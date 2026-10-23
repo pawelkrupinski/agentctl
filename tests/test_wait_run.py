@@ -1,0 +1,181 @@
+"""agentctl wait run: verdict-only output, failed-log tails, single waiter, --until landable, backoff."""
+import contextlib, io, threading, itertools, json, os, subprocess, sys, tempfile, time, unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from test_agentctl import A, TOOL  # noqa: E402
+
+FAKE = os.path.join(HERE, "fake_forgejo_gh.py")
+
+
+def job(name, status="completed", conclusion="success"):
+    return {"name": name, "status": status, "conclusion": conclusion if status == "completed" else ""}
+
+
+class FakeForge(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = os.path.join(self.tmp.name, "gh")
+        os.makedirs(self.d)
+        self.env = {"AGENTCTL_SCRATCH": os.path.join(self.tmp.name, "scratch"), "AGENTCTL_FORGEJO_GH": FAKE,
+                    "FAKE_GH_DIR": self.d, "GH_TOKEN": "dummy", "AGENTCTL_MIN_INTERVAL": "0.3", "AGENTCTL_ATTACH_POLL": "0.2"}
+        self.saved = {k: os.environ.get(k) for k in self.env}
+        os.environ.update(self.env)
+        self.saved_gh, A.FORGEJO_GH = A.FORGEJO_GH, FAKE
+
+    def tearDown(self):
+        A.FORGEJO_GH = self.saved_gh
+        for k, v in self.saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        self.tmp.cleanup()
+
+    def put(self, name, obj):
+        with open(os.path.join(self.d, name), "w") as f:
+            f.write(obj if isinstance(obj, str) else json.dumps(obj))
+
+    def run_json(self, rid, status, conclusion="", jobs=(), workflow="Main", branch="main"):
+        self.put(f"run-{rid}.json", {"status": status, "conclusion": conclusion, "jobs": list(jobs),
+                                     "workflowName": workflow, "headBranch": branch})
+
+    def calls(self):
+        p = os.path.join(self.d, "calls.log")
+        if not os.path.exists(p):
+            return []
+        with open(p) as f:
+            return f.read().splitlines()
+
+    def tool(self, *argv):
+        out, errb = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(errb):
+            rc = A.main(list(argv))
+        return rc, out.getvalue(), errb.getvalue()
+
+
+class RelevantLinesTest(unittest.TestCase):
+    def test_strong_markers_win_and_info_noise_is_dropped(self):
+        log = "\n".join([
+            "test\tRun\t2026-10-23T11:28:07.1Z 11:28:07 INFO  Refreshed X: listing INCOMPLETE (a page failed)",
+            "test\tRun\t2026-10-23T11:28:07.2Z |-INFO in ch.qos.logback - Setting level of logger [x] to ERROR",
+            "test\tRun\t2026-10-23T11:28:08.0Z \x1b[31m[info] - should match the snapshot *** FAILED ***\x1b[0m",
+            "test\tRun\t2026-10-23T11:28:08.1Z [info]   Snapshot mismatch: 3 rows differ",
+            "test\tRun\t2026-10-23T11:28:08.2Z [info]   regenerate with x",
+            "lint\tRun\t2026-10-23T11:00:00.0Z something went wrong: error reading file",
+        ])
+        per = A.relevant_lines(log, 8)
+        self.assertEqual(per["test"], ["[info] - should match the snapshot *** FAILED ***", "[info]   Snapshot mismatch: 3 rows differ",
+                                       "[info]   regenerate with x"])
+        self.assertEqual(per["lint"], ["something went wrong: error reading file"])
+        self.assertEqual(A.relevant_lines(log, 1)["test"], ["[info]   regenerate with x"])
+
+    def test_backoff_caps_at_five_minutes(self):
+        self.assertEqual(list(itertools.islice(A.backoff(60, 300), 6)), [60, 90, 135, 202.5, 300, 300])
+
+
+class WaitRunTest(FakeForge):
+    def test_failed_run_prints_verdict_and_tail_only(self):
+        self.run_json(7, "completed", "failure", [job("build"), job("test (rest)", conclusion="failure")])
+        self.put("run-7.log", "test (rest)\tRun\t2026-10-23T11:28:07Z 11:28:07 INFO  boring\n"
+                              "test (rest)\tRun\t2026-10-23T11:28:08Z [info] - a spec *** FAILED ***\n")
+        rc, out, _ = self.tool("wait", "run", "7", "--repo", "movies")
+        self.assertEqual(rc, 1)
+        self.assertIn("run pawelkrupinski/movies#7: failure; failed: test (rest)", out)
+        self.assertIn("a spec *** FAILED ***", out)
+        self.assertNotIn("boring", out)
+
+    def test_legacy_repo_first_form_and_multiple_ids(self):
+        self.run_json(1, "completed", "success")
+        self.run_json(2, "completed", "success")
+        rc, out, _ = self.tool("wait", "run", "infra", "1", "2")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("bitcashier/infra#1: success", out)
+        self.assertIn("bitcashier/infra#2: success", out)
+
+    def test_landable_stops_when_takes_rows_end(self):
+        jobs = [job("takes (poland)"), job("takes (germany)"), job("request-bisect", "queued"), job("drop-measure-branch", "queued")]
+        self.run_json(9, "in_progress", jobs=jobs, workflow="Identity model convergence", branch="measure/pawel/abc-1")
+        self.put("api-repos_pawelkrupinski_movies_actions_runs_9_artifacts.json",
+                 {"artifacts": [{"name": "identity-takes-pl"}, {"name": "convergence-diagnostics-pl"}]})
+        self.put("art-9-identity-takes-pl.txt", "identity takes (pl): lost 0, changed 0, gained 0")
+        rc, out, _ = self.tool("wait", "run", "9", "--until", "landable", "--timeout", "5")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("takes rows ended (2): all green", out)
+        self.assertIn("[identity-takes-pl] identity takes (pl): lost 0", out)
+        self.assertIn("scripts/identity-measure --run 9", out)
+        # --until done waits for the whole run (its tail is still queued)
+        rc, out, _ = self.tool("wait", "run", "9", "--timeout", "1")
+        self.assertEqual(rc, 2, out)
+
+    def test_landable_on_an_ordinary_run_waits_for_completion(self):
+        self.run_json(10, "in_progress", jobs=[job("takes (poland)")], workflow="Main", branch="main")
+        rc, out, _ = self.tool("wait", "run", "10", "--until", "landable", "--timeout", "1")
+        self.assertEqual(rc, 2, out)
+
+    def test_attaches_to_a_live_waiter_without_polling(self):
+        """A lock held by a live pid + its verdict: the second caller reads the verdict and never calls Forgejo."""
+        holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1.5)"])
+        threading.Thread(target=holder.wait, daemon=True).start()  # reaped, so its pid really dies
+        d = os.path.join(self.env["AGENTCTL_SCRATCH"], "agentctl-wait")
+        os.makedirs(d, exist_ok=True)
+        key = "run-pawelkrupinski_movies-5"
+        with open(os.path.join(d, key + ".lock"), "w") as f:
+            json.dump({"pid": holder.pid, "started": "t"}, f)
+        with open(os.path.join(d, key + ".verdict"), "w") as f:
+            json.dump({"ok": True, "line": "run pawelkrupinski/movies#5: success (from the holder)"}, f)
+        self.run_json(5, "in_progress")
+        try:
+            rc, out, errs = self.tool("wait", "run", "5", "--repo", "movies", "--timeout", "10")
+        finally:
+            holder.wait()
+        self.assertIn("attached to existing waiter", errs)
+        self.assertIn("(from the holder)", out)
+        self.assertEqual(self.calls(), [])
+
+    def test_two_processes_one_poller(self):
+        self.run_json(11, "in_progress")
+        cmd = [sys.executable, TOOL, "wait", "run", "11", "--repo", "movies", "--timeout", "30"]
+        first = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=os.environ)
+        time.sleep(1.0)
+        second = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=os.environ)
+        time.sleep(1.0)
+        self.run_json(11, "completed", "success")
+        o1, _ = first.communicate(timeout=30)
+        o2, e2 = second.communicate(timeout=30)
+        self.assertEqual(o1.strip(), "run pawelkrupinski/movies#11: success")
+        self.assertEqual(o1, o2)
+        self.assertIn("attached", e2)
+        pollers = {l.split()[0] for l in self.calls()}
+        self.assertEqual(pollers, {str(first.pid)})
+
+
+class WaitMutationTest(unittest.TestCase):
+    def run_one(self, name):
+        return unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(WaitRunTest(name))
+
+    def test_landable_test_kills_a_mutant_that_never_recognises_measure_runs(self):
+        real = A.is_measure_run
+        A.is_measure_run = lambda d: False
+        try:
+            res = self.run_one("test_landable_stops_when_takes_rows_end")
+        finally:
+            A.is_measure_run = real
+        self.assertTrue(res.failures or res.errors, "mutant survived")
+
+    def test_attach_test_kills_a_mutant_that_ignores_the_lock(self):
+        real = A.Waiter.acquire
+
+        def mutant(self):
+            self.owned = True
+            return True
+        A.Waiter.acquire = mutant
+        try:
+            res = self.run_one("test_attaches_to_a_live_waiter_without_polling")
+        finally:
+            A.Waiter.acquire = real
+        self.assertTrue(res.failures or res.errors, "mutant survived")
+
+
+if __name__ == "__main__":
+    unittest.main()

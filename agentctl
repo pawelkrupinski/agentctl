@@ -1,0 +1,1580 @@
+#!/usr/bin/env python3
+"""agentctl: cheaper, safer Claude subagent orchestration for the bitcashier repos and movies.
+
+  agentctl wait run <id>... [--repo R] [--until done|landable] [--tail N] [--interval S] [--timeout S]
+        Blocks on Forgejo's actions API (backoff 60 s -> x1.5 -> cap 300 s) and prints ONLY the verdict per run:
+        `run <o/r>#<id>: <conclusion>[; failed: job, ...]` plus each failed job's last N relevant log lines
+        (FAILED / error / assert). ONE waiter per run (lock in the scratchpad); a second call attaches to the live
+        waiter's verdict file instead of polling. --until landable: an Identity model convergence measure/ run is
+        done once its takes rows end; prints their verdict.txt files. Exit 0 all green, 1 any red, 2 timeout.
+        AGENTS: start it with run_in_background=true and END YOUR TURN; never loop/sleep in the foreground.
+  agentctl wait file <path> [--contains REGEX] [--interval S] [--timeout S]
+        Same, for a file appearing (and containing REGEX).
+  agentctl ci-why [main|<run id>] [--repo R] [--tail N]
+        Why main is red: the red gate's three workflows (movies), their newest decided runs, failed jobs + log lines,
+        commit/author, INFRA-SHAPED vs TEST FAILURE, and the clearing rule (later green run / Fixes-Red:). Exit 1 red.
+  agentctl land [--repo PATH] [--branch B] [--stash]
+        fetch, rebase onto forgejo/main, prepush-check, push (the hook runs, sdkman sbt/java on PATH), retry push races
+        x3, verify: last line `LANDED <sha>` or `NOT LANDED: <reason>` (+ ci-why on a red gate). Never --no-verify.
+  agentctl env [--print|--check] [--ns movies|bitcashier]
+        eval "$(agentctl env --print)" puts sdkman sbt/java on PATH; --check checks sbt, java, vault, tunnel, token.
+        Locked vault: one line `vault <ns> locked: ask the user to run `! secrets unlock <ns>``, exit 1. Never unlocks.
+  agentctl db-q [--env forgejo] [--max-rows N] "<sql>"
+        Read-only Forgejo DB query (sqlite3 -readonly -safe); only one SELECT/WITH/PRAGMA read; rows capped.
+  agentctl state <topic> [--set field=value ...] [--add field=value ...]
+        Print scratchpad/state-<topic>.md, creating it from the template first; --set replaces a field,
+        --add appends to a comma-separated one (commits, run ids).
+  agentctl prepush-check [--base forgejo/main] [--head HEAD] [--allow GLOB ...] [--max-foreign N]
+  agentctl prepush-check --hook <remote> [<url>]       (pre-push hook mode: reads the hook's stdin)
+        Refuses when `base...head` touches a file outside the allowed set ($AGENTCTL_ALLOW, whitespace-separated
+        globs, or --allow), or when it deletes/reverts more than N (default 2, $AGENTCTL_MAX_FOREIGN) files back to
+        an older version of main -- the `reset --soft` squash onto a moved main. `git revert` commits are exempt
+        for the files of the commit they revert.
+  agentctl cleanup [--dry-run|--execute] [--repo PATH ...] [--no-fetch] [--no-remote] [--min-age-hours H]
+        Removes ONLY proven-merged items: clean, idle worktrees whose HEAD is an ancestor of forgejo/main or whose
+        commits are all patch-equivalent on it (`git cherry`), their local branches, and remote measure/* branches
+        whose runs all finished (or >24 h old with no run in progress). Every deletion -> agentctl-deleted.log.
+        Dry run by default when stdin is a TTY.
+  agentctl orphans [--kill]
+        Wait loops / sbt servers whose worktree is gone, whose owning shell died, whose target runs finished,
+        or that duplicate an older loop on the same runs.
+
+Full reference, examples and the standard agent workflow: ~/bin/AGENTCTL.md
+
+Scratchpad: $AGENTCTL_SCRATCH, else /private/tmp/claude-<uid>/*/<$CLAUDE_CODE_SESSION_ID>/scratchpad, else
+~/.cache/agentctl. Forgejo tokens come from $GH_TOKEN or `secrets get <ns> FORGEJO_API_TOKEN`; never printed.
+"""
+WAIT_RUN_HELP = """Block until Forgejo runs finish; print only the verdicts.
+
+Agents: start this with the Bash tool's run_in_background=true and END YOUR TURN -- you are re-invoked when it
+exits. Never wrap it (or forgejo-gh) in a foreground sleep/until loop. A second `wait run` on the same id attaches to
+the first waiter (single waiter per target), so it is safe to call again after a resume.
+
+Examples:
+  agentctl wait run 1961 --until landable          # a measure run: stop when the takes rows end
+  agentctl wait run 1976 1984 --repo movies --tail 12
+Exit: 0 all green, 1 any red/cancelled, 2 timeout. A waiter that vanished is taken over."""
+CI_WHY_HELP = """Why is main red? For movies: the newest DECIDED run on main (success/failure; cancelled and skipped say
+nothing) of exactly the three workflows the pre-push red gate reads -- Main, Identity model convergence, Record scrape
+fixtures. Other repos: every workflow seen on main. For each red one: failed jobs, their relevant log lines, the commit
+and author, INFRA-SHAPED (setup-step failure, 0-length log, artifact already exists, ENOENT, ...) vs TEST FAILURE, and
+the gate's clearing rule (a later green run, or `Fixes-Red: <#number|run id>` on every production commit).
+  agentctl ci-why                 # movies (or the cwd's repo)
+  agentctl ci-why 1934            # explain one run
+Exit: 0 green, 1 red (or a run explained)."""
+LAND_HELP = """Land the current commit(s) on forgejo/main, safely, in one command:
+  fetch -> rebase onto forgejo/main -> agentctl prepush-check -> git push forgejo HEAD:main (the repo's pre-push hook
+  runs, with sdkman's sbt/java on PATH) -> on a push race (non-fast-forward, cannot lock ref) refetch, rebase and retry,
+  up to 3 times -> fetch and verify with merge-base / git cherry.
+Last line: `LANDED <sha>`, or `NOT LANDED: <exact reason>` (red gate: followed by the `agentctl ci-why` summary).
+Never passes --no-verify and refuses to run with PREPUSH_SKIP set. Refuses a dirty tree unless --stash (a named stash,
+restored afterwards, found by its sha -- the stash list is shared by every worktree).
+Exit: 0 landed, 1 not landed."""
+ENV_HELP = """Agent environment, without secrets.
+  eval "$(agentctl env --print)"   # sdkman's sbt + java first on PATH, JAVA_HOME; exit 1 (one line on stderr) on a locked vault
+  agentctl env --check            # sbt, a java that runs, `secrets status <ns>`, tunnel localhost:3000 and :2222, the
+                                  # Forgejo token (read inside the check, sent to /api/v1/user, never printed), forgejo-gh
+A locked vault prints exactly: vault <ns> locked: ask the user to run `! secrets unlock <ns>`  -- and exits 1.
+agentctl never runs `secrets unlock` (Touch ID is the user's). Output never contains a token: tools read it at use."""
+DBQ_HELP = """Read-only query of the Forgejo database (sqlite3 -readonly -safe over ssh to ci-runner).
+Refuses anything but ONE SELECT / WITH ... SELECT / PRAGMA read (no DML in a CTE, no dot-commands, no PRAGMA x = y).
+Output: tab-separated with a header, capped at --max-rows (default 200). On a refused connection it reopens the laptop
+tunnel once (launchctl kickstart -k gui/$UID/net.bitcashier.forgejo-tunnel) and retries.
+Tables: action_run, action_run_job, action_task, action_task_step (status 1 ok, 2 fail, 3 cancelled, 4 skipped,
+5 waiting, 6 running). Prefer `forgejo-gh` / `agentctl ci-why` for runs and logs; db-q is the fallback.
+  agentctl db-q 'select id, "index", status, substr(title, 1, 60) from action_run order by id desc limit 10'
+Exit: 0 ok, 1 query/connection failed, 2 refused."""
+import argparse, datetime as dt, fnmatch, glob, json, os, re, signal, subprocess, sys, time, urllib.parse, urllib.request
+
+HOME = os.path.expanduser("~")
+REPOS = [f"{HOME}/bitcashier/{r}" for r in ("infra", "core", "dashboard", "invoice-page", "version-dashboard")] + [
+    f"{HOME}/projects/movies"
+]
+SHORT = {
+    "movies": "pawelkrupinski/movies",
+    **{r: f"bitcashier/{r}" for r in ("infra", "core", "dashboard", "invoice-page", "version-dashboard")},
+}
+FORGEJO_GH = os.environ.get("AGENTCTL_FORGEJO_GH", f"{HOME}/bitcashier/infra/bin/forgejo-gh")
+API = os.environ.get("AGENTCTL_FORGEJO_API", "http://localhost:3000/api/v1")
+REMOTE = "forgejo"
+PROTECTED_BRANCHES = {"main", "master"}
+ZERO = "0" * 40
+
+
+# ---------------------------------------------------------------- helpers
+def now():
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def ts():
+    return now().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def err(msg):
+    print(f"agentctl: {msg}", file=sys.stderr, flush=True)
+
+
+def scratch():
+    d = os.environ.get("AGENTCTL_SCRATCH")
+    if not d:
+        sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+        hits = sorted(glob.glob(f"/private/tmp/claude-{os.getuid()}/*/{sid}/scratchpad")) if sid else []
+        d = hits[0] if hits else os.path.join(HOME, ".cache", "agentctl")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def git(repo, *args, check=True, input=None):
+    r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, input=input)
+    if check and r.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} in {repo}: {r.stderr.strip()}")
+    return r.stdout if check else r
+
+
+def git_ok(repo, *args):
+    return subprocess.run(["git", "-C", repo, *args], capture_output=True).returncode == 0
+
+
+def slug(repo_arg):
+    if repo_arg in SHORT:
+        return SHORT[repo_arg]
+    if os.path.isdir(repo_arg):
+        url = git(repo_arg, "remote", "get-url", REMOTE).strip()
+        m = re.search(r"[:/]([^/:]+/[^/]+?)(?:\.git)?/?$", url)
+        if not m:
+            raise SystemExit(f"agentctl: cannot parse remote url of {repo_arg}")
+        return m.group(1)
+    if re.fullmatch(r"[\w.-]+/[\w.-]+", repo_arg):
+        return repo_arg
+    raise SystemExit(f"agentctl: unknown repo {repo_arg!r}")
+
+
+_tokens = {}
+
+
+def token(o_r):
+    if os.environ.get("GH_TOKEN"):
+        return os.environ["GH_TOKEN"]
+    ns = "movies" if o_r.startswith("pawelkrupinski/") else "bitcashier"
+    if ns not in _tokens:
+        r = subprocess.run(["secrets", "get", ns, "FORGEJO_API_TOKEN"], capture_output=True, text=True)
+        if r.returncode != 0 or not r.stdout.strip():
+            raise SystemExit(f"agentctl: could not read the {ns} FORGEJO_API_TOKEN from the vault")
+        _tokens[ns] = r.stdout.strip()
+    return _tokens[ns]
+
+
+def gh_json(o_r, *args):
+    env = dict(os.environ, GH_TOKEN=token(o_r))
+    r = subprocess.run([FORGEJO_GH, *args, "-R", o_r], capture_output=True, text=True, env=env, timeout=300)
+    if r.returncode != 0:
+        raise RuntimeError(f"forgejo-gh {' '.join(args)}: {r.stderr.strip()[:300]}")
+    return json.loads(r.stdout)
+
+
+def api(o_r, method, path, params=None):
+    url = f"{API}/repos/{o_r}/{path}" + ("?" + urllib.parse.urlencode(params) if params else "")
+    req = urllib.request.Request(url, method=method, headers={"Authorization": f"token {token(o_r)}"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        body = resp.read()
+    return json.loads(body) if body else None
+
+
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def parse_time(s):
+    return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+# ---------------------------------------------------------------- wait
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+LOG_TS = re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ")
+STRONG = re.compile(r"\*\*\* FAILED|\[error\]|::error::|(?i:assertion|assert(ion)? failed)|\bError:|ENOENT|artifact already exists|(?i:exit code [1-9])|\bFAILED\b")
+WEAK = re.compile(r"\bfail(ed|ure)?\b|\berror\b|exception|assert", re.I)
+NOISE = re.compile(r"Setting level of logger|\|-INFO in ch\.qos|\berrors?[=:] ?0\b|\b0 (errors?|failed)\b|\b(INFO|DEBUG|TRACE)\b", re.I)
+MEASURE_WORKFLOWS = {"Identity model convergence"}
+
+
+def relevant_lines(log_text, tail):
+    """{job: [last `tail` relevant lines]} from `forgejo-gh run view --log-failed` output (job<TAB>step<TAB>line).
+    Strong markers (*** FAILED, [error], ::error::, assertion, exit code) win; plain fail/error words only when a job
+    has none, and never from INFO/DEBUG log lines."""
+    strong, weak, follow = {}, {}, {}
+    for raw in log_text.splitlines():
+        parts = raw.split("\t", 2)
+        job, line = (parts[0], parts[2]) if len(parts) == 3 else ("?", raw)
+        line = LOG_TS.sub("", ANSI.sub("", line)).rstrip()
+        if not line:
+            continue
+        if follow.get(job):  # the 2 lines after a scalatest `*** FAILED ***` carry its reason
+            follow[job] -= 1
+            strong.setdefault(job, []).append(line[:300])
+            continue
+        if "*** FAILED ***" in line:
+            follow[job] = 2
+        if STRONG.search(line) and not re.search(r"Setting level of logger|-INFO in ch\.qos", line):
+            strong.setdefault(job, []).append(line[:300])
+        elif WEAK.search(line) and not NOISE.search(line):
+            weak.setdefault(job, []).append(line[:300])
+    return {j: (strong.get(j) or weak.get(j))[-tail:] for j in set(strong) | set(weak)}
+
+
+def raw_tails(log_text, n=3):
+    """{job: (line count, last n cleaned lines)} of a --log-failed output."""
+    out = {}
+    for raw in log_text.splitlines():
+        parts = raw.split("\t", 2)
+        job, line = (parts[0], parts[2]) if len(parts) == 3 else ("?", raw)
+        line = LOG_TS.sub("", ANSI.sub("", line)).rstrip()
+        cnt, last = out.get(job, (0, []))
+        out[job] = (cnt + 1, (last + [line[:200]])[-n:])
+    return out
+
+
+def fetch_failed_log(o_r, run_id):
+    env = dict(os.environ, GH_TOKEN=token(o_r))
+    r = subprocess.run([FORGEJO_GH, "run", "view", str(run_id), "--log-failed", "-R", o_r], capture_output=True, text=True, env=env, timeout=300)
+    return r.stdout
+
+
+def fetch_takes_verdicts(o_r, run_id):
+    """{artifact: verdict.txt text} of a measure run's identity-takes-<cc> artifacts (the takes rows' verdict files)."""
+    env = dict(os.environ, GH_TOKEN=token(o_r))
+    arts = gh_json(o_r, "api", f"repos/{o_r}/actions/runs/{run_id}/artifacts").get("artifacts", [])
+    out = {}
+    for a in arts:
+        name = a.get("name", "")
+        if not name.startswith("identity-takes-"):
+            continue
+        d = os.path.join(scratch(), "agentctl-wait", f"art-{run_id}-{name}")
+        os.makedirs(d, exist_ok=True)
+        subprocess.run([FORGEJO_GH, "run", "download", str(run_id), "-n", name, "-D", d, "-R", o_r], capture_output=True, env=env, timeout=300)
+        p = os.path.join(d, "verdict.txt")
+        out[name] = open(p, errors="replace").read().strip() if os.path.exists(p) else "(no verdict.txt in the artifact)"
+    return out
+
+
+def is_measure_run(d):
+    return d.get("workflowName") in MEASURE_WORKFLOWS and (d.get("headBranch") or "").startswith("measure/")
+
+
+def fetch_job_log(o_r, run_id, job_id):
+    env = dict(os.environ, GH_TOKEN=token(o_r))
+    r = subprocess.run([FORGEJO_GH, "run", "view", str(run_id), "--log", "--job", str(job_id), "-R", o_r],
+                       capture_output=True, text=True, env=env, timeout=300)
+    return r.stdout
+
+
+ANNOTATION = re.compile(r"::error\b[^:]*::")
+MAX_JOB_LOG_FETCHES = 5
+
+
+def job_log_lines(o_r, run_id, job, tail):
+    """Relevant lines from a job's WHOLE log. Forgejo's per-step slices (what --log-failed prints) are shifted by a
+    few lines from the stored log, so a failed step's slice can hold only its neighbours' checkout/cache lines while
+    its `::error` annotation and output sit just past it (run 1988, takes (united-kingdom)). `::error` annotations
+    first, else the strong/weak markers."""
+    jid = job.get("databaseId") if isinstance(job, dict) else None
+    if not jid:
+        return []
+    try:
+        log = fetch_job_log(o_r, run_id, jid)
+    except Exception:
+        return []
+    clean = [LOG_TS.sub("", ANSI.sub("", (l.split("\t", 2)[2] if l.count("\t") >= 2 else l))).rstrip() for l in log.splitlines()]
+    notes = [l[:300] for l in clean if ANNOTATION.search(l)]
+    if notes:
+        return notes[-tail:]
+    name = job.get("name", "?")
+    return relevant_lines("\n".join(f"{name}\t-\t{l}" for l in clean), tail).get(name, [])
+
+
+def failure_detail(o_r, run_id, failed, tail):
+    """failed: job dicts (name, databaseId) or names."""
+    if not failed or tail <= 0:
+        return []
+    try:
+        per = relevant_lines(fetch_failed_log(o_r, run_id), tail)
+    except Exception as e:
+        return [f"  (could not read the failed log: {e})"]
+    out, fetched = [], 0
+    for jd in failed:
+        job = jd["name"] if isinstance(jd, dict) else jd
+        lines = per.get(job) or next((v for k, v in per.items() if k in job or job in k), [])
+        if not lines and fetched < MAX_JOB_LOG_FETCHES and isinstance(jd, dict):
+            fetched += 1
+            lines = job_log_lines(o_r, run_id, jd, tail)
+        out.append(f"  -- {job}: " + ("no FAILED/error/assert line in its log (0-length log or setup failure? see `agentctl ci-why`)" if not lines else f"last {len(lines)} relevant line(s)"))
+        out += [f"     {l}" for l in lines]
+    return out
+
+
+def run_verdict(o_r, run_id, until="done", tail=0):
+    """(done, ok, text) for a Forgejo run. until=landable: a measure run is done once its takes rows ended."""
+    d = gh_json(o_r, "run", "view", str(run_id), "--json", "status,conclusion,jobs,workflowName,headBranch")
+    jobs = d.get("jobs") or []
+    head = f"run {o_r}#{run_id}"
+    if until == "landable" and is_measure_run(d):
+        takes = [j for j in jobs if j.get("name", "").startswith("takes")]
+        if d.get("status") == "completed" or (takes and all(j.get("status") == "completed" for j in takes)):
+            badj = [j for j in takes if j.get("conclusion") not in ("success", "skipped")]
+            bad = [j["name"] for j in badj]
+            lines = [f"{head}: takes rows ended ({len(takes)}): " + ("all green" if not bad else "failed: " + ", ".join(bad))]
+            try:
+                for name, text in sorted(fetch_takes_verdicts(o_r, run_id).items()):
+                    lines += [f"  [{name}] {l}" for l in text.splitlines()]
+            except Exception as e:
+                lines.append(f"  (could not read the verdict files: {e})")
+            lines.append(f"  collect the LANDABLE verdict: scripts/identity-measure --run {run_id}")
+            lines += failure_detail(o_r, run_id, badj, tail)
+            return True, not bad and bool(takes), "\n".join(lines)
+        n_done = sum(1 for j in takes if j.get("status") == "completed")
+        return False, None, f"{head}: {d.get('status')} (takes rows {n_done}/{len(takes)} ended)"
+    if d.get("status") != "completed":
+        return False, None, f"{head}: {d.get('status')}"
+    concl = d.get("conclusion") or "unknown"
+    failedj = [j for j in jobs if j.get("conclusion") in ("failure", "cancelled", "timed_out")]
+    failed = [j["name"] for j in failedj]
+    line = f"{head}: {concl}" + (f"; failed: {', '.join(failed)}" if failed else "")
+    lines = [line] + failure_detail(o_r, run_id, failedj, tail)
+    return True, concl in ("success", "skipped", "neutral"), "\n".join(lines)
+
+
+def file_verdict(path, contains):
+    if not os.path.exists(path):
+        return False, None, f"file {path}: absent"
+    if contains:
+        try:
+            with open(path, errors="replace") as f:
+                if not re.search(contains, f.read(), re.M):
+                    return False, None, f"file {path}: present, no match for {contains!r}"
+        except OSError as e:
+            return False, None, f"file {path}: unreadable ({e})"
+    st = os.stat(path)
+    when = dt.datetime.fromtimestamp(st.st_mtime, dt.timezone.utc).strftime("%H:%M:%SZ")
+    return True, True, f"file {path}: present ({st.st_size} bytes, mtime {when})"
+
+
+def foreign_loops_on(run_id):
+    """Other (non-agentctl) processes already polling this run id."""
+    me = os.getpid()
+    out = []
+    for pid, ppid, etime, cmd in ps():
+        if pid in (me, os.getppid()) or "agentctl" in cmd:
+            continue
+        if re.search(rf"run view {run_id}\b|runs/{run_id}\b", cmd) and "sleep" in cmd:
+            out.append(pid)
+    return out
+
+
+def default_repo():
+    try:
+        return slug(os.getcwd())
+    except (SystemExit, RuntimeError):
+        return SHORT["movies"]
+
+
+def backoff(floor, cap):
+    """Poll delays: floor, x1.5 each time, never above cap (<= 300 s)."""
+    d = floor
+    while True:
+        yield d
+        d = min(cap, d * 1.5)
+
+
+class Waiter:
+    """One target waited on: holds the target's lock (and polls) or attaches to the live holder's verdict file."""
+
+    def __init__(self, d, key, check):
+        self.key, self.check = key, check
+        self.lock, self.verdict = os.path.join(d, key + ".lock"), os.path.join(d, key + ".verdict")
+        self.owned, self.holder, self.result = False, None, None
+
+    def acquire(self):
+        """True if we own the lock now; False if a live waiter holds it (self.holder = its info)."""
+        while True:
+            try:
+                fd = os.open(self.lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    info = json.load(open(self.lock))
+                except (OSError, ValueError):
+                    info = {}
+                pid = info.get("pid")
+                if pid and pid_alive(pid):
+                    self.holder = info
+                    return False
+                err(f"stale lock (pid {pid} gone), taking over")
+                try:
+                    os.unlink(self.lock)
+                except FileNotFoundError:
+                    pass
+                continue
+            with os.fdopen(fd, "w") as f:
+                json.dump({"pid": os.getpid(), "started": ts(), "target": self.key}, f)
+            self.owned = True
+            try:
+                os.unlink(self.verdict)
+            except FileNotFoundError:
+                pass
+            return True
+
+    def poll_owned(self):
+        try:
+            done, ok, text = self.check()
+        except Exception as e:  # transient API trouble: report and keep waiting
+            done, ok, text = False, None, f"check failed: {e}"
+        if done:
+            tmp = self.verdict + f".{os.getpid()}"
+            with open(tmp, "w") as f:
+                json.dump({"ok": ok, "line": text, "at": ts()}, f)
+            os.replace(tmp, self.verdict)
+            self.result = (ok, text)
+        return text
+
+    def poll_attached(self):
+        """Holder gone: read its verdict, or take over when it left none."""
+        pid = (self.holder or {}).get("pid")
+        if os.path.exists(self.lock) and pid and pid_alive(pid):
+            return
+        try:
+            v = json.load(open(self.verdict))
+            self.result = (v["ok"], v["line"])
+        except (OSError, ValueError, KeyError):
+            err(f"{self.key}: waiter pid {pid} ended without a verdict; taking over")
+            self.holder = None
+            if not self.acquire():
+                return
+
+    def release(self):
+        if self.owned:
+            try:
+                os.unlink(self.lock)
+            except FileNotFoundError:
+                pass
+            self.owned = False
+
+
+def wait_all(waiters, timeout, floor, cap):
+    """Block until every waiter has a verdict. Prints each verdict as it lands. Exit 0 all ok, 1 any failed, 2 timeout."""
+    deadline = time.time() + timeout
+    attach_poll = float(os.environ.get("AGENTCTL_ATTACH_POLL", "15"))
+    for w in waiters:
+        if not w.acquire():
+            err(f"{w.key}: attached to existing waiter pid {w.holder.get('pid')} (since {w.holder.get('started')}); not polling Forgejo")
+    delays = backoff(floor, cap)
+    next_check, last = 0.0, {}
+    try:
+        while True:
+            pending = [w for w in waiters if w.result is None]
+            if time.time() >= next_check:
+                for w in pending:
+                    if w.owned:
+                        last[w.key] = w.poll_owned()
+                        if w.result:
+                            print(w.result[1], flush=True)
+                next_check = time.time() + next(delays)
+            for w in pending:
+                if w.result is None and not w.owned:
+                    w.poll_attached()
+                    if w.result:
+                        print(w.result[1], flush=True)
+            pending = [w for w in waiters if w.result is None]
+            if not pending:
+                return 0 if all(w.result[0] for w in waiters) else 1
+            if time.time() >= deadline:
+                for w in pending:
+                    print(f"TIMEOUT after {timeout}s; last: {last.get(w.key, 'attached to another waiter')}", flush=True)
+                return 2
+            step = next_check - time.time()
+            if any(not w.owned for w in pending):
+                step = min(step, attach_poll)
+            time.sleep(max(0.05, min(step, deadline - time.time())))
+    finally:
+        for w in waiters:
+            w.release()
+
+
+def cmd_wait(a):
+    floor = float(os.environ.get("AGENTCTL_MIN_INTERVAL", "60"))
+    cap = max(floor, min(300, a.interval))
+    d = os.path.join(scratch(), "agentctl-wait")
+    os.makedirs(d, exist_ok=True)
+    if a.kind == "run":
+        ids = list(a.ids)
+        repo = a.repo
+        if ids and not ids[0].isdigit():  # legacy form: wait run <repo> <id>...
+            repo = repo or ids[0]
+            ids = ids[1:]
+        if not ids or not all(i.isdigit() for i in ids):
+            raise SystemExit("agentctl: wait run needs numeric run ids (action_run.id, the GITHUB_RUN_ID)")
+        o_r = slug(repo) if repo else default_repo()
+        waiters = []
+        for i in dict.fromkeys(ids):
+            others = foreign_loops_on(i)
+            if others:
+                err(f"note: other loops already poll run {i}: pids {others} (see `agentctl orphans`)")
+            key = f"run-{o_r.replace('/', '_')}-{i}" + ("-landable" if a.until == "landable" else "")
+            waiters.append(Waiter(d, key, (lambda i=i: run_verdict(o_r, int(i), a.until, a.tail))))
+        return wait_all(waiters, a.timeout, floor, cap)
+    path = os.path.abspath(a.target)
+    key = "file-" + re.sub(r"[^\w.-]", "_", path)[-150:]
+    return wait_all([Waiter(d, key, lambda: file_verdict(path, a.contains))], a.timeout, min(floor, a.interval), max(min(floor, a.interval), min(300, a.interval)))
+
+
+# ---------------------------------------------------------------- ci-why
+# Exactly the workflows movies' scripts/hooks/pre-push check_redgate reads (GatingWorkflows / GatingWorkflowFiles).
+GATING = {"pawelkrupinski/movies": [("Main", "main.yml"), ("Identity model convergence", "identity-model-convergence.yml"),
+                                    ("Record scrape fixtures", "record-scrape-fixtures.yml")]}
+SETUP_STEP = re.compile(r"^(Set up job|Initialize containers|actions/checkout|Checkout|.*(download|upload)-artifact|.*cache@|Set up .*runner)", re.I)
+INFRA_LOG = re.compile(r"artifact already exists|ENOENT|No space left on device|Cannot connect to the Docker daemon|"
+                       r"connection (refused|reset)|Could not resolve host|TLS handshake timeout|runner .* lost|context deadline exceeded|"
+                       r"The operation was canceled|exit code 137|Killed", re.I)
+RUN_FIELDS = "databaseId,number,status,conclusion,headSha,url,displayTitle,workflowName,createdAt"
+
+
+def repo_path_for(o_r):
+    for p in REPOS:
+        if os.path.isdir(p) and git_ok(p, "remote", "get-url", REMOTE):
+            try:
+                if slug(p) == o_r:
+                    return p
+            except (SystemExit, RuntimeError):
+                pass
+    return None
+
+
+def commit_line(o_r, sha, repo=None):
+    repo = repo or repo_path_for(o_r)
+    if repo and git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}"):
+        return git(repo, "log", "-1", "--format=%h %an <%ae> %ad: %s", "--date=format:%m-%d %H:%M", sha).strip()
+    try:
+        c = gh_json(o_r, "api", f"repos/{o_r}/git/commits/{sha}")
+        a = c.get("author") or c.get("commit", {}).get("author", {})
+        msg = c.get("message") or c.get("commit", {}).get("message", "")
+        return f"{sha[:9]} {a.get('name')} <{a.get('email')}>: {msg.splitlines()[0] if msg else ''}"
+    except Exception:
+        return sha[:9]
+
+
+def classify_job(job, lines, raw=(0, [])):
+    """('infra'|'unclear'|'test', why) for one failed job, from its steps, relevant log lines and raw (count, tail)."""
+    bad = [s for s in job.get("steps") or [] if s.get("conclusion") in ("failure", "timed_out")]
+    step = bad[0]["name"] if bad else None
+    if step and SETUP_STEP.match(step):
+        return "infra", f"failed in setup step '{step}' (often a `needs:` cascade or runner/setup trouble)"
+    if not raw[0] and not lines:
+        return "infra", "0-length log" + (f" (step '{step}')" if step else "")
+    hit = next((l for l in lines if INFRA_LOG.search(l)), None)
+    if hit and not any("*** FAILED" in l or "[error]" in l for l in lines):
+        return "infra", f"infra-shaped log line: {hit[:120]}"
+    if not lines:
+        tail = " | ".join(raw[1])
+        return "unclear", f"{raw[0]}-line log with no FAILED/error/assert line (truncated? runner lost?) in step '{step}'; ends: {tail}"
+    return "test", f"failed step '{step}'" if step else "test failure"
+
+
+def gate_runs(o_r):
+    """[(workflow, newest decided run on main | None, newer unfinished run | None)]."""
+    flows = GATING.get(o_r)
+    if not flows:
+        recent = gh_json(o_r, "run", "list", "--branch", "main", "--limit", "40", "--json", RUN_FIELDS)
+        flows = [(n, n) for n in dict.fromkeys(r["workflowName"] for r in recent)]
+    out = []
+    for name, wfile in flows:
+        runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30", "--json", RUN_FIELDS)
+        decided = next((r for r in runs if r.get("status") == "completed" and r.get("conclusion") in ("success", "failure", "timed_out")), None)
+        newer = next((r for r in runs if r.get("status") != "completed"), None)
+        if newer and decided and newer["databaseId"] < decided["databaseId"]:
+            newer = None
+        out.append((name, decided, newer))
+    return out
+
+
+def explain_run(o_r, run, tail, repo=None):
+    """Lines explaining one red run: commit, failed jobs, their log tails, infra vs test."""
+    rid = run["databaseId"]
+    d = gh_json(o_r, "run", "view", str(rid), "--json", "jobs,headSha,url,number,conclusion,workflowName")
+    num = d.get("number") or run.get("number")
+    failed = [j for j in d.get("jobs") or [] if j.get("conclusion") in ("failure", "timed_out")]
+    try:
+        log = fetch_failed_log(o_r, rid) if failed else ""
+    except Exception as e:
+        log = ""
+        err(f"could not read run {rid}'s failed log: {e}")
+    per, raws = relevant_lines(log, tail), raw_tails(log)
+    lines = [f"  run id {rid} (#{num}) {d.get('url') or run.get('url')}",
+             f"  commit {commit_line(o_r, d.get('headSha') or run.get('headSha'), repo)}"]
+    kinds, fetched = [], 0
+    for j in failed:
+        jl = per.get(j["name"]) or []
+        bad = [st for st in j.get("steps") or [] if st.get("conclusion") in ("failure", "timed_out")]
+        setup = bool(bad) and bool(SETUP_STEP.match(bad[0]["name"]))
+        if not jl and not setup and fetched < MAX_JOB_LOG_FETCHES:  # a shifted step slice: read the whole job log
+            fetched += 1
+            jl = job_log_lines(o_r, rid, j, tail)
+        kind, why = classify_job(j, jl, raws.get(j["name"], (0, [])))
+        kinds.append(kind)
+        lines.append(f"  [{kind}] {j['name']}: {why}")
+        lines += [f"      {l}" for l in jl]
+    rerun = f"rerun: {FORGEJO_GH.replace(HOME, '~')} run rerun {rid} --failed -R {o_r}"
+    if "test" in kinds:
+        verdict = "TEST FAILURE"
+    elif "unclear" in kinds:
+        verdict = f"UNCLEAR (a failed step logged no FAILED/error line: read `forgejo-gh run view {rid} --log-failed`; if infra, {rerun})"
+    else:
+        verdict = f"INFRA-SHAPED ({rerun})" if kinds else "no failed job listed"
+    lines.insert(0, f"  verdict: {verdict}")
+    return lines, num
+
+
+def ci_why(o_r, tail=6, run_id=None, repo=None):
+    """(red, text). run_id: explain that one run; else the gating workflows' newest decided runs on main."""
+    if run_id:
+        lines, _ = explain_run(o_r, {"databaseId": int(run_id)}, tail, repo)
+        return True, f"run {o_r}#{run_id}\n" + "\n".join(lines)
+    out, red = [], False
+    for name, decided, newer in gate_runs(o_r):
+        pending = f"; newer run {newer['databaseId']} (#{newer.get('number')}) {newer.get('status')} may clear it" if newer else ""
+        if not decided:
+            out.append(f"{name}: no decided run on main")
+            continue
+        if decided["conclusion"] == "success":
+            out.append(f"{name}: GREEN (run {decided['databaseId']} #{decided.get('number')})")
+            continue
+        red = True
+        out.append(f"{name}: RED (run {decided['databaseId']} #{decided.get('number')}, {decided['conclusion']}){pending}")
+        lines, num = explain_run(o_r, decided, tail, repo)
+        out += lines
+        out.append(f"  clears when: a later {name} run on main is green, or every pushed commit touching a production path "
+                   f"carries `Fixes-Red: {num}` (or `Fixes-Red: {decided['databaseId']}`); tools-only commits land while red")
+    head = f"ci-why {o_r}: " + ("main is RED for the gate" if red else "main is green for the gate")
+    return red, "\n".join([head] + out)
+
+
+def cmd_ci_why(a):
+    o_r = slug(a.repo) if a.repo else default_repo()
+    target = None if a.target in (None, "main") else a.target
+    if target and not target.isdigit():
+        raise SystemExit("agentctl: ci-why takes a run id or `main`")
+    red, text = ci_why(o_r, a.tail, target)
+    print(text)
+    return 1 if red else 0
+
+
+# ---------------------------------------------------------------- land / env
+SDKMAN_BINS = [f"{HOME}/.sdkman/candidates/sbt/current/bin", f"{HOME}/.sdkman/candidates/java/current/bin"]
+RACE = re.compile(r"non-fast-forward|cannot lock ref|fetch first|failed to update ref|stale info|incorrect old value|"
+                  r"reference already exists|remote rejected.*(lock|update)", re.I)
+# The hook REFUSING for red (its "is RED on main" warnings also print when tools-only commits land while red: not a refusal)
+REDGATE = re.compile(r"main is red: only a fix|carries no Fixes-Red")
+TUNNEL_TROUBLE = re.compile(r"GitOps manifests STALE|Connection to localhost closed|forgejo\.internal.*(refused|unreachable)|"
+                            r"Could not read from remote repository|Connection refused", re.I)
+LAND_RETRIES = 3
+
+
+def tool_env():
+    """os.environ with sdkman's sbt and java first on PATH (the movies hook's sbt check needs them)."""
+    env = dict(os.environ)
+    path = env.get("PATH", "").split(":")
+    env["PATH"] = ":".join([b for b in SDKMAN_BINS if os.path.isdir(b) and b not in path] + path)
+    java_home = f"{HOME}/.sdkman/candidates/java/current"
+    if not env.get("JAVA_HOME") and os.path.isdir(java_home):
+        env["JAVA_HOME"] = java_home
+    return env
+
+
+def push_argv(remote, src, dst="main"):
+    argv = ["git", "push", remote, f"{src}:refs/heads/{dst}"]
+    assert not any(a in ("--no-verify", "-n", "--force", "-f") or a.startswith("--force") for a in argv)
+    return argv
+
+
+class Stash:
+    """A NAMED stash (git's stash list is shared by every worktree of a clone): found again by its own sha, never by
+    position, and restored exactly once."""
+
+    def __init__(self, repo):
+        self.repo, self.name, self.sha = repo, f"agentctl-land-{os.getpid()}-{int(time.time())}", None
+
+    def save(self):
+        git(self.repo, "stash", "push", "--include-untracked", "-m", self.name)
+        for line in git(self.repo, "stash", "list", "--format=%H %gs").splitlines():
+            sha, _, msg = line.partition(" ")
+            if msg.endswith(self.name):
+                self.sha = sha
+                return
+        raise RuntimeError(f"stash {self.name} not found after saving it")
+
+    def restore(self):
+        if not self.sha:
+            return True
+        r = git(self.repo, "stash", "apply", "--index", self.sha, check=False)
+        if r.returncode != 0:
+            r = git(self.repo, "stash", "apply", self.sha, check=False)
+        if r.returncode != 0:
+            err(f"could not re-apply stash {self.name} ({self.sha[:10]}): {r.stderr.strip()[:200]}; it is kept: "
+                f"`git stash list | grep {self.name}`")
+            return False
+        for i, line in enumerate(git(self.repo, "stash", "list", "--format=%H").splitlines()):
+            if line.strip() == self.sha:
+                git(self.repo, "stash", "drop", f"stash@{{{i}}}", check=False)
+                break
+        self.sha = None
+        return True
+
+
+def landed(repo, sha, main_ref):
+    if git_ok(repo, "merge-base", "--is-ancestor", sha, main_ref):
+        return "ancestor"
+    lines = git(repo, "cherry", main_ref, sha).splitlines()
+    if lines and all(l.startswith("-") for l in lines):
+        return "patch-equivalent"
+    return None
+
+
+def cmd_land(a):
+    if os.environ.get("PREPUSH_SKIP"):
+        print("NOT LANDED: PREPUSH_SKIP is set in the environment; agentctl land never skips checks. `unset PREPUSH_SKIP`.")
+        return 1
+    repo = git(a.repo or os.getcwd(), "rev-parse", "--show-toplevel").strip()
+    main_ref = f"refs/remotes/{REMOTE}/main"
+    env = tool_env()
+    log_path = os.path.join(scratch(), f"agentctl-land-{os.path.basename(repo)}-{os.getpid()}.log")
+
+    def sh(*args):
+        return subprocess.run(args, cwd=repo, capture_output=True, text=True, env=env)
+
+    dirty = git(repo, "status", "--porcelain", "--untracked-files=no").strip()
+    stash = None
+    if dirty and not a.stash:
+        print(f"NOT LANDED: the working tree has uncommitted changes ({len(dirty.splitlines())} file(s)). Commit them, or "
+              "pass --stash to set them aside in a named stash and restore them afterwards.")
+        return 1
+    if a.branch:
+        r = sh("git", "rev-parse", "--abbrev-ref", "HEAD")
+        if r.stdout.strip() != a.branch:
+            if dirty:
+                print("NOT LANDED: --branch with a dirty tree; commit first")
+                return 1
+            r = sh("git", "switch", a.branch)
+            if r.returncode:
+                print(f"NOT LANDED: cannot switch to {a.branch}: {r.stderr.strip()}")
+                return 1
+    try:
+        if dirty:
+            stash = Stash(repo)
+            stash.save()
+            err(f"stashed local changes as {stash.name} ({stash.sha[:10]})")
+        return land_loop(repo, main_ref, sh, log_path, a)
+    finally:
+        if stash and not stash.restore():
+            print(f"WARNING: local changes are in stash {stash.name}, not restored")
+
+
+def land_loop(repo, main_ref, sh, log_path, a):
+    for attempt in range(LAND_RETRIES + 1):
+        r = sh("git", "fetch", "--quiet", REMOTE, "main")
+        if r.returncode:  # a tunnel restart is seconds long: one more try before giving up
+            err(f"git fetch failed ({r.stderr.strip()[:120]}); retrying once in 15 s")
+            time.sleep(15)
+            r = sh("git", "fetch", "--quiet", REMOTE, "main")
+        if r.returncode:
+            print(f"NOT LANDED: git fetch {REMOTE} main failed: {r.stderr.strip()[:300]} (tunnel? `agentctl env --check`)")
+            return 1
+        head = git(repo, "rev-parse", "HEAD").strip()
+        if landed(repo, head, main_ref):
+            print(f"LANDED {head} (already on {REMOTE}/main)")
+            return 0
+        r = sh("git", "rebase", "--quiet", f"{REMOTE}/main")
+        if r.returncode:
+            conflicts = git(repo, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
+            sh("git", "rebase", "--abort")
+            print(f"NOT LANDED: rebase onto {REMOTE}/main conflicts in: {', '.join(conflicts) or r.stderr.strip()[:300]}. "
+                  "Resolve by hand (git rebase forgejo/main), then land again.")
+            return 1
+        head = git(repo, "rev-parse", "HEAD").strip()
+        if landed(repo, head, main_ref):
+            print(f"LANDED {head} (the rebase left nothing: already on {REMOTE}/main)")
+            return 0
+        problems = check_range(repo, f"{REMOTE}/main", head, [], int(os.environ.get("AGENTCTL_MAX_FOREIGN", "2")))
+        if problems:
+            print("NOT LANDED: prepush-check refused:\n  " + "\n  ".join(problems))
+            return 1
+        err(f"pushing {head[:10]} to {REMOTE}/main (attempt {attempt + 1}/{LAND_RETRIES + 1}; hook log: {log_path})")
+        r = sh(*push_argv(REMOTE, head))
+        with open(log_path, "a") as f:
+            f.write(f"=== attempt {attempt + 1} {ts()} {head}\n{r.stdout}{r.stderr}\n")
+        out = r.stdout + r.stderr
+        if r.returncode == 0:
+            sh("git", "fetch", "--quiet", REMOTE, "main")
+            how = landed(repo, head, main_ref)
+            if how:
+                print(f"LANDED {head}" + ("" if how == "ancestor" else f" ({how})"))
+                return 0
+            print(f"NOT LANDED: the push exited 0 but {head[:10]} is not on {REMOTE}/main after a fetch; see {log_path}")
+            return 1
+        if RACE.search(out) and attempt < LAND_RETRIES:
+            err(f"push race ({RACE.search(out).group(0)}): refetch, rebase, retry")
+            time.sleep(min(30, 2 + 3 * attempt))
+            continue
+        tail = "\n  ".join([l for l in out.splitlines() if l.strip()][-25:])
+        if REDGATE.search(out):
+            print(f"NOT LANDED: the red gate refused the push (main is red).\n  {tail}")
+            try:
+                print(ci_why(slug(repo), 4, repo=repo)[1])
+            except Exception as e:
+                print(f"(agentctl ci-why failed: {e})")
+            return 1
+        if RACE.search(out):
+            print(f"NOT LANDED: still racing after {LAND_RETRIES} retries ({RACE.search(out).group(0)}); try again shortly.")
+            return 1
+        hint = ""
+        if TUNNEL_TROUBLE.search(out):
+            hint = ("\n  HINT: the hook could not reach Forgejo (tunnel dropped?): `~/bin/agentctl env --check` "
+                    "(it says the kickstart fix), then land again.")
+        print(f"NOT LANDED: the push failed (pre-push hook or remote). Last lines (full log {log_path}):\n  {tail}{hint}")
+        return 1
+    return 1
+
+
+# ---------------------------------------------------------------- env
+TUNNEL_PORTS = [(3000, "Forgejo web/API"), (2222, "Forgejo ssh")]
+
+
+def default_ns():
+    return "movies" if os.path.realpath(os.getcwd()).startswith(os.path.realpath(f"{HOME}/projects/movies")) else "bitcashier"
+
+
+def vault_state(ns):
+    """'unlocked', 'locked' or 'unknown: <why>' -- `secrets status` only; never unlock, never read a value."""
+    try:
+        r = subprocess.run(["secrets", "status", ns], capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
+    except FileNotFoundError:
+        return "unknown: no `secrets` command"
+    except subprocess.TimeoutExpired:
+        return "unknown: `secrets status` timed out"
+    out = r.stdout.strip()
+    return out if out in ("unlocked", "locked") else ("locked" if "locked" in out and "unlocked" not in out else f"unknown: {out or r.stderr.strip()[:80]}")
+
+
+def locked_line(ns):
+    return f"vault {ns} locked: ask the user to run `! secrets unlock {ns}`"
+
+
+def port_open(port, host="127.0.0.1", timeout=2.0):
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def export_lines():
+    lines = []
+    bins = [b for b in SDKMAN_BINS if os.path.isdir(b)]
+    if bins:
+        lines.append(f'export PATH="{":".join(bins)}:$PATH"')
+    jh = f"{HOME}/.sdkman/candidates/java/current"
+    if os.path.isdir(jh):
+        lines.append(f'export JAVA_HOME="{jh}"')
+    lines.append(f'export AGENTCTL_ENV=1')
+    return lines
+
+
+def token_works(ns):
+    """Read the Forgejo token inside this call (never printed) and ask the API who it is. (ok, detail)."""
+    r = subprocess.run(["secrets", "get", ns, "FORGEJO_API_TOKEN"], capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL)
+    tok = r.stdout.strip()
+    if r.returncode or not tok:
+        return False, f"no FORGEJO_API_TOKEN in vault {ns}"
+    try:
+        req = urllib.request.Request(f"{API}/user", headers={"Authorization": f"token {tok}"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            login = json.loads(resp.read()).get("login")
+        return True, f"token valid (user {login})"
+    except Exception as e:
+        return False, f"token rejected or API unreachable: {str(e)[:80]}"
+    finally:
+        tok = None
+
+
+def cmd_env(a):
+    ns = a.ns or default_ns()
+    if not a.check:
+        print("\n".join(export_lines()))
+        st = vault_state(ns)
+        if st != "unlocked":
+            print(locked_line(ns) if st == "locked" else f"vault {ns} {st}", file=sys.stderr)
+            return 1
+        return 0
+    env = tool_env()
+    problems, report = [], []
+
+    def which(cmd):
+        for d in env["PATH"].split(":"):
+            p = os.path.join(d, cmd)
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                return p
+        return None
+
+    sbt = which("sbt")
+    (report if sbt else problems).append(f"sbt: {sbt or 'NOT FOUND (install sdkman sbt)'}")
+    java = os.path.join(env["JAVA_HOME"], "bin", "java") if env.get("JAVA_HOME") else which("java")
+    jv = subprocess.run([java, "-version"], capture_output=True, text=True, timeout=30) if java else None
+    if jv and jv.returncode == 0:
+        report.append(f"java: {(jv.stderr or jv.stdout).splitlines()[0]}")
+    else:
+        problems.append(f"java: no java that runs ({java or 'none on PATH'})")
+    st = vault_state(ns)
+    if st == "locked":
+        print(locked_line(ns))
+        return 1
+    (report if st == "unlocked" else problems).append(f"vault {ns}: {st}")
+    tunnel_ok = True
+    for port, what in TUNNEL_PORTS:
+        ok = port_open(port)
+        tunnel_ok &= ok
+        (report if ok else problems).append(f"tunnel localhost:{port} ({what}): {'open' if ok else 'REFUSED'}")
+    if not tunnel_ok:
+        problems.append("  fix: launchctl kickstart -k gui/$(id -u)/net.bitcashier.forgejo-tunnel")
+    if st == "unlocked" and port_open(TUNNEL_PORTS[0][0]):
+        ok, detail = token_works(ns)
+        (report if ok else problems).append(f"forgejo-gh token ({ns}): {detail}")
+    gh = os.path.exists(FORGEJO_GH)
+    (report if gh else problems).append(f"forgejo-gh: {FORGEJO_GH if gh else 'MISSING ' + FORGEJO_GH}")
+    for l in report:
+        print(f"ok   {l}")
+    for l in problems:
+        print(f"FAIL {l}")
+    return 1 if problems else 0
+
+
+# ---------------------------------------------------------------- db-q
+DB_ENVS = {
+    "forgejo": ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "pawel@10.1.0.3",
+                'sudo -u forgejo nix --extra-experimental-features "nix-command flakes" shell nixpkgs#sqlite -c '
+                "sqlite3 -readonly -safe -bail -header -tabs /mnt/data/forgejo/data/forgejo.db"],
+}
+# Defence in depth: sqlite3 already runs -readonly -safe. One statement, starting SELECT / WITH / PRAGMA, and none of
+# these (a CTE can front an INSERT/UPDATE/DELETE; -safe already blocks the file functions).
+WRITE_WORDS = re.compile(r"\bINSERT\b|\bREPLACE\s+INTO\b|\bUPDATE\b\s+\S+\s+SET\b|\bDELETE\s+FROM\b|"
+                         r"\b(DROP|ALTER|CREATE|ATTACH|DETACH|VACUUM|REINDEX)\s+\w|"
+                         r"\b(load_extension|writefile|readfile|edit|fts3_tokenizer)\s*\(", re.I)
+TUNNEL_LABEL = "net.bitcashier.forgejo-tunnel"
+
+
+def strip_sql(sql):
+    """The SQL with comments and string/identifier literals blanked (keywords inside them say nothing), in one pass."""
+    tok = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|`[^`]*`|\[[^\]]*\]|--[^\n]*|/\*.*?\*/", re.S)
+    return tok.sub(lambda m: " " if m.group(0)[:2] in ("--", "/*") else "''", sql)
+
+
+def sql_refusal(sql):
+    """None when the SQL is a single read-only SELECT / WITH ... SELECT / PRAGMA read; else why it is refused."""
+    if any(l.lstrip().startswith(".") for l in sql.splitlines()):
+        return "sqlite3 dot-commands are refused"
+    bare = strip_sql(sql).strip()
+    if not bare:
+        return "empty query"
+    if ";" in bare.rstrip(";").rstrip():
+        return "one statement only"
+    first = bare.split(None, 1)[0].upper()
+    if first not in ("SELECT", "WITH", "PRAGMA"):
+        return f"only SELECT, WITH and PRAGMA are allowed (got {first})"
+    m = WRITE_WORDS.search(bare)
+    if m:
+        return f"write/side-effect keyword {m.group(0)!r} is refused"
+    if first == "PRAGMA" and "=" in bare:
+        return "PRAGMA assignments are refused (reads only)"
+    return None
+
+
+def kick_tunnel():
+    subprocess.run(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{TUNNEL_LABEL}"], capture_output=True)
+    for _ in range(15):
+        if port_open(TUNNEL_PORTS[0][0]):
+            return True
+        time.sleep(1)
+    return False
+
+
+def run_db(argv, sql):
+    return subprocess.run(argv, input=sql.rstrip().rstrip(";") + ";\n", capture_output=True, text=True, timeout=300)
+
+
+def cmd_db_q(a):
+    why = sql_refusal(a.sql)
+    if why:
+        print(f"agentctl db-q: REFUSED: {why}", file=sys.stderr)
+        return 2
+    argv = DB_ENVS[a.env]
+    r = run_db(argv, a.sql)
+    if r.returncode != 0 and re.search(r"Connection refused|Connection timed out|No route to host", r.stderr):
+        err(f"connection refused; reopening the tunnel ({TUNNEL_LABEL}) once")
+        kick_tunnel()
+        r = run_db(argv, a.sql)
+    if r.returncode != 0:
+        print(f"agentctl db-q: failed (exit {r.returncode}): {r.stderr.strip()[-500:]}", file=sys.stderr)
+        return 1
+    lines = r.stdout.splitlines()
+    head, rows = lines[:1], lines[1:]
+    print("\n".join(head + rows[: a.max_rows]))
+    if len(rows) > a.max_rows:
+        print(f"... {len(rows) - a.max_rows} more row(s) not shown (capped at {a.max_rows}; add LIMIT/WHERE or --max-rows)")
+    return 0
+
+
+# ---------------------------------------------------------------- state
+TEMPLATE = """# State: {topic}
+updated: {ts}
+repo:
+branch:
+worktree:
+commits:
+run ids:
+waiting on:
+next step:
+notes:
+"""
+
+
+def cmd_state(a):
+    path = os.path.join(scratch(), f"state-{a.topic}.md")
+    if not os.path.exists(path):
+        with open(path, "w") as f:
+            f.write(TEMPLATE.format(topic=a.topic, ts=ts()))
+        err(f"created {path}")
+    text = open(path).read()
+    changed = False
+    for spec, append in [(s, False) for s in a.set or []] + [(s, True) for s in a.add or []]:
+        field, _, value = spec.partition("=")
+        field = field.strip()
+        pat = re.compile(rf"^{re.escape(field)}:[ \t]*(.*)$", re.M)
+        m = pat.search(text)
+        if m:
+            old = m.group(1).strip()
+            new = f"{old}, {value}" if append and old else value
+            text = text[: m.start()] + f"{field}: {new}" + text[m.end():]
+        else:
+            text = text.rstrip("\n") + f"\n{field}: {value}\n"
+        changed = True
+    if changed:
+        text = re.sub(r"^updated:.*$", f"updated: {ts()}", text, count=1, flags=re.M)
+        with open(path, "w") as f:
+            f.write(text)
+    print(f"# {path}")
+    print(text, end="")
+    return 0
+
+
+# ---------------------------------------------------------------- prepush-check
+def changed_files(repo, a, b):
+    """[(status, path)] for a..b (renames split into delete + add)."""
+    out = git(repo, "diff", "--name-status", "--no-renames", "-z", a, b)
+    parts = out.split("\0")
+    res = []
+    i = 0
+    while i + 1 < len(parts):
+        res.append((parts[i], parts[i + 1]))
+        i += 2
+    return res
+
+
+def blobs(repo, specs):
+    """Map 'rev:path' -> blob sha or None, in one cat-file call."""
+    if not specs:
+        return {}
+    r = git(repo, "cat-file", "--batch-check=%(objectname)", input="\n".join(specs) + "\n")
+    lines = r.splitlines()
+    return {s: (None if l.endswith("missing") else l.strip()) for s, l in zip(specs, lines)}
+
+
+def reverted_commits(repo, mb, head):
+    shas = set()
+    for body in git(repo, "log", "--format=%B%x00", f"{mb}..{head}").split("\0"):
+        shas.update(re.findall(r"This reverts commit ([0-9a-f]{7,40})", body))
+    files = set()
+    for s in shas:
+        r = git(repo, "show", "--name-only", "--format=", s, check=False)
+        if r.returncode == 0:
+            files.update(l for l in r.stdout.splitlines() if l)
+    return files
+
+
+def foreign_reverts(repo, base, head, files, depth=8, since="45.days"):
+    """Files whose content at head equals an OLDER version from main's history -- i.e. the push would undo
+    someone's change on main (absence counts: deleting a file main recently added)."""
+    hits = []
+    head_specs = [f"{head}:{p}" for _, p in files]
+    head_blob = blobs(repo, head_specs)
+    for (_, p), hs in zip(files, head_specs):
+        hb = head_blob[hs]
+        commits = git(repo, "log", f"-n{depth}", f"--since={since}", "--format=%H", base, "--", p).split()
+        if not commits:
+            continue
+        olds = blobs(repo, [f"{c}^:{p}" for c in commits])
+        cur = blobs(repo, [f"{base}:{p}"])[f"{base}:{p}"]
+        for c in commits:
+            ob = olds[f"{c}^:{p}"]
+            if ob == hb and ob != cur:
+                hits.append((p, c[:10]))
+                break
+    return hits
+
+
+def allowed(path, globs):
+    return any(fnmatch.fnmatch(path, g) or path.startswith(g.rstrip("/") + "/") for g in globs)
+
+
+def check_range(repo, base, head, allow, max_foreign):
+    problems = []
+    mb = git(repo, "merge-base", base, head).strip()
+    files = changed_files(repo, mb, head)
+    stat = git(repo, "diff", "--shortstat", mb, head).strip()
+    print(f"prepush-check: {base}...{head[:12]}: {stat or 'no changes'}")
+    if allow:
+        outside = [p for _, p in files if not allowed(p, allow)]
+        if outside:
+            problems.append(f"{len(outside)} file(s) outside the allowed set {allow}: " + ", ".join(outside[:20]))
+    exempt = reverted_commits(repo, mb, head)
+    reverts = [(p, c) for p, c in foreign_reverts(repo, base, head, files) if p not in exempt]
+    if allow:  # files in the allowed set are the agent's own: reverting them is its call
+        reverts = [(p, c) for p, c in reverts if not allowed(p, allow)]
+    if len(reverts) > max_foreign:
+        problems.append(
+            f"{len(reverts)} file(s) would be reverted/deleted back to an older main version (max {max_foreign}) -- "
+            "a squash onto a moved main? `git rebase forgejo/main` and re-check. "
+            + ", ".join(f"{p} (undoes {c})" for p, c in reverts[:20])
+        )
+    return problems
+
+
+def cmd_prepush(a):
+    repo = os.getcwd()
+    allow = (a.allow or []) + os.environ.get("AGENTCTL_ALLOW", "").split()
+    max_foreign = a.max_foreign if a.max_foreign is not None else int(os.environ.get("AGENTCTL_MAX_FOREIGN", "2"))
+    problems = []
+    if a.hook:
+        remote = a.hook[0]
+        base_ref = f"refs/remotes/{remote}/main"
+        for line in sys.stdin.read().splitlines():
+            parts = line.split()
+            if len(parts) != 4:
+                continue
+            _, lsha, rref, rsha = parts
+            if lsha == ZERO or not rref.startswith("refs/heads/"):
+                continue  # deletes and tags: nothing to check
+            base = base_ref if git_ok(repo, "rev-parse", "--verify", "-q", base_ref) else rsha
+            if base == ZERO:
+                continue
+            problems += check_range(repo, base, lsha, allow, max_foreign)
+    else:
+        problems = check_range(repo, a.base, git(repo, "rev-parse", a.head).strip(), allow, max_foreign)
+    for p in problems:
+        print(f"prepush-check: REFUSED: {p}", file=sys.stderr)
+    if problems:
+        return 1
+    print("prepush-check: ok")
+    return 0
+
+
+# ---------------------------------------------------------------- cleanup
+def log_deletion(kind, repo, name, sha, why):
+    with open(os.path.join(scratch(), "agentctl-deleted.log"), "a") as f:
+        f.write(f"{ts()}\t{kind}\t{repo}\t{name}\t{sha}\t{why}\n")
+
+
+def worktrees(repo):
+    wts, cur = [], {}
+    for line in git(repo, "worktree", "list", "--porcelain").splitlines() + [""]:
+        if not line:
+            if cur:
+                wts.append(cur)
+            cur = {}
+            continue
+        k, _, v = line.partition(" ")
+        cur[k] = v if v else True
+    return wts
+
+
+def process_cwds():
+    r = subprocess.run(["lsof", "-a", "-d", "cwd", "-Fpn"], capture_output=True, text=True)
+    res, pid = {}, None
+    for line in r.stdout.splitlines():
+        if line.startswith("p"):
+            pid = int(line[1:])
+        elif line.startswith("n") and pid:
+            res[pid] = line[1:]
+    return res
+
+
+def gitdir_activity(repo, wt_path):
+    gd = git(repo, "-C", wt_path, "rev-parse", "--absolute-git-dir", check=False)
+    if gd.returncode != 0:
+        return None
+    d = gd.stdout.strip()
+    mt = [os.stat(os.path.join(d, f)).st_mtime for f in ("HEAD", "index", "logs/HEAD", "ORIG_HEAD") if os.path.exists(os.path.join(d, f))]
+    return max(mt) if mt else None
+
+
+def merged_reason(repo, head, main):
+    if git_ok(repo, "merge-base", "--is-ancestor", head, main):
+        return "ancestor of forgejo/main"
+    lines = git(repo, "cherry", main, head).splitlines()
+    if lines and all(l.startswith("-") for l in lines):
+        return f"all {len(lines)} commit(s) patch-equivalent on forgejo/main"
+    return None
+
+
+CACHE_TREES = os.path.join(HOME, ".cache") + "/"  # tool-owned trees (e.g. kinowo-identity measure-local): reused, not litter
+
+
+def plan_worktrees(repo, main, min_age_h, cwds, include_caches=False):
+    """[(action, wt, branch, sha, reason)] where action is 'delete' or 'skip'."""
+    plan = []
+    wts = worktrees(repo)
+    checked_out = {w.get("branch") for w in wts if w.get("branch")}
+    for w in wts[1:]:  # the first entry is the main checkout
+        path, sha = w["worktree"], w.get("HEAD", "")
+        branch = w.get("branch", "").removeprefix("refs/heads/") or None
+        def skip(why):
+            plan.append(("skip", path, branch, sha, why))
+        if "locked" in w:
+            skip("locked"); continue
+        if branch in PROTECTED_BRANCHES:
+            skip(f"on {branch}"); continue
+        if path.startswith(CACHE_TREES) and not include_caches:
+            skip("tool cache tree (--include-caches to consider)"); continue
+        if "prunable" in w or not os.path.isdir(path):
+            skip("directory missing (prunable; not touched)"); continue
+        busy = [p for p, c in cwds.items() if c == path or c.startswith(path + "/")]
+        if busy:
+            skip(f"in use by pid {busy[:3]}"); continue
+        act = gitdir_activity(repo, path)
+        if act and time.time() - act < min_age_h * 3600:
+            skip(f"active {int((time.time() - act) / 60)} min ago"); continue
+        dirty = git(repo, "-C", path, "status", "--porcelain", "--untracked-files=all", check=False)
+        if dirty.returncode != 0:
+            skip("git status failed"); continue
+        if dirty.stdout.strip():
+            skip(f"dirty ({len(dirty.stdout.splitlines())} changed/untracked)"); continue
+        why = merged_reason(repo, sha, main)
+        if not why:
+            n = len(git(repo, "rev-list", f"{main}..{sha}").split())
+            skip(f"unmerged ({n} commit(s) not on forgejo/main)"); continue
+        plan.append(("delete", path, branch, sha, why))
+    return plan
+
+
+def plan_measure(o_r, runs_for, now_=None):
+    """Remote measure/* branches: [(action, name, sha, reason)]. runs_for(name) -> list of run dicts."""
+    now_ = now_ or now()
+    plan, page = [], 1
+    while True:
+        bs = api(o_r, "GET", "branches", {"limit": 50, "page": page})
+        for b in bs:
+            if b["name"].startswith("measure/"):
+                plan.append(measure_decision(b["name"], b["commit"]["id"], parse_time(b["commit"]["timestamp"]), runs_for(b["name"]), now_))
+        if len(bs) < 50:
+            return plan
+        page += 1
+
+
+def measure_decision(name, sha, commit_time, runs, now_):
+    if not name.startswith("measure/"):
+        return ("skip", name, sha, "not a measure/ branch")
+    active = [r for r in runs if r.get("status") != "completed"]
+    if active:
+        return ("skip", name, sha, f"run {active[0].get('databaseId')} {active[0].get('status')}")
+    if runs:
+        return ("delete", name, sha, f"{len(runs)} run(s) finished")
+    age_h = (now_ - commit_time).total_seconds() / 3600
+    if age_h > 24:
+        return ("delete", name, sha, f"no runs, {age_h:.0f}h old")
+    return ("skip", name, sha, f"no runs yet, {age_h:.1f}h old")
+
+
+def cmd_cleanup(a):
+    dry = a.dry_run or (sys.stdin.isatty() and not a.execute)
+    mode = "DRY RUN" if dry else "EXECUTE"
+    print(f"agentctl cleanup ({mode}); log: {os.path.join(scratch(), 'agentctl-deleted.log')}")
+    cwds = process_cwds()
+    rc = 0
+    for repo in a.repo or REPOS:
+        repo = os.path.abspath(os.path.expanduser(repo))
+        name = os.path.basename(repo)
+        if not os.path.isdir(repo):
+            continue
+        try:
+            if not a.no_fetch:
+                git(repo, "fetch", "--quiet", REMOTE, "main")
+            main = git(repo, "rev-parse", f"refs/remotes/{REMOTE}/main").strip()
+        except RuntimeError as e:
+            err(f"{name}: {e}; skipping repo"); rc = 1; continue
+        print(f"\n== {name} (forgejo/main {main[:10]})")
+        for action, path, branch, sha, why in plan_worktrees(repo, main, a.min_age_hours, cwds, a.include_caches):
+            label = f"worktree {path} [{branch or 'detached'}] {sha[:10]}"
+            if action == "skip":
+                if a.verbose:
+                    print(f"  keep   {label}: {why}")
+                continue
+            print(f"  {'would delete' if dry else 'delete'} {label}: {why}")
+            if dry:
+                continue
+            # Re-verify right before acting; `git worktree remove` (no --force) refuses dirty trees itself.
+            if git(repo, "-C", path, "rev-parse", "HEAD").strip() != sha or not merged_reason(repo, sha, main):
+                print("    changed since planning; kept"); continue
+            r = git(repo, "worktree", "remove", path, check=False)
+            if r.returncode != 0:
+                print(f"    worktree remove refused: {r.stderr.strip()}"); rc = 1; continue
+            log_deletion("worktree", name, path, sha, why)
+            if branch and branch not in PROTECTED_BRANCHES:
+                others = {w.get("branch") for w in worktrees(repo)}
+                if f"refs/heads/{branch}" in others:
+                    print(f"    branch {branch} checked out elsewhere; kept"); continue
+                r = git(repo, "update-ref", "-d", f"refs/heads/{branch}", sha, check=False)
+                if r.returncode == 0:
+                    log_deletion("branch", name, branch, sha, why)
+                    print(f"    deleted branch {branch} ({sha[:10]})")
+                else:
+                    print(f"    branch {branch} not deleted: {r.stderr.strip()}"); rc = 1
+        if a.no_remote:
+            continue
+        o_r = slug(repo)
+        try:
+            runs_for = lambda b: gh_json(o_r, "run", "list", "--branch", b, "--limit", "20", "--json", "databaseId,status")
+            mplan = plan_measure(o_r, runs_for)
+        except Exception as e:
+            err(f"{name}: measure branches not checked: {e}"); rc = 1; continue
+        for action, bname, sha, why in mplan:
+            label = f"remote {o_r}:{bname} {sha[:10]}"
+            if action == "skip":
+                if a.verbose:
+                    print(f"  keep   {label}: {why}")
+                continue
+            print(f"  {'would delete' if dry else 'delete'} {label}: {why}")
+            if dry:
+                continue
+            try:
+                cur = api(o_r, "GET", f"branches/{urllib.parse.quote(bname, safe='')}")["commit"]["id"]
+                if cur != sha:
+                    print("    moved since planning; kept"); continue
+                api(o_r, "DELETE", f"branches/{urllib.parse.quote(bname, safe='')}")
+                log_deletion("remote-branch", o_r, bname, sha, why)
+            except Exception as e:
+                print(f"    delete failed: {e}"); rc = 1
+    return rc
+
+
+# ---------------------------------------------------------------- orphans
+def ps():
+    r = subprocess.run(["ps", "-axo", "pid=,ppid=,etime=,command="], capture_output=True, text=True)
+    out = []
+    for line in r.stdout.splitlines():
+        parts = line.split(None, 3)
+        if len(parts) == 4:
+            out.append((int(parts[0]), int(parts[1]), parts[2], parts[3]))
+    return out
+
+
+def loop_body(cmd):
+    m = re.search(r"eval '(.*)' < /dev/null", cmd, re.S)
+    return m.group(1) if m else cmd
+
+
+def is_wait_loop(cmd):
+    if re.search(r"\bagentctl wait\b", cmd):
+        return True
+    if not re.match(r"\S*(zsh|bash|sh) ", cmd):
+        return False
+    body = loop_body(cmd)
+    return bool(re.search(r"\bsleep\b", body) and re.search(r"\b(until|while)\b", body))
+
+
+def loop_targets(body):
+    ids = set(re.findall(r"run (?:view|watch) (\d+)", body)) | set(re.findall(r"/runs/(\d+)", body))
+    ids |= {i for m in re.findall(r"for \w+ in ((?:\d+\s+)*\d+)\s*;", body) for i in m.split()}
+    m = re.search(r"(?:-R|--repo)[ =]([\w.-]+/[\w.-]+)", body) or re.search(r"agentctl wait run (\S+)", body)
+    repo = None
+    if m:
+        try:
+            repo = slug(m.group(1))
+        except SystemExit:
+            repo = None
+    return repo, sorted(ids, key=int)
+
+
+def missing_tree_paths(text):
+    gone = set()
+    for p in re.findall(rf"{re.escape(HOME)}/(?:projects|bitcashier)/[\w.-]+", text):
+        if not os.path.exists(p):
+            gone.add(p)
+    return sorted(gone)
+
+
+def is_sbt(cmd):
+    return ("java" in cmd.split(" ", 1)[0] and re.search(r"xsbt\.boot|sbt-launch|sbt\.boot|\bsbt\.server", cmd)) or bool(
+        re.search(r"scripts/sbt-warm --keep", cmd)
+    )
+
+
+def cmd_orphans(a):
+    procs = ps()
+    cwds = process_cwds()
+    me = {os.getpid(), os.getppid()}
+    found = []
+    status_cache = {}
+
+    def finished(repo, rid):
+        k = (repo, rid)
+        if k not in status_cache:
+            try:
+                status_cache[k] = gh_json(repo, "run", "view", rid, "--json", "status").get("status") == "completed"
+            except Exception:
+                status_cache[k] = None
+        return status_cache[k]
+
+    seen_targets = {}
+    loops = [p for p in procs if p[0] not in me and is_wait_loop(p[3])]
+    loops.sort(key=lambda p: p[0])
+    for pid, ppid, etime, cmd in loops:
+        body = loop_body(cmd)
+        reasons = []
+        if ppid == 1:
+            reasons.append("owning shell/agent is gone")
+        gone = missing_tree_paths(body + " " + cwds.get(pid, ""))
+        if gone:
+            reasons.append(f"worktree missing: {', '.join(gone)}")
+        repo, ids = loop_targets(body)
+        if repo and ids:
+            states = [finished(repo, i) for i in ids]
+            if all(s is True for s in states):
+                reasons.append(f"all target runs finished ({repo} {' '.join(ids)})")
+            key = (repo, tuple(ids))
+            if key in seen_targets and pid_alive(seen_targets[key]):
+                reasons.append(f"duplicate of loop pid {seen_targets[key]}")
+            else:
+                seen_targets.setdefault(key, pid)
+        if reasons:
+            found.append(("wait-loop", pid, etime, "; ".join(reasons), body[:140].replace("\n", " ")))
+    for pid, ppid, etime, cmd in procs:
+        if pid in me or not is_sbt(cmd):
+            continue
+        cwd = cwds.get(pid, "")
+        reasons = []
+        if cwd and not os.path.isdir(cwd):
+            reasons.append(f"cwd gone: {cwd}")
+        elif cwd and not os.path.exists(os.path.join(cwd, ".git")) and cwd.startswith(HOME + "/projects"):
+            reasons.append(f"cwd {cwd} is no longer a git checkout")
+        gone = missing_tree_paths(cmd)
+        if gone:
+            reasons.append(f"worktree missing: {', '.join(gone)}")
+        if reasons:
+            found.append(("sbt", pid, etime, "; ".join(reasons), cmd[:140]))
+    if not found:
+        print("no orphans")
+        return 0
+    for kind, pid, etime, why, what in found:
+        print(f"{kind:9} pid {pid:<6} up {etime:>11}  {why}\n          {what}")
+    if a.kill:
+        for kind, pid, *_ in found:
+            kids = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True).stdout.split()
+            for p in [pid] + [int(k) for k in kids]:
+                try:
+                    os.kill(p, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            print(f"killed {kind} pid {pid}" + (f" (+children {kids})" if kids else ""))
+    return 0
+
+
+# ---------------------------------------------------------------- main
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="agentctl", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    w = sub.add_parser("wait")
+    wsub = w.add_subparsers(dest="kind", required=True)
+    wr = wsub.add_parser("run", help="block until Forgejo runs finish; print only the verdicts",
+                         description=WAIT_RUN_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    wr.add_argument("ids", nargs="+", metavar="ID", help="run ids (action_run.id); a leading repo name is accepted (legacy form)")
+    wr.add_argument("--repo", "-R", help="o/r or short name (movies, core, infra, ...); default: the cwd's forgejo remote, else movies")
+    wr.add_argument("--until", choices=("done", "landable"), default="done",
+                    help="landable: for an Identity model convergence measure/ run, stop once the takes rows end and print their verdict files")
+    wr.add_argument("--tail", type=int, default=8, metavar="N", help="relevant log lines (FAILED/error/assert) per failed job (default 8; 0 = none)")
+    wf = wsub.add_parser("file", help="block until a file appears (and matches)")
+    wf.add_argument("target")
+    wf.add_argument("--contains")
+    for p in (wr, wf):
+        p.add_argument("--interval", type=int, default=300, help="backoff cap in seconds (<= 300)")
+        p.add_argument("--timeout", type=int, default=6 * 3600)
+    s = sub.add_parser("state", help="print/update scratchpad/state-<topic>.md (the hand-off file for long waits)",
+                       description="Print scratchpad/state-<topic>.md, creating it from the template first. --set field=value "
+                       "replaces a field, --add field=value appends to a comma-separated one. Write it before ending a turn "
+                       "that waits >30 min on CI. Reference: ~/bin/AGENTCTL.md")
+    s.add_argument("topic")
+    s.add_argument("--set", action="append")
+    s.add_argument("--add", action="append")
+    pp = sub.add_parser("prepush-check", help="refuse a push that strays outside --allow or reverts others' work on main",
+                        description="Refuses when base...head touches a file outside the allowed set, or returns more than "
+                        "--max-foreign (2) files to an older main version (the `reset --soft` squash onto a moved main). "
+                        "movies' pre-push hook calls it with --hook; `agentctl land` runs it before every push. Exit 1 refused.")
+    pp.add_argument("--base", default=f"{REMOTE}/main")
+    pp.add_argument("--head", default="HEAD")
+    pp.add_argument("--allow", action="append")
+    pp.add_argument("--max-foreign", type=int)
+    pp.add_argument("--hook", nargs="+", metavar="REMOTE [URL]")
+    c = sub.add_parser("cleanup", help="remove ONLY proven-merged worktrees/branches and finished measure/* branches",
+                       description="Removes only clean, idle worktrees whose HEAD is on forgejo/main (ancestor or all commits "
+                       "patch-equivalent), their branches, and remote measure/* branches whose runs finished. Every deletion "
+                       "is logged to scratchpad/agentctl-deleted.log. Dry run by default on a TTY; --execute acts.")
+    g = c.add_mutually_exclusive_group()
+    g.add_argument("--dry-run", action="store_true")
+    g.add_argument("--execute", action="store_true", help="act even when stdin is a TTY")
+    c.add_argument("--repo", action="append")
+    c.add_argument("--no-fetch", action="store_true")
+    c.add_argument("--no-remote", action="store_true", help="skip remote measure/* branches")
+    c.add_argument("--min-age-hours", type=float, default=2.0)
+    c.add_argument("--include-caches", action="store_true", help="also consider worktrees under ~/.cache")
+    c.add_argument("-v", "--verbose", action="store_true", help="also list what is kept and why")
+    cw = sub.add_parser("ci-why", help="why is main red: the gating runs' failed jobs, log tails, infra vs test, clearing rule",
+                        description=CI_WHY_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    cw.add_argument("target", nargs="?", default="main", help="`main` (default) or a run id to explain")
+    cw.add_argument("--repo", "-R")
+    cw.add_argument("--tail", type=int, default=6, metavar="N", help="relevant log lines per failed job")
+    ld = sub.add_parser("land", help="fetch, rebase onto forgejo/main, prepush-check, push (hook runs), verify: LANDED <sha>",
+                        description=LAND_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ld.add_argument("--repo", help="checkout to land from (default: cwd)")
+    ld.add_argument("--branch", help="local branch to land (default: the checked-out HEAD)")
+    ld.add_argument("--stash", action="store_true", help="set uncommitted changes aside in a NAMED stash and restore them after")
+    ev = sub.add_parser("env", help="print sdkman sbt/java export lines (--print) or check the agent environment (--check)",
+                        description=ENV_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    eg = ev.add_mutually_exclusive_group()
+    eg.add_argument("--print", action="store_true", help="export lines for eval (default)")
+    eg.add_argument("--check", action="store_true", help="check sbt, java, the vault, the tunnel and the Forgejo token")
+    ev.add_argument("--ns", choices=("movies", "bitcashier"), help="vault namespace (default: movies inside ~/projects/movies, else bitcashier)")
+    dq = sub.add_parser("db-q", help="read-only query of the Forgejo DB (SELECT/WITH/PRAGMA only)",
+                        description=DBQ_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    dq.add_argument("sql")
+    dq.add_argument("--env", choices=sorted(DB_ENVS), default="forgejo")
+    dq.add_argument("--max-rows", type=int, default=200)
+    o = sub.add_parser("orphans", help="list wait loops / sbt servers whose worktree, owner or target runs are gone",
+                       description="Lists wait loops and sbt servers that are orphaned: worktree gone, owning shell dead, "
+                       "every target run finished, or a duplicate of an older loop on the same runs. --kill sends SIGTERM "
+                       "(to them and their children).")
+    o.add_argument("--kill", action="store_true")
+    a = ap.parse_args(argv)
+    return {"wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd](a)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
