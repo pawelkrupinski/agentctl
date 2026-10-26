@@ -8,7 +8,7 @@ calls.
 
 - Not on PATH: call it as `~/bin/agentctl`.
 - Python 3, standard library only.
-- Tests: `python3 -m unittest discover -s ~/bin/tests` (57 tests, mutation tests included).
+- Tests: `python3 -m unittest discover -s ~/bin/tests` (72 tests, mutation tests included).
 - `agentctl --help` and `agentctl <cmd> --help` match this page.
 
 ## Standard agent workflow
@@ -20,6 +20,9 @@ heavy-run ~/bin/agentctl land               # 2. rebase + check + push + verify 
 ~/bin/agentctl wait run <id> &              # 3. Bash run_in_background=true, then END YOUR TURN
 ~/bin/agentctl ci-why                       # 4. only when land says the red gate refused, or Main is red
 ```
+
+For an identity change in movies, step 2 is `queue add` instead of `land`, followed by `queue wait` (see
+"queue" below): `land` for one non-identity commit, `queue` for anything that needs `identity-landing-check`.
 
 Step by step:
 
@@ -47,6 +50,8 @@ Step by step:
 - **Never deletes unmerged work.** `cleanup` deletes only what is proven merged: the worktree's HEAD is an ancestor of
   forgejo/main, or every one of its commits is patch-equivalent there per `git cherry`. The tree must also be clean and
   idle. Every deletion is re-verified just before it happens and logged.
+- **One queue processor.** `queue run` holds an flock on the queue directory, so the kernel frees it when the
+  processor dies. It pushes only through `push_argv()` and the pre-push hook, and refuses to run with `PREPUSH_SKIP`.
 - **One waiter per target.** `wait` holds a lock per run or file in the scratchpad. A second caller attaches to the
   live waiter's verdict file and does not poll.
 - **No artificial load.** Polls back off up to 5 minutes. Nothing in agentctl burns CPU.
@@ -198,6 +203,65 @@ LANDED c972d56a2b4932077baaa40af95d388ab500bb03
 ```
 
 Use it for every push to main. Don't use it for `measure/` branches: `identity-measure` pushes those itself.
+
+### queue: batch landings, one identity landing check per batch
+
+```
+agentctl queue add [--identity] [--repo PATH]        # from your worktree
+agentctl queue wait [<entry>] [--timeout S]          # LANDED <sha> | REJECTED <why>
+agentctl queue status
+agentctl queue cancel <entry>                        # a queued entry, not one in the current batch
+agentctl queue run [--once]                          # the processor; `queue add` starts it
+```
+
+**When to use which:**
+
+- `land`: a single change that needs no identity landing check: tools, docs, non-identity code. It is unchanged.
+- `queue`: any change that needs `scripts/identity-landing-check` (identity/, worker identity adapters, the stage,
+  the projection, title rules, identity fixtures). Don't take a landing-check slot or run the check yourself: the
+  queue does both. Several agents queued at once share ONE check instead of one each.
+
+`queue add` records the worktree, branch, HEAD, its merge-base with forgejo/main, and whether the entry needs the
+landing check. A path needs it when it matches the pre-push hook's identity-change list (`identity/`,
+`worker/src/main/scala/services/identity/`, title-rules/words, `services/titlerules/`, `test/resources/fixtures/identity-`),
+or names identity, matcher, resolver, resolution or projection code outside `scripts/`, `docs/`, `.claude/` and the
+CI trees. `--identity` forces the check. The entry also records whether it touches a production path (the hook's
+`is_production_path`) and whether every production commit carries `Fixes-Red:`. A worktree has at most one open entry.
+Only committed work is queued. If no processor is running, `queue add` starts one detached, in its own session, so it
+outlives your turn. It logs to `<queue dir>/processor.log`. The queue directory is `~/.cache/agentctl/queue/<repo>`
+(`$AGENTCTL_QUEUE_DIR` overrides it), and the processor builds batches in its own worktree, `<queue dir>/work`.
+
+How the processor works, one batch at a time:
+
+1. It fetches and takes every queued entry, in order. Entries added while a batch runs go into the next batch.
+2. **Gate.** When `ci-why` says main is red for the gate, production entries are held (their note says why and the
+   processor polls with backoff), and only tools-only and `Fixes-Red:` entries go ahead, as the hook allows.
+3. **Build.** Starting from forgejo/main, it rebases each entry onto the tip so far (`git rebase --onto`) and runs
+   prepush-check on it. An entry that conflicts, or that prepush-check refuses, is rejected alone, and the message
+   says whether it conflicts with main or only with an earlier entry.
+4. **Check.** When any entry in the batch needs it, it runs ONE `scripts/identity-landing-check --full <tip>`, holding
+   one of the shared `/tmp/movies-landing-slot-{1,2}` slots. Verdicts are cached by (main, tree).
+5. **Bisect on BLOCKED.** It checks the first half of the batch, then halves again until it finds the first entry
+   whose prefix is red. That entry is rejected with the failing output and log path. The green prefix before it is
+   pushed, and the entries after it are requeued, so they are rechecked without it. A single-entry batch is rejected
+   directly. Exit 2 ("could not check") requeues and retries, and rejects after 3 attempts.
+6. **Push** the tip with `git push forgejo <tip>:refs/heads/main`. The repo's pre-push hook runs in the work tree,
+   which is at the tip. If main moved since the batch was built, or the push races, it rebuilds and rechecks. If the
+   red gate refuses, it holds. If the hook fails on a multi-entry batch, it retries each entry alone. If it fails on
+   a single entry, that entry is rejected with the hook's tail.
+
+`queue wait` polls the entry file (no Forgejo calls), restarts a processor if none is running, and prints the verdict
+last: `LANDED <sha>` (the rebased commit on main) or `REJECTED <why>`, with the detail lines above it. Exit: 0 landed,
+1 rejected, 2 timeout (12 h by default). Start it with `run_in_background=true` and end your turn. Your branch is not
+rewritten: the landed commits are patch-equivalent to it, so `cleanup` recognises the worktree as merged.
+
+```
+$ ~/bin/agentctl queue add                      # from ~/projects/movies-wt-relay
+QUEUED 20261026-101500-relay-3f2a: 2 commit(s) up to 9c1e0a2b3d (relay); identity landing check: yes (identity/src/main/scala/services/identity/RelayStage.scala); production; position 2
+wait for it (Bash run_in_background=true, then END YOUR TURN): ~/bin/agentctl queue wait 20261026-101500-relay-3f2a
+$ ~/bin/agentctl queue wait 20261026-101500-relay-3f2a
+LANDED 4be0c1f9...
+```
 
 ### env: the agent environment, without secrets
 

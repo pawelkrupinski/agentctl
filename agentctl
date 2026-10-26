@@ -16,6 +16,10 @@
   agentctl land [--repo PATH] [--branch B] [--stash]
         fetch, rebase onto forgejo/main, prepush-check, push (the hook runs, sdkman sbt/java on PATH), retry push races
         x3, verify: last line `LANDED <sha>` or `NOT LANDED: <reason>` (+ ci-why on a red gate). Never --no-verify.
+  agentctl queue add [--identity] | wait [<entry>] | status | cancel <entry> | run [--once]
+        Merge queue: batches every queued entry onto forgejo/main, runs ONE identity landing check on the batch tip
+        (when any entry needs it), bisects a BLOCKED batch to the culprit, pushes through the normal hook. `queue wait`
+        prints LANDED <sha> | REJECTED <why>. Use it for identity changes; `land` stays for single non-identity commits.
   agentctl env [--print|--check] [--ns movies|bitcashier]
         eval "$(agentctl env --print)" puts sdkman sbt/java on PATH; --check checks sbt, java, vault, tunnel, token.
         Locked vault: one line `vault <ns> locked: ask the user to run `! secrets unlock <ns>``, exit 1. Never unlocks.
@@ -84,7 +88,7 @@ Tables: action_run, action_run_job, action_task, action_task_step (status 1 ok, 
 5 waiting, 6 running). Prefer `forgejo-gh` / `agentctl ci-why` for runs and logs; db-q is the fallback.
   agentctl db-q 'select id, "index", status, substr(title, 1, 60) from action_run order by id desc limit 10'
 Exit: 0 ok, 1 query/connection failed, 2 refused."""
-import argparse, datetime as dt, fnmatch, glob, json, os, re, signal, subprocess, sys, time, urllib.parse, urllib.request
+import argparse, contextlib, datetime as dt, fcntl, fnmatch, glob, itertools, json, os, re, shlex, signal, subprocess, sys, time, traceback, urllib.parse, urllib.request
 
 HOME = os.path.expanduser("~")
 REPOS = [f"{HOME}/bitcashier/{r}" for r in ("infra", "core", "dashboard", "invoice-page", "version-dashboard")] + [
@@ -846,6 +850,618 @@ def land_loop(repo, main_ref, sh, log_path, a):
     return 1
 
 
+# ---------------------------------------------------------------- queue
+QUEUE_HELP = """A merge queue for agent landings: ONE landing check per batch instead of one per agent.
+  agentctl queue add [--identity]      # from your worktree: enqueue its commits, start the processor if none runs
+  agentctl queue wait [<entry>]        # Bash run_in_background=true, END YOUR TURN: LANDED <sha> | REJECTED <why>
+  agentctl queue status                # the processor's phase and every open entry
+  agentctl queue cancel <entry>        # drop a queued entry (not one in the current batch)
+  agentctl queue run [--once]          # the processor itself (queue add starts it detached; one at a time, by lock)
+The processor builds forgejo/main + each queued entry rebased in order (an entry that does not rebase, or that
+prepush-check refuses, is rejected alone), runs ONE `scripts/identity-landing-check --full <tip>` when any entry needs
+it (identity/, worker identity adapters, title rules, identity fixtures, identity/matcher/resolver/projection code),
+and pushes the tip through the normal pre-push hook. BLOCKED: bisect by halves, reject the culprit with the failing
+output, land the green prefix, requeue the rest. Main moved: rebuild and recheck. Main red for the gate: production
+entries wait, tools-only (and Fixes-Red:) entries go. A multi-entry batch whose hook fails is retried one by one.
+Never --no-verify, never PREPUSH_SKIP, never a force push. Log: <queue dir>/processor.log.
+Exit: add 0 queued, 1 not; wait 0 landed, 1 rejected, 2 timeout."""
+IDENTITY_STRICT = re.compile(r"^(identity/|worker/src/main/scala/services/identity/|common/src/main/(resources/title-(rules|words)\.tsv|"
+                             r"scala/services/titlerules/)|test/resources/fixtures/identity-)")
+IDENTITY_WORDS = re.compile(r"(^|/)(identity|matcher|resolver|resolution|projection)|(identity|matcher|resolver|projection)[^/]*\.", re.I)
+TOOL_TREES = ("scripts/", "docs/", ".claude/", ".github/", ".forgejo/")
+PRODUCTION_GLOBS = ("*/src/main/*", "conf/*", "*/conf/*", "build.sbt", "project/*", "infra/nix/*", "infra/kubernetes/*", "Dockerfile")
+LANDING_CHECK = "scripts/identity-landing-check --full"
+LANDING_SLOTS = "/tmp/movies-landing-slot-1 /tmp/movies-landing-slot-2"
+QUEUE_CHECK_ERRORS = 3
+FINAL = ("landed", "rejected")
+
+
+def is_production_path(p):
+    """movies' pre-push is_production_path: what reaches a pod or a fleet host (the rest lands while red)."""
+    return any(fnmatch.fnmatch(p, g) for g in PRODUCTION_GLOBS)
+
+
+def needs_identity_check(p):
+    """The paths whose change must pass identity-landing-check: the pre-push hook's identity-change advice, plus any
+    identity/matcher/resolver/projection code outside the tool trees (takes-skip-gate's deny list)."""
+    if IDENTITY_STRICT.match(p):
+        return True
+    return bool(IDENTITY_WORDS.search(p)) and not p.startswith(TOOL_TREES) and not p.endswith(".md")
+
+
+def main_checkout(repo):
+    common = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
+    return os.path.dirname(common) if os.path.basename(common) == ".git" else common
+
+
+def queue_dir(main):
+    d = os.environ.get("AGENTCTL_QUEUE_DIR") or os.path.join(HOME, ".cache", "agentctl", "queue", os.path.basename(main))
+    os.makedirs(os.path.join(d, "entries"), exist_ok=True)
+    return d
+
+
+class Flock:
+    """An flock(2) lock: released by the kernel when its holder dies, so it never goes stale."""
+
+    def __init__(self, path):
+        self.path, self.fd = path, None
+
+    def acquire(self, block=True, tries=1, delay=0.2):
+        fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
+        for i in range(tries):
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | (0 if block else fcntl.LOCK_NB))
+                self.fd = fd
+                return True
+            except BlockingIOError:
+                if i + 1 < tries:
+                    time.sleep(delay)
+        os.close(fd)
+        return False
+
+    def release(self):
+        if self.fd is not None:
+            fcntl.flock(self.fd, fcntl.LOCK_UN)
+            os.close(self.fd)
+            self.fd = None
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
+
+
+def write_json(path, data):
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=1)
+    os.replace(tmp, path)
+
+
+def read_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def entry_path(qd, eid):
+    return os.path.join(qd, "entries", eid + ".json")
+
+
+def read_entries(qd):
+    es = [e for e in (read_json(p) for p in glob.glob(os.path.join(qd, "entries", "*.json"))) if e]
+    return sorted(es, key=lambda e: (e.get("added_at", 0), e["id"]))
+
+
+def write_entry(qd, e):
+    e["updated"] = ts()
+    write_json(entry_path(qd, e["id"]), e)
+
+
+def find_entry(qd, ref, worktree=None):
+    es = read_entries(qd)
+    if ref:
+        hits = [e for e in es if e["id"] == ref] or [e for e in es if ref in e["id"]]
+        if len(hits) != 1:
+            raise SystemExit(f"agentctl: {'no' if not hits else 'more than one'} queue entry matches {ref!r} (`agentctl queue status`)")
+        return hits[0]
+    mine = [e for e in es if e.get("worktree") == worktree]
+    if not mine:
+        raise SystemExit(f"agentctl: no queue entry for {worktree}; name one (`agentctl queue status`)")
+    open_ = [e for e in mine if e["state"] not in FINAL]
+    return (open_ or mine)[-1]
+
+
+def processor_running(qd):
+    st = read_json(os.path.join(qd, "processor.json")) or {}
+    return bool(st.get("pid")) and st.get("phase") != "exited" and pid_alive(st["pid"]), st
+
+
+def spawn_processor(qd, main):
+    """Start `agentctl queue run` detached (its own session: it outlives the agent's turn), logging to the queue dir.
+    A second processor exits at once on the lock, so starting one too many is harmless."""
+    if os.environ.get("AGENTCTL_QUEUE_NO_SPAWN"):
+        return None
+    with open(os.path.join(qd, "processor.log"), "a") as log:
+        p = subprocess.Popen([sys.executable, os.path.realpath(__file__), "queue", "run", "--repo", main], cwd=main,
+                             stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, env=tool_env())
+    return p.pid
+
+
+def has_landing_check(repo, head):
+    return bool(os.environ.get("AGENTCTL_LANDING_CHECK")) or git_ok(repo, "cat-file", "-e", f"{head}:scripts/identity-landing-check")
+
+
+def cmd_queue(a):
+    return {"add": cmd_queue_add, "status": cmd_queue_status, "wait": cmd_queue_wait, "cancel": cmd_queue_cancel,
+            "run": cmd_queue_run}[a.qcmd](a)
+
+
+def cmd_queue_add(a):
+    if os.environ.get("PREPUSH_SKIP"):
+        print("NOT QUEUED: PREPUSH_SKIP is set in the environment; the queue never skips checks. `unset PREPUSH_SKIP`.")
+        return 1
+    wt = git(a.repo or os.getcwd(), "rev-parse", "--show-toplevel").strip()
+    main = main_checkout(wt)
+    qd = queue_dir(main)
+    main_ref = f"refs/remotes/{REMOTE}/main"
+    if git(wt, "fetch", "--quiet", REMOTE, "main", check=False).returncode:
+        err(f"git fetch {REMOTE} main failed; using the last fetched {REMOTE}/main")
+    head = git(wt, "rev-parse", "HEAD").strip()
+    branch = git(wt, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    if landed(wt, head, main_ref):
+        print(f"LANDED {head} (already on {REMOTE}/main; nothing to queue)")
+        return 0
+    base = git(wt, "merge-base", head, main_ref).strip()
+    commits = git(wt, "rev-list", "--reverse", f"{base}..{head}").split()
+    files = [f for f in git(wt, "diff", "--name-only", base, head).splitlines() if f]
+    why_identity = next((f for f in files if needs_identity_check(f)), None) if has_landing_check(wt, head) else None
+    identity = bool(a.identity or why_identity)
+    prod = [c for c in commits if any(is_production_path(p) for p in git(wt, "diff-tree", "--no-commit-id", "--name-only", "-r", c).split())]
+    fixes = bool(prod) and all("Fixes-Red:" in git(wt, "log", "-1", "--format=%B", c) for c in prod)
+    if git(wt, "status", "--porcelain", "--untracked-files=no").strip():
+        err("note: uncommitted changes are not queued: only the committed HEAD is")
+    with Flock(os.path.join(qd, "queue.lock")):
+        es = read_entries(qd)
+        dup = next((e for e in es if e["state"] not in FINAL and e.get("worktree") == wt), None)
+        if dup:
+            print(f"NOT QUEUED: {wt} already has entry {dup['id']} ({dup['state']}, head {dup['head'][:10]}). Wait for it, or "
+                  f"`agentctl queue cancel {dup['id']}` (a queued entry only) and add again.")
+            return 1
+        eid = f"{now():%Y%m%d-%H%M%S}-{re.sub(r'[^A-Za-z0-9._-]+', '-', branch)[:40]}-{os.urandom(2).hex()}"
+        e = {"id": eid, "state": "queued", "repo": main, "worktree": wt, "branch": branch, "head": head, "base": base,
+             "commits": commits, "identity": identity, "identity_why": "--identity" if a.identity else why_identity,
+             "production": bool(prod), "fixes_red": fixes, "added": ts(), "added_at": time.time(), "note": ""}
+        write_entry(qd, e)
+        write_json(os.path.join(qd, "config.json"), {"repo": main})
+        pos = sum(1 for x in es if x["state"] not in FINAL) + 1
+    print(f"QUEUED {eid}: {len(commits)} commit(s) up to {head[:10]} ({branch}); identity landing check: "
+          + (f"yes ({e['identity_why']})" if identity else "no") + f"; {'production' if prod else 'tools-only'}; position {pos}")
+    running, st = processor_running(qd)
+    if not running:
+        pid = spawn_processor(qd, main)
+        if pid:
+            err(f"started the queue processor (pid {pid}; log {os.path.join(qd, 'processor.log')})")
+    print(f"wait for it (Bash run_in_background=true, then END YOUR TURN): ~/bin/agentctl queue wait {eid}")
+    return 0
+
+
+def cmd_queue_status(a):
+    main = main_checkout(a.repo or os.getcwd())
+    qd = queue_dir(main)
+    running, st = processor_running(qd)
+    print(f"queue {qd} (repo {main})")
+    if running:
+        detail = " ".join(f"{k}={v}" for k, v in st.items() if k not in ("pid", "phase", "since") and v)
+        print(f"processor: pid {st['pid']}, {st.get('phase')} since {st.get('since')}" + (f"; {detail}" if detail else ""))
+    else:
+        print("processor: not running")
+    es = read_entries(qd)
+    open_ = [e for e in es if e["state"] not in FINAL]
+    for e in open_:
+        print(f"  {e['id']}  {e['state']:<10} {e['head'][:10]} {e.get('branch')} identity={'yes' if e.get('identity') else 'no'} "
+              f"{'production' if e.get('production') else 'tools-only'}" + (" solo" if e.get("solo") else "")
+              + (f"\n      {e['note']}" if e.get("note") else ""))
+    if not open_:
+        print("  (no open entries)")
+    cutoff = time.time() - 86400
+    done = [e for e in es if e["state"] in FINAL and e.get("finished_at", 0) >= cutoff]
+    if done:
+        print("finished in the last 24 h:")
+        for e in done[-15:]:
+            what = f"LANDED {e.get('result_sha', '')[:10]}" if e["state"] == "landed" else f"REJECTED {(e.get('why') or '').splitlines()[0][:100]}"
+            print(f"  {e['id']}  {what}")
+    return 0
+
+
+def cmd_queue_wait(a):
+    wt = git(a.repo or os.getcwd(), "rev-parse", "--show-toplevel").strip()
+    main = main_checkout(wt)
+    qd = queue_dir(main)
+    eid = find_entry(qd, a.entry, wt)["id"]
+    poll = float(os.environ.get("AGENTCTL_QUEUE_POLL", "20"))
+    deadline, spawned_at = time.time() + a.timeout, 0.0
+    while True:
+        e = read_json(entry_path(qd, eid)) or {}
+        if e.get("state") == "landed":
+            print(f"LANDED {e['result_sha']}" + (f" ({e['why']})" if e.get("why") else ""))
+            return 0
+        if e.get("state") == "rejected":
+            why = (e.get("why") or "no reason recorded").splitlines()
+            for l in why[1:]:
+                print(f"  {l}")
+            print(f"REJECTED {why[0]}")
+            return 1
+        cfg = read_json(os.path.join(qd, "config.json")) or {}
+        if not processor_running(qd)[0] and time.time() - spawned_at > 300:
+            pid = spawn_processor(qd, cfg.get("repo") or main)
+            spawned_at = time.time()
+            if pid:
+                err(f"no queue processor was running; started one (pid {pid})")
+        if time.time() >= deadline:
+            print(f"TIMEOUT after {a.timeout}s: {eid} is still {e.get('state')}" + (f" ({e['note']})" if e.get("note") else ""))
+            return 2
+        time.sleep(max(0.05, min(poll, deadline - time.time())))
+
+
+def cmd_queue_cancel(a):
+    wt = git(a.repo or os.getcwd(), "rev-parse", "--show-toplevel").strip()
+    qd = queue_dir(main_checkout(wt))
+    with Flock(os.path.join(qd, "queue.lock")):
+        e = find_entry(qd, a.entry, wt)
+        if e["state"] != "queued":
+            print(f"NOT CANCELLED: {e['id']} is {e['state']}" + (" (in the current batch)" if e["state"] == "processing" else ""))
+            return 1
+        e.update(state="rejected", why="cancelled by its owner", finished=ts(), finished_at=time.time())
+        write_entry(qd, e)
+    print(f"CANCELLED {e['id']}")
+    return 0
+
+
+def cmd_queue_run(a):
+    main = main_checkout(a.repo or os.getcwd())
+    qd = queue_dir(main)
+    if os.environ.get("PREPUSH_SKIP"):
+        print(f"{ts()} queue: refusing to run with PREPUSH_SKIP set", flush=True)
+        return 1
+    lock = Flock(os.path.join(qd, "processor.lock"))
+    if not lock.acquire(block=False, tries=10):
+        print(f"{ts()} queue: a processor already runs (pid {processor_running(qd)[1].get('pid')}); exiting", flush=True)
+        return 0
+    try:
+        return QueueProcessor(qd, main, a.once).run(lock)
+    finally:
+        lock.release()
+
+
+class QueueProcessor:
+    def __init__(self, qd, repo, once=False):
+        self.qd, self.repo, self.once = qd, repo, once
+        self.work = os.path.join(qd, "work")
+        self.main_ref = f"refs/remotes/{REMOTE}/main"
+        self.env = tool_env()
+        self.qlock = os.path.join(qd, "queue.lock")
+        self.held_why = ""
+        self.max_foreign = int(os.environ.get("AGENTCTL_MAX_FOREIGN", "2"))
+
+    # -- bookkeeping
+    def log(self, msg):
+        print(f"{ts()} {msg}", flush=True)
+
+    def status(self, phase, **kw):
+        write_json(os.path.join(self.qd, "processor.json"), {"pid": os.getpid(), "phase": phase, "since": ts(), **kw})
+
+    def update(self, e, only_if=None, **fields):
+        with Flock(self.qlock):
+            cur = read_json(entry_path(self.qd, e["id"]))
+            if not cur or (only_if and cur["state"] != only_if):
+                return None
+            cur.update(fields)
+            write_entry(self.qd, cur)
+            return cur
+
+    def finish(self, e, state, sha=None, why=""):
+        self.log(f"{state.upper()} {e['id']}" + (f" {sha}" if sha else "") + (f": {why.splitlines()[0]}" if why else ""))
+        self.update(e, state=state, result_sha=sha, why=why, finished=ts(), finished_at=time.time(), note="")
+
+    def reject(self, e, why):
+        self.finish(e, "rejected", why=why)
+
+    def requeue(self, entries, note, solo=False):
+        for e in entries:
+            self.log(f"requeue {e['id']}: {note}")
+            self.update(e, state="queued", note=note, batch_sha=None, **({"solo": True} if solo else {}))
+
+    # -- the loop
+    def run(self, lock):
+        self.status("starting")
+        for e in read_entries(self.qd):
+            if e["state"] == "processing":  # we hold the lock: whoever was processing it is gone
+                self.update(e, state="queued", note="requeued: the processor that held it ended")
+        hold = backoff(float(os.environ.get("AGENTCTL_QUEUE_HOLD_POLL", "60")), 300)
+        try:
+            while True:
+                try:
+                    outcome = self.pass_()
+                except Exception as e:  # never strand claimed entries: requeue them and hold
+                    self.log(f"processor error: {e}\n{traceback.format_exc()}")
+                    self.requeue([x for x in read_entries(self.qd) if x["state"] == "processing"], f"requeued after a processor error: {e}")
+                    self.held_why, outcome = f"processor error: {e}", "held"
+                if outcome == "progress":
+                    hold = backoff(float(os.environ.get("AGENTCTL_QUEUE_HOLD_POLL", "60")), 300)
+                    continue
+                if outcome == "held":
+                    if self.once:
+                        self.log(f"held ({self.held_why}); --once: exiting")
+                        return 0
+                    d = next(hold)
+                    self.status("holding", why=self.held_why, retry_in=f"{d:.0f}s")
+                    self.log(f"held ({self.held_why}); next try in {d:.0f}s")
+                    time.sleep(d)
+                    continue
+                # idle: give up the lock, then look once more -- an entry added while we were leaving is not stranded
+                self.status("exited")
+                lock.release()
+                if not any(e["state"] == "queued" for e in read_entries(self.qd)) or not lock.acquire(block=False, tries=10):
+                    return 0
+                self.status("starting")
+        finally:
+            if lock.fd is not None:
+                self.status("exited")
+
+    def fetch(self):
+        for i in range(2):
+            if git(self.repo, "fetch", "--quiet", REMOTE, "main", check=False).returncode == 0:
+                return git(self.repo, "rev-parse", self.main_ref).strip()
+            if i == 0:
+                time.sleep(15)
+        return None
+
+    def gate(self):
+        """(red, summary) from ci-why -- the pre-push red gate's view. ci-why failing holds nothing: the hook still gates."""
+        try:
+            red, text = ci_why(slug(self.repo), 3, repo=self.repo)
+        except (Exception, SystemExit) as e:
+            self.log(f"gate: ci-why failed ({e}); not holding (the pre-push hook still enforces the gate)")
+            return False, ""
+        return red, "; ".join(l.strip() for l in text.splitlines() if ": RED" in l) or "main is red for the gate"
+
+    def pass_(self):
+        main = self.fetch()
+        if not main:
+            self.held_why = f"git fetch {REMOTE} main failed (tunnel? `agentctl env --check`)"
+            return "held"
+        queued = [e for e in read_entries(self.qd) if e["state"] == "queued"]
+        if not queued:
+            return "idle"
+        cands = [queued[0]] if queued[0].get("solo") else list(itertools.takewhile(lambda e: not e.get("solo"), queued))
+        red, why = self.gate()
+        ok = cands if not red else [e for e in cands if not e.get("production") or e.get("fixes_red")]
+        if red:
+            for e in cands:
+                if e not in ok:
+                    self.update(e, only_if="queued", note=f"held: main is red for the gate ({why}); production commits wait "
+                                f"for green, tools-only entries land")
+        if not ok:
+            self.held_why = f"main is red for the gate ({why})"
+            return "held"
+        claimed = []
+        with Flock(self.qlock):
+            for e in ok:
+                cur = read_json(entry_path(self.qd, e["id"]))
+                if cur and cur["state"] == "queued":
+                    cur.update(state="processing", note="")
+                    write_entry(self.qd, cur)
+                    claimed.append(cur)
+        return self.batch(main, claimed) if claimed else "progress"
+
+    # -- building
+    def ensure_work(self, sha):
+        if not (os.path.isdir(self.work) and git_ok(self.work, "rev-parse", "--git-dir")):
+            git(self.repo, "worktree", "prune", check=False)
+            if os.path.exists(self.work):
+                os.rename(self.work, f"{self.work}.broken-{int(time.time())}")
+            git(self.repo, "worktree", "add", "--detach", "-q", self.work, sha)
+        git(self.work, "rebase", "--abort", check=False)
+        git(self.work, "checkout", "-q", "--detach", "-f", sha)
+
+    def rebases_alone(self, main, e):
+        r = git(self.work, "rebase", "--quiet", "--onto", main, e["base"], e["head"], check=False)
+        if r.returncode:
+            git(self.work, "rebase", "--abort", check=False)
+        return r.returncode == 0
+
+    def batch(self, main, entries):
+        self.status("building", batch=" ".join(e["id"] for e in entries))
+        self.ensure_work(main)
+        tip, included = main, []
+        for e in entries:
+            r = git(self.work, "rebase", "--quiet", "--onto", tip, e["base"], e["head"], check=False)
+            if r.returncode:
+                files = git(self.work, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
+                git(self.work, "rebase", "--abort", check=False)
+                what = ", ".join(files) or r.stderr.strip()[:300]
+                if tip != main and self.rebases_alone(main, e):
+                    why = (f"conflicts with an earlier entry of the batch ({', '.join(x['id'] for x in included)}) in: {what}\n"
+                           f"it rebases onto {REMOTE}/main alone: once those land, `git rebase {REMOTE}/main`, resolve, "
+                           f"`agentctl queue add` again")
+                else:
+                    why = f"does not rebase onto {REMOTE}/main: conflicts in: {what}\n`git rebase {REMOTE}/main`, resolve, `agentctl queue add` again"
+                self.reject(e, why)
+                git(self.work, "checkout", "-q", "--detach", "-f", tip)
+                continue
+            new = git(self.work, "rev-parse", "HEAD").strip()
+            if new == tip:
+                if tip == main:
+                    self.finish(e, "landed", sha=e["head"], why=f"already on {REMOTE}/main")
+                else:
+                    self.reject(e, "its commits are already in an earlier entry of the batch: "
+                                   + ", ".join(x["id"] for x in included))
+                continue
+            problems = check_range(self.work, tip, new, [], self.max_foreign)
+            if problems:
+                self.reject(e, "prepush-check refused it after the rebase:\n" + "\n".join(problems))
+                git(self.work, "checkout", "-q", "--detach", "-f", tip)
+                continue
+            e["batch_sha"] = new
+            self.update(e, batch_sha=new)
+            included.append(e)
+            tip = new
+        if not included:
+            return "progress"
+        self.log(f"batch on {main[:10]}: " + ", ".join(e["id"] for e in included) + f" -> {tip[:10]}")
+        if any(e.get("identity") for e in included):
+            v, text, logp = self.check(tip, main)
+            if v == "error":
+                return self.check_error(included, text, logp)
+            if v == "red":
+                return self.bisect(main, included, text, logp)
+        return self.push(main, tip, included)
+
+    # -- the landing check
+    @contextlib.contextmanager
+    def slot(self):
+        """One of the global landing-check slots (the same mkdir slots agents take by hand)."""
+        slots = (os.environ.get("AGENTCTL_LANDING_SLOTS") or LANDING_SLOTS).split()
+        poll = float(os.environ.get("AGENTCTL_SLOT_POLL", "60"))
+        got = None
+        while not got:
+            for s in slots:
+                try:
+                    os.mkdir(s)
+                    got = s
+                    break
+                except FileExistsError:
+                    pass
+            if not got:
+                self.status("waiting for a landing-check slot", slots=" ".join(slots))
+                time.sleep(poll)
+        try:
+            yield got
+        finally:
+            try:
+                os.rmdir(got)
+            except OSError:
+                pass
+
+    def check(self, sha, main):
+        """('green'|'red'|'error', output, log path) of the landing check at sha. A verdict is cached by (main, tree):
+        identity-landing-check measures the tree against its merge-base with main, nothing else."""
+        tree = git(self.work, "rev-parse", f"{sha}^{{tree}}").strip()
+        vdir = os.path.join(self.qd, "verdicts")
+        os.makedirs(vdir, exist_ok=True)
+        cache = os.path.join(vdir, f"{main}-{tree}.json")
+        hit = read_json(cache)
+        if hit:
+            self.log(f"landing check {sha[:10]}: {hit['verdict']} (cached for this main and tree)")
+            return hit["verdict"], hit["text"], hit["log"]
+        argv = shlex.split(os.environ.get("AGENTCTL_LANDING_CHECK") or LANDING_CHECK) + [sha]
+        os.makedirs(os.path.join(self.qd, "checks"), exist_ok=True)
+        logp = os.path.join(self.qd, "checks", f"{sha[:12]}-{int(time.time())}.log")
+        with self.slot():
+            self.status("checking", sha=sha, log=logp)
+            self.log(f"landing check {sha[:10]}: {' '.join(argv)} (log {logp})")
+            with open(logp, "w") as f:
+                try:
+                    r = subprocess.run(argv, cwd=self.work, stdout=subprocess.PIPE, stderr=f, text=True, env=self.env,
+                                       stdin=subprocess.DEVNULL, timeout=8 * 3600)
+                    rc, out = r.returncode, r.stdout
+                except subprocess.TimeoutExpired:
+                    rc, out = 124, "landing check timed out after 8 h\n"
+                f.write(out)
+        lines = [l for l in out.splitlines() if l.strip()]
+        last = lines[-1].strip() if lines else ""
+        v = "green" if rc == 0 and last.startswith("LANDABLE") else "red" if rc == 1 else "error"
+        text = "\n".join(open(logp, errors="replace").read().splitlines()[-30:])
+        self.log(f"landing check {sha[:10]}: {v} (exit {rc}; {last[:120]})")
+        if v != "error":
+            write_json(cache, {"verdict": v, "text": text, "log": logp, "sha": sha})
+        return v, text, logp
+
+    def check_error(self, entries, text, logp):
+        keep = []
+        for e in entries:
+            n = (read_json(entry_path(self.qd, e["id"])) or e).get("check_errors", 0) + 1
+            self.update(e, check_errors=n)
+            if n >= QUEUE_CHECK_ERRORS:
+                self.reject(e, f"the landing check could not run {n} times (no verdict; full log {logp}); "
+                               f"fix the cause, then `agentctl queue add` again\n{text}")
+            else:
+                keep.append(e)
+        self.requeue(keep, f"the landing check could not run (no verdict; log {logp}); retrying")
+        self.held_why = "the landing check could not run"
+        return "held" if keep else "progress"
+
+    def bisect(self, main, entries, red_text, red_log):
+        """The batch tip is BLOCKED. Find the first prefix that is red by halves (main itself is taken as green: the
+        gate holds production work while main is red), reject that entry, land the green prefix, requeue the rest."""
+        tips = [e["batch_sha"] for e in entries]
+        lo, hi = 0, len(entries)
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            self.log(f"bisect: checking the first {mid} of {len(entries)} entries ({tips[mid - 1][:10]})")
+            v, text, logp = self.check(tips[mid - 1], main)
+            if v == "error":
+                return self.check_error(entries, text, logp)
+            if v == "green":
+                lo = mid
+            else:
+                hi, red_text, red_log = mid, text, logp
+        culprit, prefix, rest = entries[hi - 1], entries[:lo], entries[hi:]
+        how = (f"bisected: with the {hi - 1} entr{'y' if hi == 2 else 'ies'} before it the check is LANDABLE, with it BLOCKED"
+               if len(entries) > 1 else "the batch was this entry alone")
+        self.reject(culprit, f"the identity landing check is BLOCKED with it ({how}); full log {red_log}\n{red_text}")
+        if prefix:
+            outcome = self.push(main, tips[lo - 1], prefix)
+            self.requeue(rest, f"requeued after {culprit['id']} was rejected")
+            return outcome
+        self.requeue(rest, f"requeued after {culprit['id']} was rejected")
+        return "progress"
+
+    # -- landing
+    def push(self, main, tip, entries):
+        cur = self.fetch()
+        if cur != main:
+            self.requeue(entries, f"{REMOTE}/main moved ({main[:10]} -> {(cur or '?')[:10]}) under the batch: rebuilding and rechecking")
+            return "progress"
+        self.status("pushing", sha=tip, batch=" ".join(e["id"] for e in entries))
+        git(self.work, "checkout", "-q", "--detach", "-f", tip)  # the hook checks the pushed tree in place
+        r = subprocess.run(push_argv(REMOTE, tip), cwd=self.work, capture_output=True, text=True, env=self.env)
+        out = r.stdout + r.stderr
+        logp = os.path.join(self.qd, "checks", f"push-{tip[:12]}-{int(time.time())}.log")
+        os.makedirs(os.path.dirname(logp), exist_ok=True)
+        with open(logp, "w") as f:
+            f.write(out)
+        if r.returncode == 0:
+            self.fetch()
+            for e in entries:
+                if landed(self.repo, e["batch_sha"], self.main_ref):
+                    self.finish(e, "landed", sha=e["batch_sha"])
+                else:
+                    self.reject(e, f"the push exited 0 but {e['batch_sha'][:10]} is not on {REMOTE}/main after a fetch; see {logp}")
+            return "progress"
+        if RACE.search(out):
+            self.requeue(entries, f"push race ({RACE.search(out).group(0)}): rebuilding on the new main and rechecking")
+            return "progress"
+        tail = "\n".join([l for l in out.splitlines() if l.strip()][-25:])
+        if REDGATE.search(out):
+            self.requeue(entries, "held: the red gate refused the push (main is red)")
+            self.held_why = "the red gate refused the push"
+            return "held"
+        if len(entries) > 1:
+            self.log(f"the batch's pre-push hook failed (log {logp}):\n{tail}")
+            self.requeue(entries, f"the batch's pre-push hook failed (log {logp}); retrying each entry alone", solo=True)
+            return "progress"
+        hint = ("\nHINT: the hook could not reach Forgejo (tunnel dropped?): `~/bin/agentctl env --check`, then queue add again"
+                if TUNNEL_TROUBLE.search(out) else "")
+        self.reject(entries[0], f"the pre-push hook failed (full log {logp}):\n{tail}{hint}")
+        return "progress"
+
+
 # ---------------------------------------------------------------- env
 TUNNEL_PORTS = [(3000, "Forgejo web/API"), (2222, "Forgejo ssh")]
 
@@ -1572,8 +2188,23 @@ def main(argv=None):
                        "every target run finished, or a duplicate of an older loop on the same runs. --kill sends SIGTERM "
                        "(to them and their children).")
     o.add_argument("--kill", action="store_true")
+    q = sub.add_parser("queue", help="merge queue: batch landings, one identity landing check per batch, bisect on red",
+                       description=QUEUE_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    qs = q.add_subparsers(dest="qcmd", required=True)
+    qa = qs.add_parser("add", help="enqueue this worktree's commits; start the processor if none runs")
+    qa.add_argument("--identity", action="store_true", help="run the identity landing check even when no path needs it")
+    qst = qs.add_parser("status", help="the processor's phase and the open entries")
+    qw = qs.add_parser("wait", help="block until an entry lands or is rejected: LANDED <sha> | REJECTED <why>")
+    qw.add_argument("entry", nargs="?", help="entry id (or a unique part of it); default: this worktree's newest entry")
+    qw.add_argument("--timeout", type=int, default=12 * 3600)
+    qc = qs.add_parser("cancel", help="drop a queued entry (not one in the current batch)")
+    qc.add_argument("entry", nargs="?")
+    qr = qs.add_parser("run", help="the processor (queue add starts it detached; one runs at a time)")
+    qr.add_argument("--once", action="store_true", help="exit instead of waiting when only held entries are left")
+    for p in (qa, qst, qw, qc, qr):
+        p.add_argument("--repo", help="checkout (default: cwd)")
     a = ap.parse_args(argv)
-    return {"wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd](a)
+    return {"queue": cmd_queue, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd](a)
 
 
 if __name__ == "__main__":
