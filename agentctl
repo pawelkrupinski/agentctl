@@ -1255,8 +1255,10 @@ def cmd_queue_requeue(a):
             print(f"REQUEUED {dup['id']} in the place of {e['id']} (same head {e['head'][:10]}; not duplicated)")
         else:
             e.update(state="queued", why="", result_sha=None, finished=None, finished_at=None, note="requeued")
+            if a.last:
+                e["added_at"] = time.time()
             write_entry(qd, e)
-            print(f"REQUEUED {e['id']} in its original place")
+            print(f"REQUEUED {e['id']} " + ("behind the open entries" if a.last else "in its original place"))
     if not processor_running(qd)[0]:
         spawn_processor(qd, main)
     return 0
@@ -2447,6 +2449,7 @@ def main(argv=None):
     qre = qs.add_parser("resume", help="lift a FLAKY (or MAIN RED) hold; the processor starts again")
     qrq = qs.add_parser("requeue", help="put a wrongly rejected entry back in its original place")
     qrq.add_argument("entry")
+    qrq.add_argument("--last", action="store_true", help="behind every open entry instead of its original place")
     for p in (qa, qst, qw, qc, qr, qre, qrq):
         p.add_argument("--repo", help="checkout (default: cwd)")
     a = ap.parse_args(argv)

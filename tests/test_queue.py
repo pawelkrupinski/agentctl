@@ -377,6 +377,16 @@ class QueueTest(Base):
         self.process()
         self.assertEqual(self.remote_log()[:2], ["q2", "q1"])
 
+    def test_requeue_last_goes_behind_the_open_entries(self):
+        w1, _ = self.agent("l1", {"f1.txt": "l1\n"})
+        w2, _ = self.agent("l2", {"f2.txt": "l2\n"})
+        id1 = self.add(w1)
+        self.run_tool("queue", "cancel", id1, cwd=self.r.path)
+        id2 = self.add(w2)
+        rc, out = self.run_tool("queue", "requeue", id1, "--last", cwd=self.r.path)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([e["id"] for e in A.read_entries(self.qd) if e["state"] == "queued"], [id2, id1])
+
     def test_single_red_entry_is_rejected_without_bisecting(self):
         w, _ = self.agent("r1", {"identity/R.scala": "r\n", "RED": "SomeSpec\n"})
         eid = self.add(w)

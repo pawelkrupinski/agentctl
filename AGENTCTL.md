@@ -212,7 +212,7 @@ agentctl queue wait [<entry>] [--timeout S]          # LANDED <sha> | REJECTED <
 agentctl queue status
 agentctl queue cancel <entry>                        # a queued entry, not one in the current batch
 agentctl queue resume                                # lift a hold that waits for it; refreshes the processor's token
-agentctl queue requeue <entry>                       # a wrongly rejected entry back in its original place
+agentctl queue requeue <entry> [--last]              # a wrongly rejected entry back (original place, or last)
 agentctl queue run [--once]                          # the processor; `queue add` starts it
 ```
 
