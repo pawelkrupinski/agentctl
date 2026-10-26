@@ -857,7 +857,8 @@ QUEUE_HELP = """A merge queue for agent landings: ONE landing check per batch in
   agentctl queue add [--identity]      # from your worktree: enqueue its commits, start the processor if none runs
   agentctl queue wait [<entry>]        # Bash run_in_background=true, END YOUR TURN: LANDED <sha> | REJECTED <why>
   agentctl queue status                # the processor's phase and every open entry
-  agentctl queue cancel <entry>        # drop a queued entry (not one in the current batch)
+  agentctl queue cancel <entry>        # drop an entry; one in the current batch stops its check and the rest rebuild
+  agentctl queue hold [--reason R]     # PAUSE (sticks: waiters keep waiting and start no processor) until resume
   agentctl queue resume                # lift a FLAKY hold (after the fix is on main, or the owner decides)
   agentctl queue run [--once]          # the processor itself (queue add starts it detached; one at a time, by lock)
 The processor builds forgejo/main + each queued entry rebased in order (an entry that does not rebase, or that
@@ -1038,7 +1039,7 @@ def has_landing_check(repo, head):
 def cmd_queue(a):
     return {"add": cmd_queue_add, "status": cmd_queue_status, "wait": cmd_queue_wait, "cancel": cmd_queue_cancel,
             "run": cmd_queue_run,
-            "resume": cmd_queue_resume, "requeue": cmd_queue_requeue}[a.qcmd](a)
+            "resume": cmd_queue_resume, "requeue": cmd_queue_requeue, "hold": cmd_queue_hold}[a.qcmd](a)
 
 
 def cmd_queue_add(a):
@@ -1110,7 +1111,7 @@ def cmd_queue_status(a):
     hold = read_hold(qd)
     if hold:
         print(f"HELD since {hold.get('since')}: {hold['what']}" + (f" -- {hold['detail']}" if hold.get("detail") else "")
-              + ("; `agentctl queue resume` to go on" if hold.get("kind") == "flaky" else "; resumes when main moves and the gate is green"))
+              + ("; `agentctl queue resume` to go on" if hold_needs_resume(hold) else "; resumes by itself when main moves and the gate is green"))
     es = read_entries(qd)
     open_ = [e for e in es if e["state"] not in FINAL]
     for e in open_:
@@ -1148,7 +1149,8 @@ def cmd_queue_wait(a):
             print(f"REJECTED {why[0]}")
             return 1
         hold = read_hold(qd)
-        if hold and hold_needs_resume(hold):
+        paused = bool(hold) and hold.get("kind") == "manual"
+        if hold and hold_needs_resume(hold) and not paused:
             if hold.get("kind") == "flaky":
                 print(f"  {hold.get('detail', '')}; nobody rejected, nothing landed. Not yours unless your spec is named: report it.")
                 print(f"  the owner resumes with `agentctl queue resume` once it is fixed on main")
@@ -1158,7 +1160,7 @@ def cmd_queue_wait(a):
                 print(f"HELD {hold['what']}")
             return 3
         cfg = read_json(os.path.join(qd, "config.json")) or {}
-        if not processor_running(qd)[0] and time.time() - spawned_at > 300:
+        if not paused and not processor_running(qd)[0] and time.time() - spawned_at > 300:
             pid = spawn_processor(qd, cfg.get("repo") or main)
             spawned_at = time.time()
             if pid:
@@ -1174,8 +1176,14 @@ def cmd_queue_cancel(a):
     qd = queue_dir(main_checkout(wt))
     with Flock(os.path.join(qd, "queue.lock")):
         e = find_entry(qd, a.entry, wt)
-        if e["state"] != "queued":
-            print(f"NOT CANCELLED: {e['id']} is {e['state']}" + (" (in the current batch)" if e["state"] == "processing" else ""))
+        if e["state"] == "processing" and processor_running(qd)[0]:
+            e["cancel_requested"] = ts()
+            write_entry(qd, e)
+            print(f"CANCEL REQUESTED {e['id']}: the processor drops it from the current batch (stopping the batch's check "
+                  "and cancelling its runs), requeues the rest and rebuilds; `queue status` shows it")
+            return 0
+        if e["state"] not in ("queued", "processing"):  # processing with no processor: a dead one's leftover
+            print(f"NOT CANCELLED: {e['id']} is {e['state']}")
             return 1
         e.update(state="rejected", why="cancelled by its owner", finished=ts(), finished_at=time.time())
         write_entry(qd, e)
@@ -1288,7 +1296,26 @@ def read_hold(qd):
 
 
 def hold_needs_resume(hold):
-    return bool(hold.get("needs_resume") or hold.get("kind") in ("flaky", "no-token"))
+    return bool(hold.get("needs_resume") or hold.get("kind") in ("flaky", "no-token", "manual"))
+
+
+class CheckInterrupted(Exception):
+    """The owner paused the queue, or cancelled an entry of the batch, while it was being built or checked."""
+
+
+def cmd_queue_hold(a):
+    """PAUSE: a persistent hold the processor stops at (a running check is stopped, its runs cancelled) and waiters
+    respect: they keep waiting and start no processor, so a pause sticks until `queue resume`."""
+    main = main_checkout(a.repo or os.getcwd())
+    qd = queue_dir(main)
+    reason = a.reason or "no reason given"
+    with Flock(os.path.join(qd, "queue.lock")):
+        prev = read_hold(qd)
+        write_json(os.path.join(qd, "hold.json"), {"kind": "manual", "what": f"PAUSED by the owner: {reason}", "since": ts(),
+                                                   "needs_resume": True, "was": (prev or {}).get("what")})
+    print(f"PAUSED: {reason}" + (f" (replaces the hold: {prev['what']})" if prev else "")
+          + "; `agentctl queue resume` to go on")
+    return 0
 
 
 def cmd_queue_requeue(a):
@@ -1393,6 +1420,7 @@ class QueueProcessor:
         self.held_why = ""
         self.stop = False  # a FLAKY hold: exit, and stay down until `queue resume`
         self.batch_id = ""
+        self.current = []  # the ids of the batch being built or checked
         self.max_foreign = int(os.environ.get("AGENTCTL_MAX_FOREIGN", "2"))
 
     # -- bookkeeping
@@ -1541,7 +1569,39 @@ class QueueProcessor:
                     cur.update(state="processing", note="")
                     write_entry(self.qd, cur)
                     claimed.append(cur)
-        return self.batch(main, claimed) if claimed else "progress"
+        if not claimed:
+            return "progress"
+        self.current = [e["id"] for e in claimed]
+        try:
+            return self.batch(main, claimed)
+        except CheckInterrupted as ci:
+            return self.interrupted(claimed, str(ci))
+        finally:
+            self.current = []
+
+    def interrupt_reason(self):
+        hold = read_hold(self.qd)
+        if hold and hold.get("kind") == "manual":
+            return hold["what"]
+        gone = [i for i in self.current if (read_json(entry_path(self.qd, i)) or {}).get("cancel_requested")]
+        return f"{', '.join(gone)} cancelled by its owner" if gone else None
+
+    def interrupted(self, claimed, why):
+        """Drop the batch: owner-cancelled entries are rejected, the rest requeued (rebuilt and rechecked next pass)."""
+        self.log(f"batch interrupted: {why}")
+        for e in claimed:
+            cur = read_json(entry_path(self.qd, e["id"])) or {}
+            if cur.get("state") != "processing":
+                continue
+            if cur.get("cancel_requested"):
+                self.reject(e, "cancelled by its owner")
+            else:
+                self.requeue([e], f"requeued: the batch was interrupted ({why})")
+        hold = read_hold(self.qd)
+        if hold and hold.get("kind") == "manual":
+            self.held_why, self.stop = hold["what"], True
+            return "held"
+        return "progress"
 
     # -- building
     def ensure_work(self, sha):
@@ -1654,6 +1714,9 @@ class QueueProcessor:
         with self.slot():
             self.status("checking", sha=sha, log=logp)
             self.log(f"landing check {sha[:10]}: {' '.join(argv)} (log {logp})")
+            why = self.interrupt_reason()
+            if why:
+                raise CheckInterrupted(why)
             write_json(os.path.join(self.qd, "active-check.json"), rec)
             p = None
             try:
@@ -1661,11 +1724,20 @@ class QueueProcessor:
                     # its own process group: whatever it leaves behind is killed with it
                     p = subprocess.Popen(argv, cwd=self.work, stdout=subprocess.PIPE, stderr=f, text=True, stdin=subprocess.DEVNULL,
                                          env=dict(self.env, IDENTITY_LANDING_OUT=rec["out"]), start_new_session=True)
+                    poll, deadline = float(os.environ.get("AGENTCTL_QUEUE_CHECK_POLL", "15")), time.time() + 8 * 3600
                     try:
-                        out, _ = p.communicate(timeout=8 * 3600)
-                        rc = p.returncode
-                    except subprocess.TimeoutExpired:
-                        rc, out = 124, "landing check timed out after 8 h\n"
+                        while True:  # a pause or an owner's cancel stops the check: it is not waited out
+                            try:
+                                out, _ = p.communicate(timeout=poll)
+                                rc = p.returncode
+                                break
+                            except subprocess.TimeoutExpired:
+                                why = self.interrupt_reason()
+                                if why:
+                                    raise CheckInterrupted(why)
+                                if time.time() >= deadline:
+                                    rc, out = 124, "landing check timed out after 8 h\n"
+                                    break
                     finally:
                         kill_group(p)
                     f.write(out)
@@ -1814,6 +1886,9 @@ class QueueProcessor:
 
     # -- landing
     def push(self, main, tip, entries):
+        why = self.interrupt_reason() if self.current else None
+        if why:
+            raise CheckInterrupted(why)
         cur = self.fetch()
         if cur != main:
             self.requeue(entries, f"{REMOTE}/main moved ({main[:10]} -> {(cur or '?')[:10]}) under the batch: rebuilding and rechecking")
@@ -2595,7 +2670,9 @@ def main(argv=None):
     qrq = qs.add_parser("requeue", help="put a wrongly rejected entry back in its original place")
     qrq.add_argument("entry")
     qrq.add_argument("--last", action="store_true", help="behind every open entry instead of its original place")
-    for p in (qa, qst, qw, qc, qr, qre, qrq):
+    qh = qs.add_parser("hold", help="PAUSE the queue (a running check stops) until `queue resume`; waiters keep waiting")
+    qh.add_argument("--reason")
+    for p in (qa, qst, qw, qc, qr, qre, qrq, qh):
         p.add_argument("--repo", help="checkout (default: cwd)")
     a = ap.parse_args(argv)
     return {"queue": cmd_queue, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd](a)

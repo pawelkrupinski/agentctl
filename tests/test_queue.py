@@ -20,9 +20,9 @@ echo "${FORGEJO_API_TOKEN:-<none>}" > "$CHECK_CALLS.token"
 echo "identity-ci-run: pushed measure/q/ci-1" >&2
 mkdir -p "${IDENTITY_LANDING_OUT:-/nonexistent}" 2>/dev/null && echo "identity-measure: pushed measure/q/me-1" > "$IDENTITY_LANDING_OUT/measure.log"
 echo $$ > "$CHECK_CALLS.pid"
-if [ -f "$CHECK_CALLS.sleep" ]; then sleep 30; fi
 if [ -f "$CHECK_CALLS.noverdict" ]; then echo "NO VERDICT: could not check unit -- dispatch failed"; exit 2; fi
 if [ -n "$CHECK_HOOK" ] && [ ! -f "$CHECK_HOOK.done" ]; then touch "$CHECK_HOOK.done"; sh "$CHECK_HOOK"; fi
+if [ -f "$CHECK_CALLS.sleep" ]; then rm -f "$CHECK_CALLS.sleep"; sleep 30; fi  # the first check only: a long one
 blocked() {
   echo "identity-landing-check: $1 *** FAILED ***" >&2
   echo "identity landing check: $sha"; echo; echo BLOCKED; echo "  - $1: some test"; echo "    hint: read its failure in the log"
@@ -36,7 +36,8 @@ echo LANDABLE
 """
 ENV_KEYS = ("AGENTCTL_QUEUE_DIR", "AGENTCTL_QUEUE_NO_SPAWN", "AGENTCTL_LANDING_CHECK", "AGENTCTL_LANDING_SLOTS", "CHECK_CALLS",
             "CHECK_HOOK", "AGENTCTL_QUEUE_POLL", "AGENTCTL_FORGEJO_GH", "FAKE_GH_DIR", "GH_TOKEN", "PREPUSH_SKIP",
-            "PATH", "FORGEJO_API_TOKEN", "AGENTCTL_FORGEJO_API", "FAKE_SECRETS_LOCKED")
+            "PATH", "FORGEJO_API_TOKEN", "AGENTCTL_FORGEJO_API", "FAKE_SECRETS_LOCKED",
+            "AGENTCTL_QUEUE_CHECK_POLL")
 # A stand-in `secrets`: `get <ns> FORGEJO_API_TOKEN` prints tok-secret, or fails like a locked vault.
 SECRETS = """#!/bin/sh
 [ -f "$FAKE_SECRETS_LOCKED" ] && { echo "vault $2 locked" >&2; exit 1; }
@@ -473,6 +474,73 @@ class QueueTest(Base):
             time.sleep(0.1)
         self.assertFalse(A.pid_alive(check_pid), "the check outlived the processor")
         self.assertEqual(self.entry(eid)["state"], "queued", out)
+
+    # -- the owner's pause and cancel
+    def during_first_check(self, *argv):
+        """Run `agentctl <argv>` (as the owner, from the main checkout) while the first landing check is under way."""
+        hook = os.path.join(self.tmp.name, "owner.sh")
+        with open(hook, "w") as f:
+            f.write(f"cd {self.r.path} && {sys.executable} {TOOL} {' '.join(argv)} > {hook}.out 2>&1\n")
+        os.environ["CHECK_HOOK"] = hook
+        os.environ["AGENTCTL_QUEUE_CHECK_POLL"] = "0.1"
+        open(self.calls + ".sleep", "w").close()  # that first check runs long, so the processor must interrupt it
+
+    def test_hold_pauses_the_queue_and_waiters_neither_spawn_nor_give_up(self):
+        w, _ = self.agent("ph", {"identity/P.scala": "p\n"})
+        eid = self.add(w)
+        rc, out = self.run_tool("queue", "hold", "--reason", "swapping processors", cwd=self.r.path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("PAUSED", self.run_tool("queue", "status", cwd=self.r.path)[1])
+        self.assertIn("swapping processors", self.run_tool("queue", "status", cwd=self.r.path)[1])
+        self.process()
+        self.assertEqual(self.check_calls(), [])
+        self.assertEqual(self.entry(eid)["state"], "queued")
+        os.environ.pop("AGENTCTL_QUEUE_NO_SPAWN")
+        os.environ["AGENTCTL_QUEUE_POLL"] = "0.05"
+        A.time.sleep = self.sleep
+        rc, out = self.run_tool("queue", "wait", eid, "--timeout", "1", cwd=w)
+        self.assertEqual(rc, 2, out)  # still waiting when it timed out: a pause is not a HELD verdict
+        self.assertFalse(A.processor_running(self.qd)[0])
+        self.assertFalse(os.path.exists(os.path.join(self.qd, "processor.log")), "the waiter started a processor")
+        os.environ["AGENTCTL_QUEUE_NO_SPAWN"] = "1"
+        A.time.sleep = lambda s: None
+        rc, out = self.run_tool("queue", "resume", cwd=self.r.path)
+        self.assertEqual(rc, 0, out)
+        self.process()
+        self.assertEqual(self.entry(eid)["state"], "landed")
+
+    def test_hold_during_a_check_stops_it_and_cancels_its_runs(self):
+        self.dispatched_runs()
+        w, _ = self.agent("hc", {"identity/H.scala": "h\n"})
+        eid = self.add(w)
+        self.during_first_check("queue", "hold", "--reason", "now")
+        t = time.monotonic()
+        self.process()
+        self.assertLess(time.monotonic() - t, 20, "the check was waited out, not stopped")
+        self.assertEqual(os.listdir(os.path.join(self.qd, "verdicts")), [])  # no verdict taken from a stopped check
+        self.assertEqual(self.entry(eid)["state"], "queued")
+        self.assertIn("run cancel 501 -R", " ".join(self.gh_calls()))
+        self.assertEqual(self.hold()["kind"], "manual")
+        self.assertEqual(self.push_count(), 0)
+
+    def test_cancel_drops_an_entry_from_the_batch_under_check_and_the_rest_lands(self):
+        self.dispatched_runs()
+        w1, _ = self.agent("k1", {"identity/K1.scala": "1\n"})
+        w2, _ = self.agent("k2", {"identity/K2.scala": "2\n"})
+        id1, id2 = self.add(w1), self.add(w2)
+        self.during_first_check("queue", "cancel", id2)
+        t = time.monotonic()
+        rc, out = self.process()
+        self.assertLess(time.monotonic() - t, 20, "the check was waited out, not stopped")
+        self.assertIn("CANCEL", open(os.path.join(self.tmp.name, "owner.sh.out")).read())
+        rej = self.entry(id2)
+        self.assertEqual(rej["state"], "rejected", out)
+        self.assertIn("cancelled by its owner", rej["why"])
+        self.assertEqual(self.entry(id1)["state"], "landed", out)
+        self.assertIn("run cancel 501 -R", " ".join(self.gh_calls()))
+        self.assertEqual(len(self.check_calls()), 2)  # the interrupted batch, then k1 alone
+        self.assertEqual(self.remote_log()[0], "k1")
+        self.assertNotIn("k2", self.remote_log())
 
     def test_single_red_entry_is_rejected_without_bisecting(self):
         w, _ = self.agent("r1", {"identity/R.scala": "r\n", "RED": "SomeSpec\n"})

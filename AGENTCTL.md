@@ -8,7 +8,7 @@ calls.
 
 - Not on PATH: call it as `~/bin/agentctl`.
 - Python 3, standard library only.
-- Tests: `python3 -m unittest discover -s ~/bin/tests` (88 tests, mutation tests included).
+- Tests: `python3 -m unittest discover -s ~/bin/tests` (91 tests, mutation tests included).
 - `agentctl --help` and `agentctl <cmd> --help` match this page.
 
 ## Standard agent workflow
@@ -211,7 +211,8 @@ Use it for every push to main. Don't use it for `measure/` branches: `identity-m
 agentctl queue add [--identity] [--repo PATH]        # from your worktree
 agentctl queue wait [<entry>] [--timeout S]          # LANDED <sha> | REJECTED <why>
 agentctl queue status
-agentctl queue cancel <entry>                        # a queued entry, not one in the current batch
+agentctl queue cancel <entry>                        # drop an entry, even one in the current batch
+agentctl queue hold [--reason R]                     # PAUSE until `queue resume` (sticks: waiters start nothing)
 agentctl queue resume                                # lift a hold that waits for it; refreshes the processor's token
 agentctl queue requeue <entry> [--last]              # a wrongly rejected entry back (original place, or last)
 agentctl queue run [--once]                          # the processor; `queue add` starts it
@@ -245,6 +246,16 @@ Runs on other branches, such as recordings or other agents' runs, are never touc
 leaves `active-check.json`, so the next processor cancels those runs when it starts. Right before each check, the gate
 is read again: if main is red for the gate and the batch holds production entries, no check is started. A batch
 rebuilt on a moved main gets a new tip, so it always dispatches fresh runs and never reuses the old tip's.
+
+**Pause and cancel (owner actions).**
+- `queue hold [--reason]` writes a persistent hold. Killing the processor does not stick, because any `queue wait`
+  restarts it; this does. The processor stops at the hold. A check it is running is stopped within 15 s: its
+  process group is killed, its runs are cancelled and its branches deleted, and the batch is requeued.
+- `queue wait` keeps waiting while paused and starts no processor. `queue status` shows `PAUSED by the owner: <reason>`.
+- `queue resume` lifts the pause.
+- `queue cancel <entry>` on an entry of the batch being built or checked marks it. The processor then stops that
+  batch's check (cancelling its runs), rejects the entry as "cancelled by its owner", requeues the rest and rebuilds
+  them. It checks for the mark again just before pushing.
 
 **The processor's token.** The detached processor runs in its own session, so it cannot read a vault that was unlocked
 in yours. `queue add` and `queue resume` resolve FORGEJO_API_TOKEN in your session (`$FORGEJO_API_TOKEN`, else
