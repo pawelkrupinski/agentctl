@@ -8,7 +8,7 @@ calls.
 
 - Not on PATH: call it as `~/bin/agentctl`.
 - Python 3, standard library only.
-- Tests: `python3 -m unittest discover -s ~/bin/tests` (86 tests, mutation tests included).
+- Tests: `python3 -m unittest discover -s ~/bin/tests` (93 tests, mutation tests included).
 - `agentctl --help` and `agentctl <cmd> --help` match this page.
 
 ## Standard agent workflow
@@ -60,8 +60,16 @@ Step by step:
   verified push, so the kernel frees it when the lander dies. A second `land` waits (one line names the holder), then
   rebases onto what the first landed: nobody tests a base that is about to move. The watch after LANDED runs with the
   lock already released.
-- **One waiter per target.** `wait` holds a lock per run or file in the scratchpad. A second caller attaches to the
-  live waiter's verdict file and does not poll.
+- **Every long-running mode is OWNED** (2026-10-26): `wait`, land's watch and its wait on `waiting`, and the `waiting`
+  processor each hold one flock per target under `~/.cache/agentctl/owners/` (`$AGENTCTL_OWNERS_DIR`), freed by the
+  kernel when the process dies, with a record beside it: owner (Claude session, else user@cwd), pid, process start time,
+  argv, cwd, code version, and the CI runs it started. A second instance of the same target attaches (`wait`) or says
+  who owns it; it never runs beside a live one and never waits on a dead one. The runs it started are cancelled when
+  it ends, by its SIGTERM/SIGHUP/SIGINT handler, or after a SIGKILL by the next owner of the same target. At each poll
+  it compares `agentctl`'s file with the version it started on and, after a change, re-execs on the new code with
+  the same pid (land's watch resumes as `agentctl watch --sha`, its wait on `waiting` as `agentctl waiting await`).
+- **One waiter per target.** `wait` owns the run or file (above), in any session. A second caller attaches to the live
+  owner's verdict file and does not poll.
 - **No artificial load.** Polls back off up to 5 minutes. Nothing in agentctl burns CPU.
 
 ## Standing-OK cleanup scope
@@ -397,9 +405,11 @@ agentctl cleanup (DRY RUN); log: /…/scratchpad/agentctl-deleted.log
 agentctl orphans [--kill]
 ```
 
-It lists wait loops and sbt servers that are orphaned: their worktree is gone, their owning shell died, every target
-run finished, or they duplicate an older loop on the same runs. `--kill` sends SIGTERM to them and their children.
-Output is `no orphans`, or one line per process with the reason.
+It lists owner records that are strays (a dead process's record and the runs it never cancelled; an owner still on
+old code; an owner whose cwd is gone), wait loops and sbt servers that are orphaned (their worktree is gone, their
+owning shell died, every target run finished, or they duplicate an older loop on the same runs). `--kill` cancels a
+dead owner's runs and removes its record, and sends SIGTERM to the rest (an owner's handler cancels its own runs).
+Output is `no orphans`, or one line per stray with the reason.
 
 ---
 

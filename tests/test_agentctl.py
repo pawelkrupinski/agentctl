@@ -70,6 +70,7 @@ class Base(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.scratch = os.path.join(self.tmp.name, "scratch")
         os.environ["AGENTCTL_SCRATCH"] = self.scratch
+        os.environ["AGENTCTL_OWNERS_DIR"] = os.path.join(self.tmp.name, "owners")
         for k in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM"):
             os.environ[k] = ENV[k]
         self.r = Repo(os.path.realpath(self.tmp.name))
@@ -270,8 +271,8 @@ class WaitAndStateTest(Base):
         target = os.path.join(self.tmp.name, "done.flag")
         proc = subprocess.Popen([sys.executable, TOOL, "wait", "file", target, "--interval", "1"], stdout=subprocess.PIPE, text=True, env=os.environ)
         time.sleep(1.0)
-        locks = os.listdir(os.path.join(self.scratch, "agentctl-wait"))
-        self.assertEqual(len([l for l in locks if l.endswith(".lock")]), 1)
+        records = A.owner_records()
+        self.assertEqual([(r["kind"], r["alive"]) for r in records], [("wait", True)])
         second = subprocess.Popen([sys.executable, TOOL, "wait", "file", target], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=os.environ)
         time.sleep(0.8)
         with open(target, "w") as f:

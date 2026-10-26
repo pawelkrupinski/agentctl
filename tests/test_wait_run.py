@@ -18,7 +18,8 @@ class FakeForge(unittest.TestCase):
         self.d = os.path.join(self.tmp.name, "gh")
         os.makedirs(self.d)
         self.env = {"AGENTCTL_SCRATCH": os.path.join(self.tmp.name, "scratch"), "AGENTCTL_FORGEJO_GH": FAKE,
-                    "FAKE_GH_DIR": self.d, "GH_TOKEN": "dummy", "AGENTCTL_MIN_INTERVAL": "0.3", "AGENTCTL_ATTACH_POLL": "0.2"}
+                    "FAKE_GH_DIR": self.d, "GH_TOKEN": "dummy", "AGENTCTL_MIN_INTERVAL": "0.3", "AGENTCTL_ATTACH_POLL": "0.2",
+                    "AGENTCTL_OWNERS_DIR": os.path.join(self.tmp.name, "owners")}
         self.saved = {k: os.environ.get(k) for k in self.env}
         os.environ.update(self.env)
         self.saved_gh, A.FORGEJO_GH = A.FORGEJO_GH, FAKE
@@ -114,15 +115,17 @@ class WaitRunTest(FakeForge):
         self.assertEqual(rc, 2, out)
 
     def test_attaches_to_a_live_waiter_without_polling(self):
-        """A lock held by a live pid + its verdict: the second caller reads the verdict and never calls Forgejo."""
-        holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1.5)"])
-        threading.Thread(target=holder.wait, daemon=True).start()  # reaped, so its pid really dies
-        d = os.path.join(self.env["AGENTCTL_SCRATCH"], "agentctl-wait")
-        os.makedirs(d, exist_ok=True)
+        """An owner holding the target's lock + its verdict: the second caller reads the verdict and never calls Forgejo."""
         key = "run-pawelkrupinski_movies-5"
-        with open(os.path.join(d, key + ".lock"), "w") as f:
+        own = A.Owned("wait", key)
+        holder = subprocess.Popen([sys.executable, "-c", "import fcntl, sys, time\n"
+                                   "f = open(sys.argv[1], 'a+'); fcntl.flock(f, fcntl.LOCK_EX); print('held', flush=True); "
+                                   "time.sleep(1.5)", own.lockpath], stdout=subprocess.PIPE, text=True)
+        os.makedirs(os.path.dirname(own.lockpath), exist_ok=True)
+        self.assertEqual(holder.stdout.readline().strip(), "held")
+        with open(own.record, "w") as f:
             json.dump({"pid": holder.pid, "started": "t"}, f)
-        with open(os.path.join(d, key + ".verdict"), "w") as f:
+        with open(own.lockpath[: -len(".lock")] + ".verdict", "w") as f:
             json.dump({"ok": True, "line": "run pawelkrupinski/movies#5: success (from the holder)"}, f)
         self.run_json(5, "in_progress")
         try:
