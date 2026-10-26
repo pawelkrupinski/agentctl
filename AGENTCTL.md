@@ -8,7 +8,7 @@ calls.
 
 - Not on PATH: call it as `~/bin/agentctl`.
 - Python 3, standard library only.
-- Tests: `python3 -m unittest discover -s ~/bin/tests` (76 tests, mutation tests included).
+- Tests: `python3 -m unittest discover -s ~/bin/tests` (81 tests, mutation tests included).
 - `agentctl --help` and `agentctl <cmd> --help` match this page.
 
 ## Standard agent workflow
@@ -211,7 +211,8 @@ agentctl queue add [--identity] [--repo PATH]        # from your worktree
 agentctl queue wait [<entry>] [--timeout S]          # LANDED <sha> | REJECTED <why>
 agentctl queue status
 agentctl queue cancel <entry>                        # a queued entry, not one in the current batch
-agentctl queue resume                                # lift a FLAKY hold (the fix is on main, or the owner decides)
+agentctl queue resume                                # lift a hold that waits for it; refreshes the processor's token
+agentctl queue requeue <entry>                       # a wrongly rejected entry back in its original place
 agentctl queue run [--once]                          # the processor; `queue add` starts it
 ```
 
@@ -231,6 +232,13 @@ CI trees. `--identity` forces the check. The entry also records whether it touch
 Only committed work is queued. If no processor is running, `queue add` starts one detached, in its own session, so it
 outlives your turn. It logs to `<queue dir>/processor.log`. The queue directory is `~/.cache/agentctl/queue/<repo>`
 (`$AGENTCTL_QUEUE_DIR` overrides it), and the processor builds batches in its own worktree, `<queue dir>/work`.
+
+**The processor's token.** The detached processor runs in its own session, so it cannot read a vault that was unlocked
+in yours. `queue add` and `queue resume` resolve FORGEJO_API_TOKEN in your session (`$FORGEJO_API_TOKEN`, else
+`secrets get`) and hand it over in `<queue dir>/token` (mode 0600; never in argv, logs or status). Before any check
+dispatches, a preflight confirms the processor has a token and that Forgejo accepts it. The token is passed on as
+`FORGEJO_API_TOKEN` to the check, the hook and the gate. Without one, the queue HOLDs with
+`no-token: run `secrets unlock movies`, then `agentctl queue resume``.
 
 How the processor works, one batch at a time:
 
@@ -255,7 +263,9 @@ How the processor works, one batch at a time:
      nothing lands. The queue HOLDs with `FLAKY <spec(s)> (batch <id>, runs <logs>)`, appends a line to
      `<queue dir>/flaky.log`, and the processor stops until `agentctl queue resume`. It never picks a winner between
      a red and a green run (movies: never rerun to green). `resume` also clears the verdict cache.
-   - Exit 2 ("could not check") requeues and retries, and rejects after 3 attempts.
+   - **No verdict** (exit 2: infra, dispatch or token trouble) is never an entry's fault, so nothing is ever
+     REJECTED for it. The queue HOLDs with `no-verdict`, requeues everyone, retries with backoff, and after 5
+     attempts in a row waits for `queue resume`. A verdict lifts the hold.
 6. **Push** the tip with `git push forgejo <tip>:refs/heads/main`. The repo's pre-push hook runs in the work tree,
    which is at the tip. If main moved since the batch was built, or the push races, it rebuilds and rechecks. If the
    red gate refuses, it holds. If the hook fails on a multi-entry batch, it retries each entry alone. If it fails on
@@ -263,9 +273,9 @@ How the processor works, one batch at a time:
 
 `queue wait` polls the entry file (no Forgejo calls), restarts a processor if none is running, and prints the verdict
 last: `LANDED <sha>` (the rebased commit on main), `REJECTED <why>` with the detail lines above it, or
-`HELD flaky <spec(s)>` when the queue is held for a flake. HELD is not your fault unless your spec is named: report
+`HELD <why>` (flaky, no-token, no-verdict) when the queue waits for `queue resume`. HELD is not your fault unless your spec is named: report
 it and stop. A `MAIN RED` hold keeps `wait` waiting, since it resumes by itself; `queue status` shows every hold.
-Exit: 0 landed, 1 rejected, 2 timeout (12 h by default), 3 HELD flaky. Start it with `run_in_background=true` and end your turn. Your branch is not
+Exit: 0 landed, 1 rejected, 2 timeout (12 h by default), 3 HELD. Start it with `run_in_background=true` and end your turn. Your branch is not
 rewritten: the landed commits are patch-equivalent to it, so `cleanup` recognises the worktree as merged.
 
 ```

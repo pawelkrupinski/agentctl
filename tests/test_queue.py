@@ -15,6 +15,8 @@ HOOK = "#!/bin/sh\nunset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE\ncat > /dev/null\n
 CHECK = """#!/bin/sh
 sha="$1"
 echo "$sha" >> "$CHECK_CALLS"
+echo "${FORGEJO_API_TOKEN:-<none>}" > "$CHECK_CALLS.token"
+if [ -f "$CHECK_CALLS.noverdict" ]; then echo "NO VERDICT: could not check unit -- dispatch failed"; exit 2; fi
 if [ -n "$CHECK_HOOK" ] && [ ! -f "$CHECK_HOOK.done" ]; then touch "$CHECK_HOOK.done"; sh "$CHECK_HOOK"; fi
 blocked() {
   echo "identity-landing-check: $1 *** FAILED ***" >&2
@@ -28,7 +30,15 @@ if git cat-file -e "$sha:SHIFTY" 2>/dev/null; then [ "$(count shifty)" = 0 ] && 
 echo LANDABLE
 """
 ENV_KEYS = ("AGENTCTL_QUEUE_DIR", "AGENTCTL_QUEUE_NO_SPAWN", "AGENTCTL_LANDING_CHECK", "AGENTCTL_LANDING_SLOTS", "CHECK_CALLS",
-            "CHECK_HOOK", "AGENTCTL_QUEUE_POLL", "AGENTCTL_FORGEJO_GH", "FAKE_GH_DIR", "GH_TOKEN", "PREPUSH_SKIP")
+            "CHECK_HOOK", "AGENTCTL_QUEUE_POLL", "AGENTCTL_FORGEJO_GH", "FAKE_GH_DIR", "GH_TOKEN", "PREPUSH_SKIP",
+            "PATH", "FORGEJO_API_TOKEN", "AGENTCTL_FORGEJO_API", "FAKE_SECRETS_LOCKED")
+# A stand-in `secrets`: `get <ns> FORGEJO_API_TOKEN` prints tok-secret, or fails like a locked vault.
+SECRETS = """#!/bin/sh
+[ -f "$FAKE_SECRETS_LOCKED" ] && { echo "vault $2 locked" >&2; exit 1; }
+[ "$1" = get ] && { echo tok-secret; exit 0; }
+[ "$1" = status ] && { echo unlocked; exit 0; }
+exit 2
+"""
 
 
 class QueueTest(Base):
@@ -48,15 +58,23 @@ class QueueTest(Base):
         self.write_exec(check, CHECK)
         os.environ.update(AGENTCTL_QUEUE_DIR=self.qd, AGENTCTL_QUEUE_NO_SPAWN="1", AGENTCTL_LANDING_CHECK=check,
                           AGENTCTL_LANDING_SLOTS=f"{t}/slot-1 {t}/slot-2", CHECK_CALLS=self.calls)
-        for k in ("CHECK_HOOK", "PREPUSH_SKIP"):
+        bindir = os.path.join(t, "bin")
+        os.makedirs(bindir)
+        self.write_exec(os.path.join(bindir, "secrets"), SECRETS)
+        self.locked = os.path.join(t, "vault-locked")
+        os.environ.update(PATH=f"{bindir}:{os.environ['PATH']}", FAKE_SECRETS_LOCKED=self.locked,
+                          AGENTCTL_FORGEJO_API="http://127.0.0.1:9/api/v1")  # nothing listens: the token is not judged
+        for k in ("CHECK_HOOK", "PREPUSH_SKIP", "FORGEJO_API_TOKEN"):
             os.environ.pop(k, None)
+        self.saved_api = A.API
+        A.API = os.environ["AGENTCTL_FORGEJO_API"]
         self.saved_why = A.ci_why
         A.ci_why = lambda o_r, tail=6, run_id=None, repo=None: (False, "ci-why: main is green for the gate")
         self.sleep = A.time.sleep
         A.time.sleep = lambda s: None
 
     def tearDown(self):
-        A.ci_why, A.time.sleep = self.saved_why, self.sleep
+        A.ci_why, A.time.sleep, A.API = self.saved_why, self.sleep, self.saved_api
         for k, v in self.saved_env.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -255,6 +273,109 @@ class QueueTest(Base):
         self.assertEqual(self.entry(id2)["state"], "rejected")
         self.assertEqual(self.check_calls().count(main), 1)
         self.assertEqual(len(self.check_calls()), 5)  # x1, main, x1 again; x2, x2 again
+
+    # -- the processor's token
+    def test_queue_add_hands_the_processor_its_token_in_a_private_file(self):
+        w, _ = self.agent("tk", {"identity/T.scala": "t\n"})
+        rc, out = self.run_tool("queue", "add", cwd=w)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("tok-secret", out)
+        tok = os.path.join(self.qd, "token")
+        self.assertEqual(stat.S_IMODE(os.stat(tok).st_mode), 0o600)
+        self.assertEqual(open(tok).read().strip(), "tok-secret")
+        open(self.locked, "w").close()  # the processor's own session cannot read the vault
+        rc, out = self.process()
+        self.assertNotIn("tok-secret", out)
+        self.assertEqual(open(self.calls + ".token").read().strip(), "tok-secret")
+        self.assertEqual(self.entry(self.add_id(w))["state"], "landed")
+
+    def add_id(self, wt):
+        return A.find_entry(self.qd, None, wt)["id"]
+
+    def test_no_token_holds_before_any_check_until_resume(self):
+        open(self.locked, "w").close()
+        w, _ = self.agent("nt", {"identity/N.scala": "n\n"})
+        rc, out = self.run_tool("queue", "add", cwd=w)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("secrets unlock", out)
+        eid = self.add_id(w)
+        self.process()
+        self.assertEqual(self.check_calls(), [])
+        self.assertEqual(self.entry(eid)["state"], "queued")
+        self.assertEqual(self.hold()["kind"], "no-token")
+        rc, out = self.wait(eid)
+        self.assertEqual(rc, 3, out)
+        self.assertIn("HELD no-token: run `secrets unlock", out)
+        self.assertIn("agentctl queue resume", out)
+        os.unlink(self.locked)
+        rc, out = self.run_tool("queue", "resume", cwd=w)  # resume refreshes the token from this session
+        self.assertEqual(rc, 0, out)
+        self.process()
+        self.assertEqual(self.entry(eid)["state"], "landed")
+
+    def test_a_token_forgejo_rejects_holds_as_no_token(self):
+        import http.server, threading
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(401)
+                self.end_headers()
+            def log_message(self, *a):
+                pass
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        A.API = f"http://127.0.0.1:{srv.server_port}/api/v1"
+        try:
+            w, _ = self.agent("bt", {"identity/B.scala": "b\n"})
+            eid = self.add(w)
+            self.process()
+        finally:
+            srv.shutdown()
+        self.assertEqual(self.check_calls(), [])
+        self.assertEqual(self.hold()["kind"], "no-token")
+        self.assertEqual(self.entry(eid)["state"], "queued")
+
+    # -- no verdict
+    def test_no_verdict_holds_and_retries_but_never_rejects(self):
+        open(self.calls + ".noverdict", "w").close()
+        w, _ = self.agent("nv", {"identity/V.scala": "v\n"})
+        eid = self.add(w)
+        self.process()
+        hold = self.hold()
+        self.assertEqual(hold["kind"], "no-verdict")
+        self.assertFalse(hold["needs_resume"])
+        self.assertIn("HELD", self.run_tool("queue", "status", cwd=self.r.path)[1])
+        for _ in range(A.QUEUE_CHECK_ERRORS + 2):  # retried with backoff, up to the bound; never rejected
+            self.process()
+            self.assertEqual(self.entry(eid)["state"], "queued")
+        self.assertEqual(len(self.check_calls()), A.QUEUE_CHECK_ERRORS)
+        self.assertTrue(self.hold()["needs_resume"])
+        rc, out = self.wait(eid)
+        self.assertEqual(rc, 3, out)
+        self.assertIn("HELD no-verdict", out)
+        os.unlink(self.calls + ".noverdict")
+        self.run_tool("queue", "resume", cwd=self.r.path)
+        self.process()
+        self.assertEqual(self.entry(eid)["state"], "landed")
+        self.assertIsNone(self.hold())
+
+    def test_requeue_restores_a_rejected_entry_in_its_place_without_duplicating(self):
+        w1, _ = self.agent("q1", {"f1.txt": "q1\n"})
+        w2, _ = self.agent("q2", {"f2.txt": "q2\n"})
+        id1, id2 = self.add(w1), self.add(w2)
+        for eid in (id1, id2):
+            self.run_tool("queue", "cancel", eid, cwd=self.r.path)
+        id1b = self.add(w1)  # q1 re-added, same head
+        rc, out = self.run_tool("queue", "requeue", id1, cwd=self.r.path)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.entry(id1)["state"], "rejected")  # not duplicated: the open one takes its place
+        self.assertEqual(self.entry(id1b)["added_at"], self.entry(id1)["added_at"])
+        rc, out = self.run_tool("queue", "requeue", id2, cwd=self.r.path)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.entry(id2)["state"], "queued")
+        order = [e["id"] for e in A.read_entries(self.qd) if e["state"] == "queued"]
+        self.assertEqual(order, [id1b, id2])
+        self.process()
+        self.assertEqual(self.remote_log()[:2], ["q2", "q1"])
 
     def test_single_red_entry_is_rejected_without_bisecting(self):
         w, _ = self.agent("r1", {"identity/R.scala": "r\n", "RED": "SomeSpec\n"})

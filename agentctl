@@ -160,6 +160,8 @@ def token(o_r):
     if os.environ.get("GH_TOKEN"):
         return os.environ["GH_TOKEN"]
     ns = "movies" if o_r.startswith("pawelkrupinski/") else "bitcashier"
+    if ns == "movies" and os.environ.get("FORGEJO_API_TOKEN"):  # the queue processor's handed-over token
+        return os.environ["FORGEJO_API_TOKEN"]
     if ns not in _tokens:
         r = subprocess.run(["secrets", "get", ns, "FORGEJO_API_TOKEN"], capture_output=True, text=True)
         if r.returncode != 0 or not r.stdout.strip():
@@ -869,7 +871,7 @@ Blame needs proof: a red batch first checks bare main (cached per main sha; red 
 moves and the gate is green), then bisects, then re-checks the red boundary ONCE: red again with the same failing
 specs -> reject that entry; green or other specs -> HOLD `FLAKY` (nobody rejected, nothing landed) until
 `agentctl queue resume`. Holds: `queue status`, <queue dir>/flaky.log.
-Exit: add 0 queued, 1 not; wait 0 landed, 1 rejected, 2 timeout, 3 HELD flaky."""
+Exit: add 0 queued, 1 not; wait 0 landed, 1 rejected, 2 timeout, 3 HELD (flaky, no-token, no-verdict)."""
 IDENTITY_STRICT = re.compile(r"^(identity/|worker/src/main/scala/services/identity/|common/src/main/(resources/title-(rules|words)\.tsv|"
                              r"scala/services/titlerules/)|test/resources/fixtures/identity-)")
 IDENTITY_WORDS = re.compile(r"(^|/)(identity|matcher|resolver|resolution|projection)|(identity|matcher|resolver|projection)[^/]*\.", re.I)
@@ -877,7 +879,7 @@ TOOL_TREES = ("scripts/", "docs/", ".claude/", ".github/", ".forgejo/")
 PRODUCTION_GLOBS = ("*/src/main/*", "conf/*", "*/conf/*", "build.sbt", "project/*", "infra/nix/*", "infra/kubernetes/*", "Dockerfile")
 LANDING_CHECK = "scripts/identity-landing-check --full"
 LANDING_SLOTS = "/tmp/movies-landing-slot-1 /tmp/movies-landing-slot-2"
-QUEUE_CHECK_ERRORS = 3
+QUEUE_CHECK_ERRORS = 5  # no-verdict retries (with backoff) before the hold waits for `queue resume`; never a reject
 FINAL = ("landed", "rejected")
 
 
@@ -1004,7 +1006,7 @@ def has_landing_check(repo, head):
 def cmd_queue(a):
     return {"add": cmd_queue_add, "status": cmd_queue_status, "wait": cmd_queue_wait, "cancel": cmd_queue_cancel,
             "run": cmd_queue_run,
-            "resume": cmd_queue_resume}[a.qcmd](a)
+            "resume": cmd_queue_resume, "requeue": cmd_queue_requeue}[a.qcmd](a)
 
 
 def cmd_queue_add(a):
@@ -1047,6 +1049,10 @@ def cmd_queue_add(a):
         pos = sum(1 for x in es if x["state"] not in FINAL) + 1
     print(f"QUEUED {eid}: {len(commits)} commit(s) up to {head[:10]} ({branch}); identity landing check: "
           + (f"yes ({e['identity_why']})" if identity else "no") + f"; {'production' if prod else 'tools-only'}; position {pos}")
+    if not hand_over_token(qd, main):
+        ns = queue_ns(main)
+        print(f"note: no Forgejo token in this session (vault {ns} locked?): the processor cannot dispatch checks. "
+              f"Ask the user to run `! secrets unlock {ns}`, then `agentctl queue resume`.")
     running, st = processor_running(qd)
     if not running:
         pid = spawn_processor(qd, main)
@@ -1110,10 +1116,14 @@ def cmd_queue_wait(a):
             print(f"REJECTED {why[0]}")
             return 1
         hold = read_hold(qd)
-        if hold and hold.get("kind") == "flaky":
-            print(f"  {hold.get('detail', '')}; nobody rejected, nothing landed. Not yours unless your spec is named: report it.")
-            print(f"  the owner resumes with `agentctl queue resume` once it is fixed on main")
-            print(f"HELD flaky {', '.join(hold.get('specs') or [])} ({hold['what']})")
+        if hold and hold_needs_resume(hold):
+            if hold.get("kind") == "flaky":
+                print(f"  {hold.get('detail', '')}; nobody rejected, nothing landed. Not yours unless your spec is named: report it.")
+                print(f"  the owner resumes with `agentctl queue resume` once it is fixed on main")
+                print(f"HELD flaky {', '.join(hold.get('specs') or [])} ({hold['what']})")
+            else:
+                print("  not your entry's fault: nobody rejected, nothing landed. Report it.")
+                print(f"HELD {hold['what']}")
             return 3
         cfg = read_json(os.path.join(qd, "config.json")) or {}
         if not processor_running(qd)[0] and time.time() - spawned_at > 300:
@@ -1141,6 +1151,72 @@ def cmd_queue_cancel(a):
     return 0
 
 
+def queue_ns(main):
+    try:
+        return "movies" if slug(main).startswith("pawelkrupinski/") else "bitcashier"
+    except (SystemExit, RuntimeError):
+        return "movies"
+
+
+def session_token(ns):
+    """FORGEJO_API_TOKEN as THIS session sees it ($FORGEJO_API_TOKEN, else the vault). A detached processor is in
+    another session and cannot read a vault unlocked here: `queue add` / `queue resume` hand it over."""
+    if os.environ.get("FORGEJO_API_TOKEN"):
+        return os.environ["FORGEJO_API_TOKEN"]
+    try:
+        r = subprocess.run(["secrets", "get", ns, "FORGEJO_API_TOKEN"], capture_output=True, text=True, timeout=15,
+                           stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+
+def store_token(qd, tok):
+    """<queue dir>/token, mode 0600 from creation: never in argv, env of other tools, logs or status."""
+    path, tmp = os.path.join(qd, "token"), os.path.join(qd, f".token.{os.getpid()}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(tok + "\n")
+    os.replace(tmp, path)
+
+
+def stored_token(qd):
+    try:
+        with open(os.path.join(qd, "token")) as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def hand_over_token(qd, main):
+    """Refresh the processor's token from this session; lift a no-token hold when it worked. True when stored."""
+    tok = session_token(queue_ns(main))
+    if not tok:
+        return False
+    store_token(qd, tok)
+    with Flock(os.path.join(qd, "queue.lock")):
+        hold = read_hold(qd)
+        if hold and hold.get("kind") == "no-token":
+            os.unlink(os.path.join(qd, "hold.json"))
+    return True
+
+
+def token_verdict(tok):
+    """'ok', 'rejected' (Forgejo answers 401/403) or 'unknown' (unreachable: the check will say so itself)."""
+    req = urllib.request.Request(f"{API}/user", headers={"Authorization": f"token {tok}"})
+    try:
+        with urllib.request.urlopen(req, timeout=20):
+            return "ok"
+    except urllib.error.HTTPError as e:
+        return "rejected" if e.code in (401, 403) else "unknown"
+    except Exception:
+        return "unknown"
+
+
+def no_token_what(ns, why):
+    return f"no-token: run `secrets unlock {ns}`, then `agentctl queue resume` ({why})"
+
+
 def failure_signature(out):
     """The failing specs/steps a landing check named: the `  - <spec>: <test>` rows under its last `BLOCKED` line."""
     lines = out.splitlines()
@@ -1155,13 +1231,50 @@ def read_hold(qd):
     return read_json(os.path.join(qd, "hold.json"))
 
 
-def cmd_queue_resume(a):
+def hold_needs_resume(hold):
+    return bool(hold.get("needs_resume") or hold.get("kind") in ("flaky", "no-token"))
+
+
+def cmd_queue_requeue(a):
+    """A wrongly rejected entry back in its ORIGINAL place. When its worktree already has an open entry for the same
+    head (re-added meanwhile), that one takes the original place instead: no duplicate, its waiters stay valid."""
     main = main_checkout(a.repo or os.getcwd())
     qd = queue_dir(main)
     with Flock(os.path.join(qd, "queue.lock")):
+        e = find_entry(qd, a.entry)
+        if e["state"] != "rejected":
+            print(f"NOT REQUEUED: {e['id']} is {e['state']}")
+            return 1
+        dup = next((x for x in read_entries(qd) if x["state"] not in FINAL and x.get("worktree") == e.get("worktree")), None)
+        if dup and dup["head"] != e["head"]:
+            print(f"NOT REQUEUED: {e.get('worktree')} has open entry {dup['id']} at another head ({dup['head'][:10]})")
+            return 1
+        if dup:
+            dup.update(added_at=e["added_at"], note=f"moved to the place of {e['id']} (requeued)")
+            write_entry(qd, dup)
+            print(f"REQUEUED {dup['id']} in the place of {e['id']} (same head {e['head'][:10]}; not duplicated)")
+        else:
+            e.update(state="queued", why="", result_sha=None, finished=None, finished_at=None, note="requeued")
+            write_entry(qd, e)
+            print(f"REQUEUED {e['id']} in its original place")
+    if not processor_running(qd)[0]:
+        spawn_processor(qd, main)
+    return 0
+
+
+def cmd_queue_resume(a):
+    main = main_checkout(a.repo or os.getcwd())
+    qd = queue_dir(main)
+    if not hand_over_token(qd, main):
+        ns = queue_ns(main)
+        print(f"NOT RESUMED: no Forgejo token in this session: run `secrets unlock {ns}` here, then `agentctl queue resume`")
+        return 1
+    with Flock(os.path.join(qd, "queue.lock")):
         hold = read_hold(qd)
         if not hold:
-            print("queue: not held")
+            print("queue: not held (token refreshed)")
+            if not processor_running(qd)[0]:
+                spawn_processor(qd, main)
             return 0
         os.unlink(os.path.join(qd, "hold.json"))
         for p in glob.glob(os.path.join(qd, "verdicts", "*.json")):  # a resumed queue judges afresh
@@ -1284,6 +1397,20 @@ class QueueProcessor:
             return False, ""
         return red, "; ".join(l.strip() for l in text.splitlines() if ": RED" in l) or "main is red for the gate"
 
+    def preflight_token(self):
+        """The Forgejo token, BEFORE any check dispatches or measure branch is pushed: the one `queue add`/`resume`
+        handed over, else $FORGEJO_API_TOKEN, else this session's vault. None, or one Forgejo rejects -> HOLD no-token."""
+        ns = queue_ns(self.repo)
+        tok = stored_token(self.qd) or os.environ.get("FORGEJO_API_TOKEN") or session_token(ns)
+        why = "none handed over and the vault is locked to the processor" if not tok else (
+            "Forgejo rejects the handed-over token" if token_verdict(tok) == "rejected" else None)
+        if why:
+            self.set_hold("no-token", no_token_what(ns, why), needs_resume=True)
+            self.stop = True
+            return False
+        self.env["FORGEJO_API_TOKEN"] = os.environ["FORGEJO_API_TOKEN"] = tok  # the check, the hook, ci-why's gate
+        return True
+
     def set_hold(self, kind, what, **kw):
         write_json(os.path.join(self.qd, "hold.json"), {"kind": kind, "what": what, "since": ts(), **kw})
         self.log(f"HOLD {what}")
@@ -1291,7 +1418,7 @@ class QueueProcessor:
 
     def pass_(self):
         hold = read_hold(self.qd)
-        if hold and hold.get("kind") == "flaky":
+        if hold and hold_needs_resume(hold):
             self.held_why, self.stop = f"{hold['what']}; `agentctl queue resume` to go on", True
             return "held"
         main = self.fetch()
@@ -1309,6 +1436,8 @@ class QueueProcessor:
         queued = [e for e in read_entries(self.qd) if e["state"] == "queued"]
         if not queued:
             return "idle"
+        if not self.preflight_token():
+            return "held"
         cands = [queued[0]] if queued[0].get("solo") else list(itertools.takewhile(lambda e: not e.get("solo"), queued))
         red, why = self.gate()
         ok = cands if not red else [e for e in cands if not e.get("production") or e.get("fixes_red")]
@@ -1451,6 +1580,12 @@ class QueueProcessor:
         v = "green" if rc == 0 and last.startswith("LANDABLE") else "red" if rc == 1 else "error"
         with open(logp, errors="replace") as f:
             text = "\n".join(f.read().splitlines()[-30:])
+        if v != "error":
+            with Flock(self.qlock):
+                h = read_hold(self.qd)
+                if h and h.get("kind") == "no-verdict":
+                    os.unlink(os.path.join(self.qd, "hold.json"))
+                    self.log(f"a verdict again: lifted {h['what']}")
         sig = failure_signature(out) if v == "red" else ()
         self.log(f"landing check {sha[:10]}: {v} (exit {rc}; {last[:120]})" + (f" signature {', '.join(sig)}" if sig else ""))
         if v != "error":
@@ -1458,18 +1593,22 @@ class QueueProcessor:
         return v, text, logp, sig
 
     def check_error(self, entries, text, logp):
-        keep = []
-        for e in entries:
-            n = (read_json(entry_path(self.qd, e["id"])) or e).get("check_errors", 0) + 1
-            self.update(e, check_errors=n)
-            if n >= QUEUE_CHECK_ERRORS:
-                self.reject(e, f"the landing check could not run {n} times (no verdict; full log {logp}); "
-                               f"fix the cause, then `agentctl queue add` again\n{text}")
-            else:
-                keep.append(e)
-        self.requeue(keep, f"the landing check could not run (no verdict; log {logp}); retrying")
-        self.held_why = "the landing check could not run"
-        return "held" if keep else "progress"
+        """No verdict (infra, dispatch, token) is NEVER an entry's fault: requeue everyone and HOLD the queue. Retried
+        with backoff; after QUEUE_CHECK_ERRORS in a row the hold waits for `agentctl queue resume`."""
+        self.requeue(entries, "requeued: the landing check gave no verdict")
+        if re.search(r"no Forgejo token|HTTP 401", text):
+            ns = queue_ns(self.repo)
+            self.set_hold("no-token", no_token_what(ns, "the check could not authenticate"), needs_resume=True, log=logp)
+            self.stop = True
+            return "held"
+        prev = read_hold(self.qd) or {}
+        n = prev.get("attempts", 0) + 1 if prev.get("kind") == "no-verdict" else 1
+        stop = n >= QUEUE_CHECK_ERRORS
+        what = (f"no-verdict: the landing check could not run ({n}/{QUEUE_CHECK_ERRORS}; log {logp})"
+                + ("; fix the cause, then `agentctl queue resume`" if stop else "; retrying with backoff"))
+        self.set_hold("no-verdict", what, attempts=n, needs_resume=stop, log=logp, tail=text[-2000:])
+        self.stop = stop
+        return "held"
 
     def bisect(self, main, entries, red_text, red_log, red_sig):
         """The batch tip is BLOCKED. Blame needs proof, never a guess:
@@ -2306,7 +2445,9 @@ def main(argv=None):
     qr = qs.add_parser("run", help="the processor (queue add starts it detached; one runs at a time)")
     qr.add_argument("--once", action="store_true", help="exit instead of waiting when only held entries are left")
     qre = qs.add_parser("resume", help="lift a FLAKY (or MAIN RED) hold; the processor starts again")
-    for p in (qa, qst, qw, qc, qr, qre):
+    qrq = qs.add_parser("requeue", help="put a wrongly rejected entry back in its original place")
+    qrq.add_argument("entry")
+    for p in (qa, qst, qw, qc, qr, qre, qrq):
         p.add_argument("--repo", help="checkout (default: cwd)")
     a = ap.parse_args(argv)
     return {"queue": cmd_queue, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd](a)
