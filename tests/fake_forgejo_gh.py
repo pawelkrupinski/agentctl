@@ -5,6 +5,7 @@
   run download <id> -n <a> -D <dir> -> art-<id>-<a>.txt copied to <dir>/verdict.txt
   run list [--workflow W] [--branch B] ... -> runs.json filtered (W matches workflowName or the workflow file)
   api <path>                 -> api-<path with / as _>.json
+  run cancel <id>, api -X <METHOD> <path> -> recorded only
 Every call is appended to calls.log as `<caller pid> <argv>`."""
 import json, os, re, shutil, sys
 
@@ -43,6 +44,10 @@ elif argv[:2] == ["run", "list"]:
     w, b = opt("--workflow"), opt("--branch")
     runs = [r for r in runs if (not w or w in (r.get("workflowName"), r.get("workflowFile"))) and (not b or r.get("headBranch") == b)]
     print(json.dumps(runs[: int(opt("--limit") or 20)]))
+elif argv[:2] == ["run", "cancel"]:
+    print(f"Request to cancel workflow {argv[2]} submitted.")
+elif argv[:1] == ["api"] and "-X" in argv:
+    pass  # a write (e.g. DELETE a branch): recorded in calls.log, answers nothing
 elif argv[:1] == ["api"]:
     emit(os.path.join(d, "api-" + re.sub(r"[/?&=]", "_", argv[1]) + ".json"))
 else:

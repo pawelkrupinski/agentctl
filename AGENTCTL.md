@@ -8,7 +8,7 @@ calls.
 
 - Not on PATH: call it as `~/bin/agentctl`.
 - Python 3, standard library only.
-- Tests: `python3 -m unittest discover -s ~/bin/tests` (84 tests, mutation tests included).
+- Tests: `python3 -m unittest discover -s ~/bin/tests` (88 tests, mutation tests included).
 - `agentctl --help` and `agentctl <cmd> --help` match this page.
 
 ## Standard agent workflow
@@ -233,6 +233,18 @@ CI trees. `--identity` forces the check. The entry also records whether it touch
 Only committed work is queued. If no processor is running, `queue add` starts one detached, in its own session, so it
 outlives your turn. It logs to `<queue dir>/processor.log`. The queue directory is `~/.cache/agentctl/queue/<repo>`
 (`$AGENTCTL_QUEUE_DIR` overrides it), and the processor builds batches in its own worktree, `<queue dir>/work`.
+
+**No abandoned CI runs.** A landing check runs in its own process group, with `IDENTITY_LANDING_OUT` set to
+`<queue dir>/checks/<sha>-<ts>.d`, and is recorded in `active-check.json`. Once the check returns (any verdict, no
+verdict, or a timeout), or the processor is stopped (SIGTERM, SIGHUP, SIGINT), the processor:
+- kills the check's process group;
+- finds the measure/ branches the check pushed (`pushed measure/…` lines in its log and output directory);
+- cancels every run on those branches that has not finished (`forgejo-gh run cancel`), and deletes the branches.
+
+Runs on other branches, such as recordings or other agents' runs, are never touched. A processor killed with SIGKILL
+leaves `active-check.json`, so the next processor cancels those runs when it starts. Right before each check, the gate
+is read again: if main is red for the gate and the batch holds production entries, no check is started. A batch
+rebuilt on a moved main gets a new tip, so it always dispatches fresh runs and never reuses the old tip's.
 
 **The processor's token.** The detached processor runs in its own session, so it cannot read a vault that was unlocked
 in yours. `queue add` and `queue resume` resolve FORGEJO_API_TOKEN in your session (`$FORGEJO_API_TOKEN`, else

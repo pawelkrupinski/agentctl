@@ -16,6 +16,11 @@ CHECK = """#!/bin/sh
 sha="$1"
 echo "$sha" >> "$CHECK_CALLS"
 echo "${FORGEJO_API_TOKEN:-<none>}" > "$CHECK_CALLS.token"
+# what the real check prints when it dispatches: identity-ci-run's line in the check log, identity-measure's in its out dir
+echo "identity-ci-run: pushed measure/q/ci-1" >&2
+mkdir -p "${IDENTITY_LANDING_OUT:-/nonexistent}" 2>/dev/null && echo "identity-measure: pushed measure/q/me-1" > "$IDENTITY_LANDING_OUT/measure.log"
+echo $$ > "$CHECK_CALLS.pid"
+if [ -f "$CHECK_CALLS.sleep" ]; then sleep 30; fi
 if [ -f "$CHECK_CALLS.noverdict" ]; then echo "NO VERDICT: could not check unit -- dispatch failed"; exit 2; fi
 if [ -n "$CHECK_HOOK" ] && [ ! -f "$CHECK_HOOK.done" ]; then touch "$CHECK_HOOK.done"; sh "$CHECK_HOOK"; fi
 blocked() {
@@ -66,7 +71,12 @@ class QueueTest(Base):
                           AGENTCTL_FORGEJO_API="http://127.0.0.1:9/api/v1")  # nothing listens: the token is not judged
         for k in ("CHECK_HOOK", "PREPUSH_SKIP", "FORGEJO_API_TOKEN"):
             os.environ.pop(k, None)
-        self.saved_api = A.API
+        self.saved_api, self.saved_gh = A.API, A.FORGEJO_GH
+        self.gh = os.path.join(t, "fakegh")
+        os.makedirs(self.gh)
+        self.gh_runs([])
+        os.environ.update(FAKE_GH_DIR=self.gh, GH_TOKEN="x", AGENTCTL_FORGEJO_GH=os.path.join(HERE, "fake_forgejo_gh.py"))
+        A.FORGEJO_GH = os.environ["AGENTCTL_FORGEJO_GH"]
         A.API = os.environ["AGENTCTL_FORGEJO_API"]
         self.saved_why = A.ci_why
         A.ci_why = lambda o_r, tail=6, run_id=None, repo=None: (False, "ci-why: main is green for the gate")
@@ -74,7 +84,7 @@ class QueueTest(Base):
         A.time.sleep = lambda s: None
 
     def tearDown(self):
-        A.ci_why, A.time.sleep, A.API = self.saved_why, self.sleep, self.saved_api
+        A.ci_why, A.time.sleep, A.API, A.FORGEJO_GH = self.saved_why, self.sleep, self.saved_api, self.saved_gh
         for k, v in self.saved_env.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -92,6 +102,20 @@ class QueueTest(Base):
         self.write_exec(self.hook_path, HOOK + body + "\n")
 
     # -- helpers
+    def gh_runs(self, runs):
+        with open(os.path.join(self.gh, "runs.json"), "w") as f:
+            json.dump(runs, f)
+
+    def gh_calls(self):
+        p = os.path.join(self.gh, "calls.log")
+        return [l.split(" ", 1)[1] for l in open(p).read().splitlines()] if os.path.exists(p) else []
+
+    def dispatched_runs(self):
+        """Run 501 still going on the check's ci branch, 502 done on its measure branch."""
+        self.gh_runs([{"databaseId": 501, "status": "in_progress", "headBranch": "measure/q/ci-1", "workflowName": "Identity run"},
+                      {"databaseId": 502, "status": "completed", "conclusion": "success", "headBranch": "measure/q/me-1",
+                       "workflowName": "Identity model convergence"}])
+
     def agent(self, name, files, msg=None):
         """A worktree on its own branch with one commit writing `files` ({path: text})."""
         wt = self.r.worktree(f"wt-{name}", branch=name)
@@ -387,6 +411,69 @@ class QueueTest(Base):
         self.assertEqual(rc, 0, out)
         self.assertEqual([e["id"] for e in A.read_entries(self.qd) if e["state"] == "queued"], [id2, id1])
 
+    # -- the check's CI runs are never abandoned
+    def test_a_finished_check_cancels_its_runs_still_going_and_deletes_its_branches(self):
+        self.dispatched_runs()
+        w, _ = self.agent("cr", {"identity/C.scala": "c\n"})
+        eid = self.add(w)
+        self.process()
+        self.assertEqual(self.entry(eid)["state"], "landed")
+        calls = self.gh_calls()
+        self.assertIn("run cancel 501 -R", " ".join(calls))
+        self.assertNotIn("run cancel 502", " ".join(calls))
+        for b in ("measure%2Fq%2Fci-1", "measure%2Fq%2Fme-1"):
+            self.assertTrue(any(c.startswith("api -X DELETE") and c.rstrip().endswith(f"branches/{b}") for c in calls), (b, calls))
+        self.assertFalse(os.path.exists(os.path.join(self.qd, "active-check.json")))
+
+    def test_no_check_starts_when_the_gate_turns_red_first(self):
+        answers = iter([False])  # green when the batch is formed, red when its check would start
+        A.ci_why = lambda *a, **k: (next(answers, True), "Main: RED (run 9 #5, failure)")
+        w, _ = self.agent("gr", {"identity/app/src/main/G.scala": "g\n"})
+        eid = self.add(w)
+        self.assertTrue(self.entry(eid)["production"])
+        self.process()
+        self.assertEqual(self.check_calls(), [])
+        self.assertEqual(self.entry(eid)["state"], "queued")
+
+    def test_a_processor_that_died_mid_check_has_its_runs_cancelled_at_the_next_start(self):
+        self.dispatched_runs()
+        os.makedirs(self.qd, exist_ok=True)
+        log = os.path.join(self.tmp.name, "dead-check.log")
+        with open(log, "w") as f:
+            f.write("identity-ci-run: pushed measure/q/ci-1\n")
+        A.write_json(os.path.join(self.qd, "active-check.json"), {"log": log, "out": log + ".d", "sha": "f" * 40})
+        self.process()
+        self.assertIn("run cancel 501 -R", " ".join(self.gh_calls()))
+        self.assertFalse(os.path.exists(os.path.join(self.qd, "active-check.json")))
+
+    def test_sigterm_mid_check_kills_the_check_and_cancels_its_runs(self):
+        import signal
+        self.dispatched_runs()
+        open(self.calls + ".sleep", "w").close()
+        A.time.sleep = self.sleep  # (time is one module: the setUp stub silences the test's own waits too)
+        w, _ = self.agent("st", {"identity/S.scala": "s\n"})
+        eid = self.add(w)
+        p = subprocess.Popen([sys.executable, TOOL, "queue", "run", "--once", "--repo", self.r.path], stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True)
+        for _ in range(300):
+            if os.path.exists(self.calls + ".pid") and os.path.exists(os.path.join(self.qd, "active-check.json")):
+                break
+            time.sleep(0.05)
+        time.sleep(0.3)
+        if not os.path.exists(self.calls + ".pid"):
+            p.kill()
+            self.fail("the check never started:\n" + p.communicate()[0])
+        check_pid = int(open(self.calls + ".pid").read())
+        p.send_signal(signal.SIGTERM)
+        out, _ = p.communicate(timeout=60)
+        self.assertIn("run cancel 501 -R", " ".join(self.gh_calls()), out)
+        for _ in range(50):
+            if not A.pid_alive(check_pid):
+                break
+            time.sleep(0.1)
+        self.assertFalse(A.pid_alive(check_pid), "the check outlived the processor")
+        self.assertEqual(self.entry(eid)["state"], "queued", out)
+
     def test_single_red_entry_is_rejected_without_bisecting(self):
         w, _ = self.agent("r1", {"identity/R.scala": "r\n", "RED": "SomeSpec\n"})
         eid = self.add(w)
@@ -491,12 +578,7 @@ class QueueTest(Base):
             self.assertFalse(bad in q, bad)
 
     def test_add_spawns_a_detached_processor_and_wait_reports_landed(self):
-        fake = os.path.join(self.tmp.name, "fakegh")
-        os.makedirs(fake)
-        with open(os.path.join(fake, "runs.json"), "w") as f:
-            f.write("[]")  # no workflows on main: green for the gate
-        os.environ.update(AGENTCTL_FORGEJO_GH=os.path.join(HERE, "fake_forgejo_gh.py"), FAKE_GH_DIR=fake, GH_TOKEN="x",
-                          AGENTCTL_QUEUE_POLL="0.2")
+        os.environ.update(AGENTCTL_QUEUE_POLL="0.2")  # the fake gh from setUp: no workflows on main, green for the gate
         os.environ.pop("AGENTCTL_QUEUE_NO_SPAWN")
         A.time.sleep = self.sleep
         w1, _ = self.agent("s1", {"identity/S.scala": "s\n"})
