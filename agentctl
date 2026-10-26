@@ -16,10 +16,12 @@
   agentctl land [--repo PATH] [--branch B] [--stash]
         fetch, rebase onto forgejo/main, prepush-check, push (the hook runs, sdkman sbt/java on PATH), retry push races
         x3, verify: last line `LANDED <sha>` or `NOT LANDED: <reason>` (+ ci-why on a red gate). Never --no-verify.
-  agentctl queue add [--identity] | wait [<entry>] | status | cancel <entry> | resume | run [--once]
-        Merge queue: batches every queued entry onto forgejo/main, runs ONE identity landing check on the batch tip
-        (when any entry needs it), bisects a BLOCKED batch to the culprit, pushes through the normal hook. `queue wait`
-        prints LANDED <sha> | REJECTED <why>. Use it for identity changes; `land` stays for single non-identity commits.
+        One lander per repository at a time (an flock): the next waits, then rebases onto what the previous landed.
+        In a repo with scripts/hooks/pre-push the hook runs FIRST as a dry run (--range forgejo/main..HEAD; the long
+        area tests run there), then the push reuses its pass. The identity/page area tests take minutes: run land
+        with run_in_background=true.
+  agentctl queue ...
+        RETIRED 2026-10-26 (no pre-merge CI left to batch): prints the retirement note and exits 2. Use `land`.
   agentctl env [--print|--check] [--ns movies|bitcashier]
         eval "$(agentctl env --print)" puts sdkman sbt/java on PATH; --check checks sbt, java, vault, tunnel, token.
         Locked vault: one line `vault <ns> locked: ask the user to run `! secrets unlock <ns>``, exit 1. Never unlocks.
@@ -70,7 +72,13 @@ LAND_HELP = """Land the current commit(s) on forgejo/main, safely, in one comman
   fetch -> rebase onto forgejo/main -> agentctl prepush-check -> git push forgejo HEAD:main (the repo's pre-push hook
   runs, with sdkman's sbt/java on PATH) -> on a push race (non-fast-forward, cannot lock ref) refetch, rebase and retry,
   up to 3 times -> fetch and verify with merge-base / git cherry.
+ONE LANDER PER REPOSITORY: the whole sequence holds the repository's landing lock (~/.cache/agentctl/land/, an flock);
+a second land waits for it (one line names the holder; $AGENTCTL_LAND_LOCK_TIMEOUT, default 4 h) and then rebases onto
+what the first landed. CHECK FIRST: in a repo with scripts/hooks/pre-push (movies) the hook runs as a dry run,
+`--range forgejo/main..<sha>`, before the push -- the basic checks and the identity / page area tests the paths select,
+minutes for those -- and the push's own hook run reuses its stored pass in seconds.
 Last line: `LANDED <sha>`, or `NOT LANDED: <exact reason>` (red gate: followed by the `agentctl ci-why` summary).
+Run it with the Bash tool's run_in_background=true when the area tests will run.
 Never passes --no-verify and refuses to run with PREPUSH_SKIP set. Refuses a dirty tree unless --stash (a named stash,
 restored afterwards, found by its sha -- the stash list is shared by every worktree).
 Exit: 0 landed, 1 not landed."""
@@ -160,7 +168,7 @@ def token(o_r):
     if os.environ.get("GH_TOKEN"):
         return os.environ["GH_TOKEN"]
     ns = "movies" if o_r.startswith("pawelkrupinski/") else "bitcashier"
-    if ns == "movies" and os.environ.get("FORGEJO_API_TOKEN"):  # the queue processor's handed-over token
+    if ns == "movies" and os.environ.get("FORGEJO_API_TOKEN"):  # a token the environment already carries
         return os.environ["FORGEJO_API_TOKEN"]
     if ns not in _tokens:
         r = subprocess.run(["secrets", "get", ns, "FORGEJO_API_TOKEN"], capture_output=True, text=True)
@@ -685,6 +693,12 @@ REDGATE = re.compile(r"main is red: only a fix|carries no Fixes-Red")
 TUNNEL_TROUBLE = re.compile(r"GitOps manifests STALE|Connection to localhost closed|forgejo\.internal.*(refused|unreachable)|"
                             r"Could not read from remote repository|Connection refused", re.I)
 LAND_RETRIES = 3
+# One lander per repository: with no pre-merge CI left (movies, 2026-10-26) a landing is the hook's local tests --
+# minutes for an identity or page change -- and two landers would each test a base the other is about to move, then
+# race, rebase, and test again. Agents wait for the lock instead (land runs in the background), and it caps the
+# laptop at one landing hook's JVM at a time.
+LAND_LOCK_DIR = os.path.join(HOME, ".cache", "agentctl", "land")
+LAND_LOCK_TIMEOUT = 4 * 3600
 
 
 def tool_env():
@@ -747,6 +761,51 @@ def landed(repo, sha, main_ref):
     return None
 
 
+def land_lock_path(repo):
+    """One lock per repository: every worktree of a clone shares its git common dir."""
+    common = os.path.realpath(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
+    return os.path.join(LAND_LOCK_DIR, re.sub(r"[^A-Za-z0-9._-]", "_", common.strip("/")) + ".lock")
+
+
+@contextlib.contextmanager
+def land_lock(repo):
+    """Hold the repository's landing lock (an flock, freed by the kernel when the holder dies), waiting for it with one
+    line saying who holds it. Yields True when held, False when the wait timed out."""
+    path = land_lock_path(repo)
+    os.makedirs(LAND_LOCK_DIR, exist_ok=True)
+    f = open(path, "a+")
+    try:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            f.seek(0)
+            err(f"waiting for the landing lock ({path}), held by: {f.read().strip() or 'unknown'}")
+            deadline = time.monotonic() + float(os.environ.get("AGENTCTL_LAND_LOCK_TIMEOUT", LAND_LOCK_TIMEOUT))
+            while True:
+                try:
+                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() > deadline:
+                        yield False
+                        return
+                    time.sleep(5)
+            err("got the landing lock")
+        f.seek(0)
+        f.truncate()
+        f.write(f"pid {os.getpid()} {repo} since {ts()}\n")
+        f.flush()
+        yield True
+    finally:
+        f.close()
+
+
+def precheck_hook(repo):
+    """The repo's own pre-push hook, when it has one with a dry-run mode (movies: scripts/hooks/pre-push --range)."""
+    hook = os.path.join(repo, "scripts", "hooks", "pre-push")
+    return hook if os.access(hook, os.X_OK) else None
+
+
 def cmd_land(a):
     if os.environ.get("PREPUSH_SKIP"):
         print("NOT LANDED: PREPUSH_SKIP is set in the environment; agentctl land never skips checks. `unset PREPUSH_SKIP`.")
@@ -780,7 +839,11 @@ def cmd_land(a):
             stash = Stash(repo)
             stash.save()
             err(f"stashed local changes as {stash.name} ({stash.sha[:10]})")
-        return land_loop(repo, main_ref, sh, log_path, a)
+        with land_lock(repo) as held:
+            if not held:
+                print("NOT LANDED: timed out waiting for the landing lock (another land is running its checks); land again.")
+                return 1
+            return land_loop(repo, main_ref, sh, log_path, a)
     finally:
         if stash and not stash.restore():
             print(f"WARNING: local changes are in stash {stash.name}, not restored")
@@ -815,6 +878,17 @@ def land_loop(repo, main_ref, sh, log_path, a):
         if problems:
             print("NOT LANDED: prepush-check refused:\n  " + "\n  ".join(problems))
             return 1
+        hook = precheck_hook(repo)
+        if hook:
+            # CHECK FIRST: the hook's dry run over exactly what the push will carry (its pass is stored, so the push's own
+            # hook run reuses it in seconds). A long hook inside `git push` holds the push's ssh connection idle, and a
+            # tunnel drop kills it after "all clear" (2026-10-23); the area tests make long hooks the norm.
+            err(f"checking {head[:10]}: {os.path.relpath(hook, repo)} --range {REMOTE}/main..HEAD (log: {log_path})")
+            r = sh(hook, "--range", f"{REMOTE}/main..{head}")
+            with open(log_path, "a") as f:
+                f.write(f"=== check {attempt + 1} {ts()} {head}\n{r.stdout}{r.stderr}\n")
+            if r.returncode != 0:
+                return refused(repo, r.stdout + r.stderr, log_path, "the pre-push checks failed")
         err(f"pushing {head[:10]} to {REMOTE}/main (attempt {attempt + 1}/{LAND_RETRIES + 1}; hook log: {log_path})")
         r = sh(*push_argv(REMOTE, head))
         with open(log_path, "a") as f:
@@ -832,1371 +906,41 @@ def land_loop(repo, main_ref, sh, log_path, a):
             err(f"push race ({RACE.search(out).group(0)}): refetch, rebase, retry")
             time.sleep(min(30, 2 + 3 * attempt))
             continue
-        tail = "\n  ".join([l for l in out.splitlines() if l.strip()][-25:])
-        if REDGATE.search(out):
-            print(f"NOT LANDED: the red gate refused the push (main is red).\n  {tail}")
-            try:
-                print(ci_why(slug(repo), 4, repo=repo)[1])
-            except Exception as e:
-                print(f"(agentctl ci-why failed: {e})")
-            return 1
-        if RACE.search(out):
+        if RACE.search(out) and not REDGATE.search(out):
             print(f"NOT LANDED: still racing after {LAND_RETRIES} retries ({RACE.search(out).group(0)}); try again shortly.")
             return 1
-        hint = ""
-        if TUNNEL_TROUBLE.search(out):
-            hint = ("\n  HINT: the hook could not reach Forgejo (tunnel dropped?): `~/bin/agentctl env --check` "
-                    "(it says the kickstart fix), then land again.")
-        print(f"NOT LANDED: the push failed (pre-push hook or remote). Last lines (full log {log_path}):\n  {tail}{hint}")
-        return 1
+        return refused(repo, out, log_path, "the push failed (pre-push hook or remote)")
     return 1
 
 
-# ---------------------------------------------------------------- queue
-QUEUE_HELP = """A merge queue for agent landings: ONE landing check per batch instead of one per agent.
-  agentctl queue add [--identity]      # from your worktree: enqueue its commits, start the processor if none runs
-  agentctl queue wait [<entry>]        # Bash run_in_background=true, END YOUR TURN: LANDED <sha> | REJECTED <why>
-  agentctl queue status                # the processor's phase and every open entry
-  agentctl queue cancel <entry>        # drop an entry; one in the current batch stops its check and the rest rebuild
-  agentctl queue hold [--reason R]     # PAUSE (sticks: waiters keep waiting and start no processor) until resume
-  agentctl queue resume                # lift a FLAKY hold (after the fix is on main, or the owner decides)
-  agentctl queue run [--once]          # the processor itself (queue add starts it detached; one at a time, by lock)
-The processor builds forgejo/main + each queued entry rebased in order (an entry that does not rebase, or that
-prepush-check refuses, is rejected alone), runs ONE `scripts/identity-landing-check --full <tip>` when any entry needs
-it (identity/, worker identity adapters, title rules, identity fixtures, identity/matcher/resolver/projection code),
-and pushes the tip through the normal pre-push hook. BLOCKED: bisect by halves, reject the culprit with the failing
-output, land the green prefix, requeue the rest. Main moved: rebuild and recheck. Main red for the gate: production
-entries wait, tools-only (and Fixes-Red:) entries go. A multi-entry batch whose hook fails is retried one by one.
-Never --no-verify, never PREPUSH_SKIP, never a force push. Log: <queue dir>/processor.log.
-Blame needs proof: a red batch first checks bare main (cached per main sha; red -> HOLD `MAIN RED`, resumes when main
-moves and the gate is green), then bisects, then re-checks the red boundary ONCE: red again with the same failing
-specs -> reject that entry; green or other specs -> HOLD `FLAKY` (nobody rejected, nothing landed) until
-`agentctl queue resume`. Holds: `queue status`, <queue dir>/flaky.log.
-Exit: add 0 queued, 1 not; wait 0 landed, 1 rejected, 2 timeout, 3 HELD (flaky, no-token, no-verdict)."""
-IDENTITY_STRICT = re.compile(r"^(identity/|worker/src/main/scala/services/identity/|common/src/main/(resources/title-(rules|words)\.tsv|"
-                             r"scala/services/titlerules/)|test/resources/fixtures/identity-)")
-IDENTITY_WORDS = re.compile(r"(^|/)(identity|matcher|resolver|resolution|projection)|(identity|matcher|resolver|projection)[^/]*\.", re.I)
-TOOL_TREES = ("scripts/", "docs/", ".claude/", ".github/", ".forgejo/")
-PRODUCTION_GLOBS = ("*/src/main/*", "conf/*", "*/conf/*", "build.sbt", "project/*", "infra/nix/*", "infra/kubernetes/*", "Dockerfile")
-LANDING_CHECK = "scripts/identity-landing-check --full"
-LANDING_SLOTS = "/tmp/movies-landing-slot-1 /tmp/movies-landing-slot-2"
-QUEUE_CHECK_ERRORS = 5  # no-verdict retries (with backoff) before the hold waits for `queue resume`; never a reject
-FINAL = ("landed", "rejected")
-
-
-def is_production_path(p):
-    """movies' pre-push is_production_path: what reaches a pod or a fleet host (the rest lands while red)."""
-    return any(fnmatch.fnmatch(p, g) for g in PRODUCTION_GLOBS)
-
-
-def needs_identity_check(p):
-    """The paths whose change must pass identity-landing-check: the pre-push hook's identity-change advice, plus any
-    identity/matcher/resolver/projection code outside the tool trees (takes-skip-gate's deny list)."""
-    if IDENTITY_STRICT.match(p):
-        return True
-    return bool(IDENTITY_WORDS.search(p)) and not p.startswith(TOOL_TREES) and not p.endswith(".md")
-
-
-def main_checkout(repo):
-    common = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
-    return os.path.dirname(common) if os.path.basename(common) == ".git" else common
-
-
-def queue_dir(main):
-    d = os.environ.get("AGENTCTL_QUEUE_DIR") or os.path.join(HOME, ".cache", "agentctl", "queue", os.path.basename(main))
-    os.makedirs(os.path.join(d, "entries"), exist_ok=True)
-    return d
-
-
-class Flock:
-    """An flock(2) lock: released by the kernel when its holder dies, so it never goes stale."""
-
-    def __init__(self, path):
-        self.path, self.fd = path, None
-
-    def acquire(self, block=True, tries=1, delay=0.2):
-        fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
-        for i in range(tries):
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | (0 if block else fcntl.LOCK_NB))
-                self.fd = fd
-                return True
-            except BlockingIOError:
-                if i + 1 < tries:
-                    time.sleep(delay)
-        os.close(fd)
-        return False
-
-    def release(self):
-        if self.fd is not None:
-            fcntl.flock(self.fd, fcntl.LOCK_UN)
-            os.close(self.fd)
-            self.fd = None
-
-    def __enter__(self):
-        self.acquire()
-        return self
-
-    def __exit__(self, *exc):
-        self.release()
-
-
-def write_json(path, data):
-    tmp = f"{path}.{os.getpid()}.tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=1)
-    os.replace(tmp, path)
-
-
-def read_json(path):
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
-
-
-def entry_path(qd, eid):
-    return os.path.join(qd, "entries", eid + ".json")
-
-
-def read_entries(qd):
-    es = [e for e in (read_json(p) for p in glob.glob(os.path.join(qd, "entries", "*.json"))) if e]
-    return sorted(es, key=lambda e: (e.get("added_at", 0), e["id"]))
-
-
-def write_entry(qd, e):
-    e["updated"] = ts()
-    write_json(entry_path(qd, e["id"]), e)
-
-
-def find_entry(qd, ref, worktree=None):
-    es = read_entries(qd)
-    if ref:
-        hits = [e for e in es if e["id"] == ref] or [e for e in es if ref in e["id"]]
-        if len(hits) != 1:
-            raise SystemExit(f"agentctl: {'no' if not hits else 'more than one'} queue entry matches {ref!r} (`agentctl queue status`)")
-        return hits[0]
-    mine = [e for e in es if e.get("worktree") == worktree]
-    if not mine:
-        raise SystemExit(f"agentctl: no queue entry for {worktree}; name one (`agentctl queue status`)")
-    open_ = [e for e in mine if e["state"] not in FINAL]
-    return (open_ or mine)[-1]
-
-
-def processor_running(qd):
-    """(running, processor.json). Running means the processor.lock flock is HELD: the kernel drops it when the
-    processor exits, so a killed, zombie or recycled pid never counts (a pid check took a zombie for alive)."""
-    st = read_json(os.path.join(qd, "processor.json")) or {}
-    probe = Flock(os.path.join(qd, "processor.lock"))
-    if probe.acquire(block=False):
-        probe.release()
-        return False, st
-    return True, st
-
-
-def spawn_processor(qd, main):
-    """Start `agentctl queue run` fully detached: a double fork with setsid, so it is nobody's child -- a killed
-    `queue wait` or agent shell can neither take it down nor leave it a zombie. It logs to the queue dir. A second
-    processor exits at once on the lock, so starting one too many is harmless. Returns its pid."""
-    if os.environ.get("AGENTCTL_QUEUE_NO_SPAWN"):
-        return None
-    argv = [sys.executable, os.path.realpath(__file__), "queue", "run", "--repo", main]
-    env, logp = tool_env(), os.path.join(qd, "processor.log")
-    r, w = os.pipe()
-    pid = os.fork()
-    if pid == 0:  # the intermediate child: new session, fork the processor, exit at once (reaped below)
+def refused(repo, out, log_path, what):
+    """Print the NOT LANDED line for a hook or push that said no: the red gate explained by ci-why, a tunnel hinted."""
+    tail = "\n  ".join([l for l in out.splitlines() if l.strip()][-25:])
+    if REDGATE.search(out):
+        print(f"NOT LANDED: the red gate refused the push (main is red).\n  {tail}")
         try:
-            os.close(r)
-            os.setsid()
-            gpid = os.fork()
-            if gpid == 0:
-                try:
-                    os.close(w)
-                    log = os.open(logp, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
-                    null = os.open(os.devnull, os.O_RDONLY)
-                    os.dup2(null, 0)
-                    os.dup2(log, 1)
-                    os.dup2(log, 2)
-                    os.chdir(main)
-                    os.execve(sys.executable, argv, env)
-                finally:
-                    os._exit(127)
-            os.write(w, str(gpid).encode())
-        finally:
-            os._exit(0)
-    os.close(w)
-    os.waitpid(pid, 0)
-    with os.fdopen(r) as f:
-        got = f.read().strip()
-    return int(got) if got.isdigit() else None
-
-
-def has_landing_check(repo, head):
-    return bool(os.environ.get("AGENTCTL_LANDING_CHECK")) or git_ok(repo, "cat-file", "-e", f"{head}:scripts/identity-landing-check")
-
-
-def cmd_queue(a):
-    return {"add": cmd_queue_add, "status": cmd_queue_status, "wait": cmd_queue_wait, "cancel": cmd_queue_cancel,
-            "run": cmd_queue_run,
-            "resume": cmd_queue_resume, "requeue": cmd_queue_requeue, "hold": cmd_queue_hold}[a.qcmd](a)
-
-
-def cmd_queue_add(a):
-    if os.environ.get("PREPUSH_SKIP"):
-        print("NOT QUEUED: PREPUSH_SKIP is set in the environment; the queue never skips checks. `unset PREPUSH_SKIP`.")
+            print(ci_why(slug(repo), 4, repo=repo)[1])
+        except Exception as e:
+            print(f"(agentctl ci-why failed: {e})")
         return 1
-    wt = git(a.repo or os.getcwd(), "rev-parse", "--show-toplevel").strip()
-    main = main_checkout(wt)
-    qd = queue_dir(main)
-    main_ref = f"refs/remotes/{REMOTE}/main"
-    if git(wt, "fetch", "--quiet", REMOTE, "main", check=False).returncode:
-        err(f"git fetch {REMOTE} main failed; using the last fetched {REMOTE}/main")
-    head = git(wt, "rev-parse", "HEAD").strip()
-    branch = git(wt, "rev-parse", "--abbrev-ref", "HEAD").strip()
-    if landed(wt, head, main_ref):
-        print(f"LANDED {head} (already on {REMOTE}/main; nothing to queue)")
-        return 0
-    base = git(wt, "merge-base", head, main_ref).strip()
-    commits = git(wt, "rev-list", "--reverse", f"{base}..{head}").split()
-    files = [f for f in git(wt, "diff", "--name-only", base, head).splitlines() if f]
-    why_identity = next((f for f in files if needs_identity_check(f)), None) if has_landing_check(wt, head) else None
-    identity = bool(a.identity or why_identity)
-    prod = [c for c in commits if any(is_production_path(p) for p in git(wt, "diff-tree", "--no-commit-id", "--name-only", "-r", c).split())]
-    fixes = bool(prod) and all("Fixes-Red:" in git(wt, "log", "-1", "--format=%B", c) for c in prod)
-    if git(wt, "status", "--porcelain", "--untracked-files=no").strip():
-        err("note: uncommitted changes are not queued: only the committed HEAD is")
-    with Flock(os.path.join(qd, "queue.lock")):
-        es = read_entries(qd)
-        dup = next((e for e in es if e["state"] not in FINAL and e.get("worktree") == wt), None)
-        if dup:
-            print(f"NOT QUEUED: {wt} already has entry {dup['id']} ({dup['state']}, head {dup['head'][:10]}). Wait for it, or "
-                  f"`agentctl queue cancel {dup['id']}` (a queued entry only) and add again.")
-            return 1
-        eid = f"{now():%Y%m%d-%H%M%S}-{re.sub(r'[^A-Za-z0-9._-]+', '-', branch)[:40]}-{os.urandom(2).hex()}"
-        e = {"id": eid, "state": "queued", "repo": main, "worktree": wt, "branch": branch, "head": head, "base": base,
-             "commits": commits, "identity": identity, "identity_why": "--identity" if a.identity else why_identity,
-             "production": bool(prod), "fixes_red": fixes, "added": ts(), "added_at": time.time(), "note": ""}
-        write_entry(qd, e)
-        write_json(os.path.join(qd, "config.json"), {"repo": main})
-        pos = sum(1 for x in es if x["state"] not in FINAL) + 1
-    print(f"QUEUED {eid}: {len(commits)} commit(s) up to {head[:10]} ({branch}); identity landing check: "
-          + (f"yes ({e['identity_why']})" if identity else "no") + f"; {'production' if prod else 'tools-only'}; position {pos}")
-    if not hand_over_token(qd, main):
-        ns = queue_ns(main)
-        print(f"note: no Forgejo token in this session (vault {ns} locked?): the processor cannot dispatch checks. "
-              f"Ask the user to run `! secrets unlock {ns}`, then `agentctl queue resume`.")
-    running, st = processor_running(qd)
-    if not running:
-        pid = spawn_processor(qd, main)
-        if pid:
-            err(f"started the queue processor (pid {pid}; log {os.path.join(qd, 'processor.log')})")
-    hold = read_hold(qd)
-    if hold:
-        print(f"note: the queue is HELD: {hold['what']}")
-    print(f"wait for it (Bash run_in_background=true, then END YOUR TURN): ~/bin/agentctl queue wait {eid}")
-    return 0
-
-
-def cmd_queue_status(a):
-    main = main_checkout(a.repo or os.getcwd())
-    qd = queue_dir(main)
-    running, st = processor_running(qd)
-    print(f"queue {qd} (repo {main})")
-    if running:
-        detail = " ".join(f"{k}={v}" for k, v in st.items() if k not in ("pid", "phase", "since") and v)
-        print(f"processor: pid {st['pid']}, {st.get('phase')} since {st.get('since')}" + (f"; {detail}" if detail else ""))
-    else:
-        print("processor: not running")
-    hold = read_hold(qd)
-    if hold:
-        print(f"HELD since {hold.get('since')}: {hold['what']}" + (f" -- {hold['detail']}" if hold.get("detail") else "")
-              + ("; `agentctl queue resume` to go on" if hold_needs_resume(hold) else "; resumes by itself when main moves and the gate is green"))
-    es = read_entries(qd)
-    open_ = [e for e in es if e["state"] not in FINAL]
-    for e in open_:
-        print(f"  {e['id']}  {e['state']:<10} {e['head'][:10]} {e.get('branch')} identity={'yes' if e.get('identity') else 'no'} "
-              f"{'production' if e.get('production') else 'tools-only'}" + (" solo" if e.get("solo") else "")
-              + (f"\n      {e['note']}" if e.get("note") else ""))
-    if not open_:
-        print("  (no open entries)")
-    cutoff = time.time() - 86400
-    done = [e for e in es if e["state"] in FINAL and e.get("finished_at", 0) >= cutoff]
-    if done:
-        print("finished in the last 24 h:")
-        for e in done[-15:]:
-            what = f"LANDED {e.get('result_sha', '')[:10]}" if e["state"] == "landed" else f"REJECTED {(e.get('why') or '').splitlines()[0][:100]}"
-            print(f"  {e['id']}  {what}")
-    return 0
-
-
-def cmd_queue_wait(a):
-    wt = git(a.repo or os.getcwd(), "rev-parse", "--show-toplevel").strip()
-    main = main_checkout(wt)
-    qd = queue_dir(main)
-    eid = find_entry(qd, a.entry, wt)["id"]
-    poll = float(os.environ.get("AGENTCTL_QUEUE_POLL", "20"))
-    deadline, spawned_at = time.time() + a.timeout, 0.0
-    while True:
-        e = read_json(entry_path(qd, eid)) or {}
-        if e.get("state") == "landed":
-            print(f"LANDED {e['result_sha']}" + (f" ({e['why']})" if e.get("why") else ""))
-            return 0
-        if e.get("state") == "rejected":
-            why = (e.get("why") or "no reason recorded").splitlines()
-            for l in why[1:]:
-                print(f"  {l}")
-            print(f"REJECTED {why[0]}")
-            return 1
-        hold = read_hold(qd)
-        paused = bool(hold) and hold.get("kind") == "manual"
-        if hold and hold_needs_resume(hold) and not paused:
-            if hold.get("kind") == "flaky":
-                print(f"  {hold.get('detail', '')}; nobody rejected, nothing landed. Not yours unless your spec is named: report it.")
-                print(f"  the owner resumes with `agentctl queue resume` once it is fixed on main")
-                print(f"HELD flaky {', '.join(hold.get('specs') or [])} ({hold['what']})")
-            else:
-                print("  not your entry's fault: nobody rejected, nothing landed. Report it.")
-                print(f"HELD {hold['what']}")
-            return 3
-        cfg = read_json(os.path.join(qd, "config.json")) or {}
-        if not paused and not processor_running(qd)[0] and time.time() - spawned_at > 300:
-            pid = spawn_processor(qd, cfg.get("repo") or main)
-            spawned_at = time.time()
-            if pid:
-                err(f"no queue processor was running; started one (pid {pid})")
-        if time.time() >= deadline:
-            print(f"TIMEOUT after {a.timeout}s: {eid} is still {e.get('state')}" + (f" ({e['note']})" if e.get("note") else ""))
-            return 2
-        time.sleep(max(0.05, min(poll, deadline - time.time())))
-
-
-def cmd_queue_cancel(a):
-    wt = git(a.repo or os.getcwd(), "rev-parse", "--show-toplevel").strip()
-    qd = queue_dir(main_checkout(wt))
-    with Flock(os.path.join(qd, "queue.lock")):
-        e = find_entry(qd, a.entry, wt)
-        if e["state"] == "processing" and processor_running(qd)[0]:
-            e["cancel_requested"] = ts()
-            write_entry(qd, e)
-            print(f"CANCEL REQUESTED {e['id']}: the processor drops it from the current batch (stopping the batch's check "
-                  "and cancelling its runs), requeues the rest and rebuilds; `queue status` shows it")
-            return 0
-        if e["state"] not in ("queued", "processing"):  # processing with no processor: a dead one's leftover
-            print(f"NOT CANCELLED: {e['id']} is {e['state']}")
-            return 1
-        e.update(state="rejected", why="cancelled by its owner", finished=ts(), finished_at=time.time())
-        write_entry(qd, e)
-    print(f"CANCELLED {e['id']}")
-    return 0
-
-
-def queue_ns(main):
-    try:
-        return "movies" if slug(main).startswith("pawelkrupinski/") else "bitcashier"
-    except (SystemExit, RuntimeError):
-        return "movies"
-
-
-def session_token(ns):
-    """FORGEJO_API_TOKEN as THIS session sees it ($FORGEJO_API_TOKEN, else the vault). A detached processor is in
-    another session and cannot read a vault unlocked here: `queue add` / `queue resume` hand it over."""
-    if os.environ.get("FORGEJO_API_TOKEN"):
-        return os.environ["FORGEJO_API_TOKEN"]
-    try:
-        r = subprocess.run(["secrets", "get", ns, "FORGEJO_API_TOKEN"], capture_output=True, text=True, timeout=15,
-                           stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
-
-
-def store_token(qd, tok):
-    """<queue dir>/token, mode 0600 from creation: never in argv, env of other tools, logs or status."""
-    path, tmp = os.path.join(qd, "token"), os.path.join(qd, f".token.{os.getpid()}")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(tok + "\n")
-    os.replace(tmp, path)
-
-
-def stored_token(qd):
-    try:
-        with open(os.path.join(qd, "token")) as f:
-            return f.read().strip() or None
-    except OSError:
-        return None
-
-
-def hand_over_token(qd, main):
-    """Refresh the processor's token from this session; lift a no-token hold when it worked. True when stored."""
-    tok = session_token(queue_ns(main))
-    if not tok:
-        return False
-    store_token(qd, tok)
-    with Flock(os.path.join(qd, "queue.lock")):
-        hold = read_hold(qd)
-        if hold and hold.get("kind") == "no-token":
-            os.unlink(os.path.join(qd, "hold.json"))
-    return True
-
-
-def token_verdict(tok):
-    """'ok', 'rejected' (Forgejo answers 401/403) or 'unknown' (unreachable: the check will say so itself)."""
-    req = urllib.request.Request(f"{API}/user", headers={"Authorization": f"token {tok}"})
-    try:
-        with urllib.request.urlopen(req, timeout=20):
-            return "ok"
-    except urllib.error.HTTPError as e:
-        return "rejected" if e.code in (401, 403) else "unknown"
-    except Exception:
-        return "unknown"
-
-
-def no_token_what(ns, why):
-    return f"no-token: run `secrets unlock {ns}`, then `agentctl queue resume` ({why})"
-
-
-# A landing check's dispatches: identity-ci-run / identity-measure say `pushed measure/<user>/<sha>-<rand>` for each
-# branch whose run they start. Only runs ON those branches are ever cancelled -- never a recording or another's run.
-PRECHECK_FILE = "scripts/queue-precheck-specs.txt"
-CONVERGENCE_PATHS = ".github/convergence-paths.txt"
-
-
-def convergence_path(path, patterns):
-    """.github/actions/changed-paths/matches.sh's dialect: `dir/**` is everything under dir/, else an exact path."""
-    return any(path.startswith(p[:-2]) if p.endswith("/**") else path == p for p in patterns)
-
-
-CHECK_BRANCH = re.compile(r"\bpushed (measure/[\w.\-/]+)")
-
-
-def branch_runs(o_r, branch):
-    return gh_json(o_r, "run", "list", "--branch", branch, "--limit", "20", "--json", "databaseId,status")
-
-
-def jobs_unfinished(o_r, rid):
-    """A run Forgejo marked finished can still hold rows queued or running (run 3011: failed, 3 rows on the landing
-    runner for an hour). Unknown counts as unfinished: a cancel of a truly finished run is a harmless 409."""
-    try:
-        jobs = gh_json(o_r, "run", "view", str(rid), "--json", "status,jobs").get("jobs") or []
-    except Exception:
-        return True
-    return any(j.get("status") not in ("completed", "success", "failure", "cancelled", "skipped") for j in jobs)
-
-
-def cancel_run(o_r, rid):
-    env = dict(os.environ, GH_TOKEN=token(o_r))
-    r = subprocess.run([FORGEJO_GH, "run", "cancel", str(rid), "-R", o_r], capture_output=True, text=True, env=env, timeout=120)
-    return r.returncode == 0, (r.stdout + r.stderr).strip()[:200]
-
-
-def delete_measure_branch(o_r, branch):
-    if not branch.startswith("measure/"):
-        raise ValueError(f"not a measure/ branch: {branch}")
-    env = dict(os.environ, GH_TOKEN=token(o_r))
-    r = subprocess.run([FORGEJO_GH, "api", "-X", "DELETE", f"repos/{o_r}/branches/{urllib.parse.quote(branch, safe='')}"],
-                       capture_output=True, text=True, env=env, timeout=120)
-    return r.returncode == 0, (r.stdout + r.stderr).strip()[:200]
-
-
-def failure_signature(out):
-    """The failing specs/steps a landing check named: the `  - <spec>: <test>` rows under its last `BLOCKED` line."""
-    lines = out.splitlines()
-    starts = [i for i, l in enumerate(lines) if l.strip() == "BLOCKED"]
-    if not starts:
-        return ("(no spec named)",)
-    specs = {m.group(1).strip() for l in lines[starts[-1] + 1:] if (m := re.match(r"^\s+- ([^:]+):", l))}
-    return tuple(sorted(specs)) or ("(no spec named)",)
-
-
-def read_hold(qd):
-    return read_json(os.path.join(qd, "hold.json"))
-
-
-def hold_needs_resume(hold):
-    return bool(hold.get("needs_resume") or hold.get("kind") in ("flaky", "no-token", "manual"))
-
-
-class CheckInterrupted(Exception):
-    """The owner paused the queue, or cancelled an entry of the batch, while it was being built or checked."""
-
-
-def cmd_queue_hold(a):
-    """PAUSE: a persistent hold the processor stops at (a running check is stopped, its runs cancelled) and waiters
-    respect: they keep waiting and start no processor, so a pause sticks until `queue resume`."""
-    main = main_checkout(a.repo or os.getcwd())
-    qd = queue_dir(main)
-    reason = a.reason or "no reason given"
-    with Flock(os.path.join(qd, "queue.lock")):
-        prev = read_hold(qd)
-        write_json(os.path.join(qd, "hold.json"), {"kind": "manual", "what": f"PAUSED by the owner: {reason}", "since": ts(),
-                                                   "needs_resume": True, "was": (prev or {}).get("what")})
-    print(f"PAUSED: {reason}" + (f" (replaces the hold: {prev['what']})" if prev else "")
-          + "; `agentctl queue resume` to go on")
-    return 0
-
-
-def cmd_queue_requeue(a):
-    """A wrongly rejected entry back in its ORIGINAL place. When its worktree already has an open entry for the same
-    head (re-added meanwhile), that one takes the original place instead: no duplicate, its waiters stay valid."""
-    main = main_checkout(a.repo or os.getcwd())
-    qd = queue_dir(main)
-    with Flock(os.path.join(qd, "queue.lock")):
-        e = find_entry(qd, a.entry)
-        if e["state"] != "rejected":
-            print(f"NOT REQUEUED: {e['id']} is {e['state']}")
-            return 1
-        dup = next((x for x in read_entries(qd) if x["state"] not in FINAL and x.get("worktree") == e.get("worktree")), None)
-        if dup and dup["head"] != e["head"]:
-            print(f"NOT REQUEUED: {e.get('worktree')} has open entry {dup['id']} at another head ({dup['head'][:10]})")
-            return 1
-        if dup:
-            dup.update(added_at=e["added_at"], note=f"moved to the place of {e['id']} (requeued)")
-            write_entry(qd, dup)
-            print(f"REQUEUED {dup['id']} in the place of {e['id']} (same head {e['head'][:10]}; not duplicated)")
-        else:
-            e.update(state="queued", why="", result_sha=None, finished=None, finished_at=None, note="requeued")
-            if a.last:
-                e["added_at"] = time.time()
-            write_entry(qd, e)
-            print(f"REQUEUED {e['id']} " + ("behind the open entries" if a.last else "in its original place"))
-    if not processor_running(qd)[0]:
-        spawn_processor(qd, main)
-    return 0
-
-
-def cmd_queue_resume(a):
-    main = main_checkout(a.repo or os.getcwd())
-    qd = queue_dir(main)
-    if not hand_over_token(qd, main):
-        ns = queue_ns(main)
-        print(f"NOT RESUMED: no Forgejo token in this session: run `secrets unlock {ns}` here, then `agentctl queue resume`")
-        return 1
-    with Flock(os.path.join(qd, "queue.lock")):
-        hold = read_hold(qd)
-        if not hold:
-            print("queue: not held (token refreshed)")
-            if not processor_running(qd)[0]:
-                spawn_processor(qd, main)
-            return 0
-        os.unlink(os.path.join(qd, "hold.json"))
-        for p in glob.glob(os.path.join(qd, "verdicts", "*.json")):  # a resumed queue judges afresh
-            os.unlink(p)
-        with open(os.path.join(qd, "flaky.log"), "a") as f:
-            f.write(f"{ts()}\tRESUMED\t{hold.get('what')}\n")
-    print(f"RESUMED (was: {hold.get('what')})")
-    if not processor_running(qd)[0]:
-        spawn_processor(qd, main)
-    return 0
-
-
-def cmd_queue_run(a):
-    main = main_checkout(a.repo or os.getcwd())
-    qd = queue_dir(main)
-    if os.environ.get("PREPUSH_SKIP"):
-        print(f"{ts()} queue: refusing to run with PREPUSH_SKIP set", flush=True)
-        return 1
-    def terminated(signum, _frame):  # unwind through the finally blocks: kill the check, cancel its runs, requeue
-        raise SystemExit(128 + signum)
-
-    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
-        signal.signal(sig, terminated)
-    lock = Flock(os.path.join(qd, "processor.lock"))
-    if not lock.acquire(block=False, tries=10):
-        print(f"{ts()} queue: a processor already runs (pid {processor_running(qd)[1].get('pid')}); exiting", flush=True)
-        return 0
-    try:
-        return QueueProcessor(qd, main, a.once).run(lock)
-    finally:
-        lock.release()
-
-
-def kill_group(p):
-    """SIGTERM a process group (a landing check and the identity-ci-run / measure waits it started), SIGKILL if it
-    lingers."""
-    for sig, wait in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
-        try:
-            os.killpg(p.pid, sig)
-        except (ProcessLookupError, PermissionError):
-            return
-        try:
-            p.wait(timeout=wait)
-            os.killpg(p.pid, 0)  # the leader is gone; members may linger
-        except subprocess.TimeoutExpired:
-            continue
-        except (ProcessLookupError, PermissionError):
-            return
-
-
-class QueueProcessor:
-    def __init__(self, qd, repo, once=False):
-        self.qd, self.repo, self.once = qd, repo, once
-        self.work = os.path.join(qd, "work")
-        self.main_ref = f"refs/remotes/{REMOTE}/main"
-        self.env = tool_env()
-        self.qlock = os.path.join(qd, "queue.lock")
-        self.held_why = ""
-        self.stop = False  # a FLAKY hold: exit, and stay down until `queue resume`
-        self.batch_id = ""
-        self.current = []  # the ids of the batch being built or checked
-        self.max_foreign = int(os.environ.get("AGENTCTL_MAX_FOREIGN", "2"))
-
-    # -- bookkeeping
-    def log(self, msg):
-        print(f"{ts()} {msg}", flush=True)
-
-    def status(self, phase, **kw):
-        write_json(os.path.join(self.qd, "processor.json"), {"pid": os.getpid(), "phase": phase, "since": ts(), **kw})
-
-    def update(self, e, only_if=None, **fields):
-        with Flock(self.qlock):
-            cur = read_json(entry_path(self.qd, e["id"]))
-            if not cur or (only_if and cur["state"] != only_if):
-                return None
-            cur.update(fields)
-            write_entry(self.qd, cur)
-            return cur
-
-    def finish(self, e, state, sha=None, why=""):
-        self.log(f"{state.upper()} {e['id']}" + (f" {sha}" if sha else "") + (f": {why.splitlines()[0]}" if why else ""))
-        self.update(e, state=state, result_sha=sha, why=why, finished=ts(), finished_at=time.time(), note="")
-
-    def reject(self, e, why):
-        self.finish(e, "rejected", why=why)
-
-    def requeue(self, entries, note, solo=False):
-        for e in entries:
-            self.log(f"requeue {e['id']}: {note}")
-            self.update(e, state="queued", note=note, batch_sha=None, **({"solo": True} if solo else {}))
-
-    # -- the loop
-    def run(self, lock):
-        self.status("starting")
-        for e in read_entries(self.qd):
-            if e["state"] == "processing":  # we hold the lock: whoever was processing it is gone
-                self.update(e, state="queued", note="requeued: the processor that held it ended")
-        stale = read_json(os.path.join(self.qd, "active-check.json"))
-        if stale:  # a processor killed mid-check (even by SIGKILL): its runs must not run on unwatched
-            self.abandon_check(stale, "left by a processor that ended mid-check")
-        hold = backoff(float(os.environ.get("AGENTCTL_QUEUE_HOLD_POLL", "60")), 300)
-        try:
-            while True:
-                try:
-                    outcome = self.pass_()
-                except Exception as e:  # never strand claimed entries: requeue them and hold
-                    self.log(f"processor error: {e}\n{traceback.format_exc()}")
-                    self.requeue([x for x in read_entries(self.qd) if x["state"] == "processing"], f"requeued after a processor error: {e}")
-                    self.held_why, outcome = f"processor error: {e}", "held"
-                if outcome == "progress":
-                    hold = backoff(float(os.environ.get("AGENTCTL_QUEUE_HOLD_POLL", "60")), 300)
-                    continue
-                if outcome == "held":
-                    if self.once or self.stop:
-                        self.log(f"held ({self.held_why}); --once: exiting")
-                        return 0
-                    d = next(hold)
-                    self.status("holding", why=self.held_why, retry_in=f"{d:.0f}s")
-                    self.log(f"held ({self.held_why}); next try in {d:.0f}s")
-                    time.sleep(d)
-                    continue
-                # idle: give up the lock, then look once more -- an entry added while we were leaving is not stranded
-                self.status("exited")
-                lock.release()
-                if not any(e["state"] == "queued" for e in read_entries(self.qd)) or not lock.acquire(block=False, tries=10):
-                    return 0
-                self.status("starting")
-        finally:
-            if lock.fd is not None:
-                self.requeue([x for x in read_entries(self.qd) if x["state"] == "processing"], "requeued: the processor ended")
-                self.status("exited")
-
-    def fetch(self):
-        for i in range(2):
-            if git(self.repo, "fetch", "--quiet", REMOTE, "main", check=False).returncode == 0:
-                return git(self.repo, "rev-parse", self.main_ref).strip()
-            if i == 0:
-                time.sleep(15)
-        return None
-
-    def gate(self):
-        """(red, summary) from ci-why -- the pre-push red gate's view. ci-why failing holds nothing: the hook still gates."""
-        try:
-            red, text = ci_why(slug(self.repo), 3, repo=self.repo)
-        except (Exception, SystemExit) as e:
-            self.log(f"gate: ci-why failed ({e}); not holding (the pre-push hook still enforces the gate)")
-            return False, ""
-        return red, "; ".join(l.strip() for l in text.splitlines() if ": RED" in l) or "main is red for the gate"
-
-    def preflight_token(self):
-        """The Forgejo token, BEFORE any check dispatches or measure branch is pushed: the one `queue add`/`resume`
-        handed over, else $FORGEJO_API_TOKEN, else this session's vault. None, or one Forgejo rejects -> HOLD no-token."""
-        ns = queue_ns(self.repo)
-        tok = stored_token(self.qd) or os.environ.get("FORGEJO_API_TOKEN") or session_token(ns)
-        why = "none handed over and the vault is locked to the processor" if not tok else (
-            "Forgejo rejects the handed-over token" if token_verdict(tok) == "rejected" else None)
-        if why:
-            self.set_hold("no-token", no_token_what(ns, why), needs_resume=True)
-            self.stop = True
-            return False
-        self.env["FORGEJO_API_TOKEN"] = os.environ["FORGEJO_API_TOKEN"] = tok  # the check, the hook, ci-why's gate
-        return True
-
-    def set_hold(self, kind, what, **kw):
-        write_json(os.path.join(self.qd, "hold.json"), {"kind": kind, "what": what, "since": ts(), **kw})
-        self.log(f"HOLD {what}")
-        self.held_why = what
-
-    def pass_(self):
-        hold = read_hold(self.qd)
-        if hold and hold_needs_resume(hold):
-            self.held_why, self.stop = f"{hold['what']}; `agentctl queue resume` to go on", True
-            return "held"
-        main = self.fetch()
-        if not main:
-            self.held_why = f"git fetch {REMOTE} main failed (tunnel? `agentctl env --check`)"
-            return "held"
-        if hold and hold.get("kind") == "main-red":
-            if main == hold.get("sha") or self.gate()[0]:
-                self.held_why = f"{hold['what']}; resumes when main moves and the gate is green"
-                return "held"
-            with Flock(self.qlock):
-                if read_hold(self.qd) == hold:
-                    os.unlink(os.path.join(self.qd, "hold.json"))
-            self.log(f"resumed: main moved to {main[:10]} and the gate is green (was {hold['what']})")
-        queued = [e for e in read_entries(self.qd) if e["state"] == "queued"]
-        if not queued:
-            return "idle"
-        if not self.preflight_token():
-            return "held"
-        cands = [queued[0]] if queued[0].get("solo") else list(itertools.takewhile(lambda e: not e.get("solo"), queued))
-        red, why = self.gate()
-        ok = cands if not red else [e for e in cands if not e.get("production") or e.get("fixes_red")]
-        if red:
-            for e in cands:
-                if e not in ok:
-                    self.update(e, only_if="queued", note=f"held: main is red for the gate ({why}); production commits wait "
-                                f"for green, tools-only entries land")
-        if not ok:
-            self.held_why = f"main is red for the gate ({why})"
-            return "held"
-        claimed = []
-        with Flock(self.qlock):
-            for e in ok:
-                cur = read_json(entry_path(self.qd, e["id"]))
-                if cur and cur["state"] == "queued":
-                    cur.update(state="processing", note="")
-                    write_entry(self.qd, cur)
-                    claimed.append(cur)
-        if not claimed:
-            return "progress"
-        self.current = [e["id"] for e in claimed]
-        try:
-            return self.batch(main, claimed)
-        except CheckInterrupted as ci:
-            return self.interrupted(claimed, str(ci))
-        finally:
-            self.current = []
-
-    def interrupt_reason(self):
-        hold = read_hold(self.qd)
-        if hold and hold.get("kind") == "manual":
-            return hold["what"]
-        gone = [i for i in self.current if (read_json(entry_path(self.qd, i)) or {}).get("cancel_requested")]
-        return f"{', '.join(gone)} cancelled by its owner" if gone else None
-
-    def interrupted(self, claimed, why):
-        """Drop the batch: owner-cancelled entries are rejected, the rest requeued (rebuilt and rechecked next pass)."""
-        self.log(f"batch interrupted: {why}")
-        for e in claimed:
-            cur = read_json(entry_path(self.qd, e["id"])) or {}
-            if cur.get("state") != "processing":
-                continue
-            if cur.get("cancel_requested"):
-                self.reject(e, "cancelled by its owner")
-            else:
-                self.requeue([e], f"requeued: the batch was interrupted ({why})")
-        hold = read_hold(self.qd)
-        if hold and hold.get("kind") == "manual":
-            self.held_why, self.stop = hold["what"], True
-            return "held"
-        return "progress"
-
-    # -- building
-    def ensure_work(self, sha):
-        if not (os.path.isdir(self.work) and git_ok(self.work, "rev-parse", "--git-dir")):
-            git(self.repo, "worktree", "prune", check=False)
-            if os.path.exists(self.work):
-                os.rename(self.work, f"{self.work}.broken-{int(time.time())}")
-            git(self.repo, "worktree", "add", "--detach", "-q", self.work, sha)
-        git(self.work, "rebase", "--abort", check=False)
-        git(self.work, "checkout", "-q", "--detach", "-f", sha)
-
-    def rebases_alone(self, main, e):
-        r = git(self.work, "rebase", "--quiet", "--onto", main, e["base"], e["head"], check=False)
-        if r.returncode:
-            git(self.work, "rebase", "--abort", check=False)
-        return r.returncode == 0
-
-    def batch(self, main, entries):
-        self.status("building", batch=" ".join(e["id"] for e in entries))
-        self.ensure_work(main)
-        tip, included = main, []
-        for e in entries:
-            r = git(self.work, "rebase", "--quiet", "--onto", tip, e["base"], e["head"], check=False)
-            if r.returncode:
-                files = git(self.work, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
-                git(self.work, "rebase", "--abort", check=False)
-                what = ", ".join(files) or r.stderr.strip()[:300]
-                if tip != main and self.rebases_alone(main, e):
-                    why = (f"conflicts with an earlier entry of the batch ({', '.join(x['id'] for x in included)}) in: {what}\n"
-                           f"it rebases onto {REMOTE}/main alone: once those land, `git rebase {REMOTE}/main`, resolve, "
-                           f"`agentctl queue add` again")
-                else:
-                    why = f"does not rebase onto {REMOTE}/main: conflicts in: {what}\n`git rebase {REMOTE}/main`, resolve, `agentctl queue add` again"
-                self.reject(e, why)
-                git(self.work, "checkout", "-q", "--detach", "-f", tip)
-                continue
-            new = git(self.work, "rev-parse", "HEAD").strip()
-            if new == tip:
-                if tip == main:
-                    self.finish(e, "landed", sha=e["head"], why=f"already on {REMOTE}/main")
-                else:
-                    self.reject(e, "its commits are already in an earlier entry of the batch: "
-                                   + ", ".join(x["id"] for x in included))
-                continue
-            problems = check_range(self.work, tip, new, [], self.max_foreign)
-            if problems:
-                self.reject(e, "prepush-check refused it after the rebase:\n" + "\n".join(problems))
-                git(self.work, "checkout", "-q", "--detach", "-f", tip)
-                continue
-            e["batch_sha"] = new
-            self.update(e, batch_sha=new)
-            included.append(e)
-            tip = new
-        if not included:
-            return "progress"
-        self.batch_id = f"{now():%Y%m%d-%H%M%S}-{tip[:7]}"
-        self.log(f"batch {self.batch_id} on {main[:10]}: " + ", ".join(e["id"] for e in included) + f" -> {tip[:10]}")
-        if any(e.get("identity") for e in included):
-            if self.gate_holds(included):
-                return "held"
-            outcome = self.precheck_gate(main, included)  # minutes, locally, before hours of CI
-            if outcome:
-                return outcome
-            v, text, logp, sig = self.check(tip, main)
-            if v == "error":
-                return self.check_error(included, text, logp)
-            if v == "red":
-                return self.bisect(main, included, text, logp, sig)
-            return self.push(main, tip, included, checked=True)
-        return self.push(main, tip, included)
-
-    # -- the landing check
-    @contextlib.contextmanager
-    def slot(self):
-        """One of the global landing-check slots (the same mkdir slots agents take by hand)."""
-        slots = (os.environ.get("AGENTCTL_LANDING_SLOTS") or LANDING_SLOTS).split()
-        poll = float(os.environ.get("AGENTCTL_SLOT_POLL", "60"))
-        got = None
-        while not got:
-            for s in slots:
-                try:
-                    os.mkdir(s)
-                    got = s
-                    break
-                except FileExistsError:
-                    pass
-            if not got:
-                self.status("waiting for a landing-check slot", slots=" ".join(slots))
-                time.sleep(poll)
-        try:
-            yield got
-        finally:
-            try:
-                os.rmdir(got)
-            except OSError:
-                pass
-
-    def check(self, sha, main, fresh=False):
-        """('green'|'red'|'error', output tail, log path, failure signature) of the landing check at sha. A verdict is
-        cached by (main, tree): identity-landing-check measures the tree against its merge-base with main, nothing
-        else -- so bare main's own (base) verdict is paid once per main sha. fresh: run it, whatever the cache holds."""
-        tree = git(self.work, "rev-parse", f"{sha}^{{tree}}").strip()
-        vdir = os.path.join(self.qd, "verdicts")
-        os.makedirs(vdir, exist_ok=True)
-        cache = os.path.join(vdir, f"{main}-{tree}.json")
-        hit = None if fresh else read_json(cache)
-        if hit:
-            self.log(f"landing check {sha[:10]}: {hit['verdict']} (cached for this main and tree)")
-            return hit["verdict"], hit["text"], hit["log"], tuple(hit.get("sig") or ())
-        argv = shlex.split(os.environ.get("AGENTCTL_LANDING_CHECK") or LANDING_CHECK) + [sha]
-        os.makedirs(os.path.join(self.qd, "checks"), exist_ok=True)
-        logp = os.path.join(self.qd, "checks", f"{sha[:12]}-{int(time.time())}.log")
-        rec = {"log": logp, "out": logp[:-len(".log")] + ".d", "sha": sha, "started": ts()}
-        with self.slot():
-            self.status("checking", sha=sha, log=logp)
-            self.log(f"landing check {sha[:10]}: {' '.join(argv)} (log {logp})")
-            why = self.interrupt_reason()
-            if why:
-                raise CheckInterrupted(why)
-            write_json(os.path.join(self.qd, "active-check.json"), rec)
-            p = None
-            try:
-                with open(logp, "w") as f:
-                    # its own process group: whatever it leaves behind is killed with it
-                    p = subprocess.Popen(argv, cwd=self.work, stdout=subprocess.PIPE, stderr=f, text=True, stdin=subprocess.DEVNULL,
-                                         env=dict(self.env, IDENTITY_LANDING_OUT=rec["out"]), start_new_session=True)
-                    poll, deadline = float(os.environ.get("AGENTCTL_QUEUE_CHECK_POLL", "15")), time.time() + 8 * 3600
-                    try:
-                        while True:  # a pause or an owner's cancel stops the check: it is not waited out
-                            try:
-                                out, _ = p.communicate(timeout=poll)
-                                rc = p.returncode
-                                break
-                            except subprocess.TimeoutExpired:
-                                why = self.interrupt_reason()
-                                if why:
-                                    raise CheckInterrupted(why)
-                                if time.time() >= deadline:
-                                    rc, out = 124, "landing check timed out after 8 h\n"
-                                    break
-                    finally:
-                        kill_group(p)
-                    f.write(out)
-            finally:  # a check's result is final once it returns (or never comes): its runs still going are waste
-                self.abandon_check(rec, "the check ended" if p is not None and p.returncode is not None else "the check was stopped")
-        lines = [l for l in out.splitlines() if l.strip()]
-        last = lines[-1].strip() if lines else ""
-        v = "green" if rc == 0 and last.startswith("LANDABLE") else "red" if rc == 1 else "error"
-        with open(logp, errors="replace") as f:
-            text = "\n".join(f.read().splitlines()[-30:])
-        if v != "error":
-            with Flock(self.qlock):
-                h = read_hold(self.qd)
-                if h and h.get("kind") == "no-verdict":
-                    os.unlink(os.path.join(self.qd, "hold.json"))
-                    self.log(f"a verdict again: lifted {h['what']}")
-        sig = failure_signature(out) if v == "red" else ()
-        self.log(f"landing check {sha[:10]}: {v} (exit {rc}; {last[:120]})" + (f" signature {', '.join(sig)}" if sig else ""))
-        if v != "error":
-            write_json(cache, {"verdict": v, "text": text, "log": logp, "sha": sha, "sig": list(sig)})
-        return v, text, logp, sig
-
-    def abandon_check(self, rec, why):
-        """Cancel every run still going on the check's measure/ branches and delete the branches."""
-        texts = []
-        for path in [rec.get("log", "")] + glob.glob(os.path.join(rec.get("out", "/nonexistent"), "**", "*"), recursive=True):
-            try:
-                if os.path.isfile(path):
-                    with open(path, errors="replace") as f:
-                        texts.append(f.read())
-            except OSError:
-                pass
-        branches = sorted(set(CHECK_BRANCH.findall("\n".join(texts))))
-        try:
-            o_r = slug(self.repo)
-        except (SystemExit, RuntimeError):
-            o_r = None
-        for b in branches if o_r else []:
-            try:
-                live = [r for r in branch_runs(o_r, b) if r.get("status") != "completed" or jobs_unfinished(o_r, r["databaseId"])]
-            except Exception as e:
-                self.log(f"abandon: could not list the runs on {b}: {e}")
-                live = []
-            for r in live:
-                ok, msg = cancel_run(o_r, r["databaseId"])
-                self.log(f"abandon ({why}): cancel run {r['databaseId']} on {b}: {'ok' if ok else 'FAILED ' + msg}")
-            try:
-                ok, msg = delete_measure_branch(o_r, b)
-                if not ok and "404" not in msg and "not found" not in msg.lower():
-                    self.log(f"abandon: could not delete {b}: {msg}")
-            except Exception as e:
-                self.log(f"abandon: could not delete {b}: {e}")
-        cur = os.path.join(self.qd, "active-check.json")
-        if (read_json(cur) or {}).get("log") == rec.get("log"):
-            os.unlink(cur)
-
-    def gate_holds(self, entries):
-        """Re-read the gate right before a check: no check for production entries the gate would hold anyway."""
-        if not any(e.get("production") and not e.get("fixes_red") for e in entries):
-            return False
-        red, why = self.gate()
-        if not red:
-            return False
-        self.requeue(entries, f"held: main went red for the gate ({why}) before the landing check started; no check dispatched")
-        self.held_why = f"main is red for the gate ({why})"
-        return True
-
-    def hook_bisect(self, main, tip, entries, logp, checked, depth):
-        """The push's hook refused a multi-entry batch. Bisect LOCALLY with `pre-push --range` (cheap), reject only the
-        culprit, and push the culprit-free batch under the verdict already taken (it covered a superset) once that tip
-        passes the pre-check and the hook. Not reproducible locally: each entry alone, as before."""
-        def alone(why):
-            self.log(f"hook failure not bisected locally ({why}): retrying each entry alone")
-            self.requeue(entries, f"the batch's pre-push hook failed (log {logp}); retrying each entry alone", solo=True)
-            return "progress"
-
-        tips = [e["batch_sha"] for e in entries]
-        ok, sig, text = self.hook_range(main, tip, fresh=True)
-        if ok is not False:
-            return alone("`pre-push --range` does not reproduce it" if ok else "the hook could not judge")
-        lo, hi = 0, len(entries)
-        while hi - lo > 1:
-            mid = (lo + hi) // 2
-            v, s2, t2 = self.hook_range(main, tips[mid - 1], fresh=True)
-            if v is None:
-                return alone("the hook could not judge a prefix")
-            if v:
-                lo = mid
-            else:
-                hi, sig, text = mid, s2, t2
-        ok2, sig2, text2 = self.hook_range(main, tips[hi - 1], fresh=True)
-        if ok2 is not False or sig2 != sig:
-            return alone(f"`{sig}` did not reproduce at its boundary")
-        culprit, after = entries[hi - 1], entries[hi:]
-        self.reject(culprit, f"the pre-push hook refuses the batch with it, twice (`{sig}`); push log {logp}\n{text2}")
-        rest = entries[:hi - 1] + after
-        if not rest:
-            return "progress"
-        before = tips[hi - 2] if hi > 1 else main
-        newtip = before
-        if after:
-            old = git(self.work, "rev-list", "--reverse", f"{tips[hi - 1]}..{tip}").split()
-            r = git(self.work, "rebase", "--quiet", "--onto", before, tips[hi - 1], tip, check=False)
-            if r.returncode:
-                git(self.work, "rebase", "--abort", check=False)
-                self.requeue(rest, f"requeued after {culprit['id']} was rejected (the rest does not rebase without it)")
-                return "progress"
-            newtip = git(self.work, "rev-parse", "HEAD").strip()
-            new = git(self.work, "rev-list", "--reverse", f"{before}..{newtip}").split()
-            if len(new) != len(old) or any(e["batch_sha"] not in old for e in after):
-                self.requeue(rest, f"requeued after {culprit['id']} was rejected")
-                return "progress"
-            for e in after:
-                e["batch_sha"] = new[old.index(e["batch_sha"])]
-                self.update(e, batch_sha=e["batch_sha"])
-        if self.precheck(newtip, base=main)[0] is not True:
-            self.requeue(rest, f"requeued after {culprit['id']} was rejected (the batch without it fails the pre-check)")
-            return "progress"
-        self.log(f"pushing the batch without {culprit['id']} ({newtip[:10]})" + (" under the landing verdict already taken" if checked else ""))
-        return self.push(main, newtip, rest, checked=checked, depth=depth + 1)
-
-    # -- main moving under a verdict
-    def moved_outside_check(self, main, cur):
-        """True when main..cur touches none of the landing check's paths: the identity landing paths and
-        .github/convergence-paths.txt (as cur has it). No list, or a main that did not move forward: False."""
-        if not git_ok(self.repo, "merge-base", "--is-ancestor", main, cur):
-            return False
-        r = git(self.repo, "show", f"{cur}:{CONVERGENCE_PATHS}", check=False)
-        if r.returncode:
-            return False
-        pats = [l.strip() for l in r.stdout.splitlines() if l.strip() and not l.strip().startswith("#")]
-        files = [f for f in git(self.repo, "log", "--format=", "--name-only", f"{main}..{cur}").splitlines() if f]
-        hit = next((f for f in files if needs_identity_check(f) or convergence_path(f, pats)), None)
-        if hit:
-            self.log(f"main moved by a path the landing check covers ({hit}): recheck")
-        return hit is None
-
-    def rebase_batch(self, main, cur, tip, entries):
-        """The batch's commits replayed onto cur; each entry's batch_sha mapped to its new commit. None unless clean."""
-        old = git(self.work, "rev-list", "--reverse", f"{main}..{tip}").split()
-        r = git(self.work, "rebase", "--quiet", "--onto", cur, main, tip, check=False)
-        if r.returncode:
-            git(self.work, "rebase", "--abort", check=False)
-            return None
-        moved = git(self.work, "rev-parse", "HEAD").strip()
-        new = git(self.work, "rev-list", "--reverse", f"{cur}..{moved}").split()
-        if len(new) != len(old) or any(e["batch_sha"] not in old for e in entries):
-            return None
-        for e in entries:
-            e["batch_sha"] = new[old.index(e["batch_sha"])]
-            self.update(e, batch_sha=e["batch_sha"])
-        return moved
-
-    # -- the local pre-check
-    def precheck(self, sha, base=None, fresh=False):
-        """The whole local pre-check of sha: the repo's list (list_precheck), then -- for a batch over base -- the
-        checks the pre-push hook will run on that push (hook_range). (True | False | None, signature, text)."""
-        r = self.list_precheck(sha, fresh)
-        if r[0] is not True or not base or base == sha:
-            return r
-        return self.hook_range(base, sha, fresh)
-
-    def range_hook(self):
-        """The work tree's pre-push hook (core.hooksPath, relative to the checkout as movies sets it), when it can
-        run its checks without pushing (`--range A..B`); else None."""
-        hp = git(self.work, "config", "core.hooksPath", check=False).stdout.strip()
-        if hp:
-            d = hp if os.path.isabs(hp) else os.path.join(self.work, hp)
-        else:
-            d = os.path.join(git(self.work, "rev-parse", "--path-format=absolute", "--git-common-dir").strip(), "hooks")
-        p = os.path.join(d, "pre-push")
-        try:
-            with open(p, errors="replace") as f:
-                return p if os.access(p, os.X_OK) and "--range" in f.read() else None
-        except OSError:
-            return None
-
-    def hook_range(self, base, sha, fresh=False):
-        """(True | False | None, signature, text) of `<pre-push hook> --range base..sha` in the work tree at sha: what
-        the push's hook will run, without pushing. The signature is the checks it says blocked. Red gate, tunnel or
-        stale manifests: None (not the batch's doing). No --range hook: True."""
-        tree = git(self.work, "rev-parse", f"{sha}^{{tree}}").strip()
-        cache = os.path.join(self.qd, "prechecks", f"hook-{base}-{tree}.json")
-        hit = None if fresh else read_json(cache)
-        if hit:
-            return hit["ok"], hit["sig"], hit["text"]
-        git(self.work, "checkout", "-q", "--detach", "-f", sha)
-        git(self.work, "clean", "-fdq", check=False)
-        try:
-            hp = self.range_hook()
-            if not hp:
-                return True, "", "(no pre-push hook with --range)"
-            self.status("pre-checking (pre-push hook)", sha=sha)
-            try:
-                r = subprocess.run([hp, "--range", f"{base}..{sha}"], cwd=self.work, capture_output=True, text=True,
-                                   env=self.env, timeout=3600, stdin=subprocess.DEVNULL)
-                rc, out = r.returncode, r.stdout + r.stderr
-            except (OSError, subprocess.TimeoutExpired) as e:
-                rc, out = 127, str(e)
-        finally:
-            git(self.work, "checkout", "-q", "-f", check=False)
-            git(self.work, "clean", "-fdq", check=False)
-        tail = "\n".join([l for l in out.splitlines() if l.strip()][-40:])
-        if rc == 0:
-            result = (True, "", "")
-        elif rc in (126, 127) or REDGATE.search(out) or TUNNEL_TROUBLE.search(out):
-            result = (None, "pre-push hook could not judge", tail)
-        else:
-            m = re.search(r"blocked by:\s*([^(.]+)", out)
-            names = " ".join(sorted(m.group(1).split())) if m else "(unnamed)"
-            result = (False, f"pre-push hook: {names}", f"$ scripts/hooks/pre-push --range {base[:10]}..{sha[:10]}\n{tail}")
-        self.log(f"pre-push hook --range {sha[:10]}: " + {True: "passed", False: f"FAILED: {result[1]}", None: "could not judge"}[result[0]])
-        if result[0] is not None:
-            os.makedirs(os.path.dirname(cache), exist_ok=True)
-            write_json(cache, {"ok": result[0], "sig": result[1], "text": result[2]})
-        return result
-
-    def list_precheck(self, sha, fresh=False):
-        """(True | False | None, signature, text): the repo's scripts/queue-precheck-specs.txt at sha, run in the work
-        tree (`sbt <cmd>` through scripts/sbt-warm, `sh <cmd>`), first failure stops. None = could not pre-check.
-        No list at sha: True (nothing to pre-check). Whatever a failing check wrote is shown as a diff and discarded:
-        a moved snapshot is its owner's to review, never regenerated here."""
-        spec = git(self.work, "show", f"{sha}:{PRECHECK_FILE}", check=False)
-        if spec.returncode:
-            return True, "", f"(no {PRECHECK_FILE})"
-        lines = [l.strip() for l in spec.stdout.splitlines() if l.strip() and not l.strip().startswith("#")]
-        tree = git(self.work, "rev-parse", f"{sha}^{{tree}}").strip()
-        cache = os.path.join(self.qd, "prechecks", f"{tree}.json")
-        hit = None if fresh else read_json(cache)
-        if hit:
-            return hit["ok"], hit["sig"], hit["text"]
-        self.status("pre-checking", sha=sha)
-        git(self.work, "checkout", "-q", "--detach", "-f", sha)
-        git(self.work, "clean", "-fdq", check=False)
-        result = (True, "", "")
-        try:
-            for line in lines:
-                kind, _, cmd = line.partition(" ")
-                argv = ["scripts/sbt-warm", cmd.strip()] if kind == "sbt" else ["sh", "-c", cmd] if kind == "sh" else None
-                if argv is None:
-                    self.log(f"pre-check: unknown line kind {kind!r} in {PRECHECK_FILE}: {line}")
-                    continue
-                try:
-                    r = subprocess.run(argv, cwd=self.work, capture_output=True, text=True, env=self.env, timeout=3600,
-                                       stdin=subprocess.DEVNULL)
-                    rc, out = r.returncode, r.stdout + r.stderr
-                except (OSError, subprocess.TimeoutExpired) as e:
-                    rc, out = 127, str(e)
-                if rc == 0:
-                    continue
-                tail = "\n".join([l for l in out.splitlines() if l.strip()][-40:])
-                if rc in (126, 127) or (kind == "sbt" and not re.search(r"\[error\]|\*\*\* FAILED|Compilation failed", out)):
-                    result = (None, line, f"$ {line}\n{tail}")
-                    break
-                changed = git(self.work, "status", "--porcelain", check=False).stdout.strip()
-                diff = git(self.work, "diff", check=False).stdout
-                text = f"$ {line}\n{tail}"
-                if changed:
-                    text += (f"\nthe check changed files (not kept: review, regenerate on the current main yourself):\n"
-                             f"{changed}\n{diff[:6000]}")
-                result = (False, line, text)
-                break
-        finally:
-            git(self.work, "checkout", "-q", "-f", check=False)
-            git(self.work, "clean", "-fdq", check=False)
-        self.log(f"pre-check {sha[:10]}: " + {True: "passed", False: f"FAILED: {result[1]}", None: f"could not run: {result[1]}"}[result[0]])
-        if result[0] is not None:
-            os.makedirs(os.path.dirname(cache), exist_ok=True)
-            write_json(cache, {"ok": result[0], "sig": result[1], "text": result[2]})
-        return result
-
-    def precheck_gate(self, main, entries):
-        """None to go on to the CI check; else an outcome. A red batch tip is bisected LOCALLY with the same pre-check
-        (main proven first, the boundary re-run once), only the culprit is rejected and the rest requeued. Anything
-        unsure (could not run, did not reproduce) leaves the verdict to the CI check."""
-        tips = [e["batch_sha"] for e in entries]
-        ok, sig, text = self.precheck(tips[-1], base=main)
-        if ok is not False:
-            return None
-        bok, bsig, btext = self.precheck(main)
-        if bok is False:
-            what = f"MAIN RED pre-check `{bsig}` at {main[:10]}"
-            self.set_hold("main-red", what, sha=main, specs=[bsig], batch=self.batch_id)
-            self.requeue(entries, f"HELD: {what}: not this batch's; resumes when main moves and the gate is green")
-            return "held"
-        if bok is None:
-            return None
-        lo, hi = 0, len(entries)
-        while hi - lo > 1:
-            mid = (lo + hi) // 2
-            v, s2, t2 = self.precheck(tips[mid - 1], base=main)
-            if v is None:
-                return None
-            if v:
-                lo = mid
-            else:
-                hi, sig, text = mid, s2, t2
-        ok2, sig2, text2 = self.precheck(tips[hi - 1], base=main, fresh=True)
-        if ok2 is not False or sig2 != sig:
-            self.log(f"pre-check failure `{sig}` did not reproduce at its boundary: the CI check decides")
-            return None
-        culprit = entries[hi - 1]
-        how = f"with the {hi - 1} entr{'y' if hi == 2 else 'ies'} before it it passes" if hi > 1 else "it passes on bare main"
-        self.reject(culprit, f"the queue's pre-check fails with it, twice (`{sig}`; {how}); no CI was spent\n{text2}")
-        self.requeue([e for e in entries if e is not culprit], f"requeued after {culprit['id']} failed the pre-check")
-        return "progress"
-
-    def check_error(self, entries, text, logp):
-        """No verdict (infra, dispatch, token) is NEVER an entry's fault: requeue everyone and HOLD the queue. Retried
-        with backoff; after QUEUE_CHECK_ERRORS in a row the hold waits for `agentctl queue resume`."""
-        self.requeue(entries, "requeued: the landing check gave no verdict")
-        if re.search(r"no Forgejo token|HTTP 401", text):
-            ns = queue_ns(self.repo)
-            self.set_hold("no-token", no_token_what(ns, "the check could not authenticate"), needs_resume=True, log=logp)
-            self.stop = True
-            return "held"
-        prev = read_hold(self.qd) or {}
-        n = prev.get("attempts", 0) + 1 if prev.get("kind") == "no-verdict" else 1
-        stop = n >= QUEUE_CHECK_ERRORS
-        what = (f"no-verdict: the landing check could not run ({n}/{QUEUE_CHECK_ERRORS}; log {logp})"
-                + ("; fix the cause, then `agentctl queue resume`" if stop else "; retrying with backoff"))
-        self.set_hold("no-verdict", what, attempts=n, needs_resume=stop, log=logp, tail=text[-2000:])
-        self.stop = stop
-        return "held"
-
-    def bisect(self, main, entries, red_text, red_log, red_sig):
-        """The batch tip is BLOCKED. Blame needs proof, never a guess:
-        1. bare main's own verdict (cached per main sha): any red there is not the batch's -> HOLD `MAIN RED`;
-        2. by halves, the first prefix that is red (signature S) after a green one;
-        3. ONE fresh re-check of that prefix: red again with the same S -> reject that entry, land the green prefix,
-           requeue the rest. Green, or another signature -> a FLAKE: nobody rejected, nothing landed, HOLD `FLAKY`
-           until `agentctl queue resume` (movies: never rerun to green; never pick between a red and a green run)."""
-        if self.gate_holds(entries):
-            return "held"
-        bv, btext, blog, bsig = self.check(main, main)
-        if bv == "error":
-            return self.check_error(entries, btext, blog)
-        if bv == "red":
-            what = f"MAIN RED {', '.join(bsig)} at {main[:10]}"
-            self.set_hold("main-red", what, sha=main, specs=list(bsig), log=blog, batch=self.batch_id)
-            self.requeue(entries, f"HELD: {what} (base check {blog}): not this batch's; resumes when main moves and the gate is green")
-            return "held"
-        tips = [e["batch_sha"] for e in entries]
-        lo, hi, runs = 0, len(entries), [red_log]
-        while hi - lo > 1:
-            mid = (lo + hi) // 2
-            self.log(f"bisect: checking the first {mid} of {len(entries)} entries ({tips[mid - 1][:10]})")
-            if self.gate_holds(entries):
-                return "held"
-            v, text, logp, sig = self.check(tips[mid - 1], main)
-            runs.append(logp)
-            if v == "error":
-                return self.check_error(entries, text, logp)
-            if v == "green":
-                lo = mid
-            else:
-                hi, red_text, red_log, red_sig = mid, text, logp, sig
-        self.log(f"re-checking the red boundary {tips[hi - 1][:10]} once (signature {', '.join(red_sig)})")
-        if self.gate_holds(entries):
-            return "held"
-        v2, text2, log2, sig2 = self.check(tips[hi - 1], main, fresh=True)
-        runs.append(log2)
-        if v2 == "error":
-            return self.check_error(entries, text2, log2)
-        specs = ", ".join(red_sig)
-        if v2 != "red" or sig2 != red_sig:
-            detail = "green on the re-check" if v2 == "green" else f"re-check red with a different signature ({', '.join(sig2)})"
-            what = f"FLAKY {specs} (batch {self.batch_id}, runs {red_log} {log2})"
-            self.set_hold("flaky", what, specs=list(red_sig), batch=self.batch_id, runs=[red_log, log2], detail=detail,
-                          entries=[e["id"] for e in entries])
-            with open(os.path.join(self.qd, "flaky.log"), "a") as f:
-                f.write(f"{ts()}\tFLAKY\t{specs}\tbatch {self.batch_id}\t{detail}\truns {' '.join(runs)}\n")
-            self.requeue(entries, f"HELD flaky {specs}: {detail}; nobody rejected, nothing landed; "
-                                  "`agentctl queue resume` once it is fixed on main (or the owner decides)")
-            self.stop = True
-            return "held"
-        culprit, prefix, rest = entries[hi - 1], entries[:lo], entries[hi:]
-        how = (f"with the {hi - 1} entr{'y' if hi == 2 else 'ies'} before it LANDABLE" if hi > 1 else "with bare main LANDABLE")
-        self.reject(culprit, f"the identity landing check is BLOCKED with it, twice ({specs}); {how}; logs {red_log} {log2}\n{text2}")
-        if prefix:
-            outcome = self.push(main, tips[lo - 1], prefix, checked=True)
-            self.requeue(rest, f"requeued after {culprit['id']} was rejected")
-            return outcome
-        self.requeue(rest, f"requeued after {culprit['id']} was rejected")
-        return "progress"
-
-    # -- landing
-    def push(self, main, tip, entries, checked=False, depth=0):
-        """checked: tip carries a landing-check verdict. When main moved only by commits touching none of the paths that
-        check covers, the batch is rebased onto the new main and pushed WITHOUT a recheck -- if the rebase is clean
-        and the pre-check passes on the new tip. Anything else rebuilds and rechecks."""
-        why = self.interrupt_reason() if self.current else None
-        if why:
-            raise CheckInterrupted(why)
-        cur = self.fetch()
-        if cur != main:
-            if checked and cur and depth < 5 and self.moved_outside_check(main, cur):
-                moved = self.rebase_batch(main, cur, tip, entries)
-                if moved and self.precheck(moved, base=cur)[0] is True:
-                    self.log(f"{REMOTE}/main moved {main[:10]} -> {cur[:10]} by paths the landing check does not cover: "
-                             f"the verdict holds; pushing the batch rebased onto it ({moved[:10]})")
-                    return self.push(cur, moved, entries, checked=True, depth=depth + 1)
-                self.log("main moved by uncovered paths, but the rebase or the pre-check on the new tip failed: rebuilding")
-            self.requeue(entries, f"{REMOTE}/main moved ({main[:10]} -> {(cur or '?')[:10]}) under the batch: rebuilding and rechecking")
-            return "progress"
-        self.status("pushing", sha=tip, batch=" ".join(e["id"] for e in entries))
-        git(self.work, "checkout", "-q", "--detach", "-f", tip)  # the hook checks the pushed tree in place
-        r = subprocess.run(push_argv(REMOTE, tip), cwd=self.work, capture_output=True, text=True, env=self.env)
-        out = r.stdout + r.stderr
-        logp = os.path.join(self.qd, "checks", f"push-{tip[:12]}-{int(time.time())}.log")
-        os.makedirs(os.path.dirname(logp), exist_ok=True)
-        with open(logp, "w") as f:
-            f.write(out)
-        if r.returncode == 0:
-            self.fetch()
-            for e in entries:
-                if landed(self.repo, e["batch_sha"], self.main_ref):
-                    self.finish(e, "landed", sha=e["batch_sha"])
-                else:
-                    self.reject(e, f"the push exited 0 but {e['batch_sha'][:10]} is not on {REMOTE}/main after a fetch; see {logp}")
-            return "progress"
-        if RACE.search(out):
-            self.requeue(entries, f"push race ({RACE.search(out).group(0)}): rebuilding on the new main and rechecking")
-            return "progress"
-        tail = "\n".join([l for l in out.splitlines() if l.strip()][-25:])
-        if REDGATE.search(out):
-            self.requeue(entries, "held: the red gate refused the push (main is red)")
-            self.held_why = "the red gate refused the push"
-            return "held"
-        if len(entries) > 1:
-            self.log(f"the batch's pre-push hook failed (log {logp}):\n{tail}")
-            return self.hook_bisect(main, tip, entries, logp, checked, depth)
-        hint = ("\nHINT: the hook could not reach Forgejo (tunnel dropped?): `~/bin/agentctl env --check`, then queue add again"
-                if TUNNEL_TROUBLE.search(out) else "")
-        self.reject(entries[0], f"the pre-push hook failed (full log {logp}):\n{tail}{hint}")
-        return "progress"
+    hint = ""
+    if TUNNEL_TROUBLE.search(out):
+        hint = ("\n  HINT: the hook could not reach Forgejo (tunnel dropped?): `~/bin/agentctl env --check` "
+                "(it says the kickstart fix), then land again.")
+    print(f"NOT LANDED: {what}. Last lines (full log {log_path}):\n  {tail}{hint}")
+    return 1
+
+
+# ---------------------------------------------------------------- queue (retired)
+QUEUE_RETIRED = """NOT QUEUED: the merge queue is RETIRED (2026-10-26). There is no pre-merge CI left to batch: the landing check
+is no merge requirement any more. Land every change -- identity changes included -- with `~/bin/agentctl land` (Bash
+run_in_background=true): it waits for the repository's landing lock, rebases, and runs the pre-push hook, which runs
+the basic checks plus the identity / page area tests your paths select, locally. Main's CI tests everything after."""
+
+
+def cmd_queue_retired(a):
+    print(QUEUE_RETIRED)
+    return 2
 
 
 # ---------------------------------------------------------------- env
@@ -2925,29 +1669,10 @@ def main(argv=None):
                        "every target run finished, or a duplicate of an older loop on the same runs. --kill sends SIGTERM "
                        "(to them and their children).")
     o.add_argument("--kill", action="store_true")
-    q = sub.add_parser("queue", help="merge queue: batch landings, one identity landing check per batch, bisect on red",
-                       description=QUEUE_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
-    qs = q.add_subparsers(dest="qcmd", required=True)
-    qa = qs.add_parser("add", help="enqueue this worktree's commits; start the processor if none runs")
-    qa.add_argument("--identity", action="store_true", help="run the identity landing check even when no path needs it")
-    qst = qs.add_parser("status", help="the processor's phase and the open entries")
-    qw = qs.add_parser("wait", help="block until an entry lands or is rejected: LANDED <sha> | REJECTED <why>")
-    qw.add_argument("entry", nargs="?", help="entry id (or a unique part of it); default: this worktree's newest entry")
-    qw.add_argument("--timeout", type=int, default=12 * 3600)
-    qc = qs.add_parser("cancel", help="drop a queued entry (not one in the current batch)")
-    qc.add_argument("entry", nargs="?")
-    qr = qs.add_parser("run", help="the processor (queue add starts it detached; one runs at a time)")
-    qr.add_argument("--once", action="store_true", help="exit instead of waiting when only held entries are left")
-    qre = qs.add_parser("resume", help="lift a FLAKY (or MAIN RED) hold; the processor starts again")
-    qrq = qs.add_parser("requeue", help="put a wrongly rejected entry back in its original place")
-    qrq.add_argument("entry")
-    qrq.add_argument("--last", action="store_true", help="behind every open entry instead of its original place")
-    qh = qs.add_parser("hold", help="PAUSE the queue (a running check stops) until `queue resume`; waiters keep waiting")
-    qh.add_argument("--reason")
-    for p in (qa, qst, qw, qc, qr, qre, qrq, qh):
-        p.add_argument("--repo", help="checkout (default: cwd)")
+    q = sub.add_parser("queue", help="RETIRED 2026-10-26: use `agentctl land` (prints this and exits 2)")
+    q.add_argument("rest", nargs=argparse.REMAINDER)
     a = ap.parse_args(argv)
-    return {"queue": cmd_queue, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd](a)
+    return {"queue": cmd_queue_retired, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd](a)
 
 
 if __name__ == "__main__":
