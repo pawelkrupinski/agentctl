@@ -984,19 +984,51 @@ def find_entry(qd, ref, worktree=None):
 
 
 def processor_running(qd):
+    """(running, processor.json). Running means the processor.lock flock is HELD: the kernel drops it when the
+    processor exits, so a killed, zombie or recycled pid never counts (a pid check took a zombie for alive)."""
     st = read_json(os.path.join(qd, "processor.json")) or {}
-    return bool(st.get("pid")) and st.get("phase") != "exited" and pid_alive(st["pid"]), st
+    probe = Flock(os.path.join(qd, "processor.lock"))
+    if probe.acquire(block=False):
+        probe.release()
+        return False, st
+    return True, st
 
 
 def spawn_processor(qd, main):
-    """Start `agentctl queue run` detached (its own session: it outlives the agent's turn), logging to the queue dir.
-    A second processor exits at once on the lock, so starting one too many is harmless."""
+    """Start `agentctl queue run` fully detached: a double fork with setsid, so it is nobody's child -- a killed
+    `queue wait` or agent shell can neither take it down nor leave it a zombie. It logs to the queue dir. A second
+    processor exits at once on the lock, so starting one too many is harmless. Returns its pid."""
     if os.environ.get("AGENTCTL_QUEUE_NO_SPAWN"):
         return None
-    with open(os.path.join(qd, "processor.log"), "a") as log:
-        p = subprocess.Popen([sys.executable, os.path.realpath(__file__), "queue", "run", "--repo", main], cwd=main,
-                             stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, env=tool_env())
-    return p.pid
+    argv = [sys.executable, os.path.realpath(__file__), "queue", "run", "--repo", main]
+    env, logp = tool_env(), os.path.join(qd, "processor.log")
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:  # the intermediate child: new session, fork the processor, exit at once (reaped below)
+        try:
+            os.close(r)
+            os.setsid()
+            gpid = os.fork()
+            if gpid == 0:
+                try:
+                    os.close(w)
+                    log = os.open(logp, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+                    null = os.open(os.devnull, os.O_RDONLY)
+                    os.dup2(null, 0)
+                    os.dup2(log, 1)
+                    os.dup2(log, 2)
+                    os.chdir(main)
+                    os.execve(sys.executable, argv, env)
+                finally:
+                    os._exit(127)
+            os.write(w, str(gpid).encode())
+        finally:
+            os._exit(0)
+    os.close(w)
+    os.waitpid(pid, 0)
+    with os.fdopen(r) as f:
+        got = f.read().strip()
+    return int(got) if got.isdigit() else None
 
 
 def has_landing_check(repo, head):

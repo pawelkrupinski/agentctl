@@ -501,6 +501,14 @@ class QueueTest(Base):
         A.time.sleep = self.sleep
         w1, _ = self.agent("s1", {"identity/S.scala": "s\n"})
         eid = self.add(w1)
+        pid = None
+        for _ in range(100):
+            pid = (A.read_json(os.path.join(self.qd, "processor.json")) or {}).get("pid")
+            if pid:
+                break
+            time.sleep(0.05)
+        with self.assertRaises(ChildProcessError):  # fully detached: never our child, so never our zombie
+            os.waitpid(pid, os.WNOHANG)
         rc, out = self.run_tool("queue", "wait", eid, "--timeout", "60", cwd=w1)
         log = open(os.path.join(self.qd, "processor.log")).read()
         self.assertEqual(rc, 0, out + log)
@@ -510,6 +518,34 @@ class QueueTest(Base):
             if not A.processor_running(self.qd)[0]:
                 break
             time.sleep(0.1)
+
+
+class QueueLivenessTest(Base):
+    def test_a_zombie_pid_is_not_a_running_processor(self):
+        qd = os.path.join(self.tmp.name, "q")
+        os.makedirs(qd)
+        z = subprocess.Popen(["true"])
+        try:
+            for _ in range(100):  # exited, not reaped: a zombie
+                if subprocess.run(["ps", "-o", "stat=", "-p", str(z.pid)], capture_output=True, text=True).stdout.strip().startswith("Z"):
+                    break
+                time.sleep(0.02)
+            A.write_json(os.path.join(qd, "processor.json"), {"pid": z.pid, "phase": "holding"})
+            self.assertFalse(A.processor_running(qd)[0])
+        finally:
+            z.wait()
+
+    def test_the_processor_lock_holder_is_running(self):
+        qd = os.path.join(self.tmp.name, "q")
+        os.makedirs(qd)
+        A.write_json(os.path.join(qd, "processor.json"), {"pid": os.getpid(), "phase": "holding"})
+        lock = A.Flock(os.path.join(qd, "processor.lock"))
+        self.assertTrue(lock.acquire(block=False))
+        try:
+            self.assertTrue(A.processor_running(qd)[0])
+        finally:
+            lock.release()
+        self.assertFalse(A.processor_running(qd)[0])  # a live pid without the lock is no processor
 
 
 class QueuePathsTest(unittest.TestCase):

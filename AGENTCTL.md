@@ -8,7 +8,7 @@ calls.
 
 - Not on PATH: call it as `~/bin/agentctl`.
 - Python 3, standard library only.
-- Tests: `python3 -m unittest discover -s ~/bin/tests` (81 tests, mutation tests included).
+- Tests: `python3 -m unittest discover -s ~/bin/tests` (84 tests, mutation tests included).
 - `agentctl --help` and `agentctl <cmd> --help` match this page.
 
 ## Standard agent workflow
@@ -51,7 +51,8 @@ Step by step:
   forgejo/main, or every one of its commits is patch-equivalent there per `git cherry`. The tree must also be clean and
   idle. Every deletion is re-verified just before it happens and logged.
 - **One queue processor.** `queue run` holds an flock on the queue directory, so the kernel frees it when the
-  processor dies. It pushes only through `push_argv()` and the pre-push hook, and refuses to run with `PREPUSH_SKIP`.
+  processor dies. Liveness is that lock, never a pid, so a zombie counts as dead. The processor is started with a
+  double fork and setsid, so it is nobody's child. It pushes only through `push_argv()` and the pre-push hook, and refuses to run with `PREPUSH_SKIP`.
 - **One waiter per target.** `wait` holds a lock per run or file in the scratchpad. A second caller attaches to the
   live waiter's verdict file and does not poll.
 - **No artificial load.** Polls back off up to 5 minutes. Nothing in agentctl burns CPU.
