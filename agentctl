@@ -78,10 +78,19 @@ what the first landed. CHECK FIRST: in a repo with scripts/hooks/pre-push (movie
 `--range forgejo/main..<sha>`, before the push -- the basic checks and the identity / page area tests the paths select,
 minutes for those -- and the push's own hook run reuses its stored pass in seconds.
 Last line: `LANDED <sha>`, or `NOT LANDED: <exact reason>` (red gate: followed by the `agentctl ci-why` summary).
-Run it with the Bash tool's run_in_background=true when the area tests will run.
+THE WATCH: after LANDED, land keeps running (the lock already free) and watches main's CI for the sha (movies):
+  Main         the main.yml run for the sha; cancelled or superseded by a newer push: the newest Main run whose head
+               contains it;
+  convergence  the FIRST Identity model convergence run on main created after the push whose head contains the sha (its
+               own kick, a later push's, or the daily run); none within 60 min ($AGENTCTL_WATCH_CONV_START s):
+               `convergence: none started within 60 min`, not waited for.
+  -> `WATCH OK: Main #n green, convergence #m green`, or `WATCH RED: <workflow> #n <failed jobs>` + the ci-why summary
+     (your change may have broken main: fix forward with `Fixes-Red: <n>`), or `WATCH UNKNOWN: ...` after 3 h
+     ($AGENTCTL_WATCH_TIMEOUT s). --no-watch exits at LANDED (scripts).
+AGENTS: run land with the Bash tool's run_in_background=true and END YOUR TURN: you are re-invoked with the verdict.
 Never passes --no-verify and refuses to run with PREPUSH_SKIP set. Refuses a dirty tree unless --stash (a named stash,
 restored afterwards, found by its sha -- the stash list is shared by every worktree).
-Exit: 0 landed, 1 not landed."""
+Exit: 0 landed (and watched green), 1 not landed, 2 landed but the watch could not tell, 3 landed and main's CI RED."""
 ENV_HELP = """Agent environment, without secrets.
   eval "$(agentctl env --print)"   # sdkman's sbt + java first on PATH, JAVA_HOME; exit 1 (one line on stderr) on a locked vault
   agentctl env --check            # sbt, a java that runs, `secrets status <ns>`, tunnel localhost:3000 and :2222, the
@@ -839,14 +848,19 @@ def cmd_land(a):
             stash = Stash(repo)
             stash.save()
             err(f"stashed local changes as {stash.name} ({stash.sha[:10]})")
+        a.landed_sha, a.pushed_at = None, None
         with land_lock(repo) as held:
             if not held:
                 print("NOT LANDED: timed out waiting for the landing lock (another land is running its checks); land again.")
                 return 1
-            return land_loop(repo, main_ref, sh, log_path, a)
+            rc = land_loop(repo, main_ref, sh, log_path, a)
     finally:
         if stash and not stash.restore():
             print(f"WARNING: local changes are in stash {stash.name}, not restored")
+    if rc != 0 or not a.landed_sha or getattr(a, "no_watch", False):
+        return rc
+    # the lock is free again: the next lander goes while this one watches main's CI
+    return watch_landed(repo, a.landed_sha, a.pushed_at)
 
 
 def land_loop(repo, main_ref, sh, log_path, a):
@@ -890,6 +904,7 @@ def land_loop(repo, main_ref, sh, log_path, a):
             if r.returncode != 0:
                 return refused(repo, r.stdout + r.stderr, log_path, "the pre-push checks failed")
         err(f"pushing {head[:10]} to {REMOTE}/main (attempt {attempt + 1}/{LAND_RETRIES + 1}; hook log: {log_path})")
+        a.pushed_at = time.time()
         r = sh(*push_argv(REMOTE, head))
         with open(log_path, "a") as f:
             f.write(f"=== attempt {attempt + 1} {ts()} {head}\n{r.stdout}{r.stderr}\n")
@@ -898,7 +913,8 @@ def land_loop(repo, main_ref, sh, log_path, a):
             sh("git", "fetch", "--quiet", REMOTE, "main")
             how = landed(repo, head, main_ref)
             if how:
-                print(f"LANDED {head}" + ("" if how == "ancestor" else f" ({how})"))
+                print(f"LANDED {head}" + ("" if how == "ancestor" else f" ({how})"), flush=True)
+                a.landed_sha = head
                 return 0
             print(f"NOT LANDED: the push exited 0 but {head[:10]} is not on {REMOTE}/main after a fetch; see {log_path}")
             return 1
@@ -929,6 +945,118 @@ def refused(repo, out, log_path, what):
                 "(it says the kickstart fix), then land again.")
     print(f"NOT LANDED: {what}. Last lines (full log {log_path}):\n  {tail}{hint}")
     return 1
+
+
+# ---------------------------------------------------------------- land: the watch after LANDED
+# The owner (2026-10-26): "whenever an agent pushed to main, make a script watch the corresponding convergence and main
+# build and tell the agent if it fails". With no pre-merge CI, main's CI is where a change is tested in full: land keeps
+# running after LANDED until Main and the convergence say green or red, so the agent (land in the background) hears it.
+WATCH = {"pawelkrupinski/movies": {"main": ("Main", "main.yml"),
+                                   "convergence": ("Identity model convergence", "identity-model-convergence.yml")}}
+WATCH_TIMEOUT = 3 * 3600          # either run undecided by then: exit 2, could not tell
+WATCH_CONV_START = 3600           # no convergence run containing the sha started by then: said, not waited for
+WATCH_SLACK = 120                 # clock skew between the laptop and Forgejo's createdAt
+WATCH_ERRORS = 10                 # consecutive failed API reads before giving up (exit 2)
+UNDECIDED = ("cancelled", "skipped", "neutral", "")
+
+
+def contains(repo, sha, head):
+    """Whether a run's head commit contains sha (fetching main once when head is unknown here)."""
+    if not head:
+        return False
+    if head == sha:
+        return True
+    if not git_ok(repo, "cat-file", "-e", f"{head}^{{commit}}"):
+        git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
+    return git_ok(repo, "merge-base", "--is-ancestor", sha, head)
+
+
+def is_cancelled(r):
+    return r.get("status") == "completed" and (r.get("conclusion") or "") in UNDECIDED
+
+
+def pick_main_run(repo, sha, runs):
+    """Main's run for sha: its own push run, unless that was cancelled or never came (a newer push superseded it); then the
+    newest run whose head contains sha."""
+    own = next((r for r in runs if r.get("headSha") == sha and not is_cancelled(r)), None)
+    if own:
+        return own
+    later = [r for r in runs if not is_cancelled(r) and contains(repo, sha, r.get("headSha"))]
+    return max(later, key=lambda r: r["databaseId"]) if later else None
+
+
+def pick_convergence_run(repo, sha, runs, pushed_at):
+    """The FIRST convergence run on main created after the push whose head contains sha -- this commit's kick, a later
+    push's, or the daily run (the owner, 2026-10-26: never hunt the sha's own kick). A cancelled one (the lane replaced
+    it) passes to the next."""
+    after = [r for r in runs if r.get("createdAt") and parse_time(r["createdAt"]).timestamp() >= pushed_at - WATCH_SLACK]
+    ok = [r for r in sorted(after, key=lambda r: r["databaseId"]) if not is_cancelled(r) and contains(repo, sha, r.get("headSha"))]
+    return ok[0] if ok else None
+
+
+def watch_landed(repo, sha, pushed_at, o_r=None):
+    """Watch Main and the convergence for a landed sha. 0 green (or nothing to watch), 3 red, 2 could not tell."""
+    o_r = o_r or slug(repo)
+    flows = WATCH.get(o_r)
+    if not flows:
+        print(f"watch: no CI watched for {o_r} (only movies' Main and convergence are)")
+        return 0
+    pushed_at = pushed_at or time.time()
+    timeout = float(os.environ.get("AGENTCTL_WATCH_TIMEOUT", WATCH_TIMEOUT))
+    conv_start = float(os.environ.get("AGENTCTL_WATCH_CONV_START", WATCH_CONV_START))
+    t0 = time.time()
+    err(f"watching Main and the convergence for {sha[:10]} (up to {int(timeout // 60)} min; `--no-watch` skips this)")
+    done, errors, said = {}, 0, set()  # kind -> (run, ok | None for none started)
+    delays = backoff(float(os.environ.get("AGENTCTL_WATCH_POLL", 60)), 300)
+    while True:
+        try:
+            for kind, (name, wfile) in flows.items():
+                if kind in done:
+                    continue
+                runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30",
+                               "--json", RUN_FIELDS)
+                run = pick_main_run(repo, sha, runs) if kind == "main" else pick_convergence_run(repo, sha, runs, pushed_at)
+                if run is None:
+                    if kind == "convergence" and time.time() - t0 >= conv_start:
+                        done[kind] = (None, None)
+                        print(f"convergence: none started within {int(conv_start // 60)} min of the push", flush=True)
+                    continue
+                if (kind, run["databaseId"]) not in said:
+                    said.add((kind, run["databaseId"]))
+                    err(f"{name}: following run #{run.get('number')} ({run.get('status')}, head {str(run.get('headSha'))[:10]})")
+                if run.get("status") == "completed" and not is_cancelled(run):
+                    done[kind] = (run, run.get("conclusion") == "success")
+                    print(f"{name} #{run.get('number')}: {run.get('conclusion')}", flush=True)
+            errors = 0
+        except Exception as e:  # a tunnel blip or a token hiccup: read again, give up after a run of them
+            errors += 1
+            err(f"watch: could not read the runs ({str(e)[:160]}) [{errors}/{WATCH_ERRORS}]")
+            if errors >= WATCH_ERRORS:
+                print(f"WATCH UNKNOWN: could not read Forgejo's runs {errors} times in a row; check `agentctl ci-why` later")
+                return 2
+        reds = [(k, r) for k, (r, ok) in done.items() if ok is False]
+        if reds:
+            for kind, r in reds:
+                d = gh_json(o_r, "run", "view", str(r["databaseId"]), "--json", "jobs")
+                failed = [j["name"] for j in d.get("jobs") or [] if j.get("conclusion") in ("failure", "timed_out", "cancelled")]
+                print(f"WATCH RED: {flows[kind][0]} #{r.get('number')} {', '.join(failed) or r.get('conclusion')} "
+                      f"(it contains your {sha[:10]}: if your change broke it, fix forward now with `Fixes-Red: "
+                      f"{r.get('number')}`)")
+            try:
+                print(ci_why(o_r, 4, repo=repo)[1])
+            except Exception as e:
+                print(f"(agentctl ci-why failed: {e})")
+            return 3
+        if len(done) == len(flows):
+            parts = [f"{flows[k][0].split()[0] if k == 'main' else 'convergence'} " +
+                     (f"#{r.get('number')} green" if r else "none started") for k, (r, ok) in done.items()]
+            print("WATCH OK: " + ", ".join(sorted(parts, key=lambda x: not x.startswith("Main"))))
+            return 0
+        if time.time() - t0 >= timeout:
+            left = ", ".join(flows[k][0] for k in flows if k not in done)
+            print(f"WATCH UNKNOWN: {left} undecided after {int(timeout // 60)} min; check `agentctl ci-why` later")
+            return 2
+        time.sleep(next(delays))
 
 
 # ---------------------------------------------------------------- queue (retired)
@@ -1653,6 +1781,7 @@ def main(argv=None):
     ld.add_argument("--repo", help="checkout to land from (default: cwd)")
     ld.add_argument("--branch", help="local branch to land (default: the checked-out HEAD)")
     ld.add_argument("--stash", action="store_true", help="set uncommitted changes aside in a NAMED stash and restore them after")
+    ld.add_argument("--no-watch", action="store_true", help="exit at LANDED instead of watching Main and the convergence")
     ev = sub.add_parser("env", help="print sdkman sbt/java export lines (--print) or check the agent environment (--check)",
                         description=ENV_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     eg = ev.add_mutually_exclusive_group()
