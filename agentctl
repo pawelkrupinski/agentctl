@@ -16,7 +16,7 @@
   agentctl land [--repo PATH] [--branch B] [--stash]
         fetch, rebase onto forgejo/main, prepush-check, push (the hook runs, sdkman sbt/java on PATH), retry push races
         x3, verify: last line `LANDED <sha>` or `NOT LANDED: <reason>` (+ ci-why on a red gate). Never --no-verify.
-  agentctl queue add [--identity] | wait [<entry>] | status | cancel <entry> | run [--once]
+  agentctl queue add [--identity] | wait [<entry>] | status | cancel <entry> | resume | run [--once]
         Merge queue: batches every queued entry onto forgejo/main, runs ONE identity landing check on the batch tip
         (when any entry needs it), bisects a BLOCKED batch to the culprit, pushes through the normal hook. `queue wait`
         prints LANDED <sha> | REJECTED <why>. Use it for identity changes; `land` stays for single non-identity commits.
@@ -856,6 +856,7 @@ QUEUE_HELP = """A merge queue for agent landings: ONE landing check per batch in
   agentctl queue wait [<entry>]        # Bash run_in_background=true, END YOUR TURN: LANDED <sha> | REJECTED <why>
   agentctl queue status                # the processor's phase and every open entry
   agentctl queue cancel <entry>        # drop a queued entry (not one in the current batch)
+  agentctl queue resume                # lift a FLAKY hold (after the fix is on main, or the owner decides)
   agentctl queue run [--once]          # the processor itself (queue add starts it detached; one at a time, by lock)
 The processor builds forgejo/main + each queued entry rebased in order (an entry that does not rebase, or that
 prepush-check refuses, is rejected alone), runs ONE `scripts/identity-landing-check --full <tip>` when any entry needs
@@ -864,7 +865,11 @@ and pushes the tip through the normal pre-push hook. BLOCKED: bisect by halves, 
 output, land the green prefix, requeue the rest. Main moved: rebuild and recheck. Main red for the gate: production
 entries wait, tools-only (and Fixes-Red:) entries go. A multi-entry batch whose hook fails is retried one by one.
 Never --no-verify, never PREPUSH_SKIP, never a force push. Log: <queue dir>/processor.log.
-Exit: add 0 queued, 1 not; wait 0 landed, 1 rejected, 2 timeout."""
+Blame needs proof: a red batch first checks bare main (cached per main sha; red -> HOLD `MAIN RED`, resumes when main
+moves and the gate is green), then bisects, then re-checks the red boundary ONCE: red again with the same failing
+specs -> reject that entry; green or other specs -> HOLD `FLAKY` (nobody rejected, nothing landed) until
+`agentctl queue resume`. Holds: `queue status`, <queue dir>/flaky.log.
+Exit: add 0 queued, 1 not; wait 0 landed, 1 rejected, 2 timeout, 3 HELD flaky."""
 IDENTITY_STRICT = re.compile(r"^(identity/|worker/src/main/scala/services/identity/|common/src/main/(resources/title-(rules|words)\.tsv|"
                              r"scala/services/titlerules/)|test/resources/fixtures/identity-)")
 IDENTITY_WORDS = re.compile(r"(^|/)(identity|matcher|resolver|resolution|projection)|(identity|matcher|resolver|projection)[^/]*\.", re.I)
@@ -998,7 +1003,8 @@ def has_landing_check(repo, head):
 
 def cmd_queue(a):
     return {"add": cmd_queue_add, "status": cmd_queue_status, "wait": cmd_queue_wait, "cancel": cmd_queue_cancel,
-            "run": cmd_queue_run}[a.qcmd](a)
+            "run": cmd_queue_run,
+            "resume": cmd_queue_resume}[a.qcmd](a)
 
 
 def cmd_queue_add(a):
@@ -1046,6 +1052,9 @@ def cmd_queue_add(a):
         pid = spawn_processor(qd, main)
         if pid:
             err(f"started the queue processor (pid {pid}; log {os.path.join(qd, 'processor.log')})")
+    hold = read_hold(qd)
+    if hold:
+        print(f"note: the queue is HELD: {hold['what']}")
     print(f"wait for it (Bash run_in_background=true, then END YOUR TURN): ~/bin/agentctl queue wait {eid}")
     return 0
 
@@ -1060,6 +1069,10 @@ def cmd_queue_status(a):
         print(f"processor: pid {st['pid']}, {st.get('phase')} since {st.get('since')}" + (f"; {detail}" if detail else ""))
     else:
         print("processor: not running")
+    hold = read_hold(qd)
+    if hold:
+        print(f"HELD since {hold.get('since')}: {hold['what']}" + (f" -- {hold['detail']}" if hold.get("detail") else "")
+              + ("; `agentctl queue resume` to go on" if hold.get("kind") == "flaky" else "; resumes when main moves and the gate is green"))
     es = read_entries(qd)
     open_ = [e for e in es if e["state"] not in FINAL]
     for e in open_:
@@ -1096,6 +1109,12 @@ def cmd_queue_wait(a):
                 print(f"  {l}")
             print(f"REJECTED {why[0]}")
             return 1
+        hold = read_hold(qd)
+        if hold and hold.get("kind") == "flaky":
+            print(f"  {hold.get('detail', '')}; nobody rejected, nothing landed. Not yours unless your spec is named: report it.")
+            print(f"  the owner resumes with `agentctl queue resume` once it is fixed on main")
+            print(f"HELD flaky {', '.join(hold.get('specs') or [])} ({hold['what']})")
+            return 3
         cfg = read_json(os.path.join(qd, "config.json")) or {}
         if not processor_running(qd)[0] and time.time() - spawned_at > 300:
             pid = spawn_processor(qd, cfg.get("repo") or main)
@@ -1119,6 +1138,39 @@ def cmd_queue_cancel(a):
         e.update(state="rejected", why="cancelled by its owner", finished=ts(), finished_at=time.time())
         write_entry(qd, e)
     print(f"CANCELLED {e['id']}")
+    return 0
+
+
+def failure_signature(out):
+    """The failing specs/steps a landing check named: the `  - <spec>: <test>` rows under its last `BLOCKED` line."""
+    lines = out.splitlines()
+    starts = [i for i, l in enumerate(lines) if l.strip() == "BLOCKED"]
+    if not starts:
+        return ("(no spec named)",)
+    specs = {m.group(1).strip() for l in lines[starts[-1] + 1:] if (m := re.match(r"^\s+- ([^:]+):", l))}
+    return tuple(sorted(specs)) or ("(no spec named)",)
+
+
+def read_hold(qd):
+    return read_json(os.path.join(qd, "hold.json"))
+
+
+def cmd_queue_resume(a):
+    main = main_checkout(a.repo or os.getcwd())
+    qd = queue_dir(main)
+    with Flock(os.path.join(qd, "queue.lock")):
+        hold = read_hold(qd)
+        if not hold:
+            print("queue: not held")
+            return 0
+        os.unlink(os.path.join(qd, "hold.json"))
+        for p in glob.glob(os.path.join(qd, "verdicts", "*.json")):  # a resumed queue judges afresh
+            os.unlink(p)
+        with open(os.path.join(qd, "flaky.log"), "a") as f:
+            f.write(f"{ts()}\tRESUMED\t{hold.get('what')}\n")
+    print(f"RESUMED (was: {hold.get('what')})")
+    if not processor_running(qd)[0]:
+        spawn_processor(qd, main)
     return 0
 
 
@@ -1146,6 +1198,8 @@ class QueueProcessor:
         self.env = tool_env()
         self.qlock = os.path.join(qd, "queue.lock")
         self.held_why = ""
+        self.stop = False  # a FLAKY hold: exit, and stay down until `queue resume`
+        self.batch_id = ""
         self.max_foreign = int(os.environ.get("AGENTCTL_MAX_FOREIGN", "2"))
 
     # -- bookkeeping
@@ -1195,7 +1249,7 @@ class QueueProcessor:
                     hold = backoff(float(os.environ.get("AGENTCTL_QUEUE_HOLD_POLL", "60")), 300)
                     continue
                 if outcome == "held":
-                    if self.once:
+                    if self.once or self.stop:
                         self.log(f"held ({self.held_why}); --once: exiting")
                         return 0
                     d = next(hold)
@@ -1230,11 +1284,28 @@ class QueueProcessor:
             return False, ""
         return red, "; ".join(l.strip() for l in text.splitlines() if ": RED" in l) or "main is red for the gate"
 
+    def set_hold(self, kind, what, **kw):
+        write_json(os.path.join(self.qd, "hold.json"), {"kind": kind, "what": what, "since": ts(), **kw})
+        self.log(f"HOLD {what}")
+        self.held_why = what
+
     def pass_(self):
+        hold = read_hold(self.qd)
+        if hold and hold.get("kind") == "flaky":
+            self.held_why, self.stop = f"{hold['what']}; `agentctl queue resume` to go on", True
+            return "held"
         main = self.fetch()
         if not main:
             self.held_why = f"git fetch {REMOTE} main failed (tunnel? `agentctl env --check`)"
             return "held"
+        if hold and hold.get("kind") == "main-red":
+            if main == hold.get("sha") or self.gate()[0]:
+                self.held_why = f"{hold['what']}; resumes when main moves and the gate is green"
+                return "held"
+            with Flock(self.qlock):
+                if read_hold(self.qd) == hold:
+                    os.unlink(os.path.join(self.qd, "hold.json"))
+            self.log(f"resumed: main moved to {main[:10]} and the gate is green (was {hold['what']})")
         queued = [e for e in read_entries(self.qd) if e["state"] == "queued"]
         if not queued:
             return "idle"
@@ -1313,13 +1384,14 @@ class QueueProcessor:
             tip = new
         if not included:
             return "progress"
-        self.log(f"batch on {main[:10]}: " + ", ".join(e["id"] for e in included) + f" -> {tip[:10]}")
+        self.batch_id = f"{now():%Y%m%d-%H%M%S}-{tip[:7]}"
+        self.log(f"batch {self.batch_id} on {main[:10]}: " + ", ".join(e["id"] for e in included) + f" -> {tip[:10]}")
         if any(e.get("identity") for e in included):
-            v, text, logp = self.check(tip, main)
+            v, text, logp, sig = self.check(tip, main)
             if v == "error":
                 return self.check_error(included, text, logp)
             if v == "red":
-                return self.bisect(main, included, text, logp)
+                return self.bisect(main, included, text, logp, sig)
         return self.push(main, tip, included)
 
     # -- the landing check
@@ -1348,17 +1420,18 @@ class QueueProcessor:
             except OSError:
                 pass
 
-    def check(self, sha, main):
-        """('green'|'red'|'error', output, log path) of the landing check at sha. A verdict is cached by (main, tree):
-        identity-landing-check measures the tree against its merge-base with main, nothing else."""
+    def check(self, sha, main, fresh=False):
+        """('green'|'red'|'error', output tail, log path, failure signature) of the landing check at sha. A verdict is
+        cached by (main, tree): identity-landing-check measures the tree against its merge-base with main, nothing
+        else -- so bare main's own (base) verdict is paid once per main sha. fresh: run it, whatever the cache holds."""
         tree = git(self.work, "rev-parse", f"{sha}^{{tree}}").strip()
         vdir = os.path.join(self.qd, "verdicts")
         os.makedirs(vdir, exist_ok=True)
         cache = os.path.join(vdir, f"{main}-{tree}.json")
-        hit = read_json(cache)
+        hit = None if fresh else read_json(cache)
         if hit:
             self.log(f"landing check {sha[:10]}: {hit['verdict']} (cached for this main and tree)")
-            return hit["verdict"], hit["text"], hit["log"]
+            return hit["verdict"], hit["text"], hit["log"], tuple(hit.get("sig") or ())
         argv = shlex.split(os.environ.get("AGENTCTL_LANDING_CHECK") or LANDING_CHECK) + [sha]
         os.makedirs(os.path.join(self.qd, "checks"), exist_ok=True)
         logp = os.path.join(self.qd, "checks", f"{sha[:12]}-{int(time.time())}.log")
@@ -1376,11 +1449,13 @@ class QueueProcessor:
         lines = [l for l in out.splitlines() if l.strip()]
         last = lines[-1].strip() if lines else ""
         v = "green" if rc == 0 and last.startswith("LANDABLE") else "red" if rc == 1 else "error"
-        text = "\n".join(open(logp, errors="replace").read().splitlines()[-30:])
-        self.log(f"landing check {sha[:10]}: {v} (exit {rc}; {last[:120]})")
+        with open(logp, errors="replace") as f:
+            text = "\n".join(f.read().splitlines()[-30:])
+        sig = failure_signature(out) if v == "red" else ()
+        self.log(f"landing check {sha[:10]}: {v} (exit {rc}; {last[:120]})" + (f" signature {', '.join(sig)}" if sig else ""))
         if v != "error":
-            write_json(cache, {"verdict": v, "text": text, "log": logp, "sha": sha})
-        return v, text, logp
+            write_json(cache, {"verdict": v, "text": text, "log": logp, "sha": sha, "sig": list(sig)})
+        return v, text, logp, sig
 
     def check_error(self, entries, text, logp):
         keep = []
@@ -1396,25 +1471,54 @@ class QueueProcessor:
         self.held_why = "the landing check could not run"
         return "held" if keep else "progress"
 
-    def bisect(self, main, entries, red_text, red_log):
-        """The batch tip is BLOCKED. Find the first prefix that is red by halves (main itself is taken as green: the
-        gate holds production work while main is red), reject that entry, land the green prefix, requeue the rest."""
+    def bisect(self, main, entries, red_text, red_log, red_sig):
+        """The batch tip is BLOCKED. Blame needs proof, never a guess:
+        1. bare main's own verdict (cached per main sha): any red there is not the batch's -> HOLD `MAIN RED`;
+        2. by halves, the first prefix that is red (signature S) after a green one;
+        3. ONE fresh re-check of that prefix: red again with the same S -> reject that entry, land the green prefix,
+           requeue the rest. Green, or another signature -> a FLAKE: nobody rejected, nothing landed, HOLD `FLAKY`
+           until `agentctl queue resume` (movies: never rerun to green; never pick between a red and a green run)."""
+        bv, btext, blog, bsig = self.check(main, main)
+        if bv == "error":
+            return self.check_error(entries, btext, blog)
+        if bv == "red":
+            what = f"MAIN RED {', '.join(bsig)} at {main[:10]}"
+            self.set_hold("main-red", what, sha=main, specs=list(bsig), log=blog, batch=self.batch_id)
+            self.requeue(entries, f"HELD: {what} (base check {blog}): not this batch's; resumes when main moves and the gate is green")
+            return "held"
         tips = [e["batch_sha"] for e in entries]
-        lo, hi = 0, len(entries)
+        lo, hi, runs = 0, len(entries), [red_log]
         while hi - lo > 1:
             mid = (lo + hi) // 2
             self.log(f"bisect: checking the first {mid} of {len(entries)} entries ({tips[mid - 1][:10]})")
-            v, text, logp = self.check(tips[mid - 1], main)
+            v, text, logp, sig = self.check(tips[mid - 1], main)
+            runs.append(logp)
             if v == "error":
                 return self.check_error(entries, text, logp)
             if v == "green":
                 lo = mid
             else:
-                hi, red_text, red_log = mid, text, logp
+                hi, red_text, red_log, red_sig = mid, text, logp, sig
+        self.log(f"re-checking the red boundary {tips[hi - 1][:10]} once (signature {', '.join(red_sig)})")
+        v2, text2, log2, sig2 = self.check(tips[hi - 1], main, fresh=True)
+        runs.append(log2)
+        if v2 == "error":
+            return self.check_error(entries, text2, log2)
+        specs = ", ".join(red_sig)
+        if v2 != "red" or sig2 != red_sig:
+            detail = "green on the re-check" if v2 == "green" else f"re-check red with a different signature ({', '.join(sig2)})"
+            what = f"FLAKY {specs} (batch {self.batch_id}, runs {red_log} {log2})"
+            self.set_hold("flaky", what, specs=list(red_sig), batch=self.batch_id, runs=[red_log, log2], detail=detail,
+                          entries=[e["id"] for e in entries])
+            with open(os.path.join(self.qd, "flaky.log"), "a") as f:
+                f.write(f"{ts()}\tFLAKY\t{specs}\tbatch {self.batch_id}\t{detail}\truns {' '.join(runs)}\n")
+            self.requeue(entries, f"HELD flaky {specs}: {detail}; nobody rejected, nothing landed; "
+                                  "`agentctl queue resume` once it is fixed on main (or the owner decides)")
+            self.stop = True
+            return "held"
         culprit, prefix, rest = entries[hi - 1], entries[:lo], entries[hi:]
-        how = (f"bisected: with the {hi - 1} entr{'y' if hi == 2 else 'ies'} before it the check is LANDABLE, with it BLOCKED"
-               if len(entries) > 1 else "the batch was this entry alone")
-        self.reject(culprit, f"the identity landing check is BLOCKED with it ({how}); full log {red_log}\n{red_text}")
+        how = (f"with the {hi - 1} entr{'y' if hi == 2 else 'ies'} before it LANDABLE" if hi > 1 else "with bare main LANDABLE")
+        self.reject(culprit, f"the identity landing check is BLOCKED with it, twice ({specs}); {how}; logs {red_log} {log2}\n{text2}")
         if prefix:
             outcome = self.push(main, tips[lo - 1], prefix)
             self.requeue(rest, f"requeued after {culprit['id']} was rejected")
@@ -2201,7 +2305,8 @@ def main(argv=None):
     qc.add_argument("entry", nargs="?")
     qr = qs.add_parser("run", help="the processor (queue add starts it detached; one runs at a time)")
     qr.add_argument("--once", action="store_true", help="exit instead of waiting when only held entries are left")
-    for p in (qa, qst, qw, qc, qr):
+    qre = qs.add_parser("resume", help="lift a FLAKY (or MAIN RED) hold; the processor starts again")
+    for p in (qa, qst, qw, qc, qr, qre):
         p.add_argument("--repo", help="checkout (default: cwd)")
     a = ap.parse_args(argv)
     return {"queue": cmd_queue, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd](a)

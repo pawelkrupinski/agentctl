@@ -7,17 +7,24 @@ sys.path.insert(0, HERE)
 from test_agentctl import A, TOOL, Base, sh  # noqa: E402
 
 HOOK = "#!/bin/sh\nunset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE\ncat > /dev/null\n"
-# The stand-in identity-landing-check: BLOCKED when the checked tree holds a file named RED, else LANDABLE. Every call
-# is logged; $CHECK_HOOK (a shell script) runs once, during the first check.
+# The stand-in identity-landing-check, printing the real one's verdict shape. BLOCKED when the checked tree holds:
+#   RED     always, failing the spec the file names (deterministic);
+#   FLAKY   only on the first check of any tree holding it (red, then green);
+#   SHIFTY  on every check, FlakySpecA the first time, FlakySpecB after (the signature moves).
+# Else LANDABLE. Every call is logged; $CHECK_HOOK (a shell script) runs once, during the first check.
 CHECK = """#!/bin/sh
 sha="$1"
 echo "$sha" >> "$CHECK_CALLS"
 if [ -n "$CHECK_HOOK" ] && [ ! -f "$CHECK_HOOK.done" ]; then touch "$CHECK_HOOK.done"; sh "$CHECK_HOOK"; fi
-if git cat-file -e "$sha:RED" 2>/dev/null; then
-  echo "identity-landing-check: MatchedTakesLabelSpec *** FAILED *** known-wrong in scope rows" >&2
-  echo "BLOCKED: MatchedTakesLabelSpec"
+blocked() {
+  echo "identity-landing-check: $1 *** FAILED ***" >&2
+  echo "identity landing check: $sha"; echo; echo BLOCKED; echo "  - $1: some test"; echo "    hint: read its failure in the log"
   exit 1
-fi
+}
+count() { n=$(cat "$CHECK_CALLS.$1" 2>/dev/null || echo 0); echo $((n + 1)) > "$CHECK_CALLS.$1"; echo "$n"; }
+if git cat-file -e "$sha:RED" 2>/dev/null; then blocked "$(git show "$sha:RED")"; fi
+if git cat-file -e "$sha:FLAKY" 2>/dev/null && [ "$(count flaky)" = 0 ]; then blocked FlakySpec; fi
+if git cat-file -e "$sha:SHIFTY" 2>/dev/null; then [ "$(count shifty)" = 0 ] && blocked FlakySpecA; blocked FlakySpecB; fi
 echo LANDABLE
 """
 ENV_KEYS = ("AGENTCTL_QUEUE_DIR", "AGENTCTL_QUEUE_NO_SPAWN", "AGENTCTL_LANDING_CHECK", "AGENTCTL_LANDING_SLOTS", "CHECK_CALLS",
@@ -145,28 +152,116 @@ class QueueTest(Base):
         self.assertEqual(self.push_count(), 1)
 
     def test_red_batch_bisects_to_the_culprit_and_lands_the_rest(self):
-        ws = [self.agent(f"b{i}", {f"identity/B{i}.scala": f"{i}\n", **({"RED": "x\n"} if i == 3 else {})}) for i in range(1, 5)]
+        ws = [self.agent(f"b{i}", {f"identity/B{i}.scala": f"{i}\n", **({"RED": "MatchedTakesLabelSpec\n"} if i == 3 else {})}) for i in range(1, 5)]
         ids = [self.add(w) for w, _ in ws]
         rc, out = self.process()
         self.assertEqual(rc, 0, out)
         log = self.remote_log()
         self.assertEqual(log[:3], ["b4", "b2", "b1"])
         self.assertNotIn("b3", log)
-        # the full batch (red), the first half (green), the first three (red), then b4 alone on the new main
-        self.assertEqual(len(self.check_calls()), 4, out)
+        # the full batch (red), bare main (green), the first half (green), the first three (red), the first three
+        # again (red, same signature: deterministic), then b4 alone on the new main
+        calls = self.check_calls()
+        self.assertEqual(len(calls), 6, out)
+        self.assertEqual(calls[3], calls[4])
+        self.assertEqual(self.entry(ids[2])["state"], "rejected")
         rc, out = self.wait(ids[2])
         self.assertEqual(rc, 1, out)
-        self.assertIn("REJECTED the identity landing check is BLOCKED with it (bisected", out)
+        self.assertIn("REJECTED the identity landing check is BLOCKED with it, twice (MatchedTakesLabelSpec)", out)
         self.assertIn("MatchedTakesLabelSpec", out)
         for i in (0, 1, 3):
             self.assertEqual(self.entry(ids[i])["state"], "landed", ids[i])
 
+    def main_sha(self):
+        return sh(self.r.root, "git", "--git-dir", self.r.bare, "rev-parse", "main")
+
+    def hold(self):
+        return A.read_json(os.path.join(self.qd, "hold.json"))
+
+    def assert_nothing_moved(self, ids, main):
+        self.assertEqual(self.main_sha(), main)
+        for eid in ids:
+            self.assertEqual(self.entry(eid)["state"], "queued", eid)
+
+    def test_red_then_green_boundary_is_a_flake_held_until_resume(self):
+        w1, _ = self.agent("f1", {"identity/F1.scala": "1\n"})
+        w2, _ = self.agent("f2", {"identity/F2.scala": "2\n", "FLAKY": "x\n"})
+        ids = [self.add(w) for w in (w1, w2)]
+        main = self.main_sha()
+        rc, out = self.process()
+        self.assertEqual(rc, 0, out)
+        self.assert_nothing_moved(ids, main)  # f1 is green, but nothing lands on a flake's evidence
+        hold = self.hold()
+        self.assertEqual(hold["kind"], "flaky")
+        self.assertIn("FLAKY FlakySpec (batch ", hold["what"])
+        self.assertIn("FlakySpec", open(os.path.join(self.qd, "flaky.log")).read())
+        self.assertIn("FLAKY FlakySpec", self.run_tool("queue", "status", cwd=self.r.path)[1])
+        rc, out = self.wait(ids[0])
+        self.assertEqual(rc, 3, out)
+        self.assertIn("HELD flaky FlakySpec", out)
+        n = len(self.check_calls())
+        self.process()  # held: no check, nothing lands, until resume
+        self.assertEqual(len(self.check_calls()), n)
+        self.assert_nothing_moved(ids, main)
+        rc, out = self.run_tool("queue", "resume", cwd=self.r.path)
+        self.assertEqual(rc, 0, out)
+        self.assertIsNone(self.hold())
+        rc, out = self.process()
+        self.assertEqual([self.entry(i)["state"] for i in ids], ["landed", "landed"], out)
+
+    def test_a_different_signature_on_the_recheck_is_a_flake(self):
+        w, _ = self.agent("sh1", {"identity/S.scala": "s\n", "SHIFTY": "x\n"})
+        eid = self.add(w)
+        main = self.main_sha()
+        self.process()
+        self.assert_nothing_moved([eid], main)
+        hold = self.hold()
+        self.assertEqual(hold["kind"], "flaky")
+        self.assertIn("FlakySpecA", hold["what"])
+        self.assertIn("different signature (FlakySpecB)", hold["detail"])
+
+    def test_red_base_holds_main_red_and_resumes_on_a_new_green_main(self):
+        self.r.write("RED", "BaseSpec\n")
+        self.r.commit("main breaks")
+        self.r.push()
+        red_main = self.main_sha()
+        w, _ = self.agent("mr", {"identity/M.scala": "m\n"})
+        eid = self.add(w)
+        self.process()
+        self.assert_nothing_moved([eid], red_main)
+        hold = self.hold()
+        self.assertEqual(hold["kind"], "main-red")
+        self.assertEqual(hold["what"], f"MAIN RED BaseSpec at {red_main[:10]}")
+        n = len(self.check_calls())
+        self.process()  # same main: still held, no check spent
+        self.assertEqual(len(self.check_calls()), n)
+        self.assertEqual(self.hold()["kind"], "main-red")
+        sh(self.r.path, "git", "rm", "-q", "RED")
+        self.r.commit("main fixed")
+        self.r.push()
+        rc, out = self.process()  # main moved and the gate is green: resumes by itself
+        self.assertIsNone(self.hold(), out)
+        self.assertEqual(self.entry(eid)["state"], "landed", out)
+
+    def test_base_verdict_is_paid_once_per_main_sha(self):
+        w1, _ = self.agent("x1", {"identity/X1.scala": "1\n", "RED": "XSpec\n"})
+        id1 = self.add(w1)
+        main = self.main_sha()
+        self.process()
+        self.assertEqual(self.entry(id1)["state"], "rejected")
+        w2, _ = self.agent("x2", {"identity/X2.scala": "2\n", "RED": "YSpec\n"})
+        id2 = self.add(w2)
+        self.process()
+        self.assertEqual(self.entry(id2)["state"], "rejected")
+        self.assertEqual(self.check_calls().count(main), 1)
+        self.assertEqual(len(self.check_calls()), 5)  # x1, main, x1 again; x2, x2 again
+
     def test_single_red_entry_is_rejected_without_bisecting(self):
-        w, _ = self.agent("r1", {"identity/R.scala": "r\n", "RED": "x\n"})
+        w, _ = self.agent("r1", {"identity/R.scala": "r\n", "RED": "SomeSpec\n"})
         eid = self.add(w)
         self.process()
         self.assertEqual(self.entry(eid)["state"], "rejected")
-        self.assertEqual(len(self.check_calls()), 1)
+        self.assertEqual(len(self.check_calls()), 3)  # the entry, bare main, the entry again
         self.assertEqual(self.push_count(), 0)
 
     def test_red_gate_holds_production_entries_and_lands_tools_only(self):

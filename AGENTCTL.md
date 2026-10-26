@@ -8,7 +8,7 @@ calls.
 
 - Not on PATH: call it as `~/bin/agentctl`.
 - Python 3, standard library only.
-- Tests: `python3 -m unittest discover -s ~/bin/tests` (72 tests, mutation tests included).
+- Tests: `python3 -m unittest discover -s ~/bin/tests` (76 tests, mutation tests included).
 - `agentctl --help` and `agentctl <cmd> --help` match this page.
 
 ## Standard agent workflow
@@ -211,6 +211,7 @@ agentctl queue add [--identity] [--repo PATH]        # from your worktree
 agentctl queue wait [<entry>] [--timeout S]          # LANDED <sha> | REJECTED <why>
 agentctl queue status
 agentctl queue cancel <entry>                        # a queued entry, not one in the current batch
+agentctl queue resume                                # lift a FLAKY hold (the fix is on main, or the owner decides)
 agentctl queue run [--once]                          # the processor; `queue add` starts it
 ```
 
@@ -241,18 +242,30 @@ How the processor works, one batch at a time:
    says whether it conflicts with main or only with an earlier entry.
 4. **Check.** When any entry in the batch needs it, it runs ONE `scripts/identity-landing-check --full <tip>`, holding
    one of the shared `/tmp/movies-landing-slot-{1,2}` slots. Verdicts are cached by (main, tree).
-5. **Bisect on BLOCKED.** It checks the first half of the batch, then halves again until it finds the first entry
-   whose prefix is red. That entry is rejected with the failing output and log path. The green prefix before it is
-   pushed, and the entries after it are requeued, so they are rechecked without it. A single-entry batch is rejected
-   directly. Exit 2 ("could not check") requeues and retries, and rejects after 3 attempts.
+5. **BLOCKED: blame needs proof.** A failure's *signature* is the set of specs/steps the check lists under `BLOCKED`.
+   - **Main first.** It runs the same check on bare forgejo/main. The verdict is cached per main sha, so it is paid
+     at most once per main commit, and only when a batch goes red. Any red there means the batch is not to blame:
+     nobody is rejected, and the queue HOLDs with `MAIN RED <signature> at <sha>`. It resumes by itself when main
+     moves to a new sha and the gate is green. Only a green main allows a bisect.
+   - **Bisect.** It checks the first half of the batch, then halves again, until it finds the first red prefix after
+     a green one.
+   - **One re-check** of that red prefix, run fresh. Red again with the same signature: that entry is rejected with
+     the failing output, the green prefix before it is pushed, and the entries after it are requeued, to be checked
+     again without it. Green on the re-check, or a different signature: it is a **FLAKE**. Nobody is rejected and
+     nothing lands. The queue HOLDs with `FLAKY <spec(s)> (batch <id>, runs <logs>)`, appends a line to
+     `<queue dir>/flaky.log`, and the processor stops until `agentctl queue resume`. It never picks a winner between
+     a red and a green run (movies: never rerun to green). `resume` also clears the verdict cache.
+   - Exit 2 ("could not check") requeues and retries, and rejects after 3 attempts.
 6. **Push** the tip with `git push forgejo <tip>:refs/heads/main`. The repo's pre-push hook runs in the work tree,
    which is at the tip. If main moved since the batch was built, or the push races, it rebuilds and rechecks. If the
    red gate refuses, it holds. If the hook fails on a multi-entry batch, it retries each entry alone. If it fails on
    a single entry, that entry is rejected with the hook's tail.
 
 `queue wait` polls the entry file (no Forgejo calls), restarts a processor if none is running, and prints the verdict
-last: `LANDED <sha>` (the rebased commit on main) or `REJECTED <why>`, with the detail lines above it. Exit: 0 landed,
-1 rejected, 2 timeout (12 h by default). Start it with `run_in_background=true` and end your turn. Your branch is not
+last: `LANDED <sha>` (the rebased commit on main), `REJECTED <why>` with the detail lines above it, or
+`HELD flaky <spec(s)>` when the queue is held for a flake. HELD is not your fault unless your spec is named: report
+it and stop. A `MAIN RED` hold keeps `wait` waiting, since it resumes by itself; `queue status` shows every hold.
+Exit: 0 landed, 1 rejected, 2 timeout (12 h by default), 3 HELD flaky. Start it with `run_in_background=true` and end your turn. Your branch is not
 rewritten: the landed commits are patch-equivalent to it, so `cleanup` recognises the worktree as merged.
 
 ```
