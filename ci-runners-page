@@ -5,7 +5,7 @@
 
 Reads Forgejo's database read-only through `agentctl db-q` (sqlite3 -readonly over ssh) every refresh.
 """
-import argparse, html, json, subprocess, threading, time
+import argparse, collections, html, json, re, subprocess, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -13,7 +13,7 @@ AGENTCTL = str(Path.home() / "bin" / "agentctl")
 FORGEJO = "http://forgejo.internal:3000"
 
 RUNNING = """
-select rn.name as runner, rp.owner_name || '/' || rp.name as repo, r."index" as run, r.workflow_id as workflow,
+select t.id as task, rn.name as runner, rp.owner_name || '/' || rp.name as repo, r."index" as run, r.workflow_id as workflow,
        replace(r.ref, 'refs/heads/', '') as ref, substr(r.commit_sha, 1, 9) as sha, j.name as job,
        j.runs_on as label, cast(strftime('%s','now') - j.started as integer) as secs
 from action_task t
@@ -97,10 +97,81 @@ def host():
     return {"runners": runners, "tiers": tiers, "host": load}
 
 
+# CPU use, every poll: each tier's and each job container's cumulative cpu.stat usage, and the host's /proc/stat, read
+# off ci-runner (read-only). Rates come from consecutive samples; a job's container name carries its Forgejo task id.
+CPU_PROBE = r"""
+for t in deploy gate check measure; do printf 'S\t%s\t%s\n' "$t" "$(awk '/usage_usec/{print $2}' /sys/fs/cgroup/ci.slice/ci-$t.slice/cpu.stat)"; done
+printf 'P\t%s\n' "$(head -1 /proc/stat)"
+sudo -n docker ps --no-trunc --format '{{.ID}} {{.Names}}' | while read id n; do
+  f=$(ls -d /sys/fs/cgroup/ci.slice/ci-*.slice/docker-$id.scope 2>/dev/null | head -1)
+  [ -n "$f" ] && printf 'C\t%s\t%s\n' "$n" "$(awk '/usage_usec/{print $2}' $f/cpu.stat)"
+done
+true  # else the loop's last test sets the exit status: a job with no ci.slice scope must not fail the probe
+"""
+
+
+def cpu_sample():
+    out = subprocess.run(["ssh", "-o", "ConnectTimeout=10", "pawel@10.1.0.3", CPU_PROBE], capture_output=True,
+                         text=True, timeout=60)
+    if out.returncode != 0:
+        raise RuntimeError((out.stderr or "ssh failed").strip()[-300:])
+    tiers, tasks, busy = {}, {}, None
+    for line in out.stdout.splitlines():
+        f = line.split("\t")
+        if f[0] == "S" and len(f) == 3 and f[2].isdigit():
+            tiers[f[1]] = int(f[2])
+        elif f[0] == "P":
+            j = [int(x) for x in f[1].split()[1:]]
+            busy = (sum(j) - j[3] - j[4], sum(j))  # (busy, total) jiffies: idle and iowait out
+        elif f[0] == "C" and len(f) == 3:
+            m = re.search(r"TASK-(\d+)_", f[1])
+            if m and f[2].isdigit():
+                tasks[m.group(1)] = int(f[2])
+    return {"t": time.time(), "tiers": tiers, "tasks": tasks, "busy": busy}
+
+
+def cpu_count(cpuset):
+    n = 0
+    for part in (cpuset or "").split(","):
+        if "-" in part:
+            a, b = part.split("-")
+            n += int(b) - int(a) + 1
+        elif part.strip().isdigit():
+            n += 1
+    return n
+
+
+PREV = {}
+PEAK = {}  # task id -> highest centicores seen
+HISTORY = collections.deque(maxlen=360)  # (time, host cc, {tier: cc}) every 10 s: the last hour
+
+
+def cpu_rates(now):
+    """Centicores (1 core = 100) per tier, per running job's task and for the host, since the previous sample."""
+    global PREV
+    prev, PREV = PREV, now
+    if not prev:
+        return None
+    dt = now["t"] - prev["t"]
+    cc = lambda a, b: max(0, round((a - b) / dt / 10000))  # usec of CPU per second -> centicores
+    tiers = {t: cc(v, prev["tiers"][t]) for t, v in now["tiers"].items() if t in prev["tiers"]}
+    tasks = {k: cc(v, prev["tasks"][k]) for k, v in now["tasks"].items() if k in prev["tasks"]}
+    for k, v in tasks.items():
+        PEAK[k] = max(PEAK.get(k, 0), v)
+    for k in [k for k in PEAK if k not in now["tasks"]]:
+        del PEAK[k]
+    host = None
+    if now["busy"] and prev["busy"]:
+        (b1, t1), (b0, t0) = now["busy"], prev["busy"]
+        host = round(3200 * (b1 - b0) / max(1, t1 - t0))  # share of all 32 threads, in centicores
+    HISTORY.append((round(now["t"]), host, tiers))
+    return {"tiers": tiers, "tasks": tasks, "peaks": dict(PEAK), "host": host}
+
+
 # The last good reading, refreshed by ONE background poller: a page load never waits on ssh to ci-runner, a slow or
 # failed read keeps serving the last good one marked stale (like the events page, never a blank page), and /healthz
 # reports whether the poller itself is alive, which is what the watchdog restarts on.
-STATE = {"at": None, "running": [], "waiting": [], "waiting_jobs": [], "limits": {"runners": {}, "tiers": {}, "host": None}, "error": "first read in progress", "polled": time.time()}
+STATE = {"at": None, "running": [], "waiting": [], "waiting_jobs": [], "limits": {"runners": {}, "tiers": {}, "host": None}, "cpu": None, "history": [], "error": "first read in progress", "polled": time.time()}
 LOCK = threading.Lock()
 
 
@@ -117,6 +188,13 @@ def poll_forever(every=10):
                     r["labels"] = labels.get(name, "")
                 fresh["limits"] = h
             n += 1
+            try:
+                rates = cpu_rates(cpu_sample())
+                if rates:
+                    fresh["cpu"] = rates
+                    fresh["history"] = list(HISTORY)
+            except Exception as e:  # CPU figures are extra: their failure never blanks the jobs
+                fresh["cpu_error"] = str(e)
             with LOCK:
                 STATE.update(fresh, at=time.strftime("%H:%M:%S"), ok=time.time(), error=None)
         except Exception as e:
@@ -150,7 +228,7 @@ th{color:var(--muted);font-weight:normal}.err{color:var(--warn);margin-bottom:12
 .tiers{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-bottom:16px}
 .tier{background:var(--card);border-radius:10px;padding:8px 12px;font-size:13px}.tier b{font-size:14px}
 .bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:6px 0 4px}.bar i{display:block;height:100%;background:var(--accent)}
-.full .bar i{background:var(--warn)}.free{color:var(--muted);font-weight:normal}
+.full .bar i{background:var(--warn)}.spark{display:block;width:100%;height:34px;margin:4px 0 2px}.spark polyline{fill:none;stroke:var(--accent);stroke-width:1.5;vector-effect:non-scaling-stroke}.free{color:var(--muted);font-weight:normal}
 </style></head><body>
 <h1>CI runners</h1><div class="sub" id="sub">loading…</div><div id="err" class="err"></div>
 <div class="tiers" id="tiers"></div>
@@ -169,20 +247,29 @@ async function tick() {
     for (const n of Object.keys(L.runners || {})) by[n] ??= [];
     const gib = b => isNaN(+b) ? b : (+b / 2**30).toFixed(0) + "G";
     const lim = t => t.max && t.max !== "max" ? "max " + gib(t.max) : t.high && t.high !== "max" ? "high " + gib(t.high) : t.low && t.low !== "0" ? "low " + gib(t.low) : "no cap";
-    document.getElementById("tiers").innerHTML = (L.host ? `<div class="tier"><b>Host</b><br>load ${esc(L.host.load)}<br>${esc(L.host.cpus)} CPUs</div>` : "") +
+    const C = d.cpu || {tiers: {}, tasks: {}, peaks: {}}, H = d.history || [];
+    const ncpu = set => (set || "").split(",").reduce((a, p) => a + (p.includes("-") ? p.split("-")[1] - p.split("-")[0] + 1 : (p.trim() ? 1 : 0)), 0);
+    // A one-hour sparkline of centicores, against the ceiling it can reach.
+    const spark = (vals, max) => { if (vals.length < 2) return ""; const w = 176, h = 34;
+      const pts = vals.map((v, i) => `${(i * w / (vals.length - 1)).toFixed(1)},${(h - Math.min(1, (v || 0) / max) * h).toFixed(1)}`).join(" ");
+      return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="${pts}"/></svg>`; };
+    const ccLine = (now, max) => now == null ? "" : `<span class="${now > 0.9 * max ? "old" : ""}">${now}</span> / ${max} cc`;
+    document.getElementById("tiers").innerHTML = (L.host ? `<div class="tier"><b>Host</b> <span class="free">load ${esc(L.host.load)}</span><br>CPU ${ccLine(C.host, 3200)}
+      ${spark(H.map(x => x[1]), 3200)}<span class="meta">last hour · ${esc(L.host.cpus)} threads = 3200 cc</span></div>` : "") +
       ["deploy","gate","check","measure"].filter(t => L.tiers && L.tiers[t]).map(t => { const x = L.tiers[t];
         const slots = Object.entries(L.runners).filter(([n, r]) => r.tier === t);
         const cap = slots.reduce((a, [, r]) => a + r.capacity, 0), used = slots.reduce((a, [n]) => a + (by[n] || []).length, 0);
         return `<div class="tier ${used >= cap ? "full" : ""}"><b>${t}</b> <span class="free">weight ${esc(x.weight)}</span>
           <div class="bar"><i style="width:${cap ? Math.min(100, 100*used/cap) : 0}%"></i></div>${used}/${cap} slots · CPUs ${esc(x.cpus)}<br>
-          CPU pressure <span class="${+x.pressure > 40 ? "old" : ""}">${esc(x.pressure)}%</span> · mem ${gib(x.mem)} (${lim(x)})</div>`; }).join("");
+          CPU pressure <span class="${+x.pressure > 40 ? "old" : ""}">${esc(x.pressure)}%</span> · mem ${gib(x.mem)} (${lim(x)})<br>
+          CPU ${ccLine((C.tiers || {})[t], 100 * ncpu(x.cpus))}${spark(H.map(h => (h[2] || {})[t]), 100 * ncpu(x.cpus))}</div>`; }).join("");
     document.getElementById("sub").textContent = d.running.length + " jobs running · data from " + (d.at || "—") + " · every 10 s";
     document.getElementById("runners").innerHTML = Object.keys(by).sort().map(n => { const r = (L.runners || {})[n]; const cap = r ? r.capacity : null;
       return `<div class="card ${cap !== null && by[n].length >= cap ? "full" : ""}"><h2>${esc(n)}<span class="count">${by[n].length}${cap !== null ? "/" + cap : ""} busy${cap !== null ? " · " + Math.max(0, cap - by[n].length) + " free" : ""}</span></h2>` +
         (r ? `<div class="meta">tier ${esc(r.tier)} · ${esc((() => { try { return JSON.parse(r.labels || "[]").join(", "); } catch { return r.labels; } })())}${r.state !== "running" ? " · <span class='old'>" + esc(r.state) + "</span>" : ""}</div>` +
              `<div class="bar"><i style="width:${cap ? Math.min(100, 100*by[n].length/cap) : 0}%"></i></div>` : "") +
       by[n].map(j => `<div class="job"><a href="${F}/${esc(j.repo)}/actions/runs/${esc(j.run)}" target="_blank">${esc(j.repo.split("/")[1])} #${esc(j.run)}</a> · ${esc(j.workflow)} · ${esc(j.job)}
-        <div class="meta">${esc(j.ref)} @ ${esc(j.sha)} · ${esc(j.label)} · <span class="${+j.secs > 1800 ? "old" : ""}">${dur(j.secs)}</span></div></div>`).join("") + "</div>"; }).join("") || "<div class='sub'>Nothing running.</div>";
+        <div class="meta">${esc(j.ref)} @ ${esc(j.sha)} · ${esc(j.label)} · <span class="${+j.secs > 1800 ? "old" : ""}">${dur(j.secs)}</span>${(C.tasks || {})[j.task] != null ? ` · CPU <b>${C.tasks[j.task]}</b> cc, peak ${C.peaks[j.task] ?? "?"}, max ${100 * ncpu(((L.tiers || {})[r ? r.tier : ""] || {}).cpus) || "?"}` : ""}</div></div>`).join("") + "</div>"; }).join("") || "<div class='sub'>Nothing running.</div>";
     const jobsOf = {};
     for (const j of (d.waiting_jobs || [])) (jobsOf[j.label] ??= []).push(j);
     document.getElementById("waiting").innerHTML = "<tr><th>Label</th><th>Jobs</th><th>Oldest wait</th><th>From</th></tr>" +
