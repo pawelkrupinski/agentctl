@@ -8,7 +8,7 @@ calls.
 
 - Not on PATH: call it as `~/bin/agentctl`.
 - Python 3, standard library only.
-- Tests: `python3 -m unittest discover -s ~/bin/tests` (91 tests, mutation tests included).
+- Tests: `python3 -m unittest discover -s ~/bin/tests` (96 tests, mutation tests included).
 - `agentctl --help` and `agentctl <cmd> --help` match this page.
 
 ## Standard agent workflow
@@ -246,6 +246,25 @@ Runs on other branches, such as recordings or other agents' runs, are never touc
 leaves `active-check.json`, so the next processor cancels those runs when it starts. Right before each check, the gate
 is read again: if main is red for the gate and the batch holds production entries, no check is started. A batch
 rebuilt on a moved main gets a new tip, so it always dispatches fresh runs and never reuses the old tip's.
+
+**The local pre-check, before any CI.** Before it dispatches a CI landing check, the processor reads the batch tip's
+`scripts/queue-precheck-specs.txt`. This list is owned by the repo: `sbt <cmd>` lines run through `scripts/sbt-warm`,
+`sh <cmd>` lines run in the shell, and the first failure stops. The processor runs the list in its work tree.
+- If the tip fails, the same pre-check runs on bare main first. If main fails it too, the queue holds with
+  `MAIN RED pre-check …`.
+- Otherwise the processor bisects the batch's entries locally, which costs minutes, not CI hours. It re-runs the
+  failing boundary once and rejects only the culprit, attaching the failing output and the diff of any file the
+  check wrote. Such files are discarded, never regenerated or kept. The rest of the batch is requeued.
+- When it is unsure (a list it could not run, or a failure that did not reproduce), the CI check decides.
+- Results are cached per tree. With no list at the tip, the pre-check is skipped.
+
+**Main moving under a verdict.** If main moved during a check only through commits that touch none of the paths the
+check covers (the identity landing paths and `.github/convergence-paths.txt` as of the new main), the batch is
+rebased onto the new main and pushed without a recheck. This needs a clean rebase and a passing pre-check on the new
+tip. Anything else rebuilds and rechecks.
+
+**Abandoning a check** also cancels a run Forgejo already marked finished while any of its jobs is still queued or
+running, so those jobs stop holding runner slots.
 
 **Pause and cancel (owner actions).**
 - `queue hold [--reason]` writes a persistent hold. Killing the processor does not stick, because any `queue wait`

@@ -112,10 +112,27 @@ class QueueTest(Base):
         return [l.split(" ", 1)[1] for l in open(p).read().splitlines()] if os.path.exists(p) else []
 
     def dispatched_runs(self):
-        """Run 501 still going on the check's ci branch, 502 done on its measure branch."""
+        """Run 501 still going on the check's ci branch; on its measure branch 502 done with every job done, and 503
+        marked failed while 3 of its rows still wait for runner slots."""
         self.gh_runs([{"databaseId": 501, "status": "in_progress", "headBranch": "measure/q/ci-1", "workflowName": "Identity run"},
                       {"databaseId": 502, "status": "completed", "conclusion": "success", "headBranch": "measure/q/me-1",
+                       "workflowName": "Identity model convergence"},
+                      {"databaseId": 503, "status": "completed", "conclusion": "failure", "headBranch": "measure/q/me-1",
                        "workflowName": "Identity model convergence"}])
+        for rid, jobs in ((502, ["completed", "completed"]), (503, ["completed", "queued", "queued", "in_progress"])):
+            with open(os.path.join(self.gh, f"run-{rid}.json"), "w") as f:
+                json.dump({"status": "completed", "jobs": [{"name": f"j{i}", "status": st} for i, st in enumerate(jobs)]}, f)
+
+    def check_paths_on_main(self, precheck=None):
+        """main gains the repo-owned lists: the convergence paths and (optionally) the queue's pre-check."""
+        self.r.write(".github/convergence-paths.txt", "# paths\nidentity/src/main/**\ncommon/src/main/**\nbuild.sbt\n")
+        if precheck is not None:
+            self.r.write("scripts/queue-precheck-specs.txt", precheck)
+        self.r.write("snap.txt", "the checked-in snapshot\n")
+        self.r.commit("repo-owned lists")
+        self.r.push()
+        if os.path.exists(self.pushes):
+            os.unlink(self.pushes)
 
     def agent(self, name, files, msg=None):
         """A worktree on its own branch with one commit writing `files` ({path: text})."""
@@ -421,6 +438,7 @@ class QueueTest(Base):
         self.assertEqual(self.entry(eid)["state"], "landed")
         calls = self.gh_calls()
         self.assertIn("run cancel 501 -R", " ".join(calls))
+        self.assertIn("run cancel 503 -R", " ".join(calls))  # failed, but its queued rows would hold runner slots
         self.assertNotIn("run cancel 502", " ".join(calls))
         for b in ("measure%2Fq%2Fci-1", "measure%2Fq%2Fme-1"):
             self.assertTrue(any(c.startswith("api -X DELETE") and c.rstrip().endswith(f"branches/{b}") for c in calls), (b, calls))
@@ -541,6 +559,76 @@ class QueueTest(Base):
         self.assertEqual(len(self.check_calls()), 2)  # the interrupted batch, then k1 alone
         self.assertEqual(self.remote_log()[0], "k1")
         self.assertNotIn("k2", self.remote_log())
+
+    # -- the local pre-check
+    PRECHECK = ("# cheap and deterministic: before any CI\n"
+                "sh test ! -f STALE || { echo regenerated > snap.txt; echo 'ReadModelSnapshotSpec *** FAILED *** snapshot stale'; exit 1; }\n")
+
+    def test_a_failing_precheck_is_bisected_locally_and_only_the_culprit_rejected(self):
+        self.check_paths_on_main(self.PRECHECK)
+        ws = [self.agent(f"pc{i}", {f"identity/P{i}.scala": f"{i}\n", **({"STALE": "x\n"} if i == 2 else {})}) for i in (1, 2, 3)]
+        ids = [self.add(w) for w, _ in ws]
+        rc, out = self.process()
+        self.assertEqual(self.entry(ids[1])["state"], "rejected", out)
+        why = self.entry(ids[1])["why"]
+        self.assertIn("pre-check", why)
+        self.assertIn("ReadModelSnapshotSpec *** FAILED ***", why)
+        self.assertIn("+regenerated", why)  # the snapshot's diff, for its owner to review
+        self.assertEqual([self.entry(i)["state"] for i in (ids[0], ids[2])], ["landed", "landed"], out)
+        self.assertEqual(len(self.check_calls()), 1)  # CI ran once, for the batch without the culprit
+        self.assertEqual(sh(self.r.root, "git", "--git-dir", self.r.bare, "show", "main:snap.txt"), "the checked-in snapshot")
+
+    def test_a_main_red_precheck_blames_no_entry(self):
+        self.check_paths_on_main(self.PRECHECK)
+        self.r.write("STALE", "x\n")
+        self.r.commit("main breaks the pre-check")
+        self.r.push()
+        w, _ = self.agent("mp", {"identity/M.scala": "m\n"})
+        eid = self.add(w)
+        self.process()
+        self.assertEqual(self.entry(eid)["state"], "queued")
+        self.assertEqual(self.hold()["kind"], "main-red")
+        self.assertIn("pre-check", self.hold()["what"])
+        self.assertEqual(self.check_calls(), [])
+
+    # -- main moving under a long check
+    def move_main_during_check(self, files):
+        other = os.path.join(self.tmp.name, "other")
+        sh(self.r.root, "git", "clone", "-q", self.r.bare, other)
+        mover = os.path.join(self.tmp.name, "mover.sh")
+        writes = " && ".join(f"mkdir -p $(dirname {p}) && echo moved > {p}" for p in files)
+        with open(mover, "w") as f:
+            f.write(f"cd {other} && {writes} && git add -A && git -c core.hooksPath=/dev/null commit -q -m mover && "
+                    f"git -c core.hooksPath=/dev/null push -q origin HEAD:main\n")
+        os.environ["CHECK_HOOK"] = mover
+
+    def test_main_moved_by_paths_the_check_does_not_cover_keeps_the_verdict(self):
+        self.check_paths_on_main(self.PRECHECK)
+        w, _ = self.agent("kv", {"identity/K.scala": "k\n"})
+        eid = self.add(w)
+        self.move_main_during_check(["scripts/tool.sh", "docs/x.md"])
+        rc, out = self.process()
+        self.assertEqual(self.entry(eid)["state"], "landed", out)
+        self.assertEqual(len(self.check_calls()), 1, out)
+        self.assertEqual(self.remote_log()[:2], ["kv", "mover"])
+
+    def test_main_moved_by_a_covered_path_rechecks(self):
+        self.check_paths_on_main(self.PRECHECK)
+        w, _ = self.agent("rc", {"identity/R.scala": "r\n"})
+        eid = self.add(w)
+        self.move_main_during_check(["common/src/main/scala/X.scala"])
+        rc, out = self.process()
+        self.assertEqual(self.entry(eid)["state"], "landed", out)
+        self.assertEqual(len(self.check_calls()), 2, out)
+
+    def test_main_moved_but_the_precheck_fails_on_the_new_tip_rechecks_nothing_and_rebuilds(self):
+        self.check_paths_on_main(self.PRECHECK)
+        w, _ = self.agent("pf", {"identity/F.scala": "f\n"})
+        eid = self.add(w)
+        self.move_main_during_check(["STALE"])  # a tools-only path, yet the combination fails the pre-check
+        rc, out = self.process()
+        self.assertNotIn(self.entry(eid)["state"], ("landed",), out)
+        self.assertNotIn("pf", self.remote_log())
 
     def test_single_red_entry_is_rejected_without_bisecting(self):
         w, _ = self.agent("r1", {"identity/R.scala": "r\n", "RED": "SomeSpec\n"})

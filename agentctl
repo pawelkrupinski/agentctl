@@ -1259,11 +1259,30 @@ def no_token_what(ns, why):
 
 # A landing check's dispatches: identity-ci-run / identity-measure say `pushed measure/<user>/<sha>-<rand>` for each
 # branch whose run they start. Only runs ON those branches are ever cancelled -- never a recording or another's run.
+PRECHECK_FILE = "scripts/queue-precheck-specs.txt"
+CONVERGENCE_PATHS = ".github/convergence-paths.txt"
+
+
+def convergence_path(path, patterns):
+    """.github/actions/changed-paths/matches.sh's dialect: `dir/**` is everything under dir/, else an exact path."""
+    return any(path.startswith(p[:-2]) if p.endswith("/**") else path == p for p in patterns)
+
+
 CHECK_BRANCH = re.compile(r"\bpushed (measure/[\w.\-/]+)")
 
 
 def branch_runs(o_r, branch):
     return gh_json(o_r, "run", "list", "--branch", branch, "--limit", "20", "--json", "databaseId,status")
+
+
+def jobs_unfinished(o_r, rid):
+    """A run Forgejo marked finished can still hold rows queued or running (run 3011: failed, 3 rows on the landing
+    runner for an hour). Unknown counts as unfinished: a cancel of a truly finished run is a harmless 409."""
+    try:
+        jobs = gh_json(o_r, "run", "view", str(rid), "--json", "status,jobs").get("jobs") or []
+    except Exception:
+        return True
+    return any(j.get("status") not in ("completed", "success", "failure", "cancelled", "skipped") for j in jobs)
 
 
 def cancel_run(o_r, rid):
@@ -1662,11 +1681,15 @@ class QueueProcessor:
         if any(e.get("identity") for e in included):
             if self.gate_holds(included):
                 return "held"
+            outcome = self.precheck_gate(main, included)  # minutes, locally, before hours of CI
+            if outcome:
+                return outcome
             v, text, logp, sig = self.check(tip, main)
             if v == "error":
                 return self.check_error(included, text, logp)
             if v == "red":
                 return self.bisect(main, included, text, logp, sig)
+            return self.push(main, tip, included, checked=True)
         return self.push(main, tip, included)
 
     # -- the landing check
@@ -1777,7 +1800,7 @@ class QueueProcessor:
             o_r = None
         for b in branches if o_r else []:
             try:
-                live = [r for r in branch_runs(o_r, b) if r.get("status") != "completed"]
+                live = [r for r in branch_runs(o_r, b) if r.get("status") != "completed" or jobs_unfinished(o_r, r["databaseId"])]
             except Exception as e:
                 self.log(f"abandon: could not list the runs on {b}: {e}")
                 live = []
@@ -1804,6 +1827,129 @@ class QueueProcessor:
         self.requeue(entries, f"held: main went red for the gate ({why}) before the landing check started; no check dispatched")
         self.held_why = f"main is red for the gate ({why})"
         return True
+
+    # -- main moving under a verdict
+    def moved_outside_check(self, main, cur):
+        """True when main..cur touches none of the landing check's paths: the identity landing paths and
+        .github/convergence-paths.txt (as cur has it). No list, or a main that did not move forward: False."""
+        if not git_ok(self.repo, "merge-base", "--is-ancestor", main, cur):
+            return False
+        r = git(self.repo, "show", f"{cur}:{CONVERGENCE_PATHS}", check=False)
+        if r.returncode:
+            return False
+        pats = [l.strip() for l in r.stdout.splitlines() if l.strip() and not l.strip().startswith("#")]
+        files = [f for f in git(self.repo, "log", "--format=", "--name-only", f"{main}..{cur}").splitlines() if f]
+        hit = next((f for f in files if needs_identity_check(f) or convergence_path(f, pats)), None)
+        if hit:
+            self.log(f"main moved by a path the landing check covers ({hit}): recheck")
+        return hit is None
+
+    def rebase_batch(self, main, cur, tip, entries):
+        """The batch's commits replayed onto cur; each entry's batch_sha mapped to its new commit. None unless clean."""
+        old = git(self.work, "rev-list", "--reverse", f"{main}..{tip}").split()
+        r = git(self.work, "rebase", "--quiet", "--onto", cur, main, tip, check=False)
+        if r.returncode:
+            git(self.work, "rebase", "--abort", check=False)
+            return None
+        moved = git(self.work, "rev-parse", "HEAD").strip()
+        new = git(self.work, "rev-list", "--reverse", f"{cur}..{moved}").split()
+        if len(new) != len(old) or any(e["batch_sha"] not in old for e in entries):
+            return None
+        for e in entries:
+            e["batch_sha"] = new[old.index(e["batch_sha"])]
+            self.update(e, batch_sha=e["batch_sha"])
+        return moved
+
+    # -- the local pre-check
+    def precheck(self, sha, fresh=False):
+        """(True | False | None, signature, text): the repo's scripts/queue-precheck-specs.txt at sha, run in the work
+        tree (`sbt <cmd>` through scripts/sbt-warm, `sh <cmd>`), first failure stops. None = could not pre-check.
+        No list at sha: True (nothing to pre-check). Whatever a failing check wrote is shown as a diff and discarded:
+        a moved snapshot is its owner's to review, never regenerated here."""
+        spec = git(self.work, "show", f"{sha}:{PRECHECK_FILE}", check=False)
+        if spec.returncode:
+            return True, "", f"(no {PRECHECK_FILE})"
+        lines = [l.strip() for l in spec.stdout.splitlines() if l.strip() and not l.strip().startswith("#")]
+        tree = git(self.work, "rev-parse", f"{sha}^{{tree}}").strip()
+        cache = os.path.join(self.qd, "prechecks", f"{tree}.json")
+        hit = None if fresh else read_json(cache)
+        if hit:
+            return hit["ok"], hit["sig"], hit["text"]
+        self.status("pre-checking", sha=sha)
+        git(self.work, "checkout", "-q", "--detach", "-f", sha)
+        git(self.work, "clean", "-fdq", check=False)
+        result = (True, "", "")
+        try:
+            for line in lines:
+                kind, _, cmd = line.partition(" ")
+                argv = ["scripts/sbt-warm", cmd.strip()] if kind == "sbt" else ["sh", "-c", cmd] if kind == "sh" else None
+                if argv is None:
+                    self.log(f"pre-check: unknown line kind {kind!r} in {PRECHECK_FILE}: {line}")
+                    continue
+                try:
+                    r = subprocess.run(argv, cwd=self.work, capture_output=True, text=True, env=self.env, timeout=3600,
+                                       stdin=subprocess.DEVNULL)
+                    rc, out = r.returncode, r.stdout + r.stderr
+                except (OSError, subprocess.TimeoutExpired) as e:
+                    rc, out = 127, str(e)
+                if rc == 0:
+                    continue
+                tail = "\n".join([l for l in out.splitlines() if l.strip()][-40:])
+                if rc in (126, 127) or (kind == "sbt" and not re.search(r"\[error\]|\*\*\* FAILED|Compilation failed", out)):
+                    result = (None, line, f"$ {line}\n{tail}")
+                    break
+                changed = git(self.work, "status", "--porcelain", check=False).stdout.strip()
+                diff = git(self.work, "diff", check=False).stdout
+                text = f"$ {line}\n{tail}"
+                if changed:
+                    text += (f"\nthe check changed files (not kept: review, regenerate on the current main yourself):\n"
+                             f"{changed}\n{diff[:6000]}")
+                result = (False, line, text)
+                break
+        finally:
+            git(self.work, "checkout", "-q", "-f", check=False)
+            git(self.work, "clean", "-fdq", check=False)
+        self.log(f"pre-check {sha[:10]}: " + {True: "passed", False: f"FAILED: {result[1]}", None: f"could not run: {result[1]}"}[result[0]])
+        if result[0] is not None:
+            os.makedirs(os.path.dirname(cache), exist_ok=True)
+            write_json(cache, {"ok": result[0], "sig": result[1], "text": result[2]})
+        return result
+
+    def precheck_gate(self, main, entries):
+        """None to go on to the CI check; else an outcome. A red batch tip is bisected LOCALLY with the same pre-check
+        (main proven first, the boundary re-run once), only the culprit is rejected and the rest requeued. Anything
+        unsure (could not run, did not reproduce) leaves the verdict to the CI check."""
+        tips = [e["batch_sha"] for e in entries]
+        ok, sig, text = self.precheck(tips[-1])
+        if ok is not False:
+            return None
+        bok, bsig, btext = self.precheck(main)
+        if bok is False:
+            what = f"MAIN RED pre-check `{bsig}` at {main[:10]}"
+            self.set_hold("main-red", what, sha=main, specs=[bsig], batch=self.batch_id)
+            self.requeue(entries, f"HELD: {what}: not this batch's; resumes when main moves and the gate is green")
+            return "held"
+        if bok is None:
+            return None
+        lo, hi = 0, len(entries)
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            v, s2, t2 = self.precheck(tips[mid - 1])
+            if v is None:
+                return None
+            if v:
+                lo = mid
+            else:
+                hi, sig, text = mid, s2, t2
+        ok2, sig2, text2 = self.precheck(tips[hi - 1], fresh=True)
+        if ok2 is not False or sig2 != sig:
+            self.log(f"pre-check failure `{sig}` did not reproduce at its boundary: the CI check decides")
+            return None
+        culprit = entries[hi - 1]
+        how = f"with the {hi - 1} entr{'y' if hi == 2 else 'ies'} before it it passes" if hi > 1 else "it passes on bare main"
+        self.reject(culprit, f"the queue's pre-check fails with it, twice (`{sig}`; {how}); no CI was spent\n{text2}")
+        self.requeue([e for e in entries if e is not culprit], f"requeued after {culprit['id']} failed the pre-check")
+        return "progress"
 
     def check_error(self, entries, text, logp):
         """No verdict (infra, dispatch, token) is NEVER an entry's fault: requeue everyone and HOLD the queue. Retried
@@ -1878,19 +2024,29 @@ class QueueProcessor:
         how = (f"with the {hi - 1} entr{'y' if hi == 2 else 'ies'} before it LANDABLE" if hi > 1 else "with bare main LANDABLE")
         self.reject(culprit, f"the identity landing check is BLOCKED with it, twice ({specs}); {how}; logs {red_log} {log2}\n{text2}")
         if prefix:
-            outcome = self.push(main, tips[lo - 1], prefix)
+            outcome = self.push(main, tips[lo - 1], prefix, checked=True)
             self.requeue(rest, f"requeued after {culprit['id']} was rejected")
             return outcome
         self.requeue(rest, f"requeued after {culprit['id']} was rejected")
         return "progress"
 
     # -- landing
-    def push(self, main, tip, entries):
+    def push(self, main, tip, entries, checked=False, depth=0):
+        """checked: tip carries a landing-check verdict. When main moved only by commits touching none of the paths that
+        check covers, the batch is rebased onto the new main and pushed WITHOUT a recheck -- if the rebase is clean
+        and the pre-check passes on the new tip. Anything else rebuilds and rechecks."""
         why = self.interrupt_reason() if self.current else None
         if why:
             raise CheckInterrupted(why)
         cur = self.fetch()
         if cur != main:
+            if checked and cur and depth < 5 and self.moved_outside_check(main, cur):
+                moved = self.rebase_batch(main, cur, tip, entries)
+                if moved and self.precheck(moved)[0] is True:
+                    self.log(f"{REMOTE}/main moved {main[:10]} -> {cur[:10]} by paths the landing check does not cover: "
+                             f"the verdict holds; pushing the batch rebased onto it ({moved[:10]})")
+                    return self.push(cur, moved, entries, checked=True, depth=depth + 1)
+                self.log("main moved by uncovered paths, but the rebase or the pre-check on the new tip failed: rebuilding")
             self.requeue(entries, f"{REMOTE}/main moved ({main[:10]} -> {(cur or '?')[:10]}) under the batch: rebuilding and rechecking")
             return "progress"
         self.status("pushing", sha=tip, batch=" ".join(e["id"] for e in entries))
