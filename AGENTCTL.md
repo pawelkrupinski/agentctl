@@ -8,7 +8,7 @@ calls.
 
 - Not on PATH: call it as `~/bin/agentctl`.
 - Python 3, standard library only.
-- Tests: `python3 -m unittest discover -s ~/bin/tests` (98 tests, mutation tests included).
+- Tests: `python3 -m unittest discover -s ~/bin/tests` (75 tests, mutation tests included).
 - `agentctl --help` and `agentctl <cmd> --help` match this page.
 
 ## Standard agent workflow
@@ -16,21 +16,26 @@ calls.
 ```sh
 eval "$(~/bin/agentctl env --print)"        # 1. sbt/java on PATH; a locked vault stops you here with one line
 #    ... work in your own worktree, commit ...
-heavy-run ~/bin/agentctl land               # 2. rebase + check + push + verify -> LANDED <sha> | NOT LANDED: <why>
+~/bin/agentctl land                         # 2. Bash run_in_background=true, END YOUR TURN: lock, rebase, local tests, push, watch CI
 ~/bin/agentctl wait run <id> &              # 3. Bash run_in_background=true, then END YOUR TURN
 ~/bin/agentctl ci-why                       # 4. only when land says the red gate refused, or Main is red
 ```
 
-For an identity change in movies, step 2 is `queue add` instead of `land`, followed by `queue wait` (see
-"queue" below): `land` for one non-identity commit, `queue` for anything that needs `identity-landing-check`.
+Every change lands with `land`, identity changes included (2026-10-26: no pre-merge CI; the merge queue is retired).
+In movies the pre-push hook runs the basic tests plus the identity / page area tests the change touches, locally, and
+after LANDED `land` watches main's Main and convergence runs for your sha and ends `WATCH OK` / `WATCH RED` /
+`WATCH UNKNOWN`.
 
 Step by step:
 
 1. Run `env --print` first in any session that builds or pushes. If it prints
    `vault <ns> locked: ask the user to run `! secrets unlock <ns>``, stop there and pass that line to the lead.
 2. Work and commit in your own worktree. Never use `reset --soft` onto a moved main.
-3. Run `land` from the worktree. Run it under the scratchpad `heavy-run` when the pre-push hook will start sbt, which
-   is any Scala, script or workflow change in movies.
+3. Run `land` from the worktree with the Bash tool's `run_in_background=true`, then END YOUR TURN. You are re-invoked
+   when it exits: `NOT LANDED: <why>` (fix and land again), or `LANDED <sha>` followed by the watch's verdict. On
+   `WATCH RED` your change may have broken main: read the ci-why summary it prints and fix forward at once with
+   `Fixes-Red: <run>`. (There is no `heavy-run` wrapper on this laptop; the landing lock keeps one landing hook's JVM
+   at a time.)
 4. To wait for a CI run, start `wait run` with the Bash tool's `run_in_background=true` and end your turn. You are
    re-invoked when it exits. Never sleep or poll in the foreground.
 5. When main is red or the gate refused, run `ci-why`. It names the run, the cause (infra or test) and how the gate
@@ -50,9 +55,10 @@ Step by step:
 - **Never deletes unmerged work.** `cleanup` deletes only what is proven merged: the worktree's HEAD is an ancestor of
   forgejo/main, or every one of its commits is patch-equivalent there per `git cherry`. The tree must also be clean and
   idle. Every deletion is re-verified just before it happens and logged.
-- **One queue processor.** `queue run` holds an flock on the queue directory, so the kernel frees it when the
-  processor dies. Liveness is that lock, never a pid, so a zombie counts as dead. The processor is started with a
-  double fork and setsid, so it is nobody's child. It pushes only through `push_argv()` and the pre-push hook, and refuses to run with `PREPUSH_SKIP`.
+- **One lander per repository.** `land` holds an flock per git common dir (`~/.cache/agentctl/land/`) from fetch to
+  verified push, so the kernel frees it when the lander dies. A second `land` waits (one line names the holder), then
+  rebases onto what the first landed: nobody tests a base that is about to move. The watch after LANDED runs with the
+  lock already released.
 - **One waiter per target.** `wait` holds a lock per run or file in the scratchpad. A second caller attaches to the
   live waiter's verdict file and does not poll.
 - **No artificial load.** Polls back off up to 5 minutes. Nothing in agentctl burns CPU.
@@ -164,179 +170,81 @@ Record scrape fixtures: GREEN (run 1630 #801)
 Use it when the red gate refused your push, or before you decide whether a red is yours. Don't read logs by hand
 first. A genuine `Fixes-Red:` trailer is only for a commit that really fixes that run.
 
-### land: rebase, check, push, verify
+### land: lock, rebase, check, push, verify, watch
 
 ```
-agentctl land [--repo PATH] [--branch B] [--stash]
+agentctl land [--repo PATH] [--branch B] [--stash] [--no-watch]     # agents: Bash run_in_background=true
 ```
 
 Steps, in order:
 
-1. fetch (retried once after 15 s, since a tunnel restart takes seconds);
-2. `git rebase forgejo/main`; on a conflict it aborts and lists the files;
-3. `prepush-check` against forgejo/main;
-4. `git push forgejo <sha>:refs/heads/main`. The repo's pre-push hook runs, with sdkman's sbt/java first on PATH and
+1. take the repository's landing lock (an flock per git common dir under `~/.cache/agentctl/land/`), waiting for
+   another lander's to be released (`waiting for the landing lock (…), held by: pid … <worktree> since …`;
+   `$AGENTCTL_LAND_LOCK_TIMEOUT`, default 4 h);
+2. fetch (retried once after 15 s, since a tunnel restart takes seconds);
+3. `git rebase forgejo/main`; on a conflict it aborts and lists the files;
+4. `prepush-check` against forgejo/main;
+5. CHECK FIRST, when the repo has `scripts/hooks/pre-push` (movies): `scripts/hooks/pre-push --range
+   forgejo/main..<sha>`, the hook's dry run over exactly what will be pushed. In movies that is the red gate, the
+   path-selected checks, the basic tests and the area tests (`identity`, `page`: minutes; see
+   `docs/landing-process.md`). A failure is `NOT LANDED: the pre-push checks failed` with the tail, and nothing is
+   pushed. The pass is stored, so step 6's hook reuses it in seconds (a long hook inside `git push` holds the push's
+   ssh connection idle, and a tunnel drop kills it);
+6. `git push forgejo <sha>:refs/heads/main`. The repo's pre-push hook runs, with sdkman's sbt/java first on PATH and
    JAVA_HOME set;
-5. on a race (`non-fast-forward`, `cannot lock ref`, `fetch first`, `failed to update ref`), refetch, rebase and
-   retry, up to 3 times;
-6. fetch again and verify with `merge-base --is-ancestor`, or `git cherry` for patch-equivalent commits.
+7. on a race (`non-fast-forward`, `cannot lock ref`, `fetch first`, `failed to update ref`), refetch, rebase and
+   retry (from step 5), up to 3 times;
+8. fetch again and verify with `merge-base --is-ancestor`, or `git cherry` for patch-equivalent commits:
+   `LANDED <sha>`. The lock is released here;
+9. THE WATCH (movies; `--no-watch` skips it): main's CI for the landed sha.
+   - **Main**: the `main.yml` run whose head is the sha; if it was cancelled or never came (a newer push superseded
+     it), the newest Main run whose head contains the sha (`merge-base --is-ancestor`).
+   - **Convergence**: the FIRST `identity-model-convergence.yml` run on main created after the push whose head
+     contains the sha — the sha's own kick, a later push's, or the daily run; a cancelled one (the lane replaced it)
+     passes to the next. None within 60 min (`$AGENTCTL_WATCH_CONV_START` seconds; kick-convergence skips pushes
+     outside `.github/convergence-paths.txt`): `convergence: none started within 60 min`, not waited for.
+   - Polls back off from 60 s to 5 min. Verdict: `WATCH OK: Main #n green, convergence #m green` (exit 0);
+     `WATCH RED: <workflow> #n <failed jobs>` plus the `ci-why` summary (exit 3) the moment either is red: your
+     change may have broken main, fix forward with `Fixes-Red: <n>`; `WATCH UNKNOWN: …` (exit 2) when a run is
+     undecided after 3 h (`$AGENTCTL_WATCH_TIMEOUT`) or Forgejo's runs could not be read 10 times in a row.
+   - Other repos: `watch: no CI watched for <repo>`, exit 0.
 
-The last line is `LANDED <sha>` or `NOT LANDED: <reason>`. Possible reasons:
+`NOT LANDED: <reason>` reasons:
 
 - dirty tree;
+- lock wait timed out;
 - rebase conflict;
 - prepush-check refusal;
+- the pre-push checks failed (the dry run: its last 25 lines; the full log in `scratchpad/agentctl-land-*.log`);
 - red gate (followed by the `ci-why` summary);
-- hook failure (its last 25 lines; the full log is in `scratchpad/agentctl-land-*.log`, plus a tunnel hint when
-  Forgejo was unreachable);
+- hook failure at push time (its last 25 lines, plus a tunnel hint when Forgejo was unreachable);
 - still racing;
 - pushed but not on main.
 
 A dirty tree is refused unless you pass `--stash`. That stashes the changes under a named stash
 (`agentctl-land-<pid>-<ts>`), finds it again by its sha (the stash list is shared by every worktree), and restores it
-afterwards. Exit: 0 landed, 1 not.
+afterwards. Exit: 0 landed (and watched green, or nothing to watch), 1 not landed, 2 landed but the watch could not
+tell, 3 landed and Main or the convergence RED.
 
 ```
-$ ~/bin/agentctl land          # from ~/bitcashier/infra-wt-agentctl-doc
-agentctl: pushing c972d56a2b to forgejo/main (attempt 1/4; hook log: …/agentctl-land-infra-wt-agentctl-doc-72692.log)
-prepush-check: forgejo/main...c972d56a2b49: 1 file changed, 8 insertions(+)
+$ ~/bin/agentctl land          # from ~/projects/movies-wt-relay, run_in_background=true
+agentctl: checking c972d56a2b: scripts/hooks/pre-push --range forgejo/main..HEAD (log: …/agentctl-land-movies-wt-relay-72692.log)
+agentctl: pushing c972d56a2b to forgejo/main (attempt 1/4; hook log: …)
 LANDED c972d56a2b4932077baaa40af95d388ab500bb03
+agentctl: watching Main and the convergence for c972d56a2b (up to 180 min; `--no-watch` skips this)
+Main #2711: success
+Identity model convergence #1630: success
+WATCH OK: Main #2711 green, convergence #1630 green
 ```
 
 Use it for every push to main. Don't use it for `measure/` branches: `identity-measure` pushes those itself.
 
-### queue: batch landings, one identity landing check per batch
+### queue: RETIRED (2026-10-26)
 
-```
-agentctl queue add [--identity] [--repo PATH]        # from your worktree
-agentctl queue wait [<entry>] [--timeout S]          # LANDED <sha> | REJECTED <why>
-agentctl queue status
-agentctl queue cancel <entry>                        # drop an entry, even one in the current batch
-agentctl queue hold [--reason R]                     # PAUSE until `queue resume` (sticks: waiters start nothing)
-agentctl queue resume                                # lift a hold that waits for it; refreshes the processor's token
-agentctl queue requeue <entry> [--last]              # a wrongly rejected entry back (original place, or last)
-agentctl queue run [--once]                          # the processor; `queue add` starts it
-```
-
-**When to use which:**
-
-- `land`: a single change that needs no identity landing check: tools, docs, non-identity code. It is unchanged.
-- `queue`: any change that needs `scripts/identity-landing-check` (identity/, worker identity adapters, the stage,
-  the projection, title rules, identity fixtures). Don't take a landing-check slot or run the check yourself: the
-  queue does both. Several agents queued at once share ONE check instead of one each.
-
-`queue add` records the worktree, branch, HEAD, its merge-base with forgejo/main, and whether the entry needs the
-landing check. A path needs it when it matches the pre-push hook's identity-change list (`identity/`,
-`worker/src/main/scala/services/identity/`, title-rules/words, `services/titlerules/`, `test/resources/fixtures/identity-`),
-or names identity, matcher, resolver, resolution or projection code outside `scripts/`, `docs/`, `.claude/` and the
-CI trees. `--identity` forces the check. The entry also records whether it touches a production path (the hook's
-`is_production_path`) and whether every production commit carries `Fixes-Red:`. A worktree has at most one open entry.
-Only committed work is queued. If no processor is running, `queue add` starts one detached, in its own session, so it
-outlives your turn. It logs to `<queue dir>/processor.log`. The queue directory is `~/.cache/agentctl/queue/<repo>`
-(`$AGENTCTL_QUEUE_DIR` overrides it), and the processor builds batches in its own worktree, `<queue dir>/work`.
-
-**No abandoned CI runs.** A landing check runs in its own process group, with `IDENTITY_LANDING_OUT` set to
-`<queue dir>/checks/<sha>-<ts>.d`, and is recorded in `active-check.json`. Once the check returns (any verdict, no
-verdict, or a timeout), or the processor is stopped (SIGTERM, SIGHUP, SIGINT), the processor:
-- kills the check's process group;
-- finds the measure/ branches the check pushed (`pushed measure/…` lines in its log and output directory);
-- cancels every run on those branches that has not finished (`forgejo-gh run cancel`), and deletes the branches.
-
-Runs on other branches, such as recordings or other agents' runs, are never touched. A processor killed with SIGKILL
-leaves `active-check.json`, so the next processor cancels those runs when it starts. Right before each check, the gate
-is read again: if main is red for the gate and the batch holds production entries, no check is started. A batch
-rebuilt on a moved main gets a new tip, so it always dispatches fresh runs and never reuses the old tip's.
-
-**The local pre-check, before any CI.** Before it dispatches a CI landing check, the processor reads the batch tip's
-`scripts/queue-precheck-specs.txt`. This list is owned by the repo: `sbt <cmd>` lines run through `scripts/sbt-warm`,
-`sh <cmd>` lines run in the shell, and the first failure stops. The processor runs the list in its work tree.
-- After the list passes, the pre-check runs the repo's own pre-push hook as `pre-push --range <main>..<tip>`, in the
-  work tree at the tip. That is everything the push's hook will check (lints, sbt specs, drift, scripttests), and
-  the hook pushes nothing. A red gate, a tunnel failure or stale manifests counts as "could not judge", not as a
-  failure.
-- If the tip fails, the same pre-check runs on bare main first. If main fails it too, the queue holds with
-  `MAIN RED pre-check …`.
-- Otherwise the processor bisects the batch's entries locally, which costs minutes, not CI hours. It re-runs the
-  failing boundary once and rejects only the culprit, attaching the failing output and the diff of any file the
-  check wrote. Such files are discarded, never regenerated or kept. The rest of the batch is requeued.
-- When it is unsure (a list it could not run, or a failure that did not reproduce), the CI check decides.
-- Results are cached per tree. With no list at the tip, the pre-check is skipped.
-
-**A hook failure at push time** on a multi-entry batch is bisected locally with `pre-push --range`, and the failing
-boundary is re-run once. Only the culprit is rejected. The rest is rebased without it and, if that tip passes the
-pre-check, pushed under the landing verdict already taken, since that verdict covered a superset. Only a failure
-that `--range` cannot reproduce falls back to retrying each entry alone.
-
-**Main moving under a verdict.** If main moved during a check only through commits that touch none of the paths the
-check covers (the identity landing paths and `.github/convergence-paths.txt` as of the new main), the batch is
-rebased onto the new main and pushed without a recheck. This needs a clean rebase and a passing pre-check on the new
-tip. Anything else rebuilds and rechecks.
-
-**Abandoning a check** also cancels a run Forgejo already marked finished while any of its jobs is still queued or
-running, so those jobs stop holding runner slots.
-
-**Pause and cancel (owner actions).**
-- `queue hold [--reason]` writes a persistent hold. Killing the processor does not stick, because any `queue wait`
-  restarts it; this does. The processor stops at the hold. A check it is running is stopped within 15 s: its
-  process group is killed, its runs are cancelled and its branches deleted, and the batch is requeued.
-- `queue wait` keeps waiting while paused and starts no processor. `queue status` shows `PAUSED by the owner: <reason>`.
-- `queue resume` lifts the pause.
-- `queue cancel <entry>` on an entry of the batch being built or checked marks it. The processor then stops that
-  batch's check (cancelling its runs), rejects the entry as "cancelled by its owner", requeues the rest and rebuilds
-  them. It checks for the mark again just before pushing.
-
-**The processor's token.** The detached processor runs in its own session, so it cannot read a vault that was unlocked
-in yours. `queue add` and `queue resume` resolve FORGEJO_API_TOKEN in your session (`$FORGEJO_API_TOKEN`, else
-`secrets get`) and hand it over in `<queue dir>/token` (mode 0600; never in argv, logs or status). Before any check
-dispatches, a preflight confirms the processor has a token and that Forgejo accepts it. The token is passed on as
-`FORGEJO_API_TOKEN` to the check, the hook and the gate. Without one, the queue HOLDs with
-`no-token: run `secrets unlock movies`, then `agentctl queue resume``.
-
-How the processor works, one batch at a time:
-
-1. It fetches and takes every queued entry, in order. Entries added while a batch runs go into the next batch.
-2. **Gate.** When `ci-why` says main is red for the gate, production entries are held (their note says why and the
-   processor polls with backoff), and only tools-only and `Fixes-Red:` entries go ahead, as the hook allows.
-3. **Build.** Starting from forgejo/main, it rebases each entry onto the tip so far (`git rebase --onto`) and runs
-   prepush-check on it. An entry that conflicts, or that prepush-check refuses, is rejected alone, and the message
-   says whether it conflicts with main or only with an earlier entry.
-4. **Check.** When any entry in the batch needs it, it runs ONE `scripts/identity-landing-check --full <tip>`, holding
-   one of the shared `/tmp/movies-landing-slot-{1,2}` slots. Verdicts are cached by (main, tree).
-5. **BLOCKED: blame needs proof.** A failure's *signature* is the set of specs/steps the check lists under `BLOCKED`.
-   - **Main first.** It runs the same check on bare forgejo/main. The verdict is cached per main sha, so it is paid
-     at most once per main commit, and only when a batch goes red. Any red there means the batch is not to blame:
-     nobody is rejected, and the queue HOLDs with `MAIN RED <signature> at <sha>`. It resumes by itself when main
-     moves to a new sha and the gate is green. Only a green main allows a bisect.
-   - **Bisect.** It checks the first half of the batch, then halves again, until it finds the first red prefix after
-     a green one.
-   - **One re-check** of that red prefix, run fresh. Red again with the same signature: that entry is rejected with
-     the failing output, the green prefix before it is pushed, and the entries after it are requeued, to be checked
-     again without it. Green on the re-check, or a different signature: it is a **FLAKE**. Nobody is rejected and
-     nothing lands. The queue HOLDs with `FLAKY <spec(s)> (batch <id>, runs <logs>)`, appends a line to
-     `<queue dir>/flaky.log`, and the processor stops until `agentctl queue resume`. It never picks a winner between
-     a red and a green run (movies: never rerun to green). `resume` also clears the verdict cache.
-   - **No verdict** (exit 2: infra, dispatch or token trouble) is never an entry's fault, so nothing is ever
-     REJECTED for it. The queue HOLDs with `no-verdict`, requeues everyone, retries with backoff, and after 5
-     attempts in a row waits for `queue resume`. A verdict lifts the hold.
-6. **Push** the tip with `git push forgejo <tip>:refs/heads/main`. The repo's pre-push hook runs in the work tree,
-   which is at the tip. If main moved since the batch was built, or the push races, it rebuilds and rechecks. If the
-   red gate refuses, it holds. If the hook fails on a multi-entry batch, it retries each entry alone. If it fails on
-   a single entry, that entry is rejected with the hook's tail.
-
-`queue wait` polls the entry file (no Forgejo calls), restarts a processor if none is running, and prints the verdict
-last: `LANDED <sha>` (the rebased commit on main), `REJECTED <why>` with the detail lines above it, or
-`HELD <why>` (flaky, no-token, no-verdict) when the queue waits for `queue resume`. HELD is not your fault unless your spec is named: report
-it and stop. A `MAIN RED` hold keeps `wait` waiting, since it resumes by itself; `queue status` shows every hold.
-Exit: 0 landed, 1 rejected, 2 timeout (12 h by default), 3 HELD. Start it with `run_in_background=true` and end your turn. Your branch is not
-rewritten: the landed commits are patch-equivalent to it, so `cleanup` recognises the worktree as merged.
-
-```
-$ ~/bin/agentctl queue add                      # from ~/projects/movies-wt-relay
-QUEUED 20261026-101500-relay-3f2a: 2 commit(s) up to 9c1e0a2b3d (relay); identity landing check: yes (identity/src/main/scala/services/identity/RelayStage.scala); production; position 2
-wait for it (Bash run_in_background=true, then END YOUR TURN): ~/bin/agentctl queue wait 20261026-101500-relay-3f2a
-$ ~/bin/agentctl queue wait 20261026-101500-relay-3f2a
-LANDED 4be0c1f9...
-```
+The merge queue batched identity landings around ONE CI landing check. With no pre-merge CI left (the owner,
+2026-10-26: basic tests before merging, the touched area's tests locally, everything else on main), there is nothing
+to batch, and `land`'s lock already lets several agents land in turn without stepping on each other. Every `agentctl
+queue …` command prints the retirement note and exits 2. Its code is in this repo's history (before 25e71e5).
 
 ### env: the agent environment, without secrets
 
