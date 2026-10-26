@@ -8,7 +8,7 @@ calls.
 
 - Not on PATH: call it as `~/bin/agentctl`.
 - Python 3, standard library only.
-- Tests: `python3 -m unittest discover -s ~/bin/tests` (75 tests, mutation tests included).
+- Tests: `python3 -m unittest discover -s ~/bin/tests` (86 tests, mutation tests included).
 - `agentctl --help` and `agentctl <cmd> --help` match this page.
 
 ## Standard agent workflow
@@ -24,7 +24,8 @@ eval "$(~/bin/agentctl env --print)"        # 1. sbt/java on PATH; a locked vaul
 Every change lands with `land`, identity changes included (2026-10-26: no pre-merge CI; the merge queue is retired).
 In movies the pre-push hook runs the basic tests plus the identity / page area tests the change touches, locally, and
 after LANDED `land` watches main's Main and convergence runs for your sha and ends `WATCH OK` / `WATCH RED` /
-`WATCH UNKNOWN`.
+`WATCH UNKNOWN`. While main is red, a production change prints `WAITING <sha> (n changes queued on waiting)` and land
+keeps running until the `waiting` branch lands with it once main is green.
 
 Step by step:
 
@@ -184,19 +185,23 @@ Steps, in order:
 2. fetch (retried once after 15 s, since a tunnel restart takes seconds);
 3. `git rebase forgejo/main`; on a conflict it aborts and lists the files;
 4. `prepush-check` against forgejo/main;
-5. CHECK FIRST, when the repo has `scripts/hooks/pre-push` (movies): `scripts/hooks/pre-push --range
+5. MAIN RED? When a gating workflow is red (ci-why's gate) and a pushed commit touches a production path without a
+   `Fixes-Red:` naming a red run, the change does not push: it goes onto the `waiting` branch (see "waiting" below),
+   `WAITING <sha> (n changes queued on waiting)`, the lock is released, and land keeps running until the branch lands:
+   then `LANDED <sha>` and step 9. Tools-only and Fixes-Red changes go on to step 6 while red, as the hook allows;
+6. CHECK FIRST, when the repo has `scripts/hooks/pre-push` (movies): `scripts/hooks/pre-push --range
    forgejo/main..<sha>`, the hook's dry run over exactly what will be pushed. In movies that is the red gate, the
    path-selected checks, the basic tests and the area tests (`identity`, `page`: minutes; see
    `docs/landing-process.md`). A failure is `NOT LANDED: the pre-push checks failed` with the tail, and nothing is
-   pushed. The pass is stored, so step 6's hook reuses it in seconds (a long hook inside `git push` holds the push's
+   pushed. The pass is stored, so step 7's hook reuses it in seconds (a long hook inside `git push` holds the push's
    ssh connection idle, and a tunnel drop kills it);
-6. `git push forgejo <sha>:refs/heads/main`. The repo's pre-push hook runs, with sdkman's sbt/java first on PATH and
+7. `git push forgejo <sha>:refs/heads/main`. The repo's pre-push hook runs, with sdkman's sbt/java first on PATH and
    JAVA_HOME set;
-7. on a race (`non-fast-forward`, `cannot lock ref`, `fetch first`, `failed to update ref`), refetch, rebase and
+8. on a race (`non-fast-forward`, `cannot lock ref`, `fetch first`, `failed to update ref`), refetch, rebase and
    retry (from step 5), up to 3 times;
-8. fetch again and verify with `merge-base --is-ancestor`, or `git cherry` for patch-equivalent commits:
+9. fetch again and verify with `merge-base --is-ancestor`, or `git cherry` for patch-equivalent commits:
    `LANDED <sha>`. The lock is released here;
-9. THE WATCH (movies; `--no-watch` skips it): main's CI for the landed sha.
+10. THE WATCH (movies; `--no-watch` skips it): main's CI for the landed sha.
    - **Main**: the `main.yml` run whose head is the sha; if it was cancelled or never came (a newer push superseded
      it), the newest Main run whose head contains the sha (`merge-base --is-ancestor`).
    - **Convergence**: the FIRST `identity-model-convergence.yml` run on main created after the push whose head
@@ -215,6 +220,9 @@ Steps, in order:
 - lock wait timed out;
 - rebase conflict;
 - prepush-check refusal;
+- main is red and the change conflicts with the changes already on `waiting`, or the checks failed on the combined
+  `waiting` tip (only your change is rejected; the waiting ones stay);
+- (later, for a waiting change) main moved and the change no longer applies, or the green-main batch failed with it;
 - the pre-push checks failed (the dry run: its last 25 lines; the full log in `scratchpad/agentctl-land-*.log`);
 - red gate (followed by the `ci-why` summary);
 - hook failure at push time (its last 25 lines, plus a tunnel hint when Forgejo was unreachable);
@@ -239,11 +247,42 @@ WATCH OK: Main #2711 green, convergence #1630 green
 
 Use it for every push to main. Don't use it for `measure/` branches: `identity-measure` pushes those itself.
 
+### waiting: production changes held while main is red, landed together on green
+
+```
+agentctl waiting status          # the changes on `waiting`, the processor, the gate
+agentctl waiting cancel <id>     # drop one (its land ends NOT LANDED: cancelled); the branch is rebuilt without it
+agentctl waiting run [--once]    # the processor; land starts it detached
+```
+
+The owner (2026-10-26): "when waiting for main to go green, merge all waiting changes into one waiting branch (always
+use the same name) and merge it when main is green".
+
+- **The branch** is the local `waiting` of the main clone, in its worktree `<clone>-wt-waiting`
+  (`~/projects/movies-wt-waiting`). It exists only while changes wait.
+- **Enqueueing** (inside `land`, under the landing lock): fetch, create `waiting` from forgejo/main if missing,
+  cherry-pick the change's commits onto it, and run the repo hook's `--checks-only forgejo/main..waiting` there (every
+  check but the red gate, over the COMBINED tip: the basic tests plus every touched area's). A conflict or a failure
+  resets the branch and rejects only that change, with the output. Otherwise `WAITING <tip> (n changes queued on
+  waiting; entry <id>)`, and land waits on its entry file (no Forgejo calls; restarts a dead processor; 24 h bound).
+- **The processor** (one per repo, an flock; detached, `start_new_session`; log `processor.log` in the state dir
+  `~/.cache/agentctl/waiting/<repo>/`) polls the gate (60 s backing off to 5 min). Green: under the landing lock it
+  fetches, rebuilds `waiting` on forgejo/main entry by entry (a change that no longer applies is rejected alone), runs
+  the hook's `--range` dry run (gate included), and pushes the whole branch to main in ONE push through the hook.
+  Then every entry is LANDED (its own commit's sha on main), the branch and its worktree are deleted, and each
+  waiting `land` prints `LANDED <sha>` and goes on to its WATCH. The gate red again at the dry run: back to waiting.
+  A failing batch is searched prefix by prefix and only the first failing change rejected; when no single change
+  fails (flaky or infra), the whole batch is rejected with the output rather than one guessed.
+- **Bypass:** tools-only changes and `Fixes-Red:` fixes never wait (the hook lets them land while red), nor does
+  anything when main is green. A repo hook without `--checks-only` (movies before the change that added it) disables
+  waiting: land behaves as before.
+
 ### queue: RETIRED (2026-10-26)
 
 The merge queue batched identity landings around ONE CI landing check. With no pre-merge CI left (the owner,
 2026-10-26: basic tests before merging, the touched area's tests locally, everything else on main), there is nothing
-to batch, and `land`'s lock already lets several agents land in turn without stepping on each other. Every `agentctl
+to batch: `land`'s lock lets several agents land in turn without stepping on each other, and `waiting` batches what
+must wait for a red main. Every `agentctl
 queue …` command prints the retirement note and exits 2. Its code is in this repo's history (before 25e71e5).
 
 ### env: the agent environment, without secrets

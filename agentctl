@@ -78,6 +78,9 @@ what the first landed. CHECK FIRST: in a repo with scripts/hooks/pre-push (movie
 `--range forgejo/main..<sha>`, before the push -- the basic checks and the identity / page area tests the paths select,
 minutes for those -- and the push's own hook run reuses its stored pass in seconds.
 Last line: `LANDED <sha>`, or `NOT LANDED: <exact reason>` (red gate: followed by the `agentctl ci-why` summary).
+MAIN RED: a production change without a Fixes-Red: naming the red run goes onto the ONE local `waiting` branch instead
+(checked on the combined tip): `WAITING <sha> (n changes queued on waiting)`, and land keeps running until the
+processor pushes the whole branch once main is green, then LANDED + the watch (`agentctl waiting --help`).
 THE WATCH: after LANDED, land keeps running (the lock already free) and watches main's CI for the sha (movies):
   Main         the main.yml run for the sha; cancelled or superseded by a newer push: the newest Main run whose head
                contains it;
