@@ -188,7 +188,7 @@ Steps, in order:
 5. MAIN RED? When a gating workflow is red (ci-why's gate) and a pushed commit touches a production path without a
    `Fixes-Red:` naming a red run, the change does not push: it goes onto the `waiting` branch (see "waiting" below),
    `WAITING <sha> (n changes queued on waiting)`, the lock is released, and land keeps running until the branch lands:
-   then `LANDED <sha>` and step 9. Tools-only and Fixes-Red changes go on to step 6 while red, as the hook allows;
+   then `LANDED <sha>` and step 10. Tools-only and Fixes-Red changes go on to step 6 while red, as the hook allows;
 6. CHECK FIRST, when the repo has `scripts/hooks/pre-push` (movies): `scripts/hooks/pre-push --range
    forgejo/main..<sha>`, the hook's dry run over exactly what will be pushed. In movies that is the red gate, the
    path-selected checks, the basic tests and the area tests (`identity`, `page`: minutes; see
