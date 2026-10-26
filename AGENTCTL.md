@@ -8,7 +8,7 @@ calls.
 
 - Not on PATH: call it as `~/bin/agentctl`.
 - Python 3, standard library only.
-- Tests: `python3 -m unittest discover -s ~/bin/tests` (96 tests, mutation tests included).
+- Tests: `python3 -m unittest discover -s ~/bin/tests` (98 tests, mutation tests included).
 - `agentctl --help` and `agentctl <cmd> --help` match this page.
 
 ## Standard agent workflow
@@ -250,6 +250,10 @@ rebuilt on a moved main gets a new tip, so it always dispatches fresh runs and n
 **The local pre-check, before any CI.** Before it dispatches a CI landing check, the processor reads the batch tip's
 `scripts/queue-precheck-specs.txt`. This list is owned by the repo: `sbt <cmd>` lines run through `scripts/sbt-warm`,
 `sh <cmd>` lines run in the shell, and the first failure stops. The processor runs the list in its work tree.
+- After the list passes, the pre-check runs the repo's own pre-push hook as `pre-push --range <main>..<tip>`, in the
+  work tree at the tip. That is everything the push's hook will check (lints, sbt specs, drift, scripttests), and
+  the hook pushes nothing. A red gate, a tunnel failure or stale manifests counts as "could not judge", not as a
+  failure.
 - If the tip fails, the same pre-check runs on bare main first. If main fails it too, the queue holds with
   `MAIN RED pre-check …`.
 - Otherwise the processor bisects the batch's entries locally, which costs minutes, not CI hours. It re-runs the
@@ -257,6 +261,11 @@ rebuilt on a moved main gets a new tip, so it always dispatches fresh runs and n
   check wrote. Such files are discarded, never regenerated or kept. The rest of the batch is requeued.
 - When it is unsure (a list it could not run, or a failure that did not reproduce), the CI check decides.
 - Results are cached per tree. With no list at the tip, the pre-check is skipped.
+
+**A hook failure at push time** on a multi-entry batch is bisected locally with `pre-push --range`, and the failing
+boundary is re-run once. Only the culprit is rejected. The rest is rebased without it and, if that tip passes the
+pre-check, pushed under the landing verdict already taken, since that verdict covered a superset. Only a failure
+that `--range` cannot reproduce falls back to retrying each entry alone.
 
 **Main moving under a verdict.** If main moved during a check only through commits that touch none of the paths the
 check covers (the identity landing paths and `.github/convergence-paths.txt` as of the new main), the batch is

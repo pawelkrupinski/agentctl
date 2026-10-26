@@ -1828,6 +1828,60 @@ class QueueProcessor:
         self.held_why = f"main is red for the gate ({why})"
         return True
 
+    def hook_bisect(self, main, tip, entries, logp, checked, depth):
+        """The push's hook refused a multi-entry batch. Bisect LOCALLY with `pre-push --range` (cheap), reject only the
+        culprit, and push the culprit-free batch under the verdict already taken (it covered a superset) once that tip
+        passes the pre-check and the hook. Not reproducible locally: each entry alone, as before."""
+        def alone(why):
+            self.log(f"hook failure not bisected locally ({why}): retrying each entry alone")
+            self.requeue(entries, f"the batch's pre-push hook failed (log {logp}); retrying each entry alone", solo=True)
+            return "progress"
+
+        tips = [e["batch_sha"] for e in entries]
+        ok, sig, text = self.hook_range(main, tip, fresh=True)
+        if ok is not False:
+            return alone("`pre-push --range` does not reproduce it" if ok else "the hook could not judge")
+        lo, hi = 0, len(entries)
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            v, s2, t2 = self.hook_range(main, tips[mid - 1], fresh=True)
+            if v is None:
+                return alone("the hook could not judge a prefix")
+            if v:
+                lo = mid
+            else:
+                hi, sig, text = mid, s2, t2
+        ok2, sig2, text2 = self.hook_range(main, tips[hi - 1], fresh=True)
+        if ok2 is not False or sig2 != sig:
+            return alone(f"`{sig}` did not reproduce at its boundary")
+        culprit, after = entries[hi - 1], entries[hi:]
+        self.reject(culprit, f"the pre-push hook refuses the batch with it, twice (`{sig}`); push log {logp}\n{text2}")
+        rest = entries[:hi - 1] + after
+        if not rest:
+            return "progress"
+        before = tips[hi - 2] if hi > 1 else main
+        newtip = before
+        if after:
+            old = git(self.work, "rev-list", "--reverse", f"{tips[hi - 1]}..{tip}").split()
+            r = git(self.work, "rebase", "--quiet", "--onto", before, tips[hi - 1], tip, check=False)
+            if r.returncode:
+                git(self.work, "rebase", "--abort", check=False)
+                self.requeue(rest, f"requeued after {culprit['id']} was rejected (the rest does not rebase without it)")
+                return "progress"
+            newtip = git(self.work, "rev-parse", "HEAD").strip()
+            new = git(self.work, "rev-list", "--reverse", f"{before}..{newtip}").split()
+            if len(new) != len(old) or any(e["batch_sha"] not in old for e in after):
+                self.requeue(rest, f"requeued after {culprit['id']} was rejected")
+                return "progress"
+            for e in after:
+                e["batch_sha"] = new[old.index(e["batch_sha"])]
+                self.update(e, batch_sha=e["batch_sha"])
+        if self.precheck(newtip, base=main)[0] is not True:
+            self.requeue(rest, f"requeued after {culprit['id']} was rejected (the batch without it fails the pre-check)")
+            return "progress"
+        self.log(f"pushing the batch without {culprit['id']} ({newtip[:10]})" + (" under the landing verdict already taken" if checked else ""))
+        return self.push(main, newtip, rest, checked=checked, depth=depth + 1)
+
     # -- main moving under a verdict
     def moved_outside_check(self, main, cur):
         """True when main..cur touches none of the landing check's paths: the identity landing paths and
@@ -1861,7 +1915,70 @@ class QueueProcessor:
         return moved
 
     # -- the local pre-check
-    def precheck(self, sha, fresh=False):
+    def precheck(self, sha, base=None, fresh=False):
+        """The whole local pre-check of sha: the repo's list (list_precheck), then -- for a batch over base -- the
+        checks the pre-push hook will run on that push (hook_range). (True | False | None, signature, text)."""
+        r = self.list_precheck(sha, fresh)
+        if r[0] is not True or not base or base == sha:
+            return r
+        return self.hook_range(base, sha, fresh)
+
+    def range_hook(self):
+        """The work tree's pre-push hook (core.hooksPath, relative to the checkout as movies sets it), when it can
+        run its checks without pushing (`--range A..B`); else None."""
+        hp = git(self.work, "config", "core.hooksPath", check=False).stdout.strip()
+        if hp:
+            d = hp if os.path.isabs(hp) else os.path.join(self.work, hp)
+        else:
+            d = os.path.join(git(self.work, "rev-parse", "--path-format=absolute", "--git-common-dir").strip(), "hooks")
+        p = os.path.join(d, "pre-push")
+        try:
+            with open(p, errors="replace") as f:
+                return p if os.access(p, os.X_OK) and "--range" in f.read() else None
+        except OSError:
+            return None
+
+    def hook_range(self, base, sha, fresh=False):
+        """(True | False | None, signature, text) of `<pre-push hook> --range base..sha` in the work tree at sha: what
+        the push's hook will run, without pushing. The signature is the checks it says blocked. Red gate, tunnel or
+        stale manifests: None (not the batch's doing). No --range hook: True."""
+        tree = git(self.work, "rev-parse", f"{sha}^{{tree}}").strip()
+        cache = os.path.join(self.qd, "prechecks", f"hook-{base}-{tree}.json")
+        hit = None if fresh else read_json(cache)
+        if hit:
+            return hit["ok"], hit["sig"], hit["text"]
+        git(self.work, "checkout", "-q", "--detach", "-f", sha)
+        git(self.work, "clean", "-fdq", check=False)
+        try:
+            hp = self.range_hook()
+            if not hp:
+                return True, "", "(no pre-push hook with --range)"
+            self.status("pre-checking (pre-push hook)", sha=sha)
+            try:
+                r = subprocess.run([hp, "--range", f"{base}..{sha}"], cwd=self.work, capture_output=True, text=True,
+                                   env=self.env, timeout=3600, stdin=subprocess.DEVNULL)
+                rc, out = r.returncode, r.stdout + r.stderr
+            except (OSError, subprocess.TimeoutExpired) as e:
+                rc, out = 127, str(e)
+        finally:
+            git(self.work, "checkout", "-q", "-f", check=False)
+            git(self.work, "clean", "-fdq", check=False)
+        tail = "\n".join([l for l in out.splitlines() if l.strip()][-40:])
+        if rc == 0:
+            result = (True, "", "")
+        elif rc in (126, 127) or REDGATE.search(out) or TUNNEL_TROUBLE.search(out):
+            result = (None, "pre-push hook could not judge", tail)
+        else:
+            m = re.search(r"blocked by:\s*([^(.]+)", out)
+            names = " ".join(sorted(m.group(1).split())) if m else "(unnamed)"
+            result = (False, f"pre-push hook: {names}", f"$ scripts/hooks/pre-push --range {base[:10]}..{sha[:10]}\n{tail}")
+        self.log(f"pre-push hook --range {sha[:10]}: " + {True: "passed", False: f"FAILED: {result[1]}", None: "could not judge"}[result[0]])
+        if result[0] is not None:
+            os.makedirs(os.path.dirname(cache), exist_ok=True)
+            write_json(cache, {"ok": result[0], "sig": result[1], "text": result[2]})
+        return result
+
+    def list_precheck(self, sha, fresh=False):
         """(True | False | None, signature, text): the repo's scripts/queue-precheck-specs.txt at sha, run in the work
         tree (`sbt <cmd>` through scripts/sbt-warm, `sh <cmd>`), first failure stops. None = could not pre-check.
         No list at sha: True (nothing to pre-check). Whatever a failing check wrote is shown as a diff and discarded:
@@ -1920,7 +2037,7 @@ class QueueProcessor:
         (main proven first, the boundary re-run once), only the culprit is rejected and the rest requeued. Anything
         unsure (could not run, did not reproduce) leaves the verdict to the CI check."""
         tips = [e["batch_sha"] for e in entries]
-        ok, sig, text = self.precheck(tips[-1])
+        ok, sig, text = self.precheck(tips[-1], base=main)
         if ok is not False:
             return None
         bok, bsig, btext = self.precheck(main)
@@ -1934,14 +2051,14 @@ class QueueProcessor:
         lo, hi = 0, len(entries)
         while hi - lo > 1:
             mid = (lo + hi) // 2
-            v, s2, t2 = self.precheck(tips[mid - 1])
+            v, s2, t2 = self.precheck(tips[mid - 1], base=main)
             if v is None:
                 return None
             if v:
                 lo = mid
             else:
                 hi, sig, text = mid, s2, t2
-        ok2, sig2, text2 = self.precheck(tips[hi - 1], fresh=True)
+        ok2, sig2, text2 = self.precheck(tips[hi - 1], base=main, fresh=True)
         if ok2 is not False or sig2 != sig:
             self.log(f"pre-check failure `{sig}` did not reproduce at its boundary: the CI check decides")
             return None
@@ -2042,7 +2159,7 @@ class QueueProcessor:
         if cur != main:
             if checked and cur and depth < 5 and self.moved_outside_check(main, cur):
                 moved = self.rebase_batch(main, cur, tip, entries)
-                if moved and self.precheck(moved)[0] is True:
+                if moved and self.precheck(moved, base=cur)[0] is True:
                     self.log(f"{REMOTE}/main moved {main[:10]} -> {cur[:10]} by paths the landing check does not cover: "
                              f"the verdict holds; pushing the batch rebased onto it ({moved[:10]})")
                     return self.push(cur, moved, entries, checked=True, depth=depth + 1)
@@ -2075,8 +2192,7 @@ class QueueProcessor:
             return "held"
         if len(entries) > 1:
             self.log(f"the batch's pre-push hook failed (log {logp}):\n{tail}")
-            self.requeue(entries, f"the batch's pre-push hook failed (log {logp}); retrying each entry alone", solo=True)
-            return "progress"
+            return self.hook_bisect(main, tip, entries, logp, checked, depth)
         hint = ("\nHINT: the hook could not reach Forgejo (tunnel dropped?): `~/bin/agentctl env --check`, then queue add again"
                 if TUNNEL_TROUBLE.search(out) else "")
         self.reject(entries[0], f"the pre-push hook failed (full log {logp}):\n{tail}{hint}")

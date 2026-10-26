@@ -630,6 +630,43 @@ class QueueTest(Base):
         self.assertNotIn(self.entry(eid)["state"], ("landed",), out)
         self.assertNotIn("pf", self.remote_log())
 
+    # -- the repo's own pre-push hook, run before CI and bisected locally
+    def range_hook(self, lenient_until_pushed=False):
+        """A hook like movies': `--range A..B` runs its checks without pushing. Its `sbt` lint fails a tree holding LINT.
+        lenient_until_pushed: --range passes until the first real push (a failure only the push finds)."""
+        pushed = os.path.join(self.tmp.name, "pushed-once")
+        gate = f'[ -f {pushed} ] || exit 0\n' if lenient_until_pushed else ""
+        self.hook(f'if [ "$1" = --range ]; then\n  echo "range $2" >> {self.tmp.name}/ranges\n  {gate}'
+                  f'  [ -f LINT ] && {{ echo "ProcessAccessLintSpec *** FAILED *** quoted fixture" >&2; '
+                  f'echo "! pre-push blocked by: sbt (3s). Fix, or bypass" >&2; exit 1; }}\n  exit 0\nfi\n'
+                  f'touch {pushed}\necho push >> {self.pushes}\n'
+                  f'git ls-tree -r --name-only "$(git rev-parse HEAD)" | grep -qx LINT && '
+                  f'{{ echo "! pre-push blocked by: sbt (3s). Fix" >&2; exit 1; }}\nexit 0')
+
+    def test_the_hooks_checks_run_before_ci_and_a_lint_culprit_is_bisected_locally(self):
+        self.range_hook()
+        ws = [self.agent(f"hk{i}", {f"identity/H{i}.scala": f"{i}\n", **({"LINT": "x\n"} if i == 2 else {})}) for i in (1, 2, 3)]
+        ids = [self.add(w) for w, _ in ws]
+        rc, out = self.process()
+        rej = self.entry(ids[1])
+        self.assertEqual(rej["state"], "rejected", out)
+        self.assertIn("ProcessAccessLintSpec", rej["why"])
+        self.assertEqual([self.entry(i)["state"] for i in (ids[0], ids[2])], ["landed", "landed"], out)
+        self.assertEqual(len(self.check_calls()), 1)  # no CI for the batch the hook would have refused
+        self.assertEqual(self.push_count(), 1)
+
+    def test_a_hook_failure_at_push_is_bisected_locally_and_the_rest_pushed_under_the_verdict(self):
+        self.range_hook(lenient_until_pushed=True)
+        ws = [self.agent(f"hp{i}", {f"identity/Q{i}.scala": f"{i}\n", **({"LINT": "x\n"} if i == 2 else {})}) for i in (1, 2, 3)]
+        ids = [self.add(w) for w, _ in ws]
+        rc, out = self.process()
+        self.assertEqual(self.entry(ids[1])["state"], "rejected", out)
+        self.assertIn("ProcessAccessLintSpec", self.entry(ids[1])["why"])
+        self.assertEqual([self.entry(i)["state"] for i in (ids[0], ids[2])], ["landed", "landed"], out)
+        self.assertEqual(len(self.check_calls()), 1, out)  # the verdict covered a superset: no new CI check
+        self.assertEqual(self.remote_log()[:2], ["hp3", "hp1"])
+        self.assertFalse(any(self.entry(i).get("solo") for i in ids))
+
     def test_single_red_entry_is_rejected_without_bisecting(self):
         w, _ = self.agent("r1", {"identity/R.scala": "r\n", "RED": "SomeSpec\n"})
         eid = self.add(w)
