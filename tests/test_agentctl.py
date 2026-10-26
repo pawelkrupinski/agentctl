@@ -2,7 +2,7 @@
 import contextlib, datetime as dt, importlib.machinery, importlib.util, io, json, os, subprocess, sys, tempfile, threading, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-TOOL = os.path.join(HERE, "..", "agentctl")
+TOOL = os.environ.get("AGENTCTL_UNDER_TEST") or os.path.join(HERE, "..", "agentctl")
 _loader = importlib.machinery.SourceFileLoader("agentctl", TOOL)
 _spec = importlib.util.spec_from_loader("agentctl", _loader)
 A = importlib.util.module_from_spec(_spec)

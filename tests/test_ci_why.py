@@ -29,8 +29,8 @@ class CiWhyTest(FakeForge):
             run(50, 25, "Main", "main.yml", "in_progress", ""),
             run(40, 20, "Main", "main.yml"),
             run(39, 19, "Identity model convergence", "identity-model-convergence.yml", conclusion="failure"),
-            run(38, 18, "Record scrape fixtures", "record-scrape-fixtures.yml", conclusion="cancelled"),  # says nothing
-            run(30, 15, "Record scrape fixtures", "record-scrape-fixtures.yml"),
+            run(38, 18, "Verify scrape recording", "verify-scrape-recording.yml", conclusion="cancelled"),  # says nothing
+            run(30, 15, "Verify scrape recording", "verify-scrape-recording.yml"),
             run(29, 14, "Unrelated", "other.yml", conclusion="failure"),
         ])
         self.put("run-39.json", {"jobs": imc_jobs, "headSha": SHA, "url": "http://f/runs/19", "number": 19, "status": "completed", "conclusion": "failure"})
@@ -47,7 +47,7 @@ class CiWhyTest(FakeForge):
         self.assertEqual(rc, 1, out)
         self.assertIn("Main: GREEN (run 40 #20)", out)
         self.assertIn("Identity model convergence: RED (run 39 #19, failure)", out)
-        self.assertIn("Record scrape fixtures: GREEN (run 30 #15)", out)  # the cancelled run is passed over
+        self.assertIn("Verify scrape recording: GREEN (run 30 #15)", out)  # the cancelled run is passed over
         self.assertNotIn("Unrelated", out)
         self.assertIn("verdict: TEST FAILURE", out)
         self.assertIn("[test] takes (poland)", out)
@@ -102,7 +102,7 @@ class CiWhyTest(FakeForge):
 
     def test_all_green(self):
         self.put("runs.json", [run(40, 20, "Main", "main.yml"), run(39, 19, "Identity model convergence", "identity-model-convergence.yml"),
-                               run(30, 15, "Record scrape fixtures", "record-scrape-fixtures.yml")])
+                               run(30, 15, "Verify scrape recording", "verify-scrape-recording.yml")])
         rc, out, _ = self.why()
         self.assertEqual(rc, 0, out)
         self.assertIn("main is green", out)

@@ -61,8 +61,8 @@ Examples:
   agentctl wait run 1976 1984 --repo movies --tail 12
 Exit: 0 all green, 1 any red/cancelled, 2 timeout. A waiter that vanished is taken over."""
 CI_WHY_HELP = """Why is main red? For movies: the newest DECIDED run on main (success/failure; cancelled and skipped say
-nothing) of exactly the three workflows the pre-push red gate reads -- Main, Identity model convergence, Record scrape
-fixtures. Other repos: every workflow seen on main. For each red one: failed jobs, their relevant log lines, the commit
+nothing) of exactly the three workflows the pre-push red gate reads -- Main, Identity model convergence, Verify scrape
+recording. Other repos: every workflow seen on main. For each red one: failed jobs, their relevant log lines, the commit
 and author, INFRA-SHAPED (setup-step failure, 0-length log, artifact already exists, ENOENT, ...) vs TEST FAILURE, and
 the gate's clearing rule (a later green run, or `Fixes-Red: <#number|run id>` on every production commit).
   agentctl ci-why                 # movies (or the cwd's repo)
@@ -556,7 +556,7 @@ def cmd_wait(a):
 # ---------------------------------------------------------------- ci-why
 # Exactly the workflows movies' scripts/hooks/pre-push check_redgate reads (GatingWorkflows / GatingWorkflowFiles).
 GATING = {"pawelkrupinski/movies": [("Main", "main.yml"), ("Identity model convergence", "identity-model-convergence.yml"),
-                                    ("Record scrape fixtures", "record-scrape-fixtures.yml")]}
+                                    ("Verify scrape recording", "verify-scrape-recording.yml")]}
 SETUP_STEP = re.compile(r"^(Set up job|Initialize containers|actions/checkout|Checkout|.*(download|upload)-artifact|.*cache@|Set up .*runner)", re.I)
 INFRA_LOG = re.compile(r"artifact already exists|ENOENT|No space left on device|Cannot connect to the Docker daemon|"
                        r"connection (refused|reset)|Could not resolve host|TLS handshake timeout|runner .* lost|context deadline exceeded|"
@@ -848,7 +848,7 @@ def cmd_land(a):
             stash = Stash(repo)
             stash.save()
             err(f"stashed local changes as {stash.name} ({stash.sha[:10]})")
-        a.landed_sha, a.pushed_at = None, None
+        a.landed_sha, a.pushed_at, a.waiting = None, None, None
         with land_lock(repo) as held:
             if not held:
                 print("NOT LANDED: timed out waiting for the landing lock (another land is running its checks); land again.")
@@ -857,6 +857,8 @@ def cmd_land(a):
     finally:
         if stash and not stash.restore():
             print(f"WARNING: local changes are in stash {stash.name}, not restored")
+    if rc == 0 and a.waiting:  # main was red: the change waits on `waiting`, and lands with it once main is green
+        rc, a.landed_sha, a.pushed_at = await_entry(repo, a.waiting["id"])
     if rc != 0 or not a.landed_sha or getattr(a, "no_watch", False):
         return rc
     # the lock is free again: the next lander goes while this one watches main's CI
@@ -892,6 +894,11 @@ def land_loop(repo, main_ref, sh, log_path, a):
         if problems:
             print("NOT LANDED: prepush-check refused:\n  " + "\n  ".join(problems))
             return 1
+        reds = gate_reds(repo) if waiting_supported(repo) else set()
+        if reds:
+            commits = waiting_commits(repo, f"{REMOTE}/main", head)
+            if must_wait(repo, commits, reds):
+                return waiting_enqueue(repo, head, commits, log_path, a)
         hook = precheck_hook(repo)
         if hook:
             # CHECK FIRST: the hook's dry run over exactly what the push will carry (its pass is stored, so the push's own
@@ -1059,11 +1066,391 @@ def watch_landed(repo, sha, pushed_at, o_r=None):
         time.sleep(next(delays))
 
 
+# ---------------------------------------------------------------- waiting: production changes held while main is red
+# The owner (2026-10-26): "when waiting for main to go green, merge all waiting changes into one waiting branch (always
+# use the same name) and merge it when main is green". While the gate is red, `land` puts a production change onto the
+# local branch `waiting` (worktree <main clone>-wt-waiting) instead of being refused: rebased onto it, the local checks
+# run on the combined tip, `WAITING <sha> (n changes queued on waiting)`. One processor (`waiting run`, detached, locked)
+# watches the gate; once main is green it rebuilds `waiting` on forgejo/main, runs the hook's dry run, pushes the whole
+# branch in ONE push, deletes it, and every waiting `land` goes on to its LANDED and WATCH. Tools-only commits and
+# Fixes-Red fixes never wait (the hook lets them land while red). Replaces the merge queue.
+WAITING_BRANCH = "waiting"
+WAITING_DIR = os.path.join(HOME, ".cache", "agentctl", "waiting")
+PRODUCTION_GLOBS = ("*/src/main/*", "conf/*", "*/conf/*", "build.sbt", "project/*", "infra/nix/*", "infra/kubernetes/*",
+                    "Dockerfile")
+WAITING_AWAIT_TIMEOUT = 24 * 3600
+WAITING_POLL = 60          # the processor's gate poll floor (backs off to 300 s)
+WAITING_HELP = """While main is red, production changes wait on ONE local branch, `waiting`, and land together when main is green.
+  agentctl land                  # main red + a production change without Fixes-Red: -> WAITING <sha> (n changes queued on
+                                 # waiting); land keeps running until the branch lands: LANDED <sha> + the WATCH
+  agentctl waiting status        # the changes on `waiting`, the processor, the gate
+  agentctl waiting cancel <id>   # drop a change (its land exits NOT LANDED: cancelled); `waiting` is rebuilt without it
+  agentctl waiting run [--once]  # the processor (land starts it detached; one at a time, by lock)
+`waiting` lives in the main clone (worktree <clone>-wt-waiting). Enqueueing cherry-picks the change onto it and runs the
+repo hook's checks (`scripts/hooks/pre-push --checks-only forgejo/main..waiting`: everything but the red gate) on the
+combined tip; a conflict or a failure rejects only that change. The processor polls the gate (60 s -> 5 min); on green
+it rebuilds `waiting` on forgejo/main (a conflicting change is rejected alone), runs the hook's dry run, pushes ONE push
+through the hook, and deletes the branch. A failing batch is searched prefix by prefix and only the culprit rejected.
+State: ~/.cache/agentctl/waiting/<repo>/ (entries, processor.log)."""
+
+
+def is_production_path(p):
+    """movies' pre-push is_production_path: what reaches a pod or a fleet host (the rest lands while red)."""
+    return any(fnmatch.fnmatch(p, g) for g in PRODUCTION_GLOBS)
+
+
+def gate_reds(repo):
+    """The ids (run numbers and run ids) of the gating workflows' red runs on main; empty when green, not gated, or the
+    gate cannot be read (the hook then judges the push itself)."""
+    try:
+        o_r = slug(repo)
+        if o_r not in GATING:
+            return set()
+        reds = set()
+        for _name, decided, _newer in gate_runs(o_r):
+            if decided and decided.get("conclusion") != "success":
+                reds |= {str(decided.get("number")), str(decided.get("databaseId"))}
+        return reds
+    except Exception as e:
+        err(f"could not read the gate ({str(e)[:160]}): the hook judges the push")
+        return set()
+
+
+def waiting_supported(repo):
+    """A repo hook, if any, must have --checks-only (its checks without the red gate) to check a waiting tip."""
+    hook = precheck_hook(repo)
+    if not hook:
+        return True
+    with open(hook) as f:
+        return "--checks-only" in f.read()
+
+
+def waiting_commits(repo, base, head):
+    return git(repo, "rev-list", "--reverse", f"{base}..{head}").split()
+
+
+def must_wait(repo, commits, reds):
+    """A production commit with no Fixes-Red: naming a red run waits; tools-only and declared fixes go (the hook's rule)."""
+    for c in commits:
+        paths = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", c).split("\n")
+        if not any(p and is_production_path(p) for p in paths):
+            continue
+        fixes = git(repo, "log", "-1", "--format=%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", c).strip()
+        if not ({f.strip().lstrip("#") for f in fixes.split(",") if f.strip()} & reds):
+            return True
+    return False
+
+
+def waiting_state(repo):
+    common = os.path.realpath(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
+    d = os.path.join(WAITING_DIR, re.sub(r"[^A-Za-z0-9._-]", "_", common.strip("/")))
+    os.makedirs(os.path.join(d, "entries"), exist_ok=True)
+    clone = os.path.dirname(common) if os.path.basename(common) == ".git" else common
+    return d, clone, f"{clone}-wt-waiting"
+
+
+def waiting_entries(d, open_only=True):
+    out = []
+    for p in sorted(glob.glob(os.path.join(d, "entries", "*.json"))):
+        try:
+            with open(p) as f:
+                e = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if not open_only or e.get("status") == "waiting":
+            out.append(e)
+    return sorted(out, key=lambda e: e["seq"])
+
+
+def save_entry(d, e):
+    p = os.path.join(d, "entries", f"{e['id']}.json")
+    with open(p + ".tmp", "w") as f:
+        json.dump(e, f, indent=1)
+    os.replace(p + ".tmp", p)
+
+
+def wlog(d, msg):
+    with open(os.path.join(d, "processor.log"), "a") as f:
+        f.write(f"{ts()} {msg}\n")
+
+
+def ensure_waiting_tree(repo, wt):
+    if not os.path.isdir(wt):
+        if git_ok(repo, "rev-parse", "--verify", "-q", f"refs/heads/{WAITING_BRANCH}"):
+            git(repo, "worktree", "add", "-q", wt, WAITING_BRANCH)
+        else:
+            git(repo, "worktree", "add", "-q", "-b", WAITING_BRANCH, wt, f"{REMOTE}/main")
+    return wt
+
+
+def drop_waiting_tree(repo, wt):
+    if os.path.isdir(wt):
+        git(repo, "worktree", "remove", "--force", wt, check=False)
+    git(repo, "worktree", "prune", check=False)
+    git(repo, "branch", "-D", WAITING_BRANCH, check=False)
+
+
+def pick(wt, commits):
+    """Cherry-pick commits onto wt's HEAD: None, or the conflicting files (the pick aborted)."""
+    r = git(wt, "cherry-pick", "--allow-empty", "--keep-redundant-commits", *commits, check=False)
+    if r.returncode == 0:
+        return None
+    files = git(wt, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
+    git(wt, "cherry-pick", "--abort", check=False)
+    return files or [r.stderr.strip()[:200]]
+
+
+def run_hook(wt, mode, base):
+    """(ok, output) of the checkout's scripts/hooks/pre-push <mode> base..HEAD; (True, '') when the repo has no hook."""
+    hook = precheck_hook(wt)
+    if not hook:
+        return True, ""
+    with open(hook) as f:
+        has_checks_only = "--checks-only" in f.read()
+    if mode == "--checks-only" and not has_checks_only:
+        return False, ("scripts/hooks/pre-push has no --checks-only mode (the checks without the red gate) at this base: "
+                       "the waiting branch needs the hook from movies' 'waiting' change")
+    head = git(wt, "rev-parse", "HEAD").strip()
+    r = subprocess.run([hook, mode, f"{base}..{head}"], cwd=wt, capture_output=True, text=True, env=tool_env())
+    return r.returncode == 0, r.stdout + r.stderr
+
+
+def tail_of(out, n=25):
+    return "\n  ".join([l for l in out.splitlines() if l.strip()][-n:])
+
+
+def waiting_enqueue(repo, head, commits, log_path, a):
+    """Under the landing lock: put the change's commits onto `waiting` and check the combined tip. Sets a.waiting."""
+    d, _clone, wt = waiting_state(repo)
+    git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
+    ensure_waiting_tree(repo, wt)
+    before = git(wt, "rev-parse", "HEAD").strip()
+    conflict = pick(wt, commits)
+    if conflict:
+        print(f"NOT LANDED: main is red, and the change conflicts with the changes already waiting on `{WAITING_BRANCH}` "
+              f"in: {', '.join(conflict)}. Rebase onto them (git rebase {WAITING_BRANCH}) or wait for them to land.")
+        return 1
+    base = git(wt, "merge-base", "HEAD", f"{REMOTE}/main").strip()
+    err(f"main is red: checking {head[:10]} on `{WAITING_BRANCH}` with the {len(waiting_entries(d))} change(s) already "
+        f"waiting (scripts/hooks/pre-push --checks-only; log {log_path})")
+    ok, out = run_hook(wt, "--checks-only", base)
+    with open(log_path, "a") as f:
+        f.write(f"=== waiting checks {ts()} {head}\n{out}\n")
+    if not ok:
+        git(wt, "reset", "--hard", "-q", before)
+        print(f"NOT LANDED: the checks failed on `{WAITING_BRANCH}` (your change on top of the waiting ones). "
+              f"Last lines (full log {log_path}):\n  {tail_of(out)}")
+        return 1
+    seq = max([e["seq"] for e in waiting_entries(d, open_only=False)] + [0]) + 1
+    e = {"id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{seq}", "seq": seq,
+         "worktree": repo, "head": head, "commits": commits, "status": "waiting", "created": ts(),
+         "tip": git(wt, "rev-parse", "HEAD").strip()}
+    save_entry(d, e)
+    n = len(waiting_entries(d))
+    print(f"WAITING {e['tip']} ({n} change{'s' if n != 1 else ''} queued on {WAITING_BRANCH}; entry {e['id']})", flush=True)
+    a.waiting = e
+    spawn_waiting_processor(repo)
+    return 0
+
+
+def processor_lock_path(d):
+    return os.path.join(d, "processor.lock")
+
+
+def waiting_processor_alive(d):
+    with open(processor_lock_path(d), "a+") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(f, fcntl.LOCK_UN)
+        return False
+
+
+def spawn_waiting_processor(repo):
+    d, _c, _w = waiting_state(repo)
+    if waiting_processor_alive(d):
+        return
+    with open(os.path.join(d, "processor.log"), "a") as logf:
+        subprocess.Popen([sys.executable, os.path.realpath(__file__), "waiting", "run", "--repo", repo],
+                         stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=repo)
+
+
+def await_entry(repo, eid):
+    """Block until the entry lands or is rejected: (rc, landed sha, pushed_at). Restarts a dead processor."""
+    d, _c, _w = waiting_state(repo)
+    p = os.path.join(d, "entries", f"{eid}.json")
+    t0, delays = time.time(), backoff(15, 60)
+    timeout = float(os.environ.get("AGENTCTL_WAITING_TIMEOUT", WAITING_AWAIT_TIMEOUT))
+    while True:
+        with open(p) as f:
+            e = json.load(f)
+        if e["status"] == "landed":
+            print(f"LANDED {e['landed_sha']} (with the {e.get('batch', 1)} change(s) of `{WAITING_BRANCH}`, once main was green)",
+                  flush=True)
+            return 0, e["landed_sha"], e.get("pushed_at")
+        if e["status"] in ("rejected", "cancelled"):
+            print(f"NOT LANDED: {e.get('why') or e['status']}")
+            return 1, None, None
+        if time.time() - t0 > timeout:
+            print(f"NOT LANDED (still waiting): entry {eid} on `{WAITING_BRANCH}` after {int(timeout // 3600)} h; "
+                  "`agentctl waiting status`")
+            return 2, None, None
+        spawn_waiting_processor(repo)
+        time.sleep(next(delays))
+
+
+def reject(d, e, why):
+    e.update(status="rejected", why=why, decided=ts())
+    save_entry(d, e)
+    wlog(d, f"rejected {e['id']}: {why.splitlines()[0]}")
+
+
+def rebuild(repo, d, wt, entries, base):
+    """`waiting` = base + each entry's commits, in order; a conflicting entry is rejected alone. Returns the kept ones."""
+    git(wt, "reset", "--hard", "-q", base)
+    kept = []
+    for e in entries:
+        conflict = pick(wt, e["commits"])
+        if conflict:
+            reject(d, e, f"main moved while it waited and the change no longer applies (conflicts in: "
+                         f"{', '.join(conflict)}): rebase onto forgejo/main and land again")
+            continue
+        e["tip"] = git(wt, "rev-parse", "HEAD").strip()
+        kept.append(e)
+    return kept
+
+
+def find_culprit(repo, d, wt, entries, base):
+    """The first entry whose prefix fails the checks (rejected), or None when every prefix passes (a flake)."""
+    for i in range(len(entries)):
+        kept = rebuild(repo, d, wt, entries[: i + 1], base)
+        if len(kept) < i + 1:
+            return True
+        ok, out = run_hook(wt, "--checks-only", base)
+        if not ok:
+            reject(d, entries[i], f"the checks failed with your change on `{WAITING_BRANCH}` once main was green:\n  "
+                                  f"{tail_of(out)}")
+            return entries[i]
+    return None
+
+
+def waiting_round(repo, d, wt):
+    """One attempt at landing `waiting`: 'empty', 'red', 'landed', 'retry'."""
+    entries = waiting_entries(d)
+    if not entries:
+        return "empty"
+    if gate_reds(repo):
+        return "red"
+    with land_lock(repo) as held:
+        if not held:
+            return "retry"
+        git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
+        ensure_waiting_tree(repo, wt)
+        base = git(repo, "rev-parse", f"{REMOTE}/main").strip()
+        entries = rebuild(repo, d, wt, entries, base)
+        if not entries:
+            return "empty"
+        tip = git(wt, "rev-parse", "HEAD").strip()
+        wlog(d, f"main is green: landing {len(entries)} change(s) at {tip[:10]} on {base[:10]}")
+        ok, out = run_hook(wt, "--range", f"{REMOTE}/main")
+        if ok:
+            pushed_at = time.time()
+            r = subprocess.run(push_argv(REMOTE, WAITING_BRANCH), cwd=wt, capture_output=True, text=True, env=tool_env())
+            out = r.stdout + r.stderr
+            ok = r.returncode == 0
+            if ok:
+                git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
+                if not landed(repo, tip, f"refs/remotes/{REMOTE}/main"):
+                    wlog(d, f"pushed {tip[:10]} but it is not on main after a fetch; retrying")
+                    return "retry"
+                for e in entries:
+                    e.update(status="landed", landed_sha=e["tip"], pushed_at=pushed_at, batch=len(entries), decided=ts())
+                    save_entry(d, e)
+                wlog(d, f"LANDED {tip} ({len(entries)} change(s) in one push)")
+                drop_waiting_tree(repo, wt)
+                return "landed"
+            if RACE.search(out):
+                return "retry"
+        if REDGATE.search(out):
+            wlog(d, "the gate went red again before the push: waiting")
+            return "red"
+        wlog(d, f"the batch failed its checks:\n  {tail_of(out, 12)}")
+        culprit = find_culprit(repo, d, wt, entries, base)
+        if culprit is None:  # every prefix passed alone: flaky or infra; the whole batch is told, never one guessed
+            for e in entries:
+                reject(d, e, f"the waiting batch failed its checks once main was green, but no single change did "
+                             f"(flaky or infra?):\n  {tail_of(out)}")
+        return "retry"
+
+
+def waiting_run(repo, once=False):
+    d, _c, wt = waiting_state(repo)
+    with open(processor_lock_path(d), "a+") as lockf:
+        try:
+            fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return 0
+        delays = backoff(float(os.environ.get("AGENTCTL_WAITING_POLL", WAITING_POLL)), 300)
+        while True:
+            state = waiting_round(repo, d, wt)
+            if state == "empty":
+                if not waiting_entries(d):
+                    drop_waiting_tree(repo, wt)
+                return 0
+            if once and state in ("red", "landed"):
+                return 0
+            if state == "landed":
+                delays = backoff(float(os.environ.get("AGENTCTL_WAITING_POLL", WAITING_POLL)), 300)
+                continue
+            time.sleep(next(delays) if state == "red" else 5)
+
+
+def cmd_waiting(a):
+    repo = git(a.repo or os.getcwd(), "rev-parse", "--show-toplevel").strip()
+    d, _c, wt = waiting_state(repo)
+    if a.wcmd == "run":
+        return waiting_run(repo, once=a.once)
+    if a.wcmd == "status":
+        entries = waiting_entries(d)
+        print(f"waiting {d} (branch `{WAITING_BRANCH}`, worktree {wt}{'' if os.path.isdir(wt) else ': none'})")
+        print(f"processor: {'running' if waiting_processor_alive(d) else 'not running'}")
+        reds = gate_reds(repo)
+        print(f"gate: {'RED (' + ', '.join(sorted(reds)) + ')' if reds else 'green (or unread)'}")
+        for e in entries:
+            print(f"  {e['id']}  {e['worktree']}  {len(e['commits'])} commit(s), tip {e.get('tip', '')[:10]}, since {e['created']}")
+        if not entries:
+            print("  (no change waiting)")
+        return 0
+    if a.wcmd == "cancel":
+        hits = [e for e in waiting_entries(d) if a.entry in e["id"]]
+        if len(hits) != 1:
+            print(f"no single waiting change matches {a.entry!r}: `agentctl waiting status`")
+            return 1
+        with land_lock(repo) as held:
+            if not held:
+                print("could not take the landing lock")
+                return 1
+            e = hits[0]
+            e.update(status="cancelled", why="cancelled by `agentctl waiting cancel`", decided=ts())
+            save_entry(d, e)
+            rest = waiting_entries(d)
+            if rest and os.path.isdir(wt):
+                base = git(wt, "merge-base", "HEAD", f"{REMOTE}/main").strip()
+                rebuild(repo, d, wt, rest, base)
+            elif not rest:
+                drop_waiting_tree(repo, wt)
+        print(f"cancelled {e['id']}")
+        return 0
+    return 2
+
+
 # ---------------------------------------------------------------- queue (retired)
 QUEUE_RETIRED = """NOT QUEUED: the merge queue is RETIRED (2026-10-26). There is no pre-merge CI left to batch: the landing check
 is no merge requirement any more. Land every change -- identity changes included -- with `~/bin/agentctl land` (Bash
 run_in_background=true): it waits for the repository's landing lock, rebases, and runs the pre-push hook, which runs
-the basic checks plus the identity / page area tests your paths select, locally. Main's CI tests everything after."""
+the basic checks plus the identity / page area tests your paths select, locally. While main is red, a production
+change waits on the `waiting` branch and lands with the others once main is green (`agentctl waiting status`)."""
 
 
 def cmd_queue_retired(a):
@@ -1798,10 +2185,20 @@ def main(argv=None):
                        "every target run finished, or a duplicate of an older loop on the same runs. --kill sends SIGTERM "
                        "(to them and their children).")
     o.add_argument("--kill", action="store_true")
+    wg = sub.add_parser("waiting", help="production changes held on ONE `waiting` branch while main is red; landed together on green",
+                        description=WAITING_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    wgs = wg.add_subparsers(dest="wcmd", required=True)
+    wgs.add_parser("status", help="the changes on `waiting`, the processor, the gate").add_argument("--repo")
+    wgc = wgs.add_parser("cancel", help="drop a waiting change; `waiting` is rebuilt without it")
+    wgc.add_argument("entry")
+    wgc.add_argument("--repo")
+    wgr = wgs.add_parser("run", help="the processor (land starts it detached; one at a time, by lock)")
+    wgr.add_argument("--once", action="store_true")
+    wgr.add_argument("--repo")
     q = sub.add_parser("queue", help="RETIRED 2026-10-26: use `agentctl land` (prints this and exits 2)")
     q.add_argument("rest", nargs=argparse.REMAINDER)
     a = ap.parse_args(argv)
-    return {"queue": cmd_queue_retired, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd](a)
+    return {"queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd](a)
 
 
 if __name__ == "__main__":
