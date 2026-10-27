@@ -6798,6 +6798,23 @@ def cmd_maintain(a):
     return 0
 
 
+FIXTURE_SERVER = re.compile(r"serve\.py\b|FixtureServerMain")
+FIXTURE_MAX_AGE = 6 * 3600
+
+
+def fixture_reason(cmd, ppid, etime, isdir=os.path.isdir):
+    """Why a test fixture server (`python -I <tmp>/serve.py`, tools.FixtureServerMain) is stale, or None: its temp dir is
+    gone, or it is older than 6 h and orphaned (no live parent test)."""
+    if not FIXTURE_SERVER.search(cmd) or "agentctl" in cmd:
+        return None
+    m = re.search(r"(/(?:private/)?var/folders/\S+?/tmp\.[^/\s]+|/(?:private/)?tmp/\S*?)/serve\.py", cmd)
+    if m and not isdir(m.group(1)):
+        return f"fixture server: its temp dir {m.group(1)} is gone"
+    if tosec(etime) >= FIXTURE_MAX_AGE and ppid == 1:
+        return f"fixture server up {etime}, older than 6 h with no live parent test"
+    return None
+
+
 def cmd_orphans(a):
     sbt_only = getattr(a, "sbt_only", False)  # the daily sweep: stuck sbt servers only
     safe = getattr(a, "safe", False)  # the scheduled reaper: never an owner merely on old code (it re-execs itself)
@@ -6883,6 +6900,10 @@ def cmd_orphans(a):
             reasons.append(f"worktree missing: {', '.join(gone)}")
         if reasons:
             found.append(("sbt", pid, etime, "; ".join(reasons), f"{cwd}: {cmd[:120]}"))
+    for pid, ppid, etime, cmd in procs:  # stale test fixture servers: listed first, reaped, logged
+        why = fixture_reason(cmd, ppid, etime) if pid not in me else None
+        if why:
+            found.append(("fixture", pid, etime, why, cmd[:160]))
     try:
         if not live and os.environ.get("AGENTCTL_SBT_REAP") == "0":
             raise OSError("tests: the real state is left alone")

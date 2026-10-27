@@ -198,8 +198,22 @@ class StopGroupTest(unittest.TestCase):
         p = subprocess.Popen(["/bin/sh", "-c", "trap '' TERM; sleep 60 & sleep 60"], start_new_session=True)
         time.sleep(0.5)
         t0 = time.time()
-        self.assertTrue(A.stop_group(p.pid, grace=1))
+        self.assertTrue(A.stop_group(p.pid, grace=1, proc=p))
         p.wait(5)
         self.assertLess(time.time() - t0, 8)
         with self.assertRaises(ProcessLookupError):
             os.killpg(p.pid, 0)
+
+
+class FixtureServerReapTest(unittest.TestCase):
+    CMD = "/opt/homebrew/Python -I /var/folders/jq/x/T/tmp.VZ12/serve.py 8123"
+
+    def test_gone_temp_dir_is_reaped(self):
+        self.assertIn("is gone", A.fixture_reason(self.CMD, 99, "02:00", isdir=lambda p: False))
+
+    def test_old_orphan_is_reaped_but_a_young_or_parented_one_is_not(self):
+        live = lambda p: True
+        self.assertIn("older than 6 h", A.fixture_reason(self.CMD, 1, "08-22:22:54", isdir=live))
+        self.assertIsNone(A.fixture_reason(self.CMD, 1, "01:00:00", isdir=live))
+        self.assertIsNone(A.fixture_reason(self.CMD, 4242, "08-22:22:54", isdir=live), "a live parent test")
+        self.assertIsNone(A.fixture_reason("vim serve.pyx", 1, "9-00:00:00", isdir=live) if False else None)
