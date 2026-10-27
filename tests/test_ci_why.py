@@ -46,14 +46,70 @@ class CiWhyTest(FakeForge):
         rc, out, _ = self.why()
         self.assertEqual(rc, 1, out)
         self.assertIn("Main: GREEN (run 40 #20)", out)
-        self.assertIn("Identity model convergence: RED (run 39 #19, failure)", out)
+        self.assertIn("Identity model convergence: RED (run 39 #19, failure; red for ", out)
         self.assertIn("Verify scrape recording: GREEN (run 30 #15)", out)  # the cancelled run is passed over
-        self.assertNotIn("Unrelated", out)
+        gate, _, outside = out.partition("Outside the gate")
+        self.assertNotIn("Unrelated", gate)  # not the gate's: it decides nothing about a push
+        self.assertIn("Unrelated: RED for", outside)  # ...but a red is shown, with how long
         self.assertIn("verdict: TEST FAILURE", out)
         self.assertIn("[test] takes (poland)", out)
         self.assertIn("expected X got Y", out)
         self.assertIn("Agent Smith <a@b>: resolver: tweak", out)
         self.assertIn("`Fixes-Red: 19` (or `Fixes-Red: 39`)", out)
+
+    def test_reds_outside_the_gate_are_listed_with_how_long_they_have_been_red(self):
+        def r(rid, wf, conclusion, at, status="completed"):
+            return {**run(rid, rid, wf, wf.lower().replace(" ", "-") + ".yml", status, conclusion), "updatedAt": at}
+        self.put("runs.json", [
+            r(70, "Main", "success", "2026-10-27T05:00:00Z"),
+            r(69, "Identity findings report", "failure", "2026-10-27T04:00:00Z"),
+            r(68, "Identity findings report", "failure", "2026-10-26T04:00:00Z"),
+            r(67, "Identity findings report", "cancelled", "2026-10-25T09:00:00Z"),  # says nothing
+            r(66, "Identity findings report", "failure", "2026-10-25T04:00:00Z"),
+            r(65, "Identity findings report", "success", "2026-10-24T04:00:00Z"),
+            r(64, "Nightly stress", "success", "2026-10-27T01:00:00Z"),
+            r(63, "Nightly stress", "failure", "2026-10-26T01:00:00Z"),
+            r(62, "Identity model convergence", "success", "2026-10-27T03:00:00Z"),
+            r(61, "Verify scrape recording", "success", "2026-10-27T03:00:00Z"),
+        ])
+        os.environ["AGENTCTL_NOW"] = "2026-10-27T06:00:00Z"
+        try:
+            rc, out, _ = self.why()
+        finally:
+            del os.environ["AGENTCTL_NOW"]
+        self.assertEqual(rc, 0, out)  # the gate is green: outside reds never make ci-why red
+        self.assertIn("main is green for the gate", out)
+        self.assertIn("Outside the gate", out)
+        self.assertIn("Identity findings report: RED for 2d 2h since 2026-10-25T04:00:00Z (3 failed runs; newest run 69 #69)",
+                      out)
+        self.assertNotIn("Nightly stress", out)  # green again
+
+    def test_a_gate_red_says_how_long(self):
+        self.put("runs.json", [
+            {**run(81, 81, "Main", "main.yml", conclusion="failure"), "updatedAt": "2026-10-27T05:30:00Z"},
+            {**run(80, 80, "Main", "main.yml", conclusion="failure"), "updatedAt": "2026-10-27T03:00:00Z"},
+            {**run(79, 79, "Main", "main.yml"), "updatedAt": "2026-10-27T01:00:00Z"},
+        ])
+        self.put("run-81.json", {"jobs": [], "headSha": SHA, "url": "u", "number": 81, "status": "completed",
+                                 "conclusion": "failure"})
+        self.put("run-81.log", "")
+        os.environ["AGENTCTL_NOW"] = "2026-10-27T06:00:00Z"
+        try:
+            rc, out, _ = self.why()
+        finally:
+            del os.environ["AGENTCTL_NOW"]
+        self.assertEqual(rc, 1, out)
+        self.assertIn("Main: RED (run 81 #81, failure; red for 3h 0m (2 failed runs))", out)
+
+    def test_gate_reds_reads_the_gate_runs(self):
+        # land's red check: it swallows any error into "green", so a shape change in gate_runs must not break it
+        self.put("runs.json", [run(91, 41, "Main", "main.yml", conclusion="failure"),
+                               run(90, 40, "Identity model convergence", "identity-model-convergence.yml")])
+        saved, A.slug = A.slug, lambda repo: "pawelkrupinski/movies"
+        try:
+            self.assertEqual(A.gate_reds("/any"), {"41", "91"})
+        finally:
+            A.slug = saved
 
     def test_infra_shaped(self):
         self.scenario([{**job("leg (spain)", conclusion="failure"), "steps": [step("Set up job", "failure")]},

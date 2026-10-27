@@ -164,6 +164,11 @@ main. For each red run it shows:
 - a newer run in flight that may clear it;
 - the clearing rule.
 
+A gate red says how long it has been red (`red for 3h 0m (2 failed runs)`: from the oldest failure of the current
+streak). For movies it then lists every workflow OUTSIDE the gate whose newest decided run on main is red, oldest red
+first, each with how long and since when (the owner, 2026-10-27: a red nobody is shown gets ignored). Those never make
+`ci-why` exit 1: they block no push.
+
 `ci-why <run id>` explains one run. Exit: 0 green, 1 red (or a run explained).
 
 ```

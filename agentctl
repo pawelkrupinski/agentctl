@@ -748,7 +748,8 @@ SETUP_STEP = re.compile(r"^(Set up job|Initialize containers|actions/checkout|Ch
 INFRA_LOG = re.compile(r"artifact already exists|ENOENT|No space left on device|Cannot connect to the Docker daemon|"
                        r"connection (refused|reset)|Could not resolve host|TLS handshake timeout|runner .* lost|context deadline exceeded|"
                        r"The operation was canceled|exit code 137|Killed", re.I)
-RUN_FIELDS = "databaseId,number,status,conclusion,headSha,url,displayTitle,workflowName,createdAt"
+RUN_FIELDS = "databaseId,number,status,conclusion,headSha,url,displayTitle,workflowName,createdAt,updatedAt"
+RED_CONCLUSIONS = ("failure", "timed_out")
 
 
 def repo_path_for(o_r):
@@ -793,7 +794,7 @@ def classify_job(job, lines, raw=(0, [])):
 
 
 def gate_runs(o_r):
-    """[(workflow, newest decided run on main | None, newer unfinished run | None)]."""
+    """[(workflow, newest decided run on main | None, newer unfinished run | None, red_streak of its runs)]."""
     flows = GATING.get(o_r)
     if not flows:
         recent = gh_json(o_r, "run", "list", "--branch", "main", "--limit", "40", "--json", RUN_FIELDS)
@@ -805,8 +806,51 @@ def gate_runs(o_r):
         newer = next((r for r in runs if r.get("status") != "completed"), None)
         if newer and decided and newer["databaseId"] < decided["databaseId"]:
             newer = None
-        out.append((name, decided, newer))
+        out.append((name, decided, newer, red_streak(runs)))
     return out
+
+
+def red_streak(runs):
+    """(since, count) of the red streak that `runs` (one workflow's on main, newest first) ends on: its decided runs up
+    to the newest success, `since` the oldest failure's completion (when CI first said red). (None, 0) when green."""
+    decided = [r for r in runs if r.get("status") == "completed" and r.get("conclusion") in ("success",) + RED_CONCLUSIONS]
+    streak = list(itertools.takewhile(lambda r: r.get("conclusion") in RED_CONCLUSIONS, decided))
+    if not streak:
+        return None, 0
+    oldest = streak[-1]
+    return oldest.get("updatedAt") or oldest.get("createdAt"), len(streak)
+
+
+def red_for(since, now=None):
+    """'3d 4h' / '5h 12m' / '7m' since an ISO time, or '?' when it cannot be read."""
+    try:
+        t = dt.datetime.fromisoformat(str(since).replace("Z", "+00:00"))
+    except ValueError:
+        return "?"
+    if now is None:  # $AGENTCTL_NOW: the tests' clock
+        now = (dt.datetime.fromisoformat(os.environ["AGENTCTL_NOW"].replace("Z", "+00:00")) if os.environ.get("AGENTCTL_NOW")
+               else dt.datetime.now(dt.timezone.utc))
+    mins = max(0, int((now - t).total_seconds() // 60))
+    d, h, m = mins // 1440, mins % 1440 // 60, mins % 60
+    return f"{d}d {h}h" if d else f"{h}h {m}m" if h else f"{m}m"
+
+
+def outside_gate(o_r):
+    """[(workflow, newest decided run, since, count)] for each workflow on main OUTSIDE the gate whose newest decided
+    run is red: not blocking a push, but red, and for how long (the owner, 2026-10-27: a red nobody is shown is a red
+    that gets ignored)."""
+    gated = {n for n, _ in GATING.get(o_r, [])}
+    runs = gh_json(o_r, "run", "list", "--branch", "main", "--limit", "200", "--json", RUN_FIELDS)
+    out = []
+    for name in dict.fromkeys(r.get("workflowName") for r in runs):
+        if not name or name in gated:
+            continue
+        mine = [r for r in runs if r.get("workflowName") == name]
+        since, count = red_streak(mine)
+        if count:
+            decided = next(r for r in mine if r.get("status") == "completed" and r.get("conclusion") in RED_CONCLUSIONS)
+            out.append((name, decided, since, count))
+    return sorted(out, key=lambda x: str(x[2]))
 
 
 def explain_run(o_r, run, tail, repo=None):
@@ -852,7 +896,7 @@ def ci_why(o_r, tail=6, run_id=None, repo=None):
         lines, _ = explain_run(o_r, {"databaseId": int(run_id)}, tail, repo)
         return True, f"run {o_r}#{run_id}\n" + "\n".join(lines)
     out, red = [], False
-    for name, decided, newer in gate_runs(o_r):
+    for name, decided, newer, (since, count) in gate_runs(o_r):
         pending = f"; newer run {newer['databaseId']} (#{newer.get('number')}) {newer.get('status')} may clear it" if newer else ""
         if not decided:
             out.append(f"{name}: no decided run on main")
@@ -861,12 +905,23 @@ def ci_why(o_r, tail=6, run_id=None, repo=None):
             out.append(f"{name}: GREEN (run {decided['databaseId']} #{decided.get('number')})")
             continue
         red = True
-        out.append(f"{name}: RED (run {decided['databaseId']} #{decided.get('number')}, {decided['conclusion']}){pending}")
+        streak = f"; red for {red_for(since)} ({count} failed run{'s' if count != 1 else ''})" if count else ""
+        out.append(f"{name}: RED (run {decided['databaseId']} #{decided.get('number')}, {decided['conclusion']}{streak}){pending}")
         lines, num = explain_run(o_r, decided, tail, repo)
         out += lines
         out.append(f"  clears when: a later {name} run on main is green, or every pushed commit touching a production path "
                    f"carries `Fixes-Red: {num}` (or `Fixes-Red: {decided['databaseId']}`); tools-only commits land while red")
     head = f"ci-why {o_r}: " + ("main is RED for the gate" if red else "main is green for the gate")
+    if o_r in GATING:
+        try:
+            others = outside_gate(o_r)
+        except Exception as e:  # the gate's verdict stands without them
+            others, out = [], out + [f"outside the gate: could not list main's runs ({e})"]
+        if others:
+            out.append(f"Outside the gate (red, not blocking a push; oldest first):")
+            for name, r, since, count in others:
+                out.append(f"  {name}: RED for {red_for(since)} since {since} ({count} failed run{'s' if count != 1 else ''}; "
+                           f"newest run {r['databaseId']} #{r.get('number')}) -- `agentctl ci-why {r['databaseId']}`")
     return red, "\n".join([head] + out)
 
 
@@ -1314,7 +1369,7 @@ def gate_reds(repo):
         if o_r not in GATING:
             return set()
         reds = set()
-        for _name, decided, _newer in gate_runs(o_r):
+        for _name, decided, _newer, _streak in gate_runs(o_r):
             if decided and decided.get("conclusion") != "success":
                 reds |= {str(decided.get("number")), str(decided.get("databaseId"))}
         return reds
