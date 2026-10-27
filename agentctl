@@ -8003,7 +8003,7 @@ def tunnel_watch(now_=None, probe=None, kick=None):
         err(f"the Forgejo tunnel {r} {st['fails']} probes in a row; kickstarting {TUNNEL_LABEL}")
         (kick or launchctl_kick)()
         st["last_kick"] = t
-        st.setdefault("pending_since", t)
+        st["pending_since"] = st.get("pending_since") or t
         did = "kicked"
     if st.get("pending_since") and t - st["pending_since"] >= TUNNEL_RESTORE_WAIT and not st.get("escalated"):
         msg = (f"STALLED: the Forgejo tunnel (localhost:3000) still {r} {int((t - st['pending_since']) // 60)} min after a "

@@ -188,3 +188,29 @@ class CheckTreeTest(StateBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TaggedTreeAndPartialClearTest(StateBase):
+    def test_a_tagged_tree_is_no_fixer_whatever_it_is_called(self):
+        # agentctl's baseline tree holds the change's Fixes-Red commit as its parent: tagged, never credited
+        wt, _fix = self.worktree_commit("odd-name", "fix FooSpec\n\nFixes-Red: 20")
+        self.assertIn("fixing: odd-name", self.why()[1])
+        A.mark_internal(wt)
+        self.assertTrue(A.internal_tree(wt))
+        self.assertNotIn("odd-name", self.why()[1])
+
+    def test_a_partial_clear_keeps_the_claim_and_a_full_clear_stops_it(self):
+        wt = self.r.worktree("repo-wt-fixer", branch="fixer")
+        mk = lambda sig, status: A.write_json(A.sig_path(sig), {"sig": sig, "status": status, "runs": ["20"], "workflow": "Main",
+                                                              "job": sig, "line": sig})
+        mk("a", "cleared"), mk("b", "flaky"), mk("c", "open")
+        A.write_json(A.reds_dir("claims", "x.json"), {"who": "red-fixer-20", "worktree": wt, "run": "20", "runs": ["20"],
+                                                      "sigs": ["a", "b", "c"], "started": A.ts()})
+        told = A.tell_to_stop(A.read_record(A.sig_path("a")), "no longer fails")
+        self.assertEqual(told, [])
+        self.assertFalse(os.path.exists(os.path.join(wt, "RED-STOP.md")))
+        self.assertEqual(sorted(A.all_claims()[0]["sigs"]), ["b", "c"])  # narrowed to what is still open
+        mk("b", "cleared"), mk("c", "cleared")
+        self.assertEqual(A.tell_to_stop(A.read_record(A.sig_path("b")), "gone"), ["red-fixer-20"])
+        self.assertTrue(os.path.exists(os.path.join(wt, "RED-STOP.md")))
+        self.assertEqual(A.all_claims(), [])

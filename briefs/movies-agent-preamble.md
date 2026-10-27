@@ -35,6 +35,7 @@ Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wai
   status names you as its fixer (`agentctl ci-why`, the status line); land the fix with `Fixes-Red: <run>`.
 - On a WATCH RED routed back to you: if your change caused it, fix forward AT ONCE with a `Fixes-Red: <n>` trailer
   (same final trailer block as Co-Authored-By) and land again; if not, say so with the run number.
+- Before committing, run the unit tests of the modules you touched and their dependents, through scripts/sbt-warm (`git diff --name-only forgejo/main | scripts/unit-shards run` does it, split as CI splits them).
 - Before landing, check that `git diff --stat forgejo/main...HEAD` lists only your files, and run the test layers your
   change touches (CLAUDE.md). `scripts/identity-measure --footprint` / `identity-landing-check` stay available as
   optional confidence tools for a risky identity change; neither is required, and never run their `--full` mode
