@@ -223,6 +223,19 @@ def movies_repo_path():
     return os.environ.get("AGENTCTL_MOVIES_REPO") or os.path.join(HOME, "projects", "movies")
 
 
+def interactive_foreground():
+    """Only an interactive, foreground invocation may run `secrets` (it can pop a Touch ID / keychain prompt): a TTY on
+    stdin or stderr, or AGENTCTL_INTERACTIVE=1. Never the processor, a launchd job, a detached watch or the statusline."""
+    if _IN_PROCESSOR[0] or os.environ.get("AGENTCTL_NO_SECRETS"):
+        return False
+    if os.environ.get("AGENTCTL_INTERACTIVE") == "1":
+        return True
+    try:
+        return sys.stdin.isatty() or sys.stderr.isatty()
+    except (ValueError, AttributeError):
+        return False
+
+
 def token_from_processor(o_r):
     """Ask the always-on processor (private 0600 socket, same uid) for the token it holds. None when it is not there."""
     import socket
@@ -250,7 +263,7 @@ def token_unavailable_note(ns, why):
         return
     flag = reds_dir("TOKEN_UNAVAILABLE")
     try:
-        if os.path.exists(flag):
+        if os.path.exists(flag) and time.time() - os.path.getmtime(flag) < 3600:  # at most once an hour
             return
         os.makedirs(reds_dir(), exist_ok=True)
         with open(flag, "w") as f:
@@ -262,10 +275,7 @@ def token_unavailable_note(ns, why):
 
 
 def token_found(ns):
-    try:
-        os.unlink(reds_dir("TOKEN_UNAVAILABLE"))
-    except OSError:
-        pass
+    pass  # the hourly flag stands: a flapping token does not re-announce
 
 
 def token(o_r):
@@ -281,7 +291,9 @@ def token(o_r):
         why = "the waiting processor holds none"
         if not tok:
             sec = secrets_bin()
-            if not sec:
+            if not interactive_foreground():
+                why += "; not an interactive foreground run, so `secrets` is not tried (it would prompt)"
+            elif not sec:
                 why += "; no `secrets` command found"
             else:
                 try:

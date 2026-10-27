@@ -25,6 +25,8 @@ class TokenResolutionTest(Base):
         A._tokens.clear()
         A.SECRETS_FALLBACKS = ()
         os.environ["PATH"] = "/usr/bin:/bin"  # no `secrets`
+        self.saved["AGENTCTL_INTERACTIVE"] = os.environ.get("AGENTCTL_INTERACTIVE")
+        os.environ["AGENTCTL_INTERACTIVE"] = "1"  # the test runner is not a tty
 
     def tearDown(self):
         A.SECRETS_FALLBACKS = self.saved_fb
@@ -61,6 +63,20 @@ class TokenResolutionTest(Base):
     def test_3_secrets_by_absolute_path(self):
         self.fake_secrets("echo vault-token-0123456789")
         self.assertEqual(A.token(MOVIES), "vault-token-0123456789")
+
+    def test_background_process_never_runs_secrets(self):
+        marker = os.path.join(self.tmp.name, "ran")
+        self.fake_secrets(f"touch {marker}; echo vault-token-0123456789")
+        os.environ.pop("AGENTCTL_INTERACTIVE")
+        with self.assertRaises(A.NoToken) as cm:
+            A.token(MOVIES)
+        self.assertIn("not an interactive foreground run", str(cm.exception))
+        self.assertFalse(os.path.exists(marker))
+        A._IN_PROCESSOR[0] = True
+        os.environ["AGENTCTL_INTERACTIVE"] = "1"
+        with self.assertRaises(A.NoToken):
+            A.token(MOVIES)
+        self.assertFalse(os.path.exists(marker), "the processor never prompts, even told interactive")
 
     def test_processor_without_token_falls_through_to_secrets(self):
         self.serve(tok=None)
