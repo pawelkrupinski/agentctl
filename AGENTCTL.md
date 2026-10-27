@@ -667,7 +667,7 @@ owner merely on old code, which re-execs itself. Every kill is a line of `~/.cac
 `WATCH STALLED`.
 
 **Stale JVMs** (folded in 2026-10-27 from `~/.local/bin/reap-stale-jvms.sh`, launchd `dev.kinowo.jvm-reaper`, now
-retired; movies keeps the old script as `scripts/reap-stale-jvms.sh`): the same rules, by the same tunables
+retired; movies' `scripts/reap-stale-jvms.sh` is now a shim calling `agentctl reap`): the same rules, by the same tunables
 (`HOG_MIN_AGE_SECONDS`, `HOG_MIN_CPU_PERCENT`, `ORPHAN_MIN_AGE_SECONDS`, `PROTECT_REGEX`, `PROTECTED_PORTS`, ...):
 
 - `orphan`: an sbt worker / forked-test JVM with PPID 1, 10 min or older, whatever its CPU;
