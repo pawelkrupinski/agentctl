@@ -3032,8 +3032,8 @@ def cmd_gov(a):
 # The owner (2026-10-27): "just limit the precommit checks to a reasonable number", and "keep measuring to adjust that
 # number". Every pre-commit check run (land's dry run, the `waiting` batch check, the known-red baseline) is admitted by
 # THE GOVERNOR (above) as a check-kind ticket of class `check` (`red` for a change fixing a red run, which skips the
-# cap): at most N run at once. Its JVM is the sbt server the hook starts or reaches, admitted as a ticket of its own at
-# the check's priority (KINOWO_GOV_CLASS in the hook's environment); the check's own ticket counts the hook's ~1 GB.
+# cap): at most N run at once. Its ticket counts a JVM's 5 GB: the hook's `sbt -batch` takes no ticket of its own; an
+# sbt server it starts through sbt-warm does (at the check's priority, KINOWO_GOV_CLASS), counted twice for a while.
 # N: $AGENTCTL_MAX_CHECKS if set, else the automatic cap (checks/cap.json, default 3, at most the budget's worth of sbt
 # servers). A waiter prints why it waits. Each run appends to checks/runs.jsonl: its duration, its wait, the cap and the
 # number of checks running, the load average, CPU % and memory pressure / swap sampled during it. After each run the cap
@@ -3117,7 +3117,7 @@ def check_slot(repo, label, cls="check"):
     """Hold a check ticket of the governor for a pre-commit check run (waiting, with a line saying why, until it is
     admitted). Records the run in runs.jsonl and adjusts the cap afterwards."""
     slot = Slot(label, cls)
-    slot.ticket = gov_admit(cls, GOV_MEM_GB["hook"], label, kind="check")
+    slot.ticket = gov_admit(cls, GOV_MEM_GB["check"], label, kind="check")
     slot.waited, slot.cap = slot.ticket.waited, checks_cap()
     slot.running = len(slot_holders())
     slot.t0, slot.rc = time.monotonic(), None

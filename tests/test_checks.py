@@ -118,7 +118,7 @@ class SlotTest(unittest.TestCase):
         t0 = time.time()
         out = self.take()
         self.assertGreater(time.time() - t0, 1.5, "it waited for the holder")
-        self.assertIn("waiting for the governor (check, 1 GB, land test): 1/1 checks running (the check cap)", out)
+        self.assertIn("waiting for the governor (check, 5 GB, land test): 1/1 checks running (the check cap)", out)
         rec = [json.loads(l) for l in open(os.path.join(A.checks_dir(), "runs.jsonl"))][-1]
         self.assertGreater(rec["waited"], 1.5)
         self.assertEqual((rec["cap"], rec["running"], rec["label"]), (1, 1, "land test"))

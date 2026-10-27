@@ -507,8 +507,8 @@ sbt-warm's kept servers each holding a slot, idle or not).
   slot (riding, the keeper hand-off unchanged); `KINOWO_GOVERNOR=0`, Linux or an agentctl without `gov` keep the slots.
 - **Priority:** red (a change carrying `Fixes-Red:` for a red run; a `*-wt-red-*` checkout) > check > agent (an agent's
   own sbt) > measure (identity-measure*). Only the head of the queue is admitted: a lower class never overtakes.
-- **Memory:** the expected GB (5 for a JVM, 1 for a check's hook; its JVM is a ticket of its own at the check's
-  priority, `KINOWO_GOV_CLASS`) must fit the budget (sum of live tickets, `$AGENTCTL_GOV_BUDGET_GB`, 60% of RAM), and
+- **Memory:** the expected GB (5 for a JVM and for a check, whose hook's `sbt -batch` takes no ticket of its own; an
+  sbt server the hook starts through sbt-warm does, at the check's priority, `KINOWO_GOV_CLASS`) must fit the budget (sum of live tickets, `$AGENTCTL_GOV_BUDGET_GB`, 60% of RAM), and
   2.5 GB (`$AGENTCTL_GOV_FREE_NEED_GB`) must be free now (free + inactive + speculative) beyond a 1 GB reserve and what
   tickets admitted in the last 2 min still grow into; memory pressure under 75% (red: 90%).
 - **CPU:** agent work waits while load1 > 1.5x the cores, measurements while > 1x; checks and red never.
