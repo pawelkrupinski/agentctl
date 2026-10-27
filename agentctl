@@ -2925,6 +2925,9 @@ def tool_env():
     java_home = f"{HOME}/.sdkman/candidates/java/current"
     if not env.get("JAVA_HOME") and os.path.isdir(java_home):
         env["JAVA_HOME"] = java_home
+    # the movies hook's known-red baseline: `<dir>/<main sha>`, written by baseline_failures (a hook without the mode
+    # ignores it)
+    env.setdefault("PREPUSH_BASELINE_DIR", reds_dir("baseline-out"))
     return env
 
 
@@ -3168,7 +3171,7 @@ def sync(repo, main_ref, sh):
     return None, head
 
 
-def dry_run(repo, hook, head, log_path, attempt, mode="--range"):
+def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False):
     """The repo hook's dry run over forgejo/main..head, in a check slot, watched for a stall: None when it passed, else
     land's rc."""
     err(f"checking {head[:10]}: {os.path.relpath(hook, repo)} {mode} {REMOTE}/main..HEAD (log: {log_path})")
@@ -3188,9 +3191,13 @@ def dry_run(repo, hook, head, log_path, attempt, mode="--range"):
                 checks = ", ".join(sorted(known))
                 print(f"KNOWN RED: {checks} fail{'s' if len(known) == 1 else ''} the same way on plain {REMOTE}/main "
                       f"(see `agentctl ci-why`, `Local checks`): not held against this change", flush=True)
+                if not rechecked:  # the hook again, now with main's baseline written: it passes known reds (stored)
+                    return dry_run(repo, hook, head, log_path, f"{attempt}, against the known-red baseline", mode,
+                                   rechecked=True)
                 return refused(repo, out, log_path, f"the pre-push checks failed only where plain {REMOTE}/main fails "
-                               f"too ({checks}; a known red, claimable as `local`); the push's hook still runs them, so "
-                               "this change lands once they are fixed on main (or with the fix)")
+                               f"too ({checks}; a known red, claimable as `local`), and the hook still held them "
+                               "against it (no baseline mode, or no baseline for this main), so this change lands once "
+                               "they are fixed on main (or with the fix)")
             if known:
                 print(f"KNOWN RED (not held against this change): {', '.join(sorted(known))}; NEW with this change: "
                       f"{', '.join(sorted(new))}", flush=True)
@@ -3206,8 +3213,10 @@ def dry_run(repo, hook, head, log_path, attempt, mode="--range"):
 # main^{tree} -p <head>`), checked with `--checks-only <head>..<that>` -- the change's paths select the checks, main's
 # tree is checked. Checks failing there the same way (the same normalized failure lines) are main's own red: recorded
 # in reds/local.json, shown by ci-why as `Local checks`, claimable (`red claim local`) and dispatched like any red, and
-# land says which failures are the change's own. The push itself still runs the hook: until movies' pre-push has a
-# baseline mode of its own, a change whose only failures are known red waits for main's fix (never a bypass).
+# land says which failures are the change's own. The hook's own output there is kept as `reds/baseline-out/<main sha>`
+# (first line `pre-push baseline <main sha>`), the file movies' pre-push reads through $PREPUSH_BASELINE_DIR (tool_env):
+# land's dry run then runs the hook once more, which passes a check failing only as it fails on main (its pass stored,
+# so the push reuses it). No file for main: the hook blocks every failure (fail-closed).
 HOOK_STATUS = re.compile(r"pre-push (\S+) (ok|FAILED) \(\d+s\)")
 LOCAL_FLOW = "Local checks"
 
@@ -3260,17 +3269,45 @@ def baseline_failures(repo, hook, head, log_path):
         err(f"the change's checks failed: running them on plain {REMOTE}/main {main[:10]} (the known-red baseline)")
         with check_slot(repo, f"baseline {main[:10]}") as slot:
             rc, out = run_watched([os.path.join(tree, os.path.relpath(hook, repo)), "--checks-only", f"{head}..{synth}"],
-                                  tree, tool_env(), log_path, "baseline", sampler=slot.sample)
+                                  tree, {**tool_env(), "PREPUSH_BASELINE_DIR": ""}, log_path, "baseline",
+                                  sampler=slot.sample)
             slot.done(rc, out)
     finally:
         git(repo, "worktree", "remove", "--force", tree, check=False)
     if rc is None:
         return None
+    write_baseline_out(main, out)
     fails = check_failures(out) if rc else {}
     write_json(cache, {"main": main, "at": ts(), "fails": {k: sorted(v) for k, v in fails.items()},
                        "passes": sorted(check_passes(out))})
     note_local_red(main, fails, check_passes(out))
     return fails
+
+
+def write_baseline_out(main, out):
+    """reds/baseline-out/<main>: the hook's output on plain main (appended to a run for other paths on the same main),
+    for the hook's known-red baseline; files older than 3 days go."""
+    d = reds_dir("baseline-out")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, main)
+    try:
+        with open(path) as f:
+            old = f.read()
+    except OSError:
+        old = ""
+    if not old.startswith(f"pre-push baseline {main}\n"):
+        old = f"pre-push baseline {main}\n"
+    tmp = f"{path}.{os.getpid()}"
+    with open(tmp, "w") as f:
+        f.write(old + (out or "") + ("" if (out or "").endswith("\n") else "\n"))
+    os.replace(tmp, path)
+    for name in os.listdir(d):
+        p = os.path.join(d, name)
+        try:
+            if time.time() - os.path.getmtime(p) > 3 * 86400:
+                os.unlink(p)
+        except OSError:
+            pass
 
 
 def note_local_red(main, fails, passes):

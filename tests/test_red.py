@@ -533,6 +533,15 @@ if git ls-tree -r --name-only "$head" | grep -q LINT; then echo "[error] lint: b
 exit $fail
 """
 
+# BASE_HOOK's last line, for a hook with a baseline mode: sbt's failure passes when <dir>/<base sha> names the base and
+# holds the same failure (the movies hook compares every failure line; this one, the spec's)
+BASELINE_MODE = """b="$(git rev-parse "${2%%..*}")"; f="${PREPUSH_BASELINE_DIR:-/nonexistent}/$b"
+if [ $fail = 1 ] && ! git ls-tree -r --name-only "$head" | grep -q LINT && [ -r "$f" ] \\
+   && [ "$(head -1 "$f")" = "pre-push baseline $b" ] && grep -q 'BrokenSpec should work' "$f"; then
+  echo "hook: known red sbt"; exit 0
+fi
+exit $fail"""
+
 
 class BaselineTest(RedBase):
     """Item 9: pre-push failing on plain forgejo/main is main's own red: recorded, shown, claimable; a change is told
@@ -593,6 +602,18 @@ class BaselineTest(RedBase):
         self.assertEqual(rc, 1, out)
         self.assertIn("KNOWN RED (not held against this change): sbt; NEW with this change: lint", out)
         self.assertIn("NOT LANDED: the pre-push checks failed.", out)
+
+    def test_a_hook_with_a_baseline_mode_is_run_again_against_main_s_baseline_and_passes(self):
+        with open(self.hook, "w") as f:
+            f.write(BASE_HOOK.replace("exit $fail", BASELINE_MODE))
+        wt, head = self.worktree_commit("repo-wt-base", "an innocent change")
+        rc, out = self.dry(wt, head)
+        self.assertIsNone(rc, out)
+        self.assertIn("KNOWN RED: sbt fails the same way on plain forgejo/main", out)
+        main = A.git(wt, "rev-parse", "forgejo/main").strip()
+        with open(os.path.join(A.reds_dir("baseline-out"), main)) as f:
+            self.assertEqual(f.readline(), f"pre-push baseline {main}\n")
+        self.assertEqual(set(A.local_red()["checks"]), {"sbt"})  # still main's red: the check failed, it was excused
 
     def test_a_passing_check_clears_main_s_known_red(self):
         wt, head = self.worktree_commit("repo-wt-ok2", "innocent")

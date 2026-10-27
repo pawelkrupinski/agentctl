@@ -275,8 +275,11 @@ agent must be assigned to it".
   tree (`git commit-tree main^{tree} -p <head>`, `--checks-only <head>..<that>`). Failures that main shares (same check,
   same normalized lines) are main's own red: `KNOWN RED: … not held against this change`, recorded in
   `reds/local.json`, shown by ci-why as `Local checks` (and in the status line), claimable as `red claim local`,
-  dispatched like any red; a later passing run of those checks clears it. The push itself still runs the hook: movies'
-  pre-push has no baseline mode yet, so such a change still waits for main's fix (never a bypass).
+  dispatched like any red; a later passing run of those checks clears it. That run's hook output is kept as
+  `reds/baseline-out/<main sha>`, which movies' pre-push reads through `$PREPUSH_BASELINE_DIR` (set by agentctl): land
+  runs the dry run once more, and the hook passes a check that fails only as it fails on plain main (`KNOWN RED: <check>
+  ...`), its pass stored, so the push reuses it. A change that fixes main's red just passes. Fail-closed: no baseline
+  for the push's base, and every failure blocks as before.
 - **An unreadable gate** (Forgejo, the tunnel, the vault or the token down): the patrol dispatches nothing, writes ONE
   `UNKNOWN: the red patrol cannot read the gate (…)` per spell with an infra check (ports 3000 / 2222, the token),
   and pushes fail closed (an unread gate is red).
