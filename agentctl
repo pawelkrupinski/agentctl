@@ -4247,12 +4247,15 @@ def join(repo, main_ref, sh, log_path, a, head=None, worktree=None):
               f"{base[:10]}) in: {', '.join(conflict)}. Rebase onto them (git rebase {WAITING_BRANCH}) or wait for them "
               f"to land.")
         return 1
+    seq_lock = open(os.path.join(d, "seq.lock"), "a+")  # a seq of its own, beside a land queueing meanwhile
+    fcntl.flock(seq_lock, fcntl.LOCK_EX)
     seq = max([e["seq"] for e in waiting_entries(d, open_only=False)] + [0]) + 1
-    e = {"id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{seq}", "seq": seq,
+    e = {"id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(worktree or repo)}-{seq}", "seq": seq,
          "worktree": worktree or repo, "head": head, "commits": commits, "fixes": sorted(fixes_of(repo, commits)),
          "status": "waiting", "created": ts(), "tip": git(wt, "rev-parse", "HEAD").strip(),
          "follow": bool(getattr(a, "follow", False))}
     save_entry(d, e)
+    seq_lock.close()
     if reds and set(e["fixes"]) & reds:  # a fix goes FIRST: the branch is rebuilt in batch order with it
         rebuild(repo, d, wt, batch_order(repo, waiting_entries(d), reds), base)
         e = next(x for x in waiting_entries(d) if x["id"] == e["id"])
@@ -4299,10 +4302,8 @@ def enqueue(repo, main_ref, sh, a):
         return rc
     d, _clone, _wt = waiting_state(repo)
     commits = waiting_commits(repo, f"{REMOTE}/main", head)
-    with land_lock(repo) as held:  # the seq is unique
-        if not held:
-            print("NOT LANDED: timed out waiting for the landing lock to queue the change; land again.")
-            return 1
+    with open(os.path.join(d, "seq.lock"), "a+") as seq_lock:  # a unique seq; never the landing lock (a push holds it)
+        fcntl.flock(seq_lock, fcntl.LOCK_EX)
         seq = max([e["seq"] for e in waiting_entries(d, open_only=False)] + [0]) + 1
         e = {"id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{seq}", "seq": seq,
              "worktree": repo, "head": head, "commits": commits, "fixes": sorted(fixes_of(repo, commits)),
