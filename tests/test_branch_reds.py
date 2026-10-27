@@ -155,6 +155,23 @@ class BranchRedTest(BranchBase):
         self.put("runs.json", [brun(66, 2118, self.x, self.branch, conclusion="success")] + runs)
         self.assertEqual(A.branch_reds(self.snap()), [])
 
+    def test_a_failure_on_a_deleted_branch_is_dropped_silently(self):
+        A.branch_exists = lambda o_r, b: False  # its owner deleted it after finishing (measure/de-speed-conf-1)
+        snap = self.snap()
+        self.assertFalse(snap["branches"][0]["alive"])
+        self.assertEqual(A.route_branch_reds(MOVIES, snap), [])
+        self.assertEqual([x for x in A.inbox_entries() if x["kind"] == "BRANCH_RED"], [])
+        self.assertEqual(A.branch_reds(snap), [])
+
+    def test_branch_exists_reads_forgejo_s_404_as_deleted(self):
+        A.branch_exists = self.saved_exists
+        self.put(f"api-repos_pawelkrupinski_movies_branches_{self.branch.replace('/', '%2F')}.json", {"name": self.branch})
+        self.assertTrue(A.branch_exists(MOVIES, self.branch))
+        saved = A.gh_json
+        A.gh_json = lambda *a: (_ for _ in ()).throw(RuntimeError("forgejo-gh api: gh: The target couldn't be found. (HTTP 404)"))
+        self.addCleanup(setattr, A, "gh_json", saved)
+        self.assertFalse(A.branch_exists(MOVIES, "measure/de-speed-conf-1"))
+
     def test_an_old_failure_is_recorded_not_routed(self):
         snap = self.snap()
         self.assertEqual(A.route_branch_reds(MOVIES, snap, now_=time.time() + 2 * A.BRANCH_ROUTE_MAX_AGE), [])

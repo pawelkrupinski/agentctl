@@ -1707,14 +1707,14 @@ def branch_red_line(e):
 
 
 def route_branch_reds(o_r, snap, now_=None):
-    """ONE inbox entry per failed branch run (BRANCH RED), with ci-why's first error lines; signatures saved, so a
-    PREDICTS MAIN RED run is a red unit. Returns the lines written."""
+    """ONE inbox entry per failed branch run (BRANCH RED) whose branch still exists, with ci-why's first error lines;
+    signatures saved, so a PREDICTS MAIN RED run is a red unit. Returns the lines written."""
     t = now_ if now_ is not None else time.time()
     written = []
     for e in (snap or {}).get("branches") or []:
         r = e["run"]
-        if not e.get("red") or os.path.exists(routed_path(r["databaseId"])):
-            continue
+        if not e.get("red") or not e.get("alive") or os.path.exists(routed_path(r["databaseId"])):
+            continue  # a run on a deleted branch is dropped silently: its owner finished with it
         try:
             done = dt.datetime.fromisoformat(str(r.get("updatedAt")).replace("Z", "+00:00")).timestamp()
         except ValueError:
