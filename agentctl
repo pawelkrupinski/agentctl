@@ -4191,6 +4191,10 @@ def run_local_recheck(repo, main):
         base = git(repo, "commit-tree", empty, "-m", "agentctl recheck base").strip()
     synth = git(repo, "commit-tree", f"{main}^{{tree}}", "-p", base, "-m", f"agentctl recheck: {REMOTE}/main {main[:10]}").strip()
     _d, clone, _w = waiting_state(repo)
+    for w in worktrees(repo)[1:]:  # a killed recheck's tree (its pid is gone)
+        m = re.fullmatch(re.escape(clone) + r"-wt-recheck-(\d+)", w["worktree"])
+        if m and not pid_alive(int(m.group(1))):
+            git(repo, "worktree", "remove", "--force", w["worktree"], check=False)
     tree = f"{clone}-wt-recheck-{os.getpid()}"
     if git(repo, "worktree", "add", "-q", "--detach", tree, synth, check=False).returncode != 0:
         return []
