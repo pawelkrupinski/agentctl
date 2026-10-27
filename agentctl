@@ -1501,14 +1501,41 @@ def trailer_values(s):
     return {f.strip().lstrip("#") for f in (s or "").split(",") if f.strip()}
 
 
+# BACKGROUND CODE TOUCHES ONLY THESE ROOTS. A path learned from another process (its cwd) or from a git registry
+# (`worktree list`) that lies elsewhere -- ~/Desktop, ~/Documents, ~/Downloads -- is never stat'ed or opened: macOS asks
+# "Python wants to access files in your Desktop folder" for every such touch. Skipped paths are logged once.
+def allowed_roots():
+    h = HOME
+    roots = [f"{h}/projects", f"{h}/bitcashier", f"{h}/.cache/agentctl", f"{h}/.cache", f"{h}/Library/Logs", "/tmp", "/private/tmp",
+             "/var/folders", "/private/var/folders", os.path.realpath(os.environ.get("TMPDIR") or "/tmp")]
+    return roots + [x for x in os.environ.get("AGENTCTL_ALLOWED_ROOTS", "").split(":") if x]
+
+
+_skipped_paths = set()
+
+
+def allowed_path(path):
+    """True when path (a string; never stat'ed here) is under an allowed root, or a sibling worktree of ~/bin
+    (~/bin, ~/bin-wt-*). Otherwise False, logged once."""
+    if not path:
+        return False
+    n = os.path.normpath(path)
+    h = HOME
+    ok = (n == f"{h}/bin" or n.startswith(f"{h}/bin/") or n.startswith(f"{h}/bin-wt-")
+          or any(n == r or n.startswith(r.rstrip("/") + "/") for r in allowed_roots()))
+    if not ok and n not in _skipped_paths:
+        _skipped_paths.add(n)
+        err(f"skipped {n}: outside the roots background code may touch")
+    return ok
+
+
 def land_cwds():
     """{worktree: pid} of every running `agentctl land`."""
     out = {}
     for pid, _pp, _e, cmd in ps():
         if re.search(r"agentctl land\b", cmd) and pid != os.getpid():
-            r = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"], capture_output=True, text=True)
-            cwd = next((l[1:] for l in r.stdout.splitlines() if l.startswith("n")), None)
-            wt = worktree_of(cwd)
+            cwd = lsof_cwds([pid]).get(pid)
+            wt = worktree_of(cwd) if cwd else None
             if wt:
                 out[os.path.realpath(wt)] = pid
     return out
@@ -5901,18 +5928,36 @@ def worktrees(repo):
             continue
         k, _, v = line.partition(" ")
         cur[k] = v if v else True
-    return wts
+    return [w for w in wts if not isinstance(w.get("worktree"), str) or allowed_path(w["worktree"])]
+
+
+SYSTEM_CMD = ("/System/", "/Applications/", "/usr/libexec/", "/Library/", "/usr/sbin/", "/sbin/", "/usr/bin/login")
+
+
+def cwd_candidates():
+    """Pids worth asking for a cwd: everything but GUI apps and system daemons (Finder, Preview...). NEVER every process:
+    lsof walking all cwds touches ~/Desktop, ~/Documents... and macOS charges those to our Python (TCC prompts)."""
+    return [pid for pid, _pp, _e, cmd in ps() if not cmd.startswith(SYSTEM_CMD) and pid != os.getpid()]
+
+
+def lsof_cwds(pids):
+    """{pid: cwd} through ONE `lsof -a -p <pids> -d cwd` (always pid-scoped), keeping only allowed paths."""
+    pids = [int(x) for x in pids]
+    res = {}
+    for i in range(0, len(pids), 200):
+        r = subprocess.run(["lsof", "-nP", "-a", "-p", ",".join(map(str, pids[i:i + 200])), "-d", "cwd", "-Fpn"],
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        pid = None
+        for line in r.stdout.splitlines():
+            if line.startswith("p"):
+                pid = int(line[1:])
+            elif line.startswith("n") and pid and allowed_path(line[1:]):
+                res[pid] = line[1:]
+    return res
 
 
 def process_cwds():
-    r = subprocess.run(["lsof", "-a", "-d", "cwd", "-Fpn"], capture_output=True, text=True)
-    res, pid = {}, None
-    for line in r.stdout.splitlines():
-        if line.startswith("p"):
-            pid = int(line[1:])
-        elif line.startswith("n") and pid:
-            res[pid] = line[1:]
-    return res
+    return lsof_cwds(cwd_candidates())
 
 
 def gitdir_activity(repo, wt_path):
@@ -6546,13 +6591,20 @@ def jvm_scan():
         if len(f) == 6 and f[0].isdigit() and f[1].isdigit():
             rows.append((int(f[0]), int(f[1]), f[2], f[3], f[4], f[5]))
     cwd = {}
-    for line in read("AGENTCTL_JVM_CWD", "lsof -nP -a -d cwd -c java -Fpn 2>/dev/null | awk '/^p/{p=substr($0,2)} "
-                                         "/^n/{print p, substr($0,2)}'").splitlines():
+    if os.environ.get("AGENTCTL_JVM_CWD"):
+        read_cwd = read("AGENTCTL_JVM_CWD", "").splitlines()
+    else:  # pid-scoped: the java processes of the ps rows above, never a machine-wide lsof
+        jp = [r_[0] for r_ in rows if re.search(r"(^|/)java(\s|$)", r_[5].split(" ", 1)[0] if r_[5] else "")]
+        read_cwd = [f"{p_} {d_}" for p_, d_ in lsof_cwds(jp).items()] if jp else []
+    for line in read_cwd:
         p, _, d = line.partition(" ")
-        if p.isdigit():
+        if p.isdigit() and allowed_path(d):
             cwd[int(p)] = d
-    kept = {l.strip() for l in read("AGENTCTL_JVM_KEPT", "for p in $(pgrep -f 'sbt-warm --keep'); do lsof -a -p $p "
-                                    "-d cwd -Fn 2>/dev/null | sed -n 's/^n//p'; done | sort -u").splitlines() if l.strip()}
+    if os.environ.get("AGENTCTL_JVM_KEPT"):
+        kept = {l.strip() for l in read("AGENTCTL_JVM_KEPT", "").splitlines() if l.strip() and allowed_path(l.strip())}
+    else:
+        kp = [r_[0] for r_ in rows if "sbt-warm --keep" in r_[5]]
+        kept = set(lsof_cwds(kp).values()) if kp else set()
     ports = set()
     if not os.environ.get("AGENTCTL_JVM_PS"):
         for port in str(jvm_knob("PROTECTED_PORTS", "9000")).split():

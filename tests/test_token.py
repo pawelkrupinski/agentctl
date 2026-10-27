@@ -146,3 +146,46 @@ class LoopCannotStallTest(unittest.TestCase):
                 self.assertEqual(c.recv(100).decode(), TOK)
         finally:
             os.environ.pop("AGENTCTL_SOCK_DIR") if saved is None else os.environ.__setitem__("AGENTCTL_SOCK_DIR", saved)
+
+
+class BackgroundTouchesOnlyAllowedRootsTest(unittest.TestCase):
+    def test_no_machine_wide_lsof_and_nothing_under_desktop_is_touched(self):
+        import tempfile
+        home = os.path.expanduser("~")
+        desk = f"{home}/Desktop/secret-project"
+        calls, touched = [], []
+        real_run, real_isdir, real_stat = subprocess.run, os.path.isdir, os.stat
+
+        def fake_run(argv, *a, **k):
+            if isinstance(argv, list) and argv and argv[0] == "lsof":
+                calls.append(argv)
+                if "-p" not in argv:
+                    raise AssertionError(f"machine-wide lsof: {argv}")
+                pids = argv[argv.index("-p") + 1].split(",")
+                out = "".join(f"p{p}\nn{desk if p == '111' else home + '/projects/movies'}\n" for p in pids)
+                return subprocess.CompletedProcess(argv, 0, out, "")
+            if isinstance(argv, list) and argv[:1] == ["ps"]:
+                return subprocess.CompletedProcess(argv, 0, "111 1 01:00 /bin/zsh\n222 1 01:00 /bin/zsh\n"
+                                                   "333 1 01:00 /System/Library/CoreServices/Finder.app/x\n", "")
+            return real_run(argv, *a, **k)
+
+        def spy_isdir(p):
+            if str(p).startswith(f"{home}/Desktop"):
+                touched.append(p)
+            return real_isdir(p)
+
+        def spy_stat(p, *a, **k):
+            if str(p).startswith(f"{home}/Desktop"):
+                touched.append(p)
+            return real_stat(p, *a, **k)
+        subprocess.run, os.path.isdir, os.stat = fake_run, spy_isdir, spy_stat
+        try:
+            cwds = A.process_cwds()
+            A.worktree_of(cwds.get(111))
+        finally:
+            subprocess.run, os.path.isdir, os.stat = real_run, real_isdir, real_stat
+        self.assertTrue(calls and all("-p" in c for c in calls), calls)
+        self.assertNotIn("333", calls[0][calls[0].index("-p") + 1], "GUI/system processes are not asked")
+        self.assertNotIn(111, cwds)  # ~/Desktop: skipped
+        self.assertEqual(cwds.get(222), f"{home}/projects/movies")
+        self.assertEqual(touched, [])
