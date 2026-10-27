@@ -78,7 +78,7 @@ class OneDecisionTest(StateBase):
             text = line.split("]: ", 1)[1]
             self.assertIn(f"fixing: {text}", out, (line, out))
         texts = " | ".join(report)
-        self.assertIn("Main #20 [test (rest)]: UNASSIGNED (assigning:", texts)
+        self.assertIn(f"Main #20 [test (rest)]: {A.DISPATCHING_GAP} (the patrol assigns", texts)
         self.assertIn(f"{CAP} #30 [capture (de)]: UNASSIGNED (outside the gate: a fixer is dispatched at", texts)
         self.assertIn("Nightly #40 [stress]: repo (", texts)
         self.assertIn("claimed) -- on it", texts)
@@ -92,8 +92,8 @@ class OneDecisionTest(StateBase):
         os.environ["AGENTCTL_RED_UNCLAIMED_MIN"] = "0"
         self.runs(self.capture_run(70, 30, [("capture (de)", "[error] de boom")]))
         _a, report = self.patrol(dispatch=False)
-        self.assertIn("UNASSIGNED (due: nobody fixing it for 0 min; the patrol dispatches a fixer at its next look)", report[-1])
-        self.assertIn("fixing: UNASSIGNED (due: nobody fixing it", self.why()[1])
+        self.assertIn(f"{A.DISPATCHING_GAP} (due: nobody fixing it for 0 min; the patrol dispatches a fixer at its next look)", report[-1])
+        self.assertIn(f"fixing: {A.DISPATCHING_GAP} (due: nobody fixing it", self.why()[1])
         acts, _r = self.patrol(dispatch=True)
         self.assertTrue(any("DISPATCHED pid" in a for a in acts), acts)
         self.wait_fixer()

@@ -1,6 +1,6 @@
 """One CI-state snapshot (gate, outside-the-gate reds, summary, patrol read it), the stale local red (recheck, release,
 fixer worktree tidy) and the re-exec gate (committed + smoke-checked code only)."""
-import glob, json, os, signal, subprocess, sys, tempfile, time, unittest
+import contextlib, glob, io, json, os, signal, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -219,10 +219,6 @@ class RestartGateTest(unittest.TestCase):
         self.assertEqual(A.smoke_check(os.path.join(HERE, "..", "agentctl")), (True, ""))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 CAPTURE_YML = "name: Identity capture\non:\n  schedule:\n    - cron: '0 3 * * 1'\n  workflow_dispatch:\n"
 NODISPATCH_YML = "name: Identity capture\non:\n  schedule:\n    - cron: '0 3 * * 1'\n"
 
@@ -238,7 +234,9 @@ class VerifyOutsideGateTest(RedBase):
                                  "headSha": self.sha, "number": 2104, "databaseId": 70, "workflowName": "Identity capture"})
         self.calls = []
         self.saved_api = A.api
-        A.api = lambda o_r, method, path, params=None, body=None: self.calls.append((method, path, body))
+        # the run-number lookup finds no run #70: these name the run by its id (the fallback)
+        A.api = lambda o_r, method, path, params=None, body=None: (
+            None if (method, path) == ("GET", "actions/runs") else self.calls.append((method, path, body)))
         self.addCleanup(setattr, A, "api", self.saved_api)
 
     def workflow(self, text):
@@ -282,3 +280,76 @@ class VerifyOutsideGateTest(RedBase):
 
     def test_a_number_that_is_no_run_is_left_to_the_old_verdict(self):
         self.assertIsNone(A.verify_outside_gate(MOVIES, self.r.path, self.sha, "99999"))
+
+
+class FixesRedNumberTest(RedBase):
+    """`Fixes-Red: N` is the run NUMBER (#N). 2026-10-27: Fixes-Red 2133 (Identity capture #2133, id 3281) was read as
+    run id 2133 -- an old convergence run, #1111 -- and the fix was judged a convergence fix: FIX UNVERIFIED, and the
+    capture workflow was never dispatched to verify it."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ["AGENTCTL_VERIFY_POLL"] = "0"
+        self.addCleanup(os.environ.pop, "AGENTCTL_VERIFY_POLL", None)
+        self.conv_old = run(2133, 1111, "Identity model convergence", "identity-model-convergence.yml", self.sha,
+                            conclusion="failure")
+        self.capture = run(3281, 2133, "Identity capture", "identity-capture.yml", self.sha, conclusion="failure")
+        self.put("run-2133.json", dict(self.conv_old, jobs=[]))
+        self.put("run-3281.json", dict(self.capture, jobs=[{"name": "capture (uk)", "status": "completed",
+                                                            "conclusion": "failure"}]))
+        self.by_number = {2133: 3281}
+        self.calls = []
+
+        def api(o_r, method, path, params=None, body=None):
+            self.calls.append((method, path, params, body))
+            if method == "GET" and path == "actions/runs" and params and "run_number" in params:
+                rid = self.by_number.get(int(params["run_number"]))
+                return {"workflow_runs": [{"id": rid, "index_in_repo": int(params["run_number"])}] if rid else []}
+            return None
+        self.saved_api, self.saved_rfv = A.api, A.repo_for_verify
+        A.api, A.repo_for_verify = api, (lambda o_r: self.r.path)
+        self.addCleanup(setattr, A, "api", self.saved_api)
+        self.addCleanup(setattr, A, "repo_for_verify", self.saved_rfv)
+        self.listed = {"main": [run(40, 20, "Main", "main.yml", self.sha)], "convergence": [self.conv_old]}
+
+    def test_a_number_and_an_id_naming_different_runs_resolve_to_the_number_and_say_so(self):
+        kind, r = A.claimed_run(MOVIES, "2133", self.listed)
+        self.assertIsNone(kind, "Identity capture is no gate workflow")
+        self.assertEqual((r["databaseId"], r["number"], r["workflowName"]), (3281, 2133, "Identity capture"))
+        self.assertIn("run number #2133", r["_note"])
+        self.assertIn("not run id 2133", r["_note"])
+
+    def test_an_id_is_the_fallback_only_when_no_run_has_that_number(self):
+        self.by_number = {}
+        kind, r = A.claimed_run(MOVIES, "2133", self.listed)
+        self.assertEqual((kind, r["number"]), ("convergence", 1111))
+        self.assertIn("no run #2133", r["_note"])
+
+    def test_a_listed_run_with_that_number_wins_over_a_listed_id(self):
+        listed = {"convergence": [self.conv_old, run(4000, 2133, "Identity model convergence",
+                                                     "identity-model-convergence.yml", self.sha)]}
+        kind, r = A.claimed_run(MOVIES, "2133", listed)
+        self.assertEqual((kind, r["databaseId"]), ("convergence", 4000))
+
+    def test_a_non_gate_fix_is_dispatched_for_verification(self):
+        self.r.write(".forgejo/workflows/identity-capture.yml", CAPTURE_YML)
+        fix = self.r.commit("capture publish fix\n\nFixes-Red: 2133")
+        self.r.push()
+        self.put("runs.json", green_gate(self, self.sha) + [
+            run(3290, 2140, "Identity capture", "identity-capture.yml", self.sha, conclusion="success"), self.capture])
+        self.put("run-3290.json", {"jobs": [{"name": "capture (uk)", "status": "completed", "conclusion": "success"}],
+                                   "headSha": self.sha, "number": 2140, "databaseId": 3290,
+                                   "workflowName": "Identity capture"})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            A.verify_fixes(MOVIES, fix, ["2133"], {}, self.listed, A.WATCH[MOVIES])
+        self.assertIn(("POST", "actions/workflows/identity-capture.yml/dispatches"),
+                      [c[:2] for c in self.calls], "the capture workflow is dispatched to verify the fix")
+        line = out.getvalue().strip().splitlines()[-1]
+        self.assertTrue(line.startswith("FIX OK: #2133 cleared by #2140"), line)
+        self.assertNotIn("convergence", line.split("[")[0])
+        self.assertIn("not run id 2133", line)
+
+
+if __name__ == "__main__":
+    unittest.main()

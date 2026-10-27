@@ -144,9 +144,9 @@ class FixingShownTest(RedBase):
         rc, out = self.why()
         self.assertEqual(rc, 1, out)
         self.assertIn("Main: RED (run 40 #20", out)
-        self.assertIn("  fixing: UNASSIGNED", out)
+        self.assertIn(f"  fixing: {A.DISPATCHING_GAP}", out)
         rc, out = self.why("--summary")
-        self.assertEqual(out.strip().splitlines()[-1], "gate RED (main #20 → UNASSIGNED; convergence green)")
+        self.assertEqual(out.strip().splitlines()[-1], f"gate RED (main #20 → {A.DISPATCHING_GAP}; convergence green)")
 
     def test_a_claim_is_shown_under_the_red_row_and_in_the_summary(self):
         wt = self.r.worktree("repo-wt-fixer", branch="fixer")
@@ -173,7 +173,7 @@ class FixingShownTest(RedBase):
         finally:
             os.environ.pop("AGENTCTL_AGENT_NAME")
         self.assertEqual(rc, 0, out)
-        self.assertIn("  fixing: UNASSIGNED", self.why()[1])
+        self.assertIn(f"  fixing: {A.DISPATCHING_GAP}", self.why()[1])
 
     def test_a_newer_run_failing_the_same_way_keeps_the_claim(self):
         # the claimed run's own first error line: the same as #22's but for numbers and the seed (the same signature)
@@ -208,7 +208,7 @@ class FixingShownTest(RedBase):
 
     def test_a_commit_naming_another_run_fixes_nothing_here(self):
         self.worktree_commit("repo-wt-other", "fix\n\nFixes-Red: 999")
-        self.assertIn("  fixing: UNASSIGNED", self.why()[1])
+        self.assertIn(f"  fixing: {A.DISPATCHING_GAP}", self.why()[1])
 
     def test_a_waiting_entry_with_the_fix_is_waiting(self):
         wt = self.r.worktree("repo-wt-wait", branch="wait")
@@ -237,7 +237,7 @@ class FixingShownTest(RedBase):
         runs[0]["headSha"] = fix
         self.put("runs.json", runs)
         out = self.why()[1]
-        self.assertIn("  fixing: UNASSIGNED", out)
+        self.assertIn(f"  fixing: {A.DISPATCHING_GAP}", out)
         self.assertIn(f"(fix {fix[:9]} landed, and #22 still fails this way)", out)
 
     def test_reds_outside_the_gate_show_who_fixes_them_too(self):
@@ -286,7 +286,7 @@ class StaleClaimTest(RedBase):
                 os.utime(os.path.join(gd, f), (old, old))
         self.claim(self.dead_pid(), 45, wt)
         out = self.why()[1]
-        self.assertIn("  fixing: UNASSIGNED (assigning: the patrol assigns its live author or dispatches a fixer at its next look (every 2 min)) (stale claim: gone-agent", out)
+        self.assertIn(f"  fixing: {A.DISPATCHING_GAP} (the patrol assigns its live author or dispatches a fixer now) (stale claim: gone-agent", out)
         self.assertIn("no commit or activity for", out)
         self.assertIn("STALE", self.tool("red", "list")[1])
         removed = A.sweep_claims()
@@ -596,7 +596,7 @@ class BaselineTest(RedBase):
         self.assertEqual(set(A.local_red()["checks"]), {"sbt"})
         rc, out = self.why()
         self.assertIn("Local checks: RED on plain forgejo/main", out)
-        self.assertIn("  fixing: UNASSIGNED", out)
+        self.assertIn(f"  fixing: {A.DISPATCHING_GAP}", out)
         self.assertIn("brokenspec should work", out)
         os.environ["AGENTCTL_CLAIM_PID"] = str(os.getpid())
         try:

@@ -206,10 +206,14 @@ and `red patrol` can never disagree (2026-10-27: Identity capture #2133 was `UNA
 while `red patrol` said "nothing to do", for ~50 min). Precedence: `fix landed in <sha>, awaiting #M` > a change
 waiting / landing / committed (`<worktree> (..., waiting)`) > `BLOCKED ON OWNER` > `<claimant> (..., claimed) -- note`
 > diagnosed > a notified author > a dispatched fixer before its claim (`dispatching`); with nobody on it:
-`UNASSIGNED (assigning: ...)` (a gate red, the patrol's next look), `UNASSIGNED (due: ...)` (outside the gate, the
-next look dispatches), `UNASSIGNED (outside the gate: a fixer is dispatched at HH:MM unless somebody claims it)`,
+`dispatching a fixer… (...)` (a gate red before the patrol's look, or outside the gate and due; normal weight),
+`UNASSIGNED (outside the gate: a fixer is dispatched at HH:MM unless somebody claims it)`,
 `UNASSIGNED (its fix <sha> failed ...: its fixer is resumed ...)`, or `NOBODY (skipped: <reason>)` -- dispatch OFF, a
-cap, the daily budget, an escalation. States are recomputed from the snapshot and the worktrees every time, never kept.
+cap, the daily budget, an escalation (bold NOBODY: only a truly unowned red, always with its reason). **Assign first**
+(2026-10-27, "why is main red unassigned?"): the processor cycle that first sees a gate red runs the patrol's assignment
+(author claim or dispatch) BEFORE it publishes the CI-state snapshot and the gate line, so no published state holds an
+unassigned red; when the gate line changes (its reds or their states) it touches `~/.cache/agentctl/statusline.stale`
+(`$AGENTCTL_STATUSLINE_STALE`) and the status line refreshes at its next call, not only at its 60 s age. States are recomputed from the snapshot and the worktrees every time, never kept.
 agentctl's own trees (`<clone>-wt-check-N`, `-wt-waiting`, `-wt-batch`, the queue's clone, ~/.cache) are never a
 fixer, owner or author: a queued change's owner is its entry's source worktree. `ci-why --summary` is the status
 line's one line: `gate RED (main #2066 → fix 0a5767c awaiting #2070; convergence green)`.
@@ -339,6 +343,10 @@ agent must be assigned to it".
 - **Services re-exec only onto good code.** `restart_if_changed` needs the file to equal ~/bin's HEAD version (a dirty
   edit is never picked up) and HEAD to pass `py_compile` and `agentctl --selftest`; otherwise the old code keeps running
   and one inbox entry `CODE REFUSED` names the commit.
+- **`Fixes-Red: N` is the run NUMBER** (#N, Forgejo's index): resolved through `actions/runs?run_number=N` first,
+  as a run id only when no run has that number; a number and an id naming different runs: the number, and the FIX
+  verdict says so in `[...]` (2026-10-27: `Fixes-Red: 2133`, Identity capture #2133, was read as id 2133, an old
+  convergence run #1111: FIX UNVERIFIED, and capture never dispatched).
 - **A fix for a red outside the gate** (`Fixes-Red: N` naming e.g. an Identity capture run) is verified by the watch at
   once: the workflow is dispatched on main (workflow_dispatch, default inputs), waited for, and `FIX OK` / `FIX FAILED`
   goes to the inbox, the claim is released and the snapshot refreshed. One verification at a time per workflow (a second
@@ -378,6 +386,19 @@ cold. The checker:
    it joins `waiting` (`WAITING ...`, the entry names your worktree); else the push from the tree, whose hook reuses
    the pass (or confirms the remote run) -> `LANDED <sha>` and a detached watch that closes your worktree after
    WATCH OK when proven merged (unless land had `--keep-worktree`).
+
+**Never an empty commit** (2026-10-27: overlapping entries -- a commit queued, queued again, both run -- landed four
+empty duplicates on main: 317fba9b3, 1fddd8951, 1d554f051, 693e1be78/82f4d9f55):
+- **Re-queueing replaces.** `land` from a worktree whose older entry (same worktree and branch) is still queued or
+  checking supersedes it: `SUPERSEDED <old> by <new>` to the inbox, its checker stopped; a checker re-reads its entry
+  under the landing lock and never pushes a superseded one. Joining `waiting` again supersedes the older waiting entry.
+- **Already on main is LANDED.** The checker and the `waiting` rebuild pick each commit onto current forgejo/main one
+  at a time; one that is patch-equivalent (`git cherry`'s test) or empty after the pick is dropped. An entry left with
+  nothing: `LANDED <head> (already on main via <commit>): nothing left to push`, no push. A partly applied entry keeps
+  only its non-empty commits (the dropped ones in the entry's `dropped`). A change identical to one already on
+  `waiting` joins nothing new.
+- **The last guard:** `prepush-check` (land's guard and movies' hook) refuses a range carrying an empty commit, unless
+  it is deliberate: `git commit --allow-empty` with an `Allow-Empty: <why>` trailer.
 
 A check the LAPTOP failed (sbt's server never came up, `failed to connect to server`, a script test's TIMEOUT, a
 stall) is no verdict on the change: it is queued again 5 min later, up to 3 times. Every verdict is an inbox entry
@@ -722,7 +743,7 @@ a signal, or on a crash), and land writes its `WAITING` line there at once, sinc
 - The orchestrating session reads it whether or not the agent is alive: `agentctl inbox --unread --ack` after each
   agent's report, and before deciding an agent's land is lost.
 - Each entry has a `kind`, from its verdict: `RED`, `OK`, `STALLED`, `UNKNOWN` (also a crash, a signal, an exit with
-  no verdict), `NOT_LANDED`, `LANDED`, `WAITING`, `HELD`, `FIX_FAILED`, `FIX_OK`, `FIX_UNVERIFIED`, `CHECK`, `OTHER`;
+  no verdict), `NOT_LANDED`, `SUPERSEDED`, `LANDED`, `WAITING`, `HELD`, `FIX_FAILED`, `FIX_OK`, `FIX_UNVERIFIED`, `CHECK`, `OTHER`;
   from `red`: `RED_UNCLAIMED`, `RED_BUDGET`, `RED_ESCALATE`, `BLOCKED`, `RED_DISPATCHED`, `FIXER_LANDED`,
   `FIXER_FAILED`; from the branch runs: `BRANCH_RED` (see "dispatch").
 
@@ -789,7 +810,8 @@ agentctl prepush-check --hook <remote> [<url>]        # movies' pre-push hook mo
 It refuses when `base...head` touches a file outside `--allow` / `$AGENTCTL_ALLOW`, or when it returns more than N
 files (default 2) to an older main version, which is what the `reset --soft` squash onto a moved main does. `git
 revert` commits are exempt for their own files. So is a DECLARED retirement: a deleted file named by a `Retires: <path>` trailer (one per line, in the commit's
-final trailer block with Co-Authored-By); undeclared deletions and modifications still count. `land` runs it, and so does movies' hook. Exit 0 ok, 1 refused.
+final trailer block with Co-Authored-By); undeclared deletions and modifications still count. It also refuses an EMPTY commit (no tree change) unless it carries
+an `Allow-Empty: <why>` trailer. `land` runs it, and so does movies' hook. Exit 0 ok, 1 refused.
 
 ```
 prepush-check: forgejo/main...c972d56a2b49: 1 file changed, 8 insertions(+)

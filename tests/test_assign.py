@@ -149,7 +149,7 @@ class InfraAndNobodyTest(AssignBase):
 
     def test_nobody_only_with_its_reason_the_budget(self):
         self.assertEqual(self.why("--summary")[1].strip().splitlines()[-1],
-                         "gate RED (main #20 → UNASSIGNED; convergence green)")  # before the patrol: never NOBODY
+                         f"gate RED (main #20 → {A.DISPATCHING_GAP}; convergence green)")  # before the patrol: never NOBODY
         os.environ["AGENTCTL_RED_GATE_MAX_FIXERS"] = "0"
         acts = self.patrol(time.time())
         self.assertTrue(any(a.startswith("RED UNCLAIMED: Main #20 [test (rest)]: NOBODY -- gate fixer cap 0 reached")
@@ -162,7 +162,9 @@ class InfraAndNobodyTest(AssignBase):
     def test_the_processor_patrols_at_once_when_the_snapshot_first_sees_a_gate_red(self):
         A._last_patrol[0] = time.time()
         A._seen_gate_reds.clear()
-        saved = A.slug, A.ci_why, A.publish_gate_summary, A.route_branch_reds
+        saved = A.slug, A.ci_why, A.publish_gate_summary, A.route_branch_reds, A.assign_first
+        assigned = []
+        A.assign_first = lambda repo, snap: assigned.append(snap)
         A.slug = lambda r: MOVIES
         A.ci_why = lambda *a, **k: (True, "gate RED (x)")
         A.publish_gate_summary = lambda *a, **k: None
@@ -171,8 +173,8 @@ class InfraAndNobodyTest(AssignBase):
         try:
             A.maybe_publish_gate(self.r.path)
         finally:
-            A.slug, A.ci_why, A.publish_gate_summary, A.route_branch_reds = saved
-        self.assertEqual(A._last_patrol[0], 0.0)
+            A.slug, A.ci_why, A.publish_gate_summary, A.route_branch_reds, A.assign_first = saved
+        self.assertEqual(len(assigned), 1, "the publisher assigns the new red itself, before it publishes")
         self.assertEqual(A._seen_gate_reds, {40})
 
 

@@ -5,11 +5,11 @@
 # shown in bold red; a cache older than 5 min says `as of HH:MM`. Branch reds (runs on measure/check/fixer branches)
 # follow main's, apart: `branch reds: N → owner (workflow #n)`.
 # The status line runs often, so this prints a cached line at once and refreshes the cache in the background
-# at most once a minute (ci-why talks to Forgejo). `claude-statusline --refresh` rebuilds it in the foreground.
+# at most once a minute (ci-why talks to Forgejo), or at once when the processor marks it stale (statusline.stale). `claude-statusline --refresh` rebuilds it in the foreground.
 set -u
-cache="${HOME}/.cache/agentctl/statusline.txt"
-lock="${HOME}/.cache/agentctl/statusline.lock"
-repo="${HOME}/projects/movies"
+cache="${AGENTCTL_STATUSLINE_CACHE:-${HOME}/.cache/agentctl/statusline.txt}"
+lock="${cache%.txt}.lock"
+repo="${AGENTCTL_STATUSLINE_REPO:-${HOME}/projects/movies}"
 mkdir -p "$(dirname "$cache")"
 cat >/dev/null # the session JSON Claude Code sends on stdin; not needed
 
@@ -49,7 +49,11 @@ age=999999
 # Claude Code ends the status-line command's process group, so the refresh runs in a session of its own
 # (python's start_new_session; macOS has no setsid). A lock older than 5 min is a refresh that died: take it over.
 [ -d "$lock" ] && [ $(( $(date +%s) - $(stat -f %m "$lock") )) -ge 300 ] && rmdir "$lock" 2>/dev/null
-if [ "$age" -ge 60 ] && mkdir "$lock" 2>/dev/null; then
+# The processor touches the marker when the reds or their states change: refresh at this call, not at the 60 s age
+marker="${AGENTCTL_STATUSLINE_STALE:-${HOME}/.cache/agentctl/statusline.stale}"
+stale_marker=0
+[ -f "$marker" ] && [ -f "$cache" ] && [ "$marker" -nt "$cache" ] && stale_marker=1
+if { [ "$age" -ge 60 ] || [ "$stale_marker" = 1 ]; } && mkdir "$lock" 2>/dev/null; then
   python3 -c 'import subprocess, sys
 subprocess.Popen(["/bin/bash", "-c", "trap \"rmdir \\\"$1\\\"\" EXIT; \"$0\" --refresh-only", sys.argv[1], sys.argv[2]],
                  start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)' \

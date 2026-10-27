@@ -115,7 +115,7 @@ Tables: action_run, action_run_job, action_task, action_task_step (status 1 ok, 
 5 waiting, 6 running). Prefer `forgejo-gh` / `agentctl ci-why` for runs and logs; db-q is the fallback.
   agentctl db-q 'select id, "index", status, substr(title, 1, 60) from action_run order by id desc limit 10'
 Exit: 0 ok, 1 query/connection failed, 2 refused."""
-import argparse, contextlib, io, datetime as dt, fcntl, fnmatch, glob, itertools, json, os, re, shlex, signal, subprocess, sys, time, traceback, urllib.error, urllib.parse, urllib.request
+import argparse, contextlib, io, datetime as dt, fcntl, fnmatch, glob, itertools, json, os, re, shlex, signal, subprocess, sys, threading, time, traceback, urllib.error, urllib.parse, urllib.request
 
 HOME = os.path.expanduser("~")
 REPOS = [f"{HOME}/bitcashier/{r}" for r in ("infra", "core", "dashboard", "invoice-page", "version-dashboard")] + [
@@ -1287,9 +1287,9 @@ def ci_state_path():
     return os.path.join(os.path.dirname(reds_dir()), "ci-state.json")
 
 
-def ci_state_refresh(o_r):
-    """Read the gate and every other workflow on main once, write the snapshot, return it. Raises when the gate cannot
-    be read (nothing is written: the old snapshot ages out)."""
+def ci_state_refresh(o_r, write=True):
+    """Read the gate and every other workflow on main once, write the snapshot (unless write=False: ci_state_write
+    later), return it. Raises when the gate cannot be read (nothing is written: the old snapshot ages out)."""
     gate = gate_runs(o_r)
     snap = {"at": time.time(), "repo": o_r, "outside_error": None, "outside": [],
             "gate": [{"name": n, "decided": d, "newer": nw, "since": st[0], "count": st[1],
@@ -1309,6 +1309,12 @@ def ci_state_refresh(o_r):
         snap["branches"] = branch_state(o_r, scan_repo_for(o_r), prev)
     except (Exception, SystemExit) as e:
         snap["branches_error"] = str(e)[:200]
+    if write:
+        ci_state_write(snap)
+    return snap
+
+
+def ci_state_write(snap):
     path = ci_state_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = f"{path}.{os.getpid()}.tmp"
@@ -1978,10 +1984,21 @@ def publish_gate_summary(o_r, line, epoch=None):
         return
     path = gate_summary_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        with open(path) as f:
+            prev = f.read().rstrip("\n").split("\t", 2)[1:]
+    except (OSError, ValueError):
+        prev = None
     tmp = f"{path}.{os.getpid()}.tmp"
     with open(tmp, "w") as f:
         f.write(f"{int(epoch or time.time())}\t{o_r}\t{line}\n")
     os.replace(tmp, path)
+    if prev != [o_r, line]:  # the reds or their states changed: the status line refreshes at its next call, not at 60 s
+        marker = statusline_stale_path()
+        os.makedirs(os.path.dirname(marker), exist_ok=True)
+        with open(marker, "a"):
+            pass
+        os.utime(marker, None)
 
 
 def cached_gate_summary(o_r, now=None):
@@ -2016,6 +2033,23 @@ def run_bounded(name, fn, secs):
     return not t.is_alive()
 
 
+def assign_first(repo, snap):
+    """The patrol's assignment for a gate red the publisher has just seen, before anything is published (one patrol at a
+    time: a running patrol thread is waited for). Never fatal: a failure leaves it to the patrol's next look."""
+    _last_patrol[0] = time.time()
+    try:
+        with _patrol_lock:
+            for line in patrol_repo(repo, dispatch=True, wait_recheck=False, snap=snap):
+                err(f"red patrol (assign first): {line}")
+    except (Exception, SystemExit) as e:
+        _last_patrol[0] = 0.0
+        err(f"red patrol (assign first): skipped ({str(e).replace('agentctl: ', '')[:200]})")
+
+
+def statusline_stale_path():
+    return os.environ.get("AGENTCTL_STATUSLINE_STALE") or os.path.join(HOME, ".cache", "agentctl", "statusline.stale")
+
+
 def maybe_publish_gate(repo):
     """The processor's loop, at most every GATE_PUBLISH_INTERVAL s: read the gate (it holds the token) and publish the
     summary line for the status line. Never fatal; a failed read leaves the old file to age out (fail-closed)."""
@@ -2026,14 +2060,18 @@ def maybe_publish_gate(repo):
     def work():
         try:
             o_r = slug(repo)
-            snap = ci_state_refresh(o_r)  # ONE read of Forgejo per cycle; everything below reads it
+            snap = ci_state_refresh(o_r, write=False)  # ONE read of Forgejo per cycle; everything below reads it
             refresh_pinned_recording(o_r, repo)  # what PREDICTS MAIN RED compares a branch run's recording with
             reds_now = {g["decided"]["databaseId"] for g in snap["gate"]
                         if g.get("decided") and g["decided"].get("conclusion") in RED_CONCLUSIONS}
-            if reds_now - _seen_gate_reds:  # a gate red this cycle first sees: the patrol assigns it now, not in 2 min
-                _last_patrol[0] = 0.0
+            if reds_now - _seen_gate_reds:
+                # ASSIGN FIRST (the owner: "why is main red unassigned?"): a gate red this cycle first sees is assigned
+                # -- its live author claimed, or a fixer dispatched -- BEFORE the snapshot and the gate line are
+                # published, so no published state holds a red nobody was assigned to
+                assign_first(repo, snap)
             _seen_gate_reds.clear()
             _seen_gate_reds.update(reds_now)
+            ci_state_write(snap)
             _red, line = ci_why(o_r, summary=True, snap=snap, repo=repo)
             publish_gate_summary(o_r, line.splitlines()[-1], epoch=snap["at"])
         except (Exception, SystemExit) as e:
@@ -2579,6 +2617,7 @@ def fixer_short(f):
 #                 written into the red's record and a RED UNCLAIMED inbox entry (escalated after 10 min)
 #   nobody     -- no signature could be read for it: nothing to decide on
 _blocker_cache = {}
+DISPATCHING_GAP = "dispatching a fixer…"  # a red the patrol is about to assign: normal weight (bold NOBODY: truly unowned)
 
 
 def cached_dispatch_blocker(ttl=60):
@@ -2658,8 +2697,9 @@ def red_state(g, infos, now_=None, entries=None):
         block = dispatch_block(u, rec, g, t) if any(r.get("unassigned") for r in recs) else None
         if block:  # the patrol looked: no live author, and no fixer can go
             return done("skipped", f"NOBODY (skipped: {block})", f"NOBODY (skipped: {block[:60]})", block)
-        why = "the patrol assigns its live author or dispatches a fixer at its next look (every 2 min)"
-        return done("assign", f"UNASSIGNED (assigning: {why})", "UNASSIGNED", why)
+        # the gap before the patrol's look (the processor runs it in the cycle that first sees a gate red): never NOBODY
+        why = "the patrol assigns its live author or dispatches a fixer now"
+        return done("assign", f"{DISPATCHING_GAP} ({why})", DISPATCHING_GAP, why)
     limit = env_num("AGENTCTL_RED_UNCLAIMED_MIN", RED_UNCLAIMED_MIN) * 60
     since = min([r["nobody_since"] for r in recs if r.get("nobody_since")] or [t])
     author = author_of(u, entries if entries is not None else inbox_red_entries())
@@ -2674,8 +2714,8 @@ def red_state(g, infos, now_=None, entries=None):
         return done("skipped", f"NOBODY (skipped: {block})", f"NOBODY (skipped: {block[:60]})", block, due_at=due_at)
     mins = int((t - since) // 60)
     why = f"nobody fixing it for {mins} min" + (", author gone" if author_gone else "")
-    return done("dispatch", f"UNASSIGNED (due: {why}; the patrol dispatches a fixer at its next look)",
-                "UNASSIGNED (dispatching)", why, due_at=due_at)
+    return done("dispatch", f"{DISPATCHING_GAP} (due: {why}; the patrol dispatches a fixer at its next look)",
+                DISPATCHING_GAP, why, due_at=due_at)
 
 
 def red_states(units, infos, now_=None):
@@ -4051,16 +4091,20 @@ def gate_unread_spell(o_r, why):
 def resolve_run(o_r, n):
     """(workflow, run) of the run on main a number or id names, else (None, None)."""
     n = str(n).lstrip("#")
-    for lists in (_gate_lists, _outside_lists):
-        for name, runs in lists.items():
-            for r in runs:
-                if n in run_names(r):
-                    return name, r
+    for key in ("number", "databaseId"):  # a run NUMBER first (the repo's convention), an id only failing that
+        for lists in (_gate_lists, _outside_lists):
+            for name, runs in lists.items():
+                for r in runs:
+                    if str(r.get(key)) == n:
+                        return name, r
     try:
         runs = gh_json(o_r, "run", "list", "--branch", "main", "--limit", "200", "--json", RUN_FIELDS)
-        r = next((r for r in runs if n in run_names(r)), None)
+        r = next((r for r in runs if str(r.get("number")) == n), None)
         if r is None:
-            r = gh_json(o_r, "run", "view", n, "--json", RUN_FIELDS)
+            rid = run_id_of_number(o_r, n) if n.isdigit() else None
+            r = next((r for r in runs if str(r.get("databaseId")) == str(rid or n)), None)
+            if r is None:
+                r = gh_json(o_r, "run", "view", str(rid or n), "--json", RUN_FIELDS)
         return r.get("workflowName"), r
     except (Exception, SystemExit) as e:
         err(f"red: could not look up run {n} ({str(e)[:120]}): claimed by its number only")
@@ -4235,16 +4279,17 @@ def sweep_claims(now_=None, out=None):
 
 
 _last_patrol = [0.0]
+_patrol_lock = threading.Lock()  # the patrol thread and the publisher's assign-first look: one at a time (one dispatch)
 
 
-def patrol_repo(repo, dispatch=True, wait_recheck=True, report=None):
+def patrol_repo(repo, dispatch=True, wait_recheck=True, report=None, snap=None):
     """The processor's look at the reds: the gate (and the reds outside it), who fixes each, notes and dispatch. Reads the
     CI-state snapshot when it is fresh, else Forgejo. A stale local-checks red is rechecked (in the background in the
     processor, wait_recheck=False)."""
     o_r = slug(repo)
     if o_r not in GATING:
         return []
-    snap = ci_state_load(o_r)
+    snap = snap or ci_state_load(o_r)
     pre = recheck_local(repo, wait=wait_recheck)
     if snap:
         rows = [(n, d, _gate_lists.get(n, []), True) for n, d, _nw, _s in gate_from_snap(snap)]
@@ -4274,8 +4319,9 @@ def maybe_patrol(repo):
 
     def work():
         try:
-            for line in patrol_repo(repo, dispatch=True, wait_recheck=False):
-                err(f"red patrol: {line}")
+            with _patrol_lock:
+                for line in patrol_repo(repo, dispatch=True, wait_recheck=False):
+                    err(f"red patrol: {line}")
         except (Exception, SystemExit) as e:
             why = str(e).replace("agentctl: ", "")[:200]
             err(f"red patrol: skipped ({why})")
@@ -5788,21 +5834,68 @@ def job_results(o_r, rid):
     return {j.get("name"): j.get("conclusion") or j.get("status") or "" for j in d.get("jobs") or []}
 
 
-def claimed_run(o_r, n, listed):
-    """(kind, run) of the run a `Fixes-Red: n` names -- a run number or a run id -- among the runs the watch listed, else
-    by `run view` (an id); (None, None) when it is not one of the watched workflows."""
-    for kind, runs in listed.items():
+def run_id_of_number(o_r, n):
+    """The run id whose run NUMBER (Forgejo's index_in_repo, the #N of every link) is n, or None."""
+    try:
+        runs = (api(o_r, "GET", "actions/runs", {"run_number": int(n), "limit": 5}) or {}).get("workflow_runs") or []
+    except (Exception, SystemExit):
+        return None
+    hit = next((x for x in runs if str(x.get("index_in_repo", x.get("run_number"))) == str(n)), None)
+    return hit and hit.get("id")
+
+
+def fixes_red_run(o_r, n, listed=None):
+    """The run a `Fixes-Red: n` names. The repo's convention is the run NUMBER (#N); an id only when no run has that
+    number (2026-10-27: Fixes-Red 2133 meant Identity capture #2133, id 3281, and was read as id 2133, an old
+    convergence run #1111). When the number and the id name different runs, the number wins and the run says so in
+    `_note`. None when n is no run."""
+    listed = listed or {}
+    for runs in listed.values():
         for r in runs:
-            if str(n) in (str(r.get("number")), str(r.get("databaseId"))):
-                return kind, r
+            if str(r.get("number")) == str(n):
+                return dict(r)
+    run = None
+    rid = run_id_of_number(o_r, n)
+    if rid is not None:
+        try:
+            run = gh_json(o_r, "run", "view", str(rid), "--json", RUN_FIELDS)
+        except Exception:
+            run = None
+    if run is not None:
+        by_id = next((r for runs in listed.values() for r in runs if str(r.get("databaseId")) == str(n)), None)
+        if by_id is None:
+            try:
+                by_id = gh_json(o_r, "run", "view", str(n), "--json", RUN_FIELDS)
+            except Exception:
+                by_id = None
+        if by_id and str(by_id.get("databaseId")) != str(run.get("databaseId")):
+            run["_note"] = (f"Fixes-Red {n} read as run number #{n} ({run.get('workflowName')}), not run id {n} "
+                            f"({by_id.get('workflowName')} #{by_id.get('number')})")
+        return run
+    for runs in listed.values():  # no run has that number: an id, as the trailer's fallback
+        for r in runs:
+            if str(r.get("databaseId")) == str(n):
+                return dict(r, _note=f"Fixes-Red {n}: no run #{n}, read as run id {n}")
     try:
         r = gh_json(o_r, "run", "view", str(n), "--json", RUN_FIELDS)
+        return dict(r, _note=f"Fixes-Red {n}: no run #{n}, read as run id {n}")
     except Exception:
+        return None
+
+
+def claimed_run(o_r, n, listed):
+    """(kind, run) of the run a `Fixes-Red: n` names (fixes_red_run: its number first, then an id); kind None when it is
+    not one of the watched workflows; (None, None) when n is no run."""
+    r = fixes_red_run(o_r, n, listed)
+    if r is None:
         return None, None
+    for kind, runs in listed.items():
+        if any(str(x.get("databaseId")) == str(r.get("databaseId")) for x in runs):
+            return kind, r
     for kind, (name, _wfile) in WATCH.get(o_r, {}).items():
         if r.get("workflowName") == name:
             return kind, r
-    return None, None
+    return None, r
 
 
 # -- a fix for a red OUTSIDE the gate (Identity capture, weekly or on dispatch) is verified now, not at the next
@@ -5833,11 +5926,10 @@ def verify_dir(*parts):
     return reds_dir("verify", *parts)
 
 
-def verify_outside_gate(o_r, repo, sha, n):
+def verify_outside_gate(o_r, repo, sha, n, old=None):
     """The verdict line for `Fixes-Red: n` naming a run outside the gate, or None when n is no run at all."""
-    try:
-        old = gh_json(o_r, "run", "view", str(n), "--json", RUN_FIELDS)
-    except Exception:
+    old = old if old is not None else fixes_red_run(o_r, n)
+    if old is None:
         return None
     name = old.get("workflowName")
     path, txt = workflow_file_of(repo, sha, name) if name else (None, "")
@@ -5915,8 +6007,8 @@ def verify_fixes(o_r, sha, fixes, done, listed, flows):
     for n in fixes:
         try:
             kind, old = claimed_run(o_r, n, listed)
-            if old is None:
-                line = verify_outside_gate(o_r, repo_for_verify(o_r), sha, n)
+            if kind is None:
+                line = verify_outside_gate(o_r, repo_for_verify(o_r), sha, n, old=old) if old is not None else None
                 if line is None:
                     line = f"FIX UNVERIFIED: #{n} (fix {sha[:10]}) is not a run of {' or '.join(f[0] for f in flows.values())}"
             elif kind not in done or done[kind][0] is None:
@@ -5937,7 +6029,9 @@ def verify_fixes(o_r, sha, fixes, done, listed, flows):
                 else:
                     line = f"FIX OK: #{old.get('number')} cleared by #{new.get('number')}"
         except (Exception, SystemExit) as e:
-            line = f"FIX UNVERIFIED: #{n} (fix {sha[:10]}) could not be compared ({str(e)[:160]})"
+            line, old = f"FIX UNVERIFIED: #{n} (fix {sha[:10]}) could not be compared ({str(e)[:160]})", None
+        if old is not None and old.get("_note"):
+            line += f" [{old['_note']}]"
         print(line, flush=True)
         inbox_write("watch", line, [line], [], 1 if line.startswith("FIX FAILED") else 0)
 
@@ -6178,14 +6272,126 @@ def drop_waiting_tree(repo, wt):
     git(repo, "branch", "-D", WAITING_BRANCH, check=False)
 
 
-def pick(wt, commits):
-    """Cherry-pick commits onto wt's HEAD: None, or the conflicting files (the pick aborted)."""
-    r = git(wt, "cherry-pick", "--allow-empty", "--keep-redundant-commits", *commits, check=False)
-    if r.returncode == 0:
+# NEVER AN EMPTY COMMIT (2026-10-27). An agent queued a commit, queued it again, and both entries ran: the later one's
+# commit had already landed through the earlier one, its rebase (a cherry-pick with --keep-redundant-commits) left an
+# EMPTY commit, and that was pushed -- four times on movies main (317fba9b3, 1fddd8951, 1d554f051, 693e1be78/82f4d9f55).
+# Now every rebuild of an entry drops a commit that is patch-equivalent to its new base, or empty after the pick; an
+# entry left with nothing is LANDED (already on main via <commit>); re-queueing supersedes the older entry; and the
+# squash guard refuses any push carrying an empty commit unless it is a deliberate one with an `Allow-Empty:` trailer.
+ALLOW_EMPTY_TRAILER = "Allow-Empty"
+
+
+def deliberate_empty(repo, c):
+    """A commit made empty on purpose: `git commit --allow-empty` with an `Allow-Empty: <why>` trailer."""
+    return bool(git(repo, "log", "-1", f"--format=%(trailers:key={ALLOW_EMPTY_TRAILER},valueonly)", c,
+                    check=False).stdout.strip())
+
+
+def is_empty_commit(repo, c):
+    """A non-merge commit whose tree is its parent's (a root commit is never empty here)."""
+    parents = git(repo, "rev-list", "--parents", "-n", "1", c).split()[1:]
+    if len(parents) != 1:
+        return False
+    return git(repo, "rev-parse", f"{c}^{{tree}}").strip() == git(repo, "rev-parse", f"{parents[0]}^{{tree}}").strip()
+
+
+def patch_id(repo, c):
+    diff = git(repo, "show", "--format=", "--no-color", "--no-ext-diff", c, check=False).stdout
+    if not diff.strip():
         return None
-    files = git(wt, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
-    git(wt, "cherry-pick", "--abort", check=False)
-    return files or [r.stderr.strip()[:200]]
+    r = subprocess.run(["git", "patch-id", "--stable"], cwd=repo, input=diff, capture_output=True, text=True)
+    return (r.stdout.split() or [None])[0]
+
+
+def equivalent_on(repo, c, upstream, limit=400):
+    """The commit of `upstream` (since its merge-base with c) that carries c's patch, or None (`git cherry`'s test,
+    naming the commit)."""
+    pid = patch_id(repo, c)
+    if not pid:
+        return None
+    mb = git(repo, "merge-base", c, upstream, check=False).stdout.strip()
+    rng = f"{mb}..{upstream}" if mb else upstream
+    for u in git(repo, "rev-list", "--no-merges", "-n", str(limit), rng, check=False).stdout.split():
+        if patch_id(repo, u) == pid:
+            return u
+    return None
+
+
+def pick(wt, commits, dropped=None):
+    """Cherry-pick commits onto wt's HEAD, one at a time: None, or the conflicting files (the pick aborted, HEAD back
+    where it was). A commit already in HEAD's history (patch-equivalent), or empty once picked, is DROPPED, never kept
+    as an empty commit: appended to `dropped` as (commit, the commit of HEAD carrying it, or None). A deliberate empty
+    commit (an Allow-Empty: trailer) is kept."""
+    start = git(wt, "rev-parse", "HEAD").strip()
+    for c in commits:
+        before = git(wt, "rev-parse", "HEAD").strip()
+        r = git(wt, "cherry-pick", "--allow-empty", "--keep-redundant-commits", c, check=False)
+        if r.returncode != 0:
+            files = git(wt, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
+            git(wt, "cherry-pick", "--abort", check=False)
+            via = equivalent_on(wt, c, before) if files else None
+            if via:  # its patch is already there, and a later change to the same lines conflicts with it again
+                git(wt, "reset", "--hard", "-q", before)
+                if dropped is not None:
+                    dropped.append((c, via))
+                continue
+            git(wt, "reset", "--hard", "-q", start)
+            return files or [r.stderr.strip()[:200]]
+        if is_empty_commit(wt, "HEAD") and not deliberate_empty(wt, c):
+            git(wt, "reset", "--hard", "-q", before)
+            if dropped is not None:
+                dropped.append((c, equivalent_on(wt, c, before)))
+    return None
+
+
+def apply_entry(d, wt, e, base):
+    """Pick the entry's commits onto wt's HEAD (base, or base plus earlier entries): ('ok', None), ('conflict', files),
+    ('landed', via) or ('duplicate', via). A commit already on MAIN (base's history) is dropped from the entry for good
+    (a partly landed entry keeps only the rest); one only an earlier entry carries is left out of this build alone (that
+    entry may still be rejected). Nothing left of it on main: 'landed' -- the caller says LANDED, never pushes empty."""
+    first = git(wt, "rev-parse", "HEAD").strip() == base
+    dropped = []
+    conflict = pick(wt, e["commits"], dropped)
+    if conflict:
+        return "conflict", conflict
+    if not dropped:
+        return "ok", None
+    on_main = [(c, v) for c, v in dropped
+               if (v and git(wt, "merge-base", "--is-ancestor", v, base, check=False).returncode == 0) or (not v and first)]
+    if on_main:
+        gone = {c for c, _v in on_main}
+        e["commits"] = [c for c in e["commits"] if c not in gone]
+        e.setdefault("dropped", []).extend([[c, v] for c, v in on_main])
+        save_entry(d, e)
+        wlog(d, f"{e['id']}: {len(on_main)} commit(s) already on {REMOTE}/main, dropped: "
+                + ", ".join(f"{c[:10]} (via {v[:10] if v else 'an empty pick'})" for c, v in on_main))
+        if not e["commits"]:
+            return "landed", next((v for _c, v in reversed(on_main) if v), None)
+    if not [c for c in e["commits"] if c not in {x for x, _v in dropped}]:  # all of it is on an earlier entry
+        return "duplicate", next((v for _c, v in reversed(dropped) if v), None)
+    return "ok", None
+
+
+def already_landed(d, e, via):
+    """Every commit of the entry is on main already (an earlier entry, or someone, landed it): LANDED, nothing pushed."""
+    queue_verdict(d, e, "landed", f"LANDED {e['head']} (already on main via {via or 'an equivalent commit'}): "
+                                  "nothing left to push", code=0, landed_sha=via, already=True)
+
+
+def supersede(d, e, by, why):
+    """The entry gives way to `by` (a newer entry of the same worktree and branch, or one carrying the same change): its
+    checker, if running, is stopped; said in the inbox."""
+    e.update(status="superseded", superseded_by=by, why=why, decided=ts())
+    save_entry(d, e)
+    h = read_record(entry_owned(e["id"]).record) or {}
+    if lock_held(entry_owned(e["id"]).lockpath) and h.get("pid") and int(h["pid"]) != os.getpid():
+        try:
+            os.kill(int(h["pid"]), signal.SIGTERM)  # its checker: its CI run is cancelled with it
+        except OSError:
+            pass
+    line = f"SUPERSEDED {e['id']} by {by}: {why}"
+    wlog(d, line)
+    inbox_write("land", line, [line], [], 0, cwd=e["worktree"])
 
 
 def run_hook(wt, mode, base):
@@ -6239,7 +6445,7 @@ def batch_order(repo, entries, reds):
     return sorted(entries, key=lambda e: (rank(e), e["seq"]))
 
 
-def join(repo, main_ref, sh, log_path, a, head=None, worktree=None):
+def join(repo, main_ref, sh, log_path, a, head=None, worktree=None, branch=None):
     """Under the landing lock, in seconds: the change (its own checks passed) joins `waiting`, rebuilt on forgejo/main.
     Rejected only on a cherry-pick conflict. Prints `WAITING <tip> (entry <id>, n in batch)`, starts the processor."""
     lock_note("join `waiting`")
@@ -6252,24 +6458,39 @@ def join(repo, main_ref, sh, log_path, a, head=None, worktree=None):
     reds = gate_reds(repo)
     ensure_waiting_tree(repo, wt)
     base = git(repo, "rev-parse", main_ref).strip()
-    rebuild(repo, d, wt, batch_order(repo, waiting_entries(d), reds), base)
+    branch = branch_of(repo) if branch is None else branch
+    seq_lock = open(os.path.join(d, "seq.lock"), "a+")  # a seq of its own, beside a land queueing meanwhile
+    fcntl.flock(seq_lock, fcntl.LOCK_EX)
+    seq = max([e["seq"] for e in waiting_entries(d, open_only=False)] + [0]) + 1
+    eid = f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(worktree or repo)}-{seq}"
+    for old in waiting_entries(d):  # joining again replaces this worktree and branch's older waiting entry
+        if same_change_source(old, worktree or repo, branch):
+            supersede(d, old, eid, f"{worktree or repo} joined `{WAITING_BRANCH}` again; only the newest entry lands")
+    seq_lock.close()
+    kept = rebuild(repo, d, wt, batch_order(repo, waiting_entries(d), reds), base)
     before = git(wt, "rev-parse", "HEAD").strip()
-    conflict = pick(wt, commits)
+    dropped = []
+    conflict = pick(wt, commits, dropped)
     if conflict:
         git(wt, "reset", "--hard", "-q", before)
         print(f"NOT LANDED: the change conflicts with the changes already on `{WAITING_BRANCH}` (rebuilt on {REMOTE}/main "
               f"{base[:10]}) in: {', '.join(conflict)}. Rebase onto them (git rebase {WAITING_BRANCH}) or wait for them "
               f"to land.")
         return 1
-    seq_lock = open(os.path.join(d, "seq.lock"), "a+")  # a seq of its own, beside a land queueing meanwhile
-    fcntl.flock(seq_lock, fcntl.LOCK_EX)
-    seq = max([e["seq"] for e in waiting_entries(d, open_only=False)] + [0]) + 1
-    e = {"id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(worktree or repo)}-{seq}", "seq": seq,
-         "worktree": worktree or repo, "head": head, "commits": commits, "fixes": sorted(fixes_of(repo, commits)),
-         "status": "waiting", "created": ts(), "tip": git(wt, "rev-parse", "HEAD").strip(),
-         "follow": bool(getattr(a, "follow", False))}
+    if commits and len(dropped) == len(commits):  # the very same change already waits: no empty entry of its own
+        via = next((v for _c, v in reversed(dropped) if v), None)
+        owner = next((x for x in kept if via and x.get("tip") and git(
+            wt, "merge-base", "--is-ancestor", via, x["tip"], check=False).returncode == 0), None)
+        if owner:
+            print(f"WAITING {owner['tip']} (entry {owner['id']}: the same change already waits; nothing new joined)",
+                  flush=True)
+            a.waiting = owner
+            spawn_waiting_processor(repo)
+            return 0
+    e = {"id": eid, "seq": seq, "worktree": worktree or repo, "branch": branch, "head": head, "commits": commits,
+         "fixes": sorted(fixes_of(repo, commits)), "status": "waiting", "created": ts(),
+         "tip": git(wt, "rev-parse", "HEAD").strip(), "follow": bool(getattr(a, "follow", False))}
     save_entry(d, e)
-    seq_lock.close()
     if reds and set(e["fixes"]) & reds:  # a fix goes FIRST: the branch is rebuilt in batch order with it
         rebuild(repo, d, wt, batch_order(repo, waiting_entries(d), reds), base)
         e = next(x for x in waiting_entries(d) if x["id"] == e["id"])
@@ -6303,6 +6524,20 @@ QUEUE_INFRA_DELAY = 300
 QUEUE_ROUNDS = 3        # checked again while main moves under the checks; the last round pushes, its hook checking
 
 
+def branch_of(wt):
+    """The worktree's checked-out branch ('' when detached or gone)."""
+    if not os.path.isdir(wt or ""):
+        return ""
+    return git(wt, "symbolic-ref", "--short", "-q", "HEAD", check=False).stdout.strip()
+
+
+def same_change_source(e, worktree, branch):
+    """Whether entry e came from this worktree and branch (an entry from before branches were recorded: the worktree)."""
+    if os.path.realpath(e.get("worktree") or "") != os.path.realpath(worktree or ""):
+        return False
+    return not e.get("branch") or not branch or e["branch"] == branch
+
+
 def queued_entries(d):
     return [e for e in waiting_entries(d, open_only=False) if e.get("status") in ("queued", "checking")]
 
@@ -6326,12 +6561,16 @@ def enqueue(repo, main_ref, sh, a):
         fcntl.flock(seq_lock, fcntl.LOCK_EX)
         seq = max([e["seq"] for e in waiting_entries(d, open_only=False)] + [0]) + 1
         e = {"id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{seq}", "seq": seq,
-             "worktree": repo, "head": head, "commits": commits, "fixes": sorted(fixes_of(repo, commits)),
+             "worktree": repo, "branch": branch_of(repo), "head": head, "commits": commits,
+             "fixes": sorted(fixes_of(repo, commits)),
              "status": "queued", "created": ts(), "keep_worktree": bool(getattr(a, "keep_worktree", False)),
              "claude_pid": int(os.environ["CLAUDE_PID"]) if (os.environ.get("CLAUDE_PID") or "").isdigit() else None,
              "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or None,
              "base": git(repo, "rev-parse", main_ref).strip()}
         save_entry(d, e)
+        for old in queued_entries(d):  # RE-QUEUEING REPLACES: only the newest entry per worktree and branch runs
+            if old["id"] != e["id"] and same_change_source(old, repo, e["branch"]):
+                supersede(d, old, e["id"], f"{repo} queued again ({head[:10]}); only the newest entry runs")
     ahead = len(queued_entries(d)) - 1
     print(f"QUEUED {e['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}): its checks run in the background; "
           "LANDED / WAITING / NOT LANDED goes to `agentctl inbox`", flush=True)
@@ -6386,6 +6625,14 @@ def spawn_checks(repo, d):
         reds = set()
     todo = sorted([e for e in waiting_entries(d, open_only=False) if e.get("status") in ("queued", "checking")],
                   key=lambda e: (0 if reds and set(e.get("fixes") or []) & reds else 1, e["seq"]))
+    newest = {}
+    for e in sorted(todo, key=lambda e: e["seq"]):  # entries queued before re-queueing replaced: the newest one runs
+        for k, older in list(newest.items()):
+            if same_change_source(older, e["worktree"], e.get("branch") or ""):
+                supersede(d, older, e["id"], f"{e['worktree']} queued again; only the newest entry runs")
+                del newest[k]
+        newest[e["id"]] = e
+    todo = [e for e in todo if e["id"] in newest]
     started = 0
     for e in todo:
         if lock_held(entry_owned(e["id"]).lockpath) or e.get("retry_after", 0) > time.time():
@@ -6410,11 +6657,16 @@ def queue_verdict(d, e, status, verdict, tail=(), code=1, **fields):
     inbox_write("land", verdict.splitlines()[0], [verdict.splitlines()[0]], list(tail)[-25:], code, cwd=e["worktree"])
 
 
-def rebase_in_tree(tree, e, base):
-    """The entry's commits on base, in the tree: the new head, or None on a conflict (aborted)."""
+def rebase_in_tree(d, tree, e, base):
+    """The entry's commits on base, in the tree: (head, None); (None, None) on a conflict (aborted); (None, via) when
+    every commit is on base already (dropped: LANDED via that commit, never an empty push)."""
     git(tree, "checkout", "-q", "--force", "--detach", base)
-    conflict = pick(tree, e["commits"])
-    return None if conflict else git(tree, "rev-parse", "HEAD").strip()
+    how, x = apply_entry(d, tree, e, base)
+    if how == "conflict":
+        return None, None
+    if how in ("landed", "duplicate"):
+        return None, x or "an equivalent commit"
+    return git(tree, "rev-parse", "HEAD").strip(), None
 
 
 def check_entry(repo, eid):
@@ -6457,7 +6709,10 @@ def _check_entry(repo, d, e, i, own=None):
         git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
         base = git(repo, "rev-parse", f"{REMOTE}/main").strip()
         tree = check_tree(repo, i, base)
-        head = rebase_in_tree(tree, e, base)
+        head, via = rebase_in_tree(d, tree, e, base)
+        if via:
+            already_landed(d, e, via if via != "an equivalent commit" else None)
+            return 0
         if not head:
             queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {REMOTE}/main {base[:10]} "
                           f"(main moved since QUEUED): rebase onto forgejo/main and land again")
@@ -6495,6 +6750,10 @@ def _check_entry(repo, d, e, i, own=None):
         with land_lock(repo) as held:
             if not held:
                 continue
+            now_ = read_record(os.path.join(d, "entries", f"{e['id']}.json")) or {}
+            if now_.get("status") not in ("queued", "checking"):  # superseded / cancelled during its checks: no push
+                wlog(d, f"{e['id']}: {now_.get('status')} during its checks: not pushed")
+                return 0
             git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
             moved = git(repo, "rev-parse", f"{REMOTE}/main").strip()
             if moved != base:
@@ -6503,7 +6762,10 @@ def _check_entry(repo, d, e, i, own=None):
                     continue
                 # the last round: rebased under the lock and pushed, so the push's hook runs the checks on the new base
                 # here (as land's last round did): a busy main never starves a change
-                head = rebase_in_tree(tree, e, moved)
+                head, via = rebase_in_tree(d, tree, e, moved)
+                if via:
+                    already_landed(d, e, via if via != "an equivalent commit" else None)
+                    return 0
                 if not head:
                     queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {REMOTE}/main "
                                   f"{moved[:10]} (main moved during its checks): rebase onto forgejo/main and land again")
@@ -6547,7 +6809,8 @@ def queue_join(repo, d, e, tree, head):
     with contextlib.redirect_stdout(out):
         rc = join(repo, f"refs/remotes/{REMOTE}/main", lambda *x: subprocess.run(x, cwd=tree, capture_output=True,
                                                                                   text=True, env=tool_env()),
-                  os.path.join(d, f"check-{e['id']}"), a, head=head, worktree=e["worktree"])
+                  os.path.join(d, f"check-{e['id']}"), a, head=head, worktree=e["worktree"],
+                  branch=e.get("branch") or "")
     line = (out.getvalue().strip().splitlines() or [""])[-1]
     if rc == 0:
         e.update(status="joined", decided=ts(), waiting_id=a.waiting["id"])
@@ -6838,10 +7101,19 @@ def rebuild(repo, d, wt, entries, base):
     git(wt, "reset", "--hard", "-q", base)
     kept = []
     for e in entries:
-        conflict = pick(wt, e["commits"])
-        if conflict:
+        how, x = apply_entry(d, wt, e, base)
+        if how == "conflict":
             reject(d, e, f"main moved while it waited and the change no longer applies (conflicts in: "
-                         f"{', '.join(conflict)}): rebase onto forgejo/main and land again")
+                         f"{', '.join(x)}): rebase onto forgejo/main and land again")
+            continue
+        if how == "landed":  # all of it reached main meanwhile: LANDED, and nothing of it is pushed again
+            already_landed(d, e, x)
+            continue
+        if how == "duplicate":  # an earlier entry carries the very same change: that one lands it
+            owner = next((k for k in kept if x and git(wt, "merge-base", "--is-ancestor", x, k["tip"],
+                                                        check=False).returncode == 0), None)
+            supersede(d, e, owner["id"] if owner else "an earlier entry",
+                      f"the same change already waits on `{WAITING_BRANCH}`" + (f" as {owner['id']}" if owner else ""))
             continue
         e["tip"] = git(wt, "rev-parse", "HEAD").strip()
         kept.append(e)
@@ -7078,7 +7350,7 @@ def waiting_round(repo, d, wt):
         ensure_waiting_tree(repo, wt)
         base = git(repo, "rev-parse", f"{REMOTE}/main").strip()
         kept = rebuild(repo, d, wt, batch_order(repo, entries, reds), base)
-    for e in [e for e in entries if e not in kept]:
+    for e in [e for e in entries if e not in kept and e.get("status") == "rejected"]:  # LANDED / SUPERSEDED: said
         inbox_write("land", f"NOT LANDED: {e.get('why', 'rejected').splitlines()[0]}", [], [], 1, cwd=e["worktree"])
     if not kept:
         return "rejected"
@@ -7713,6 +7985,13 @@ def check_range(repo, base, head, allow, max_foreign):
         outside = [p for _, p in files if not allowed(p, allow)]
         if outside:
             problems.append(f"{len(outside)} file(s) outside the allowed set {allow}: " + ", ".join(outside[:20]))
+    empty = [c for c in git(repo, "rev-list", "--no-merges", f"{mb}..{head}").split()
+             if is_empty_commit(repo, c) and not deliberate_empty(repo, c)]
+    if empty:  # never an empty commit on main (four landed as re-queued duplicates, 2026-10-27)
+        problems.append(f"{len(empty)} EMPTY commit(s) (no change: already on main?): "
+                        + ", ".join(f"{c[:10]} {git(repo, 'log', '-1', '--format=%s', c).strip()[:60]}" for c in empty[:10])
+                        + f". Drop them (git rebase {base}); a deliberate empty commit needs an "
+                          f"`{ALLOW_EMPTY_TRAILER}: <why>` trailer")
     exempt = reverted_commits(repo, mb, head)
     reverts = [(p, c) for p, c in foreign_reverts(repo, base, head, files) if p not in exempt]
     if allow:  # files in the allowed set are the agent's own: reverting them is its call
@@ -8783,7 +9062,7 @@ INBOX_KINDS = [("BRANCH_RED", r"BRANCH RED"), ("RED_UNCLAIMED", r"RED UNCLAIMED"
                ("RED", r"WATCH RED"), ("OK", r"WATCH OK"), ("STALLED", r"WATCH STALLED|STALLED:|.*\bstalled\b"),
                # a crash, a signal or an exit with no verdict: whatever it watched is unknown now
                ("UNKNOWN", r"WATCH UNKNOWN|UNKNOWN:|crashed:|exited:|ended by signal|exit \d+ with no verdict"),
-               ("NOT_LANDED", r"NOT LANDED"), ("LANDED", r"LANDED "), ("WAITING", r"WAITING "), ("QUEUED", r"QUEUED "), ("HELD", r"HELD:"),
+               ("NOT_LANDED", r"NOT LANDED"), ("SUPERSEDED", r"SUPERSEDED "), ("LANDED", r"LANDED "), ("WAITING", r"WAITING "), ("QUEUED", r"QUEUED "), ("HELD", r"HELD:"),
                ("CHECK", r"CHECK CAP")]
 WAIT_KINDS_DEFAULT = "RED,BRANCH_RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_BUDGET,RED_AUTHOR,RED_ESCALATE,BLOCKED,FIXER_FAILED,RED_REVERT"
 
