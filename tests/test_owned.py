@@ -136,6 +136,25 @@ class OwnedTest(unittest.TestCase):
         self.assertIn("agentctl changed on disk", errs)
         self.assertEqual(A.owner_records(), [], "and leaves no record behind")
 
+    def test_a_restart_resumes_the_owners_own_command_not_the_processs(self):
+        """land's watch restarts as `agentctl watch ...`, never as `land` again (which found the sha on main, printed
+        LANDED a second time and exited 0 with no WATCH verdict, 2026-10-27)."""
+        execs = []
+        saved = A.os.execv, A.START_CODE, A.sys.argv
+        A.os.execv = lambda exe, args: execs.append(args)
+        A.START_CODE, A.sys.argv = "an-older-agentctl", ["agentctl", "land"]
+        A._last_code_check[0] = 0.0
+        try:
+            o = A.Owned("watch", "o_r-sha", ["watch", "--sha", "abc"])
+            self.assertTrue(o.acquire())
+            A.restart_if_changed([o])
+        finally:
+            A.os.execv, A.START_CODE, A.sys.argv = saved
+            A._last_code_check[0] = 0.0
+            o.release()
+        self.assertEqual(len(execs), 1)
+        self.assertEqual(execs[0][2:], ["watch", "--sha", "abc"])
+
     def test_orphans_names_a_dead_owners_record_and_an_owner_on_old_code(self):
         d = os.environ["AGENTCTL_OWNERS_DIR"]
         os.makedirs(d, exist_ok=True)

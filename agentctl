@@ -570,7 +570,8 @@ _last_code_check = [0.0]
 
 
 def restart_if_changed(owned=(), argv=None):
-    """Re-exec this process on agentctl's new code (same pid, same argv unless given) once the file on disk changed.
+    """Re-exec this process on agentctl's new code (same pid; argv: given, else the first owner's, else this process's)
+    once the file on disk changed.
     The owned locks are released without cancelling: the new process takes them back and adopts their runs."""
     every = float(os.environ.get("AGENTCTL_RESTART_CHECK", OWNERS_RESTART_CHECK))
     if time.time() - _last_code_check[0] < every:
@@ -584,7 +585,10 @@ def restart_if_changed(owned=(), argv=None):
         o.release(cancel=False, keep_record=True)
     sys.stdout.flush()
     sys.stderr.flush()
-    os.execv(sys.executable, [sys.executable, TOOL_PATH] + list(sys.argv[1:] if argv is None else argv))
+    # The owner's own command (land's watch resumes as `agentctl watch`, not as `land`), else this process's.
+    if argv is None:
+        argv = owned[0].argv if owned else sys.argv[1:]
+    os.execv(sys.executable, [sys.executable, TOOL_PATH] + list(argv))
 
 
 def owner_records():
