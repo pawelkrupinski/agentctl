@@ -2896,7 +2896,8 @@ def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None):
 #   (free + inactive + speculative pages) less a reserve ($AGENTCTL_GOV_RESERVE_GB, 1) less what the tickets admitted in
 #   the last 2 min will still grow into (a JVM takes its heap over its first minutes); and memory pressure (100 -
 #   memory_pressure's free %) must be under 75% (90% for red).
-# - CPU: agent work waits while the 1-min load is over 1.5x the cores, measurements while over 1x; checks and red do not.
+# - CPU: checks wait while the 1-min load is over 4x the cores (a load of ~250 kept an sbt server from starting in 5 min
+#   and failed two checks, 2026-10-27), agent work over 1.5x, measurements over 1x; red never.
 # - EVICTION: when the head waiter does not fit on memory, the governor stops the idle kept sbt server unused longest
 #   (sbt-warm's registry: no call running in it -- its busy lock taken exclusively for the stop, so none starts under it --
 #   unused for a minute, not serving, never the root checkout's), then looks again. Idle warm servers go first.
@@ -2909,7 +2910,7 @@ GOV_RESERVE_GB = 1.0
 GOV_FREE_NEED_GB = 2.5  # free memory a new JVM needs NOW (beyond the reserve); its heap grows into the budget's share later
 GOV_PRESSURE_STOP = {"red": 90}  # memory pressure (%) at which a class waits; others: GOV_PRESSURE_DEFAULT
 GOV_PRESSURE_DEFAULT = 75
-GOV_LOAD = {"agent": 1.5, "measure": 1.0}  # waits while load1 > factor x cores; red and check never wait on CPU
+GOV_LOAD = {"check": 4.0, "agent": 1.5, "measure": 1.0}  # waits while load1 > factor x cores; red never waits on CPU
 GOV_EVICT_IDLE = 60     # a kept server unused this long (seconds) may be evicted
 GOV_POLL = 2.0
 GOV_REPORT = 600
@@ -4506,6 +4507,12 @@ def join(repo, main_ref, sh, log_path, a, head=None, worktree=None):
 # moved meanwhile: rebased in the tree and checked again. Every verdict goes to the inbox with the agent's worktree.
 # `land --follow` keeps the old in-process land (checks, push, watch) for scripts and red fixers.
 QUEUE_POOL = 3          # check trees, so at most this many queued changes are checked at once ($AGENTCTL_CHECK_TREES)
+# A check the LAPTOP failed, not the change: sbt's server never came up or was lost, a script test cut off by its
+# time bound, a stall. Queued again after QUEUE_INFRA_DELAY, at most QUEUE_INFRA_RETRIES times, then judged as it is.
+INFRA_CHECK_FAILURE = re.compile(r"failed to connect to server|sbt server did not start within \d+ seconds|"
+                                 r"sbt server disconnected|^TIMEOUT +\d+s|STALLED:", re.M)
+QUEUE_INFRA_RETRIES = 3
+QUEUE_INFRA_DELAY = 300
 QUEUE_ROUNDS = 3        # checked again while main moves under the checks; the last round pushes, its hook checking
 
 
@@ -4592,7 +4599,7 @@ def spawn_checks(repo, d):
                   key=lambda e: (0 if reds and set(e.get("fixes") or []) & reds else 1, e["seq"]))
     started = 0
     for e in todo:
-        if lock_held(entry_owned(e["id"]).lockpath):
+        if lock_held(entry_owned(e["id"]).lockpath) or e.get("retry_after", 0) > time.time():
             continue
         slot = check_tree_slot(repo, d)
         if not slot:
@@ -4682,6 +4689,16 @@ def _check_entry(repo, d, e, i, own=None):
                 queue_verdict(d, e, "rejected", f"NOT LANDED: stalled checks ({where}): no output and no CPU for "
                               f"{env_num('AGENTCTL_LAND_STALL_MIN', LAND_STALL_MIN):g} min", (out or "").splitlines())
                 return 1
+            if not ok and INFRA_CHECK_FAILURE.search(out or "") and e.get("infra_retries", 0) < QUEUE_INFRA_RETRIES:
+                # the laptop failed the checks, not the change (an sbt server that never came up under load, a script
+                # test cut off by its bound): queued again for a later look, not NOT LANDED (2026-10-27, load ~250)
+                e["infra_retries"] = e.get("infra_retries", 0) + 1
+                e.update(status="queued", retry_after=time.time() + QUEUE_INFRA_DELAY,
+                         why=f"infra: {INFRA_CHECK_FAILURE.search(out).group(0)}")
+                save_entry(d, e)
+                wlog(d, f"{e['id']}: its checks failed on the laptop, not on the change ({e['why']}): queued again "
+                        f"in {QUEUE_INFRA_DELAY // 60} min (retry {e['infra_retries']}/{QUEUE_INFRA_RETRIES})")
+                return 0
             if not ok:
                 queue_verdict(d, e, "rejected", f"NOT LANDED: the pre-push checks failed ({where}); the change "
                               f"{e['head'][:10]} stays in {e['worktree']}", (out or "").splitlines())
@@ -4763,8 +4780,11 @@ def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own=None
         if ok is not None:
             return ok, out, f"on ci-runner ({why})"
         wlog(d, f"{e['id']}: the remote check gave no verdict ({out.splitlines()[-1] if out else '?'}): checking here")
+    # the range through the remote's ref (forgejo/main is `base` now, fetched just before): the hook finds the remote, and
+    # with it Forgejo's red gate, from it -- given bare shas it fell back to gh (GitHub, suspended): the gate unread
+    rng = f"{REMOTE}/main..{head}" if git(tree, "rev-parse", f"{REMOTE}/main").strip() == base else f"{base}..{head}"
     with check_slot(repo, f"queued {e['id']} {head[:10]}", cls) as slot:
-        rc, out = run_watched([os.path.join(tree, "scripts", "hooks", "pre-push"), mode, f"{base}..{head}"], tree,
+        rc, out = run_watched([os.path.join(tree, "scripts", "hooks", "pre-push"), mode, rng], tree,
                               slot.env(tool_env()), log_path, "checks", sampler=slot.sample)
         slot.done(rc, out)
     with open(os.path.join(d, "checks.log"), "a") as f:
@@ -5360,9 +5380,10 @@ def waiting_run(repo, once=False, service=False):
             HEARTBEAT[0] = time.time()
             restart_if_changed([own], ["waiting", "run", "--repo", repo] + (["--once"] if once else [])
                                + (["--service"] if service else []))
+            spawn_checks(repo, d)  # THE LAND QUEUE first: each queued change's checks, in a checker of its own (the
+            # patrol below can take minutes -- a fixer's worktree checkout under load -- and held queued changes back)
             maybe_publish_gate(repo)  # the gate line for the status line (~/.cache/agentctl/gate-summary.txt)
             maybe_patrol(repo)  # the reds: who fixes each, RED UNCLAIMED, a dispatched fixer (always-on: launchd)
-            spawn_checks(repo, d)  # THE LAND QUEUE: each queued change's checks, in a checker of its own
             if not service and not waiting_entries(d) and queued_entries(d):
                 drop.nap(float(os.environ.get("AGENTCTL_SERVICE_POLL", SERVICE_IDLE_POLL)))
                 continue

@@ -315,7 +315,9 @@ cold. The checker:
    the pass (or confirms the remote run) -> `LANDED <sha>` and a detached watch that closes your worktree after
    WATCH OK when proven merged (unless land had `--keep-worktree`).
 
-Every verdict is an inbox entry whose cwd is your worktree. A checker that dies is restarted by the processor (three
+A check the LAPTOP failed (sbt's server never came up, `failed to connect to server`, a script test's TIMEOUT, a
+stall) is no verdict on the change: it is queued again 5 min later, up to 3 times. Every verdict is an inbox entry
+whose cwd is your worktree. A checker that dies is restarted by the processor (three
 times, then `NOT LANDED`). `land --follow`, `--no-watch`, a dispatched red fixer (`$AGENTCTL_RED_FIXER`, whose wrapper
 reads LANDED) and `AGENTCTL_QUEUE=0` keep the in-process land below.
 
@@ -512,7 +514,7 @@ sbt-warm's kept servers each holding a slot, idle or not).
   sbt server the hook starts through sbt-warm does, at the check's priority, `KINOWO_GOV_CLASS`) must fit the budget (sum of live tickets, `$AGENTCTL_GOV_BUDGET_GB`, 60% of RAM), and
   2.5 GB (`$AGENTCTL_GOV_FREE_NEED_GB`) must be free now (free + inactive + speculative) beyond a 1 GB reserve and what
   tickets admitted in the last 2 min still grow into; memory pressure under 75% (red: 90%).
-- **CPU:** agent work waits while load1 > 1.5x the cores, measurements while > 1x; checks and red never.
+- **CPU:** checks wait while load1 > 4x the cores, agent work > 1.5x, measurements > 1x; red never.
 - **Eviction first:** when the head waiter does not fit on memory, the idle kept sbt server unused longest (no call in
   it, unused 1 min, not serving, never the root checkout's) is stopped (`sbt-warm --stop`, its busy lock held), then it
   looks again. Logged in `gov/gov.log`; every admission in `gov/admits.jsonl`.

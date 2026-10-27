@@ -177,6 +177,28 @@ class QueueTest(WaitingTest):
         self.assertIn("[error] BROKEN is in the tree", out)
         self.assertIn(("DELETE", "branches/check%2Fe1"), calls)
 
+    def test_a_check_the_laptop_failed_is_queued_again_not_rejected(self):
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        eid, _ = self.queued(wt)
+        real = A.run_entry_checks
+        A.run_entry_checks = lambda *a, **k: (False, "sbt server did not start within 300 seconds\n[error] failed to "
+                                                      "connect to server", "locally")
+        self.addCleanup(setattr, A, "run_entry_checks", real)
+        self.assertEqual(self.check(eid), 0)
+        e = self.entries()[eid.rsplit("-", 1)[-1]]
+        self.assertEqual((e["status"], e["infra_retries"]), ("queued", 1))
+        self.assertGreater(e["retry_after"], A.time.time())
+        self.assertEqual([x for x in self.inbox() if x["kind"] == "NOT_LANDED"], [])
+        for _ in range(A.QUEUE_INFRA_RETRIES):
+            self.check(eid)
+        self.assertEqual(self.entries()[eid.rsplit("-", 1)[-1]]["status"], "rejected", "judged once retries run out")
+
+    def test_the_hook_is_given_the_remotes_ref_so_it_reads_forgejos_gate(self):
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        eid, _ = self.queued(wt)
+        self.check(eid)
+        self.assertRegex(self.calls_of("--range")[0], r"^--range forgejo/main\.\.[0-9a-f]{40}$")
+
     def test_follow_keeps_the_in_process_land(self):
         wt, sha = self.agent("a", "web/src/main/A.scala", "a\n")
         rc, out = self.land(wt, "--follow")

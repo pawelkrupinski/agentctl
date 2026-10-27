@@ -82,7 +82,7 @@ class GovernorTest(unittest.TestCase):
         self.assertIsNone(self.admit("check"))
         self.assertIsNotNone(self.admit("red"))
 
-    def test_cpu_load_holds_agents_and_measurements_not_checks(self):
+    def test_cpu_load_holds_measurements_then_agents_then_checks_never_red(self):
         cores = os.cpu_count()
         os.environ["AGENTCTL_GOV_LOAD_PROBE"] = f"echo {int(cores * 1.2)}"
         self.assertIsNone(self.admit("measure"))
@@ -90,6 +90,9 @@ class GovernorTest(unittest.TestCase):
         os.environ["AGENTCTL_GOV_LOAD_PROBE"] = f"echo {cores * 3}"
         self.assertIsNone(self.admit("agent"))
         self.assertIsNotNone(self.admit("check"))
+        os.environ["AGENTCTL_GOV_LOAD_PROBE"] = f"echo {cores * 5}"
+        self.assertIsNone(self.admit("check"), "a check waits past 4x the cores")
+        self.assertIsNotNone(self.admit("red"), "a red fix never waits on CPU")
 
     def waiter(self, cls, at):
         p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
