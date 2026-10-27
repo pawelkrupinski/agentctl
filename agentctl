@@ -27,6 +27,9 @@
         Locked vault: one line `vault <ns> locked: ask the user to run `! secrets unlock <ns>``, exit 1. Never unlocks.
   agentctl db-q [--env forgejo] [--max-rows N] "<sql>"
         Read-only Forgejo DB query (sqlite3 -readonly -safe); only one SELECT/WITH/PRAGMA read; rows capped.
+  agentctl inbox [ID...] [--unread] [--ack] [--limit N] [--json] [-v]
+        Every final verdict of land / watch / wait / waiting await (and land's WAITING line), one JSON file each in
+        ~/.cache/agentctl/inbox/, written however the command ended. The orchestrator reads it, agent alive or not.
   agentctl state <topic> [--set field=value ...] [--add field=value ...]
         Print scratchpad/state-<topic>.md, creating it from the template first; --set replaces a field,
         --add appends to a comma-separated one (commits, run ids).
@@ -2526,6 +2529,156 @@ def cmd_orphans(a):
             print(f"killed {kind} pid {pid}" + (f" (+children {kids})" if kids else ""))
     return 0
 
+# ---------------------------------------------------------------- inbox
+# The owner (2026-10-27): three agents ended their turns while their land/watch still ran, and the WATCH verdicts went
+# nowhere. Every `land`, `watch`, `wait` and `waiting await` writes its verdict to an inbox when it ends -- normally, on
+# a signal, or on a crash -- and land's WAITING line too (it may wait for hours): one JSON file per verdict under
+# ~/.cache/agentctl/inbox/ ($AGENTCTL_INBOX_DIR; beside $AGENTCTL_OWNERS_DIR when only that is set). The orchestrating
+# session reads it with `agentctl inbox` whether or not the agent that started the command is still alive. A restart
+# on new code (os.execv) writes nothing: the resumed process writes the verdict. Only a SIGKILL leaves no entry (its
+# owner record stays, and `agentctl orphans` names it).
+INBOX_COMMANDS = {"land", "watch", "wait", "waiting await"}
+VERDICT_LINE = re.compile(r"^(LANDED \S+|NOT LANDED|WAITING \S+|WATCH (OK|RED|UNKNOWN)\b|run \S+#\d+: |file \S+: )")
+INBOX_TAIL = 15
+
+
+def inbox_dir():
+    if os.environ.get("AGENTCTL_INBOX_DIR"):
+        return os.environ["AGENTCTL_INBOX_DIR"]
+    if os.environ.get("AGENTCTL_OWNERS_DIR"):
+        return os.path.join(os.path.dirname(os.path.abspath(os.environ["AGENTCTL_OWNERS_DIR"])), "inbox")
+    return os.path.join(HOME, ".cache", "agentctl", "inbox")
+
+
+class VerdictTee:
+    """stdout, with every line also kept: the verdict lines, and the last INBOX_TAIL lines for context."""
+
+    def __init__(self, stream, on_line=None):
+        self.stream, self.on_line, self.partial = stream, on_line, ""
+        self.verdicts, self.tail = [], []
+
+    def write(self, s):
+        n = self.stream.write(s)
+        self.partial += s
+        while "\n" in self.partial:
+            line, self.partial = self.partial.split("\n", 1)
+            self._line(line)
+        return n
+
+    def _line(self, line):
+        self.tail = (self.tail + [line])[-INBOX_TAIL:]
+        if VERDICT_LINE.match(line):
+            self.verdicts.append(line)
+            if self.on_line:
+                self.on_line(line)
+
+    def finish(self):
+        if self.partial:
+            self._line(self.partial)
+            self.partial = ""
+
+    def flush(self):
+        return self.stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+
+def inbox_write(command, verdict, verdicts, tail, exit_code, final=True):
+    """One inbox entry, written atomically; returns its id (None when the inbox cannot be written: never fatal)."""
+    now = dt.datetime.now(dt.timezone.utc)
+    eid = (f"{now.strftime('%Y%m%dT%H%M%S%f')}-{os.getpid()}-{re.sub(r'[^a-z]+', '-', command)}"
+           + ("" if final else "-waiting"))
+    rec = {"id": eid, "time": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "at": now.timestamp(), "command": command, "argv": sys.argv[1:],
+           "cwd": os.getcwd(), "pid": os.getpid(), "final": final, "exit": exit_code, "verdict": verdict,
+           "owner": os.environ.get("CLAUDE_CODE_SESSION_ID") or f"{os.environ.get('USER', '?')}@{os.getcwd()}",
+           "verdicts": verdicts, "tail": tail}
+    try:
+        d = inbox_dir()
+        os.makedirs(d, exist_ok=True)
+        tmp = os.path.join(d, f".{eid}.tmp")
+        with open(tmp, "w") as f:
+            json.dump(rec, f, indent=1)
+        os.replace(tmp, os.path.join(d, eid + ".json"))
+        return eid
+    except OSError as e:
+        err(f"could not write the inbox entry ({e})")
+        return None
+
+
+def inbox_command(a):
+    """The inbox's name for a parsed command, or None when it writes no entry."""
+    name = a.cmd + (f" {a.wcmd}" if a.cmd == "waiting" else "")
+    return name if name in INBOX_COMMANDS else None
+
+
+def with_inbox(command, handler, a):
+    """Run handler(a) with its stdout teed; whatever way it ends, write its verdict to the inbox."""
+    def on_line(line):
+        if line.startswith("WAITING "):
+            inbox_write(command, line, [line], tee.tail, None, final=False)
+    tee = VerdictTee(sys.stdout, on_line)
+    sys.stdout, code, crash = tee, 1, None
+    try:
+        code = handler(a)
+        return code
+    except SystemExit as e:
+        code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+        if code >= 128:
+            crash = f"ended by signal {code - 128}"
+        raise
+    except BaseException as e:
+        crash = f"crashed: {type(e).__name__}: {e}"
+        raise
+    finally:
+        sys.stdout = tee.stream
+        tee.finish()
+        last = next((l for l in reversed(tee.tail) if l.strip()), "(no output)")
+        verdict = crash or (tee.verdicts[-1] if tee.verdicts else last)
+        inbox_write(command, verdict, tee.verdicts, tee.tail, code if crash is None else (code or 1))
+
+
+def inbox_entries():
+    d = inbox_dir()
+    acked_dir = os.path.join(d, "acked")
+    acked = set(os.listdir(acked_dir)) if os.path.isdir(acked_dir) else set()
+    out = []
+    for p in glob.glob(os.path.join(d, "*.json")):
+        rec = read_record(p)
+        if rec is not None and rec.get("id"):
+            rec["read"] = rec["id"] in acked
+            out.append(rec)
+    return sorted(out, key=lambda r: (r.get("at") or 0, r["id"]))
+
+
+def cmd_inbox(a):
+    entries = inbox_entries()
+    if a.ids:
+        entries = [e for e in entries if any(e["id"].startswith(i) for i in a.ids)]
+    if a.unread:
+        entries = [e for e in entries if not e["read"]]
+    if a.limit:
+        entries = entries[-a.limit:]
+    if a.json:
+        print(json.dumps(entries, indent=1))
+    elif not entries:
+        print("inbox: no " + ("unread " if a.unread else "") + f"entries ({inbox_dir()})")
+    else:
+        for e in entries:
+            where = (e.get("cwd") or "").replace(HOME, "~")
+            state = f"exit {e.get('exit')}" if e.get("final", True) else "still running"
+            print(f"{e['id']} {'read  ' if e['read'] else 'UNREAD'} {e.get('command')} {where} {state}: {e.get('verdict')}")
+            if a.verbose:
+                for line in e.get("tail") or []:
+                    print(f"    {line}")
+    if a.ack and entries:
+        os.makedirs(os.path.join(inbox_dir(), "acked"), exist_ok=True)
+        for e in entries:
+            open(os.path.join(inbox_dir(), "acked", e["id"]), "a").close()
+        print(f"inbox: acknowledged {len(entries)} entr{'y' if len(entries) == 1 else 'ies'}")
+    return 0
+
+
 
 # ---------------------------------------------------------------- main
 def main(argv=None):
@@ -2635,8 +2788,18 @@ def main(argv=None):
     sw.add_argument("--no-report", action="store_true", help="do not write ~/.cache/agentctl/sweep/<date>.txt")
     q = sub.add_parser("queue", help="RETIRED 2026-10-26: use `agentctl land` (prints this and exits 2)")
     q.add_argument("rest", nargs=argparse.REMAINDER)
+    ib = sub.add_parser("inbox", help="every final verdict of land / watch / wait / waiting await (and land's WAITING), "
+                                      "kept whether or not the agent that ran it is alive")
+    ib.add_argument("ids", nargs="*", metavar="ID", help="only these entries (an id prefix)")
+    ib.add_argument("--unread", action="store_true", help="only the entries not acknowledged yet")
+    ib.add_argument("--ack", action="store_true", help="acknowledge the entries listed")
+    ib.add_argument("--limit", type=int, default=30, help="the newest N (default 30; 0 = all)")
+    ib.add_argument("--json", action="store_true")
+    ib.add_argument("-v", "--verbose", action="store_true", help="each entry's last output lines too")
     a = ap.parse_args(argv)
-    return {"queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd](a)
+    handler = {"inbox": cmd_inbox, "queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
+    command = inbox_command(a)
+    return with_inbox(command, handler, a) if command else handler(a)
 
 
 if __name__ == "__main__":

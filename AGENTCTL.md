@@ -8,7 +8,7 @@ calls.
 
 - Not on PATH: call it as `~/bin/agentctl`.
 - Python 3, standard library only.
-- Tests: `python3 -m unittest discover -s ~/bin/tests` (99 tests, mutation tests included).
+- Tests: `python3 -m unittest discover -s ~/bin/tests` (mutation tests included).
 - `agentctl --help` and `agentctl <cmd> --help` match this page.
 
 ## Standard agent workflow
@@ -19,6 +19,7 @@ eval "$(~/bin/agentctl env --print)"        # 1. sbt/java on PATH; a locked vaul
 ~/bin/agentctl land                         # 2. Bash run_in_background=true, END YOUR TURN: lock, rebase, local tests, push, watch CI
 ~/bin/agentctl wait run <id> &              # 3. Bash run_in_background=true, then END YOUR TURN
 ~/bin/agentctl ci-why                       # 4. only when land says the red gate refused, or Main is red
+~/bin/agentctl inbox --unread --ack         # 5. the orchestrator: every land/watch/wait verdict, agent alive or not
 ```
 
 Every change lands with `land`, identity changes included (2026-10-26: no pre-merge CI; the merge queue is retired).
@@ -351,6 +352,33 @@ id	index	status	substr(title,1,40)
 
 Use it only as the fallback, when `forgejo-gh` or `ci-why` cannot answer, for example for queue analysis. It never
 writes.
+
+### inbox: every final verdict, durable
+
+```
+agentctl inbox [ID...] [--unread] [--ack] [--limit N] [--json] [-v]
+```
+
+The owner (2026-10-27): three agents ended their turns while their land/watch still ran, and the WATCH verdicts went
+nowhere. Every `land`, `watch`, `wait` and `waiting await` now writes its verdict to an inbox when it ends (normally, on
+a signal, or on a crash), and land writes its `WAITING` line there at once, since it may wait for hours.
+
+- One JSON file per verdict under `~/.cache/agentctl/inbox/` (`$AGENTCTL_INBOX_DIR`): id, time, command, argv, cwd,
+  owner (the Claude session, else user@cwd), pid, exit code, the verdict line (the last `LANDED` / `NOT LANDED` /
+  `WAITING` / `WATCH ...` / `run ...:` / `file ...:` line; `ended by signal N` or `crashed: ...` when it died), every
+  verdict line it printed, and its last 15 output lines.
+- A restart on new code (re-exec, same pid) writes nothing: the resumed `watch` / `waiting await` writes the verdict.
+  Only a SIGKILL leaves no entry (its owner record stays; `agentctl orphans` names it).
+- `agentctl inbox` lists the newest 30 (`--limit 0`: all), `--unread` only those not acknowledged, `--ack`
+  acknowledges what it listed, `-v` adds each entry's output tail, an ID prefix picks entries. Exit 0.
+- The orchestrating session reads it whether or not the agent is alive: `agentctl inbox --unread --ack` after each
+  agent's report, and before deciding an agent's land is lost.
+
+```
+$ agentctl inbox --unread
+20261027T041502113201-51234-land UNREAD land ~/projects/movies-wt-gen2-4 exit 0: WATCH OK: Main #2711 green, convergence #1630 green
+20261027T031100553120-50111-land-waiting UNREAD land ~/projects/movies-wt-x still running: WAITING 3f2c1a9 (2 changes queued on waiting; entry e7)
+```
 
 ### state: the hand-off file for long waits
 
