@@ -442,6 +442,27 @@ class DispatchTest(RedBase):
         self.assertEqual(len(self.inbox("RED_ESCALATE")), 1)
         self.assertEqual(A.fixer_records(), [])
 
+    def test_a_claim_made_while_the_patrol_decides_stops_the_dispatch(self):
+        t = time.time()
+        self.patrol(t)
+        real, n = A.find_fixers, [0]
+
+        def racing(repo, units, now_=None, o_r=None):
+            out = real(repo, units, now_, o_r)
+            n[0] += 1
+            if n[0] >= 2:  # the patrol's own look is the first; a claim lands before the pre-spawn look
+                for i in out.values():
+                    i["fixers"] = [{"who": "agent-x", "worktree": "/w/x", "state": "claimed", "note": "", "named": True}]
+            return out
+        A.find_fixers = racing
+        try:
+            acts = self.patrol(t + 11 * 60)
+        finally:
+            A.find_fixers = real
+        self.assertFalse(any("RED DISPATCHED" in a or " DISPATCHED pid" in a for a in acts), acts)
+        self.assertEqual(A.fixer_records(), [])
+        self.assertIn("claimed meanwhile", open(A.reds_dir("dispatch.log")).read())
+
     def test_the_global_cap_and_the_daily_cap(self):
         os.makedirs(os.path.join(self.tmp.name, "reds", "77"))
         A.write_json(os.path.join(self.tmp.name, "reds", "77", "fixer.json"),

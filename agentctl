@@ -1728,6 +1728,18 @@ def summary_fixer(infos):
 
 # -- the reds: one unit per signature
 @contextlib.contextmanager
+def claim_lock():
+    """`red claim` and a dispatch decision never interleave: a claim made while the patrol decides is seen by it."""
+    os.makedirs(reds_dir(), exist_ok=True)
+    with open(reds_dir("claim.lock"), "a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
 def reds_lock():
     """One writer of the signature records at a time (ci-why's notes and the processor's patrol)."""
     os.makedirs(reds_dir(), exist_ok=True)
@@ -1979,7 +1991,17 @@ def maybe_dispatch(o_r, repo, u, rec, t, why, group=None):
     blocker = dispatch_blocker()
     if blocker:
         return dispatch_log(u, f"NOT DISPATCHED: {blocker}", once_per_day=True)
-    ok, msg = red_dispatch(o_r, repo, u, why=why, group=group)
+    with claim_lock():
+        # the patrol's picture is old by now (a claim, a queued or waiting Fixes-Red change may have arrived): look again
+        # under the lock `red claim` takes, immediately before the spawn
+        try:
+            now_info = find_fixers(scan_repo_for(o_r, repo), [x for x in (group or [u])], o_r=o_r)
+            fixers = [f for i in now_info.values() for f in i.get("fixers", [])]
+        except (Exception, SystemExit):
+            fixers = []
+        if fixers:
+            return dispatch_log(u, f"NOT DISPATCHED: claimed meanwhile ({fixer_text(fixers[0])})")
+        ok, msg = red_dispatch(o_r, repo, u, why=why, group=group)
     return msg
 
 
@@ -2595,7 +2617,8 @@ def red_claim(o_r, n, note="", state="claimed", cmd=None):
          "jobs": sorted({u["job"] for u in units}), "state": state, "blocked_cmd": cmd if state == "blocked" else None}
     if os.environ.get("AGENTCTL_RED_FIXER"):
         c["dispatched"] = True
-    write_json(path, c)
+    with claim_lock():
+        write_json(path, c)
     return c, path
 
 
