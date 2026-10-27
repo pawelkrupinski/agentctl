@@ -154,8 +154,8 @@ class InfraAndNobodyTest(AssignBase):
         acts = self.patrol(time.time())
         self.assertTrue(any(a.startswith("RED UNCLAIMED: Main #20 [test (rest)]: NOBODY -- gate fixer cap 0 reached")
                             for a in acts), acts)
-        self.assertIn("main #20 → NOBODY (gate fixer cap 0 reached", self.why("--summary")[1])
-        self.assertIn("fixing: NOBODY (gate fixer cap 0 reached", self.why()[1])
+        self.assertIn("main #20 → NOBODY (skipped: gate fixer cap 0 reached", self.why("--summary")[1])
+        self.assertIn("fixing: NOBODY (skipped: gate fixer cap 0 reached", self.why()[1])
         os.environ.pop("AGENTCTL_RED_GATE_MAX_FIXERS")
         self.assertEqual(len(self.inbox("RED_UNCLAIMED")), 1)
 

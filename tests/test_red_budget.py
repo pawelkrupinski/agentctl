@@ -74,7 +74,7 @@ class RefundTest(RedBase):
             again = A.maybe_dispatch(MOVIES, self.r.path, u, rec, t, why="x", group=[u])
         finally:
             os.environ.pop("AGENTCTL_RED_DAILY_CAP")
-        self.assertIn("SKIPPED (daily cap 1 reached)", msg)
+        self.assertIn("SKIPPED (daily dispatch budget 1 spent)", msg)
         self.assertIsNone(again)
         budget = self.inbox("RED_BUDGET")
         self.assertEqual(len(budget), 1)

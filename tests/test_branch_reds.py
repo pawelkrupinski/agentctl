@@ -118,7 +118,32 @@ class BranchRedTest(BranchBase):
         self.assertIn("branch reds: 1 → movies-wt-drift (convergence #2116 PREDICTS MAIN RED)", line)
         self.assertNotIn("no reds", line)
 
+    def pin(self, pins, tag="convergence-fixtures"):
+        """main's convergence workflow names the pins' release; the release holds hermetic-<code>.txt per country."""
+        if A.pin_release_tag(self.r.path) != tag:
+            os.makedirs(os.path.join(self.r.path, ".github", "workflows"), exist_ok=True)
+            self.r.write(A.CONVERGENCE_WORKFLOW, f"jobs:\n  legs:\n    env:\n      FIXTURE_RELEASE_TAG: {tag}\n")
+            self.r.commit("convergence workflow")
+            sh(self.r.path, "git", "push", "-q", "forgejo", "HEAD:main")
+            sh(self.r.path, "git", "fetch", "-q", "forgejo")
+        saved = A.read_pins
+        self.addCleanup(setattr, A, "read_pins", saved)
+        seen = []
+        A.read_pins = lambda o_r, tag_: seen.append(tag_) or dict(pins)
+        A.refresh_pinned_recording(MOVIES, self.r.path, force=True)
+        self.assertEqual(seen, [tag])
+
+    def test_the_pinned_recording_is_read_from_the_movies_repo_never_hard_coded(self):
+        self.pin({"pl": "528", "de": "528"})
+        self.assertEqual(A.pinned_recording(), "528")
+        self.assertEqual(A.diff_text([("recording", "573", "")]), "recording 573 ≠ main's 528")
+        self.assertEqual(A.newer_recording({"recording": "573"}, {"recording": ""}), "573")
+        self.pin({"pl": "528", "de": "600"})
+        self.assertEqual(A.pinned_recording(), "528/600")
+        self.assertIsNone(A.newer_recording({"recording": "573"}, {"recording": ""}))
+
     def test_differing_inputs_are_a_plain_branch_red_naming_the_input_and_a_newer_recording_blocks_promoting(self):
+        A.write_json(A.pinned_path(), {"at": time.time(), "tag": "convergence-fixtures", "pins": {"pl": "573", "de": "573"}})
         self.land_x()
         self.inputs(64, dict(MAIN_INPUTS, recording="3166"))
         snap = self.snap()

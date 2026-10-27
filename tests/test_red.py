@@ -176,6 +176,8 @@ class FixingShownTest(RedBase):
         self.assertIn("  fixing: UNASSIGNED", self.why()[1])
 
     def test_a_newer_run_failing_the_same_way_keeps_the_claim(self):
+        # the claimed run's own first error line: the same as #22's but for numbers and the seed (the same signature)
+        self.put("run-40.log", f"test (rest)\tRun tests\t2026-10-27T08:00:00Z {FAIL_LINE} (took 9 ms, seed 0xdeadbeef01)\n")
         os.environ["AGENTCTL_CLAIM_PID"] = str(os.getpid())
         try:
             self.tool("red", "claim", "20", "--repo", "movies", cwd=self.r.path)
@@ -284,7 +286,7 @@ class StaleClaimTest(RedBase):
                 os.utime(os.path.join(gd, f), (old, old))
         self.claim(self.dead_pid(), 45, wt)
         out = self.why()[1]
-        self.assertIn("  fixing: UNASSIGNED (assigning: the patrol assigns its live author or dispatches a fixer within minutes) (stale claim: gone-agent", out)
+        self.assertIn("  fixing: UNASSIGNED (assigning: the patrol assigns its live author or dispatches a fixer at its next look (every 2 min)) (stale claim: gone-agent", out)
         self.assertIn("no commit or activity for", out)
         self.assertIn("STALE", self.tool("red", "list")[1])
         removed = A.sweep_claims()
@@ -318,7 +320,7 @@ class PatrolTest(RedBase):
         self.assertEqual(self.patrol(t + 9 * 60, dispatch=False), [])
         acts = self.patrol(t + 11 * 60, dispatch=False)
         self.assertEqual(len(acts), 1, acts)
-        self.assertTrue(acts[0].startswith("RED UNCLAIMED: Main #20 [test (rest)]: nobody fixing it for 11 min"), acts)
+        self.assertTrue(acts[0].startswith("RED UNCLAIMED: Main #20 [test (rest)]: NOBODY -- nobody fixing it for 11 min"), acts)
         self.assertEqual(self.patrol(t + 20 * 60, dispatch=False), [])  # one per spell
         self.assertEqual(len(self.inbox("RED_UNCLAIMED")), 1)
         out = io.StringIO()
@@ -473,7 +475,7 @@ class DispatchTest(RedBase):
         finally:
             os.environ.pop("AGENTCTL_RED_GATE_MAX_FIXERS")
             os.environ.pop("AGENTCTL_RED_MAX_FIXERS")
-        self.assertTrue(any("SKIPPED (gate: 1 fixers alive, cap 1)" in a for a in acts), acts)
+        self.assertTrue(any("SKIPPED (gate fixer cap 1 reached (1 alive))" in a for a in acts), acts)
         unclaimed = self.inbox("RED_UNCLAIMED")
         self.assertEqual(len(unclaimed), 1)
         self.assertIn("NOBODY -- gate fixer cap 1 reached", unclaimed[0]["verdict"])
@@ -518,7 +520,7 @@ class DispatchTest(RedBase):
         t = time.time()
         acts = self.patrol(t)
         self.assertTrue(any("dispatch is OFF" in a for a in acts), acts)
-        self.assertIn("main #20 → NOBODY (dispatch is OFF", self.why("--summary")[1])
+        self.assertIn("main #20 → NOBODY (skipped: dispatch is OFF", self.why("--summary")[1])
         self.assertIn("automatic dispatch: ON", self.tool("red", "auto", "on")[1])
 
     def test_red_dispatch_by_hand_refuses_a_red_being_fixed(self):
@@ -795,8 +797,11 @@ class LifecycleTest(RedBase):
         finally:
             os.environ.pop("FAKE_CLAUDE_SLEEP")
         self.assertEqual(len([a for a in acts if "DISPATCHED pid" in a]), 1, acts)
-        self.assertTrue(any("SKIPPED (outside the gate: 1 fixer(s) alive, its cap)" in a for a in acts), acts)
-        self.assertEqual(self.inbox("RED_UNCLAIMED"), [])  # only a gate red is RED UNCLAIMED
+        self.assertTrue(any(a.startswith("RED UNCLAIMED: Weekly #32") and "outside-the-gate fixer cap 1 reached" in a for a in acts), acts)
+        # no silent skip (2026-10-27): the capped red's reason is in its record and ONE RED UNCLAIMED entry (escalated
+        # after 10 min unread), outside the gate too
+        self.assertEqual([e["verdict"][:28] for e in self.inbox("RED_UNCLAIMED")], ["RED UNCLAIMED: Weekly #32 [s"])
+        self.assertIn("fixing: NOBODY (skipped: outside-the-gate fixer cap 1 reached)", self.why()[1])
         self.wait_fixer()
 
     def test_an_unreadable_gate_dispatches_nothing_and_says_so_once_with_an_infra_check(self):

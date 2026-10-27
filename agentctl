@@ -1175,7 +1175,7 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, track=False, snap
             lines, num, per_job = explain_run_jobs(o_r, decided, tail, repo)
             explained[name] = (lines, num)
             save_run_sigs(o_r, decided, name, per_job)
-    infos = {}
+    infos, states = {}, {}
     try:
         rows = [(n, d, _gate_lists.get(n, []), True) for n, d, _nw, _s in gate]
         units = gate_red_units(o_r, rows, [(n, r, _outside_lists.get(n, []), False) for n, r, _s, _c in others])
@@ -1185,22 +1185,16 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, track=False, snap
         infos = find_fixers(scan_repo_for(o_r, repo), units, o_r=o_r)
         if track:
             red_patrol(o_r, scan_repo_for(o_r, repo), units, infos, dispatch=False)
+        states = red_states(units, infos)  # THE decision the patrol acts on: ci-why only renders it
     except (Exception, SystemExit) as e:  # who is fixing is information: the gate's verdict stands without it
         err(f"red: could not tell who is fixing ({str(e)[:160]})")
 
     def fixing(name, run, indent="  "):
-        us = units_of.get((name, run.get("databaseId"))) or []
-        anyf = [f for u in us for f in (infos.get(u["key"]) or {}).get("fixers") or []]
-        if anyf:  # one fixer of the run covers its signatures with no cause of their own (an empty-log `timings`)
-            for u in us:
-                if u["key"] in infos and not infos[u["key"]]["fixers"]:
-                    infos[u["key"]] = {**infos[u["key"]], "fixers": anyf[:1]}
-        per = [(u, fixing_lines(infos.get(u["key"]), indent)) for u in us]
-        if len({tuple(l) for _u, l in per}) <= 1:  # every signature fixed the same way (one fixer for the run): one line
-            lines = per[0][1] if per else []
-        else:
-            lines = [l for u, _ in per for l in fixing_lines(infos.get(u["key"]), indent, f" [{u['job']}]")]
-        return lines, [infos[u["key"]] for u in us if u["key"] in infos]
+        st = states.get((name, run.get("databaseId")))
+        return state_lines(st, indent), st
+
+    def short(st):
+        return st["short"] if st else "?"
 
     for name, decided, newer, (since, count) in gate:
         pending = f"; newer run {newer['databaseId']} (#{newer.get('number')}) {newer.get('status')} may clear it" if newer else ""
@@ -1221,7 +1215,7 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, track=False, snap
         out += lines
         out.append(f"  clears when: a later {name} run on main is green, or every pushed commit touching a production path "
                    f"carries `Fixes-Red: {num}` (or `Fixes-Red: {decided['databaseId']}`); tools-only commits land while red")
-        parts.append(f"{short_flow(name)} #{decided.get('number')} \u2192 {summary_fixer(finfos)}")
+        parts.append(f"{short_flow(name)} #{decided.get('number')} \u2192 {short(finfos)}")
     lus = local_units(lrepo)
     local = [u for u in units_of.get((LOCAL_FLOW, (lus or [{"run": {}}])[0]["run"].get("databaseId")), [])]
     if lstale:
@@ -1237,13 +1231,13 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, track=False, snap
         out += flines
         for u in local:
             out.append(f"  [{u['job']}] {u['line'][:160]}")
-        parts.append(f"local checks \u2192 {summary_fixer(finfos)}")
+        parts.append(f"local checks \u2192 {short(finfos)}")
     fl = [u for u in units if u.get("flake")] if units_of else []
     if fl:
         out.append("Flaky (passed on the next run with no fix; open until a fix lands; most frequent first):")
         for u in fl:
             out.append(f"  {u['workflow']} #{u['run'].get('number')} [{u['job']}] {u['flake_count']}x: {u['line'][:120]}")
-            out += fixing_lines(infos.get(u["key"]), "    ")
+            out += fixing(u["workflow"], u["run"], "    ")[0]
     head = f"ci-why {o_r}: " + ("main is RED for the gate" if red else "main is green for the gate")
     if others_err is not None:
         out.append(f"outside the gate: could not list main's runs ({others_err})")
@@ -1267,7 +1261,7 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, track=False, snap
             line += " (" + "; ".join(p_ for p_ in parts if not p_.startswith("local")) + ")"
         reds_ = []
         for name, r, _since, _count in others:
-            reds_.append(f"{name} #{r.get('number')} \u2192 {summary_fixer(fixing(name, r)[1])}")
+            reds_.append(f"{name} #{r.get('number')} \u2192 {short(fixing(name, r)[1])}")
         reds_ += [p_ for p_ in parts if p_.startswith("local")]
         if len(reds_) > SUMMARY_MAX_REDS:
             reds_ = reds_[:SUMMARY_MAX_REDS] + [f"+{len(reds_) - SUMMARY_MAX_REDS} more"]
@@ -1380,7 +1374,13 @@ MEASURE_BRANCH = re.compile(r"^measure/[^/]+/([0-9a-f]{7,40})-[0-9A-Za-z]+$")
 # inputs that change where or how a run runs, or how much of it, never what main's run of the same workflow would decide
 INPUTS_NOT_PREDICTIVE = frozenset({"tier", "runner", "profile", "jvm-options", "heap", "reuse-run", "takes-base",
                                    "takes-countries", "countries"})
-PINNED_RECORDING = "573"  # what main's convergence replays when its `recording` input is empty ($AGENTCTL_PINNED_RECORDING)
+# What main's convergence replays when its `recording` input is empty: each country's pin, the first word of the
+# `hermetic-<code>.txt` asset of the release convergence-setup.sh reads ($FIXTURE_RELEASE_TAG in the convergence
+# workflow on forgejo/main). Read from the movies repo by the processor (refresh_pinned_recording), cached in
+# pinned-recording.json; $AGENTCTL_PINNED_RECORDING overrides. Never hard-coded (it was "573", and goes stale when a
+# recording is promoted).
+CONVERGENCE_WORKFLOW = ".github/workflows/identity-model-convergence.yml"
+PIN_REFRESH = 3600
 BRANCH_RUNS_LIMIT = 150
 BRANCH_ROUTE_MAX_AGE = 24 * 3600  # a failure first seen older than this is recorded, not routed (no flood on upgrade)
 OWNER_REMATCH = 3600  # an unmatched branch is matched again after this long
@@ -1443,10 +1443,25 @@ def tracked_branch(name, recorded=()):
     return bool(name) and name not in PROTECTED_BRANCHES and (name.startswith(DISPATCH_PATTERNS) or name in recorded)
 
 
+INTERNAL_TREE = re.compile(r"-wt-(check-\d+|waiting|batch)$")
+
+
+def internal_tree(path):
+    """agentctl's own trees -- the queue's check trees (<clone>-wt-check-N, which hold every queued commit while it is
+    checked), the `waiting` and batch trees, the queue's work clone, tool caches -- never an owner, author or fixer
+    (2026-10-27: the status line said `main #2146 → check-1 committed` for a fix that had landed). A queued change's
+    owner is its queue entry's source worktree."""
+    p = os.path.realpath(path or "")
+    return bool(INTERNAL_TREE.search(p.rstrip("/"))) or p.startswith(os.path.realpath(CACHE_TREES).rstrip("/") + "/") \
+        or p.startswith(os.path.realpath(WAITING_DIR).rstrip("/") + "/")
+
+
 def worktree_holding(repo, sha):
-    """The worktree whose HEAD is sha, else the one whose HEAD reflog holds it (the agent's own commit, since rebased)."""
+    """The worktree whose HEAD is sha, else the one whose HEAD reflog holds it (the agent's own commit, since rebased).
+    Never one of agentctl's internal trees."""
     try:
-        trees = [w for w in worktrees(repo) if isinstance(w.get("worktree"), str) and os.path.isdir(w["worktree"])]
+        trees = [w for w in worktrees(repo) if isinstance(w.get("worktree"), str) and os.path.isdir(w["worktree"])
+                 and not internal_tree(w["worktree"])]
     except (RuntimeError, OSError):
         return None
     trees = trees[1:] + trees[:1]  # an agent's worktree before the root checkout (often on main itself)
@@ -1589,8 +1604,67 @@ def input_diff(inputs, main_inputs):
             if norm_input(inputs.get(k)) != norm_input(main_inputs.get(k))]
 
 
+def pinned_path():
+    return os.path.join(os.path.dirname(reds_dir()), "pinned-recording.json")
+
+
+def pin_release_tag(repo):
+    """The release the convergence pins live in: FIXTURE_RELEASE_TAG as main's convergence workflow sets it."""
+    r = git(repo, "show", f"refs/remotes/{REMOTE}/main:{CONVERGENCE_WORKFLOW}", check=False) if repo else None
+    tags = re.findall(r"FIXTURE_RELEASE_TAG:\s*['\"]?([\w.-]+)", r.stdout if r and r.returncode == 0 else "")
+    return tags[0] if tags else None
+
+
+def read_pins(o_r, tag):
+    """{country code: pinned recording run} from the release's hermetic-<code>.txt assets."""
+    rel = api(o_r, "GET", f"releases/tags/{urllib.parse.quote(tag)}")
+    base = API.split("/api/")[0]
+    pins = {}
+    for a in (rel or {}).get("assets") or []:
+        m = re.fullmatch(r"hermetic-(\w+)\.txt", a.get("name") or "")
+        if not m:
+            continue
+        url = f"{base}/{o_r}/releases/download/{urllib.parse.quote(tag)}/{a['name']}"
+        req = urllib.request.Request(url, headers={"Authorization": f"token {token(o_r)}"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            first = (resp.read().decode(errors="replace").splitlines() or [""])[0].split()
+        if first and first[0].isdigit():
+            pins[m.group(1)] = first[0]
+    return pins
+
+
+def refresh_pinned_recording(o_r, repo, now_=None, force=False):
+    """Re-read the convergence pins at most every PIN_REFRESH s (the processor's loop). Never fatal."""
+    t = now_ if now_ is not None else time.time()
+    rec = read_record(pinned_path()) or {}
+    if not force and t - float(rec.get("at") or 0) < PIN_REFRESH:
+        return rec
+    try:
+        tag = pin_release_tag(repo)
+        if not tag:
+            return rec
+        pins = read_pins(o_r, tag)
+        if pins:
+            rec = {"at": t, "repo": o_r, "tag": tag, "pins": pins}
+            write_json(pinned_path(), rec)
+    except (Exception, SystemExit) as e:
+        err(f"pinned recording: not re-read ({str(e)[:160]})")
+    return rec
+
+
+def pinned_runs():
+    """The recordings main's convergence replays by default (one per pinned country, deduplicated), or []."""
+    if os.environ.get("AGENTCTL_PINNED_RECORDING"):
+        return [os.environ["AGENTCTL_PINNED_RECORDING"]]
+    pins = (read_record(pinned_path()) or {}).get("pins") or {}
+    return sorted(set(pins.values()), key=lambda x: int(x) if x.isdigit() else 0)
+
+
 def pinned_recording():
-    return os.environ.get("AGENTCTL_PINNED_RECORDING") or PINNED_RECORDING
+    """main's pinned recording as a name: `573`, `528/573` when the countries' pins differ, or `the pinned pair
+    (unread)`."""
+    runs = pinned_runs()
+    return "/".join(runs) if runs else "the pinned pair (unread)"
 
 
 def diff_text(diff):
@@ -1604,8 +1678,9 @@ def diff_text(diff):
 
 def newer_recording(inputs, main_inputs):
     """The branch run's recording when it is newer than the one main replays, else None."""
-    mine, theirs = norm_input(inputs.get("recording")), norm_input(main_inputs.get("recording")) or pinned_recording()
-    return mine if mine.isdigit() and theirs.isdigit() and int(mine) > int(theirs) else None
+    mine, theirs = norm_input(inputs.get("recording")), norm_input(main_inputs.get("recording"))
+    ref = [int(theirs)] if theirs.isdigit() else [int(x) for x in pinned_runs() if x.isdigit()] if not theirs else []
+    return mine if mine.isdigit() and ref and int(mine) > max(ref) else None
 
 
 def predicts_main(repo, base, main_run, inputs, main_inputs):
@@ -1952,6 +2027,7 @@ def maybe_publish_gate(repo):
         try:
             o_r = slug(repo)
             snap = ci_state_refresh(o_r)  # ONE read of Forgejo per cycle; everything below reads it
+            refresh_pinned_recording(o_r, repo)  # what PREDICTS MAIN RED compares a branch run's recording with
             reds_now = {g["decided"]["databaseId"] for g in snap["gate"]
                         if g.get("decided") and g["decided"].get("conclusion") in RED_CONCLUSIONS}
             if reds_now - _seen_gate_reds:  # a gate red this cycle first sees: the patrol assigns it now, not in 2 min
@@ -2037,7 +2113,16 @@ RED_PATROL_INTERVAL = 120   # seconds between the processor's looks at the reds 
 RED_FIXER_WALL = 3 * 3600   # a dispatched fixer's maximum wall time ($AGENTCTL_RED_FIXER_WALL)
 BRIEF = os.path.join(HOME, "bin", "briefs", "movies-agent-preamble.md")
 BRIEF_SRC = "/private/tmp/claude-501/-Users-pawel-bitcashier/974d50a6-c3f9-4d25-a24f-55345ffa6de5/scratchpad/movies-agent-preamble.md"
-RED_STATE_RANK = {"diagnosed": 1, "claimed": 1, "committed": 2, "landing": 3, "waiting": 4, "landed": 5, "blocked": 6}
+# ONE display state per red, in this precedence (the owner, 2026-10-27: the status line said `check-1 committed` while
+# ci-why said `fix landed in 73cf2038f, awaiting #2153`): a landed fix > a change queued / waiting / landing / committed
+# > blocked on the owner > a claim > a diagnosis > a notified author > a dispatched fixer before its own claim; with
+# none of them, red_state's dispatching > skipped (reason) > NOBODY (reason).
+RED_STATE_RANK = {"dispatching": 1, "author": 1.5, "diagnosed": 2, "claimed": 3, "blocked": 4, "committed": 5,
+                  "landing": 6, "waiting": 7, "landed": 8}
+
+
+def fixer_rank(f):
+    return RED_STATE_RANK["author"] if f["state"] == "claimed" and f.get("author") else RED_STATE_RANK[f["state"]]
 
 
 def reds_dir(*parts):
@@ -2069,7 +2154,8 @@ def norm_line(line):
     s = ANSI.sub("", line or "")
     s = LOG_TS.sub("", s)
     s = re.sub(r"/(private/)?(tmp|var/folders)/\S*", "<tmp>", s)
-    s = HEXISH.sub("H", s.lower())
+    s = re.sub(r"\b0x[0-9a-f]+\b", "H", s.lower())
+    s = HEXISH.sub("H", s)
     s = NUMS.sub("N", s)
     return " ".join(s.split())[:160]
 
@@ -2323,8 +2409,7 @@ def scan_fix_commits(repo):
     heads = {}
     for w in worktrees(repo):
         p, head = w.get("worktree"), w.get("HEAD")
-        if (not p or not head or w.get("bare") or p.startswith(CACHE_TREES)
-                or p.endswith((f"-wt-{WAITING_BRANCH}", "-wt-batch"))):
+        if not p or not head or w.get("bare") or internal_tree(p) or p.endswith((f"-wt-{WAITING_BRANCH}", "-wt-batch")):
             continue
         heads[os.path.realpath(p)] = head
     unlanded = {}
@@ -2371,9 +2456,16 @@ def find_fixers(repo, units, now_=None, o_r=None):
         return set().union(*[causes.get(str(v), set()) for v in values]) if values else set()
 
     def match(names, sigs=()):
+        """The units a claim / fix / fixer counts for. One that names its signatures counts for exactly those (and their
+        cause); one naming only runs counts for the signatures those runs failed with (each unit's names are its own
+        signature's runs) or their causes. A run-keyed unit (no signature read) goes by its run names."""
+        sigs = set(sigs or ()) - {None}
         cs = causes_of(names)
-        return [u["key"] for u in units if (set(names) & u["names"]) or (set(sigs) & u["sigs"])
-                or (u.get("cause") and u["cause"] in cs)]
+        if sigs:
+            scs = {cause_of(r.get("job"), r.get("line")) for r in map(lambda x: read_record(sig_path(x)) or {}, sigs)}
+            return [u["key"] for u in units if (sigs & u["sigs"]) or (not u["sigs"] and set(names) & u["names"])
+                    or (u.get("cause") and u["cause"] in scs - {None})]
+        return [u["key"] for u in units if (set(names) & u["names"]) or (u.get("cause") and u["cause"] in cs)]
 
     for c in all_claims():
         keys = match(set(map(str, c.get("runs") or [])) | {str(c.get("run"))}, c.get("sigs") or [])
@@ -2386,7 +2478,7 @@ def find_fixers(repo, units, now_=None, o_r=None):
                 continue
             put(k, c.get("worktree"), c.get("state") if c.get("state") in ("blocked", "diagnosed") else "claimed",
                 who=c.get("who"), cmd=c.get("blocked_cmd"), dispatched=bool(c.get("dispatched")),
-                awaiting=c.get("awaiting"))
+                awaiting=c.get("awaiting"), author=bool(c.get("author")))
             out[k]["fixers"][os.path.realpath(c["worktree"]) if c.get("worktree") else c.get("who")]["note"] = c.get("note") or ""
     if repo:
         try:
@@ -2440,14 +2532,14 @@ def find_fixers(repo, units, now_=None, o_r=None):
             if r["alive"]:
                 for k in match({str(r.get("run"))}, r.get("sigs") or [r.get("sig")]):
                     if not out[k]["fixers"]:
-                        put(k, r.get("worktree"), "claimed", who=f"red-fixer-{r.get('run')}", dispatched=True)
+                        put(k, r.get("worktree"), "dispatching", who=f"red-fixer-{r.get('run')}", dispatched=True)
     except (Exception, SystemExit):
         pass
     for u in units:
         rec = read_record(sig_path(u["sig"])) if u.get("sig") else None
         out[u["key"]]["unassigned"] = (rec or {}).get("unassigned")
     for k in out:
-        out[k]["fixers"] = sorted(out[k]["fixers"].values(), key=lambda f: -RED_STATE_RANK[f["state"]])
+        out[k]["fixers"] = sorted(out[k]["fixers"].values(), key=lambda f: -fixer_rank(f))
     return out
 
 
@@ -2461,51 +2553,153 @@ def fixer_text(f):
     return s + (f" -- {f['note']}" if f.get("note") else "")
 
 
-def fixing_lines(info, indent="  ", label=""):
-    if not info:
+def fixer_short(f):
+    """The status line's words for a fixer."""
+    if f["state"] == "landed":
+        return f"fix {f['sha'][:7]} awaiting #{f['awaiting']}" if f.get("awaiting") else f"fix {f['sha'][:7]} landed"
+    if f["state"] == "blocked":
+        return f"BLOCKED ON OWNER: {f.get('cmd')}"
+    who = f["who"].replace("movies-wt-", "")
+    if f["state"] == "diagnosed":
+        return f"{who} diagnosed, awaiting {f.get('awaiting') or '?'}"
+    return f"{who} {f['state']}"
+
+
+# THE ONE ASSIGNMENT DECISION (the owner, 2026-10-27: for Identity capture #2133 ci-why said "fixing: UNASSIGNED
+# (assigning: ... within minutes)" while `red patrol` said "nothing to do", and nothing acted for ~50 min -- the display
+# and the dispatch decision were two pieces of code). red_state decides, for one red run (its signatures together),
+# exactly one state; the patrol acts on it, and ci-why, its summary and the status line render it, so they cannot
+# disagree:
+#   fixing     -- someone is on it (the strongest fixer by RED_STATE_RANK)
+#   resume     -- a landed fix did not fix it and its dispatched fixer gets its session back
+#   assign     -- a gate red: its live author is assigned, or a fixer dispatched, at the patrol's next look
+#   dispatch   -- outside the gate, due: a fixer is dispatched at the patrol's next look
+#   wait       -- outside the gate, nobody on it yet: a fixer is dispatched at HH:MM unless somebody claims it
+#   skipped    -- due, but nothing can be dispatched (a cap, the budget, dispatch OFF, an escalation): the reason is
+#                 written into the red's record and a RED UNCLAIMED inbox entry (escalated after 10 min)
+#   nobody     -- no signature could be read for it: nothing to decide on
+_blocker_cache = {}
+
+
+def cached_dispatch_blocker(ttl=60):
+    """dispatch_blocker runs `claude -p --help`: once a minute per process is enough for a display."""
+    key = (reds_dir(), os.path.exists(reds_dir("DISPATCH_OFF")), os.environ.get("AGENTCTL_CLAUDE"),
+           os.environ.get("AGENTCTL_CLAUDE_SETTINGS"))
+    hit = _blocker_cache.get(key)
+    if hit and time.time() - hit[0] < ttl:
+        return hit[1]
+    v = dispatch_blocker()
+    _blocker_cache[key] = (time.time(), v)
+    return v
+
+
+def dispatch_block(u, rec, group, t, blocker=None):
+    """Why a fixer cannot be dispatched for this red now (read-only; maybe_dispatch and red_state both ask it), or
+    None. A red already carrying RED_MAX_DISPATCHES fixers is blocked only once it is escalated (until then the
+    patrol's dispatch escalates it, or reverts a known culprit)."""
+    if rec.get("escalated") and len(fresh_dispatches(rec)) >= RED_MAX_DISPATCHES:
+        return f"escalated after {len(fresh_dispatches(rec))} fixers: a person must take it"
+    alive = [r for r in fixer_records() if r["alive"]]
+    if u["gate"]:
+        gcap = int(env_num("AGENTCTL_RED_GATE_MAX_FIXERS", RED_GATE_MAX_FIXERS))
+        galive = [r for r in alive if r.get("gate")]
+        if len(galive) >= gcap:
+            return f"gate fixer cap {gcap} reached ({len(galive)} alive)"
+    else:
+        cap = int(env_num("AGENTCTL_RED_MAX_FIXERS", RED_MAX_FIXERS))
+        if len(alive) >= cap:
+            return f"fixer cap {cap} reached ({len(alive)} alive)"
+        out_cap = int(env_num("AGENTCTL_RED_MAX_OUTSIDE", RED_MAX_OUTSIDE))
+        if sum(1 for r in alive if not r.get("gate")) >= out_cap:
+            return f"outside-the-gate fixer cap {out_cap} reached"
+        daily = int(env_num("AGENTCTL_RED_DAILY_CAP", RED_DAILY_CAP))
+        if dispatches_today(t) >= daily:
+            return f"daily dispatch budget {daily} spent"
+    return blocker if blocker is not None else cached_dispatch_blocker()
+
+
+def resumable_fix(failed):
+    """(sha, run, fixer record) of a failed landed fix whose dispatched fixer has not had its session back, or None."""
+    for sha, run in failed or []:
+        rec = fixer_of_sha(sha)
+        if rec and not rec.get("resumed") and not any(r["alive"] for r in fixer_records() if r.get("sig") == rec.get("sig")):
+            return sha, run, rec
+    return None
+
+
+def red_state(g, infos, now_=None, entries=None):
+    """THE assignment state of one red run (g: its units, primary first) -> {state, text, short, reason, fixer, failed,
+    stale, due_at}. Read-only: the patrol acts on it, ci-why and the status line print it."""
+    t = now_ if now_ is not None else time.time()
+    u = g[0]
+    infos_ = [infos.get(x["key"]) or {} for x in g]
+    fixers = [f for i in infos_ for f in i.get("fixers") or []]
+    out = {"state": None, "reason": None, "fixer": None, "due_at": None, "group": g,
+           "failed": [ff for i in infos_ for ff in i.get("failed") or []],
+           "stale": [s_ for i in infos_ for s_ in i.get("stale") or []]}
+
+    def done(state, text, short, reason=None, **kw):
+        return {**out, "state": state, "text": text, "short": short, "reason": reason, **kw}
+
+    if fixers:
+        best = max(fixers, key=fixer_rank)
+        return done("fixing", fixer_text(best), fixer_short(best), fixer=best)
+    if not u.get("sig"):
+        why = "its failed jobs could not be read"
+        return done("nobody", f"NOBODY ({why})", f"NOBODY ({why})", why)
+    res = resumable_fix(out["failed"])
+    if res:
+        sha, run, _r = res
+        why = f"its fix {sha[:9]} failed (#{run.get('number')}): its fixer is resumed at the patrol's next look"
+        return done("resume", f"UNASSIGNED ({why})", "UNASSIGNED (resuming its fixer)", why)
+    recs = [read_record(sig_path(x["sig"])) or {} for x in g if x.get("sig")]
+    rec = recs[0] if recs else {}
+    if u["gate"]:
+        block = dispatch_block(u, rec, g, t) if any(r.get("unassigned") for r in recs) else None
+        if block:  # the patrol looked: no live author, and no fixer can go
+            return done("skipped", f"NOBODY (skipped: {block})", f"NOBODY (skipped: {block[:60]})", block)
+        why = "the patrol assigns its live author or dispatches a fixer at its next look (every 2 min)"
+        return done("assign", f"UNASSIGNED (assigning: {why})", "UNASSIGNED", why)
+    limit = env_num("AGENTCTL_RED_UNCLAIMED_MIN", RED_UNCLAIMED_MIN) * 60
+    since = min([r["nobody_since"] for r in recs if r.get("nobody_since")] or [t])
+    author = author_of(u, entries if entries is not None else inbox_red_entries())
+    author_gone = bool(author and author.get("claude_pid") and not proc_alive(author["claude_pid"]))
+    due_at = since + limit
+    if t < due_at and not author_gone:
+        at = time.strftime("%H:%M", time.localtime(due_at))
+        why = f"outside the gate: a fixer is dispatched at {at} unless somebody claims it"
+        return done("wait", f"UNASSIGNED ({why})", f"UNASSIGNED (dispatch at {at})", why, due_at=due_at)
+    block = dispatch_block(u, rec, g, t)
+    if block:
+        return done("skipped", f"NOBODY (skipped: {block})", f"NOBODY (skipped: {block[:60]})", block, due_at=due_at)
+    mins = int((t - since) // 60)
+    why = f"nobody fixing it for {mins} min" + (", author gone" if author_gone else "")
+    return done("dispatch", f"UNASSIGNED (due: {why}; the patrol dispatches a fixer at its next look)",
+                "UNASSIGNED (dispatching)", why, due_at=due_at)
+
+
+def red_states(units, infos, now_=None):
+    """{(workflow, run id): red_state} for every red run of units."""
+    entries = inbox_red_entries()
+    return {(g[0]["workflow"], g[0]["run"].get("databaseId")): red_state(g, infos, now_, entries)
+            for g in red_groups(units)}
+
+
+def state_lines(st, indent="  "):
+    """ci-why's lines for one red's state: ONE `fixing:` line, then what a failed fix or a stale claim adds."""
+    if not st:
         return []
-    lines = [f"{indent}fixing{label}: {fixer_text(f)}" for f in info["fixers"]]
-    if not lines:
-        extra = "; ".join(info["stale"])
-        lines = [f"{indent}fixing{label}: {nobody_text(info)}" + (f" (stale claim: {extra})" if extra else "")]
-    for sha, r in info["failed"]:
+    line = f"{indent}fixing: {st['text']}"
+    if st["state"] != "fixing" and st["stale"]:
+        line += f" (stale claim: {'; '.join(st['stale'])})"
+    lines = [line]
+    for sha, r in st["failed"]:
         lines.append(f"{indent}  (fix {sha[:9]} landed, and #{r.get('number')} still fails this way)")
     return lines
 
 
-UNASSIGNED = "UNASSIGNED (assigning: the patrol assigns its live author or dispatches a fixer within minutes)"
-
-
-def nobody_text(info, short=False):
-    """NOBODY only with the reason nobody can be put on it (dispatch OFF, a cap, the budget, an escalation); before the
-    patrol's first look, UNASSIGNED."""
-    why = (info or {}).get("unassigned")
-    if why:
-        return f"NOBODY ({why[:70] if short else why})"
-    return "UNASSIGNED" if short else UNASSIGNED
-
-
 def short_flow(name):
     return "main" if name == "Main" else "convergence" if "convergence" in name.lower() else name.lower()
-
-
-def summary_fixer(infos):
-    """The status line's word for one red row: the strongest fixer, or NOBODY."""
-    best = None
-    for info in infos:
-        for f in info["fixers"]:
-            if best is None or RED_STATE_RANK[f["state"]] > RED_STATE_RANK[best["state"]]:
-                best = f
-    if best is None:
-        return nobody_text(next((i for i in infos if i.get("unassigned")), None), short=True)
-    if best["state"] == "landed":
-        return f"fix {best['sha'][:7]} awaiting #{best['awaiting']}" if best.get("awaiting") else f"fix {best['sha'][:7]} landed"
-    if best["state"] == "blocked":
-        return f"BLOCKED ON OWNER: {best.get('cmd')}"
-    who = best["who"].replace("movies-wt-", "")
-    if best["state"] == "diagnosed":
-        return f"{who} diagnosed, awaiting {best.get('awaiting') or '?'}"
-    return f"{who} {best['state']}"
 
 
 # -- the reds: one unit per signature
@@ -2552,14 +2746,29 @@ def observe(workflow, s, run, runs, gate):
     return rec
 
 
+def sig_names(sig, decided, streak):
+    """The run names a signature's red is known by: the runs that FAILED WITH IT -- the decided run, the streak runs whose
+    cached signatures hold it. Never the whole streak (2026-10-27: Identity capture #2133 failed `publish`, and a fix
+    naming #2104, a `capture (uk)` failure of the same streak, was counted for it: "fix f085a400b landed, and #2133
+    still fails this way"). A fix, claim or run that names a run counts only for the signatures that run failed with."""
+    names = run_names(decided)
+    for r in streak:
+        rec = read_record(reds_dir("runsig", f"{r.get('databaseId')}.json"))
+        if rec and any(x.get("sig") == sig for x in rec.get("sigs") or []):
+            names |= run_names(r)
+    return names
+
+
 def red_units(o_r, name, decided, runs, sigs, gate):
-    streak = set().union(*[run_names(r) for r in streak_runs(runs)]) if runs else set()
+    sruns = streak_runs(runs) if runs else []
+    streak = set().union(*[run_names(r) for r in sruns]) if sruns else set()
     streak |= run_names(decided)
     units = []
     for s in sigs:
         rec = observe(name, s, decided, runs, gate)
         units.append({"key": s["sig"], "sig": s["sig"], "workflow": name, "job": s["job"], "kind": s["kind"],
-                      "line": s["line"], "names": streak | set(rec.get("runs") or []), "sigs": {s["sig"]}, "runs": runs,
+                      "line": s["line"], "names": sig_names(s["sig"], decided, sruns) | set(rec.get("runs") or []),
+                      "sigs": {s["sig"]}, "runs": runs,
                       "cause": cause_of(s["job"], s["line"]),
                       "run": decided, "gate": gate})
     if not units:  # no failed job listed (or none readable): the run itself is the red
@@ -2710,70 +2919,116 @@ def red_groups(units):
     return [sorted(g, key=lambda u: (KIND_ORDER.get(u["kind"], 1), u["job"])) for g in groups.values()]
 
 
-def red_patrol(o_r, repo, units, infos, dispatch=False, now_=None):
-    """Per red run (its signatures together): who fixes it decides nobody_since; a gate red nobody fixes for
-    RED_UNCLAIMED_MIN is ONE `RED UNCLAIMED` inbox entry per spell and, with dispatch (the processor), ONE headless fixer
-    -- unless its author was told (WATCH RED) and is still alive within those minutes; an author whose session is gone
-    does not delay it. After RED_MAX_DISPATCHES fixers for a signature: one `RED ESCALATE`, never dispatched again.
-    Reds outside the gate come after the gate's, under their own cap. Returns the actions taken."""
+def note_unclaimed(g, reason, mins=None):
+    """No silent skip: a red nobody fixes and nothing could be put on gets its reason written into its record (ci-why
+    shows `skipped: <reason>`) and ONE `RED UNCLAIMED` inbox entry per spell (escalated past the orchestrator after
+    $AGENTCTL_INBOX_ESCALATE_MIN). Returns the inbox line when one was written."""
+    u = g[0]
+    jobs = ", ".join(x["job"] for x in g)
+    with reds_lock():
+        recs = {x["sig"]: read_record(sig_path(x["sig"])) or {} for x in g if x.get("sig")}
+        noted = any(r.get("noted") for r in recs.values())
+        for sig, r in recs.items():
+            r["unassigned"] = reason
+            r["noted"] = True
+            write_json(sig_path(sig), r)
+    if noted:
+        return None
+    line = (f"RED UNCLAIMED: {u['workflow']} #{u['run'].get('number')} [{jobs}]: NOBODY -- {reason}"
+            + (f" (on {u['predicts']}: PREDICTS MAIN RED)" if u.get("predicts") else "")
+            + f" -- `~/bin/agentctl red claim {u['run'].get('number')}`, or assign an agent")
+    inbox_write("red", line, [line], [x.get("line") or "" for x in g][:INBOX_TAIL], 1)
+    return line
+
+
+def state_line(st):
+    """The patrol's one line for a red it took no action on: the same words ci-why prints."""
+    u = st["group"][0]
+    return f"{u['workflow']} #{u['run'].get('number')} [{', '.join(x['job'] for x in st['group'])}]: {st['text']}"
+
+
+def red_patrol(o_r, repo, units, infos, dispatch=False, now_=None, report=None):
+    """Per red run (its signatures together) the patrol ACTS on red_state -- the decision ci-why prints:
+    fixing (a diagnosis may await its implementer), resume a failed fix's fixer, assign a gate red (author or fixer
+    now), dispatch a due red outside the gate, wait (its nobody_since recorded), skipped (the reason written, one
+    RED UNCLAIMED). Without dispatch (`red patrol`, ci-why's track) it only records and notes. A dispatch that does not
+    happen leaves its reason in the red's record: never a silent skip. Returns the actions taken; report (a list) gets
+    the state line of every red. Reds outside the gate come after the gate's, under their own caps."""
     t = now_ if now_ is not None else time.time()
     limit = env_num("AGENTCTL_RED_UNCLAIMED_MIN", RED_UNCLAIMED_MIN) * 60
-    actions, reds_entries = [], inbox_red_entries()
+    actions, entries = [], inbox_red_entries()
     groups = sorted(red_groups([u for u in units if u.get("sig")]),
                     key=lambda g: (0 if g[0]["gate"] else 1 if g[0].get("flake") else 2, -(g[0].get("flake_count") or 0),
                                    g[0]["workflow"]))
     for g in groups:
         u = g[0]
-        fixed = any((infos.get(x["key"]) or {}).get("fixers") for x in g)
-        held = [f for x in g for f in (infos.get(x["key"]) or {}).get("fixers") or []]
-        if dispatch and held and all(f["state"] == "diagnosed" for f in held):  # a diagnosis awaits its implementer
-            sigs = {x["sig"] for x in g}
-            c = next((c for c in all_claims() if c.get("state") == "diagnosed" and c.get("awaiting") == "an implementer"
-                      and sigs & set(c.get("sigs") or [])), None)
-            if c:
-                act = diagnosed_followup(o_r, repo, c, t, group=[dict(x, diagnosis=None) for x in g])
-                if act:
-                    actions.append(act)
-        if not fixed:
-            failed = [f for x in g for f in (infos.get(x["key"]) or {}).get("failed") or []]
-            act = handle_failed_fix(o_r, repo, g, {"failed": failed}, dispatch) if failed else None
-            if act:
-                actions.append(act)
-                continue
-        if dispatch and u["gate"] and not fixed:  # the moment of red: an author or a fixer NOW, never a wait
-            actions += assign_gate_red(o_r, repo, g, t)
+        st = red_state(g, infos, t, entries)
+        if report is not None:
+            report.append(state_line(st))
+        if st["state"] == "fixing":
+            held = [f for x in g for f in (infos.get(x["key"]) or {}).get("fixers") or []]
+            if dispatch and all(f["state"] == "diagnosed" for f in held):  # a diagnosis awaits its implementer
+                sigs = {x["sig"] for x in g}
+                c = next((c for c in all_claims() if c.get("state") == "diagnosed" and c.get("awaiting") == "an implementer"
+                          and sigs & set(c.get("sigs") or [])), None)
+                if c:
+                    act = diagnosed_followup(o_r, repo, c, t, group=[dict(x, diagnosis=None) for x in g])
+                    if act:
+                        actions.append(act)
+            with reds_lock():
+                for x in g:
+                    rec = read_record(sig_path(x["sig"])) or {}
+                    if rec.get("nobody_since") or rec.get("noted") or rec.get("unassigned"):
+                        rec.update(nobody_since=None, noted=False, unassigned=None)
+                        write_json(sig_path(x["sig"]), rec)
             continue
-        with reds_lock():
-            recs = {x["sig"]: read_record(sig_path(x["sig"])) or {} for x in g}
-            if fixed:
-                for sig, rec in recs.items():
-                    rec.update(nobody_since=None, noted=False, unassigned=None)
-                    write_json(sig_path(sig), rec)
-                continue
-            for rec in recs.values():
+        with reds_lock():  # nobody on it: since when
+            for x in g:
+                rec = read_record(sig_path(x["sig"])) or {}
                 if not rec.get("nobody_since"):
                     rec["nobody_since"] = t
-            since = min(rec["nobody_since"] for rec in recs.values())
-            author = author_of(u, reds_entries)
-            author_gone = bool(author and author.get("claude_pid") and not proc_alive(author["claude_pid"]))
-            due = t - since >= limit or author_gone
-            mins = int((t - since) // 60)
-            jobs = ", ".join(x["job"] for x in g)
-            if due and u["gate"] and not any(rec.get("noted") for rec in recs.values()):
-                line = (f"RED UNCLAIMED: {u['workflow']} #{u['run'].get('number')} [{jobs}]: nobody fixing it for "
-                        f"{mins} min" + (f" (on {u['predicts']}: PREDICTS MAIN RED)" if u.get("predicts") else "") + ("; its author's session is gone" if author_gone else "")
-                        + f" -- `~/bin/agentctl red claim {u['run'].get('number')}`, or assign an agent")
-                inbox_write("red", line, [line], [x.get("line") or "" for x in g][:INBOX_TAIL], 1)
+                    write_json(sig_path(x["sig"]), rec)
+        if st["state"] == "resume":
+            if dispatch:
+                act = handle_failed_fix(o_r, repo, g, {"failed": st["failed"]}, dispatch)
+                if act:
+                    actions.append(act)
+            continue
+        if st["state"] == "skipped":
+            if dispatch:
+                dispatch_log(u, f"SKIPPED ({st['reason']})", once_per_day=True)
+            line = note_unclaimed(g, st["reason"])
+            if line:
                 actions.append(line)
-                for rec in recs.values():
-                    rec["noted"] = True
-            for sig, rec in recs.items():
-                write_json(sig_path(sig), rec)
-        if dispatch and due:
-            act = maybe_dispatch(o_r, repo, u, recs[u["sig"]], t, why=f"nobody fixing it for {mins} min"
-                                 + (", author gone" if author_gone else ""), group=g)
-            if act:
-                actions.append(act)
+            if not (dispatch and u["gate"]):  # a gate red is assigned again each look: an author may have come
+                continue
+        if st["state"] == "wait":
+            continue
+        if not dispatch:
+            if u["gate"]:  # no dispatch here (ci-why's track): a gate red nobody fixes for the limit is noted
+                recs = [read_record(sig_path(x["sig"])) or {} for x in g]
+                since = min([r["nobody_since"] for r in recs if r.get("nobody_since")] or [t])
+                if t - since >= limit:
+                    line = note_unclaimed(g, f"nobody fixing it for {int((t - since) // 60)} min")
+                    if line:
+                        actions.append(line)
+            continue
+        if u["gate"]:  # the moment of red: an author or a fixer NOW, never a wait
+            actions += assign_gate_red(o_r, repo, g, t)
+            continue
+        _skip_reason.pop(u["sig"], None)
+        act = maybe_dispatch(o_r, repo, u, read_record(sig_path(u["sig"])) or {}, t, why=st["reason"], group=g)
+        if act:
+            actions.append(act)
+        dispatched = bool(act and (" DISPATCHED" in act or act.startswith(("RED REVERT", "RED ESCALATE"))))
+        alive = [r for r in fixer_records() if r["alive"] and set(r.get("sigs") or [r.get("sig")]) & {x["sig"] for x in g}]
+        if not dispatched and not alive:
+            why = _skip_reason.get(u["sig"]) or "not dispatched (see reds/dispatch.log)"
+            line = note_unclaimed(g, why)
+            if line:
+                actions.append(line)
+        elif dispatched:
+            set_unassigned(g, None)
     return actions
 
 
@@ -3048,35 +3303,22 @@ def maybe_dispatch(o_r, repo, u, rec, t, why, group=None, diagnosis=None):
     mine = {x["sig"] for x in (group or [u])}
     if any(set(r.get("sigs") or [r.get("sig")]) & mine for r in alive):
         return None
-    if u["gate"]:  # gate reds: their own cap on fixers alive at once, never a daily budget; hitting it is escalated
-        gcap = int(env_num("AGENTCTL_RED_GATE_MAX_FIXERS", RED_GATE_MAX_FIXERS))
-        galive = [r for r in alive if r.get("gate")]
-        if len(galive) >= gcap:
-            _skip_reason[u["sig"]] = f"gate fixer cap {gcap} reached ({len(galive)} alive)"
-            return dispatch_log(u, f"SKIPPED (gate: {len(galive)} fixers alive, cap {gcap})")
-    else:
-        cap = int(env_num("AGENTCTL_RED_MAX_FIXERS", RED_MAX_FIXERS))
-        if len(alive) >= cap:
-            _skip_reason[u["sig"]] = f"fixer cap {cap} reached ({len(alive)} alive)"
-            return dispatch_log(u, f"SKIPPED ({len(alive)} fixers alive, cap {cap})")
-        out_cap = int(env_num("AGENTCTL_RED_MAX_OUTSIDE", RED_MAX_OUTSIDE))
-        if sum(1 for r in alive if not r.get("gate")) >= out_cap:
-            _skip_reason[u["sig"]] = f"outside-the-gate fixer cap {out_cap} reached"
-            return dispatch_log(u, f"SKIPPED (outside the gate: {out_cap} fixer(s) alive, its cap)")
-        daily = int(env_num("AGENTCTL_RED_DAILY_CAP", RED_DAILY_CAP))
-        if dispatches_today(t) >= daily:
-            _skip_reason[u["sig"]] = f"daily dispatch budget {daily} spent"
-            line = dispatch_log(u, f"SKIPPED (daily cap {daily} reached)", once_per_day=True)
+    blocker = dispatch_blocker()
+    block = dispatch_block(u, rec, group or [u], t, blocker=blocker or "")  # the same check red_state shows
+    if block:
+        _skip_reason[u["sig"]] = block
+        if block == blocker:
+            return dispatch_log(u, f"NOT DISPATCHED: {blocker}", once_per_day=True)
+        if block.startswith("daily dispatch budget"):
+            line = dispatch_log(u, f"SKIPPED ({block})", once_per_day=True)
             if line:  # once a day per red: an inbox entry that escalates when nobody acks it
+                daily = int(env_num("AGENTCTL_RED_DAILY_CAP", RED_DAILY_CAP))
                 msg = (f"RED BUDGET: daily dispatch budget {daily} spent (refunds excluded); {u['workflow']} "
                        f"#{u['run'].get('number')} [{u['job']}] (outside the gate) not dispatched -- "
                        f"`~/bin/agentctl red dispatch {u['run'].get('number')}`, or raise $AGENTCTL_RED_DAILY_CAP")
                 inbox_write("red", msg, [msg], [u.get("line") or ""], 1)
             return line
-    blocker = dispatch_blocker()
-    if blocker:
-        _skip_reason[u["sig"]] = blocker
-        return dispatch_log(u, f"NOT DISPATCHED: {blocker}", once_per_day=True)
+        return dispatch_log(u, f"SKIPPED ({block})")
     with claim_lock():
         # the patrol's picture is old by now (a claim, a queued or waiting Fixes-Red change may have arrived): look again
         # under the lock `red claim` takes, immediately before the spawn
@@ -3938,8 +4180,11 @@ def cmd_red(a):
             rc = rc or (0 if ok else 1)
         return rc
     if a.rcmd == "patrol":
-        acts = patrol_repo(repo, dispatch=a.dispatch)
-        print("\n".join(acts) if acts else "red patrol: nothing to do")
+        report = []
+        acts = patrol_repo(repo, dispatch=a.dispatch, report=report)
+        print("\n".join(acts) if acts else "red patrol: no action taken")
+        for line in report:  # red_state's words for every red: what ci-why prints under it
+            print(f"  {line}")
         return 0
     return 2
 
@@ -3990,7 +4235,7 @@ def sweep_claims(now_=None, out=None):
 _last_patrol = [0.0]
 
 
-def patrol_repo(repo, dispatch=True, wait_recheck=True):
+def patrol_repo(repo, dispatch=True, wait_recheck=True, report=None):
     """The processor's look at the reds: the gate (and the reds outside it), who fixes each, notes and dispatch. Reads the
     CI-state snapshot when it is fresh, else Forgejo. A stale local-checks red is rechecked (in the background in the
     processor, wait_recheck=False)."""
@@ -4015,7 +4260,7 @@ def patrol_repo(repo, dispatch=True, wait_recheck=True):
     units += flake_units()
     infos = find_fixers(scan, units, o_r=o_r)
     gate_unread_spell(o_r, None)
-    return pre + acts + red_patrol(o_r, repo, units, infos, dispatch=dispatch)
+    return pre + acts + red_patrol(o_r, repo, units, infos, dispatch=dispatch, report=report)
 
 
 def maybe_patrol(repo):

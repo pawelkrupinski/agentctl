@@ -200,10 +200,18 @@ Outside the gate (red, not blocking a push; oldest first):
 Use it when the red gate refused your push, or before you decide whether a red is yours. Don't read logs by hand
 first. A genuine `Fixes-Red:` trailer is only for a commit that really fixes that run.
 
-Under each red row (the gate's and the reds outside it) ci-why names who is fixing it (see "red"):
-`fixing: <claimant> (<worktree>, claimed|committed|landing|waiting)`, `fixing: fix landed in <sha>, awaiting #M`,
-`fixing: BLOCKED ON OWNER `<command>``, `fixing: UNASSIGNED (assigning: ...)` before the patrol's first look, or
-`fixing: NOBODY (<why>)` -- only when dispatch cannot run: OFF, a cap, the daily budget, an escalation. `ci-why --summary` is the status
+Under each red row (the gate's and the reds outside it) ci-why prints ONE line, `fixing: <state>`, the state
+`red_state` decides for that red run -- the same function the patrol acts on, so ci-why, `--summary`, the status line
+and `red patrol` can never disagree (2026-10-27: Identity capture #2133 was `UNASSIGNED (assigning ...)` in ci-why
+while `red patrol` said "nothing to do", for ~50 min). Precedence: `fix landed in <sha>, awaiting #M` > a change
+waiting / landing / committed (`<worktree> (..., waiting)`) > `BLOCKED ON OWNER` > `<claimant> (..., claimed) -- note`
+> diagnosed > a notified author > a dispatched fixer before its claim (`dispatching`); with nobody on it:
+`UNASSIGNED (assigning: ...)` (a gate red, the patrol's next look), `UNASSIGNED (due: ...)` (outside the gate, the
+next look dispatches), `UNASSIGNED (outside the gate: a fixer is dispatched at HH:MM unless somebody claims it)`,
+`UNASSIGNED (its fix <sha> failed ...: its fixer is resumed ...)`, or `NOBODY (skipped: <reason>)` -- dispatch OFF, a
+cap, the daily budget, an escalation. States are recomputed from the snapshot and the worktrees every time, never kept.
+agentctl's own trees (`<clone>-wt-check-N`, `-wt-waiting`, `-wt-batch`, the queue's clone, ~/.cache) are never a
+fixer, owner or author: a queued change's owner is its entry's source worktree. `ci-why --summary` is the status
 line's one line: `gate RED (main #2066 → fix 0a5767c awaiting #2070; convergence green)`.
 
 ### red: who is fixing each red build, and a fixer for one nobody fixes
@@ -222,9 +230,11 @@ The owner (2026-10-27): "i want gate status to point to agent(s) fixing the red 
 agent must be assigned to it".
 
 - **One cause, many reds.** A red is keyed by its failure SIGNATURE: workflow + failing job + its first relevant log
-  line, normalized (numbers, shas, timestamps, temp paths out). A newer run failing the same way is the same red: a
-  claim or a `Fixes-Red:` naming any run with that signature still counts. One fixer per red run covers all its
-  signatures.
+  line, normalized (numbers, shas, 0x hex, timestamps, temp paths out). A newer run failing the same way is the same
+  red: a claim or a `Fixes-Red:` naming any run WITH THAT SIGNATURE still counts. A red's run names are only the runs
+  that failed with its signature, never the whole streak, and a claim counts for the signatures it names: a fix for
+  job A never counts for job B (2026-10-27: `Fixes-Red: 2104`, a `capture (uk)` fix, was shown as a failed fix of
+  #2133's `publish`). One fixer per red run covers all its signatures.
 - **Fixing it** is any of: a claim (`red claim`: the claimant is `$AGENTCTL_AGENT_NAME`, else the Claude session, else
   the worktree; its pid the Claude Code process); a worktree with an unlanded commit carrying `Fixes-Red: N`
   (committed; patch-equivalent on main counts as landed); a running `agentctl land` from such a worktree (landing); a
@@ -245,8 +255,11 @@ agent must be assigned to it".
   - no live author: a fixer is dispatched NOW (one per red run, whatever the number of authors);
   - an infra-shaped red (every failed job `[infra]` or UNCLEAR: runner lost, truncated log) skips the authors and gets
     an infra-diagnosis fixer at once.
-- **RED UNCLAIMED.** A gate red the patrol could not put anyone on is ONE inbox entry per spell, `RED UNCLAIMED:
-  <workflow> #N [jobs]: NOBODY -- <why>`; the status line says `NOBODY (<why>)`. `ci-why` (no dispatch) still writes
+- **No silent skips (2026-10-27).** `red patrol` prints every red's state line (as ci-why words it) after its
+  actions. A red nobody fixes that the patrol cannot put anyone on -- gate or outside -- gets the reason written into
+  its record (`NOBODY (skipped: <why>)` in ci-why and the status line), a `SKIPPED` line in dispatch.log, and ONE
+  `RED UNCLAIMED: <workflow> #N [jobs]: NOBODY -- <why>` inbox entry per spell, escalated after 10 min unread (see
+  "inbox escalated"). `ci-why` (no dispatch) still writes
   it for a red nobody fixes for 10 min (`$AGENTCTL_RED_UNCLAIMED_MIN`), and reds outside the gate keep that wait.
 - **Dispatch (the always-on `waiting` processor, launchd `net.bitcashier.agentctl-waiting`).** Every 2 min
   (`$AGENTCTL_RED_PATROL`, and at once on a new gate red) it reads the gate and the reds outside it. A gate red with no
@@ -679,7 +692,10 @@ failed and nobody was told: the snapshot, the status line and the reds covered m
   inputs for that workflow (its dispatch inputs, read from the owner record or Forgejo's DB, ignoring tier, runner,
   profile, jvm-options, heap, reuse-run, takes-base, takes-countries, countries). Main hits it next, so it is a gate red
   at once: `RED UNCLAIMED`, claimed and dispatched like a main red. Inputs that differ make it a plain branch red that
-  names them (`recording 3166 ≠ main's 573`); a test failure on a NEWER recording also says `blocks promoting recording
+  names them (`recording 3166 ≠ main's 573`; main's pinned recording is read from the movies repo -- the
+  `hermetic-<code>.txt` assets of the release that `FIXTURE_RELEASE_TAG` in main's identity-model-convergence.yml
+  names -- by the processor hourly, cached in `~/.cache/agentctl/pinned-recording.json`; `$AGENTCTL_PINNED_RECORDING`
+  overrides); a test failure on a NEWER recording also says `blocks promoting recording
   N`. Unread inputs predict nothing (the processor asks the DB only over an open ssh control connection; `ci-why` from
   a terminal reads them).
 - **Status line / summary**: `branch reds: N → owner (workflow #n)` after main's reds, `PREDICTS MAIN RED` in bold red;
