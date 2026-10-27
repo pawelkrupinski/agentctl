@@ -1,15 +1,18 @@
-"""agentctl waiting: while main is red a production change waits on ONE `waiting` branch (checked on the combined tip),
-and the processor lands the whole branch in one push once main is green. Tools-only and Fixes-Red changes bypass it."""
-import os, stat, sys, unittest
+"""agentctl land (the owner, 2026-10-27): every change runs its OWN checks first, in parallel within the check slots;
+then, main green, it pushes; main red, a production change joins ONE `waiting` branch by cherry-pick and land returns at
+WAITING. At green the processor rebuilds `waiting` on main, runs ONE fast check of the batch (compile + fast tests),
+pushes it in one push, bisects a failing batch by prefix, and sends every verdict to the inbox."""
+import json, os, stat, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base, sh  # noqa: E402
 
 REPO_HOOK = """#!/bin/sh
-# supports --checks-only (the checks without the red gate)
+# supports --checks-only (the checks without the red gate) and --fast-only (compile and the fast tests)
 echo "$*" >> "{calls}"
 if git ls-files | grep -q BROKEN; then echo "[error] BROKEN is in the tree"; exit 1; fi
+if git ls-files | grep -q PartA && git ls-files | grep -q PartB; then echo "[error] PartA and PartB disagree"; exit 1; fi
 exit 0
 """
 
@@ -24,6 +27,14 @@ class WaitingTest(Base):
         self.reds = {"7"}
         A.gate_reds = lambda repo: set(self.reds)
         A.spawn_waiting_processor = lambda repo: None
+        self.watches = []
+        self.saved_spawn_watch = A.spawn_watch
+        A.spawn_watch = lambda repo, e, pushed_at: self.watches.append(e["tip"])
+        self.saved_spawn_watch_of = A.spawn_watch_of
+        A.spawn_watch_of = lambda repo, sha, pushed_at, close=None: self.watches.append(sha)
+        os.environ["AGENTCTL_CHECKS_DIR"] = os.path.join(t, "checks")
+        self.saved_inbox = os.environ.get("AGENTCTL_INBOX_DIR")
+        os.environ["AGENTCTL_INBOX_DIR"] = os.path.join(t, "inbox")
         self.awaited = []
         A.await_entry = lambda repo, eid, close=None: (self.awaited.append(eid), (9, None, None))[1]
         A.time.sleep = lambda s: None
@@ -48,6 +59,15 @@ class WaitingTest(Base):
     def tearDown(self):
         (A.LAND_LOCK_DIR, A.WAITING_DIR, A.gate_reds, A.spawn_waiting_processor, A.await_entry, A.time.sleep,
          A.watch_landed) = self.saved
+        A.spawn_watch = self.saved_spawn_watch
+        A.spawn_watch_of = self.saved_spawn_watch_of
+        os.environ.pop("AGENTCTL_CHECKS_DIR", None)
+        if self.saved_inbox is None:
+            os.environ.pop("AGENTCTL_INBOX_DIR", None)
+        else:
+            os.environ["AGENTCTL_INBOX_DIR"] = self.saved_inbox
+        for k in ("AGENTCTL_LAND_STALL_MIN",):
+            os.environ.pop(k, None)
         super().tearDown()
 
     def agent(self, name, path, text, msg=None):
@@ -55,8 +75,8 @@ class WaitingTest(Base):
         self.r.write(path, text, at=wt)
         return wt, self.r.commit(msg or f"{name}: {path}", at=wt)
 
-    def land(self, wt):
-        return self.run_tool("land", cwd=wt)
+    def land(self, wt, *extra):
+        return self.run_tool("land", *extra, cwd=wt)
 
     def remote_log(self):
         return sh(self.r.root, "git", "--git-dir", self.r.bare, "log", "--format=%s", "main").splitlines()
@@ -67,94 +87,82 @@ class WaitingTest(Base):
     def pushes_count(self):
         return len(open(self.pushes).read().split()) if os.path.exists(self.pushes) else 0
 
-    def test_red_then_green_lands_every_waiting_change_in_one_push(self):
-        wt1, _ = self.agent("a", "web/src/main/A.scala", "a\n")
-        wt2, _ = self.agent("b", "worker/src/main/B.scala", "b\n")
+    def inbox(self):
+        return A.inbox_entries()
+
+    def entries(self):
+        d, _c, _w = A.waiting_state(self.r.path)
+        return {e["id"].rsplit("-", 1)[-1]: e for e in A.waiting_entries(d, open_only=False)}
+
+    def calls_of(self, mode):
+        return [l for l in open(self.calls).read().splitlines() if l.startswith(mode)] if os.path.exists(self.calls) else []
+
+    def test_green_main_lands_directly_after_its_own_checks(self):
+        self.reds = set()
+        wt, sha = self.agent("a", "web/src/main/A.scala", "a\n")
+        rc, out = self.land(wt)
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"LANDED {sha}", out)
+        self.assertEqual(len(self.calls_of("--range")), 1)
+        self.assertEqual(self.watches, [sha], "the watch is detached")
+        self.assertFalse(self.entries())
+
+    def test_red_main_own_checks_first_then_join_by_cherry_pick_and_one_fast_check_and_push_at_green(self):
+        wt1, s1 = self.agent("a", "web/src/main/A.scala", "a\n")
+        wt2, s2 = self.agent("b", "worker/src/main/B.scala", "b\n")
         rc, out = self.land(wt1)
-        self.assertEqual(rc, 9, out)
-        self.assertRegex(out, r"WAITING [0-9a-f]{40} \(1 change queued on waiting")
+        self.assertEqual(rc, 0, out)
+        self.assertRegex(out, r"WAITING [0-9a-f]{40} \(entry \S+-1, 1 in batch\)")
         rc, out = self.land(wt2)
-        self.assertIn("(2 changes queued on waiting", out)
-        self.assertEqual(self.pushes_count(), 0, "nothing reaches main while it is red")
-        self.assertEqual(self.waiting_log(), ["b: worker/src/main/B.scala", "a: web/src/main/A.scala"])
-        self.assertIn("--checks-only", open(self.calls).read(), "the combined tip is checked, without the red gate")
-        A.waiting_run(self.r.path, once=True)  # still red: nothing moves
+        self.assertRegex(out, r"WAITING [0-9a-f]{40} \(entry \S+-2, 2 in batch\)")
+        self.assertEqual(len(self.calls_of("--checks-only")), 2, "each change's own checks ran first, without the gate")
         self.assertEqual(self.pushes_count(), 0)
+        A.waiting_run(self.r.path, once=True)  # still red: nothing moves
+        self.assertEqual(self.calls_of("--fast-only"), [])
         self.reds = set()
         A.waiting_run(self.r.path, once=True)
-        self.assertEqual(self.pushes_count(), 1, "ONE push for the whole branch")
+        self.assertEqual(len(self.calls_of("--fast-only")), 1, "ONE fast check of the rebuilt batch")
+        self.assertEqual(self.calls_of("--range"), [], "no full check of the batch: each passed its own")
+        self.assertEqual(self.pushes_count(), 1, "ONE push")
         self.assertEqual(self.remote_log()[:2], ["b: worker/src/main/B.scala", "a: web/src/main/A.scala"])
-        self.assertFalse(A.git_ok(self.r.path, "rev-parse", "--verify", "-q", "refs/heads/waiting"), "the branch is deleted")
-        d, _c, wt = A.waiting_state(self.r.path)
-        self.assertFalse(os.path.isdir(wt))
-        e1, e2 = A.waiting_entries(d, open_only=False)
-        self.assertEqual([e1["status"], e2["status"]], ["landed", "landed"])
-        rc, sha, _ = self.saved[4](self.r.path, e1["id"])  # the real await_entry: the waiting land's verdict
-        self.assertEqual(rc, 0)
-        self.assertIn(sha, sh(self.r.root, "git", "--git-dir", self.r.bare, "rev-list", "main"))
+        e = self.entries()
+        self.assertEqual([e["1"]["status"], e["2"]["status"]], ["landed", "landed"])
+        self.assertEqual(sorted(x["cwd"] for x in self.inbox() if x["verdict"].startswith("LANDED")), sorted([wt1, wt2]))
+        self.assertEqual(len(self.watches), 2)
 
-    def test_a_waiting_land_goes_on_to_landed_and_the_watch(self):
-        A.await_entry = lambda repo, eid, close=None: (print("LANDED abc (with …)"), (0, "abc", 1.0))[1]
-        watched = []
-        A.watch_landed = lambda repo, sha, pushed_at, o_r=None, close=None: (watched.append(sha), 3)[1]
-        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+    def test_a_failing_own_check_never_joins(self):
+        wt, _ = self.agent("b", "web/src/main/BROKEN.scala", "b\n")
         rc, out = self.land(wt)
-        self.assertEqual(rc, 3, out)
-        self.assertEqual(watched, ["abc"])
-        self.assertLess(out.index("WAITING"), out.index("LANDED"))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("NOT LANDED: the pre-push checks failed", out)
+        self.assertFalse(self.entries())
 
-    def test_a_conflict_rejects_only_the_culprit(self):
+    def test_tools_only_and_a_fix_land_directly_while_red(self):
+        wt, sha = self.agent("t", "scripts/x.sh", "echo\n")
+        rc, out = self.land(wt)
+        self.assertIn(f"LANDED {sha}", out)
+        wf, fsha = self.agent("f", "web/src/main/Fix.scala", "fix\n", msg="f: fix\n\nFixes-Red: 7")
+        rc, out = self.land(wf)
+        self.assertIn(f"LANDED {fsha}", out)
+        self.assertFalse(self.entries())
+
+    def test_fixes_red_entries_go_first_in_the_batch(self):
+        wa, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        self.land(wa)
+        d, _c, wt = A.waiting_state(self.r.path)
+        e = {"id": "x-9", "seq": 9, "worktree": wa, "head": "", "commits": [], "fixes": ["7"], "status": "waiting"}
+        self.assertEqual([x["id"] for x in A.batch_order(self.r.path, A.waiting_entries(d) + [e], {"7"})][0], "x-9")
+
+    def test_a_conflict_at_join_is_the_only_rejection_there(self):
         wt1, _ = self.agent("a", "web/src/main/Shared.scala", "line 1 by a\n")
         wt2, _ = self.agent("b", "web/src/main/Shared.scala", "line 1 by b\n")
         self.land(wt1)
         rc, out = self.land(wt2)
         self.assertEqual(rc, 1, out)
-        self.assertIn("NOT LANDED: main is red, and the change conflicts", out)
-        self.assertIn("web/src/main/Shared.scala", out)
+        self.assertIn("NOT LANDED: the change conflicts with the changes already on `waiting`", out)
         self.assertEqual(self.waiting_log(), ["a: web/src/main/Shared.scala"])
 
-    def test_a_failing_check_rejects_only_that_change(self):
-        wt1, _ = self.agent("a", "web/src/main/A.scala", "a\n")
-        wt2, _ = self.agent("b", "web/src/main/BROKEN.scala", "b\n")
-        self.land(wt1)
-        rc, out = self.land(wt2)
-        self.assertEqual(rc, 1, out)
-        self.assertIn("NOT LANDED: the checks failed on `waiting`", out)
-        self.assertIn("BROKEN is in the tree", out)
-        self.assertEqual(self.waiting_log(), ["a: web/src/main/A.scala"])
-
-    def test_main_moving_while_waiting_rebases_the_branch(self):
-        wt1, _ = self.agent("a", "web/src/main/A.scala", "a\n")
-        self.land(wt1)
-        self.r.write("docs/x.md", "someone else\n")
-        self.r.commit("main moved")
-        self.r.push()
-        os.remove(self.pushes)
-        self.reds = set()
-        A.waiting_run(self.r.path, once=True)
-        self.assertEqual(self.remote_log()[:2], ["a: web/src/main/A.scala", "main moved"])
-        self.assertEqual(self.pushes_count(), 1)
-
-    def test_main_moving_into_a_conflict_rejects_that_change_and_lands_the_rest(self):
-        wt1, _ = self.agent("a", "web/src/main/Shared.scala", "line 1 by a\n")
-        wt2, _ = self.agent("b", "web/src/main/B.scala", "b\n")
-        self.land(wt1)
-        self.land(wt2)
-        self.r.write("web/src/main/Shared.scala", "line 1 on main\n")
-        self.r.commit("main changed the shared line")
-        self.r.push()
-        self.reds = set()
-        A.waiting_run(self.r.path, once=True)
-        d, _c, _w = A.waiting_state(self.r.path)
-        a, b = A.waiting_entries(d, open_only=False)
-        self.assertEqual((a["status"], b["status"]), ("rejected", "landed"))
-        self.assertIn("no longer applies", a["why"])
-        self.assertEqual(self.remote_log()[0], "b: web/src/main/B.scala")
-
-    def test_an_enqueue_rebuilds_waiting_on_the_current_main_before_judging_a_conflict(self):
-        # `waiting` was built on an older main; main has since changed Shared.scala (a tools-only push, say), and the
-        # new change, rebased on the CURRENT main, edits that same line again. Against the old base its pick
-        # conflicts; against the rebuilt one it applies (movies, 2026-10-27: a false conflict on bounded-step-test.sh).
+    def test_a_join_rebuilds_waiting_on_the_current_main(self):
         wt1, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         self.land(wt1)
         self.r.write("web/src/main/Shared.scala", "line 1 on main\n")
@@ -165,63 +173,160 @@ class WaitingTest(Base):
         self.r.commit("b: Shared.scala", at=wt2)
         rc, out = self.land(wt2)
         self.assertNotIn("conflicts", out)
-        self.assertIn("(2 changes queued on waiting", out)
-        main = sh(self.r.path, "git", "rev-parse", "forgejo/main")
-        self.assertEqual(sh(self.r.path, "git", "merge-base", "waiting", "forgejo/main"), main,
-                         "waiting sits on the current main")
-        self.assertEqual(self.waiting_log(), ["b: Shared.scala", "a: web/src/main/A.scala"])
+        self.assertEqual(sh(self.r.path, "git", "merge-base", "waiting", "forgejo/main"),
+                         sh(self.r.path, "git", "rev-parse", "forgejo/main"))
 
-    def test_an_enqueue_onto_a_stale_waiting_rejects_only_entries_that_no_longer_apply(self):
-        wt1, _ = self.agent("a", "web/src/main/Shared.scala", "line 1 by a\n")
-        self.land(wt1)
-        self.r.write("web/src/main/Shared.scala", "line 1 on main\n")
-        self.r.commit("main changed the shared line")
-        self.r.push()
-        wt2, _ = self.agent("b", "web/src/main/B.scala", "b\n")
-        rc, out = self.land(wt2)
-        self.assertIn("(1 change queued on waiting", out)
-        d, _c, _w = A.waiting_state(self.r.path)
-        a, b = A.waiting_entries(d, open_only=False)
-        self.assertEqual((a["status"], b["status"]), ("rejected", "waiting"))
-        self.assertIn("no longer applies", a["why"])
-
-    def test_tools_only_bypasses_waiting_while_red(self):
-        wt, sha = self.agent("t", "scripts/x.sh", "echo\n")
-        rc, out = self.land(wt)
-        self.assertEqual(rc, 0, out)
-        self.assertIn(f"LANDED {sha}", out)
-        self.assertNotIn("WAITING", out)
-        self.assertEqual(self.remote_log()[0], "t: scripts/x.sh")
-
-    def test_a_fixes_red_fix_bypasses_waiting(self):
-        wt, sha = self.agent("f", "web/src/main/A.scala", "fix\n", msg="fix\n\nFixes-Red: 7")
-        rc, out = self.land(wt)
-        self.assertEqual(rc, 0, out)
-        self.assertIn(f"LANDED {sha}", out)
-        self.assertNotIn("WAITING", out)
-
-    def test_green_main_pushes_directly(self):
+    def test_a_failing_batch_rejects_only_the_culprit_by_prefix_and_lands_the_rest(self):
+        wts = [self.agent("a", "web/src/main/PartA.scala", "a\n")[0], self.agent("b", "web/src/main/PartB.scala", "b\n")[0],
+               self.agent("c", "web/src/main/C.scala", "c\n")[0]]
+        for wt in wts:
+            rc, out = self.land(wt)
+            self.assertEqual(rc, 0, out)  # each passes its own checks
         self.reds = set()
-        wt, sha = self.agent("g", "web/src/main/A.scala", "a\n")
-        rc, out = self.land(wt)
-        self.assertEqual(rc, 0, out)
-        self.assertIn(f"LANDED {sha}", out)
-        self.assertNotIn("WAITING", out)
+        A.waiting_run(self.r.path, once=True)
+        e = self.entries()
+        self.assertEqual([e["1"]["status"], e["2"]["status"], e["3"]["status"]], ["landed", "rejected", "waiting"])
+        self.assertIn("PartA and PartB disagree", e["2"]["why"])
+        self.assertEqual(self.remote_log()[0], "a: web/src/main/PartA.scala", "the passing prefix lands at once")
+        bad = [x for x in self.inbox() if x["verdict"].startswith("NOT LANDED")]
+        self.assertEqual([x["cwd"] for x in bad], [wts[1]])
+        A.waiting_run(self.r.path, once=True)
+        self.assertEqual(self.remote_log()[0], "c: web/src/main/C.scala", "the rest lands with the next batch")
 
-    def test_status_and_cancel(self):
+    def test_a_join_during_the_check_waits_for_the_next_batch(self):
+        wa, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        wb, _ = self.agent("b", "web/src/main/B.scala", "b\n")
+        self.land(wa)
+        self.reds = set()
+        check, joined = A.batch_check, []
+
+        def joining(repo, d, tree, base, tip):
+            if not joined:
+                self.reds = {"7"}  # red again for a moment: b joins while a's batch is being checked
+                joined.append(self.land(wb))
+                self.reds = set()
+            return check(repo, d, tree, base, tip)
+        A.batch_check = joining
+        try:
+            A.waiting_run(self.r.path, once=True)
+        finally:
+            A.batch_check = check
+        self.assertEqual(joined[0][0], 0, joined[0][1])
+        self.assertEqual(self.remote_log()[0], "a: web/src/main/A.scala")
+        self.assertEqual(self.entries()["2"]["status"], "waiting")
+        A.waiting_run(self.r.path, once=True)
+        self.assertEqual(self.remote_log()[0], "b: web/src/main/B.scala")
+
+    def hung_sbt(self, hook_body):
+        """The repo's hook calls scripts/sbt-warm, a fake whose command hangs like the sbtn of 2026-10-27; --stop logs."""
+        self.stops = os.path.join(self.tmp.name, "sbt-stops")
+        self.r.write("scripts/sbt-warm", f'#!/bin/sh\n[ "$1" = --stop ] && {{ echo stop >> "{self.stops}"; exit 0; }}\nsleep 60\n')
+        os.chmod(os.path.join(self.r.path, "scripts/sbt-warm"), 0o755)
+        self.r.write("scripts/hooks/pre-push", REPO_HOOK.format(calls=self.calls).replace("exit 0\n", hook_body + "\nexit 0\n"))
+        os.chmod(os.path.join(self.r.path, "scripts/hooks/pre-push"), 0o755)
+        self.r.commit("a hanging sbt")
+        self.r.push()
+        os.remove(self.pushes)
+
+    def test_a_hung_sbt_in_the_batch_check_is_retried_on_a_fresh_server_then_held(self):
+        self.hung_sbt('case "$1" in --fast-only) scripts/sbt-warm compile ;; esac')
+        wa, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        self.land(wa)
+        self.reds = set()
+        os.environ["AGENTCTL_LAND_STALL_MIN"] = "0.02"  # 1.2 s
+        A.waiting_run(self.r.path, once=True)
+        self.assertEqual(len(self.calls_of("--fast-only")), 2, "a stalled check is retried once")
+        self.assertEqual(len(open(self.stops).read().split()), 4, "on a FRESH server: stopped before and after each")
+        self.assertEqual(self.entries()["1"]["status"], "waiting", "held, not rejected")
+        self.assertEqual(self.pushes_count(), 0)
+        self.assertEqual(len([x for x in self.inbox() if x["verdict"].startswith("HELD")]), 1)
+        d, _c, w = A.waiting_state(self.r.path)
+        self.assertGreater(A.batch_state(d)["held_until"], time.time())
+        self.assertEqual(A.waiting_round(self.r.path, d, w), "held")
+        self.run_tool("waiting", "resume", cwd=self.r.path)
+        self.assertFalse(A.batch_state(d).get("held_until"))
+
+    def test_the_hooks_stall_signal_counts_as_a_stall(self):
+        self.hung_sbt('case "$1" in --fast-only) echo "pre-push STALLED: sbt (no progress for 1200 s)"; exit 75 ;; esac')
+        wa, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        self.land(wa)
+        self.reds = set()
+        A.waiting_run(self.r.path, once=True)
+        self.assertEqual(len(self.calls_of("--fast-only")), 2)
+        self.assertTrue([x for x in self.inbox() if x["verdict"].startswith("HELD")])
+
+    def test_a_batch_lands_with_no_land_process_alive_and_its_watch_verdict_reaches_the_inbox(self):
+        A.spawn_watch = self.saved_spawn_watch  # the real, detached watch
+        wa, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        rc, out = self.land(wa)  # the agent's turn ends here: no land process waits on the entry
+        self.assertEqual(rc, 0)
+        self.reds = set()
+        A.waiting_run(self.r.path, once=True, service=True)  # the service processor
+        sha = self.entries()["1"]["landed_sha"]
+        deadline = time.time() + 30
+        while time.time() < deadline and not [x for x in self.inbox() if x["command"] == "watch"]:
+            time.sleep(0.2)
+        verdicts = {x["command"]: x for x in self.inbox() if x.get("final", True)}
+        self.assertTrue(verdicts["land"]["verdict"].startswith(f"LANDED {sha}"))
+        self.assertIn(sha, verdicts["watch"]["argv"])
+        self.assertEqual((verdicts["watch"]["exit"], verdicts["watch"]["cwd"]), (0, wa))
+
+    def test_the_service_processor_stays_cheap_while_waiting_is_empty(self):
+        calls = []
+        saved = A.waiting_round
+        A.waiting_round = lambda *a: calls.append(a) or "empty"
+        try:
+            self.assertEqual(A.waiting_run(self.r.path, once=True, service=True), 0)
+        finally:
+            A.waiting_round = saved
+        self.assertEqual(calls, [], "an empty `waiting` is a directory listing: no git, no gate, no lock")
+
+    def test_land_follow_still_waits_and_watches(self):
+        A.await_entry = lambda repo, eid, close=None: (print("LANDED abc (with …)"), (0, "abc", 1.0))[1]
+        watched = []
+        A.watch_landed = lambda repo, sha, pushed_at, o_r=None, close=None: (watched.append(sha), 3)[1]
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        rc, out = self.land(wt, "--follow")
+        self.assertEqual(rc, 3, out)
+        self.assertEqual(watched, ["abc"])
+
+    def test_status_pause_and_cancel(self):
         wt1, _ = self.agent("a", "web/src/main/A.scala", "a\n")
-        wt2, _ = self.agent("b", "web/src/main/B.scala", "b\n")
         self.land(wt1)
-        self.land(wt2)
+        self.run_tool("waiting", "pause", cwd=self.r.path)
+        d, _c, w = A.waiting_state(self.r.path)
+        self.assertEqual(A.waiting_round(self.r.path, d, w), "paused")
         rc, out = self.run_tool("waiting", "status", cwd=self.r.path)
-        self.assertEqual(out.count("commit(s), tip"), 2, out)
-        self.assertIn("gate: RED (7)", out)
-        d, _c, _w = A.waiting_state(self.r.path)
-        first = A.waiting_entries(d)[0]["id"]
-        rc, out = self.run_tool("waiting", "cancel", first, cwd=self.r.path)
+        self.assertIn("PAUSED", out)
+        self.run_tool("waiting", "resume", cwd=self.r.path)
+        rc, out = self.run_tool("waiting", "cancel", "-1", cwd=self.r.path)
         self.assertEqual(rc, 0, out)
-        self.assertEqual(self.waiting_log(), ["b: web/src/main/B.scala"])
-        self.assertEqual([e["status"] for e in A.waiting_entries(d, open_only=False)], ["cancelled", "waiting"])
+        self.assertEqual(self.entries()["1"]["status"], "cancelled")
+
+    def test_service_install_status_uninstall_with_a_fake_launchctl(self):
+        t = self.tmp.name
+        log = os.path.join(t, "launchctl.log")
+        fake = os.path.join(t, "launchctl")
+        with open(fake, "w") as f:
+            f.write(f'#!/bin/sh\necho "$*" >> {log}\n[ "$1" = print ] && {{ echo "    state = running"; echo "    pid = 4242"; }}\nexit 0\n')
+        os.chmod(fake, 0o755)
+        os.environ.update(AGENTCTL_LAUNCHCTL=fake, AGENTCTL_LAUNCH_AGENTS=os.path.join(t, "LaunchAgents"))
+        try:
+            rc, out = self.run_tool("waiting", "service", "install", cwd=self.r.path)
+            self.assertEqual(rc, 0, out)
+            plist = open(os.path.join(t, "LaunchAgents", "net.bitcashier.agentctl-waiting.plist")).read()
+            for needle in ("<key>KeepAlive</key>", "<key>RunAtLoad</key>", "<string>--service</string>", self.r.path,
+                           "service.log"):
+                self.assertIn(needle, plist)
+            self.assertIn("bootstrap gui/", open(log).read())
+            rc, out = self.run_tool("waiting", "service", "status", cwd=self.r.path)
+            self.assertIn("running, pid 4242", out)
+            rc, out = self.run_tool("waiting", "service", "uninstall", cwd=self.r.path)
+            self.assertFalse(os.path.exists(os.path.join(t, "LaunchAgents", "net.bitcashier.agentctl-waiting.plist")))
+            self.assertIn("bootout gui/", open(log).read())
+        finally:
+            for k in ("AGENTCTL_LAUNCHCTL", "AGENTCTL_LAUNCH_AGENTS"):
+                os.environ.pop(k, None)
 
     def test_the_queue_points_at_waiting(self):
         rc, out = self.run_tool("queue", "add", cwd=self.r.path)

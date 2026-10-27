@@ -16,7 +16,7 @@ calls.
 ```sh
 eval "$(~/bin/agentctl env --print)"        # 1. sbt/java on PATH; a locked vault stops you here with one line
 #    ... work in your own worktree, commit ...
-~/bin/agentctl land                         # 2. Bash run_in_background=true, END YOUR TURN: lock, rebase, local tests, push, watch CI
+~/bin/agentctl land                         # 2. own checks, then LANDED (green) or WAITING (red): END YOUR TURN (verdicts -> inbox)
 ~/bin/agentctl wait run <id> &              # 3. Bash run_in_background=true, then END YOUR TURN
 ~/bin/agentctl ci-why                       # 4. only when land says the red gate refused, or Main is red
 ~/bin/agentctl inbox --unread --ack         # 5. the orchestrator: every land/watch/wait verdict, agent alive or not
@@ -149,8 +149,9 @@ file /…/scratchpad/done.flag: present (2 bytes, mtime 13:02:11Z)
 agentctl ci-why [main|<run id>] [--repo R] [--tail N]
 ```
 
-For movies it reads exactly the workflows that the pre-push red gate (`check_redgate`) reads: *Main*,
-*Identity model convergence* and *Record scrape fixtures*. For each, it takes the newest decided run on main
+For movies it reads exactly THE GATE (the owner, 2026-10-27: "if the latest main and convergence runs are green, just
+push then"): *Main* and *Identity model convergence*, the same two the pre-push red gate (`check_redgate`), land's
+red/green branch and the `waiting` processor read. Verify scrape recording no longer gates. For each, it takes the newest decided run on main
 (success or failure; cancelled and skipped runs are passed over). For other repos it reads every workflow seen on
 main. For each red run it shows:
 
@@ -182,7 +183,8 @@ Identity model convergence: RED (run 1934 #945, failure); newer run 1988 (#973) 
   [infra] leg (germany): failed in setup step 'Set up job' (often a `needs:` cascade or runner/setup trouble)
   [unclear] takes (united-kingdom): 8-line log with no FAILED/error/assert line (truncated? runner lost?) in step '…'; ends: …
   clears when: a later Identity model convergence run on main is green, or every pushed commit touching a production path carries `Fixes-Red: 945` (or `Fixes-Red: 1934`); tools-only commits land while red
-Record scrape fixtures: GREEN (run 1630 #801)
+Outside the gate (red, not blocking a push; oldest first):
+  Verify scrape recording: RED for 5h 15m since 2026-10-26T23:49:43Z (1 failed run; newest run 3140 #2000) -- `agentctl ci-why 3140`
 ```
 
 Use it when the red gate refused your push, or before you decide whether a red is yours. Don't read logs by hand
@@ -271,35 +273,71 @@ WATCH OK: Main #2711 green, convergence #1630 green
 
 Use it for every push to main. Don't use it for `measure/` branches: `identity-measure` pushes those itself.
 
-### waiting: production changes held while main is red, landed together on green
+### land, red or green (2026-10-27)
 
 ```
-agentctl waiting status          # the changes on `waiting`, the processor, the gate
-agentctl waiting cancel <id>     # drop one (its land ends NOT LANDED: cancelled); the branch is rebuilt without it
-agentctl waiting run [--once]    # the processor; land starts it detached
+agentctl land [--follow]   # own checks first (a check slot) -> green: push, LANDED -> red: join `waiting`, WAITING
 ```
 
-The owner (2026-10-26): "when waiting for main to go green, merge all waiting changes into one waiting branch (always
-use the same name) and merge it when main is green".
+1. **The change's OWN checks first**, red main or green, outside the landing lock and in parallel with other landers'
+   within the check slots (below): the hook's dry run `--range forgejo/main..HEAD` -- or, when main is red and the
+   change must wait (a production path, no `Fixes-Red:` for the red run), `--checks-only` (no gate). A failure:
+   `NOT LANDED`; nothing joins.
+2. **Then the gate** (ci-why's: the newest COMPLETED Main and Identity model convergence runs on main; running, queued
+   and cancelled runs say nothing). **Green** (or a change that may land while red: tools only, or every production
+   commit carrying `Fixes-Red:` for the red run): under the lock, fetch, check main has not moved since the check
+   (moved: check again, outside the lock), push; the hook reuses the check's pass. `LANDED <sha>`, a DETACHED watch is
+   started (its WATCH verdict goes to the inbox), and land exits 0. **Red**: under the lock, only the cherry-pick of the
+   already-checked change onto `waiting` (rebuilt on forgejo/main; a conflict is `NOT LANDED`):
+   `WAITING <sha> (entry <id>, n in batch)`, and land exits 0. END YOUR TURN at either; every verdict reaches
+   `agentctl inbox`. `--follow` stays: until the batch lands, then watches.
 
-- **The branch** is the local `waiting` of the main clone, in its worktree `<clone>-wt-waiting`
-  (`~/projects/movies-wt-waiting`). It exists only while changes wait.
-- **Enqueueing** (inside `land`, under the landing lock): fetch, create `waiting` from forgejo/main if missing,
-  cherry-pick the change's commits onto it, and run the repo hook's `--checks-only forgejo/main..waiting` there (every
-  check but the red gate, over the COMBINED tip: the basic tests plus every touched area's). A conflict or a failure
-  resets the branch and rejects only that change, with the output. Otherwise `WAITING <tip> (n changes queued on
-  waiting; entry <id>)`, and land waits on its entry file (no Forgejo calls; restarts a dead processor; 24 h bound).
-- **The processor** (one per repo, an flock; detached, `start_new_session`; log `processor.log` in the state dir
-  `~/.cache/agentctl/waiting/<repo>/`) polls the gate (60 s backing off to 5 min). Green: under the landing lock it
-  fetches, rebuilds `waiting` on forgejo/main entry by entry (a change that no longer applies is rejected alone), runs
-  the hook's `--range` dry run (gate included), and pushes the whole branch to main in ONE push through the hook.
-  Then every entry is LANDED (its own commit's sha on main), the branch and its worktree are deleted, and each
-  waiting `land` prints `LANDED <sha>` and goes on to its WATCH. The gate red again at the dry run: back to waiting.
-  A failing batch is searched prefix by prefix and only the first failing change rejected; when no single change
-  fails (flaky or infra), the whole batch is rejected with the output rather than one guessed.
-- **Bypass:** tools-only changes and `Fixes-Red:` fixes never wait (the hook lets them land while red), nor does
-  anything when main is green. A repo hook without `--checks-only` (movies before the change that added it) disables
-  waiting: land behaves as before.
+### waiting: production changes held while main is red, landed in one push at green
+
+```
+agentctl waiting status                      # the entries, the batch being checked, a HELD batch, the gate
+agentctl waiting cancel <id>                 # drop one; `waiting` is rebuilt without it
+agentctl waiting pause|resume                # take no batch until resume (joins still queue); resume ends a HELD wait
+agentctl waiting run [--once] [--service]    # the processor; land starts it detached
+agentctl waiting service install|uninstall|status   # the processor as launchd agent net.bitcashier.agentctl-waiting
+```
+
+- **The processor** (one per repo, an owned lock; it re-execs on agentctl's new code before each batch) waits while
+  the gate is red (it takes a batch while red only if a `Fixes-Red:` entry for the red run waits -- such an entry goes
+  FIRST). At green, under the lock it rebuilds `waiting` on forgejo/main; released, it runs ONE combined check of the
+  batch's tip: `pre-push --fast-only` (every test config compiled, the lint specs and local-tests.txt's `fast` set; no
+  area tests: each change passed its own full checks before it joined; the full `--range` for a hook without
+  `--fast-only`), in a detached worktree `<clone>-wt-batch` on a FRESH sbt server (`sbt-warm --stop` before and
+  after), in a check slot. Changes that join during the check wait for the next batch.
+- **Pass:** under the lock, main unmoved, ONE push of the tip through the hook (`PREPUSH_REUSE_FAST=1`: it reuses the
+  fast pass after judging the gate). Every entry is LANDED (an inbox entry in its agent's worktree) and gets a detached
+  watch. **Fail:** bisect by prefix (binary search over the entries' tips), reject only the culprit (`NOT LANDED` with
+  the failing tail, to the inbox), land the passing prefix before it at once; the rest go with the next batch.
+- **Stall:** the check runs under the 20-min no-progress abort (no output growth and under a second of CPU in its
+  process group), and the hook's exit 75 / `STALLED:` counts too. A stalled check is retried once on a fresh server;
+  stalled again, the batch is HELD for 30 min (`$AGENTCTL_BATCH_HOLD`) with a `HELD:` inbox entry.
+- **As a service** (`waiting service install`, which the owner runs): `agentctl waiting run --service` under launchd
+  (KeepAlive, RunAtLoad, log `~/.cache/agentctl/waiting/<repo>/service.log`). An empty `waiting` costs a directory
+  listing every 30 s; wall-clock sleeps only, so it carries on after the laptop sleeps; a batch lands with no land or
+  agent alive, its verdicts in the inbox.
+
+### checks: the pre-commit check slots
+
+```
+agentctl checks status             # the slots and their holders
+agentctl checks stats [--days 7]   # p50/p90 check duration and slot wait per concurrency level
+```
+
+The owner (2026-10-27): "just limit the precommit checks to a reasonable number", "keep measuring to adjust that
+number". Every check run -- land's dry run, the batch check -- holds one of N slots (flocks under
+`~/.cache/agentctl/checks/`, freed by the kernel when the holder dies; a stalled check is ended and its slot goes with
+it). N: `$AGENTCTL_MAX_CHECKS` if set, else the automatic cap (default 3: one of jvm-gate's 4 JVM slots stays for
+agents' own sbt work). A waiter prints its position in line and the holders, again every 10 min. Each run is appended to
+`checks/runs.jsonl`: duration, slot wait, cap, checks running, and the load, CPU % and memory pressure / swap sampled
+during it. After each run the cap is adjusted, at most once a day, logged in `checks/adjust.log` and sent to the inbox:
+up 1 (to the JVM slots) when over 30% of the day's checks waited over a minute while memory pressure stayed under 50%
+and swap steady; down 1 (to 1) when memory pressure reached 75% or swap grew 512 MB during a check, or when the p90
+duration at the current level is over 1.5x the p90 one level below.
 
 ### queue: RETIRED (2026-10-26)
 
@@ -468,7 +506,7 @@ agentctl cleanup (DRY RUN); log: /…/scratchpad/agentctl-deleted.log
 ### orphans: leftover loops and sbt servers
 
 ```
-agentctl orphans [--kill]
+agentctl orphans [--kill [--safe]]
 ```
 
 It lists owner records that are strays (a dead process's record and the runs it never cancelled; an owner still on
@@ -476,6 +514,15 @@ old code; an owner whose cwd is gone), wait loops and sbt servers that are orpha
 owning shell died, every target run finished, or they duplicate an older loop on the same runs). `--kill` cancels a
 dead owner's runs and removes its record, and sends SIGTERM to the rest (an owner's handler cancels its own runs).
 Output is `no orphans`, or one line per stray with the reason.
+
+`--kill --safe` is the scheduled reaper's mode (`~/bin/launchd/net.bitcashier.agentctl-reap.plist`, every 15 min; not
+installed by agentctl): it ends only strays -- a dead owner's record and its runs, wait loops whose agent or runs are
+gone or that duplicate an older one, sbt servers whose worktree is gone, whose serving command's sbt-warm or owner died
+(sbt-warm's `.serving`), or that hold a running command (an sbtn client) with no CPU for 20 min across reaps
+(`~/.cache/agentctl/sbt-cpu.json`; a `jcmd Thread.print` dump first, in `~/.cache/agentctl/sbt-dumps/`) -- never an
+owner merely on old code, which re-execs itself. Every kill is a line of `~/.cache/agentctl/reap.log`. The daily
+`sweep` reaps the sbt servers too. A watch whose runs show no change for 120 min (`$AGENTCTL_WATCH_STALL_MIN`) ends
+`WATCH STALLED`.
 
 ---
 

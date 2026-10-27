@@ -1,4 +1,4 @@
-"""agentctl ci-why: the gate's three workflows, newest decided run, infra vs test, the clearing rule."""
+"""agentctl ci-why: the gate's two workflows (Main, convergence), newest decided run, infra vs test, the clearing rule."""
 import io, os, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -47,7 +47,7 @@ class CiWhyTest(FakeForge):
         self.assertEqual(rc, 1, out)
         self.assertIn("Main: GREEN (run 40 #20)", out)
         self.assertIn("Identity model convergence: RED (run 39 #19, failure; red for ", out)
-        self.assertIn("Verify scrape recording: GREEN (run 30 #15)", out)  # the cancelled run is passed over
+        self.assertNotIn("Verify scrape recording:", out.partition("Outside the gate")[0])  # no longer the gate's
         gate, _, outside = out.partition("Outside the gate")
         self.assertNotIn("Unrelated", gate)  # not the gate's: it decides nothing about a push
         self.assertIn("Unrelated: RED for", outside)  # ...but a red is shown, with how long
@@ -156,6 +156,20 @@ class CiWhyTest(FakeForge):
         self.assertEqual(rc, 1, out)
         self.assertIn("::error title=identity drift (uk)", out)
 
+    def test_the_gate_is_exactly_main_and_convergence(self):
+        # the owner, 2026-10-27: "if the latest main and convergence runs are green, just push then"
+        self.put("runs.json", [run(40, 20, "Main", "main.yml"), run(39, 19, "Identity model convergence", "identity-model-convergence.yml"),
+                               run(30, 15, "Verify scrape recording", "verify-scrape-recording.yml", conclusion="failure")])
+        rc, out, _ = self.why()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("main is green for the gate", out)
+        self.assertIn("Verify scrape recording: RED", out.partition("Outside the gate")[2])
+        saved, A.slug = A.slug, lambda repo: "pawelkrupinski/movies"
+        try:
+            self.assertEqual(A.gate_reds("/any"), set(), "land and the processor read the same gate")
+        finally:
+            A.slug = saved
+
     def test_all_green(self):
         self.put("runs.json", [run(40, 20, "Main", "main.yml"), run(39, 19, "Identity model convergence", "identity-model-convergence.yml"),
                                run(30, 15, "Verify scrape recording", "verify-scrape-recording.yml")])
@@ -175,7 +189,9 @@ class CiWhyMutationTest(unittest.TestCase):
         self.assertTrue(res.failures or res.errors, f"mutant {attr} survived")
 
     def test_mutants_die(self):
-        self.kill("test_test_failure_with_clearing_rule", "GATING", {"pawelkrupinski/movies": A.GATING["pawelkrupinski/movies"][:2]})
+        self.kill("test_test_failure_with_clearing_rule", "GATING", {"pawelkrupinski/movies": A.GATING["pawelkrupinski/movies"][:1]})
+        self.kill("test_the_gate_is_exactly_main_and_convergence", "GATING", {"pawelkrupinski/movies": A.GATING[
+            "pawelkrupinski/movies"] + [("Verify scrape recording", "verify-scrape-recording.yml")]})
         self.kill("test_infra_shaped", "classify_job", lambda job, lines, raw=(0, []): ("test", "x"))
         self.kill("test_artifact_exists_is_infra_and_silent_log_is_unclear", "INFRA_LOG", A.re.compile(r"$^"))
 

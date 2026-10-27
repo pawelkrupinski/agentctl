@@ -11,6 +11,10 @@ _loader.exec_module(A)
 # No test writes to the real inbox (~/.cache/agentctl/inbox): every land / watch / wait a test runs writes its verdict
 # here instead (test_inbox sets its own per test).
 os.environ.setdefault("AGENTCTL_INBOX_DIR", tempfile.mkdtemp(prefix="agentctl-inbox-test-"))
+# ...nor reaps this machine's stuck sbt servers (orphans / sweep): test_sbt_reaper drives the rules on fakes.
+os.environ.setdefault("AGENTCTL_SBT_REAP", "0")
+# ...nor takes this machine's pre-commit check slots, nor writes its measurements or cap.
+os.environ.setdefault("AGENTCTL_CHECKS_DIR", tempfile.mkdtemp(prefix="agentctl-checks-test-"))
 
 ENV = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
            GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")

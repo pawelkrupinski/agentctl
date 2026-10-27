@@ -130,6 +130,17 @@ class WatchTest(Base):
         self.assertEqual(rc, 2, out)
         self.assertIn("WATCH UNKNOWN: Main undecided", out)
 
+    def test_no_change_in_the_runs_for_the_bound_is_a_named_stall(self):
+        self.main = [run(70, self.sha, status="in_progress")]  # it never moves (a runner lost mid-run)
+        self.conv = [run(71, self.sha, status="queued", created=self.pushed_at + 1)]
+        os.environ["AGENTCTL_WATCH_STALL_MIN"] = "0"
+        try:
+            rc, out = self.watch()
+        finally:
+            del os.environ["AGENTCTL_WATCH_STALL_MIN"]
+        self.assertEqual(rc, 2, out)
+        self.assertIn("WATCH STALLED: no change in Main run 70 in_progress", out)
+
     def test_api_failures_give_up_with_could_not_tell(self):
         def broken(o_r, *args):
             raise RuntimeError("connection refused")
@@ -170,10 +181,24 @@ class LandWatchTest(Base):
         A.watch_landed, A.LAND_LOCK_DIR = self.saved
         super().tearDown()
 
-    def test_land_watches_after_landed_and_returns_its_verdict(self):
+    def test_land_ends_at_landed_and_watches_detached(self):
+        spawned, saved = [], A.spawn_watch_of
+        A.spawn_watch_of = lambda repo, sha, pushed_at, close=None: spawned.append(sha)
+        try:
+            self.r.write("f1.txt", "mine\n")
+            sha = self.r.commit("mine")
+            rc, out = self.run_tool("land", cwd=self.r.path)
+        finally:
+            A.spawn_watch_of = saved
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"LANDED {sha}", out)
+        self.assertEqual(spawned, [sha], "the watch is detached: its verdict goes to the inbox")
+        self.assertEqual(self.calls, [], "land itself does not watch")
+
+    def test_land_follow_watches_after_landed_and_returns_its_verdict(self):
         self.r.write("f1.txt", "mine\n")
         sha = self.r.commit("mine")
-        rc, out = self.run_tool("land", cwd=self.r.path)
+        rc, out = self.run_tool("land", "--follow", cwd=self.r.path)
         self.assertEqual(rc, 3, out)
         self.assertIn(f"LANDED {sha}", out)
         self.assertEqual(self.calls[0][0], sha)

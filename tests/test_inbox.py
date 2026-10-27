@@ -69,6 +69,14 @@ class InboxTest(unittest.TestCase):
         self.assertEqual(final["verdict"], "WATCH OK: Main #5 green, convergence #6 green")
         self.assertEqual(final["verdicts"][-2:], ["LANDED abc123", "WATCH OK: Main #5 green, convergence #6 green"])
 
+    def test_a_land_that_ends_at_waiting_writes_it_once(self):
+        def handler(a):
+            print("WAITING abc123 (entry e1, 2 in batch)")
+            return 0
+        with contextlib.redirect_stdout(io.StringIO()):
+            A.with_inbox("land", handler, None)
+        self.assertEqual([e["verdict"] for e in self.entries()], ["WAITING abc123 (entry e1, 2 in batch)"])
+
     def test_a_crash_is_a_verdict_too(self):
         def handler(a):
             print("LANDED abc123")

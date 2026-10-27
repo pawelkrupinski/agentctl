@@ -11,7 +11,7 @@
   agentctl wait file <path> [--contains REGEX] [--interval S] [--timeout S]
         Same, for a file appearing (and containing REGEX).
   agentctl ci-why [main|<run id>] [--repo R] [--tail N]
-        Why main is red: the red gate's three workflows (movies), their newest decided runs, failed jobs + log lines,
+        Why main is red: the red gate's two workflows (movies: Main, convergence), their newest decided runs, failed jobs + log lines,
         commit/author, INFRA-SHAPED vs TEST FAILURE, and the clearing rule (later green run / Fixes-Red:). Exit 1 red.
   agentctl land [--repo PATH] [--branch B] [--stash]
         fetch, rebase onto forgejo/main, prepush-check, push (the hook runs, sdkman sbt/java on PATH), retry push races
@@ -64,8 +64,8 @@ Examples:
   agentctl wait run 1976 1984 --repo movies --tail 12
 Exit: 0 all green, 1 any red/cancelled, 2 timeout. A waiter that vanished is taken over."""
 CI_WHY_HELP = """Why is main red? For movies: the newest DECIDED run on main (success/failure; cancelled and skipped say
-nothing) of exactly the three workflows the pre-push red gate reads -- Main, Identity model convergence, Verify scrape
-recording. Other repos: every workflow seen on main. For each red one: failed jobs, their relevant log lines, the commit
+nothing) of exactly the two workflows the gate reads (the owner, 2026-10-27) -- Main and Identity model convergence;
+every other red on main is listed after, as information only. Other repos: every workflow seen on main. For each red one: failed jobs, their relevant log lines, the commit
 and author, INFRA-SHAPED (setup-step failure, 0-length log, artifact already exists, ENOENT, ...) vs TEST FAILURE, and
 the gate's clearing rule (a later green run, or `Fixes-Red: <#number|run id>` on every production commit).
   agentctl ci-why                 # movies (or the cwd's repo)
@@ -111,7 +111,7 @@ Tables: action_run, action_run_job, action_task, action_task_step (status 1 ok, 
 5 waiting, 6 running). Prefer `forgejo-gh` / `agentctl ci-why` for runs and logs; db-q is the fallback.
   agentctl db-q 'select id, "index", status, substr(title, 1, 60) from action_run order by id desc limit 10'
 Exit: 0 ok, 1 query/connection failed, 2 refused."""
-import argparse, contextlib, datetime as dt, fcntl, fnmatch, glob, itertools, json, os, re, shlex, signal, subprocess, sys, time, traceback, urllib.parse, urllib.request
+import argparse, contextlib, io, datetime as dt, fcntl, fnmatch, glob, itertools, json, os, re, shlex, signal, subprocess, sys, time, traceback, urllib.parse, urllib.request
 
 HOME = os.path.expanduser("~")
 REPOS = [f"{HOME}/bitcashier/{r}" for r in ("infra", "core", "dashboard", "invoice-page", "version-dashboard")] + [
@@ -742,8 +742,10 @@ def cmd_wait(a):
 
 # ---------------------------------------------------------------- ci-why
 # Exactly the workflows movies' scripts/hooks/pre-push check_redgate reads (GatingWorkflows / GatingWorkflowFiles).
-GATING = {"pawelkrupinski/movies": [("Main", "main.yml"), ("Identity model convergence", "identity-model-convergence.yml"),
-                                    ("Verify scrape recording", "verify-scrape-recording.yml")]}
+# THE GATE (the owner, 2026-10-27: "if the latest main and convergence runs are green, just push then, remember that"):
+# exactly the newest decided Main run and the newest decided Identity model convergence run on main. Verify scrape
+# recording no longer gates; ci-why lists it, and every other red, as information only.
+GATING = {"pawelkrupinski/movies": [("Main", "main.yml"), ("Identity model convergence", "identity-model-convergence.yml")]}
 SETUP_STEP = re.compile(r"^(Set up job|Initialize containers|actions/checkout|Checkout|.*(download|upload)-artifact|.*cache@|Set up .*runner)", re.I)
 INFRA_LOG = re.compile(r"artifact already exists|ENOENT|No space left on device|Cannot connect to the Docker daemon|"
                        r"connection (refused|reset)|Could not resolve host|TLS handshake timeout|runner .* lost|context deadline exceeded|"
@@ -979,7 +981,10 @@ def group_cpu_seconds(pgid):
     return total
 
 
-def run_watched(argv, cwd, env, log_path, step, stall=None):
+STALL_CPU_SECONDS = 1.0  # CPU that counts as progress per window: a watchdog's polls are not work
+
+
+def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None):
     """Run argv (its own process group, stdin closed), its output into a file beside log_path. (returncode, output);
     returncode None when it STALLED: no output and no CPU in its process group for `stall` seconds, after which the
     group is ended. Waits with Popen.wait, never time.sleep."""
@@ -988,17 +993,22 @@ def run_watched(argv, cwd, env, log_path, step, stall=None):
     with open(out_path, "w") as out:
         p = subprocess.Popen(argv, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                              start_new_session=True)
-    seen, changed, stalled = None, time.monotonic(), False
+    size, cpu, changed, stalled = -1, None, time.monotonic(), False
     poll = max(0.2, min(15.0, stall / 4))
+    need = float(os.environ.get("AGENTCTL_STALL_CPU_SECONDS", STALL_CPU_SECONDS))
     while True:
         try:
             p.wait(timeout=poll)
             break
         except subprocess.TimeoutExpired:
             pass
-        now = (os.path.getsize(out_path), group_cpu_seconds(p.pid))
-        if now != seen:
-            seen, changed = now, time.monotonic()
+        if sampler:
+            sampler()
+        now_size, now_cpu = os.path.getsize(out_path), group_cpu_seconds(p.pid)
+        # progress: output grew, or the group used a real second of CPU since the last progress (the hook idle in
+        # `wait` with only its watchdog polling used ~0.08 s in 50 min, 2026-10-27: that is not progress)
+        if now_size != size or cpu is None or now_cpu - cpu >= need:
+            size, cpu, changed = now_size, now_cpu, time.monotonic()
         elif time.monotonic() - changed > stall:
             stalled = True
             for sig, grace in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
@@ -1019,6 +1029,268 @@ def run_watched(argv, cwd, env, log_path, step, stall=None):
     except OSError:
         pass
     return (None if stalled else p.returncode), output
+
+
+# ---------------------------------------------------------------- check slots
+# The owner (2026-10-27): "just limit the precommit checks to a reasonable number", and "keep measuring to adjust that
+# number". Every pre-commit check run (land's dry run, the `waiting` batch check) holds one of N slots: flocks
+# ~/.cache/agentctl/checks/slot-<i>.lock, freed by the kernel when the holder dies, so a slot never leaks; a check
+# that stalls is ended by run_watched, and its slot goes with it. N: $AGENTCTL_MAX_CHECKS if set, else the automatic cap
+# (checks/cap.json, default 3, leaving one of jvm-gate's 4 JVM slots to agents' own sbt work). A waiter prints its
+# position and the holders. Each run appends to checks/runs.jsonl: its duration, its wait for a slot, the cap and the
+# number of checks running, the load average, CPU % and memory pressure / swap sampled during it. After each run the
+# cap is adjusted from the data (adjust_cap), at most once a day, each change logged and sent to the inbox.
+CHECKS_DEFAULT_CAP = 3
+JVM_SLOTS_DEFAULT = 4
+
+
+def checks_dir():
+    d = os.environ.get("AGENTCTL_CHECKS_DIR") or os.path.join(HOME, ".cache", "agentctl", "checks")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def jvm_slots():
+    try:
+        return max(1, int(os.environ.get("KINOWO_JVM_SLOTS", JVM_SLOTS_DEFAULT)))
+    except ValueError:
+        return JVM_SLOTS_DEFAULT
+
+
+def cap_state():
+    try:
+        with open(os.path.join(checks_dir(), "cap.json")) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {"cap": CHECKS_DEFAULT_CAP}
+
+
+def checks_cap():
+    if os.environ.get("AGENTCTL_MAX_CHECKS"):
+        return max(1, int(os.environ["AGENTCTL_MAX_CHECKS"]))
+    return max(1, min(jvm_slots(), int(cap_state().get("cap", CHECKS_DEFAULT_CAP))))
+
+
+def machine_sample():
+    """(load1, cpu %, memory pressure %, swap used MB) of this machine, cheaply; None where unreadable."""
+    load1 = os.getloadavg()[0]
+    cpu = min(100.0, 100.0 * load1 / (os.cpu_count() or 1))
+    pressure = swap = None
+    try:
+        r = subprocess.run(["memory_pressure", "-Q"], capture_output=True, text=True, timeout=10)
+        m = re.search(r"free percentage:\s*(\d+)", r.stdout)
+        pressure = 100 - int(m.group(1)) if m else None
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    try:
+        r = subprocess.run(["sysctl", "-n", "vm.swapusage"], capture_output=True, text=True, timeout=10)
+        m = re.search(r"used = ([\d.]+)M", r.stdout)
+        swap = float(m.group(1)) if m else None
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return load1, cpu, pressure, swap
+
+
+class Slot:
+    def __init__(self, label):
+        self.label, self.f, self.index, self.waited, self.t0 = label, None, None, 0.0, None
+        self.samples, self.running, self.cap, self._last_sample = [], 0, 0, 0.0
+
+    def sample(self, force=False):
+        if force or time.monotonic() - self._last_sample >= 30:
+            self._last_sample = time.monotonic()
+            try:
+                self.samples.append(machine_sample())
+            except Exception:
+                pass
+
+    def done(self, rc, out):
+        self.rc, self.out = rc, out
+
+
+def slot_holders(cap):
+    out = []
+    for i in range(cap):
+        path = os.path.join(checks_dir(), f"slot-{i}.lock")
+        if lock_held(path):
+            try:
+                out.append(open(path).read().strip() or f"slot {i}")
+            except OSError:
+                out.append(f"slot {i}")
+    return out
+
+
+@contextlib.contextmanager
+def check_slot(repo, label):
+    """Hold one of the check slots for a pre-commit check run; waits (FIFO by arrival, a ticket file) printing its
+    position and the holders. Records the run in runs.jsonl and adjusts the cap afterwards."""
+    d = checks_dir()
+    slot, t_wait = Slot(label), time.monotonic()
+    ticket = os.path.join(d, f"wait-{time.time():.6f}-{os.getpid()}")
+    open(ticket, "w").write(label)
+    said, report_at = False, 0.0
+    try:
+        while True:
+            cap = checks_cap()
+            waiters = sorted(n for n in os.listdir(d) if n.startswith("wait-")
+                             and pid_alive(int(n.rsplit("-", 1)[1])))
+            mine = os.path.basename(ticket)
+            ahead = waiters.index(mine) if mine in waiters else 0
+            free = None
+            if ahead < cap:
+                for i in range(cap):
+                    f = open(os.path.join(d, f"slot-{i}.lock"), "a+")
+                    try:
+                        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        free = (i, f)
+                        break
+                    except BlockingIOError:
+                        f.close()
+            if free:
+                slot.index, slot.f = free
+                break
+            if time.monotonic() >= report_at:
+                holders = slot_holders(cap)
+                err(f"{'still ' if said else ''}waiting for a check slot ({len(holders)}/{cap} busy; position "
+                    f"{ahead + 1} in line): " + "; ".join(holders))
+                said, report_at = True, time.monotonic() + 600
+            time.sleep(2)
+    finally:
+        try:
+            os.unlink(ticket)
+        except OSError:
+            pass
+    slot.waited, slot.cap = time.monotonic() - t_wait, checks_cap()
+    slot.running = len(slot_holders(slot.cap))
+    slot.f.seek(0)
+    slot.f.truncate()
+    slot.f.write(f"pid {os.getpid()} {label} since {ts()}")
+    slot.f.flush()
+    slot.t0, slot.rc = time.monotonic(), None
+    slot.sample(force=True)
+    try:
+        yield slot
+    finally:
+        slot.sample(force=True)
+        record_check(slot, time.monotonic() - slot.t0)
+        slot.f.close()
+        try:
+            maybe_adjust_cap()
+        except Exception as e:
+            err(f"could not adjust the check cap: {e}")
+
+
+def record_check(slot, duration):
+    def mx(i):
+        vals = [x[i] for x in slot.samples if x and x[i] is not None]
+        return max(vals) if vals else None
+    rec = {"at": time.time(), "label": slot.label, "duration": round(duration, 1), "waited": round(slot.waited, 1),
+           "cap": slot.cap, "running": slot.running, "rc": slot.rc, "load1": mx(0), "cpu": mx(1), "pressure": mx(2),
+           "swap_mb": mx(3), "swap_mb_start": slot.samples[0][3] if slot.samples and slot.samples[0] else None}
+    with open(os.path.join(checks_dir(), "runs.jsonl"), "a") as f:
+        f.write(json.dumps(rec) + "\n")
+
+
+def check_runs(days=7, now=None):
+    now = now or time.time()
+    out = []
+    try:
+        with open(os.path.join(checks_dir(), "runs.jsonl")) as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if r.get("at", 0) >= now - days * 86400:
+                    out.append(r)
+    except OSError:
+        pass
+    return out
+
+
+def pct(vals, q):
+    vals = sorted(vals)
+    if not vals:
+        return None
+    return vals[min(len(vals) - 1, int(round(q * (len(vals) - 1))))]
+
+
+SLOT_WAIT_COMMON = 0.3        # share of the day's runs that waited over a minute for a slot
+PRESSURE_LOW, PRESSURE_HIGH = 50, 75
+SWAP_GROWTH_HIGH_MB = 512
+
+
+def adjust_cap(runs, cap, max_cap, last_change, now):
+    """(new cap, reason) from the last day's check runs, or (cap, None). At most one change a day. Lower by 1 (to 1)
+    when memory pressure or swap rises, or when p90 duration at the current level is over 1.5x the p90 at the level
+    below; raise by 1 (to max_cap) when slot waits are common and memory pressure and swap stay low."""
+    if now - (last_change or 0) < 86400:
+        return cap, None
+    day = [r for r in runs if r.get("at", 0) >= now - 86400]
+    if not day:
+        return cap, None
+    pressures = [r["pressure"] for r in day if r.get("pressure") is not None]
+    growth = [(r["swap_mb"] or 0) - (r.get("swap_mb_start") or 0) for r in day if r.get("swap_mb") is not None]
+    if (pressures and max(pressures) >= PRESSURE_HIGH) or (growth and max(growth) >= SWAP_GROWTH_HIGH_MB):
+        if cap > 1:
+            return cap - 1, (f"memory pressure up to {max(pressures) if pressures else '?'}% or swap growing up to "
+                             f"{int(max(growth)) if growth else 0} MB during a check")
+        return cap, None
+    at = [r["duration"] for r in runs if r.get("running") == cap]
+    below = [r["duration"] for r in runs if r.get("running") == cap - 1]
+    if cap > 1 and len(at) >= 5 and len(below) >= 5 and pct(at, 0.9) > 1.5 * pct(below, 0.9):
+        return cap - 1, f"p90 check duration with {cap} running is {pct(at, 0.9):.0f}s, over 1.5x the {pct(below, 0.9):.0f}s with {cap - 1}"
+    waited = [r for r in day if r.get("waited", 0) > 60]
+    if (cap < max_cap and len(day) >= 5 and len(waited) / len(day) >= SLOT_WAIT_COMMON
+            and (not pressures or max(pressures) < PRESSURE_LOW) and (not growth or max(growth) < 64)):
+        return cap + 1, (f"{len(waited)} of {len(day)} checks today waited over a minute for a slot, memory pressure "
+                         f"under {PRESSURE_LOW}% and swap steady")
+    return cap, None
+
+
+def maybe_adjust_cap(now=None):
+    if os.environ.get("AGENTCTL_MAX_CHECKS"):
+        return None
+    now = now or time.time()
+    st = cap_state()
+    cap = int(st.get("cap", CHECKS_DEFAULT_CAP))
+    new, why = adjust_cap(check_runs(7, now), cap, jvm_slots(), st.get("changed_at"), now)
+    if why is None or new == cap:
+        return None
+    st = {"cap": new, "changed_at": now, "reason": why, "previous": cap}
+    with open(os.path.join(checks_dir(), "cap.json.tmp"), "w") as f:
+        json.dump(st, f)
+    os.replace(os.path.join(checks_dir(), "cap.json.tmp"), os.path.join(checks_dir(), "cap.json"))
+    line = f"CHECK CAP {cap} -> {new}: {why}"
+    with open(os.path.join(checks_dir(), "adjust.log"), "a") as f:
+        f.write(f"{ts()} {line}\n")
+    inbox_write("checks", line, [line], [], 0)
+    return line
+
+
+def cmd_checks(a):
+    if a.ccmd == "stats":
+        runs = check_runs(a.days)
+        cap = checks_cap()
+        st = cap_state()
+        print(f"check slots: cap {cap}" + (" ($AGENTCTL_MAX_CHECKS)" if os.environ.get("AGENTCTL_MAX_CHECKS") else
+                                          f" (auto; last change: {st.get('reason', 'none')})")
+              + f"; busy now: {len(slot_holders(cap))}; {len(runs)} check run(s) in {a.days} d")
+        print(f"{'running':>7} {'runs':>5} {'p50 dur':>8} {'p90 dur':>8} {'p50 wait':>9} {'p90 wait':>9} {'max mem%':>8} {'max swap':>8}")
+        for level in sorted({r.get("running", 0) for r in runs}):
+            rs = [r for r in runs if r.get("running", 0) == level]
+            dur, wait = [r["duration"] for r in rs], [r["waited"] for r in rs]
+            mem = [r["pressure"] for r in rs if r.get("pressure") is not None]
+            swp = [r["swap_mb"] for r in rs if r.get("swap_mb") is not None]
+            print(f"{level:>7} {len(rs):>5} {pct(dur, .5):>7.0f}s {pct(dur, .9):>7.0f}s {pct(wait, .5):>8.0f}s "
+                  f"{pct(wait, .9):>8.0f}s {max(mem) if mem else '-':>8} {int(max(swp)) if swp else '-':>8}")
+        return 0
+    if a.ccmd == "status":
+        cap = checks_cap()
+        holders = slot_holders(cap)
+        print(f"check slots: {len(holders)}/{cap} busy" + "".join(f"\n  {h}" for h in holders))
+        return 0
+    return 2
 
 
 def stalled(step, output, log_path):
@@ -1227,10 +1499,16 @@ def cmd_land(a):
     finally:
         if stash and not stash.restore():
             print(f"WARNING: local changes are in stash {stash.name}, not restored")
-    if rc == 0 and a.waiting:  # main was red: the change waits on `waiting`, and lands with it once main is green
+    if rc == 0 and a.waiting and not getattr(a, "follow", False):
+        return 0  # the processor lands it; LANDED / NOT LANDED and the WATCH verdict go to `agentctl inbox`
+    if rc == 0 and a.waiting:  # --follow: wait here for the batch, then watch
         rc, a.landed_sha, a.pushed_at = await_entry(repo, a.waiting["id"], close=None if getattr(a, "keep_worktree", False) else repo)
     if rc != 0 or not a.landed_sha or getattr(a, "no_watch", False):
         return rc
+    if not getattr(a, "follow", False):  # land ends at LANDED; a detached watch sends its verdict to the inbox
+        spawn_watch_of(repo, a.landed_sha, a.pushed_at, close=None if getattr(a, "keep_worktree", False) else repo)
+        print(f"watching {a.landed_sha[:10]} detached: its WATCH verdict goes to `agentctl inbox`", flush=True)
+        return 0
     # the lock is free again: the next lander goes while this one watches main's CI; on WATCH OK the worktree it ran
     # from is closed when proven merged (close_worktree), unless --keep-worktree
     return watch_landed(repo, a.landed_sha, a.pushed_at, close=None if getattr(a, "keep_worktree", False) else repo)
@@ -1271,11 +1549,15 @@ def sync(repo, main_ref, sh):
     return None, head
 
 
-def dry_run(repo, hook, head, log_path, attempt):
-    """The repo hook's dry run over forgejo/main..head, watched for a stall: None when it passed, else land's rc."""
-    err(f"checking {head[:10]}: {os.path.relpath(hook, repo)} --range {REMOTE}/main..HEAD (log: {log_path})")
+def dry_run(repo, hook, head, log_path, attempt, mode="--range"):
+    """The repo hook's dry run over forgejo/main..head, in a check slot, watched for a stall: None when it passed, else
+    land's rc."""
+    err(f"checking {head[:10]}: {os.path.relpath(hook, repo)} {mode} {REMOTE}/main..HEAD (log: {log_path})")
     lock_note(f"checks of {head[:10]}")
-    rc, out = run_watched([hook, "--range", f"{REMOTE}/main..{head}"], repo, tool_env(), log_path, "checks")
+    with check_slot(repo, f"land {os.path.basename(repo)} {head[:10]}") as slot:
+        rc, out = run_watched([hook, mode, f"{REMOTE}/main..{head}"], repo, tool_env(), log_path, "checks",
+                              sampler=slot.sample)
+        slot.done(rc, out)
     with open(log_path, "a") as f:
         f.write(f"=== check {attempt} {ts()} {head}\n{out}\n")
     if rc is None:
@@ -1294,10 +1576,12 @@ def precheck(repo, main_ref, sh, log_path, a):
     hook = precheck_hook(repo)
     if not hook:
         return None
+    # The change's OWN checks first, red main or green (the owner, 2026-10-27: "once the checks are done but build is
+    # red, merge to waiting"): main red and the change one that must wait, without the gate (--checks-only), since it
+    # will join `waiting` and land with the batch at green.
     reds = gate_reds(repo) if waiting_supported(repo) else set()
-    if reds and must_wait(repo, waiting_commits(repo, f"{REMOTE}/main", head), reds):
-        return None  # it goes onto `waiting` under the lock, checked there on the combined tip
-    rc = dry_run(repo, hook, head, log_path, "before the lock")
+    joining = bool(reds) and must_wait(repo, waiting_commits(repo, f"{REMOTE}/main", head), reds)
+    rc = dry_run(repo, hook, head, log_path, "before the lock", mode="--checks-only" if joining else "--range")
     if rc is not None:
         return rc
     a.prechecked = (head, git(repo, "rev-parse", main_ref).strip())
@@ -1311,10 +1595,9 @@ def land_loop(repo, main_ref, sh, log_path, a):
         if rc is not None:
             return rc
         reds = gate_reds(repo) if waiting_supported(repo) else set()
-        if reds:
-            commits = waiting_commits(repo, f"{REMOTE}/main", head)
-            if must_wait(repo, commits, reds):
-                return waiting_enqueue(repo, head, commits, log_path, a)
+        if reds and must_wait(repo, waiting_commits(repo, f"{REMOTE}/main", head), reds):
+            # checked already (before the lock, without the gate): only the cherry-pick onto `waiting` here
+            return join(repo, main_ref, sh, log_path, a, head=head)
         hook = precheck_hook(repo)
         prechecked = getattr(a, "prechecked", None)
         if hook and prechecked and prechecked != (head, git(repo, "rev-parse", main_ref).strip()):
@@ -1384,6 +1667,7 @@ WATCH = {"pawelkrupinski/movies": {"main": ("Main", "main.yml"),
 WATCH_TIMEOUT = 3 * 3600          # either run undecided by then: exit 2, could not tell
 WATCH_CONV_START = 3600           # no convergence run containing the sha started by then: said, not waited for
 WATCH_SLACK = 120                 # clock skew between the laptop and Forgejo's createdAt
+WATCH_STALL_MIN = 120  # a watch with no change in its runs for this long ends WATCH STALLED
 WATCH_ERRORS = 10                 # consecutive failed API reads before giving up (exit 2)
 UNDECIDED = ("cancelled", "skipped", "neutral", "")
 
@@ -1453,8 +1737,13 @@ def _watch(repo, sha, pushed_at, o_r, flows, own):
     t0 = time.time()
     err(f"watching Main and the convergence for {sha[:10]} (up to {int(timeout // 60)} min; `--no-watch` skips this)")
     done, errors, said = {}, 0, set()  # kind -> (run, ok | None for none started)
+    # NO PROGRESS: nothing about the followed runs (which run, its status, its last update) changed for this long ends
+    # the watch with a named verdict (a queue Forgejo never serves, a runner lost mid-run), not a silent 3 h wait
+    stall = float(os.environ.get("AGENTCTL_WATCH_STALL_MIN", WATCH_STALL_MIN)) * 60
+    state, changed = None, time.time()
     delays = backoff(float(os.environ.get("AGENTCTL_WATCH_POLL", 60)), 300)
     while True:
+        seen = {}
         try:
             for kind, (name, wfile) in flows.items():
                 if kind in done:
@@ -1467,6 +1756,7 @@ def _watch(repo, sha, pushed_at, o_r, flows, own):
                         done[kind] = (None, None)
                         print(f"convergence: none started within {int(conv_start // 60)} min of the push", flush=True)
                     continue
+                seen[kind] = (run.get("databaseId"), run.get("status"), run.get("updatedAt"))
                 if (kind, run["databaseId"]) not in said:
                     said.add((kind, run["databaseId"]))
                     err(f"{name}: following run #{run.get('number')} ({run.get('status')}, head {str(run.get('headSha'))[:10]})")
@@ -1502,6 +1792,14 @@ def _watch(repo, sha, pushed_at, o_r, flows, own):
             left = ", ".join(flows[k][0] for k in flows if k not in done)
             print(f"WATCH UNKNOWN: {left} undecided after {int(timeout // 60)} min; check `agentctl ci-why` later")
             return 2
+        now_state = (tuple(sorted(done)), tuple(sorted(seen.items())))
+        if now_state != state:
+            state, changed = now_state, time.time()
+        elif time.time() - changed >= stall:
+            left = ", ".join(f"{flows[k][0]} {('run ' + str(v[0]) + ' ' + str(v[1])) if v else 'no run'}"
+                             for k, v in [(k, seen.get(k)) for k in flows if k not in done])
+            print(f"WATCH STALLED: no change in {left} for {int(stall // 60)} min; check `agentctl ci-why` later")
+            return 2
         restart_if_changed([own])
         time.sleep(next(delays))
 
@@ -1520,18 +1818,18 @@ PRODUCTION_GLOBS = ("*/src/main/*", "conf/*", "*/conf/*", "build.sbt", "project/
                     "Dockerfile")
 WAITING_AWAIT_TIMEOUT = 24 * 3600
 WAITING_POLL = 60          # the processor's gate poll floor (backs off to 300 s)
-WAITING_HELP = """While main is red, production changes wait on ONE local branch, `waiting`, and land together when main is green.
-  agentctl land                  # main red + a production change without Fixes-Red: -> WAITING <sha> (n changes queued on
-                                 # waiting); land keeps running until the branch lands: LANDED <sha> + the WATCH
-  agentctl waiting status        # the changes on `waiting`, the processor, the gate
-  agentctl waiting cancel <id>   # drop a change (its land exits NOT LANDED: cancelled); `waiting` is rebuilt without it
-  agentctl waiting run [--once]  # the processor (land starts it detached; one at a time, by lock)
-`waiting` lives in the main clone (worktree <clone>-wt-waiting). Enqueueing cherry-picks the change onto it and runs the
-repo hook's checks (`scripts/hooks/pre-push --checks-only forgejo/main..waiting`: everything but the red gate) on the
-combined tip; a conflict or a failure rejects only that change. The processor polls the gate (60 s -> 5 min); on green
-it rebuilds `waiting` on forgejo/main (a conflicting change is rejected alone), runs the hook's dry run, pushes ONE push
-through the hook, and deletes the branch. A failing batch is searched prefix by prefix and only the culprit rejected.
-State: ~/.cache/agentctl/waiting/<repo>/ (entries, processor.log)."""
+WAITING_HELP = """While main is red, a production change that passed its OWN checks (land runs them first, red or green) joins
+ONE local branch, `waiting`, by cherry-pick (land: WAITING <sha> (entry <id>, n in batch), exit 0). At green the
+processor rebuilds `waiting` on main, runs ONE fast check of the batch (pre-push --fast-only: compile and the fast tests,
+a fresh sbt server, a stall retried once then HELD), pushes it in one push, bisects a failing batch by prefix and rejects
+only the culprit. A Fixes-Red entry goes first. Every verdict (LANDED, NOT LANDED, HELD, each landed entry's detached
+WATCH) goes to `agentctl inbox`.
+
+  agentctl waiting status                       # the entries, the batch being checked, a HELD batch, the gate
+  agentctl waiting cancel <id>                  # drop a change; `waiting` is rebuilt without it
+  agentctl waiting pause|resume                 # stop / restart taking batches (joins still queue)
+  agentctl waiting run [--once] [--service]     # the processor (land starts it detached; one at a time, by lock)
+  agentctl waiting service install|uninstall|status   # it as the launchd agent net.bitcashier.agentctl-waiting"""
 
 
 def is_production_path(p):
@@ -1664,40 +1962,68 @@ def tail_of(out, n=25):
     return "\n  ".join([l for l in out.splitlines() if l.strip()][-n:])
 
 
-def waiting_enqueue(repo, head, commits, log_path, a):
-    """Under the landing lock: put the change's commits onto `waiting` and check the combined tip. Sets a.waiting."""
+def batching(repo):
+    """Whether land batches here (every change joins `waiting`): a repo hook with --checks-only (movies)."""
+    hook = precheck_hook(repo)
+    return bool(hook) and waiting_supported(repo)
+
+
+def fixes_of(repo, commits):
+    """The run ids/numbers the commits' Fixes-Red: trailers name."""
+    out = set()
+    for c in commits:
+        v = git(repo, "log", "-1", "--format=%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", c).strip()
+        out |= {f.strip().lstrip("#") for f in v.split(",") if f.strip()}
+    return out
+
+
+def batch_order(repo, entries, reds):
+    """The order a batch is built in: a fix for the current red first, then (main red) what may land while red -- tools
+    only, or every commit carrying a Fixes-Red for a red run -- then the rest; by join order within each."""
+    def rank(e):
+        if reds and set(e.get("fixes") or []) & reds:
+            return 0
+        if reds and not must_wait(repo, e["commits"], reds):
+            return 1
+        return 2
+    return sorted(entries, key=lambda e: (rank(e), e["seq"]))
+
+
+def join(repo, main_ref, sh, log_path, a, head=None):
+    """Under the landing lock, in seconds: the change (its own checks passed) joins `waiting`, rebuilt on forgejo/main.
+    Rejected only on a cherry-pick conflict. Prints `WAITING <tip> (entry <id>, n in batch)`, starts the processor."""
+    lock_note("join `waiting`")
+    if head is None:
+        rc, head = sync(repo, main_ref, sh)
+        if rc is not None:
+            return rc
     d, _clone, wt = waiting_state(repo)
-    git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
+    commits = waiting_commits(repo, f"{REMOTE}/main", head)
+    reds = gate_reds(repo)
     ensure_waiting_tree(repo, wt)
-    # `waiting` is rebuilt on the CURRENT main before the change is judged: built on an older main, every file main
-    # changed since reads as a conflict with a change rebased onto it (movies 2026-10-27: a false conflict on
-    # bounded-step-test.sh, `waiting` still on 010362c1e). An entry that no longer applies on it is rejected alone.
-    base = git(repo, "rev-parse", f"{REMOTE}/main").strip()
-    rebuild(repo, d, wt, waiting_entries(d), base)
+    base = git(repo, "rev-parse", main_ref).strip()
+    rebuild(repo, d, wt, batch_order(repo, waiting_entries(d), reds), base)
     before = git(wt, "rev-parse", "HEAD").strip()
     conflict = pick(wt, commits)
     if conflict:
-        print(f"NOT LANDED: main is red, and the change conflicts with the changes already waiting on `{WAITING_BRANCH}` "
-              f"(rebuilt on {REMOTE}/main {base[:10]}) in: {', '.join(conflict)}. Rebase onto them "
-              f"(git rebase {WAITING_BRANCH}) or wait for them to land.")
-        return 1
-    err(f"main is red: checking {head[:10]} on `{WAITING_BRANCH}` with the {len(waiting_entries(d))} change(s) already "
-        f"waiting (scripts/hooks/pre-push --checks-only; log {log_path})")
-    ok, out = run_hook(wt, "--checks-only", base)
-    with open(log_path, "a") as f:
-        f.write(f"=== waiting checks {ts()} {head}\n{out}\n")
-    if not ok:
         git(wt, "reset", "--hard", "-q", before)
-        print(f"NOT LANDED: the checks failed on `{WAITING_BRANCH}` (your change on top of the waiting ones). "
-              f"Last lines (full log {log_path}):\n  {tail_of(out)}")
+        print(f"NOT LANDED: the change conflicts with the changes already on `{WAITING_BRANCH}` (rebuilt on {REMOTE}/main "
+              f"{base[:10]}) in: {', '.join(conflict)}. Rebase onto them (git rebase {WAITING_BRANCH}) or wait for them "
+              f"to land.")
         return 1
     seq = max([e["seq"] for e in waiting_entries(d, open_only=False)] + [0]) + 1
     e = {"id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{seq}", "seq": seq,
-         "worktree": repo, "head": head, "commits": commits, "status": "waiting", "created": ts(),
-         "tip": git(wt, "rev-parse", "HEAD").strip()}
+         "worktree": repo, "head": head, "commits": commits, "fixes": sorted(fixes_of(repo, commits)),
+         "status": "waiting", "created": ts(), "tip": git(wt, "rev-parse", "HEAD").strip(),
+         "follow": bool(getattr(a, "follow", False))}
     save_entry(d, e)
+    if reds and set(e["fixes"]) & reds:  # a fix goes FIRST: the branch is rebuilt in batch order with it
+        rebuild(repo, d, wt, batch_order(repo, waiting_entries(d), reds), base)
+        e = next(x for x in waiting_entries(d) if x["id"] == e["id"])
     n = len(waiting_entries(d))
-    print(f"WAITING {e['tip']} ({n} change{'s' if n != 1 else ''} queued on {WAITING_BRANCH}; entry {e['id']})", flush=True)
+    with open(log_path, "a") as f:
+        f.write(f"=== joined {ts()} {head} as {e['id']} ({n} on {WAITING_BRANCH})\n")
+    print(f"WAITING {e['tip']} (entry {e['id']}, {n} in batch)", flush=True)
     a.waiting = e
     spawn_waiting_processor(repo)
     return 0
@@ -1713,9 +2039,10 @@ def waiting_processor_alive(d):
 
 
 def spawn_waiting_processor(repo):
-    d, _c, _w = waiting_state(repo)
+    d, clone, _w = waiting_state(repo)
     if waiting_processor_alive(d):
         return
+    repo = clone if os.path.isdir(clone) else repo  # the clone, not a joiner's worktree: that one closes after WATCH OK
     with open(os.path.join(d, "processor.log"), "a") as logf:
         subprocess.Popen([sys.executable, os.path.realpath(__file__), "waiting", "run", "--repo", repo],
                          stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=repo)
@@ -1780,70 +2107,242 @@ def rebuild(repo, d, wt, entries, base):
     return kept
 
 
-def find_culprit(repo, d, wt, entries, base):
-    """The first entry whose prefix fails the checks (rejected), or None when every prefix passes (a flake)."""
-    for i in range(len(entries)):
-        kept = rebuild(repo, d, wt, entries[: i + 1], base)
-        if len(kept) < i + 1:
-            return True
-        ok, out = run_hook(wt, "--checks-only", base)
-        if not ok:
-            reject(d, entries[i], f"the checks failed with your change on `{WAITING_BRANCH}` once main was green:\n  "
-                                  f"{tail_of(out)}")
-            return entries[i]
-    return None
+def batch_state(d):
+    try:
+        with open(os.path.join(d, "batch.json")) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_batch_state(d, st):
+    with open(os.path.join(d, "batch.json.tmp"), "w") as f:
+        json.dump(st, f, indent=1)
+    os.replace(os.path.join(d, "batch.json.tmp"), os.path.join(d, "batch.json"))
+
+
+def batch_tree(repo, sha):
+    """A detached worktree of the clone at `sha`: the batch is checked there, so `waiting` keeps taking joins."""
+    _d, clone, wt = waiting_state(repo)
+    bwt = f"{clone}-wt-batch"
+    if not os.path.isdir(bwt):
+        git(repo, "worktree", "prune", check=False)
+        git(repo, "worktree", "add", "-q", "--detach", bwt, sha)
+    else:
+        git(bwt, "checkout", "-q", "--force", "--detach", sha)
+    return bwt
+
+
+def sbt_stop(tree):
+    """A FRESH sbt server for the batch check: stop the tree's server and keeper (scripts/sbt-warm --stop), if any."""
+    script = os.path.join(tree, "scripts", "sbt-warm")
+    if os.access(script, os.X_OK):
+        try:
+            subprocess.run([script, "--stop"], cwd=tree, capture_output=True, text=True, timeout=180, env=tool_env())
+        except subprocess.TimeoutExpired:
+            err(f"sbt-warm --stop in {tree} took over 3 min")
+
+
+STALL_SIGNAL = re.compile(r"(^|\s)(pre-push |sbt-warm )?STALLED:", re.M)
+BATCH_HOLD = 30 * 60
+
+
+def batch_mode(hook):
+    """The combined check's hook mode: `--fast-only` (compile of every test config and the fast tests: every change
+    passed its own full checks before it joined) when the hook has it, else the full `--range` dry run."""
+    try:
+        with open(hook) as f:
+            return "--fast-only" if "--fast-only" in f.read() else "--range"
+    except OSError:
+        return "--range"
+
+
+def batch_check(repo, d, tree, base, tip):
+    """The hook's dry run over base..tip in `tree` (the basic checks plus every touched area's), on a fresh sbt server,
+    under the stall abort. (ok, output, stalled): a stall -- land's 20 min, or the hook's exit 75 / `STALLED:` -- is
+    retried once on a fresh server; stalled twice, `stalled` is True."""
+    hook = precheck_hook(tree) or precheck_hook(repo)
+    if not hook:
+        return True, "", False
+    out = ""
+    for attempt in (1, 2):
+        batch_tree(repo, tip)
+        sbt_stop(tree)
+        wlog(d, f"checking {base[:10]}..{tip[:10]} (attempt {attempt}, fresh sbt server)")
+        with check_slot(repo, f"waiting batch {tip[:10]}") as slot:
+            rc, out = run_watched([hook, batch_mode(hook), f"{base}..{tip}"], tree, tool_env(),
+                                  os.path.join(d, f"check-{tip[:10]}"), f"batch-check-{attempt}", sampler=slot.sample)
+            slot.done(rc, out)
+        sbt_stop(tree)
+        with open(os.path.join(d, "checks.log"), "a") as f:
+            f.write(f"=== {ts()} {base[:10]}..{tip[:10]} attempt {attempt} rc {rc}\n{out}\n")
+        if rc is None or rc == 75 or STALL_SIGNAL.search(out or ""):
+            wlog(d, f"the check of {tip[:10]} STALLED (attempt {attempt})")
+            continue
+        return rc == 0, out, False
+    return False, out, True
+
+
+def push_batch(repo, d, entries, tip, base, how):
+    """Under the lock: push `tip` (main still at `base`) through the hook. 'landed' | 'moved' | 'red' | 'failed'."""
+    with land_lock(repo) as held:
+        if not held:
+            return "moved"
+        git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
+        if git(repo, "rev-parse", f"{REMOTE}/main").strip() != base:
+            wlog(d, f"main moved during the check of {tip[:10]}: the batch is rebuilt and checked again")
+            return "moved"
+        lock_note(f"push of the batch {tip[:10]}")
+        pushed_at = time.time()
+        tree = batch_tree(repo, tip)  # the push's hook runs in the tree it checked, so it reuses that pass
+        env = dict(tool_env(), PREPUSH_REUSE_FAST="1")  # the batch's fast pass stands for the push (pre-push --fast-only)
+        rc, out = run_watched(push_argv(REMOTE, tip), tree, env, os.path.join(d, f"push-{tip[:10]}"), "push")
+        with open(os.path.join(d, "checks.log"), "a") as f:
+            f.write(f"=== push {ts()} {tip[:10]} rc {rc}\n{out}\n")
+        if rc is None:
+            wlog(d, f"the push of {tip[:10]} stalled")
+            return "failed"
+        if rc != 0:
+            if REDGATE.search(out):
+                wlog(d, "the gate went red before the push: waiting")
+                return "red"
+            if RACE.search(out):
+                return "moved"
+            wlog(d, f"the push of {tip[:10]} failed:\n  {tail_of(out, 12)}")
+            return "failed"
+        git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
+        if not landed(repo, tip, f"refs/remotes/{REMOTE}/main"):
+            return "moved"
+    for e in entries:
+        e.update(status="landed", landed_sha=e["tip"], pushed_at=pushed_at, batch=len(entries), decided=ts())
+        save_entry(d, e)
+        inbox_write("land", f"LANDED {e['tip']} ({how}: {len(entries)} change(s) in one push)", [f"LANDED {e['tip']}"],
+                    [], 0, cwd=e["worktree"])
+        spawn_watch(repo, e, pushed_at)
+    wlog(d, f"LANDED {tip} ({len(entries)} change(s) in one push)")
+    return "landed"
+
+
+def spawn_watch_of(repo, sha, pushed_at, close=None):
+    """A DETACHED `agentctl watch` of sha (its own session): its verdict goes to the inbox, agent alive or not."""
+    d = os.path.join(HOME, ".cache", "agentctl")
+    os.makedirs(d, exist_ok=True)
+    argv = [sys.executable, os.path.realpath(__file__), "watch", "--repo", repo, "--sha", sha,
+            "--pushed-at", str(pushed_at or time.time())] + (["--close", close] if close else [])
+    with open(os.path.join(d, "watches.log"), "a") as logf:
+        subprocess.Popen(argv, cwd=repo, stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True)
+
+
+def spawn_watch(repo, e, pushed_at):
+    """A DETACHED watch of a landed entry (its own session): its WATCH verdict goes to the inbox whether or not the agent
+    that joined lives. Not when a `land --follow` (or an older land's await) waits on the entry: that one watches."""
+    if lock_held(Owned("await", e["id"]).lockpath):
+        return
+    where = e["worktree"] if os.path.isdir(e["worktree"]) else repo
+    d, _c, _w = waiting_state(repo)
+    argv = [sys.executable, os.path.realpath(__file__), "watch", "--repo", where, "--sha", e["tip"],
+            "--pushed-at", str(pushed_at)] + (["--close", e["worktree"]] if os.path.isdir(e["worktree"]) else [])
+    with open(os.path.join(d, "watches.log"), "a") as logf:
+        subprocess.Popen(argv, cwd=where, stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True)
+
+
+def bisect(repo, d, batch, base):
+    """The batch failed: the first entry whose prefix fails (binary search over the prefixes' tips). (index, output) of
+    the culprit; (None, output) when the whole batch passes on its own again (flaky or infra)."""
+    _d, _c, _w = waiting_state(repo)
+    bwt = batch_tree(repo, batch[-1]["tip"])
+    lo, hi, out_hi = 0, len(batch) - 1, ""
+    ok, out, stalled = batch_check(repo, d, bwt, base, batch[hi]["tip"])
+    if ok or stalled:
+        return None, out
+    out_hi = out
+    while lo < hi:
+        mid = (lo + hi) // 2
+        ok, out, stalled = batch_check(repo, d, bwt, base, batch[mid]["tip"])
+        if stalled:
+            return None, out
+        if ok:
+            lo = mid + 1
+        else:
+            hi, out_hi = mid, out
+    return lo, out_hi
 
 
 def waiting_round(repo, d, wt):
-    """One attempt at landing `waiting`: 'empty', 'red', 'landed', 'retry'."""
+    """One batch: 'empty', 'paused', 'held', 'red' (nothing may go while red), 'landed', 'rejected', 'retry'.
+
+    Under the lock (seconds): fetch, rebuild `waiting` on forgejo/main in batch order, take the batch -- every entry, or
+    while main is red only what may land while red, and only once a Fixes-Red entry for the red run is among them.
+    Released, one check of the batch's tip (a fresh sbt server, the stall abort; a stall is retried once, then the batch
+    is HELD with an inbox entry). Pass: one push of the tip through the hook, every entry LANDED. Fail: bisect by
+    prefix, reject only the culprit (NOT LANDED with the failing tail, to the inbox), land the passing prefix before it.
+    Entries that join meanwhile wait for the next batch."""
     entries = waiting_entries(d)
     if not entries:
         return "empty"
-    if gate_reds(repo):
-        return "red"
+    st = batch_state(d)
+    if os.path.exists(os.path.join(d, "PAUSED")):
+        return "paused"
+    if st.get("held_until", 0) > time.time():
+        return "held"
+    reds = gate_reds(repo)
     with land_lock(repo) as held:
         if not held:
             return "retry"
+        lock_note("rebuild `waiting` for a batch")
         git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
         ensure_waiting_tree(repo, wt)
         base = git(repo, "rev-parse", f"{REMOTE}/main").strip()
-        entries = rebuild(repo, d, wt, entries, base)
-        if not entries:
-            return "empty"
-        tip = git(wt, "rev-parse", "HEAD").strip()
-        wlog(d, f"main is green: landing {len(entries)} change(s) at {tip[:10]} on {base[:10]}")
-        ok, out = run_hook(wt, "--range", f"{REMOTE}/main")
-        if ok:
-            pushed_at = time.time()
-            r = subprocess.run(push_argv(REMOTE, WAITING_BRANCH), cwd=wt, capture_output=True, text=True, env=tool_env())
-            out = r.stdout + r.stderr
-            ok = r.returncode == 0
-            if ok:
-                git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
-                if not landed(repo, tip, f"refs/remotes/{REMOTE}/main"):
-                    wlog(d, f"pushed {tip[:10]} but it is not on main after a fetch; retrying")
-                    return "retry"
-                for e in entries:
-                    e.update(status="landed", landed_sha=e["tip"], pushed_at=pushed_at, batch=len(entries), decided=ts())
-                    save_entry(d, e)
-                wlog(d, f"LANDED {tip} ({len(entries)} change(s) in one push)")
-                drop_waiting_tree(repo, wt)
-                return "landed"
-            if RACE.search(out):
-                return "retry"
-        if REDGATE.search(out):
-            wlog(d, "the gate went red again before the push: waiting")
+        kept = rebuild(repo, d, wt, batch_order(repo, entries, reds), base)
+    for e in [e for e in entries if e not in kept]:
+        inbox_write("land", f"NOT LANDED: {e.get('why', 'rejected').splitlines()[0]}", [], [], 1, cwd=e["worktree"])
+    if not kept:
+        return "rejected"
+    if reds:
+        batch = [e for e in kept if not must_wait(repo, e["commits"], reds)]
+        if not any(set(e.get("fixes") or []) & reds for e in batch):
             return "red"
-        wlog(d, f"the batch failed its checks:\n  {tail_of(out, 12)}")
-        culprit = find_culprit(repo, d, wt, entries, base)
-        if culprit is None:  # every prefix passed alone: flaky or infra; the whole batch is told, never one guessed
-            for e in entries:
-                reject(d, e, f"the waiting batch failed its checks once main was green, but no single change did "
-                             f"(flaky or infra?):\n  {tail_of(out)}")
+    else:
+        batch = kept
+    tip = batch[-1]["tip"]
+    save_batch_state(d, {"checking": [e["id"] for e in batch], "tip": tip, "base": base, "since": ts()})
+    bwt = batch_tree(repo, tip)
+    ok, out, stalled = batch_check(repo, d, bwt, base, tip)
+    save_batch_state(d, {})
+    if stalled:
+        until = time.time() + float(os.environ.get("AGENTCTL_BATCH_HOLD", BATCH_HOLD))
+        save_batch_state(d, {"held_until": until, "why": f"the check of {tip[:10]} stalled twice, on fresh sbt servers"})
+        inbox_write("waiting", f"HELD: the batch check of {tip[:10]} ({len(batch)} change(s)) stalled twice on a fresh "
+                               f"sbt server; the changes stay on `{WAITING_BRANCH}`, checked again after "
+                               f"{int((until - time.time()) // 60)} min", [], (out or "").splitlines()[-15:], 1, cwd=repo)
+        wlog(d, f"HELD: the check of {tip[:10]} stalled twice")
+        return "held"
+    if ok:
+        r = push_batch(repo, d, batch, tip, base, "batch")
+        return {"landed": "landed", "red": "red"}.get(r, "retry")
+    if REDGATE.search(out or ""):
+        return "red"
+    wlog(d, f"the batch {tip[:10]} failed its checks; bisecting by prefix")
+    culprit, cout = bisect(repo, d, batch, base)
+    if culprit is None:
+        wlog(d, "every prefix passed on its own again (flaky or infra): checked again next round")
         return "retry"
+    bad = batch[culprit]
+    reject(d, bad, f"the checks failed with your change in the batch on `{WAITING_BRANCH}`:\n  {tail_of(cout)}")
+    inbox_write("land", f"NOT LANDED: the checks failed with your change in the batch (entry {bad['id']})", [],
+                cout.splitlines()[-25:], 1, cwd=bad["worktree"])
+    if culprit > 0:  # the prefix before it passed its own check: it lands now; the rest join the next batch
+        push_batch(repo, d, batch[:culprit], batch[culprit - 1]["tip"], base, "batch prefix before a rejected change")
+    return "rejected"
 
 
-def waiting_run(repo, once=False):
+SERVICE_IDLE_POLL = 30  # seconds between looks at an empty `waiting` (a directory listing: no git, no network)
+
+
+def waiting_run(repo, once=False, service=False):
+    """The processor: batches until `waiting` is empty -- or, as the launchd service, for good, looking at an empty
+    `waiting` every SERVICE_IDLE_POLL s (a directory listing). Re-execs on agentctl's new code between batches. Wall-clock
+    sleeps only: after the laptop sleeps it simply polls again."""
     d, _c, wt = waiting_state(repo)
     own = processor_owned(d, repo)
     if not own.acquire():
@@ -1852,32 +2351,154 @@ def waiting_run(repo, once=False):
         stack.callback(own.release)
         delays = backoff(float(os.environ.get("AGENTCTL_WAITING_POLL", WAITING_POLL)), 300)
         while True:
+            restart_if_changed([own], ["waiting", "run", "--repo", repo] + (["--once"] if once else [])
+                               + (["--service"] if service else []))
+            if service and not waiting_entries(d):
+                if os.path.isdir(wt) and not git_ok(repo, "rev-parse", "--verify", "-q", f"refs/heads/{WAITING_BRANCH}"):
+                    drop_waiting_tree(repo, wt)
+                if once:
+                    return 0
+                time.sleep(float(os.environ.get("AGENTCTL_SERVICE_POLL", SERVICE_IDLE_POLL)))
+                continue
             state = waiting_round(repo, d, wt)
             if state == "empty":
                 if not waiting_entries(d):
                     drop_waiting_tree(repo, wt)
+                if service:
+                    continue
                 return 0
-            if once and state in ("red", "landed"):
+            if once:
                 return 0
-            if state == "landed":
+            if state in ("landed", "rejected"):
                 delays = backoff(float(os.environ.get("AGENTCTL_WAITING_POLL", WAITING_POLL)), 300)
                 continue
-            restart_if_changed([own], ["waiting", "run", "--repo", repo] + (["--once"] if once else []))
-            time.sleep(next(delays) if state == "red" else 5)
+            time.sleep(next(delays) if state in ("red", "held", "paused") else 5)
+
+
+SERVICE_LABEL = "net.bitcashier.agentctl-waiting"
+
+
+def launch_agents_dir():
+    return os.environ.get("AGENTCTL_LAUNCH_AGENTS") or os.path.join(HOME, "Library", "LaunchAgents")
+
+
+def launchctl(*args):
+    return subprocess.run([os.environ.get("AGENTCTL_LAUNCHCTL", "launchctl")] + list(args), capture_output=True,
+                          text=True)
+
+
+def service_plist(repo, log):
+    from xml.sax.saxutils import escape
+    argv = [sys.executable, os.path.realpath(__file__), "waiting", "run", "--service", "--repo", repo]
+    args = "".join(f"\n        <string>{escape(x)}</string>" for x in argv)
+    path_env = ":".join(SDKMAN_BINS + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"])
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{SERVICE_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>{args}
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{escape(repo)}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{escape(path_env)}</string>
+        <key>HOME</key>
+        <string>{escape(HOME)}</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>{escape(log)}</string>
+    <key>StandardErrorPath</key>
+    <string>{escape(log)}</string>
+</dict>
+</plist>
+"""
+
+
+def waiting_service(action, repo):
+    """The `waiting` processor as a launchd agent (KeepAlive, RunAtLoad): `agentctl waiting run --service` for the clone,
+    its log in the waiting state dir. install writes the plist and bootstraps it; uninstall boots it out and removes it."""
+    d, clone, _wt = waiting_state(repo)
+    plist = os.path.join(launch_agents_dir(), f"{SERVICE_LABEL}.plist")
+    domain = f"gui/{os.getuid()}"
+    log = os.path.join(d, "service.log")
+    if action == "install":
+        os.makedirs(launch_agents_dir(), exist_ok=True)
+        with open(plist, "w") as f:
+            f.write(service_plist(clone, log))
+        launchctl("bootout", f"{domain}/{SERVICE_LABEL}")  # a previous one, if any
+        r = launchctl("bootstrap", domain, plist)
+        if r.returncode != 0:
+            print(f"wrote {plist}, but launchctl bootstrap failed: {r.stderr.strip() or r.stdout.strip()}")
+            return 1
+        print(f"installed {SERVICE_LABEL}: `agentctl waiting run --service --repo {clone}`, log {log}")
+        return 0
+    if action == "uninstall":
+        launchctl("bootout", f"{domain}/{SERVICE_LABEL}")
+        try:
+            os.unlink(plist)
+        except FileNotFoundError:
+            pass
+        print(f"uninstalled {SERVICE_LABEL}")
+        return 0
+    if action == "status":
+        r = launchctl("print", f"{domain}/{SERVICE_LABEL}")
+        if r.returncode != 0:
+            print(f"{SERVICE_LABEL}: not loaded" + (f" (plist {plist} present)" if os.path.exists(plist) else ""))
+            return 1
+        state = re.search(r"^\s*state = (\S+)", r.stdout, re.M)
+        pid = re.search(r"^\s*pid = (\d+)", r.stdout, re.M)
+        print(f"{SERVICE_LABEL}: {state.group(1) if state else 'loaded'}" + (f", pid {pid.group(1)}" if pid else "")
+              + f"; processor {'running' if waiting_processor_alive(d) else 'not running'}; log {log}")
+        return 0
+    return 2
 
 
 def cmd_waiting(a):
     repo = git(a.repo or os.getcwd(), "rev-parse", "--show-toplevel").strip()
     d, _c, wt = waiting_state(repo)
     if a.wcmd == "run":
-        return waiting_run(repo, once=a.once)
+        return waiting_run(repo, once=a.once, service=getattr(a, "service", False))
+    if a.wcmd == "service":
+        return waiting_service(a.action, repo)
     if a.wcmd == "await":  # land's wait on its entry, resumed after a restart on new code
         rc, sha, pushed_at = await_entry(repo, a.entry)
         return watch_landed(repo, sha, pushed_at, close=a.close) if rc == 0 and sha else rc
+    if a.wcmd == "pause":
+        open(os.path.join(d, "PAUSED"), "a").close()
+        print(f"paused: the processor takes no batch until `agentctl waiting resume` ({d}/PAUSED); joins still queue")
+        return 0
+    if a.wcmd == "resume":
+        try:
+            os.unlink(os.path.join(d, "PAUSED"))
+        except FileNotFoundError:
+            pass
+        st = batch_state(d)
+        st.pop("held_until", None)
+        save_batch_state(d, st)
+        spawn_waiting_processor(repo)
+        print("resumed: the processor takes the next batch")
+        return 0
     if a.wcmd == "status":
         entries = waiting_entries(d)
         print(f"waiting {d} (branch `{WAITING_BRANCH}`, worktree {wt}{'' if os.path.isdir(wt) else ': none'})")
-        print(f"processor: {'running' if waiting_processor_alive(d) else 'not running'}")
+        print(f"processor: {'running' if waiting_processor_alive(d) else 'not running'}"
+              + ("; PAUSED (`agentctl waiting resume`)" if os.path.exists(os.path.join(d, "PAUSED")) else ""))
+        st = batch_state(d)
+        if st.get("checking"):
+            print(f"checking: {len(st['checking'])} change(s) at {st['tip'][:10]} on {st['base'][:10]} since {st['since']}")
+        if st.get("held_until", 0) > time.time():
+            print(f"HELD until {dt.datetime.fromtimestamp(st['held_until']).strftime('%H:%M')}: {st.get('why')}")
         reds = gate_reds(repo)
         print(f"gate: {'RED (' + ', '.join(sorted(reds)) + ')' if reds else 'green (or unread)'}")
         for e in entries:
@@ -1899,8 +2520,8 @@ def cmd_waiting(a):
             save_entry(d, e)
             rest = waiting_entries(d)
             if rest and os.path.isdir(wt):
-                base = git(wt, "merge-base", "HEAD", f"{REMOTE}/main").strip()
-                rebuild(repo, d, wt, rest, base)
+                base = git(repo, "rev-parse", f"{REMOTE}/main").strip()
+                rebuild(repo, d, wt, batch_order(repo, rest, gate_reds(repo)), base)
             elif not rest:
                 drop_waiting_tree(repo, wt)
         print(f"cancelled {e['id']}")
@@ -2590,6 +3211,13 @@ def cmd_sweep(a):
         except RuntimeError as e:
             out.append(f"== {os.path.basename(repo)}: {e}")
             rc = 1
+    reaped = io.StringIO()
+    if os.environ.get("AGENTCTL_SBT_REAP") != "0":  # the tests never reap this machine's servers
+        with contextlib.redirect_stdout(reaped):
+            cmd_orphans(argparse.Namespace(kill=not a.dry_run, sbt_only=True))
+    out.append("== sbt servers (a gone worktree, an orphaned serving command, a running command with no CPU for "
+               f"{SBT_STALL_MIN} min){'' if not a.dry_run else ': not reaped (DRY RUN)'}")
+    out += ["  " + l for l in reaped.getvalue().splitlines()]
     text = "\n".join(out)
     print(text)
     if not a.no_report:
@@ -2645,6 +3273,79 @@ def missing_tree_paths(text):
     return sorted(gone)
 
 
+# STUCK SBT SERVERS (2026-10-27): a worktree's one server ran an orphaned `--serve` (its owner's shell died) for hours,
+# and every later command queued behind it at 0% CPU. Besides a gone worktree, orphans/sweep reap a server whose
+# serving command's sbt-warm or owner is dead (scripts/sbt-warm's $State/<key>.serving), and one with a command
+# running (an sbtn client in its checkout) whose process tree used no CPU for SBT_STALL_MIN minutes, judged across
+# runs from ~/.cache/agentctl/sbt-cpu.json. A thread dump (jcmd Thread.print) is saved first, under
+# ~/.cache/agentctl/sbt-dumps/.
+SBT_STALL_MIN = 20
+
+
+def sbt_warm_state():
+    return os.environ.get("KINOWO_SBT_WARM_STATE") or os.path.join(HOME, ".cache", "kinowo-sbt-warm")
+
+
+def sbt_serving():
+    """{checkout root: (serving sbt-warm pid, owner pid or None, command)} from sbt-warm's .serving marks."""
+    out = {}
+    for path in glob.glob(os.path.join(sbt_warm_state(), "*.serving")):
+        try:
+            with open(path) as f:
+                parts = f.read().split(None, 2)
+            with open(path[: -len(".serving")] + ".root") as f:
+                root = f.read().strip()
+        except OSError:
+            continue
+        if len(parts) >= 2:
+            owner = None if parts[1] == "-" else int(parts[1]) if parts[1].isdigit() else None
+            out[root] = (int(parts[0]) if parts[0].isdigit() else 0, owner, parts[2].strip() if len(parts) > 2 else "")
+    return out
+
+
+def tree_cpu(pid, procs_cpu, children):
+    """CPU seconds of pid and every descendant (the server and its forked test JVMs)."""
+    total, todo = 0.0, [pid]
+    while todo:
+        p = todo.pop()
+        total += procs_cpu.get(p, 0.0)
+        todo += children.get(p, [])
+    return total
+
+
+def sbt_stuck_reasons(pid, cwd, cpu, clients, serving, state, now):
+    """Why the sbt server pid (checkout cwd, tree CPU seconds) is stuck: an orphaned serving command, or a running
+    command and no CPU for SBT_STALL_MIN. Updates state[pid] = {cpu, since}."""
+    reasons = []
+    serve = serving.get(cwd)
+    if serve:
+        spid, owner, cmd = serve
+        if not pid_alive(spid) or (owner and not pid_alive(owner)):
+            reasons.append(f"serving `{cmd[:60]}` for {'sbt-warm pid ' + str(spid) if not pid_alive(spid) else 'owner pid ' + str(owner)}, which ended")
+    rec = state.get(str(pid))
+    if not rec or abs(rec.get("cpu", -1) - cpu) > 0.5:
+        state[str(pid)] = {"cpu": cpu, "since": now}
+    elif clients.get(cwd):
+        mins = (now - rec["since"]) / 60
+        limit = float(os.environ.get("AGENTCTL_SBT_STALL_MIN", SBT_STALL_MIN))
+        if mins >= limit:
+            reasons.append(f"a command running (sbtn pid {clients[cwd][0]}) and no CPU for {int(mins)} min")
+    return reasons
+
+
+def thread_dump(pid, cwd):
+    d = os.path.join(HOME, ".cache", "agentctl", "sbt-dumps")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, f"{pid}-{dt.datetime.now().strftime('%Y%m%dT%H%M%S')}.txt")
+    try:
+        r = subprocess.run(["jcmd", str(pid), "Thread.print"], capture_output=True, text=True, timeout=60)
+        with open(path, "w") as f:
+            f.write(f"# sbt server pid {pid}, checkout {cwd}\n{r.stdout}{r.stderr}")
+        return path
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"(no thread dump: {e})"
+
+
 def is_sbt(cmd):
     return ("java" in cmd.split(" ", 1)[0] and re.search(r"xsbt\.boot|sbt-launch|sbt\.boot|\bsbt\.server", cmd)) or bool(
         re.search(r"scripts/sbt-warm --keep", cmd)
@@ -2654,6 +3355,21 @@ def is_sbt(cmd):
 def cmd_watch(a):
     repo = git(a.repo or os.getcwd(), "rev-parse", "--show-toplevel").strip()
     return watch_landed(repo, a.sha, a.pushed_at, close=a.close)
+
+
+def owner_orphans_dead_only():
+    """Cancel a DEAD owner's runs and drop its record (what --kill does to it), and log it; live owners untouched."""
+    for rec in owner_records():
+        if rec["alive"]:
+            continue
+        for o_r, rid in rec.get("runs") or []:
+            cancel_run(o_r, rid, f"its owner pid {rec.get('pid')} died")
+        for ext in (".json", ".verdict"):
+            try:
+                os.unlink(rec["path"][: -len(".json")] + ext)
+            except FileNotFoundError:
+                pass
+        reap_log(f"removed dead owner {rec.get('kind')} {rec.get('key')} pid {rec.get('pid')} (runs {rec.get('runs')})")
 
 
 def owner_orphans(kill):
@@ -2694,8 +3410,22 @@ def owner_orphans(kill):
     return found
 
 
+REAP_LOG = os.path.join(HOME, ".cache", "agentctl", "reap.log")
+
+
+def reap_log(line):
+    os.makedirs(os.path.dirname(REAP_LOG), exist_ok=True)
+    with open(REAP_LOG, "a") as f:
+        f.write(f"{ts()} {line}\n")
+
+
 def cmd_orphans(a):
-    owners = owner_orphans(a.kill)
+    sbt_only = getattr(a, "sbt_only", False)  # the daily sweep: stuck sbt servers only
+    safe = getattr(a, "safe", False)  # the scheduled reaper: never an owner merely on old code (it re-execs itself)
+    owners = [] if sbt_only else owner_orphans(a.kill and not safe) if safe else owner_orphans(a.kill)
+    if safe and a.kill:  # a dead owner's record and runs only
+        owners = [o for o in owners if "process gone" in o[2]]
+        owner_orphans_dead_only()
     procs = ps()
     cwds = process_cwds()
     me = {os.getpid(), os.getppid()}
@@ -2712,7 +3442,7 @@ def cmd_orphans(a):
         return status_cache[k]
 
     seen_targets = {}
-    loops = [p for p in procs if p[0] not in me and is_wait_loop(p[3])]
+    loops = [] if sbt_only else [p for p in procs if p[0] not in me and is_wait_loop(p[3])]
     loops.sort(key=lambda p: p[0])
     for pid, ppid, etime, cmd in loops:
         body = loop_body(cmd)
@@ -2734,11 +3464,37 @@ def cmd_orphans(a):
                 seen_targets.setdefault(key, pid)
         if reasons:
             found.append(("wait-loop", pid, etime, "; ".join(reasons), body[:140].replace("\n", " ")))
+    cpu_path = os.path.join(HOME, ".cache", "agentctl", "sbt-cpu.json")
+    try:
+        with open(cpu_path) as f:
+            cpu_state = json.load(f)
+    except (OSError, ValueError):
+        cpu_state = {}
+    procs_cpu, children = {}, {}
+    for line in subprocess.run(["ps", "-A", "-o", "pid=,ppid=,time="], capture_output=True, text=True).stdout.splitlines():
+        f3 = line.split()
+        if len(f3) == 3:
+            secs = 0.0
+            for x in re.split(r"[:-]", f3[2]):
+                try:
+                    secs = secs * 60 + float(x)
+                except ValueError:
+                    pass
+            procs_cpu[int(f3[0])] = secs
+            children.setdefault(int(f3[1]), []).append(int(f3[0]))
+    clients = {}
+    for pid, ppid, etime, cmd in procs:
+        if "sbtn" in cmd.split(" ", 1)[0] and cwds.get(pid):
+            clients.setdefault(cwds[pid], []).append(pid)
+    serving, now, live = sbt_serving(), time.time(), set()
     for pid, ppid, etime, cmd in procs:
         if pid in me or not is_sbt(cmd):
             continue
         cwd = cwds.get(pid, "")
         reasons = []
+        if "java" in cmd.split(" ", 1)[0] and os.environ.get("AGENTCTL_SBT_REAP") != "0":  # tests: "0"
+            live.add(str(pid))
+            reasons += sbt_stuck_reasons(pid, cwd, tree_cpu(pid, procs_cpu, children), clients, serving, cpu_state, now)
         if cwd and not os.path.isdir(cwd):
             reasons.append(f"cwd gone: {cwd}")
         elif cwd and not os.path.exists(os.path.join(cwd, ".git")) and cwd.startswith(HOME + "/projects"):
@@ -2747,7 +3503,15 @@ def cmd_orphans(a):
         if gone:
             reasons.append(f"worktree missing: {', '.join(gone)}")
         if reasons:
-            found.append(("sbt", pid, etime, "; ".join(reasons), cmd[:140]))
+            found.append(("sbt", pid, etime, "; ".join(reasons), f"{cwd}: {cmd[:120]}"))
+    try:
+        if not live and os.environ.get("AGENTCTL_SBT_REAP") == "0":
+            raise OSError("tests: the real state is left alone")
+        with open(cpu_path + ".tmp", "w") as f:
+            json.dump({k: v for k, v in cpu_state.items() if k in live}, f)
+        os.replace(cpu_path + ".tmp", cpu_path)
+    except OSError:
+        pass
     for kind, pid, why, what in owners:
         print(f"{kind:9} pid {pid!s:<6}  {why}\n          {what}")
     if not found:
@@ -2758,6 +3522,8 @@ def cmd_orphans(a):
         print(f"{kind:9} pid {pid:<6} up {etime:>11}  {why}\n          {what}")
     if a.kill:
         for kind, pid, *_ in found:
+            if kind == "sbt" and "java" in (next((c for p, _pp, _e, c in procs if p == pid), "").split(" ", 1)[0]):
+                print(f"thread dump of sbt server pid {pid}: {thread_dump(pid, cwds.get(pid, ''))}")
             kids = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True).stdout.split()
             for p in [pid] + [int(k) for k in kids]:
                 try:
@@ -2765,6 +3531,8 @@ def cmd_orphans(a):
                 except ProcessLookupError:
                     pass
             print(f"killed {kind} pid {pid}" + (f" (+children {kids})" if kids else ""))
+            reap_log(f"killed {kind} pid {pid}" + (f" (+children {kids})" if kids else "") + ": "
+                     + next((f"{w} | {what}" for k, p, _e, w, what in found if p == pid), ""))
     return 0
 
 # ---------------------------------------------------------------- inbox
@@ -2822,13 +3590,13 @@ class VerdictTee:
         return getattr(self.stream, name)
 
 
-def inbox_write(command, verdict, verdicts, tail, exit_code, final=True):
+def inbox_write(command, verdict, verdicts, tail, exit_code, final=True, cwd=None):
     """One inbox entry, written atomically; returns its id (None when the inbox cannot be written: never fatal)."""
     now = dt.datetime.now(dt.timezone.utc)
     eid = (f"{now.strftime('%Y%m%dT%H%M%S%f')}-{os.getpid()}-{re.sub(r'[^a-z]+', '-', command)}"
            + ("" if final else "-waiting"))
     rec = {"id": eid, "time": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "at": now.timestamp(), "command": command, "argv": sys.argv[1:],
-           "cwd": os.getcwd(), "pid": os.getpid(), "final": final, "exit": exit_code, "verdict": verdict,
+           "cwd": cwd or os.getcwd(), "pid": os.getpid(), "final": final, "exit": exit_code, "verdict": verdict,
            "owner": os.environ.get("CLAUDE_CODE_SESSION_ID") or f"{os.environ.get('USER', '?')}@{os.getcwd()}",
            "verdicts": verdicts, "tail": tail}
     try:
@@ -2852,9 +3620,12 @@ def inbox_command(a):
 
 def with_inbox(command, handler, a):
     """Run handler(a) with its stdout teed; whatever way it ends, write its verdict to the inbox."""
+    waiting_line = []
+
     def on_line(line):
         if line.startswith("WAITING "):
             inbox_write(command, line, [line], tee.tail, None, final=False)
+            waiting_line.append(line)
     tee = VerdictTee(sys.stdout, on_line)
     sys.stdout, code, crash = tee, 1, None
     try:
@@ -2873,7 +3644,8 @@ def with_inbox(command, handler, a):
         tee.finish()
         last = next((l for l in reversed(tee.tail) if l.strip()), "(no output)")
         verdict = crash or (tee.verdicts[-1] if tee.verdicts else last)
-        inbox_write(command, verdict, tee.verdicts, tee.tail, code if crash is None else (code or 1))
+        if not (crash is None and code == 0 and waiting_line and verdict == waiting_line[-1]):  # land ended AT WAITING:
+            inbox_write(command, verdict, tee.verdicts, tee.tail, code if crash is None else (code or 1))  # written once
 
 
 def inbox_entries():
@@ -2977,6 +3749,9 @@ def main(argv=None):
     ld.add_argument("--branch", help="local branch to land (default: the checked-out HEAD)")
     ld.add_argument("--stash", action="store_true", help="set uncommitted changes aside in a NAMED stash and restore them after")
     ld.add_argument("--no-watch", action="store_true", help="exit at LANDED instead of watching Main and the convergence")
+    ld.add_argument("--follow", action="store_true",
+                    help="movies: stay until the batch lands, then watch (default: return at WAITING; the verdicts go "
+                         "to `agentctl inbox`)")
     ld.add_argument("--keep-worktree", action="store_true",
                     help="after WATCH OK, keep the worktree land ran from (default: closed when proven merged and clean)")
     ev = sub.add_parser("env", help="print sdkman sbt/java export lines (--print) or check the agent environment (--check)",
@@ -2997,15 +3772,24 @@ def main(argv=None):
                        "the same runs. --kill cancels a dead owner's runs and drops its record, and sends SIGTERM to the "
                        "rest (to them and their children).")
     o.add_argument("--kill", action="store_true")
+    o.add_argument("--safe", action="store_true",
+                   help="the scheduled reaper's mode: with --kill, end only strays (dead owners' records and runs, stray "
+                        "wait loops, stuck sbt servers), never an owner merely on old code; every kill is logged")
     wg = sub.add_parser("waiting", help="production changes held on ONE `waiting` branch while main is red; landed together on green",
                         description=WAITING_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     wgs = wg.add_subparsers(dest="wcmd", required=True)
     wgs.add_parser("status", help="the changes on `waiting`, the processor, the gate").add_argument("--repo")
+    wgs.add_parser("pause", help="the processor takes no batch until resume (joins still queue)").add_argument("--repo")
+    wgs.add_parser("resume", help="undo pause, and a HELD batch's wait").add_argument("--repo")
     wgc = wgs.add_parser("cancel", help="drop a waiting change; `waiting` is rebuilt without it")
     wgc.add_argument("entry")
     wgc.add_argument("--repo")
     wgr = wgs.add_parser("run", help="the processor (land starts it detached; one at a time, by lock)")
     wgr.add_argument("--once", action="store_true")
+    wgr.add_argument("--service", action="store_true", help="stay when `waiting` is empty (the launchd agent's mode)")
+    wgsv = wgs.add_parser("service", help=f"the processor as a launchd agent ({SERVICE_LABEL}: KeepAlive, RunAtLoad)")
+    wgsv.add_argument("action", choices=("install", "uninstall", "status"))
+    wgsv.add_argument("--repo")
     wgr.add_argument("--repo")
     wga = wgs.add_parser("await", help="wait for one change on `waiting` to land, then watch (land's own wait, resumed "
                                        "after a restart on new code)")
@@ -3026,6 +3810,11 @@ def main(argv=None):
     sw.add_argument("--no-report", action="store_true", help="do not write ~/.cache/agentctl/sweep/<date>.txt")
     q = sub.add_parser("queue", help="RETIRED 2026-10-26: use `agentctl land` (prints this and exits 2)")
     q.add_argument("rest", nargs=argparse.REMAINDER)
+    ck = sub.add_parser("checks", help="the pre-commit check slots: status, and stats per concurrency level")
+    cks = ck.add_subparsers(dest="ccmd", required=True)
+    cks.add_parser("status", help="the slots and their holders")
+    cst = cks.add_parser("stats", help="p50/p90 check duration and slot wait per concurrency level")
+    cst.add_argument("--days", type=float, default=7)
     ib = sub.add_parser("inbox", help="every final verdict of land / watch / wait / waiting await (and land's WAITING), "
                                       "kept whether or not the agent that ran it is alive")
     ib.add_argument("ids", nargs="*", metavar="ID", help="only these entries (an id prefix)")
@@ -3035,7 +3824,7 @@ def main(argv=None):
     ib.add_argument("--json", action="store_true")
     ib.add_argument("-v", "--verbose", action="store_true", help="each entry's last output lines too")
     a = ap.parse_args(argv)
-    handler = {"inbox": cmd_inbox, "queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
+    handler = {"checks": cmd_checks, "inbox": cmd_inbox, "queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)
 

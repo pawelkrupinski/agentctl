@@ -178,6 +178,28 @@ class OwnedTest(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(d, "test-dead.json")))
         self.assertTrue(any("run cancel 9" in c for c in self.cancels()), "the dead owner's runs are cancelled")
 
+    def test_the_safe_reaper_ends_strays_but_never_an_owner_on_old_code_and_logs_each(self):
+        d = os.environ["AGENTCTL_OWNERS_DIR"]
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "test-dead.json"), "w") as f:
+            json.dump({"kind": "test", "key": "dead", "pid": 999999, "started": "then", "process_start": "x",
+                       "owner": "gone-agent", "argv": ["x"], "code": "abc", "runs": [["o/r", 9]]}, f)
+        p = self.holder()
+        rec = A.Owned("test", "k1", argv=["x"]).record
+        r = json.load(open(rec))
+        r["code"] = "an-older-agentctl"
+        with open(rec, "w") as f:
+            json.dump(r, f)
+        saved, A.REAP_LOG = A.REAP_LOG, os.path.join(self.tmp.name, "reap.log")
+        try:
+            rc, out = self.tool("orphans", "--kill", "--safe")
+        finally:
+            log, A.REAP_LOG = A.REAP_LOG, saved
+        time.sleep(0.5)
+        self.assertIsNone(p.poll(), "a live owner on old code re-execs itself: the reaper leaves it")
+        self.assertFalse(os.path.exists(os.path.join(d, "test-dead.json")))
+        self.assertIn("removed dead owner test dead pid 999999", open(log).read())
+
     def tool(self, *argv):
         import contextlib, io
         out = io.StringIO()
