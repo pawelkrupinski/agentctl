@@ -283,7 +283,7 @@ class PrepushTest(Base):
         sh(wt, "git", "reset", "-q", "--hard", "forgejo/main")
         sh(wt, "git", "rm", "-q", "f1.txt", "f2.txt", "f3.txt")
         sh(wt, "git", "commit", "-q", "-m", "retire, one only\n\nRetires: f1.txt")
-        rc, out = self.check(cwd=wt)
+        rc, out = self.check("--max-foreign", "1", cwd=wt)
         self.assertEqual(rc, 1, out)
 
     def test_hook_mode(self):
