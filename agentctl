@@ -1428,13 +1428,18 @@ def waiting_enqueue(repo, head, commits, log_path, a):
     d, _clone, wt = waiting_state(repo)
     git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
     ensure_waiting_tree(repo, wt)
+    # `waiting` is rebuilt on the CURRENT main before the change is judged: built on an older main, every file main
+    # changed since reads as a conflict with a change rebased onto it (movies 2026-10-27: a false conflict on
+    # bounded-step-test.sh, `waiting` still on 010362c1e). An entry that no longer applies on it is rejected alone.
+    base = git(repo, "rev-parse", f"{REMOTE}/main").strip()
+    rebuild(repo, d, wt, waiting_entries(d), base)
     before = git(wt, "rev-parse", "HEAD").strip()
     conflict = pick(wt, commits)
     if conflict:
         print(f"NOT LANDED: main is red, and the change conflicts with the changes already waiting on `{WAITING_BRANCH}` "
-              f"in: {', '.join(conflict)}. Rebase onto them (git rebase {WAITING_BRANCH}) or wait for them to land.")
+              f"(rebuilt on {REMOTE}/main {base[:10]}) in: {', '.join(conflict)}. Rebase onto them "
+              f"(git rebase {WAITING_BRANCH}) or wait for them to land.")
         return 1
-    base = git(wt, "merge-base", "HEAD", f"{REMOTE}/main").strip()
     err(f"main is red: checking {head[:10]} on `{WAITING_BRANCH}` with the {len(waiting_entries(d))} change(s) already "
         f"waiting (scripts/hooks/pre-push --checks-only; log {log_path})")
     ok, out = run_hook(wt, "--checks-only", base)

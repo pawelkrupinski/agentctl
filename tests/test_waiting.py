@@ -151,6 +151,40 @@ class WaitingTest(Base):
         self.assertIn("no longer applies", a["why"])
         self.assertEqual(self.remote_log()[0], "b: web/src/main/B.scala")
 
+    def test_an_enqueue_rebuilds_waiting_on_the_current_main_before_judging_a_conflict(self):
+        # `waiting` was built on an older main; main has since changed Shared.scala (a tools-only push, say), and the
+        # new change, rebased on the CURRENT main, edits that same line again. Against the old base its pick
+        # conflicts; against the rebuilt one it applies (movies, 2026-10-27: a false conflict on bounded-step-test.sh).
+        wt1, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        self.land(wt1)
+        self.r.write("web/src/main/Shared.scala", "line 1 on main\n")
+        self.r.commit("main changed the shared line")
+        self.r.push()
+        wt2 = self.r.worktree("wt-b", branch="b")
+        self.r.write("web/src/main/Shared.scala", "line 1 by b\n", at=wt2)
+        self.r.commit("b: Shared.scala", at=wt2)
+        rc, out = self.land(wt2)
+        self.assertNotIn("conflicts", out)
+        self.assertIn("(2 changes queued on waiting", out)
+        main = sh(self.r.path, "git", "rev-parse", "forgejo/main")
+        self.assertEqual(sh(self.r.path, "git", "merge-base", "waiting", "forgejo/main"), main,
+                         "waiting sits on the current main")
+        self.assertEqual(self.waiting_log(), ["b: Shared.scala", "a: web/src/main/A.scala"])
+
+    def test_an_enqueue_onto_a_stale_waiting_rejects_only_entries_that_no_longer_apply(self):
+        wt1, _ = self.agent("a", "web/src/main/Shared.scala", "line 1 by a\n")
+        self.land(wt1)
+        self.r.write("web/src/main/Shared.scala", "line 1 on main\n")
+        self.r.commit("main changed the shared line")
+        self.r.push()
+        wt2, _ = self.agent("b", "web/src/main/B.scala", "b\n")
+        rc, out = self.land(wt2)
+        self.assertIn("(1 change queued on waiting", out)
+        d, _c, _w = A.waiting_state(self.r.path)
+        a, b = A.waiting_entries(d, open_only=False)
+        self.assertEqual((a["status"], b["status"]), ("rejected", "waiting"))
+        self.assertIn("no longer applies", a["why"])
+
     def test_tools_only_bypasses_waiting_while_red(self):
         wt, sha = self.agent("t", "scripts/x.sh", "echo\n")
         rc, out = self.land(wt)
