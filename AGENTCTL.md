@@ -20,6 +20,7 @@ eval "$(~/bin/agentctl env --print)"        # 1. sbt/java on PATH; a locked vaul
 ~/bin/agentctl wait run <id> &              # 3. Bash run_in_background=true, then END YOUR TURN
 ~/bin/agentctl ci-why                       # 4. only when land says the red gate refused, or Main is red
 ~/bin/agentctl inbox --unread --ack         # 5. the orchestrator: every land/watch/wait verdict, agent alive or not
+~/bin/agentctl inbox wait &                 # 6. the orchestrator's notifier: Bash run_in_background=true (see "inbox")
 ```
 
 Every change lands with `land`, identity changes included (2026-10-26: no pre-merge CI; the merge queue is retired).
@@ -51,7 +52,10 @@ Step by step:
 - **Never unlocks the vault.** `env` only runs `secrets status <ns>`. When the vault is locked, it tells you which
   `!` command to hand to the user. Touch ID belongs to the user.
 - **Never prints a secret.** Tokens are read inside the call that uses them (`secrets get … FORGEJO_API_TOKEN` or
-  `$GH_TOKEN`) and go only into a request header.
+  `$GH_TOKEN`) and go only into a request header -- or, for a DETACHED child (land's watch, the processor it starts),
+  into the child's environment, and to the waiting processor over a 0600 unix socket (see "waiting"): never on a
+  command line or on disk. Why: `secrets` anchors an unlock to the session's processes, so a process whose launcher
+  exited (a detached watch once land ends) or a launchd service gets `locked`.
 - **The DB is read-only.** `db-q` runs `sqlite3 -readonly -safe` and refuses anything but one SELECT, WITH or PRAGMA
   read.
 - **Never deletes unmerged work.** `cleanup` deletes only what is proven merged: the worktree's HEAD is an ancestor of
@@ -236,7 +240,22 @@ of parallel dry runs is capped by sbt-warm's JVM slots, not by the lock.
    - Polls back off from 60 s to 5 min. Verdict: `WATCH OK: Main #n green, convergence #m green` (exit 0);
      `WATCH RED: <workflow> #n <failed jobs>` plus the `ci-why` summary (exit 3) the moment either is red: your
      change may have broken main, fix forward with `Fixes-Red: <n>`; `WATCH UNKNOWN: …` (exit 2) when a run is
-     undecided after 3 h (`$AGENTCTL_WATCH_TIMEOUT`) or Forgejo's runs could not be read 10 times in a row.
+     undecided after 3 h (`$AGENTCTL_WATCH_TIMEOUT`), or with no Forgejo token at all (`no Forgejo token (…)`, at
+     once: retrying cannot help).
+   - **Forgejo unreachable** (2026-10-27): a failed read backs off from 30 s to 5 min and is retried until the 3 h
+     bound; only then `WATCH UNKNOWN: Forgejo's runs could not be read for 1h 40m (n failed reads, the last: …)`. No
+     stall is judged on failed reads.
+   - **Red fixes are verified** (the owner, 2026-10-27: the batch fix 97bb6d835 claimed `Fixes-Red: 2047`, Main #2059
+     failed again in the same worker-identity job, and nothing said so). For each run N a landed commit's
+     `Fixes-Red:` names (the sha's own trailers, plus `--fixes N` that land / the batch pass for the pushed commits),
+     the watch compares the first completed run of N's workflow containing the commit with N's failed jobs, each its
+     own inbox entry: `FIX FAILED: <workflow> #<new> still fails <jobs> (fix <sha> claimed #N)`, `FIX OK: #N cleared by
+     #<new>`, or `FIX UNVERIFIED: …` (N's workflow not completed when the watch ended, a job did not run, N not a
+     Main / convergence run).
+   - Every exit writes a verdict that names its cause (2026-10-27: two detached watches ended `(no output)`, exit 1:
+     they had no vault, and `token()`'s SystemExit slipped past the watch's `except Exception`). A SystemExit's message
+     is the verdict (`exited: …`), an exit with no verdict line says what it printed last (stderr first), and the
+     entry is written even when WATCH OK has just removed the worktree the watch ran in.
    - Other repos: `watch: no CI watched for <repo>`, exit 0.
 
 `NOT LANDED: <reason>` reasons:
@@ -302,6 +321,16 @@ agentctl waiting run [--once] [--service]    # the processor; land starts it det
 agentctl waiting service install|uninstall|status   # the processor as launchd agent net.bitcashier.agentctl-waiting
 ```
 
+- **An unread gate is RED** (the owner, 2026-10-27). At 08:05Z the launchd processor, with no Forgejo token (launchd
+  has no `secrets` on PATH, and no vault session anyway), read the gate as green and pushed a 2-change batch (ce9442b1b)
+  onto red Main #2047; the hook, tokenless too, skipped its own gate. Now `gate_reds` answers `{unread}` when it cannot
+  read: land joins `waiting`, the processor takes no batch, writes ONE `UNKNOWN: the waiting processor cannot read the
+  gate (…)` inbox entry per unread spell, and `waiting status` prints `gate: UNREAD, taken as red (…)`.
+- **The token hand-off**: the processor listens on a unix socket (`/tmp/agentctl-<uid>/<hash>.sock`, 0600 in a 0700
+  dir; `$AGENTCTL_SOCK_DIR`). Every `land` that joins, and `waiting status` / `resume`, run where the vault answers and
+  hand it the token, kept in its memory and environment only (a re-exec keeps it; the batch push's hook and the
+  watches it starts inherit it). After a reboot or service restart: `~/bin/agentctl waiting status` from a session
+  with the vault unlocked.
 - **The processor** (one per repo, an owned lock; it re-execs on agentctl's new code before each batch) waits while
   the gate is red (it takes a batch while red only if a `Fixes-Red:` entry for the red run waits -- such an entry goes
   FIRST). At green, under the lock it rebuilds `waiting` on forgejo/main; released, it runs ONE combined check of the
@@ -423,6 +452,25 @@ a signal, or on a crash), and land writes its `WAITING` line there at once, sinc
   acknowledges what it listed, `-v` adds each entry's output tail, an ID prefix picks entries. Exit 0.
 - The orchestrating session reads it whether or not the agent is alive: `agentctl inbox --unread --ack` after each
   agent's report, and before deciding an agent's land is lost.
+- Each entry has a `kind`, from its verdict: `RED`, `OK`, `STALLED`, `UNKNOWN` (also a crash, a signal, an exit with
+  no verdict), `NOT_LANDED`, `LANDED`, `WAITING`, `HELD`, `FIX_FAILED`, `FIX_OK`, `FIX_UNVERIFIED`, `CHECK`, `OTHER`.
+
+#### inbox wait: the orchestrator's notifier
+
+```
+agentctl inbox wait [--kinds RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN] [--since-ack] [--timeout S]
+```
+
+It blocks until an UNREAD entry of those kinds (the default above) exists, prints every such entry, and exits 0 (2 at
+`--timeout`). It acknowledges nothing. `--since-ack` skips entries older than the last acknowledgement (an old
+backlog). It is cheap: one `stat()` of the inbox directory and of `acked/` a second (`$AGENTCTL_INBOX_POLL`), the
+entries re-read only when either changed; no Forgejo, no git. The orchestrating Claude session's loop:
+
+1. run `~/bin/agentctl inbox wait` with the Bash tool's `run_in_background=true`, and end the turn (or go on working);
+2. woken when it exits: route each printed entry (a RED or FIX FAILED to the agent that landed it -- its cwd -- or a
+   new fix agent; NOT LANDED back to its agent; STALLED / UNKNOWN: read `inbox <id> -v`, `ci-why`);
+3. `~/bin/agentctl inbox <id> --ack` for each entry routed;
+4. run it again (step 1). An entry not acked wakes the next `inbox wait` at once.
 
 ```
 $ agentctl inbox --unread

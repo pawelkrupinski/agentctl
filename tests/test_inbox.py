@@ -112,6 +112,100 @@ class InboxTest(unittest.TestCase):
         _, out = self.run_main(["inbox"])
         self.assertEqual(out.count("read  "), 2)
 
+    def test_a_systemexit_message_is_the_verdict(self):
+        # 2026-10-27: two detached watches died on the vault's SystemExit and their entries said "(no output)"
+        def handler(a):
+            raise SystemExit("agentctl: could not read the movies FORGEJO_API_TOKEN from the vault")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()), \
+                self.assertRaises(SystemExit):
+            A.with_inbox("watch", handler, None)
+        [e] = self.entries()
+        self.assertEqual(e["verdict"], "exited: could not read the movies FORGEJO_API_TOKEN from the vault")
+        self.assertEqual((e["exit"], e["kind"]), (1, "UNKNOWN"))
+
+    def test_a_bare_exit_1_names_what_it_said_last(self):
+        def handler(a):
+            A.err("watch: the runs could not be listed")
+            return 1
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            A.with_inbox("watch", handler, None)
+        [e] = self.entries()
+        self.assertEqual(e["verdict"], "exit 1 with no verdict line; it said last: watch: the runs could not be listed")
+        self.assertNotIn("(no output)", e["verdict"])
+
+    def test_the_entry_is_written_after_the_cwd_is_removed(self):
+        # WATCH OK closes the worktree the detached watch runs in: os.getcwd() raises, and the verdict was lost
+        gone = os.path.join(self.tmp.name, "wt")
+        os.makedirs(gone)
+        here = os.getcwd()
+
+        def handler(a):
+            os.chdir(gone)
+            os.rmdir(gone)
+            print("WATCH OK: Main #5 green, convergence #6 green")
+            return 0
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                A.with_inbox("watch", handler, None)
+        finally:
+            os.chdir(here)
+        [e] = self.entries()
+        self.assertEqual((e["verdict"], e["kind"]), ("WATCH OK: Main #5 green, convergence #6 green", "OK"))
+
+    def test_kinds(self):
+        for verdict, kind in [("WATCH RED: Main #9 test", "RED"), ("WATCH STALLED: no change", "STALLED"),
+                              ("WATCH UNKNOWN: x", "UNKNOWN"), ("NOT LANDED: the checks failed", "NOT_LANDED"),
+                              ("NOT LANDED: stalled push", "STALLED"), ("FIX FAILED: Main #2 still fails t", "FIX_FAILED"),
+                              ("FIX OK: #1 cleared by #2", "FIX_OK"), ("LANDED abc", "LANDED"), ("crashed: X: y", "UNKNOWN"),
+                              ("UNKNOWN: the waiting processor cannot read the gate", "UNKNOWN"), ("CHECK CAP 3 -> 2", "CHECK")]:
+            self.assertEqual(A.inbox_kind(verdict), kind, verdict)
+        self.assertEqual(A.inbox_kind("WAITING abc", final=False), "WAITING")
+
+    def wait(self, *args):
+        os.environ["AGENTCTL_INBOX_POLL"] = "0.02"
+        try:
+            return self.run_main(["inbox", "wait", *args])
+        finally:
+            del os.environ["AGENTCTL_INBOX_POLL"]
+
+    def test_inbox_wait_prints_an_unread_entry_of_its_kinds(self):
+        A.inbox_write("watch", "WATCH OK: Main #5 green", [], [], 0)
+        red = A.inbox_write("watch", "WATCH RED: Main #9 test", [], [], 3)
+        code, out = self.wait("--timeout", "5")
+        self.assertEqual(code, 0)
+        self.assertIn(f"{red} UNREAD watch", out)
+        self.assertNotIn("WATCH OK", out)
+        self.assertFalse(any(e["read"] for e in self.entries()), "wait does not ack: the orchestrator acks once routed")
+
+    def test_inbox_wait_ignores_other_kinds_and_read_entries(self):
+        A.inbox_write("watch", "WATCH OK: Main #5 green", [], [], 0)
+        eid = A.inbox_write("watch", "WATCH RED: Main #9 test", [], [], 3)
+        self.run_main(["inbox", eid, "--ack"])
+        code, out = self.wait("--timeout", "0.2")
+        self.assertEqual(code, 2, out)
+        code, out = self.wait("--timeout", "5", "--kinds", "OK")
+        self.assertEqual(code, 0)
+        self.assertIn("WATCH OK", out)
+
+    def test_inbox_wait_since_ack_skips_the_backlog(self):
+        A.inbox_write("watch", "WATCH RED: Main #1 old", [], [], 3)
+        os.makedirs(os.path.join(self.inbox, "acked"), exist_ok=True)
+        time.sleep(0.02)
+        open(os.path.join(self.inbox, "acked", "something"), "a").close()
+        code, out = self.wait("--since-ack", "--timeout", "0.2")
+        self.assertEqual(code, 2, out)
+
+    def test_inbox_wait_wakes_on_a_new_entry(self):
+        import threading
+        t = threading.Timer(0.3, lambda: A.inbox_write("land", "NOT LANDED: the checks failed", [], [], 1))
+        t.start()
+        t0 = time.time()
+        code, out = self.wait("--timeout", "10")
+        t.join()
+        self.assertEqual(code, 0)
+        self.assertIn("NOT LANDED: the checks failed", out)
+        self.assertLess(time.time() - t0, 5)
+
     def test_other_commands_write_nothing(self):
         self.run_main(["inbox"])
         self.run_main(["state", "demo"])

@@ -141,13 +141,81 @@ class WatchTest(Base):
         self.assertEqual(rc, 2, out)
         self.assertIn("WATCH STALLED: no change in Main run 70 in_progress", out)
 
-    def test_api_failures_give_up_with_could_not_tell(self):
+    def test_api_failures_back_off_and_end_unknown_only_at_the_bound(self):
         def broken(o_r, *args):
             raise RuntimeError("connection refused")
         A.gh_json = broken
+        sleeps = []
+        A.time.sleep = sleeps.append
+        os.environ["AGENTCTL_WATCH_TIMEOUT"] = "0.3"
         rc, out = self.watch()
         self.assertEqual(rc, 2, out)
-        self.assertIn("WATCH UNKNOWN: could not read", out)
+        self.assertGreater(len(sleeps), 10, "no give-up after 10 failed reads: it reads again until the bound")
+        self.assertEqual(sleeps[:3], [30, 45, 67.5])
+        self.assertEqual(max(sleeps), 300)
+        self.assertIn("WATCH UNKNOWN: Forgejo's runs could not be read for 0m", out)
+        self.assertIn("connection refused", out.splitlines()[-1])
+        self.assertNotIn("STALLED", out, "a failed read says nothing about the runs")
+
+    def test_forgejo_back_after_failures_is_read_again(self):
+        calls = []
+        self.main = [run(11, self.sha)]
+        self.conv = [run(21, self.sha)]
+        good = A.gh_json
+
+        def flaky(o_r, *args):
+            calls.append(args)
+            if len(calls) <= 25:
+                raise RuntimeError("tunnel down")
+            return good(o_r, *args)
+        A.gh_json = flaky
+        rc, out = self.watch()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("WATCH OK: Main #11 green, convergence #21 green", out)
+        self.assertIn("Forgejo answers again", out)
+
+    def test_no_token_ends_at_once_with_the_cause(self):
+        def no_token(o_r, *args):
+            raise A.NoToken("agentctl: could not read the movies FORGEJO_API_TOKEN from the vault (locked)")
+        A.gh_json = no_token
+        rc, out = self.watch()
+        self.assertEqual(rc, 2, out)
+        self.assertIn("WATCH UNKNOWN: no Forgejo token (could not read the movies FORGEJO_API_TOKEN", out)
+
+    def fix_scenario(self, new_jobs):
+        """#2047 red in test (worker-identity); the fix lands; Main #2059 is the first run containing it."""
+        self.main = [run(2059, self.sha, conclusion="success" if all(c == "success" for c in new_jobs.values()) else "failure"),
+                     run(2047, "0" * 40, conclusion="failure")]
+        self.conv = [run(21, self.sha)]
+        self.jobs[2047] = [{"name": "test (worker-identity)", "conclusion": "failure"}, {"name": "lint", "conclusion": "success"}]
+        self.jobs[2059] = [{"name": n, "conclusion": c} for n, c in new_jobs.items()]
+        import contextlib, io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            rc = A.watch_landed(self.r.path, self.sha, self.pushed_at, o_r=MOVIES, fixes=["2047"])
+        fix = [e for e in A.inbox_entries() if e["verdict"].startswith("FIX")]
+        return rc, out.getvalue(), fix
+
+    def test_a_fix_that_fails_again_in_the_same_job_is_fix_failed(self):
+        rc, out, fix = self.fix_scenario({"test (worker-identity)": "failure", "lint": "success"})
+        self.assertEqual(rc, 3, out)
+        line = f"FIX FAILED: Main #2059 still fails test (worker-identity) (fix {self.sha[:10]} claimed #2047)"
+        self.assertIn(line, out)
+        self.assertEqual([(e["verdict"], e["kind"]) for e in fix][-1:], [(line, "FIX_FAILED")])
+
+    def test_a_fix_whose_jobs_all_pass_is_fix_ok(self):
+        rc, out, fix = self.fix_scenario({"test (worker-identity)": "success", "lint": "success"})
+        self.assertEqual(rc, 0, out)
+        self.assertIn("FIX OK: #2047 cleared by #2059", out)
+        self.assertEqual(fix[-1]["kind"], "FIX_OK")
+        self.assertTrue(out.rstrip().endswith("FIX OK: #2047 cleared by #2059") or "WATCH OK" in out)
+
+    def test_the_fixes_red_trailer_of_the_landed_commit_is_read(self):
+        self.r.write("f3.txt", "the fix\n")
+        self.sha = self.r.commit("fix the worker-identity test\n\nFixes-Red: 2047")
+        self.r.push()
+        rc, out, fix = self.fix_scenario({"test (worker-identity)": "failure"})
+        self.assertIn("FIX FAILED: Main #2059 still fails test (worker-identity)", out)
 
     def test_other_repos_watch_nothing(self):
         import contextlib, io
@@ -167,7 +235,7 @@ class LandWatchTest(Base):
         A.LAND_LOCK_DIR = os.path.join(self.tmp.name, "locks")
         self.calls = []
 
-        def fake(repo, sha, pushed_at, o_r=None, close=None):
+        def fake(repo, sha, pushed_at, o_r=None, close=None, fixes=()):
             # the lock is free while watching: another lander could take it now
             import fcntl
             with open(A.land_lock_path(repo), "a+") as f:
@@ -183,7 +251,7 @@ class LandWatchTest(Base):
 
     def test_land_ends_at_landed_and_watches_detached(self):
         spawned, saved = [], A.spawn_watch_of
-        A.spawn_watch_of = lambda repo, sha, pushed_at, close=None: spawned.append(sha)
+        A.spawn_watch_of = lambda repo, sha, pushed_at, close=None, fixes=(): spawned.append(sha)
         try:
             self.r.write("f1.txt", "mine\n")
             sha = self.r.commit("mine")

@@ -31,14 +31,14 @@ class WaitingTest(Base):
         self.saved_spawn_watch = A.spawn_watch
         A.spawn_watch = lambda repo, e, pushed_at: self.watches.append(e["tip"])
         self.saved_spawn_watch_of = A.spawn_watch_of
-        A.spawn_watch_of = lambda repo, sha, pushed_at, close=None: self.watches.append(sha)
+        A.spawn_watch_of = lambda repo, sha, pushed_at, close=None, fixes=(): self.watches.append(sha)
         os.environ["AGENTCTL_CHECKS_DIR"] = os.path.join(t, "checks")
         self.saved_inbox = os.environ.get("AGENTCTL_INBOX_DIR")
         os.environ["AGENTCTL_INBOX_DIR"] = os.path.join(t, "inbox")
         self.awaited = []
         A.await_entry = lambda repo, eid, close=None: (self.awaited.append(eid), (9, None, None))[1]
         A.time.sleep = lambda s: None
-        A.watch_landed = lambda repo, sha, pushed_at, o_r=None, close=None: 0
+        A.watch_landed = lambda repo, sha, pushed_at, o_r=None, close=None, fixes=(): 0
         os.environ.pop("PREPUSH_SKIP", None)
         self.calls, self.pushes = os.path.join(t, "hook-calls"), os.path.join(t, "pushes")
         hooks = os.path.join(t, "hooks")
@@ -284,7 +284,7 @@ class WaitingTest(Base):
     def test_land_follow_still_waits_and_watches(self):
         A.await_entry = lambda repo, eid, close=None: (print("LANDED abc (with …)"), (0, "abc", 1.0))[1]
         watched = []
-        A.watch_landed = lambda repo, sha, pushed_at, o_r=None, close=None: (watched.append(sha), 3)[1]
+        A.watch_landed = lambda repo, sha, pushed_at, o_r=None, close=None, fixes=(): (watched.append(sha), 3)[1]
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         rc, out = self.land(wt, "--follow")
         self.assertEqual(rc, 3, out)
@@ -302,6 +302,73 @@ class WaitingTest(Base):
         rc, out = self.run_tool("waiting", "cancel", "-1", cwd=self.r.path)
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.entries()["1"]["status"], "cancelled")
+
+    def test_an_unread_gate_holds_the_batch_and_says_so_once(self):
+        # 08:05Z 10-27: the processor could not read the gate (no token under launchd), took it for green, and pushed
+        wt1, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        self.land(wt1)
+        self.reds = {A.GATE_UNREAD}
+        A.gate_unread_why[0] = "could not read the movies FORGEJO_API_TOKEN from the vault"
+        A.waiting_run(self.r.path, once=True)
+        A.waiting_run(self.r.path, once=True)
+        self.assertEqual(self.pushes_count(), 0, "an unread gate is never green")
+        self.assertEqual(self.calls_of("--fast-only"), [])
+        notes = [e for e in self.inbox() if e["verdict"].startswith("UNKNOWN: the waiting processor cannot read the gate")]
+        self.assertEqual(len(notes), 1, "said once per unread spell")
+        self.assertEqual(notes[0]["kind"], "UNKNOWN")
+        rc, out = self.run_tool("waiting", "status", cwd=self.r.path)
+        self.assertIn("gate: UNREAD, taken as red", out)
+        self.assertNotIn("green", out)
+        self.reds = set()
+        A.waiting_run(self.r.path, once=True)
+        self.assertEqual(self.pushes_count(), 1, "read green again: the batch lands")
+
+    def test_land_with_an_unread_gate_joins_waiting(self):
+        self.reds = {A.GATE_UNREAD}
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        rc, out = self.land(wt)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("WAITING", out)
+        self.assertEqual(self.pushes_count(), 0)
+
+    def test_the_token_is_handed_to_a_listening_processor(self):
+        import tempfile
+        sockdir = tempfile.mkdtemp(dir="/tmp", prefix="agentctl-sock-")
+        saved = {k: os.environ.get(k) for k in ("AGENTCTL_SOCK_DIR", "FORGEJO_API_TOKEN", "GH_TOKEN")}
+        os.environ["AGENTCTL_SOCK_DIR"] = sockdir
+        os.environ.pop("GH_TOKEN", None)
+        os.environ.pop("FORGEJO_API_TOKEN", None)
+        saved_slug, saved_token = A.slug, A.token
+        A.slug = lambda repo: "pawelkrupinski/movies"
+        try:
+            d, _c, _w = A.waiting_state(self.r.path)
+            drop = A.TokenDrop(d, "pawelkrupinski/movies").open()
+            self.assertEqual(oct(os.stat(drop.path).st_mode & 0o777), "0o600")
+            A.token = lambda o_r: "tok-0123456789abcdef"
+            self.assertTrue(A.offer_token(self.r.path))
+            drop.nap(0.5)
+            self.assertEqual(os.environ.get("FORGEJO_API_TOKEN"), "tok-0123456789abcdef")
+            drop.close()
+            self.assertFalse(os.path.exists(drop.path))
+            self.assertFalse(A.offer_token(self.r.path), "nobody listens: nothing handed over")
+        finally:
+            A.slug, A.token = saved_slug, saved_token
+            for k, v in saved.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+    def test_a_detached_child_is_handed_the_token_in_its_environment(self):
+        saved = A.token
+        A.token = lambda o_r: "tok-abcdef0123456789"
+        try:
+            env = A.token_env("pawelkrupinski/movies", {})
+            self.assertEqual(env, {"FORGEJO_API_TOKEN": "tok-abcdef0123456789"})
+
+            def none(o_r):
+                raise A.NoToken("locked")
+            A.token = none
+            self.assertEqual(A.token_env("pawelkrupinski/movies", {"X": "1"}), {"X": "1"})
+        finally:
+            A.token = saved
 
     def test_service_install_status_uninstall_with_a_fake_launchctl(self):
         t = self.tmp.name

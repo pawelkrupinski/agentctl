@@ -13,6 +13,8 @@ _loader.exec_module(A)
 os.environ.setdefault("AGENTCTL_INBOX_DIR", tempfile.mkdtemp(prefix="agentctl-inbox-test-"))
 # ...nor reaps this machine's stuck sbt servers (orphans / sweep): test_sbt_reaper drives the rules on fakes.
 os.environ.setdefault("AGENTCTL_SBT_REAP", "0")
+# ...nor listens on this machine's token hand-off sockets (a short dir: a socket path is <= 104 bytes).
+os.environ.setdefault("AGENTCTL_SOCK_DIR", tempfile.mkdtemp(dir="/tmp", prefix="agentctl-sock-test-"))
 # ...nor takes this machine's pre-commit check slots, nor writes its measurements or cap.
 os.environ.setdefault("AGENTCTL_CHECKS_DIR", tempfile.mkdtemp(prefix="agentctl-checks-test-"))
 

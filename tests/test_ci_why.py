@@ -1,5 +1,5 @@
 """agentctl ci-why: the gate's two workflows (Main, convergence), newest decided run, infra vs test, the clearing rule."""
-import io, os, sys, unittest
+import contextlib, io, os, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -108,6 +108,32 @@ class CiWhyTest(FakeForge):
         saved, A.slug = A.slug, lambda repo: "pawelkrupinski/movies"
         try:
             self.assertEqual(A.gate_reds("/any"), {"41", "91"})
+        finally:
+            A.slug = saved
+
+    def test_an_unread_gate_is_never_green(self):
+        # 08:05Z 10-27: a launchd processor with no token read the gate as green and pushed onto red Main #2047
+        saved = A.slug, A.gh_json
+        A.slug = lambda repo: "pawelkrupinski/movies"
+        try:
+            for exc in (A.NoToken("agentctl: could not read the movies FORGEJO_API_TOKEN from the vault"),
+                        FileNotFoundError(2, "No such file or directory: 'secrets'"), RuntimeError("tunnel down")):
+                def broken(o_r, *args, exc=exc):
+                    raise exc
+                A.gh_json = broken
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(A.gate_reds("/any"), {A.GATE_UNREAD}, exc)
+        finally:
+            A.slug, A.gh_json = saved
+
+    def test_a_newer_in_progress_run_does_not_hide_a_completed_red(self):
+        self.put("runs.json", [run(3200, 2050, "Main", "main.yml", "in_progress", ""),
+                               run(3199, 2049, "Main", "main.yml", conclusion="cancelled"),
+                               run(3192, 2047, "Main", "main.yml", conclusion="failure"),
+                               run(3190, 900, "Identity model convergence", "identity-model-convergence.yml")])
+        saved, A.slug = A.slug, lambda repo: "pawelkrupinski/movies"
+        try:
+            self.assertEqual(A.gate_reds("/any"), {"2047", "3192"})
         finally:
             A.slug = saved
 

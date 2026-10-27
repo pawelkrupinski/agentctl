@@ -179,18 +179,56 @@ def slug(repo_arg):
 _tokens = {}
 
 
+class NoToken(SystemExit):
+    """The vault would not give the Forgejo token. A process whose launching session ended (a detached watch once land
+    exits, a launchd service) is never authorized: `secrets` anchors an unlock to the session's processes (2026-10-27:
+    two detached watches died on it with no verdict, and the waiting processor read the gate as green)."""
+
+
+def token_ns(o_r):
+    return "movies" if o_r.startswith("pawelkrupinski/") else "bitcashier"
+
+
 def token(o_r):
     if os.environ.get("GH_TOKEN"):
         return os.environ["GH_TOKEN"]
-    ns = "movies" if o_r.startswith("pawelkrupinski/") else "bitcashier"
+    ns = token_ns(o_r)
     if ns == "movies" and os.environ.get("FORGEJO_API_TOKEN"):  # a token the environment already carries
         return os.environ["FORGEJO_API_TOKEN"]
     if ns not in _tokens:
-        r = subprocess.run(["secrets", "get", ns, "FORGEJO_API_TOKEN"], capture_output=True, text=True)
+        try:
+            r = subprocess.run(["secrets", "get", ns, "FORGEJO_API_TOKEN"], capture_output=True, text=True)
+        except OSError as e:  # launchd's PATH has no `secrets`
+            raise NoToken(f"agentctl: could not read the {ns} FORGEJO_API_TOKEN from the vault (secrets: {e.strerror})")
         if r.returncode != 0 or not r.stdout.strip():
-            raise SystemExit(f"agentctl: could not read the {ns} FORGEJO_API_TOKEN from the vault")
+            raise NoToken(f"agentctl: could not read the {ns} FORGEJO_API_TOKEN from the vault (locked for this process: "
+                          "its session ended, or `! secrets unlock " + ns + "`)")
         _tokens[ns] = r.stdout.strip()
     return _tokens[ns]
+
+
+def detached_env(repo):
+    """token_env for the repo at path `repo` (os.environ when it names no forge)."""
+    try:
+        return token_env(slug(repo))
+    except (Exception, SystemExit):
+        return dict(os.environ)
+
+
+def token_env(o_r, env=None):
+    """env (default os.environ) plus the Forgejo token, for a DETACHED child: once its parent exits the vault no longer
+    answers it, so it is handed the token now (in its environment, never on a command line or on disk). Without a token
+    here the child gets none and says so itself."""
+    env = dict(os.environ if env is None else env)
+    try:
+        tok = token(o_r)
+    except SystemExit:
+        return env
+    if token_ns(o_r) == "movies":
+        env["FORGEJO_API_TOKEN"] = tok
+    else:
+        env["GH_TOKEN"] = tok
+    return env
 
 
 def gh_json(o_r, *args):
@@ -1506,12 +1544,14 @@ def cmd_land(a):
     if rc != 0 or not a.landed_sha or getattr(a, "no_watch", False):
         return rc
     if not getattr(a, "follow", False):  # land ends at LANDED; a detached watch sends its verdict to the inbox
-        spawn_watch_of(repo, a.landed_sha, a.pushed_at, close=None if getattr(a, "keep_worktree", False) else repo)
+        spawn_watch_of(repo, a.landed_sha, a.pushed_at, close=None if getattr(a, "keep_worktree", False) else repo,
+                       fixes=getattr(a, "fixes", None) or ())
         print(f"watching {a.landed_sha[:10]} detached: its WATCH verdict goes to `agentctl inbox`", flush=True)
         return 0
     # the lock is free again: the next lander goes while this one watches main's CI; on WATCH OK the worktree it ran
     # from is closed when proven merged (close_worktree), unless --keep-worktree
-    return watch_landed(repo, a.landed_sha, a.pushed_at, close=None if getattr(a, "keep_worktree", False) else repo)
+    return watch_landed(repo, a.landed_sha, a.pushed_at, close=None if getattr(a, "keep_worktree", False) else repo,
+                        fixes=getattr(a, "fixes", None) or ())
 
 
 MAIN_MOVED = "main moved"  # land_loop: the check outside the lock no longer covers forgejo/main
@@ -1612,6 +1652,10 @@ def land_loop(repo, main_ref, sh, log_path, a):
             if rc is not None:
                 return rc
         a.prechecked = None  # a retry after a push race checks its new base again
+        try:  # the runs the pushed commits claim to fix: the watch verifies them
+            a.fixes = sorted(fixes_of(repo, waiting_commits(repo, f"{REMOTE}/main", head)))
+        except Exception:
+            a.fixes = []
         err(f"pushing {head[:10]} to {REMOTE}/main (attempt {attempt + 1}/{LAND_RETRIES + 1}; hook log: {log_path})")
         lock_note(f"push of {head[:10]}")
         a.pushed_at = time.time()
@@ -1668,7 +1712,6 @@ WATCH_TIMEOUT = 3 * 3600          # either run undecided by then: exit 2, could 
 WATCH_CONV_START = 3600           # no convergence run containing the sha started by then: said, not waited for
 WATCH_SLACK = 120                 # clock skew between the laptop and Forgejo's createdAt
 WATCH_STALL_MIN = 120  # a watch with no change in its runs for this long ends WATCH STALLED
-WATCH_ERRORS = 10                 # consecutive failed API reads before giving up (exit 2)
 UNDECIDED = ("cancelled", "skipped", "neutral", "")
 
 
@@ -1706,24 +1749,30 @@ def pick_convergence_run(repo, sha, runs, pushed_at):
     return ok[0] if ok else None
 
 
-def watch_landed(repo, sha, pushed_at, o_r=None, close=None):
+def watch_landed(repo, sha, pushed_at, o_r=None, close=None, fixes=()):
     """Watch Main and the convergence for a landed sha. 0 green (or nothing to watch), 3 red, 2 could not tell. OWNED
-    (one watcher per sha; on agentctl's new code it re-execs as `agentctl watch`)."""
+    (one watcher per sha; on agentctl's new code it re-execs as `agentctl watch`). fixes: the runs the landed commits'
+    `Fixes-Red:` trailers name (the sha's own are read here too): each is verified against the new run (FIX OK / FIX
+    FAILED, to the inbox)."""
     o_r = o_r or slug(repo)
     flows = WATCH.get(o_r)
     if not flows:
         print(f"watch: no CI watched for {o_r} (only movies' Main and convergence are)")
         return 0
     pushed_at = pushed_at or time.time()
+    try:
+        fixes = sorted(set(fixes) | fixes_of(repo, [sha]))
+    except Exception:
+        fixes = sorted(set(fixes))
     own = Owned("watch", f"{o_r}-{sha}", ["watch", "--repo", repo, "--sha", sha, "--pushed-at", str(pushed_at)]
-                + (["--close", close] if close else []))
+                + (["--close", close] if close else []) + [x for f in fixes for x in ("--fixes", f)])
     if not own.acquire():
         h = own.holder or {}
         print(f"WATCH UNKNOWN: another agentctl (pid {h.get('pid')}, {h.get('owner')}) already watches {sha[:10]}; "
               "its verdict is its own (`agentctl orphans` lists owners)")
         return 2
     try:
-        rc = _watch(repo, sha, pushed_at, o_r, flows, own)
+        rc = _watch(repo, sha, pushed_at, o_r, flows, own, fixes)
     finally:
         own.release()
     if rc == 0 and close:
@@ -1731,17 +1780,87 @@ def watch_landed(repo, sha, pushed_at, o_r=None, close=None):
     return rc
 
 
-def _watch(repo, sha, pushed_at, o_r, flows, own):
+def failed_jobs(o_r, rid):
+    d = gh_json(o_r, "run", "view", str(rid), "--json", "jobs")
+    return [j["name"] for j in d.get("jobs") or [] if j.get("conclusion") in ("failure", "timed_out", "cancelled")]
+
+
+def job_results(o_r, rid):
+    d = gh_json(o_r, "run", "view", str(rid), "--json", "jobs")
+    return {j.get("name"): j.get("conclusion") or j.get("status") or "" for j in d.get("jobs") or []}
+
+
+def claimed_run(o_r, n, listed):
+    """(kind, run) of the run a `Fixes-Red: n` names -- a run number or a run id -- among the runs the watch listed, else
+    by `run view` (an id); (None, None) when it is not one of the watched workflows."""
+    for kind, runs in listed.items():
+        for r in runs:
+            if str(n) in (str(r.get("number")), str(r.get("databaseId"))):
+                return kind, r
+    try:
+        r = gh_json(o_r, "run", "view", str(n), "--json", RUN_FIELDS)
+    except Exception:
+        return None, None
+    for kind, (name, _wfile) in WATCH.get(o_r, {}).items():
+        if r.get("workflowName") == name:
+            return kind, r
+    return None, None
+
+
+def verify_fixes(o_r, sha, fixes, done, listed, flows):
+    """The owner (2026-10-27): the batch fix 97bb6d835 claimed Fixes-Red 2047, Main #2059 failed again in the same
+    worker-identity job, and nothing said so. For each claimed run N: the first completed run of N's workflow containing
+    the commit (the watch's) against N's failed jobs. Each verdict is printed and written to the inbox."""
+    for n in fixes:
+        try:
+            kind, old = claimed_run(o_r, n, listed)
+            if old is None:
+                line = f"FIX UNVERIFIED: #{n} (fix {sha[:10]}) is not a run of {' or '.join(f[0] for f in flows.values())}"
+            elif kind not in done or done[kind][0] is None:
+                line = (f"FIX UNVERIFIED: no completed {flows[kind][0]} run containing {sha[:10]} when the watch ended "
+                        f"(fix claimed #{old.get('number')})")
+            else:
+                new = done[kind][0]
+                was = failed_jobs(o_r, old["databaseId"])
+                now_ = job_results(o_r, new["databaseId"])
+                again = [j for j in was if now_.get(j) in ("failure", "timed_out", "cancelled")]
+                missing = [j for j in was if now_.get(j) != "success" and j not in again]
+                if again:
+                    line = (f"FIX FAILED: {flows[kind][0]} #{new.get('number')} still fails {', '.join(again)} "
+                            f"(fix {sha[:10]} claimed #{old.get('number')})")
+                elif missing:
+                    line = (f"FIX UNVERIFIED: {flows[kind][0]} #{new.get('number')} did not run {', '.join(missing)} "
+                            f"(fix {sha[:10]} claimed #{old.get('number')})")
+                else:
+                    line = f"FIX OK: #{old.get('number')} cleared by #{new.get('number')}"
+        except (Exception, SystemExit) as e:
+            line = f"FIX UNVERIFIED: #{n} (fix {sha[:10]}) could not be compared ({str(e)[:160]})"
+        print(line, flush=True)
+        inbox_write("watch", line, [line], [], 1 if line.startswith("FIX FAILED") else 0)
+
+
+def _watch(repo, sha, pushed_at, o_r, flows, own, fixes=()):
     timeout = float(os.environ.get("AGENTCTL_WATCH_TIMEOUT", WATCH_TIMEOUT))
     conv_start = float(os.environ.get("AGENTCTL_WATCH_CONV_START", WATCH_CONV_START))
     t0 = time.time()
-    err(f"watching Main and the convergence for {sha[:10]} (up to {int(timeout // 60)} min; `--no-watch` skips this)")
-    done, errors, said = {}, 0, set()  # kind -> (run, ok | None for none started)
+    err(f"watching Main and the convergence for {sha[:10]} (up to {int(timeout // 60)} min; `--no-watch` skips this)"
+        + (f"; verifying Fixes-Red {', '.join(fixes)}" if fixes else ""))
+    done, said, listed = {}, set(), {}  # kind -> (run, ok | None for none started); kind -> the runs last listed
     # NO PROGRESS: nothing about the followed runs (which run, its status, its last update) changed for this long ends
     # the watch with a named verdict (a queue Forgejo never serves, a runner lost mid-run), not a silent 3 h wait
     stall = float(os.environ.get("AGENTCTL_WATCH_STALL_MIN", WATCH_STALL_MIN)) * 60
     state, changed = None, time.time()
     delays = backoff(float(os.environ.get("AGENTCTL_WATCH_POLL", 60)), 300)
+    # UNREACHABLE: a failed read backs off (to 5 min) and is retried until the watch's own bound; only then UNKNOWN,
+    # saying for how long Forgejo could not be read (2026-10-27: ten failures in a row used to end it in minutes)
+    unreachable, failures, last_error, err_delays = None, 0, "", None
+
+    def verdict(rc, line):
+        print(line, flush=True)
+        if fixes:
+            verify_fixes(o_r, sha, fixes, done, listed, flows)
+        return rc
+
     while True:
         seen = {}
         try:
@@ -1750,6 +1869,7 @@ def _watch(repo, sha, pushed_at, o_r, flows, own):
                     continue
                 runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30",
                                "--json", RUN_FIELDS)
+                listed[kind] = runs
                 run = pick_main_run(repo, sha, runs) if kind == "main" else pick_convergence_run(repo, sha, runs, pushed_at)
                 if run is None:
                     if kind == "convergence" and time.time() - t0 >= conv_start:
@@ -1763,45 +1883,64 @@ def _watch(repo, sha, pushed_at, o_r, flows, own):
                 if run.get("status") == "completed" and not is_cancelled(run):
                     done[kind] = (run, run.get("conclusion") == "success")
                     print(f"{name} #{run.get('number')}: {run.get('conclusion')}", flush=True)
-            errors = 0
-        except Exception as e:  # a tunnel blip or a token hiccup: read again, give up after a run of them
-            errors += 1
-            err(f"watch: could not read the runs ({str(e)[:160]}) [{errors}/{WATCH_ERRORS}]")
-            if errors >= WATCH_ERRORS:
-                print(f"WATCH UNKNOWN: could not read Forgejo's runs {errors} times in a row; check `agentctl ci-why` later")
-                return 2
+            if unreachable is not None:
+                err(f"watch: Forgejo answers again after {red_for(iso_at(unreachable))} ({failures} failed reads)")
+            unreachable, failures, err_delays = None, 0, None
+        except NoToken as e:  # no vault for this process: retrying cannot help
+            return verdict(2, f"WATCH UNKNOWN: no Forgejo token ({str(e).replace('agentctl: ', '')}); "
+                              f"check `agentctl ci-why` for {sha[:10]}")
+        except Exception as e:  # a tunnel blip, Forgejo down: read again, backing off, until the bound
+            failures += 1
+            last_error = str(e)[:160]
+            if unreachable is None:
+                unreachable, err_delays = time.time(), backoff(float(os.environ.get("AGENTCTL_WATCH_ERROR_POLL", 30)), 300)
+            err(f"watch: could not read the runs ({last_error}) [{failures} failed, unreachable for "
+                f"{red_for(iso_at(unreachable))}]")
         reds = [(k, r) for k, (r, ok) in done.items() if ok is False]
         if reds:
             for kind, r in reds:
-                d = gh_json(o_r, "run", "view", str(r["databaseId"]), "--json", "jobs")
-                failed = [j["name"] for j in d.get("jobs") or [] if j.get("conclusion") in ("failure", "timed_out", "cancelled")]
+                try:
+                    failed = failed_jobs(o_r, r["databaseId"])
+                except (Exception, SystemExit) as e:  # the verdict stands without the job names
+                    err(f"could not read the jobs of run {r['databaseId']} ({str(e)[:120]})")
+                    failed = []
                 print(f"WATCH RED: {flows[kind][0]} #{r.get('number')} {', '.join(failed) or r.get('conclusion')} "
                       f"(it contains your {sha[:10]}: if your change broke it, fix forward now with `Fixes-Red: "
-                      f"{r.get('number')}`)")
+                      f"{r.get('number')}`)", flush=True)
             try:
                 print(ci_why(o_r, 4, repo=repo)[1])
-            except Exception as e:
+            except (Exception, SystemExit) as e:
                 print(f"(agentctl ci-why failed: {e})")
+            if fixes:
+                verify_fixes(o_r, sha, fixes, done, listed, flows)
             return 3
         if len(done) == len(flows):
             parts = [f"{flows[k][0].split()[0] if k == 'main' else 'convergence'} " +
                      (f"#{r.get('number')} green" if r else "none started") for k, (r, ok) in done.items()]
-            print("WATCH OK: " + ", ".join(sorted(parts, key=lambda x: not x.startswith("Main"))))
-            return 0
+            return verdict(0, "WATCH OK: " + ", ".join(sorted(parts, key=lambda x: not x.startswith("Main"))))
         if time.time() - t0 >= timeout:
             left = ", ".join(flows[k][0] for k in flows if k not in done)
-            print(f"WATCH UNKNOWN: {left} undecided after {int(timeout // 60)} min; check `agentctl ci-why` later")
-            return 2
-        now_state = (tuple(sorted(done)), tuple(sorted(seen.items())))
-        if now_state != state:
-            state, changed = now_state, time.time()
-        elif time.time() - changed >= stall:
-            left = ", ".join(f"{flows[k][0]} {('run ' + str(v[0]) + ' ' + str(v[1])) if v else 'no run'}"
-                             for k, v in [(k, seen.get(k)) for k in flows if k not in done])
-            print(f"WATCH STALLED: no change in {left} for {int(stall // 60)} min; check `agentctl ci-why` later")
-            return 2
+            if unreachable is not None:
+                return verdict(2, f"WATCH UNKNOWN: Forgejo's runs could not be read for {red_for(iso_at(unreachable))} "
+                                  f"({failures} failed reads, the last: {last_error}); {left} undecided after "
+                                  f"{int(timeout // 60)} min; check `agentctl ci-why` later")
+            return verdict(2, f"WATCH UNKNOWN: {left} undecided after {int(timeout // 60)} min; check `agentctl ci-why` "
+                              "later")
+        if unreachable is None:  # a failed read says nothing about the runs: no stall judged on it
+            now_state = (tuple(sorted(done)), tuple(sorted(seen.items())))
+            if now_state != state:
+                state, changed = now_state, time.time()
+            elif time.time() - changed >= stall:
+                left = ", ".join(f"{flows[k][0]} {('run ' + str(v[0]) + ' ' + str(v[1])) if v else 'no run'}"
+                                 for k, v in [(k, seen.get(k)) for k in flows if k not in done])
+                return verdict(2, f"WATCH STALLED: no change in {left} for {int(stall // 60)} min; check `agentctl "
+                                  "ci-why` later")
         restart_if_changed([own])
-        time.sleep(next(delays))
+        time.sleep(next(err_delays) if unreachable is not None else next(delays))
+
+
+def iso_at(t):
+    return dt.datetime.fromtimestamp(t, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # ---------------------------------------------------------------- waiting: production changes held while main is red
@@ -1837,9 +1976,15 @@ def is_production_path(p):
     return any(fnmatch.fnmatch(p, g) for g in PRODUCTION_GLOBS)
 
 
+GATE_UNREAD = "unread"  # gate_reds' member when the gate could not be read: never green, and no Fixes-Red matches it
+gate_unread_why = [""]
+
+
 def gate_reds(repo):
-    """The ids (run numbers and run ids) of the gating workflows' red runs on main; empty when green, not gated, or the
-    gate cannot be read (the hook then judges the push itself)."""
+    """The ids (run numbers and run ids) of the gating workflows' red runs on main; empty when green or not gated.
+    When the gate cannot be read: {GATE_UNREAD}, which every caller takes as RED -- a production change waits, the
+    processor takes no batch (the owner, 2026-10-27: an unread gate is never green; at 08:05Z a launchd processor with
+    no Forgejo token read it as green, and the hook, with no token either, skipped its own gate: a push onto red #2047)."""
     try:
         o_r = slug(repo)
         if o_r not in GATING:
@@ -1848,10 +1993,12 @@ def gate_reds(repo):
         for _name, decided, _newer, _streak in gate_runs(o_r):
             if decided and decided.get("conclusion") != "success":
                 reds |= {str(decided.get("number")), str(decided.get("databaseId"))}
+        gate_unread_why[0] = ""
         return reds
-    except Exception as e:
-        err(f"could not read the gate ({str(e)[:160]}): the hook judges the push")
-        return set()
+    except (Exception, SystemExit) as e:  # SystemExit: NoToken
+        gate_unread_why[0] = str(e).replace("agentctl: ", "")[:200]
+        err(f"could not read the gate ({gate_unread_why[0]}): taken as RED until it is read")
+        return {GATE_UNREAD}
 
 
 def waiting_supported(repo):
@@ -2026,6 +2173,7 @@ def join(repo, main_ref, sh, log_path, a, head=None):
     print(f"WAITING {e['tip']} (entry {e['id']}, {n} in batch)", flush=True)
     a.waiting = e
     spawn_waiting_processor(repo)
+    offer_token(repo)
     return 0
 
 
@@ -2045,7 +2193,106 @@ def spawn_waiting_processor(repo):
     repo = clone if os.path.isdir(clone) else repo  # the clone, not a joiner's worktree: that one closes after WATCH OK
     with open(os.path.join(d, "processor.log"), "a") as logf:
         subprocess.Popen([sys.executable, os.path.realpath(__file__), "waiting", "run", "--repo", repo],
-                         stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=repo)
+                         stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=repo,
+                         env=detached_env(repo))
+
+
+# THE TOKEN HAND-OFF. The processor as a launchd service, or detached once its land exits, gets no answer from the vault
+# (an unlock belongs to the session that made it). So it listens on a unix socket (0600, in a 0700 directory) and a
+# process that can read the vault -- every `land` that joins `waiting`, and `waiting status` / `resume` -- hands it the
+# token. It lives only in the processor's memory and environment (a re-exec keeps it; the push's hook and the watches it
+# starts inherit it), never on disk. Until it has one, the gate is unread: taken as red, said once in the inbox.
+def token_sock_path(d):
+    import hashlib
+    base = os.environ.get("AGENTCTL_SOCK_DIR") or f"/tmp/agentctl-{os.getuid()}"  # short: a socket path is <= 104 bytes
+    return os.path.join(base, hashlib.sha1(os.path.abspath(d).encode()).hexdigest()[:12] + ".sock")
+
+
+TOKEN_SHAPE = re.compile(r"[\w.~+/=-]{8,512}")
+
+
+class TokenDrop:
+    """The processor's end of the hand-off."""
+
+    def __init__(self, d, o_r):
+        self.path, self.o_r, self.sock = token_sock_path(d), o_r, None
+
+    def open(self):
+        import socket
+        try:
+            os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
+            os.chmod(os.path.dirname(self.path), 0o700)
+            if os.path.exists(self.path):
+                os.unlink(self.path)
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            old = os.umask(0o177)
+            try:
+                s.bind(self.path)
+            finally:
+                os.umask(old)
+            s.listen(4)
+            self.sock = s
+        except OSError as e:
+            err(f"no token hand-off socket ({e}): the processor reads the vault itself")
+        return self
+
+    def nap(self, secs):
+        """Sleep secs; take a token handed over meanwhile."""
+        if not self.sock:
+            time.sleep(secs)
+            return
+        import select
+        end = time.time() + secs
+        while True:
+            left = end - time.time()
+            if left <= 0:
+                return
+            ready, _, _ = select.select([self.sock], [], [], left)
+            if ready:
+                self.take()
+
+    def take(self):
+        try:
+            conn, _ = self.sock.accept()
+        except OSError:
+            return
+        with conn:
+            conn.settimeout(5)
+            try:
+                tok = conn.recv(4096).decode().strip()
+            except (OSError, UnicodeDecodeError):
+                return
+            if TOKEN_SHAPE.fullmatch(tok):
+                os.environ["FORGEJO_API_TOKEN" if token_ns(self.o_r) == "movies" else "GH_TOKEN"] = tok
+                err("the Forgejo token was handed over: the gate is read again")
+
+    def close(self):
+        if self.sock:
+            self.sock.close()
+            self.sock = None
+            try:
+                os.unlink(self.path)
+            except OSError:
+                pass
+
+
+def offer_token(repo):
+    """Hand this process's Forgejo token to the repo's waiting processor when it listens (see THE TOKEN HAND-OFF). Never
+    fatal; True when handed over."""
+    import socket
+    try:
+        d, _c, _w = waiting_state(repo)
+        path = token_sock_path(d)
+        if not os.path.exists(path):
+            return False
+        tok = token(slug(repo))
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(3)
+            s.connect(path)
+            s.sendall(tok.encode())
+        return True
+    except (Exception, SystemExit):
+        return False
 
 
 def await_entry(repo, eid, close=None):
@@ -2223,14 +2470,17 @@ def push_batch(repo, d, entries, tip, base, how):
     return "landed"
 
 
-def spawn_watch_of(repo, sha, pushed_at, close=None):
-    """A DETACHED `agentctl watch` of sha (its own session): its verdict goes to the inbox, agent alive or not."""
+def spawn_watch_of(repo, sha, pushed_at, close=None, fixes=()):
+    """A DETACHED `agentctl watch` of sha (its own session): its verdict goes to the inbox, agent alive or not. It is
+    handed the Forgejo token (token_env): once land exits, the vault no longer answers it."""
     d = os.path.join(HOME, ".cache", "agentctl")
     os.makedirs(d, exist_ok=True)
     argv = [sys.executable, os.path.realpath(__file__), "watch", "--repo", repo, "--sha", sha,
-            "--pushed-at", str(pushed_at or time.time())] + (["--close", close] if close else [])
+            "--pushed-at", str(pushed_at or time.time())] + (["--close", close] if close else []) + \
+        [x for f in fixes for x in ("--fixes", str(f))]
     with open(os.path.join(d, "watches.log"), "a") as logf:
-        subprocess.Popen(argv, cwd=repo, stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True)
+        subprocess.Popen(argv, cwd=repo, stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True,
+                         env=detached_env(repo))
 
 
 def spawn_watch(repo, e, pushed_at):
@@ -2241,9 +2491,11 @@ def spawn_watch(repo, e, pushed_at):
     where = e["worktree"] if os.path.isdir(e["worktree"]) else repo
     d, _c, _w = waiting_state(repo)
     argv = [sys.executable, os.path.realpath(__file__), "watch", "--repo", where, "--sha", e["tip"],
-            "--pushed-at", str(pushed_at)] + (["--close", e["worktree"]] if os.path.isdir(e["worktree"]) else [])
+            "--pushed-at", str(pushed_at)] + (["--close", e["worktree"]] if os.path.isdir(e["worktree"]) else []) + \
+        [x for f in e.get("fixes") or [] for x in ("--fixes", str(f))]
     with open(os.path.join(d, "watches.log"), "a") as logf:
-        subprocess.Popen(argv, cwd=where, stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True)
+        subprocess.Popen(argv, cwd=where, stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True,
+                         env=detached_env(repo))
 
 
 def bisect(repo, d, batch, base):
@@ -2268,6 +2520,22 @@ def bisect(repo, d, batch, base):
     return lo, out_hi
 
 
+def unread_note(d, reds, entries):
+    """The gate unread while changes wait: once per unread spell, an UNKNOWN inbox entry (they would wait unseen)."""
+    flag = os.path.join(d, "GATE_UNREAD")
+    if GATE_UNREAD not in reds:
+        if os.path.exists(flag):
+            os.unlink(flag)
+        return
+    if os.path.exists(flag):
+        return
+    open(flag, "w").write(ts() + "\n")
+    wlog(d, f"the gate is unread ({gate_unread_why[0]}): taken as red")
+    inbox_write("waiting", f"UNKNOWN: the waiting processor cannot read the gate ({gate_unread_why[0]}); {len(entries)} "
+                           "change(s) wait, taken as red. Hand it the token: `~/bin/agentctl waiting status` from a session "
+                           "with the vault unlocked", [], [], 2, cwd=entries[0].get("worktree") if entries else None)
+
+
 def waiting_round(repo, d, wt):
     """One batch: 'empty', 'paused', 'held', 'red' (nothing may go while red), 'landed', 'rejected', 'retry'.
 
@@ -2286,6 +2554,7 @@ def waiting_round(repo, d, wt):
     if st.get("held_until", 0) > time.time():
         return "held"
     reds = gate_reds(repo)
+    unread_note(d, reds, entries)
     with land_lock(repo) as held:
         if not held:
             return "retry"
@@ -2349,6 +2618,12 @@ def waiting_run(repo, once=False, service=False):
         return 0
     with contextlib.ExitStack() as stack:
         stack.callback(own.release)
+        try:
+            o_r = slug(repo)
+        except (Exception, SystemExit):
+            o_r = SHORT["movies"]
+        drop = TokenDrop(d, o_r).open()
+        stack.callback(drop.close)
         delays = backoff(float(os.environ.get("AGENTCTL_WAITING_POLL", WAITING_POLL)), 300)
         while True:
             restart_if_changed([own], ["waiting", "run", "--repo", repo] + (["--once"] if once else [])
@@ -2358,7 +2633,7 @@ def waiting_run(repo, once=False, service=False):
                     drop_waiting_tree(repo, wt)
                 if once:
                     return 0
-                time.sleep(float(os.environ.get("AGENTCTL_SERVICE_POLL", SERVICE_IDLE_POLL)))
+                drop.nap(float(os.environ.get("AGENTCTL_SERVICE_POLL", SERVICE_IDLE_POLL)))
                 continue
             state = waiting_round(repo, d, wt)
             if state == "empty":
@@ -2372,7 +2647,7 @@ def waiting_run(repo, once=False, service=False):
             if state in ("landed", "rejected"):
                 delays = backoff(float(os.environ.get("AGENTCTL_WAITING_POLL", WAITING_POLL)), 300)
                 continue
-            time.sleep(next(delays) if state in ("red", "held", "paused") else 5)
+            drop.nap(next(delays) if state in ("red", "held", "paused") else 5)
 
 
 SERVICE_LABEL = "net.bitcashier.agentctl-waiting"
@@ -2487,6 +2762,7 @@ def cmd_waiting(a):
         st.pop("held_until", None)
         save_batch_state(d, st)
         spawn_waiting_processor(repo)
+        offer_token(repo)
         print("resumed: the processor takes the next batch")
         return 0
     if a.wcmd == "status":
@@ -2499,8 +2775,10 @@ def cmd_waiting(a):
             print(f"checking: {len(st['checking'])} change(s) at {st['tip'][:10]} on {st['base'][:10]} since {st['since']}")
         if st.get("held_until", 0) > time.time():
             print(f"HELD until {dt.datetime.fromtimestamp(st['held_until']).strftime('%H:%M')}: {st.get('why')}")
+        offer_token(repo)
         reds = gate_reds(repo)
-        print(f"gate: {'RED (' + ', '.join(sorted(reds)) + ')' if reds else 'green (or unread)'}")
+        print("gate: " + (f"UNREAD, taken as red ({gate_unread_why[0]})" if GATE_UNREAD in reds else
+                          f"RED ({', '.join(sorted(reds))})" if reds else "green"))
         for e in entries:
             print(f"  {e['id']}  {e['worktree']}  {len(e['commits'])} commit(s), tip {e.get('tip', '')[:10]}, since {e['created']}")
         if not entries:
@@ -3354,7 +3632,7 @@ def is_sbt(cmd):
 
 def cmd_watch(a):
     repo = git(a.repo or os.getcwd(), "rev-parse", "--show-toplevel").strip()
-    return watch_landed(repo, a.sha, a.pushed_at, close=a.close)
+    return watch_landed(repo, a.sha, a.pushed_at, close=a.close, fixes=a.fixes or ())
 
 
 def owner_orphans_dead_only():
@@ -3544,7 +3822,7 @@ def cmd_orphans(a):
 # on new code (os.execv) writes nothing: the resumed process writes the verdict. Only a SIGKILL leaves no entry (its
 # owner record stays, and `agentctl orphans` names it).
 INBOX_COMMANDS = {"land", "watch", "wait", "waiting await"}
-VERDICT_LINE = re.compile(r"^(LANDED \S+|NOT LANDED|WAITING \S+|WATCH (OK|RED|UNKNOWN)\b|run \S+#\d+: |file \S+: )")
+VERDICT_LINE = re.compile(r"^(LANDED \S+|NOT LANDED|WAITING \S+|WATCH (OK|RED|UNKNOWN|STALLED)\b|run \S+#\d+: |file \S+: )")
 INBOX_TAIL = 15
 
 
@@ -3590,14 +3868,45 @@ class VerdictTee:
         return getattr(self.stream, name)
 
 
+def safe_cwd():
+    """The cwd, or what it was: a watch's WATCH OK closes the worktree it runs in, and os.getcwd() then raises (the
+    verdict was lost with it)."""
+    try:
+        return os.getcwd()
+    except OSError:
+        return os.environ.get("PWD") or "(removed)"
+
+
+INBOX_KINDS = [("FIX_FAILED", r"FIX FAILED"), ("FIX_OK", r"FIX OK"), ("FIX_UNVERIFIED", r"FIX UNVERIFIED"),
+               ("RED", r"WATCH RED"), ("OK", r"WATCH OK"), ("STALLED", r"WATCH STALLED|.*\bstalled\b"),
+               # a crash, a signal or an exit with no verdict: whatever it watched is unknown now
+               ("UNKNOWN", r"WATCH UNKNOWN|UNKNOWN:|crashed:|exited:|ended by signal|exit \d+ with no verdict"),
+               ("NOT_LANDED", r"NOT LANDED"), ("LANDED", r"LANDED "), ("WAITING", r"WAITING "), ("HELD", r"HELD:"),
+               ("CHECK", r"CHECK CAP")]
+WAIT_KINDS_DEFAULT = "RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN"
+
+
+def inbox_kind(verdict, final=True):
+    """An entry's kind, from its verdict line: what `inbox wait --kinds` selects on."""
+    v = verdict or ""
+    if not final:
+        return "WAITING"
+    for kind, pat in INBOX_KINDS:
+        if re.match(pat, v):
+            return kind
+    return "OTHER"
+
+
 def inbox_write(command, verdict, verdicts, tail, exit_code, final=True, cwd=None):
     """One inbox entry, written atomically; returns its id (None when the inbox cannot be written: never fatal)."""
     now = dt.datetime.now(dt.timezone.utc)
     eid = (f"{now.strftime('%Y%m%dT%H%M%S%f')}-{os.getpid()}-{re.sub(r'[^a-z]+', '-', command)}"
            + ("" if final else "-waiting"))
+    here = safe_cwd()
     rec = {"id": eid, "time": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "at": now.timestamp(), "command": command, "argv": sys.argv[1:],
-           "cwd": cwd or os.getcwd(), "pid": os.getpid(), "final": final, "exit": exit_code, "verdict": verdict,
-           "owner": os.environ.get("CLAUDE_CODE_SESSION_ID") or f"{os.environ.get('USER', '?')}@{os.getcwd()}",
+           "cwd": cwd or here, "pid": os.getpid(), "final": final, "exit": exit_code, "verdict": verdict,
+           "kind": inbox_kind(verdict, final),
+           "owner": os.environ.get("CLAUDE_CODE_SESSION_ID") or f"{os.environ.get('USER', '?')}@{here}",
            "verdicts": verdicts, "tail": tail}
     try:
         d = inbox_dir()
@@ -3627,7 +3936,8 @@ def with_inbox(command, handler, a):
             inbox_write(command, line, [line], tee.tail, None, final=False)
             waiting_line.append(line)
     tee = VerdictTee(sys.stdout, on_line)
-    sys.stdout, code, crash = tee, 1, None
+    errs = VerdictTee(sys.stderr)  # its last lines name a cause when stdout has no verdict
+    sys.stdout, sys.stderr, code, crash = tee, errs, 1, None
     try:
         code = handler(a)
         return code
@@ -3635,15 +3945,26 @@ def with_inbox(command, handler, a):
         code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
         if code >= 128:
             crash = f"ended by signal {code - 128}"
+        elif e.code is not None and not isinstance(e.code, int):  # SystemExit("agentctl: ..."): the message is the cause
+            crash = f"exited: {str(e.code).replace('agentctl: ', '')}"
         raise
     except BaseException as e:
         crash = f"crashed: {type(e).__name__}: {e}"
         raise
     finally:
-        sys.stdout = tee.stream
+        sys.stdout, sys.stderr = tee.stream, errs.stream
         tee.finish()
-        last = next((l for l in reversed(tee.tail) if l.strip()), "(no output)")
-        verdict = crash or (tee.verdicts[-1] if tee.verdicts else last)
+        errs.finish()
+        last = next((l for l in reversed(tee.tail) if l.strip()), None)
+        last_err = next((l.replace("agentctl: ", "") for l in reversed(errs.tail) if l.strip()), None)
+        if tee.verdicts:
+            verdict = crash or tee.verdicts[-1]
+        elif crash:
+            verdict = crash
+        elif code:  # never a bare exit: what it said last, on stderr first
+            verdict = f"exit {code} with no verdict line; it said last: {last_err or last or 'nothing'}"
+        else:
+            verdict = last or last_err or "exit 0 with no output"
         if not (crash is None and code == 0 and waiting_line and verdict == waiting_line[-1]):  # land ended AT WAITING:
             inbox_write(command, verdict, tee.verdicts, tee.tail, code if crash is None else (code or 1))  # written once
 
@@ -3661,7 +3982,64 @@ def inbox_entries():
     return sorted(out, key=lambda r: (r.get("at") or 0, r["id"]))
 
 
+def entry_line(e):
+    where = (e.get("cwd") or "").replace(HOME, "~")
+    state = f"exit {e.get('exit')}" if e.get("final", True) else "still running"
+    return f"{e['id']} {'read  ' if e['read'] else 'UNREAD'} {e.get('command')} {where} {state}: {e.get('verdict')}"
+
+
+def last_ack(d):
+    """When anything was last acknowledged (the newest file in acked/), 0 if never."""
+    acked = os.path.join(d, "acked")
+    try:
+        return max([os.stat(acked).st_mtime] + [os.stat(os.path.join(acked, n)).st_mtime for n in os.listdir(acked)])
+    except OSError:
+        return 0.0
+
+
+INBOX_WAIT_POLL = 1.0  # seconds between stat()s of the inbox directory ($AGENTCTL_INBOX_POLL)
+
+
+def inbox_wait(kinds, since_ack=False, timeout=0, verbose=False):
+    """THE NOTIFIER: block until an unread entry of `kinds` exists, print it (every one there is), exit 0; 2 at the
+    timeout. Cheap: one stat() of the inbox directory (and of acked/) a second, the entries read again only when either
+    changed (a new entry is an os.replace into the directory, an ack a file in acked/). No Forgejo, no git."""
+    d = inbox_dir()
+    os.makedirs(d, exist_ok=True)
+    want = {k.strip().upper().replace("-", "_") for k in kinds.split(",") if k.strip()}
+    floor = last_ack(d) if since_ack else 0.0
+    poll = float(os.environ.get("AGENTCTL_INBOX_POLL", INBOX_WAIT_POLL))
+    t0, seen = time.time(), None
+    while True:
+        try:
+            stamp = (os.stat(d).st_mtime_ns, os.stat(os.path.join(d, "acked")).st_mtime_ns
+                     if os.path.isdir(os.path.join(d, "acked")) else 0)
+        except OSError:
+            stamp = None
+        if stamp != seen:
+            seen = stamp
+            hits = [e for e in inbox_entries() if not e["read"] and (e.get("at") or 0) > floor
+                    and (e.get("kind") or inbox_kind(e.get("verdict"), e.get("final", True))) in want]
+            if hits:
+                for e in hits:
+                    print(entry_line(e))
+                    if verbose:
+                        for line in e.get("tail") or []:
+                            print(f"    {line}")
+                print(f"inbox: {len(hits)} to route; then `~/bin/agentctl inbox <id> --ack` and run `inbox wait` again")
+                return 0
+        if timeout and time.time() - t0 >= timeout:
+            print(f"inbox: no unread {','.join(sorted(want))} entry within {int(timeout)} s")
+            return 2
+        time.sleep(poll)
+
+
 def cmd_inbox(a):
+    if a.ids[:1] == ["wait"]:
+        if a.ids[1:]:
+            print("usage: agentctl inbox wait [--kinds K,...] [--since-ack] [--timeout S]")
+            return 2
+        return inbox_wait(a.kinds, a.since_ack, a.timeout, a.verbose)
     entries = inbox_entries()
     if a.ids:
         entries = [e for e in entries if any(e["id"].startswith(i) for i in a.ids)]
@@ -3675,9 +4053,7 @@ def cmd_inbox(a):
         print("inbox: no " + ("unread " if a.unread else "") + f"entries ({inbox_dir()})")
     else:
         for e in entries:
-            where = (e.get("cwd") or "").replace(HOME, "~")
-            state = f"exit {e.get('exit')}" if e.get("final", True) else "still running"
-            print(f"{e['id']} {'read  ' if e['read'] else 'UNREAD'} {e.get('command')} {where} {state}: {e.get('verdict')}")
+            print(entry_line(e))
             if a.verbose:
                 for line in e.get("tail") or []:
                     print(f"    {line}")
@@ -3802,6 +4178,8 @@ def main(argv=None):
     wt.add_argument("--repo")
     wt.add_argument("--pushed-at", type=float, default=None)
     wt.add_argument("--close", help="after WATCH OK, remove this worktree and its branch when proven merged")
+    wt.add_argument("--fixes", action="append", default=[], metavar="N",
+                    help="a run the landed commits claim to fix (Fixes-Red); the sha's own trailers are read too")
     sw = sub.add_parser("sweep", help="daily report: unmerged idle worktrees/branches (listed); remote branches merged into "
                                       "main (deleted, standing OK)")
     sw.add_argument("--repo", action="append", help="a checkout (repeatable); default movies")
@@ -3817,7 +4195,13 @@ def main(argv=None):
     cst.add_argument("--days", type=float, default=7)
     ib = sub.add_parser("inbox", help="every final verdict of land / watch / wait / waiting await (and land's WAITING), "
                                       "kept whether or not the agent that ran it is alive")
-    ib.add_argument("ids", nargs="*", metavar="ID", help="only these entries (an id prefix)")
+    ib.add_argument("ids", nargs="*", metavar="ID", help="only these entries (an id prefix); or `wait`: block until an "
+                                                          "unread entry of --kinds exists, print it, exit 0 (the notifier)")
+    ib.add_argument("--kinds", default=WAIT_KINDS_DEFAULT,
+                    help=f"wait: the kinds that wake it (default {WAIT_KINDS_DEFAULT}; also OK, FIX_OK, FIX_UNVERIFIED, "
+                         "LANDED, WAITING, HELD, CHECK, OTHER)")
+    ib.add_argument("--since-ack", action="store_true", help="wait: only entries newer than the last acknowledgement")
+    ib.add_argument("--timeout", type=float, default=0, help="wait: give up after S seconds, exit 2 (default: never)")
     ib.add_argument("--unread", action="store_true", help="only the entries not acknowledged yet")
     ib.add_argument("--ack", action="store_true", help="acknowledge the entries listed")
     ib.add_argument("--limit", type=int, default=30, help="the newest N (default 30; 0 = all)")
