@@ -14,9 +14,9 @@ cat >/dev/null # the session JSON Claude Code sends on stdin; not needed
 
 refresh() {
   local gate waiting inbox line
-  # ci-why --summary: each gate row, and for a red one who is fixing it (agentctl's `red`): one line
+  # ci-why --summary --cached (the line the always-on processor publishes; this session has no vault): each gate row, and for a red one who is fixing it (agentctl's `red`): one line
   #   gate RED (main #2066 → fix 0a5767c awaiting #2070; convergence green)   /   gate RED (main #2066 → NOBODY; …)
-  gate=$(cd "$repo" && ~/bin/agentctl ci-why --summary 2>/dev/null | tail -1)
+  gate=$(cd "$repo" && ~/bin/agentctl ci-why --summary --cached 2>/dev/null | tail -1)
   # waiting status: entries on `waiting` (red main), then "queued for their checks: N" and those entries
   waiting=$(cd "$repo" && ~/bin/agentctl waiting status 2>/dev/null | awk '
     /^queued for their checks/ { q = 1; next }

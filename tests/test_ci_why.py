@@ -224,3 +224,51 @@ class CiWhyMutationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CachedGateTest(CiWhyTest):
+    def setUp(self):
+        super().setUp()
+        import tempfile
+        self.gs = os.path.join(tempfile.mkdtemp(), "gate-summary.txt")
+        os.environ["AGENTCTL_GATE_SUMMARY"] = self.gs
+        self.addCleanup(os.environ.pop, "AGENTCTL_GATE_SUMMARY", None)
+
+    def write(self, line, age=0, repo=None):
+        import time
+        open(self.gs, "w").write(f"{int(time.time()) - age}\t{repo or A.slug('movies')}\t{line}\n")
+
+    def test_fresh_file_is_printed_without_a_live_read(self):
+        self.write("gate RED (main #9 -> NOBODY)")
+        rc, out, _ = self.why("--summary", "--cached")
+        self.assertEqual((rc, out.strip()), (1, "gate RED (main #9 -> NOBODY)"))
+
+    def test_old_file_is_never_shown_failed_live_read_is_unread(self):
+        self.write("gate green", age=400)
+        rc, out, _ = self.why("--summary", "--cached")  # no runs.json: the fake forge fails the live read
+        self.assertTrue(out.startswith("gate UNREAD (as of "), out)
+        self.assertNotIn("gate green", out)
+
+    def test_missing_or_other_repo_file_is_unread(self):
+        self.assertIn("gate UNREAD (as of never", self.why("--summary", "--cached")[1])
+        self.write("gate green", repo="x/y")
+        self.assertIn("gate UNREAD", self.why("--summary", "--cached")[1])
+
+    def test_old_file_falls_back_to_live_read(self):
+        self.write("gate green", age=400)
+        self.scenario([step_job for step_job in []])
+        rc, out, _ = self.why("--summary", "--cached")
+        self.assertTrue(out.startswith("gate RED"), out)
+
+    def test_publish_is_atomic_and_refuses_unread(self):
+        A.publish_gate_summary("a/b", "gate UNREAD (x)")
+        self.assertFalse(os.path.exists(self.gs))
+        A.publish_gate_summary("a/b", "gate green")
+        self.assertEqual(A.cached_gate_summary("a/b")[0], "gate green")
+        self.assertEqual(os.listdir(os.path.dirname(self.gs)), ["gate-summary.txt"])
+
+    def test_processor_publishes_the_gate(self):
+        self.scenario([])
+        A._last_gate_publish[0] = 0
+        A.maybe_publish_gate(os.path.expanduser("~/projects/movies"))
+        self.assertTrue(A.cached_gate_summary(A.slug(os.path.expanduser("~/projects/movies")))[0] or os.path.exists(self.gs))

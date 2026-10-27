@@ -51,7 +51,7 @@
 Full reference, examples and the standard agent workflow: ~/bin/AGENTCTL.md
 
 Scratchpad: $AGENTCTL_SCRATCH, else /private/tmp/claude-<uid>/*/<$CLAUDE_CODE_SESSION_ID>/scratchpad, else
-~/.cache/agentctl. Forgejo tokens come from $GH_TOKEN or `secrets get <ns> FORGEJO_API_TOKEN`; never printed.
+~/.cache/agentctl. Forgejo tokens come from $GH_TOKEN / $FORGEJO_API_TOKEN, else the waiting processor's private socket, else `secrets get <ns> FORGEJO_API_TOKEN` (absolute path); never printed.
 """
 WAIT_RUN_HELP = """Block until Forgejo runs finish; print only the verdicts.
 
@@ -206,21 +206,97 @@ def token_ns(o_r):
     return "movies" if o_r.startswith("pawelkrupinski/") else "bitcashier"
 
 
+SECRETS_FALLBACKS = (os.path.join(HOME, ".local", "bin", "secrets"), "/opt/homebrew/bin/secrets", "/usr/local/bin/secrets")
+_IN_PROCESSOR = [False]  # the processor serves the socket itself: it must never ask it
+
+
+def secrets_bin():
+    """`secrets` by absolute path: a detached or launchd process has a PATH without it."""
+    import shutil
+    for c in (shutil.which("secrets"),) + SECRETS_FALLBACKS:
+        if c and os.access(c, os.X_OK):
+            return c
+    return None
+
+
+def movies_repo_path():
+    return os.environ.get("AGENTCTL_MOVIES_REPO") or os.path.join(HOME, "projects", "movies")
+
+
+def token_from_processor(o_r):
+    """Ask the always-on processor (private 0600 socket, same uid) for the token it holds. None when it is not there."""
+    import socket
+    if _IN_PROCESSOR[0] or token_ns(o_r) != "movies":
+        return None
+    try:
+        d, _c, _w = waiting_state(movies_repo_path())
+        path = token_sock_path(d)
+        if not os.path.exists(path):
+            return None
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(3)
+            s.connect(path)
+            s.sendall(TOKEN_REQUEST)
+            s.shutdown(socket.SHUT_WR)
+            tok = s.recv(4096).decode().strip()
+        return tok if TOKEN_SHAPE.fullmatch(tok) else None
+    except (Exception, SystemExit):
+        return None
+
+
+def token_unavailable_note(ns, why):
+    """No source had the token: ONE inbox entry per spell (the flag clears when a token is read again)."""
+    if ns != "movies":
+        return
+    flag = reds_dir("TOKEN_UNAVAILABLE")
+    try:
+        if os.path.exists(flag):
+            return
+        os.makedirs(reds_dir(), exist_ok=True)
+        with open(flag, "w") as f:
+            f.write(ts() + "\n")
+        inbox_write("token", f"UNKNOWN: token unavailable ({why}): run `secrets unlock {ns}` in any session; the next "
+                             "land or `waiting status` re-seeds the processor", [], [], 2)
+    except (Exception, SystemExit):
+        pass
+
+
+def token_found(ns):
+    try:
+        os.unlink(reds_dir("TOKEN_UNAVAILABLE"))
+    except OSError:
+        pass
+
+
 def token(o_r):
+    """ONE credential path for every agentctl process: the environment, then the processor's socket, then `secrets`
+    (absolute path). No source: NoToken naming the cause, and one inbox entry."""
     if os.environ.get("GH_TOKEN"):
         return os.environ["GH_TOKEN"]
     ns = token_ns(o_r)
     if ns == "movies" and os.environ.get("FORGEJO_API_TOKEN"):  # a token the environment already carries
         return os.environ["FORGEJO_API_TOKEN"]
     if ns not in _tokens:
-        try:
-            r = subprocess.run(["secrets", "get", ns, "FORGEJO_API_TOKEN"], capture_output=True, text=True)
-        except OSError as e:  # launchd's PATH has no `secrets`
-            raise NoToken(f"agentctl: could not read the {ns} FORGEJO_API_TOKEN from the vault (secrets: {e.strerror})")
-        if r.returncode != 0 or not r.stdout.strip():
-            raise NoToken(f"agentctl: could not read the {ns} FORGEJO_API_TOKEN from the vault (locked for this process: "
-                          "its session ended, or `! secrets unlock " + ns + "`)")
-        _tokens[ns] = r.stdout.strip()
+        tok = token_from_processor(o_r)
+        why = "the waiting processor holds none"
+        if not tok:
+            sec = secrets_bin()
+            if not sec:
+                why += "; no `secrets` command found"
+            else:
+                try:
+                    r = subprocess.run([sec, "get", ns, "FORGEJO_API_TOKEN"], capture_output=True, text=True,
+                                       stdin=subprocess.DEVNULL)
+                    tok = r.stdout.strip() if r.returncode == 0 else ""
+                except OSError as e:
+                    tok, why = "", why + f"; secrets: {e.strerror}"
+                if not tok:
+                    why += "; the vault is locked for this process (its session ended, or `! secrets unlock " + ns + "`)"
+        if not tok:
+            token_unavailable_note(ns, why)
+            raise NoToken(f"agentctl: could not read the {ns} FORGEJO_API_TOKEN ({why})")
+        token_found(ns)
+        _tokens[ns] = tok
     return _tokens[ns]
 
 
@@ -1064,11 +1140,76 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, track=False):
     return red, "\n".join([head] + out)
 
 
+GATE_SUMMARY_MAX_AGE = 180  # s: a published gate line older than this is never shown as the gate
+GATE_LINE = re.compile(r"gate (RED|green)\b")
+
+
+def gate_summary_path():
+    return os.environ.get("AGENTCTL_GATE_SUMMARY") or os.path.join(HOME, ".cache", "agentctl", "gate-summary.txt")
+
+
+def publish_gate_summary(o_r, line):
+    """Atomically: `<epoch>\t<repo>\t<line>`. Only a read gate line is ever published (never UNREAD)."""
+    if not GATE_LINE.match(line):
+        return
+    path = gate_summary_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
+        f.write(f"{int(time.time())}\t{o_r}\t{line}\n")
+    os.replace(tmp, path)
+
+
+def cached_gate_summary(o_r, now=None):
+    """(line, written_epoch). line is None for a missing, malformed, other-repo, future-dated or too-old file."""
+    try:
+        epoch, repo_, line = open(gate_summary_path()).read().rstrip("\n").split("\t", 2)
+        epoch = int(epoch)
+    except (OSError, ValueError):
+        return None, None
+    age = (now or time.time()) - epoch
+    if repo_ != o_r or not GATE_LINE.match(line) or age < -5 or age > GATE_SUMMARY_MAX_AGE:
+        return None, epoch
+    return line, epoch
+
+
+_last_gate_publish = [0.0]
+
+
+def maybe_publish_gate(repo):
+    """The processor's loop, at most every GATE_PUBLISH_INTERVAL s: read the gate (it holds the token) and publish the
+    summary line for the status line. Never fatal; a failed read leaves the old file to age out (fail-closed)."""
+    if time.time() - _last_gate_publish[0] < env_num("AGENTCTL_GATE_PUBLISH", 45):
+        return
+    _last_gate_publish[0] = time.time()
+    try:
+        o_r = slug(repo)
+        _red, line = ci_why(o_r, summary=True)
+        publish_gate_summary(o_r, line.splitlines()[-1])
+    except (Exception, SystemExit) as e:
+        err(f"gate summary: skipped ({str(e).replace('agentctl: ', '')[:200]})")
+
+
 def cmd_ci_why(a):
     o_r = slug(a.repo) if a.repo else default_repo()
     target = None if a.target in (None, "main") else a.target
     if target and not target.isdigit():
         raise SystemExit("agentctl: ci-why takes a run id or `main`")
+    if getattr(a, "cached", False):
+        if not getattr(a, "summary", False) or target:
+            raise SystemExit("agentctl: ci-why --cached goes with --summary and main")
+        line, epoch = cached_gate_summary(o_r)
+        if line:
+            print(line)
+            return 1 if line.startswith("gate RED") else 0
+        try:
+            red, text = ci_why(o_r, a.tail, None, summary=True, track=False)
+            print(text)
+            return 1 if red else 0
+        except (Exception, SystemExit):
+            asof = time.strftime("%H:%M", time.localtime(epoch)) if epoch else "never"
+            print(f"gate UNREAD (as of {asof}: no fresh published gate, Forgejo not readable here)")
+            return 2
     red, text = ci_why(o_r, a.tail, target, summary=getattr(a, "summary", False), track=target is None)
     print(text)
     return 1 if red else 0
@@ -4633,6 +4774,7 @@ def token_sock_path(d):
 
 
 TOKEN_SHAPE = re.compile(r"[\w.~+/=-]{8,512}")
+TOKEN_REQUEST = b"?token\n"  # a client asking the processor for its token (not shaped like one)
 
 
 class TokenDrop:
@@ -4684,6 +4826,10 @@ class TokenDrop:
             conn.settimeout(5)
             try:
                 tok = conn.recv(4096).decode().strip()
+                if tok == TOKEN_REQUEST.decode().strip():  # a same-uid process (the socket is 0600) asks for the token
+                    mine = os.environ.get("FORGEJO_API_TOKEN" if token_ns(self.o_r) == "movies" else "GH_TOKEN", "")
+                    conn.sendall(mine.encode())
+                    return
             except (OSError, UnicodeDecodeError):
                 return
             if TOKEN_SHAPE.fullmatch(tok):
@@ -5068,12 +5214,14 @@ def waiting_run(repo, once=False, service=False):
             o_r = slug(repo)
         except (Exception, SystemExit):
             o_r = SHORT["movies"]
+        _IN_PROCESSOR[0] = True
         drop = TokenDrop(d, o_r).open()
         stack.callback(drop.close)
         delays = backoff(float(os.environ.get("AGENTCTL_WAITING_POLL", WAITING_POLL)), 300)
         while True:
             restart_if_changed([own], ["waiting", "run", "--repo", repo] + (["--once"] if once else [])
                                + (["--service"] if service else []))
+            maybe_publish_gate(repo)  # the gate line for the status line (~/.cache/agentctl/gate-summary.txt)
             maybe_patrol(repo)  # the reds: who fixes each, RED UNCLAIMED, a dispatched fixer (always-on: launchd)
             spawn_checks(repo, d)  # THE LAND QUEUE: each queued change's checks, in a checker of its own
             if not service and not waiting_entries(d) and queued_entries(d):
@@ -5302,7 +5450,7 @@ def default_ns():
 def vault_state(ns):
     """'unlocked', 'locked' or 'unknown: <why>' -- `secrets status` only; never unlock, never read a value."""
     try:
-        r = subprocess.run(["secrets", "status", ns], capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
+        r = subprocess.run([secrets_bin() or "secrets", "status", ns], capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
     except FileNotFoundError:
         return "unknown: no `secrets` command"
     except subprocess.TimeoutExpired:
@@ -5338,7 +5486,7 @@ def export_lines():
 
 def token_works(ns):
     """Read the Forgejo token inside this call (never printed) and ask the API who it is. (ok, detail)."""
-    r = subprocess.run(["secrets", "get", ns, "FORGEJO_API_TOKEN"], capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL)
+    r = subprocess.run([secrets_bin() or "secrets", "get", ns, "FORGEJO_API_TOKEN"], capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL)
     tok = r.stdout.strip()
     if r.returncode or not tok:
         return False, f"no FORGEJO_API_TOKEN in vault {ns}"
@@ -6860,6 +7008,7 @@ def main(argv=None):
     cw.add_argument("--repo", "-R")
     cw.add_argument("--tail", type=int, default=6, metavar="N", help="relevant log lines per failed job")
     cw.add_argument("--summary", action="store_true", help="one line for the status line: each gate row, and who is fixing a red one")
+    cw.add_argument("--cached", action="store_true", help="with --summary: the line the waiting processor published if under 3 min old, else a live read, else `gate UNREAD (as of HH:MM ...)`")
     ld = sub.add_parser("land", help="fetch, rebase onto forgejo/main, prepush-check, push (hook runs), verify: LANDED <sha>",
                         description=LAND_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     ld.add_argument("--repo", help="checkout to land from (default: cwd)")
