@@ -117,7 +117,7 @@ class RedBase(unittest.TestCase):
 
     def patrol(self, t, dispatch=True):
         units = self.units()
-        return A.red_patrol(MOVIES, self.r.path, units, A.find_fixers(self.r.path, units), dispatch=dispatch, now_=t)
+        return A.red_patrol(MOVIES, self.r.path, units, A.find_fixers(self.r.path, units, now_=t), dispatch=dispatch, now_=t)
 
     def inbox(self, kind=None):
         es = A.inbox_entries()
@@ -143,9 +143,9 @@ class FixingShownTest(RedBase):
         rc, out = self.why()
         self.assertEqual(rc, 1, out)
         self.assertIn("Main: RED (run 40 #20", out)
-        self.assertIn("  fixing: NOBODY", out)
+        self.assertIn("  fixing: UNASSIGNED", out)
         rc, out = self.why("--summary")
-        self.assertEqual(out.strip().splitlines()[-1], "gate RED (main #20 → NOBODY; convergence green)")
+        self.assertEqual(out.strip().splitlines()[-1], "gate RED (main #20 → UNASSIGNED; convergence green)")
 
     def test_a_claim_is_shown_under_the_red_row_and_in_the_summary(self):
         wt = self.r.worktree("repo-wt-fixer", branch="fixer")
@@ -172,7 +172,7 @@ class FixingShownTest(RedBase):
         finally:
             os.environ.pop("AGENTCTL_AGENT_NAME")
         self.assertEqual(rc, 0, out)
-        self.assertIn("  fixing: NOBODY", self.why()[1])
+        self.assertIn("  fixing: UNASSIGNED", self.why()[1])
 
     def test_a_newer_run_failing_the_same_way_keeps_the_claim(self):
         os.environ["AGENTCTL_CLAIM_PID"] = str(os.getpid())
@@ -205,7 +205,7 @@ class FixingShownTest(RedBase):
 
     def test_a_commit_naming_another_run_fixes_nothing_here(self):
         self.worktree_commit("repo-wt-other", "fix\n\nFixes-Red: 999")
-        self.assertIn("  fixing: NOBODY", self.why()[1])
+        self.assertIn("  fixing: UNASSIGNED", self.why()[1])
 
     def test_a_waiting_entry_with_the_fix_is_waiting(self):
         wt = self.r.worktree("repo-wt-wait", branch="wait")
@@ -234,7 +234,7 @@ class FixingShownTest(RedBase):
         runs[0]["headSha"] = fix
         self.put("runs.json", runs)
         out = self.why()[1]
-        self.assertIn("  fixing: NOBODY", out)
+        self.assertIn("  fixing: UNASSIGNED", out)
         self.assertIn(f"(fix {fix[:9]} landed, and #22 still fails this way)", out)
 
     def test_reds_outside_the_gate_show_who_fixes_them_too(self):
@@ -283,7 +283,7 @@ class StaleClaimTest(RedBase):
                 os.utime(os.path.join(gd, f), (old, old))
         self.claim(self.dead_pid(), 45, wt)
         out = self.why()[1]
-        self.assertIn("  fixing: NOBODY (stale claim: gone-agent", out)
+        self.assertIn("  fixing: UNASSIGNED (assigning: the patrol assigns its live author or dispatches a fixer within minutes) (stale claim: gone-agent", out)
         self.assertIn("no commit or activity for", out)
         self.assertIn("STALE", self.tool("red", "list")[1])
         removed = A.sweep_claims()
@@ -305,8 +305,7 @@ class StaleClaimTest(RedBase):
                 os.utime(os.path.join(gd, f), (old, old))
         self.claim(self.dead_pid(), 45, wt)
         t = time.time()
-        self.patrol(t)
-        acts = self.patrol(t + 11 * 60)
+        acts = self.patrol(t) + self.patrol(t + 11 * 60)
         self.assertTrue(any("DISPATCHED" in a for a in acts), acts)
         self.wait_fixer()
 
@@ -368,9 +367,8 @@ class DispatchTest(RedBase):
     def test_a_red_nobody_fixes_gets_one_headless_fixer(self):
         os.environ["FAKE_CLAUDE_SLEEP"] = "1.5"
         t = time.time()
-        self.patrol(t)
-        acts = self.patrol(t + 11 * 60)
-        self.assertTrue(any(a.startswith("RED UNCLAIMED") for a in acts), acts)
+        acts = self.patrol(t) + self.patrol(t + 11 * 60)
+        self.assertFalse(any(a.startswith("RED UNCLAIMED") for a in acts), acts)  # dispatched at once: never NOBODY
         disp = [a for a in acts if "DISPATCHED" in a]
         self.assertEqual(len(disp), 1, acts)
         wt = f"{self.r.path}-wt-red-20"
@@ -404,7 +402,7 @@ class DispatchTest(RedBase):
         self.assertEqual(A.all_claims(), [])  # released at its end
         log = open(os.path.join(self.tmp.name, "reds", "dispatch.log")).read()
         self.assertIn("DISPATCHED pid", log)
-        self.assertIn("nobody fixing it for 11 min", log)
+        self.assertIn("(no live author)", log)
 
     def test_a_failing_fixer_is_fixer_failed_and_wakes_the_orchestrator(self):
         os.environ["FAKE_CLAUDE_RESULT"] = "I looked.\nGAVE UP: FooSpec needs the owner's fixture"
@@ -435,8 +433,7 @@ class DispatchTest(RedBase):
         rec["dispatches"] = [{"at": "x", "run": 20}, {"at": "y", "run": 20}]
         A.write_json(A.sig_path(u["sig"]), rec)
         t = time.time()
-        self.patrol(t)
-        acts = self.patrol(t + 11 * 60)
+        acts = self.patrol(t) + self.patrol(t + 11 * 60)
         self.assertTrue(any(a.startswith("RED ESCALATE: Main #20 [test (rest)] still red after 2") for a in acts), acts)
         self.assertEqual(self.patrol(t + 30 * 60), [])  # once
         self.assertEqual(len(self.inbox("RED_ESCALATE")), 1)
@@ -444,7 +441,6 @@ class DispatchTest(RedBase):
 
     def test_a_claim_made_while_the_patrol_decides_stops_the_dispatch(self):
         t = time.time()
-        self.patrol(t)
         real, n = A.find_fixers, [0]
 
         def racing(repo, units, now_=None, o_r=None):
@@ -486,17 +482,6 @@ class DispatchTest(RedBase):
         self.assertEqual([a for a in self.patrol(t + 13 * 60) if "DISPATCHED" in a][:1] != [], True)
         self.wait_fixer()
 
-    def test_the_author_first(self):
-        # the author was told (WATCH RED) and is alive: no dispatch within the 10 min
-        os.environ["CLAUDE_PID"] = str(os.getpid())
-        try:
-            A.inbox_write("watch", "WATCH RED: Main #20 test (rest) (it contains your abc)", [], [], 3)
-        finally:
-            os.environ.pop("CLAUDE_PID")
-        t = time.time()
-        self.patrol(t)
-        self.assertEqual(self.patrol(t + 5 * 60), [])
-
     def test_an_author_whose_session_is_gone_does_not_delay_the_fixer(self):
         p = subprocess.Popen(["true"])
         p.wait()
@@ -506,7 +491,7 @@ class DispatchTest(RedBase):
         finally:
             os.environ.pop("CLAUDE_PID")
         acts = self.patrol(time.time())
-        self.assertTrue(any("DISPATCHED" in a and "author gone" in a for a in acts), acts)
+        self.assertTrue(any("DISPATCHED" in a and "no live author" in a for a in acts), acts)
         self.wait_fixer()
 
     def test_dispatch_needs_the_interactive_auto_mode_and_says_what_the_owner_must_set(self):
@@ -517,16 +502,16 @@ class DispatchTest(RedBase):
         self.assertIn("NOT DISPATCHED: interactive sessions run in permission mode 'default'", out)
         self.assertIn('permissions.defaultMode to "auto"', out)
         t = time.time()
-        self.patrol(t)
-        acts = self.patrol(t + 11 * 60)
+        acts = self.patrol(t) + self.patrol(t + 11 * 60)
         self.assertTrue(any("NOT DISPATCHED" in a for a in acts), acts)
         self.assertEqual(A.fixer_records(), [])
 
     def test_auto_off_stops_the_dispatch(self):
         self.assertIn("automatic dispatch: OFF", self.tool("red", "auto", "off")[1])
         t = time.time()
-        self.patrol(t)
-        self.assertTrue(any("dispatch is OFF" in a for a in self.patrol(t + 11 * 60)))
+        acts = self.patrol(t)
+        self.assertTrue(any("dispatch is OFF" in a for a in acts), acts)
+        self.assertIn("main #20 → NOBODY (dispatch is OFF", self.why("--summary")[1])
         self.assertIn("automatic dispatch: ON", self.tool("red", "auto", "on")[1])
 
     def test_red_dispatch_by_hand_refuses_a_red_being_fixed(self):
@@ -602,7 +587,7 @@ class BaselineTest(RedBase):
         self.assertEqual(set(A.local_red()["checks"]), {"sbt"})
         rc, out = self.why()
         self.assertIn("Local checks: RED on plain forgejo/main", out)
-        self.assertIn("  fixing: NOBODY", out)
+        self.assertIn("  fixing: UNASSIGNED", out)
         self.assertIn("brokenspec should work", out)
         os.environ["AGENTCTL_CLAIM_PID"] = str(os.getpid())
         try:

@@ -1923,6 +1923,7 @@ def cached_gate_summary(o_r, now=None):
 
 
 _last_gate_publish = [0.0]
+_seen_gate_reds = set()
 _bounded = {}
 
 
@@ -1951,6 +1952,12 @@ def maybe_publish_gate(repo):
         try:
             o_r = slug(repo)
             snap = ci_state_refresh(o_r)  # ONE read of Forgejo per cycle; everything below reads it
+            reds_now = {g["decided"]["databaseId"] for g in snap["gate"]
+                        if g.get("decided") and g["decided"].get("conclusion") in RED_CONCLUSIONS}
+            if reds_now - _seen_gate_reds:  # a gate red this cycle first sees: the patrol assigns it now, not in 2 min
+                _last_patrol[0] = 0.0
+            _seen_gate_reds.clear()
+            _seen_gate_reds.update(reds_now)
             _red, line = ci_why(o_r, summary=True, snap=snap, repo=repo)
             publish_gate_summary(o_r, line.splitlines()[-1], epoch=snap["at"])
         except (Exception, SystemExit) as e:
@@ -2215,6 +2222,10 @@ def claim_stale(c, now_=None):
     if c.get("state") == "blocked":
         return None  # waits on the owner: never stale, never unassigned
     t = now_ if now_ is not None else time.time()
+    if c.get("author"):  # assigned to its live author at the moment of red: holds for the window, unless it acted
+        why = author_stale(c, t)
+        if why is not False:
+            return why
     quiet = (t - claim_heartbeat(c)) / 60
     limit = env_num("AGENTCTL_RED_STALE_MIN", RED_STALE_MIN)
     alive = proc_alive(c.get("pid"), c.get("process_start"))
@@ -2422,6 +2433,17 @@ def find_fixers(repo, units, now_=None, o_r=None):
                                     or (r.get("createdAt") and parse_time(r["createdAt"]).timestamp() > ct - WATCH_SLACK))],
                               key=lambda r: r["databaseId"])
                 put(u["key"], None, "landed", who=subj[:50], sha=sha, awaiting=pend[0].get("number") if pend else None)
+    try:  # a dispatched fixer between its spawn and its own claim is already on it
+        for r in fixer_records():
+            if r["alive"]:
+                for k in match({str(r.get("run"))}, r.get("sigs") or [r.get("sig")]):
+                    if not out[k]["fixers"]:
+                        put(k, r.get("worktree"), "claimed", who=f"red-fixer-{r.get('run')}", dispatched=True)
+    except (Exception, SystemExit):
+        pass
+    for u in units:
+        rec = read_record(sig_path(u["sig"])) if u.get("sig") else None
+        out[u["key"]]["unassigned"] = (rec or {}).get("unassigned")
     for k in out:
         out[k]["fixers"] = sorted(out[k]["fixers"].values(), key=lambda f: -RED_STATE_RANK[f["state"]])
     return out
@@ -2443,10 +2465,22 @@ def fixing_lines(info, indent="  ", label=""):
     lines = [f"{indent}fixing{label}: {fixer_text(f)}" for f in info["fixers"]]
     if not lines:
         extra = "; ".join(info["stale"])
-        lines = [f"{indent}fixing{label}: NOBODY" + (f" (stale claim: {extra})" if extra else "")]
+        lines = [f"{indent}fixing{label}: {nobody_text(info)}" + (f" (stale claim: {extra})" if extra else "")]
     for sha, r in info["failed"]:
         lines.append(f"{indent}  (fix {sha[:9]} landed, and #{r.get('number')} still fails this way)")
     return lines
+
+
+UNASSIGNED = "UNASSIGNED (assigning: the patrol assigns its live author or dispatches a fixer within minutes)"
+
+
+def nobody_text(info, short=False):
+    """NOBODY only with the reason nobody can be put on it (dispatch OFF, a cap, the budget, an escalation); before the
+    patrol's first look, UNASSIGNED."""
+    why = (info or {}).get("unassigned")
+    if why:
+        return f"NOBODY ({why[:70] if short else why})"
+    return "UNASSIGNED" if short else UNASSIGNED
 
 
 def short_flow(name):
@@ -2461,7 +2495,7 @@ def summary_fixer(infos):
             if best is None or RED_STATE_RANK[f["state"]] > RED_STATE_RANK[best["state"]]:
                 best = f
     if best is None:
-        return "NOBODY"
+        return nobody_text(next((i for i in infos if i.get("unassigned")), None), short=True)
     if best["state"] == "landed":
         return f"fix {best['sha'][:7]} awaiting #{best['awaiting']}" if best.get("awaiting") else f"fix {best['sha'][:7]} landed"
     if best["state"] == "blocked":
@@ -2659,11 +2693,14 @@ def red_patrol(o_r, repo, units, infos, dispatch=False, now_=None):
             if act:
                 actions.append(act)
                 continue
+        if dispatch and u["gate"] and not fixed:  # the moment of red: an author or a fixer NOW, never a wait
+            actions += assign_gate_red(o_r, repo, g, t)
+            continue
         with reds_lock():
             recs = {x["sig"]: read_record(sig_path(x["sig"])) or {} for x in g}
             if fixed:
                 for sig, rec in recs.items():
-                    rec.update(nobody_since=None, noted=False)
+                    rec.update(nobody_since=None, noted=False, unassigned=None)
                     write_json(sig_path(sig), rec)
                 continue
             for rec in recs.values():
@@ -2693,6 +2730,238 @@ def red_patrol(o_r, repo, units, infos, dispatch=False, now_=None):
     return actions
 
 
+# -- assignment at the moment of red (the owner, 2026-10-27: "why is no one assigned to the red? root cause structural
+# fix" -- Main #2138 said `fixing: NOBODY` right after it went red: the author-first window only notified and nobody
+# claimed, the "author" could be a finished agent, and one sha stood for a run of several commits). The first patrol
+# that sees a gate red assigns it AT ONCE: a LIVE author (a pid alive AND git or inbox activity within
+# AUTHOR_ACTIVE_MIN) gets a claim "author <worktree>, notified, until HH:MM"; with none, a fixer is dispatched now. An
+# author who neither commits nor claims within AUTHOR_WINDOW_MIN is dispatched past. Every commit of the red run since
+# the workflow's last green run is attributed (queue entries' landed heads, LANDED inbox entries, HEAD / reflog);
+# each live author is notified, one is assigned, one fixer at most. Infra-shaped reds (every failed job infra or
+# unclear) skip the authors: an infra-diagnosis fixer at once. NOBODY then means only that dispatch cannot run
+# (OFF, a cap, the budget, an escalation), and says why.
+AUTHOR_WINDOW_MIN = 10   # an assigned author must commit or claim within this ($AGENTCTL_AUTHOR_WINDOW_MIN)
+AUTHOR_ACTIVE_MIN = 15   # live = a pid alive and activity within this ($AGENTCTL_AUTHOR_ACTIVE_MIN)
+_skip_reason = {}        # sig -> why the last dispatch decision for it did not dispatch
+
+
+def red_commits(repo, u, limit=30):
+    """The commits of the red run since the workflow's last green run on main (newest first); just its head when the
+    range cannot be read here."""
+    red = u["run"].get("headSha")
+    if not repo or not red or not git_ok(repo, "cat-file", "-e", f"{red}^{{commit}}"):
+        return [red] if red else []
+    rid = u["run"].get("databaseId") or 0
+    green = next((r for r in u.get("runs") or [] if r.get("status") == "completed" and r.get("conclusion") == "success"
+                  and (r.get("databaseId") or 0) < rid and r.get("headSha")), None)
+    if green and git_ok(repo, "cat-file", "-e", f"{green['headSha']}^{{commit}}"):
+        r = git(repo, "rev-list", f"--max-count={limit}", red, f"^{green['headSha']}", check=False)
+    else:
+        r = git(repo, "rev-list", "--max-count=1", red, check=False)
+    return [s for s in r.stdout.split() if s] if r.returncode == 0 else [red]
+
+
+def landed_heads(repo):
+    """{pushed head sha: {worktree, claude_pid, session}}: queue entries that landed, and LANDED inbox entries."""
+    out = {}
+    try:
+        d, _c, _w = waiting_state(repo)
+        for e in waiting_entries(d, open_only=False):
+            if e.get("landed_sha"):
+                out[e["landed_sha"]] = {"worktree": e.get("worktree"), "claude_pid": e.get("claude_pid"),
+                                        "session": e.get("session")}
+    except (Exception, SystemExit):
+        pass
+    try:
+        for e in inbox_entries():
+            m = re.match(r"LANDED ([0-9a-f]{7,40})", str(e.get("verdict") or ""))
+            if m and e.get("cwd"):
+                cur = next((k for k in out if k.startswith(m.group(1))), None)
+                rec = out.setdefault(cur or m.group(1), {"worktree": e["cwd"]})
+                rec.setdefault("claude_pid", None)
+                rec["claude_pid"] = rec.get("claude_pid") or e.get("claude_pid")
+    except (Exception, SystemExit):
+        pass
+    return out
+
+
+def agent_pids_in(wts):
+    """{worktree: [pid]} of the agent processes (claude, agentctl land/watch, the hook) whose cwd is in one of wts."""
+    want = [os.path.realpath(w) for w in wts if w]
+    if not want:
+        return {}
+    pids = [pid for pid, _pp, _e, cmd in ps() if pid != os.getpid()
+            and (AGENT_WORK.search(cmd or "") or re.search(r"agentctl (watch|wait)\b", cmd or ""))]
+    out = {}
+    for pid, cwd in lsof_cwds(pids).items() if pids else ():
+        c = os.path.realpath(cwd)
+        for w in want:
+            if c == w or c.startswith(w + "/"):
+                out.setdefault(w, []).append(pid)
+    return out
+
+
+def worktree_activity(repo, wt, entries=()):
+    """The worktree's last sign of work: git (index, HEAD log, last commit) or an inbox entry from it."""
+    beats = [gitdir_activity(repo, wt) or 0.0]
+    r = git(wt, "log", "-1", "--format=%ct", check=False)
+    if r.returncode == 0 and r.stdout.strip().isdigit():
+        beats.append(float(r.stdout.strip()))
+    beats += [float(e.get("at") or 0) for e in entries if os.path.realpath(e.get("cwd") or "/") == os.path.realpath(wt)]
+    return max(beats)
+
+
+def red_authors(repo, u, now_=None):
+    """[{worktree, shas, pids, live, activity}] for the commits of the red run, the newest commit's author first."""
+    t = now_ if now_ is not None else time.time()
+    commits = red_commits(repo, u)
+    if not repo or not commits:
+        return []
+    heads = landed_heads(repo)
+    owner, pending = {}, []
+    for c in reversed(commits):  # oldest first: a change's commits end at its landed head
+        pending.append(c)
+        h = heads.get(c) or next((v for k, v in heads.items() if c.startswith(k) or k.startswith(c)), None)
+        if h:
+            for p in pending:
+                owner[p] = h
+            pending = []
+    for c in pending:
+        wt = worktree_holding(repo, c)
+        if wt:
+            owner[c] = {"worktree": wt}
+    by_wt = {}
+    for c in commits:  # newest first
+        h = owner.get(c)
+        if not h or not h.get("worktree") or not allowed_path(h["worktree"]) or not os.path.isdir(h["worktree"]):
+            continue
+        a = by_wt.setdefault(os.path.realpath(h["worktree"]), {"worktree": h["worktree"], "shas": [], "pids": set()})
+        a["shas"].append(c)
+        if h.get("claude_pid"):
+            a["pids"].add(int(h["claude_pid"]))
+    try:
+        entries = inbox_entries()
+    except OSError:
+        entries = []
+    running = agent_pids_in(list(by_wt))
+    active = env_num("AGENTCTL_AUTHOR_ACTIVE_MIN", AUTHOR_ACTIVE_MIN) * 60
+    out = []
+    for k, a in by_wt.items():
+        a["pids"] = sorted(set(a["pids"]) | set(running.get(k, [])))
+        a["activity"] = worktree_activity(repo, a["worktree"], entries)
+        alive = [p for p in a["pids"] if proc_alive(p)]
+        a["live_pid"] = alive[0] if alive else None
+        a["live"] = bool(alive) and t - a["activity"] <= active
+        out.append(a)
+    return out
+
+
+def author_claim(u, group, a, t):
+    """The claim that assigns the red to its live author until the window ends."""
+    wt = a["worktree"]
+    until = t + env_num("AGENTCTL_AUTHOR_WINDOW_MIN", AUTHOR_WINDOW_MIN) * 60
+    who = f"author {os.path.basename(wt)}"
+    c = {"who": who, "worktree": wt, "cwd": wt, "pid": a["live_pid"], "process_start": process_start(a["live_pid"]),
+         "started": iso_at(t), "beat": iso_at(t), "author": True, "author_until": until, "author_shas": a["shas"],
+         "note": f"author, notified, until {time.strftime('%H:%M', time.localtime(until))}",
+         "run": str(u["run"].get("number")), "run_id": u["run"].get("databaseId"),
+         "runs": sorted(set().union(*[x["names"] for x in group])), "sigs": sorted({x["sig"] for x in group if x.get("sig")}),
+         "workflow": u["workflow"], "jobs": sorted({x["job"] for x in group}), "state": "claimed"}
+    path = reds_dir("claims", claim_key(who, wt, c["sigs"][0] if c["sigs"] else c["run"]) + ".json")
+    with claim_lock():
+        write_json(path, c)
+    return c
+
+
+def author_stale(c, t):
+    """None while an author claim holds, else why not: its session ended, or the window passed with no commit or claim
+    refresh of its own (it acted: the ordinary claim rules apply from then on)."""
+    if not proc_alive(c.get("pid"), c.get("process_start")):
+        return "its author's session ended"
+    started = parse_time(c["started"]).timestamp()
+    wt = c.get("worktree")
+    r = git(wt, "log", "-1", "--format=%ct", check=False) if wt and os.path.isdir(wt) else None
+    acted = bool(r and r.returncode == 0 and r.stdout.strip().isdigit() and float(r.stdout.strip()) > started)
+    acted = acted or parse_time(c.get("beat") or c["started"]).timestamp() > started + 1
+    if acted:
+        return False  # the ordinary rules
+    if t >= float(c.get("author_until") or 0):
+        return f"its author did not act within {int(env_num('AGENTCTL_AUTHOR_WINDOW_MIN', AUTHOR_WINDOW_MIN))} min"
+    return None
+
+
+def set_unassigned(group, why):
+    with reds_lock():
+        for x in group:
+            if not x.get("sig"):
+                continue
+            rec = read_record(sig_path(x["sig"])) or {}
+            if rec.get("unassigned") != why:
+                rec["unassigned"] = why
+                write_json(sig_path(x["sig"]), rec)
+
+
+def assign_gate_red(o_r, repo, g, t):
+    """The moment of red: a live author is assigned (and every live author notified), else a fixer is dispatched now,
+    else the red says why nobody is on it (RED UNCLAIMED once, with the reason). Returns the actions."""
+    u, acts = g[0], []
+    jobs = ", ".join(x["job"] for x in g)
+    infra = {x["kind"] for x in g} <= {"infra", "unclear"}
+    authors = [] if infra else red_authors(repo, u, t)
+    rec0 = read_record(sig_path(u["sig"])) or {}
+    tried = set(rec0.get("authors_tried") or [])
+    live = [a for a in authors if a["live"] and os.path.realpath(a["worktree"]) not in tried]
+    if live:
+        chosen = live[0]
+        c = author_claim(u, g, chosen, t)
+        with reds_lock():
+            for x in g:
+                rec = read_record(sig_path(x["sig"])) or {}
+                rec["authors_tried"] = sorted(set(rec.get("authors_tried") or []) | {os.path.realpath(chosen["worktree"])})
+                rec["unassigned"] = None
+                write_json(sig_path(x["sig"]), rec)
+        for a in live:
+            mine = a is chosen
+            line = (f"RED AUTHOR: {u['workflow']} #{u['run'].get('number')} [{jobs}] contains your "
+                    f"{', '.join(s[:9] for s in a['shas'])} ({a['worktree'].replace(HOME, '~')}): "
+                    + (f"ASSIGNED to you until {c['note'].rsplit(' ', 1)[-1]} -- fix it (`Fixes-Red: {u['run'].get('number')}`) "
+                       f"or `~/bin/agentctl red claim {u['run'].get('number')}`; no commit or claim by then and a fixer "
+                       "is dispatched" if mine else "notified (another author is assigned)"))
+            inbox_write("red", line, [line], [x.get("line") or "" for x in g][:INBOX_TAIL], 1, cwd=a["worktree"])
+            acts.append(line)
+        return acts
+    why = ("infra-shaped: diagnose" if infra else
+           "no live author" + (f" (authors: {', '.join(os.path.basename(a['worktree']) for a in authors)}, idle or gone)"
+                               if authors else "") + (", the assigned author did not act" if tried else ""))
+    _skip_reason.pop(u["sig"], None)
+    msg = maybe_dispatch(o_r, repo, u, read_record(sig_path(u["sig"])) or rec0, t, why=why, group=g)
+    if msg:
+        acts.append(msg)
+    reason = _skip_reason.get(u["sig"])
+    if msg and (" DISPATCHED" in msg or msg.startswith("RED REVERT")) and not reason:
+        set_unassigned(g, None)
+        return acts
+    if reason is None:
+        alive = [r for r in fixer_records() if r["alive"] and set(r.get("sigs") or [r.get("sig")]) & {x["sig"] for x in g}]
+        if alive:
+            set_unassigned(g, None)  # a fixer is starting: its claim follows
+            return acts
+        reason = (read_record(sig_path(u["sig"])) or {}).get("unassigned") or "not dispatched (see reds/dispatch.log)"
+    set_unassigned(g, reason)
+    with reds_lock():
+        recs = {x["sig"]: read_record(sig_path(x["sig"])) or {} for x in g}
+        if not any(r.get("noted") for r in recs.values()):
+            line = (f"RED UNCLAIMED: {u['workflow']} #{u['run'].get('number')} [{jobs}]: NOBODY -- {reason}"
+                    + (f" (on {u['predicts']}: PREDICTS MAIN RED)" if u.get("predicts") else "")
+                    + f" -- `~/bin/agentctl red claim {u['run'].get('number')}`, or assign an agent")
+            inbox_write("red", line, [line], [x.get("line") or "" for x in g][:INBOX_TAIL], 1)
+            acts.insert(0, line)
+            for sig, r in recs.items():
+                r["noted"] = True
+                write_json(sig_path(sig), r)
+    return acts
+
+
 def maybe_dispatch(o_r, repo, u, rec, t, why, group=None):
     """One dispatch decision for a due red: escalate, skip (a cap, a blocker) or dispatch. Returns what it did."""
     if len(rec.get("dispatches") or []) >= RED_MAX_DISPATCHES:
@@ -2717,7 +2986,9 @@ def maybe_dispatch(o_r, repo, u, rec, t, why, group=None):
             line = (f"RED ESCALATE: {u['workflow']} #{u['run'].get('number')} [{u['job']}] still red after "
                     f"{len(rec['dispatches'])} dispatched fixers; not dispatched again -- a person must take it")
             inbox_write("red", line, [line], [u.get("line") or ""], 1)
+            _skip_reason[u["sig"]] = f"escalated after {len(rec['dispatches'])} fixers: a person must take it"
             return line
+        _skip_reason[u["sig"]] = f"escalated after {len(rec.get('dispatches') or [])} fixers: a person must take it"
         return None
     alive = [r for r in fixer_records() if r["alive"]]
     mine = {x["sig"] for x in (group or [u])}
@@ -2725,28 +2996,34 @@ def maybe_dispatch(o_r, repo, u, rec, t, why, group=None):
         return None
     cap = int(env_num("AGENTCTL_RED_MAX_FIXERS", RED_MAX_FIXERS))
     if len(alive) >= cap:
+        _skip_reason[u["sig"]] = f"fixer cap {cap} reached ({len(alive)} alive)"
         return dispatch_log(u, f"SKIPPED ({len(alive)} fixers alive, cap {cap})")
     if not u["gate"]:
         out_cap = int(env_num("AGENTCTL_RED_MAX_OUTSIDE", RED_MAX_OUTSIDE))
         if sum(1 for r in alive if not r.get("gate")) >= out_cap:
+            _skip_reason[u["sig"]] = f"outside-the-gate fixer cap {out_cap} reached"
             return dispatch_log(u, f"SKIPPED (outside the gate: {out_cap} fixer(s) alive, its cap)")
     daily = int(env_num("AGENTCTL_RED_DAILY_CAP", RED_DAILY_CAP))
     if dispatches_today(t) >= daily:
+        _skip_reason[u["sig"]] = f"daily dispatch budget {daily} spent"
         return dispatch_log(u, f"SKIPPED (daily cap {daily} reached)", once_per_day=True)
     blocker = dispatch_blocker()
     if blocker:
+        _skip_reason[u["sig"]] = blocker
         return dispatch_log(u, f"NOT DISPATCHED: {blocker}", once_per_day=True)
     with claim_lock():
         # the patrol's picture is old by now (a claim, a queued or waiting Fixes-Red change may have arrived): look again
         # under the lock `red claim` takes, immediately before the spawn
         try:
-            now_info = find_fixers(scan_repo_for(o_r, repo), [x for x in (group or [u])], o_r=o_r)
+            now_info = find_fixers(scan_repo_for(o_r, repo), [x for x in (group or [u])], now_=t, o_r=o_r)
             fixers = [f for i in now_info.values() for f in i.get("fixers", [])]
         except (Exception, SystemExit):
             fixers = []
         if fixers:
             return dispatch_log(u, f"NOT DISPATCHED: claimed meanwhile ({fixer_text(fixers[0])})")
         ok, msg = red_dispatch(o_r, repo, u, why=why, group=group)
+    if not ok:
+        _skip_reason[u["sig"]] = f"dispatch failed: {str(msg)[-120:]}"
     return msg
 
 
@@ -2799,8 +3076,9 @@ def fixer_prompt(u, wt, brief, resume_note=None):
                 "documents each check; reproduce it in your worktree, root-cause and fix it (never loosen the check), "
                 "commit with a `Fixes-Red: local` trailer and land with `~/bin/agentctl land` in the foreground. End "
                 "at `LANDED <sha>`, or `GAVE UP: <why>`.")
-    elif u["kind"] == "infra":
-        task = (f"Red run {u['workflow']} #{num} (run id {rid}) failed in job `{u['job']}`, and ci-why calls it INFRA-SHAPED. "
+    elif u["kind"] in ("infra", "unclear"):  # the group's primary: no test failure in the run at all
+        task = (f"Red run {u['workflow']} #{num} (run id {rid}) failed in job `{u['job']}`, and ci-why calls it "
+                f"{'INFRA-SHAPED' if u['kind'] == 'infra' else 'UNCLEAR (no FAILED/error line: runner lost? log truncated?)'}. "
                 f"DIAGNOSE ONLY: `~/bin/agentctl ci-why {rid}`, the CI runners' health (~/bin/ci-runners-page, the "
                 "ci-runner host's systemd units over ssh, read-only), disk, docker, the tunnel. Make NO code change and "
                 "do not rerun anything to get green. If it needs a deploy, a restart or any owner action, run "
@@ -5623,6 +5901,8 @@ def enqueue(repo, main_ref, sh, a):
         e = {"id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{seq}", "seq": seq,
              "worktree": repo, "head": head, "commits": commits, "fixes": sorted(fixes_of(repo, commits)),
              "status": "queued", "created": ts(), "keep_worktree": bool(getattr(a, "keep_worktree", False)),
+             "claude_pid": int(os.environ["CLAUDE_PID"]) if (os.environ.get("CLAUDE_PID") or "").isdigit() else None,
+             "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or None,
              "base": git(repo, "rev-parse", main_ref).strip()}
         save_entry(d, e)
     ahead = len(queued_entries(d)) - 1
@@ -8069,7 +8349,7 @@ def safe_cwd():
         return os.environ.get("PWD") or "(removed)"
 
 
-INBOX_KINDS = [("BRANCH_RED", r"BRANCH RED"), ("RED_UNCLAIMED", r"RED UNCLAIMED"), ("RED_ESCALATE", r"RED ESCALATE"), ("BLOCKED", r"RED BLOCKED ON OWNER"),
+INBOX_KINDS = [("BRANCH_RED", r"BRANCH RED"), ("RED_UNCLAIMED", r"RED UNCLAIMED"), ("RED_AUTHOR", r"RED AUTHOR"), ("RED_ESCALATE", r"RED ESCALATE"), ("BLOCKED", r"RED BLOCKED ON OWNER"),
                ("RED_DISPATCHED", r"RED DISPATCHED"), ("RED_REVERT", r"RED REVERT"), ("RED_FLAKE", r"RED FLAKE"), ("FIXER_LANDED", r"RED FIXER [^:]*: LANDED "),
                ("FIXER_FAILED", r"RED FIXER "), ("RED_CLEARED", r"RED CLEARED"), ("FIX_FAILED", r"FIX FAILED"), ("FIX_OK", r"FIX OK"), ("FIX_UNVERIFIED", r"FIX UNVERIFIED"),
                ("RED", r"WATCH RED"), ("OK", r"WATCH OK"), ("STALLED", r"WATCH STALLED|.*\bstalled\b"),
@@ -8077,7 +8357,7 @@ INBOX_KINDS = [("BRANCH_RED", r"BRANCH RED"), ("RED_UNCLAIMED", r"RED UNCLAIMED"
                ("UNKNOWN", r"WATCH UNKNOWN|UNKNOWN:|crashed:|exited:|ended by signal|exit \d+ with no verdict"),
                ("NOT_LANDED", r"NOT LANDED"), ("LANDED", r"LANDED "), ("WAITING", r"WAITING "), ("QUEUED", r"QUEUED "), ("HELD", r"HELD:"),
                ("CHECK", r"CHECK CAP")]
-WAIT_KINDS_DEFAULT = "RED,BRANCH_RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_ESCALATE,BLOCKED,FIXER_FAILED,RED_REVERT"
+WAIT_KINDS_DEFAULT = "RED,BRANCH_RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_AUTHOR,RED_ESCALATE,BLOCKED,FIXER_FAILED,RED_REVERT"
 
 
 def inbox_kind(verdict, final=True):

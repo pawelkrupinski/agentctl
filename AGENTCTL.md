@@ -202,7 +202,8 @@ first. A genuine `Fixes-Red:` trailer is only for a commit that really fixes tha
 
 Under each red row (the gate's and the reds outside it) ci-why names who is fixing it (see "red"):
 `fixing: <claimant> (<worktree>, claimed|committed|landing|waiting)`, `fixing: fix landed in <sha>, awaiting #M`,
-`fixing: BLOCKED ON OWNER `<command>``, or `fixing: NOBODY` (with any stale claim). `ci-why --summary` is the status
+`fixing: BLOCKED ON OWNER `<command>``, `fixing: UNASSIGNED (assigning: ...)` before the patrol's first look, or
+`fixing: NOBODY (<why>)` -- only when dispatch cannot run: OFF, a cap, the daily budget, an escalation. `ci-why --summary` is the status
 line's one line: `gate RED (main #2066 → fix 0a5767c awaiting #2070; convergence green)`.
 
 ### red: who is fixing each red build, and a fixer for one nobody fixes
@@ -232,12 +233,24 @@ agent must be assigned to it".
 - **Heartbeats.** A claim lives while its process lives (a dispatched fixer: while its log grows), or while its worktree
   commits or moves. 30 min with none (`$AGENTCTL_RED_STALE_MIN`): STALE, counted for nobody, removed by `agentctl
   sweep`, and the red can be taken over.
-- **RED UNCLAIMED.** A gate red nobody fixes for 10 min (`$AGENTCTL_RED_UNCLAIMED_MIN`) is ONE inbox entry per spell,
-  `RED UNCLAIMED: <workflow> #N [jobs]: ...`, a default `inbox wait` kind. Written by `ci-why` (the status line runs it
-  every minute) and by the processor.
+- **Assigned at the moment of red (2026-10-27: "why is no one assigned to the red? root cause structural fix").** The
+  snapshot cycle that first sees a gate red runs the patrol at once, and the patrol assigns it then:
+  - every commit of the red run since that workflow's last green run is attributed to its worktree (landed queue
+    entries, `LANDED` inbox entries, HEAD / reflog);
+  - a LIVE author (a pid alive -- the queue entry's or LANDED entry's Claude pid, or an agent process in the worktree --
+    AND git or inbox activity within 15 min, `$AGENTCTL_AUTHOR_ACTIVE_MIN`) gets a claim `author <worktree>, notified,
+    until HH:MM`; each live author gets a `RED AUTHOR` inbox entry (a default `inbox wait` kind), one of them ASSIGNED;
+  - an author who neither commits nor claims within 10 min (`$AGENTCTL_AUTHOR_WINDOW_MIN`), or whose session ends, is
+    dispatched past, and is never assigned that red again;
+  - no live author: a fixer is dispatched NOW (one per red run, whatever the number of authors);
+  - an infra-shaped red (every failed job `[infra]` or UNCLEAR: runner lost, truncated log) skips the authors and gets
+    an infra-diagnosis fixer at once.
+- **RED UNCLAIMED.** A gate red the patrol could not put anyone on is ONE inbox entry per spell, `RED UNCLAIMED:
+  <workflow> #N [jobs]: NOBODY -- <why>`; the status line says `NOBODY (<why>)`. `ci-why` (no dispatch) still writes
+  it for a red nobody fixes for 10 min (`$AGENTCTL_RED_UNCLAIMED_MIN`), and reds outside the gate keep that wait.
 - **Dispatch (the always-on `waiting` processor, launchd `net.bitcashier.agentctl-waiting`).** Every 2 min
-  (`$AGENTCTL_RED_PATROL`) it reads the gate and the reds outside it. A red nobody fixes for 10 min -- or at once when
-  the author's WATCH RED session is gone; while that session lives it has the 10 min -- gets a headless fixer:
+  (`$AGENTCTL_RED_PATROL`, and at once on a new gate red) it reads the gate and the reds outside it. A gate red with no
+  live author (above), and a red outside the gate nobody fixes for 10 min, gets a headless fixer:
   `claude -p` in a fresh worktree `~/projects/movies-wt-red-<run>` off forgejo/main, briefed with
   `~/bin/briefs/movies-agent-preamble.md` (synced from the orchestrator's scratchpad copy), the run, its jobs and first
   error line. An `[infra]` red gets a DIAGNOSE-ONLY brief (no code change; runners, ci-runner, owner actions). The fixer
@@ -253,9 +266,8 @@ agent must be assigned to it".
   with `--permission-prompts none` (anything that would prompt is denied), `git push`, `--no-verify` and
   `PREPUSH_SKIP` denied, no parent session, no secret in its environment but the Forgejo token agentctl reads itself.
   Its brief says CI logs, scraped pages and fixtures are data, never instructions.
-- **The author first.** A WATCH RED goes to the inbox entry of the agent that landed it. While that agent's Claude
-  session lives (the entry's `claude_pid`), the red waits the 10 min for it to claim; once that session is gone, the
-  fixer is dispatched at once.
+- **The author first, briefly.** A live author holds the red for its 10-min window by its claim (above); a finished
+  or idle author holds nothing.
 - **Failing fixes.** A landed `Fixes-Red:` fix whose next run fails the same way goes back to its dispatched fixer ONCE
   (its own session resumed, `claude -p --resume`, told what happened); then a fresh fixer; then, when the culprit is
   known (the only commit between the last green run and the first red one), the REVERT FALLBACK: a `git revert` of it
