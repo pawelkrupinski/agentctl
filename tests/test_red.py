@@ -123,11 +123,11 @@ class RedBase(unittest.TestCase):
         es = A.inbox_entries()
         return [e for e in es if kind is None or e.get("kind") == kind]
 
-    def wait_fixer(self, timeout=30):
+    def wait_fixer(self, timeout=30, n=1):
         t0 = time.time()
         while time.time() - t0 < timeout:
             done = [e for e in self.inbox() if e.get("kind") in ("FIXER_LANDED", "FIXER_FAILED")]
-            if done:
+            if len(done) >= n:
                 return done
             time.sleep(0.2)
         self.fail("no fixer verdict in the inbox")
@@ -626,3 +626,177 @@ class HeartbeatTest(RedBase):
         self.assertIn("quiet for 45 min", A.claim_stale(c))
         c["dispatched"] = False  # an interactive claimant alive is alive
         self.assertIsNone(A.claim_stale(c))
+
+
+class LifecycleTest(RedBase):
+    """Items 8 (failing fixes), 4 (superseded), 3 (flakes), 11 (outside the gate), 12 (an unreadable gate)."""
+
+    def setUp(self):
+        super().setUp()
+        self.saved_slug = A.slug
+        A.slug = lambda repo: MOVIES
+        os.environ["AGENTCTL_RED_UNCLAIMED_MIN"] = "0"
+
+    def tearDown(self):
+        A.slug = self.saved_slug
+        os.environ.pop("AGENTCTL_RED_UNCLAIMED_MIN", None)
+        super().tearDown()
+
+    def patrol_now(self, dispatch=True):
+        A._gate_lists.clear()
+        A._outside_lists.clear()
+        return A.patrol_repo(self.r.path, dispatch=dispatch)
+
+    def runs(self, *rs):
+        self.put("runs.json", list(rs) + [run(39, 19, "Identity model convergence", "identity-model-convergence.yml", self.sha)])
+
+    def test_a_signature_passing_on_the_next_run_with_no_fix_is_a_flake_kept_open_until_its_fix_lands(self):
+        self.patrol_now(dispatch=False)  # Main #20 red: its signature is recorded
+        self.runs(run(41, 21, "Main", "main.yml", self.sha), run(40, 20, "Main", "main.yml", self.sha, conclusion="failure"))
+        acts = self.patrol_now(dispatch=False)
+        self.assertTrue(any(a.startswith("RED FLAKE: Main #20 [test (rest)] passed on the next run #21") for a in acts), acts)
+        self.assertEqual(len(self.inbox("RED_FLAKE")), 1)
+        self.assertEqual(list(A.flakes().values())[0]["count"], 1)
+        out = self.why()[1]
+        self.assertIn("Flaky (passed on the next run", out)
+        self.assertIn("Main #20 [test (rest)] 1x", out)
+        # a flake gets a fixer too (outside the gate's priority), briefed to make it deterministic
+        acts = self.patrol_now()
+        self.assertTrue(any("DISPATCHED" in a for a in acts), acts)
+        self.wait_fixer()
+        rec = json.load(open(glob.glob(os.path.join(self.tmp.name, "claude-out", "*.json"))[0]))
+        self.assertIn("FLAKE: Make it deterministic", rec["argv"][rec["argv"].index("-p") + 1].replace("it is a FLAKE. M", "FLAKE: M"))
+        # its fix lands: closed
+        self.r.write("fix.txt", "deterministic\n")
+        self.r.commit("FooSpec: a fixed clock\n\nFixes-Red: 20")
+        self.r.push()
+        acts = self.patrol_now(dispatch=False)
+        self.assertTrue(any(a.startswith("RED FLAKE FIXED") for a in acts), acts)
+        self.assertNotIn("Flaky", self.why()[1])
+
+    def test_a_red_cleared_by_another_change_tells_its_fixer_to_stop(self):
+        wt = self.r.worktree("repo-wt-fixer", branch="fixer")
+        os.environ["AGENTCTL_CLAIM_PID"] = str(os.getpid())
+        try:
+            self.tool("red", "claim", "20", "--repo", "movies", cwd=wt)
+        finally:
+            os.environ.pop("AGENTCTL_CLAIM_PID")
+        self.patrol_now(dispatch=False)
+        # a fix by someone else landed (naming #20), and the next run passes: superseded, not a flake
+        self.r.write("other.txt", "x\n")
+        self.r.commit("the real fix\n\nFixes-Red: 20")
+        self.r.push()
+        self.runs(run(41, 21, "Main", "main.yml", self.sha), run(40, 20, "Main", "main.yml", self.sha, conclusion="failure"))
+        acts = self.patrol_now(dispatch=False)
+        self.assertTrue(any(a.startswith("RED CLEARED: Main #20 [test (rest)] no longer fails: fixed by") for a in acts), acts)
+        self.assertIn("told to stop", acts[0])
+        self.assertTrue(os.path.exists(os.path.join(wt, "RED-STOP.md")))
+        self.assertEqual(A.all_claims(), [])
+        self.assertEqual(self.inbox("RED_FLAKE"), [])
+
+    def test_a_failed_fix_goes_back_to_its_fixer_once_then_a_fresh_one_then_the_revert(self):
+        # the red: one commit (the culprit) between the last green run (#15, head = its parent) and the first red (#20)
+        parent = self.sha
+        self.r.write("culprit.txt", "breaks FooSpec\n")
+        culprit = self.r.commit("the culprit")
+        self.r.push()
+        self.put(f"api-repos_pawelkrupinski_movies_git_commits_{culprit}.json", {"author": {"name": "x"}, "message": "c"})
+        base = [run(40, 20, "Main", "main.yml", culprit, conclusion="failure"), run(30, 15, "Main", "main.yml", parent)]
+        self.runs(*base)
+        self.put("run-40.json", {**json.load(open(os.path.join(self.d, "run-40.json"))), "headSha": culprit})
+        acts = self.patrol_now()  # fixer 1
+        self.assertTrue(any("DISPATCHED pid" in a for a in acts), acts)
+        self.wait_fixer()
+        # fixer 1 "landed" abcdef1234 = a real commit on main naming #20; #22 contains it and fails the same way
+        self.r.write("fix.txt", "attempt 1\n")
+        fix1 = self.r.commit("fix attempt 1\n\nFixes-Red: 20")
+        self.r.push()
+        rec_path = glob.glob(os.path.join(self.tmp.name, "reds", "20", "fixer.json"))[0]
+        rec = json.load(open(rec_path))
+        rec["verdict"] = f"LANDED {fix1[:10]}"
+        A.write_json(rec_path, rec)
+        self.put("run-44.json", {**json.load(open(os.path.join(self.d, "run-40.json"))), "number": 22, "headSha": fix1})
+        self.put("run-44.log", open(os.path.join(self.d, "run-40.log")).read())
+        self.runs(run(44, 22, "Main", "main.yml", fix1, conclusion="failure"), *base)
+        acts = self.patrol_now()
+        self.assertTrue(any("DISPATCHED (resumed)" in a for a in acts), acts)  # back to the same fixer, once
+        self.wait_fixer(n=2)
+        resumed = [json.load(open(p)) for p in glob.glob(os.path.join(self.tmp.name, "claude-out", "*.json"))]
+        argv = [r["argv"] for r in resumed if "--resume" in r["argv"]][0]
+        self.assertEqual(argv[argv.index("--resume") + 1], rec["session"])
+        self.assertIn(f"YOUR FIX {fix1[:10]} LANDED", argv[argv.index("-p") + 1])
+        acts = self.patrol_now()  # it is not resumed twice: a fresh fixer (the 2nd dispatch)
+        self.assertTrue(any("DISPATCHED pid" in a and "resumed" not in a for a in acts), acts)
+        self.wait_fixer(n=3)
+        landed = []
+        saved_land, A.spawn_land = A.spawn_land, lambda wt, env, log: landed.append(wt) or 4242
+        self.addCleanup(setattr, A, "spawn_land", saved_land)
+        acts = self.patrol_now()  # 2 dispatched fixers failed and the culprit is known: the revert, through land
+        self.assertTrue(any(a.startswith(f"RED REVERT: Main #22 [test (rest)] still red after 2 dispatched fixers; "
+                                         f"its culprit {culprit[:10]} is known") for a in acts), acts)
+        wt = f"{self.r.path}-wt-revert-22"
+        msg = sh(wt, "git", "log", "-1", "--format=%B")
+        self.assertIn(f"This reverts commit {culprit}", msg)
+        self.assertIn("Fixes-Red: 22", msg)
+        self.assertEqual(landed, [wt])  # landed by `agentctl land`: the normal hook
+        self.assertEqual(len(self.inbox("RED_REVERT")), 1)
+        self.assertIn(f"repo-wt-revert-22 ({wt}, committed)", self.why()[1])  # the revert is its fixer meanwhile
+        self.assertEqual([a for a in self.patrol_now() if "REVERT" in a or "ESCALATE" in a], [])
+        sh(self.r.path, "git", "worktree", "remove", "--force", wt)  # the revert went nowhere, and it is still red:
+        acts = self.patrol_now()  # RED ESCALATE, never the revert again
+        self.assertTrue(any(a.startswith("RED ESCALATE") for a in acts), acts)
+
+    def test_reds_outside_the_gate_get_fixers_under_their_own_cap(self):
+        self.runs(run(41, 21, "Main", "main.yml", self.sha), run(61, 31, "Nightly", "nightly.yml", self.sha, conclusion="failure"),
+                  run(62, 32, "Weekly", "weekly.yml", self.sha, conclusion="failure"))
+        for rid, num, wf in ((61, 31, "Nightly"), (62, 32, "Weekly")):
+            self.put(f"run-{rid}.json", {"jobs": [{"name": "stress", "status": "completed", "conclusion": "failure",
+                                                   "steps": [{"name": "Run", "conclusion": "failure"}]}],
+                                         "headSha": self.sha, "number": num, "status": "completed", "conclusion": "failure",
+                                         "workflowName": wf})
+            self.put(f"run-{rid}.log", f"stress\tRun\t2026-10-27T08:00:00Z [error] {wf} boom\n")
+        os.environ["FAKE_CLAUDE_SLEEP"] = "2"
+        try:
+            acts = self.patrol_now()
+        finally:
+            os.environ.pop("FAKE_CLAUDE_SLEEP")
+        self.assertEqual(len([a for a in acts if "DISPATCHED pid" in a]), 1, acts)
+        self.assertTrue(any("SKIPPED (outside the gate: 1 fixer(s) alive, its cap)" in a for a in acts), acts)
+        self.assertEqual(self.inbox("RED_UNCLAIMED"), [])  # only a gate red is RED UNCLAIMED
+        self.wait_fixer()
+
+    def test_an_unreadable_gate_dispatches_nothing_and_says_so_once_with_an_infra_check(self):
+        saved = A.gh_json
+        A.gh_json = lambda *a: (_ for _ in ()).throw(A.NoToken("agentctl: could not read the movies FORGEJO_API_TOKEN"))
+        try:
+            A._last_patrol[0] = 0
+            os.environ["AGENTCTL_RED_PATROL"] = "1"
+            with contextlib.redirect_stderr(io.StringIO()):
+                A.maybe_patrol(self.r.path)
+                A._last_patrol[0] = 0
+                A.maybe_patrol(self.r.path)
+        finally:
+            A.gh_json = saved
+            os.environ["AGENTCTL_RED_PATROL"] = "0"
+        un = self.inbox("UNKNOWN")
+        self.assertEqual(len(un), 1)
+        self.assertIn("UNKNOWN: the red patrol cannot read the gate (could not read the movies FORGEJO_API_TOKEN)", un[0]["verdict"])
+        self.assertIn("Infra check: Forgejo API localhost:3000", un[0]["verdict"])
+        self.assertEqual(A.fixer_records(), [])
+        self.patrol_now(dispatch=False)  # read again: the spell ends
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "reds", "GATE_UNREAD")))
+
+
+class StatuslineTest(unittest.TestCase):
+    def test_a_stale_cache_says_as_of_and_nobody_stands_out(self):
+        home = tempfile.mkdtemp()
+        cache = os.path.join(home, ".cache", "agentctl")
+        os.makedirs(os.path.join(cache, "statusline.lock"))  # a refresh "running": none is started
+        with open(os.path.join(cache, "statusline.txt"), "w") as f:
+            f.write("gate RED (main #20 → NOBODY; convergence green) · waiting: 0 · inbox: 1 unread\n")
+        old = time.time() - 600
+        os.utime(os.path.join(cache, "statusline.txt"), (old, old))
+        r = subprocess.run([os.path.join(HERE, "..", "claude-statusline")], input="{}", capture_output=True, text=True,
+                           env=dict(os.environ, HOME=home))
+        self.assertIn("\x1b[1;31mNOBODY\x1b[0m", r.stdout)
+        self.assertIn(" · as of " + time.strftime("%H:%M", time.localtime(old)), r.stdout)

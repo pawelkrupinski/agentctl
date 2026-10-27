@@ -248,6 +248,32 @@ agent must be assigned to it".
   with `--permission-prompts none` (anything that would prompt is denied), `git push`, `--no-verify` and
   `PREPUSH_SKIP` denied, no parent session, no secret in its environment but the Forgejo token agentctl reads itself.
   Its brief says CI logs, scraped pages and fixtures are data, never instructions.
+- **The author first.** A WATCH RED goes to the inbox entry of the agent that landed it. While that agent's Claude
+  session lives (the entry's `claude_pid`), the red waits the 10 min for it to claim; once that session is gone, the
+  fixer is dispatched at once.
+- **Failing fixes.** A landed `Fixes-Red:` fix whose next run fails the same way goes back to its dispatched fixer ONCE
+  (its own session resumed, `claude -p --resume`, told what happened); then a fresh fixer; then, when the culprit is
+  known (the only commit between the last green run and the first red one), the REVERT FALLBACK: a `git revert` of it
+  with `Fixes-Red: N`, landed by `agentctl land` through the normal hook (`RED REVERT` in the inbox); then
+  `RED ESCALATE`.
+- **Superseded.** A signature that stops failing while a fix of someone else's landed (or the next run just passes it
+  after it was red for a while): `RED CLEARED`, and every claimant is told to stop (the inbox, plus `RED-STOP.md` in its
+  worktree; a dispatched fixer's wrapper ends it at once).
+- **Flakes.** A signature that passes on the NEXT run with no fix landed is a flake: `RED FLAKE` (with its count in
+  `~/.cache/agentctl/reds/flakes.json`), shown by ci-why under `Flaky`, kept open (and its claim) until a fix naming it
+  lands, and dispatched after the gate's reds, most frequent first, briefed "make it deterministic". Nothing ever reruns
+  a run to green.
+- **Main's own local checks.** When a change's pre-push dry run fails, land runs the same checks on plain forgejo/main's
+  tree (`git commit-tree main^{tree} -p <head>`, `--checks-only <head>..<that>`). Failures that main shares (same check,
+  same normalized lines) are main's own red: `KNOWN RED: … not held against this change`, recorded in
+  `reds/local.json`, shown by ci-why as `Local checks` (and in the status line), claimable as `red claim local`,
+  dispatched like any red; a later passing run of those checks clears it. The push itself still runs the hook: movies'
+  pre-push has no baseline mode yet, so such a change still waits for main's fix (never a bypass).
+- **An unreadable gate** (Forgejo, the tunnel, the vault or the token down): the patrol dispatches nothing, writes ONE
+  `UNKNOWN: the red patrol cannot read the gate (…)` per spell with an infra check (ports 3000 / 2222, the token),
+  and pushes fail closed (an unread gate is red).
+- **Nobody awake.** The launchd processor patrols and dispatches with no session open; every verdict waits in the
+  inbox. The status line says `as of HH:MM` once its cache is over 5 min old.
 
 ### land: lock, rebase, check, push, verify, watch
 

@@ -980,7 +980,7 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, track=False):
     try:
         rows = [(n, d, _gate_lists.get(n, []), True) for n, d, _nw, _s in gate]
         units = gate_red_units(o_r, rows, [(n, r, _outside_lists.get(n, []), False) for n, r, _s, _c in others])
-        units += local_units()
+        units += local_units() + flake_units()
         for u in units:
             units_of.setdefault((u["workflow"], u["run"].get("databaseId")), []).append(u)
         infos = find_fixers(scan_repo_for(o_r, repo), units)
@@ -1029,6 +1029,12 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, track=False):
         for u in local:
             out.append(f"  [{u['job']}] {u['line'][:160]}")
         parts.append(f"local checks \u2192 {summary_fixer(finfos)}")
+    fl = [u for u in units if u.get("flake")] if units_of else []
+    if fl:
+        out.append("Flaky (passed on the next run with no fix; open until a fix lands; most frequent first):")
+        for u in fl:
+            out.append(f"  {u['workflow']} #{u['run'].get('number')} [{u['job']}] {u['flake_count']}x: {u['line'][:120]}")
+            out += fixing_lines(infos.get(u["key"]), "    ")
     head = f"ci-why {o_r}: " + ("main is RED for the gate" if red else "main is green for the gate")
     if others_err is not None:
         out.append(f"outside the gate: could not list main's runs ({others_err})")
@@ -1615,10 +1621,18 @@ def red_patrol(o_r, repo, units, infos, dispatch=False, now_=None):
     t = now_ if now_ is not None else time.time()
     limit = env_num("AGENTCTL_RED_UNCLAIMED_MIN", RED_UNCLAIMED_MIN) * 60
     actions, reds_entries = [], inbox_red_entries()
-    groups = sorted(red_groups([u for u in units if u.get("sig")]), key=lambda g: (not g[0]["gate"], g[0]["workflow"]))
+    groups = sorted(red_groups([u for u in units if u.get("sig")]),
+                    key=lambda g: (0 if g[0]["gate"] else 1 if g[0].get("flake") else 2, -(g[0].get("flake_count") or 0),
+                                   g[0]["workflow"]))
     for g in groups:
         u = g[0]
         fixed = any((infos.get(x["key"]) or {}).get("fixers") for x in g)
+        if not fixed:
+            failed = [f for x in g for f in (infos.get(x["key"]) or {}).get("failed") or []]
+            act = handle_failed_fix(o_r, repo, g, {"failed": failed}, dispatch) if failed else None
+            if act:
+                actions.append(act)
+                continue
         with reds_lock():
             recs = {x["sig"]: read_record(sig_path(x["sig"])) or {} for x in g}
             if fixed:
@@ -1656,6 +1670,19 @@ def red_patrol(o_r, repo, units, infos, dispatch=False, now_=None):
 def maybe_dispatch(o_r, repo, u, rec, t, why, group=None):
     """One dispatch decision for a due red: escalate, skip (a cap, a blocker) or dispatch. Returns what it did."""
     if len(rec.get("dispatches") or []) >= RED_MAX_DISPATCHES:
+        culprit = None if rec.get("reverted") or u["workflow"] == LOCAL_FLOW else culprit_of(repo, u)
+        if culprit:
+            ok, msg = red_revert(o_r, repo, u, culprit)
+            with reds_lock():
+                rec = read_record(sig_path(u["sig"])) or rec
+                rec["reverted"] = {"at": ts(), "culprit": culprit, "ok": ok, "what": msg}
+                write_json(sig_path(u["sig"]), rec)
+            line = (f"RED REVERT: {u['workflow']} #{u['run'].get('number')} [{u['job']}] still red after "
+                    f"{len(rec['dispatches'])} dispatched fixers; its culprit {culprit[:10]} is known: {msg}")
+            inbox_write("red", line, [line], [], 0 if ok else 1)
+            dispatch_log(u, line)
+            if ok:
+                return line
         if not rec.get("escalated"):
             with reds_lock():
                 rec = read_record(sig_path(u["sig"])) or rec
@@ -1807,7 +1834,8 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, group=None):
            "jobs": [x["job"] for x in group], "run": num, "run_id": u["run"].get("databaseId"), "workflow": u["workflow"], "job": u["job"],
            "kind": u["kind"], "line": u.get("line"), "gate": u["gate"], "flake": bool(u.get("flake")), "worktree": wt,
            "started": ts(), "why": why, "log": os.path.join(d, f"claude-{k}.log"), "names": sorted(u["names"]),
-           "session": resume.get("session") if resume else None, "resume": bool(resume)}
+           "session": resume.get("session") if resume else None, "resume": bool(resume),
+           "resume_note": resume.get("note") if resume else None}
     write_json(rec_path, rec)
     with open(os.path.join(d, "fixer.log"), "a") as logf:
         p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=wt,
@@ -1913,6 +1941,232 @@ def red_fixer(a):
             pass
     print(line)
     return 0 if verdict.startswith("LANDED") else 1
+
+
+# -- failing fixes: back to the same fixer once, then a fresh one, then a revert of a known culprit, then RED ESCALATE
+def fixer_of_sha(sha):
+    """The dispatched fixer record whose verdict landed sha, or None."""
+    for r in fixer_records():
+        m = re.match(r"LANDED ([0-9a-f]{7,40})", str(r.get("verdict") or ""))
+        if m and (sha.startswith(m.group(1)) or m.group(1).startswith(sha[:10])):
+            return r
+    return None
+
+
+def handle_failed_fix(o_r, repo, g, info, dispatch):
+    """A landed fix that did not fix it (a run containing it fails the same way): its dispatched fixer is resumed ONCE
+    with what happened (its own session, its worktree); after that the red is due like any other (a fresh fixer, then
+    the revert fallback, then RED ESCALATE). Returns what it did, or None."""
+    u = g[0]
+    for sha, run in info.get("failed") or []:
+        rec = fixer_of_sha(sha)
+        if not rec or rec.get("resumed") or any(r["alive"] for r in fixer_records() if r.get("sig") == rec.get("sig")):
+            continue
+        rec["resumed"] = ts()
+        write_json(rec["path"], {k: v for k, v in rec.items() if k not in ("path", "alive")})
+        if not dispatch:
+            return None
+        note = (f"YOUR FIX {sha[:10]} LANDED, and {u['workflow']} #{run.get('number')} still fails the same way "
+                f"({', '.join(x['job'] for x in g)}). Find out why it did not fix it, and fix it properly (same rules; "
+                f"Fixes-Red: {run.get('number')}).")
+        ok, msg = red_dispatch(o_r, repo, {**u, "run": run}, why=f"its fix {sha[:10]} failed",
+                               resume={**rec, "note": note}, group=g)
+        return msg
+    return None
+
+
+def culprit_of(repo, u):
+    """The commit that turned this red, when one alone can have: the only commit between the last green run's head and
+    the first red run's head of the streak. None when unknown."""
+    runs = u.get("runs") or []
+    decided = [r for r in runs if r.get("status") == "completed" and r.get("conclusion") in ("success",) + RED_CONCLUSIONS]
+    streak = streak_runs(runs)
+    if not repo or not streak or len(decided) <= len(streak):
+        return None
+    first, green = streak[-1], decided[len(streak)]
+    if green.get("conclusion") != "success":
+        return None
+    r = git(repo, "rev-list", f"{green.get('headSha')}..{first.get('headSha')}", check=False)
+    shas = r.stdout.split() if r.returncode == 0 else []
+    return shas[0] if len(shas) == 1 else None
+
+
+def red_revert(o_r, repo, u, culprit):
+    """The revert fallback: a revert of the culprit with `Fixes-Red: N`, landed by a detached `agentctl land` through
+    the normal hook (its verdicts reach the inbox). (ok, message)."""
+    num = u["run"].get("number")
+    _d, clone, _w = waiting_state(repo)
+    wt, branch = f"{clone}-wt-revert-{num}", f"revert-{num}"
+    if os.path.exists(wt) or git_ok(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"):
+        return False, f"revert worktree {wt} or branch {branch} exists already"
+    git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
+    if git(repo, "worktree", "add", "-q", "-b", branch, wt, f"{REMOTE}/main", check=False).returncode != 0:
+        return False, "git worktree add failed"
+    r = git(wt, "revert", "--no-edit", culprit, check=False)
+    if r.returncode != 0:
+        git(wt, "revert", "--abort", check=False)
+        return False, f"git revert {culprit[:10]} does not apply ({(r.stderr or r.stdout).strip()[:120]})"
+    msg = git(wt, "log", "-1", "--format=%B").strip()
+    git(wt, "commit", "--amend", "-q", "-m", f"{msg}\n\nThe revert fallback (agentctl red): {u['workflow']} #{num} "
+        f"still failed after {RED_MAX_DISPATCHES} dispatched fixes.\n\nFixes-Red: {num}\n"
+        "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>")
+    pid = spawn_land(wt, fixer_env(o_r, num), reds_dir(f"revert-{num}.log"))
+    return True, f"landing a revert of {culprit[:10]} from {wt} (pid {pid})"
+
+
+def spawn_land(wt, env, log):
+    """A detached `agentctl land` of wt (the normal hook; its verdicts reach the inbox). Its pid."""
+    with open(log, "a") as logf:
+        return subprocess.Popen([sys.executable, TOOL_PATH, "land"], cwd=wt, stdin=subprocess.DEVNULL, stdout=logf,
+                                stderr=logf, start_new_session=True, env=env).pid
+
+
+# -- superseded reds and flakes
+def flake_key(rec):
+    return f"{rec.get('workflow')}|{rec.get('job')}|{norm_line(rec.get('line') or '')}"
+
+
+def flakes():
+    return read_record(reds_dir("flakes.json")) or {}
+
+
+def note_flake(rec, run):
+    with reds_lock():
+        f = flakes()
+        k = flake_key(rec)
+        e = f.get(k) or {"count": 0, "runs": [], "workflow": rec.get("workflow"), "job": rec.get("job"),
+                         "line": rec.get("line")}
+        e.update(count=e["count"] + 1, last=ts(), runs=(e["runs"] + [rec.get("last_run")])[-20:], sig=rec.get("sig"))
+        f[k] = e
+        write_json(reds_dir("flakes.json"), f)
+    return e["count"]
+
+
+def all_sig_records():
+    out = []
+    for p in glob.glob(reds_dir("sigs", "*.json")):
+        r = read_record(p)
+        if r and r.get("sig"):
+            out.append(r)
+    return out
+
+
+def tell_to_stop(rec, why):
+    """Every live claim of this red: a RED-STOP.md in its worktree (a dispatched fixer's wrapper ends it); claims go."""
+    told = []
+    names = set(map(str, rec.get("runs") or []))
+    for c in all_claims():
+        if rec["sig"] not in (c.get("sigs") or []) and not (names & (set(map(str, c.get("runs") or [])) | {str(c.get("run"))})):
+            continue
+        wt = c.get("worktree")
+        if wt and os.path.isdir(wt):
+            with open(os.path.join(wt, "RED-STOP.md"), "w") as f:
+                f.write(f"STOP: {why}. Nothing to fix any more (agentctl red, {ts()}); remove this file with your "
+                        "worktree.\n")
+        told.append(c.get("who"))
+        if c.get("state") != "blocked":
+            try:
+                os.unlink(c["path"])
+            except OSError:
+                pass
+    return told
+
+
+def review_cleared(o_r, repo, units, landed):
+    """Open signatures that no longer fail: a FLAKE when the next run passed it with no fix landed (kept open -- the
+    claim too -- until a fix lands; its count in reds/flakes.json orders the flake fixers), else CLEARED (superseded):
+    every fixer is told to stop (inbox, plus RED-STOP.md in its worktree). A flake is closed when a fix naming it
+    lands. Returns what it did."""
+    acts, now_sigs = [], {u["sig"] for u in units if u.get("sig")}
+    lists = {**_outside_lists, **_gate_lists}
+    for rec in all_sig_records():
+        st = rec.get("status") or "open"
+        if st not in ("open", "flaky") or rec["sig"] in now_sigs or rec.get("workflow") not in lists:
+            continue
+        names = set(map(str, rec.get("runs") or []))
+        fixed_by = next((sha for sha, _ct, vals, _s in landed if vals & names), None)
+        if st == "flaky":
+            if fixed_by:
+                with reds_lock():
+                    rec.update(status="fixed", fixed_by=fixed_by, closed=ts())
+                    write_json(sig_path(rec["sig"]), rec)
+                acts.append(f"RED FLAKE FIXED: {rec['workflow']} [{rec['job']}] by {fixed_by[:10]}")
+            continue
+        runs = lists[rec["workflow"]]
+        later = sorted([r for r in runs if r.get("status") == "completed" and r.get("conclusion") in ("success",) + RED_CONCLUSIONS
+                        and int(r.get("databaseId") or 0) > int(rec.get("last_run_id") or 0)], key=lambda r: r["databaseId"])
+        if not later:
+            continue
+        nxt = later[0]
+        if not fixed_by and not rec.get("flake_checked"):
+            count = note_flake(rec, nxt)
+            with reds_lock():
+                rec.update(status="flaky", flaky_since=ts(), passed_in=nxt.get("number"), nobody_since=None, noted=False,
+                           flake_checked=True, flake_count=count)
+                write_json(sig_path(rec["sig"]), rec)
+            line = (f"RED FLAKE: {rec['workflow']} #{rec.get('last_run')} [{rec['job']}] passed on the next run "
+                    f"#{nxt.get('number')} with no fix: a flake ({count} time(s) so far) -- make it deterministic, never "
+                    "rerun to green; its claim stays open until the fix lands")
+            inbox_write("red", line, [line], [rec.get("line") or ""], 1)
+            acts.append(line)
+            continue
+        why = (f"{rec['workflow']} #{rec.get('last_run')} [{rec['job']}] no longer fails: "
+               + (f"fixed by {fixed_by[:10]}" if fixed_by else f"#{nxt.get('number')} does not fail this way"))
+        told = tell_to_stop(rec, why)
+        with reds_lock():
+            rec.update(status="cleared", cleared=ts(), cleared_by=nxt.get("number"))
+            write_json(sig_path(rec["sig"]), rec)
+        if told or not fixed_by:
+            line = f"RED CLEARED: {why}" + (f"; told to stop: {', '.join(told)}" if told else "")
+            inbox_write("red", line, [line], [], 0)
+            acts.append(line)
+    return acts
+
+
+def flake_units():
+    """Open flaky signatures as red units (outside the gate; ordered by their flake count)."""
+    units = []
+    for rec in all_sig_records():
+        if rec.get("status") != "flaky":
+            continue
+        run = {"number": rec.get("last_run"), "databaseId": rec.get("last_run_id"), "status": "completed",
+               "conclusion": "failure"}
+        units.append({"key": rec["sig"], "sig": rec["sig"], "workflow": rec["workflow"], "job": rec["job"],
+                      "kind": rec.get("kind") or "test", "line": rec.get("line") or "", "flake": True,
+                      "flake_count": rec.get("flake_count") or 1, "names": set(map(str, rec.get("runs") or [])),
+                      "sigs": {rec["sig"]}, "runs": [], "run": run, "gate": False})
+    return sorted(units, key=lambda u: -u["flake_count"])
+
+
+# -- an unreadable gate: no dispatch, one UNKNOWN per spell, an infra check
+def infra_check(o_r):
+    parts = [f"Forgejo API localhost:3000 {'open' if port_open(3000) else 'CLOSED'}",
+             f"Forgejo ssh localhost:2222 {'open' if port_open(2222) else 'CLOSED'}"]
+    try:
+        token(o_r)
+        parts.append("token: present")
+    except (Exception, SystemExit):
+        parts.append("token: MISSING (hand it over: `~/bin/agentctl waiting status` from a session with the vault "
+                     "unlocked, or `! secrets unlock movies`)")
+    return "; ".join(parts)
+
+
+def gate_unread_spell(o_r, why):
+    """The patrol could not read the gate: no dispatch, ONE `UNKNOWN:` inbox entry per spell, with an infra check."""
+    flag = reds_dir("GATE_UNREAD")
+    if why is None:
+        if os.path.exists(flag):
+            os.unlink(flag)
+        return None
+    if os.path.exists(flag):
+        return None
+    os.makedirs(reds_dir(), exist_ok=True)
+    with open(flag, "w") as f:
+        f.write(ts() + "\n")
+    line = (f"UNKNOWN: the red patrol cannot read the gate ({why[:200]}): nothing dispatched, pushes fail closed. "
+            f"Infra check: {infra_check(o_r)}")
+    inbox_write("red", line, [line], [], 2)
+    return line
 
 
 def resolve_run(o_r, n):
@@ -2107,8 +2361,13 @@ def patrol_repo(repo, dispatch=True):
     except (Exception, SystemExit):
         others = []
     units = gate_red_units(o_r, rows, others) + local_units()
-    infos = find_fixers(scan_repo_for(o_r, repo), units)
-    return red_patrol(o_r, repo, units, infos, dispatch=dispatch)
+    scan = scan_repo_for(o_r, repo)
+    landed = scan_fix_commits(scan)[1] if scan else []
+    acts = review_cleared(o_r, repo, units, landed)
+    units += flake_units()
+    infos = find_fixers(scan, units)
+    gate_unread_spell(o_r, None)
+    return acts + red_patrol(o_r, repo, units, infos, dispatch=dispatch)
 
 
 def maybe_patrol(repo):
@@ -2121,7 +2380,12 @@ def maybe_patrol(repo):
         for line in patrol_repo(repo, dispatch=True):
             err(f"red patrol: {line}")
     except (Exception, SystemExit) as e:
-        err(f"red patrol: skipped ({str(e).replace('agentctl: ', '')[:200]})")
+        why = str(e).replace("agentctl: ", "")[:200]
+        err(f"red patrol: skipped ({why})")
+        try:
+            gate_unread_spell(slug(repo), why)
+        except (Exception, SystemExit):
+            pass
 
 
 # ---------------------------------------------------------------- land / env
@@ -5437,14 +5701,14 @@ def safe_cwd():
 
 
 INBOX_KINDS = [("RED_UNCLAIMED", r"RED UNCLAIMED"), ("RED_ESCALATE", r"RED ESCALATE"), ("BLOCKED", r"RED BLOCKED ON OWNER"),
-               ("RED_DISPATCHED", r"RED DISPATCHED"), ("FIXER_LANDED", r"RED FIXER [^:]*: LANDED "),
+               ("RED_DISPATCHED", r"RED DISPATCHED"), ("RED_REVERT", r"RED REVERT"), ("RED_FLAKE", r"RED FLAKE"), ("FIXER_LANDED", r"RED FIXER [^:]*: LANDED "),
                ("FIXER_FAILED", r"RED FIXER "), ("RED_CLEARED", r"RED CLEARED"), ("FIX_FAILED", r"FIX FAILED"), ("FIX_OK", r"FIX OK"), ("FIX_UNVERIFIED", r"FIX UNVERIFIED"),
                ("RED", r"WATCH RED"), ("OK", r"WATCH OK"), ("STALLED", r"WATCH STALLED|.*\bstalled\b"),
                # a crash, a signal or an exit with no verdict: whatever it watched is unknown now
                ("UNKNOWN", r"WATCH UNKNOWN|UNKNOWN:|crashed:|exited:|ended by signal|exit \d+ with no verdict"),
                ("NOT_LANDED", r"NOT LANDED"), ("LANDED", r"LANDED "), ("WAITING", r"WAITING "), ("HELD", r"HELD:"),
                ("CHECK", r"CHECK CAP")]
-WAIT_KINDS_DEFAULT = "RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_ESCALATE,BLOCKED,FIXER_FAILED"
+WAIT_KINDS_DEFAULT = "RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_ESCALATE,BLOCKED,FIXER_FAILED,RED_REVERT"
 
 
 def inbox_kind(verdict, final=True):
