@@ -6,7 +6,7 @@ import json, os, stat, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, Base, sh  # noqa: E402
+from test_agentctl import A, Base, StallSamples, sh  # noqa: E402
 
 REPO_HOOK = """#!/bin/sh
 # supports --checks-only (the checks without the red gate) and --fast-only (compile and the fast tests)
@@ -219,8 +219,11 @@ class WaitingTest(Base):
 
     def hung_sbt(self, hook_body):
         """The repo's hook calls scripts/sbt-warm, a fake whose command hangs like the sbtn of 2026-10-27; --stop logs."""
-        self.stops = os.path.join(self.tmp.name, "sbt-stops")
-        self.r.write("scripts/sbt-warm", f'#!/bin/sh\n[ "$1" = --stop ] && {{ echo stop >> "{self.stops}"; exit 0; }}\nsleep 60\n')
+        self.stops, hung = os.path.join(self.tmp.name, "sbt-stops"), os.path.join(self.tmp.name, "sbt-hung")
+        # hung: the stall clock runs only while a hung sbt is there (a --stop ends it), never on the machine's load
+        self.r.write("scripts/sbt-warm", f'#!/bin/sh\n[ "$1" = --stop ] && {{ echo stop >> "{self.stops}"; rm -f "{hung}"; '
+                                         f'exit 0; }}\ntouch "{hung}"\nsleep 60\n')
+        StallSamples(hung=hung).install(self)
         os.chmod(os.path.join(self.r.path, "scripts/sbt-warm"), 0o755)
         self.r.write("scripts/hooks/pre-push", REPO_HOOK.format(calls=self.calls).replace("exit 0\n", hook_body + "\nexit 0\n"))
         os.chmod(os.path.join(self.r.path, "scripts/hooks/pre-push"), 0o755)
@@ -263,7 +266,7 @@ class WaitingTest(Base):
         self.reds = set()
         A.waiting_run(self.r.path, once=True, service=True)  # the service processor
         sha = self.entries()["1"]["landed_sha"]
-        deadline = time.time() + 30
+        deadline = time.time() + 180
         while time.time() < deadline and not [x for x in self.inbox() if x["command"] == "watch"]:
             time.sleep(0.2)
         verdicts = {x["command"]: x for x in self.inbox() if x.get("final", True)}

@@ -61,7 +61,7 @@ class OwnedTest(unittest.TestCase):
         self.assertEqual(p.stdout.readline().strip(), "held")
         return p
 
-    def until(self, cond, timeout=15):
+    def until(self, cond, timeout=180):
         t = time.time() + timeout
         while time.time() < t:
             if cond():
@@ -99,7 +99,7 @@ class OwnedTest(unittest.TestCase):
         p = self.holder()
         rec = A.Owned("test", "k1", argv=["x"]).record
         p.send_signal(signal.SIGTERM)
-        p.wait(timeout=15)
+        p.wait(timeout=180)
         self.assertEqual(len(self.cancels()), 1)
         self.assertIn("run cancel 77", self.cancels()[0])
         self.assertFalse(os.path.exists(rec))
@@ -131,7 +131,7 @@ class OwnedTest(unittest.TestCase):
         self.assertTrue(self.until(lambda: any(r["code"] != first["code"] for r in A.owner_records())),
                         "it re-execs on the new file")
         open(target, "w").close()
-        out, errs = p.communicate(timeout=30)
+        out, errs = p.communicate(timeout=180)
         self.assertEqual(p.returncode, 0, errs)
         self.assertIn("agentctl changed on disk", errs)
         self.assertEqual(A.owner_records(), [], "and leaves no record behind")

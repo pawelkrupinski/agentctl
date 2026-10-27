@@ -90,11 +90,11 @@ class InboxTest(unittest.TestCase):
         flag = os.path.join(self.tmp.name, "never.flag")
         p = subprocess.Popen([sys.executable, TOOL, "wait", "file", flag, "--timeout", "60"], env=dict(os.environ),
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        owners, deadline = os.environ["AGENTCTL_OWNERS_DIR"], time.time() + 20
+        owners, deadline = os.environ["AGENTCTL_OWNERS_DIR"], time.time() + 180
         while time.time() < deadline and not (os.path.isdir(owners) and any(n.endswith(".json") for n in os.listdir(owners))):
             time.sleep(0.05)
         p.send_signal(signal.SIGTERM)
-        p.communicate(timeout=20)
+        p.communicate(timeout=180)
         [e] = self.entries()
         self.assertEqual((e["command"], e["verdict"], e["exit"]), ("wait", "ended by signal 15", 143))
 

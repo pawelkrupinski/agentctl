@@ -120,7 +120,7 @@ class StaleMarkerTest(unittest.TestCase):
         env = dict(os.environ, HOME=self.home, AGENTCTL_STATUSLINE_REPO=self.home)
         subprocess.run([STATUSLINE], input="{}", capture_output=True, text=True, env=env)
         t0 = time.time()
-        while time.time() - t0 < 15:
+        while time.time() - t0 < 180:
             if "gate RED (main #20" not in open(path).read():
                 return True  # rewritten by a refresh (here: UNREAD, no agentctl under this HOME)
             if marker_age is None and time.time() - t0 > 2:

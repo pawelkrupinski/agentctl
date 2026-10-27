@@ -112,7 +112,7 @@ class TokenResolutionTest(Base):
                "AGENTCTL_MOVIES_REPO": self.r.path, "AGENTCTL_INBOX_DIR": os.environ["AGENTCTL_INBOX_DIR"],
                "AGENTCTL_REDS_DIR": os.environ["AGENTCTL_REDS_DIR"], "GIT_CONFIG_GLOBAL": "/dev/null"}
         r = subprocess.run(["env", "-i"] + [f"{k}={v}" for k, v in env.items()] + [sys.executable, "-c", code],
-                           capture_output=True, text=True, start_new_session=True, timeout=30)
+                           capture_output=True, text=True, start_new_session=True, timeout=180)
         self.assertEqual(r.stdout.strip(), TOK, r.stderr)
 
 

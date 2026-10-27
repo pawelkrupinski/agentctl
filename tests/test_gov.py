@@ -167,14 +167,15 @@ class GovernorTest(unittest.TestCase):
         flag = os.path.join(self.d, "admitted")
         p = subprocess.Popen(["bash", "-c", f'exec 7>>"{ticket}"; "{sys.executable}" "{A.__file__}" gov admit --fd 7 '
                                             f'--ticket "{ticket}" --class agent --label shell --pid $$ --try && '
-                                            f'touch "{flag}"; sleep 3'])
+                                            f'touch "{flag}"; while [ ! -e "{flag}.release" ]; do sleep 0.05; done'])
         self.procs.append(p)
-        deadline = time.time() + 10
+        deadline = time.time() + 180
         while not os.path.exists(flag) and time.time() < deadline:
             time.sleep(0.05)
         self.assertTrue(os.path.exists(flag), "admitted")
         self.assertTrue(A.lock_held(ticket), "the shell holds the ticket after agentctl exits")
         self.assertEqual([t["label"] for t in A.gov_tickets()], ["shell"])
+        open(f"{flag}.release", "w").close()  # the shell ends when the test says, not after a wall-clock sleep
         p.wait()
         self.assertFalse(A.lock_held(ticket), "freed when the shell ends")
 

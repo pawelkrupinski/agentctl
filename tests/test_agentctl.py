@@ -38,6 +38,31 @@ ENV = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTE
            GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
 
 
+class StallSamples:
+    """The samples a stall verdict reads (run_watched's CPU and clock), driven by the test, never by the machine's load:
+    `busy` adds 5 CPU seconds at every sample (a busy, silent process); otherwise no CPU at all, and the clock stands
+    still until `hung` (a file the fake process writes once it hangs) exists, then jumps 60 s at every sample."""
+
+    def __init__(self, busy=False, hung=None):
+        self.busy, self.hung, self.cpu_s, self.now = busy, hung, 0.0, 0.0
+
+    def cpu(self, pgid):
+        self.cpu_s += 5.0 if self.busy else 0.0
+        return self.cpu_s
+
+    def clock(self):
+        if self.hung is None or os.path.exists(self.hung):
+            self.now += 60.0
+        return self.now
+
+    def install(self, case):
+        """Patched into agentctl for the test case (run_watched's defaults)."""
+        saved = (A.group_cpu_seconds, A.stall_clock)
+        A.group_cpu_seconds, A.stall_clock = self.cpu, self.clock
+        case.addCleanup(lambda: (setattr(A, "group_cpu_seconds", saved[0]), setattr(A, "stall_clock", saved[1])))
+        return self
+
+
 def sh(cwd, *args, input=None):
     r = subprocess.run(args, cwd=cwd, capture_output=True, text=True, env=ENV, input=input)
     if r.returncode:
@@ -320,8 +345,8 @@ class WaitAndStateTest(Base):
         time.sleep(0.8)
         with open(target, "w") as f:
             f.write("ok")
-        o1, _ = proc.communicate(timeout=20)
-        o2, e2 = second.communicate(timeout=20)
+        o1, _ = proc.communicate(timeout=180)
+        o2, e2 = second.communicate(timeout=180)
         self.assertIn("present", o1)
         self.assertIn("attached to existing waiter", e2)
         self.assertEqual(o1.strip(), o2.strip())

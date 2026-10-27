@@ -3,7 +3,7 @@ import io, os, stat, subprocess, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, Base, sh  # noqa: E402
+from test_agentctl import A, Base, StallSamples, sh  # noqa: E402
 
 HOOK_HEAD = "#!/bin/sh\nunset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE\ncat > /dev/null\n"
 
@@ -234,11 +234,13 @@ class LandTest(Base):
     def test_a_stalled_check_ends_with_not_landed_and_frees_the_lock(self):
         pushes = os.path.join(self.tmp.name, "pushes")
         self.hook(f"echo push >> {pushes}")
-        self.repo_hook("echo checking; sleep 60")  # silent and idle: no output, no CPU
+        hung = os.path.join(self.tmp.name, "hung")
+        self.repo_hook(f"echo checking; touch {hung}; sleep 60")  # then silent and idle: no output, no CPU
         self.r.commit("the repo's hook")
         self.r.push()
         os.remove(pushes)
         sha = self.mine()
+        StallSamples(hung=hung).install(self)  # no CPU; the clock runs once the hook hangs
         os.environ["AGENTCTL_LAND_STALL_MIN"] = "0.02"  # 1.2 s
         try:
             rc, out = self.land()
@@ -253,10 +255,11 @@ class LandTest(Base):
 
     def test_a_busy_silent_check_is_progress_not_a_stall(self):
         self.hook("exit 0")
-        self.repo_hook(f"{sys.executable} -c 'import time\nt=time.time()\nwhile time.time()-t<3: pass'")
+        self.repo_hook("sleep 3")  # silent; its CPU is the samples' (busy), whatever the machine's load
         self.r.commit("the repo's hook")
         self.r.push()
         sha = self.mine()
+        StallSamples(busy=True).install(self)  # 5 CPU seconds a sample while the clock runs 60 s: busy, not stalled
         os.environ["AGENTCTL_LAND_STALL_MIN"] = "0.02"
         try:
             rc, out = self.land()

@@ -5,7 +5,7 @@ import contextlib, io, json, os, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A  # noqa: E402
+from test_agentctl import A, StallSamples  # noqa: E402
 
 DAY = 86400
 
@@ -157,16 +157,18 @@ class StallTest(unittest.TestCase):
     def test_a_trickle_of_cpu_is_not_progress(self):
         # the hook idle in `wait` with only its watchdog polling: a few ms of CPU each poll, no output
         with tempfile.TemporaryDirectory() as d:
-            code = "import time\nwhile True:\n    time.sleep(0.05); sum(range(200))"
-            rc, out = A.run_watched([sys.executable, "-c", code], d, dict(os.environ), os.path.join(d, "log"), "x",
-                                    stall=1.5)
+            # a few ms a poll (the samples say so: the machine's load decides nothing), the clock running
+            samples = StallSamples()
+            samples.cpu = lambda pgid, n=[]: (n.append(1), 0.01 * len(n))[1]
+            rc, out = A.run_watched(["sleep", "60"], d, dict(os.environ), os.path.join(d, "log"), "x",
+                                    stall=1.5, cpu=samples.cpu, clock=samples.clock)
         self.assertIsNone(rc, "stalled")
 
     def test_real_cpu_is_progress(self):
         with tempfile.TemporaryDirectory() as d:
-            code = "import time\nt=time.time()\nwhile time.time()-t<4: pass"
-            rc, out = A.run_watched([sys.executable, "-c", code], d, dict(os.environ), os.path.join(d, "log"), "x",
-                                    stall=1.5)
+            samples = StallSamples(busy=True)  # 5 CPU seconds a sample, 60 s of clock: busy however loaded
+            rc, out = A.run_watched(["sleep", "2"], d, dict(os.environ), os.path.join(d, "log"), "x",
+                                    stall=1.5, cpu=samples.cpu, clock=samples.clock)
         self.assertEqual(rc, 0)
 
 

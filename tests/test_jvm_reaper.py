@@ -85,11 +85,16 @@ class JvmRulesTest(unittest.TestCase):
         env = {"AGENTCTL_JVM_PS": ps, "AGENTCTL_JVM_CWD": os.path.join(self.t, "cwd"),
                "AGENTCTL_JVM_KEPT": os.path.join(self.t, "keptfile")}
         os.environ.update(env)
+        # the fixture's table only: the live machine's processes (busy under load, other agents' loops and servers,
+        # some ending mid-scan) decide nothing here
+        saved = (A.ps, A.process_cwds, A.owner_orphans, A.sbt_serving)
+        A.ps, A.process_cwds, A.owner_orphans, A.sbt_serving = (lambda: []), (lambda: {}), (lambda kill: []), (lambda: {})
         out = io.StringIO()
         try:
             with contextlib.redirect_stdout(out):
                 A.cmd_orphans(argparse.Namespace(kill=False, safe=True))
         finally:
+            A.ps, A.process_cwds, A.owner_orphans, A.sbt_serving = saved
             for k in env:
                 os.environ.pop(k)
         self.assertIn("jvm       pid=99999 ppid=1 rule=orphan", out.getvalue())

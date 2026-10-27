@@ -381,8 +381,13 @@ cold. The checker:
 2. runs the hook's dry run there -- `--range`, or `--checks-only` when main is red and the change must wait -- as a
    check of THE GOVERNOR (`gov`: red for a `Fixes-Red:` fix), under the stall bound; or, when `gov status` reports
    pressure, on ci-runner (see "remote checks"); a failure is `NOT LANDED: the pre-push checks failed` with the tail;
-3. under the landing lock: main moved since the check -> back to 1 (twice; the third time it is rebased there and
-   pushed, the push's hook running the checks on the new base, so a busy main never starves it); main red and the change must wait ->
+3. under the landing lock: main moved since the check -> rebased onto it there, and checked again (back to 1) ONLY when
+   the commits that landed meanwhile overlap: a path both touch, an sbt module one touches that the other's is or
+   depends on (the hook's own `--compile-plan`, build.sbt's dependsOn), or a change to build.sbt / project/ / the hook;
+   a conflict is NOT LANDED. No overlap: pushed at once, the change's checks skipped at the push (`PREPUSH_SKIP` = the
+   hook's `--plan` for its paths; the red gate still runs), the LANDED line saying `main moved by 3 commits, no
+   overlap: pushed without re-check`; main's CI tests the combination. Re-checked twice at most; the third time it is
+   pushed as rebased, the push's hook running the checks on the new base, so a busy main never starves it; main red and the change must wait ->
    it joins `waiting` (`WAITING ...`, the entry names your worktree); else the push from the tree, whose hook reuses
    the pass (or confirms the remote run) -> `LANDED <sha>` and a detached watch that closes your worktree after
    WATCH OK when proven merged (unless land had `--keep-worktree`).

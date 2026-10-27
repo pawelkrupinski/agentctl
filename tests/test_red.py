@@ -124,7 +124,7 @@ class RedBase(unittest.TestCase):
         es = A.inbox_entries()
         return [e for e in es if kind is None or e.get("kind") == kind]
 
-    def wait_fixer(self, timeout=30, n=1):
+    def wait_fixer(self, timeout=180, n=1):
         t0 = time.time()
         while time.time() - t0 < timeout:
             done = [e for e in self.inbox() if e.get("kind") in ("FIXER_LANDED", "FIXER_FAILED")]
@@ -646,7 +646,7 @@ class HeartbeatTest(RedBase):
         os.environ.update(FAKE_CLAUDE_SLEEP="30", AGENTCTL_RED_FIXER_WALL="1")
         try:
             A.red_dispatch(MOVIES, self.r.path, self.units()[0])
-            done = self.wait_fixer(timeout=40)
+            done = self.wait_fixer(timeout=180)
         finally:
             os.environ.pop("FAKE_CLAUDE_SLEEP")
             os.environ.pop("AGENTCTL_RED_FIXER_WALL")

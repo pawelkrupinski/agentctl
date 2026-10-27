@@ -7,7 +7,22 @@ import json, os, subprocess, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, sh  # noqa: E402
-from test_waiting import WaitingTest  # noqa: E402
+from test_waiting import REPO_HOOK, WaitingTest  # noqa: E402
+
+PLAN_HOOK = """#!/bin/sh
+case "$1" in
+    --compile-plan)
+        while read -r p; do
+            case "$p" in
+                common/*.scala) printf 'common/Test/compile\\nworker/Test/compile\\nweb/Test/compile\\n' ;;
+                worker/*.scala) echo worker/Test/compile ;;
+                web/*.scala)    echo web/Test/compile ;;
+            esac
+        done
+        exit 0 ;;
+    --plan) cat > /dev/null; printf 'sbt\\nidentity\\n'; exit 0 ;;
+esac
+"""
 
 
 class QueueTest(WaitingTest):
@@ -18,8 +33,18 @@ class QueueTest(WaitingTest):
         # the push's hook records what the processor handed it
         hooks = os.path.join(self.tmp.name, "hooks")
         with open(os.path.join(hooks, "pre-push"), "w") as f:
-            f.write(f'#!/bin/sh\ncat > /dev/null\necho "push remote=${{PREPUSH_REMOTE_RUN:-}}" >> "{self.pushes}"\n')
+            f.write(f'#!/bin/sh\ncat > /dev/null\n'
+                    f'echo "push remote=${{PREPUSH_REMOTE_RUN:-}}${{PREPUSH_SKIP:+ skip=$PREPUSH_SKIP}}" >> "{self.pushes}"\n')
         self.saved_q = (A.gov_pressure, A.remote_check)
+        # the repo's hook answers the dry-run queries the re-check rule reads: its compile plan (common <- worker,
+        # web) and its plan of checks
+        self.r.write("scripts/hooks/pre-push", PLAN_HOOK + REPO_HOOK.format(calls=self.calls).split("\n", 1)[1])
+        os.chmod(os.path.join(self.r.path, "scripts/hooks/pre-push"), 0o755)
+        self.r.commit("the hook's plans")
+        self.r.push()
+        for p in (self.pushes, self.calls):
+            if os.path.exists(p):
+                os.remove(p)
 
     def tearDown(self):
         A.gov_pressure, A.remote_check = self.saved_q
@@ -94,7 +119,8 @@ class QueueTest(WaitingTest):
 
         def moving(repo, d, e, tree, base, head, mode, cls, log_path, own=None):
             n.append(1)
-            other, _ = self.agent(f"m{len(n)}", f"worker/src/main/M{len(n)}.scala", "m\n", msg=f"main moves {len(n)}")
+            # the same sbt module (web) each time: an overlap, so each move means a re-check
+            other, _ = self.agent(f"m{len(n)}", f"web/src/main/M{len(n)}.scala", "m\n", msg=f"main moves {len(n)}")
             sh(other, "git", "push", "-q", "forgejo", "HEAD:main")
             return real(repo, d, e, tree, base, head, mode, cls, log_path, own)
         A.run_entry_checks = moving
@@ -103,6 +129,73 @@ class QueueTest(WaitingTest):
         self.assertEqual(len(n), A.QUEUE_ROUNDS)
         self.assertEqual(self.remote_log()[:2], ["a: one", f"main moves {A.QUEUE_ROUNDS}"])
         self.assertIn("by the push's hook", [e for e in self.inbox() if e["kind"] == "LANDED"][0]["verdict"])
+
+    def moves_once(self, *moves):
+        """Main moves during the first round's checks: one commit per (path, text) landed by another agent."""
+        real, n = A.run_entry_checks, []
+
+        def moving(repo, d, e, tree, base, head, mode, cls, log_path, own=None):
+            n.append(1)
+            if len(n) == 1:
+                for i, (path, text) in enumerate(moves):
+                    other, _ = self.agent(f"m{i}", path, text, msg=f"main moves {i}")
+                    sh(other, "git", "push", "-q", "forgejo", "HEAD:main")
+            return real(repo, d, e, tree, base, head, mode, cls, log_path, own)
+        A.run_entry_checks = moving
+        self.addCleanup(setattr, A, "run_entry_checks", real)
+        return n
+
+    def landed_verdict(self):
+        return [e for e in self.inbox() if e["kind"] == "LANDED"][0]["verdict"]
+
+    def test_disjoint_commits_landing_meanwhile_push_without_a_recheck(self):
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        rounds = self.moves_once(("worker/src/main/W.scala", "w\n"), ("docs/notes.md", "n\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual(len(rounds), 1, "checked once")
+        self.assertEqual(len(self.calls_of("--range")), 1)
+        self.assertEqual(self.remote_log()[0], "a: one", "rebased onto the moved main and pushed")
+        self.assertIn("main moved by 2 commits, no overlap: pushed without re-check", self.landed_verdict())
+        self.assertEqual(self.pushed()[-1], "push remote= skip=sbt identity", "the push skips the checks already passed")
+
+    def test_a_file_both_touch_rechecks(self):
+        self.r.write("docs/notes.md", "".join(f"line {i}\n" for i in range(12)))
+        self.r.commit("notes")
+        self.r.push()
+        os.remove(self.pushes)
+        wt, _ = self.agent("a", "docs/notes.md", "mine\n" + "".join(f"line {i}\n" for i in range(1, 12)), msg="a: one")
+        eid, _ = self.queued(wt)
+        rounds = self.moves_once(("docs/notes.md", "".join(f"line {i}\n" for i in range(11)) + "theirs\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual(len(rounds), 2, "checked again on the moved main")
+        self.assertEqual(self.remote_log()[0], "a: one")
+        self.assertNotIn("without re-check", self.landed_verdict())
+        self.assertEqual(self.pushed()[-1], "push remote=", "the push's hook skips nothing")
+
+    def test_a_module_the_change_depends_on_rechecks(self):
+        wt, _ = self.agent("a", "worker/src/main/A.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        rounds = self.moves_once(("common/src/main/C.scala", "c\n"))  # worker depends on common
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual(len(rounds), 2)
+        self.assertEqual(self.pushed()[-1], "push remote=")
+
+    def rechecked_when_landing(self, path, text):
+        wt, _ = self.agent("a", "docs/A.md", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        rounds = self.moves_once((path, text))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual(len(rounds), 2, f"{path} landed meanwhile: checked again")
+        self.assertEqual(self.remote_log()[0], "a: one")
+        self.assertNotIn("without re-check", self.landed_verdict())
+
+    def test_a_change_to_build_sbt_rechecks(self):
+        self.rechecked_when_landing("build.sbt", "lazy val x = 1\n")
+
+    def test_a_change_to_the_hook_rechecks(self):
+        hook = open(os.path.join(self.r.path, "scripts/hooks/pre-push")).read()
+        self.rechecked_when_landing("scripts/hooks/pre-push", hook + "# a change to the hook\n")
 
     def test_a_conflict_with_the_moved_main_is_not_landed(self):
         wt, _ = self.agent("a", "web/src/main/Shared.scala", "mine\n")
