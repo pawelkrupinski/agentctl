@@ -151,8 +151,21 @@ def scratch():
     return d
 
 
+GIT_NET_SSH = "ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+
+
 def git(repo, *args, check=True, input=None):
-    r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, input=input)
+    env = None
+    if args and args[0] in ("fetch", "ls-remote"):  # never hang on a Forgejo whose ssh accepts and does not answer
+        env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+        env.setdefault("GIT_SSH_COMMAND", GIT_NET_SSH)
+    try:
+        r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, input=input, env=env,
+                           timeout=600 if env else None)
+    except subprocess.TimeoutExpired:
+        if check:
+            raise RuntimeError(f"git {' '.join(args)} in {repo}: timed out after 600 s")
+        return subprocess.CompletedProcess(args, 124, "", "timed out after 600 s")
     if check and r.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} in {repo}: {r.stderr.strip()}")
     return r.stdout if check else r
@@ -4714,11 +4727,29 @@ def delete_remote_branch(repo, o_r, name, sha):
     api(o_r, "DELETE", f"branches/{q}")
 
 
+FETCH_TIMEOUT = 180  # an unattended fetch's bound ($AGENTCTL_FETCH_TIMEOUT)
+
+
+def bounded_fetch(repo, *extra):
+    """`git fetch forgejo` for an unattended run (maintain's sweep): bounded, ssh keepalives on, never prompting. True,
+    or why not (2026-10-27: Forgejo's ssh accepted the connection and never answered, and the first maintain pass hung
+    in the sweep's fetch)."""
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_SSH_COMMAND=GIT_NET_SSH)
+    try:
+        r = subprocess.run(["git", "-C", repo, "fetch", "--quiet", *extra, REMOTE], capture_output=True, text=True, env=env,
+                           timeout=env_num("AGENTCTL_FETCH_TIMEOUT", FETCH_TIMEOUT), stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return f"timed out after {int(env_num('AGENTCTL_FETCH_TIMEOUT', FETCH_TIMEOUT))} s"
+    return True if r.returncode == 0 else (r.stderr.strip().splitlines() or ["exit %d" % r.returncode])[-1][:160]
+
+
 def sweep_repo(repo, idle_days, dry, out):
     name = os.path.basename(repo)
     now_ = time.time()
-    git(repo, "fetch", "--quiet", "--prune", REMOTE, check=False)
+    fetched = bounded_fetch(repo, "--prune")
     main = f"refs/remotes/{REMOTE}/main"
+    if fetched is not True:
+        out.append(f"== {name}: fetch failed ({fetched}): from the last fetched state")
     out.append(f"== {name} (forgejo/main {git(repo, 'rev-parse', main).strip()[:10]})")
     idle_wt, checked_out = [], set()
     for w in worktrees(repo)[1:]:
@@ -4994,6 +5025,225 @@ def reap_log(line):
         f.write(f"{ts()} {line}\n")
 
 
+# ---------------------------------------------------------------- stale JVMs (folded in from reap-stale-jvms.sh)
+# The owner (2026-10-27): ONE reaper. Its rules, unchanged from ~/.local/bin/reap-stale-jvms.sh (movies'
+# scripts/reap-stale-jvms.sh, spec scripts/reap-stale-jvms-test.sh), which ran as launchd dev.kinowo.jvm-reaper:
+#   orphan  an sbt worker / forked-test JVM whose parent is gone (PPID 1), 10 min or older: killed whatever its CPU;
+#   hog     any sbt/java process 1.5 h or older that burned >= 5% of a core over its LIFETIME (cputime / elapsed, not ps's
+#           decaying %CPU), with no tty (a human's terminal can Ctrl-C it), never a server a live `sbt-warm --keep`
+#           keeps in its directory (2026-10-19 the hog rule killed one mid-use);
+#   dup-sbt-server / dup-sbt-gone-dir   detached `sbt-launch --detach-stdio` servers (PPID 1) grouped by cwd: all but the
+#           newest are reaped once 10 min old and IDLE now (recent %CPU <= 5: 2026-10-15 one was killed at 120% mid-run),
+#           and a server whose cwd is gone (a `<dir>.part` whose `<dir>` exists is a finished rename, not gone).
+# Spared always: IDEs and the protected names (PROTECT_REGEX), a listener on a protected port (9000) under 50% of a core,
+# this reaper's own process group, and -- agentctl's rule -- any process descended from a live Claude Code session or a
+# running land / check / waiting processor (another agent's working process). Before killing: the list; an sbt server
+# gets a thread dump first; TERM, then KILL after 10 s; every kill one line of ~/.cache/agentctl/reap.log.
+JVM_PROTECT = r"kinowo\.longrun|scripts\.IdentityCalibrate|JetBrains|IntelliJ|IDEA|Android Studio|jetbrains|toolbox|/Applications/|GradleDaemon|KotlinCompileDaemon|jdk.jcmd|VisualVM|jconsole"
+JVM_SCOPE = r"(^|/)java( |$)|(^|/)java$|sbt-launch\.jar|org\.scala-sbt|sbt\.internal|sbt\.ForkMain"
+JVM_ORPHAN = r"sbt\.internal\.worker[0-9]*\.WorkerMain|sbt\.ForkMain|org\.scala\.sbt\.ForkMain"
+AGENT_WORK = re.compile(r"(^|/)claude( |$)|agentctl (land|waiting run|red fixer)\b|scripts/hooks/pre-push|scripts/sbt-warm")
+
+
+def jvm_knob(name, default):
+    """The old script's tunables, by the same names ($HOG_MIN_AGE_SECONDS, ...)."""
+    return os.environ.get(name, default)
+
+
+def tosec(t):
+    """ps's [[dd-]hh:]mm:ss[.frac] (etime) or unbounded mm:ss (cputime) -> seconds."""
+    dd = 0
+    t = str(t)
+    if "-" in t:
+        d_, t = t.split("-", 1)
+        dd = int(d_ or 0)
+    s = 0.0
+    for part in t.split(":"):
+        try:
+            s = s * 60 + float(part)
+        except ValueError:
+            return 0.0
+    return s + dd * 86400
+
+
+def jvm_candidates(rows, cwd, kept, port_pids, self_pid, isdir=os.path.isdir):
+    """rows: [(pid, ppid, tty, etime, cputime, args)] -> [(pid, ppid, age, cpu, pct, rule, args)]: the old script's
+    rules A (orphan), B (hog) and C (dup-sbt-server, dup-sbt-gone-dir), exactly."""
+    hog_age, hog_cpu = float(jvm_knob("HOG_MIN_AGE_SECONDS", 5400)), float(jvm_knob("HOG_MIN_CPU_PERCENT", 5))
+    orphan_age = float(jvm_knob("ORPHAN_MIN_AGE_SECONDS", 600))
+    no_tty = str(jvm_knob("HOG_REQUIRE_NO_TTY", "1")) == "1"
+    port_max = float(jvm_knob("PROTECTED_PORT_MAX_CPU_PERCENT", 50))
+    protect, scope = re.compile(jvm_knob("PROTECT_REGEX", JVM_PROTECT)), re.compile(jvm_knob("SCOPE_REGEX", JVM_SCOPE))
+    orphan_re = re.compile(jvm_knob("ORPHAN_REGEX", JVM_ORPHAN))
+    out, servers = [], {}
+    for pid, ppid, tty, etime, cputime, args in rows:
+        if pid == self_pid or pid <= 1 or not scope.search(args) or protect.search(args):
+            continue
+        age, cpu = tosec(etime), tosec(cputime)
+        pct = cpu * 100.0 / age if age > 0 else 0.0
+        if pid in port_pids and pct <= port_max:
+            continue
+        rule = None
+        if orphan_re.search(args) and ppid == 1 and age >= orphan_age:
+            rule = "orphan"
+        elif age >= hog_age and pct >= hog_cpu and not ("--detach-stdio" in args and pid in cwd and cwd[pid] in kept):
+            if no_tty and tty not in ("??", "?", "-"):
+                continue
+            rule = "hog"
+        if rule is None and ppid == 1 and "sbt-launch.jar" in args and "--detach-stdio" in args and pid in cwd:
+            servers[pid] = (age, cpu, pct, args)
+            continue
+        if rule:
+            out.append((pid, ppid, age, cpu, pct, rule, args))
+    dirs, newest = {}, {}
+    for pid in servers:
+        d = re.sub(r"\.part$", "", cwd[pid])
+        dirs[pid] = d
+        n = newest.get(d)
+        if n is None or servers[pid][0] < servers[n][0] or (servers[pid][0] == servers[n][0] and pid > n):
+            newest[d] = pid
+    for pid, (age, cpu, pct, args) in servers.items():
+        d = dirs[pid]
+        if not isdir(d) and not isdir(d + ".part"):
+            rule = "dup-sbt-gone-dir"
+        elif newest[d] != pid and age >= orphan_age:
+            rule = "dup-sbt-server"
+        else:
+            continue
+        out.append((pid, 1, age, cpu, pct, rule, f"{args} cwd={d}"))
+    return sorted(out)
+
+
+def jvm_scan():
+    """The live process table for jvm_candidates ($AGENTCTL_JVM_PS / _CWD / _KEPT: fixture files for the tests)."""
+    def read(env, cmd):
+        if os.environ.get(env):
+            with open(os.environ[env]) as f:
+                return f.read()
+        return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout
+    rows = []
+    for line in read("AGENTCTL_JVM_PS", "ps -Ao pid=,ppid=,tty=,etime=,cputime=,args=").splitlines():
+        f = line.split(None, 5)
+        if len(f) == 6 and f[0].isdigit() and f[1].isdigit():
+            rows.append((int(f[0]), int(f[1]), f[2], f[3], f[4], f[5]))
+    cwd = {}
+    for line in read("AGENTCTL_JVM_CWD", "lsof -nP -a -d cwd -c java -Fpn 2>/dev/null | awk '/^p/{p=substr($0,2)} "
+                                         "/^n/{print p, substr($0,2)}'").splitlines():
+        p, _, d = line.partition(" ")
+        if p.isdigit():
+            cwd[int(p)] = d
+    kept = {l.strip() for l in read("AGENTCTL_JVM_KEPT", "for p in $(pgrep -f 'sbt-warm --keep'); do lsof -a -p $p "
+                                    "-d cwd -Fn 2>/dev/null | sed -n 's/^n//p'; done | sort -u").splitlines() if l.strip()}
+    ports = set()
+    if not os.environ.get("AGENTCTL_JVM_PS"):
+        for port in str(jvm_knob("PROTECTED_PORTS", "9000")).split():
+            r = subprocess.run(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"], capture_output=True, text=True)
+            ports |= {int(x) for x in r.stdout.split() if x.isdigit()}
+    return rows, cwd, kept, ports
+
+
+def agent_work(pid, procs):
+    """The live Claude session or land / check / waiting processor pid descends from, if any: another agent's work."""
+    parents = {p: (pp, c) for p, pp, _e, c in procs}
+    seen, p = set(), parents.get(pid, (None, ""))[0]
+    while p and p > 1 and p not in seen:
+        seen.add(p)
+        pp, c = parents.get(p, (None, ""))
+        if AGENT_WORK.search(c or ""):
+            return f"pid {p} ({(c or '')[:60]})"
+        p = pp
+    return None
+
+
+def jvm_reap(cands, kill, procs):
+    """List the candidates; with kill, end them under the guards (idle duplicate, alive, not this group, no agent's
+    work), sbt servers after a thread dump, TERM then KILL. Returns the lines printed."""
+    lines = []
+    grace = float(jvm_knob("TERM_GRACE_SECONDS", 10))
+    own_pgid = os.getpgid(0)
+    for pid, ppid, age, cpu, pct, rule, args in cands:
+        short = re.sub(r"-Duser\.(country|language)=[A-Za-z]+ ?", "", args)[:150]
+        detail = f"pid={pid} ppid={ppid} rule={rule} age={int(age // 3600)}h{int(age % 3600 // 60)}m cpu={pct:.1f}%-of-a-core cmd=[{short}]"
+        lines.append(f"jvm       {detail}")
+    for l in lines:
+        print(l)
+    if not kill:
+        return lines
+    for pid, ppid, age, cpu, pct, rule, args in cands:
+        why = None
+        if rule == "dup-sbt-server":
+            r = subprocess.run(["ps", "-o", "%cpu=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+            try:
+                if float(r) > float(jvm_knob("DUP_MAX_RECENT_CPU_PERCENT", 5)):
+                    why = f"busy now ({r}% CPU), not idle"
+            except ValueError:
+                pass
+        if why is None and not pid_alive(pid):
+            why = "already gone"
+        if why is None:
+            try:
+                if os.getpgid(pid) == own_pgid:
+                    why = "own process group"
+            except OSError:
+                why = "already gone"
+        if why is None:
+            w = agent_work(pid, procs)
+            if w:
+                why = f"another agent's working process (under {w})"
+        if why:
+            print(f"skip jvm pid {pid} ({rule}): {why}")
+            reap_log(f"skip jvm pid {pid} ({rule}): {why}")
+            continue
+        dump = ""
+        if "sbt-launch" in args or "xsbt.boot" in args:
+            dump = f"; thread dump {thread_dump(pid, '')}"
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        waited = 0.0
+        while waited < grace and pid_alive(pid):
+            time.sleep(0.5)
+            waited += 0.5
+        how = f"SIGTERM, {waited:.0f}s"
+        if pid_alive(pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            how = f"SIGKILL after {grace:.0f}s"
+        line = f"killed jvm pid {pid} ({how}) rule={rule}{dump}: {args[:150]}"
+        print(line)
+        reap_log(line)
+    return lines
+
+
+MAINTAIN_SWEEP_HOUR = 9  # local time: the daily sweep runs at the first maintain pass from 09:00 ($AGENTCTL_SWEEP_HOUR)
+
+
+def cmd_maintain(a):
+    """THE reaper (the owner, 2026-10-27: one service, not three): launchd net.bitcashier.agentctl-maintain runs it every
+    15 min. Each pass: the reap (`orphans --kill --safe`: dead owners, stray wait loops, stuck sbt servers, stale JVMs);
+    once a day, at the first pass from 09:00 local, the sweep. --dry-run lists and kills nothing."""
+    if hasattr(sys.stdout, "reconfigure"):  # its log shows each step as it happens
+        sys.stdout.reconfigure(line_buffering=True)
+    print(f"== agentctl maintain {ts()}{' (DRY RUN)' if a.dry_run else ''}")
+    print("== reap")
+    cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True))
+    path = os.path.join(HOME, ".cache", "agentctl", "maintain.json")
+    st = read_record(path) or {}
+    today, hour = dt.date.today().isoformat(), dt.datetime.now().hour
+    if a.sweep or (st.get("sweep") != today and hour >= int(env_num("AGENTCTL_SWEEP_HOUR", MAINTAIN_SWEEP_HOUR))):
+        print("== sweep (daily)")
+        rc = cmd_sweep(argparse.Namespace(repo=None, idle_days=SWEEP_IDLE_DAYS, dry_run=a.dry_run, no_report=a.dry_run))
+        if not a.dry_run:
+            write_json(path, {**st, "sweep": today, "sweep_rc": rc, "sweep_at": ts()})
+    else:
+        print(f"== sweep: done today ({st.get('sweep_at')})" if st.get("sweep") == today else
+              f"== sweep: from {MAINTAIN_SWEEP_HOUR:02d}:00")
+    return 0
+
+
 def cmd_orphans(a):
     sbt_only = getattr(a, "sbt_only", False)  # the daily sweep: stuck sbt servers only
     safe = getattr(a, "safe", False)  # the scheduled reaper: never an owner merely on old code (it re-execs itself)
@@ -5087,10 +5337,20 @@ def cmd_orphans(a):
         os.replace(cpu_path + ".tmp", cpu_path)
     except OSError:
         pass
+    jvms = []
+    if not sbt_only and (os.environ.get("AGENTCTL_SBT_REAP") != "0" or os.environ.get("AGENTCTL_JVM_PS")):
+        try:
+            rows, jcwd, kept, ports = jvm_scan()
+            taken = {f[1] for f in found}
+            jvms = [c for c in jvm_candidates(rows, jcwd, kept, ports, os.getpid()) if c[0] not in taken]
+        except (OSError, ValueError) as e:
+            print(f"jvm scan failed: {e}")
     for kind, pid, why, what in owners:
         print(f"{kind:9} pid {pid!s:<6}  {why}\n          {what}")
     if not found:
-        if not owners:
+        if jvms:
+            jvm_reap(jvms, a.kill, procs)
+        elif not owners:
             print("no orphans")
         return 0
     for kind, pid, etime, why, what in found:
@@ -5108,6 +5368,8 @@ def cmd_orphans(a):
             print(f"killed {kind} pid {pid}" + (f" (+children {kids})" if kids else ""))
             reap_log(f"killed {kind} pid {pid}" + (f" (+children {kids})" if kids else "") + ": "
                      + next((f"{w} | {what}" for k, p, _e, w, what in found if p == pid), ""))
+    if jvms:
+        jvm_reap(jvms, a.kill, procs)
     return 0
 
 # ---------------------------------------------------------------- inbox
@@ -5536,8 +5798,15 @@ def main(argv=None):
     rf.add_argument("--record", required=True)
     for p_ in (rc_, rb, rr, rl, rdp, ra, rp, rf):
         p_.add_argument("--repo")
+    mt = sub.add_parser("maintain", help="THE reaper, every 15 min (launchd net.bitcashier.agentctl-maintain): the reap, "
+                                         "and once a day the sweep")
+    mt.add_argument("--dry-run", action="store_true", help="list what would be reaped / swept, kill and delete nothing")
+    mt.add_argument("--sweep", action="store_true", help="run the sweep now, whatever the hour")
+    rp_ = sub.add_parser("reap", help="the reap alone: orphans --kill --safe (stale JVMs included); --dry-run lists")
+    rp_.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
-    handler = {"red": cmd_red, "checks": cmd_checks, "inbox": cmd_inbox, "queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
+    handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
+               "red": cmd_red, "checks": cmd_checks, "inbox": cmd_inbox, "queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)
 

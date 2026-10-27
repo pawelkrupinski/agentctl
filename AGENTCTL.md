@@ -578,9 +578,8 @@ included (a STATE.md keeps it) -- and never the root checkout, a locked tree, or
 lander's own shell aside). It prints `closed worktree <path> and branch <b> (...)` or `worktree <path> kept: <why>`,
 and logs to `agentctl-deleted.log`. `--keep-worktree` skips it. WATCH RED or UNKNOWN closes nothing.
 
-**`agentctl sweep` is the daily report** (launchd `net.bitcashier.agentctl-sweep`, 09:00; source
-`~/bin/launchd/net.bitcashier.agentctl-sweep.plist`; log `~/Library/Logs/agentctl-sweep.log`; each report also in
-`~/.cache/agentctl/sweep/<date>.txt`):
+**`agentctl sweep` is the daily report** (run by `agentctl maintain` at its first pass from 09:00, see "maintain";
+each report also in `~/.cache/agentctl/sweep/<date>.txt`). It also removes STALE red claims (see "red"):
 
 ```
 agentctl sweep [--repo PATH ...] [--idle-days 3] [--dry-run] [--no-report]
@@ -621,14 +620,43 @@ owning shell died, every target run finished, or they duplicate an older loop on
 dead owner's runs and removes its record, and sends SIGTERM to the rest (an owner's handler cancels its own runs).
 Output is `no orphans`, or one line per stray with the reason.
 
-`--kill --safe` is the scheduled reaper's mode (`~/bin/launchd/net.bitcashier.agentctl-reap.plist`, every 15 min; not
-installed by agentctl): it ends only strays -- a dead owner's record and its runs, wait loops whose agent or runs are
+`--kill --safe` (= `agentctl reap`) is the scheduled reaper's mode (run by `agentctl maintain` every 15 min): it ends
+only strays -- a dead owner's record and its runs, wait loops whose agent or runs are
 gone or that duplicate an older one, sbt servers whose worktree is gone, whose serving command's sbt-warm or owner died
 (sbt-warm's `.serving`), or that hold a running command (an sbtn client) with no CPU for 20 min across reaps
 (`~/.cache/agentctl/sbt-cpu.json`; a `jcmd Thread.print` dump first, in `~/.cache/agentctl/sbt-dumps/`) -- never an
 owner merely on old code, which re-execs itself. Every kill is a line of `~/.cache/agentctl/reap.log`. The daily
 `sweep` reaps the sbt servers too. A watch whose runs show no change for 120 min (`$AGENTCTL_WATCH_STALL_MIN`) ends
 `WATCH STALLED`.
+
+**Stale JVMs** (folded in 2026-10-27 from `~/.local/bin/reap-stale-jvms.sh`, launchd `dev.kinowo.jvm-reaper`, now
+retired; movies keeps the old script as `scripts/reap-stale-jvms.sh`): the same rules, by the same tunables
+(`HOG_MIN_AGE_SECONDS`, `HOG_MIN_CPU_PERCENT`, `ORPHAN_MIN_AGE_SECONDS`, `PROTECT_REGEX`, `PROTECTED_PORTS`, ...):
+
+- `orphan`: an sbt worker / forked-test JVM with PPID 1, 10 min or older, whatever its CPU;
+- `hog`: any sbt/java process 1.5 h or older at >= 5% of a core over its LIFETIME, with no tty, never a server a live
+  `sbt-warm --keep` keeps in its directory;
+- `dup-sbt-server` / `dup-sbt-gone-dir`: detached `sbt-launch --detach-stdio` servers grouped by cwd, all but the newest
+  once 10 min old and idle now (recent %CPU <= 5), and one whose cwd is gone (a renamed `.part` is not gone);
+- spared: IDEs and the protected names, a listener on port 9000 under 50% of a core, the reaper's own group, and any
+  process under a live Claude Code session or a running land / check / waiting processor / red fixer.
+
+They are listed first (`jvm pid=… rule=…`); with `--kill`, an sbt server gets a thread dump first, then TERM and KILL
+after 10 s. Every kill and skip is a line of `~/.cache/agentctl/reap.log`.
+
+### maintain: THE reaper, every 15 min
+
+```
+agentctl maintain [--dry-run] [--sweep]     # launchd net.bitcashier.agentctl-maintain (RunAtLoad, every 15 min)
+agentctl reap [--dry-run]                   # the reap alone
+```
+
+The owner (2026-10-27): one reaper, not three. Each pass runs the reap (`orphans --kill --safe`, stale JVMs included)
+and, once a day at the first pass from 09:00 local (`$AGENTCTL_SWEEP_HOUR`), the sweep. State in
+`~/.cache/agentctl/maintain.json`, output in `~/Library/Logs/agentctl-maintain.log`, kills in
+`~/.cache/agentctl/reap.log`. Source `~/bin/launchd/net.bitcashier.agentctl-maintain.plist` (installed as a copy). It
+replaces `net.bitcashier.agentctl-reap`, `net.bitcashier.agentctl-sweep` and `dev.kinowo.jvm-reaper` (their plists:
+`~/bin/launchd/retired/`); `~/.local/bin/reap-stale-jvms.sh` is now a shim calling `agentctl reap`.
 
 ---
 

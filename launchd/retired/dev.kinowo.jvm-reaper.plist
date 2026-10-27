@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.kinowo.jvm-reaper</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/pawel/.local/bin/reap-stale-jvms.sh</string>
+    </array>
+
+    <!-- ps/awk/date/tail all live in /usr/bin and /bin; nothing here needs
+         homebrew, but keep it on PATH so the script stays portable if a
+         future rule reaches for jps or gtimeout. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+    </dict>
+
+    <!-- Run at login: orphaned workers survive a logout, and a machine that
+         has been asleep for a weekend should be clean the moment it is back. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Every 15 min. Faster buys nothing — the rules are keyed on a
+         10-minute orphan grace and a 1.5h age — and each pass is one ps. -->
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <!-- The script keeps its own timestamped, self-trimming log; this file is
+         only for the case where bash itself falls over, which would otherwise
+         be an invisible failure that quietly stops all reaping. -->
+    <key>StandardOutPath</key>
+    <string>/dev/null</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/pawel/Library/Logs/jvm-reaper.err.log</string>
+
+    <!-- Reaping is pure cleanup; never let it compete with a real build. -->
+    <key>Nice</key>
+    <integer>10</integer>
+    <key>LowPriorityIO</key>
+    <true/>
+</dict>
+</plist>

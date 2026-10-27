@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  agentctl maintain, every 15 min and at login (~/bin/AGENTCTL.md, "maintain"): THE reaper. Each pass reaps (orphans
+  kill safe: dead owners' records and runs, stray wait loops, stuck sbt servers after a thread dump, and the stale-JVM
+  rules of the retired dev.kinowo.jvm-reaper: orphan workers, lifetime hogs, duplicate / gone-dir sbt servers); once a
+  day, at the first pass from 09:00, it runs the sweep. Every kill: ~/.cache/agentctl/reap.log. Replaces
+  net.bitcashier.agentctl-reap, net.bitcashier.agentctl-sweep and dev.kinowo.jvm-reaper (2026-10-27).
+  Source: ~/bin/launchd/; installed as a copy.
+  Install: cp ~/bin/launchd/net.bitcashier.agentctl-maintain.plist ~/Library/LaunchAgents/ &&
+           launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/net.bitcashier.agentctl-maintain.plist
+  Unload:  launchctl bootout gui/$(id -u)/net.bitcashier.agentctl-maintain
+-->
+<dict>
+    <key>Label</key>
+    <string>net.bitcashier.agentctl-maintain</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/pawel/bin/agentctl</string>
+        <string>maintain</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/pawel/bin:/Users/pawel/.sdkman/candidates/java/current/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/pawel</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>900</integer>
+    <key>Nice</key>
+    <integer>10</integer>
+    <key>LowPriorityIO</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/pawel/Library/Logs/agentctl-maintain.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/pawel/Library/Logs/agentctl-maintain.log</string>
+</dict>
+</plist>
