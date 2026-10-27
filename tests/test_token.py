@@ -189,3 +189,17 @@ class BackgroundTouchesOnlyAllowedRootsTest(unittest.TestCase):
         self.assertNotIn(111, cwds)  # ~/Desktop: skipped
         self.assertEqual(cwds.get(222), f"{home}/projects/movies")
         self.assertEqual(touched, [])
+
+
+class StopGroupTest(unittest.TestCase):
+    def test_a_term_ignoring_group_is_killed_whole(self):
+        import signal, time
+        # a leader that ignores TERM, with a child of its own (the fixer's `claude -p` and its tools)
+        p = subprocess.Popen(["/bin/sh", "-c", "trap '' TERM; sleep 60 & sleep 60"], start_new_session=True)
+        time.sleep(0.5)
+        t0 = time.time()
+        self.assertTrue(A.stop_group(p.pid, grace=1))
+        p.wait(5)
+        self.assertLess(time.time() - t0, 8)
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(p.pid, 0)

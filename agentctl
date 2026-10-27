@@ -2167,6 +2167,33 @@ def fixer_verdict(text):
     return None
 
 
+def stop_group(pgid, grace=10.0, proc=None):
+    """End a whole process group: TERM, then KILL after `grace` s (a `claude -p` may ignore TERM). True when it is gone."""
+    def alive():
+        if proc is not None:
+            proc.poll()  # reap the leader: a zombie still answers killpg(0)
+        try:
+            os.killpg(pgid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+    if not alive():
+        return True
+    for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 5.0)):
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            return True
+        end = time.time() + wait
+        while time.time() < end:
+            if not alive():
+                return True
+            time.sleep(0.1)
+    return not alive()
+
+
 def red_fixer(a):
     """The dispatched fixer's wrapper (detached): claim, run claude, enforce the wall time, write the verdict."""
     rec = read_record(a.record)
@@ -2200,18 +2227,30 @@ def red_fixer(a):
     with open(rec["log"], "a") as log:
         p = subprocess.Popen(argv, cwd=wt, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, env=env,
                              start_new_session=True)
-        rec["claude_pid"] = p.pid
+        rec["claude_pid"] = rec["claude_pgid"] = p.pid  # start_new_session: the pgid is its pid
         write_json(a.record, rec)
+        try:
+            c = read_record(cpath) or claim
+            c["pgid"] = p.pid
+            write_json(cpath, c)
+        except OSError:
+            pass
+
+        def cancelled(signum, _frame):  # the wrapper is stopped: its whole claude group goes with it
+            stop_group(p.pid, env_num("AGENTCTL_FIXER_TERM_GRACE", 10), p)
+            os._exit(143)
+        for sg in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+            signal.signal(sg, cancelled)
         while rc is None:
             try:
                 rc = p.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 if time.time() - t0 > wall:
-                    os.killpg(p.pid, signal.SIGTERM)
+                    stop_group(p.pid, env_num("AGENTCTL_FIXER_TERM_GRACE", 10), p)
                     verdict = f"TIMED OUT after {int(wall // 60)} min (maximum wall time)"
                     rc = p.wait()
                 elif os.path.exists(os.path.join(wt, "RED-STOP.md")):
-                    os.killpg(p.pid, signal.SIGTERM)
+                    stop_group(p.pid, env_num("AGENTCTL_FIXER_TERM_GRACE", 10), p)
                     verdict = "STOPPED: " + open(os.path.join(wt, "RED-STOP.md")).readline().strip()
                     rc = p.wait()
     try:
