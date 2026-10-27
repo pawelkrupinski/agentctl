@@ -309,7 +309,8 @@ cold. The checker:
 2. runs the hook's dry run there -- `--range`, or `--checks-only` when main is red and the change must wait -- as a
    check of THE GOVERNOR (`gov`: red for a `Fixes-Red:` fix), under the stall bound; or, when `gov status` reports
    pressure, on ci-runner (see "remote checks"); a failure is `NOT LANDED: the pre-push checks failed` with the tail;
-3. under the landing lock: main moved since the check -> back to 1 (3 rounds); main red and the change must wait ->
+3. under the landing lock: main moved since the check -> back to 1 (twice; the third time it is rebased there and
+   pushed, the push's hook running the checks on the new base, so a busy main never starves it); main red and the change must wait ->
    it joins `waiting` (`WAITING ...`, the entry names your worktree); else the push from the tree, whose hook reuses
    the pass (or confirms the remote run) -> `LANDED <sha>` and a detached watch that closes your worktree after
    WATCH OK when proven merged (unless land had `--keep-worktree`).

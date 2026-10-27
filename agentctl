@@ -4421,7 +4421,7 @@ def join(repo, main_ref, sh, log_path, a, head=None, worktree=None):
 # moved meanwhile: rebased in the tree and checked again. Every verdict goes to the inbox with the agent's worktree.
 # `land --follow` keeps the old in-process land (checks, push, watch) for scripts and red fixers.
 QUEUE_POOL = 3          # check trees, so at most this many queued changes are checked at once ($AGENTCTL_CHECK_TREES)
-QUEUE_ROUNDS = 3        # main moved under a checked change this often: checked again each time, then NOT LANDED
+QUEUE_ROUNDS = 3        # checked again while main moves under the checks; the last round pushes, its hook checking
 
 
 def queued_entries(d):
@@ -4605,9 +4605,21 @@ def _check_entry(repo, d, e, i, own=None):
             if not held:
                 continue
             git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
-            if git(repo, "rev-parse", f"{REMOTE}/main").strip() != base:
-                wlog(d, f"{e['id']}: main moved during its checks: rebased and checked again")
-                continue
+            moved = git(repo, "rev-parse", f"{REMOTE}/main").strip()
+            if moved != base:
+                if round_ < QUEUE_ROUNDS - 1:
+                    wlog(d, f"{e['id']}: main moved during its checks: rebased and checked again")
+                    continue
+                # the last round: rebased under the lock and pushed, so the push's hook runs the checks on the new base
+                # here (as land's last round did): a busy main never starves a change
+                head = rebase_in_tree(tree, e, moved)
+                if not head:
+                    queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {REMOTE}/main "
+                                  f"{moved[:10]} (main moved during its checks): rebase onto forgejo/main and land again")
+                    return 1
+                e.pop("remote_run", None)
+                base, e["tip"], where = moved, head, "by the push's hook, under the landing lock"
+                commits = waiting_commits(tree, base, head)
             reds = gate_reds(repo) if waiting_supported(repo) else set()
             if reds and must_wait(repo, commits, reds):
                 return queue_join(repo, d, e, tree, head)

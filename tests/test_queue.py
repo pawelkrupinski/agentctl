@@ -87,6 +87,23 @@ class QueueTest(WaitingTest):
         self.assertEqual(self.check(eid), 0)
         self.assertEqual(self.remote_log()[:2], ["a: one", "b: two"])
 
+    def test_a_main_that_keeps_moving_lands_it_on_the_last_round_through_the_push_hook(self):
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        real, n = A.run_entry_checks, []
+
+        def moving(repo, d, e, tree, base, head, mode, cls, log_path, own=None):
+            n.append(1)
+            other, _ = self.agent(f"m{len(n)}", f"worker/src/main/M{len(n)}.scala", "m\n", msg=f"main moves {len(n)}")
+            sh(other, "git", "push", "-q", "forgejo", "HEAD:main")
+            return real(repo, d, e, tree, base, head, mode, cls, log_path, own)
+        A.run_entry_checks = moving
+        self.addCleanup(setattr, A, "run_entry_checks", real)
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual(len(n), A.QUEUE_ROUNDS)
+        self.assertEqual(self.remote_log()[:2], ["a: one", f"main moves {A.QUEUE_ROUNDS}"])
+        self.assertIn("by the push's hook", [e for e in self.inbox() if e["kind"] == "LANDED"][0]["verdict"])
+
     def test_a_conflict_with_the_moved_main_is_not_landed(self):
         wt, _ = self.agent("a", "web/src/main/Shared.scala", "mine\n")
         eid, _ = self.queued(wt)
