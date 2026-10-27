@@ -156,7 +156,7 @@ class LandWatchTest(Base):
         A.LAND_LOCK_DIR = os.path.join(self.tmp.name, "locks")
         self.calls = []
 
-        def fake(repo, sha, pushed_at, o_r=None):
+        def fake(repo, sha, pushed_at, o_r=None, close=None):
             # the lock is free while watching: another lander could take it now
             import fcntl
             with open(A.land_lock_path(repo), "a+") as f:

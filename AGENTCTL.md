@@ -8,7 +8,7 @@ calls.
 
 - Not on PATH: call it as `~/bin/agentctl`.
 - Python 3, standard library only.
-- Tests: `python3 -m unittest discover -s ~/bin/tests` (93 tests, mutation tests included).
+- Tests: `python3 -m unittest discover -s ~/bin/tests` (99 tests, mutation tests included).
 - `agentctl --help` and `agentctl <cmd> --help` match this page.
 
 ## Standard agent workflow
@@ -79,7 +79,10 @@ The user has standing-OKed `agentctl cleanup --execute` for exactly what it dele
 - clean, idle (at least 2 h) worktrees of the six repos whose HEAD is merged into forgejo/main (ancestor, or all
   commits patch-equivalent);
 - their local branches, but never `main` or `master`, and never a branch checked out elsewhere;
-- remote `measure/*` branches whose runs have all finished, or that are more than 24 h old with no run.
+- remote `measure/*` branches whose runs have all finished, or that are more than 24 h old with no run;
+- after `WATCH OK`, the worktree `land` ran from and its branch, when proven merged and clean (see "The lifecycle closes
+  itself");
+- remote branches `agentctl sweep` proves merged into main (not `main`, `master`, `waiting`, `measure/*`).
 
 It skips locked trees, dirty trees, trees in use by a process, and trees under `~/.cache` (unless you pass
 `--include-caches`). Every deletion is appended to `scratchpad/agentctl-deleted.log`
@@ -182,7 +185,7 @@ first. A genuine `Fixes-Red:` trailer is only for a commit that really fixes tha
 ### land: lock, rebase, check, push, verify, watch
 
 ```
-agentctl land [--repo PATH] [--branch B] [--stash] [--no-watch]     # agents: Bash run_in_background=true
+agentctl land [--repo PATH] [--branch B] [--stash] [--no-watch] [--keep-worktree]   # agents: Bash run_in_background=true
 ```
 
 Steps, in order:
@@ -382,6 +385,29 @@ revert` commits are exempt for their own files. `land` runs it, and so does movi
 prepush-check: forgejo/main...c972d56a2b49: 1 file changed, 8 insertions(+)
 prepush-check: ok
 ```
+
+### The lifecycle closes itself (2026-10-26)
+
+**After `WATCH OK`, `land` closes the worktree it ran from**: it removes the worktree and its local branch, only when
+proven merged -- `git cherry forgejo/main HEAD` shows no commit of its own and the tree is clean, untracked files
+included (a STATE.md keeps it) -- and never the root checkout, a locked tree, or a tree another process is in (the
+lander's own shell aside). It prints `closed worktree <path> and branch <b> (...)` or `worktree <path> kept: <why>`,
+and logs to `agentctl-deleted.log`. `--keep-worktree` skips it. WATCH RED or UNKNOWN closes nothing.
+
+**`agentctl sweep` is the daily report** (launchd `net.bitcashier.agentctl-sweep`, 09:00; source
+`~/bin/launchd/net.bitcashier.agentctl-sweep.plist`; log `~/Library/Logs/agentctl-sweep.log`; each report also in
+`~/.cache/agentctl/sweep/<date>.txt`):
+
+```
+agentctl sweep [--repo PATH ...] [--idle-days 3] [--dry-run] [--no-report]
+```
+
+- LISTS movies' worktrees and local branches that are unmerged and idle for more than 3 days (idle: no git activity in
+  the worktree and no newer tip commit), and remote branches that are unmerged. It deletes nothing unmerged and no
+  worktree at all.
+- DELETES remote branches proven merged into main (ancestor, or every commit patch-equivalent per `git cherry`), under
+  the standing OK, through the API and only if the branch still points where it was read. Never `main`, `master`,
+  `waiting`, or `measure/*` (those are `cleanup`'s, by their runs).
 
 ### cleanup: remove proven-merged items only
 

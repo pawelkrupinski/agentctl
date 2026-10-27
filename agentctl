@@ -1038,11 +1038,12 @@ def cmd_land(a):
         if stash and not stash.restore():
             print(f"WARNING: local changes are in stash {stash.name}, not restored")
     if rc == 0 and a.waiting:  # main was red: the change waits on `waiting`, and lands with it once main is green
-        rc, a.landed_sha, a.pushed_at = await_entry(repo, a.waiting["id"])
+        rc, a.landed_sha, a.pushed_at = await_entry(repo, a.waiting["id"], close=None if getattr(a, "keep_worktree", False) else repo)
     if rc != 0 or not a.landed_sha or getattr(a, "no_watch", False):
         return rc
-    # the lock is free again: the next lander goes while this one watches main's CI
-    return watch_landed(repo, a.landed_sha, a.pushed_at)
+    # the lock is free again: the next lander goes while this one watches main's CI; on WATCH OK the worktree it ran
+    # from is closed when proven merged (close_worktree), unless --keep-worktree
+    return watch_landed(repo, a.landed_sha, a.pushed_at, close=None if getattr(a, "keep_worktree", False) else repo)
 
 
 def land_loop(repo, main_ref, sh, log_path, a):
@@ -1181,7 +1182,7 @@ def pick_convergence_run(repo, sha, runs, pushed_at):
     return ok[0] if ok else None
 
 
-def watch_landed(repo, sha, pushed_at, o_r=None):
+def watch_landed(repo, sha, pushed_at, o_r=None, close=None):
     """Watch Main and the convergence for a landed sha. 0 green (or nothing to watch), 3 red, 2 could not tell. OWNED
     (one watcher per sha; on agentctl's new code it re-execs as `agentctl watch`)."""
     o_r = o_r or slug(repo)
@@ -1190,16 +1191,20 @@ def watch_landed(repo, sha, pushed_at, o_r=None):
         print(f"watch: no CI watched for {o_r} (only movies' Main and convergence are)")
         return 0
     pushed_at = pushed_at or time.time()
-    own = Owned("watch", f"{o_r}-{sha}", ["watch", "--repo", repo, "--sha", sha, "--pushed-at", str(pushed_at)])
+    own = Owned("watch", f"{o_r}-{sha}", ["watch", "--repo", repo, "--sha", sha, "--pushed-at", str(pushed_at)]
+                + (["--close", close] if close else []))
     if not own.acquire():
         h = own.holder or {}
         print(f"WATCH UNKNOWN: another agentctl (pid {h.get('pid')}, {h.get('owner')}) already watches {sha[:10]}; "
               "its verdict is its own (`agentctl orphans` lists owners)")
         return 2
     try:
-        return _watch(repo, sha, pushed_at, o_r, flows, own)
+        rc = _watch(repo, sha, pushed_at, o_r, flows, own)
     finally:
         own.release()
+    if rc == 0 and close:
+        print(close_worktree(close), flush=True)
+    return rc
 
 
 def _watch(repo, sha, pushed_at, o_r, flows, own):
@@ -1466,10 +1471,10 @@ def spawn_waiting_processor(repo):
                          stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=repo)
 
 
-def await_entry(repo, eid):
+def await_entry(repo, eid, close=None):
     """Block until the entry lands or is rejected: (rc, landed sha, pushed_at). Restarts a dead processor. OWNED (one
     awaiter per entry; on agentctl's new code it re-execs as `agentctl waiting await <entry>`, which then watches)."""
-    own = Owned("await", eid, ["waiting", "await", eid, "--repo", repo])
+    own = Owned("await", eid, ["waiting", "await", eid, "--repo", repo] + (["--close", close] if close else []))
     if not own.acquire():
         h = own.holder or {}
         print(f"NOT LANDED (still waiting): entry {eid} is already awaited by pid {h.get('pid')} ({h.get('owner')})")
@@ -1618,7 +1623,7 @@ def cmd_waiting(a):
         return waiting_run(repo, once=a.once)
     if a.wcmd == "await":  # land's wait on its entry, resumed after a restart on new code
         rc, sha, pushed_at = await_entry(repo, a.entry)
-        return watch_landed(repo, sha, pushed_at) if rc == 0 and sha else rc
+        return watch_landed(repo, sha, pushed_at, close=a.close) if rc == 0 and sha else rc
     if a.wcmd == "status":
         entries = waiting_entries(d)
         print(f"waiting {d} (branch `{WAITING_BRANCH}`, worktree {wt}{'' if os.path.isdir(wt) else ': none'})")
@@ -2196,6 +2201,154 @@ def cmd_cleanup(a):
     return rc
 
 
+# ---------------------------------------------------------------- the lifecycle closes itself
+# The owner (2026-10-26): after WATCH OK, land removes the worktree it ran from and its branch -- only when proven merged
+# (git cherry shows nothing of its own left, the tree clean) and never the root checkout or a tree another process is
+# in; and a daily `agentctl sweep` reports what is unmerged and idle, deleting only remote branches proven merged.
+SWEEP_IDLE_DAYS = 3
+SWEEP_KEEP_REMOTE = ("main", "master", WAITING_BRANCH)
+SWEEP_DIR = os.path.join(HOME, ".cache", "agentctl", "sweep")
+SWEEP_REPOS = [os.path.join(HOME, "projects", "movies")]
+
+
+def own_ancestry():
+    """This process and its parents (the agent's shell is in the worktree it lands from)."""
+    parents = {p: pp for p, pp, _e, _c in ps()}
+    chain, pid = set(), os.getpid()
+    while pid and pid not in chain:
+        chain.add(pid)
+        pid = parents.get(pid)
+    return chain
+
+
+def close_worktree(wt):
+    """Remove the worktree land ran from and its local branch, when proven merged. Returns one line saying what."""
+    wt = os.path.realpath(wt)
+    try:
+        trees = worktrees(wt)
+    except RuntimeError as e:
+        return f"worktree {wt} kept: {e}"
+    root = os.path.realpath(trees[0]["worktree"])
+    if wt == root:
+        return f"worktree {wt} kept: the root checkout is never closed"
+    me = next((t for t in trees if os.path.realpath(t["worktree"]) == wt), None)
+    if me is None:
+        return f"worktree {wt} kept: not a worktree of {root}"
+    if "locked" in me:
+        return f"worktree {wt} kept: locked"
+    branch = (me.get("branch") or "").removeprefix("refs/heads/") or None
+    if branch in PROTECTED_BRANCHES:
+        return f"worktree {wt} kept: on {branch}"
+    mine = own_ancestry()
+    busy = [p for p, c in process_cwds().items() if p not in mine and (c == wt or c.startswith(wt + "/"))]
+    if busy:
+        return f"worktree {wt} kept: in use by pid {busy[:3]}"
+    dirty = git(wt, "status", "--porcelain", "--untracked-files=all", check=False)
+    if dirty.returncode or dirty.stdout.strip():
+        return f"worktree {wt} kept: the tree is not clean ({len(dirty.stdout.splitlines())} changed/untracked)"
+    git(wt, "fetch", "--quiet", REMOTE, "main", check=False)
+    main = f"refs/remotes/{REMOTE}/main"
+    head = git(wt, "rev-parse", "HEAD").strip()
+    ahead = [l for l in git(wt, "cherry", main, head).splitlines() if l.startswith("+")]
+    if ahead:
+        return f"worktree {wt} kept: {len(ahead)} commit(s) not on forgejo/main"
+    why = merged_reason(root, head, main) or "nothing of its own left"
+    r = git(root, "worktree", "remove", wt, check=False)
+    if r.returncode:
+        return f"worktree {wt} kept: git worktree remove refused: {r.stderr.strip()[:200]}"
+    log_deletion("worktree", os.path.basename(root), wt, head, f"closed after WATCH OK: {why}")
+    msg = f"closed worktree {wt}"
+    if branch and f"refs/heads/{branch}" not in {t.get("branch") for t in worktrees(root)}:
+        if git(root, "update-ref", "-d", f"refs/heads/{branch}", head, check=False).returncode == 0:
+            log_deletion("branch", os.path.basename(root), branch, head, f"closed after WATCH OK: {why}")
+            msg += f" and branch {branch}"
+    return msg + f" ({why})"
+
+
+def delete_remote_branch(repo, o_r, name, sha):
+    """Delete a forge branch through the API, only if it still points at sha."""
+    q = urllib.parse.quote(name, safe="")
+    cur = api(o_r, "GET", f"branches/{q}")["commit"]["id"]
+    if cur != sha:
+        raise RuntimeError(f"moved to {cur[:10]} since it was read")
+    api(o_r, "DELETE", f"branches/{q}")
+
+
+def sweep_repo(repo, idle_days, dry, out):
+    name = os.path.basename(repo)
+    now_ = time.time()
+    git(repo, "fetch", "--quiet", "--prune", REMOTE, check=False)
+    main = f"refs/remotes/{REMOTE}/main"
+    out.append(f"== {name} (forgejo/main {git(repo, 'rev-parse', main).strip()[:10]})")
+    idle_wt, checked_out = [], set()
+    for w in worktrees(repo)[1:]:
+        path, sha = w["worktree"], w.get("HEAD", "")
+        branch = (w.get("branch") or "").removeprefix("refs/heads/")
+        checked_out.add(branch)
+        if not os.path.isdir(path) or path.startswith(CACHE_TREES) or merged_reason(repo, sha, main):
+            continue
+        tip = int(git(repo, "log", "-1", "--format=%ct", sha, check=False).stdout.strip() or 0)
+        last = max(gitdir_activity(repo, path) or 0, tip)
+        days = (now_ - last) / 86400
+        if days > idle_days:
+            n = len(git(repo, "rev-list", f"{main}..{sha}").split())
+            idle_wt.append(f"  UNMERGED worktree {path} [{branch or 'detached'}]: {n} commit(s), idle {int(days)} d")
+    out += idle_wt or [f"  no unmerged worktree idle more than {idle_days} d"]
+    lonely = []
+    for line in git(repo, "for-each-ref", "--format=%(refname:short) %(objectname) %(committerdate:unix)",
+                    "refs/heads").splitlines():
+        b, sha, t = line.split()
+        if b in PROTECTED_BRANCHES or b in checked_out or merged_reason(repo, sha, main):
+            continue
+        days = (now_ - int(t)) / 86400
+        if days > idle_days:
+            lonely.append(f"  UNMERGED branch {b} (no worktree): tip {sha[:10]}, idle {int(days)} d")
+    out += lonely
+    o_r = None
+    for line in git(repo, "ls-remote", "--heads", REMOTE).splitlines():
+        sha, ref = line.split()
+        b = ref.removeprefix("refs/heads/")
+        if b in SWEEP_KEEP_REMOTE or b.startswith("measure/"):
+            continue  # measure/* is `agentctl cleanup`'s, by its runs
+        if not git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}"):
+            git(repo, "fetch", "--quiet", REMOTE, b, check=False)
+        why = git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}") and merged_reason(repo, sha, main)
+        if not why:
+            t = int(git(repo, "log", "-1", "--format=%ct", sha, check=False).stdout.strip() or now_)
+            out.append(f"  unmerged remote branch {b}: tip {sha[:10]}, {int((now_ - t) / 86400)} d old (listed, kept)")
+            continue
+        if dry:
+            out.append(f"  would delete remote branch {b} {sha[:10]}: {why}")
+            continue
+        try:
+            o_r = o_r or slug(repo)
+            delete_remote_branch(repo, o_r, b, sha)
+            log_deletion("remote-branch", o_r, b, sha, f"sweep: {why}")
+            out.append(f"  deleted remote branch {b} {sha[:10]}: {why}")
+        except Exception as e:
+            out.append(f"  remote branch {b} not deleted: {e}")
+
+
+def cmd_sweep(a):
+    repos = [os.path.abspath(os.path.expanduser(r)) for r in (a.repo or SWEEP_REPOS)]
+    out = [f"agentctl sweep {ts()}{' (DRY RUN)' if a.dry_run else ''}: unmerged and idle > {a.idle_days} d is listed, "
+           "never deleted; remote branches proven merged into main are deleted (standing OK)"]
+    rc = 0
+    for repo in repos:
+        try:
+            sweep_repo(repo, a.idle_days, a.dry_run, out)
+        except RuntimeError as e:
+            out.append(f"== {os.path.basename(repo)}: {e}")
+            rc = 1
+    text = "\n".join(out)
+    print(text)
+    if not a.no_report:
+        os.makedirs(SWEEP_DIR, exist_ok=True)
+        with open(os.path.join(SWEEP_DIR, dt.date.today().isoformat() + ".txt"), "w") as f:
+            f.write(text + "\n")
+    return rc
+
+
 # ---------------------------------------------------------------- orphans
 def ps():
     r = subprocess.run(["ps", "-axo", "pid=,ppid=,etime=,command="], capture_output=True, text=True)
@@ -2250,7 +2403,7 @@ def is_sbt(cmd):
 
 def cmd_watch(a):
     repo = git(a.repo or os.getcwd(), "rev-parse", "--show-toplevel").strip()
-    return watch_landed(repo, a.sha, a.pushed_at)
+    return watch_landed(repo, a.sha, a.pushed_at, close=a.close)
 
 
 def owner_orphans(kill):
@@ -2424,6 +2577,8 @@ def main(argv=None):
     ld.add_argument("--branch", help="local branch to land (default: the checked-out HEAD)")
     ld.add_argument("--stash", action="store_true", help="set uncommitted changes aside in a NAMED stash and restore them after")
     ld.add_argument("--no-watch", action="store_true", help="exit at LANDED instead of watching Main and the convergence")
+    ld.add_argument("--keep-worktree", action="store_true",
+                    help="after WATCH OK, keep the worktree land ran from (default: closed when proven merged and clean)")
     ev = sub.add_parser("env", help="print sdkman sbt/java export lines (--print) or check the agent environment (--check)",
                         description=ENV_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     eg = ev.add_mutually_exclusive_group()
@@ -2456,15 +2611,23 @@ def main(argv=None):
                                        "after a restart on new code)")
     wga.add_argument("entry")
     wga.add_argument("--repo")
+    wga.add_argument("--close")
     wt = sub.add_parser("watch", help="watch Main and the convergence for a landed sha (land's watch, resumed after a "
                                       "restart on new code): WATCH OK / RED / UNKNOWN")
     wt.add_argument("--sha", required=True)
     wt.add_argument("--repo")
     wt.add_argument("--pushed-at", type=float, default=None)
+    wt.add_argument("--close", help="after WATCH OK, remove this worktree and its branch when proven merged")
+    sw = sub.add_parser("sweep", help="daily report: unmerged idle worktrees/branches (listed); remote branches merged into "
+                                      "main (deleted, standing OK)")
+    sw.add_argument("--repo", action="append", help="a checkout (repeatable); default movies")
+    sw.add_argument("--idle-days", type=float, default=SWEEP_IDLE_DAYS)
+    sw.add_argument("--dry-run", action="store_true")
+    sw.add_argument("--no-report", action="store_true", help="do not write ~/.cache/agentctl/sweep/<date>.txt")
     q = sub.add_parser("queue", help="RETIRED 2026-10-26: use `agentctl land` (prints this and exits 2)")
     q.add_argument("rest", nargs=argparse.REMAINDER)
     a = ap.parse_args(argv)
-    return {"queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd](a)
+    return {"queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd](a)
 
 
 if __name__ == "__main__":

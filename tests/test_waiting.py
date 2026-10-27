@@ -25,9 +25,9 @@ class WaitingTest(Base):
         A.gate_reds = lambda repo: set(self.reds)
         A.spawn_waiting_processor = lambda repo: None
         self.awaited = []
-        A.await_entry = lambda repo, eid: (self.awaited.append(eid), (9, None, None))[1]
+        A.await_entry = lambda repo, eid, close=None: (self.awaited.append(eid), (9, None, None))[1]
         A.time.sleep = lambda s: None
-        A.watch_landed = lambda repo, sha, pushed_at, o_r=None: 0
+        A.watch_landed = lambda repo, sha, pushed_at, o_r=None, close=None: 0
         os.environ.pop("PREPUSH_SKIP", None)
         self.calls, self.pushes = os.path.join(t, "hook-calls"), os.path.join(t, "pushes")
         hooks = os.path.join(t, "hooks")
@@ -94,9 +94,9 @@ class WaitingTest(Base):
         self.assertIn(sha, sh(self.r.root, "git", "--git-dir", self.r.bare, "rev-list", "main"))
 
     def test_a_waiting_land_goes_on_to_landed_and_the_watch(self):
-        A.await_entry = lambda repo, eid: (print("LANDED abc (with …)"), (0, "abc", 1.0))[1]
+        A.await_entry = lambda repo, eid, close=None: (print("LANDED abc (with …)"), (0, "abc", 1.0))[1]
         watched = []
-        A.watch_landed = lambda repo, sha, pushed_at, o_r=None: (watched.append(sha), 3)[1]
+        A.watch_landed = lambda repo, sha, pushed_at, o_r=None, close=None: (watched.append(sha), 3)[1]
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         rc, out = self.land(wt)
         self.assertEqual(rc, 3, out)
