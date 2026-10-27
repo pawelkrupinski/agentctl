@@ -903,3 +903,22 @@ class FixedNotFlakyTest(RedBase):
         acts = self.patrol_now(dispatch=False)
         self.assertTrue(any("RED FLAKE FIXED" in a and "never a flake" in a for a in acts), acts)
         self.assertEqual(A.flakes(), {})
+
+
+class SiblingTest(FixedNotFlakyTest):
+    def test_a_causeless_signature_follows_its_run_mates_and_old_flakes_get_their_heads_backfilled(self):
+        # Main #20 fails in `test (rest)` (a cause) and `timings` (an empty log: no cause of its own)
+        self.put("run-40.json", {"jobs": [{"name": "test (rest)", "status": "completed", "conclusion": "failure",
+                                           "steps": [{"name": "Run tests", "conclusion": "failure"}]},
+                                          {"name": "timings", "status": "completed", "conclusion": "failure",
+                                           "steps": [{"name": "Run tests", "conclusion": "failure"}]}],
+                                 "headSha": self.sha, "url": "u", "number": 20, "status": "completed",
+                                 "conclusion": "failure", "workflowName": "Main"})
+        self.patrol_now(dispatch=False)
+        fix = self.land("the fix\n\nFixes-Red: 99")
+        self.green_after(fix)
+        self.patrol_now(dispatch=False)
+        recs = {r["job"]: r for r in A.all_sig_records()}
+        self.assertEqual(recs["test (rest)"]["fixed_by"], fix)
+        self.assertEqual(recs["timings"]["fixed_by"], fix)  # not a flake: its run-mate was fixed
+        self.assertEqual(self.inbox("RED_FLAKE"), [])

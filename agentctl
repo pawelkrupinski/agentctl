@@ -2203,13 +2203,18 @@ def review_cleared(o_r, repo, units, landed):
                 return sha
         return None
 
-    for rec in all_sig_records():
+    # signatures with a cause first: a causeless run-mate follows them (sibling_fix)
+    for rec in sorted(all_sig_records(), key=lambda r: cause_of(r.get("job"), r.get("line")) is None):
         st = rec.get("status") or "open"
         if st not in ("open", "flaky") or rec["sig"] in now_sigs or rec.get("workflow") not in lists:
             continue
         runs = lists[rec["workflow"]]
+        if st == "flaky" and not rec.get("passed_in_head"):  # flagged before the heads were kept: backfill them
+            by_num = {str(r.get("number")): r for r in runs}
+            rec["red_head"] = rec.get("red_head") or (by_num.get(str(rec.get("last_run"))) or {}).get("headSha")
+            rec["passed_in_head"] = (by_num.get(str(rec.get("passed_in"))) or {}).get("headSha")
         if st == "flaky":
-            fixed_by = landed_fix(rec)
+            fixed_by = landed_fix(rec) or sibling_fix(rec)
             if not fixed_by and rec.get("red_head") and rec.get("passed_in_head"):
                 fixed_by, _known = fix_between(repo, rec, rec["red_head"], rec["passed_in_head"], causes, workflows)
             if fixed_by:
@@ -2230,7 +2235,7 @@ def review_cleared(o_r, repo, units, landed):
             continue
         nxt = later[0]
         red_run = next((r for r in runs if str(r.get("databaseId")) == str(rec.get("last_run_id"))), {})
-        fixed_by = landed_fix(rec)
+        fixed_by = landed_fix(rec) or sibling_fix(rec)
         known = True
         if not fixed_by:
             fixed_by, known = fix_between(repo, rec, red_run.get("headSha"), nxt.get("headSha"), causes, workflows)
@@ -2258,6 +2263,19 @@ def review_cleared(o_r, repo, units, landed):
             inbox_write("red", line, [line], [], 0)
             acts.append(line)
     return acts
+
+
+def sibling_fix(rec):
+    """A signature with no cause of its own (an empty-log job, e.g. `timings` failing because `plan` did) follows the
+    signatures of its own red run: fixed when one of them was."""
+    if cause_of(rec.get("job"), rec.get("line")):
+        return None
+    run = read_record(reds_dir("runsig", f"{rec.get('last_run_id')}.json")) or {}
+    for x in run.get("sigs") or []:
+        sib = read_record(sig_path(x["sig"])) or {}
+        if x["sig"] != rec["sig"] and sib.get("fixed_by") and sib.get("status") in ("fixed", "cleared"):
+            return sib["fixed_by"]
+    return None
 
 
 def unnote_flake(rec):
