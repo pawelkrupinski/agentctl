@@ -17,11 +17,16 @@ refresh() {
   # ci-why --summary: each gate row, and for a red one who is fixing it (agentctl's `red`): one line
   #   gate RED (main #2066 → fix 0a5767c awaiting #2070; convergence green)   /   gate RED (main #2066 → NOBODY; …)
   gate=$(cd "$repo" && ~/bin/agentctl ci-why --summary 2>/dev/null | tail -1)
+  # waiting status: entries on `waiting` (red main), then "queued for their checks: N" and those entries
   waiting=$(cd "$repo" && ~/bin/agentctl waiting status 2>/dev/null | awk '
-    /^  [0-9]{8}-/ { n++; w = $2; sub(".*/movies-wt-", "", w); names = names (names ? ", " : "") w }
-    END { if (n) printf "waiting: %d — %s", n, names; else printf "waiting: 0" }')
-  # ci-why takes ~20 s and talks to Forgejo; if it came back empty, keep the last good gate rather than blank it
-  case "$gate" in "gate RED"* | "gate green"*) ;; *) gate=$(sed -n 's/ · waiting:.*//p' "$cache" 2>/dev/null) ;; esac
+    /^queued for their checks/ { q = 1; next }
+    /^  [0-9]{8}-/ { w = $1; sub(/^[0-9]{8}-[0-9]{6}-movies-wt-/, "", w); sub(/-[0-9]+$/, "", w)
+                     if (q) { nq++; qn = qn (qn ? ", " : "") w } else { n++; names = names (names ? ", " : "") w } }
+    END { printf "waiting: %d%s", n, (n ? " — " names : "")
+          if (nq) printf " · checking: %d — %s", nq, qn }')
+  # An unread gate is never shown as green (nor as the last value read): it says so, fail-closed like the hook.
+  # The detached refresh has no vault session of its own, so ci-why can fail here when the processor's token is gone.
+  case "$gate" in "gate RED"* | "gate green"*) ;; *) gate="gate UNREAD ($(date +%H:%M): ci-why could not read Forgejo)" ;; esac
   inbox=$(~/bin/agentctl inbox --unread 2>/dev/null | grep -c UNREAD)
   line="${gate:-gate ?} · ${waiting:-waiting: ?} · inbox: ${inbox:-0} unread"
   printf '%s\n' "$line" >"$cache.tmp" && mv "$cache.tmp" "$cache"
@@ -30,7 +35,7 @@ refresh() {
 show() { # the cached line, NOBODY / BLOCKED ON OWNER in bold red, and its age once it is over 5 min old
   local stale=""
   [ "$age" -ge 300 ] && stale=" · as of $(date -r "$(stat -f %m "$cache")" +%H:%M)"
-  sed -e $'s/NOBODY/\033[1;31mNOBODY\033[0m/g' -e $'s/BLOCKED ON OWNER\\([^;)]*\\)/\033[1;31mBLOCKED ON OWNER\\1\033[0m/g' "$cache" \
+  sed -e $'s/NOBODY/\033[1;31mNOBODY\033[0m/g' -e $'s/gate UNREAD/\033[1;31mgate UNREAD\033[0m/' -e $'s/BLOCKED ON OWNER\\([^;)]*\\)/\033[1;31mBLOCKED ON OWNER\\1\033[0m/g' "$cache" \
     | sed "s/\$/$stale/"
 }
 if [ "${1:-}" = "--refresh" ]; then refresh; age=0; show; exit 0; fi
