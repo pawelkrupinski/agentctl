@@ -109,7 +109,7 @@ A locked vault prints exactly: vault <ns> locked: ask the user to run `! secrets
 agentctl never runs `secrets unlock` (Touch ID is the user's). Output never contains a token: tools read it at use."""
 DBQ_HELP = """Read-only query of the Forgejo database (sqlite3 -readonly -safe over ssh to ci-runner).
 Refuses anything but ONE SELECT / WITH ... SELECT / PRAGMA read (no DML in a CTE, no dot-commands, no PRAGMA x = y).
-Output: tab-separated with a header, capped at --max-rows (default 200). On a refused connection it reopens the laptop
+Output: tab-separated with a header, capped at --max-rows (default 200). On a refused or timed-out connection it reopens the laptop
 tunnel once (launchctl kickstart -k gui/$UID/net.bitcashier.forgejo-tunnel) and retries.
 Tables: action_run, action_run_job, action_task, action_task_step (status 1 ok, 2 fail, 3 cancelled, 4 skipped,
 5 waiting, 6 running). Prefer `forgejo-gh` / `agentctl ci-why` for runs and logs; db-q is the fallback.
@@ -337,23 +337,37 @@ def token_env(o_r, env=None):
 
 
 def gh_json(o_r, *args):
+    return tunnel_retry(lambda: _gh_json_once(o_r, *args))
+
+
+def _gh_json_once(o_r, *args):
     env = dict(os.environ, GH_TOKEN=token(o_r))
-    r = subprocess.run([FORGEJO_GH, *args, "-R", o_r], capture_output=True, text=True, env=env, timeout=300)
+    r = subprocess.run([FORGEJO_GH, *args, "-R", o_r], capture_output=True, text=True, env=env, timeout=GH_JSON_TIMEOUT)
     if r.returncode != 0:
         raise RuntimeError(f"forgejo-gh {' '.join(args)}: {r.stderr.strip()[:300]}")
     return json.loads(r.stdout)
 
 
+GH_JSON_TIMEOUT = 90  # a read through a hung tunnel must fail fast enough for the one kickstart + retry
+
+
 def api(o_r, method, path, params=None, body=None):
+    return tunnel_retry(lambda: _api_once(o_r, method, path, params, body))
+
+
+def _api_once(o_r, method, path, params=None, body=None):
     url = f"{API}/repos/{o_r}/{path}" + ("?" + urllib.parse.urlencode(params) if params else "")
     headers = {"Authorization": f"token {token(o_r)}"}
     if body is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, method=method, headers=headers,
                                  data=json.dumps(body).encode() if body is not None else None)
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
         body = resp.read()
     return json.loads(body) if body else None
+
+
+API_TIMEOUT = 60
 
 
 def pid_alive(pid):
@@ -1449,16 +1463,38 @@ def tracked_branch(name, recorded=()):
     return bool(name) and name not in PROTECTED_BRANCHES and (name.startswith(DISPATCH_PATTERNS) or name in recorded)
 
 
-INTERNAL_TREE = re.compile(r"-wt-(check-\d+|waiting|batch)$")
+INTERNAL_TREE = re.compile(r"-wt-(check-\d+|waiting|batch)$")  # legacy fallback: trees made before they were tagged
+
+
+def internal_trees_dir(*parts):
+    d = os.environ.get("AGENTCTL_INTERNAL_TREES_DIR") or os.path.join(HOME, ".cache", "agentctl", "internal-trees")
+    return os.path.join(d, *parts)
+
+
+def mark_internal(path):
+    """Tag a worktree agentctl made for itself (check-N, baseline, recheck, waiting, batch, a finished red fixer's):
+    a registry entry, so owner and fixer detection exclude it by the tag, not by what the tree is called."""
+    if not path:
+        return path
+    try:
+        import hashlib
+        p = os.path.realpath(path)
+        os.makedirs(internal_trees_dir(), exist_ok=True)
+        write_json(internal_trees_dir(hashlib.sha1(p.encode()).hexdigest() + ".json"), {"path": p, "at": ts()})
+    except OSError:
+        pass
+    return path
 
 
 def internal_tree(path):
-    """agentctl's own trees -- the queue's check trees (<clone>-wt-check-N, which hold every queued commit while it is
-    checked), the `waiting` and batch trees, the queue's work clone, tool caches -- never an owner, author or fixer
-    (2026-10-27: the status line said `main #2146 → check-1 committed` for a fix that had landed). A queued change's
-    owner is its queue entry's source worktree."""
+    """agentctl's own trees -- tagged at creation (mark_internal): the queue's check trees, the baseline / recheck /
+    `waiting` / batch trees, a finished red fixer's tree, the queue's work clone, tool caches -- never an owner, author
+    or fixer (2026-10-27: the status line said `main #2146 → check-1 committed` for a fix that had landed; ci-why
+    credited movies-wt-baseline-65721). A queued change's owner is its queue entry's source worktree."""
+    import hashlib
     p = os.path.realpath(path or "")
-    return bool(INTERNAL_TREE.search(p.rstrip("/"))) or p.startswith(os.path.realpath(CACHE_TREES).rstrip("/") + "/") \
+    return os.path.exists(internal_trees_dir(hashlib.sha1(p.encode()).hexdigest() + ".json")) \
+        or bool(INTERNAL_TREE.search(p.rstrip("/"))) or p.startswith(os.path.realpath(CACHE_TREES).rstrip("/") + "/") \
         or p.startswith(os.path.realpath(WAITING_DIR).rstrip("/") + "/")
 
 
@@ -3664,6 +3700,7 @@ def red_fixer(a):
     inbox_write("red fixer", line, [line], tail, 0 if verdict.startswith("LANDED") else 1, cwd=wt)
     rec.update(ended=ts(), rc=rc, verdict=verdict)
     write_json(a.record, rec)
+    mark_internal(wt)  # its fixer ended: the tree is agentctl's litter now, never a fixer or owner
     c = read_record(cpath)
     if verdict.startswith("DIAGNOSED:"):  # the claim stays, for the same red: never NOBODY after a diagnosis
         followup = keep_diagnosed_claim(a.repo, dict(rec, path=a.record), c or claim, cpath, verdict)
@@ -3875,7 +3912,17 @@ def tell_to_stop(rec, why):
     told = []
     names = set(map(str, rec.get("runs") or []))
     for c in all_claims():
-        if rec["sig"] not in (c.get("sigs") or []) and not (names & (set(map(str, c.get("runs") or [])) | {str(c.get("run"))})):
+        cruns = set(map(str, c.get("runs") or [])) | {str(c.get("run"))}
+        if rec["sig"] not in (c.get("sigs") or []) and not (names & cruns):
+            continue
+        # a claim covers every signature it claimed: stop it only when ALL are cleared; a partial clear narrows it
+        # (2026-10-27: Main #2164's fixer was stopped for `timings` with integration-test (rest) and the page tests
+        # still open)
+        open_sigs = [r["sig"] for r in all_sig_records() if r["sig"] != rec["sig"] and r.get("status") in ("open", "flaky")
+                     and (r["sig"] in (c.get("sigs") or []) or (not c.get("sigs") and cruns & set(map(str, r.get("runs") or []))))]
+        if open_sigs:
+            c["sigs"] = open_sigs
+            write_json(c["path"], {k: v for k, v in c.items() if k != "path"})
             continue
         wt = c.get("worktree")
         if wt and os.path.isdir(wt):
@@ -5386,7 +5433,7 @@ def baseline_failures(repo, hook, head, log_path):
     synth = synth.stdout.strip()
     _d, clone, _w = waiting_state(repo)
     tree = f"{clone}-wt-baseline-{os.getpid()}"
-    if git(repo, "worktree", "add", "-q", "--detach", tree, synth, check=False).returncode != 0:
+    if git(repo, "worktree", "add", "-q", "--detach", mark_internal(tree), synth, check=False).returncode != 0:
         return None
     try:
         err(f"the change's checks failed: running them on plain {REMOTE}/main {main[:10]} (the known-red baseline)")
@@ -5514,7 +5561,7 @@ def run_local_recheck(repo, main):
         if m and not pid_alive(int(m.group(1))):
             git(repo, "worktree", "remove", "--force", w["worktree"], check=False)
     tree = f"{clone}-wt-recheck-{os.getpid()}"
-    if git(repo, "worktree", "add", "-q", "--detach", tree, synth, check=False).returncode != 0:
+    if git(repo, "worktree", "add", "-q", "--detach", mark_internal(tree), synth, check=False).returncode != 0:
         return []
     log_path = reds_dir("local", "recheck.log")
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
@@ -6259,9 +6306,9 @@ def wlog(d, msg):
 def ensure_waiting_tree(repo, wt):
     if not os.path.isdir(wt):
         if git_ok(repo, "rev-parse", "--verify", "-q", f"refs/heads/{WAITING_BRANCH}"):
-            git(repo, "worktree", "add", "-q", wt, WAITING_BRANCH)
+            git(repo, "worktree", "add", "-q", mark_internal(wt), WAITING_BRANCH)
         else:
-            git(repo, "worktree", "add", "-q", "-b", WAITING_BRANCH, wt, f"{REMOTE}/main")
+            git(repo, "worktree", "add", "-q", "-b", WAITING_BRANCH, mark_internal(wt), f"{REMOTE}/main")
     return wt
 
 
@@ -6595,10 +6642,10 @@ def check_tree_slot(repo, d):
 def check_tree(repo, i, sha):
     """The detached worktree <clone>-wt-check-<i> at sha (kept between checks: its build stays warm)."""
     _d, clone, _w = waiting_state(repo)
-    tree = f"{clone}-wt-check-{i}"
+    tree = mark_internal(f"{clone}-wt-check-{i}")
     if not os.path.isdir(tree):
         git(repo, "worktree", "prune", check=False)
-        git(repo, "worktree", "add", "-q", "--detach", tree, sha)
+        git(repo, "worktree", "add", "-q", "--detach", mark_internal(tree), sha)
         seed = os.path.join(tree, "scripts", "sbt-warm")
         if os.access(seed, os.X_OK):  # a cold tree's first compile seeded from the shared build cache, not from scratch
             try:
@@ -7140,7 +7187,7 @@ def batch_tree(repo, sha):
     bwt = f"{clone}-wt-batch"
     if not os.path.isdir(bwt):
         git(repo, "worktree", "prune", check=False)
-        git(repo, "worktree", "add", "-q", "--detach", bwt, sha)
+        git(repo, "worktree", "add", "-q", "--detach", mark_internal(bwt), sha)
     else:
         git(bwt, "checkout", "-q", "--force", "--detach", sha)
     return bwt
@@ -7452,6 +7499,10 @@ def waiting_run(repo, once=False, service=False):
                                + (["--service"] if service else []))
             spawn_checks(repo, d)  # THE LAND QUEUE first: each queued change's checks, in a checker of its own (the
             # patrol below can take minutes -- a fixer's worktree checkout under load -- and held queued changes back)
+            try:
+                tunnel_watch()  # the health probe: 2 timeouts/refusals in a row -> kickstart the laptop tunnel
+            except Exception as e:
+                err(f"tunnel probe failed: {e}")
             maybe_publish_gate(repo)  # the gate line for the status line (~/.cache/agentctl/gate-summary.txt)
             maybe_patrol(repo)  # the reds: who fixes each, RED UNCLAIMED, a dispatched fixer (always-on: launchd)
             maybe_escalate_inbox()  # unacked RED UNCLAIMED / RED BUDGET / STALLED past 10 min: a macOS notification
@@ -7828,13 +7879,140 @@ def sql_refusal(sql):
     return None
 
 
-def kick_tunnel():
+def launchctl_kick():
     subprocess.run(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{TUNNEL_LABEL}"], capture_output=True)
+
+
+def kick_tunnel():
+    launchctl_kick()
     for _ in range(15):
         if port_open(TUNNEL_PORTS[0][0]):
             return True
         time.sleep(1)
     return False
+
+
+# ---- THE TUNNEL HEALTH (2026-10-27: the tunnel's ssh was alive but its connections hung; only a *refused* connection
+# was kicked). A timeout is a refusal for every Forgejo read (tunnel_retry: ONE kickstart + retry), and the always-on
+# processor probes GET <API>/version each cycle (5 s): 2 failures in a row kick it (at most once a minute, logged), and a
+# kick that does not restore it within 2 min is ONE STALLED inbox entry.
+TUNNEL_PROBE_TIMEOUT = 5
+TUNNEL_KICK_MIN_GAP = 60
+TUNNEL_RESTORE_WAIT = 120
+TUNNEL_DOWN_TEXT = re.compile(r"Connection refused|timed? ?out|timeout|deadline exceeded|Connection reset|EOF", re.I)
+
+
+def tunnel_state_path():
+    return os.environ.get("AGENTCTL_TUNNEL_STATE") or os.path.join(HOME, ".cache", "agentctl", "tunnel-health.json")
+
+
+def tunnel_down(e):
+    """True when the exception says the tunnel refused or hung (not an HTTP answer such as 401/404)."""
+    import socket
+    if isinstance(e, urllib.error.HTTPError):
+        return False
+    if isinstance(e, urllib.error.URLError):
+        return tunnel_down(e.reason) if isinstance(e.reason, BaseException) else bool(TUNNEL_DOWN_TEXT.search(str(e.reason)))
+    if isinstance(e, (socket.timeout, TimeoutError, ConnectionError, subprocess.TimeoutExpired)):
+        return True
+    return isinstance(e, RuntimeError) and bool(TUNNEL_DOWN_TEXT.search(str(e)))
+
+
+def tunnel_kick_rate_limited(now_=None):
+    """Claim the right to kickstart: False (and nothing done) when one happened less than TUNNEL_KICK_MIN_GAP ago."""
+    t = now_ if now_ is not None else time.time()
+    st = read_json_file(tunnel_state_path())
+    if t - st.get("last_kick", 0) < TUNNEL_KICK_MIN_GAP:
+        return False
+    st["last_kick"] = t
+    write_json_file(tunnel_state_path(), st)
+    return True
+
+
+def read_json_file(path):
+    try:
+        with open(path) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def write_json_file(path, d):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(d, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def tunnel_retry(fn):
+    """Run a Forgejo read; on a refusal OR a timeout kickstart the tunnel once (rate-limited across processes) and retry
+    once. Any other error, and the retry's own, propagate."""
+    try:
+        return fn()
+    except Exception as e:
+        if not tunnel_down(e):
+            raise
+        err(f"the Forgejo tunnel refused or timed out ({str(e)[:80]}); reopening it ({TUNNEL_LABEL}) once and retrying")
+        if tunnel_kick_rate_limited():
+            launchctl_kick()
+        for _ in range(15):
+            if tunnel_probe() == "ok":
+                break
+            time.sleep(1)
+        return fn()
+
+
+def tunnel_probe():
+    """'ok' (any HTTP answer), 'timeout' or 'refused' for GET <API>/version."""
+    import socket
+    try:
+        with urllib.request.urlopen(f"{API}/version", timeout=TUNNEL_PROBE_TIMEOUT) as resp:
+            resp.read()
+        return "ok"
+    except urllib.error.HTTPError:
+        return "ok"
+    except Exception as e:
+        if isinstance(e, urllib.error.URLError):
+            e = e.reason if isinstance(e.reason, BaseException) else e
+        if isinstance(e, (socket.timeout, TimeoutError)) or "timed out" in str(e):
+            return "timeout"
+        return "refused"
+
+
+def tunnel_watch(now_=None, probe=None, kick=None):
+    """One processor cycle of the health probe. Returns what it did: ok, down, kicked, restored, escalated, or ''."""
+    t = now_ if now_ is not None else time.time()
+    r = (probe or tunnel_probe)()
+    st = read_json_file(tunnel_state_path())
+    if r == "ok":
+        did = "restored" if st.get("pending_since") else "ok"
+        if did == "restored":
+            err("the Forgejo tunnel answers again")
+        if st.get("fails") or st.get("pending_since"):
+            st.update(fails=0, pending_since=None, escalated=False)
+            write_json_file(tunnel_state_path(), st)
+        return did
+    st["fails"] = st.get("fails", 0) + 1
+    did = "down"
+    if st["fails"] >= 2 and t - st.get("last_kick", 0) >= TUNNEL_KICK_MIN_GAP:
+        err(f"the Forgejo tunnel {r} {st['fails']} probes in a row; kickstarting {TUNNEL_LABEL}")
+        (kick or launchctl_kick)()
+        st["last_kick"] = t
+        st.setdefault("pending_since", t)
+        did = "kicked"
+    if st.get("pending_since") and t - st["pending_since"] >= TUNNEL_RESTORE_WAIT and not st.get("escalated"):
+        msg = (f"STALLED: the Forgejo tunnel (localhost:3000) still {r} {int((t - st['pending_since']) // 60)} min after a "
+               f"kickstart; run `launchctl kickstart -k gui/$(id -u)/{TUNNEL_LABEL}` and check ~/Library/Logs/forgejo-tunnel.log")
+        inbox_write("tunnel", msg, [msg], [], 2)
+        st["escalated"] = True
+        did = "escalated"
+    write_json_file(tunnel_state_path(), st)
+    return did
 
 
 def run_db(argv, sql):
