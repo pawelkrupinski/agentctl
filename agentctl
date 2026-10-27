@@ -469,6 +469,26 @@ def job_log_lines(o_r, run_id, job, tail):
     return relevant_lines("\n".join(f"{name}\t-\t{l}" for l in clean), tail).get(name, [])
 
 
+HOOK_BLOCK = re.compile(r"blocked by:|pre-push\S* .*FAILED|\u2717|\u2716|^\s*(FAIL\b|\u2500\u2500 FAIL)|\bexpected:|\bactual:")
+
+
+def hook_lines(o_r, run_id, job, tail):
+    """A precommit-check run's own verdict: the hook's `blocked by:` line and the failing checks' lines (its `FAIL`
+    headers, `✗` rows, expected/actual), not the last lines of a passing subtest further down the log."""
+    jid = job.get("databaseId") if isinstance(job, dict) else None
+    if not jid:
+        return []
+    try:
+        log = fetch_job_log(o_r, run_id, jid)
+    except Exception:
+        return []
+    clean = [LOG_TS.sub("", ANSI.sub("", (l.split("\t", 2)[2] if l.count("\t") >= 2 else l))).rstrip() for l in log.splitlines()]
+    if not any("blocked by:" in l or re.search(r"pre-push\S* .*FAILED", l) for l in clean):
+        return []
+    hits = [l[:300] for l in clean if HOOK_BLOCK.search(l)]
+    return hits[:tail * 4] if hits else []
+
+
 def failure_detail(o_r, run_id, failed, tail):
     """failed: job dicts (name, databaseId) or names."""
     if not failed or tail <= 0:
@@ -1100,6 +1120,10 @@ def explain_run_jobs(o_r, run, tail, repo=None):
     kinds, fetched, per_job = [], 0, []
     for j in failed:
         jl = per.get(j["name"]) or []
+        if fetched < MAX_JOB_LOG_FETCHES and "precommit" in str(d.get("workflowName", "")).lower().replace("-", ""):
+            hl = hook_lines(o_r, rid, j, tail)  # the hook's own verdict beats a passing subtest's tail
+            if hl:
+                fetched, jl = fetched + 1, hl
         bad = [st for st in j.get("steps") or [] if st.get("conclusion") in ("failure", "timed_out")]
         setup = bool(bad) and bool(SETUP_STEP.match(bad[0]["name"]))
         if not jl and not setup and fetched < MAX_JOB_LOG_FETCHES:  # a shifted step slice: read the whole job log
