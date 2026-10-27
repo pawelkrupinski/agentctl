@@ -15,7 +15,8 @@ refresh() {
   gate=$(cd "$repo" && ~/bin/agentctl ci-why 2>/dev/null | awk '
     NR == 1 { state = ($0 ~ /is RED/) ? "RED" : (($0 ~ /is green/) ? "green" : "?") }
     / RED \(run / { split($0, a, ":"); name = a[1]; sub(/^ +/, "", name)
-                    if (match($0, /#[0-9]+/)) n2 = tolower(name); sub(/identity model /, "", n2); sub(/verify scrape /, "", n2); reds = reds (reds ? ", " : "") n2 " " substr($0, RSTART, RLENGTH) }
+                    if (match($0, /#[0-9]+/)) { n2 = tolower(name); sub(/identity model /, "", n2); sub(/verify scrape /, "", n2)
+                                                reds = reds (reds ? ", " : "") n2 " " substr($0, RSTART, RLENGTH) } }
     END { printf "gate %s", state; if (reds) printf " (%s)", reds }')
   waiting=$(cd "$repo" && ~/bin/agentctl waiting status 2>/dev/null | awk '
     /^  [0-9]{8}-/ { n++; w = $2; sub(".*/movies-wt-", "", w); names = names (names ? ", " : "") w }
