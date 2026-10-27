@@ -2082,6 +2082,21 @@ def assign_first(repo, snap):
         err(f"red patrol (assign first): skipped ({str(e).replace('agentctl: ', '')[:200]})")
 
 
+def gate_dirty_path():
+    return os.path.join(HOME, ".cache", "agentctl", "gate.dirty")
+
+
+def mark_gate_dirty():
+    """A push moved main: the processor's duties thread re-reads the gate at its next tick (<= DUTY_TICK s)."""
+    try:
+        os.makedirs(os.path.dirname(gate_dirty_path()), exist_ok=True)
+        with open(gate_dirty_path(), "a"):
+            pass
+        os.utime(gate_dirty_path(), None)
+    except OSError:
+        pass
+
+
 def statusline_stale_path():
     return os.environ.get("AGENTCTL_STATUSLINE_STALE") or os.path.join(HOME, ".cache", "agentctl", "statusline.stale")
 
@@ -2089,7 +2104,11 @@ def statusline_stale_path():
 def maybe_publish_gate(repo):
     """The processor's loop, at most every GATE_PUBLISH_INTERVAL s: read the gate (it holds the token) and publish the
     summary line for the status line. Never fatal; a failed read leaves the old file to age out (fail-closed)."""
-    if time.time() - _last_gate_publish[0] < env_num("AGENTCTL_GATE_PUBLISH", 45):
+    try:  # a push to main since the last publish (mark_gate_dirty): publish now, not at the 45 s mark
+        marked = os.path.getmtime(gate_dirty_path()) > _last_gate_publish[0]
+    except OSError:
+        marked = False
+    if not marked and time.time() - _last_gate_publish[0] < env_num("AGENTCTL_GATE_PUBLISH", 45):
         return
     _last_gate_publish[0] = time.time()
 
@@ -5758,6 +5777,8 @@ def land_loop(repo, main_ref, sh, log_path, a):
         lock_note(f"push of {head[:10]}")
         a.pushed_at = time.time()
         rc, out = run_watched(push_argv(REMOTE, head), repo, tool_env(), log_path, "push")
+        if rc == 0:
+            mark_gate_dirty()
         with open(log_path, "a") as f:
             f.write(f"=== attempt {attempt + 1} {ts()} {head}\n{out}\n")
         if rc is None:
@@ -6937,6 +6958,8 @@ def _check_entry(repo, d, e, i, own=None):
                 env["PREPUSH_SKIP"] = " ".join(skip)
             rc, out = run_watched(push_argv(REMOTE, head), tree, env, log_path, "push")
             if rc == 0:
+                mark_gate_dirty()
+            if rc == 0:
                 git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
                 if landed(repo, head, f"refs/remotes/{REMOTE}/main"):
                     queue_verdict(d, e, "landed", f"LANDED {head} (queued {e['id']}, checked {where})", code=0,
@@ -7540,6 +7563,8 @@ def push_batch(repo, d, entries, tip, base, how):
         tree = batch_tree(repo, tip)  # the push's hook runs in the tree it checked, so it reuses that pass
         env = dict(tool_env(), PREPUSH_REUSE_FAST="1")  # the batch's fast pass stands for the push (pre-push --fast-only)
         rc, out = run_watched(push_argv(REMOTE, tip), tree, env, os.path.join(d, f"push-{tip[:10]}"), "push")
+        if rc == 0:
+            mark_gate_dirty()
         with open(os.path.join(d, "checks.log"), "a") as f:
             f.write(f"=== push {ts()} {tip[:10]} rc {rc}\n{out}\n")
         if rc is None:
@@ -7741,16 +7766,54 @@ def start_watchdog(argv):
         while True:
             time.sleep(env_num("AGENTCTL_WATCHDOG_TICK", 30))
             stalled = time.time() - HEARTBEAT[0]
-            if stalled < env_num("AGENTCTL_STALL_SECS", STALL_SECS) or IN_BATCH[0]:
+            duty_stalled = time.time() - DUTY_BEAT[0]
+            limit = env_num("AGENTCTL_STALL_SECS", STALL_SECS)
+            # the duties thread is never in a batch; its bounded steps join for up to 2 x AGENTCTL_STEP_BOUND
+            if duty_stalled >= limit + 2 * env_num("AGENTCTL_STEP_BOUND", 120):
+                stalled, what = duty_stalled, "the duties thread (gate line, patrol)"
+            elif stalled >= limit and not IN_BATCH[0]:
+                what = "the loop"
+            else:
                 continue
-            err(f"STALLED: the loop made no cycle in {int(stalled)} s; stacks follow, then re-exec")
+            err(f"STALLED: {what} made no cycle in {int(stalled)} s; stacks follow, then re-exec")
             faulthandler.dump_traceback(all_threads=True)
-            inbox_write("waiting", f"STALLED: the waiting processor's loop made no cycle in {int(stalled)} s; stacks in "
+            inbox_write("waiting", f"STALLED: the waiting processor's {what} made no cycle in {int(stalled)} s; stacks in "
                                    "its service.log; re-exec'd", [], [], 2)
             sys.stdout.flush()
             sys.stderr.flush()
             os.execv(sys.executable, [sys.executable, TOOL_PATH] + list(argv))
     threading.Thread(target=watch, name="watchdog", daemon=True).start()
+
+
+DUTY_BEAT = [time.time()]  # the duties thread stamps it each tick
+DUTY_TICK = 5
+
+
+def start_duties(repo):
+    """The processor's always-on duties, on a thread of their own so neither a batch check nor a red-gate nap (up to
+    300 s) delays them: the tunnel probe, the gate line for the status line, the red patrol, the inbox escalations.
+    Each is rate-limited inside; a step that hangs is bounded (run_bounded) and the watchdog re-execs a stuck thread.
+    Returns the Event that stops it."""
+    import threading
+    stop = threading.Event()
+
+    def loop():
+        while not stop.is_set():
+            DUTY_BEAT[0] = time.time()
+            for name, step in (("tunnel probe", tunnel_watch),  # 2 timeouts/refusals in a row -> kickstart the tunnel
+                               ("gate summary", lambda: maybe_publish_gate(repo)),  # ~/.cache/agentctl/gate-summary.txt
+                               ("red patrol", lambda: maybe_patrol(repo)),  # who fixes each red; dispatch a fixer
+                               ("inbox escalation", maybe_escalate_inbox)):  # unacked past 10 min: notified
+                try:
+                    step()
+                except (Exception, SystemExit) as e:
+                    err(f"{name} failed: {str(e).replace('agentctl: ', '')[:200]}")
+                DUTY_BEAT[0] = time.time()
+                if stop.is_set():
+                    return
+            stop.wait(env_num("AGENTCTL_DUTY_TICK", DUTY_TICK))
+    threading.Thread(target=loop, name="duties", daemon=True).start()
+    return stop
 
 
 SERVICE_IDLE_POLL = 30  # seconds between looks at an empty `waiting` (a directory listing: no git, no network)
@@ -7775,6 +7838,7 @@ def waiting_run(repo, once=False, service=False):
         start_watchdog(["waiting", "run", "--repo", repo] + (["--once"] if once else []) + (["--service"] if service else []))
         drop = TokenDrop(d, o_r).open()
         stack.callback(drop.close)
+        stack.callback(start_duties(repo).set)  # the duties end with this processor
         delays = backoff(float(os.environ.get("AGENTCTL_WAITING_POLL", WAITING_POLL)), 300)
         while True:
             HEARTBEAT[0] = time.time()
@@ -7786,13 +7850,8 @@ def waiting_run(repo, once=False, service=False):
                 err(f"reconcile of the checking entries failed: {e}")
             spawn_checks(repo, d)  # THE LAND QUEUE first: each queued change's checks, in a checker of its own (the
             # patrol below can take minutes -- a fixer's worktree checkout under load -- and held queued changes back)
-            try:
-                tunnel_watch()  # the health probe: 2 timeouts/refusals in a row -> kickstart the laptop tunnel
-            except Exception as e:
-                err(f"tunnel probe failed: {e}")
-            maybe_publish_gate(repo)  # the gate line for the status line (~/.cache/agentctl/gate-summary.txt)
-            maybe_patrol(repo)  # the reds: who fixes each, RED UNCLAIMED, a dispatched fixer (always-on: launchd)
-            maybe_escalate_inbox()  # unacked RED UNCLAIMED / RED BUDGET / STALLED past 10 min: a macOS notification
+            # the tunnel probe, the gate line, the patrol and the escalations run on the duties thread (start_duties), never
+            # here: this loop sits in a batch check or a red-gate nap for minutes, and the gate line went stale with it
             if not service and not waiting_entries(d) and queued_entries(d):
                 drop.nap(float(os.environ.get("AGENTCTL_SERVICE_POLL", SERVICE_IDLE_POLL)))
                 continue
