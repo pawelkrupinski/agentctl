@@ -672,7 +672,8 @@ agentctl prepush-check --hook <remote> [<url>]        # movies' pre-push hook mo
 
 It refuses when `base...head` touches a file outside `--allow` / `$AGENTCTL_ALLOW`, or when it returns more than N
 files (default 2) to an older main version, which is what the `reset --soft` squash onto a moved main does. `git
-revert` commits are exempt for their own files. `land` runs it, and so does movies' hook. Exit 0 ok, 1 refused.
+revert` commits are exempt for their own files. So is a DECLARED retirement: a deleted file named by a `Retires: <path>` trailer (one per line, in the commit's
+final trailer block with Co-Authored-By); undeclared deletions and modifications still count. `land` runs it, and so does movies' hook. Exit 0 ok, 1 refused.
 
 ```
 prepush-check: forgejo/main...c972d56a2b49: 1 file changed, 8 insertions(+)

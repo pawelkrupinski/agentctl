@@ -269,6 +269,23 @@ class PrepushTest(Base):
         rc, out = self.check()
         self.assertEqual(rc, 0, out)
 
+    def test_declared_retirement_is_exempt(self):
+        for i in (1, 2, 3):
+            self.r.write(f"f{i}.txt", f"v2 {i}\n")
+        self.r.commit("main edits three files")
+        self.r.push()
+        wt = self.r.worktree("wt-ret", branch="ret")
+        sh(wt, "git", "rm", "-q", "f1.txt", "f2.txt", "f3.txt")
+        sh(wt, "git", "commit", "-q", "-m", "retire\n\nRetires: f1.txt\nRetires: f2.txt\nRetires: f3.txt")
+        rc, out = self.check(cwd=wt)
+        self.assertEqual(rc, 0, out)
+        # undeclared deletions still count
+        sh(wt, "git", "reset", "-q", "--hard", "forgejo/main")
+        sh(wt, "git", "rm", "-q", "f1.txt", "f2.txt", "f3.txt")
+        sh(wt, "git", "commit", "-q", "-m", "retire, one only\n\nRetires: f1.txt")
+        rc, out = self.check(cwd=wt)
+        self.assertEqual(rc, 1, out)
+
     def test_hook_mode(self):
         wt = self.r.worktree("wt-hook", branch="h")
         self.r.write("f1.txt", "x\n", at=wt)
