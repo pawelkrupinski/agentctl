@@ -150,13 +150,13 @@ class InfraAndNobodyTest(AssignBase):
     def test_nobody_only_with_its_reason_the_budget(self):
         self.assertEqual(self.why("--summary")[1].strip().splitlines()[-1],
                          "gate RED (main #20 → UNASSIGNED; convergence green)")  # before the patrol: never NOBODY
-        os.environ["AGENTCTL_RED_DAILY_CAP"] = "0"
+        os.environ["AGENTCTL_RED_GATE_MAX_FIXERS"] = "0"
         acts = self.patrol(time.time())
-        self.assertTrue(any(a.startswith("RED UNCLAIMED: Main #20 [test (rest)]: NOBODY -- daily dispatch budget 0 spent")
+        self.assertTrue(any(a.startswith("RED UNCLAIMED: Main #20 [test (rest)]: NOBODY -- gate fixer cap 0 reached")
                             for a in acts), acts)
-        self.assertIn("main #20 → NOBODY (daily dispatch budget 0 spent)", self.why("--summary")[1])
-        self.assertIn("fixing: NOBODY (daily dispatch budget 0 spent)", self.why()[1])
-        os.environ.pop("AGENTCTL_RED_DAILY_CAP")
+        self.assertIn("main #20 → NOBODY (gate fixer cap 0 reached", self.why("--summary")[1])
+        self.assertIn("fixing: NOBODY (gate fixer cap 0 reached", self.why()[1])
+        os.environ.pop("AGENTCTL_RED_GATE_MAX_FIXERS")
         self.assertEqual(len(self.inbox("RED_UNCLAIMED")), 1)
 
     def test_the_processor_patrols_at_once_when_the_snapshot_first_sees_a_gate_red(self):

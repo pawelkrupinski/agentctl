@@ -256,11 +256,27 @@ agent must be assigned to it".
   error line. An `[infra]` red gets a DIAGNOSE-ONLY brief (no code change; runners, ci-runner, owner actions). The fixer
   claims the red with its wrapper's pid, logs under `~/.cache/agentctl/reds/<run>/`, ends at `LANDED` (or `GAVE UP:` /
   `BLOCKED ON OWNER:` / `DIAGNOSED:`), and its verdict reaches the inbox (`RED FIXER <workflow> #N: ...`, kind
-  FIXER_LANDED or FIXER_FAILED; `RED DISPATCHED` when it starts). Caps: one fixer per red; 2 alive in all
-  (`$AGENTCTL_RED_MAX_FIXERS`), 1 of them for reds outside the gate (`$AGENTCTL_RED_MAX_OUTSIDE`), gate reds first; 6
-  a day (`$AGENTCTL_RED_DAILY_CAP`); 3 h wall time each (`$AGENTCTL_RED_FIXER_WALL`). A red still failing after 2
-  dispatched fixers: one `RED ESCALATE` entry, never dispatched again. Every decision is a line of
-  `~/.cache/agentctl/reds/dispatch.log` with its reason.
+  FIXER_LANDED or FIXER_FAILED; `RED DISPATCHED` when it starts). Caps: one fixer per red; 3 h wall time each
+  (`$AGENTCTL_RED_FIXER_WALL`). A red still failing after 2 dispatched fixers: one `RED ESCALATE` entry, never
+  dispatched again. Every decision is a line of `~/.cache/agentctl/reds/dispatch.log` with its reason.
+- **Gate reds are never budget-starved (2026-10-27: Main #2146 sat at `NOBODY (daily dispatch budget 6 spent)` for
+  85+ min).** A gate red has its own cap, 3 fixers ALIVE at once (`$AGENTCTL_RED_GATE_MAX_FIXERS`), and NO daily cap;
+  hitting it is `RED UNCLAIMED: ... NOBODY -- gate fixer cap 3 reached`, escalated at once (below). Reds outside the
+  gate: 2 alive in all (`$AGENTCTL_RED_MAX_FIXERS`), 1 of them outside (`$AGENTCTL_RED_MAX_OUTSIDE`), and 6 a day
+  (`$AGENTCTL_RED_DAILY_CAP`, with the Fixes-Red verifications); past it, ONE `RED BUDGET` inbox entry per red a day.
+- **Refunds.** A dispatch that did nothing is not counted (`red list` says `[refunded: ...]`): `GAVE UP` / `NOT LANDED`
+  because it is already fixed or there is nothing to do; `STOPPED` (superseded) and `red cleared`; a fixer killed
+  before any verdict; `BLOCKED ON OWNER` only for a CI read (`forgejo-gh run view|download`: the fixer carries the
+  token); a DUPLICATE -- a fixer whose red someone else claimed between the dispatch decision and its start steps
+  aside at once (`DUPLICATE: <who> is on it`, no `claude` run; a by-hand dispatch never does).
+- **DIAGNOSED keeps the claim, for the same red.** A fixer ending `DIAGNOSED: <cause>; durable fix: <...>` turns its
+  claim into `diagnosed: <summary>; awaiting an implementer` (never stale; the red is never NOBODY after a diagnosis),
+  and an implementer is dispatched at once in a fresh worktree with the diagnosis in its brief: remove the cause, or,
+  for a real one-off outside the code, land the means to diagnose it next time (the failing process's stderr and exit
+  status kept: e.g. Chrome's stderr, which CdpDriver discarded for #2146). Under a cap the claim says why it waits and
+  the patrol dispatches it later; the implementer's own claim replaces it. The implementer is the same attempt (not
+  counted toward RED ESCALATE); an implementer that only diagnoses again: the claim says `awaiting a person` and
+  `RED ESCALATE`.
 - **Permissions.** A fixer runs in the permission mode interactive sessions start in (`permissions.defaultMode` in
   `~/.claude/settings.json`; it must be `auto`, else dispatch is off and `red auto` says what the owner must set),
   with `--permission-prompts none` (anything that would prompt is denied), `git push`, `--no-verify` and
@@ -691,14 +707,26 @@ a signal, or on a crash), and land writes its `WAITING` line there at once, sinc
   agent's report, and before deciding an agent's land is lost.
 - Each entry has a `kind`, from its verdict: `RED`, `OK`, `STALLED`, `UNKNOWN` (also a crash, a signal, an exit with
   no verdict), `NOT_LANDED`, `LANDED`, `WAITING`, `HELD`, `FIX_FAILED`, `FIX_OK`, `FIX_UNVERIFIED`, `CHECK`, `OTHER`;
-  from `red`: `RED_UNCLAIMED`, `RED_ESCALATE`, `BLOCKED`, `RED_DISPATCHED`, `FIXER_LANDED`, `FIXER_FAILED`; from the
-  branch runs: `BRANCH_RED` (see "dispatch").
+  from `red`: `RED_UNCLAIMED`, `RED_BUDGET`, `RED_ESCALATE`, `BLOCKED`, `RED_DISPATCHED`, `FIXER_LANDED`,
+  `FIXER_FAILED`; from the branch runs: `BRANCH_RED` (see "dispatch").
+
+#### inbox escalated: an escalation that wakes somebody (2026-10-27)
+
+Main #2146's `RED UNCLAIMED` woke nobody: the orchestrator's `inbox wait` was not re-armed. An UNREAD `RED_UNCLAIMED`,
+`RED_BUDGET` or `STALLED` entry older than 10 min (`$AGENTCTL_INBOX_ESCALATE_MIN`; a gate fixer cap at once) is
+escalated past the orchestrator: ONE macOS notification per entry (`osascript -e 'display notification ...'`, never a
+dialog; marker `inbox/escalated/<id>`), and the status line leads with a bold `ESCALATED: N unacked (...)` until it is
+acked. The always-on processor runs it each minute, the status line's refresh by `agentctl inbox escalated` (prints
+that line, or nothing).
 
 #### inbox wait: the orchestrator's notifier
 
 ```
-agentctl inbox wait [--kinds RED,BRANCH_RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_ESCALATE,BLOCKED,FIXER_FAILED] [--since-ack] [--timeout S]
+agentctl inbox wait [--kinds RED,BRANCH_RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_BUDGET,RED_ESCALATE,BLOCKED,FIXER_FAILED] [--since-ack] [--timeout S] [--forever]
 ```
+
+`--forever` never exits: it streams each such entry once, one line each, as it appears -- ONE long-lived background
+task (Monitor or `run_in_background`) covers the whole session, no re-arm needed; ack as you route.
 
 It blocks until an UNREAD entry of those kinds (the default above) exists, prints every such entry, and exits 0 (2 at
 `--timeout`). It acknowledges nothing. `--since-ack` skips entries older than the last acknowledgement (an old

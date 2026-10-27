@@ -42,7 +42,8 @@ class RedBase(unittest.TestCase):
                     "AGENTCTL_WAITING_DIR_UNUSED": "", "FAKE_CLAUDE_SLEEP": "0", "CLAUDE_PID": "",
                     "CLAUDE_CODE_SESSION_ID": "", "AGENTCTL_AGENT_NAME": "", "AGENTCTL_CLAIM_PID": "",
                     "AGENTCTL_RED_FIXER": "", "AGENTCTL_RED_MAX_FIXERS": "", "AGENTCTL_RED_DAILY_CAP": "",
-                    "AGENTCTL_RED_MAX_OUTSIDE": ""}
+                    "AGENTCTL_RED_MAX_OUTSIDE": "", "AGENTCTL_RED_GATE_MAX_FIXERS": "",
+                    "AGENTCTL_NOTIFY": "true", "AGENTCTL_INBOX_ESCALATE_MIN": ""}
         self.saved = {k: os.environ.get(k) for k in self.env}
         os.environ.update(self.env)
         for k, v in self.env.items():
@@ -459,27 +460,33 @@ class DispatchTest(RedBase):
         self.assertEqual(A.fixer_records(), [])
         self.assertIn("claimed meanwhile", open(A.reds_dir("dispatch.log")).read())
 
-    def test_the_global_cap_and_the_daily_cap(self):
+    def test_a_gate_red_has_its_own_cap_and_no_daily_cap(self):
+        """2026-10-27: gate red Main #2146 sat at NOBODY (daily dispatch budget 6 spent): gate reds never are."""
         os.makedirs(os.path.join(self.tmp.name, "reds", "77"))
         A.write_json(os.path.join(self.tmp.name, "reds", "77", "fixer.json"),
                      {"sig": "other", "pid": os.getpid(), "started": A.ts(), "gate": True})
-        os.environ["AGENTCTL_RED_MAX_FIXERS"] = "1"
+        os.environ["AGENTCTL_RED_GATE_MAX_FIXERS"] = "1"
+        os.environ["AGENTCTL_RED_MAX_FIXERS"] = "1"  # the cap of reds outside the gate: not this one's
         try:
             t = time.time()
-            self.patrol(t)
-            acts = self.patrol(t + 11 * 60)
+            acts = self.patrol(t)
         finally:
+            os.environ.pop("AGENTCTL_RED_GATE_MAX_FIXERS")
             os.environ.pop("AGENTCTL_RED_MAX_FIXERS")
-        self.assertTrue(any("SKIPPED (1 fixers alive, cap 1)" in a for a in acts), acts)
+        self.assertTrue(any("SKIPPED (gate: 1 fixers alive, cap 1)" in a for a in acts), acts)
+        unclaimed = self.inbox("RED_UNCLAIMED")
+        self.assertEqual(len(unclaimed), 1)
+        self.assertIn("NOBODY -- gate fixer cap 1 reached", unclaimed[0]["verdict"])
+        self.assertEqual([e["id"] for e in A.inbox_escalations(t)], [unclaimed[0]["id"]])  # escalated at once
         A.write_json(os.path.join(self.tmp.name, "reds", "77", "fixer.json"),
-                     {"sig": "other", "pid": 1 << 22, "started": A.ts(), "gate": True, "ended": A.ts()})
-        os.environ["AGENTCTL_RED_DAILY_CAP"] = "1"
+                     {"sig": "other", "pid": 1 << 22, "started": A.ts(), "gate": False, "ended": A.ts(),
+                      "verdict": "LANDED abc1234"})
+        os.environ["AGENTCTL_RED_DAILY_CAP"] = "0"
         try:
             acts = self.patrol(t + 12 * 60)
         finally:
             os.environ.pop("AGENTCTL_RED_DAILY_CAP")
-        self.assertTrue(any("SKIPPED (daily cap 1 reached)" in a for a in acts), acts)
-        self.assertEqual([a for a in self.patrol(t + 13 * 60) if "DISPATCHED" in a][:1] != [], True)
+        self.assertTrue(any(" DISPATCHED pid" in a for a in acts), acts)  # the daily budget is not a gate red's
         self.wait_fixer()
 
     def test_an_author_whose_session_is_gone_does_not_delay_the_fixer(self):
