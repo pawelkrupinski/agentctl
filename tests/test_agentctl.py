@@ -28,6 +28,8 @@ os.environ.setdefault("AGENTCTL_GOV_DIR", tempfile.mkdtemp(prefix="agentctl-gov-
 os.environ.setdefault("AGENTCTL_GOV_FREE_PROBE", "echo 64")
 os.environ.setdefault("AGENTCTL_GOV_PRESSURE_PROBE", "echo 10")
 os.environ.setdefault("AGENTCTL_GOV_LOAD_PROBE", "echo 1")
+# land's old in-process path, unless a test of the queue asks for it
+os.environ.setdefault("AGENTCTL_QUEUE", "0")
 os.environ.setdefault("KINOWO_SBT_WARM_STATE", tempfile.mkdtemp(prefix="agentctl-sbt-warm-test-"))
 
 ENV = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",

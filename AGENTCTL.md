@@ -16,7 +16,7 @@ calls.
 ```sh
 eval "$(~/bin/agentctl env --print)"        # 1. sbt/java on PATH; a locked vault stops you here with one line
 #    ... work in your own worktree, commit ...
-~/bin/agentctl land                         # 2. own checks, then LANDED (green) or WAITING (red): END YOUR TURN (verdicts -> inbox)
+~/bin/agentctl land                         # 2. rebase + guard, then QUEUED <id> in seconds: END YOUR TURN (verdicts -> inbox)
 ~/bin/agentctl wait run <id> &              # 3. Bash run_in_background=true, then END YOUR TURN
 ~/bin/agentctl ci-why                       # 4. only when land says the red gate refused, or Main is red
 ~/bin/agentctl inbox --unread --ack         # 5. the orchestrator: every land/watch/wait verdict, agent alive or not
@@ -25,21 +25,23 @@ eval "$(~/bin/agentctl env --print)"        # 1. sbt/java on PATH; a locked vaul
 ```
 
 Every change lands with `land`, identity changes included (2026-10-26: no pre-merge CI; the merge queue is retired).
-In movies the pre-push hook runs the basic tests plus the identity / page area tests the change touches, locally, and
-after LANDED `land` watches main's Main and convergence runs for your sha and ends `WATCH OK` / `WATCH RED` /
-`WATCH UNKNOWN`. While main is red, a production change prints `WAITING <sha> (n changes queued on waiting)` and land
-keeps running until the `waiting` branch lands with it once main is green.
+Since 2026-10-27 (the owner: "agents never wait on a land") `land` in movies rebases, runs the squash guard and prints
+`QUEUED <id> (<sha>)` at once; the always-on `waiting` processor then runs the change's checks (the pre-push hook: the
+basic tests plus the identity / page area tests the change touches) in a check tree of its own, within the governor's
+budget -- or on ci-runner when the laptop is under pressure -- and pushes it (`LANDED <sha>`, then a detached watch:
+`WATCH OK` / `WATCH RED` / `WATCH UNKNOWN`) or, main red, puts it on `waiting` (`WAITING`). Every verdict goes to
+`agentctl inbox`, naming your worktree. See "the land queue".
 
 Step by step:
 
 1. Run `env --print` first in any session that builds or pushes. If it prints
    `vault <ns> locked: ask the user to run `! secrets unlock <ns>``, stop there and pass that line to the lead.
 2. Work and commit in your own worktree. Never use `reset --soft` onto a moved main.
-3. Run `land` from the worktree with the Bash tool's `run_in_background=true`, then END YOUR TURN. You are re-invoked
-   when it exits: `NOT LANDED: <why>` (fix and land again), or `LANDED <sha>` followed by the watch's verdict. On
-   `WATCH RED` your change may have broken main: read the ci-why summary it prints and fix forward at once with
-   `Fixes-Red: <run>`. (There is no `heavy-run` wrapper on this laptop; the landing lock keeps one landing hook's JVM
-   at a time.)
+3. Run `land` from the worktree; it prints `QUEUED <id>` within seconds (or `NOT LANDED: <why>` for a dirty tree, a
+   rebase conflict, the squash guard). END YOUR TURN at QUEUED. The verdict -- `LANDED`, `WAITING`, `NOT LANDED` with
+   the failing checks' tail, then the watch's `WATCH OK/RED` -- reaches the orchestrator through `agentctl inbox`; a
+   NOT LANDED or WATCH RED of yours comes back to you: fix forward (`Fixes-Red: <run>` for a red you caused) and land
+   again.
 4. To wait for a CI run, start `wait run` with the Bash tool's `run_in_background=true` and end your turn. You are
    re-invoked when it exits. Never sleep or poll in the foreground.
 5. When main is red or the gate refused, run `ci-why`. It names the run, the cause (infra or test) and how the gate
@@ -285,6 +287,49 @@ agent must be assigned to it".
   and pushes fail closed (an unread gate is red).
 - **Nobody awake.** The launchd processor patrols and dispatches with no session open; every verdict waits in the
   inbox. The status line says `as of HH:MM` once its cache is over 5 min old.
+
+### the land queue: QUEUED at once, checked and pushed by the processor (2026-10-27)
+
+```
+agentctl land                       # movies: rebase, squash guard, QUEUED <id> (<sha>): END YOUR TURN
+agentctl land --follow              # the in-process land below (checks here, push, watch): scripts and red fixers
+agentctl waiting status             # also lists the queued changes (queued / checking, a remote run)
+agentctl waiting cancel <id>        # drop a queued change (its checker is stopped, its CI run cancelled)
+```
+
+The owner: "agents never wait on a land". In movies (a repo whose hook can check a change apart), `land` fetches,
+rebases onto forgejo/main, runs the squash guard, writes the change as a QUEUED entry of the `waiting` state and
+returns: `QUEUED <id> (<sha>, n ahead)`, exit 0 (an inbox entry of kind QUEUED). The always-on processor (launchd
+`net.bitcashier.agentctl-waiting`) starts a CHECKER per queued change (`agentctl waiting check <id>`, owned per entry;
+a fix of a red run first), at most `$AGENTCTL_CHECK_TREES` (3) at once, each in a CHECK TREE of its own -- a detached
+worktree `<clone>-wt-check-<n>`, kept between checks so its build stays warm, seeded from the shared build cache when
+cold. The checker:
+
+1. rebuilds the change on forgejo/main in the tree (a conflict: `NOT LANDED: ... no longer applies`);
+2. runs the hook's dry run there -- `--range`, or `--checks-only` when main is red and the change must wait -- as a
+   check of THE GOVERNOR (`gov`: red for a `Fixes-Red:` fix), under the stall bound; or, when `gov status` reports
+   pressure, on ci-runner (see "remote checks"); a failure is `NOT LANDED: the pre-push checks failed` with the tail;
+3. under the landing lock: main moved since the check -> back to 1 (3 rounds); main red and the change must wait ->
+   it joins `waiting` (`WAITING ...`, the entry names your worktree); else the push from the tree, whose hook reuses
+   the pass (or confirms the remote run) -> `LANDED <sha>` and a detached watch that closes your worktree after
+   WATCH OK when proven merged (unless land had `--keep-worktree`).
+
+Every verdict is an inbox entry whose cwd is your worktree. A checker that dies is restarted by the processor (three
+times, then `NOT LANDED`). `land --follow`, `--no-watch`, a dispatched red fixer (`$AGENTCTL_RED_FIXER`, whose wrapper
+reads LANDED) and `AGENTCTL_QUEUE=0` keep the in-process land below.
+
+### remote checks: ci-runner's check tier under pressure
+
+When the governor reports memory or CPU pressure (`gov status`'s `pressure:` line: memory pressure over 75%, under
+3 + 5 GB free with no idle sbt server to evict, or load over 2x the cores; `$AGENTCTL_REMOTE_PRESSURE`,
+`$AGENTCTL_REMOTE_LOAD`; `AGENTCTL_REMOTE_CHECKS=0` turns it off), a queued change's checks run on ci-runner instead:
+the checker pushes the checked tip to `check/<entry id>` (movies' hook checks nothing for a check/ branch), whose push
+runs `.github/workflows/precommit-check.yml` on the check tier (ubuntu runner, slice `check`): the same hook,
+`--checks-only <merge-base with main>..HEAD`. The checker follows that run (owned: cancelled if the checker dies;
+none started in 15 min, or undecided after 2 h: no verdict, checked locally instead), reads its verdict -- the same
+shape as a local one, the failed jobs' relevant lines as the tail -- and deletes the branch. The push to main then
+carries `PREPUSH_REMOTE_RUN=<run id>`: the hook takes that run for its checks only once Forgejo says it is
+precommit-check.yml, a success, on exactly the pushed commit; anything else runs every check on the laptop.
 
 ### land: lock, rebase, check, push, verify, watch
 

@@ -71,7 +71,11 @@ the gate's clearing rule (a later green run, or `Fixes-Red: <#number|run id>` on
   agentctl ci-why                 # movies (or the cwd's repo)
   agentctl ci-why 1934            # explain one run
 Exit: 0 green, 1 red (or a run explained)."""
-LAND_HELP = """Land the current commit(s) on forgejo/main, safely, in one command:
+LAND_HELP = """Land the current commit(s) on forgejo/main, safely, in one command.
+THE LAND QUEUE (movies, 2026-10-27): fetch -> rebase -> prepush-check -> `QUEUED <id> (<sha>)` at once; END YOUR TURN.
+The waiting processor checks the change in a check tree of its own within the governor (on ci-runner under pressure),
+then pushes it (LANDED + a detached watch) or, main red, puts it on `waiting`; every verdict goes to `agentctl inbox`.
+`--follow` (and --no-watch, a dispatched red fixer, AGENTCTL_QUEUE=0) runs the in-process land described below:
   fetch -> rebase onto forgejo/main -> agentctl prepush-check -> git push forgejo HEAD:main (the repo's pre-push hook
   runs, with sdkman's sbt/java on PATH) -> on a push race (non-fast-forward, cannot lock ref) refetch, rebase and retry,
   up to 3 times -> fetch and verify with merge-base / git cherry.
@@ -3432,6 +3436,8 @@ def cmd_land(a):
             stash = Stash(repo)
             stash.save()
             err(f"stashed local changes as {stash.name} ({stash.sha[:10]})")
+        if queue_mode(repo, a):  # THE LAND QUEUE: rebase, guard, QUEUED -- the checks and the push are the processor's
+            return enqueue(repo, main_ref, sh, a)
         a.landed_sha, a.pushed_at, a.waiting = None, None, None
         rc = None
         for round_ in range(LAND_PRECHECK_ROUNDS + 1):
@@ -4219,7 +4225,7 @@ def batch_order(repo, entries, reds):
     return sorted(entries, key=lambda e: (rank(e), e["seq"]))
 
 
-def join(repo, main_ref, sh, log_path, a, head=None):
+def join(repo, main_ref, sh, log_path, a, head=None, worktree=None):
     """Under the landing lock, in seconds: the change (its own checks passed) joins `waiting`, rebuilt on forgejo/main.
     Rejected only on a cherry-pick conflict. Prints `WAITING <tip> (entry <id>, n in batch)`, starts the processor."""
     lock_note("join `waiting`")
@@ -4243,7 +4249,7 @@ def join(repo, main_ref, sh, log_path, a, head=None):
         return 1
     seq = max([e["seq"] for e in waiting_entries(d, open_only=False)] + [0]) + 1
     e = {"id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{seq}", "seq": seq,
-         "worktree": repo, "head": head, "commits": commits, "fixes": sorted(fixes_of(repo, commits)),
+         "worktree": worktree or repo, "head": head, "commits": commits, "fixes": sorted(fixes_of(repo, commits)),
          "status": "waiting", "created": ts(), "tip": git(wt, "rev-parse", "HEAD").strip(),
          "follow": bool(getattr(a, "follow", False))}
     save_entry(d, e)
@@ -4260,6 +4266,340 @@ def join(repo, main_ref, sh, log_path, a, head=None):
     return 0
 
 
+# ---------------------------------------------------------------- the land queue: agents never wait on a land
+# The owner (2026-10-27): "agents never wait on a land". `land` rebases the change onto forgejo/main, runs the squash
+# guard, enqueues it and returns at once: `QUEUED <id> (<sha>)`. The always-on `waiting` processor (launchd
+# net.bitcashier.agentctl-waiting) runs each queued change's checks in a CHECK TREE of its own (a pool of detached
+# worktrees <clone>-wt-check-<n>, kept warm between checks, seeded from the shared build cache when cold), admitted by
+# the governor (a check; red for a Fixes-Red fix of a red run, which goes first) -- or on ci-runner's check tier when the
+# governor reports pressure (see "remote checks") -- then, under the landing lock: main green (or a change that may land
+# while red), the checked tip is pushed (`LANDED`, and a detached watch); main red, it joins `waiting` (`WAITING`). Main
+# moved meanwhile: rebased in the tree and checked again. Every verdict goes to the inbox with the agent's worktree.
+# `land --follow` keeps the old in-process land (checks, push, watch) for scripts and red fixers.
+QUEUE_POOL = 3          # check trees, so at most this many queued changes are checked at once ($AGENTCTL_CHECK_TREES)
+QUEUE_ROUNDS = 3        # main moved under a checked change this often: checked again each time, then NOT LANDED
+
+
+def queued_entries(d):
+    return [e for e in waiting_entries(d, open_only=False) if e.get("status") in ("queued", "checking")]
+
+
+def queue_mode(repo, a):
+    """Whether land queues (QUEUED, returning at once): a repo whose hook can check a change apart (movies), unless
+    --follow / --no-watch (scripts), a dispatched red fixer (its wrapper reads LANDED), or AGENTCTL_QUEUE=0."""
+    if getattr(a, "follow", False) or getattr(a, "no_watch", False) or os.environ.get("AGENTCTL_RED_FIXER"):
+        return False
+    return os.environ.get("AGENTCTL_QUEUE", "1") != "0" and batching(repo)
+
+
+def enqueue(repo, main_ref, sh, a):
+    """Rebase, squash guard, then the change becomes a queued entry: prints QUEUED and starts the processor."""
+    rc, head = sync(repo, main_ref, sh)
+    if rc is not None:
+        return rc
+    d, _clone, _wt = waiting_state(repo)
+    commits = waiting_commits(repo, f"{REMOTE}/main", head)
+    with land_lock(repo) as held:  # the seq is unique
+        if not held:
+            print("NOT LANDED: timed out waiting for the landing lock to queue the change; land again.")
+            return 1
+        seq = max([e["seq"] for e in waiting_entries(d, open_only=False)] + [0]) + 1
+        e = {"id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{seq}", "seq": seq,
+             "worktree": repo, "head": head, "commits": commits, "fixes": sorted(fixes_of(repo, commits)),
+             "status": "queued", "created": ts(), "keep_worktree": bool(getattr(a, "keep_worktree", False)),
+             "base": git(repo, "rev-parse", main_ref).strip()}
+        save_entry(d, e)
+    ahead = len(queued_entries(d)) - 1
+    print(f"QUEUED {e['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}): its checks run in the background; "
+          "LANDED / WAITING / NOT LANDED goes to `agentctl inbox`", flush=True)
+    spawn_waiting_processor(repo)
+    offer_token(repo)
+    return 0
+
+
+def check_tree_slot(repo, d):
+    """(index, open lock file) of a free check tree slot, or None when all QUEUE_POOL are busy."""
+    n = int(env_num("AGENTCTL_CHECK_TREES", QUEUE_POOL))
+    for i in range(1, n + 1):
+        f = open(os.path.join(d, f"check-tree-{i}.lock"), "a+")
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return i, f
+        except BlockingIOError:
+            f.close()
+    return None
+
+
+def check_tree(repo, i, sha):
+    """The detached worktree <clone>-wt-check-<i> at sha (kept between checks: its build stays warm)."""
+    _d, clone, _w = waiting_state(repo)
+    tree = f"{clone}-wt-check-{i}"
+    if not os.path.isdir(tree):
+        git(repo, "worktree", "prune", check=False)
+        git(repo, "worktree", "add", "-q", "--detach", tree, sha)
+        seed = os.path.join(tree, "scripts", "sbt-warm")
+        if os.access(seed, os.X_OK):  # a cold tree's first compile seeded from the shared build cache, not from scratch
+            try:
+                subprocess.run([seed, "--seed"], cwd=tree, capture_output=True, text=True, timeout=600, env=tool_env())
+            except subprocess.TimeoutExpired:
+                err(f"sbt-warm --seed in {tree} took over 10 min")
+    else:
+        git(tree, "reset", "-q", "--hard", check=False)
+        git(tree, "clean", "-qfd", "-e", "target/", check=False)
+        git(tree, "checkout", "-q", "--force", "--detach", sha)
+    return tree
+
+
+def entry_owned(eid):
+    return Owned("check", eid, ["waiting", "check", eid])
+
+
+def spawn_checks(repo, d):
+    """Start a checker (`agentctl waiting check <id>`, detached, owned per entry) for each queued entry, oldest first,
+    while check trees are free; red fixes first."""
+    try:
+        reds = gate_reds(repo)
+    except Exception:
+        reds = set()
+    todo = sorted([e for e in waiting_entries(d, open_only=False) if e.get("status") in ("queued", "checking")],
+                  key=lambda e: (0 if reds and set(e.get("fixes") or []) & reds else 1, e["seq"]))
+    started = 0
+    for e in todo:
+        if lock_held(entry_owned(e["id"]).lockpath):
+            continue
+        slot = check_tree_slot(repo, d)
+        if not slot:
+            break
+        slot[1].close()  # the checker takes it again itself
+        with open(os.path.join(d, "processor.log"), "a") as logf:
+            subprocess.Popen([sys.executable, os.path.realpath(__file__), "waiting", "check", e["id"], "--repo", repo],
+                             stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=repo,
+                             env=detached_env(repo))
+        started += 1
+        time.sleep(1)  # it takes its tree slot before the next looks
+    return started
+
+
+def queue_verdict(d, e, status, verdict, tail=(), code=1, **fields):
+    e.update(status=status, decided=ts(), why=verdict, **fields)
+    save_entry(d, e)
+    wlog(d, f"{e['id']}: {verdict.splitlines()[0]}")
+    inbox_write("land", verdict.splitlines()[0], [verdict.splitlines()[0]], list(tail)[-25:], code, cwd=e["worktree"])
+
+
+def rebase_in_tree(tree, e, base):
+    """The entry's commits on base, in the tree: the new head, or None on a conflict (aborted)."""
+    git(tree, "checkout", "-q", "--force", "--detach", base)
+    conflict = pick(tree, e["commits"])
+    return None if conflict else git(tree, "rev-parse", "HEAD").strip()
+
+
+def check_entry(repo, eid):
+    """One queued change: its checks in a check tree within the governor's budget (or on ci-runner under pressure),
+    then pushed (green), joined to `waiting` (red) or rejected. Owned per entry."""
+    d, _c, _w = waiting_state(repo)
+    own = entry_owned(eid)
+    if not own.acquire():
+        return 0
+    try:
+        p = os.path.join(d, "entries", f"{eid}.json")
+        e = read_record(p)
+        if not e or e.get("status") not in ("queued", "checking"):
+            return 0
+        e["attempts"] = e.get("attempts", 0) + 1
+        if e["attempts"] > 3:  # its checkers died three times (killed, crashed): said, not tried forever
+            queue_verdict(d, e, "rejected", f"NOT LANDED: the checker of {eid} ended without a verdict 3 times; land again")
+            return 1
+        save_entry(d, e)
+        slot = None
+        while not slot:
+            slot = check_tree_slot(repo, d)
+            if not slot:
+                time.sleep(10)
+        i, slot_f = slot
+        try:
+            return _check_entry(repo, d, e, i, own)
+        finally:
+            slot_f.close()
+    finally:
+        own.release()
+
+
+def _check_entry(repo, d, e, i, own=None):
+    hook = precheck_hook(repo)
+    log_path = os.path.join(d, f"check-{e['id']}")
+    e.update(status="checking", since=ts())
+    save_entry(d, e)
+    for round_ in range(QUEUE_ROUNDS):
+        git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
+        base = git(repo, "rev-parse", f"{REMOTE}/main").strip()
+        tree = check_tree(repo, i, base)
+        head = rebase_in_tree(tree, e, base)
+        if not head:
+            queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {REMOTE}/main {base[:10]} "
+                          f"(main moved since QUEUED): rebase onto forgejo/main and land again")
+            return 1
+        e["tip"] = head
+        save_entry(d, e)
+        lock_note(f"queued {e['id']}: checks of {head[:10]}")
+        reds = gate_reds(repo) if waiting_supported(repo) else set()
+        commits = waiting_commits(tree, base, head)
+        joining = bool(reds) and must_wait(repo, commits, reds)
+        cls = gov_class_of(repo, commits, reds)
+        mode = "--checks-only" if joining else "--range"
+        where, remote_run = "no hook", None
+        e.pop("remote_run", None)
+        if hook:
+            ok, out, where = run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own)
+            if ok is None:
+                queue_verdict(d, e, "rejected", f"NOT LANDED: stalled checks ({where}): no output and no CPU for "
+                              f"{env_num('AGENTCTL_LAND_STALL_MIN', LAND_STALL_MIN):g} min", (out or "").splitlines())
+                return 1
+            if not ok:
+                queue_verdict(d, e, "rejected", f"NOT LANDED: the pre-push checks failed ({where}); the change "
+                              f"{e['head'][:10]} stays in {e['worktree']}", (out or "").splitlines())
+                return 1
+        with land_lock(repo) as held:
+            if not held:
+                continue
+            git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
+            if git(repo, "rev-parse", f"{REMOTE}/main").strip() != base:
+                wlog(d, f"{e['id']}: main moved during its checks: rebased and checked again")
+                continue
+            reds = gate_reds(repo) if waiting_supported(repo) else set()
+            if reds and must_wait(repo, commits, reds):
+                return queue_join(repo, d, e, tree, head)
+            fixes = sorted(fixes_of(repo, commits))
+            pushed_at = time.time()
+            env = tool_env()
+            if e.get("remote_run"):  # the hook takes ci-runner's pass once Forgejo confirms it (remote checks)
+                env["PREPUSH_REMOTE_RUN"] = str(e["remote_run"])
+            rc, out = run_watched(push_argv(REMOTE, head), tree, env, log_path, "push")
+            if rc == 0:
+                git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
+                if landed(repo, head, f"refs/remotes/{REMOTE}/main"):
+                    queue_verdict(d, e, "landed", f"LANDED {head} (queued {e['id']}, checked {where})", code=0,
+                                  landed_sha=head, pushed_at=pushed_at)
+                    close = None if e.get("keep_worktree") else e["worktree"]
+                    spawn_watch_of(e["worktree"] if os.path.isdir(e["worktree"]) else repo, head, pushed_at,
+                                   close=close if close and os.path.isdir(close) else None, fixes=fixes)
+                    return 0
+            if rc is not None and RACE.search(out or ""):
+                continue
+            if rc is not None and REDGATE.search(out or ""):
+                continue  # red now: the next round joins `waiting`
+            queue_verdict(d, e, "rejected", "NOT LANDED: the push failed (pre-push hook or remote)",
+                          (out or "").splitlines())
+            return 1
+    queue_verdict(d, e, "rejected", f"NOT LANDED: main moved under the checks {QUEUE_ROUNDS} times; land again")
+    return 1
+
+
+def queue_join(repo, d, e, tree, head):
+    """Under the landing lock, main red: the checked change joins `waiting` (land's join, from the check tree)."""
+    a = argparse.Namespace(follow=False)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = join(repo, f"refs/remotes/{REMOTE}/main", lambda *x: subprocess.run(x, cwd=tree, capture_output=True,
+                                                                                  text=True, env=tool_env()),
+                  os.path.join(d, f"check-{e['id']}"), a, head=head, worktree=e["worktree"])
+    line = (out.getvalue().strip().splitlines() or [""])[-1]
+    if rc == 0:
+        e.update(status="joined", decided=ts(), waiting_id=a.waiting["id"])
+        save_entry(d, e)
+        inbox_write("land", line, [line], [], None, final=False, cwd=e["worktree"])
+        wlog(d, f"{e['id']}: {line}")
+        return 0
+    queue_verdict(d, e, "rejected", line or "NOT LANDED: could not join `waiting`")
+    return 1
+
+
+def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own=None):
+    """(ok, output, where) of the change's checks: on ci-runner when the governor reports pressure (and the repo has the
+    remote check workflow), else in the tree, admitted by the governor. ok None: stalled."""
+    why = gov_pressure() if os.environ.get("AGENTCTL_REMOTE_CHECKS", "1") != "0" else None
+    if why and remote_checks_supported(tree):
+        wlog(d, f"{e['id']}: the laptop is under pressure ({why}): checks on ci-runner")
+        ok, out = remote_check(repo, e, base, head, mode, own)
+        if ok is not None:
+            return ok, out, f"on ci-runner ({why})"
+        wlog(d, f"{e['id']}: the remote check gave no verdict ({out.splitlines()[-1] if out else '?'}): checking here")
+    with check_slot(repo, f"queued {e['id']} {head[:10]}", cls) as slot:
+        rc, out = run_watched([os.path.join(tree, "scripts", "hooks", "pre-push"), mode, f"{base}..{head}"], tree,
+                              slot.env(tool_env()), log_path, "checks", sampler=slot.sample)
+        slot.done(rc, out)
+    with open(os.path.join(d, "checks.log"), "a") as f:
+        f.write(f"=== {ts()} {e['id']} {base[:10]}..{head[:10]} {mode} rc {rc}\n{out}\n")
+    return (None if rc is None else rc == 0), out, f"locally, check tree {os.path.basename(tree)}"
+
+
+# ---------------------------------------------------------------- remote checks: ci-runner's check tier under pressure
+# The owner (2026-10-27): when the governor reports memory or CPU pressure (gov_pressure), a queued change's pre-commit
+# checks run on ci-runner's check tier instead. The checked tip is pushed to `check/<entry id>` (the hook checks nothing
+# for a check/ branch: it is a run's ref, never landed), whose push runs .github/workflows/precommit-check.yml: the same
+# hook, `--checks-only <merge-base with main>..HEAD`, on the check tier's runner. agentctl follows that run (owned: the run
+# is cancelled if the checker dies), reads the verdict -- the same (ok, output) shape as a local check, the failed jobs'
+# relevant lines as output -- and deletes the branch. The push to main then carries PREPUSH_REMOTE_RUN=<run id>: the hook
+# takes that run's pass for its checks only after Forgejo confirms it (the workflow, success, the pushed commit itself).
+REMOTE_WORKFLOW = "precommit-check.yml"
+REMOTE_TIMEOUT = 2 * 3600
+REMOTE_START = 15 * 60  # no run for the pushed branch by then: no verdict (checked locally instead)
+
+
+def remote_checks_supported(tree):
+    return os.path.exists(os.path.join(tree, ".github", "workflows", REMOTE_WORKFLOW))
+
+
+def remote_check(repo, e, base, head, mode, own=None):
+    """(ok, output) of the change's checks on ci-runner; ok None when no verdict came (the caller checks locally)."""
+    o_r = slug(repo)
+    branch = f"check/{e['id']}"
+    r = git(repo, "push", "--quiet", REMOTE, f"{head}:refs/heads/{branch}", check=False)
+    if r.returncode != 0:
+        return None, f"push of {branch} failed: {r.stderr.strip()[:300]}"
+    t0, rid, delays = time.time(), None, backoff(15, 120)
+    try:
+        while True:
+            try:
+                if rid is None:
+                    runs = (api(o_r, "GET", "actions/runs", {"workflow_id": REMOTE_WORKFLOW, "limit": 20})
+                            or {}).get("workflow_runs") or []
+                    hit = next((x for x in runs if x.get("commit_sha") == head
+                                and x.get("prettyref") in (branch, f"refs/heads/{branch}")), None)
+                    if hit:
+                        rid = hit["id"]
+                        e["remote_run"] = rid
+                        if own:
+                            own.add_run(o_r, rid)
+                    elif time.time() - t0 > REMOTE_START:
+                        return None, f"no {REMOTE_WORKFLOW} run started for {branch} in {REMOTE_START // 60} min"
+                if rid is not None:
+                    run = api(o_r, "GET", f"actions/runs/{rid}") or {}
+                    status = run.get("status")
+                    if status in ("success", "failure"):
+                        if own:
+                            own.drop_run(rid)
+                        if status == "success":
+                            return True, f"{REMOTE_WORKFLOW} run {rid} (#{run.get('index_in_repo')}): success"
+                        lines = relevant_lines(fetch_failed_log(o_r, rid), 25)
+                        out = [f"{REMOTE_WORKFLOW} run {rid} (#{run.get('index_in_repo')}) failed: {run.get('html_url')}"]
+                        for job, ls in lines.items():
+                            out += [f"-- {job}"] + ls
+                        return False, "\n".join(out)
+                    if status in ("cancelled", "skipped"):
+                        return None, f"{REMOTE_WORKFLOW} run {rid} {status}"
+            except (Exception, SystemExit) as ex:  # Forgejo down for a while: keep reading until the bound
+                err(f"remote check of {e['id']}: {str(ex)[:160]}")
+            if time.time() - t0 > REMOTE_TIMEOUT:
+                if rid is not None:
+                    cancel_run(o_r, rid, "the remote check timed out")
+                return None, f"{REMOTE_WORKFLOW} run {rid} undecided after {REMOTE_TIMEOUT // 3600} h"
+            time.sleep(next(delays))
+    finally:
+        try:
+            api(o_r, "DELETE", f"branches/{urllib.parse.quote(branch, safe='')}")
+        except Exception as ex:
+            err(f"could not delete {branch} ({str(ex)[:120]}): `agentctl sweep` lists it")
 def processor_owned(d, repo=None):
     """The processor's ownership: one per waiting state directory (one per repository)."""
     return Owned("waiting", os.path.basename(d.rstrip("/")) or "repo", ["waiting", "run", "--repo", repo or ""])
@@ -4734,6 +5074,10 @@ def waiting_run(repo, once=False, service=False):
             restart_if_changed([own], ["waiting", "run", "--repo", repo] + (["--once"] if once else [])
                                + (["--service"] if service else []))
             maybe_patrol(repo)  # the reds: who fixes each, RED UNCLAIMED, a dispatched fixer (always-on: launchd)
+            spawn_checks(repo, d)  # THE LAND QUEUE: each queued change's checks, in a checker of its own
+            if not service and not waiting_entries(d) and queued_entries(d):
+                drop.nap(float(os.environ.get("AGENTCTL_SERVICE_POLL", SERVICE_IDLE_POLL)))
+                continue
             if service and not waiting_entries(d):
                 if os.path.isdir(wt) and not git_ok(repo, "rev-parse", "--verify", "-q", f"refs/heads/{WAITING_BRANCH}"):
                     drop_waiting_tree(repo, wt)
@@ -4850,6 +5194,8 @@ def cmd_waiting(a):
     d, _c, wt = waiting_state(repo)
     if a.wcmd == "run":
         return waiting_run(repo, once=a.once, service=getattr(a, "service", False))
+    if a.wcmd == "check":  # one queued change's checker (the processor starts it)
+        return check_entry(main_clone(repo), a.entry)
     if a.wcmd == "service":
         return waiting_service(a.action, repo)
     if a.wcmd == "await":  # land's wait on its entry, resumed after a restart on new code
@@ -4892,8 +5238,23 @@ def cmd_waiting(a):
             print(f"  {e['id']}  {e['worktree']}  {len(e['commits'])} commit(s), tip {e.get('tip', '')[:10]}, since {e['created']}")
         if not entries:
             print("  (no change waiting)")
+        queued = queued_entries(d)
+        print(f"queued for their checks: {len(queued)}")
+        for e in queued:
+            print(f"  {e['id']}  {e['status']}{' since ' + e['since'] if e.get('since') else ''}  {e['worktree']}  "
+                  f"{e['head'][:10]}{'  remote run ' + str(e['remote_run']) if e.get('remote_run') else ''}")
         return 0
     if a.wcmd == "cancel":
+        queued = [e for e in queued_entries(d) if a.entry in e["id"]]
+        if len(queued) == 1:
+            e = queued[0]
+            e.update(status="cancelled", why="cancelled by `agentctl waiting cancel`", decided=ts())
+            save_entry(d, e)
+            h = read_record(entry_owned(e["id"]).record) or {}
+            if lock_held(entry_owned(e["id"]).lockpath) and h.get("pid"):
+                os.kill(int(h["pid"]), signal.SIGTERM)  # its checker: its CI run is cancelled with it
+            print(f"cancelled {e['id']}")
+            return 0
         hits = [e for e in waiting_entries(d) if a.entry in e["id"]]
         if len(hits) != 1:
             print(f"no single waiting change matches {a.entry!r}: `agentctl waiting status`")
@@ -6186,7 +6547,7 @@ def cmd_orphans(a):
 # on new code (os.execv) writes nothing: the resumed process writes the verdict. Only a SIGKILL leaves no entry (its
 # owner record stays, and `agentctl orphans` names it).
 INBOX_COMMANDS = {"land", "watch", "wait", "waiting await"}
-VERDICT_LINE = re.compile(r"^(LANDED \S+|NOT LANDED|WAITING \S+|WATCH (OK|RED|UNKNOWN|STALLED)\b|run \S+#\d+: |file \S+: )")
+VERDICT_LINE = re.compile(r"^(LANDED \S+|NOT LANDED|WAITING \S+|QUEUED \S+|WATCH (OK|RED|UNKNOWN|STALLED)\b|run \S+#\d+: |file \S+: )")
 INBOX_TAIL = 15
 
 
@@ -6247,7 +6608,7 @@ INBOX_KINDS = [("RED_UNCLAIMED", r"RED UNCLAIMED"), ("RED_ESCALATE", r"RED ESCAL
                ("RED", r"WATCH RED"), ("OK", r"WATCH OK"), ("STALLED", r"WATCH STALLED|.*\bstalled\b"),
                # a crash, a signal or an exit with no verdict: whatever it watched is unknown now
                ("UNKNOWN", r"WATCH UNKNOWN|UNKNOWN:|crashed:|exited:|ended by signal|exit \d+ with no verdict"),
-               ("NOT_LANDED", r"NOT LANDED"), ("LANDED", r"LANDED "), ("WAITING", r"WAITING "), ("HELD", r"HELD:"),
+               ("NOT_LANDED", r"NOT LANDED"), ("LANDED", r"LANDED "), ("WAITING", r"WAITING "), ("QUEUED", r"QUEUED "), ("HELD", r"HELD:"),
                ("CHECK", r"CHECK CAP")]
 WAIT_KINDS_DEFAULT = "RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_ESCALATE,BLOCKED,FIXER_FAILED,RED_REVERT"
 
@@ -6256,7 +6617,7 @@ def inbox_kind(verdict, final=True):
     """An entry's kind, from its verdict line: what `inbox wait --kinds` selects on."""
     v = verdict or ""
     if not final:
-        return "WAITING"
+        return "QUEUED" if v.startswith("QUEUED ") else "WAITING"
     for kind, pat in INBOX_KINDS:
         if re.match(pat, v):
             return kind
@@ -6299,7 +6660,7 @@ def with_inbox(command, handler, a):
     waiting_line = []
 
     def on_line(line):
-        if line.startswith("WAITING "):
+        if line.startswith(("WAITING ", "QUEUED ")):
             inbox_write(command, line, [line], tee.tail, None, final=False)
             waiting_line.append(line)
     tee = VerdictTee(sys.stdout, on_line)
@@ -6495,8 +6856,8 @@ def main(argv=None):
     ld.add_argument("--stash", action="store_true", help="set uncommitted changes aside in a NAMED stash and restore them after")
     ld.add_argument("--no-watch", action="store_true", help="exit at LANDED instead of watching Main and the convergence")
     ld.add_argument("--follow", action="store_true",
-                    help="movies: stay until the batch lands, then watch (default: return at WAITING; the verdicts go "
-                         "to `agentctl inbox`)")
+                    help="movies: run the checks here and stay until it lands, then watch (default: QUEUED at once; "
+                         "the checks run in the waiting processor and every verdict goes to `agentctl inbox`)")
     ld.add_argument("--keep-worktree", action="store_true",
                     help="after WATCH OK, keep the worktree land ran from (default: closed when proven merged and clean)")
     ev = sub.add_parser("env", help="print sdkman sbt/java export lines (--print) or check the agent environment (--check)",
@@ -6536,6 +6897,10 @@ def main(argv=None):
     wgsv.add_argument("action", choices=("install", "uninstall", "status"))
     wgsv.add_argument("--repo")
     wgr.add_argument("--repo")
+    wgk = wgs.add_parser("check", help="one queued change's checker: its checks, then push / join `waiting` / reject "
+                                       "(the processor starts it)")
+    wgk.add_argument("entry")
+    wgk.add_argument("--repo")
     wga = wgs.add_parser("await", help="wait for one change on `waiting` to land, then watch (land's own wait, resumed "
                                        "after a restart on new code)")
     wga.add_argument("entry")
