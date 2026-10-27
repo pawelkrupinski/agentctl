@@ -1,5 +1,5 @@
 """One credential path: the environment, then the processor's socket, then `secrets` (absolute path); fail closed."""
-import json, os, stat, subprocess, sys, tempfile, threading, unittest
+import json, os, subprocess, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -43,25 +43,9 @@ class TokenResolutionTest(Base):
 
     def serve(self, tok=TOK):
         d, _c, _w = A.waiting_state(self.r.path)
-        if tok:
-            os.environ["FORGEJO_API_TOKEN"] = tok
         drop = A.TokenDrop(d, MOVIES).open()
-        if tok:
-            os.environ.pop("FORGEJO_API_TOKEN")  # the server holds it; the client has no environment
-        stop = threading.Event()
-
-        def loop():
-            while not stop.is_set():
-                if tok:
-                    os.environ["FORGEJO_API_TOKEN"] = tok
-                drop.nap(0.2)
-                os.environ.pop("FORGEJO_API_TOKEN", None)
-        t = threading.Thread(target=loop, daemon=True)
-        t.start()
-
-        def done():
-            stop.set(); t.join(); drop.close()
-        self.addCleanup(done)
+        drop.held = lambda: tok or ""  # the processor's token (the test process itself has none in its environment)
+        self.addCleanup(drop.close)
         return drop
 
     def test_1_environment_wins(self):
@@ -118,3 +102,31 @@ class TokenResolutionTest(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LoopCannotStallTest(unittest.TestCase):
+    def test_a_hung_step_does_not_block_and_is_not_restarted(self):
+        import threading
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        self.assertFalse(A.run_bounded("t-hang", lambda: gate.wait(30), 0.2))
+        self.assertFalse(A.run_bounded("t-hang", lambda: None, 0.2), "still running: not started twice")
+        gate.set()
+        A._bounded["t-hang"].join(5)
+        self.assertTrue(A.run_bounded("t-hang", lambda: None, 1))
+
+    def test_the_socket_is_served_while_the_loop_is_busy(self):
+        base = tempfile.mkdtemp(dir="/tmp", prefix="agentctl-sock-")
+        saved = os.environ.get("AGENTCTL_SOCK_DIR")
+        os.environ["AGENTCTL_SOCK_DIR"] = base
+        try:
+            d = tempfile.mkdtemp()
+            drop = A.TokenDrop(d, MOVIES).open()
+            drop.held = lambda: TOK
+            self.addCleanup(drop.close)
+            import socket  # the main thread never calls nap/take: only the server thread can answer
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
+                c.settimeout(3); c.connect(drop.path); c.sendall(A.TOKEN_REQUEST); c.shutdown(socket.SHUT_WR)
+                self.assertEqual(c.recv(100).decode(), TOK)
+        finally:
+            os.environ.pop("AGENTCTL_SOCK_DIR") if saved is None else os.environ.__setitem__("AGENTCTL_SOCK_DIR", saved)

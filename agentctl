@@ -1174,6 +1174,21 @@ def cached_gate_summary(o_r, now=None):
 
 
 _last_gate_publish = [0.0]
+_bounded = {}
+
+
+def run_bounded(name, fn, secs):
+    """Run fn in a daemon thread and wait at most secs: a hung network call can never stall the processor's loop. A step
+    still running from an earlier cycle is not started again (False); True when fn finished in time."""
+    import threading
+    t = _bounded.get(name)
+    if t and t.is_alive():
+        return False
+    t = threading.Thread(target=fn, name=name, daemon=True)
+    _bounded[name] = t
+    t.start()
+    t.join(secs)
+    return not t.is_alive()
 
 
 def maybe_publish_gate(repo):
@@ -1182,12 +1197,16 @@ def maybe_publish_gate(repo):
     if time.time() - _last_gate_publish[0] < env_num("AGENTCTL_GATE_PUBLISH", 45):
         return
     _last_gate_publish[0] = time.time()
-    try:
-        o_r = slug(repo)
-        _red, line = ci_why(o_r, summary=True)
-        publish_gate_summary(o_r, line.splitlines()[-1])
-    except (Exception, SystemExit) as e:
-        err(f"gate summary: skipped ({str(e).replace('agentctl: ', '')[:200]})")
+
+    def work():
+        try:
+            o_r = slug(repo)
+            _red, line = ci_why(o_r, summary=True)
+            publish_gate_summary(o_r, line.splitlines()[-1])
+        except (Exception, SystemExit) as e:
+            err(f"gate summary: skipped ({str(e).replace('agentctl: ', '')[:200]})")
+    if not run_bounded("gate-publish", work, env_num("AGENTCTL_STEP_BOUND", 120)):
+        err("gate summary: still reading from an earlier cycle (the loop goes on)")
 
 
 def cmd_ci_why(a):
@@ -2687,16 +2706,20 @@ def maybe_patrol(repo):
     if every <= 0 or time.time() - _last_patrol[0] < every:
         return
     _last_patrol[0] = time.time()
-    try:
-        for line in patrol_repo(repo, dispatch=True):
-            err(f"red patrol: {line}")
-    except (Exception, SystemExit) as e:
-        why = str(e).replace("agentctl: ", "")[:200]
-        err(f"red patrol: skipped ({why})")
+
+    def work():
         try:
-            gate_unread_spell(slug(repo), why)
-        except (Exception, SystemExit):
-            pass
+            for line in patrol_repo(repo, dispatch=True):
+                err(f"red patrol: {line}")
+        except (Exception, SystemExit) as e:
+            why = str(e).replace("agentctl: ", "")[:200]
+            err(f"red patrol: skipped ({why})")
+            try:
+                gate_unread_spell(slug(repo), why)
+            except (Exception, SystemExit):
+                pass
+    if not run_bounded("red-patrol", work, env_num("AGENTCTL_STEP_BOUND", 120)):
+        err("red patrol: still running from an earlier cycle (the loop goes on)")
 
 
 # ---------------------------------------------------------------- land / env
@@ -4810,24 +4833,34 @@ class TokenDrop:
                 os.umask(old)
             s.listen(4)
             self.sock = s
+            import threading  # served on a thread of its own: no step of the main loop can leave a client waiting
+            threading.Thread(target=self.serve, name="token-socket", daemon=True).start()
         except OSError as e:
             err(f"no token hand-off socket ({e}): the processor reads the vault itself")
         return self
 
-    def nap(self, secs):
-        """Sleep secs; take a token handed over meanwhile."""
-        if not self.sock:
-            time.sleep(secs)
-            return
+    def held(self):
+        return os.environ.get("FORGEJO_API_TOKEN" if token_ns(self.o_r) == "movies" else "GH_TOKEN", "")
+
+    def serve(self):
         import select
+        while self.sock:
+            try:
+                ready, _, _ = select.select([self.sock], [], [], 1)
+                if ready and self.sock:
+                    self.take()
+            except (OSError, ValueError):
+                return
+
+    def nap(self, secs):
+        """Sleep secs (the socket is served by its own thread)."""
         end = time.time() + secs
         while True:
+            HEARTBEAT[0] = time.time()
             left = end - time.time()
             if left <= 0:
                 return
-            ready, _, _ = select.select([self.sock], [], [], left)
-            if ready:
-                self.take()
+            time.sleep(min(left, 10))
 
     def take(self):
         try:
@@ -4839,8 +4872,7 @@ class TokenDrop:
             try:
                 tok = conn.recv(4096).decode().strip()
                 if tok == TOKEN_REQUEST.decode().strip():  # a same-uid process (the socket is 0600) asks for the token
-                    mine = os.environ.get("FORGEJO_API_TOKEN" if token_ns(self.o_r) == "movies" else "GH_TOKEN", "")
-                    conn.sendall(mine.encode())
+                    conn.sendall(self.held().encode())
                     return
             except (OSError, UnicodeDecodeError):
                 return
@@ -4850,8 +4882,8 @@ class TokenDrop:
 
     def close(self):
         if self.sock:
-            self.sock.close()
-            self.sock = None
+            sock, self.sock = self.sock, None
+            sock.close()
             try:
                 os.unlink(self.path)
             except OSError:
@@ -5209,6 +5241,36 @@ def waiting_round(repo, d, wt):
     return "rejected"
 
 
+HEARTBEAT = [time.time()]  # the processor's loop stamps it each pass
+IN_BATCH = [False]  # inside waiting_round: a batch's checks legitimately take long
+STALL_SECS = 300
+
+
+def start_watchdog(argv):
+    """If the loop completes no cycle in STALL_SECS (outside a batch): dump every thread's stack to the log, write one
+    STALLED inbox entry, and re-exec. SIGUSR1 dumps the stacks on demand."""
+    import faulthandler, threading
+    try:
+        faulthandler.register(signal.SIGUSR1, all_threads=True)
+    except (AttributeError, ValueError, OSError):
+        pass
+
+    def watch():
+        while True:
+            time.sleep(env_num("AGENTCTL_WATCHDOG_TICK", 30))
+            stalled = time.time() - HEARTBEAT[0]
+            if stalled < env_num("AGENTCTL_STALL_SECS", STALL_SECS) or IN_BATCH[0]:
+                continue
+            err(f"STALLED: the loop made no cycle in {int(stalled)} s; stacks follow, then re-exec")
+            faulthandler.dump_traceback(all_threads=True)
+            inbox_write("waiting", f"STALLED: the waiting processor's loop made no cycle in {int(stalled)} s; stacks in "
+                                   "its service.log; re-exec'd", [], [], 2)
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os.execv(sys.executable, [sys.executable, TOOL_PATH] + list(argv))
+    threading.Thread(target=watch, name="watchdog", daemon=True).start()
+
+
 SERVICE_IDLE_POLL = 30  # seconds between looks at an empty `waiting` (a directory listing: no git, no network)
 
 
@@ -5227,10 +5289,13 @@ def waiting_run(repo, once=False, service=False):
         except (Exception, SystemExit):
             o_r = SHORT["movies"]
         _IN_PROCESSOR[0] = True
+        HEARTBEAT[0] = time.time()
+        start_watchdog(["waiting", "run", "--repo", repo] + (["--once"] if once else []) + (["--service"] if service else []))
         drop = TokenDrop(d, o_r).open()
         stack.callback(drop.close)
         delays = backoff(float(os.environ.get("AGENTCTL_WAITING_POLL", WAITING_POLL)), 300)
         while True:
+            HEARTBEAT[0] = time.time()
             restart_if_changed([own], ["waiting", "run", "--repo", repo] + (["--once"] if once else [])
                                + (["--service"] if service else []))
             maybe_publish_gate(repo)  # the gate line for the status line (~/.cache/agentctl/gate-summary.txt)
@@ -5246,7 +5311,12 @@ def waiting_run(repo, once=False, service=False):
                     return 0
                 drop.nap(float(os.environ.get("AGENTCTL_SERVICE_POLL", SERVICE_IDLE_POLL)))
                 continue
-            state = waiting_round(repo, d, wt)
+            IN_BATCH[0] = True
+            try:
+                state = waiting_round(repo, d, wt)
+            finally:
+                IN_BATCH[0] = False
+                HEARTBEAT[0] = time.time()
             if state == "empty":
                 if not waiting_entries(d):
                     drop_waiting_tree(repo, wt)
