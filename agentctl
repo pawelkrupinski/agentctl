@@ -4181,9 +4181,10 @@ def run_local_recheck(repo, main):
     hook = precheck_hook(repo)
     if not hook:
         return []
-    # The base is the main the red was recorded on: the checks judge what changed since (shellcheck fails only on warnings
+    # The base is the main the red FIRST appeared on (first_main; the record's `main` moves with every recheck): the checks judge what changed since (shellcheck fails only on warnings
     # a change ADDS, so against an empty base the whole tree would count). Unknown to this clone: the empty tree.
-    old_main = str(local_red().get("main") or "")
+    firsts = [str(c.get("first_main") or "") for c in (local_red().get("checks") or {}).values()]
+    old_main = next((f for f in firsts if f and git_ok(repo, "cat-file", "-e", f"{f}^{{commit}}")), "")
     if old_main and git_ok(repo, "cat-file", "-e", f"{old_main}^{{commit}}"):
         base = old_main
     else:
