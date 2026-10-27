@@ -419,6 +419,23 @@ shape as a local one, the failed jobs' relevant lines as the tail -- and deletes
 carries `PREPUSH_REMOTE_RUN=<run id>`: the hook takes that run for its checks only once Forgejo says it is
 precommit-check.yml, a success, on exactly the pushed commit; anything else runs every check on the laptop.
 
+**The run is the ENTRY's, not the checker's** (2026-10-27: entry -45's run 3344 went green while `waiting status` showed
+`checking ... remote run 3344` for an hour -- its checker ended mid-wait at 19:52:56Z, taking its next run 3354 down
+with it (`cancelled ... (its check ended)`), the replacement started over, and the saved `remote_run` was never
+cleared):
+- the check's record (`remote` in the entry: branch, base, tip, mode, run, push time) is saved the moment the branch
+  is pushed and again when the run is found; `remote_run` is cleared (and saved) at each new round;
+- a checker that dies, is stopped or re-exec'd mid-wait cancels nothing; its replacement ADOPTS the run -- same tip, no
+  new push, no new run -- and the 15-min / 2-h bounds count from the push (an adoption is no `attempts` retry);
+- every cycle the processor re-derives each `checking` entry from the facts (its checker's lock, its run's status on
+  Forgejo), stateless: a run decided 5 min ago that its live checker has not collected means a stranded checker --
+  stopped, and the replacement takes the verdict; a checker's SIGTERM is never swallowed by the outage handler;
+- an entry checking over 2x the expected duration (`$AGENTCTL_CHECK_EXPECTED_MIN`, 30 min, from the round's start) is
+  re-examined, and when still unresolvable (Forgejo unreadable, a decided run nobody collects, no checker) it is ONE
+  `STALLED: queue entry ...` inbox entry per round (escalated like any STALLED). The processor's own marks live in
+  `waiting/<repo>/reconcile/<id>.json`;
+- superseding or cancelling an entry cancels its undecided run.
+
 ### land: lock, rebase, check, push, verify, watch
 
 ```

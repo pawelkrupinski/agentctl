@@ -708,7 +708,7 @@ class Owned:
 
     def _signals(self):
         def end(signum, frame):
-            raise SystemExit(128 + signum)
+            raise Terminated(128 + signum)
         for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
             try:
                 self._old[s] = signal.signal(s, end)
@@ -6430,6 +6430,7 @@ def supersede(d, e, by, why):
     checker, if running, is stopped; said in the inbox."""
     e.update(status="superseded", superseded_by=by, why=why, decided=ts())
     save_entry(d, e)
+    cancel_entry_remote(e, f"its queue entry was superseded by {by}")
     h = read_record(entry_owned(e["id"]).record) or {}
     if lock_held(entry_owned(e["id"]).lockpath) and h.get("pid") and int(h["pid"]) != os.getpid():
         try:
@@ -6728,8 +6729,12 @@ def check_entry(repo, eid):
         e = read_record(p)
         if not e or e.get("status") not in ("queued", "checking"):
             return 0
-        e["attempts"] = e.get("attempts", 0) + 1
-        if e["attempts"] > 3:  # its checkers died three times (killed, crashed): said, not tried forever
+        rem = e.get("remote") or {}
+        if rem.get("run") is not None and not rem.get("collected_at") and e.get("adoptions", 0) < 10:
+            e["adoptions"] = e.get("adoptions", 0) + 1  # a replacement that adopts the entry's remote run: not a retry
+        else:
+            e["attempts"] = e.get("attempts", 0) + 1
+        if e.get("attempts", 0) > 3:  # its checkers died three times (killed, crashed): said, not tried forever
             queue_verdict(d, e, "rejected", f"NOT LANDED: the checker of {eid} ended without a verdict 3 times; land again")
             return 1
         save_entry(d, e)
@@ -6750,13 +6755,29 @@ def check_entry(repo, eid):
 def _check_entry(repo, d, e, i, own=None):
     hook = precheck_hook(repo)
     log_path = os.path.join(d, f"check-{e['id']}")
-    e.update(status="checking", since=ts())
+    if e.get("status") != "checking" or not e.get("since"):
+        e["since"] = ts()
+    e["status"] = "checking"
     save_entry(d, e)
     for round_ in range(QUEUE_ROUNDS):
         git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
         base = git(repo, "rev-parse", f"{REMOTE}/main").strip()
-        tree = check_tree(repo, i, base)
-        head, via = rebase_in_tree(d, tree, e, base)
+        rem = e.get("remote") or {}
+        adopt = (rem.get("head") == e["head"] and rem.get("base") == base and not rem.get("collected_at")
+                 and rem.get("status") not in ("cancelled", "skipped", "abandoned")
+                 and git_ok(repo, "cat-file", "-e", f"{rem.get('tip')}^{{commit}}"))
+        if adopt:  # a replacement checker (the last one died, was stopped or re-exec'd mid-wait): the same tip, its run
+            tree = check_tree(repo, i, rem["tip"])
+            head, via = rem["tip"], None
+        else:
+            if rem.get("run") is not None and not rem.get("status"):
+                cancel_entry_remote(e, "superseded by a new round of its checks")
+            e.pop("remote", None)
+            e.pop("remote_run", None)
+            e["round_since"] = ts()
+            save_entry(d, e)
+            tree = check_tree(repo, i, base)
+            head, via = rebase_in_tree(d, tree, e, base)
         if via:
             already_landed(d, e, via if via != "an equivalent commit" else None)
             return 0
@@ -6772,8 +6793,7 @@ def _check_entry(repo, d, e, i, own=None):
         joining = bool(reds) and must_wait(repo, commits, reds)
         cls = gov_class_of(repo, commits, reds)
         mode = "--checks-only" if joining else "--range"
-        where, remote_run = "no hook", None
-        e.pop("remote_run", None)
+        where = "no hook"
         if hook:
             ok, out, where = run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own)
             if ok is None:
@@ -6872,8 +6892,10 @@ def queue_join(repo, d, e, tree, head):
 def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own=None):
     """(ok, output, where) of the change's checks: on ci-runner when the governor reports pressure (and the repo has the
     remote check workflow), else in the tree, admitted by the governor. ok None: stalled."""
-    why = gov_pressure() if os.environ.get("AGENTCTL_REMOTE_CHECKS", "1") != "0" else None
-    if why and remote_checks_supported(tree):
+    adopted = remote_matches(e, base, head, mode)
+    why = "its remote run, adopted" if adopted else \
+        gov_pressure() if os.environ.get("AGENTCTL_REMOTE_CHECKS", "1") != "0" else None
+    if why and (adopted or remote_checks_supported(tree)):
         wlog(d, f"{e['id']}: the laptop is under pressure ({why}): checks on ci-runner")
         ok, out = remote_check(repo, e, base, head, mode, own)
         if ok is not None:
@@ -6908,65 +6930,239 @@ def remote_checks_supported(tree):
     return os.path.exists(os.path.join(tree, ".github", "workflows", REMOTE_WORKFLOW))
 
 
-def remote_check(repo, e, base, head, mode, own=None):
-    """(ok, output) of the change's checks on ci-runner; ok None when no verdict came (the caller checks locally)."""
-    o_r = slug(repo)
-    branch = f"check/{e['id']}"
-    r = git(repo, "push", "--quiet", REMOTE, f"{head}:refs/heads/{branch}", check=False)
-    if r.returncode != 0:
-        return None, f"push of {branch} failed: {r.stderr.strip()[:300]}"
-    try:
-        record_dispatch(branch=branch, workflow=REMOTE_WORKFLOW, worktree=e.get("worktree"), sha=head, agent="land queue",
-                        pid=os.getpid(), purpose=f"pre-commit check of queue entry {e['id']}")
-    except (Exception, SystemExit) as ex:
-        err(f"remote check of {e['id']}: owner not recorded ({str(ex)[:120]})")
-    t0, rid, delays = time.time(), None, backoff(15, 120)
-    try:
-        while True:
+REMOTE_EXPECTED_MIN = 30  # a check's expected duration ($AGENTCTL_CHECK_EXPECTED_MIN): an entry checking 2x that is re-examined
+REMOTE_COLLECT_GRACE = 300  # a run decided this long ago and still uncollected: its checker is stranded, stopped, replaced
+
+
+class Terminated(SystemExit):
+    """A signal's exit (Owned's handler): never swallowed by a wait loop that rides out a token or tunnel outage."""
+
+
+def remote_matches(e, base, head, mode):
+    """The entry's recorded remote check, when it is the check of exactly this tip on this base in this mode."""
+    rem = e.get("remote") or {}
+    if rem.get("tip") == head and rem.get("base") == base and rem.get("mode") == mode and rem.get("head") == e.get("head") \
+            and rem.get("status") not in ("cancelled", "skipped", "abandoned"):
+        return rem
+    return None
+
+
+def remote_poll(o_r, rem):
+    """STATELESS: the remote check's state from Forgejo alone -- the run (found by its check/ branch and tip when its id
+    is not known yet), its status, and for a decided run the verdict. Returns the updated record (a copy); raises when
+    Forgejo cannot be read."""
+    rem = dict(rem)
+    if rem.get("run") is None:
+        runs = (api(o_r, "GET", "actions/runs", {"workflow_id": REMOTE_WORKFLOW, "limit": 50})
+                or {}).get("workflow_runs") or []
+        hit = next((x for x in runs if x.get("commit_sha") == rem["tip"]
+                    and x.get("prettyref") in (rem["branch"], f"refs/heads/{rem['branch']}")), None)
+        if not hit:
+            return rem
+        rem["run"] = hit["id"]
+    run = api(o_r, "GET", f"actions/runs/{rem['run']}") or {}
+    status = run.get("status")
+    rem["run_status"] = status
+    if status in ("success", "failure", "cancelled", "skipped") and not rem.get("status"):
+        rem["status"], rem["decided_at"] = status, time.time()
+        name = f"{REMOTE_WORKFLOW} run {rem['run']} (#{run.get('index_in_repo')})"
+        if status == "success":
+            rem["out"] = f"{name}: success"
+        elif status == "failure":
+            out = [f"{name} failed: {run.get('html_url')}"]
             try:
-                if rid is None:
-                    runs = (api(o_r, "GET", "actions/runs", {"workflow_id": REMOTE_WORKFLOW, "limit": 20})
-                            or {}).get("workflow_runs") or []
-                    hit = next((x for x in runs if x.get("commit_sha") == head
-                                and x.get("prettyref") in (branch, f"refs/heads/{branch}")), None)
-                    if hit:
-                        rid = hit["id"]
-                        e["remote_run"] = rid
-                        try:
-                            save_dispatch({"branch": branch, "run_id": rid})
-                        except OSError:
-                            pass
-                        if own:
-                            own.add_run(o_r, rid)
-                    elif time.time() - t0 > REMOTE_START:
-                        return None, f"no {REMOTE_WORKFLOW} run started for {branch} in {REMOTE_START // 60} min"
-                if rid is not None:
-                    run = api(o_r, "GET", f"actions/runs/{rid}") or {}
-                    status = run.get("status")
-                    if status in ("success", "failure"):
-                        if own:
-                            own.drop_run(rid)
-                        if status == "success":
-                            return True, f"{REMOTE_WORKFLOW} run {rid} (#{run.get('index_in_repo')}): success"
-                        lines = relevant_lines(fetch_failed_log(o_r, rid), 25)
-                        out = [f"{REMOTE_WORKFLOW} run {rid} (#{run.get('index_in_repo')}) failed: {run.get('html_url')}"]
-                        for job, ls in lines.items():
-                            out += [f"-- {job}"] + ls
-                        return False, "\n".join(out)
-                    if status in ("cancelled", "skipped"):
-                        return None, f"{REMOTE_WORKFLOW} run {rid} {status}"
-            except (Exception, SystemExit) as ex:  # Forgejo down for a while: keep reading until the bound
-                err(f"remote check of {e['id']}: {str(ex)[:160]}")
-            if time.time() - t0 > REMOTE_TIMEOUT:
-                if rid is not None:
-                    cancel_run(o_r, rid, "the remote check timed out")
-                return None, f"{REMOTE_WORKFLOW} run {rid} undecided after {REMOTE_TIMEOUT // 3600} h"
-            time.sleep(next(delays))
-    finally:
+                for job, ls in relevant_lines(fetch_failed_log(o_r, rem["run"]), 25).items():
+                    out += [f"-- {job}"] + ls
+            except Exception as ex:
+                out.append(f"(its failed log could not be read: {str(ex)[:120]})")
+            rem["out"] = "\n".join(out)
+        else:
+            rem["out"] = f"{REMOTE_WORKFLOW} run {rem['run']} {status}"
+    return rem
+
+
+def save_remote(d, e, rem):
+    """The remote check's record in the entry, saved at once (a replacement checker adopts it); `remote_run` mirrors the
+    run for the push's hook and `waiting status`."""
+    e["remote"] = rem
+    if rem.get("run") is not None:
+        e["remote_run"] = rem["run"]
+    else:
+        e.pop("remote_run", None)
+    if d and e.get("seq") is not None:
+        save_entry(d, e)
+
+
+def delete_check_branch(o_r, branch):
+    try:
+        api(o_r, "DELETE", f"branches/{urllib.parse.quote(branch, safe='')}")
+    except Exception as ex:
+        err(f"could not delete {branch} ({str(ex)[:120]}): `agentctl sweep` lists it")
+
+
+def remote_check(repo, e, base, head, mode, own=None):
+    """(ok, output) of the change's checks on ci-runner; ok None when no verdict came (the caller checks locally).
+    The run belongs to the ENTRY, not to this process: its record (`remote` in the entry) is saved the moment the branch is
+    pushed and again when the run is found, so a checker that dies or is replaced mid-wait strands nothing -- the next one
+    ADOPTS the run (no new push, no new run) and the processor re-derives its state from Forgejo every cycle. Its time
+    bounds count from the push, not from this process's start."""
+    o_r = slug(repo)
+    try:
+        d = waiting_state(repo)[0]
+    except (Exception, SystemExit):
+        d = None
+    rem = remote_matches(e, base, head, mode)
+    if rem and d:
+        wlog(d, f"{e['id']}: adopting its remote check (run {rem.get('run') or 'not found yet'}, pushed "
+                f"{int((time.time() - rem['pushed_at']) // 60)} min ago)")
+    if not rem:
+        branch = f"check/{e['id']}"
+        r = git(repo, "push", "--quiet", "--force", REMOTE, f"{head}:refs/heads/{branch}", check=False)
+        if r.returncode != 0:
+            return None, f"push of {branch} failed: {r.stderr.strip()[:300]}"
+        rem = {"branch": branch, "head": e.get("head"), "base": base, "tip": head, "mode": mode, "run": None,
+               "pushed_at": time.time(), "status": None}
+        save_remote(d, e, rem)
         try:
-            api(o_r, "DELETE", f"branches/{urllib.parse.quote(branch, safe='')}")
-        except Exception as ex:
-            err(f"could not delete {branch} ({str(ex)[:120]}): `agentctl sweep` lists it")
+            record_dispatch(branch=branch, workflow=REMOTE_WORKFLOW, worktree=e.get("worktree"), sha=head,
+                            agent="land queue", pid=os.getpid(), purpose=f"pre-commit check of queue entry {e['id']}")
+        except (Exception, SystemExit) as ex:
+            err(f"remote check of {e['id']}: owner not recorded ({str(ex)[:120]})")
+    delays = backoff(15, 120)
+    while True:
+        try:
+            new = remote_poll(o_r, rem)
+            if new.get("run") is not None and rem.get("run") is None:
+                try:
+                    save_dispatch({"branch": rem["branch"], "run_id": new["run"]})
+                except OSError:
+                    pass
+            if new != rem:
+                rem = new
+                save_remote(d, e, rem)
+        except Terminated:
+            raise
+        except (Exception, SystemExit) as ex:  # Forgejo down for a while: keep reading until the bound
+            err(f"remote check of {e['id']}: {str(ex)[:160]}")
+        if rem.get("status"):
+            rem["collected_at"] = time.time()
+            save_remote(d, e, rem)
+            delete_check_branch(o_r, rem["branch"])
+            if rem["status"] in ("success", "failure"):
+                return rem["status"] == "success", rem["out"]
+            return None, rem["out"]
+        age = time.time() - rem["pushed_at"]
+        if rem.get("run") is None and age > REMOTE_START:
+            rem.update(status="abandoned", collected_at=time.time())
+            save_remote(d, e, rem)
+            delete_check_branch(o_r, rem["branch"])
+            return None, f"no {REMOTE_WORKFLOW} run started for {rem['branch']} in {REMOTE_START // 60} min"
+        if age > REMOTE_TIMEOUT:
+            cancel_run(o_r, rem["run"], "the remote check timed out")
+            rem.update(status="abandoned", collected_at=time.time())
+            save_remote(d, e, rem)
+            delete_check_branch(o_r, rem["branch"])
+            return None, f"{REMOTE_WORKFLOW} run {rem['run']} undecided after {REMOTE_TIMEOUT // 3600} h"
+        time.sleep(next(delays))
+
+
+def cancel_entry_remote(e, why):
+    """An entry that ends (superseded, cancelled) takes its undecided remote run with it: the run is the entry's."""
+    rem = e.get("remote") or {}
+    if rem.get("run") is not None and not rem.get("status"):
+        try:
+            cancel_run(slug(e["worktree"]) if os.path.isdir(e.get("worktree") or "") else SHORT["movies"], rem["run"], why)
+        except (Exception, SystemExit) as ex:
+            err(f"could not cancel run {rem['run']} of {e['id']}: {str(ex)[:120]}")
+
+
+# ---------------------------------------------------------------- the processor re-derives every checking entry
+def reconcile_dir(d):
+    p = os.path.join(d, "reconcile")
+    os.makedirs(p, exist_ok=True)
+    return p
+
+
+def reconcile_checking(repo, d, now_=None):
+    """Every processor cycle, STATELESS and idempotent: each `checking` entry's state from the facts -- its checker's lock
+    and its remote run's status on Forgejo -- never from a live waiter's memory.
+    - a remote run DECIDED over REMOTE_COLLECT_GRACE ago that its live checker has not collected: the checker is
+      stranded (wedged mid-wait): stopped, so spawn_checks starts one that adopts the run and its verdict;
+    - no live checker: spawn_checks restarts one (adopting the run);
+    - checking over 2x the expected duration ($AGENTCTL_CHECK_EXPECTED_MIN, 30 min), counted from the round's start:
+      re-examined, and when it is still unresolvable (Forgejo unreadable, a decided run still uncollected after its
+      checker was stopped, no checker) escalated ONCE to the inbox as STALLED.
+    The processor's own marks live in reconcile/<id>.json, never in the entry (its checker owns that file)."""
+    now_ = now_ if now_ is not None else time.time()
+    try:
+        o_r = slug(repo)
+    except (Exception, SystemExit):
+        o_r = SHORT["movies"]
+    expected = env_num("AGENTCTL_CHECK_EXPECTED_MIN", REMOTE_EXPECTED_MIN) * 60
+    out = []
+    for e in waiting_entries(d, open_only=False):
+        if e.get("status") != "checking":
+            continue
+        mpath = os.path.join(reconcile_dir(d), f"{e['id']}.json")
+        marks = read_record(mpath) or {}
+        if marks.get("run") != (e.get("remote") or {}).get("run") or marks.get("tip") != (e.get("remote") or {}).get("tip"):
+            marks = {k: v for k, v in marks.items() if k in ("escalated", "dead_since")}  # a new run: its own marks
+            marks.update(run=(e.get("remote") or {}).get("run"), tip=(e.get("remote") or {}).get("tip"))
+        alive = lock_held(entry_owned(e["id"]).lockpath)
+        rem, unreadable = e.get("remote"), None
+        if rem and not rem.get("status"):
+            try:
+                new = remote_poll(o_r, rem)
+                if new.get("status") and not marks.get("decided_at"):
+                    marks["decided_at"] = now_
+                    wlog(d, f"{e['id']}: its remote run {new['run']} is {new['status']} (seen by the processor)")
+                rem = new
+            except (Exception, SystemExit) as ex:
+                unreadable = str(ex)[:160]
+        decided_at = marks.get("decided_at") or (rem or {}).get("decided_at")
+        uncollected = bool(rem and rem.get("status") and not rem.get("collected_at") and decided_at and now_ - decided_at > REMOTE_COLLECT_GRACE)
+        if uncollected and alive and not marks.get("stopped_at"):
+            h = read_record(entry_owned(e["id"]).record) or {}
+            if h.get("pid") and int(h["pid"]) != os.getpid():
+                try:
+                    os.kill(int(h["pid"]), signal.SIGTERM)
+                except OSError:
+                    pass
+            marks["stopped_at"] = now_
+            wlog(d, f"{e['id']}: remote run {rem.get('run')} decided {int((now_ - decided_at) // 60)} min ago and not "
+                    f"collected: its checker (pid {h.get('pid')}) is stranded; stopped, a new one adopts the verdict")
+            out.append(("stopped", e["id"]))
+        since = e.get("round_since") or e.get("since")
+        overdue = since and now_ - parse_time(since).timestamp() > 2 * expected
+        why = None
+        if overdue:
+            if unreadable:
+                why = f"its remote run cannot be read ({unreadable})"
+            elif uncollected and marks.get("stopped_at") and now_ - marks["stopped_at"] > REMOTE_COLLECT_GRACE:
+                why = f"remote run {rem.get('run')} is {rem.get('status')} but no checker collects it"
+            elif not alive and marks.get("dead_since") and now_ - marks["dead_since"] > REMOTE_COLLECT_GRACE:
+                why = "no checker runs for it"
+        if not alive:
+            marks.setdefault("dead_since", now_)
+        else:
+            marks.pop("dead_since", None)
+        key = f"{since}"
+        if why and marks.get("escalated") != key:
+            marks["escalated"] = key
+            mins = int((now_ - parse_time(since).timestamp()) // 60)
+            line = (f"STALLED: queue entry {e['id']} checking for {mins} min (over 2x the expected "
+                    f"{int(expected // 60)} min): {why}")
+            wlog(d, line)
+            inbox_write("land", line, [line], [f"remote: {json.dumps(rem)[:400]}" if rem else "remote: none",
+                                              f"checker alive: {alive}"], 1, cwd=e.get("worktree"))
+            out.append(("escalated", e["id"]))
+        tmp = f"{mpath}.{os.getpid()}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(marks, f)
+        os.replace(tmp, mpath)
+    return out
+
+
 def processor_owned(d, repo=None):
     """The processor's ownership: one per waiting state directory (one per repository)."""
     return Owned("waiting", os.path.basename(d.rstrip("/")) or "repo", ["waiting", "run", "--repo", repo or ""])
@@ -7497,6 +7693,10 @@ def waiting_run(repo, once=False, service=False):
             HEARTBEAT[0] = time.time()
             restart_if_changed([own], ["waiting", "run", "--repo", repo] + (["--once"] if once else [])
                                + (["--service"] if service else []))
+            try:  # every checking entry re-derived from its checker's lock and its run on Forgejo (never a waiter's memory)
+                reconcile_checking(repo, d)
+            except Exception as e:
+                err(f"reconcile of the checking entries failed: {e}")
             spawn_checks(repo, d)  # THE LAND QUEUE first: each queued change's checks, in a checker of its own (the
             # patrol below can take minutes -- a fixer's worktree checkout under load -- and held queued changes back)
             try:
@@ -7686,6 +7886,7 @@ def cmd_waiting(a):
             e = queued[0]
             e.update(status="cancelled", why="cancelled by `agentctl waiting cancel`", decided=ts())
             save_entry(d, e)
+            cancel_entry_remote(e, "its queue entry was cancelled")
             h = read_record(entry_owned(e["id"]).record) or {}
             if lock_held(entry_owned(e["id"]).lockpath) and h.get("pid"):
                 os.kill(int(h["pid"]), signal.SIGTERM)  # its checker: its CI run is cancelled with it

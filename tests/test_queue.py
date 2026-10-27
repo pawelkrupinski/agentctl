@@ -2,7 +2,7 @@
 QUEUED <id>; the processor's checker runs the change's checks in a check tree of its own, within the governor, then
 pushes it (green), puts it on `waiting` (red) or rejects it, every verdict to the inbox with the agent's worktree; under
 pressure the checks run on ci-runner's check tier and the push carries the remote run for the hook to confirm."""
-import os, sys, unittest
+import json, os, subprocess, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -214,9 +214,190 @@ class QueueTest(WaitingTest):
         self.assertEqual(self.pushed(), [], "a cancelled change is never checked or pushed")
 
 
+class Died(BaseException):
+    """A checker that dies mid-wait (SIGKILL: no handler runs past this point in the wait loop)."""
+
+
+class RemotePickupTest(QueueTest):
+    """2026-10-27: entry -45's remote run 3344 finished green yet the entry showed `checking ... remote run 3344` for an
+    hour: the run belonged to the checker process (cancelled or orphaned when it ended), a replacement re-dispatched from
+    scratch, and the saved remote_run was never cleared. Now the run is the ENTRY's: saved at once, adopted by a
+    replacement checker, re-derived by the processor from Forgejo every cycle."""
+
+    def setUp(self):
+        super().setUp()
+        self.r.write(".github/workflows/precommit-check.yml", "name: Pre-commit check\n")
+        self.r.commit("the remote check workflow")
+        self.r.push()
+        os.remove(self.pushes)
+        A.gov_pressure = lambda: "load 99 on 14 cores"
+        self.state = {"status": "running", "polls": 0, "branch_pushes": [], "cancelled": [], "fail_api": False}
+        saved = (A.api, A.slug, A.git, A.cancel_run, A.fetch_failed_log)
+        self.addCleanup(lambda: setattr(A, "api", saved[0]) or setattr(A, "slug", saved[1])
+                        or setattr(A, "git", saved[2]) or setattr(A, "cancel_run", saved[3])
+                        or setattr(A, "fetch_failed_log", saved[4]))
+        real_git = A.git
+        st = self.state
+
+        def git(repo, *args, **kw):
+            if args[:1] == ("push",) and any("refs/heads/check/" in a for a in args):
+                ref = next(a for a in args if "refs/heads/check/" in a)
+                st["branch_pushes"].append(ref)
+            return real_git(repo, *args, **kw)
+
+        def api(o_r, method, path, params=None, body=None):
+            if st["fail_api"]:
+                raise RuntimeError("Connection refused")
+            if path == "actions/runs":
+                return {"workflow_runs": [{"id": 99, "commit_sha": ref.split(":")[0],
+                                           "prettyref": ref.split("refs/heads/")[1]} for ref in st["branch_pushes"]]}
+            if path == "actions/runs/99":
+                st["polls"] += 1
+                return {"id": 99, "index_in_repo": 7, "status": st["status"], "html_url": "http://f/runs/7"}
+            return None
+        A.api, A.slug, A.git = api, (lambda repo: "o/movies"), git
+        A.cancel_run = lambda o_r, rid, why: st["cancelled"].append(rid)
+        A.fetch_failed_log = lambda o_r, rid: ""
+
+    def die_on_sleep(self, exc):
+        def sleep(s):
+            raise exc
+        A.time.sleep = sleep
+
+    def entry(self, eid):
+        return self.entries()[eid.rsplit("-", 1)[-1]]
+
+    def test_a_checker_killed_mid_wait_strands_nothing_its_replacement_adopts_the_run(self):
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        eid, _ = self.queued(wt)
+        self.die_on_sleep(Died())
+        with self.assertRaises(Died):
+            self.check(eid)
+        e = self.entry(eid)
+        self.assertEqual((e["status"], e["remote"]["run"], e["remote_run"]), ("checking", 99, 99),
+                         "the run is saved in the entry the moment it is found")
+        self.assertEqual(self.state["cancelled"], [], "a dead checker's run is the entry's: never cancelled")
+        self.state["status"] = "success"  # it finishes while no checker runs
+        d, _c, _w = A.waiting_state(self.r.path)
+        A.reconcile_checking(self.r.path, d)
+        A.time.sleep = lambda s: None
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual(len(self.state["branch_pushes"]), 1, "adopted: no second check/ push, no second run")
+        self.assertEqual(self.pushed(), ["push remote=", "push remote=99"], "the check/ branch, then main with the run")
+        self.assertEqual(self.calls_of("--range"), [], "nothing checked on the laptop")
+        e = self.entry(eid)
+        self.assertEqual((e["status"], e.get("attempts"), e.get("adoptions")), ("landed", 1, 1))
+
+    def test_a_reexec_mid_wait_keeps_waiting_on_the_same_run(self):
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        eid, _ = self.queued(wt)
+        self.die_on_sleep(A.Terminated(143))  # a SIGTERM (re-exec, service restart) while the run is still running
+        with self.assertRaises(SystemExit):
+            self.check(eid)
+        self.assertEqual(self.state["cancelled"], [])
+        polls = []
+
+        def sleep(s):  # the new process waits on the same run, which goes green after a while
+            polls.append(s)
+            if len(polls) == 3:
+                self.state["status"] = "success"
+        A.time.sleep = sleep
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual(len(polls), 3)
+        self.assertEqual(len(self.state["branch_pushes"]), 1)
+        self.assertEqual(self.pushed(), ["push remote=", "push remote=99"], "the check/ branch, then main with the run")
+
+    def test_a_terminate_is_never_swallowed_by_the_outage_handler(self):
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        eid, _ = self.queued(wt)
+        real = A.remote_poll
+
+        def poll(o_r, rem):
+            raise A.Terminated(143)
+        A.remote_poll = poll
+        self.addCleanup(setattr, A, "remote_poll", real)
+        with self.assertRaises(SystemExit):
+            self.check(eid)
+
+    def checking_entry(self, since_min=0):
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        eid, _ = self.queued(wt)
+        self.die_on_sleep(Died())
+        with self.assertRaises(Died):
+            self.check(eid)
+        A.time.sleep = lambda s: None
+        d, _c, _w = A.waiting_state(self.r.path)
+        e = self.entry(eid)
+        if since_min:
+            stamp = A.dt.datetime.fromtimestamp(A.time.time() - since_min * 60, A.dt.timezone.utc)
+            e["round_since"] = stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+            A.save_entry(d, e)
+        return d, e
+
+    def test_the_processor_stops_a_checker_that_does_not_collect_a_decided_run(self):
+        d, e = self.checking_entry()
+        own = A.entry_owned(e["id"])
+        holder = subprocess.Popen([sys.executable, "-c", "import fcntl,sys,time; f=open(sys.argv[1],'a+'); "
+                                   "fcntl.flock(f, fcntl.LOCK_EX); print('held', flush=True); time.sleep(120)",
+                                   own.lockpath], stdout=subprocess.PIPE, text=True)
+        self.addCleanup(holder.kill)
+        holder.stdout.readline()
+        with open(own.record, "w") as f:
+            json.dump({"pid": holder.pid}, f)
+        self.state["status"] = "success"
+        t = A.time.time()
+        self.assertEqual(A.reconcile_checking(self.r.path, d, now_=t), [], "decided just now: its checker collects it")
+        self.assertEqual(A.reconcile_checking(self.r.path, d, now_=t + 60), [])
+        self.assertEqual(A.reconcile_checking(self.r.path, d, now_=t + A.REMOTE_COLLECT_GRACE + 1),
+                         [("stopped", e["id"])])
+        self.assertEqual(holder.wait(10), -15, "the stranded checker got a SIGTERM")
+        self.assertEqual(A.reconcile_checking(self.r.path, d, now_=t + A.REMOTE_COLLECT_GRACE + 2), [], "stopped once")
+        self.assertEqual(self.check(e["id"]), 0, "the replacement adopts the verdict")
+        self.assertEqual(self.pushed(), ["push remote=", "push remote=99"], "the check/ branch, then main with the run")
+
+    def test_overdue_and_unresolvable_escalates_once(self):
+        d, e = self.checking_entry(since_min=2 * A.REMOTE_EXPECTED_MIN + 5)
+        self.state["fail_api"] = True
+        self.assertEqual(A.reconcile_checking(self.r.path, d), [("escalated", e["id"])])
+        self.assertEqual(A.reconcile_checking(self.r.path, d), [], "once per round")
+        stalled = [x for x in self.inbox() if x["kind"] == "STALLED"]
+        self.assertEqual(len(stalled), 1)
+        self.assertIn(e["id"], stalled[0]["verdict"])
+        self.assertIn("cannot be read", stalled[0]["verdict"])
+
+    def test_overdue_but_progressing_is_not_escalated(self):
+        d, e = self.checking_entry(since_min=2 * A.REMOTE_EXPECTED_MIN + 5)
+        self.assertEqual(A.reconcile_checking(self.r.path, d), [], "the run is still running and readable")
+        self.assertEqual([x for x in self.inbox() if x["kind"] == "STALLED"], [])
+
+    def test_superseding_an_entry_cancels_its_run(self):
+        d, e = self.checking_entry()
+        A.supersede(d, e, "newer", "queued again")
+        self.assertEqual(self.state["cancelled"], [99])
+
+    def test_a_new_round_clears_the_old_runs_record(self):
+        d, e = self.checking_entry()
+        other, _ = self.agent("b", "worker/src/main/B.scala", "b\n", msg="b: two")
+        sh(other, "git", "push", "-q", "forgejo", "HEAD:main")
+        A.gov_pressure = lambda: None
+        seen = []
+        real = A.run_entry_checks
+
+        def spy(repo, d_, e_, *a, **k):
+            seen.append(A.read_record(os.path.join(d_, "entries", f"{e_['id']}.json")))
+            return real(repo, d_, e_, *a, **k)
+        A.run_entry_checks = spy
+        self.addCleanup(setattr, A, "run_entry_checks", real)
+        self.assertEqual(self.check(e["id"]), 0)
+        self.assertNotIn("remote_run", seen[0], "main moved: the old run's record is gone from the saved entry")
+        self.assertEqual(self.state["cancelled"], [99], "the old, undecided run is cancelled")
+        self.assertEqual(self.pushed()[-1], "push remote=")
+
+
 def load_tests(loader, tests, pattern):
     """Only this file's own cases (QueueTest borrows WaitingTest's fixture, not its tests)."""
-    return unittest.TestSuite(QueueTest(n) for n in sorted(vars(QueueTest)) if n.startswith("test_"))
+    return unittest.TestSuite([QueueTest(n) for n in sorted(vars(QueueTest)) if n.startswith("test_")]
+                              + [RemotePickupTest(n) for n in sorted(vars(RemotePickupTest)) if n.startswith("test_")])
 
 
 if __name__ == "__main__":
