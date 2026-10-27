@@ -20,6 +20,8 @@ os.environ.setdefault("AGENTCTL_SOCK_DIR", tempfile.mkdtemp(dir="/tmp", prefix="
 os.environ.setdefault("AGENTCTL_REDS_DIR", tempfile.mkdtemp(prefix="agentctl-reds-test-"))
 os.environ.setdefault("AGENTCTL_RED_REPO", "-")
 os.environ.setdefault("AGENTCTL_RED_PATROL", "0")
+# ...nor asks Forgejo's DB (over ssh) for a run's dispatch inputs.
+os.environ.setdefault("AGENTCTL_DB_INPUTS", "0")
 os.environ.setdefault("AGENTCTL_CLAUDE", "/nonexistent/claude")
 # ...nor takes this machine's pre-commit check slots, nor writes its measurements or cap.
 os.environ.setdefault("AGENTCTL_CHECKS_DIR", tempfile.mkdtemp(prefix="agentctl-checks-test-"))

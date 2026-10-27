@@ -115,7 +115,7 @@ Tables: action_run, action_run_job, action_task, action_task_step (status 1 ok, 
 5 waiting, 6 running). Prefer `forgejo-gh` / `agentctl ci-why` for runs and logs; db-q is the fallback.
   agentctl db-q 'select id, "index", status, substr(title, 1, 60) from action_run order by id desc limit 10'
 Exit: 0 ok, 1 query/connection failed, 2 refused."""
-import argparse, contextlib, io, datetime as dt, fcntl, fnmatch, glob, itertools, json, os, re, shlex, signal, subprocess, sys, time, traceback, urllib.parse, urllib.request
+import argparse, contextlib, io, datetime as dt, fcntl, fnmatch, glob, itertools, json, os, re, shlex, signal, subprocess, sys, time, traceback, urllib.error, urllib.parse, urllib.request
 
 HOME = os.path.expanduser("~")
 REPOS = [f"{HOME}/bitcashier/{r}" for r in ("infra", "core", "dashboard", "invoice-page", "version-dashboard")] + [
@@ -1168,6 +1168,7 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, track=False, snap
             others_err = e
     lrepo = scan_repo_for(o_r, repo)
     lstale = local_stale(lrepo)
+    bsnap = snap or ci_state_load(o_r)  # the branch reds come from the snapshot only (the processor writes it)
     explained = {}
     for name, decided, newer, _streak in gate:
         if decided and decided.get("conclusion") in RED_CONCLUSIONS:
@@ -1178,7 +1179,7 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, track=False, snap
     try:
         rows = [(n, d, _gate_lists.get(n, []), True) for n, d, _nw, _s in gate]
         units = gate_red_units(o_r, rows, [(n, r, _outside_lists.get(n, []), False) for n, r, _s, _c in others])
-        units += local_units(lrepo) + flake_units()
+        units += local_units(lrepo) + flake_units() + predict_units(o_r, bsnap)
         for u in units:
             units_of.setdefault((u["workflow"], u["run"].get("databaseId")), []).append(u)
         infos = find_fixers(scan_repo_for(o_r, repo), units, o_r=o_r)
@@ -1252,6 +1253,14 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, track=False, snap
             out.append(f"  {name}: RED for {red_for(since)} since {since} ({count} failed run{'s' if count != 1 else ''}; "
                        f"newest run {r['databaseId']} #{r.get('number')}) -- `agentctl ci-why {r['databaseId']}`")
             out += fixing(name, r, "    ")[0]
+    blines = branch_lines(bsnap)
+    if blines:
+        out += blines
+        for u in units_of.values():
+            for x in u:
+                if x.get("predicts"):
+                    out += fixing(x["workflow"], x["run"], "    ")[0]
+                    break
     if summary:
         line = "gate RED" if red else "gate green"
         if red:
@@ -1264,8 +1273,11 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, track=False, snap
             reds_ = reds_[:SUMMARY_MAX_REDS] + [f"+{len(reds_) - SUMMARY_MAX_REDS} more"]
         if reds_:
             line += " \u00b7 reds: " + "; ".join(reds_)
-        elif not red and others_err is None:
+        bsum = branch_summary(bsnap)
+        if not reds_ and not bsum and not red and others_err is None:
             line += " \u00b7 no reds"
+        if bsum:
+            line += " \u00b7 " + bsum
         return red, line
     return red, "\n".join([head] + out)
 
@@ -1294,6 +1306,15 @@ def ci_state_refresh(o_r):
                                 "runs": _outside_lists.get(n, [])} for n, r, since, count in outside_gate(o_r)]
         except Exception as e:
             snap["outside_error"] = str(e)[:200]
+    try:  # the branch runs: measure/*, check/*, red fixers' and every recorded dispatch's (after the main lists)
+        try:
+            with open(ci_state_path()) as f:
+                prev = (json.load(f) or {}).get("branches") or []
+        except (OSError, ValueError, AttributeError):
+            prev = []
+        snap["branches"] = branch_state(o_r, scan_repo_for(o_r), prev)
+    except (Exception, SystemExit) as e:
+        snap["branches_error"] = str(e)[:200]
     path = ci_state_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = f"{path}.{os.getpid()}.tmp"
@@ -1328,6 +1349,542 @@ def outside_from_snap(snap):
         _outside_lists[g["name"]] = g["runs"]
         out.append((g["name"], g["decided"], g["since"], g["count"]))
     return out
+
+
+# ---------------------------------------------------------------- branch runs: every dispatch has an owner, every branch red a route
+# The owner (2026-10-27): "red not captured, make a structural fix". Identity model convergence #2116 (run 3264) on
+# measure/pawel/982f7681f-0b04a4 failed and nobody was told: the snapshot, the status line and the reds covered main only,
+# and a branch run (measure/*, check/*, a red fixer's) had no owner and no route.
+#
+# OWNER RECORDS, ~/.cache/agentctl/dispatches/<key>.json ($AGENTCTL_DISPATCH_DIR): every CI run agentctl or an agent
+# dispatches -- the branch and/or run id, the worktree, the session or agent name, the pid, the purpose, the inputs, the
+# time. `agentctl dispatch run` (a `forgejo-gh workflow run` wrapper) and `agentctl dispatch record` write one; so do
+# agentctl's own dispatches (the queue's remote checks, the Fixes-Red verification). A branch run with none (the movies
+# scripts call forgejo-gh themselves) is matched after the fact: measure/<user>/<sha>-<x> (else the run's head commit) to
+# the worktree whose HEAD is that commit or whose HEAD reflog holds it; check/<entry> to that queue entry's worktree. The
+# match is recorded, so it is made once.
+#
+# THE SNAPSHOT also records the newest completed run of each tracked branch and workflow (a branch with an owner record,
+# or measure/*, check/*, red-*). A failed one is ONE inbox entry, `BRANCH RED: <workflow> #N on <branch> → owner <...>`
+# with the first error lines (a wake-up kind for `inbox wait`). It stays a branch red until its branch is deleted or a
+# newer run of that workflow on the branch is green.
+#
+# PREDICTS MAIN RED: the failing run is built on commits all on main now (ancestor or patch-equivalent), AND it ran with
+# the inputs main's run of that workflow uses (the dispatch inputs, minus INPUTS_NOT_PREDICTIVE). Main will hit it next,
+# so it is claimed and dispatched like a main red, before main fails. Inputs that differ make it a plain BRANCH RED, the
+# line naming them ("recording 3166 ≠ main's 573": run 3264 replayed the fresh 10-27 recording, main replays the pinned
+# one with its fixture fills). A measure on a NEWER recording that fails hermetically (a test failure, not infra) also
+# says "blocks promoting recording N": that recording lacks something a promotion of it will need.
+DISPATCH_PATTERNS = ("measure/", "check/", "red-")
+MEASURE_BRANCH = re.compile(r"^measure/[^/]+/([0-9a-f]{7,40})-[0-9A-Za-z]+$")
+# inputs that change where or how a run runs, or how much of it, never what main's run of the same workflow would decide
+INPUTS_NOT_PREDICTIVE = frozenset({"tier", "runner", "profile", "jvm-options", "heap", "reuse-run", "takes-base",
+                                   "takes-countries", "countries"})
+PINNED_RECORDING = "573"  # what main's convergence replays when its `recording` input is empty ($AGENTCTL_PINNED_RECORDING)
+BRANCH_RUNS_LIMIT = 150
+BRANCH_ROUTE_MAX_AGE = 24 * 3600  # a failure first seen older than this is recorded, not routed (no flood on upgrade)
+OWNER_REMATCH = 3600  # an unmatched branch is matched again after this long
+DB_HOST = "pawel@10.1.0.3"
+
+
+def dispatches_dir(*parts):
+    d = os.environ.get("AGENTCTL_DISPATCH_DIR") or os.path.join(os.path.dirname(reds_dir()), "dispatches")
+    return os.path.join(d, *parts)
+
+
+def dispatch_key(branch=None, run_id=None):
+    return f"branch-{re.sub(r'[^A-Za-z0-9._-]', '_', branch)}" if branch else f"run-{run_id}"
+
+
+def save_dispatch(rec, key=None):
+    """Write an owner record (merged over an existing one: a later field wins, a None never erases). Returns it."""
+    p = dispatches_dir(f"{key or dispatch_key(rec.get('branch'), rec.get('run_id'))}.json")
+    old = read_record(p) or {}
+    rec = {**old, **{k: v for k, v in rec.items() if v is not None}}
+    write_json(p, rec)
+    return rec
+
+
+def record_dispatch(branch=None, run_id=None, workflow=None, purpose="", inputs=None, worktree=None, sha=None,
+                    agent=None, pid=None, key=None, source="registered"):
+    """The owner record of a dispatch made from here: who (agent name, Claude session, pid) and where (worktree)."""
+    if not branch and not run_id:
+        raise SystemExit("agentctl: a dispatch is recorded by its branch or its run id")
+    wt = worktree or worktree_of(safe_cwd())
+    cp = os.environ.get("CLAUDE_PID") or ""
+    pid = pid or (int(cp) if cp.isdigit() else os.getppid())
+    return save_dispatch({"branch": branch, "run_id": int(run_id) if str(run_id or "").isdigit() else None,
+                          "workflow": workflow, "purpose": purpose, "inputs": inputs, "worktree": wt, "sha": sha,
+                          "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or None,
+                          "agent": agent or os.environ.get("AGENTCTL_AGENT_NAME") or None, "pid": pid,
+                          "process_start": process_start(pid) if pid else None, "at": ts(), "epoch": time.time(),
+                          "source": source}, key)
+
+
+def dispatch_records():
+    out = []
+    for p in sorted(glob.glob(dispatches_dir("*.json"))):
+        r = read_record(p)
+        if r:
+            out.append(r)
+    return out
+
+
+def dispatch_for(branch, run_id=None):
+    """The owner record of a branch run: its run's, else its branch's (None when there is none)."""
+    for key in ([dispatch_key(None, run_id)] if run_id else []) + ([dispatch_key(branch)] if branch else []):
+        r = read_record(dispatches_dir(f"{key}.json"))
+        if r and (r.get("worktree") or r.get("agent") or r.get("session")):
+            return r
+    return None
+
+
+def tracked_branch(name, recorded=()):
+    return bool(name) and name not in PROTECTED_BRANCHES and (name.startswith(DISPATCH_PATTERNS) or name in recorded)
+
+
+def worktree_holding(repo, sha):
+    """The worktree whose HEAD is sha, else the one whose HEAD reflog holds it (the agent's own commit, since rebased)."""
+    try:
+        trees = [w for w in worktrees(repo) if isinstance(w.get("worktree"), str) and os.path.isdir(w["worktree"])]
+    except (RuntimeError, OSError):
+        return None
+    trees = trees[1:] + trees[:1]  # an agent's worktree before the root checkout (often on main itself)
+    for w in trees:
+        if str(w.get("HEAD", "")).startswith(sha):
+            return w["worktree"]
+    for w in trees:
+        r = git(w["worktree"], "reflog", "--format=%H", "HEAD", check=False)
+        if r.returncode == 0 and any(h.startswith(sha) for h in r.stdout.split()):
+            return w["worktree"]
+    return None
+
+
+def queue_entry_worktree(entry_id):
+    for p in glob.glob(os.path.join(WAITING_DIR, "*", "entries", f"{entry_id}.json")):
+        e = read_record(p) or {}
+        if e.get("worktree"):
+            return e["worktree"]
+    return None
+
+
+def branch_base(branch, run):
+    """The commit a branch run was built on: a measure/<user>/<sha>-<x> branch names it (identity-ci-run pushes main's CI
+    laid over it), else the run's head commit."""
+    m = MEASURE_BRANCH.match(branch or "")
+    return m.group(1) if m else run.get("headSha")
+
+
+def owner_of(repo, branch, run):
+    """The owner record of a branch run, matched after the fact (and recorded) when nobody recorded one."""
+    rid = run.get("databaseId")
+    rec = dispatch_for(branch, rid)
+    if rec:
+        return rec
+    key = dispatch_key(branch)
+    old = read_record(dispatches_dir(f"{key}.json")) or {}
+    if old.get("source") == "unmatched" and time.time() - float(old.get("epoch") or 0) < OWNER_REMATCH:
+        return None
+    wt, how = None, None
+    if branch.startswith("check/"):
+        wt, how = queue_entry_worktree(branch[len("check/"):]), "its queue entry"
+    base = branch_base(branch, run)
+    if not wt and repo and base:
+        wt, how = worktree_holding(repo, base), f"the worktree that holds {base[:9]}"
+    if not wt:
+        save_dispatch({"branch": branch, "run_id": rid, "workflow": run.get("workflowName"), "source": "unmatched",
+                       "at": ts(), "epoch": time.time()}, key)
+        return None
+    return save_dispatch({"branch": branch, "run_id": rid, "workflow": run.get("workflowName"), "worktree": wt,
+                          "sha": base, "purpose": f"matched by branch name ({how})", "source": "matched",
+                          "at": ts(), "epoch": time.time()}, key)
+
+
+def owner_gone(rec):
+    """True when the owner is gone: its worktree removed, or its recorded pid dead. None: no owner known."""
+    if not rec or not (rec.get("worktree") or rec.get("pid")):
+        return None
+    if rec.get("worktree") and not os.path.isdir(rec["worktree"]):
+        return True
+    if rec.get("pid") and not proc_alive(rec["pid"], rec.get("process_start")):
+        return True
+    return False
+
+
+def owner_text(rec, short=False):
+    if not rec:
+        return "NOBODY (no owner record, no worktree holds its commit)"
+    wt = rec.get("worktree") or ""
+    who = rec.get("agent") or (f"session {rec['session'][:8]}" if rec.get("session") else None)
+    if short:
+        return os.path.basename(wt) if wt else (who or "?")
+    return wt.replace(HOME, "~") + (f" ({who})" if who and who != os.path.basename(wt) else "") if wt else (who or "?")
+
+
+def ssh_master_up(host=DB_HOST):
+    """An open ssh control connection to the DB host: asking it costs no Touch ID prompt."""
+    try:
+        return subprocess.run(["ssh", "-O", "check", host], capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def db_inputs(run_ids):
+    """{run id: its workflow_dispatch inputs} from Forgejo's DB (the API does not serve them), for the ids not cached.
+    Asked only from an interactive foreground or over an open ssh control connection: never a prompt from the processor
+    ($AGENTCTL_DB_INPUTS=0 never asks, =1 always)."""
+    ids = sorted({int(i) for i in run_ids if str(i).isdigit()})
+    mode = os.environ.get("AGENTCTL_DB_INPUTS")
+    if not ids or mode == "0" or (mode != "1" and not (interactive_foreground() or ssh_master_up())):
+        return {}
+    sql = ("select id, json_extract(event_payload, '$.inputs') from action_run where id in ("
+           + ",".join(map(str, ids)) + ")")
+    try:
+        r = run_db(DB_ENVS["forgejo"], sql)
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    out = {}
+    for line in r.stdout.splitlines()[1:] if r.returncode == 0 else []:
+        rid, _, js = line.partition("\t")
+        try:
+            out[int(rid)] = json.loads(js) if js.strip() else {}
+        except ValueError:
+            continue
+    for rid, inputs in out.items():
+        write_json(dispatches_dir("inputs", f"{rid}.json"), inputs)
+    return out
+
+
+def run_inputs(runs, recs=None):
+    """{run id: inputs or None (unread)} for runs: {} for a run not dispatched by hand (a push), else the owner record's,
+    the cache, Forgejo's DB."""
+    out, want = {}, []
+    for run in runs:
+        rid = run.get("databaseId")
+        rec = (recs or {}).get(rid)
+        cached = read_record(dispatches_dir("inputs", f"{rid}.json"))
+        if run.get("event") and run["event"] != "workflow_dispatch":
+            out[rid] = {}
+        elif rec and rec.get("inputs") is not None and rec.get("run_id") in (None, rid):
+            out[rid] = rec["inputs"]
+        elif cached is not None:
+            out[rid] = cached
+        else:
+            out[rid] = None
+            want.append(rid)
+    for rid, inputs in db_inputs(want).items():
+        out[rid] = inputs
+    return out
+
+
+def norm_input(v):
+    v = "" if v is None else str(v).strip()
+    return "" if v.lower() in ("false", "") else v
+
+
+def input_diff(inputs, main_inputs):
+    """[(key, the branch run's value, main's)] of the predictive inputs that differ."""
+    keys = sorted((set(inputs) | set(main_inputs)) - INPUTS_NOT_PREDICTIVE)
+    return [(k, norm_input(inputs.get(k)), norm_input(main_inputs.get(k))) for k in keys
+            if norm_input(inputs.get(k)) != norm_input(main_inputs.get(k))]
+
+
+def pinned_recording():
+    return os.environ.get("AGENTCTL_PINNED_RECORDING") or PINNED_RECORDING
+
+
+def diff_text(diff):
+    parts = []
+    for k, mine, theirs in diff[:3]:
+        if k == "recording" and not theirs:
+            theirs = pinned_recording()
+        parts.append(f"{k} {mine or '(none)'} ≠ main's {theirs or '(none)'}")
+    return ", ".join(parts) + (f" (+{len(diff) - 3} more)" if len(diff) > 3 else "")
+
+
+def newer_recording(inputs, main_inputs):
+    """The branch run's recording when it is newer than the one main replays, else None."""
+    mine, theirs = norm_input(inputs.get("recording")), norm_input(main_inputs.get("recording")) or pinned_recording()
+    return mine if mine.isdigit() and theirs.isdigit() and int(mine) > int(theirs) else None
+
+
+def predicts_main(repo, base, main_run, inputs, main_inputs):
+    """(predicts, why not / '') for a failed branch run."""
+    if not repo or not base:
+        return False, "its commit is unknown here"
+    if not git_ok(repo, "cat-file", "-e", f"{base}^{{commit}}"):
+        return False, f"its commit {base[:9]} is not here"
+    if not merged_reason(repo, base, f"refs/remotes/{REMOTE}/main"):
+        return False, f"its commit {base[:9]} is not on main"
+    if not main_run:
+        return False, "main runs no such workflow"
+    if inputs is None or main_inputs is None:
+        return False, "its inputs or main's are unread (`agentctl ci-why` from a terminal reads them)"
+    diff = input_diff(inputs, main_inputs)
+    if diff:
+        return False, diff_text(diff)
+    return True, ""
+
+
+def branch_exists(o_r, name):
+    """False only when Forgejo says the branch is gone (404); True otherwise (an unread answer keeps it)."""
+    try:
+        gh_json(o_r, "api", f"repos/{o_r}/branches/{urllib.parse.quote(name, safe='')}")
+        return True
+    except (Exception, SystemExit) as e:
+        return not re.search(r"HTTP 404|Not Found", str(e))
+
+
+def branch_state(o_r, repo, prev=None):
+    """[entry] per tracked (branch, workflow): the newest completed run, its owner, whether its branch is alive, and for
+    a red one whether it PREDICTS MAIN RED (why not). A red no longer listed carries over from prev until its branch
+    is gone."""
+    runs = gh_json(o_r, "run", "list", "--limit", str(BRANCH_RUNS_LIMIT), "--json", RUN_FIELDS + ",headBranch,event")
+    recorded = {r.get("branch") for r in dispatch_records() if r.get("branch")}
+    latest, newest_main = {}, {}
+    for r in runs:  # newest first
+        b, wf = r.get("headBranch") or "", r.get("workflowName")
+        if r.get("status") != "completed":
+            continue
+        if b == "main":
+            newest_main.setdefault(wf, r)
+        elif tracked_branch(b, recorded):
+            latest.setdefault((b, wf), r)
+    for wf, rs in list(_gate_lists.items()) + list(_outside_lists.items()):
+        m = next((r for r in rs if r.get("status") == "completed"), None)
+        if m and (wf not in newest_main or m["databaseId"] > newest_main[wf]["databaseId"]):
+            newest_main[wf] = m
+    for e in prev or []:  # a red past the listed window stays one until its branch goes or turns green
+        k = (e["branch"], e["workflow"])
+        if e.get("red") and k not in latest and e.get("alive"):
+            latest[k] = dict(e["run"], headBranch=e["branch"], workflowName=e["workflow"])
+    reds = {k: r for k, r in latest.items() if r.get("conclusion") in RED_CONCLUSIONS}
+    recs = {r["databaseId"]: owner_of(repo, b, r) for (b, _wf), r in reds.items()}
+    mains = {wf: newest_main.get(wf) for (_b, wf) in reds}
+    inputs = run_inputs(list(reds.values()) + [m for m in mains.values() if m], recs)
+    out = []
+    for (b, wf), r in sorted(latest.items()):
+        e = {"branch": b, "workflow": wf, "run": {k: r.get(k) for k in ("databaseId", "number", "conclusion", "headSha",
+                                                                          "updatedAt", "url", "event")},
+             "red": (b, wf) in reds}
+        if e["red"]:
+            rec, m = recs.get(r["databaseId"]), mains.get(wf)
+            base = branch_base(b, r)
+            mine, theirs = inputs.get(r["databaseId"]), inputs.get(m["databaseId"]) if m else None
+            pred, why = predicts_main(repo, base, m, mine, theirs)
+            e.update(owner=rec, owner_gone=owner_gone(rec), base=base, alive=branch_exists(o_r, b), predicts=pred,
+                     why=why, main_run=m and {"databaseId": m["databaseId"], "number": m.get("number")},
+                     newer_recording=newer_recording(mine, theirs) if mine is not None and theirs is not None else None)
+        out.append(e)
+    return out
+
+
+def branch_reds(snap):
+    """The snapshot's live branch reds: failed, branch still there (newest run of that workflow on it)."""
+    return [e for e in (snap or {}).get("branches") or [] if e.get("red") and e.get("alive")]
+
+
+def routed_path(rid):
+    return dispatches_dir("routed", f"{rid}.json")
+
+
+def entry_predicts(e):
+    """PREDICTS MAIN RED, unless the routed failure is infra-shaped only (a runner's trouble predicts nothing)."""
+    return bool(e.get("predicts")) and not (read_record(routed_path(e["run"]["databaseId"])) or {}).get("infra")
+
+
+def branch_red_line(e):
+    r, rec = e["run"], e.get("owner")
+    line = f"BRANCH RED: {e['workflow']} #{r.get('number')} on {e['branch']} → owner {owner_text(rec)}"
+    if entry_predicts(e):
+        line += f"; PREDICTS MAIN RED (its commit {str(e.get('base'))[:9]} is on main, main's inputs)"
+    elif e.get("why"):
+        line += f" ({e['why']})"
+    rt = read_record(routed_path(r["databaseId"])) or {}
+    if rt.get("blocks_promoting"):
+        line += f"; blocks promoting recording {rt['blocks_promoting']}"
+    return line
+
+
+def route_branch_reds(o_r, snap, now_=None):
+    """ONE inbox entry per failed branch run (BRANCH RED), with ci-why's first error lines; signatures saved, so a
+    PREDICTS MAIN RED run is a red unit. Returns the lines written."""
+    t = now_ if now_ is not None else time.time()
+    written = []
+    for e in (snap or {}).get("branches") or []:
+        r = e["run"]
+        if not e.get("red") or os.path.exists(routed_path(r["databaseId"])):
+            continue
+        try:
+            done = dt.datetime.fromisoformat(str(r.get("updatedAt")).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            done = t
+        if t - done > BRANCH_ROUTE_MAX_AGE:
+            write_json(routed_path(r["databaseId"]), {"at": ts(), "routed": False, "why": "older than the route window"})
+            continue
+        try:
+            lines, _num, per_job = explain_run_jobs(o_r, dict(r, workflowName=e["workflow"]), 4)
+            save_run_sigs(o_r, r, e["workflow"], per_job)
+        except (Exception, SystemExit) as ex:
+            lines, per_job = [f"  (could not read the run: {str(ex)[:160]})"], []
+        kinds = {k for _j, k, _l in per_job}
+        rec = {"at": ts(), "routed": True, "infra": bool(kinds) and kinds <= {"infra"},
+               "blocks_promoting": e.get("newer_recording") if "test" in kinds else None}
+        write_json(routed_path(r["databaseId"]), rec)
+        line = branch_red_line(e)
+        tail = [l for l in lines if l.startswith("      ") or l.startswith("  [")][:INBOX_TAIL] or lines[:INBOX_TAIL]
+        inbox_write("branch", line, [line], tail, 1, cwd=(e.get("owner") or {}).get("worktree"))
+        written.append(line)
+    return written
+
+
+def predict_units(o_r, snap):
+    """Red units for the branch reds that PREDICT MAIN RED: gate reds (claimed, RED UNCLAIMED, dispatched) before main
+    fails. Their signatures are the run's: main failing the same way later is the same red."""
+    units = []
+    for e in branch_reds(snap):
+        if not entry_predicts(e):
+            continue
+        run = dict(e["run"], headBranch=e["branch"], workflowName=e["workflow"])
+        for u in gate_red_units(o_r, [(e["workflow"], run, [run], True)]):
+            u["predicts"] = e["branch"]
+            units.append(u)
+    return units
+
+
+def branch_lines(snap):
+    """ci-why's section on the branch reds."""
+    reds = branch_reds(snap)
+    if not reds:
+        return []
+    out = [f"Branch reds (runs on measure/check/fixer branches; {len(reds)}):"]
+    for e in reds:
+        out.append("  " + branch_red_line(e).removeprefix("BRANCH RED: ")
+                   + f" -- `agentctl ci-why {e['run']['databaseId']}`")
+    return out
+
+
+def branch_summary(snap):
+    """`branch reds: N → owner (workflow #n[ PREDICTS MAIN RED]); ...` for the status line, or ''."""
+    reds = branch_reds(snap)
+    if not reds:
+        return ""
+    parts = [f"{owner_text(e.get('owner'), short=True)} ({short_flow(e['workflow'])} #{e['run'].get('number')}"
+             + (" PREDICTS MAIN RED" if entry_predicts(e) else "") + ")" for e in reds]
+    if len(parts) > SUMMARY_MAX_REDS:
+        parts = parts[:SUMMARY_MAX_REDS] + [f"+{len(parts) - SUMMARY_MAX_REDS} more"]
+    return f"branch reds: {len(reds)} → " + "; ".join(parts)
+
+
+def orphan_branches(repo, o_r, dry, out, runs_for=None):
+    """The sweep's part: remote tracked branches whose owner is gone (worktree removed or pid dead) and whose runs all
+    finished. measure/* ones are deleted (the standing OK: a finished measure/* branch); the rest are listed."""
+    runs_for = runs_for or (lambda b: gh_json(o_r, "run", "list", "--branch", b, "--limit", "20", "--json", RUN_FIELDS))
+    recorded = {r.get("branch") for r in dispatch_records() if r.get("branch")}
+    found = []
+    for line in git(repo, "ls-remote", "--heads", REMOTE, check=False).stdout.splitlines():
+        sha, ref = line.split()
+        b = ref.removeprefix("refs/heads/")
+        if not tracked_branch(b, recorded) or b in SWEEP_KEEP_REMOTE:
+            continue
+        try:
+            runs = runs_for(b)
+        except (Exception, SystemExit) as e:
+            out.append(f"  branch {b}: its runs unread ({str(e)[:100]}), kept")
+            continue
+        if any(r.get("status") != "completed" for r in runs):
+            continue
+        rec = owner_of(repo, b, (runs or [{}])[0] | {"headSha": sha}) if runs else dispatch_for(b)
+        gone = owner_gone(rec)
+        if not gone:
+            continue
+        found.append(b)
+        what = f"owner {owner_text(rec)} gone, {len(runs)} run(s) finished"
+        if not b.startswith("measure/"):
+            out.append(f"  OWNER GONE branch {b} {sha[:10]}: {what} (listed, kept)")
+        elif dry:
+            out.append(f"  would delete OWNER GONE branch {b} {sha[:10]}: {what}")
+        else:
+            try:
+                delete_remote_branch(repo, o_r, b, sha)
+                log_deletion("remote-branch", o_r, b, sha, f"sweep: {what}")
+                out.append(f"  deleted OWNER GONE branch {b} {sha[:10]}: {what}")
+            except Exception as e:
+                out.append(f"  OWNER GONE branch {b} not deleted: {e}")
+    return found
+
+
+DISPATCH_HELP = """Every CI run dispatched by hand has an owner record (~/.cache/agentctl/dispatches/): its failures are
+routed to that owner (BRANCH RED in the inbox), and a run predicting main's next red is claimed and fixed like one.
+
+  agentctl dispatch run <workflow> --ref <branch> [-f key=value ...] [--purpose "..."]
+      `forgejo-gh workflow run`, recorded: the worktree (the cwd's), CLAUDE_CODE_SESSION_ID / $AGENTCTL_AGENT_NAME,
+      $CLAUDE_PID, the inputs, the run id once it shows.
+  agentctl dispatch record --branch <branch> [--run <id>] [--workflow W] [-f key=value ...] [--purpose "..."]
+      register a dispatch made another way (a script's own forgejo-gh call).
+  agentctl dispatch list
+      every record: branch / run, owner, alive or gone, purpose.
+Without a record, a measure/<user>/<sha>-<x> branch is matched to the worktree that holds <sha> (HEAD or reflog), a
+check/<entry> branch to its queue entry's worktree."""
+
+
+def parse_fields(fields):
+    out = {}
+    for kv in fields or []:
+        k, sep, v = kv.partition("=")
+        if not sep:
+            raise SystemExit(f"agentctl: -f takes key=value (got {kv!r})")
+        out[k] = v
+    return out
+
+
+def cmd_dispatch(a):
+    o_r = slug(a.repo) if getattr(a, "repo", None) else default_repo()
+    if a.dcmd == "list":
+        recs = dispatch_records()
+        if not recs:
+            print(f"dispatch: no records ({dispatches_dir()})")
+        for r in recs:
+            gone = owner_gone(r)
+            state = "unmatched" if r.get("source") == "unmatched" else "owner gone" if gone else "owner alive" if gone is False else "no owner"
+            print(f"{r.get('at', '?')} {r.get('branch') or ''} run {r.get('run_id') or '?'} {r.get('workflow') or ''}: "
+                  f"{owner_text(r) if r.get('source') != 'unmatched' else '-'} [{state}] {r.get('purpose') or ''}")
+        return 0
+    inputs = parse_fields(a.field)
+    if a.dcmd == "record":
+        rec = record_dispatch(branch=a.branch, run_id=a.run, workflow=a.workflow, purpose=a.purpose, inputs=inputs or None)
+        print(f"dispatch: recorded {rec.get('branch') or ''} run {rec.get('run_id') or '?'} → owner {owner_text(rec)}")
+        return 0
+    # run
+    t0 = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=60)
+    argv = [FORGEJO_GH, "workflow", "run", a.workflow, "--ref", a.ref]
+    for k, v in inputs.items():
+        argv += ["-f", f"{k}={v}"]
+    r = subprocess.run(argv + ["-R", o_r], capture_output=True, text=True, env=dict(os.environ, GH_TOKEN=token(o_r)),
+                       timeout=300)
+    sys.stdout.write(r.stdout)
+    sys.stderr.write(r.stderr)
+    if r.returncode != 0:
+        return r.returncode
+    rec = record_dispatch(branch=a.ref, run_id=None, workflow=a.workflow,
+                          purpose=a.purpose, inputs=inputs,
+                          key=None if a.ref != "main" else f"main-{re.sub(r'[^A-Za-z0-9._-]', '_', a.workflow)}-{int(time.time())}")
+    rid = None
+    for _ in range(int(env_num("AGENTCTL_DISPATCH_FIND", 12))):
+        try:
+            runs = gh_json(o_r, "run", "list", "--workflow", a.workflow, "--branch", a.ref, "--limit", "5", "--json", RUN_FIELDS)
+            fresh = [x for x in runs if str(x.get("createdAt", "")) >= t0.strftime("%Y-%m-%dT%H:%M:%SZ")]
+            if fresh:
+                rid = max(x["databaseId"] for x in fresh)
+                break
+        except (Exception, SystemExit):
+            pass
+        time.sleep(env_num("AGENTCTL_DISPATCH_FIND_POLL", 5))
+    if rid:
+        rec = save_dispatch(dict(rec, run_id=rid), None if a.ref != "main" else dispatch_key(None, rid))
+        write_json(dispatches_dir("inputs", f"{rid}.json"), inputs)
+    print(f"dispatched {a.workflow} on {a.ref}: run {rid or '(not listed yet)'} → owner {owner_text(rec)}")
+    return 0
 
 
 
@@ -1398,6 +1955,12 @@ def maybe_publish_gate(repo):
             publish_gate_summary(o_r, line.splitlines()[-1], epoch=snap["at"])
         except (Exception, SystemExit) as e:
             err(f"gate summary: skipped ({str(e).replace('agentctl: ', '')[:200]})")
+            return
+        try:
+            for routed in route_branch_reds(o_r, snap):
+                err(f"branch reds: {routed}")
+        except (Exception, SystemExit) as e:
+            err(f"branch reds: not routed ({str(e).replace('agentctl: ', '')[:200]})")
     if not run_bounded("gate-publish", work, env_num("AGENTCTL_STEP_BOUND", 120)):
         err("gate summary: still reading from an earlier cycle (the loop goes on)")
 
@@ -2114,7 +2677,7 @@ def red_patrol(o_r, repo, units, infos, dispatch=False, now_=None):
             jobs = ", ".join(x["job"] for x in g)
             if due and u["gate"] and not any(rec.get("noted") for rec in recs.values()):
                 line = (f"RED UNCLAIMED: {u['workflow']} #{u['run'].get('number')} [{jobs}]: nobody fixing it for "
-                        f"{mins} min" + ("; its author's session is gone" if author_gone else "")
+                        f"{mins} min" + (f" (on {u['predicts']}: PREDICTS MAIN RED)" if u.get("predicts") else "") + ("; its author's session is gone" if author_gone else "")
                         + f" -- `~/bin/agentctl red claim {u['run'].get('number')}`, or assign an agent")
                 inbox_write("red", line, [line], [x.get("line") or "" for x in g][:INBOX_TAIL], 1)
                 actions.append(line)
@@ -2252,6 +2815,9 @@ def fixer_prompt(u, wt, brief, resume_note=None):
                 "`~/bin/agentctl land` in the foreground. End at `LANDED <sha>`. If you cannot fix it, end with a line "
                 "`GAVE UP: <why>`; if it needs the owner, `~/bin/agentctl red block " + str(num) + " --cmd \"<command>\"` "
                 "and end `BLOCKED ON OWNER: <command>`.")
+    if u.get("predicts"):
+        task += (f" This red is on branch {u['predicts']}, not main yet: a run of commits that have since landed on main, "
+                 "with main's inputs, so main will fail the same way next. Fix it on main before it does.")
     if u.get("flake"):
         task += (" This red PASSED on the next run: it is a FLAKE. Make it deterministic (find the race, the clock, "
                  "the ordering); do not just retry it.")
@@ -2984,7 +3550,7 @@ def patrol_repo(repo, dispatch=True, wait_recheck=True):
             others = [(n, r, _outside_lists.get(n, []), False) for n, r, _s, _c in outside_gate(o_r)]
         except (Exception, SystemExit):
             others = []
-    units = gate_red_units(o_r, rows, others) + local_units(repo)
+    units = gate_red_units(o_r, rows, others) + local_units(repo) + predict_units(o_r, snap)
     scan = scan_repo_for(o_r, repo)
     landed = scan_fix_commits(scan)[1] if scan else []
     acts = review_cleared(o_r, repo, units, landed)
@@ -4590,6 +5156,11 @@ def verify_outside_gate(o_r, repo, sha, n):
     write_json(rec_path, {"fix": sha, "run": n, "workflow": name, "file": flow, "at": ts(), "epoch": t0, "pending": True})
     try:
         api(o_r, "POST", f"actions/workflows/{flow}/dispatches", body={"ref": "main", "inputs": {}})
+        try:
+            record_dispatch(branch="main", workflow=name, sha=sha, agent="red verify", pid=os.getpid(), inputs={},
+                            purpose=f"verify Fixes-Red {n} (fix {sha[:10]})", key=f"verify-{flow}-{int(t0)}")
+        except (Exception, SystemExit):
+            pass
     except Exception as e:
         write_json(rec_path, {**read_record(rec_path), "pending": False, "error": str(e)[:160]})
         return f"FIX UNVERIFIED: could not dispatch {name} on main ({str(e)[:120]}); fix {sha[:10]} claimed #{old.get('number')}"
@@ -5327,6 +5898,11 @@ def remote_check(repo, e, base, head, mode, own=None):
     r = git(repo, "push", "--quiet", REMOTE, f"{head}:refs/heads/{branch}", check=False)
     if r.returncode != 0:
         return None, f"push of {branch} failed: {r.stderr.strip()[:300]}"
+    try:
+        record_dispatch(branch=branch, workflow=REMOTE_WORKFLOW, worktree=e.get("worktree"), sha=head, agent="land queue",
+                        pid=os.getpid(), purpose=f"pre-commit check of queue entry {e['id']}")
+    except (Exception, SystemExit) as ex:
+        err(f"remote check of {e['id']}: owner not recorded ({str(ex)[:120]})")
     t0, rid, delays = time.time(), None, backoff(15, 120)
     try:
         while True:
@@ -5339,6 +5915,10 @@ def remote_check(repo, e, base, head, mode, own=None):
                     if hit:
                         rid = hit["id"]
                         e["remote_run"] = rid
+                        try:
+                            save_dispatch({"branch": branch, "run_id": rid})
+                        except OSError:
+                            pass
                         if own:
                             own.add_run(o_r, rid)
                     elif time.time() - t0 > REMOTE_START:
@@ -6817,6 +7397,12 @@ def sweep_repo(repo, idle_days, dry, out):
             out.append(f"  deleted remote branch {b} {sha[:10]}: {why}")
         except Exception as e:
             out.append(f"  remote branch {b} not deleted: {e}")
+    out.append("== branches whose owner is gone (worktree removed or pid dead) and whose runs all finished")
+    try:
+        if not orphan_branches(repo, o_r or slug(repo), dry, out):
+            out.append("  none")
+    except (Exception, SystemExit) as e:
+        out.append(f"  could not list them ({str(e)[:160]})")
 
 
 def cmd_sweep(a):
@@ -7483,7 +8069,7 @@ def safe_cwd():
         return os.environ.get("PWD") or "(removed)"
 
 
-INBOX_KINDS = [("RED_UNCLAIMED", r"RED UNCLAIMED"), ("RED_ESCALATE", r"RED ESCALATE"), ("BLOCKED", r"RED BLOCKED ON OWNER"),
+INBOX_KINDS = [("BRANCH_RED", r"BRANCH RED"), ("RED_UNCLAIMED", r"RED UNCLAIMED"), ("RED_ESCALATE", r"RED ESCALATE"), ("BLOCKED", r"RED BLOCKED ON OWNER"),
                ("RED_DISPATCHED", r"RED DISPATCHED"), ("RED_REVERT", r"RED REVERT"), ("RED_FLAKE", r"RED FLAKE"), ("FIXER_LANDED", r"RED FIXER [^:]*: LANDED "),
                ("FIXER_FAILED", r"RED FIXER "), ("RED_CLEARED", r"RED CLEARED"), ("FIX_FAILED", r"FIX FAILED"), ("FIX_OK", r"FIX OK"), ("FIX_UNVERIFIED", r"FIX UNVERIFIED"),
                ("RED", r"WATCH RED"), ("OK", r"WATCH OK"), ("STALLED", r"WATCH STALLED|.*\bstalled\b"),
@@ -7491,7 +8077,7 @@ INBOX_KINDS = [("RED_UNCLAIMED", r"RED UNCLAIMED"), ("RED_ESCALATE", r"RED ESCAL
                ("UNKNOWN", r"WATCH UNKNOWN|UNKNOWN:|crashed:|exited:|ended by signal|exit \d+ with no verdict"),
                ("NOT_LANDED", r"NOT LANDED"), ("LANDED", r"LANDED "), ("WAITING", r"WAITING "), ("QUEUED", r"QUEUED "), ("HELD", r"HELD:"),
                ("CHECK", r"CHECK CAP")]
-WAIT_KINDS_DEFAULT = "RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_ESCALATE,BLOCKED,FIXER_FAILED,RED_REVERT"
+WAIT_KINDS_DEFAULT = "RED,BRANCH_RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_ESCALATE,BLOCKED,FIXER_FAILED,RED_REVERT"
 
 
 def inbox_kind(verdict, final=True):
@@ -7870,6 +8456,22 @@ def main(argv=None):
     rf.add_argument("--record", required=True)
     for p_ in (rc_, rb, rr, rl, rdp, ra, rp, rf):
         p_.add_argument("--repo")
+    dp = sub.add_parser("dispatch", help="own every CI dispatch: run (forgejo-gh workflow run, recorded) / record / list",
+                        description=DISPATCH_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    dps = dp.add_subparsers(dest="dcmd", required=True)
+    dpr = dps.add_parser("run", help="forgejo-gh workflow run, with an owner record")
+    dpr.add_argument("workflow", help="the workflow file, e.g. identity-model-convergence.yml")
+    dpr.add_argument("--ref", required=True)
+    dpc = dps.add_parser("record", help="register a dispatch made another way")
+    dpc.add_argument("--branch")
+    dpc.add_argument("--run", help="its run id")
+    dpc.add_argument("--workflow")
+    for p_ in (dpr, dpc):
+        p_.add_argument("-f", "--field", action="append", default=[], metavar="KEY=VALUE", help="a dispatch input")
+        p_.add_argument("--purpose", default="", help="one line: what the run is for")
+    dpl = dps.add_parser("list", help="every owner record")
+    for p_ in (dpr, dpc, dpl):
+        p_.add_argument("--repo")
     mt = sub.add_parser("maintain", help="THE reaper, every 15 min (launchd net.bitcashier.agentctl-maintain): the reap, "
                                          "and once a day the sweep")
     mt.add_argument("--dry-run", action="store_true", help="list what would be reaped / swept, kill and delete nothing")
@@ -7878,7 +8480,7 @@ def main(argv=None):
     rp_.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
     handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": cmd_red, "gov": cmd_gov, "checks": cmd_checks, "inbox": cmd_inbox, "queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
+               "red": cmd_red, "dispatch": cmd_dispatch, "gov": cmd_gov, "checks": cmd_checks, "inbox": cmd_inbox, "queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)
 

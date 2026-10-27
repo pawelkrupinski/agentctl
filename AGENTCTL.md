@@ -22,6 +22,7 @@ eval "$(~/bin/agentctl env --print)"        # 1. sbt/java on PATH; a locked vaul
 ~/bin/agentctl inbox --unread --ack         # 5. the orchestrator: every land/watch/wait verdict, agent alive or not
 ~/bin/agentctl inbox wait &                 # 6. the orchestrator's notifier: Bash run_in_background=true (see "inbox")
 ~/bin/agentctl red claim <run> --note "…"   # 7. assigned a red build? claim it first (see "red")
+~/bin/agentctl dispatch run <wf.yml> --ref <branch> -f k=v --purpose "…"  # 8. dispatching CI yourself? own it (see "dispatch")
 ```
 
 Every change lands with `land`, identity changes included (2026-10-26: no pre-merge CI; the merge queue is retired).
@@ -90,7 +91,9 @@ The user has standing-OKed `agentctl cleanup --execute` for exactly what it dele
 - remote `measure/*` branches whose runs have all finished, or that are more than 24 h old with no run;
 - after `WATCH OK`, the worktree `land` ran from and its branch, when proven merged and clean (see "The lifecycle closes
   itself");
-- remote branches `agentctl sweep` proves merged into main (not `main`, `master`, `waiting`, `measure/*`).
+- remote branches `agentctl sweep` proves merged into main (not `main`, `master`, `waiting`, `measure/*`);
+- remote `measure/*` branches whose owner is gone (its worktree removed or its recorded pid dead) and whose runs all
+  finished (`agentctl sweep`; a `check/*` or `red-*` one is listed only).
 
 It skips locked trees, dirty trees, trees in use by a process, and trees under `~/.cache` (unless you pass
 `--include-caches`). Every deletion is appended to `scratchpad/agentctl-deleted.log`
@@ -621,6 +624,39 @@ id	index	status	substr(title,1,40)
 Use it only as the fallback, when `forgejo-gh` or `ci-why` cannot answer, for example for queue analysis. It never
 writes.
 
+### dispatch: every CI dispatch has an owner; branch reds are routed (2026-10-27)
+
+```
+agentctl dispatch run <workflow.yml> --ref <branch> [-f key=value ...] [--purpose "..."]
+agentctl dispatch record --branch <branch> [--run <id>] [--workflow W] [-f key=value ...] [--purpose "..."]
+agentctl dispatch list
+```
+
+The owner: "red not captured, make a structural fix". Convergence #2116 (run 3264) on `measure/pawel/982f7681f-0b04a4`
+failed and nobody was told: the snapshot, the status line and the reds covered main only.
+
+- **Owner records** (`~/.cache/agentctl/dispatches/`, `$AGENTCTL_DISPATCH_DIR`): branch, run id, worktree, Claude
+  session / `$AGENTCTL_AGENT_NAME`, pid (`$CLAUDE_PID`), purpose, inputs, time. `dispatch run` wraps
+  `forgejo-gh workflow run` and records it; `dispatch record` registers a dispatch made another way. agentctl's own
+  dispatches record themselves (the queue's `check/*` remote checks, the Fixes-Red verification on main). A run with no
+  record is matched once, after the fact: `measure/<user>/<sha>-<x>` (identity-measure, identity-ci-run) or the run's
+  head commit to the worktree whose HEAD is that commit or whose HEAD reflog holds it; `check/<entry>` to its queue
+  entry's worktree.
+- **The snapshot** (`ci-state.json`, `branches`) also holds the newest completed run of each tracked branch and
+  workflow: any branch with an owner record, and `measure/*`, `check/*`, `red-*`. A branch red ends when its branch is
+  deleted or a newer run of that workflow on it is green.
+- **Route**: a failed branch run is ONE inbox entry, `BRANCH RED: <workflow> #N on <branch> → owner <worktree (agent)>`,
+  with ci-why's first error lines; `inbox wait` wakes on it by default. Route it to that worktree's agent.
+- **PREDICTS MAIN RED**: the run is built on commits all on main now (ancestor or patch-equivalent) AND ran with main's
+  inputs for that workflow (its dispatch inputs, read from the owner record or Forgejo's DB, ignoring tier, runner,
+  profile, jvm-options, heap, reuse-run, takes-base, takes-countries, countries). Main hits it next, so it is a gate red
+  at once: `RED UNCLAIMED`, claimed and dispatched like a main red. Inputs that differ make it a plain branch red that
+  names them (`recording 3166 ≠ main's 573`); a test failure on a NEWER recording also says `blocks promoting recording
+  N`. Unread inputs predict nothing (the processor asks the DB only over an open ssh control connection; `ci-why` from
+  a terminal reads them).
+- **Status line / summary**: `branch reds: N → owner (workflow #n)` after main's reds, `PREDICTS MAIN RED` in bold red;
+  `ci-why` lists them under "Branch reds".
+
 ### inbox: every final verdict, durable
 
 ```
@@ -643,12 +679,13 @@ a signal, or on a crash), and land writes its `WAITING` line there at once, sinc
   agent's report, and before deciding an agent's land is lost.
 - Each entry has a `kind`, from its verdict: `RED`, `OK`, `STALLED`, `UNKNOWN` (also a crash, a signal, an exit with
   no verdict), `NOT_LANDED`, `LANDED`, `WAITING`, `HELD`, `FIX_FAILED`, `FIX_OK`, `FIX_UNVERIFIED`, `CHECK`, `OTHER`;
-  from `red`: `RED_UNCLAIMED`, `RED_ESCALATE`, `BLOCKED`, `RED_DISPATCHED`, `FIXER_LANDED`, `FIXER_FAILED`.
+  from `red`: `RED_UNCLAIMED`, `RED_ESCALATE`, `BLOCKED`, `RED_DISPATCHED`, `FIXER_LANDED`, `FIXER_FAILED`; from the
+  branch runs: `BRANCH_RED` (see "dispatch").
 
 #### inbox wait: the orchestrator's notifier
 
 ```
-agentctl inbox wait [--kinds RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_ESCALATE,BLOCKED,FIXER_FAILED] [--since-ack] [--timeout S]
+agentctl inbox wait [--kinds RED,BRANCH_RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_ESCALATE,BLOCKED,FIXER_FAILED] [--since-ack] [--timeout S]
 ```
 
 It blocks until an UNREAD entry of those kinds (the default above) exists, prints every such entry, and exits 0 (2 at
