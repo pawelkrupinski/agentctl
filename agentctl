@@ -2694,7 +2694,9 @@ def state_lines(st, indent="  "):
         line += f" (stale claim: {'; '.join(st['stale'])})"
     lines = [line]
     for sha, r in st["failed"]:
-        lines.append(f"{indent}  (fix {sha[:9]} landed, and #{r.get('number')} still fails this way)")
+        more = f"{indent}  (fix {sha[:9]} landed, and #{r.get('number')} still fails this way)"
+        if more not in lines:  # one per fix and run, however many of the run's signatures it names
+            lines.append(more)
     return lines
 
 
