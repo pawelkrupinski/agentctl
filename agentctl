@@ -2122,8 +2122,11 @@ def maybe_publish_gate(repo):
             if reds_now - _seen_gate_reds:
                 # ASSIGN FIRST (the owner: "why is main red unassigned?"): a gate red this cycle first sees is assigned
                 # -- its live author claimed, or a fixer dispatched -- BEFORE the snapshot and the gate line are
-                # published, so no published state holds a red nobody was assigned to
-                assign_first(repo, snap)
+                # published, so no published state holds a red nobody was assigned to. Bounded: a dispatch under load (a
+                # worktree checkout) takes minutes, and the red itself must not wait for it -- past 20 s it is published
+                # as `dispatching a fixer…` (red_state's gap) while the dispatch finishes on its own thread
+                if not run_bounded("assign-first", lambda: assign_first(repo, snap), env_num("AGENTCTL_ASSIGN_BOUND", 20)):
+                    err("red patrol (assign first): still dispatching; the red is published meanwhile")
             _seen_gate_reds.clear()
             _seen_gate_reds.update(reds_now)
             ci_state_write(snap)
