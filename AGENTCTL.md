@@ -444,23 +444,50 @@ agentctl waiting service install|uninstall|status   # the processor as launchd a
   listing every 30 s; wall-clock sleeps only, so it carries on after the laptop sleeps; a batch lands with no land or
   agent alive, its verdicts in the inbox.
 
-### checks: the pre-commit check slots
+### gov: THE governor -- one admission control for laptop memory and CPU
 
 ```
-agentctl checks status             # the slots and their holders
-agentctl checks stats [--days 7]   # p50/p90 check duration and slot wait per concurrency level
+agentctl gov status                 # admitted work, waiters, memory, evictable idle sbt servers, pressure
+agentctl gov stats [--days 7]       # checks stats, plus each class's admission waits and the evictions
+agentctl gov evict [--dry-run]      # stop the idle kept sbt server unused longest, by hand
+agentctl gov admit --class C ...    # scripts/jvm-gate.sh's call (--fd 7 --ticket <file>); --try: one look
+```
+
+The owner (2026-10-27): one governor instead of three limiters (jvm-gate.sh's 4 JVM slots, the check-slot cap,
+sbt-warm's kept servers each holding a slot, idle or not).
+
+- **Tickets.** Every heavy unit -- a pre-commit check, an sbt JVM (sbt-warm's server, identity tools) -- holds a ticket:
+  an flock on `~/.cache/agentctl/gov/t-<id>.lock` (`$AGENTCTL_GOV_DIR`), freed by the kernel when its holders end,
+  with a record beside it (class, expected GB, label, pid, cwd). jvm-gate.sh holds it on descriptor 7, as it held a
+  slot (riding, the keeper hand-off unchanged); `KINOWO_GOVERNOR=0`, Linux or an agentctl without `gov` keep the slots.
+- **Priority:** red (a change carrying `Fixes-Red:` for a red run; a `*-wt-red-*` checkout) > check > agent (an agent's
+  own sbt) > measure (identity-measure*). Only the head of the queue is admitted: a lower class never overtakes.
+- **Memory:** the expected GB (5 for a JVM, 1 for a check's hook; its JVM is a ticket of its own at the check's
+  priority, `KINOWO_GOV_CLASS`) must fit the budget (sum of live tickets, `$AGENTCTL_GOV_BUDGET_GB`, 60% of RAM), and
+  2.5 GB (`$AGENTCTL_GOV_FREE_NEED_GB`) must be free now (free + inactive + speculative) beyond a 1 GB reserve and what
+  tickets admitted in the last 2 min still grow into; memory pressure under 75% (red: 90%).
+- **CPU:** agent work waits while load1 > 1.5x the cores, measurements while > 1x; checks and red never.
+- **Eviction first:** when the head waiter does not fit on memory, the idle kept sbt server unused longest (no call in
+  it, unused 1 min, not serving, never the root checkout's) is stopped (`sbt-warm --stop`, its busy lock held), then it
+  looks again. Logged in `gov/gov.log`; every admission in `gov/admits.jsonl`.
+- **Checks** keep their cap (below), now one of the governor's limits.
+
+### checks: the pre-commit check cap
+
+```
+agentctl checks status             # the checks running
+agentctl checks stats [--days 7]   # p50/p90 check duration and wait per concurrency level
 ```
 
 The owner (2026-10-27): "just limit the precommit checks to a reasonable number", "keep measuring to adjust that
-number". Every check run -- land's dry run, the batch check -- holds one of N slots (flocks under
-`~/.cache/agentctl/checks/`, freed by the kernel when the holder dies; a stalled check is ended and its slot goes with
-it). N: `$AGENTCTL_MAX_CHECKS` if set, else the automatic cap (default 3: one of jvm-gate's 4 JVM slots stays for
-agents' own sbt work). A waiter prints its position in line and the holders, again every 10 min. Each run is appended to
-`checks/runs.jsonl`: duration, slot wait, cap, checks running, and the load, CPU % and memory pressure / swap sampled
-during it. After each run the cap is adjusted, at most once a day, logged in `checks/adjust.log` and sent to the inbox:
-up 1 (to the JVM slots) when over 30% of the day's checks waited over a minute while memory pressure stayed under 50%
-and swap steady; down 1 (to 1) when memory pressure reached 75% or swap grew 512 MB during a check, or when the p90
-duration at the current level is over 1.5x the p90 one level below.
+number". Every check run -- the queued checks, land --follow's dry run, the batch check, the known-red baseline -- is a
+check ticket of the governor: at most N run at once (a red fix skips the cap). N: `$AGENTCTL_MAX_CHECKS` if set, else
+the automatic cap (default 3, at most the budget's worth of sbt servers). Each run is appended to `checks/runs.jsonl`:
+duration, wait, cap, checks running, and the load, CPU % and memory pressure / swap sampled during it. After each run
+the cap is adjusted, at most once a day, logged in `checks/adjust.log` and sent to the inbox: up 1 when over 30% of the
+day's checks waited over a minute while memory pressure stayed under 50% and swap steady; down 1 (to 1) when memory
+pressure reached 75% or swap grew 512 MB during a check, or when the p90 duration at the current level is over 1.5x the
+p90 one level below.
 
 ### queue: RETIRED (2026-10-26)
 

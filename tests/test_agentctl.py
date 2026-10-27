@@ -23,6 +23,12 @@ os.environ.setdefault("AGENTCTL_RED_PATROL", "0")
 os.environ.setdefault("AGENTCTL_CLAUDE", "/nonexistent/claude")
 # ...nor takes this machine's pre-commit check slots, nor writes its measurements or cap.
 os.environ.setdefault("AGENTCTL_CHECKS_DIR", tempfile.mkdtemp(prefix="agentctl-checks-test-"))
+# the governor of a test is its own: its own tickets, and a machine with room (never this laptop's memory or load)
+os.environ.setdefault("AGENTCTL_GOV_DIR", tempfile.mkdtemp(prefix="agentctl-gov-test-"))
+os.environ.setdefault("AGENTCTL_GOV_FREE_PROBE", "echo 64")
+os.environ.setdefault("AGENTCTL_GOV_PRESSURE_PROBE", "echo 10")
+os.environ.setdefault("AGENTCTL_GOV_LOAD_PROBE", "echo 1")
+os.environ.setdefault("KINOWO_SBT_WARM_STATE", tempfile.mkdtemp(prefix="agentctl-sbt-warm-test-"))
 
 ENV = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
            GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")

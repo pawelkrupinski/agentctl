@@ -2648,17 +2648,393 @@ def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None):
     return (None if stalled else p.returncode), output
 
 
+# ---------------------------------------------------------------- the governor: ONE admission control for memory and CPU
+# The owner (2026-10-27): "one governor for laptop memory and CPU". Three limiters guarded the 36 GB / 14-core Mac each on
+# its own -- movies' scripts/jvm-gate.sh (4 JVM slots), the check slots' cap (below) and sbt-warm's kept servers (each
+# holding a JVM slot, idle or not) -- so an idle warm server held the slot a red fix's check waited for, and none knew
+# what the others had admitted. Now one governor admits every heavy unit of work:
+#
+# - A TICKET is an flock on <gov>/t-<id>.lock (freed by the kernel when its holder ends, however it ends) with its record
+#   beside it, t-<id>.json: class, expected GB, label, pid, cwd, since. agentctl's own checks hold one in-process; movies'
+#   scripts/jvm-gate.sh opens descriptor 7 on a ticket file and runs `agentctl gov admit --fd 7`, which locks that shared
+#   open file: the shell, and the JVM or the kept server's keeper it hands descriptor 7 to, hold the ticket.
+# - CLASSES, in priority order: red (a change carrying Fixes-Red for a red run; a red fixer's worktree), check (a
+#   pre-commit check), agent (an agent's own sbt), measure (identity-measure*). Waiters queue in that order, first come
+#   first served within a class, and only the head of the queue is admitted: a lower class never overtakes a higher one.
+# - MEMORY: the expected GB must fit under the BUDGET (the sum of the live tickets' expected GB; $AGENTCTL_GOV_BUDGET_GB,
+#   default 60% of RAM), and what it needs NOW ($AGENTCTL_GOV_FREE_NEED_GB, 2.5, or less) must fit into FREE memory
+#   (free + inactive + speculative pages) less a reserve ($AGENTCTL_GOV_RESERVE_GB, 1) less what the tickets admitted in
+#   the last 2 min will still grow into (a JVM takes its heap over its first minutes); and memory pressure (100 -
+#   memory_pressure's free %) must be under 75% (90% for red).
+# - CPU: agent work waits while the 1-min load is over 1.5x the cores, measurements while over 1x; checks and red do not.
+# - EVICTION: when the head waiter does not fit on memory, the governor stops the idle kept sbt server unused longest
+#   (sbt-warm's registry: no call running in it -- its busy lock taken exclusively for the stop, so none starts under it --
+#   unused for a minute, not serving, never the root checkout's), then looks again. Idle warm servers go first.
+# - CHECKS keep their cap (`checks`, below): measured and auto-tuned as before, now one of the governor's limits.
+# Every admission is a line of <gov>/admits.jsonl (class, GB, wait, what it waited on); every eviction a line of gov.log.
+GOV_CLASSES = {"red": 0, "check": 1, "agent": 2, "measure": 3}
+GOV_MEM_GB = {"red": 5.0, "check": 5.0, "agent": 5.0, "measure": 6.0, "hook": 1.0}
+GOV_RAMP = 120          # seconds a new ticket's JVM is still growing into its expected memory
+GOV_RESERVE_GB = 1.0
+GOV_FREE_NEED_GB = 2.5  # free memory a new JVM needs NOW (beyond the reserve); its heap grows into the budget's share later
+GOV_PRESSURE_STOP = {"red": 90}  # memory pressure (%) at which a class waits; others: GOV_PRESSURE_DEFAULT
+GOV_PRESSURE_DEFAULT = 75
+GOV_LOAD = {"agent": 1.5, "measure": 1.0}  # waits while load1 > factor x cores; red and check never wait on CPU
+GOV_EVICT_IDLE = 60     # a kept server unused this long (seconds) may be evicted
+GOV_POLL = 2.0
+GOV_REPORT = 600
+
+
+def gov_dir():
+    d = os.environ.get("AGENTCTL_GOV_DIR") or os.path.join(HOME, ".cache", "agentctl", "gov")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def gov_log(msg):
+    with open(os.path.join(gov_dir(), "gov.log"), "a") as f:
+        f.write(f"{ts()} {msg}\n")
+
+
+def ram_gb():
+    try:
+        r = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=10)
+        return int(r.stdout.strip()) / 2 ** 30
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return 36.0
+
+
+def gov_budget():
+    return env_num("AGENTCTL_GOV_BUDGET_GB", round(0.6 * ram_gb(), 1))
+
+
+def free_gb():
+    """GB of RAM a new heap can have now (free + inactive + speculative pages); $AGENTCTL_GOV_FREE_PROBE's output when
+    set (the tests' seam); None when unreadable."""
+    probe = os.environ.get("AGENTCTL_GOV_FREE_PROBE")
+    if probe:
+        try:
+            return float(subprocess.run(probe, shell=True, capture_output=True, text=True).stdout.strip())
+        except ValueError:
+            return None
+    try:
+        out = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    page = re.search(r"page size of (\d+) bytes", out)
+    pages = sum(int(m.group(2)) for m in re.finditer(r"Pages (free|inactive|speculative):\s+(\d+)", out))
+    return pages * int(page.group(1)) / 2 ** 30 if page else None
+
+
+def gov_machine():
+    """{free, pressure, load1, cores}: live memory and CPU ($AGENTCTL_GOV_PRESSURE_PROBE / _LOAD_PROBE: the tests')."""
+    load1, _cpu, pressure, _swap = machine_sample()
+    if os.environ.get("AGENTCTL_GOV_PRESSURE_PROBE"):
+        pressure = float(subprocess.run(os.environ["AGENTCTL_GOV_PRESSURE_PROBE"], shell=True, capture_output=True,
+                                        text=True).stdout.strip() or 0)
+    if os.environ.get("AGENTCTL_GOV_LOAD_PROBE"):
+        load1 = float(subprocess.run(os.environ["AGENTCTL_GOV_LOAD_PROBE"], shell=True, capture_output=True,
+                                     text=True).stdout.strip() or 0)
+    return {"free": free_gb(), "pressure": pressure, "load1": load1, "cores": os.cpu_count() or 1}
+
+
+def gov_tickets():
+    """The live tickets' records (their lock held), oldest first; a dead ticket's files are removed."""
+    out = []
+    for p in sorted(glob.glob(os.path.join(gov_dir(), "t-*.json"))):
+        lock = p[:-5] + ".lock"
+        if not lock_held(lock):
+            try:
+                if time.time() - os.path.getmtime(p) > 30:  # never one being written
+                    os.unlink(p)
+                    os.unlink(lock)
+            except OSError:
+                pass
+            continue
+        rec = read_record(p)
+        if rec:
+            rec["path"] = lock
+            out.append(rec)
+    return sorted(out, key=lambda r: r.get("at", 0))
+
+
+def gov_committed(tickets):
+    return sum(float(t.get("mem") or 0) for t in tickets)
+
+
+def gov_ramp(tickets, now=None):
+    now = now or time.time()
+    return sum(float(t.get("mem") or 0) for t in tickets if now - t.get("at", 0) < GOV_RAMP)
+
+
+def gov_fits(cls, mem, tickets, m, kind="job"):
+    """(True, None) when work of class cls expecting `mem` GB may start now; else (False, why, on_memory)."""
+    if kind == "check" and cls != "red":
+        checks = sum(1 for t in tickets if t.get("kind") == "check")
+        if checks >= checks_cap():
+            return False, f"{checks}/{checks_cap()} checks running (the check cap)", False
+    budget = gov_budget()
+    committed = gov_committed(tickets)
+    if committed + mem > budget:
+        return False, f"{committed:.0f}+{mem:.0f} GB over the {budget:.0f} GB budget", True
+    if m.get("free") is not None:
+        room = m["free"] - env_num("AGENTCTL_GOV_RESERVE_GB", GOV_RESERVE_GB) - gov_ramp(tickets)
+        need = min(mem, env_num("AGENTCTL_GOV_FREE_NEED_GB", GOV_FREE_NEED_GB))
+        if need > room:
+            return False, (f"{m['free']:.1f} GB free, {gov_ramp(tickets):.0f} GB still growing: {max(room, 0):.1f} GB "
+                           f"for the {need:g} GB it needs now"), True
+    stop = GOV_PRESSURE_STOP.get(cls, GOV_PRESSURE_DEFAULT)
+    if m.get("pressure") is not None and m["pressure"] >= stop:
+        return False, f"memory pressure {m['pressure']:.0f}% (waits at {stop}%)", True
+    factor = GOV_LOAD.get(cls)
+    if factor and m.get("load1") is not None and m["load1"] > factor * m["cores"]:
+        return False, f"load {m['load1']:.0f} over {factor:g}x {m['cores']} cores", False
+    return True, None, False
+
+
+def gov_waiters():
+    """The live waiters, in admission order: (class priority, arrival)."""
+    out = []
+    for p in glob.glob(os.path.join(gov_dir(), "w-*.json")):
+        rec = read_record(p)
+        if not rec or not pid_alive(int(rec.get("pid", 0))):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+            continue
+        rec["path"] = p
+        out.append(rec)
+    return sorted(out, key=lambda r: (GOV_CLASSES.get(r.get("class"), 9), r.get("at", 0)))
+
+
+def sbt_warm_state():
+    return os.environ.get("KINOWO_SBT_WARM_STATE") or os.path.join(HOME, ".cache", "kinowo-sbt-warm")
+
+
+def idle_servers(min_idle=None):
+    """The kept sbt servers the governor may evict, unused longest first: [(idle seconds, root, key prefix)]. Never the
+    root checkout's (the owner's own), a serving one, or one a call is running in (its busy lock held)."""
+    min_idle = GOV_EVICT_IDLE if min_idle is None else min_idle
+    out = []
+    for f in glob.glob(os.path.join(sbt_warm_state(), "*.root")):
+        prefix = f[:-5]
+        try:
+            with open(f) as rf, open(prefix + ".pid") as pf:
+                root, pid = rf.read().strip(), int(pf.read().strip())
+        except (OSError, ValueError):
+            continue
+        if not os.path.isdir(root) or os.path.isdir(os.path.join(root, ".git")) or not pid_alive(pid):
+            continue
+        if os.path.exists(prefix + ".serving") or lock_held(prefix + ".busy"):
+            continue
+        try:
+            idle = time.time() - os.path.getmtime(prefix + ".used")
+        except OSError:
+            continue
+        if idle >= min_idle:
+            out.append((idle, root, prefix))
+    return sorted(out, reverse=True)
+
+
+def gov_evict(why):
+    """Stop the idle kept server unused longest (holding its busy lock, so no call starts under the stop). The evicted
+    checkout, or None."""
+    for idle, root, prefix in idle_servers():
+        f = open(prefix + ".busy", "a+")
+        try:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                continue  # a call started meanwhile
+            script = os.path.join(root, "scripts", "sbt-warm")
+            if not os.access(script, os.X_OK):
+                continue
+            try:
+                subprocess.run([script, "--stop", "--root"], cwd=root, capture_output=True, text=True, timeout=180)
+            except subprocess.TimeoutExpired:
+                gov_log(f"evict {root}: sbt-warm --stop took over 3 min")
+            gov_log(f"evicted the idle sbt server of {root} (unused {int(idle // 60)} min) for: {why}")
+            return root
+        finally:
+            f.close()
+    return None
+
+
+class GovTicket:
+    def __init__(self, path, rec, f=None):
+        self.path, self.rec, self.f = path, rec, f
+        self.waited, self.why = rec.get("waited", 0.0), rec.get("waited_on")
+
+    def release(self):
+        for p in (self.path[:-5] + ".json", self.path):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+        if self.f:
+            self.f.close()
+            self.f = None
+
+
+def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=True, force=False, pid=None, cwd=None,
+              report=None):
+    """Admit one unit of work: a GovTicket once it may start (None for a --try that may not). With `fd`, the lock is
+    taken on that inherited descriptor (a shell's, which then holds the ticket); else on a file this process keeps open."""
+    cls = cls if cls in GOV_CLASSES else "agent"
+    mem = GOV_MEM_GB.get(cls, 5.0) if mem is None else float(mem)
+    d = gov_dir()
+    t0 = time.time()
+    me = os.path.join(d, f"w-{t0:.6f}-{os.getpid()}.json")
+    write_json(me, {"class": cls, "mem": mem, "label": label, "kind": kind, "pid": os.getpid(), "at": t0})
+    said, report_at, why = False, 0.0, None
+    report = report or err
+    try:
+        while True:
+            tickets = gov_tickets()
+            waiters = gov_waiters()
+            head = waiters and os.path.abspath(waiters[0]["path"]) == os.path.abspath(me)
+            if force:
+                ok, why, on_mem = True, None, False
+            elif not head:
+                w = waiters[0] if waiters else {}
+                ok, on_mem = False, False
+                why = f"behind {w.get('class')} work ({w.get('label') or '?'}, pid {w.get('pid')})"
+            else:
+                ok, why, on_mem = gov_fits(cls, mem, tickets, gov_machine(), kind)
+            if ok:
+                break
+            if head and on_mem and cls != "measure" and gov_evict(f"{cls} {label} ({why})"):
+                time.sleep(env_num("AGENTCTL_GOV_EVICT_SETTLE", 3))  # the freed memory shows in vm_stat
+                continue
+            if not wait:
+                return None
+            if time.monotonic() >= report_at:
+                report(f"{'still ' if said else ''}waiting for the governor ({cls}, {mem:g} GB, {label}): {why}; "
+                       f"{len(tickets)} admitted, {gov_committed(tickets):.0f}/{gov_budget():.0f} GB")
+                said, report_at = True, time.monotonic() + GOV_REPORT
+            time.sleep(env_num("AGENTCTL_GOV_POLL", GOV_POLL))
+    finally:
+        try:
+            os.unlink(me)
+        except OSError:
+            pass
+    path = ticket or os.path.join(d, f"t-{t0:.6f}-{os.getpid()}.lock")
+    f = None
+    if fd is not None:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    else:
+        f = open(path, "a+")
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    waited = round(time.time() - t0, 1)
+    rec = {"class": cls, "mem": mem, "label": label, "kind": kind, "pid": pid or os.getpid(), "cwd": cwd or os.getcwd(),
+           "at": time.time(), "since": ts(), "waited": waited, "waited_on": why if waited >= 1 else None}
+    write_json(path[:-5] + ".json", rec)
+    with open(os.path.join(d, "admits.jsonl"), "a") as af:
+        af.write(json.dumps({k: rec[k] for k in ("class", "mem", "label", "kind", "at", "waited", "waited_on")}) + "\n")
+    if said:
+        report(f"admitted by the governor after {int(waited)} s ({cls}, {mem:g} GB, {label})")
+    return GovTicket(path, rec, f)
+
+
+@contextlib.contextmanager
+def gov_ticket(cls, mem=None, label="", kind="job", report=None):
+    t = gov_admit(cls, mem, label, kind=kind, report=report)
+    try:
+        yield t
+    finally:
+        t.release()
+
+
+def gov_pressure():
+    """Why the laptop is under pressure now (memory pressure, free memory or load past the governor's limits for a
+    check), or None: `land` runs a change's checks on ci-runner while it says so."""
+    m = gov_machine()
+    if m.get("pressure") is not None and m["pressure"] >= env_num("AGENTCTL_REMOTE_PRESSURE", GOV_PRESSURE_DEFAULT):
+        return f"memory pressure {m['pressure']:.0f}%"
+    if m.get("free") is not None and m["free"] < env_num("AGENTCTL_GOV_RESERVE_GB", GOV_RESERVE_GB) + GOV_MEM_GB["check"] \
+            and not idle_servers():
+        return f"{m['free']:.1f} GB free and no idle sbt server to evict"
+    if m.get("load1") is not None and m["load1"] > env_num("AGENTCTL_REMOTE_LOAD", 2.0) * m["cores"]:
+        return f"load {m['load1']:.0f} on {m['cores']} cores"
+    return None
+
+
+def gov_class_of(repo, commits, reds):
+    """red when a commit carries Fixes-Red for a red run, else check."""
+    return "red" if reds and (fixes_of(repo, commits) & reds) else "check"
+
+
+def cmd_gov(a):
+    if a.gcmd == "admit":
+        t = gov_admit(a.cls, a.mem, a.label or "", kind=a.kind, fd=a.fd, ticket=a.ticket, wait=not a.try_,
+                      force=a.force, pid=a.pid, cwd=a.cwd)
+        return 0 if t else 1
+    if a.gcmd == "evict":
+        if a.dry_run:
+            for idle, root, _p in idle_servers():
+                print(f"would evict {root} (unused {int(idle // 60)} min)")
+            return 0
+        root = gov_evict("by hand (agentctl gov evict)")
+        print(f"evicted {root}" if root else "no idle sbt server to evict")
+        return 0
+    if a.gcmd == "status":
+        tickets, m = gov_tickets(), gov_machine()
+        print(f"governor: {len(tickets)} admitted, {gov_committed(tickets):.1f}/{gov_budget():.0f} GB committed, "
+              f"{gov_ramp(tickets):.0f} GB still growing; free {m['free'] if m['free'] is None else round(m['free'], 1)} "
+              f"GB, pressure {m['pressure']}%, load {m['load1']:.1f}/{m['cores']} cores; check cap {checks_cap()}")
+        for t in tickets:
+            print(f"  {t.get('class'):<7} {t.get('mem'):>4} GB  {t.get('kind'):<5} {t.get('label')}  pid {t.get('pid')}  "
+                  f"since {t.get('since')}  {t.get('cwd')}")
+        for w in gov_waiters():
+            print(f"  WAITING {w.get('class'):<7} {w.get('mem'):>4} GB  {w.get('label')}  pid {w.get('pid')}")
+        idle = idle_servers()
+        if idle:
+            print("evictable: " + ", ".join(f"{os.path.basename(r)} ({int(i // 60)} min)" for i, r, _p in idle))
+        why = gov_pressure()
+        print(f"pressure: {why} (land checks on ci-runner)" if why else "pressure: none (land checks locally)")
+        return 0
+    if a.gcmd == "stats":
+        rc = cmd_checks(argparse.Namespace(ccmd="stats", days=a.days))
+        cutoff = time.time() - a.days * 86400
+        rows = []
+        try:
+            with open(os.path.join(gov_dir(), "admits.jsonl")) as f:
+                for line in f:
+                    try:
+                        r = json.loads(line)
+                    except ValueError:
+                        continue
+                    if r.get("at", 0) >= cutoff:
+                        rows.append(r)
+        except OSError:
+            pass
+        print(f"{'class':>7} {'admits':>6} {'p50 wait':>9} {'p90 wait':>9} {'waited>1m':>9}")
+        for cls in GOV_CLASSES:
+            rs = [r for r in rows if r.get("class") == cls]
+            if rs:
+                w = [r.get("waited", 0) for r in rs]
+                print(f"{cls:>7} {len(rs):>6} {pct(w, .5):>8.0f}s {pct(w, .9):>8.0f}s {sum(1 for x in w if x > 60):>9}")
+        try:
+            ev = sum(1 for l in open(os.path.join(gov_dir(), "gov.log")) if " evicted " in l)
+        except OSError:
+            ev = 0
+        print(f"evictions (all time): {ev}")
+        return rc
+    return 2
+
+
 # ---------------------------------------------------------------- check slots
 # The owner (2026-10-27): "just limit the precommit checks to a reasonable number", and "keep measuring to adjust that
-# number". Every pre-commit check run (land's dry run, the `waiting` batch check) holds one of N slots: flocks
-# ~/.cache/agentctl/checks/slot-<i>.lock, freed by the kernel when the holder dies, so a slot never leaks; a check
-# that stalls is ended by run_watched, and its slot goes with it. N: $AGENTCTL_MAX_CHECKS if set, else the automatic cap
-# (checks/cap.json, default 3, leaving one of jvm-gate's 4 JVM slots to agents' own sbt work). A waiter prints its
-# position and the holders. Each run appends to checks/runs.jsonl: its duration, its wait for a slot, the cap and the
-# number of checks running, the load average, CPU % and memory pressure / swap sampled during it. After each run the
-# cap is adjusted from the data (adjust_cap), at most once a day, each change logged and sent to the inbox.
+# number". Every pre-commit check run (land's dry run, the `waiting` batch check, the known-red baseline) is admitted by
+# THE GOVERNOR (above) as a check-kind ticket of class `check` (`red` for a change fixing a red run, which skips the
+# cap): at most N run at once. Its JVM is the sbt server the hook starts or reaches, admitted as a ticket of its own at
+# the check's priority (KINOWO_GOV_CLASS in the hook's environment); the check's own ticket counts the hook's ~1 GB.
+# N: $AGENTCTL_MAX_CHECKS if set, else the automatic cap (checks/cap.json, default 3, at most the budget's worth of sbt
+# servers). A waiter prints why it waits. Each run appends to checks/runs.jsonl: its duration, its wait, the cap and the
+# number of checks running, the load average, CPU % and memory pressure / swap sampled during it. After each run the cap
+# is adjusted from the data (adjust_cap), at most once a day, each change logged and sent to the inbox.
 CHECKS_DEFAULT_CAP = 3
-JVM_SLOTS_DEFAULT = 4
 
 
 def checks_dir():
@@ -2667,11 +3043,9 @@ def checks_dir():
     return d
 
 
-def jvm_slots():
-    try:
-        return max(1, int(os.environ.get("KINOWO_JVM_SLOTS", JVM_SLOTS_DEFAULT)))
-    except ValueError:
-        return JVM_SLOTS_DEFAULT
+def gov_max_checks():
+    """The most checks the budget holds: one sbt server's worth of memory each."""
+    return max(1, int(gov_budget() // GOV_MEM_GB["check"]))
 
 
 def cap_state():
@@ -2685,7 +3059,7 @@ def cap_state():
 def checks_cap():
     if os.environ.get("AGENTCTL_MAX_CHECKS"):
         return max(1, int(os.environ["AGENTCTL_MAX_CHECKS"]))
-    return max(1, min(jvm_slots(), int(cap_state().get("cap", CHECKS_DEFAULT_CAP))))
+    return max(1, min(gov_max_checks(), int(cap_state().get("cap", CHECKS_DEFAULT_CAP))))
 
 
 def machine_sample():
@@ -2709,8 +3083,8 @@ def machine_sample():
 
 
 class Slot:
-    def __init__(self, label):
-        self.label, self.f, self.index, self.waited, self.t0 = label, None, None, 0.0, None
+    def __init__(self, label, cls="check"):
+        self.label, self.cls, self.ticket, self.waited, self.t0 = label, cls, None, 0.0, None
         self.samples, self.running, self.cap, self._last_sample = [], 0, 0, 0.0
 
     def sample(self, force=False):
@@ -2724,65 +3098,24 @@ class Slot:
     def done(self, rc, out):
         self.rc, self.out = rc, out
 
+    def env(self, env):
+        """The hook's environment: its sbt JVM is admitted at this check's priority."""
+        return dict(env, KINOWO_GOV_CLASS=self.cls)
 
-def slot_holders(cap):
-    out = []
-    for i in range(cap):
-        path = os.path.join(checks_dir(), f"slot-{i}.lock")
-        if lock_held(path):
-            try:
-                out.append(open(path).read().strip() or f"slot {i}")
-            except OSError:
-                out.append(f"slot {i}")
-    return out
+
+def slot_holders(cap=None):
+    return [f"pid {t.get('pid')} {t.get('label')} since {t.get('since')} ({t.get('class')})"
+            for t in gov_tickets() if t.get("kind") == "check"]
 
 
 @contextlib.contextmanager
-def check_slot(repo, label):
-    """Hold one of the check slots for a pre-commit check run; waits (FIFO by arrival, a ticket file) printing its
-    position and the holders. Records the run in runs.jsonl and adjusts the cap afterwards."""
-    d = checks_dir()
-    slot, t_wait = Slot(label), time.monotonic()
-    ticket = os.path.join(d, f"wait-{time.time():.6f}-{os.getpid()}")
-    open(ticket, "w").write(label)
-    said, report_at = False, 0.0
-    try:
-        while True:
-            cap = checks_cap()
-            waiters = sorted(n for n in os.listdir(d) if n.startswith("wait-")
-                             and pid_alive(int(n.rsplit("-", 1)[1])))
-            mine = os.path.basename(ticket)
-            ahead = waiters.index(mine) if mine in waiters else 0
-            free = None
-            if ahead < cap:
-                for i in range(cap):
-                    f = open(os.path.join(d, f"slot-{i}.lock"), "a+")
-                    try:
-                        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        free = (i, f)
-                        break
-                    except BlockingIOError:
-                        f.close()
-            if free:
-                slot.index, slot.f = free
-                break
-            if time.monotonic() >= report_at:
-                holders = slot_holders(cap)
-                err(f"{'still ' if said else ''}waiting for a check slot ({len(holders)}/{cap} busy; position "
-                    f"{ahead + 1} in line): " + "; ".join(holders))
-                said, report_at = True, time.monotonic() + 600
-            time.sleep(2)
-    finally:
-        try:
-            os.unlink(ticket)
-        except OSError:
-            pass
-    slot.waited, slot.cap = time.monotonic() - t_wait, checks_cap()
-    slot.running = len(slot_holders(slot.cap))
-    slot.f.seek(0)
-    slot.f.truncate()
-    slot.f.write(f"pid {os.getpid()} {label} since {ts()}")
-    slot.f.flush()
+def check_slot(repo, label, cls="check"):
+    """Hold a check ticket of the governor for a pre-commit check run (waiting, with a line saying why, until it is
+    admitted). Records the run in runs.jsonl and adjusts the cap afterwards."""
+    slot = Slot(label, cls)
+    slot.ticket = gov_admit(cls, GOV_MEM_GB["hook"], label, kind="check")
+    slot.waited, slot.cap = slot.ticket.waited, checks_cap()
+    slot.running = len(slot_holders())
     slot.t0, slot.rc = time.monotonic(), None
     slot.sample(force=True)
     try:
@@ -2790,7 +3123,7 @@ def check_slot(repo, label):
     finally:
         slot.sample(force=True)
         record_check(slot, time.monotonic() - slot.t0)
-        slot.f.close()
+        slot.ticket.release()
         try:
             maybe_adjust_cap()
         except Exception as e:
@@ -2871,7 +3204,7 @@ def maybe_adjust_cap(now=None):
     now = now or time.time()
     st = cap_state()
     cap = int(st.get("cap", CHECKS_DEFAULT_CAP))
-    new, why = adjust_cap(check_runs(7, now), cap, jvm_slots(), st.get("changed_at"), now)
+    new, why = adjust_cap(check_runs(7, now), cap, gov_max_checks(), st.get("changed_at"), now)
     if why is None or new == cap:
         return None
     st = {"cap": new, "changed_at": now, "reason": why, "previous": cap}
@@ -2892,7 +3225,7 @@ def cmd_checks(a):
         st = cap_state()
         print(f"check slots: cap {cap}" + (" ($AGENTCTL_MAX_CHECKS)" if os.environ.get("AGENTCTL_MAX_CHECKS") else
                                           f" (auto; last change: {st.get('reason', 'none')})")
-              + f"; busy now: {len(slot_holders(cap))}; {len(runs)} check run(s) in {a.days} d")
+              + f"; running now: {len(slot_holders(cap))}; {len(runs)} check run(s) in {a.days} d")
         print(f"{'running':>7} {'runs':>5} {'p50 dur':>8} {'p90 dur':>8} {'p50 wait':>9} {'p90 wait':>9} {'max mem%':>8} {'max swap':>8}")
         for level in sorted({r.get("running", 0) for r in runs}):
             rs = [r for r in runs if r.get("running", 0) == level]
@@ -2905,7 +3238,8 @@ def cmd_checks(a):
     if a.ccmd == "status":
         cap = checks_cap()
         holders = slot_holders(cap)
-        print(f"check slots: {len(holders)}/{cap} busy" + "".join(f"\n  {h}" for h in holders))
+        print(f"checks: {len(holders)}/{cap} running (the governor's check cap; `agentctl gov status` for the rest)"
+              + "".join(f"\n  {h}" for h in holders))
         return 0
     return 2
 
@@ -3171,13 +3505,13 @@ def sync(repo, main_ref, sh):
     return None, head
 
 
-def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False):
-    """The repo hook's dry run over forgejo/main..head, in a check slot, watched for a stall: None when it passed, else
-    land's rc."""
+def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False, cls="check"):
+    """The repo hook's dry run over forgejo/main..head, admitted by the governor as a check (`red` for a fix of a red
+    run), watched for a stall: None when it passed, else land's rc."""
     err(f"checking {head[:10]}: {os.path.relpath(hook, repo)} {mode} {REMOTE}/main..HEAD (log: {log_path})")
     lock_note(f"checks of {head[:10]}")
-    with check_slot(repo, f"land {os.path.basename(repo)} {head[:10]}") as slot:
-        rc, out = run_watched([hook, mode, f"{REMOTE}/main..{head}"], repo, tool_env(), log_path, "checks",
+    with check_slot(repo, f"land {os.path.basename(repo)} {head[:10]}", cls) as slot:
+        rc, out = run_watched([hook, mode, f"{REMOTE}/main..{head}"], repo, slot.env(tool_env()), log_path, "checks",
                               sampler=slot.sample)
         slot.done(rc, out)
     with open(log_path, "a") as f:
@@ -3193,7 +3527,7 @@ def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False
                       f"(see `agentctl ci-why`, `Local checks`): not held against this change", flush=True)
                 if not rechecked:  # the hook again, now with main's baseline written: it passes known reds (stored)
                     return dry_run(repo, hook, head, log_path, f"{attempt}, against the known-red baseline", mode,
-                                   rechecked=True)
+                                   rechecked=True, cls=cls)
                 return refused(repo, out, log_path, f"the pre-push checks failed only where plain {REMOTE}/main fails "
                                f"too ({checks}; a known red, claimable as `local`), and the hook still held them "
                                "against it (no baseline mode, or no baseline for this main), so this change lands once "
@@ -3269,7 +3603,7 @@ def baseline_failures(repo, hook, head, log_path):
         err(f"the change's checks failed: running them on plain {REMOTE}/main {main[:10]} (the known-red baseline)")
         with check_slot(repo, f"baseline {main[:10]}") as slot:
             rc, out = run_watched([os.path.join(tree, os.path.relpath(hook, repo)), "--checks-only", f"{head}..{synth}"],
-                                  tree, {**tool_env(), "PREPUSH_BASELINE_DIR": ""}, log_path, "baseline",
+                                  tree, {**slot.env(tool_env()), "PREPUSH_BASELINE_DIR": ""}, log_path, "baseline",
                                   sampler=slot.sample)
             slot.done(rc, out)
     finally:
@@ -3366,8 +3700,10 @@ def precheck(repo, main_ref, sh, log_path, a):
     # red, merge to waiting"): main red and the change one that must wait, without the gate (--checks-only), since it
     # will join `waiting` and land with the batch at green.
     reds = gate_reds(repo) if waiting_supported(repo) else set()
-    joining = bool(reds) and must_wait(repo, waiting_commits(repo, f"{REMOTE}/main", head), reds)
-    rc = dry_run(repo, hook, head, log_path, "before the lock", mode="--checks-only" if joining else "--range")
+    commits = waiting_commits(repo, f"{REMOTE}/main", head)
+    joining = bool(reds) and must_wait(repo, commits, reds)
+    rc = dry_run(repo, hook, head, log_path, "before the lock", mode="--checks-only" if joining else "--range",
+                 cls=gov_class_of(repo, commits, reds))
     if rc is not None:
         return rc
     a.prechecked = (head, git(repo, "rev-parse", main_ref).strip())
@@ -3394,7 +3730,8 @@ def land_loop(repo, main_ref, sh, log_path, a):
             # CHECK FIRST: the hook's dry run over exactly what the push will carry (its pass is stored, so the push's own
             # hook run reuses it in seconds). A long hook inside `git push` holds the push's ssh connection idle, and a
             # tunnel drop kills it after "all clear" (2026-10-23); the area tests make long hooks the norm.
-            rc = dry_run(repo, hook, head, log_path, attempt + 1)
+            rc = dry_run(repo, hook, head, log_path, attempt + 1,
+                         cls=gov_class_of(repo, waiting_commits(repo, f"{REMOTE}/main", head), reds))
             if rc is not None:
                 return rc
         a.prechecked = None  # a retry after a push race checks its new base again
@@ -4150,7 +4487,7 @@ def batch_mode(hook):
         return "--range"
 
 
-def batch_check(repo, d, tree, base, tip):
+def batch_check(repo, d, tree, base, tip, cls="check"):
     """The hook's dry run over base..tip in `tree` (the basic checks plus every touched area's), on a fresh sbt server,
     under the stall abort. (ok, output, stalled): a stall -- land's 20 min, or the hook's exit 75 / `STALLED:` -- is
     retried once on a fresh server; stalled twice, `stalled` is True."""
@@ -4162,8 +4499,8 @@ def batch_check(repo, d, tree, base, tip):
         batch_tree(repo, tip)
         sbt_stop(tree)
         wlog(d, f"checking {base[:10]}..{tip[:10]} (attempt {attempt}, fresh sbt server)")
-        with check_slot(repo, f"waiting batch {tip[:10]}") as slot:
-            rc, out = run_watched([hook, batch_mode(hook), f"{base}..{tip}"], tree, tool_env(),
+        with check_slot(repo, f"waiting batch {tip[:10]}", cls) as slot:
+            rc, out = run_watched([hook, batch_mode(hook), f"{base}..{tip}"], tree, slot.env(tool_env()),
                                   os.path.join(d, f"check-{tip[:10]}"), f"batch-check-{attempt}", sampler=slot.sample)
             slot.done(rc, out)
         sbt_stop(tree)
@@ -4343,7 +4680,8 @@ def waiting_round(repo, d, wt):
     tip = batch[-1]["tip"]
     save_batch_state(d, {"checking": [e["id"] for e in batch], "tip": tip, "base": base, "since": ts()})
     bwt = batch_tree(repo, tip)
-    ok, out, stalled = batch_check(repo, d, bwt, base, tip)
+    ok, out, stalled = batch_check(repo, d, bwt, base, tip,
+                                   "red" if reds and any(set(e.get("fixes") or []) & reds for e in batch) else "check")
     save_batch_state(d, {})
     if stalled:
         until = time.time() + float(os.environ.get("AGENTCTL_BATCH_HOLD", BATCH_HOLD))
@@ -6225,6 +6563,24 @@ def main(argv=None):
     cks.add_parser("status", help="the slots and their holders")
     cst = cks.add_parser("stats", help="p50/p90 check duration and slot wait per concurrency level")
     cst.add_argument("--days", type=float, default=7)
+    gv = sub.add_parser("gov", help="the governor: ONE admission control for laptop memory and CPU (status, stats, admit, evict)")
+    gvs = gv.add_subparsers(dest="gcmd", required=True)
+    gvs.add_parser("status", help="admitted work, waiters, memory, evictable idle sbt servers, pressure")
+    gst = gvs.add_parser("stats", help="checks stats, plus each class's admission waits and the evictions")
+    gst.add_argument("--days", type=float, default=7)
+    gad = gvs.add_parser("admit", help="wait until admitted (scripts/jvm-gate.sh: --fd 7 --ticket <its file>); exit 0 admitted, 1 not (--try)")
+    gad.add_argument("--class", dest="cls", default="agent", choices=list(GOV_CLASSES))
+    gad.add_argument("--mem", type=float, default=None, help="expected GB (default: the class's)")
+    gad.add_argument("--label", default="")
+    gad.add_argument("--kind", default="job", choices=["job", "check"])
+    gad.add_argument("--fd", type=int, default=None, help="lock this inherited descriptor (the caller's) as the ticket")
+    gad.add_argument("--ticket", default=None, help="the ticket's lock file (the one --fd is open on)")
+    gad.add_argument("--pid", type=int, default=None, help="the holder's pid, for the record")
+    gad.add_argument("--cwd", default=None)
+    gad.add_argument("--try", dest="try_", action="store_true", help="one look, never waiting")
+    gad.add_argument("--force", action="store_true", help="admit at once (memory already counted elsewhere)")
+    gev = gvs.add_parser("evict", help="stop the idle kept sbt server unused longest")
+    gev.add_argument("--dry-run", action="store_true")
     ib = sub.add_parser("inbox", help="every final verdict of land / watch / wait / waiting await (and land's WAITING), "
                                       "kept whether or not the agent that ran it is alive")
     ib.add_argument("ids", nargs="*", metavar="ID", help="only these entries (an id prefix); or `wait`: block until an "
@@ -6273,7 +6629,7 @@ def main(argv=None):
     rp_.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
     handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": cmd_red, "checks": cmd_checks, "inbox": cmd_inbox, "queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
+               "red": cmd_red, "gov": cmd_gov, "checks": cmd_checks, "inbox": cmd_inbox, "queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)
 

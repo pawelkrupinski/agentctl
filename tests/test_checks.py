@@ -70,10 +70,17 @@ class AdjustCapTest(unittest.TestCase):
 
 
 class SlotTest(unittest.TestCase):
+    """A check is admitted by the governor as a check ticket; the check cap is one of its limits."""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.saved = {k: os.environ.get(k) for k in ("AGENTCTL_CHECKS_DIR", "AGENTCTL_MAX_CHECKS")}
-        os.environ.update(AGENTCTL_CHECKS_DIR=os.path.join(self.tmp.name, "checks"), AGENTCTL_MAX_CHECKS="1")
+        keys = ("AGENTCTL_CHECKS_DIR", "AGENTCTL_MAX_CHECKS", "AGENTCTL_GOV_DIR", "AGENTCTL_GOV_FREE_PROBE",
+                "AGENTCTL_GOV_PRESSURE_PROBE", "AGENTCTL_GOV_LOAD_PROBE", "AGENTCTL_GOV_POLL", "KINOWO_SBT_WARM_STATE")
+        self.saved = {k: os.environ.get(k) for k in keys}
+        os.environ.update(AGENTCTL_CHECKS_DIR=os.path.join(self.tmp.name, "checks"), AGENTCTL_MAX_CHECKS="1",
+                          AGENTCTL_GOV_DIR=os.path.join(self.tmp.name, "gov"), AGENTCTL_GOV_FREE_PROBE="echo 30",
+                          AGENTCTL_GOV_PRESSURE_PROBE="echo 20", AGENTCTL_GOV_LOAD_PROBE="echo 1",
+                          AGENTCTL_GOV_POLL="0.2", KINOWO_SBT_WARM_STATE=os.path.join(self.tmp.name, "sbt-warm"))
         self.procs = []
 
     def tearDown(self):
@@ -86,13 +93,14 @@ class SlotTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def holder(self, seconds):
-        path = os.path.join(A.checks_dir(), "slot-0.lock")
+        """Another process holding a check ticket for `seconds`."""
         ready = os.path.join(self.tmp.name, "ready")
-        p = subprocess.Popen([sys.executable, "-c", (
-            "import fcntl, sys, time\n"
-            "f = open(sys.argv[1], 'a+'); fcntl.flock(f, fcntl.LOCK_EX); f.seek(0); f.truncate(); "
-            "f.write('pid other land movies-wt-x abc'); f.flush()\n"
-            "open(sys.argv[2], 'w').close(); time.sleep(float(sys.argv[3]))"), path, ready, str(seconds)])
+        code = ("import sys, time, importlib.machinery, importlib.util\n"
+                "l = importlib.machinery.SourceFileLoader('agentctl', sys.argv[1])\n"
+                "s = importlib.util.spec_from_loader('agentctl', l); A = importlib.util.module_from_spec(s); l.exec_module(A)\n"
+                "t = A.gov_admit('check', 1.0, 'land movies-wt-x abc', kind='check')\n"
+                "open(sys.argv[2], 'w').close(); time.sleep(float(sys.argv[3]))")
+        p = subprocess.Popen([sys.executable, "-c", code, A.__file__, ready, str(seconds)])
         self.procs.append(p)
         while not os.path.exists(ready):
             time.sleep(0.05)
@@ -105,24 +113,31 @@ class SlotTest(unittest.TestCase):
                 slot.done(0, "")
         return err.getvalue()
 
-    def test_a_waiter_says_its_position_and_the_holders_then_runs_when_the_slot_frees(self):
+    def test_a_waiter_says_why_then_runs_when_the_check_ends(self):
         self.holder(2.5)
         t0 = time.time()
         out = self.take()
         self.assertGreater(time.time() - t0, 1.5, "it waited for the holder")
-        self.assertIn("waiting for a check slot (1/1 busy; position 1 in line): pid other land movies-wt-x abc", out)
+        self.assertIn("waiting for the governor (check, 1 GB, land test): 1/1 checks running (the check cap)", out)
         rec = [json.loads(l) for l in open(os.path.join(A.checks_dir(), "runs.jsonl"))][-1]
         self.assertGreater(rec["waited"], 1.5)
         self.assertEqual((rec["cap"], rec["running"], rec["label"]), (1, 1, "land test"))
         for k in ("duration", "load1", "cpu", "pressure", "swap_mb"):
             self.assertIn(k, rec)
 
-    def test_a_killed_holders_slot_is_freed_by_the_kernel(self):
+    def test_a_killed_holders_ticket_is_freed_by_the_kernel(self):
         p = self.holder(60)
         p.kill()
         p.wait()
         t0 = time.time()
         self.take()
+        self.assertLess(time.time() - t0, 5)
+
+    def test_a_red_fix_skips_the_check_cap(self):
+        self.holder(30)
+        t0 = time.time()
+        with A.check_slot("/repo", "land fix", "red") as slot:
+            self.assertEqual(slot.env({})["KINOWO_GOV_CLASS"], "red")
         self.assertLess(time.time() - t0, 5)
 
     def test_stats_per_concurrency_level(self):

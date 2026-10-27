@@ -200,12 +200,12 @@ class WaitingTest(Base):
         self.reds = set()
         check, joined = A.batch_check, []
 
-        def joining(repo, d, tree, base, tip):
+        def joining(repo, d, tree, base, tip, cls="check"):
             if not joined:
                 self.reds = {"7"}  # red again for a moment: b joins while a's batch is being checked
                 joined.append(self.land(wb))
                 self.reds = set()
-            return check(repo, d, tree, base, tip)
+            return check(repo, d, tree, base, tip, cls)
         A.batch_check = joining
         try:
             A.waiting_run(self.r.path, once=True)
