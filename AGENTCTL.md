@@ -295,6 +295,11 @@ agent must be assigned to it".
 - **Services re-exec only onto good code.** `restart_if_changed` needs the file to equal ~/bin's HEAD version (a dirty
   edit is never picked up) and HEAD to pass `py_compile` and `agentctl --selftest`; otherwise the old code keeps running
   and one inbox entry `CODE REFUSED` names the commit.
+- **A fix for a red outside the gate** (`Fixes-Red: N` naming e.g. an Identity capture run) is verified by the watch at
+  once: the workflow is dispatched on main (workflow_dispatch, default inputs), waited for, and `FIX OK` / `FIX FAILED`
+  goes to the inbox, the claim is released and the snapshot refreshed. One verification at a time per workflow (a second
+  fix landing meanwhile gets none), counted in the daily dispatch budget. No workflow_dispatch: `FIX UNVERIFIED until
+  next scheduled run (cron ...)`.
 - Headless fixers carry the Forgejo token (fixer_env); CI reads never block on the owner, `BLOCKED ON OWNER` is for real
   owner actions only.
 - **An unreadable gate** (Forgejo, the tunnel, the vault or the token down): the patrol dispatches nothing, writes ONE

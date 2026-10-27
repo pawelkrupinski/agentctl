@@ -344,9 +344,13 @@ def gh_json(o_r, *args):
     return json.loads(r.stdout)
 
 
-def api(o_r, method, path, params=None):
+def api(o_r, method, path, params=None, body=None):
     url = f"{API}/repos/{o_r}/{path}" + ("?" + urllib.parse.urlencode(params) if params else "")
-    req = urllib.request.Request(url, method=method, headers={"Authorization": f"token {token(o_r)}"})
+    headers = {"Authorization": f"token {token(o_r)}"}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, method=method, headers=headers,
+                                 data=json.dumps(body).encode() if body is not None else None)
     with urllib.request.urlopen(req, timeout=60) as resp:
         body = resp.read()
     return json.loads(body) if body else None
@@ -2055,7 +2059,8 @@ def fixer_records():
 
 def dispatches_today(now_=None):
     day = dt.datetime.fromtimestamp(now_ if now_ is not None else time.time(), dt.timezone.utc).strftime("%Y-%m-%d")
-    return sum(1 for r in fixer_records() if str(r.get("started", "")).startswith(day))
+    return (sum(1 for r in fixer_records() if str(r.get("started", "")).startswith(day))
+            + sum(1 for p in glob.glob(reds_dir("verify", "*.json")) if str((read_record(p) or {}).get("at", "")).startswith(day)))
 
 
 KIND_ORDER = {"test": 0, "unclear": 1, "infra": 2}
@@ -4524,6 +4529,104 @@ def claimed_run(o_r, n, listed):
     return None, None
 
 
+# -- a fix for a red OUTSIDE the gate (Identity capture, weekly or on dispatch) is verified now, not at the next
+# scheduled run (the owner, 2026-10-27): its workflow is dispatched on main (workflow_dispatch; the inputs are the
+# workflow's defaults), the run waited for, FIX OK / FIX FAILED to the inbox, the claim released, the snapshot refreshed.
+# One verification dispatch per workflow at a time (a second fix landing while one is pending gets none: the pending
+# run is the newest to start), counted in the daily dispatch budget. No workflow_dispatch: FIX UNVERIFIED until the
+# next scheduled run.
+VERIFY_WAIT = 2 * 3600
+
+
+def repo_for_verify(o_r):
+    return scan_repo_for(o_r) or repo_path_for(o_r)
+
+
+def workflow_file_of(repo, sha, name):
+    """(path in the tree, text) of the workflow file whose `name:` is `name`, at sha."""
+    for d in (".forgejo/workflows", ".github/workflows"):
+        r = git(repo, "ls-tree", "--name-only", sha, f"{d}/", check=False)
+        for path in r.stdout.split():
+            txt = git(repo, "show", f"{sha}:{path}", check=False).stdout
+            if re.search(rf"^name:\s*[\"']?{re.escape(name)}[\"']?\s*$", txt, re.M):
+                return path, txt
+    return None, ""
+
+
+def verify_dir(*parts):
+    return reds_dir("verify", *parts)
+
+
+def verify_outside_gate(o_r, repo, sha, n):
+    """The verdict line for `Fixes-Red: n` naming a run outside the gate, or None when n is no run at all."""
+    try:
+        old = gh_json(o_r, "run", "view", str(n), "--json", RUN_FIELDS)
+    except Exception:
+        return None
+    name = old.get("workflowName")
+    path, txt = workflow_file_of(repo, sha, name) if name else (None, "")
+    if not path:
+        return None
+    flow = os.path.basename(path)
+    if "workflow_dispatch" not in txt:
+        cron = re.search(r"cron:\s*[\"']([^\"']+)[\"']", txt)
+        return (f"FIX UNVERIFIED until next scheduled run{' (cron ' + cron.group(1) + ')' if cron else ''}: {name} has no "
+                f"workflow_dispatch (fix {sha[:10]} claimed #{old.get('number')})")
+    rec_path = verify_dir(re.sub(r"[^\w.-]+", "_", name) + ".json")
+    rec = read_record(rec_path) or {}
+    if rec.get("pending") and time.time() - float(rec.get("epoch") or 0) < VERIFY_WAIT:
+        return (f"FIX UNVERIFIED: {name} already has a verification run pending ({rec.get('fix', '')[:10]}); "
+                f"fix {sha[:10]} gets none of its own")
+    cap = int(env_num("AGENTCTL_RED_DAILY_CAP", RED_DAILY_CAP))
+    if dispatches_today() >= cap:
+        return f"FIX UNVERIFIED: daily dispatch budget ({cap}) reached; {name} not dispatched for fix {sha[:10]}"
+    t0 = time.time()
+    os.makedirs(verify_dir(), exist_ok=True)
+    write_json(rec_path, {"fix": sha, "run": n, "workflow": name, "file": flow, "at": ts(), "epoch": t0, "pending": True})
+    try:
+        api(o_r, "POST", f"actions/workflows/{flow}/dispatches", body={"ref": "main", "inputs": {}})
+    except Exception as e:
+        write_json(rec_path, {**read_record(rec_path), "pending": False, "error": str(e)[:160]})
+        return f"FIX UNVERIFIED: could not dispatch {name} on main ({str(e)[:120]}); fix {sha[:10]} claimed #{old.get('number')}"
+    new = None
+    poll = env_num("AGENTCTL_VERIFY_POLL", 30)
+    while time.time() - t0 < env_num("AGENTCTL_VERIFY_WAIT", VERIFY_WAIT):
+        runs = gh_json(o_r, "run", "list", "--workflow", flow, "--branch", "main", "--limit", "10", "--json", RUN_FIELDS)
+        fresh = [r for r in runs if r["databaseId"] > old["databaseId"] and not is_cancelled(r)
+                 and r.get("databaseId") not in (rec.get("seen") or [])]
+        new = min(fresh, key=lambda r: r["databaseId"]) if fresh else None
+        if new and new.get("status") == "completed":
+            break
+        new = None
+        time.sleep(poll)
+    write_json(rec_path, {**read_record(rec_path), "pending": False, "new_run": new and new.get("databaseId")})
+    if not new:
+        return f"FIX UNVERIFIED: the verification run of {name} did not finish in time (fix {sha[:10]} claimed #{old.get('number')})"
+    was = failed_jobs(o_r, old["databaseId"])
+    now_ = job_results(o_r, new["databaseId"])
+    again = [j for j in was if now_.get(j) in ("failure", "timed_out", "cancelled")]
+    if again or (not was and new.get("conclusion") != "success"):
+        return (f"FIX FAILED: {name} #{new.get('number')} (verification dispatch) still fails "
+                f"{', '.join(again) or 'a job'} (fix {sha[:10]} claimed #{old.get('number')})")
+    release_claims_for(n, old)
+    try:
+        ci_state_refresh(o_r)
+    except (Exception, SystemExit):
+        pass
+    return f"FIX OK: #{old.get('number')} cleared by #{new.get('number')} (verification dispatch of {name})"
+
+
+def release_claims_for(n, old):
+    names = {str(n), str(old.get("number")), str(old.get("databaseId"))}
+    for c in all_claims():
+        if names & set(map(str, c.get("runs") or [])) | ({str(c.get("run"))} & names):
+            try:
+                os.unlink(c["path"])
+            except OSError:
+                pass
+
+
+
 def verify_fixes(o_r, sha, fixes, done, listed, flows):
     """The owner (2026-10-27): the batch fix 97bb6d835 claimed Fixes-Red 2047, Main #2059 failed again in the same
     worker-identity job, and nothing said so. For each claimed run N: the first completed run of N's workflow containing
@@ -4532,7 +4635,9 @@ def verify_fixes(o_r, sha, fixes, done, listed, flows):
         try:
             kind, old = claimed_run(o_r, n, listed)
             if old is None:
-                line = f"FIX UNVERIFIED: #{n} (fix {sha[:10]}) is not a run of {' or '.join(f[0] for f in flows.values())}"
+                line = verify_outside_gate(o_r, repo_for_verify(o_r), sha, n)
+                if line is None:
+                    line = f"FIX UNVERIFIED: #{n} (fix {sha[:10]}) is not a run of {' or '.join(f[0] for f in flows.values())}"
             elif kind not in done or done[kind][0] is None:
                 line = (f"FIX UNVERIFIED: no completed {flows[kind][0]} run containing {sha[:10]} when the watch ended "
                         f"(fix claimed #{old.get('number')})")

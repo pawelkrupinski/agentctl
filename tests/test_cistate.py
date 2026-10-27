@@ -221,3 +221,64 @@ class RestartGateTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+CAPTURE_YML = "name: Identity capture\non:\n  schedule:\n    - cron: '0 3 * * 1'\n  workflow_dispatch:\n"
+NODISPATCH_YML = "name: Identity capture\non:\n  schedule:\n    - cron: '0 3 * * 1'\n"
+
+
+class VerifyOutsideGateTest(RedBase):
+    def setUp(self):
+        super().setUp()
+        os.environ["AGENTCTL_VERIFY_POLL"] = "0"
+        self.addCleanup(os.environ.pop, "AGENTCTL_VERIFY_POLL", None)
+        self.put("runs.json", green_gate(self, self.sha) + [
+            run(70, 2104, "Identity capture", "identity-capture.yml", self.sha, conclusion="failure")])
+        self.put("run-70.json", {"jobs": [{"name": "capture (uk)", "status": "completed", "conclusion": "failure"}],
+                                 "headSha": self.sha, "number": 2104, "databaseId": 70, "workflowName": "Identity capture"})
+        self.calls = []
+        self.saved_api = A.api
+        A.api = lambda o_r, method, path, params=None, body=None: self.calls.append((method, path, body))
+        self.addCleanup(setattr, A, "api", self.saved_api)
+
+    def workflow(self, text):
+        self.r.write(".forgejo/workflows/identity-capture.yml", text)
+        self.fix = self.r.commit("capture fix")
+        self.r.push()
+
+    def new_run(self, conclusion):
+        self.put("runs.json", green_gate(self, self.sha) + [
+            run(71, 2110, "Identity capture", "identity-capture.yml", self.sha, conclusion=conclusion),
+            run(70, 2104, "Identity capture", "identity-capture.yml", self.sha, conclusion="failure")])
+        self.put("run-71.json", {"jobs": [{"name": "capture (uk)", "status": "completed", "conclusion": conclusion}],
+                                 "headSha": self.sha, "number": 2110, "databaseId": 71, "workflowName": "Identity capture"})
+
+    def test_a_fix_for_a_dispatchable_workflow_dispatches_it_and_reports_fix_ok(self):
+        self.workflow(CAPTURE_YML)
+        self.new_run("success")
+        line = A.verify_outside_gate(MOVIES, self.r.path, self.fix, "70")
+        self.assertEqual(self.calls[0][:2], ("POST", "actions/workflows/identity-capture.yml/dispatches"))
+        self.assertTrue(line.startswith("FIX OK: #2104 cleared by #2110"), line)
+        self.assertEqual(A.dispatches_today(), 1)  # counted in the budget
+
+    def test_a_verification_run_that_still_fails_is_fix_failed(self):
+        self.workflow(CAPTURE_YML)
+        self.new_run("failure")
+        self.assertTrue(A.verify_outside_gate(MOVIES, self.r.path, self.fix, "70").startswith("FIX FAILED"))
+
+    def test_one_verification_at_a_time_per_workflow(self):
+        self.workflow(CAPTURE_YML)
+        A.write_json(A.reds_dir("verify", "Identity_capture.json"), {"fix": "a" * 40, "pending": True, "epoch": time.time(),
+                                                                     "at": A.ts()})
+        line = A.verify_outside_gate(MOVIES, self.r.path, self.fix, "70")
+        self.assertIn("already has a verification run pending", line)
+        self.assertEqual(self.calls, [])
+
+    def test_a_workflow_without_dispatch_says_unverified_until_the_next_scheduled_run(self):
+        self.workflow(NODISPATCH_YML)
+        line = A.verify_outside_gate(MOVIES, self.r.path, self.fix, "70")
+        self.assertIn("FIX UNVERIFIED until next scheduled run (cron 0 3 * * 1)", line)
+        self.assertEqual(self.calls, [])
+
+    def test_a_number_that_is_no_run_is_left_to_the_old_verdict(self):
+        self.assertIsNone(A.verify_outside_gate(MOVIES, self.r.path, self.sha, "99999"))
