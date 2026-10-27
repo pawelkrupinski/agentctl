@@ -521,3 +521,108 @@ class DispatchTest(RedBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+BASE_HOOK = """#!/bin/sh
+head="${2##*..}"
+fail=0
+if git ls-tree -r --name-only "$head" | grep -q BROKEN; then
+  echo "[info] - BrokenSpec should work *** FAILED *** (took 12 ms)"; echo "! pre-push sbt FAILED (3s)"; fail=1
+else echo "pre-push sbt ok (1s)"; fi
+if git ls-tree -r --name-only "$head" | grep -q LINT; then echo "[error] lint: bad style"; echo "! pre-push lint FAILED (1s)"; fail=1; fi
+exit $fail
+"""
+
+
+class BaselineTest(RedBase):
+    """Item 9: pre-push failing on plain forgejo/main is main's own red: recorded, shown, claimable; a change is told
+    which of its failures are its own."""
+
+    def setUp(self):
+        super().setUp()
+        self.hook = os.path.join(self.tmp.name, "hook.sh")
+        with open(self.hook, "w") as f:
+            f.write(BASE_HOOK)
+        os.chmod(self.hook, 0o755)
+        self.r.write("BROKEN", "main's own red\n")
+        self.r.commit("main breaks BrokenSpec")
+        self.r.push()
+        self.put("runs.json", [run(40, 20, "Main", "main.yml", self.sha),
+                               run(39, 19, "Identity model convergence", "identity-model-convergence.yml", self.sha)])
+
+    def dry(self, wt, head):
+        out = io.StringIO()
+        log = os.path.join(self.tmp.name, "land.log")
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            rc = A.dry_run(wt, self.hook, head, log, "t")
+        return rc, out.getvalue()
+
+    def test_parse_the_hooks_failed_checks(self):
+        out = ("\x1b[33m! pre-push\x1b[0m [error] x *** FAILED *** 12 ms\n\x1b[33m! pre-push\x1b[0m sbt FAILED (3s)\n"
+               "\x1b[36m▸ pre-push\x1b[0m lint ok (1s)\n")
+        self.assertEqual(set(A.check_failures(out)), {"sbt"})
+        self.assertEqual(A.check_passes(out), {"lint"})
+
+    def test_a_change_failing_only_where_main_fails_is_told_so_and_main_s_red_is_recorded(self):
+        wt, head = self.worktree_commit("repo-wt-ok", "an innocent change")
+        rc, out = self.dry(wt, head)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("KNOWN RED: sbt fails the same way on plain forgejo/main", out)
+        self.assertIn("NOT LANDED: the pre-push checks failed only where plain forgejo/main fails too (sbt", out)
+        self.assertEqual(set(A.local_red()["checks"]), {"sbt"})
+        rc, out = self.why()
+        self.assertIn("Local checks: RED on plain forgejo/main", out)
+        self.assertIn("  fixing: NOBODY", out)
+        self.assertIn("brokenspec should work", out)
+        os.environ["AGENTCTL_CLAIM_PID"] = str(os.getpid())
+        try:
+            rc, out = self.tool("red", "claim", "local", "--repo", "movies", cwd=wt)
+        finally:
+            os.environ.pop("AGENTCTL_CLAIM_PID")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("claimed Local checks #local [sbt]", out)
+        self.assertIn("claimed)", self.why()[1])
+        self.assertIn("local checks → ", self.why("--summary")[1])
+
+    def test_a_change_with_a_failure_of_its_own_is_told_which(self):
+        self.r.write("LINT", "x\n")
+        wt = self.r.worktree("repo-wt-bad", branch="bad")
+        self.r.write("LINT", "bad\n", at=wt)
+        head = self.r.commit("a lint error", at=wt)
+        rc, out = self.dry(wt, head)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("KNOWN RED (not held against this change): sbt; NEW with this change: lint", out)
+        self.assertIn("NOT LANDED: the pre-push checks failed.", out)
+
+    def test_a_passing_check_clears_main_s_known_red(self):
+        wt, head = self.worktree_commit("repo-wt-ok2", "innocent")
+        self.dry(wt, head)
+        self.assertTrue(A.local_red())
+        os.remove(os.path.join(wt, "BROKEN"))
+        fix = self.r.commit("fix BrokenSpec\n\nFixes-Red: local", at=wt)
+        rc, out = self.dry(wt, fix)
+        self.assertIsNone(rc, out)
+        self.assertEqual(A.local_red(), {})
+
+
+class HeartbeatTest(RedBase):
+    def test_a_dispatched_fixer_past_its_wall_time_is_ended_and_says_so(self):
+        os.environ.update(FAKE_CLAUDE_SLEEP="30", AGENTCTL_RED_FIXER_WALL="1")
+        try:
+            A.red_dispatch(MOVIES, self.r.path, self.units()[0])
+            done = self.wait_fixer(timeout=40)
+        finally:
+            os.environ.pop("FAKE_CLAUDE_SLEEP")
+            os.environ.pop("AGENTCTL_RED_FIXER_WALL")
+        self.assertEqual(done[0]["kind"], "FIXER_FAILED")
+        self.assertIn("TIMED OUT after 0 min (maximum wall time)", done[0]["verdict"])
+
+    def test_a_live_dispatched_fixer_whose_log_is_quiet_for_30_min_is_stale(self):
+        log = os.path.join(self.tmp.name, "quiet.log")
+        open(log, "w").close()
+        old = time.time() - 45 * 60
+        os.utime(log, (old, old))
+        c = {"who": "red-fixer-20", "pid": os.getpid(), "started": A.iso_at(old), "dispatched": True, "log": log}
+        self.assertIn("quiet for 45 min", A.claim_stale(c))
+        c["dispatched"] = False  # an interactive claimant alive is alive
+        self.assertIsNone(A.claim_stale(c))
