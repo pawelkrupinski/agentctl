@@ -142,6 +142,8 @@ class OwnedTest(unittest.TestCase):
         execs = []
         saved = A.os.execv, A.START_CODE, A.sys.argv
         A.os.execv = lambda exe, args: execs.append(args)
+        gate, A.restart_gate = A.restart_gate, lambda: (True, "")
+        self.addCleanup(setattr, A, "restart_gate", gate)
         A.START_CODE, A.sys.argv = "an-older-agentctl", ["agentctl", "land"]
         A._last_code_check[0] = 0.0
         try:

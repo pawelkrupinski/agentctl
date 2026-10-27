@@ -282,6 +282,21 @@ agent must be assigned to it".
   runs the dry run once more, and the hook passes a check that fails only as it fails on plain main (`KNOWN RED: <check>
   ...`), its pass stored, so the push reuses it. A change that fixes main's red just passes. Fail-closed: no baseline
   for the push's base, and every failure blocks as before.
+- **A stale local red.** `reds/local.json` is keyed to the main sha it was computed on. Once forgejo/main moves past it
+  the record is shown as `Local checks: stale, rechecking` (never RED, no unit, no dispatch) and the failing checks are
+  run again on the new main (the hook over empty-tree..main, other checks skipped, governor check class): in the
+  background by the processor's patrol, synchronously by `red patrol`, or by a land's passing dry run. A pass clears the
+  red, releases its claims, stops its dispatched fixer (process groups) and writes `FIX OK` to the inbox; the fixer's
+  worktrees whose commits are patch-equivalent on main (`git cherry`) are removed, any other is an inbox `RED LEFTOVER`.
+- **One CI-state snapshot.** The processor reads every main workflow once per cycle into
+  `~/.cache/agentctl/ci-state.json`; the gate verdict, the outside-the-gate reds, the published summary and the patrol
+  read it (older than 3 min: unread, never green). `ci-why --summary` is one line: `gate green · reds: Identity capture
+  #2104 → drift; local → stale, rechecking` or `gate green · no reds` (at most 3 reds, then `+N more`).
+- **Services re-exec only onto good code.** `restart_if_changed` needs the file to equal ~/bin's HEAD version (a dirty
+  edit is never picked up) and HEAD to pass `py_compile` and `agentctl --selftest`; otherwise the old code keeps running
+  and one inbox entry `CODE REFUSED` names the commit.
+- Headless fixers carry the Forgejo token (fixer_env); CI reads never block on the owner, `BLOCKED ON OWNER` is for real
+  owner actions only.
 - **An unreadable gate** (Forgejo, the tunnel, the vault or the token down): the patrol dispatches nothing, writes ONE
   `UNKNOWN: the red patrol cannot read the gate (…)` per spell with an infra check (ports 3000 / 2222, the token),
   and pushes fail closed (an unread gate is red).
