@@ -217,6 +217,31 @@ class WatchTest(Base):
         rc, out, fix = self.fix_scenario({"test (worker-identity)": "failure"})
         self.assertIn("FIX FAILED: Main #2059 still fails test (worker-identity)", out)
 
+    def test_a_watch_whose_worktree_was_removed_after_landed_still_ends_with_its_verdict(self):
+        # 2026-10-27: `crashed: RuntimeError: git rev-parse --show-toplevel in ~/projects/movies-wt-gate-closed`: the
+        # agent removed its worktree at LANDED (as the brief says) while the detached watch still ran in it
+        import contextlib, io
+        wt = self.r.worktree("repo-wt-gone", base=self.sha)
+        self.main = [run(11, self.sha)]
+        self.conv = [run(12, self.sha, created=self.pushed_at + 5)]
+        old, saved_slug = os.getcwd(), A.slug
+        A.slug = lambda repo: MOVIES
+        out = io.StringIO()
+        try:
+            os.chdir(wt)
+            import subprocess
+            subprocess.run(["git", "-C", self.r.path, "worktree", "remove", "--force", wt], check=True)
+            self.assertFalse(os.path.exists(wt))
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+                rc = A.main(["watch", "--repo", wt, "--sha", self.sha, "--pushed-at", str(self.pushed_at), "--close", wt])
+        finally:
+            os.chdir(old)
+            A.slug = saved_slug
+        self.assertEqual(rc, 0, out.getvalue())
+        self.assertIn("WATCH OK: Main #11 green, convergence #12 green", out.getvalue())
+        self.assertNotIn("crashed", out.getvalue())
+        self.assertEqual(A.main_clone(wt), os.path.realpath(self.r.path))
+
     def test_other_repos_watch_nothing(self):
         import contextlib, io
         out = io.StringIO()

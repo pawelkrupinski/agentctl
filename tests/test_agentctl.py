@@ -15,6 +15,12 @@ os.environ.setdefault("AGENTCTL_INBOX_DIR", tempfile.mkdtemp(prefix="agentctl-in
 os.environ.setdefault("AGENTCTL_SBT_REAP", "0")
 # ...nor listens on this machine's token hand-off sockets (a short dir: a socket path is <= 104 bytes).
 os.environ.setdefault("AGENTCTL_SOCK_DIR", tempfile.mkdtemp(dir="/tmp", prefix="agentctl-sock-test-"))
+# ...nor reads or writes this machine's red claims and fixers, nor scans its worktrees, nor patrols from a test's
+# processor, nor ever finds the real `claude` CLI.
+os.environ.setdefault("AGENTCTL_REDS_DIR", tempfile.mkdtemp(prefix="agentctl-reds-test-"))
+os.environ.setdefault("AGENTCTL_RED_REPO", "-")
+os.environ.setdefault("AGENTCTL_RED_PATROL", "0")
+os.environ.setdefault("AGENTCTL_CLAUDE", "/nonexistent/claude")
 # ...nor takes this machine's pre-commit check slots, nor writes its measurements or cap.
 os.environ.setdefault("AGENTCTL_CHECKS_DIR", tempfile.mkdtemp(prefix="agentctl-checks-test-"))
 

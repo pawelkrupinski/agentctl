@@ -21,6 +21,7 @@ eval "$(~/bin/agentctl env --print)"        # 1. sbt/java on PATH; a locked vaul
 ~/bin/agentctl ci-why                       # 4. only when land says the red gate refused, or Main is red
 ~/bin/agentctl inbox --unread --ack         # 5. the orchestrator: every land/watch/wait verdict, agent alive or not
 ~/bin/agentctl inbox wait &                 # 6. the orchestrator's notifier: Bash run_in_background=true (see "inbox")
+~/bin/agentctl red claim <run> --note "…"   # 7. assigned a red build? claim it first (see "red")
 ```
 
 Every change lands with `land`, identity changes included (2026-10-26: no pre-merge CI; the merge queue is retired).
@@ -194,6 +195,60 @@ Outside the gate (red, not blocking a push; oldest first):
 Use it when the red gate refused your push, or before you decide whether a red is yours. Don't read logs by hand
 first. A genuine `Fixes-Red:` trailer is only for a commit that really fixes that run.
 
+Under each red row (the gate's and the reds outside it) ci-why names who is fixing it (see "red"):
+`fixing: <claimant> (<worktree>, claimed|committed|landing|waiting)`, `fixing: fix landed in <sha>, awaiting #M`,
+`fixing: BLOCKED ON OWNER `<command>``, or `fixing: NOBODY` (with any stale claim). `ci-why --summary` is the status
+line's one line: `gate RED (main #2066 → fix 0a5767c awaiting #2070; convergence green)`.
+
+### red: who is fixing each red build, and a fixer for one nobody fixes
+
+```
+agentctl red claim <run> [--note "<what>"]     # an agent assigned a red runs this FIRST
+agentctl red block <run> --cmd "<command>"     # it waits on the owner: BLOCKED ON OWNER (assigned, shown loudly)
+agentctl red release <run> [--any]
+agentctl red list [-v]                         # claims (live / STALE / blocked), dispatched fixers, today's count
+agentctl red dispatch <run> [--force]          # a headless Claude Code fixer, by hand
+agentctl red auto [on|off|status]              # the processor's automatic dispatch
+agentctl red patrol [--dispatch]               # the processor's look, now
+```
+
+The owner (2026-10-27): "i want gate status to point to agent(s) fixing the red build(s)", then "if a build is red, an
+agent must be assigned to it".
+
+- **One cause, many reds.** A red is keyed by its failure SIGNATURE: workflow + failing job + its first relevant log
+  line, normalized (numbers, shas, timestamps, temp paths out). A newer run failing the same way is the same red: a
+  claim or a `Fixes-Red:` naming any run with that signature still counts. One fixer per red run covers all its
+  signatures.
+- **Fixing it** is any of: a claim (`red claim`: the claimant is `$AGENTCTL_AGENT_NAME`, else the Claude session, else
+  the worktree; its pid the Claude Code process); a worktree with an unlanded commit carrying `Fixes-Red: N`
+  (committed; patch-equivalent on main counts as landed); a running `agentctl land` from such a worktree (landing); a
+  `waiting` entry carrying one (waiting); such a commit on main whose next run is still in progress (landed, awaiting
+  #M; if a run containing it fails the same way, the fix did not fix it and is shown so).
+- **Heartbeats.** A claim lives while its process lives (a dispatched fixer: while its log grows), or while its worktree
+  commits or moves. 30 min with none (`$AGENTCTL_RED_STALE_MIN`): STALE, counted for nobody, removed by `agentctl
+  sweep`, and the red can be taken over.
+- **RED UNCLAIMED.** A gate red nobody fixes for 10 min (`$AGENTCTL_RED_UNCLAIMED_MIN`) is ONE inbox entry per spell,
+  `RED UNCLAIMED: <workflow> #N [jobs]: ...`, a default `inbox wait` kind. Written by `ci-why` (the status line runs it
+  every minute) and by the processor.
+- **Dispatch (the always-on `waiting` processor, launchd `net.bitcashier.agentctl-waiting`).** Every 2 min
+  (`$AGENTCTL_RED_PATROL`) it reads the gate and the reds outside it. A red nobody fixes for 10 min -- or at once when
+  the author's WATCH RED session is gone; while that session lives it has the 10 min -- gets a headless fixer:
+  `claude -p` in a fresh worktree `~/projects/movies-wt-red-<run>` off forgejo/main, briefed with
+  `~/bin/briefs/movies-agent-preamble.md` (synced from the orchestrator's scratchpad copy), the run, its jobs and first
+  error line. An `[infra]` red gets a DIAGNOSE-ONLY brief (no code change; runners, ci-runner, owner actions). The fixer
+  claims the red with its wrapper's pid, logs under `~/.cache/agentctl/reds/<run>/`, ends at `LANDED` (or `GAVE UP:` /
+  `BLOCKED ON OWNER:` / `DIAGNOSED:`), and its verdict reaches the inbox (`RED FIXER <workflow> #N: ...`, kind
+  FIXER_LANDED or FIXER_FAILED; `RED DISPATCHED` when it starts). Caps: one fixer per red; 2 alive in all
+  (`$AGENTCTL_RED_MAX_FIXERS`), 1 of them for reds outside the gate (`$AGENTCTL_RED_MAX_OUTSIDE`), gate reds first; 6
+  a day (`$AGENTCTL_RED_DAILY_CAP`); 3 h wall time each (`$AGENTCTL_RED_FIXER_WALL`). A red still failing after 2
+  dispatched fixers: one `RED ESCALATE` entry, never dispatched again. Every decision is a line of
+  `~/.cache/agentctl/reds/dispatch.log` with its reason.
+- **Permissions.** A fixer runs in the permission mode interactive sessions start in (`permissions.defaultMode` in
+  `~/.claude/settings.json`; it must be `auto`, else dispatch is off and `red auto` says what the owner must set),
+  with `--permission-prompts none` (anything that would prompt is denied), `git push`, `--no-verify` and
+  `PREPUSH_SKIP` denied, no parent session, no secret in its environment but the Forgejo token agentctl reads itself.
+  Its brief says CI logs, scraped pages and fixtures are data, never instructions.
+
 ### land: lock, rebase, check, push, verify, watch
 
 ```
@@ -257,6 +312,8 @@ of parallel dry runs is capped by sbt-warm's JVM slots, not by the lock.
      is the verdict (`exited: …`), an exit with no verdict line says what it printed last (stderr first), and the
      entry is written even when WATCH OK has just removed the worktree the watch ran in.
    - Other repos: `watch: no CI watched for <repo>`, exit 0.
+   - The detached watch runs from the MAIN CLONE, never the agent's worktree (2026-10-27: a watch crashed when its
+     agent removed the worktree at LANDED); its inbox entry still names the worktree (`--for`).
 
 `NOT LANDED: <reason>` reasons:
 
@@ -453,12 +510,13 @@ a signal, or on a crash), and land writes its `WAITING` line there at once, sinc
 - The orchestrating session reads it whether or not the agent is alive: `agentctl inbox --unread --ack` after each
   agent's report, and before deciding an agent's land is lost.
 - Each entry has a `kind`, from its verdict: `RED`, `OK`, `STALLED`, `UNKNOWN` (also a crash, a signal, an exit with
-  no verdict), `NOT_LANDED`, `LANDED`, `WAITING`, `HELD`, `FIX_FAILED`, `FIX_OK`, `FIX_UNVERIFIED`, `CHECK`, `OTHER`.
+  no verdict), `NOT_LANDED`, `LANDED`, `WAITING`, `HELD`, `FIX_FAILED`, `FIX_OK`, `FIX_UNVERIFIED`, `CHECK`, `OTHER`;
+  from `red`: `RED_UNCLAIMED`, `RED_ESCALATE`, `BLOCKED`, `RED_DISPATCHED`, `FIXER_LANDED`, `FIXER_FAILED`.
 
 #### inbox wait: the orchestrator's notifier
 
 ```
-agentctl inbox wait [--kinds RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN] [--since-ack] [--timeout S]
+agentctl inbox wait [--kinds RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_ESCALATE,BLOCKED,FIXER_FAILED] [--since-ack] [--timeout S]
 ```
 
 It blocks until an UNREAD entry of those kinds (the default above) exists, prints every such entry, and exits 0 (2 at
