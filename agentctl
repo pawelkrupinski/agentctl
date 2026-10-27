@@ -4132,8 +4132,15 @@ def recheck_local(repo, wait=True):
 
 
 def _recheck_guarded(repo, main):
+    """One recheck at a time across processes (the processor's and a `red patrol`): the second one leaves it."""
+    os.makedirs(reds_dir("local"), exist_ok=True)
     try:
-        return run_local_recheck(repo, main)
+        with open(reds_dir("local", "recheck.lock"), "a+") as lf:
+            try:
+                fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return []
+            return run_local_recheck(repo, main)
     except (Exception, SystemExit) as e:
         err(f"local recheck: skipped ({str(e).replace('agentctl: ', '')[:200]})")
         return []
