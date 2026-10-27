@@ -1,0 +1,36 @@
+#!/bin/bash
+# Claude Code status line: the movies landing state in one line.
+#   gate RED (convergence #2036) · waiting: 3 — dep-index step 1…, metrics fix… · inbox: 2 unread
+# The status line runs often, so this prints a cached line at once and refreshes the cache in the background
+# at most once a minute (ci-why talks to Forgejo). `claude-statusline --refresh` rebuilds it in the foreground.
+set -u
+cache="${HOME}/.cache/agentctl/statusline.txt"
+lock="${HOME}/.cache/agentctl/statusline.lock"
+repo="${HOME}/projects/movies"
+mkdir -p "$(dirname "$cache")"
+cat >/dev/null # the session JSON Claude Code sends on stdin; not needed
+
+refresh() {
+  local gate waiting inbox line
+  gate=$(cd "$repo" && ~/bin/agentctl ci-why 2>/dev/null | awk '
+    NR == 1 { state = ($0 ~ /is RED/) ? "RED" : (($0 ~ /is green/) ? "green" : "?") }
+    / RED \(run / { split($0, a, ":"); name = a[1]; sub(/^ +/, "", name)
+                    if (match($0, /#[0-9]+/)) n2 = tolower(name); sub(/identity model /, "", n2); sub(/verify scrape /, "", n2); reds = reds (reds ? ", " : "") n2 " " substr($0, RSTART, RLENGTH) }
+    END { printf "gate %s", state; if (reds) printf " (%s)", reds }')
+  waiting=$(cd "$repo" && ~/bin/agentctl waiting status 2>/dev/null | awk '
+    /^  [0-9]{8}-/ { n++; w = $2; sub(".*/movies-wt-", "", w); names = names (names ? ", " : "") w }
+    END { if (n) printf "waiting: %d — %s", n, names; else printf "waiting: 0" }')
+  inbox=$(~/bin/agentctl inbox --unread 2>/dev/null | grep -c UNREAD)
+  line="${gate:-gate ?} · ${waiting:-waiting: ?} · inbox: ${inbox:-0} unread"
+  printf '%s\n' "$line" >"$cache.tmp" && mv "$cache.tmp" "$cache"
+}
+
+if [ "${1:-}" = "--refresh" ]; then refresh; cat "$cache"; exit 0; fi
+
+age=999999
+[ -f "$cache" ] && age=$(( $(date +%s) - $(stat -f %m "$cache") ))
+if [ "$age" -ge 60 ] && mkdir "$lock" 2>/dev/null; then
+  ( trap 'rmdir "$lock"' EXIT; refresh ) >/dev/null 2>&1 </dev/null &
+  disown 2>/dev/null || true
+fi
+if [ -f "$cache" ]; then cat "$cache"; else echo "landing state: loading…"; fi
