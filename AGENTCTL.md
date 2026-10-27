@@ -194,11 +194,17 @@ first. A genuine `Fixes-Red:` trailer is only for a commit that really fixes tha
 agentctl land [--repo PATH] [--branch B] [--stash] [--no-watch] [--keep-worktree]   # agents: Bash run_in_background=true
 ```
 
-Steps, in order:
+Steps, in order. Since 2026-10-27 the LONG part runs before the lock: fetch, rebase, the squash guard and step 6's
+dry run first, unlocked; then, under the lock, steps 1-5 again (seconds) and, when forgejo/main has not moved since the
+dry run, straight to the push, whose hook reuses that pass. Main moved: the lock is given back and the dry run repeats
+on the new main, unlocked (twice; a third time it runs under the lock, so a lander always finishes). A step that makes
+no progress -- no output and no CPU in its process group for 20 min (`$AGENTCTL_LAND_STALL_MIN`) -- is ended with
+`NOT LANDED: stalled <step>` (one land's hook hung 2.5 h in sbt-warm on 2026-10-27 and held every lander). The JVM load
+of parallel dry runs is capped by sbt-warm's JVM slots, not by the lock.
 
 1. take the repository's landing lock (an flock per git common dir under `~/.cache/agentctl/land/`), waiting for
-   another lander's to be released (`waiting for the landing lock (…), held by: pid … <worktree> since …`;
-   `$AGENTCTL_LAND_LOCK_TIMEOUT`, default 4 h);
+   another lander's to be released (`waiting for the landing lock (…), held for 12 min by: pid … <worktree> since …;
+   now: checks of <sha> since …`, repeated every 10 min; `$AGENTCTL_LAND_LOCK_TIMEOUT`, default 4 h);
 2. fetch (retried once after 15 s, since a tunnel restart takes seconds);
 3. `git rebase forgejo/main`; on a conflict it aborts and lists the files;
 4. `prepush-check` against forgejo/main;
@@ -242,6 +248,7 @@ Steps, in order:
 - (later, for a waiting change) main moved and the change no longer applies, or the green-main batch failed with it;
 - the pre-push checks failed (the dry run: its last 25 lines; the full log in `scratchpad/agentctl-land-*.log`);
 - red gate (followed by the `ci-why` summary);
+- `stalled <step>`: the dry run, the push or the waiting checks made no progress for 20 min and were ended;
 - hook failure at push time (its last 25 lines, plus a tunnel hint when Forgejo was unreachable);
 - still racing;
 - pushed but not on main.

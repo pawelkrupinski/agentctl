@@ -186,6 +186,94 @@ class LandTest(Base):
         self.assertFalse(os.path.exists(pushes), "a failed dry run must not reach git push")
         self.assertNotEqual(self.remote_main(), sha)
 
+    def lock_probe(self, out):
+        """Shell that records whether the landing lock is FREE (another process can take it) while it runs."""
+        path = A.land_lock_path(self.r.path)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        return (f"{sys.executable} -c \"import fcntl,sys\n"
+                f"f=open(sys.argv[1],'a+')\n"
+                f"try: fcntl.flock(f, fcntl.LOCK_EX|fcntl.LOCK_NB); print('free')\n"
+                f"except BlockingIOError: print('held')\" {path} >> {out}")
+
+    def mine(self):
+        self.r.write("f1.txt", "mine\n")
+        return self.r.commit("mine")
+
+    def test_the_checks_run_before_the_lock_is_taken(self):
+        probes = os.path.join(self.tmp.name, "probes")
+        self.hook("exit 0")
+        self.repo_hook(self.lock_probe(probes))
+        self.r.commit("the repo's hook")
+        self.r.push()
+        sha = self.mine()
+        rc, out = self.land()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(open(probes).read().split(), ["free"], "the long checks never hold the lock")
+        self.assertEqual(self.remote_main(), sha)
+
+    def test_main_moving_under_the_lock_rechecks_outside_it(self):
+        probes, other = os.path.join(self.tmp.name, "probes"), os.path.join(self.tmp.name, "other")
+        sh(self.r.root, "git", "clone", "-q", self.r.bare, other)
+        marker = os.path.join(self.tmp.name, "moved")
+        self.hook("exit 0")
+        # the first check lets another agent land: under the lock main has moved, so land checks again, unlocked
+        self.repo_hook(self.lock_probe(probes) + f"\n[ -f {marker} ] && exit 0\ntouch {marker}\n"
+                       f"cd {other} && git -c core.hooksPath=/dev/null commit -q --allow-empty -m racer "
+                       f"&& git -c core.hooksPath=/dev/null push -q origin HEAD:main\nexit 0")
+        self.r.commit("the repo's hook")
+        self.r.push()
+        sh(other, "git", "pull", "-q", "origin", "main")
+        self.mine()
+        rc, out = self.land()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("moved since the check", out)
+        self.assertEqual(open(probes).read().split(), ["free", "free"])
+        self.assertEqual(sh(self.r.root, "git", "--git-dir", self.r.bare, "log", "-2", "--format=%s", "main").split("\n"),
+                         ["mine", "racer"])
+
+    def test_a_stalled_check_ends_with_not_landed_and_frees_the_lock(self):
+        pushes = os.path.join(self.tmp.name, "pushes")
+        self.hook(f"echo push >> {pushes}")
+        self.repo_hook("echo checking; sleep 60")  # silent and idle: no output, no CPU
+        self.r.commit("the repo's hook")
+        self.r.push()
+        os.remove(pushes)
+        sha = self.mine()
+        os.environ["AGENTCTL_LAND_STALL_MIN"] = "0.02"  # 1.2 s
+        try:
+            rc, out = self.land()
+        finally:
+            del os.environ["AGENTCTL_LAND_STALL_MIN"]
+        self.assertEqual(rc, 1, out)
+        self.assertIn("NOT LANDED: stalled checks", out)
+        self.assertIn("checking", out)
+        self.assertFalse(os.path.exists(pushes))
+        self.assertNotEqual(self.remote_main(), sha)
+        self.assertFalse(A.lock_held(A.land_lock_path(self.r.path)))
+
+    def test_a_busy_silent_check_is_progress_not_a_stall(self):
+        self.hook("exit 0")
+        self.repo_hook(f"{sys.executable} -c 'import time\nt=time.time()\nwhile time.time()-t<3: pass'")
+        self.r.commit("the repo's hook")
+        self.r.push()
+        sha = self.mine()
+        os.environ["AGENTCTL_LAND_STALL_MIN"] = "0.02"
+        try:
+            rc, out = self.land()
+        finally:
+            del os.environ["AGENTCTL_LAND_STALL_MIN"]
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.remote_main(), sha)
+
+    def test_a_waiter_says_how_long_the_holder_has_held_the_lock(self):
+        self.hook("exit 0")
+        self.hold_lock(1.5)
+        A.time.sleep = self.sleep
+        self.mine()
+        rc, out = self.land()
+        self.assertEqual(rc, 0, out)
+        self.assertRegex(out, r"waiting for the landing lock \(.*\), held for (\?|\d+ min) by: pid other lander")
+
     def hold_lock(self, seconds):
         """Another lander: a separate process holding this repository's landing lock for <seconds>."""
         path = A.land_lock_path(self.r.path)

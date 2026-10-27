@@ -950,6 +950,82 @@ LAND_RETRIES = 3
 # laptop at one landing hook's JVM at a time.
 LAND_LOCK_DIR = os.path.join(HOME, ".cache", "agentctl", "land")
 LAND_LOCK_TIMEOUT = 4 * 3600
+# NO STALLED HOLDER (the owner, 2026-10-27): one land's hook hung 2.5 h in sbt-warm and blocked every lander behind the
+# lock. A step land runs (the hook's dry run, the push) that makes NO PROGRESS -- its output does not grow and its
+# process group uses no CPU -- for LAND_STALL_MIN minutes ($AGENTCTL_LAND_STALL_MIN) is ended (its process group,
+# TERM then KILL) and land says `NOT LANDED: stalled <step>`. And the long checks run BEFORE the lock: under it, only a
+# fetch, a check that main has not moved since, and the push (whose hook reuses the dry run's pass). Waiters print
+# how long the holder has held the lock, and what it is doing, every LAND_WAIT_REPORT_MIN minutes.
+LAND_STALL_MIN = 20
+LAND_WAIT_REPORT_MIN = 10
+LAND_PRECHECK_ROUNDS = 2  # main moved under the lock this often: the next check runs under it, so a lander finishes
+
+
+def group_cpu_seconds(pgid):
+    """The CPU seconds every live process of process group `pgid` has used (ps's cumulative TIME), or 0."""
+    r = subprocess.run(["ps", "-A", "-o", "pgid=,time="], capture_output=True, text=True)
+    total = 0.0
+    for line in r.stdout.splitlines():
+        parts = line.split()
+        if len(parts) != 2 or parts[0] != str(pgid):
+            continue
+        secs = 0.0
+        for field in re.split(r"[:-]", parts[1]):
+            try:
+                secs = secs * 60 + float(field)
+            except ValueError:
+                pass
+        total += secs
+    return total
+
+
+def run_watched(argv, cwd, env, log_path, step, stall=None):
+    """Run argv (its own process group, stdin closed), its output into a file beside log_path. (returncode, output);
+    returncode None when it STALLED: no output and no CPU in its process group for `stall` seconds, after which the
+    group is ended. Waits with Popen.wait, never time.sleep."""
+    stall = stall if stall is not None else float(os.environ.get("AGENTCTL_LAND_STALL_MIN", LAND_STALL_MIN)) * 60
+    out_path = f"{log_path}.{re.sub(r'[^A-Za-z0-9_-]', '_', step)}.out"
+    with open(out_path, "w") as out:
+        p = subprocess.Popen(argv, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                             start_new_session=True)
+    seen, changed, stalled = None, time.monotonic(), False
+    poll = max(0.2, min(15.0, stall / 4))
+    while True:
+        try:
+            p.wait(timeout=poll)
+            break
+        except subprocess.TimeoutExpired:
+            pass
+        now = (os.path.getsize(out_path), group_cpu_seconds(p.pid))
+        if now != seen:
+            seen, changed = now, time.monotonic()
+        elif time.monotonic() - changed > stall:
+            stalled = True
+            for sig, grace in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
+                try:
+                    os.killpg(p.pid, sig)
+                except ProcessLookupError:
+                    break
+                try:
+                    p.wait(timeout=grace)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            break
+    with open(out_path, errors="replace") as f:
+        output = f.read()
+    try:
+        os.unlink(out_path)
+    except OSError:
+        pass
+    return (None if stalled else p.returncode), output
+
+
+def stalled(step, output, log_path):
+    mins = float(os.environ.get("AGENTCTL_LAND_STALL_MIN", LAND_STALL_MIN))
+    print(f"NOT LANDED: stalled {step}: no output and no CPU for {mins:g} min, so it was ended (the landing lock is free "
+          f"again). Last lines (full log {log_path}):\n  {tail_of(output)}")
+    return 1
 
 
 def tool_env():
@@ -1018,10 +1094,38 @@ def land_lock_path(repo):
     return os.path.join(LAND_LOCK_DIR, re.sub(r"[^A-Za-z0-9._-]", "_", common.strip("/")) + ".lock")
 
 
+_held_lock = [None]  # (file, first line) of the landing lock this process holds
+
+
+def lock_note(step):
+    """Say in the held landing lock's file what the holder is doing now (waiters print it)."""
+    if _held_lock[0]:
+        f, first = _held_lock[0]
+        f.seek(0)
+        f.truncate()
+        f.write(f"{first}; now: {step} since {ts()}\n")
+        f.flush()
+
+
+def held_for(holder):
+    """'37 min' since the holder's `since <ts>`, or '?'."""
+    m = re.search(r"since (\S+?)(?:;|$|\s)", holder)
+    if not m:
+        return "?"
+    try:
+        t = dt.datetime.fromisoformat(m.group(1).replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        return "?"
+    return f"{int((dt.datetime.now(dt.timezone.utc) - t).total_seconds() // 60)} min"
+
+
 @contextlib.contextmanager
 def land_lock(repo):
-    """Hold the repository's landing lock (an flock, freed by the kernel when the holder dies), waiting for it with one
-    line saying who holds it. Yields True when held, False when the wait timed out."""
+    """Hold the repository's landing lock (an flock, freed by the kernel when the holder dies), waiting for it with a
+    line saying who holds it, for how long and doing what, repeated every LAND_WAIT_REPORT_MIN minutes. Yields True
+    when held, False when the wait timed out."""
     path = land_lock_path(repo)
     os.makedirs(LAND_LOCK_DIR, exist_ok=True)
     f = open(path, "a+")
@@ -1029,9 +1133,14 @@ def land_lock(repo):
         try:
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            f.seek(0)
-            err(f"waiting for the landing lock ({path}), held by: {f.read().strip() or 'unknown'}")
+            def holder():
+                f.seek(0)
+                return f.read().strip() or "unknown"
+            h = holder()
+            err(f"waiting for the landing lock ({path}), held for {held_for(h)} by: {h}")
             deadline = time.monotonic() + float(os.environ.get("AGENTCTL_LAND_LOCK_TIMEOUT", LAND_LOCK_TIMEOUT))
+            every = float(os.environ.get("AGENTCTL_LAND_WAIT_REPORT_MIN", LAND_WAIT_REPORT_MIN)) * 60
+            report_at = time.monotonic() + every
             while True:
                 try:
                     fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1040,14 +1149,21 @@ def land_lock(repo):
                     if time.monotonic() > deadline:
                         yield False
                         return
+                    if time.monotonic() > report_at:
+                        h = holder()
+                        err(f"still waiting for the landing lock: held for {held_for(h)} by: {h}")
+                        report_at = time.monotonic() + every
                     time.sleep(5)
             err("got the landing lock")
+        first = f"pid {os.getpid()} {repo} since {ts()}"
         f.seek(0)
         f.truncate()
-        f.write(f"pid {os.getpid()} {repo} since {ts()}\n")
+        f.write(first + "\n")
         f.flush()
+        _held_lock[0] = (f, first)
         yield True
     finally:
+        _held_lock[0] = None
         f.close()
 
 
@@ -1091,11 +1207,23 @@ def cmd_land(a):
             stash.save()
             err(f"stashed local changes as {stash.name} ({stash.sha[:10]})")
         a.landed_sha, a.pushed_at, a.waiting = None, None, None
-        with land_lock(repo) as held:
-            if not held:
-                print("NOT LANDED: timed out waiting for the landing lock (another land is running its checks); land again.")
-                return 1
-            rc = land_loop(repo, main_ref, sh, log_path, a)
+        rc = None
+        for round_ in range(LAND_PRECHECK_ROUNDS + 1):
+            # The long checks first, WITHOUT the lock (the last round: under it, so a lander always finishes).
+            a.prechecked = None
+            if round_ < LAND_PRECHECK_ROUNDS:
+                rc = precheck(repo, main_ref, sh, log_path, a)
+                if rc is not None:
+                    break
+            with land_lock(repo) as held:
+                if not held:
+                    print("NOT LANDED: timed out waiting for the landing lock (another land is running its checks); "
+                          "land again.")
+                    return 1
+                rc = land_loop(repo, main_ref, sh, log_path, a)
+            if rc != MAIN_MOVED:
+                break
+            err(f"{REMOTE}/main moved since the check: checking again on it, outside the lock")
     finally:
         if stash and not stash.restore():
             print(f"WARNING: local changes are in stash {stash.name}, not restored")
@@ -1108,58 +1236,108 @@ def cmd_land(a):
     return watch_landed(repo, a.landed_sha, a.pushed_at, close=None if getattr(a, "keep_worktree", False) else repo)
 
 
+MAIN_MOVED = "main moved"  # land_loop: the check outside the lock no longer covers forgejo/main
+
+
+def sync(repo, main_ref, sh):
+    """Fetch, rebase onto forgejo/main, the squash guard: (rc, None) when land is decided here, else (None, head)."""
+    r = sh("git", "fetch", "--quiet", REMOTE, "main")
+    if r.returncode:  # a tunnel restart is seconds long: one more try before giving up
+        err(f"git fetch failed ({r.stderr.strip()[:120]}); retrying once in 15 s")
+        time.sleep(15)
+        r = sh("git", "fetch", "--quiet", REMOTE, "main")
+    if r.returncode:
+        print(f"NOT LANDED: git fetch {REMOTE} main failed: {r.stderr.strip()[:300]} (tunnel? `agentctl env --check`)")
+        return 1, None
+    head = git(repo, "rev-parse", "HEAD").strip()
+    if landed(repo, head, main_ref):
+        print(f"LANDED {head} (already on {REMOTE}/main)")
+        return 0, None
+    r = sh("git", "rebase", "--quiet", f"{REMOTE}/main")
+    if r.returncode:
+        conflicts = git(repo, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
+        sh("git", "rebase", "--abort")
+        print(f"NOT LANDED: rebase onto {REMOTE}/main conflicts in: {', '.join(conflicts) or r.stderr.strip()[:300]}. "
+              "Resolve by hand (git rebase forgejo/main), then land again.")
+        return 1, None
+    head = git(repo, "rev-parse", "HEAD").strip()
+    if landed(repo, head, main_ref):
+        print(f"LANDED {head} (the rebase left nothing: already on {REMOTE}/main)")
+        return 0, None
+    problems = check_range(repo, f"{REMOTE}/main", head, [], int(os.environ.get("AGENTCTL_MAX_FOREIGN", "2")))
+    if problems:
+        print("NOT LANDED: prepush-check refused:\n  " + "\n  ".join(problems))
+        return 1, None
+    return None, head
+
+
+def dry_run(repo, hook, head, log_path, attempt):
+    """The repo hook's dry run over forgejo/main..head, watched for a stall: None when it passed, else land's rc."""
+    err(f"checking {head[:10]}: {os.path.relpath(hook, repo)} --range {REMOTE}/main..HEAD (log: {log_path})")
+    lock_note(f"checks of {head[:10]}")
+    rc, out = run_watched([hook, "--range", f"{REMOTE}/main..{head}"], repo, tool_env(), log_path, "checks")
+    with open(log_path, "a") as f:
+        f.write(f"=== check {attempt} {ts()} {head}\n{out}\n")
+    if rc is None:
+        return stalled("checks (scripts/hooks/pre-push --range)", out, log_path)
+    if rc != 0:
+        return refused(repo, out, log_path, "the pre-push checks failed")
+    return None
+
+
+def precheck(repo, main_ref, sh, log_path, a):
+    """Before the lock: sync and the hook's dry run (the long part). None when land goes on to the lock (with
+    a.prechecked = (head, base) when the dry run passed there), else land's rc."""
+    rc, head = sync(repo, main_ref, sh)
+    if rc is not None:
+        return rc
+    hook = precheck_hook(repo)
+    if not hook:
+        return None
+    reds = gate_reds(repo) if waiting_supported(repo) else set()
+    if reds and must_wait(repo, waiting_commits(repo, f"{REMOTE}/main", head), reds):
+        return None  # it goes onto `waiting` under the lock, checked there on the combined tip
+    rc = dry_run(repo, hook, head, log_path, "before the lock")
+    if rc is not None:
+        return rc
+    a.prechecked = (head, git(repo, "rev-parse", main_ref).strip())
+    return None
+
+
 def land_loop(repo, main_ref, sh, log_path, a):
     for attempt in range(LAND_RETRIES + 1):
-        r = sh("git", "fetch", "--quiet", REMOTE, "main")
-        if r.returncode:  # a tunnel restart is seconds long: one more try before giving up
-            err(f"git fetch failed ({r.stderr.strip()[:120]}); retrying once in 15 s")
-            time.sleep(15)
-            r = sh("git", "fetch", "--quiet", REMOTE, "main")
-        if r.returncode:
-            print(f"NOT LANDED: git fetch {REMOTE} main failed: {r.stderr.strip()[:300]} (tunnel? `agentctl env --check`)")
-            return 1
-        head = git(repo, "rev-parse", "HEAD").strip()
-        if landed(repo, head, main_ref):
-            print(f"LANDED {head} (already on {REMOTE}/main)")
-            return 0
-        r = sh("git", "rebase", "--quiet", f"{REMOTE}/main")
-        if r.returncode:
-            conflicts = git(repo, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
-            sh("git", "rebase", "--abort")
-            print(f"NOT LANDED: rebase onto {REMOTE}/main conflicts in: {', '.join(conflicts) or r.stderr.strip()[:300]}. "
-                  "Resolve by hand (git rebase forgejo/main), then land again.")
-            return 1
-        head = git(repo, "rev-parse", "HEAD").strip()
-        if landed(repo, head, main_ref):
-            print(f"LANDED {head} (the rebase left nothing: already on {REMOTE}/main)")
-            return 0
-        problems = check_range(repo, f"{REMOTE}/main", head, [], int(os.environ.get("AGENTCTL_MAX_FOREIGN", "2")))
-        if problems:
-            print("NOT LANDED: prepush-check refused:\n  " + "\n  ".join(problems))
-            return 1
+        lock_note("fetch and rebase")
+        rc, head = sync(repo, main_ref, sh)
+        if rc is not None:
+            return rc
         reds = gate_reds(repo) if waiting_supported(repo) else set()
         if reds:
             commits = waiting_commits(repo, f"{REMOTE}/main", head)
             if must_wait(repo, commits, reds):
                 return waiting_enqueue(repo, head, commits, log_path, a)
         hook = precheck_hook(repo)
-        if hook:
+        prechecked = getattr(a, "prechecked", None)
+        if hook and prechecked and prechecked != (head, git(repo, "rev-parse", main_ref).strip()):
+            # main moved since the check outside the lock: give the lock back and check again outside it
+            a.prechecked = None
+            return MAIN_MOVED
+        if hook and not prechecked:
             # CHECK FIRST: the hook's dry run over exactly what the push will carry (its pass is stored, so the push's own
             # hook run reuses it in seconds). A long hook inside `git push` holds the push's ssh connection idle, and a
             # tunnel drop kills it after "all clear" (2026-10-23); the area tests make long hooks the norm.
-            err(f"checking {head[:10]}: {os.path.relpath(hook, repo)} --range {REMOTE}/main..HEAD (log: {log_path})")
-            r = sh(hook, "--range", f"{REMOTE}/main..{head}")
-            with open(log_path, "a") as f:
-                f.write(f"=== check {attempt + 1} {ts()} {head}\n{r.stdout}{r.stderr}\n")
-            if r.returncode != 0:
-                return refused(repo, r.stdout + r.stderr, log_path, "the pre-push checks failed")
+            rc = dry_run(repo, hook, head, log_path, attempt + 1)
+            if rc is not None:
+                return rc
+        a.prechecked = None  # a retry after a push race checks its new base again
         err(f"pushing {head[:10]} to {REMOTE}/main (attempt {attempt + 1}/{LAND_RETRIES + 1}; hook log: {log_path})")
+        lock_note(f"push of {head[:10]}")
         a.pushed_at = time.time()
-        r = sh(*push_argv(REMOTE, head))
+        rc, out = run_watched(push_argv(REMOTE, head), repo, tool_env(), log_path, "push")
         with open(log_path, "a") as f:
-            f.write(f"=== attempt {attempt + 1} {ts()} {head}\n{r.stdout}{r.stderr}\n")
-        out = r.stdout + r.stderr
-        if r.returncode == 0:
+            f.write(f"=== attempt {attempt + 1} {ts()} {head}\n{out}\n")
+        if rc is None:
+            return stalled("push (git push and its pre-push hook)", out, log_path)
+        if rc == 0:
             sh("git", "fetch", "--quiet", REMOTE, "main")
             how = landed(repo, head, main_ref)
             if how:
@@ -1473,8 +1651,13 @@ def run_hook(wt, mode, base):
         return False, ("scripts/hooks/pre-push has no --checks-only mode (the checks without the red gate) at this base: "
                        "the waiting branch needs the hook from movies' 'waiting' change")
     head = git(wt, "rev-parse", "HEAD").strip()
-    r = subprocess.run([hook, mode, f"{base}..{head}"], cwd=wt, capture_output=True, text=True, env=tool_env())
-    return r.returncode == 0, r.stdout + r.stderr
+    lock_note(f"{mode} checks on `{WAITING_BRANCH}`")
+    rc, out = run_watched([hook, mode, f"{base}..{head}"], wt, tool_env(), os.path.join(scratch(), f"agentctl-waiting-{os.getpid()}"),
+                          "waiting-checks")
+    if rc is None:
+        mins = float(os.environ.get("AGENTCTL_LAND_STALL_MIN", LAND_STALL_MIN))
+        return False, f"{out}\nstalled: scripts/hooks/pre-push {mode}: no output and no CPU for {mins:g} min, so it was ended"
+    return rc == 0, out
 
 
 def tail_of(out, n=25):
