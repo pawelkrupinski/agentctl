@@ -284,7 +284,7 @@ agent must be assigned to it".
   for the push's base, and every failure blocks as before.
 - **A stale local red.** `reds/local.json` is keyed to the main sha it was computed on. Once forgejo/main moves past it
   the record is shown as `Local checks: stale, rechecking` (never RED, no unit, no dispatch) and the failing checks are
-  run again on the new main (the hook over empty-tree..main, other checks skipped, governor check class): in the
+  run again on the new main (the hook over <recorded main>..main, other checks skipped, governor check class): in the
   background by the processor's patrol, synchronously by `red patrol`, or by a land's passing dry run. A pass clears the
   red, releases its claims, stops its dispatched fixer (process groups) and writes `FIX OK` to the inbox; the fixer's
   worktrees whose commits are patch-equivalent on main (`git cherry`) are removed, any other is an inbox `RED LEFTOVER`.

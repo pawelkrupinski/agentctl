@@ -4171,13 +4171,19 @@ def _recheck_guarded(repo, main):
 
 
 def run_local_recheck(repo, main):
-    """Run the recorded failing checks on main's tree (the hook over empty-tree..main, every other check skipped)."""
+    """Run the recorded failing checks on main's tree (the hook over <recorded main>..main, every other check skipped)."""
     failing = sorted(local_red().get("checks") or {})
     hook = precheck_hook(repo)
     if not hook:
         return []
-    empty = git(repo, "hash-object", "-t", "tree", "-w", "--stdin", input="").strip()  # the empty tree, written
-    base = git(repo, "commit-tree", empty, "-m", "agentctl recheck base").strip()
+    # The base is the main the red was recorded on: the checks judge what changed since (shellcheck fails only on warnings
+    # a change ADDS, so against an empty base the whole tree would count). Unknown to this clone: the empty tree.
+    old_main = str(local_red().get("main") or "")
+    if old_main and git_ok(repo, "cat-file", "-e", f"{old_main}^{{commit}}"):
+        base = old_main
+    else:
+        empty = git(repo, "hash-object", "-t", "tree", "-w", "--stdin", input="").strip()
+        base = git(repo, "commit-tree", empty, "-m", "agentctl recheck base").strip()
     synth = git(repo, "commit-tree", f"{main}^{{tree}}", "-p", base, "-m", f"agentctl recheck: {REMOTE}/main {main[:10]}").strip()
     _d, clone, _w = waiting_state(repo)
     tree = f"{clone}-wt-recheck-{os.getpid()}"
