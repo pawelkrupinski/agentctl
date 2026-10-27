@@ -490,7 +490,9 @@ START_CODE = code_version()
 
 def process_start(pid):
     """The process's start time as ps prints it: with the pid, it names one process even after the pid is reused."""
-    r = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True)
+    # LC_ALL=C: one format whoever asks (2026-10-27: launchd's processor wrote "Tue Oct 27 …", a session's en_GB ps read
+    # "Tue 27 Oct …", and a live red fixer looked dead)
+    r = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, env=dict(os.environ, LC_ALL="C"))
     return r.stdout.strip()
 
 
@@ -983,7 +985,7 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, track=False):
         units += local_units() + flake_units()
         for u in units:
             units_of.setdefault((u["workflow"], u["run"].get("databaseId")), []).append(u)
-        infos = find_fixers(scan_repo_for(o_r, repo), units)
+        infos = find_fixers(scan_repo_for(o_r, repo), units, o_r=o_r)
         if track:
             red_patrol(o_r, scan_repo_for(o_r, repo), units, infos, dispatch=False)
     except (Exception, SystemExit) as e:  # who is fixing is information: the gate's verdict stands without it
@@ -991,6 +993,11 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, track=False):
 
     def fixing(name, run, indent="  "):
         us = units_of.get((name, run.get("databaseId"))) or []
+        anyf = [f for u in us for f in (infos.get(u["key"]) or {}).get("fixers") or []]
+        if anyf:  # one fixer of the run covers its signatures with no cause of their own (an empty-log `timings`)
+            for u in us:
+                if u["key"] in infos and not infos[u["key"]]["fixers"]:
+                    infos[u["key"]] = {**infos[u["key"]], "fixers": anyf[:1]}
         per = [(u, fixing_lines(infos.get(u["key"]), indent)) for u in us]
         if len({tuple(l) for _u, l in per}) <= 1:  # every signature fixed the same way (one fixer for the run): one line
             lines = per[0][1] if per else []
@@ -1144,6 +1151,50 @@ def signature(workflow, job, line):
     return hashlib.sha1(f"{workflow}\0{job}\0{norm_line(line)}".encode()).hexdigest()[:12]
 
 
+def cause_of(job, line):
+    """A failure's CAUSE across workflows (the owner, 2026-10-27: one sparse-checkout failure hit findings report #2049,
+    live drift #2051 and lean vs whole #2050): its job and normalized first error line, no workflow. None without a
+    line (an empty-log job says nothing about its cause)."""
+    return signature("*", job, line) if norm_line(line) else None
+
+
+def name_causes(o_r=None, values=()):
+    """{run number or id: {causes}} from every run whose signatures are known (reds/runsig), plus, with o_r, the runs
+    `values` name that are not known yet (looked up once, then cached like any run)."""
+    out = {}
+    for p in glob.glob(reds_dir("runsig", "*.json")):
+        rec = read_record(p)
+        if not rec:
+            continue
+        cs = {cause_of(x["job"], x["line"]) for x in rec.get("sigs") or []} - {None}
+        for n in (rec.get("run"), rec.get("number")):
+            if n is not None:
+                out.setdefault(str(n), set()).update(cs)
+        out.setdefault(f"wf:{rec.get('number')}", set()).add(rec.get("workflow"))
+    missing = [v for v in values if v not in out and v.isdigit()]
+    if o_r and missing:
+        tried = read_record(reds_dir("unknown-runs.json")) or {}
+        for v in missing:
+            if v in tried:
+                continue
+            name, r = resolve_run(o_r, v)
+            if r is not None and r.get("status") == "completed" and r.get("conclusion") in RED_CONCLUSIONS:
+                try:
+                    sigs = run_sigs(o_r, r, name)
+                    cs = {cause_of(x["job"], x["line"]) for x in sigs} - {None}
+                    for n in run_names(r):
+                        out.setdefault(n, set()).update(cs)
+                    continue
+                except (Exception, SystemExit):
+                    pass
+            tried[v] = ts()
+        try:
+            write_json(reds_dir("unknown-runs.json"), tried)
+        except OSError:
+            pass
+    return out
+
+
 def run_names(r):
     return {str(x) for x in (r.get("number"), r.get("databaseId")) if x not in (None, "")}
 
@@ -1213,7 +1264,8 @@ def all_claims():
 def proc_alive(pid, start=None):
     if not pid or not pid_alive(int(pid)):
         return False
-    return not start or process_start(int(pid)) == start
+    # the same words in any order: records written before process_start ran ps under LC_ALL=C hold a locale's order
+    return not start or sorted(process_start(int(pid)).split()) == sorted(str(start).split())
 
 
 def mtime(path):
@@ -1336,7 +1388,7 @@ def scan_fix_commits(repo):
     return unlanded, landed
 
 
-def find_fixers(repo, units, now_=None):
+def find_fixers(repo, units, now_=None, o_r=None):
     """units: [{"key", "workflow", "names": run numbers/ids, "sigs": {sig}, "runs": the workflow's runs}] -> {key:
     {"fixers": [{who, worktree, state, note, sha, awaiting, cmd}], "stale": [why...], "failed": [(sha, run)]}}.
     Never raises: a part that cannot be read names nobody."""
@@ -1354,8 +1406,15 @@ def find_fixers(repo, units, now_=None):
         elif who and not cur.get("named"):
             cur["who"], cur["named"] = who, True
 
+    causes = {}
+
+    def causes_of(values):
+        return set().union(*[causes.get(str(v), set()) for v in values]) if values else set()
+
     def match(names, sigs=()):
-        return [u["key"] for u in units if (set(names) & u["names"]) or (set(sigs) & u["sigs"])]
+        cs = causes_of(names)
+        return [u["key"] for u in units if (set(names) & u["names"]) or (set(sigs) & u["sigs"])
+                or (u.get("cause") and u["cause"] in cs)]
 
     for c in all_claims():
         keys = match(set(map(str, c.get("runs") or [])) | {str(c.get("run"))}, c.get("sigs") or [])
@@ -1375,6 +1434,12 @@ def find_fixers(repo, units, now_=None):
         except (Exception, SystemExit) as e:
             err(f"red: could not read the worktrees' Fixes-Red commits ({str(e)[:120]})")
             unlanded, landed = {}, []
+        vals_all = set().union(*[v for _s, _c, v, _t in landed], *[v for cs in unlanded.values() for _s, v in cs]) \
+            if (landed or unlanded) else set()
+        try:
+            causes.update(name_causes(o_r, sorted(vals_all)))
+        except (Exception, SystemExit):
+            pass
         try:
             landers = land_cwds()
         except (Exception, SystemExit):
@@ -1392,7 +1457,7 @@ def find_fixers(repo, units, now_=None):
             pass
         for sha, ct, vals, subj in landed:
             for u in units:
-                if not (vals & u["names"]):
+                if not (vals & u["names"]) and not (u.get("cause") and u["cause"] in causes_of(vals)):
                     continue
                 runs = u.get("runs") or []
                 # a completed run containing the fix that still fails this way: the fix did not fix it
@@ -1498,6 +1563,7 @@ def red_units(o_r, name, decided, runs, sigs, gate):
         rec = observe(name, s, decided, runs, gate)
         units.append({"key": s["sig"], "sig": s["sig"], "workflow": name, "job": s["job"], "kind": s["kind"],
                       "line": s["line"], "names": streak | set(rec.get("runs") or []), "sigs": {s["sig"]}, "runs": runs,
+                      "cause": cause_of(s["job"], s["line"]),
                       "run": decided, "gate": gate})
     if not units:  # no failed job listed (or none readable): the run itself is the red
         units.append({"key": f"run-{decided.get('databaseId')}", "sig": None, "workflow": name, "job": "?", "kind": "unclear",
@@ -2072,41 +2138,112 @@ def tell_to_stop(rec, why):
     return told
 
 
+PATHISH = re.compile(r"(?:\./)?((?:[\w.-]+/)+[\w.-]+)")
+
+
+def run_workflows():
+    """{run number or id: workflow} of every run whose signatures are known."""
+    out = {}
+    for p in glob.glob(reds_dir("runsig", "*.json")):
+        rec = read_record(p)
+        if rec:
+            for n in (rec.get("run"), rec.get("number")):
+                if n is not None:
+                    out[str(n)] = rec.get("workflow")
+    return out
+
+
+def fix_between(repo, rec, red_head, green_head, causes, workflows):
+    """The commit between a red run's head and the next passing run's head that FIXED this red rather than it passing
+    by chance (the owner, 2026-10-27: live drift #2051 was called a flake, and 03d646e63, `Fixes-Red: 2049`, which fixed
+    the same failure in another workflow, had landed between): a `Fixes-Red:` naming one of its runs, a run with the
+    same cause (any workflow) or a run of the same workflow, or a change to a file its failure names, or to CI's own
+    workflows and actions. (sha or None, known): known False when the commits between cannot be read here."""
+    if not repo or not red_head or not green_head:
+        return None, False
+    if red_head == green_head:
+        return None, True
+    r = git(repo, "log", f"{red_head}..{green_head}", "--format=%x00%H%x09%(trailers:key=Fixes-Red,valueonly,separator=%x2C)",
+            "--name-only", check=False)
+    if r.returncode != 0:
+        return None, False
+    names = set(map(str, rec.get("runs") or []))
+    cause = cause_of(rec.get("job"), rec.get("line"))
+    named = {m.group(1) for m in PATHISH.finditer(rec.get("line") or "")}
+    for chunk in r.stdout.split("\0")[1:]:
+        head, _, files = chunk.partition("\n")
+        sha, _, vals = head.partition("\t")
+        vals = trailer_values(vals)
+        if vals & names or (cause and any(cause in causes.get(v, ()) for v in vals)) \
+                or any(workflows.get(v) == rec.get("workflow") for v in vals):
+            return sha, True
+        for f in files.split():
+            if f.startswith((".github/workflows/", ".github/actions/")) or any(f.endswith(n) or n.endswith(f) for n in named):
+                return sha, True
+    return None, True
+
+
 def review_cleared(o_r, repo, units, landed):
-    """Open signatures that no longer fail: a FLAKE when the next run passed it with no fix landed (kept open -- the
-    claim too -- until a fix lands; its count in reds/flakes.json orders the flake fixers), else CLEARED (superseded):
-    every fixer is told to stop (inbox, plus RED-STOP.md in its worktree). A flake is closed when a fix naming it
-    lands. Returns what it did."""
+    """Open signatures that no longer fail. FIXED (superseded) when a fix for it landed -- its runs, its cause in any
+    workflow, a fix aimed at its workflow, or a change to what the failing job ran between the red run and the green
+    one: every fixer is told to stop (inbox, plus RED-STOP.md in its worktree). A FLAKE only when the next run passed it
+    and no commit between can have fixed it (kept open -- the claim too -- until a fix lands; its count in
+    reds/flakes.json orders the flake fixers). A flake later found fixed by a commit that the passing run already held
+    was never a flake: its count is taken back. Returns what it did."""
     acts, now_sigs = [], {u["sig"] for u in units if u.get("sig")}
     lists = {**_outside_lists, **_gate_lists}
+    vals_all = sorted(set().union(*[v for _s, _c, v, _t in landed])) if landed else []
+    causes = name_causes(o_r, vals_all)
+    workflows = run_workflows()
+
+    def landed_fix(rec):
+        names, cause = set(map(str, rec.get("runs") or [])), cause_of(rec.get("job"), rec.get("line"))
+        for sha, _ct, vals, _s in landed:
+            if vals & names or (cause and any(cause in causes.get(v, ()) for v in vals)):
+                return sha
+        return None
+
     for rec in all_sig_records():
         st = rec.get("status") or "open"
         if st not in ("open", "flaky") or rec["sig"] in now_sigs or rec.get("workflow") not in lists:
             continue
-        names = set(map(str, rec.get("runs") or []))
-        fixed_by = next((sha for sha, _ct, vals, _s in landed if vals & names), None)
-        if st == "flaky":
-            if fixed_by:
-                with reds_lock():
-                    rec.update(status="fixed", fixed_by=fixed_by, closed=ts())
-                    write_json(sig_path(rec["sig"]), rec)
-                acts.append(f"RED FLAKE FIXED: {rec['workflow']} [{rec['job']}] by {fixed_by[:10]}")
-            continue
         runs = lists[rec["workflow"]]
+        if st == "flaky":
+            fixed_by = landed_fix(rec)
+            if not fixed_by and rec.get("red_head") and rec.get("passed_in_head"):
+                fixed_by, _known = fix_between(repo, rec, rec["red_head"], rec["passed_in_head"], causes, workflows)
+            if fixed_by:
+                false_flake = bool(rec.get("passed_in_head")) and repo and git_ok(repo, "merge-base", "--is-ancestor",
+                                                                                   fixed_by, rec["passed_in_head"])
+                if false_flake:
+                    unnote_flake(rec)
+                with reds_lock():
+                    rec.update(status="fixed", fixed_by=fixed_by, closed=ts(), false_flake=bool(false_flake))
+                    write_json(sig_path(rec["sig"]), rec)
+                tell_to_stop(rec, f"fixed by {fixed_by[:10]}")
+                acts.append(f"RED FLAKE FIXED: {rec['workflow']} [{rec['job']}] by {fixed_by[:10]}"
+                            + (" (it was never a flake: the fix had landed before the passing run)" if false_flake else ""))
+            continue
         later = sorted([r for r in runs if r.get("status") == "completed" and r.get("conclusion") in ("success",) + RED_CONCLUSIONS
                         and int(r.get("databaseId") or 0) > int(rec.get("last_run_id") or 0)], key=lambda r: r["databaseId"])
         if not later:
             continue
         nxt = later[0]
-        if not fixed_by and not rec.get("flake_checked"):
+        red_run = next((r for r in runs if str(r.get("databaseId")) == str(rec.get("last_run_id"))), {})
+        fixed_by = landed_fix(rec)
+        known = True
+        if not fixed_by:
+            fixed_by, known = fix_between(repo, rec, red_run.get("headSha"), nxt.get("headSha"), causes, workflows)
+        if not fixed_by and known and not rec.get("flake_checked"):
             count = note_flake(rec, nxt)
             with reds_lock():
                 rec.update(status="flaky", flaky_since=ts(), passed_in=nxt.get("number"), nobody_since=None, noted=False,
-                           flake_checked=True, flake_count=count)
+                           flake_checked=True, flake_count=count, red_head=red_run.get("headSha"),
+                           passed_in_head=nxt.get("headSha"))
                 write_json(sig_path(rec["sig"]), rec)
             line = (f"RED FLAKE: {rec['workflow']} #{rec.get('last_run')} [{rec['job']}] passed on the next run "
-                    f"#{nxt.get('number')} with no fix: a flake ({count} time(s) so far) -- make it deterministic, never "
-                    "rerun to green; its claim stays open until the fix lands")
+                    f"#{nxt.get('number')} and no commit between can have fixed it: a flake ({count} time(s) so far) -- "
+                    "make it deterministic, never rerun to green; its claim stays open until the fix lands")
             inbox_write("red", line, [line], [rec.get("line") or ""], 1)
             acts.append(line)
             continue
@@ -2114,13 +2251,24 @@ def review_cleared(o_r, repo, units, landed):
                + (f"fixed by {fixed_by[:10]}" if fixed_by else f"#{nxt.get('number')} does not fail this way"))
         told = tell_to_stop(rec, why)
         with reds_lock():
-            rec.update(status="cleared", cleared=ts(), cleared_by=nxt.get("number"))
+            rec.update(status="cleared", cleared=ts(), cleared_by=nxt.get("number"), fixed_by=fixed_by)
             write_json(sig_path(rec["sig"]), rec)
         if told or not fixed_by:
             line = f"RED CLEARED: {why}" + (f"; told to stop: {', '.join(told)}" if told else "")
             inbox_write("red", line, [line], [], 0)
             acts.append(line)
     return acts
+
+
+def unnote_flake(rec):
+    with reds_lock():
+        f = flakes()
+        k = flake_key(rec)
+        if k in f:
+            f[k]["count"] = max(0, f[k]["count"] - 1)
+            if not f[k]["count"]:
+                del f[k]
+            write_json(reds_dir("flakes.json"), f)
 
 
 def flake_units():
@@ -2281,7 +2429,7 @@ def cmd_red(a):
             print(f"NOT DISPATCHED: #{a.run} is not a red run on main" + (f" ({name} #{r.get('number')} is "
                   f"{r.get('conclusion') or r.get('status')})" if r else ""))
             return 1
-        infos = find_fixers(repo, units)
+        infos = find_fixers(repo, units, o_r=o_r)
         rc = 0
         for g in red_groups(units):
             u = g[0]
@@ -2365,7 +2513,7 @@ def patrol_repo(repo, dispatch=True):
     landed = scan_fix_commits(scan)[1] if scan else []
     acts = review_cleared(o_r, repo, units, landed)
     units += flake_units()
-    infos = find_fixers(scan, units)
+    infos = find_fixers(scan, units, o_r=o_r)
     gate_unread_spell(o_r, None)
     return acts + red_patrol(o_r, repo, units, infos, dispatch=dispatch)
 

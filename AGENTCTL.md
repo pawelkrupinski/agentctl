@@ -259,7 +259,15 @@ agent must be assigned to it".
 - **Superseded.** A signature that stops failing while a fix of someone else's landed (or the next run just passes it
   after it was red for a while): `RED CLEARED`, and every claimant is told to stop (the inbox, plus `RED-STOP.md` in its
   worktree; a dispatched fixer's wrapper ends it at once).
-- **Flakes.** A signature that passes on the NEXT run with no fix landed is a flake: `RED FLAKE` (with its count in
+- **One cause, across workflows.** A failure's CAUSE is its job and normalized first error line without the workflow
+  (one sparse-checkout failure hit findings report #2049, live drift #2051 and lean vs whole #2050): a `Fixes-Red:` or
+  a claim naming a run with the same cause counts for every red with it, in any workflow. A red whose fix has landed
+  is `fix landed in <sha>, awaiting #M` (or `no run containing it yet`) and is never dispatched.
+- **Flakes.** A signature that passes on the NEXT run is a flake only when no commit between the red run and the green
+  one can have fixed it: none carries a `Fixes-Red:` naming one of its runs, a run with the same cause (any workflow) or
+  a run of the same workflow, and none touches a file its failure line names or `.github/workflows|actions/`. Otherwise
+  it is FIXED (superseded). A flake later found fixed by a commit the passing run already held is reclassified and its
+  count taken back. A flake is: `RED FLAKE` (with its count in
   `~/.cache/agentctl/reds/flakes.json`), shown by ci-why under `Flaky`, kept open (and its claim) until a fix naming it
   lands, and dispatched after the gate's reds, most frequent first, briefed "make it deterministic". Nothing ever reruns
   a run to green.

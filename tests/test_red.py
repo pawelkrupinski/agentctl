@@ -800,3 +800,106 @@ class StatuslineTest(unittest.TestCase):
                            env=dict(os.environ, HOME=home))
         self.assertIn("\x1b[1;31mNOBODY\x1b[0m", r.stdout)
         self.assertIn(" · as of " + time.strftime("%H:%M", time.localtime(old)), r.stdout)
+
+
+class FixedNotFlakyTest(RedBase):
+    """2026-10-27, live: live drift #2051 and capture #2076 were called flakes, but a fix had landed between the red run
+    and the green one (03d646e63, `Fixes-Red: 2049`: the same failure in another workflow); and lean vs whole #2050 got
+    a fixer although that fix had landed and it only lacked a newer run."""
+
+    def setUp(self):
+        super().setUp()
+        self.saved_slug = A.slug
+        A.slug = lambda repo: MOVIES
+        os.environ["AGENTCTL_RED_UNCLAIMED_MIN"] = "0"
+        # the same failure, in another workflow's run #99 (id 199): its signatures are known (cached)
+        A.save_run_sigs(MOVIES, {"databaseId": 199, "number": 99, "headSha": self.sha}, "Other",
+                        [("test (rest)", "test", FAIL_LINE)])
+
+    def tearDown(self):
+        A.slug = self.saved_slug
+        os.environ.pop("AGENTCTL_RED_UNCLAIMED_MIN", None)
+        super().tearDown()
+
+    def patrol_now(self, dispatch=True):
+        A._gate_lists.clear()
+        A._outside_lists.clear()
+        return A.patrol_repo(self.r.path, dispatch=dispatch)
+
+    def land(self, msg, path="fix.txt"):
+        self.r.write(path, msg + "\n")
+        sha = self.r.commit(msg)
+        self.r.push()
+        return sha
+
+    def green_after(self, head):
+        self.put("runs.json", [run(41, 21, "Main", "main.yml", head), run(40, 20, "Main", "main.yml", self.sha, conclusion="failure"),
+                               run(39, 19, "Identity model convergence", "identity-model-convergence.yml", self.sha)])
+
+    def test_a_fix_of_the_same_cause_in_another_workflow_counts_for_this_red(self):
+        fix = self.land("CI: the sparse checkout holds the action\n\nFixes-Red: 99")
+        out = self.why()[1]
+        self.assertIn(f"  fixing: fix landed in {fix[:9]}, no run containing it yet", out)
+        self.assertNotIn("NOBODY", out)
+        acts = self.patrol_now()
+        self.assertEqual([a for a in acts if "DISPATCHED" in a], [], acts)  # fixed: never dispatched
+        self.assertEqual(A.fixer_records(), [])
+
+    def assert_fixed_not_flaky(self, fix):
+        self.patrol_now(dispatch=False)
+        self.green_after(fix)
+        acts = self.patrol_now(dispatch=False)
+        self.assertEqual(self.inbox("RED_FLAKE"), [], acts)
+        self.assertEqual(A.flakes(), {})
+        rec = A.all_sig_records()[0]
+        self.assertEqual((rec["status"], rec["fixed_by"]), ("cleared", fix))
+
+    def test_a_cross_workflow_fix_between_the_red_and_the_green_run_is_no_flake(self):
+        self.patrol_now(dispatch=False)
+        fix = self.land("the fix, named for the other workflow's run\n\nFixes-Red: 99")
+        self.green_after(fix)
+        # landed_fix finds it directly; and fix_between would too
+        rec = A.all_sig_records()[0]
+        self.assertEqual(A.fix_between(self.r.path, rec, self.sha, fix, A.name_causes(), A.run_workflows())[0], fix)
+        self.patrol_now(dispatch=False)
+        self.assertEqual(self.inbox("RED_FLAKE"), [])
+        self.assertEqual(A.all_sig_records()[0]["status"], "cleared")
+
+    def test_a_fix_aimed_at_the_same_workflow_between_them_is_no_flake(self):
+        A.save_run_sigs(MOVIES, {"databaseId": 140, "number": 14, "headSha": self.sha}, "Main",
+                        [("preflight", "test", "::error::secret X is unset")])
+        self.patrol_now(dispatch=False)
+        fix = self.land("Main: the preflight secret\n\nFixes-Red: 14")
+        self.green_after(fix)
+        self.patrol_now(dispatch=False)
+        self.assertEqual(self.inbox("RED_FLAKE"), [])
+        self.assertEqual(A.all_sig_records()[0]["fixed_by"], fix)
+
+    def test_a_change_to_ci_s_own_workflows_between_them_is_no_flake(self):
+        self.patrol_now(dispatch=False)
+        fix = self.land("CI: plan job checkout", path=".github/workflows/main.yml")
+        self.assert_fixed_not_flaky(fix)
+
+    def test_an_unrelated_change_between_them_is_still_a_flake(self):
+        self.patrol_now(dispatch=False)
+        other = self.land("docs: a typo", path="docs/x.md")
+        self.green_after(other)
+        self.patrol_now(dispatch=False)
+        self.assertEqual(len(self.inbox("RED_FLAKE")), 1)
+
+    def test_a_false_flake_is_reclassified_and_its_count_taken_back(self):
+        self.patrol_now(dispatch=False)
+        other = self.land("docs: a typo", path="docs/x.md")
+        self.green_after(other)
+        self.patrol_now(dispatch=False)  # called a flake (nothing between could have fixed it, as far as it knew)
+        self.assertEqual(sum(e["count"] for e in A.flakes().values()), 1)
+        # it turns out run #99's failure is the same cause, and its fix (in the passing run) names #99
+        rec = A.all_sig_records()[0]
+        fix = sh(self.r.path, "git", "commit", "--allow-empty", "-q", "-m", "x\n\nFixes-Red: 99") or \
+            sh(self.r.path, "git", "rev-parse", "HEAD")
+        self.r.push()
+        rec["passed_in_head"] = fix
+        A.write_json(A.sig_path(rec["sig"]), {k: v for k, v in rec.items()})
+        acts = self.patrol_now(dispatch=False)
+        self.assertTrue(any("RED FLAKE FIXED" in a and "never a flake" in a for a in acts), acts)
+        self.assertEqual(A.flakes(), {})
