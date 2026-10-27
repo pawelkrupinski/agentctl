@@ -21,17 +21,25 @@ refresh() {
   waiting=$(cd "$repo" && ~/bin/agentctl waiting status 2>/dev/null | awk '
     /^  [0-9]{8}-/ { n++; w = $2; sub(".*/movies-wt-", "", w); names = names (names ? ", " : "") w }
     END { if (n) printf "waiting: %d — %s", n, names; else printf "waiting: 0" }')
+  # ci-why takes ~20 s and talks to Forgejo; if it came back empty, keep the last good gate rather than blank it
+  case "$gate" in "gate RED"* | "gate green"*) ;; *) gate=$(sed -n 's/ · waiting:.*//p' "$cache" 2>/dev/null) ;; esac
   inbox=$(~/bin/agentctl inbox --unread 2>/dev/null | grep -c UNREAD)
   line="${gate:-gate ?} · ${waiting:-waiting: ?} · inbox: ${inbox:-0} unread"
   printf '%s\n' "$line" >"$cache.tmp" && mv "$cache.tmp" "$cache"
 }
 
 if [ "${1:-}" = "--refresh" ]; then refresh; cat "$cache"; exit 0; fi
+if [ "${1:-}" = "--refresh-only" ]; then refresh; exit 0; fi
 
 age=999999
 [ -f "$cache" ] && age=$(( $(date +%s) - $(stat -f %m "$cache") ))
+# Claude Code ends the status-line command's process group, so the refresh runs in a session of its own
+# (python's start_new_session; macOS has no setsid). A lock older than 5 min is a refresh that died: take it over.
+[ -d "$lock" ] && [ $(( $(date +%s) - $(stat -f %m "$lock") )) -ge 300 ] && rmdir "$lock" 2>/dev/null
 if [ "$age" -ge 60 ] && mkdir "$lock" 2>/dev/null; then
-  ( trap 'rmdir "$lock"' EXIT; refresh ) >/dev/null 2>&1 </dev/null &
-  disown 2>/dev/null || true
+  python3 -c 'import subprocess, sys
+subprocess.Popen(["/bin/bash", "-c", "trap \"rmdir \\\"$1\\\"\" EXIT; \"$0\" --refresh-only", sys.argv[1], sys.argv[2]],
+                 start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)' \
+    "$0" "$lock"
 fi
 if [ -f "$cache" ]; then cat "$cache"; else echo "landing state: loading…"; fi
