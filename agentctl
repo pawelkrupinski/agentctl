@@ -10162,7 +10162,7 @@ def recover_reland(cond, a):
     with open(recovery_dir("reland.log"), "a") as f:
         subprocess.Popen([sys.executable, os.path.realpath(__file__), "land"], stdin=subprocess.DEVNULL, stdout=f,
                          stderr=f, start_new_session=True, cwd=wt,
-                         env={**os.environ, "AGENTCTL_NO_SECRETS": "1", "AGENTCTL_RELAND": str(int(a.get("attempt") or 1))})
+                         env={**os.environ, "AGENTCTL_NO_SECRETS": "1"})
     return f"landing {wt.replace(HOME, '~')} again (attempt {a.get('attempt')})"
 
 
@@ -10352,7 +10352,13 @@ def land_not_landed(verdict, worktree, tail=(), code=1):
     """A NOT LANDED to the inbox: infra (or an unknown cause, once) opens a condition that lands it again on recovery."""
     first = verdict.splitlines()[0]
     cause, probe = land_failure_cause(first)
-    attempt = int(os.environ.get("AGENTCTL_RELAND") or 0) + 1
+    attempt = 0
+    if cause != "real" and worktree:  # counted per worktree and HEAD, on disk: the verdict comes from the processor
+        head = git(worktree, "rev-parse", "HEAD", check=False).stdout.strip() if os.path.isdir(worktree) else ""
+        counts = read_record(recovery_dir("relands.json")) or {}
+        k = f"{os.path.realpath(worktree)}@{head}"
+        attempt = counts[k] = int(counts.get(k) or 0) + 1
+        write_json(recovery_dir("relands.json"), dict(list(counts.items())[-200:]))
     if cause != "real" and worktree and attempt <= LAND_RETRY_MAX[cause]:
         r = run_probe(probe, {"repo": movies_repo_path()} if probe == "git_fetch" else {})
         if r.ok:  # the infra check passes already (a blip): land again now, no condition to wait on

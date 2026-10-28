@@ -213,14 +213,13 @@ class DetectorsTest(RegistryBase):
         self.assertEqual(A.open_conditions(), [])
         # an unknown cause: the author's entry AND one retry, never a second
         A.PROBES["git_fetch"] = Recorder()
+        wt2 = os.path.join(self.tmp.name, "movies-wt-y")
+        os.makedirs(wt2)
+        wt = wt2
         A.land_not_landed("NOT LANDED: something odd", wt)
         self.assertEqual(A.open_conditions()[0]["kind"], "LAND_UNKNOWN")
         A.recovery_tick(force=True)
-        os.environ["AGENTCTL_RELAND"] = "1"
-        try:
-            A.land_not_landed("NOT LANDED: something odd", wt)
-        finally:
-            os.environ.pop("AGENTCTL_RELAND")
+        A.land_not_landed("NOT LANDED: something odd", wt)  # the same change again: retried once already
         self.assertEqual(A.open_conditions(), [])
         self.assertEqual(len(relanded), 2)
 
