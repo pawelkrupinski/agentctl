@@ -5,7 +5,7 @@
 # shown in bold red; a cache older than 5 min says `as of HH:MM`. Branch reds (runs on measure/check/fixer branches)
 # follow main's, apart: `branch reds: N → owner (workflow #n)`.
 # The status line runs often, so this prints a cached line at once and refreshes the cache in the background
-# at most once a minute (ci-why talks to Forgejo), or at once when the processor marks it stale (statusline.stale). `claude-statusline --refresh` rebuilds it in the foreground.
+# at most every 15 s (all local reads; Claude Code re-runs this every 10 s: statusLine.refreshInterval), or at once when the processor marks it stale (statusline.stale). `claude-statusline --refresh` rebuilds it in the foreground.
 set -u
 cache="${AGENTCTL_STATUSLINE_CACHE:-${HOME}/.cache/agentctl/statusline.txt}"
 lock="${cache%.txt}.lock"
@@ -53,7 +53,7 @@ age=999999
 marker="${AGENTCTL_STATUSLINE_STALE:-${HOME}/.cache/agentctl/statusline.stale}"
 stale_marker=0
 [ -f "$marker" ] && [ -f "$cache" ] && [ "$marker" -nt "$cache" ] && stale_marker=1
-if { [ "$age" -ge 60 ] || [ "$stale_marker" = 1 ]; } && mkdir "$lock" 2>/dev/null; then
+if { [ "$age" -ge 15 ] || [ "$stale_marker" = 1 ]; } && mkdir "$lock" 2>/dev/null; then
   python3 -c 'import subprocess, sys
 subprocess.Popen(["/bin/bash", "-c", "trap \"rmdir \\\"$1\\\"\" EXIT; \"$0\" --refresh-only", sys.argv[1], sys.argv[2]],
                  start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)' \
