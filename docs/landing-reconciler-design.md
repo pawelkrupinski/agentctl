@@ -136,6 +136,7 @@ For each repo (only movies is gated today):
 ## 5. State machines
 
 Notation:
+
 - **Deadline:** the time after entering the state, or a lease's expiry.
 - **On deadline:** the automatic exit.
 - **Escalate:** emit an event with `severity=escalate`, raise `level`, set a new deadline. It is a
