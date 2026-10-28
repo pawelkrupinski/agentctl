@@ -9829,12 +9829,52 @@ INBOX_ESCALATE_MIN = 10  # $AGENTCTL_INBOX_ESCALATE_MIN
 _last_escalate = [0.0]
 
 
+def red_escalation_resolved(e, claimed=None, snap=None):
+    """A RED UNCLAIMED / RED BUDGET entry whose red is now claimed by someone, or is no longer the red its workflow
+    decided on (green, or a newer run), needs no person: True. Unknown (no run number, no snapshot): False."""
+    if (e.get("kind") or inbox_kind(e.get("verdict"))) not in ("RED_UNCLAIMED", "RED_BUDGET"):
+        return False
+    m = re.search(r"#(\d+)", str(e.get("verdict") or ""))
+    if not m:
+        return False
+    n = m.group(1)
+    if claimed is None:
+        claimed = set()
+        for c in all_claims():
+            if c.get("state", "claimed") in ("claimed", "blocked", "committed", "diagnosed"):
+                claimed |= {str(c.get("run")), str(c.get("run_id"))} | set(map(str, c.get("runs") or []))
+    if n in claimed:
+        return True
+    if snap is None:
+        snap = ci_state_load(SHORT["movies"])
+    if not snap:
+        return False
+    for u in (snap.get("gate") or []) + (snap.get("outside") or []):
+        d = u.get("decided") or {}
+        if str(d.get("number")) == n:
+            return d.get("conclusion") not in RED_CONCLUSIONS
+    return True  # no workflow decides on that run any more: superseded
+
+
 def inbox_escalations(now_=None):
+    """The unacked entries due for escalation. An escalated red that has since been claimed or gone green is
+    acknowledged here (the status line's ESCALATED clears on its own: nobody has to ack a solved problem)."""
     t = now_ if now_ is not None else time.time()
     lim = env_num("AGENTCTL_INBOX_ESCALATE_MIN", INBOX_ESCALATE_MIN) * 60
-    return [e for e in inbox_entries() if not e["read"] and e.get("final", True)
-            and (e.get("kind") or inbox_kind(e.get("verdict"))) in ESCALATE_KINDS
-            and (t - float(e.get("at") or 0) >= lim or "gate fixer cap" in str(e.get("verdict") or ""))]
+    out = []
+    for e in inbox_entries():
+        if e["read"] or not e.get("final", True) or (e.get("kind") or inbox_kind(e.get("verdict"))) not in ESCALATE_KINDS:
+            continue
+        try:
+            if red_escalation_resolved(e):
+                os.makedirs(os.path.join(inbox_dir(), "acked"), exist_ok=True)
+                open(os.path.join(inbox_dir(), "acked", e["id"]), "a").close()
+                continue
+        except (Exception, SystemExit) as ex:  # never stops the escalation: the entry stays
+            err(f"inbox: could not check {e['id']} ({str(ex)[:120]})")
+        if t - float(e.get("at") or 0) >= lim or "gate fixer cap" in str(e.get("verdict") or ""):
+            out.append(e)
+    return out
 
 
 def applescript_str(text):
