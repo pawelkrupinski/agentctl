@@ -10190,6 +10190,142 @@ def jvm_reap(cands, kill, procs):
 MAINTAIN_SWEEP_HOUR = 9  # local time: the daily sweep runs at the first maintain pass from 09:00 ($AGENTCTL_SWEEP_HOUR)
 
 
+# ---------------------------------------------------------------- the store (design §3, §6; phase 1 step 1)
+# ONE sqlite database at the state root ($AGENTCTL_STATE_ROOT/store.db, WAL, BEGIN IMMEDIATE for writers): leases now;
+# items, events and offers as the later steps move into it. Its clock is the only clock leases use.
+class LeaseLost(RuntimeError):
+    """A lease this process held is gone (expired and taken, past its max hold, or released): stop its work."""
+
+
+class Store:
+    """Leases (design §6): a holder plus a TTL, renewed only on real progress (a new progress mark), capped by an
+    absolute max hold; an expired lease is free. Every acquire bumps the epoch (a fencing token) and draws a secret that
+    renew and release need."""
+
+    SCHEMA = ("CREATE TABLE IF NOT EXISTS leases (name TEXT PRIMARY KEY, holder TEXT NOT NULL, epoch INTEGER NOT NULL, "
+              "secret TEXT NOT NULL, acquired_at REAL, renewed_at REAL, expires_at REAL, max_until REAL, progress TEXT, "
+              "item TEXT, meta TEXT)",
+              "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)")
+
+    def __init__(self, path=None, clock=None):
+        self.path = path or state_root("store.db")
+        self.clock = clock or time.time
+
+    def db(self):
+        import sqlite3
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        c = sqlite3.connect(self.path, timeout=30, isolation_level=None)
+        c.row_factory = sqlite3.Row
+        c.execute("PRAGMA journal_mode=WAL")
+        for q in self.SCHEMA:
+            c.execute(q)
+        return c
+
+    def _row(self, c, name):
+        r = c.execute("SELECT * FROM leases WHERE name=?", (name,)).fetchone()
+        return dict(r) if r else None
+
+    def acquire(self, name, holder, ttl, max_hold, progress="", item=None, meta=None):
+        """{'epoch', 'secret', 'expires_at', 'max_until'} when acquired, else {'held': the live lease}."""
+        import secrets as _secrets
+        c = self.db()
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            now_ = self.clock()
+            row = self._row(c, name)
+            if row and row["holder"] and row["expires_at"] > now_:
+                c.execute("COMMIT")
+                return {"held": {k: row[k] for k in ("holder", "epoch", "expires_at", "max_until", "progress", "meta")}}
+            epoch = (row["epoch"] if row else 0) + 1
+            secret = _secrets.token_hex(16)
+            max_until = now_ + max_hold
+            exp = min(now_ + ttl, max_until)
+            c.execute("INSERT OR REPLACE INTO leases VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                      (name, holder, epoch, secret, now_, now_, exp, max_until, progress, item, json.dumps(meta or {})))
+            c.execute("COMMIT")
+            return {"epoch": epoch, "secret": secret, "expires_at": exp, "max_until": max_until, "ttl": ttl}
+        finally:
+            c.close()
+
+    def renew(self, name, epoch, secret, progress, ttl, note=None):
+        """'ok' (extended: the progress mark changed), 'no_progress' (not extended), or 'lost'."""
+        c = self.db()
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            now_ = self.clock()
+            row = self._row(c, name)
+            if not row or row["epoch"] != epoch or row["secret"] != secret or not row["holder"] \
+                    or row["expires_at"] <= now_ or now_ >= row["max_until"]:
+                c.execute("COMMIT")
+                return "lost"
+            if progress == row["progress"]:
+                c.execute("COMMIT")
+                return "no_progress"
+            meta = json.loads(row["meta"] or "{}")
+            if note is not None:
+                meta["note"] = note
+            c.execute("UPDATE leases SET progress=?, renewed_at=?, expires_at=?, meta=? WHERE name=?",
+                      (progress, now_, min(now_ + ttl, row["max_until"]), json.dumps(meta), name))
+            c.execute("COMMIT")
+            return "ok"
+        finally:
+            c.close()
+
+    def note(self, name, epoch, secret, note):
+        """Say what the holder does now (waiters print it); no renewal."""
+        c = self.db()
+        try:
+            row = self._row(c, name)
+            if row and row["epoch"] == epoch and row["secret"] == secret:
+                meta = json.loads(row["meta"] or "{}")
+                meta["note"] = note
+                c.execute("UPDATE leases SET meta=? WHERE name=? AND epoch=?", (json.dumps(meta), name, epoch))
+        finally:
+            c.close()
+
+    def release(self, name, epoch, secret):
+        c = self.db()
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            row = self._row(c, name)
+            ok = bool(row and row["epoch"] == epoch and row["secret"] == secret and row["holder"])
+            if ok:
+                c.execute("UPDATE leases SET holder='', expires_at=? WHERE name=?", (self.clock(), name))
+            c.execute("COMMIT")
+            return "ok" if ok else "lost"
+        finally:
+            c.close()
+
+    def get(self, name):
+        c = self.db()
+        try:
+            return self._row(c, name)
+        finally:
+            c.close()
+
+    def list(self, prefix=""):
+        c = self.db()
+        try:
+            return [dict(r) for r in c.execute("SELECT * FROM leases WHERE name LIKE ? ORDER BY name", (prefix + "%",))]
+        finally:
+            c.close()
+
+
+def cmd_lease(a):
+    """`agentctl lease list [prefix]` (debugging; the leases' holders, epochs, expiry, notes)."""
+    st, now_ = Store(), time.time()
+    rows = st.list(a.prefix or "")
+    for r in rows:
+        live = r["holder"] and r["expires_at"] > now_
+        meta = json.loads(r["meta"] or "{}")
+        print(f"{r['name']}  {'LIVE' if live else 'free'}  {r['holder'] or '-'}  epoch {r['epoch']}  "
+              f"expires in {int(r['expires_at'] - now_)} s  max {int(r['max_until'] - now_)} s"
+              + (f"  -- {meta.get('note')}" if meta.get("note") else ""))
+    if not rows:
+        print("no leases")
+    return 0
+
+
 # ---------------------------------------------------------------- the invariant watchdog (design §10, phase 1 step 2)
 # A separate, cheap, dumb launchd job (net.bitcashier.agentctl-watchdog, every 60 s): `agentctl watchdog` reads today's
 # files only -- the queue entries, the published gate line, the processor's beat file, the inbox -- and checks the
@@ -11808,6 +11944,9 @@ def main(argv=None):
     gad.add_argument("--force", action="store_true", help="admit at once (memory already counted elsewhere)")
     gev = gvs.add_parser("evict", help="stop the idle kept sbt server unused longest")
     gev.add_argument("--dry-run", action="store_true")
+    ls_ = sub.add_parser("lease", help="the store's leases (debugging): `lease list [prefix]`")
+    ls_.add_argument("lcmd", choices=("list",))
+    ls_.add_argument("prefix", nargs="?", default="")
     sub.add_parser("watchdog", help="the invariant watchdog's pass (launchd every 60 s): W1 oldest unlanded change, W2 "
                    "gate red nobody holds, W5 processor beat, W6 escalations notified, WM maintain ran")
     rcv = sub.add_parser("recover", help="the recovery registry: each open non-green condition, its probe, its next check")
@@ -11888,7 +12027,7 @@ def main(argv=None):
     rp_.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
     handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": cmd_red, "dispatch": cmd_dispatch, "gov": cmd_gov, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
+               "red": cmd_red, "dispatch": cmd_dispatch, "gov": cmd_gov, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)
 
