@@ -11368,8 +11368,9 @@ def red_escalation_resolved(e):
     """A RED UNCLAIMED / BUDGET / ESCALATE entry whose red is now claimed, green or superseded: True -- through the
     registry's red_resolved probe, the check every such condition is opened with (an entry from before the registry, or
     one whose condition is gone, clears through the same check). Unknown (no run number, no snapshot): False."""
-    if (e.get("kind") or inbox_kind(e.get("verdict"))) not in ("RED_UNCLAIMED", "RED_BUDGET", "RED_ESCALATE"):
-        return False
+    if (e.get("kind") or inbox_kind(e.get("verdict"))) not in ("RED_UNCLAIMED", "RED_BUDGET", "RED_ESCALATE",
+                                                                "FIXER_FAILED", "DIAGNOSED"):
+        return False  # a fixer's failure or diagnosis is solved too once its red is held again, green or superseded
     m = re.search(r"#(\d+)", str(e.get("verdict") or ""))
     person = {"person": True} if (e.get("kind") or inbox_kind(e.get("verdict"))) == "RED_ESCALATE" else {}
     return bool(m) and run_probe("red_resolved", {"run": m.group(1), **person}).ok is True
