@@ -3122,7 +3122,7 @@ def red_author(repo, ob, t):
     worktree; audit #15: never an inherited environment), live = an agent process in that worktree, active lately."""
     u = {"run": ob["run"], "runs": ob["runs_list"]}
     for a in red_authors(repo, u, t):
-        if a["live"]:
+        if a["live"] and a.get("session"):  # a change item's recorded author, never a worktree that merely holds the commit
             return {"worktree": a["worktree"], "session": a.get("session"), "shas": a["shas"][:5]}
     return None
 
@@ -3493,22 +3493,36 @@ def red_cap(cls):
     return int(env_num(env, default))
 
 
+def red_run_of(pic):
+    return (pic.get("workflow"), str((pic.get("run") or {}).get("number")))
+
+
 def red_dispatcher(store, o_r, repo, t):
-    """Take the open fixer offers, highest priority first, within the caps (gate 3 alive, the rest 2) and while dispatch
-    can run; an offer that cannot be taken says why (its escalation names it)."""
+    """Take the open fixer offers, highest priority first (within a run: a test failure first), within the caps (gate 3
+    alive, the rest 2) and while dispatch can run. ONE RUN, ONE FIXER: the run's other open offers are taken with it,
+    under the same holder (its fixer renews and releases them all); a run whose fixer is already on it waits for that
+    fixer. An offer that cannot be taken says why (its escalation names it)."""
     acts = []
     offs = store.offers("fixer")
     if not offs:
         return acts
+    offs.sort(key=lambda o: (o["priority"], KIND_ORDER.get(o["picture"].get("kind"), 1), o["opened_at"]))
     blocker = cached_dispatch_blocker()
+    gone = set()
     for off in offs:
+        if off["id"] in gone:
+            continue
         pic, cls = off["picture"], ("gate" if off["picture"].get("gate") else "other")
         alive = red_fixers_alive(store, t)
         n_cls = sum(1 for r in alive if bool(lease_meta(r).get("gate")) == (cls == "gate"))
+        on_run = next((r for r in alive if (lease_meta(r).get("workflow"), str(lease_meta(r).get("run"))) == red_run_of(pic)),
+                      None)
         if off["tier"] == "author":
             why = f"offered to its author ({str((pic.get('author') or {}).get('worktree') or '?').replace(HOME, '~')})"
         elif blocker:
             why = blocker
+        elif on_run:
+            why = f"its run's fixer {on_run['holder']} is on the run; this red is offered again when it ends"
         elif n_cls >= red_cap(cls):
             first = min(alive, key=lambda r: r["acquired_at"]) if alive else None
             why = f"capacity {n_cls}/{red_cap(cls)}" + (f", next when {first['holder']} ends" if first else "")
@@ -3520,18 +3534,29 @@ def red_dispatcher(store, o_r, repo, t):
             continue
         num = (pic.get("run") or {}).get("number")
         holder = f"laptop:fixer:red-{pic['key']}-{int(pic.get('attempts') or 0) + 1}"
-        took = store.take(off["id"], holder, RED_FIXER_TTL, RED_FIXER_MAX,
-                          meta={"kind": "fixer", "gate": cls == "gate", "tier": off["tier"], "run": num})
+        meta = {"kind": "fixer", "gate": cls == "gate", "tier": off["tier"], "run": num, "workflow": pic.get("workflow")}
+        took = store.take(off["id"], holder, RED_FIXER_TTL, RED_FIXER_MAX, meta=meta)
         if not took or "held" in took or "gone" in took:
             continue
-        ok, msg = red_spawn(store, o_r, repo, off, took)
+        extra = []
+        if off["tier"] not in ("revert", "resume"):
+            for sib in offs:
+                if sib["id"] != off["id"] and sib["id"] not in gone and sib["tier"] not in ("author", "revert", "resume") \
+                        and red_run_of(sib["picture"]) == red_run_of(pic):
+                    st_ = store.take(sib["id"], holder, RED_FIXER_TTL, RED_FIXER_MAX, meta=meta)
+                    if st_ and "epoch" in st_:
+                        extra.append({"name": sib["lease"], "epoch": st_["epoch"], "secret": st_["secret"],
+                                      "picture": sib["picture"]})
+                        gone.add(sib["id"])
+        ok, msg = red_spawn(store, o_r, repo, off, took, extra)
         if not ok:
-            store.release(off["lease"], took["epoch"], took["secret"], outcome=f"NOT STARTED: {str(msg)[:200]}")
+            for x in [{"name": off["lease"], **took}] + extra:
+                store.release(x["name"], x["epoch"], x["secret"], outcome=f"NOT STARTED: {str(msg)[:200]}")
         acts.append(msg)
     return acts
 
 
-def red_spawn(store, o_r, repo, off, took):
+def red_spawn(store, o_r, repo, off, took, extra=()):
     """Start what the tier says, under the taken lease: the revert fallback, or a headless fixer (fresh worktree; the
     same session and worktree for `resume`)."""
     pic, tier = off["picture"], off["tier"]
@@ -3539,6 +3564,8 @@ def red_spawn(store, o_r, repo, off, took):
          "line": pic.get("line"), "run": pic.get("run") or {}, "refuted": pic.get("refuted"), "predicts": pic.get("predicts"),
          "flake": pic.get("red_kind") == "flake", "diagnosis": pic.get("diagnosis"), "key": pic["key"],
          "names": set(pic.get("names") or [])}
+    for x in extra:  # the run's other reds, under the same fixer
+        u["jobs"] = sorted(set(u.get("jobs") or [u["job"]]) | set(x["picture"].get("jobs") or []))
     if tier == "revert":
         ok, msg = red_revert(o_r, repo, u, pic.get("culprit"))
         store.note(off["lease"], took["epoch"], took["secret"], msg)
@@ -3555,7 +3582,8 @@ def red_spawn(store, o_r, repo, off, took):
     effort = "max" if tier == "deep" else None
     if tier == "deep":
         u["diagnosis"] = red_investigation_brief(pic)
-    return red_dispatch(o_r, repo, u, why=f"tier {tier}", resume=resume, effort=effort, lease=off["lease"], took=took)
+    return red_dispatch(o_r, repo, u, why=f"tier {tier}", resume=resume, effort=effort, lease=off["lease"], took=took,
+                        extra=extra)
 
 
 def red_investigation_brief(pic):
@@ -3724,7 +3752,7 @@ def stop_group(pgid, grace=10.0, proc=None):
     return not alive()
 
 
-def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=None, took=None):
+def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=None, took=None, extra=()):
     """Start a headless fixer for red u under its taken lease: a fresh worktree <clone>-wt-red-<run> off forgejo/main
     (resume: the same worktree and session), then a detached `agentctl red fixer` that runs `claude -p` there, renews
     the lease by its progress, and releases it with its verdict. (ok, message)."""
@@ -3751,11 +3779,14 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
            "kind": u.get("kind"), "line": u.get("line"), "flake": bool(u.get("flake")), "worktree": wt, "started": ts(),
            "why": why, "log": os.path.join(d, f"claude-{k}.log"), "session": resume.get("session") if resume else None,
            "resume": bool(resume), "resume_note": resume.get("note") if resume else None, "diagnosis": u.get("diagnosis"),
-           "effort": effort, "refuted": u.get("refuted") or [], "predicts": u.get("predicts"), "orphan": u.get("orphan")}
+           "effort": effort, "refuted": u.get("refuted") or [], "predicts": u.get("predicts"), "orphan": u.get("orphan"),
+           "extra_leases": [{"name": x["name"], "epoch": x["epoch"]} for x in extra]}
     write_json(rec_path, rec)
     env = fixer_env(o_r, num)
     if took:
         env["AGENTCTL_LEASE_SECRET"] = took["secret"]
+    if extra:
+        env["AGENTCTL_LEASE_SECRETS"] = json.dumps({x["name"]: x["secret"] for x in extra})
     with open(os.path.join(d, "fixer.log"), "a") as logf:
         p = subprocess.Popen([sys.executable, TOOL_PATH, "red", "fixer", "--repo", repo, "--record", rec_path],
                              stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=wt, env=env)
@@ -3797,6 +3828,9 @@ def red_fixer(a):
     st = Store()
     name, epoch = rec.get("lease"), rec.get("epoch")
     secret = os.environ.pop("AGENTCTL_LEASE_SECRET", None)
+    extra = [(x["name"], x["epoch"], json.loads(os.environ.get("AGENTCTL_LEASE_SECRETS") or "{}").get(x["name"]))
+             for x in rec.get("extra_leases") or []]
+    os.environ.pop("AGENTCTL_LEASE_SECRETS", None)
     if not name:  # an orphan's fixer (no offer): it takes a lease of its own
         name = red_lease(f"orphan-{os.path.basename(wt)}")
         took = st.acquire(name, f"laptop:fixer:{who}", RED_FIXER_TTL, RED_FIXER_MAX, progress="start",
@@ -3812,6 +3846,8 @@ def red_fixer(a):
     if row and row["epoch"] == epoch and row["secret"] == secret:
         st.note(name, epoch, secret, f"dispatched: {rec.get('why')}")
         st.set_meta(name, epoch, secret, meta)
+        for n_, e_, s_ in extra:
+            st.set_meta(n_, e_, s_, meta)
     rec.update(pid=me, process_start=process_start(me), session=session, lease=name, epoch=epoch)
     write_json(a.record, rec)
     u = {"workflow": rec["workflow"], "job": rec.get("job"), "jobs": rec.get("jobs"), "kind": rec.get("kind") or "test",
@@ -3838,7 +3874,8 @@ def red_fixer(a):
 
         def cancelled(signum, _frame):  # the wrapper is stopped: its whole claude group goes with it
             stop_group(p.pid, env_num("AGENTCTL_FIXER_TERM_GRACE", 10), p)
-            st.release(name, epoch, secret, outcome="STOPPED: the fixer's wrapper was stopped")
+            for n_, e_, s_ in [(name, epoch, secret)] + extra:
+                st.release(n_, e_, s_, outcome="STOPPED: the fixer's wrapper was stopped")
             os._exit(143)
         for sg in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
             signal.signal(sg, cancelled)
@@ -3854,7 +3891,10 @@ def red_fixer(a):
                 elif time.time() - last_renew >= every:
                     last_renew = time.time()
                     note = (read_record(a.record) or {}).get("note")
-                    if st.renew(name, epoch, secret, fixer_mark(rec, wt), RED_FIXER_TTL, note=note) == "lost":
+                    mark = fixer_mark(rec, wt)
+                    for n_, e_, s_ in extra:  # the run's other reds: renewed with it (a revoked one simply ends)
+                        st.renew(n_, e_, s_, mark, RED_FIXER_TTL, note=note)
+                    if st.renew(name, epoch, secret, mark, RED_FIXER_TTL, note=note) == "lost":
                         stop = "STOPPED: the red's lease was lost (expired without progress, past its max hold, or revoked)"
                 if stop:
                     stop_group(p.pid, env_num("AGENTCTL_FIXER_TERM_GRACE", 10), p)
@@ -3868,7 +3908,8 @@ def red_fixer(a):
     line = f"RED FIXER {rec['workflow']} #{num}: {verdict[:300]}"
     tail = [l[:300] for l in text.splitlines()[-INBOX_TAIL:]]
     inbox_write("red fixer", line, [line], tail, 0 if verdict.startswith("LANDED") else 1, cwd=wt)
-    st.release(name, epoch, secret, outcome=verdict[:600], notes="\n".join(tail[-8:]))
+    for n_, e_, s_ in [(name, epoch, secret)] + extra:
+        st.release(n_, e_, s_, outcome=verdict[:600], notes="\n".join(tail[-8:]))
     rec.update(ended=ts(), rc=rc, verdict=verdict)
     write_json(a.record, rec)
     if not rec.get("orphan"):  # an orphan's tree is its author's, never litter

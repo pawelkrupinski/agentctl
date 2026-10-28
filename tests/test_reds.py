@@ -401,6 +401,27 @@ class DispatchTest(RedsBase):
         self.assertEqual(it["data"]["tier"], "resume")  # the same fixer's session, its worktree
 
 
+    def test_one_run_one_fixer_its_other_reds_taken_with_it(self):
+        self.put("run-40.json", {"jobs": [{"name": "a", "status": "completed", "conclusion": "failure",
+                                           "steps": [{"name": "Run tests", "conclusion": "failure"}]},
+                                          {"name": "b", "status": "completed", "conclusion": "failure",
+                                           "steps": [{"name": "Run tests", "conclusion": "failure"}]}],
+                                 "headSha": self.sha, "url": "u", "number": 20, "status": "completed",
+                                 "conclusion": "failure", "workflowName": "Main"})
+        self.put("run-40.log", f"a\tRun tests\t2026-10-27T08:00:00Z {FAIL_LINE}\nb\tRun tests\t2026-10-27T08:00:00Z {OTHER_LINE}\n")
+        os.environ["FAKE_CLAUDE_SLEEP"] = "30"
+        try:
+            self.tick(dispatch=True)
+        finally:
+            os.environ["FAKE_CLAUDE_SLEEP"] = "0"
+        its = [i for i in self.st.items("red")]
+        self.assertEqual(len(its), 2)
+        holders = {self.st.get(A.red_lease(i["data"]["key"]))["holder"] for i in its}
+        self.assertEqual(len(holders), 1, holders)  # both reds under ONE fixer
+        self.assertEqual(len(A.fixer_records()), 1)
+        self.assertEqual(self.unheld(), [])
+
+
 class AuditTest(RedsBase):
     def test_7_a_workflow_outside_the_newest_200_runs_is_still_read(self):
         saved = A.main_workflow_files, A.gh_json
