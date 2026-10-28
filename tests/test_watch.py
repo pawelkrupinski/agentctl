@@ -238,14 +238,14 @@ class LandWatchTest(Base):
         super().tearDown()
 
     def test_land_ends_at_landed_and_watches_detached(self):
-        spawned, saved = [], A.spawn_watch_of
-        A.spawn_watch_of = lambda repo, sha, pushed_at, close=None, fixes=(): spawned.append(sha)
+        spawned, saved = [], A.start_watch
+        A.start_watch = lambda repo, sha, pushed_at, **kw: spawned.append(sha)
         try:
             self.r.write("f1.txt", "mine\n")
             sha = self.r.commit("mine")
             rc, out = self.run_tool("land", cwd=self.r.path)
         finally:
-            A.spawn_watch_of = saved
+            A.start_watch = saved
         self.assertEqual(rc, 0, out)
         self.assertIn(f"LANDED {sha}", out)
         self.assertEqual(spawned, [sha], "the watch is detached: its verdict goes to the inbox")
@@ -267,6 +267,50 @@ class LandWatchTest(Base):
         rc, out = self.run_tool("land", "--no-watch", cwd=self.r.path)
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.calls, [])
+
+
+class WatchItemTest(unittest.TestCase):
+    """Step 9: a landed sha is a watch item the tick evaluates once per look; no detached process."""
+    def setUp(self):
+        import tempfile
+        self.root = tempfile.mkdtemp()
+        self.saved = {k: os.environ.get(k) for k in ("AGENTCTL_STATE_ROOT", "AGENTCTL_INBOX_DIR")}
+        os.environ["AGENTCTL_STATE_ROOT"] = self.root
+        os.environ["AGENTCTL_INBOX_DIR"] = os.path.join(self.root, "inbox")
+        self.saved_a = A.watch_eval, A.slug, A.main_clone, A.close_worktree
+        A.slug = lambda repo: "pawelkrupinski/movies"
+        A.main_clone = lambda repo: repo
+        self.closed = []
+        A.close_worktree = lambda wt: self.closed.append(wt) or f"closed {wt}"
+
+    def tearDown(self):
+        A.watch_eval, A.slug, A.main_clone, A.close_worktree = self.saved_a
+        for k, v in self.saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_pending_then_ok_closes_the_worktree_and_tells_its_author(self):
+        wt = os.path.join(self.root, "wt")
+        os.makedirs(wt)
+        A.start_watch("/repo", "a" * 40, time.time(), worktree=wt, close=wt, session="s1")
+        A.watch_eval = lambda *a: None
+        self.assertEqual(A.tick_watches(), [])
+        self.assertEqual(A.Store().item("watch", "a" * 40)["state"], "watching")
+        A.watch_eval = lambda *a: ("ok", "WATCH OK: Main #5 green, convergence #6 green (aaaaaaaaaa)", [])
+        self.assertEqual(A.tick_watches(now_=time.time() + 120), [f"watch {'a' * 10}: ok"])
+        self.assertEqual(self.closed, [wt])
+        A.project_events()
+        [e] = A.inbox_entries()
+        self.assertEqual((e["kind"], e["cwd"], e["exit"]), ("OK", wt, 0))
+
+    def test_undecided_past_its_deadline_is_unknown_and_escalates(self):
+        A.start_watch("/repo", "b" * 40, time.time(), worktree="/w")
+        A.watch_eval = lambda *a: None
+        A.tick_watches(now_=time.time() + 4 * 3600)
+        self.assertEqual(A.Store().item("watch", "b" * 40)["state"], "unknown")
+        self.assertEqual(A.Store().events()[-1]["severity"], "escalate")
 
 
 if __name__ == "__main__":

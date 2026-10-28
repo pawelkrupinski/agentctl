@@ -5832,10 +5832,11 @@ def cmd_land(a):
         rc, a.landed_sha, a.pushed_at = await_entry(repo, a.waiting["id"], close=None if getattr(a, "keep_worktree", False) else repo)
     if rc != 0 or not a.landed_sha or getattr(a, "no_watch", False):
         return rc
-    if not getattr(a, "follow", False):  # land ends at LANDED; a detached watch sends its verdict to the inbox
-        spawn_watch_of(repo, a.landed_sha, a.pushed_at, close=None if getattr(a, "keep_worktree", False) else repo,
-                       fixes=getattr(a, "fixes", None) or ())
-        print(f"watching {a.landed_sha[:10]} detached: its WATCH verdict goes to `agentctl inbox`", flush=True)
+    if not getattr(a, "follow", False):  # land ends at LANDED; its watch item's verdict goes to the inbox
+        start_watch(repo, a.landed_sha, a.pushed_at, worktree=repo,
+                    close=None if getattr(a, "keep_worktree", False) else repo,
+                    session=os.environ.get("CLAUDE_CODE_SESSION_ID"))
+        print(f"watching {a.landed_sha[:10]}: its WATCH verdict goes to `agentctl inbox`", flush=True)
         return 0
     # the lock is free again: the next lander goes while this one watches main's CI; on WATCH OK the worktree it ran
     # from is closed when proven merged (close_worktree), unless --keep-worktree
@@ -7287,8 +7288,8 @@ def push_change(repo, d, e):
             queue_verdict(d, e, "landed", f"LANDED {head} (queued {e['id']}, checked {where})", code=0,
                           landed_sha=head, pushed_at=pushed_at)
             close = None if e.get("keep_worktree") else e["worktree"]
-            spawn_watch_of(e["worktree"] if os.path.isdir(e["worktree"]) else repo, head, pushed_at,
-                           close=close if close and os.path.isdir(close) else None, fixes=fixes)
+            start_watch(repo, head, pushed_at, worktree=e["worktree"],
+                        close=close if close and os.path.isdir(close) else None, session=e.get("session"))
             return "landed"
         if rc is not None and (RACE.search(out or "") or REDGATE.search(out or "")):
             set_change(d, e, "checked", event={"text": f"{e['id']}: the push raced or met a red gate: tried again"})
@@ -7866,34 +7867,100 @@ def main_clone(path):
     raise RuntimeError(f"{path}: gone, and no main clone found for it")
 
 
-def spawn_watch_of(repo, sha, pushed_at, close=None, fixes=()):
-    """A DETACHED `agentctl watch` of sha (its own session): its verdict goes to the inbox, agent alive or not. It is
-    handed the Forgejo token (token_env): once land exits, the vault no longer answers it. It runs from the MAIN CLONE
-    (main_clone): the worktree it closes may be removed by its agent first."""
-    agent, repo = repo, main_clone(repo)
-    d = state_root()
-    os.makedirs(d, exist_ok=True)
-    argv = [sys.executable, os.path.realpath(__file__), "watch", "--repo", repo, "--for", agent, "--sha", sha,
-            "--pushed-at", str(pushed_at or time.time())] + (["--close", close] if close else []) + \
-        [x for f in fixes for x in ("--fixes", str(f))]
-    with open(os.path.join(d, "watches.log"), "a") as logf:
-        subprocess.Popen(argv, cwd=repo, stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True,
-                         env=detached_env(repo))
+# WATCHES FROM ITEMS (design §5.1 `landed`, phase 1 step 9): a landed sha is a `watch` item; each tick evaluates it ONCE
+# (no detached process, no loop): its Main run and convergence run (pick_main_run / pick_convergence_run), WATCH OK
+# -> ok (the worktree closed when proven merged), WATCH RED -> red (its author told; the red machine attaches it), still
+# undecided at its 3 h deadline -> unknown, an escalation (a stuck run). The verdicts reach the author's inbox as
+# events. `land --follow` keeps its in-process watch (the agent waits on purpose).
+WATCH_EVERY = 60
 
 
-def spawn_watch(repo, e, pushed_at):
-    """A DETACHED watch of a landed entry (its own session): its WATCH verdict goes to the inbox whether or not the agent
-    that joined lives. Not when a `land --follow` (or an older land's await) waits on the entry: that one watches."""
-    if lock_held(Owned("await", e["id"]).lockpath):
-        return
-    where = main_clone(repo)  # never the joiner's worktree: it may be removed while the watch runs
-    d, _c, _w = waiting_state(repo)
-    argv = [sys.executable, os.path.realpath(__file__), "watch", "--repo", where, "--for", e["worktree"], "--sha", e["tip"],
-            "--pushed-at", str(pushed_at)] + (["--close", e["worktree"]] if os.path.isdir(e["worktree"]) else []) + \
-        [x for f in e.get("fixes") or [] for x in ("--fixes", str(f))]
-    with open(os.path.join(d, "watches.log"), "a") as logf:
-        subprocess.Popen(argv, cwd=where, stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True,
-                         env=detached_env(repo))
+def start_watch(repo, sha, pushed_at, worktree=None, close=None, session=None):
+    """The landed sha's watch item (idempotent)."""
+    o_r = slug(repo)
+    if not WATCH.get(o_r):
+        return None
+    return Store().put_item("watch", sha, "watching", {"repo": main_clone(repo), "o_r": o_r, "pushed_at": pushed_at or time.time(),
+                                                       "worktree": worktree or repo, "close": close, "session": session,
+                                                       "next_at": 0})
+
+
+def watch_event(it, verdict, severity="info", code=0):
+    dd = it["data"]
+    return {"text": verdict.splitlines()[0], "severity": severity,
+            "audience": {"worktree": dd.get("worktree"), "session": dd.get("session")},
+            "refs": {"verdict": verdict.splitlines()[0], "tail": verdict.splitlines()[1:25], "exit": code,
+                     "command": "watch", "sha": it["id"]}}
+
+
+def tick_watches(now_=None):
+    """One evaluation of each due watch item. Returns what it decided."""
+    t = now_ if now_ is not None else time.time()
+    st = Store()
+    did = []
+    for it in st.items("watch", states=("watching",)):
+        dd = it["data"]
+        if t > it["deadline"]:
+            st.transition("watch", it["id"], "unknown", it["version"],
+                          event=watch_event(it, f"WATCH UNKNOWN: Main or the convergence still undecided for {it['id'][:10]} "
+                                                f"after {int(WATCH_TIMEOUT // 3600)} h: a stuck run (`agentctl ci-why`)",
+                                            "escalate", 2))
+            did.append(f"watch {it['id'][:10]}: unknown")
+            continue
+        if float(dd.get("next_at") or 0) > t:
+            continue
+        flows = WATCH.get(dd["o_r"]) or {}
+        try:
+            verdict = watch_eval(dd["repo"], it["id"], dd["pushed_at"], dd["o_r"], flows, t)
+        except (Exception, SystemExit) as e:  # unreadable now: tried again at the next look, the deadline bounds it
+            err(f"watch {it['id'][:10]}: could not read the runs ({str(e)[:120]})")
+            verdict = None
+        if verdict is None:
+            st.update_item("watch", it["id"], it["version"], {"next_at": t + env_num("AGENTCTL_WATCH_POLL", WATCH_EVERY)})
+            continue
+        state, line, red_runs = verdict
+        st.transition("watch", it["id"], state, it["version"], event=watch_event(it, line, code=0 if state == "ok" else 3))
+        if state == "ok" and dd.get("close") and os.path.isdir(dd["close"]):
+            err(close_worktree(dd["close"]))
+        for wf, n in red_runs:  # the red machine takes it, its author offered first
+            try:
+                red_attach(st, wf, n, author={"session": dd.get("session"), "worktree": dd.get("worktree")})
+            except (Exception, SystemExit) as e:
+                err(f"watch {it['id'][:10]}: could not attach {wf} #{n} ({str(e)[:120]})")
+        did.append(f"watch {it['id'][:10]}: {state}")
+    return did
+
+
+def watch_eval(repo, sha, pushed_at, o_r, flows, now_):
+    """One look at the runs that contain sha: ('ok', line), ('red', line) or None (undecided)."""
+    done = {}
+    conv_start = float(os.environ.get("AGENTCTL_WATCH_CONV_START", WATCH_CONV_START))
+    for kind, (name, wfile) in flows.items():
+        runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30", "--json", RUN_FIELDS)
+        run = pick_main_run(repo, sha, runs) if kind == "main" else pick_convergence_run(repo, sha, runs, pushed_at)
+        if run is None:
+            if kind == "convergence" and now_ - float(pushed_at) >= conv_start:
+                done[kind] = (None, None)
+            continue
+        if run.get("status") == "completed" and not is_cancelled(run):
+            done[kind] = (run, run.get("conclusion") == "success")
+    reds = [(k, r) for k, (r, ok) in done.items() if ok is False]
+    if reds:
+        lines = []
+        for kind, r in reds:
+            try:
+                failed = failed_jobs(o_r, r["databaseId"])
+            except (Exception, SystemExit):
+                failed = []
+            lines.append(f"WATCH RED: {flows[kind][0]} #{r.get('number')} {', '.join(failed) or r.get('conclusion')} "
+                         f"(it contains your {sha[:10]}: if your change broke it, fix forward now with `Fixes-Red: "
+                         f"{r.get('number')}`)")
+        return "red", "\n".join(lines), [(flows[k][0], r.get("number")) for k, r in reds]
+    if len(done) == len(flows):
+        parts = [f"{flows[k][0].split()[0] if k == 'main' else 'convergence'} " +
+                 (f"#{r.get('number')} green" if r else "none started") for k, (r, ok) in done.items()]
+        return "ok", "WATCH OK: " + ", ".join(sorted(parts, key=lambda x: not x.startswith("Main"))) + f" ({sha[:10]})", []
+    return None
 
 
 def bisect(repo, d, batch, base, bwt):
@@ -8175,7 +8242,9 @@ def push_batch_item(repo, d, st, it):
     for e in members:
         queue_verdict(d, e, "landed", f"LANDED {e['tip']} (batch: {len(members)} change(s) in one push)", code=0,
                       landed_sha=e["tip"], pushed_at=pushed_at, batch=len(members))
-        spawn_watch(repo, e, pushed_at)
+        if not lock_held(Owned("await", e["id"]).lockpath):  # a `land --follow` waiting on it watches it itself
+            start_watch(repo, e["tip"], pushed_at, worktree=e["worktree"],
+                        close=e["worktree"] if os.path.isdir(e["worktree"]) else None, session=e.get("session"))
     batch_move(st, st.item("batch", it["id"]), "landed", text=f"LANDED {tip} ({len(members)} change(s) in one push)")
     wlog(d, f"LANDED {tip} ({len(members)} change(s) in one push)")
     return f"batch {it['id']}: landed {tip[:10]}"
@@ -8216,6 +8285,7 @@ def waiting_run(repo, once=False, service=False):
             for name, step in (("change items", lambda: project_changes(d)),
                                ("change tick", lambda: [wlog(d, f"tick: {x}") for x in tick_changes(repo, d)]),
                                ("batch tick", lambda: [wlog(d, f"tick: {x}") for x in tick_batch(repo, d)]),
+                               ("watches", lambda: [wlog(d, f"tick: {x}") for x in tick_watches()]),
                                ("events", project_events), ("notifier", notify_escalations),
                                ("network watch", network_watch), ("tunnel probe", tunnel_watch),
                                ("gate summary", lambda: maybe_publish_gate(repo)),
@@ -10188,6 +10258,13 @@ MACHINES = {
         "rejected": StateSpec(ARCHIVE, "rejected", (), terminal=True),
         "superseded": StateSpec(ARCHIVE, "superseded", (), terminal=True),
         "cancelled": StateSpec(ARCHIVE, "cancelled", (), terminal=True),
+    },
+    # step 9: a landed sha's watch of Main and the convergence (no detached process: the tick evaluates it)
+    "watch": {
+        "watching": StateSpec(3 * H, "unknown", ("ok", "red", "unknown")),
+        "ok": StateSpec(ARCHIVE, "ok", (), terminal=True),
+        "red": StateSpec(ARCHIVE, "red", (), terminal=True),
+        "unknown": StateSpec(ARCHIVE, "unknown", (), terminal=True),
     },
     # §5.2 + §14.1 the batch: a computed item, no branch
     "batch": {

@@ -28,10 +28,8 @@ class WaitingTest(Base):
         A.gate_reds = lambda repo: set(self.reds)
         A.spawn_waiting_processor = lambda repo: None
         self.watches = []
-        self.saved_spawn_watch = A.spawn_watch
-        A.spawn_watch = lambda repo, e, pushed_at: self.watches.append(e["tip"])
-        self.saved_spawn_watch_of = A.spawn_watch_of
-        A.spawn_watch_of = lambda repo, sha, pushed_at, close=None, fixes=(): self.watches.append(sha)
+        self.saved_start_watch = A.start_watch
+        A.start_watch = lambda repo, sha, pushed_at, **kw: self.watches.append(sha)
         os.environ["AGENTCTL_CHECKS_DIR"] = os.path.join(t, "checks")
         self.saved_inbox = os.environ.get("AGENTCTL_INBOX_DIR")
         os.environ["AGENTCTL_INBOX_DIR"] = os.path.join(t, "inbox")
@@ -59,8 +57,7 @@ class WaitingTest(Base):
     def tearDown(self):
         (A.WAITING_DIR, A.gate_reds, A.spawn_waiting_processor, A.await_entry, A.time.sleep,
          A.watch_landed) = self.saved
-        A.spawn_watch = self.saved_spawn_watch
-        A.spawn_watch_of = self.saved_spawn_watch_of
+        A.start_watch = self.saved_start_watch
         os.environ.pop("AGENTCTL_CHECKS_DIR", None)
         if self.saved_inbox is None:
             os.environ.pop("AGENTCTL_INBOX_DIR", None)
@@ -267,20 +264,16 @@ class WaitingTest(Base):
         self.assertEqual(self.batch()["state"], "held")
 
     def test_a_batch_lands_with_no_land_process_alive_and_its_watch_verdict_reaches_the_inbox(self):
-        A.spawn_watch = self.saved_spawn_watch  # the real, detached watch
+        A.start_watch = self.saved_start_watch  # the real watch item
         wa, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         rc, out = self.land(wa)  # the agent's turn ends here: no land process waits on the entry
         self.assertEqual(rc, 0)
         self.reds = set()
         self.drive()  # the processor's ticks
         sha = self.entries()["1"]["landed_sha"]
-        deadline = time.time() + 180
-        while time.time() < deadline and not [x for x in self.inbox() if x["command"] == "watch"]:
-            time.sleep(0.2)
         verdicts = {x["command"]: x for x in self.inbox() if x.get("final", True)}
         self.assertTrue(verdicts["land"]["verdict"].startswith(f"LANDED {sha}"))
-        self.assertIn(sha, verdicts["watch"]["argv"])
-        self.assertEqual((verdicts["watch"]["exit"], verdicts["watch"]["cwd"]), (0, wa))
+        self.assertEqual(verdicts["land"]["cwd"], wa, "its author's inbox, no land process alive")
 
     def test_the_tick_stays_cheap_while_nothing_waits(self):
         d, _c, _w = A.waiting_state(self.r.path)
