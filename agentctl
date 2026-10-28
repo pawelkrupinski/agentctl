@@ -3704,7 +3704,15 @@ def fixer_prompt(u, wt, brief, resume_note=None):
         common += (f"RECURRING: this failure outlived {len(u['refuted'])} landed fixes ({', '.join(x[:10] for x in u['refuted'])}): "
                    "each treated a symptom. Read them (`git show`), find the ROOT CAUSE they all missed, and fix that; "
                    "another symptom fix is not a fix. ")
-    if u.get("diagnosis"):  # a diagnose-only fixer found the cause: this one makes the durable fix
+    if u.get("orphan"):  # an unlanded change whose author ended (orphan_duty)
+        common = common.replace(f"FIRST run `~/bin/agentctl red claim {num} --note \"<one line: what you are doing>\"`. ",
+                                "").replace("(branch off forgejo/main, already created)", "(the ended author's own)")
+        task = (f"This worktree holds commits that are NOT on forgejo/main, and the agent that wrote them has ended. Its last "
+                f"verdict: {str(u.get('line') or 'none')[:400]!r}. Make it land: `git fetch forgejo && git rebase "
+                "forgejo/main` (never squash), fix what the checks reject (read the failing checks' output; never loosen a "
+                "test, never skip a check), then `~/bin/agentctl land --follow` in the foreground. If the change is wrong or "
+                "already on main in another form, say so. End at `LANDED <sha>`, or `GAVE UP: <why>`.")
+    elif u.get("diagnosis"):  # a diagnose-only fixer found the cause: this one makes the durable fix
         task = (f"Red run {u['workflow']} #{num} (run id {rid}), job `{u['job']}`, was DIAGNOSED by a diagnose-only fixer: "
                 f"{u['diagnosis'][:600]!r}. The diagnosis is not the end, and nor is a 'one-off' verdict: make the DURABLE "
                 "fix. Remove the cause (code, CI config, the test harness) if it is in the repo. If it really lies outside "
@@ -3895,7 +3903,7 @@ def red_fixer(a):
     rec.update(pid=me, process_start=process_start(me), session=session, claim=cpath)
     write_json(a.record, rec)
     u = {"workflow": rec["workflow"], "job": rec["job"], "jobs": rec.get("jobs"), "kind": rec["kind"], "line": rec.get("line"),
-         "flake": rec.get("flake"), "diagnosis": rec.get("diagnosis"),
+         "flake": rec.get("flake"), "diagnosis": rec.get("diagnosis"), "orphan": rec.get("orphan"),
          "run": {"number": num, "databaseId": rec.get("run_id")}}
     brief = sync_brief()
     note = rec.get("resume_note")
@@ -3947,7 +3955,8 @@ def red_fixer(a):
     inbox_write("red fixer", line, [line], tail, 0 if verdict.startswith("LANDED") else 1, cwd=wt)
     rec.update(ended=ts(), rc=rc, verdict=verdict)
     write_json(a.record, rec)
-    mark_internal(wt)  # its fixer ended: the tree is agentctl's litter now, never a fixer or owner
+    if not rec.get("orphan"):  # an orphan's tree is its author's, never litter
+        mark_internal(wt)  # its fixer ended: the tree is agentctl's litter now, never a fixer or owner
     c = read_record(cpath)
     if verdict.startswith("DIAGNOSED:"):  # the claim stays, for the same red: never NOBODY after a diagnosis
         followup = keep_diagnosed_claim(a.repo, dict(rec, path=a.record), c or claim, cpath, verdict)
@@ -9747,7 +9756,171 @@ def cmd_maintain(a):
         print(f"== sweep: done today ({st.get('sweep_at')})" if st.get("sweep") == today else
               f"== sweep: from {MAINTAIN_SWEEP_HOUR:02d}:00")
     maintain_stale_fixes(a.dry_run)
+    print("== orphaned work")
+    try:
+        for line in orphan_duty(dry_run=a.dry_run) or ["  none"]:
+            print(f"  {line}")
+    except (Exception, SystemExit) as e:
+        print(f"  could not look ({str(e)[:160]})")
     return 0
+
+
+# ORPHANED WORK (the owner, 2026-10-28: "review and fix landing code ... so things don't get missed or stalled"; the
+# audit found movies-wt-workflow-prune rejected 6x and idle 15 h, identity-impact / unit-before-push / red-local idle
+# 12-19 h, flipflop / nodrift-cadence / unify / mongo-csot never landed at all): every maintain pass, a worktree whose
+# commits are not on forgejo/main (by patch) and whose author is gone -- no process in it, no land, no live claim,
+# idle ORPHAN_IDLE -- gets ONE action: a re-land (its last verdict infra, unknown or none), or a dispatched fixer (a
+# real failure: the checks rejected it). Still orphaned after that: UNLANDED ORPHAN, a condition whose probe clears
+# when its commits are on main, or somebody works in it again. Nothing is ever deleted.
+ORPHAN_IDLE = 2 * 3600
+ORPHAN_PER_PASS = 3
+
+
+def orphan_key(repo, wt):
+    """The change's identity across rebases: its commits' patch-ids (not HEAD, which every rebase moves)."""
+    main = f"refs/remotes/{REMOTE}/main"
+    ch = git(repo, "-C", wt, "cherry", main, "HEAD", check=False)
+    plus = [l[2:].strip() for l in (ch.stdout if ch.returncode == 0 else "").splitlines() if l.startswith("+ ")]
+    ids = []
+    for sha in plus:  # bytes: a commit may carry binary content
+        show = subprocess.run(["git", "-C", wt, "show", sha], capture_output=True, timeout=60).stdout
+        r = subprocess.run(["git", "patch-id", "--stable"], input=show, capture_output=True, timeout=60)
+        ids.append((r.stdout.decode(errors="replace").split() or [sha])[0])
+    return plus, hashlib_sha1("\n".join(sorted(ids)))[:16] if ids else None
+
+
+def hashlib_sha1(text):
+    import hashlib
+    return hashlib.sha1(text.encode()).hexdigest()
+
+
+def last_land_verdict(wt):
+    """The newest final land verdict in the inbox for this worktree, or None."""
+    rw = os.path.realpath(wt)
+    es = [e for e in inbox_entries() if e.get("final", True) and e.get("command") in ("land", "waiting")
+          and os.path.realpath(str(e.get("cwd") or "")) == rw]
+    return str(es[-1].get("verdict") or "") if es else None
+
+
+def orphan_candidates(repo, now_=None):
+    """[(worktree, commits, key, last verdict)] of the orphans now."""
+    t = now_ if now_ is not None else time.time()
+    try:
+        cwds = {os.path.realpath(c) for c in process_cwds().values()}
+    except (Exception, SystemExit):
+        cwds = set()
+    try:
+        landers = {os.path.realpath(w) for w in land_cwds()}
+    except (Exception, SystemExit):
+        landers = set()
+    live = live_claim_worktrees()
+    try:  # a change in the land queue (queued, checking, waiting) is not orphaned
+        d, _c, _w = waiting_state(repo)
+        live |= {os.path.realpath(e.get("worktree") or "") for e in waiting_entries(d, open_only=False)
+                 if e.get("status") in ("queued", "checking", "waiting")}
+    except (Exception, SystemExit):
+        pass
+    out = []
+    for w in worktrees(repo):
+        p = w.get("worktree")
+        if not isinstance(p, str) or w.get("bare") or os.path.realpath(p) == os.path.realpath(repo) or internal_tree(p) \
+                or p.endswith((f"-wt-{WAITING_BRANCH}", "-wt-batch")) or not os.path.isdir(p):
+            continue
+        rp = os.path.realpath(p)
+        if rp in landers or rp in live or any(c == rp or c.startswith(rp + "/") for c in cwds):
+            continue
+        act = gitdir_activity(repo, p) or 0
+        if t - act < env_num("AGENTCTL_ORPHAN_IDLE", ORPHAN_IDLE):
+            continue
+        commits, key = orphan_key(repo, p)
+        if commits and key:
+            out.append((p, commits, key, last_land_verdict(p)))
+    return out
+
+
+def probe_orphan_landed(a):
+    """The orphan's change is on main (by patch), its worktree is gone, or somebody works in it again."""
+    wt = a["worktree"]
+    if not os.path.isdir(wt):
+        return True, f"{wt} is gone"
+    repo = a.get("repo") or movies_repo_path()
+    _c, key = orphan_key(repo, wt)
+    if key != a.get("key"):
+        return True, "its commits are on main" if key is None else "its change moved on (new commits)"
+    rp = os.path.realpath(wt)
+    if rp in live_claim_worktrees():
+        return True, "a live claim works in it"
+    return False, f"{len(_c)} commit(s) still not on main, nobody in it"
+
+
+def orphan_duty(repo=None, dry_run=False, now_=None):
+    """One maintain pass over the orphans: one action each, then UNLANDED ORPHAN. Returns what it did."""
+    repo = repo or movies_repo_path()
+    if not os.path.isdir(repo):
+        return []
+    path = recovery_dir("orphans.json")
+    st = read_record(path) or {}
+    did, acted = [], 0
+    try:  # a red fixer's fix that a landed one superseded is no orphan to land again (maintain_stale_fixes lists it)
+        superseded = {os.path.realpath(w) for w, whys in stale_fix_worktrees(repo) if any("superseded" in x for x in whys)}
+    except (Exception, SystemExit):
+        superseded = set()
+    for wt, commits, key, verdict in orphan_candidates(repo, now_):
+        if os.path.realpath(wt) in superseded:
+            continue
+        rec = st.get(key) or {"worktree": wt, "first": ts(), "actions": []}
+        name = os.path.basename(wt)
+        cause = land_failure_cause(verdict.splitlines()[0])[0] if verdict and verdict.startswith("NOT LANDED") else None
+        if dry_run:
+            did.append(f"orphan {name}: {len(commits)} commit(s); last verdict: {verdict or 'never landed'}")
+            continue
+        if not rec["actions"]:
+            if acted >= ORPHAN_PER_PASS:  # a few a pass: the queue and the fixer caps are shared
+                continue
+            if cause == "real" and dispatch_block({"gate": False}, {}, [], time.time()):
+                continue  # no fixer slot now: the next pass
+            acted += 1
+            if cause == "real":
+                ok, msg = orphan_dispatch(repo, wt, name, verdict)
+                rec["actions"].append({"at": ts(), "what": "fixer", "ok": ok, "msg": msg[:200]})
+            else:
+                w = recover_reland(None, {"worktree": wt, "attempt": 1})
+                rec["actions"].append({"at": ts(), "what": "reland", "msg": w})
+            did.append(f"orphan {name}: {rec['actions'][-1]['what']} ({verdict or 'never landed'})")
+        elif not rec.get("escalated") and time.time() - parse_time(rec["actions"][-1]["at"]).timestamp() \
+                >= env_num("AGENTCTL_ORPHAN_IDLE", ORPHAN_IDLE):  # its action had its time
+            text = (f"UNLANDED ORPHAN: {wt.replace(HOME, '~')}: {len(commits)} commit(s) not on forgejo/main, its author "
+                    f"gone, still not landed after a {rec['actions'][-1]['what']} ({verdict or 'never landed'}) -- land it, "
+                    "hand it to an agent, or drop it")
+            c = open_condition("UNLANDED_ORPHAN", text, run_probe("orphan_landed", {"worktree": wt, "key": key, "repo": repo}),
+                               [], key=re.sub(r"[^\w.-]+", "_", f"orphan-{name}"), command="maintain", cwd=wt)
+            rec["escalated"] = ts() if c else None
+            did.append(f"orphan {name}: escalated UNLANDED ORPHAN" if c else f"orphan {name}: cleared")
+        st[key] = rec
+    if not dry_run:
+        write_json(path, st)
+    return did
+
+
+def orphan_dispatch(repo, wt, name, verdict):
+    """A headless fixer IN the orphan's worktree (its author's), told the last verdict."""
+    num = f"orphan-{name}"
+    d = reds_dir(num)
+    os.makedirs(d, exist_ok=True)
+    k = 1 + len(glob.glob(os.path.join(d, "fixer*.json")))
+    rec_path = os.path.join(d, "fixer.json" if k == 1 else f"fixer-{k}.json")
+    rec = {"sig": None, "sigs": [], "jobs": ["land"], "run": num, "run_id": None, "workflow": "Unlanded change",
+           "job": "land", "kind": "test", "line": (verdict or "")[:400], "gate": False, "worktree": wt, "started": ts(),
+           "why": "orphaned change, author gone", "log": os.path.join(d, f"claude-{k}.log"), "names": [num],
+           "orphan": True}
+    write_json(rec_path, rec)
+    with open(os.path.join(d, "fixer.log"), "a") as logf:
+        p = subprocess.Popen([sys.executable, TOOL_PATH, "red", "fixer", "--repo", repo, "--record", rec_path],
+                             stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=wt,
+                             env=fixer_env(slug(repo), num))
+    rec.update(pid=p.pid, process_start=process_start(p.pid))
+    write_json(rec_path, rec)
+    return True, f"fixer pid {p.pid} in {wt.replace(HOME, '~')}"
 
 
 def maintain_stale_fixes(dry_run, repo=None):
@@ -9991,9 +10164,9 @@ def safe_cwd():
         return os.environ.get("PWD") or "(removed)"
 
 
-INBOX_KINDS = [("RECOVERED", r"RECOVERED:"), ("RELANDING", r"RELANDING:"), ("NETWORK", r"NETWORK:"),  # first: they quote others
+INBOX_KINDS = [("UNLANDED_ORPHAN", r"UNLANDED ORPHAN:"), ("RECOVERED", r"RECOVERED:"), ("RELANDING", r"RELANDING:"), ("NETWORK", r"NETWORK:"),  # first: they quote others
                ("BRANCH_RED", r"BRANCH RED"), ("RED_UNCLAIMED", r"RED UNCLAIMED"), ("RED_BUDGET", r"RED BUDGET"), ("RED_AUTHOR", r"RED AUTHOR"), ("RED_ESCALATE", r"RED ESCALATE"), ("BLOCKED", r"RED BLOCKED ON OWNER"),
-               ("RED_DISPATCHED", r"RED DISPATCHED"), ("RED_REVERT", r"RED REVERT"), ("RED_FLAKE", r"RED FLAKE"), ("FIXER_LANDED", r"RED FIXER [^:]*: LANDED "),
+               ("RED_DISPATCHED", r"RED DISPATCHED"), ("RED_REVERT", r"RED REVERT"), ("RED_FLAKE", r"RED FLAKE"), ("FIXER_LANDED", r"RED FIXER [^:]*: LANDED "), ("DIAGNOSED", r"RED FIXER [^:]*: DIAGNOSED:"),
                ("FIXER_FAILED", r"RED FIXER "), ("RED_CLEARED", r"RED CLEARED"), ("FIX_FAILED", r"FIX FAILED"), ("FIX_OK", r"FIX OK"), ("FIX_UNVERIFIED", r"FIX UNVERIFIED"),
                ("RED", r"WATCH RED"), ("OK", r"WATCH OK"), ("STALLED", r"WATCH STALLED|STALLED:|.*\bstalled\b"),
                # a crash, a signal or an exit with no verdict: whatever it watched is unknown now
@@ -10181,7 +10354,7 @@ def inbox_wait(kinds, since_ack=False, timeout=0, verbose=False, forever=False):
 # are acked, the gate is marked dirty, the status line refreshes, its on_recover actions run (release a block and
 # dispatch the red's workflow to verify it, kick the tunnel, land a change again), and one RECOVERED note is written.
 # Nobody acks a solved problem. `agentctl recover status` lists the open conditions.
-CONDITION_KINDS = ("RED_UNCLAIMED", "RED_BUDGET", "RED_ESCALATE", "BLOCKED", "STALLED", "UNKNOWN", "NETWORK")
+CONDITION_KINDS = ("UNLANDED_ORPHAN", "RED_UNCLAIMED", "RED_BUDGET", "RED_ESCALATE", "BLOCKED", "STALLED", "UNKNOWN", "NETWORK")
 RECOVER_BACKOFF_MAX = 600  # a probe is re-run at most this far apart, however often it failed ($AGENTCTL_RECOVER_MAX)
 _OPENING = [0]  # > 0 inside open_condition: the one place a condition-kind inbox entry or a block may be written
 
@@ -10350,11 +10523,11 @@ def probe_fixer_slot(a):
     return why is None, why or "a fixer slot is free"
 
 
-PROBES = {"fixer_slot": probe_fixer_slot, "batch_hold": probe_batch_hold, "workflow_green": probe_workflow_green, "http": probe_http, "tcp": probe_tcp, "red_resolved": probe_red_resolved,
+PROBES = {"orphan_landed": probe_orphan_landed, "fixer_slot": probe_fixer_slot, "batch_hold": probe_batch_hold, "workflow_green": probe_workflow_green, "http": probe_http, "tcp": probe_tcp, "red_resolved": probe_red_resolved,
           "route": probe_route, "tunnel": probe_tunnel, "gate_read": probe_gate_read, "token": probe_token,
           "processor": probe_processor, "git_fetch": probe_git_fetch, "laptop_load": probe_laptop_load,
           "queue_entry": probe_queue_entry}
-PROBE_EVERY = {"fixer_slot": 30, "batch_hold": 60, "route": 5, "tunnel": 10, "gate_read": 15, "processor": 30, "queue_entry": 60, "red_resolved": 60,
+PROBE_EVERY = {"orphan_landed": 300, "fixer_slot": 30, "batch_hold": 60, "route": 5, "tunnel": 10, "gate_read": 15, "processor": 30, "queue_entry": 60, "red_resolved": 60,
                "workflow_green": 60, "token": 60, "laptop_load": 60, "tcp": 60, "http": 120, "git_fetch": 120}
 
 
@@ -10366,7 +10539,7 @@ def probe_words(kind, a):
             "gate_read": lambda: "the gate is read", "token": lambda: "the processor holds a token",
             "processor": lambda: "the processor cycles again", "git_fetch": lambda: f"git can read {REMOTE}/main",
             "laptop_load": lambda: "the laptop's load is normal", "batch_hold": lambda: "the batch hold ends",
-            "fixer_slot": lambda: "a fixer slot is free",
+            "fixer_slot": lambda: "a fixer slot is free", "orphan_landed": lambda: "its commits are on main or somebody works in it",
             "queue_entry": lambda: f"queue entry {a.get('eid')} moves"}.get(kind, lambda: kind)()
 
 
@@ -10675,7 +10848,8 @@ def land_not_landed(verdict, worktree, tail=(), code=1):
 # INBOX_ESCALATE_MIN (a gate fixer cap: at once) is escalated past the orchestrator: ONE macOS notification per entry
 # (`osascript -e 'display notification ...'`, never a dialog), and the status line leads with a bold `ESCALATED: ...`
 # until it is acked. Driven by the always-on processor (each minute) and by the status line's refresh.
-ESCALATE_KINDS = ("RED_UNCLAIMED", "RED_BUDGET", "STALLED")
+ESCALATE_KINDS = ("RED_UNCLAIMED", "RED_BUDGET", "STALLED", "UNLANDED_ORPHAN", "RED_ESCALATE", "BLOCKED", "DIAGNOSED",
+                  "FIXER_FAILED")  # 2026-10-28: an escalation nobody is told of is no escalation
 INBOX_ESCALATE_MIN = 10  # $AGENTCTL_INBOX_ESCALATE_MIN
 _last_escalate = [0.0]
 
