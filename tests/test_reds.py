@@ -575,6 +575,32 @@ class OldRedTest(RedsBase):
         self.assertIn(("POST", "actions/workflows/report-timings.yml/dispatches"), calls)
 
 
+class UnkickedTest(RedsBase):
+    def test_a_relevant_main_push_with_no_convergence_run_is_a_red_until_one_runs(self):
+        self.green(41, 21)  # Main green; convergence #19 (on self.sha) is its newest main run
+        self.r.write(".github/convergence-paths.txt", "worker/**\n")
+        self.r.write(".github/actions/changed-paths/matches.sh",
+                     "#!/usr/bin/env bash\ngrep -q '^worker/' && echo true || echo false\n")
+        self.r.commit("the gate's files")
+        self.r.write("worker/x.scala", "x\n")
+        head = self.r.commit("a pipeline change")
+        self.r.push()
+        os.environ["AGENTCTL_UNKICKED_AFTER"] = "0"
+        try:
+            self.tick()
+            its = [i for i in self.st.items("red") if i["data"]["job"] == "kick"]
+            self.assertEqual([i["state"] for i in its], ["offered"])
+            self.assertIn(head[:10], its[0]["data"]["line"])
+            runs = json.load(open(os.path.join(self.d, "runs.json")))
+            later = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 60))
+            self.put("runs.json", [run(99, 30, "Identity model convergence", "identity-model-convergence.yml", head,
+                                       status="in_progress", created=later)] + runs)
+            self.tick()
+        finally:
+            os.environ.pop("AGENTCTL_UNKICKED_AFTER")
+        self.assertEqual([i["state"] for i in self.st.items("red") if i["data"]["job"] == "kick"], ["cleared"])
+
+
 class AuditTest(RedsBase):
     def test_7_a_workflow_outside_the_newest_200_runs_is_still_read(self):
         saved = A.main_workflow_files, A.gh_json

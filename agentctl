@@ -2913,6 +2913,72 @@ def stuck_runs(lists, now_=None):
     return out
 
 
+UNKICKED_AFTER = 60 * 60  # a convergence-relevant main push with no convergence run on main by then is a red
+UNKICKED = {"pawelkrupinski/movies": ("Identity model convergence", ".github/convergence-paths.txt",
+                                      ".github/actions/changed-paths/matches.sh")}
+
+
+def convergence_relevant(repo, base, head, paths_file, matcher):
+    """True / False: does base..head touch a path that can change the suite's verdict (main's own list and matcher)?
+    None when it cannot be told here."""
+    import tempfile
+    d = git(repo, "diff", "--name-only", base, head, check=False)
+    if d.returncode != 0:
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        files = {}
+        for name, path in (("paths", paths_file), ("matcher", matcher)):
+            r = git(repo, "show", f"{head}:{path}", check=False)
+            if r.returncode != 0:
+                return None
+            files[name] = os.path.join(tmp, name)
+            with open(files[name], "w") as f:
+                f.write(r.stdout)
+        try:
+            r = subprocess.run(["bash", files["matcher"], files["paths"]], input=d.stdout, capture_output=True, text=True,
+                               timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return None
+    out = r.stdout.strip()
+    return True if out == "true" else False if out == "false" else None
+
+
+def unkicked_obs(o_r, repo, snap, now_=None):
+    """THE MISSING RUN IS A RED (2026-10-28: main had no convergence run for six hours while its kick diffed against a
+    measurement's run): forgejo/main's head, when it touches the suite's paths since the suite's newest MAIN run and is
+    older than UNKICKED_AFTER, with no main run of the suite started since it, is an infra red until one runs."""
+    spec = UNKICKED.get(o_r)
+    if not spec or not repo or not snap:
+        return {}
+    name, paths_file, matcher = spec
+    runs = next((g.get("runs") or [] for g in snap.get("gate") or [] if g["name"] == name), [])
+    if not runs:
+        return {}
+    head = git(repo, "rev-parse", f"refs/remotes/{REMOTE}/main", check=False).stdout.strip()
+    ct = git(repo, "log", "-1", "--format=%ct", head, check=False).stdout.strip() if head else ""
+    if not head or not ct.isdigit():
+        return {}
+    t = now_ if now_ is not None else time.time()
+    if t - float(ct) < env_num("AGENTCTL_UNKICKED_AFTER", UNKICKED_AFTER):
+        return {}
+    newest = runs[0]
+    try:
+        if parse_time(newest.get("createdAt")).timestamp() >= float(ct):
+            return {}  # a run started since the push: kicked
+    except (ValueError, TypeError, AttributeError):
+        return {}
+    base = newest.get("headSha")
+    if not base or not git_ok(repo, "cat-file", "-e", f"{base}^{{commit}}") \
+            or convergence_relevant(repo, base, head, paths_file, matcher) is not True:
+        return {}
+    u = {"key": red_key(name, "kick", "convergence not kicked"), "workflow": name, "job": "kick", "kind": "infra",
+         "red_kind": "stuck-run", "gate": True,
+         "line": f"no {name} run on main for {head[:10]} ({fmt_age(t - float(ct))} after it; the newest is "
+                 f"#{newest.get('number')} on {str(base)[:10]}): Main's kick-convergence did not dispatch it",
+         "run": {"number": f"unkicked-{head[:10]}", "databaseId": None, "headSha": head}, "runs": [], "names": set()}
+    return red_obs_of_units([u])
+
+
 def red_observe(o_r, repo, snap):
     """{key: observation} of everything red on main now: the gate, every other workflow (its newest decided run, audit
     #7), main's local checks, the branch runs that predict main red, and the stuck runs (audit #8)."""
@@ -2921,6 +2987,10 @@ def red_observe(o_r, repo, snap):
     units = gate_red_units(o_r, rows, others) + local_units(repo) + predict_units(o_r, snap)
     obs = red_obs_of_units(units)
     obs.update(stuck_obs(snap))
+    try:
+        obs.update(unkicked_obs(o_r, repo, snap))
+    except (Exception, SystemExit) as e:
+        err(f"red: could not tell whether the convergence was kicked ({str(e)[:120]})")
     return obs
 
 
