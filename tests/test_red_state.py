@@ -133,22 +133,20 @@ class SignatureTest(StateBase):
 class NoSilentSkipTest(StateBase):
     def test_a_due_red_that_cannot_be_dispatched_says_why_everywhere_and_escalates(self):
         os.environ["AGENTCTL_RED_UNCLAIMED_MIN"] = "0"
-        os.environ["AGENTCTL_RED_DAILY_CAP"] = "0"
+        os.environ["AGENTCTL_RED_MAX_OUTSIDE"] = "0"
+        self.addCleanup(os.environ.pop, "AGENTCTL_RED_MAX_OUTSIDE", None)
         self.runs(self.capture_run(70, 30, [("capture (de)", "[error] de boom")]))
         t = time.time()
         acts, report = self.patrol(dispatch=True, t=t)
-        self.assertIn("NOBODY (skipped: daily dispatch budget 0 spent)", report[-1])
-        self.assertTrue(any(a.startswith(f"RED UNCLAIMED: {CAP} #30 [capture (de)]: NOBODY -- daily dispatch budget 0 spent")
-                            for a in acts), acts)
+        acts, report = self.patrol(dispatch=True, t=t + 1)
+        # 2026-10-28: never NOBODY -- it waits in the FIFO fixer queue, its reason recorded and shown everywhere
+        self.assertIn("queued for a fixer (#1, next slot when the patrol's next look)", report[-1])
         rec = A.read_record(A.sig_path(A.signature(CAP, "capture (de)", "[error] de boom")))
-        self.assertEqual(rec["unassigned"], "daily dispatch budget 0 spent")
-        self.assertIn("fixing: NOBODY (skipped: daily dispatch budget 0 spent)", self.why()[1])
-        self.assertIn(f"{CAP} #30 → NOBODY (skipped: daily dispatch budget 0 spent)", self.why("--summary")[1])
-        self.assertEqual(len(self.inbox("RED_UNCLAIMED")), 1)
-        self.patrol(dispatch=True, t=t + 60)
-        self.assertEqual(len(self.inbox("RED_UNCLAIMED")), 1)  # once per spell
-        esc = A.inbox_escalations(now_=time.time() + 11 * 60)
-        self.assertTrue(any("RED UNCLAIMED" in (e.get("verdict") or "") for e in esc), esc)
+        self.assertIn("outside-the-gate fixer cap 0 reached", rec["unassigned"])
+        self.assertIn("fixing: queued for a fixer (#1", self.why()[1])
+        self.assertIn(f"{CAP} #30 → queued for a fixer (#1)", self.why("--summary")[1])
+        self.assertEqual(self.inbox("RED_UNCLAIMED"), [])
+        self.assertTrue(any(c["probe"]["kind"] == "fixer_slot" for c in A.open_conditions()))
 
 
 class CheckTreeTest(StateBase):

@@ -320,7 +320,7 @@ class PatrolTest(RedBase):
         self.assertEqual(self.patrol(t + 9 * 60, dispatch=False), [])
         acts = self.patrol(t + 11 * 60, dispatch=False)
         self.assertEqual(len(acts), 1, acts)
-        self.assertTrue(acts[0].startswith("RED UNCLAIMED: Main #20 [test (rest)]: NOBODY -- nobody fixing it for 11 min"), acts)
+        self.assertTrue(acts[0].startswith("RED UNCLAIMED: Main #20 [test (rest)]: unassigned -- nobody fixing it for 11 min"), acts)
         self.assertEqual(self.patrol(t + 20 * 60, dispatch=False), [])  # one per spell
         self.assertEqual(len(self.inbox("RED_UNCLAIMED")), 1)
         out = io.StringIO()
@@ -437,10 +437,12 @@ class DispatchTest(RedBase):
         A.write_json(A.sig_path(u["sig"]), rec)
         t = time.time()
         acts = self.patrol(t) + self.patrol(t + 11 * 60)
-        self.assertTrue(any(a.startswith("RED ESCALATE: Main #20 [test (rest)] still red after 2") for a in acts), acts)
-        self.assertEqual(self.patrol(t + 30 * 60), [])  # once
+        # 2026-10-28: the escalation is a named investigation fixer, never "a person must take it" with nobody on it
+        self.assertTrue(any(a.startswith("RED ESCALATE: Main #20 [test (rest)] still red after 2") and
+                            "an investigation fixer is assigned" in a for a in acts), acts)
         self.assertEqual(len(self.inbox("RED_ESCALATE")), 1)
-        self.assertEqual(A.fixer_records(), [])
+        self.assertEqual([r.get("why") for r in A.fixer_records()], ["escalated after 2 fixers: investigation"])
+        self.wait_fixer()
 
     def test_a_claim_made_while_the_patrol_decides_stops_the_dispatch(self):
         t = time.time()
@@ -475,11 +477,9 @@ class DispatchTest(RedBase):
         finally:
             os.environ.pop("AGENTCTL_RED_GATE_MAX_FIXERS")
             os.environ.pop("AGENTCTL_RED_MAX_FIXERS")
-        self.assertTrue(any("SKIPPED (gate fixer cap 1 reached (1 alive))" in a for a in acts), acts)
-        unclaimed = self.inbox("RED_UNCLAIMED")
-        self.assertEqual(len(unclaimed), 1)
-        self.assertIn("NOBODY -- gate fixer cap 1 reached", unclaimed[0]["verdict"])
-        self.assertEqual([e["id"] for e in A.inbox_escalations(t)], [unclaimed[0]["id"]])  # escalated at once
+        self.assertTrue(any("QUEUED (gate fixer cap 1 reached (1 alive))" in a for a in acts), acts)
+        self.assertEqual(self.inbox("RED_UNCLAIMED"), [])  # 2026-10-28: never NOBODY -- queued for the next slot
+        self.assertEqual([e["sig"] for e in A.fixer_queue(gate=True)], [self.units()[0]["sig"]])
         A.write_json(os.path.join(self.tmp.name, "reds", "77", "fixer.json"),
                      {"sig": "other", "pid": 1 << 22, "started": A.ts(), "gate": False, "ended": A.ts(),
                       "verdict": "LANDED abc1234"})
@@ -512,7 +512,7 @@ class DispatchTest(RedBase):
         self.assertIn('permissions.defaultMode to "auto"', out)
         t = time.time()
         acts = self.patrol(t) + self.patrol(t + 11 * 60)
-        self.assertTrue(any("NOT DISPATCHED" in a for a in acts), acts)
+        self.assertTrue(any("QUEUED (interactive sessions run in permission mode" in a for a in acts), acts)
         self.assertEqual(A.fixer_records(), [])
 
     def test_auto_off_stops_the_dispatch(self):
@@ -520,7 +520,8 @@ class DispatchTest(RedBase):
         t = time.time()
         acts = self.patrol(t)
         self.assertTrue(any("dispatch is OFF" in a for a in acts), acts)
-        self.assertIn("main #20 → NOBODY (skipped: dispatch is OFF", self.why("--summary")[1])
+        self.assertIn("main #20 → queued for a fixer (#1)", self.why("--summary")[1])
+        self.assertIn("queued for a fixer (#1, next slot when dispatch can run: dispatch is OFF", self.why()[1])
         self.assertIn("automatic dispatch: ON", self.tool("red", "auto", "on")[1])
 
     def test_red_dispatch_by_hand_refuses_a_red_being_fixed(self):
@@ -797,11 +798,10 @@ class LifecycleTest(RedBase):
         finally:
             os.environ.pop("FAKE_CLAUDE_SLEEP")
         self.assertEqual(len([a for a in acts if "DISPATCHED pid" in a]), 1, acts)
-        self.assertTrue(any(a.startswith("RED UNCLAIMED: Weekly #32") and "outside-the-gate fixer cap 1 reached" in a for a in acts), acts)
-        # no silent skip (2026-10-27): the capped red's reason is in its record and ONE RED UNCLAIMED entry (escalated
-        # after 10 min unread), outside the gate too
-        self.assertEqual([e["verdict"][:28] for e in self.inbox("RED_UNCLAIMED")], ["RED UNCLAIMED: Weekly #32 [s"])
-        self.assertIn("fixing: NOBODY (skipped: outside-the-gate fixer cap 1 reached)", self.why()[1])
+        self.assertTrue(any("Weekly #32" in a and "QUEUED (outside-the-gate fixer cap 1 reached)" in a for a in acts), acts)
+        # never NOBODY (2026-10-28): the capped red waits in the FIFO queue, with its slot named
+        self.assertEqual(self.inbox("RED_UNCLAIMED"), [])
+        self.assertIn("fixing: queued for a fixer (#1, next slot when", self.why()[1])
         self.wait_fixer()
 
     def test_an_unreadable_gate_dispatches_nothing_and_says_so_once_with_an_infra_check(self):

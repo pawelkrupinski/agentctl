@@ -152,12 +152,11 @@ class InfraAndNobodyTest(AssignBase):
                          f"gate RED (main #20 → {A.DISPATCHING_GAP}; convergence green)")  # before the patrol: never NOBODY
         os.environ["AGENTCTL_RED_GATE_MAX_FIXERS"] = "0"
         acts = self.patrol(time.time())
-        self.assertTrue(any(a.startswith("RED UNCLAIMED: Main #20 [test (rest)]: NOBODY -- gate fixer cap 0 reached")
-                            for a in acts), acts)
-        self.assertIn("main #20 → NOBODY (skipped: gate fixer cap 0 reached", self.why("--summary")[1])
-        self.assertIn("fixing: NOBODY (skipped: gate fixer cap 0 reached", self.why()[1])
+        self.assertTrue(any("QUEUED (gate fixer cap 0 reached" in a for a in acts), acts)
+        self.assertIn("main #20 → queued for a fixer (#1)", self.why("--summary")[1])  # 2026-10-28: never NOBODY
+        self.assertIn("fixing: queued for a fixer (#1, next slot when the patrol's next look)", self.why()[1])
         os.environ.pop("AGENTCTL_RED_GATE_MAX_FIXERS")
-        self.assertEqual(len(self.inbox("RED_UNCLAIMED")), 1)
+        self.assertEqual(self.inbox("RED_UNCLAIMED"), [])
 
     def test_the_processor_patrols_at_once_when_the_snapshot_first_sees_a_gate_red(self):
         A._last_patrol[0] = time.time()

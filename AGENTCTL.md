@@ -246,11 +246,35 @@ Decodo (2026-10-28): `Decodo probe` (movies, every 30 min + dispatch) CONNECTs t
 Security headers' block is `red block <n> --cmd "Check the Decodo dashboard ..." --until-green "Decodo probe"`, so it
 clears and Security headers is re-dispatched once Decodo answers.
 
+### always claimed: no red is ever NOBODY (2026-10-28)
+
+The owner: "why unclaimed ... should always claim, fix structurally".
+
+- **A claim follows its red.** A claim (an agent's, a dispatched fixer's, a block) counts for every newer failed run
+  of the same workflow and failing job in the current red streak whose first error line matches (or either line is
+  unknown). A different line or job is a new red. A green run ends it, and so do a release or a dead claimant.
+- **A committed fix counts only while it is live.** An unlanded `Fixes-Red:` commit counts for the runs it names (never
+  by cause) and only while a land, a live claim or a fixer is in its worktree, or it is younger than 30 min. It stops
+  counting once a later landed fix for the same runs or cause supersedes it, or once a fix landed since is refuted by a
+  newer run. Otherwise it is a `stale` line (`abandoned: no process behind it, 14 h old`, `superseded by <sha>`), and
+  `agentctl maintain` lists its worktree (and removes it only when proven merged).
+- **No daily budget.** A red that cannot get a fixer now (a concurrency cap, or dispatch unavailable) waits in a FIFO
+  queue per class: `queued for a fixer (#k, next slot when <x> ends)`. That is a recovery condition (probe
+  `fixer_slot`, on recover: the patrol runs). Gate reds keep their own cap of 3 alive.
+- **Escalation is never NOBODY.** After 2 failed fixers comes ONE investigation fixer (named in RED ESCALATE). If it
+  ends with the red still nobody's, the red goes to the owner as a BLOCK whose probe is the red's own workflow going
+  green. A red with 3 or more refuted fixes is `recurring: N fixes refuted`, and its fixer is told to find the root
+  cause, with those commits listed.
+- **One outage is one condition.** `red block <n> --cmd "..." --cause Decodo --until-green "Decodo probe"` opens it, and
+  later reds attach with `--cause Decodo`. When the probe passes, every attached red is released and its workflow
+  dispatched to verify it. The status line shows one line: `Decodo down → blocks: A, B (auto-clears when …)`.
+- A claim or a block re-checks the red_resolved conditions at once: RED UNCLAIMED clears without waiting for backoff.
+
 ### red: who is fixing each red build, and a fixer for one nobody fixes
 
 ```
 agentctl red claim <run> [--note "<what>"]     # an agent assigned a red runs this FIRST
-agentctl red block <run> --cmd "<command>" [--until-green <workflow> | --until-http <url> | --until-tcp <host:port>]
+agentctl red block <run> --cmd "<command>" [--cause <outage>] [--until-green <workflow> | --until-http <url> | --until-tcp <host:port>]
                                                # it waits on the owner: BLOCKED ON OWNER (assigned, shown loudly) until
                                                # its probe passes (default: the red's own workflow goes green)
 agentctl red release <run> [--any]

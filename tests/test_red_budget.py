@@ -63,26 +63,20 @@ class RefundTest(RedBase):
         fixer(t, 3, "DUPLICATE: session 974d50a6 (~/projects/x) is on it")
         self.assertEqual(A.dispatches_today(), 0)
 
-    def test_an_outside_red_past_the_daily_budget_is_one_red_budget_entry_that_escalates(self):
+    def test_no_daily_budget_starves_an_outside_red_any_more(self):
+        """2026-10-28 (`RED UNCLAIMED ... NOBODY -- daily dispatch budget 6 spent`): reds outside the gate have a
+        concurrency cap and a FIFO queue, never a daily budget."""
         fixer(self.tmp.name, 9, "LANDED abcdef1234")
         u = dict(self.units()[0], gate=False)
         rec = json.load(open(A.sig_path(u["sig"])))
         os.environ["AGENTCTL_RED_DAILY_CAP"] = "1"
         try:
-            t = time.time()
-            msg = A.maybe_dispatch(MOVIES, self.r.path, u, rec, t, why="x", group=[u])
-            again = A.maybe_dispatch(MOVIES, self.r.path, u, rec, t, why="x", group=[u])
+            msg = A.maybe_dispatch(MOVIES, self.r.path, u, rec, time.time(), why="x", group=[u])
         finally:
             os.environ.pop("AGENTCTL_RED_DAILY_CAP")
-        self.assertIn("SKIPPED (daily dispatch budget 1 spent)", msg)
-        self.assertIsNone(again)
-        budget = self.inbox("RED_BUDGET")
-        self.assertEqual(len(budget), 1)
-        self.assertTrue(budget[0]["verdict"].startswith("RED BUDGET: daily dispatch budget 1 spent (refunds excluded); "
-                                                        "Main #20 [test (rest)] (outside the gate) not dispatched"))
-        self.assertIn("RED_BUDGET", A.WAIT_KINDS_DEFAULT.split(","))
-        self.assertEqual(A.inbox_escalations(t + 5 * 60), [])
-        self.assertEqual(len(A.inbox_escalations(t + 11 * 60)), 1)
+        self.assertIn(" DISPATCHED pid", msg)
+        self.assertEqual(self.inbox("RED_BUDGET"), [])
+        self.wait_fixer()
 
     def test_a_refunded_dispatch_frees_its_budget(self):
         fixer(self.tmp.name, 9, "GAVE UP: already fixed on main by 03d646e63")
@@ -177,7 +171,7 @@ class DiagnosedTest(RedBase):
         out = self.why()[1]
         self.assertIn("fixing: red-fixer-20", out)
         self.assertIn("diagnosed: a one-off Chrome startup crash", out)
-        self.assertIn("awaiting an implementer (gate fixer cap 0 reached", out)
+        self.assertIn("awaiting an implementer (queued for a fixer: gate fixer cap 0 reached", out)
         self.assertNotIn("NOBODY", out)
         self.assertIn("main #20 → red-fixer-20 diagnosed, awaiting an implementer", self.why("--summary")[1])
         self.assertEqual(self.inbox("RED_UNCLAIMED"), [])
@@ -193,15 +187,17 @@ class DiagnosedTest(RedBase):
         self.patrol(time.time())
         self.wait_fixer(n=2)
         for _ in range(50):
-            if self.inbox("RED_ESCALATE"):
+            if self.inbox("BLOCKED"):
                 break
             time.sleep(0.2)
-        esc = self.inbox("RED_ESCALATE")
+        # 2026-10-28: diagnosed twice goes to the owner as a block with its probe (the red's own workflow going green)
+        esc = self.inbox("BLOCKED")
         self.assertEqual(len(esc), 1)
-        self.assertIn("diagnosed twice, not fixed", esc[0]["verdict"])
-        [c] = A.all_claims()
-        self.assertEqual(c["state"], "diagnosed")
-        self.assertTrue(c["awaiting"].startswith("a person"))
+        self.assertIn("RED BLOCKED ON OWNER: Main #20", esc[0]["verdict"])
+        self.assertIn("auto-clears when Main is green", esc[0]["verdict"])
+        cs = sorted(A.all_claims(), key=lambda c: c["state"])
+        self.assertEqual([c["state"] for c in cs], ["blocked", "diagnosed"])
+        self.assertTrue(cs[1]["awaiting"].startswith("a person"))
         self.assertNotIn("NOBODY", self.why()[1])
         self.assertEqual([a for a in self.patrol(time.time()) if "DISPATCHED" in a], [])
 
