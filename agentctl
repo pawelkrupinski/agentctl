@@ -8554,6 +8554,7 @@ def start_duties(repo):
     def loop():
         while not stop.is_set():
             DUTY_BEAT[0] = time.monotonic()
+            write_beat("processor")  # the watchdog's W5 reads it (a separate process: no shared memory)
             for name, step in (("network watch", network_watch),  # a new route: tunnel kicked, gate read at once
                                ("tunnel probe", tunnel_watch),  # 2 timeouts/refusals in a row -> kickstart the tunnel
                                ("gate summary", lambda: maybe_publish_gate(repo)),  # ~/.cache/agentctl/gate-summary.txt
@@ -10189,6 +10190,153 @@ def jvm_reap(cands, kill, procs):
 MAINTAIN_SWEEP_HOUR = 9  # local time: the daily sweep runs at the first maintain pass from 09:00 ($AGENTCTL_SWEEP_HOUR)
 
 
+# ---------------------------------------------------------------- the invariant watchdog (design §10, phase 1 step 2)
+# A separate, cheap, dumb launchd job (net.bitcashier.agentctl-watchdog, every 60 s): `agentctl watchdog` reads today's
+# files only -- the queue entries, the published gate line, the processor's beat file, the inbox -- and checks the
+# invariants the reconciler must converge to. A violation is a condition (INVARIANT, its probe the invariant itself:
+# it closes when the invariant holds again) and a macOS notification; on W5 (the processor's duties stopped) it also
+# kickstarts the processor, at most once per WATCHDOG_KICK_GAP. It shares no code path with the processor beyond the
+# registry and the read-only readers.
+W1_MAX = 2 * 3600       # the oldest unlanded change ($AGENTCTL_W1_MAX); while main is red, counted from the red's start
+W2_MAX = 10 * 60        # a gate red with nobody on it
+W5_MAX = 120            # the processor's duties beat
+W6_MAX = 5 * 60         # a due escalation not notified
+WM_MAX = 45 * 60        # maintain's last pass (launchd every 15 min)
+WATCHDOG_KICK_GAP = 600
+
+
+def beat_path(name):
+    return state_root(f"{name}.beat")
+
+
+def write_beat(name):
+    try:
+        os.makedirs(state_root(), exist_ok=True)
+        with open(beat_path(name), "w") as f:
+            f.write(f"{time.time():.0f} {os.getpid()}\n")
+    except OSError:
+        pass
+
+
+def beat_age(name):
+    try:
+        return time.time() - float(open(beat_path(name)).read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def watchdog_state():
+    return read_record(state_root("watchdog.json")) or {}
+
+
+def inv_w1():
+    """W1: the oldest non-terminal change is younger than W1_MAX (while main is red: past the red's own start)."""
+    d, _c, _w = waiting_state(movies_repo_path())
+    open_ = [e for e in waiting_entries(d, open_only=False) if e.get("status") in ("queued", "checking", "waiting")]
+    if not open_:
+        return True, "no change waits"
+    oldest = min(open_, key=lambda e: e.get("created") or "")
+    age = time.time() - parse_time(oldest.get("created") or ts()).timestamp()
+    line, _e = cached_gate_summary(SHORT["movies"])
+    red_since = 0.0
+    if line and line.startswith("gate RED"):
+        snap = ci_state_load(SHORT["movies"]) or {}
+        starts = [parse_time(g["since"]).timestamp() for g in snap.get("gate") or [] if g.get("since")]
+        red_since = (time.time() - min(starts)) if starts else 0.0
+    lim = env_num("AGENTCTL_W1_MAX", W1_MAX)
+    ok = age < lim or (red_since and age < red_since + lim)
+    return ok, f"oldest unlanded change {oldest['id']} ({oldest.get('status')}) is {fmt_age(age)} old" + \
+        (f", main red for {fmt_age(red_since)}" if red_since else "")
+
+
+UNASSIGNED_WORDS = re.compile(r"queued for a fixer|UNASSIGNED|dispatching a fixer|NOBODY")
+
+
+def inv_w2():
+    """W2: no gate red sits with nobody on it for W2_MAX (from the published gate line)."""
+    line, _e = cached_gate_summary(SHORT["movies"])
+    gate = (re.match(r"gate RED \((.*?)\)(?: ·|$)", line or "") or [None, ""])[1]
+    bad = [p_.strip() for p_ in gate.split(";") if "→" in p_ and UNASSIGNED_WORDS.search(p_)]
+    st = watchdog_state()
+    first = st.get("w2_since")
+    now_ = time.time()
+    if not bad:
+        if first:
+            write_json(state_root("watchdog.json"), {**st, "w2_since": None})
+        return True, "every gate red has somebody on it"
+    if not first:
+        first = now_
+        write_json(state_root("watchdog.json"), {**st, "w2_since": first})
+    return now_ - first < env_num("AGENTCTL_W2_MAX", W2_MAX), f"gate red with nobody on it for {fmt_age(now_ - first)}: {bad[0][:120]}"
+
+
+def inv_w5():
+    """W5: the processor's duties beat within W5_MAX (only where the processor service is installed)."""
+    if not os.path.exists(os.path.join(launch_agents_dir(), f"{SERVICE_LABEL}.plist")):
+        return True, "no processor service here"
+    age = beat_age("processor")
+    if age is None:
+        return None, "no processor beat yet (a processor from before the watchdog)"
+    return age < env_num("AGENTCTL_W5_MAX", W5_MAX), f"the processor's duties beat {int(age)} s ago"
+
+
+def inv_w6():
+    """W6: no escalation due for over W6_MAX without its notification."""
+    lim = env_num("AGENTCTL_INBOX_ESCALATE_MIN", INBOX_ESCALATE_MIN) * 60
+    d = os.path.join(inbox_dir(), "escalated")
+    late = [e for e in inbox_escalations() if not os.path.exists(os.path.join(d, e["id"]))
+            and time.time() - float(e.get("at") or 0) - lim > env_num("AGENTCTL_W6_MAX", W6_MAX)]
+    return not late, (f"{len(late)} escalation(s) due and not notified: {str(late[0].get('verdict'))[:100]}" if late
+                      else "every due escalation was notified")
+
+
+def inv_wm():
+    """WM: maintain (the reaper; the watchdog's own watcher) ran within WM_MAX."""
+    if not os.path.exists(os.path.join(launch_agents_dir(), "net.bitcashier.agentctl-maintain.plist")):
+        return True, "no maintain service here"
+    age = beat_age("maintain")
+    if age is None:
+        return None, "no maintain beat yet"
+    return age < env_num("AGENTCTL_WM_MAX", WM_MAX), \
+        f"maintain last ran {fmt_age(age) + ' ago' if age is not None else 'never'}"
+
+
+INVARIANTS = {"W1": inv_w1, "W2": inv_w2, "W5": inv_w5, "W6": inv_w6, "WM": inv_wm}
+
+
+def probe_invariant(a):
+    return INVARIANTS[a["id"]]()
+
+
+def cmd_watchdog(a):
+    """One watchdog pass: every invariant checked; a violation opens its INVARIANT condition (and notifies), a restored
+    one closes it; W5 kickstarts the processor. Prints one line per invariant."""
+    write_beat("watchdog")
+    st = watchdog_state()
+    rc = 0
+    for wid in INVARIANTS:
+        r = run_probe("invariant", {"id": wid})
+        key = f"invariant-{wid}"
+        cond = next((c for c in open_conditions() if c["key"] == key), None)
+        print(f"{wid}: {'ok' if r.ok else 'cannot tell' if r.ok is None else 'VIOLATED'} -- {r.detail}")
+        if r.ok is False:
+            rc = 1
+            if not cond:
+                open_condition("INVARIANT", f"INVARIANT {wid} violated: {r.detail}", r, [], key=key, command="watchdog")
+                notify(f"agentctl watchdog: {wid}", r.detail[:220])
+            # a kickstart costs the processor its token (handed over again by the next interactive agentctl): only for a
+            # processor silent past 3 x W5_MAX, at most every WATCHDOG_KICK_GAP
+            if wid == "W5" and (beat_age("processor") or 0) > 3 * env_num("AGENTCTL_W5_MAX", W5_MAX) \
+                    and time.time() - float(st.get("kicked_at") or 0) >= WATCHDOG_KICK_GAP:
+                launchctl("kickstart", "-k", f"gui/{os.getuid()}/{SERVICE_LABEL}")
+                st["kicked_at"] = time.time()
+                write_json(state_root("watchdog.json"), {**watchdog_state(), "kicked_at": st["kicked_at"]})
+                print(f"W5: kickstarted {SERVICE_LABEL}")
+        elif r.ok and cond:
+            close_condition(cond, r)
+    return rc
+
+
 def cmd_maintain(a):
     """THE reaper (the owner, 2026-10-27: one service, not three): launchd net.bitcashier.agentctl-maintain runs it every
     15 min. Each pass: the reap (`orphans --kill --safe`: dead owners, stray wait loops, stuck sbt servers, stale JVMs);
@@ -10196,6 +10344,13 @@ def cmd_maintain(a):
     if hasattr(sys.stdout, "reconfigure"):  # its log shows each step as it happens
         sys.stdout.reconfigure(line_buffering=True)
     print(f"== agentctl maintain {ts()}{' (DRY RUN)' if a.dry_run else ''}")
+    if not a.dry_run:
+        write_beat("maintain")
+        wd = beat_age("watchdog")  # the watchdog's watcher (design §15): it must have run within 5 min
+        if os.path.exists(os.path.join(launch_agents_dir(), "net.bitcashier.agentctl-watchdog.plist")) and \
+                (wd is None or wd > 300):
+            notify("agentctl: the watchdog is not running", f"last ran {fmt_age(wd) + ' ago' if wd else 'never'}")
+            print(f"== the watchdog last ran {fmt_age(wd) + ' ago' if wd else 'never'}: notified")
     print("== reap")
     cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True))
     path = state_root("maintain.json")
@@ -10618,7 +10773,7 @@ def safe_cwd():
         return os.environ.get("PWD") or "(removed)"
 
 
-INBOX_KINDS = [("CLOSED", r"CLOSED:"), ("UNLANDED_ORPHAN", r"UNLANDED ORPHAN:"), ("RECOVERED", r"RECOVERED:"), ("RELANDING", r"RELANDING:"), ("NETWORK", r"NETWORK:"),  # first: they quote others
+INBOX_KINDS = [("INVARIANT", r"INVARIANT "), ("CLOSED", r"CLOSED"), ("UNLANDED_ORPHAN", r"UNLANDED ORPHAN:"), ("RECOVERED", r"RECOVERED:"), ("RELANDING", r"RELANDING:"), ("NETWORK", r"NETWORK:"),  # first: they quote others
                ("BRANCH_RED", r"BRANCH RED"), ("RED_UNCLAIMED", r"RED UNCLAIMED"), ("RED_BUDGET", r"RED BUDGET"), ("RED_AUTHOR", r"RED AUTHOR"), ("RED_ESCALATE", r"RED ESCALATE"), ("BLOCKED", r"RED BLOCKED ON OWNER"),
                ("RED_DISPATCHED", r"RED DISPATCHED"), ("RED_REVERT", r"RED REVERT"), ("RED_FLAKE", r"RED FLAKE"), ("FIXER_LANDED", r"RED FIXER [^:]*: LANDED "), ("DIAGNOSED", r"RED FIXER [^:]*: DIAGNOSED:"),
                ("FIXER_FAILED", r"RED FIXER "), ("RED_CLEARED", r"RED CLEARED"), ("FIX_FAILED", r"FIX FAILED"), ("FIX_OK", r"FIX OK"), ("FIX_UNVERIFIED", r"FIX UNVERIFIED"),
@@ -10808,7 +10963,7 @@ def inbox_wait(kinds, since_ack=False, timeout=0, verbose=False, forever=False):
 # are acked, the gate is marked dirty, the status line refreshes, its on_recover actions run (release a block and
 # dispatch the red's workflow to verify it, kick the tunnel, land a change again), and one RECOVERED note is written.
 # Nobody acks a solved problem. `agentctl recover status` lists the open conditions.
-CONDITION_KINDS = ("UNLANDED_ORPHAN", "RED_UNCLAIMED", "RED_BUDGET", "RED_ESCALATE", "BLOCKED", "STALLED", "UNKNOWN", "NETWORK")
+CONDITION_KINDS = ("INVARIANT", "UNLANDED_ORPHAN", "RED_UNCLAIMED", "RED_BUDGET", "RED_ESCALATE", "BLOCKED", "STALLED", "UNKNOWN", "NETWORK")
 RECOVER_BACKOFF_MAX = 600  # a probe is re-run at most this far apart, however often it failed ($AGENTCTL_RECOVER_MAX)
 _OPENING = [0]  # > 0 inside open_condition: the one place a condition-kind inbox entry or a block may be written
 
@@ -10983,11 +11138,11 @@ def probe_waiting_ok(a):
     return at > float(a.get("since") or 0), f"last good round {iso_at(at)}" if at else "no good round yet"
 
 
-PROBES = {"waiting_ok": probe_waiting_ok, "owner_block": probe_owner_block, "orphan_landed": probe_orphan_landed, "fixer_slot": probe_fixer_slot, "batch_hold": probe_batch_hold, "workflow_green": probe_workflow_green, "http": probe_http, "tcp": probe_tcp, "red_resolved": probe_red_resolved,
+PROBES = {"invariant": probe_invariant, "waiting_ok": probe_waiting_ok, "owner_block": probe_owner_block, "orphan_landed": probe_orphan_landed, "fixer_slot": probe_fixer_slot, "batch_hold": probe_batch_hold, "workflow_green": probe_workflow_green, "http": probe_http, "tcp": probe_tcp, "red_resolved": probe_red_resolved,
           "route": probe_route, "tunnel": probe_tunnel, "gate_read": probe_gate_read, "token": probe_token,
           "processor": probe_processor, "git_fetch": probe_git_fetch, "laptop_load": probe_laptop_load,
           "queue_entry": probe_queue_entry}
-PROBE_EVERY = {"waiting_ok": 30, "owner_block": 60, "orphan_landed": 300, "fixer_slot": 30, "batch_hold": 60, "route": 5, "tunnel": 10, "gate_read": 15, "processor": 30, "queue_entry": 60, "red_resolved": 60,
+PROBE_EVERY = {"invariant": 60, "waiting_ok": 30, "owner_block": 60, "orphan_landed": 300, "fixer_slot": 30, "batch_hold": 60, "route": 5, "tunnel": 10, "gate_read": 15, "processor": 30, "queue_entry": 60, "red_resolved": 60,
                "workflow_green": 60, "token": 60, "laptop_load": 60, "tcp": 60, "http": 120, "git_fetch": 120}
 
 
@@ -10999,7 +11154,7 @@ def probe_words(kind, a):
             "gate_read": lambda: "the gate is read", "token": lambda: "the processor holds a token",
             "processor": lambda: "the processor cycles again", "git_fetch": lambda: f"git can read {REMOTE}/main",
             "laptop_load": lambda: "the laptop's load is normal", "batch_hold": lambda: "the batch hold ends",
-            "fixer_slot": lambda: "a fixer slot is free", "waiting_ok": lambda: "a waiting round completes",
+            "fixer_slot": lambda: "a fixer slot is free", "invariant": lambda: f"invariant {a.get('id')} holds", "waiting_ok": lambda: "a waiting round completes",
             "owner_block": lambda: (probe_words(a["inner"]["kind"], a["inner"]["args"]) if a.get("inner") else "its check passes")
             + " (or the block loses its justification)", "orphan_landed": lambda: "its commits are on main or somebody works in it",
             "queue_entry": lambda: f"queue entry {a.get('eid')} moves"}.get(kind, lambda: kind)()
@@ -11358,7 +11513,7 @@ def land_not_landed(verdict, worktree, tail=(), code=1):
 # INBOX_ESCALATE_MIN (a gate fixer cap: at once) is escalated past the orchestrator: ONE macOS notification per entry
 # (`osascript -e 'display notification ...'`, never a dialog), and the status line leads with a bold `ESCALATED: ...`
 # until it is acked. Driven by the always-on processor (each minute) and by the status line's refresh.
-ESCALATE_KINDS = ("RED_UNCLAIMED", "RED_BUDGET", "STALLED", "UNLANDED_ORPHAN", "RED_ESCALATE", "BLOCKED", "DIAGNOSED",
+ESCALATE_KINDS = ("INVARIANT", "RED_UNCLAIMED", "RED_BUDGET", "STALLED", "UNLANDED_ORPHAN", "RED_ESCALATE", "BLOCKED", "DIAGNOSED",
                   "FIXER_FAILED")  # 2026-10-28: an escalation nobody is told of is no escalation
 INBOX_ESCALATE_MIN = 10  # $AGENTCTL_INBOX_ESCALATE_MIN
 _last_escalate = [0.0]
@@ -11653,6 +11808,8 @@ def main(argv=None):
     gad.add_argument("--force", action="store_true", help="admit at once (memory already counted elsewhere)")
     gev = gvs.add_parser("evict", help="stop the idle kept sbt server unused longest")
     gev.add_argument("--dry-run", action="store_true")
+    sub.add_parser("watchdog", help="the invariant watchdog's pass (launchd every 60 s): W1 oldest unlanded change, W2 "
+                   "gate red nobody holds, W5 processor beat, W6 escalations notified, WM maintain ran")
     rcv = sub.add_parser("recover", help="the recovery registry: each open non-green condition, its probe, its next check")
     rcv.add_argument("rcmd", nargs="?", choices=("status", "tick"), default="status",
                      help="status (default): list; tick: probe every open condition now (clears what passes)")
@@ -11731,7 +11888,7 @@ def main(argv=None):
     rp_.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
     handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": cmd_red, "dispatch": cmd_dispatch, "gov": cmd_gov, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
+               "red": cmd_red, "dispatch": cmd_dispatch, "gov": cmd_gov, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)
 
