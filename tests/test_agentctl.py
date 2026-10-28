@@ -1,5 +1,5 @@
 """Tests for ~/bin/agentctl: python3 -m unittest discover -s ~/bin/tests -v"""
-import contextlib, datetime as dt, importlib.machinery, importlib.util, io, json, os, subprocess, sys, tempfile, threading, time, unittest
+import contextlib, re, datetime as dt, importlib.machinery, importlib.util, io, json, os, subprocess, sys, tempfile, threading, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOL = os.environ.get("AGENTCTL_UNDER_TEST") or os.path.join(HERE, "..", "agentctl")
@@ -27,7 +27,8 @@ def _real_cache_marks():
         marks |= {f"waiting/{d}" for d in os.listdir(w) if any(x in d for x in temp)}
     try:
         with open(os.path.join(root, "checks", "runs.jsonl"), errors="replace") as f:
-            marks |= {f"runs.jsonl:{l[:200]}" for l in f if "/var/folders/" in l or "/tmp/" in l}
+            marks |= {f"runs.jsonl:{l[:200]}" for l in f if "/var/folders/" in l or "/tmp/" in l
+                      or re.search(r'"label": "[a-z]+ repo-wt-', l)}  # the tests' repos are named repo-wt-*
     except OSError:
         pass
     sw = os.path.join(root, "sweep")

@@ -21,9 +21,9 @@ class WaitingTest(Base):
     def setUp(self):
         super().setUp()
         t = self.tmp.name
-        self.saved = (A.LAND_LOCK_DIR, A.WAITING_DIR, A.gate_reds, A.spawn_waiting_processor, A.await_entry,
+        self.saved = (A.WAITING_DIR, A.gate_reds, A.spawn_waiting_processor, A.await_entry,
                       A.time.sleep, A.watch_landed)
-        A.LAND_LOCK_DIR, A.WAITING_DIR = os.path.join(t, "locks"), os.path.join(t, "waiting-state")
+        A.WAITING_DIR = os.path.join(t, "waiting-state")
         self.reds = {"7"}
         A.gate_reds = lambda repo: set(self.reds)
         A.spawn_waiting_processor = lambda repo: None
@@ -57,7 +57,7 @@ class WaitingTest(Base):
                 os.remove(p)
 
     def tearDown(self):
-        (A.LAND_LOCK_DIR, A.WAITING_DIR, A.gate_reds, A.spawn_waiting_processor, A.await_entry, A.time.sleep,
+        (A.WAITING_DIR, A.gate_reds, A.spawn_waiting_processor, A.await_entry, A.time.sleep,
          A.watch_landed) = self.saved
         A.spawn_watch = self.saved_spawn_watch
         A.spawn_watch_of = self.saved_spawn_watch_of

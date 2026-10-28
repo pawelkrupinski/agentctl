@@ -4975,11 +4975,6 @@ LAND_RETRIES = 3
 # minutes for an identity or page change -- and two landers would each test a base the other is about to move, then
 # race, rebase, and test again. Agents wait for the lock instead (land runs in the background), and it caps the
 # laptop at one landing hook's JVM at a time.
-LAND_LOCK_DIR = None  # a test's override; else land_lock_dir(): under the state root, resolved at each use
-
-
-def land_lock_dir():
-    return LAND_LOCK_DIR or state_root("land")
 LAND_LOCK_TIMEOUT = 4 * 3600
 # NO STALLED HOLDER (the owner, 2026-10-27): one land's hook hung 2.5 h in sbt-warm and blocked every lander behind the
 # lock. A step land runs (the hook's dry run, the push) that makes NO PROGRESS -- its output does not grow and its
@@ -5043,10 +5038,14 @@ def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None, cpu=No
             break
         except subprocess.TimeoutExpired:
             pass
-        lock_beat()  # the landing lock's holder is alive and at work: waiters see a fresh heartbeat
         if sampler:
             sampler()
         now_size, now_cpu = os.path.getsize(out_path), cpu_of(p.pid)
+        try:  # the landing lease's holder renews on real progress only (output bytes, whole CPU seconds)
+            lock_beat(f"{step}:{now_size}:{int(now_cpu or 0)}")
+        except LeaseLost as ex:
+            err(f"{ex}: ending {step}")
+            stalled = True
         # progress: output grew, or the group used a real second of CPU since the last progress (the hook idle in
         # `wait` with only its watchdog polling used ~0.08 s in 50 min, 2026-10-27: that is not progress)
         now_c = clock()
@@ -5769,138 +5768,84 @@ def landed(repo, sha, main_ref):
     return None
 
 
-def land_lock_path(repo):
-    """One lock per repository: every worktree of a clone shares its git common dir."""
+# THE LANDING LOCK IS A LEASE (design §6, phase 1 step 3; the owner, 2026-10-28: a push hung on a dropped tunnel held
+# the flock 30+ min and a checked batch waited behind it). `land/<repo>` in the store: TTL LAND_LEASE_TTL, renewed only
+# on real progress (run_watched's output / CPU), capped at LAND_LEASE_MAX; a holder that stops progressing simply
+# loses it, and a waiter takes it. No flock, no heartbeat file, no killing another process: expiry IS the release.
+# A holder that lost the lease stops its work (run_watched ends its group: LeaseLost).
+LAND_LEASE_TTL = 120
+LAND_LEASE_MAX = 45 * 60  # the design's 300 s once checks no longer run in the push's hook under the lease (step 6)
+
+
+def land_lease_name(repo):
+    """One lease per repository: every worktree of a clone shares its git common dir."""
     common = os.path.realpath(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
-    return os.path.join(land_lock_dir(), re.sub(r"[^A-Za-z0-9._-]", "_", common.strip("/")) + ".lock")
+    return "land/" + re.sub(r"[^A-Za-z0-9._-]", "_", common.strip("/"))
 
 
-_held_lock = [None]  # (file, first line) of the landing lock this process holds
+_held_lock = [None]  # (store, name, lease) of the landing lease this process holds
 
 
 def lock_note(step):
-    """Say in the held landing lock's file what the holder is doing now (waiters print it)."""
+    """Say in the held landing lease what the holder is doing now (waiters print it)."""
     if _held_lock[0]:
-        f, first = _held_lock[0]
-        _lock_step[0] = f"; now: {step} since {ts()}"
-        _write_lock(f, first)
+        st, name, lease = _held_lock[0]
+        st.note(name, lease["epoch"], lease["secret"], f"{step} since {ts()}")
 
 
-_lock_step = [""]
-LOCK_BEAT_MAX = 600  # a live holder whose heartbeat is older than this holds the lock for nothing: the waiter ends it
+def lock_beat(progress=None):
+    """The holder at work renews the landing lease with its progress mark (run_watched: output bytes and CPU). Raises
+    LeaseLost when the lease is gone: the work must stop."""
+    if _held_lock[0] and progress is not None:
+        st, name, lease = _held_lock[0]
+        if st.renew(name, lease["epoch"], lease["secret"], progress, lease["ttl"]) == "lost":
+            raise LeaseLost(f"the landing lease {name} (epoch {lease['epoch']}) was lost")
 
 
-def _write_lock(f, first):
-    f.seek(0)
-    f.truncate()
-    f.write(f"{first}{_lock_step[0]}; beat {int(time.time())}\n")
-    f.flush()
-
-
-def lock_beat():
-    """The holder at work stamps its heartbeat into the lock file (run_watched does, every poll)."""
-    if _held_lock[0]:
-        try:
-            _write_lock(*_held_lock[0])
-        except (OSError, ValueError):
-            pass
-
-
-def break_stale_lock(path, holder_text, why_log=None):
-    """THE LOCK OUTLIVES NO WORK: a holder (an agentctl process; the flock dies with its process) whose heartbeat is
-    older than LOCK_BEAT_MAX is ended -- its process group, TERM then KILL -- and that is said. True when ended."""
-    why_log = why_log or err
-    m, b = re.match(r"pid (\d+)", holder_text or ""), re.search(r"beat (\d+)", holder_text or "")
-    if not m:
-        return False
-    pid, beat = int(m.group(1)), float(b.group(1)) if b else None
-    if beat is None:  # the holder's start counts as its first beat
-        st = re.search(r"since (\S+?)(?:;|$|\s)", holder_text)
-        try:
-            beat = parse_time(st.group(1)).timestamp() if st else None
-        except (Exception, SystemExit):
-            beat = None
-    if beat is None or time.time() - beat < env_num("AGENTCTL_LOCK_BEAT_MAX", LOCK_BEAT_MAX) or pid == os.getpid():
-        return False
-    cmd = next((c for p_, _pp, _e, c in ps() if p_ == pid), "")
-    if "agentctl" not in cmd:
-        return False
-    why_log(f"the landing lock's holder pid {pid} has done nothing for {int(time.time() - beat)} s ({holder_text[:160]}): "
-            f"ending it, the lock is freed ({path})")
-    for sig, grace in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
-        try:
-            os.killpg(os.getpgid(pid), sig)
-        except (ProcessLookupError, PermissionError, OSError):
-            try:
-                os.kill(pid, sig)
-            except OSError:
-                return True
-        t0 = time.time()
-        while time.time() - t0 < grace:
-            if not proc_alive(pid):
-                return True
-            time.sleep(0.2)
-    return True
-
-
-def held_for(holder):
-    """'37 min' since the holder's `since <ts>`, or '?'."""
-    m = re.search(r"since (\S+?)(?:;|$|\s)", holder)
-    if not m:
-        return "?"
-    try:
-        t = dt.datetime.fromisoformat(m.group(1).replace("Z", "+00:00"))
-        if t.tzinfo is None:
-            t = t.replace(tzinfo=dt.timezone.utc)
-    except ValueError:
-        return "?"
-    return f"{int((dt.datetime.now(dt.timezone.utc) - t).total_seconds() // 60)} min"
+def held_for(lease):
+    return f"{int((time.time() - float(lease.get('acquired_at') or time.time())) // 60)} min"
 
 
 @contextlib.contextmanager
 def land_lock(repo):
-    """Hold the repository's landing lock (an flock, freed by the kernel when the holder dies), waiting for it with a
-    line saying who holds it, for how long and doing what, repeated every LAND_WAIT_REPORT_MIN minutes. Yields True
-    when held, False when the wait timed out."""
-    path = land_lock_path(repo)
-    os.makedirs(land_lock_dir(), exist_ok=True)
-    f = open(path, "a+")
+    """Hold the repository's landing lease, waiting for it with a line saying who holds it and doing what, repeated
+    every LAND_WAIT_REPORT_MIN minutes. Yields True when held, False when the wait timed out."""
+    st, name = Store(), land_lease_name(repo)
+    holder = f"{socket_host()}:land:{os.getpid()}"
+    ttl = env_num("AGENTCTL_LAND_LEASE_TTL", LAND_LEASE_TTL)
+    got = st.acquire(name, holder, ttl, env_num("AGENTCTL_LAND_LEASE_MAX", LAND_LEASE_MAX), progress="acquired",
+                     meta={"pid": os.getpid(), "repo": repo})
+    if "held" in got:
+        def said(h):
+            meta = json.loads(h.get("meta") or "{}")
+            return f"{h['holder']} (pid {meta.get('pid')}), {meta.get('note') or 'working'}; expires in {int(h['expires_at'] - time.time())} s"
+        err(f"waiting for the landing lease {name}, held by {said(got['held'])}")
+        deadline = time.monotonic() + float(os.environ.get("AGENTCTL_LAND_LOCK_TIMEOUT", LAND_LOCK_TIMEOUT))
+        every = float(os.environ.get("AGENTCTL_LAND_WAIT_REPORT_MIN", LAND_WAIT_REPORT_MIN)) * 60
+        report_at = time.monotonic() + every
+        while "held" in got:
+            if time.monotonic() > deadline:
+                yield False
+                return
+            if time.monotonic() > report_at:
+                err(f"still waiting for the landing lease: {said(got['held'])}")
+                report_at = time.monotonic() + every
+            time.sleep(2)
+            got = st.acquire(name, holder, ttl, env_num("AGENTCTL_LAND_LEASE_MAX", LAND_LEASE_MAX),
+                             progress="acquired", meta={"pid": os.getpid(), "repo": repo})
+        err("got the landing lease")
+    got["ttl"] = ttl
+    _held_lock[0] = (st, name, got)
     try:
-        try:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            def holder():
-                f.seek(0)
-                return f.read().strip() or "unknown"
-            h = holder()
-            err(f"waiting for the landing lock ({path}), held for {held_for(h)} by: {h}")
-            deadline = time.monotonic() + float(os.environ.get("AGENTCTL_LAND_LOCK_TIMEOUT", LAND_LOCK_TIMEOUT))
-            every = float(os.environ.get("AGENTCTL_LAND_WAIT_REPORT_MIN", LAND_WAIT_REPORT_MIN)) * 60
-            report_at = time.monotonic() + every
-            while True:
-                try:
-                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if break_stale_lock(path, holder()):
-                        continue
-                    if time.monotonic() > deadline:
-                        yield False
-                        return
-                    if time.monotonic() > report_at:
-                        h = holder()
-                        err(f"still waiting for the landing lock: held for {held_for(h)} by: {h}")
-                        report_at = time.monotonic() + every
-                    time.sleep(5)
-            err("got the landing lock")
-        first = f"pid {os.getpid()} {repo} since {ts()}"
-        _lock_step[0] = ""
-        _write_lock(f, first)
-        _held_lock[0] = (f, first)
         yield True
     finally:
         _held_lock[0] = None
-        f.close()
+        st.release(name, got["epoch"], got["secret"])
+
+
+def socket_host():
+    import socket
+    return socket.gethostname().split(".")[0]
 
 
 def precheck_hook(repo):
@@ -9140,7 +9085,7 @@ def network_watch(route=None, kick=None):
     if r is None:
         err(f"the network went away (was {prev[0]} via {prev[1]})")
         open_condition("NETWORK", f"NETWORK: offline (no default route; was {prev[0]} via {prev[1]})", run_probe("route"),
-                       [("tunnel_reset", {}), ("check_locks", {})], key="network-offline", inbox=False)  # the kick: below, on the way back
+                       [("tunnel_reset", {})], key="network-offline", inbox=False)  # the kick: below, on the way back
         return "offline"
     err(f"the network {'is back' if prev is None else 'changed'} ({prev[0] if prev else '-'} via {prev[1] if prev else '-'} -> "
         f"{r[0]} via {r[1]}): "
@@ -9176,7 +9121,7 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
             msg = (f"NETWORK: the laptop's uplink loses {int(loss * 100)}% of packets to 1.1.1.1, so Forgejo (localhost:3000) "
                    f"{r}s; not a tunnel fault, nothing to restart -- the gate reads come back with the network")
             err(msg)
-            open_condition("NETWORK", msg, res or run_probe("tunnel"), [("tunnel_reset", {}), ("check_locks", {})], key="tunnel",
+            open_condition("NETWORK", msg, res or run_probe("tunnel"), [("tunnel_reset", {})], key="tunnel",
                            command="tunnel")
         st.update(network=True, pending_since=None, escalated=False)  # the kick/escalation clock starts on a good uplink
         write_json_file(tunnel_state_path(), st)
@@ -9191,7 +9136,7 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
     if st.get("pending_since") and t - st["pending_since"] >= TUNNEL_RESTORE_WAIT and not st.get("escalated"):
         msg = (f"STALLED: the Forgejo tunnel (localhost:3000) still {r} {int((t - st['pending_since']) // 60)} min after a "
                f"kickstart; run `launchctl kickstart -k gui/$(id -u)/{TUNNEL_LABEL}` and check ~/Library/Logs/forgejo-tunnel.log")
-        open_condition("STALLED", msg, res or run_probe("tunnel"), [("tunnel_reset", {}), ("check_locks", {})], key="tunnel-stalled",
+        open_condition("STALLED", msg, res or run_probe("tunnel"), [("tunnel_reset", {})], key="tunnel-stalled",
                        command="tunnel", exit_code=2)
         st["escalated"] = True
         did = "escalated"
@@ -11380,21 +11325,7 @@ def recover_clear_hold(cond, a):
     return "the batch hold is lifted"
 
 
-def recover_check_locks(cond, a):
-    """The network or the tunnel is back: a landing lock held across the outage whose holder stopped beating is freed."""
-    done = []
-    for p_ in glob.glob(os.path.join(land_lock_dir(), "*.lock")):
-        try:
-            with open(p_) as f:
-                h = f.read().strip()
-        except OSError:
-            continue
-        if h and break_stale_lock(p_, h):
-            done.append(os.path.basename(p_))
-    return f"freed the stale landing lock(s) {', '.join(done)}" if done else ""
-
-
-RECOVER_ACTIONS = {"check_locks": recover_check_locks, "clear_hold": recover_clear_hold, "patrol_now": recover_patrol_now, "release_block": recover_release_block, "verify": recover_verify, "kick_tunnel": recover_kick_tunnel,
+RECOVER_ACTIONS = {"clear_hold": recover_clear_hold, "patrol_now": recover_patrol_now, "release_block": recover_release_block, "verify": recover_verify, "kick_tunnel": recover_kick_tunnel,
                    "tunnel_reset": recover_tunnel_reset, "clear_flag": recover_clear_flag, "reland": recover_reland}
 
 

@@ -15,15 +15,13 @@ class LandTest(Base):
         os.makedirs(self.hooks)
         sh(self.r.path, "git", "config", "core.hooksPath", self.hooks)
         os.environ.pop("PREPUSH_SKIP", None)
-        self.saved_retries, self.saved_why, self.saved_lock_dir = A.LAND_RETRIES, A.ci_why, A.LAND_LOCK_DIR
-        A.LAND_LOCK_DIR = os.path.join(self.tmp.name, "land-locks")
+        self.saved_retries, self.saved_why = A.LAND_RETRIES, A.ci_why
         os.environ.pop("AGENTCTL_LAND_LOCK_TIMEOUT", None)
         self.sleep = A.time.sleep
         A.time.sleep = lambda s: None
 
     def tearDown(self):
         A.LAND_RETRIES, A.ci_why, A.time.sleep = self.saved_retries, self.saved_why, self.sleep
-        A.LAND_LOCK_DIR = self.saved_lock_dir
         os.environ.pop("AGENTCTL_LAND_LOCK_TIMEOUT", None)
         os.environ.pop("PREPUSH_SKIP", None)
         super().tearDown()
@@ -187,13 +185,15 @@ class LandTest(Base):
         self.assertNotEqual(self.remote_main(), sha)
 
     def lock_probe(self, out):
-        """Shell that records whether the landing lock is FREE (another process can take it) while it runs."""
-        path = A.land_lock_path(self.r.path)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        return (f"{sys.executable} -c \"import fcntl,sys\n"
-                f"f=open(sys.argv[1],'a+')\n"
-                f"try: fcntl.flock(f, fcntl.LOCK_EX|fcntl.LOCK_NB); print('free')\n"
-                f"except BlockingIOError: print('held')\" {path} >> {out}")
+        """Shell that records whether the landing LEASE is FREE (another process could take it) while it runs."""
+        db, name = A.Store().path, A.land_lease_name(self.r.path)
+        return (f"{sys.executable} -c \"import sqlite3,sys,time\n"
+                f"r=sqlite3.connect(sys.argv[1]).execute('select holder,expires_at from leases where name=?',(sys.argv[2],)).fetchone()\n"
+                f"print('held' if r and r[0] and r[1] > time.time() else 'free')\" {db} {name} >> {out}")
+
+    def lease_free(self, repo=None):
+        r = A.Store().get(A.land_lease_name(repo or self.r.path))
+        return not r or not r["holder"] or r["expires_at"] <= time.time()
 
     def mine(self):
         self.r.write("f1.txt", "mine\n")
@@ -251,7 +251,7 @@ class LandTest(Base):
         self.assertIn("checking", out)
         self.assertFalse(os.path.exists(pushes))
         self.assertNotEqual(self.remote_main(), sha)
-        self.assertFalse(A.lock_held(A.land_lock_path(self.r.path)))
+        self.assertTrue(self.lease_free())
 
     def test_a_busy_silent_check_is_progress_not_a_stall(self):
         self.hook("exit 0")
@@ -275,21 +275,17 @@ class LandTest(Base):
         self.mine()
         rc, out = self.land()
         self.assertEqual(rc, 0, out)
-        self.assertRegex(out, r"waiting for the landing lock \(.*\), held for (\?|\d+ min) by: pid other lander")
+        self.assertRegex(out, r"waiting for the landing lease land/\S+, held by other lander \(pid \d+\)")
 
     def hold_lock(self, seconds):
-        """Another lander: a separate process holding this repository's landing lock for <seconds>."""
-        path = A.land_lock_path(self.r.path)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        ready = os.path.join(self.tmp.name, "holder-ready")
-        p = subprocess.Popen([sys.executable, "-c", (
-            "import fcntl, sys, time\n"
-            "f = open(sys.argv[1], 'a+'); fcntl.flock(f, fcntl.LOCK_EX); f.write('pid other lander'); f.flush()\n"
-            "open(sys.argv[2], 'w').close(); time.sleep(float(sys.argv[3]))"), path, ready, str(seconds)])
-        self.addCleanup(lambda: (p.kill(), p.wait()))
-        while not os.path.exists(ready):
-            self.sleep(0.05)
-        return p
+        """Another lander: the repository's landing lease held by someone else, released after <seconds>."""
+        st, name = A.Store(), A.land_lease_name(self.r.path)
+        got = st.acquire(name, "other lander", 120, 300, meta={"pid": 4242})
+        import threading
+        t = threading.Timer(seconds, lambda: st.release(name, got["epoch"], got["secret"]))
+        t.start()
+        self.addCleanup(lambda: (t.cancel(), st.release(name, got["epoch"], got["secret"])))
+        return got
 
     def test_a_second_lander_waits_for_the_lock_then_lands(self):
         self.hook("exit 0")
@@ -299,13 +295,13 @@ class LandTest(Base):
         sha = self.r.commit("mine")
         rc, out = self.land()
         self.assertEqual(rc, 0, out)
-        self.assertIn("waiting for the landing lock", out)
+        self.assertIn("waiting for the landing lease", out)
         self.assertIn("other lander", out)
         self.assertEqual(self.remote_main(), sha)
 
     def test_the_lock_is_shared_by_every_worktree_of_the_clone(self):
         wt = self.r.worktree("wt-lock", branch="lock")
-        self.assertEqual(A.land_lock_path(wt), A.land_lock_path(self.r.path))
+        self.assertEqual(A.land_lease_name(wt), A.land_lease_name(self.r.path))
 
     def test_lock_wait_times_out_without_pushing(self):
         self.hook("exit 0")

@@ -256,22 +256,20 @@ class LandWatchTest(Base):
 
     def setUp(self):
         super().setUp()
-        self.saved = A.watch_landed, A.LAND_LOCK_DIR
-        A.LAND_LOCK_DIR = os.path.join(self.tmp.name, "locks")
+        self.saved = A.watch_landed
         self.calls = []
 
         def fake(repo, sha, pushed_at, o_r=None, close=None, fixes=()):
-            # the lock is free while watching: another lander could take it now
-            import fcntl
-            with open(A.land_lock_path(repo), "a+") as f:
-                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # the lease is free while watching: another lander could take it now
+            r = A.Store().get(A.land_lease_name(repo))
+            assert not r or not r["holder"] or r["expires_at"] <= time.time(), "the landing lease is held while watching"
             self.calls.append((sha, pushed_at))
             print("WATCH RED: Main #5 test")
             return 3
         A.watch_landed = fake
 
     def tearDown(self):
-        A.watch_landed, A.LAND_LOCK_DIR = self.saved
+        A.watch_landed = self.saved
         super().tearDown()
 
     def test_land_ends_at_landed_and_watches_detached(self):

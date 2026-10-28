@@ -29,31 +29,26 @@ class PushBoundTest(unittest.TestCase):
         self.assertIsNone(rc)  # busy forever: the wall bound ends it
 
 
-class StaleLockTest(unittest.TestCase):
-    def test_a_holder_that_stopped_beating_is_ended_and_the_lock_freed(self):
+class LeaseTest(unittest.TestCase):
+    """The store's leases (design §6) and the landing lease (step 3): a holder that stops progressing loses it."""
+    def test_a_push_hanging_under_the_landing_lease_loses_it_and_ends(self):
         d = tempfile.mkdtemp()
-        path = os.path.join(d, "repo.lock")
-        old = int(time.time()) - 3600
-        code = ("import fcntl, time, sys  # agentctl lock holder\n"
-                f"f = open({path!r}, 'a+'); fcntl.flock(f, fcntl.LOCK_EX)\n"
-                f"f.seek(0); f.truncate(); f.write('pid %d /repo since x; now: push; beat {old}' % __import__('os').getpid()); f.flush()\n"
-                "print('held', flush=True); time.sleep(300)\n")
-        p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True, start_new_session=True)
+        st = A.Store(path=os.path.join(d, "store.db"))
+        got = st.acquire("land/x", "me", 2, 300, progress="acquired")
+        got["ttl"] = 2
+        A._held_lock[0] = (st, "land/x", got)
+        script = os.path.join(d, "push.sh")
+        with open(script, "w") as f:
+            f.write("#!/bin/sh\necho 'Connection to localhost closed by remote host.'\nexec sleep 300\n")
+        os.chmod(script, 0o755)
         try:
-            self.assertEqual(p.stdout.readline().strip(), "held")
-            with open(path) as f:
-                holder = f.read()
-            said = []
-            self.assertTrue(A.break_stale_lock(path, holder, why_log=said.append))
-            self.assertIn("has done nothing for", said[0])
-            p.wait(timeout=20)
-            with open(path, "a+") as f:
-                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)  # free now
-            fresh = holder.replace(f"beat {old}", f"beat {int(time.time())}")
-            self.assertFalse(A.break_stale_lock(path, fresh, why_log=said.append))  # a beating holder is left alone
+            t0 = time.monotonic()
+            rc, _out = A.run_watched([script], d, dict(os.environ), os.path.join(d, "log"), "push", stall=600)
         finally:
-            if p.poll() is None:
-                p.kill()
+            A._held_lock[0] = None
+        self.assertIsNone(rc)  # the lease lapsed (no progress): its group ended, long before the stall bound
+        self.assertLess(time.monotonic() - t0, 60)
+        self.assertNotIn("held", st.acquire("land/x", "the batch", 120, 300))  # the next lander takes it at once
 
 
 class BatchRetryTest(unittest.TestCase):
