@@ -661,7 +661,109 @@ The owner pushes and deploys every infra step.
    (Q7).
 7. **Watchdog phase 2.** The Prometheus alerts go live (Slack). The laptop watchdog keeps W5 and W7.
 
-## 14. Security
+## 14. Simplifications
+
+The owner (2026-10-28): "simplify the pipeline / process / branches if possible". Each candidate is kept only if no
+guarantee is lost. Phase 1 implements the simplified shape directly; §13's steps stay in order, each deleting more.
+
+### 14.1 One path for every change (kept)
+
+**Goes:** the long-lived `waiting` branch and its worktree (`-wt-waiting`, `-wt-batch`), the separate batch
+processor loop, `join`/`queue_join`, `rebuild`, `ensure_waiting_tree`/`drop_waiting_tree`, and the
+`waiting pause|resume|cancel|run|service|await` subcommands. Every change is one item in one queue. The tick lands
+items in order, Fixes-Red first. While main is green, a checked item is pushed alone. While main is red, checked
+items wait in state `waiting`. When main turns green with more than one item waiting, the tick computes the batch
+tip in a throwaway check tree (main plus the items, in queue order), checks it once, and pushes that tip. On
+failure it bisects, confirming the culprit as §5.2 says. A batch is a computed item, not a branch.
+
+**Guarantees kept:**
+- a production change never lands on a red main (unchanged gate rule);
+- a batch is checked as a whole on the current main before its one push;
+- a culprit is confirmed before it is rejected;
+- Fixes-Red lands while red.
+
+**Lines deleted:** about 640 (the waiting branch and batch functions, 546; the waiting commands, about 100). The
+batch machine (§5.2) keeps its states, but `assembling` builds a tip in a check tree instead of a branch.
+
+### 14.2 Fewer branch kinds (kept)
+
+**Goes:** `check/<id>` (remote-check refs), the local `waiting` branch, and the reconciler's own ad-hoc names.
+There are two namespaces, each owned by a live item:
+- `land/<entry>`: the submitted change; each round force-updates it (`--force-with-lease`) to the rebased tip, and
+  that ref is what a CI check runs on;
+- `measure/<id>`: measurement runs, as today.
+
+A red fixer's worktree branch stays local and becomes a `land/<entry>` when it submits. The tick deletes every
+`land/*` or `measure/*` ref not backed by a live item (the reconciler's own refs, within the standing OK). The
+forgejo-src patch branch is infra's, so it is out of scope.
+
+**Guarantees kept:** a CI check runs on exactly the tree it judges, and nothing is pushed to main except a checked
+tip. **Lines deleted:** about 120 (`cancel_entry_remote`, the check-branch naming and its cleanup).
+
+### 14.3 One check definition (kept, with two kinds)
+
+**Goes:** the split between `run_entry_checks`, `remote_check`/`remote_poll`/`save_remote`, `batch_check` and
+`check_slot`'s callers. One executor: `check(tree, base, kind) → verdict`, with kind in {`change`, `batch`}.
+- It runs where capacity is: local under the governor, or on the CI check tier.
+- Its verdict is stored once, keyed by (tree hash, base hash, kind), and reused wherever the same tree appears: a
+  replacement checker, a batch whose tip equals an already-checked change, and the push (agentctl sets the movies
+  hook's REUSE env from the stored verdict).
+
+**Kept separate:**
+- the two kinds, because the batch's fast-only check is a deliberate trade the owner made;
+- the hook's known-red baseline, a correctness feature for a red main, passed through unchanged.
+
+**Guarantees kept:** every pushed tip has a pass for exactly that tree and base; a check's infra failure is never a
+test failure. **Lines deleted:** about 240 (the check paths, 243, folded into one executor of about 120 new lines).
+
+### 14.4 One way to hold work, one way to report (kept)
+
+**Goes:**
+- every per-mechanism store: `reds/claims/*.json`, block claims, `recovery/*.json`, `recovery/relands.json`,
+  `recovery/orphans.json`, `reds/fixer-queue.json`, `waiting/<repo>/batch*.json`, `waiting/<repo>/reconcile/`,
+  `ci-state.json`, `gate-summary.txt`, `statusline.stale`, `inbox/escalated/`;
+- the detached `watch` processes.
+
+What replaces them: a lease (holding) and an item (state), both in the store; an event (reporting), projected to
+the inbox and the snapshot.
+
+**Guarantees kept:**
+- the owner's rules (a condition opens and closes on one probe; always claimed; never NOBODY; a code red is never
+  the owner's), now as properties of the machines and leases;
+- the inbox format, which the orchestrator keys on.
+
+**Lines deleted:** the §12 table (about 3,300), unchanged by this item: it is §12 itself.
+
+### 14.5 Fewer commands (kept)
+
+| Today | After phase 1 |
+|---|---|
+| `waiting status` | `land status` (the queue with each item's state, deadline and holder) |
+| `waiting pause` / `resume` | `land hold` / `land release` (a `hold/<repo>` lease) |
+| `waiting cancel <id>` | `land cancel <id>` |
+| `waiting run` / `service` | `agentctl tick` (the launchd service's loop, same label) |
+| `waiting check` / `await` | internal: the check executor; `land --follow` waits on events |
+| `queue` (retired) | deleted |
+| `watch` | deleted (the `landed` state's watch, derived each tick) |
+| `red claim` / `release` / `block` | unchanged names, lease operations |
+| `red list` | `red status` (reds with state, deadline and holder) |
+| `red patrol` / `red auto` / `red dispatch` | `red patrol` deleted (the tick); `red auto` kept (dispatcher on or off); `red dispatch` kept (an offer at top priority) |
+| `red verify` | deleted (the `fix-pending` step dispatches the run) |
+| `red fixer` | internal (the dispatcher's wrapper) |
+| `recover status` / `tick` | `agentctl status` (items, leases, open conditions); `agentctl tick --once` |
+| `maintain` | kept for the reap and the sweep; orphan and stale-fix duties move to the tick |
+| `dispatch` (CI owner records) | kept (`measure/<id>` items later) |
+
+Thin aliases stay for one week where agents' briefs name the old command, printing the new one.
+
+### 14.6 Not simplified (rejected)
+
+- **Dropping the batch.** It is what lets several changes land in one check at green after a red spell. Pushing
+  them one by one would multiply the checks, and the queue would drain slowly.
+- **Dropping local checks in phase 1.** The owner's landing policy is "local tests, then main"; CI-by-default is
+  phase 2 (decision 1).
+
+## 15. Security
 
 - **No new credentials on the laptop.** The sync and dispatcher authenticate to `agentctl-store` with the
   Forgejo token they already have: the Touch ID vault, handed to the launchd processor over the existing
@@ -686,7 +788,7 @@ The owner pushes and deploys every infra step.
 - **Untrusted data.** CI logs, scraped pages and fixtures are data in fixer pictures, as today. Event text
   shown in notifications goes through `applescript_str`. The store never executes payloads.
 
-## 15. Failure modes of the new design
+## 16. Failure modes of the new design
 
 | Failure | What happens | What notices it |
 |---|---|---|
@@ -700,7 +802,7 @@ The owner pushes and deploys every infra step.
 | A bug pins items in a state | The deadline exit fires anyway. If the tick itself is broken, W4 (items past deadline) and W3 (expired leases not reaped) fire. | W3, W4 |
 | Watchdog down | Phase 2: Prometheus alerting is independent of both services. Phase 1: the maintain launchd job checks the watchdog's own heartbeat file, and the watchdog checks maintain's. | Each other |
 
-## 16. Test strategy
+## 17. Test strategy
 
 1. **Machines.** The table-driven test of §5.5: deadlines, exits, liveness through escalation,
    terminal-state immutability.
@@ -736,7 +838,7 @@ The owner pushes and deploys every infra step.
    - The NixOS module gets an `evalModules` or VM check if the infra repo has one for actions_api.
      Otherwise a `nixos-rebuild build` of ci-runner in infra CI.
 
-## 17. Open questions for the owner
+## 18. Open questions for the owner
 
 1. **Where checks run in phase 2.** Default to the CI check tier (heavy-work-on-ci), or keep the laptop's
    local pre-commit checks ("run unit tests locally before checking in") with CI only under pressure?
