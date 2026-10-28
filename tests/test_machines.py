@@ -68,6 +68,19 @@ class MachinesTest(unittest.TestCase):
         self.assertIn("UPDATE items SET state", body[:body.index("\n    def ", 10)])
 
 
+class OneLoopTest(unittest.TestCase):
+    def test_the_processor_is_one_loop_and_the_batch_no_branch(self):
+        """Step 8: no duties thread, no in-process watchdog, no waiting round, no `waiting` branch or worktree."""
+        for gone in ("start_duties", "start_watchdog", "waiting_round", "push_batch", "ensure_waiting_tree",
+                     "drop_waiting_tree", "batch_tree", "batch_state", "rebuild"):
+            self.assertFalse(hasattr(A, gone), gone)
+        with open(TOOL) as f:
+            src = f.read()
+        self.assertNotIn("threading.Thread(target=loop", src)
+        for s_ in ("blocked-red", "assembling", "checking", "bisecting", "pushing", "held", "landed"):
+            self.assertIn(s_, A.MACHINES["batch"])
+
+
 class ProjectionTest(unittest.TestCase):
     def test_the_queue_entries_project_to_change_items_with_their_transitions(self):
         root = tempfile.mkdtemp()

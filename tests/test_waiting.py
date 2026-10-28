@@ -81,9 +81,6 @@ class WaitingTest(Base):
     def remote_log(self):
         return sh(self.r.root, "git", "--git-dir", self.r.bare, "log", "--format=%s", "main").splitlines()
 
-    def waiting_log(self):
-        return sh(self.r.path, "git", "log", "--format=%s", "forgejo/main..waiting").splitlines()
-
     def pushes_count(self):
         return len(open(self.pushes).read().split()) if os.path.exists(self.pushes) else 0
 
@@ -94,6 +91,27 @@ class WaitingTest(Base):
     def entries(self):
         d, _c, _w = A.waiting_state(self.r.path)
         return {e["id"].rsplit("-", 1)[-1]: e for e in A.waiting_entries(d, open_only=False)}
+
+    def drive(self, n=10):
+        """The batch to rest, as the processor's ticks drive it, its executors run in-process (step 8)."""
+        d, _c, _w = A.waiting_state(self.r.path)
+        saved = A.spawn_batch_executor
+        A.spawn_batch_executor = lambda repo, d_, bid: A.check_batch(repo, bid)
+        out = []
+        try:
+            for _ in range(n):
+                did = A.tick_batch(self.r.path, d)
+                out += did
+                if not did or did == ["paused"]:
+                    break
+        finally:
+            A.spawn_batch_executor = saved
+        A.project_events()
+        return out
+
+    def batch(self):
+        d, _c, _w = A.waiting_state(self.r.path)
+        return A.current_batch(A.Store(), d)
 
     def calls_of(self, mode):
         return [l for l in open(self.calls).read().splitlines() if l.startswith(mode)] if os.path.exists(self.calls) else []
@@ -113,15 +131,15 @@ class WaitingTest(Base):
         wt2, s2 = self.agent("b", "worker/src/main/B.scala", "b\n")
         rc, out = self.land(wt1)
         self.assertEqual(rc, 0, out)
-        self.assertRegex(out, r"WAITING [0-9a-f]{40} \(entry \S+-1, 1 in batch\)")
+        self.assertRegex(out, r"WAITING [0-9a-f]{40} \(entry \S+-1, 1 waiting\)")
         rc, out = self.land(wt2)
-        self.assertRegex(out, r"WAITING [0-9a-f]{40} \(entry \S+-2, 2 in batch\)")
+        self.assertRegex(out, r"WAITING [0-9a-f]{40} \(entry \S+-2, 2 waiting\)")
         self.assertEqual(len(self.calls_of("--checks-only")), 2, "each change's own checks ran first, without the gate")
         self.assertEqual(self.pushes_count(), 0)
-        A.waiting_run(self.r.path, once=True)  # still red: nothing moves
+        self.drive()  # still red: nothing moves
         self.assertEqual(self.calls_of("--fast-only"), [])
         self.reds = set()
-        A.waiting_run(self.r.path, once=True)
+        self.drive()
         self.assertEqual(len(self.calls_of("--fast-only")), 1, "ONE fast check of the rebuilt batch")
         self.assertEqual(self.calls_of("--range"), [], "no full check of the batch: each passed its own")
         self.assertEqual(self.pushes_count(), 1, "ONE push")
@@ -154,28 +172,20 @@ class WaitingTest(Base):
         e = {"id": "x-9", "seq": 9, "worktree": wa, "head": "", "commits": [], "fixes": ["7"], "status": "waiting"}
         self.assertEqual([x["id"] for x in A.batch_order(self.r.path, A.waiting_entries(d) + [e], {"7"})][0], "x-9")
 
-    def test_a_conflict_at_join_is_the_only_rejection_there(self):
+    def test_a_conflict_is_found_when_the_batch_is_assembled_and_rejects_that_change_alone(self):
+        """Step 8: waiting is no branch; a change that no longer applies is rejected when the batch is assembled."""
         wt1, _ = self.agent("a", "web/src/main/Shared.scala", "line 1 by a\n")
         wt2, _ = self.agent("b", "web/src/main/Shared.scala", "line 1 by b\n")
         self.land(wt1)
         rc, out = self.land(wt2)
-        self.assertEqual(rc, 1, out)
-        self.assertIn("NOT LANDED: the change conflicts with the changes already on `waiting`", out)
-        self.assertEqual(self.waiting_log(), ["a: web/src/main/Shared.scala"])
-
-    def test_a_join_rebuilds_waiting_on_the_current_main(self):
-        wt1, _ = self.agent("a", "web/src/main/A.scala", "a\n")
-        self.land(wt1)
-        self.r.write("web/src/main/Shared.scala", "line 1 on main\n")
-        self.r.commit("main changed the shared line")
-        self.r.push()
-        wt2 = self.r.worktree("wt-b", branch="b")
-        self.r.write("web/src/main/Shared.scala", "line 1 by b\n", at=wt2)
-        self.r.commit("b: Shared.scala", at=wt2)
-        rc, out = self.land(wt2)
-        self.assertNotIn("conflicts", out)
-        self.assertEqual(sh(self.r.path, "git", "merge-base", "waiting", "forgejo/main"),
-                         sh(self.r.path, "git", "rev-parse", "forgejo/main"))
+        self.assertEqual(rc, 0, out)  # it waits; nothing is cherry-picked at join
+        self.reds = set()
+        self.drive()
+        e = self.entries()
+        self.assertEqual([e["1"]["status"], e["2"]["status"]], ["landed", "rejected"])
+        self.assertIn("no longer applies", e["2"]["why"])
+        self.assertEqual([x["cwd"] for x in self.inbox() if x["verdict"].startswith("NOT LANDED")], [wt2])
+        self.assertFalse(sh(self.r.path, "git", "branch", "--list", "waiting"), "no waiting branch")
 
     def test_a_failing_batch_rejects_only_the_culprit_by_prefix_and_lands_the_rest(self):
         wts = [self.agent("a", "web/src/main/PartA.scala", "a\n")[0], self.agent("b", "web/src/main/PartB.scala", "b\n")[0],
@@ -184,15 +194,14 @@ class WaitingTest(Base):
             rc, out = self.land(wt)
             self.assertEqual(rc, 0, out)  # each passes its own checks
         self.reds = set()
-        A.waiting_run(self.r.path, once=True)
+        self.drive()
         e = self.entries()
-        self.assertEqual([e["1"]["status"], e["2"]["status"], e["3"]["status"]], ["landed", "rejected", "waiting"])
+        self.assertEqual([e["1"]["status"], e["2"]["status"], e["3"]["status"]], ["landed", "rejected", "landed"],
+                         "the prefix lands, the culprit is rejected, the rest lands with the next batch")
         self.assertIn("PartA and PartB disagree", e["2"]["why"])
-        self.assertEqual(self.remote_log()[0], "a: web/src/main/PartA.scala", "the passing prefix lands at once")
+        self.assertEqual(self.remote_log()[:2], ["c: web/src/main/C.scala", "a: web/src/main/PartA.scala"])
         bad = [x for x in self.inbox() if x["verdict"].startswith("NOT LANDED")]
         self.assertEqual([x["cwd"] for x in bad], [wts[1]])
-        A.waiting_run(self.r.path, once=True)
-        self.assertEqual(self.remote_log()[0], "c: web/src/main/C.scala", "the rest lands with the next batch")
 
     def test_a_join_during_the_check_waits_for_the_next_batch(self):
         wa, _ = self.agent("a", "web/src/main/A.scala", "a\n")
@@ -209,14 +218,13 @@ class WaitingTest(Base):
             return check(repo, d, tree, base, tip, cls)
         A.batch_check = joining
         try:
-            A.waiting_run(self.r.path, once=True)
+            self.drive()
         finally:
             A.batch_check = check
         self.assertEqual(joined[0][0], 0, joined[0][1])
-        self.assertEqual(self.remote_log()[0], "a: web/src/main/A.scala")
-        self.assertEqual(self.entries()["2"]["status"], "waiting")
-        A.waiting_run(self.r.path, once=True)
-        self.assertEqual(self.remote_log()[0], "b: web/src/main/B.scala")
+        self.assertEqual(self.remote_log()[:2], ["b: web/src/main/B.scala", "a: web/src/main/A.scala"],
+                         "a's batch landed alone; b, joined during its check, landed with the next batch")
+        self.assertEqual(self.pushes_count(), 2)
 
     def hung_sbt(self, hook_body):
         """The repo's hook calls scripts/sbt-warm, a fake whose command hangs like the sbtn of 2026-10-27; --stop logs."""
@@ -238,26 +246,25 @@ class WaitingTest(Base):
         self.land(wa)
         self.reds = set()
         os.environ["AGENTCTL_LAND_STALL_MIN"] = "0.02"  # 1.2 s
-        A.waiting_run(self.r.path, once=True)
+        self.drive()
         self.assertEqual(len(self.calls_of("--fast-only")), 2, "a stalled check is retried once")
         self.assertEqual(len(open(self.stops).read().split()), 4, "on a FRESH server: stopped before and after each")
         self.assertEqual(self.entries()["1"]["status"], "waiting", "held, not rejected")
         self.assertEqual(self.pushes_count(), 0)
-        self.assertEqual(len([x for x in self.inbox() if x["verdict"].startswith("HELD")]), 1)
-        d, _c, w = A.waiting_state(self.r.path)
-        self.assertGreater(A.batch_state(d)["held_until"], time.time())
-        self.assertEqual(A.waiting_round(self.r.path, d, w), "held")
+        self.assertEqual(self.batch()["state"], "held")
+        self.assertTrue([x for x in A.Store().events() if x["kind"] == "batch.held" and x["severity"] == "escalate"])
+        self.assertEqual(self.drive(), [], "held: nothing moves until its deadline")
         self.run_tool("waiting", "resume", cwd=self.r.path)
-        self.assertFalse(A.batch_state(d).get("held_until"))
+        self.assertEqual(self.batch()["state"], "assembling")
 
     def test_the_hooks_stall_signal_counts_as_a_stall(self):
         self.hung_sbt('case "$1" in --fast-only) echo "pre-push STALLED: sbt (no progress for 1200 s)"; exit 75 ;; esac')
         wa, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         self.land(wa)
         self.reds = set()
-        A.waiting_run(self.r.path, once=True)
+        self.drive()
         self.assertEqual(len(self.calls_of("--fast-only")), 2)
-        self.assertTrue([x for x in self.inbox() if x["verdict"].startswith("HELD")])
+        self.assertEqual(self.batch()["state"], "held")
 
     def test_a_batch_lands_with_no_land_process_alive_and_its_watch_verdict_reaches_the_inbox(self):
         A.spawn_watch = self.saved_spawn_watch  # the real, detached watch
@@ -265,7 +272,7 @@ class WaitingTest(Base):
         rc, out = self.land(wa)  # the agent's turn ends here: no land process waits on the entry
         self.assertEqual(rc, 0)
         self.reds = set()
-        A.waiting_run(self.r.path, once=True, service=True)  # the service processor
+        self.drive()  # the processor's ticks
         sha = self.entries()["1"]["landed_sha"]
         deadline = time.time() + 180
         while time.time() < deadline and not [x for x in self.inbox() if x["command"] == "watch"]:
@@ -275,15 +282,14 @@ class WaitingTest(Base):
         self.assertIn(sha, verdicts["watch"]["argv"])
         self.assertEqual((verdicts["watch"]["exit"], verdicts["watch"]["cwd"]), (0, wa))
 
-    def test_the_service_processor_stays_cheap_while_waiting_is_empty(self):
-        calls = []
-        saved = A.waiting_round
-        A.waiting_round = lambda *a: calls.append(a) or "empty"
+    def test_the_tick_stays_cheap_while_nothing_waits(self):
+        d, _c, _w = A.waiting_state(self.r.path)
+        saved = A.gate_reds
+        A.gate_reds = lambda repo: self.fail("an empty batch reads no gate")
         try:
-            self.assertEqual(A.waiting_run(self.r.path, once=True, service=True), 0)
+            self.assertEqual(A.tick_batch(self.r.path, d), [])
         finally:
-            A.waiting_round = saved
-        self.assertEqual(calls, [], "an empty `waiting` is a directory listing: no git, no gate, no lock")
+            A.gate_reds = saved
 
     def test_land_follow_still_waits_and_watches(self):
         A.await_entry = lambda repo, eid, close=None: (print("LANDED abc (with …)"), (0, "abc", 1.0))[1]
@@ -298,8 +304,7 @@ class WaitingTest(Base):
         wt1, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         self.land(wt1)
         self.run_tool("waiting", "pause", cwd=self.r.path)
-        d, _c, w = A.waiting_state(self.r.path)
-        self.assertEqual(A.waiting_round(self.r.path, d, w), "paused")
+        self.assertEqual(self.drive(), ["paused"])
         rc, out = self.run_tool("waiting", "status", cwd=self.r.path)
         self.assertIn("PAUSED", out)
         self.run_tool("waiting", "resume", cwd=self.r.path)
@@ -313,8 +318,8 @@ class WaitingTest(Base):
         self.land(wt1)
         self.reds = {A.GATE_UNREAD}
         A.gate_unread_why[0] = "could not read the movies FORGEJO_API_TOKEN from the vault"
-        A.waiting_run(self.r.path, once=True)
-        A.waiting_run(self.r.path, once=True)
+        self.drive()
+        self.drive()
         self.assertEqual(self.pushes_count(), 0, "an unread gate is never green")
         self.assertEqual(self.calls_of("--fast-only"), [])
         notes = [e for e in self.inbox() if e["verdict"].startswith("UNKNOWN: the waiting processor cannot read the gate")]
@@ -324,7 +329,7 @@ class WaitingTest(Base):
         self.assertIn("gate: UNREAD, taken as red", out)
         self.assertNotIn("green", out)
         self.reds = set()
-        A.waiting_run(self.r.path, once=True)
+        self.drive()
         self.assertEqual(self.pushes_count(), 1, "read green again: the batch lands")
 
     def test_land_with_an_unread_gate_joins_waiting(self):

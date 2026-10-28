@@ -113,7 +113,7 @@ class NoEmptyWaitingTest(QueueTest):
         sh(other, "git", "push", "-q", "forgejo", "HEAD:main")
         via = sh(other, "git", "rev-parse", "HEAD")
         self.reds = set()
-        A.waiting_run(self.r.path, once=True)
+        self.drive()
         es = self.entries()
         self.assertEqual((es["1"]["status"], es["1"]["landed_sha"]), ("landed", via))
         self.assertEqual(es["2"]["status"], "landed")
@@ -132,9 +132,9 @@ class NoEmptyWaitingTest(QueueTest):
         self.assertEqual(self.land(wa)[0], 0)
         es = self.entries()
         self.assertEqual((es["1"]["status"], es["2"]["status"]), ("superseded", "waiting"))
-        self.assertEqual(self.waiting_log(), ["a: two", "a: one"], "the newest entry carries both commits, once")
+        self.assertEqual(len(es["2"]["commits"]), 2, "the newest entry carries both commits, once")
         self.reds = set()
-        A.waiting_run(self.r.path, once=True)
+        self.drive()
         self.assertEqual(self.remote_log()[:2], ["a: two", "a: one"])
         self.assertEqual(empty_commits_on_main(self), [])
 
@@ -146,8 +146,12 @@ class NoEmptyWaitingTest(QueueTest):
         self.assertEqual(self.land(wa)[0], 0)
         rc, out = self.land(wb)
         self.assertEqual(rc, 0, out)
-        self.assertIn("the same change already waits", out)
-        self.assertEqual(self.waiting_log(), ["a: one"], "no empty commit on `waiting`")
+        self.reds = set()
+        self.drive()  # assembled at green: the copy is a duplicate of the first, superseded, never an empty commit
+        es = self.entries()
+        self.assertEqual((es["1"]["status"], es["2"]["status"]), ("landed", "superseded"))
+        self.assertIn("the same change already waits", es["2"]["why"])
+        self.assertEqual(empty_commits_on_main(self), [])
 
 
 class EmptyCommitGuardTest(Base):

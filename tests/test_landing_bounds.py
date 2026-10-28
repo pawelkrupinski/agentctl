@@ -52,34 +52,37 @@ class LeaseTest(unittest.TestCase):
 class BatchRetryTest(unittest.TestCase):
     def test_three_failed_landings_hold_the_batch_with_a_condition(self):
         d = tempfile.mkdtemp()
-        saved = A.run_probe, A.open_condition
+        st = A.Store(path=os.path.join(d, "store.db"))
+        saved = A.open_condition, A.wlog
         opened = []
         A.open_condition = lambda kind, text, probe, acts, **kw: opened.append((kind, text, acts)) or {"key": kw.get("key")}
+        A.wlog = lambda d_, m: None
         try:
-            self.assertEqual(A.batch_retry(d, "a" * 40, "its push failed", 3), "retry")
-            self.assertEqual(A.batch_retry(d, "a" * 40, "its push failed", 3), "retry")
-            self.assertEqual(A.batch_retry(d, "a" * 40, "its push failed", 3), "held")
+            it = A.new_batch(st, d, "pushing")
+            for _ in range(2):
+                it = A.batch_fail(st, d, it, "its push failed", 3)
+                self.assertEqual(it["state"], "assembling")
+                it = A.batch_move(st, it, "pushing")
+            it = A.batch_fail(st, d, it, "its push failed", 3)
         finally:
-            A.run_probe, A.open_condition = saved
-        self.assertGreater(A.batch_state(d)["held_until"], time.time())
+            A.open_condition, A.wlog = saved
+        self.assertEqual(it["state"], "held")
         self.assertEqual(opened[0][0], "STALLED")
         self.assertIn("did not land 3 times", opened[0][1])
         self.assertEqual(opened[0][2], [("clear_hold", {"d": d})])
-        self.assertEqual(A.batch_retry(d, None), "retry")  # landed: the count clears
+        self.assertEqual(st.events()[-1]["severity"], "escalate")
 
     def test_bisect_rechecks_its_culprit_before_rejecting(self):
         d = tempfile.mkdtemp()
         batch = [{"id": str(i), "tip": f"t{i}"} for i in range(4)]
         results = iter([(False, "full fails", False), (False, "t1 fails", False), (False, "t0 fails", False),
                         (True, "t0 passes when checked again", False)])
-        saved = A.batch_check, A.batch_tree, A.waiting_state
+        saved = A.batch_check
         A.batch_check = lambda *a, **k: next(results)
-        A.batch_tree = lambda repo, tip: d
-        A.waiting_state = lambda repo: (d, d, d)
         try:
-            culprit, _out = A.bisect(d, d, batch, "base")
+            culprit, _out = A.bisect(d, d, batch, "base", d)
         finally:
-            A.batch_check, A.batch_tree, A.waiting_state = saved
+            A.batch_check = saved
         self.assertIsNone(culprit)  # flaky: nobody rejected
 
 
