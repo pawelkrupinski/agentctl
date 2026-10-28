@@ -167,6 +167,15 @@ class CiWhyTest(FakeForge):
         self.assertIn("[infra] convergence (united-kingdom): UNKNOWN, an outside dependency unreachable", out)
         self.assertNotIn("TEST FAILURE", out)
 
+    def test_a_check_failing_only_on_the_proxy_being_down_is_infra(self):
+        # Security headers (live) #2239: every Decodo port failed, nothing about the origin was checked.
+        self.scenario([{**job("check", conclusion="failure"), "steps": [step("Check kinowo.net and showtimes.cc", "failure")]}],
+                      "check\tCheck kinowo.net\t2026-10-28T00:10:00Z ::error::https://kinowo.net/api/me: proxy unavailable "
+                      "(Decodo isp.decodo.com): every port of isp.decodo.com failed: 10002: Tunnel connection failed: 503\n")
+        rc, out, _ = self.why()
+        self.assertIn("[infra] check: UNKNOWN, an outside dependency unreachable", out)
+        self.assertNotIn("TEST FAILURE", out)
+
     def shifted(self):
         """Forgejo's step slice shifted: --log-failed shows the failed step's neighbours' checkout/cache lines, while the
         step's `::error` annotation sits just past the slice in the whole job log (run 1988, takes (united-kingdom))."""

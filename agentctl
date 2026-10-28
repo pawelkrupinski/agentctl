@@ -1004,7 +1004,10 @@ INFRA_LOG = re.compile(r"artifact already exists|ENOENT|No space left on device|
 # A job that says it could not judge because something OUTSIDE the code was unreachable (movies' recording health:
 # `::error::UNKNOWN: proxy unreachable -- ...`, Record scrape fixtures #2238, the Decodo proxy down): an UNKNOWN, read as
 # infra -- never a TEST FAILURE that sends a fixer after a code change.
-UNKNOWN_LOG = re.compile(r"::(error|warning)[^:]*::UNKNOWN: |\bUNKNOWN: proxy unreachable\b")
+# Security headers (live) / OG cards say `proxy unavailable (Decodo ...` when every proxy port failed; the Decodo probe
+# workflow says `DECODO DOWN:` -- the proxy, not the code.
+UNKNOWN_LOG = re.compile(r"::(error|warning)[^:]*::UNKNOWN: |\bUNKNOWN: proxy unreachable\b|proxy unavailable \(Decodo|"
+                         r"\bDECODO DOWN: ")
 RUN_FIELDS = "databaseId,number,status,conclusion,headSha,url,displayTitle,workflowName,createdAt,updatedAt"
 RED_CONCLUSIONS = ("failure", "timed_out")
 
