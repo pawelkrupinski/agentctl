@@ -74,6 +74,9 @@ class RedBase(unittest.TestCase):
                         os.killpg(pid, 15)
                     except OSError:
                         pass
+            t0 = time.time()  # gone before its directory is: a stopped wrapper still writes its verdict
+            while rec.get("pid") and A.pid_alive(rec["pid"]) and time.time() - t0 < 15:
+                time.sleep(0.1)
         self.tmp.cleanup()
 
     def put(self, name, obj):

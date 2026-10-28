@@ -330,7 +330,7 @@ class OwnerTest(RedsBase):
         self.tick()
         self.tick()
         decodo = [i for i in self.st.items("red") if i["data"]["workflow"] == "Decodo probe"]
-        self.assertEqual(len(decodo), 2)
+        self.assertEqual(len(decodo), 1)  # its line-less infra jobs: one red
         self.assertEqual({i["state"] for i in decodo}, {"blocked-external"})
         self.assertEqual(self.unheld(), [])
         self.tick(advance=3 * 3600)
@@ -420,6 +420,45 @@ class DispatchTest(RedsBase):
         self.assertEqual(len(holders), 1, holders)  # both reds under ONE fixer
         self.assertEqual(len(A.fixer_records()), 1)
         self.assertEqual(self.unheld(), [])
+
+
+    def test_five_ticks_on_one_red_dispatch_exactly_one_fixer(self):
+        os.environ["FAKE_CLAUDE_SLEEP"] = "60"
+        try:
+            for _ in range(5):
+                self.tick(dispatch=True, advance=20)
+        finally:
+            os.environ["FAKE_CLAUDE_SLEEP"] = "0"
+        self.assertEqual(len(A.fixer_records()), 1)
+        self.assertEqual(self.only()["state"], "leased")
+
+    def test_a_runs_infra_failures_without_error_lines_are_one_red_and_one_fixer(self):
+        self.put("run-40.json", {"jobs": [{"name": f"leg ({c})", "status": "completed", "conclusion": "failure",
+                                           "steps": [{"name": f"Run leg {c}", "conclusion": "failure"}]}
+                                          for c in ("uk", "de", "pl", "es")] + [
+                                     {"name": "timings", "status": "completed", "conclusion": "failure",
+                                      "steps": [{"name": "Report", "conclusion": "failure"}]}],
+                                 "headSha": self.sha, "url": "u", "number": 20, "status": "completed",
+                                 "conclusion": "failure", "workflowName": "Main"})
+        self.put("run-40.log", "")
+        os.environ["FAKE_CLAUDE_SLEEP"] = "60"
+        try:
+            for _ in range(3):
+                self.tick(dispatch=True, advance=20)
+        finally:
+            os.environ["FAKE_CLAUDE_SLEEP"] = "0"
+        it = self.only()
+        self.assertEqual(len(it["data"]["jobs"]), 5)
+        self.assertEqual(len(A.fixer_records()), 1)
+
+    def test_a_red_re_keyed_in_its_own_run_clears_its_old_item(self):
+        self.tick()
+        old = self.only()
+        self.put("run-40.log", f"test (rest)\tRun tests\t2026-10-27T08:00:00Z {OTHER_LINE}\n")
+        os.unlink(A.reds_dir("runsig", "40.json"))
+        self.tick()
+        self.assertEqual(self.st.item("red", old["id"])["state"], "cleared")
+        self.assertEqual(self.only()["data"]["line"], OTHER_LINE)
 
 
 class AuditTest(RedsBase):

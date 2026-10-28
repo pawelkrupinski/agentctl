@@ -2757,7 +2757,8 @@ RED_LADDER = ((0, "author", "author"), (0, None, "fresh"),
 
 
 def red_tier(d, culprit=None):
-    if d.get("kind") in ("infra", "unclear") and d.get("red_kind") != "flake":
+    if d.get("kind") in ("infra", "unclear") and d.get("red_kind") != "flake" and not d.get("diagnosis") \
+            and int(d.get("attempts") or 0) < 3:
         return "infra"
     last = (d.get("history") or [{}])[-1]
     conds = {"author": bool((d.get("author") or {}).get("worktree")) and not d.get("author_tried"),
@@ -2851,7 +2852,11 @@ def red_obs_of_units(units):
     """{key: observation}: the units grouped by key (a matrix of jobs failing the same way is one red)."""
     obs = {}
     for u in sorted(units, key=lambda u: KIND_ORDER.get(u["kind"], 1)):
-        key = u.get("key") or red_key(u["workflow"], u["job"], u["line"])
+        lineless = not norm_line(u.get("line")) or str(u.get("line")).startswith("step failed:")
+        # an infra-shaped failure with no error line of its own (a runner, a crashed leg, a timing report that failed
+        # because others did): ONE red for the workflow's run, never one per job -- one cause, one fixer
+        key = u.get("key") or (red_key(u["workflow"], "infra", "infra-shaped, no error line")
+                               if u["kind"] in ("infra", "unclear") and lineless else red_key(u["workflow"], u["job"], u["line"]))
         o = obs.get(key)
         run = {k: u["run"].get(k) for k in ("number", "databaseId", "headSha", "createdAt", "updatedAt")}
         if o is None:
@@ -2923,9 +2928,9 @@ def red_gone(it, obs, snap):
     if d["key"] in obs:
         return False
     rid = (d.get("last_run") or {}).get("databaseId")
-    if d.get("job") == "?" and any(o["job"] != "?" and o["workflow"] == d.get("workflow")
-                                   and o["run"].get("databaseId") == rid for o in obs.values()):
-        return True  # its failed jobs were unreadable; now they are read, its run's reds carry their own keys
+    same_run = [o for o in obs.values() if o["workflow"] == d.get("workflow") and o["run"].get("databaseId") == rid]
+    if same_run and all(o["job"] != "?" for o in same_run):
+        return True  # its own run, read in full, no longer fails this way (re-keyed, or its jobs were unreadable)
     if d.get("red_kind") == "flake":
         return False  # a flake is already gone: only its fix ends it
     if d.get("red_kind") in ("local", "stuck-run", "predicts"):
@@ -3497,6 +3502,18 @@ def red_run_of(pic):
     return (pic.get("workflow"), str((pic.get("run") or {}).get("number")))
 
 
+def red_run_holder(store, run, t):
+    """The live red lease on any red of this (workflow, run number), or None: one run, one fixer, whoever holds it."""
+    for it in red_active(store).values():
+        d = it["data"]
+        if (d.get("workflow"), str((d.get("last_run") or {}).get("number"))) != run:
+            continue
+        row = store.get(red_lease(d["key"]))
+        if lease_is_live(row, t):
+            return row
+    return None
+
+
 def red_dispatcher(store, o_r, repo, t):
     """Take the open fixer offers, highest priority first (within a run: a test failure first), within the caps (gate 3
     alive, the rest 2) and while dispatch can run. ONE RUN, ONE FIXER: the run's other open offers are taken with it,
@@ -3515,8 +3532,7 @@ def red_dispatcher(store, o_r, repo, t):
         pic, cls = off["picture"], ("gate" if off["picture"].get("gate") else "other")
         alive = red_fixers_alive(store, t)
         n_cls = sum(1 for r in alive if bool(lease_meta(r).get("gate")) == (cls == "gate"))
-        on_run = next((r for r in alive if (lease_meta(r).get("workflow"), str(lease_meta(r).get("run"))) == red_run_of(pic)),
-                      None)
+        on_run = red_run_holder(store, red_run_of(pic), t)
         if off["tier"] == "author":
             why = f"offered to its author ({str((pic.get('author') or {}).get('worktree') or '?').replace(HOME, '~')})"
         elif blocker:
@@ -3831,6 +3847,11 @@ def red_fixer(a):
     extra = [(x["name"], x["epoch"], json.loads(os.environ.get("AGENTCTL_LEASE_SECRETS") or "{}").get(x["name"]))
              for x in rec.get("extra_leases") or []]
     os.environ.pop("AGENTCTL_LEASE_SECRETS", None)
+    if not name and not rec.get("orphan"):  # dispatched by older code: no lease stands behind it
+        rec.update(pid=me, ended=ts(), rc=0, verdict="STOPPED: dispatched without a lease (older code)")
+        write_json(a.record, rec)
+        print(f"RED FIXER {rec['workflow']} #{num}: STOPPED (no lease)")
+        return 0
     if not name:  # an orphan's fixer (no offer): it takes a lease of its own
         name = red_lease(f"orphan-{os.path.basename(wt)}")
         took = st.acquire(name, f"laptop:fixer:{who}", RED_FIXER_TTL, RED_FIXER_MAX, progress="start",
