@@ -3557,6 +3557,12 @@ def red_renew_holders(store, t):
         if m.get("kind") == "claim":
             mark = red_wt_mark(m.get("worktree"))
             ttl = m.get("ttl") or RED_CLAIM_TTL
+        elif m.get("kind") == "sibling":  # held by its run's fixer: lives exactly as long as that fixer's own lease
+            prim = store.get(m.get("primary") or "")
+            if not lease_is_live(prim, t) or prim["holder"] != row["holder"]:
+                store.revoke(row["name"], "its run's fixer ended")
+                continue
+            mark, ttl = f"with {prim['renewed_at']}", RED_FIXER_TTL
         elif m.get("kind") == "legacy-fixer":
             if m.get("pid") and not proc_alive(m.get("pid"), m.get("process_start")):
                 store.revoke(row["name"], "its fixer process ended")  # ended: its attempt is counted now
@@ -3639,7 +3645,7 @@ def red_fixers_alive(store, t):
     """One row per live FIXER (a fixer holding its run's several red leases counts once)."""
     out = {}
     for r in store.list("red/"):
-        if lease_is_live(r, t) and lease_meta(r).get("kind") in ("fixer", "legacy-fixer"):
+        if lease_is_live(r, t) and lease_meta(r).get("kind") in ("fixer", "legacy-fixer", "sibling"):
             out.setdefault(r["holder"], r)
     return list(out.values())
 
@@ -3690,6 +3696,17 @@ def red_dispatcher(store, o_r, repo, t):
         alive = red_fixers_alive(store, t)
         n_cls = sum(1 for r in alive if bool(lease_meta(r).get("gate")) == (cls == "gate"))
         on_run = red_run_holder(store, red_run_of(pic), t)
+        if on_run and on_run.get("name", "").startswith("red/") and off["tier"] not in ("revert",):
+            # ONE RUN, ONE FIXER: a red of a run whose fixer is at work is that fixer's -- leased to it at once, renewed
+            # while the fixer's own lease lives (the same truth in the state, the status line and the escalations)
+            took = store.take(off["id"], on_run["holder"], RED_FIXER_TTL, RED_FIXER_MAX,
+                              meta={**lease_meta(on_run), "kind": "sibling",
+                                    "primary": lease_meta(on_run).get("primary") or on_run["name"],
+                                    "outcome": None, "notes": None})
+            if took and "epoch" in took:
+                acts.append(f"{off['picture'].get('workflow')} #{(off['picture'].get('run') or {}).get('number')}: "
+                            f"red {off['picture']['key']} joined its run's fixer {on_run['holder']}")
+            continue
         if off["tier"] == "author":
             why = f"offered to its author ({str((pic.get('author') or {}).get('worktree') or '?').replace(HOME, '~')})"
         elif blocker:

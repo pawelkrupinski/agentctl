@@ -606,6 +606,37 @@ class UnkickedTest(RedsBase):
         self.assertEqual([i["state"] for i in self.st.items("red") if i["data"]["job"] == "kick"], ["cleared"])
 
 
+class SiblingTest(RedsBase):
+    def test_a_red_appearing_in_a_run_its_fixer_holds_is_leased_to_that_fixer_and_ends_with_it(self):
+        self.tick()
+        a = self.only()
+        took = self.st.acquire(A.red_lease(a["data"]["key"]), "laptop:fixer:red-a-1", 900, 3600,
+                               meta={"kind": "fixer", "gate": True, "workflow": "Main", "run": 20})
+        self.tick()
+        # a newer read of the same run shows a second failure: the run's fixer holds it at once
+        self.put("run-40.json", {"jobs": [{"name": "test (rest)", "status": "completed", "conclusion": "failure",
+                                           "steps": [{"name": "Run tests", "conclusion": "failure"}]},
+                                          {"name": "b", "status": "completed", "conclusion": "failure",
+                                           "steps": [{"name": "Run tests", "conclusion": "failure"}]}],
+                                 "headSha": self.sha, "url": "u", "number": 20, "status": "completed",
+                                 "conclusion": "failure", "workflowName": "Main"})
+        self.put("run-40.log", f"test (rest)\tRun tests\t2026-10-27T08:00:00Z {FAIL_LINE}\n"
+                               f"b\tRun tests\t2026-10-27T08:00:00Z {OTHER_LINE}\n")
+        os.unlink(A.reds_dir("runsig", "40.json"))
+        for _ in range(3):
+            self.tick(dispatch=True)
+        b = [i for i in self.st.items("red") if i["data"]["line"] == OTHER_LINE][0]
+        self.assertEqual(b["state"], "leased")
+        self.assertEqual(self.st.get(A.red_lease(b["data"]["key"]))["holder"], "laptop:fixer:red-a-1")
+        self.assertEqual(A.escalated_now(self.st), [])
+        self.assertNotIn("offered", A.red_view(self.st, b)[0])
+        self.st.release(A.red_lease(a["data"]["key"]), took["epoch"], took["secret"], outcome="GAVE UP: x")
+        self.tick()
+        self.tick()
+        b = self.st.item("red", b["id"])
+        self.assertEqual(b["state"], "offered")  # its fixer ended: offered again with it
+
+
 class AuditTest(RedsBase):
     def test_7_a_workflow_outside_the_newest_200_runs_is_still_read(self):
         saved = A.main_workflow_files, A.gh_json
