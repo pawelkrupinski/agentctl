@@ -279,6 +279,19 @@ class FixTest(RedsBase):
         self.assertTrue(self.only()["data"]["fix"]["verify_dispatched"])
 
 
+    def test_a_change_landing_on_red_under_the_ci_fix_rule_is_no_fix_for_the_red(self):
+        self.tick()
+        wt = self.r.worktree("repo-wt-ci", branch="ci")
+        self.r.write("ci.txt", "x\n", at=wt)
+        c = self.r.commit("CI kick fix\n\nFixes-Red: 20\nRed-Unrelated: CI kick fix, unrelated to the identity red", at=wt)
+        d, _c, _w = A.waiting_state(self.r.path)
+        os.makedirs(os.path.join(d, "entries"), exist_ok=True)
+        A.write_json(os.path.join(d, "entries", "e9.json"), {"id": "e9", "seq": 9, "status": "checking", "fixes": ["20"],
+                                                             "commits": [c], "worktree": wt})
+        self.tick()
+        self.assertEqual(self.only()["state"], "offered")  # not fix-pending: the red keeps its own fixers
+
+
 class ClearTest(RedsBase):
     def test_the_observation_that_opened_a_red_clears_it(self):
         self.tick()

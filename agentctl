@@ -3042,11 +3042,21 @@ def landed_fix_commits(repo):
     return out
 
 
+def red_unrelated(repo, e):
+    """A change landing on a red gate under the owner's speed-up / CI-fix rule names the red only to pass the gate:
+    its `Red-Unrelated: <reason>` trailer says it is no fix for that red, so it never takes the red's fixer away."""
+    for c in e.get("commits") or []:
+        r = git(repo, "log", "-1", "--format=%(trailers:key=Red-Unrelated,valueonly)", c, check=False)
+        if r.returncode == 0 and r.stdout.strip():
+            return True
+    return False
+
+
 def red_fix_facts(repo):
     entries = []
     try:
         d, _c, _w = waiting_state(repo)
-        entries = [e for e in waiting_entries(d, open_only=False) if e.get("fixes")]
+        entries = [e for e in waiting_entries(d, open_only=False) if e.get("fixes") and not red_unrelated(repo, e)]
     except (Exception, SystemExit):
         pass
     try:
