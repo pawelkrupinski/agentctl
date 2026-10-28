@@ -3171,7 +3171,7 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
     live = lease_is_live(row, t)
     gone = obs is not None and red_gone(it, obs, snap)
     fix = red_fix_of(it, facts)
-    block = red_block_of(it)
+    block = red_block_of(it, store)
     acts = []
     if st == "red":
         it = red_offer(store, it, f"{red_what(d)} is red: offered")
@@ -3194,7 +3194,8 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
             return red_lease_ended(store, it, row, block, t)
         if block:
             store.close_offer(f"red:{it['id']}", "blocked")
-            red_move(store, it, "blocked-external", f"{red_what(d)}: {block['text']}", data={"cause": block.get("cause")})
+            red_move(store, it, "blocked-external", f"{red_what(d)}: {block['text']}",
+                     data={"cause": block.get("cause"), "block": block["name"]})
             return [f"blocked {red_what(d)}"]
         if t >= it["deadline"]:  # no taker in time: escalate (the state's self-transition), widen, offer again
             off = store.offer_of(f"red:{it['id']}") or {}
@@ -3234,10 +3235,16 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
         if fix:
             red_move(store, it, "fix-pending", f"{red_what(d)}: fix {fix.get('entry') or fix.get('sha')}", data={"fix": fix})
             return [f"fix-pending {red_what(d)}"]
-        if not block or t >= it["deadline"]:
-            red_offer(store, it, f"{red_what(d)}: its block ended: offered again", data={"cause": None},
-                      escalate=t >= it["deadline"])
-            return [f"re-offered {red_what(d)} (block ended)"]
+        if not block:  # its block lapsed: the probe passed (verify it), or its justification or max hold is gone
+            brow = store.get(d.get("block") or block_lease(key))
+            out = str(lease_meta(brow).get("outcome") or "expired")
+            if out.startswith("PROBE PASSED"):
+                red_move(store, it, "fix-pending", f"{red_what(d)}: its block's check passes ({out[14:120]}): verifying",
+                         data={"fix": {"status": "verify", "at": t, "entry": None, "sha": ""}, "block": None})
+                return [f"verifying {red_what(d)} (its block cleared)"]
+            red_offer(store, it, f"{red_what(d)}: its block ended ({out[:120]}): offered again",
+                      data={"cause": None, "block": None}, escalate=not out.startswith("INVALID"))
+            return [f"re-offered {red_what(d)} (block ended: {out[:60]})"]
         return acts
     return acts
 
@@ -3253,7 +3260,8 @@ def red_lease_ended(store, it, row, block, t):
     if str(h["outcome"]).startswith("DIAGNOSED:"):
         upd["diagnosis"] = h["outcome"][len("DIAGNOSED:"):].strip()[:600]
     if block:
-        red_move(store, it, "blocked-external", f"{red_what(d)}: {block['text']}", data={**upd, "cause": block.get("cause")})
+        red_move(store, it, "blocked-external", f"{red_what(d)}: {block['text']}",
+                 data={**upd, "cause": block.get("cause"), "block": block["name"]})
         return [f"blocked {red_what(d)}"]
     red_offer(store, it, f"{red_what(d)}: {h['holder']} ended ({h['outcome'][:120]}): offered again", data=upd)
     return [f"re-offered {red_what(d)} after {h['outcome'][:60]}"]
@@ -3266,6 +3274,25 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
         store.update_item("red", it["id"], it["version"], {"fix": {**f, **fix}})
         it = store.item("red", it["id"])
         d, f = it["data"], it["data"]["fix"]
+    if f.get("status") == "verify":  # an owner block's check passed: the next decided run says whether it is fixed
+        last = ((snap or {}).get("latest") or {}).get(d.get("workflow")) or {}
+        after = bool(last.get("updatedAt")) and parse_time(last["updatedAt"]).timestamp() > float(f.get("at") or 0)
+        if obs is not None and gone:
+            line = f"FIX OK: {red_what(d)} cleared after its owner block's check passed"
+            inbox_write("red", line, [line], [], 0)
+            red_move(store, it, "verified", line)
+            return [line]
+        if obs is not None and after and d["key"] in obs:
+            red_offer(store, it, f"{red_what(d)}: still red after its block cleared: offered again", data={"fix": None})
+            return [f"re-offered {red_what(d)} (still red after its block)"]
+        if not d.get("gate") and not f.get("verify_dispatched"):
+            line = red_verify_dispatch(o_r, repo, d.get("workflow"), "")
+            store.update_item("red", it["id"], it["version"], {"fix": {**f, "verify_dispatched": ts(), "verify": line}})
+            return [line]
+        if t >= it["deadline"]:
+            red_move(store, it, "fix-pending", f"RED {red_what(d)}: unverified {fmt_age(t - it['entered_at'])} after its block")
+            return [f"escalated {red_what(d)}: unverified after its block"]
+        return []
     if f.get("status") != "landed":
         status = red_entry_status(facts, f.get("entry"))
         if status in FIX_OPEN:
@@ -3462,62 +3489,14 @@ def red_import_claims(store, active, t):
     return out
 
 
-# -- owner blocks (until step 11 makes them leases): an open BLOCKED condition holding the red
-def red_block_of(it):
-    """{text, cause} of the owner block holding this red, or None: a blocked claim naming its runs, or an outage
-    condition whose probe is the red's own workflow going green (one cause, many reds)."""
-    d = it["data"]
-    names = set(d.get("runs") or [])
-    try:
-        conds = open_conditions()
-    except (Exception, SystemExit):
-        return None
-    for cond in conds:
-        if cond.get("kind") != "BLOCKED":
-            continue
-        pr = cond["probe"]["args"].get("inner") if cond["probe"]["kind"] == "owner_block" else cond["probe"]
-        cause = cond["key"][len("cause-"):] if cond["key"].startswith("cause-") else None
-        held = [x for _n, x in cond.get("on_recover") or [] if x.get("path")]
-        for x in held:
-            c = read_record(x["path"]) or {}
-            if names & (set(map(str, c.get("runs") or [])) | {str(c.get("run"))}):
-                return {"text": cond.get("text") or "BLOCKED ON OWNER", "cause": cause, "until": cond.get("until")}
-        if cause and (pr or {}).get("kind") == "workflow_green" and pr["args"].get("workflow") == d.get("workflow"):
-            return {"text": f"BLOCKED: {cause} down (auto-clears when {probe_words(pr['kind'], pr['args'])})",
-                    "cause": cause, "until": probe_words(pr["kind"], pr["args"])}
-    return None
-
-
-def block_claims():
-    out = []
-    for p in sorted(glob.glob(reds_dir("claims", "*.json"))):
-        c = read_record(p)
-        if c and c.get("state") == "blocked":
-            c["path"] = p
-            out.append(c)
-    return out
-
-
-def write_block_claim(o_r, n, cmd, until, cause, note=""):
-    """`red block`'s record of the block (step 11 makes it a block lease)."""
-    if not _OPENING[0]:
-        raise ConditionBypass("a block is written by open_condition only (`red block`): it needs its recovery probe")
-    here = safe_cwd()
-    name, r, units = red_run_units(o_r, n)
-    names = sorted(set().union(*[u["names"] for u in units]) if units else {str(n).lstrip("#")} | (run_names(r) if r else set()))
-    who = claimant(here)
-    path = reds_dir("claims", re.sub(r"[^\w.-]+", "_", f"block-{name}-{str(n).lstrip('#')}-{who}")[:150] + ".json")
-    c = {"who": who, "worktree": worktree_of(here) or here, "started": ts(), "note": note,
-         "run": str(r.get("number")) if r else str(n).lstrip("#"), "run_id": r.get("databaseId") if r else None,
-         "runs": names, "workflow": name, "jobs": sorted({u["job"] for u in units}), "state": "blocked",
-         "blocked_cmd": cmd, "until": until, "cause": cause}
-    write_json(path, c)
-    return c, path
-
-
 # -- the dispatcher (the phase-2 shape: offers and leases only)
 def red_fixers_alive(store, t):
-    return [r for r in store.list("red/") if lease_is_live(r, t) and lease_meta(r).get("kind") in ("fixer", "legacy-fixer")]
+    """One row per live FIXER (a fixer holding its run's several red leases counts once)."""
+    out = {}
+    for r in store.list("red/"):
+        if lease_is_live(r, t) and lease_meta(r).get("kind") in ("fixer", "legacy-fixer"):
+            out.setdefault(r["holder"], r)
+    return list(out.values())
 
 
 def red_cap(cls):
@@ -4107,7 +4086,7 @@ def red_view(store, it, t=None):
                     f"fix {str(f.get('sha'))[:7]} awaiting its run")
         return f"fix {f.get('entry')} {f.get('status')} (Fixes-Red){rec}", f"fix {f.get('status')}"
     if st == "blocked-external":
-        b = red_block_of(it) or {}
+        b = red_block_of(it, store) or {}
         return b.get("text") or "BLOCKED ON OWNER", (f"BLOCKED: {d.get('cause')} down" if d.get("cause") else "BLOCKED ON OWNER")
     return st, st
 
@@ -4128,7 +4107,7 @@ def red_view_of_units(store, units):
         text, short = red_view(store, it)
         more = f" (+{len(its) - 1} more red{'s' if len(its) > 2 else ''} in this run)" if len(its) > 1 else ""
         out[k] = {"state": it["state"], "text": text + more, "short": short, "cause": it["data"].get("cause"),
-                  "until": (red_block_of(it) or {}).get("until") if it["state"] == "blocked-external" else None}
+                  "until": (red_block_of(it, store) or {}).get("until") if it["state"] == "blocked-external" else None}
     return out
 
 
@@ -4185,6 +4164,12 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=True, facts=None):
         acts += red_adopt_fixers(store, active, t)
     except (Exception, SystemExit) as e:
         err(f"red tick: adopting live fixers failed ({str(e)[:160]})")
+    if any(c.get("kind") == "BLOCKED" for c in open_conditions()) or glob.glob(reds_dir("claims", "*.json")):
+        acts += red_import_blocks(store)
+    try:
+        acts += red_renew_blocks(store, t)
+    except (Exception, SystemExit) as e:
+        err(f"red tick: renewing the blocks failed ({str(e)[:160]})")
     for key, it in list(active.items()):
         try:
             acts += red_step(store, it, obs, snap, facts, repo, o_r, t)
@@ -4452,8 +4437,8 @@ def red_run_units(o_r, n):
 # root cause and structural fix", "fix structurally so it doesn't false-flag this way" -- an escalation block raised for
 # the CdpLaunchSpec crash on #2164 followed the red onto #2283 and hid its live fixer). A code red is never the owner's:
 # a block needs an OWNER CAUSE (outside the code, that only the owner can act on), a red whose verdict is not a test
-# failure, no live fixer, and the owner's exact command -- checked at the block AND again every tick
-# (owner_block_invalid, AND-ed into the condition's probe): a block that lost its justification drops at once.
+# failure, no live fixer, and the owner's exact command -- checked at the block AND again every tick (block_invalid:
+# the tick renews a block lease only while it holds): a block that lost its justification lapses at once.
 OWNER_CAUSES = {"external-account": "an external account only the owner holds (a provider dashboard, a plan)",
                 "credentials": "credentials or secrets only the owner can issue or rotate",
                 "infra-apply": "an infra apply only the owner may run",
@@ -4470,57 +4455,6 @@ def red_verdict_kinds(o_r, n, name=None):
         if str(r.get("number")) == str(n) and (name is None or r.get("workflow") == name):
             kinds |= {x.get("kind") for x in r.get("sigs") or []}
     return kinds - {None}
-
-
-def red_live_fixers(c):
-    """Live holders of the red that block c names, other than blocks: a live red lease, a queued Fixes-Red change."""
-    out = []
-    names = set(map(str, c.get("runs") or [])) | {str(c.get("run"))}
-    try:
-        st = Store()
-        for it in red_active(st).values():
-            if names & set(it["data"].get("runs") or []) and (not c.get("workflow") or it["data"].get("workflow") == c.get("workflow")):
-                row = st.get(red_lease(it["data"]["key"]))
-                if lease_is_live(row, st.clock()):
-                    out.append(f"{row['holder']} (leased)")
-    except Exception:
-        pass
-    try:
-        d, _c, _w = waiting_state(movies_repo_path())
-        for e in waiting_entries(d):
-            if set(map(str, e.get("fixes") or [])) & names:
-                out.append(f"a Fixes-Red change ({e.get('status')}, entry {e.get('id')})")
-    except (Exception, SystemExit):
-        pass
-    return out
-
-
-def owner_block_invalid(c):
-    """Why the owner block of claim c is no longer justified, or None."""
-    if c.get("owner_cause") not in OWNER_CAUSES:
-        return f"no owner cause (one of {', '.join(OWNER_CAUSES)}): only the owner's causes may block on the owner"
-    if not str(c.get("blocked_cmd") or "").strip():
-        return "no owner command"
-    if "test" in red_verdict_kinds(SHORT["movies"], c.get("run"), c.get("workflow")):
-        return "its red is a TEST FAILURE: a code red is never the owner's"
-    live = red_live_fixers(c)
-    if live:
-        return f"a live fixer is on it: {live[0]}"
-    return None
-
-
-def probe_owner_block(a):
-    """A BLOCKED condition's probe: passes when its own check passes (the outage is over) OR no block it holds is
-    justified any more (owner_block_invalid of every claim it releases)."""
-    paths = a.get("claims") or []
-    cs = [read_record(p_) for p_ in paths]
-    valid = [c for c, p_ in zip(cs, paths) if c and not owner_block_invalid(dict(c, path=p_))]
-    if paths and not valid:
-        why = next((owner_block_invalid(dict(c, path=p_)) for c, p_ in zip(cs, paths) if c), "its claims are gone")
-        return True, f"INVALID: {why}"
-    inner = a["inner"]
-    ok, detail = PROBES[inner["kind"]](inner["args"])
-    return ok, detail
 
 
 def owner_details(o_r, n, name, units, cmd, words, owner_cause):
@@ -4541,11 +4475,91 @@ def owner_details(o_r, n, name, units, cmd, words, owner_cause):
             f"auto-clears when {words}")
 
 
+# -- owner blocks are leases (design §5.3 blocked-external; phase 1 step 11)
+# A block is a lease `block/<key>` (one red) or `block/cause/<name>` (ONE external cause holding every red it explains),
+# holder `owner:<owner cause>`, TTL 10 min, max 7 d. Only the tick renews it, and only while its probe still fails AND
+# its justification holds for a red it holds (an owner cause, the owner's exact command, never a TEST FAILURE, no live
+# fixer). Its probe passing, the justification gone, or the max hold: it lapses, and its reds go on (verify / offered).
+BLOCK_TTL, BLOCK_MAX = 10 * 60, 7 * 86400
+BLOCK_PROBE_EVERY = 60
+
+
+def block_lease(key=None, cause=None):
+    return f"block/cause/{re.sub(r'[^\w.-]+', '_', cause)}" if cause else f"block/{key}"
+
+
+def red_block_of(it, store=None):
+    """{name, text, cause, until, meta} of the live block lease holding this red, or None."""
+    st = store or Store()
+    d = it["data"]
+    for row in st.list("block/"):
+        if lease_is_live(row, st.clock()):
+            m = lease_meta(row)
+            if d.get("key") in (m.get("keys") or []):
+                return {"name": row["name"], "text": m.get("text") or "BLOCKED ON OWNER", "cause": m.get("cause"),
+                        "until": m.get("until"), "meta": m}
+    return None
+
+
+def block_invalid(store, it, m, t):
+    """Why this block no longer justifies holding red `it`, or None (checked at the block AND every tick)."""
+    d = it["data"]
+    if m.get("owner_cause") not in OWNER_CAUSES:
+        return f"no owner cause (one of {', '.join(OWNER_CAUSES)}): only the owner's causes may block on the owner"
+    if not str(m.get("cmd") or "").strip():
+        return "no owner command"
+    if d.get("kind") == "test":
+        return "its red is a TEST FAILURE: a code red is never the owner's"
+    row = store.get(red_lease(d["key"]))
+    if lease_is_live(row, t):
+        return f"a live fixer is on it: {row['holder']}"
+    return None
+
+
+def red_renew_blocks(store, t):
+    """The tick's look at every live block: its probe (at most every BLOCK_PROBE_EVERY s) and its justification per red.
+    Still failing and still justified: renewed (the probe's fresh failing result is its progress). Otherwise it lapses
+    now (revoked, the reason in its outcome) or a red that lost its justification is detached from it."""
+    out = []
+    active = {it["data"]["key"]: it for it in red_active(store).values()}
+    for row in store.list("block/"):
+        if not lease_is_live(row, t):
+            continue
+        m = lease_meta(row)
+        keys = [k for k in m.get("keys") or [] if k in active]
+        dropped = [(k, block_invalid(store, active[k], m, t)) for k in keys]
+        dropped = [(k, why) for k, why in dropped if why]
+        keep = [k for k in keys if k not in {k_ for k_, _w in dropped}]
+        for k, why in dropped:
+            out.append(f"dropped the owner block of {red_what(active[k]['data'])}: {why}")
+        if not keep:
+            why = dropped[0][1] if dropped else "it holds no open red"
+            store.revoke(row["name"], f"INVALID: {why}")
+            out.append(f"block {row['name']} lapsed: {why}")
+            continue
+        if keep != m.get("keys"):
+            store.set_meta(row["name"], row["epoch"], row["secret"], {"keys": keep})
+        if t - float(m.get("probed_at") or 0) < BLOCK_PROBE_EVERY:
+            store.renew(row["name"], row["epoch"], row["secret"], f"held@{int(t // BLOCK_PROBE_EVERY)}", BLOCK_TTL)
+            continue
+        pr = m.get("probe") or {}
+        r = run_probe(pr.get("kind"), pr.get("args")) if pr.get("kind") in PROBES else None
+        store.set_meta(row["name"], row["epoch"], row["secret"], {"probed_at": t, "last": r.detail if r else "no probe"})
+        if r is not None and r.ok:
+            store.revoke(row["name"], f"PROBE PASSED: {r.detail}")
+            out.append(f"RECOVERED: {m.get('until')} ({r.detail}): the block {row['name']} lapsed")
+            line = f"RECOVERED: {m.get('until')} ({r.detail}): {m.get('text', '')[:200]}"
+            inbox_write("recover", line, [line], [], 0)
+            continue
+        store.renew(row["name"], row["epoch"], row["secret"], f"{r.detail if r else 'cannot tell'}@{int(t)}", BLOCK_TTL)
+    return out
+
+
 def red_block(o_r, a):
-    """`red block`: the red waits on the OWNER, for an owner cause only, as a CONDITION whose probe is the check that
-    keeps it red -- named (--until-green / --until-http / --until-tcp) or the red's own workflow going green -- AND-ed
-    with the block's justification (owner_block_invalid). On recovery the block is released and (unless the probe was
-    that very workflow) the red's workflow dispatched on main to verify it."""
+    """`red block`: the red waits on the OWNER, for an owner cause only, as a block lease the tick renews while its
+    probe -- named (--until-green / --until-http / --until-tcp), an open cause's, or the red's own workflow going green
+    -- still fails and its justification holds. --cause NAME: ONE lease for that outage, every red it explains attached."""
+    st = Store()
     n = str(a.run).lstrip("#")
     name, units = None, []
     try:
@@ -4553,9 +4567,11 @@ def red_block(o_r, a):
     except (Exception, SystemExit):
         name, _r = resolve_run(o_r, n)
     cause = getattr(a, "cause", None)
-    ckey = re.sub(r"[^\w.-]+", "_", f"cause-{cause}") if cause else None
-    old = read_record(recovery_dir(ckey + ".json")) if cause else None
-    owner_cause = getattr(a, "owner_cause", None) or (old or {}).get("owner_cause")
+    lname = block_lease(cause=cause) if cause else None
+    old = st.get(lname) if lname else None
+    old = old if lease_is_live(old, st.clock()) else None
+    om = lease_meta(old)
+    owner_cause = getattr(a, "owner_cause", None) or om.get("owner_cause")
     if owner_cause not in OWNER_CAUSES:
         print(f"NOT BLOCKED: a block on the owner needs --owner-cause, one of: {', '.join(OWNER_CAUSES)} (a cause outside "
               "the code that only the owner can act on). A code red is yours: claim it and fix it.")
@@ -4564,14 +4580,14 @@ def red_block(o_r, a):
         print(f"NOT BLOCKED: #{n} is a TEST FAILURE ({units[0].get('job')}): a code red is never the owner's -- "
               f"`~/bin/agentctl red claim {n}` and fix it")
         return 2
-    live = red_live_fixers({"run": n, "runs": sorted(set().union(*[x["names"] for x in units])) if units else [n],
-                            "workflow": name, "jobs": [x["job"] for x in units]})
+    items = red_targets(st, o_r, n) if units else []
+    live = [st.get(red_lease(it["data"]["key"]))["holder"] for it in items
+            if lease_is_live(st.get(red_lease(it["data"]["key"])), st.clock())]
     if live:
         print(f"NOT BLOCKED: a live fixer is on #{n}: {live[0]}")
         return 1
-    if old and not (a.until_green or a.until_http or a.until_tcp):  # attach to the outage's ONE condition: its probe
-        inner = old["probe"]["args"].get("inner") or old["probe"]
-        iprobe = run_probe(inner["kind"], inner["args"])
+    if old and not (a.until_green or a.until_http or a.until_tcp):  # attach to the outage's ONE lease: its probe
+        iprobe = run_probe(om["probe"]["kind"], om["probe"]["args"])
     elif cause and not (a.until_green or a.until_http or a.until_tcp):
         print(f"NOT BLOCKED: no open cause {cause!r} to attach to; open it with its probe: --cause {cause} "
               "--until-green <workflow> | --until-http <url> | --until-tcp <host:port>")
@@ -4593,85 +4609,78 @@ def red_block(o_r, a):
     if iprobe.ok:
         print(f"NOT BLOCKED: {words} already ({iprobe.detail}): nothing waits on the owner -- `red claim {n}` and fix it")
         return 1
-    details = owner_details(o_r, n, name, units, a.owner_cmd, words, owner_cause)
-    key = ckey or re.sub(r"[^\w.-]+", "_", f"block-{name}-{n}")
-    held = {}
-
-    def effect():
-        held["c"], path = write_block_claim(o_r, n, a.owner_cmd, words, cause, a.note or "")
-        cur = read_record(path) or held["c"]
-        write_json(path, {**cur, "owner_cause": owner_cause, "details": details})
-        return {"path": path}
-
-    def text(_extra):
-        c = held["c"]
-        what = f"{c.get('workflow') or 'run'} #{c['run']}" + (f" [{', '.join(c['jobs'])}]" if c.get("jobs") else "")
-        if cause:
-            return f"RED BLOCKED ON OWNER: {cause} down (blocks {what}): {details}"
-        return f"RED BLOCKED ON OWNER: {what}: {details}"
-    claims = [x["path"] for _n, x in (old or {}).get("on_recover") or [] if x.get("path")]
-    probe = run_probe("owner_block", {"inner": {"kind": iprobe.kind, "args": iprobe.args}, "claims": claims})
-    rec = [("release_block", {"run": n, "workflow": name})]
-    if not (iprobe.kind == "workflow_green" and iprobe.args.get("workflow") == name):
-        rec.append(("verify", {"run": n, "workflow": name, "repo": o_r}))
-    cond = open_condition("BLOCKED", text, probe, rec, key=key, command="red", effect=effect)
-    if cond:
-        cond["probe"]["args"]["claims"] = [x["path"] for _n, x in cond["on_recover"] if x.get("path")]
-        write_json(recovery_dir(key + ".json"), {**cond, "owner_cause": owner_cause})
-    print((f"attached {name} #{n} to {cause!r}: " if old else "") + (cond or {}).get("text", "")
-          + f" ({iprobe.detail}; `agentctl recover status`)")
+    if not items:
+        print(f"NOT BLOCKED: #{n} names no red on main")
+        return 1
+    details = owner_details(o_r, n, name, units, a.owner_cmd or om.get("cmd"), words, owner_cause)
+    keys = [it["data"]["key"] for it in items]
+    what = ", ".join(red_what(it["data"]) for it in items)
+    text = (f"BLOCKED: {cause} down (auto-clears when {words})" if cause else
+            f"BLOCKED ON OWNER: {details}")
+    verify = not (iprobe.kind == "workflow_green" and iprobe.args.get("workflow") == name)
+    if old:
+        st.set_meta(lname, old["epoch"], old["secret"], {"keys": sorted(set(om.get("keys") or []) | set(keys))})
+        print(f"attached {what} to {cause!r}: {om.get('text')} ({iprobe.detail}; `agentctl red status`)")
+    else:
+        lname = lname or block_lease(keys[0])
+        r = st.acquire(lname, f"owner:{owner_cause}", BLOCK_TTL, BLOCK_MAX, progress=f"{iprobe.detail}@{int(time.time())}",
+                       meta={"kind": "block", "owner_cause": owner_cause, "cmd": a.owner_cmd, "cause": cause,
+                             "probe": {"kind": iprobe.kind, "args": iprobe.args}, "until": words, "keys": keys,
+                             "text": text, "details": details, "verify": verify, "probed_at": time.time()})
+        if "held" in r:
+            print(f"NOT BLOCKED: {lname} is held by {r['held']['holder']}")
+            return 1
+        line = (f"RED BLOCKED ON OWNER: {cause} down (blocks {what}): {details}" if cause else
+                f"RED BLOCKED ON OWNER: {what}: {details}")
+        inbox_write("red", line, [line], [], 1)
+        print(line + f" ({iprobe.detail}; `agentctl red status`)")
+    for it in items:
+        cur = st.item("red", it["id"])
+        st.update_item("red", it["id"], cur["version"], {"block": lname})
     return 0
 
 
-def validate_owner_blocks():
-    """Every tick: each owner block that lost its justification drops at once (its claim released, its actions gone);
-    a BLOCKED condition left holding none closes through its own probe (owner_block)."""
+def red_import_blocks(store):
+    """Step 11's migration: every BLOCKED condition (an outage or one red's block) becomes a block lease holding the
+    open reds its block claims name; the condition and claim files go."""
     out = []
+    active = red_active(store)
     for cond in open_conditions():
         if cond.get("kind") != "BLOCKED":
             continue
-        acts, keep, dropped = cond.get("on_recover") or [], [], []
-        for n_, x in acts:
-            c = read_record(x["path"]) if x.get("path") else None
-            why = owner_block_invalid(dict(c, path=x["path"])) if c else None
-            if why:
-                dropped.append((x, why))
-            else:
-                keep.append([n_, x])
-        if not dropped:
-            continue
-        gone = {str(x.get("run")) for x, _w in dropped}
-        keep = [[n_, x] for n_, x in keep if not (n_ == "verify" and str(x.get("run")) in gone)]
-        path = cond.pop("path")
-        if any(n_ == "release_block" for n_, _x in keep):  # an outage still holding other reds: detach these
-            for x, why in dropped:
-                try:
-                    os.unlink(x["path"])
-                except OSError:
-                    pass
-                out.append(f"dropped the owner block of #{x.get('run')}: {why}")
-            cond["on_recover"] = keep
-            cond["probe"]["args"]["claims"] = [x["path"] for _n, x in keep if x.get("path")]
-            write_json(path, cond)
-        else:  # it holds no justified block: closed now, whatever its (outage) probe says
-            cond["path"] = path
-            line = close_condition(cond, f"INVALID: {dropped[0][1]}")
-            if line:
-                out.append(line)
-    held = {x.get("path") for c in open_conditions() for _n, x in c.get("on_recover") or []}
-    for c in block_claims():  # a block with no condition (made before the registry, or its condition gone)
-        if c["path"] not in held:
-            why = owner_block_invalid(c)
-            if why:
-                try:
-                    os.unlink(c["path"])
-                    out.append(f"dropped the owner block of {c.get('workflow')} #{c.get('run')} ({c.get('who')}): {why}")
-                except OSError:
-                    pass
-    for line in out:
-        err(line)
+        pr = cond["probe"]["args"].get("inner") if cond["probe"]["kind"] == "owner_block" else cond["probe"]
+        cause = cond["key"][len("cause-"):] if cond["key"].startswith("cause-") else None
+        paths = [x["path"] for _n, x in cond.get("on_recover") or [] if x.get("path")]
+        cs = [read_record(p) or {} for p in paths]
+        names = set().union(*[set(map(str, c.get("runs") or [])) | {str(c.get("run"))} for c in cs]) if cs else set()
+        keys = [k for k, it in active.items() if names & set(it["data"].get("runs") or [])
+                or (cause and pr and pr.get("kind") == "workflow_green" and it["data"].get("workflow") == pr["args"].get("workflow"))]
+        c0 = cs[0] if cs else {}
+        if keys and pr:
+            lname = block_lease(cause=cause) if cause else block_lease(keys[0])
+            store.acquire(lname, f"owner:{cond.get('owner_cause') or c0.get('owner_cause') or 'external-account'}",
+                          BLOCK_TTL, BLOCK_MAX, progress="imported",
+                          meta={"kind": "block", "owner_cause": cond.get("owner_cause") or c0.get("owner_cause"),
+                                "cmd": c0.get("blocked_cmd"), "cause": cause, "probe": pr, "until": cond.get("until"),
+                                "keys": keys, "text": cond.get("text"), "details": c0.get("details"), "verify": True})
+            out.append(f"imported the block {cond['key']} as {lname} ({len(keys)} red(s))")
+        else:
+            out.append(f"dropped the block {cond['key']}: no open red it names")
+        for p in paths + [cond["path"]]:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+    for p in glob.glob(reds_dir("claims", "*.json")):  # a block claim with no condition
+        try:
+            os.unlink(p)
+            out.append(f"dropped {os.path.basename(p)}")
+        except OSError:
+            pass
     if out:
-        mark_gate_dirty()
+        with open(reds_dir("import.log"), "a") as f:
+            for line in out:
+                f.write(f"{ts()} {line}\n")
     return out
 
 
@@ -11079,7 +11088,7 @@ def inbox_wait(kinds, since_ack=False, timeout=0, verbose=False, forever=False):
 # are acked, the gate is marked dirty, the status line refreshes, its on_recover actions run (release a block and
 # dispatch the red's workflow to verify it, kick the tunnel, land a change again), and one RECOVERED note is written.
 # Nobody acks a solved problem. `agentctl recover status` lists the open conditions.
-CONDITION_KINDS = ("INVARIANT", "UNLANDED_ORPHAN", "BLOCKED", "STALLED", "UNKNOWN", "NETWORK")
+CONDITION_KINDS = ("INVARIANT", "UNLANDED_ORPHAN", "STALLED", "UNKNOWN", "NETWORK")
 RECOVER_BACKOFF_MAX = 600  # a probe is re-run at most this far apart, however often it failed ($AGENTCTL_RECOVER_MAX)
 _OPENING = [0]  # > 0 inside open_condition: the one place a condition-kind inbox entry or a block may be written
 
@@ -11217,7 +11226,7 @@ def probe_waiting_ok(a):
     return at > float(a.get("since") or 0), f"last good round {iso_at(at)}" if at else "no good round yet"
 
 
-PROBES = {"invariant": probe_invariant, "waiting_ok": probe_waiting_ok, "owner_block": probe_owner_block, "orphan_landed": probe_orphan_landed, "batch_hold": probe_batch_hold, "workflow_green": probe_workflow_green, "http": probe_http, "tcp": probe_tcp,
+PROBES = {"invariant": probe_invariant, "waiting_ok": probe_waiting_ok, "orphan_landed": probe_orphan_landed, "batch_hold": probe_batch_hold, "workflow_green": probe_workflow_green, "http": probe_http, "tcp": probe_tcp,
           "route": probe_route, "tunnel": probe_tunnel, "gate_read": probe_gate_read, "token": probe_token,
           "processor": probe_processor, "git_fetch": probe_git_fetch, "laptop_load": probe_laptop_load,
           "queue_entry": probe_queue_entry}
@@ -11234,8 +11243,7 @@ def probe_words(kind, a):
             "processor": lambda: "the processor cycles again", "git_fetch": lambda: f"git can read {REMOTE}/main",
             "laptop_load": lambda: "the laptop's load is normal", "batch_hold": lambda: "the batch hold ends",
             "invariant": lambda: f"invariant {a.get('id')} holds", "waiting_ok": lambda: "a waiting round completes",
-            "owner_block": lambda: (probe_words(a["inner"]["kind"], a["inner"]["args"]) if a.get("inner") else "its check passes")
-            + " (or the block loses its justification)", "orphan_landed": lambda: "its commits are on main or somebody works in it",
+            "orphan_landed": lambda: "its commits are on main or somebody works in it",
             "queue_entry": lambda: f"queue entry {a.get('eid')} moves"}.get(kind, lambda: kind)()
 
 
@@ -11249,21 +11257,6 @@ def run_probe(kind, args=None):
     except (Exception, SystemExit) as e:
         ok, detail = None, f"probe error: {str(e)[:160]}"
     return ProbeResult(kind, args, ok, detail, _made_by_run_probe=_RUN_PROBE_TOKEN)
-
-
-# -- what runs when a condition clears (besides the common acks, gate dirty, status line refresh, RECOVERED note)
-def recover_release_block(cond, a):
-    try:
-        os.unlink(a["path"])
-    except OSError:
-        pass
-    return f"released the block of {a.get('workflow') or 'run'} #{a.get('run')}"
-
-
-def recover_verify(cond, a):
-    """Dispatch the red's workflow on main to verify it (no wait: the red's tick reads the run)."""
-    o_r = a.get("repo") or SHORT["movies"]
-    return red_verify_dispatch(o_r, repo_for_verify(o_r), a.get("workflow"), "") + f" (#{a['run']})"
 
 
 def recover_kick_tunnel(cond, a):
@@ -11309,7 +11302,7 @@ def recover_clear_hold(cond, a):
     return "the batch hold is lifted"
 
 
-RECOVER_ACTIONS = {"clear_hold": recover_clear_hold, "release_block": recover_release_block, "verify": recover_verify, "kick_tunnel": recover_kick_tunnel,
+RECOVER_ACTIONS = {"clear_hold": recover_clear_hold, "kick_tunnel": recover_kick_tunnel,
                    "tunnel_reset": recover_tunnel_reset, "clear_flag": recover_clear_flag}
 
 
@@ -11421,10 +11414,6 @@ def recovery_tick(now_=None, force=False):
     Backoff: PROBE_EVERY x 2^fails, at most RECOVER_BACKOFF_MAX. Returns the RECOVERED lines."""
     t = now_ if now_ is not None else time.time()
     out = []
-    try:  # an owner block that lost its justification drops at every tick, whatever probe its condition was made with
-        out += [x for x in validate_owner_blocks() if x.startswith(("RECOVERED", "CLOSED"))]
-    except (Exception, SystemExit) as e:
-        err(f"recover: could not re-validate the owner blocks ({str(e)[:160]})")
     for c in open_conditions():
         if not force and float(c.get("next_check") or 0) > t:
             continue
@@ -11511,20 +11500,33 @@ RED_ESCALATION_KINDS = ("RED_UNCLAIMED", "RED_BUDGET", "RED_ESCALATE", "FIXER_FA
 
 
 def red_escalation_key(e):
-    """The red an escalation entry is about (its run number), or None."""
-    if (e.get("kind") or inbox_kind(e.get("verdict"))) not in RED_ESCALATION_KINDS:
+    """What a red's escalation entry is about: `cause-<name>` for an owner block on an outage (ONE escalation per
+    cause), else the red's run number; None for other entries."""
+    kind = e.get("kind") or inbox_kind(e.get("verdict"))
+    v = str(e.get("verdict") or "")
+    if kind == "BLOCKED":
+        m = re.search(r"BLOCKED ON OWNER: (\S+) down", v)
+        if m:
+            return f"cause-{m.group(1)}"
+    elif kind not in RED_ESCALATION_KINDS:
         return None
-    m = re.search(r"#(\d+)", str(e.get("verdict") or ""))
+    m = re.search(r"#(\d+)", v)
     return m.group(1) if m else None
 
 
 def red_escalation_resolved(e):
-    """A red's escalation entry whose red is held now (leased, a fix on its way, blocked), or no longer open: True --
-    read from the red's item, the same item whose offer escalated. No run number: False."""
-    n = red_escalation_key(e)
-    if n is None:
+    """A red's escalation entry whose red is held now (leased, a fix on its way), or no longer open, or (an owner block)
+    whose block lease has lapsed: True -- read from the store, where the escalation came from."""
+    k = red_escalation_key(e)
+    if k is None:
         return False
-    its = red_item_of_run(Store(), n)
+    st = Store()
+    kind = e.get("kind") or inbox_kind(e.get("verdict"))
+    if k.startswith("cause-"):
+        return not lease_is_live(st.get(block_lease(cause=k[len("cause-"):])), st.clock())
+    its = red_item_of_run(st, k)
+    if kind == "BLOCKED":
+        return not any(it["state"] == "blocked-external" for it in its)
     return not any(it["state"] in ("red", "offered") for it in its)
 
 
@@ -11543,12 +11545,12 @@ def inbox_escalations(now_=None):
         kind = e.get("kind") or inbox_kind(e.get("verdict"))
         if e["read"] or not e.get("final", True) or kind not in ESCALATE_KINDS:
             continue
-        rk = red_escalation_key(e)  # ONE escalation per open red: its newest entry stands for the others
+        rk = red_escalation_key(e)  # ONE escalation per open red or cause: its newest entry stands for the others
         if rk is not None:
             if f"red-{rk}" in seen:
                 continue
             seen.add(f"red-{rk}")
-        if kind in CONDITION_KINDS:
+        if kind in CONDITION_KINDS and rk is None:
             key = by_entry.get(e["id"])
             if key is None:  # its condition is closed (or it predates the registry): nothing left to act on
                 os.makedirs(os.path.join(inbox_dir(), "acked"), exist_ok=True)

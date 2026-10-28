@@ -323,19 +323,57 @@ class OwnerTest(RedsBase):
                                  "conclusion": "failure", "workflowName": "Decodo probe"})
         self.put("run-60.log", "")
         r = A.run_probe("http", {"url": "http://127.0.0.1:9/decodo"})
-        A.write_json(os.path.join(os.environ["AGENTCTL_RECOVERY_DIR"], "cause-Decodo.json"), {
-            "key": "cause-Decodo", "kind": "BLOCKED", "text": "Decodo down",
+        claim = A.reds_dir("claims", "block.json")
+        A.write_json(claim, {"state": "blocked", "runs": ["30"], "workflow": "Decodo probe", "blocked_cmd": "check Decodo",
+                             "owner_cause": "external-account"})
+        A.write_json(os.path.join(os.environ["AGENTCTL_RECOVERY_DIR"], "cause-Decodo.json"), {  # step 10's form: imported
+            "key": "cause-Decodo", "kind": "BLOCKED", "text": "Decodo down", "owner_cause": "external-account",
             "probe": {"kind": "workflow_green", "args": {"repo": MOVIES, "workflow": "Decodo probe"}},
-            "on_recover": [], "opened_at": time.time(), "last_result": {"ok": r.ok}})
+            "on_recover": [["release_block", {"run": "30", "path": claim}]], "opened_at": time.time(),
+            "last_result": {"ok": r.ok}})
         self.tick()
         self.tick()
         decodo = [i for i in self.st.items("red") if i["data"]["workflow"] == "Decodo probe"]
         self.assertEqual(len(decodo), 1)  # its line-less infra jobs: one red
         self.assertEqual({i["state"] for i in decodo}, {"blocked-external"})
         self.assertEqual(self.unheld(), [])
-        self.tick(advance=3 * 3600)
+        for _ in range(4):  # past the offer deadlines; the tick renews the block meanwhile (its probe still fails)
+            self.tick(advance=9 * 60)
+        self.assertEqual({self.st.item("red", i["id"])["state"] for i in decodo}, {"blocked-external"})
         esc = [e for e in self.st.events() if e["severity"] == "escalate" and e["item_id"] in {i["id"] for i in decodo}]
-        self.assertEqual(esc, [])  # the reds do not escalate one by one: the cause does (its own condition)
+        self.assertEqual(esc, [])  # the reds do not escalate one by one: the cause does (its own lease)
+        lease = self.st.get("block/cause/Decodo")
+        self.assertEqual(lease["holder"], "owner:external-account")
+        self.assertEqual(A.open_conditions(), [])  # the condition became the lease
+
+    def test_a_live_fixer_outranks_a_block_whose_justification_then_lapses(self):
+        self.main_red(40, 20, kind="infra")
+        self.tick()
+        rc, out = self.tool("red", "block", "20", "--owner-cause", "deploy", "--cmd", "deploy it", "--until-http",
+                            "http://127.0.0.1:9/x", "--repo", "movies", cwd=self.r.path)
+        self.assertEqual(rc, 0, out)
+        self.tick()
+        it = self.only()
+        self.assertEqual(it["state"], "blocked-external")
+        wt = self.r.worktree("repo-wt-fx", branch="fx")
+        self.assertEqual(self.tool("red", "claim", "20", "--repo", "movies", cwd=wt)[0], 0)
+        self.t[0] = time.time()
+        self.tick()
+        self.tick()
+        self.assertEqual(self.only()["state"], "leased")
+        self.assertEqual([r for r in self.st.list("block/") if A.lease_is_live(r, self.t[0])], [])
+        self.assertIn("INVALID: a live fixer", A.lease_meta(self.st.list("block/")[0])["outcome"])
+
+    def test_one_escalation_per_external_cause(self):
+        for n in (1, 2):
+            A.inbox_write("red", f"RED BLOCKED ON OWNER: Decodo down (blocks Decodo probe #{n}): x", ["x"], [], 1)
+        os.environ["AGENTCTL_INBOX_ESCALATE_MIN"] = "0"
+        self.st.acquire("block/cause/Decodo", "owner:external-account", 600, 3600)
+        try:
+            es = A.inbox_escalations()
+        finally:
+            os.environ.pop("AGENTCTL_INBOX_ESCALATE_MIN")
+        self.assertEqual(len([e for e in es if "Decodo down" in e["verdict"]]), 1)
 
     def test_escalation_counts_one_per_open_red(self):
         for n in range(3):
