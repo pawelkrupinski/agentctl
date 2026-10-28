@@ -65,15 +65,31 @@ These run first on the laptop (phase 1) and then on ci-runner (phase 2).
 ## 3. Components
 
 ```
-                       phase 1: all on the laptop               phase 2: the core on ci-runner
- ┌───────────────┐    ┌─────────────────────────────┐          ┌──────────────────────────────────────┐
- │ agentctl land │──▶ │ store (sqlite)              │          │ agentctl-store (sqlite + HTTP :3014) │
- │ red claim ... │    │ reconciler tick (processor) │          │ agentctl-reconciler (ci-lander)      │
- └───────────────┘    │ dispatcher (fixers)         │          │ metrics → Prometheus → Slack         │
- ┌───────────────┐    │ watchdog (own launchd job)  │          └──────────────────▲───────────────────┘
- │ status line   │◀── │ state snapshot, inbox       │                             │ tunnel :3014
- └───────────────┘    └─────────────────────────────┘          laptop: sync (submit, events→inbox, state
-                                                                mirror), dispatcher, watchdog
+PHASE 1: everything on the laptop
+
+ ┌───────────────┐      ┌─────────────────────────────┐
+ │ agentctl land │─────▶│ store (sqlite)              │
+ │ red claim ... │      │ reconciler tick (processor) │
+ └───────────────┘      │ dispatcher (fixers)         │
+ ┌───────────────┐      │ watchdog (own launchd job)  │
+ │ status line   │◀─────│ state snapshot, inbox       │
+ └───────────────┘      └─────────────────────────────┘
+
+PHASE 2: the core on ci-runner
+
+ ci-runner
+ ┌──────────────────────────────────────┐
+ │ agentctl-store (sqlite + HTTP :3014) │
+ │ agentctl-reconciler (ci-lander)      │
+ │ metrics → Prometheus → Slack         │
+ └──────────────────▲───────────────────┘
+                    │ tunnel :3014
+ laptop             │
+ ┌──────────────────┴───────────────────┐
+ │ sync: submit, events → inbox,        │
+ │       state mirror                   │
+ │ dispatcher (fixers), watchdog        │
+ └──────────────────────────────────────┘
 ```
 
 - **Store.** One sqlite database holds the `leases`, `items`, `events`, `offers` and `meta` tables.
