@@ -126,6 +126,19 @@ class TunnelTest(unittest.TestCase):
         self.assertEqual(len(self.inbox), 1)
         self.assertIn("STALLED", self.inbox[0])
 
+    def test_watch_lossy_uplink_is_a_network_note_not_a_kick(self):
+        down, lossy, clean = (lambda: "timeout"), (lambda: 0.5), (lambda: 0.0)
+        self.assertEqual(A.tunnel_watch(1000, down, uplink=lossy), "network")
+        self.assertEqual(A.tunnel_watch(1010, down, uplink=lossy), "network")
+        self.assertEqual(A.tunnel_watch(1500, down, uplink=lossy), "network")  # minutes on: still no STALLED
+        self.assertEqual(self.kicks, [])
+        self.assertEqual(len(self.inbox), 1)  # one NETWORK note per outage
+        self.assertIn("NETWORK", self.inbox[0])
+        self.assertEqual(A.tunnel_watch(1510, lambda: "ok"), "restored")
+        # the uplink is fine again but the tunnel is not: the kick / escalation path as usual
+        self.assertEqual(A.tunnel_watch(1520, down, uplink=clean), "down")
+        self.assertEqual(A.tunnel_watch(1530, down, uplink=clean), "kicked")
+
     def test_watch_single_blip_and_recovery(self):
         self.assertEqual(A.tunnel_watch(1000, lambda: "refused"), "down")
         self.assertEqual(A.tunnel_watch(1010, lambda: "ok"), "ok")

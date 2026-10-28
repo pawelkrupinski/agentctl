@@ -7355,7 +7355,7 @@ class TokenDrop:
         """Sleep secs (the socket is served by its own thread)."""
         end = time.time() + secs
         while True:
-            HEARTBEAT[0] = time.time()
+            HEARTBEAT[0] = time.monotonic()
             left = end - time.time()
             if left <= 0:
                 return
@@ -7751,7 +7751,7 @@ def waiting_round(repo, d, wt):
     return "rejected"
 
 
-HEARTBEAT = [time.time()]  # the processor's loop stamps it each pass
+HEARTBEAT = [time.monotonic()]  # the processor's loop stamps it each pass (monotonic: a laptop sleep is no stall)
 IN_BATCH = [False]  # inside waiting_round: a batch's checks legitimately take long
 STALL_SECS = 300
 
@@ -7768,8 +7768,8 @@ def start_watchdog(argv):
     def watch():
         while True:
             time.sleep(env_num("AGENTCTL_WATCHDOG_TICK", 30))
-            stalled = time.time() - HEARTBEAT[0]
-            duty_stalled = time.time() - DUTY_BEAT[0]
+            stalled = time.monotonic() - HEARTBEAT[0]
+            duty_stalled = time.monotonic() - DUTY_BEAT[0]
             limit = env_num("AGENTCTL_STALL_SECS", STALL_SECS)
             # the duties thread is never in a batch; its bounded steps join for up to 2 x AGENTCTL_STEP_BOUND
             if duty_stalled >= limit + 2 * env_num("AGENTCTL_STEP_BOUND", 120):
@@ -7788,7 +7788,7 @@ def start_watchdog(argv):
     threading.Thread(target=watch, name="watchdog", daemon=True).start()
 
 
-DUTY_BEAT = [time.time()]  # the duties thread stamps it each tick
+DUTY_BEAT = [time.monotonic()]  # the duties thread stamps it each tick (monotonic, like HEARTBEAT)
 DUTY_TICK = 5
 
 
@@ -7802,7 +7802,7 @@ def start_duties(repo):
 
     def loop():
         while not stop.is_set():
-            DUTY_BEAT[0] = time.time()
+            DUTY_BEAT[0] = time.monotonic()
             for name, step in (("tunnel probe", tunnel_watch),  # 2 timeouts/refusals in a row -> kickstart the tunnel
                                ("gate summary", lambda: maybe_publish_gate(repo)),  # ~/.cache/agentctl/gate-summary.txt
                                ("red patrol", lambda: maybe_patrol(repo)),  # who fixes each red; dispatch a fixer
@@ -7811,7 +7811,7 @@ def start_duties(repo):
                     step()
                 except (Exception, SystemExit) as e:
                     err(f"{name} failed: {str(e).replace('agentctl: ', '')[:200]}")
-                DUTY_BEAT[0] = time.time()
+                DUTY_BEAT[0] = time.monotonic()
                 if stop.is_set():
                     return
             stop.wait(env_num("AGENTCTL_DUTY_TICK", DUTY_TICK))
@@ -7837,14 +7837,14 @@ def waiting_run(repo, once=False, service=False):
         except (Exception, SystemExit):
             o_r = SHORT["movies"]
         _IN_PROCESSOR[0] = True
-        HEARTBEAT[0] = time.time()
+        HEARTBEAT[0] = time.monotonic()
         start_watchdog(["waiting", "run", "--repo", repo] + (["--once"] if once else []) + (["--service"] if service else []))
         drop = TokenDrop(d, o_r).open()
         stack.callback(drop.close)
         stack.callback(start_duties(repo).set)  # the duties end with this processor
         delays = backoff(float(os.environ.get("AGENTCTL_WAITING_POLL", WAITING_POLL)), 300)
         while True:
-            HEARTBEAT[0] = time.time()
+            HEARTBEAT[0] = time.monotonic()
             restart_if_changed([own], ["waiting", "run", "--repo", repo] + (["--once"] if once else [])
                                + (["--service"] if service else []))
             try:  # every checking entry re-derived from its checker's lock and its run on Forgejo (never a waiter's memory)
@@ -7870,7 +7870,7 @@ def waiting_run(repo, once=False, service=False):
                 state = waiting_round(repo, d, wt)
             finally:
                 IN_BATCH[0] = False
-                HEARTBEAT[0] = time.time()
+                HEARTBEAT[0] = time.monotonic()
             if state == "empty":
                 if not waiting_entries(d):
                     drop_waiting_tree(repo, wt)
@@ -8308,8 +8308,8 @@ def tunnel_retry(fn):
         if not tunnel_down(e):
             raise
         err(f"the Forgejo tunnel refused or timed out ({str(e)[:80]}); reopening it ({TUNNEL_LABEL}) once and retrying")
-        if tunnel_kick_rate_limited():
-            launchctl_kick()
+        if tunnel_kick_rate_limited() and not read_json_file(tunnel_state_path()).get("network"):  # the uplink's
+            launchctl_kick()  # fault (tunnel_watch): a restart only churns the tunnel
         for _ in range(15):
             if tunnel_probe() == "ok":
                 break
@@ -8334,20 +8334,46 @@ def tunnel_probe():
         return "refused"
 
 
-def tunnel_watch(now_=None, probe=None, kick=None):
-    """One processor cycle of the health probe. Returns what it did: ok, down, kicked, restored, escalated, or ''."""
+UPLINK_LOSS_MAX = 0.2  # packet loss to the internet above which the laptop's own uplink, not the tunnel, is the fault
+
+
+def uplink_loss():
+    """Packet loss (0..1) from the laptop to 1.1.1.1 over 10 pings; 1.0 when ping fails outright."""
+    try:
+        out = subprocess.run(["ping", "-c", "10", "-i", "0.2", "-t", "5", "1.1.1.1"], capture_output=True, text=True,
+                             timeout=15).stdout
+        m = re.search(r"([\d.]+)% packet loss", out)
+        return float(m.group(1)) / 100 if m else 1.0
+    except (OSError, subprocess.SubprocessError):
+        return 1.0
+
+
+def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
+    """One processor cycle of the health probe. Returns what it did: ok, down, kicked, restored, escalated, network, or
+    ''. A tunnel that fails while the laptop's own uplink loses packets is the network's fault: no kickstart (it only
+    churns the tunnel), no STALLED escalation, one NETWORK note per outage."""
     t = now_ if now_ is not None else time.time()
     r = (probe or tunnel_probe)()
     st = read_json_file(tunnel_state_path())
     if r == "ok":
-        did = "restored" if st.get("pending_since") else "ok"
+        did = "restored" if st.get("pending_since") or st.get("network") else "ok"
         if did == "restored":
             err("the Forgejo tunnel answers again")
-        if st.get("fails") or st.get("pending_since"):
-            st.update(fails=0, pending_since=None, escalated=False)
+        if st.get("fails") or st.get("pending_since") or st.get("network"):
+            st.update(fails=0, pending_since=None, escalated=False, network=False)
             write_json_file(tunnel_state_path(), st)
         return did
     st["fails"] = st.get("fails", 0) + 1
+    loss = (uplink or (uplink_loss if probe is None else (lambda: 0.0)))()
+    if loss > UPLINK_LOSS_MAX:
+        if not st.get("network"):
+            msg = (f"NETWORK: the laptop's uplink loses {int(loss * 100)}% of packets to 1.1.1.1, so Forgejo (localhost:3000) "
+                   f"{r}s; not a tunnel fault, nothing to restart -- the gate reads come back with the network")
+            err(msg)
+            inbox_write("tunnel", msg, [msg], [], 1)
+        st.update(network=True, pending_since=None, escalated=False)  # the kick/escalation clock starts on a good uplink
+        write_json_file(tunnel_state_path(), st)
+        return "network"
     did = "down"
     if st["fails"] >= 2 and t - st.get("last_kick", 0) >= TUNNEL_KICK_MIN_GAP:
         err(f"the Forgejo tunnel {r} {st['fails']} probes in a row; kickstarting {TUNNEL_LABEL}")
