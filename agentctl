@@ -5794,12 +5794,62 @@ def lock_note(step):
 
 
 def lock_beat(progress=None):
-    """The holder at work renews the landing lease with its progress mark (run_watched: output bytes and CPU). Raises
-    LeaseLost when the lease is gone: the work must stop."""
-    if _held_lock[0] and progress is not None:
+    """The holder at work renews every lease this process holds -- the landing lease, a check slot, a change's check --
+    with its progress mark (run_watched: output bytes and CPU). Raises LeaseLost when one is gone: the work must stop."""
+    if progress is None:
+        return
+    if _held_lock[0]:
         st, name, lease = _held_lock[0]
         if st.renew(name, lease["epoch"], lease["secret"], progress, lease["ttl"]) == "lost":
             raise LeaseLost(f"the landing lease {name} (epoch {lease['epoch']}) was lost")
+    for h in list(_held_leases):
+        if h.renew(progress) == "lost":
+            raise LeaseLost(f"the lease {h.name} (epoch {h.lease['epoch']}) was lost")
+
+
+_held_leases = []  # the LeaseHold objects this process holds (renewed together on progress)
+
+
+class LeaseHold:
+    """One lease this process holds: acquired (or not: held elsewhere), renewed on progress, released at the end."""
+
+    def __init__(self, name, ttl, max_hold, meta=None, store=None):
+        self.name, self.ttl, self.max_hold, self.meta = name, ttl, max_hold, dict(meta or {}, pid=os.getpid())
+        self.store, self.lease, self.held = store or Store(), None, None
+
+    def acquire(self):
+        got = self.store.acquire(self.name, f"{socket_host()}:{self.name.split('/')[0]}:{os.getpid()}", self.ttl,
+                                 self.max_hold, progress="acquired", meta=self.meta)
+        if "held" in got:
+            self.held = got["held"]
+            return False
+        self.lease = got
+        _held_leases.append(self)
+        return True
+
+    def renew(self, progress):
+        if not self.lease:
+            return "lost"
+        return self.store.renew(self.name, self.lease["epoch"], self.lease["secret"], progress, self.ttl)
+
+    def release(self):
+        if self in _held_leases:
+            _held_leases.remove(self)
+        if self.lease:
+            self.store.release(self.name, self.lease["epoch"], self.lease["secret"])
+            self.lease = None
+
+    def close(self):  # the old slot file's name for it
+        self.release()
+
+
+def lease_live(name, store=None):
+    """The live lease `name` (its row, meta decoded), or None."""
+    r = (store or Store()).get(name)
+    if r and r["holder"] and r["expires_at"] > time.time():
+        r["meta"] = json.loads(r["meta"] or "{}")
+        return r
+    return None
 
 
 def held_for(lease):
@@ -7345,17 +7395,33 @@ def enqueue(repo, main_ref, sh, a):
     return 0
 
 
+# CHECK SLOTS AND A CHANGE'S CHECK ARE LEASES (design §6, §7.1; phase 1 step 4): `slot/check/<repo>/<i>` (one per
+# check tree) and `check/<entry>` (its checker), TTL CHECK_LEASE_TTL renewed on the check's real progress
+# (run_watched's output and CPU; a remote check's run status), max hold CHECK_LEASE_MAX. A checker that stops
+# progressing loses both: the slot frees, and the entry's next checker adopts its remote run. No lock files.
+CHECK_LEASE_TTL = 10 * 60
+CHECK_LEASE_MAX = 3 * 3600
+
+
 def check_tree_slot(repo, d):
-    """(index, open lock file) of a free check tree slot, or None when all QUEUE_POOL are busy."""
+    """(index, LeaseHold) of a free check tree slot, or None when all QUEUE_POOL are busy."""
     n = int(env_num("AGENTCTL_CHECK_TREES", QUEUE_POOL))
+    key = os.path.basename(d.rstrip("/"))
     for i in range(1, n + 1):
-        f = open(os.path.join(d, f"check-tree-{i}.lock"), "a+")
-        try:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return i, f
-        except BlockingIOError:
-            f.close()
+        h = LeaseHold(f"slot/check/{key}/{i}", env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL), CHECK_LEASE_MAX)
+        if h.acquire():
+            return i, h
     return None
+
+
+def checker_lease(eid):
+    return LeaseHold(f"check/{eid}", env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL), CHECK_LEASE_MAX,
+                     meta={"entry": eid})
+
+
+def checker_alive(eid):
+    """The live checker lease of entry eid (meta: its pid), or None."""
+    return lease_live(f"check/{eid}")
 
 
 def check_tree(repo, i, sha):
@@ -7401,12 +7467,12 @@ def spawn_checks(repo, d):
     todo = [e for e in todo if e["id"] in newest]
     started = 0
     for e in todo:
-        if lock_held(entry_owned(e["id"]).lockpath) or e.get("retry_after", 0) > time.time():
+        if checker_alive(e["id"]) or e.get("retry_after", 0) > time.time():
             continue
         slot = check_tree_slot(repo, d)
         if not slot:
             break
-        slot[1].close()  # the checker takes it again itself
+        slot[1].release()  # the checker takes it again itself
         with open(os.path.join(d, "processor.log"), "a") as logf:
             subprocess.Popen([sys.executable, os.path.realpath(__file__), "waiting", "check", e["id"], "--repo", repo],
                              stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=repo,
@@ -7442,8 +7508,12 @@ def check_entry(repo, eid):
     """One queued change: its checks in a check tree within the governor's budget (or on ci-runner under pressure),
     then pushed (green), joined to `waiting` (red) or rejected. Owned per entry."""
     d, _c, _w = waiting_state(repo)
+    lease = checker_lease(eid)
+    if not lease.acquire():  # another checker holds it (and progresses)
+        return 0
     own = entry_owned(eid)
     if not own.acquire():
+        lease.release()
         return 0
     try:
         p = os.path.join(d, "entries", f"{eid}.json")
@@ -7475,9 +7545,10 @@ def check_entry(repo, eid):
         try:
             return _check_entry(repo, d, e, i, own)
         finally:
-            slot_f.close()
+            slot_f.release()
     finally:
         own.release()
+        lease.release()
 
 
 def _check_entry(repo, d, e, i, own=None):
@@ -7807,6 +7878,12 @@ def remote_check(repo, e, base, head, mode, own=None):
             raise
         except (Exception, SystemExit) as ex:  # Forgejo down for a while: keep reading until the bound
             err(f"remote check of {e['id']}: {str(ex)[:160]}")
+        try:  # the CI run is the check's work: its status (and, while it runs, the minute) is the progress mark
+            lock_beat(f"remote:{rem.get('run')}:{rem.get('status') or rem.get('run_status') or 'pending'}:"
+                      f"{int(time.time() // 60)}")
+        except LeaseLost as ex:
+            err(f"remote check of {e['id']}: {ex}; a new checker adopts its run")
+            return None, str(ex)
         if rem.get("status"):
             rem["collected_at"] = time.time()
             save_remote(d, e, rem)
@@ -7871,7 +7948,7 @@ def reconcile_checking(repo, d, now_=None):
         if marks.get("run") != (e.get("remote") or {}).get("run") or marks.get("tip") != (e.get("remote") or {}).get("tip"):
             marks = {k: v for k, v in marks.items() if k in ("escalated", "dead_since")}  # a new run: its own marks
             marks.update(run=(e.get("remote") or {}).get("run"), tip=(e.get("remote") or {}).get("tip"))
-        alive = lock_held(entry_owned(e["id"]).lockpath)
+        alive = bool(checker_alive(e["id"]))
         rem, unreadable = e.get("remote"), None
         if rem and not rem.get("status"):
             try:
@@ -10280,7 +10357,7 @@ def cmd_lease(a):
 # registry and the read-only readers.
 W1_MAX = 2 * 3600       # the oldest unlanded change ($AGENTCTL_W1_MAX); while main is red, counted from the red's start
 W2_MAX = 10 * 60        # a gate red with nobody on it
-W5_MAX = 120            # the processor's duties beat
+W5_MAX = 300            # the processor's duties beat (its bounded steps take up to 2 min)
 W6_MAX = 5 * 60         # a due escalation not notified
 WM_MAX = 45 * 60        # maintain's last pass (launchd every 15 min)
 WATCHDOG_KICK_GAP = 600

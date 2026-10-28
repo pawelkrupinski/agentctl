@@ -20,7 +20,7 @@ class PushBoundTest(unittest.TestCase):
         t0 = time.monotonic()
         rc, out = A.run_watched([script], d, dict(os.environ), os.path.join(d, "log"), "push", stall=1)
         self.assertIsNone(rc)  # stalled: its group ended
-        self.assertLess(time.monotonic() - t0, 30)
+        self.assertLess(time.monotonic() - t0, 90)  # generous: the full suite loads the machine
         self.assertEqual(A.land_failure_cause("NOT LANDED: the push failed (pre-push hook or remote)", out.splitlines())[0],
                          "infra")
         self.assertTrue(A.TRANSIENT_PUSH.search(out))

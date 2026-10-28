@@ -437,6 +437,8 @@ class RemotePickupTest(QueueTest):
         holder.stdout.readline()
         with open(own.record, "w") as f:
             json.dump({"pid": holder.pid}, f)
+        st = A.Store()
+        lease = st.acquire(f"check/{e['id']}", "the stranded checker", 600, 3600, meta={"pid": holder.pid})
         self.state["status"] = "success"
         t = A.time.time()
         self.assertEqual(A.reconcile_checking(self.r.path, d, now_=t), [], "decided just now: its checker collects it")
@@ -444,6 +446,7 @@ class RemotePickupTest(QueueTest):
         self.assertEqual(A.reconcile_checking(self.r.path, d, now_=t + A.REMOTE_COLLECT_GRACE + 1),
                          [("stopped", e["id"])])
         self.assertEqual(holder.wait(10), -15, "the stranded checker got a SIGTERM")
+        st.release(f"check/{e['id']}", lease["epoch"], lease["secret"])  # it died: its lease lapses (here at once)
         self.assertEqual(A.reconcile_checking(self.r.path, d, now_=t + A.REMOTE_COLLECT_GRACE + 2), [], "stopped once")
         self.assertEqual(self.check(e["id"]), 0, "the replacement adopts the verdict")
         self.assertEqual(self.pushed(), ["push remote=", "push remote=99"], "the check/ branch, then main with the run")

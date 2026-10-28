@@ -32,5 +32,30 @@ class StoreTest(unittest.TestCase):
         self.assertIn("held", self.st.acquire("land/r", "me", 120, 300))
 
 
+class CheckLeaseTest(unittest.TestCase):
+    """Check slots and a change's check are leases (phase 1 step 4): a checker that stops progressing frees both."""
+    def test_slots_are_leases_and_a_live_checker_blocks_a_second(self):
+        d = tempfile.mkdtemp()
+        os.environ["AGENTCTL_CHECK_TREES"] = "2"
+        try:
+            a, b = A.check_tree_slot("/r", d), A.check_tree_slot("/r", d)
+            self.assertEqual((a[0], b[0]), (1, 2))
+            self.assertIsNone(A.check_tree_slot("/r", d))  # both busy
+            a[1].release()
+            c = A.check_tree_slot("/r", d)
+            self.assertEqual(c[0], 1)
+            for x in (b, c):
+                x[1].release()
+        finally:
+            os.environ.pop("AGENTCTL_CHECK_TREES")
+        one = A.checker_lease("e9")
+        self.assertTrue(one.acquire())
+        self.assertTrue(A.checker_alive("e9"))
+        self.assertFalse(A.checker_lease("e9").acquire())  # a second checker of the same entry steps aside
+        self.assertEqual(one.renew("p1"), "ok")
+        one.release()
+        self.assertIsNone(A.checker_alive("e9"))
+
+
 if __name__ == "__main__":
     unittest.main()
