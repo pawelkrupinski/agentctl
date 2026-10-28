@@ -25,6 +25,7 @@ class RedsBase(RedBase):
         self.saved_root = os.environ.get("AGENTCTL_STATE_ROOT")
         os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp.name, "state")
         os.environ["AGENTCTL_RECOVERY_DIR"] = os.path.join(self.tmp.name, "recovery")
+        os.environ["AGENTCTL_RUNNERS_PAGE_CACHE"] = os.path.join(self.tmp.name, "runners-page.json")
         self.t = [time.time()]
         self.st = A.Store(clock=lambda: self.t[0])
         A._blocker_cache.clear()
@@ -35,6 +36,7 @@ class RedsBase(RedBase):
         else:
             os.environ["AGENTCTL_STATE_ROOT"] = self.saved_root
         os.environ.pop("AGENTCTL_RECOVERY_DIR", None)
+        os.environ.pop("AGENTCTL_RUNNERS_PAGE_CACHE", None)
         super().tearDown()
 
     def snap(self):
@@ -697,6 +699,37 @@ class AuditTest(RedsBase):
         self.tick()
         stuck = [i for i in self.st.items("red") if i["data"]["red_kind"] == "stuck-run"]
         self.assertEqual([i["state"] for i in stuck], ["cleared"])
+
+    def stuck_after(self, jobs, busy):
+        """The stuck-run reds after a tick with a bisect run created 5 h ago on the `measure` label (4 slots, `busy` of
+        them running) whose jobs are `jobs`."""
+        old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 5 * 3600))
+        runs = json.load(open(os.path.join(self.d, "runs.json")))
+        self.put("runs.json", [run(81, 31, "Convergence bisect", "convergence-bisect.yml", self.sha, status="queued",
+                                   created=old)] + runs)
+        self.put("run-81.json", {"jobs": jobs})
+        page = {"ok": time.time(), "limits": {"runners": {"runner-measure": {"capacity": 4, "state": "running",
+                                                                              "labels": '["measure"]'}}},
+                "running": [{"runner": "runner-measure", "run": "30"} for _ in range(busy)],
+                "waiting_jobs": [{"label": '["measure"]', "repo": MOVIES, "run": "29", "secs": "18500"},
+                                 {"label": '["measure"]', "repo": MOVIES, "run": "31", "secs": "18000"}]}
+        with open(os.environ["AGENTCTL_RUNNERS_PAGE_CACHE"], "w") as f:
+            json.dump(page, f)
+        self.tick()
+        return [i for i in self.st.items("red") if i["data"]["red_kind"] == "stuck-run"]
+
+    def test_8_a_run_queued_behind_every_busy_runner_of_its_label_is_queued_not_stuck(self):
+        # Convergence bisect #2385 (run 3568): an hour waiting for a `measure` slot was called a stuck infra red
+        self.assertEqual(self.stuck_after([{"name": "preflight", "status": "queued", "startedAt": None}], busy=4), [])
+        self.assertEqual([s.get("queued") for s in A.state_read()["ci"]["stuck"]],
+                         ["queued: measure full (4/4 busy, 1 ahead, oldest 5 h)"])
+
+    def test_8_a_run_never_started_while_its_label_has_a_free_slot_is_stuck(self):
+        self.assertEqual(len(self.stuck_after([{"name": "preflight", "status": "queued", "startedAt": None}], busy=3)), 1)
+
+    def test_8_a_run_is_as_old_as_its_first_jobs_start_not_its_creation(self):
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60))
+        self.assertEqual(self.stuck_after([{"name": "preflight", "status": "in_progress", "startedAt": now}], busy=4), [])
 
 
 if __name__ == "__main__":

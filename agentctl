@@ -1198,7 +1198,7 @@ def explain_run(o_r, run, tail, repo=None):
 def explain_run_jobs(o_r, run, tail, repo=None):
     """(lines, run number, [(failed job, infra|unclear|test, its first relevant line)])."""
     rid = run["databaseId"]
-    d = gh_json(o_r, "run", "view", str(rid), "--json", "jobs,headSha,url,number,conclusion,workflowName")
+    d = gh_json(o_r, "run", "view", str(rid), "--json", "jobs,headSha,url,number,status,conclusion,workflowName")
     num = d.get("number") or run.get("number")
     failed = [j for j in d.get("jobs") or [] if j.get("conclusion") in ("failure", "timed_out")]
     try:
@@ -1236,6 +1236,9 @@ def explain_run_jobs(o_r, run, tail, repo=None):
         verdict = f"UNCLEAR (a failed step logged no FAILED/error line: read `forgejo-gh run view {rid} --log-failed`; if infra, {rerun})"
     else:
         verdict = f"INFRA-SHAPED ({rerun})" if kinds else "no failed job listed"
+    if not kinds and d.get("status") not in (None, "completed"):  # undecided: running, or waiting for a runner slot
+        verdict = (queue_full(o_r, num, runner_queue()) if not any(j.get("startedAt") for j in d.get("jobs") or [])
+                   else None) or f"undecided ({d.get('status')})"
     lines.insert(0, f"  verdict: {verdict}")
     return lines, num, per_job
 
@@ -1438,7 +1441,7 @@ def ci_state_refresh(o_r, write=True):
         if d:
             latest[name] = {k: d.get(k) for k in ("number", "databaseId", "conclusion", "headSha", "updatedAt")}
     snap["latest"] = latest
-    snap["stuck"] = stuck_runs({**_outside_lists, **_gate_lists})  # audit #8: undecided far past their workflow's p90
+    snap["stuck"] = stuck_runs({**_outside_lists, **_gate_lists}, o_r=o_r)  # audit #8: undecided far past their workflow's p90
     if write:
         ci_state_write(snap)
     return snap
@@ -2811,6 +2814,8 @@ def stuck_obs(snap):
     """Audit #8: the snapshot's stuck runs (undecided past STUCK_FACTOR x their workflow's p90) as infra reds."""
     units = []
     for s in (snap or {}).get("stuck") or []:
+        if s.get("queued"):
+            continue  # waiting its turn behind busy runners: the queue, not a stuck run
         r = s["run"]
         units.append({"key": red_key(s["name"], "stuck", "stuck run"), "workflow": s["name"], "job": "stuck",
                       "kind": "infra", "red_kind": "stuck-run", "gate": s["name"] in {g["name"] for g in snap.get("gate") or []},
@@ -2819,10 +2824,13 @@ def stuck_obs(snap):
     return red_obs_of_units(units)
 
 
-def stuck_runs(lists, now_=None):
-    """[{name, run, age, limit}]: per workflow, its undecided runs older than max(STUCK_FACTOR x the p90 of its decided
-    runs' durations, STUCK_FLOOR)."""
+def stuck_runs(lists, now_=None, o_r=None, jobs_of=None, queue=None):
+    """[{name, run, age, limit[, queued]}]: per workflow, its undecided runs older than max(STUCK_FACTOR x the p90 of its
+    decided runs' durations, STUCK_FLOOR). A run's age counts from its first job's start (Convergence bisect #2385, run
+    3568: an hour queued behind a measurement holding every `measure` slot was called a stuck red): a run none of whose
+    jobs started, waiting only on labels whose every runner is up with all slots busy, carries `queued` and is no red."""
     t = now_ if now_ is not None else time.time()
+    jobs_of = jobs_of or (lambda r: run_jobs(o_r, r))
     out = []
     for name, runs in lists.items():
         durs = []
@@ -2839,10 +2847,74 @@ def stuck_runs(lists, now_=None):
                     age = t - parse_time(r["createdAt"]).timestamp()
                 except (ValueError, TypeError):
                     continue
+                if age <= limit:
+                    continue
+                jobs = jobs_of(r)
+                starts = sorted(parse_time(j["startedAt"]).timestamp() for j in jobs or [] if j.get("startedAt"))
+                queued = None
+                if starts:
+                    age = t - starts[0]
+                elif jobs is not None:  # none started: queued, not stuck, when every runner that could take it is busy
+                    queued = queue_full(o_r, r.get("number"), runner_queue(t) if queue is None else queue)
                 if age > limit:
-                    out.append({"name": name, "run": {k: r.get(k) for k in ("number", "databaseId", "headSha", "createdAt")},
-                                "age": age, "limit": limit})
+                    s = {"name": name, "run": {k: r.get(k) for k in ("number", "databaseId", "headSha", "createdAt")},
+                         "age": age, "limit": limit}
+                    out.append({**s, "queued": queued} if queued else s)
     return out
+
+
+def run_jobs(o_r, run):
+    """The run's jobs ([{name, status, startedAt, ...}]), or None when they cannot be read."""
+    try:
+        return gh_json(o_r, "run", "view", str(run.get("databaseId")), "--json", "jobs").get("jobs") or []
+    except (Exception, SystemExit):
+        return None
+
+
+RUNNERS_PAGE_MAX_AGE = 5 * 60  # ci-runners-page reads Forgejo every 10 s and ci-runner's runners every minute
+
+
+def runner_queue(now_=None):
+    """ci-runners-page's last good read of ci-runner (`running` tasks per runner, `waiting_jobs` per label, each runner's
+    `limits`), or None when it is missing or older than RUNNERS_PAGE_MAX_AGE."""
+    path = os.environ.get("AGENTCTL_RUNNERS_PAGE_CACHE", f"{HOME}/.cache/ci-runners-page/last-good.json")
+    try:
+        with open(path) as f:
+            q = json.load(f)
+        fresh = (now_ if now_ is not None else time.time()) - float(q["ok"]) <= RUNNERS_PAGE_MAX_AGE
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return q if fresh else None
+
+
+def queue_full(o_r, number, q):
+    """'queued: <label> full (N/N busy, M ahead, oldest Xm)' when run #number of o_r waits only on labels whose every
+    serving runner is up with all its slots busy, else None (a free slot, a runner down, or nothing known: stuck)."""
+    if not q or number is None:
+        return None
+    waits = q.get("waiting_jobs") or []
+    mine = [w for w in waits if w.get("repo") == o_r and str(w.get("run")) == str(number)]
+    if not mine:
+        return None
+    says = []
+    for label in sorted({w.get("label") for w in mine}):
+        try:
+            want = set(json.loads(label))
+            serving = {n: r for n, r in ((q.get("limits") or {}).get("runners") or {}).items()
+                       if want <= set(json.loads(r.get("labels") or "[]"))}
+        except (ValueError, TypeError):
+            return None
+        if not serving or any(r.get("state") != "running" for r in serving.values()):
+            return None
+        cap = sum(int(r.get("capacity") or 0) for r in serving.values())
+        busy = sum(1 for x in q.get("running") or [] if x.get("runner") in serving)
+        if busy < cap:
+            return None
+        queue_ = [int(w.get("secs") or 0) for w in waits if w.get("label") == label]
+        own = max(int(w.get("secs") or 0) for w in mine if w.get("label") == label)
+        says.append(f"{', '.join(sorted(want))} full ({busy}/{cap} busy, {sum(1 for x in queue_ if x > own)} ahead, "
+                    f"oldest {fmt_age(max(queue_))})")
+    return "queued: " + "; ".join(says)
 
 
 UNKICKED_AFTER = 60 * 60  # a convergence-relevant main push with no convergence run on main by then is a red
