@@ -139,6 +139,26 @@ class TunnelTest(unittest.TestCase):
         self.assertEqual(A.tunnel_watch(1520, down, uplink=clean), "down")
         self.assertEqual(A.tunnel_watch(1530, down, uplink=clean), "kicked")
 
+    def test_network_change_kicks_the_tunnel_and_marks_the_gate(self):
+        A._last_route[0] = "unseen"
+        home, phone = ("en0", "172.30.154.83"), ("en0", "172.20.10.1")
+        saved, A.mark_gate_dirty = A.mark_gate_dirty, (lambda: self.inbox.append("DIRTY"))
+        try:
+            self.assertEqual(A.network_watch(lambda: home, lambda: self.kicks.append(1)), "")  # first look: no change
+            self.assertEqual(A.network_watch(lambda: home, lambda: self.kicks.append(1)), "")
+            self.assertEqual(A.network_watch(lambda: None, lambda: self.kicks.append(1)), "offline")
+            self.assertEqual(self.kicks, [])
+            self.assertEqual(A.network_watch(lambda: phone, lambda: self.kicks.append(1)), "changed")  # back online
+            self.assertEqual(A.network_watch(lambda: home, lambda: self.kicks.append(1)), "changed")  # another network
+            self.assertEqual(len(self.kicks), 2)
+            self.assertEqual(self.inbox, ["DIRTY", "DIRTY"])
+        finally:
+            A.mark_gate_dirty = saved
+
+    def test_default_route_reads_this_machine(self):
+        r = A.default_route()
+        self.assertTrue(r is None or (r[0] and r[1]))
+
     def test_watch_single_blip_and_recovery(self):
         self.assertEqual(A.tunnel_watch(1000, lambda: "refused"), "down")
         self.assertEqual(A.tunnel_watch(1010, lambda: "ok"), "ok")

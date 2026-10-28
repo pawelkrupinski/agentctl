@@ -7803,7 +7803,8 @@ def start_duties(repo):
     def loop():
         while not stop.is_set():
             DUTY_BEAT[0] = time.monotonic()
-            for name, step in (("tunnel probe", tunnel_watch),  # 2 timeouts/refusals in a row -> kickstart the tunnel
+            for name, step in (("network watch", network_watch),  # a new route: tunnel kicked, gate read at once
+                               ("tunnel probe", tunnel_watch),  # 2 timeouts/refusals in a row -> kickstart the tunnel
                                ("gate summary", lambda: maybe_publish_gate(repo)),  # ~/.cache/agentctl/gate-summary.txt
                                ("red patrol", lambda: maybe_patrol(repo)),  # who fixes each red; dispatch a fixer
                                ("inbox escalation", maybe_escalate_inbox)):  # unacked past 10 min: notified
@@ -8348,6 +8349,42 @@ def uplink_loss():
         return 1.0
 
 
+_last_route = ["unseen"]  # the route at the last look; None while offline
+
+
+def default_route():
+    """(interface, gateway) of the default route, or None (offline / route failed)."""
+    try:
+        out = subprocess.run(["route", "-n", "get", "default"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    f = dict(re.findall(r"^\s*(interface|gateway): (\S+)", out, re.M))
+    return (f.get("interface"), f.get("gateway")) if f else None
+
+
+def network_watch(route=None, kick=None):
+    """React to the laptop's network changing (another Wi-Fi, a hotspot, back online): the tunnel's ssh rides the old
+    route and would take ServerAlive's 30 s to notice, the gate line says UNREAD until the next read. A changed default
+    route kickstarts the tunnel at once and marks the gate dirty. Returns 'changed', 'offline' or ''."""
+    r = (route or default_route)()
+    prev, _last_route[0] = _last_route[0], r
+    if prev == "unseen" or r == prev:
+        return ""
+    if r is None:
+        err(f"the network went away (was {prev[0]} via {prev[1]})")
+        return "offline"
+    err(f"the network {'is back' if prev is None else 'changed'} ({prev[0] if prev else '-'} via {prev[1] if prev else '-'} -> "
+        f"{r[0]} via {r[1]}): "
+        f"kickstarting {TUNNEL_LABEL}, the gate is read at once")
+    (kick or launchctl_kick)()
+    st = read_json_file(tunnel_state_path())
+    if st.get("network") or st.get("fails"):
+        st.update(fails=0, network=False, pending_since=None, escalated=False)
+        write_json_file(tunnel_state_path(), st)
+    mark_gate_dirty()
+    return "changed"
+
+
 def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
     """One processor cycle of the health probe. Returns what it did: ok, down, kicked, restored, escalated, network, or
     ''. A tunnel that fails while the laptop's own uplink loses packets is the network's fault: no kickstart (it only
@@ -8358,7 +8395,8 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
     if r == "ok":
         did = "restored" if st.get("pending_since") or st.get("network") else "ok"
         if did == "restored":
-            err("the Forgejo tunnel answers again")
+            err("the Forgejo tunnel answers again: the gate is read at once")
+            mark_gate_dirty()  # the status line leaves `gate UNREAD` at the next duties tick, not at the 45 s mark
         if st.get("fails") or st.get("pending_since") or st.get("network"):
             st.update(fails=0, pending_since=None, escalated=False, network=False)
             write_json_file(tunnel_state_path(), st)
