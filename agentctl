@@ -5348,6 +5348,10 @@ def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=Tr
                 return None
             if max_wait is not None and time.time() - t0 > max_wait:
                 raise GovTimeout(f"the governor did not admit {cls} work ({label}) in {int(max_wait // 60)} min: {why}")
+            try:  # a check waiting its turn holds its leases (bounded by max_wait and their max hold), never loses them
+                lock_beat(f"gov-wait:{label}:{int(time.time() // 60)}")
+            except LeaseLost as ex:
+                raise GovTimeout(f"{ex} while waiting for the governor") from None
             if time.monotonic() >= report_at:
                 report(f"{'still ' if said else ''}waiting for the governor ({cls}, {mem:g} GB, {label}): {why}; "
                        f"{len(tickets)} admitted, {gov_committed(tickets):.0f}/{gov_budget():.0f} GB")
