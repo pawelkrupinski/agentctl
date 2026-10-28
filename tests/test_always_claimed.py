@@ -164,9 +164,8 @@ class OwnerBlockTest(RedBase):
         A.write_json(path, old)
         A._OPENING[0] += 1
         try:
-            A.open_condition("BLOCKED", "RED BLOCKED ON OWNER: Main #2164: take it",
-                             A.run_probe("owner_block", {"inner": {"kind": "workflow_green", "args": {"workflow": "Main"}},
-                                                         "claims": [path]}),
+            A.open_condition("BLOCKED", "RED BLOCKED ON OWNER: Main #2164: take it",  # as the old code made it
+                             A.run_probe("workflow_green", {"workflow": "Main"}),
                              [("release_block", {"run": "2164", "workflow": "Main"})], key="block-Main-2164",
                              effect=lambda: {"path": path})
         finally:

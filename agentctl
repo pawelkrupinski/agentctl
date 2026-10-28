@@ -4792,13 +4792,11 @@ def validate_owner_blocks():
             cond["on_recover"] = keep
             cond["probe"]["args"]["claims"] = [x["path"] for _n, x in keep if x.get("path")]
             write_json(path, cond)
-        else:
+        else:  # it holds no justified block: closed now, whatever its (outage) probe says
             cond["path"] = path
-            r = run_probe(cond["probe"]["kind"], cond["probe"]["args"])
-            if r.ok:
-                line = close_condition(cond, r)
-                if line:
-                    out.append(line)
+            line = close_condition(cond, f"INVALID: {dropped[0][1]}")
+            if line:
+                out.append(line)
     held = {x.get("path") for c in open_conditions() for _n, x in c.get("on_recover") or []}
     for c in all_claims():  # a block with no condition (made before the registry, or its condition gone)
         if c.get("state") == "blocked" and c["path"] not in held:
@@ -10906,7 +10904,8 @@ def close_condition(cond, result):
     """The probe passed (result: its ProbeResult, or a reason string for a manual close): claim the close (an atomic
     rename: one closer), ack, mark dirty, run on_recover, note it."""
     if isinstance(result, str):
-        result = ProbeResult(cond["probe"]["kind"], cond["probe"]["args"], True, f"closed by hand: {result}",
+        result = ProbeResult(cond["probe"]["kind"], cond["probe"]["args"], True,
+                             result if result.startswith("INVALID:") else f"closed by hand: {result}",
                              _made_by_run_probe=_RUN_PROBE_TOKEN)
     done = recovery_dir("closed", f"{cond['key']}-{int(time.time())}.json")
     os.makedirs(os.path.dirname(done), exist_ok=True)
