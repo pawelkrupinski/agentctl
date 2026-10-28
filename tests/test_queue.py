@@ -70,6 +70,7 @@ class QueueTest(WaitingTest):
                 A.push_change(self.r.path, d, e)
             else:
                 break
+        A.project_events()  # the processor's projector: the events become the inbox entries
         e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
         return 1 if e["status"] == "rejected" else 0
 

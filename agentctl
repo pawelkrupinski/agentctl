@@ -6612,8 +6612,8 @@ def already_landed(d, e, via):
 def supersede(d, e, by, why):
     """The entry gives way to `by` (a newer entry of the same worktree and branch, or one carrying the same change): its
     checker, if running, is stopped; said in the inbox."""
-    e.update(status="superseded", superseded_by=by, why=why, decided=ts())
-    save_entry(d, e)
+    line = f"SUPERSEDED {e['id']} by {by}: {why}"
+    set_change(d, e, "superseded", event=change_event(e, line, code=0), superseded_by=by, why=why, decided=ts())
     cancel_entry_remote(e, f"its queue entry was superseded by {by}")
     h = read_record(entry_owned(e["id"]).record) or {}
     if lock_held(entry_owned(e["id"]).lockpath) and h.get("pid") and int(h["pid"]) != os.getpid():
@@ -6621,9 +6621,7 @@ def supersede(d, e, by, why):
             os.kill(int(h["pid"]), signal.SIGTERM)  # its checker: its CI run is cancelled with it
         except OSError:
             pass
-    line = f"SUPERSEDED {e['id']} by {by}: {why}"
     wlog(d, line)
-    inbox_write("land", line, [line], [], 0, cwd=e["worktree"])
 
 
 def run_hook(wt, mode, base):
@@ -6773,8 +6771,8 @@ def requeue_infra(d, e, why, delay=None):
     wait = delay if delay is not None else INFRA_BACKOFF[min(n - 1, len(INFRA_BACKOFF) - 1)]
     sev = "escalate" if n >= QUEUE_INFRA_RETRIES else "info"
     set_change(d, e, "queued", data={"infra_attempts": n},
-               event={"severity": sev, "text": f"{e['id']}: infra ({why}): queued again in {int(wait // 60)} min",
-                      "audience": {"worktree": e.get("worktree")}},
+               event=change_event(e, f"QUEUED AGAIN {e['id']}: infra ({why}); checked again in {int(wait // 60)} min",
+                                  code=None, final=False, severity=sev),
                infra_retries=n, retry_after=time.time() + wait, why=f"infra: {why}", waiting_on=None)
     wlog(d, f"{e['id']}: {why}: queued again in {int(wait // 60)} min (infra retry {n}"
             + (", escalated" if sev == "escalate" else "") + ")")
@@ -6985,11 +6983,10 @@ def set_change(d, e, to, data=None, event=None, store=None, **fields):
 
 
 def queue_verdict(d, e, status, verdict, tail=(), code=1, **fields):
-    """A change's final verdict: its state (set_change), the processor log and its author's inbox entry."""
-    set_change(d, e, {"joined": "waiting"}.get(status, status), event={"text": verdict.splitlines()[0]},
+    """A change's final verdict: its state (set_change), whose event the projector makes its author's inbox entry."""
+    set_change(d, e, {"joined": "waiting"}.get(status, status), event=change_event(e, verdict, tail, code),
                decided=ts(), why=verdict, **fields)
     wlog(d, f"{e['id']}: {verdict.splitlines()[0]}")
-    inbox_write("land", verdict.splitlines()[0], [verdict.splitlines()[0]], list(tail)[-25:], code, cwd=e["worktree"])
 
 
 def rebase_in_tree(d, tree, e, base):
@@ -7261,8 +7258,8 @@ def queue_join(repo, d, e, tree, head):
                   branch=e.get("branch") or "")
     line = (out.getvalue().strip().splitlines() or [""])[-1]
     if rc == 0:
-        set_change(d, e, "waiting", event={"text": line}, decided=ts(), waiting_id=a.waiting["id"])
-        inbox_write("land", line, [line], [], None, final=False, cwd=e["worktree"])
+        set_change(d, e, "waiting", event=change_event(e, line, code=None, final=False), decided=ts(),
+                   waiting_id=a.waiting["id"])
         wlog(d, f"{e['id']}: {line}")
         return 0
     queue_verdict(d, e, "rejected", line or "NOT LANDED: could not join `waiting`")
@@ -7627,7 +7624,7 @@ def _await_entry(repo, eid, own):
             print(f"LANDED {e['landed_sha']} (with the {e.get('batch', 1)} change(s) of `{WAITING_BRANCH}`, once main was green)",
                   flush=True)
             return 0, e["landed_sha"], e.get("pushed_at")
-        if e["status"] in ("rejected", "cancelled"):
+        if e["status"] in ("rejected", "cancelled", "superseded"):  # audit S1: a superseded entry never hangs a follow
             print(f"NOT LANDED: {e.get('why') or e['status']}")
             return 1, None, None
         if time.time() - t0 > timeout:
@@ -8099,6 +8096,11 @@ def waiting_run(repo, once=False, service=False):
                     wlog(d, f"tick: {line}")
             except Exception as e:
                 err(f"the change tick failed: {e}")
+            try:  # events -> the inbox, escalations -> a notification (step 7)
+                project_events()
+                notify_escalations()
+            except Exception as e:
+                err(f"the event projector failed: {e}")
             # the tunnel probe, the gate line, the patrol and the escalations run on the duties thread (start_duties), never
             # here: this loop sits in a batch check or a red-gate nap for minutes, and the gate line went stale with it
             if not service and not waiting_entries(d) and queued_entries(d):
@@ -10021,6 +10023,28 @@ class Store:
         finally:
             c.close()
 
+    def mark_notified(self, seq):
+        c = self.db()
+        try:
+            c.execute("UPDATE events SET notified_at=? WHERE seq=? AND notified_at IS NULL", (self.clock(), seq))
+        finally:
+            c.close()
+
+    def meta_get(self, k, default=None):
+        c = self.db()
+        try:
+            r = c.execute("SELECT v FROM meta WHERE k=?", (k,)).fetchone()
+            return r["v"] if r else default
+        finally:
+            c.close()
+
+    def meta_set(self, k, v):
+        c = self.db()
+        try:
+            c.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", (k, str(v)))
+        finally:
+            c.close()
+
     def events(self, after=0, limit=500):
         c = self.db()
         try:
@@ -10148,6 +10172,70 @@ def project_changes(d, store=None):
             cur = st.item("change", e["id"])
         out.append(cur)
     return out
+
+
+# ---------------------------------------------------------------- events -> the inbox (design §8.2; phase 1 step 7)
+# The PROJECTOR writes one inbox entry, in today's format, for each event with an audience or a severity other than
+# info -- its verdict line (refs.verdict) or its text, the audience's worktree as its cwd, its tail and exit; the entry
+# id carries the event's seq, so a repeated pass writes nothing twice. The NOTIFIER sends a macOS notification for
+# each severity=escalate event once (notified_at). Both run in the processor's loop; `agentctl inbox`, `inbox wait`,
+# the orchestrator's routing and the status line read the inbox as before.
+def project_events(store=None):
+    """Write the inbox entries of the events since the projector's cursor; returns how many."""
+    st = store or Store()
+    cur = int(st.meta_get("projector_seq", 0) or 0)
+    n = 0
+    for ev in st.events(after=cur):
+        cur = ev["seq"]
+        aud, refs = ev.get("audience") or {}, ev.get("refs") or {}
+        if not aud and ev["severity"] == "info":
+            continue
+        verdict = refs.get("verdict") or ev.get("text") or ev["kind"]
+        eid = (dt.datetime.fromtimestamp(ev["at"], dt.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+               + f"-ev{ev['seq']}-{re.sub(r'[^a-z]+', '-', ev['kind'])}")
+        d = inbox_dir()
+        path = os.path.join(d, eid + ".json")
+        if os.path.exists(path):
+            continue
+        final = refs.get("final", True)
+        rec = {"id": eid, "time": dt.datetime.fromtimestamp(ev["at"], dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+               "at": ev["at"], "command": refs.get("command") or ev["kind"].split(".")[0], "argv": [],
+               "cwd": aud.get("worktree") or safe_cwd(), "pid": os.getpid(), "final": final,
+               "exit": refs.get("exit", 0 if ev["severity"] == "info" else 1), "verdict": verdict,
+               "kind": inbox_kind(verdict, final), "owner": aud.get("session") or aud.get("worktree") or "?",
+               "claude_pid": aud.get("claude_pid"), "verdicts": [verdict], "tail": list(refs.get("tail") or [])[-25:],
+               "event": ev["seq"]}
+        try:
+            os.makedirs(d, exist_ok=True)
+            write_json(path, rec)
+            n += 1
+        except OSError as ex:
+            err(f"projector: could not write {eid} ({ex})")
+            break
+    st.meta_set("projector_seq", cur)
+    return n
+
+
+def notify_escalations(store=None):
+    """One macOS notification per severity=escalate event (notified_at marks it); returns how many."""
+    st = store or Store()
+    n = 0
+    for ev in st.events(after=int(st.meta_get("notifier_seq", 0) or 0)):
+        st.meta_set("notifier_seq", ev["seq"])
+        if ev["severity"] != "escalate" or ev.get("notified_at"):
+            continue
+        st.mark_notified(ev["seq"])
+        notify(f"agentctl: {ev['kind']}", str((ev.get("refs") or {}).get("verdict") or ev.get("text") or "")[:220])
+        n += 1
+    return n
+
+
+def change_event(e, verdict, tail=(), code=1, final=True, severity="info", **refs):
+    """The event a change's transition carries to its author (the projector makes it their inbox entry)."""
+    return {"text": verdict.splitlines()[0], "severity": severity,
+            "audience": {"worktree": e.get("worktree"), "session": e.get("session"), "claude_pid": e.get("claude_pid")},
+            "refs": {"verdict": verdict.splitlines()[0], "tail": list(tail)[-25:], "exit": code, "final": final,
+                     "command": "land", "entry": e["id"], **refs}}
 
 
 def cmd_lease(a):

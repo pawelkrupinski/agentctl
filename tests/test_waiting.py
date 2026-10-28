@@ -88,6 +88,7 @@ class WaitingTest(Base):
         return len(open(self.pushes).read().split()) if os.path.exists(self.pushes) else 0
 
     def inbox(self):
+        A.project_events()  # as the processor's loop does each cycle (step 7: the events are the inbox's source)
         return A.inbox_entries()
 
     def entries(self):
