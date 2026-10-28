@@ -33,7 +33,7 @@ class RedBase(unittest.TestCase):
         self.settings = os.path.join(t, "settings.json")
         with open(self.settings, "w") as f:
             json.dump({"permissions": {"defaultMode": "auto"}}, f)
-        self.env = {"AGENTCTL_SCRATCH": os.path.join(t, "scratch"), "AGENTCTL_FORGEJO_GH": FAKE, "FAKE_GH_DIR": self.d,
+        self.env = {"AGENTCTL_STATE_ROOT": os.path.join(t, "state"), "AGENTCTL_SCRATCH": os.path.join(t, "scratch"), "AGENTCTL_FORGEJO_GH": FAKE, "FAKE_GH_DIR": self.d,
                     "GH_TOKEN": "dummy", "AGENTCTL_OWNERS_DIR": os.path.join(t, "owners"),
                     "AGENTCTL_REDS_DIR": os.path.join(t, "reds"), "AGENTCTL_INTERNAL_TREES_DIR": os.path.join(t, "internal"), "AGENTCTL_INBOX_DIR": os.path.join(t, "inbox"),
                     "AGENTCTL_RED_REPO": self.r.path, "AGENTCTL_CLAUDE": FAKE_CLAUDE,

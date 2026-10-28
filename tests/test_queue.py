@@ -58,8 +58,20 @@ class QueueTest(WaitingTest):
         eid = out.split("QUEUED ", 1)[1].split()[0]
         return eid, out
 
-    def check(self, eid):
-        return A.check_entry(self.r.path, eid)
+    def check(self, eid, rounds=6):
+        """The change to its outcome, as the processor drives it: the executor's checks, then the tick's push
+        (step 6: they are two steps now), round after round while main moves. 1 when it ends rejected."""
+        d, _c, _w = A.waiting_state(self.r.path)
+        for _ in range(rounds):
+            e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+            if e["status"] in ("queued", "checking") and not e.get("retry_after", 0) > A.time.time():
+                A.check_entry(self.r.path, eid)
+            elif e["status"] == "checked":
+                A.push_change(self.r.path, d, e)
+            else:
+                break
+        e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+        return 1 if e["status"] == "rejected" else 0
 
     def pushed(self):
         return open(self.pushes).read().splitlines() if os.path.exists(self.pushes) else []
@@ -112,23 +124,25 @@ class QueueTest(WaitingTest):
         self.assertEqual(self.check(eid), 0)
         self.assertEqual(self.remote_log()[:2], ["a: one", "b: two"])
 
-    def test_a_main_that_keeps_moving_lands_it_on_the_last_round_through_the_push_hook(self):
+    def test_a_main_that_keeps_moving_is_checked_again_each_round_then_lands(self):
+        """Step 6: main moving with an overlap is a new round (queued), never an attempt; no check runs in the push."""
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
         eid, _ = self.queued(wt)
         real, n = A.run_entry_checks, []
 
         def moving(repo, d, e, tree, base, head, mode, cls, log_path, own=None):
             n.append(1)
-            # the same sbt module (web) each time: an overlap, so each move means a re-check
-            other, _ = self.agent(f"m{len(n)}", f"web/src/main/M{len(n)}.scala", "m\n", msg=f"main moves {len(n)}")
-            sh(other, "git", "push", "-q", "forgejo", "HEAD:main")
+            if len(n) <= 2:  # the same sbt module (web): an overlap, so each move means a new round
+                other, _ = self.agent(f"m{len(n)}", f"web/src/main/M{len(n)}.scala", "m\n", msg=f"main moves {len(n)}")
+                sh(other, "git", "push", "-q", "forgejo", "HEAD:main")
             return real(repo, d, e, tree, base, head, mode, cls, log_path, own)
         A.run_entry_checks = moving
         self.addCleanup(setattr, A, "run_entry_checks", real)
         self.assertEqual(self.check(eid), 0)
-        self.assertEqual(len(n), A.QUEUE_ROUNDS)
-        self.assertEqual(self.remote_log()[:2], ["a: one", f"main moves {A.QUEUE_ROUNDS}"])
-        self.assertIn("by the push's hook", [e for e in self.inbox() if e["kind"] == "LANDED"][0]["verdict"])
+        self.assertEqual(len(n), 3, "checked once per round")
+        self.assertEqual(self.remote_log()[:2], ["a: one", "main moves 2"])
+        self.assertEqual(self.entries()[eid.rsplit("-", 1)[-1]]["rounds"], 2)
+        self.assertNotIn("by the push's hook", self.landed_verdict())
 
     def moves_once(self, *moves):
         """Main moves during the first round's checks: one commit per (path, text) landed by another agent."""
@@ -282,9 +296,17 @@ class QueueTest(WaitingTest):
         self.assertEqual((e["status"], e["infra_retries"]), ("queued", 1))
         self.assertGreater(e["retry_after"], A.time.time())
         self.assertEqual([x for x in self.inbox() if x["kind"] == "NOT_LANDED"], [])
+        d, _c, _w = A.waiting_state(self.r.path)
         for _ in range(A.QUEUE_INFRA_RETRIES):
-            self.check(eid)
-        self.assertEqual(self.entries()[eid.rsplit("-", 1)[-1]]["status"], "rejected", "judged once retries run out")
+            e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+            e["retry_after"] = 0
+            A.save_entry(d, e)
+            self.check(eid, rounds=1)
+        e = self.entries()[eid.rsplit("-", 1)[-1]]
+        self.assertEqual((e["status"], e["infra_retries"]), ("queued", 1 + A.QUEUE_INFRA_RETRIES),
+                         "infra never rejects a change (design §5.1)")
+        evs = [x for x in A.Store().events() if x["item_id"] == eid and x["severity"] == "escalate"]
+        self.assertTrue(evs, "from the third infra re-queue on, each one escalates")
 
     def test_the_hook_is_given_the_remotes_ref_so_it_reads_forgejos_gate(self):
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
@@ -371,15 +393,12 @@ class RemotePickupTest(QueueTest):
                          "the run is saved in the entry the moment it is found")
         self.assertEqual(self.state["cancelled"], [], "a dead checker's run is the entry's: never cancelled")
         self.state["status"] = "success"  # it finishes while no checker runs
-        d, _c, _w = A.waiting_state(self.r.path)
-        A.reconcile_checking(self.r.path, d)
         A.time.sleep = lambda s: None
         self.assertEqual(self.check(eid), 0)
         self.assertEqual(len(self.state["branch_pushes"]), 1, "adopted: no second check/ push, no second run")
         self.assertEqual(self.pushed(), ["push remote=", "push remote=99"], "the check/ branch, then main with the run")
         self.assertEqual(self.calls_of("--range"), [], "nothing checked on the laptop")
-        e = self.entry(eid)
-        self.assertEqual((e["status"], e.get("attempts"), e.get("adoptions")), ("landed", 1, 1))
+        self.assertEqual(self.entry(eid)["status"], "landed")
 
     def test_a_reexec_mid_wait_keeps_waiting_on_the_same_run(self):
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
@@ -427,44 +446,42 @@ class RemotePickupTest(QueueTest):
             A.save_entry(d, e)
         return d, e
 
-    def test_the_processor_stops_a_checker_that_does_not_collect_a_decided_run(self):
+    def tick(self, d):
+        started = []
+        saved = A.spawn_executor
+        A.spawn_executor = lambda repo, d_, eid: started.append(eid)
+        try:
+            return A.tick_changes(self.r.path, d), started
+        finally:
+            A.spawn_executor = saved
+
+    def test_a_checker_that_stops_progressing_loses_its_lease_and_the_tick_starts_one_that_adopts_its_run(self):
+        """Step 6 (reconcile_checking deleted): a wedged checker stops renewing check/<entry>; once the lease lapses
+        the tick starts a replacement, which adopts the decided run."""
         d, e = self.checking_entry()
-        own = A.entry_owned(e["id"])
-        holder = subprocess.Popen([sys.executable, "-c", "import fcntl,sys,time; f=open(sys.argv[1],'a+'); "
-                                   "fcntl.flock(f, fcntl.LOCK_EX); print('held', flush=True); time.sleep(120)",
-                                   own.lockpath], stdout=subprocess.PIPE, text=True)
-        self.addCleanup(holder.kill)
-        holder.stdout.readline()
-        with open(own.record, "w") as f:
-            json.dump({"pid": holder.pid}, f)
         st = A.Store()
-        lease = st.acquire(f"check/{e['id']}", "the stranded checker", 600, 3600, meta={"pid": holder.pid})
+        got = st.acquire(f"check/{e['id']}", "a wedged checker", 600, 3600)
+        self.assertEqual(self.tick(d)[1], [], "a live checker: nothing started")
+        st.release(f"check/{e['id']}", got["epoch"], got["secret"])  # its lease lapsed (here at once)
+        self.assertEqual(self.tick(d)[1], [e["id"]])
         self.state["status"] = "success"
-        t = A.time.time()
-        self.assertEqual(A.reconcile_checking(self.r.path, d, now_=t), [], "decided just now: its checker collects it")
-        self.assertEqual(A.reconcile_checking(self.r.path, d, now_=t + 60), [])
-        self.assertEqual(A.reconcile_checking(self.r.path, d, now_=t + A.REMOTE_COLLECT_GRACE + 1),
-                         [("stopped", e["id"])])
-        self.assertEqual(holder.wait(10), -15, "the stranded checker got a SIGTERM")
-        st.release(f"check/{e['id']}", lease["epoch"], lease["secret"])  # it died: its lease lapses (here at once)
-        self.assertEqual(A.reconcile_checking(self.r.path, d, now_=t + A.REMOTE_COLLECT_GRACE + 2), [], "stopped once")
         self.assertEqual(self.check(e["id"]), 0, "the replacement adopts the verdict")
         self.assertEqual(self.pushed(), ["push remote=", "push remote=99"], "the check/ branch, then main with the run")
 
-    def test_overdue_and_unresolvable_escalates_once(self):
-        d, e = self.checking_entry(since_min=2 * A.REMOTE_EXPECTED_MIN + 5)
-        self.state["fail_api"] = True
-        self.assertEqual(A.reconcile_checking(self.r.path, d), [("escalated", e["id"])])
-        self.assertEqual(A.reconcile_checking(self.r.path, d), [], "once per round")
-        stalled = [x for x in self.inbox() if x["kind"] == "STALLED"]
-        self.assertEqual(len(stalled), 1)
-        self.assertIn(e["id"], stalled[0]["verdict"])
-        self.assertIn("cannot be read", stalled[0]["verdict"])
-
-    def test_overdue_but_progressing_is_not_escalated(self):
-        d, e = self.checking_entry(since_min=2 * A.REMOTE_EXPECTED_MIN + 5)
-        self.assertEqual(A.reconcile_checking(self.r.path, d), [], "the run is still running and readable")
-        self.assertEqual([x for x in self.inbox() if x["kind"] == "STALLED"], [])
+    def test_checking_past_its_deadline_with_no_checker_is_queued_again_as_infra(self):
+        d, e = self.checking_entry()
+        st = A.Store()
+        st.put_item("change", e["id"], "checking")
+        self.tick(d)  # in time: unchanged
+        self.assertEqual(self.entry(e["id"])["status"], "checking")
+        saved = A.spawn_executor
+        A.spawn_executor = lambda *a: None
+        try:
+            A.tick_changes(self.r.path, d, now_=A.time.time() + 3 * 3600)
+        finally:
+            A.spawn_executor = saved
+        e2 = self.entry(e["id"])
+        self.assertEqual((e2["status"], e2["infra_retries"]), ("queued", 1), "infra, never a rejection")
 
     def test_superseding_an_entry_cancels_its_run(self):
         d, e = self.checking_entry()

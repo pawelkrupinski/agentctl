@@ -13,14 +13,14 @@ class OrphanTest(RedBase):
     def setUp(self):
         super().setUp()
         os.environ["AGENTCTL_ORPHAN_IDLE"] = "0"
-        self.saved_o = A.process_cwds, A.recover_reland, A.orphan_dispatch
+        self.saved_o = A.process_cwds, A.spawn_land, A.orphan_dispatch
         A.process_cwds = lambda: {}
         self.relands, self.fixers = [], []
-        A.recover_reland = lambda c, a: self.relands.append(a["worktree"]) or "landing again"
+        A.spawn_land = lambda c, a: self.relands.append(a["worktree"]) or "landing again"
         A.orphan_dispatch = lambda repo, wt, name, verdict: self.fixers.append((wt, verdict)) or (True, "fixer pid 1")
 
     def tearDown(self):
-        A.process_cwds, A.recover_reland, A.orphan_dispatch = self.saved_o
+        A.process_cwds, A.spawn_land, A.orphan_dispatch = self.saved_o
         os.environ.pop("AGENTCTL_ORPHAN_IDLE", None)
         super().tearDown()
 

@@ -95,7 +95,7 @@ class NoEmptyQueueTest(QueueTest):
         A.save_entry(d, dup)
         os.environ["AGENTCTL_CHECK_TREES"] = "0"  # no tree free: nothing is started, the dedupe is all that runs
         self.addCleanup(os.environ.pop, "AGENTCTL_CHECK_TREES", None)
-        A.spawn_checks(self.r.path, d)
+        A.tick_changes(self.r.path, d)
         es = self.entries()
         self.assertEqual((es[self.key(e1)]["status"], es["9"]["status"]), ("superseded", "queued"))
 

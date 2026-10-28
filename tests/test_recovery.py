@@ -195,43 +195,6 @@ class DetectorsTest(RegistryBase):
         A.recovery_tick(force=True)
         self.assertEqual(A.open_conditions(), [])
 
-    def test_an_infra_not_landed_lands_again_when_its_check_passes(self):
-        wt = os.path.join(self.tmp.name, "movies-wt-x")
-        os.makedirs(wt)
-        relanded = []
-        A.RECOVER_ACTIONS["reland"] = lambda c, a: relanded.append(a) or "landing again"
-        A.PROBES["git_fetch"] = Recorder()
-        A.land_not_landed("NOT LANDED: git fetch forgejo main failed: ssh: connect timed out (tunnel?)", wt)
-        c = A.open_conditions()[0]
-        self.assertEqual((c["kind"], c["probe"]["kind"]), ("LAND_INFRA", "git_fetch"))
-        self.assertEqual(len(self.entries("NOT_LANDED")), 1)
-        A.recovery_tick(force=True)
-        self.assertEqual(relanded, [{"worktree": wt, "attempt": 1}])
-        self.assertTrue(self.entries("NOT_LANDED")[0]["read"])
-        # a test failure stays the author's: no condition, no retry
-        A.land_not_landed("NOT LANDED: the pre-push checks failed (check tree 2); the change was not pushed", wt)
-        self.assertEqual(A.open_conditions(), [])
-        # an unknown cause: the author's entry AND one retry, never a second
-        A.PROBES["git_fetch"] = Recorder()
-        wt2 = os.path.join(self.tmp.name, "movies-wt-y")
-        os.makedirs(wt2)
-        wt = wt2
-        A.land_not_landed("NOT LANDED: something odd", wt)
-        self.assertEqual(A.open_conditions()[0]["kind"], "LAND_UNKNOWN")
-        A.recovery_tick(force=True)
-        A.land_not_landed("NOT LANDED: something odd", wt)  # the same change again: retried once already
-        self.assertEqual(A.open_conditions(), [])
-        self.assertEqual(len(relanded), 2)
-
-    def test_land_failure_causes(self):
-        for v, cause in [("NOT LANDED: git fetch forgejo main failed: x", "infra"),
-                         ("NOT LANDED: stalled checks (remote): no output and no CPU for 20 min", "infra"),
-                         ("NOT LANDED: its remote run cannot be read (timeout)", "infra"),
-                         ("NOT LANDED: rebase onto forgejo/main conflicts in: a.scala", "real"),
-                         ("NOT LANDED: the checks failed with your change in the batch (entry 1)", "real"),
-                         ("NOT LANDED: the push failed (pre-push hook or remote)", "unknown")]:
-            self.assertEqual(A.land_failure_cause(v)[0], cause, v)
-
 
 class UntilGreenTest(RedBase):
     """`red block --until-green "Decodo probe"`: released by the probe workflow going green, then verified."""

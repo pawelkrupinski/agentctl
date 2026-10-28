@@ -170,8 +170,11 @@ class Base(unittest.TestCase):
         for k in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM"):
             os.environ[k] = ENV[k]
         self.r = Repo(os.path.realpath(self.tmp.name))
+        self.saved_root = os.environ.get("AGENTCTL_STATE_ROOT")  # a store per test: items and leases never leak across
+        os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp.name, "state")
 
     def tearDown(self):
+        os.environ["AGENTCTL_STATE_ROOT"] = self.saved_root
         self.tmp.cleanup()
 
     def run_tool(self, *argv, stdin=None, cwd=None):

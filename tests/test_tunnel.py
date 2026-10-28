@@ -36,6 +36,10 @@ class TunnelTest(unittest.TestCase):
         self.saved = (A.API, A.TUNNEL_PROBE_TIMEOUT, A.launchctl_kick, A.inbox_write, A.TUNNEL_KICK_MIN_GAP,
                       os.environ.get("AGENTCTL_TUNNEL_STATE"))
         os.environ["AGENTCTL_TUNNEL_STATE"] = os.path.join(self.tmp.name, "t.json")
+        self.saved_rec = os.environ.get("AGENTCTL_RECOVERY_DIR")  # its own registry: no other test's tunnel condition
+        os.environ["AGENTCTL_RECOVERY_DIR"] = os.path.join(self.tmp.name, "rec")
+        self.addCleanup(lambda: os.environ.__setitem__("AGENTCTL_RECOVERY_DIR", self.saved_rec) if self.saved_rec
+                        else os.environ.pop("AGENTCTL_RECOVERY_DIR", None))
         self.kicks, self.inbox = [], []
         A.launchctl_kick = lambda: self.kicks.append(1)
         A.inbox_write = lambda *a, **k: self.inbox.append(a[1])

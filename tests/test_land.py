@@ -187,8 +187,8 @@ class LandTest(Base):
     def lock_probe(self, out):
         """Shell that records whether the landing LEASE is FREE (another process could take it) while it runs."""
         db, name = A.Store().path, A.land_lease_name(self.r.path)
-        return (f"{sys.executable} -c \"import sqlite3,sys,time\n"
-                f"r=sqlite3.connect(sys.argv[1]).execute('select holder,expires_at from leases where name=?',(sys.argv[2],)).fetchone()\n"
+        return (f"{sys.executable} -c \"import os,sqlite3,sys,time\n"
+                f"r=os.path.exists(sys.argv[1]) and sqlite3.connect(sys.argv[1]).execute('select holder,expires_at from leases where name=?',(sys.argv[2],)).fetchone()\n"
                 f"print('held' if r and r[0] and r[1] > time.time() else 'free')\" {db} {name} >> {out}")
 
     def lease_free(self, repo=None):

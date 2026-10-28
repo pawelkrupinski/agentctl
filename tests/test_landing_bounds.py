@@ -21,8 +21,6 @@ class PushBoundTest(unittest.TestCase):
         rc, out = A.run_watched([script], d, dict(os.environ), os.path.join(d, "log"), "push", stall=1)
         self.assertIsNone(rc)  # stalled: its group ended
         self.assertLess(time.monotonic() - t0, 90)  # generous: the full suite loads the machine
-        self.assertEqual(A.land_failure_cause("NOT LANDED: the push failed (pre-push hook or remote)", out.splitlines())[0],
-                         "infra")
         self.assertTrue(A.TRANSIENT_PUSH.search(out))
         rc, _out = A.run_watched(["sh", "-c", "while :; do echo tick; sleep 0.2; done"], d, dict(os.environ),
                                  os.path.join(d, "log2"), "push", stall=60, wall=2)
@@ -86,20 +84,28 @@ class BatchRetryTest(unittest.TestCase):
 
 
 class RequeueTest(unittest.TestCase):
-    def test_an_infra_requeue_resets_attempts_and_is_bounded(self):
+    def test_an_infra_requeue_backs_off_escalates_from_the_third_and_never_rejects(self):
         d = tempfile.mkdtemp()
         os.makedirs(os.path.join(d, "entries"))
-        e = {"id": "e1", "status": "checking", "attempts": 3}
-        saved = A.save_entry, A.wlog
-        A.save_entry = lambda d_, e_: None
+        st = A.Store(path=os.path.join(d, "store.db"))
+        e = {"id": "e1", "seq": 1, "status": "checking", "worktree": "/w"}
+        A.write_json(os.path.join(d, "entries", "e1.json"), e)
+        saved_store, saved_wlog = A.Store, A.wlog
+        A.Store = lambda *a, **k: st
         A.wlog = lambda d_, m: None
         try:
-            for _ in range(A.QUEUE_INFRA_RETRIES):
+            waits = []
+            for _ in range(4):
                 self.assertTrue(A.requeue_infra(d, e, "the push failed on infra (closed by remote host)"))
-                self.assertEqual((e["status"], e["attempts"]), ("queued", 0))
-            self.assertFalse(A.requeue_infra(d, e, "again"))  # bounded: the caller says NOT LANDED
+                waits.append(round(e["retry_after"] - time.time()))
+                self.assertEqual(e["status"], "queued")
+                st.transition("change", "e1", "checking", st.item("change", "e1")["version"])
+                e["status"] = "checking"
         finally:
-            A.save_entry, A.wlog = saved
+            A.Store, A.wlog = saved_store, saved_wlog
+        self.assertEqual([w // 60 for w in waits], [5, 10, 30, 60])
+        sev = [x["severity"] for x in st.events() if x["to_state"] == "queued"]
+        self.assertEqual(sev, ["info", "info", "escalate", "escalate"])
 
 
 class GovBoundTest(unittest.TestCase):
