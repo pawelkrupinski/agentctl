@@ -5018,7 +5018,10 @@ def stall_clock():
     return time.monotonic()
 
 
-def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None, cpu=None, clock=None):
+WATCHED_GROUPS = set()  # process groups run_watched started and that may still run: the watchdog ends them first
+
+
+def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None, cpu=None, clock=None, wall=None):
     """Run argv (its own process group, stdin closed), its output into a file beside log_path. (returncode, output);
     returncode None when it STALLED: no output and no CPU in its process group for `stall` seconds, after which the
     group is ended. Waits with Popen.wait, never time.sleep. `cpu` (pgid -> CPU seconds) and `clock` are the samples the
@@ -5029,24 +5032,31 @@ def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None, cpu=No
     with open(out_path, "w") as out:
         p = subprocess.Popen(argv, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                              start_new_session=True)
+    WATCHED_GROUPS.add(p.pid)
     size, cpu, changed, stalled = -1, None, clock(), False
     poll = max(0.2, min(15.0, stall / 4))
     need = float(os.environ.get("AGENTCTL_STALL_CPU_SECONDS", STALL_CPU_SECONDS))
+    t_start = time.monotonic()
     while True:
         try:
             p.wait(timeout=poll)
             break
         except subprocess.TimeoutExpired:
             pass
+        lock_beat()  # the landing lock's holder is alive and at work: waiters see a fresh heartbeat
         if sampler:
             sampler()
         now_size, now_cpu = os.path.getsize(out_path), cpu_of(p.pid)
         # progress: output grew, or the group used a real second of CPU since the last progress (the hook idle in
         # `wait` with only its watchdog polling used ~0.08 s in 50 min, 2026-10-27: that is not progress)
+        now_c = clock()
         if now_size != size or cpu is None or now_cpu - cpu >= need:
-            size, cpu, changed = now_size, now_cpu, clock()
-        elif clock() - changed > stall:
+            size, cpu, changed = now_size, now_cpu, now_c
+        elif now_c - changed > stall:
             stalled = True
+        if wall is not None and time.monotonic() - t_start > wall:  # busy or not: the wall bound (a push's)
+            stalled = True
+        if stalled:
             for sig, grace in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
                 try:
                     os.killpg(p.pid, sig)
@@ -5058,6 +5068,7 @@ def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None, cpu=No
                 except subprocess.TimeoutExpired:
                     continue
             break
+    WATCHED_GROUPS.discard(p.pid)
     with open(out_path, errors="replace") as f:
         output = f.read()
     try:
@@ -5297,8 +5308,15 @@ class GovTicket:
             self.f = None
 
 
+class GovTimeout(RuntimeError):
+    """The governor did not admit the work within its bound (audit #12: an unbounded wait hid a stuck queue entry)."""
+
+
+GOV_ADMIT_MAX = 2 * 3600  # a check waits this long for the governor at most ($AGENTCTL_GOV_ADMIT_MAX)
+
+
 def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=True, force=False, pid=None, cwd=None,
-              report=None):
+              report=None, max_wait=None):
     """Admit one unit of work: a GovTicket once it may start (None for a --try that may not). With `fd`, the lock is
     taken on that inherited descriptor (a shell's, which then holds the ticket); else on a file this process keeps open."""
     cls = cls if cls in GOV_CLASSES else "agent"
@@ -5329,6 +5347,8 @@ def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=Tr
                 continue
             if not wait:
                 return None
+            if max_wait is not None and time.time() - t0 > max_wait:
+                raise GovTimeout(f"the governor did not admit {cls} work ({label}) in {int(max_wait // 60)} min: {why}")
             if time.monotonic() >= report_at:
                 report(f"{'still ' if said else ''}waiting for the governor ({cls}, {mem:g} GB, {label}): {why}; "
                        f"{len(tickets)} admitted, {gov_committed(tickets):.0f}/{gov_budget():.0f} GB")
@@ -5533,7 +5553,8 @@ def check_slot(repo, label, cls="check"):
     """Hold a check ticket of the governor for a pre-commit check run (waiting, with a line saying why, until it is
     admitted). Records the run in runs.jsonl and adjusts the cap afterwards."""
     slot = Slot(label, cls)
-    slot.ticket = gov_admit(cls, GOV_MEM_GB["check"], label, kind="check")
+    slot.ticket = gov_admit(cls, GOV_MEM_GB["check"], label, kind="check",
+                            max_wait=env_num("AGENTCTL_GOV_ADMIT_MAX", GOV_ADMIT_MAX))
     slot.waited, slot.cap = slot.ticket.waited, checks_cap()
     slot.running = len(slot_holders())
     slot.t0, slot.rc = time.monotonic(), None
@@ -5685,6 +5706,20 @@ def tool_env():
     return env
 
 
+# EVERY PUSH IS BOUNDED (the owner, 2026-10-28, "fix root cause in a structural way": a queued change's `git push` over
+# the ssh tunnel died with "Connection to localhost closed by remote host" when the hotspot dropped, then hung -- no
+# progress, no exit -- holding the landing lock 30+ min while a checked batch waited behind it with the gate green): a
+# push gets a no-progress bound (no output and no CPU) of PUSH_STALL_SECS and a wall bound of PUSH_WALL_MIN, its group
+# killed on either; a stalled or dead-transport push is infra (re-queued), never a hang.
+PUSH_STALL_SECS = 180
+PUSH_WALL_MIN = 45
+
+
+def push_bounds():
+    return {"stall": env_num("AGENTCTL_PUSH_STALL_SECS", PUSH_STALL_SECS),
+            "wall": env_num("AGENTCTL_PUSH_WALL_MIN", PUSH_WALL_MIN) * 60}
+
+
 def push_argv(remote, src, dst="main"):
     argv = ["git", "push", remote, f"{src}:refs/heads/{dst}"]
     assert not any(a in ("--no-verify", "-n", "--force", "-f") or a.startswith("--force") for a in argv)
@@ -5747,10 +5782,65 @@ def lock_note(step):
     """Say in the held landing lock's file what the holder is doing now (waiters print it)."""
     if _held_lock[0]:
         f, first = _held_lock[0]
-        f.seek(0)
-        f.truncate()
-        f.write(f"{first}; now: {step} since {ts()}\n")
-        f.flush()
+        _lock_step[0] = f"; now: {step} since {ts()}"
+        _write_lock(f, first)
+
+
+_lock_step = [""]
+LOCK_BEAT_MAX = 600  # a live holder whose heartbeat is older than this holds the lock for nothing: the waiter ends it
+
+
+def _write_lock(f, first):
+    f.seek(0)
+    f.truncate()
+    f.write(f"{first}{_lock_step[0]}; beat {int(time.time())}\n")
+    f.flush()
+
+
+def lock_beat():
+    """The holder at work stamps its heartbeat into the lock file (run_watched does, every poll)."""
+    if _held_lock[0]:
+        try:
+            _write_lock(*_held_lock[0])
+        except (OSError, ValueError):
+            pass
+
+
+def break_stale_lock(path, holder_text, why_log=None):
+    """THE LOCK OUTLIVES NO WORK: a holder (an agentctl process; the flock dies with its process) whose heartbeat is
+    older than LOCK_BEAT_MAX is ended -- its process group, TERM then KILL -- and that is said. True when ended."""
+    why_log = why_log or err
+    m, b = re.match(r"pid (\d+)", holder_text or ""), re.search(r"beat (\d+)", holder_text or "")
+    if not m:
+        return False
+    pid, beat = int(m.group(1)), float(b.group(1)) if b else None
+    if beat is None:  # the holder's start counts as its first beat
+        st = re.search(r"since (\S+?)(?:;|$|\s)", holder_text)
+        try:
+            beat = parse_time(st.group(1)).timestamp() if st else None
+        except (Exception, SystemExit):
+            beat = None
+    if beat is None or time.time() - beat < env_num("AGENTCTL_LOCK_BEAT_MAX", LOCK_BEAT_MAX) or pid == os.getpid():
+        return False
+    cmd = next((c for p_, _pp, _e, c in ps() if p_ == pid), "")
+    if "agentctl" not in cmd:
+        return False
+    why_log(f"the landing lock's holder pid {pid} has done nothing for {int(time.time() - beat)} s ({holder_text[:160]}): "
+            f"ending it, the lock is freed ({path})")
+    for sig, grace in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
+        try:
+            os.killpg(os.getpgid(pid), sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                return True
+        t0 = time.time()
+        while time.time() - t0 < grace:
+            if not proc_alive(pid):
+                return True
+            time.sleep(0.2)
+    return True
 
 
 def held_for(holder):
@@ -5792,6 +5882,8 @@ def land_lock(repo):
                     fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
                 except BlockingIOError:
+                    if break_stale_lock(path, holder()):
+                        continue
                     if time.monotonic() > deadline:
                         yield False
                         return
@@ -5802,10 +5894,8 @@ def land_lock(repo):
                     time.sleep(5)
             err("got the landing lock")
         first = f"pid {os.getpid()} {repo} since {ts()}"
-        f.seek(0)
-        f.truncate()
-        f.write(first + "\n")
-        f.flush()
+        _lock_step[0] = ""
+        _write_lock(f, first)
         _held_lock[0] = (f, first)
         yield True
     finally:
@@ -6343,7 +6433,7 @@ def land_loop(repo, main_ref, sh, log_path, a):
         err(f"pushing {head[:10]} to {REMOTE}/main (attempt {attempt + 1}/{LAND_RETRIES + 1}; hook log: {log_path})")
         lock_note(f"push of {head[:10]}")
         a.pushed_at = time.time()
-        rc, out = run_watched(push_argv(REMOTE, head), repo, tool_env(), log_path, "push")
+        rc, out = run_watched(push_argv(REMOTE, head), repo, tool_env(), log_path, "push", **push_bounds())
         if rc == 0:
             mark_gate_dirty()
         with open(log_path, "a") as f:
@@ -6904,6 +6994,7 @@ def wlog(d, msg):
 
 def ensure_waiting_tree(repo, wt):
     if not os.path.isdir(wt):
+        git(repo, "worktree", "prune", check=False)  # a removed tree's stale registration refuses the add (audit #9)
         if git_ok(repo, "rev-parse", "--verify", "-q", f"refs/heads/{WAITING_BRANCH}"):
             git(repo, "worktree", "add", "-q", mark_internal(wt), WAITING_BRANCH)
         else:
@@ -7168,6 +7259,27 @@ INFRA_CHECK_FAILURE = re.compile(r"failed to connect to server|sbt server did no
                                  r"sbt server disconnected|^TIMEOUT +\d+s|STALLED:", re.M)
 QUEUE_INFRA_RETRIES = 3
 QUEUE_INFRA_DELAY = 300
+# A PUSH, FETCH OR TUNNEL BLIP IS NO VERDICT ON THE CHANGE (audit #6, 2026-10-28: entry 67 "the push failed (pre-push
+# hook or remote)" was a tunnel error in its tail; a fixer GAVE UP on it): such a failure, a stalled push, a lock that
+# never came free and main moving under every round re-queue the entry (retry_after, at most QUEUE_INFRA_RETRIES),
+# its `attempts` reset (a checker restart after an infra re-queue is no failure of the change).
+TRANSIENT_PUSH = re.compile(r"Connection (reset|refused|timed out|closed)|closed by remote host|Could not resolve host|ssh: connect to host|"
+                            r"kex_exchange_identification|[Bb]roken pipe|early EOF|remote end hung up|RPC failed|"
+                            r"unable to access|HTTP (502|503|504)|timed out|Operation timed out|tunnel", re.I)
+SLOT_WAIT_MAX = 2 * 3600  # a checker waits this long for a check tree, then the entry is re-queued
+
+
+def requeue_infra(d, e, why, delay=None):
+    """Back to queued for a later look (not NOT LANDED): (True) when retries are left, else False."""
+    if e.get("infra_retries", 0) >= QUEUE_INFRA_RETRIES:
+        return False
+    e["infra_retries"] = e.get("infra_retries", 0) + 1
+    e.update(status="queued", retry_after=time.time() + (QUEUE_INFRA_DELAY if delay is None else delay), why=f"infra: {why}",
+             attempts=0, waiting_on=None)
+    save_entry(d, e)
+    wlog(d, f"{e['id']}: {why}: queued again in {int((QUEUE_INFRA_DELAY if delay is None else delay) // 60)} min "
+            f"(retry {e['infra_retries']}/{QUEUE_INFRA_RETRIES})")
+    return True
 QUEUE_ROUNDS = 3        # checked again while main moves under the checks; the last round pushes, its hook checking
 # Main moved between a change's check and its push: re-checked only when what landed meanwhile can change the verdict
 # (the owner, 2026-10-27: memo-key -41 passed runs 3341 and 3350, then main moved and it was checked a third time) --
@@ -7401,12 +7513,19 @@ def check_entry(repo, eid):
         if e.get("attempts", 0) > 3:  # its checkers died three times (killed, crashed): said, not tried forever
             queue_verdict(d, e, "rejected", f"NOT LANDED: the checker of {eid} ended without a verdict 3 times; land again")
             return 1
+        e["waiting_on"] = "a check tree slot"
         save_entry(d, e)
-        slot = None
+        slot, t_slot = None, time.time()
         while not slot:
             slot = check_tree_slot(repo, d)
             if not slot:
+                if time.time() - t_slot > env_num("AGENTCTL_SLOT_WAIT_MAX", SLOT_WAIT_MAX):  # bounded (audit #12)
+                    if not requeue_infra(d, e, f"no check tree free for {int((time.time() - t_slot) // 60)} min"):
+                        queue_verdict(d, e, "rejected", f"NOT LANDED: no check tree came free for {eid} in "
+                                      f"{QUEUE_INFRA_RETRIES + 1} tries (the laptop's check trees are all busy)")
+                    return 0
                 time.sleep(10)
+        e["waiting_on"] = None
         i, slot_f = slot
         try:
             return _check_entry(repo, d, e, i, own)
@@ -7445,6 +7564,9 @@ def _check_entry(repo, d, e, i, own=None):
         if via:
             already_landed(d, e, via if via != "an equivalent commit" else None)
             return 0
+        if not head and not git_ok(repo, "rev-parse", "--verify", "-q", f"{REMOTE}/main"):
+            if requeue_infra(d, e, "its fetch of main failed"):
+                return 0
         if not head:
             queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {REMOTE}/main {base[:10]} "
                           f"(main moved since QUEUED): rebase onto forgejo/main and land again")
@@ -7468,7 +7590,7 @@ def _check_entry(repo, d, e, i, own=None):
                 # the laptop failed the checks, not the change (an sbt server that never came up under load, a script
                 # test cut off by its bound): queued again for a later look, not NOT LANDED (2026-10-27, load ~250)
                 e["infra_retries"] = e.get("infra_retries", 0) + 1
-                e.update(status="queued", retry_after=time.time() + QUEUE_INFRA_DELAY,
+                e.update(status="queued", retry_after=time.time() + QUEUE_INFRA_DELAY, attempts=0,
                          why=f"infra: {INFRA_CHECK_FAILURE.search(out).group(0)}")
                 save_entry(d, e)
                 wlog(d, f"{e['id']}: its checks failed on the laptop, not on the change ({e['why']}): queued again "
@@ -7530,7 +7652,7 @@ def _check_entry(repo, d, e, i, own=None):
                 env["PREPUSH_REMOTE_RUN"] = str(e["remote_run"])
             if skip:  # checked on the old base, no overlap with what landed since: the hook judges the red gate only
                 env["PREPUSH_SKIP"] = " ".join(skip)
-            rc, out = run_watched(push_argv(REMOTE, head), tree, env, log_path, "push")
+            rc, out = run_watched(push_argv(REMOTE, head), tree, env, log_path, "push", **push_bounds())
             if rc == 0:
                 mark_gate_dirty()
             if rc == 0:
@@ -7546,9 +7668,14 @@ def _check_entry(repo, d, e, i, own=None):
                 continue
             if rc is not None and REDGATE.search(out or ""):
                 continue  # red now: the next round joins `waiting`
-            queue_verdict(d, e, "rejected", "NOT LANDED: the push failed (pre-push hook or remote)",
-                          (out or "").splitlines())
+            blip = "the push stalled" if rc is None else (TRANSIENT_PUSH.search(out or "") or [None])[0]
+            if blip and requeue_infra(d, e, f"the push failed on infra ({blip})"):
+                return 0
+            queue_verdict(d, e, "rejected", "NOT LANDED: the push failed (pre-push hook or remote)"
+                          + (f": {blip}" if blip else ""), (out or "").splitlines())
             return 1
+    if requeue_infra(d, e, f"main moved (or the landing lock stayed busy) under {QUEUE_ROUNDS} rounds of its checks"):
+        return 0
     queue_verdict(d, e, "rejected", f"NOT LANDED: main moved under the checks {QUEUE_ROUNDS} times; land again")
     return 1
 
@@ -7588,10 +7715,17 @@ def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own=None
     # the range through the remote's ref (forgejo/main is `base` now, fetched just before): the hook finds the remote, and
     # with it Forgejo's red gate, from it -- given bare shas it fell back to gh (GitHub, suspended): the gate unread
     rng = f"{REMOTE}/main..{head}" if git(tree, "rev-parse", f"{REMOTE}/main").strip() == base else f"{base}..{head}"
-    with check_slot(repo, f"queued {e['id']} {head[:10]}", cls) as slot:
-        rc, out = run_watched([os.path.join(tree, "scripts", "hooks", "pre-push"), mode, rng], tree,
-                              slot.env(tool_env()), log_path, "checks", sampler=slot.sample)
-        slot.done(rc, out)
+    e["waiting_on"] = "the governor (a check slot)"
+    save_entry(d, e)
+    try:
+        with check_slot(repo, f"queued {e['id']} {head[:10]}", cls) as slot:
+            e["waiting_on"] = None
+            save_entry(d, e)
+            rc, out = run_watched([os.path.join(tree, "scripts", "hooks", "pre-push"), mode, rng], tree,
+                                  slot.env(tool_env()), log_path, "checks", sampler=slot.sample)
+            slot.done(rc, out)
+    except GovTimeout as ex:  # an infra failure of the laptop, re-queued by the caller (INFRA_CHECK_FAILURE)
+        return False, f"TIMEOUT 0s {ex}", "locally (never admitted)"
     with open(os.path.join(d, "checks.log"), "a") as f:
         f.write(f"=== {ts()} {e['id']} {base[:10]}..{head[:10]} {mode} rc {rc}\n{out}\n")
     return (None if rc is None else rc == 0), out, f"locally, check tree {os.path.basename(tree)}"
@@ -7826,6 +7960,8 @@ def reconcile_checking(repo, d, now_=None):
                 why = f"remote run {rem.get('run')} is {rem.get('status')} but no checker collects it"
             elif not alive and marks.get("dead_since") and now_ - marks["dead_since"] > REMOTE_COLLECT_GRACE:
                 why = "no checker runs for it"
+            elif alive and e.get("waiting_on"):  # a live checker that waits (audit #12): said, with what it waits on
+                why = f"its live checker waits on {e['waiting_on']}"
         if not alive:
             marks.setdefault("dead_since", now_)
         else:
@@ -8137,7 +8273,8 @@ def push_batch(repo, d, entries, tip, base, how):
         pushed_at = time.time()
         tree = batch_tree(repo, tip)  # the push's hook runs in the tree it checked, so it reuses that pass
         env = dict(tool_env(), PREPUSH_REUSE_FAST="1")  # the batch's fast pass stands for the push (pre-push --fast-only)
-        rc, out = run_watched(push_argv(REMOTE, tip), tree, env, os.path.join(d, f"push-{tip[:10]}"), "push")
+        rc, out = run_watched(push_argv(REMOTE, tip), tree, env, os.path.join(d, f"push-{tip[:10]}"), "push",
+                              **push_bounds())
         if rc == 0:
             mark_gate_dirty()
         with open(os.path.join(d, "checks.log"), "a") as f:
@@ -8234,6 +8371,11 @@ def bisect(repo, d, batch, base):
             lo = mid + 1
         else:
             hi, out_hi = mid, out
+    # one flaky failure rejects nobody (audit #10): the culprit's prefix is checked once more before it is rejected
+    ok, out, stalled = batch_check(repo, d, bwt, base, batch[lo]["tip"])
+    if ok or stalled:
+        wlog(d, f"bisect: the prefix through {batch[lo]['id']} passed when checked again: flaky, nobody rejected")
+        return None, out
     return lo, out_hi
 
 
@@ -8304,14 +8446,17 @@ def waiting_round(repo, d, wt):
         return "held"
     if ok:
         r = push_batch(repo, d, batch, tip, base, "batch")
-        return {"landed": "landed", "red": "red"}.get(r, "retry")
+        if r in ("landed", "red"):
+            batch_retry(d, None)
+            return r
+        return batch_retry(d, tip, f"its push {r}", len(batch))
     if REDGATE.search(out or ""):
         return "red"
     wlog(d, f"the batch {tip[:10]} failed its checks; bisecting by prefix")
     culprit, cout = bisect(repo, d, batch, base)
     if culprit is None:
         wlog(d, "every prefix passed on its own again (flaky or infra): checked again next round")
-        return "retry"
+        return batch_retry(d, tip, "it failed, then every prefix passed on its own (flaky or infra)", len(batch))
     bad = batch[culprit]
     reject(d, bad, f"the checks failed with your change in the batch on `{WAITING_BRANCH}`:\n  {tail_of(cout)}")
     inbox_write("land", f"NOT LANDED: the checks failed with your change in the batch (entry {bad['id']})", [],
@@ -8319,6 +8464,36 @@ def waiting_round(repo, d, wt):
     if culprit > 0:  # the prefix before it passed its own check: it lands now; the rest join the next batch
         push_batch(repo, d, batch[:culprit], batch[culprit - 1]["tip"], base, "batch prefix before a rejected change")
     return "rejected"
+
+
+BATCH_RETRY_MAX = 3  # a batch tip that fails to land this many times is HELD, with a condition (audit #5)
+
+
+def batch_retry(d, tip, why=None, n_changes=0):
+    """Count a failed landing of the batch at `tip` (tip None: it landed, the count clears). 'retry', or 'held' after
+    BATCH_RETRY_MAX: the batch is held and a condition opened on the git route (git_fetch), cleared with the hold."""
+    p = os.path.join(d, "batch-retries.json")
+    if tip is None:
+        write_json(p, {})
+        return "retry"
+    st = read_record(p) or {}
+    n = int(st.get(tip) or 0) + 1
+    write_json(p, {tip: n})
+    if n < env_num("AGENTCTL_BATCH_RETRY_MAX", BATCH_RETRY_MAX):
+        wlog(d, f"the batch {tip[:10]} did not land ({why}): retry {n}/{BATCH_RETRY_MAX}")
+        return "retry"
+    until = time.time() + float(os.environ.get("AGENTCTL_BATCH_HOLD", BATCH_HOLD))
+    save_batch_state(d, {"held_until": until, "why": f"the batch {tip[:10]} did not land {n} times ({why})"})
+    write_json(p, {})
+    text = (f"HELD: the batch {tip[:10]} ({n_changes} change(s)) did not land {n} times ({why}); it stays on "
+            f"`{WAITING_BRANCH}` and is tried again when git can read {REMOTE}/main, or after {int((until - time.time()) // 60)} min")
+    c = open_condition("STALLED", text, run_probe("git_fetch", {"repo": os.path.dirname(d)}), [("clear_hold", {"d": d})],
+                       key=f"batch-retry-{tip[:10]}", command="waiting")
+    if not c:  # git answers: not the route -- held for its time, said once (a note: the hold ends on its own)
+        note = "BATCH " + text
+        inbox_write("waiting", note, [note], [], 1)
+    wlog(d, text)
+    return "held"
 
 
 HEARTBEAT = [time.monotonic()]  # the processor's loop stamps it each pass (monotonic: a laptop sleep is no stall)
@@ -8353,6 +8528,11 @@ def start_watchdog(argv):
             open_condition("STALLED", f"STALLED: the waiting processor's {what} made no cycle in {int(stalled)} s; stacks in "
                                       "its service.log; re-exec'd", run_probe("processor", {"since": time.time()}), [],
                            key="processor-stalled", command="waiting", exit_code=2)
+            for pg in list(WATCHED_GROUPS):  # a hook mid-batch would outlive the re-exec in the batch tree (audit #13)
+                try:
+                    stop_group(pg, 5)
+                except OSError:
+                    pass
             sys.stdout.flush()
             sys.stderr.flush()
             os.execv(sys.executable, [sys.executable, TOOL_PATH] + list(argv))
@@ -8392,6 +8572,8 @@ def start_duties(repo):
     return stop
 
 
+ROUND_ERRORS_MAX = 3
+round_errors = [0]
 SERVICE_IDLE_POLL = 30  # seconds between looks at an empty `waiting` (a directory listing: no git, no network)
 
 
@@ -8442,6 +8624,17 @@ def waiting_run(repo, once=False, service=False):
             IN_BATCH[0] = True
             try:
                 state = waiting_round(repo, d, wt)
+                round_errors[0] = 0
+                write_json(os.path.join(d, "round-ok.json"), {"at": time.time()})
+            except Exception as ex:  # one git error is one bad round, never a crash loop (audit #9)
+                state = "retry"
+                round_errors[0] += 1
+                wlog(d, f"the round failed ({type(ex).__name__}: {str(ex)[:200]}); {round_errors[0]} in a row")
+                if round_errors[0] == ROUND_ERRORS_MAX:
+                    open_condition("STALLED", f"STALLED: the waiting processor's rounds failed {ROUND_ERRORS_MAX} times in a "
+                                              f"row ({type(ex).__name__}: {str(ex)[:160]}); see {d}/processor.log",
+                                   run_probe("waiting_ok", {"d": d, "since": time.time()}), [], key="waiting-rounds",
+                                   command="waiting")
             finally:
                 IN_BATCH[0] = False
                 HEARTBEAT[0] = time.monotonic()
@@ -8946,7 +9139,7 @@ def network_watch(route=None, kick=None):
     if r is None:
         err(f"the network went away (was {prev[0]} via {prev[1]})")
         open_condition("NETWORK", f"NETWORK: offline (no default route; was {prev[0]} via {prev[1]})", run_probe("route"),
-                       [("tunnel_reset", {})], key="network-offline", inbox=False)  # the kick: below, on the way back
+                       [("tunnel_reset", {}), ("check_locks", {})], key="network-offline", inbox=False)  # the kick: below, on the way back
         return "offline"
     err(f"the network {'is back' if prev is None else 'changed'} ({prev[0] if prev else '-'} via {prev[1] if prev else '-'} -> "
         f"{r[0]} via {r[1]}): "
@@ -8982,7 +9175,7 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
             msg = (f"NETWORK: the laptop's uplink loses {int(loss * 100)}% of packets to 1.1.1.1, so Forgejo (localhost:3000) "
                    f"{r}s; not a tunnel fault, nothing to restart -- the gate reads come back with the network")
             err(msg)
-            open_condition("NETWORK", msg, res or run_probe("tunnel"), [("tunnel_reset", {})], key="tunnel",
+            open_condition("NETWORK", msg, res or run_probe("tunnel"), [("tunnel_reset", {}), ("check_locks", {})], key="tunnel",
                            command="tunnel")
         st.update(network=True, pending_since=None, escalated=False)  # the kick/escalation clock starts on a good uplink
         write_json_file(tunnel_state_path(), st)
@@ -8997,7 +9190,7 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
     if st.get("pending_since") and t - st["pending_since"] >= TUNNEL_RESTORE_WAIT and not st.get("escalated"):
         msg = (f"STALLED: the Forgejo tunnel (localhost:3000) still {r} {int((t - st['pending_since']) // 60)} min after a "
                f"kickstart; run `launchctl kickstart -k gui/$(id -u)/{TUNNEL_LABEL}` and check ~/Library/Logs/forgejo-tunnel.log")
-        open_condition("STALLED", msg, res or run_probe("tunnel"), [("tunnel_reset", {})], key="tunnel-stalled",
+        open_condition("STALLED", msg, res or run_probe("tunnel"), [("tunnel_reset", {}), ("check_locks", {})], key="tunnel-stalled",
                        command="tunnel", exit_code=2)
         st["escalated"] = True
         did = "escalated"
@@ -10784,11 +10977,17 @@ def probe_fixer_slot(a):
     return why is None, why or "a fixer slot is free"
 
 
-PROBES = {"owner_block": probe_owner_block, "orphan_landed": probe_orphan_landed, "fixer_slot": probe_fixer_slot, "batch_hold": probe_batch_hold, "workflow_green": probe_workflow_green, "http": probe_http, "tcp": probe_tcp, "red_resolved": probe_red_resolved,
+def probe_waiting_ok(a):
+    """A waiting round completed after the condition opened."""
+    at = float((read_record(os.path.join(a["d"], "round-ok.json")) or {}).get("at") or 0)
+    return at > float(a.get("since") or 0), f"last good round {iso_at(at)}" if at else "no good round yet"
+
+
+PROBES = {"waiting_ok": probe_waiting_ok, "owner_block": probe_owner_block, "orphan_landed": probe_orphan_landed, "fixer_slot": probe_fixer_slot, "batch_hold": probe_batch_hold, "workflow_green": probe_workflow_green, "http": probe_http, "tcp": probe_tcp, "red_resolved": probe_red_resolved,
           "route": probe_route, "tunnel": probe_tunnel, "gate_read": probe_gate_read, "token": probe_token,
           "processor": probe_processor, "git_fetch": probe_git_fetch, "laptop_load": probe_laptop_load,
           "queue_entry": probe_queue_entry}
-PROBE_EVERY = {"owner_block": 60, "orphan_landed": 300, "fixer_slot": 30, "batch_hold": 60, "route": 5, "tunnel": 10, "gate_read": 15, "processor": 30, "queue_entry": 60, "red_resolved": 60,
+PROBE_EVERY = {"waiting_ok": 30, "owner_block": 60, "orphan_landed": 300, "fixer_slot": 30, "batch_hold": 60, "route": 5, "tunnel": 10, "gate_read": 15, "processor": 30, "queue_entry": 60, "red_resolved": 60,
                "workflow_green": 60, "token": 60, "laptop_load": 60, "tcp": 60, "http": 120, "git_fetch": 120}
 
 
@@ -10800,7 +10999,7 @@ def probe_words(kind, a):
             "gate_read": lambda: "the gate is read", "token": lambda: "the processor holds a token",
             "processor": lambda: "the processor cycles again", "git_fetch": lambda: f"git can read {REMOTE}/main",
             "laptop_load": lambda: "the laptop's load is normal", "batch_hold": lambda: "the batch hold ends",
-            "fixer_slot": lambda: "a fixer slot is free",
+            "fixer_slot": lambda: "a fixer slot is free", "waiting_ok": lambda: "a waiting round completes",
             "owner_block": lambda: (probe_words(a["inner"]["kind"], a["inner"]["args"]) if a.get("inner") else "its check passes")
             + " (or the block loses its justification)", "orphan_landed": lambda: "its commits are on main or somebody works in it",
             "queue_entry": lambda: f"queue entry {a.get('eid')} moves"}.get(kind, lambda: kind)()
@@ -10864,10 +11063,13 @@ LAND_RETRY_MAX = {"infra": 5, "unknown": 1}
 
 
 def recover_reland(cond, a):
-    """`agentctl land` again in the change's worktree (it fetches and rebases first: a conflict is a real NOT LANDED)."""
+    """`agentctl land` again in the change's worktree (it fetches and rebases first: a conflict is a real NOT LANDED).
+    'landing ...' when started, else why not (the caller says it: never a silent drop)."""
     wt = a["worktree"]
     if not os.path.isdir(wt):
         return f"not landed again: {wt} is gone"
+    if git(wt, "status", "--porcelain", "--untracked-files=no", check=False).stdout.strip():
+        return f"not landed again: {wt} has uncommitted changes"
     os.makedirs(recovery_dir(), exist_ok=True)
     with open(recovery_dir("reland.log"), "a") as f:
         subprocess.Popen([sys.executable, os.path.realpath(__file__), "land"], stdin=subprocess.DEVNULL, stdout=f,
@@ -10881,7 +11083,27 @@ def recover_patrol_now(cond, a):
     return "the patrol looks now"
 
 
-RECOVER_ACTIONS = {"patrol_now": recover_patrol_now, "release_block": recover_release_block, "verify": recover_verify, "kick_tunnel": recover_kick_tunnel,
+def recover_clear_hold(cond, a):
+    if batch_state(a["d"]).get("held_until"):
+        save_batch_state(a["d"], {})
+    return "the batch hold is lifted"
+
+
+def recover_check_locks(cond, a):
+    """The network or the tunnel is back: a landing lock held across the outage whose holder stopped beating is freed."""
+    done = []
+    for p_ in glob.glob(os.path.join(land_lock_dir(), "*.lock")):
+        try:
+            with open(p_) as f:
+                h = f.read().strip()
+        except OSError:
+            continue
+        if h and break_stale_lock(p_, h):
+            done.append(os.path.basename(p_))
+    return f"freed the stale landing lock(s) {', '.join(done)}" if done else ""
+
+
+RECOVER_ACTIONS = {"check_locks": recover_check_locks, "clear_hold": recover_clear_hold, "patrol_now": recover_patrol_now, "release_block": recover_release_block, "verify": recover_verify, "kick_tunnel": recover_kick_tunnel,
                    "tunnel_reset": recover_tunnel_reset, "clear_flag": recover_clear_flag, "reland": recover_reland}
 
 
@@ -11084,34 +11306,43 @@ LAND_REAL = re.compile(r"conflict|checks failed|pre-push checks failed|prepush-c
                        r"PREPUSH_SKIP|red gate refused|no longer applies|superseded", re.I)
 
 
-def land_failure_cause(verdict):
-    """('real' | 'infra' | 'unknown', probe kind or None) for a NOT LANDED verdict."""
+def land_failure_cause(verdict, tail=()):
+    """('real' | 'infra' | 'unknown', probe kind or None) for a NOT LANDED verdict: its first line, and when that names
+    nothing, its tail (audit #6: "the push failed (pre-push hook or remote)" hid a tunnel error in the tail)."""
     if LAND_REAL.search(verdict):
         return "real", None
-    for pat, probe in LAND_INFRA:
-        if pat.search(verdict):
-            return "infra", probe
+    for text in (verdict, "\n".join(list(tail)[-40:])):
+        for pat, probe in LAND_INFRA:
+            if pat.search(text):
+                return "infra", probe
+        if text is not verdict and TRANSIENT_PUSH.search(text):
+            return "infra", "git_fetch"
     return "unknown", "git_fetch"
 
 
 def land_not_landed(verdict, worktree, tail=(), code=1):
     """A NOT LANDED to the inbox: infra (or an unknown cause, once) opens a condition that lands it again on recovery."""
     first = verdict.splitlines()[0]
-    cause, probe = land_failure_cause(first)
+    cause, probe = land_failure_cause(first, tail)
     attempt = 0
-    if cause != "real" and worktree:  # counted per worktree and HEAD, on disk: the verdict comes from the processor
-        head = git(worktree, "rev-parse", "HEAD", check=False).stdout.strip() if os.path.isdir(worktree) else ""
+    if cause != "real" and worktree:  # counted per worktree and CHANGE (its patch-ids: a rebase keeps the count), on disk
+        try:
+            _c, change = orphan_key(movies_repo_path() if not os.path.isdir(worktree) else worktree, worktree) \
+                if os.path.isdir(worktree) else ([], None)
+        except (Exception, SystemExit):
+            change = None
         counts = read_record(recovery_dir("relands.json")) or {}
-        k = f"{os.path.realpath(worktree)}@{head}"
+        k = f"{os.path.realpath(worktree)}@{change}"
         attempt = counts[k] = int(counts.get(k) or 0) + 1
         write_json(recovery_dir("relands.json"), dict(list(counts.items())[-200:]))
     if cause != "real" and worktree and attempt <= LAND_RETRY_MAX[cause]:
         r = run_probe(probe, {"repo": movies_repo_path()} if probe == "git_fetch" else {})
         if r.ok:  # the infra check passes already (a blip): land again now, no condition to wait on
-            line = f"RELANDING: {first} ({cause}; {r.detail}): landing again now (attempt {attempt})"
-            inbox_write("land", line, [line], list(tail)[-25:], code, cwd=worktree)
-            recover_reland(None, {"worktree": worktree, "attempt": attempt})
-            return None
+            done = recover_reland(None, {"worktree": worktree, "attempt": attempt})
+            if done.startswith("landing"):
+                line = f"RELANDING: {first} ({cause}; {r.detail}): landing again now (attempt {attempt})"
+                return inbox_write("land", line, [line], list(tail)[-25:], code, cwd=worktree)
+            first = f"{first} -- and it could not be landed again: {done}"  # said, final: never a silent drop
         c = open_condition("LAND_INFRA" if cause == "infra" else "LAND_UNKNOWN",
                            f"{first} ({cause}: lands again when {probe_words(probe, r.args)})", r,
                            [("reland", {"worktree": worktree, "attempt": attempt})],
