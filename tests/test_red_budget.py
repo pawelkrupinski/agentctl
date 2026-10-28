@@ -224,7 +224,11 @@ class EscalationTest(RedBase):
         return open(self.notes).read().splitlines() if os.path.exists(self.notes) else []
 
     def write(self, verdict, age_min):
-        eid = A.inbox_write("red", verdict, [verdict], [], 1)
+        A._OPENING[0] += 1  # an entry as open_condition writes it (or one from before the registry)
+        try:
+            eid = A.inbox_write("red", verdict, [verdict], [], 1)
+        finally:
+            A._OPENING[0] -= 1
         p = os.path.join(A.inbox_dir(), eid + ".json")
         rec = json.load(open(p))
         rec["at"] -= age_min * 60
@@ -287,7 +291,11 @@ class WaitForeverTest(RedBase):
         p = subprocess.Popen([sys.executable, TOOL, "inbox", "wait", "--forever"], stdout=subprocess.PIPE, text=True,
                              env=dict(os.environ, AGENTCTL_INBOX_POLL="0.1"))
         try:
-            A.inbox_write("red", "RED UNCLAIMED: Main #1 [x]: NOBODY -- y", [], [], 1)
+            A._OPENING[0] += 1  # as open_condition writes it
+            try:
+                A.inbox_write("red", "RED UNCLAIMED: Main #1 [x]: NOBODY -- y", [], [], 1)
+            finally:
+                A._OPENING[0] -= 1
             first = p.stdout.readline()
             A.inbox_write("land", "NOT LANDED: the checks failed", [], [], 1)
             A.inbox_write("land", "LANDED abc1234 (not a wait kind)", [], [], 0)

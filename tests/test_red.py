@@ -360,7 +360,7 @@ class PatrolTest(RedBase):
         self.assertEqual(rc, 0, out)
         self.assertEqual(len(self.inbox("BLOCKED")), 1)
         self.assertIn("fixing: BLOCKED ON OWNER `bin/deploy ci-runner --apply`", self.why()[1])
-        self.assertIn("main #20 → BLOCKED ON OWNER: bin/deploy ci-runner --apply", self.why("--summary")[1])
+        self.assertIn("main #20 → BLOCKED ON OWNER (auto-clears when Main is green)", self.why("--summary")[1])
         t = time.time()
         self.patrol(t)
         self.assertEqual(self.patrol(t + 60 * 60), [])
@@ -822,8 +822,12 @@ class LifecycleTest(RedBase):
         self.assertIn("UNKNOWN: the red patrol cannot read the gate (could not read the movies FORGEJO_API_TOKEN)", un[0]["verdict"])
         self.assertIn("Infra check: Forgejo API localhost:3000", un[0]["verdict"])
         self.assertEqual(A.fixer_records(), [])
-        self.patrol_now(dispatch=False)  # read again: the spell ends
-        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "reds", "GATE_UNREAD")))
+        self.patrol_now(dispatch=False)
+        self.assertTrue(os.path.exists(A.recovery_dir("gate-unread.json")))  # a condition on the gate_read probe
+        A.ci_state_refresh(MOVIES)  # read again: the same probe passes, the spell ends, its entry acked
+        A.recovery_tick(force=True)
+        self.assertFalse(os.path.exists(A.recovery_dir("gate-unread.json")))
+        self.assertTrue(all(e["read"] for e in A.inbox_entries() if e.get("kind") == "UNKNOWN"))
 
 
 class StatuslineTest(unittest.TestCase):

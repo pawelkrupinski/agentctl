@@ -218,11 +218,41 @@ agentctl's own trees (`<clone>-wt-check-N`, `-wt-waiting`, `-wt-batch`, the queu
 fixer, owner or author: a queued change's owner is its entry's source worktree. `ci-why --summary` is the status
 line's one line: `gate RED (main #2066 → fix 0a5767c awaiting #2070; convergence green)`.
 
+### recover: every non-green condition clears itself
+
+```
+agentctl recover [status]    # each open condition: what, its probe, last check, next check, on-recover actions
+agentctl recover tick        # probe every open condition now
+```
+
+The owner (2026-10-28): "make this self-recover", "i want a general solution", "the way it got red / blocked i want it
+to go green as well", "structural". Every non-green state -- RED UNCLAIMED / BUDGET / ESCALATE, RED BLOCKED ON OWNER,
+STALLED, UNKNOWN, NETWORK, the gate UNREAD, an infra NOT LANDED -- is a CONDITION in `~/.cache/agentctl/recovery/`,
+opened only by `open_condition(kind, text, probe, on_recover)` with the FAILED result of the check that found it
+(`run_probe`, no default). The duties thread re-runs that same probe (backoff 2^fails, at most 10 min; every condition
+at once when the network changes); when it passes, the condition's inbox entries are acked, the gate is marked dirty,
+the status line refreshes, its actions run (release a block and dispatch the red's workflow to verify it, reset the
+tunnel state, lift a batch hold, `agentctl land` again) and one `RECOVERED:` note is written. Probes: workflow_green
+(the snapshot's newest decided run), http, tcp, red_resolved (claimed, green or superseded), route, tunnel, gate_read,
+token, processor, git_fetch, laptop_load, queue_entry -- none calls `secrets`. `inbox_write` refuses a condition-kind
+entry anywhere else (a command's own verdict, `reply=True`, aside), a blocked claim cannot be written outside it, and
+`tests/test_recovery.py` lints the source for a bypass.
+
+An infra NOT LANDED (fetch / tunnel / network, a remote run unreadable or ci-runner trouble, a stall) lands again when
+its check passes (it rebases first; a conflict is a real NOT LANDED); a cause the text does not name counts as real AND
+is retried once; a test failure, conflict or refusal stays with the author.
+
+Decodo (2026-10-28): `Decodo probe` (movies, every 30 min + dispatch) CONNECTs through the proxy with the CI secrets;
+Security headers' block is `red block <n> --cmd "Check the Decodo dashboard ..." --until-green "Decodo probe"`, so it
+clears and Security headers is re-dispatched once Decodo answers.
+
 ### red: who is fixing each red build, and a fixer for one nobody fixes
 
 ```
 agentctl red claim <run> [--note "<what>"]     # an agent assigned a red runs this FIRST
-agentctl red block <run> --cmd "<command>"     # it waits on the owner: BLOCKED ON OWNER (assigned, shown loudly)
+agentctl red block <run> --cmd "<command>" [--until-green <workflow> | --until-http <url> | --until-tcp <host:port>]
+                                               # it waits on the owner: BLOCKED ON OWNER (assigned, shown loudly) until
+                                               # its probe passes (default: the red's own workflow goes green)
 agentctl red release <run> [--any]
 agentctl red list [-v]                         # claims (live / STALE / blocked), dispatched fixers, today's count
 agentctl red dispatch <run> [--force]          # a headless Claude Code fixer, by hand

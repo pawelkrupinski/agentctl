@@ -258,20 +258,16 @@ def token_from_processor(o_r):
 
 
 def token_unavailable_note(ns, why):
-    """No source had the token: ONE inbox entry per spell (the flag clears when a token is read again)."""
+    """No source had the token: ONE condition per spell (UNKNOWN in the inbox), cleared by the token probe -- the
+    processor holds one again -- with its entry acked."""
     if ns != "movies":
         return
-    flag = reds_dir("TOKEN_UNAVAILABLE")
     try:
-        if os.path.exists(flag) and time.time() - os.path.getmtime(flag) < 3600:  # at most once an hour
-            return
-        os.makedirs(reds_dir(), exist_ok=True)
-        with open(flag, "w") as f:
-            f.write(ts() + "\n")
-        inbox_write("token", f"UNKNOWN: token unavailable ({why}): run `secrets unlock {ns}` in any session; the next "
-                             "land or `waiting status` re-seeds the processor", [], [], 2)
-    except (Exception, SystemExit):
-        pass
+        open_condition("UNKNOWN", f"UNKNOWN: token unavailable ({why}): run `secrets unlock {ns}` in any session; the "
+                                  "next land or `waiting status` re-seeds the processor",
+                       run_probe("token", {"ns": ns}), [], key=f"token-{ns}", command="token", exit_code=2)
+    except (Exception, SystemExit) as e:
+        err(f"token: could not note the missing token ({str(e)[:120]})")
 
 
 def token_found(ns):
@@ -1330,6 +1326,12 @@ def ci_state_refresh(o_r, write=True):
         snap["branches"] = branch_state(o_r, scan_repo_for(o_r), prev)
     except (Exception, SystemExit) as e:
         snap["branches_error"] = str(e)[:200]
+    latest = {}  # each workflow's newest decided run on main: what workflow_green probes read
+    for name, runs in list(_outside_lists.items()) + list(_gate_lists.items()):
+        d = next((r for r in runs if r.get("status") == "completed" and not is_cancelled(r)), None)
+        if d:
+            latest[name] = {k: d.get(k) for k in ("number", "databaseId", "conclusion", "headSha", "updatedAt")}
+    snap["latest"] = latest
     if write:
         ci_state_write(snap)
     return snap
@@ -2194,7 +2196,9 @@ normalized first error line): a newer run failing the same way is the same red.
 
   agentctl red claim <run> [--note "<what>"]     you are fixing it (claimant: $AGENTCTL_AGENT_NAME, the Claude
                                                  session, else the worktree; pid: the Claude Code process)
-  agentctl red block <run> --cmd "<command>"     it waits on the owner: BLOCKED ON OWNER (counts as assigned)
+  agentctl red block <run> --cmd "<command>" [--until-green WF | --until-http URL | --until-tcp HOST:PORT]
+                                                 it waits on the owner: BLOCKED ON OWNER (counts as assigned) until
+                                                 its probe passes (default: the red's own workflow goes green)
   agentctl red release <run> [--any]             drop your claim
   agentctl red list [-v]                         claims (live / STALE / blocked), dispatched fixers, today's count
   agentctl red dispatch <run> [--force]          a headless Claude Code fixer in ~/projects/movies-wt-red-<run>
@@ -2580,7 +2584,7 @@ def find_fixers(repo, units, now_=None, o_r=None):
                 out[k]["stale"].append(f"{c.get('who')} ({(c.get('worktree') or '?').replace(HOME, '~')}): {why}")
                 continue
             put(k, c.get("worktree"), c.get("state") if c.get("state") in ("blocked", "diagnosed") else "claimed",
-                who=c.get("who"), cmd=c.get("blocked_cmd"), dispatched=bool(c.get("dispatched")),
+                who=c.get("who"), cmd=c.get("blocked_cmd"), until=c.get("until"), dispatched=bool(c.get("dispatched")),
                 awaiting=c.get("awaiting"), author=bool(c.get("author")))
             out[k]["fixers"][os.path.realpath(c["worktree"]) if c.get("worktree") else c.get("who")]["note"] = c.get("note") or ""
     if repo:
@@ -2651,7 +2655,8 @@ def fixer_text(f):
         return (f"fix landed in {f['sha'][:9]}, awaiting #{f['awaiting']}" if f.get("awaiting") else
                 f"fix landed in {f['sha'][:9]}, no run containing it yet") + f" ({f['who']})"
     if f["state"] == "blocked":
-        return f"BLOCKED ON OWNER `{f.get('cmd')}` ({f['who']}, {(f.get('worktree') or '?').replace(HOME, '~')})"
+        return (f"BLOCKED ON OWNER `{f.get('cmd')}`" + (f" (auto-clears when {f['until']})" if f.get("until") else "")
+                + f" ({f['who']}, {(f.get('worktree') or '?').replace(HOME, '~')})")
     s = f"{f['who']} ({(f.get('worktree') or '?').replace(HOME, '~')}, {f['state']})"
     return s + (f" -- {f['note']}" if f.get("note") else "")
 
@@ -2661,7 +2666,7 @@ def fixer_short(f):
     if f["state"] == "landed":
         return f"fix {f['sha'][:7]} awaiting #{f['awaiting']}" if f.get("awaiting") else f"fix {f['sha'][:7]} landed"
     if f["state"] == "blocked":
-        return f"BLOCKED ON OWNER: {f.get('cmd')}"
+        return f"BLOCKED ON OWNER (auto-clears when {f['until']})" if f.get("until") else f"BLOCKED ON OWNER: {f.get('cmd')}"
     who = f["who"].replace("movies-wt-", "")
     if f["state"] == "diagnosed":
         return f"{who} diagnosed, awaiting {f.get('awaiting') or '?'}"
@@ -3044,8 +3049,17 @@ def note_unclaimed(g, reason, mins=None):
     line = (f"RED UNCLAIMED: {u['workflow']} #{u['run'].get('number')} [{jobs}]: NOBODY -- {reason}"
             + (f" (on {u['predicts']}: PREDICTS MAIN RED)" if u.get("predicts") else "")
             + f" -- `~/bin/agentctl red claim {u['run'].get('number')}`, or assign an agent")
-    inbox_write("red", line, [line], [x.get("line") or "" for x in g][:INBOX_TAIL], 1)
+    red_condition("RED_UNCLAIMED", line, u, [x.get("line") or "" for x in g][:INBOX_TAIL])
     return line
+
+
+def red_condition(kind, line, u, tail=()):
+    """A red nobody fixes (RED UNCLAIMED / BUDGET / ESCALATE): a condition on red_resolved -- it clears, its entry
+    acked, once the red is claimed, green or superseded."""
+    n = str(u["run"].get("number") if isinstance(u.get("run"), dict) else u.get("run"))
+    args = {"run": n, "workflow": u["workflow"], "since": time.time(), **({"person": True} if kind == "RED_ESCALATE" else {})}
+    return open_condition(kind, line, run_probe("red_resolved", args),
+                          [], key=f"red-{kind}-{n}", command="red", tail=tail)
 
 
 def state_line(st):
@@ -3363,7 +3377,7 @@ def assign_gate_red(o_r, repo, g, t):
             line = (f"RED UNCLAIMED: {u['workflow']} #{u['run'].get('number')} [{jobs}]: NOBODY -- {reason}"
                     + (f" (on {u['predicts']}: PREDICTS MAIN RED)" if u.get("predicts") else "")
                     + f" -- `~/bin/agentctl red claim {u['run'].get('number')}`, or assign an agent")
-            inbox_write("red", line, [line], [x.get("line") or "" for x in g][:INBOX_TAIL], 1)
+            red_condition("RED_UNCLAIMED", line, u, [x.get("line") or "" for x in g][:INBOX_TAIL])
             acts.insert(0, line)
             for sig, r in recs.items():
                 r["noted"] = True
@@ -3401,7 +3415,7 @@ def maybe_dispatch(o_r, repo, u, rec, t, why, group=None, diagnosis=None):
                 write_json(sig_path(u["sig"]), rec)
             line = (f"RED ESCALATE: {u['workflow']} #{u['run'].get('number')} [{u['job']}] still red after "
                     f"{len(fresh_dispatches(rec))} dispatched fixers; not dispatched again -- a person must take it")
-            inbox_write("red", line, [line], [u.get("line") or ""], 1)
+            red_condition("RED_ESCALATE", line, u, [u.get("line") or ""])
             _skip_reason[u["sig"]] = f"escalated after {len(fresh_dispatches(rec))} fixers: a person must take it"
             return line
         _skip_reason[u["sig"]] = f"escalated after {len(fresh_dispatches(rec))} fixers: a person must take it"
@@ -3423,7 +3437,7 @@ def maybe_dispatch(o_r, repo, u, rec, t, why, group=None, diagnosis=None):
                 msg = (f"RED BUDGET: daily dispatch budget {daily} spent (refunds excluded); {u['workflow']} "
                        f"#{u['run'].get('number')} [{u['job']}] (outside the gate) not dispatched -- "
                        f"`~/bin/agentctl red dispatch {u['run'].get('number')}`, or raise $AGENTCTL_RED_DAILY_CAP")
-                inbox_write("red", msg, [msg], [u.get("line") or ""], 1)
+                red_condition("RED_BUDGET", msg, u, [u.get("line") or ""])
             return line
         return dispatch_log(u, f"SKIPPED ({block})")
     with claim_lock():
@@ -3779,7 +3793,7 @@ def keep_diagnosed_claim(repo, rec, c, cpath, verdict):
     if again:
         line = (f"RED ESCALATE: {rec['workflow']} #{rec['run']} [{rec['job']}] diagnosed twice, not fixed: "
                 f"{summary[:200]} -- a person must take it")
-        inbox_write("red", line, [line], [], 1)
+        red_condition("RED_ESCALATE", line, {"run": rec["run"], "workflow": rec["workflow"]})
         return line
     try:
         o_r = slug(repo)
@@ -4147,21 +4161,15 @@ def infra_check(o_r):
 
 
 def gate_unread_spell(o_r, why):
-    """The patrol could not read the gate: no dispatch, ONE `UNKNOWN:` inbox entry per spell, with an infra check."""
-    flag = reds_dir("GATE_UNREAD")
-    if why is None:
-        if os.path.exists(flag):
-            os.unlink(flag)
+    """The patrol could not read the gate: no dispatch, ONE `UNKNOWN:` condition per spell, with an infra check; the
+    gate_read probe (a snapshot written after it opened) clears it."""
+    if why is None or os.path.exists(recovery_dir("gate-unread.json")):
         return None
-    if os.path.exists(flag):
-        return None
-    os.makedirs(reds_dir(), exist_ok=True)
-    with open(flag, "w") as f:
-        f.write(ts() + "\n")
     line = (f"UNKNOWN: the red patrol cannot read the gate ({why[:200]}): nothing dispatched, pushes fail closed. "
             f"Infra check: {infra_check(o_r)}")
-    inbox_write("red", line, [line], [], 2)
-    return line
+    c = open_condition("UNKNOWN", line, run_probe("gate_read", {"repo": o_r, "since": time.time()}), [],
+                       key="gate-unread", command="red", exit_code=2)
+    return line if c else None
 
 
 def resolve_run(o_r, n):
@@ -4206,7 +4214,9 @@ def red_run_units(o_r, n):
     return name, r, []
 
 
-def red_claim(o_r, n, note="", state="claimed", cmd=None):
+def red_claim(o_r, n, note="", state="claimed", cmd=None, until=None):
+    if state == "blocked" and not _OPENING[0]:
+        raise ConditionBypass("a blocked claim is written by open_condition only (`red block`): it needs its recovery probe")
     here = safe_cwd()
     wt = worktree_of(here) or here
     who = claimant(here)
@@ -4222,7 +4232,8 @@ def red_claim(o_r, n, note="", state="claimed", cmd=None):
          "pid": pid, "process_start": process_start(pid), "started": old.get("started") or ts(), "beat": ts(),
          "note": note or old.get("note", ""), "run": str(r.get("number")) if r else str(n).lstrip("#"),
          "run_id": r.get("databaseId") if r else None, "runs": names, "sigs": sigs, "workflow": name,
-         "jobs": sorted({u["job"] for u in units}), "state": state, "blocked_cmd": cmd if state == "blocked" else None}
+         "jobs": sorted({u["job"] for u in units}), "state": state, "blocked_cmd": cmd if state == "blocked" else None,
+         "until": until if state == "blocked" else None}
     if os.environ.get("AGENTCTL_RED_FIXER"):
         c["dispatched"] = True
     with claim_lock():
@@ -4232,17 +4243,13 @@ def red_claim(o_r, n, note="", state="claimed", cmd=None):
 
 def cmd_red(a):
     o_r = slug(a.repo) if getattr(a, "repo", None) and a.rcmd != "fixer" else default_repo()
-    if a.rcmd == "claim" or a.rcmd == "block":
-        state = "blocked" if a.rcmd == "block" else "claimed"
-        c, path = red_claim(o_r, a.run, a.note or "", state, getattr(a, "owner_cmd", None))
+    if a.rcmd == "block":
+        return red_block(o_r, a)
+    if a.rcmd == "claim":
+        c, path = red_claim(o_r, a.run, a.note or "")
         what = f"{c.get('workflow') or 'run'} #{c['run']}" + (f" [{', '.join(c['jobs'])}]" if c.get("jobs") else "")
-        if state == "blocked":
-            line = f"RED BLOCKED ON OWNER: {what}: `{a.owner_cmd}` ({c['who']}, {c['worktree'].replace(HOME, '~')})"
-            inbox_write("red", line, [line], [], 1)
-            print(line)
-        else:
-            print(f"claimed {what} for {c['who']} ({c['worktree'].replace(HOME, '~')}, pid {c['pid']})"
-                  + (f": {c['note']}" if c.get("note") else "") + f"; release: ~/bin/agentctl red release {c['run']}")
+        print(f"claimed {what} for {c['who']} ({c['worktree'].replace(HOME, '~')}, pid {c['pid']})"
+              + (f": {c['note']}" if c.get("note") else "") + f"; release: ~/bin/agentctl red release {c['run']}")
         return 0
     if a.rcmd == "release":
         n = str(a.run).lstrip("#")
@@ -4255,6 +4262,9 @@ def cmd_red(a):
         for c in mine:
             os.unlink(c["path"])
             print(f"released {c.get('workflow') or 'run'} #{c.get('run')} ({c.get('who')})")
+            for cond in open_conditions():  # its block's condition goes with it (nothing left to release or verify)
+                if any(x.get("path") == c["path"] for _n, x in cond.get("on_recover") or []):
+                    os.unlink(cond["path"])
         return 0
     if a.rcmd == "list":
         return red_list(a)
@@ -4270,6 +4280,8 @@ def cmd_red(a):
         return 0
     if a.rcmd == "fixer":
         return red_fixer(a)
+    if a.rcmd == "verify":
+        return red_verify(o_r, str(a.run).lstrip("#"))
     repo = scan_repo_for(o_r, getattr(a, "repo", None) and os.path.abspath(a.repo))
     if a.rcmd == "dispatch":
         b = dispatch_blocker()
@@ -4309,6 +4321,60 @@ def cmd_red(a):
             print(f"  {line}")
         return 0
     return 2
+
+
+def red_block(o_r, a):
+    """`red block`: the red waits on the owner, as a CONDITION whose probe is the check that keeps it red -- named
+    (--until-green <workflow>, --until-http <url>, --until-tcp <host:port>) or, by default, the red's own workflow
+    going green. When the probe passes the block is released and (unless the probe was that very workflow) the red's
+    workflow is dispatched on main to verify it."""
+    n = str(a.run).lstrip("#")
+    name, _r = resolve_run(o_r, n)
+    if a.until_green:
+        probe = run_probe("workflow_green", {"repo": o_r, "workflow": a.until_green})
+    elif a.until_http:
+        probe = run_probe("http", {"url": a.until_http})
+    elif a.until_tcp:
+        host, _, port = a.until_tcp.rpartition(":")
+        probe = run_probe("tcp", {"host": host, "port": int(port)})
+    elif name:
+        probe = run_probe("workflow_green", {"repo": o_r, "workflow": name})
+    else:
+        print(f"NOT BLOCKED: #{n}'s workflow is unknown, so no probe can clear the block; name one: --until-green "
+              "<workflow> | --until-http <url> | --until-tcp <host:port>")
+        return 2
+    words = probe_words(probe.kind, probe.args)
+    if probe.ok:
+        print(f"NOT BLOCKED: {words} already ({probe.detail}): nothing waits on the owner -- `red claim {n}` and fix it")
+        return 1
+    held = {}
+
+    def effect():
+        held["c"], path = red_claim(o_r, n, a.note or "", "blocked", a.owner_cmd, until=words)
+        return {"path": path}
+
+    def text(_extra):
+        c = held["c"]
+        what = f"{c.get('workflow') or 'run'} #{c['run']}" + (f" [{', '.join(c['jobs'])}]" if c.get("jobs") else "")
+        return (f"RED BLOCKED ON OWNER: {what}: `{a.owner_cmd}` ({c['who']}, {c['worktree'].replace(HOME, '~')}) -- "
+                f"auto-clears when {words}")
+    rec = [("release_block", {"run": n, "workflow": name})]
+    if not (probe.kind == "workflow_green" and probe.args.get("workflow") == name):
+        rec.append(("verify", {"run": n, "workflow": name, "repo": o_r}))
+    cond = open_condition("BLOCKED", text, probe, rec, key=re.sub(r"[^\w.-]+", "_", f"block-{name}-{n}"), command="red", effect=effect)
+    print(cond["text"] + f" ({probe.detail}; `agentctl recover status`)")
+    return 0
+
+
+def red_verify(o_r, n):
+    """`red verify <run>`: the outside-gate verification dispatch for run n now (a recovered block's follow-up)."""
+    repo = repo_for_verify(o_r)
+    sha = git(repo, "rev-parse", f"{REMOTE}/main", check=False).stdout.strip() if repo else ""
+    line = verify_outside_gate(o_r, repo, sha, n) if sha else None
+    line = line or f"FIX UNVERIFIED: #{n} is not a run outside the gate that can be dispatched"
+    print(line)
+    inbox_write("watch", line, [line], [], 1 if line.startswith("FIX FAILED") else 0)
+    return 0
 
 
 def red_list(a):
@@ -6802,7 +6868,10 @@ def queue_verdict(d, e, status, verdict, tail=(), code=1, **fields):
     e.update(status=status, decided=ts(), why=verdict, **fields)
     save_entry(d, e)
     wlog(d, f"{e['id']}: {verdict.splitlines()[0]}")
-    inbox_write("land", verdict.splitlines()[0], [verdict.splitlines()[0]], list(tail)[-25:], code, cwd=e["worktree"])
+    if status == "rejected" and verdict.startswith("NOT LANDED"):  # infra: a condition that lands it again
+        land_not_landed(verdict, e["worktree"], tail, code)
+    else:
+        inbox_write("land", verdict.splitlines()[0], [verdict.splitlines()[0]], list(tail)[-25:], code, cwd=e["worktree"])
 
 
 def rebase_in_tree(d, tree, e, base):
@@ -7273,8 +7342,9 @@ def reconcile_checking(repo, d, now_=None):
             line = (f"STALLED: queue entry {e['id']} checking for {mins} min (over 2x the expected "
                     f"{int(expected // 60)} min): {why}")
             wlog(d, line)
-            inbox_write("land", line, [line], [f"remote: {json.dumps(rem)[:400]}" if rem else "remote: none",
-                                              f"checker alive: {alive}"], 1, cwd=e.get("worktree"))
+            open_condition("STALLED", line, run_probe("queue_entry", {"repo": repo, "eid": e["id"], "round": since}), [],
+                           key=f"queue-{e['id']}", command="land", cwd=e.get("worktree"),
+                           tail=[f"remote: {json.dumps(rem)[:400]}" if rem else "remote: none", f"checker alive: {alive}"])
             out.append(("escalated", e["id"]))
         tmp = f"{mpath}.{os.getpid()}.tmp"
         with open(tmp, "w") as f:
@@ -7674,18 +7744,14 @@ def bisect(repo, d, batch, base):
 
 def unread_note(d, reds, entries):
     """The gate unread while changes wait: once per unread spell, an UNKNOWN inbox entry (they would wait unseen)."""
-    flag = os.path.join(d, "GATE_UNREAD")
-    if GATE_UNREAD not in reds:
-        if os.path.exists(flag):
-            os.unlink(flag)
+    if GATE_UNREAD not in reds or os.path.exists(recovery_dir("gate-unread-waiting.json")):
         return
-    if os.path.exists(flag):
-        return
-    open(flag, "w").write(ts() + "\n")
     wlog(d, f"the gate is unread ({gate_unread_why[0]}): taken as red")
-    inbox_write("waiting", f"UNKNOWN: the waiting processor cannot read the gate ({gate_unread_why[0]}); {len(entries)} "
-                           "change(s) wait, taken as red. Hand it the token: `~/bin/agentctl waiting status` from a session "
-                           "with the vault unlocked", [], [], 2, cwd=entries[0].get("worktree") if entries else None)
+    open_condition("UNKNOWN", f"UNKNOWN: the waiting processor cannot read the gate ({gate_unread_why[0]}); {len(entries)} "
+                              "change(s) wait, taken as red. Hand it the token: `~/bin/agentctl waiting status` from a "
+                              "session with the vault unlocked",
+                   run_probe("gate_read", {"since": time.time()}), [], key="gate-unread-waiting", command="waiting",
+                   exit_code=2, cwd=entries[0].get("worktree") if entries else None)
 
 
 def waiting_round(repo, d, wt):
@@ -7716,7 +7782,7 @@ def waiting_round(repo, d, wt):
         base = git(repo, "rev-parse", f"{REMOTE}/main").strip()
         kept = rebuild(repo, d, wt, batch_order(repo, entries, reds), base)
     for e in [e for e in entries if e not in kept and e.get("status") == "rejected"]:  # LANDED / SUPERSEDED: said
-        inbox_write("land", f"NOT LANDED: {e.get('why', 'rejected').splitlines()[0]}", [], [], 1, cwd=e["worktree"])
+        land_not_landed(f"NOT LANDED: {e.get('why', 'rejected').splitlines()[0]}", e["worktree"])
     if not kept:
         return "rejected"
     if reds:
@@ -7734,9 +7800,11 @@ def waiting_round(repo, d, wt):
     if stalled:
         until = time.time() + float(os.environ.get("AGENTCTL_BATCH_HOLD", BATCH_HOLD))
         save_batch_state(d, {"held_until": until, "why": f"the check of {tip[:10]} stalled twice, on fresh sbt servers"})
-        inbox_write("waiting", f"HELD: the batch check of {tip[:10]} ({len(batch)} change(s)) stalled twice on a fresh "
-                               f"sbt server; the changes stay on `{WAITING_BRANCH}`, checked again after "
-                               f"{int((until - time.time()) // 60)} min", [], (out or "").splitlines()[-15:], 1, cwd=repo)
+        open_condition("STALLED", f"HELD: the batch check of {tip[:10]} ({len(batch)} change(s)) stalled twice on a fresh "
+                                  f"sbt server; the changes stay on `{WAITING_BRANCH}`, checked again after "
+                                  f"{int((until - time.time()) // 60)} min",
+                       run_probe("batch_hold", {"d": d}), [], key=f"batch-held-{int(until)}", command="waiting",
+                       cwd=repo, tail=(out or "").splitlines()[-15:])
         wlog(d, f"HELD: the check of {tip[:10]} stalled twice")
         return "held"
     if ok:
@@ -7787,8 +7855,9 @@ def start_watchdog(argv):
                 continue
             err(f"STALLED: {what} made no cycle in {int(stalled)} s; stacks follow, then re-exec")
             faulthandler.dump_traceback(all_threads=True)
-            inbox_write("waiting", f"STALLED: the waiting processor's {what} made no cycle in {int(stalled)} s; stacks in "
-                                   "its service.log; re-exec'd", [], [], 2)
+            open_condition("STALLED", f"STALLED: the waiting processor's {what} made no cycle in {int(stalled)} s; stacks in "
+                                      "its service.log; re-exec'd", run_probe("processor", {"since": time.time()}), [],
+                           key="processor-stalled", command="waiting", exit_code=2)
             sys.stdout.flush()
             sys.stderr.flush()
             os.execv(sys.executable, [sys.executable, TOOL_PATH] + list(argv))
@@ -7814,6 +7883,7 @@ def start_duties(repo):
                                ("tunnel probe", tunnel_watch),  # 2 timeouts/refusals in a row -> kickstart the tunnel
                                ("gate summary", lambda: maybe_publish_gate(repo)),  # ~/.cache/agentctl/gate-summary.txt
                                ("red patrol", lambda: maybe_patrol(repo)),  # who fixes each red; dispatch a fixer
+                               ("recovery", maybe_recovery_tick),  # each open condition's own probe; a pass clears it
                                ("inbox escalation", maybe_escalate_inbox)):  # unacked past 10 min: notified
                 try:
                     step()
@@ -7853,6 +7923,7 @@ def waiting_run(repo, once=False, service=False):
         delays = backoff(float(os.environ.get("AGENTCTL_WAITING_POLL", WAITING_POLL)), 300)
         while True:
             HEARTBEAT[0] = time.monotonic()
+            LOOP_CYCLED[0] = True
             restart_if_changed([own], ["waiting", "run", "--repo", repo] + (["--once"] if once else [])
                                + (["--service"] if service else []))
             try:  # every checking entry re-derived from its checker's lock and its run on Forgejo (never a waiter's memory)
@@ -8379,15 +8450,15 @@ def network_watch(route=None, kick=None):
         return ""
     if r is None:
         err(f"the network went away (was {prev[0]} via {prev[1]})")
+        open_condition("NETWORK", f"NETWORK: offline (no default route; was {prev[0]} via {prev[1]})", run_probe("route"),
+                       [("tunnel_reset", {})], key="network-offline", inbox=False)  # the kick: below, on the way back
         return "offline"
     err(f"the network {'is back' if prev is None else 'changed'} ({prev[0] if prev else '-'} via {prev[1] if prev else '-'} -> "
         f"{r[0]} via {r[1]}): "
         f"kickstarting {TUNNEL_LABEL}, the gate is read at once")
     (kick or launchctl_kick)()
-    st = read_json_file(tunnel_state_path())
-    if st.get("network") or st.get("fails"):
-        st.update(fails=0, network=False, pending_since=None, escalated=False)
-        write_json_file(tunnel_state_path(), st)
+    recover_tunnel_reset(None, {})
+    recovery_recheck_all()  # a new route: every open condition is probed again now, its backoff reset
     mark_gate_dirty()
     return "changed"
 
@@ -8397,7 +8468,8 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
     ''. A tunnel that fails while the laptop's own uplink loses packets is the network's fault: no kickstart (it only
     churns the tunnel), no STALLED escalation, one NETWORK note per outage."""
     t = now_ if now_ is not None else time.time()
-    r = (probe or tunnel_probe)()
+    res = run_probe("tunnel") if probe is None else None  # the registry's probe: the one that will clear what it opens
+    r = (res.detail.rsplit(" ", 1)[-1] if res else probe())
     st = read_json_file(tunnel_state_path())
     if r == "ok":
         did = "restored" if st.get("pending_since") or st.get("network") else "ok"
@@ -8415,7 +8487,8 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
             msg = (f"NETWORK: the laptop's uplink loses {int(loss * 100)}% of packets to 1.1.1.1, so Forgejo (localhost:3000) "
                    f"{r}s; not a tunnel fault, nothing to restart -- the gate reads come back with the network")
             err(msg)
-            inbox_write("tunnel", msg, [msg], [], 1)
+            open_condition("NETWORK", msg, res or run_probe("tunnel"), [("tunnel_reset", {})], key="tunnel",
+                           command="tunnel")
         st.update(network=True, pending_since=None, escalated=False)  # the kick/escalation clock starts on a good uplink
         write_json_file(tunnel_state_path(), st)
         return "network"
@@ -8429,7 +8502,8 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
     if st.get("pending_since") and t - st["pending_since"] >= TUNNEL_RESTORE_WAIT and not st.get("escalated"):
         msg = (f"STALLED: the Forgejo tunnel (localhost:3000) still {r} {int((t - st['pending_since']) // 60)} min after a "
                f"kickstart; run `launchctl kickstart -k gui/$(id -u)/{TUNNEL_LABEL}` and check ~/Library/Logs/forgejo-tunnel.log")
-        inbox_write("tunnel", msg, [msg], [], 2)
+        open_condition("STALLED", msg, res or run_probe("tunnel"), [("tunnel_reset", {})], key="tunnel-stalled",
+                       command="tunnel", exit_code=2)
         st["escalated"] = True
         did = "escalated"
     write_json_file(tunnel_state_path(), st)
@@ -9655,7 +9729,8 @@ def safe_cwd():
         return os.environ.get("PWD") or "(removed)"
 
 
-INBOX_KINDS = [("BRANCH_RED", r"BRANCH RED"), ("RED_UNCLAIMED", r"RED UNCLAIMED"), ("RED_BUDGET", r"RED BUDGET"), ("RED_AUTHOR", r"RED AUTHOR"), ("RED_ESCALATE", r"RED ESCALATE"), ("BLOCKED", r"RED BLOCKED ON OWNER"),
+INBOX_KINDS = [("RECOVERED", r"RECOVERED:"), ("RELANDING", r"RELANDING:"), ("NETWORK", r"NETWORK:"),  # first: they quote others
+               ("BRANCH_RED", r"BRANCH RED"), ("RED_UNCLAIMED", r"RED UNCLAIMED"), ("RED_BUDGET", r"RED BUDGET"), ("RED_AUTHOR", r"RED AUTHOR"), ("RED_ESCALATE", r"RED ESCALATE"), ("BLOCKED", r"RED BLOCKED ON OWNER"),
                ("RED_DISPATCHED", r"RED DISPATCHED"), ("RED_REVERT", r"RED REVERT"), ("RED_FLAKE", r"RED FLAKE"), ("FIXER_LANDED", r"RED FIXER [^:]*: LANDED "),
                ("FIXER_FAILED", r"RED FIXER "), ("RED_CLEARED", r"RED CLEARED"), ("FIX_FAILED", r"FIX FAILED"), ("FIX_OK", r"FIX OK"), ("FIX_UNVERIFIED", r"FIX UNVERIFIED"),
                ("RED", r"WATCH RED"), ("OK", r"WATCH OK"), ("STALLED", r"WATCH STALLED|STALLED:|.*\bstalled\b"),
@@ -9677,8 +9752,12 @@ def inbox_kind(verdict, final=True):
     return "OTHER"
 
 
-def inbox_write(command, verdict, verdicts, tail, exit_code, final=True, cwd=None):
-    """One inbox entry, written atomically; returns its id (None when the inbox cannot be written: never fatal)."""
+def inbox_write(command, verdict, verdicts, tail, exit_code, final=True, cwd=None, reply=False):
+    """One inbox entry, written atomically; returns its id (None when the inbox cannot be written: never fatal).
+    A CONDITION_KINDS entry only from open_condition (ConditionBypass otherwise: it would have no probe to clear it);
+    reply=True: a command's own verdict to the agent that ran it (with_inbox), not a standing condition."""
+    if final and not reply and not _OPENING[0] and inbox_kind(verdict, final) in CONDITION_KINDS:
+        raise ConditionBypass(f"a {inbox_kind(verdict, final)} inbox entry outside open_condition: {str(verdict)[:160]}")
     now = dt.datetime.now(dt.timezone.utc)
     eid = (f"{now.strftime('%Y%m%dT%H%M%S%f')}-{os.getpid()}-{re.sub(r'[^a-z]+', '-', command)}"
            + ("" if final else "-waiting"))
@@ -9748,7 +9827,7 @@ def with_inbox(command, handler, a):
             verdict = last or last_err or "exit 0 with no output"
         if not (crash is None and code == 0 and waiting_line and verdict == waiting_line[-1]):  # land ended AT WAITING:
             inbox_write(command, verdict, tee.verdicts, tee.tail, code if crash is None else (code or 1),  # written once
-                        cwd=getattr(a, "inbox_cwd", None))
+                        cwd=getattr(a, "inbox_cwd", None), reply=True)
 
 
 def inbox_entries():
@@ -9826,6 +9905,471 @@ def inbox_wait(kinds, since_ack=False, timeout=0, verbose=False, forever=False):
         time.sleep(poll)
 
 
+# ---------------------------------------------------------------- recovery: every non-green condition clears itself
+# The owner (2026-10-28): "make this self-recover", "i want a general solution. recovery mechanism", "the way it got
+# red / blocked i want it to go green as well", "structural". ONE registry, one JSON per open CONDITION in
+# recovery_dir(). Every non-green state the status line or the inbox shows -- an escalation-kind inbox entry
+# (CONDITION_KINDS: RED UNCLAIMED / BUDGET / ESCALATE, RED BLOCKED ON OWNER, STALLED, UNKNOWN, NETWORK), an owner block
+# (`red block`), the gate UNREAD, an infra NOT LANDED -- is opened by open_condition(kind, text, probe, on_recover) and
+# ONLY there: inbox_write refuses those kinds anywhere else (ConditionBypass), a blocked claim cannot be written outside
+# it, and test_recovery's lint fails on a bypass in the source.
+# THE RULE: the probe is the check that found the problem -- a FAILED ProbeResult, which only run_probe makes -- so the
+# check that turned it red is the check that turns it green. The duties thread re-runs each open condition's probe
+# (recovery_tick; per-condition backoff; never `secrets`). When it passes the condition closes itself: its inbox entries
+# are acked, the gate is marked dirty, the status line refreshes, its on_recover actions run (release a block and
+# dispatch the red's workflow to verify it, kick the tunnel, land a change again), and one RECOVERED note is written.
+# Nobody acks a solved problem. `agentctl recover status` lists the open conditions.
+CONDITION_KINDS = ("RED_UNCLAIMED", "RED_BUDGET", "RED_ESCALATE", "BLOCKED", "STALLED", "UNKNOWN", "NETWORK")
+RECOVER_BACKOFF_MAX = 600  # a probe is re-run at most this far apart, however often it failed ($AGENTCTL_RECOVER_MAX)
+_OPENING = [0]  # > 0 inside open_condition: the one place a condition-kind inbox entry or a block may be written
+
+
+class ConditionBypass(RuntimeError):
+    """A non-green condition written without open_condition (and so without a probe that can clear it): a bug."""
+
+
+class ProbeResult:
+    """What one probe said: ok True (passes), False (fails) or None (cannot tell: stays open). Made by run_probe only."""
+    __slots__ = ("kind", "args", "ok", "detail", "at")
+
+    def __init__(self, kind, args, ok, detail, _made_by_run_probe=None):
+        if _made_by_run_probe is not _RUN_PROBE_TOKEN:
+            raise ConditionBypass("a ProbeResult is made by run_probe only: the check that opens is the check that closes")
+        self.kind, self.args, self.ok, self.detail, self.at = kind, dict(args), ok, str(detail)[:300], time.time()
+
+
+_RUN_PROBE_TOKEN = object()
+
+
+def recovery_dir(*parts):
+    d = os.environ.get("AGENTCTL_RECOVERY_DIR") or (reds_dir("recovery") if os.environ.get("AGENTCTL_REDS_DIR")
+                                                   else os.path.join(HOME, ".cache", "agentctl", "recovery"))
+    return os.path.join(d, *parts)
+
+
+# -- the probes: (ok, detail) for their args. Background-safe: no `secrets`, bounded, never raising (run_probe catches).
+def probe_workflow_green(a):
+    """The newest decided run of workflow a['workflow'] on main is green (the CI-state snapshot's `latest`)."""
+    snap = ci_state_load(a.get("repo") or SHORT["movies"])
+    if not snap:
+        return None, "no fresh CI-state snapshot"
+    last = (snap.get("latest") or {}).get(a["workflow"])
+    if not last:
+        return None, f"no decided run of {a['workflow']} on main in the snapshot"
+    ok = last.get("conclusion") == "success"
+    return ok, f"{a['workflow']} #{last.get('number')} {last.get('conclusion')}"
+
+
+def probe_http(a):
+    lo, hi = a.get("expect") or (200, 499)
+    try:
+        req = urllib.request.Request(a["url"], method=a.get("method") or "GET")
+        with urllib.request.urlopen(req, timeout=float(a.get("timeout") or 10)) as r:
+            code = r.status
+    except urllib.error.HTTPError as e:
+        code = e.code
+    except Exception as e:
+        return False, f"{a['url']}: {str(e)[:120]}"
+    return lo <= code <= hi, f"{a['url']}: HTTP {code}"
+
+
+def probe_tcp(a):
+    import socket
+    try:
+        with socket.create_connection((a["host"], int(a["port"])), timeout=float(a.get("timeout") or 5)):
+            return True, f"{a['host']}:{a['port']} accepts"
+    except OSError as e:
+        return False, f"{a['host']}:{a['port']}: {e}"
+
+
+def probe_red_resolved(a):
+    """Red run a['run'] is claimed by someone, or its workflow decided on a later run (green, or superseded)."""
+    n = str(a["run"]).lstrip("#")
+    held = ("claimed", "blocked", "committed") if a.get("person") else ("claimed", "blocked", "committed", "diagnosed")
+    for c in all_claims():  # person: an escalation clears for a claim by an agent or a person, not a dispatched fixer
+        if c.get("state", "claimed") in held and not (a.get("person") and c.get("dispatched")) and \
+                n in {str(c.get("run")), str(c.get("run_id"))} | set(map(str, c.get("runs") or [])):
+            return True, f"#{n} is claimed by {c.get('who')}"
+    if a.get("workflow") == LOCAL_FLOW or n == "local":
+        return (False, "main's local checks are red") if local_red().get("checks") else (True, "main's local checks pass")
+    snap = ci_state_load(SHORT["movies"])
+    if not snap:
+        return None, "no fresh CI-state snapshot"
+    for u in (snap.get("gate") or []) + (snap.get("outside") or []):
+        d = u.get("decided") or {}
+        if str(d.get("number")) == n:
+            return d.get("conclusion") not in RED_CONCLUSIONS, f"#{n} is {d.get('conclusion')}"
+        if a.get("workflow") and u.get("name") == a["workflow"]:
+            if n.isdigit() and int(d.get("number") or 0) < int(n):
+                return None, f"the snapshot predates #{n}"
+            return True, f"{a['workflow']} decided on #{d.get('number')} since"
+    if float(snap.get("at") or 0) < float(a.get("since") or 0):
+        return None, "the snapshot predates the condition"
+    return True, f"#{n} is no longer the red its workflow decided on (green, or superseded)"
+
+
+def probe_route(_a):
+    r = default_route()
+    return (True, f"default route {r[0]} via {r[1]}") if r else (False, "no default route (offline)")
+
+
+def probe_tunnel(_a):
+    r = tunnel_probe()
+    return r == "ok", f"Forgejo (localhost:3000) {r}"
+
+
+def probe_gate_read(a):
+    """The gate was read (a CI-state snapshot written) after the condition opened."""
+    snap = ci_state_load(a.get("repo") or SHORT["movies"])
+    at = float((snap or {}).get("at") or 0)
+    return at > float(a.get("since") or 0), (f"gate read at {iso_at(at)}" if at else "no fresh CI-state snapshot")
+
+
+def probe_token(a):
+    """A token without `secrets`: the environment, this processor's own, or the processor's socket."""
+    ns = a.get("ns") or "movies"
+    if os.environ.get("GH_TOKEN") or (ns == "movies" and os.environ.get("FORGEJO_API_TOKEN")) or _tokens.get(ns):
+        return True, f"{ns} token present"
+    tok = token_from_processor(SHORT["movies"]) if ns == "movies" else None
+    return bool(tok), f"{ns} token " + ("held by the processor" if tok else "unavailable")
+
+
+PROCESS_T0 = time.time()
+LOOP_CYCLED = [False]  # the processor's loop made a full cycle in this process
+
+
+def probe_processor(a):
+    """A processor started after the stall (the watchdog re-execs) whose loop and duties both cycle."""
+    fresh = PROCESS_T0 > float(a.get("since") or 0)
+    duty_age = time.monotonic() - DUTY_BEAT[0]
+    ok = fresh and LOOP_CYCLED[0] and duty_age < env_num("AGENTCTL_STALL_SECS", STALL_SECS)
+    return ok, f"process from {iso_at(PROCESS_T0)}, loop cycled: {LOOP_CYCLED[0]}, duties {int(duty_age)} s ago"
+
+
+def probe_git_fetch(a):
+    """The remote's main can be read over git (what a land's `git fetch` needs)."""
+    repo = a.get("repo") or movies_repo_path()
+    try:
+        r = subprocess.run(["git", "-C", repo, "ls-remote", "--heads", REMOTE, "main"], capture_output=True, text=True,
+                           timeout=60, stdin=subprocess.DEVNULL, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, f"git ls-remote {REMOTE}: {str(e)[:120]}"
+    return r.returncode == 0 and "refs/heads/main" in r.stdout, f"git ls-remote {REMOTE} main: exit {r.returncode} " \
+        + (r.stderr.strip()[-120:] if r.returncode else "ok")
+
+
+def probe_laptop_load(_a):
+    p = gov_pressure()
+    return p is None, p or "the laptop is not under pressure"
+
+
+def probe_queue_entry(a):
+    """Queue entry a['eid'] is no longer checking in the round that stalled (decided, re-queued or a new round)."""
+    d, _c, _w = waiting_state(a.get("repo") or movies_repo_path())
+    e = read_record(os.path.join(d, "entries", f"{a['eid']}.json")) or {}
+    moving = e.get("status") != "checking" or (e.get("round_since") or e.get("since")) != a.get("round")
+    return moving, f"entry {a['eid']}: {e.get('status') or 'gone'}"
+
+
+def probe_batch_hold(a):
+    """The `waiting` batch is no longer held (its hold ran out, or a later round cleared it)."""
+    until = float(batch_state(a["d"]).get("held_until") or 0)
+    return until <= time.time(), (f"held until {iso_at(until)}" if until > time.time() else "not held")
+
+
+PROBES = {"batch_hold": probe_batch_hold, "workflow_green": probe_workflow_green, "http": probe_http, "tcp": probe_tcp, "red_resolved": probe_red_resolved,
+          "route": probe_route, "tunnel": probe_tunnel, "gate_read": probe_gate_read, "token": probe_token,
+          "processor": probe_processor, "git_fetch": probe_git_fetch, "laptop_load": probe_laptop_load,
+          "queue_entry": probe_queue_entry}
+PROBE_EVERY = {"batch_hold": 60, "route": 5, "tunnel": 10, "gate_read": 15, "processor": 30, "queue_entry": 60, "red_resolved": 60,
+               "workflow_green": 60, "token": 60, "laptop_load": 60, "tcp": 60, "http": 120, "git_fetch": 120}
+
+
+def probe_words(kind, a):
+    """A probe in a person's words: the status line's `auto-clears when <this>`."""
+    return {"workflow_green": lambda: f"{a.get('workflow')} is green", "http": lambda: f"{a.get('url')} answers",
+            "tcp": lambda: f"{a.get('host')}:{a.get('port')} accepts", "red_resolved": lambda: f"#{a.get('run')} is claimed, green or superseded",
+            "route": lambda: "the network is back", "tunnel": lambda: "the Forgejo tunnel answers",
+            "gate_read": lambda: "the gate is read", "token": lambda: "the processor holds a token",
+            "processor": lambda: "the processor cycles again", "git_fetch": lambda: f"git can read {REMOTE}/main",
+            "laptop_load": lambda: "the laptop's load is normal", "batch_hold": lambda: "the batch hold ends",
+            "queue_entry": lambda: f"queue entry {a.get('eid')} moves"}.get(kind, lambda: kind)()
+
+
+def run_probe(kind, args=None):
+    """Run probe `kind` on args: the ONE way to a ProbeResult. A probe that raises is ok=None (cannot tell)."""
+    if kind not in PROBES:
+        raise ConditionBypass(f"unknown probe {kind!r}: every condition needs a probe from PROBES")
+    args = dict(args or {})
+    try:
+        ok, detail = PROBES[kind](args)
+    except (Exception, SystemExit) as e:
+        ok, detail = None, f"probe error: {str(e)[:160]}"
+    return ProbeResult(kind, args, ok, detail, _made_by_run_probe=_RUN_PROBE_TOKEN)
+
+
+# -- what runs when a condition clears (besides the common acks, gate dirty, status line refresh, RECOVERED note)
+def recover_release_block(cond, a):
+    try:
+        os.unlink(a["path"])
+    except OSError:
+        pass
+    return f"released the block of {a.get('workflow') or 'run'} #{a.get('run')}"
+
+
+def recover_verify(cond, a):
+    """Dispatch the red's workflow on main to verify it (the outside-gate verify path, in a detached `red verify`)."""
+    repo = repo_for_verify(a.get("repo") or SHORT["movies"])
+    log = recovery_dir("verify.log")
+    os.makedirs(os.path.dirname(log), exist_ok=True)
+    with open(log, "a") as f:
+        subprocess.Popen([sys.executable, os.path.realpath(__file__), "red", "verify", str(a["run"])],
+                         stdin=subprocess.DEVNULL, stdout=f, stderr=f, start_new_session=True, cwd=repo or HOME,
+                         env={**os.environ, "AGENTCTL_NO_SECRETS": "1"})
+    return f"dispatched {a.get('workflow') or 'its workflow'} on main to verify #{a['run']}"
+
+
+def recover_kick_tunnel(cond, a):
+    launchctl_kick()
+    return f"kickstarted {TUNNEL_LABEL}"
+
+
+def recover_tunnel_reset(cond, a):
+    st = read_json_file(tunnel_state_path())
+    if st.get("network") or st.get("fails") or st.get("pending_since"):
+        st.update(fails=0, network=False, pending_since=None, escalated=False)
+        write_json_file(tunnel_state_path(), st)
+    return ""
+
+
+def recover_clear_flag(cond, a):
+    try:
+        os.unlink(a["path"])
+    except OSError:
+        pass
+    return ""
+
+
+LAND_RETRY_MAX = {"infra": 5, "unknown": 1}
+
+
+def recover_reland(cond, a):
+    """`agentctl land` again in the change's worktree (it fetches and rebases first: a conflict is a real NOT LANDED)."""
+    wt = a["worktree"]
+    if not os.path.isdir(wt):
+        return f"not landed again: {wt} is gone"
+    os.makedirs(recovery_dir(), exist_ok=True)
+    with open(recovery_dir("reland.log"), "a") as f:
+        subprocess.Popen([sys.executable, os.path.realpath(__file__), "land"], stdin=subprocess.DEVNULL, stdout=f,
+                         stderr=f, start_new_session=True, cwd=wt,
+                         env={**os.environ, "AGENTCTL_NO_SECRETS": "1", "AGENTCTL_RELAND": str(int(a.get("attempt") or 1))})
+    return f"landing {wt.replace(HOME, '~')} again (attempt {a.get('attempt')})"
+
+
+RECOVER_ACTIONS = {"release_block": recover_release_block, "verify": recover_verify, "kick_tunnel": recover_kick_tunnel,
+                   "tunnel_reset": recover_tunnel_reset, "clear_flag": recover_clear_flag, "reland": recover_reland}
+
+
+def condition_key(kind, probe):
+    return re.sub(r"[^\w.-]+", "_", f"{kind}-{probe.kind}-" + "-".join(f"{v}" for _k, v in sorted(probe.args.items())
+                                                                           if _k != "since"))[:150]
+
+
+def open_condition(kind, text, probe, on_recover, key=None, inbox=True, command="recover", exit_code=1, cwd=None,
+                   tail=(), effect=None):
+    """Open (or refresh) a non-green condition. probe: the FAILED ProbeResult of the check that found it (required: the
+    same probe, passing, closes it); on_recover: [(action, args)] from RECOVER_ACTIONS. effect: a callable run inside
+    (a block's claim write); its dict result is merged into every on_recover args. Writes ONE inbox entry (text) per
+    spell. Returns the condition, or None when the probe passes now (nothing is wrong)."""
+    if not isinstance(probe, ProbeResult):
+        raise ConditionBypass(f"open_condition({kind!r}) without a ProbeResult: no condition without its recovery probe")
+    for name, _a in on_recover:
+        if name not in RECOVER_ACTIONS:
+            raise ConditionBypass(f"unknown on_recover action {name!r}")
+    if probe.ok:
+        return None
+    key = key or condition_key(kind, probe)
+    path = recovery_dir(key + ".json")
+    old = read_record(path) or {}
+    _OPENING[0] += 1
+    try:
+        extra = (effect() if effect else None) or {}
+        text = text(extra) if callable(text) else text
+        ids = list(old.get("inbox") or [])
+        if inbox and not old:
+            eid = inbox_write(command, text, [text], list(tail), exit_code, cwd=cwd)
+            ids += [eid] if eid else []
+    finally:
+        _OPENING[0] -= 1
+    t = time.time()
+    cond = {**old, "key": key, "kind": kind, "text": text, "probe": {"kind": probe.kind, "args": probe.args},
+            "until": probe_words(probe.kind, probe.args), "on_recover": [[n, {**x, **extra}] for n, x in on_recover],
+            "opened": old.get("opened") or ts(), "opened_at": old.get("opened_at") or t, "inbox": ids,
+            "last_checked": t, "last_result": {"ok": probe.ok, "detail": probe.detail}, "fails": old.get("fails") or 0,
+            "next_check": t + PROBE_EVERY.get(probe.kind, 60)}
+    write_json(path, cond)
+    return cond
+
+
+def open_conditions():
+    out = []
+    for p in sorted(glob.glob(recovery_dir("*.json"))):
+        c = read_record(p)
+        if c and c.get("probe"):
+            c["path"] = p
+            out.append(c)
+    return out
+
+
+def close_condition(cond, result):
+    """The probe passed: claim the close (an atomic rename: one closer), ack, mark dirty, run on_recover, note it."""
+    done = recovery_dir("closed", f"{cond['key']}-{int(time.time())}.json")
+    os.makedirs(os.path.dirname(done), exist_ok=True)
+    try:
+        os.replace(cond["path"], done)
+    except OSError:
+        return None  # another process closed it
+    acked = os.path.join(inbox_dir(), "acked")
+    os.makedirs(acked, exist_ok=True)
+    for eid in cond.get("inbox") or []:
+        open(os.path.join(acked, eid), "a").close()
+    did = []
+    for name, a in cond.get("on_recover") or []:
+        try:
+            w = RECOVER_ACTIONS[name](cond, a)
+            if w:
+                did.append(w)
+        except (Exception, SystemExit) as e:
+            did.append(f"{name} failed: {str(e)[:120]}")
+    mark_gate_dirty()
+    try:
+        marker = statusline_stale_path()
+        os.makedirs(os.path.dirname(marker), exist_ok=True)
+        open(marker, "a").close()
+        os.utime(marker, None)
+    except OSError:
+        pass
+    line = (f"RECOVERED: {cond['until']} ({result.detail}): {cond.get('text', '')[:200]}"
+            + (f"; {'; '.join(did)}" if did else ""))
+    err(line)
+    inbox_write("recover", line, [line], [], 0)
+    write_json(done, {**{k: v for k, v in cond.items() if k != "path"}, "closed": ts(), "closed_by": result.detail,
+                      "did": did})
+    return line
+
+
+def recovery_tick(now_=None, force=False):
+    """The duties thread's look: each open condition whose next check is due re-runs ITS probe; a pass closes it.
+    Backoff: PROBE_EVERY x 2^fails, at most RECOVER_BACKOFF_MAX. Returns the RECOVERED lines."""
+    t = now_ if now_ is not None else time.time()
+    out = []
+    for c in open_conditions():
+        if not force and float(c.get("next_check") or 0) > t:
+            continue
+        r = run_probe(c["probe"]["kind"], c["probe"]["args"])
+        if r.ok:
+            line = close_condition(c, r)
+            if line:
+                out.append(line)
+            continue
+        fails = int(c.get("fails") or 0) + 1
+        every = PROBE_EVERY.get(r.kind, 60) * 2 ** min(fails, 8)
+        c.update(fails=fails, last_checked=t, last_result={"ok": r.ok, "detail": r.detail},
+                 next_check=t + min(every, env_num("AGENTCTL_RECOVER_MAX", RECOVER_BACKOFF_MAX)))
+        path = c.pop("path")
+        if os.path.exists(path):
+            write_json(path, c)
+    return out
+
+
+def recovery_recheck_all():
+    """The network changed or came back: every open condition is probed at the next tick, backoff reset."""
+    for c in open_conditions():
+        path = c.pop("path")
+        c.update(next_check=0, fails=0)
+        write_json(path, c)
+
+
+_last_recovery = [0.0]
+
+
+def maybe_recovery_tick():
+    if time.time() - _last_recovery[0] < 5:
+        return
+    _last_recovery[0] = time.time()
+    recovery_tick()
+
+
+def cmd_recover(a):
+    if a.rcmd == "tick":
+        lines = recovery_tick(force=True)
+        print("\n".join(lines) if lines else "recover: nothing cleared")
+        return 0
+    cs = open_conditions()
+    if not cs:
+        print("recover: no open conditions")
+        return 0
+    t = time.time()
+    for c in cs:
+        lr = c.get("last_result") or {}
+        print(f"{c['kind']} {c['key']} (open since {c.get('opened')}): {c.get('text', '')[:140]}\n"
+              f"  probe: {c['probe']['kind']} {json.dumps({k: v for k, v in c['probe']['args'].items() if k != 'since'})}"
+              f" -- clears when {c.get('until')}\n"
+              f"  last checked {iso_at(float(c.get('last_checked') or 0))}: {'cannot tell' if lr.get('ok') is None else 'fails'}"
+              f" ({lr.get('detail')}); next check in {max(0, int(float(c.get('next_check') or 0) - t))} s"
+              f" (fails {c.get('fails') or 0})\n"
+              f"  on recover: {', '.join(n for n, _x in c.get('on_recover') or []) or 'ack + gate dirty'}")
+    return 0
+
+
+# -- infra NOT LANDED (the owner, 2026-10-28: 7 changes sat unlanded overnight after infra failures and nobody retried):
+# a NOT LANDED whose text names infra opens a condition on the same infra check; when it passes, `agentctl land` runs
+# again in that worktree (it rebases first: a conflict is a real NOT LANDED for the author). A cause the text does not
+# name is real (the author's) and retried at most once; a test failure, a conflict, a refusal stay the author's.
+LAND_INFRA = [  # (pattern, probe kind): first match wins
+    (re.compile(r"git fetch \S+ main failed|could not read from remote|Could not resolve host|ls-remote|"
+                r"Connection (refused|reset|timed out)|tunnel|network", re.I), "git_fetch"),
+    (re.compile(r"remote run .*(cannot be read|unreadable)|ci-runner|runner .*(overload|busy|lost|offline)|"
+                r"remote check.*(timed? ?out|timeout|overload)", re.I), "tunnel"),
+    (re.compile(r"stalled|no output and no CPU|timed out waiting for the landing lock|ended without a verdict", re.I),
+     "laptop_load"),
+]
+LAND_REAL = re.compile(r"conflict|checks failed|pre-push checks failed|prepush-check refused|uncommitted|squash|"
+                       r"PREPUSH_SKIP|red gate refused|no longer applies|superseded", re.I)
+
+
+def land_failure_cause(verdict):
+    """('real' | 'infra' | 'unknown', probe kind or None) for a NOT LANDED verdict."""
+    if LAND_REAL.search(verdict):
+        return "real", None
+    for pat, probe in LAND_INFRA:
+        if pat.search(verdict):
+            return "infra", probe
+    return "unknown", "git_fetch"
+
+
+def land_not_landed(verdict, worktree, tail=(), code=1):
+    """A NOT LANDED to the inbox: infra (or an unknown cause, once) opens a condition that lands it again on recovery."""
+    first = verdict.splitlines()[0]
+    cause, probe = land_failure_cause(first)
+    attempt = int(os.environ.get("AGENTCTL_RELAND") or 0) + 1
+    if cause != "real" and worktree and attempt <= LAND_RETRY_MAX[cause]:
+        r = run_probe(probe, {"repo": movies_repo_path()} if probe == "git_fetch" else {})
+        if r.ok:  # the infra check passes already (a blip): land again now, no condition to wait on
+            line = f"RELANDING: {first} ({cause}; {r.detail}): landing again now (attempt {attempt})"
+            inbox_write("land", line, [line], list(tail)[-25:], code, cwd=worktree)
+            recover_reland(None, {"worktree": worktree, "attempt": attempt})
+            return None
+        c = open_condition("LAND_INFRA" if cause == "infra" else "LAND_UNKNOWN",
+                           f"{first} ({cause}: lands again when {probe_words(probe, r.args)})", r,
+                           [("reland", {"worktree": worktree, "attempt": attempt})],
+                           key=re.sub(r"[^\w.-]+", "_", f"land-{os.path.basename(worktree)}"), command="land",
+                           exit_code=code, cwd=worktree, tail=list(tail)[-25:])
+        if c:
+            return c
+    return inbox_write("land", first, [first], list(tail)[-25:], code, cwd=worktree)
+
+
 # THE ESCALATION THAT WAKES SOMEBODY (the owner, 2026-10-27: Main #2146's RED UNCLAIMED sat unread for 85+ min because
 # the orchestrator's `inbox wait` was not re-armed). An unread RED UNCLAIMED, RED BUDGET or STALLED entry older than
 # INBOX_ESCALATE_MIN (a gate fixer cap: at once) is escalated past the orchestrator: ONE macOS notification per entry
@@ -9836,31 +10380,15 @@ INBOX_ESCALATE_MIN = 10  # $AGENTCTL_INBOX_ESCALATE_MIN
 _last_escalate = [0.0]
 
 
-def red_escalation_resolved(e, claimed=None, snap=None):
-    """A RED UNCLAIMED / RED BUDGET entry whose red is now claimed by someone, or is no longer the red its workflow
-    decided on (green, or a newer run), needs no person: True. Unknown (no run number, no snapshot): False."""
-    if (e.get("kind") or inbox_kind(e.get("verdict"))) not in ("RED_UNCLAIMED", "RED_BUDGET"):
+def red_escalation_resolved(e):
+    """A RED UNCLAIMED / BUDGET / ESCALATE entry whose red is now claimed, green or superseded: True -- through the
+    registry's red_resolved probe, the check every such condition is opened with (an entry from before the registry, or
+    one whose condition is gone, clears through the same check). Unknown (no run number, no snapshot): False."""
+    if (e.get("kind") or inbox_kind(e.get("verdict"))) not in ("RED_UNCLAIMED", "RED_BUDGET", "RED_ESCALATE"):
         return False
     m = re.search(r"#(\d+)", str(e.get("verdict") or ""))
-    if not m:
-        return False
-    n = m.group(1)
-    if claimed is None:
-        claimed = set()
-        for c in all_claims():
-            if c.get("state", "claimed") in ("claimed", "blocked", "committed", "diagnosed"):
-                claimed |= {str(c.get("run")), str(c.get("run_id"))} | set(map(str, c.get("runs") or []))
-    if n in claimed:
-        return True
-    if snap is None:
-        snap = ci_state_load(SHORT["movies"])
-    if not snap:
-        return False
-    for u in (snap.get("gate") or []) + (snap.get("outside") or []):
-        d = u.get("decided") or {}
-        if str(d.get("number")) == n:
-            return d.get("conclusion") not in RED_CONCLUSIONS
-    return True  # no workflow decides on that run any more: superseded
+    person = {"person": True} if (e.get("kind") or inbox_kind(e.get("verdict"))) == "RED_ESCALATE" else {}
+    return bool(m) and run_probe("red_resolved", {"run": m.group(1), **person}).ok is True
 
 
 def inbox_escalations(now_=None):
@@ -10125,6 +10653,9 @@ def main(argv=None):
     gad.add_argument("--force", action="store_true", help="admit at once (memory already counted elsewhere)")
     gev = gvs.add_parser("evict", help="stop the idle kept sbt server unused longest")
     gev.add_argument("--dry-run", action="store_true")
+    rcv = sub.add_parser("recover", help="the recovery registry: each open non-green condition, its probe, its next check")
+    rcv.add_argument("rcmd", nargs="?", choices=("status", "tick"), default="status",
+                     help="status (default): list; tick: probe every open condition now (clears what passes)")
     ib = sub.add_parser("inbox", help="every final verdict of land / watch / wait / waiting await (and land's WAITING), "
                                       "kept whether or not the agent that ran it is alive")
     ib.add_argument("ids", nargs="*", metavar="ID", help="only these entries (an id prefix); or `wait`: block until an "
@@ -10150,6 +10681,12 @@ def main(argv=None):
     rb.add_argument("run")
     rb.add_argument("--cmd", dest="owner_cmd", required=True, help="the exact command the owner must run")
     rb.add_argument("--note", default="")
+    rbu = rb.add_mutually_exclusive_group()  # the probe that clears it (default: the red's own workflow goes green)
+    rbu.add_argument("--until-green", metavar="WORKFLOW", help="clears when this workflow's newest run on main is green")
+    rbu.add_argument("--until-http", metavar="URL", help="clears when this URL answers 2xx-4xx")
+    rbu.add_argument("--until-tcp", metavar="HOST:PORT", help="clears when this port accepts a connection")
+    rv = rds.add_parser("verify", help="dispatch a red's workflow on main now and compare (outside-gate verification)")
+    rv.add_argument("run")
     rr = rds.add_parser("release", help="drop your claim of a run")
     rr.add_argument("run")
     rr.add_argument("--any", action="store_true", help="release anyone's claim of it")
@@ -10190,7 +10727,7 @@ def main(argv=None):
     rp_.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
     handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": cmd_red, "dispatch": cmd_dispatch, "gov": cmd_gov, "checks": cmd_checks, "inbox": cmd_inbox, "queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
+               "red": cmd_red, "dispatch": cmd_dispatch, "gov": cmd_gov, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)
 
