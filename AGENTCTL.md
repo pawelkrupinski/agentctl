@@ -261,9 +261,17 @@ The owner: "why unclaimed ... should always claim, fix structurally".
 - **No daily budget.** A red that cannot get a fixer now (a concurrency cap, or dispatch unavailable) waits in a FIFO
   queue per class: `queued for a fixer (#k, next slot when <x> ends)`. That is a recovery condition (probe
   `fixer_slot`, on recover: the patrol runs). Gate reds keep their own cap of 3 alive.
-- **Escalation is never NOBODY.** After 2 failed fixers comes ONE investigation fixer (named in RED ESCALATE). If it
-  ends with the red still nobody's, the red goes to the owner as a BLOCK whose probe is the red's own workflow going
-  green. A red with 3 or more refuted fixes is `recurring: N fixes refuted`, and its fixer is told to find the root
+- **Escalation is never NOBODY and never the owner.** After 2 failed fixers comes ONE investigation fixer (named in
+  RED ESCALATE). After that come DEEP investigations (`claude --effort max`), again and again within the caps. Each one
+  gets the whole history: the failing test and its error, every refuted fix, every fixer's verdict. A code red is
+  never parked on the owner.
+- **BLOCKED ON OWNER is only for the owner's causes.** `red block` needs `--owner-cause` (external-account,
+  credentials, infra-apply, deploy, billing, dashboard), and it refuses a TEST FAILURE red and a red with a live
+  fixer. Every block states what fails, what was tried, why only the owner can act, the exact `!` command, and how it
+  auto-clears; `ci-why` shows all of it, while the status line shows a short form with a pointer. Every patrol tick
+  checks each block again (the condition's probe is `owner_block`, which ANDs in the block's justification). A block
+  that lost its cause, its command, or its non-test verdict, or whose red has a live fixer, is dropped at once.
+  A live fixer outranks a block. A red with 3 or more refuted fixes is `recurring: N fixes refuted`, and its fixer is told to find the root
   cause, with those commits listed.
 - **One outage is one condition.** `red block <n> --cmd "..." --cause Decodo --until-green "Decodo probe"` opens it, and
   later reds attach with `--cause Decodo`. When the probe passes, every attached red is released and its workflow

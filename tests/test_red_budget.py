@@ -141,7 +141,7 @@ class DiagnosedTest(RedBase):
         acts = self.patrol(time.time())
         self.assertTrue(any("DISPATCHED" in a and "infra-shaped: diagnose" in a for a in acts), acts)
         done = self.wait_fixer(n=2)
-        self.assertEqual([e["kind"] for e in done], ["FIXER_FAILED", "FIXER_LANDED"])
+        self.assertEqual([e["kind"] for e in done], ["DIAGNOSED", "FIXER_LANDED"])
         self.assertIn("DIAGNOSED: a one-off Chrome", done[0]["verdict"])
         diag, impl = self.prompts()
         self.assertIn("DIAGNOSE ONLY", diag)
@@ -183,23 +183,24 @@ class DiagnosedTest(RedBase):
         self.assertEqual(done[-1]["kind"], "FIXER_LANDED")
         self.assertIn("was DIAGNOSED", self.prompts()[-1])
 
-    def test_an_implementer_that_only_diagnoses_again_escalates_and_keeps_the_claim(self):
+    def test_an_implementer_that_only_diagnoses_again_escalates_to_a_deep_investigation_never_the_owner(self):
         self.patrol(time.time())
         self.wait_fixer(n=2)
         for _ in range(50):
-            if self.inbox("BLOCKED"):
+            if self.inbox("RED_ESCALATE"):
                 break
             time.sleep(0.2)
-        # 2026-10-28: diagnosed twice goes to the owner as a block with its probe (the red's own workflow going green)
-        esc = self.inbox("BLOCKED")
+        # 2026-10-28: diagnosed twice is a code red still: a DEEP investigation next, never BLOCKED ON OWNER
+        esc = self.inbox("RED_ESCALATE")
         self.assertEqual(len(esc), 1)
-        self.assertIn("RED BLOCKED ON OWNER: Main #20", esc[0]["verdict"])
-        self.assertIn("auto-clears when Main is green", esc[0]["verdict"])
-        cs = sorted(A.all_claims(), key=lambda c: c["state"])
-        self.assertEqual([c["state"] for c in cs], ["blocked", "diagnosed"])
-        self.assertTrue(cs[1]["awaiting"].startswith("a person"))
+        self.assertIn("diagnosed twice, not fixed", esc[0]["verdict"])
+        self.assertIn("a deep investigation is dispatched next", esc[0]["verdict"])
+        self.assertEqual(self.inbox("BLOCKED"), [])
+        self.assertFalse([c for c in A.all_claims() if c.get("state") in ("blocked", "diagnosed")])
         self.assertNotIn("NOBODY", self.why()[1])
-        self.assertEqual([a for a in self.patrol(time.time()) if "DISPATCHED" in a], [])
+        acts = self.patrol(time.time())
+        self.assertTrue(any("deep investigation" in a for a in acts), acts)
+        self.wait_fixer(n=3)
 
 
 class EscalationTest(RedBase):
@@ -236,20 +237,21 @@ class EscalationTest(RedBase):
                          "red claim 2146`, or assign an agent", 11)
         self.write("RED UNCLAIMED: Main #2147 [ci]: NOBODY -- x", 3)  # too young
         self.write("STALLED: the waiting processor's loop made no cycle in 900 s", 12)
-        self.write("RED FIXER Main #2146: GAVE UP: x", 30)  # not an escalation kind
+        self.write("RED FIXER Main #2146: GAVE UP: x", 30)  # FIXER_FAILED escalates too (2026-10-28)
+        self.write("RED FLAKE: Main #2146 [ci] passed on the next run", 30)  # not an escalation kind
         acked = self.write("RED BUDGET: daily dispatch budget 6 spent (refunds excluded); W #1 [j]", 20)
         self.tool("inbox", acked, "--ack")
         rc, out = self.tool("inbox", "escalated")
         self.assertEqual(rc, 0)
-        self.assertTrue(out.startswith("ESCALATED: 2 unacked ("), out)
+        self.assertTrue(out.startswith("ESCALATED: 3 unacked ("), out)
         self.assertIn("RED UNCLAIMED: Main #2146 [ci]: NOBODY -- daily dispatch budget 6 spent", out)
         self.assertNotIn("assign an agent", out)
         notes = self.notified()
-        self.assertEqual(len(notes), 2, notes)
+        self.assertEqual(len(notes), 3, notes)
         self.assertTrue(any(n.startswith("agentctl: RED_UNCLAIMED unacked|RED UNCLAIMED: Main #2146") for n in notes), notes)
         self.tool("inbox", "escalated")
         A.escalate_inbox()
-        self.assertEqual(len(self.notified()), 2)  # once per entry
+        self.assertEqual(len(self.notified()), 3)  # once per entry
         self.tool("inbox", "--unread", "--ack")
         self.assertEqual(self.tool("inbox", "escalated")[1], "")  # acked: the status line is plain again
 

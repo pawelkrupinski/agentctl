@@ -102,7 +102,9 @@ class NeverNobodyTest(RedBase):
         self.assertEqual(A._last_patrol[0], 0.0)
         self.assertEqual(self.inbox("RED_BUDGET") + self.inbox("RED_UNCLAIMED"), [])
 
-    def test_two_failed_fixers_get_an_investigation_then_the_owner_never_nobody(self):
+    def test_two_failed_fixers_get_an_investigation_then_deep_ones_never_the_owner(self):
+        """2026-10-28 ("main #2283 → BLOCKED ON OWNER ... root cause and structural fix"): a code red is never parked on
+        the owner: after the investigation comes a DEEP investigation (effort max, the whole history), again and again."""
         os.environ["AGENTCTL_CLAIM_PID"] = str(os.getpid())
         u = self.units()[0]
         rec = json.load(open(A.sig_path(u["sig"])))
@@ -111,19 +113,94 @@ class NeverNobodyTest(RedBase):
         try:
             msg = A.maybe_dispatch(MOVIES, self.r.path, u, rec, time.time(), why="x", group=[u])
             self.assertTrue(msg.startswith("RED ESCALATE"), msg)
-            self.assertIn("an investigation fixer is assigned", msg)
+            self.assertIn("investigation assigned", msg)
             self.wait_fixer()
-            rec = json.load(open(A.sig_path(u["sig"])))
-            self.assertTrue(rec.get("investigated"))
             for c in A.all_claims():  # the investigator ended without a fix
                 os.unlink(c["path"])
-            msg = A.maybe_dispatch(MOVIES, self.r.path, u, rec, time.time(), why="x", group=[u])
+            rec = json.load(open(A.sig_path(u["sig"])))
+            msg = A.maybe_dispatch(MOVIES, self.r.path, dict(u, refuted=["a" * 40]), rec, time.time(), why="x", group=[u])
+            self.wait_fixer(n=2)
         finally:
             os.environ.pop("AGENTCTL_CLAIM_PID")
-        self.assertTrue(msg.startswith("RED BLOCKED ON OWNER: Main #20"), msg)
-        self.assertEqual([(c["state"], c["who"], c["until"]) for c in A.all_claims()],
-                         [("blocked", "escalated-to-owner", "Main is green")])
-        self.assertIn("BLOCKED ON OWNER (auto-clears when Main is green)", self.why("--summary")[1])
+        self.assertIn("deep investigation #1 assigned", msg)
+        deep = [r for r in A.fixer_records() if "deep investigation" in str(r.get("why"))]
+        self.assertEqual([r.get("effort") for r in deep], ["max"])
+        self.assertIn("DEEP INVESTIGATION (effort max)", deep[0]["diagnosis"])
+        self.assertIn("Refuted fixes: aaaaaaaaaa", deep[0]["diagnosis"])
+        self.assertIn("--effort", self.prompts_argv()[-1])
+        self.assertFalse([c for c in A.all_claims() if c.get("state") == "blocked"])  # never the owner
+
+    def prompts_argv(self):
+        import glob as g
+        out = []
+        for p_ in sorted(g.glob(os.path.join(self.tmp.name, "claude-out", "*.json")), key=os.path.getmtime):
+            out.append(json.load(open(p_))["argv"])
+        return out
+
+
+class OwnerBlockTest(RedBase):
+    """BLOCKED ON OWNER is only for the owner's causes, carries the owner's whole picture, and drops the moment it
+    loses its justification (2026-10-28: an escalation block from #2164 followed the red onto #2283 and hid its live
+    fixer)."""
+    def test_a_test_failure_or_a_block_without_an_owner_cause_is_refused(self):
+        rc, out = self.tool("red", "block", "20", "--owner-cause", "deploy", "--cmd", "x", "--repo", "movies", cwd=self.r.path)
+        self.assertEqual(rc, 2, out)
+        self.assertIn("is a TEST FAILURE", out)
+        self.main_red(40, 20, kind="infra")
+        rc, out = self.tool("red", "block", "20", "--cmd", "x", "--repo", "movies", cwd=self.r.path)
+        self.assertEqual(rc, 2, out)
+        self.assertIn("needs --owner-cause", out)
+        self.assertEqual(A.all_claims(), [])
+
+    def test_the_real_case_an_old_escalation_block_and_a_live_claim_show_the_fixer_and_no_owner_block(self):
+        self.main_red(40, 20, kind="infra")
+        A.write_json(A.reds_dir("runsig", "40.json"), {"number": 20, "workflow": "Main", "sigs": [
+            {"job": "test (rest)", "kind": "test", "line": "CdpLaunchSpec crashed", "sig": "x"}]})  # now a TEST FAILURE
+        u = self.units()[0]
+        path = A.reds_dir("claims", "esc.json")
+        old = {"who": "escalated-to-owner", "worktree": self.r.path, "started": A.ts(), "state": "blocked",
+               "blocked_cmd": "take Main #2164: 2 fixers and an investigation did not clear it", "until": "Main is green",
+               "run": "2164", "runs": ["2164", "20", "40"], "sigs": [u["sig"]], "jobs": [u["job"]], "workflow": "Main"}
+        A.write_json(path, old)
+        A._OPENING[0] += 1
+        try:
+            A.open_condition("BLOCKED", "RED BLOCKED ON OWNER: Main #2164: take it",
+                             A.run_probe("owner_block", {"inner": {"kind": "workflow_green", "args": {"workflow": "Main"}},
+                                                         "claims": [path]}),
+                             [("release_block", {"run": "2164", "workflow": "Main"})], key="block-Main-2164",
+                             effect=lambda: {"path": path})
+        finally:
+            A._OPENING[0] -= 1
+        self.assertIn("BLOCKED ON OWNER", self.why("--summary")[1])
+        A.write_json(A.reds_dir("claims", "live.json"), {  # the live fixer on the newer run
+            "who": "session 974d50a6", "worktree": self.r.path, "pid": os.getpid(), "started": A.ts(), "beat": A.ts(),
+            "process_start": A.process_start(os.getpid()), "run": "20", "runs": ["20", "40"], "sigs": [u["sig"]],
+            "jobs": [u["job"]], "workflow": "Main", "note": "CdpLaunchSpec crasher output root cause"})
+        self.assertIn("session 974d50a6", self.why("--summary")[1])  # a live fixer outranks a block, even before the tick
+        self.patrol(time.time())  # the tick re-validates: the block lost its justification
+        self.assertFalse(os.path.exists(path))
+        self.assertEqual(A.open_conditions(), [])
+        self.assertNotIn("BLOCKED ON OWNER", self.why()[1])
+        self.assertIn("fixing: session 974d50a6", self.why()[1])
+        self.assertTrue(all(e["read"] for e in self.inbox("BLOCKED")))
+
+    def test_an_owner_block_states_the_whole_picture_and_a_manual_close_takes_a_reason(self):
+        self.main_red(40, 20, kind="infra")
+        A.ci_state_write({"at": time.time(), "repo": MOVIES, "gate": [], "outside": [], "latest": {}})
+        os.environ["AGENTCTL_CLAIM_PID"] = str(os.getpid())
+        try:
+            rc, out = self.tool("red", "block", "20", "--owner-cause", "credentials", "--cmd",
+                                "secrets set movies X=y", "--repo", "movies", cwd=self.r.path)
+        finally:
+            os.environ.pop("AGENTCTL_CLAIM_PID")
+        self.assertEqual(rc, 0, out)
+        [e] = self.inbox("BLOCKED")
+        for part in ("failing: test (rest):", "tried: no fix landed", "only the owner: credentials or secrets",
+                     "run: `! secrets set movies X=y`", "auto-clears when Main is green"):
+            self.assertIn(part, e["verdict"])
+        [c] = A.open_conditions()
+        self.assertTrue(A.close_condition(c, "the owner rotated it").startswith("RECOVERED:"))
+        self.assertEqual(A.all_claims(), [])
 
 
 class StaleCommitTest(RedBase):
@@ -162,6 +239,7 @@ class CauseTest(RedBase):
     def setUp(self):
         super().setUp()
         os.environ["AGENTCTL_CLAIM_PID"] = str(os.getpid())
+        self.main_red(40, 20, kind="infra")  # an outside cause
         A.ci_state_write({"at": time.time(), "repo": MOVIES, "gate": [], "outside": [],
                           "latest": {"Decodo probe": {"number": 99, "conclusion": "failure"}}})
         self.saved_actions = dict(A.RECOVER_ACTIONS)
@@ -175,7 +253,7 @@ class CauseTest(RedBase):
         super().tearDown()
 
     def test_one_outage_is_one_condition_and_its_recovery_releases_and_verifies_every_red(self):
-        rc, out = self.tool("red", "block", "20", "--cmd", "Check the Decodo dashboard", "--cause", "Decodo",
+        rc, out = self.tool("red", "block", "20", "--owner-cause", "external-account", "--cmd", "Check the Decodo dashboard", "--cause", "Decodo",
                             "--until-green", "Decodo probe", "--repo", "movies", cwd=self.r.path)
         self.assertEqual(rc, 0, out)
         rc, out = self.tool("red", "block", "19", "--cmd", "Check the Decodo dashboard", "--cause", "Decodo",

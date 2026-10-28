@@ -2213,7 +2213,7 @@ normalized first error line): a newer run failing the same way is the same red.
 
   agentctl red claim <run> [--note "<what>"]     you are fixing it (claimant: $AGENTCTL_AGENT_NAME, the Claude
                                                  session, else the worktree; pid: the Claude Code process)
-  agentctl red block <run> --cmd "<command>" [--until-green WF | --until-http URL | --until-tcp HOST:PORT]
+  agentctl red block <run> --owner-cause KIND --cmd "<command>" [--cause NAME] [--until-green WF | --until-http URL | --until-tcp HOST:PORT]
                                                  it waits on the owner: BLOCKED ON OWNER (counts as assigned) until
                                                  its probe passes (default: the red's own workflow goes green)
   agentctl red release <run> [--any]             drop your claim
@@ -2243,7 +2243,7 @@ BRIEF_SRC = "/private/tmp/claude-501/-Users-pawel-bitcashier/974d50a6-c3f9-4d25-
 # ci-why said `fix landed in 73cf2038f, awaiting #2153`): a landed fix > a change queued / waiting / landing / committed
 # > blocked on the owner > a claim > a diagnosis > a notified author > a dispatched fixer before its own claim; with
 # none of them, red_state's dispatching > skipped (reason) > NOBODY (reason).
-RED_STATE_RANK = {"dispatching": 1, "author": 1.5, "diagnosed": 2, "claimed": 3, "blocked": 4, "committed": 5,
+RED_STATE_RANK = {"dispatching": 1, "author": 1.5, "diagnosed": 2, "blocked": 2.5, "claimed": 3, "committed": 5,
                   "landing": 6, "waiting": 7, "landed": 8}
 
 
@@ -2695,6 +2695,7 @@ def find_fixers(repo, units, now_=None, o_r=None):
                 continue
             put(k, c.get("worktree"), c.get("state") if c.get("state") in ("blocked", "diagnosed") else "claimed",
                 who=c.get("who"), cmd=c.get("blocked_cmd"), until=c.get("until"), cause=c.get("cause"),
+                details=c.get("details"), run=c.get("run"),
                 dispatched=bool(c.get("dispatched")),
                 awaiting=c.get("awaiting"), author=bool(c.get("author")))
             out[k]["fixers"][os.path.realpath(c["worktree"]) if c.get("worktree") else c.get("who")]["note"] = c.get("note") or ""
@@ -2781,6 +2782,8 @@ def fixer_text(f):
     if f["state"] == "blocked" and f.get("cause"):
         return (f"BLOCKED: {f['cause']} down -- one condition for every red it explains (auto-clears when "
                 f"{f.get('until')}; `agentctl recover status`)")
+    if f["state"] == "blocked" and f.get("details"):
+        return f"BLOCKED ON OWNER: {f['details']} ({f['who']})"
     if f["state"] == "blocked":
         return (f"BLOCKED ON OWNER `{f.get('cmd')}`" + (f" (auto-clears when {f['until']})" if f.get("until") else "")
                 + f" ({f['who']}, {(f.get('worktree') or '?').replace(HOME, '~')})")
@@ -2795,7 +2798,8 @@ def fixer_short(f):
     if f["state"] == "blocked":
         if f.get("cause"):
             return f"BLOCKED: {f['cause']} down (auto-clears when {f.get('until')})"
-        return f"BLOCKED ON OWNER (auto-clears when {f['until']})" if f.get("until") else f"BLOCKED ON OWNER: {f.get('cmd')}"
+        return (f"BLOCKED ON OWNER (auto-clears when {f['until']}; `agentctl ci-why {f.get('run') or ''}`)".replace(" `agentctl ci-why `", "")
+                if f.get("until") else f"BLOCKED ON OWNER: {f.get('cmd')}")
     who = f["who"].replace("movies-wt-", "")
     if f["state"] == "diagnosed":
         return f"{who} diagnosed, awaiting {f.get('awaiting') or '?'}"
@@ -3274,6 +3278,11 @@ def red_patrol(o_r, repo, units, infos, dispatch=False, now_=None, report=None):
     groups = sorted(red_groups([u for u in units if u.get("sig")]),
                     key=lambda g: (0 if g[0]["gate"] else 1 if g[0].get("flake") else 2, -(g[0].get("flake_count") or 0),
                                    g[0]["workflow"]))
+    if dispatch:
+        try:
+            actions += validate_owner_blocks()
+        except (Exception, SystemExit) as e:
+            err(f"red: could not re-validate the owner blocks ({str(e)[:160]})")
     waiting = set()  # the sigs still waiting for somebody: the fixer queue keeps only these
     for g in groups:
         st = red_state(g, infos, t, entries)
@@ -3578,10 +3587,30 @@ def fresh_dispatches(rec):
     return [d for d in rec.get("dispatches") or [] if not d.get("implement")]
 
 
-def maybe_dispatch(o_r, repo, u, rec, t, why, group=None, diagnosis=None):
+def investigation_brief(u, rec, deep=False):
+    """The whole history for an investigation: the failing test and its error, every refuted fix, every fixer's verdict
+    (dispatch.log and the records)."""
+    verdicts = [f"{d.get('at')}: " + str((read_record(d.get("record") or "") or {}).get("verdict") or "no verdict")[:200]
+                for d in rec.get("dispatches") or []]
+    try:
+        with open(reds_dir("dispatch.log")) as f:
+            log = [l.strip()[:220] for l in f if f"sig {u.get('sig')}:" in l][-12:]
+    except OSError:
+        log = []
+    refuted = u.get("refuted") or []
+    return ((f"DEEP INVESTIGATION (effort max) after {len(rec.get('dispatches') or [])} fixers and an investigation"
+             if deep else f"INVESTIGATION after {len(fresh_dispatches(rec))} dispatched fixers") +
+            f" did not clear it. Failing: `{u.get('job')}`: {str(u.get('line') or '')[:300]!r}. Refuted fixes: "
+            f"{', '.join(x[:10] for x in refuted) or 'none'}. Fixers' verdicts: {' | '.join(verdicts) or 'none'}. "
+            f"Dispatch log: {' | '.join(log) or 'empty'}. Find the ROOT CAUSE they all missed and fix it in the code. "
+            "This is a code red unless you PROVE the cause is outside the code and only the owner can act; only then "
+            f"`~/bin/agentctl red block {u['run'].get('number')} --owner-cause <kind> --cmd \"<the exact command>\"`")
+
+
+def maybe_dispatch(o_r, repo, u, rec, t, why, group=None, diagnosis=None, effort=None):
     """One dispatch decision for a due red: escalate, skip (a cap, a blocker) or dispatch. Returns what it did.
     diagnosis: the red is DIAGNOSED (its claim kept); this dispatches the implementer, with the diagnosis in its brief."""
-    if not diagnosis and len(fresh_dispatches(rec)) >= RED_MAX_DISPATCHES:
+    if not diagnosis and (len(fresh_dispatches(rec)) >= RED_MAX_DISPATCHES or rec.get("investigated")):
         culprit = None if rec.get("reverted") or u["workflow"] == LOCAL_FLOW else culprit_of(repo, u)
         if culprit:
             ok, msg = red_revert(o_r, repo, u, culprit)
@@ -3601,22 +3630,26 @@ def maybe_dispatch(o_r, repo, u, rec, t, why, group=None, diagnosis=None):
         alive_mine = [r for r in fixer_records() if r["alive"] and u["sig"] in set(r.get("sigs") or [r.get("sig")])]
         if alive_mine:
             return None
-        if rec.get("investigated"):
-            return escalate_to_owner(o_r, repo, u, rec)
-        verdicts = "; ".join(str((read_record(d.get("record") or "") or {}).get("verdict") or "no verdict")[:160]
-                             for d in fresh_dispatches(rec))
-        diagnosis = (f"INVESTIGATION: {len(fresh_dispatches(rec))} dispatched fixers did not clear this red (their "
-                     f"verdicts: {verdicts}). Find the root cause they missed, then make the durable fix; if it needs the "
-                     f"owner, `~/bin/agentctl red block {u['run'].get('number')} --cmd \"<command>\"`")
-        why = f"escalated after {len(fresh_dispatches(rec))} fixers: investigation"
-        msg = maybe_dispatch(o_r, repo, u, rec, t, why, group=group, diagnosis=diagnosis)
+        # 2026-10-28 ("main #2283 → BLOCKED ON OWNER ... root cause and structural fix"): a red is NEVER parked on the
+        # owner by escalation -- a code red is the code's; the next is a DEEP investigation (effort max, the whole
+        # history), again and again within the caps. Only a fixer that finds an owner cause blocks (red block
+        # --owner-cause), and that block is re-validated every tick.
+        deep = len(rec.get("deep") or [])
+        diagnosis = investigation_brief(u, rec, deep=bool(rec.get("investigated")))
+        why = (f"escalated after {len(fresh_dispatches(rec))} fixers: " +
+               (f"deep investigation #{deep + 1}" if rec.get("investigated") else "investigation"))
+        msg = maybe_dispatch(o_r, repo, u, rec, t, why, group=group, diagnosis=diagnosis,
+                             effort="max" if rec.get("investigated") else None)
         if msg and " DISPATCHED" in msg:
             with reds_lock():
                 rec = read_record(sig_path(u["sig"])) or rec
-                rec.update(investigated=ts(), escalated=rec.get("escalated") or ts())
+                if rec.get("investigated"):
+                    rec["deep"] = (rec.get("deep") or []) + [ts()]
+                rec.update(investigated=rec.get("investigated") or ts(), escalated=rec.get("escalated") or ts())
                 write_json(sig_path(u["sig"]), rec)
             line = (f"RED ESCALATE: {u['workflow']} #{u['run'].get('number')} [{u['job']}] still red after "
-                    f"{len(fresh_dispatches(rec))} dispatched fixers: an investigation fixer is assigned ({msg.split(' in ')[-1][:80]})")
+                    f"{len(fresh_dispatches(rec))} dispatched fixers: {why.split(': ', 1)[1]} assigned "
+                    f"({msg.split(' in ')[-1][:80]})")
             red_condition("RED_ESCALATE", line, u, [u.get("line") or ""])
             return line
         return msg
@@ -3646,33 +3679,13 @@ def maybe_dispatch(o_r, repo, u, rec, t, why, group=None, diagnosis=None):
             fixers = [f for f in fixers if f.get("dispatched") or f["state"] in ("landing", "waiting", "committed", "landed")]
         if fixers:
             return dispatch_log(u, f"NOT DISPATCHED: claimed meanwhile ({fixer_text(fixers[0])})")
-        ok, msg = red_dispatch(o_r, repo, u, why=why, group=group, diagnosis=diagnosis)
+        ok, msg = red_dispatch(o_r, repo, u, why=why, group=group, diagnosis=diagnosis, effort=effort)
     if ok:
         dequeue_fixer({x["sig"] for x in (group or [u]) if x.get("sig")})
     else:  # it stays in the queue: the patrol tries again at its next look
         _skip_reason[u["sig"]] = f"queued for a fixer: dispatch failed ({str(msg)[-120:]})"
         enqueue_fixer(u, f"dispatch failed: {str(msg)[-80:]}")
     return msg
-
-
-def escalate_to_owner(o_r, repo, u, rec):
-    """The investigation ended and the red is still nobody's: the owner, as a BLOCK (BLOCKED ON OWNER, assigned) whose
-    probe is the red's own workflow going green. Returns the line, or None (the workflow is green already)."""
-    n = str(u["run"].get("number"))
-    probe = run_probe("workflow_green", {"repo": o_r, "workflow": u["workflow"]})
-    words = probe_words(probe.kind, probe.args)
-    cmd = (f"take {u['workflow']} #{n} [{u['job']}]: {len(fresh_dispatches(rec))} fixers and an investigation did not "
-           f"clear it -- `~/bin/agentctl ci-why {u['run'].get('databaseId')}`, their verdicts in "
-           f"{reds_dir('dispatch.log').replace(HOME, '~')}")
-
-    def effect():
-        _c, path = red_claim(o_r, n, "escalated: the owner takes it", "blocked", cmd, until=words,
-                             who="escalated-to-owner", wt=repo)
-        return {"path": path}
-    cond = open_condition("BLOCKED", f"RED BLOCKED ON OWNER: {u['workflow']} #{n} [{u['job']}]: `{cmd}` -- auto-clears "
-                                     f"when {words}", probe, [("release_block", {"run": n, "workflow": u["workflow"]})],
-                          key=re.sub(r"[^\w.-]+", "_", f"block-{u['workflow']}-{n}"), command="red", effect=effect)
-    return cond and cond["text"]
 
 
 def dispatch_log(u, what, once_per_day=False):
@@ -3739,7 +3752,7 @@ def fixer_prompt(u, wt, brief, resume_note=None):
                 "CdpDriver discards), a retry-free guard that names the cause. `~/bin/agentctl ci-why " + str(rid) + "` "
                 "explains the run. Never rerun to green, never loosen a test. Commit with a `Fixes-Red: " + str(num) + "` "
                 "trailer and land it with `~/bin/agentctl land` in the foreground. End at `LANDED <sha>`; if you cannot, "
-                "`GAVE UP: <why>`; if it needs the owner, `~/bin/agentctl red block " + str(num) + " --cmd \"<command>\"` "
+                "`GAVE UP: <why>`; if it needs the owner, `~/bin/agentctl red block " + str(num) + " --owner-cause <kind> --cmd \"<command>\"` (only for a cause outside the code that only the owner can act on: never a code red) "
                 "and end `BLOCKED ON OWNER: <command>`.")
     elif u["workflow"] == LOCAL_FLOW:
         task = (f"The pre-push check `{u['job']}` FAILS ON PLAIN forgejo/main {str(u['run'].get('headSha'))[:10]} (no "
@@ -3753,7 +3766,7 @@ def fixer_prompt(u, wt, brief, resume_note=None):
                 f"DIAGNOSE ONLY: `~/bin/agentctl ci-why {rid}`, the CI runners' health (~/bin/ci-runners-page, the "
                 "ci-runner host's systemd units over ssh, read-only), disk, docker, the tunnel. Make NO code change and "
                 "do not rerun anything to get green. If it needs a deploy, a restart or any owner action, run "
-                f"`~/bin/agentctl red block {num} --cmd \"<the exact command the owner must run>\"` and end with a line "
+                f"`~/bin/agentctl red block {num} --owner-cause <kind> --cmd \"<the exact command the owner must run>\"` and end with a line "
                 "`BLOCKED ON OWNER: <command>`; otherwise end with `DIAGNOSED: <cause>; durable fix: <what to change, or "
                 "what to log so the next occurrence names its cause>` -- an implementer is dispatched with it at once.")
     else:
@@ -3763,7 +3776,7 @@ def fixer_prompt(u, wt, brief, resume_note=None):
                 f". `~/bin/agentctl ci-why {rid}` explains it. Root-cause it (never rerun to green, never loosen a test "
                 "or a budget to pass), commit the fix with a `Fixes-Red: " + str(num) + "` trailer, and land it with "
                 "`~/bin/agentctl land` in the foreground. End at `LANDED <sha>`. If you cannot fix it, end with a line "
-                "`GAVE UP: <why>`; if it needs the owner, `~/bin/agentctl red block " + str(num) + " --cmd \"<command>\"` "
+                "`GAVE UP: <why>`; if it needs the owner, `~/bin/agentctl red block " + str(num) + " --owner-cause <kind> --cmd \"<command>\"` (only for a cause outside the code that only the owner can act on: never a code red) "
                 "and end `BLOCKED ON OWNER: <command>`.")
     if u.get("predicts"):
         task += (f" This red is on branch {u['predicts']}, not main yet: a run of commits that have since landed on main, "
@@ -3799,7 +3812,7 @@ def fixer_env(o_r, num, wrapper_pid=None):
     return env
 
 
-def red_dispatch(o_r, repo, u, why="by hand", resume=None, group=None, diagnosis=None):
+def red_dispatch(o_r, repo, u, why="by hand", resume=None, group=None, diagnosis=None, effort=None):
     """Start a headless fixer for unit u: a fresh worktree <clone>-wt-red-<run> off forgejo/main, then a detached
     `agentctl red fixer` that runs `claude -p` there, claims the red with its own pid, logs to reds/<run>/ and writes
     its verdict to the inbox. (ok, message)."""
@@ -3828,7 +3841,7 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, group=None, diagnosis
            "started": ts(), "why": why, "log": os.path.join(d, f"claude-{k}.log"), "names": sorted(u["names"]),
            "session": resume.get("session") if resume else None, "resume": bool(resume),
            "resume_note": resume.get("note") if resume else None, "cause": u.get("cause"),
-           "implement": bool(diagnosis), "diagnosis": diagnosis}
+           "implement": bool(diagnosis), "diagnosis": diagnosis, "effort": effort}
     write_json(rec_path, rec)
     with open(os.path.join(d, "fixer.log"), "a") as logf:
         p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=wt,
@@ -3931,6 +3944,8 @@ def red_fixer(a):
             "--output-format", "stream-json", "--verbose", "-n", f"red fixer #{num}",
             "--disallowedTools", "Bash(git push:*)", "Bash(*--no-verify*)", "Bash(*PREPUSH_SKIP*)"]
     argv += ["--resume", session] if rec.get("resume") else ["--session-id", session]
+    if rec.get("effort"):  # a deep investigation
+        argv += ["--effort", rec["effort"]]
     env = dict(os.environ, AGENTCTL_CLAIM_PID=str(me), AGENTCTL_AGENT_NAME=who)
     wall = env_num("AGENTCTL_RED_FIXER_WALL", RED_FIXER_WALL)
     t0, verdict, rc = time.time(), None, None
@@ -4024,13 +4039,18 @@ def keep_diagnosed_claim(repo, rec, c, cpath, verdict):
     if again:
         line = (f"RED ESCALATE: {rec['workflow']} #{rec['run']} [{rec['job']}] diagnosed twice, not fixed: "
                 f"{summary[:200]} -- the owner takes it")
-        try:  # never NOBODY: the owner, as a block cleared by the red's own workflow going green
-            u = {"run": {"number": rec["run"], "databaseId": rec.get("run_id")}, "workflow": rec["workflow"],
-                 "job": rec["job"], "sig": rec.get("sig")}
-            line = escalate_to_owner(slug(repo), repo, u, read_record(sig_path(rec.get("sig"))) or {}) or line
-        except (Exception, SystemExit) as e:
-            err(f"red: could not block {rec['workflow']} #{rec['run']} on the owner ({str(e)[:120]})")
-            red_condition("RED_ESCALATE", line, {"run": rec["run"], "workflow": rec["workflow"]})
+        # never the owner for a code red: the patrol's next look sends a DEEP investigation (maybe_dispatch), its claim
+        # dropped here so the red is due again
+        try:
+            os.unlink(cpath)
+        except OSError:
+            pass
+        with reds_lock():
+            srec = read_record(sig_path(rec.get("sig"))) or {}
+            srec.update(investigated=srec.get("investigated") or ts(), escalated=srec.get("escalated") or ts())
+            write_json(sig_path(rec.get("sig")), srec)
+        red_condition("RED_ESCALATE", line.replace("the owner takes it", "a deep investigation is dispatched next"),
+                      {"run": rec["run"], "workflow": rec["workflow"]})
         return line
     try:
         o_r = slug(repo)
@@ -4569,61 +4589,231 @@ def cmd_red(a):
     return 2
 
 
+# BLOCKED ON OWNER IS FOR THE OWNER'S CAUSES ONLY (the owner, 2026-10-28: "fix this: main #2283 → BLOCKED ON OWNER ...
+# root cause and structural fix", "fix structurally so it doesn't false-flag this way" -- an escalation block raised for
+# the CdpLaunchSpec crash on #2164 followed the red onto #2283 and hid its live fixer). A code red is never the owner's:
+# a block needs an OWNER CAUSE (outside the code, that only the owner can act on), a red whose verdict is not a test
+# failure, no live fixer, and the owner's exact command -- checked at the block AND again every tick
+# (owner_block_invalid, AND-ed into the condition's probe): a block that lost its justification drops at once.
+OWNER_CAUSES = {"external-account": "an external account only the owner holds (a provider dashboard, a plan)",
+                "credentials": "credentials or secrets only the owner can issue or rotate",
+                "infra-apply": "an infra apply only the owner may run",
+                "deploy": "a deploy only the owner may run",
+                "billing": "a billing action in an account only the owner holds",
+                "dashboard": "an action in a dashboard only the owner can reach"}
+
+
+def red_verdict_kinds(o_r, n, name=None):
+    """{test, infra, unclear} of red run n (its jobs' verdicts), from the run-signature cache; set() unknown."""
+    kinds = set()
+    for p_ in glob.glob(reds_dir("runsig", "*.json")):
+        r = read_record(p_) or {}
+        if str(r.get("number")) == str(n) and (name is None or r.get("workflow") == name):
+            kinds |= {x.get("kind") for x in r.get("sigs") or []}
+    return kinds - {None}
+
+
+def red_live_fixers(c):
+    """Live fixers of the red claim c blocks, other than blocks: a live claim, a queued or waiting Fixes-Red change."""
+    out = []
+    names = set(map(str, c.get("runs") or [])) | {str(c.get("run"))}
+    for o in all_claims():
+        if o.get("path") == c.get("path") or o.get("state") == "blocked" or claim_stale(o):
+            continue
+        if o.get("workflow") == c.get("workflow") and (set(map(str, o.get("runs") or [])) | {str(o.get("run"))}) & names \
+                or (o.get("workflow") == c.get("workflow") and set(o.get("jobs") or []) & set(c.get("jobs") or [])):
+            out.append(f"{o.get('who')} ({o.get('state', 'claimed')})")
+    try:
+        d, _c, _w = waiting_state(movies_repo_path())
+        for e in waiting_entries(d):
+            if set(map(str, e.get("fixes") or [])) & names:
+                out.append(f"a Fixes-Red change ({e.get('status')}, entry {e.get('id')})")
+    except (Exception, SystemExit):
+        pass
+    return out
+
+
+def owner_block_invalid(c):
+    """Why the owner block of claim c is no longer justified, or None."""
+    if c.get("owner_cause") not in OWNER_CAUSES:
+        return f"no owner cause (one of {', '.join(OWNER_CAUSES)}): only the owner's causes may block on the owner"
+    if not str(c.get("blocked_cmd") or "").strip():
+        return "no owner command"
+    if "test" in red_verdict_kinds(SHORT["movies"], c.get("run"), c.get("workflow")):
+        return "its red is a TEST FAILURE: a code red is never the owner's"
+    live = red_live_fixers(c)
+    if live:
+        return f"a live fixer is on it: {live[0]}"
+    return None
+
+
+def probe_owner_block(a):
+    """A BLOCKED condition's probe: passes when its own check passes (the outage is over) OR no block it holds is
+    justified any more (owner_block_invalid of every claim it releases)."""
+    paths = a.get("claims") or []
+    cs = [read_record(p_) for p_ in paths]
+    valid = [c for c, p_ in zip(cs, paths) if c and not owner_block_invalid(dict(c, path=p_))]
+    if paths and not valid:
+        why = next((owner_block_invalid(dict(c, path=p_)) for c, p_ in zip(cs, paths) if c), "its claims are gone")
+        return True, f"INVALID: {why}"
+    inner = a["inner"]
+    ok, detail = PROBES[inner["kind"]](inner["args"])
+    return ok, detail
+
+
+def owner_details(o_r, n, name, units, cmd, words, owner_cause):
+    """The owner's whole picture, one line each part: what fails, what was tried, why only the owner, the command, how
+    it clears (the owner, 2026-10-28: "more details in the future pls")."""
+    u = units[0] if units else {}
+    failing = f"{u.get('job') or '?'}: {str(u.get('line') or 'no error line read')[:160]}"
+    sigs = {x.get("sig") for x in units} - {None}
+    verdicts = [str(r.get("verdict") or "running")[:90] for r in fixer_records() if set(r.get("sigs") or [r.get("sig")]) & sigs]
+    try:
+        infos = find_fixers(scan_repo_for(o_r), units, o_r=o_r) if units else {}
+        refuted = sorted({sha[:9] for i in infos.values() for sha, _r in i.get("failed") or []})
+    except (Exception, SystemExit):
+        refuted = []
+    tried = (f"{len(refuted)} fix(es) refuted ({', '.join(refuted)})" if refuted else "no fix landed") + \
+        (f"; fixers: {' | '.join(verdicts[-4:])}" if verdicts else "; no fixer dispatched")
+    return (f"failing: {failing}. tried: {tried}. only the owner: {OWNER_CAUSES[owner_cause]}. run: `! {cmd}`. "
+            f"auto-clears when {words}")
+
+
 def red_block(o_r, a):
-    """`red block`: the red waits on the owner, as a CONDITION whose probe is the check that keeps it red -- named
-    (--until-green <workflow>, --until-http <url>, --until-tcp <host:port>) or, by default, the red's own workflow
-    going green. When the probe passes the block is released and (unless the probe was that very workflow) the red's
-    workflow is dispatched on main to verify it."""
+    """`red block`: the red waits on the OWNER, for an owner cause only, as a CONDITION whose probe is the check that
+    keeps it red -- named (--until-green / --until-http / --until-tcp) or the red's own workflow going green -- AND-ed
+    with the block's justification (owner_block_invalid). On recovery the block is released and (unless the probe was
+    that very workflow) the red's workflow dispatched on main to verify it."""
     n = str(a.run).lstrip("#")
-    name, _r = resolve_run(o_r, n)
+    name, units = None, []
+    try:
+        name, _r, units = red_run_units(o_r, n)
+    except (Exception, SystemExit):
+        name, _r = resolve_run(o_r, n)
     cause = getattr(a, "cause", None)
     ckey = re.sub(r"[^\w.-]+", "_", f"cause-{cause}") if cause else None
     old = read_record(recovery_dir(ckey + ".json")) if cause else None
+    owner_cause = getattr(a, "owner_cause", None) or (old or {}).get("owner_cause")
+    if owner_cause not in OWNER_CAUSES:
+        print(f"NOT BLOCKED: a block on the owner needs --owner-cause, one of: {', '.join(OWNER_CAUSES)} (a cause outside "
+              "the code that only the owner can act on). A code red is yours: claim it and fix it.")
+        return 2
+    if any(x.get("kind") == "test" for x in units):
+        print(f"NOT BLOCKED: #{n} is a TEST FAILURE ({units[0].get('job')}): a code red is never the owner's -- "
+              f"`~/bin/agentctl red claim {n}` and fix it")
+        return 2
+    live = red_live_fixers({"run": n, "runs": sorted(set().union(*[x["names"] for x in units])) if units else [n],
+                            "workflow": name, "jobs": [x["job"] for x in units]})
+    if live:
+        print(f"NOT BLOCKED: a live fixer is on #{n}: {live[0]}")
+        return 1
     if old and not (a.until_green or a.until_http or a.until_tcp):  # attach to the outage's ONE condition: its probe
-        probe = run_probe(old["probe"]["kind"], old["probe"]["args"])
+        inner = old["probe"]["args"].get("inner") or old["probe"]
+        iprobe = run_probe(inner["kind"], inner["args"])
     elif cause and not (a.until_green or a.until_http or a.until_tcp):
         print(f"NOT BLOCKED: no open cause {cause!r} to attach to; open it with its probe: --cause {cause} "
               "--until-green <workflow> | --until-http <url> | --until-tcp <host:port>")
         return 2
     elif a.until_green:
-        probe = run_probe("workflow_green", {"repo": o_r, "workflow": a.until_green})
+        iprobe = run_probe("workflow_green", {"repo": o_r, "workflow": a.until_green})
     elif a.until_http:
-        probe = run_probe("http", {"url": a.until_http})
+        iprobe = run_probe("http", {"url": a.until_http})
     elif a.until_tcp:
         host, _, port = a.until_tcp.rpartition(":")
-        probe = run_probe("tcp", {"host": host, "port": int(port)})
+        iprobe = run_probe("tcp", {"host": host, "port": int(port)})
     elif name:
-        probe = run_probe("workflow_green", {"repo": o_r, "workflow": name})
+        iprobe = run_probe("workflow_green", {"repo": o_r, "workflow": name})
     else:
         print(f"NOT BLOCKED: #{n}'s workflow is unknown, so no probe can clear the block; name one: --until-green "
               "<workflow> | --until-http <url> | --until-tcp <host:port>")
         return 2
-    words = probe_words(probe.kind, probe.args)
-    if probe.ok:
-        print(f"NOT BLOCKED: {words} already ({probe.detail}): nothing waits on the owner -- `red claim {n}` and fix it")
+    words = probe_words(iprobe.kind, iprobe.args)
+    if iprobe.ok:
+        print(f"NOT BLOCKED: {words} already ({iprobe.detail}): nothing waits on the owner -- `red claim {n}` and fix it")
         return 1
+    details = owner_details(o_r, n, name, units, a.owner_cmd, words, owner_cause)
+    key = ckey or re.sub(r"[^\w.-]+", "_", f"block-{name}-{n}")
     held = {}
 
     def effect():
         held["c"], path = red_claim(o_r, n, a.note or "", "blocked", a.owner_cmd, until=words, cause=cause)
+        cur = read_record(path) or held["c"]
+        write_json(path, {**cur, "owner_cause": owner_cause, "details": details})
         return {"path": path}
 
     def text(_extra):
         c = held["c"]
         what = f"{c.get('workflow') or 'run'} #{c['run']}" + (f" [{', '.join(c['jobs'])}]" if c.get("jobs") else "")
         if cause:
-            return f"RED BLOCKED ON OWNER: {cause} down: `{a.owner_cmd}` (blocks {what}) -- auto-clears when {words}"
-        return (f"RED BLOCKED ON OWNER: {what}: `{a.owner_cmd}` ({c['who']}, {c['worktree'].replace(HOME, '~')}) -- "
-                f"auto-clears when {words}")
+            return f"RED BLOCKED ON OWNER: {cause} down (blocks {what}): {details}"
+        return f"RED BLOCKED ON OWNER: {what}: {details}"
+    claims = [x["path"] for _n, x in (old or {}).get("on_recover") or [] if x.get("path")]
+    probe = run_probe("owner_block", {"inner": {"kind": iprobe.kind, "args": iprobe.args}, "claims": claims})
     rec = [("release_block", {"run": n, "workflow": name})]
-    if not (probe.kind == "workflow_green" and probe.args.get("workflow") == name):
+    if not (iprobe.kind == "workflow_green" and iprobe.args.get("workflow") == name):
         rec.append(("verify", {"run": n, "workflow": name, "repo": o_r}))
-    key = ckey or re.sub(r"[^\w.-]+", "_", f"block-{name}-{n}")
     cond = open_condition("BLOCKED", text, probe, rec, key=key, command="red", effect=effect)
-    print((f"attached {name} #{n} to {cause!r}: " if old else "") + cond["text"]
-          + f" ({probe.detail}; `agentctl recover status`)")
+    if cond:
+        cond["probe"]["args"]["claims"] = [x["path"] for _n, x in cond["on_recover"] if x.get("path")]
+        write_json(recovery_dir(key + ".json"), {**cond, "owner_cause": owner_cause})
+    print((f"attached {name} #{n} to {cause!r}: " if old else "") + (cond or {}).get("text", "")
+          + f" ({iprobe.detail}; `agentctl recover status`)")
     recovery_recheck("red_resolved")  # its RED UNCLAIMED / ESCALATE clear now, not at their next backoff tick
     return 0
+
+
+def validate_owner_blocks():
+    """Every tick: each owner block that lost its justification drops at once (its claim released, its actions gone);
+    a BLOCKED condition left holding none closes through its own probe (owner_block)."""
+    out = []
+    for cond in open_conditions():
+        if cond.get("kind") != "BLOCKED":
+            continue
+        acts, keep, dropped = cond.get("on_recover") or [], [], []
+        for n_, x in acts:
+            c = read_record(x["path"]) if x.get("path") else None
+            why = owner_block_invalid(dict(c, path=x["path"])) if c else None
+            if why:
+                dropped.append((x, why))
+            else:
+                keep.append([n_, x])
+        if not dropped:
+            continue
+        gone = {str(x.get("run")) for x, _w in dropped}
+        keep = [[n_, x] for n_, x in keep if not (n_ == "verify" and str(x.get("run")) in gone)]
+        path = cond.pop("path")
+        if any(n_ == "release_block" for n_, _x in keep):  # an outage still holding other reds: detach these
+            for x, why in dropped:
+                try:
+                    os.unlink(x["path"])
+                except OSError:
+                    pass
+                out.append(f"dropped the owner block of #{x.get('run')}: {why}")
+            cond["on_recover"] = keep
+            cond["probe"]["args"]["claims"] = [x["path"] for _n, x in keep if x.get("path")]
+            write_json(path, cond)
+        else:
+            cond["path"] = path
+            r = run_probe(cond["probe"]["kind"], cond["probe"]["args"])
+            if r.ok:
+                line = close_condition(cond, r)
+                if line:
+                    out.append(line)
+    held = {x.get("path") for c in open_conditions() for _n, x in c.get("on_recover") or []}
+    for c in all_claims():  # a block with no condition (made before the registry, or its condition gone)
+        if c.get("state") == "blocked" and c["path"] not in held:
+            why = owner_block_invalid(c)
+            if why:
+                try:
+                    os.unlink(c["path"])
+                    out.append(f"dropped the owner block of {c.get('workflow')} #{c.get('run')} ({c.get('who')}): {why}")
+                except OSError:
+                    pass
+    for line in out:
+        err(line)
+    if out:
+        mark_gate_dirty()
+    return out
 
 
 def red_verify(o_r, n):
@@ -10207,7 +10397,7 @@ INBOX_KINDS = [("UNLANDED_ORPHAN", r"UNLANDED ORPHAN:"), ("RECOVERED", r"RECOVER
                ("UNKNOWN", r"WATCH UNKNOWN|UNKNOWN:|crashed:|exited:|ended by signal|exit \d+ with no verdict"),
                ("NOT_LANDED", r"NOT LANDED"), ("SUPERSEDED", r"SUPERSEDED "), ("LANDED", r"LANDED "), ("WAITING", r"WAITING "), ("QUEUED", r"QUEUED "), ("HELD", r"HELD:"),
                ("CHECK", r"CHECK CAP")]
-WAIT_KINDS_DEFAULT = "RED,BRANCH_RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_BUDGET,RED_AUTHOR,RED_ESCALATE,BLOCKED,FIXER_FAILED,RED_REVERT"
+WAIT_KINDS_DEFAULT = "RED,BRANCH_RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_BUDGET,RED_AUTHOR,RED_ESCALATE,BLOCKED,FIXER_FAILED,DIAGNOSED,UNLANDED_ORPHAN,RED_REVERT"
 
 
 def inbox_kind(verdict, final=True):
@@ -10557,11 +10747,11 @@ def probe_fixer_slot(a):
     return why is None, why or "a fixer slot is free"
 
 
-PROBES = {"orphan_landed": probe_orphan_landed, "fixer_slot": probe_fixer_slot, "batch_hold": probe_batch_hold, "workflow_green": probe_workflow_green, "http": probe_http, "tcp": probe_tcp, "red_resolved": probe_red_resolved,
+PROBES = {"owner_block": probe_owner_block, "orphan_landed": probe_orphan_landed, "fixer_slot": probe_fixer_slot, "batch_hold": probe_batch_hold, "workflow_green": probe_workflow_green, "http": probe_http, "tcp": probe_tcp, "red_resolved": probe_red_resolved,
           "route": probe_route, "tunnel": probe_tunnel, "gate_read": probe_gate_read, "token": probe_token,
           "processor": probe_processor, "git_fetch": probe_git_fetch, "laptop_load": probe_laptop_load,
           "queue_entry": probe_queue_entry}
-PROBE_EVERY = {"orphan_landed": 300, "fixer_slot": 30, "batch_hold": 60, "route": 5, "tunnel": 10, "gate_read": 15, "processor": 30, "queue_entry": 60, "red_resolved": 60,
+PROBE_EVERY = {"owner_block": 60, "orphan_landed": 300, "fixer_slot": 30, "batch_hold": 60, "route": 5, "tunnel": 10, "gate_read": 15, "processor": 30, "queue_entry": 60, "red_resolved": 60,
                "workflow_green": 60, "token": 60, "laptop_load": 60, "tcp": 60, "http": 120, "git_fetch": 120}
 
 
@@ -10573,7 +10763,9 @@ def probe_words(kind, a):
             "gate_read": lambda: "the gate is read", "token": lambda: "the processor holds a token",
             "processor": lambda: "the processor cycles again", "git_fetch": lambda: f"git can read {REMOTE}/main",
             "laptop_load": lambda: "the laptop's load is normal", "batch_hold": lambda: "the batch hold ends",
-            "fixer_slot": lambda: "a fixer slot is free", "orphan_landed": lambda: "its commits are on main or somebody works in it",
+            "fixer_slot": lambda: "a fixer slot is free",
+            "owner_block": lambda: (probe_words(a["inner"]["kind"], a["inner"]["args"]) if a.get("inner") else "its check passes")
+            + " (or the block loses its justification)", "orphan_landed": lambda: "its commits are on main or somebody works in it",
             "queue_entry": lambda: f"queue entry {a.get('eid')} moves"}.get(kind, lambda: kind)()
 
 
@@ -10711,7 +10903,11 @@ def open_conditions():
 
 
 def close_condition(cond, result):
-    """The probe passed: claim the close (an atomic rename: one closer), ack, mark dirty, run on_recover, note it."""
+    """The probe passed (result: its ProbeResult, or a reason string for a manual close): claim the close (an atomic
+    rename: one closer), ack, mark dirty, run on_recover, note it."""
+    if isinstance(result, str):
+        result = ProbeResult(cond["probe"]["kind"], cond["probe"]["args"], True, f"closed by hand: {result}",
+                             _made_by_run_probe=_RUN_PROBE_TOKEN)
     done = recovery_dir("closed", f"{cond['key']}-{int(time.time())}.json")
     os.makedirs(os.path.dirname(done), exist_ok=True)
     try:
@@ -10724,6 +10920,8 @@ def close_condition(cond, result):
         open(os.path.join(acked, eid), "a").close()
     did = []
     for name, a in cond.get("on_recover") or []:
+        if name == "verify" and str(result.detail).startswith("INVALID:"):
+            continue  # the block lost its justification: the red goes back to dispatch, nothing recovered to verify
         try:
             w = RECOVER_ACTIONS[name](cond, a)
             if w:
@@ -11193,6 +11391,8 @@ def main(argv=None):
     rbu.add_argument("--until-green", metavar="WORKFLOW", help="clears when this workflow's newest run on main is green")
     rbu.add_argument("--until-http", metavar="URL", help="clears when this URL answers 2xx-4xx")
     rbu.add_argument("--until-tcp", metavar="HOST:PORT", help="clears when this port accepts a connection")
+    rb.add_argument("--owner-cause", choices=sorted(OWNER_CAUSES), help="why only the owner can act (required: a code red is "
+                    "never the owner's): " + "; ".join(f"{k}: {v}" for k, v in OWNER_CAUSES.items()))
     rb.add_argument("--cause", metavar="NAME", help="an outside outage (e.g. decodo): ONE condition for every red it "
                     "explains; attach to the open one, or open it with --until-*")
     rv = rds.add_parser("verify", help="dispatch a red's workflow on main now and compare (outside-gate verification)")

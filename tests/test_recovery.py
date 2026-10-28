@@ -163,7 +163,7 @@ class NoBypassTest(RegistryBase):
                 if nm == "red_claim" and not opens and any(isinstance(x, ast.Constant) and x.value == "blocked"
                                                            for x in list(call.args) + [k.value for k in call.keywords]):
                     bad.append(f"{fn.name}:{call.lineno} a blocked claim outside open_condition")
-                if nm == "ProbeResult" and fn.name != "run_probe":
+                if nm == "ProbeResult" and fn.name not in ("run_probe", "close_condition"):  # a manual close: a reason
                     bad.append(f"{fn.name}:{call.lineno} a ProbeResult not from run_probe")
                 if nm == "open_condition" and len(call.args) < 4:
                     bad.append(f"{fn.name}:{call.lineno} open_condition without (kind, text, probe, on_recover)")
@@ -237,6 +237,7 @@ class UntilGreenTest(RedBase):
     """`red block --until-green "Decodo probe"`: released by the probe workflow going green, then verified."""
     def setUp(self):
         super().setUp()
+        self.main_red(40, 20, kind="infra")  # an outside cause: a code red is never blocked on the owner
         self.rec_dir = os.path.join(self.tmp.name, "rec")
         os.environ["AGENTCTL_RECOVERY_DIR"] = self.rec_dir
         self.saved_actions = dict(A.RECOVER_ACTIONS)
@@ -258,14 +259,14 @@ class UntilGreenTest(RedBase):
         self.snap("failure")
         os.environ["AGENTCTL_CLAIM_PID"] = str(os.getpid())
         try:
-            rc, out = self.tool("red", "block", "20", "--cmd", "Check the Decodo dashboard", "--until-green",
+            rc, out = self.tool("red", "block", "20", "--owner-cause", "external-account", "--cmd", "Check the Decodo dashboard", "--until-green",
                                 "Decodo probe", "--repo", "movies", cwd=self.r.path)
         finally:
             os.environ.pop("AGENTCTL_CLAIM_PID")
         self.assertEqual(rc, 0, out)
         self.assertIn("auto-clears when Decodo probe is green", out)
         self.assertEqual([c.get("state") for c in A.all_claims()], ["blocked"])
-        self.assertIn("main #20 → BLOCKED ON OWNER (auto-clears when Decodo probe is green)", self.why("--summary")[1])
+        self.assertIn("main #20 → BLOCKED ON OWNER (auto-clears when Decodo probe is green", self.why("--summary")[1])
         verified = []
         A.RECOVER_ACTIONS["verify"] = lambda c, a: verified.append(a["run"]) or "dispatched"
         self.assertEqual(A.recovery_tick(force=True), [])  # the probe workflow is still red: nothing moves
@@ -280,18 +281,19 @@ class UntilGreenTest(RedBase):
 
     def test_a_block_whose_probe_passes_already_is_refused_and_the_default_probe_is_the_red_s_workflow(self):
         self.snap("success")
-        rc, out = self.tool("red", "block", "20", "--cmd", "x", "--until-green", "Decodo probe", "--repo", "movies",
+        rc, out = self.tool("red", "block", "20", "--owner-cause", "external-account", "--cmd", "x", "--until-green", "Decodo probe", "--repo", "movies",
                             cwd=self.r.path)
         self.assertEqual(rc, 1, out)
         self.assertIn("NOT BLOCKED", out)
         os.environ["AGENTCTL_CLAIM_PID"] = str(os.getpid())
         try:
-            rc, out = self.tool("red", "block", "20", "--cmd", "x", "--repo", "movies", cwd=self.r.path)
+            rc, out = self.tool("red", "block", "20", "--owner-cause", "external-account", "--cmd", "x", "--repo", "movies", cwd=self.r.path)
         finally:
             os.environ.pop("AGENTCTL_CLAIM_PID")
         self.assertEqual(rc, 0, out)
         c = A.open_conditions()[0]
-        self.assertEqual(c["probe"], {"kind": "workflow_green", "args": {"repo": MOVIES, "workflow": "Main"}})
+        self.assertEqual(c["probe"]["kind"], "owner_block")  # the outage's check AND the block's justification
+        self.assertEqual(c["probe"]["args"]["inner"], {"kind": "workflow_green", "args": {"repo": MOVIES, "workflow": "Main"}})
         self.assertEqual([n for n, _a in c["on_recover"]], ["release_block"])  # its own green IS the verification
 
 

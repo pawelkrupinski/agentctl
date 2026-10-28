@@ -127,7 +127,7 @@ class RedBase(unittest.TestCase):
     def wait_fixer(self, timeout=180, n=1):
         t0 = time.time()
         while time.time() - t0 < timeout:
-            done = [e for e in self.inbox() if e.get("kind") in ("FIXER_LANDED", "FIXER_FAILED")]
+            done = [e for e in self.inbox() if e.get("kind") in ("FIXER_LANDED", "FIXER_FAILED", "DIAGNOSED")]
             if len(done) >= n:
                 return done
             time.sleep(0.2)
@@ -351,16 +351,20 @@ class PatrolTest(RedBase):
         self.assertEqual(A.fixer_records(), [])
 
     def test_blocked_on_owner_is_loud_and_counts_as_assigned(self):
+        self.main_red(40, 20, kind="infra")  # an owner cause outside the code
         os.environ["AGENTCTL_CLAIM_PID"] = str(os.getpid())
         try:
-            rc, out = self.tool("red", "block", "20", "--cmd", "bin/deploy ci-runner --apply", "--repo", "movies",
-                                cwd=self.r.path)
+            rc, out = self.tool("red", "block", "20", "--owner-cause", "infra-apply", "--cmd", "bin/deploy ci-runner --apply",
+                                "--repo", "movies", cwd=self.r.path)
         finally:
             os.environ.pop("AGENTCTL_CLAIM_PID")
         self.assertEqual(rc, 0, out)
         self.assertEqual(len(self.inbox("BLOCKED")), 1)
-        self.assertIn("fixing: BLOCKED ON OWNER `bin/deploy ci-runner --apply`", self.why()[1])
-        self.assertIn("main #20 → BLOCKED ON OWNER (auto-clears when Main is green)", self.why("--summary")[1])
+        why = self.why()[1]
+        self.assertIn("fixing: BLOCKED ON OWNER: failing: test (rest):", why)  # the owner's whole picture
+        self.assertIn("only the owner: an infra apply only the owner may run. run: `! bin/deploy ci-runner --apply`", why)
+        self.assertIn("main #20 → BLOCKED ON OWNER (auto-clears when Main is green; `agentctl ci-why 20`)",
+                      self.why("--summary")[1])
         t = time.time()
         self.patrol(t)
         self.assertEqual(self.patrol(t + 60 * 60), [])
@@ -439,7 +443,7 @@ class DispatchTest(RedBase):
         acts = self.patrol(t) + self.patrol(t + 11 * 60)
         # 2026-10-28: the escalation is a named investigation fixer, never "a person must take it" with nobody on it
         self.assertTrue(any(a.startswith("RED ESCALATE: Main #20 [test (rest)] still red after 2") and
-                            "an investigation fixer is assigned" in a for a in acts), acts)
+                            "investigation assigned" in a for a in acts), acts)
         self.assertEqual(len(self.inbox("RED_ESCALATE")), 1)
         self.assertEqual([r.get("why") for r in A.fixer_records()], ["escalated after 2 fixers: investigation"])
         self.wait_fixer()
