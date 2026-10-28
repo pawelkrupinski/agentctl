@@ -145,12 +145,19 @@ def err(msg):
     print(f"agentctl: {msg}", file=sys.stderr, flush=True)
 
 
+def state_root(*parts):
+    """THE state root (the owner, 2026-10-28: tests wrote ~200 waiting/ dirs, the sweep reports and 176 rows of
+    checks/runs.jsonl into the real cache): $AGENTCTL_STATE_ROOT, else ~/.cache/agentctl, resolved at EVERY use and
+    inherited by every child process. Every agentctl path is under it unless its own override says otherwise."""
+    return os.path.join(os.environ.get("AGENTCTL_STATE_ROOT") or os.path.join(HOME, ".cache", "agentctl"), *parts)
+
+
 def scratch():
     d = os.environ.get("AGENTCTL_SCRATCH")
     if not d:
         sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
         hits = sorted(glob.glob(f"/private/tmp/claude-{os.getuid()}/*/{sid}/scratchpad")) if sid else []
-        d = hits[0] if hits else os.path.join(HOME, ".cache", "agentctl")
+        d = hits[0] if hits else state_root()
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -599,7 +606,7 @@ TOOL_PATH = os.path.realpath(__file__)
 
 
 def owners_dir():
-    return os.environ.get("AGENTCTL_OWNERS_DIR") or os.path.join(HOME, ".cache", "agentctl", "owners")
+    return os.environ.get("AGENTCTL_OWNERS_DIR") or state_root("owners")
 
 
 def code_version(path=TOOL_PATH):
@@ -1486,7 +1493,7 @@ INTERNAL_TREE = re.compile(r"-wt-(check-\d+|waiting|batch)$")  # legacy fallback
 
 
 def internal_trees_dir(*parts):
-    d = os.environ.get("AGENTCTL_INTERNAL_TREES_DIR") or os.path.join(HOME, ".cache", "agentctl", "internal-trees")
+    d = os.environ.get("AGENTCTL_INTERNAL_TREES_DIR") or state_root("internal-trees")
     return os.path.join(d, *parts)
 
 
@@ -1514,7 +1521,7 @@ def internal_tree(path):
     p = os.path.realpath(path or "")
     return os.path.exists(internal_trees_dir(hashlib.sha1(p.encode()).hexdigest() + ".json")) \
         or bool(INTERNAL_TREE.search(p.rstrip("/"))) or p.startswith(os.path.realpath(CACHE_TREES).rstrip("/") + "/") \
-        or p.startswith(os.path.realpath(WAITING_DIR).rstrip("/") + "/")
+        or p.startswith(os.path.realpath(waiting_dir()).rstrip("/") + "/")
 
 
 def worktree_holding(repo, sha):
@@ -1537,7 +1544,7 @@ def worktree_holding(repo, sha):
 
 
 def queue_entry_worktree(entry_id):
-    for p in glob.glob(os.path.join(WAITING_DIR, "*", "entries", f"{entry_id}.json")):
+    for p in glob.glob(os.path.join(waiting_dir(), "*", "entries", f"{entry_id}.json")):
         e = read_record(p) or {}
         if e.get("worktree"):
             return e["worktree"]
@@ -2030,7 +2037,7 @@ GATE_LINE = re.compile(r"gate (RED|green)\b")
 
 
 def gate_summary_path():
-    return os.environ.get("AGENTCTL_GATE_SUMMARY") or os.path.join(HOME, ".cache", "agentctl", "gate-summary.txt")
+    return os.environ.get("AGENTCTL_GATE_SUMMARY") or state_root("gate-summary.txt")
 
 
 def publish_gate_summary(o_r, line, epoch=None):
@@ -2102,7 +2109,7 @@ def assign_first(repo, snap):
 
 
 def gate_dirty_path():
-    return os.path.join(HOME, ".cache", "agentctl", "gate.dirty")
+    return state_root("gate.dirty")
 
 
 def mark_gate_dirty():
@@ -2117,7 +2124,7 @@ def mark_gate_dirty():
 
 
 def statusline_stale_path():
-    return os.environ.get("AGENTCTL_STATUSLINE_STALE") or os.path.join(HOME, ".cache", "agentctl", "statusline.stale")
+    return os.environ.get("AGENTCTL_STATUSLINE_STALE") or state_root("statusline.stale")
 
 
 def maybe_publish_gate(repo):
@@ -2245,7 +2252,7 @@ def fixer_rank(f):
 
 
 def reds_dir(*parts):
-    d = os.environ.get("AGENTCTL_REDS_DIR") or os.path.join(HOME, ".cache", "agentctl", "reds")
+    d = os.environ.get("AGENTCTL_REDS_DIR") or state_root("reds")
     return os.path.join(d, *parts)
 
 
@@ -4741,7 +4748,11 @@ LAND_RETRIES = 3
 # minutes for an identity or page change -- and two landers would each test a base the other is about to move, then
 # race, rebase, and test again. Agents wait for the lock instead (land runs in the background), and it caps the
 # laptop at one landing hook's JVM at a time.
-LAND_LOCK_DIR = os.path.join(HOME, ".cache", "agentctl", "land")
+LAND_LOCK_DIR = None  # a test's override; else land_lock_dir(): under the state root, resolved at each use
+
+
+def land_lock_dir():
+    return LAND_LOCK_DIR or state_root("land")
 LAND_LOCK_TIMEOUT = 4 * 3600
 # NO STALLED HOLDER (the owner, 2026-10-27): one land's hook hung 2.5 h in sbt-warm and blocked every lander behind the
 # lock. A step land runs (the hook's dry run, the push) that makes NO PROGRESS -- its output does not grow and its
@@ -4868,7 +4879,7 @@ GOV_REPORT = 600
 
 
 def gov_dir():
-    d = os.environ.get("AGENTCTL_GOV_DIR") or os.path.join(HOME, ".cache", "agentctl", "gov")
+    d = os.environ.get("AGENTCTL_GOV_DIR") or state_root("gov")
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -5220,7 +5231,7 @@ CHECKS_DEFAULT_CAP = 3
 
 
 def checks_dir():
-    d = os.environ.get("AGENTCTL_CHECKS_DIR") or os.path.join(HOME, ".cache", "agentctl", "checks")
+    d = os.environ.get("AGENTCTL_CHECKS_DIR") or state_root("checks")
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -5499,7 +5510,7 @@ def landed(repo, sha, main_ref):
 def land_lock_path(repo):
     """One lock per repository: every worktree of a clone shares its git common dir."""
     common = os.path.realpath(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
-    return os.path.join(LAND_LOCK_DIR, re.sub(r"[^A-Za-z0-9._-]", "_", common.strip("/")) + ".lock")
+    return os.path.join(land_lock_dir(), re.sub(r"[^A-Za-z0-9._-]", "_", common.strip("/")) + ".lock")
 
 
 _held_lock = [None]  # (file, first line) of the landing lock this process holds
@@ -5535,7 +5546,7 @@ def land_lock(repo):
     line saying who holds it, for how long and doing what, repeated every LAND_WAIT_REPORT_MIN minutes. Yields True
     when held, False when the wait timed out."""
     path = land_lock_path(repo)
-    os.makedirs(LAND_LOCK_DIR, exist_ok=True)
+    os.makedirs(land_lock_dir(), exist_ok=True)
     f = open(path, "a+")
     try:
         try:
@@ -6553,7 +6564,11 @@ def iso_at(t):
 # branch in ONE push, deletes it, and every waiting `land` goes on to its LANDED and WATCH. Tools-only commits and
 # Fixes-Red fixes never wait (the hook lets them land while red). Replaces the merge queue.
 WAITING_BRANCH = "waiting"
-WAITING_DIR = os.path.join(HOME, ".cache", "agentctl", "waiting")
+WAITING_DIR = None  # a test's override; else waiting_dir(): under the state root, resolved at each use
+
+
+def waiting_dir():
+    return WAITING_DIR or state_root("waiting")
 PRODUCTION_GLOBS = ("*/src/main/*", "conf/*", "*/conf/*", "build.sbt", "project/*", "infra/nix/*", "infra/kubernetes/*",
                     "Dockerfile")
 WAITING_AWAIT_TIMEOUT = 24 * 3600
@@ -6629,7 +6644,7 @@ def must_wait(repo, commits, reds):
 
 def waiting_state(repo):
     common = os.path.realpath(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
-    d = os.path.join(WAITING_DIR, re.sub(r"[^A-Za-z0-9._-]", "_", common.strip("/")))
+    d = os.path.join(waiting_dir(), re.sub(r"[^A-Za-z0-9._-]", "_", common.strip("/")))
     os.makedirs(os.path.join(d, "entries"), exist_ok=True)
     clone = os.path.dirname(common) if os.path.basename(common) == ".git" else common
     return d, clone, f"{clone}-wt-waiting"
@@ -7948,7 +7963,7 @@ def spawn_watch_of(repo, sha, pushed_at, close=None, fixes=()):
     handed the Forgejo token (token_env): once land exits, the vault no longer answers it. It runs from the MAIN CLONE
     (main_clone): the worktree it closes may be removed by its agent first."""
     agent, repo = repo, main_clone(repo)
-    d = os.path.join(HOME, ".cache", "agentctl")
+    d = state_root()
     os.makedirs(d, exist_ok=True)
     argv = [sys.executable, os.path.realpath(__file__), "watch", "--repo", repo, "--for", agent, "--sha", sha,
             "--pushed-at", str(pushed_at or time.time())] + (["--close", close] if close else []) + \
@@ -8585,7 +8600,7 @@ TUNNEL_DOWN_TEXT = re.compile(r"Connection refused|timed? ?out|timeout|deadline 
 
 
 def tunnel_state_path():
-    return os.environ.get("AGENTCTL_TUNNEL_STATE") or os.path.join(HOME, ".cache", "agentctl", "tunnel-health.json")
+    return os.environ.get("AGENTCTL_TUNNEL_STATE") or state_root("tunnel-health.json")
 
 
 def tunnel_down(e):
@@ -9172,7 +9187,11 @@ def cmd_cleanup(a):
 # in; and a daily `agentctl sweep` reports what is unmerged and idle, deleting only remote branches proven merged.
 SWEEP_IDLE_DAYS = 3
 SWEEP_KEEP_REMOTE = ("main", "master", WAITING_BRANCH)
-SWEEP_DIR = os.path.join(HOME, ".cache", "agentctl", "sweep")
+SWEEP_DIR = None  # a test's override; else sweep_dir(): under the state root, resolved at each use
+
+
+def sweep_dir():
+    return SWEEP_DIR or state_root("sweep")
 SWEEP_REPOS = [os.path.join(HOME, "projects", "movies")]
 
 
@@ -9343,8 +9362,8 @@ def cmd_sweep(a):
     text = "\n".join(out)
     print(text)
     if not a.no_report:
-        os.makedirs(SWEEP_DIR, exist_ok=True)
-        with open(os.path.join(SWEEP_DIR, dt.date.today().isoformat() + ".txt"), "w") as f:
+        os.makedirs(sweep_dir(), exist_ok=True)
+        with open(os.path.join(sweep_dir(), dt.date.today().isoformat() + ".txt"), "w") as f:
             f.write(text + "\n")
     return rc
 
@@ -9456,7 +9475,7 @@ def sbt_stuck_reasons(pid, cwd, cpu, clients, serving, state, now):
 
 
 def thread_dump(pid, cwd):
-    d = os.path.join(HOME, ".cache", "agentctl", "sbt-dumps")
+    d = state_root("sbt-dumps")
     os.makedirs(d, exist_ok=True)
     path = os.path.join(d, f"{pid}-{dt.datetime.now().strftime('%Y%m%dT%H%M%S')}.txt")
     try:
@@ -9534,12 +9553,16 @@ def owner_orphans(kill):
     return found
 
 
-REAP_LOG = os.path.join(HOME, ".cache", "agentctl", "reap.log")
+REAP_LOG = None  # a test's override; else reap_log_path(): under the state root, resolved at each use
+
+
+def reap_log_path():
+    return REAP_LOG or state_root("reap.log")
 
 
 def reap_log(line):
-    os.makedirs(os.path.dirname(REAP_LOG), exist_ok=True)
-    with open(REAP_LOG, "a") as f:
+    os.makedirs(os.path.dirname(reap_log_path()), exist_ok=True)
+    with open(reap_log_path(), "a") as f:
         f.write(f"{ts()} {line}\n")
 
 
@@ -9755,7 +9778,7 @@ def cmd_maintain(a):
     print(f"== agentctl maintain {ts()}{' (DRY RUN)' if a.dry_run else ''}")
     print("== reap")
     cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True))
-    path = os.path.join(HOME, ".cache", "agentctl", "maintain.json")
+    path = state_root("maintain.json")
     st = read_record(path) or {}
     today, hour = dt.date.today().isoformat(), dt.datetime.now().hour
     if a.sweep or (st.get("sweep") != today and hour >= int(env_num("AGENTCTL_SWEEP_HOUR", MAINTAIN_SWEEP_HOUR))):
@@ -10024,7 +10047,7 @@ def cmd_orphans(a):
                 seen_targets.setdefault(key, pid)
         if reasons:
             found.append(("wait-loop", pid, etime, "; ".join(reasons), body[:140].replace("\n", " ")))
-    cpu_path = os.path.join(HOME, ".cache", "agentctl", "sbt-cpu.json")
+    cpu_path = state_root("sbt-cpu.json")
     try:
         with open(cpu_path) as f:
             cpu_state = json.load(f)
@@ -10129,7 +10152,7 @@ def inbox_dir():
         return os.environ["AGENTCTL_INBOX_DIR"]
     if os.environ.get("AGENTCTL_OWNERS_DIR"):
         return os.path.join(os.path.dirname(os.path.abspath(os.environ["AGENTCTL_OWNERS_DIR"])), "inbox")
-    return os.path.join(HOME, ".cache", "agentctl", "inbox")
+    return state_root("inbox")
 
 
 class VerdictTee:
@@ -10389,7 +10412,7 @@ _RUN_PROBE_TOKEN = object()
 
 def recovery_dir(*parts):
     d = os.environ.get("AGENTCTL_RECOVERY_DIR") or (reds_dir("recovery") if os.environ.get("AGENTCTL_REDS_DIR")
-                                                   else os.path.join(HOME, ".cache", "agentctl", "recovery"))
+                                                   else state_root("recovery"))
     return os.path.join(d, *parts)
 
 

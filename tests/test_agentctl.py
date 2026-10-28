@@ -10,6 +10,50 @@ _loader.exec_module(A)
 
 # No test writes to the real inbox (~/.cache/agentctl/inbox): every land / watch / wait a test runs writes its verdict
 # here instead (test_inbox sets its own per test).
+# THE STATE ROOT (2026-10-28: tests wrote ~200 waiting/ dirs, the sweep reports and 176 checks/runs.jsonl rows into the
+# real ~/.cache/agentctl): every agentctl path of every test, and of every child process, lives under a temp root.
+os.environ.setdefault("AGENTCTL_STATE_ROOT", tempfile.mkdtemp(prefix="agentctl-state-test-"))
+os.environ.setdefault("AGENTCTL_MOVIES_REPO", os.path.join(os.environ["AGENTCTL_STATE_ROOT"], "no-movies-repo"))
+
+
+def _real_cache_marks():
+    """What a test leak into the real cache would add: test-repo dirs under waiting/, test rows in checks/runs.jsonl,
+    a test repo in a sweep report."""
+    root = os.path.join(os.path.expanduser("~"), ".cache", "agentctl")
+    temp = ("var_folders", "_tmp_", "agentctl-", "/var/folders/", "/tmp/")
+    marks = set()
+    w = os.path.join(root, "waiting")
+    if os.path.isdir(w):
+        marks |= {f"waiting/{d}" for d in os.listdir(w) if any(x in d for x in temp)}
+    try:
+        with open(os.path.join(root, "checks", "runs.jsonl"), errors="replace") as f:
+            marks |= {f"runs.jsonl:{l[:200]}" for l in f if "/var/folders/" in l or "/tmp/" in l}
+    except OSError:
+        pass
+    sw = os.path.join(root, "sweep")
+    for n in os.listdir(sw) if os.path.isdir(sw) else []:
+        try:
+            if "/var/folders/" in open(os.path.join(sw, n), errors="replace").read():
+                marks.add(f"sweep/{n}")
+        except OSError:
+            pass
+    return marks
+
+
+_MARKS_BEFORE = _real_cache_marks()
+
+
+def _guard_real_cache():
+    leaked = _real_cache_marks() - _MARKS_BEFORE
+    if leaked:
+        sys.stderr.write("TEST LEAK into the real ~/.cache/agentctl:\n  " + "\n  ".join(sorted(leaked)[:20]) + "\n")
+        sys.stderr.flush()
+        os._exit(3)
+
+
+import atexit  # noqa: E402
+atexit.register(_guard_real_cache)
+
 os.environ.setdefault("AGENTCTL_INBOX_DIR", tempfile.mkdtemp(prefix="agentctl-inbox-test-"))
 # ...nor reaps this machine's stuck sbt servers (orphans / sweep): test_sbt_reaper drives the rules on fakes.
 os.environ.setdefault("AGENTCTL_SBT_REAP", "0")

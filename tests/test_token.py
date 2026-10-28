@@ -110,7 +110,8 @@ class TokenResolutionTest(Base):
                 f"print(A.token({MOVIES!r}))\n")
         env = {"HOME": os.path.expanduser("~"), "PATH": "/usr/bin:/bin", "AGENTCTL_SOCK_DIR": self.sock_dir,
                "AGENTCTL_MOVIES_REPO": self.r.path, "AGENTCTL_INBOX_DIR": os.environ["AGENTCTL_INBOX_DIR"],
-               "AGENTCTL_REDS_DIR": os.environ["AGENTCTL_REDS_DIR"], "GIT_CONFIG_GLOBAL": "/dev/null"}
+               "AGENTCTL_REDS_DIR": os.environ["AGENTCTL_REDS_DIR"], "GIT_CONFIG_GLOBAL": "/dev/null",
+               "AGENTCTL_STATE_ROOT": os.environ["AGENTCTL_STATE_ROOT"]}
         r = subprocess.run(["env", "-i"] + [f"{k}={v}" for k, v in env.items()] + [sys.executable, "-c", code],
                            capture_output=True, text=True, start_new_session=True, timeout=180)
         self.assertEqual(r.stdout.strip(), TOK, r.stderr)
