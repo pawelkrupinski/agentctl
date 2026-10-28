@@ -1043,10 +1043,25 @@ def commit_line(o_r, sha, repo=None):
         return sha[:9]
 
 
-def classify_job(job, lines, raw=(0, [])):
-    """('infra'|'unclear'|'test', why) for one failed job, from its steps, relevant log lines and raw (count, tail)."""
+# scripts/ci/bounded-step.sh --reap's warning: a step outlived its own `timeout-minutes` (the runner gives up on it and
+# goes on, so its log just stops). Identity rule ablation #2400 read as UNCLEAR with it in its log.
+STEP_TIMED_OUT = "ending what a timed-out step left running"
+
+
+def timed_out_jobs(log_text):
+    """The jobs of a --log-failed output whose log carries bounded-step's timed-out-step warning."""
+    return {raw.split("\t", 1)[0] for raw in log_text.splitlines() if STEP_TIMED_OUT in raw and "\t" in raw}
+
+
+def classify_job(job, lines, raw=(0, []), timed_out=False):
+    """('infra'|'unclear'|'test', why) for one failed job, from its steps, relevant log lines and raw (count, tail).
+    timed_out: a step of it ran past its own timeout-minutes -- the row's work outgrew its bound, a code/config red
+    (`TIMEOUT`), never infra: a rerun meets the same bound."""
     bad = [s for s in job.get("steps") or [] if s.get("conclusion") in ("failure", "timed_out")]
     step = bad[0]["name"] if bad else None
+    if timed_out and not any("*** FAILED" in l or "[error]" in l for l in lines):
+        return "test", (f"TIMEOUT: step '{step}' ran past its timeout-minutes" if step else "TIMEOUT: a step ran past its timeout-minutes") + \
+            " (bounded-step.sh reaped what it left): its work outgrew its bound -- shorten the work or let it stop itself, never rerun"
     if step and SETUP_STEP.match(step):
         return "infra", f"failed in setup step '{step}' (often a `needs:` cascade or runner/setup trouble)"
     if not raw[0] and not lines:
@@ -1190,7 +1205,7 @@ def explain_run_jobs(o_r, run, tail, repo=None):
     except Exception as e:
         log = ""
         err(f"could not read run {rid}'s failed log: {e}")
-    per, raws = relevant_lines(log, tail), raw_tails(log)
+    per, raws, timed = relevant_lines(log, tail), raw_tails(log), timed_out_jobs(log)
     lines = [f"  run id {rid} (#{num}) {d.get('url') or run.get('url')}",
              f"  commit {commit_line(o_r, d.get('headSha') or run.get('headSha'), repo)}"]
     kinds, fetched, per_job = [], 0, []
@@ -1205,14 +1220,16 @@ def explain_run_jobs(o_r, run, tail, repo=None):
         if not jl and not setup and fetched < MAX_JOB_LOG_FETCHES:  # a shifted step slice: read the whole job log
             fetched += 1
             jl = job_log_lines(o_r, rid, j, tail)
-        kind, why = classify_job(j, jl, raws.get(j["name"], (0, [])))
+        kind, why = classify_job(j, jl, raws.get(j["name"], (0, [])), j["name"] in timed)
         kinds.append(kind)
         # a job with no error line is known by its failing STEP (a red is its failing test or step, never its job name)
         per_job.append((j["name"], kind, jl[0] if jl else (f"step failed: {bad[0]['name']}" if bad else "")))
         lines.append(f"  [{kind}] {j['name']}: {why}")
         lines += [f"      {l}" for l in jl]
     rerun = f"rerun: {FORGEJO_GH.replace(HOME, '~')} run rerun {rid} --failed -R {o_r}"
-    if "test" in kinds:
+    if any(l.startswith("  [test]") and ": TIMEOUT: " in l for l in lines):
+        verdict = "TIMEOUT (a step ran past its own timeout-minutes: a code/config red, not a rerun)"
+    elif "test" in kinds:
         verdict = "TEST FAILURE"
     elif "unclear" in kinds:
         verdict = f"UNCLEAR (a failed step logged no FAILED/error line: read `forgejo-gh run view {rid} --log-failed`; if infra, {rerun})"
