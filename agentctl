@@ -1360,8 +1360,40 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
 CI_STATE_MAX_AGE = 180
 
 
-def ci_state_path():
-    return os.path.join(os.path.dirname(reds_dir()), "ci-state.json")
+# THE SNAPSHOT (design §9, phase 1 step 13): ONE file, state.json at the state root, written by the processor -- the
+# gate's read (`ci`), the published gate line (`summary`), and each tick the items (changes, the batch, reds,
+# conditions), `tick_at` and the code version. The status line and `ci-why --summary --cached` read only it; their
+# staleness words come from its times. ci-state.json, gate-summary.txt and the statusline.stale marker are gone.
+_state_lock = __import__("threading").Lock()
+
+
+def state_path():
+    return os.environ.get("AGENTCTL_STATE_FILE") or state_root("state.json")
+
+
+def state_read():
+    try:
+        with open(state_path()) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def state_update(**parts):
+    """Merge parts into state.json, atomically (one writer at a time: a lock file, and a lock for this process's
+    threads)."""
+    path = state_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with _state_lock, open(path + ".lock", "a+") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        d = state_read()
+        d.update(parts)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(d, f)
+        os.replace(tmp, path)
+    return d
 
 
 def ci_state_refresh(o_r, write=True):
@@ -1378,11 +1410,7 @@ def ci_state_refresh(o_r, write=True):
         except Exception as e:
             snap["outside_error"] = str(e)[:200]
     try:  # the branch runs: measure/*, check/*, red fixers' and every recorded dispatch's (after the main lists)
-        try:
-            with open(ci_state_path()) as f:
-                prev = (json.load(f) or {}).get("branches") or []
-        except (OSError, ValueError, AttributeError):
-            prev = []
+        prev = (state_read().get("ci") or {}).get("branches") or []
         snap["branches"] = branch_state(o_r, scan_repo_for(o_r), prev)
     except (Exception, SystemExit) as e:
         snap["branches_error"] = str(e)[:200]
@@ -1399,22 +1427,16 @@ def ci_state_refresh(o_r, write=True):
 
 
 def ci_state_write(snap):
-    path = ci_state_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = f"{path}.{os.getpid()}.tmp"
-    with open(tmp, "w") as f:
-        json.dump(snap, f)
-    os.replace(tmp, path)
+    state_update(ci=snap)
     return snap
 
 
 def ci_state_load(o_r, now=None):
     """The snapshot when it is for o_r and at most CI_STATE_MAX_AGE old, else None (unread)."""
     try:
-        with open(ci_state_path()) as f:
-            snap = json.load(f)
+        snap = state_read().get("ci") or {}
         age = (now or time.time()) - float(snap["at"])
-    except (OSError, ValueError, KeyError, TypeError):
+    except (KeyError, TypeError, ValueError):
         return None
     return snap if snap.get("repo") == o_r and -5 <= age <= CI_STATE_MAX_AGE else None
 
@@ -2079,39 +2101,26 @@ GATE_SUMMARY_MAX_AGE = 180  # s: a published gate line older than this is never 
 GATE_LINE = re.compile(r"gate (RED|green)\b")
 
 
-def gate_summary_path():
-    return os.environ.get("AGENTCTL_GATE_SUMMARY") or state_root("gate-summary.txt")
-
-
 def publish_gate_summary(o_r, line, epoch=None):
-    """Atomically: `<epoch>\t<repo>\t<line>`. Only a read gate line is ever published (never UNREAD)."""
+    """The snapshot's gate line: {at, repo, line}. Only a read gate line is ever published (never UNREAD)."""
     if not GATE_LINE.match(line):
         return
-    path = gate_summary_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    state_update(summary={"at": int(epoch or time.time()), "repo": o_r, "line": line})
+
+
+def published_summary():
+    """(epoch, repo, line) the processor last published, or (None, None, None)."""
+    sm = state_read().get("summary") or {}
     try:
-        with open(path) as f:
-            prev = f.read().rstrip("\n").split("\t", 2)[1:]
-    except (OSError, ValueError):
-        prev = None
-    tmp = f"{path}.{os.getpid()}.tmp"
-    with open(tmp, "w") as f:
-        f.write(f"{int(epoch or time.time())}\t{o_r}\t{line}\n")
-    os.replace(tmp, path)
-    if prev != [o_r, line]:  # the reds or their states changed: the status line refreshes at its next call, not at 60 s
-        marker = statusline_stale_path()
-        os.makedirs(os.path.dirname(marker), exist_ok=True)
-        with open(marker, "a"):
-            pass
-        os.utime(marker, None)
+        return int(sm["at"]), sm.get("repo"), sm.get("line")
+    except (KeyError, TypeError, ValueError):
+        return None, None, None
 
 
 def cached_gate_summary(o_r, now=None):
-    """(line, written_epoch). line is None for a missing, malformed, other-repo, future-dated or too-old file."""
-    try:
-        epoch, repo_, line = open(gate_summary_path()).read().rstrip("\n").split("\t", 2)
-        epoch = int(epoch)
-    except (OSError, ValueError):
+    """(line, published_epoch). line is None for a missing, malformed, other-repo, future-dated or too-old line."""
+    epoch, repo_, line = published_summary()
+    if epoch is None:
         return None, None
     age = (now or time.time()) - epoch
     if repo_ != o_r or not GATE_LINE.match(line) or age < -5 or age > GATE_SUMMARY_MAX_AGE:
@@ -2150,10 +2159,6 @@ def mark_gate_dirty():
         os.utime(gate_dirty_path(), None)
     except OSError:
         pass
-
-
-def statusline_stale_path():
-    return os.environ.get("AGENTCTL_STATUSLINE_STALE") or state_root("statusline.stale")
 
 
 def maybe_publish_gate(repo):
@@ -2207,10 +2212,7 @@ def cmd_ci_why(a):
             print(line)
             return 1 if line.startswith("gate RED") else 0
         asof = time.strftime("%H:%M", time.localtime(epoch)) if epoch else "never"
-        try:
-            _e, repo_, old = open(gate_summary_path()).read().rstrip("\n").split("\t", 2)
-        except (OSError, ValueError):
-            repo_, old = None, None
+        _e, repo_, old = published_summary()
         if old and repo_ == o_r and GATE_LINE.match(old):
             print(f"gate UNREAD (as of {asof}: {old[5:]})")
         else:
@@ -8289,6 +8291,59 @@ ROUND_ERRORS_MAX = 3
 SERVICE_IDLE_POLL = 30  # seconds between looks at an empty `waiting` (a directory listing: no git, no network)
 
 
+def write_snapshot(d, store=None):
+    """The tick's part of state.json: the open items and the tick's own time and code version."""
+    st = store or Store()
+    open_ = lambda typ: [i for i in st.items(typ) if typ in MACHINES and not machine_state(typ, i["state"]).terminal]
+    brief = lambda i: {"id": i["id"], "state": i["state"], "deadline": i["deadline"], "level": i["level"],
+                       "worktree": (i["data"] or {}).get("worktree")}
+    queued = queued_entries(d)
+    waiting = waiting_entries(d)
+    state_update(tick_at=time.time(), version=code_version(),
+                 changes=[brief(i) for i in open_("change")], batch=[brief(i) for i in open_("batch")],
+                 reds=[brief(i) for i in open_("red")] if "red" in MACHINES else [],
+                 conditions=[brief(i) for i in open_("condition")] if "condition" in MACHINES else [],
+                 waiting=[e["worktree"] for e in waiting], queued=[e["worktree"] for e in queued])
+
+
+def status_line(now_=None):
+    """The status line from state.json alone (no git, no Forgejo, no subprocess): the gate line, the waiting and
+    checking changes, the unread inbox; `RECONCILER STALLED since HH:MM` when the tick is over 2 min old."""
+    t = now_ if now_ is not None else time.time()
+    d = state_read()
+    epoch, _repo, line = published_summary()
+    gate = line or "gate ?"
+    if epoch and t - epoch > GATE_SUMMARY_MAX_AGE:
+        gate = f"gate UNREAD (as of {time.strftime('%H:%M', time.localtime(epoch))}: {gate[5:]})"
+    short = lambda wts: ", ".join(re.sub(r"^.*-wt-", "", os.path.basename(w or "")) for w in wts)
+    waiting, queued = d.get("waiting") or [], d.get("queued") or []
+    parts = [gate]
+    tick = d.get("tick_at")
+    if not tick or t - float(tick) > 120:
+        parts.insert(0, f"RECONCILER STALLED since {time.strftime('%H:%M', time.localtime(float(tick)))}" if tick
+                     else "RECONCILER not running")
+    parts.append(f"waiting: {len(waiting)}" + (f" — {short(waiting)}" if waiting else "")
+                 + (f" · checking: {len(queued)} — {short(queued)}" if queued else ""))
+    return " · ".join(parts)
+
+
+def cmd_status(a):
+    if a.line:
+        print(status_line())
+        return 0
+    d, t = state_read(), time.time()
+    print(status_line())
+    for key in ("changes", "batch", "reds", "conditions"):
+        rows = d.get(key) or []
+        print(f"{key}: {len(rows)}")
+        for r in rows:
+            print(f"  {r['id']}  {r['state']}  deadline in {int((r['deadline'] - t) // 60)} min"
+                  + (f"  (level {r['level']})" if r.get("level") else ""))
+    tick = d.get("tick_at")
+    print(f"tick: {int(t - tick)} s ago, code {d.get('version')}" if tick else "tick: never")
+    return 0
+
+
 TICK = 5  # seconds between ticks ($AGENTCTL_TICK); every step is bounded or rate-limited inside
 
 
@@ -8340,6 +8395,10 @@ def waiting_run(repo, once=False, service=False):
                                command="waiting")
             if not failed:
                 write_json(os.path.join(d, "round-ok.json"), {"at": time.time()})
+            try:
+                write_snapshot(d)
+            except Exception as e:
+                err(f"the snapshot could not be written: {e}")
             if once and not queued_entries(d) and not waiting_entries(d):
                 return 0
             drop.nap(env_num("AGENTCTL_TICK", TICK))
@@ -11593,13 +11652,6 @@ def close_condition(cond, result, store=None):
         except (Exception, SystemExit) as e:
             did.append(f"{name} failed: {str(e)[:120]}")
     mark_gate_dirty()
-    try:
-        marker = statusline_stale_path()
-        os.makedirs(os.path.dirname(marker), exist_ok=True)
-        open(marker, "a").close()
-        os.utime(marker, None)
-    except OSError:
-        pass
     line = ((f"CLOSED (unjustified): {reason[len('INVALID: '):]}: {cond.get('text', '')[:200]}"
              if reason.startswith("INVALID:") else f"CLOSED: {reason[len('closed by hand: '):]}: {cond.get('text', '')[:200]}")
             if manual else
@@ -11953,6 +12005,9 @@ def main(argv=None):
     ls_ = sub.add_parser("lease", help="the store's leases (debugging): `lease list [prefix]`")
     ls_.add_argument("lcmd", choices=("list",))
     ls_.add_argument("prefix", nargs="?", default="")
+    sta = sub.add_parser("status", help="the snapshot (state.json): `--line` is the status line; else the open items "
+                         "with their states and deadlines, and the leases")
+    sta.add_argument("--line", action="store_true", help="the one status line (no git, no Forgejo: state.json only)")
     sub.add_parser("watchdog", help="the invariant watchdog's pass (launchd every 60 s): W1 oldest unlanded change, W2 "
                    "gate red nobody holds, W5 processor beat, W6 escalations notified, WM maintain ran")
     rcv = sub.add_parser("recover", help="the recovery registry: each open non-green condition, its probe, its next check")
@@ -12038,7 +12093,7 @@ def main(argv=None):
     rp_.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
     handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": cmd_red, "dispatch": cmd_dispatch, "gov": cmd_gov, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
+               "red": cmd_red, "dispatch": cmd_dispatch, "gov": cmd_gov, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)
 

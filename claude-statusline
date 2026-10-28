@@ -5,7 +5,7 @@
 # shown in bold red; a cache older than 5 min says `as of HH:MM`. Branch reds (runs on measure/check/fixer branches)
 # follow main's, apart: `branch reds: N → owner (workflow #n)`.
 # The status line runs often, so this prints a cached line at once and refreshes the cache in the background
-# at most every 15 s (all local reads; Claude Code re-runs this every 10 s: statusLine.refreshInterval), or at once when the processor marks it stale (statusline.stale). `claude-statusline --refresh` rebuilds it in the foreground.
+# at most every 15 s (state.json and the inbox: local reads only; Claude Code re-runs this every 10 s: statusLine.refreshInterval). `claude-statusline --refresh` rebuilds it in the foreground.
 set -u
 cache="${AGENTCTL_STATUSLINE_CACHE:-${HOME}/.cache/agentctl/statusline.txt}"
 lock="${cache%.txt}.lock"
@@ -14,24 +14,14 @@ mkdir -p "$(dirname "$cache")"
 cat >/dev/null # the session JSON Claude Code sends on stdin; not needed
 
 refresh() {
-  local gate waiting inbox esc line
-  # ci-why --summary --cached (the line the always-on processor publishes; this session has no vault): each gate row, and for a red one who is fixing it (agentctl's `red`): one line
-  #   gate RED (main #2066 → fix 0a5767c awaiting #2070; convergence green)   /   gate RED (main #2066 → offered: fresh, capacity 3/3; …)
-  gate=$(cd "$repo" && ~/bin/agentctl ci-why --summary --cached 2>/dev/null | tail -1)
-  # waiting status: entries on `waiting` (red main), then "queued for their checks: N" and those entries
-  waiting=$(cd "$repo" && ~/bin/agentctl waiting status 2>/dev/null | awk '
-    /^queued for their checks/ { q = 1; next }
-    /^  [0-9]{8}-/ { w = $1; sub(/^[0-9]{8}-[0-9]{6}-movies-wt-/, "", w); sub(/-[0-9]+$/, "", w)
-                     if (q) { nq++; qn = qn (qn ? ", " : "") w } else { n++; names = names (names ? ", " : "") w } }
-    END { printf "waiting: %d%s", n, (n ? " — " names : "")
-          if (nq) printf " · checking: %d — %s", nq, qn }')
-  # An unread gate is never shown as green (nor as the last value read): it says so, fail-closed like the hook.
-  # The detached refresh has no vault session of its own, so ci-why can fail here when the processor's token is gone.
-  case "$gate" in "gate RED"* | "gate green"*) ;; *) gate="gate UNREAD ($(date +%H:%M): ci-why could not read Forgejo)" ;; esac
+  local gate inbox esc line
+  # `agentctl status --line`: the processor's snapshot (state.json) alone -- the gate line, waiting / checking, and
+  # `RECONCILER STALLED since HH:MM` when its tick is old. No git, no Forgejo (design §9).
+  gate=$(~/bin/agentctl status --line 2>/dev/null | tail -1)
   inbox=$(~/bin/agentctl inbox --unread 2>/dev/null | grep -c UNREAD)
-  # an unread RED UNCLAIMED / RED BUDGET / STALLED entry past 10 min: notified (macOS) and leading the line, in bold
+  # an unacked escalation: notified (macOS) and following the gate, in bold
   esc=$(~/bin/agentctl inbox escalated 2>/dev/null | head -1)
-  line="${gate:-gate ?} · ${esc:+$esc · }${waiting:-waiting: ?} · inbox: ${inbox:-0} unread"  # the gate first (owner)
+  line="${gate:-gate ?} · ${esc:+$esc · }inbox: ${inbox:-0} unread"  # the gate first (owner)
   printf '%s\n' "$line" >"$cache.tmp" && mv "$cache.tmp" "$cache"
 }
 
@@ -49,11 +39,7 @@ age=999999
 # Claude Code ends the status-line command's process group, so the refresh runs in a session of its own
 # (python's start_new_session; macOS has no setsid). A lock older than 5 min is a refresh that died: take it over.
 [ -d "$lock" ] && [ $(( $(date +%s) - $(stat -f %m "$lock") )) -ge 300 ] && rmdir "$lock" 2>/dev/null
-# The processor touches the marker when the reds or their states change: refresh at this call, not at the 60 s age
-marker="${AGENTCTL_STATUSLINE_STALE:-${HOME}/.cache/agentctl/statusline.stale}"
-stale_marker=0
-[ -f "$marker" ] && [ -f "$cache" ] && [ "$marker" -nt "$cache" ] && stale_marker=1
-if { [ "$age" -ge 15 ] || [ "$stale_marker" = 1 ]; } && mkdir "$lock" 2>/dev/null; then
+if [ "$age" -ge 15 ] && mkdir "$lock" 2>/dev/null; then
   python3 -c 'import subprocess, sys
 subprocess.Popen(["/bin/bash", "-c", "trap \"rmdir \\\"$1\\\"\" EXIT; \"$0\" --refresh-only", sys.argv[1], sys.argv[2]],
                  start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)' \

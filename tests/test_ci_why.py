@@ -250,13 +250,14 @@ class CachedGateTest(CiWhyTest):
     def setUp(self):
         super().setUp()
         import tempfile
-        self.gs = os.path.join(tempfile.mkdtemp(), "gate-summary.txt")
-        os.environ["AGENTCTL_GATE_SUMMARY"] = self.gs
-        self.addCleanup(os.environ.pop, "AGENTCTL_GATE_SUMMARY", None)
+        self.gs = os.path.join(tempfile.mkdtemp(), "state.json")
+        os.environ["AGENTCTL_STATE_FILE"] = self.gs
+        self.addCleanup(os.environ.pop, "AGENTCTL_STATE_FILE", None)
 
     def write(self, line, age=0, repo=None):
-        import time
-        open(self.gs, "w").write(f"{int(time.time()) - age}\t{repo or A.slug('movies')}\t{line}\n")
+        import json, time
+        with open(self.gs, "w") as f:
+            json.dump({"summary": {"at": int(time.time()) - age, "repo": repo or A.slug("movies"), "line": line}}, f)
 
     def test_fresh_file_is_printed_without_a_live_read(self):
         self.write("gate RED (main #9 -> NOBODY)")
@@ -288,7 +289,7 @@ class CachedGateTest(CiWhyTest):
         self.assertFalse(os.path.exists(self.gs))
         A.publish_gate_summary("a/b", "gate green")
         self.assertEqual(A.cached_gate_summary("a/b")[0], "gate green")
-        self.assertEqual(os.listdir(os.path.dirname(self.gs)), ["gate-summary.txt"])
+        self.assertEqual(sorted(os.listdir(os.path.dirname(self.gs))), ["state.json", "state.json.lock"])
 
     def test_processor_publishes_the_gate(self):
         self.scenario([])

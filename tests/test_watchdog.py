@@ -13,7 +13,7 @@ class WatchdogTest(unittest.TestCase):
         self.root = tempfile.mkdtemp()
         self.env = {"AGENTCTL_STATE_ROOT": self.root, "AGENTCTL_RECOVERY_DIR": os.path.join(self.root, "rec"),
                     "AGENTCTL_INBOX_DIR": os.path.join(self.root, "inbox"),
-                    "AGENTCTL_GATE_SUMMARY": os.path.join(self.root, "gate-summary.txt"),
+                    "AGENTCTL_STATE_FILE": os.path.join(self.root, "state.json"),
                     "AGENTCTL_LAUNCH_AGENTS": os.path.join(self.root, "agents"),
                     "AGENTCTL_MOVIES_REPO": os.path.join(self.root, "movies"),
                     "AGENTCTL_NOTIFY": "true"}

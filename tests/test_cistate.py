@@ -27,7 +27,7 @@ class SnapshotTest(RedBase):
 
     def test_one_snapshot_drives_gate_and_reds_and_the_summary_names_the_non_gate_red(self):
         snap = A.ci_state_refresh(MOVIES)
-        self.assertTrue(os.path.exists(A.ci_state_path()))
+        self.assertTrue(os.path.exists(A.state_path()))
         self.put("runs.json", [])  # Forgejo is gone: everything below reads the snapshot only
         A._gate_lists.clear()
         A._outside_lists.clear()
@@ -56,9 +56,6 @@ class SnapshotTest(RedBase):
         self.assertIsNone(A.ci_state_load("x/y"))
 
     def test_the_processor_publishes_the_snapshot_time_so_an_old_one_ages_out_as_unread(self):
-        gs = os.path.join(self.tmp.name, "gate-summary.txt")
-        os.environ["AGENTCTL_GATE_SUMMARY"] = gs
-        self.addCleanup(os.environ.pop, "AGENTCTL_GATE_SUMMARY", None)
         snap = A.ci_state_refresh(MOVIES)
         A.publish_gate_summary(MOVIES, "gate green · no reds", epoch=snap["at"] - 400)
         self.put("runs.json", "not json")
