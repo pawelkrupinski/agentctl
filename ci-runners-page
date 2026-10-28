@@ -38,10 +38,15 @@ order by jobs desc
 
 
 def query(sql):
-    out = subprocess.run([AGENTCTL, "db-q", " ".join(sql.split())], capture_output=True, text=True, timeout=60)
+    beat()
+    try:
+        out = subprocess.run([AGENTCTL, "db-q", " ".join(sql.split())], capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("the read of Forgejo's database (agentctl db-q over ssh to ci-runner) timed out after 60 s")
     lines = [l for l in out.stdout.splitlines() if l.strip()]
     if out.returncode != 0 or not lines:
-        raise RuntimeError((out.stderr or out.stdout).strip()[-300:] or "no output")
+        raise RuntimeError((out.stderr or out.stdout).strip()[-300:]
+                           or f"agentctl db-q exited {out.returncode} with no output (ssh to ci-runner failed?)")
     head = lines[0].split("\t")
     return [dict(zip(head, l.split("\t"))) for l in lines[1:]]
 
@@ -80,6 +85,7 @@ printf 'H\t%s\t%s\n' "$(cut -d' ' -f1-3 /proc/loadavg)" "$(nproc)"
 
 
 def host():
+    beat()
     out = subprocess.run(["ssh", "-o", "ConnectTimeout=10", "pawel@10.1.0.3", HOST_PROBE], capture_output=True,
                          text=True, timeout=60)
     if out.returncode != 0:
@@ -111,6 +117,7 @@ true  # else the loop's last test sets the exit status: a job with no ci.slice s
 
 
 def cpu_sample():
+    beat()
     out = subprocess.run(["ssh", "-o", "ConnectTimeout=10", "pawel@10.1.0.3", CPU_PROBE], capture_output=True,
                          text=True, timeout=60)
     if out.returncode != 0:
@@ -178,6 +185,7 @@ def day_history():
     end = int(time.time())
     cmd = (f"curl -s -G 'http://{PROM}:9090/api/v1/query_range' --data-urlencode 'query={DAY_QUERY}' "
            f"--data-urlencode start={end - 86400} --data-urlencode end={end} --data-urlencode step=300")
+    beat()
     out = subprocess.run(["ssh", "-o", "ConnectTimeout=10", PROM, cmd], capture_output=True, text=True, timeout=60)
     res = json.loads(out.stdout)["data"]["result"]
     return [[int(float(t)), round(float(v))] for t, v in res[0]["values"]] if res else []
@@ -188,6 +196,40 @@ def day_history():
 # reports whether the poller itself is alive, which is what the watchdog restarts on.
 STATE = {"at": None, "running": [], "waiting": [], "waiting_jobs": [], "limits": {"runners": {}, "tiers": {}, "host": None}, "cpu": None, "history": [], "day": [], "error": "first read in progress", "polled": time.time()}
 LOCK = threading.Lock()
+SAVED = Path.home() / ".cache" / "ci-runners-page" / "last-good.json"  # survives a restart (the watchdog's included)
+
+
+def beat():
+    """The poller is making progress: stamped before each ssh read (each bounded at 60 s), so /healthz tells a stuck
+    poller from a slow network -- a cycle of six slow but answering reads is no stall, and no restart."""
+    with LOCK:
+        STATE["polled"] = time.time()
+
+
+def save_good():
+    try:
+        SAVED.parent.mkdir(parents=True, exist_ok=True)
+        with LOCK:
+            data = dict(STATE, history=list(HISTORY))
+        tmp = SAVED.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data))
+        tmp.replace(SAVED)
+    except OSError:
+        pass
+
+
+def load_good():
+    """The last good reading from before a restart, served marked stale until the first read succeeds."""
+    try:
+        data = json.loads(SAVED.read_text())
+    except (OSError, ValueError):
+        return
+    for x in data.pop("history", None) or []:
+        if time.time() - x[0] < 3600:
+            HISTORY.append(tuple(x))
+    data.update(history=list(HISTORY), error="first read since a restart in progress", polled=time.time())
+    with LOCK:
+        STATE.update(data)
 
 
 def poll_forever(every=10):
@@ -217,6 +259,7 @@ def poll_forever(every=10):
                 fresh["cpu_error"] = str(e)
             with LOCK:
                 STATE.update(fresh, at=time.strftime("%H:%M:%S"), ok=time.time(), error=None)
+            save_good()
         except Exception as e:
             with LOCK:
                 STATE["error"] = str(e)
@@ -402,6 +445,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=8790)
     port = ap.parse_args().port
+    load_good()
     threading.Thread(target=poll_forever, daemon=True).start()
     print(f"ci-runners-page on http://runners.localhost:{port}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
