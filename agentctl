@@ -3111,7 +3111,7 @@ def red_offer_class(d):
     return "flake" if d.get("red_kind") == "flake" else "gate" if d.get("gate") else "other"
 
 
-def red_offer(store, it, text, data=None, repo=None, escalate=False):
+def red_offer(store, it, text, data=None, repo=None, escalate=False, verdict=None):
     """Into `offered`, with its tier from the ladder, its deadline and its offer (the picture a taker gets)."""
     d = {**it["data"], **(data or {})}
     tier = red_tier(d, d.get("culprit"))
@@ -3119,18 +3119,19 @@ def red_offer(store, it, text, data=None, repo=None, escalate=False):
     sev = {"severity": "escalate"} if escalate or tier == "deep" else {}
     aud = {"audience": {k: v for k, v in (d.get("author") or {}).items() if k in ("worktree", "session")}} \
         if tier == "author" else {}
+    if tier == "author":  # addressed to the change's recorded author (the projector writes it to their inbox)
+        a = d["author"]
+        verdict = (f"RED AUTHOR: {red_what(d)} contains your {', '.join(s[:9] for s in a.get('shas') or [])} "
+                   f"({str(a.get('worktree')).replace(HOME, '~')}): offered to you for {deadline // 60} min -- "
+                   f"`~/bin/agentctl red claim {d['key']} --worktree .` and fix it "
+                   f"(`Fixes-Red: {(d.get('last_run') or {}).get('number')}`); else a fixer takes it")
+    if tier == "deep":
+        verdict = verdict or f"RED ESCALATE: {red_what(d)} still red after {d.get('attempts')} attempts: a deep investigation is offered"
+    if verdict:
+        sev["refs"] = {"key": d.get("key"), "run": (d.get("last_run") or {}).get("number"), "workflow": d.get("workflow"),
+                       "verdict": verdict, "tail": [d.get("line") or ""], "command": "red"}
     it = red_move(store, it, "offered", text, data={**(data or {}), "tier": tier}, deadline_s=deadline, **sev, **aud)
     red_put_offer(store, it)
-    if tier == "author":
-        a = d["author"]
-        line = (f"RED AUTHOR: {red_what(d)} contains your {', '.join(s[:9] for s in a.get('shas') or [])} "
-                f"({str(a.get('worktree')).replace(HOME, '~')}): offered to you until "
-                f"{time.strftime('%H:%M', time.localtime(it['deadline']))} -- `~/bin/agentctl red claim {d['key']} "
-                f"--worktree .` and fix it (`Fixes-Red: {(d.get('last_run') or {}).get('number')}`); else a fixer takes it")
-        inbox_write("red", line, [line], [d.get("line") or ""], 1, cwd=a.get("worktree"))
-    if tier == "deep":
-        line = f"RED ESCALATE: {red_what(d)} still red after {d.get('attempts')} attempts: a deep investigation is offered"
-        inbox_write("red", line, [line], [d.get("line") or ""], 1)
     return it
 
 
@@ -3294,10 +3295,9 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
             off = store.offer_of(f"red:{it['id']}") or {}
             why = off.get("reason") or "no taker"
             mins = int((t - it["entered_at"]) // 60)
-            text = f"RED {red_what(d)}: no taker for {mins} min ({why})"
-            line = text + f" -- `~/bin/agentctl red claim {key} --worktree <yours>` to take it"
-            inbox_write("red", f"RED UNCLAIMED: {line[4:]}", [line], [d.get("line") or ""], 1)
-            red_offer(store, it, text, data={"author_tried": True} if d.get("tier") == "author" else None)
+            text = f"RED UNCLAIMED: {red_what(d)}: no taker for {mins} min ({why})"
+            red_offer(store, it, text, data={"author_tried": True} if d.get("tier") == "author" else None,
+                      verdict=text + f" -- `~/bin/agentctl red claim {key} --worktree <yours>` to take it")
             return [text]
         if not store.offer_of(f"red:{it['id']}"):  # repair: an offered red always has its open offer
             red_put_offer(store, it)
@@ -4305,8 +4305,6 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=True, facts=None):
         acts += red_adopt_fixers(store, active, t)
     except (Exception, SystemExit) as e:
         err(f"red tick: adopting live fixers failed ({str(e)[:160]})")
-    if any(c.get("kind") == "BLOCKED" for c in open_conditions()) or glob.glob(reds_dir("claims", "*.json")):
-        acts += red_import_blocks(store)
     try:
         acts += red_renew_blocks(store, t)
     except (Exception, SystemExit) as e:
@@ -4523,7 +4521,7 @@ def infra_check(o_r):
 def gate_unread_spell(o_r, why):
     """The patrol could not read the gate: no dispatch, ONE `UNKNOWN:` condition per spell, with an infra check; the
     gate_read probe (a snapshot written after it opened) clears it."""
-    if why is None or os.path.exists(recovery_dir("gate-unread.json")):
+    if why is None or condition_item_of(Store(), "gate-unread"):
         return None
     line = (f"UNKNOWN: the red patrol cannot read the gate ({why[:200]}): nothing dispatched, pushes fail closed. "
             f"Infra check: {infra_check(o_r)}")
@@ -4779,50 +4777,6 @@ def red_block(o_r, a):
         cur = st.item("red", it["id"])
         st.update_item("red", it["id"], cur["version"], {"block": lname})
     return 0
-
-
-def red_import_blocks(store):
-    """Step 11's migration: every BLOCKED condition (an outage or one red's block) becomes a block lease holding the
-    open reds its block claims name; the condition and claim files go."""
-    out = []
-    active = red_active(store)
-    for cond in open_conditions():
-        if cond.get("kind") != "BLOCKED":
-            continue
-        pr = cond["probe"]["args"].get("inner") if cond["probe"]["kind"] == "owner_block" else cond["probe"]
-        cause = cond["key"][len("cause-"):] if cond["key"].startswith("cause-") else None
-        paths = [x["path"] for _n, x in cond.get("on_recover") or [] if x.get("path")]
-        cs = [read_record(p) or {} for p in paths]
-        names = set().union(*[set(map(str, c.get("runs") or [])) | {str(c.get("run"))} for c in cs]) if cs else set()
-        keys = [k for k, it in active.items() if names & set(it["data"].get("runs") or [])
-                or (cause and pr and pr.get("kind") == "workflow_green" and it["data"].get("workflow") == pr["args"].get("workflow"))]
-        c0 = cs[0] if cs else {}
-        if keys and pr:
-            lname = block_lease(cause=cause) if cause else block_lease(keys[0])
-            store.acquire(lname, f"owner:{cond.get('owner_cause') or c0.get('owner_cause') or 'external-account'}",
-                          BLOCK_TTL, BLOCK_MAX, progress="imported",
-                          meta={"kind": "block", "owner_cause": cond.get("owner_cause") or c0.get("owner_cause"),
-                                "cmd": c0.get("blocked_cmd"), "cause": cause, "probe": pr, "until": cond.get("until"),
-                                "keys": keys, "text": cond.get("text"), "details": c0.get("details"), "verify": True})
-            out.append(f"imported the block {cond['key']} as {lname} ({len(keys)} red(s))")
-        else:
-            out.append(f"dropped the block {cond['key']}: no open red it names")
-        for p in paths + [cond["path"]]:
-            try:
-                os.unlink(p)
-            except OSError:
-                pass
-    for p in glob.glob(reds_dir("claims", "*.json")):  # a block claim with no condition
-        try:
-            os.unlink(p)
-            out.append(f"dropped {os.path.basename(p)}")
-        except OSError:
-            pass
-    if out:
-        with open(reds_dir("import.log"), "a") as f:
-            for line in out:
-                f.write(f"{ts()} {line}\n")
-    return out
 
 
 # ---------------------------------------------------------------- land / env
@@ -7924,7 +7878,7 @@ def bisect(repo, d, batch, base, bwt):
 
 def unread_note(d, reds, entries):
     """The gate unread while changes wait: once per unread spell, an UNKNOWN inbox entry (they would wait unseen)."""
-    if GATE_UNREAD not in reds or os.path.exists(recovery_dir("gate-unread-waiting.json")):
+    if GATE_UNREAD not in reds or condition_item_of(Store(), "gate-unread-waiting"):
         return
     wlog(d, f"the gate is unread ({gate_unread_why[0]}): taken as red")
     open_condition("UNKNOWN", f"UNKNOWN: the waiting processor cannot read the gate ({gate_unread_why[0]}); {len(entries)} "
@@ -8221,8 +8175,7 @@ def waiting_run(repo, once=False, service=False):
                                ("network watch", network_watch), ("tunnel probe", tunnel_watch),
                                ("gate summary", lambda: maybe_publish_gate(repo)),
                                ("red tick", lambda: maybe_red_tick(repo)),
-                               ("recovery", maybe_recovery_tick),
-                               ("inbox escalation", maybe_escalate_inbox)):
+                               ("recovery", maybe_recovery_tick)):
                 try:
                     step()
                 except (Exception, SystemExit) as e:  # one step's error is that step's, never the loop's (audit #9)
@@ -10203,6 +10156,12 @@ MACHINES = {
     },
 }
 
+# §5.4 a condition (the recovery registry folded in), phase 1 step 12: open escalates 10 min after opening, then every
+# 2 h (recovery_tick's re-deadline); only its own probe passing closes it
+MACHINES["condition"] = {
+    "open": StateSpec(10 * 60, "open", ("closed",), escalate=True),
+    "closed": StateSpec(ARCHIVE, "closed", (), terminal=True),
+}
 # §5.3 a red (keyed by its failing test or step), phase 1 step 10
 MACHINES["red"] = {
     "red": StateSpec(60, "offered", ("offered", "fix-pending", "leased", "blocked-external", "cleared")),
@@ -10453,13 +10412,16 @@ def inv_w5():
 
 
 def inv_w6():
-    """W6: no escalation due for over W6_MAX without its notification."""
-    lim = env_num("AGENTCTL_INBOX_ESCALATE_MIN", INBOX_ESCALATE_MIN) * 60
-    d = os.path.join(inbox_dir(), "escalated")
-    late = [e for e in inbox_escalations() if not os.path.exists(os.path.join(d, e["id"]))
-            and time.time() - float(e.get("at") or 0) - lim > env_num("AGENTCTL_W6_MAX", W6_MAX)]
-    return not late, (f"{len(late)} escalation(s) due and not notified: {str(late[0].get('verdict'))[:100]}" if late
-                      else "every due escalation was notified")
+    """W6: no escalation event left unnotified for over W6_MAX (the notifier's delivery, from the store)."""
+    try:
+        st = Store()
+        t = st.clock()
+        late = [e for e in st.events(after=max(0, int(st.meta_get("notifier_seq", 0) or 0) - 500), limit=5000)
+                if e["severity"] == "escalate" and not e.get("notified_at") and t - e["at"] > env_num("AGENTCTL_W6_MAX", W6_MAX)]
+    except Exception as e:
+        return None, f"cannot read the store ({str(e)[:120]})"
+    return not late, (f"{len(late)} escalation(s) not notified: {str(late[0].get('text'))[:100]}" if late
+                      else "every escalation was notified")
 
 
 def inv_wm():
@@ -11362,12 +11324,38 @@ def condition_key(kind, probe):
                                                                            if _k != "since"))[:150]
 
 
+_last_recovery = [0.0]
+
+
+def maybe_recovery_tick():
+    if time.time() - _last_recovery[0] < 5:
+        return
+    _last_recovery[0] = time.time()
+    recovery_tick()
+
+
+# -- conditions are items (design §5.4; phase 1 step 12): the store's "condition" machine, open -> closed
+CONDITION_ESCALATE_EVERY = 2 * 3600  # an open condition escalates 10 min after opening, then every 2 h
+
+
+def condition_item_of(store, key):
+    """The open condition item for key, or None."""
+    for it in store.items("condition", ["open"]):
+        if it["data"].get("key") == key:
+            return it
+    return None
+
+
+def condition_dict(it):
+    return {**it["data"], "id": it["id"], "version": it["version"], "deadline": it["deadline"], "level": it["level"]}
+
+
 def open_condition(kind, text, probe, on_recover, key=None, inbox=True, command="recover", exit_code=1, cwd=None,
-                   tail=(), effect=None):
-    """Open (or refresh) a non-green condition. probe: the FAILED ProbeResult of the check that found it (required: the
-    same probe, passing, closes it); on_recover: [(action, args)] from RECOVER_ACTIONS. effect: a callable run inside
-    (a block's claim write); its dict result is merged into every on_recover args. Writes ONE inbox entry (text) per
-    spell. Returns the condition, or None when the probe passes now (nothing is wrong)."""
+                   tail=(), effect=None, store=None):
+    """Open (or refresh) a non-green condition: an item of the "condition" machine. probe: the FAILED ProbeResult of the
+    check that found it (required: the same probe, passing, closes it); on_recover: [(action, args)] from
+    RECOVER_ACTIONS. effect: a callable run inside; its dict result is merged into every on_recover args. Writes ONE
+    inbox entry (text) per spell. Returns the condition, or None when the probe passes now (nothing is wrong)."""
     if not isinstance(probe, ProbeResult):
         raise ConditionBypass(f"open_condition({kind!r}) without a ProbeResult: no condition without its recovery probe")
     for name, _a in on_recover:
@@ -11375,63 +11363,68 @@ def open_condition(kind, text, probe, on_recover, key=None, inbox=True, command=
             raise ConditionBypass(f"unknown on_recover action {name!r}")
     if probe.ok:
         return None
+    st = store or Store()
     key = key or condition_key(kind, probe)
-    path = recovery_dir(key + ".json")
-    old = read_record(path) or {}
+    cur = condition_item_of(st, key)
     _OPENING[0] += 1
     try:
         extra = (effect() if effect else None) or {}
         text = text(extra) if callable(text) else text
-        ids = list(old.get("inbox") or [])
-        if inbox and not old:
+        ids = []
+        if inbox and not cur:
             eid = inbox_write(command, text, [text], list(tail), exit_code, cwd=cwd)
-            ids += [eid] if eid else []
+            ids = [eid] if eid else []
     finally:
         _OPENING[0] -= 1
     t = time.time()
-    new = [[n, {**x, **extra}] for n, x in on_recover]  # effect's result goes to THIS call's actions only
-    acts = list(old.get("on_recover") or []) + [x for x in new if x not in (old.get("on_recover") or [])]
-    cond = {**old, "key": key, "kind": kind, "text": text if not old else old.get("text", text),
-            "probe": {"kind": probe.kind, "args": probe.args},
-            "until": probe_words(probe.kind, probe.args), "on_recover": acts,
-            "opened": old.get("opened") or ts(), "opened_at": old.get("opened_at") or t, "inbox": ids,
-            "last_checked": t, "last_result": {"ok": probe.ok, "detail": probe.detail}, "fails": old.get("fails") or 0,
-            "next_check": t + PROBE_EVERY.get(probe.kind, 60)}
-    write_json(path, cond)
-    return cond
+    new = [[n, {**x, **extra}] for n, x in on_recover]
+    if cur:
+        d = cur["data"]
+        acts = list(d.get("on_recover") or []) + [x for x in new if x not in (d.get("on_recover") or [])]
+        st.update_item("condition", cur["id"], cur["version"], {"on_recover": acts, "last_checked": t,
+                                                                 "last_result": {"ok": probe.ok, "detail": probe.detail}})
+        return condition_dict(st.item("condition", cur["id"]))
+    iid, n = key, 1
+    while st.item("condition", iid) is not None:  # an earlier spell is closed: a new item
+        n += 1
+        iid = f"{key}.{n}"
+    data = {"key": key, "kind": kind, "text": text, "probe": {"kind": probe.kind, "args": probe.args},
+            "until": probe_words(probe.kind, probe.args), "on_recover": new, "opened": ts(), "opened_at": t,
+            "inbox": ids, "last_checked": t, "last_result": {"ok": probe.ok, "detail": probe.detail}, "fails": 0,
+            "next_check": t + PROBE_EVERY.get(probe.kind, 60), "command": command, "cwd": cwd}
+    return condition_dict(st.put_item("condition", iid, "open", data))
 
 
-def open_conditions():
-    out = []
-    for p in sorted(glob.glob(recovery_dir("*.json"))):
-        c = read_record(p)
-        if c and c.get("probe"):
-            c["path"] = p
-            out.append(c)
-    return out
+def open_conditions(store=None):
+    """The open conditions, as dicts (key, kind, text, probe, on_recover, inbox, ... plus id and version)."""
+    return [condition_dict(it) for it in (store or Store()).items("condition", ["open"])]
 
 
-def close_condition(cond, result):
-    """The probe passed (result: its ProbeResult, or a reason string for a manual close): claim the close (an atomic
-    rename: one closer), ack, mark dirty, run on_recover, note it."""
+def close_condition(cond, result, store=None):
+    """The probe passed (result: its ProbeResult, or a reason string for a manual close): the item moves to closed (a
+    compare-and-set: one closer), its inbox entries are acked, its on_recover actions run, one RECOVERED note."""
+    st = store or Store()
     if isinstance(result, str):
         result = ProbeResult(cond["probe"]["kind"], cond["probe"]["args"], True,
                              result if result.startswith("INVALID:") else f"closed by hand: {result}",
                              _made_by_run_probe=_RUN_PROBE_TOKEN)
-    done = recovery_dir("closed", f"{cond['key']}-{int(time.time())}.json")
-    os.makedirs(os.path.dirname(done), exist_ok=True)
+    it = st.item("condition", cond["id"])
+    if not it or it["state"] != "open":
+        return None
+    manual = str(result.detail).startswith(("INVALID:", "closed by hand:"))
+    reason = str(result.detail)
     try:
-        os.replace(cond["path"], done)
-    except OSError:
-        return None  # another process closed it
+        st.transition("condition", it["id"], "closed", it["version"],
+                      data={"closed": ts(), "closed_by": reason},
+                      event={"text": f"{cond.get('kind')} closed: {reason[:200]}", "refs": {"key": cond.get("key")}})
+    except (StaleVersion, TerminalState):
+        return None  # another closer won
     acked = os.path.join(inbox_dir(), "acked")
     os.makedirs(acked, exist_ok=True)
-    for eid in cond.get("inbox") or []:
+    for eid in it["data"].get("inbox") or []:
         open(os.path.join(acked, eid), "a").close()
     did = []
-    for name, a in cond.get("on_recover") or []:
-        if name == "verify" and str(result.detail).startswith("INVALID:"):
-            continue  # the block lost its justification: the red goes back to dispatch, nothing recovered to verify
+    for name, a in it["data"].get("on_recover") or []:
         try:
             w = RECOVER_ACTIONS[name](cond, a)
             if w:
@@ -11446,72 +11439,98 @@ def close_condition(cond, result):
         os.utime(marker, None)
     except OSError:
         pass
-    manual = str(result.detail).startswith(("INVALID:", "closed by hand:"))
-    reason = str(result.detail)
     line = ((f"CLOSED (unjustified): {reason[len('INVALID: '):]}: {cond.get('text', '')[:200]}"
              if reason.startswith("INVALID:") else f"CLOSED: {reason[len('closed by hand: '):]}: {cond.get('text', '')[:200]}")
             if manual else
-            f"RECOVERED: {cond['until']} ({result.detail}): {cond.get('text', '')[:200]}"
+            f"RECOVERED: {cond.get('until')} ({result.detail}): {cond.get('text', '')[:200]}"
             + (f"; {'; '.join(did)}" if did else ""))
     err(line)
     inbox_write("recover", line, [line], [], 0)
-    write_json(done, {**{k: v for k, v in cond.items() if k != "path"}, "closed": ts(), "closed_by": result.detail,
-                      "did": did})
     return line
 
 
-def recovery_tick(now_=None, force=False):
-    """The duties thread's look: each open condition whose next check is due re-runs ITS probe; a pass closes it.
-    Backoff: PROBE_EVERY x 2^fails, at most RECOVER_BACKOFF_MAX. Returns the RECOVERED lines."""
-    t = now_ if now_ is not None else time.time()
+def migrate_condition_files(store):
+    """Step 12's migration: every open condition file under recovery_dir() becomes a condition item; the file goes."""
     out = []
-    for c in open_conditions():
-        if not force and float(c.get("next_check") or 0) > t:
+    for p in sorted(glob.glob(recovery_dir("*.json"))):
+        c = read_record(p)
+        if not c or not c.get("probe"):
             continue
-        r = run_probe(c["probe"]["kind"], c["probe"]["args"])
-        if r.ok:
-            line = close_condition(c, r)
-            if line:
-                out.append(line)
-            continue
-        fails = int(c.get("fails") or 0) + 1
-        every = PROBE_EVERY.get(r.kind, 60) * 2 ** min(fails, 8)
-        c.update(fails=fails, last_checked=t, last_result={"ok": r.ok, "detail": r.detail},
-                 next_check=t + min(every, env_num("AGENTCTL_RECOVER_MAX", RECOVER_BACKOFF_MAX)))
-        path = c.pop("path")
-        if os.path.exists(path):
-            write_json(path, c)
+        if c.get("kind") != "BLOCKED" and not condition_item_of(store, c["key"]):
+            data = {k: v for k, v in c.items() if k != "path"}
+            data.setdefault("opened_at", time.time())
+            data["escalate_after"] = time.time() + CONDITION_ESCALATE_EVERY  # its inbox entry told already: no storm
+            store.put_item("condition", c["key"], "open", data)
+            out.append(f"migrated the condition {c['key']}")
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
     return out
 
 
-def recovery_recheck(kind):
-    """An event that may have cleared conditions of probe `kind` (a claim, a block): probe those now."""
+def recovery_tick(now_=None, force=False, store=None):
+    """The processor's look: each open condition whose next check is due re-runs ITS probe; a pass closes it.
+    Backoff: PROBE_EVERY x 2^fails, at most RECOVER_BACKOFF_MAX. Past its deadline (10 min after opening, then every
+    2 h) an open condition escalates: the state's self-transition, an escalate event the notifier delivers. Returns the
+    RECOVERED lines."""
+    st = store or Store()
+    t = now_ if now_ is not None else time.time()
+    out = []
     try:
-        for c in open_conditions():
+        out += migrate_condition_files(st)
+    except (Exception, SystemExit) as e:
+        err(f"recover: could not migrate the condition files ({str(e)[:160]})")
+    for it in st.items("condition", ["open"]):
+        c = condition_dict(it)
+        if force or float(c.get("next_check") or 0) <= t:
+            r = run_probe(c["probe"]["kind"], c["probe"]["args"])
+            if r.ok:
+                line = close_condition(c, r, store=st)
+                if line:
+                    out.append(line)
+                continue
+            fails = int(c.get("fails") or 0) + 1
+            every = PROBE_EVERY.get(r.kind, 60) * 2 ** min(fails, 8)
+            try:
+                st.update_item("condition", it["id"], it["version"], {
+                    "fails": fails, "last_checked": t, "last_result": {"ok": r.ok, "detail": r.detail},
+                    "next_check": t + min(every, env_num("AGENTCTL_RECOVER_MAX", RECOVER_BACKOFF_MAX))})
+            except StaleVersion:
+                continue
+            it = st.item("condition", it["id"])
+        if it["state"] == "open" and t >= max(it["deadline"], float(it["data"].get("escalate_after") or 0)):
+            age = fmt_age(t - float(it["data"].get("opened_at") or t))
+            line = f"ESCALATED: {it['data'].get('kind')} open for {age}: {str(it['data'].get('text'))[:200]}"
+            try:
+                st.transition("condition", it["id"], "open", it["version"], deadline_s=CONDITION_ESCALATE_EVERY,
+                              event={"text": line, "audience": {"worktree": it["data"].get("cwd")} if it["data"].get("cwd")
+                                     else {}, "refs": {"verdict": line, "key": it["data"].get("key"), "command": "recover"}})
+            except StaleVersion:
+                pass
+    return out
+
+
+def recovery_recheck(kind, store=None):
+    """An event that may have cleared conditions of probe `kind`: probe those now."""
+    try:
+        for c in open_conditions(store):
             if c["probe"]["kind"] == kind:
                 r = run_probe(kind, c["probe"]["args"])
                 if r.ok:
-                    close_condition(c, r)
+                    close_condition(c, r, store=store)
     except (Exception, SystemExit) as e:
         err(f"recover: recheck of {kind} failed ({str(e)[:120]})")
 
 
-def recovery_recheck_all():
+def recovery_recheck_all(store=None):
     """The network changed or came back: every open condition is probed at the next tick, backoff reset."""
-    for c in open_conditions():
-        path = c.pop("path")
-        c.update(next_check=0, fails=0)
-        write_json(path, c)
-
-
-_last_recovery = [0.0]
-
-
-def maybe_recovery_tick():
-    if time.time() - _last_recovery[0] < 5:
-        return
-    _last_recovery[0] = time.time()
-    recovery_tick()
+    st = store or Store()
+    for it in st.items("condition", ["open"]):
+        try:
+            st.update_item("condition", it["id"], it["version"], {"next_check": 0, "fails": 0})
+        except StaleVersion:
+            pass
 
 
 def cmd_recover(a):
@@ -11526,7 +11545,8 @@ def cmd_recover(a):
     t = time.time()
     for c in cs:
         lr = c.get("last_result") or {}
-        print(f"{c['kind']} {c['key']} (open since {c.get('opened')}): {c.get('text', '')[:140]}\n"
+        print(f"{c['kind']} {c['key']} (open since {c.get('opened')}{', ESCALATED' if c.get('level') else ''}): "
+              f"{c.get('text', '')[:140]}\n"
               f"  probe: {c['probe']['kind']} {json.dumps({k: v for k, v in c['probe']['args'].items() if k != 'since'})}"
               f" -- clears when {c.get('until')}\n"
               f"  last checked {iso_at(float(c.get('last_checked') or 0))}: {'cannot tell' if lr.get('ok') is None else 'fails'}"
@@ -11536,90 +11556,28 @@ def cmd_recover(a):
     return 0
 
 
-# THE ESCALATION THAT WAKES SOMEBODY (the owner, 2026-10-27: Main #2146's RED UNCLAIMED sat unread for 85+ min because
-# the orchestrator's `inbox wait` was not re-armed). An unread RED UNCLAIMED, RED BUDGET or STALLED entry older than
-# INBOX_ESCALATE_MIN (a gate fixer cap: at once) is escalated past the orchestrator: ONE macOS notification per entry
-# (`osascript -e 'display notification ...'`, never a dialog), and the status line leads with a bold `ESCALATED: ...`
-# until it is acked. Driven by the always-on processor (each minute) and by the status line's refresh.
-ESCALATE_KINDS = ("INVARIANT", "RED_UNCLAIMED", "RED_BUDGET", "STALLED", "UNLANDED_ORPHAN", "RED_ESCALATE", "BLOCKED", "DIAGNOSED",
-                  "FIXER_FAILED")  # 2026-10-28: an escalation nobody is told of is no escalation
-INBOX_ESCALATE_MIN = 10  # $AGENTCTL_INBOX_ESCALATE_MIN
-_last_escalate = [0.0]
-
-
-RED_ESCALATION_KINDS = ("RED_UNCLAIMED", "RED_BUDGET", "RED_ESCALATE", "FIXER_FAILED", "DIAGNOSED")
-
-
-def red_escalation_key(e):
-    """What a red's escalation entry is about: `cause-<name>` for an owner block on an outage (ONE escalation per
-    cause), else the red's run number; None for other entries."""
-    kind = e.get("kind") or inbox_kind(e.get("verdict"))
-    v = str(e.get("verdict") or "")
-    if kind == "BLOCKED":
-        m = re.search(r"BLOCKED ON OWNER: (\S+) down", v)
-        if m:
-            return f"cause-{m.group(1)}"
-    elif kind not in RED_ESCALATION_KINDS:
-        return None
-    m = re.search(r"#(\d+)", v)
-    return m.group(1) if m else None
-
-
-def red_escalation_resolved(e):
-    """A red's escalation entry whose red is held now (leased, a fix on its way), or no longer open, or (an owner block)
-    whose block lease has lapsed: True -- read from the store, where the escalation came from."""
-    k = red_escalation_key(e)
-    if k is None:
-        return False
-    st = Store()
-    kind = e.get("kind") or inbox_kind(e.get("verdict"))
-    if k.startswith("cause-"):
-        return not lease_is_live(st.get(block_lease(cause=k[len("cause-"):])), st.clock())
-    its = red_item_of_run(st, k)
-    if kind == "BLOCKED":
-        return not any(it["state"] == "blocked-external" for it in its)
-    return not any(it["state"] in ("red", "offered") for it in its)
-
-
-def inbox_escalations(now_=None):
-    """The unacked entries due for escalation. An escalated red that has since been claimed or gone green is
-    acknowledged here (the status line's ESCALATED clears on its own: nobody has to ack a solved problem)."""
-    t = now_ if now_ is not None else time.time()
-    lim = env_num("AGENTCTL_INBOX_ESCALATE_MIN", INBOX_ESCALATE_MIN) * 60
+# THE ESCALATION THAT WAKES SOMEBODY is an event (severity escalate) the notifier delivers once (notified_at). What is
+# escalated NOW is level-triggered: every red or condition item whose state escalated and that still sits in it (a red
+# offered with nobody taking it, a fix unverified, a condition still open). Taking the red, verifying the fix, the probe
+# passing: the item leaves that state and the escalation is gone -- nobody acks a solved problem.
+def escalated_now(store=None):
+    """[(item type, item, words)] of the items escalated and still in that state."""
+    st = store or Store()
     out = []
-    by_entry = {}  # inbox id -> its OPEN condition: one escalation per condition, none for a closed one
-    for c in open_conditions():
-        for i in c.get("inbox") or []:
-            by_entry[i] = c["key"]
-    seen = set()
-    for e in reversed(inbox_entries()):
-        kind = e.get("kind") or inbox_kind(e.get("verdict"))
-        if e["read"] or not e.get("final", True) or kind not in ESCALATE_KINDS:
-            continue
-        rk = red_escalation_key(e)  # ONE escalation per open red or cause: its newest entry stands for the others
-        if rk is not None:
-            if f"red-{rk}" in seen:
-                continue
-            seen.add(f"red-{rk}")
-        if kind in CONDITION_KINDS and rk is None:
-            key = by_entry.get(e["id"])
-            if key is None:  # its condition is closed (or it predates the registry): nothing left to act on
-                os.makedirs(os.path.join(inbox_dir(), "acked"), exist_ok=True)
-                open(os.path.join(inbox_dir(), "acked", e["id"]), "a").close()
-                continue
-            if key in seen:
-                continue
-            seen.add(key)
-        try:
-            if red_escalation_resolved(e):
-                os.makedirs(os.path.join(inbox_dir(), "acked"), exist_ok=True)
-                open(os.path.join(inbox_dir(), "acked", e["id"]), "a").close()
-                continue
-        except (Exception, SystemExit) as ex:  # never stops the escalation: the entry stays
-            err(f"inbox: could not check {e['id']} ({str(ex)[:120]})")
-        if t - float(e.get("at") or 0) >= lim:
-            out.append(e)
-    return out[::-1]
+    for it in st.items("red", ["offered", "fix-pending"]):
+        if it["level"]:
+            out.append(("red", it, f"{red_what(it['data'])}: {red_view(st, it)[1]}"))
+    for it in st.items("condition", ["open"]):
+        if it["level"]:
+            out.append(("condition", it, str(it["data"].get("text") or it["data"].get("kind"))))
+    return out
+
+
+def escalation_line(es):
+    if not es:
+        return ""
+    first = re.sub(r"\s+--\s+`.*$", "", es[0][2])[:90]
+    return f"ESCALATED: {len(es)} ({first}{'; …' if len(es) > 1 else ''})"
 
 
 def applescript_str(text):
@@ -11638,43 +11596,9 @@ def notify(title, text):
                     'sound name "Basso"'], capture_output=True, timeout=10)
 
 
-def escalate_inbox(now_=None):
-    """Notify each escalated entry once (a marker in inbox/escalated/); returns every escalated entry."""
-    es = inbox_escalations(now_)
-    d = os.path.join(inbox_dir(), "escalated")
-    for e in es:
-        m = os.path.join(d, e["id"])
-        if os.path.exists(m):
-            continue
-        try:
-            os.makedirs(d, exist_ok=True)
-            open(m, "a").close()  # first: never notified twice, even if the notification hangs
-            notify(f"agentctl: {e.get('kind')} unacked", str(e.get("verdict") or "")[:220])
-        except (OSError, subprocess.SubprocessError) as ex:
-            err(f"inbox: could not escalate {e['id']} ({ex})")
-    return es
-
-
-def escalation_line(es):
-    if not es:
-        return ""
-    first = re.sub(r"\s+--\s+`.*$", "", str(es[-1].get("verdict") or ""))[:90]
-    return f"ESCALATED: {len(es)} unacked ({first}{'; …' if len(es) > 1 else ''})"
-
-
-def maybe_escalate_inbox():
-    if time.time() - _last_escalate[0] < 60:
-        return
-    _last_escalate[0] = time.time()
-    try:
-        escalate_inbox()
-    except Exception as e:  # never stops the loop
-        err(f"inbox escalation: {e}")
-
-
 def cmd_inbox(a):
-    if a.ids[:1] == ["escalated"]:  # the status line's: notify what is due, print the bold line (nothing when none)
-        line = escalation_line(escalate_inbox())
+    if a.ids[:1] == ["escalated"]:  # the status line's: what is escalated now (the notifier already told) -- bold
+        line = escalation_line(escalated_now())
         if line:
             print(line)
         return 0

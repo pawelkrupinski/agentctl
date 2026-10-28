@@ -23,6 +23,7 @@ class RegistryBase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.env = {"AGENTCTL_RECOVERY_DIR": os.path.join(self.tmp.name, "rec"),
+                    "AGENTCTL_STATE_ROOT": os.path.join(self.tmp.name, "state"),
                     "AGENTCTL_INBOX_DIR": os.path.join(self.tmp.name, "inbox"),
                     "AGENTCTL_STATUSLINE_STALE": os.path.join(self.tmp.name, "stale"),
                     "AGENTCTL_TUNNEL_STATE": os.path.join(self.tmp.name, "tunnel.json")}
@@ -89,6 +90,33 @@ class SameProbeTest(RegistryBase):
         self.assertEqual(ran, [{"n": 1}])
         self.assertEqual(len(lines), 1)
         self.assertIn("kicked", lines[0])
+
+
+class ConditionItemTest(RegistryBase):
+    """Step 12: a condition is an item of the "condition" machine -- it escalates (an event the notifier delivers) 10 min
+    after opening and every 2 h after, and only its own probe passing closes it."""
+    def test_open_escalate_by_deadline_close_by_its_probe_and_old_files_migrate(self):
+        ok = [False]
+        A.PROBES["tunnel"] = lambda a: (ok[0], "down" if not ok[0] else "up")
+        A.open_condition("STALLED", "STALLED: x", A.run_probe("tunnel"), [], key="k1")
+        st = A.Store()
+        it = st.item("condition", "k1")
+        self.assertEqual((it["state"], it["level"]), ("open", 0))
+        self.assertEqual(A.recovery_tick(now_=time.time() + 11 * 60), [])
+        it = st.item("condition", "k1")
+        self.assertEqual(it["level"], 1)
+        self.assertEqual([e["severity"] for e in st.events() if e["item_id"] == "k1"][-1], "escalate")
+        self.assertGreater(it["deadline"], time.time() + 3600)  # the next escalation in 2 h
+        ok[0] = True
+        self.assertEqual(len(A.recovery_tick(force=True)), 1)
+        self.assertEqual(st.item("condition", "k1")["state"], "closed")
+        self.assertEqual(A.open_conditions(), [])
+        os.makedirs(A.recovery_dir(), exist_ok=True)  # a condition file from before step 12: an item now
+        A.write_json(A.recovery_dir("old.json"), {"key": "old", "kind": "NETWORK", "text": "NETWORK: x",
+                                                  "probe": {"kind": "tunnel", "args": {}}, "next_check": 1e12})
+        A.recovery_tick()
+        self.assertFalse(os.path.exists(A.recovery_dir("old.json")))
+        self.assertEqual([c["key"] for c in A.open_conditions()], ["old"])  # an item now, its probe due at its own time
 
 
 class NoBypassTest(RegistryBase):

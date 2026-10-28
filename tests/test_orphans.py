@@ -33,7 +33,7 @@ class OrphanTest(RedBase):
         self.assertEqual(self.relands, [wt])  # one re-land, never a loop
         [e] = self.inbox("UNLANDED_ORPHAN")
         self.assertIn("repo-wt-flipflop: 1 commit(s) not on forgejo/main", e["verdict"])
-        self.assertIn("UNLANDED_ORPHAN", A.ESCALATE_KINDS)
+        self.assertEqual([c["kind"] for c in A.open_conditions()], ["UNLANDED_ORPHAN"])  # an item: it escalates by its machine
         self.assertEqual(A.recovery_tick(force=True), [])  # still not on main
         sh(wt, "git", "push", "-q", "forgejo", "HEAD:main")  # it lands
         sh(self.r.path, "git", "fetch", "-q", "forgejo")

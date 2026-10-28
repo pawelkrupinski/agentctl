@@ -38,6 +38,10 @@ class TunnelTest(unittest.TestCase):
         os.environ["AGENTCTL_TUNNEL_STATE"] = os.path.join(self.tmp.name, "t.json")
         self.saved_rec = os.environ.get("AGENTCTL_RECOVERY_DIR")  # its own registry: no other test's tunnel condition
         os.environ["AGENTCTL_RECOVERY_DIR"] = os.path.join(self.tmp.name, "rec")
+        self.saved_root = os.environ.get("AGENTCTL_STATE_ROOT")  # its own store too: the conditions are items
+        os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp.name, "state")
+        self.addCleanup(lambda: os.environ.__setitem__("AGENTCTL_STATE_ROOT", self.saved_root) if self.saved_root
+                        else os.environ.pop("AGENTCTL_STATE_ROOT", None))
         self.addCleanup(lambda: os.environ.__setitem__("AGENTCTL_RECOVERY_DIR", self.saved_rec) if self.saved_rec
                         else os.environ.pop("AGENTCTL_RECOVERY_DIR", None))
         self.kicks, self.inbox = [], []

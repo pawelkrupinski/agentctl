@@ -42,6 +42,7 @@ class RedBase(unittest.TestCase):
                     "AGENTCTL_RED_FIXER": "", "AGENTCTL_RED_MAX_FIXERS": "", "AGENTCTL_RED_DAILY_CAP": "",
                     "AGENTCTL_RED_MAX_OUTSIDE": "", "AGENTCTL_RED_GATE_MAX_FIXERS": "",
                     "AGENTCTL_NOTIFY": "true", "AGENTCTL_INBOX_ESCALATE_MIN": ""}
+        self.env["AGENTCTL_STATE_ROOT"] = os.path.join(t, "state-root")  # its own store: no other test's items or leases
         self.saved = {k: os.environ.get(k) for k in self.env}
         os.environ.update(self.env)
         for k, v in self.env.items():

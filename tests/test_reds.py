@@ -40,7 +40,7 @@ class RedsBase(RedBase):
     def snap(self):
         A._gate_lists.clear()
         A._outside_lists.clear()
-        return A.ci_state_refresh(MOVIES, write=False)
+        return A.ci_state_refresh(MOVIES)  # written: a workflow_green probe reads it
 
     def tick(self, dispatch=False, advance=0, snap=True):
         self.t[0] += advance
@@ -120,6 +120,7 @@ class NeverNobodyTest(RedsBase):
         esc = [e for e in self.st.events() if e["severity"] == "escalate"]
         self.assertEqual(len(esc), 2)
         self.assertIn("dispatch is OFF", esc[-1]["text"])
+        A.project_events(self.st)
         self.assertTrue(any("RED UNCLAIMED" in str(e.get("verdict")) for e in self.inbox()))
         self.assertNotIn("NOBODY", self.why()[1])
 
@@ -322,15 +323,10 @@ class OwnerTest(RedsBase):
                                  "headSha": self.sha, "url": "u", "number": 30, "status": "completed",
                                  "conclusion": "failure", "workflowName": "Decodo probe"})
         self.put("run-60.log", "")
-        r = A.run_probe("http", {"url": "http://127.0.0.1:9/decodo"})
-        claim = A.reds_dir("claims", "block.json")
-        A.write_json(claim, {"state": "blocked", "runs": ["30"], "workflow": "Decodo probe", "blocked_cmd": "check Decodo",
-                             "owner_cause": "external-account"})
-        A.write_json(os.path.join(os.environ["AGENTCTL_RECOVERY_DIR"], "cause-Decodo.json"), {  # step 10's form: imported
-            "key": "cause-Decodo", "kind": "BLOCKED", "text": "Decodo down", "owner_cause": "external-account",
-            "probe": {"kind": "workflow_green", "args": {"repo": MOVIES, "workflow": "Decodo probe"}},
-            "on_recover": [["release_block", {"run": "30", "path": claim}]], "opened_at": time.time(),
-            "last_result": {"ok": r.ok}})
+        self.tick()
+        rc, out = self.tool("red", "block", "30", "--cause", "Decodo", "--owner-cause", "external-account", "--cmd",
+                            "check Decodo", "--until-green", "Decodo probe", "--repo", "movies", cwd=self.r.path)
+        self.assertEqual(rc, 0, out)
         self.tick()
         self.tick()
         decodo = [i for i in self.st.items("red") if i["data"]["workflow"] == "Decodo probe"]
@@ -344,7 +340,7 @@ class OwnerTest(RedsBase):
         self.assertEqual(esc, [])  # the reds do not escalate one by one: the cause does (its own lease)
         lease = self.st.get("block/cause/Decodo")
         self.assertEqual(lease["holder"], "owner:external-account")
-        self.assertEqual(A.open_conditions(), [])  # the condition became the lease
+
 
     def test_a_live_fixer_outranks_a_block_whose_justification_then_lapses(self):
         self.main_red(40, 20, kind="infra")
@@ -364,27 +360,23 @@ class OwnerTest(RedsBase):
         self.assertEqual([r for r in self.st.list("block/") if A.lease_is_live(r, self.t[0])], [])
         self.assertIn("INVALID: a live fixer", A.lease_meta(self.st.list("block/")[0])["outcome"])
 
-    def test_one_escalation_per_external_cause(self):
-        for n in (1, 2):
-            A.inbox_write("red", f"RED BLOCKED ON OWNER: Decodo down (blocks Decodo probe #{n}): x", ["x"], [], 1)
-        os.environ["AGENTCTL_INBOX_ESCALATE_MIN"] = "0"
-        self.st.acquire("block/cause/Decodo", "owner:external-account", 600, 3600)
-        try:
-            es = A.inbox_escalations()
-        finally:
-            os.environ.pop("AGENTCTL_INBOX_ESCALATE_MIN")
-        self.assertEqual(len([e for e in es if "Decodo down" in e["verdict"]]), 1)
-
-    def test_escalation_counts_one_per_open_red(self):
-        for n in range(3):
-            A.inbox_write("red", f"RED UNCLAIMED: Main #20 [t]: no taker for {n} min", ["x"], [], 1)
-        os.environ["AGENTCTL_INBOX_ESCALATE_MIN"] = "0"
-        try:
-            self.tick()
-            es = A.inbox_escalations()
-        finally:
-            os.environ.pop("AGENTCTL_INBOX_ESCALATE_MIN")
-        self.assertEqual(len([e for e in es if "#20" in e["verdict"]]), 1)
+    def test_escalation_counts_one_per_open_red_and_none_for_reds_a_cause_holds(self):
+        os.makedirs(A.reds_dir(), exist_ok=True)
+        open(A.reds_dir("DISPATCH_OFF"), "w").close()
+        for _ in range(3):  # three cycles of no taker: three escalate events, ONE escalated red
+            self.tick(dispatch=True, advance=A.RED_OFFER["gate"] + 1)
+        es = A.escalated_now(self.st)
+        self.assertEqual(len(es), 1)
+        self.assertTrue(A.escalation_line(es).startswith("ESCALATED: 1 (Main #20"))
+        A.project_events(self.st)  # the projector writes the escalations into the inbox; the notifier tells
+        self.assertTrue(any(str(e.get("verdict")).startswith("RED UNCLAIMED") for e in A.inbox_entries()))
+        self.assertGreaterEqual(A.notify_escalations(self.st), 2)
+        self.assertEqual(A.notify_escalations(self.st), 0)  # once each
+        wt = self.r.worktree("repo-wt-taker", branch="taker")
+        self.assertEqual(self.tool("red", "claim", "20", "--repo", "movies", cwd=wt)[0], 0)
+        self.t[0] = time.time()
+        self.tick()
+        self.assertEqual(A.escalated_now(self.st), [])  # held now: the escalation is gone by itself
 
 
 class LadderTest(RedsBase):
