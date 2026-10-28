@@ -484,8 +484,9 @@ def job_log_lines(o_r, run_id, job, tail):
         return []
     clean = [LOG_TS.sub("", ANSI.sub("", (l.split("\t", 2)[2] if l.count("\t") >= 2 else l))).rstrip() for l in log.splitlines()]
     notes = [l[:300] for l in clean if ANNOTATION.search(l)]
-    if notes:
-        return notes[-tail:]
+    timed = [l[:300] for l in clean if STEP_TIMED_OUT in l]  # past the failed step's slice, in the reap step's
+    if notes or timed:
+        return (timed[-1:] + [n for n in notes if n not in timed])[-tail:]
     name = job.get("name", "?")
     return relevant_lines("\n".join(f"{name}\t-\t{l}" for l in clean), tail).get(name, [])
 
@@ -1220,7 +1221,7 @@ def explain_run_jobs(o_r, run, tail, repo=None):
         if not jl and not setup and fetched < MAX_JOB_LOG_FETCHES:  # a shifted step slice: read the whole job log
             fetched += 1
             jl = job_log_lines(o_r, rid, j, tail)
-        kind, why = classify_job(j, jl, raws.get(j["name"], (0, [])), j["name"] in timed)
+        kind, why = classify_job(j, jl, raws.get(j["name"], (0, [])), j["name"] in timed or any(STEP_TIMED_OUT in l for l in jl))
         kinds.append(kind)
         # a job with no error line is known by its failing STEP (a red is its failing test or step, never its job name)
         per_job.append((j["name"], kind, jl[0] if jl else (f"step failed: {bad[0]['name']}" if bad else "")))

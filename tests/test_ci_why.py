@@ -158,12 +158,16 @@ class CiWhyTest(FakeForge):
         self.assertIn("verdict: UNCLEAR", out)
 
     def test_a_step_cut_at_its_own_timeout_is_a_timeout_never_unclear(self):
-        # Identity rule ablation #2400: bounded-step reaped the ablation step; its log just stopped mid-progress
-        self.scenario([{**job("ablate", conclusion="failure"), "steps": [step("Ablate this shard's batches", "failure")]}],
-                      "ablate\tAblate this shard's batches\t2026-10-28T20:24:42Z [ablation full-us] b013: 0 moved in 14.1s\n"
-                      "ablate\tComplete job\t2026-10-28T20:24:49Z ::warning::ending what a timed-out step left running "
-                      "(/var/run/act/workflow/6.sh, process group 4547)\n"
-                      "ablate\tComplete job\t2026-10-28T20:24:50Z Uploaded artifact 'identity-rule-ablation-shard-0'\n")
+        # Identity rule ablation #2400: bounded-step reaped the ablation step; its slice just stopped mid-progress, and
+        # the reap's warning sits past it, in the whole job log only
+        self.scenario([{**job("ablate", conclusion="failure"), "databaseId": 34165,
+                        "steps": [step("Set up job", "success"), step("Ablate this shard's batches", "failure")]}],
+                      "ablate\tAblate this shard's batches\t2026-10-28T20:08:56Z 20:08:56Z [ablation full-uk] b007: 157 moved in 14.9s\n")
+        self.put("run-39-job-34165.log",
+                 "ablate\tAblate this shard's batches\t2026-10-28T20:24:42Z [ablation full-us] b013: 0 moved in 14.1s\n"
+                 "ablate\tComplete job\t2026-10-28T20:24:49Z ::warning::ending what a timed-out step left running "
+                 "(/var/run/act/workflow/6.sh, process group 4547)\n"
+                 "ablate\tComplete job\t2026-10-28T20:24:50Z Uploaded artifact 'identity-rule-ablation-shard-0'\n")
         rc, out, _ = self.why()
         self.assertIn("verdict: TIMEOUT", out)
         self.assertIn("[test] ablate: TIMEOUT: step 'Ablate this shard's batches' ran past its timeout-minutes", out)
