@@ -93,7 +93,7 @@ class OwnerTest(BranchBase):
 
 
 class BranchRedTest(BranchBase):
-    def test_predicts_main_red_when_its_commit_landed_with_main_inputs_routed_once_and_claimed_like_a_main_red(self):
+    def test_predicts_main_red_when_its_commit_landed_with_main_inputs_routed_once_and_offered_like_a_main_red(self):
         self.land_x()
         snap = self.snap()
         e = A.branch_reds(snap)[0]
@@ -108,10 +108,10 @@ class BranchRedTest(BranchBase):
         self.assertEqual(A.route_branch_reds(MOVIES, snap), [])  # one entry per run
         units = A.predict_units(MOVIES, snap)
         self.assertTrue(units and all(u["gate"] and u["predicts"] == self.branch for u in units))
-        t = time.time()
-        A.red_patrol(MOVIES, self.r.path, units, A.find_fixers(self.r.path, units), dispatch=False, now_=t)
-        acts = A.red_patrol(MOVIES, self.r.path, units, A.find_fixers(self.r.path, units), dispatch=False, now_=t + 3600)
-        self.assertTrue(any(a.startswith("RED UNCLAIMED") and "PREDICTS MAIN RED" in a for a in acts), acts)
+        st = A.Store(path=os.path.join(self.tmp.name, "store.db"))
+        A.red_tick(st, MOVIES, self.r.path, snap, dispatch=False)  # a red item before main fails: offered like a gate red
+        its = [i for i in st.items("red") if i["data"]["red_kind"] == "predicts"]
+        self.assertTrue(its and all(i["state"] == "offered" and i["data"]["predicts"] == self.branch for i in its), its)
         self.assertIn("main will fail the same way next", A.fixer_prompt(units[0], "/wt", "/brief"))
         red, line = A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path)
         self.assertFalse(red)

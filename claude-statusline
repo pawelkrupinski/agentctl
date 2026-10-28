@@ -1,7 +1,7 @@
 #!/bin/bash
 # Claude Code status line: the movies landing state in one line.
 #   gate RED (main #2066 → fix 0a5767c awaiting #2070; convergence green) · waiting: 3 — dep-index, … · inbox: 2 unread
-# An unacked escalation (`ESCALATED: ...`, agentctl inbox escalated) follows the gate. A red nobody fixes (NOBODY), one waiting on the owner (BLOCKED ON OWNER) and a branch red that PREDICTS MAIN RED are
+# An unacked escalation (`ESCALATED: ...`, agentctl inbox escalated) follows the gate. A red whose offer nobody took in time (offered (ESCALATED)), one waiting on the owner (BLOCKED ON OWNER) and a branch red that PREDICTS MAIN RED are
 # shown in bold red; a cache older than 5 min says `as of HH:MM`. Branch reds (runs on measure/check/fixer branches)
 # follow main's, apart: `branch reds: N → owner (workflow #n)`.
 # The status line runs often, so this prints a cached line at once and refreshes the cache in the background
@@ -16,7 +16,7 @@ cat >/dev/null # the session JSON Claude Code sends on stdin; not needed
 refresh() {
   local gate waiting inbox esc line
   # ci-why --summary --cached (the line the always-on processor publishes; this session has no vault): each gate row, and for a red one who is fixing it (agentctl's `red`): one line
-  #   gate RED (main #2066 → fix 0a5767c awaiting #2070; convergence green)   /   gate RED (main #2066 → NOBODY; …)
+  #   gate RED (main #2066 → fix 0a5767c awaiting #2070; convergence green)   /   gate RED (main #2066 → offered: fresh, capacity 3/3; …)
   gate=$(cd "$repo" && ~/bin/agentctl ci-why --summary --cached 2>/dev/null | tail -1)
   # waiting status: entries on `waiting` (red main), then "queued for their checks: N" and those entries
   waiting=$(cd "$repo" && ~/bin/agentctl waiting status 2>/dev/null | awk '
@@ -35,10 +35,10 @@ refresh() {
   printf '%s\n' "$line" >"$cache.tmp" && mv "$cache.tmp" "$cache"
 }
 
-show() { # the cached line, NOBODY / BLOCKED ON OWNER in bold red, and its age once it is over 5 min old
+show() { # the cached line, an escalated offer / BLOCKED ON OWNER in bold red, and its age once it is over 5 min old
   local stale=""
   [ "$age" -ge 300 ] && stale=" · as of $(date -r "$(stat -f %m "$cache")" +%H:%M)"
-  sed -e $'s/\\(ESCALATED: [^·]*\\)/\033[1;31m\\1\033[0m/' -e $'s/NOBODY/\033[1;31mNOBODY\033[0m/g' -e $'s/PREDICTS MAIN RED/\033[1;31mPREDICTS MAIN RED\033[0m/g' -e $'s/gate UNREAD/\033[1;31mgate UNREAD\033[0m/' -e $'s/BLOCKED ON OWNER\\([^;)]*\\)/\033[1;31mBLOCKED ON OWNER\\1\033[0m/g' "$cache" \
+  sed -e $'s/\\(ESCALATED: [^·]*\\)/\033[1;31m\\1\033[0m/' -e $'s/offered (ESCALATED)/\033[1;31moffered (ESCALATED)\033[0m/g' -e $'s/PREDICTS MAIN RED/\033[1;31mPREDICTS MAIN RED\033[0m/g' -e $'s/gate UNREAD/\033[1;31mgate UNREAD\033[0m/' -e $'s/BLOCKED ON OWNER\\([^;)]*\\)/\033[1;31mBLOCKED ON OWNER\\1\033[0m/g' "$cache" \
     | sed "s/\$/$stale/"
 }
 if [ "${1:-}" = "--refresh" ]; then refresh; age=0; show; exit 0; fi

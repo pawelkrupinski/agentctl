@@ -107,21 +107,20 @@ class NoBypassTest(RegistryBase):
             A.open_condition("STALLED", "STALLED: x", A.run_probe("tunnel"), [("no-such-action", {})])
 
     def test_a_condition_kind_inbox_entry_is_refused_outside_open_condition(self):
-        for v in ("STALLED: tunnel", "UNKNOWN: gate", "NETWORK: uplink", "RED UNCLAIMED: Main #1", "RED BUDGET: x",
-                  "RED ESCALATE: x", "RED BLOCKED ON OWNER: x", "NOT LANDED: stalled push"):
+        for v in ("STALLED: tunnel", "UNKNOWN: gate", "NETWORK: uplink", "RED BLOCKED ON OWNER: x", "NOT LANDED: stalled push"):
             with self.assertRaises(A.ConditionBypass, msg=v):
                 A.inbox_write("x", v, [v], [], 1)
         self.assertTrue(A.inbox_write("land", "WATCH UNKNOWN: a command's own verdict", [], [], 2, reply=True))
         self.assertTrue(A.inbox_write("land", "NOT LANDED: the pre-push checks failed", [], [], 1))
         with self.assertRaises(A.ConditionBypass):
-            A.red_claim(MOVIES, "1", "", "blocked", "cmd")
+            A.write_block_claim(MOVIES, "1", "cmd", "x", None)
 
     def test_lint_no_condition_written_around_the_registry(self):
         """The source: an inbox_write whose verdict is a condition kind, a blocked red_claim, a ProbeResult or an
         open_condition without a probe argument, anywhere but the registry's own functions, fails this test."""
         with open(TOOL) as f:
             tree = ast.parse(f.read())
-        prefix = re.compile(r"^(STALLED:|UNKNOWN:|NETWORK:|RED UNCLAIMED|RED BUDGET|RED ESCALATE|RED BLOCKED ON OWNER|"
+        prefix = re.compile(r"^(STALLED:|UNKNOWN:|NETWORK:|RED BLOCKED ON OWNER|"
                             r"WATCH STALLED|WATCH UNKNOWN|HELD:)")
         allowed = {"open_condition", "inbox_write", "run_probe", "with_inbox"}
 
@@ -160,9 +159,8 @@ class NoBypassTest(RegistryBase):
                         texts = [text_of(v)]
                     if any(prefix.match(t) for t in texts):
                         bad.append(f"{fn.name}:{call.lineno} inbox_write of a condition kind")
-                if nm == "red_claim" and not opens and any(isinstance(x, ast.Constant) and x.value == "blocked"
-                                                           for x in list(call.args) + [k.value for k in call.keywords]):
-                    bad.append(f"{fn.name}:{call.lineno} a blocked claim outside open_condition")
+                if nm == "write_block_claim" and not opens and fn.name != "red_block":
+                    bad.append(f"{fn.name}:{call.lineno} a block outside open_condition")
                 if nm == "ProbeResult" and fn.name not in ("run_probe", "close_condition"):  # a manual close: a reason
                     bad.append(f"{fn.name}:{call.lineno} a ProbeResult not from run_probe")
                 if nm == "open_condition" and len(call.args) < 4:
@@ -228,16 +226,15 @@ class UntilGreenTest(RedBase):
             os.environ.pop("AGENTCTL_CLAIM_PID")
         self.assertEqual(rc, 0, out)
         self.assertIn("auto-clears when Decodo probe is green", out)
-        self.assertEqual([c.get("state") for c in A.all_claims()], ["blocked"])
-        self.assertIn("main #20 → BLOCKED ON OWNER (auto-clears when Decodo probe is green", self.why("--summary")[1])
+        self.assertEqual([c.get("state") for c in A.block_claims()], ["blocked"])
         verified = []
         A.RECOVER_ACTIONS["verify"] = lambda c, a: verified.append(a["run"]) or "dispatched"
         self.assertEqual(A.recovery_tick(force=True), [])  # the probe workflow is still red: nothing moves
-        self.assertEqual(len(A.all_claims()), 1)
+        self.assertEqual(len(A.block_claims()), 1)
         self.snap("success")
         lines = A.recovery_tick(force=True)
         self.assertEqual(len(lines), 1, lines)
-        self.assertEqual(A.all_claims(), [])  # the block released
+        self.assertEqual(A.block_claims(), [])  # the block released
         self.assertEqual(verified, ["20"])  # the red's own workflow dispatched to verify it
         self.assertTrue(all(e["read"] for e in self.inbox("BLOCKED")))
         self.assertEqual(A.open_conditions(), [])

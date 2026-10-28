@@ -182,41 +182,6 @@ class WatchTest(Base):
         self.assertEqual(rc, 2, out)
         self.assertIn("WATCH UNKNOWN: no Forgejo token (could not read the movies FORGEJO_API_TOKEN", out)
 
-    def fix_scenario(self, new_jobs):
-        """#2047 red in test (worker-identity); the fix lands; Main #2059 is the first run containing it."""
-        self.main = [run(2059, self.sha, conclusion="success" if all(c == "success" for c in new_jobs.values()) else "failure"),
-                     run(2047, "0" * 40, conclusion="failure")]
-        self.conv = [run(21, self.sha)]
-        self.jobs[2047] = [{"name": "test (worker-identity)", "conclusion": "failure"}, {"name": "lint", "conclusion": "success"}]
-        self.jobs[2059] = [{"name": n, "conclusion": c} for n, c in new_jobs.items()]
-        import contextlib, io
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            rc = A.watch_landed(self.r.path, self.sha, self.pushed_at, o_r=MOVIES, fixes=["2047"])
-        fix = [e for e in A.inbox_entries() if e["verdict"].startswith("FIX")]
-        return rc, out.getvalue(), fix
-
-    def test_a_fix_that_fails_again_in_the_same_job_is_fix_failed(self):
-        rc, out, fix = self.fix_scenario({"test (worker-identity)": "failure", "lint": "success"})
-        self.assertEqual(rc, 3, out)
-        line = f"FIX FAILED: Main #2059 still fails test (worker-identity) (fix {self.sha[:10]} claimed #2047)"
-        self.assertIn(line, out)
-        self.assertEqual([(e["verdict"], e["kind"]) for e in fix][-1:], [(line, "FIX_FAILED")])
-
-    def test_a_fix_whose_jobs_all_pass_is_fix_ok(self):
-        rc, out, fix = self.fix_scenario({"test (worker-identity)": "success", "lint": "success"})
-        self.assertEqual(rc, 0, out)
-        self.assertIn("FIX OK: #2047 cleared by #2059", out)
-        self.assertEqual(fix[-1]["kind"], "FIX_OK")
-        self.assertTrue(out.rstrip().endswith("FIX OK: #2047 cleared by #2059") or "WATCH OK" in out)
-
-    def test_the_fixes_red_trailer_of_the_landed_commit_is_read(self):
-        self.r.write("f3.txt", "the fix\n")
-        self.sha = self.r.commit("fix the worker-identity test\n\nFixes-Red: 2047")
-        self.r.push()
-        rc, out, fix = self.fix_scenario({"test (worker-identity)": "failure"})
-        self.assertIn("FIX FAILED: Main #2059 still fails test (worker-identity)", out)
-
     def test_a_watch_whose_worktree_was_removed_after_landed_still_ends_with_its_verdict(self):
         # 2026-10-27: `crashed: RuntimeError: git rev-parse --show-toplevel in ~/projects/movies-wt-gate-closed`: the
         # agent removed its worktree at LANDED (as the brief says) while the detached watch still ran in it

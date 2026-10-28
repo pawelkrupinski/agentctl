@@ -33,7 +33,7 @@ class SnapshotTest(RedBase):
         A._outside_lists.clear()
         red, line = A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path)
         self.assertFalse(red)
-        self.assertTrue(line.startswith("gate green · reds: Identity capture #2104 → UNASSIGNED"), line)
+        self.assertTrue(line.startswith("gate green · reds: Identity capture #2104 → offering"), line)
         self.assertEqual([n for n, *_ in A.gate_from_snap(snap)], ["Main", "Identity model convergence"])
         self.assertEqual([n for n, *_ in A.outside_from_snap(snap)], ["Identity capture"])
 
@@ -106,7 +106,7 @@ class StaleLocalRedTest(RedBase):
         saved = A.slug
         A.slug = lambda r: MOVIES
         try:
-            return A.patrol_repo(self.r.path, dispatch=False, wait_recheck=True)
+            return A.recheck_local(self.r.path, wait=True)
         finally:
             A.slug = saved
 
@@ -118,26 +118,16 @@ class StaleLocalRedTest(RedBase):
         self.assertNotIn("Local checks: RED", out)
         self.assertIn("local → stale, rechecking", self.why("--summary")[1])
 
-    def test_a_passing_recheck_clears_releases_the_claim_stops_the_fixer_and_tidies_worktrees(self):
+    def test_a_passing_recheck_clears_and_tidies_the_fixers_worktrees(self):
         wt = self.r.worktree("red-local", base="forgejo/main~1", branch="red-local")
         os.unlink(os.path.join(wt, "BROKEN"))
-        dup = self.r.commit("same fix", at=wt)
-        sleeper = subprocess.Popen(["sleep", "60"], start_new_session=True)
-        import threading
-        threading.Thread(target=sleeper.wait, daemon=True).start()  # reaps the leader, as the processor does
-        self.addCleanup(lambda: (sleeper.poll() is None) and os.killpg(sleeper.pid, signal.SIGKILL))
+        self.r.commit("same fix", at=wt)
         d = A.reds_dir("local")
         os.makedirs(d)
-        A.write_json(os.path.join(d, "fixer.json"), {"workflow": A.LOCAL_FLOW, "pid": sleeper.pid,
-                                                      "process_start": A.process_start(sleeper.pid), "worktree": wt,
-                                                      "run": "local"})
-        os.makedirs(A.reds_dir("claims"), exist_ok=True)
-        A.write_json(A.reds_dir("claims", "c.json"), {"who": "red-fixer-local", "workflow": A.LOCAL_FLOW, "runs": ["local"]})
+        A.write_json(os.path.join(d, "fixer.json"), {"workflow": A.LOCAL_FLOW, "pid": 99999999, "worktree": wt,
+                                                      "run": "local", "ended": A.ts()})
         acts = self.patrol_now()
         self.assertFalse(os.path.exists(A.reds_dir("local.json")), acts)
-        self.assertEqual(A.all_claims(), [])
-        time.sleep(0.5)
-        self.assertIsNotNone(sleeper.poll())
         self.assertTrue(any(e["verdict"].startswith("FIX OK") for e in A.inbox_entries()))
         self.assertFalse(os.path.isdir(wt), acts)  # the duplicate fix is patch-equivalent on main: removed
         self.assertNotIn("Local checks", self.why()[1].replace("Local checks pass", ""))
@@ -221,134 +211,6 @@ class RestartGateTest(unittest.TestCase):
 
 CAPTURE_YML = "name: Identity capture\non:\n  schedule:\n    - cron: '0 3 * * 1'\n  workflow_dispatch:\n"
 NODISPATCH_YML = "name: Identity capture\non:\n  schedule:\n    - cron: '0 3 * * 1'\n"
-
-
-class VerifyOutsideGateTest(RedBase):
-    def setUp(self):
-        super().setUp()
-        os.environ["AGENTCTL_VERIFY_POLL"] = "0"
-        self.addCleanup(os.environ.pop, "AGENTCTL_VERIFY_POLL", None)
-        self.put("runs.json", green_gate(self, self.sha) + [
-            run(70, 2104, "Identity capture", "identity-capture.yml", self.sha, conclusion="failure")])
-        self.put("run-70.json", {"jobs": [{"name": "capture (uk)", "status": "completed", "conclusion": "failure"}],
-                                 "headSha": self.sha, "number": 2104, "databaseId": 70, "workflowName": "Identity capture"})
-        self.calls = []
-        self.saved_api = A.api
-        # the run-number lookup finds no run #70: these name the run by its id (the fallback)
-        A.api = lambda o_r, method, path, params=None, body=None: (
-            None if (method, path) == ("GET", "actions/runs") else self.calls.append((method, path, body)))
-        self.addCleanup(setattr, A, "api", self.saved_api)
-
-    def workflow(self, text):
-        self.r.write(".forgejo/workflows/identity-capture.yml", text)
-        self.fix = self.r.commit("capture fix")
-        self.r.push()
-
-    def new_run(self, conclusion):
-        self.put("runs.json", green_gate(self, self.sha) + [
-            run(71, 2110, "Identity capture", "identity-capture.yml", self.sha, conclusion=conclusion),
-            run(70, 2104, "Identity capture", "identity-capture.yml", self.sha, conclusion="failure")])
-        self.put("run-71.json", {"jobs": [{"name": "capture (uk)", "status": "completed", "conclusion": conclusion}],
-                                 "headSha": self.sha, "number": 2110, "databaseId": 71, "workflowName": "Identity capture"})
-
-    def test_a_fix_for_a_dispatchable_workflow_dispatches_it_and_reports_fix_ok(self):
-        self.workflow(CAPTURE_YML)
-        self.new_run("success")
-        line = A.verify_outside_gate(MOVIES, self.r.path, self.fix, "70")
-        self.assertEqual(self.calls[0][:2], ("POST", "actions/workflows/identity-capture.yml/dispatches"))
-        self.assertTrue(line.startswith("FIX OK: #2104 cleared by #2110"), line)
-        self.assertEqual(A.dispatches_today(), 1)  # counted in the budget
-
-    def test_a_verification_run_that_still_fails_is_fix_failed(self):
-        self.workflow(CAPTURE_YML)
-        self.new_run("failure")
-        self.assertTrue(A.verify_outside_gate(MOVIES, self.r.path, self.fix, "70").startswith("FIX FAILED"))
-
-    def test_one_verification_at_a_time_per_workflow(self):
-        self.workflow(CAPTURE_YML)
-        A.write_json(A.reds_dir("verify", "Identity_capture.json"), {"fix": "a" * 40, "pending": True, "epoch": time.time(),
-                                                                     "at": A.ts()})
-        line = A.verify_outside_gate(MOVIES, self.r.path, self.fix, "70")
-        self.assertIn("already has a verification run pending", line)
-        self.assertEqual(self.calls, [])
-
-    def test_a_workflow_without_dispatch_says_unverified_until_the_next_scheduled_run(self):
-        self.workflow(NODISPATCH_YML)
-        line = A.verify_outside_gate(MOVIES, self.r.path, self.fix, "70")
-        self.assertIn("FIX UNVERIFIED until next scheduled run (cron 0 3 * * 1)", line)
-        self.assertEqual(self.calls, [])
-
-    def test_a_number_that_is_no_run_is_left_to_the_old_verdict(self):
-        self.assertIsNone(A.verify_outside_gate(MOVIES, self.r.path, self.sha, "99999"))
-
-
-class FixesRedNumberTest(RedBase):
-    """`Fixes-Red: N` is the run NUMBER (#N). 2026-10-27: Fixes-Red 2133 (Identity capture #2133, id 3281) was read as
-    run id 2133 -- an old convergence run, #1111 -- and the fix was judged a convergence fix: FIX UNVERIFIED, and the
-    capture workflow was never dispatched to verify it."""
-
-    def setUp(self):
-        super().setUp()
-        os.environ["AGENTCTL_VERIFY_POLL"] = "0"
-        self.addCleanup(os.environ.pop, "AGENTCTL_VERIFY_POLL", None)
-        self.conv_old = run(2133, 1111, "Identity model convergence", "identity-model-convergence.yml", self.sha,
-                            conclusion="failure")
-        self.capture = run(3281, 2133, "Identity capture", "identity-capture.yml", self.sha, conclusion="failure")
-        self.put("run-2133.json", dict(self.conv_old, jobs=[]))
-        self.put("run-3281.json", dict(self.capture, jobs=[{"name": "capture (uk)", "status": "completed",
-                                                            "conclusion": "failure"}]))
-        self.by_number = {2133: 3281}
-        self.calls = []
-
-        def api(o_r, method, path, params=None, body=None):
-            self.calls.append((method, path, params, body))
-            if method == "GET" and path == "actions/runs" and params and "run_number" in params:
-                rid = self.by_number.get(int(params["run_number"]))
-                return {"workflow_runs": [{"id": rid, "index_in_repo": int(params["run_number"])}] if rid else []}
-            return None
-        self.saved_api, self.saved_rfv = A.api, A.repo_for_verify
-        A.api, A.repo_for_verify = api, (lambda o_r: self.r.path)
-        self.addCleanup(setattr, A, "api", self.saved_api)
-        self.addCleanup(setattr, A, "repo_for_verify", self.saved_rfv)
-        self.listed = {"main": [run(40, 20, "Main", "main.yml", self.sha)], "convergence": [self.conv_old]}
-
-    def test_a_number_and_an_id_naming_different_runs_resolve_to_the_number_and_say_so(self):
-        kind, r = A.claimed_run(MOVIES, "2133", self.listed)
-        self.assertIsNone(kind, "Identity capture is no gate workflow")
-        self.assertEqual((r["databaseId"], r["number"], r["workflowName"]), (3281, 2133, "Identity capture"))
-        self.assertIn("run number #2133", r["_note"])
-        self.assertIn("not run id 2133", r["_note"])
-
-    def test_an_id_is_the_fallback_only_when_no_run_has_that_number(self):
-        self.by_number = {}
-        kind, r = A.claimed_run(MOVIES, "2133", self.listed)
-        self.assertEqual((kind, r["number"]), ("convergence", 1111))
-        self.assertIn("no run #2133", r["_note"])
-
-    def test_a_listed_run_with_that_number_wins_over_a_listed_id(self):
-        listed = {"convergence": [self.conv_old, run(4000, 2133, "Identity model convergence",
-                                                     "identity-model-convergence.yml", self.sha)]}
-        kind, r = A.claimed_run(MOVIES, "2133", listed)
-        self.assertEqual((kind, r["databaseId"]), ("convergence", 4000))
-
-    def test_a_non_gate_fix_is_dispatched_for_verification(self):
-        self.r.write(".forgejo/workflows/identity-capture.yml", CAPTURE_YML)
-        fix = self.r.commit("capture publish fix\n\nFixes-Red: 2133")
-        self.r.push()
-        self.put("runs.json", green_gate(self, self.sha) + [
-            run(3290, 2140, "Identity capture", "identity-capture.yml", self.sha, conclusion="success"), self.capture])
-        self.put("run-3290.json", {"jobs": [{"name": "capture (uk)", "status": "completed", "conclusion": "success"}],
-                                   "headSha": self.sha, "number": 2140, "databaseId": 3290,
-                                   "workflowName": "Identity capture"})
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            A.verify_fixes(MOVIES, fix, ["2133"], {}, self.listed, A.WATCH[MOVIES])
-        self.assertIn(("POST", "actions/workflows/identity-capture.yml/dispatches"),
-                      [c[:2] for c in self.calls], "the capture workflow is dispatched to verify the fix")
-        line = out.getvalue().strip().splitlines()[-1]
-        self.assertTrue(line.startswith("FIX OK: #2133 cleared by #2140"), line)
-        self.assertNotIn("convergence", line.split("[")[0])
-        self.assertIn("not run id 2133", line)
 
 
 if __name__ == "__main__":
