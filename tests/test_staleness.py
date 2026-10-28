@@ -31,9 +31,11 @@ class EscalateKindsTest(RedBase):
         A._OPENING[0] += 1  # as open_condition writes them
         try:
             A.inbox_write("red", "RED ESCALATE: W #7 [j] still red after 2 dispatched fixers: an investigation", [], [], 1)
-            A.inbox_write("red", "RED BLOCKED ON OWNER: W #8 [j]: `x` -- auto-clears when W is green", [], [], 1)
+            blocked = A.inbox_write("red", "RED BLOCKED ON OWNER: W #8 [j]: `x` -- auto-clears when W is green", [], [], 1)
         finally:
             A._OPENING[0] -= 1
+        A.write_json(A.recovery_dir("block-W-8.json"), {"key": "block-W-8", "kind": "BLOCKED", "inbox": [blocked],
+                                                        "probe": {"kind": "tcp", "args": {}}, "next_check": 1e12})
         A.inbox_write("red fixer", "RED FIXER W #9: DIAGNOSED: a cause; durable fix: y", [], [], 1)
         A.inbox_write("red fixer", "RED FIXER W #10: GAVE UP: no idea", [], [], 1)
         later = time.time() + 11 * 60

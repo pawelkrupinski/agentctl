@@ -176,7 +176,9 @@ class OwnerBlockTest(RedBase):
             "process_start": A.process_start(os.getpid()), "run": "20", "runs": ["20", "40"], "sigs": [u["sig"]],
             "jobs": [u["job"]], "workflow": "Main", "note": "CdpLaunchSpec crasher output root cause"})
         self.assertIn("session 974d50a6", self.why("--summary")[1])  # a live fixer outranks a block, even before the tick
-        self.patrol(time.time())  # the tick re-validates: the block lost its justification
+        lines = A.recovery_tick()  # LOCAL: no patrol, no Forgejo read needed to drop an unjustified block
+        self.assertTrue(any(x.startswith("CLOSED (unjustified): ") for x in lines), lines)
+        self.assertFalse([x for x in lines if x.startswith("RECOVERED")])  # never "Main is green" when it is not
         self.assertFalse(os.path.exists(path))
         self.assertEqual(A.open_conditions(), [])
         self.assertNotIn("BLOCKED ON OWNER", self.why()[1])
@@ -198,8 +200,32 @@ class OwnerBlockTest(RedBase):
                      "run: `! secrets set movies X=y`", "auto-clears when Main is green"):
             self.assertIn(part, e["verdict"])
         [c] = A.open_conditions()
-        self.assertTrue(A.close_condition(c, "the owner rotated it").startswith("RECOVERED:"))
+        self.assertTrue(A.close_condition(c, "the owner rotated it").startswith("CLOSED: the owner rotated it"))
         self.assertEqual(A.all_claims(), [])
+
+
+class OutageTest(RedBase):
+    def test_an_open_outage_holds_its_own_probes_red_and_one_escalation_per_cause(self):
+        A.ci_state_write({"at": time.time(), "repo": MOVIES, "gate": [], "outside": [],
+                          "latest": {"Main": {"number": 20, "conclusion": "failure"}}})
+        self.main_red(40, 20, kind="infra")
+        A._OPENING[0] += 1
+        try:
+            ids = [A.inbox_write("red", f"RED BLOCKED ON OWNER: Decodo down (blocks W #{n})", [], [], 1) for n in (1, 2)]
+        finally:
+            A._OPENING[0] -= 1
+        A.write_json(A.recovery_dir("cause-Decodo.json"), {  # the outage, its check: Main going green
+            "key": "cause-Decodo", "kind": "BLOCKED", "text": "RED BLOCKED ON OWNER: Decodo down", "inbox": ids[:1],
+            "probe": {"kind": "owner_block", "args": {"inner": {"kind": "workflow_green", "args": {"workflow": "Main"}},
+                                                      "claims": []}},
+            "until": "Main is green", "on_recover": [], "next_check": time.time() + 999})
+        st = A.red_states(self.units(), A.find_fixers(self.r.path, self.units()))
+        [s_] = st.values()
+        self.assertEqual(s_["state"], "fixing")  # held by the outage: never a code fixer
+        self.assertIn("Decodo down", s_["text"])
+        es = A.inbox_escalations(time.time() + 11 * 60)
+        self.assertEqual([e["id"] for e in es if e.get("kind") == "BLOCKED"], ids[:1])  # one per open cause
+        self.assertTrue([e for e in self.inbox("BLOCKED") if e["id"] == ids[1]][0]["read"])  # unattached: acked
 
 
 class StaleCommitTest(RedBase):

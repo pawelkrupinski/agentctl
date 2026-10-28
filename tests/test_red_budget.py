@@ -236,7 +236,10 @@ class EscalationTest(RedBase):
         old = self.write("RED UNCLAIMED: Main #2146 [ci]: NOBODY -- daily dispatch budget 6 spent -- `~/bin/agentctl "
                          "red claim 2146`, or assign an agent", 11)
         self.write("RED UNCLAIMED: Main #2147 [ci]: NOBODY -- x", 3)  # too young
-        self.write("STALLED: the waiting processor's loop made no cycle in 900 s", 12)
+        stalled = self.write("STALLED: the waiting processor's loop made no cycle in 900 s", 12)
+        A.write_json(A.recovery_dir("processor-stalled.json"), {  # its open condition (an unattached one is acked)
+            "key": "processor-stalled", "kind": "STALLED", "inbox": [stalled], "probe": {"kind": "processor", "args": {}},
+            "next_check": 1e12})
         self.write("RED FIXER Main #2146: GAVE UP: x", 30)  # FIXER_FAILED escalates too (2026-10-28)
         self.write("RED FLAKE: Main #2146 [ci] passed on the next run", 30)  # not an escalation kind
         acked = self.write("RED BUDGET: daily dispatch budget 6 spent (refunds excluded); W #1 [j]", 20)

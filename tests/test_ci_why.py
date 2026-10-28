@@ -274,11 +274,14 @@ class CachedGateTest(CiWhyTest):
         self.write("gate green", repo="x/y")
         self.assertIn("gate UNREAD", self.why("--summary", "--cached")[1])
 
-    def test_old_file_falls_back_to_live_read(self):
+    def test_an_old_file_is_said_as_unread_never_a_live_read(self):
+        """2026-10-28: the stale-file live read made the status line's 15 s refresh take 60 s."""
         self.write("gate green", age=400)
         self.scenario([step_job for step_job in []])
         rc, out, _ = self.why("--summary", "--cached")
-        self.assertTrue(out.startswith("gate RED"), out)
+        self.assertEqual(rc, 2)
+        self.assertTrue(out.startswith("gate UNREAD (as of "), out)
+        self.assertIn("green", out)
 
     def test_publish_is_atomic_and_refuses_unread(self):
         A.publish_gate_summary("a/b", "gate UNREAD (x)")
