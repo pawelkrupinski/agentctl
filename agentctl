@@ -1005,6 +1005,10 @@ SETUP_STEP = re.compile(r"^(Set up job|Initialize containers|actions/checkout|Ch
 INFRA_LOG = re.compile(r"artifact already exists|ENOENT|No space left on device|Cannot connect to the Docker daemon|"
                        r"connection (refused|reset)|Could not resolve host|TLS handshake timeout|runner .* lost|context deadline exceeded|"
                        r"The operation was canceled|exit code 137|Killed", re.I)
+# A job that says it could not judge because something OUTSIDE the code was unreachable (movies' recording health:
+# `::error::UNKNOWN: proxy unreachable -- ...`, Record scrape fixtures #2238, the Decodo proxy down): an UNKNOWN, read as
+# infra -- never a TEST FAILURE that sends a fixer after a code change.
+UNKNOWN_LOG = re.compile(r"::(error|warning)[^:]*::UNKNOWN: |\bUNKNOWN: proxy unreachable\b")
 RUN_FIELDS = "databaseId,number,status,conclusion,headSha,url,displayTitle,workflowName,createdAt,updatedAt"
 RED_CONCLUSIONS = ("failure", "timed_out")
 
@@ -1041,6 +1045,9 @@ def classify_job(job, lines, raw=(0, [])):
         return "infra", f"failed in setup step '{step}' (often a `needs:` cascade or runner/setup trouble)"
     if not raw[0] and not lines:
         return "infra", "0-length log" + (f" (step '{step}')" if step else "")
+    unknown = next((l for l in lines if UNKNOWN_LOG.search(l)), None)
+    if unknown and not any("*** FAILED" in l or "[error]" in l for l in lines):
+        return "infra", f"UNKNOWN, an outside dependency unreachable (not a code red): {unknown.strip()[:160]}"
     hit = next((l for l in lines if INFRA_LOG.search(l)), None)
     if hit and not any("*** FAILED" in l or "[error]" in l for l in lines):
         return "infra", f"infra-shaped log line: {hit[:120]}"

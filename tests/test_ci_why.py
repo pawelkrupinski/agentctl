@@ -157,6 +157,16 @@ class CiWhyTest(FakeForge):
         self.assertIn("[unclear] b: 1-line log", out)
         self.assertIn("verdict: UNCLEAR", out)
 
+    def test_an_unknown_outside_dependency_is_infra_never_a_test_failure(self):
+        # Record scrape fixtures #2238: the recording's health could not judge Cineworld with the Decodo proxy down.
+        self.scenario([{**job("convergence (united-kingdom)", conclusion="failure"), "steps": [step("Fail the leg on the recording's health", "failure")]}],
+                      "convergence (united-kingdom)\tFail the leg\t2026-10-28T00:10:00Z ::error::UNKNOWN: uk: www.cineworld.co.uk refused "
+                      "66/66 (100%) of what this recording asked it, 66 with the residential proxy unreachable\n"
+                      "convergence (united-kingdom)\tFail the leg\t2026-10-28T00:10:01Z ::error::UNKNOWN: proxy unreachable — fix the proxy\n")
+        rc, out, _ = self.why()
+        self.assertIn("[infra] convergence (united-kingdom): UNKNOWN, an outside dependency unreachable", out)
+        self.assertNotIn("TEST FAILURE", out)
+
     def shifted(self):
         """Forgejo's step slice shifted: --log-failed shows the failed step's neighbours' checkout/cache lines, while the
         step's `::error` annotation sits just past the slice in the whole job log (run 1988, takes (united-kingdom))."""
@@ -220,6 +230,7 @@ class CiWhyMutationTest(unittest.TestCase):
             "pawelkrupinski/movies"] + [("Verify scrape recording", "verify-scrape-recording.yml")]})
         self.kill("test_infra_shaped", "classify_job", lambda job, lines, raw=(0, []): ("test", "x"))
         self.kill("test_artifact_exists_is_infra_and_silent_log_is_unclear", "INFRA_LOG", A.re.compile(r"$^"))
+        self.kill("test_an_unknown_outside_dependency_is_infra_never_a_test_failure", "UNKNOWN_LOG", A.re.compile(r"$^"))
 
 
 if __name__ == "__main__":
