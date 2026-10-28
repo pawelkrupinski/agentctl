@@ -461,6 +461,20 @@ class DispatchTest(RedsBase):
         self.assertEqual(self.only()["data"]["line"], OTHER_LINE)
 
 
+    def test_a_live_fixer_process_without_a_lease_on_the_run_gets_no_second_fixer(self):
+        import subprocess
+        sleeper = subprocess.Popen(["sleep", "60"], start_new_session=True)
+        self.addCleanup(lambda: (sleeper.kill(), sleeper.wait()))
+        os.makedirs(A.reds_dir("20"), exist_ok=True)
+        A.write_json(A.reds_dir("20", "fixer.json"), {"workflow": "Main", "run": 20, "pid": sleeper.pid,
+                                                      "process_start": A.process_start(sleeper.pid), "worktree": "/w"})
+        self.tick(dispatch=True)
+        it = self.only()
+        self.assertEqual(it["state"], "offered")
+        self.assertIn("no lease", self.st.offer_of(f"red:{it['id']}")["reason"])
+        self.assertEqual(len(A.fixer_records()), 1)
+
+
 class AuditTest(RedsBase):
     def test_7_a_workflow_outside_the_newest_200_runs_is_still_read(self):
         saved = A.main_workflow_files, A.gh_json

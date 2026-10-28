@@ -3511,6 +3511,12 @@ def red_run_holder(store, run, t):
         row = store.get(red_lease(d["key"]))
         if lease_is_live(row, t):
             return row
+    # a fixer process still alive on the run without a lease (one from before the leases, whose imported lease lapsed):
+    # it is still at work, so no second fixer goes beside it -- the wrapper's wall time bounds it
+    for r in fixer_records():
+        if r["alive"] and (r.get("workflow"), str(r.get("run"))) == run:
+            return {"holder": f"pid {r.get('pid')} ({str(r.get('worktree') or '?').replace(HOME, '~')}, no lease)",
+                    "acquired_at": 0}
     return None
 
 
