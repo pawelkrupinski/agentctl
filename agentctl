@@ -2226,6 +2226,7 @@ RED_MAX_OUTSIDE = 1         # ...of which for reds outside the gate ($AGENTCTL_R
 RED_MAX_DISPATCHES = 2      # fresh fixers per signature before RED ESCALATE
 RED_DAILY_CAP = 6           # dispatched fixers a day for reds OUTSIDE the gate ($AGENTCTL_RED_DAILY_CAP); never gate reds
 RED_GATE_MAX_FIXERS = 3     # gate reds: fixers alive at once, NO daily cap ($AGENTCTL_RED_GATE_MAX_FIXERS); hit: escalated
+DIAGNOSED_FOLLOWUP_MIN = 30  # a diagnosis not followed up for this long gets its implementer whatever else claims the red
 RED_RECURRING = 3            # landed fixes the same failure outlived: `recurring`, and its fixer hunts the root cause
 RED_PATROL_INTERVAL = 120   # seconds between the processor's looks at the reds ($AGENTCTL_RED_PATROL)
 RED_FIXER_WALL = 3 * 3600   # a dispatched fixer's maximum wall time ($AGENTCTL_RED_FIXER_WALL)
@@ -2434,6 +2435,11 @@ def claim_stale(c, now_=None):
     quiet = (t - claim_heartbeat(c)) / 60
     limit = env_num("AGENTCTL_RED_STALE_MIN", RED_STALE_MIN)
     alive = proc_alive(c.get("pid"), c.get("process_start"))
+    # STALE BY HEARTBEAT, NOT BY PID (the owner, 2026-10-28: the orchestrator session -- alive since 10-23 -- held
+    # #2044 and #2112 for a day with no commit, beat or activity): a live claimant is stale after 2 x RED_STALE_MIN
+    # with no sign of work on it (`red claim` again refreshes the beat)
+    if alive and not c.get("dispatched") and quiet >= 2 * limit:
+        return f"its claimant is alive but did nothing on it for {int(quiet)} min (no commit, beat or activity)"
     if alive and not (c.get("dispatched") and quiet >= limit):
         return None
     if c.get("dispatched") and not alive:
@@ -3273,14 +3279,17 @@ def red_patrol(o_r, repo, units, infos, dispatch=False, now_=None, report=None):
             report.append(state_line(st))
         if st["state"] == "fixing":
             held = [f for x in g for f in (infos.get(x["key"]) or {}).get("fixers") or []]
-            if dispatch and all(f["state"] == "diagnosed" for f in held):  # a diagnosis awaits its implementer
-                sigs = {x["sig"] for x in g}
-                c = next((c for c in all_claims() if c.get("state") == "diagnosed" and c.get("awaiting") == "an implementer"
-                          and sigs & set(c.get("sigs") or [])), None)
-                if c:
-                    act = diagnosed_followup(o_r, repo, c, t, group=[dict(x, diagnosis=None) for x in g])
-                    if act:
-                        actions.append(act)
+            # a diagnosis awaits its implementer: at once when only diagnoses hold the red, and after DIAGNOSED_FOLLOWUP
+            # whatever else claims it (2026-10-28: one live orchestrator claim kept a diagnosis waiting for good)
+            sigs = {x["sig"] for x in g}
+            c = next((c for c in all_claims() if c.get("state") == "diagnosed" and c.get("awaiting") == "an implementer"
+                      and (sigs & set(c.get("sigs") or []) or any(claim_follows(c, x) for x in g))), None)
+            overdue = c and t - parse_time(c.get("diagnosed_at") or c.get("started") or ts()).timestamp() \
+                >= env_num("AGENTCTL_DIAGNOSED_FOLLOWUP_MIN", DIAGNOSED_FOLLOWUP_MIN) * 60
+            if dispatch and c and (all(f["state"] == "diagnosed" for f in held) or overdue):
+                act = diagnosed_followup(o_r, repo, c, t, group=[dict(x, diagnosis=None) for x in g])
+                if act:
+                    actions.append(act)
             with reds_lock():
                 for x in g:
                     rec = read_record(sig_path(x["sig"])) or {}
@@ -3626,6 +3635,8 @@ def maybe_dispatch(o_r, repo, u, rec, t, why, group=None, diagnosis=None):
         except (Exception, SystemExit):
             fixers = []
         fixers = [f for f in fixers if f["state"] != "diagnosed"]  # a diagnosis awaits exactly this dispatch
+        if diagnosis:  # its implementer is due: a plain claim is no reason to wait (a fix on its way is)
+            fixers = [f for f in fixers if f.get("dispatched") or f["state"] in ("landing", "waiting", "committed", "landed")]
         if fixers:
             return dispatch_log(u, f"NOT DISPATCHED: claimed meanwhile ({fixer_text(fixers[0])})")
         ok, msg = red_dispatch(o_r, repo, u, why=why, group=group, diagnosis=diagnosis)
