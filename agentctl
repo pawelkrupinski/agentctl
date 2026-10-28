@@ -8628,6 +8628,10 @@ def waiting_run(repo, once=False, service=False):
             LOOP_CYCLED[0] = True
             restart_if_changed([own], ["waiting", "run", "--repo", repo] + (["--once"] if once else [])
                                + (["--service"] if service else []))
+            try:  # the change items follow the entries (step 5's projection; step 6 makes the tick their writer)
+                project_changes(d)
+            except Exception as e:
+                err(f"the change items could not be projected: {e}")
             try:  # every checking entry re-derived from its checker's lock and its run on Forgejo (never a waiter's memory)
                 reconcile_checking(repo, d)
             except Exception as e:
@@ -8820,6 +8824,15 @@ def cmd_waiting(a):
         for e in queued:
             print(f"  {e['id']}  {e['status']}{' since ' + e['since'] if e.get('since') else ''}  {e['worktree']}  "
                   f"{e['head'][:10]}{'  remote run ' + str(e['remote_run']) if e.get('remote_run') else ''}")
+        try:
+            items = [i for i in project_changes(d) if not machine_state("change", i["state"]).terminal]
+            print(f"change items: {len(items)}")
+            for i in items:
+                left = int(i["deadline"] - time.time())
+                print(f"  {i['id']}  {i['state']}  deadline in {left // 60} min"
+                      + (f"  PAST ITS DEADLINE (level {i['level']})" if left < 0 else ""))
+        except (Exception, SystemExit) as ex:
+            print(f"change items: unreadable ({str(ex)[:120]})")
         return 0
     if a.wcmd == "cancel":
         queued = [e for e in queued_entries(d) if a.entry in e["id"]]
@@ -10229,7 +10242,15 @@ class Store:
     SCHEMA = ("CREATE TABLE IF NOT EXISTS leases (name TEXT PRIMARY KEY, holder TEXT NOT NULL, epoch INTEGER NOT NULL, "
               "secret TEXT NOT NULL, acquired_at REAL, renewed_at REAL, expires_at REAL, max_until REAL, progress TEXT, "
               "item TEXT, meta TEXT)",
-              "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)")
+              "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)",
+              # items (design §5): one row per machine item; `version` is the compare-and-set token of every transition
+              "CREATE TABLE IF NOT EXISTS items (type TEXT NOT NULL, id TEXT NOT NULL, state TEXT NOT NULL, "
+              "version INTEGER NOT NULL, entered_at REAL NOT NULL, deadline REAL NOT NULL, level INTEGER NOT NULL DEFAULT 0, "
+              "data TEXT, PRIMARY KEY (type, id))",
+              # events (design §8.1): seq is THE cursor; dedupe makes a repeated tick a no-op
+              "CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, kind TEXT NOT NULL, "
+              "item_type TEXT, item_id TEXT, from_state TEXT, to_state TEXT, severity TEXT NOT NULL DEFAULT 'info', "
+              "audience TEXT, text TEXT, refs TEXT, dedupe TEXT UNIQUE, notified_at REAL)")
 
     def __init__(self, path=None, clock=None):
         self.path = path or state_root("store.db")
@@ -10327,12 +10348,213 @@ class Store:
         finally:
             c.close()
 
+    # -- items and their transitions (design §5; phase 1 step 5) -----------------------------------------------------
+    def _item(self, c, typ, iid):
+        r = c.execute("SELECT * FROM items WHERE type=? AND id=?", (typ, iid)).fetchone()
+        if not r:
+            return None
+        d = dict(r)
+        d["data"] = json.loads(d["data"] or "{}")
+        return d
+
+    def item(self, typ, iid):
+        c = self.db()
+        try:
+            return self._item(c, typ, iid)
+        finally:
+            c.close()
+
+    def items(self, typ, states=None):
+        c = self.db()
+        try:
+            rows = [self._item(c, typ, r["id"]) for r in c.execute("SELECT id FROM items WHERE type=? ORDER BY id", (typ,))]
+        finally:
+            c.close()
+        return [r for r in rows if states is None or r["state"] in states]
+
+    def put_item(self, typ, iid, state, data=None):
+        """Create the item in `state` (version 1); an existing item is left as it is. Returns the item."""
+        spec = machine_state(typ, state)
+        c = self.db()
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            if not self._item(c, typ, iid):
+                now_ = self.clock()
+                c.execute("INSERT INTO items VALUES (?,?,?,?,?,?,?,?)",
+                          (typ, iid, state, 1, now_, now_ + spec.deadline, 0, json.dumps(data or {})))
+            c.execute("COMMIT")
+            return self._item(c, typ, iid)
+        finally:
+            c.close()
+
+    def transition(self, typ, iid, to, expect_version, data=None, event=None, deadline_s=None):
+        """THE way an item changes state: compare-and-set on its version (StaleVersion on a miss), never out of a
+        terminal state (TerminalState), its deadline from MACHINES, its data merged, and its event written in the same
+        transaction (kind `<type>.<to>` unless given; deduped). A self-transition (an escalation) bumps the version, keeps
+        entered_at and re-deadlines; deadline_s overrides the state's deadline (e.g. a gate red's shorter offer).
+        Returns the new version."""
+        spec = machine_state(typ, to)
+        c = self.db()
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            cur = self._item(c, typ, iid)
+            if not cur or cur["version"] != expect_version:
+                c.execute("ROLLBACK")
+                raise StaleVersion(f"{typ} {iid}: version {cur and cur['version']}, expected {expect_version}")
+            if machine_state(typ, cur["state"]).terminal and to != cur["state"]:
+                c.execute("ROLLBACK")
+                raise TerminalState(f"{typ} {iid} is {cur['state']}: terminal")
+            now_ = self.clock()
+            same = to == cur["state"]
+            level = cur["level"] + 1 if same and spec.escalate else (cur["level"] if same else 0)
+            merged = {**cur["data"], **(data or {})}
+            c.execute("UPDATE items SET state=?, version=?, entered_at=?, deadline=?, level=?, data=? WHERE type=? AND id=?",
+                      (to, cur["version"] + 1, now_ if not same else cur["entered_at"],
+                       now_ + (spec.deadline if deadline_s is None else float(deadline_s)), level,
+                       json.dumps(merged), typ, iid))
+            ev = dict(event or {})
+            c.execute("INSERT OR IGNORE INTO events (at, kind, item_type, item_id, from_state, to_state, severity, "
+                      "audience, text, refs, dedupe) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                      (now_, ev.get("kind") or f"{typ}.{to}", typ, iid, cur["state"], to,
+                       ev.get("severity") or ("escalate" if same and spec.escalate else "info"),
+                       json.dumps(ev.get("audience") or {}), ev.get("text") or "", json.dumps(ev.get("refs") or {}),
+                       ev.get("dedupe") or f"{typ}:{iid}:{to}:{cur['version'] + 1}"))
+            c.execute("COMMIT")
+            return cur["version"] + 1
+        finally:
+            c.close()
+
+    def update_item(self, typ, iid, expect_version, data):
+        """Merge data into the item (compare-and-set on its version): no state, entered_at or deadline change, no
+        event. Returns the new version (StaleVersion on a miss)."""
+        c = self.db()
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            cur = self._item(c, typ, iid)
+            if not cur or cur["version"] != expect_version:
+                c.execute("ROLLBACK")
+                raise StaleVersion(f"{typ} {iid}: version {cur and cur['version']}, expected {expect_version}")
+            c.execute("UPDATE items SET version=?, data=? WHERE type=? AND id=?",
+                      (cur["version"] + 1, json.dumps({**cur["data"], **(data or {})}), typ, iid))
+            c.execute("COMMIT")
+            return cur["version"] + 1
+        finally:
+            c.close()
+
+    def events(self, after=0, limit=500):
+        c = self.db()
+        try:
+            out = []
+            for r in c.execute("SELECT * FROM events WHERE seq>? ORDER BY seq LIMIT ?", (after, limit)):
+                d = dict(r)
+                for k in ("audience", "refs"):
+                    d[k] = json.loads(d[k] or "{}")
+                out.append(d)
+            return out
+        finally:
+            c.close()
+
     def list(self, prefix=""):
         c = self.db()
         try:
             return [dict(r) for r in c.execute("SELECT * FROM leases WHERE name LIKE ? ORDER BY name", (prefix + "%",))]
         finally:
             c.close()
+
+
+# ---------------------------------------------------------------- the machines (design §5; phase 1 step 5)
+# Every state of every machine has a finite deadline and an automatic exit (`on_deadline`, a state of the same
+# machine); a deadline-only walk from any state ends in a terminal state or cycles through an escalation (the
+# table-driven test). Terminal states archive after 14 d. The "red" and "condition" machines join with steps 10-12.
+class StaleVersion(RuntimeError):
+    """A transition's compare-and-set lost: the item moved since it was read."""
+
+
+class TerminalState(RuntimeError):
+    """A transition out of a terminal state."""
+
+
+class StateSpec:
+    __slots__ = ("deadline", "on_deadline", "exits", "terminal", "escalate")
+
+    def __init__(self, deadline, on_deadline, exits=(), terminal=False, escalate=False):
+        self.deadline, self.on_deadline, self.exits = float(deadline), on_deadline, tuple(exits)
+        self.terminal, self.escalate = terminal, escalate
+
+
+ARCHIVE = 14 * 86400
+M = 60
+H = 3600
+MACHINES = {
+    # §5.1 a submitted change
+    "change": {
+        "queued": StateSpec(15 * M, "queued", ("checking", "superseded", "cancelled", "landed"), escalate=True),
+        "checking": StateSpec(2 * H, "queued", ("checked", "rejected", "queued")),
+        "checked": StateSpec(5 * M, "checked", ("pushing", "waiting", "queued"), escalate=True),
+        "waiting": StateSpec(6 * H, "waiting", ("landed", "rejected", "queued"), escalate=True),
+        "pushing": StateSpec(300, "checked", ("landed", "checked")),
+        "landed": StateSpec(ARCHIVE, "landed", (), terminal=True),
+        "rejected": StateSpec(ARCHIVE, "rejected", (), terminal=True),
+        "superseded": StateSpec(ARCHIVE, "superseded", (), terminal=True),
+        "cancelled": StateSpec(ARCHIVE, "cancelled", (), terminal=True),
+    },
+    # §5.2 + §14.1 the batch: a computed item, no branch
+    "batch": {
+        "blocked-red": StateSpec(6 * H, "blocked-red", ("assembling",), escalate=True),
+        "assembling": StateSpec(300, "assembling", ("checking", "held", "landed"), escalate=True),
+        "checking": StateSpec(2 * H, "held", ("pushing", "bisecting", "held")),
+        "bisecting": StateSpec(4 * H, "held", ("pushing", "assembling", "held")),
+        "pushing": StateSpec(300, "assembling", ("landed", "assembling")),
+        "held": StateSpec(30 * M, "assembling", ("assembling",), escalate=True),
+        "landed": StateSpec(ARCHIVE, "landed", (), terminal=True),
+    },
+}
+
+
+def machine_state(typ, state):
+    try:
+        return MACHINES[typ][state]
+    except KeyError:
+        raise ValueError(f"no state {state!r} in machine {typ!r}") from None
+
+
+def deadline_walk(typ, state):
+    """The deadline-only path from `state`: (reached terminal?, cycle escalates?)."""
+    seen = []
+    while state not in seen:
+        seen.append(state)
+        spec = MACHINES[typ][state]
+        if spec.terminal:
+            return True, False
+        state = spec.on_deadline
+    cycle = seen[seen.index(state):]
+    return False, any(MACHINES[typ][x].escalate for x in cycle)
+
+
+# the change items, projected from today's queue entries (read-only until step 6 makes the tick their writer)
+ENTRY_STATE = {"queued": "queued", "checking": "checking", "joined": "waiting", "waiting": "waiting", "landed": "landed",
+               "rejected": "rejected", "superseded": "superseded", "cancelled": "cancelled"}
+
+
+def project_changes(d, store=None):
+    """Each queue entry's change item: created in its state, moved (a transition, with its event) when the entry's
+    status moved. Returns the items."""
+    st = store or Store()
+    out = []
+    for e in waiting_entries(d, open_only=False):
+        state = ENTRY_STATE.get(e.get("status"))
+        if not state:
+            continue
+        cur = st.put_item("change", e["id"], state, {"worktree": e.get("worktree"), "head": e.get("head")})
+        if cur["state"] != state and not machine_state("change", cur["state"]).terminal:
+            try:
+                st.transition("change", e["id"], state, cur["version"],
+                              event={"text": f"{e['id']}: {cur['state']} -> {state}", "refs": {"entry": e["id"]}})
+            except (StaleVersion, TerminalState):
+                pass
+            cur = st.item("change", e["id"])
+        out.append(cur)
+    return out
 
 
 def cmd_lease(a):
