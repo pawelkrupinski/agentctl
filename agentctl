@@ -8076,6 +8076,10 @@ def tick_batch(repo, d, now_=None):
     if os.path.exists(os.path.join(d, "PAUSED")):
         return ["paused"]
     reds = gate_reds(repo)
+    did = landed_meanwhile(repo, d, waiting, t) if reds else []  # at green the assembly finds them (with their commit)
+    waiting = waiting_entries(d)
+    if not waiting and not it:
+        return did
     unread_note(d, reds, waiting)
     fix_waits = bool(reds) and any(set(e.get("fixes") or []) & reds for e in waiting)
     if not it:
@@ -8131,6 +8135,32 @@ def tick_batch(repo, d, now_=None):
     if state == "pushing":
         return [push_batch_item(repo, d, st, it)]
     return []
+
+
+LANDED_LOOK_EVERY = 600
+
+
+def landed_meanwhile(repo, d, waiting, now_):
+    """§5.1's exit, for waiting changes while the batch waits on a red: one whose every commit is patch-equivalent on
+    main (someone landed it meanwhile) is LANDED at once -- looked at every LANDED_LOOK_EVERY s per entry."""
+    main = f"refs/remotes/{REMOTE}/main"
+    did = []
+    for e in waiting:
+        if float(e.get("landed_look_at") or 0) > now_ - LANDED_LOOK_EVERY or not e.get("commits"):
+            continue
+        e["landed_look_at"] = now_
+        save_entry(d, e)
+        last = e["commits"][-1]
+        if git_ok(repo, "merge-base", "--is-ancestor", last, main):  # pushed as it is
+            already_landed(d, e, last)
+            did.append(f"{e['id']}: its commits are on main: landed")
+            continue
+        ch = git(repo, "cherry", main, last, f"{e['commits'][0]}^", check=False)
+        lines = [l for l in (ch.stdout if ch.returncode == 0 else "").splitlines() if l.strip()]
+        if lines and all(l.startswith("- ") for l in lines):  # landed as an equivalent patch
+            already_landed(d, e, None)
+            did.append(f"{e['id']}: its commits are on main: landed")
+    return did
 
 
 def spawn_batch_executor(repo, d, bid):
@@ -10328,8 +10358,12 @@ def project_changes(d, store=None):
     status moved. Returns the items."""
     st = store or Store()
     out = []
-    for e in waiting_entries(d, open_only=False):
+    every = {x["id"]: x for x in waiting_entries(d, open_only=False)}
+    for e in every.values():
         state = ENTRY_STATE.get(e.get("status"))
+        if e.get("status") == "joined":  # a pre-step-8 join: the change follows the waiting entry that carries it
+            w = every.get(e.get("waiting_id") or "")
+            state = ENTRY_STATE.get((w or {}).get("status"), "landed" if not w else "waiting")
         if not state:
             continue
         cur = st.put_item("change", e["id"], state, {"worktree": e.get("worktree"), "head": e.get("head")})

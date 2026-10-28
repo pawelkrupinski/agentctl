@@ -122,6 +122,19 @@ class NoEmptyWaitingTest(QueueTest):
         self.assertIn(f"already on main via {via}", [x for x in self.inbox() if x["cwd"] == wa][-1]["verdict"])
         self.assertEqual([x for x in self.inbox() if x["kind"] == "NOT_LANDED"], [])
 
+    def test_a_waiting_change_landed_by_hand_while_red_is_landed_without_a_batch(self):
+        """Step 8 follow-up: a waiting entry whose commits reach main (by hand) while main is red is LANDED by the tick,
+        not left waiting behind the red."""
+        self.reds = {"7"}
+        os.environ["AGENTCTL_QUEUE"] = "0"
+        wa, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
+        self.assertEqual(self.land(wa)[0], 0)
+        sh(wa, "git", "push", "-q", "forgejo", "HEAD:main")  # the owner pushes it by hand
+        sh(self.r.path, "git", "fetch", "-q", "forgejo")
+        self.drive()  # still red
+        self.assertEqual(self.entries()["1"]["status"], "landed")
+        self.assertIn("already on main", [x for x in self.inbox() if x["cwd"] == wa][-1]["verdict"])
+
     def test_joining_again_supersedes_the_older_waiting_entry(self):
         self.reds = {"7"}
         os.environ["AGENTCTL_QUEUE"] = "0"
