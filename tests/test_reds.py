@@ -582,6 +582,13 @@ class OldRedTest(RedsBase):
         self.assertIn(("POST", "actions/workflows/report-timings.yml/dispatches"), calls)
 
 
+class AttachTest(RedsBase):
+    def test_watch_red_attaches_by_run_number_with_its_author(self):
+        its = A.red_attach(self.st, "Main", 20, author={"session": "s1", "worktree": "/w"})
+        self.assertEqual(len(its), 1)
+        self.assertEqual(self.st.item("red", its[0]["id"])["data"]["author"]["session"], "s1")
+
+
 class UnkickedTest(RedsBase):
     def test_a_relevant_main_push_with_no_convergence_run_is_a_red_until_one_runs(self):
         self.green(41, 21)  # Main green; convergence #19 (on self.sha) is its newest main run

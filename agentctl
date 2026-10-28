@@ -3200,8 +3200,13 @@ def red_attach_obs(store, it, ob):
 
 
 def red_attach(store, workflow, run, author=None, o_r=None):
-    """WATCH RED (the landed watch): the run's failures opened or attached, its author offered first."""
+    """WATCH RED (the landed watch): the run's failures opened or attached, its author offered first. run: the run (a
+    dict), or its number."""
     o_r = o_r or SHORT["movies"]
+    if not isinstance(run, dict):
+        _name, run = resolve_run(o_r, run)
+        if run is None:
+            return []
     try:
         sigs = run_sigs(o_r, run, workflow)
     except (Exception, SystemExit):
