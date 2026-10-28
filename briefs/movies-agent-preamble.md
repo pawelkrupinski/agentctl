@@ -41,6 +41,7 @@ Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wai
   optional confidence tools for a risky identity change; neither is required, and never run their `--full` mode
   "to be safe" -- main's convergence runs it after the merge.
 - There are no PRs and no other branches on the remote (the tools' own `measure/` and `check/` run refs aside).
+- Never squash, always rebase against upstream (owner): `git fetch forgejo && git rebase forgejo/main`, never a local main; one commit per logical step; no squash, no `reset --soft` recommit.
 - Never use `PREPUSH_SKIP` or `--no-verify` -- on ANY commit or push, throwaway `measure/` branches included. Never
   `reset --soft` onto a moved main. `agentctl land --no-watch` is for scripts only.
 - Merge on green means MAIN green: while a gating workflow is red on main, a production commit waits on `waiting`
@@ -78,3 +79,6 @@ Under 300 words:
 - any command the user must run.
 
 When done, remove your worktree with `git worktree remove` once it is merged.
+
+- Owner-run steps (prod Mongo, infra push/deploy, secret writes): report them as ONE complete `!` command the owner can paste as-is (tunnel, `secrets get`, a read-only script file, cleanup), never a bare query.
+- Any document you write for the owner (design doc, write-up, report): also put it in ~/Desktop/"claude docs"/ as .md and a rendered .pdf (`nix shell nixpkgs#pandoc -c pandoc X.md -s -o X.html`, then Chrome headless `--print-to-pdf`).

@@ -1,0 +1,262 @@
+# Landing reconciler, phase 2: owner runbook
+
+Status: prepared on 2026-10-28 and updated the same day with the owner's answers. Nothing is deployed,
+created or granted yet.
+Design: `~/bin/docs/landing-reconciler-design.md` (§3, §6.3, §10, §13 phase 2, §15, owner decisions).
+
+## What is prepared
+
+Two local infra branches. Neither is pushed. The commit ids below are from before the rebases in
+steps 1 and 4.
+
+**`agentctl-phase2`** changes no host when merged. The module is not imported, and the settings
+changes do nothing until `bin/forgejo-settings` runs.
+
+- `fa01826b`: declares the repository `pawelkrupinski/agentctl`.
+- `33212b68`: adds `nix/hosts/ci-runner/agentctl.nix` and `agentctl-pin.nix`.
+- `340b50b1`: adds `ci-metrics`, the read-only metrics identity. ci-lander becomes push-only.
+- `7792b415`: moves the `ci-metrics` declaration so the step 4 rebase applies cleanly.
+
+**`agentctl-phase2-enable`** sits on top of the first branch and **turns phase 2 on** at the next
+ci-runner deploy. Auto-apply may also start the new units on its own.
+
+- `81b8e623`: adds the `ci-lander` user, the `lander` team (write on movies only), and push
+  protection on movies `main` (pawel and ci-lander may push).
+- `da5a7e38`: adds `agentctl.rules` and its tests.
+- `60a1bc1b`: imports `agentctl.nix` and adds 3014 to the tunnel's `permitOpen`.
+- `13b78ede`: merges `agentctl-phase2` in.
+- `2c8049ce`: removes the Slack route, so agentctl alerts take the default route. Removes the
+  escalation alert. W1 now excludes the time main was red.
+
+Both rebases were rehearsed in a scratch clone. They apply cleanly and give exactly this tree.
+
+### The units on ci-runner (`agentctl.nix`)
+
+| Unit | What it does |
+|---|---|
+| `agentctl-src` | Exports the pinned ~/bin commit from Forgejo's own repository on disk. |
+| `agentctl-lander-bot` | Creates `ci-lander`, the push identity. Its token has only `write:repository`. Its password, token and ssh key live only in `/var/lib/agentctl-lander` (0700). |
+| `agentctl-metrics-bot` | Creates `ci-metrics`, the scrape identity. It belongs to no team and can read no repository. Its token has only `read:user`. The token lives only in `/var/lib/agentctl-metrics-bot` (0700). No password is kept. |
+| `agentctl-store` | Binds `10.1.0.3:3014` and checks every caller's token with Forgejo. `pawel` gets the full API. `ci-metrics` may call `GET /metrics` and nothing else. |
+| `agentctl-reconciler` | Runs as `ci-lander`. `Type=notify`, `WatchdogSec=120`, `Restart=always`. |
+| `agentctl-store-backup` | Makes an hourly sqlite backup. |
+| `agentctl-metrics` | Every minute, copies `/metrics` into the node-exporter textfile directory as `ci-metrics`. |
+
+Logs go to the journal, which is shipped to VictoriaLogs. Query them with
+`_SYSTEMD_UNIT:agentctl-reconciler.service`.
+
+### Alerts and escalations
+
+There is no Slack integration for agentctl. `agentctl.rules` adds no route of its own. Its alerts carry
+ci-runner's labels (`env="global"`), so alertmanager's default route sends them to the same receiver as
+every other ci-runner alert: today that is `slack-infra-alerts`.
+
+Escalations are delivered by agentctl itself, on the laptop, as an inbox entry plus a macOS
+notification (design §8.2). The laptop watchdog owns W5, W6 and W7.
+
+### Backups: nothing leaves ci-runner
+
+The store's 24 hourly copies stay in `/var/lib/agentctl/backup`. Neither the store nor any bot
+credential is copied off the host, on purpose:
+
+- **The store is rebuildable.** Losing it loses only attempt counters and terminal history. Items are
+  re-derived from the `land/*` refs and the Forgejo runs (design §16).
+- **The credentials can be re-minted.**
+  - ci-lander: delete the Forgejo user and `/var/lib/agentctl-lander`, then restart
+    `agentctl-lander-bot`. It mints a new user, token and key.
+  - ci-metrics: delete `/var/lib/agentctl-metrics-bot/token.env` and restart `agentctl-metrics-bot`.
+
+## Owner steps
+
+Run these in order. Each one is a full `!` line. Steps 1 to 3 can run any time. Step 4 must wait until
+phase 1 is done.
+
+**1. Merge the inert branch.** This changes no host.
+
+```
+! cd ~/bitcashier/infra && git pull --rebase -q forgejo main && git rebase -q main agentctl-phase2 && git checkout -q main && git merge --ff-only -q agentctl-phase2 && git push forgejo main
+```
+
+**2. Create the repository.** The dry run must show `+ repo pawelkrupinski/agentctl`. It also shows the
+warning `user ci-metrics missing: created on ci-runner by its own unit`, which is expected.
+
+```
+! cd ~/bitcashier/infra && bin/forgejo-settings --dry-run
+```
+
+```
+! cd ~/bitcashier/infra && bin/forgejo-settings
+```
+
+**3. Push ~/bin.** The local branch `master` is pushed as Forgejo's `main`. ~/bin's history was scanned
+on 2026-10-28 for keys and tokens, and none were found.
+
+```
+! git -C ~/bin remote add forgejo ssh://forgejo-git/pawelkrupinski/agentctl.git && git -C ~/bin push forgejo master:main && git -C ~/bin branch -q --set-upstream-to=forgejo/main master && git -C ~/bin log --oneline -1 forgejo/main
+```
+
+**4. Pin the phase-1 revision and merge the enable branch.** Do this once phase 1 is done and its code
+implements the contract below.
+
+```
+! cd ~/bitcashier/infra && git -C ~/bin push forgejo master:main && rev=$(git -C ~/bin rev-parse forgejo/main) && git pull --rebase -q forgejo main && git rebase -q main agentctl-phase2-enable && git checkout -q main && git merge --ff-only -q agentctl-phase2-enable && sed -i '' "s/rev = \"[0-9a-f]*\";/rev = \"$rev\";/" nix/hosts/ci-runner/agentctl-pin.nix && git diff --stat && git commit -qam "agentctl phase 2: pin ~/bin $rev" && git push forgejo main
+```
+
+**5. Deploy ci-runner.** This creates `ci-lander` and `ci-metrics`. Preview first, then apply. The
+preview should start the seven `agentctl-*` units and restart no runner.
+
+```
+! cd ~/bitcashier/infra && bin/deploy ci-runner
+```
+
+```
+! cd ~/bitcashier/infra && bin/deploy ci-runner --apply
+```
+
+**6. Grant ci-lander its permissions.** This step needs the users from step 5. The dry run must show:
+
+- `+ team pawelkrupinski/lander` and its member `ci-lander`;
+- `+ repo pawelkrupinski/movies branch protection main`;
+- `= user ci-lander` and `= user ci-metrics`.
+
+`ci-metrics` gets no team. Nothing is granted to it.
+
+```
+! cd ~/bitcashier/infra && bin/forgejo-settings --dry-run
+```
+
+```
+! cd ~/bitcashier/infra && bin/forgejo-settings
+```
+
+**7. Deploy monitoring.** This loads `agentctl.rules`. The alerts go through the existing default route.
+
+```
+! cd ~/bitcashier/infra && bin/deploy monitoring && bin/deploy monitoring --apply
+```
+
+**8. Laptop: forward port 3014 through the tunnel.**
+
+```
+! perl -0pi -e 's|(    LocalForward 3010 10\.1\.0\.3:3010\n)|$1    # the agentctl store (laptop sync: leases, submissions, events); infra ci-runner permitOpen\n    LocalForward 3014 10.1.0.3:3014\n|' ~/.ssh/config && grep -n 'LocalForward 3014' ~/.ssh/config && launchctl kickstart -k gui/$(id -u)/net.bitcashier.forgejo-tunnel
+```
+
+**9. Verify.**
+
+Check the units, the file permissions and the metrics file:
+
+```
+! ssh ci-runner 'systemctl is-active agentctl-src agentctl-lander-bot agentctl-metrics-bot agentctl-store agentctl-reconciler agentctl-metrics.timer agentctl-store-backup.timer; sudo stat -c "%a %U %n" /var/lib/agentctl-lander /var/lib/agentctl-lander/id_ed25519 /var/lib/agentctl-metrics-bot/token.env; grep -c "^agentctl_" /etc/node-exporter/textfile.d/agentctl.prom'
+```
+
+Expected:
+
+- every unit is `active`;
+- the lander directory is `700 ci-lander`, and its key is `400 ci-lander`;
+- the ci-metrics token is `400 root`;
+- the count is more than 0.
+
+Check what ci-metrics can and cannot do. Its token never leaves the host:
+
+```
+! ssh ci-runner 'sudo bash -c '\''. /var/lib/agentctl-metrics-bot/token.env; for u in http://10.1.0.3:3014/metrics http://10.1.0.3:3014/v1/state http://forgejo.internal:3000/api/v1/repos/pawelkrupinski/movies; do echo "$(curl -s -o /dev/null -w %{http_code} -H "Authorization: token $GH_TOKEN" $u) $u"; done'\'''
+```
+
+Expected: `200` for `/metrics`, and `403` for `/v1/state`. Movies answers `404`, because Forgejo hides
+a private repository from a user who cannot read it.
+
+Check the store as pawel, and without a token:
+
+```
+! echo "no token: $(curl -s -o /dev/null -w '%{http_code}' http://localhost:3014/v1/state)" && curl -sf -H "Authorization: token $(secrets get movies FORGEJO_API_TOKEN)" http://localhost:3014/v1/state | jq '{tick_at, version}'
+```
+
+Expected: `no token: 401`, then a `tick_at` less than 15 s old.
+
+Check that Forgejo has no drift left:
+
+```
+! cd ~/bitcashier/infra && bin/forgejo-settings --dry-run 2>&1 | grep -E 'lander|metrics|agentctl'
+```
+
+Expected: every line starts with `=`.
+
+**Rollback.** Revert the enabling commit and deploy again. The store's database stays in
+`/var/lib/agentctl`.
+
+```
+! cd ~/bitcashier/infra && git pull --rebase -q forgejo main && git revert --no-edit $(git log --format=%H -1 --grep='ENABLES phase 2') && git push forgejo main && bin/deploy ci-runner
+```
+
+## What the module expects from agentctl (the phase-2 code contract)
+
+The module runs `python3 /var/lib/agentctl-src/<rev>/agentctl`. If the phase-2 code names things
+differently, change `agentctl.nix`.
+
+### Commands
+
+**`agentctl store serve --listen ADDR:PORT --forgejo-url URL --allow-user U... --metrics-user U...`**
+
+- Serves the §6.3 API and `GET /metrics`, from `$AGENTCTL_STATE_ROOT/store.db`.
+- Every request carries `Authorization: token`. The store checks it with `/api/v1/user` and caches the
+  answer for 5 min.
+- An `--allow-user` gets the whole API. A `--metrics-user` gets `GET /metrics` only.
+- Any other user gets 403. A request with no token gets 401.
+
+**`agentctl tick`**
+
+- The reconciler loop.
+- Sends sd_notify `READY=1` when it is ready, and `WATCHDOG=1` after every tick (through
+  `$NOTIFY_SOCKET`).
+- On SIGTERM, exits cleanly between ticks.
+
+### The reconciler's environment
+
+- `AGENTCTL_STATE_ROOT=/var/lib/agentctl/state`
+- `HOME=/var/lib/agentctl`
+- `AGENTCTL_HOST=ci-runner`
+- `AGENTCTL_FORGEJO_URL`
+- `AGENTCTL_FORGEJO_GH`: a gh-shim wrapper for the actions API on `127.0.0.1:3010`
+- `AGENTCTL_MOVIES_REMOTE`: ssh to Forgejo's port 2222
+- `GIT_SSH_COMMAND`: ci-lander's key, with pinned `known_hosts`
+- `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL`: ci-lander
+- `GH_TOKEN`: ci-lander's token, `write:repository` only
+
+### Gauges `/metrics` must export
+
+The header of `agentctl.rules` defines each one.
+
+| Gauge | Notes |
+|---|---|
+| `agentctl_reconciler_tick_timestamp` | |
+| `agentctl_oldest_change_age_seconds` | Excludes the time main was red since the change was submitted. |
+| `agentctl_red_unleased_seconds` | |
+| `agentctl_leases_expired_unreaped` | |
+| `agentctl_items_past_deadline` | |
+
+## The laptop after phase 2 (design note; the agentctl code comes later)
+
+| launchd job | After phase 2 |
+|---|---|
+| `net.bitcashier.agentctl-waiting` | **Stays, as the sync.** The label is kept. It submits `land/<entry>`, pulls events into the inbox, and mirrors `/v1/state` into `state.json` every 10 s. It also reports orphans and claim activity, and it is **the escalation notifier**: inbox entry, macOS notification, `:ack`. It never ticks. Decision 7 means no standby and one writer, so the laptop's tick code is deleted. |
+| fixer dispatcher | **Stays**, inside the sync or as its own job. It takes `fixer` offers over `RemoteStore`, spawns `claude -p` fixers, and renews their leases by progress. Fixers stay on the laptop (decision 8). |
+| `net.bitcashier.agentctl-watchdog` | **Stays, with W5, W6 and W7.** W5 is the tick age from the mirrored `state.json`. W6 is escalations left unnotified, read from the event feed. W7 is the sync's cursor lag. It reports `ci-runner unreachable` and `tunnel down` as two different conditions. It no longer kickstarts the processor. |
+| `net.bitcashier.agentctl-maintain` | **Stays** for the reap and the sweep. Its orphan facts go to the sync. |
+| `net.bitcashier.forgejo-tunnel` | **Stays**, plus `LocalForward 3014` (step 8). |
+| local check executor | **Goes.** Checks run on the CI check tier (decision 1). |
+
+The laptop's local `store.db` goes away after the one-shot import (§13 phase 2, step 3). What stays on
+the laptop: the inbox, `state.json` (now a mirror, with `fetched_at`), and the outbox
+(`QUEUED-LOCAL`).
+
+## Owner decisions on the open questions (2026-10-28)
+
+1. **No Slack integration.** agentctl alerts take the existing default route. Escalations are delivered
+   by agentctl's own notifications on the laptop.
+2. **The metrics scrape uses its own read-only identity, `ci-metrics`.** ci-lander stays push-only.
+3. **`land/*` is not protected.** ci-lander's write access on movies covers it. Only `main` is
+   protected.
+4. **There is no off-host backup** of the store or the keys. The store is rebuildable, and the keys can
+   be re-minted (see above).
+5. **W1 excludes the time main was red.** It is computed in agentctl's gauge.
+6. **The pin stays a commit exported from Forgejo's repository on disk.**
