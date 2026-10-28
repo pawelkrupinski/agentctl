@@ -36,6 +36,7 @@ class RedBase(unittest.TestCase):
                     "AGENTCTL_REDS_DIR": os.path.join(t, "reds"), "AGENTCTL_INTERNAL_TREES_DIR": os.path.join(t, "internal"), "AGENTCTL_INBOX_DIR": os.path.join(t, "inbox"),
                     "AGENTCTL_RED_REPO": self.r.path, "AGENTCTL_CLAUDE": FAKE_CLAUDE,
                     "AGENTCTL_CLAUDE_SETTINGS": self.settings, "FAKE_CLAUDE_OUT": os.path.join(t, "claude-out"),
+                    "AGENTCTL_CLAUDE_PROJECTS": os.path.join(t, "claude-projects"), "AGENTCTL_BG_POLL": "0.2",
                     "AGENTCTL_BRIEF": os.path.join(t, "brief.md"), "AGENTCTL_BRIEF_SRC": os.path.join(t, "brief-src.md"),
                     "AGENTCTL_WAITING_DIR_UNUSED": "", "FAKE_CLAUDE_SLEEP": "0", "CLAUDE_PID": "",
                     "CLAUDE_CODE_SESSION_ID": "", "AGENTCTL_AGENT_NAME": "", "AGENTCTL_CLAIM_PID": "",
@@ -67,6 +68,13 @@ class RedBase(unittest.TestCase):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+        for p in glob.glob(os.path.join(self.tmp.name, "claude-out", "agents", "*.json")):  # nor any fake session
+            try:
+                pid = json.load(open(p)).get("pid")
+                if pid:
+                    os.killpg(pid, 15)
+            except (OSError, ValueError):
+                pass
         for p in glob.glob(os.path.join(self.tmp.name, "reds", "*", "fixer*.json")):  # no fixer outlives its test
             rec = json.load(open(p))
             for pid in (rec.get("pid"), rec.get("claude_pid")):

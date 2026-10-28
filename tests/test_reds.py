@@ -9,7 +9,7 @@ made structural and tested here:
   - every state self-clears through the same observation that opened it.
 Plus the audit items: #7 (every workflow's newest decided run), #8 (stuck undecided runs are reds), #15 (the author
 from the change item, never an inherited environment)."""
-import json, os, sys, time, unittest
+import json, os, subprocess, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -646,6 +646,64 @@ class SiblingTest(RedsBase):
         self.tick()
         b = self.st.item("red", b["id"])
         self.assertEqual(b["state"], "offered")  # its fixer ended: offered again with it
+
+
+class BackgroundSessionTest(RedsBase):
+    """The owner (2026-10-29): "I want fixers to be visible in ui": a fixer is a `claude --bg -n <label>` session."""
+
+    def sessions(self):
+        r = subprocess.run([os.environ["AGENTCTL_CLAUDE"], "agents", "--json", "--all"], capture_output=True, text=True)
+        return json.loads(r.stdout)
+
+    def wait(self, cond, limit=30):
+        t0 = time.time()
+        while not cond() and time.time() - t0 < limit:
+            time.sleep(0.1)
+        return cond()
+
+    def test_a_fixer_is_a_named_session_renewed_by_its_transcript_and_stopped_when_its_lease_is_revoked(self):
+        os.environ.update(FAKE_CLAUDE_SLEEP="60", AGENTCTL_RED_RENEW="0.3")
+        try:
+            self.tick(dispatch=True)
+            it = self.only()
+            name = A.red_lease(it["data"]["key"])
+            rec = lambda: (A.fixer_records() or [{}])[0]
+            self.assertTrue(self.wait(lambda: rec().get("transcript")))
+            [s] = self.sessions()
+            self.assertEqual((s["name"], s["state"]), ("red fixer #20 · main test (rest)", "working"))
+            self.assertEqual(A.lease_meta(self.st.get(name))["session"], s["sessionId"])  # a resume goes back to it
+            argv = json.load(open(os.path.join(os.environ["FAKE_CLAUDE_OUT"], f"{s['id']}.json")))["argv"]
+            self.assertNotIn("-p", argv)
+            self.assertIn("Bash(git push:*)", argv)
+            before = self.st.get(name)["progress"]
+            with open(rec()["transcript"], "a") as f:  # the session works: its transcript grows
+                f.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "x"}]}}) + "\n")
+            self.assertTrue(self.wait(lambda: self.st.get(name)["progress"] != before))
+            self.st.revoke(name, "RED CLEARED")
+            self.assertTrue(self.wait(lambda: rec().get("ended")))
+            [s] = self.sessions()
+            self.assertEqual((s["state"], s.get("stopped")), ("done", True))  # `claude stop`, never a kill
+            self.assertTrue(rec()["verdict"].startswith("STOPPED"), rec()["verdict"])
+        finally:
+            os.environ.update(FAKE_CLAUDE_SLEEP="0")
+            os.environ.pop("AGENTCTL_RED_RENEW", None)
+
+    def test_the_verdict_is_the_sessions_final_answer_and_the_session_is_left_listed(self):
+        os.environ["FAKE_CLAUDE_RESULT"] = "GAVE UP: cannot reproduce"
+        try:
+            self.tick(dispatch=True)
+            self.assertTrue(self.wait(lambda: (A.fixer_records() or [{}])[0].get("ended")))
+        finally:
+            os.environ.pop("FAKE_CLAUDE_RESULT")
+        self.assertEqual(A.fixer_records()[0]["verdict"], "GAVE UP: cannot reproduce")
+        self.assertEqual([s["state"] for s in self.sessions()], ["done"])
+
+    def test_labels(self):
+        self.assertEqual(A.fixer_label({"run": 2392, "workflow": "Identity model convergence",
+                                        "job": "takes-drift-2 (united-states)"}),
+                         "red fixer #2392 · convergence takes-drift-2 (united-states)")
+        self.assertEqual(A.fixer_label({"orphan": True, "worktree": "/x/movies-wt-proxy-park"}),
+                         "orphan · movies-wt-proxy-park")
 
 
 class QuickExitTest(RedsBase):

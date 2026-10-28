@@ -287,7 +287,7 @@ agentctl red block <run> --cmd "<command>" [--cause <outage>] [--until-green <wo
                                                # its probe passes (default: the red's own workflow goes green)
 agentctl red release <run> [--any]
 agentctl red list [-v]                         # claims (live / STALE / blocked), dispatched fixers, today's count
-agentctl red dispatch <run> [--force]          # a headless Claude Code fixer, by hand
+agentctl red dispatch <run> [--force]          # a background Claude Code fixer session, by hand
 agentctl red auto [on|off|status]              # the processor's automatic dispatch
 agentctl red patrol [--dispatch]               # the processor's look, now
 ```
@@ -306,7 +306,11 @@ agent must be assigned to it".
   (committed; patch-equivalent on main counts as landed); a running `agentctl land` from such a worktree (landing); a
   `waiting` entry carrying one (waiting); such a commit on main whose next run is still in progress (landed, awaiting
   #M; if a run containing it fails the same way, the fix did not fix it and is shown so).
-- **Heartbeats.** A claim lives while its process lives (a dispatched fixer: while its log grows), or while its worktree
+- **Every fixer is a Claude Code background session.** `claude agents` lists them by name (`red fixer #2392 ·
+  convergence takes-drift-2 (united-states)`, `orphan · movies-wt-proxy-park`); `claude attach | logs | stop <id>` work
+  on them. Its wrapper tracks it by that id, renews its lease by its transcript and worktree, takes its verdict from its
+  final answer and `claude stop`s it when the lease goes (`claude agents --all` keeps it listed, `attach` reopens it).
+- **Heartbeats.** A claim lives while its process lives (a dispatched fixer: while its transcript grows), or while its worktree
   commits or moves. 30 min with none (`$AGENTCTL_RED_STALE_MIN`): STALE, counted for nobody, removed by `agentctl
   sweep`, and the red can be taken over.
 - **Assigned at the moment of red (2026-10-27: "why is no one assigned to the red? root cause structural fix").** The
