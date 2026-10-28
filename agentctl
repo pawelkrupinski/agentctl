@@ -3386,13 +3386,40 @@ def red_renew_holders(store, t):
             mark = red_wt_mark(m.get("worktree"))
             ttl = m.get("ttl") or RED_CLAIM_TTL
         elif m.get("kind") == "legacy-fixer":
+            if m.get("pid") and not proc_alive(m.get("pid"), m.get("process_start")):
+                store.revoke(row["name"], "its fixer process ended")  # ended: its attempt is counted now
+                continue
             mark = f"{os.path.getsize(m['log']) if m.get('log') and os.path.exists(m['log']) else 0}:" \
-                   f"{proc_alive(m.get('pid'), m.get('process_start'))}"
+                   f"{red_wt_mark(m.get('worktree'))}"
             ttl = RED_IMPORT_TTL
         else:
             continue
         if mark:
             store.renew(row["name"], row["epoch"], row["secret"], mark, ttl)
+
+
+def red_adopt_fixers(store, active, t):
+    """ONE SOURCE OF TRUTH FOR WHO HOLDS A RED: a fixer process alive on a run (one from before the leases, whose
+    imported lease lapsed) is granted the leases of its run's free reds -- holder its pid and worktree, renewed by its
+    transcript's growth and its worktree's activity, revoked when the process ends -- so the red is `leased` in the
+    state, the status line, the escalations and W2 alike."""
+    out = []
+    for r in fixer_records():
+        if not r["alive"] or r.get("lease"):
+            continue
+        run = (r.get("workflow"), str(r.get("run")))
+        for it in active.values():
+            d = it["data"]
+            if (d.get("workflow"), str((d.get("last_run") or {}).get("number"))) != run:
+                continue
+            got = store.acquire(red_lease(d["key"]), f"laptop:fixer:pid-{r.get('pid')}@{r.get('worktree')}",
+                                RED_IMPORT_TTL, RED_FIXER_MAX, progress="adopted", item=f"red:{it['id']}",
+                                meta={"kind": "legacy-fixer", "pid": r.get("pid"), "process_start": r.get("process_start"),
+                                      "log": r.get("log"), "worktree": r.get("worktree"), "who": f"red-fixer-{r.get('run')}",
+                                      "workflow": d.get("workflow"), "run": r.get("run"), "gate": bool(d.get("gate"))})
+            if "held" not in got:
+                out.append(f"adopted the live fixer pid {r.get('pid')} as the holder of {red_what(d)}")
+    return out
 
 
 def red_import_claims(store, active, t):
@@ -4154,6 +4181,10 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=True, facts=None):
             err(f"red tick: {key}: {str(e)[:160]}")
     if glob.glob(reds_dir("claims", "*.json")) or os.path.exists(reds_dir("fixer-queue.json")):
         acts += red_import_claims(store, active, t)
+    try:
+        acts += red_adopt_fixers(store, active, t)
+    except (Exception, SystemExit) as e:
+        err(f"red tick: adopting live fixers failed ({str(e)[:160]})")
     for key, it in list(active.items()):
         try:
             acts += red_step(store, it, obs, snap, facts, repo, o_r, t)

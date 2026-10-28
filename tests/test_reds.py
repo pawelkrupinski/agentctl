@@ -461,18 +461,30 @@ class DispatchTest(RedsBase):
         self.assertEqual(self.only()["data"]["line"], OTHER_LINE)
 
 
-    def test_a_live_fixer_process_without_a_lease_on_the_run_gets_no_second_fixer(self):
+    def test_a_live_fixer_from_before_the_leases_is_adopted_as_the_runs_holder_until_it_ends(self):
         import subprocess
         sleeper = subprocess.Popen(["sleep", "60"], start_new_session=True)
-        self.addCleanup(lambda: (sleeper.kill(), sleeper.wait()))
+        self.addCleanup(lambda: (sleeper.poll() is None) and (sleeper.kill(), sleeper.wait()))
+        wt = self.r.worktree("repo-wt-old-fixer", branch="old-fixer")
         os.makedirs(A.reds_dir("20"), exist_ok=True)
         A.write_json(A.reds_dir("20", "fixer.json"), {"workflow": "Main", "run": 20, "pid": sleeper.pid,
-                                                      "process_start": A.process_start(sleeper.pid), "worktree": "/w"})
+                                                      "process_start": A.process_start(sleeper.pid), "worktree": wt,
+                                                      "log": A.reds_dir("20", "claude-1.log")})
+        self.t[0] = time.time()
+        self.tick(dispatch=True)
         self.tick(dispatch=True)
         it = self.only()
-        self.assertEqual(it["state"], "offered")
-        self.assertIn("no lease", self.st.offer_of(f"red:{it['id']}")["reason"])
-        self.assertEqual(len(A.fixer_records()), 1)
+        self.assertEqual(it["state"], "leased")  # one truth: leased in the state, the view, W2 and the escalations
+        self.assertEqual(self.unheld(), [])
+        self.assertIn(f"pid-{sleeper.pid}", self.st.get(A.red_lease(it["data"]["key"]))["holder"])
+        self.assertIn("leased", A.red_view(self.st, it)[0])
+        self.assertEqual(len(A.fixer_records()), 1)  # no second fixer
+        sleeper.kill()
+        sleeper.wait()
+        self.tick()
+        self.tick()
+        it = self.only()
+        self.assertEqual((it["state"], it["data"]["attempts"]), ("offered", 1))
 
 
 class AuditTest(RedsBase):
