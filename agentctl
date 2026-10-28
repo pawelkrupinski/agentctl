@@ -3353,14 +3353,27 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
     return acts
 
 
+RED_QUICK_EXIT = 120       # a fixer ending this soon with no verdict never got going
+RED_START_BACKOFF = 600    # ...and its red waits this long (doubling) before the next dispatch
+
+
 def red_lease_ended(store, it, row, block, t):
     """Its holder's lease ended (released with a verdict, expired without progress, revoked): one attempt (not for a
     release by hand or a fixer that never started), the verdict in its history, offered again up the ladder."""
     d = it["data"]
     h = red_history(row, t)
+    m = lease_meta(row)
+    quick = float(m.get("released_at") or t) - float((row or {}).get("acquired_at") or 0) < RED_QUICK_EXIT
+    if quick and re.match(r"exit -?\d+ with no", str(h["outcome"])):  # it never got going (a crash at start): not an
+        h["outcome"] = f"NOT STARTED: {h['outcome']}"                  # attempt, and no instant re-dispatch either
     counted = not str(h["outcome"]).startswith(("NOT STARTED", "RELEASED"))
     upd = {"history": (d.get("history") or []) + [h], "holder": None,
            "attempts": int(d.get("attempts") or 0) + (1 if counted else 0)}
+    if str(h["outcome"]).startswith("NOT STARTED"):
+        fails = int(d.get("start_failures") or 0) + 1
+        upd.update(start_failures=fails, dispatch_after=t + min(RED_START_BACKOFF * 2 ** (fails - 1), 3600))
+    elif counted:
+        upd.update(start_failures=0, dispatch_after=0)
     if str(h["outcome"]).startswith("DIAGNOSED:"):
         upd["diagnosis"] = h["outcome"][len("DIAGNOSED:"):].strip()[:600]
     wt = h.get("worktree")
@@ -3707,8 +3720,13 @@ def red_dispatcher(store, o_r, repo, t):
                 acts.append(f"{off['picture'].get('workflow')} #{(off['picture'].get('run') or {}).get('number')}: "
                             f"red {off['picture']['key']} joined its run's fixer {on_run['holder']}")
             continue
+        item = store.item("red", off["item"].split(":", 1)[1]) or {"data": {}}
+        after = float(item["data"].get("dispatch_after") or 0)
         if off["tier"] == "author":
             why = f"offered to its author ({str((pic.get('author') or {}).get('worktree') or '?').replace(HOME, '~')})"
+        elif after > t:
+            why = (f"its last {item['data'].get('start_failures')} fixer(s) never got going; the next at "
+                   f"{time.strftime('%H:%M', time.localtime(after))}")
         elif blocker:
             why = blocker
         elif on_run:

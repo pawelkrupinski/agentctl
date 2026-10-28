@@ -352,6 +352,8 @@ class OwnerTest(RedsBase):
         esc = [e for e in self.st.events() if e["severity"] == "escalate" and e["item_id"] in {i["id"] for i in decodo}]
         self.assertEqual(esc, [])  # the reds do not escalate one by one: the cause does (its own lease)
         lease = self.st.get("block/cause/Decodo")
+        self.assertTrue(A.lease_is_live(lease, self.t[0]))  # it survives every tick while its probe fails
+        lease = self.st.get("block/cause/Decodo")
         self.assertEqual(lease["holder"], "owner:external-account")
 
 
@@ -635,6 +637,26 @@ class SiblingTest(RedsBase):
         self.tick()
         b = self.st.item("red", b["id"])
         self.assertEqual(b["state"], "offered")  # its fixer ended: offered again with it
+
+
+class QuickExitTest(RedsBase):
+    def test_a_fixer_that_never_gets_going_is_no_attempt_and_its_red_backs_off(self):
+        os.environ["FAKE_CLAUDE_RESULT"] = ""  # no verdict line at all: `exit 0 with no LANDED / GAVE UP line`
+        try:
+            self.tick(dispatch=True)
+            it = self.only()
+            t0 = time.time()
+            while A.lease_is_live(self.st.get(A.red_lease(it["data"]["key"])), time.time()) and time.time() - t0 < 60:
+                time.sleep(0.2)
+            self.t[0] = time.time()
+            self.tick(dispatch=True)
+            self.tick(dispatch=True)
+        finally:
+            os.environ.pop("FAKE_CLAUDE_RESULT")
+        it = self.only()
+        self.assertEqual((it["state"], it["data"]["attempts"]), ("offered", 0))
+        self.assertEqual(len(A.fixer_records()), 1)  # no instant re-dispatch
+        self.assertIn("never got going", self.st.offer_of(f"red:{it['id']}")["reason"])
 
 
 class AuditTest(RedsBase):
