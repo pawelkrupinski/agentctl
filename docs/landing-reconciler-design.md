@@ -758,3 +758,17 @@ The owner pushes and deploys every infra step.
    Acceptable, or should headless fixers also run on ci-runner (Anthropic credentials on the server)?
 9. **TTL defaults.** Are the defaults in §6.2 right? In particular: a fixer's 15 min without progress, a
    3 h maximum, and a push's 300 s maximum.
+
+## Owner decisions (2026-10-28)
+
+Approved: build phase 1, then phase 2, with these defaults for the open questions.
+
+1. Checks run on the CI check tier by default in phase 2; the laptop only compiles and runs quick tests.
+2. "Oldest unlanded change" invariant: X = 2 h.
+3. `ci-lander` becomes the only pusher of `main` once phase 2 has run stable for a week.
+4. The reconciler may cancel its own stuck runs and runs superseded on main; never anyone else's.
+5. Slack channel for escalations: not decided yet (needed only in phase 2).
+6. `~/bin` gets a Forgejo repo; infra pins the reconciler's version from it.
+7. No laptop standby reconciler after phase 2: one writer.
+8. Overnight fixers on ci-runner: later, not part of phase 1 or 2.
+9. Lease TTLs: start with the defaults in §6; tune from the watchdog's data.
