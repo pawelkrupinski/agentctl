@@ -14,6 +14,7 @@ _loader.exec_module(A)
 # real ~/.cache/agentctl): every agentctl path of every test, and of every child process, lives under a temp root.
 os.environ.setdefault("AGENTCTL_STATE_ROOT", tempfile.mkdtemp(prefix="agentctl-state-test-"))
 os.environ.setdefault("AGENTCTL_MOVIES_REPO", os.path.join(os.environ["AGENTCTL_STATE_ROOT"], "no-movies-repo"))
+os.environ.setdefault("AGENTCTL_BIN_REPO", "-")  # no test makes worktrees of the agentctl repository itself
 
 
 def _real_cache_marks():

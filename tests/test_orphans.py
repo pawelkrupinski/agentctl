@@ -13,20 +13,19 @@ class OrphanTest(RedBase):
     def setUp(self):
         super().setUp()
         os.environ["AGENTCTL_ORPHAN_IDLE"] = "0"
-        self.saved_o = A.process_cwds, A.reland_worktree, A.orphan_dispatch
+        self.saved_o = A.process_cwds, A.reland_worktree
         A.process_cwds = lambda: {}
-        self.relands, self.fixers = [], []
+        self.relands = []
         A.reland_worktree = lambda c, a: self.relands.append(a["worktree"]) or "landing again"
-        A.orphan_dispatch = lambda repo, wt, name, verdict: self.fixers.append((wt, verdict)) or (True, "fixer pid 1")
 
     def tearDown(self):
-        A.process_cwds, A.reland_worktree, A.orphan_dispatch = self.saved_o
+        A.process_cwds, A.reland_worktree = self.saved_o
         os.environ.pop("AGENTCTL_ORPHAN_IDLE", None)
         super().tearDown()
 
     def test_an_orphan_is_relanded_once_then_escalated_and_clears_when_it_lands(self):
         wt, sha = self.worktree_commit("repo-wt-flipflop", "flipflop: a change nobody landed")
-        self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-flipflop: reland (never landed)"])
+        self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-flipflop: submit (never landed)"])
         self.assertEqual(self.relands, [wt])
         self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-flipflop: escalated UNLANDED ORPHAN"])
         self.assertEqual(A.orphan_duty(self.r.path), [])  # once
@@ -41,16 +40,17 @@ class OrphanTest(RedBase):
         self.assertTrue(all(x["read"] for x in self.inbox("UNLANDED_ORPHAN")))
         self.assertTrue(os.path.isdir(wt))  # nothing deleted
 
-    def test_a_real_failure_gets_a_fixer_and_a_live_worktree_is_no_orphan(self):
+    def test_a_real_failure_is_submitted_once_too_and_a_live_worktree_is_no_orphan(self):
+        """Step 14: an orphan is submitted once whatever its last verdict (its checks decide; a rejection is its red's to
+        rescue): no orphan fixer."""
         wt, _sha = self.worktree_commit("repo-wt-prune", "workflow prune")
         A.inbox_write("land", "NOT LANDED: the pre-push checks failed (locally, check tree x-wt-check-1)", [], [], 1, cwd=wt)
         A.process_cwds = lambda: {4242: wt}  # somebody works in it: no orphan
         self.assertEqual(A.orphan_duty(self.r.path), [])
         A.process_cwds = lambda: {}
-        self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-prune: fixer (NOT LANDED: the pre-push checks "
+        self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-prune: submit (NOT LANDED: the pre-push checks "
                                                       "failed (locally, check tree x-wt-check-1))"])
-        self.assertEqual([w for w, _v in self.fixers], [wt])
-        self.assertEqual(self.relands, [])
+        self.assertEqual(self.relands, [wt])
 
     def test_the_change_key_survives_a_rebase(self):
         wt, _sha = self.worktree_commit("repo-wt-x", "x")

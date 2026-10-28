@@ -2434,97 +2434,9 @@ def contains_local(repo, sha, head):
     return git_ok(repo, "merge-base", "--is-ancestor", sha, head)
 
 
-_commit_time = {}  # an unlanded Fixes-Red commit's commit time (scan_fix_commits)
-
-
-def scan_fix_commits(repo):
-    """(unlanded, landed): unlanded {worktree: [(sha, {values})]} -- Fixes-Red commits in worktrees not yet on
-    forgejo/main (patch-equivalence counts as landed); landed [(sha, commit time, {values}, subject)] on forgejo/main
-    in the last 3 days."""
-    main = f"refs/remotes/{REMOTE}/main"
-    fmt = "%H%x09%ct%x09%(trailers:key=Fixes-Red,valueonly,separator=%x2C)%x09%s"
-    landed = []
-    r = git(repo, "log", main, "--since=3.days", f"--format={fmt}", check=False)
-    for line in (r.stdout if r.returncode == 0 else "").splitlines():
-        sha, ct, vals, subj = (line.split("\t", 3) + ["", "", "", ""])[:4]
-        if trailer_values(vals):
-            landed.append((sha, float(ct or 0), trailer_values(vals), subj))
-    heads = {}
-    for w in worktrees(repo):
-        p, head = w.get("worktree"), w.get("HEAD")
-        if not p or not head or w.get("bare") or internal_tree(p) or p.endswith((f"-wt-{WAITING_BRANCH}", "-wt-batch")):
-            continue
-        heads[os.path.realpath(p)] = head
-    unlanded = {}
-    if heads:
-        r = git(repo, "log", "--max-count=2000", f"--format={fmt}", *sorted(set(heads.values())), "--not", main, check=False)
-        cands = []
-        for line in (r.stdout if r.returncode == 0 else "").splitlines():
-            sha, ct, vals, _s = (line.split("\t", 3) + ["", "", "", ""])[:4]
-            if trailer_values(vals):
-                cands.append((sha, trailer_values(vals)))
-                _commit_time[sha] = float(ct or 0)
-        for wt, head in heads.items() if cands else ():
-            mine = [(s, v) for s, v in cands if git_ok(repo, "merge-base", "--is-ancestor", s, head)]
-            if not mine:
-                continue
-            ch = git(repo, "cherry", main, head, check=False)
-            plus = {l[2:].strip() for l in (ch.stdout if ch.returncode == 0 else "").splitlines() if l.startswith("+ ")}
-            mine = [(s, v) for s, v in mine if s in plus]
-            if mine:
-                unlanded[wt] = mine
-    return unlanded, landed
-
-
-FIX_COMMIT_FRESH = 30 * 60  # an unlanded Fixes-Red commit younger than this counts with nobody visibly behind it
-
-
-def fix_commit_stale(wt, sha, vals, landed, landers, live_wts, t, causes_of=lambda v: set(), refuted=()):
-    """Why an unlanded Fixes-Red commit is NOT a live fix, or None: (b) a landed Fixes-Red for the same runs or cause
-    after it superseded it, (c) a fix landed since was refuted by a newer run, (a) nobody behind it (no land, no live
-    claim or fixer in its worktree) and older than FIX_COMMIT_FRESH."""
-    ct = _commit_time.get(sha, 0)
-    for lsha, lct, lvals, _subj in landed:
-        if lct > ct and (set(lvals) & set(vals) or (causes_of(lvals) & causes_of(vals))):
-            return f"fix {sha[:9]} superseded by {lsha[:9]}, landed since"
-    for fs, fr in refuted:
-        if fr.get("createdAt") and parse_time(fr["createdAt"]).timestamp() > ct:
-            return f"fix {sha[:9]} is older than #{fr.get('number')}, which refuted the fix {fs[:9]} landed since"
-    if wt in landers or os.path.realpath(wt) in live_wts or t - ct < env_num("AGENTCTL_FIX_FRESH", FIX_COMMIT_FRESH):
-        return None
-    return f"fix {sha[:9]} abandoned: no process behind it, {fmt_age(t - ct)} old"
-
-
 def fmt_age(secs):
     secs = max(0, int(secs))
     return f"{secs // 86400} d" if secs >= 86400 else f"{secs // 3600} h" if secs >= 3600 else f"{secs // 60} min"
-
-
-def live_claim_worktrees(now_=None):
-    """The worktrees a live red lease names (an interactive claim's, a dispatched fixer's)."""
-    t = now_ if now_ is not None else time.time()
-    try:
-        rows = Store().list("red/")
-    except Exception:
-        return set()
-    return {os.path.realpath(lease_meta(r)["worktree"]) for r in rows
-            if lease_is_live(r, t) and lease_meta(r).get("worktree")}
-
-
-def stale_fix_worktrees(repo):
-    """[(worktree, [why])]: worktrees whose every unlanded Fixes-Red commit is stale (agentctl maintain lists them)."""
-    unlanded, landed = scan_fix_commits(repo)
-    try:
-        landers = land_cwds()
-    except (Exception, SystemExit):
-        landers = {}
-    live, t = live_claim_worktrees(), time.time()
-    out = []
-    for wt, commits in unlanded.items():
-        whys = [fix_commit_stale(wt, sha, vals, landed, landers, live, t) for sha, vals in commits]
-        if whys and all(whys):
-            out.append((wt, whys))
-    return out
 
 
 _blocker_cache = {}
@@ -3838,6 +3750,10 @@ def fixer_prompt(u, wt, brief, resume_note=None):
               "CI reads (runs, logs, artifacts: `forgejo-gh run view|download`, `agentctl ci-why`) work in your environment, "
               "which carries the Forgejo token: NEVER block on the owner or the vault for them. BLOCKED ON OWNER is only "
               "for real owner actions (prod, a deploy, an infra push, a secret write). ")
+    if u.get("bin_worktree"):
+        common += (f"AGENTCTL CHANGES (~/bin) go ONLY in {u['bin_worktree']} (a worktree of ~/bin, branch off master): "
+                   "commit there, `git -C <it> rebase master`, then `git -C ~/bin merge --ff-only <its branch>` once ~/bin "
+                   "is clean; NEVER edit ~/bin's own checkout. ")
     if len(u.get("refuted") or []) >= RED_RECURRING:
         common += (f"RECURRING: this failure outlived {len(u['refuted'])} landed fixes ({', '.join(x[:10] for x in u['refuted'])}): "
                    "each treated a symptom. Read them (`git show`), find the ROOT CAUSE they all missed, and fix that; "
@@ -3973,6 +3889,44 @@ def stop_group(pgid, grace=10.0, proc=None):
     return not alive()
 
 
+# A FIXER'S ~/bin WORKTREE (the owner, 2026-10-28: red fixer #2385 edited ~/bin's own checkout, uncommitted, and blocked
+# every other agent's merge): each dispatched fixer gets a worktree of the agentctl repository too, ~/bin-wt-red-<run>
+# (branch red-<run>, off master); its brief says agentctl changes go there, landed by rebase + `merge --ff-only`, never in
+# ~/bin itself. Removed when the fixer ends without commits in it. $AGENTCTL_BIN_REPO ('-': none, the tests').
+def bin_repo():
+    r = os.environ.get("AGENTCTL_BIN_REPO") or os.path.dirname(TOOL_PATH)
+    return None if r == "-" or not os.path.isdir(os.path.join(r, ".git")) else r
+
+
+def bin_worktree_for(num, resume=None):
+    if resume and resume.get("bin_worktree") and os.path.isdir(resume["bin_worktree"]):
+        return resume["bin_worktree"]
+    br = bin_repo()
+    if not br:
+        return None
+    wt, branch, n = f"{br}-wt-red-{num}", f"red-{num}", 1
+    while os.path.exists(wt) or git_ok(br, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"):
+        n += 1
+        wt, branch = f"{br}-wt-red-{num}-{n}", f"red-{num}-{n}"
+    git(br, "worktree", "prune", check=False)
+    r = git(br, "worktree", "add", "-q", "-b", branch, wt, "master", check=False)
+    return wt if r.returncode == 0 else None
+
+
+def drop_bin_worktree(wt):
+    """The fixer's ~/bin worktree, when it ended with nothing in it (no commit beyond master, nothing uncommitted)."""
+    br = bin_repo()
+    if not wt or not br or not os.path.isdir(wt):
+        return
+    if git(wt, "status", "--porcelain", check=False).stdout.strip() or \
+            git(wt, "rev-list", "--count", "master..HEAD", check=False).stdout.strip() not in ("", "0"):
+        return
+    branch = git(wt, "rev-parse", "--abbrev-ref", "HEAD", check=False).stdout.strip()
+    git(br, "worktree", "remove", wt, check=False)
+    if branch.startswith("red-"):
+        git(br, "branch", "-D", branch, check=False)
+
+
 def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=None, took=None, extra=()):
     """Start a headless fixer for red u under its taken lease: a fresh worktree <clone>-wt-red-<run> off forgejo/main
     (resume: the same worktree and session), then a detached `agentctl red fixer` that runs `claude -p` there, renews
@@ -3995,7 +3949,9 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
         r = git(repo, "worktree", "add", "-q", "-b", branch, wt, f"{REMOTE}/main", check=False)
         if r.returncode != 0:
             return False, dispatch_log(u, f"NOT DISPATCHED: git worktree add failed ({r.stderr.strip()[:160]})")
-    rec = {"key": u.get("key"), "lease": lease, "epoch": (took or {}).get("epoch"), "jobs": u.get("jobs") or [u.get("job")],
+    bin_wt = bin_worktree_for(num, resume)
+    rec = {"bin_worktree": bin_wt, "key": u.get("key"), "lease": lease, "epoch": (took or {}).get("epoch"),
+           "jobs": u.get("jobs") or [u.get("job")],
            "run": num, "run_id": u["run"].get("databaseId"), "workflow": u["workflow"], "job": u.get("job"),
            "kind": u.get("kind"), "line": u.get("line"), "flake": bool(u.get("flake")), "worktree": wt, "started": ts(),
            "why": why, "log": os.path.join(d, f"claude-{k}.log"), "session": resume.get("session") if resume else None,
@@ -4079,6 +4035,7 @@ def red_fixer(a):
     u = {"workflow": rec["workflow"], "job": rec.get("job"), "jobs": rec.get("jobs"), "kind": rec.get("kind") or "test",
          "line": rec.get("line"), "flake": rec.get("flake"), "diagnosis": rec.get("diagnosis"), "orphan": rec.get("orphan"),
          "refuted": rec.get("refuted"), "predicts": rec.get("predicts"), "prior_work": rec.get("prior_work"),
+         "bin_worktree": rec.get("bin_worktree"),
          "run": {"number": num, "databaseId": rec.get("run_id")}}
     prompt = fixer_prompt(u, wt, sync_brief(), rec.get("resume_note"))
     cli = claude_cli()
@@ -4140,6 +4097,7 @@ def red_fixer(a):
     write_json(a.record, rec)
     if not rec.get("orphan"):  # an orphan's tree is its author's, never litter
         mark_internal(wt)  # its fixer ended: the tree is agentctl's litter now, never a fixer or owner
+    drop_bin_worktree(rec.get("bin_worktree"))
     print(line)
     return 0 if verdict.startswith("LANDED") else 1
 
@@ -7012,6 +6970,58 @@ def queue_mode(repo, a):
     return os.environ.get("AGENTCTL_QUEUE", "1") != "0" and batching(repo)
 
 
+# SUBMISSION BY REF (design §13 step 14, §14.2): a queued change is also pushed to Forgejo as refs/heads/land/<entry>
+# (its own ref: the movies hook checks nothing on it, no workflow runs on it), so the change no longer lives only in a
+# worktree -- an author that ends, a worktree removed, leave it reachable. The tick deletes every land/* ref whose change
+# is decided (or unknown). Checks rebuild from the commits, never from the worktree.
+LAND_REF_SWEEP_EVERY = 600
+_last_ref_sweep = [0.0]
+
+
+def land_refs_supported(repo):
+    """The repository's hook at forgejo/main checks nothing on a land/ ref (else the push would run its full checks)."""
+    hook = git(repo, "show", f"{REMOTE}/main:scripts/hooks/pre-push", check=False).stdout
+    return "refs/heads/land/" in hook
+
+
+def submit_ref(repo, d, e):
+    """Push the change to refs/heads/land/<entry> (bounded); the entry records it. Never fatal: the queue does not need
+    it in phase 1."""
+    if not land_refs_supported(repo):
+        return None
+    ref = f"refs/heads/land/{e['id']}"
+    rc, out = run_watched(["git", "push", "--quiet", REMOTE, f"{e['head']}:{ref}"], repo, tool_env(),
+                          os.path.join(d, f"submit-{e['id']}"), "submit", **push_bounds())
+    if rc == 0:
+        e["ref"] = ref
+        save_entry(d, e)
+        return ref
+    err(f"submit: could not push {ref} ({tail_of(out or '', 2)[:160]}); the change is queued all the same")
+    return None
+
+
+def sweep_land_refs(repo, d, now_=None):
+    """Every LAND_REF_SWEEP_EVERY s: each remote land/<entry> ref whose change is decided, or unknown here, deleted."""
+    t = now_ if now_ is not None else time.time()
+    if t - _last_ref_sweep[0] < env_num("AGENTCTL_LAND_REF_SWEEP", LAND_REF_SWEEP_EVERY):
+        return []
+    _last_ref_sweep[0] = t
+    r = git(repo, "ls-remote", "--heads", REMOTE, "refs/heads/land/*", check=False)
+    if r.returncode != 0:
+        return []
+    every = {e["id"]: e for e in waiting_entries(d, open_only=False)}
+    did = []
+    for line in r.stdout.splitlines():
+        ref = line.split()[-1]
+        eid = ref[len("refs/heads/land/"):]
+        e = every.get(eid)
+        if e and e.get("status") not in ENTRY_FINAL:
+            continue
+        dr = git(repo, "push", "--quiet", REMOTE, f":{ref}", check=False)
+        did.append(f"{ref}: deleted" if dr.returncode == 0 else f"{ref}: could not delete")
+    return did
+
+
 def enqueue(repo, main_ref, sh, a):
     """Rebase, squash guard, then the change becomes a queued entry: prints QUEUED and starts the processor."""
     rc, head = sync(repo, main_ref, sh)
@@ -7033,6 +7043,7 @@ def enqueue(repo, main_ref, sh, a):
         for old in queued_entries(d):  # RE-QUEUEING REPLACES: only the newest entry per worktree and branch runs
             if old["id"] != e["id"] and same_change_source(old, repo, e["branch"]):
                 supersede(d, old, e["id"], f"{repo} queued again ({head[:10]}); only the newest entry runs")
+    submit_ref(repo, d, e)
     ahead = len(queued_entries(d)) - 1
     print(f"QUEUED {e['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}): its checks run in the background; "
           "LANDED / WAITING / NOT LANDED goes to `agentctl inbox`", flush=True)
@@ -8376,6 +8387,7 @@ def waiting_run(repo, once=False, service=False):
                                ("change tick", lambda: [wlog(d, f"tick: {x}") for x in tick_changes(repo, d)]),
                                ("batch tick", lambda: [wlog(d, f"tick: {x}") for x in tick_batch(repo, d)]),
                                ("watches", lambda: [wlog(d, f"tick: {x}") for x in tick_watches()]),
+                               ("land refs", lambda: [wlog(d, f"tick: {x}") for x in sweep_land_refs(repo, d)]),
                                ("events", project_events), ("notifier", notify_escalations),
                                ("network watch", network_watch), ("tunnel probe", tunnel_watch),
                                ("gate summary", lambda: maybe_publish_gate(repo)),
@@ -10655,7 +10667,35 @@ def inv_wm():
         f"maintain last ran {fmt_age(age) + ' ago' if age is not None else 'never'}"
 
 
-INVARIANTS = {"W1": inv_w1, "W2": inv_w2, "W5": inv_w5, "W6": inv_w6, "WM": inv_wm}
+WB_MAX = 10 * 60
+
+
+def inv_wb():
+    """WB: ~/bin's own checkout carries no uncommitted edit older than WB_MAX (work goes in worktrees: an edit there
+    blocks every other agent's merge). Names the processes working in it."""
+    br = bin_repo()
+    if not br:
+        return True, "no agentctl repository here"
+    files = [l[3:] for l in git(br, "status", "--porcelain", "--untracked-files=no", check=False).stdout.splitlines()
+             if l.strip() and not l[3:].startswith("briefs/")]
+    if not files:
+        return True, f"{br} is clean"
+    newest = max((os.path.getmtime(os.path.join(br, f)) for f in files if os.path.exists(os.path.join(br, f))), default=0)
+    if time.time() - newest < env_num("AGENTCTL_WB_MAX", WB_MAX):
+        return True, f"{br}: {len(files)} file(s) edited just now"
+    try:
+        cwds = process_cwds()
+        names = {pid: cmd for pid, _pp, _e, cmd in ps()}
+        who = [f"pid {p} {names.get(p, '')[:60]}" for p, c in cwds.items()
+               if os.path.realpath(c) == os.path.realpath(br) or os.path.realpath(c).startswith(os.path.realpath(br) + "/")]
+    except (Exception, SystemExit):
+        who = []
+    return False, (f"{br} has uncommitted edits ({', '.join(files[:4])}) unchanged for {fmt_age(time.time() - newest)}"
+                   + (f"; working there: {'; '.join(who[:3])}" if who else "; nobody works there now") +
+                   ": commit them in a worktree of ~/bin")
+
+
+INVARIANTS = {"WB": inv_wb, "W1": inv_w1, "W2": inv_w2, "W5": inv_w5, "W6": inv_w6, "WM": inv_wm}
 
 
 def probe_invariant(a):
@@ -10718,7 +10758,6 @@ def cmd_maintain(a):
     else:
         print(f"== sweep: done today ({st.get('sweep_at')})" if st.get("sweep") == today else
               f"== sweep: from {MAINTAIN_SWEEP_HOUR:02d}:00")
-    maintain_stale_fixes(a.dry_run)
     print("== orphaned work")
     try:
         for line in orphan_duty(dry_run=a.dry_run) or ["  none"]:
@@ -10765,6 +10804,17 @@ def last_land_verdict(wt):
     return str(es[-1].get("verdict") or "") if es else None
 
 
+def live_lease_worktrees():
+    """The worktrees a live lease names (a fixer's, an interactive claim's): somebody works there."""
+    out, t = set(), time.time()
+    for r in Store().list():
+        if r["holder"] and r["expires_at"] > t:
+            wt = (json.loads(r["meta"] or "{}") or {}).get("worktree")
+            if wt:
+                out.add(os.path.realpath(wt))
+    return out
+
+
 def orphan_candidates(repo, now_=None):
     """[(worktree, commits, key, last verdict)] of the orphans now."""
     t = now_ if now_ is not None else time.time()
@@ -10776,7 +10826,7 @@ def orphan_candidates(repo, now_=None):
         landers = {os.path.realpath(w) for w in land_cwds()}
     except (Exception, SystemExit):
         landers = set()
-    live = live_claim_worktrees()
+    live = live_lease_worktrees()
     try:  # a change in the land queue (queued, checking, waiting) is not orphaned
         d, _c, _w = waiting_state(repo)
         live |= {os.path.realpath(e.get("worktree") or "") for e in waiting_entries(d, open_only=False)
@@ -10811,7 +10861,7 @@ def probe_orphan_landed(a):
     if key != a.get("key"):
         return True, "its commits are on main" if key is None else "its change moved on (new commits)"
     rp = os.path.realpath(wt)
-    if rp in live_claim_worktrees():
+    if rp in live_lease_worktrees():
         return True, "a live claim works in it"
     return False, f"{len(_c)} commit(s) still not on main, nobody in it"
 
@@ -10824,33 +10874,18 @@ def orphan_duty(repo=None, dry_run=False, now_=None):
     path = recovery_dir("orphans.json")
     st = read_record(path) or {}
     did, acted = [], 0
-    try:  # a red fixer's fix that a landed one superseded is no orphan to land again (maintain_stale_fixes lists it)
-        superseded = {os.path.realpath(w) for w, whys in stale_fix_worktrees(repo) if any("superseded" in x for x in whys)}
-    except (Exception, SystemExit):
-        superseded = set()
     for wt, commits, key, verdict in orphan_candidates(repo, now_):
-        if os.path.realpath(wt) in superseded:
-            continue
         rec = st.get(key) or {"worktree": wt, "first": ts(), "actions": []}
         name = os.path.basename(wt)
-        cause = "real" if verdict and verdict.startswith("NOT LANDED") and \
-            re.search(r"checks failed|conflict|no longer applies|refused", verdict) else None
         if dry_run:
             did.append(f"orphan {name}: {len(commits)} commit(s); last verdict: {verdict or 'never landed'}")
             continue
         if not rec["actions"]:
-            if acted >= ORPHAN_PER_PASS:  # a few a pass: the queue and the fixer caps are shared
+            if acted >= ORPHAN_PER_PASS:  # a few a pass: the queue is shared
                 continue
-            if cause == "real" and (cached_dispatch_blocker() or len([r for r in red_fixers_alive(Store(), time.time())
-                                                                       if not lease_meta(r).get("gate")]) >= red_cap("other")):
-                continue  # no fixer slot now: the next pass
-            acted += 1
-            if cause == "real":
-                ok, msg = orphan_dispatch(repo, wt, name, verdict)
-                rec["actions"].append({"at": ts(), "what": "fixer", "ok": ok, "msg": msg[:200]})
-            else:
-                w = reland_worktree(None, {"worktree": wt, "attempt": 1})
-                rec["actions"].append({"at": ts(), "what": "reland", "msg": w})
+            acted += 1  # SUBMITTED ONCE (design §11 I9): its checks then decide; a rejection is its red's to rescue
+            w = reland_worktree(None, {"worktree": wt, "attempt": 1})
+            rec["actions"].append({"at": ts(), "what": "submit", "msg": w})
             did.append(f"orphan {name}: {rec['actions'][-1]['what']} ({verdict or 'never landed'})")
         elif not rec.get("escalated") and time.time() - parse_time(rec["actions"][-1]["at"]).timestamp() \
                 >= env_num("AGENTCTL_ORPHAN_IDLE", ORPHAN_IDLE):  # its action had its time
@@ -10865,55 +10900,6 @@ def orphan_duty(repo=None, dry_run=False, now_=None):
     if not dry_run:
         write_json(path, st)
     return did
-
-
-def orphan_dispatch(repo, wt, name, verdict):
-    """A headless fixer IN the orphan's worktree (its author's), told the last verdict."""
-    num = f"orphan-{name}"
-    d = reds_dir(num)
-    os.makedirs(d, exist_ok=True)
-    k = 1 + len(glob.glob(os.path.join(d, "fixer*.json")))
-    rec_path = os.path.join(d, "fixer.json" if k == 1 else f"fixer-{k}.json")
-    rec = {"sig": None, "sigs": [], "jobs": ["land"], "run": num, "run_id": None, "workflow": "Unlanded change",
-           "job": "land", "kind": "test", "line": (verdict or "")[:400], "gate": False, "worktree": wt, "started": ts(),
-           "why": "orphaned change, author gone", "log": os.path.join(d, f"claude-{k}.log"), "names": [num],
-           "orphan": True}
-    write_json(rec_path, rec)
-    with open(os.path.join(d, "fixer.log"), "a") as logf:
-        p = subprocess.Popen([sys.executable, TOOL_PATH, "red", "fixer", "--repo", repo, "--record", rec_path],
-                             stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=wt,
-                             env=fixer_env(slug(repo), num))
-    rec.update(pid=p.pid, process_start=process_start(p.pid))
-    write_json(rec_path, rec)
-    return True, f"fixer pid {p.pid} in {wt.replace(HOME, '~')}"
-
-
-def maintain_stale_fixes(dry_run, repo=None):
-    """The evidence of a stale fix: a worktree whose only unlanded Fixes-Red commits are stale. Proven merged (its HEAD
-    on main by patch): removed (the standing OK, logged); otherwise listed, never deleted."""
-    repo = repo or movies_repo_path()
-    if not os.path.isdir(repo):
-        return []
-    print("== stale fix worktrees")
-    try:
-        stale = stale_fix_worktrees(repo)
-        main = git(repo, "rev-parse", f"refs/remotes/{REMOTE}/main").strip()
-    except (Exception, SystemExit) as e:
-        print(f"  could not read them ({str(e)[:160]})")
-        return []
-    for wt, whys in stale:
-        head = git(repo, "-C", wt, "rev-parse", "HEAD", check=False).stdout.strip()
-        merged = merged_reason(repo, head, main) if head else None
-        if merged and not dry_run:
-            r = git(repo, "worktree", "remove", wt, check=False)
-            done = "removed" if r.returncode == 0 else f"kept ({r.stderr.strip()[:80]})"
-            with open(os.path.join(scratch(), "agentctl-deleted.log"), "a") as f:
-                f.write(f"{ts()} maintain: stale fix worktree {wt} {head[:10]} ({merged}): {done}\n")
-            print(f"  {done} {wt.replace(HOME, '~')}: {'; '.join(whys)} ({merged})")
-        else:
-            print(f"  LIST {wt.replace(HOME, '~')}: {'; '.join(whys)}" + (f" ({merged}; dry run)" if merged else
-                  " -- not merged: review, then `git worktree remove` it"))
-    return stale
 
 
 FIXTURE_SERVER = re.compile(r"serve\.py\b|FixtureServerMain")

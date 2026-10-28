@@ -330,6 +330,32 @@ class QueueTest(WaitingTest):
         self.assertEqual(self.pushed(), [], "a cancelled change is never checked or pushed")
 
 
+    def remote_refs(self):
+        out = sh(self.r.path, "git", "ls-remote", "--heads", "forgejo", "refs/heads/land/*")
+        return [l.split()[-1] for l in out.splitlines() if l.strip()]
+
+    def test_a_queued_change_is_pushed_to_its_land_ref_and_the_ref_goes_when_it_is_decided(self):
+        saved = A.land_refs_supported
+        A.land_refs_supported = lambda repo: True
+        self.addCleanup(setattr, A, "land_refs_supported", saved)
+        wt, sha = self.agent("a", "web/src/main/A.scala", "a\n")
+        eid, _out = self.queued(wt)
+        self.assertEqual(self.remote_refs(), [f"refs/heads/land/{eid}"])
+        self.assertEqual(self.entries()[eid.rsplit("-", 1)[-1]]["ref"], f"refs/heads/land/{eid}")
+        d, _c, _w = A.waiting_state(self.r.path)
+        A._last_ref_sweep[0] = 0
+        self.assertEqual(A.sweep_land_refs(self.r.path, d), [], "queued: its ref stays")
+        self.assertEqual(self.check(eid), 0)  # landed
+        A._last_ref_sweep[0] = 0
+        self.assertEqual(A.sweep_land_refs(self.r.path, d), [f"refs/heads/land/{eid}: deleted"])
+        self.assertEqual(self.remote_refs(), [])
+
+    def test_no_land_ref_while_the_repositorys_hook_would_check_it(self):
+        wt, _sha = self.agent("a", "web/src/main/A.scala", "a\n")
+        self.queued(wt)
+        self.assertEqual(self.remote_refs(), [], "the hook at forgejo/main knows no land/ refs: nothing pushed")
+
+
 class Died(BaseException):
     """A checker that dies mid-wait (SIGKILL: no handler runs past this point in the wait loop)."""
 
