@@ -489,14 +489,23 @@ class DispatchTest(RedsBase):
         self.assertEqual(len(it["data"]["jobs"]), 5)
         self.assertEqual(len(A.fixer_records()), 1)
 
-    def test_a_red_re_keyed_in_its_own_run_clears_its_old_item(self):
+    def test_a_test_red_is_never_cleared_by_its_own_run_reread_only_by_a_newer_decided_main_run(self):
         self.tick()
         old = self.only()
         self.put("run-40.log", f"test (rest)\tRun tests\t2026-10-27T08:00:00Z {OTHER_LINE}\n")
         os.unlink(A.reds_dir("runsig", "40.json"))
+        self.tick()  # the same run read again differently: no newer decided run on main, so nothing clears
+        self.assertEqual(self.st.item("red", old["id"])["state"], "offered")
+
+    def test_clearing_one_red_of_a_run_never_stops_the_fixer_holding_its_others(self):
         self.tick()
-        self.assertEqual(self.st.item("red", old["id"])["state"], "cleared")
-        self.assertEqual(self.only()["data"]["line"], OTHER_LINE)
+        it = self.only()
+        wt = self.r.worktree("repo-wt-h", branch="h")
+        self.st.acquire(A.red_lease(it["data"]["key"]), "laptop:fixer:x", 900, 3600, meta={"kind": "fixer", "worktree": wt})
+        self.st.acquire("red/otherkey", "laptop:fixer:x", 900, 3600, meta={"kind": "fixer", "worktree": wt})
+        self.assertIsNone(A.red_stop_holder(self.st, it["data"]["key"], "x", "red cleared"))
+        self.assertFalse(os.path.exists(os.path.join(wt, "RED-STOP.md")))
+        self.assertTrue(A.lease_is_live(self.st.get("red/otherkey"), self.t[0]))
 
 
     def test_a_live_fixer_from_before_the_leases_is_adopted_as_the_runs_holder_until_it_ends(self):
@@ -523,6 +532,47 @@ class DispatchTest(RedsBase):
         self.tick()
         it = self.only()
         self.assertEqual((it["state"], it["data"]["attempts"]), ("offered", 1))
+
+
+class OldRedTest(RedsBase):
+    def outside(self, wf_text):
+        saved = os.environ.get("AGENTCTL_RED_OLD_RUN")
+        os.environ["AGENTCTL_RED_OLD_RUN"] = str(2 * 86400)
+        self.addCleanup(os.environ.__setitem__, "AGENTCTL_RED_OLD_RUN", saved or "1e12")
+        self.put("runs.json", [run(40, 20, "Main", "main.yml", self.sha), run(39, 19, "Identity model convergence",
+                                                                             "identity-model-convergence.yml", self.sha),
+                               run(90, 38, "Report run timings", "report-timings.yml", self.sha, conclusion="failure",
+                                   created="2026-10-19T21:10:26Z")])
+        self.put("run-90.json", {"jobs": [{"name": "report", "status": "completed", "conclusion": "failure",
+                                           "steps": [{"name": "Report", "conclusion": "failure"}]}], "headSha": self.sha,
+                                 "url": "u", "number": 38, "status": "completed", "conclusion": "failure",
+                                 "workflowName": "Report run timings"})
+        self.put("run-90.log", "report\tReport\t2026-10-19T21:10:26Z [error] boom\n")
+        if wf_text:
+            self.r.write(".forgejo/workflows/report-timings.yml", wf_text)
+            self.r.commit("wf")
+            self.r.push()
+
+    def test_an_old_red_of_a_workflow_that_cannot_run_is_retired_not_escalated(self):
+        self.outside("name: Report run timings\non:\n  workflow_run: {}\n")
+        self.tick(dispatch=True)
+        it = self.st.items("red")[0]
+        self.assertEqual(it["state"], "cleared")
+        self.assertIn("retired", it["data"]["retired"])
+        self.assertEqual([e for e in self.st.events() if e["severity"] == "escalate"], [])
+
+    def test_an_old_red_of_a_dispatchable_workflow_is_verified_by_a_fresh_run(self):
+        self.outside("name: Report run timings\non:\n  workflow_dispatch:\n")
+        calls, saved = [], (A.api, A.record_dispatch)
+        A.api = lambda o_r, method, path, params=None, body=None: calls.append((method, path))
+        A.record_dispatch = lambda **kw: None
+        try:
+            self.tick(dispatch=True)
+        finally:
+            A.api, A.record_dispatch = saved
+        it = self.only()
+        self.assertEqual((it["state"], it["data"]["fix"]["status"]), ("fix-pending", "verify"))
+        self.assertIn(("POST", "actions/workflows/report-timings.yml/dispatches"), calls)
 
 
 class AuditTest(RedsBase):

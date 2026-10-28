@@ -2355,6 +2355,9 @@ def worktree_of(path):
 def proc_alive(pid, start=None):
     if not pid or not pid_alive(int(pid)):
         return False
+    r = subprocess.run(["ps", "-o", "stat=", "-p", str(int(pid))], capture_output=True, text=True)
+    if r.stdout.strip().startswith("Z"):  # a defunct process its parent never reaped: ended
+        return False
     # the same words in any order: records written before process_start ran ps under LC_ALL=C hold a locale's order
     return not start or sorted(process_start(int(pid)).split()) == sorted(str(start).split())
 
@@ -2921,22 +2924,34 @@ def red_observe(o_r, repo, snap):
     return obs
 
 
+def red_rekeyed(d, obs):
+    """A line-less or unreadable red whose own run is now read in full under other keys (its jobs merged into the run's
+    one infra red, or its failed jobs read at last): superseded by that red, never 'cleared by a newer run'."""
+    if d["key"] in obs or not (d.get("job") == "?" or not norm_line(d.get("line"))
+                               or str(d.get("line")).startswith("step failed:")):
+        return False
+    rid = (d.get("last_run") or {}).get("databaseId")
+    same_run = [o for o in obs.values() if o["workflow"] == d.get("workflow") and o["run"].get("databaseId") == rid]
+    return bool(same_run) and all(o["job"] != "?" for o in same_run)
+
+
 def red_gone(it, obs, snap):
     """The observation that opened the red, now negative: True when a NEWER decided run of its workflow does not fail
     this way (local: main's local checks no longer fail it; stuck: no stuck run; a branch prediction: gone)."""
     d = it["data"]
     if d["key"] in obs:
         return False
-    rid = (d.get("last_run") or {}).get("databaseId")
-    same_run = [o for o in obs.values() if o["workflow"] == d.get("workflow") and o["run"].get("databaseId") == rid]
-    if same_run and all(o["job"] != "?" for o in same_run):
-        return True  # its own run, read in full, no longer fails this way (re-keyed, or its jobs were unreadable)
+    if red_rekeyed(d, obs):
+        return True
     if d.get("red_kind") == "flake":
         return False  # a flake is already gone: only its fix ends it
     if d.get("red_kind") in ("local", "stuck-run", "predicts"):
         return True
+    # ONLY a newer DECIDED run of the same workflow ON MAIN clears it (the snapshot's `latest` reads main's runs only;
+    # a branch or measure run never counts)
     last = ((snap or {}).get("latest") or {}).get(d.get("workflow"))
-    return bool(last) and int(last.get("databaseId") or 0) > int((d.get("last_run") or {}).get("databaseId") or 0)
+    return bool(last) and last.get("headBranch", "main") == "main" and \
+        int(last.get("databaseId") or 0) > int((d.get("last_run") or {}).get("databaseId") or 0)
 
 
 # -- fixes on their way: Fixes-Red changes in the queue, and Fixes-Red commits landed on main
@@ -3055,7 +3070,8 @@ def red_picture(d):
             "kind": d.get("kind"), "line": d.get("line"), "run": d.get("last_run"), "gate": bool(d.get("gate")),
             "red_kind": d.get("red_kind"), "attempts": int(d.get("attempts") or 0), "history": (d.get("history") or [])[-6:],
             "refuted": d.get("refuted") or [], "diagnosis": d.get("diagnosis"), "predicts": d.get("predicts"),
-            "author": d.get("author"), "culprit": d.get("culprit"), "names": sorted(red_names(d) - {None})}
+            "author": d.get("author"), "culprit": d.get("culprit"), "names": sorted(red_names(d) - {None}),
+            "prior_work": d.get("prior_work")}
 
 
 def red_put_offer(store, it):
@@ -3139,6 +3155,8 @@ def red_stop_holder(store, key, why, outcome):
     if not lease_is_live(row, store.clock()):
         return None
     store.revoke(red_lease(key), outcome)
+    if any(lease_is_live(r, store.clock()) and r["holder"] == row["holder"] for r in store.list("red/")):
+        return None  # it still holds other reds of its run: only this lease goes, never its work
     wt = lease_meta(row).get("worktree")
     if wt and os.path.isdir(wt) and allowed_path(wt):
         try:
@@ -3173,12 +3191,17 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
     fix = red_fix_of(it, facts)
     block = red_block_of(it, store)
     acts = []
+    if st in ("red", "offered") and not live and not fix and not block:
+        old = red_old_run(d, t)
+        if old:  # AN OLD RED SEEN ONLY NOW (audit #7 surfaces a rarely run workflow): verified by a fresh run, or retired
+            return red_resolve_old(store, it, old, o_r, repo, t)
     if st == "red":
         it = red_offer(store, it, f"{red_what(d)} is red: offered")
         return [f"offered {red_what(d)} ({it['data']['tier']})"]
     if st == "offered":
         if gone and not fix:
-            red_close(store, it, "cleared", f"a newer run does not fail this way")
+            red_close(store, it, "cleared", "re-keyed: its run's failures are held by the run's other reds"
+                      if obs is not None and red_rekeyed(d, obs) else "a newer decided run on main does not fail this way")
             return [f"cleared {red_what(d)}"] + red_flake_check(store, it, snap, repo, facts)
         if fix:
             store.close_offer(f"red:{it['id']}", "fix-pending")
@@ -3216,7 +3239,8 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
                      data={"fix": fix})
             return [f"fix-pending {red_what(d)}"]
         if gone:
-            red_close(store, it, "cleared", "a newer run does not fail this way")
+            red_close(store, it, "cleared", "re-keyed: its run's failures are held by the run's other reds"
+                      if obs is not None and red_rekeyed(d, obs) else "a newer decided run on main does not fail this way")
             return [f"cleared {red_what(d)}"]
         if live:
             if row["holder"] != d.get("holder"):
@@ -3230,7 +3254,7 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
             red_move(store, it, "leased", f"{red_what(d)}: a live fixer outranks the block", data={"holder": row["holder"]})
             return [f"leased {red_what(d)} (over its block)"]
         if gone:
-            red_close(store, it, "cleared", "a newer run does not fail this way")
+            red_close(store, it, "cleared", "a newer decided run on main does not fail this way")
             return [f"cleared {red_what(d)}"]
         if fix:
             red_move(store, it, "fix-pending", f"{red_what(d)}: fix {fix.get('entry') or fix.get('sha')}", data={"fix": fix})
@@ -3259,12 +3283,53 @@ def red_lease_ended(store, it, row, block, t):
            "attempts": int(d.get("attempts") or 0) + (1 if counted else 0)}
     if str(h["outcome"]).startswith("DIAGNOSED:"):
         upd["diagnosis"] = h["outcome"][len("DIAGNOSED:"):].strip()[:600]
+    wt = h.get("worktree")
+    if wt and os.path.isdir(wt) and allowed_path(wt):  # its unlanded commits are never lost: the next fixer starts there
+        ch = git(wt, "cherry", f"refs/remotes/{REMOTE}/main", "HEAD", check=False)
+        left = [l[2:].strip()[:10] for l in (ch.stdout if ch.returncode == 0 else "").splitlines() if l.startswith("+ ")]
+        if left:
+            upd["prior_work"] = {"worktree": wt, "commits": left[:20]}
     if block:
         red_move(store, it, "blocked-external", f"{red_what(d)}: {block['text']}",
                  data={**upd, "cause": block.get("cause"), "block": block["name"]})
         return [f"blocked {red_what(d)}"]
     red_offer(store, it, f"{red_what(d)}: {h['holder']} ended ({h['outcome'][:120]}): offered again", data=upd)
     return [f"re-offered {red_what(d)} after {h['outcome'][:60]}"]
+
+
+RED_OLD_RUN = 2 * 86400  # an outside red whose newest run is older than this is checked by a fresh run before it is fixed
+
+
+def red_old_run(d, t):
+    """The age of an outside red's newest failing run when it is older than RED_OLD_RUN and not yet re-checked, else 0."""
+    if d.get("red_kind") != "outside" or d.get("old_checked"):
+        return 0
+    try:
+        age = t - parse_time((d.get("last_run") or {}).get("createdAt")).timestamp()
+    except (ValueError, TypeError, AttributeError):
+        return 0
+    return age if age > env_num("AGENTCTL_RED_OLD_RUN", RED_OLD_RUN) else 0
+
+
+def red_resolve_old(store, it, age, o_r, repo, t):
+    """A dispatchable workflow is run again on main (fix-pending: verify) -- green verifies it, the same failure makes it
+    an ordinary red; one that cannot be dispatched and has not run for that long is RETIRED (cleared, marked so; its next
+    failing run opens a new red)."""
+    d = it["data"]
+    path, txt = workflow_file_of(repo, f"{REMOTE}/main", d.get("workflow")) if repo else (None, "")
+    store.close_offer(f"red:{it['id']}", "old run")
+    if path and "workflow_dispatch" in txt:
+        line = red_verify_dispatch(o_r, repo, d.get("workflow"), "")
+        red_move(store, it, "fix-pending", f"{red_what(d)}: its newest run is {fmt_age(age)} old: {line}",
+                 data={"old_checked": True, "fix": {"status": "verify", "at": t, "entry": None, "sha": "",
+                                                    "verify_dispatched": ts(), "verify": line}})
+        return [f"old red {red_what(d)}: {line}"]
+    why = (f"retired: {d.get('workflow')} has not run for {fmt_age(age)}" +
+           (" and has no workflow_dispatch" if path else " and its workflow file is gone from main") +
+           "; its next failing run opens a new red")
+    store.update_item("red", it["id"], it["version"], {"old_checked": True, "retired": why})
+    red_close(store, store.item("red", it["id"]), "cleared", why)
+    return [f"old red {red_what(d)}: {why}"]
 
 
 def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
@@ -3591,7 +3656,7 @@ def red_spawn(store, o_r, repo, off, took, extra=()):
     u = {"workflow": pic["workflow"], "job": pic.get("job"), "jobs": pic.get("jobs"), "kind": pic.get("kind") or "test",
          "line": pic.get("line"), "run": pic.get("run") or {}, "refuted": pic.get("refuted"), "predicts": pic.get("predicts"),
          "flake": pic.get("red_kind") == "flake", "diagnosis": pic.get("diagnosis"), "key": pic["key"],
-         "names": set(pic.get("names") or [])}
+         "names": set(pic.get("names") or []), "prior_work": pic.get("prior_work")}
     for x in extra:  # the run's other reds, under the same fixer
         u["jobs"] = sorted(set(u.get("jobs") or [u["job"]]) | set(x["picture"].get("jobs") or []))
     if tier == "revert":
@@ -3698,6 +3763,12 @@ def fixer_prompt(u, wt, brief, resume_note=None):
                 "`~/bin/agentctl land` in the foreground. End at `LANDED <sha>`. If you cannot fix it, end with a line "
                 "`GAVE UP: <why>`; if it needs the owner, `~/bin/agentctl red block " + str(num) + " --owner-cause <kind> --cmd \"<command>\"` (only for a cause outside the code that only the owner can act on: never a code red) "
                 "and end `BLOCKED ON OWNER: <command>`.")
+    pw = u.get("prior_work") or {}
+    if pw.get("commits"):
+        task += (f" A PREVIOUS FIXER of this red left commits not on forgejo/main in {pw['worktree']} "
+                 f"({', '.join(pw['commits'])}): read them first (`git -C {pw['worktree']} log -p forgejo/main..HEAD`). If "
+                 "they are (part of) the fix, cherry-pick them into your worktree (never squash; keep their messages, add "
+                 f"the `Fixes-Red: {num}` trailer) and land them; never leave them behind unexamined.")
     if u.get("predicts"):
         task += (f" This red is on branch {u['predicts']}, not main yet: a run of commits that have since landed on main, "
                  "with main's inputs, so main will fail the same way next. Fix it on main before it does.")
@@ -3808,7 +3879,7 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
            "why": why, "log": os.path.join(d, f"claude-{k}.log"), "session": resume.get("session") if resume else None,
            "resume": bool(resume), "resume_note": resume.get("note") if resume else None, "diagnosis": u.get("diagnosis"),
            "effort": effort, "refuted": u.get("refuted") or [], "predicts": u.get("predicts"), "orphan": u.get("orphan"),
-           "extra_leases": [{"name": x["name"], "epoch": x["epoch"]} for x in extra]}
+           "extra_leases": [{"name": x["name"], "epoch": x["epoch"]} for x in extra], "prior_work": u.get("prior_work")}
     write_json(rec_path, rec)
     env = fixer_env(o_r, num)
     if took:
@@ -3885,7 +3956,7 @@ def red_fixer(a):
     write_json(a.record, rec)
     u = {"workflow": rec["workflow"], "job": rec.get("job"), "jobs": rec.get("jobs"), "kind": rec.get("kind") or "test",
          "line": rec.get("line"), "flake": rec.get("flake"), "diagnosis": rec.get("diagnosis"), "orphan": rec.get("orphan"),
-         "refuted": rec.get("refuted"), "predicts": rec.get("predicts"),
+         "refuted": rec.get("refuted"), "predicts": rec.get("predicts"), "prior_work": rec.get("prior_work"),
          "run": {"number": num, "databaseId": rec.get("run_id")}}
     prompt = fixer_prompt(u, wt, sync_brief(), rec.get("resume_note"))
     cli = claude_cli()

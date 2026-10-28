@@ -63,6 +63,7 @@ os.environ.setdefault("AGENTCTL_SOCK_DIR", tempfile.mkdtemp(dir="/tmp", prefix="
 # ...nor reads or writes this machine's red claims and fixers, nor scans its worktrees, nor patrols from a test's
 # processor, nor ever finds the real `claude` CLI.
 os.environ.setdefault("AGENTCTL_REDS_DIR", tempfile.mkdtemp(prefix="agentctl-reds-test-"))
+os.environ.setdefault("AGENTCTL_RED_OLD_RUN", "1e12")  # the fixtures' fixed dates never age into old reds
 os.environ.setdefault("AGENTCTL_RED_REPO", "-")
 os.environ.setdefault("AGENTCTL_RED_PATROL", "0")
 # ...nor asks Forgejo's DB (over ssh) for a run's dispatch inputs.
