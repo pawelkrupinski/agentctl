@@ -9483,7 +9483,7 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
         return did
     st["fails"] = st.get("fails", 0) + 1
     loss = (uplink or (uplink_loss if probe is None else (lambda: 0.0)))()
-    if loss > UPLINK_LOSS_MAX:
+    if loss >= UPLINK_LOSS_MAX:
         if not st.get("network"):
             msg = (f"NETWORK: the laptop's uplink loses {int(loss * 100)}% of packets to 1.1.1.1, so Forgejo (localhost:3000) "
                    f"{r}s; not a tunnel fault, nothing to restart -- the gate reads come back with the network")

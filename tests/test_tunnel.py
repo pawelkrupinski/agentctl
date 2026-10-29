@@ -149,12 +149,12 @@ class TunnelTest(unittest.TestCase):
 
     def test_a_lossy_uplink_shows_the_gate_as_network_not_unread_and_reads_retry_without_a_kick(self):
         # 2026-10-29: ~20% loss to 1.1.1.1 and the jump host kept the forward timing out; restarts only churned it
-        down, lossy, clean = (lambda: "timeout"), (lambda: 0.2 + 0.01), (lambda: 0.0)
+        down, lossy, clean = (lambda: "timeout"), (lambda: A.UPLINK_LOSS_MAX), (lambda: 0.0)  # AT the bound: lossy
         A.publish_gate_summary("o/r", "gate green · no reds", epoch=A.time.time() - 3600)
         self.assertIn("gate UNREAD", A.status_line())
         self.assertEqual(A.tunnel_watch(A.time.time(), down, uplink=lossy), "network")
         line = A.status_line()
-        self.assertIn("gate NETWORK (lossy uplink: 21% loss", line)
+        self.assertIn("gate NETWORK (lossy uplink: 20% loss", line)
         self.assertNotIn("UNREAD", line)
         calls = []
 
