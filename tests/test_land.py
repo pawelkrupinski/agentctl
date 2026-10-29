@@ -3,7 +3,7 @@ import io, os, stat, subprocess, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, Base, StallSamples, sh  # noqa: E402
+from test_agentctl import A, Base, StallSamples, sh, code_source  # noqa: E402
 
 HOOK_HEAD = "#!/bin/sh\nunset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE\ncat > /dev/null\n"
 
@@ -361,7 +361,7 @@ class LandTest(Base):
         argv = A.push_argv("forgejo", "abc")
         self.assertNotIn("--no-verify", argv)
         self.assertEqual(argv, ["git", "push", "forgejo", "abc:refs/heads/main"])
-        src = open(A.__file__ if hasattr(A, "__file__") else os.path.join(HERE, "..", "agentctl")).read()
+        src = code_source()
         land_src = src[src.index("# ---------------------------------------------------------------- land"):src.index("# ---------------------------------------------------------------- state")]
         self.assertNotIn('"--no-verify"', land_src.replace('a in ("--no-verify"', ""))
 
