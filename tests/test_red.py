@@ -88,6 +88,10 @@ class RedBase(unittest.TestCase):
                         pass
             t0 = time.time()  # gone before its directory is: a stopped wrapper still writes its verdict
             while rec.get("pid") and A.pid_alive(rec["pid"]) and time.time() - t0 < 15:
+                try:  # our own child: a zombie answers kill(0) until reaped (it cost every such test 15 s)
+                    os.waitpid(rec["pid"], os.WNOHANG)
+                except ChildProcessError:
+                    pass
                 time.sleep(0.1)
         self.tmp.cleanup()
 

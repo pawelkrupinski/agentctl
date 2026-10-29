@@ -251,11 +251,12 @@ class WaitingTest(Base):
         self.assertEqual(self.pushes_count(), 2)
 
     def hung_sbt(self, hook_body):
-        """The repo's hook calls scripts/sbt-warm, a fake whose command hangs like the sbtn of 2026-10-27; --stop logs."""
+        """The repo's hook calls scripts/sbt-warm, a fake whose command hangs like the sbtn of 2026-10-27; --stop logs;
+        --seed (a cold check tree's seed) returns at once: a hanging seed cost each test its full 60 s sleep."""
         self.stops, hung = os.path.join(self.tmp.name, "sbt-stops"), os.path.join(self.tmp.name, "sbt-hung")
         # hung: the stall clock runs only while a hung sbt is there (a --stop ends it), never on the machine's load
         self.r.write("scripts/sbt-warm", f'#!/bin/sh\n[ "$1" = --stop ] && {{ echo stop >> "{self.stops}"; rm -f "{hung}"; '
-                                         f'exit 0; }}\ntouch "{hung}"\nsleep 60\n')
+                                         f'exit 0; }}\n[ "$1" = --seed ] && exit 0\ntouch "{hung}"\nsleep 60\n')
         StallSamples(hung=hung).install(self)
         os.chmod(os.path.join(self.r.path, "scripts/sbt-warm"), 0o755)
         self.r.write("scripts/hooks/pre-push", REPO_HOOK.format(calls=self.calls).replace("exit 0\n", hook_body + "\nexit 0\n"))
