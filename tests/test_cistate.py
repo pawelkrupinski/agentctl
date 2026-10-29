@@ -227,6 +227,28 @@ class RestartGateTest(unittest.TestCase):
         self.commit("def (:\n")
         self.assertIn("py_compile", A.restart_gate()[1])
 
+    def part(self, text, commit=True):
+        lib = os.path.join(self.d, "lib", "agentctl")
+        os.makedirs(lib, exist_ok=True)
+        with open(os.path.join(lib, "part.py"), "w") as f:
+            f.write(text)
+        if commit:
+            sh(self.d, "git", "add", "-A")
+            sh(self.d, "git", "commit", "-q", "-m", "part")
+
+    def test_the_package_parts_are_code_too(self):
+        # the entry runs its part: the smoke tree must hold lib/agentctl beside it, and a part's edit is new code
+        self.commit("import os, sys\nexec(open(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'lib', "
+                    "'agentctl', 'part.py')).read())\n")
+        before = A.code_version(self.tool)
+        self.part("import sys\nsys.exit(0)\n")
+        self.assertNotEqual(A.code_version(self.tool), before)
+        self.assertEqual(A.restart_gate(), (True, ""))
+        self.part("import sys\nsys.exit(0)  # dirty\n", commit=False)
+        ok, why = A.restart_gate()
+        self.assertFalse(ok)
+        self.assertIn("lib/agentctl/part.py", why)
+
     def test_the_real_tool_passes_its_own_selftest(self):
         self.assertEqual(A.smoke_check(os.path.join(HERE, "..", "agentctl")), (True, ""))
 
