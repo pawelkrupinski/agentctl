@@ -268,6 +268,14 @@ The header of `agentctl.rules` defines each one.
   steps: the inbox projector, the notifier, the network and tunnel watches, the claims' renewal (a claim's
   activity is in the laptop's worktrees) and the fixer dispatcher. Its checks, and the batch's, run on the
   CI tier (`precommit-check.yml`, decision 1). A change's commits are fetched from `land/<id>`.
+- The clone heals itself (2026-10-29: a clone cut off by a crash loop passed for a clone and blocked all
+  landing for hours). It is cloned into `.<name>.clone-tmp-<pid>-<ms>` beside the target, verified
+  (`forgejo/main` resolves, its commits and tip tree are readable) and renamed into place. A fetch failing
+  with a corruption signature marks it suspect (`.<name>.suspect.json`); the "clone health" step probes it
+  (`clone_health`) and, broken, re-clones and swaps under `.<name>.clone.lock` (every clone user holds it
+  shared). The broken copy stays as `<repo>.broken-<ts>` (one only); a CLONE condition carries git's
+  error and closes when the probe passes. A change re-queued 3 times (or 30 min) for the same infra reason
+  opens a STALLED condition with the exact error.
 - `AGENTCTL_FORGEJO_URL` is read for the API (`<url>/api/v1`) when `AGENTCTL_FORGEJO_API` is unset.
 - The laptop: `store import --to URL` (the one-shot move) and `store use URL | --local` (the switch,
   kept in the state root so agents' own `land` / `red claim` agree). As the sync, `land` pushes
