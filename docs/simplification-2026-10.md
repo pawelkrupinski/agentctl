@@ -181,3 +181,33 @@ pin must be bumped to include 1cff127. It can ride with Agent A's next pin bump.
 `NOT FILED ... pin predates issue`.
 
 Suite: 605 tests in 129 s at the start (laptop load ~30), now 629 tests in 57-67 s (8 workers).
+
+## Agent A: item 5 (owner's item 2), one red model -- DONE
+
+- A red is (workflow, failing job, signature); `jobs` are every job failing that way, `derived` the cascade jobs.
+  Every red belongs to ONE queue family: its configured family (`red-families.json`), else its run.
+- One priority queue (the store's fixer offers: gate < fix < outside < flake, test before infra, oldest first) and
+  EXACTLY ONE FIXER PER FAMILY; at most `RED_FIXERS` (5, `$AGENTCTL_RED_FIXERS`) fixers alive; an offer waiting
+  `RED_STARVE` (45 min) is STARVED and escalates. Removed: the gate/other/overflow capacity classes, the borrow, and
+  the separate one-run and one-family rules (`red_run_holder`, `red_slots`, `red_slot_of`, `RED_CAPS`, the
+  `RED_CAPACITY_*`/`OVERFLOW` knobs).
+- Kept, tests unchanged except their wording of the wait: every red held or owner-blocked; total states with
+  self-recovery; the laptop-pressure gate; the crash-loop breaker; Fixes-Red validation; a queued fix holds its red.
+- Migration in place: `red_migrate` (store meta `red_model` 2) gives every open red its `signature` and `family`,
+  once, from the tick (server). Test: tests/test_red_capacity.py `MigrationTest`.
+
+Commits: bad870a, eeaf045.
+
+### Milestone (items 3-5): what the owner runs -- ONE pin bump to the item-5 revision
+
+ci-runner still runs its older pin. Items 3 (package: the pinned tree must contain lib/, which `git archive` of the
+commit does), 4 and 5 (the red migration runs on ci-runner's tick) all ride on one bump:
+
+```
+! cd ~/bitcashier/infra && git pull --rebase -q forgejo main && rev=$(git -C ~/bin rev-parse forgejo/main) && sed -i '' "s/rev = \"[0-9a-f]*\";/rev = \"$rev\";/" nix/hosts/ci-runner/agentctl-pin.nix && git diff --stat && git commit -qam "agentctl: pin ~/bin $rev (simplification items 2-5)" && git push forgejo main && bin/deploy ci-runner
+```
+
+then `! cd ~/bitcashier/infra && bin/deploy ci-runner --apply`. After it: `~/bin/agentctl red status` shows
+`fixers alive: n/5`, and ci-runner's journal `_SYSTEMD_UNIT:agentctl-reconciler.service` says once
+`red model 2: N open red(s) migrated in place` (or nothing when no red is open). (If Agent C's auto-pin is live by
+then, it does the bump itself once CI is green.)
