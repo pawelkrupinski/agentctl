@@ -9,7 +9,7 @@ made structural and tested here:
   - every state self-clears through the same observation that opened it.
 Plus the audit items: #7 (every workflow's newest decided run), #8 (stuck undecided runs are reds), #15 (the author
 from the change item, never an inherited environment)."""
-import json, os, subprocess, sys, time, unittest
+import json, os, signal, subprocess, sys, time, types, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -17,6 +17,28 @@ from test_agentctl import A  # noqa: E402
 from test_red import RedBase, run, FAIL_LINE, MOVIES  # noqa: E402
 
 OTHER_LINE = "[info] - BarSpec should baz *** FAILED ***"
+
+
+class DroppingStore:
+    """A store as RemoteStore meets ci-runner's through the tunnel: the n-th calls of a method named (1-based, per
+    method) raise StoreUnavailable, a reset connection; every other call answers. `calls`: (method, answer) in order,
+    a renew's own answer, 'dropped' for a dropped one."""
+
+    def __init__(self, st, **drops):
+        self.st, self.drops, self.counts, self.calls = st, drops, {}, []
+
+    def __getattr__(self, m):
+        f = getattr(self.st, m)
+
+        def call(*a, **k):
+            self.counts[m] = self.counts.get(m, 0) + 1
+            if self.counts[m] in self.drops.get(m, ()):
+                self.calls.append((m, "dropped"))
+                raise A.StoreUnavailable(f"POST /v1/store/{m}: [Errno 54] Connection reset by peer")
+            r = f(*a, **k)
+            self.calls.append((m, r if m == "renew" else "ok"))
+            return r
+        return call
 
 
 class RedsBase(RedBase):
@@ -931,6 +953,43 @@ class BackgroundSessionTest(RedsBase):
             os.environ.pop("FAKE_CLAUDE_RESULT")
         self.assertEqual(A.fixer_records()[0]["verdict"], "GAVE UP: cannot reproduce")
         self.assertEqual([s["state"] for s in self.sessions()], ["done"])
+
+    def test_a_store_that_drops_requests_never_ends_the_wrapper_nor_strands_its_lease(self):
+        # 2026-10-29, #2517: the wrapper died on `POST /v1/store/get: [Errno 54] Connection reset by peer` (ci-runner's
+        # store, through the tunnel) a minute after it started its session: nothing renewed the lease, it lapsed, and a
+        # second fixer was dispatched onto the red the first was still working on
+        self.tick()
+        it = self.only()
+        name = A.red_lease(it["data"]["key"])
+        took = self.st.acquire(name, f"laptop:fixer:red-{it['data']['key']}-1", A.RED_FIXER_TTL, A.RED_FIXER_MAX,
+                               progress="start", meta={"kind": "fixer"})
+        os.makedirs(A.reds_dir("20"), exist_ok=True)
+        path = A.reds_dir("20", "fixer.json")
+        A.write_json(path, {"run": 20, "run_id": 40, "workflow": "Main", "job": "test (rest)", "kind": "test",
+                            "lease": name, "epoch": took["epoch"], "worktree": self.r.worktree("repo-wt-red-20"),
+                            "started": A.ts(), "log": A.reds_dir("20", "claude-1.log")})
+        # the 2nd set_meta: the session's id, sent when `claude agents` first lists it
+        flaky = DroppingStore(self.st, get={2, 3, 4}, set_meta={2}, renew={1}, release={1})
+        saved = A.Store, {sg: signal.getsignal(sg) for sg in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+        os.environ.update(FAKE_CLAUDE_SLEEP="10", AGENTCTL_RED_RENEW="0.3", AGENTCTL_LEASE_SECRET=took["secret"])
+        A.Store = lambda *a, **k: flaky
+        try:
+            rc = A.red_fixer(types.SimpleNamespace(record=path, repo=self.r.path))
+        finally:
+            A.Store = saved[0]
+            for sg, h in saved[1].items():
+                signal.signal(sg, h)
+            os.environ.update(FAKE_CLAUDE_SLEEP="0")
+            os.environ.pop("AGENTCTL_RED_RENEW", None)
+            os.environ.pop("AGENTCTL_LEASE_SECRET", None)
+        rec = json.load(open(path))
+        self.assertEqual((rc, rec["verdict"]), (0, "LANDED abcdef1234"))
+        last_drop = max(i for i, (m, r) in enumerate(flaky.calls) if r == "dropped" and m != "release")
+        self.assertIn(("renew", "ok"), flaky.calls[last_drop + 1:], flaky.calls)  # renewed once the store answered
+        lease = self.st.get(name)
+        self.assertFalse(A.lease_is_live(lease, time.time()))  # released with its verdict: the release was asked again
+        self.assertEqual(A.lease_meta(lease)["outcome"], "LANDED abcdef1234")
+        self.assertEqual(A.lease_meta(lease)["session"], rec["session"])  # sent again: a resume goes back to it
 
     def test_labels(self):
         self.assertEqual(A.fixer_label({"run": 2392, "workflow": "Identity model convergence",

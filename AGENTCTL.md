@@ -406,7 +406,8 @@ agentctl red claim <run> [--note "<what>"]     # an agent assigned a red runs th
 agentctl red block <run> --cmd "<command>" [--cause <outage>] [--until-green <workflow> | --until-http <url> | --until-tcp <host:port>]
                                                # it waits on the owner: BLOCKED ON OWNER (assigned, shown loudly) until
                                                # its probe passes (default: the red's own workflow goes green)
-agentctl red beat <run> --note "<what>"       # renew your lease by hand (a new note is progress)
+agentctl red beat <run> --note "<what>"       # renew your lease by hand (a new note is progress; in a dispatched
+                                               # fixer only its note: its wrapper renews the lease)
 agentctl red release <run> [--any]
 agentctl red status [-v]                       # every red: its state, holder or offer, deadline (`red list`: old name)
 agentctl red dispatch <run> [--force]          # the red's offer at top priority: the dispatcher takes it now
@@ -435,6 +436,10 @@ agent must be assigned to it".
   convergence takes-drift-2 (united-states)`, `orphan · movies-wt-proxy-park`); `claude attach | logs | stop <id>` work
   on them. Its wrapper tracks it by that id, renews its lease by its transcript and worktree, takes its verdict from its
   final answer and `claude stop`s it when the lease goes (`claude agents --all` keeps it listed, `attach` reopens it).
+  A store that does not answer (`StoreUnavailable`: the tunnel to ci-runner reset a request) decides nothing: the
+  wrapper asks again at its next poll, and its release up to `RED_RELEASE_ASKS` times (2026-10-29, #2517: one reset
+  ended the wrapper a minute in, its lease lapsed with nobody renewing it, and a second fixer was dispatched onto the
+  red the first was still fixing).
 - **Heartbeats.** A claim lives while its process lives (a dispatched fixer: while its transcript grows), or while its worktree
   commits or moves. 30 min with none (`$AGENTCTL_RED_STALE_MIN`): STALE, counted for nobody, removed by `agentctl
   sweep`, and the red can be taken over.

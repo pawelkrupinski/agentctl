@@ -3002,6 +3002,7 @@ RED_RECURRING = 3            # landed fixes the same failure outlived: `recurrin
 RED_TICK_INTERVAL = 15       # seconds between the processor's red ticks ($AGENTCTL_RED_TICK)
 RED_FIXER_WALL = 3 * 3600    # a dispatched fixer's maximum wall time ($AGENTCTL_RED_FIXER_WALL)
 RED_RENEW_EVERY = 60         # a fixer's wrapper renews its lease this often
+RED_RELEASE_ASKS = 12        # ...and asks a store that does not answer this many times, a poll apart, to release it
 STUCK_FACTOR, STUCK_FLOOR = 3, 30 * 60  # audit #8: a run undecided past max(3 x its workflow's p90, 30 min) is a red
 BRIEF = os.path.join(HOME, "bin", "briefs", "movies-agent-preamble.md")
 BRIEF_SRC = "/private/tmp/claude-501/-Users-pawel-bitcashier/974d50a6-c3f9-4d25-a24f-55345ffa6de5/scratchpad/movies-agent-preamble.md"
@@ -4606,6 +4607,18 @@ def fixer_mark(rec, wt):
     return f"{size}:{head}:{hashlib.sha1(st.encode()).hexdigest()[:10]}"
 
 
+def fixer_meta_sent(st, leases, meta):
+    """Merge a fixer's meta (worktree, session, pid, log: a resume finds its session by it) into its leases, the store
+    keeping only its holder's: True, or False when the store did not answer and the wrapper must send it again."""
+    try:
+        for n_, e_, s_ in leases:
+            st.set_meta(n_, e_, s_, meta)
+        return True
+    except StoreUnavailable as e:
+        print(f"{ts()} the store did not answer ({e}): the leases' meta is sent again", flush=True)
+        return False
+
+
 # A FIXER IS A BACKGROUND CLAUDE SESSION (the owner, 2026-10-29: "I want fixers to be visible in ui"): `claude --bg -n
 # <label>` starts it, so `claude agents` lists it by its label and the owner can `claude attach | logs | stop` it. The
 # wrapper tracks it by the id --bg prints, never a child pid: `claude agents --json --all` says working / done, its
@@ -4710,13 +4723,16 @@ def red_fixer(a):
             print(f"RED FIXER {rec['workflow']} #{num}: DUPLICATE")
             return 0
         epoch, secret = took["epoch"], took["secret"]
-    meta = {"worktree": wt, "session": session, "pid": me, "log": rec["log"]}
-    row = st.get(name)
-    if row and row["epoch"] == epoch and row["secret"] == secret:
-        st.note(name, epoch, secret, f"dispatched: {rec.get('why')}")
-        st.set_meta(name, epoch, secret, meta)
-        for n_, e_, s_ in extra:
-            st.set_meta(n_, e_, s_, meta)
+    leases = [(name, epoch, secret)] + extra
+    meta, meta_due = {"worktree": wt, "session": session, "pid": me, "log": rec["log"]}, False
+    try:
+        row = st.get(name)
+        if row and row["epoch"] == epoch and row["secret"] == secret:
+            st.note(name, epoch, secret, f"dispatched: {rec.get('why')}")
+            meta_due = not fixer_meta_sent(st, leases, meta)
+    except StoreUnavailable as e:  # its lease unread: the meta is sent at the polls below
+        print(f"{ts()} the store did not answer ({e}): the leases' meta is sent again", flush=True)
+        meta_due = True
     rec.update(pid=me, process_start=process_start(me), session=session, lease=name, epoch=epoch)
     write_json(a.record, rec)
     u = {"workflow": rec["workflow"], "job": rec.get("job"), "jobs": rec.get("jobs"), "kind": rec.get("kind") or "test",
@@ -4747,8 +4763,11 @@ def red_fixer(a):
 
         def cancelled(signum, _frame):  # the wrapper is stopped: its session goes with it
             bg_stop(cli, bid)
-            for n_, e_, s_ in [(name, epoch, secret)] + extra:
-                st.release(n_, e_, s_, outcome="STOPPED: the fixer's wrapper was stopped")
+            for n_, e_, s_ in leases:
+                try:
+                    st.release(n_, e_, s_, outcome="STOPPED: the fixer's wrapper was stopped")
+                except StoreUnavailable:  # it lapses by its TTL instead
+                    pass
             os._exit(143)
         for sg in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
             signal.signal(sg, cancelled)
@@ -4764,8 +4783,7 @@ def red_fixer(a):
                 if rec["transcript"]:
                     rec["log"] = rec["transcript"]
                 meta.update(session=rec["session"], log=rec["log"], bg_id=bid)
-                for n_, e_, s_ in [(name, epoch, secret)] + extra:
-                    st.set_meta(n_, e_, s_, meta)
+                meta_due = not fixer_meta_sent(st, leases, meta)
                 write_json(a.record, rec)
             missing = missing + 1 if ent is None else 0
             if (ent or {}).get("state") == "done" or missing >= 3:  # finished its turn, or gone from `claude agents`
@@ -4775,18 +4793,31 @@ def red_fixer(a):
                 stop = f"TIMED OUT after {int(wall // 60)} min (maximum wall time)"
             elif os.path.exists(os.path.join(wt, "RED-STOP.md")):
                 stop = "STOPPED: " + open(os.path.join(wt, "RED-STOP.md")).readline().strip()
-            elif not held(st.get(name)):  # revoked (the red cleared, a release, its own block): stop at once
-                outcome = str(lease_meta(st.get(name)).get("outcome") or "")
-                stop = (outcome if outcome.startswith("BLOCKED ON OWNER") else
-                        "STOPPED: the red's lease was lost (expired without progress, past its max hold, or revoked)")
-            elif time.time() - last_renew >= every:
-                last_renew = time.time()
-                note = (read_record(a.record) or {}).get("note")
-                mark = fixer_mark(rec, wt)
-                for n_, e_, s_ in extra:  # the run's other reds: renewed with it (a revoked one simply ends)
-                    st.renew(n_, e_, s_, mark, RED_FIXER_TTL, note=note)
-                if st.renew(name, epoch, secret, mark, RED_FIXER_TTL, note=note) == "lost":
-                    stop = "STOPPED: the red's lease was lost (expired without progress, past its max hold, or revoked)"
+            else:
+                # A store that does not answer decides nothing: it is asked again at the next poll, and a lease that
+                # lapsed meanwhile reads as lost once it answers. 2026-10-29, #2517: `POST /v1/store/get: Connection
+                # reset by peer` (ci-runner's store, through the tunnel) ended the wrapper a minute in; nothing renewed
+                # its lease, and a second fixer was dispatched onto the red its session was still working on.
+                try:
+                    if meta_due:
+                        meta_due = not fixer_meta_sent(st, leases, meta)
+                    row = st.get(name)
+                    if not held(row):  # revoked (the red cleared, a release, its own block): stop at once
+                        outcome = str(lease_meta(row).get("outcome") or "")
+                        stop = (outcome if outcome.startswith("BLOCKED ON OWNER") else
+                                "STOPPED: the red's lease was lost (expired without progress, past its max hold, or "
+                                "revoked)")
+                    elif time.time() - last_renew >= every:
+                        note = (read_record(a.record) or {}).get("note")
+                        mark = fixer_mark(rec, wt)
+                        for n_, e_, s_ in extra:  # the run's other reds: renewed with it (a revoked one simply ends)
+                            st.renew(n_, e_, s_, mark, RED_FIXER_TTL, note=note)
+                        if st.renew(name, epoch, secret, mark, RED_FIXER_TTL, note=note) == "lost":
+                            stop = ("STOPPED: the red's lease was lost (expired without progress, past its max hold, "
+                                    "or revoked)")
+                        last_renew = time.time()
+                except StoreUnavailable as e:
+                    print(f"{ts()} the store did not answer ({e}): asked again at the next poll", flush=True)
             if stop:
                 verdict = stop
         bg_stop(cli, bid)  # done or stopped: the session ends (`claude agents --all` keeps it, `claude attach` reopens it)
@@ -4797,8 +4828,16 @@ def red_fixer(a):
     line = f"RED FIXER {rec['workflow']} #{num}: {verdict[:300]}"
     tail = [l[:300] for l in text.splitlines()[-INBOX_TAIL:]]
     inbox_write("red fixer", line, [line], tail, 0 if verdict.startswith("LANDED") else 1, cwd=wt)
-    for n_, e_, s_ in [(name, epoch, secret)] + extra:
-        st.release(n_, e_, s_, outcome=verdict[:600], notes="\n".join(tail[-8:]))
+    if meta_due:  # never sent while the session ran: before the release, so a resume finds its session
+        fixer_meta_sent(st, leases, meta)
+    for n_, e_, s_ in leases:
+        for left in range(RED_RELEASE_ASKS, 0, -1):  # a store that does not answer is asked again, a poll apart
+            try:
+                st.release(n_, e_, s_, outcome=verdict[:600], notes="\n".join(tail[-8:]))
+                break
+            except StoreUnavailable as e:  # never answered: the lease lapses by its TTL, and the red is offered again
+                print(f"{ts()} could not release {n_} ({e}){'' if left > 1 else ': it lapses by its TTL'}", flush=True)
+                time.sleep(poll)
     rec.update(ended=ts(), rc=0 if verdict.startswith("LANDED") else 1, verdict=verdict)
     write_json(a.record, rec)
     if not rec.get("orphan"):  # an orphan's tree is its author's, never litter
