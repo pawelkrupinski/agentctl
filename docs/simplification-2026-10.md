@@ -1,7 +1,6 @@
 # agentctl simplification, 2026-10-29 onward: progress log
 
-**PACKAGE SPLIT IN PROGRESS from 22:50 (Agent A): ~/bin/agentctl is being cut into lib/agentctl/*.py (one shared
-namespace). Avoid editing agentctl itself until the split lands; rebase onto it then.**
+**PACKAGE SPLIT LANDED 23:30 (Agent A, 2ce6ce6): agentctl's code is lib/agentctl/*.py now; edit the parts, not the 73-line entry.**
 
 Agents (owner, 2026-10-29 evening): **Agent A** (core: items 2-7, this log's Agent A sections), **Agent B** (item 1's
 workflow and suite speed, 9, 10, 8), **Agent C** (infra: the Actions branch, item 11). Item 1 was finished by Agent A
@@ -121,3 +120,24 @@ test `Repo` (a bare remote + clone, built a few hundred times per run) is copied
   a processor run left the flag set, and test_token's secrets test then failed at random.
 - tests/test_harness.py checks each rule. The suite is green under `env -i PATH=/usr/bin:/bin HOME=/nonexistent`.
 Commit 8f054a9.
+
+## Agent A: item 3 (owner's item 6), the package split -- DONE (23:30)
+
+- `~/bin/agentctl` is a 73-line entry: its docstring and the loader. The code is `lib/agentctl/` in 31 parts (core,
+  wait, owned, ciwhy, branches, red, fixer, land, gov, slots, landwatch, waiting, queue, remote, batch, tools, cleanup,
+  maint, store, server, upkeep, watchdog, inbox, recovery, status, live, cli), listed in order in
+  `lib/agentctl/__init__.py` PARTS.
+- ONE NAMESPACE, deliberately: the entry runs every part, in order, in its own module namespace -- exactly the old
+  file's semantics, so the move changed no behaviour (checked: the parts' concatenation equals the old file except the
+  groundwork commit), `agentctl.<name>` is every name, and the tests' `A.<name> = ...` patches still reach every part.
+  `import agentctl` with `~/bin/lib` on sys.path loads the same. Real module boundaries (imports between parts) can
+  come part by part later.
+- The entry finds `lib/` relative to its own real path, so ci-runner's `python3 <pinned tree>/agentctl` works.
+- Live safety: first a843bb1 (code_version, the restart gate and the smoke check cover every part) went live, the
+  laptop processor re-execed onto it, then the split; the processor (pid 58047) re-execed onto the split with its
+  token (23:30).
+- Tests that read the source use `code_source()` (the entry and its parts in order).
+- Rebased over 869b48c (token fix), 7c3c342 (FIXER_SWAP_GB: now in lib/agentctl/gov.py) and Agent B's harness.
+
+Commits: a843bb1 (groundwork), 955ad34 .. 2ce6ce6 (one part per commit, the suite green before each).
+Pin bump: needed for ci-runner to run it (behaviour unchanged, so it can ride with item 4's bump).
