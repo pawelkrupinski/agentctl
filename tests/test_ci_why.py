@@ -147,6 +147,18 @@ class CiWhyTest(FakeForge):
         self.assertIn("[infra] timings: 0-length log", out)
         self.assertIn("run rerun 39 --failed", out)
 
+    def test_a_log_the_forge_did_not_serve_is_unreadable_never_a_0_length_infra_log(self):
+        # convergence #2473 (run 3656): the ci-runner actions API reset the log reads, and the takes-drift rows' real
+        # flip failures were read as 0-length logs, INFRA, and handed to a diagnose-only fixer
+        self.scenario([{**job("takes-drift-2 (germany)", conclusion="failure"), "steps": [step("Check drift", "failure")]}])
+        os.remove(os.path.join(self.d, "run-39.log"))
+        rc, out, _ = self.why()
+        self.assertNotIn("0-length log", out)
+        self.assertNotIn("INFRA-SHAPED", out)
+        self.assertIn("[unclear] takes-drift-2 (germany): LOG UNREADABLE", out)
+        self.assertIn("fake gh: no run-39.log", out)
+        self.assertIn("verdict: UNCLEAR", out)
+
     def test_artifact_exists_is_infra_and_silent_log_is_unclear(self):
         self.scenario([{**job("a", conclusion="failure"), "steps": [step("Upload", "failure")]},
                        {**job("b", conclusion="failure"), "steps": [step("Resolve", "failure")]}],

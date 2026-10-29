@@ -246,6 +246,8 @@ main. For each red run it shows:
   - `INFRA-SHAPED`, with the `rerun --failed` command. Covers failures in a setup step, a 0-length log,
     `artifact already exists`, ENOENT, docker, disk or connection errors;
   - `UNCLEAR`, when a log has lines but no failure marker (truncated, or the runner was lost);
+    also `LOG UNREADABLE`, when forgejo-gh could not serve the log (read twice; its error named): no log was read, so
+    it is never a 0-length one (convergence #2473 was handed to a diagnose-only fixer as INFRA that way);
 - a newer run in flight that may clear it;
 - the clearing rule.
 

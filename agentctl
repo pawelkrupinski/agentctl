@@ -489,10 +489,20 @@ def raw_tails(log_text, n=3):
     return out
 
 
-def fetch_failed_log(o_r, run_id):
+def read_log(o_r, *args):
+    """A log forgejo-gh serves, read twice at most. A read it failed (the ci-runner actions API resetting or refusing
+    the connection under load) raises with its stderr: never an empty log, which ci-why read as a 0-length one, INFRA
+    (convergence #2473, run 3656: the takes-drift rows' flip failures handed to a diagnose-only fixer)."""
     env = dict(os.environ, GH_TOKEN=token(o_r))
-    r = subprocess.run([FORGEJO_GH, "run", "view", str(run_id), "--log-failed", "-R", o_r], capture_output=True, text=True, env=env, timeout=300)
-    return r.stdout
+    for attempt in (1, 2):
+        r = subprocess.run([FORGEJO_GH, "run", "view", *args, "-R", o_r], capture_output=True, text=True, env=env, timeout=300)
+        if r.returncode == 0:
+            return r.stdout
+    raise RuntimeError((r.stderr.strip().splitlines() or [f"exit {r.returncode}"])[-1][:200])
+
+
+def fetch_failed_log(o_r, run_id):
+    return read_log(o_r, str(run_id), "--log-failed")
 
 
 def fetch_takes_verdicts(o_r, run_id):
@@ -517,27 +527,26 @@ def is_measure_run(d):
 
 
 def fetch_job_log(o_r, run_id, job_id):
-    env = dict(os.environ, GH_TOKEN=token(o_r))
-    r = subprocess.run([FORGEJO_GH, "run", "view", str(run_id), "--log", "--job", str(job_id), "-R", o_r],
-                       capture_output=True, text=True, env=env, timeout=300)
-    return r.stdout
+    return read_log(o_r, str(run_id), "--log", "--job", str(job_id))
 
 
 ANNOTATION = re.compile(r"::error\b[^:]*::")
 MAX_JOB_LOG_FETCHES = 5
 
 
-def job_log_lines(o_r, run_id, job, tail):
+def job_log_lines(o_r, run_id, job, tail, unread=None):
     """Relevant lines from a job's WHOLE log. Forgejo's per-step slices (what --log-failed prints) are shifted by a
     few lines from the stored log, so a failed step's slice can hold only its neighbours' checkout/cache lines while
     its `::error` annotation and output sit just past it (run 1988, takes (united-kingdom)). `::error` annotations
-    first, else the strong/weak markers."""
+    first, else the strong/weak markers. `unread`, a list: a failed read's error is appended to it."""
     jid = job.get("databaseId") if isinstance(job, dict) else None
     if not jid:
         return []
     try:
         log = fetch_job_log(o_r, run_id, jid)
-    except Exception:
+    except Exception as e:
+        if unread is not None:
+            unread.append(str(e))
         return []
     clean = [LOG_TS.sub("", ANSI.sub("", (l.split("\t", 2)[2] if l.count("\t") >= 2 else l))).rstrip() for l in log.splitlines()]
     notes = [l[:300] for l in clean if ANNOTATION.search(l)]
@@ -1270,10 +1279,12 @@ def explain_run_jobs(o_r, run, tail, repo=None):
     d = gh_json(o_r, "run", "view", str(rid), "--json", "jobs,headSha,url,number,status,conclusion,workflowName")
     num = d.get("number") or run.get("number")
     failed = [j for j in d.get("jobs") or [] if j.get("conclusion") in ("failure", "timed_out")]
+    unread = []  # why the failed log, and a job's own, could not be read: no log was read, so none is 0-length
     try:
         log = fetch_failed_log(o_r, rid) if failed else ""
     except Exception as e:
         log = ""
+        unread.append(str(e))
         err(f"could not read run {rid}'s failed log: {e}")
     per, raws, timed = relevant_lines(log, tail), raw_tails(log), timed_out_jobs(log)
     lines = [f"  run id {rid} (#{num}) {d.get('url') or run.get('url')}",
@@ -1289,8 +1300,11 @@ def explain_run_jobs(o_r, run, tail, repo=None):
         setup = bool(bad) and bool(SETUP_STEP.match(bad[0]["name"]))
         if not jl and not setup and fetched < MAX_JOB_LOG_FETCHES:  # a shifted step slice: read the whole job log
             fetched += 1
-            jl = job_log_lines(o_r, rid, j, tail)
+            jl = job_log_lines(o_r, rid, j, tail, unread)
         kind, why = classify_job(j, jl, raws.get(j["name"], (0, [])), j["name"] in timed or any(STEP_TIMED_OUT in l for l in jl))
+        if unread and not jl and not setup:
+            kind, why = "unclear", (f"LOG UNREADABLE ({unread[-1]}): no log was read, so nothing says infra or test -- "
+                                    f"read `forgejo-gh run view {rid} --log-failed` again; never rerun on this alone")
         kinds.append(kind)
         # a job with no error line is known by its failing STEP (a red is its failing test or step, never its job name)
         per_job.append((j["name"], kind, jl[0] if jl else (f"step failed: {bad[0]['name']}" if bad else "")))
