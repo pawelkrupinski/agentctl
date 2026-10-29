@@ -254,13 +254,13 @@ class QueueTest(WaitingTest):
         self.assertEqual(len(self.calls_of("--range")), 1)
         self.assertEqual(self.pushed(), ["push remote="])
 
-    def fake_forgejo(self, status, head):
+    def fake_forgejo(self, status, head, ref="check/e1"):
         calls = []
 
         def api(o_r, method, path, params=None):
             calls.append((method, path))
             if path == "actions/runs":
-                return {"workflow_runs": [{"id": 99, "commit_sha": head, "prettyref": "check/e1"}]}
+                return {"workflow_runs": [{"id": 99, "commit_sha": head, "prettyref": ref}]}
             if path == "actions/runs/99":
                 return {"id": 99, "index_in_repo": 7, "status": status, "html_url": "http://f/runs/7"}
             return None
@@ -284,6 +284,25 @@ class QueueTest(WaitingTest):
         self.assertFalse(ok)
         self.assertIn("[error] BROKEN is in the tree", out)
         self.assertIn(("DELETE", "branches/check%2Fe1"), calls)
+
+    def test_the_batchs_check_on_ci_runner_is_the_fast_only_set_on_a_check_fast_branch(self):
+        head = sh(self.r.path, "git", "rev-parse", "HEAD").strip()
+        calls = self.fake_forgejo("success", head, ref="check/fast-batch-x")
+        ok, out = A.remote_check(self.r.path, {"id": "batch-x"}, "base", head, "--fast-only")
+        self.assertTrue(ok, out)
+        self.assertIn(("DELETE", "branches/check%2Ffast-batch-x"), calls)  # the branch names the mode for the workflow
+        seen, saved = [], (A.remote_check, A.remote_checks_supported, A.precheck_hook, A.batch_mode)
+        A.remote_check = lambda repo, e, base, tip, mode, own=None: seen.append((e["id"], mode)) or (True, "ok")
+        A.remote_checks_supported = lambda tree: True
+        A.precheck_hook = lambda tree: "/hook"
+        A.batch_mode = lambda hook: "--fast-only"
+        os.environ["AGENTCTL_ROLE"] = "server"
+        try:
+            self.assertEqual(A.batch_check(self.r.path, self.r.path, self.r.path, "b" * 40, "c" * 40), (True, "ok", False))
+        finally:
+            A.remote_check, A.remote_checks_supported, A.precheck_hook, A.batch_mode = saved
+            os.environ.pop("AGENTCTL_ROLE")
+        self.assertEqual(seen, [("batch-cccccccccc", "--fast-only")])
 
     def test_a_check_the_laptop_failed_is_queued_again_not_rejected(self):
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
