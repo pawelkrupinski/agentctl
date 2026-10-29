@@ -147,6 +147,33 @@ class TunnelTest(unittest.TestCase):
         self.assertEqual(A.tunnel_watch(1520, down, uplink=clean), "down")
         self.assertEqual(A.tunnel_watch(1530, down, uplink=clean), "kicked")
 
+    def test_a_lossy_uplink_shows_the_gate_as_network_not_unread_and_reads_retry_without_a_kick(self):
+        # 2026-10-29: ~20% loss to 1.1.1.1 and the jump host kept the forward timing out; restarts only churned it
+        down, lossy, clean = (lambda: "timeout"), (lambda: 0.2 + 0.01), (lambda: 0.0)
+        A.publish_gate_summary("o/r", "gate green · no reds", epoch=A.time.time() - 3600)
+        self.assertIn("gate UNREAD", A.status_line())
+        self.assertEqual(A.tunnel_watch(A.time.time(), down, uplink=lossy), "network")
+        line = A.status_line()
+        self.assertIn("gate NETWORK (lossy uplink: 21% loss", line)
+        self.assertNotIn("UNREAD", line)
+        calls = []
+
+        def read():
+            calls.append(1)
+            raise RuntimeError("forgejo-gh run list: timed out")
+        A.tunnel_down, saved = (lambda e: True), A.tunnel_down
+        try:
+            with self.assertRaises(RuntimeError):
+                A.tunnel_retry(read)
+        finally:
+            A.tunnel_down = saved
+        self.assertEqual((len(calls), self.kicks), (2, []))  # one plain retry, no restart, no 15 s wait
+        self.assertEqual(A.tunnel_watch(A.time.time(), lambda: "ok"), "restored")
+        self.assertIn("gate UNREAD", A.status_line())  # the NETWORK reading is gone with the outage
+        # the uplink fine and the forward dead (05:27-05:50): the end-to-end probe kicks after two failures
+        self.assertEqual(A.tunnel_watch(A.time.time(), down, uplink=clean), "down")
+        self.assertEqual(A.tunnel_watch(A.time.time() + 10, down, uplink=clean), "kicked")
+
     def test_network_change_kicks_the_tunnel_and_marks_the_gate(self):
         A._last_route[0] = "unseen"
         home, phone = ("en0", "172.30.154.83"), ("en0", "172.20.10.1")

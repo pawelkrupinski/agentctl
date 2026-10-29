@@ -8771,6 +8771,9 @@ def write_snapshot(d, store=None):
                  waiting=[e["worktree"] for e in waiting], queued=[e["worktree"] for e in queued])
 
 
+NETWORK_SHOWN_FOR = 600  # a lossy-uplink reading this recent turns the status line's UNREAD into NETWORK
+
+
 def status_line(now_=None):
     """The status line from state.json alone (no git, no Forgejo, no subprocess): the gate line, the waiting and
     checking changes, the unread inbox; `RECONCILER STALLED since HH:MM` when the tick is over 2 min old."""
@@ -8778,8 +8781,14 @@ def status_line(now_=None):
     d = state_read()
     epoch, _repo, line = published_summary()
     gate = line or "gate ?"
+    net = d.get("network") or {}
+    lossy = net.get("at") and t - float(net["at"]) < NETWORK_SHOWN_FOR
     if epoch and t - epoch > GATE_SUMMARY_MAX_AGE:
-        gate = f"gate UNREAD (as of {time.strftime('%H:%M', time.localtime(epoch))}: {gate[5:]})"
+        gate = (f"gate NETWORK (lossy uplink: {int(float(net.get('loss') or 0) * 100)}% loss; as of "
+                f"{time.strftime('%H:%M', time.localtime(epoch))}: {gate[5:]})" if lossy else
+                f"gate UNREAD (as of {time.strftime('%H:%M', time.localtime(epoch))}: {gate[5:]})")
+    elif not line and lossy:
+        gate = f"gate NETWORK (lossy uplink: {int(float(net.get('loss') or 0) * 100)}% loss)"
     short = lambda wts: ", ".join(re.sub(r"^.*-wt-", "", os.path.basename(w or "")) for w in wts)
     waiting, queued = d.get("waiting") or [], d.get("queued") or []
     parts = [gate]
@@ -9375,8 +9384,10 @@ def tunnel_retry(fn):
         if not tunnel_down(e):
             raise
         err(f"the Forgejo tunnel refused or timed out ({str(e)[:80]}); reopening it ({TUNNEL_LABEL}) once and retrying")
-        if tunnel_kick_rate_limited() and not read_json_file(tunnel_state_path()).get("network"):  # the uplink's
-            launchctl_kick()  # fault (tunnel_watch): a restart only churns the tunnel
+        if read_json_file(tunnel_state_path()).get("network"):  # the uplink loses packets (tunnel_watch): a restart only
+            return fn()  # churns the tunnel, and a wait for it to answer costs every read 15 s -- one plain retry
+        if tunnel_kick_rate_limited():
+            launchctl_kick()
         for _ in range(15):
             if tunnel_probe() == "ok":
                 break
@@ -9467,6 +9478,8 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
         if st.get("fails") or st.get("pending_since") or st.get("network"):
             st.update(fails=0, pending_since=None, escalated=False, network=False)
             write_json_file(tunnel_state_path(), st)
+        if (state_read().get("network") or {}).get("at"):
+            state_update(network=None)
         return did
     st["fails"] = st.get("fails", 0) + 1
     loss = (uplink or (uplink_loss if probe is None else (lambda: 0.0)))()
@@ -9479,7 +9492,10 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
                            command="tunnel")
         st.update(network=True, pending_since=None, escalated=False)  # the kick/escalation clock starts on a good uplink
         write_json_file(tunnel_state_path(), st)
+        state_update(network={"loss": loss, "at": t, "forgejo": r})  # the status line says NETWORK, not a bare UNREAD
         return "network"
+    if (state_read().get("network") or {}).get("at"):
+        state_update(network=None)  # the uplink is fine: a dead forward is the tunnel's (the kickstart below)
     did = "down"
     if st["fails"] >= 2 and t - st.get("last_kick", 0) >= TUNNEL_KICK_MIN_GAP:
         err(f"the Forgejo tunnel {r} {st['fails']} probes in a row; kickstarting {TUNNEL_LABEL}")
