@@ -170,5 +170,247 @@ class StateTest(LiveBase):
         self.assertIsNone(A.live_tail_info(p)["stop"])
 
 
+class MaskTest(unittest.TestCase):
+    def test_credentials_are_masked(self):
+        M = A.LIVE_MASKED
+        for secret in ("ghp_" + "a1B2" * 9, "github_pat_" + "x1" * 25, "sk-ant-api03-" + "Ab3" * 10, "AKIAIOSFODNN7EXAMPLE",
+                       "hvs.CAESIJ" + "q9" * 12, "xoxb-1234-5678-abcdEFGH", "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4"):
+            self.assertEqual(A.live_mask_text(f"use {secret} now"), f"use {M} now", secret)
+        self.assertEqual(A.live_mask_text("export FORGEJO_TOKEN=3f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a"),
+                         f"export FORGEJO_TOKEN={M}")
+        self.assertEqual(A.live_mask_text('{"password": "hunter2hunter2X9"}'), '{"password": "' + M + '"}')
+        self.assertEqual(A.live_mask_text("Authorization: Bearer abcdef0123456789abcdef01"), f"Authorization: Bearer {M}")
+        self.assertEqual(A.live_mask_text("git push https://pawel:s3cretPass@host/r.git"),
+                         f"git push https://pawel:{M}@host/r.git")
+        pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----"
+        self.assertEqual(A.live_mask_text(f"key:\n{pem}\nok"), f"key:\n{M}\nok")
+
+    def test_ordinary_text_is_left_alone(self):
+        for s in ("commit 0f24259a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e", "inputTokens: 207", "token budget exhausted",
+                  "val token = readToken()", "password: $VAULT_PASSWORD", "the secret sauce is caching",
+                  "/Users/pawel/.claude/projects/-Users-pawel-projects-movies/2bee16b9-f06c-4c34.jsonl",
+                  "https://forgejo.example/o/r/actions/runs/3785"):
+            self.assertEqual(A.live_mask_text(s), s)
+
+    def test_json_values_under_secret_keys(self):
+        got = A.live_mask({"input": {"command": "ls", "api_key": "abcdefgh", "auth_token": "x", "tokens": 3,
+                                     "password": "$P"}, "list": ["ghp_" + "Z9" * 18]})
+        self.assertEqual(got, {"input": {"command": "ls", "api_key": A.LIVE_MASKED, "auth_token": "x", "tokens": 3,
+                                         "password": "$P"}, "list": [A.LIVE_MASKED]})
+
+
+class TailTest(LiveBase):
+    def lines(self, tail):
+        out, reset, _more = tail.poll()
+        return [(o, x if isinstance(x, int) else x.decode()) for o, x in out], reset
+
+    def test_growth_partial_lines_truncation_and_rotation(self):
+        p = os.path.join(self.root, "t.jsonl")
+        with open(p, "wb") as f:
+            f.write(b"one\ntw")
+        t = A.LiveTail(p)
+        self.assertEqual(self.lines(t), ([(4, "one")], None))
+        self.assertEqual(self.lines(t), ([], None))  # half a line is held back
+        with open(p, "ab") as f:
+            f.write(b"o\nthree\n")
+        self.assertEqual(self.lines(t), ([(8, "two"), (14, "three")], None))
+        with open(p, "wb") as f:  # truncated in place
+            f.write(b"x\n")
+        self.assertEqual(self.lines(t), ([(2, "x")], "truncated"))
+        os.rename(p, p + ".1")  # rotated: a new file at the path
+        with open(p, "wb") as f:
+            f.write(b"new\n")
+        self.assertEqual(self.lines(t), ([(4, "new")], "rotated"))
+        t.close()
+        t = A.LiveTail(p, offset=4)  # resuming past the history
+        with open(p, "ab") as f:
+            f.write(b"more\n")
+        self.assertEqual(self.lines(t), ([(9, "more")], None))
+        t.close()
+        t = A.LiveTail(p, offset=999)
+        self.assertEqual(self.lines(t), ([(4, "new"), (9, "more")], "truncated"))
+        t.close()
+
+    def test_bounded_reads_and_lines(self):
+        p = os.path.join(self.root, "big.jsonl")
+        with open(p, "wb") as f:
+            f.write(b"a" * 50 + b"\n" + b"b" * 10 + b"\n" + b"c" * 30 + b"\nd\n")
+        t = A.LiveTail(p, chunk=16, line_max=20)
+        got, more = [], True
+        while more:
+            out, _r, more = t.poll()
+            got += out
+        t.close()
+        self.assertEqual(got, [(51, 51), (62, b"b" * 10), (93, 31), (95, b"d")])  # over line_max: its size only
+
+    def test_entries_skip_bookkeeping_and_mask(self):
+        self.assertIsNone(A.live_entry(entry("api-request-blob", message={"content": "x"}).encode()))
+        self.assertIsNone(A.live_entry(b"   "))
+        e = A.live_entry(entry("assistant", parentUuid="p", message={
+            "role": "assistant", "usage": {"x": 1}, "stop_reason": "tool_use", "content": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": "echo ghp_" + "Q1" * 18}}]}).encode())
+        self.assertEqual(e["message"], {"role": "assistant", "stop_reason": "tool_use", "content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "echo " + A.LIVE_MASKED}}]})
+        self.assertNotIn("parentUuid", e)
+        self.assertEqual(A.live_entry(b"not json sk-ant-" + b"x1" * 12), {"type": "raw", "text": "not json " + A.LIVE_MASKED})
+        self.assertEqual(A.live_entry(entry("new-kind", extra=1).encode())["extra"], 1)  # unknown: all of it
+
+    def test_sse_framing(self):
+        self.assertEqual(A.sse_frame("entry", {"a": "x\ny"}, 12), b'id: 12\nevent: entry\ndata: {"a": "x\\ny"}\n\n')
+        self.assertEqual(A.sse_frame("x", "l1\nl2"), b"event: x\ndata: l1\ndata: l2\n\n")
+
+
+def sse_events(raw):
+    out = []
+    for block in raw.split("\n\n"):
+        ev = {"data": []}
+        for ln in block.split("\n"):
+            if ln.startswith(":") or not ln:
+                continue
+            k, _, v = ln.partition(": ")
+            if k == "data":
+                ev["data"].append(v)
+            else:
+                ev[k] = v
+        if "event" in ev:
+            ev["data"] = json.loads("\n".join(ev["data"]))
+            out.append(ev)
+    return out
+
+
+class StreamServerTest(LiveBase):
+    def setUp(self):
+        super().setUp()
+        os.environ["AGENTCTL_LIVE_POLL"] = "0.05"
+        self.saved_cached = A.status_cached
+        A.status_cached = lambda: {"at": 0, "agents": []}
+        self.srv = A.status_page_server("127.0.0.1", 0)
+        self.port = self.srv.server_address[1]
+        import threading
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.p = self.transcript("/w/live", "s-live", [
+            entry("user", message={"role": "user", "content": "fix the red"}),
+            entry("api-request", params={"model": "m"}),
+            entry("assistant", message={"role": "assistant", "content": [{"type": "text", "text": "on it"}],
+                                        "stop_reason": "tool_use"})])
+        self.fixer(31, 1, transcript=self.p, pid=4242)
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+        A.status_cached = self.saved_cached
+        super().tearDown()
+
+    def open(self, path, host="agentctl.localhost", headers=None):
+        import socket
+        s = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        hd = "".join(f"{k}: {v}\r\n" for k, v in (headers or {}).items())
+        s.sendall(f"GET {path} HTTP/1.1\r\nHost: {host}\r\n{hd}\r\n".encode())
+        return s
+
+    def read_until(self, s, pred, secs=5):
+        """(the response head, every event so far on s) once pred(events) holds."""
+        bufs = self.__dict__.setdefault("bufs", {})
+        buf, end = bufs.get(id(s), b""), time.time() + secs
+        if buf:
+            text = buf.decode("utf-8", "replace")
+            if pred(sse_events(text.split("\r\n\r\n", 1)[1])):
+                return text.split("\r\n\r\n", 1)[0], sse_events(text.split("\r\n\r\n", 1)[1])
+        while time.time() < end:
+            try:
+                b = s.recv(65536)
+            except OSError:
+                break
+            if not b:
+                break
+            buf += b
+            bufs[id(s)] = buf
+            text = buf.decode("utf-8", "replace")
+            body = text.split("\r\n\r\n", 1)[1] if "\r\n\r\n" in text else ""
+            if pred(sse_events(body)):
+                return text.split("\r\n\r\n", 1)[0], sse_events(body)
+        self.fail(f"not seen in {secs} s: {buf[-2000:]!r}")
+
+    def test_history_then_growth_then_truncation(self):
+        s = self.open("/stream?agent=fixer-31-1")
+        head, evs = self.read_until(s, lambda es: any(e["event"] == "state" for e in es))
+        self.assertIn("200", head.split("\r\n")[0])
+        self.assertIn("text/event-stream", head)
+        self.assertEqual([e["event"] for e in evs], ["meta", "entry", "entry", "synced", "state"])
+        self.assertEqual(evs[1]["data"]["message"]["content"], "fix the red")
+        self.assertEqual(evs[2]["data"]["message"]["content"][0]["text"], "on it")
+        self.assertEqual(int(evs[2]["id"]), os.path.getsize(self.p))
+        self.assertEqual(evs[4]["data"]["state"], "working")
+        with open(self.p, "a") as f:
+            f.write(entry("assistant", message={"content": [{"type": "text", "text": "done, token ghp_" + "R2" * 18}],
+                                                "stop_reason": "end_turn"}))
+        _h, evs = self.read_until(s, lambda es: sum(e["event"] == "state" for e in es) >= 2)
+        said = [e for e in evs if e["event"] == "entry"][-1]["data"]["message"]["content"][0]["text"]
+        self.assertEqual(said, "done, token " + A.LIVE_MASKED)
+        self.assertEqual([e for e in evs if e["event"] == "state"][-1]["data"]["state"], "waiting on background")
+        with open(self.p, "w") as f:
+            f.write(entry("user", message={"content": "fresh"}))
+        _h, evs = self.read_until(s, lambda es: any(e["event"] == "state" and e["data"]["state"] == "working"
+                                                    for e in es[es.index(next(x for x in es if x["event"] == "reset")):])
+                                  if any(x["event"] == "reset" for x in es) else False)
+        after = evs[[e["event"] for e in evs].index("reset"):]
+        self.assertEqual(after[0]["id"], "0")
+        self.assertEqual([e["data"]["message"]["content"] for e in after if e["event"] == "entry"], ["fresh"])
+        s.close()
+
+    def test_resume_from_an_offset_or_last_event_id(self):
+        size = os.path.getsize(self.p)
+        with open(self.p, "a") as f:
+            f.write(entry("user", message={"content": "later"}))
+        for hd, q in (({}, f"&from={size}"), ({"Last-Event-ID": str(size)}, "&from=0")):
+            s = self.open("/stream?agent=fixer-31-1" + q, headers=hd)
+            _h, evs = self.read_until(s, lambda es: any(e["event"] == "synced" for e in es))
+            s.close()
+            self.assertEqual([e["data"]["message"]["content"] for e in evs if e["event"] == "entry"], ["later"])
+
+    def test_unknown_agents_paths_hosts_and_writes_are_refused(self):
+        import urllib.request, urllib.error
+
+        def get(path, host="agentctl.localhost", method="GET"):
+            req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", headers={"Host": host}, method=method)
+            try:
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    return r.status
+            except urllib.error.HTTPError as e:
+                e.close()
+                return e.code
+        self.assertEqual(get("/stream?agent=fixer-99-1"), 404)
+        self.assertEqual(get("/stream?agent=" + urllib.request.quote(self.p)), 404)
+        self.assertEqual(get("/stream?path=" + urllib.request.quote(self.p)), 404)
+        self.assertEqual(get("/stream?agent=fixer-31-1&from=x"), 400)
+        self.assertEqual(get("/stream?agent=fixer-31-1", host="evil.example"), 403)
+        self.assertEqual(get("/stream?agent=fixer-31-1", method="POST"), 405)
+
+    def test_streams_are_capped(self):
+        saved = A._live_streams
+        A._live_streams = __import__("threading").BoundedSemaphore(1)
+        try:
+            s = self.open("/stream?agent=fixer-31-1")
+            self.read_until(s, lambda es: any(e["event"] == "synced" for e in es))
+            s2 = self.open("/stream?agent=fixer-31-1")
+            self.assertIn(b" 503 ", s2.recv(200))
+            s2.close()
+            s.close()
+        finally:
+            A._live_streams = saved
+
+    def test_a_slow_client_is_dropped(self):
+        writes = []
+
+        def write(b):
+            writes.append(b)
+            if len(writes) > 1:
+                raise TimeoutError("timed out")  # what a full socket buffer past LIVE_SEND_TIMEOUT raises
+        e = A.live_lookup("fixer-31-1")
+        with self.assertRaises(OSError):
+            A.live_stream(e, 0, write, poll=0.01, max_secs=5)
+        self.assertEqual(len(writes), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
