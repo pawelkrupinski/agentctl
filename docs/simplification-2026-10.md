@@ -96,3 +96,28 @@ there must keep those columns, or give me an `agentctl event add` to call instea
 `/var/lib/agentctl-src/current/agentctl` -- keep that entry point through the package split.
 For Agent B: auto-pin ships only on `success` of the LATEST tests.yml run of a commit on refs/heads/main; a flaky
 suite therefore delays shipping, never ships red.
+
+## Agent B
+
+### B1: CI and suite speed -- DONE
+
+The workflow (`.forgejo/workflows/tests.yml`, `ubuntu-26.04` = ci-runner's container tier, the label the infra
+repo's own workflows use) and `tests/run.py` (parallel workers, a per-test timeout) were Agent A's item 1. Added: the
+test `Repo` (a bare remote + clone, built a few hundred times per run) is copied from a per-process template, 0.4 s ->
+0.04 s each. Full suite on the loaded laptop (load ~30): 129 s -> 88 s; at load ~10: ~68 s. Commit 7ba70b1.
+
+### B2: test hygiene -- DONE
+
+`tests/harness.py`, imported by test_agentctl before agentctl loads (every test module imports test_agentctl):
+- HOME is a temp dir per process; PATH = a harness bin (python3 = the running interpreter, git, node) + the system
+  dirs; SDKMAN_*, GIT_*, JAVA_HOME and tokens dropped; git reads the harness's gitconfig. The workflow no longer sets
+  git config.
+- The per-test timeout (SIGALRM, 60 s, $AGENTCTL_TEST_TIMEOUT) lives in the harness: a hang or busy spin fails with
+  its traceback under any runner, plain `python3 -m unittest` included. run.py keeps the hard backstop.
+- The clock rule (82fdc89's proxy, universal): every agentctl module -- each `agentctl.*` module after the split too
+  -- gets fresh `time` and `subprocess` proxies before and after every test; a test that leaves the stdlib's clock or
+  subprocess faked fails.
+- agentctl's `_IN_PROCESSOR` flag and token cache are reset per test. This was the flaky test from Agent A's note:
+  a processor run left the flag set, and test_token's secrets test then failed at random.
+- tests/test_harness.py checks each rule. The suite is green under `env -i PATH=/usr/bin:/bin HOME=/nonexistent`.
+Commit 8f054a9.
