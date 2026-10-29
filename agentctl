@@ -456,10 +456,10 @@ NOISE = re.compile(r"Setting level of logger|\|-INFO in ch\.qos|\berrors?[=:] ?0
 MEASURE_WORKFLOWS = {"Identity model convergence"}
 
 
-def relevant_lines(log_text, tail):
+def relevant_lines(log_text, tail, strong_jobs=None):
     """{job: [last `tail` relevant lines]} from `forgejo-gh run view --log-failed` output (job<TAB>step<TAB>line).
     Strong markers (*** FAILED, [error], ::error::, assertion, exit code) win; plain fail/error words only when a job
-    has none, and never from INFO/DEBUG log lines."""
+    has none, and never from INFO/DEBUG log lines. strong_jobs, a set: the jobs with a STRONG line are added to it."""
     strong, weak, follow = {}, {}, {}
     for raw in log_text.splitlines():
         parts = raw.split("\t", 2)
@@ -477,6 +477,8 @@ def relevant_lines(log_text, tail):
             strong.setdefault(job, []).append(line[:300])
         elif WEAK.search(line) and not NOISE.search(line):
             weak.setdefault(job, []).append(line[:300])
+    if strong_jobs is not None:
+        strong_jobs.update(strong)
     return {j: (strong.get(j) or weak.get(j))[-tail:] for j in set(strong) | set(weak)}
 
 
@@ -537,11 +539,12 @@ ANNOTATION = re.compile(r"::error\b[^:]*::")
 MAX_JOB_LOG_FETCHES = 5
 
 
-def job_log_lines(o_r, run_id, job, tail, unread=None):
+def job_log_lines(o_r, run_id, job, tail, unread=None, annotated=None):
     """Relevant lines from a job's WHOLE log. Forgejo's per-step slices (what --log-failed prints) are shifted by a
     few lines from the stored log, so a failed step's slice can hold only its neighbours' checkout/cache lines while
     its `::error` annotation and output sit just past it (run 1988, takes (united-kingdom)). `::error` annotations
-    first, else the strong/weak markers. `unread`, a list: a failed read's error is appended to it."""
+    first, else the strong/weak markers. `unread`, a list: a failed read's error is appended to it. `annotated`, a
+    list: True is appended when the lines are the job's annotations (or its step timeout), False otherwise."""
     jid = job.get("databaseId") if isinstance(job, dict) else None
     if not jid:
         return []
@@ -554,10 +557,26 @@ def job_log_lines(o_r, run_id, job, tail, unread=None):
     clean = [LOG_TS.sub("", ANSI.sub("", (l.split("\t", 2)[2] if l.count("\t") >= 2 else l))).rstrip() for l in log.splitlines()]
     notes = [l[:300] for l in clean if ANNOTATION.search(l)]
     timed = [l[:300] for l in clean if STEP_TIMED_OUT in l]  # past the failed step's slice, in the reap step's
+    if annotated is not None:
+        annotated.append(bool(notes or timed))
     if notes or timed:
-        return (timed[-1:] + [n for n in notes if n not in timed])[-tail:]
+        return (timed[-1:] + [n for n in notes if n not in timed])[:tail]
     name = job.get("name", "?")
     return relevant_lines("\n".join(f"{name}\t-\t{l}" for l in clean), tail).get(name, [])
+
+
+def choose_job_lines(slice_lines, slice_strong, whole, whole_annotated):
+    """A failed job's lines -- its red's KEY is the first. A STRONG line in the failed step's slice wins; else the job's
+    own `::error` annotations (read from its whole log); else the slice's WEAK lines; else the whole log's. One failure,
+    three reds (Verify scrape recording, GermanyConvergenceSpec serving Bambi '(1989)' as a B-Movie): the slice's weak
+    lines came first, so #2406 was keyed by a `WARN FallbackHttpFetch ... All 2 backends failed` line, #2481 by an
+    `enrichment-fixtures: FileNotFoundException`, and only #2493 (an empty slice) by its `::error
+    title=GermanyConvergenceSpec...` annotation: the waiting `Fixes-Red: 2406` fix never reached #2493's red."""
+    if slice_strong:
+        return slice_lines
+    if whole_annotated and whole:
+        return whole
+    return slice_lines or whole
 
 
 HOOK_BLOCK = re.compile(r"blocked by:|pre-push\S* .*FAILED|\u2717|\u2716|^\s*(FAIL\b|\u2500\u2500 FAIL)|\bexpected:|\bactual:")
@@ -1502,7 +1521,8 @@ def explain_run_jobs(o_r, run, tail, repo=None):
         log = ""
         unread.append(str(e))
         err(f"could not read run {rid}'s failed log: {e}")
-    per, raws, timed = relevant_lines(log, tail), raw_tails(log), timed_out_jobs(log)
+    strong_jobs = set()
+    per, raws, timed = relevant_lines(log, tail, strong_jobs), raw_tails(log), timed_out_jobs(log)
     lines = [f"  run id {rid} (#{num}) {d.get('url') or run.get('url')}",
              f"  commit {commit_line(o_r, d.get('headSha') or run.get('headSha'), repo)}"]
     kinds, fetched, per_job = [], 0, []
@@ -1512,16 +1532,24 @@ def explain_run_jobs(o_r, run, tail, repo=None):
             lines.append(f"  [derived] {j['name']}: never started: {CASCADE_PREFIX}{', '.join(cascades[j['name']])} "
                          "(through `needs:`; follows that red)")
             continue
-        jl = per.get(j["name"]) or []
+        jl, strong = per.get(j["name"]) or [], j["name"] in strong_jobs
         if fetched < MAX_JOB_LOG_FETCHES and "precommit" in str(d.get("workflowName", "")).lower().replace("-", ""):
             hl = hook_lines(o_r, rid, j, tail)  # the hook's own verdict beats a passing subtest's tail
             if hl:
-                fetched, jl = fetched + 1, hl
+                fetched, jl, strong = fetched + 1, hl, True
         bad = [st for st in j.get("steps") or [] if st.get("conclusion") in ("failure", "timed_out")]
         setup = bool(bad) and bool(SETUP_STEP.match(bad[0]["name"]))
-        if not jl and not setup and fetched < MAX_JOB_LOG_FETCHES:  # a shifted step slice: read the whole job log
+        note = None
+        if not strong and not setup and fetched < MAX_JOB_LOG_FETCHES:
+            # no STRONG line in the step's slice (a shifted slice, or only weak words): the job's own `::error`
+            # annotations, in its whole log, say what failed
             fetched += 1
-            jl = job_log_lines(o_r, rid, j, tail, unread)
+            was, ann = len(unread), []
+            whole = job_log_lines(o_r, rid, j, tail, unread, ann)
+            if jl and len(unread) > was:  # keyed by a weak line only because the annotations went unread: never cached
+                note = (f"      (LOG UNREADABLE: {j['name']}'s whole log, which holds its ::error annotations: "
+                        f"{unread[-1][:160]}; read again next time)")
+            jl = choose_job_lines(jl, strong, whole, bool(ann and ann[0]))
         kind, why = classify_job(j, jl, raws.get(j["name"], (0, [])), j["name"] in timed or any(STEP_TIMED_OUT in l for l in jl))
         if unread and not jl and not setup:
             kind, why = "unclear", (f"LOG UNREADABLE ({unread[-1]}): no log was read, so nothing says infra or test -- "
@@ -1531,6 +1559,8 @@ def explain_run_jobs(o_r, run, tail, repo=None):
         per_job.append((j["name"], kind, jl[0] if jl else (f"step failed: {bad[0]['name']}" if bad else "")))
         lines.append(f"  [{kind}] {j['name']}: {why}")
         lines += [f"      {l}" for l in jl]
+        if note:
+            lines.append(note)
     rerun = f"rerun: {FORGEJO_GH.replace(HOME, '~')} run rerun {rid} --failed -R {o_r}"
     if any(l.startswith("  [test]") and ": TIMEOUT: " in l for l in lines):
         verdict = "TIMEOUT (a step ran past its own timeout-minutes: a code/config red, not a rerun)"
@@ -1582,7 +1612,8 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
     states, units, flakes_ = {}, [], []
     try:  # who holds each red: its item in the store (the tick acts; ci-why only renders)
         rows = [(n, d, _gate_lists.get(n, []), True) for n, d, _nw, _s in gate]
-        units = gate_red_units(o_r, rows, [(n, r, _outside_lists.get(n, []), False) for n, r, _s, _c in others])
+        units = gate_red_units(o_r, rows, [(n, r, _outside_lists.get(n, []), False) for n, r, _s, _c in others],
+                               rereads=0 if summary else None)
         units += local_units(lrepo) + predict_units(o_r, bsnap)
         for u in units:
             units_of.setdefault((u["workflow"], u["run"].get("databaseId")), []).append(u)
@@ -2654,12 +2685,15 @@ def streak_runs(runs):
 
 
 def classifier_version():
-    """What a cached signature's kind was judged by: classify_job and every pattern it reads. A record of another
-    version is classified again (#2426: cached a TEST FAILURE before KEY_REFUSED_LOG, `red block` kept reading it)."""
+    """What a cached signature was judged by: its KIND (classify_job and every pattern it reads) and its LINE, the red's
+    key (relevant_lines, job_log_lines, choose_job_lines and the STRONG / WEAK / NOISE / ANNOTATION patterns). A record
+    of another version is read again (#2426: cached a TEST FAILURE before KEY_REFUSED_LOG, `red block` kept reading it;
+    #2406 / #2481 / #2493: one failure cached under three lines, the older two from before annotations came first)."""
     import hashlib, inspect
     parts = [inspect.getsource(classify_job), inspect.getsource(derive_cascades), inspect.getsource(workflow_jobs),
              inspect.getsource(job_is_phantom), SETUP_STEP.pattern, INFRA_LOG.pattern, UNKNOWN_LOG.pattern,
-             KEY_REFUSED_LOG.pattern, STEP_TIMED_OUT]
+             KEY_REFUSED_LOG.pattern, STEP_TIMED_OUT, inspect.getsource(relevant_lines), inspect.getsource(job_log_lines),
+             inspect.getsource(choose_job_lines), STRONG.pattern, WEAK.pattern, NOISE.pattern, ANNOTATION.pattern]
     return hashlib.sha1("\n".join(parts).encode()).hexdigest()[:12]
 
 
@@ -3089,18 +3123,44 @@ def red_item_of_run(store, n, workflow=None):
 
 
 # -- what is red now: one observation per key, from the CI-state snapshot
-def red_units(o_r, name, decided, runs, sigs, gate):
-    """The failing jobs of one red run as units: [{workflow, job, kind, line, run, runs, names, gate}]."""
+STREAK_REREADS = 3  # stale or missing streak run signatures read again per tick ($AGENTCTL_STREAK_REREADS)
+
+
+def streak_sigs(o_r, name, r, budget):
+    """A streak run's signatures: its cached record when the classifier that wrote it is this one; else read again
+    through run_sigs while `budget` (a one-element list, the tick's) lasts; else the stale record's (the next tick reads
+    it). A raw stale record keyed #2406 by its old WARN line while #2493 was keyed by its annotation: the streak never
+    named #2406, so the waiting `Fixes-Red: 2406` fix never held #2493's red."""
+    rec = read_record(reds_dir("runsig", f"{r.get('databaseId')}.json"))
+    if rec is not None and rec.get("classifier") == classifier_version():
+        return rec.get("sigs") or []
+    if budget[0] > 0 and r.get("status") == "completed" and r.get("conclusion") in RED_CONCLUSIONS:
+        budget[0] -= 1
+        try:
+            return run_sigs(o_r, r, name)
+        except (Exception, SystemExit) as e:
+            err(f"red: could not read the failed jobs of run {r.get('databaseId')} ({str(e)[:120]})")
+    return (rec or {}).get("sigs") or []
+
+
+def red_units(o_r, name, decided, runs, sigs, gate, budget=None):
+    """The failing jobs of one red run as units: [{workflow, job, kind, line, run, runs, names, gate}]. budget: the
+    tick's re-reads of stale streak signatures (a one-element list; default STREAK_REREADS)."""
     sruns = streak_runs(runs) if runs else []
+    budget = budget if budget is not None else [int(env_num("AGENTCTL_STREAK_REREADS", STREAK_REREADS))]
+    streak = {}
     units = []
     derived = [s for s in sigs if s.get("kind") == "derived"]
     sigs = [s for s in sigs if s.get("kind") != "derived"]  # a phantom is no red: it is folded into its source's
     for s in sigs:
         names = set(run_names(decided))
-        for r in sruns:  # the streak's runs that failed THIS way (their cached signatures)
-            rec = read_record(reds_dir("runsig", f"{r.get('databaseId')}.json"))
-            if rec and any(x.get("job") == s["job"] and norm_line(x.get("line")) == norm_line(s["line"])
-                           for x in rec.get("sigs") or []):
+        for r in sruns:  # the streak's runs that failed THIS way (their signatures, by this classifier)
+            if r.get("databaseId") == decided.get("databaseId"):
+                continue
+            rid = r.get("databaseId")
+            if rid not in streak:
+                streak[rid] = streak_sigs(o_r, name, r, budget)
+            if any(x.get("job") == s["job"] and norm_line(x.get("line")) == norm_line(s["line"]) for x in streak[rid]):
                 names |= run_names(r)
         units.append({"workflow": name, "job": s["job"], "kind": s["kind"], "line": s["line"], "run": decided,
                       "runs": runs, "names": names, "gate": gate,
@@ -3111,9 +3171,11 @@ def red_units(o_r, name, decided, runs, sigs, gate):
     return units
 
 
-def gate_red_units(o_r, rows, others=()):
-    """The red units of ci-why's rows: [(name, decided, runs, gate)] -> units (signatures read, cached)."""
+def gate_red_units(o_r, rows, others=(), rereads=None):
+    """The red units of ci-why's rows: [(name, decided, runs, gate)] -> units (signatures read, cached; at most
+    `rereads` (STREAK_REREADS) stale streak runs read again per call -- the tick's; the status line's summary none)."""
     units = []
+    budget = [int(env_num("AGENTCTL_STREAK_REREADS", STREAK_REREADS)) if rereads is None else rereads]
     for name, decided, runs, gate in list(rows) + list(others):
         if not decided or decided.get("conclusion") not in RED_CONCLUSIONS:
             continue
@@ -3122,7 +3184,7 @@ def gate_red_units(o_r, rows, others=()):
         except (Exception, SystemExit) as e:
             err(f"red: could not read the failed jobs of run {decided.get('databaseId')} ({str(e)[:120]})")
             sigs = []
-        units += red_units(o_r, name, decided, runs, sigs, gate)
+        units += red_units(o_r, name, decided, runs, sigs, gate, budget)
     return units
 
 
@@ -3351,6 +3413,42 @@ def red_rekeyed(d, obs):
     rid = (d.get("last_run") or {}).get("databaseId")
     same_run = [o for o in obs.values() if o["workflow"] == d.get("workflow") and o["run"].get("databaseId") == rid]
     return bool(same_run) and all(o["job"] != "?" for o in same_run)
+
+
+def red_merge_rekeyed(store, active, obs):
+    """Reds keyed apart that the classifier now reads as ONE failure: an open red whose key is not observed any more,
+    while a run of its own now fails the same job under another open red's key (the streak's signatures read again by
+    this classifier), is merged into that red -- its runs (the names a `Fixes-Red:` change links by), history, refuted
+    fixes and attempts kept -- and closed as re-keyed. Verify scrape recording #2406 (a WARN line), #2481 (a
+    FileNotFoundException) and #2493 (the GermanyConvergenceSpec annotation) were one failure as three reds, and the
+    fix waiting under `Fixes-Red: 2406` never held #2493's. Returns what it did; `active` is updated in place."""
+    acts = []
+    if not obs:
+        return acts
+    for key, it in list(active.items()):
+        d = it["data"]
+        if key in obs or it["state"] in RED_TERMINAL or d.get("red_kind") in ("local", "stuck-run", "predicts"):
+            continue
+        runs = set(map(str, d.get("runs") or []))
+        jobs = {str(j) for j in (d.get("jobs") or [d.get("job")]) if j and j != "?"}
+        into = [o for o in obs.values() if o["key"] != key and o["key"] in active and o["workflow"] == d.get("workflow")
+                and runs & set(map(str, o.get("names") or ())) and jobs & set(o.get("jobs") or ())]
+        if not into:
+            continue
+        target = store.item("red", active[into[0]["key"]]["id"])
+        td = target["data"]
+        merged = red_import_merge(td, d)
+        merged["refuted"] = sorted(set(td.get("refuted") or []) | set(d.get("refuted") or []))
+        merged["merged_from"] = sorted(set(td.get("merged_from") or []) | {key})
+        store.update_item("red", target["id"], target["version"],
+                          {k: v for k, v in merged.items() if k not in RED_DERIVED_FIELDS and k != "key"})
+        active[td["key"]] = store.item("red", target["id"])
+        red_close(store, store.item("red", it["id"]), "cleared",
+                  f"re-keyed: the same failure as red {td['key']} ({red_what(td)}), merged into it with its runs "
+                  f"{', '.join(sorted(runs))}")
+        active.pop(key, None)
+        acts.append(f"merged red {key} ({red_what(d)}) into {td['key']}: one failure, re-keyed")
+    return acts
 
 
 def red_gone_why(d, obs):
@@ -5783,6 +5881,10 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=True, facts=None):
                 active[key] = red_open(store, ob, repo, t)
         except (Exception, SystemExit) as e:
             err(f"red tick: {key}: {str(e)[:160]}")
+    try:
+        acts += red_merge_rekeyed(store, active, obs)
+    except (Exception, SystemExit) as e:
+        err(f"red tick: merging re-keyed reds failed ({str(e)[:160]})")
     if glob.glob(reds_dir("claims", "*.json")) or os.path.exists(reds_dir("fixer-queue.json")):
         acts += red_import_claims(store, active, t)
     try:
