@@ -27,3 +27,33 @@ Owner action: Actions are off for the repository. Infra branch **`agentctl-ci`**
 
 The dry run should show the agentctl repository's `has_actions` changing to true. The workflow has not run on
 ci-runner yet; its first run comes with the next push to main after that.
+
+## Item 2 (owner's item 1): drop local-store mode -- DONE
+
+What changed:
+- Two roles only. `server` (AGENTCTL_HOST=ci-runner or AGENTCTL_ROLE=server): the database in-process, the tick
+  (`server_steps`). `sync` (everywhere else): `Store()` is always `RemoteStore` (`store.url`, else
+  http://localhost:3014), the loop is `sync_steps`. The laptop's combined phase-1 tick, `LAPTOP_ONLY_STEPS`, the
+  laptop-pressure branch of the entry checks, `store import`, `Store.import_lease`, `store use --local` are gone.
+- Disaster recovery: no laptop copy is needed -- ci-runner's 24 hourly backups, and design §16's rebuild from the
+  land/* refs and Forgejo's runs. Documented in AGENTCTL.md ("store") and the code's ROLES comment.
+- Bug found on the way: noting a missing token on the sync recursed (the remote store's call reads the same token);
+  guarded and tested.
+- Tests: the harness runs in the server role with a closed-port default store URL (no test can reach the real
+  store); phase-2 tests that play the laptop say so (`Phase2Base.sync()`).
+- `waiting` aliases: kept, with a dated TODO(2026-11-05). The laptop's launchd job still runs `waiting run
+  --service`; removing the alias before the owner reinstalls it (`agentctl tick service install`, which kickstarts
+  and needs the token again) would stop the sync.
+
+Commits (~/bin): 32715f7, dbe6578 (+ this log).
+
+### Milestone: what the owner runs (pin bump to the item-2 revision)
+
+ci-runner still runs the older pinned revision; item 2 changes the server's code too (server_steps, checks always on
+the CI tier). Bump the pin, preview, apply:
+
+```
+! cd ~/bitcashier/infra && git pull --rebase -q forgejo main && rev=$(git -C ~/bin rev-parse forgejo/main) && sed -i '' "s/rev = \"[0-9a-f]*\";/rev = \"$rev\";/" nix/hosts/ci-runner/agentctl-pin.nix && git diff --stat && git commit -qam "agentctl: pin ~/bin $rev (simplification item 2)" && git push forgejo main && bin/deploy ci-runner
+```
+
+then `! cd ~/bitcashier/infra && bin/deploy ci-runner --apply` (restarts only agentctl-src/store/reconciler).
