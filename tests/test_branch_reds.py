@@ -297,6 +297,24 @@ class OrphanBranchRedTest(BranchBase):
         self.assertEqual(texts, [f"branch red gone: {IDRUN} #2365 on {self.b65} (its branch deleted or green)"])
         self.assertEqual(self.store.item("branch-red", A.branch_red_id(MOVIES, 3548))["state"], "gone")
 
+    def test_its_finished_measure_branch_is_deleted_by_cleanup_an_open_one_is_not(self):
+        for b in (self.b65, self.b70):
+            sh(self.r.path, "git", "push", "-q", "forgejo", f"HEAD:refs/heads/{b}")
+        A.settle_branch_reds(MOVIES, self.snap(), self.store)
+        A.save_dispatch({"branch": self.b70, "run_id": 3553, "worktree": self.wt, "source": "registered"})
+        A.settle_branch_reds(MOVIES, self.snap(), self.store)  # #2370 reopened: its owner is back
+        deleted = []
+        saved = A.delete_remote_branch
+        A.delete_remote_branch = lambda repo, o_r, name, sha: deleted.append(name)
+        self.addCleanup(setattr, A, "delete_remote_branch", saved)
+        ids = {self.b65: 3548, self.b70: 3553}
+        out = []
+        A.orphan_branches(self.r.path, MOVIES, False, out,
+                          lambda b: [dict(brun(ids.get(b, 1), 1, self.sha, b, wf=IDRUN, wfile=IDRUN_FILE))],
+                          store=self.store)
+        self.assertEqual(deleted, [self.b65], out)
+        self.assertTrue(any("its red closed as an orphan" in l for l in out), out)
+
 
 class SweepOrphansTest(BranchBase):
     def test_a_finished_measure_branch_whose_owner_is_gone_is_deleted_others_listed_or_kept(self):

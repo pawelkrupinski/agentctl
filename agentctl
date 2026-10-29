@@ -2500,12 +2500,29 @@ def branch_summary(snap):
     return f"branch reds: {len(reds)} → " + "; ".join(parts)
 
 
-def orphan_branches(repo, o_r, dry, out, runs_for=None):
-    """The sweep's part: remote tracked branches whose owner is gone (worktree removed or pid dead) and whose runs all
-    finished. measure/* ones are deleted (the standing OK: a finished measure/* branch); the rest are listed."""
+def orphaned_red(store, o_r, runs):
+    """The why of a run of these whose branch red closed as an orphan (settle_branch_reds), else None."""
+    for r in runs or []:
+        try:
+            it = store and store.item("branch-red", branch_red_id(o_r, r.get("databaseId")))
+        except (Exception, SystemExit):
+            return None
+        if it and it["state"] == "orphaned":
+            return it["data"].get("why") or "no owner"
+    return None
+
+
+def orphan_branches(repo, o_r, dry, out, runs_for=None, store=None):
+    """The sweep's part: remote tracked branches whose owner is gone (worktree removed or pid dead), or whose branch red
+    closed as an orphan (no owner at all), and whose runs all finished. measure/* ones are deleted (the standing OK: a
+    finished measure/* branch); the rest are listed."""
     runs_for = runs_for or (lambda b: gh_json(o_r, "run", "list", "--branch", b, "--limit", "20", "--json", RUN_FIELDS))
     recorded = {r.get("branch") for r in dispatch_records() if r.get("branch")}
     found = []
+    try:
+        st = store or Store()
+    except (Exception, SystemExit):
+        st = None
     for line in git(repo, "ls-remote", "--heads", REMOTE, check=False).stdout.splitlines():
         sha, ref = line.split()
         b = ref.removeprefix("refs/heads/")
@@ -2520,10 +2537,12 @@ def orphan_branches(repo, o_r, dry, out, runs_for=None):
             continue
         rec = owner_of(repo, b, (runs or [{}])[0] | {"headSha": sha}) if runs else dispatch_for(b)
         gone = owner_gone(rec)
-        if not gone:
+        orphan = None if gone or rec else orphaned_red(st, o_r, runs)
+        if not gone and not orphan:
             continue
         found.append(b)
-        what = f"owner {owner_text(rec)} gone, {len(runs)} run(s) finished"
+        what = (f"owner {owner_text(rec)} gone" if gone else f"its red closed as an orphan ({orphan})") \
+            + f", {len(runs)} run(s) finished"
         if not b.startswith("measure/"):
             out.append(f"  OWNER GONE branch {b} {sha[:10]}: {what} (listed, kept)")
         elif dry:
