@@ -8644,7 +8644,8 @@ def waiting_run(repo, once=False, service=False):
                                 ("gate summary", lambda: maybe_publish_gate(repo)),
                                 ("red time", lambda: track_red_time(Store(), gate_is_red_now())),
                                 ("red tick", lambda: maybe_red_tick(repo)),
-                                ("recovery", maybe_recovery_tick))
+                                ("recovery", maybe_recovery_tick),
+                                ("upkeep", lambda: [wlog(d, f"upkeep: {x}") for x in maybe_upkeep()]))
             if not (role == "server" and n in LAPTOP_ONLY_STEPS))
         while True:
             if TICK_STOP[0]:  # SIGTERM (systemd's stop): between ticks, never inside one
@@ -11459,10 +11460,11 @@ def sync_steps(repo, d, o_r):
             ("landed worktrees", lambda: [err(x) for x in close_landed_worktrees()]),
             ("claims", lambda: red_renew_holders(Store(), time.time())),
             ("dispatcher", dispatch),
-            ("network watch", network_watch), ("tunnel probe", tunnel_watch))
+            ("network watch", network_watch), ("tunnel probe", tunnel_watch),
+            ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep()]))
 
 
-LAPTOP_ONLY_STEPS = ("events", "notifier", "network watch", "tunnel probe")
+LAPTOP_ONLY_STEPS = ("events", "notifier", "network watch", "tunnel probe", "upkeep")
 
 
 def close_landed_worktrees(store=None):
@@ -11477,6 +11479,105 @@ def close_landed_worktrees(store=None):
         if ev["kind"] == "watch.ok" and wt and os.path.isdir(wt):
             out.append(close_worktree(wt))
     return out
+
+
+# ---------------------------------------------------------------- upkeep: the tick keeps the laptop's disk (2026-10-29)
+# The owner's coordinator, 2026-10-29: the Data volume filled up (739 MB free) -- 109 proven-merged idle worktrees
+# (mostly finished fixers' movies-wt-red-*) piled up because nothing ran `cleanup` on its own, and the test suite had
+# leaked 3,009 `agentctl-*` temp dirs. Now, at most every UPKEEP_EVERY s (and at once when the disk runs low), the
+# laptop's processor runs:
+#   - `cleanup --execute --no-remote`, the STANDING-OK scope only (clean, idle, proven-merged worktrees and their
+#     branches; every deletion re-verified and logged in agentctl-deleted.log);
+#   - each ended fixer's worktree whose red is closed (no open red item with its key) closed by close_worktree (only
+#     when proven merged, clean and unused);
+#   - the test suite's own leftovers: `agentctl-*` dirs in the user's temp dir and `agentctl-sock-*` in /tmp older than
+#     TEST_TMP_MAX_AGE (a run removes its own at exit; these are killed runs').
+UPKEEP_EVERY = 3600
+TEST_TMP_MAX_AGE = 3600
+_last_upkeep = [0.0]
+
+
+def user_tmp_dir():
+    try:
+        return os.confstr("CS_DARWIN_USER_TEMP_DIR") or tempfile_dir()
+    except (ValueError, OSError, AttributeError):
+        return tempfile_dir()
+
+
+def tempfile_dir():
+    import tempfile
+    return tempfile.gettempdir()
+
+
+def sweep_test_tmp(now_=None):
+    """The test suite's leftovers older than TEST_TMP_MAX_AGE: `agentctl-*` in the user's temp dir, `agentctl-sock-*` in
+    /tmp (never the processor's own socket dir /tmp/agentctl-<uid>). Returns how many went."""
+    import shutil
+    t = now_ if now_ is not None else time.time()
+    n = 0
+    for pat in (os.path.join(user_tmp_dir(), "agentctl-*"), "/tmp/agentctl-sock-*"):
+        for p in glob.glob(pat):
+            try:
+                if os.path.isdir(p) and not os.path.islink(p) and t - os.lstat(p).st_mtime > TEST_TMP_MAX_AGE:
+                    shutil.rmtree(p, ignore_errors=True)
+                    n += 1
+            except OSError:
+                pass
+    return n
+
+
+def close_finished_fixer_trees(store=None):
+    """Each ended fixer's worktree whose red is closed: closed when proven merged, clean and unused (close_worktree
+    keeps it otherwise and says why). Returns the lines."""
+    st = store or Store()
+    try:
+        open_keys = {it["data"].get("key") for it in red_active(st).values()}
+    except Exception:
+        return []
+    out = []
+    for rec in fixer_records():
+        wt = rec.get("worktree")
+        if rec.get("alive") or not rec.get("ended") or rec.get("orphan") or not wt or not os.path.isdir(wt):
+            continue
+        if rec.get("key") in open_keys:
+            continue
+        out.append(close_worktree(wt))
+    return out
+
+
+def run_upkeep():
+    """One upkeep pass (see above); its lines, also appended to the state root's upkeep.log."""
+    lines = []
+    try:  # its own process: cleanup prints, and the processor's stdout is never redirected under its other threads
+        r = subprocess.run([sys.executable, TOOL_PATH, "cleanup", "--execute", "--no-remote"], capture_output=True,
+                           text=True, timeout=1800, stdin=subprocess.DEVNULL)
+        lines += [x.strip() for x in r.stdout.splitlines() if x.strip().startswith("delete")]
+        if r.returncode not in (0, 1):
+            lines.append(f"cleanup exit {r.returncode}: {(r.stderr or r.stdout).strip()[-200:]}")
+    except (OSError, subprocess.TimeoutExpired) as e:
+        lines.append(f"cleanup failed: {str(e)[:200]}")
+    lines += close_finished_fixer_trees()
+    n = sweep_test_tmp()
+    if n:
+        lines.append(f"removed {n} test temp dir(s) older than {TEST_TMP_MAX_AGE // 60} min")
+    try:
+        os.makedirs(state_root(), exist_ok=True)
+        with open(state_root("upkeep.log"), "a") as f:
+            for x in lines:
+                f.write(f"{ts()} {x}\n")
+    except OSError:
+        pass
+    return lines
+
+
+def maybe_upkeep(now_=None):
+    """The tick's upkeep step: at most every UPKEEP_EVERY s."""
+    t = now_ if now_ is not None else time.time()
+    if t - _last_upkeep[0] < env_num("AGENTCTL_UPKEEP_EVERY", UPKEEP_EVERY):
+        return []
+    _last_upkeep[0] = t
+    run_bounded("upkeep", run_upkeep, 1)  # in its thread (minutes of git): the tick goes on; it logs to upkeep.log
+    return [f"started (log {state_root('upkeep.log')})"]
 
 
 # ---------------------------------------------------------------- the invariant watchdog (design §10, phase 1 step 2)
