@@ -154,3 +154,30 @@ Pin bump: needed for ci-runner to run it (behaviour unchanged, so it can ride wi
 - tests/test_status_model.py: the line, the page header, ci-why and red status agree.
 
 Commit: a092a1b. Pin bump: laptop-side mostly (status rendering); ride with item 5's.
+
+### B3: cache hygiene -- DONE
+
+`expire_cache` (lib/agentctl/watchdog.py) runs in every `maintain` pass, the laptop's every-15-min job. Under the state
+root it removes, once they are older than 7 days (`$AGENTCTL_CACHE_EXPIRE_DAYS`): the per-land logs
+(`agentctl-land-*` and their `.checks.out` / `.push.out` / `.baseline.out`), `phase2-apply-*.log`, `sbt-dumps/*`, the
+`reds/baseline*` caches, a `reds/<run>/` dir that is old as a whole and has no running fixer, and an `internal-trees`
+tag whose worktree is gone. The inbox, the store, `waiting/` and `checks/` stay. It follows no symlink and touches no
+protected folder. A dry run at 1.5 days on the laptop's cache found 906 dead tags (most of them leaked by old tests),
+30 land logs and 20 red dirs. Commit 37432a2.
+
+### B4: one agentctl editor -- DONE
+
+- `agentctl issue "<text>"` / `--list [--all]` / `--close ID [--note]`: a store item of type `issue` (open, escalating
+  weekly; closed). The status page has an "agentctl issues" section.
+- The red fixer's prompt: never edit ~/bin, file defects with `agentctl issue`. Fixers no longer get a ~/bin worktree.
+- `agentctl red am-fixer` (74e2ec5's in_fixer: the session's binding or record, else the fixer environment when there
+  is no session). `hooks/pre-commit` refuses a fixer's commit. `git -C ~/bin config core.hooksPath hooks` is set, so
+  every ~/bin worktree that has the hook uses it. If agentctl itself is broken, the hook warns and lets the commit
+  through.
+- Commits 1cff127, ecf399f.
+
+Owner action: on the laptop, `issue` writes to ci-runner's store, and that store needs the `issue` machine, so the
+pin must be bumped to include 1cff127. It can ride with Agent A's next pin bump. Until then `agentctl issue` prints
+`NOT FILED ... pin predates issue`.
+
+Suite: 605 tests in 129 s at the start (laptop load ~30), now 629 tests in 57-67 s (8 workers).
