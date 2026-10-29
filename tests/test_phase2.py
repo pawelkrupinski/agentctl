@@ -39,7 +39,9 @@ class Phase2Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="agentctl-p2-")
         self.saved = {k: os.environ.get(k) for k in ("AGENTCTL_STATE_ROOT", "AGENTCTL_STORE_URL", "AGENTCTL_STORE_TOKEN",
-                                                    "AGENTCTL_ROLE", "AGENTCTL_MOVIES_REPO", "NOTIFY_SOCKET")}
+                                                    "AGENTCTL_ROLE", "AGENTCTL_MOVIES_REPO", "NOTIFY_SOCKET",
+                                                    "AGENTCTL_STORE_RETRY_BASE")}
+        os.environ["AGENTCTL_STORE_RETRY_BASE"] = "0.01"  # the retries' backoff, short here
         os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp, "state")
         for k in ("AGENTCTL_STORE_URL", "AGENTCTL_STORE_TOKEN", "AGENTCTL_ROLE", "NOTIFY_SOCKET"):
             os.environ.pop(k, None)
@@ -182,6 +184,72 @@ class SubmitTest(Phase2Base):
         self.assertEqual(os.listdir(A.sync_outbox_dir()), [])
 
 
+class RetryTest(Phase2Base):
+    def flaky_proxy(self, fail_first):
+        """A TCP proxy to the store that resets its first `fail_first` connections after reading the request."""
+        import socketserver
+        seen = []
+        target = ("127.0.0.1", self.srv.server_port)
+
+        class H(socketserver.BaseRequestHandler):
+            def handle(self):
+                seen.append(1)
+                if len(seen) <= fail_first:
+                    self.request.recv(65536)
+                    self.request.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b"\x01\x00\x00\x00\x00\x00\x00\x00")
+                    self.request.close()  # RST: "Connection reset by peer"
+                    return
+                up = socket.create_connection(target)
+                self.request.settimeout(5)
+                up.settimeout(5)
+                data = self.request.recv(65536)
+                while b"\r\n\r\n" in data and len(data) < int((data.split(b"Content-Length: ")[1].split(b"\r\n")[0]
+                                                                  if b"Content-Length: " in data else b"0")) + \
+                        data.index(b"\r\n\r\n") + 4:
+                    data += self.request.recv(65536)
+                up.sendall(data)
+                out = b""
+                while True:
+                    try:
+                        chunk = up.recv(65536)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    out += chunk
+                    if b"\r\n\r\n" in out:
+                        head, body = out.split(b"\r\n\r\n", 1)
+                        n = int(head.split(b"Content-Length: ")[1].split(b"\r\n")[0]) if b"Content-Length: " in head else 0
+                        if len(body) >= n:
+                            break
+                self.request.sendall(out)
+                up.close()
+        srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), H)
+        srv.daemon_threads = True
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        return f"http://127.0.0.1:{srv.server_address[1]}", seen
+
+    def test_a_transient_reset_is_retried_and_a_persistent_outage_is_no_verdict(self):
+        took = self.st.acquire("red/r", "laptop:fixer:r", 600, 3600)
+        url, seen = self.flaky_proxy(2)
+        r = A.RemoteStore(url, "tok-pawel")
+        self.assertEqual(r.get("red/r")["holder"], "laptop:fixer:r")  # two resets, then an answer
+        self.assertEqual(len(seen), 3)
+        url, seen = self.flaky_proxy(1)
+        self.assertEqual(A.RemoteStore(url, "tok-pawel").renew("red/r", took["epoch"], took["secret"], "p1", 600), "ok")
+        # a mutation that may have reached the server is not sent twice
+        url, seen = self.flaky_proxy(1)
+        with self.assertRaises(A.StoreUnavailable):
+            A.RemoteStore(url, "tok-pawel").acquire("red/s", "h", 600, 3600)
+        self.assertEqual(len(seen), 1)
+        # refused (never reached the server): sent again, and a store that stays down raises after the bounded retries
+        t0 = time.time()
+        with self.assertRaises(A.StoreUnavailable):
+            A.RemoteStore("http://127.0.0.1:9", "tok-pawel").acquire("red/s", "h", 600, 3600)
+        self.assertLess(time.time() - t0, 5)
+
+
 class InternalErrorTest(Phase2Base):
     def test_an_unexpected_error_is_a_500_with_a_json_error_never_a_dropped_connection(self):
         saved = A.submit_change
@@ -259,7 +327,7 @@ class ServerSideTest(Phase2Base):
 class RemoteStatusLineTest(Phase2Base):
     def line_with(self, answer, now_):
         class Fake:
-            def __init__(self, url, tok=None, clock=None, timeout=60):
+            def __init__(self, url, tok=None, clock=None, timeout=60, retries=None):
                 pass
 
             def state(self):

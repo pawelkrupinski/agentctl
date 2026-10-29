@@ -9363,7 +9363,7 @@ def remote_status_state(url, t):
     last_try = max(float(d.get("fetched_at") or 0), float((d.get("store_error") or {}).get("at") or 0))
     if t - last_try > STATUS_LIVE_AFTER:
         try:
-            mirror_state(RemoteStore(url, timeout=5), t)
+            mirror_state(RemoteStore(url, timeout=5, retries=0), t)  # the status line never waits out a retry
         except (Exception, SystemExit) as e:
             note_store_error(e, t)
         d = state_read()
@@ -11822,18 +11822,56 @@ class StoreUnavailable(RuntimeError):
     """The remote store did not answer (the tunnel, ci-runner, the service): no verdict either way."""
 
 
+class _StoreTransient(Exception):
+    """One failed attempt of a store call; unsent: it never reached the server (safe to send again)."""
+
+    def __init__(self, msg, unsent=False):
+        super().__init__(msg)
+        self.unsent = unsent
+
+
+def http_client_errors():
+    import http.client
+    return http.client.HTTPException
+
+
+# TRANSIENT STORE FAILURES ARE RETRIED (2026-10-29: fixer -8's watcher died on one `POST /v1/store/get: [Errno 54]
+# Connection reset by peer`). Reads and the calls that are harmless twice (a renew answers no_progress, a release of a
+# released lease is a no-op) retry on any transient failure; the rest only when the request never left (refused).
+STORE_RETRIES = 4
+STORE_RETRY_BASE = 0.5   # s; doubled each attempt: 0.5 + 1 + 2 + 4 = 7.5 s at most
+STORE_RPC_SAFE = ("get", "item", "items", "offers", "offer_of", "meta_get", "events", "list", "renew", "note",
+                  "set_meta", "release", "close_offer", "offer_reason", "mark_notified", "meta_set")
+
+
 class RemoteStore:
     """Store's methods over the phase-2 API (`POST /v1/store/<method>`), plus the §6.3 calls the sync needs. The token
     is the caller's own Forgejo token ($AGENTCTL_STORE_TOKEN, else the movies token agentctl reads)."""
 
-    def __init__(self, url, tok=None, clock=None, timeout=60):
+    def __init__(self, url, tok=None, clock=None, timeout=60, retries=None):
         self.url, self._tok, self.clock, self.timeout = url.rstrip("/"), tok, clock or time.time, timeout
+        self.retries = retries
         self.path = self.url
 
     def _token(self):
         return self._tok or os.environ.get("AGENTCTL_STORE_TOKEN") or token(SHORT["movies"])
 
-    def call(self, method, path, body=None, timeout=None):
+    def call(self, method, path, body=None, timeout=None, safe=None):
+        """One API call, retried through a transient failure (a reset, a refusal, a timeout, a 502/503/504) up to
+        STORE_RETRIES times with backoff. A call that may have taken effect (a mutation whose request was sent) is
+        retried only when it never reached the server (refused). What is still failing after that raises
+        StoreUnavailable: no verdict either way -- never "lost"."""
+        safe = (method == "GET") if safe is None else safe
+        tries = int(env_num("AGENTCTL_STORE_RETRIES", STORE_RETRIES)) if self.retries is None else self.retries
+        for attempt in range(tries + 1):
+            try:
+                return self._call_once(method, path, body, timeout)
+            except _StoreTransient as e:
+                if attempt == tries or not (safe or e.unsent):
+                    raise StoreUnavailable(str(e)) from None
+                time.sleep(env_num("AGENTCTL_STORE_RETRY_BASE", STORE_RETRY_BASE) * (2 ** attempt))
+
+    def _call_once(self, method, path, body=None, timeout=None):
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(self.url + path, data=data, method=method,
                                      headers={"Authorization": f"token {self._token()}",
@@ -11849,12 +11887,16 @@ class RemoteStore:
             cls = store_errors().get(b.get("error"))
             if cls:
                 raise cls(b.get("message") or "")
+            if e.code in (502, 503, 504):  # the tunnel or the service between restarts
+                raise _StoreTransient(f"{method} {path}: HTTP {e.code} {b.get('message') or e.reason}", e.code == 503) \
+                    from None
             raise StoreUnavailable(f"{method} {path}: HTTP {e.code} {b.get('message') or e.reason}") from None
-        except (urllib.error.URLError, OSError, ValueError) as e:
-            raise StoreUnavailable(f"{method} {path}: {e}") from None
+        except (urllib.error.URLError, OSError, ValueError, http_client_errors()) as e:
+            reason = getattr(e, "reason", e)
+            raise _StoreTransient(f"{method} {path}: {e}", isinstance(reason, ConnectionRefusedError)) from None
 
     def _rpc(self, m, args, kwargs):
-        return self.call("POST", f"/v1/store/{m}", {"args": list(args), "kwargs": kwargs})["result"]
+        return self.call("POST", f"/v1/store/{m}", {"args": list(args), "kwargs": kwargs}, safe=m in STORE_RPC_SAFE)["result"]
 
     def state(self):
         return self.call("GET", "/v1/state")
@@ -11864,13 +11906,13 @@ class RemoteStore:
                          timeout=wait + 30)["events"]
 
     def submit(self, entry):
-        return self.call("POST", "/v1/changes", entry)
+        return self.call("POST", "/v1/changes", entry, safe=bool(entry.get("id")))  # an id: the same change twice
 
     def cancel_change(self, eid, how="cancel"):
         return self.call("POST", f"/v1/changes/{urllib.parse.quote(eid, safe='')}:{how}", {})
 
     def nudge(self):
-        return self.call("POST", "/v1/tick", {})
+        return self.call("POST", "/v1/tick", {}, safe=True)
 
 
 for _m in STORE_RPC:
