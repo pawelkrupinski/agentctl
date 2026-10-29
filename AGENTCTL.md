@@ -227,19 +227,24 @@ lease holders and fixers, the page also lists every other known session or subag
 
 ```
 agentctl store serve --listen ADDR:PORT --forgejo-url URL --allow-user U... --metrics-user U...   # ci-runner's unit
-agentctl store import --to http://localhost:3014   # the laptop's move (leases, its queue, then open reds merged by key); rerunnable
-agentctl store use http://localhost:3014 | --local # the switch for every agentctl process on this laptop
+agentctl store use http://localhost:3014           # which store every agentctl process on this laptop uses (the default)
 agentctl tick                                      # on ci-runner (AGENTCTL_HOST=ci-runner): the reconciler
 ```
 
-Prepared, not yet switched on (the owner's steps: `~/bin/docs/phase2-runbook.md`). The store is served over HTTP on
+Live since 2026-10-29 (the owner's steps: `~/bin/docs/phase2-runbook.md`). The store is served over HTTP on
 ci-runner's :3014 (through the tunnel); every request carries the caller's own Forgejo token, checked with Forgejo.
-Each process has a ROLE: `local` (today: the laptop does everything), `server` (`tick` on ci-runner: changes,
-batch, watches, reds, conditions; checks on the CI tier; never the laptop's duties) and `sync` (the laptop once `store
-use` points at ci-runner: `land` submits there, events become inbox entries, escalations notifications, the state is
-mirrored into `state.json`, claims are renewed from the worktrees, and the fixer dispatcher takes the offers -- fixers
-stay on the laptop, in `claude agents`). `Store()` is the remote store in the sync role, so every command works
-unchanged. With the store down `land` prints `QUEUED-LOCAL` and the sync submits it later.
+Each process has one of TWO roles (owner decision 7: one writer, no laptop standby):
+- `server` (AGENTCTL_HOST=ci-runner or AGENTCTL_ROLE=server): the database in-process; `tick` there runs changes,
+  batch, watches, reds, conditions; checks on the CI tier; never the laptop's duties.
+- `sync` (everywhere else): `land` submits there, events become inbox entries, escalations notifications, the state is
+  mirrored into `state.json`, claims are renewed from the worktrees, and the fixer dispatcher takes the offers --
+  fixers stay on the laptop, in `claude agents`. `Store()` is the remote store (`store.url` in the state root, else
+  http://localhost:3014), so every command works unchanged. With the store down `land` prints `QUEUED-LOCAL` and the
+  sync submits it later.
+
+There is no laptop store any more (`store use --local`, `store import` and the laptop's own tick were removed
+2026-10-29, docs/simplification-2026-10.md item 2). Disaster recovery needs no laptop copy: ci-runner keeps 24 hourly
+backups (`agentctl-store-backup`), and a lost store.db is rebuilt from the land/* refs and Forgejo's runs (design §16).
 
 ### wait run: block on CI and print only the verdict
 

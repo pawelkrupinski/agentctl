@@ -189,7 +189,7 @@ Check that Forgejo has no drift left:
 
 Expected: every line starts with `=`.
 
-**10. Laptop: move onto ci-runner's store.** Until now the laptop keeps its own queue, and ci-runner's
+**10. Laptop: move onto ci-runner's store.** (Done 2026-10-29. Since then `store import` and `store use --local` are gone with the laptop's store, docs/simplification-2026-10.md item 2: the line below is history, not a runnable step. Rollback is the revert below alone; the laptop's sync keeps pointing at :3014.) Until now the laptop keeps its own queue, and ci-runner's
 reconciler ticks an empty one. This stops the laptop's processor, copies its live leases (same epoch and
 secret, so their holders keep renewing them), open reds and conditions and its queued changes into the
 remote store, switches every agentctl process on the laptop to it (`~/.cache/agentctl/store.url`), and
@@ -203,7 +203,7 @@ Expected: `store import -> ...: N live lease(s), ...`, `store: http://localhost:
 status` listing the changes ci-runner now holds. Back to the local store: `~/bin/agentctl store use
 --local` and `launchctl kickstart -k gui/$(id -u)/net.bitcashier.agentctl-waiting`.
 
-**Rollback.** Run step 10's `store use --local` line first. Then revert the enabling commit and deploy again. The store's database stays in
+**Rollback.** Revert the enabling commit and deploy again. The store's database stays in
 `/var/lib/agentctl`.
 
 ```
@@ -277,8 +277,8 @@ The header of `agentctl.rules` defines each one.
   error and closes when the probe passes. A change re-queued 3 times (or 30 min) for the same infra reason
   opens a STALLED condition with the exact error.
 - `AGENTCTL_FORGEJO_URL` is read for the API (`<url>/api/v1`) when `AGENTCTL_FORGEJO_API` is unset.
-- The laptop: `store import --to URL` (the one-shot move) and `store use URL | --local` (the switch,
-  kept in the state root so agents' own `land` / `red claim` agree). As the sync, `land` pushes
+- The laptop: `store use URL` (the switch, kept in the state root so agents' own `land` / `red claim` agree; the
+  default is http://localhost:3014). `store import` and `--local` were removed with the laptop's store (2026-10-29). As the sync, `land` pushes
   `land/<id>` and POSTs the change; with the store down it prints `QUEUED-LOCAL` and the sync sends it
   from the outbox.
 - WATCH OK on ci-runner closes the laptop worktree the change was landed from: the `watch.ok` event names
