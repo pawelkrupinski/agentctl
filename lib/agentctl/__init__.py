@@ -10,7 +10,7 @@ order of definitions is kept.
 """
 import os as _os
 
-PARTS = ("landwatch", "waiting", "queue", "remote", "batch", "tools", "cleanup", "maint", "store", "server",
+PARTS = ("slots", "landwatch", "waiting", "queue", "remote", "batch", "tools", "cleanup", "maint", "store", "server",
          "upkeep", "watchdog", "inbox", "recovery", "status", "live", "cli")
 
 
