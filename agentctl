@@ -3416,7 +3416,8 @@ def red_rekeyed(d, obs):
 
 
 def red_merge_rekeyed(store, active, obs):
-    """Reds keyed apart that the classifier now reads as ONE failure: an open red whose key is not observed any more,
+    """Reds keyed apart that the classifier now reads as ONE failure: an open red keyed by an OLDER classifier (its
+    `classifier`, recorded when it was opened or last observed) whose key is not observed any more,
     while a run of its own now fails the same job under another open red's key (the streak's signatures read again by
     this classifier), is merged into that red -- its runs (the names a `Fixes-Red:` change links by), history, refuted
     fixes and attempts kept -- and closed as re-keyed. Verify scrape recording #2406 (a WARN line), #2481 (a
@@ -3425,10 +3426,12 @@ def red_merge_rekeyed(store, active, obs):
     acts = []
     if not obs:
         return acts
+    cv = classifier_version()
     for key, it in list(active.items()):
         d = it["data"]
-        if key in obs or it["state"] in RED_TERMINAL or d.get("red_kind") in ("local", "stuck-run", "predicts"):
-            continue
+        if key in obs or it["state"] in RED_TERMINAL or d.get("red_kind") in ("local", "stuck-run", "predicts") \
+                or d.get("classifier") == cv:
+            continue  # keyed by THIS classifier: a re-read of its run under other keys clears nothing (cf. red_gone)
         runs = set(map(str, d.get("runs") or []))
         jobs = {str(j) for j in (d.get("jobs") or [d.get("job")]) if j and j != "?"}
         into = [o for o in obs.values() if o["key"] != key and o["key"] in active and o["workflow"] == d.get("workflow")
@@ -3949,7 +3952,7 @@ def red_open(store, ob, repo, t):
     data = {"key": key, "workflow": ob["workflow"], "jobs": ob["jobs"], "job": ob["job"], "kind": ob["kind"],
             "line": ob["line"], "red_kind": ob["red_kind"], "gate": ob["gate"], "predicts": ob.get("predicts"),
             "runs": sorted(ob["names"]), "last_run": ob["run"], "opened_at": t, "attempts": 0, "history": [],
-            "derived": ob.get("derived") or []}
+            "derived": ob.get("derived") or [], "classifier": classifier_version()}
     if ob["kind"] == "test" and ob["red_kind"] in ("gate", "outside"):
         try:
             data["author"] = red_author(repo, ob, t)
@@ -3968,10 +3971,12 @@ def red_attach_obs(store, it, ob):
     runs = sorted(set(d.get("runs") or []) | set(ob["names"]))
     newer = int(ob["run"].get("databaseId") or 0) > int((d.get("last_run") or {}).get("databaseId") or 0)
     derived = sorted(set(d.get("derived") or []) | set(ob.get("derived") or []))
+    cv = classifier_version()
     if runs == d.get("runs") and not newer and sorted(ob["jobs"]) == sorted(d.get("jobs") or []) \
-            and derived == sorted(d.get("derived") or []):
+            and derived == sorted(d.get("derived") or []) and d.get("classifier") == cv:
         return it
-    upd = {"runs": runs, "jobs": sorted(set(d.get("jobs") or []) | set(ob["jobs"])), "derived": derived}
+    upd = {"runs": runs, "jobs": sorted(set(d.get("jobs") or []) | set(ob["jobs"])), "derived": derived,
+           "classifier": cv}  # observed under this classifier's key
     if newer:
         upd["last_run"] = ob["run"]
     store.update_item("red", it["id"], it["version"], upd)
