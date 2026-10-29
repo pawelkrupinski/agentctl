@@ -276,6 +276,58 @@ class DispatcherRemoteTest(Phase2Base):
         self.assertEqual(self.st.offers("fixer"), [])
 
 
+class StaleStoreFixerTest(Phase2Base):
+    def test_a_live_fixer_renewing_the_laptops_store_is_adopted_on_ci_runners_and_no_second_fixer_goes(self):
+        # 2026-10-29: the gate fixer's wrapper (pid 31738), started before `store use`, renewed its lease on the
+        # laptop's store.db; ci-runner's imported copy expired and its reds were offered again
+        os.environ.pop("AGENTCTL_REDS_DIR", None)
+        os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp, "laptop")  # (one process plays both hosts here)
+        t = time.time()
+        laptop = A.Store(path=A.state_root("store.db"))
+        took = laptop.acquire("red/k1", "laptop:fixer:red-k1-7", 900, 3600, meta={"kind": "fixer", "run": 20})
+        row = dict(laptop.get("red/k1"), expires_at=t - 60)  # ci-runner's copy: imported, then lapsed
+        self.st.import_lease(row)
+        it = self.st.put_item("red", "k1", "offered", {"key": "k1", "workflow": "Main", "last_run": {"number": 20}})
+        pic = {"key": "k1", "workflow": "Main", "job": "test", "run": {"number": 20, "databaseId": 40}, "kind": "test"}
+        self.st.offer("fixer", f"red:{it['id']}", A.red_lease("k1"), "fresh", 1, t + 600, pic)
+        log = os.path.join(self.tmp, "fixer.log")
+        with open(log, "w") as f:
+            f.write("working\n")
+        A.write_json(A.reds_dir("20", "fixer-1.json"),
+                     {"workflow": "Main", "run": 20, "pid": os.getpid(), "process_start": A.process_start(os.getpid()),
+                      "worktree": self.tmp, "log": log, "lease": "red/k1", "epoch": took["epoch"]})
+        acts = A.red_adopt_fixers(self.remote, A.red_active(self.remote), t)
+        self.assertEqual(len(acts), 1, acts)
+        held = self.st.get("red/k1")
+        self.assertTrue(held["holder"].startswith(f"laptop:fixer:pid-{os.getpid()}@"))
+        self.assertEqual(A.lease_meta(held)["kind"], "legacy-fixer")
+        self.assertTrue(A.lease_is_live(held, t))
+        A.red_renew_holders(self.remote, t)  # renewed by its log's growth and its worktree's activity
+        spawned, saved = [], (A.red_spawn, A.cached_dispatch_blocker)
+        A.red_spawn = lambda *a, **k: spawned.append(a) or (True, "ok")
+        A.cached_dispatch_blocker = lambda: None
+        try:
+            A.red_dispatcher(self.remote, "o/r", self.repo, t)
+        finally:
+            A.red_spawn, A.cached_dispatch_blocker = saved
+        self.assertEqual(spawned, [])  # its run's fixer is alive: no duplicate
+        # a fixer whose lease IS held on the store in use is its own wrapper's: never adopted
+        self.assertEqual(A.red_adopt_fixers(self.remote, A.red_active(self.remote), t), [])
+        self.assertFalse(A.fixer_on_other_store({"lease": "red/k1", "epoch": took["epoch"]}, laptop, t))
+
+
+class CurrentStoreTest(Phase2Base):
+    def test_a_long_running_holder_follows_store_use(self):
+        os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp, "laptop")
+        cs = A.CurrentStore()
+        took = cs.acquire("red/w", "laptop:fixer:w", 600, 3600)  # on the laptop's store
+        self.assertIsNone(self.st.get("red/w"))
+        self.st.import_lease(A.Store(path=A.state_root("store.db")).get("red/w"))  # the import copies it
+        os.environ.update(AGENTCTL_STORE_URL=self.url, AGENTCTL_STORE_TOKEN="tok-pawel")  # `store use`
+        self.assertEqual(cs.renew("red/w", took["epoch"], took["secret"], "moved", 600), "ok")
+        self.assertEqual(self.st.get("red/w")["progress"], "moved")  # renewed on ci-runner's store
+
+
 class ImportTest(Phase2Base):
     def test_the_one_shot_import_moves_live_leases_open_items_and_the_queue(self):
         local = A.Store(path=os.path.join(self.tmp, "laptop.db"))

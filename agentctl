@@ -4075,7 +4075,7 @@ def red_adopt_fixers(store, active, t):
     state, the status line, the escalations and W2 alike."""
     out = []
     for r in fixer_records():
-        if not r["alive"] or r.get("lease"):
+        if not r["alive"] or (r.get("lease") and not fixer_on_other_store(r, store, t)):
             continue
         run = (r.get("workflow"), str(r.get("run")))
         for it in active.values():
@@ -4090,6 +4090,24 @@ def red_adopt_fixers(store, active, t):
             if "held" not in got:
                 out.append(f"adopted the live fixer pid {r.get('pid')} as the holder of {red_what(d)}")
     return out
+
+
+def fixer_on_other_store(r, store, t):
+    """A live fixer whose wrapper renews its lease on the laptop's own store.db while the store in use is ci-runner's
+    (2026-10-29 cutover: the gate fixer pid 31738, started before `store use`, kept renewing red-67b7ea491ade-7 on the
+    laptop; ci-runner's imported copy expired and its reds were offered again). The sync adopts its run's reds for it
+    (red_adopt_fixers: renewed by its log's growth and its worktree's activity, revoked when the process ends)."""
+    if not isinstance(store, RemoteStore) or not r.get("lease"):
+        return False
+    try:
+        mine = Store(path=state_root("store.db")).get(r["lease"])
+    except Exception:
+        return False
+    if not (mine and mine["epoch"] == r.get("epoch") and lease_is_live(mine, t)):
+        return False
+    there = store.get(r["lease"])
+    return not (there and there["epoch"] == r.get("epoch") and there["secret"] == mine["secret"]
+                and lease_is_live(there, t))
 
 
 def red_import_claims(store, active, t):
@@ -4709,6 +4727,16 @@ def bg_final_text(path):
     return last
 
 
+class CurrentStore:
+    """Store() resolved again at every call, so a long-running process follows `agentctl store use` (2026-10-29
+    cutover: the gate fixer's wrapper, started on the laptop's store, renewed its leases there for hours while
+    ci-runner's imported copies expired and its reds were offered again). Its leases' epoch and secret are the same on
+    both (the import copies them), so its renewals simply land on the store in use."""
+
+    def __getattr__(self, name):
+        return getattr(Store(), name)
+
+
 def red_fixer(a):
     """The dispatched fixer's wrapper (detached): start its background claude session under the red's lease, renew the
     lease by its progress every RED_RENEW_EVERY s, `claude stop` it when the lease is lost (RED-STOP.md), release the
@@ -4718,7 +4746,7 @@ def red_fixer(a):
     session = rec.get("session")  # known once `claude agents` lists the session (--bg picks its id)
     me = os.getpid()
     who = f"red-fixer-{num}"
-    st = Store()
+    st = CurrentStore()
     name, epoch = rec.get("lease"), rec.get("epoch")
     secret = os.environ.pop("AGENTCTL_LEASE_SECRET", None)
     extra = [(x["name"], x["epoch"], json.loads(os.environ.get("AGENTCTL_LEASE_SECRETS") or "{}").get(x["name"]))
@@ -12649,6 +12677,14 @@ def sync_steps(repo, d, o_r):
             last_mirror[0] = time.time()
             mirror_state()
 
+    def sync_claims():
+        """The laptop's holders on ci-runner's store: its live fixers whose leases are not held there adopted (their
+        wrappers may renew another store), then every claim and adopted fixer renewed by its worktree's activity."""
+        st, t = Store(), time.time()
+        for x in red_adopt_fixers(st, red_active(st), t):
+            err(f"red: {x}")
+        red_renew_holders(st, t)
+
     def dispatch():
         if os.path.exists(reds_dir("DISPATCH_OFF")):
             return []
@@ -12656,7 +12692,7 @@ def sync_steps(repo, d, o_r):
     return (("outbox", flush_outbox), ("state mirror", mirror), ("children", reap_children),
             ("events", project_events), ("notifier", notify_escalations),
             ("landed worktrees", lambda: [err(x) for x in close_landed_worktrees()]),
-            ("claims", lambda: red_renew_holders(Store(), time.time())),
+            ("claims", sync_claims),
             ("dispatcher", dispatch),
             ("network watch", network_watch), ("tunnel probe", tunnel_watch),
             ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep()]))
