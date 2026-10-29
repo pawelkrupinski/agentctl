@@ -3443,7 +3443,7 @@ def fix_show(repo, sha, path):
     return r.stdout if r.returncode == 0 else None
 
 
-def workflow_jobs(text):
+def fix_workflow_jobs(text):
     """{job key: (its block's text, its `name:`)} of a workflow file, by indentation (no YAML parser here)."""
     lines = text.splitlines()
     try:
@@ -3485,7 +3485,7 @@ def red_job_reads(repo, sha, d):
     if not wf:
         return None
     reads, texts = {wf[0]}, []
-    jobs = workflow_jobs(wf[1])
+    jobs = fix_workflow_jobs(wf[1])
     names = [str(j) for j in d.get("jobs") or [d.get("job")] if j]
     heads = {re.split(r" / | \(", n, maxsplit=1)[0].strip().lower() for n in names}
     picked = [body for k, (body, nm) in jobs.items()
