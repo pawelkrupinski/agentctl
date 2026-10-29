@@ -559,7 +559,7 @@ agent must be assigned to it".
   (`scripts/identity-drift-ci --for-red <run>`); it fails before the fix and passes after; iterate on it, the full
   suites give only the final verdict.
 - **No new fixer on a laptop under pressure (2026-10-29: load 56-72 on 14 cores, swap 30.4 of 31.7 GB).** The
-  dispatcher starts no fixer while swap is over 90% used (`$AGENTCTL_FIXER_SWAP_PCT`), the load over 3x the cores
+  dispatcher starts no fixer while swap USED is over 16 GB (`$AGENTCTL_FIXER_SWAP_GB`; absolute, since macOS shrinks the swap total), the load over 3x the cores
   (`$AGENTCTL_FIXER_LOAD`) or free memory under 4 GB (`$AGENTCTL_FIXER_FREE_GB`). The red stays offered, reading
   `waiting: laptop pressure (<which>)`, and takes no slot; it dispatches when the pressure clears, and its offer's
   deadline still escalates it (`RED UNCLAIMED`, `RED STARVED`) as before.

@@ -7256,10 +7256,11 @@ def gov_pressure():
 
 
 # NO NEW FIXER ON A LAPTOP UNDER PRESSURE (the owner's coordinator, 2026-10-29: load 56-72 on 14 cores, swap 30.4 of
-# 31.7 GB). The dispatcher starts no fixer while swap is over FIXER_SWAP_PCT used, the load over FIXER_LOAD x the cores,
+# 31.7 GB). The dispatcher starts no fixer while swap used is over FIXER_SWAP_GB, the load over FIXER_LOAD x the cores,
 # or free memory under FIXER_FREE_GB: the red stays offered (`waiting: laptop pressure (...)`), takes no slot, and
 # dispatches when the pressure clears; its offer's own deadline still escalates it (RED UNCLAIMED / STARVED).
-FIXER_SWAP_PCT = 90.0   # $AGENTCTL_FIXER_SWAP_PCT
+FIXER_SWAP_GB = 16.0    # $AGENTCTL_FIXER_SWAP_GB: swap USED, absolute -- macOS shrinks the swap total as it frees,
+                        # so a share of the total never drops (15.0 GB total, 13.9 used read as 93% with 57% RAM free)
 FIXER_LOAD = 3.0        # $AGENTCTL_FIXER_LOAD (x cores)
 FIXER_FREE_GB = 4.0     # $AGENTCTL_FIXER_FREE_GB
 
@@ -7281,7 +7282,7 @@ def laptop_pressure(m=None, swap=None):
         return os.environ["AGENTCTL_LAPTOP_PRESSURE"].strip("-") or None  # `-` or empty: none
     m = m or gov_machine()
     used, total = swap or swap_usage()
-    if used is not None and total and 100.0 * used / total > env_num("AGENTCTL_FIXER_SWAP_PCT", FIXER_SWAP_PCT):
+    if used is not None and used / 1024 > env_num("AGENTCTL_FIXER_SWAP_GB", FIXER_SWAP_GB):
         return f"swap {used / 1024:.1f} of {total / 1024:.1f} GB used"
     if m.get("load1") is not None and m["load1"] > env_num("AGENTCTL_FIXER_LOAD", FIXER_LOAD) * m["cores"]:
         return f"load {m['load1']:.0f} on {m['cores']} cores"

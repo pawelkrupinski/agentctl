@@ -178,6 +178,8 @@ class LaptopPressureTest(CapacityBase):
         calm = {"free": 12.0, "load1": 10.0, "cores": 14, "pressure": 30}
         self.assertIsNone(A.laptop_pressure(calm, (10_000.0, 32_000.0)))
         self.assertIn("swap", A.laptop_pressure(calm, (30_400.0, 31_700.0)))
+        # macOS shrinks the swap total as it frees: 13.9 of 15.0 GB with RAM to spare is no pressure (2026-10-29 22:55)
+        self.assertIsNone(A.laptop_pressure(calm, (14_104.0, 15_360.0)))
         self.assertIn("load 56 on 14", A.laptop_pressure({**calm, "load1": 56.0}, (0.0, 1.0)))
         self.assertIn("3.0 GB free", A.laptop_pressure({**calm, "free": 3.0}, (None, None)))
 
