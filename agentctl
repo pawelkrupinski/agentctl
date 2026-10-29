@@ -27,7 +27,7 @@
         Locked vault: one line `vault <ns> locked: ask the user to run `! secrets unlock <ns>``, exit 1. Never unlocks.
   agentctl db-q [--env forgejo] [--max-rows N] "<sql>"
         Read-only Forgejo DB query (sqlite3 -readonly -safe); only one SELECT/WITH/PRAGMA read; rows capped.
-  agentctl inbox [ID...] [--unread] [--ack] [--limit N] [--json] [-v]
+  agentctl inbox [ID...] [--unread] [--ack [--all]] [--limit N] [--json] [-v]
         Every final verdict of land / watch / wait / waiting await (and land's WAITING line), one JSON file each in
         ~/.cache/agentctl/inbox/, written however the command ended. The orchestrator reads it, agent alive or not.
   agentctl state <topic> [--set field=value ...] [--add field=value ...]
@@ -14939,7 +14939,7 @@ def inbox_write(command, verdict, verdicts, tail, exit_code, final=True, cwd=Non
            "kind": inbox_kind(verdict, final),
            "owner": os.environ.get("CLAUDE_CODE_SESSION_ID") or f"{os.environ.get('USER', '?')}@{here}",
            "claude_pid": int(os.environ["CLAUDE_PID"]) if (os.environ.get("CLAUDE_PID") or "").isdigit() else None,
-           "verdicts": verdicts, "tail": tail}
+           "agent": agent_name(), "verdicts": verdicts, "tail": tail}
     try:
         d = inbox_dir()
         os.makedirs(d, exist_ok=True)
@@ -15617,11 +15617,44 @@ def cmd_inbox(a):
                 for line in e.get("tail") or []:
                     print(f"    {line}")
     if a.ack and entries:
+        # ACK ONLY YOUR OWN (2026-10-29 19:00: an agent's `inbox --unread --ack` marked every agent's verdicts read):
+        # named ids and --all (the owner, the orchestrator) ack what was listed; otherwise only the caller's entries
+        mine = entries if (a.ids or getattr(a, "all", False)) else [e for e in entries if own_inbox_entry(e)]
         os.makedirs(os.path.join(inbox_dir(), "acked"), exist_ok=True)
-        for e in entries:
+        for e in mine:
             open(os.path.join(inbox_dir(), "acked", e["id"]), "a").close()
-        print(f"inbox: acknowledged {len(entries)} entr{'y' if len(entries) == 1 else 'ies'}")
+        left = len(entries) - len(mine)
+        print(f"inbox: acknowledged {len(mine)} entr{'y' if len(mine) == 1 else 'ies'}"
+              + (f"; {left} left unread for the agents they belong to (`--all` acks them: the owner's)" if left else ""))
     return 0
+
+
+def caller_identity():
+    """(session, worktree, agent name) of the process running agentctl: its Claude session, the git worktree of its cwd
+    (None outside one, or at $HOME), its agent name (agent_name)."""
+    here = safe_cwd()
+    r = subprocess.run(["git", "-C", here, "rev-parse", "--show-toplevel"], capture_output=True, text=True) \
+        if os.path.isdir(here) else None
+    top = os.path.realpath(r.stdout.strip()) if r is not None and r.returncode == 0 and r.stdout.strip() else None
+    if top in (os.path.realpath(HOME), "/"):
+        top = None
+    return os.environ.get("CLAUDE_CODE_SESSION_ID") or None, top, agent_name()
+
+
+def own_inbox_entry(e, who=None):
+    """Whether inbox entry e is the caller's: its session's, from inside its worktree, or its agent name's."""
+    session, top, name = who or caller_identity()
+    if session and e.get("owner") == session:
+        return True
+    if name and e.get("agent") == name:
+        return True
+    if top:
+        for p in (e.get("cwd"), str(e.get("owner") or "").partition("@")[2]):
+            if p and os.path.isabs(p):
+                p = os.path.realpath(p)
+                if p == top or p.startswith(top.rstrip("/") + "/"):
+                    return True
+    return False
 
 
 # ---------------------------------------------------------------- the status page (2026-10-29)
@@ -17312,7 +17345,9 @@ def main(argv=None):
     ib.add_argument("--timeout", type=float, default=0, help="wait: give up after S seconds, exit 2 (default: never)")
     ib.add_argument("--forever", action="store_true", help="wait: never exit; stream each entry once, one line each")
     ib.add_argument("--unread", action="store_true", help="only the entries not acknowledged yet")
-    ib.add_argument("--ack", action="store_true", help="acknowledge the entries listed")
+    ib.add_argument("--ack", action="store_true", help="acknowledge the entries listed that are YOURS (your session's, "
+                                                        "worktree's or agent name's), or those named by ID")
+    ib.add_argument("--all", action="store_true", help="with --ack: every entry listed, anyone's (the owner)")
     ib.add_argument("--limit", type=int, default=30, help="the newest N (default 30; 0 = all)")
     ib.add_argument("--json", action="store_true")
     ib.add_argument("-v", "--verbose", action="store_true", help="each entry's last output lines too")

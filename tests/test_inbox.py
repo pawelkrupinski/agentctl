@@ -112,6 +112,44 @@ class InboxTest(unittest.TestCase):
         _, out = self.run_main(["inbox"])
         self.assertEqual(out.count("read  "), 2)
 
+    def test_ack_marks_only_the_callers_own_entries_and_all_is_the_owners(self):
+        """2026-10-29 19:00: an agent's `inbox --unread --ack` marked every agent's verdicts read."""
+        saved = (os.environ.get("CLAUDE_CODE_SESSION_ID"), os.getcwd())
+        mine_wt = os.path.join(self.tmp.name, "movies-wt-mine")
+        other_wt = os.path.join(self.tmp.name, "movies-wt-mine-2")  # a sibling whose name extends mine
+        for wt in (mine_wt, other_wt):
+            subprocess.run(["git", "init", "-q", wt], check=True)
+        try:
+            os.environ["CLAUDE_CODE_SESSION_ID"] = "session-mine"
+            own = A.inbox_write("land", "LANDED aaaaaaa", [], [], 0, reply=True)
+            os.environ["CLAUDE_CODE_SESSION_ID"] = "session-other"
+            in_my_tree = A.inbox_write("land", "WATCH RED: Main #9 test", [], [], 3, cwd=os.path.join(mine_wt, "sub"),
+                                       reply=True)
+            theirs = A.inbox_write("land", "NOT LANDED: theirs", [], [], 1, cwd=other_wt, reply=True)
+            named = A.inbox_write("land", "NOT LANDED: named", [], [], 1, cwd=other_wt, reply=True)
+            os.environ["CLAUDE_CODE_SESSION_ID"] = "session-mine"
+            os.chdir(mine_wt)
+            _, out = self.run_main(["inbox", "--unread", "--ack"])
+            self.assertIn("acknowledged 2 entries; 2 left unread", out)
+            read = {e["id"]: e["read"] for e in self.entries()}
+            self.assertEqual(read, {own: True, in_my_tree: True, theirs: False, named: False})
+            self.run_main(["inbox", named, "--ack"])  # an entry named by id: acked, whoever's
+            self.assertEqual({e["id"]: e["read"] for e in self.entries()}[theirs], False)
+            self.assertTrue({e["id"]: e["read"] for e in self.entries()}[named])
+            os.chdir(self.tmp.name)  # outside any worktree, another session: nothing of its own
+            os.environ["CLAUDE_CODE_SESSION_ID"] = "session-third"
+            _, out = self.run_main(["inbox", "--unread", "--ack"])
+            self.assertIn("acknowledged 0 entries; 1 left unread", out)
+            _, out = self.run_main(["inbox", "--unread", "--ack", "--all"])  # the owner's
+            self.assertIn("acknowledged 1 entry", out)
+            self.assertTrue(all(e["read"] for e in self.entries()))
+        finally:
+            os.chdir(saved[1])
+            if saved[0] is None:
+                os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+            else:
+                os.environ["CLAUDE_CODE_SESSION_ID"] = saved[0]
+
     def test_a_systemexit_message_is_the_verdict(self):
         # 2026-10-27: two detached watches died on the vault's SystemExit and their entries said "(no output)"
         def handler(a):

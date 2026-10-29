@@ -24,7 +24,7 @@ eval "$(~/bin/agentctl env --print)"        # 1. sbt/java on PATH; a locked vaul
 ~/bin/agentctl land                         # 2. rebase + guard, then QUEUED <id> in seconds: END YOUR TURN (verdicts -> inbox)
 ~/bin/agentctl wait run <id> &              # 3. Bash run_in_background=true, then END YOUR TURN
 ~/bin/agentctl ci-why                       # 4. only when land says the red gate refused, or Main is red
-~/bin/agentctl inbox --unread --ack         # 5. the orchestrator: every land/watch/wait verdict, agent alive or not
+~/bin/agentctl inbox --unread --ack         # 5. your own verdicts (the orchestrator/owner: --ack --all), agent alive or not
 ~/bin/agentctl inbox wait --forever &       # 6. the orchestrator's notifier: Bash run_in_background=true (see "inbox")
 ~/bin/agentctl red claim <run> --note "…"   # 7. assigned a red build? claim it first (see "red")
 ~/bin/agentctl dispatch run <wf.yml> --ref <branch> -f k=v --purpose "…"  # 8. dispatching CI yourself? own it (see "dispatch")
@@ -930,7 +930,7 @@ failed and nobody was told: the snapshot, the status line and the reds covered m
 ### inbox: every final verdict, durable
 
 ```
-agentctl inbox [ID...] [--unread] [--ack] [--limit N] [--json] [-v]
+agentctl inbox [ID...] [--unread] [--ack [--all]] [--limit N] [--json] [-v]
 ```
 
 The owner (2026-10-27): three agents ended their turns while their land/watch still ran, and the WATCH verdicts went
@@ -946,8 +946,10 @@ nowhere. Every verdict now reaches the inbox: a change's, a batch's and a watch'
   a `wait` leaves no entry (its owner record stays; `agentctl orphans` names it); the reconciler's verdicts are events
   in the store and survive any process.
 - `agentctl inbox` lists the newest 30 (`--limit 0`: all), `--unread` only those not acknowledged, `--ack`
-  acknowledges what it listed, `-v` adds each entry's output tail, an ID prefix picks entries. Exit 0.
-- The orchestrating session reads it whether or not the agent is alive: `agentctl inbox --unread --ack` after each
+  acknowledges what it listed that is the CALLER'S OWN -- its session's, from inside its worktree, or its agent name's
+  (2026-10-29 19:00: an agent's `--unread --ack` hid every other agent's verdicts) -- entries named by ID whoever's,
+  and `--ack --all` everything listed (the owner's, the orchestrator's), `-v` adds each entry's output tail, an ID prefix picks entries. Exit 0.
+- The orchestrating session reads it whether or not the agent is alive: `agentctl inbox --unread --ack --all` after each
   agent's report, and before deciding an agent's land is lost.
 - Each entry has a `kind`, from its verdict: `RED`, `OK`, `STALLED`, `UNKNOWN` (also a crash, a signal, an exit with
   no verdict), `NOT_LANDED`, `SUPERSEDED`, `LANDED`, `WAITING`, `HELD`, `FIX_FAILED`, `FIX_OK`, `FIX_UNVERIFIED`, `CHECK`, `OTHER`;
