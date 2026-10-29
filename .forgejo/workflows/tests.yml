@@ -1,0 +1,25 @@
+# agentctl's own suite on ci-runner (docs/simplification-2026-10.md, item 1). GREEN here is what the auto-pin
+# (infra agentctl-autopin) reads before it bumps ci-runner's agentctl-pin.nix to a revision of main.
+#
+# The `ubuntu-26.04` label is ci-runner's container tier (infra nix/hosts/ci-runner/forgejo.nix `ubuntu`): a fresh
+# job container per run, so the suite meets an empty HOME, no sdkman, no ~/.cache/agentctl, no ~/projects/movies --
+# exactly the hermetic harness the tests promise. tests/run.py runs it in parallel with a per-test timeout; the
+# whole job is bounded too.
+name: tests
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  suite:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Suite (parallel, 60 s per test)
+        run: |
+          git config --global user.name agentctl-ci
+          git config --global user.email agentctl-ci@forgejo.internal
+          git config --global init.defaultBranch main
+          python3 --version
+          timeout -s KILL 420 python3 tests/run.py -j 6 --timeout 60 --suite-timeout 360 --durations 15
