@@ -3037,15 +3037,18 @@ FIX_OPEN = ("queued", "checking", "checked", "waiting", "joined", "pushing")
 
 
 def landed_fix_commits(repo):
-    """[(sha, commit time, {values}, subject)]: Fixes-Red commits on forgejo/main in the last 3 days."""
+    """[(sha, commit time, {values}, subject)]: Fixes-Red commits on forgejo/main in the last 3 days -- but for one whose
+    `Red-Unrelated:` trailer says it names the red only to pass the gate (`red_unrelated`): landed, it is no more a fix
+    than queued. Identity model convergence #2432 (2026-10-28): four CI speed-ups carrying `Fixes-Red: 2392` beside one
+    were each read as the red's fix on its way, its live fixer stopped, then refuted -- "recurring: 4 fixes refuted"."""
     if not repo:
         return []
-    fmt = "%H%x09%ct%x09%(trailers:key=Fixes-Red,valueonly,separator=%x2C)%x09%s"
+    fmt = "%H%x09%ct%x09%(trailers:key=Red-Unrelated,valueonly,separator=%x2C)%x09%(trailers:key=Fixes-Red,valueonly,separator=%x2C)%x09%s"
     r = git(repo, "log", f"refs/remotes/{REMOTE}/main", "--since=3.days", f"--format={fmt}", check=False)
     out = []
     for line in (r.stdout if r.returncode == 0 else "").splitlines():
-        sha, ct, vals, subj = (line.split("\t", 3) + ["", "", "", ""])[:4]
-        if trailer_values(vals):
+        sha, ct, unrelated, vals, subj = (line.split("\t", 4) + ["", "", "", "", ""])[:5]
+        if trailer_values(vals) and not unrelated.strip():
             out.append((sha, float(ct or 0), trailer_values(vals), subj))
     return out
 
@@ -4675,13 +4678,14 @@ def fix_between(repo, rec, red_head, green_head, causes, workflows):
     by chance (the owner, 2026-10-27: live drift #2051 was called a flake, and 03d646e63, `Fixes-Red: 2049`, which fixed
     the same failure in another workflow, had landed between): a `Fixes-Red:` naming one of its runs, a run with the
     same cause (any workflow) or a run of the same workflow, or a change to a file its failure names, or to CI's own
-    workflows and actions. (sha or None, known): known False when the commits between cannot be read here."""
+    workflows and actions -- a `Fixes-Red:` beside `Red-Unrelated:` names the red only to pass the gate, and fixes
+    nothing (`landed_fix_commits`). (sha or None, known): known False when the commits between cannot be read here."""
     if not repo or not red_head or not green_head:
         return None, False
     if red_head == green_head:
         return None, True
-    r = git(repo, "log", f"{red_head}..{green_head}", "--format=%x00%H%x09%(trailers:key=Fixes-Red,valueonly,separator=%x2C)",
-            "--name-only", check=False)
+    r = git(repo, "log", f"{red_head}..{green_head}", "--format=%x00%H%x09%(trailers:key=Red-Unrelated,valueonly,separator=%x2C)"
+            "%x09%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", "--name-only", check=False)
     if r.returncode != 0:
         return None, False
     names = set(map(str, rec.get("runs") or []))
@@ -4689,8 +4693,9 @@ def fix_between(repo, rec, red_head, green_head, causes, workflows):
     named = {m.group(1) for m in PATHISH.finditer(rec.get("line") or "")}
     for chunk in r.stdout.split("\0")[1:]:
         head, _, files = chunk.partition("\n")
-        sha, _, vals = head.partition("\t")
-        vals = trailer_values(vals)
+        sha, _, rest = head.partition("\t")
+        unrelated, _, vals = rest.partition("\t")
+        vals = set() if unrelated.strip() else trailer_values(vals)
         if vals & names or (cause and any(cause in causes.get(v, ()) for v in vals)) \
                 or any(workflows.get(v) == rec.get("workflow") for v in vals):
             return sha, True

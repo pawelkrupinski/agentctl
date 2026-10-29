@@ -305,6 +305,10 @@ The owner: "why unclaimed ... should always claim, fix structurally".
   counting once a later landed fix for the same runs or cause supersedes it, or once a fix landed since is refuted by a
   newer run. Otherwise it is a `stale` line (`abandoned: no process behind it, 14 h old`, `superseded by <sha>`), and
   `agentctl maintain` lists its worktree (and removes it only when proven merged).
+- **A `Red-Unrelated:` commit is no fix.** A change landing on red under the owner's speed-up rule carries `Fixes-Red:`
+  only to pass the gate; its `Red-Unrelated: <why>` trailer keeps it, queued or landed, from counting as the red's fix
+  (so it never stops the red's fixer, nor is it refuted) and from making a red that passed by chance read as fixed
+  (2026-10-28: four speed-ups landed this way stopped #2392's fixer, then went down as #2432's "4 fixes refuted").
 - **No daily budget.** A red that cannot get a fixer now (a concurrency cap, or dispatch unavailable) waits in a FIFO
   queue per class: `queued for a fixer (#k, next slot when <x> ends)`. That is a recovery condition (probe
   `fixer_slot`, on recover: the red tick runs). Gate reds keep their own cap of 3 alive.

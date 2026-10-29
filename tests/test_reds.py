@@ -293,6 +293,30 @@ class FixTest(RedsBase):
         self.tick()
         self.assertEqual(self.only()["state"], "offered")  # not fix-pending: the red keeps its own fixers
 
+    def test_a_change_landed_on_red_under_the_speed_up_rule_is_no_fix_for_the_red(self):
+        # Identity model convergence #2432 (2026-10-28): four CI speed-ups landed on red carrying `Fixes-Red: 2392` beside
+        # `Red-Unrelated:`; each was read off main as the red's fix on its way, its live fixer was stopped, and the next
+        # run counted it a refuted fix -- the red went "recurring: 4 fixes refuted" with none of them a fix.
+        self.tick()
+        wt = self.r.worktree("repo-wt-speedup", branch="speedup")
+        self.r.write("speedup.txt", "x\n", at=wt)
+        sha = self.r.commit("CI speed-up\n\nFixes-Red: 20\nRed-Unrelated: a CI speed-up, landing on red; no fix for this red",
+                            at=wt)
+        self.r.push(at=wt, ref=f"{sha}:main")
+        self.tick()
+        self.assertEqual(self.only()["state"], "offered")  # not fix-pending: the red keeps its own fixers
+        self.assertIsNone(self.only()["data"].get("fix"))
+
+    def test_a_commit_naming_the_red_only_to_pass_the_gate_fixed_nothing_between_red_and_green(self):
+        rec = {"runs": ["20"], "job": "takes-drift-1 (germany)", "line": "identity drift (de)", "workflow": "x.yml"}
+        red = A.git(self.r.path, "rev-parse", "HEAD").strip()
+        self.r.write("speedup.txt", "x\n")
+        unrelated = self.r.commit("CI speed-up\n\nFixes-Red: 20\nRed-Unrelated: a CI speed-up, landing on red")
+        self.assertEqual(A.fix_between(self.r.path, rec, red, unrelated, {}, {}), (None, True))  # passing by chance: a flake
+        self.r.write("fix.txt", "x\n")
+        fix = self.r.commit("fix it\n\nFixes-Red: 20")
+        self.assertEqual(A.fix_between(self.r.path, rec, red, fix, {}, {}), (fix, True))
+
 
 class ClearTest(RedsBase):
     def test_the_observation_that_opened_a_red_clears_it(self):
