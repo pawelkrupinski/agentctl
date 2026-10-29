@@ -195,7 +195,7 @@ the tick's. It answers only Host `agentctl.localhost`, `127.0.0.1` or `localhost
 
 ```
 agentctl store serve --listen ADDR:PORT --forgejo-url URL --allow-user U... --metrics-user U...   # ci-runner's unit
-agentctl store import --to http://localhost:3014   # the laptop's one-shot move (leases, open reds, its queue)
+agentctl store import --to http://localhost:3014   # the laptop's move (leases, its queue, then open reds merged by key); rerunnable
 agentctl store use http://localhost:3014 | --local # the switch for every agentctl process on this laptop
 agentctl tick                                      # on ci-runner (AGENTCTL_HOST=ci-runner): the reconciler
 ```

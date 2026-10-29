@@ -12466,7 +12466,9 @@ def cmd_store(a):
         return 0
     if a.scmd == "import":
         n = store_import(Store(path=state_root("store.db")), RemoteStore(a.to), a.repo or movies_repo_path())
-        print(f"store import -> {a.to}: {n['leases']} live lease(s), {n['items']} open item(s), {n['changes']} change(s)")
+        print(f"store import -> {a.to}: {n['leases']} live lease(s) copied ({n['leases_there']} there already), "
+              f"{n['items']} open item(s) created, {n['merged']} red(s) merged into ci-runner's ({n['skipped']} closed there already), "
+              f"{n['changes']} change(s)")
         return 0
     host, _, port = a.listen.rpartition(":")
     st = Store(path=state_root("store.db"))
@@ -12492,20 +12494,72 @@ def cmd_store(a):
     return 0
 
 
+RED_DERIVED_FIELDS = ("holder", "fix", "block", "cause", "until", "tier", "priority")  # the tick's to set, from the state
+
+
+def red_import_merge(into, other):
+    """One red's data from two spells of it: `other`'s history kept (fix, refuted, attempts, author, ...), the runs and
+    jobs united, the newer last run and the earlier opening -- the red's NAMES are what links a Fixes-Red change to it."""
+    by_id = lambda r: int((r or {}).get("databaseId") or 0)
+    m = {**into, **{k: v for k, v in other.items() if v not in (None, [], {}, "") and not into.get(k)
+                    and k not in RED_DERIVED_FIELDS}}
+    m["runs"] = sorted(set(map(str, into.get("runs") or [])) | set(map(str, other.get("runs") or [])))
+    m["jobs"] = sorted(set(into.get("jobs") or []) | set(other.get("jobs") or []))
+    m["last_run"] = max((into.get("last_run"), other.get("last_run")), key=by_id) or into.get("last_run")
+    opened = [float(x) for x in (into.get("opened_at"), other.get("opened_at")) if x]
+    if opened:
+        m["opened_at"] = min(opened)
+    m["attempts"] = max(int(into.get("attempts") or 0), int(other.get("attempts") or 0))
+    m["history"] = (other.get("history") or []) + [h for h in into.get("history") or [] if h not in (other.get("history") or [])]
+    return m
+
+
+def import_red(remote, it):
+    """One open laptop red onto ci-runner's store, BY ITS KEY (2026-10-29 cutover: the reconciler ticked before the
+    import finished and opened its own items for the same reds -- put_item left those as they were, so #2493 lost its
+    runs back to #2406 and with them the link to its Fixes-Red: 2406 change, and #2473's reds got a second open item
+    each). No open item for the key: created as it is. Else the laptop's history is merged into the open one (the
+    laptop's own id when it is open there) and every other open item of the key is merged in and closed. The STATE
+    is never set here: the tick derives it from the merged red (a fix whose Fixes-Red names it -> fix-pending, a live
+    lease -> leased, ...). Returns what it did."""
+    key = it["data"].get("key") or it["id"]
+    same = [x for x in remote.items("red") if (x["data"].get("key") or x["id"]) == key
+            and not machine_state("red", x["state"]).terminal]
+    if not same:
+        there = remote.item("red", it["id"])
+        if there:  # ci-runner's reconciler already closed this spell: its decision stands
+            return f"skipped: {there['state']} there already"
+        remote.put_item("red", it["id"], it["state"], it.get("data"))
+        return "created"
+    same.sort(key=lambda x: (x["id"] != it["id"], x["entered_at"]))
+    primary, rest = same[0], same[1:]
+    data = red_import_merge(primary["data"], it["data"])
+    for x in rest:
+        data = red_import_merge(data, x["data"])
+    if data != primary["data"]:
+        remote.update_item("red", primary["id"], primary["version"], data)
+    for x in rest:
+        remote.close_offer(f"red:{x['id']}", "merged")
+        remote.transition("red", x["id"], "cleared", x["version"],
+                          data={"merged_into": primary["id"]},
+                          event={"text": f"red {x['id']}: merged into {primary['id']} (one open red per key; store import)"})
+    return f"merged into {primary['id']}" + (f" (closed {', '.join(x['id'] for x in rest)})" if rest else "")
+
+
 def store_import(local, remote, repo):
-    """§13 phase 2 step 3, the laptop's one-shot move onto ci-runner's store: every live lease copied as it is (its
-    holder renews it there with the same epoch and secret), every open red and condition item created there, and every
-    open change of the local queue submitted (its land/<id> ref pushed first). Returns the counts."""
-    n = {"leases": 0, "items": 0, "changes": 0}
+    """§13 phase 2 step 3, the laptop's one-shot move onto ci-runner's store (safe to run again): every live lease
+    copied as it is (its holder renews it there with the same epoch and secret), every open change of the local queue
+    submitted (its land/<id> ref pushed first) BEFORE the items -- so the Fixes-Red changes a red's fix-pending rests on
+    are there at the reconciler's next tick -- then every open red merged in by its key (import_red) and every open
+    condition created. Returns the counts."""
+    n = {"leases": 0, "leases_there": 0, "items": 0, "merged": 0, "skipped": 0, "changes": 0}
     t = time.time()
     for row in local.list():
-        if row["holder"] and row["expires_at"] > t and remote.import_lease(row):
-            n["leases"] += 1
-    for typ in ("red", "condition"):
-        for it in local.items(typ):
-            if not machine_state(typ, it["state"]).terminal:
-                remote.put_item(typ, it["id"], it["state"], it.get("data"))
-                n["items"] += 1
+        if row["holder"] and row["expires_at"] > t:
+            if remote.import_lease(row):
+                n["leases"] += 1
+            else:
+                n["leases_there"] += 1
     d = waiting_state(repo)[0]
     for e in queued_entries(d) + waiting_entries(d):
         if not e.get("ref") and not submit_ref(repo, d, e, remote=True):
@@ -12513,6 +12567,16 @@ def store_import(local, remote, repo):
             continue
         remote.submit({**{k: e.get(k) for k in SUBMIT_FIELDS}, "id": e["id"]})
         n["changes"] += 1
+    for it in local.items("red"):
+        if not machine_state("red", it["state"]).terminal:
+            how = import_red(remote, it)
+            n["items" if how == "created" else "skipped" if how.startswith("skipped") else "merged"] += 1
+            if how != "created":
+                err(f"store import: red {it['id']}: {how}")
+    for it in local.items("condition"):
+        if not machine_state("condition", it["state"]).terminal:
+            remote.put_item("condition", it["id"], it["state"], it.get("data"))
+            n["items"] += 1
     return n
 
 

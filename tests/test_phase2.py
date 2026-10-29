@@ -290,14 +290,63 @@ class ImportTest(Phase2Base):
         e["ref"] = f"refs/heads/land/{e['id']}"
         A.save_entry(d, e)
         n = A.store_import(local, self.remote, lrepo)
-        self.assertEqual(n, {"leases": 1, "items": 1, "changes": 1})
+        self.assertEqual(n, {"leases": 1, "leases_there": 0, "items": 1, "merged": 0, "skipped": 0, "changes": 1})
         row = self.st.get("red/k9")
         self.assertEqual((row["epoch"], row["secret"]), (took["epoch"], took["secret"]))  # its holder renews it there
         self.assertEqual(self.remote.renew("red/k9", took["epoch"], took["secret"], "moved", 900), "ok")
         self.assertIsNone(self.st.get("red/old"))
         self.assertEqual(self.st.item("red", "k9")["state"], "leased")
         self.assertEqual([x["id"] for x in A.queued_entries(A.waiting_state(self.repo)[0])], [e["id"]])
-        self.assertEqual(A.store_import(local, self.remote, lrepo)["leases"], 0)  # twice is harmless
+        again = A.store_import(local, self.remote, lrepo)  # twice is harmless
+        self.assertEqual((again["leases"], again["leases_there"], again["items"]), (0, 1, 0))
+        self.assertEqual(len([x for x in self.st.items("red") if x["state"] == "leased"]), 1)
+
+    def test_an_import_after_the_reconciler_ticked_merges_each_red_by_its_key_and_keeps_its_fix_link(self):
+        # 2026-10-29: ci-runner's reconciler opened its own items for the laptop's reds before the import finished;
+        # the import left them as they were -- #2493 lost run 2406 from its names, and with it its Fixes-Red: 2406 fix
+        self.st.put_item("red", "k7", "offered", {"key": "k7", "runs": ["2493"], "last_run": {"databaseId": 93},
+                                                 "jobs": ["verify"], "tier": "fresh", "attempts": 0})
+        self.st.put_item("red", "k8", "offered", {"key": "k8", "runs": ["2473"]})      # the reconciler's spell ...
+        self.st.put_item("red", "k8.2", "offered", {"key": "k8", "runs": ["2473"]})    # ... and an earlier import's
+        local = A.Store(path=os.path.join(self.tmp, "laptop2.db"))
+        local.put_item("red", "k7", "fix-pending", {"key": "k7", "runs": ["2406", "2493"], "jobs": ["convergence"],
+                                                     "last_run": {"databaseId": 90}, "attempts": 2,
+                                                     "fix": {"entry": "e-2406", "status": "waiting"},
+                                                     "history": [{"holder": "laptop:fixer:a"}]})
+        local.put_item("red", "k8.2", "offered", {"key": "k8", "runs": ["2470", "2473"], "attempts": 1})
+        local.put_item("red", "k6", "fix-pending", {"key": "k6", "runs": ["2406"]})
+        cleared = local.put_item("red", "k5", "offered", {"key": "k5", "runs": ["1"]})
+        local.transition("red", "k5", "cleared", cleared["version"])
+        lrepo = os.path.join(self.tmp, "laptop-movies2")
+        subprocess.run(["git", "init", "-q", lrepo], check=True)
+        d = A.waiting_state(lrepo)[0]
+        e, _ = A.queue_change(d, {"worktree": "/w/fix", "branch": "f", "head": "f" * 40, "commits": ["f" * 40],
+                                  "fixes": ["2406"]})
+        e.update(status="waiting", ref=f"refs/heads/land/{e['id']}")
+        A.save_entry(d, e)
+        order = []
+        real_submit, real_put = self.remote.submit, self.remote.put_item
+        self.remote.submit = lambda x: order.append("change") or real_submit(x)
+        self.remote.put_item = lambda *a, **k: order.append("item") or real_put(*a, **k)
+        n = A.store_import(local, self.remote, lrepo)
+        self.assertEqual(order, ["change", "item"])  # the Fixes-Red change is there before the red that rests on it
+        self.assertEqual((n["items"], n["merged"], n["changes"]), (1, 2, 1))
+        k7 = self.st.item("red", "k7")
+        self.assertEqual(k7["state"], "offered")  # the state is the tick's to derive
+        self.assertEqual(k7["data"]["runs"], ["2406", "2493"])
+        self.assertEqual((k7["data"]["attempts"], k7["data"]["last_run"]["databaseId"]), (2, 93))
+        self.assertEqual(k7["data"]["history"], [{"holder": "laptop:fixer:a"}])
+        self.assertNotIn("fix", k7["data"])
+        facts = {"entries": [dict(x, status="waiting") for x in A.waiting_entries(A.waiting_state(self.repo)[0],
+                                                                                  open_only=False)]}
+        self.assertEqual(A.red_fix_of(k7, facts)["entry"], e["id"])  # the tick's link: its names meet Fixes-Red: 2406
+        self.assertEqual(self.st.item("red", "k8.2")["data"]["runs"], ["2470", "2473"])
+        self.assertEqual(self.st.item("red", "k8")["state"], "cleared")  # one open red per key
+        self.assertEqual(self.st.item("red", "k8")["data"]["merged_into"], "k8.2")
+        self.assertEqual(self.st.item("red", "k6")["state"], "fix-pending")
+        self.assertIsNone(self.st.item("red", "k5"))
+        self.assertEqual(A.store_import(local, self.remote, lrepo)["merged"], 3)  # again: nothing new
+        self.assertEqual(self.st.item("red", "k7")["version"], k7["version"])
 
 
 class CloseAfterWatchTest(Phase2Base):
