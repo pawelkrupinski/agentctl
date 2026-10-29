@@ -1363,6 +1363,8 @@ def red_for(since, now=None):
 
 OUTSIDE_FLOW_RECHECK = 1800  # a workflow outside the newest-200 window is listed on its own this often (audit #7)
 _flow_files = {}   # main sha -> {workflow name: file}
+_flow_meta = {}    # main sha -> {"callable": {name whose only trigger is workflow_call}, "paths": {name: path},
+#                                  "callers": {called file's basename: [caller names]}}
 _flow_runs = {}    # workflow file -> (listed at, its runs on main)
 
 
@@ -1375,17 +1377,64 @@ def main_workflow_files(o_r):
     if not main:
         return {}
     if main not in _flow_files:
-        out = {}
+        out, meta = {}, {"callable": set(), "paths": {}, "callers": {}}
         for d in (".forgejo/workflows", ".github/workflows"):
             r = git(repo, "ls-tree", "--name-only", main, f"{d}/", check=False)
             for path in r.stdout.split():
                 if path.endswith((".yml", ".yaml")):
                     txt = git(repo, "show", f"{main}:{path}", check=False).stdout
                     m = re.search(r"^name:\s*[\"']?(.+?)[\"']?\s*$", txt, re.M)
-                    out[m.group(1) if m else os.path.basename(path)] = os.path.basename(path)
+                    name = m.group(1) if m else os.path.basename(path)
+                    out[name] = os.path.basename(path)
+                    meta["paths"][name] = path
+                    if workflow_triggers(txt) == {"workflow_call"}:
+                        meta["callable"].add(name)
+                    for called in re.findall(r"^\s*(?:-\s*)?uses:\s*\./\.(?:github|forgejo)/workflows/([\w.-]+)\s*$", txt, re.M):
+                        meta["callers"].setdefault(called, []).append(name)
         _flow_files.clear()
         _flow_files[main] = out
+        _flow_meta.clear()
+        _flow_meta[main] = meta
     return _flow_files[main]
+
+
+def main_flow_meta(o_r):
+    """main_workflow_files' by-products for forgejo/main: callable-only names, each name's path, each file's callers."""
+    main_workflow_files(o_r)
+    return next(iter(_flow_meta.values()), {"callable": set(), "paths": {}, "callers": {}})
+
+
+def main_callable_flows(o_r):
+    """The workflows on forgejo/main whose only trigger is workflow_call: they never run on their own, so no newer run
+    of theirs can ever clear a red run of theirs on main (red_callable_evidence does)."""
+    return main_flow_meta(o_r)["callable"]
+
+
+def workflow_triggers(txt):
+    """The trigger names of a workflow file's `on:` (a scalar, a [list], a block of keys or of `- items`)."""
+    lines = txt.splitlines()
+    for i, line in enumerate(lines):
+        m = re.match(r"^[\"']?on[\"']?:\s*(.*?)\s*(#.*)?$", line)
+        if not m:
+            continue
+        inline = m.group(1)
+        if inline:
+            while re.search(r"\{[^{}]*\}", inline[1:]):  # a {flow: mapping}: its keys, not their values
+                inline = inline[0] + re.sub(r"\{[^{}]*\}", "", inline[1:])
+            return set(re.findall(r"[A-Za-z_]+", re.sub(r"\[[^\]]*\]", "", inline) if inline[0] == "{" else inline))
+        names, indent = set(), None
+        for sub in lines[i + 1:]:
+            if not sub.strip() or sub.lstrip().startswith("#"):
+                continue
+            k = re.match(r"^(\s+)(?:-\s*)?[\"']?([A-Za-z_]+)[\"']?\s*(:|$)", sub)
+            if not k:
+                break  # the next top-level key
+            if indent is None:
+                indent = len(k.group(1))
+            if len(k.group(1)) == indent:
+                names.add(k.group(2))
+        return names
+    return set()
 
 
 def outside_gate(o_r):
@@ -1682,6 +1731,7 @@ def ci_state_refresh(o_r, write=True):
                                 "runs": _outside_lists.get(n, [])} for n, r, since, count in outside_gate(o_r)]
         except Exception as e:
             snap["outside_error"] = str(e)[:200]
+        snap["callable_only"] = sorted(main_callable_flows(o_r))  # their reds wait for red_callable_evidence
     try:  # the branch runs: measure/*, check/*, red fixers' and every recorded dispatch's (after the main lists)
         prev = (state_read().get("ci") or {}).get("branches") or []
         snap["branches"] = branch_state(o_r, scan_repo_for(o_r), prev)
@@ -3285,6 +3335,13 @@ def red_rekeyed(d, obs):
     return bool(same_run) and all(o["job"] != "?" for o in same_run)
 
 
+def red_gone_why(d, obs):
+    """Why red_gone holds, for the cleared red's line."""
+    if obs is not None and red_rekeyed(d, obs):
+        return "re-keyed: its run's failures are held by the run's other reds"
+    return "a newer decided run on main does not fail this way"
+
+
 def red_gone(it, obs, snap):
     """The observation that opened the red, now negative: True when a NEWER decided run of its workflow does not fail
     this way (local: main's local checks no longer fail it; stuck: no stuck run; a branch prediction: gone)."""
@@ -3554,6 +3611,46 @@ def red_close(store, it, to, text):
     return red_move(store, it, to, text)
 
 
+def red_callable_evidence(d, snap, repo, o_r):
+    """For an outside red of a workflow that on main runs only when called (snap's callable_only): the line proving it
+    fixed, else None. Proof is BOTH: its file changed on main since the failing run (the first such commit C), and
+    callers' newest decided runs on main that contain C passed (at least one; none containing C failed) -- a caller
+    run reads the called file, so it passing says Forgejo parses the new file. "Report run timings" #38 (2026-10-19, a
+    `workflow_call.secrets` block Forgejo 15 rejected; 32d1805de fixed it that night) stayed red for 10 days: no run
+    of its own could come to clear it. Never closed on the trigger alone: 5cf3f69's 811 re-opened retirements."""
+    if not repo or d.get("red_kind") != "outside" or d.get("workflow") not in ((snap or {}).get("callable_only") or ()):
+        return None
+    run = d.get("last_run") or {}
+    main = f"refs/remotes/{REMOTE}/main"
+    meta = main_flow_meta(o_r)
+    path = meta["paths"].get(d.get("workflow"))
+    if not path or not run.get("headSha"):
+        return None
+    log = git(repo, "log", "--format=%H", f"{run['headSha']}..{main}", "--", path, check=False)
+    changes = log.stdout.split() if log.returncode == 0 else []
+    if not changes:
+        return None
+    first = changes[-1]
+    latest = (snap or {}).get("latest") or {}
+    passed, failed = [], []
+    for name in meta["callers"].get(os.path.basename(path), []):
+        last = latest.get(name) or {}
+        if contains_local(repo, first, last.get("headSha")):
+            (passed if last.get("conclusion") == "success" else failed).append(f"{name} #{last.get('number')}")
+    if not passed or failed:
+        return None
+    return (f"{d.get('workflow')} runs only when called: its file changed on main since #{run.get('number')} "
+            f"({first[:10]}), and its callers' runs since passed: {', '.join(sorted(passed))}")
+
+
+def red_settled(store, key, run):
+    """True when an earlier spell of this red was verified for this very run (red_callable_evidence): the same old
+    run, observed again, opens no new spell."""
+    rid = str((run or {}).get("databaseId"))
+    return any(it["data"].get("key") == key and it["state"] == "verified" and str(it["data"].get("settled_run")) == rid
+               for it in store.items("red"))
+
+
 def red_step(store, it, obs, snap, facts, repo, o_r, t):
     it = store.item("red", it["id"])
     d, st, key = it["data"], it["state"], it["data"]["key"]
@@ -3563,6 +3660,14 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
     fix = red_fix_of(it, facts)
     block = red_block_of(it, store)
     acts = []
+    proof = red_callable_evidence(d, snap, repo, o_r) if st in ("red", "offered", "leased", "blocked-external") else None
+    if proof:  # recorded as a verified fix is: its own event, the holder told, the run settled
+        line = f"FIX OK: {red_what(d)}: {proof}"
+        inbox_write("red", line, [line], [], 0)
+        store.close_offer(f"red:{it['id']}", "verified")
+        red_stop_holder(store, key, "its callers' runs prove it fixed", "red verified")
+        red_move(store, it, "verified", line, data={"settled_run": (d.get("last_run") or {}).get("databaseId")})
+        return [line]
     if st in ("red", "offered") and not live and not fix and not block:
         old = red_old_run(d, t)
         if old:  # AN OLD RED SEEN ONLY NOW (audit #7 surfaces a rarely run workflow): verified by a fresh run, or fixed
@@ -3576,8 +3681,7 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
         return [f"offered {red_what(d)} ({it['data']['tier']})"]
     if st == "offered":
         if gone and not fix:
-            red_close(store, it, "cleared", "re-keyed: its run's failures are held by the run's other reds"
-                      if obs is not None and red_rekeyed(d, obs) else "a newer decided run on main does not fail this way")
+            red_close(store, it, "cleared", red_gone_why(d, obs))
             return [f"cleared {red_what(d)}"] + red_flake_check(store, it, snap, repo, facts)
         if fix:
             store.close_offer(f"red:{it['id']}", "fix-pending")
@@ -3620,8 +3724,7 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
                      data={"fix": fix})
             return [f"fix-pending {red_what(d)}"]
         if gone:
-            red_close(store, it, "cleared", "re-keyed: its run's failures are held by the run's other reds"
-                      if obs is not None and red_rekeyed(d, obs) else "a newer decided run on main does not fail this way")
+            red_close(store, it, "cleared", red_gone_why(d, obs))
             return [f"cleared {red_what(d)}"]
         if live:
             if row["holder"] != d.get("holder"):
@@ -3635,7 +3738,7 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
             red_move(store, it, "leased", f"{red_what(d)}: a live fixer outranks the block", data={"holder": row["holder"]})
             return [f"leased {red_what(d)} (over its block)"]
         if gone:
-            red_close(store, it, "cleared", "a newer decided run on main does not fail this way")
+            red_close(store, it, "cleared", red_gone_why(d, obs))
             return [f"cleared {red_what(d)}"]
         if fix:
             red_move(store, it, "fix-pending", f"{red_what(d)}: fix {fix.get('entry') or fix.get('sha')}", data={"fix": fix})
@@ -4901,7 +5004,10 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=True, facts=None):
     for key, ob in (obs or {}).items():
         try:
             it = active.get(key)
-            active[key] = red_attach_obs(store, it, ob) if it else red_open(store, ob, repo, t)
+            if it:
+                active[key] = red_attach_obs(store, it, ob)
+            elif not red_settled(store, key, ob["run"]):
+                active[key] = red_open(store, ob, repo, t)
         except (Exception, SystemExit) as e:
             err(f"red tick: {key}: {str(e)[:160]}")
     if glob.glob(reds_dir("claims", "*.json")) or os.path.exists(reds_dir("fixer-queue.json")):
@@ -11288,14 +11394,14 @@ MACHINES["condition"] = {
     "open": StateSpec(10 * 60, "open", ("closed",), escalate=True),
     "closed": StateSpec(ARCHIVE, "closed", (), terminal=True),
 }
-# §5.3 a red (keyed by its failing test or step), phase 1 step 10
+# §5.3 a red (keyed by its failing test or step), phase 1 step 10; -> verified outside fix-pending: red_callable_evidence
 MACHINES["red"] = {
-    "red": StateSpec(60, "offered", ("offered", "fix-pending", "leased", "blocked-external", "cleared")),
-    "offered": StateSpec(RED_OFFER["other"], "offered", ("leased", "fix-pending", "blocked-external", "cleared"),
-                         escalate=True),
-    "leased": StateSpec(RED_CLAIM_MAX, "offered", ("fix-pending", "offered", "blocked-external", "cleared")),
+    "red": StateSpec(60, "offered", ("offered", "fix-pending", "leased", "blocked-external", "cleared", "verified")),
+    "offered": StateSpec(RED_OFFER["other"], "offered", ("leased", "fix-pending", "blocked-external", "cleared",
+                                                         "verified"), escalate=True),
+    "leased": StateSpec(RED_CLAIM_MAX, "offered", ("fix-pending", "offered", "blocked-external", "cleared", "verified")),
     "fix-pending": StateSpec(RED_FIX_DECIDE, "fix-pending", ("offered", "verified", "cleared"), escalate=True),
-    "blocked-external": StateSpec(7 * 86400, "offered", ("offered", "fix-pending", "leased", "cleared")),
+    "blocked-external": StateSpec(7 * 86400, "offered", ("offered", "fix-pending", "leased", "cleared", "verified")),
     "verified": StateSpec(ARCHIVE, "verified", (), terminal=True),
     "cleared": StateSpec(ARCHIVE, "cleared", (), terminal=True),
 }

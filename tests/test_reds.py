@@ -666,9 +666,9 @@ class OldRedTest(RedsBase):
             self.r.push()
 
     def test_an_old_red_of_a_workflow_that_cannot_run_is_offered_never_retired(self):
-        # "Report run timings" #38 (2026-10-29): a workflow_call-only workflow's old red was retired, re-opened by the
-        # next tick's same observation and retired again 811 times, never offered, "offering" in ci-why for 9 days
-        self.outside("name: Report run timings\non:\n  workflow_call: {}\n")
+        # "Report run timings" #38 (2026-10-29): an old red no fresh run could check was retired, re-opened by the next
+        # tick's same observation and retired again 811 times, never offered, "offering" in ci-why for 9 days
+        self.outside("name: Report run timings\non:\n  schedule:\n    - cron: \"0 3 * * *\"\n")
         for _ in range(4):
             self.tick(advance=60)
         self.assertEqual(len(self.st.items("red")), 1)  # one spell, no churn
@@ -678,6 +678,44 @@ class OldRedTest(RedsBase):
         self.assertIn("workflow_dispatch", it["data"]["old_note"])
         self.assertIsNotNone(self.st.offer_of(f"red:{it['id']}"))  # the dispatcher takes it
         self.assertEqual(self.unheld(), [])
+
+    def made_callable_only(self, caller_runs):
+        # "Report run timings" #38 (2026-10-19..29): a `workflow_call.secrets` block Forgejo 15 rejected, fixed that
+        # night by 32d1805de, red on main for 10 days: a callable-only workflow never runs on its own to clear it
+        self.outside("name: Report run timings\non:\n  schedule:\n    - cron: \"0 3 * * *\"\n")
+        self.tick()
+        it = self.only()
+        self.r.write(".forgejo/workflows/report-timings.yml", "name: Report run timings\non:\n  workflow_call: {}\n")
+        self.r.write(".forgejo/workflows/nightly.yml", "name: Nightly\non:\n  schedule:\n    - cron: \"0 1 * * *\"\n"
+                     "jobs:\n  timings:\n    uses: ./.forgejo/workflows/report-timings.yml\n")
+        head = self.r.commit("callable only, called by Nightly")
+        self.r.push()
+        runs = json.load(open(os.path.join(self.d, "runs.json")))
+        self.put("runs.json", [run(100 + i, 50 + i, "Nightly", "nightly.yml", head if after else self.sha, conclusion=c)
+                               for i, (after, c) in enumerate(caller_runs)] + runs)
+        for _ in range(4):
+            self.tick(advance=60)
+        return it
+
+    def test_a_callable_only_workflows_red_is_verified_once_its_callers_pass_with_its_changed_file(self):
+        it = self.made_callable_only([(True, "success")])
+        reds = self.st.items("red")
+        self.assertEqual([(i["id"], i["state"]) for i in reds], [(it["id"], "verified")])  # one spell, never re-opened
+        self.assertEqual(reds[0]["data"]["settled_run"], 90)
+        self.assertTrue(any("its callers' runs since passed: Nightly #50" in str(e.get("text")) for e in self.st.events()))
+        self.assertIsNone(self.st.offer_of(f"red:{it['id']}"))
+        self.assertEqual(self.unheld(), [])
+
+    def test_a_callable_only_workflows_red_stays_offered_without_a_passing_caller_run_since_its_change(self):
+        # the trigger alone never closes a red (5cf3f69: 811 re-opened retirements); no caller run since: no proof
+        it = self.made_callable_only([(False, "success")])
+        self.assertEqual((self.only()["id"], self.only()["state"]), (it["id"], "offered"))
+        self.assertEqual(self.unheld(), [])
+
+    def test_a_callable_only_workflows_red_stays_offered_while_a_caller_run_since_its_change_fails(self):
+        self.made_callable_only([(True, "failure")])
+        mine = [i for i in self.st.items("red") if i["data"]["workflow"] == "Report run timings"]
+        self.assertEqual([i["state"] for i in mine], ["offered"])
 
     def test_an_old_red_whose_fresh_run_is_refused_is_offered_not_left_verifying(self):
         # Archive recording #823 (2026-10-29): the verify dispatch was refused (HTTP 400, a required input) and the red
@@ -699,7 +737,7 @@ class OldRedTest(RedsBase):
         self.assertEqual(self.unheld(), [])
 
     def stuck_verify(self, verify):
-        self.outside("name: Report run timings\non:\n  workflow_call: {}\n")
+        self.outside("name: Report run timings\non:\n  schedule:\n    - cron: \"0 3 * * *\"\n")
         self.tick()
         it = self.only()
         A.red_move(self.st, it, "fix-pending", "as recorded live", data={
@@ -908,6 +946,14 @@ class AuditTest(RedsBase):
         finally:
             A.main_workflow_files, A.gh_json = saved
         self.assertIn("Nightly", [n for n, *_ in out])
+
+    def test_7_a_workflows_triggers_are_read_from_its_on_key(self):
+        for txt, want in (("on: workflow_call\n", {"workflow_call"}), ("on: [push, workflow_call]\n", {"push", "workflow_call"}),
+                          ("on: {push: {branches: [main]}, workflow_call: {}}\n", {"push", "workflow_call"}),
+                          ("on:\n    push:\n        branches: [main]\n    workflow_call:\njobs: {}\n", {"push", "workflow_call"}),
+                          ("name: x\non:\n  workflow_call:\n    inputs:\n      lane: {}\npermissions: {}\n", {"workflow_call"}),
+                          ("\"on\":\n  - workflow_dispatch\n  - workflow_call\n", {"workflow_dispatch", "workflow_call"})):
+            self.assertEqual(A.workflow_triggers(txt), want, txt)
 
     def test_8_a_run_stuck_past_three_times_its_p90_is_a_red_until_it_decides(self):
         old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 5 * 3600))
