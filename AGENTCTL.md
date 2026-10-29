@@ -198,6 +198,27 @@ the tick's. It answers only Host `agentctl.localhost`, `127.0.0.1` or `localhost
 `secrets` (the store token is the one the sync holds) and never writes. `AGENTCTL_STATUS_PAGE=off` turns it off,
 `AGENTCTL_STATUS_PORT` pins one port. Code: "the status page" section of agentctl; tests: `tests/test_status_page.py`.
 
+**Live agent output** (2026-10-29, "I want full output"): every Agents row whose Claude transcript agentctl knows shows
+its state (working / waiting on background / done / failed) and a **live output** button: a pane that streams the whole
+transcript from its first line and follows it as it grows -- every assistant message, thinking, every tool call with
+all of its input, every tool result in full (long ones collapsed, expanding in place, never cut), user, system and
+queued-message entries, each timed -- with *follow* and *pause* toggles; *full screen* opens `/agent/<id>`. Below the
+lease holders and fixers, the page also lists every other known session or subagent written in the last 3 h.
+
+- Known agents (ids, never paths): `fixer-<run>-<n>` (reds/<run>/fixer-<n>.json's `transcript`, or its `log` when a
+  .jsonl), `session-<uuid>` (a dispatch record's session, or a live lease holder's `log`), `task-<id>` (subagents, via
+  `AGENTCTL_LIVE_GLOBS`, os.pathsep-separated; default `/private/tmp/claude-<uid>/*/*/tasks/*.output`). Only a regular
+  `.jsonl` owned by you under `~/.claude/projects` (after symlinks) is ever streamed.
+- `GET /stream?agent=<id>[&from=<offset>]`: Server-Sent Events -- `meta`, one `entry` per transcript line (id = the
+  byte offset past it; a reconnecting EventSource resumes from Last-Event-ID), `synced` after the history, `state` on
+  each change, `reset` when the file was truncated or replaced (shown again from 0). Bookkeeping lines (API request
+  dumps, cost, mode, titles) are skipped. Bounded: 256 KiB read per step, 16 MiB per line (longer: an `oversize` entry),
+  12 streams at once (503), a client that does not take a frame in 10 s is dropped.
+- Masked (conservative): known token shapes (gh*_, github_pat_, sk-, xox*, AKIA, hvs., JWTs, PEM private keys), the
+  value of a password/secret/token/api-key assignment or JSON key when it looks like a credential, Bearer/Basic/token
+  headers, URL passwords. Everything else is shown as written.
+- Read-only: GET/HEAD only (others 405), same Host check, 127.0.0.1 only. Tests: `tests/test_live.py`.
+
 ### store: phase 2, the store and the reconciler on ci-runner
 
 ```
