@@ -1128,6 +1128,161 @@ def timed_out_jobs(log_text):
     return {raw.split("\t", 1)[0] for raw in log_text.splitlines() if STEP_TIMED_OUT in raw and "\t" in raw}
 
 
+# PHANTOM "Set up job" JOBS (the owner, 2026-10-29; ~/Desktop/claude docs/convergence-failures-2026-10-29.md): Forgejo
+# fails a reusable-workflow caller (`leg (<country>)`, `verify (<country>)`, `timings`) in "Set up job" when a job it
+# depends on failed -- it never takes a runner (no start time). Such a job is no red of its own: it is DERIVED from the
+# real failure upstream of it (its `needs:` closure, and a caller's own child jobs), follows that red and clears with
+# it, and never takes or waits for a fixer slot. A job failing in setup with no real failure upstream (a runner or
+# infra fault) stays an infra red. Told apart by the workflow's `needs:` graph and the run's job results.
+CASCADE_PREFIX = "needs: cascade of "
+_JOB_LINE = re.compile(r"^( *)([A-Za-z_][\w-]*):\s*(#.*)?$")
+_PROP_LINE = re.compile(r"^( *)([A-Za-z_][\w-]*):\s*(.*)$")
+
+
+def _yaml_scalar(v):
+    v = v.strip()
+    if v[:1] in ("'", '"'):
+        end = v.find(v[0], 1)
+        return v[1:end] if end > 0 else v[1:]
+    return re.sub(r"(^|\s+)#.*$", "", v).strip()
+
+
+def workflow_jobs(text):
+    """{job id: {needs: [ids], uses: str|None, name: str|None}} of a workflow file's top-level `jobs:` -- a small
+    indentation reader (the hosts have no YAML library); None when there is no `jobs:` block."""
+    lines = (text or "").splitlines()
+    try:
+        start = next(i for i, l in enumerate(lines) if re.match(r"^jobs:\s*(#.*)?$", l))
+    except StopIteration:
+        return None
+    jobs, job, ind, prop_ind, block = {}, None, None, None, None
+    for l in lines[start + 1:]:
+        if not l.strip() or l.lstrip().startswith("#"):
+            continue
+        n = len(l) - len(l.lstrip(" "))
+        if n == 0:
+            break
+        if ind is None:
+            ind = n
+        m = _JOB_LINE.match(l)
+        if n == ind and m:
+            job, prop_ind, block = m.group(2), None, None
+            jobs[job] = {"needs": [], "uses": None, "name": None}
+            continue
+        if job is None or n <= ind:
+            continue
+        if prop_ind is None:
+            prop_ind = n
+        if n == prop_ind:
+            block = None
+            pm = _PROP_LINE.match(l)
+            if not pm:
+                continue
+            k, v = pm.group(2), pm.group(3)
+            if k == "needs":
+                v = _yaml_scalar(v)
+                if v.startswith("["):
+                    jobs[job]["needs"] = [x.strip().strip("'\"") for x in v.strip("[]").split(",") if x.strip()]
+                elif v:
+                    jobs[job]["needs"] = [v]
+                else:
+                    block = "needs"
+            elif k in ("uses", "name"):
+                jobs[job][k] = _yaml_scalar(v) or None
+        elif block == "needs" and l.strip().startswith("- "):
+            jobs[job]["needs"].append(_yaml_scalar(l.strip()[2:]).strip("'\""))
+    return jobs
+
+
+def _name_pattern(tmpl):
+    """(regex, literal length) of a job's display name template (`verify (${{ matrix.country }})`)."""
+    parts = re.split(r"\$\{\{.*?\}\}", tmpl)
+    return re.compile(".+?".join(re.escape(p) for p in parts) + r"\Z"), sum(len(p) for p in parts)
+
+
+def job_is_phantom(j):
+    """Failed before it ever ran: no start time, failing in a setup step (or with no step at all)."""
+    if j.get("conclusion") not in ("failure", "timed_out") or j.get("startedAt"):
+        return False
+    bad = [s for s in j.get("steps") or [] if s.get("conclusion") in ("failure", "timed_out")]
+    return not bad or bool(SETUP_STEP.match(bad[0]["name"]))
+
+
+def derive_cascades(jobs, graph, called=None):
+    """{failed job name: [the real failures it cascades from]} for the run's phantom jobs (job_is_phantom) that have a
+    real failure upstream: in the `needs:` closure of their workflow job (its jobs and, for a reusable caller, its child
+    jobs), or among their own child jobs when they are a caller. jobs: the run's jobs; graph: workflow_jobs of the
+    run's workflow; called: {`uses:` path: workflow_jobs of it or None (unreadable)}. No graph: nothing is derived (a
+    setup failure stays infra)."""
+    if not graph:
+        return {}
+    called = called or {}
+    pats = []  # (literal length, regex, owner: (top-level id, is_child))
+    for jid, g in graph.items():
+        rx, lit = _name_pattern(g.get("name") or jid)
+        pats.append((lit + 1000, rx, (jid, False)))  # a top-level name beats a child template that also matches it
+        sub = called.get(g.get("uses")) if g.get("uses") else None
+        for cid, cg in (sub or {}).items():
+            rx, lit = _name_pattern(cg.get("name") or cid)
+            pats.append((lit, rx, (jid, True)))
+    blind = [jid for jid, g in graph.items() if g.get("uses") and called.get(g["uses"]) is None]
+    owner = {}
+    for j in jobs:
+        hits = sorted((p for p in pats if p[1].match(j["name"])), key=lambda p: -p[0])
+        if hits:
+            owner[j["name"]] = hits[0][2]
+        elif len(blind) == 1:  # the one caller whose children could not be read: theirs
+            owner[j["name"]] = (blind[0], True)
+    real = [j["name"] for j in jobs if j.get("conclusion") in ("failure", "timed_out") and not job_is_phantom(j)]
+    out = {}
+    for j in jobs:
+        if not job_is_phantom(j) or j["name"] not in owner or owner[j["name"]][1]:
+            continue
+        top = owner[j["name"]][0]
+        up, todo = set(), list(graph.get(top, {}).get("needs") or [])
+        while todo:
+            x = todo.pop()
+            if x not in up and x in graph:
+                up.add(x)
+                todo += graph[x].get("needs") or []
+        src = [r for r in real if r in owner and (owner[r][0] in up or (owner[r][0] == top and owner[r][1]))]
+        if src:
+            out[j["name"]] = sorted(src)
+    return out
+
+
+def workflow_text(o_r, path, sha, repo=None):
+    """A workflow file's text at a commit: the local clone first, then the forge's contents API; None if neither."""
+    repo = repo or repo_path_for(o_r)
+    if repo:
+        for ref in (sha, f"{REMOTE}/main"):
+            r = git(repo, "show", f"{ref}:{path}", check=False) if ref else None
+            if r is not None and r.returncode == 0:
+                return r.stdout
+    try:
+        import base64
+        c = gh_json(o_r, "api", f"repos/{o_r}/contents/{path}" + (f"?ref={sha}" if sha else ""))
+        return base64.b64decode(c.get("content") or "").decode("utf-8", "replace") or None
+    except Exception:
+        return None
+
+
+def run_cascades(o_r, d, repo=None):
+    """derive_cascades for one run view (`d`, with jobs, headSha and workflowDatabaseId: the workflow's file)."""
+    if not any(job_is_phantom(j) for j in d.get("jobs") or []):
+        return {}
+    wf = d.get("workflowDatabaseId")
+    if not wf or not str(wf).endswith((".yml", ".yaml")):
+        return {}
+    graph = workflow_jobs(workflow_text(o_r, f".github/workflows/{wf}", d.get("headSha"), repo))
+    called = {}
+    for g in (graph or {}).values():
+        u = g.get("uses")
+        if u and u.startswith("./") and u not in called:
+            called[u] = workflow_jobs(workflow_text(o_r, u[2:], d.get("headSha"), repo))
+    return derive_cascades(d.get("jobs") or [], graph, called)
+
+
 def classify_job(job, lines, raw=(0, []), timed_out=False):
     """('infra'|'unclear'|'test', why) for one failed job, from its steps, relevant log lines and raw (count, tail).
     timed_out: a step of it ran past its own timeout-minutes -- the row's work outgrew its bound, a code/config red
@@ -1279,9 +1434,15 @@ def explain_run(o_r, run, tail, repo=None):
 def explain_run_jobs(o_r, run, tail, repo=None):
     """(lines, run number, [(failed job, infra|unclear|test, its first relevant line)])."""
     rid = run["databaseId"]
-    d = gh_json(o_r, "run", "view", str(rid), "--json", "jobs,headSha,url,number,status,conclusion,workflowName")
+    d = gh_json(o_r, "run", "view", str(rid), "--json",
+                "jobs,headSha,url,number,status,conclusion,workflowName,workflowDatabaseId")
     num = d.get("number") or run.get("number")
     failed = [j for j in d.get("jobs") or [] if j.get("conclusion") in ("failure", "timed_out")]
+    try:
+        cascades = run_cascades(o_r, d, repo)
+    except Exception as e:  # unread: every setup failure stays an infra red of its own
+        cascades = {}
+        err(f"could not read run {rid}'s workflow graph: {e}")
     unread = []  # why the failed log, and a job's own, could not be read: no log was read, so none is 0-length
     try:
         log = fetch_failed_log(o_r, rid) if failed else ""
@@ -1294,6 +1455,11 @@ def explain_run_jobs(o_r, run, tail, repo=None):
              f"  commit {commit_line(o_r, d.get('headSha') or run.get('headSha'), repo)}"]
     kinds, fetched, per_job = [], 0, []
     for j in failed:
+        if j["name"] in cascades:  # a phantom: no red of its own, it follows the red of what it cascades from
+            per_job.append((j["name"], "derived", "", cascades[j["name"]]))
+            lines.append(f"  [derived] {j['name']}: never started: {CASCADE_PREFIX}{', '.join(cascades[j['name']])} "
+                         "(through `needs:`; follows that red)")
+            continue
         jl = per.get(j["name"]) or []
         if fetched < MAX_JOB_LOG_FETCHES and "precommit" in str(d.get("workflowName", "")).lower().replace("-", ""):
             hl = hook_lines(o_r, rid, j, tail)  # the hook's own verdict beats a passing subtest's tail
@@ -2043,7 +2209,7 @@ def route_branch_reds(o_r, snap, now_=None):
             save_run_sigs(o_r, r, e["workflow"], per_job)
         except (Exception, SystemExit) as ex:
             lines, per_job = [f"  (could not read the run: {str(ex)[:160]})"], []
-        kinds = {k for _j, k, _l in per_job}
+        kinds = {p[1] for p in per_job} - {"derived"}
         rec = {"at": ts(), "routed": True, "infra": bool(kinds) and kinds <= {"infra"},
                "blocks_promoting": e.get("newer_recording") if "test" in kinds else None}
         write_json(routed_path(r["databaseId"]), rec)
@@ -2428,14 +2594,20 @@ def classifier_version():
     """What a cached signature's kind was judged by: classify_job and every pattern it reads. A record of another
     version is classified again (#2426: cached a TEST FAILURE before KEY_REFUSED_LOG, `red block` kept reading it)."""
     import hashlib, inspect
-    parts = [inspect.getsource(classify_job), SETUP_STEP.pattern, INFRA_LOG.pattern, UNKNOWN_LOG.pattern,
+    parts = [inspect.getsource(classify_job), inspect.getsource(derive_cascades), inspect.getsource(workflow_jobs),
+             inspect.getsource(job_is_phantom), SETUP_STEP.pattern, INFRA_LOG.pattern, UNKNOWN_LOG.pattern,
              KEY_REFUSED_LOG.pattern, STEP_TIMED_OUT]
     return hashlib.sha1("\n".join(parts).encode()).hexdigest()[:12]
 
 
 def save_run_sigs(o_r, run, workflow, per_job):
     """per_job: [(job, kind, first relevant line)] of a completed red run -> its signatures, cached on disk."""
-    sigs = [{"job": j, "kind": k, "line": (l or "")[:300], "sig": signature(workflow, j, l)} for j, k, l in per_job]
+    sigs = []
+    for p in per_job:  # (job, kind, line[, derived from])
+        j, k, l = p[:3]
+        sigs.append({"job": j, "kind": k, "line": (l or "")[:300], "sig": signature(workflow, j, l)})
+        if len(p) > 3:
+            sigs[-1]["derived_from"] = list(p[3])
     rec = {"run": run.get("databaseId"), "number": run.get("number"), "workflow": workflow, "sigs": sigs,
            "headSha": run.get("headSha"), "classifier": classifier_version()}
     try:
@@ -2853,6 +3025,8 @@ def red_units(o_r, name, decided, runs, sigs, gate):
     """The failing jobs of one red run as units: [{workflow, job, kind, line, run, runs, names, gate}]."""
     sruns = streak_runs(runs) if runs else []
     units = []
+    derived = [s for s in sigs if s.get("kind") == "derived"]
+    sigs = [s for s in sigs if s.get("kind") != "derived"]  # a phantom is no red: it is folded into its source's
     for s in sigs:
         names = set(run_names(decided))
         for r in sruns:  # the streak's runs that failed THIS way (their cached signatures)
@@ -2861,7 +3035,8 @@ def red_units(o_r, name, decided, runs, sigs, gate):
                            for x in rec.get("sigs") or []):
                 names |= run_names(r)
         units.append({"workflow": name, "job": s["job"], "kind": s["kind"], "line": s["line"], "run": decided,
-                      "runs": runs, "names": names, "gate": gate})
+                      "runs": runs, "names": names, "gate": gate,
+                      "derived": sorted(x["job"] for x in derived if s["job"] in (x.get("derived_from") or []))})
     if not units:  # no failed job listed (or none readable): the run itself is the red
         units.append({"workflow": name, "job": "?", "kind": "unclear", "line": "", "run": decided, "runs": runs,
                       "names": set(run_names(decided)), "gate": gate})
@@ -2903,8 +3078,9 @@ def red_obs_of_units(units):
             obs[key] = {"key": key, "workflow": u["workflow"], "jobs": [u["job"]], "job": u["job"], "kind": u["kind"],
                         "line": (u.get("line") or "")[:300], "run": run, "names": set(u.get("names") or ()),
                         "gate": bool(u["gate"]), "red_kind": red_kind, "predicts": u.get("predicts"),
-                        "runs_list": u.get("runs") or []}
+                        "runs_list": u.get("runs") or [], "derived": sorted(u.get("derived") or [])}
         else:
+            o["derived"] = sorted(set(o.get("derived") or []) | set(u.get("derived") or []))
             o["jobs"] = sorted(set(o["jobs"]) | {u["job"]})
             o["names"] |= set(u.get("names") or ())
     return obs
@@ -3279,7 +3455,8 @@ def red_open(store, ob, repo, t):
         iid = f"{key}.{n}"
     data = {"key": key, "workflow": ob["workflow"], "jobs": ob["jobs"], "job": ob["job"], "kind": ob["kind"],
             "line": ob["line"], "red_kind": ob["red_kind"], "gate": ob["gate"], "predicts": ob.get("predicts"),
-            "runs": sorted(ob["names"]), "last_run": ob["run"], "opened_at": t, "attempts": 0, "history": []}
+            "runs": sorted(ob["names"]), "last_run": ob["run"], "opened_at": t, "attempts": 0, "history": [],
+            "derived": ob.get("derived") or []}
     if ob["kind"] == "test" and ob["red_kind"] in ("gate", "outside"):
         try:
             data["author"] = red_author(repo, ob, t)
@@ -3297,9 +3474,11 @@ def red_attach_obs(store, it, ob):
     d = it["data"]
     runs = sorted(set(d.get("runs") or []) | set(ob["names"]))
     newer = int(ob["run"].get("databaseId") or 0) > int((d.get("last_run") or {}).get("databaseId") or 0)
-    if runs == d.get("runs") and not newer and sorted(ob["jobs"]) == sorted(d.get("jobs") or []):
+    derived = sorted(set(d.get("derived") or []) | set(ob.get("derived") or []))
+    if runs == d.get("runs") and not newer and sorted(ob["jobs"]) == sorted(d.get("jobs") or []) \
+            and derived == sorted(d.get("derived") or []):
         return it
-    upd = {"runs": runs, "jobs": sorted(set(d.get("jobs") or []) | set(ob["jobs"]))}
+    upd = {"runs": runs, "jobs": sorted(set(d.get("jobs") or []) | set(ob["jobs"])), "derived": derived}
     if newer:
         upd["last_run"] = ob["run"]
     store.update_item("red", it["id"], it["version"], upd)

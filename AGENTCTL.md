@@ -276,6 +276,13 @@ main. For each red run it shows:
   - `TEST FAILURE`;
   - `INFRA-SHAPED`, with the `rerun --failed` command. Covers failures in a setup step, a 0-length log,
     `artifact already exists`, ENOENT, docker, disk or connection errors;
+  - `[derived]` rows are no verdict of their own: a job Forgejo failed in "Set up job" without ever starting it
+    (no runner time) because a job it depends on failed -- a reusable caller such as `leg (<country>)`,
+    `verify (<country>)` or `timings`. Told apart by the workflow's `needs:` graph (read at the run's head) and the
+    run's job results: `[derived] leg (poland): never started: needs: cascade of takes-drift-2 (germany)`. It opens
+    no red: it is listed on the red of what it cascades from (`derived`), never takes or waits for a fixer slot,
+    and clears with it. A setup failure with nothing failed upstream (a job that started, or no readable graph)
+    stays `INFRA-SHAPED`, an infra red of its own;
   - `UNCLEAR`, when a log has lines but no failure marker (truncated, or the runner was lost);
     also `LOG UNREADABLE`, when forgejo-gh could not serve the log (read twice; its error named): no log was read, so
     it is never a 0-length one (convergence #2473 was handed to a diagnose-only fixer as INFRA that way);
@@ -297,7 +304,7 @@ Identity model convergence: RED (run 1934 #945, failure); newer run 1988 (#973) 
   verdict: UNCLEAR (a failed step logged no FAILED/error line: read `forgejo-gh run view 1934 --log-failed`; if infra, rerun: ~/bitcashier/infra/bin/forgejo-gh run rerun 1934 --failed -R pawelkrupinski/movies)
   run id 1934 (#945) http://forgejo.internal:3000/pawelkrupinski/movies/actions/runs/945
   commit 2f0fdcd3c Paweł Krupiński <…> 10-23 11:32: order-phases.sh: no mapfile -- the pre-push hook runs scripts under macOS's bash 3.2
-  [infra] leg (germany): failed in setup step 'Set up job' (often a `needs:` cascade or runner/setup trouble)
+  [derived] leg (germany): never started: needs: cascade of takes (united-kingdom) (through `needs:`; follows that red)
   [unclear] takes (united-kingdom): 8-line log with no FAILED/error/assert line (truncated? runner lost?) in step '…'; ends: …
   clears when: a later Identity model convergence run on main is green, or every pushed commit touching a production path carries `Fixes-Red: 945` (or `Fixes-Red: 1934`); tools-only commits land while red
 Outside the gate (red, not blocking a push; oldest first):
