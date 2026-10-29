@@ -5678,19 +5678,32 @@ def own_fixer_record_path():
 
 def red_claim(store, o_r, target, note="", wt=None):
     """(rc, lines): the red's lease to the caller (a claim, renewed by its worktree's activity). Inside a dispatched
-    fixer it is the fixer's note (its wrapper holds the lease)."""
+    fixer, a red its wrapper already holds (its own, or a family / run sibling under the same holder) gets the fixer's
+    note; ANY OTHER red N is claimed for the fixer, in its worktree -- how a fixer (the convergence family's) takes a
+    second red. 2026-10-29: `red claim <N>` in a fixer wrote the note on its own lease and ignored N."""
     own = own_fixer_record_path()
-    if own:
-        rec = read_record(own) or {}
-        rec["note"] = note or rec.get("note") or "working"
-        write_json(own, rec)
-        return 0, [f"noted on your lease {rec.get('lease')}: {rec['note']}"]
+    rec = (read_record(own) or {}) if own else {}
     here = safe_cwd()
+    items = None
+    if own:
+        items = red_targets(store, o_r, target)
+        primary = store.get(rec["lease"]) if rec.get("lease") else None
+        mine = primary["holder"] if lease_is_live(primary, store.clock()) else None
+
+        def held_by_me(it):
+            row = store.get(red_lease(it["data"]["key"]))
+            return lease_is_live(row, store.clock()) and (row["holder"] == mine or row["name"] == rec.get("lease"))
+        if not items or all(held_by_me(it) for it in items):
+            rec["note"] = note or rec.get("note") or "working"
+            write_json(own, rec)
+            return 0, [f"noted on your lease {rec.get('lease')}: {rec['note']}"]
+        items = [it for it in items if not held_by_me(it)]
+        wt = wt or rec.get("worktree")
     wt = os.path.realpath(wt or worktree_of(here) or here)
     if root_checkout(wt, o_r) or not os.path.isdir(wt):
         return 2, [f"NOT CLAIMED: {wt.replace(HOME, '~')} is not a worktree of your own (a claim is renewed by its "
                    "worktree's activity; the root checkout counts for nobody): `--worktree <your worktree>`"]
-    items = red_targets(store, o_r, target)
+    items = items if items is not None else red_targets(store, o_r, target)
     if not items:
         return 1, [f"NOT CLAIMED: #{target} names no red on main"]
     who = claimant(here)

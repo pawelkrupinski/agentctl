@@ -1,7 +1,7 @@
 """A red's key is its failure, read the same way in every run (2026-10-29: Verify scrape recording's GermanyConvergenceSpec
 failure -- Bambi '(1989)' served as a B-Movie -- was three reds: #2406 keyed by a WARN line, #2481 by a
 FileNotFoundException, #2493 by its `::error` annotation; the fix waiting under `Fixes-Red: 2406` never held #2493's)."""
-import os, re, sys, unittest
+import os, re, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -125,6 +125,57 @@ class RedKeyingTest(RedsBase):
         self.assertEqual(A.red_fix_of(new, self.facts())["entry"], FIX_ENTRY)
         A.red_tick(self.st, MOVIES, self.r.path, self.snap(), now_=self.t[0], dispatch=False, facts=self.facts())
         self.assertEqual(self.only()["state"], "fix-pending")
+
+
+class FixerClaimsAnotherRedTest(RedsBase):
+    """2026-10-29: inside a dispatched fixer, `red claim <N>` wrote the note on the fixer's own lease and ignored N, so
+    the convergence family's fixer could not take #2493 beside its own #2527."""
+
+    def fixer(self, session="s-fixer"):
+        from test_reds import OwnerTest
+        it, path = OwnerTest.held_by_a_fixer(self, session)
+        wt = self.r.worktree("movies-wt-red-2527-2", branch="red-2527-2")
+        A.write_json(path, {**A.read_record(path), "worktree": wt})
+        os.environ.update(CLAUDE_CODE_SESSION_ID=session)
+        return it, path, wt
+
+    def other_red(self, key="d71a1822c3c7"):
+        self.st.put_item("red", key, "offered", {
+            "key": key, "workflow": "Verify scrape recording", "jobs": [JOB], "job": JOB, "kind": "test", "line": SPEC_A,
+            "red_kind": "outside", "gate": False, "runs": ["2493", "3684"], "last_run": {"number": 2493, "databaseId": 3684},
+            "opened_at": self.t[0], "attempts": 0, "history": []})
+        return key
+
+    def test_a_fixer_claims_a_second_red_by_its_key_or_run(self):
+        it, path, wt = self.fixer()
+        key = self.other_red()
+        rc, out = self.tool("red", "claim", "2493", "--note", "the Bambi row too", "--repo", "movies", cwd=wt)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("claimed Verify scrape recording #2493", out)
+        row = self.st.get(A.red_lease(key))
+        self.assertTrue(A.lease_is_live(row, time.time()), row)
+        self.assertEqual(os.path.realpath(A.lease_meta(row)["worktree"]), os.path.realpath(wt))
+        self.assertIsNone(A.read_record(path).get("note"), "N's claim is no note on the fixer's own lease")
+
+    def test_its_own_red_still_gets_the_note(self):
+        it, path, wt = self.fixer()
+        rc, out = self.tool("red", "claim", "20", "--note", "on #20", "--repo", "movies", cwd=wt)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("noted on your lease", out)
+        self.assertEqual(A.read_record(path)["note"], "on #20")
+
+    def test_a_family_sibling_under_its_lease_is_its_own(self):
+        it, path, wt = self.fixer()
+        key = self.other_red()
+        primary = self.st.get(A.red_lease(it["data"]["key"]))
+        off = self.st.offer_of(f"red:{key}") or A.red_put_offer(self.st, self.st.item("red", key))
+        took = self.st.take(self.st.offer_of(f"red:{key}")["id"], primary["holder"], A.RED_FIXER_TTL, A.RED_FIXER_MAX,
+                            meta={"kind": "sibling", "family": "convergence", "primary": primary["name"]})
+        self.assertIn("epoch", took, off)
+        rc, out = self.tool("red", "claim", "2493", "--note", "sibling", "--repo", "movies", cwd=wt)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("noted on your lease", out)
+        self.assertEqual(self.st.get(A.red_lease(key))["holder"], primary["holder"])
 
 
 if __name__ == "__main__":
