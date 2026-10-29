@@ -571,8 +571,8 @@ class RedFamilyTest(Phase2Base):
         other = os.path.join(self.tmp, "fams.json")
         with open(other, "w") as f:
             json.dump({"families": [{"name": "scrapes", "workflows": ["Verify scrape recording"]}]}, f)
+        self.addCleanup(os.environ.__setitem__, "AGENTCTL_RED_FAMILIES", os.environ["AGENTCTL_RED_FAMILIES"])
         os.environ["AGENTCTL_RED_FAMILIES"] = other
-        self.addCleanup(os.environ.pop, "AGENTCTL_RED_FAMILIES", None)
         self.assertEqual(A.red_family({"workflow": "Verify scrape recording", "jobs": ["verify (germany)"]}), "scrapes")
         self.assertIsNone(A.red_family({"workflow": "Identity model convergence", "jobs": ["leg (poland)"]}))
 

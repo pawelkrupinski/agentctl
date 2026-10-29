@@ -883,8 +883,11 @@ def red_family(d):
     if not d:
         return None
     jobs = [str(j) for j in (d.get("jobs") or []) + [d.get("job")] if j]
-    for fam in red_families():
-        if d.get("workflow") in (fam.get("workflows") or []) or any(rx.search(j) for rx in fam["_jobs"] for j in jobs):
+    for fam in red_families():  # the first family that matches: its workflows or jobs (if it names any) AND its kinds
+        named = bool(fam.get("workflows") or fam["_jobs"])
+        by_name = d.get("workflow") in (fam.get("workflows") or []) or any(rx.search(j) for rx in fam["_jobs"] for j in jobs)
+        by_kind = not fam.get("kinds") or d.get("kind") in fam["kinds"]
+        if (by_name or not named) and by_kind and (named or fam.get("kinds")):
             return fam["name"]
     return None
 
@@ -1697,7 +1700,7 @@ def red_fixers_alive(store, t):
     """One row per live FIXER (a fixer holding several reds' leases counts once)."""
     out = {}
     for r in store.list("red/"):
-        if lease_is_live(r, t) and lease_meta(r).get("kind") in ("fixer", "legacy-fixer", "sibling"):
+        if lease_is_live(r, t) and lease_meta(r).get("kind") in ("fixer", "legacy-fixer", "sibling", "owned"):
             out.setdefault(r["holder"], r)
     return list(out.values())
 
@@ -1832,6 +1835,18 @@ def red_dispatcher(store, o_r, repo, t):
             continue
         pic = off["picture"]
         fam = red_queue_family(pic)
+        owned = family_owned(fam) and off["tier"] not in ("revert", "author")
+        if owned and (live := owner_alive(store, fam, t)):
+            # THE FAMILY'S OWNER IS ALIVE: the red is its next turn -- its lease taken for the owner and handed over
+            took = store.take(off["id"], owner_holder(fam), OWNER_TTL, OWNER_MAX,
+                              meta={"kind": "owned", "family": fam, "owner": owner_lease(fam),
+                                    "worktree": lease_meta(live).get("worktree"), "gate": bool(pic.get("gate"))})
+            if took and "epoch" in took:
+                owner_hand(fam, off["lease"], took)
+                red_family_tell(live, pic, fam)
+                acts.append(f"{pic.get('workflow')} #{(pic.get('run') or {}).get('number')}: red {pic['key']} handed "
+                            f"to its family {fam}'s owner")
+            continue
         holder = red_family_holder(store, fam, t) if off["tier"] != "revert" else None
         if holder and holder["name"] != off["lease"]:
             # ONE FIXER PER FAMILY: a new red of a family whose fixer is at work is that fixer's -- under its lease
@@ -1867,10 +1882,11 @@ def red_dispatcher(store, o_r, repo, t):
                 store.offer_reason(off["id"], why)
             continue
         num = (pic.get("run") or {}).get("number")
-        holder_id = f"laptop:fixer:red-{pic['key']}-{int(pic.get('attempts') or 0) + 1}"
-        meta = {"kind": "fixer", "gate": bool(pic.get("gate")), "family": fam, "tier": off["tier"], "run": num,
-                "workflow": pic.get("workflow")}
-        took = store.take(off["id"], holder_id, RED_FIXER_TTL, RED_FIXER_MAX, meta=meta)
+        holder_id = owner_holder(fam) if owned else f"laptop:fixer:red-{pic['key']}-{int(pic.get('attempts') or 0) + 1}"
+        meta = {"kind": "owned" if owned else "fixer", "gate": bool(pic.get("gate")), "family": fam,
+                "tier": off["tier"], "run": num, "workflow": pic.get("workflow")}
+        ttl, max_ = (OWNER_TTL, OWNER_MAX) if owned else (RED_FIXER_TTL, RED_FIXER_MAX)
+        took = store.take(off["id"], holder_id, ttl, max_, meta=meta)
         if not took or "held" in took or "gone" in took:
             continue
         extra = []
@@ -1878,12 +1894,12 @@ def red_dispatcher(store, o_r, repo, t):
             for sib in offs:
                 if sib["id"] != off["id"] and sib["id"] not in gone and sib["tier"] not in ("author", "revert", "resume") \
                         and red_queue_family(sib["picture"]) == fam:
-                    st_ = store.take(sib["id"], holder_id, RED_FIXER_TTL, RED_FIXER_MAX, meta=meta)
+                    st_ = store.take(sib["id"], holder_id, ttl, max_, meta=meta)
                     if st_ and "epoch" in st_:
                         extra.append({"name": sib["lease"], "epoch": st_["epoch"], "secret": st_["secret"],
                                       "picture": sib["picture"]})
                         gone.add(sib["id"])
-        ok, msg = red_spawn(store, o_r, repo, off, took, extra)
+        ok, msg = (owner_spawn if owned else red_spawn)(store, o_r, repo, *((fam,) if owned else ()), off, took, extra)
         if not ok:
             for x in [{"name": off["lease"], **took}] + extra:
                 store.release(x["name"], x["epoch"], x["secret"], outcome=f"NOT STARTED: {str(msg)[:200]}")

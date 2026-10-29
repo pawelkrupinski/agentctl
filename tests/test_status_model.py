@@ -52,7 +52,7 @@ class StatusModelTest(unittest.TestCase):
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
                 A.red_status(st)
-            m = A.status_data(store=st, now_=st.clock(), only=("reds", "families", "dispatcher"))
+            m = A.status_data(store=st, now_=st.clock(), only=("reds", "families", "owners", "dispatcher"))
         finally:
             A.cached_dispatch_blocker = saved
         self.assertEqual(buf.getvalue().strip(), A.render_red_status(m))

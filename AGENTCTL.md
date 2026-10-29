@@ -539,6 +539,21 @@ agent must be assigned to it".
   gate <red>" while main is red) and verification counts from its landing. A fix of the gate's OWN red (a gate run's
   red carries its key, whichever run its Fixes-Red names) reads "landing on red (Fixes-Red), <queued|checking|...>" in
   `red status`, `status --line` and the status page, never "blocked by gate" that same red (2026-10-29 19:20).
+- **LONG-LIVED FAMILY OWNERS (simplification item 6, 2026-10-30).** A family marked `"owner": true` in
+  `red-families.json` (today: `convergence`, `main-tests` = Main's test failures, `infra` = every other infra-shaped or
+  unclear red) has ONE persistent owner instead of a fresh fixer per red: one `claude --bg` session (`red owner ·
+  <family>` in `claude agents`) and its wrapper (`agentctl red owner --family F`, detached), working in ONE worktree
+  (`<clone>-wt-owner-<family>`, branch `owner-<family>`) with a NOTEBOOK there (`RED-NOTEBOOK.md`, never committed)
+  that it reads first and keeps current. Its lease `owner/<family>` is a HEARTBEAT (renewed while the wrapper lives,
+  lapsing 15 min after it dies; no 3 h maximum). New reds of the family are handed to it -- their leases taken for the
+  owner (kind `owned`), a line in `RED-INBOX.md` -- and become the NEXT TURN of the same session (`--resume`). A turn
+  ends with one verdict line; that turn's red leases are released with it, exactly as a fixer's, so verification,
+  re-offers (back to the same owner), the attempt ladder and the crash-loop breaker work as before. It is restarted
+  only when it died (same worktree, notebook and session), and ends after 6 h with no red (`$AGENTCTL_OWNER_IDLE`), on
+  `RED-STOP.md`, or after 2 turns in a row with no verdict. Its brief: fast reproducer first, and for convergence the
+  MECHANISM-ONLY rule (fix the incremental state that diverges from a whole resolve; never a resolver rule tuned on one
+  recording, never a baseline or allow-list row). `red status` lists each owner (`owner <family>: ALIVE, turn n, ...`).
+  Records: `<reds dir>/owners/<family>/` (`owner.json`, `owner.log`, `leases.json` 0600).
 - **ONE RED QUEUE (simplification item 5, 2026-10-30; replaced the per-class caps, the borrow and the overflow slot).**
   A red is (workflow, failing job, signature); its cascade jobs are derived. Every red belongs to ONE queue family:
   its configured family (`red-families.json`), else its run (`run:<workflow>#<number>`). The open offers are one

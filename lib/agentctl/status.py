@@ -238,6 +238,11 @@ def render_red_status(m, verbose=False):
         out.append(f"family {f['family']}: {f['open']} open red(s), ONE fixer: "
                    + (f"{f['holder']} ({str(f.get('worktree') or '?').replace(HOME, '~')})" if f.get("holder")
                       else "none at work"))
+    for o in m.get("owners") or []:
+        if o.get("worktree"):
+            out.append(f"owner {o['family']}: {'ALIVE' if o['alive'] else 'not running'}, turn {o.get('turn') or 0}, "
+                       f"{o.get('reds') or 0} red(s) in hand, {o.get('restarts') or 0} restart(s); "
+                       f"{str(o['worktree']).replace(HOME, '~')}" + (f" (ended: {o['verdict']})" if o.get("ended") else ""))
     dp = m.get("dispatcher") or {}
     if "error" in dp:
         out.append(f"dispatcher: unread ({dp['error']})")
@@ -657,6 +662,7 @@ def status_data(store=None, now_=None, bound=None, keep=False, only=None):
                ("dispatcher", lambda: status_dispatcher(need(), t), 1),
                ("reds", lambda: status_reds(need(), t, repo), 1),
                ("families", lambda: status_families(need(), t), 1),
+               ("owners", lambda: owners_status(need(), t), 1),
                ("agents", lambda: status_agents(need(), t), 2),
                ("landing", lambda: status_landing(need(), t), 1),
                ("conditions", lambda: status_conditions(need(), t), 1),

@@ -51,6 +51,8 @@ os.environ.setdefault("AGENTCTL_BIN_REPO", "-")  # no test makes worktrees of th
 # closed port -- never ci-runner's real store through the tunnel.
 os.environ.setdefault("AGENTCTL_ROLE", "server")
 os.environ.setdefault("AGENTCTL_STORE_DEFAULT_URL", "http://127.0.0.1:9")
+# THE RED FAMILIES ARE THE TESTS' OWN (never ~/bin/red-families.json, which the owner edits): convergence, no owner.
+os.environ.setdefault("AGENTCTL_RED_FAMILIES", os.path.join(HERE, "fixtures", "red-families.json"))
 
 
 def _real_cache_marks():

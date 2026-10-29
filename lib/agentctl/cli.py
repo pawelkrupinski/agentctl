@@ -251,7 +251,9 @@ def main(argv=None):
     rp.add_argument("--dispatch", action="store_true")
     rf = rds.add_parser("fixer", help=argparse.SUPPRESS)
     rf.add_argument("--record", required=True)
-    for p_ in [rc_, rbt, rb, rr, rdp, ra, rp, rf] + rls:
+    rfo = rds.add_parser("owner", help=argparse.SUPPRESS)  # a family owner's wrapper (lib/agentctl/owner.py)
+    rfo.add_argument("--family", required=True)
+    for p_ in [rc_, rbt, rb, rr, rdp, ra, rp, rf, rfo] + rls:
         p_.add_argument("--repo")
     ram = rds.add_parser("am-fixer", help="exit 0 (and print who) inside a dispatched red fixer, else 1 (~/bin's "
                          "pre-commit hook asks)")
