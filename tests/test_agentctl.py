@@ -149,20 +149,44 @@ def sh(cwd, *args, input=None):
     return r.stdout.strip()
 
 
+_REPO_TEMPLATE = []
+
+
+def _repo_template():
+    """The bare remote and its clone, built ONCE per process (~10 git calls, ~0.4 s on a loaded laptop) and copied for
+    every Repo after that: the suite builds a few hundred."""
+    if not _REPO_TEMPLATE:
+        root = os.path.realpath(tempfile.mkdtemp(prefix="repo-tpl-"))
+        bare, path = os.path.join(root, "remote.git"), os.path.join(root, "repo")
+        sh(root, "git", "init", "-q", "--bare", "-b", "main", bare)
+        sh(root, "git", "init", "-q", "-b", "main", path)
+        sh(path, "git", "remote", "add", "forgejo", bare)
+        for i in range(5):
+            with open(os.path.join(path, f"f{i}.txt"), "w") as f:
+                f.write(f"v1 {i}\n")
+        sh(path, "git", "add", "-A")
+        sh(path, "git", "commit", "-q", "-m", "init")
+        sh(path, "git", "push", "-q", "forgejo", "HEAD:main")
+        sh(path, "git", "fetch", "-q", "forgejo")
+        _REPO_TEMPLATE.append((bare, path))
+    return _REPO_TEMPLATE[0]
+
+
 class Repo:
-    """A bare 'forgejo' remote plus a clone with a few commits on main."""
+    """A bare 'forgejo' remote plus a clone with a few commits on main (a copy of the process's template)."""
 
     def __init__(self, root):
         self.root = root
         self.bare = os.path.join(root, "remote.git")
         self.path = os.path.join(root, "repo")
-        sh(root, "git", "init", "-q", "--bare", "-b", "main", self.bare)
-        sh(root, "git", "init", "-q", "-b", "main", self.path)
-        sh(self.path, "git", "remote", "add", "forgejo", self.bare)
-        for i in range(5):
-            self.write(f"f{i}.txt", f"v1 {i}\n")
-        self.commit("init")
-        self.push()
+        tbare, tpath = _repo_template()
+        _shutil.copytree(tbare, self.bare, symlinks=True)
+        _shutil.copytree(tpath, self.path, symlinks=True)
+        cfg = os.path.join(self.path, ".git", "config")
+        with open(cfg) as f:
+            text = f.read()
+        with open(cfg, "w") as f:
+            f.write(text.replace(f"url = {tbare}\n", f"url = {self.bare}\n"))
 
     def write(self, rel, text, at=None):
         p = os.path.join(at or self.path, rel)
