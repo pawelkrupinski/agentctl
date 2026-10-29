@@ -421,7 +421,102 @@ class StaleStoreFixerTest(Phase2Base):
         self.assertEqual(spawned, [])  # its run's fixer is alive: no duplicate
         # a fixer whose lease IS held on the store in use is its own wrapper's: never adopted
         self.assertEqual(A.red_adopt_fixers(self.remote, A.red_active(self.remote), t), [])
-        self.assertFalse(A.fixer_on_other_store({"lease": "red/k1", "epoch": took["epoch"]}, laptop, t))
+
+
+def git_tree(tmp, name):
+    """A clone with refs/remotes/forgejo/main and a worktree `name` off it: (clone, worktree)."""
+    clone = os.path.join(tmp, "clone")
+    if not os.path.isdir(clone):
+        subprocess.run(["git", "init", "-q", "-b", "main", clone], check=True)
+        sh = lambda *a: subprocess.run(["git", "-C", clone, "-c", "user.name=t", "-c", "user.email=t@t", *a], check=True,
+                                       capture_output=True)
+        sh("commit", "-q", "--allow-empty", "-m", "base")
+        sh("update-ref", "refs/remotes/forgejo/main", "HEAD")
+    wt = os.path.join(tmp, name)
+    subprocess.run(["git", "-C", clone, "worktree", "add", "-q", "-b", name, wt, "forgejo/main"], check=True,
+                   capture_output=True)
+    return clone, wt
+
+
+def commit(wt, msg, at=None):
+    env = dict(os.environ, **({"GIT_AUTHOR_DATE": f"@{int(at)} +0000"} if at else {}))
+    with open(os.path.join(wt, msg.replace(" ", "-")), "w") as f:
+        f.write(msg)
+    subprocess.run(["git", "-C", wt, "add", "-A"], check=True)
+    subprocess.run(["git", "-C", wt, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", msg], check=True,
+                   env=env)
+
+
+class FixerContinuityTest(Phase2Base):
+    def setUp(self):
+        super().setUp()
+        os.environ.pop("AGENTCTL_REDS_DIR", None)
+        os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp, "laptop")
+
+    def record(self, run, key, wt, alive, n=1, **kw):
+        rec = {"workflow": "Identity model convergence", "run": run, "key": key, "worktree": wt,
+               "lease": f"red/{key}", "epoch": 1, "log": os.path.join(self.tmp, f"log-{run}-{n}"), **kw}
+        if alive:
+            rec.update(pid=os.getpid(), process_start=A.process_start(os.getpid()))
+        else:
+            rec.update(pid=999999, ended="2026-10-29T12:00:00Z")
+        A.write_json(A.reds_dir(str(run), f"fixer-{n}.json"), rec)
+        return rec
+
+    def test_a_live_fixer_keeps_its_red_on_a_newer_run_and_no_second_fixer_is_dispatched(self):
+        # 2026-10-29: fixer -7 worked on #2473's red; the red moved on to run #2517 and -8 was dispatched beside it
+        t = time.time()
+        self.record(2473, "k1", self.tmp, alive=True)
+        it = self.st.put_item("red", "k1", "offered", {"key": "k1", "workflow": "Identity model convergence",
+                                                       "last_run": {"number": 2517}})
+        self.st.import_lease({"name": "red/k1", "holder": "laptop:fixer:red-k1-8", "epoch": 3, "secret": "s",
+                              "acquired_at": t - 900, "renewed_at": t - 700, "expires_at": t - 100, "max_until": t + 3600,
+                              "progress": "", "item": None, "meta": "{}"})  # -8's: its watcher died, the lease lapsed
+        pic = {"key": "k1", "workflow": "Identity model convergence", "job": "leg", "run": {"number": 2517, "databaseId": 9},
+               "kind": "test"}
+        self.st.offer("fixer", f"red:{it['id']}", "red/k1", "fresh", 1, t + 600, pic)
+        spawned, saved = [], (A.red_spawn, A.cached_dispatch_blocker)
+        A.red_spawn = lambda *a, **k: spawned.append(a) or (True, "ok")
+        A.cached_dispatch_blocker = lambda: None
+        try:
+            A.red_dispatcher(self.remote, "o/r", self.repo, t + 5)
+        finally:
+            A.red_spawn, A.cached_dispatch_blocker = saved
+        self.assertEqual(spawned, [])
+        self.assertIn("previous fixer", self.st.offers("fixer")[0]["reason"])
+        acts = A.red_adopt_fixers(self.remote, A.red_active(self.remote), t + 5)  # it is the holder again
+        self.assertEqual(len(acts), 1, acts)
+        self.assertTrue(self.st.get("red/k1")["holder"].startswith(f"laptop:fixer:pid-{os.getpid()}@"))
+
+    def test_a_lease_ended_on_purpose_is_not_taken_back(self):
+        t = time.time()
+        took = self.st.acquire("red/k2", "laptop:fixer:red-k2-1", 600, 3600)
+        self.record(2473, "k2", self.tmp, alive=True, epoch=took["epoch"])
+        self.st.put_item("red", "k2", "fix-pending", {"key": "k2", "workflow": "Identity model convergence",
+                                                      "last_run": {"number": 2473}})
+        self.st.revoke("red/k2", "fix submitted")
+        self.assertEqual(A.red_adopt_fixers(self.remote, A.red_active(self.remote), t), [])
+
+    def test_a_new_fixer_continues_the_previous_fixers_worktree_and_its_unlanded_commits(self):
+        _clone, old = git_tree(self.tmp, "movies-wt-red-2473-5")
+        commit(old, "step one")
+        commit(old, "step two")
+        _c, other = git_tree(self.tmp, "movies-wt-red-2400")
+        commit(other, "older attempt", at=time.time() - 86400)
+        _c, empty = git_tree(self.tmp, "movies-wt-red-2380")
+        self.record(2473, "k3", old, alive=False, n=7)
+        self.record(2400, "k3", other, alive=False, n=1)
+        self.record(2380, "k3", empty, alive=False, n=1)
+        u = {"key": "k3", "workflow": "Identity model convergence", "run": {"number": 2517}}
+        got = A.previous_fixer_tree(u)
+        self.assertEqual(got["worktree"], old)
+        self.assertIn("CONTINUE, NEVER START OVER", got["note"])
+        self.assertIn("2 commit(s)", got["note"])
+        self.assertIn(other, got["note"])  # the other unlanded attempt: cherry-pick what belongs
+        self.assertNotIn(empty, got["note"])
+        self.assertIsNone(A.previous_fixer_tree({"key": "zz", "workflow": "W", "run": {"number": 1}}))
+
+
 
 
 class CurrentStoreTest(Phase2Base):

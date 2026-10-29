@@ -4068,21 +4068,38 @@ def red_renew_holders(store, t):
             store.renew(row["name"], row["epoch"], row["secret"], mark, ttl)
 
 
+def fixer_keys(r):
+    """The red keys a fixer record holds or held: its own red's, its lease's and its run's other reds' leases'."""
+    names = [r.get("lease")] + [x.get("name") for x in r.get("extra_leases") or []]
+    keys = {n.split("/", 1)[1] for n in names if n and n.startswith("red/")}
+    return keys | ({r["key"]} if r.get("key") else set())
+
+
 def red_adopt_fixers(store, active, t):
-    """ONE SOURCE OF TRUTH FOR WHO HOLDS A RED: a fixer process alive on a run (one from before the leases, whose
-    imported lease lapsed) is granted the leases of its run's free reds -- holder its pid and worktree, renewed by its
-    transcript's growth and its worktree's activity, revoked when the process ends -- so the red is `leased` in the
-    state, the status line, the escalations and W2 alike."""
+    """ONE SOURCE OF TRUTH FOR WHO HOLDS A RED, AND A LIVE FIXER STAYS ITS HOLDER: a fixer process alive on a red -- by
+    the red's key (a newer run of the same red is still its red) or by its run -- whose lease is not live on the store
+    in use is granted the red's lease again: holder its pid and worktree, renewed by its transcript's growth and its
+    worktree's activity, revoked when the process ends. So the red is `leased` in the state, the status line and the
+    escalations alike, and no second fixer is dispatched beside it. Cases (2026-10-29): a fixer from before the leases;
+    one whose wrapper renewed the laptop's store across `store use`, ci-runner's imported copy lapsing; one whose red
+    moved on to a newer run (#2473 -> #2517) while it worked. A lease that LAPSED (or is missing) is taken again; one
+    released or revoked on purpose (a fix, a block, cleared) is not: its wrapper stops."""
     out = []
     for r in fixer_records():
-        if not r["alive"] or (r.get("lease") and not fixer_on_other_store(r, store, t)):
+        if not r["alive"]:
             continue
-        run = (r.get("workflow"), str(r.get("run")))
+        run, keys = (r.get("workflow"), str(r.get("run"))), fixer_keys(r)
         for it in active.values():
             d = it["data"]
-            if (d.get("workflow"), str((d.get("last_run") or {}).get("number"))) != run:
+            if d.get("key") not in keys and (d.get("workflow"), str((d.get("last_run") or {}).get("number"))) != run:
                 continue
-            got = store.acquire(red_lease(d["key"]), f"laptop:fixer:pid-{r.get('pid')}@{r.get('worktree')}",
+            name = red_lease(d["key"])
+            row = store.get(name)
+            if lease_is_live(row, t):
+                continue
+            if row and not row["holder"] and r.get("lease"):
+                continue  # released or revoked on purpose (a fix, a block, cleared, its run's fixer ended): never retaken
+            got = store.acquire(name, f"laptop:fixer:pid-{r.get('pid')}@{r.get('worktree')}",
                                 RED_IMPORT_TTL, RED_FIXER_MAX, progress="adopted", item=f"red:{it['id']}",
                                 meta={"kind": "legacy-fixer", "pid": r.get("pid"), "process_start": r.get("process_start"),
                                       "log": r.get("log"), "worktree": r.get("worktree"), "who": f"red-fixer-{r.get('run')}",
@@ -4090,24 +4107,6 @@ def red_adopt_fixers(store, active, t):
             if "held" not in got:
                 out.append(f"adopted the live fixer pid {r.get('pid')} as the holder of {red_what(d)}")
     return out
-
-
-def fixer_on_other_store(r, store, t):
-    """A live fixer whose wrapper renews its lease on the laptop's own store.db while the store in use is ci-runner's
-    (2026-10-29 cutover: the gate fixer pid 31738, started before `store use`, kept renewing red-67b7ea491ade-7 on the
-    laptop; ci-runner's imported copy expired and its reds were offered again). The sync adopts its run's reds for it
-    (red_adopt_fixers: renewed by its log's growth and its worktree's activity, revoked when the process ends)."""
-    if not isinstance(store, RemoteStore) or not r.get("lease"):
-        return False
-    try:
-        mine = Store(path=state_root("store.db")).get(r["lease"])
-    except Exception:
-        return False
-    if not (mine and mine["epoch"] == r.get("epoch") and lease_is_live(mine, t)):
-        return False
-    there = store.get(r["lease"])
-    return not (there and there["epoch"] == r.get("epoch") and there["secret"] == mine["secret"]
-                and lease_is_live(there, t))
 
 
 def red_import_claims(store, active, t):
@@ -4266,6 +4265,8 @@ def red_dispatcher(store, o_r, repo, t):
     offs.sort(key=lambda o: (o["priority"], KIND_ORDER.get(o["picture"].get("kind"), 1), o["opened_at"]))
     blocker = cached_dispatch_blocker()
     gone = set()
+    sessions = None if not offs else (bg_sessions() if any(not r.get("alive") and not r.get("ended") and r.get("bg_id")
+                                                            for r in fixer_records()) else [])
     for off in offs:
         if off["id"] in gone:
             continue
@@ -4295,6 +4296,9 @@ def red_dispatcher(store, o_r, repo, t):
             why = blocker
         elif on_run:
             why = f"its run's fixer {on_run['holder']} is on the run; this red is offered again when it ends"
+        elif (prev := previous_fixer_working(pic.get("key"), red_run_of(pic), sessions)):
+            why = (f"its previous fixer {prev} is still at work on it: it stays the holder (its lease is taken again "
+                   "for it); this red is offered again when it ends")
         elif slot is None:
             why = cap_why
         else:
@@ -4335,7 +4339,8 @@ def red_spawn(store, o_r, repo, off, took, extra=()):
     u = {"workflow": pic["workflow"], "job": pic.get("job"), "jobs": pic.get("jobs"), "kind": pic.get("kind") or "test",
          "line": pic.get("line"), "run": pic.get("run") or {}, "refuted": pic.get("refuted"), "predicts": pic.get("predicts"),
          "flake": pic.get("red_kind") == "flake", "diagnosis": pic.get("diagnosis"), "key": pic["key"],
-         "names": set(pic.get("names") or []), "prior_work": pic.get("prior_work"), "old_note": pic.get("old_note")}
+         "names": set(pic.get("names") or []), "prior_work": pic.get("prior_work"), "old_note": pic.get("old_note"),
+         "history": pic.get("history") or []}
     for x in extra:  # the run's other reds, under the same fixer
         u["jobs"] = sorted(set(u.get("jobs") or [u["job"]]) | set(x["picture"].get("jobs") or []))
     if tier == "revert":
@@ -4584,8 +4589,12 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
     os.makedirs(d, exist_ok=True)
     k = 1 + len(glob.glob(os.path.join(d, "fixer*.json")))
     rec_path = os.path.join(d, "fixer.json" if k == 1 else f"fixer-{k}.json")
+    cont = None if resume else previous_fixer_tree(u)
     if resume and resume.get("worktree") and os.path.isdir(resume["worktree"]):
         wt = resume["worktree"]
+    elif cont:  # FIXER CONTINUITY: the previous fixer's worktree and its unlanded commits, never a fresh start
+        wt = cont["worktree"]
+        resume = {"note": cont["note"]}
     else:
         _d, clone, _w = waiting_state(repo)
         wt, branch, n = f"{clone}-wt-red-{num}", f"red-{num}", 1
@@ -4603,7 +4612,8 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
            "run": num, "run_id": u["run"].get("databaseId"), "workflow": u["workflow"], "job": u.get("job"),
            "kind": u.get("kind"), "line": u.get("line"), "flake": bool(u.get("flake")), "worktree": wt, "started": ts(),
            "why": why, "log": os.path.join(d, f"claude-{k}.log"), "session": resume.get("session") if resume else None,
-           "resume": bool(resume), "resume_note": resume.get("note") if resume else None, "diagnosis": u.get("diagnosis"),
+           "resume": bool(resume and resume.get("session")), "resume_note": resume.get("note") if resume else None,
+           "continued_from": (cont or {}).get("worktree"), "diagnosis": u.get("diagnosis"),
            "effort": effort, "refuted": u.get("refuted") or [], "predicts": u.get("predicts"), "orphan": u.get("orphan"),
            "extra_leases": [{"name": x["name"], "epoch": x["epoch"]} for x in extra], "prior_work": u.get("prior_work")}
     write_json(rec_path, rec)
@@ -4617,10 +4627,99 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
                            stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=wt, env=env)
     rec.update(pid=p.pid, process_start=process_start(p.pid))
     write_json(rec_path, rec)
-    line = dispatch_log(u, f"DISPATCHED{' (resumed)' if resume else ''} pid {p.pid} in {wt} ({why}); log {rec['log']}")
+    line = dispatch_log(u, f"DISPATCHED{' (resumed)' if rec['resume'] else ' (continuing)' if cont else ''} pid {p.pid} "
+                           f"in {wt} ({why}); log {rec['log']}")
     inbox_write("red", f"RED DISPATCHED: {u['workflow']} #{num} [{u.get('job')}] -> fixer session "
                        f"'{fixer_label({**rec, 'run': num})}' (`claude agents`) in {wt.replace(HOME, '~')} ({why})", [], [], 0, cwd=wt)
     return True, line
+
+
+def unlanded_commits(wt):
+    """[(sha, author time)] of the worktree's commits not on forgejo/main (git cherry: a rebased copy on main counts as
+    landed), oldest first; [] when it is not a worktree."""
+    if not wt or not os.path.isdir(wt):
+        return []
+    ch = git(wt, "cherry", f"refs/remotes/{REMOTE}/main", "HEAD", check=False)
+    shas = [l[2:].strip() for l in (ch.stdout if ch.returncode == 0 else "").splitlines() if l.startswith("+ ")]
+    out = []
+    for sha in shas:
+        r = git(wt, "log", "-1", "--format=%at", sha, check=False)
+        out.append((sha, int(r.stdout.strip() or 0) if r.returncode == 0 and r.stdout.strip().isdigit() else 0))
+    return out
+
+
+def fixer_working(r, sessions=None):
+    """A fixer record still at work: its wrapper alive, or (its wrapper gone without an end) its background session
+    still listed as not done. sessions: `claude agents --json --all`'s rows, read once by the caller."""
+    if r.get("alive"):
+        return True
+    if r.get("ended") or not r.get("bg_id") or not sessions:
+        return False
+    row = next((x for x in sessions if x.get("id") == r["bg_id"] or str(x.get("sessionId") or "").startswith(r["bg_id"])),
+               None)
+    return bool(row) and row.get("state") not in ("done", "stopped", "failed")
+
+
+def bg_sessions():
+    try:
+        r = subprocess.run([claude_cli(), "agents", "--json", "--all"], capture_output=True, text=True, timeout=60,
+                           stdin=subprocess.DEVNULL)
+        rows = json.loads(r.stdout) if r.returncode == 0 else []
+    except (OSError, subprocess.TimeoutExpired, ValueError, SystemExit):
+        rows = []
+    return rows if isinstance(rows, list) else []
+
+
+def fixers_of(key, run):
+    """The fixer records of a red: by its key (any run of it) or by its run."""
+    return [r for r in fixer_records() if key in fixer_keys(r) or (r.get("workflow"), str(r.get("run"))) == run]
+
+
+def previous_fixer_working(key, run, sessions=None):
+    """'<who> (<worktree>)' of a fixer of this red still at work, else None: while it works it is the holder (the sync
+    re-acquires its lease), never a second fixer beside it."""
+    recs = fixers_of(key, run)
+    if not recs:
+        return None
+    if sessions is None and any(not r.get("alive") and not r.get("ended") and r.get("bg_id") for r in recs):
+        sessions = bg_sessions()
+    for r in recs:
+        if fixer_working(r, sessions):
+            return f"pid {r.get('pid')} ({str(r.get('worktree') or '?').replace(HOME, '~')})"
+    return None
+
+
+def previous_fixer_tree(u):
+    """FIXER CONTINUITY (the owner, 2026-10-29: fixer -8 of #2473's red started fresh in movies-wt-red-2517 while -7's
+    five commits sat unlanded in movies-wt-red-2473-5): a new fixer of the same red -- its key, any run of it -- goes on
+    in the previous fixer's worktree when that holds commits not on forgejo/main (the most recently committed one),
+    and is told to cherry-pick any other's. {worktree, note} or None. Read on the laptop at dispatch: the worktrees are
+    here, never on ci-runner."""
+    run = (u.get("workflow"), str((u.get("run") or {}).get("number")))
+    trees = [r.get("worktree") for r in fixers_of(u.get("key"), run)]
+    trees += [h.get("worktree") for h in u.get("history") or []] + [(u.get("prior_work") or {}).get("worktree")]
+    found = {}
+    for wt in trees:
+        if wt and wt not in found and os.path.isdir(wt) and allowed_path(wt) and not os.path.exists(os.path.join(wt, "RED-STOP.md")):
+            left = unlanded_commits(wt)
+            if left:
+                found[wt] = left
+    if not found:
+        return None
+    wt = max(found, key=lambda w: max(at for _s, at in found[w]))
+    others = {w: c for w, c in found.items() if w != wt}
+    num = (u.get("run") or {}).get("number")
+    note = (f"CONTINUE, NEVER START OVER: {wt} is the previous fixer's worktree of this red, with {len(found[wt])} "
+            f"commit(s) not on forgejo/main ({', '.join(s[:10] for s, _ in found[wt][:10])}). Read them first (`git log -p "
+            f"forgejo/main..HEAD`), `git fetch forgejo && git rebase forgejo/main` (never squash), carry the fix on from "
+            f"there (add `Fixes-Red: {num}` to what you commit) and land each verified step with `~/bin/agentctl land`.")
+    if others:
+        note += " Other earlier fixers of it left unlanded commits too: " + "; ".join(
+            f"{w} ({', '.join(s[:10] for s, _ in c[:10])})" for w, c in others.items()) + \
+            " -- cherry-pick what belongs to the fix (never squash), say why you leave the rest."
+    return {"worktree": wt, "note": note}
+
+
 
 
 def dispatch_log(u, what):
