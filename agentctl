@@ -112,7 +112,8 @@ SHORT = {
     **{r: f"bitcashier/{r}" for r in ("infra", "core", "dashboard", "invoice-page", "version-dashboard")},
 }
 FORGEJO_GH = os.environ.get("AGENTCTL_FORGEJO_GH", f"{HOME}/bitcashier/infra/bin/forgejo-gh")
-API = os.environ.get("AGENTCTL_FORGEJO_API", "http://localhost:3000/api/v1")
+API = os.environ.get("AGENTCTL_FORGEJO_API") or (os.environ["AGENTCTL_FORGEJO_URL"].rstrip("/") + "/api/v1"
+                                                  if os.environ.get("AGENTCTL_FORGEJO_URL") else "http://localhost:3000/api/v1")
 REMOTE = "forgejo"
 PROTECTED_BRANCHES = {"main", "master"}
 ZERO = "0" * 40
@@ -4514,11 +4515,12 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=True, facts=None):
             pass  # another writer moved it: the next tick
         except (Exception, SystemExit) as e:
             err(f"red tick: {key}: {type(e).__name__}: {str(e)[:200]}")
-    try:
-        red_renew_holders(store, t)
-    except (Exception, SystemExit) as e:
-        err(f"red tick: renewing the claims failed ({str(e)[:160]})")
-    if dispatch:
+    if host_role() != "server":  # a claim's activity is in the laptop's worktrees: the laptop's sync renews them
+        try:
+            red_renew_holders(store, t)
+        except (Exception, SystemExit) as e:
+            err(f"red tick: renewing the claims failed ({str(e)[:160]})")
+    if dispatch and host_role() != "server":  # fixers run on the laptop (owner decision 8): its sync dispatches
         try:
             acts += red_dispatcher(store, o_r, repo, t)
         except (Exception, SystemExit) as e:
@@ -7186,9 +7188,9 @@ def land_refs_supported(repo):
     return "refs/heads/land/" in hook
 
 
-def submit_ref(repo, d, e):
-    """Push the change to refs/heads/land/<entry> (bounded); the entry records it. Never fatal: the queue does not need
-    it in phase 1."""
+def submit_ref(repo, d, e, remote=False):
+    """Push the change to refs/heads/land/<entry> (bounded); the entry records it. Never fatal in phase 1 (the queue does
+    not need it); in phase 2 (remote: ci-runner fetches the change from it) the caller refuses without it."""
     if not land_refs_supported(repo):
         return None
     ref = f"refs/heads/land/{e['id']}"
@@ -7196,7 +7198,8 @@ def submit_ref(repo, d, e):
                           os.path.join(d, f"submit-{e['id']}"), "submit", **push_bounds())
     if rc == 0:
         e["ref"] = ref
-        save_entry(d, e)
+        if not remote:
+            save_entry(d, e)
         return ref
     err(f"submit: could not push {ref} ({tail_of(out or '', 2)[:160]}); the change is queued all the same")
     return None
@@ -7231,22 +7234,29 @@ def enqueue(repo, main_ref, sh, a):
         return rc
     d, _clone, _wt = waiting_state(repo)
     commits = waiting_commits(repo, f"{REMOTE}/main", head)
-    with open(os.path.join(d, "seq.lock"), "a+") as seq_lock:  # a unique seq; never the landing lock (a push holds it)
-        fcntl.flock(seq_lock, fcntl.LOCK_EX)
-        seq = max([e["seq"] for e in waiting_entries(d, open_only=False)] + [0]) + 1
-        e = {"id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{seq}", "seq": seq,
-             "worktree": repo, "branch": branch_of(repo), "head": head, "commits": commits,
-             "fixes": sorted(fixes_of(repo, commits)),
-             "status": "queued", "created": ts(), "keep_worktree": bool(getattr(a, "keep_worktree", False)),
-             "claude_pid": int(os.environ["CLAUDE_PID"]) if (os.environ.get("CLAUDE_PID") or "").isdigit() else None,
-             "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or None,
-             "base": git(repo, "rev-parse", main_ref).strip()}
-        save_entry(d, e)
-        for old in queued_entries(d):  # RE-QUEUEING REPLACES: only the newest entry per worktree and branch runs
-            if old["id"] != e["id"] and same_change_source(old, repo, e["branch"]):
-                supersede(d, old, e["id"], f"{repo} queued again ({head[:10]}); only the newest entry runs")
+    fields = {"worktree": repo, "branch": branch_of(repo), "head": head, "commits": commits,
+              "fixes": sorted(fixes_of(repo, commits)), "keep_worktree": bool(getattr(a, "keep_worktree", False)),
+              "claude_pid": int(os.environ["CLAUDE_PID"]) if (os.environ.get("CLAUDE_PID") or "").isdigit() else None,
+              "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or None,
+              "base": git(repo, "rev-parse", main_ref).strip(), "host": os.uname().nodename}
+    if host_role() == "sync":  # PHASE 2: the change goes to ci-runner's queue -- its ref first, then the submission
+        e = {**fields, "id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-"
+                             f"{os.urandom(3).hex()}"}
+        if not submit_ref(repo, d, e, remote=True):
+            print(f"NOT LANDED: could not push the change to refs/heads/land/{e['id']} (ci-runner checks it from there): "
+                  "`agentctl env --check`, then land again")
+            return 1
+        r = submit_remote(Store(), e)
+        if r.get("outbox"):
+            print(f"QUEUED-LOCAL {e['id']} ({head[:10]}): the store is unreachable ({r['outbox']}); the sync submits it "
+                  "when it answers. LANDED / WAITING / NOT LANDED goes to `agentctl inbox`", flush=True)
+            return 0
+        ahead = r.get("ahead") or 0
+        print(f"QUEUED {r['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}): its checks run on ci-runner; "
+              "LANDED / WAITING / NOT LANDED goes to `agentctl inbox`", flush=True)
+        return 0
+    e, ahead = queue_change(d, fields)
     submit_ref(repo, d, e)
-    ahead = len(queued_entries(d)) - 1
     print(f"QUEUED {e['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}): its checks run in the background; "
           "LANDED / WAITING / NOT LANDED goes to `agentctl inbox`", flush=True)
     spawn_waiting_processor(repo)
@@ -7395,6 +7405,10 @@ def _check_entry(repo, d, e, i, own=None):
     if not git_ok(repo, "rev-parse", "--verify", "-q", f"{REMOTE}/main"):
         return 0 if requeue_infra(d, e, "its fetch of main failed") else 1
     base = git(repo, "rev-parse", f"{REMOTE}/main").strip()
+    if not git_ok(repo, "cat-file", "-e", f"{e['head']}^{{commit}}"):  # phase 2: the change is on Forgejo, as land/<id>
+        git(repo, "fetch", "--quiet", REMOTE, f"refs/heads/land/{e['id']}", check=False)
+        if not git_ok(repo, "cat-file", "-e", f"{e['head']}^{{commit}}"):
+            return 0 if requeue_infra(d, e, f"its commits are not here and refs/heads/land/{e['id']} gave none") else 1
     rem = e.get("remote") or {}
     adopt = (rem.get("head") == e["head"] and rem.get("base") == base and not rem.get("collected_at")
              and rem.get("status") not in ("cancelled", "skipped", "abandoned")
@@ -7627,6 +7641,7 @@ def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own=None
     remote check workflow), else in the tree, admitted by the governor. ok None: stalled."""
     adopted = remote_matches(e, base, head, mode)
     why = "its remote run, adopted" if adopted else \
+        "the reconciler on ci-runner checks on the CI tier (owner decision 1)" if host_role() == "server" else \
         gov_pressure() if os.environ.get("AGENTCTL_REMOTE_CHECKS", "1") != "0" else None
     if why and (adopted or remote_checks_supported(tree)):
         wlog(d, f"{e['id']}: the laptop is under pressure ({why}): checks on ci-runner")
@@ -8049,6 +8064,9 @@ def batch_check(repo, d, tree, base, tip, cls="check"):
     hook = precheck_hook(tree) or precheck_hook(repo)
     if not hook:
         return True, "", False
+    if host_role() == "server" and remote_checks_supported(tree):  # ci-runner: the CI check tier (owner decision 1)
+        ok, out = remote_check(repo, {"id": f"batch-{tip[:10]}", "head": tip}, base, tip, batch_mode(hook))
+        return (ok, out, False) if ok is not None else (False, out, True)
     out = ""
     for attempt in (1, 2):
         git(tree, "checkout", "-q", "--force", "--detach", tip)
@@ -8580,28 +8598,36 @@ def waiting_run(repo, once=False, service=False):
         drop = TokenDrop(d, o_r).open()
         stack.callback(drop.close)
         errors = 0
+        role = host_role()
+        steps = sync_steps(repo, d, o_r) if role == "sync" else tuple(
+            (n, f) for n, f in (("change items", lambda: project_changes(d)),
+                                ("change tick", lambda: [wlog(d, f"tick: {x}") for x in tick_changes(repo, d)]),
+                                ("batch tick", lambda: [wlog(d, f"tick: {x}") for x in tick_batch(repo, d)]),
+                                ("watches", lambda: [wlog(d, f"tick: {x}") for x in tick_watches()]),
+                                ("land refs", lambda: [wlog(d, f"tick: {x}") for x in sweep_land_refs(repo, d)]),
+                                ("lease archive", lambda: maybe_archive_leases(d)),
+                                ("events", project_events), ("notifier", notify_escalations),
+                                ("network watch", network_watch), ("tunnel probe", tunnel_watch),
+                                ("gate summary", lambda: maybe_publish_gate(repo)),
+                                ("red time", lambda: track_red_time(Store(), gate_is_red_now())),
+                                ("red tick", lambda: maybe_red_tick(repo)),
+                                ("recovery", maybe_recovery_tick))
+            if not (role == "server" and n in LAPTOP_ONLY_STEPS))
         while True:
+            if TICK_STOP[0]:  # SIGTERM (systemd's stop): between ticks, never inside one
+                return 0
             write_beat("processor")
             LOOP_CYCLED[0] = True
             restart_if_changed([own], argv)
             failed = False
-            for name, step in (("change items", lambda: project_changes(d)),
-                               ("change tick", lambda: [wlog(d, f"tick: {x}") for x in tick_changes(repo, d)]),
-                               ("batch tick", lambda: [wlog(d, f"tick: {x}") for x in tick_batch(repo, d)]),
-                               ("watches", lambda: [wlog(d, f"tick: {x}") for x in tick_watches()]),
-                               ("land refs", lambda: [wlog(d, f"tick: {x}") for x in sweep_land_refs(repo, d)]),
-                               ("lease archive", lambda: maybe_archive_leases(d)),
-                               ("events", project_events), ("notifier", notify_escalations),
-                               ("network watch", network_watch), ("tunnel probe", tunnel_watch),
-                               ("gate summary", lambda: maybe_publish_gate(repo)),
-                               ("red tick", lambda: maybe_red_tick(repo)),
-                               ("recovery", maybe_recovery_tick)):
+            for name, step in steps:
                 try:
                     step()
                 except (Exception, SystemExit) as e:  # one step's error is that step's, never the loop's (audit #9)
                     failed = True
                     err(f"{name} failed: {str(e).replace('agentctl: ', '')[:200]}")
                 write_beat("processor")
+                sd_notify("WATCHDOG=1")  # each bounded step is progress: systemd's WatchdogSec never cuts a long tick
             errors = errors + 1 if failed else 0
             if errors == ROUND_ERRORS_MAX:
                 open_condition("STALLED", f"STALLED: the waiting processor's ticks failed {ROUND_ERRORS_MAX} times in a row; "
@@ -8610,14 +8636,18 @@ def waiting_run(repo, once=False, service=False):
                                command="waiting")
             if not failed:
                 write_json(os.path.join(d, "round-ok.json"), {"at": time.time()})
-            try:
-                write_snapshot(d)
-            except Exception as e:
-                err(f"the snapshot could not be written: {e}")
-            if once and not queued_entries(d) and not waiting_entries(d):
+            if role != "sync":  # the sync's state.json is ci-runner's, mirrored
+                try:
+                    write_snapshot(d)
+                except Exception as e:
+                    err(f"the snapshot could not be written: {e}")
+            sd_notify("WATCHDOG=1")
+            if once and (role == "sync" or (not queued_entries(d) and not waiting_entries(d))):
                 return 0
             drop.nap(env_num("AGENTCTL_TICK", TICK))
 
+
+TICK_STOP = [False]  # set by SIGTERM in `agentctl tick`: the loop returns between ticks
 
 SERVICE_LABEL = "net.bitcashier.agentctl-waiting"
 
@@ -8812,8 +8842,14 @@ once main is green (`agentctl land status`)."""
 def cmd_tick(a):
     """`agentctl tick`: the processor (the reconciler's loop of ticks); `tick service install|uninstall|status`: it as the
     launchd agent (design §14.5: `waiting run` / `waiting service`, renamed)."""
-    repo = a.repo or (git(safe_cwd(), "rev-parse", "--show-toplevel", check=False).stdout.strip()
-                      if git_ok(safe_cwd(), "rev-parse", "--show-toplevel") else movies_repo_path())
+    if host_role() == "server":  # ci-runner: its own clone, systemd's notify protocol, a clean stop between ticks
+        repo = ensure_server_clone(a.repo)
+        signal.signal(signal.SIGTERM, lambda *_: TICK_STOP.__setitem__(0, True))
+        Store()  # the database exists (its schema) before systemd hears READY
+        sd_notify("READY=1")
+    else:
+        repo = a.repo or (git(safe_cwd(), "rev-parse", "--show-toplevel", check=False).stdout.strip()
+                          if git_ok(safe_cwd(), "rev-parse", "--show-toplevel") else movies_repo_path())
     w = argparse.Namespace(wcmd="service" if a.tcmd == "service" else "run", repo=repo, once=a.once, service=not a.once,
                            action=a.action, renamed=True)
     if a.tcmd == "service" and not a.action:
@@ -10686,7 +10722,9 @@ def project_changes(d, store=None):
             state = ENTRY_STATE.get((w or {}).get("status"), "landed" if not w else "waiting")
         if not state:
             continue
-        cur = st.put_item("change", e["id"], state, {"worktree": e.get("worktree"), "head": e.get("head")})
+        cur = st.put_item("change", e["id"], state, {"worktree": e.get("worktree"), "head": e.get("head"),
+                                                     "submitted_at": st.clock(),
+                                                     "red_accum0": float(st.meta_get("red_accum", 0) or 0)})
         if cur["state"] != state and not machine_state("change", cur["state"]).terminal:
             try:
                 st.transition("change", e["id"], state, cur["version"],
@@ -10798,6 +10836,513 @@ def cmd_lease(a):
     if hidden:
         print(f"({hidden} free for over {LEASE_LIST_RECENT // 60} min not shown: --all)")
     return 0
+
+
+# ---------------------------------------------------------------- phase 2: the store over HTTP (design §6.3, §13 phase 2)
+# `agentctl store serve` puts the store behind a small HTTP API on ci-runner (:3014, reached through the Forgejo tunnel;
+# nix/hosts/ci-runner/agentctl.nix runs it). Every request carries `Authorization: token <a Forgejo token>`, checked
+# against Forgejo's /api/v1/user (the answer cached STORE_AUTH_CACHE s): an --allow-user login gets the whole API, a
+# --metrics-user login GET /metrics alone, anyone else 403, no token 401. The reconciler (`agentctl tick` there) opens
+# the same database in-process: two units, one WAL file, so a reconciler crash leaves leases, submissions and the event
+# feed up. RemoteStore is Store's twin over the API: `Store()` returns one when $AGENTCTL_STORE_URL is set, so the
+# laptop's sync, its dispatcher, `red claim` and the fixers' wrappers work against ci-runner's store unchanged.
+#
+# ROLES: "local" (phase 1: the laptop does everything), "server" (`agentctl tick` on ci-runner: the tick, never the
+# laptop's duties), "sync" (the laptop once $AGENTCTL_STORE_URL is set: submit, events -> inbox, the notifier, the state
+# mirror, the claims' activity, the fixer dispatcher; it never ticks).
+STORE_RPC = ("acquire", "renew", "note", "release", "revoke", "set_meta", "offer", "offers", "offer_of", "offer_reason",
+             "close_offer", "take", "get", "item", "items", "put_item", "transition", "update_item", "mark_notified",
+             "meta_get", "meta_set", "events", "archive_free_leases", "list")
+STORE_AUTH_CACHE = 300   # s a token's login is trusted before Forgejo is asked again (§15)
+EVENTS_WAIT_MAX = 25     # s a GET /v1/events long-poll waits for a new event
+STORE_PORT = 3014
+SYNC_MIRROR_EVERY = 10   # s between the laptop's copies of /v1/state into state.json
+
+
+def host_role():
+    r = os.environ.get("AGENTCTL_ROLE")
+    if r:
+        return r
+    if os.environ.get("AGENTCTL_STORE_URL"):
+        return "sync"
+    return "server" if os.environ.get("AGENTCTL_HOST") == "ci-runner" else "local"
+
+
+def store_errors():
+    return {"StaleVersion": StaleVersion, "TerminalState": TerminalState, "LeaseLost": LeaseLost}
+
+
+class StoreUnavailable(RuntimeError):
+    """The remote store did not answer (the tunnel, ci-runner, the service): no verdict either way."""
+
+
+class RemoteStore:
+    """Store's methods over the phase-2 API (`POST /v1/store/<method>`), plus the §6.3 calls the sync needs. The token
+    is the caller's own Forgejo token ($AGENTCTL_STORE_TOKEN, else the movies token agentctl reads)."""
+
+    def __init__(self, url, tok=None, clock=None, timeout=60):
+        self.url, self._tok, self.clock, self.timeout = url.rstrip("/"), tok, clock or time.time, timeout
+        self.path = self.url
+
+    def _token(self):
+        return self._tok or os.environ.get("AGENTCTL_STORE_TOKEN") or token(SHORT["movies"])
+
+    def call(self, method, path, body=None, timeout=None):
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(self.url + path, data=data, method=method,
+                                     headers={"Authorization": f"token {self._token()}",
+                                              "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
+                return json.loads(r.read() or b"null")
+        except urllib.error.HTTPError as e:
+            try:
+                b = json.loads(e.read() or b"{}")
+            except ValueError:
+                b = {}
+            cls = store_errors().get(b.get("error"))
+            if cls:
+                raise cls(b.get("message") or "")
+            raise StoreUnavailable(f"{method} {path}: HTTP {e.code} {b.get('message') or e.reason}") from None
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            raise StoreUnavailable(f"{method} {path}: {e}") from None
+
+    def _rpc(self, m, args, kwargs):
+        return self.call("POST", f"/v1/store/{m}", {"args": list(args), "kwargs": kwargs})["result"]
+
+    def state(self):
+        return self.call("GET", "/v1/state")
+
+    def wait_events(self, after, wait=EVENTS_WAIT_MAX, limit=500):
+        return self.call("GET", f"/v1/events?after={int(after)}&wait={int(wait)}&limit={int(limit)}",
+                         timeout=wait + 30)["events"]
+
+    def submit(self, entry):
+        return self.call("POST", "/v1/changes", entry)
+
+    def cancel_change(self, eid, how="cancel"):
+        return self.call("POST", f"/v1/changes/{urllib.parse.quote(eid, safe='')}:{how}", {})
+
+    def nudge(self):
+        return self.call("POST", "/v1/tick", {})
+
+
+for _m in STORE_RPC:
+    setattr(RemoteStore, _m, (lambda m: lambda self, *a, **k: self._rpc(m, a, k))(_m))
+
+
+def _store_new(cls, path=None, clock=None):
+    if cls is Store and path is None and os.environ.get("AGENTCTL_STORE_URL"):
+        return RemoteStore(os.environ["AGENTCTL_STORE_URL"], clock=clock)
+    return object.__new__(cls)
+
+
+Store.__new__ = _store_new
+
+
+def store_grace(st, now_=None):
+    """§6.2 'Store downtime grace': at the service's start every live lease is extended by the time the store was down
+    (meta last_alive), so a store restart never expires everyone at once. Returns the gap applied."""
+    now_ = now_ if now_ is not None else st.clock()
+    last = float(st.meta_get("last_alive", 0) or 0)
+    gap = now_ - last if last else 0
+    if gap > 60:
+        c = st.db()
+        try:
+            c.execute("UPDATE leases SET expires_at=expires_at+?, max_until=max_until+? WHERE holder!='' AND expires_at>?",
+                      (gap, gap, last))
+        finally:
+            c.close()
+    st.meta_set("last_alive", now_)
+    return gap if gap > 60 else 0
+
+
+def server_repo():
+    """The reconciler's own clone on ci-runner ($AGENTCTL_MOVIES_REPO, else ~/movies; `tick` clones it from
+    $AGENTCTL_MOVIES_REMOTE as remote `forgejo`)."""
+    return os.environ.get("AGENTCTL_MOVIES_REPO") or os.path.join(HOME, "movies")
+
+
+def ensure_server_clone(repo=None):
+    repo = repo or server_repo()
+    if not os.path.isdir(os.path.join(repo, ".git")):
+        url = os.environ.get("AGENTCTL_MOVIES_REMOTE")
+        if not url:
+            raise SystemExit("agentctl tick: no clone at {repo} and no $AGENTCTL_MOVIES_REMOTE to clone it from")
+        r = subprocess.run(["git", "clone", "--quiet", "--origin", REMOTE, url, repo], capture_output=True, text=True,
+                           env=dict(os.environ, GIT_TERMINAL_PROMPT="0"), timeout=1800)
+        if r.returncode != 0:
+            raise SystemExit(f"agentctl tick: git clone {url} failed: {r.stderr.strip()[:300]}")
+    return repo
+
+
+def queue_change(d, fields, entry_id=None):
+    """A submitted change as a queued entry (seq under seq.lock); re-queueing from the same source supersedes the older
+    one. Returns (entry, n ahead). Shared by `land` (phase 1) and POST /v1/changes (phase 2)."""
+    with open(os.path.join(d, "seq.lock"), "a+") as seq_lock:  # a unique seq; never the landing lock (a push holds it)
+        fcntl.flock(seq_lock, fcntl.LOCK_EX)
+        every = waiting_entries(d, open_only=False)
+        seq = max([e["seq"] for e in every] + [0]) + 1
+        eid = entry_id or f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(fields['worktree'])}-{seq}"
+        if any(x["id"] == eid for x in every):
+            e = next(x for x in every if x["id"] == eid)
+            return e, max(len(queued_entries(d)) - 1, 0)
+        e = {**fields, "id": eid, "seq": seq, "status": "queued", "created": ts()}
+        save_entry(d, e)
+        for old in queued_entries(d):  # RE-QUEUEING REPLACES: only the newest entry per worktree and branch runs
+            if old["id"] != e["id"] and same_change_source(old, e["worktree"], e.get("branch")):
+                supersede(d, old, e["id"], f"{e['worktree']} queued again ({e['head'][:10]}); only the newest entry runs")
+    return e, max(len(queued_entries(d)) - 1, 0)
+
+
+SUBMIT_FIELDS = ("worktree", "branch", "head", "commits", "fixes", "keep_worktree", "claude_pid", "session", "base", "host")
+
+
+def submit_change(body, repo=None):
+    """POST /v1/changes: a change the laptop pushed to refs/heads/land/<id> becomes a queued entry of the server's queue."""
+    repo = repo or server_repo()
+    if not os.path.isdir(repo):
+        raise ValueError(f"the reconciler has not cloned {repo} yet")
+    missing = [k for k in ("worktree", "head", "commits") if not body.get(k)]
+    if missing or not re.fullmatch(r"[0-9a-f]{40}", str(body.get("head"))):
+        raise ValueError(f"a change needs worktree, head (a full sha) and commits; missing or bad: {missing or ['head']}")
+    if body.get("id") and not re.fullmatch(r"[\w.-]{1,120}", body["id"]):
+        raise ValueError("a bad change id")
+    d = waiting_state(repo)[0]
+    e, ahead = queue_change(d, {k: body.get(k) for k in SUBMIT_FIELDS}, body.get("id"))
+    return {"id": e["id"], "seq": e["seq"], "ahead": ahead}
+
+
+def cancel_submitted(eid, how="cancel", repo=None):
+    d = waiting_state(repo or server_repo())[0]
+    hits = [e for e in queued_entries(d) + waiting_entries(d) if e["id"] == eid]
+    if not hits:
+        raise KeyError(eid)
+    e = hits[0]
+    set_change(d, e, "cancelled", event={"text": f"{e['id']}: {how}led"}, why=f"{how}led through the store API",
+               decided=ts())
+    cancel_entry_remote(e, f"its queue entry was {how}led")
+    return {"id": eid, "status": "cancelled"}
+
+
+def gate_is_red_now():
+    ci = state_read().get("ci") or {}
+    return any((g.get("conclusion") or "") in ("failure", "timed_out") for g in ci.get("gate") or [])
+
+
+def track_red_time(st, red, now_=None):
+    """meta red_accum: the seconds main has been red, summed (the W1 gauge leaves them out of a change's age)."""
+    now_ = now_ if now_ is not None else st.clock()
+    last = float(st.meta_get("red_accum_at", 0) or 0)
+    acc = float(st.meta_get("red_accum", 0) or 0)
+    if red and last:
+        acc += max(0.0, min(now_ - last, 600))
+        st.meta_set("red_accum", acc)
+    st.meta_set("red_accum_at", now_)
+    return acc
+
+
+def metrics_text(st, now_=None):
+    """The Prometheus text the module's agentctl-metrics copies to node-exporter (agentctl.rules' gauges)."""
+    t = now_ if now_ is not None else st.clock()
+    snap = state_read()
+    tick = float(snap.get("tick_at") or 0)
+    acc = float(st.meta_get("red_accum", 0) or 0)
+    ages = []
+    for it in st.items("change"):
+        if machine_state("change", it["state"]).terminal:
+            continue
+        dd = it.get("data") or {}
+        since = float(dd.get("submitted_at") or it["entered_at"])
+        acc0 = dd.get("red_accum0")
+        ages.append(max(0.0, (t - since) - max(0.0, acc - float(acc if acc0 is None else acc0))))
+    unleased = 0.0
+    try:
+        for it in red_unheld(st):
+            unleased = max(unleased, t - float(it.get("entered_at") or t))
+    except Exception:
+        pass
+    two = 2 * env_num("AGENTCTL_TICK", TICK)
+    unreaped = 0
+    for typ, state, lease in (("red", "leased", lambda i: red_lease(i["data"]["key"])),
+                              ("change", "checking", lambda i: f"check/{i['id']}")):
+        for it in st.items(typ, [state]):
+            try:
+                row = st.get(lease(it))
+            except (KeyError, TypeError):
+                continue
+            if row and row["expires_at"] < t - two and row["expires_at"] > it["entered_at"]:
+                unreaped += 1
+    past = sum(1 for typ in MACHINES for it in st.items(typ)
+               if not machine_state(typ, it["state"]).terminal and it["deadline"] < t - two)
+    rows = [("agentctl_reconciler_tick_timestamp", "unix time the last tick finished", tick),
+            ("agentctl_oldest_change_age_seconds", "age of the oldest non-terminal change, not counting red main time",
+             max(ages) if ages else 0),
+            ("agentctl_red_unleased_seconds", "longest a red on main has had no lease, fix, block or offer", unleased),
+            ("agentctl_leases_expired_unreaped", "leases past their TTL by more than 2 ticks with their item unmoved",
+             unreaped),
+            ("agentctl_items_past_deadline", "items past their state's deadline by more than 2 ticks", past)]
+    out = []
+    for name, help_, v in rows:
+        out += [f"# HELP {name} {help_}.", f"# TYPE {name} gauge", f"{name} {float(v):.0f}"]
+    return "\n".join(out) + "\n"
+
+
+class StoreAPI:
+    """The HTTP API's logic, apart from the socket (tests call handle() directly too)."""
+
+    def __init__(self, store, forgejo_url, allow=(), metrics=(), user_of=None, repo=None):
+        self.store, self.forgejo = store, (forgejo_url or "").rstrip("/")
+        self.allow, self.metrics = set(allow), set(metrics)
+        self.user_of, self.repo = user_of or self._forgejo_user, repo
+        self.cache, self.lock = {}, threading.Lock()
+
+    def _forgejo_user(self, tok):
+        req = urllib.request.Request(f"{self.forgejo}/api/v1/user", headers={"Authorization": f"token {tok}"})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                return json.loads(r.read()).get("login")
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                return None
+            raise
+
+    def login(self, tok):
+        import hashlib
+        k, now_ = hashlib.sha256(tok.encode()).hexdigest(), time.time()
+        with self.lock:
+            hit = self.cache.get(k)
+            if hit and now_ - hit[1] < STORE_AUTH_CACHE:
+                return hit[0]
+        who = self.user_of(tok)
+        with self.lock:
+            self.cache[k] = (who, now_)
+        return who
+
+    @staticmethod
+    def _json(code, obj):
+        return code, "application/json", json.dumps(obj).encode()
+
+    def handle(self, method, path, headers, body=b""):
+        u = urllib.parse.urlsplit(path)
+        q = {k: v[-1] for k, v in urllib.parse.parse_qs(u.query).items()}
+        auth = headers.get("Authorization") or headers.get("authorization") or ""
+        m = re.match(r"(?i)(?:token|bearer)\s+(\S+)$", auth.strip())
+        if not m:
+            return self._json(401, {"error": "Unauthorized", "message": "Authorization: token <Forgejo token> required"})
+        try:
+            who = self.login(m.group(1))
+        except Exception as e:
+            return self._json(503, {"error": "Unavailable", "message": f"Forgejo could not check the token: {e}"})
+        if who not in self.allow and not (who in self.metrics and method == "GET" and u.path == "/metrics"):
+            return self._json(403, {"error": "Forbidden", "message": f"{who or 'this token'} may not call {u.path}"})
+        try:
+            if body:
+                args = json.loads(body)
+            else:
+                args = {}
+            return self.route(method, u.path, q, args)
+        except tuple(store_errors().values()) as e:
+            return self._json(409, {"error": type(e).__name__, "message": str(e)})
+        except KeyError as e:
+            return self._json(404, {"error": "NotFound", "message": str(e)})
+        except (ValueError, TypeError) as e:
+            return self._json(400, {"error": "BadRequest", "message": str(e)})
+
+    def route(self, method, p, q, b):
+        st = self.store
+        if method == "GET" and p == "/metrics":
+            return 200, "text/plain; version=0.0.4", metrics_text(st).encode()
+        if method == "GET" and p == "/v1/state":
+            return self._json(200, state_read())
+        if method == "GET" and p == "/v1/leases":
+            return self._json(200, {"leases": st.list(q.get("prefix", ""))})
+        if method == "POST" and p.startswith("/v1/leases/") and ":" in p:
+            name, op = urllib.parse.unquote(p[len("/v1/leases/"):]).rsplit(":", 1)
+            if op == "acquire":
+                r = st.acquire(name, b["holder"], float(b["ttl_s"]), float(b["max_hold_s"]), b.get("progress") or "",
+                               b.get("item"), b.get("meta"))
+            elif op == "renew":
+                r = st.renew(name, int(b["epoch"]), b["secret"], b.get("progress") or "", float(b["ttl_s"]),
+                             note=b.get("note"))
+            elif op == "release":
+                r = st.release(name, int(b["epoch"]), b["secret"], b.get("outcome"), b.get("notes"))
+            else:
+                raise KeyError(op)
+            return self._json(200, {"result": r})
+        if method == "GET" and p == "/v1/offers":
+            return self._json(200, {"offers": st.offers(q.get("kind"))})
+        if method == "POST" and re.fullmatch(r"/v1/offers/\d+:take", p):
+            r = st.take(int(p.split("/")[3].split(":")[0]), b["holder"], float(b["ttl_s"]),
+                        float(b.get("max_hold_s") or b["ttl_s"]), b.get("meta"))
+            return self._json(200, {"result": r})
+        if method == "GET" and p == "/v1/events":
+            after, wait = int(q.get("after", 0)), min(float(q.get("wait", 0)), EVENTS_WAIT_MAX)
+            end = time.time() + wait
+            while True:
+                evs = st.events(after=after, limit=int(q.get("limit", 500)))
+                if evs or time.time() >= end:
+                    return self._json(200, {"events": evs})
+                time.sleep(0.5)
+        if method == "POST" and re.fullmatch(r"/v1/events/\d+:ack", p):
+            st.mark_notified(int(p.split("/")[3].split(":")[0]))
+            return self._json(200, {"result": "ok"})
+        if method == "POST" and p == "/v1/changes":
+            return self._json(200, submit_change(b, self.repo))
+        if method == "POST" and re.fullmatch(r"/v1/changes/[^/]+:(cancel|abandon)", p):
+            eid, how = urllib.parse.unquote(p[len("/v1/changes/"):]).rsplit(":", 1)
+            return self._json(200, cancel_submitted(eid, how, self.repo))
+        if method == "POST" and p == "/v1/tick":
+            with open(state_root("tick.nudge"), "a"):
+                os.utime(state_root("tick.nudge"))
+            return self._json(200, {"result": "ok"})
+        if method == "POST" and p.startswith("/v1/store/"):
+            m = p[len("/v1/store/"):]
+            if m not in STORE_RPC:
+                raise KeyError(m)
+            return self._json(200, {"result": getattr(st, m)(*b.get("args", []), **b.get("kwargs", {}))})
+        raise KeyError(f"{method} {p}")
+
+
+def store_server(api, host, port):
+    """A ThreadingHTTPServer serving api (returns it; serve_forever() is the caller's)."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def _go(self, method):
+            n = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(n) if n else b""
+            code, ctype, out = api.handle(method, self.path, dict(self.headers), body)
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+
+        def do_GET(self):
+            self._go("GET")
+
+        def do_POST(self):
+            self._go("POST")
+
+        def log_message(self, fmt, *args):  # the journal gets one line per non-2xx answer only
+            if args and str(args[1] if len(args) > 1 else "").startswith(("4", "5")):
+                sys.stderr.write("agentctl-store: %s\n" % (fmt % args))
+
+    srv = ThreadingHTTPServer((host, port), Handler)
+    srv.daemon_threads = True
+    return srv
+
+
+def cmd_store(a):
+    """`agentctl store serve --listen ADDR:PORT --forgejo-url URL --allow-user U... --metrics-user U...`."""
+    host, _, port = a.listen.rpartition(":")
+    st = Store(path=state_root("store.db"))
+    gap = store_grace(st)
+    if gap:
+        err(f"store: down {int(gap)} s; every live lease extended by that")
+    api = StoreAPI(st, a.forgejo_url or os.environ.get("AGENTCTL_FORGEJO_URL") or "", a.allow_user or [],
+                   a.metrics_user or [])
+    srv = store_server(api, host or "127.0.0.1", int(port or STORE_PORT))
+
+    def alive():
+        while True:
+            time.sleep(30)
+            try:
+                st.meta_set("last_alive", time.time())
+            except Exception as e:
+                err(f"store: last_alive not written ({e})")
+    threading.Thread(target=alive, daemon=True).start()
+    signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=srv.shutdown, daemon=True).start())
+    err(f"store: serving {state_root('store.db')} on {host}:{port} (allow {','.join(api.allow) or '-'}; metrics "
+        f"{','.join(api.metrics) or '-'})")
+    srv.serve_forever()
+    return 0
+
+
+def sd_notify(msg):
+    """systemd's notify protocol ($NOTIFY_SOCKET; '@' an abstract socket): READY=1, WATCHDOG=1. A no-op elsewhere."""
+    path = os.environ.get("NOTIFY_SOCKET")
+    if not path:
+        return False
+    import socket
+    addr = "\0" + path[1:] if path.startswith("@") else path
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
+            s.connect(addr)
+            s.sendall(msg.encode())
+        return True
+    except OSError as e:
+        err(f"sd_notify {msg}: {e}")
+        return False
+
+
+# ---- the laptop's sync (role "sync")
+def sync_outbox_dir():
+    return state_root("outbox")
+
+
+def submit_remote(st, e):
+    """Submit a change to the remote store; unreachable: kept in the outbox (QUEUED-LOCAL) for the sync to send."""
+    try:
+        return st.submit(e)
+    except StoreUnavailable as ex:
+        os.makedirs(sync_outbox_dir(), exist_ok=True)
+        write_json(os.path.join(sync_outbox_dir(), f"{e['id']}.json"), e)
+        return {"id": e["id"], "outbox": str(ex)[:200]}
+
+
+def flush_outbox(st=None):
+    """The changes `land` could not submit (the store down): sent now, oldest first. Returns how many went."""
+    st = st or Store()
+    n = 0
+    for p in sorted(glob.glob(os.path.join(sync_outbox_dir(), "*.json"))):
+        e = read_record(p)
+        if not e:
+            continue
+        try:
+            st.submit(e)
+        except StoreUnavailable:
+            break
+        except Exception as ex:  # refused (bad request): said once, dropped
+            inbox_write("land", f"NOT LANDED: {e.get('id')}: the store refused it ({str(ex)[:200]})", [], [], 1,
+                        cwd=e.get("worktree") or safe_cwd())
+        os.unlink(p)
+        n += 1
+    return n
+
+
+def mirror_state(st=None):
+    """ci-runner's /v1/state copied into the laptop's state.json (with fetched_at): the status line reads it."""
+    st = st or Store()
+    snap = st.state()
+    state_update(**{**snap, "fetched_at": time.time()})
+    return snap
+
+
+def sync_steps(repo, d, o_r):
+    """The laptop's loop once the store is remote: it never ticks."""
+    last_mirror = [0.0]
+
+    def mirror():
+        if time.time() - last_mirror[0] >= env_num("AGENTCTL_SYNC_MIRROR", SYNC_MIRROR_EVERY):
+            last_mirror[0] = time.time()
+            mirror_state()
+
+    def dispatch():
+        if os.path.exists(reds_dir("DISPATCH_OFF")):
+            return []
+        return red_dispatcher(Store(), o_r, repo, time.time())
+    return (("outbox", flush_outbox), ("state mirror", mirror),
+            ("events", project_events), ("notifier", notify_escalations),
+            ("claims", lambda: red_renew_holders(Store(), time.time())),
+            ("dispatcher", dispatch),
+            ("network watch", network_watch), ("tunnel probe", tunnel_watch))
+
+
+LAPTOP_ONLY_STEPS = ("events", "notifier", "network watch", "tunnel probe")
 
 
 # ---------------------------------------------------------------- the invariant watchdog (design §10, phase 1 step 2)
@@ -12234,6 +12779,13 @@ def main(argv=None):
     sw.add_argument("--idle-days", type=float, default=SWEEP_IDLE_DAYS)
     sw.add_argument("--dry-run", action="store_true")
     sw.add_argument("--no-report", action="store_true", help="do not write ~/.cache/agentctl/sweep/<date>.txt")
+    sto = sub.add_parser("store", help="phase 2: the store's HTTP API (`store serve`, ci-runner's agentctl-store unit)")
+    stos = sto.add_subparsers(dest="scmd", required=True)
+    sts = stos.add_parser("serve", help="serve $AGENTCTL_STATE_ROOT/store.db: the §6.3 API and GET /metrics")
+    sts.add_argument("--listen", default=f"127.0.0.1:{STORE_PORT}", help="ADDR:PORT")
+    sts.add_argument("--forgejo-url", help="Forgejo's base URL: each caller's token is checked with its /api/v1/user")
+    sts.add_argument("--allow-user", action="append", help="a login with the whole API (repeatable)")
+    sts.add_argument("--metrics-user", action="append", help="a login with GET /metrics only (repeatable)")
     tk = sub.add_parser("tick", help="the processor: the reconciler's loop of ticks (`tick service install|uninstall|status`: "
                         "it as the launchd agent)")
     tk.add_argument("tcmd", nargs="?", choices=("service",), help="service: the launchd agent")
@@ -12357,7 +12909,7 @@ def main(argv=None):
     rp_.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
     handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": cmd_red, "dispatch": cmd_dispatch, "gov": cmd_gov, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
+               "red": cmd_red, "dispatch": cmd_dispatch, "gov": cmd_gov, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)
 
