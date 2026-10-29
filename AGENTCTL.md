@@ -8,10 +8,14 @@ calls.
 
 - Not on PATH: call it as `~/bin/agentctl`.
 - Python 3, standard library only.
-- Tests: `~/bin/agentctl suite` from the worktree (= `python3 -m unittest discover -s tests` under a governor ticket of
-  class `suite`, ONE run at once, `$AGENTCTL_SUITE_CAP`: parallel agents queue instead of piling up on the laptop;
-  `agentctl suite tests.test_reds` runs one module the same way). Mutation tests included. Run the touched modules
-  while working and the full suite once, before landing.
+- Tests: `~/bin/agentctl suite` from the worktree (= `python3 tests/run.py` under a governor ticket of class `suite`,
+  ONE run at once, `$AGENTCTL_SUITE_CAP`: parallel agents queue instead of piling up on the laptop). tests/run.py runs
+  the suite in parallel workers (`-j N`, default min(cpus, 8)), each test under a timeout (`--timeout S`, default 60:
+  the test FAILS with its traceback instead of hanging the suite), the whole suite bounded (`--suite-timeout`); about
+  70 s on the laptop. `agentctl suite test_reds` runs the tests whose id contains a pattern. Mutation tests included.
+  Run the touched modules while working and the full suite once, before landing.
+- CI: `.forgejo/workflows/tests.yml` runs the same suite on ci-runner's container tier for every push to main (a
+  fresh container: no HOME, sdkman or movies clone to lean on). Green there is what the auto-pin reads.
 - `agentctl --help` and `agentctl <cmd> --help` match this page.
 - The design behind it: `~/bin/docs/landing-reconciler-design.md`. Phase 2 (the store and the reconciler on
   ci-runner): `~/bin/docs/phase2-runbook.md`.
@@ -780,7 +784,7 @@ agentctl gov status                 # admitted work, waiters, memory, evictable 
 agentctl gov stats [--days 7]       # checks stats, plus each class's admission waits and the evictions
 agentctl gov evict [--dry-run]      # stop the idle kept sbt server unused longest, by hand
 agentctl gov admit --class C ...    # scripts/jvm-gate.sh's call (--fd 7 --ticket <file>); --try: one look
-agentctl suite [unittest args]      # agentctl's own tests under a `suite` ticket: one suite run at once (SUITE_CAP)
+agentctl suite [run.py args]       # agentctl's own tests (tests/run.py) under a `suite` ticket: one run at once (SUITE_CAP)
 ```
 
 The owner (2026-10-27): one governor instead of three limiters (jvm-gate.sh's 4 JVM slots, the check-slot cap,
