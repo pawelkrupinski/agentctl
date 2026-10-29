@@ -93,7 +93,14 @@ moves it forward; nothing is a detached process that can die with its state in i
   from outside the processor: W1 the oldest unlanded change is under 2 h old (counted from the red's start while main
   is red), W2 every red has a holder, an offer, a fix on its way or an owner block, W5 the processor beats, W6 every
   escalation was notified, WM maintain ran, WB nobody leaves uncommitted edits in ~/bin's own checkout for over 10 min
-  (it names the processes working there). A violation is a condition and a notification.
+  (it names the processes working there), W7 (phase 2, the sync role) the sync has projected every event older than
+  5 min. A violation is a condition and a notification.
+- **Upkeep** (the laptop's processor, at most hourly, in its own thread; log `~/.cache/agentctl/upkeep.log`): the
+  standing-OK `cleanup --execute --no-remote` (clean, idle, proven-merged worktrees and their branches), each ended
+  fixer's worktree whose red is closed (when proven merged and clean), and the test suite's `agentctl-*` temp dirs
+  older than an hour. **WD, the disk**: under 50 GB free (`$AGENTCTL_DISK_MIN_GB`) the upkeep runs at once; still under
+  after it, an INVARIANT condition whose probe is the same free-space check (it closes itself; it escalates only while
+  it stays open). The owner, 2026-10-29: the Data volume had filled up with 109 merged fixer worktrees.
 
 ## Safety guarantees
 
@@ -334,6 +341,11 @@ The owner: "why unclaimed ... should always claim, fix structurally".
   RED ESCALATE). After that come DEEP investigations (`claude --effort max`), again and again within the caps. Each one
   gets the whole history: the failing test and its error, every refuted fix, every fixer's verdict. A code red is
   never parked on the owner.
+- **A spent quota is a wait, not the owner's** (2026-10-29: Record scrape fixtures #2426, OMDb's "Request limit
+  reached"). A red whose key hit a spent quota (`QUOTA SPENT` in ci-why) is held by a wait lease
+  (`block/cause/quota-<service>`, holder `wait:quota`): no fixer, no owner block. After the quota's window resets
+  (OMDb: midnight UTC) its workflow is dispatched on main once; the wait ends when a run since got past its preflight
+  (one OMDb call). Only an invalid key (`KEY REFUSED`) is the owner's.
 - **BLOCKED ON OWNER is only for the owner's causes.** `red block` needs `--owner-cause` (external-account,
   credentials, infra-apply, deploy, billing, dashboard), and it refuses a TEST FAILURE red and a red with a live
   fixer. Every block states what fails, what was tried, why only the owner can act, the exact `!` command, and how it
@@ -589,7 +601,7 @@ entry cancels its undecided run.
 ### tick: the processor, the token, the gate
 
 ```
-agentctl land status                         # the changes, the batch, a HELD batch, the gate, the processor
+agentctl land status                         # the changes, the batch, a HELD batch, the gate, the processor (any cwd)
 agentctl land cancel <id>                    # drop one change
 agentctl land hold|release                   # take no batch until release (changes still queue); release ends a HELD wait
 agentctl tick [--once]                       # the processor (the tick loop)

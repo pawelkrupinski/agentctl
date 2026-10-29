@@ -273,8 +273,13 @@ The header of `agentctl.rules` defines each one.
   kept in the state root so agents' own `land` / `red claim` agree). As the sync, `land` pushes
   `land/<id>` and POSTs the change; with the store down it prints `QUEUED-LOCAL` and the sync sends it
   from the outbox.
-- Not yet: closing the laptop worktree after WATCH OK when the reconciler is on ci-runner (the worktree is
-  not there; it stays until `cleanup`), and W7 (the sync's cursor lag) in the laptop watchdog.
+- WATCH OK on ci-runner closes the laptop worktree the change was landed from: the `watch.ok` event names
+  it, and the sync closes it (proven merged and clean only).
+- W7 in the laptop watchdog: an event older than 5 min still past the sync's projector cursor is an
+  INVARIANT condition, closed by the same check.
+- The batch's check on the CI tier is the fast-only set, as on the laptop: its check branch is
+  `check/fast-<id>`. movies' `precommit-check.yml` must map that name to `--fast-only`; until that lands
+  there, such a branch runs the full `--checks-only` set (stricter, never weaker).
 
 ## The laptop after phase 2 (design note)
 
