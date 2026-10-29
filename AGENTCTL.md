@@ -539,19 +539,19 @@ agent must be assigned to it".
   gate <red>" while main is red) and verification counts from its landing. A fix of the gate's OWN red (a gate run's
   red carries its key, whichever run its Fixes-Red names) reads "landing on red (Fixes-Red), <queued|checking|...>" in
   `red status`, `status --line` and the status page, never "blocked by gate" that same red (2026-10-29 19:20).
-- **Gate reds are never budget-starved (2026-10-27: Main #2146 sat at `NOBODY (daily dispatch budget 6 spent)` for
-  85+ min).** A gate red has its own cap, 3 fixers ALIVE at once (`$AGENTCTL_RED_GATE_MAX_FIXERS`), and NO daily cap;
-  hitting it is `RED UNCLAIMED: ... NOBODY -- gate fixer cap 3 reached`, escalated at once (below). Reds outside the
-  gate: 2 alive in all (`$AGENTCTL_RED_MAX_FIXERS`), 1 of them outside (`$AGENTCTL_RED_MAX_OUTSIDE`), and 6 a day
-  (`$AGENTCTL_RED_DAILY_CAP`, with the Fixes-Red verifications); past it, ONE `RED BUDGET` inbox entry per red a day.
-- **Fair capacity (2026-10-29: two reds of Verify scrape recording #2493 sat `offered, capacity 2/2` for 73 min).**
-  The slots are reserved per class: gate 3, other 2. One fixer holding its run's several reds is ONE slot. A red that
-  waited 20 min (`$AGENTCTL_RED_CAPACITY_BORROW`) for its class BORROWS an idle slot of the other class, as long as the
-  lender keeps one idle; at 45 min (`$AGENTCTL_RED_CAPACITY_WINDOW`) it takes the OVERFLOW slot (1 beyond the caps,
-  `$AGENTCTL_RED_OVERFLOW_FIXERS`); with that taken too it is `STARVED` and escalates at once (`RED STARVED: ...`),
-  then every cycle. No running fixer is killed for it. The wait reads, in `red status`, `ci-why` and the status page:
-  `capacity 2/2 other, waiting 12m; next slot when <fixer> ends by 15:09 or borrows an idle gate slot at 14:20 or
-  overflow at 14:45`; `fixers alive:` shows the overflow slot when it is in use.
+- **ONE RED QUEUE (simplification item 5, 2026-10-30; replaced the per-class caps, the borrow and the overflow slot).**
+  A red is (workflow, failing job, signature); its cascade jobs are derived. Every red belongs to ONE queue family:
+  its configured family (`red-families.json`), else its run (`run:<workflow>#<number>`). The open offers are one
+  priority queue -- the gate's first, then a fix's, then outside reds, flakes last; a test failure before an infra one;
+  then the oldest -- and the dispatcher keeps EXACTLY ONE FIXER PER FAMILY: a family at work takes each new red under
+  its fixer's lease, a family with none gets one fixer (its other open offers taken with it) while fewer than 5 fixers
+  are alive in all (`$AGENTCTL_RED_FIXERS`). One family never holds two slots, so the gate cannot starve the rest, nor
+  the rest the gate. An offer waiting 45 min with no slot (`$AGENTCTL_RED_STARVE`) is `STARVED` and escalates at once
+  (`RED STARVED: ...`), then every cycle; no running fixer is killed for it. The wait reads, in `red status`, `ci-why`
+  and the status page: `capacity 5/5, waiting 12 min; next slot when <fixer> ends by 15:09`; `fixers alive: n/5`.
+  The old knobs `$AGENTCTL_RED_GATE_MAX_FIXERS`, `$AGENTCTL_RED_MAX_FIXERS`, `$AGENTCTL_RED_OVERFLOW_FIXERS`,
+  `$AGENTCTL_RED_CAPACITY_BORROW` and `_WINDOW` are no longer read. The store's open reds were migrated in place
+  (meta `red_model` 2: each red's `signature` and `family`), once, by the tick.
 - **Fast reproducer first (the owner's standing rule, 2026-10-29).** Every dispatched fixer's brief says: before
   fixing, build the fastest faithful reproducer -- a pinned minimal fixture or slice replayed by one spec on a warm sbt
   server (identity flips: a slice from `scripts/identity-slice`, then `scripts/sbt-warm 'worker/testOnly
