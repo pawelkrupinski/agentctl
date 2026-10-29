@@ -16209,6 +16209,11 @@ def status_page_server(host, port):
                     return self.send(200, json.dumps(status_cached(), default=str), "application/json")
                 if u.path == "/stream":
                     return self.stream(u)
+                if u.path.startswith("/agent/"):
+                    if not live_lookup(urllib.parse.unquote(u.path[len("/agent/"):])):
+                        return self.send(404, "no such agent: an id from the page's Agents section\n",
+                                         "text/plain; charset=utf-8")
+                    return self.send(200, AGENT_PAGE_HTML, "text/html; charset=utf-8")
                 if u.path == "/log":
                     q = urllib.parse.parse_qs(u.query).get("path") or [""]
                     real = status_log_path(q[0])
@@ -16807,6 +16812,100 @@ def live_stream(e, start, write, closed=lambda: False, poll=None, ping=LIVE_PING
         tail.close()
 
 
+# THE LIVE PANE (both pages): an EventSource on /stream renders every entry in order -- assistant text, thinking,
+# each tool call with all of its input, each tool result whole (a long one collapsed, expanding in place), user,
+# system and queued-message entries -- each with its time; follow (keep the newest in view) and pause (close the
+# stream; resume reopens it from the last offset) toggles; the state chip from the stream's `state` events.
+LIVE_CSS = r"""
+.live{margin-top:6px;border:1px solid var(--line);border-radius:6px;background:var(--card)}
+.live .bar{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;padding:4px 8px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--card);z-index:1}
+.live .log{max-height:600px;overflow:auto;padding:2px 8px 6px}.live.full .log{max-height:none;overflow:visible}
+.live button,.agent button{font:inherit;font-size:12px;padding:1px 8px;border:1px solid var(--line);border-radius:4px;background:var(--bg);color:var(--fg);cursor:pointer}
+.ent{padding:5px 0;border-bottom:1px dashed var(--line)}.ent:last-child{border-bottom:0}
+.ent .ts{color:var(--mute);font:11px ui-monospace,Menlo,monospace;margin-right:6px}
+.ent .txt{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:2px}.ent .lbl{color:var(--mute);font-size:11px;margin-top:3px}
+.live pre{max-height:none;white-space:pre-wrap;overflow-wrap:anywhere}.ent.a .txt{font-size:13.5px}
+.ent.th .txt{color:var(--mute);font-style:italic}
+"""
+
+LIVE_JS = r"""
+const LIVE={},LIVE_OPEN=new Set(),LIVE_BIG=3000,LIVE_BIG_LINES=30;
+const STATE_CLS={"working":"warn","waiting on background":"info","done":"ok","failed":"bad"};
+function lvBlock(label,text){text=String(text==null?"":text);const n=text.split("\n").length;
+ if(text.length>LIVE_BIG||n>LIVE_BIG_LINES)return`<details><summary>${label?E(label)+" ":""}<span class="mute">${n} lines, ${text.length} chars: click to expand</span></summary><pre>${E(text)}</pre></details>`;
+ return(label?`<div class="lbl">${E(label)}</div>`:"")+`<pre>${E(text)}</pre>`}
+function lvJson(v){return typeof v==="string"?v:JSON.stringify(v,null,2)}
+function lvInput(i){if(!i||typeof i!=="object"||Array.isArray(i))return lvBlock("input",lvJson(i));
+ const ks=Object.keys(i);if(!ks.length)return`<div class="lbl">input: {}</div>`;return ks.map(k=>lvBlock(k,lvJson(i[k]))).join("")}
+function lvResult(c){if(typeof c==="string")return c;if(Array.isArray(c))return c.map(b=>b&&b.type==="text"?b.text:b&&b.type==="image"?`[image ${(b.source||{}).media_type||""}]`:lvJson(b)).join("\n");return lvJson(c)}
+function lvEntry(e){const t=e.timestamp?new Date(e.timestamp):null;
+ const ts=t&&!isNaN(t)?t.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"}):"";
+ const hd=(who,c)=>`<span class="ts" title="${E(e.timestamp||"")}">${E(ts)}</span>${chip(who,c)} `;
+ const m=e.message||{};let h="";
+ if(e.type==="assistant"){const cs=Array.isArray(m.content)?m.content:[{type:"text",text:lvJson(m.content)}];
+  for(const b of cs){if(!b)continue;
+   if(b.type==="text")h+=`<div class="ent a">${hd(e.isApiErrorMessage?"API error":"assistant",e.isApiErrorMessage?"bad":"ok")}<div class="txt">${E(b.text)}</div></div>`;
+   else if(b.type==="thinking"||b.type==="redacted_thinking")h+=`<div class="ent th">${hd("thinking","info")}${b.thinking?`<div class="txt">${E(b.thinking)}</div>`:`<span class="mute">(its text is not kept in the transcript)</span>`}</div>`;
+   else if(b.type==="tool_use"||b.type==="server_tool_use")h+=`<div class="ent tu">${hd("tool call","warn")}<b>${E(b.name)}</b> <span class="mute mono">${E(b.id||"")}</span>${lvInput(b.input)}</div>`;
+   else h+=`<div class="ent">${hd(b.type||"block","info")}${lvBlock("",lvJson(b))}</div>`}
+  return h}
+ if(e.type==="user"){const who=e.isMeta?"user (meta)":"user";
+  if(!Array.isArray(m.content))return`<div class="ent u">${hd(who,"info")}${lvBlock("",lvJson(m.content))}</div>`;
+  for(const b of m.content){if(!b)continue;
+   if(b.type==="tool_result")h+=`<div class="ent tr">${hd(b.is_error?"tool error":"tool result",b.is_error?"bad":"info")}<span class="mute mono">${E(b.tool_use_id||"")}</span>${lvBlock("",lvResult(b.content))}</div>`;
+   else if(b.type==="text")h+=`<div class="ent u">${hd(who,"info")}${lvBlock("",b.text)}</div>`;
+   else h+=`<div class="ent u">${hd(who+" · "+(b.type||"?"),"info")}${b.type==="image"?`<span class="mute">[image ${E((b.source||{}).media_type||"")}]</span>`:lvBlock("",lvJson(b))}</div>`}
+  return h}
+ if(e.type==="system")return`<div class="ent s">${hd("system"+(e.subtype?" · "+e.subtype:""),"warn")}${lvBlock("",e.content!=null?lvJson(e.content):lvJson(e))}</div>`;
+ if(e.type==="queue-operation")return`<div class="ent q">${hd("message "+(e.operation||""),"info")}${e.content!=null?lvBlock("",lvJson(e.content)):""}</div>`;
+ if(e.type==="attachment"){const a=e.attachment||{};return`<div class="ent at">${hd("attachment · "+(a.type||"?"),"info")}${lvBlock("",lvJson(a))}</div>`}
+ if(e.type==="raw")return`<div class="ent">${hd("raw line","info")}${lvBlock("",e.text)}</div>`;
+ if(e.type==="oversize")return`<div class="ent">${hd("oversize","bad")}<span class="mute">a ${E(e.bytes)}-byte line, over the stream's bound: read it in the transcript file</span></div>`;
+ return`<div class="ent">${hd(e.type||"entry","info")}${lvBlock("",lvJson(e))}</div>`}
+function lvScroller(p){return p.full?document.scrollingElement:p.log}
+function lvFlush(p){p.raf=0;if(!p.pending)return;p.log.insertAdjacentHTML("beforeend",p.pending);p.pending="";
+ p.el.querySelector(".cnt").textContent=p.n+" entries";if(p.follow){const s=lvScroller(p);s.scrollTop=s.scrollHeight}}
+function lvAdd(p,html){p.pending+=html;if(!p.raf)p.raf=requestAnimationFrame(()=>lvFlush(p))}
+function lvConn(p,txt,c){p.el.querySelector(".conn").innerHTML=chip(txt,c)}
+function liveStart(p){if(p.es)return;
+ const es=p.es=new EventSource(`/stream?agent=${encodeURIComponent(p.id)}&from=${p.offset}`);lvConn(p,"connecting","info");
+ es.addEventListener("meta",ev=>{const m=JSON.parse(ev.data);p.el.querySelector(".src").textContent=tilde(m.transcript)});
+ es.addEventListener("entry",ev=>{p.n++;lvAdd(p,lvEntry(JSON.parse(ev.data)));if(ev.lastEventId)p.offset=+ev.lastEventId});
+ es.addEventListener("reset",ev=>{p.log.innerHTML="";p.pending="";p.n=0;p.offset=0;
+  lvAdd(p,`<div class="ent">${chip("restarted","warn")} <span class="mute">the transcript was ${E(JSON.parse(ev.data).why)}: shown again from its start</span></div>`)});
+ es.addEventListener("synced",ev=>{if(ev.lastEventId)p.offset=+ev.lastEventId;lvConn(p,"live","ok")});
+ es.addEventListener("state",ev=>{const s=JSON.parse(ev.data);p.el.querySelector(".state").innerHTML=chip(s.state,STATE_CLS[s.state]||"info")+` <span class="mute">${E(s.why||"")}</span>`});
+ es.onerror=()=>lvConn(p,es.readyState===2?"closed":"reconnecting","bad")}
+function liveStop(p){if(p.es){p.es.close();p.es=null}lvConn(p,"paused","warn")}
+function livePane(id,full){if(LIVE[id])return LIVE[id];const el=document.createElement("div");el.className="live"+(full?" full":"");
+ el.innerHTML=`<div class="bar"><span class="conn"></span><span class="state"></span><label><input type="checkbox" class="fo" checked> follow</label><button class="pa">pause</button>${full?"":`<a href="/agent/${encodeURIComponent(id)}" target="_blank">full screen</a>`}<span class="mute cnt"></span><span class="mute mono src"></span></div><div class="log"></div>`;
+ const p=LIVE[id]={id,el,full:!!full,log:el.querySelector(".log"),es:null,offset:0,n:0,pending:"",raf:0,follow:true,paused:false};
+ el.querySelector(".fo").onchange=ev=>{p.follow=ev.target.checked;if(p.follow){const s=lvScroller(p);s.scrollTop=s.scrollHeight}};
+ el.querySelector(".pa").onclick=ev=>{p.paused=!p.paused;ev.target.textContent=p.paused?"resume":"pause";p.paused?liveStop(p):liveStart(p)};
+ liveStart(p);return p}
+function liveClose(id){const p=LIVE[id];if(!p)return;liveStop(p);p.el.remove();delete LIVE[id]}
+"""
+
+AGENT_PAGE_HTML = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>agent output</title>
+<style>/*CSS*/</style></head><body><main>
+<h1><a href="/">agentctl</a> · <span id="who" class="mono"></span></h1>
+<div id="root"></div>
+</main>
+<script>
+"use strict";
+const E=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const chip=(s,c)=>`<span class="chip ${c||"info"}">${E(s)}</span>`;
+let HOME="";const tilde=p=>{p=String(p||"");const m=p.match(/^\/Users\/[^\/]+/);return m?"~"+p.slice(m[0].length):p};
+/*LIVE_JS*/
+const ID=decodeURIComponent(location.pathname.replace(/^\/agent\//,""));
+document.getElementById("who").textContent=ID;document.title=ID+" · agentctl";
+document.getElementById("root").appendChild(livePane(ID,true).el);
+</script></body></html>
+"""
+
+
 STATUS_PAGE_HTML = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>agentctl status</title>
@@ -16835,6 +16934,7 @@ tr:last-child td{border-bottom:0}td.n{white-space:nowrap}.mono{font-family:ui-mo
 .agent .top{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline}.agent .said{margin:6px 0;white-space:pre-wrap;overflow-wrap:anywhere}
 details{margin-top:4px}summary{cursor:pointer;color:var(--mute)}pre{margin:4px 0;padding:6px 8px;background:var(--bg);border:1px solid var(--line);border-radius:4px;overflow-x:auto;font-size:11.5px;max-height:420px}
 ul.c{margin:2px 0;padding-left:16px}#stamp{color:var(--mute);font-weight:400;font-size:12px}
+/*LIVE_CSS*/
 </style></head><body><main>
 <h1>agentctl <span id="stamp">loading…</span></h1>
 <div id="root"></div>
@@ -16856,6 +16956,7 @@ const tilde=p=>{p=String(p||"");return HOME&&p.startsWith(HOME)?"~"+p.slice(HOME
 const logLink=p=>`<a href="/log?path=${encodeURIComponent(p)}" target="_blank">full log</a>`;
 let HOME="";
 let STALE={};
+/*LIVE_JS*/
 function sec(title,sub,data,fn,key){const st=key&&STALE[key];let h=`<h2>${E(title)} <small>${sub||""}</small>${st?` <span class="chip warn">${E(st)}</span>`:""}</h2>`;
  if(data&&data.error)return h+`<div class="err">${E(data.error)}</div>`;try{return h+fn(data)}catch(e){return h+`<div class="err">render: ${E(e)}</div>`}}
 function table(cols,rows){if(!rows.length)return`<div class="mute">none</div>`;
@@ -16897,14 +16998,15 @@ function agents(as){if(!as.length)return`<div class="mute">none</div>`;return as
  ${a.alive===true?chip("alive","ok"):a.alive===false?chip("dead"+(a.rc!=null?" rc "+a.rc:""),"bad"):chip("?")}
  <span>pid <span class="mono">${E(a.pid??"–")}</span></span><span>${E(a.kind||"")}${a.tier?" · tier "+E(a.tier):""}</span>
  <span>${E(a.workflow||"")} ${a.run!=null?"#"+E(a.run):""}</span><span class="mono mute">${E(tilde(a.worktree))}</span>
- <span>started ${ago(a.started)}</span>${a.ended?`<span>ended ${ago(a.ended)}</span>`:""}<span>last progress ${ago(a.last_progress)}</span></div>
+ <span>started ${ago(a.started)}</span>${a.ended?`<span>ended ${ago(a.ended)}</span>`:""}<span>last progress ${ago(a.last_progress)}</span>
+ ${a.live?`<span>${chip(a.live_state||"?",STATE_CLS[a.live_state]||"info")} <button data-live-btn="${E(a.live)}">${LIVE_OPEN.has(a.live)?"hide live output":"live output"}</button> <a href="/agent/${encodeURIComponent(a.live)}" target="_blank">full screen</a></span>`:""}</div>
  ${lease?`<div class="mute">${lease}</div>`:""}
  ${a.verdict?`<div class="said"><b>verdict:</b> ${E(a.verdict)}</div>`:""}
  ${a.said?`<div class="said"><span class="mute">last said ${ago(a.said_at)}:</span> ${E(a.said)}</div>`:""}
  ${commits?`<ul class="c">${commits}</ul>`:""}
  ${files.length?`<details data-k="files:${E(a.pid)}:${E(a.worktree)}"><summary>${files.length} files changed recently</summary><pre>${E(files.join("\n"))}</pre></details>`:""}
  ${a.git_error?`<div class="err">git: ${E(a.git_error)}</div>`:""}${a.git_stale?`<div class="mute">${E(a.git_stale)}</div>`:""}
- ${a.detail_error?`<div class="err">${E(a.detail_error)}</div>`:""}${logs}</div>`}).join("")}
+ ${a.detail_error?`<div class="err">${E(a.detail_error)}</div>`:""}${logs}${a.live?`<div class="livehost" data-live="${E(a.live)}"></div>`:""}</div>`}).join("")}
 function landing(l){const row=c=>[`<span class="mono">${E(c.id)}</span>`,chip(c.state)+(c.level?" "+chip("escalated","bad"):""),
  E(tilde(c.worktree||""))+(c.branch?` <span class="mute">${E(c.branch)}</span>`:""),`<span class="mono">${E(c.head||"")}</span>`,
  `<span class="n">${ago(c.entered_at)}</span>`,`<span class="n">${c.past_deadline?chip("past "+hm(c.deadline),"bad"):hm(c.deadline)+" ("+ago(c.deadline)+")"}</span>`,E(c.why||"")];
@@ -16917,6 +17019,7 @@ function conds(cs){return table(["condition","since","probe","last result","next
 function events(es){return table(["#","when","kind","item","→","text"],es.map(e=>[`<span class="mono">${E(e.seq)}</span>`,`<span class="n">${hm(e.at)} <span class="mute">${ago(e.at)}</span></span>`,
  chip(e.kind,e.severity==="info"?"info":e.severity==="escalate"?"bad":"warn"),`<span class="mono">${E(e.item||"")}</span>`,e.to?`${E(e.from||"")} → ${chip(e.to)}`:"",E(e.text)]))}
 function render(s){NOW=s.at;HOME=s.home||"";STALE=s.stale||{};const n=x=>Array.isArray(x)?x.length:"?";
+ const tops={};for(const id in LIVE)tops[id]=LIVE[id].log.scrollTop;  // the open panes move to the new rows as they are
  document.getElementById("root").innerHTML=header(s)
  +sec("Reds",n(s.reds)+" open",s.reds,reds,"reds")
  +sec("Agents",n(s.agents)+" (lease holders and fixers alive or ended in the last 3 h)",s.agents,agents,"agents")
@@ -16924,14 +17027,24 @@ function render(s){NOW=s.at;HOME=s.home||"";STALE=s.stale||{};const n=x=>Array.i
  +sec("Open conditions",n(s.conditions),s.conditions,conds,"conditions")
  +sec("Events","last "+n(s.events),s.events,events,"events");
  document.querySelectorAll("details[data-k]").forEach(d=>{if(OPEN.has(d.dataset.k))d.open=true});
+ const hosts=new Set();document.querySelectorAll(".livehost[data-live]").forEach(h=>{const id=h.dataset.live;hosts.add(id);
+  if(LIVE_OPEN.has(id)){h.appendChild(livePane(id).el);if(tops[id]!=null)LIVE[id].log.scrollTop=tops[id]}});
+ for(const id in LIVE)if(!hosts.has(id)){liveClose(id);LIVE_OPEN.delete(id)}  // its agent left the page
  document.getElementById("stamp").textContent="· "+new Date(s.at*1000).toLocaleTimeString()+" · refreshes every 15 s"}
 async function load(){try{const r=await fetch("/api/status",{cache:"no-store"});if(!r.ok)throw new Error("HTTP "+r.status);render(await r.json())}
  catch(e){document.getElementById("stamp").textContent="· refresh failed: "+e+" (retrying)"}}
 const OPEN=new Set();  // the <details> the reader opened stay open across refreshes
 document.addEventListener("toggle",e=>{const k=e.target.dataset&&e.target.dataset.k;if(!k)return;e.target.open?OPEN.add(k):OPEN.delete(k)},true);
+document.addEventListener("click",e=>{const b=e.target.closest&&e.target.closest("button[data-live-btn]");if(!b)return;
+ const id=b.dataset.liveBtn,h=document.querySelector(`.livehost[data-live="${CSS.escape(id)}"]`);
+ if(LIVE_OPEN.has(id)){LIVE_OPEN.delete(id);liveClose(id);b.textContent="live output"}
+ else{LIVE_OPEN.add(id);if(h)h.appendChild(livePane(id).el);b.textContent="hide live output"}});
 load();setInterval(load,15000);
 </script></body></html>
 """
+STATUS_PAGE_HTML = STATUS_PAGE_HTML.replace("/*LIVE_CSS*/", LIVE_CSS).replace("/*LIVE_JS*/", LIVE_JS)
+AGENT_PAGE_HTML = AGENT_PAGE_HTML.replace("/*CSS*/", STATUS_PAGE_HTML.split("<style>", 1)[1].split("</style>", 1)[0]) \
+    .replace("/*LIVE_JS*/", LIVE_JS)
 
 
 # ---------------------------------------------------------------- main

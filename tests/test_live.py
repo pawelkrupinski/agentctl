@@ -399,6 +399,34 @@ class StreamServerTest(LiveBase):
         finally:
             A._live_streams = saved
 
+    def test_pages(self):
+        import urllib.request, urllib.error
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/agent/fixer-31-1", headers={"Host": "agentctl.localhost"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            body = r.read().decode()
+        self.assertIn("livePane(ID,true)", body)
+        self.assertIn("prefers-color-scheme:dark", body)
+        self.assertNotIn("/*", body.split("<script>")[1].split("lvBlock")[0])  # every placeholder filled
+        for bad in ("/agent/fixer-99-1", "/agent/" + urllib.request.quote(self.p, safe=""), "/agent/../etc/passwd"):
+            req = urllib.request.Request(f"http://127.0.0.1:{self.port}{bad}", headers={"Host": "agentctl.localhost"})
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(req, timeout=5)
+            cm.exception.close()
+            self.assertEqual(cm.exception.code, 404, bad)
+        for frag in ("data-live-btn", "new EventSource", "follow", "pause", ".livehost"):
+            self.assertIn(frag, A.STATUS_PAGE_HTML)
+        self.assertNotIn("/*LIVE", A.STATUS_PAGE_HTML)
+
+    @unittest.skipUnless(__import__("shutil").which("node"), "node is not installed")
+    def test_the_scripts_parse(self):
+        import subprocess, tempfile
+        for html in (A.STATUS_PAGE_HTML, A.AGENT_PAGE_HTML):
+            with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
+                f.write(html.split("<script>")[1].split("</script>")[0])
+            r = subprocess.run(["node", "--check", f.name], capture_output=True, text=True, timeout=60)
+            os.remove(f.name)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_a_slow_client_is_dropped(self):
         writes = []
 
