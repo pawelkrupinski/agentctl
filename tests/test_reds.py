@@ -789,6 +789,18 @@ class OldRedTest(RedsBase):
                           "Report run timings"], [(it["id"], "verified")])
         self.assertTrue(any("its callers' runs since passed: Nightly #50" in str(e.get("text")) for e in self.st.events()))
 
+    def test_a_settled_callable_only_run_reads_verified_and_leaves_the_status_line(self):
+        # Report run timings #38 (2026-10-29): verified at 16:17Z by its callers' runs, yet still its newest run on main,
+        # so ci-why and the status line read it "offering" -- "offered at the next tick", which never comes
+        self.made_callable_only([(True, "success")])
+        snap = self.snap()
+        self.assertEqual([o["name"] for o in snap["outside"]], ["Report run timings"])  # still observed, never re-opened
+        summary = A.ci_why(MOVIES, summary=True, snap=snap, repo=self.r.path)[1]
+        self.assertNotIn("Report run timings", summary)
+        full = A.ci_why(MOVIES, snap=snap, repo=self.r.path)[1]
+        self.assertNotIn("offered at the next tick", full)
+        self.assertIn("fixing: verified: Report run timings runs only when called", full)
+
     def test_a_callable_only_workflows_red_stays_offered_without_a_passing_caller_run_since_its_change(self):
         # the trigger alone never closes a red (5cf3f69: 811 re-opened retirements); no caller run since: no proof
         it = self.made_callable_only([(False, "success")])

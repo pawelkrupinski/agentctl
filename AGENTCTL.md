@@ -299,7 +299,9 @@ main. For each red run it shows:
 A gate red says how long it has been red (`red for 3h 0m (2 failed runs)`: from the oldest failure of the current
 streak). For movies it then lists every workflow OUTSIDE the gate whose newest decided run on main is red, oldest red
 first, each with how long and since when (the owner, 2026-10-27: a red nobody is shown gets ignored). Those never make
-`ci-why` exit 1: they block no push.
+`ci-why` exit 1: they block no push. A `workflow_call`-only workflow's run that its callers proved fixed (its red
+verified, the run settled) stays that workflow's newest run on main for good: it is listed apart, under `Proven fixed
+outside the gate`, and left out of the status line (Report run timings #38 read "offering" there after its FIX OK).
 
 `ci-why <run id>` explains one run. Exit: 0 green, 1 red (or a run explained).
 

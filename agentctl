@@ -1630,6 +1630,10 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
     def short(st):
         return st["short"] if st else "?"
 
+    # A RUN ITS CALLERS PROVED FIXED is no red, though it stays its callable-only workflow's newest run on main for good
+    proven = [o for o in others if (fixing(o[0], o[1])[1] or {}).get("state") == "verified"]
+    others = [o for o in others if o not in proven]
+
     for name, decided, newer, (since, count) in gate:
         pending = f"; newer run {newer['databaseId']} (#{newer.get('number')}) {newer.get('status')} may clear it" if newer else ""
         if not decided:
@@ -1682,6 +1686,11 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
         for name, r, since, count in others:
             out.append(f"  {name}: RED for {red_for(since)} since {since} ({count} failed run{'s' if count != 1 else ''}; "
                        f"newest run {r['databaseId']} #{r.get('number')}) -- `agentctl ci-why {r['databaseId']}`")
+            out += fixing(name, r, "    ")[0]
+    if proven:
+        out.append("Proven fixed outside the gate (no red; it runs only when called, so its newest run on main stays red):")
+        for name, r, _since, _count in proven:
+            out.append(f"  {name}: newest run {r['databaseId']} #{r.get('number')} -- `agentctl ci-why {r['databaseId']}`")
             out += fixing(name, r, "    ")[0]
     blines = branch_lines(bsnap)
     if blines:
@@ -4290,12 +4299,12 @@ def red_callable_evidence(d, snap, repo, o_r):
             + (f" and {len(passed) - 3} more" if len(passed) > 3 else ""))
 
 
-def red_settled(store, key, run):
-    """True when an earlier spell of this red was verified for this very run (red_callable_evidence): the same old
-    run, observed again, opens no new spell."""
-    rid = str((run or {}).get("databaseId"))
-    return any(it["data"].get("key") == key and it["state"] == "verified" and str(it["data"].get("settled_run")) == rid
-               for it in store.items("red"))
+def red_settled_runs(store):
+    """{(key, run id): its verified spell} for the runs red_callable_evidence settled. Such a run stays its workflow's
+    newest on main for good (the workflow runs only when called): observed again, it opens no new spell, and it reads
+    as verified, never "offering" (Report run timings #38 read "offering" in the status line after its FIX OK)."""
+    return {(it["data"].get("key"), str(it["data"]["settled_run"])): it for it in store.items("red")
+            if it["state"] == "verified" and it["data"].get("settled_run") is not None}
 
 
 def red_step(store, it, obs, snap, facts, repo, o_r, t):
@@ -4316,7 +4325,8 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
         inbox_write("red", line, [line], [], 0)
         store.close_offer(f"red:{it['id']}", "verified")
         red_stop_holder(store, key, "its callers' runs prove it fixed", "red verified")
-        red_move(store, it, "verified", line, data={"settled_run": (d.get("last_run") or {}).get("databaseId")})
+        red_move(store, it, "verified", line, data={"settled_run": (d.get("last_run") or {}).get("databaseId"),
+                                                    "proof": proof})
         return [line]
     if st in ("red", "offered") and not live and not fix and not block:
         old = red_old_run(d, t)
@@ -6074,14 +6084,20 @@ def red_view(store, it, t=None):
 
 def red_view_of_units(store, units):
     """{(workflow, run id): {state, text, short, cause}} for ci-why's red rows, from the red items their keys name."""
-    out, active = {}, red_active(store)
+    out, active, settled = {}, red_active(store), None
     groups = {}
     for key, ob in red_obs_of_units(units).items():
         groups.setdefault((ob["workflow"], ob["run"].get("databaseId")), []).append(key)
     for k, keys in groups.items():
         its = [active[x] for x in keys if x in active]
         if not its:
-            out[k] = {"state": "red", "text": "observed: offered at the next tick", "short": "offering", "cause": None}
+            settled = red_settled_runs(store) if settled is None else settled
+            done = [settled.get((x, str(k[1]))) for x in keys]
+            if all(done):  # its newest run for good, proven fixed by its callers' runs: never offered again
+                proof = done[0]["data"].get("proof") or "proven fixed by its callers' runs"
+                out[k] = {"state": "verified", "text": f"verified: {proof}", "short": "verified", "cause": None}
+            else:
+                out[k] = {"state": "red", "text": "observed: offered at the next tick", "short": "offering", "cause": None}
             continue
         rank = {"leased": 0, "fix-pending": 1, "blocked-external": 2, "offered": 3, "red": 4}
         it = min(its, key=lambda x: rank.get(x["state"], 5))
@@ -6135,13 +6151,15 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=True, facts=None):
         except (Exception, SystemExit) as e:
             err(f"red tick: could not observe ({str(e)[:160]}): nothing opens or clears this tick")
     facts = facts if facts is not None else red_fix_facts(repo, store)
-    active = red_active(store)
+    active, settled = red_active(store), None
     for key, ob in (obs or {}).items():
         try:
             it = active.get(key)
             if it:
                 active[key] = red_attach_obs(store, it, ob)
-            elif not red_settled(store, key, ob["run"]):
+                continue
+            settled = red_settled_runs(store) if settled is None else settled
+            if (key, str(ob["run"].get("databaseId"))) not in settled:
                 active[key] = red_open(store, ob, repo, t)
         except (Exception, SystemExit) as e:
             err(f"red tick: {key}: {str(e)[:160]}")
