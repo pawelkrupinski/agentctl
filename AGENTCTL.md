@@ -508,6 +508,12 @@ agent must be assigned to it".
   then every cycle. No running fixer is killed for it. The wait reads, in `red status`, `ci-why` and the status page:
   `capacity 2/2 other, waiting 12m; next slot when <fixer> ends by 15:09 or borrows an idle gate slot at 14:20 or
   overflow at 14:45`; `fixers alive:` shows the overflow slot when it is in use.
+- **Fast reproducer first (the owner's standing rule, 2026-10-29).** Every dispatched fixer's brief says: before
+  fixing, build the fastest faithful reproducer -- a pinned minimal fixture or slice replayed by one spec on a warm sbt
+  server (identity flips: a slice from `scripts/identity-slice`, then `scripts/sbt-warm 'worker/testOnly
+  scripts.IdentityDriftSpec -- -z "<case>"'`), else a CI rerun of only the failing job or row
+  (`scripts/identity-drift-ci --for-red <run>`); it fails before the fix and passes after; iterate on it, the full
+  suites give only the final verdict.
 - **No new fixer on a laptop under pressure (2026-10-29: load 56-72 on 14 cores, swap 30.4 of 31.7 GB).** The
   dispatcher starts no fixer while swap is over 90% used (`$AGENTCTL_FIXER_SWAP_PCT`), the load over 3x the cores
   (`$AGENTCTL_FIXER_LOAD`) or free memory under 4 GB (`$AGENTCTL_FIXER_FREE_GB`). The red stays offered, reading

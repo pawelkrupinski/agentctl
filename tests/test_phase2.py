@@ -633,6 +633,15 @@ class LandAsYouGoTest(Phase2Base):
         self.assertIn("LAND AS YOU GO", p)
         self.assertIn("RED-NUDGE.md", p)
 
+    def test_the_fixer_prompt_says_fast_reproducer_first(self):
+        """The owner's standing rule (2026-10-29): a fast reproducer, failing before the fix and passing after."""
+        p = A.fixer_prompt({"workflow": "Main", "run": {"number": 20, "databaseId": 40}, "job": "j", "kind": "test"},
+                           "/wt", "/brief")
+        self.assertIn("FAST REPRODUCER FIRST", p)
+        self.assertIn("scripts/identity-drift-ci --for-red <run>", p)
+        self.assertIn("worker/testOnly scripts.IdentityDriftSpec", p)
+        self.assertIn("FAIL before your fix and PASS after", p)
+
 
 class CurrentStoreTest(Phase2Base):
     def test_a_long_running_holder_follows_store_use(self):

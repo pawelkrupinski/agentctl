@@ -4853,6 +4853,18 @@ def sync_brief():
     return dst
 
 
+# FAST REPRODUCER FIRST (the owner's standing rule, 2026-10-29: "fast reproducer first, for fixing future problems"):
+# every dispatched fixer builds the fastest faithful reproducer before it fixes, sees it fail, fixes, sees it pass, and
+# iterates on it; the full suites give only the final verdict.
+FAST_REPRODUCER = (
+    "FAST REPRODUCER FIRST: before fixing, build the fastest faithful reproducer -- a pinned minimal fixture or slice "
+    "replayed by ONE spec on a warm sbt server (seconds); e.g. identity flips: cut a slice with `scripts/identity-slice` "
+    "and run `scripts/sbt-warm 'worker/testOnly scripts.IdentityDriftSpec -- -z \"<case>\"'` over it. Failing that, a "
+    "CI rerun of only the failing job or row: `scripts/identity-drift-ci --for-red <run>` for drift rows. The "
+    "reproducer must FAIL before your fix and PASS after it: show both. Iterate on it; the full suites (convergence, "
+    "Main) give only the final verdict. ")
+
+
 def fixer_prompt(u, wt, brief, resume_note=None):
     num, rid = u["run"].get("number"), u["run"].get("databaseId")
     common = (f"You are an unattended red-build fixer dispatched by agentctl (nobody else was fixing this red), a background session the owner sees in `claude agents`. Read {brief} "
@@ -4870,7 +4882,7 @@ def fixer_prompt(u, wt, brief, resume_note=None):
               f"{FIXER_UNLANDED_NUDGE // 60} min get a RED-NUDGE.md in your worktree (read it, land, delete it), then an "
               "escalation to the owner. RED FAMILIES: reds of your red's family (e.g. all convergence work) are added "
               "to your lease while you work, each as a line in RED-INBOX.md in your worktree: read it after every step "
-              "and fix those too. ")
+              "and fix those too. " + FAST_REPRODUCER)
     if u.get("bin_worktree"):
         common += (f"AGENTCTL CHANGES (~/bin) go ONLY in {u['bin_worktree']} (a worktree of ~/bin, branch off master): "
                    "commit there, `git -C <it> rebase master`, then `git -C ~/bin merge --ff-only <its branch>` once ~/bin "
