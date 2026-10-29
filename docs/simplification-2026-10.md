@@ -123,7 +123,7 @@ Commit 8f054a9.
 
 ## Agent A: item 3 (owner's item 6), the package split -- DONE (23:30)
 
-- `~/bin/agentctl` is a 73-line entry: its docstring and the loader. The code is `lib/agentctl/` in 31 parts (core,
+- `~/bin/agentctl` is a 73-line entry: its docstring and the loader. The code is `lib/agentctl/` in 27 parts (core,
   wait, owned, ciwhy, branches, red, fixer, land, gov, slots, landwatch, waiting, queue, remote, batch, tools, cleanup,
   maint, store, server, upkeep, watchdog, inbox, recovery, status, live, cli), listed in order in
   `lib/agentctl/__init__.py` PARTS.
