@@ -1,5 +1,12 @@
 # agentctl simplification, 2026-10-29 onward: progress log
 
+**PACKAGE SPLIT IN PROGRESS from 22:50 (Agent A): ~/bin/agentctl is being cut into lib/agentctl/*.py (one shared
+namespace). Avoid editing agentctl itself until the split lands; rebase onto it then.**
+
+Agents (owner, 2026-10-29 evening): **Agent A** (core: items 2-7, this log's Agent A sections), **Agent B** (item 1's
+workflow and suite speed, 9, 10, 8), **Agent C** (infra: the Actions branch, item 11). Item 1 was finished by Agent A
+before the split of work (below).
+
 One maintainer, items strictly in order, each pushed to forgejo `main` before the next. The coordinator reads this.
 Baseline (2026-10-29, forgejo/main 67cd130): agentctl 17,335 lines, 798 functions, 58 subcommands; 601 tests, 702 s
 serial.
@@ -57,3 +64,13 @@ the CI tier). Bump the pin, preview, apply:
 ```
 
 then `! cd ~/bitcashier/infra && bin/deploy ci-runner --apply` (restarts only agentctl-src/store/reconciler).
+
+## Agent A: token regression check (2026-10-29 22:31-22:45)
+
+Not caused by a push: the network dropped, every sync step failed, and after ROUND_ERRORS_MAX rounds the STALLED
+condition's own (remote) store call raised StoreUnavailable out of the loop. The processor died, launchd restarted it
+(pid 58047, 22:44), and a fresh process holds no token. Re-exec onto new code keeps it (os.execv inherits the
+environment). Fixed in 869b48c (the note is never fatal, retried each round), with two regression tests
+(tests/test_tick_bounds.py StoreDownNeverEndsTheLoopTest). Laptop-only: no pin bump needed for it.
+Note for Agent B: one full-suite run of 869b48c failed one test and the next three passed -- a flaky test somewhere
+(name not captured).
