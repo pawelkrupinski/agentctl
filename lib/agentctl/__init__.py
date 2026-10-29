@@ -10,8 +10,9 @@ order of definitions is kept.
 """
 import os as _os
 
-PARTS = ("red", "fixer", "land", "gov", "slots", "landwatch", "waiting", "queue", "remote", "batch", "tools",
-         "cleanup", "maint", "store", "server", "upkeep", "watchdog", "inbox", "recovery", "status", "live", "cli")
+PARTS = ("branches", "red", "fixer", "land", "gov", "slots", "landwatch", "waiting", "queue", "remote", "batch",
+         "tools", "cleanup", "maint", "store", "server", "upkeep", "watchdog", "inbox", "recovery", "status", "live",
+         "cli")
 
 
 def load_into(ns):
