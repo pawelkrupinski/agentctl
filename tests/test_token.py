@@ -17,7 +17,7 @@ class TokenResolutionTest(Base):
             os.environ.pop(k, None)
         os.environ["AGENTCTL_MOVIES_REPO"] = self.r.path
         os.environ["AGENTCTL_INBOX_DIR"] = os.path.join(self.tmp.name, "inbox")
-        self.sock_dir = tempfile.mkdtemp(dir="/tmp", prefix="agentctl-sock-")
+        self.sock_dir = tempfile.mkdtemp(dir=os.environ["AGENTCTL_TEST_RUN_SOCK"], prefix="s-")
         self.saved["AGENTCTL_SOCK_DIR"] = os.environ.get("AGENTCTL_SOCK_DIR")
         os.environ["AGENTCTL_SOCK_DIR"] = self.sock_dir
         self.saved_fb, self.saved_cache, self.saved_reds = A.SECRETS_FALLBACKS, dict(A._tokens), os.environ.get("AGENTCTL_REDS_DIR")
@@ -133,7 +133,7 @@ class LoopCannotStallTest(unittest.TestCase):
         self.assertTrue(A.run_bounded("t-hang", lambda: None, 1))
 
     def test_the_socket_is_served_while_the_loop_is_busy(self):
-        base = tempfile.mkdtemp(dir="/tmp", prefix="agentctl-sock-")
+        base = tempfile.mkdtemp(dir=os.environ["AGENTCTL_TEST_RUN_SOCK"], prefix="s-")
         saved = os.environ.get("AGENTCTL_SOCK_DIR")
         os.environ["AGENTCTL_SOCK_DIR"] = base
         try:

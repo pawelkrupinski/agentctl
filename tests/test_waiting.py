@@ -335,7 +335,7 @@ class WaitingTest(Base):
 
     def test_the_token_is_handed_to_a_listening_processor(self):
         import tempfile
-        sockdir = tempfile.mkdtemp(dir="/tmp", prefix="agentctl-sock-")
+        sockdir = tempfile.mkdtemp(dir=os.environ["AGENTCTL_TEST_RUN_SOCK"], prefix="s-")
         saved = {k: os.environ.get(k) for k in ("AGENTCTL_SOCK_DIR", "FORGEJO_API_TOKEN", "GH_TOKEN")}
         os.environ["AGENTCTL_SOCK_DIR"] = sockdir
         os.environ.pop("GH_TOKEN", None)

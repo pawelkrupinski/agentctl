@@ -2,6 +2,16 @@
 import contextlib, re, datetime as dt, importlib.machinery, importlib.util, io, json, os, subprocess, sys, tempfile, threading, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+# EVERY TEMP DIR OF A TEST RUN UNDER ONE, removed when the run ends (the owner, 2026-10-29: 3,009 leaked `agentctl-*`
+# dirs, a full disk): tempfile's own dir, and TMPDIR for every child process; a killed run's leftovers the processor
+# removes after an hour (upkeep). Short, so a socket path inside stays <= 104 bytes. /tmp holds only the socket dirs.
+import atexit as _atexit, shutil as _shutil  # noqa: E401
+if not os.environ.get("AGENTCTL_TEST_RUN_TMP"):
+    os.environ["AGENTCTL_TEST_RUN_TMP"] = tempfile.mkdtemp(prefix="agentctl-t-")
+    os.environ["TMPDIR"] = os.environ["AGENTCTL_TEST_RUN_TMP"]
+    _atexit.register(_shutil.rmtree, os.environ["AGENTCTL_TEST_RUN_TMP"], True)
+tempfile.tempdir = os.environ["AGENTCTL_TEST_RUN_TMP"]
 TOOL = os.environ.get("AGENTCTL_UNDER_TEST") or os.path.join(HERE, "..", "agentctl")
 _loader = importlib.machinery.SourceFileLoader("agentctl", TOOL)
 _spec = importlib.util.spec_from_loader("agentctl", _loader)
@@ -60,7 +70,10 @@ os.environ.setdefault("AGENTCTL_INBOX_DIR", tempfile.mkdtemp(prefix="agentctl-in
 # ...nor reaps this machine's stuck sbt servers (orphans / sweep): test_sbt_reaper drives the rules on fakes.
 os.environ.setdefault("AGENTCTL_SBT_REAP", "0")
 # ...nor listens on this machine's token hand-off sockets (a short dir: a socket path is <= 104 bytes).
-os.environ.setdefault("AGENTCTL_SOCK_DIR", tempfile.mkdtemp(dir="/tmp", prefix="agentctl-sock-test-"))
+if not os.environ.get("AGENTCTL_TEST_RUN_SOCK"):  # the run's socket dirs, under one short /tmp dir, removed at its end
+    os.environ["AGENTCTL_TEST_RUN_SOCK"] = tempfile.mkdtemp(dir="/tmp", prefix="agentctl-sock-t-")
+    _atexit.register(_shutil.rmtree, os.environ["AGENTCTL_TEST_RUN_SOCK"], True)
+os.environ.setdefault("AGENTCTL_SOCK_DIR", tempfile.mkdtemp(dir=os.environ["AGENTCTL_TEST_RUN_SOCK"], prefix="s-"))
 # ...nor reads or writes this machine's red claims and fixers, nor scans its worktrees, nor patrols from a test's
 # processor, nor ever finds the real `claude` CLI.
 os.environ.setdefault("AGENTCTL_REDS_DIR", tempfile.mkdtemp(prefix="agentctl-reds-test-"))
