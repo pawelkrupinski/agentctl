@@ -3254,7 +3254,7 @@ def red_picture(d):
             "red_kind": d.get("red_kind"), "attempts": int(d.get("attempts") or 0), "history": (d.get("history") or [])[-6:],
             "refuted": d.get("refuted") or [], "diagnosis": d.get("diagnosis"), "predicts": d.get("predicts"),
             "author": d.get("author"), "culprit": d.get("culprit"), "names": sorted(red_names(d) - {None}),
-            "prior_work": d.get("prior_work")}
+            "prior_work": d.get("prior_work"), "old_note": d.get("old_note")}
 
 
 def red_put_offer(store, it):
@@ -3381,8 +3381,12 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
     acts = []
     if st in ("red", "offered") and not live and not fix and not block:
         old = red_old_run(d, t)
-        if old:  # AN OLD RED SEEN ONLY NOW (audit #7 surfaces a rarely run workflow): verified by a fresh run, or retired
-            return red_resolve_old(store, it, old, o_r, repo, t)
+        if old:  # AN OLD RED SEEN ONLY NOW (audit #7 surfaces a rarely run workflow): verified by a fresh run, or fixed
+            done = red_resolve_old(store, it, old, o_r, repo, t)
+            if done is not None:
+                return done
+            it = store.item("red", it["id"])  # no fresh run can check it: an ordinary red, offered below
+            d = it["data"]
     if st == "red":
         it = red_offer(store, it, f"{red_what(d)} is red: offered")
         return [f"offered {red_what(d)} ({it['data']['tier']})"]
@@ -3513,23 +3517,27 @@ def red_old_run(d, t):
 
 def red_resolve_old(store, it, age, o_r, repo, t):
     """A dispatchable workflow is run again on main (fix-pending: verify) -- green verifies it, the same failure makes it
-    an ordinary red; one that cannot be dispatched and has not run for that long is RETIRED (cleared, marked so; its next
-    failing run opens a new red)."""
+    an ordinary red. One that no fresh run can check (no workflow_dispatch, its file gone from main, or the dispatch
+    refused) returns None: it stays an ordinary red, offered and dispatched like any other. It is never RETIRED:
+    "Report run timings" #38 (2026-10-29, a workflow_call-only workflow) was retired, re-opened by the next tick's same
+    observation and retired again 811 times in 19 h, never offered, while ci-why showed it "offering" for 9 days."""
     d = it["data"]
     path, txt = workflow_file_of(repo, f"{REMOTE}/main", d.get("workflow")) if repo else (None, "")
-    store.close_offer(f"red:{it['id']}", "old run")
     if path and "workflow_dispatch" in txt:
         line = red_verify_dispatch(o_r, repo, d.get("workflow"), "")
-        red_move(store, it, "fix-pending", f"{red_what(d)}: its newest run is {fmt_age(age)} old: {line}",
-                 data={"old_checked": True, "fix": {"status": "verify", "at": t, "entry": None, "sha": "",
-                                                    "verify_dispatched": ts(), "verify": line}})
-        return [f"old red {red_what(d)}: {line}"]
-    why = (f"retired: {d.get('workflow')} has not run for {fmt_age(age)}" +
-           (" and has no workflow_dispatch" if path else " and its workflow file is gone from main") +
-           "; its next failing run opens a new red")
-    store.update_item("red", it["id"], it["version"], {"old_checked": True, "retired": why})
-    red_close(store, store.item("red", it["id"]), "cleared", why)
-    return [f"old red {red_what(d)}: {why}"]
+        if line.startswith("dispatched"):
+            store.close_offer(f"red:{it['id']}", "old run")
+            red_move(store, it, "fix-pending", f"{red_what(d)}: its newest run is {fmt_age(age)} old: {line}",
+                     data={"old_checked": True, "fix": {"status": "verify", "at": t, "entry": None, "sha": "",
+                                                        "verify_dispatched": ts(), "verify": line}})
+            return [f"old red {red_what(d)}: {line}"]
+        why = line
+    else:
+        why = (f"{d.get('workflow')} has not run for {fmt_age(age)}" +
+               (" and has no workflow_dispatch" if path else " and its workflow file is gone from main"))
+    store.update_item("red", it["id"], it["version"], {"old_checked": True,
+                                                      "old_note": f"no fresh run can check it ({why[:200]}): a fixer decides"})
+    return None
 
 
 def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
@@ -3878,7 +3886,7 @@ def red_spawn(store, o_r, repo, off, took, extra=()):
     u = {"workflow": pic["workflow"], "job": pic.get("job"), "jobs": pic.get("jobs"), "kind": pic.get("kind") or "test",
          "line": pic.get("line"), "run": pic.get("run") or {}, "refuted": pic.get("refuted"), "predicts": pic.get("predicts"),
          "flake": pic.get("red_kind") == "flake", "diagnosis": pic.get("diagnosis"), "key": pic["key"],
-         "names": set(pic.get("names") or []), "prior_work": pic.get("prior_work")}
+         "names": set(pic.get("names") or []), "prior_work": pic.get("prior_work"), "old_note": pic.get("old_note")}
     for x in extra:  # the run's other reds, under the same fixer
         u["jobs"] = sorted(set(u.get("jobs") or [u["job"]]) | set(x["picture"].get("jobs") or []))
     if tier == "revert":
@@ -3989,6 +3997,9 @@ def fixer_prompt(u, wt, brief, resume_note=None):
                 "`~/bin/agentctl land` in the foreground. End at `LANDED <sha>`. If you cannot fix it, end with a line "
                 "`GAVE UP: <why>`; if it needs the owner, `~/bin/agentctl red block " + str(num) + " --owner-cause <kind> --cmd \"<command>\"` (only for a cause outside the code that only the owner can act on: never a code red) "
                 "and end `BLOCKED ON OWNER: <command>`.")
+    if u.get("old_note"):
+        task += (f" This red's newest run is old and {u['old_note']}: decide whether it still fails (fix it), or why it "
+                 "cannot recur (land the change that makes that so, e.g. its workflow fixed or removed), and say which.")
     pw = u.get("prior_work") or {}
     if pw.get("commits"):
         task += (f" A PREVIOUS FIXER of this red left commits not on forgejo/main in {pw['worktree']} "

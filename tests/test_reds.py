@@ -653,13 +653,38 @@ class OldRedTest(RedsBase):
             self.r.commit("wf")
             self.r.push()
 
-    def test_an_old_red_of_a_workflow_that_cannot_run_is_retired_not_escalated(self):
-        self.outside("name: Report run timings\non:\n  workflow_run: {}\n")
-        self.tick(dispatch=True)
-        it = self.st.items("red")[0]
-        self.assertEqual(it["state"], "cleared")
-        self.assertIn("retired", it["data"]["retired"])
-        self.assertEqual([e for e in self.st.events() if e["severity"] == "escalate"], [])
+    def test_an_old_red_of_a_workflow_that_cannot_run_is_offered_never_retired(self):
+        # "Report run timings" #38 (2026-10-29): a workflow_call-only workflow's old red was retired, re-opened by the
+        # next tick's same observation and retired again 811 times, never offered, "offering" in ci-why for 9 days
+        self.outside("name: Report run timings\non:\n  workflow_call: {}\n")
+        for _ in range(4):
+            self.tick(advance=60)
+        self.assertEqual(len(self.st.items("red")), 1)  # one spell, no churn
+        it = self.only()
+        self.assertEqual(it["state"], "offered")
+        self.assertTrue(it["data"]["old_checked"])
+        self.assertIn("workflow_dispatch", it["data"]["old_note"])
+        self.assertIsNotNone(self.st.offer_of(f"red:{it['id']}"))  # the dispatcher takes it
+        self.assertEqual(self.unheld(), [])
+
+    def test_an_old_red_whose_fresh_run_is_refused_is_offered_not_left_verifying(self):
+        # Archive recording #823 (2026-10-29): the verify dispatch was refused (HTTP 400, a required input) and the red
+        # sat in fix-pending "fix None verify" for 19 h with no fixer
+        self.outside("name: Report run timings\non:\n  workflow_dispatch:\n    inputs:\n      runs: {required: true}\n")
+        saved = (A.api, A.record_dispatch)
+
+        def refuse(*a, **k):
+            raise RuntimeError("HTTP Error 400: Bad Request")
+        A.api, A.record_dispatch = refuse, (lambda **kw: None)
+        try:
+            self.tick()
+            self.tick(advance=60)
+        finally:
+            A.api, A.record_dispatch = saved
+        it = self.only()
+        self.assertEqual(it["state"], "offered")
+        self.assertIn("HTTP Error 400", it["data"]["old_note"])
+        self.assertEqual(self.unheld(), [])
 
     def test_an_old_red_of_a_dispatchable_workflow_is_verified_by_a_fresh_run(self):
         self.outside("name: Report run timings\non:\n  workflow_dispatch:\n")
