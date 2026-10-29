@@ -956,23 +956,9 @@ def red_lines(st, indent="  "):
 
 
 def red_status(store, verbose=False):
-    t = store.clock()
-    its = sorted(red_active(store).values(), key=lambda i: (not i["data"].get("gate"), i["entered_at"]))
-    print(f"reds ({len(its)} open):" if its else "reds: none open")
-    for it in its:
-        text, _s = red_view(store, it, t)
-        fam = red_family(it["data"])
-        print(f"  {it['state']:<16} {red_what(it['data'])} {it['data']['key']}" + (f" [{fam}]" if fam else "") + f": {text}")
-        if verbose:
-            for h in it["data"].get("history") or []:
-                print(f"      {h.get('at')} {h.get('holder')}: {str(h.get('outcome'))[:140]}")
-    for fam in sorted({f for f in (red_family(i["data"]) for i in its) if f}):
-        n = sum(1 for i in its if red_family(i["data"]) == fam)
-        row = red_family_holder(store, fam, t)
-        print(f"family {fam}: {n} open red(s), ONE fixer: " + (f"{row['holder']} ({str(lease_meta(row).get('worktree') or '?').replace(HOME, '~')})"
-                                                               if row else "none at work"))
-    b = cached_dispatch_blocker()
-    print(f"dispatcher: {'OFF -- ' + b if b else 'ON'}; fixers alive: {red_slots_line(store, t)}")
+    """`agentctl red status`: rendered from the status model (its reds, families and dispatcher sections)."""
+    print(render_red_status(status_data(store=store, now_=store.clock(), only=("reds", "families", "dispatcher")),
+                            verbose))
     return 0
 
 

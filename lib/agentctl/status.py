@@ -108,9 +108,41 @@ def status_strip_lease(r, t):
             "workflow": m.get("workflow"), "log": m.get("log")}
 
 
-def status_header(t, d=None):
-    """The gate (state.json's CI snapshot and the published line), the tick, the network and the tunnel."""
-    d = state_read() if d is None else d
+# ---- ONE STATUS MODEL (docs/simplification-2026-10.md item 4): status_data() is THE assembled status (what /api/status
+# returns); `status --line`, `status`, `red status`, `ci-why --summary --cached` and the page render from it (or from
+# the sections they need: status_data(only=...)). No second formatter reads state.json or the store for itself.
+def status_gate_text(d, t, o_r=None, unreachable=False):
+    """THE gate text, from the published summary in state.json d: the line itself while fresh; stale or missing, what
+    it last said marked with its age -- `gate ?` when ci-runner's store does not answer (no verdict), `gate NETWORK`
+    on a lossy uplink, else `gate UNREAD`. o_r: only that repository's line counts."""
+    sm = d.get("summary") or {}
+    try:
+        epoch = int(sm["at"])
+    except (KeyError, TypeError, ValueError):
+        epoch = None
+    line = sm.get("line") if epoch and GATE_LINE.match(sm.get("line") or "") and (not o_r or sm.get("repo") == o_r) else None
+    age = t - epoch if epoch else None
+    if line and -5 <= age <= GATE_SUMMARY_MAX_AGE:
+        return line
+    net = d.get("network") or {}
+    lossy = net.get("at") and t - float(net["at"]) < NETWORK_SHOWN_FOR
+    asof = time.strftime("%H:%M", time.localtime(epoch)) if epoch else "never"
+    rest = line[5:] if line else None
+    if unreachable:
+        return f"gate ? (as of {asof}: {rest})" if rest else "gate ?"
+    if lossy:
+        return (f"gate NETWORK (lossy uplink: {int(float(net.get('loss') or 0) * 100)}% loss"
+                + (f"; as of {asof}: {rest})" if rest else ")"))
+    return f"gate UNREAD (as of {asof}: {rest or 'no fresh published gate'})"
+
+
+def status_header(t, d=None, probes=True):
+    """The cheap section every renderer starts from: state.json (on the sync refreshed from ci-runner's /v1/state when
+    its mirror is old, at most one GET), the gate text, the reconciler's tick, the store's reachability, the waiting and
+    checking changes, the open items, the pins. probes: also the tunnel's state and Forgejo's port (the page's)."""
+    url = store_url()
+    if d is None:
+        d = remote_status_state(url, t) if url else state_read()
     ci = d.get("ci") or {}
     gate = []
     for g in ci.get("gate") or []:
@@ -120,16 +152,116 @@ def status_header(t, d=None):
                      "newer": new.get("number"), "newer_status": new.get("status"),
                      "newer_url": status_run_url(ci.get("repo"), new.get("number")), "since": g.get("since"),
                      "count": g.get("count")})
-    tunnel = read_json_file(tunnel_state_path())
     tick = d.get("tick_at")
-    return {"line": status_line(t), "gate": gate, "gate_red": any(x["conclusion"] in RED_CONCLUSIONS for x in gate),
-            "summary": (d.get("summary") or {}).get("line"), "summary_at": (d.get("summary") or {}).get("at"),
-            "ci_at": ci.get("at"), "repo": ci.get("repo") or SHORT["movies"],
-            "tick_at": tick, "tick_age": t - float(tick) if tick else None, "fetched_at": d.get("fetched_at"),
-            "code": d.get("version"), "network": d.get("network"), "waiting": d.get("waiting") or [],
-            "queued": d.get("queued") or [],
-            "tunnel": {k: tunnel.get(k) for k in ("fails", "last_kick", "pending_since", "escalated", "network")},
-            "forgejo_port": port_open(3000, timeout=1.0)}
+    fetched = float(d.get("fetched_at") or 0) if url else None
+    unreachable = bool(url) and t - fetched > STORE_UNREACHABLE_AFTER
+    h = {"gate": gate, "gate_red": any(x["conclusion"] in RED_CONCLUSIONS for x in gate),
+         "gate_text": status_gate_text(d, t, unreachable=unreachable),
+         "summary": (d.get("summary") or {}).get("line"), "summary_at": (d.get("summary") or {}).get("at"),
+         "summary_repo": (d.get("summary") or {}).get("repo"),
+         "ci_at": ci.get("at"), "repo": ci.get("repo") or SHORT["movies"],
+         "tick_at": tick, "tick_age": t - float(tick) if tick else None, "fetched_at": d.get("fetched_at"),
+         "store_url": url, "store_unreachable": unreachable, "store_error": d.get("store_error"),
+         "code": d.get("version"), "network": d.get("network"), "waiting": d.get("waiting") or [],
+         "queued": d.get("queued") or [],
+         "items": {k: d.get(k) or [] for k in ("changes", "batch", "reds", "conditions")},
+         "pins": pins_status(now_=t)}
+    if probes:
+        tunnel = read_json_file(tunnel_state_path())
+        h["tunnel"] = {k: tunnel.get(k) for k in ("fails", "last_kick", "pending_since", "escalated", "network")}
+        h["forgejo_port"] = port_open(3000, timeout=1.0)
+    h["line"] = render_status_line(h, t)
+    return h
+
+
+def render_status_line(h, t):
+    """The status line: the gate text, the waiting and checking changes; `RECONCILER STALLED since HH:MM` when the
+    tick is over 2 min old, `STORE UNREACHABLE since HH:MM` when ci-runner's store has not answered for a minute."""
+    short = lambda wts: ", ".join(re.sub(r"^.*-wt-", "", os.path.basename(w or "")) for w in wts)
+    hm = lambda x: time.strftime('%H:%M', time.localtime(float(x)))
+    parts, tick, url = [h["gate_text"]], h["tick_at"], h["store_url"]
+    if h["store_unreachable"]:  # no verdict on ci-runner's reconciler: its store did not answer (never STALLED)
+        se = h.get("store_error") or {}
+        parts.insert(0, f"STORE UNREACHABLE since {hm(float(h.get('fetched_at') or 0) or se.get('since') or t)} ({url}"
+                        + (f": {se['why'][:80]}" if se.get("why") else "") + ")"
+                        + (f"; ci-runner ticked at {hm(tick)}" if tick else ""))
+    elif not tick or t - float(tick) > 120:
+        parts.insert(0, (f"RECONCILER STALLED since {hm(tick)}" if tick else "RECONCILER not running")
+                     + (" (ci-runner)" if url else ""))
+    waiting, queued = h["waiting"], h["queued"]
+    parts.append(f"waiting: {len(waiting)}" + (f" — {short(waiting)}" if waiting else "")
+                 + (f" · checking: {len(queued)} — {short(queued)}" if queued else ""))
+    return " · ".join(parts)
+
+
+def status_line(now_=None):
+    """`status --line`: the header's line (no git, no Forgejo; on the sync at most one GET /v1/state)."""
+    t = now_ if now_ is not None else time.time()
+    return status_header(t, probes=False)["line"]
+
+
+def render_status(h, t):
+    """`agentctl status`: the line, the open items with their states and deadlines, the tick, the pins."""
+    out = [h["line"]]
+    for key in ("changes", "batch", "reds", "conditions"):
+        rows = h["items"][key]
+        out.append(f"{key}: {len(rows)}")
+        out += [f"  {r['id']}  {r['state']}  deadline in {int((r['deadline'] - t) // 60)} min"
+                + (f"  (level {r['level']})" if r.get("level") else "") for r in rows]
+    tick = h["tick_at"]
+    out.append(f"tick: {int(t - tick)} s ago, code {h['code']}" if tick else "tick: never")
+    out.append(h["pins"])
+    return "\n".join(out)
+
+
+def cmd_status(a):
+    if getattr(a, "open", False):
+        return status_page_open()
+    t = time.time()
+    h = status_header(t, probes=False)
+    print(h["line"] if a.line else render_status(h, t))
+    return 0
+
+
+def render_red_status(m, verbose=False):
+    """`agentctl red status` from the model's reds, families and dispatcher sections."""
+    reds = m["reds"]
+    if isinstance(reds, dict) and "error" in reds:
+        return f"reds: unread ({reds['error']})"
+    out = [f"reds ({len(reds)} open):" if reds else "reds: none open"]
+    for r in reds:
+        out.append(f"  {r['state']:<16} {r['what']} {r['key']}" + (f" [{r['family']}]" if r.get("family") else "")
+                   + f": {r['text']}")
+        if verbose:
+            out += [f"      {h.get('at')} {h.get('holder')}: {str(h.get('outcome'))[:140]}" for h in r["history"]]
+    for f in m.get("families") or []:
+        out.append(f"family {f['family']}: {f['open']} open red(s), ONE fixer: "
+                   + (f"{f['holder']} ({str(f.get('worktree') or '?').replace(HOME, '~')})" if f.get("holder")
+                      else "none at work"))
+    dp = m.get("dispatcher") or {}
+    if "error" in dp:
+        out.append(f"dispatcher: unread ({dp['error']})")
+    else:
+        ov = f", {dp['overflow_alive']}/{dp['overflow_cap']} overflow" if dp.get("overflow_alive") else ""
+        out.append(f"dispatcher: {'OFF -- ' + dp['blocker'] if dp.get('blocker') else 'ON'}; fixers alive: "
+                   f"{dp['gate_alive']}/{dp['gate_cap']} gate, {dp['other_alive']}/{dp['other_cap']} other{ov}")
+    return "\n".join(out)
+
+
+def status_families(st, t):
+    """Each family with open reds: how many, and its ONE fixer (the live primary lease), if any."""
+    active = red_active(st)
+    fams = {}
+    for it in active.values():
+        f = red_family(it["data"])
+        if f:
+            fams[f] = fams.get(f, 0) + 1
+    out = []
+    for f in sorted(fams):
+        row = red_family_holder(st, f, t, active=active)
+        out.append({"family": f, "open": fams[f], "holder": row["holder"] if row else None,
+                    "worktree": lease_meta(row).get("worktree") if row else None})
+    return out
 
 
 def status_store_probe(st, t):
@@ -175,6 +307,7 @@ def status_reds(st, t, repo=None):
                     "deadline": it["deadline"], "level": it.get("level"), "lease": lease,
                     "fix": d.get("fix"), "attempts": d.get("attempts"), "family": red_family(d),
                     "note": (lease or {}).get("note") or (str(hist[-1].get("outcome"))[:400] if hist else None),
+                    "what": red_what(d),
                     "history": [{"at": h.get("at"), "holder": h.get("holder"), "outcome": str(h.get("outcome"))[:300]}
                                 for h in hist[-5:]]})
     return out
@@ -504,30 +637,35 @@ def status_events(st, n=STATUS_EVENTS):
             for e in reversed(evs)]
 
 
-def status_data(store=None, now_=None, bound=None, keep=False):
-    """/api/status: every section from its own bounded source; a failing one is {"error": ...} in its place."""
+def status_data(store=None, now_=None, bound=None, keep=False, only=None):
+    """THE STATUS MODEL (/api/status): every section from its own bounded source; a failing one is {"error": ...} in
+    its place. only: just these sections (a renderer's)."""
     t = now_ if now_ is not None else time.time()
     b = bound if bound is not None else env_num("AGENTCTL_STATUS_BOUND", STATUS_SOURCE_BOUND)
     d = state_read()
     repo = (d.get("ci") or {}).get("repo") or SHORT["movies"]
-    try:
-        st = store if store is not None else status_store()
-    except (Exception, SystemExit) as e:
-        st, st_err = None, status_err(e)
+    st, st_err = None, None
+    if not only or set(only) - {"header"}:
+        try:
+            st = store if store is not None else status_store()
+        except (Exception, SystemExit) as e:
+            st_err = status_err(e)
 
     def need():
         if st is None:
             raise RuntimeError(st_err["error"])
         return st
-    res, meta = status_sources((("header", lambda: status_header(t, d), 1),
-                          ("store", lambda: status_store_probe(need(), t), 1),
-                          ("dispatcher", lambda: status_dispatcher(need(), t), 1),
-                          ("reds", lambda: status_reds(need(), t, repo), 1),
-                          ("agents", lambda: status_agents(need(), t), 2),
-                          ("landing", lambda: status_landing(need(), t), 1),
-                          ("conditions", lambda: status_conditions(need(), t), 1),
-                          ("events", lambda: status_events(need()), 1)), b, keep=keep)
-    if "error" in res["store"]:
+    sources = (("header", lambda: status_header(t), 1),
+               ("store", lambda: status_store_probe(need(), t), 1),
+               ("dispatcher", lambda: status_dispatcher(need(), t), 1),
+               ("reds", lambda: status_reds(need(), t, repo), 1),
+               ("families", lambda: status_families(need(), t), 1),
+               ("agents", lambda: status_agents(need(), t), 2),
+               ("landing", lambda: status_landing(need(), t), 1),
+               ("conditions", lambda: status_conditions(need(), t), 1),
+               ("events", lambda: status_events(need()), 1))
+    res, meta = status_sources(tuple(x for x in sources if not only or x[0] in only), b, keep=keep)
+    if "error" in res.get("store", {}):
         res["store"] = {**res["store"], "remote": store_url(), "reachable": False}
     return {"at": t, "repo": repo, "home": HOME, "forgejo": FORGEJO_WEB, **res, **meta}
 

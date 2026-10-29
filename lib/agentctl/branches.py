@@ -923,17 +923,9 @@ def cmd_ci_why(a):
         # NEVER LIVE WORK (2026-10-28: a stale file sent the status line's 15 s refresh into a 60 s live read): the
         # processor's published line, or -- stale or missing -- what it last said, marked with its age. Live reads
         # belong to the processor's publish step only.
-        line, epoch = cached_gate_summary(o_r)
-        if line:
-            print(line)
-            return 1 if line.startswith("gate RED") else 0
-        asof = time.strftime("%H:%M", time.localtime(epoch)) if epoch else "never"
-        _e, repo_, old = published_summary()
-        if old and repo_ == o_r and GATE_LINE.match(old):
-            print(f"gate UNREAD (as of {asof}: {old[5:]})")
-        else:
-            print(f"gate UNREAD (as of {asof}: no fresh published gate)")
-        return 2
+        text = status_gate_text(state_read(), time.time(), o_r)  # the status model's gate text, for this repo
+        print(text)
+        return 1 if text.startswith("gate RED") else 0 if GATE_LINE.match(text) else 2  # 2: UNREAD / ? / NETWORK
     red, text = ci_why(o_r, a.tail, target, summary=getattr(a, "summary", False))
     print(text)
     return 1 if red else 0

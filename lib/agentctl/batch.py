@@ -428,65 +428,6 @@ def remote_status_state(url, t):
     return d
 
 
-def status_line(now_=None):
-    """The status line from state.json (no git, no Forgejo; in remote mode at most one GET /v1/state, see
-    remote_status_state): the gate line, the waiting and checking changes; `RECONCILER STALLED since HH:MM` when the
-    tick is over 2 min old, `STORE UNREACHABLE since HH:MM` when ci-runner's store has not answered for a minute."""
-    t = now_ if now_ is not None else time.time()
-    url = store_url()
-    d = remote_status_state(url, t) if url else state_read()
-    fetched = float(d.get("fetched_at") or 0) if url else None
-    unreachable = url and t - fetched > STORE_UNREACHABLE_AFTER
-    epoch, _repo, line = published_summary()
-    gate = line or "gate ?"
-    net = d.get("network") or {}
-    lossy = net.get("at") and t - float(net["at"]) < NETWORK_SHOWN_FOR
-    if epoch and t - epoch > GATE_SUMMARY_MAX_AGE and unreachable:
-        gate = f"gate ? (as of {time.strftime('%H:%M', time.localtime(epoch))}: {gate[5:]})"
-    elif epoch and t - epoch > GATE_SUMMARY_MAX_AGE:
-        gate = (f"gate NETWORK (lossy uplink: {int(float(net.get('loss') or 0) * 100)}% loss; as of "
-                f"{time.strftime('%H:%M', time.localtime(epoch))}: {gate[5:]})" if lossy else
-                f"gate UNREAD (as of {time.strftime('%H:%M', time.localtime(epoch))}: {gate[5:]})")
-    elif not line and lossy:
-        gate = f"gate NETWORK (lossy uplink: {int(float(net.get('loss') or 0) * 100)}% loss)"
-    short = lambda wts: ", ".join(re.sub(r"^.*-wt-", "", os.path.basename(w or "")) for w in wts)
-    waiting, queued = d.get("waiting") or [], d.get("queued") or []
-    parts = [gate]
-    tick = d.get("tick_at")
-    hm = lambda x: time.strftime('%H:%M', time.localtime(float(x)))
-    if unreachable:  # no verdict on ci-runner's reconciler: its store did not answer (never STALLED)
-        se = d.get("store_error") or {}
-        parts.insert(0, f"STORE UNREACHABLE since {hm(fetched or se.get('since') or t)} ({url}"
-                        + (f": {se['why'][:80]}" if se.get("why") else "") + ")"
-                        + (f"; ci-runner ticked at {hm(tick)}" if tick else ""))
-    elif not tick or t - float(tick) > 120:
-        parts.insert(0, (f"RECONCILER STALLED since {hm(tick)}" if tick else "RECONCILER not running")
-                     + (" (ci-runner)" if url else ""))
-    parts.append(f"waiting: {len(waiting)}" + (f" — {short(waiting)}" if waiting else "")
-                 + (f" · checking: {len(queued)} — {short(queued)}" if queued else ""))
-    return " · ".join(parts)
-
-
-def cmd_status(a):
-    if getattr(a, "open", False):
-        return status_page_open()
-    if a.line:
-        print(status_line())
-        return 0
-    d, t = state_read(), time.time()
-    print(status_line())
-    for key in ("changes", "batch", "reds", "conditions"):
-        rows = d.get(key) or []
-        print(f"{key}: {len(rows)}")
-        for r in rows:
-            print(f"  {r['id']}  {r['state']}  deadline in {int((r['deadline'] - t) // 60)} min"
-                  + (f"  (level {r['level']})" if r.get("level") else ""))
-    tick = d.get("tick_at")
-    print(f"tick: {int(t - tick)} s ago, code {d.get('version')}" if tick else "tick: never")
-    print(pins_status(now_=t))
-    return 0
-
-
 TICK = 5  # seconds between ticks ($AGENTCTL_TICK); every step is bounded or rate-limited inside
 
 
