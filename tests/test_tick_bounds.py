@@ -51,3 +51,54 @@ class StepBoundTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StoreDownNeverEndsTheLoopTest(unittest.TestCase):
+    """2026-10-29 22:31: the network dropped, every step failed for ROUND_ERRORS_MAX rounds, and the STALLED condition's
+    own call to the (remote) store raised out of the loop: the processor died, launchd restarted it, and a restarted
+    processor holds no Forgejo token. The loop must outlive its store; a re-exec onto new code must keep the token."""
+
+    def test_failing_rounds_and_an_unreachable_store_never_end_the_processor(self):
+        from test_agentctl import Repo
+        import tempfile
+        r = Repo(tempfile.mkdtemp())
+        rounds, opened = [], []
+        saved = (A.server_steps, A.open_condition, A.TokenDrop.nap, A.restart_if_changed, A.write_snapshot)
+
+        def down(*a, **k):
+            opened.append(1)
+            raise A.StoreUnavailable("POST /v1/store/items: <urlopen error [Errno 61] Connection refused>")
+
+        def nap(self, secs):
+            rounds.append(1)
+            if len(rounds) >= A.ROUND_ERRORS_MAX + 2:
+                A.TICK_STOP[0] = True
+        A.server_steps = lambda repo, d, shared: (("boom", lambda: (_ for _ in ()).throw(RuntimeError("down"))),)
+        A.open_condition, A.TokenDrop.nap, A.restart_if_changed = down, nap, lambda *a, **k: None
+        A.write_snapshot = lambda *a, **k: None
+        try:
+            self.assertEqual(A.waiting_run(r.path), 0)  # ended by TICK_STOP, never by the store's exception
+        finally:
+            (A.server_steps, A.open_condition, A.TokenDrop.nap, A.restart_if_changed, A.write_snapshot) = saved
+            A.TICK_STOP[0] = False
+        self.assertEqual(len(rounds), A.ROUND_ERRORS_MAX + 2, "every round ran")
+        self.assertEqual(len(opened), 3, "the STALLED note is tried again each failing round until it lands")
+
+    def test_a_re_exec_onto_new_code_keeps_the_token_in_the_environment(self):
+        seen = {}
+        saved = (A.os.execv, A.START_CODE, A.restart_gate, A.code_version, os.environ.get("FORGEJO_API_TOKEN"))
+        A.os.execv = lambda exe, argv: seen.update(argv=argv, tok=os.environ.get("FORGEJO_API_TOKEN"))
+        A.START_CODE, A.restart_gate, A.code_version = "old", (lambda: (True, "")), (lambda *a: "new")
+        A._last_code_check[0] = 0
+        os.environ["FORGEJO_API_TOKEN"] = "tok-handed-over"
+        try:
+            A.restart_if_changed(argv=["waiting", "run", "--service"])
+        finally:
+            A.os.execv, A.START_CODE, A.restart_gate, A.code_version, tok = saved
+            if tok is None:
+                os.environ.pop("FORGEJO_API_TOKEN", None)
+            else:
+                os.environ["FORGEJO_API_TOKEN"] = tok
+        # execv (never execve with a filtered env): the new image inherits this environment, the token with it
+        self.assertEqual(seen["tok"], "tok-handed-over")
+        self.assertEqual(seen["argv"][-3:], ["waiting", "run", "--service"])

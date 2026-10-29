@@ -10736,7 +10736,7 @@ def waiting_run(repo, once=False, service=False):
         _IN_PROCESSOR[0] = True
         drop = TokenDrop(d, o_r).open()
         stack.callback(drop.close)
-        errors = 0
+        errors, stalled_noted = 0, False
         role = host_role()
         if service and role != "server":
             status_page_start()  # the read-only status page, a daemon thread (see "the status page"); never fatal
@@ -10759,11 +10759,21 @@ def waiting_run(repo, once=False, service=False):
                 write_beat("processor")
                 sd_notify("WATCHDOG=1")  # each bounded step is progress: systemd's WatchdogSec never cuts a long tick
             errors = errors + 1 if failed else 0
-            if errors == ROUND_ERRORS_MAX:
-                open_condition("STALLED", f"STALLED: the waiting processor's ticks failed {ROUND_ERRORS_MAX} times in a row; "
-                                          f"see {d}/processor.log and service.log",
-                               run_probe("waiting_ok", {"d": d, "since": time.time()}), [], key="waiting-rounds",
-                               command="waiting")
+            if errors == 0:
+                stalled_noted = False
+            if errors >= ROUND_ERRORS_MAX and not stalled_noted:
+                # NEVER FATAL (2026-10-29 22:31: the network dropped, every step failed, and this condition's own store
+                # call -- the store is remote on the laptop -- raised StoreUnavailable out of the loop: the processor
+                # died, launchd restarted it, and the restart holds no Forgejo token until the owner hands it over).
+                # Not noted now: tried again next round.
+                try:
+                    open_condition("STALLED", f"STALLED: the waiting processor's ticks failed {errors} times in a row; "
+                                              f"see {d}/processor.log and service.log",
+                                   run_probe("waiting_ok", {"d": d, "since": time.time()}), [], key="waiting-rounds",
+                                   command="waiting")
+                    stalled_noted = True
+                except (Exception, SystemExit) as e:
+                    err(f"STALLED could not be noted ({str(e)[:160]}); the loop goes on")
             if not failed:
                 write_json(os.path.join(d, "round-ok.json"), {"at": time.time()})
             if role != "sync":  # the sync's state.json is ci-runner's, mirrored
