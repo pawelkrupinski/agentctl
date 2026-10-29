@@ -232,5 +232,86 @@ class HealTest(unittest.TestCase):
         self.assertFalse(A.note_clone_suspect(self.repo, "Could not read 409b8bb3c1"))
 
 
+class RequeueLoopTest(unittest.TestCase):
+    """2026-10-29: every change re-queued as "infra (its fetch of main failed)" every 5-10 min, for hours, silently."""
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.d, "entries"))
+        self.st = A.Store(path=os.path.join(self.d, "store.db"))
+        self.opened = []
+        self.saved = A.Store, A.wlog, A.open_condition
+        A.Store = lambda *a, **k: self.st
+        A.wlog = lambda d_, m: None
+        A.open_condition = lambda kind, text, probe, acts, **kw: self.opened.append((kind, text, probe, kw)) or {}
+        self.e = {"id": "e1", "seq": 1, "status": "checking", "worktree": "/w", "head": "a" * 40}
+        A.write_json(os.path.join(self.d, "entries", "e1.json"), self.e)
+
+    def tearDown(self):
+        A.Store, A.wlog, A.open_condition = self.saved
+
+    def again(self, why, **kw):
+        self.assertTrue(A.requeue_infra(self.d, self.e, why, **kw))
+        self.st.transition("change", "e1", "checking", self.st.item("change", "e1")["version"])
+        self.e["status"] = "checking"
+
+    def test_the_third_requeue_for_the_same_reason_opens_a_condition_with_gits_error(self):
+        err = "error: Could not read 409b8bb3c1\nfatal: remote did not send all necessary objects"
+        for _ in range(3):
+            self.assertEqual(self.opened, [])  # the first two: events only
+            self.again(f"{A.FETCH_MAIN_FAILED}: fatal: remote did not send all necessary objects",
+                       reason=A.FETCH_MAIN_FAILED, detail=err, repo=self.d)
+        self.assertEqual(len(self.opened), 1)
+        kind, text, probe, kw = self.opened[0]
+        self.assertEqual(kind, "STALLED")
+        self.assertIn("re-queued 3 times", text)
+        self.assertIn("did not send all necessary objects", text)
+        self.assertIn("error: Could not read 409b8bb3c1", kw["tail"])
+        self.assertEqual(probe.kind, "clone_health")  # the clone's: cleared when it fetches main again
+        self.assertTrue(kw["key"].startswith("main-fetch-"))
+        self.assertIn("Could not read", "".join(kw["tail"]))
+        queued = [x["text"] for x in self.st.events() if x["to_state"] == "queued"]
+        self.assertTrue(all("did not send all necessary objects" in t for t in queued), queued)
+
+    def test_a_different_reason_starts_the_count_again(self):
+        self.again("its checks stalled (sbt)")
+        self.again("its check passed its deadline with no live checker")
+        self.again("its checks stalled (a hook)")
+        self.assertEqual(self.opened, [])
+        self.again("its checks stalled (sbt again)")
+        self.assertEqual(self.opened, [])
+        self.again("its checks stalled (sbt once more)")
+        self.assertEqual(len(self.opened), 1)
+        self.assertEqual(self.opened[0][2].kind, "infra_requeue")
+        self.assertEqual(self.opened[0][3]["key"], "infra-requeue-e1")
+
+    def test_thirty_minutes_on_the_same_reason_open_it_before_the_third(self):
+        self.again("its checks stalled (sbt)")
+        self.e["infra_reason_since"] -= 31 * 60
+        self.again("its checks stalled (sbt)")
+        self.assertEqual(len(self.opened), 1)
+        self.assertIn("re-queued 2 times", self.opened[0][1])
+
+    def test_the_change_condition_clears_when_the_change_gets_past_it(self):
+        for _ in range(3):
+            self.again("its checks stalled (sbt)")
+        args = self.opened[0][2].args
+        self.assertFalse(A.run_probe("infra_requeue", args).ok)  # checking, the same reason: still stuck
+        A.write_json(os.path.join(self.d, "entries", "e1.json"), {**self.e, "status": "checked", "infra_reason": None})
+        self.assertTrue(A.run_probe("infra_requeue", args).ok)
+
+    def test_a_checks_fetch_of_main_failing_says_why(self):
+        saved = A.precheck_hook, A.fetch_main
+        A.precheck_hook = lambda repo: None
+        A.fetch_main = lambda repo: (False, "error: Could not read 409b8bb3c1\nfatal: remote did not send all "
+                                            "necessary objects")
+        try:
+            self.assertEqual(A._check_entry(self.d, self.d, self.e, 1), 0)
+        finally:
+            A.precheck_hook, A.fetch_main = saved
+        self.assertEqual(self.e["status"], "queued")
+        self.assertIn("its fetch of main failed: fatal: remote did not send all necessary objects", self.e["why"])
+        self.assertEqual(self.e["infra_reason"], A.FETCH_MAIN_FAILED)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -7734,19 +7734,65 @@ SLOT_WAIT_MAX = 2 * 3600  # a checker waits this long for a check tree, then the
 INFRA_BACKOFF = (300, 600, 1800, 3600)  # infra re-queues back off; from the third, each one escalates
 
 
-def requeue_infra(d, e, why, delay=None):
+def requeue_infra(d, e, why, delay=None, reason=None, detail=None, repo=None):
     """Back to queued for a later look: infra NEVER rejects a change (design §5.1). The delay grows 5 -> 60 min; from
-    QUEUE_INFRA_RETRIES on, each re-queue is an escalation (its event's severity). Returns True."""
+    QUEUE_INFRA_RETRIES on, each re-queue is an escalation (its event's severity). NEVER SILENTLY FOREVER (2026-10-29:
+    a corrupt clone's fetch of main re-queued every change for hours, and nobody was told): re-queued for the same
+    reason (reason: why without its details) QUEUE_INFRA_RETRIES times or for INFRA_SAME_MAX, it opens a condition
+    with the exact error (detail), which its own probe clears. Returns True."""
     n = e.get("infra_retries", 0) + 1
     wait = delay if delay is not None else INFRA_BACKOFF[min(n - 1, len(INFRA_BACKOFF) - 1)]
     sev = "escalate" if n >= QUEUE_INFRA_RETRIES else "info"
+    t = time.time()
+    reason = reason or infra_reason_of(why)
+    same = e.get("infra_reason") == reason
+    n_same = int(e.get("infra_same") or 0) + 1 if same else 1
+    since = float(e.get("infra_reason_since") or t) if same else t
     set_change(d, e, "queued", data={"infra_attempts": n},
                event=change_event(e, f"QUEUED AGAIN {e['id']}: infra ({why}); checked again in {int(wait // 60)} min",
                                   code=None, final=False, severity=sev),
-               infra_retries=n, retry_after=time.time() + wait, why=f"infra: {why}", waiting_on=None)
+               infra_retries=n, retry_after=t + wait, why=f"infra: {why}", waiting_on=None,
+               infra_reason=reason, infra_same=n_same, infra_reason_since=since)
     wlog(d, f"{e['id']}: {why}: queued again in {int(wait // 60)} min (infra retry {n}"
             + (", escalated" if sev == "escalate" else "") + ")")
+    if n_same >= QUEUE_INFRA_RETRIES or t - since >= env_num("AGENTCTL_INFRA_SAME_MAX", INFRA_SAME_MAX):
+        try:
+            infra_requeue_condition(d, e, why, reason, n_same, t - since, detail, repo)
+        except (Exception, SystemExit) as x:
+            err(f"{e['id']}: re-queued {n_same} times for {reason}, and its condition could not be opened ({str(x)[:160]})")
     return True
+
+
+INFRA_SAME_MAX = 30 * 60
+FETCH_MAIN_FAILED = "its fetch of main failed"
+
+
+def infra_reason_of(why):
+    """An infra re-queue's reason without its details (what differs between two re-queues for the same cause)."""
+    return re.sub(r"\s*\(.*?\)", "", why).split(":")[0].strip()
+
+
+def infra_requeue_condition(d, e, why, reason, n, age, detail, repo):
+    """The condition of a change re-queued n times for the same infra reason: main's fetch failing is the clone's
+    (one per clone, cleared when it verifies and fetches main again); any other reason the change's own (cleared when
+    it gets past it)."""
+    text = (f"STALLED: {e['id']} re-queued {n} times in {fmt_age(age)} for the same infra reason ({reason}); it lands "
+            f"only once that clears. Last: {why}")
+    tail = (detail or why).strip().splitlines()[-15:]
+    if reason == FETCH_MAIN_FAILED:
+        repo = repo or repo_of_waiting(d)
+        return open_condition("STALLED", f"{text}. Every change's check fetches main: the landing is blocked",
+                              run_probe("clone_health", {"repo": repo}), [],
+                              key=f"main-fetch-{os.path.basename(os.path.abspath(repo))}", command="land", tail=tail)
+    return open_condition("STALLED", text, run_probe("infra_requeue", {"d": d, "eid": e["id"], "reason": reason}), [],
+                          key=f"infra-requeue-{e['id']}", command="land", cwd=e.get("worktree"), tail=tail)
+
+
+def probe_infra_requeue(a):
+    """Change a['eid'] got past a['reason']: decided, checked, gone, or re-queued for another reason."""
+    e = read_record(os.path.join(a["d"], "entries", f"{a['eid']}.json")) or {}
+    stuck = e.get("status") in ("queued", "checking") and e.get("infra_reason") == a.get("reason")
+    return not stuck, f"entry {a['eid']}: {e.get('status') or 'gone'}" + (f" ({e.get('why')})" if stuck else "")
 
 
 # Main moved between a change's check and its push: re-checked only when what landed meanwhile can change the verdict
@@ -8067,14 +8113,20 @@ def _check_entry(repo, d, e, i, own=None):
     log_path = os.path.join(d, f"check-{e['id']}")
     if e.get("status") != "checking":
         set_change(d, e, "checking", event={"text": f"{e['id']}: checking"}, since=ts())
-    _fetched, _ferr = fetch_main(repo)  # a corruption signature marks the clone for repair (clone_heal_tick)
-    if not git_ok(repo, "rev-parse", "--verify", "-q", f"{REMOTE}/main"):
-        return 0 if requeue_infra(d, e, "its fetch of main failed") else 1
+    fetched, ferr = fetch_main(repo)  # a corruption signature marks the clone for repair (clone_heal_tick)
+    if not fetched:  # never checked on a stale main; git's own words say why (2026-10-29: "Could not read 409b8bb...")
+        last = (ferr.strip().splitlines() or ["?"])[-1][:240]
+        return 0 if requeue_infra(d, e, f"{FETCH_MAIN_FAILED}: {last}", reason=FETCH_MAIN_FAILED, detail=ferr,
+                                  repo=repo) else 1
     base = git(repo, "rev-parse", f"{REMOTE}/main").strip()
     if not git_ok(repo, "cat-file", "-e", f"{e['head']}^{{commit}}"):  # phase 2: the change is on Forgejo, as land/<id>
-        git(repo, "fetch", "--quiet", REMOTE, f"refs/heads/land/{e['id']}", check=False)
+        lr = git(repo, "fetch", "--quiet", REMOTE, f"refs/heads/land/{e['id']}", check=False)
         if not git_ok(repo, "cat-file", "-e", f"{e['head']}^{{commit}}"):
-            return 0 if requeue_infra(d, e, f"its commits are not here and refs/heads/land/{e['id']} gave none") else 1
+            lerr = (lr.stderr or "").strip()
+            note_clone_suspect(repo, lerr)
+            return 0 if requeue_infra(d, e, f"its commits are not here and refs/heads/land/{e['id']} gave none"
+                                      + (f": {lerr.splitlines()[-1][:240]}" if lerr else ""), detail=lerr,
+                                      repo=repo) else 1
     rem = e.get("remote") or {}
     adopt = (rem.get("head") == e["head"] and rem.get("base") == base and not rem.get("collected_at")
              and rem.get("status") not in ("cancelled", "skipped", "abandoned")
@@ -8119,7 +8171,7 @@ def _check_entry(repo, d, e, i, own=None):
             return 1
     set_change(d, e, "checked", data={"tip": head, "base": base, "mode": mode, "where": where},
                event={"text": f"{e['id']}: checked {head[:10]} on {base[:10]} ({where})"},
-               tip=head, checked_base=base, checked_mode=mode, checked_where=where, tree=i)
+               tip=head, checked_base=base, checked_mode=mode, checked_where=where, tree=i, infra_reason=None, infra_same=0)
     wlog(d, f"{e['id']}: checked {head[:10]} on {base[:10]} ({where})")
     return 0
 
@@ -13606,10 +13658,11 @@ def probe_waiting_ok(a):
 PROBES = {"disk_free": lambda a: probe_disk_free(a), "quota_reset": lambda a: probe_quota_reset(a), "invariant": probe_invariant, "waiting_ok": probe_waiting_ok, "orphan_landed": probe_orphan_landed, "batch_hold": probe_batch_hold, "workflow_green": probe_workflow_green, "http": probe_http, "tcp": probe_tcp,
           "route": probe_route, "tunnel": probe_tunnel, "gate_read": probe_gate_read, "token": probe_token,
           "processor": probe_processor, "git_fetch": probe_git_fetch, "laptop_load": probe_laptop_load,
-          "queue_entry": probe_queue_entry, "clone_health": probe_clone_health}
+          "queue_entry": probe_queue_entry, "clone_health": probe_clone_health,
+          "infra_requeue": probe_infra_requeue}
 PROBE_EVERY = {"disk_free": 300, "quota_reset": 300, "invariant": 60, "waiting_ok": 30, "owner_block": 60, "orphan_landed": 300, "batch_hold": 60, "route": 5, "tunnel": 10, "gate_read": 15, "processor": 30, "queue_entry": 60,
                "workflow_green": 60, "token": 60, "laptop_load": 60, "tcp": 60, "http": 120, "git_fetch": 120,
-               "clone_health": 120}
+               "clone_health": 120, "infra_requeue": 60}
 
 
 def probe_words(kind, a):
@@ -13625,7 +13678,8 @@ def probe_words(kind, a):
             "invariant": lambda: f"invariant {a.get('id')} holds", "waiting_ok": lambda: "a waiting round completes",
             "orphan_landed": lambda: "its commits are on main or somebody works in it",
             "queue_entry": lambda: f"queue entry {a.get('eid')} moves",
-            "clone_health": lambda: f"{a.get('repo')} verifies and fetches {REMOTE}/main"}.get(kind, lambda: kind)()
+            "clone_health": lambda: f"{a.get('repo')} verifies and fetches {REMOTE}/main",
+            "infra_requeue": lambda: f"queue entry {a.get('eid')} gets past {a.get('reason')}"}.get(kind, lambda: kind)()
 
 
 def run_probe(kind, args=None):
