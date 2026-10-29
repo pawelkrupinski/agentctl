@@ -74,3 +74,25 @@ environment). Fixed in 869b48c (the note is never fatal, retried each round), wi
 (tests/test_tick_bounds.py StoreDownNeverEndsTheLoopTest). Laptop-only: no pin bump needed for it.
 Note for Agent B: one full-suite run of 869b48c failed one test and the next three passed -- a flaky test somewhere
 (name not captured).
+
+## Agent C: infra -- Actions for agentctl, the auto-pin, the safer manual bump (2026-10-29 22:50-23:10)
+
+All on LOCAL infra branches, nothing pushed or deployed (owner does both):
+- **Actions** (`agentctl-ci`, a539a9f1, already there from item 1): `has_actions` on. tests.yml needs no secret,
+  variable or new label (`ubuntu-26.04` exists; actions/checkout is mirrored). Re-checked with check-nix-formatting.
+- **Auto-pin** (`agentctl-autopin` = agentctl-ci + 736ce8a5): `agentctl-autopin.timer` every 5 min runs
+  `agentctl-pin auto` on ci-runner: newest agentctl main commit descending from the running one, not marked bad,
+  whose latest tests.yml run on main is success (Forgejo's sqlite, read-only, no token) -> host pin, restart
+  agentctl-src/-store/-reconciler only, event `pin.bumped`; a revision that does not stay up is rolled back from,
+  marked bad, `escalate` event. Infra's agentctl-pin.nix still wins (host pin counts only over the infra pin it was
+  written on). Veto: `sudo agentctl-pin hold|release|rollback|status`. Units now run /var/lib/agentctl-src/current.
+  `bin/prove-agentctl-pin` (stubs; mutation-checked) proves red/running/untested/other-workflow never ship.
+- **Manual bump** (6d46c9e2): infra `bin/agentctl-pin-bump [<rev>] [--apply]`, refusing a non-green tests.yml run.
+- Owner steps: phase2-runbook.md "Auto-pin" and ~/Desktop/claude docs/agentctl-autopin.md/.pdf.
+
+For Agent A: the auto-pin writes its events straight into the store's `events` table with sqlite3 (columns at, kind,
+item_type='agentctl', item_id='pin', severity, audience='{}', text, refs, dedupe), as ci-lander. A schema change
+there must keep those columns, or give me an `agentctl event add` to call instead. It also runs
+`/var/lib/agentctl-src/current/agentctl` -- keep that entry point through the package split.
+For Agent B: auto-pin ships only on `success` of the LATEST tests.yml run of a commit on refs/heads/main; a flaky
+suite therefore delays shipping, never ships red.
