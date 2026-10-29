@@ -287,18 +287,29 @@ class LandTest(Base):
         return got
 
     def hold_until_waited(self):
-        """Another lander holds the landing lease until this lander has waited for it once (its first sleep in the wait
-        loop): a timer of 1.5 s expired before a lander slowed by a loaded machine (load 25) ever reached the lock."""
+        """Another lander holds the landing lease until this lander has been REFUSED it and then waits (its first sleep
+        after the refusal): a timer of 1.5 s expired before a lander slowed by a loaded machine (load 25) ever reached
+        the lock; releasing at the lander's first sleep of any kind let a sleep before the lock -- the precheck waiting
+        for the governor or a check slot under a loaded suite -- free the lease, and the lander never waited. Only the
+        lander's thread counts: A.time.sleep is the process's, and a thread an earlier test left running sleeps too."""
         got = self.hold_lock(3600)
-        st, name, sleep = A.Store(), A.land_lease_name(self.r.path), self.sleep
-        lander = __import__("threading").get_ident()  # `land` runs in-process, on this thread
+        name, sleep = A.land_lease_name(self.r.path), self.sleep
+        import threading
+        lander, refused = threading.get_ident(), []
+        acquire = A.Store.acquire
+
+        def watched_acquire(st, lease, holder, *a, **k):
+            r = acquire(st, lease, holder, *a, **k)
+            if lease == name and holder != "other lander" and "held" in (r or {}):
+                refused.append(holder)
+            return r
+        A.Store.acquire = watched_acquire
+        self.addCleanup(setattr, A.Store, "acquire", acquire)
 
         def first_wait(secs):
-            # A.time.sleep is the process's time.sleep: a thread left running by an earlier test that sleeps must not
-            # count as the lander's wait (it released the lease before the lander reached it: a flake under load)
-            if __import__("threading").get_ident() != lander:
-                return sleep(secs)
-            st.release(name, got["epoch"], got["secret"])
+            if threading.get_ident() != lander or not refused:
+                return sleep(min(secs, 0.05))
+            A.Store().release(name, got["epoch"], got["secret"])
             A.time.sleep = sleep
             return sleep(min(secs, 0.2))
         A.time.sleep = first_wait
