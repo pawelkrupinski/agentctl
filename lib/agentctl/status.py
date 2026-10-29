@@ -663,6 +663,7 @@ def status_data(store=None, now_=None, bound=None, keep=False, only=None):
                ("agents", lambda: status_agents(need(), t), 2),
                ("landing", lambda: status_landing(need(), t), 1),
                ("conditions", lambda: status_conditions(need(), t), 1),
+               ("issues", lambda: status_issues(need(), t), 1),
                ("events", lambda: status_events(need()), 1))
     res, meta = status_sources(tuple(x for x in sources if not only or x[0] in only), b, keep=keep)
     if "error" in res.get("store", {}):
@@ -871,4 +872,71 @@ def status_page_open():
     url = status_page_url()
     print(url)
     subprocess.run([os.environ.get("AGENTCTL_OPEN", "open"), url], capture_output=True, timeout=30)
+    return 0
+
+
+# ONE agentctl EDITOR (docs/simplification-2026-10.md, Agent B item 4): an agent that meets an agentctl defect -- a red
+# fixer above all, which never edits ~/bin (the brief says so; ~/bin's pre-commit hook refuses its commits) -- files it
+# with `agentctl issue "<text>"`. An issue is a store item (type `issue`): open until the maintainer closes it, shown
+# on the status page, escalated each week it stays open.
+MACHINES["issue"] = {
+    "open": StateSpec(7 * 86400, "open", ("closed",), escalate=True),
+    "closed": StateSpec(ARCHIVE, "closed", (), terminal=True),
+}
+ISSUE_TEXT_MAX = 4000
+
+
+def issue_open(st, text, by, cwd=None, now_=None):
+    """A new open issue; returns the item."""
+    t = now_ if now_ is not None else time.time()
+    text = str(text or "").strip()[:ISSUE_TEXT_MAX]
+    iid = f"{dt.datetime.fromtimestamp(t, dt.timezone.utc):%Y%m%dT%H%M%S}-{hashlib_sha1(f'{by}|{text}|{t}')[:6]}"
+    return st.put_item("issue", iid, "open", {"text": text, "by": by, "at": ts(), "cwd": cwd,
+                                              "session": os.environ.get("CLAUDE_CODE_SESSION_ID")})
+
+
+def issue_close(st, iid, note, by):
+    it = st.item("issue", iid)
+    if not it:
+        return None
+    if it["state"] != "closed":
+        st.transition("issue", iid, "closed", it["version"], data={"closed_by": by, "note": note, "closed_at": ts()},
+                      event={"text": f"issue {iid} closed by {by}: {note}"[:400]})
+    return st.item("issue", iid)
+
+
+def status_issues(st, t):
+    return [{"id": i["id"], "text": i["data"].get("text", "")[:1000], "by": i["data"].get("by"),
+             "at": i["data"].get("at"), "opened": i.get("entered_at"), "level": i.get("level"),
+             "cwd": i["data"].get("cwd")}
+            for i in sorted(st.items("issue", ("open",)), key=lambda i: i.get("entered_at") or 0, reverse=True)]
+
+
+def cmd_issue(a):
+    """agentctl issue "<text>" | --list | --close ID [--note N]"""
+    st = Store()
+    by = claimant()
+    try:
+        if a.close:
+            it = issue_close(st, a.close, a.note or "fixed", by)
+            if not it:
+                print(f"issue {a.close}: no such issue")
+                return 1
+            print(f"issue {it['id']}: {it['state']}")
+            return 0
+        if a.list or not a.text:
+            items = st.items("issue", None if a.all else ("open",))
+            for i in sorted(items, key=lambda i: i["id"]):
+                print(f"{i['id']}  {i['state']:6}  {i['data'].get('by') or '?'}: {i['data'].get('text', '')[:300]}")
+            if not items:
+                print("no open agentctl issues" if not a.all else "no agentctl issues")
+            return 0
+        it = issue_open(st, " ".join(a.text), by, cwd=safe_cwd())
+    except (ValueError, StoreUnavailable) as e:
+        why = str(e).replace("agentctl: ", "")[:200]
+        if "machine 'issue'" in why:  # the server runs a pinned revision from before `issue`
+            why += "; ci-runner's agentctl pin predates `issue` (a pin bump fixes it)"
+        print(f"agentctl issue: NOT FILED: the store refused it ({why})")
+        return 2
+    print(f"ISSUE {it['id']} filed: the agentctl maintainer sees it on the status page and in `agentctl issue --list`")
     return 0

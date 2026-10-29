@@ -714,6 +714,8 @@ function conds(cs){return table(["condition","since","probe","last result","next
  `${chip(c.kind,"bad")}${c.level?" "+chip("escalated","bad"):""}<div class="mute mono">${E(c.key)}</div>`,`<span class="n">${E(c.opened)}</span>`,
  `${E(c.probe)}<div class="mute">clears when ${E(c.until)}</div>`,`${c.ok==null?"cannot tell":"fails"} (${E(c.detail)}) · fails ${E(c.fails||0)}`,
  `<span class="n">${ago(c.next_check)}</span>`,E(c.text)]))}
+function issues(is){return table(["issue","filed","by","text"],is.map(i=>[`<span class="mono">${E(i.id)}</span>${i.level?" "+chip("escalated","bad"):""}`,
+ `<span class="n">${ago(i.opened)}</span>`,E(i.by||"?"),`<div>${E(i.text)}</div>${i.cwd?`<div class="mute">${E(tilde(i.cwd))}</div>`:""}`]))}
 function events(es){return table(["#","when","kind","item","→","text"],es.map(e=>[`<span class="mono">${E(e.seq)}</span>`,`<span class="n">${hm(e.at)} <span class="mute">${ago(e.at)}</span></span>`,
  chip(e.kind,e.severity==="info"?"info":e.severity==="escalate"?"bad":"warn"),`<span class="mono">${E(e.item||"")}</span>`,e.to?`${E(e.from||"")} → ${chip(e.to)}`:"",E(e.text)]))}
 function render(s){NOW=s.at;HOME=s.home||"";STALE=s.stale||{};const n=x=>Array.isArray(x)?x.length:"?";
@@ -723,6 +725,7 @@ function render(s){NOW=s.at;HOME=s.home||"";STALE=s.stale||{};const n=x=>Array.i
  +sec("Agents",n(s.agents)+" (lease holders and fixers alive or ended in the last 3 h)",s.agents,agents,"agents")
  +sec("Waiting / landing","",s.landing,landing,"landing")
  +sec("Open conditions",n(s.conditions),s.conditions,conds,"conditions")
+ +sec("agentctl issues",n(s.issues)+" open (`agentctl issue`)",s.issues,issues,"issues")
  +sec("Events","last "+n(s.events),s.events,events,"events");
  document.querySelectorAll("details[data-k]").forEach(d=>{if(OPEN.has(d.dataset.k))d.open=true});
  const hosts=new Set();document.querySelectorAll(".livehost[data-live]").forEach(h=>{const id=h.dataset.live;hosts.add(id);

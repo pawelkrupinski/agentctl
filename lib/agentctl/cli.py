@@ -253,6 +253,14 @@ def main(argv=None):
     rf.add_argument("--record", required=True)
     for p_ in [rc_, rbt, rb, rr, rdp, ra, rp, rf] + rls:
         p_.add_argument("--repo")
+    ram = rds.add_parser("am-fixer", help="exit 0 (and print who) inside a dispatched red fixer, else 1 (~/bin's "
+                         "pre-commit hook asks)")
+    iss = sub.add_parser("issue", help="file an agentctl defect (a fixer never edits ~/bin): stored, on the status page")
+    iss.add_argument("text", nargs="*", help="what is wrong (none: --list)")
+    iss.add_argument("--list", action="store_true", help="the open issues")
+    iss.add_argument("--all", action="store_true", help="with --list: closed ones too")
+    iss.add_argument("--close", metavar="ID", help="close an issue (the maintainer, once fixed)")
+    iss.add_argument("--note", help="with --close: what fixed it")
     dp = sub.add_parser("dispatch", help="own every CI dispatch: run (forgejo-gh workflow run, recorded) / record / list",
                         description=DISPATCH_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     dps = dp.add_subparsers(dest="dcmd", required=True)
@@ -277,6 +285,6 @@ def main(argv=None):
     rp_.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
     handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": cmd_red, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
+               "red": cmd_red, "issue": cmd_issue, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)

@@ -27,7 +27,9 @@ class BinWorktreeTest(unittest.TestCase):
         self.assertFalse(os.path.isdir(wt))
         p = A.fixer_prompt({"run": {"number": 2385, "databaseId": 1}, "workflow": "Main", "job": "j", "kind": "test",
                             "bin_worktree": f"{self.br}-wt-red-2385-2"}, "/wt", "/brief")
-        self.assertIn(f"AGENTCTL CHANGES (~/bin) go ONLY in {self.br}-wt-red-2385-2", p)
+        self.assertNotIn("AGENTCTL CHANGES", p)  # a fixer never edits ~/bin (Agent B item 4): it files `agentctl issue`
+        self.assertIn("never edit ~/bin", p)
+        self.assertIn('~/bin/agentctl issue "<what is wrong', p)
 
     def test_wb_flags_old_uncommitted_edits_in_the_bin_checkout(self):
         f = os.path.join(self.br, "agentctl")

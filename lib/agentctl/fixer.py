@@ -34,10 +34,9 @@ def fixer_prompt(u, wt, brief, resume_note=None):
               "escalation to the owner. RED FAMILIES: reds of your red's family (e.g. all convergence work) are added "
               "to your lease while you work, each as a line in RED-INBOX.md in your worktree: read it after every step "
               "and fix those too. " + FAST_REPRODUCER)
-    if u.get("bin_worktree"):
-        common += (f"AGENTCTL CHANGES (~/bin) go ONLY in {u['bin_worktree']} (a worktree of ~/bin, branch off master): "
-                   "commit there, `git -C <it> rebase master`, then `git -C ~/bin merge --ff-only <its branch>` once ~/bin "
-                   "is clean; NEVER edit ~/bin's own checkout. ")
+    common += ("AGENTCTL DEFECTS: never edit ~/bin (agentctl's code has one editor, its maintainer; ~/bin's pre-commit "
+               "hook refuses a fixer's commit): file each one with `~/bin/agentctl issue \"<what is wrong, where, how "
+               "to see it>\"` and go on with your red. ")
     if len(u.get("refuted") or []) >= RED_RECURRING:
         common += (f"RECURRING: this failure outlived {len(u['refuted'])} landed fixes ({', '.join(x[:10] for x in u['refuted'])}): "
                    "each treated a symptom. Read them (`git show`), find the ROOT CAUSE they all missed, and fix that; "
@@ -243,7 +242,7 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
         r = git(repo, "worktree", "add", "-q", "-b", branch, wt, f"{REMOTE}/main", check=False)
         if r.returncode != 0:
             return False, dispatch_log(u, f"NOT DISPATCHED: git worktree add failed ({r.stderr.strip()[:160]})")
-    bin_wt = bin_worktree_for(num, resume)
+    bin_wt = None  # a fixer never edits ~/bin (`agentctl issue`): no ~/bin worktree (an old record's is dropped at its end)
     rec = {"bin_worktree": bin_wt, "key": u.get("key"), "lease": lease, "epoch": (took or {}).get("epoch"),
            "jobs": u.get("jobs") or [u.get("job")],
            "run": num, "run_id": u["run"].get("databaseId"), "workflow": u["workflow"], "job": u.get("job"),
@@ -1065,7 +1064,18 @@ def maybe_red_tick(repo):
         err("red tick: still running from an earlier cycle (the loop goes on)")
 
 
+def red_am_fixer():
+    """`agentctl red am-fixer`: 0 inside a dispatched red fixer -- known by its session's binding or record, else (no
+    Claude session) its fixer environment (74e2ec5's in_fixer) -- printing who; 1 for anybody else."""
+    if in_fixer():
+        print(agent_name() or own_fixer_record_path() or "a red fixer")
+        return 0
+    return 1
+
+
 def cmd_red(a):
+    if a.rcmd == "am-fixer":
+        return red_am_fixer()
     o_r = slug(a.repo) if getattr(a, "repo", None) and a.rcmd != "fixer" else default_repo()
     st = Store()
     if a.rcmd == "block":

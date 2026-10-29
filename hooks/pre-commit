@@ -1,0 +1,21 @@
+#!/bin/sh
+# ~/bin's pre-commit hook (core.hooksPath=hooks; docs/simplification-2026-10.md, Agent B item 4): ONE agentctl
+# editor. A red fixer files an agentctl defect with `agentctl issue "<text>"` and never commits to ~/bin itself.
+#
+# The fixer is known the way agentctl knows it (74e2ec5): its Claude session's binding or fixer record, else -- in a
+# process agentctl spawned without a session -- its fixer environment. `agentctl red am-fixer` exits 0 for a fixer,
+# 1 for anybody else; any other exit (agentctl itself broken) lets the commit through with a warning, so a broken
+# agentctl can always be fixed.
+tool="${AGENTCTL_HOOK_TOOL:-$HOME/bin/agentctl}"
+who=$("$tool" red am-fixer 2>/dev/null)
+rc=$?
+case $rc in
+  0)
+    echo "pre-commit: refused -- this is a red fixer session ($who)." >&2
+    echo "  A fixer never edits ~/bin: file the agentctl defect instead:  agentctl issue \"<what is wrong>\"" >&2
+    exit 1 ;;
+  1) exit 0 ;;
+  *)
+    echo "pre-commit: could not tell whether this is a red fixer (\`agentctl red am-fixer\` exit $rc); committing" >&2
+    exit 0 ;;
+esac
