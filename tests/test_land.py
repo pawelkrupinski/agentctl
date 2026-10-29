@@ -270,8 +270,7 @@ class LandTest(Base):
 
     def test_a_waiter_says_how_long_the_holder_has_held_the_lock(self):
         self.hook("exit 0")
-        self.hold_lock(1.5)
-        A.time.sleep = self.sleep
+        self.hold_until_waited()
         self.mine()
         rc, out = self.land()
         self.assertEqual(rc, 0, out)
@@ -287,10 +286,21 @@ class LandTest(Base):
         self.addCleanup(lambda: (t.cancel(), st.release(name, got["epoch"], got["secret"])))
         return got
 
+    def hold_until_waited(self):
+        """Another lander holds the landing lease until this lander has waited for it once (its first sleep in the wait
+        loop): a timer of 1.5 s expired before a lander slowed by a loaded machine (load 25) ever reached the lock."""
+        got = self.hold_lock(3600)
+        st, name, sleep = A.Store(), A.land_lease_name(self.r.path), self.sleep
+
+        def first_wait(secs):
+            st.release(name, got["epoch"], got["secret"])
+            A.time.sleep = sleep
+            return sleep(min(secs, 0.2))
+        A.time.sleep = first_wait
+
     def test_a_second_lander_waits_for_the_lock_then_lands(self):
         self.hook("exit 0")
-        self.hold_lock(1.5)
-        A.time.sleep = self.sleep  # the real wait: the holder lets go after 1.5 s
+        self.hold_until_waited()
         self.r.write("f1.txt", "mine\n")
         sha = self.r.commit("mine")
         rc, out = self.land()
