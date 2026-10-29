@@ -4706,6 +4706,15 @@ def red_dispatcher(store, o_r, repo, t):
         return acts
     offs.sort(key=lambda o: (o["priority"], KIND_ORDER.get(o["picture"].get("kind"), 1), o["opened_at"]))
     blocker = cached_dispatch_blocker()
+    pressure = [False]  # read once per pass, when an offer gets that far
+
+    def laptop():
+        if pressure[0] is False:
+            try:
+                pressure[0] = laptop_pressure()
+            except Exception:
+                pressure[0] = None
+        return pressure[0]
     gone = set()
     sessions = None if not offs else (bg_sessions() if any(not r.get("alive") and not r.get("ended") and r.get("bg_id")
                                                             for r in fixer_records()) else [])
@@ -4748,6 +4757,8 @@ def red_dispatcher(store, o_r, repo, t):
                    f"{time.strftime('%H:%M', time.localtime(after))}")
         elif blocker:
             why = blocker
+        elif laptop():  # no new fixer on a laptop under pressure: offered still, no slot taken
+            why = f"waiting: laptop pressure ({laptop()})"
         elif on_run:
             why = f"its run's fixer {on_run['holder']} is on the run; this red is offered again when it ends"
         elif (prev := previous_fixer_working(pic.get("key"), red_run_of(pic), sessions, fam)):
@@ -6513,8 +6524,9 @@ def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None, cpu=No
 #   unused for a minute, not serving, never the root checkout's), then looks again. Idle warm servers go first.
 # - CHECKS keep their cap (`checks`, below): measured and auto-tuned as before, now one of the governor's limits.
 # Every admission is a line of <gov>/admits.jsonl (class, GB, wait, what it waited on); every eviction a line of gov.log.
-GOV_CLASSES = {"red": 0, "check": 1, "agent": 2, "measure": 3}
-GOV_MEM_GB = {"red": 5.0, "check": 5.0, "agent": 5.0, "measure": 6.0, "hook": 1.0}
+GOV_CLASSES = {"red": 0, "check": 1, "agent": 2, "measure": 3, "suite": 4}
+GOV_MEM_GB = {"red": 5.0, "check": 5.0, "agent": 5.0, "measure": 6.0, "hook": 1.0, "suite": 1.0}
+SUITE_CAP = 1  # agentctl's own test-suite runs at once ($AGENTCTL_SUITE_CAP): parallel agents queue, never pile up
 GOV_RAMP = 120          # seconds a new ticket's JVM is still growing into its expected memory
 GOV_RESERVE_GB = 1.0
 GOV_FREE_NEED_GB = 2.5  # free memory a new JVM needs NOW (beyond the reserve); its heap grows into the budget's share later
@@ -6610,6 +6622,10 @@ def gov_ramp(tickets, now=None):
 
 def gov_fits(cls, mem, tickets, m, kind="job"):
     """(True, None) when work of class cls expecting `mem` GB may start now; else (False, why, on_memory)."""
+    if cls == "suite":  # agentctl's own test suite (`agentctl suite`): at most SUITE_CAP at once
+        suites = sum(1 for t in tickets if t.get("class") == "suite")
+        if suites >= env_num("AGENTCTL_SUITE_CAP", SUITE_CAP):
+            return False, f"{suites}/{env_num('AGENTCTL_SUITE_CAP', SUITE_CAP):g} agentctl suite run(s) going (the suite cap)", False
     if kind == "check" and cls != "red":
         checks = sum(1 for t in tickets if t.get("kind") == "check")
         if checks >= checks_cap():
@@ -6812,6 +6828,49 @@ def gov_pressure():
     if m.get("load1") is not None and m["load1"] > env_num("AGENTCTL_REMOTE_LOAD", 2.0) * m["cores"]:
         return f"load {m['load1']:.0f} on {m['cores']} cores"
     return None
+
+
+# NO NEW FIXER ON A LAPTOP UNDER PRESSURE (the owner's coordinator, 2026-10-29: load 56-72 on 14 cores, swap 30.4 of
+# 31.7 GB). The dispatcher starts no fixer while swap is over FIXER_SWAP_PCT used, the load over FIXER_LOAD x the cores,
+# or free memory under FIXER_FREE_GB: the red stays offered (`waiting: laptop pressure (...)`), takes no slot, and
+# dispatches when the pressure clears; its offer's own deadline still escalates it (RED UNCLAIMED / STARVED).
+FIXER_SWAP_PCT = 90.0   # $AGENTCTL_FIXER_SWAP_PCT
+FIXER_LOAD = 3.0        # $AGENTCTL_FIXER_LOAD (x cores)
+FIXER_FREE_GB = 4.0     # $AGENTCTL_FIXER_FREE_GB
+
+
+def swap_usage():
+    """(used MB, total MB) of swap, or (None, None)."""
+    try:
+        r = subprocess.run(["sysctl", "-n", "vm.swapusage"], capture_output=True, text=True, timeout=10)
+        tot, used = re.search(r"total = ([\d.]+)M", r.stdout), re.search(r"used = ([\d.]+)M", r.stdout)
+        return (float(used.group(1)), float(tot.group(1))) if tot and used else (None, None)
+    except (OSError, subprocess.TimeoutExpired):
+        return None, None
+
+
+def laptop_pressure(m=None, swap=None):
+    """Why no new fixer may start on this laptop now, or None (gov_machine's free memory and load, vm.swapusage).
+    $AGENTCTL_LAPTOP_PRESSURE set (the tests'): its value is the answer, `-` or empty for none."""
+    if m is None and swap is None and "AGENTCTL_LAPTOP_PRESSURE" in os.environ:
+        return os.environ["AGENTCTL_LAPTOP_PRESSURE"].strip("-") or None  # `-` or empty: none
+    m = m or gov_machine()
+    used, total = swap or swap_usage()
+    if used is not None and total and 100.0 * used / total > env_num("AGENTCTL_FIXER_SWAP_PCT", FIXER_SWAP_PCT):
+        return f"swap {used / 1024:.1f} of {total / 1024:.1f} GB used"
+    if m.get("load1") is not None and m["load1"] > env_num("AGENTCTL_FIXER_LOAD", FIXER_LOAD) * m["cores"]:
+        return f"load {m['load1']:.0f} on {m['cores']} cores"
+    if m.get("free") is not None and m["free"] < env_num("AGENTCTL_FIXER_FREE_GB", FIXER_FREE_GB):
+        return f"{m['free']:.1f} GB free"
+    return None
+
+
+def cmd_suite(a):
+    """`agentctl suite [unittest args]`: agentctl's own test suite (default `discover -s tests`, in this directory)
+    under a governor ticket of class `suite` (SUITE_CAP at once): parallel agents queue here instead of piling up."""
+    args = list(a.args or []) or ["discover", "-s", "tests"]
+    with gov_ticket("suite", label=f"agentctl suite {os.path.basename(os.getcwd())}"):
+        return subprocess.run([sys.executable, "-m", "unittest"] + args).returncode
 
 
 def gov_class_of(repo, commits, reds):
@@ -16040,6 +16099,9 @@ def main(argv=None):
     gad.add_argument("--try", dest="try_", action="store_true", help="one look, never waiting")
     gad.add_argument("--force", action="store_true", help="admit at once (memory already counted elsewhere)")
     gev = gvs.add_parser("evict", help="stop the idle kept sbt server unused longest")
+    sui = sub.add_parser("suite", help="agentctl's own tests under the governor's `suite` ticket (one run at once): "
+                                       "`agentctl suite` = python3 -m unittest discover -s tests")
+    sui.add_argument("args", nargs=argparse.REMAINDER, help="unittest's arguments (default: discover -s tests)")
     gev.add_argument("--dry-run", action="store_true")
     ls_ = sub.add_parser("lease", help="the store's leases (debugging): `lease list [prefix]`")
     ls_.add_argument("lcmd", choices=("list",))
@@ -16134,7 +16196,7 @@ def main(argv=None):
     rp_.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
     handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": cmd_red, "dispatch": cmd_dispatch, "gov": cmd_gov, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
+               "red": cmd_red, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)
 

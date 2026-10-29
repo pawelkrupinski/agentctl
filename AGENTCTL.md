@@ -8,7 +8,10 @@ calls.
 
 - Not on PATH: call it as `~/bin/agentctl`.
 - Python 3, standard library only.
-- Tests: `python3 -m unittest discover -s ~/bin/tests` (mutation tests included).
+- Tests: `~/bin/agentctl suite` from the worktree (= `python3 -m unittest discover -s tests` under a governor ticket of
+  class `suite`, ONE run at once, `$AGENTCTL_SUITE_CAP`: parallel agents queue instead of piling up on the laptop;
+  `agentctl suite tests.test_reds` runs one module the same way). Mutation tests included. Run the touched modules
+  while working and the full suite once, before landing.
 - `agentctl --help` and `agentctl <cmd> --help` match this page.
 - The design behind it: `~/bin/docs/landing-reconciler-design.md`. Phase 2 (the store and the reconciler on
   ci-runner): `~/bin/docs/phase2-runbook.md`.
@@ -505,6 +508,11 @@ agent must be assigned to it".
   then every cycle. No running fixer is killed for it. The wait reads, in `red status`, `ci-why` and the status page:
   `capacity 2/2 other, waiting 12m; next slot when <fixer> ends by 15:09 or borrows an idle gate slot at 14:20 or
   overflow at 14:45`; `fixers alive:` shows the overflow slot when it is in use.
+- **No new fixer on a laptop under pressure (2026-10-29: load 56-72 on 14 cores, swap 30.4 of 31.7 GB).** The
+  dispatcher starts no fixer while swap is over 90% used (`$AGENTCTL_FIXER_SWAP_PCT`), the load over 3x the cores
+  (`$AGENTCTL_FIXER_LOAD`) or free memory under 4 GB (`$AGENTCTL_FIXER_FREE_GB`). The red stays offered, reading
+  `waiting: laptop pressure (<which>)`, and takes no slot; it dispatches when the pressure clears, and its offer's
+  deadline still escalates it (`RED UNCLAIMED`, `RED STARVED`) as before.
 - **Crash-loop breaker (G9, 2026-10-29: in E9 fixers were launched 52 times over 9 reds, #2335 18 times, mostly
   `exit 1 with no LANDED / GAVE UP line`).** 3 dispatched fixers in a row on one red that end with NO RESULT -- a
   crash, an exit with no verdict line, a lease lost or expired without progress, a time-out, a start that never got
@@ -723,6 +731,7 @@ agentctl gov status                 # admitted work, waiters, memory, evictable 
 agentctl gov stats [--days 7]       # checks stats, plus each class's admission waits and the evictions
 agentctl gov evict [--dry-run]      # stop the idle kept sbt server unused longest, by hand
 agentctl gov admit --class C ...    # scripts/jvm-gate.sh's call (--fd 7 --ticket <file>); --try: one look
+agentctl suite [unittest args]      # agentctl's own tests under a `suite` ticket: one suite run at once (SUITE_CAP)
 ```
 
 The owner (2026-10-27): one governor instead of three limiters (jvm-gate.sh's 4 JVM slots, the check-slot cap,

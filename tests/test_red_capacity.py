@@ -23,6 +23,7 @@ class CapacityBase(unittest.TestCase):
         A.cached_dispatch_blocker = lambda: None
         A.fixer_records = lambda: []
         self.envs = {}
+        self.env(AGENTCTL_LAPTOP_PRESSURE="-")  # the laptop running the tests is never the one under test
 
     def tearDown(self):
         A.red_spawn, A.cached_dispatch_blocker, A.fixer_records = self.saved
@@ -152,6 +153,67 @@ class StarvedEscalatesTest(RedsBase):
         self.assertEqual(len(esc), 1, [e["text"] for e in self.st.events()])
         self.assertEqual(self.unheld(), [])
         self.assertIn("STARVED", A.red_view(self.st, it, self.t[0])[0])
+
+
+
+class LaptopPressureTest(CapacityBase):
+    """No new fixer on a laptop under pressure (2026-10-29: load 56-72 on 14 cores, swap 30.4 of 31.7 GB): the red stays
+    offered, `waiting: laptop pressure (...)`, takes no slot, and dispatches when the pressure clears."""
+
+    def test_under_pressure_no_fixer_starts_no_slot_is_taken_and_it_dispatches_when_it_clears(self):
+        self.offer("x", True, 300)
+        self.env(AGENTCTL_LAPTOP_PRESSURE="swap 30.4 of 31.7 GB used")
+        self.dispatch()
+        self.assertEqual(self.spawned, [])
+        self.assertEqual(self.reason("x"), "waiting: laptop pressure (swap 30.4 of 31.7 GB used)")
+        self.assertIsNone(self.st.get(A.red_lease("x")))
+        sl, _ = A.red_slots(self.st, self.t[0])
+        self.assertEqual(sl["gate"][0], 0)
+        self.env(AGENTCTL_LAPTOP_PRESSURE="-")
+        self.dispatch(advance=60)
+        self.assertEqual(self.spawned, ["x"])
+
+    def test_the_thresholds_swap_load_and_free_memory(self):
+        os.environ.pop("AGENTCTL_LAPTOP_PRESSURE", None)
+        calm = {"free": 12.0, "load1": 10.0, "cores": 14, "pressure": 30}
+        self.assertIsNone(A.laptop_pressure(calm, (10_000.0, 32_000.0)))
+        self.assertIn("swap", A.laptop_pressure(calm, (30_400.0, 31_700.0)))
+        self.assertIn("load 56 on 14", A.laptop_pressure({**calm, "load1": 56.0}, (0.0, 1.0)))
+        self.assertIn("3.0 GB free", A.laptop_pressure({**calm, "free": 3.0}, (None, None)))
+
+
+class SuiteGateTest(unittest.TestCase):
+    """agentctl's own suite runs under a governor ticket of class `suite`, one at a time: a second waits."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.keys = ("AGENTCTL_GOV_DIR", "AGENTCTL_GOV_FREE_PROBE", "AGENTCTL_GOV_PRESSURE_PROBE",
+                     "AGENTCTL_GOV_LOAD_PROBE", "AGENTCTL_GOV_BUDGET_GB", "AGENTCTL_GOV_RESERVE_GB", "AGENTCTL_SUITE_CAP")
+        self.saved = {k: os.environ.get(k) for k in self.keys}
+        os.environ.update(AGENTCTL_GOV_DIR=os.path.join(self.tmp.name, "gov"), AGENTCTL_GOV_FREE_PROBE="echo 30",
+                          AGENTCTL_GOV_PRESSURE_PROBE="echo 20", AGENTCTL_GOV_LOAD_PROBE="echo 1",
+                          AGENTCTL_GOV_BUDGET_GB="20", AGENTCTL_GOV_RESERVE_GB="1")
+        os.environ.pop("AGENTCTL_SUITE_CAP", None)
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        self.tmp.cleanup()
+
+    def test_one_suite_at_a_time(self):
+        t1 = A.gov_admit("suite", label="first", wait=False)
+        self.assertIsNotNone(t1)
+        try:
+            self.assertIsNone(A.gov_admit("suite", label="second", wait=False))
+            ok, why, _ = A.gov_fits("suite", 1.0, A.gov_tickets(), A.gov_machine())
+            self.assertFalse(ok)
+            self.assertIn("suite cap", why)
+            self.assertIsNotNone(A.gov_admit("check", label="a check is no suite", wait=False))
+        finally:
+            t1.release()
+        t2 = A.gov_admit("suite", label="second", wait=False)
+        self.assertIsNotNone(t2)
+        t2.release()
 
 
 if __name__ == "__main__":
