@@ -3538,6 +3538,73 @@ def red_offer(store, it, text, data=None, repo=None, escalate=False, verdict=Non
     return it
 
 
+# RED FAMILIES (the owner, 2026-10-29: "give all convergence red work to one agent"): the reds of one family -- by
+# workflow, or by a failing job's name (Verify scrape recording's `convergence (<cc>)` is convergence work too) -- go to
+# ONE fixer. While it is alive, the dispatcher puts a new red of its family under its lease (a sibling it renews with
+# its own) and tells it in RED-INBOX.md in its worktree, never a second fixer; when it ends, the next fixer of the
+# family goes on in its worktree (previous_fixer_tree). The families are config: red-families.json beside agentctl
+# ($AGENTCTL_RED_FAMILIES names another file).
+_families_cache = {}
+
+
+def red_families():
+    path = os.environ.get("AGENTCTL_RED_FAMILIES") or os.path.join(os.path.dirname(TOOL_PATH), "red-families.json")
+    try:
+        m = os.path.getmtime(path)
+    except OSError:
+        return []
+    hit = _families_cache.get(path)
+    if not hit or hit[0] != m:
+        try:
+            with open(path) as f:
+                fams = json.load(f).get("families") or []
+            fams = [dict(x, _jobs=[re.compile(j) for j in x.get("jobs") or []]) for x in fams if x.get("name")]
+        except (OSError, ValueError, re.error) as e:
+            err(f"red families: {path} unreadable ({e}): none apply")
+            fams = []
+        hit = _families_cache[path] = (m, fams)
+    return hit[1]
+
+
+def red_family(d):
+    """The family of a red (its data, its picture, a fixer record: workflow, job, jobs), or None."""
+    if not d:
+        return None
+    jobs = [str(j) for j in (d.get("jobs") or []) + [d.get("job")] if j]
+    for fam in red_families():
+        if d.get("workflow") in (fam.get("workflows") or []) or any(rx.search(j) for rx in fam["_jobs"] for j in jobs):
+            return fam["name"]
+    return None
+
+
+def red_family_holder(store, fam, t, active=None):
+    """The live primary lease (a fixer's own, not a sibling) on a red of family fam, or None."""
+    if not fam:
+        return None
+    active = active if active is not None else red_active(store)
+    for row in store.list("red/"):
+        if not lease_is_live(row, t) or lease_meta(row).get("kind") not in ("fixer", "legacy-fixer"):
+            continue
+        it = active.get(row["name"].split("/", 1)[1])
+        if it and red_family(it["data"]) == fam:
+            return row
+    return None
+
+
+def red_family_tell(row, pic, fam):
+    """Tell the family's fixer a red was added to its lease: a line in RED-INBOX.md in its worktree."""
+    wt = lease_meta(row).get("worktree")
+    if not wt or not os.path.isdir(wt) or not allowed_path(wt):
+        return False
+    jobs = ", ".join(str(j) for j in pic.get("jobs") or [pic.get("job")] if j)
+    with open(os.path.join(wt, "RED-INBOX.md"), "a") as f:
+        f.write(f"{ts()} RED FAMILY {fam}: {pic.get('workflow')} #{(pic.get('run') or {}).get('number')} [{jobs}] "
+                f"(red {pic.get('key')}) is YOURS too, held under your lease: {str(pic.get('line') or '')[:300]} -- "
+                f"`agentctl ci-why {(pic.get('run') or {}).get('databaseId')}`; land its fix with `Fixes-Red: "
+                f"{(pic.get('run') or {}).get('number')}`.\n")
+    return True
+
+
 def red_picture(d):
     """What a taker gets: the failure, every prior attempt with its verdict, the refuted fixes, the diagnosis."""
     return {"key": d.get("key"), "workflow": d.get("workflow"), "job": d.get("job"), "jobs": d.get("jobs"),
@@ -4325,6 +4392,18 @@ def red_dispatcher(store, o_r, repo, t):
         pic, cls = off["picture"], ("gate" if off["picture"].get("gate") else "other")
         alive = red_fixers_alive(store, t)
         slot, cap_why = red_capacity(store, cls, t - float(off.get("opened_at") or t), t, alive)
+        fam = red_family(pic)
+        fam_row = red_family_holder(store, fam, t) if fam and off["tier"] not in ("revert",) else None
+        if fam_row and fam_row["name"] != off["lease"]:
+            # ONE FIXER PER FAMILY: a new red of a family whose fixer is at work is that fixer's -- under its lease
+            took = store.take(off["id"], fam_row["holder"], RED_FIXER_TTL, RED_FIXER_MAX,
+                              meta={**lease_meta(fam_row), "kind": "sibling", "primary": fam_row["name"], "family": fam,
+                                    "outcome": None, "notes": None})
+            if took and "epoch" in took:
+                red_family_tell(fam_row, pic, fam)
+                acts.append(f"{pic.get('workflow')} #{(pic.get('run') or {}).get('number')}: red {pic['key']} joined "
+                            f"its family {fam}'s fixer {fam_row['holder']}")
+            continue
         on_run = red_run_holder(store, red_run_of(pic), t)
         if on_run and on_run.get("name", "").startswith("red/") and off["tier"] not in ("revert",):
             # ONE RUN, ONE FIXER: a red of a run whose fixer is at work is that fixer's -- leased to it at once, renewed
@@ -4348,7 +4427,7 @@ def red_dispatcher(store, o_r, repo, t):
             why = blocker
         elif on_run:
             why = f"its run's fixer {on_run['holder']} is on the run; this red is offered again when it ends"
-        elif (prev := previous_fixer_working(pic.get("key"), red_run_of(pic), sessions)):
+        elif (prev := previous_fixer_working(pic.get("key"), red_run_of(pic), sessions, fam)):
             why = (f"its previous fixer {prev} is still at work on it: it stays the holder (its lease is taken again "
                    "for it); this red is offered again when it ends")
         elif slot is None:
@@ -4370,7 +4449,7 @@ def red_dispatcher(store, o_r, repo, t):
         if off["tier"] not in ("revert", "resume"):
             for sib in offs:
                 if sib["id"] != off["id"] and sib["id"] not in gone and sib["tier"] not in ("author", "revert", "resume") \
-                        and red_run_of(sib["picture"]) == red_run_of(pic):
+                        and (red_run_of(sib["picture"]) == red_run_of(pic) or (fam and red_family(sib["picture"]) == fam)):
                     st_ = store.take(sib["id"], holder, RED_FIXER_TTL, RED_FIXER_MAX, meta=meta)
                     if st_ and "epoch" in st_:
                         extra.append({"name": sib["lease"], "epoch": st_["epoch"], "secret": st_["secret"],
@@ -4455,7 +4534,9 @@ def fixer_prompt(u, wt, brief, resume_note=None):
               "LAND AS YOU GO: land each verified step at once with `~/bin/agentctl land` (a change with a `Fixes-Red:` "
               "trailer lands while main is red); never sit on unlanded commits. Commits unlanded for "
               f"{FIXER_UNLANDED_NUDGE // 60} min get a RED-NUDGE.md in your worktree (read it, land, delete it), then an "
-              "escalation to the owner. ")
+              "escalation to the owner. RED FAMILIES: reds of your red's family (e.g. all convergence work) are added "
+              "to your lease while you work, each as a line in RED-INBOX.md in your worktree: read it after every step "
+              "and fix those too. ")
     if u.get("bin_worktree"):
         common += (f"AGENTCTL CHANGES (~/bin) go ONLY in {u['bin_worktree']} (a worktree of ~/bin, branch off master): "
                    "commit there, `git -C <it> rebase master`, then `git -C ~/bin merge --ff-only <its branch>` once ~/bin "
@@ -4726,15 +4807,16 @@ def bg_sessions():
     return rows if isinstance(rows, list) else []
 
 
-def fixers_of(key, run):
-    """The fixer records of a red: by its key (any run of it) or by its run."""
-    return [r for r in fixer_records() if key in fixer_keys(r) or (r.get("workflow"), str(r.get("run"))) == run]
+def fixers_of(key, run, fam=None):
+    """The fixer records of a red: by its key (any run of it), by its run, or by its family (red-families.json)."""
+    return [r for r in fixer_records() if key in fixer_keys(r) or (r.get("workflow"), str(r.get("run"))) == run
+            or (fam and red_family(r) == fam)]
 
 
-def previous_fixer_working(key, run, sessions=None):
+def previous_fixer_working(key, run, sessions=None, fam=None):
     """'<who> (<worktree>)' of a fixer of this red still at work, else None: while it works it is the holder (the sync
     re-acquires its lease), never a second fixer beside it."""
-    recs = fixers_of(key, run)
+    recs = fixers_of(key, run, fam)
     if not recs:
         return None
     if sessions is None and any(not r.get("alive") and not r.get("ended") and r.get("bg_id") for r in recs):
@@ -4752,7 +4834,8 @@ def previous_fixer_tree(u):
     and is told to cherry-pick any other's. {worktree, note} or None. Read on the laptop at dispatch: the worktrees are
     here, never on ci-runner."""
     run = (u.get("workflow"), str((u.get("run") or {}).get("number")))
-    trees = [r.get("worktree") for r in fixers_of(u.get("key"), run)]
+    trees = [r.get("worktree") for r in sorted(fixers_of(u.get("key"), run, red_family(u)),
+                                                key=lambda r: str(r.get("started") or ""), reverse=True)]
     trees += [h.get("worktree") for h in u.get("history") or []] + [(u.get("prior_work") or {}).get("worktree")]
     found = {}
     for wt in trees:
@@ -5256,7 +5339,9 @@ def red_view(store, it, t=None):
         who = m.get("who") or str(row.get("holder") or "?").split(":")[-1]
         wt = str(m.get("worktree") or "?").replace(HOME, "~")
         exp = time.strftime("%H:%M", time.localtime(row.get("expires_at") or t))
-        return (f"{who} ({wt}, leased; lapses {exp} without progress)" + (f" -- {m['note']}" if m.get("note") else "") + rec,
+        fam = f" [family {m['family']}, with {str(m.get('primary') or '').split('/')[-1]}]" if m.get("family") else ""
+        return (f"{who} ({wt}, leased{fam}; lapses {exp} without progress)" + (f" -- {m['note']}" if m.get("note") else "")
+                + rec,
                 f"{who.replace('movies-wt-', '').replace('red-fixer-', 'fixer ')} leased")
     if st == "fix-pending":
         f = d.get("fix") or {}
@@ -5309,10 +5394,16 @@ def red_status(store, verbose=False):
     print(f"reds ({len(its)} open):" if its else "reds: none open")
     for it in its:
         text, _s = red_view(store, it, t)
-        print(f"  {it['state']:<16} {red_what(it['data'])} {it['data']['key']}: {text}")
+        fam = red_family(it["data"])
+        print(f"  {it['state']:<16} {red_what(it['data'])} {it['data']['key']}" + (f" [{fam}]" if fam else "") + f": {text}")
         if verbose:
             for h in it["data"].get("history") or []:
                 print(f"      {h.get('at')} {h.get('holder')}: {str(h.get('outcome'))[:140]}")
+    for fam in sorted({f for f in (red_family(i["data"]) for i in its) if f}):
+        n = sum(1 for i in its if red_family(i["data"]) == fam)
+        row = red_family_holder(store, fam, t)
+        print(f"family {fam}: {n} open red(s), ONE fixer: " + (f"{row['holder']} ({str(lease_meta(row).get('worktree') or '?').replace(HOME, '~')})"
+                                                               if row else "none at work"))
     b = cached_dispatch_blocker()
     print(f"dispatcher: {'OFF -- ' + b if b else 'ON'}; fixers alive: {red_slots_line(store, t)}")
     return 0
@@ -14704,7 +14795,7 @@ def status_reds(st, t, repo=None):
                     "gate": bool(d.get("gate")), "kind": d.get("kind"), "red_kind": d.get("red_kind"), "tier": d.get("tier"),
                     "opened_at": opened, "age": t - float(opened), "entered_at": it["entered_at"],
                     "deadline": it["deadline"], "level": it.get("level"), "lease": lease,
-                    "fix": d.get("fix"), "attempts": d.get("attempts"),
+                    "fix": d.get("fix"), "attempts": d.get("attempts"), "family": red_family(d),
                     "note": (lease or {}).get("note") or (str(hist[-1].get("outcome"))[:400] if hist else None),
                     "history": [{"at": h.get("at"), "holder": h.get("holder"), "outcome": str(h.get("outcome"))[:300]}
                                 for h in hist[-5:]]})
@@ -15293,7 +15384,7 @@ function reds(rs){return table(["state","red","run","failing jobs","age","holder
  const l=r.lease;const holder=l&&l.live?`${E(l.holder)}${l.worktree?`<div class="mute mono">${E(tilde(l.worktree))}</div>`:""}`:`<span class="mute">–</span>`;
  const lapse=l&&l.live?`lapses ${hm(l.expires_at)} (${ago(l.expires_at)})<div class="mute">max ${hm(l.max_until)}</div>`:"";
  return[chip(r.state)+(r.level?" "+chip("escalated","bad"):"")+`<div class="mute">${E(r.short)}</div>`,
-  `${E(r.workflow)} ${r.gate?chip("gate","bad"):chip(r.red_kind||"other","info")}<div class="mute mono">${E(r.key)} · ${E(r.tier||"")} ${E(r.kind||"")}</div>`,
+  `${E(r.workflow)} ${r.gate?chip("gate","bad"):chip(r.red_kind||"other","info")}${r.family?" "+chip("family "+r.family,"info"):""}<div class="mute mono">${E(r.key)} · ${E(r.tier||"")} ${E(r.kind||"")}</div>`,
   `<span class="n">${link(r.run_url,"#"+(r.run??"?"))}</span>`,
   E((r.jobs||[]).join(", "))+(r.line?`<div class="mute mono">${E(String(r.line).slice(0,200))}</div>`:""),
   `<span class="n">${ago(r.opened_at)}</span>`,holder,

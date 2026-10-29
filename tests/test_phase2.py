@@ -1,6 +1,6 @@
 """Phase 2 (design §6.3, §13 phase 2): the store over HTTP with Forgejo token auth, RemoteStore, the laptop's sync, the
 reconciler's entry point on ci-runner -- against a local server on a temp port, with a fake Forgejo for the auth."""
-import json, os, socket, subprocess, sys, tempfile, threading, time, unittest, urllib.request
+import contextlib, io, json, os, socket, subprocess, sys, tempfile, threading, time, unittest, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -515,6 +515,84 @@ class FixerContinuityTest(Phase2Base):
         self.assertIn(other, got["note"])  # the other unlanded attempt: cherry-pick what belongs
         self.assertNotIn(empty, got["note"])
         self.assertIsNone(A.previous_fixer_tree({"key": "zz", "workflow": "W", "run": {"number": 1}}))
+
+
+class RedFamilyTest(Phase2Base):
+    """The owner, 2026-10-29: "give all convergence red work to one agent"."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ.pop("AGENTCTL_REDS_DIR", None)
+        os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp, "laptop")
+        self.spawned, self.fns = [], (A.red_spawn, A.cached_dispatch_blocker)
+        A.red_spawn = lambda store, o_r, repo, off, took, extra=(): self.spawned.append((off, extra)) or (True, "ok")
+        A.cached_dispatch_blocker = lambda: None
+
+    def tearDown(self):
+        A.red_spawn, A.cached_dispatch_blocker = self.fns
+        super().tearDown()
+
+    def red(self, key, workflow, job, run):
+        it = self.st.put_item("red", key, "offered", {"key": key, "workflow": workflow, "job": job, "jobs": [job],
+                                                      "last_run": {"number": run, "databaseId": run + 1000}})
+        pic = {"key": key, "workflow": workflow, "job": job, "jobs": [job], "run": {"number": run, "databaseId": run + 1000},
+               "kind": "test", "line": f"{job} failed"}
+        return self.st.offer("fixer", f"red:{it['id']}", A.red_lease(key), "fresh", 1, time.time() + 600, pic)
+
+    def test_the_family_comes_from_config_by_workflow_or_by_a_failing_job(self):
+        self.assertEqual(A.red_family({"workflow": "Identity model convergence", "jobs": ["leg (poland)"]}), "convergence")
+        self.assertEqual(A.red_family({"workflow": "Verify scrape recording", "jobs": ["convergence (germany)"]}),
+                         "convergence")
+        self.assertIsNone(A.red_family({"workflow": "Verify scrape recording", "jobs": ["verify (germany)"]}))
+        other = os.path.join(self.tmp, "fams.json")
+        with open(other, "w") as f:
+            json.dump({"families": [{"name": "scrapes", "workflows": ["Verify scrape recording"]}]}, f)
+        os.environ["AGENTCTL_RED_FAMILIES"] = other
+        self.addCleanup(os.environ.pop, "AGENTCTL_RED_FAMILIES", None)
+        self.assertEqual(A.red_family({"workflow": "Verify scrape recording", "jobs": ["verify (germany)"]}), "scrapes")
+        self.assertIsNone(A.red_family({"workflow": "Identity model convergence", "jobs": ["leg (poland)"]}))
+
+    def test_a_new_convergence_red_goes_under_the_live_family_fixers_lease_and_it_is_told(self):
+        t = time.time()
+        wt = os.path.join(self.tmp, "movies-wt-red-2527")
+        os.makedirs(wt)
+        self.st.put_item("red", "a07", "leased", {"key": "a07", "workflow": "Identity model convergence", "job": "leg (uk)",
+                                                  "jobs": ["leg (uk)"], "last_run": {"number": 2527}})
+        self.st.acquire("red/a07", "laptop:fixer:red-a07-5", 900, 3600, meta={"kind": "fixer", "worktree": wt})
+        self.red("v1", "Verify scrape recording", "convergence (poland)", 2530)  # convergence work in another workflow
+        self.red("v2", "Verify scrape recording", "verify (poland)", 2531)      # not convergence
+        acts = A.red_dispatcher(self.st, "o/r", self.repo, t)
+        self.assertTrue(any("joined its family convergence's fixer laptop:fixer:red-a07-5" in a for a in acts), acts)
+        row = self.st.get("red/v1")
+        self.assertEqual((row["holder"], A.lease_meta(row)["kind"], A.lease_meta(row)["family"]),
+                         ("laptop:fixer:red-a07-5", "sibling", "convergence"))
+        with open(os.path.join(wt, "RED-INBOX.md")) as f:
+            self.assertIn("RED FAMILY convergence: Verify scrape recording #2530 [convergence (poland)]", f.read())
+        self.assertEqual([o["picture"]["key"] for o, _x in self.spawned], ["v2"])  # the rest gets its own fixer
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            A.red_status(self.st)
+        self.assertIn("family convergence: 2 open red(s), ONE fixer: laptop:fixer:red-a07-5", out.getvalue())
+        self.assertIn("[convergence]", out.getvalue())
+        self.assertEqual(A.status_reds(self.st, t)[0]["family"], "convergence")
+
+    def test_with_no_family_fixer_at_work_one_fixer_takes_every_open_red_of_the_family(self):
+        t = time.time()
+        self.red("c1", "Identity model convergence", "leg (uk)", 2527)
+        self.red("c2", "Verify scrape recording", "convergence (germany)", 2530)
+        A.red_dispatcher(self.st, "o/r", self.repo, t)
+        self.assertEqual(len(self.spawned), 1)
+        off, extra = self.spawned[0]
+        self.assertEqual(sorted([off["picture"]["key"]] + [x["picture"]["key"] for x in extra]), ["c1", "c2"])
+
+    def test_a_family_fixer_alive_without_a_lease_means_no_second_fixer(self):
+        A.write_json(A.reds_dir("2527", "fixer-5.json"),
+                     {"workflow": "Identity model convergence", "run": 2527, "job": "leg (uk)", "jobs": ["leg (uk)"],
+                      "worktree": self.tmp, "pid": os.getpid(), "process_start": A.process_start(os.getpid())})
+        self.red("c3", "Verify scrape recording", "convergence (spain)", 2531)
+        A.red_dispatcher(self.st, "o/r", self.repo, time.time())
+        self.assertEqual(self.spawned, [])
+        self.assertIn("previous fixer", self.st.offers("fixer")[0]["reason"])
 
 
 class LandAsYouGoTest(Phase2Base):

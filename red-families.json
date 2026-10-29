@@ -1,0 +1,8 @@
+{
+  "_doc": "Red families (agentctl, the owner 2026-10-29: \"give all convergence red work to one agent\"): every open red of a family is held by ONE fixer. A red is in a family when its workflow is listed, or one of its failing jobs matches a `jobs` regex (Python re.search). $AGENTCTL_RED_FAMILIES names another file.",
+  "families": [
+    {"name": "convergence",
+     "workflows": ["Identity model convergence"],
+     "jobs": ["^convergence\\b", "\\bconvergence \\("]}
+  ]
+}

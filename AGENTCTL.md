@@ -473,6 +473,14 @@ agent must be assigned to it".
   FIXER_LANDED or FIXER_FAILED; `RED DISPATCHED` when it starts). Caps: one fixer per red; 3 h wall time each
   (`$AGENTCTL_RED_FIXER_WALL`). A red still failing after 2 dispatched fixers: one `RED ESCALATE` entry, never
   dispatched again. Every decision is a line of `~/.cache/agentctl/reds/dispatch.log` with its reason.
+- **One fixer per red family; continuity; land as you go (2026-10-29).** `~/bin/red-families.json` names families
+  (convergence: the Identity model convergence workflow and any `convergence (<cc>)` job): while a family's fixer is at
+  work, a new red of it goes under its lease (`[family convergence]` in `red status` and on the status page) and a line
+  in its worktree's `RED-INBOX.md` tells it. A live fixer stays its reds' holder (its lease is taken again for it if it
+  lapsed); no second fixer while a previous one of the red, its run or its family works, and a new one goes on in the
+  previous one's worktree when that holds unlanded commits. Fixers land each verified step; commits unlanded 45 min
+  get `RED-NUDGE.md`, 90 min a `RED ESCALATE`. A queued Fixes-Red change holds its red ("fix waiting to land") and
+  verification counts from its landing.
 - **Gate reds are never budget-starved (2026-10-27: Main #2146 sat at `NOBODY (daily dispatch budget 6 spent)` for
   85+ min).** A gate red has its own cap, 3 fixers ALIVE at once (`$AGENTCTL_RED_GATE_MAX_FIXERS`), and NO daily cap;
   hitting it is `RED UNCLAIMED: ... NOBODY -- gate fixer cap 3 reached`, escalated at once (below). Reds outside the
