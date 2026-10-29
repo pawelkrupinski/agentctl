@@ -887,6 +887,14 @@ failed and nobody was told: the snapshot, the status line and the reds covered m
   a terminal reads them).
 - **Status line / summary**: `branch reds: N → owner (workflow #n)` after main's reds, `PREDICTS MAIN RED` in bold red;
   `ci-why` lists them under "Branch reds".
+- **Orphans close themselves** (2026-10-29: `branch reds: 3 → NOBODY`, identity runs #2365, #2370, #2371 on measure/*
+  branches whose worktrees were removed). A branch red with no owner record and no worktree holding its commit, whose
+  commit is not on main (or is, but main runs no such workflow, so it can never predict main red), is an ORPHAN: the
+  processor moves its `branch-red` item (`<repo>#<run id>`) to `orphaned` with an event saying why, and it leaves the
+  status line, `ci-why` and routing. Its finished `measure/*` branch is then for `agentctl cleanup` (the standing OK);
+  others are listed. If its commit turns up in a worktree (the hourly re-match) or an owner record, it reopens (event)
+  and is routed to that owner, however old. It is `gone` when its branch is deleted or green. A commit on main whose
+  workflow main runs is never an orphan: today's behaviour.
 
 ### inbox: every final verdict, durable
 
