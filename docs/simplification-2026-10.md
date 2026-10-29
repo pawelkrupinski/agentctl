@@ -211,3 +211,22 @@ then `! cd ~/bitcashier/infra && bin/deploy ci-runner --apply`. After it: `~/bin
 `fixers alive: n/5`, and ci-runner's journal `_SYSTEMD_UNIT:agentctl-reconciler.service` says once
 `red model 2: N open red(s) migrated in place` (or nothing when no red is open). (If Agent C's auto-pin is live by
 then, it does the bump itself once CI is green.)
+
+## Agent A: item 6 (owner's item 3), long-lived family owners -- DONE
+
+- `red-families.json` marks `convergence`, `main-tests` (Main's test failures) and `infra` (every other infra-shaped
+  or unclear red) `"owner": true`; a family matches by workflow/jobs and now by `kinds`.
+- One owner per family (lib/agentctl/owner.py): a `claude --bg` session `red owner · <family>` plus its wrapper
+  `agentctl red owner --family F`, in ONE worktree `<clone>-wt-owner-<family>` with `RED-NOTEBOOK.md` (excluded from
+  commits), kept across reds and restarts. `owner/<family>` is a heartbeat lease (TTL 15 min, no 3 h max).
+- New reds of the family are handed to the live owner (leases taken for it, a RED-INBOX.md line) and become the next
+  turn of the SAME session (`--resume`). A turn's verdict releases that turn's red leases like a fixer's, so the red
+  machine (verification, re-offer back to the owner, ladder, crash-loop breaker) is unchanged.
+- Restarted only when it died: same worktree, notebook and session (`restarts` counted). Ends after 6 h idle, on
+  RED-STOP.md, or after 2 verdict-less turns. The brief: fast reproducer first; mechanism-only for convergence.
+- `red status` / the status model list the owners. The tests use their own families file (tests/fixtures).
+- Not done: the status page's agents panel does not list owner sessions yet (they show in `claude agents` and in
+  `red status`).
+
+Commit: c51cb40. Laptop-side (the dispatcher and the wrapper run on the laptop): live at once, no pin bump needed for
+it beyond the items 2-5 bump.
