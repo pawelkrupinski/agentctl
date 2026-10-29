@@ -4399,7 +4399,11 @@ def fixer_prompt(u, wt, brief, resume_note=None):
               "unattended, and your final answer is your verdict: run every command in the FOREGROUND (no run_in_background, no waiting for CI). "
               "CI reads (runs, logs, artifacts: `forgejo-gh run view|download`, `agentctl ci-why`) work in your environment, "
               "which carries the Forgejo token: NEVER block on the owner or the vault for them. BLOCKED ON OWNER is only "
-              "for real owner actions (prod, a deploy, an infra push, a secret write). ")
+              "for real owner actions (prod, a deploy, an infra push, a secret write). "
+              "LAND AS YOU GO: land each verified step at once with `~/bin/agentctl land` (a change with a `Fixes-Red:` "
+              "trailer lands while main is red); never sit on unlanded commits. Commits unlanded for "
+              f"{FIXER_UNLANDED_NUDGE // 60} min get a RED-NUDGE.md in your worktree (read it, land, delete it), then an "
+              "escalation to the owner. ")
     if u.get("bin_worktree"):
         common += (f"AGENTCTL CHANGES (~/bin) go ONLY in {u['bin_worktree']} (a worktree of ~/bin, branch off master): "
                    "commit there, `git -C <it> rebase master`, then `git -C ~/bin merge --ff-only <its branch>` once ~/bin "
@@ -4720,6 +4724,63 @@ def previous_fixer_tree(u):
     return {"worktree": wt, "note": note}
 
 
+# LAND AS YOU GO (the owner, 2026-10-29: fixer -7 of #2473 sat on five unlanded commits for hours, and the import that
+# took its lease away left them stranded). The laptop watches every working fixer's worktree: commits not on
+# forgejo/main for FIXER_UNLANDED_NUDGE (by author time: a rebase keeps it) get a RED-NUDGE.md there, which its prompt
+# tells it to act on; still unlanded at FIXER_UNLANDED_ESCALATE, one RED ESCALATE inbox entry. Both clear themselves
+# once the commits are on main (RECOVERED after an escalation).
+FIXER_UNLANDED_NUDGE = 45 * 60
+FIXER_UNLANDED_ESCALATE = 90 * 60
+FIXER_LAND_WATCH_EVERY = 60
+_last_land_watch = [0.0]
+
+
+def fixers_land_watch(now_=None, force=False):
+    t = now_ if now_ is not None else time.time()
+    if not force and t - _last_land_watch[0] < env_num("AGENTCTL_FIXER_LAND_WATCH", FIXER_LAND_WATCH_EVERY):
+        return []
+    _last_land_watch[0] = t
+    out = []
+    for r in fixer_records():
+        wt = r.get("worktree")
+        if not r.get("alive") or not wt or not os.path.isdir(wt):
+            continue
+        sp, nudge = r["path"] + ".land.json", os.path.join(wt, "RED-NUDGE.md")
+        st = read_record(sp) or {}
+        left = unlanded_commits(wt)
+        label = fixer_label(r)
+        if not left:
+            if st:
+                for x in (sp, nudge):
+                    try:
+                        os.unlink(x)
+                    except OSError:
+                        pass
+                if st.get("escalated_at"):
+                    inbox_write("red fixer", f"RECOVERED: {label}: its commits are on main ({wt.replace(HOME, '~')})",
+                                [], [], 0, cwd=wt)
+                out.append(f"{label}: everything landed")
+            continue
+        oldest = min((at for _s, at in left if at), default=t)
+        mins = int((t - oldest) // 60)
+        shas = ", ".join(s_[:10] for s_, _ in left[:8])
+        if t - oldest >= env_num("AGENTCTL_FIXER_UNLANDED_NUDGE", FIXER_UNLANDED_NUDGE) and not st.get("nudged_at"):
+            with open(nudge, "w") as f:
+                f.write(f"LAND NOW (agentctl, {ts()}): {len(left)} commit(s) here are not on forgejo/main, the oldest "
+                        f"{mins} min old ({shas}). Land each verified step with `~/bin/agentctl land` (Fixes-Red lands on "
+                        f"red); if one is not ready, say why in `agentctl red claim {r.get('run')} --note`. Delete this "
+                        "file once they are queued.\n")
+            st["nudged_at"] = t
+            out.append(f"{label}: nudged ({len(left)} commit(s) unlanded for {mins} min)")
+        elif st.get("nudged_at") and not st.get("escalated_at") and \
+                t - oldest >= env_num("AGENTCTL_FIXER_UNLANDED_ESCALATE", FIXER_UNLANDED_ESCALATE):
+            line = (f"RED ESCALATE: {label}: {len(left)} commit(s) unlanded for {mins} min in {wt.replace(HOME, '~')} "
+                    f"({shas}), nudged at {time.strftime('%H:%M', time.localtime(st['nudged_at']))}: land them or stop it")
+            inbox_write("red fixer", line, [line], [], 1, cwd=wt)
+            st["escalated_at"] = t
+            out.append(line)
+        write_json(sp, st)
+    return out
 
 
 def dispatch_log(u, what):
@@ -9573,6 +9634,7 @@ def waiting_run(repo, once=False, service=False):
                                 ("gate summary", lambda: maybe_publish_gate(repo)),
                                 ("red time", lambda: track_red_time(Store(), gate_is_red_now())),
                                 ("red tick", lambda: maybe_red_tick(repo)),
+                                ("fixer landing", lambda: [wlog(d, f"red: {x}") for x in fixers_land_watch()]),
                                 ("recovery", maybe_recovery_tick),
                                 ("upkeep", lambda: [wlog(d, f"upkeep: {x}") for x in maybe_upkeep()]))
             if not (role == "server" and n in LAPTOP_ONLY_STEPS))
@@ -12878,11 +12940,12 @@ def sync_steps(repo, d, o_r):
             ("landed worktrees", lambda: [err(x) for x in close_landed_worktrees()]),
             ("claims", sync_claims),
             ("dispatcher", dispatch),
+            ("fixer landing", lambda: [err(f"red: {x}") for x in fixers_land_watch()]),
             ("network watch", network_watch), ("tunnel probe", tunnel_watch),
             ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep()]))
 
 
-LAPTOP_ONLY_STEPS = ("events", "notifier", "network watch", "tunnel probe", "upkeep")
+LAPTOP_ONLY_STEPS = ("events", "notifier", "network watch", "tunnel probe", "upkeep", "fixer landing")
 
 
 def close_landed_worktrees(store=None):

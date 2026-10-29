@@ -310,7 +310,7 @@ class ServerSideTest(Phase2Base):
         os.environ["AGENTCTL_ROLE"] = "server"
         self.assertEqual(A.host_role(), "server")
         names = [n for n, _ in A.sync_steps(self.repo, self.tmp, "o/r")]
-        self.assertEqual(names, ["outbox", "state mirror", "children", "events", "notifier", "landed worktrees", "claims", "dispatcher",
+        self.assertEqual(names, ["outbox", "state mirror", "children", "events", "notifier", "landed worktrees", "claims", "dispatcher", "fixer landing",
                                  "network watch", "tunnel probe", "upkeep"])
         self.assertTrue(set(A.LAPTOP_ONLY_STEPS) <= set(names))
 
@@ -517,6 +517,42 @@ class FixerContinuityTest(Phase2Base):
         self.assertIsNone(A.previous_fixer_tree({"key": "zz", "workflow": "W", "run": {"number": 1}}))
 
 
+class LandAsYouGoTest(Phase2Base):
+    def test_commits_unlanded_45_min_get_a_nudge_then_an_escalation_and_both_clear_once_landed(self):
+        os.environ.pop("AGENTCTL_REDS_DIR", None)
+        os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp, "laptop")
+        os.environ["AGENTCTL_INBOX_DIR"] = os.path.join(self.tmp, "inbox")
+        self.addCleanup(os.environ.pop, "AGENTCTL_INBOX_DIR", None)
+        clone, wt = git_tree(self.tmp, "movies-wt-red-2473-5")
+        t = time.time()
+        commit(wt, "a step", at=t - 30 * 60)
+        A.write_json(A.reds_dir("2473", "fixer-7.json"), {"workflow": "W", "run": 2473, "worktree": wt, "job": "leg",
+                                                         "pid": os.getpid(), "process_start": A.process_start(os.getpid())})
+        self.assertEqual(A.fixers_land_watch(t, force=True), [])  # 30 min: nothing yet
+        self.assertIn("nudged", A.fixers_land_watch(t + 20 * 60, force=True)[0])
+        self.assertTrue(os.path.exists(os.path.join(wt, "RED-NUDGE.md")))
+        self.assertEqual(A.fixers_land_watch(t + 30 * 60, force=True), [])  # once
+        esc = A.fixers_land_watch(t + 65 * 60, force=True)
+        self.assertTrue(esc[0].startswith("RED ESCALATE: "), esc)
+        self.assertEqual(A.fixers_land_watch(t + 70 * 60, force=True), [])
+        subprocess.run(["git", "-C", clone, "update-ref", "refs/remotes/forgejo/main",
+                        subprocess.run(["git", "-C", wt, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()],
+                       check=True)  # landed
+        self.assertIn("everything landed", A.fixers_land_watch(t + 75 * 60, force=True)[0])
+        self.assertFalse(os.path.exists(os.path.join(wt, "RED-NUDGE.md")))
+        kinds = []
+        for f in os.listdir(os.path.join(self.tmp, "inbox")):
+            if f.endswith(".json"):
+                with open(os.path.join(self.tmp, "inbox", f)) as fh:
+                    kinds.append(A.inbox_kind(json.load(fh)["verdict"]))
+        kinds.sort()
+        self.assertEqual(kinds, ["RECOVERED", "RED_ESCALATE"])
+
+    def test_the_fixer_prompt_says_land_as_you_go(self):
+        p = A.fixer_prompt({"workflow": "Main", "run": {"number": 20, "databaseId": 40}, "job": "j", "kind": "test"},
+                           "/wt", "/brief")
+        self.assertIn("LAND AS YOU GO", p)
+        self.assertIn("RED-NUDGE.md", p)
 
 
 class CurrentStoreTest(Phase2Base):
