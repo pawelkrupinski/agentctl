@@ -9782,7 +9782,7 @@ def tick_batch(repo, d, now_=None):
             batch_move(st, it, "blocked-red")
             return [f"batch {it['id']}: blocked by the red gate"]
         order = batch_order(repo, waiting, reds)
-        batch = [e for e in order if not reds or not must_wait(repo, e["commits"], reds)]
+        batch = drift_serialize(repo, [e for e in order if not reds or not must_wait(repo, e["commits"], reds)])
         if not batch:
             if not waiting:
                 batch_move(st, it, "landed", {"members": []}, text=f"batch {it['id']}: nothing left to land")
@@ -9853,6 +9853,99 @@ def spawn_batch_executor(repo, d, bid):
                          env=detached_env(repo))
 
 
+# THE BATCH TIP'S DRIFT CHECK (G5, convergence-failures-2026-10-29 §4: E4's 13-commit and E9's 24-commit batches masked
+# which identity change broke convergence). A batch holding MORE THAN ONE identity-model commit (IDENTITY_MODEL_GLOBS)
+# runs the drift-only pre-land check -- movies' scripts/identity-drift-ci (a drift-only convergence run on ci-runner's
+# landing tier; `--against main` for a batch landing on a red gate) -- on its tip after its own check passed and before
+# it is pushed. No script at the tip: a logged no-op. NO VERDICT (exit 2): the push goes on (an infra blip never holds
+# a batch). DRIFT RED splits the batch: its identity changes are marked (drift_split) and assembled again one per
+# batch beside the rest, so the non-identity part lands at once and a lone red identity change -- confirmed by a second
+# run -- is rejected with the drift report as its reason.
+IDENTITY_MODEL_GLOBS = ("identity/*", "worker/src/main/*/identity/*", "worker/src/main/identity/*",
+                        "worker/src/test/scala/scripts/IdentityDrift*")
+DRIFT_CI = "scripts/identity-drift-ci"
+DRIFT_STALL = 30 * 60  # the script prints a line per poll (at most every 5 min)
+
+
+def identity_model_commits(repo, commits):
+    """The commits among `commits` that touch the identity model."""
+    out = []
+    for c in commits:
+        r = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", c, check=False)
+        if any(fnmatch.fnmatch(p, g) for p in (r.stdout if r.returncode == 0 else "").splitlines() if p
+               for g in IDENTITY_MODEL_GLOBS):
+            out.append(c)
+    return out
+
+
+def drift_serialize(repo, batch):
+    """After a drift-red batch (an entry marked drift_split waits): at most ONE identity-model change per batch, the
+    first in batch order; the rest of the identity changes wait for the next batch, every other change goes now."""
+    if not any(e.get("drift_split") for e in batch):
+        return batch
+    out, ident = [], False
+    for e in batch:
+        if identity_model_commits(repo, e.get("commits") or []):
+            if ident:
+                continue
+            ident = True
+        out.append(e)
+    return out
+
+
+def batch_drift_check(repo, d, tree, base, tip, against_main=False):
+    """(verdict, output): True clean, False DRIFT RED, None no check (one identity commit or none, no script at the tip,
+    or no verdict)."""
+    commits = waiting_commits(tree, base, tip)
+    n = len(identity_model_commits(tree, commits))
+    if n <= 1:
+        return None, ""
+    if not git_ok(tree, "cat-file", "-e", f"{tip}:{DRIFT_CI}"):
+        wlog(d, f"the batch {tip[:10]} holds {n} identity-model commits; no {DRIFT_CI} at its tip: no drift check")
+        return None, ""
+    git(tree, "checkout", "-q", "--force", "--detach", tip, check=False)
+    argv = [os.path.join(tree, DRIFT_CI), tip] + (["--against", "main"] if against_main else [])
+    wlog(d, f"the batch {tip[:10]} holds {n} identity-model commits: drift check of its tip ({' '.join(argv[1:])})")
+    rc, out = run_watched(argv, tree, tool_env(), os.path.join(d, f"drift-{tip[:10]}"), "drift",
+                          stall=env_num("AGENTCTL_DRIFT_STALL", DRIFT_STALL))
+    with open(os.path.join(d, "checks.log"), "a") as f:
+        f.write(f"=== drift {ts()} {base[:10]}..{tip[:10]} rc {rc}\n{out}\n")
+    last = ([l for l in (out or "").splitlines() if l.strip()] or ["(no output)"])[-1]
+    if rc == 0:
+        wlog(d, f"the drift check of {tip[:10]}: {last[:200]}")
+        return True, out
+    if rc == 1:
+        wlog(d, f"the drift check of {tip[:10]} is RED: {last[:200]}")
+        return False, out
+    wlog(d, f"the drift check of {tip[:10]} gave no verdict (rc {rc}: {last[:200]}): the batch goes on")
+    return None, out
+
+
+def batch_drift_split(repo, d, st, it, members, tree, out):
+    """DRIFT RED on the batch tip: a lone identity change confirmed red is rejected; else every identity change is marked
+    and the batch assembled again, one identity change per batch (drift_serialize)."""
+    ident = [e for e in members if identity_model_commits(tree, e.get("commits") or [])]
+    bid = it["id"]
+    if len(ident) == 1:
+        e = ident[0]
+        ok, out2 = batch_drift_check(repo, d, tree, it["data"]["base"], e["tip"], it["data"].get("cls") == "red")
+        it = st.item("batch", bid)
+        if ok is False:
+            queue_verdict(d, e, "rejected", f"NOT LANDED: the drift check (scripts/identity-drift-ci) is red with your "
+                                            f"identity-model change in the batch, twice (entry {e['id']})"
+                                            f"\n  {tail_of(out2 or out)}", (out2 or out).splitlines()[-25:])
+            batch_move(st, it, "assembling", text=f"batch {bid}: {e['id']} rejected (drift red)", severity="escalate")
+            return 1
+        batch_move(st, it, "pushing", text=f"batch {bid}: its lone identity change's drift check passed when run again")
+        return 0
+    for e in ident:
+        e["drift_split"] = bid
+        save_entry(d, e)
+    batch_move(st, it, "assembling", text=f"batch {bid}: its drift check is red with {len(ident)} identity-model "
+                                          f"changes in it: split, one identity change per batch")
+    return 1
+
+
 def check_batch(repo, bid):
     """THE BATCH EXECUTOR (`waiting check-batch <id>`): holding check/batch-<id> and its tree's slot, it checks the
     assembled tip; pass -> pushing (the tick pushes); fail -> bisecting -> a confirmed culprit rejected and the passing
@@ -9886,7 +9979,12 @@ def check_batch(repo, bid):
                 batch_move(st, it, "held", {"why": "stalled"}, text=text, severity="escalate")
                 return 0
             if ok:
-                batch_move(st, it, "pushing", text=f"batch {bid}: {tip[:10]} passed its check")
+                drift, dout = batch_drift_check(repo, d, tree, base, tip, it["data"].get("cls") == "red")
+                it = st.item("batch", bid)
+                if drift is False:
+                    return batch_drift_split(repo, d, st, it, members, tree, dout)
+                batch_move(st, it, "pushing", text=f"batch {bid}: {tip[:10]} passed its check"
+                                                  + (" and its drift check" if drift else ""))
                 return 0
             if REDGATE.search(out or ""):
                 batch_move(st, it, "assembling", text=f"batch {bid}: the gate went red")
@@ -12231,7 +12329,7 @@ MACHINES = {
     "batch": {
         "blocked-red": StateSpec(6 * H, "blocked-red", ("assembling",), escalate=True),
         "assembling": StateSpec(300, "assembling", ("checking", "held", "landed"), escalate=True),
-        "checking": StateSpec(2 * H, "held", ("pushing", "bisecting", "held")),
+        "checking": StateSpec(2 * H, "held", ("pushing", "bisecting", "assembling", "held")),
         "bisecting": StateSpec(4 * H, "held", ("pushing", "assembling", "held")),
         "pushing": StateSpec(300, "assembling", ("landed", "assembling")),
         "held": StateSpec(30 * M, "assembling", ("assembling",), escalate=True),

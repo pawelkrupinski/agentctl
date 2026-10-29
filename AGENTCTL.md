@@ -639,6 +639,13 @@ The reconciler then takes it, a step per tick:
   push of the tip; every change is LANDED with its own watch. Fail: bisect by prefix, the culprit confirmed before it
   is rejected, the passing prefix landed at once, the rest in the next batch. A stall is retried once, then the batch
   is HELD 30 min (`HELD:` in the inbox). A waiting change that reached main another way meanwhile is LANDED.
+- **The batch tip's drift check (G5, 2026-10-29: E4's 13-commit and E9's 24-commit batches hid which identity change
+  broke convergence).** A batch holding MORE THAN ONE identity-model commit (`identity/**`,
+  `worker/src/main/**/identity/**`, `worker/src/test/scala/scripts/IdentityDrift*`) runs movies'
+  `scripts/identity-drift-ci <tip>` (`--against main` for a fix batch on a red gate) after its check passed and before
+  the push. No script at the tip: a logged no-op. No verdict (exit 2): the push goes on. DRIFT RED splits the batch:
+  its identity changes are marked and assembled again one per batch beside everything else, so the non-identity part
+  lands at once; a lone identity change red on a second run too is rejected with the drift report.
 - **The watch.** A `watch` item per landed sha, evaluated each minute by the tick: **Main** (the main.yml run whose
   head is the sha, else the newest whose head contains it) and the **convergence** (the first convergence run on main
   created after the push whose head contains it; none within 60 min: said, not waited for). `WATCH OK: Main #n green,
