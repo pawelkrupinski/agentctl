@@ -1,7 +1,9 @@
 # Landing reconciler, phase 2: owner runbook
 
-Status: prepared on 2026-10-28 and updated the same day with the owner's answers. Nothing is deployed,
-created or granted yet.
+Status: prepared on 2026-10-28 and updated the same day with the owner's answers. Updated 2026-10-29: the
+agentctl side is implemented and tested (~/bin master, "agentctl phase 2" commits; `tests/test_phase2.py`), and
+the agentctl alerts go to a null receiver (owner: "No Slack integration"). Nothing is deployed, created or
+granted yet.
 Design: `~/bin/docs/landing-reconciler-design.md` (§3, §6.3, §10, §13 phase 2, §15, owner decisions).
 
 ## What is prepared
@@ -25,8 +27,12 @@ ci-runner deploy. Auto-apply may also start the new units on its own.
 - `da5a7e38`: adds `agentctl.rules` and its tests.
 - `60a1bc1b`: imports `agentctl.nix` and adds 3014 to the tunnel's `permitOpen`.
 - `13b78ede`: merges `agentctl-phase2` in.
-- `2c8049ce`: removes the Slack route, so agentctl alerts take the default route. Removes the
-  escalation alert. W1 now excludes the time main was red.
+- `2c8049ce`: removes the Slack route. Removes the escalation alert. W1 now excludes the time main was
+  red.
+- `05be2dee` (2026-10-29): routes every `component="agentctl"` alert to `agentctl-null`, a receiver with
+  no integration, ahead of the env routes (owner: "No Slack integration"). `amtool check-config` and
+  `amtool config routes test component=agentctl` (→ `agentctl-null`) pass, and so does
+  `bin/check-promtool-rules`.
 
 Both rebases were rehearsed in a scratch clone. They apply cleanly and give exactly this tree.
 
@@ -47,9 +53,10 @@ Logs go to the journal, which is shipped to VictoriaLogs. Query them with
 
 ### Alerts and escalations
 
-There is no Slack integration for agentctl. `agentctl.rules` adds no route of its own. Its alerts carry
-ci-runner's labels (`env="global"`), so alertmanager's default route sends them to the same receiver as
-every other ci-runner alert: today that is `slack-infra-alerts`.
+There is no Slack integration for agentctl (owner, 2026-10-29). Every agentctl alert carries
+`component: agentctl`, which alertmanager's first route sends to `agentctl-null`: a receiver with no
+integration. The alerts stay visible in Prometheus (`ALERTS{component="agentctl"}`) and reach no Slack
+channel.
 
 Escalations are delivered by agentctl itself, on the laptop, as an inbox entry plus a macOS
 notification (design §8.2). The laptop watchdog owns W5, W6 and W7.
@@ -129,7 +136,8 @@ preview should start the seven `agentctl-*` units and restart no runner.
 ! cd ~/bitcashier/infra && bin/forgejo-settings
 ```
 
-**7. Deploy monitoring.** This loads `agentctl.rules`. The alerts go through the existing default route.
+**7. Deploy monitoring.** This loads `agentctl.rules` and the `agentctl-null` route: the alerts reach no
+Slack channel.
 
 ```
 ! cd ~/bitcashier/infra && bin/deploy monitoring && bin/deploy monitoring --apply
@@ -181,7 +189,21 @@ Check that Forgejo has no drift left:
 
 Expected: every line starts with `=`.
 
-**Rollback.** Revert the enabling commit and deploy again. The store's database stays in
+**10. Laptop: move onto ci-runner's store.** Until now the laptop keeps its own queue, and ci-runner's
+reconciler ticks an empty one. This stops the laptop's processor, copies its live leases (same epoch and
+secret, so their holders keep renewing them), open reds and conditions and its queued changes into the
+remote store, switches every agentctl process on the laptop to it (`~/.cache/agentctl/store.url`), and
+starts the processor again as the sync. The sync needs the token handed over once, like after any restart.
+
+```
+! launchctl bootout gui/$(id -u)/net.bitcashier.agentctl-waiting; cd ~/projects/movies && AGENTCTL_INTERACTIVE=1 ~/bin/agentctl store import --to http://localhost:3014 && AGENTCTL_INTERACTIVE=1 ~/bin/agentctl store use http://localhost:3014 && ~/bin/agentctl tick service install && sleep 5 && AGENTCTL_INTERACTIVE=1 ~/bin/agentctl land status | head -5
+```
+
+Expected: `store import -> ...: N live lease(s), ...`, `store: http://localhost:3014 ...`, then `land
+status` listing the changes ci-runner now holds. Back to the local store: `~/bin/agentctl store use
+--local` and `launchctl kickstart -k gui/$(id -u)/net.bitcashier.agentctl-waiting`.
+
+**Rollback.** Run step 10's `store use --local` line first. Then revert the enabling commit and deploy again. The store's database stays in
 `/var/lib/agentctl`.
 
 ```
@@ -234,12 +256,32 @@ The header of `agentctl.rules` defines each one.
 | `agentctl_leases_expired_unreaped` | |
 | `agentctl_items_past_deadline` | |
 
-## The laptop after phase 2 (design note; the agentctl code comes later)
+### What the code does (2026-10-29), and where it differs from the design
+
+- `store serve`: the §6.3 routes, plus `POST /v1/store/<method>` for every Store method (RemoteStore's
+  transport) and `GET /v1/leases`. A store error (StaleVersion, TerminalState, LeaseLost) answers 409 and is
+  raised as itself on the laptop. At start every live lease is extended by the store's downtime (§6.2).
+  `POST /v1/reds/{sig}:block` is not a route: `red block` runs on the laptop through the RPC.
+- `tick` (AGENTCTL_HOST=ci-runner): clones `$AGENTCTL_MOVIES_REMOTE` to `$HOME/movies` as remote `forgejo`
+  on its first start, sends `READY=1`, then `WATCHDOG=1` after every bounded step (not only per tick, so a
+  long tick never trips `WatchdogSec`), and ends between ticks on SIGTERM. It never runs the laptop's
+  steps: the inbox projector, the notifier, the network and tunnel watches, the claims' renewal (a claim's
+  activity is in the laptop's worktrees) and the fixer dispatcher. Its checks, and the batch's, run on the
+  CI tier (`precommit-check.yml`, decision 1). A change's commits are fetched from `land/<id>`.
+- `AGENTCTL_FORGEJO_URL` is read for the API (`<url>/api/v1`) when `AGENTCTL_FORGEJO_API` is unset.
+- The laptop: `store import --to URL` (the one-shot move) and `store use URL | --local` (the switch,
+  kept in the state root so agents' own `land` / `red claim` agree). As the sync, `land` pushes
+  `land/<id>` and POSTs the change; with the store down it prints `QUEUED-LOCAL` and the sync sends it
+  from the outbox.
+- Not yet: closing the laptop worktree after WATCH OK when the reconciler is on ci-runner (the worktree is
+  not there; it stays until `cleanup`), and W7 (the sync's cursor lag) in the laptop watchdog.
+
+## The laptop after phase 2 (design note)
 
 | launchd job | After phase 2 |
 |---|---|
 | `net.bitcashier.agentctl-waiting` | **Stays, as the sync.** The label is kept. It submits `land/<entry>`, pulls events into the inbox, and mirrors `/v1/state` into `state.json` every 10 s. It also reports orphans and claim activity, and it is **the escalation notifier**: inbox entry, macOS notification, `:ack`. It never ticks. Decision 7 means no standby and one writer, so the laptop's tick code is deleted. |
-| fixer dispatcher | **Stays**, inside the sync or as its own job. It takes `fixer` offers over `RemoteStore`, spawns `claude -p` fixers, and renews their leases by progress. Fixers stay on the laptop (decision 8). |
+| fixer dispatcher | **Stays**, inside the sync or as its own job. It takes `fixer` offers over `RemoteStore`, starts each fixer as a Claude Code background session (`claude --bg`, listed in `claude agents`), and renews its lease by its transcript and worktree. Fixers stay on the laptop (decision 8). |
 | `net.bitcashier.agentctl-watchdog` | **Stays, with W5, W6 and W7.** W5 is the tick age from the mirrored `state.json`. W6 is escalations left unnotified, read from the event feed. W7 is the sync's cursor lag. It reports `ci-runner unreachable` and `tunnel down` as two different conditions. It no longer kickstarts the processor. |
 | `net.bitcashier.agentctl-maintain` | **Stays** for the reap and the sweep. Its orphan facts go to the sync. |
 | `net.bitcashier.forgejo-tunnel` | **Stays**, plus `LocalForward 3014` (step 8). |
@@ -251,7 +293,7 @@ the laptop: the inbox, `state.json` (now a mirror, with `fetched_at`), and the o
 
 ## Owner decisions on the open questions (2026-10-28)
 
-1. **No Slack integration.** agentctl alerts take the existing default route. Escalations are delivered
+1. **No Slack integration.** agentctl alerts go to the `agentctl-null` receiver (2026-10-29). Escalations are delivered
    by agentctl's own notifications on the laptop.
 2. **The metrics scrape uses its own read-only identity, `ci-metrics`.** ci-lander stays push-only.
 3. **`land/*` is not protected.** ci-lander's write access on movies covers it. Only `main` is

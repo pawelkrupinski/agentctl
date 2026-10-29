@@ -153,6 +153,24 @@ agentctl watchdog                 # one invariant pass (launchd every 60 s)
 ago the tick ran. `lease list` prints holder, epoch, expiry, max hold and the holder's note; leases free for over a day
 are archived into the events by the tick, so the table stays small.
 
+### store: phase 2, the store and the reconciler on ci-runner
+
+```
+agentctl store serve --listen ADDR:PORT --forgejo-url URL --allow-user U... --metrics-user U...   # ci-runner's unit
+agentctl store import --to http://localhost:3014   # the laptop's one-shot move (leases, open reds, its queue)
+agentctl store use http://localhost:3014 | --local # the switch for every agentctl process on this laptop
+agentctl tick                                      # on ci-runner (AGENTCTL_HOST=ci-runner): the reconciler
+```
+
+Prepared, not yet switched on (the owner's steps: `~/bin/docs/phase2-runbook.md`). The store is served over HTTP on
+ci-runner's :3014 (through the tunnel); every request carries the caller's own Forgejo token, checked with Forgejo.
+Each process has a ROLE: `local` (today: the laptop does everything), `server` (`tick` on ci-runner: changes,
+batch, watches, reds, conditions; checks on the CI tier; never the laptop's duties) and `sync` (the laptop once `store
+use` points at ci-runner: `land` submits there, events become inbox entries, escalations notifications, the state is
+mirrored into `state.json`, claims are renewed from the worktrees, and the fixer dispatcher takes the offers -- fixers
+stay on the laptop, in `claude agents`). `Store()` is the remote store in the sync role, so every command works
+unchanged. With the store down `land` prints `QUEUED-LOCAL` and the sync submits it later.
+
 ### wait run: block on CI and print only the verdict
 
 ```

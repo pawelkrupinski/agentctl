@@ -8696,6 +8696,9 @@ def service_plist(repo, log):
     from xml.sax.saxutils import escape
     argv = [sys.executable, os.path.realpath(__file__), "waiting", "run", "--service", "--repo", repo]
     args = "".join(f"\n        <string>{escape(x)}</string>" for x in argv)
+    # phase 2: installed with $AGENTCTL_STORE_URL set, the agent is the laptop's SYNC against ci-runner's store
+    store_env = (f"\n        <key>AGENTCTL_STORE_URL</key>\n        <string>{escape(os.environ['AGENTCTL_STORE_URL'])}</string>"
+                 if os.environ.get("AGENTCTL_STORE_URL") else "")
     path_env = ":".join(SDKMAN_BINS + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"])
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -8719,7 +8722,7 @@ def service_plist(repo, log):
         <key>PATH</key>
         <string>{escape(path_env)}</string>
         <key>HOME</key>
-        <string>{escape(HOME)}</string>
+        <string>{escape(HOME)}</string>{store_env}
     </dict>
     <key>StandardOutPath</key>
     <string>{escape(log)}</string>
@@ -10632,6 +10635,23 @@ class Store:
         finally:
             c.close()
 
+    def import_lease(self, row):
+        """Phase 2's one-shot import: a lease row copied as it is (holder, epoch, secret, expiry), unless the name
+        exists here. True when written."""
+        c = self.db()
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            if self._row(c, row["name"]):
+                c.execute("COMMIT")
+                return False
+            c.execute("INSERT INTO leases VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                      tuple(row.get(k) for k in ("name", "holder", "epoch", "secret", "acquired_at", "renewed_at",
+                                                 "expires_at", "max_until", "progress", "item", "meta")))
+            c.execute("COMMIT")
+            return True
+        finally:
+            c.close()
+
     def list(self, prefix=""):
         c = self.db()
         try:
@@ -10883,18 +10903,32 @@ def cmd_lease(a):
 # mirror, the claims' activity, the fixer dispatcher; it never ticks).
 STORE_RPC = ("acquire", "renew", "note", "release", "revoke", "set_meta", "offer", "offers", "offer_of", "offer_reason",
              "close_offer", "take", "get", "item", "items", "put_item", "transition", "update_item", "mark_notified",
-             "meta_get", "meta_set", "events", "archive_free_leases", "list")
+             "meta_get", "meta_set", "events", "archive_free_leases", "list", "import_lease")
 STORE_AUTH_CACHE = 300   # s a token's login is trusted before Forgejo is asked again (§15)
 EVENTS_WAIT_MAX = 25     # s a GET /v1/events long-poll waits for a new event
 STORE_PORT = 3014
 SYNC_MIRROR_EVERY = 10   # s between the laptop's copies of /v1/state into state.json
 
 
+def store_url():
+    """The remote store this laptop uses: $AGENTCTL_STORE_URL, else the one `agentctl store use URL` wrote (state root's
+    store.url, so every agentctl process -- agents' `land` and `red claim` included -- agrees); None: the local store."""
+    if os.environ.get("AGENTCTL_STORE_URL"):
+        return os.environ["AGENTCTL_STORE_URL"]
+    if os.environ.get("AGENTCTL_ROLE") == "server":
+        return None
+    try:
+        with open(state_root("store.url")) as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
 def host_role():
     r = os.environ.get("AGENTCTL_ROLE")
     if r:
         return r
-    if os.environ.get("AGENTCTL_STORE_URL"):
+    if store_url():
         return "sync"
     return "server" if os.environ.get("AGENTCTL_HOST") == "ci-runner" else "local"
 
@@ -10963,8 +10997,9 @@ for _m in STORE_RPC:
 
 
 def _store_new(cls, path=None, clock=None):
-    if cls is Store and path is None and os.environ.get("AGENTCTL_STORE_URL"):
-        return RemoteStore(os.environ["AGENTCTL_STORE_URL"], clock=clock)
+    url = store_url() if cls is Store and path is None else None
+    if url:
+        return RemoteStore(url, clock=clock)
     return object.__new__(cls)
 
 
@@ -11268,7 +11303,28 @@ def store_server(api, host, port):
 
 
 def cmd_store(a):
-    """`agentctl store serve --listen ADDR:PORT --forgejo-url URL --allow-user U... --metrics-user U...`."""
+    """`agentctl store serve --listen ADDR:PORT --forgejo-url URL --allow-user U... --metrics-user U...`;
+    `agentctl store import --to URL [--repo R]` (the laptop's one-shot move)."""
+    if a.scmd == "use":
+        if a.local:
+            try:
+                os.unlink(state_root("store.url"))
+            except FileNotFoundError:
+                pass
+            print("store: local (state root's store.db); restart the processor: `launchctl kickstart -k "
+                  f"gui/{os.getuid()}/{SERVICE_LABEL}`")
+            return 0
+        RemoteStore(a.url).state()  # it answers, with this token, before anything relies on it
+        os.makedirs(state_root(), exist_ok=True)
+        with open(state_root("store.url"), "w") as f:
+            f.write(a.url + "\n")
+        print(f"store: {a.url} (every agentctl process here); the processor becomes the sync: `launchctl kickstart -k "
+              f"gui/{os.getuid()}/{SERVICE_LABEL}`")
+        return 0
+    if a.scmd == "import":
+        n = store_import(Store(path=state_root("store.db")), RemoteStore(a.to), a.repo or movies_repo_path())
+        print(f"store import -> {a.to}: {n['leases']} live lease(s), {n['items']} open item(s), {n['changes']} change(s)")
+        return 0
     host, _, port = a.listen.rpartition(":")
     st = Store(path=state_root("store.db"))
     gap = store_grace(st)
@@ -11291,6 +11347,30 @@ def cmd_store(a):
         f"{','.join(api.metrics) or '-'})")
     srv.serve_forever()
     return 0
+
+
+def store_import(local, remote, repo):
+    """§13 phase 2 step 3, the laptop's one-shot move onto ci-runner's store: every live lease copied as it is (its
+    holder renews it there with the same epoch and secret), every open red and condition item created there, and every
+    open change of the local queue submitted (its land/<id> ref pushed first). Returns the counts."""
+    n = {"leases": 0, "items": 0, "changes": 0}
+    t = time.time()
+    for row in local.list():
+        if row["holder"] and row["expires_at"] > t and remote.import_lease(row):
+            n["leases"] += 1
+    for typ in ("red", "condition"):
+        for it in local.items(typ):
+            if not machine_state(typ, it["state"]).terminal:
+                remote.put_item(typ, it["id"], it["state"], it.get("data"))
+                n["items"] += 1
+    d = waiting_state(repo)[0]
+    for e in queued_entries(d) + waiting_entries(d):
+        if not e.get("ref") and not submit_ref(repo, d, e, remote=True):
+            err(f"store import: {e['id']}: its land ref could not be pushed; land it again after the move")
+            continue
+        remote.submit({**{k: e.get(k) for k in SUBMIT_FIELDS}, "id": e["id"]})
+        n["changes"] += 1
+    return n
 
 
 def sd_notify(msg):
@@ -12817,6 +12897,14 @@ def main(argv=None):
     sts.add_argument("--forgejo-url", help="Forgejo's base URL: each caller's token is checked with its /api/v1/user")
     sts.add_argument("--allow-user", action="append", help="a login with the whole API (repeatable)")
     sts.add_argument("--metrics-user", action="append", help="a login with GET /metrics only (repeatable)")
+    stu = stos.add_parser("use", help="the laptop's switch: every agentctl process here uses the remote store at URL "
+                                      "(the processor becomes the sync), or --local again")
+    stu.add_argument("url", nargs="?", help="http://localhost:3014 (through the tunnel)")
+    stu.add_argument("--local", action="store_true")
+    sti = stos.add_parser("import", help="phase 2's one-shot move: the local store's live leases, open reds and conditions, "
+                                         "and the queue's open changes, into the remote store")
+    sti.add_argument("--to", required=True, help="the remote store's URL (http://localhost:3014 through the tunnel)")
+    sti.add_argument("--repo", help="the clone whose queue moves (default: the movies clone)")
     tk = sub.add_parser("tick", help="the processor: the reconciler's loop of ticks (`tick service install|uninstall|status`: "
                         "it as the launchd agent)")
     tk.add_argument("tcmd", nargs="?", choices=("service",), help="service: the launchd agent")

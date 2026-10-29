@@ -125,6 +125,18 @@ class RemoteStoreTest(Phase2Base):
         self.assertEqual(s.call("POST", "/v1/leases/land/movies:release",
                                 {"epoch": took["epoch"], "secret": took["secret"]})["result"], "ok")
 
+    def test_store_use_switches_every_process_here_and_local_switches_back(self):
+        os.environ["AGENTCTL_STORE_TOKEN"] = "tok-pawel"
+        self.assertEqual(A.main(["store", "use", self.url]), 0)
+        self.assertIsInstance(A.Store(), A.RemoteStore)
+        self.assertEqual(A.host_role(), "sync")
+        self.assertEqual(A.main(["store", "use", "--local"]), 0)
+        self.assertIsInstance(A.Store(), A.Store)
+        self.assertEqual(A.host_role(), "local")
+        with self.assertRaises(A.StoreUnavailable):  # a store that does not answer is never switched to
+            A.main(["store", "use", "http://127.0.0.1:9"])
+        self.assertIsInstance(A.Store(), A.Store)
+
     def test_events_long_poll_wakes_on_a_new_event_and_acks(self):
         it = self.st.put_item("condition", "c2", "open", {})
         got = []
@@ -245,6 +257,30 @@ class DispatcherRemoteTest(Phase2Base):
         row = self.st.get(A.red_lease("k1"))  # held on ci-runner's store, by the laptop's fixer
         self.assertTrue(row["holder"].startswith("laptop:fixer:red-k1-"))
         self.assertEqual(self.st.offers("fixer"), [])
+
+
+class ImportTest(Phase2Base):
+    def test_the_one_shot_import_moves_live_leases_open_items_and_the_queue(self):
+        local = A.Store(path=os.path.join(self.tmp, "laptop.db"))
+        took = local.acquire("red/k9", "laptop:fixer:red-k9-1", 900, 3600, meta={"kind": "fixer"})
+        gone = local.acquire("red/old", "x", 900, 3600)
+        local.release("red/old", gone["epoch"], gone["secret"])
+        local.put_item("red", "k9", "leased", {"key": "k9"})
+        lrepo = os.path.join(self.tmp, "laptop-movies")
+        subprocess.run(["git", "init", "-q", lrepo], check=True)
+        d = A.waiting_state(lrepo)[0]
+        e, _ = A.queue_change(d, {"worktree": "/w/z", "branch": "z", "head": "e" * 40, "commits": ["e" * 40]})
+        e["ref"] = f"refs/heads/land/{e['id']}"
+        A.save_entry(d, e)
+        n = A.store_import(local, self.remote, lrepo)
+        self.assertEqual(n, {"leases": 1, "items": 1, "changes": 1})
+        row = self.st.get("red/k9")
+        self.assertEqual((row["epoch"], row["secret"]), (took["epoch"], took["secret"]))  # its holder renews it there
+        self.assertEqual(self.remote.renew("red/k9", took["epoch"], took["secret"], "moved", 900), "ok")
+        self.assertIsNone(self.st.get("red/old"))
+        self.assertEqual(self.st.item("red", "k9")["state"], "leased")
+        self.assertEqual([x["id"] for x in A.queued_entries(A.waiting_state(self.repo)[0])], [e["id"]])
+        self.assertEqual(A.store_import(local, self.remote, lrepo)["leases"], 0)  # twice is harmless
 
 
 class TickEntryTest(unittest.TestCase):
