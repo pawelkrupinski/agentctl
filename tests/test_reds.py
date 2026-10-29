@@ -702,7 +702,7 @@ class OldRedTest(RedsBase):
         self.assertIsNotNone(self.st.offer_of(f"red:{it['id']}"))  # the dispatcher takes it
         self.assertEqual(self.unheld(), [])
 
-    def made_callable_only(self, caller_runs):
+    def made_callable_only(self, caller_runs, other_callers=()):
         # "Report run timings" #38 (2026-10-19..29): a `workflow_call.secrets` block Forgejo 15 rejected, fixed that
         # night by 32d1805de, red on main for 10 days: a callable-only workflow never runs on its own to clear it
         self.outside("name: Report run timings\non:\n  schedule:\n    - cron: \"0 3 * * *\"\n")
@@ -715,7 +715,8 @@ class OldRedTest(RedsBase):
         self.r.push()
         runs = json.load(open(os.path.join(self.d, "runs.json")))
         self.put("runs.json", [run(100 + i, 50 + i, "Nightly", "nightly.yml", head if after else self.sha, conclusion=c)
-                               for i, (after, c) in enumerate(caller_runs)] + runs)
+                               for i, (after, c) in enumerate(caller_runs)] +
+                 [run(200 + i, 70 + i, n, f, head, conclusion=c) for i, (n, f, c) in enumerate(other_callers)] + runs)
         for _ in range(4):
             self.tick(advance=60)
         return it
@@ -728,6 +729,16 @@ class OldRedTest(RedsBase):
         self.assertTrue(any("its callers' runs since passed: Nightly #50" in str(e.get("text")) for e in self.st.events()))
         self.assertIsNone(self.st.offer_of(f"red:{it['id']}"))
         self.assertEqual(self.unheld(), [])
+
+    def test_a_callable_only_workflows_red_is_verified_by_a_green_caller_whatever_its_other_callers_do(self):
+        # Report run timings has 36 callers on main and some are red at any hour for their own reasons (2026-10-29:
+        # Archive recording #823, Verify scrape recording #2493): with "none failed", #38 stayed red under f8f51e8
+        self.r.write(".forgejo/workflows/weekly.yml", "name: Weekly\non:\n  schedule:\n    - cron: \"0 2 * * 1\"\n"
+                     "jobs:\n  timings:\n    uses: ./.forgejo/workflows/report-timings.yml\n")
+        it = self.made_callable_only([(True, "success")], other_callers=[("Weekly", "weekly.yml", "failure")])
+        self.assertEqual([(i["id"], i["state"]) for i in self.st.items("red") if i["data"]["workflow"] ==
+                          "Report run timings"], [(it["id"], "verified")])
+        self.assertTrue(any("its callers' runs since passed: Nightly #50" in str(e.get("text")) for e in self.st.events()))
 
     def test_a_callable_only_workflows_red_stays_offered_without_a_passing_caller_run_since_its_change(self):
         # the trigger alone never closes a red (5cf3f69: 811 re-opened retirements); no caller run since: no proof
@@ -1044,6 +1055,26 @@ class AuditTest(RedsBase):
                           ("name: x\non:\n  workflow_call:\n    inputs:\n      lane: {}\npermissions: {}\n", {"workflow_call"}),
                           ("\"on\":\n  - workflow_dispatch\n  - workflow_call\n", {"workflow_dispatch", "workflow_call"})):
             self.assertEqual(A.workflow_triggers(txt), want, txt)
+
+    def test_7_the_servers_own_clone_is_the_scan_repo_where_no_laptop_clone_exists(self):
+        # ci-runner (2026-10-29): HOME is /var/lib/agentctl, so no REPOS path exists; without its own clone
+        # main_workflow_files read nothing and audit #7 listed no workflow outside the newest 200 runs
+        clone = os.path.join(self.tmp.name, "server-movies")
+        subprocess.run(["git", "init", "-q", clone], check=True)
+        subprocess.run(["git", "-C", clone, "remote", "add", "forgejo",
+                        "ssh://forgejo@forgejo.internal:2222/pawelkrupinski/movies.git"], check=True)
+        saved = A.REPOS, os.environ.pop("AGENTCTL_RED_REPO", None), os.environ.get("AGENTCTL_MOVIES_REPO")
+        A.REPOS = [os.path.join(self.tmp.name, "no-such-clone")]
+        os.environ["AGENTCTL_MOVIES_REPO"] = clone
+        try:
+            self.assertEqual(A.scan_repo_for(MOVIES), clone)
+        finally:
+            A.REPOS = saved[0]
+            os.environ["AGENTCTL_RED_REPO"] = saved[1] or self.r.path
+            if saved[2] is None:
+                os.environ.pop("AGENTCTL_MOVIES_REPO", None)
+            else:
+                os.environ["AGENTCTL_MOVIES_REPO"] = saved[2]
 
     def test_8_a_run_stuck_past_three_times_its_p90_is_a_red_until_it_decides(self):
         old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 5 * 3600))

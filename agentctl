@@ -1095,7 +1095,10 @@ RED_CONCLUSIONS = ("failure", "timed_out")
 
 
 def repo_path_for(o_r):
-    for p in REPOS:
+    # ci-runner's reconciler has none of REPOS (HOME is its state root): its own clone is movies' scan repo, or
+    # main_workflow_files reads nothing there -- no workflow outside the newest 200 runs is listed and no callable-only
+    # red is ever proven (2026-10-29: Report run timings #38 stayed offered under f8f51e8)
+    for p in REPOS + [server_repo()]:
         if os.path.isdir(p) and git_ok(p, "remote", "get-url", REMOTE):
             try:
                 if slug(p) == o_r:
@@ -3614,11 +3617,13 @@ def red_close(store, it, to, text):
 
 def red_callable_evidence(d, snap, repo, o_r):
     """For an outside red of a workflow that on main runs only when called (snap's callable_only): the line proving it
-    fixed, else None. Proof is BOTH: its file changed on main since the failing run (the first such commit C), and
-    callers' newest decided runs on main that contain C passed (at least one; none containing C failed) -- a caller
-    run reads the called file, so it passing says Forgejo parses the new file. "Report run timings" #38 (2026-10-19, a
-    `workflow_call.secrets` block Forgejo 15 rejected; 32d1805de fixed it that night) stayed red for 10 days: no run
-    of its own could come to clear it. Never closed on the trigger alone: 5cf3f69's 811 re-opened retirements."""
+    fixed, else None. Proof is BOTH: its file changed on main since the failing run (the first such commit C), and a
+    caller's newest decided run on main that contains C passed -- Forgejo expands the called file into the caller's
+    run, so a green one says Forgejo parses and runs the new file. A red caller vetoes nothing: it fails for reasons of
+    its own (Report run timings has 36 callers, some red at any hour; a "none failed" rule never let #38 clear).
+    "Report run timings" #38 (2026-10-19, a `workflow_call.secrets` block Forgejo 15 rejected; 32d1805de fixed it that
+    night) stayed red for 10 days: no run of its own could come to clear it. Never closed on the trigger alone:
+    5cf3f69's 811 re-opened retirements."""
     if not repo or d.get("red_kind") != "outside" or d.get("workflow") not in ((snap or {}).get("callable_only") or ()):
         return None
     run = d.get("last_run") or {}
@@ -3633,15 +3638,14 @@ def red_callable_evidence(d, snap, repo, o_r):
         return None
     first = changes[-1]
     latest = (snap or {}).get("latest") or {}
-    passed, failed = [], []
-    for name in meta["callers"].get(os.path.basename(path), []):
-        last = latest.get(name) or {}
-        if contains_local(repo, first, last.get("headSha")):
-            (passed if last.get("conclusion") == "success" else failed).append(f"{name} #{last.get('number')}")
-    if not passed or failed:
+    passed = sorted(f"{name} #{last.get('number')}" for name, last in
+                    ((n, latest.get(n) or {}) for n in meta["callers"].get(os.path.basename(path), []))
+                    if last.get("conclusion") == "success" and contains_local(repo, first, last.get("headSha")))
+    if not passed:
         return None
     return (f"{d.get('workflow')} runs only when called: its file changed on main since #{run.get('number')} "
-            f"({first[:10]}), and its callers' runs since passed: {', '.join(sorted(passed))}")
+            f"({first[:10]}), and its callers' runs since passed: {', '.join(passed[:3])}"
+            + (f" and {len(passed) - 3} more" if len(passed) > 3 else ""))
 
 
 def red_settled(store, key, run):
