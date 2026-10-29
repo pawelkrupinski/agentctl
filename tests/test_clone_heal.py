@@ -97,5 +97,140 @@ class AtomicCloneTest(unittest.TestCase):
         self.assertIn("missing", detail)
 
 
+def corrupt(repo):
+    """The incident's clone: main's commit object gone from the store, a stray shallow_* temp file."""
+    sha = A.git(repo, "rev-parse", f"{A.REMOTE}/main").strip()
+    subprocess.run(["git", "-C", repo, "repack", "-q", "-a", "-d"], check=True)  # one pack: then unpack, minus one
+    pack = [f for f in os.listdir(os.path.join(repo, ".git", "objects", "pack")) if f.endswith(".pack")][0]
+    with open(os.path.join(repo, ".git", "objects", "pack", pack), "rb") as f:
+        data = f.read()
+    for f in os.listdir(os.path.join(repo, ".git", "objects", "pack")):
+        os.unlink(os.path.join(repo, ".git", "objects", "pack", f))
+    subprocess.run(["git", "-C", repo, "unpack-objects", "-q"], input=data, check=True)
+    os.unlink(os.path.join(repo, ".git", "objects", sha[:2], sha[2:]))
+    open(os.path.join(repo, ".git", "shallow_Xy12"), "w").close()
+    return sha
+
+
+class HealTest(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.src = make_source(self.root)
+        self.repo = os.path.join(self.root, "var", "movies")
+        self.saved_env = dict(os.environ)
+        os.environ.update(AGENTCTL_MOVIES_REMOTE=self.src, AGENTCTL_MOVIES_REPO=self.repo)
+        A._clone_repair_at.clear()
+        self.store = A.Store(path=os.path.join(self.root, "store.db"))
+        self.saved = A.Store
+        A.Store = lambda *a, **k: self.store
+        A.ensure_server_clone(self.repo)
+
+    def tearDown(self):
+        A.Store = self.saved
+        os.environ.clear()
+        os.environ.update(self.saved_env)
+
+    def conds(self, state="open"):
+        return [it for it in self.store.items("condition", [state]) if it["data"].get("kind") == "CLONE"]
+
+    def test_a_healthy_clone_probes_ok(self):
+        r = A.run_probe("clone_health", {"repo": self.repo})
+        self.assertTrue(r.ok, r.detail)
+
+    def test_a_corrupt_fetch_marks_the_clone_and_the_tick_repairs_it_keeping_one_broken_copy(self):
+        older = f"{self.repo}.broken-20261001-000000"
+        os.makedirs(older)
+        corrupt(self.repo)
+        self.assertFalse(A.run_probe("clone_health", {"repo": self.repo}).ok)
+        real_git = A.git
+
+        def failing_fetch(repo, *args, **k):  # what ci-runner's fetch said, all day
+            if args[:1] == ("fetch",) and repo == self.repo:
+                return A.subprocess.CompletedProcess(args, 128, "", "error: Could not read 409b8bb3c1\nfatal: remote "
+                                                     "did not send all necessary objects")
+            return real_git(repo, *args, **k)
+        A.git = failing_fetch
+        try:
+            ok, why = A.fetch_main(self.repo)
+        finally:
+            A.git = real_git
+        self.assertFalse(ok)
+        self.assertIn("did not send all necessary objects", why)
+        self.assertTrue(os.path.exists(A.clone_side(self.repo, "suspect.json")))
+        line = A.clone_heal_tick(self.repo)
+        self.assertIn("re-cloned and swapped in", line)
+        self.assertTrue(A.clone_verify(self.repo)[0])
+        self.assertTrue(A.run_probe("clone_health", {"repo": self.repo}).ok)
+        broken = [p for p in os.listdir(os.path.dirname(self.repo)) if p.startswith("movies.broken-")]
+        self.assertEqual(len(broken), 1)  # the older one went after the swap
+        self.assertNotEqual(os.path.join(os.path.dirname(self.repo), broken[0]), older)
+        self.assertFalse(os.path.exists(A.clone_side(self.repo, "suspect.json")))
+        self.assertEqual(self.conds("open"), [])  # opened with the error, closed by the same probe
+        closed = self.conds("closed")
+        self.assertEqual(len(closed), 1)
+        self.assertIn("CLONE BROKEN", closed[0]["data"]["text"])
+        self.assertEqual(A.clone_tmp_dirs(self.repo), [])
+
+    def test_a_fetch_failing_on_the_network_marks_nothing_and_repairs_nothing(self):
+        A.git(self.repo, "remote", "set-url", A.REMOTE, os.path.join(self.root, "gone"))
+        ok, why = A.fetch_main(self.repo)
+        self.assertFalse(ok)
+        self.assertFalse(os.path.exists(A.clone_side(self.repo, "suspect.json")))
+        self.assertIsNone(A.run_probe("clone_health", {"repo": self.repo}).ok)  # cannot tell: never a repair
+
+    def test_a_suspect_mark_on_a_healthy_clone_just_goes(self):
+        A.write_json(A.clone_side(self.repo, "suspect.json"), {"at": 1, "error": "Could not read 409b8bb3c1"})
+        self.assertIn("is fine", A.clone_heal_tick(self.repo))
+        self.assertFalse(os.path.exists(A.clone_side(self.repo, "suspect.json")))
+        self.assertFalse([p for p in os.listdir(os.path.dirname(self.repo)) if ".broken-" in p])
+
+    def test_at_startup_a_clone_that_does_not_verify_is_repaired(self):
+        corrupt(self.repo)
+        A.ensure_server_clone(self.repo)
+        self.assertTrue(A.clone_verify(self.repo)[0])
+        self.assertEqual(len([p for p in os.listdir(os.path.dirname(self.repo)) if ".broken-" in p]), 1)
+
+    def test_the_check_trees_are_relinked_and_keep_their_build(self):
+        tree = f"{self.repo}-wt-check-1"
+        A.git(self.repo, "worktree", "add", "-q", "--detach", tree, f"{A.REMOTE}/main")
+        os.makedirs(os.path.join(tree, "target"))
+        open(os.path.join(tree, "target", "warm"), "w").close()
+        corrupt(self.repo)
+        A.repair_clone(self.repo, "a test")
+        self.assertEqual(A.git(tree, "rev-parse", "HEAD").strip(), A.git(self.repo, "rev-parse", f"{A.REMOTE}/main").strip())
+        A.git(tree, "reset", "-q", "--hard")
+        self.assertTrue(os.path.exists(os.path.join(tree, "target", "warm")))
+        listed = [os.path.realpath(l.split()[0]) for l in A.git(self.repo, "worktree", "list").splitlines()]
+        self.assertIn(os.path.realpath(tree), listed)
+
+    def test_the_swap_waits_for_the_clones_users_and_gives_up_in_bounds(self):
+        import threading
+        corrupt(self.repo)
+        held, release = threading.Event(), threading.Event()
+
+        def user():
+            with A.clone_shared(self.repo):
+                held.set()
+                release.wait(30)
+        t = threading.Thread(target=user)
+        t.start()
+        held.wait(10)
+        os.environ["AGENTCTL_CLONE_LOCK_WAIT"] = "0.5"
+        self.assertIsNone(A.repair_clone(self.repo, "a test"))  # the user never let go: no swap, next tick
+        self.assertFalse(A.clone_verify(self.repo)[0])
+        self.assertEqual(A.clone_tmp_dirs(self.repo), [])
+        os.environ["AGENTCTL_CLONE_LOCK_WAIT"] = "30"
+        threading.Timer(1.0, release.set).start()
+        line = A.repair_clone(self.repo, "a test")  # waits for the user, then swaps
+        t.join(10)
+        self.assertIn("swapped in", line)
+        self.assertTrue(A.clone_verify(self.repo)[0])
+
+    def test_a_persons_checkout_is_never_healed(self):
+        os.environ.pop("AGENTCTL_MOVIES_REMOTE")
+        self.assertFalse(A.heal_enabled(self.repo))
+        self.assertFalse(A.note_clone_suspect(self.repo, "Could not read 409b8bb3c1"))
+
+
 if __name__ == "__main__":
     unittest.main()

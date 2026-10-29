@@ -8053,7 +8053,8 @@ def check_entry(repo, eid):
             return 0
         i, slot_h = slot
         try:
-            return _check_entry(repo, d, e, i, own)
+            with clone_shared(repo):  # a clone swap (repair_clone) waits for the check
+                return _check_entry(repo, d, e, i, own)
         finally:
             slot_h.release()
     finally:
@@ -8066,7 +8067,7 @@ def _check_entry(repo, d, e, i, own=None):
     log_path = os.path.join(d, f"check-{e['id']}")
     if e.get("status") != "checking":
         set_change(d, e, "checking", event={"text": f"{e['id']}: checking"}, since=ts())
-    git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
+    _fetched, _ferr = fetch_main(repo)  # a corruption signature marks the clone for repair (clone_heal_tick)
     if not git_ok(repo, "rev-parse", "--verify", "-q", f"{REMOTE}/main"):
         return 0 if requeue_infra(d, e, "its fetch of main failed") else 1
     base = git(repo, "rev-parse", f"{REMOTE}/main").strip()
@@ -8137,7 +8138,7 @@ def push_change(repo, d, e):
         now_ = read_record(os.path.join(d, "entries", f"{e['id']}.json")) or {}
         if now_.get("status") != "checked":  # superseded / cancelled since its checks: no push
             return now_.get("status")
-        git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
+        fetch_main(repo)  # a corrupt clone is marked for repair; a failed fetch pushes onto the last known main
         moved = git(repo, "rev-parse", f"{REMOTE}/main").strip()
         base, head, where, skip = e["checked_base"], e["tip"], e.get("checked_where") or "", None
         if moved != base:
@@ -9279,12 +9280,19 @@ def waiting_run(repo, once=False, service=False):
         role = host_role()
         if service and role != "server":
             status_page_start()  # the read-only status page, a daemon thread (see "the status page"); never fatal
+        def shared(fn):  # a step that uses the clone holds it shared: a repair's swap waits for it
+            def run():
+                with clone_shared(repo):
+                    return fn()
+            return run
         steps = sync_steps(repo, d, o_r) if role == "sync" else tuple(
-            (n, f) for n, f in (("change items", lambda: project_changes(d)),
-                                ("change tick", lambda: [wlog(d, f"tick: {x}") for x in tick_changes(repo, d)]),
-                                ("batch tick", lambda: [wlog(d, f"tick: {x}") for x in tick_batch(repo, d)]),
+            (n, f) for n, f in (("clone health", lambda: [wlog(d, f"tick: {x}") for x in [clone_heal_tick(repo)] if x]
+                                 if heal_enabled(repo) else None),
+                                ("change items", lambda: project_changes(d)),
+                                ("change tick", shared(lambda: [wlog(d, f"tick: {x}") for x in tick_changes(repo, d)])),
+                                ("batch tick", shared(lambda: [wlog(d, f"tick: {x}") for x in tick_batch(repo, d)])),
                                 ("watches", lambda: [wlog(d, f"tick: {x}") for x in tick_watches()]),
-                                ("land refs", lambda: [wlog(d, f"tick: {x}") for x in sweep_land_refs(repo, d)]),
+                                ("land refs", shared(lambda: [wlog(d, f"tick: {x}") for x in sweep_land_refs(repo, d)])),
                                 ("lease archive", lambda: maybe_archive_leases(d)),
                                 ("children", reap_children),
                                 ("events", project_events), ("notifier", notify_escalations),
@@ -11806,7 +11814,254 @@ def ensure_server_clone(repo=None):
         elif os.path.lexists(repo):  # something that is no clone: kept aside, never overwritten
             os.rename(repo, f"{repo}.broken-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}")
         os.rename(tmp, repo)
+    elif heal_enabled(repo):  # at startup: a clone that does not verify is repaired before the first tick
+        ok, detail = clone_verify(repo)
+        if not ok:
+            repair_clone(repo, f"at startup the clone did not verify: {detail}")
     return repo
+
+
+# THE CLONE HEALS ITSELF (2026-10-29: `git fetch --refetch` could not repair the half clone either: "shallow roots
+# are not allowed to be updated"). A fetch of main failing with a corruption signature marks the clone suspect; the
+# processor's "clone health" step re-probes it (clone_health: verified, and a fetch of main works) and, when it is
+# broken, clones afresh into a temp directory and swaps it in under the clone lock (exclusive: every step and checker
+# that uses the clone holds it shared). The broken copy is kept as <repo>.broken-<ts> (the newest one only, older ones
+# deleted after a successful swap); the check and waiting worktrees are re-linked to the new clone. A CLONE condition
+# says so, and the same probe, passing, closes it. Only the server's own clone ($AGENTCTL_MOVIES_REMOTE set): never a
+# person's checkout.
+CORRUPT_GIT = re.compile(r"did not send all necessary objects|Could not read [0-9a-f]{7,}|missing (blob|tree|commit|tag) "
+                         r"object|is missing|failed to traverse parents|shallow roots are not allowed|bad object|"
+                         r"bad tree object|unable to read [0-9a-f]{7,}|is corrupt|object file .* is empty|"
+                         r"inflate: data stream error|invalid object|unable to parse object", re.I)
+CLONE_REPAIR_RETRY = 15 * 60  # a repair that failed is tried again after this
+CLONE_LOCK_WAIT = 300         # the swap waits this long for the clone's users to finish, then tries again next tick
+_clone_lock_depth = threading.local()
+_clone_repairing = threading.Lock()
+_clone_repair_at = {}
+
+
+def heal_enabled(repo):
+    return bool(os.environ.get("AGENTCTL_MOVIES_REMOTE")) and \
+        os.path.realpath(repo) == os.path.realpath(server_repo())
+
+
+def clone_side(repo, what):
+    parent, base = os.path.split(os.path.abspath(repo))
+    return os.path.join(parent, f".{base}.{what}")
+
+
+@contextlib.contextmanager
+def clone_shared(repo):
+    """Use the clone: shared under its lock (the swap takes it exclusive). A no-op where it never heals, and nested."""
+    depth = getattr(_clone_lock_depth, "n", 0)
+    if depth or not heal_enabled(repo):
+        _clone_lock_depth.n = depth + 1
+        try:
+            yield
+        finally:
+            _clone_lock_depth.n = depth
+        return
+    os.makedirs(os.path.dirname(clone_side(repo, "x")), exist_ok=True)
+    with open(clone_side(repo, "clone-gate.lock"), "a+") as gate, open(clone_side(repo, "clone.lock"), "a+") as lk:
+        fcntl.flock(gate, fcntl.LOCK_EX)  # a swap waiting for the lock holds the gate: no new user starves it
+        try:
+            fcntl.flock(lk, fcntl.LOCK_SH)
+        finally:
+            fcntl.flock(gate, fcntl.LOCK_UN)
+        _clone_lock_depth.n = 1
+        try:
+            yield
+        finally:
+            _clone_lock_depth.n = 0
+            fcntl.flock(lk, fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def clone_exclusive(repo, wait=None):
+    """The swap's hold: the gate (no new user), then the lock once every user let go. Yields False after wait s."""
+    wait = env_num("AGENTCTL_CLONE_LOCK_WAIT", CLONE_LOCK_WAIT) if wait is None else wait
+    os.makedirs(os.path.dirname(clone_side(repo, "x")), exist_ok=True)
+    with open(clone_side(repo, "clone-gate.lock"), "a+") as gate, open(clone_side(repo, "clone.lock"), "a+") as lk:
+        fcntl.flock(gate, fcntl.LOCK_EX)
+        try:
+            deadline = time.monotonic() + wait
+            while True:
+                try:
+                    fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        yield False
+                        return
+                    time.sleep(0.2)
+            try:
+                yield True
+            finally:
+                fcntl.flock(lk, fcntl.LOCK_UN)
+        finally:
+            fcntl.flock(gate, fcntl.LOCK_UN)
+
+
+def note_clone_suspect(repo, error):
+    """A git error on the clone that looks like corruption: the clone health step looks at it next tick."""
+    if heal_enabled(repo) and CORRUPT_GIT.search(error or ""):
+        write_json(clone_side(repo, "suspect.json"), {"at": time.time(), "error": (error or "").strip()[-2000:]})
+        return True
+    return False
+
+
+def fetch_main(repo):
+    """git fetch REMOTE main in repo: (ok, git's stderr). A corruption signature marks the clone suspect."""
+    r = git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
+    out = (r.stderr or "").strip()
+    if r.returncode == 0 and git_ok(repo, "rev-parse", "--verify", "-q", f"{REMOTE}/main"):
+        return True, out
+    if not out:
+        out = f"exit {r.returncode}" + ("" if r.returncode else f"; {REMOTE}/main does not resolve")
+    note_clone_suspect(repo, out)
+    return False, out
+
+
+def probe_clone_health(a):
+    """The clone verifies and a fetch of main works. A fetch failing without a corruption signature (the network,
+    Forgejo) cannot tell (None)."""
+    repo = a.get("repo") or server_repo()
+    with clone_shared(repo):
+        if not os.path.isdir(os.path.join(repo, ".git")):
+            return False, f"no clone at {repo}"
+        ok, detail = clone_verify(repo)
+        if not ok:
+            return False, detail
+        r = git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
+        err_ = (r.stderr or "").strip()
+        if r.returncode != 0:
+            return (False if CORRUPT_GIT.search(err_) else None), f"git fetch {REMOTE} main: {err_[-240:]}"
+        ok, detail = clone_verify(repo)
+        return ok, ("fetched and verified: " if ok else "") + detail
+
+
+def relink_worktrees(repo, broken):
+    """The broken clone's worktrees (the check and waiting trees) as worktrees of the new clone: their admin dirs made
+    anew (the same paths: the clone's path did not change), HEAD on their branch when the new clone has it (carried
+    over from the broken copy where readable), else detached at main, and their index rebuilt. Returns their paths."""
+    out = []
+    main_sha = git(repo, "rev-parse", f"{REMOTE}/main").strip()
+    for b in git(broken, "for-each-ref", "--format=%(refname:short)", "refs/heads/", check=False).stdout.split():
+        if b != "main":
+            git(repo, "fetch", "--quiet", "--no-tags", broken, f"+refs/heads/{b}:refs/heads/{b}", check=False)
+    admin_root = os.path.join(broken, ".git", "worktrees")
+    for name in sorted(os.listdir(admin_root)) if os.path.isdir(admin_root) else []:
+        old = os.path.join(admin_root, name)
+        try:
+            with open(os.path.join(old, "gitdir")) as f:
+                gitfile = f.read().strip()
+            with open(os.path.join(old, "HEAD")) as f:
+                head = f.read().strip()
+        except OSError:
+            continue
+        tree = os.path.dirname(gitfile)
+        if not os.path.isfile(gitfile):
+            continue
+        new = os.path.join(repo, ".git", "worktrees", name)
+        os.makedirs(new, exist_ok=True)
+        with open(os.path.join(new, "gitdir"), "w") as f:
+            f.write(gitfile + "\n")
+        with open(os.path.join(new, "commondir"), "w") as f:
+            f.write("../..\n")
+        ref = head[5:].strip() if head.startswith("ref: ") else None
+        with open(os.path.join(new, "HEAD"), "w") as f:
+            f.write((f"ref: {ref}" if ref and git_ok(repo, "rev-parse", "--verify", "-q", ref) else main_sha) + "\n")
+        with open(gitfile, "w") as f:
+            f.write(f"gitdir: {new}\n")
+        git(tree, "reset", "-q", check=False)  # the index from the new HEAD; the tree's files (its build) stay
+        out.append(tree)
+    return out
+
+
+def prune_broken(repo, keep):
+    """Every <repo>.broken-* but keep (at most one broken copy is kept)."""
+    import shutil
+    gone = []
+    for p in glob.glob(f"{glob.escape(os.path.abspath(repo))}.broken-*"):
+        if os.path.realpath(p) != os.path.realpath(keep):
+            shutil.rmtree(p, ignore_errors=True)
+            gone.append(p)
+    return gone
+
+
+def clone_condition(repo, text, probe, tail=()):
+    return open_condition("CLONE", text, probe, [], key=f"clone-{os.path.basename(os.path.abspath(repo))}",
+                          command="tick", tail=list(tail))
+
+
+def repair_clone(repo, why):
+    """Clone afresh into a temp directory, swap it in under the clone lock, keep the broken copy (one only), re-link the
+    worktrees. Opens the CLONE condition (with git's error) first; its probe, passing after the swap, closes it.
+    Returns what it did, or None when another repair runs or the users never let go (tried again next tick)."""
+    import shutil
+    if not _clone_repairing.acquire(blocking=False):
+        return None
+    try:
+        _clone_repair_at[os.path.realpath(repo)] = time.time()
+        url = os.environ.get("AGENTCTL_MOVIES_REMOTE")
+        if not url:
+            raise SystemExit(f"agentctl: cannot repair {repo}: no $AGENTCTL_MOVIES_REMOTE")
+        try:
+            clone_condition(repo, f"CLONE BROKEN: {repo}: {why.splitlines()[0][:300]}; re-cloning it from {url}",
+                            run_probe("clone_health", {"repo": repo}), tail=why.splitlines()[-15:])
+        except (Exception, SystemExit) as e:
+            err(f"clone repair: the CLONE condition could not be opened ({str(e)[:160]})")
+        err(f"clone repair: {repo} is broken ({why.splitlines()[0][:200]}): cloning {url} afresh")
+        tmp = clone_into_tmp(repo, url)
+        broken = f"{repo}.broken-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        with clone_exclusive(repo) as held:
+            if not held:
+                shutil.rmtree(tmp, ignore_errors=True)
+                err(f"clone repair: {repo} stayed in use for "
+                    f"{env_num('AGENTCTL_CLONE_LOCK_WAIT', CLONE_LOCK_WAIT):.0f} s; tried again next tick")
+                _clone_repair_at.pop(os.path.realpath(repo), None)
+                return None
+            os.rename(repo, broken)
+            os.rename(tmp, repo)
+            try:
+                trees = relink_worktrees(repo, broken)
+            except (Exception, SystemExit) as e:
+                trees = []
+                err(f"clone repair: re-linking the worktrees failed ({str(e)[:160]}); check_tree makes them again")
+        gone = prune_broken(repo, broken)
+        try:
+            os.unlink(clone_side(repo, "suspect.json"))
+        except OSError:
+            pass
+        line = (f"clone repair: {repo} re-cloned and swapped in; the broken copy is {broken}"
+                + (f"; {len(trees)} worktree(s) re-linked" if trees else "")
+                + (f"; removed {', '.join(os.path.basename(g) for g in gone)}" if gone else ""))
+        err(line)
+        recovery_recheck("clone_health")
+        return line
+    finally:
+        _clone_repairing.release()
+
+
+def clone_heal_tick(repo):
+    """The processor's "clone health" step: a suspect clone (a fetch failed with a corruption signature) is probed;
+    broken, it is repaired (at most every CLONE_REPAIR_RETRY); healthy, the mark goes (it was something else)."""
+    sus = read_record(clone_side(repo, "suspect.json"))
+    if not sus:
+        return None
+    if time.time() - _clone_repair_at.get(os.path.realpath(repo), 0) < env_num("AGENTCTL_CLONE_REPAIR_RETRY",
+                                                                               CLONE_REPAIR_RETRY):
+        return None
+    r = run_probe("clone_health", {"repo": repo})
+    if r.ok:
+        try:
+            os.unlink(clone_side(repo, "suspect.json"))
+        except OSError:
+            pass
+        return f"clone health: {repo} is fine ({r.detail})"
+    if r.ok is None:
+        return None  # cannot tell now (the network): looked at again next tick
+    return repair_clone(repo, f"{r.detail}\n{sus.get('error') or ''}".strip())
 
 
 def queue_change(d, fields, entry_id=None):
@@ -13351,9 +13606,10 @@ def probe_waiting_ok(a):
 PROBES = {"disk_free": lambda a: probe_disk_free(a), "quota_reset": lambda a: probe_quota_reset(a), "invariant": probe_invariant, "waiting_ok": probe_waiting_ok, "orphan_landed": probe_orphan_landed, "batch_hold": probe_batch_hold, "workflow_green": probe_workflow_green, "http": probe_http, "tcp": probe_tcp,
           "route": probe_route, "tunnel": probe_tunnel, "gate_read": probe_gate_read, "token": probe_token,
           "processor": probe_processor, "git_fetch": probe_git_fetch, "laptop_load": probe_laptop_load,
-          "queue_entry": probe_queue_entry}
+          "queue_entry": probe_queue_entry, "clone_health": probe_clone_health}
 PROBE_EVERY = {"disk_free": 300, "quota_reset": 300, "invariant": 60, "waiting_ok": 30, "owner_block": 60, "orphan_landed": 300, "batch_hold": 60, "route": 5, "tunnel": 10, "gate_read": 15, "processor": 30, "queue_entry": 60,
-               "workflow_green": 60, "token": 60, "laptop_load": 60, "tcp": 60, "http": 120, "git_fetch": 120}
+               "workflow_green": 60, "token": 60, "laptop_load": 60, "tcp": 60, "http": 120, "git_fetch": 120,
+               "clone_health": 120}
 
 
 def probe_words(kind, a):
@@ -13368,7 +13624,8 @@ def probe_words(kind, a):
             "laptop_load": lambda: "the laptop's load is normal", "batch_hold": lambda: "the batch hold ends",
             "invariant": lambda: f"invariant {a.get('id')} holds", "waiting_ok": lambda: "a waiting round completes",
             "orphan_landed": lambda: "its commits are on main or somebody works in it",
-            "queue_entry": lambda: f"queue entry {a.get('eid')} moves"}.get(kind, lambda: kind)()
+            "queue_entry": lambda: f"queue entry {a.get('eid')} moves",
+            "clone_health": lambda: f"{a.get('repo')} verifies and fetches {REMOTE}/main"}.get(kind, lambda: kind)()
 
 
 def run_probe(kind, args=None):
