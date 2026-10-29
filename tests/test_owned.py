@@ -120,6 +120,7 @@ class OwnedTest(unittest.TestCase):
     def test_restarts_on_the_new_code_when_agentctl_changes_on_disk(self):
         tool = os.path.join(self.tmp.name, "agentctl")
         shutil.copy(TOOL, tool)
+        shutil.copytree(os.path.join(os.path.dirname(TOOL), "lib"), os.path.join(self.tmp.name, "lib"))  # its package
         target = os.path.join(self.tmp.name, "target")
         p = subprocess.Popen([sys.executable, tool, "wait", "file", target, "--interval", "1", "--timeout", "60"],
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=dict(os.environ))

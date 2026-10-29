@@ -1,0 +1,282 @@
+# agentctl, part `cli`: the command line (main: the parser and the handlers' table).
+# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+
+# ---------------------------------------------------------------- main
+def main(argv=None):
+    if (sys.argv[1:] if argv is None else argv) == ["--selftest"]:
+        return selftest()
+    ap = argparse.ArgumentParser(prog="agentctl", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    w = sub.add_parser("wait")
+    wsub = w.add_subparsers(dest="kind", required=True)
+    wr = wsub.add_parser("run", help="block until Forgejo runs finish; print only the verdicts",
+                         description=WAIT_RUN_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    wr.add_argument("ids", nargs="+", metavar="ID", help="run ids (action_run.id); a leading repo name is accepted (legacy form)")
+    wr.add_argument("--repo", "-R", help="o/r or short name (movies, core, infra, ...); default: the cwd's forgejo remote, else movies")
+    wr.add_argument("--until", choices=("done", "landable"), default="done",
+                    help="landable: for an Identity model convergence measure/ run, stop once the takes rows end and print their verdict files")
+    wr.add_argument("--tail", type=int, default=8, metavar="N", help="relevant log lines (FAILED/error/assert) per failed job (default 8; 0 = none)")
+    wf = wsub.add_parser("file", help="block until a file appears (and matches)")
+    wf.add_argument("target")
+    wf.add_argument("--contains")
+    for p in (wr, wf):
+        p.add_argument("--interval", type=int, default=300, help="backoff cap in seconds (<= 300)")
+        p.add_argument("--timeout", type=int, default=6 * 3600)
+    s = sub.add_parser("state", help="print/update scratchpad/state-<topic>.md (the hand-off file for long waits)",
+                       description="Print scratchpad/state-<topic>.md, creating it from the template first. --set field=value "
+                       "replaces a field, --add field=value appends to a comma-separated one. Write it before ending a turn "
+                       "that waits >30 min on CI. Reference: ~/bin/AGENTCTL.md")
+    s.add_argument("topic")
+    s.add_argument("--set", action="append")
+    s.add_argument("--add", action="append")
+    pp = sub.add_parser("prepush-check", help="refuse a push that strays outside --allow or reverts others' work on main",
+                        description="Refuses when base...head touches a file outside the allowed set, or returns more than "
+                        "--max-foreign (2) files to an older main version (the `reset --soft` squash onto a moved main). "
+                        "movies' pre-push hook calls it with --hook; `agentctl land` runs it before every push. Exit 1 refused.")
+    pp.add_argument("--base", default=f"{REMOTE}/main")
+    pp.add_argument("--head", default="HEAD")
+    pp.add_argument("--allow", action="append")
+    pp.add_argument("--max-foreign", type=int)
+    pp.add_argument("--hook", nargs="+", metavar="REMOTE [URL]")
+    c = sub.add_parser("cleanup", help="remove ONLY proven-merged worktrees/branches and finished measure/* branches",
+                       description="Removes only clean, idle worktrees whose HEAD is on forgejo/main (ancestor or all commits "
+                       "patch-equivalent), their branches, and remote measure/* branches whose runs finished. Every deletion "
+                       "is logged to scratchpad/agentctl-deleted.log. Dry run by default on a TTY; --execute acts.")
+    g = c.add_mutually_exclusive_group()
+    g.add_argument("--dry-run", action="store_true")
+    g.add_argument("--execute", action="store_true", help="act even when stdin is a TTY")
+    c.add_argument("--repo", action="append")
+    c.add_argument("--no-fetch", action="store_true")
+    c.add_argument("--no-remote", action="store_true", help="skip remote measure/* branches")
+    c.add_argument("--min-age-hours", type=float, default=2.0)
+    c.add_argument("--include-caches", action="store_true", help="also consider worktrees under ~/.cache")
+    c.add_argument("-v", "--verbose", action="store_true", help="also list what is kept and why")
+    cw = sub.add_parser("ci-why", help="why is main red: the gating runs' failed jobs, log tails, infra vs test, clearing rule",
+                        description=CI_WHY_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    cw.add_argument("target", nargs="?", default="main", help="`main` (default) or a run id to explain")
+    cw.add_argument("--repo", "-R")
+    cw.add_argument("--tail", type=int, default=6, metavar="N", help="relevant log lines per failed job")
+    cw.add_argument("--summary", action="store_true", help="one line for the status line: each gate row, and who is fixing a red one")
+    cw.add_argument("--cached", action="store_true", help="with --summary: the line the waiting processor published if under 3 min old, else a live read, else `gate UNREAD (as of HH:MM ...)`")
+    ld = sub.add_parser("land", help="fetch, rebase onto forgejo/main, prepush-check, push (hook runs), verify: LANDED <sha>",
+                        description=LAND_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ld.add_argument("lcmd", nargs="?", choices=sorted(LAND_SUBCOMMANDS), metavar="status|hold|release|cancel",
+                    help="the queue instead of a land: status (the changes, the batch, the gate), hold / release (take "
+                         "no batch until release), cancel <id>")
+    ld.add_argument("entry", nargs="?", help="cancel: the change's id (a unique part of it)")
+    ld.add_argument("--repo", help="checkout to land from (default: cwd)")
+    ld.add_argument("--branch", help="local branch to land (default: the checked-out HEAD)")
+    ld.add_argument("--stash", action="store_true", help="set uncommitted changes aside in a NAMED stash and restore them after")
+    ld.add_argument("--no-watch", action="store_true", help="exit at LANDED instead of watching Main and the convergence")
+    ld.add_argument("--follow", action="store_true",
+                    help="movies: run the checks here and stay until it lands, then watch (default: QUEUED at once; "
+                         "the checks run in the waiting processor and every verdict goes to `agentctl inbox`)")
+    ld.add_argument("--keep-worktree", action="store_true",
+                    help="after WATCH OK, keep the worktree land ran from (default: closed when proven merged and clean)")
+    ev = sub.add_parser("env", help="print sdkman sbt/java export lines (--print) or check the agent environment (--check)",
+                        description=ENV_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    eg = ev.add_mutually_exclusive_group()
+    eg.add_argument("--print", action="store_true", help="export lines for eval (default)")
+    eg.add_argument("--check", action="store_true", help="check sbt, java, the vault, the tunnel and the Forgejo token")
+    ev.add_argument("--ns", choices=("movies", "bitcashier"), help="vault namespace (default: movies inside ~/projects/movies, else bitcashier)")
+    dq = sub.add_parser("db-q", help="read-only query of the Forgejo DB (SELECT/WITH/PRAGMA only)",
+                        description=DBQ_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    dq.add_argument("sql")
+    dq.add_argument("--env", choices=sorted(DB_ENVS), default="forgejo")
+    dq.add_argument("--max-rows", type=int, default=200)
+    o = sub.add_parser("orphans", help="list stray owners, wait loops and sbt servers (worktree, owner or runs gone; old code)",
+                       description="Lists owner records that are strays (a dead process's record and its uncancelled runs, "
+                       "an owner on old code, an owner whose cwd is gone), and wait loops and sbt servers that are orphaned: "
+                       "worktree gone, owning shell dead, every target run finished, or a duplicate of an older loop on "
+                       "the same runs. --kill cancels a dead owner's runs and drops its record, and sends SIGTERM to the "
+                       "rest (to them and their children).")
+    o.add_argument("--kill", action="store_true")
+    o.add_argument("--safe", action="store_true",
+                   help="the scheduled reaper's mode: with --kill, end only strays (dead owners' records and runs, stray "
+                        "wait loops, stuck sbt servers), never an owner merely on old code; every kill is logged")
+    wg = sub.add_parser("waiting", help="the processor and its queue: changes checked and pushed, held while main is red, batched at green",
+                        description=WAITING_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    wgs = wg.add_subparsers(dest="wcmd", required=True)
+    wgs.add_parser("status", help="the queued and waiting changes, the batch, the processor, the gate").add_argument("--repo")
+    wgs.add_parser("pause", help="the processor takes no batch until resume (changes still queue)").add_argument("--repo")
+    wgs.add_parser("resume", help="undo pause, and a HELD batch's wait").add_argument("--repo")
+    wgc = wgs.add_parser("cancel", help="drop a queued or waiting change")
+    wgc.add_argument("entry")
+    wgc.add_argument("--repo")
+    wgr = wgs.add_parser("run", help="the processor (land starts it detached; one at a time, by lock)")
+    wgr.add_argument("--once", action="store_true")
+    wgr.add_argument("--service", action="store_true", help="stay when `waiting` is empty (the launchd agent's mode)")
+    wgsv = wgs.add_parser("service", help=f"the processor as a launchd agent ({SERVICE_LABEL}: KeepAlive, RunAtLoad)")
+    wgsv.add_argument("action", choices=("install", "uninstall", "status"))
+    wgsv.add_argument("--repo")
+    wgr.add_argument("--repo")
+    wcb = wgs.add_parser("check-batch", help="the batch's executor: its check, its bisect (the processor starts it)")
+    wcb.add_argument("entry", help="the batch item's id")
+    wcb.add_argument("--repo")
+    wgk = wgs.add_parser("check", help="one queued change's executor: its checks -> checked / rejected / queued again "
+                                       "(the processor starts it; the processor pushes)")
+    wgk.add_argument("entry")
+    wgk.add_argument("--repo")
+    wga = wgs.add_parser("await", help="wait for one change on `waiting` to land, then watch (land's own wait, resumed "
+                                       "after a restart on new code)")
+    wga.add_argument("entry")
+    wga.add_argument("--repo")
+    wga.add_argument("--close")
+    wt = sub.add_parser("watch", help="watch Main and the convergence for a landed sha (land's watch, resumed after a "
+                                      "restart on new code): WATCH OK / RED / UNKNOWN")
+    wt.add_argument("--sha", required=True)
+    wt.add_argument("--repo")
+    wt.add_argument("--pushed-at", type=float, default=None)
+    wt.add_argument("--close", help="after WATCH OK, remove this worktree and its branch when proven merged")
+    wt.add_argument("--for", dest="agent_cwd", help="the agent's worktree (the inbox entry's cwd; it may be removed)")
+    wt.add_argument("--fixes", action="append", default=[], metavar="N",
+                    help="a run the landed commits claim to fix (Fixes-Red); the sha's own trailers are read too")
+    sw = sub.add_parser("sweep", help="daily report: unmerged idle worktrees/branches (listed); remote branches merged into "
+                                      "main (deleted, standing OK)")
+    sw.add_argument("--repo", action="append", help="a checkout (repeatable); default movies")
+    sw.add_argument("--idle-days", type=float, default=SWEEP_IDLE_DAYS)
+    sw.add_argument("--dry-run", action="store_true")
+    sw.add_argument("--no-report", action="store_true", help="do not write ~/.cache/agentctl/sweep/<date>.txt")
+    sto = sub.add_parser("store", help="phase 2: the store's HTTP API (`store serve`, ci-runner's agentctl-store unit)")
+    stos = sto.add_subparsers(dest="scmd", required=True)
+    sts = stos.add_parser("serve", help="serve $AGENTCTL_STATE_ROOT/store.db: the §6.3 API and GET /metrics")
+    sts.add_argument("--listen", default=f"127.0.0.1:{STORE_PORT}", help="ADDR:PORT")
+    sts.add_argument("--forgejo-url", help="Forgejo's base URL: each caller's token is checked with its /api/v1/user")
+    sts.add_argument("--allow-user", action="append", help="a login with the whole API (repeatable)")
+    sts.add_argument("--metrics-user", action="append", help="a login with GET /metrics only (repeatable)")
+    stu = stos.add_parser("use", help=f"the laptop's switch: every agentctl process here uses the store at URL "
+                                      f"(default without one: {DEFAULT_STORE_URL}, ci-runner's through the tunnel)")
+    stu.add_argument("url", help="http://localhost:3014 (through the tunnel)")
+    tk = sub.add_parser("tick", help="the processor: the reconciler's loop of ticks (`tick service install|uninstall|status`: "
+                        "it as the launchd agent)")
+    tk.add_argument("tcmd", nargs="?", choices=("service",), help="service: the launchd agent")
+    tk.add_argument("action", nargs="?", choices=("install", "uninstall", "status"))
+    tk.add_argument("--once", action="store_true", help="one tick, then exit")
+    tk.add_argument("--repo", help="the repository (default: the cwd's, else the movies clone)")
+    q = sub.add_parser("queue", help="RETIRED 2026-10-26: use `agentctl land` (prints this and exits 2)")
+    q.add_argument("rest", nargs=argparse.REMAINDER)
+    ck = sub.add_parser("checks", help="the pre-commit check slots: status, and stats per concurrency level")
+    cks = ck.add_subparsers(dest="ccmd", required=True)
+    cks.add_parser("status", help="the slots and their holders")
+    cst = cks.add_parser("stats", help="p50/p90 check duration and slot wait per concurrency level")
+    cst.add_argument("--days", type=float, default=7)
+    gv = sub.add_parser("gov", help="the governor: ONE admission control for laptop memory and CPU (status, stats, admit, evict)")
+    gvs = gv.add_subparsers(dest="gcmd", required=True)
+    gvs.add_parser("status", help="admitted work, waiters, memory, evictable idle sbt servers, pressure")
+    gst = gvs.add_parser("stats", help="checks stats, plus each class's admission waits and the evictions")
+    gst.add_argument("--days", type=float, default=7)
+    gad = gvs.add_parser("admit", help="wait until admitted (scripts/jvm-gate.sh: --fd 7 --ticket <its file>); exit 0 admitted, 1 not (--try)")
+    gad.add_argument("--class", dest="cls", default="agent", choices=list(GOV_CLASSES))
+    gad.add_argument("--mem", type=float, default=None, help="expected GB (default: the class's)")
+    gad.add_argument("--label", default="")
+    gad.add_argument("--kind", default="job", choices=["job", "check"])
+    gad.add_argument("--fd", type=int, default=None, help="lock this inherited descriptor (the caller's) as the ticket")
+    gad.add_argument("--ticket", default=None, help="the ticket's lock file (the one --fd is open on)")
+    gad.add_argument("--pid", type=int, default=None, help="the holder's pid, for the record")
+    gad.add_argument("--cwd", default=None)
+    gad.add_argument("--try", dest="try_", action="store_true", help="one look, never waiting")
+    gad.add_argument("--force", action="store_true", help="admit at once (memory already counted elsewhere)")
+    gev = gvs.add_parser("evict", help="stop the idle kept sbt server unused longest")
+    sui = sub.add_parser("suite", help="agentctl's own tests under the governor's `suite` ticket (one run at once): "
+                                       "`agentctl suite` = python3 tests/run.py (parallel, a timeout per test)")
+    sui.add_argument("args", nargs=argparse.REMAINDER, help="tests/run.py's arguments (-j N, --timeout S, PATTERN...)")
+    gev.add_argument("--dry-run", action="store_true")
+    ls_ = sub.add_parser("lease", help="the store's leases (debugging): `lease list [prefix]`")
+    ls_.add_argument("lcmd", choices=("list",))
+    ls_.add_argument("prefix", nargs="?", default="")
+    ls_.add_argument("--all", action="store_true", help="also the leases free for over an hour")
+    sta = sub.add_parser("status", help="the snapshot (state.json): `--line` is the status line; else the open items "
+                         "with their states and deadlines, and the leases")
+    sta.add_argument("--line", action="store_true", help="the one status line (no git, no Forgejo: state.json only)")
+    sta.add_argument("--open", action="store_true", help="open the status page (http://agentctl.localhost/) in the browser")
+    sub.add_parser("watchdog", help="the invariant watchdog's pass (launchd every 60 s): W1 oldest unlanded change, W2 "
+                   "gate red nobody holds, W5 processor beat, W6 escalations notified, WM maintain ran")
+    rcv = sub.add_parser("recover", help="the recovery registry: each open non-green condition, its probe, its next check")
+    rcv.add_argument("rcmd", nargs="?", choices=("status", "tick"), default="status",
+                     help="status (default): list; tick: probe every open condition now (clears what passes)")
+    ib = sub.add_parser("inbox", help="every verdict: the reconciler's events (QUEUED, LANDED, WAITING, NOT LANDED, WATCH ...) and wait's, "
+                                      "kept whether or not the agent that ran it is alive")
+    ib.add_argument("ids", nargs="*", metavar="ID", help="only these entries (an id prefix); or `wait`: block until an "
+                                                          "unread entry of --kinds exists, print it, exit 0 (the notifier)")
+    ib.add_argument("--kinds", default=WAIT_KINDS_DEFAULT,
+                    help=f"wait: the kinds that wake it (default {WAIT_KINDS_DEFAULT}; also OK, FIX_OK, FIX_UNVERIFIED, "
+                         "LANDED, WAITING, HELD, CHECK, OTHER)")
+    ib.add_argument("--since-ack", action="store_true", help="wait: only entries newer than the last acknowledgement")
+    ib.add_argument("--timeout", type=float, default=0, help="wait: give up after S seconds, exit 2 (default: never)")
+    ib.add_argument("--forever", action="store_true", help="wait: never exit; stream each entry once, one line each")
+    ib.add_argument("--unread", action="store_true", help="only the entries not acknowledged yet")
+    ib.add_argument("--ack", action="store_true", help="acknowledge the entries listed that are YOURS (your session's, "
+                                                        "worktree's or agent name's), or those named by ID")
+    ib.add_argument("--all", action="store_true", help="with --ack: every entry listed, anyone's (the owner)")
+    ib.add_argument("--limit", type=int, default=30, help="the newest N (default 30; 0 = all)")
+    ib.add_argument("--json", action="store_true")
+    ib.add_argument("-v", "--verbose", action="store_true", help="each entry's last output lines too")
+    rd = sub.add_parser("red", help="every red build held by a lease or offered: status / claim / beat / release / block",
+                        description=RED_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    rds = rd.add_subparsers(dest="rcmd", required=True)
+    rc_ = rds.add_parser("claim", help="take a red's lease (a run number or id, `local`, or its key): you are fixing it")
+    rc_.add_argument("run")
+    rc_.add_argument("--note", default="", help="one line: what you are doing")
+    rc_.add_argument("--worktree", help="the worktree whose activity renews the claim (default: the current one; never "
+                     "the root checkout)")
+    rc_.add_argument("--fixer", help="a dispatched fixer's own record (its prompt names it): binds this session to it")
+    rbt = rds.add_parser("beat", help="renew your red lease by hand: a new note is progress")
+    rbt.add_argument("run")
+    rbt.add_argument("--note", required=True)
+    rb = rds.add_parser("block", help="the red waits on the owner: BLOCKED ON OWNER <exact command> (shown loudly; assigned)")
+    rb.add_argument("run")
+    rb.add_argument("--cmd", dest="owner_cmd", required=True, help="the exact command the owner must run")
+    rb.add_argument("--note", default="")
+    rbu = rb.add_mutually_exclusive_group()  # the probe that clears it (default: the red's own workflow goes green)
+    rbu.add_argument("--until-green", metavar="WORKFLOW", help="clears when this workflow's newest run on main is green")
+    rbu.add_argument("--until-http", metavar="URL", help="clears when this URL answers 2xx-4xx")
+    rbu.add_argument("--until-tcp", metavar="HOST:PORT", help="clears when this port accepts a connection")
+    rb.add_argument("--owner-cause", choices=sorted(OWNER_CAUSES), help="why only the owner can act (required: a code red is "
+                    "never the owner's): " + "; ".join(f"{k}: {v}" for k, v in OWNER_CAUSES.items()))
+    rb.add_argument("--cause", metavar="NAME", help="an outside outage (e.g. decodo): ONE condition for every red it "
+                    "explains; attach to the open one, or open it with --until-*")
+    rr = rds.add_parser("release", help="drop your red lease")
+    rr.add_argument("run")
+    rr.add_argument("--any", action="store_true", help="release anyone's claim of it")
+    rls = []
+    for nm in ("status", "list"):
+        rl = rds.add_parser(nm, help="every red: its state, holder or offer, deadline" + (" (old name)" if nm == "list" else ""))
+        rl.add_argument("-v", "--verbose", action="store_true", help="also each red's attempts")
+        rls.append(rl)
+    rdp = rds.add_parser("dispatch", help="a red's offer at top priority: the dispatcher takes it now")
+    rdp.add_argument("run")
+    ra = rds.add_parser("auto", help="automatic dispatch by the waiting processor: on / off / status")
+    ra.add_argument("state", nargs="?", choices=("on", "off", "status"), default="status")
+    rp = rds.add_parser("patrol", help="old name: `red status` (the tick acts on every red)")
+    rp.add_argument("--dispatch", action="store_true")
+    rf = rds.add_parser("fixer", help=argparse.SUPPRESS)
+    rf.add_argument("--record", required=True)
+    for p_ in [rc_, rbt, rb, rr, rdp, ra, rp, rf] + rls:
+        p_.add_argument("--repo")
+    dp = sub.add_parser("dispatch", help="own every CI dispatch: run (forgejo-gh workflow run, recorded) / record / list",
+                        description=DISPATCH_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    dps = dp.add_subparsers(dest="dcmd", required=True)
+    dpr = dps.add_parser("run", help="forgejo-gh workflow run, with an owner record")
+    dpr.add_argument("workflow", help="the workflow file, e.g. identity-model-convergence.yml")
+    dpr.add_argument("--ref", required=True)
+    dpc = dps.add_parser("record", help="register a dispatch made another way")
+    dpc.add_argument("--branch")
+    dpc.add_argument("--run", help="its run id")
+    dpc.add_argument("--workflow")
+    for p_ in (dpr, dpc):
+        p_.add_argument("-f", "--field", action="append", default=[], metavar="KEY=VALUE", help="a dispatch input")
+        p_.add_argument("--purpose", default="", help="one line: what the run is for")
+    dpl = dps.add_parser("list", help="every owner record")
+    for p_ in (dpr, dpc, dpl):
+        p_.add_argument("--repo")
+    mt = sub.add_parser("maintain", help="THE reaper, every 15 min (launchd net.bitcashier.agentctl-maintain): the reap, "
+                                         "and once a day the sweep")
+    mt.add_argument("--dry-run", action="store_true", help="list what would be reaped / swept, kill and delete nothing")
+    mt.add_argument("--sweep", action="store_true", help="run the sweep now, whatever the hour")
+    rp_ = sub.add_parser("reap", help="the reap alone: orphans --kill --safe (stale JVMs included); --dry-run lists")
+    rp_.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args(argv)
+    handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
+               "red": cmd_red, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
+    command = inbox_command(a)
+    return with_inbox(command, handler, a) if command else handler(a)
