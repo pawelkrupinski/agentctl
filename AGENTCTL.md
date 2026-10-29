@@ -466,6 +466,14 @@ agent must be assigned to it".
   hitting it is `RED UNCLAIMED: ... NOBODY -- gate fixer cap 3 reached`, escalated at once (below). Reds outside the
   gate: 2 alive in all (`$AGENTCTL_RED_MAX_FIXERS`), 1 of them outside (`$AGENTCTL_RED_MAX_OUTSIDE`), and 6 a day
   (`$AGENTCTL_RED_DAILY_CAP`, with the Fixes-Red verifications); past it, ONE `RED BUDGET` inbox entry per red a day.
+- **Fair capacity (2026-10-29: two reds of Verify scrape recording #2493 sat `offered, capacity 2/2` for 73 min).**
+  The slots are reserved per class: gate 3, other 2. One fixer holding its run's several reds is ONE slot. A red that
+  waited 20 min (`$AGENTCTL_RED_CAPACITY_BORROW`) for its class BORROWS an idle slot of the other class, as long as the
+  lender keeps one idle; at 45 min (`$AGENTCTL_RED_CAPACITY_WINDOW`) it takes the OVERFLOW slot (1 beyond the caps,
+  `$AGENTCTL_RED_OVERFLOW_FIXERS`); with that taken too it is `STARVED` and escalates at once (`RED STARVED: ...`),
+  then every cycle. No running fixer is killed for it. The wait reads, in `red status`, `ci-why` and the status page:
+  `capacity 2/2 other, waiting 12m; next slot when <fixer> ends by 15:09 or borrows an idle gate slot at 14:20 or
+  overflow at 14:45`; `fixers alive:` shows the overflow slot when it is in use.
 - **Refunds.** A dispatch that did nothing is not counted (`red status` says `[refunded: ...]`): `GAVE UP` / `NOT LANDED`
   because it is already fixed or there is nothing to do; `STOPPED` (superseded) and `red cleared`; a fixer killed
   before any verdict; `BLOCKED ON OWNER` only for a CI read (`forgejo-gh run view|download`: the fixer carries the

@@ -3417,8 +3417,14 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
             red_move(store, it, "blocked-external", f"{red_what(d)}: {block['text']}",
                      data={"cause": block.get("cause"), "block": block["name"]})
             return [f"blocked {red_what(d)}"]
+        off = store.offer_of(f"red:{it['id']}") or {}
+        if str(off.get("reason") or "").startswith("STARVED") and d.get("starved") != off.get("id"):
+            # past its capacity window with even the overflow slot taken: escalated NOW (then every cycle, below)
+            text = f"RED STARVED: {red_what(d)}: no fixer slot for {fmt_age(t - float(off.get('opened_at') or t))} ({off['reason']})"
+            red_offer(store, it, text, data={"starved": off.get("id")}, escalate=True,
+                      verdict=text + f" -- `~/bin/agentctl red claim {key} --worktree <yours>` to take it")
+            return [text]
         if t >= it["deadline"]:  # no taker in time: escalate (the state's self-transition), widen, offer again
-            off = store.offer_of(f"red:{it['id']}") or {}
             why = off.get("reason") or "no taker"
             mins = int((t - it["entered_at"]) // 60)
             text = f"RED UNCLAIMED: {red_what(d)}: no taker for {mins} min ({why})"
@@ -3812,8 +3818,74 @@ def red_fixers_alive(store, t):
 
 
 def red_cap(cls):
+    if cls == "overflow":
+        return int(env_num("AGENTCTL_RED_OVERFLOW_FIXERS", RED_OVERFLOW))
     env, default = RED_CAPS[cls]
     return int(env_num(env, default))
+
+
+# FAIR CAPACITY (the owner, 2026-10-29: two reds outside the gate sat "offered, capacity 2/2" for 73 min while the gate
+# red's 9th fixer ran for hours). Each class keeps its own reserved slots (gate 3, other 2: a class never takes the
+# other's last idle slot). A red that waited RED_CAPACITY_BORROW for its class may BORROW an idle slot of the other
+# class, leaving the lender at least one idle; a red still waiting at RED_CAPACITY_WINDOW takes an OVERFLOW slot (one,
+# beyond the caps) and, when even that is taken, ESCALATES as starved (RED STARVED) every cycle. No running fixer is
+# killed for it: its work is never thrown away, and the window bounds every wait. One fixer holding its run's several
+# reds is one slot (red_fixers_alive counts holders, not leases).
+RED_CAPACITY_BORROW = 20 * 60   # $AGENTCTL_RED_CAPACITY_BORROW
+RED_CAPACITY_WINDOW = 45 * 60   # $AGENTCTL_RED_CAPACITY_WINDOW
+RED_OVERFLOW = 1                # $AGENTCTL_RED_OVERFLOW_FIXERS
+
+
+def red_slot_of(row):
+    """The slot a live fixer holds: its lease's `slot` (gate, other, overflow), else its class."""
+    m = lease_meta(row)
+    return m.get("slot") or ("gate" if m.get("gate") else "other")
+
+
+def red_slots(store, t, alive=None):
+    """{gate, other, overflow: (alive, cap)} and the live fixers, by the slot each holds."""
+    alive = red_fixers_alive(store, t) if alive is None else alive
+    out = {c: (sum(1 for r in alive if red_slot_of(r) == c), red_cap(c)) for c in ("gate", "other", "overflow")}
+    return out, alive
+
+
+def red_slots_line(store, t):
+    sl, _alive = red_slots(store, t)
+    ov = f", {sl['overflow'][0]}/{sl['overflow'][1]} overflow" if sl["overflow"][0] else ""
+    return f"{sl['gate'][0]}/{sl['gate'][1]} gate, {sl['other'][0]}/{sl['other'][1]} other{ov}"
+
+
+def red_capacity(store, cls, waited, t, alive=None):
+    """(slot, why): the slot an offer of class `cls` that has waited `waited` seconds takes now (its own class, a
+    borrowed idle one, overflow), or None and why it waits -- with what it waits for and WHEN (its ETA)."""
+    sl, alive = red_slots(store, t, alive)
+    n, cap = sl[cls]
+    if n < cap:
+        return cls, None
+    lender = "other" if cls == "gate" else "gate"
+    borrow_at, window_at = env_num("AGENTCTL_RED_CAPACITY_BORROW", RED_CAPACITY_BORROW), \
+        env_num("AGENTCTL_RED_CAPACITY_WINDOW", RED_CAPACITY_WINDOW)
+    if waited >= borrow_at and sl[lender][1] - sl[lender][0] >= 2:
+        return lender, None
+    if waited >= window_at and sl["overflow"][0] < sl["overflow"][1]:
+        return "overflow", None
+    mine = [r for r in alive if red_slot_of(r) in (cls, "overflow")]
+    first = min(mine, key=lambda r: float(r.get("max_until") or r.get("expires_at") or 0)) if mine else None
+    hm = lambda x: time.strftime("%H:%M", time.localtime(x))
+    eta = []
+    if first:
+        eta.append(f"{first['holder']} ends by {hm(float(first.get('max_until') or first.get('expires_at')))}")
+    since = t - waited
+    if waited < borrow_at:
+        eta.append(f"borrows an idle {lender} slot at {hm(since + borrow_at)}" if sl[lender][1] > 1 else "")
+    if waited < window_at:
+        eta.append(f"overflow at {hm(since + window_at)}" if sl["overflow"][1] else "")
+    eta = [e for e in eta if e]
+    head = f"capacity {n}/{cap} {cls}, waiting {fmt_age(waited)}"
+    if waited >= window_at:
+        return None, (f"STARVED: {head}, past its {fmt_age(window_at)} window, overflow "
+                      f"{sl['overflow'][0]}/{sl['overflow'][1]} taken" + (f"; next slot when {eta[0]}" if eta else ""))
+    return None, head + (f"; next slot when {' or '.join(eta)}" if eta else "")
 
 
 def red_run_of(pic):
@@ -3839,8 +3911,9 @@ def red_run_holder(store, run, t):
 
 
 def red_dispatcher(store, o_r, repo, t):
-    """Take the open fixer offers, highest priority first (within a run: a test failure first), within the caps (gate 3
-    alive, the rest 2) and while dispatch can run. ONE RUN, ONE FIXER: the run's other open offers are taken with it,
+    """Take the open fixer offers, highest priority first (within a run: a test failure first), within the slots
+    (red_capacity: gate 3 and other 2 reserved, an idle slot borrowed after RED_CAPACITY_BORROW, one overflow past
+    RED_CAPACITY_WINDOW) and while dispatch can run. ONE RUN, ONE FIXER: the run's other open offers are taken with it,
     under the same holder (its fixer renews and releases them all); a run whose fixer is already on it waits for that
     fixer. An offer that cannot be taken says why (its escalation names it)."""
     acts = []
@@ -3855,7 +3928,7 @@ def red_dispatcher(store, o_r, repo, t):
             continue
         pic, cls = off["picture"], ("gate" if off["picture"].get("gate") else "other")
         alive = red_fixers_alive(store, t)
-        n_cls = sum(1 for r in alive if bool(lease_meta(r).get("gate")) == (cls == "gate"))
+        slot, cap_why = red_capacity(store, cls, t - float(off.get("opened_at") or t), t, alive)
         on_run = red_run_holder(store, red_run_of(pic), t)
         if on_run and on_run.get("name", "").startswith("red/") and off["tier"] not in ("revert",):
             # ONE RUN, ONE FIXER: a red of a run whose fixer is at work is that fixer's -- leased to it at once, renewed
@@ -3879,9 +3952,8 @@ def red_dispatcher(store, o_r, repo, t):
             why = blocker
         elif on_run:
             why = f"its run's fixer {on_run['holder']} is on the run; this red is offered again when it ends"
-        elif n_cls >= red_cap(cls):
-            first = min(alive, key=lambda r: r["acquired_at"]) if alive else None
-            why = f"capacity {n_cls}/{red_cap(cls)}" + (f", next when {first['holder']} ends" if first else "")
+        elif slot is None:
+            why = cap_why
         else:
             why = None
         if why:
@@ -3890,7 +3962,8 @@ def red_dispatcher(store, o_r, repo, t):
             continue
         num = (pic.get("run") or {}).get("number")
         holder = f"laptop:fixer:red-{pic['key']}-{int(pic.get('attempts') or 0) + 1}"
-        meta = {"kind": "fixer", "gate": cls == "gate", "tier": off["tier"], "run": num, "workflow": pic.get("workflow")}
+        meta = {"kind": "fixer", "gate": cls == "gate", "slot": slot, "tier": off["tier"], "run": num,
+                "workflow": pic.get("workflow")}
         took = store.take(off["id"], holder, RED_FIXER_TTL, RED_FIXER_MAX, meta=meta)
         if not took or "held" in took or "gone" in took:
             continue
@@ -4623,10 +4696,7 @@ def red_status(store, verbose=False):
             for h in it["data"].get("history") or []:
                 print(f"      {h.get('at')} {h.get('holder')}: {str(h.get('outcome'))[:140]}")
     b = cached_dispatch_blocker()
-    alive = red_fixers_alive(store, t)
-    print(f"dispatcher: {'OFF -- ' + b if b else 'ON'}; fixers alive: "
-          f"{sum(1 for r in alive if lease_meta(r).get('gate'))}/{red_cap('gate')} gate, "
-          f"{sum(1 for r in alive if not lease_meta(r).get('gate'))}/{red_cap('other')} other")
+    print(f"dispatcher: {'OFF -- ' + b if b else 'ON'}; fixers alive: {red_slots_line(store, t)}")
     return 0
 
 
@@ -13433,10 +13503,10 @@ def status_store_probe(st, t):
 
 
 def status_dispatcher(st, t):
-    alive = red_fixers_alive(st, t)
+    sl, _alive = red_slots(st, t)
     return {"blocker": cached_dispatch_blocker(), "off_flag": os.path.exists(reds_dir("DISPATCH_OFF")),
-            "gate_alive": sum(1 for r in alive if lease_meta(r).get("gate")), "gate_cap": red_cap("gate"),
-            "other_alive": sum(1 for r in alive if not lease_meta(r).get("gate")), "other_cap": red_cap("other"),
+            "gate_alive": sl["gate"][0], "gate_cap": sl["gate"][1], "other_alive": sl["other"][0],
+            "other_cap": sl["other"][1], "overflow_alive": sl["overflow"][0], "overflow_cap": sl["overflow"][1],
             "escalated": [{"type": typ, "id": it["id"], "words": words} for typ, it, words in escalated_now(st)]}
 
 
@@ -14040,7 +14110,7 @@ function header(s){const h=s.header||{},st=s.store||{},dp=s.dispatcher||{};let o
  <div class="card"><div class="k">reconciler tick</div><div class="v">${tickAge==null?chip("never","bad"):chip(Math.round(tickAge)+" s ago",tickAge>120?"bad":"ok")} <span class="mute">${tickSrc}</span></div></div>
  <div class="card"><div class="k">store</div><div class="v">${st.reachable?chip("reachable","ok"):chip("unreachable","bad")} <span class="mute mono">${E(st.remote||"local")}${st.ms!=null?" · "+st.ms+" ms":""}</span>${st.error?`<div class="mute">${E(st.error)}</div>`:""}</div></div>
  <div class="card"><div class="k">network / tunnel</div><div class="v">${chip("net "+net,net==="ok"?"ok":"bad")} ${chip("tunnel "+tunTxt,tunTxt==="ok"?"ok":"bad")}</div></div>
- <div class="card"><div class="k">dispatcher · fixers</div><div class="v">${chip(disp)} gate ${E(dp.gate_alive??"?")}/${E(dp.gate_cap??"?")} · other ${E(dp.other_alive??"?")}/${E(dp.other_cap??"?")}${dp.blocker?`<div class="mute">${E(dp.blocker)}</div>`:""}${dp.error?`<div class="mute">${E(dp.error)}</div>`:""}</div></div>
+ <div class="card"><div class="k">dispatcher · fixers</div><div class="v">${chip(disp)} gate ${E(dp.gate_alive??"?")}/${E(dp.gate_cap??"?")} · other ${E(dp.other_alive??"?")}/${E(dp.other_cap??"?")}${dp.overflow_alive?` · overflow ${E(dp.overflow_alive)}/${E(dp.overflow_cap)}`:""}${dp.blocker?`<div class="mute">${E(dp.blocker)}</div>`:""}${dp.error?`<div class="mute">${E(dp.error)}</div>`:""}</div></div>
  <div class="card"><div class="k">waiting · checking</div><div class="v">${(h.waiting||[]).length} · ${(h.queued||[]).length} <span class="mute">code ${E(h.code||"?")}</span></div></div>
  </div>`;
  if(h.line)o+=`<div class="line">${E(h.line)}</div>`;
