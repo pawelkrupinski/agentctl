@@ -9343,16 +9343,49 @@ def write_snapshot(d, store=None):
 NETWORK_SHOWN_FOR = 600  # a lossy-uplink reading this recent turns the status line's UNREAD into NETWORK
 
 
-def status_line(now_=None):
-    """The status line from state.json alone (no git, no Forgejo, no subprocess): the gate line, the waiting and
-    checking changes, the unread inbox; `RECONCILER STALLED since HH:MM` when the tick is over 2 min old."""
-    t = now_ if now_ is not None else time.time()
+STATUS_LIVE_AFTER = 30   # s: a mirror of ci-runner's /v1/state older than this is read live by the status line
+STORE_UNREACHABLE_AFTER = 60  # s without a good read of ci-runner's /v1/state: the line says STORE UNREACHABLE
+
+
+def note_store_error(e, t=None):
+    """The remote store did not answer: kept in state.json (since when, why) for the status line."""
+    t = t if t is not None else time.time()
+    prev = state_read().get("store_error") or {}
+    state_update(store_error={"since": prev.get("since") or t, "at": t, "why": str(e).replace("agentctl: ", "")[:200]})
+
+
+def remote_status_state(url, t):
+    """THE STATUS LINE IN REMOTE MODE (2026-10-29 cutover: the line said RECONCILER STALLED since 13:01 while ci-runner's
+    reconciler ticked fine -- the laptop's state.json is only a mirror, and the mirror had stopped). state.json as the
+    sync mirrored it, read live from GET /v1/state when the mirror is over STATUS_LIVE_AFTER s old (at most once per
+    STATUS_LIVE_AFTER s while the store does not answer); a failed read is recorded as store_error."""
     d = state_read()
+    last_try = max(float(d.get("fetched_at") or 0), float((d.get("store_error") or {}).get("at") or 0))
+    if t - last_try > STATUS_LIVE_AFTER:
+        try:
+            mirror_state(RemoteStore(url, timeout=5), t)
+        except (Exception, SystemExit) as e:
+            note_store_error(e, t)
+        d = state_read()
+    return d
+
+
+def status_line(now_=None):
+    """The status line from state.json (no git, no Forgejo; in remote mode at most one GET /v1/state, see
+    remote_status_state): the gate line, the waiting and checking changes; `RECONCILER STALLED since HH:MM` when the
+    tick is over 2 min old, `STORE UNREACHABLE since HH:MM` when ci-runner's store has not answered for a minute."""
+    t = now_ if now_ is not None else time.time()
+    url = store_url()
+    d = remote_status_state(url, t) if url else state_read()
+    fetched = float(d.get("fetched_at") or 0) if url else None
+    unreachable = url and t - fetched > STORE_UNREACHABLE_AFTER
     epoch, _repo, line = published_summary()
     gate = line or "gate ?"
     net = d.get("network") or {}
     lossy = net.get("at") and t - float(net["at"]) < NETWORK_SHOWN_FOR
-    if epoch and t - epoch > GATE_SUMMARY_MAX_AGE:
+    if epoch and t - epoch > GATE_SUMMARY_MAX_AGE and unreachable:
+        gate = f"gate ? (as of {time.strftime('%H:%M', time.localtime(epoch))}: {gate[5:]})"
+    elif epoch and t - epoch > GATE_SUMMARY_MAX_AGE:
         gate = (f"gate NETWORK (lossy uplink: {int(float(net.get('loss') or 0) * 100)}% loss; as of "
                 f"{time.strftime('%H:%M', time.localtime(epoch))}: {gate[5:]})" if lossy else
                 f"gate UNREAD (as of {time.strftime('%H:%M', time.localtime(epoch))}: {gate[5:]})")
@@ -9362,9 +9395,15 @@ def status_line(now_=None):
     waiting, queued = d.get("waiting") or [], d.get("queued") or []
     parts = [gate]
     tick = d.get("tick_at")
-    if not tick or t - float(tick) > 120:
-        parts.insert(0, f"RECONCILER STALLED since {time.strftime('%H:%M', time.localtime(float(tick)))}" if tick
-                     else "RECONCILER not running")
+    hm = lambda x: time.strftime('%H:%M', time.localtime(float(x)))
+    if unreachable:  # no verdict on ci-runner's reconciler: its store did not answer (never STALLED)
+        se = d.get("store_error") or {}
+        parts.insert(0, f"STORE UNREACHABLE since {hm(fetched or se.get('since') or t)} ({url}"
+                        + (f": {se['why'][:80]}" if se.get("why") else "") + ")"
+                        + (f"; ci-runner ticked at {hm(tick)}" if tick else ""))
+    elif not tick or t - float(tick) > 120:
+        parts.insert(0, (f"RECONCILER STALLED since {hm(tick)}" if tick else "RECONCILER not running")
+                     + (" (ci-runner)" if url else ""))
     parts.append(f"waiting: {len(waiting)}" + (f" — {short(waiting)}" if waiting else "")
                  + (f" · checking: {len(queued)} — {short(queued)}" if queued else ""))
     return " · ".join(parts)
@@ -12660,11 +12699,15 @@ def flush_outbox(st=None):
     return n
 
 
-def mirror_state(st=None):
+def mirror_state(st=None, now_=None):
     """ci-runner's /v1/state copied into the laptop's state.json (with fetched_at): the status line reads it."""
     st = st or Store()
-    snap = st.state()
-    state_update(**{**snap, "fetched_at": time.time()})
+    try:
+        snap = st.state()
+    except StoreUnavailable as e:
+        note_store_error(e, now_)
+        raise
+    state_update(**{**snap, "fetched_at": now_ if now_ is not None else time.time(), "store_error": None})
     return snap
 
 

@@ -256,6 +256,46 @@ class ServerSideTest(Phase2Base):
         self.assertIn("fetched_at", mine)
 
 
+class RemoteStatusLineTest(Phase2Base):
+    def line_with(self, answer, now_):
+        class Fake:
+            def __init__(self, url, tok=None, clock=None, timeout=60):
+                pass
+
+            def state(self):
+                if isinstance(answer, Exception):
+                    raise answer
+                return answer
+        saved = A.RemoteStore
+        A.RemoteStore = Fake
+        try:
+            return A.status_line(now_)
+        finally:
+            A.RemoteStore = saved
+
+    def test_the_line_reads_ci_runners_tick_and_gate_and_says_store_unreachable_when_it_does_not_answer(self):
+        t = time.time()
+        os.environ["AGENTCTL_STORE_URL"] = self.url
+        # the laptop's own state.json: its last local tick and gate line, from before the cutover
+        A.state_update(tick_at=t - 600, summary={"at": int(t - 600), "repo": "o/r", "line": "gate RED (main #1)"})
+        remote = {"tick_at": t - 5, "summary": {"at": int(t - 10), "repo": "o/r", "line": "gate green"}}
+        line = self.line_with(remote, t)
+        self.assertNotIn("STALLED", line)
+        self.assertTrue(line.startswith("gate green"), line)
+        # ci-runner's store stops answering: the mirror ages, and the line says so -- never RECONCILER STALLED
+        down = A.StoreUnavailable("GET /v1/state: <urlopen error [Errno 61] Connection refused>")
+        line = self.line_with(down, t + 120)
+        self.assertTrue(line.startswith("STORE UNREACHABLE since "), line)
+        self.assertIn("Connection refused", line)
+        self.assertNotIn("STALLED", line)
+        self.assertNotIn("UNREAD", line)
+        # it answers again, but ci-runner's reconciler has not ticked for 5 min: that IS a stall, named as ci-runner's
+        line = self.line_with({"tick_at": t - 300, "summary": remote["summary"]}, t + 200)
+        self.assertTrue(line.startswith("RECONCILER STALLED since "), line)
+        self.assertIn("(ci-runner)", line)
+        self.assertIsNone(A.state_read().get("store_error"))
+
+
 class DispatcherRemoteTest(Phase2Base):
     def test_the_laptops_dispatcher_takes_ci_runners_offer_over_the_remote_store(self):
         it = self.st.put_item("red", "k1", "offered", {"key": "k1", "workflow": "Main"})

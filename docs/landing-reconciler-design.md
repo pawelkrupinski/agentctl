@@ -471,7 +471,7 @@ from the two times:
 
 | Condition | Shown |
 |---|---|
-| `fetched_at` older than 60 s | `view as of HH:MM (tunnel down / offline)` |
+| `fetched_at` older than 60 s (the line reads `GET /v1/state` itself once the mirror is 30 s old) | `STORE UNREACHABLE since HH:MM (URL: why)` -- never STALLED or UNREAD |
 | `tick_at` older than 2 min | `RECONCILER STALLED since HH:MM` |
 
 The gate itself is never shown as UNREAD because the laptop's network is lossy (I7). The gate is UNREAD
