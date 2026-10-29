@@ -878,8 +878,11 @@ failed and nobody was told: the snapshot, the status line and the reds covered m
   at once: `RED UNCLAIMED`, claimed and dispatched like a main red. Inputs that differ make it a plain branch red that
   names them (`recording 3166 ≠ main's 573`; main's pinned recording is read from the movies repo -- the
   `hermetic-<code>.txt` assets of the release that `FIXTURE_RELEASE_TAG` in main's identity-model-convergence.yml
-  names -- by the processor hourly, cached in `~/.cache/agentctl/pinned-recording.json`; `$AGENTCTL_PINNED_RECORDING`
-  overrides); a test failure on a NEWER recording also says `blocks promoting recording
+  names -- by the laptop's processor hourly with the owner's token, cached in `~/.cache/agentctl/pinned-recording.json`
+  and, in remote-store mode, written by the sync into the store (meta `pinned_recording`: tag, pins, `at`). The
+  reconciler on ci-runner never reads release assets (ci-lander is push-only, no releases): it copies the store's
+  record, and while the laptop is offline the last stored pins stand. `agentctl status` prints `pins: N (tag), read
+  X ago`, `STALE` past 24 h. `$AGENTCTL_PINNED_RECORDING` overrides); a test failure on a NEWER recording also says `blocks promoting recording
   N`. Unread inputs predict nothing (the processor asks the DB only over an open ssh control connection; `ci-why` from
   a terminal reads them).
 - **Status line / summary**: `branch reds: N → owner (workflow #n)` after main's reds, `PREDICTS MAIN RED` in bold red;
