@@ -10,6 +10,8 @@ calls.
 - Python 3, standard library only.
 - Tests: `python3 -m unittest discover -s ~/bin/tests` (mutation tests included).
 - `agentctl --help` and `agentctl <cmd> --help` match this page.
+- The design behind it: `~/bin/docs/landing-reconciler-design.md`. Phase 2 (the store and the reconciler on
+  ci-runner): `~/bin/docs/phase2-runbook.md`.
 
 ## Standard agent workflow
 
@@ -20,18 +22,17 @@ eval "$(~/bin/agentctl env --print)"        # 1. sbt/java on PATH; a locked vaul
 ~/bin/agentctl wait run <id> &              # 3. Bash run_in_background=true, then END YOUR TURN
 ~/bin/agentctl ci-why                       # 4. only when land says the red gate refused, or Main is red
 ~/bin/agentctl inbox --unread --ack         # 5. the orchestrator: every land/watch/wait verdict, agent alive or not
-~/bin/agentctl inbox wait &                 # 6. the orchestrator's notifier: Bash run_in_background=true (see "inbox")
+~/bin/agentctl inbox wait --forever &       # 6. the orchestrator's notifier: Bash run_in_background=true (see "inbox")
 ~/bin/agentctl red claim <run> --note "…"   # 7. assigned a red build? claim it first (see "red")
 ~/bin/agentctl dispatch run <wf.yml> --ref <branch> -f k=v --purpose "…"  # 8. dispatching CI yourself? own it (see "dispatch")
+~/bin/agentctl status                       # 9. what the reconciler holds: changes, the batch, reds, conditions
 ```
 
-Every change lands with `land`, identity changes included (2026-10-26: no pre-merge CI; the merge queue is retired).
-Since 2026-10-27 (the owner: "agents never wait on a land") `land` in movies rebases, runs the squash guard and prints
-`QUEUED <id> (<sha>)` at once; the always-on `waiting` processor then runs the change's checks (the pre-push hook: the
-basic tests plus the identity / page area tests the change touches) in a check tree of its own, within the governor's
-budget -- or on ci-runner when the laptop is under pressure -- and pushes it (`LANDED <sha>`, then a detached watch:
-`WATCH OK` / `WATCH RED` / `WATCH UNKNOWN`) or, main red, puts it on `waiting` (`WAITING`). Every verdict goes to
-`agentctl inbox`, naming your worktree. See "the land queue".
+Every change lands with `land` (2026-10-26: no pre-merge CI). In movies `land` rebases, runs the squash guard, pushes
+the change to `refs/heads/land/<id>` and prints `QUEUED <id> (<sha>)` at once (the owner, 2026-10-27: "agents never
+wait on a land"). The reconciler then checks it, pushes it -- or, main red, holds it and lands it with the batch at
+green -- and watches main's CI for it. Every verdict (`LANDED`, `WAITING`, `NOT LANDED` with the failing tail,
+`WATCH OK / RED / UNKNOWN`) reaches `agentctl inbox`, naming your worktree. See "land".
 
 Step by step:
 
@@ -39,46 +40,80 @@ Step by step:
    `vault <ns> locked: ask the user to run `! secrets unlock <ns>``, stop there and pass that line to the lead.
 2. Work and commit in your own worktree. Never use `reset --soft` onto a moved main.
 3. Run `land` from the worktree; it prints `QUEUED <id>` within seconds (or `NOT LANDED: <why>` for a dirty tree, a
-   rebase conflict, the squash guard). END YOUR TURN at QUEUED. The verdict -- `LANDED`, `WAITING`, `NOT LANDED` with
-   the failing checks' tail, then the watch's `WATCH OK/RED` -- reaches the orchestrator through `agentctl inbox`; a
-   NOT LANDED or WATCH RED of yours comes back to you: fix forward (`Fixes-Red: <run>` for a red you caused) and land
-   again.
+   rebase conflict, the squash guard). END YOUR TURN at QUEUED. A NOT LANDED or WATCH RED of yours comes back to you
+   through the inbox: fix forward (`Fixes-Red: <run>` for a red you caused) and land again.
 4. To wait for a CI run, start `wait run` with the Bash tool's `run_in_background=true` and end your turn. You are
    re-invoked when it exits. Never sleep or poll in the foreground.
 5. When main is red or the gate refused, run `ci-why`. It names the run, the cause (infra or test) and how the gate
    clears: a later green run, or a `Fixes-Red:` trailer.
 
+## How it works: one reconciler, items and leases (2026-10-29)
+
+The owner (2026-10-28): "the way it got red / blocked i want it to go green as well", "structural", "simplify the
+pipeline / process / branches". Since reconciler phase 1 everything agentctl tracks is DATA in one store, and ONE loop
+moves it forward; nothing is a detached process that can die with its state in its head.
+
+- **The store** (sqlite, `~/.cache/agentctl/store.db`; `$AGENTCTL_STATE_ROOT`). Four tables: `items` (one row per
+  tracked thing, with its state, deadline and a version every transition compares and sets), `leases` (who holds
+  what, below), `events` (every transition and verdict, in order: `seq` is the cursor) and `offers` (open work a taker
+  may take: a red waiting for a fixer).
+- **Items and their machines.** Every state has a deadline and an automatic exit, so nothing waits forever:
+  - `change` (a landed entry): queued → checking → checked → pushing → landed, or waiting (main red), rejected,
+    superseded, cancelled;
+  - `batch` (the changes held while main was red): blocked-red → assembling → checking → pushing → landed, bisecting
+    on a failure, held after a stall. The batch is COMPUTED in a check tree at green; there is no `waiting` branch;
+  - `watch` (a landed sha): watching → ok / red / unknown (3 h);
+  - `red` (a failure signature on main): red → offered → leased → fix-pending → verified / cleared, or
+    blocked-external (an owner block);
+  - `condition` (a non-green state with a probe, the recovery registry): open → closed.
+- **Leases.** Holding work is a lease: a name, a holder, an epoch, a secret, a TTL renewed ONLY on new progress, and a
+  maximum hold. A holder that stops making progress loses the lease and the work is offered again; an old holder's
+  late write is fenced out by the epoch. The landing lock is the lease `land/<repo>` (TTL 2 min, max 45 min), a check
+  slot `slot/check/<repo>/<n>`, a change's check `check/<entry>` (10 min, max 3 h), a red's fixer or claim
+  `red/<key>` (a fixer 15 min / 3 h, a claim 30 min / 8 h), an owner block a block lease renewed by its probe.
+  `agentctl lease list [--all]` shows them.
+- **The tick.** The processor (launchd `net.bitcashier.agentctl-waiting`, `agentctl waiting run --service`) runs one
+  loop every 5 s, each step bounded: the change items (start an executor for a queued change, push a checked one),
+  the batch, the watches, the `land/*` refs sweep, the lease archive, events → inbox, the notifier, the network and
+  tunnel watches, the gate line, the red tick (observe, offer, dispatch), the conditions. It writes the snapshot
+  `~/.cache/agentctl/state.json` each tick and re-execs onto agentctl's new code between ticks (only onto committed,
+  self-tested code).
+- **Executors.** Long work runs in a process holding a lease, never inside the tick: `waiting check <id>` (a change's
+  checks), `waiting check-batch <id>` (the batch's check and bisect), a red fixer. The tick sees a dead executor as an
+  expired lease and starts another.
+- **Events → inbox.** Every transition writes an event; the projector turns events with an audience or a non-info
+  severity into inbox entries (the format the orchestrator keys on); the notifier sends the escalations (one macOS
+  notification each). Nothing in landing code writes the inbox directly.
+- **The snapshot.** `state.json` is the only source of `agentctl status --line` (the status line) and `ci-why
+  --cached`: no git, no Forgejo at read time.
+- **Fixers are visible.** Every red fixer is a Claude Code background session: `claude agents` lists them by name
+  (`red fixer #2432 · convergence takes-drift-1 (germany)`, `orphan · movies-wt-proxy-park`); `claude attach | logs |
+  stop <id>` work on them (see "red").
+- **The watchdog** (launchd `net.bitcashier.agentctl-watchdog`, every 60 s, `agentctl watchdog`) checks the invariants
+  from outside the processor: W1 the oldest unlanded change is under 2 h old (counted from the red's start while main
+  is red), W2 every red has a holder, an offer, a fix on its way or an owner block, W5 the processor beats, W6 every
+  escalation was notified, WM maintain ran, WB nobody leaves uncommitted edits in ~/bin's own checkout for over 10 min
+  (it names the processes working there). A violation is a condition and a notification.
+
 ## Safety guarantees
 
-- **Never `--no-verify`.** `land` builds its push argv in `push_argv()`, which asserts that no `--no-verify` or
-  `--force` flag is present. `land` also refuses to run with `PREPUSH_SKIP` set. A hook failure is reported, never
-  bypassed.
+- **Never `--no-verify`.** Every push argv is built by `push_argv()`, which asserts that no `--no-verify` or `--force`
+  flag is present. `land` refuses to run with `PREPUSH_SKIP` set. A hook failure is reported, never bypassed.
 - **Never unlocks the vault.** `env` only runs `secrets status <ns>`. When the vault is locked, it tells you which
-  `!` command to hand to the user. Touch ID belongs to the user.
-- **Never prints a secret.** Tokens are read inside the call that uses them (`secrets get … FORGEJO_API_TOKEN` or
-  `$GH_TOKEN`) and go only into a request header -- or, for a DETACHED child (land's watch, the processor it starts),
-  into the child's environment, and to the waiting processor over a 0600 unix socket (see "waiting"): never on a
-  command line or on disk. Why: `secrets` anchors an unlock to the session's processes, so a process whose launcher
-  exited (a detached watch once land ends) or a launchd service gets `locked`.
+  `!` command to hand to the user. Background code never calls `secrets` (it would prompt).
+- **Never prints a secret.** Tokens are read inside the call that uses them and go only into a request header, a
+  child's environment, or to the processor over a 0600 unix socket (see "waiting"): never on a command line or on disk.
 - **The DB is read-only.** `db-q` runs `sqlite3 -readonly -safe` and refuses anything but one SELECT, WITH or PRAGMA
   read.
 - **Never deletes unmerged work.** `cleanup` deletes only what is proven merged: the worktree's HEAD is an ancestor of
   forgejo/main, or every one of its commits is patch-equivalent there per `git cherry`. The tree must also be clean and
   idle. Every deletion is re-verified just before it happens and logged.
-- **One lander per repository.** `land` holds an flock per git common dir (`~/.cache/agentctl/land/`) from fetch to
-  verified push, so the kernel frees it when the lander dies. A second `land` waits (one line names the holder), then
-  rebases onto what the first landed: nobody tests a base that is about to move. The watch after LANDED runs with the
-  lock already released.
-- **Every long-running mode is OWNED** (2026-10-26): `wait`, land's watch and its wait on `waiting`, and the `waiting`
-  processor each hold one flock per target under `~/.cache/agentctl/owners/` (`$AGENTCTL_OWNERS_DIR`), freed by the
-  kernel when the process dies, with a record beside it: owner (Claude session, else user@cwd), pid, process start time,
-  argv, cwd, code version, and the CI runs it started. A second instance of the same target attaches (`wait`) or says
-  who owns it; it never runs beside a live one and never waits on a dead one. The runs it started are cancelled when
-  it ends, by its SIGTERM/SIGHUP/SIGINT handler, or after a SIGKILL by the next owner of the same target. At each poll
-  it compares `agentctl`'s file with the version it started on and, after a change, re-execs on the new code with
-  the same pid (land's watch resumes as `agentctl watch --sha`, its wait on `waiting` as `agentctl waiting await`).
-- **One waiter per target.** `wait` owns the run or file (above), in any session. A second caller attaches to the live
-  owner's verdict file and does not poll.
+- **One push to main at a time.** Every push to main happens under the `land/<repo>` lease, after the pushed tip's own
+  checks passed on the base it is pushed onto.
+- **Every long wait is OWNED**: `wait` holds one flock per target under `~/.cache/agentctl/owners/`
+  (`$AGENTCTL_OWNERS_DIR`), freed by the kernel when the process dies, with a record (owner, pid, start time, argv,
+  cwd, code version, the CI runs it started). A second `wait` on the same target attaches; the runs a dead owner
+  started are cancelled by the next owner. Owned processes re-exec onto agentctl's new code with the same pid.
 - **No artificial load.** Polls back off up to 5 minutes. Nothing in agentctl burns CPU.
 
 ## Standing-OK cleanup scope
@@ -91,9 +126,11 @@ The user has standing-OKed `agentctl cleanup --execute` for exactly what it dele
 - remote `measure/*` branches whose runs have all finished, or that are more than 24 h old with no run;
 - after `WATCH OK`, the worktree `land` ran from and its branch, when proven merged and clean (see "The lifecycle closes
   itself");
-- remote branches `agentctl sweep` proves merged into main (not `main`, `master`, `waiting`, `measure/*`);
+- remote branches `agentctl sweep` proves merged into main (not `main`, `master`, `measure/*`);
 - remote `measure/*` branches whose owner is gone (its worktree removed or its recorded pid dead) and whose runs all
-  finished (`agentctl sweep`; a `check/*` or `red-*` one is listed only).
+  finished (`agentctl sweep`; a `check/*` or `red-*` one is listed only);
+- the reconciler's own `land/<entry>` refs once their change is decided (landed, rejected, superseded, cancelled) or
+  unknown (the tick, every 10 min).
 
 It skips locked trees, dirty trees, trees in use by a process, and trees under `~/.cache` (unless you pass
 `--include-caches`). Every deletion is appended to `scratchpad/agentctl-deleted.log`
@@ -103,6 +140,18 @@ follows "list before deleting".
 ---
 
 ## Subcommands
+
+### status, lease, watchdog: what the reconciler holds
+
+```
+agentctl status [--line]          # the snapshot: the status line, then changes, the batch, reds, conditions
+agentctl lease list [prefix] [--all]   # live leases and those freed in the last hour (--all: every one)
+agentctl watchdog                 # one invariant pass (launchd every 60 s)
+```
+
+`status` reads only `state.json` (written each tick), and prints each item with its state and deadline and how long
+ago the tick ran. `lease list` prints holder, epoch, expiry, max hold and the holder's note; leases free for over a day
+are archived into the events by the tick, so the table stays small.
 
 ### wait run: block on CI and print only the verdict
 
@@ -201,19 +250,19 @@ Use it when the red gate refused your push, or before you decide whether a red i
 first. A genuine `Fixes-Red:` trailer is only for a commit that really fixes that run.
 
 Under each red row (the gate's and the reds outside it) ci-why prints ONE line, `fixing: <state>`, the state
-`red_state` decides for that red run -- the same function the patrol acts on, so ci-why, `--summary`, the status line
-and `red patrol` can never disagree (2026-10-27: Identity capture #2133 was `UNASSIGNED (assigning ...)` in ci-why
+`red_state` decides for that red run -- the same function the red tick acts on, so ci-why, `--summary`, the status line
+and `red status` can never disagree (2026-10-27: Identity capture #2133 was `UNASSIGNED (assigning ...)` in ci-why
 while `red patrol` said "nothing to do", for ~50 min). Precedence: `fix landed in <sha>, awaiting #M` > a change
 waiting / landing / committed (`<worktree> (..., waiting)`) > `BLOCKED ON OWNER` > `<claimant> (..., claimed) -- note`
 > diagnosed > a notified author > a dispatched fixer before its claim (`dispatching`); with nobody on it:
-`dispatching a fixer… (...)` (a gate red before the patrol's look, or outside the gate and due; normal weight),
+`dispatching a fixer… (...)` (a gate red before the red tick's look, or outside the gate and due; normal weight),
 `UNASSIGNED (outside the gate: a fixer is dispatched at HH:MM unless somebody claims it)`,
 `UNASSIGNED (its fix <sha> failed ...: its fixer is resumed ...)`, or `NOBODY (skipped: <reason>)` -- dispatch OFF, a
 cap, the daily budget, an escalation (bold NOBODY: only a truly unowned red, always with its reason). **Assign first**
-(2026-10-27, "why is main red unassigned?"): the processor cycle that first sees a gate red runs the patrol's assignment
-(author claim or dispatch) BEFORE it publishes the CI-state snapshot and the gate line, so no published state holds an
-unassigned red; when the gate line changes (its reds or their states) it touches `~/.cache/agentctl/statusline.stale`
-(`$AGENTCTL_STATUSLINE_STALE`) and the status line refreshes at its next call, not only at its 60 s age. States are recomputed from the snapshot and the worktrees every time, never kept.
+(2026-10-27, "why is main red unassigned?"): the processor cycle that first sees a gate red runs the red tick's assignment
+(an offer, then the dispatcher) BEFORE it writes the snapshot, so no published state holds an unassigned red; the
+status line reads that snapshot (`state.json`) at every call. A red's state is its item's state plus its lease or
+offer, never a guess.
 agentctl's own trees (`<clone>-wt-check-N`, `-wt-waiting`, `-wt-batch`, the queue's clone, ~/.cache) are never a
 fixer, owner or author: a queued change's owner is its entry's source worktree. `ci-why --summary` is the status
 line's one line: `gate RED (main #2066 → fix 0a5767c awaiting #2070; convergence green)`.
@@ -221,26 +270,24 @@ line's one line: `gate RED (main #2066 → fix 0a5767c awaiting #2070; convergen
 ### recover: every non-green condition clears itself
 
 ```
-agentctl recover [status]    # each open condition: what, its probe, last check, next check, on-recover actions
+agentctl recover [status]    # each open condition: what, its probe, last check, next check
 agentctl recover tick        # probe every open condition now
 ```
 
-The owner (2026-10-28): "make this self-recover", "i want a general solution", "the way it got red / blocked i want it
-to go green as well", "structural". Every non-green state -- RED UNCLAIMED / BUDGET / ESCALATE, RED BLOCKED ON OWNER,
-STALLED, UNKNOWN, NETWORK, the gate UNREAD, an infra NOT LANDED -- is a CONDITION in `~/.cache/agentctl/recovery/`,
-opened only by `open_condition(kind, text, probe, on_recover)` with the FAILED result of the check that found it
-(`run_probe`, no default). The duties thread re-runs that same probe (backoff 2^fails, at most 10 min; every condition
-at once when the network changes); when it passes, the condition's inbox entries are acked, the gate is marked dirty,
-the status line refreshes, its actions run (release a block and dispatch the red's workflow to verify it, reset the
-tunnel state, lift a batch hold, `agentctl land` again) and one `RECOVERED:` note is written. Probes: workflow_green
-(the snapshot's newest decided run), http, tcp, red_resolved (claimed, green or superseded), route, tunnel, gate_read,
-token, processor, git_fetch, laptop_load, queue_entry -- none calls `secrets`. `inbox_write` refuses a condition-kind
-entry anywhere else (a command's own verdict, `reply=True`, aside), a blocked claim cannot be written outside it, and
-`tests/test_recovery.py` lints the source for a bypass.
+The owner (2026-10-28): "make this self-recover", "the way it got red / blocked i want it to go green as well",
+"structural". Every non-green state -- STALLED, UNKNOWN, NETWORK, the gate UNREAD, an infra NOT LANDED, a watchdog
+INVARIANT -- is a `condition` item in the store, opened only by `open_condition(kind, text, probe, on_recover)` with
+the FAILED result of the check that found it (`run_probe`, no default). The tick re-runs that same probe (backoff
+2^fails, at most 10 min; every condition at once when the network changes). When it passes the condition closes
+(`condition.closed`), its actions run (dispatch a red's workflow to verify it, reset the tunnel state, lift a batch
+hold, land again) and one `RECOVERED:` event is written. Unacknowledged past its deadline, a condition escalates
+(an event of severity `escalate`, which the notifier delivers). Probes: workflow_green, http, tcp, red_resolved,
+route, tunnel, gate_read, token, processor, git_fetch, laptop_load, queue_entry, invariant -- none calls `secrets`.
+`tests/test_recovery.py` lints the source for a bypass. Owner blocks are block LEASES renewed by their probe (see
+"always claimed"), not conditions.
 
-An infra NOT LANDED (fetch / tunnel / network, a remote run unreadable or ci-runner trouble, a stall) lands again when
-its check passes (it rebases first; a conflict is a real NOT LANDED); a cause the text does not name counts as real AND
-is retried once; a test failure, conflict or refusal stays with the author.
+An infra NOT LANDED (fetch / tunnel / network, a remote run unreadable, a stall) lands again when its check passes (it
+rebases first; a conflict is a real NOT LANDED); a test failure, conflict or refusal stays with the author.
 
 Decodo (2026-10-28): `Decodo probe` (movies, every 30 min + dispatch) CONNECTs through the proxy with the CI secrets;
 Security headers' block is `red block <n> --cmd "Check the Decodo dashboard ..." --until-green "Decodo probe"`, so it
@@ -260,7 +307,7 @@ The owner: "why unclaimed ... should always claim, fix structurally".
   `agentctl maintain` lists its worktree (and removes it only when proven merged).
 - **No daily budget.** A red that cannot get a fixer now (a concurrency cap, or dispatch unavailable) waits in a FIFO
   queue per class: `queued for a fixer (#k, next slot when <x> ends)`. That is a recovery condition (probe
-  `fixer_slot`, on recover: the patrol runs). Gate reds keep their own cap of 3 alive.
+  `fixer_slot`, on recover: the red tick runs). Gate reds keep their own cap of 3 alive.
 - **Escalation is never NOBODY and never the owner.** After 2 failed fixers comes ONE investigation fixer (named in
   RED ESCALATE). After that come DEEP investigations (`claude --effort max`), again and again within the caps. Each one
   gets the whole history: the failing test and its error, every refuted fix, every fixer's verdict. A code red is
@@ -268,7 +315,7 @@ The owner: "why unclaimed ... should always claim, fix structurally".
 - **BLOCKED ON OWNER is only for the owner's causes.** `red block` needs `--owner-cause` (external-account,
   credentials, infra-apply, deploy, billing, dashboard), and it refuses a TEST FAILURE red and a red with a live
   fixer. Every block states what fails, what was tried, why only the owner can act, the exact `!` command, and how it
-  auto-clears; `ci-why` shows all of it, while the status line shows a short form with a pointer. Every patrol tick
+  auto-clears; `ci-why` shows all of it, while the status line shows a short form with a pointer. Every red tick
   checks each block again (the condition's probe is `owner_block`, which ANDs in the block's justification). A block
   that lost its cause, its command, or its non-test verdict, or whose red has a live fixer, is dropped at once.
   A live fixer outranks a block. A red with 3 or more refuted fixes is `recurring: N fixes refuted`, and its fixer is told to find the root
@@ -285,12 +332,16 @@ agentctl red claim <run> [--note "<what>"]     # an agent assigned a red runs th
 agentctl red block <run> --cmd "<command>" [--cause <outage>] [--until-green <workflow> | --until-http <url> | --until-tcp <host:port>]
                                                # it waits on the owner: BLOCKED ON OWNER (assigned, shown loudly) until
                                                # its probe passes (default: the red's own workflow goes green)
+agentctl red beat <run> --note "<what>"       # renew your lease by hand (a new note is progress)
 agentctl red release <run> [--any]
-agentctl red list [-v]                         # claims (live / STALE / blocked), dispatched fixers, today's count
-agentctl red dispatch <run> [--force]          # a background Claude Code fixer session, by hand
+agentctl red status [-v]                       # every red: its state, holder or offer, deadline (`red list`: old name)
+agentctl red dispatch <run> [--force]          # the red's offer at top priority: the dispatcher takes it now
 agentctl red auto [on|off|status]              # the processor's automatic dispatch
-agentctl red patrol [--dispatch]               # the processor's look, now
+claude agents                                  # every dispatched fixer, by name (attach / logs / stop <id>)
 ```
+
+A claim is a LEASE (`red/<key>`, 30 min, renewed by your worktree's activity or a new note, at most 8 h); a fixer's is
+renewed by its session's transcript and worktree (15 min, at most 3 h). A lease that lapses offers the red again.
 
 The owner (2026-10-27): "i want gate status to point to agent(s) fixing the red build(s)", then "if a build is red, an
 agent must be assigned to it".
@@ -314,7 +365,7 @@ agent must be assigned to it".
   commits or moves. 30 min with none (`$AGENTCTL_RED_STALE_MIN`): STALE, counted for nobody, removed by `agentctl
   sweep`, and the red can be taken over.
 - **Assigned at the moment of red (2026-10-27: "why is no one assigned to the red? root cause structural fix").** The
-  snapshot cycle that first sees a gate red runs the patrol at once, and the patrol assigns it then:
+  snapshot cycle that first sees a gate red runs the red tick at once, and it assigns the red then:
   - every commit of the red run since that workflow's last green run is attributed to its worktree (landed queue
     entries, `LANDED` inbox entries, HEAD / reflog);
   - a LIVE author (a pid alive -- the queue entry's or LANDED entry's Claude pid, or an agent process in the worktree --
@@ -325,19 +376,20 @@ agent must be assigned to it".
   - no live author: a fixer is dispatched NOW (one per red run, whatever the number of authors);
   - an infra-shaped red (every failed job `[infra]` or UNCLEAR: runner lost, truncated log) skips the authors and gets
     an infra-diagnosis fixer at once.
-- **No silent skips (2026-10-27).** `red patrol` prints every red's state line (as ci-why words it) after its
-  actions. A red nobody fixes that the patrol cannot put anyone on -- gate or outside -- gets the reason written into
+- **No silent skips (2026-10-27).** `red status` prints every red's state line (as ci-why words it) after its
+  actions. A red nobody fixes that the red tick cannot put anyone on -- gate or outside -- gets the reason written into
   its record (`NOBODY (skipped: <why>)` in ci-why and the status line), a `SKIPPED` line in dispatch.log, and ONE
   `RED UNCLAIMED: <workflow> #N [jobs]: NOBODY -- <why>` inbox entry per spell, escalated after 10 min unread (see
   "inbox escalated"). `ci-why` (no dispatch) still writes
   it for a red nobody fixes for 10 min (`$AGENTCTL_RED_UNCLAIMED_MIN`), and reds outside the gate keep that wait.
-- **Dispatch (the always-on `waiting` processor, launchd `net.bitcashier.agentctl-waiting`).** Every 2 min
-  (`$AGENTCTL_RED_PATROL`, and at once on a new gate red) it reads the gate and the reds outside it. A gate red with no
-  live author (above), and a red outside the gate nobody fixes for 10 min, gets a headless fixer:
-  `claude -p` in a fresh worktree `~/projects/movies-wt-red-<run>` off forgejo/main, briefed with
+- **Dispatch (the processor's red tick).** A red with nobody on it is an OFFER; the dispatcher takes offers (gate
+  reds first, within the caps) and each taken offer is a LEASE its fixer holds. The fixer is a Claude Code background
+  session, `claude --bg -n "<label>"` (`claude agents` lists it by that label), in a fresh worktree
+  `~/projects/movies-wt-red-<run>` off forgejo/main plus `~/bin-wt-red-<run>` for any agentctl change (never ~/bin's
+  own checkout), briefed with
   `~/bin/briefs/movies-agent-preamble.md` (synced from the orchestrator's scratchpad copy), the run, its jobs and first
   error line. An `[infra]` red gets a DIAGNOSE-ONLY brief (no code change; runners, ci-runner, owner actions). The fixer
-  claims the red with its wrapper's pid, logs under `~/.cache/agentctl/reds/<run>/`, ends at `LANDED` (or `GAVE UP:` /
+  notes what it does on its lease (`red claim`), keeps its record under `~/.cache/agentctl/reds/<run>/`, ends at `LANDED` (or `GAVE UP:` /
   `BLOCKED ON OWNER:` / `DIAGNOSED:`), and its verdict reaches the inbox (`RED FIXER <workflow> #N: ...`, kind
   FIXER_LANDED or FIXER_FAILED; `RED DISPATCHED` when it starts). Caps: one fixer per red; 3 h wall time each
   (`$AGENTCTL_RED_FIXER_WALL`). A red still failing after 2 dispatched fixers: one `RED ESCALATE` entry, never
@@ -357,7 +409,7 @@ agent must be assigned to it".
   and an implementer is dispatched at once in a fresh worktree with the diagnosis in its brief: remove the cause, or,
   for a real one-off outside the code, land the means to diagnose it next time (the failing process's stderr and exit
   status kept: e.g. Chrome's stderr, which CdpDriver discarded for #2146). Under a cap the claim says why it waits and
-  the patrol dispatches it later; the implementer's own claim replaces it. The implementer is the same attempt (not
+  the dispatcher takes it later; the implementer's own claim replaces it. The implementer is the same attempt (not
   counted toward RED ESCALATE); an implementer that only diagnoses again: the claim says `awaiting a person` and
   `RED ESCALATE`.
 - **Permissions.** A fixer runs in the permission mode interactive sessions start in (`permissions.defaultMode` in
@@ -368,7 +420,7 @@ agent must be assigned to it".
 - **The author first, briefly.** A live author holds the red for its 10-min window by its claim (above); a finished
   or idle author holds nothing.
 - **Failing fixes.** A landed `Fixes-Red:` fix whose next run fails the same way goes back to its dispatched fixer ONCE
-  (its own session resumed, `claude -p --resume`, told what happened); then a fresh fixer; then, when the culprit is
+  (its own session resumed, `claude --bg --resume <session>`, told what happened); then a fresh fixer; then, when the culprit is
   known (the only commit between the last green run and the first red one), the REVERT FALLBACK: a `git revert` of it
   with `Fixes-Red: N`, landed by `agentctl land` through the normal hook (`RED REVERT` in the inbox); then
   `RED ESCALATE`.
@@ -399,12 +451,12 @@ agent must be assigned to it".
 - **A stale local red.** `reds/local.json` is keyed to the main sha it was computed on. Once forgejo/main moves past it
   the record is shown as `Local checks: stale, rechecking` (never RED, no unit, no dispatch) and the failing checks are
   run again on the new main (the hook over <recorded main>..main, other checks skipped, governor check class): in the
-  background by the processor's patrol, synchronously by `red patrol`, or by a land's passing dry run. A pass clears the
+  background by the processor's red tick, or by a land's passing dry run. A pass clears the
   red, releases its claims, stops its dispatched fixer (process groups) and writes `FIX OK` to the inbox; the fixer's
   worktrees whose commits are patch-equivalent on main (`git cherry`) are removed, any other is an inbox `RED LEFTOVER`.
-- **One CI-state snapshot.** The processor reads every main workflow once per cycle into
-  `~/.cache/agentctl/ci-state.json`; the gate verdict, the outside-the-gate reds, the published summary and the patrol
-  read it (older than 3 min: unread, never green). `ci-why --summary` is one line: `gate green · reds: Identity capture
+- **One CI-state snapshot.** The processor reads every main workflow once per cycle into `state.json`'s `ci`; the
+  gate verdict, the outside-the-gate reds, the published summary and the red tick read it (older than 3 min: unread,
+  never green). `ci-why --summary` is one line: `gate green · reds: Identity capture
   #2104 → drift; local → stale, rechecking` or `gate green · no reds` (at most 3 reds, then `+N more`).
 - **Services re-exec only onto good code.** `restart_if_changed` needs the file to equal ~/bin's HEAD version (a dirty
   edit is never picked up) and HEAD to pass `py_compile` and `agentctl --selftest`; otherwise the old code keeps running
@@ -420,250 +472,122 @@ agent must be assigned to it".
   next scheduled run (cron ...)`.
 - Headless fixers carry the Forgejo token (fixer_env); CI reads never block on the owner, `BLOCKED ON OWNER` is for real
   owner actions only.
-- **An unreadable gate** (Forgejo, the tunnel, the vault or the token down): the patrol dispatches nothing, writes ONE
+- **An unreadable gate** (Forgejo, the tunnel, the vault or the token down): the red tick dispatches nothing, writes ONE
   `UNKNOWN: the red patrol cannot read the gate (…)` per spell with an infra check (ports 3000 / 2222, the token),
   and pushes fail closed (an unread gate is red).
-- **Nobody awake.** The launchd processor patrols and dispatches with no session open; every verdict waits in the
-  inbox. The status line says `as of HH:MM` once its cache is over 5 min old.
+- **Nobody awake.** The launchd processor ticks and dispatches with no session open; every verdict waits in the
+  inbox. The status line says `RECONCILER not running` when the snapshot is stale.
 
-### the land queue: QUEUED at once, checked and pushed by the processor (2026-10-27)
+### land: QUEUED at once; checked, pushed and watched by the reconciler
 
 ```
-agentctl land                       # movies: rebase, squash guard, QUEUED <id> (<sha>): END YOUR TURN
-agentctl land --follow              # the in-process land below (checks here, push, watch): scripts and red fixers
-agentctl waiting status             # also lists the queued changes (queued / checking, a remote run)
-agentctl waiting cancel <id>        # drop a queued change (its checker is stopped, its CI run cancelled)
+agentctl land [--repo PATH] [--branch B] [--stash] [--keep-worktree]   # movies: QUEUED <id> (<sha>): END YOUR TURN
+agentctl land --follow              # scripts and red fixers: the checks here, the push, then the watch, in-process
+agentctl waiting status             # the changes with their states, the batch, the gate, the processor
+agentctl waiting cancel <id>        # drop a queued or waiting change (its executor is stopped)
 ```
 
-The owner: "agents never wait on a land". In movies (a repo whose hook can check a change apart), `land` fetches,
-rebases onto forgejo/main, runs the squash guard, writes the change as a QUEUED entry of the `waiting` state and
-returns: `QUEUED <id> (<sha>, n ahead)`, exit 0 (an inbox entry of kind QUEUED). The always-on processor (launchd
-`net.bitcashier.agentctl-waiting`) starts a CHECKER per queued change (`agentctl waiting check <id>`, owned per entry;
-a fix of a red run first), at most `$AGENTCTL_CHECK_TREES` (3) at once, each in a CHECK TREE of its own -- a detached
-worktree `<clone>-wt-check-<n>`, kept between checks so its build stays warm, seeded from the shared build cache when
-cold. The checker:
+The owner: "agents never wait on a land". In movies (a repo whose hook can check a change apart), `land`:
 
-1. rebuilds the change on forgejo/main in the tree (a conflict: `NOT LANDED: ... no longer applies`);
-2. runs the hook's dry run there -- `--range`, or `--checks-only` when main is red and the change must wait -- as a
-   check of THE GOVERNOR (`gov`: red for a `Fixes-Red:` fix), under the stall bound; or, when `gov status` reports
-   pressure, on ci-runner (see "remote checks"); a failure is `NOT LANDED: the pre-push checks failed` with the tail;
-3. under the landing lock: main moved since the check -> rebased onto it there, and checked again (back to 1) ONLY when
-   the commits that landed meanwhile overlap: a path both touch, an sbt module one touches that the other's is or
-   depends on (the hook's own `--compile-plan`, build.sbt's dependsOn), or a change to build.sbt / project/ / the hook;
-   a conflict is NOT LANDED. No overlap: pushed at once, the change's checks skipped at the push (`PREPUSH_SKIP` = the
-   hook's `--plan` for its paths; the red gate still runs), the LANDED line saying `main moved by 3 commits, no
-   overlap: pushed without re-check`; main's CI tests the combination. Re-checked twice at most; the third time it is
-   pushed as rebased, the push's hook running the checks on the new base, so a busy main never starves it; main red and the change must wait ->
-   it joins `waiting` (`WAITING ...`, the entry names your worktree); else the push from the tree, whose hook reuses
-   the pass (or confirms the remote run) -> `LANDED <sha>` and a detached watch that closes your worktree after
-   WATCH OK when proven merged (unless land had `--keep-worktree`).
+1. fetches (retried once after 15 s) and rebases onto forgejo/main (a conflict: `NOT LANDED` listing the files);
+2. runs `prepush-check`, the squash guard (below);
+3. writes the change as a `change` item in state `queued` (re-landing from the same worktree and branch SUPERSEDES the
+   older item: `SUPERSEDED <old> by <new>` to the inbox, its executor stopped);
+4. pushes the change to `refs/heads/land/<id>` on Forgejo (bounded; movies' hook checks nothing on a `land/` ref and
+   no workflow triggers on one), so the change lives on Forgejo, not only in your worktree;
+5. prints `QUEUED <id> (<sha>, n ahead)` and exits 0.
 
-**Never an empty commit** (2026-10-27: overlapping entries -- a commit queued, queued again, both run -- landed four
-empty duplicates on main: 317fba9b3, 1fddd8951, 1d554f051, 693e1be78/82f4d9f55):
-- **Re-queueing replaces.** `land` from a worktree whose older entry (same worktree and branch) is still queued or
-  checking supersedes it: `SUPERSEDED <old> by <new>` to the inbox, its checker stopped; a checker re-reads its entry
-  under the landing lock and never pushes a superseded one. Joining `waiting` again supersedes the older waiting entry.
-- **Already on main is LANDED.** The checker and the `waiting` rebuild pick each commit onto current forgejo/main one
-  at a time; one that is patch-equivalent (`git cherry`'s test) or empty after the pick is dropped. An entry left with
-  nothing: `LANDED <head> (already on main via <commit>): nothing left to push`, no push. A partly applied entry keeps
-  only its non-empty commits (the dropped ones in the entry's `dropped`). A change identical to one already on
-  `waiting` joins nothing new.
-- **The last guard:** `prepush-check` (land's guard and movies' hook) refuses a range carrying an empty commit, unless
-  it is deliberate: `git commit --allow-empty` with an `Allow-Empty: <why>` trailer.
+The reconciler then takes it, a step per tick:
 
-A check the LAPTOP failed (sbt's server never came up, `failed to connect to server`, a script test's TIMEOUT, a
-stall) is no verdict on the change: it is queued again 5 min later, up to 3 times. Every verdict is an inbox entry
-whose cwd is your worktree. A checker that dies is restarted by the processor (three
-times, then `NOT LANDED`). `land --follow`, `--no-watch`, a dispatched red fixer (`$AGENTCTL_RED_FIXER`, whose wrapper
-reads LANDED) and `AGENTCTL_QUEUE=0` keep the in-process land below.
+- **queued → checking.** The tick starts an executor, `agentctl waiting check <id>` (Fixes-Red changes first), holding
+  `check/<id>` and a check slot (`$AGENTCTL_CHECK_TREES`, 3): a CHECK TREE `<clone>-wt-check-<n>`, kept between checks so
+  its build stays warm. It rebuilds the change on forgejo/main there (each commit picked; one already on main is
+  dropped; nothing left: `LANDED <head> (already on main via <commit>)`), then runs the hook's dry run -- `--range`, or
+  `--checks-only` when main is red and the change must wait -- as a check of the governor (`gov`), under the
+  20-min no-progress bound; or, under laptop pressure, on ci-runner (see "remote checks"). Pass: `checked`. Fail:
+  `rejected`, `NOT LANDED: the pre-push checks failed` with the tail. A check the LAPTOP failed (sbt never came up, a
+  script test's TIMEOUT, a stall) is no verdict: queued again 5 min later, up to 3 times. A dead executor is an
+  expired lease: the tick starts another.
+- **checked → pushing → landed.** Under the `land/<repo>` lease the tick re-reads the item (a superseded one is never
+  pushed). Main moved since the check: rebased onto it, re-checked (a new round) ONLY when what landed meanwhile
+  overlaps -- a path both touch, an sbt module one touches that the other's is or depends on, build.sbt / project/ /
+  the hook -- else pushed at once (`main moved by 3 commits, no overlap: pushed without re-check`; the push's hook
+  judges the red gate only). Re-checked twice at most; the third time it is pushed as rebased and the push's hook runs
+  the checks. The push is bounded; on expiry it verifies before it retries. `LANDED <sha>`, and a `watch` item.
+- **checked → waiting** while main is red and the change must wait (a production path, no `Fixes-Red:` for the red
+  run): `WAITING <sha> (entry <id>, n in batch)`. Tools-only changes and Fixes-Red changes land while red.
+- **The batch.** When main turns green, the waiting changes are ONE `batch` item. The tick assembles its tip in a
+  throwaway check tree (forgejo/main plus the changes in queue order, Fixes-Red first; a change that no longer applies
+  is rejected alone), and an executor, `waiting check-batch <id>`, checks it ONCE (`pre-push --fast-only`: every test
+  config compiled and the fast tests; each change already passed its own full checks) on a fresh sbt server. Pass: one
+  push of the tip; every change is LANDED with its own watch. Fail: bisect by prefix, the culprit confirmed before it
+  is rejected, the passing prefix landed at once, the rest in the next batch. A stall is retried once, then the batch
+  is HELD 30 min (`HELD:` in the inbox). A waiting change that reached main another way meanwhile is LANDED.
+- **The watch.** A `watch` item per landed sha, evaluated each minute by the tick: **Main** (the main.yml run whose
+  head is the sha, else the newest whose head contains it) and the **convergence** (the first convergence run on main
+  created after the push whose head contains it; none within 60 min: said, not waited for). `WATCH OK: Main #n green,
+  convergence #m green` closes the worktree you landed from when proven merged (unless `--keep-worktree`); `WATCH RED:
+  <workflow> #n <failed jobs>` the moment either is red (fix forward with `Fixes-Red: <n>`); `WATCH UNKNOWN` after
+  3 h undecided. A landed `Fixes-Red: N` is verified: `FIX OK` / `FIX FAILED` / `FIX UNVERIFIED`, each an inbox entry;
+  a fix for a red outside the gate gets its workflow dispatched on main to verify it.
+
+**Never an empty commit** (2026-10-27: overlapping entries landed four empty duplicates on main): re-queueing
+replaces; a commit already on main is dropped at the rebuild; `prepush-check` refuses a range carrying an empty commit
+unless it carries `Allow-Empty: <why>`.
+
+`NOT LANDED: <reason>`: a dirty tree (`--stash` sets it aside in a named stash and restores it); a rebase conflict; a
+prepush-check refusal; the pre-push checks failed (the last 25 lines; the full log in the entry's check log); a
+conflict with the changes ahead of it in the batch; `stalled <step>` (no progress for 20 min); the red gate (followed
+by the `ci-why` summary).
+
+**In-process land** (`--follow`, `--no-watch`, a dispatched red fixer, `AGENTCTL_QUEUE=0`): the same checks run in
+land's own process, outside the lock (the hook's dry run `--range forgejo/main..<sha>`), then under the `land/<repo>`
+lease it fetches, pushes when main has not moved since the check (moved: checked again outside the lock, twice; the
+third time under it) and verifies; main red and the change must wait: it joins the queue as `waiting` and `--follow`
+waits for its batch. `--follow` then watches in-process; otherwise LANDED starts a watch item and land exits.
+
+Other repos (no movies hook): `land` holds `land/<repo>`, fetches, rebases, runs prepush-check, pushes (the repo's
+hook runs), verifies with `merge-base --is-ancestor` or `git cherry`, and prints `LANDED <sha>`; no watch.
+
+Use it for every push to main. Don't use it for `measure/` branches: `identity-measure` pushes those itself.
 
 ### remote checks: ci-runner's check tier under pressure
 
 When the governor reports memory or CPU pressure (`gov status`'s `pressure:` line: memory pressure over 75%, under
 3 + 5 GB free with no idle sbt server to evict, or load over 2x the cores; `$AGENTCTL_REMOTE_PRESSURE`,
 `$AGENTCTL_REMOTE_LOAD`; `AGENTCTL_REMOTE_CHECKS=0` turns it off), a queued change's checks run on ci-runner instead:
-the checker pushes the checked tip to `check/<entry id>` (movies' hook checks nothing for a check/ branch), whose push
-runs `.github/workflows/precommit-check.yml` on the check tier (ubuntu runner, slice `check`): the same hook,
-`--checks-only <merge-base with main>..HEAD`. The checker follows that run (owned: cancelled if the checker dies;
-none started in 15 min, or undecided after 2 h: no verdict, checked locally instead), reads its verdict -- the same
-shape as a local one, the failed jobs' relevant lines as the tail -- and deletes the branch. The push to main then
-carries `PREPUSH_REMOTE_RUN=<run id>`: the hook takes that run for its checks only once Forgejo says it is
-precommit-check.yml, a success, on exactly the pushed commit; anything else runs every check on the laptop.
+the executor pushes the checked tip to `check/<entry id>` (movies' hook checks nothing for a check/ branch), whose push
+runs `.github/workflows/precommit-check.yml` on the check tier: the same hook, `--checks-only <merge-base>..HEAD`. The
+run is the ENTRY's, not the executor's: its record is saved the moment the branch is pushed, a replacement executor
+ADOPTS it (no new push, no new run), and the 15-min (no run started) / 2-h (undecided) bounds count from the push;
+past them it is checked locally. The push to main then carries `PREPUSH_REMOTE_RUN=<run id>`: the hook takes that run
+only once Forgejo says it is precommit-check.yml, a success, on exactly the pushed commit. Superseding or cancelling an
+entry cancels its undecided run.
 
-**The run is the ENTRY's, not the checker's** (2026-10-27: entry -45's run 3344 went green while `waiting status` showed
-`checking ... remote run 3344` for an hour -- its checker ended mid-wait at 19:52:56Z, taking its next run 3354 down
-with it (`cancelled ... (its check ended)`), the replacement started over, and the saved `remote_run` was never
-cleared):
-- the check's record (`remote` in the entry: branch, base, tip, mode, run, push time) is saved the moment the branch
-  is pushed and again when the run is found; `remote_run` is cleared (and saved) at each new round;
-- a checker that dies, is stopped or re-exec'd mid-wait cancels nothing; its replacement ADOPTS the run -- same tip, no
-  new push, no new run -- and the 15-min / 2-h bounds count from the push (an adoption is no `attempts` retry);
-- every cycle the processor re-derives each `checking` entry from the facts (its checker's lock, its run's status on
-  Forgejo), stateless: a run decided 5 min ago that its live checker has not collected means a stranded checker --
-  stopped, and the replacement takes the verdict; a checker's SIGTERM is never swallowed by the outage handler;
-- an entry checking over 2x the expected duration (`$AGENTCTL_CHECK_EXPECTED_MIN`, 30 min, from the round's start) is
-  re-examined, and when still unresolvable (Forgejo unreadable, a decided run nobody collects, no checker) it is ONE
-  `STALLED: queue entry ...` inbox entry per round (escalated like any STALLED). The processor's own marks live in
-  `waiting/<repo>/reconcile/<id>.json`;
-- superseding or cancelling an entry cancels its undecided run.
-
-### land: lock, rebase, check, push, verify, watch
+### waiting: the processor, the token, the gate
 
 ```
-agentctl land [--repo PATH] [--branch B] [--stash] [--no-watch] [--keep-worktree]   # agents: Bash run_in_background=true
-```
-
-Steps, in order. Since 2026-10-27 the LONG part runs before the lock: fetch, rebase, the squash guard and step 6's
-dry run first, unlocked; then, under the lock, steps 1-5 again (seconds) and, when forgejo/main has not moved since the
-dry run, straight to the push, whose hook reuses that pass. Main moved: the lock is given back and the dry run repeats
-on the new main, unlocked (twice; a third time it runs under the lock, so a lander always finishes). A step that makes
-no progress -- no output and no CPU in its process group for 20 min (`$AGENTCTL_LAND_STALL_MIN`) -- is ended with
-`NOT LANDED: stalled <step>` (one land's hook hung 2.5 h in sbt-warm on 2026-10-27 and held every lander). The JVM load
-of parallel dry runs is capped by sbt-warm's JVM slots, not by the lock.
-
-1. take the repository's landing lock (an flock per git common dir under `~/.cache/agentctl/land/`), waiting for
-   another lander's to be released (`waiting for the landing lock (…), held for 12 min by: pid … <worktree> since …;
-   now: checks of <sha> since …`, repeated every 10 min; `$AGENTCTL_LAND_LOCK_TIMEOUT`, default 4 h);
-2. fetch (retried once after 15 s, since a tunnel restart takes seconds);
-3. `git rebase forgejo/main`; on a conflict it aborts and lists the files;
-4. `prepush-check` against forgejo/main;
-5. MAIN RED? When a gating workflow is red (ci-why's gate) and a pushed commit touches a production path without a
-   `Fixes-Red:` naming a red run, the change does not push: it goes onto the `waiting` branch (see "waiting" below),
-   `WAITING <sha> (n changes queued on waiting)`, the lock is released, and land keeps running until the branch lands:
-   then `LANDED <sha>` and step 10. Tools-only and Fixes-Red changes go on to step 6 while red, as the hook allows;
-6. CHECK FIRST, when the repo has `scripts/hooks/pre-push` (movies): `scripts/hooks/pre-push --range
-   forgejo/main..<sha>`, the hook's dry run over exactly what will be pushed. In movies that is the red gate, the
-   path-selected checks, the basic tests and the area tests (`identity`, `page`: minutes; see
-   `docs/landing-process.md`). A failure is `NOT LANDED: the pre-push checks failed` with the tail, and nothing is
-   pushed. The pass is stored, so step 7's hook reuses it in seconds (a long hook inside `git push` holds the push's
-   ssh connection idle, and a tunnel drop kills it);
-7. `git push forgejo <sha>:refs/heads/main`. The repo's pre-push hook runs, with sdkman's sbt/java first on PATH and
-   JAVA_HOME set;
-8. on a race (`non-fast-forward`, `cannot lock ref`, `fetch first`, `failed to update ref`), refetch, rebase and
-   retry (from step 5), up to 3 times;
-9. fetch again and verify with `merge-base --is-ancestor`, or `git cherry` for patch-equivalent commits:
-   `LANDED <sha>`. The lock is released here;
-10. THE WATCH (movies; `--no-watch` skips it): main's CI for the landed sha.
-   - **Main**: the `main.yml` run whose head is the sha; if it was cancelled or never came (a newer push superseded
-     it), the newest Main run whose head contains the sha (`merge-base --is-ancestor`).
-   - **Convergence**: the FIRST `identity-model-convergence.yml` run on main created after the push whose head
-     contains the sha — the sha's own kick, a later push's, or the daily run; a cancelled one (the lane replaced it)
-     passes to the next. None within 60 min (`$AGENTCTL_WATCH_CONV_START` seconds; kick-convergence skips pushes
-     outside `.github/convergence-paths.txt`): `convergence: none started within 60 min`, not waited for.
-   - Polls back off from 60 s to 5 min. Verdict: `WATCH OK: Main #n green, convergence #m green` (exit 0);
-     `WATCH RED: <workflow> #n <failed jobs>` plus the `ci-why` summary (exit 3) the moment either is red: your
-     change may have broken main, fix forward with `Fixes-Red: <n>`; `WATCH UNKNOWN: …` (exit 2) when a run is
-     undecided after 3 h (`$AGENTCTL_WATCH_TIMEOUT`), or with no Forgejo token at all (`no Forgejo token (…)`, at
-     once: retrying cannot help).
-   - **Forgejo unreachable** (2026-10-27): a failed read backs off from 30 s to 5 min and is retried until the 3 h
-     bound; only then `WATCH UNKNOWN: Forgejo's runs could not be read for 1h 40m (n failed reads, the last: …)`. No
-     stall is judged on failed reads.
-   - **Red fixes are verified** (the owner, 2026-10-27: the batch fix 97bb6d835 claimed `Fixes-Red: 2047`, Main #2059
-     failed again in the same worker-identity job, and nothing said so). For each run N a landed commit's
-     `Fixes-Red:` names (the sha's own trailers, plus `--fixes N` that land / the batch pass for the pushed commits),
-     the watch compares the first completed run of N's workflow containing the commit with N's failed jobs, each its
-     own inbox entry: `FIX FAILED: <workflow> #<new> still fails <jobs> (fix <sha> claimed #N)`, `FIX OK: #N cleared by
-     #<new>`, or `FIX UNVERIFIED: …` (N's workflow not completed when the watch ended, a job did not run, N not a
-     Main / convergence run).
-   - Every exit writes a verdict that names its cause (2026-10-27: two detached watches ended `(no output)`, exit 1:
-     they had no vault, and `token()`'s SystemExit slipped past the watch's `except Exception`). A SystemExit's message
-     is the verdict (`exited: …`), an exit with no verdict line says what it printed last (stderr first), and the
-     entry is written even when WATCH OK has just removed the worktree the watch ran in.
-   - Other repos: `watch: no CI watched for <repo>`, exit 0.
-   - The detached watch runs from the MAIN CLONE, never the agent's worktree (2026-10-27: a watch crashed when its
-     agent removed the worktree at LANDED); its inbox entry still names the worktree (`--for`).
-
-`NOT LANDED: <reason>` reasons:
-
-- dirty tree;
-- lock wait timed out;
-- rebase conflict;
-- prepush-check refusal;
-- main is red and the change conflicts with the changes already on `waiting`, or the checks failed on the combined
-  `waiting` tip (only your change is rejected; the waiting ones stay);
-- (later, for a waiting change) main moved and the change no longer applies, or the green-main batch failed with it;
-- the pre-push checks failed (the dry run: its last 25 lines; the full log in `scratchpad/agentctl-land-*.log`);
-- red gate (followed by the `ci-why` summary);
-- `stalled <step>`: the dry run, the push or the waiting checks made no progress for 20 min and were ended;
-- hook failure at push time (its last 25 lines, plus a tunnel hint when Forgejo was unreachable);
-- still racing;
-- pushed but not on main.
-
-A dirty tree is refused unless you pass `--stash`. That stashes the changes under a named stash
-(`agentctl-land-<pid>-<ts>`), finds it again by its sha (the stash list is shared by every worktree), and restores it
-afterwards. Exit: 0 landed (and watched green, or nothing to watch), 1 not landed, 2 landed but the watch could not
-tell, 3 landed and Main or the convergence RED.
-
-```
-$ ~/bin/agentctl land          # from ~/projects/movies-wt-relay, run_in_background=true
-agentctl: checking c972d56a2b: scripts/hooks/pre-push --range forgejo/main..HEAD (log: …/agentctl-land-movies-wt-relay-72692.log)
-agentctl: pushing c972d56a2b to forgejo/main (attempt 1/4; hook log: …)
-LANDED c972d56a2b4932077baaa40af95d388ab500bb03
-agentctl: watching Main and the convergence for c972d56a2b (up to 180 min; `--no-watch` skips this)
-Main #2711: success
-Identity model convergence #1630: success
-WATCH OK: Main #2711 green, convergence #1630 green
-```
-
-Use it for every push to main. Don't use it for `measure/` branches: `identity-measure` pushes those itself.
-
-### land, red or green (2026-10-27)
-
-```
-agentctl land [--follow]   # own checks first (a check slot) -> green: push, LANDED -> red: join `waiting`, WAITING
-```
-
-1. **The change's OWN checks first**, red main or green, outside the landing lock and in parallel with other landers'
-   within the check slots (below): the hook's dry run `--range forgejo/main..HEAD` -- or, when main is red and the
-   change must wait (a production path, no `Fixes-Red:` for the red run), `--checks-only` (no gate). A failure:
-   `NOT LANDED`; nothing joins.
-2. **Then the gate** (ci-why's: the newest COMPLETED Main and Identity model convergence runs on main; running, queued
-   and cancelled runs say nothing). **Green** (or a change that may land while red: tools only, or every production
-   commit carrying `Fixes-Red:` for the red run): under the lock, fetch, check main has not moved since the check
-   (moved: check again, outside the lock), push; the hook reuses the check's pass. `LANDED <sha>`, a DETACHED watch is
-   started (its WATCH verdict goes to the inbox), and land exits 0. **Red**: under the lock, only the cherry-pick of the
-   already-checked change onto `waiting` (rebuilt on forgejo/main; a conflict is `NOT LANDED`):
-   `WAITING <sha> (entry <id>, n in batch)`, and land exits 0. END YOUR TURN at either; every verdict reaches
-   `agentctl inbox`. `--follow` stays: until the batch lands, then watches.
-
-### waiting: production changes held while main is red, landed in one push at green
-
-```
-agentctl waiting status                      # the entries, the batch being checked, a HELD batch, the gate
-agentctl waiting cancel <id>                 # drop one; `waiting` is rebuilt without it
-agentctl waiting pause|resume                # take no batch until resume (joins still queue); resume ends a HELD wait
-agentctl waiting run [--once] [--service]    # the processor; land starts it detached
+agentctl waiting status                      # the changes, the batch, a HELD batch, the gate, the processor
+agentctl waiting cancel <id>                 # drop one change
+agentctl waiting pause|resume                # take no batch until resume (changes still queue); resume ends a HELD wait
+agentctl waiting run [--once] [--service]    # the processor (the tick loop)
 agentctl waiting service install|uninstall|status   # the processor as launchd agent net.bitcashier.agentctl-waiting
 ```
 
-- **An unread gate is RED** (the owner, 2026-10-27). At 08:05Z the launchd processor, with no Forgejo token (launchd
-  has no `secrets` on PATH, and no vault session anyway), read the gate as green and pushed a 2-change batch (ce9442b1b)
-  onto red Main #2047; the hook, tokenless too, skipped its own gate. Now `gate_reds` answers `{unread}` when it cannot
-  read: land joins `waiting`, the processor takes no batch, writes ONE `UNKNOWN: the waiting processor cannot read the
-  gate (…)` inbox entry per unread spell, and `waiting status` prints `gate: UNREAD, taken as red (…)`.
-- **The token hand-off**: the processor listens on a unix socket (`/tmp/agentctl-<uid>/<hash>.sock`, 0600 in a 0700
-  dir; `$AGENTCTL_SOCK_DIR`). Every `land` that joins, and `waiting status` / `resume`, run where the vault answers and
-  hand it the token, kept in its memory and environment only (a re-exec keeps it; the batch push's hook and the
-  watches it starts inherit it). After a reboot or service restart: `~/bin/agentctl waiting status` from a session
-  with the vault unlocked.
-- **The processor** (one per repo, an owned lock; it re-execs on agentctl's new code before each batch) waits while
-  the gate is red (it takes a batch while red only if a `Fixes-Red:` entry for the red run waits -- such an entry goes
-  FIRST). At green, under the lock it rebuilds `waiting` on forgejo/main; released, it runs ONE combined check of the
-  batch's tip: `pre-push --fast-only` (every test config compiled, the lint specs and local-tests.txt's `fast` set; no
-  area tests: each change passed its own full checks before it joined; the full `--range` for a hook without
-  `--fast-only`), in a detached worktree `<clone>-wt-batch` on a FRESH sbt server (`sbt-warm --stop` before and
-  after), in a check slot. Changes that join during the check wait for the next batch.
-- **Pass:** under the lock, main unmoved, ONE push of the tip through the hook (`PREPUSH_REUSE_FAST=1`: it reuses the
-  fast pass after judging the gate). Every entry is LANDED (an inbox entry in its agent's worktree) and gets a detached
-  watch. **Fail:** bisect by prefix (binary search over the entries' tips), reject only the culprit (`NOT LANDED` with
-  the failing tail, to the inbox), land the passing prefix before it at once; the rest go with the next batch.
-- **Stall:** the check runs under the 20-min no-progress abort (no output growth and under a second of CPU in its
-  process group), and the hook's exit 75 / `STALLED:` counts too. A stalled check is retried once on a fresh server;
-  stalled again, the batch is HELD for 30 min (`$AGENTCTL_BATCH_HOLD`) with a `HELD:` inbox entry.
-- **As a service** (`waiting service install`, which the owner runs): `agentctl waiting run --service` under launchd
-  (KeepAlive, RunAtLoad, log `~/.cache/agentctl/waiting/<repo>/service.log`). An empty `waiting` costs a directory
-  listing every 30 s; wall-clock sleeps only, so it carries on after the laptop sleeps; a batch lands with no land or
-  agent alive, its verdicts in the inbox.
+(`waiting check <id>`, `waiting check-batch <id>` and `waiting await` are internal: the executors and `land --follow`.)
+
+- **An unread gate is RED** (the owner, 2026-10-27). When the processor cannot read the gate (Forgejo, the tunnel or
+  the token down) a production change waits and no batch is taken; one `UNKNOWN: ... cannot read the gate (…)` per
+  spell, and `waiting status` prints `gate: UNREAD, taken as red (…)`.
+- **The token hand-off.** A launchd service gets no answer from the vault, so the processor listens on a unix socket
+  (`/tmp/agentctl-<uid>/<hash>.sock`, 0600 in a 0700 dir; `$AGENTCTL_SOCK_DIR`). Every `land`, and `waiting status` /
+  `resume` run where the vault answers, hand it the Forgejo token, kept in its memory and environment only (a re-exec
+  keeps it; executors and fixers inherit it). After a reboot or a service restart: `AGENTCTL_INTERACTIVE=1
+  ~/bin/agentctl waiting status` from `~/projects/movies` with the vault unlocked (the service log then says `the
+  Forgejo token was handed over`).
+- **As a service** (`waiting service install`, which the owner runs): KeepAlive, RunAtLoad, log
+  `~/.cache/agentctl/waiting/<repo>/service.log`. Wall-clock sleeps only, so it carries on after the laptop sleeps; a
+  batch lands with no agent alive, its verdicts in the inbox.
 
 ### gov: THE governor -- one admission control for laptop memory and CPU
 
@@ -714,9 +638,8 @@ p90 one level below.
 
 The merge queue batched identity landings around ONE CI landing check. With no pre-merge CI left (the owner,
 2026-10-26: basic tests before merging, the touched area's tests locally, everything else on main), there is nothing
-to batch: `land`'s lock lets several agents land in turn without stepping on each other, and `waiting` batches what
-must wait for a red main. Every `agentctl
-queue …` command prints the retirement note and exits 2. Its code is in this repo's history (before 25e71e5).
+to batch: the reconciler lands changes in turn, and the batch item batches what must wait for a red main. Every
+`agentctl queue …` command prints the retirement note and exits 2. Its code is in this repo's history (before 25e71e5).
 
 ### env: the agent environment, without secrets
 
@@ -792,7 +715,7 @@ failed and nobody was told: the snapshot, the status line and the reds covered m
   record is matched once, after the fact: `measure/<user>/<sha>-<x>` (identity-measure, identity-ci-run) or the run's
   head commit to the worktree whose HEAD is that commit or whose HEAD reflog holds it; `check/<entry>` to its queue
   entry's worktree.
-- **The snapshot** (`ci-state.json`, `branches`) also holds the newest completed run of each tracked branch and
+- **The snapshot** (`state.json`'s `ci.branches`) also holds the newest completed run of each tracked branch and
   workflow: any branch with an owner record, and `measure/*`, `check/*`, `red-*`. A branch red ends when its branch is
   deleted or a newer run of that workflow on it is green.
 - **Route**: a failed branch run is ONE inbox entry, `BRANCH RED: <workflow> #N on <branch> → owner <worktree (agent)>`,
@@ -817,15 +740,17 @@ agentctl inbox [ID...] [--unread] [--ack] [--limit N] [--json] [-v]
 ```
 
 The owner (2026-10-27): three agents ended their turns while their land/watch still ran, and the WATCH verdicts went
-nowhere. Every `land`, `watch`, `wait` and `waiting await` now writes its verdict to an inbox when it ends (normally, on
-a signal, or on a crash), and land writes its `WAITING` line there at once, since it may wait for hours.
+nowhere. Every verdict now reaches the inbox: a change's, a batch's and a watch's as EVENTS the processor projects
+(`QUEUED`, `LANDED`, `WAITING`, `NOT LANDED`, `WATCH ...`, `FIX ...`, each naming the author's worktree); `wait` and
+`land --follow` write theirs when they end (normally, on a signal, or on a crash).
 
 - One JSON file per verdict under `~/.cache/agentctl/inbox/` (`$AGENTCTL_INBOX_DIR`): id, time, command, argv, cwd,
   owner (the Claude session, else user@cwd), pid, exit code, the verdict line (the last `LANDED` / `NOT LANDED` /
   `WAITING` / `WATCH ...` / `run ...:` / `file ...:` line; `ended by signal N` or `crashed: ...` when it died), every
   verdict line it printed, and its last 15 output lines.
-- A restart on new code (re-exec, same pid) writes nothing: the resumed `watch` / `waiting await` writes the verdict.
-  Only a SIGKILL leaves no entry (its owner record stays; `agentctl orphans` names it).
+- A restart on new code (re-exec, same pid) writes nothing: the resumed process writes the verdict. Only a SIGKILL of
+  a `wait` leaves no entry (its owner record stays; `agentctl orphans` names it); the reconciler's verdicts are events
+  in the store and survive any process.
 - `agentctl inbox` lists the newest 30 (`--limit 0`: all), `--unread` only those not acknowledged, `--ack`
   acknowledges what it listed, `-v` adds each entry's output tail, an ID prefix picks entries. Exit 0.
 - The orchestrating session reads it whether or not the agent is alive: `agentctl inbox --unread --ack` after each
@@ -837,12 +762,12 @@ a signal, or on a crash), and land writes its `WAITING` line there at once, sinc
 
 #### inbox escalated: an escalation that wakes somebody (2026-10-27)
 
-Main #2146's `RED UNCLAIMED` woke nobody: the orchestrator's `inbox wait` was not re-armed. An UNREAD `RED_UNCLAIMED`,
-`RED_BUDGET` or `STALLED` entry older than 10 min (`$AGENTCTL_INBOX_ESCALATE_MIN`; a gate fixer cap at once) is
-escalated past the orchestrator: ONE macOS notification per entry (`osascript -e 'display notification ...'`, never a
-dialog; marker `inbox/escalated/<id>`), and the status line leads with a bold `ESCALATED: N unacked (...)` until it is
-acked. The always-on processor runs it each minute, the status line's refresh by `agentctl inbox escalated` (prints
-that line, or nothing).
+Main #2146's `RED UNCLAIMED` woke nobody: the orchestrator's `inbox wait` was not re-armed. An escalation is now an
+EVENT of severity `escalate` -- an item past its deadline in a state that escalates (a red offered too long, a
+condition left open, a stalled change) -- and the processor's notifier delivers each one ONCE: a macOS notification
+(`osascript -e 'display notification ...'`, never a dialog), marked notified in the store (W6 checks none is left
+undelivered). The status line leads with a bold `ESCALATED: N (...)` while any is current; `agentctl inbox escalated`
+prints that line, or nothing.
 
 #### inbox wait: the orchestrator's notifier
 
@@ -908,10 +833,10 @@ prepush-check: ok
 
 ### The lifecycle closes itself (2026-10-26)
 
-**After `WATCH OK`, `land` closes the worktree it ran from**: it removes the worktree and its local branch, only when
+**After `WATCH OK`, the tick closes the worktree the change was landed from**: it removes the worktree and its local branch, only when
 proven merged -- `git cherry forgejo/main HEAD` shows no commit of its own and the tree is clean, untracked files
 included (a STATE.md keeps it) -- and never the root checkout, a locked tree, or a tree another process is in (the
-lander's own shell aside). It prints `closed worktree <path> and branch <b> (...)` or `worktree <path> kept: <why>`,
+lander's own shell aside). It logs `closed worktree <path> and branch <b> (...)` or `worktree <path> kept: <why>`,
 and logs to `agentctl-deleted.log`. `--keep-worktree` skips it. WATCH RED or UNKNOWN closes nothing.
 
 **`agentctl sweep` is the daily report** (run by `agentctl maintain` at its first pass from 09:00, see "maintain";
@@ -944,6 +869,12 @@ agentctl cleanup (DRY RUN); log: /…/scratchpad/agentctl-deleted.log
   would delete worktree /Users/pawel/projects/movies-wt-hookguard [hookguard] 6a2a075956: ancestor of forgejo/main
 ```
 
+### orphan worktrees: submitted once
+
+A worktree with commits not on forgejo/main whose author is gone (no live lease, no process in it, idle) is SUBMITTED
+ONCE by the tick, whatever its last verdict: it becomes a queued change like any other (its checks then decide; a
+rejection is its red's to rescue), and an `UNLANDED ORPHAN` inbox entry names it. Nothing fixes an orphan on its own.
+
 ### orphans: leftover loops and sbt servers
 
 ```
@@ -962,8 +893,7 @@ gone or that duplicate an older one, sbt servers whose worktree is gone, whose s
 (sbt-warm's `.serving`), or that hold a running command (an sbtn client) with no CPU for 20 min across reaps
 (`~/.cache/agentctl/sbt-cpu.json`; a `jcmd Thread.print` dump first, in `~/.cache/agentctl/sbt-dumps/`) -- never an
 owner merely on old code, which re-execs itself. Every kill is a line of `~/.cache/agentctl/reap.log`. The daily
-`sweep` reaps the sbt servers too. A watch whose runs show no change for 120 min (`$AGENTCTL_WATCH_STALL_MIN`) ends
-`WATCH STALLED`.
+`sweep` reaps the sbt servers too.
 
 **Stale JVMs** (folded in 2026-10-27 from `~/.local/bin/reap-stale-jvms.sh`, launchd `dev.kinowo.jvm-reaper`, now
 retired; movies' `scripts/reap-stale-jvms.sh` is now a shim calling `agentctl reap`): the same rules, by the same tunables
@@ -1022,3 +952,11 @@ replaces `net.bitcashier.agentctl-reap`, `net.bitcashier.agentctl-sweep` and `de
   the earlier run that passed only if the whole run passed.
 - **`wait run` says "attached to existing waiter".** That is expected: another agent is already polling that run, and
   you will get the same verdict.
+- **The gate reads UNREAD and nothing lands.** The processor lost its Forgejo token (a service restart). Hand it over:
+  `cd ~/projects/movies && AGENTCTL_INTERACTIVE=1 ~/bin/agentctl waiting status` with the vault unlocked.
+- **The status line says `RECONCILER not running`.** `state.json` is stale: `agentctl waiting service status`, the
+  service log `~/.cache/agentctl/waiting/<repo>/service.log`, and `agentctl watchdog` (W5).
+- **Where is the fixer for red #N?** `claude agents` (by name), `agentctl red status`, `agentctl lease list red/`.
+- **WB: uncommitted edits in ~/bin.** Someone edited ~/bin's own checkout. Agentctl changes go in a worktree
+  (`git -C ~/bin worktree add ~/bin-wt-<name> -b <name> master`), landed by rebase + `git merge --ff-only`; the
+  processor only ever re-execs onto committed code.

@@ -72,35 +72,21 @@ the gate's clearing rule (a later green run, or `Fixes-Red: <#number|run id>` on
   agentctl ci-why 1934            # explain one run
 Exit: 0 green, 1 red (or a run explained)."""
 LAND_HELP = """Land the current commit(s) on forgejo/main, safely, in one command.
-THE LAND QUEUE (movies, 2026-10-27): fetch -> rebase -> prepush-check -> `QUEUED <id> (<sha>)` at once; END YOUR TURN.
-The waiting processor checks the change in a check tree of its own within the governor (on ci-runner under pressure),
-then pushes it (LANDED + a detached watch) or, main red, puts it on `waiting`; every verdict goes to `agentctl inbox`.
-`--follow` (and --no-watch, a dispatched red fixer, AGENTCTL_QUEUE=0) runs the in-process land described below:
-  fetch -> rebase onto forgejo/main -> agentctl prepush-check -> git push forgejo HEAD:main (the repo's pre-push hook
-  runs, with sdkman's sbt/java on PATH) -> on a push race (non-fast-forward, cannot lock ref) refetch, rebase and retry,
-  up to 3 times -> fetch and verify with merge-base / git cherry.
-ONE LANDER PER REPOSITORY: the whole sequence holds the repository's landing lock (~/.cache/agentctl/land/, an flock);
-a second land waits for it (one line names the holder; $AGENTCTL_LAND_LOCK_TIMEOUT, default 4 h) and then rebases onto
-what the first landed. CHECK FIRST: in a repo with scripts/hooks/pre-push (movies) the hook runs as a dry run,
-`--range forgejo/main..<sha>`, before the push -- the basic checks and the identity / page area tests the paths select,
-minutes for those -- and the push's own hook run reuses its stored pass in seconds.
-Last line: `LANDED <sha>`, or `NOT LANDED: <exact reason>` (red gate: followed by the `agentctl ci-why` summary).
-MAIN RED: a production change without a Fixes-Red: naming the red run goes onto the ONE local `waiting` branch instead
-(checked on the combined tip): `WAITING <sha> (n changes queued on waiting)`, and land keeps running until the
-processor pushes the whole branch once main is green, then LANDED + the watch (`agentctl waiting --help`).
-THE WATCH: after LANDED, land keeps running (the lock already free) and watches main's CI for the sha (movies):
-  Main         the main.yml run for the sha; cancelled or superseded by a newer push: the newest Main run whose head
-               contains it;
-  convergence  the FIRST Identity model convergence run on main created after the push whose head contains the sha (its
-               own kick, a later push's, or the daily run); none within 60 min ($AGENTCTL_WATCH_CONV_START s):
-               `convergence: none started within 60 min`, not waited for.
-  -> `WATCH OK: Main #n green, convergence #m green`, or `WATCH RED: <workflow> #n <failed jobs>` + the ci-why summary
-     (your change may have broken main: fix forward with `Fixes-Red: <n>`), or `WATCH UNKNOWN: ...` after 3 h
-     ($AGENTCTL_WATCH_TIMEOUT s). --no-watch exits at LANDED (scripts).
-AGENTS: run land with the Bash tool's run_in_background=true and END YOUR TURN: you are re-invoked with the verdict.
+MOVIES (the reconciler, ~/bin/AGENTCTL.md "land"): fetch -> rebase onto forgejo/main -> prepush-check (the squash
+guard) -> a queued change item, its commits pushed to refs/heads/land/<id> -> `QUEUED <id> (<sha>)` at once: END YOUR
+TURN. The processor's tick checks it in a check tree (an executor holding check/<id>, within the governor; on ci-runner
+under pressure), pushes it under the land/<repo> lease -> LANDED and a watch item (Main and the convergence for the sha:
+WATCH OK / RED / UNKNOWN); main red and the change must wait (a production path, no Fixes-Red: for the red run):
+WAITING, landed with the batch checked once at green. Every verdict goes to `agentctl inbox`, naming your worktree.
+IN-PROCESS (--follow, --no-watch, a dispatched red fixer, AGENTCTL_QUEUE=0; other repos always): the checks here
+(movies: the hook's dry run --range forgejo/main..<sha>), then under the land/<repo> lease fetch, push (the repo's
+pre-push hook runs, reusing the dry run's pass), on a race refetch, rebase and retry up to 3 times, verify with
+merge-base / git cherry: `LANDED <sha>` or `NOT LANDED: <exact reason>` (red gate: + the ci-why summary). --follow then
+waits for a WAITING change's batch and watches in-process; --no-watch exits at LANDED.
 Never passes --no-verify and refuses to run with PREPUSH_SKIP set. Refuses a dirty tree unless --stash (a named stash,
 restored afterwards, found by its sha -- the stash list is shared by every worktree).
-Exit: 0 landed (and watched green), 1 not landed, 2 landed but the watch could not tell, 3 landed and main's CI RED."""
+Exit: 0 queued / landed (and watched green), 1 not landed, 2 landed but the watch could not tell, 3 landed and main's CI
+RED."""
 ENV_HELP = """Agent environment, without secrets.
   eval "$(agentctl env --print)"   # sdkman's sbt + java first on PATH, JAVA_HOME; exit 1 (one line on stderr) on a locked vault
   agentctl env --check            # sbt, a java that runs, `secrets status <ns>`, tunnel localhost:3000 and :2222, the
@@ -6721,17 +6707,16 @@ PRODUCTION_GLOBS = ("*/src/main/*", "conf/*", "*/conf/*", "build.sbt", "project/
                     "Dockerfile")
 WAITING_AWAIT_TIMEOUT = 24 * 3600
 WAITING_POLL = 60          # the processor's gate poll floor (backs off to 300 s)
-WAITING_HELP = """While main is red, a production change that passed its OWN checks (land runs them first, red or green) joins
-ONE local branch, `waiting`, by cherry-pick (land: WAITING <sha> (entry <id>, n in batch), exit 0). At green the
-processor rebuilds `waiting` on main, runs ONE fast check of the batch (pre-push --fast-only: compile and the fast tests,
-a fresh sbt server, a stall retried once then HELD), pushes it in one push, bisects a failing batch by prefix and rejects
-only the culprit. A Fixes-Red entry goes first. Every verdict (LANDED, NOT LANDED, HELD, each landed entry's detached
-WATCH) goes to `agentctl inbox`.
+WAITING_HELP = """The processor (one loop of ticks, launchd net.bitcashier.agentctl-waiting) and its queue: every landed change is
+an item -- queued, checking, checked, pushing, landed; or waiting while main is red. At green the waiting changes are ONE
+batch item: its tip assembled in a check tree (main plus the changes, Fixes-Red first), checked once (pre-push
+--fast-only, a fresh sbt server; a stall retried once, then HELD), pushed in one push; a failing batch is bisected and
+only the confirmed culprit rejected. No `waiting` branch. Every verdict goes to `agentctl inbox`.
 
-  agentctl waiting status                       # the entries, the batch being checked, a HELD batch, the gate
-  agentctl waiting cancel <id>                  # drop a change; `waiting` is rebuilt without it
-  agentctl waiting pause|resume                 # stop / restart taking batches (joins still queue)
-  agentctl waiting run [--once] [--service]     # the processor (land starts it detached; one at a time, by lock)
+  agentctl waiting status                       # the changes, the batch, the gate, the processor (hands it the token)
+  agentctl waiting cancel <id>                  # drop a change
+  agentctl waiting pause|resume                 # stop / restart taking batches (changes still queue)
+  agentctl waiting run [--once] [--service]     # the processor
   agentctl waiting service install|uninstall|status   # it as the launchd agent net.bitcashier.agentctl-waiting"""
 
 
@@ -12167,13 +12152,13 @@ def main(argv=None):
     o.add_argument("--safe", action="store_true",
                    help="the scheduled reaper's mode: with --kill, end only strays (dead owners' records and runs, stray "
                         "wait loops, stuck sbt servers), never an owner merely on old code; every kill is logged")
-    wg = sub.add_parser("waiting", help="production changes held on ONE `waiting` branch while main is red; landed together on green",
+    wg = sub.add_parser("waiting", help="the processor and its queue: changes checked and pushed, held while main is red, batched at green",
                         description=WAITING_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     wgs = wg.add_subparsers(dest="wcmd", required=True)
-    wgs.add_parser("status", help="the changes on `waiting`, the processor, the gate").add_argument("--repo")
-    wgs.add_parser("pause", help="the processor takes no batch until resume (joins still queue)").add_argument("--repo")
+    wgs.add_parser("status", help="the queued and waiting changes, the batch, the processor, the gate").add_argument("--repo")
+    wgs.add_parser("pause", help="the processor takes no batch until resume (changes still queue)").add_argument("--repo")
     wgs.add_parser("resume", help="undo pause, and a HELD batch's wait").add_argument("--repo")
-    wgc = wgs.add_parser("cancel", help="drop a waiting change; `waiting` is rebuilt without it")
+    wgc = wgs.add_parser("cancel", help="drop a queued or waiting change")
     wgc.add_argument("entry")
     wgc.add_argument("--repo")
     wgr = wgs.add_parser("run", help="the processor (land starts it detached; one at a time, by lock)")
@@ -12247,7 +12232,7 @@ def main(argv=None):
     rcv = sub.add_parser("recover", help="the recovery registry: each open non-green condition, its probe, its next check")
     rcv.add_argument("rcmd", nargs="?", choices=("status", "tick"), default="status",
                      help="status (default): list; tick: probe every open condition now (clears what passes)")
-    ib = sub.add_parser("inbox", help="every final verdict of land / watch / wait / waiting await (and land's WAITING), "
+    ib = sub.add_parser("inbox", help="every verdict: the reconciler's events (QUEUED, LANDED, WAITING, NOT LANDED, WATCH ...) and wait's, "
                                       "kept whether or not the agent that ran it is alive")
     ib.add_argument("ids", nargs="*", metavar="ID", help="only these entries (an id prefix); or `wait`: block until an "
                                                           "unread entry of --kinds exists, print it, exit 0 (the notifier)")
