@@ -13025,26 +13025,27 @@ def run_clone(cmd, what):
     """The clone, bounded by CLONE_TIMEOUT, with systemd keepalives meanwhile: CompletedProcess; raises
     subprocess.TimeoutExpired (the clone killed) past the bound."""
     bound = env_num("AGENTCTL_CLONE_TIMEOUT", CLONE_TIMEOUT)
-    import tempfile
     every = env_num("AGENTCTL_CLONE_KEEPALIVE", CLONE_KEEPALIVE)
     started = time.monotonic()
-    with tempfile.TemporaryFile("w+") as out, tempfile.TemporaryFile("w+") as errf:
-        p = subprocess.Popen(cmd, stdout=out, stderr=errf, text=True, stdin=subprocess.DEVNULL,
-                             env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+    got = {}
+
+    def work():  # subprocess.run (bounded, waited for): the keepalives go on in this thread meanwhile
+        try:
+            got["r"] = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=bound,
+                                      env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+        except (subprocess.TimeoutExpired, OSError) as x:
+            got["x"] = x
+    t = threading.Thread(target=work, name="clone", daemon=True)
+    clone_keepalive(what, started)
+    t.start()
+    while True:
+        t.join(every)
+        if not t.is_alive():
+            break
         clone_keepalive(what, started)
-        while True:
-            try:
-                rc = p.wait(timeout=min(every, max(bound - (time.monotonic() - started), 0.01)))
-                break
-            except subprocess.TimeoutExpired:
-                if time.monotonic() - started >= bound:
-                    p.kill()
-                    p.wait()
-                    raise subprocess.TimeoutExpired(cmd, bound)
-                clone_keepalive(what, started)
-        out.seek(0)
-        errf.seek(0)
-        return subprocess.CompletedProcess(cmd, rc, out.read(), errf.read())
+    if "x" in got:
+        raise got["x"]
+    return got["r"]
 
 
 def clone_into_tmp(repo, url):

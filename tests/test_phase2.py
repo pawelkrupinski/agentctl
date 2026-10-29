@@ -797,6 +797,8 @@ class TickEntryTest(unittest.TestCase):
             pass
         s.close()
         self.assertEqual(p.returncode, 0, p.stderr[-2000:])
+        self.assertTrue(got and got[0].startswith(b"EXTEND_TIMEOUT_USEC="), got[:1])  # the clone, before READY
+        got = [m for m in got if not m.startswith(b"EXTEND_TIMEOUT_USEC=")]
         self.assertEqual(got[:2], [b"READY=1", b"WATCHDOG=1"])
         url = subprocess.run(["git", "-C", os.path.join(tmp, "movies"), "remote", "get-url", "forgejo"],
                              capture_output=True, text=True).stdout.strip()
