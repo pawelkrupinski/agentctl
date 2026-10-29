@@ -311,7 +311,7 @@ class ServerSideTest(Phase2Base):
         os.environ["AGENTCTL_ROLE"] = "server"
         self.assertEqual(A.host_role(), "server")
         names = [n for n, _ in A.sync_steps(self.repo, self.tmp, "o/r")]
-        self.assertEqual(names, ["outbox", "state mirror", "children", "events", "notifier", "landed worktrees", "claims", "dispatcher", "fixer landing",
+        self.assertEqual(names, ["outbox", "state mirror", "children", "events", "notifier", "landed worktrees", "claims", "dispatcher", "pins", "fixer landing",
                                  "network watch", "tunnel probe", "upkeep"])
         self.assertTrue(set(A.LAPTOP_ONLY_STEPS) <= set(names))
 
