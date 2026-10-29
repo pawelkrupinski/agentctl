@@ -1016,6 +1016,11 @@ INFRA_LOG = re.compile(r"artifact already exists|ENOENT|No space left on device|
 # workflow says `DECODO DOWN:` -- the proxy, not the code.
 UNKNOWN_LOG = re.compile(r"::(error|warning)[^:]*::UNKNOWN: |\bUNKNOWN: proxy unreachable\b|proxy unavailable \(Decodo|"
                          r"\bDECODO DOWN: ")
+# A job that stopped because an outside service refused the run's key -- a spent quota, a rotated or bad key -- before
+# any code was judged (movies' scripts/ci/recording-preflight.sh: `::error::OMDb refuses the key (HTTP 401: Request
+# limit reached) ...`, Record scrape fixtures #2426, CI's OMDb key still prod's shared one): the owner's credentials,
+# read as infra -- never a TEST FAILURE, which no code change clears and `red block` refuses.
+KEY_REFUSED_LOG = re.compile(r"::error[^:]*::\w+ refuses the key\b")
 RUN_FIELDS = "databaseId,number,status,conclusion,headSha,url,displayTitle,workflowName,createdAt,updatedAt"
 RED_CONCLUSIONS = ("failure", "timed_out")
 
@@ -1070,6 +1075,10 @@ def classify_job(job, lines, raw=(0, []), timed_out=False):
     unknown = next((l for l in lines if UNKNOWN_LOG.search(l)), None)
     if unknown and not any("*** FAILED" in l or "[error]" in l for l in lines):
         return "infra", f"UNKNOWN, an outside dependency unreachable (not a code red): {unknown.strip()[:160]}"
+    refused = next((l for l in lines if KEY_REFUSED_LOG.search(l)), None)
+    if refused and not any("*** FAILED" in l or "[error]" in l for l in lines):
+        return "infra", ("KEY REFUSED, an outside service refused the run's key (quota or credentials: the owner's, "
+                         f"not a code red): {refused.strip()[:160]}")
     hit = next((l for l in lines if INFRA_LOG.search(l)), None)
     if hit and not any("*** FAILED" in l or "[error]" in l for l in lines):
         return "infra", f"infra-shaped log line: {hit[:120]}"

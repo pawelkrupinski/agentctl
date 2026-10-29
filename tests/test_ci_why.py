@@ -183,6 +183,15 @@ class CiWhyTest(FakeForge):
         self.assertIn("[infra] convergence (united-kingdom): UNKNOWN, an outside dependency unreachable", out)
         self.assertNotIn("TEST FAILURE", out)
 
+    def test_an_outside_service_refusing_the_runs_key_is_never_a_test_failure(self):
+        # Record scrape fixtures #2426: the preflight found the OMDb key's day spent before any leg started -- no code ran.
+        self.scenario([{**job("preflight", conclusion="failure"), "steps": [step("OMDb and TMDB still take the keys", "failure")]}],
+                      "preflight\tOMDb and TMDB\t2026-10-28T23:31:40Z ::error::OMDb refuses the key (HTTP 401: Request limit "
+                      "reached) — spent daily quota or a bad key\n")
+        rc, out, _ = self.why()
+        self.assertIn("[infra] preflight: KEY REFUSED, an outside service refused the run's key", out)
+        self.assertNotIn("TEST FAILURE", out)
+
     def test_a_check_failing_only_on_the_proxy_being_down_is_infra(self):
         # Security headers (live) #2239: every Decodo port failed, nothing about the origin was checked.
         self.scenario([{**job("check", conclusion="failure"), "steps": [step("Check kinowo.net and showtimes.cc", "failure")]}],
@@ -257,6 +266,7 @@ class CiWhyMutationTest(unittest.TestCase):
         self.kill("test_artifact_exists_is_infra_and_silent_log_is_unclear", "INFRA_LOG", A.re.compile(r"$^"))
         self.kill("test_an_unknown_outside_dependency_is_infra_never_a_test_failure", "UNKNOWN_LOG", A.re.compile(r"$^"))
         self.kill("test_a_step_cut_at_its_own_timeout_is_a_timeout_never_unclear", "STEP_TIMED_OUT", "never in any log")
+        self.kill("test_an_outside_service_refusing_the_runs_key_is_never_a_test_failure", "KEY_REFUSED_LOG", A.re.compile(r"$^"))
 
 
 if __name__ == "__main__":
