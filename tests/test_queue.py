@@ -553,10 +553,29 @@ class RemotePickupTest(QueueTest):
         self.assertEqual(self.pushed()[-1], "push remote=")
 
 
+def own_tests_only(cls, *bases):
+    """A fixture-borrowing class runs ONLY its own test methods, however it is loaded. load_tests (below) covers
+    discovery, but `python3 -m unittest tests.test_queue.RemotePickupTest` loads the class by name and bypasses it:
+    RemotePickupTest then ran QueueTest's inherited tests under its own mocks (the remote run is always `running`,
+    the laptop always under pressure, so every check goes remote) and they polled that run forever, one core each
+    (2026-10-29: two such runs spun 48 min on an overloaded laptop). The inherited names are set to None, which the
+    loader skips (not callable)."""
+    for base in bases:
+        for n in dir(base):
+            if n.startswith("test_") and n not in vars(cls):
+                setattr(cls, n, None)
+    return cls
+
+
+own_tests_only(QueueTest, WaitingTest)
+own_tests_only(RemotePickupTest, QueueTest, WaitingTest)
+
+
 def load_tests(loader, tests, pattern):
     """Only this file's own cases (QueueTest borrows WaitingTest's fixture, not its tests)."""
-    return unittest.TestSuite([QueueTest(n) for n in sorted(vars(QueueTest)) if n.startswith("test_")]
-                              + [RemotePickupTest(n) for n in sorted(vars(RemotePickupTest)) if n.startswith("test_")])
+    return unittest.TestSuite([QueueTest(n) for n in sorted(vars(QueueTest)) if n.startswith("test_") and vars(QueueTest)[n]]
+                              + [RemotePickupTest(n) for n in sorted(vars(RemotePickupTest))
+                                 if n.startswith("test_") and vars(RemotePickupTest)[n]])
 
 
 if __name__ == "__main__":
