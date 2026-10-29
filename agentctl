@@ -1064,8 +1064,11 @@ def classify_job(job, lines, raw=(0, []), timed_out=False):
         return "infra", f"UNKNOWN, an outside dependency unreachable (not a code red): {unknown.strip()[:160]}"
     refused = next((l for l in lines if KEY_REFUSED_LOG.search(l)), None)
     if refused and not any("*** FAILED" in l or "[error]" in l for l in lines):
-        return "infra", ("KEY REFUSED, an outside service refused the run's key (quota or credentials: the owner's, "
-                         f"not a code red): {refused.strip()[:160]}")
+        if QUOTA_LOG.search(refused):
+            return "infra", ("QUOTA SPENT, an outside service's quota for the run's key is used up; it resets on its "
+                             f"own (an external wait, not the owner's, not a code red): {refused.strip()[:160]}")
+        return "infra", ("KEY REFUSED, an outside service refused the run's key (credentials: the owner's, not a code "
+                         f"red): {refused.strip()[:160]}")
     hit = next((l for l in lines if INFRA_LOG.search(l)), None)
     if hit and not any("*** FAILED" in l or "[error]" in l for l in lines):
         return "infra", f"infra-shaped log line: {hit[:120]}"
@@ -4527,6 +4530,10 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=True, facts=None):
         acts += red_renew_blocks(store, t)
     except (Exception, SystemExit) as e:
         err(f"red tick: renewing the blocks failed ({str(e)[:160]})")
+    try:
+        acts += red_quota_waits(store, o_r, repo, t)
+    except (Exception, SystemExit) as e:
+        err(f"red tick: the quota waits failed ({str(e)[:160]})")
     for key, it in list(active.items()):
         try:
             acts += red_step(store, it, obs, snap, facts, repo, o_r, t)
@@ -4864,6 +4871,13 @@ def red_block_of(it, store=None):
 def block_invalid(store, it, m, t):
     """Why this block no longer justifies holding red `it`, or None (checked at the block AND every tick)."""
     d = it["data"]
+    if m.get("wait_cause") in WAIT_CAUSES:  # an external wait (a spent quota): no owner cause, no owner command
+        if d.get("kind") == "test":
+            return "its red is a TEST FAILURE: a code red is a fixer's"
+        row = store.get(red_lease(d["key"]))
+        return f"a live fixer is on it: {row['holder']}" if lease_is_live(row, t) else None
+    if QUOTA_LOG.search(str(d.get("line") or "")):
+        return "a spent quota resets on its own: an external wait, never the owner's"
     if m.get("owner_cause") not in OWNER_CAUSES:
         return f"no owner cause (one of {', '.join(OWNER_CAUSES)}): only the owner's causes may block on the owner"
     if not str(m.get("cmd") or "").strip():
@@ -4915,6 +4929,101 @@ def red_renew_blocks(store, t):
     return out
 
 
+# A SPENT QUOTA IS AN EXTERNAL WAIT, NOT THE OWNER'S (the owner's coordinator, 2026-10-29: Record scrape fixtures #2426
+# sat BLOCKED ON OWNER for OMDb's `HTTP 401: Request limit reached` -- a daily quota, which resets on its own; only an
+# invalid key is the owner's). A red whose error line says a quota is spent is held by a WAIT lease (block/cause/quota-
+# <service>, holder `wait:quota`), never offered to a fixer and never an owner block. Its probe re-checks the key the
+# cheap way the workflow itself does: the red's workflow dispatched on main once the quota's window has reset (OMDb's
+# daily window: midnight UTC), whose first job (the recording preflight: one OMDb call) fails within minutes if the key
+# is still refused; the wait clears when a run of the workflow created after the block got past that job.
+QUOTA_LOG = re.compile(r"request limit reached|daily limit|quota (exceeded|reached|exhausted)|rate limit(ed)? reached|"
+                       r"too many requests", re.I)
+WAIT_CAUSES = {"quota": "an outside service's quota for the run's key, spent; it resets on its own"}
+QUOTA_RESET_HOUR_UTC = 0
+
+
+def quota_service(line):
+    m = re.search(r"::error[^:]*::(\w+) refuses the key", line or "") or re.search(r"\b(OMDb|TMDB|Decodo)\b", line or "", re.I)
+    return m.group(1) if m else "the service"
+
+
+def next_quota_reset(after):
+    """The first quota window reset (QUOTA_RESET_HOUR_UTC, daily) after unix time `after`."""
+    d = dt.datetime.fromtimestamp(after, dt.timezone.utc)
+    r = d.replace(hour=QUOTA_RESET_HOUR_UTC, minute=0, second=0, microsecond=0)
+    if r <= d:
+        r += dt.timedelta(days=1)
+    return r.timestamp()
+
+
+def probe_quota_reset(a):
+    """The key accepted again: a run of a['workflow'] on main created after a['since'] got past its first job
+    (a['job'], the preflight) -- or the whole run is green."""
+    o_r = a.get("repo") or SHORT["movies"]
+    runs = gh_json(o_r, "run", "list", "--workflow", a["workflow"], "--branch", "main", "--json", RUN_FIELDS, "-L", "10")
+    since = float(a.get("since") or 0)
+    for r in runs or []:
+        try:
+            if parse_time(r["createdAt"]).timestamp() <= since:
+                continue
+        except (KeyError, ValueError, TypeError):
+            continue
+        if r.get("conclusion") == "success":
+            return True, f"{a['workflow']} #{r.get('number')} green"
+        jobs = run_jobs(o_r, r) or []
+        first = next((j for j in jobs if j.get("name") == a.get("job")), None)
+        if first and first.get("conclusion") == "success":
+            return True, f"{a['workflow']} #{r.get('number')}: {a.get('job')} passed (the key is accepted again)"
+        if first and first.get("conclusion") in ("failure", "timed_out"):
+            return False, f"{a['workflow']} #{r.get('number')}: {a.get('job')} failed again (still spent)"
+    return False, (f"no run of {a['workflow']} since the quota was spent; the next window opens "
+                   f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(next_quota_reset(since)))}")
+
+
+def red_quota_waits(store, o_r, repo, t):
+    """Each open red whose line says a quota is spent, held by nobody (no fixer lease, no block): put on the WAIT lease
+    of its service; each wait past its window's reset with no run since: its workflow dispatched once per window."""
+    out = []
+    for it in red_active(store).values():
+        d = it["data"]
+        if not QUOTA_LOG.search(str(d.get("line") or "")) or d.get("kind") == "test":
+            continue
+        if lease_is_live(store.get(red_lease(d["key"])), t) or red_block_of(it, store):
+            continue
+        svc = quota_service(d.get("line"))
+        lname = block_lease(cause=f"quota-{svc.lower()}")
+        row = store.get(lname)
+        if lease_is_live(row, t):
+            m = lease_meta(row)
+            store.set_meta(lname, row["epoch"], row["secret"], {"keys": sorted(set(m.get("keys") or []) | {d["key"]})})
+        else:
+            probe = {"kind": "quota_reset", "args": {"repo": o_r, "workflow": d["workflow"], "since": t, "job": d.get("job")
+                                                     if d.get("job") else "preflight"}}
+            until = f"{svc}'s quota resets and {d['workflow']}'s {probe['args']['job']} passes"
+            store.acquire(lname, "wait:quota", BLOCK_TTL, BLOCK_MAX, progress=f"spent@{int(t)}",
+                          meta={"kind": "block", "wait_cause": "quota", "cause": f"quota-{svc.lower()}", "probe": probe,
+                                "until": until, "keys": [d["key"]], "probed_at": t, "redispatch": d["workflow"],
+                                "text": f"WAITING: {svc}'s quota for the run's key is spent; it resets on its own "
+                                        f"(auto-clears when {until})"})
+            line = f"RED WAITING: {red_what(d)}: {svc}'s quota is spent -- an external wait, not the owner's; " \
+                   f"{d['workflow']} is dispatched again after the reset"
+            inbox_write("red", line, [line], [], 0)
+        cur = store.item("red", it["id"])
+        store.update_item("red", it["id"], cur["version"], {"block": lname})
+        out.append(f"{red_what(d)}: waits on {svc}'s quota ({lname})")
+    for row in store.list("block/cause/quota-"):
+        m = lease_meta(row)
+        if not lease_is_live(row, t) or not m.get("redispatch"):
+            continue
+        since = float((m.get("probe") or {}).get("args", {}).get("since") or t)
+        last = float(m.get("dispatched_at") or since)
+        if t >= next_quota_reset(last) + 300:
+            msg = red_verify_dispatch(o_r, repo, m["redispatch"], "quota-reset")
+            out.append(f"{m['redispatch']} after {m.get('cause')}'s reset (re-checks the key): {msg}")
+            store.set_meta(row["name"], row["epoch"], row["secret"], {"dispatched_at": t})
+    return out
+
+
 def red_block(o_r, a):
     """`red block`: the red waits on the OWNER, for an owner cause only, as a block lease the tick renews while its
     probe -- named (--until-green / --until-http / --until-tcp), an open cause's, or the red's own workflow going green
@@ -4935,6 +5044,11 @@ def red_block(o_r, a):
     if owner_cause not in OWNER_CAUSES:
         print(f"NOT BLOCKED: a block on the owner needs --owner-cause, one of: {', '.join(OWNER_CAUSES)} (a cause outside "
               "the code that only the owner can act on). A code red is yours: claim it and fix it.")
+        return 2
+    if any(QUOTA_LOG.search(str(x.get("line") or "")) for x in units):
+        print(f"NOT BLOCKED: #{n}'s key hit a spent quota ({str(units[0].get('line'))[:120]}): it resets on its own, so "
+              "it is no owner action -- the tick holds the red as an external wait and re-runs its workflow after the "
+              "reset (`agentctl red status`)")
         return 2
     if any(x.get("kind") == "test" for x in units):
         print(f"NOT BLOCKED: #{n} is a TEST FAILURE ({units[0].get('job')}): a code red is never the owner's -- "
@@ -12535,17 +12649,18 @@ def probe_waiting_ok(a):
     return at > float(a.get("since") or 0), f"last good round {iso_at(at)}" if at else "no good round yet"
 
 
-PROBES = {"disk_free": lambda a: probe_disk_free(a), "invariant": probe_invariant, "waiting_ok": probe_waiting_ok, "orphan_landed": probe_orphan_landed, "batch_hold": probe_batch_hold, "workflow_green": probe_workflow_green, "http": probe_http, "tcp": probe_tcp,
+PROBES = {"disk_free": lambda a: probe_disk_free(a), "quota_reset": lambda a: probe_quota_reset(a), "invariant": probe_invariant, "waiting_ok": probe_waiting_ok, "orphan_landed": probe_orphan_landed, "batch_hold": probe_batch_hold, "workflow_green": probe_workflow_green, "http": probe_http, "tcp": probe_tcp,
           "route": probe_route, "tunnel": probe_tunnel, "gate_read": probe_gate_read, "token": probe_token,
           "processor": probe_processor, "git_fetch": probe_git_fetch, "laptop_load": probe_laptop_load,
           "queue_entry": probe_queue_entry}
-PROBE_EVERY = {"disk_free": 300, "invariant": 60, "waiting_ok": 30, "owner_block": 60, "orphan_landed": 300, "batch_hold": 60, "route": 5, "tunnel": 10, "gate_read": 15, "processor": 30, "queue_entry": 60,
+PROBE_EVERY = {"disk_free": 300, "quota_reset": 300, "invariant": 60, "waiting_ok": 30, "owner_block": 60, "orphan_landed": 300, "batch_hold": 60, "route": 5, "tunnel": 10, "gate_read": 15, "processor": 30, "queue_entry": 60,
                "workflow_green": 60, "token": 60, "laptop_load": 60, "tcp": 60, "http": 120, "git_fetch": 120}
 
 
 def probe_words(kind, a):
     """A probe in a person's words: the status line's `auto-clears when <this>`."""
     return {"disk_free": lambda: f"{a.get('min_gb')} GB are free again",
+            "quota_reset": lambda: f"the quota resets and {a.get('workflow')}'s {a.get('job')} passes",
             "workflow_green": lambda: f"{a.get('workflow')} is green", "http": lambda: f"{a.get('url')} answers",
             "tcp": lambda: f"{a.get('host')}:{a.get('port')} accepts",
             "route": lambda: "the network is back", "tunnel": lambda: "the Forgejo tunnel answers",
