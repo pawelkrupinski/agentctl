@@ -4876,7 +4876,7 @@ def block_invalid(store, it, m, t):
             return "its red is a TEST FAILURE: a code red is a fixer's"
         row = store.get(red_lease(d["key"]))
         return f"a live fixer is on it: {row['holder']}" if lease_is_live(row, t) else None
-    if QUOTA_LOG.search(str(d.get("line") or "")):
+    if QUOTA_LOG.search(str(d.get("line") or "")) or QUOTA_LOG.search(str(m.get("details") or m.get("text") or "")):
         return "a spent quota resets on its own: an external wait, never the owner's"
     if m.get("owner_cause") not in OWNER_CAUSES:
         return f"no owner cause (one of {', '.join(OWNER_CAUSES)}): only the owner's causes may block on the owner"
