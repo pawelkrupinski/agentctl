@@ -11728,16 +11728,84 @@ def server_repo():
     return os.environ.get("AGENTCTL_MOVIES_REPO") or os.path.join(HOME, "movies")
 
 
+# THE SERVER CLONE IS ATOMIC (2026-10-29: the reconciler crash-looped at 11:33 mid-clone; the half clone's .git -- an
+# incomplete object store, a stray shallow_* temp file -- passed for a clone, and every landing check's fetch of main
+# failed for hours). A clone goes into a temp directory beside the target, is verified (forgejo/main resolves, its
+# commits and its tree are all there) and only then renamed into place: a clone cut off anywhere leaves a temp
+# directory (removed at the next start), never a target that looks complete.
+CLONE_TMP = ".clone-tmp-"
+
+
+def clone_tmp_dirs(repo):
+    """The temp clones beside repo: [(path, pid of their cloner)]."""
+    parent, base = os.path.split(os.path.abspath(repo))
+    out = []
+    for p in glob.glob(os.path.join(parent, f".{base}{CLONE_TMP}*")):
+        m = re.search(re.escape(CLONE_TMP) + r"(\d+)-", os.path.basename(p))
+        out.append((p, int(m.group(1)) if m else 0))
+    return out
+
+
+def clean_clone_tmps(repo):
+    """Remove the temp clones an interrupted clone left (their cloner is gone). Returns what it removed."""
+    import shutil
+    gone = []
+    for p, pid in clone_tmp_dirs(repo):
+        if pid and pid != os.getpid() and pid_alive(pid):
+            continue
+        shutil.rmtree(p, ignore_errors=True)
+        gone.append(p)
+    return gone
+
+
+def clone_verify(path):
+    """(ok, detail): the clone at path is usable: forgejo/main resolves, every commit behind it and its tip's tree are
+    readable (the cheap connectivity check: commits, not every blob of history)."""
+    for args in (("rev-parse", "--verify", "-q", f"{REMOTE}/main^{{commit}}"),
+                 ("rev-list", "--quiet", f"{REMOTE}/main"),
+                 ("rev-list", "--quiet", "--objects", "--no-walk", f"{REMOTE}/main")):
+        r = git(path, *args, check=False)
+        if r.returncode != 0:
+            return False, f"git {' '.join(args)}: exit {r.returncode} {(r.stderr or '').strip()[-300:]}"
+    return True, f"{REMOTE}/main resolves and is connected"
+
+
+def clone_into_tmp(repo, url):
+    """A fresh, verified clone of url in a temp directory beside repo (never repo itself). Returns its path; raises
+    SystemExit (the temp directory removed) when the clone or its verification fails."""
+    import shutil
+    parent, base = os.path.split(os.path.abspath(repo))
+    os.makedirs(parent, exist_ok=True)
+    tmp = os.path.join(parent, f".{base}{CLONE_TMP}{os.getpid()}-{int(time.time() * 1000)}")
+    try:
+        r = subprocess.run(["git", "clone", "--quiet", "--origin", REMOTE, url, tmp], capture_output=True, text=True,
+                           env=dict(os.environ, GIT_TERMINAL_PROMPT="0"), timeout=1800)
+    except subprocess.TimeoutExpired:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise SystemExit(f"agentctl tick: git clone {url} timed out after 1800 s")
+    if r.returncode != 0:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise SystemExit(f"agentctl tick: git clone {url} failed: {r.stderr.strip()[:300]}")
+    ok, detail = clone_verify(tmp)
+    if not ok:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise SystemExit(f"agentctl tick: the fresh clone of {url} does not verify: {detail}")
+    return tmp
+
+
 def ensure_server_clone(repo=None):
     repo = repo or server_repo()
+    clean_clone_tmps(repo)
     if not os.path.isdir(os.path.join(repo, ".git")):
         url = os.environ.get("AGENTCTL_MOVIES_REMOTE")
         if not url:
-            raise SystemExit("agentctl tick: no clone at {repo} and no $AGENTCTL_MOVIES_REMOTE to clone it from")
-        r = subprocess.run(["git", "clone", "--quiet", "--origin", REMOTE, url, repo], capture_output=True, text=True,
-                           env=dict(os.environ, GIT_TERMINAL_PROMPT="0"), timeout=1800)
-        if r.returncode != 0:
-            raise SystemExit(f"agentctl tick: git clone {url} failed: {r.stderr.strip()[:300]}")
+            raise SystemExit(f"agentctl tick: no clone at {repo} and no $AGENTCTL_MOVIES_REMOTE to clone it from")
+        tmp = clone_into_tmp(repo, url)
+        if os.path.isdir(repo) and not os.listdir(repo):
+            os.rmdir(repo)
+        elif os.path.lexists(repo):  # something that is no clone: kept aside, never overwritten
+            os.rename(repo, f"{repo}.broken-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}")
+        os.rename(tmp, repo)
     return repo
 
 
