@@ -757,7 +757,21 @@ class TickEntryTest(unittest.TestCase):
         sock = os.path.join(tmp, "n.sock")
         s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
         s.bind(sock)
-        s.settimeout(120)
+        s.settimeout(0.2)
+        # READ AS SYSTEMD DOES, while the tick runs: an unread datagram socket queues only net.unix.max_dgram_qlen
+        # messages -- 10 in a fresh network namespace (ci-runner's job containers; systemd raises the host's to 512)
+        # -- and the tick sends a WATCHDOG=1 per step, so a reader waiting for the tick to end blocked its 11th send.
+        got, done = [], threading.Event()
+
+        def drain():  # until the tick has ended and its last message is read
+            while True:
+                try:
+                    got.append(s.recv(100))
+                except socket.timeout:
+                    if done.is_set():
+                        return
+        reader = threading.Thread(target=drain, daemon=True)
+        reader.start()
         env = dict(os.environ, AGENTCTL_ROLE="server", AGENTCTL_HOST="ci-runner", NOTIFY_SOCKET=sock,
                    AGENTCTL_STATE_ROOT=os.path.join(tmp, "state"), AGENTCTL_MOVIES_REPO=os.path.join(tmp, "movies"),
                    AGENTCTL_MOVIES_REMOTE=origin, AGENTCTL_OWNERS_DIR=os.path.join(tmp, "owners"),
@@ -765,15 +779,12 @@ class TickEntryTest(unittest.TestCase):
                    AGENTCTL_INBOX_DIR=os.path.join(tmp, "inbox"), AGENTCTL_REDS_DIR=os.path.join(tmp, "reds"),
                    AGENTCTL_RECOVERY_DIR=os.path.join(tmp, "recovery"), AGENTCTL_NOTIFY="true")
         env.pop("AGENTCTL_STORE_URL", None)
-        p = self.run_tick(env, tmp)
-        got = []
         try:
-            while True:
-                s.settimeout(1)
-                got.append(s.recv(100))
-        except OSError:
-            pass
-        s.close()
+            p = self.run_tick(env, tmp)
+        finally:
+            done.set()
+            reader.join(5)
+            s.close()
         self.assertEqual(p.returncode, 0, p.stderr[-2000:])
         self.assertTrue(got and got[0].startswith(b"EXTEND_TIMEOUT_USEC="), got[:1])  # the clone, before READY
         got = [m for m in got if not m.startswith(b"EXTEND_TIMEOUT_USEC=")]
