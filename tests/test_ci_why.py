@@ -192,6 +192,20 @@ class CiWhyTest(FakeForge):
         self.assertIn("[infra] preflight: KEY REFUSED, an outside service refused the run's key", out)
         self.assertNotIn("TEST FAILURE", out)
 
+    def test_a_run_classified_by_an_older_classifier_is_classified_again(self):
+        # #2426: its signature was cached as a TEST FAILURE before KEY_REFUSED_LOG existed, and `red block` read the
+        # cache -- a classifier fix never reached a red already seen.
+        self.scenario([{**job("preflight", conclusion="failure"), "steps": [step("OMDb and TMDB still take the keys", "failure")]}],
+                      "preflight\tOMDb and TMDB\t2026-10-28T23:31:40Z ::error::OMDb refuses the key (HTTP 401) — spent\n")
+        red = run(39, 19, "Identity model convergence", "identity-model-convergence.yml", conclusion="failure")
+        A.write_json(A.reds_dir("runsig", "39.json"), {"run": 39, "number": 19, "workflow": "Identity model convergence",
+                                                       "sigs": [{"job": "preflight", "kind": "test", "line": "x", "sig": "s"}]})
+        self.assertEqual([s["kind"] for s in A.run_sigs("pawelkrupinski/movies", red, "Identity model convergence")], ["infra"])
+        A.write_json(A.reds_dir("runsig", "39.json"), {**A.read_record(A.reds_dir("runsig", "39.json")),
+                                                       "sigs": [{"job": "preflight", "kind": "cached", "line": "x", "sig": "s"}]})
+        self.assertEqual([s["kind"] for s in A.run_sigs("pawelkrupinski/movies", red, "Identity model convergence")], ["cached"],
+                         "the same classifier's record is read, not the run again")
+
     def test_a_check_failing_only_on_the_proxy_being_down_is_infra(self):
         # Security headers (live) #2239: every Decodo port failed, nothing about the origin was checked.
         self.scenario([{**job("check", conclusion="failure"), "steps": [step("Check kinowo.net and showtimes.cc", "failure")]}],

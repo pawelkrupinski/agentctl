@@ -2347,11 +2347,20 @@ def streak_runs(runs):
     return list(itertools.takewhile(lambda r: r.get("conclusion") in RED_CONCLUSIONS, decided))
 
 
+def classifier_version():
+    """What a cached signature's kind was judged by: classify_job and every pattern it reads. A record of another
+    version is classified again (#2426: cached a TEST FAILURE before KEY_REFUSED_LOG, `red block` kept reading it)."""
+    import hashlib, inspect
+    parts = [inspect.getsource(classify_job), SETUP_STEP.pattern, INFRA_LOG.pattern, UNKNOWN_LOG.pattern,
+             KEY_REFUSED_LOG.pattern, STEP_TIMED_OUT]
+    return hashlib.sha1("\n".join(parts).encode()).hexdigest()[:12]
+
+
 def save_run_sigs(o_r, run, workflow, per_job):
     """per_job: [(job, kind, first relevant line)] of a completed red run -> its signatures, cached on disk."""
     sigs = [{"job": j, "kind": k, "line": (l or "")[:300], "sig": signature(workflow, j, l)} for j, k, l in per_job]
     rec = {"run": run.get("databaseId"), "number": run.get("number"), "workflow": workflow, "sigs": sigs,
-           "headSha": run.get("headSha")}
+           "headSha": run.get("headSha"), "classifier": classifier_version()}
     try:
         write_json(reds_dir("runsig", f"{run.get('databaseId')}.json"), rec)
     except OSError:
@@ -2362,7 +2371,7 @@ def save_run_sigs(o_r, run, workflow, per_job):
 def run_sigs(o_r, run, workflow):
     """The signatures of a completed red run: [{job, kind, line, sig}] (cached; explain_run fills the cache)."""
     rec = read_record(reds_dir("runsig", f"{run.get('databaseId')}.json"))
-    if rec is not None:
+    if rec is not None and rec.get("classifier") == classifier_version():
         return rec["sigs"]
     _lines, _num, per_job = explain_run_jobs(o_r, run, 6)
     return save_run_sigs(o_r, run, workflow, per_job)
