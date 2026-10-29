@@ -58,6 +58,7 @@ class RedBase(unittest.TestCase):
         A.land_cwds = lambda: {}
         A._gate_lists.clear()
         A._outside_lists.clear()
+        A._flow_runs.clear()  # a workflow an earlier test listed on its own (audit #7) has no runs in this one
         self.sha = sh(self.r.path, "git", "rev-parse", "HEAD")
         self.put(f"api-repos_pawelkrupinski_movies_git_commits_{self.sha}.json",
                  {"author": {"name": "Agent Smith", "email": "a@b"}, "message": "resolver: tweak"})

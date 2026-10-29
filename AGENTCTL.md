@@ -71,8 +71,12 @@ moves it forward; nothing is a detached process that can die with its state in i
     not proven within 6 h (`RED_FIX_GIVEUP`, `$AGENTCTL_RED_FIX_GIVEUP`), whose verify dispatch was refused, or whose
     fix is gone/None is offered again (escalated), its fix set aside (`unverified`). An old outside red no fresh run
     can check (no `workflow_dispatch`, a refused dispatch, its file gone) is never retired: it is offered with an
-    `old_note` and a fixer decides. THE INVARIANT, enforced each tick (`red_enforce`, after every red's step): a red
-    with no live lease, open offer, fix on its way or live block is offered again and the dispatcher gives it a fixer;
+    `old_note` and a fixer decides. A red of a `workflow_call`-only workflow (only a Forgejo parse failure gives one
+    runs of its own: Report run timings #38) is verified, in any open state, by its callers: its file changed on main
+    since the failing run, and a caller's newest decided run on main containing that change passed (a red caller
+    vetoes nothing). On ci-runner the reconciler's own clone is the repo these reads use. THE INVARIANT, enforced each
+    tick (`red_enforce`, after every red's step): a red with no live lease, open offer, fix on its way or live block
+    is offered again and the dispatcher gives it a fixer;
   - `condition` (a non-green state with a probe, the recovery registry): open → closed.
 - **Leases.** Holding work is a lease: a name, a holder, an epoch, a secret, a TTL renewed ONLY on new progress, and a
   maximum hold. A holder that stops making progress loses the lease and the work is offered again; an old holder's

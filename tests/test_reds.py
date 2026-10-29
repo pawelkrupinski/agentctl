@@ -737,7 +737,7 @@ class OldRedTest(RedsBase):
         self.assertIsNotNone(self.st.offer_of(f"red:{it['id']}"))  # the dispatcher takes it
         self.assertEqual(self.unheld(), [])
 
-    def made_callable_only(self, caller_runs, other_callers=()):
+    def made_callable_only(self, caller_runs, other_callers=(), message="callable only, called by Nightly"):
         # "Report run timings" #38 (2026-10-19..29): a `workflow_call.secrets` block Forgejo 15 rejected, fixed that
         # night by 32d1805de, red on main for 10 days: a callable-only workflow never runs on its own to clear it
         self.outside("name: Report run timings\non:\n  schedule:\n    - cron: \"0 3 * * *\"\n")
@@ -746,15 +746,18 @@ class OldRedTest(RedsBase):
         self.r.write(".forgejo/workflows/report-timings.yml", "name: Report run timings\non:\n  workflow_call: {}\n")
         self.r.write(".forgejo/workflows/nightly.yml", "name: Nightly\non:\n  schedule:\n    - cron: \"0 1 * * *\"\n"
                      "jobs:\n  timings:\n    uses: ./.forgejo/workflows/report-timings.yml\n")
-        head = self.r.commit("callable only, called by Nightly")
+        self.head = self.r.commit(message)
         self.r.push()
-        runs = json.load(open(os.path.join(self.d, "runs.json")))
-        self.put("runs.json", [run(100 + i, 50 + i, "Nightly", "nightly.yml", head if after else self.sha, conclusion=c)
-                               for i, (after, c) in enumerate(caller_runs)] +
-                 [run(200 + i, 70 + i, n, f, head, conclusion=c) for i, (n, f, c) in enumerate(other_callers)] + runs)
+        self.caller_runs(caller_runs, other_callers)
         for _ in range(4):
             self.tick(advance=60)
         return it
+
+    def caller_runs(self, caller_runs, other_callers=()):
+        runs, head = json.load(open(os.path.join(self.d, "runs.json"))), self.head
+        self.put("runs.json", [run(100 + i, 50 + i, "Nightly", "nightly.yml", head if after else self.sha, conclusion=c)
+                               for i, (after, c) in enumerate(caller_runs)] +
+                 [run(200 + i, 70 + i, n, f, head, conclusion=c) for i, (n, f, c) in enumerate(other_callers)] + runs)
 
     def test_a_callable_only_workflows_red_is_verified_once_its_callers_pass_with_its_changed_file(self):
         it = self.made_callable_only([(True, "success")])
@@ -771,6 +774,17 @@ class OldRedTest(RedsBase):
         self.r.write(".forgejo/workflows/weekly.yml", "name: Weekly\non:\n  schedule:\n    - cron: \"0 2 * * 1\"\n"
                      "jobs:\n  timings:\n    uses: ./.forgejo/workflows/report-timings.yml\n")
         it = self.made_callable_only([(True, "success")], other_callers=[("Weekly", "weekly.yml", "failure")])
+        self.assertEqual([(i["id"], i["state"]) for i in self.st.items("red") if i["data"]["workflow"] ==
+                          "Report run timings"], [(it["id"], "verified")])
+        self.assertTrue(any("its callers' runs since passed: Nightly #50" in str(e.get("text")) for e in self.st.events()))
+
+    def test_a_callable_only_workflows_landed_fix_is_verified_by_its_callers_runs_not_left_pending(self):
+        # its fixer's own `Fixes-Red: 38` parks the red in fix-pending, where no dispatch can verify a workflow_call-only
+        # workflow: unless its callers' runs are read there, it waits RED_FIX_GIVEUP and goes back to a fixer
+        it = self.made_callable_only([], message="callable only, called by Nightly\n\nFixes-Red: 38")
+        self.assertEqual(self.only()["state"], "fix-pending")
+        self.caller_runs([(True, "success")])
+        self.tick(advance=60)
         self.assertEqual([(i["id"], i["state"]) for i in self.st.items("red") if i["data"]["workflow"] ==
                           "Report run timings"], [(it["id"], "verified")])
         self.assertTrue(any("its callers' runs since passed: Nightly #50" in str(e.get("text")) for e in self.st.events()))

@@ -4135,7 +4135,10 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
     fix = red_fix_of(it, facts)
     block = red_block_of(it, store)
     acts = []
-    proof = red_callable_evidence(d, snap, repo, o_r) if st in ("red", "offered", "leased", "blocked-external") else None
+    # fix-pending too: the usual end of such a red is its fixer's own `Fixes-Red:` landing, and no dispatch can verify a
+    # workflow_call-only workflow -- it waited RED_FIX_GIVEUP (6 h) there unread, then went back to a fixer
+    proof = red_callable_evidence(d, snap, repo, o_r) if st in ("red", "offered", "leased", "blocked-external",
+                                                                "fix-pending") else None
     if proof:  # recorded as a verified fix is: its own event, the holder told, the run settled
         line = f"FIX OK: {red_what(d)}: {proof}"
         inbox_write("red", line, [line], [], 0)
