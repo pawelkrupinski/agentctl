@@ -42,39 +42,35 @@ class AtomicCloneTest(unittest.TestCase):
         self.assertEqual(A.clone_tmp_dirs(self.repo), [])
 
     def test_an_interrupted_clone_never_leaves_a_target_that_looks_complete(self):
-        real_run = A.subprocess.run
+        real_run = A.run_clone
 
-        def cut_off(cmd, *a, **k):  # the clone writes part of a .git, then the process is cut off
-            if cmd[:2] == ["git", "clone"]:
-                os.makedirs(os.path.join(cmd[-1], ".git", "objects"), exist_ok=True)
-                open(os.path.join(cmd[-1], ".git", "shallow_abc123"), "w").close()
-                raise A.subprocess.TimeoutExpired(cmd, 1800)
-            return real_run(cmd, *a, **k)
-        A.subprocess.run = cut_off
+        def cut_off(cmd, what):  # the clone writes part of a .git, then the process is cut off
+            os.makedirs(os.path.join(cmd[-1], ".git", "objects"), exist_ok=True)
+            open(os.path.join(cmd[-1], ".git", "shallow_abc123"), "w").close()
+            raise A.subprocess.TimeoutExpired(cmd, 1800)
+        A.run_clone = cut_off
         try:
             with self.assertRaises(SystemExit):
                 A.ensure_server_clone(self.repo)
         finally:
-            A.subprocess.run = real_run
+            A.run_clone = real_run
         self.assertFalse(os.path.exists(self.repo))
         self.assertEqual(A.clone_tmp_dirs(self.repo), [])
         A.ensure_server_clone(self.repo)  # the next start clones afresh
         self.assertTrue(A.clone_verify(self.repo)[0])
 
     def test_a_clone_that_does_not_verify_is_never_renamed_into_place(self):
-        real_run = A.subprocess.run
+        real_run = A.run_clone
 
-        def no_refs(cmd, *a, **k):  # git said 0 but the clone has no forgejo/main
-            if cmd[:2] == ["git", "clone"]:
-                real_run(["git", "init", "-q", cmd[-1]], check=True)
-                return A.subprocess.CompletedProcess(cmd, 0, "", "")
-            return real_run(cmd, *a, **k)
-        A.subprocess.run = no_refs
+        def no_refs(cmd, what):  # git said 0 but the clone has no forgejo/main
+            subprocess.run(["git", "init", "-q", cmd[-1]], check=True)
+            return A.subprocess.CompletedProcess(cmd, 0, "", "")
+        A.run_clone = no_refs
         try:
             with self.assertRaises(SystemExit) as cm:
                 A.ensure_server_clone(self.repo)
         finally:
-            A.subprocess.run = real_run
+            A.run_clone = real_run
         self.assertIn("does not verify", str(cm.exception))
         self.assertFalse(os.path.exists(self.repo))
         self.assertEqual(A.clone_tmp_dirs(self.repo), [])
@@ -311,6 +307,42 @@ class RequeueLoopTest(unittest.TestCase):
         self.assertEqual(self.e["status"], "queued")
         self.assertIn("its fetch of main failed: fatal: remote did not send all necessary objects", self.e["why"])
         self.assertEqual(self.e["infra_reason"], A.FETCH_MAIN_FAILED)
+
+
+class KeepaliveTest(unittest.TestCase):
+    """A ~650 MB clone outlasts TimeoutStartSec=300 and WatchdogSec=120: it keeps systemd told, and is bounded."""
+    def setUp(self):
+        self.sent = []
+        self.saved = A.sd_notify, A.SD_READY[0], dict(os.environ)
+        A.sd_notify = lambda m: self.sent.append(m) or True
+        os.environ.update(AGENTCTL_CLONE_KEEPALIVE="0.2")
+
+    def tearDown(self):
+        A.sd_notify, A.SD_READY[0] = self.saved[0], self.saved[1]
+        os.environ.clear()
+        os.environ.update(self.saved[2])
+
+    def test_before_ready_a_long_clone_extends_the_start_timeout_with_a_status(self):
+        A.SD_READY[0] = False
+        r = A.run_clone(["sh", "-c", "sleep 1; echo done; echo note >&2"], "cloning x")
+        self.assertEqual((r.returncode, r.stdout.strip(), r.stderr.strip()), (0, "done", "note"))
+        self.assertGreaterEqual(len(self.sent), 3)
+        self.assertTrue(all(m.startswith("EXTEND_TIMEOUT_USEC=") and "\nSTATUS=cloning x (" in m for m in self.sent))
+        self.assertGreater(int(self.sent[0].split("\n")[0].split("=")[1]), 0.2 * 1_000_000)
+
+    def test_after_ready_it_pets_the_watchdog(self):
+        A.SD_READY[0] = True
+        A.run_clone(["sh", "-c", "sleep 1"], "re-cloning x")
+        self.assertGreaterEqual(len(self.sent), 3)
+        self.assertTrue(all(m.startswith("WATCHDOG=1\nSTATUS=re-cloning x") for m in self.sent))
+
+    def test_the_clone_is_bounded(self):
+        os.environ["AGENTCTL_CLONE_TIMEOUT"] = "1"
+        import time
+        t0 = time.monotonic()
+        with self.assertRaises(A.subprocess.TimeoutExpired):
+            A.run_clone(["sleep", "30"], "cloning x")
+        self.assertLess(time.monotonic() - t0, 10)
 
 
 if __name__ == "__main__":

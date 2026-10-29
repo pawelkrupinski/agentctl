@@ -10759,6 +10759,7 @@ def cmd_tick(a):
         signal.signal(signal.SIGTERM, lambda *_: TICK_STOP.__setitem__(0, True))
         Store()  # the database exists (its schema) before systemd hears READY
         sd_notify("READY=1")
+        SD_READY[0] = True
     else:
         repo = a.repo or (git(safe_cwd(), "rev-parse", "--show-toplevel", check=False).stdout.strip()
                           if git_ok(safe_cwd(), "rev-parse", "--show-toplevel") else movies_repo_path())
@@ -13002,6 +13003,50 @@ def clone_verify(path):
     return True, f"{REMOTE}/main resolves and is connected"
 
 
+# A CLONE NEVER TRIPS SYSTEMD (2026-10-29: the reconciler is Type=notify, TimeoutStartSec=300, WatchdogSec=120; movies
+# is a ~650 MB pack). While a clone runs, every CLONE_KEEPALIVE s: before READY, EXTEND_TIMEOUT_USEC (the start
+# timeout pushed out past the next keepalive); after it, WATCHDOG=1; both with a STATUS= line. The clone itself is
+# bounded by CLONE_TIMEOUT, so the extensions end.
+SD_READY = [False]
+CLONE_KEEPALIVE = 20
+CLONE_TIMEOUT = 1800
+
+
+def clone_keepalive(what, started):
+    """One keepalive for a clone running since started (monotonic)."""
+    status = f"STATUS={what} ({int(time.monotonic() - started)} s)"
+    if SD_READY[0]:
+        return sd_notify(f"WATCHDOG=1\n{status}")
+    every = env_num("AGENTCTL_CLONE_KEEPALIVE", CLONE_KEEPALIVE)
+    return sd_notify(f"EXTEND_TIMEOUT_USEC={int(max(every * 4, 60) * 1_000_000)}\n{status}")
+
+
+def run_clone(cmd, what):
+    """The clone, bounded by CLONE_TIMEOUT, with systemd keepalives meanwhile: CompletedProcess; raises
+    subprocess.TimeoutExpired (the clone killed) past the bound."""
+    bound = env_num("AGENTCTL_CLONE_TIMEOUT", CLONE_TIMEOUT)
+    import tempfile
+    every = env_num("AGENTCTL_CLONE_KEEPALIVE", CLONE_KEEPALIVE)
+    started = time.monotonic()
+    with tempfile.TemporaryFile("w+") as out, tempfile.TemporaryFile("w+") as errf:
+        p = subprocess.Popen(cmd, stdout=out, stderr=errf, text=True, stdin=subprocess.DEVNULL,
+                             env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+        clone_keepalive(what, started)
+        while True:
+            try:
+                rc = p.wait(timeout=min(every, max(bound - (time.monotonic() - started), 0.01)))
+                break
+            except subprocess.TimeoutExpired:
+                if time.monotonic() - started >= bound:
+                    p.kill()
+                    p.wait()
+                    raise subprocess.TimeoutExpired(cmd, bound)
+                clone_keepalive(what, started)
+        out.seek(0)
+        errf.seek(0)
+        return subprocess.CompletedProcess(cmd, rc, out.read(), errf.read())
+
+
 def clone_into_tmp(repo, url):
     """A fresh, verified clone of url in a temp directory beside repo (never repo itself). Returns its path; raises
     SystemExit (the temp directory removed) when the clone or its verification fails."""
@@ -13010,11 +13055,10 @@ def clone_into_tmp(repo, url):
     os.makedirs(parent, exist_ok=True)
     tmp = os.path.join(parent, f".{base}{CLONE_TMP}{os.getpid()}-{int(time.time() * 1000)}")
     try:
-        r = subprocess.run(["git", "clone", "--quiet", "--origin", REMOTE, url, tmp], capture_output=True, text=True,
-                           env=dict(os.environ, GIT_TERMINAL_PROMPT="0"), timeout=1800)
-    except subprocess.TimeoutExpired:
+        r = run_clone(["git", "clone", "--quiet", "--origin", REMOTE, url, tmp], f"cloning {url} into {tmp}")
+    except subprocess.TimeoutExpired as x:
         shutil.rmtree(tmp, ignore_errors=True)
-        raise SystemExit(f"agentctl tick: git clone {url} timed out after 1800 s")
+        raise SystemExit(f"agentctl tick: git clone {url} timed out after {x.timeout:.0f} s")
     if r.returncode != 0:
         shutil.rmtree(tmp, ignore_errors=True)
         raise SystemExit(f"agentctl tick: git clone {url} failed: {r.stderr.strip()[:300]}")
