@@ -378,6 +378,58 @@ def _api_once(o_r, method, path, params=None, body=None):
 API_TIMEOUT = 60
 
 
+# DETACHED CHILDREN ARE REAPED (2026-10-29: the processor, pid 77145, carried ~17 <defunct> children, some 6 h old --
+# executors, fixers' wrappers and lands it started with Popen and never waited for). Every detached start goes through
+# spawn_detached, which keeps the Popen; reap_children() -- each tick -- polls them, and also waits for a zombie child
+# this process no longer knows (one started before an exec onto new code: the pid survives, the Popen objects do not)
+# once it has been a zombie at two looks in a row, so a child a subprocess.run in another thread is about to wait for is
+# never taken from it.
+_DETACHED = []
+_zombies_seen = set()
+
+
+def spawn_detached(argv, **kw):
+    p = subprocess.Popen(argv, **kw)
+    _DETACHED.append(p)
+    return p
+
+
+def zombie_children(pid=None):
+    """The pids of this process's children that are zombies (ps; [] when it cannot tell)."""
+    me = pid or os.getpid()
+    try:
+        out = subprocess.run(["ps", "-ax", "-o", "pid=,ppid=,stat="], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    zs = []
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) >= 3 and f[1] == str(me) and f[2].startswith("Z"):
+            zs.append(int(f[0]))
+    return zs
+
+
+def reap_children():
+    """Poll the detached children (a finished one is waited for and forgotten), then wait for each zombie child seen at
+    the last look too. Returns how many were reaped."""
+    n = 0
+    for p in list(_DETACHED):
+        if p.poll() is not None:
+            _DETACHED.remove(p)
+            n += 1
+    known = {p.pid for p in _DETACHED}
+    now_z = set(zombie_children()) - known
+    for pid in now_z & _zombies_seen:
+        try:
+            if os.waitpid(pid, os.WNOHANG)[0] == pid:
+                n += 1
+        except ChildProcessError:
+            pass
+    _zombies_seen.clear()
+    _zombies_seen.update(now_z)
+    return n
+
+
 def pid_alive(pid):
     try:
         os.kill(pid, 0)
@@ -4084,8 +4136,8 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
     if extra:
         env["AGENTCTL_LEASE_SECRETS"] = json.dumps({x["name"]: x["secret"] for x in extra})
     with open(os.path.join(d, "fixer.log"), "a") as logf:
-        p = subprocess.Popen([sys.executable, TOOL_PATH, "red", "fixer", "--repo", repo, "--record", rec_path],
-                             stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=wt, env=env)
+        p = spawn_detached([sys.executable, TOOL_PATH, "red", "fixer", "--repo", repo, "--record", rec_path],
+                           stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=wt, env=env)
     rec.update(pid=p.pid, process_start=process_start(p.pid))
     write_json(rec_path, rec)
     line = dispatch_log(u, f"DISPATCHED{' (resumed)' if resume else ''} pid {p.pid} in {wt} ({why}); log {rec['log']}")
@@ -4700,8 +4752,8 @@ def red_revert(o_r, repo, u, culprit):
 def spawn_land(wt, env, log):
     """A detached `agentctl land` of wt (the normal hook; its verdicts reach the inbox). Its pid."""
     with open(log, "a") as logf:
-        return subprocess.Popen([sys.executable, TOOL_PATH, "land"], cwd=wt, stdin=subprocess.DEVNULL, stdout=logf,
-                                stderr=logf, start_new_session=True, env=env).pid
+        return spawn_detached([sys.executable, TOOL_PATH, "land"], cwd=wt, stdin=subprocess.DEVNULL, stdout=logf,
+                              stderr=logf, start_new_session=True, env=env).pid
 
 
 PATHISH = re.compile(r"(?:\./)?((?:[\w.-]+/)+[\w.-]+)")
@@ -7774,7 +7826,7 @@ def tick_changes(repo, d, now_=None):
 def spawn_executor(repo, d, eid):
     """`agentctl waiting check <eid>`, detached: the change's checks (check_entry)."""
     with open(os.path.join(d, "processor.log"), "a") as logf:
-        subprocess.Popen([sys.executable, os.path.realpath(__file__), "waiting", "check", eid, "--repo", repo],
+        spawn_detached([sys.executable, os.path.realpath(__file__), "waiting", "check", eid, "--repo", repo],
                          stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=repo,
                          env=detached_env(repo))
     time.sleep(1)  # it takes its tree slot before the next looks
@@ -8017,7 +8069,7 @@ def spawn_waiting_processor(repo):
         return
     repo = clone if os.path.isdir(clone) else repo  # the clone, not a joiner's worktree: that one closes after WATCH OK
     with open(os.path.join(d, "processor.log"), "a") as logf:
-        subprocess.Popen([sys.executable, os.path.realpath(__file__), "waiting", "run", "--repo", repo],
+        spawn_detached([sys.executable, os.path.realpath(__file__), "waiting", "run", "--repo", repo],
                          stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=repo,
                          env=detached_env(repo))
 
@@ -8568,7 +8620,7 @@ def landed_meanwhile(repo, d, waiting, now_):
 
 def spawn_batch_executor(repo, d, bid):
     with open(os.path.join(d, "processor.log"), "a") as logf:
-        subprocess.Popen([sys.executable, os.path.realpath(__file__), "waiting", "check-batch", bid, "--repo", repo],
+        spawn_detached([sys.executable, os.path.realpath(__file__), "waiting", "check-batch", bid, "--repo", repo],
                          stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=repo,
                          env=detached_env(repo))
 
@@ -8771,6 +8823,7 @@ def waiting_run(repo, once=False, service=False):
                                 ("watches", lambda: [wlog(d, f"tick: {x}") for x in tick_watches()]),
                                 ("land refs", lambda: [wlog(d, f"tick: {x}") for x in sweep_land_refs(repo, d)]),
                                 ("lease archive", lambda: maybe_archive_leases(d)),
+                                ("children", reap_children),
                                 ("events", project_events), ("notifier", notify_escalations),
                                 ("network watch", network_watch), ("tunnel probe", tunnel_watch),
                                 ("gate summary", lambda: maybe_publish_gate(repo)),
@@ -11587,7 +11640,7 @@ def sync_steps(repo, d, o_r):
         if os.path.exists(reds_dir("DISPATCH_OFF")):
             return []
         return red_dispatcher(Store(), o_r, repo, time.time())
-    return (("outbox", flush_outbox), ("state mirror", mirror),
+    return (("outbox", flush_outbox), ("state mirror", mirror), ("children", reap_children),
             ("events", project_events), ("notifier", notify_escalations),
             ("landed worktrees", lambda: [err(x) for x in close_landed_worktrees()]),
             ("claims", lambda: red_renew_holders(Store(), time.time())),
@@ -12733,7 +12786,7 @@ def reland_worktree(cond, a):
         return f"not landed again: {wt} has uncommitted changes"
     os.makedirs(recovery_dir(), exist_ok=True)
     with open(recovery_dir("reland.log"), "a") as f:
-        subprocess.Popen([sys.executable, os.path.realpath(__file__), "land"], stdin=subprocess.DEVNULL, stdout=f,
+        spawn_detached([sys.executable, os.path.realpath(__file__), "land"], stdin=subprocess.DEVNULL, stdout=f,
                          stderr=f, start_new_session=True, cwd=wt,
                          env={**os.environ, "AGENTCTL_NO_SECRETS": "1"})
     return f"landing {wt.replace(HOME, '~')} again (attempt {a.get('attempt')})"
