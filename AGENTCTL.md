@@ -1131,6 +1131,13 @@ and, once a day at the first pass from 09:00 local (`$AGENTCTL_SWEEP_HOUR`), the
 replaces `net.bitcashier.agentctl-reap`, `net.bitcashier.agentctl-sweep` and `dev.kinowo.jvm-reaper` (their plists:
 `~/bin/launchd/retired/`); `~/.local/bin/reap-stale-jvms.sh` is now a shim calling `agentctl reap`.
 
+Each pass also expires the cache (`expire_cache`): under `~/.cache/agentctl` it removes the per-land logs
+(`agentctl-land-*`, with their `.checks.out` / `.push.out` / `.baseline.out`), `phase2-apply-*.log`, `sbt-dumps/*`,
+`reds/baseline*/*`, a `reds/<run>/` dir that is untouched as a whole and has no running fixer, and an `internal-trees/`
+tag whose worktree is gone, all once they are older than 7 days (`$AGENTCTL_CACHE_EXPIRE_DAYS`). Nothing else: the
+inbox, the store, `waiting/`, `checks/` and the logs it appends to stay. It never follows a symlink and never touches
+a protected folder (~/Desktop, ~/Documents, ~/Downloads). `--dry-run` counts what would go.
+
 ---
 
 ## movies helpers that pair with agentctl

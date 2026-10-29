@@ -270,7 +270,7 @@ def main(argv=None):
     for p_ in (dpr, dpc, dpl):
         p_.add_argument("--repo")
     mt = sub.add_parser("maintain", help="THE reaper, every 15 min (launchd net.bitcashier.agentctl-maintain): the reap, "
-                                         "and once a day the sweep")
+                                         "the cache expiry (7 days), and once a day the sweep")
     mt.add_argument("--dry-run", action="store_true", help="list what would be reaped / swept, kill and delete nothing")
     mt.add_argument("--sweep", action="store_true", help="run the sweep now, whatever the hour")
     rp_ = sub.add_parser("reap", help="the reap alone: orphans --kill --safe (stale JVMs included); --dry-run lists")

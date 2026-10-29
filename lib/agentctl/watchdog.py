@@ -306,7 +306,98 @@ def cmd_maintain(a):
             print(f"  {line}")
     except (Exception, SystemExit) as e:
         print(f"  could not look ({str(e)[:160]})")
+    print("== cache expiry")
+    try:
+        gone = expire_cache(dry_run=a.dry_run)
+        print(f"  {'would remove' if a.dry_run else 'removed'} {len(gone)} cache entr{'y' if len(gone) == 1 else 'ies'} older "
+              f"than {env_num('AGENTCTL_CACHE_EXPIRE_DAYS', CACHE_EXPIRE_DAYS):g} days")
+    except (Exception, SystemExit) as e:
+        print(f"  could not expire ({str(e)[:160]})")
     return 0
+
+
+# CACHE EXPIRY (docs/simplification-2026-10.md, Agent B item 3): the state root collects a log per land (and its
+# .checks.out / .push.out / .baseline.out), the phase-2 apply logs, sbt thread dumps, a dir per red run (its fixer
+# records and claude logs), the baseline caches and the internal-tree tags. Each maintain pass removes what is older
+# than CACHE_EXPIRE_DAYS: a file by its mtime, a red run's dir only when all of it is that old and none of its fixers is
+# still running, a tag only when its worktree is gone. Nothing outside the state root, nothing a protected-folder
+# check refuses (allowed_path: never ~/Desktop and the like), no symlink is followed.
+CACHE_EXPIRE_DAYS = 7
+CACHE_EXPIRE_FILES = (("", ("agentctl-land-*", "phase2-apply-*.log")), ("sbt-dumps", ("*",)),
+                      (os.path.join("reds", "baseline"), ("*.json",)), (os.path.join("reds", "baseline-out"), ("*",)))
+
+
+def _newest_mtime(path):
+    newest = os.lstat(path).st_mtime
+    for dp, dns, fns in os.walk(path):
+        for n in dns + fns:
+            try:
+                newest = max(newest, os.lstat(os.path.join(dp, n)).st_mtime)
+            except OSError:
+                pass
+    return newest
+
+
+def expire_cache(root=None, days=None, now=None, dry_run=False):
+    """[(path, why)] of what this pass removed (or, dry_run, would remove) under the state root."""
+    root = os.path.realpath(root or state_root())
+    days = env_num("AGENTCTL_CACHE_EXPIRE_DAYS", CACHE_EXPIRE_DAYS) if days is None else days
+    cutoff = (time.time() if now is None else now) - days * 86400
+    if not allowed_path(root):
+        return []
+    out = []
+
+    def inside(p):
+        return os.path.realpath(os.path.dirname(p)).startswith(root + os.sep) or \
+            os.path.realpath(os.path.dirname(p)) == root
+
+    def drop(p, why):
+        if not inside(p) or not allowed_path(p):
+            return
+        try:
+            if not dry_run:
+                if os.path.isdir(p) and not os.path.islink(p):
+                    import shutil
+                    shutil.rmtree(p)
+                else:
+                    os.unlink(p)
+            out.append((p, why))
+        except OSError:
+            pass
+
+    for sub, pats in CACHE_EXPIRE_FILES:
+        d = os.path.join(root, sub)
+        for pat in pats:
+            for p in glob.glob(os.path.join(glob.escape(d), pat)):
+                try:
+                    st = os.lstat(p)
+                except OSError:
+                    continue
+                if not os.path.isdir(p) and st.st_mtime < cutoff:
+                    drop(p, f"older than {days:g} days")
+    reds = os.path.join(root, "reds")
+    for p in glob.glob(os.path.join(glob.escape(reds), "[0-9]*")):
+        if os.path.islink(p) or not os.path.isdir(p) or not os.path.basename(p).isdigit():
+            continue
+        try:
+            if _newest_mtime(p) >= cutoff:
+                continue
+        except OSError:
+            continue
+        running = [r for r in (read_record(f) for f in glob.glob(os.path.join(glob.escape(p), "fixer*.json")))
+                   if r and not r.get("ended")]
+        if not running:
+            drop(p, f"red run dir, untouched for {days:g} days, no fixer running")
+    for p in glob.glob(os.path.join(glob.escape(os.path.join(root, "internal-trees")), "*.json")):
+        try:
+            if os.lstat(p).st_mtime >= cutoff:
+                continue
+        except OSError:
+            continue
+        tree = (read_record(p) or {}).get("path")
+        if not tree or (allowed_path(tree) and not os.path.exists(tree)):  # a protected path is never stat'ed
+            drop(p, "internal-tree tag of a gone worktree")
+    return out
 
 
 # ORPHANED WORK (the owner, 2026-10-28: "review and fix landing code ... so things don't get missed or stalled"; the
