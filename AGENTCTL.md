@@ -660,6 +660,24 @@ agent must be assigned to it".
 - **Nobody awake.** The launchd processor ticks and dispatches with no session open; every verdict waits in the
   inbox. The status line says `RECONCILER not running` when the snapshot is stale.
 
+### issue: agentctl defects, filed (one agentctl editor)
+
+```
+agentctl issue "<what is wrong, where, how to see it>"   # files it: ISSUE <id>
+agentctl issue --list [--all]                             # the open ones (--all: closed too)
+agentctl issue --close <id> [--note "fixed in <sha>"]     # the maintainer, once fixed
+agentctl red am-fixer                                     # exit 0 inside a dispatched red fixer (prints who), else 1
+```
+
+agentctl's code has ONE editor, its maintainer. Every other agent that meets an agentctl defect, and above all a red
+fixer, files it with `agentctl issue`. An issue is a store item (type `issue`), shown in the status page's "agentctl
+issues" section. While it stays open it escalates once a week. The fixer's prompt says so, and fixers no longer get a
+~/bin worktree. `~/bin/hooks/pre-commit` (`git -C ~/bin config core.hooksPath hooks`, shared by every ~/bin worktree)
+refuses a commit made from a fixer session. It identifies the fixer the way `red` does: by the session's binding or
+fixer record, and only without a Claude session by the fixer environment. Any other exit of `agentctl red am-fixer`
+(agentctl broken) lets the commit through with a warning, so a broken agentctl can always be fixed. On the laptop
+(sync role) the issue is stored in ci-runner's store, so ci-runner's pin must include `issue`.
+
 ### land: QUEUED at once; checked, pushed and watched by the reconciler
 
 ```

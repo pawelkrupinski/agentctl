@@ -33,6 +33,8 @@ Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wai
   (A dispatched red fixer's land, and `land --follow`, still run the checks in-process and end at `LANDED`.)
 - Assigned a red build (a run number)? Run `~/bin/agentctl red claim <run> --note "<one line>"` FIRST, so the gate
   status names you as its fixer (`agentctl ci-why`, the status line); land the fix with `Fixes-Red: <run>`.
+- Found an agentctl defect? File it: `~/bin/agentctl issue "<what is wrong, where, how to see it>"`. A red fixer never
+  edits ~/bin (agentctl has one editor; ~/bin's pre-commit hook refuses a fixer's commit).
 - On a WATCH RED routed back to you: if your change caused it, fix forward AT ONCE with a `Fixes-Red: <n>` trailer
   (same final trailer block as Co-Authored-By) and land again; if not, say so with the run number.
 - Before committing, run the unit tests of the modules you touched and their dependents, through scripts/sbt-warm (`git diff --name-only forgejo/main | scripts/unit-shards run` does it, split as CI splits them).
