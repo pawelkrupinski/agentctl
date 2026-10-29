@@ -1,6 +1,6 @@
 """Phase 2 (design §6.3, §13 phase 2): the store over HTTP with Forgejo token auth, RemoteStore, the laptop's sync, the
 reconciler's entry point on ci-runner -- against a local server on a temp port, with a fake Forgejo for the auth."""
-import contextlib, io, json, os, socket, subprocess, sys, tempfile, threading, time, unittest, urllib.request
+import contextlib, io, json, os, signal, socket, subprocess, sys, tempfile, threading, time, unittest, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -718,6 +718,33 @@ class W7Test(Phase2Base):
 
 
 class TickEntryTest(unittest.TestCase):
+    TICK_BOUND = 40  # under the harness's per-test timeout, so a hung tick FAILS saying where it hung
+
+    def run_tick(self, env, tmp):
+        """`agentctl tick --once`; when it does not end within TICK_BOUND, every thread's stack (faulthandler, on
+        SIGABRT), its stderr and its logs in the failure, not a bare harness timeout."""
+        p = subprocess.Popen([A.TOOL_PATH, "tick", "--once"], env=dict(env, PYTHONFAULTHANDLER="1"),
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+        try:
+            out, errs = p.communicate(timeout=self.TICK_BOUND)
+        except subprocess.TimeoutExpired:
+            alive = p.poll() is None
+            os.killpg(p.pid, signal.SIGABRT)
+            try:
+                out, errs = p.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                os.killpg(p.pid, signal.SIGKILL)
+                out, errs = p.communicate()
+            logs = []
+            for root, _dirs, files in os.walk(tmp):
+                for f in files:
+                    if f.endswith(".log"):
+                        with open(os.path.join(root, f), errors="replace") as fh:
+                            logs.append(f"--- {os.path.relpath(os.path.join(root, f), tmp)}\n{fh.read()[-3000:]}")
+            self.fail(f"tick --once still {'running' if alive else 'holding its pipes (a child)'} after "
+                      f"{self.TICK_BOUND} s\nstderr:\n{errs[-6000:]}\n" + "\n".join(logs))
+        return subprocess.CompletedProcess(p.args, p.returncode, out, errs)
+
     def test_tick_on_ci_runner_clones_notifies_ready_and_a_watchdog_per_tick(self):
         tmp = tempfile.mkdtemp(prefix="agentctl-tick-")
         origin = os.path.join(tmp, "origin.git")
@@ -738,7 +765,7 @@ class TickEntryTest(unittest.TestCase):
                    AGENTCTL_INBOX_DIR=os.path.join(tmp, "inbox"), AGENTCTL_REDS_DIR=os.path.join(tmp, "reds"),
                    AGENTCTL_RECOVERY_DIR=os.path.join(tmp, "recovery"), AGENTCTL_NOTIFY="true")
         env.pop("AGENTCTL_STORE_URL", None)
-        p = subprocess.run([A.TOOL_PATH, "tick", "--once"], env=env, capture_output=True, text=True, timeout=300)
+        p = self.run_tick(env, tmp)
         got = []
         try:
             while True:
