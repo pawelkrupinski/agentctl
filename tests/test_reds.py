@@ -247,6 +247,41 @@ class FixTest(RedsBase):
         self.assertEqual([i["state"] for i in self.st.items("red")], ["verified"])
         self.assertTrue(any(str(e.get("verdict")).startswith("FIX OK") for e in self.inbox()))
 
+    def test_a_queued_fix_holds_its_red_until_it_lands_and_verification_runs_from_the_landing(self):
+        # 2026-10-29: #2493's red showed "offered" (a fixer re-dispatched "to check why the 2406 fix did not clear it")
+        # while its fix 16a683a55 sat queued behind the red gate since 00:21Z, untested; the import had lost run 2406
+        # from the red's names. The link comes from the change's Fixes-Red trailer and any spell of the red's key.
+        self.tick()
+        it = self.only()
+        key = it["data"]["key"]
+        self.st.put_item("red", f"{key}.0", "cleared", {"key": key, "runs": ["19"]})  # an earlier spell saw run 19
+        wt = self.r.worktree("repo-wt-queued", branch="repo-wt-queued")
+        self.r.write("fix.txt", "queued\n", at=wt)
+        sha = self.r.commit("fix FooSpec\n\nFixes-Red: 19", at=wt)
+        d = A.waiting_state(self.r.path)[0]
+        e, _ = A.queue_change(d, {"worktree": wt, "branch": "repo-wt-queued", "head": sha, "commits": [sha]})  # no `fixes`
+        e["status"] = "waiting"
+        A.save_entry(d, e)
+        self.tick()
+        it = self.only()
+        self.assertEqual((it["state"], it["data"]["fix"]["entry"]), ("fix-pending", e["id"]))
+        self.assertEqual(self.st.offers("fixer"), [])
+        self.assertIn("waiting to land", A.red_view(self.st, it, self.t[0])[1])
+        self.tick(advance=3 * A.RED_FIX_GIVEUP)  # hours in the queue behind the red gate: still its holder
+        self.assertEqual(self.only()["state"], "fix-pending")
+        self.assertEqual(self.unheld(), [])
+        self.assertEqual(A.red_enforce(self.st, A.red_fix_facts(self.r.path, self.st), self.t[0]), [])
+        e = json.load(open(os.path.join(d, "entries", f"{e['id']}.json")))
+        e.update(status="landed", landed_sha=sha, landed_at=A.iso_at(self.t[0]))
+        A.save_entry(d, e)
+        self.tick(advance=60)
+        it = self.only()
+        self.assertEqual((it["state"], (it["data"]["fix"] or {}).get("status")), ("fix-pending", "landed"))  # verifying from now
+        self.tick(advance=A.RED_FIX_GIVEUP - 120)
+        self.assertEqual(self.only()["state"], "fix-pending")
+        self.tick(advance=240)  # RED_FIX_GIVEUP after it LANDED, no run proving it: set aside, offered
+        self.assertEqual(self.only()["state"], "offered")
+
     def test_a_landed_fix_no_run_ever_checks_is_set_aside_and_the_red_offered_again(self):
         self.tick()
         _wt, sha = self.fix_commit(20)
