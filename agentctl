@@ -4992,11 +4992,13 @@ def red_block(o_r, a):
                              "probe": {"kind": iprobe.kind, "args": iprobe.args}, "until": words, "keys": keys,
                              "text": text, "details": details, "verify": verify, "probed_at": time.time()})
         same = st.get(lname) if "held" in r else None
-        if "held" in r and not (lease_meta(same).get("kind") == "block" and set(keys) <= set(lease_meta(same).get("keys") or [])):
+        if "held" in r and lease_meta(same).get("kind") != "block":
             print(f"NOT BLOCKED: {lname} is held by {r['held']['holder']}")
             return 1
-        if same:  # this red's own block is already up (a block run earlier, before its fixer's lease was handed over)
-            print(f"already blocked: {what}: {lease_meta(same).get('text')}")
+        if same:  # the run's block is already up (named after its first red): these reds join it
+            sm = lease_meta(same)
+            st.set_meta(lname, same["epoch"], same["secret"], {"keys": sorted(set(sm.get("keys") or []) | set(keys))})
+            print(f"already blocked: {what} joined {lname}: {sm.get('text')}")
         else:
             line = (f"RED BLOCKED ON OWNER: {cause} down (blocks {what}): {details}" if cause else
                     f"RED BLOCKED ON OWNER: {what}: {details}")

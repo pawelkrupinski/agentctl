@@ -438,12 +438,13 @@ class OwnerTest(RedsBase):
         lease = self.st.get(A.red_lease(it["data"]["key"]))
         self.st.acquire(A.block_lease(it["data"]["key"]), "owner:credentials", A.BLOCK_TTL, A.BLOCK_MAX, progress="p",
                         meta={"kind": "block", "owner_cause": "credentials", "cmd": "set the key",
-                              "keys": [it["data"]["key"]], "text": "BLOCKED ON OWNER: set the key"})
+                              "keys": ["the-runs-other-red"], "text": "BLOCKED ON OWNER: set the key"})
         os.environ.update(CLAUDE_CODE_SESSION_ID="s-mine", AGENTCTL_FIXER_RECORD=path)
         rc, out = self.tool("red", "block", "20", "--owner-cause", "credentials", "--cmd", "set the key",
                             "--until-http", "http://127.0.0.1:9/x", "--repo", "movies", cwd=self.r.path)
         self.assertEqual(rc, 0, out)
         self.assertIn("already blocked", out)
+        self.assertIn(it["data"]["key"], A.lease_meta(self.st.get(A.block_lease(it["data"]["key"])))["keys"])
         self.assertFalse(A.lease_is_live(self.st.get(A.red_lease(it["data"]["key"])), time.time()), lease)
 
     def test_another_fixers_lease_still_refuses_a_block(self):
