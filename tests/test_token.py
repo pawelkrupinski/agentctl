@@ -1,5 +1,5 @@
 """One credential path: the environment, then the processor's socket, then `secrets` (absolute path); fail closed."""
-import json, os, subprocess, sys, tempfile, unittest
+import json, os, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -141,12 +141,41 @@ class LoopCannotStallTest(unittest.TestCase):
             drop = A.TokenDrop(d, MOVIES).open()
             drop.held = lambda: TOK
             self.addCleanup(drop.close)
-            import socket  # the main thread never calls nap/take: only the server thread can answer
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
-                c.settimeout(3); c.connect(drop.path); c.sendall(A.TOKEN_REQUEST); c.shutdown(socket.SHUT_WR)
-                self.assertEqual(c.recv(100).decode(), TOK)
+            # the main thread never calls nap/take: only the server thread can answer
+            self.assertEqual(A.token_request(drop.path), TOK)
         finally:
             os.environ.pop("AGENTCTL_SOCK_DIR") if saved is None else os.environ.__setitem__("AGENTCTL_SOCK_DIR", saved)
+
+
+class TokenRequestRaceTest(unittest.TestCase):
+    def test_the_answer_is_read_even_when_the_processor_closed_before_the_half_close(self):
+        # the race the socket test lost under load: the server answers and closes before the client's shutdown()
+        import socket, threading
+        path = os.path.join(tempfile.mkdtemp(dir=os.environ["AGENTCTL_TEST_RUN_SOCK"], prefix="s-"), "t.sock")
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(path)
+        srv.listen(1)
+        real = socket.socket.shutdown
+
+        def late_shutdown(sock, how):  # the client is descheduled: the server has answered and closed by now
+            done.wait(5)
+            time.sleep(0.2)
+            return real(sock, how)
+        done = threading.Event()
+
+        def serve():
+            conn, _ = srv.accept()
+            conn.recv(4096)
+            conn.sendall(TOK.encode())
+            conn.close()
+            done.set()
+        threading.Thread(target=serve, daemon=True).start()
+        socket.socket.shutdown = late_shutdown
+        try:
+            self.assertEqual(A.token_request(path), TOK)
+        finally:
+            socket.socket.shutdown = real
+            srv.close()
 
 
 class BackgroundTouchesOnlyAllowedRootsTest(unittest.TestCase):

@@ -240,15 +240,33 @@ def token_from_processor(o_r):
         path = token_sock_path(d)
         if not os.path.exists(path):
             return None
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-            s.settimeout(3)
-            s.connect(path)
-            s.sendall(TOKEN_REQUEST)
-            s.shutdown(socket.SHUT_WR)
-            tok = s.recv(4096).decode().strip()
+        tok = token_request(path)
         return tok if TOKEN_SHAPE.fullmatch(tok) else None
     except (Exception, SystemExit):
         return None
+
+
+def token_request(path, timeout=3):
+    """Ask the processor's socket for the token; its answer ('' when it holds none). The processor answers as soon as
+    it has read the request and closes its end, so by the time this side half-closes, the connection may already be
+    gone: on macOS shutdown() then raises ENOTCONN (test_token flaked on it under load, and a real lookup returned
+    no token). The half-close is only a courtesy -- the answer is already in this socket's buffer -- so it may fail."""
+    import socket
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(timeout)
+        s.connect(path)
+        s.sendall(TOKEN_REQUEST)
+        try:
+            s.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+        chunks = []
+        while True:
+            b = s.recv(4096)
+            if not b:
+                break
+            chunks.append(b)
+        return b"".join(chunks).decode().strip()
 
 
 def token_unavailable_note(ns, why):
