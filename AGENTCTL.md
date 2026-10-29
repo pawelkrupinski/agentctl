@@ -157,6 +157,7 @@ follows "list before deleting".
 
 ```
 agentctl status [--line]          # the snapshot: the status line, then changes, the batch, reds, conditions
+agentctl status --open            # open the status page, http://agentctl.localhost/ (below)
 agentctl lease list [prefix] [--all]   # live leases and those freed in the last hour (--all: every one)
 agentctl watchdog                 # one invariant pass (launchd every 60 s)
 ```
@@ -164,6 +165,31 @@ agentctl watchdog                 # one invariant pass (launchd every 60 s)
 `status` reads only `state.json` (written each tick), and prints each item with its state and deadline and how long
 ago the tick ran. `lease list` prints holder, epoch, expiry, max hold and the holder's note; leases free for over a day
 are archived into the events by the tick, so the table stays small.
+
+**The status page** (2026-10-29): the laptop's processor (the sync; launchd `net.bitcashier.agentctl-waiting`) serves a
+read-only page at **http://agentctl.localhost/** (`agentctl status --open`). It binds 127.0.0.1:80; when port 80
+cannot be bound or something already listens on it (Rancher Desktop's ssh forward holds `*:80` here, and a loopback
+bind beside it would shadow it) it serves 127.0.0.1:3015 instead, logs that in the processor's log, and `status --open`
+adds the port (it reads `~/.cache/agentctl/status-page.json`). `*.localhost` resolves to loopback in Chrome and curl
+without /etc/hosts; Safari may not resolve it -- use http://127.0.0.1:<port>/ there. On the page, refreshed every
+15 s from `/api/status` (JSON):
+
+- header: the gate (each gating workflow's decided run, linked, and a newer one running), the reconciler's tick age
+  (the remote store's `tick_at`), the store reachable or not and its latency, network and tunnel, the dispatcher on/off
+  and fixer capacity (alive/slots), what is escalated now, and the status line;
+- reds: every open red -- workflow, run (linked to Forgejo), failing jobs, machine state, age, holder and when its
+  lease lapses, deadline, last note;
+- agents: every red-lease holder and every fixer alive or ended in the last 3 h -- pid alive, worktree, tier, started,
+  last progress (lease renewal and note), what its transcript last said, `git log -3`, files changed, and a tail of each
+  log in its run's reds dir (collapsible) with a full view at `/log?path=` (only `.log`/`.out`/`.txt` files under the
+  state root; anything else is 403);
+- waiting/landing: the batch and the open change items with deadlines (past ones marked); open conditions; the last 50
+  events.
+
+Every source is read in its own thread with a bound: a failing one is an error in its own section, never the page's or
+the tick's. It answers only Host `agentctl.localhost`, `127.0.0.1` or `localhost` (DNS rebinding), never calls
+`secrets` (the store token is the one the sync holds) and never writes. `AGENTCTL_STATUS_PAGE=off` turns it off,
+`AGENTCTL_STATUS_PORT` pins one port. Code: "the status page" section of agentctl; tests: `tests/test_status_page.py`.
 
 ### store: phase 2, the store and the reconciler on ci-runner
 
