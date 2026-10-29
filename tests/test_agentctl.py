@@ -15,6 +15,7 @@ if not os.environ.get("AGENTCTL_TEST_RUN_TMP"):
     _atexit.register(_shutil.rmtree, os.environ["AGENTCTL_TEST_RUN_TMP"], True)
 tempfile.tempdir = os.environ["AGENTCTL_TEST_RUN_TMP"]
 TOOL = os.environ.get("AGENTCTL_UNDER_TEST") or os.path.join(HERE, "..", "agentctl")
+os.environ.setdefault("AGENTCTL_CONFIG", "-")  # no config file of the machine's: the code's defaults, then the test's env
 _loader = importlib.machinery.SourceFileLoader("agentctl", TOOL)
 _spec = importlib.util.spec_from_loader("agentctl", _loader)
 A = importlib.util.module_from_spec(_spec)
