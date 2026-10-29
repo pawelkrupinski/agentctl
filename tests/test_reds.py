@@ -281,12 +281,13 @@ class FixTest(RedsBase):
         self.tick()
         self.fix_commit(2104)
         self.tick()
-        self.assertEqual(self.only()["state"], "fix-pending")
+        it = self.only()
+        self.assertEqual(it["state"], "fix-pending")
         calls, saved = [], (A.api, A.record_dispatch)
         A.api = lambda o_r, method, path, params=None, body=None: calls.append((method, path))
         A.record_dispatch = lambda **kw: None
-        try:
-            self.tick(advance=A.RED_FIX_RUN_START + 1)
+        try:  # past the window from the fix's own time (its commit's wall clock, seconds after self.t's start)
+            self.tick(advance=float(it["data"]["fix"]["at"]) + A.RED_FIX_RUN_START + 1 - self.t[0])
         finally:
             A.api, A.record_dispatch = saved
         self.assertIn(("POST", "actions/workflows/identity-capture.yml/dispatches"), calls)
