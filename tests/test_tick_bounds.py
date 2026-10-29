@@ -3,7 +3,7 @@ import os, sys, threading, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A  # noqa: E402
+from test_agentctl import A, code_source  # noqa: E402
 
 
 class StepBoundTest(unittest.TestCase):
@@ -44,7 +44,7 @@ class StepBoundTest(unittest.TestCase):
         self.assertNotIn("t-late", {k for k, v in A._step_errors.items() if v})
 
     def test_no_external_call_of_the_tick_is_unbounded(self):
-        src = open(A.TOOL_PATH).read()
+        src = code_source()
         self.assertIn("timeout=600)  # every git call is bounded", src)
         self.assertIn('capture_output=True, timeout=120).returncode == 0', src)
 

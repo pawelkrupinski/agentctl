@@ -3,7 +3,7 @@ import os, subprocess, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A  # noqa: E402
+from test_agentctl import A, code_source  # noqa: E402
 
 
 class ReapTest(unittest.TestCase):
@@ -34,7 +34,7 @@ class ReapTest(unittest.TestCase):
         p.returncode = 0  # (this test's own Popen: its wait would find nothing now)
 
     def test_no_detached_start_bypasses_the_bookkeeping(self):
-        src = open(A.TOOL_PATH).read()
+        src = code_source()
         self.assertEqual(src.count("subprocess.Popen("), 2)  # spawn_detached itself, and run_watched (which waits)
         self.assertIn("children", [n for n, _ in A.sync_steps("/r", "/d", "o/r")])
 

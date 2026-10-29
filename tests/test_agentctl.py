@@ -28,6 +28,17 @@ _loader.exec_module(A)
 # test_superseding_an_entry_cancels_its_run, 2026-10-29), and a no-op one turned the poll into a busy loop.
 harness.register(A)
 
+
+def code_source():
+    """ALL of agentctl's code as one text, in the order it runs: the entry, then lib/agentctl's PARTS (a test that
+    reads the source -- "only transition writes a state" -- must see every part)."""
+    lib = os.path.join(os.path.dirname(os.path.realpath(TOOL)), "lib", "agentctl")
+    ns = {"__name__": "agentctl._parts"}
+    with open(os.path.join(lib, "__init__.py")) as f:
+        exec(f.read(), ns)
+    texts = [open(TOOL).read()] + [open(os.path.join(lib, f"{p}.py")).read() for p in ns["PARTS"]]
+    return "\n".join(texts)
+
 # No test writes to the real inbox (~/.cache/agentctl/inbox): every land / watch / wait a test runs writes its verdict
 # here instead (test_inbox sets its own per test).
 # THE STATE ROOT (2026-10-28: tests wrote ~200 waiting/ dirs, the sweep reports and 176 checks/runs.jsonl rows into the

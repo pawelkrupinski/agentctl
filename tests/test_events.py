@@ -5,7 +5,7 @@ import ast, os, stat, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, TOOL  # noqa: E402
+from test_agentctl import A, TOOL, code_source  # noqa: E402
 
 
 class EventsTest(unittest.TestCase):
@@ -49,8 +49,7 @@ class EventsTest(unittest.TestCase):
         self.assertTrue(self.st.events()[-1]["notified_at"])
 
     def test_the_change_path_writes_the_inbox_only_through_events(self):
-        with open(TOOL) as f:
-            tree = ast.parse(f.read())
+        tree = ast.parse(code_source())
         fns = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
         for name in ("queue_verdict", "queue_join", "supersede", "set_change", "requeue_infra", "push_change",
                      "check_entry", "_check_entry", "tick_changes"):

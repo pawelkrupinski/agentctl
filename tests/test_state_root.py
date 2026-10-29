@@ -5,14 +5,13 @@ import contextlib, io, json, os, re, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, TOOL  # noqa: E402
+from test_agentctl import A, TOOL, code_source  # noqa: E402
 import harness  # noqa: E402
 
 
 class StateRootTest(unittest.TestCase):
     def test_no_path_bypasses_the_state_root(self):
-        with open(TOOL) as f:
-            lines = f.read().splitlines()
+        lines = code_source().splitlines()
         start = next(i for i, l in enumerate(lines) if l.startswith("def state_root"))
         end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("def "))
         offenders = [i + 1 for i, l in enumerate(lines) if '".cache", "agentctl"' in l and not start <= i < end]

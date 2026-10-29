@@ -5,7 +5,7 @@ import ast, json, os, re, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, TOOL  # noqa: E402
+from test_agentctl import A, TOOL, code_source  # noqa: E402
 from test_red import RedBase, MOVIES  # noqa: E402
 
 
@@ -144,8 +144,7 @@ class NoBypassTest(RegistryBase):
     def test_lint_no_condition_written_around_the_registry(self):
         """The source: an inbox_write whose verdict is a condition kind, a blocked red_claim, a ProbeResult or an
         open_condition without a probe argument, anywhere but the registry's own functions, fails this test."""
-        with open(TOOL) as f:
-            tree = ast.parse(f.read())
+        tree = ast.parse(code_source())
         prefix = re.compile(r"^(STALLED:|UNKNOWN:|NETWORK:|"
                             r"WATCH STALLED|WATCH UNKNOWN|HELD:)")
         allowed = {"open_condition", "inbox_write", "run_probe", "with_inbox"}

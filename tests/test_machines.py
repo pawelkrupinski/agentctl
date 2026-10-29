@@ -6,7 +6,7 @@ import os, re, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, TOOL  # noqa: E402
+from test_agentctl import A, TOOL, code_source  # noqa: E402
 
 
 class MachinesTest(unittest.TestCase):
@@ -60,8 +60,7 @@ class MachinesTest(unittest.TestCase):
         self.assertEqual(st.events()[-1]["severity"], "escalate")
 
     def test_only_transition_writes_an_items_state(self):
-        with open(TOOL) as f:
-            src = f.read()
+        src = code_source()
         writes = [m.start() for m in re.finditer(r"UPDATE items SET state", src)]
         self.assertEqual(len(writes), 1)
         body = src[src.index("    def transition(self, typ, iid, to,"):]
@@ -74,8 +73,7 @@ class OneLoopTest(unittest.TestCase):
         for gone in ("start_duties", "start_watchdog", "waiting_round", "push_batch", "ensure_waiting_tree",
                      "drop_waiting_tree", "batch_tree", "batch_state", "rebuild"):
             self.assertFalse(hasattr(A, gone), gone)
-        with open(TOOL) as f:
-            src = f.read()
+        src = code_source()
         self.assertNotIn("threading.Thread(target=loop", src)
         for s_ in ("blocked-red", "assembling", "checking", "bisecting", "pushing", "held", "landed"):
             self.assertIn(s_, A.MACHINES["batch"])
