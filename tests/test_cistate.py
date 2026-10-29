@@ -63,6 +63,31 @@ class SnapshotTest(RedBase):
         self.assertIn("gate UNREAD", out)
 
 
+class SummaryLogReadsTest(RedBase):
+    def test_the_one_line_summary_reads_a_red_gate_runs_logs_once_not_at_every_publish(self):
+        # 2026-10-29: ci-runner's gate summary re-read convergence #2473's failed log and five job logs (~8 s each) at
+        # every 45-s publish: "gate summary: still running after 20 s" at every tick
+        main = run(40, 20, "Main", "main.yml", self.sha, conclusion="failure")
+        self.put("runs.json", [main, run(39, 19, "Identity model convergence", "identity-model-convergence.yml",
+                                         self.sha)])
+        self.put("run-40.json", {"jobs": [{"name": "test", "status": "completed", "conclusion": "failure",
+                                           "steps": [{"name": "Run", "conclusion": "failure"}]}], "headSha": self.sha,
+                                 "url": "u", "number": 20, "status": "completed", "conclusion": "failure",
+                                 "workflowName": "Main"})
+        self.put("run-40.log", "test\tRun\t2026-10-27T08:00:00Z [error] FooSpec failed\n")
+        reads, real = [], A.read_log
+        A.read_log = lambda o_r, *a: reads.append(a) or real(o_r, *a)
+        try:
+            lines = [A.ci_why(MOVIES, summary=True, snap=A.ci_state_refresh(MOVIES), repo=self.r.path)[1]
+                     for _ in range(3)]
+            self.assertEqual(len(reads), 1, reads)  # once per run: its signatures are cached (run_sigs)
+            self.assertTrue(all(l.startswith("gate RED (main #20") for l in lines), lines)
+            full = A.ci_why(MOVIES, snap=A.ci_state_refresh(MOVIES), repo=self.r.path)[1]
+            self.assertIn("FooSpec", full)  # `ci-why` itself still explains the run from its log
+        finally:
+            A.read_log = real
+
+
 class FixerTokenTest(RedBase):
     def test_a_headless_fixer_gets_the_token_and_is_told_ci_reads_never_block_on_the_owner(self):
         os.environ["GH_TOKEN"] = "tok-123"

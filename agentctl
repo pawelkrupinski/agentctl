@@ -1569,9 +1569,16 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
     explained = {}
     for name, decided, newer, _streak in gate:
         if decided and decided.get("conclusion") in RED_CONCLUSIONS:
+            if summary:  # THE ONE-LINE SUMMARY NEVER RE-READS A DECIDED RUN'S LOGS (2026-10-29: ci-runner's gate summary
+                # read convergence #2473's failed log and five job logs, ~8 s each, every 45 s -- "gate summary: still
+                # running after 20 s" at every tick). Its line shows no log line; the run's signatures are cached once
+                # per run and classifier (run_sigs), which is all the red units below read.
+                run_sigs(o_r, decided, name)
+                continue
             lines, num, per_job = explain_run_jobs(o_r, decided, tail, repo)
             explained[name] = (lines, num)
-            save_run_sigs(o_r, decided, name, per_job)
+            if not any("LOG UNREADABLE" in l for l in lines):
+                save_run_sigs(o_r, decided, name, per_job)
     states, units, flakes_ = {}, [], []
     try:  # who holds each red: its item in the store (the tick acts; ci-why only renders)
         rows = [(n, d, _gate_lists.get(n, []), True) for n, d, _nw, _s in gate]
@@ -1607,6 +1614,9 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
         out.append(f"{name}: RED (run {decided['databaseId']} #{decided.get('number')}, {decided['conclusion']}{streak}){pending}")
         flines, finfos = fixing(name, decided)
         out += flines
+        if summary:
+            parts.append(f"{short_flow(name)} #{decided.get('number')} \u2192 {short(finfos)}")
+            continue
         lines, num = explained.get(name) or explain_run(o_r, decided, tail, repo)
         out += lines
         out.append(f"  clears when: a later {name} run on main is green, or every pushed commit touching a production path "
@@ -2675,7 +2685,9 @@ def run_sigs(o_r, run, workflow):
     rec = read_record(reds_dir("runsig", f"{run.get('databaseId')}.json"))
     if rec is not None and rec.get("classifier") == classifier_version():
         return rec["sigs"]
-    _lines, _num, per_job = explain_run_jobs(o_r, run, 6)
+    lines, _num, per_job = explain_run_jobs(o_r, run, 6)
+    if any("LOG UNREADABLE" in l for l in lines):  # a log not read is no verdict: read again next time, never cached
+        return [{"job": j, "kind": k, "line": (l or "")[:300], "sig": signature(workflow, j, l)} for j, k, l in per_job]
     return save_run_sigs(o_r, run, workflow, per_job)
 
 
