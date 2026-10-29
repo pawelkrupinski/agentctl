@@ -16,6 +16,8 @@ class RenameTest(unittest.TestCase):
         A.cmd_waiting = self.saved
 
     def test_land_subcommands_are_the_queues_and_tick_is_the_processor(self):
+        saved = os.environ.pop("AGENTCTL_ROLE", None)  # the laptop's `tick` (the sync); ci-runner's has its own clone
+        self.addCleanup(os.environ.__setitem__, "AGENTCTL_ROLE", saved or "server")
         for argv, want in ((["land", "status"], "status"), (["land", "hold"], "pause"), (["land", "release"], "resume"),
                            (["land", "cancel", "x-12"], "cancel"), (["tick", "--once", "--repo", "/r"], "run"),
                            (["tick", "service", "status", "--repo", "/r"], "service")):

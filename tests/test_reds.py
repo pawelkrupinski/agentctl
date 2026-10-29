@@ -68,7 +68,8 @@ class RedsBase(RedBase):
 
     def tick(self, dispatch=False, advance=0, snap=True):
         self.t[0] += advance
-        return A.red_tick(self.st, MOVIES, self.r.path, self.snap() if snap else None, now_=self.t[0], dispatch=dispatch)
+        return A.red_tick(self.st, MOVIES, self.r.path, self.snap() if snap else None, now_=self.t[0], dispatch=dispatch,
+                          sync=True)  # this process plays both hosts: the server's tick and the sync's claims
 
     def reds(self):
         return {it["data"]["key"]: it for it in self.st.items("red")}

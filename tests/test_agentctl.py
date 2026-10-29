@@ -39,6 +39,11 @@ A.time = _AgentctlTime("time")
 os.environ.setdefault("AGENTCTL_STATE_ROOT", tempfile.mkdtemp(prefix="agentctl-state-test-"))
 os.environ.setdefault("AGENTCTL_MOVIES_REPO", os.path.join(os.environ["AGENTCTL_STATE_ROOT"], "no-movies-repo"))
 os.environ.setdefault("AGENTCTL_BIN_REPO", "-")  # no test makes worktrees of the agentctl repository itself
+# THE STORE IS IN-PROCESS (the server role: the only one with a database of its own, since the laptop's local store
+# went, docs/simplification-2026-10.md item 2), and a test playing the laptop's sync without a URL of its own meets a
+# closed port -- never ci-runner's real store through the tunnel.
+os.environ.setdefault("AGENTCTL_ROLE", "server")
+os.environ.setdefault("AGENTCTL_STORE_DEFAULT_URL", "http://127.0.0.1:9")
 
 
 def _real_cache_marks():

@@ -275,14 +275,20 @@ def token_request(path, timeout=3):
 def token_unavailable_note(ns, why):
     """No source had the token: ONE condition per spell (UNKNOWN in the inbox), cleared by the token probe -- the
     processor holds one again -- with its entry acked."""
-    if ns != "movies":
+    if ns != "movies" or _noting_token[0]:  # the sync's store is remote: its call needs this very token -- once
         return
+    _noting_token[0] = True
     try:
         open_condition("UNKNOWN", f"UNKNOWN: token unavailable ({why}): run `secrets unlock {ns}` in any session; the "
                                   "next land or `waiting status` re-seeds the processor",
                        run_probe("token", {"ns": ns}), [], key=f"token-{ns}", command="token", exit_code=2)
     except (Exception, SystemExit) as e:
         err(f"token: could not note the missing token ({str(e)[:120]})")
+    finally:
+        _noting_token[0] = False
+
+
+_noting_token = [False]  # token_unavailable_note is running: the remote store's own token read must not recurse
 
 
 def token_found(ns):
@@ -5698,10 +5704,9 @@ def bg_final_text(path):
 
 
 class CurrentStore:
-    """Store() resolved again at every call, so a long-running process follows `agentctl store use` (2026-10-29
-    cutover: the gate fixer's wrapper, started on the laptop's store, renewed its leases there for hours while
-    ci-runner's imported copies expired and its reds were offered again). Its leases' epoch and secret are the same on
-    both (the import copies them), so its renewals simply land on the store in use."""
+    """Store() resolved again at every call, so a long-running process follows `agentctl store use URL` (2026-10-29
+    cutover: the gate fixer's wrapper, started on the laptop's then store, renewed its leases there for hours while
+    ci-runner's copies expired and its reds were offered again)."""
 
     def __getattr__(self, name):
         return getattr(Store(), name)
@@ -6157,7 +6162,7 @@ _red_lock = threading.Lock()
 _last_red_tick = [0.0]
 
 
-def red_tick(store, o_r, repo, snap, now_=None, dispatch=True, facts=None):
+def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync=False):
     """One level-triggered pass: observe (unless the gate is unread: nothing opens or clears on an unknown), each red one
     step (per item, inside try: one bad item never stops the tick), the claims renewed, the dispatcher. Returns what it
     did."""
@@ -6211,12 +6216,12 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=True, facts=None):
         acts += red_enforce(store, facts, t)
     except (Exception, SystemExit) as e:
         err(f"red tick: the invariant pass failed ({str(e)[:160]})")
-    if host_role() != "server":  # a claim's activity is in the laptop's worktrees: the laptop's sync renews them
-        try:
+    if sync or dispatch:  # the sync's half on the same store (claims renewed; with dispatch its dispatcher): the tests'
+        try:  # one-process stand-in for the two hosts. In production the laptop's sync runs these (sync_steps)
             red_renew_holders(store, t)
         except (Exception, SystemExit) as e:
             err(f"red tick: renewing the claims failed ({str(e)[:160]})")
-    if dispatch and host_role() != "server":  # fixers run on the laptop (owner decision 8): its sync dispatches
+    if dispatch:  # fixers run on the laptop (owner decision 8): its sync dispatches
         try:
             acts += red_dispatcher(store, o_r, repo, t)
         except (Exception, SystemExit) as e:
@@ -6224,7 +6229,7 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=True, facts=None):
     return acts
 
 
-def red_tick_repo(repo, snap=None, dispatch=True):
+def red_tick_repo(repo, snap=None, dispatch=False):
     o_r = slug(repo)
     if o_r not in GATING:
         return []
@@ -7326,7 +7331,7 @@ def cmd_gov(a):
         if idle:
             print("evictable: " + ", ".join(f"{os.path.basename(r)} ({int(i // 60)} min)" for i, r, _p in idle))
         why = gov_pressure()
-        print(f"pressure: {why} (land checks on ci-runner)" if why else "pressure: none (land checks locally)")
+        print(f"pressure: {why} (no new fixer starts)" if why else "pressure: none")
         return 0
     if a.gcmd == "stats":
         rc = cmd_checks(argparse.Namespace(ccmd="stats", days=a.days))
@@ -7804,6 +7809,9 @@ LAND_SUBCOMMANDS = {"status": "status", "hold": "pause", "release": "resume", "c
 WAITING_RENAMED = {"status": "land status", "pause": "land hold", "resume": "land release", "cancel": "land cancel <id>",
                    "run": "tick", "service": "tick service"}
 ALIASES_UNTIL = "2026-11-05"  # the old command names (design §14.5) answer until then, each naming its new one
+# TODO(2026-11-05): drop `waiting` and WAITING_RENAMED. NOT BEFORE the laptop's launchd job stops calling `waiting run
+# --service` (as installed 2026-10-29): the owner reinstalls it with `agentctl tick service install` (which kickstarts
+# it and needs the token handed over again), then the alias goes -- removing it first would stop the sync.
 
 
 def cmd_land(a):
@@ -9617,14 +9625,13 @@ def queue_join(repo, d, e, tree, head):
 
 
 def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own=None):
-    """(ok, output, where) of the change's checks: on ci-runner when the governor reports pressure (and the repo has the
-    remote check workflow), else in the tree, admitted by the governor. ok None: stalled."""
+    """(ok, output, where) of the change's checks: on the CI tier when the repo has the remote check workflow (owner
+    decision 1; the reconciler is ci-runner's, the laptop runs no checks since its tick went), else in the tree,
+    admitted by the governor. ok None: stalled."""
     adopted = remote_matches(e, base, head, mode)
-    why = "its remote run, adopted" if adopted else \
-        "the reconciler on ci-runner checks on the CI tier (owner decision 1)" if host_role() == "server" else \
-        gov_pressure() if os.environ.get("AGENTCTL_REMOTE_CHECKS", "1") != "0" else None
-    if why and (adopted or remote_checks_supported(tree)):
-        wlog(d, f"{e['id']}: the laptop is under pressure ({why}): checks on ci-runner")
+    why = "its remote run, adopted" if adopted else "the CI tier (owner decision 1)"
+    if adopted or remote_checks_supported(tree):
+        wlog(d, f"{e['id']}: checks on {why}")
         ok, out = remote_check(repo, e, base, head, mode, own)
         if ok is not None:
             return ok, out, f"on ci-runner ({why})"
@@ -9648,9 +9655,9 @@ def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own=None
     return (None if rc is None else rc == 0), out, f"locally, check tree {os.path.basename(tree)}"
 
 
-# ---------------------------------------------------------------- remote checks: ci-runner's check tier under pressure
-# The owner (2026-10-27): when the governor reports memory or CPU pressure (gov_pressure), a queued change's pre-commit
-# checks run on ci-runner's check tier instead. The checked tip is pushed to `check/<entry id>` (the hook checks nothing
+# ---------------------------------------------------------------- remote checks: ci-runner's check tier
+# The owner (2026-10-27, then decision 1): a queued change's pre-commit checks run on ci-runner's check tier (first only
+# under the laptop's pressure; since the laptop's tick went, always: the reconciler is ci-runner's). The checked tip is pushed to `check/<entry id>` (the hook checks nothing
 # for a check/ branch: it is a run's ref, never landed), whose push runs .github/workflows/precommit-check.yml: the same
 # hook, `--checks-only <merge-base with main>..HEAD`, on the check tier's runner. agentctl follows that run (owned: the run
 # is cancelled if the checker dies), reads the verdict -- the same (ok, output) shape as a local check, the failed jobs'
@@ -10710,9 +10717,10 @@ TICK = 5  # seconds between ticks ($AGENTCTL_TICK); every step is bounded or rat
 
 
 def waiting_run(repo, once=False, service=False):
-    """THE processor: ONE loop of ticks (design §3, phase 1 step 8): the change items (executors, pushes), the batch,
-    events -> inbox and the notifier, the network and tunnel watches, the gate line, the red tick, the recovery
-    registry, the inbox escalations. Nothing in it blocks for long (checks run in executors with leases); it re-execs
+    """THE processor: ONE loop of ticks (design §3). On ci-runner (server_steps): the change items (executors,
+    pushes), the batch, the watches, the gate line, the red tick, the recovery registry. On the laptop (sync_steps):
+    the outbox, the state mirror, events -> inbox and the notifier, claims, the fixer dispatcher, the network and
+    tunnel watches, upkeep. Nothing in it blocks for long (checks run in executors with leases); it re-execs
     onto agentctl's new code between ticks; the external watchdog (W5) watches its beat."""
     d, _c, _wt = waiting_state(repo)
     own = processor_owned(d, repo)
@@ -10737,25 +10745,7 @@ def waiting_run(repo, once=False, service=False):
                 with clone_shared(repo):
                     return fn()
             return run
-        steps = sync_steps(repo, d, o_r) if role == "sync" else tuple(
-            (n, f) for n, f in (("clone health", lambda: [wlog(d, f"tick: {x}") for x in [clone_heal_tick(repo)] if x]
-                                 if heal_enabled(repo) else None),
-                                ("change items", lambda: project_changes(d)),
-                                ("change tick", shared(lambda: [wlog(d, f"tick: {x}") for x in tick_changes(repo, d)])),
-                                ("batch tick", shared(lambda: [wlog(d, f"tick: {x}") for x in tick_batch(repo, d)])),
-                                ("watches", lambda: [wlog(d, f"tick: {x}") for x in tick_watches()]),
-                                ("land refs", shared(lambda: [wlog(d, f"tick: {x}") for x in sweep_land_refs(repo, d)])),
-                                ("lease archive", lambda: maybe_archive_leases(d)),
-                                ("children", reap_children),
-                                ("events", project_events), ("notifier", notify_escalations),
-                                ("network watch", network_watch), ("tunnel probe", tunnel_watch),
-                                ("gate summary", lambda: maybe_publish_gate(repo)),
-                                ("red time", lambda: track_red_time(Store(), gate_is_red_now())),
-                                ("red tick", lambda: maybe_red_tick(repo)),
-                                ("fixer landing", lambda: [wlog(d, f"red: {x}") for x in fixers_land_watch()]),
-                                ("recovery", maybe_recovery_tick),
-                                ("upkeep", lambda: [wlog(d, f"upkeep: {x}") for x in maybe_upkeep()]))
-            if not (role == "server" and n in LAPTOP_ONLY_STEPS))
+        steps = sync_steps(repo, d, o_r) if role == "sync" else server_steps(repo, d, shared)
         while True:
             if TICK_STOP[0]:  # SIGTERM (systemd's stop): between ticks, never inside one
                 return 0
@@ -12796,23 +12786,6 @@ class Store:
         finally:
             c.close()
 
-    def import_lease(self, row):
-        """Phase 2's one-shot import: a lease row copied as it is (holder, epoch, secret, expiry), unless the name
-        exists here. True when written."""
-        c = self.db()
-        try:
-            c.execute("BEGIN IMMEDIATE")
-            if self._row(c, row["name"]):
-                c.execute("COMMIT")
-                return False
-            c.execute("INSERT INTO leases VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                      tuple(row.get(k) for k in ("name", "holder", "epoch", "secret", "acquired_at", "renewed_at",
-                                                 "expires_at", "max_until", "progress", "item", "meta")))
-            c.execute("COMMIT")
-            return True
-        finally:
-            c.close()
-
     def list(self, prefix=""):
         c = self.db()
         try:
@@ -13064,42 +13037,53 @@ def cmd_lease(a):
 # against Forgejo's /api/v1/user (the answer cached STORE_AUTH_CACHE s): an --allow-user login gets the whole API, a
 # --metrics-user login GET /metrics alone, anyone else 403, no token 401. The reconciler (`agentctl tick` there) opens
 # the same database in-process: two units, one WAL file, so a reconciler crash leaves leases, submissions and the event
-# feed up. RemoteStore is Store's twin over the API: `Store()` returns one when $AGENTCTL_STORE_URL is set, so the
-# laptop's sync, its dispatcher, `red claim` and the fixers' wrappers work against ci-runner's store unchanged.
+# feed up. RemoteStore is Store's twin over the API: on the laptop `Store()` IS one, so the laptop's sync, its
+# dispatcher, `red claim` and the fixers' wrappers work against ci-runner's store unchanged.
 #
-# ROLES: "local" (phase 1: the laptop does everything), "server" (`agentctl tick` on ci-runner: the tick, never the
-# laptop's duties), "sync" (the laptop once $AGENTCTL_STORE_URL is set: submit, events -> inbox, the notifier, the state
-# mirror, the claims' activity, the fixer dispatcher; it never ticks).
+# TWO ROLES, ONE WRITER (owner decision 7, 2026-10-29: no laptop standby reconciler; the laptop's own store and its
+# phase-1 tick were deleted in the simplification, docs/simplification-2026-10.md item 2): "server" (`agentctl tick`
+# and `store serve` on ci-runner, AGENTCTL_HOST=ci-runner or AGENTCTL_ROLE=server: the database in-process, the tick,
+# never the laptop's duties) and "sync" (everywhere else: submit, events -> inbox, the notifier, the state mirror, the
+# claims' activity, the fixer dispatcher; it never ticks and has no database of its own). DISASTER RECOVERY needs no
+# laptop copy: a lost store.db is rebuilt from the land/* refs and Forgejo's runs (design §16), the backup timer keeps
+# 24 hourly copies on ci-runner.
 STORE_RPC = ("acquire", "renew", "note", "release", "revoke", "set_meta", "offer", "offers", "offer_of", "offer_reason",
              "close_offer", "take", "get", "item", "items", "put_item", "transition", "update_item", "mark_notified",
-             "meta_get", "meta_set", "events", "archive_free_leases", "list", "import_lease")
+             "meta_get", "meta_set", "events", "archive_free_leases", "list")
 STORE_AUTH_CACHE = 300   # s a token's login is trusted before Forgejo is asked again (§15)
 EVENTS_WAIT_MAX = 25     # s a GET /v1/events long-poll waits for a new event
 STORE_PORT = 3014
 SYNC_MIRROR_EVERY = 10   # s between the laptop's copies of /v1/state into state.json
 
 
+DEFAULT_STORE_URL = f"http://localhost:{STORE_PORT}"  # ci-runner's store through the Forgejo tunnel
+
+
 def store_url():
-    """The remote store this laptop uses: $AGENTCTL_STORE_URL, else the one `agentctl store use URL` wrote (state root's
-    store.url, so every agentctl process -- agents' `land` and `red claim` included -- agrees); None: the local store."""
+    """The store a sync process uses: $AGENTCTL_STORE_URL, else the one `agentctl store use URL` wrote (state root's
+    store.url, so every agentctl process -- agents' `land` and `red claim` included -- agrees), else ci-runner's through
+    the tunnel. None on the server: its database is in-process."""
+    if host_role() == "server":
+        return None
     if os.environ.get("AGENTCTL_STORE_URL"):
         return os.environ["AGENTCTL_STORE_URL"]
-    if os.environ.get("AGENTCTL_ROLE") == "server":
-        return None
     try:
         with open(state_root("store.url")) as f:
-            return f.read().strip() or None
+            return f.read().strip() or default_store_url()
     except OSError:
-        return None
+        return default_store_url()
+
+
+def default_store_url():
+    """ci-runner's store through the tunnel; $AGENTCTL_STORE_DEFAULT_URL overrides (the tests: a closed port)."""
+    return os.environ.get("AGENTCTL_STORE_DEFAULT_URL") or DEFAULT_STORE_URL
 
 
 def host_role():
-    r = os.environ.get("AGENTCTL_ROLE")
-    if r:
-        return r
-    if store_url():
-        return "sync"
-    return "server" if os.environ.get("AGENTCTL_HOST") == "ci-runner" else "local"
+    """"server" on ci-runner (AGENTCTL_HOST=ci-runner, or AGENTCTL_ROLE=server), else "sync". There is no third role."""
+    if os.environ.get("AGENTCTL_ROLE") == "server" or os.environ.get("AGENTCTL_HOST") == "ci-runner":
+        return "server"
+    return "sync"
 
 
 def store_errors():
@@ -13887,29 +13871,14 @@ def store_server(api, host, port):
 
 
 def cmd_store(a):
-    """`agentctl store serve --listen ADDR:PORT --forgejo-url URL --allow-user U... --metrics-user U...`;
-    `agentctl store import --to URL [--repo R]` (the laptop's one-shot move)."""
+    """`agentctl store serve --listen ADDR:PORT --forgejo-url URL --allow-user U... --metrics-user U...` (ci-runner);
+    `agentctl store use URL` (the laptop: which store its sync and agents use)."""
     if a.scmd == "use":
-        if a.local:
-            try:
-                os.unlink(state_root("store.url"))
-            except FileNotFoundError:
-                pass
-            print("store: local (state root's store.db); restart the processor: `launchctl kickstart -k "
-                  f"gui/{os.getuid()}/{SERVICE_LABEL}`")
-            return 0
         RemoteStore(a.url).state()  # it answers, with this token, before anything relies on it
         os.makedirs(state_root(), exist_ok=True)
         with open(state_root("store.url"), "w") as f:
             f.write(a.url + "\n")
-        print(f"store: {a.url} (every agentctl process here); the processor becomes the sync: `launchctl kickstart -k "
-              f"gui/{os.getuid()}/{SERVICE_LABEL}`")
-        return 0
-    if a.scmd == "import":
-        n = store_import(Store(path=state_root("store.db")), RemoteStore(a.to), a.repo or movies_repo_path())
-        print(f"store import -> {a.to}: {n['leases']} live lease(s) copied ({n['leases_there']} there already), "
-              f"{n['items']} open item(s) created, {n['merged']} red(s) merged into ci-runner's ({n['skipped']} closed there already), "
-              f"{n['changes']} change(s)")
+        print(f"store: {a.url} (every agentctl process here; the sync re-reads it at its next start)")
         return 0
     host, _, port = a.listen.rpartition(":")
     st = Store(path=state_root("store.db"))
@@ -13953,72 +13922,6 @@ def red_import_merge(into, other):
     m["attempts"] = max(int(into.get("attempts") or 0), int(other.get("attempts") or 0))
     m["history"] = (other.get("history") or []) + [h for h in into.get("history") or [] if h not in (other.get("history") or [])]
     return m
-
-
-def import_red(remote, it):
-    """One open laptop red onto ci-runner's store, BY ITS KEY (2026-10-29 cutover: the reconciler ticked before the
-    import finished and opened its own items for the same reds -- put_item left those as they were, so #2493 lost its
-    runs back to #2406 and with them the link to its Fixes-Red: 2406 change, and #2473's reds got a second open item
-    each). No open item for the key: created as it is. Else the laptop's history is merged into the open one (the
-    laptop's own id when it is open there) and every other open item of the key is merged in and closed. The STATE
-    is never set here: the tick derives it from the merged red (a fix whose Fixes-Red names it -> fix-pending, a live
-    lease -> leased, ...). Returns what it did."""
-    key = it["data"].get("key") or it["id"]
-    same = [x for x in remote.items("red") if (x["data"].get("key") or x["id"]) == key
-            and not machine_state("red", x["state"]).terminal]
-    if not same:
-        there = remote.item("red", it["id"])
-        if there:  # ci-runner's reconciler already closed this spell: its decision stands
-            return f"skipped: {there['state']} there already"
-        remote.put_item("red", it["id"], it["state"], it.get("data"))
-        return "created"
-    same.sort(key=lambda x: (x["id"] != it["id"], x["entered_at"]))
-    primary, rest = same[0], same[1:]
-    data = red_import_merge(primary["data"], it["data"])
-    for x in rest:
-        data = red_import_merge(data, x["data"])
-    if data != primary["data"]:
-        remote.update_item("red", primary["id"], primary["version"], data)
-    for x in rest:
-        remote.close_offer(f"red:{x['id']}", "merged")
-        remote.transition("red", x["id"], "cleared", x["version"],
-                          data={"merged_into": primary["id"]},
-                          event={"text": f"red {x['id']}: merged into {primary['id']} (one open red per key; store import)"})
-    return f"merged into {primary['id']}" + (f" (closed {', '.join(x['id'] for x in rest)})" if rest else "")
-
-
-def store_import(local, remote, repo):
-    """§13 phase 2 step 3, the laptop's one-shot move onto ci-runner's store (safe to run again): every live lease
-    copied as it is (its holder renews it there with the same epoch and secret), every open change of the local queue
-    submitted (its land/<id> ref pushed first) BEFORE the items -- so the Fixes-Red changes a red's fix-pending rests on
-    are there at the reconciler's next tick -- then every open red merged in by its key (import_red) and every open
-    condition created. Returns the counts."""
-    n = {"leases": 0, "leases_there": 0, "items": 0, "merged": 0, "skipped": 0, "changes": 0}
-    t = time.time()
-    for row in local.list():
-        if row["holder"] and row["expires_at"] > t:
-            if remote.import_lease(row):
-                n["leases"] += 1
-            else:
-                n["leases_there"] += 1
-    d = waiting_state(repo)[0]
-    for e in queued_entries(d) + waiting_entries(d):
-        if not e.get("ref") and not submit_ref(repo, d, e, remote=True):
-            err(f"store import: {e['id']}: its land ref could not be pushed; land it again after the move")
-            continue
-        remote.submit({**{k: e.get(k) for k in SUBMIT_FIELDS}, "id": e["id"]})
-        n["changes"] += 1
-    for it in local.items("red"):
-        if not machine_state("red", it["state"]).terminal:
-            how = import_red(remote, it)
-            n["items" if how == "created" else "skipped" if how.startswith("skipped") else "merged"] += 1
-            if how != "created":
-                err(f"store import: red {it['id']}: {how}")
-    for it in local.items("condition"):
-        if not machine_state("condition", it["state"]).terminal:
-            remote.put_item("condition", it["id"], it["state"], it.get("data"))
-            n["items"] += 1
-    return n
 
 
 def sd_notify(msg):
@@ -14085,6 +13988,25 @@ def mirror_state(st=None, now_=None):
     return snap
 
 
+def server_steps(repo, d, shared):
+    """The reconciler's tick on ci-runner (the one writer): the changes, the batch, the watches, the gate, the reds,
+    the recovery registry. Never the laptop's duties (events -> inbox, the notifier, the network and tunnel watches, the
+    fixers, upkeep): those are sync_steps."""
+    return (("clone health", lambda: [wlog(d, f"tick: {x}") for x in [clone_heal_tick(repo)] if x]
+             if heal_enabled(repo) else None),
+            ("change items", lambda: project_changes(d)),
+            ("change tick", shared(lambda: [wlog(d, f"tick: {x}") for x in tick_changes(repo, d)])),
+            ("batch tick", shared(lambda: [wlog(d, f"tick: {x}") for x in tick_batch(repo, d)])),
+            ("watches", lambda: [wlog(d, f"tick: {x}") for x in tick_watches()]),
+            ("land refs", shared(lambda: [wlog(d, f"tick: {x}") for x in sweep_land_refs(repo, d)])),
+            ("lease archive", lambda: maybe_archive_leases(d)),
+            ("children", reap_children),
+            ("gate summary", lambda: maybe_publish_gate(repo)),
+            ("red time", lambda: track_red_time(Store(), gate_is_red_now())),
+            ("red tick", lambda: maybe_red_tick(repo)),
+            ("recovery", maybe_recovery_tick))
+
+
 def sync_steps(repo, d, o_r):
     """The laptop's loop once the store is remote: it never ticks."""
     last_mirror = [0.0]
@@ -14122,9 +14044,6 @@ def sync_steps(repo, d, o_r):
             ("fixer landing", lambda: [err(f"red: {x}") for x in fixers_land_watch()]),
             ("network watch", network_watch), ("tunnel probe", tunnel_watch),
             ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep()]))
-
-
-LAPTOP_ONLY_STEPS = ("events", "notifier", "network watch", "tunnel probe", "upkeep", "fixer landing")
 
 
 def close_landed_worktrees(store=None):
@@ -14450,7 +14369,7 @@ def inv_w7():
     W7_MAX is still past its projector cursor (meta projector_seq). The store not answering is no verdict (the tunnel
     and ci-runner have their own conditions). Raised and cleared by this same check, as an INVARIANT condition."""
     if host_role() != "sync":
-        return True, "no sync here (the local store)"
+        return True, "no sync here (the server)"
     try:
         st = Store()
         behind = st.events(after=int(st.meta_get("projector_seq", 0) or 0), limit=1)
@@ -17300,14 +17219,9 @@ def main(argv=None):
     sts.add_argument("--forgejo-url", help="Forgejo's base URL: each caller's token is checked with its /api/v1/user")
     sts.add_argument("--allow-user", action="append", help="a login with the whole API (repeatable)")
     sts.add_argument("--metrics-user", action="append", help="a login with GET /metrics only (repeatable)")
-    stu = stos.add_parser("use", help="the laptop's switch: every agentctl process here uses the remote store at URL "
-                                      "(the processor becomes the sync), or --local again")
-    stu.add_argument("url", nargs="?", help="http://localhost:3014 (through the tunnel)")
-    stu.add_argument("--local", action="store_true")
-    sti = stos.add_parser("import", help="phase 2's one-shot move: the local store's live leases, open reds and conditions, "
-                                         "and the queue's open changes, into the remote store")
-    sti.add_argument("--to", required=True, help="the remote store's URL (http://localhost:3014 through the tunnel)")
-    sti.add_argument("--repo", help="the clone whose queue moves (default: the movies clone)")
+    stu = stos.add_parser("use", help=f"the laptop's switch: every agentctl process here uses the store at URL "
+                                      f"(default without one: {DEFAULT_STORE_URL}, ci-runner's through the tunnel)")
+    stu.add_argument("url", help="http://localhost:3014 (through the tunnel)")
     tk = sub.add_parser("tick", help="the processor: the reconciler's loop of ticks (`tick service install|uninstall|status`: "
                         "it as the launchd agent)")
     tk.add_argument("tcmd", nargs="?", choices=("service",), help="service: the launchd agent")

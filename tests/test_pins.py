@@ -129,16 +129,6 @@ class ReconcilerReadsTheStoreTest(PinsBase):
         self.assertNotIn("STALE", A.pins_status())
 
 
-class LocalStoreModeTest(PinsBase):
-    def test_local_store_mode_reads_the_release_itself_and_keeps_the_store_in_step(self):
-        self.assertEqual(A.host_role(), "local")
-        rec = A.refresh_pinned_recording(MOVIES, self.repo, now_=T)
-        self.assertEqual(len(self.reads), 1)
-        self.assertEqual(rec["pins"], {"pl": "528", "de": "528"})
-        self.assertEqual(self.stored()["pins"], {"pl": "528", "de": "528"})
-        self.assertEqual(A.pinned_recording(), "528")
-
-
 class PinsStatusTest(PinsBase):
     def test_status_shows_the_pins_and_their_age_stale_past_a_day(self):
         self.assertIn("pins: unread", A.pins_status({}))

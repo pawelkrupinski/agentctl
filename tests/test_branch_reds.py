@@ -130,7 +130,7 @@ class BranchRedTest(BranchBase):
         self.addCleanup(setattr, A, "read_pins", saved)
         seen = []
         A.read_pins = lambda o_r, tag_: seen.append(tag_) or dict(pins)
-        A.refresh_pinned_recording(MOVIES, self.r.path, force=True)
+        A.refresh_pinned_recording(MOVIES, self.r.path, force=True, role="sync")  # the laptop reads the release
         self.assertEqual(seen, [tag])
 
     def test_the_pinned_recording_is_read_from_the_movies_repo_never_hard_coded(self):

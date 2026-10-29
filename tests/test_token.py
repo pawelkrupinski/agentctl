@@ -178,6 +178,24 @@ class TokenRequestRaceTest(unittest.TestCase):
             srv.close()
 
 
+class TokenNoteRecursionTest(unittest.TestCase):
+    def test_noting_a_missing_token_on_a_remote_store_does_not_recurse(self):
+        # the sync's store is remote: noting the missing token calls the store, which reads the token, which is missing
+        calls, saved = [], A.open_condition
+
+        def needs_token(*a, **k):
+            calls.append(1)
+            A.token_unavailable_note("movies", "again")
+            raise SystemExit("no token")
+        A.open_condition = needs_token
+        try:
+            A.token_unavailable_note("movies", "none")
+        finally:
+            A.open_condition = saved
+        self.assertEqual(calls, [1])
+        self.assertFalse(A._noting_token[0])
+
+
 class BackgroundTouchesOnlyAllowedRootsTest(unittest.TestCase):
     def test_no_machine_wide_lsof_and_nothing_under_desktop_is_touched(self):
         import tempfile

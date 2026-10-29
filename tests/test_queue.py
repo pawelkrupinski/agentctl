@@ -220,14 +220,13 @@ class QueueTest(WaitingTest):
         self.assertEqual(self.check(eid), 1)
         self.assertIn("no longer applies", [e for e in self.inbox() if e["kind"] == "NOT_LANDED"][0]["verdict"])
 
-    def test_under_pressure_the_checks_run_on_ci_runner_and_the_push_names_the_run(self):
+    def test_the_checks_run_on_the_ci_tier_and_the_push_names_the_run(self):
         self.r.write(".github/workflows/precommit-check.yml", "name: Pre-commit check\n")
         self.r.commit("the remote check workflow")
         self.r.push()
         os.remove(self.pushes)
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         eid, _ = self.queued(wt)
-        A.gov_pressure = lambda: "memory pressure 82%"
         seen = []
 
         def remote(repo, e, base, head, mode, own=None):
@@ -239,7 +238,7 @@ class QueueTest(WaitingTest):
         self.assertEqual(len(seen), 1)
         self.assertEqual(self.calls_of("--range"), [], "nothing checked on the laptop")
         self.assertEqual(self.pushed(), ["push remote=4242"])
-        self.assertIn("on ci-runner (memory pressure 82%)", [e for e in self.inbox() if e["kind"] == "LANDED"][0]["verdict"])
+        self.assertIn("on ci-runner (the CI tier", [e for e in self.inbox() if e["kind"] == "LANDED"][0]["verdict"])
 
     def test_a_remote_check_without_a_verdict_is_checked_locally(self):
         self.r.write(".github/workflows/precommit-check.yml", "name: Pre-commit check\n")
@@ -296,12 +295,10 @@ class QueueTest(WaitingTest):
         A.remote_checks_supported = lambda tree: True
         A.precheck_hook = lambda tree: "/hook"
         A.batch_mode = lambda hook: "--fast-only"
-        os.environ["AGENTCTL_ROLE"] = "server"
-        try:
+        try:  # the server role (the harness's): its batch check goes to the CI tier
             self.assertEqual(A.batch_check(self.r.path, self.r.path, self.r.path, "b" * 40, "c" * 40), (True, "ok", False))
         finally:
             A.remote_check, A.remote_checks_supported, A.precheck_hook, A.batch_mode = saved
-            os.environ.pop("AGENTCTL_ROLE")
         self.assertEqual(seen, [("batch-cccccccccc", "--fast-only")])
 
     def test_a_check_the_laptop_failed_is_queued_again_not_rejected(self):
@@ -538,7 +535,9 @@ class RemotePickupTest(QueueTest):
         d, e = self.checking_entry()
         other, _ = self.agent("b", "worker/src/main/B.scala", "b\n", msg="b: two")
         sh(other, "git", "push", "-q", "forgejo", "HEAD:main")
-        A.gov_pressure = lambda: None
+        saved_rc = A.remote_check
+        A.remote_check = lambda repo, e_, base, head, mode, own=None: (True, "precommit-check.yml: success")
+        self.addCleanup(setattr, A, "remote_check", saved_rc)
         seen = []
         real = A.run_entry_checks
 

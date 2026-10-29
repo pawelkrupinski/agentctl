@@ -44,8 +44,10 @@ class Phase2Base(unittest.TestCase):
         os.environ["AGENTCTL_STORE_RETRY_BASE"] = "0.01"  # the retries' backoff, short here
         os.environ["AGENTCTL_LAPTOP_PRESSURE"] = "-"  # the laptop running the tests is never the one under test
         os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp, "state")
-        for k in ("AGENTCTL_STORE_URL", "AGENTCTL_STORE_TOKEN", "AGENTCTL_ROLE", "NOTIFY_SOCKET"):
+        for k in ("AGENTCTL_STORE_URL", "AGENTCTL_STORE_TOKEN", "NOTIFY_SOCKET"):
             os.environ.pop(k, None)
+        # This process is ci-runner (the store's thread, the tick); a test playing the laptop's sync says so (sync())
+        os.environ["AGENTCTL_ROLE"] = "server"
         self.fj, self.fj_calls = fake_forgejo()
         self.st = A.Store(path=os.path.join(self.tmp, "state", "store.db"))
         self.repo = os.path.join(self.tmp, "movies")
@@ -65,6 +67,20 @@ class Phase2Base(unittest.TestCase):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+
+    def lapsed_lease(self, name, holder, epoch, t, max_until=None):
+        """A lease row on ci-runner's store held by `holder` at `epoch`, expired a minute ago."""
+        self.st.acquire(name, holder, 600, 3600)
+        c = self.st.db()
+        c.execute("UPDATE leases SET epoch=?, expires_at=?, max_until=? WHERE name=?",
+                  (epoch, t - 60, max_until or t + 3600, name))
+        c.close()
+
+    def sync(self):
+        """This process plays the laptop's sync from here on: Store() is RemoteStore(self.url) -- the server thread's
+        own Store() calls included, which reach the same database through the API."""
+        os.environ.pop("AGENTCTL_ROLE", None)
+        os.environ.update(AGENTCTL_STORE_URL=self.url, AGENTCTL_STORE_TOKEN="tok-pawel")
 
     def get(self, path, tok=None):
         req = urllib.request.Request(self.url + path, headers={"Authorization": f"token {tok}"} if tok else {})
@@ -115,8 +131,7 @@ class RemoteStoreTest(Phase2Base):
         self.assertTrue(any(e["kind"] == "condition.closed" for e in evs))
 
     def test_store_returns_a_remote_store_when_the_url_is_set_and_the_rest_routes_answer(self):
-        os.environ["AGENTCTL_STORE_URL"] = self.url
-        os.environ["AGENTCTL_STORE_TOKEN"] = "tok-pawel"
+        self.sync()
         s = A.Store()
         self.assertIsInstance(s, A.RemoteStore)
         self.assertIsInstance(A.Store(path=os.path.join(self.tmp, "x.db")), A.Store)  # a path: always local
@@ -128,17 +143,21 @@ class RemoteStoreTest(Phase2Base):
         self.assertEqual(s.call("POST", "/v1/leases/land/movies:release",
                                 {"epoch": took["epoch"], "secret": took["secret"]})["result"], "ok")
 
-    def test_store_use_switches_every_process_here_and_local_switches_back(self):
+    def test_store_use_switches_every_process_here_and_there_is_no_local_store(self):
+        os.environ.pop("AGENTCTL_ROLE")
         os.environ["AGENTCTL_STORE_TOKEN"] = "tok-pawel"
+        self.assertEqual(A.host_role(), "sync")  # the laptop: always the sync, never a store of its own
+        self.assertEqual(A.Store().url, "http://127.0.0.1:9")  # the default (ci-runner's; the tests' closed port)
         self.assertEqual(A.main(["store", "use", self.url]), 0)
         self.assertIsInstance(A.Store(), A.RemoteStore)
-        self.assertEqual(A.host_role(), "sync")
-        self.assertEqual(A.main(["store", "use", "--local"]), 0)
-        self.assertIsInstance(A.Store(), A.Store)
-        self.assertEqual(A.host_role(), "local")
+        self.assertEqual(A.Store().url, self.url)
         with self.assertRaises(A.StoreUnavailable):  # a store that does not answer is never switched to
             A.main(["store", "use", "http://127.0.0.1:9"])
-        self.assertIsInstance(A.Store(), A.Store)
+        self.assertEqual(A.Store().url, self.url)
+        with self.assertRaises(SystemExit):
+            A.main(["store", "use", "--local"])  # gone with the laptop's store
+        with self.assertRaises(SystemExit):
+            A.main(["store", "import", "--to", self.url])  # gone: a lost store is rebuilt on ci-runner (design §16)
 
     def test_events_long_poll_wakes_on_a_new_event_and_acks(self):
         it = self.st.put_item("condition", "c2", "open", {})
@@ -304,16 +323,24 @@ class ServerSideTest(Phase2Base):
         self.assertEqual(line, ["agentctl_oldest_change_age_seconds 300"])
 
     def test_roles_split_the_loop(self):
-        self.assertEqual(A.host_role(), "local")
-        os.environ["AGENTCTL_STORE_URL"] = self.url
-        self.assertEqual(A.host_role(), "sync")
-        os.environ.pop("AGENTCTL_STORE_URL")
-        os.environ["AGENTCTL_ROLE"] = "server"
         self.assertEqual(A.host_role(), "server")
+        os.environ.pop("AGENTCTL_ROLE")
+        self.assertEqual(A.host_role(), "sync")  # no third role: there is no local store
+        os.environ["AGENTCTL_HOST"] = "ci-runner"
+        try:
+            self.assertEqual(A.host_role(), "server")
+            self.assertIsNone(A.store_url())
+        finally:
+            os.environ.pop("AGENTCTL_HOST")
         names = [n for n, _ in A.sync_steps(self.repo, self.tmp, "o/r")]
         self.assertEqual(names, ["outbox", "state mirror", "children", "events", "notifier", "landed worktrees", "claims", "dispatcher", "pins", "fixer landing",
                                  "network watch", "tunnel probe", "upkeep"])
-        self.assertTrue(set(A.LAPTOP_ONLY_STEPS) <= set(names))
+        server = [n for n, _ in A.server_steps(self.repo, self.tmp, lambda f: f)]
+        self.assertEqual(server, ["clone health", "change items", "change tick", "batch tick", "watches", "land refs",
+                                  "lease archive", "children", "gate summary", "red time", "red tick", "recovery"])
+        laptop_only = {"events", "notifier", "network watch", "tunnel probe", "upkeep", "fixer landing", "dispatcher",
+                       "claims"}
+        self.assertEqual(laptop_only & set(server), set())
 
     def test_the_sync_mirrors_ci_runners_state(self):
         A.state_update(tick_at=1234.0, changes=[{"id": "e1"}])
@@ -344,7 +371,7 @@ class RemoteStatusLineTest(Phase2Base):
 
     def test_the_line_reads_ci_runners_tick_and_gate_and_says_store_unreachable_when_it_does_not_answer(self):
         t = time.time()
-        os.environ["AGENTCTL_STORE_URL"] = self.url
+        self.sync()
         # the laptop's own state.json: its last local tick and gate line, from before the cutover
         A.state_update(tick_at=t - 600, summary={"at": int(t - 600), "repo": "o/r", "line": "gate RED (main #1)"})
         remote = {"tick_at": t - 5, "summary": {"at": int(t - 10), "repo": "o/r", "line": "gate green"}}
@@ -386,16 +413,14 @@ class DispatcherRemoteTest(Phase2Base):
 
 
 class StaleStoreFixerTest(Phase2Base):
-    def test_a_live_fixer_renewing_the_laptops_store_is_adopted_on_ci_runners_and_no_second_fixer_goes(self):
-        # 2026-10-29: the gate fixer's wrapper (pid 31738), started before `store use`, renewed its lease on the
-        # laptop's store.db; ci-runner's imported copy expired and its reds were offered again
+    def test_a_live_fixer_whose_lease_lapsed_is_adopted_and_no_second_fixer_goes(self):
+        # 2026-10-29: the gate fixer's wrapper (pid 31738) renewed its lease on another store; ci-runner's copy
+        # expired and its reds were offered again
         os.environ.pop("AGENTCTL_REDS_DIR", None)
         os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp, "laptop")  # (one process plays both hosts here)
         t = time.time()
-        laptop = A.Store(path=A.state_root("store.db"))
-        took = laptop.acquire("red/k1", "laptop:fixer:red-k1-7", 900, 3600, meta={"kind": "fixer", "run": 20})
-        row = dict(laptop.get("red/k1"), expires_at=t - 60)  # ci-runner's copy: imported, then lapsed
-        self.st.import_lease(row)
+        self.lapsed_lease("red/k1", "laptop:fixer:red-k1-7", 1, t)
+        took = {"epoch": 1}
         it = self.st.put_item("red", "k1", "offered", {"key": "k1", "workflow": "Main", "last_run": {"number": 20}})
         pic = {"key": "k1", "workflow": "Main", "job": "test", "run": {"number": 20, "databaseId": 40}, "kind": "test"}
         self.st.offer("fixer", f"red:{it['id']}", A.red_lease("k1"), "fresh", 1, t + 600, pic)
@@ -470,9 +495,7 @@ class FixerContinuityTest(Phase2Base):
         self.record(2473, "k1", self.tmp, alive=True)
         it = self.st.put_item("red", "k1", "offered", {"key": "k1", "workflow": "Identity model convergence",
                                                        "last_run": {"number": 2517}})
-        self.st.import_lease({"name": "red/k1", "holder": "laptop:fixer:red-k1-8", "epoch": 3, "secret": "s",
-                              "acquired_at": t - 900, "renewed_at": t - 700, "expires_at": t - 100, "max_until": t + 3600,
-                              "progress": "", "item": None, "meta": "{}"})  # -8's: its watcher died, the lease lapsed
+        self.lapsed_lease("red/k1", "laptop:fixer:red-k1-8", 3, t)  # -8's: its watcher died, the lease lapsed
         pic = {"key": "k1", "workflow": "Identity model convergence", "job": "leg", "run": {"number": 2517, "databaseId": 9},
                "kind": "test"}
         self.st.offer("fixer", f"red:{it['id']}", "red/k1", "fresh", 1, t + 600, pic)
@@ -645,87 +668,15 @@ class LandAsYouGoTest(Phase2Base):
 
 class CurrentStoreTest(Phase2Base):
     def test_a_long_running_holder_follows_store_use(self):
-        os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp, "laptop")
+        os.environ.pop("AGENTCTL_ROLE")
+        os.environ["AGENTCTL_STORE_TOKEN"] = "tok-pawel"
         cs = A.CurrentStore()
-        took = cs.acquire("red/w", "laptop:fixer:w", 600, 3600)  # on the laptop's store
-        self.assertIsNone(self.st.get("red/w"))
-        self.st.import_lease(A.Store(path=A.state_root("store.db")).get("red/w"))  # the import copies it
-        os.environ.update(AGENTCTL_STORE_URL=self.url, AGENTCTL_STORE_TOKEN="tok-pawel")  # `store use`
+        with self.assertRaises(A.StoreUnavailable):
+            cs.acquire("red/w", "laptop:fixer:w", 600, 3600)  # the default store does not answer here
+        self.assertEqual(A.main(["store", "use", self.url]), 0)
+        took = cs.acquire("red/w", "laptop:fixer:w", 600, 3600)  # the same object, now on ci-runner's store
         self.assertEqual(cs.renew("red/w", took["epoch"], took["secret"], "moved", 600), "ok")
-        self.assertEqual(self.st.get("red/w")["progress"], "moved")  # renewed on ci-runner's store
-
-
-class ImportTest(Phase2Base):
-    def test_the_one_shot_import_moves_live_leases_open_items_and_the_queue(self):
-        local = A.Store(path=os.path.join(self.tmp, "laptop.db"))
-        took = local.acquire("red/k9", "laptop:fixer:red-k9-1", 900, 3600, meta={"kind": "fixer"})
-        gone = local.acquire("red/old", "x", 900, 3600)
-        local.release("red/old", gone["epoch"], gone["secret"])
-        local.put_item("red", "k9", "leased", {"key": "k9"})
-        lrepo = os.path.join(self.tmp, "laptop-movies")
-        subprocess.run(["git", "init", "-q", lrepo], check=True)
-        d = A.waiting_state(lrepo)[0]
-        e, _ = A.queue_change(d, {"worktree": "/w/z", "branch": "z", "head": "e" * 40, "commits": ["e" * 40]})
-        e["ref"] = f"refs/heads/land/{e['id']}"
-        A.save_entry(d, e)
-        n = A.store_import(local, self.remote, lrepo)
-        self.assertEqual(n, {"leases": 1, "leases_there": 0, "items": 1, "merged": 0, "skipped": 0, "changes": 1})
-        row = self.st.get("red/k9")
-        self.assertEqual((row["epoch"], row["secret"]), (took["epoch"], took["secret"]))  # its holder renews it there
-        self.assertEqual(self.remote.renew("red/k9", took["epoch"], took["secret"], "moved", 900), "ok")
-        self.assertIsNone(self.st.get("red/old"))
-        self.assertEqual(self.st.item("red", "k9")["state"], "leased")
-        self.assertEqual([x["id"] for x in A.queued_entries(A.waiting_state(self.repo)[0])], [e["id"]])
-        again = A.store_import(local, self.remote, lrepo)  # twice is harmless
-        self.assertEqual((again["leases"], again["leases_there"], again["items"]), (0, 1, 0))
-        self.assertEqual(len([x for x in self.st.items("red") if x["state"] == "leased"]), 1)
-
-    def test_an_import_after_the_reconciler_ticked_merges_each_red_by_its_key_and_keeps_its_fix_link(self):
-        # 2026-10-29: ci-runner's reconciler opened its own items for the laptop's reds before the import finished;
-        # the import left them as they were -- #2493 lost run 2406 from its names, and with it its Fixes-Red: 2406 fix
-        self.st.put_item("red", "k7", "offered", {"key": "k7", "runs": ["2493"], "last_run": {"databaseId": 93},
-                                                 "jobs": ["verify"], "tier": "fresh", "attempts": 0})
-        self.st.put_item("red", "k8", "offered", {"key": "k8", "runs": ["2473"]})      # the reconciler's spell ...
-        self.st.put_item("red", "k8.2", "offered", {"key": "k8", "runs": ["2473"]})    # ... and an earlier import's
-        local = A.Store(path=os.path.join(self.tmp, "laptop2.db"))
-        local.put_item("red", "k7", "fix-pending", {"key": "k7", "runs": ["2406", "2493"], "jobs": ["convergence"],
-                                                     "last_run": {"databaseId": 90}, "attempts": 2,
-                                                     "fix": {"entry": "e-2406", "status": "waiting"},
-                                                     "history": [{"holder": "laptop:fixer:a"}]})
-        local.put_item("red", "k8.2", "offered", {"key": "k8", "runs": ["2470", "2473"], "attempts": 1})
-        local.put_item("red", "k6", "fix-pending", {"key": "k6", "runs": ["2406"]})
-        cleared = local.put_item("red", "k5", "offered", {"key": "k5", "runs": ["1"]})
-        local.transition("red", "k5", "cleared", cleared["version"])
-        lrepo = os.path.join(self.tmp, "laptop-movies2")
-        subprocess.run(["git", "init", "-q", lrepo], check=True)
-        d = A.waiting_state(lrepo)[0]
-        e, _ = A.queue_change(d, {"worktree": "/w/fix", "branch": "f", "head": "f" * 40, "commits": ["f" * 40],
-                                  "fixes": ["2406"]})
-        e.update(status="waiting", ref=f"refs/heads/land/{e['id']}")
-        A.save_entry(d, e)
-        order = []
-        real_submit, real_put = self.remote.submit, self.remote.put_item
-        self.remote.submit = lambda x: order.append("change") or real_submit(x)
-        self.remote.put_item = lambda *a, **k: order.append("item") or real_put(*a, **k)
-        n = A.store_import(local, self.remote, lrepo)
-        self.assertEqual(order, ["change", "item"])  # the Fixes-Red change is there before the red that rests on it
-        self.assertEqual((n["items"], n["merged"], n["changes"]), (1, 2, 1))
-        k7 = self.st.item("red", "k7")
-        self.assertEqual(k7["state"], "offered")  # the state is the tick's to derive
-        self.assertEqual(k7["data"]["runs"], ["2406", "2493"])
-        self.assertEqual((k7["data"]["attempts"], k7["data"]["last_run"]["databaseId"]), (2, 93))
-        self.assertEqual(k7["data"]["history"], [{"holder": "laptop:fixer:a"}])
-        self.assertNotIn("fix", k7["data"])
-        facts = {"entries": [dict(x, status="waiting") for x in A.waiting_entries(A.waiting_state(self.repo)[0],
-                                                                                  open_only=False)]}
-        self.assertEqual(A.red_fix_of(k7, facts)["entry"], e["id"])  # the tick's link: its names meet Fixes-Red: 2406
-        self.assertEqual(self.st.item("red", "k8.2")["data"]["runs"], ["2470", "2473"])
-        self.assertEqual(self.st.item("red", "k8")["state"], "cleared")  # one open red per key
-        self.assertEqual(self.st.item("red", "k8")["data"]["merged_into"], "k8.2")
-        self.assertEqual(self.st.item("red", "k6")["state"], "fix-pending")
-        self.assertIsNone(self.st.item("red", "k5"))
-        self.assertEqual(A.store_import(local, self.remote, lrepo)["merged"], 3)  # again: nothing new
-        self.assertEqual(self.st.item("red", "k7")["version"], k7["version"])
+        self.assertEqual(self.st.get("red/w")["progress"], "moved")
 
 
 class CloseAfterWatchTest(Phase2Base):
@@ -747,8 +698,8 @@ class CloseAfterWatchTest(Phase2Base):
 
 class W7Test(Phase2Base):
     def test_w7_flags_a_sync_behind_the_event_feed_and_clears_once_it_projects(self):
-        self.assertEqual(A.inv_w7()[0], True)  # local store: nothing to lag
-        os.environ.update(AGENTCTL_STORE_URL=self.url, AGENTCTL_STORE_TOKEN="tok-pawel")
+        self.assertEqual(A.inv_w7()[0], True)  # the server: no sync here to lag
+        self.sync()
         self.assertEqual(A.inv_w7()[0], True)  # no events
         it = self.st.put_item("condition", "w7", "open", {})
         self.st.transition("condition", "w7", "closed", it["version"], event={"text": "x"})
