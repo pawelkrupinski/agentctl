@@ -8779,7 +8779,13 @@ def cmd_waiting(a):
             (a.wcmd not in ("run", "service") or sys.stdin.isatty()):
         err(f"`agentctl waiting {a.wcmd}` is now `agentctl {WAITING_RENAMED[a.wcmd]}` (the old name answers until "
             f"{ALIASES_UNTIL})")
-    repo = main_clone(a.repo or safe_cwd()) if a.wcmd == "await" else git(a.repo or os.getcwd(), "rev-parse", "--show-toplevel").strip()
+    here = a.repo or safe_cwd()
+    if a.wcmd == "await":
+        repo = main_clone(here)
+    elif git_ok(here, "rev-parse", "--show-toplevel"):
+        repo = git(here, "rev-parse", "--show-toplevel").strip()
+    else:  # outside any git checkout (e.g. ~/bitcashier): the movies clone's queue, as `await` resolves it
+        repo = main_clone(movies_repo_path())
     d, _c, wt = waiting_state(repo)
     if a.wcmd == "run":
         return waiting_run(repo, once=a.once, service=getattr(a, "service", False))

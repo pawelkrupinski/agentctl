@@ -31,6 +31,20 @@ class RenameTest(unittest.TestCase):
             self.assertEqual(A.main(["land", "cancel"]), 2)
         self.assertEqual(self.calls, [])
 
+    def test_land_status_works_outside_any_git_checkout(self):
+        import tempfile
+        A.cmd_waiting = self.saved
+        seen, saved = [], (A.waiting_state, A.main_clone, A.movies_repo_path)
+        A.movies_repo_path = lambda: "/the/movies/clone"
+        A.main_clone = lambda p: p
+        A.waiting_state = lambda repo: seen.append(repo) or (_ for _ in ()).throw(RuntimeError("stop"))
+        try:
+            with self.assertRaises(RuntimeError):
+                A.cmd_waiting(argparse.Namespace(wcmd="status", repo=tempfile.gettempdir(), entry=None, renamed=True))
+        finally:
+            A.waiting_state, A.main_clone, A.movies_repo_path = saved
+        self.assertEqual(seen, ["/the/movies/clone"])
+
     def test_an_old_name_says_its_new_one(self):
         A.cmd_waiting = self.saved
         err = io.StringIO()
