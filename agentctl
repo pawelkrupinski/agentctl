@@ -4260,8 +4260,10 @@ def red_fixer(a):
                 stop = f"TIMED OUT after {int(wall // 60)} min (maximum wall time)"
             elif os.path.exists(os.path.join(wt, "RED-STOP.md")):
                 stop = "STOPPED: " + open(os.path.join(wt, "RED-STOP.md")).readline().strip()
-            elif not held(st.get(name)):  # revoked (the red cleared, a release): stop at once, not at the next renewal
-                stop = "STOPPED: the red's lease was lost (expired without progress, past its max hold, or revoked)"
+            elif not held(st.get(name)):  # revoked (the red cleared, a release, its own block): stop at once
+                outcome = str(lease_meta(st.get(name)).get("outcome") or "")
+                stop = (outcome if outcome.startswith("BLOCKED ON OWNER") else
+                        "STOPPED: the red's lease was lost (expired without progress, past its max hold, or revoked)")
             elif time.time() - last_renew >= every:
                 last_renew = time.time()
                 note = (read_record(a.record) or {}).get("note")
@@ -4321,13 +4323,30 @@ def root_checkout(wt, o_r):
     return os.path.realpath(wt) in roots
 
 
+def own_fixer_record_path():
+    """This session's own fixer record, or None. The session id decides: a `claude --bg` session can start in a spare
+    process spawned with ANOTHER fixer's environment (2026-10-29: #2426's fixer carried #2432's AGENTCTL_FIXER_RECORD
+    and wrote its notes onto #2432's lease), so the environment's record counts only when its session is this one, or
+    when no record names this session (a record not yet told its session id)."""
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    env = os.environ.get("AGENTCTL_FIXER_RECORD")
+    if sid:
+        mine = [r for r in fixer_records() if r.get("session") == sid and not r.get("ended")]
+        if mine:
+            return max(mine, key=lambda r: r.get("started") or "")["path"]
+        if env and (read_record(env) or {}).get("session") not in (None, sid):
+            return None
+    return env or None
+
+
 def red_claim(store, o_r, target, note="", wt=None):
     """(rc, lines): the red's lease to the caller (a claim, renewed by its worktree's activity). Inside a dispatched
     fixer it is the fixer's note (its wrapper holds the lease)."""
-    if os.environ.get("AGENTCTL_FIXER_RECORD"):
-        rec = read_record(os.environ["AGENTCTL_FIXER_RECORD"]) or {}
+    own = own_fixer_record_path()
+    if own:
+        rec = read_record(own) or {}
         rec["note"] = note or rec.get("note") or "working"
-        write_json(os.environ["AGENTCTL_FIXER_RECORD"], rec)
+        write_json(own, rec)
         return 0, [f"noted on your lease {rec.get('lease')}: {rec['note']}"]
     here = safe_cwd()
     wt = os.path.realpath(wt or worktree_of(here) or here)
@@ -4363,7 +4382,7 @@ def red_claim(store, o_r, target, note="", wt=None):
 
 
 def red_beat(store, o_r, target, note):
-    if os.environ.get("AGENTCTL_FIXER_RECORD"):
+    if own_fixer_record_path():
         return red_claim(store, o_r, target, note)
     out, rc = [], 1
     for it in red_targets(store, o_r, target, create=False):
@@ -4922,8 +4941,12 @@ def red_block(o_r, a):
               f"`~/bin/agentctl red claim {n}` and fix it")
         return 2
     items = red_targets(st, o_r, n) if units else []
+    own = read_record(own_fixer_record_path() or "") or {}
+    handed = [] if not items else [red_lease(it["data"]["key"]) for it in items]
+    handed = [x for x in handed if x == own.get("lease") and lease_is_live(st.get(x), st.clock())
+              and st.get(x)["epoch"] == own.get("epoch")]
     live = [st.get(red_lease(it["data"]["key"]))["holder"] for it in items
-            if lease_is_live(st.get(red_lease(it["data"]["key"])), st.clock())]
+            if red_lease(it["data"]["key"]) not in handed and lease_is_live(st.get(red_lease(it["data"]["key"])), st.clock())]
     if live:
         print(f"NOT BLOCKED: a live fixer is on #{n}: {live[0]}")
         return 1
@@ -4978,6 +5001,8 @@ def red_block(o_r, a):
     for it in items:
         cur = st.item("red", it["id"])
         st.update_item("red", it["id"], cur["version"], {"block": lname})
+    for x in handed:  # the dispatched fixer's own lease, handed to the owner: its wrapper ends with the block's verdict
+        st.revoke(x, f"BLOCKED ON OWNER (handed over by its fixer): {a.owner_cmd or om.get('cmd')}")
     return 0
 
 

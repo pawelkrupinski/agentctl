@@ -401,6 +401,57 @@ class OwnerTest(RedsBase):
         self.assertEqual([r for r in self.st.list("block/") if A.lease_is_live(r, self.t[0])], [])
         self.assertIn("INVALID: a live fixer", A.lease_meta(self.st.list("block/")[0])["outcome"])
 
+    def held_by_a_fixer(self, session, run="20"):
+        """The open red, leased to a dispatched fixer the way red_fixer holds it, and that fixer's record."""
+        self.main_red(40, 20, kind="infra")
+        self.tick()
+        it = self.only()
+        name = red = A.red_lease(it["data"]["key"])
+        took = self.st.acquire(name, f"laptop:fixer:red-{it['data']['key']}-1", A.RED_FIXER_TTL, A.RED_FIXER_MAX,
+                               progress="start", meta={"kind": "fixer"})
+        os.makedirs(A.reds_dir(run), exist_ok=True)
+        path = A.reds_dir(run, "fixer.json")
+        A.write_json(path, {"run": int(run), "lease": red, "epoch": took["epoch"], "session": session,
+                            "started": "2026-10-29T00:00:00Z"})
+        return it, path
+
+    def test_a_dispatched_fixer_blocks_its_own_red_on_the_owner(self):
+        # 2026-10-29, #2426: its fixer's `red block` answered "a live fixer is on #2426" -- itself -- so the red went
+        # back to the dispatcher instead of the owner, and the next fixer was told its fix "did not fix it"
+        it, path = self.held_by_a_fixer("s-mine")
+        os.environ.update(CLAUDE_CODE_SESSION_ID="s-mine", AGENTCTL_FIXER_RECORD=path)
+        rc, out = self.tool("red", "block", "20", "--owner-cause", "credentials", "--cmd", "set the key",
+                            "--until-http", "http://127.0.0.1:9/x", "--repo", "movies", cwd=self.r.path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("RED BLOCKED ON OWNER", out)
+        lease = self.st.get(A.red_lease(it["data"]["key"]))
+        self.assertFalse(A.lease_is_live(lease, time.time()))  # handed over: its wrapper ends with the block's verdict
+        self.assertTrue(A.lease_meta(lease)["outcome"].startswith("BLOCKED ON OWNER"))
+        self.t[0] = time.time()
+        self.tick()
+        self.assertEqual(self.only()["state"], "blocked-external")
+
+    def test_another_fixers_lease_still_refuses_a_block(self):
+        _it, path = self.held_by_a_fixer("s-other")
+        os.environ.update(CLAUDE_CODE_SESSION_ID="s-mine", AGENTCTL_FIXER_RECORD=path)  # a spare's leaked environment
+        rc, out = self.tool("red", "block", "20", "--owner-cause", "credentials", "--cmd", "set the key",
+                            "--until-http", "http://127.0.0.1:9/x", "--repo", "movies", cwd=self.r.path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("a live fixer is on #20", out)
+
+    def test_a_fixer_never_notes_on_a_record_of_another_session(self):
+        # a `claude --bg` spare spawned for #2432's fixer, reused for #2426's: its AGENTCTL_FIXER_RECORD is #2432's
+        _it, theirs = self.held_by_a_fixer("s-other", run="32")
+        os.makedirs(A.reds_dir("20"), exist_ok=True)
+        mine = A.reds_dir("20", "fixer-2.json")
+        A.write_json(mine, {"run": 20, "lease": "red/x", "session": "s-mine", "started": "2026-10-29T00:01:00Z"})
+        os.environ.update(CLAUDE_CODE_SESSION_ID="s-mine", AGENTCTL_FIXER_RECORD=theirs)
+        self.assertEqual(A.own_fixer_record_path(), mine)
+        rc, out = self.tool("red", "claim", "20", "--note", "on #20", "--repo", "movies", cwd=self.r.path)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(A.read_record(mine)["note"], "on #20")
+        self.assertIsNone(A.read_record(theirs).get("note"))
+
     def test_escalation_counts_one_per_open_red_and_none_for_reds_a_cause_holds(self):
         os.makedirs(A.reds_dir(), exist_ok=True)
         open(A.reds_dir("DISPATCH_OFF"), "w").close()
