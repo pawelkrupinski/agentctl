@@ -159,7 +159,7 @@ def git(repo, *args, check=True, input=None):
         env.setdefault("GIT_SSH_COMMAND", GIT_NET_SSH)
     try:
         r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, input=input, env=env,
-                           timeout=600 if env else None)
+                           timeout=600)  # every git call is bounded: a stuck lock or network never holds a step
     except subprocess.TimeoutExpired:
         if check:
             raise RuntimeError(f"git {' '.join(args)} in {repo}: timed out after 600 s")
@@ -170,7 +170,10 @@ def git(repo, *args, check=True, input=None):
 
 
 def git_ok(repo, *args):
-    return subprocess.run(["git", "-C", repo, *args], capture_output=True).returncode == 0
+    try:
+        return subprocess.run(["git", "-C", repo, *args], capture_output=True, timeout=120).returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
 
 
 def slug(repo_arg):
@@ -8851,14 +8854,11 @@ def waiting_run(repo, once=False, service=False):
                 return 0
             write_beat("processor")
             LOOP_CYCLED[0] = True
-            restart_if_changed([own], argv)
+            if not any(t.is_alive() for k, t in _bounded.items() if k.startswith("step:")):
+                restart_if_changed([own], argv)  # never under a step still at work in its thread (a push, say)
             failed = False
             for name, step in steps:
-                try:
-                    step()
-                except (Exception, SystemExit) as e:  # one step's error is that step's, never the loop's (audit #9)
-                    failed = True
-                    err(f"{name} failed: {str(e).replace('agentctl: ', '')[:200]}")
+                failed = run_step(name, step) is False or failed
                 write_beat("processor")
                 sd_notify("WATCHDOG=1")  # each bounded step is progress: systemd's WatchdogSec never cuts a long tick
             errors = errors + 1 if failed else 0
@@ -8881,6 +8881,40 @@ def waiting_run(repo, once=False, service=False):
 
 
 TICK_STOP = [False]  # set by SIGTERM in `agentctl tick`: the loop returns between ticks
+
+# EVERY STEP OF THE TICK IS BOUNDED (2026-10-29, RECONCILER STALLED 05:37-05:41: during a tunnel hang the gate's
+# Forgejo reads -- gh calls of up to 90 s each, one kickstart and a retry, ten workflows -- held the loop for minutes,
+# and state.json's tick_at aged past 2 min). A step runs in a thread of its own and the tick waits at most STEP_JOIN s
+# for it; one still running is not started again until it ends (run_bounded), and the tick goes on to the next step.
+# Its error, when it ends, is reported at the next look. The steps' writes are store transitions (compare-and-set) and
+# atomic entry files, so a slow step overlapping the next tick's other steps is safe.
+STEP_JOIN = 20
+_step_errors = {}
+
+
+def run_step(name, step):
+    """One tick step, bounded (see above). True: done; False: it failed (now or, still running before, since);
+    None: still running in its thread."""
+    def work():
+        try:
+            step()
+            _step_errors[name] = None
+        except (Exception, SystemExit) as e:  # one step's error is that step's, never the loop's (audit #9)
+            _step_errors[name] = str(e).replace("agentctl: ", "")[:200]
+    t = _bounded.get(f"step:{name}")
+    if t and t.is_alive():
+        return None
+    if _step_errors.get(name):  # it failed after the tick stopped waiting for it
+        err(f"{name} failed: {_step_errors.pop(name)}")
+    if not run_bounded(f"step:{name}", work, env_num("AGENTCTL_STEP_JOIN", STEP_JOIN)):
+        err(f"{name}: still running after {env_num('AGENTCTL_STEP_JOIN', STEP_JOIN):.0f} s; the tick goes on (it ends "
+            "in its own thread)")
+        return None
+    why = _step_errors.pop(name, None)
+    if why:
+        err(f"{name} failed: {why}")
+        return False
+    return True
 
 SERVICE_LABEL = "net.bitcashier.agentctl-waiting"
 
@@ -9259,7 +9293,11 @@ def sql_refusal(sql):
 
 
 def launchctl_kick():
-    subprocess.run(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{TUNNEL_LABEL}"], capture_output=True)
+    try:
+        subprocess.run(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{TUNNEL_LABEL}"], capture_output=True,
+                       timeout=30)
+    except subprocess.TimeoutExpired:
+        err(f"launchctl kickstart {TUNNEL_LABEL}: no answer in 30 s")
 
 
 def kick_tunnel():
