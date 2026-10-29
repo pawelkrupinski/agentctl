@@ -12331,6 +12331,17 @@ class StoreAPI:
             return self._json(404, {"error": "NotFound", "message": str(e)})
         except (ValueError, TypeError) as e:
             return self._json(400, {"error": "BadRequest", "message": str(e)})
+        except Exception as e:  # ANY OTHER ERROR IS A 500 WITH ITS TRACEBACK IN THE JOURNAL, never a dropped connection
+            return self.internal_error(method, u.path, e)
+
+    def internal_error(self, method, path, e):
+        """2026-10-29 cutover: `git` missing from the store unit's PATH raised FileNotFoundError out of POST /v1/changes,
+        the handler thread died and the client saw only "Remote end closed connection without response". Now the
+        traceback goes to the journal and the client gets a 500 naming the error."""
+        import traceback
+        sys.stderr.write(f"agentctl-store: {method} {path} failed:\n{traceback.format_exc()}")
+        sys.stderr.flush()
+        return self._json(500, {"error": "Internal", "message": f"{type(e).__name__}: {str(e)[:300]}"})
 
     def route(self, method, p, q, b):
         st = self.store
@@ -12395,9 +12406,12 @@ def store_server(api, host, port):
         protocol_version = "HTTP/1.1"
 
         def _go(self, method):
-            n = int(self.headers.get("Content-Length") or 0)
-            body = self.rfile.read(n) if n else b""
-            code, ctype, out = api.handle(method, self.path, dict(self.headers), body)
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(n) if n else b""
+                code, ctype, out = api.handle(method, self.path, dict(self.headers), body)
+            except Exception as e:  # the last resort (handle() answers its own errors): a 500, never a dropped connection
+                code, ctype, out = api.internal_error(method, self.path, e)
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(out)))

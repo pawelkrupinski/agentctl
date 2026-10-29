@@ -182,6 +182,23 @@ class SubmitTest(Phase2Base):
         self.assertEqual(os.listdir(A.sync_outbox_dir()), [])
 
 
+class InternalErrorTest(Phase2Base):
+    def test_an_unexpected_error_is_a_500_with_a_json_error_never_a_dropped_connection(self):
+        saved = A.submit_change
+
+        def boom(body, repo=None):
+            raise FileNotFoundError(2, "No such file or directory", "git")
+        A.submit_change = boom
+        try:
+            with self.assertRaises(A.StoreUnavailable) as cm:
+                self.remote.submit({"worktree": "/w", "head": "a" * 40, "commits": ["a" * 40]})
+        finally:
+            A.submit_change = saved
+        self.assertIn("HTTP 500", str(cm.exception))
+        self.assertIn("FileNotFoundError", str(cm.exception))
+        self.assertEqual(self.remote.state(), A.state_read())  # the server goes on answering
+
+
 class ServerSideTest(Phase2Base):
     def test_sd_notify_speaks_systemds_protocol(self):
         path = os.path.join(self.tmp, "notify.sock")
