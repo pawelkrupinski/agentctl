@@ -75,6 +75,8 @@ class Base(unittest.TestCase):
         A.port_open = lambda port, host="127.0.0.1", timeout=2.0: True
         A.proc_alive = lambda pid, start=None: pid == 4242
         A.status_line = lambda now_=None: "gate GREEN · waiting: 0"
+        for c in (A._status_wt, A._status_wt_reads, A._status_said, A._status_last, A._status_reading):
+            c.clear()
 
     def tearDown(self):
         for n, f in self.patched.items():
@@ -208,6 +210,37 @@ class DataTest(Base):
         self.assertIn("no answer within", d["events"]["error"])
         self.assertIsInstance(d["reds"], list)
 
+    def test_the_servers_reads_show_a_slow_source_from_its_last_read(self):
+        st, _wt = self.world()
+        d = A.status_data(store=st, now_=T, bound=2, keep=True)
+        self.assertEqual(len(d["events"]), A.STATUS_EVENTS)
+        self.assertEqual(d["stale"], {})
+        self.assertIn("events", d["took"])
+        gate = __import__("threading").Event()
+        orig = st.events
+        st.events = lambda after=0, limit=500: gate.wait(10) and orig(after, limit)
+        t0 = time.time()
+        d = A.status_data(store=st, now_=T, bound=0.5, keep=True)
+        self.assertLess(time.time() - t0, 2.5)
+        self.assertEqual(len(d["events"]), A.STATUS_EVENTS, "the last finished read, not an error")
+        self.assertIn("still reading", d["stale"]["events"])
+        d = A.status_data(store=st, now_=T, bound=0.5, keep=True)
+        self.assertIn("events", d["stale"], "the read still going is not started twice")
+        gate.set()
+        A._status_reading["events"].join(10)
+        d = A.status_data(store=st, now_=T, bound=2, keep=True)
+        self.assertNotIn("events", d["stale"])
+
+    def test_old_fixer_records_are_not_opened(self):
+        _st, _wt = self.world()
+        old = os.path.join(self.env["AGENTCTL_REDS_DIR"], "2473", "fixer-1.json")
+        young = os.path.join(self.env["AGENTCTL_REDS_DIR"], "2473", "fixer-5.json")
+        os.utime(old, (T - 9 * 3600, T - 9 * 3600))
+        os.utime(young, (T - 60, T - 60))
+        recs = {r["path"]: r for r in A.status_fixer_records(T)}
+        self.assertEqual(list(recs), [young])
+        self.assertTrue(recs[young]["alive"])
+
     def test_an_unreachable_remote_store(self):
         os.environ["AGENTCTL_STORE_URL"] = "http://127.0.0.1:9"
         try:
@@ -217,6 +250,86 @@ class DataTest(Base):
         self.assertFalse(d["store"]["reachable"])
         self.assertIn("error", d["reds"])
         self.assertIn("line", d["header"])
+
+
+class AgentDetailTest(Base):
+    """The agents' details: one agent's slow worktree degrades its own row only; HEAD-keyed cache; HEAD without git."""
+    def repo(self, name, commits=2):
+        wt = os.path.join(self.root, name)
+        os.makedirs(wt)
+        self.git(wt, "init", "-q")
+        for i in range(commits):
+            self.commit(wt, i)
+        return wt
+
+    def commit(self, wt, i):
+        with open(os.path.join(wt, f"f{i}.txt"), "w") as f:
+            f.write(str(i))
+        self.git(wt, "add", ".")
+        self.git(wt, "commit", "-qm", f"c{i}")
+
+    def store(self, *wts):
+        return FakeStore(leases=[lease(f"red/k{i}", f"laptop:fixer:k{i}", {"kind": "fixer", "pid": 4242 + i, "worktree": wt,
+                                                                          "run": 100 + i}, T + 900)
+                                 for i, wt in enumerate(wts)])
+
+    def test_a_slow_worktree_degrades_its_own_row_only(self):
+        fast, slow = self.repo("fast"), self.repo("slow")
+        real = A.status_git
+        release = __import__("threading").Event()
+
+        def git(wt, *args, **k):
+            if wt == slow:
+                release.wait(10)
+            return real(wt, *args, **k)
+        A.status_git = git
+        os.environ["AGENTCTL_STATUS_AGENT_BOUND"] = "0.5"
+        try:
+            t0 = time.time()
+            rows = {a["worktree"]: a for a in A.status_agents(self.store(fast, slow), T, records=[])}
+            self.assertLess(time.time() - t0, 2.5, "the wait is one agent's bound, not the sum")
+            self.assertEqual([c["subject"] for c in rows[fast]["commits"]], ["c1", "c0"])
+            self.assertNotIn("git_stale", rows[fast])
+            self.assertIn("git still reading", rows[slow]["git_stale"])
+            self.assertNotIn("commits", rows[slow])
+            self.assertEqual(rows[slow]["pid"], 4243, "the slow row keeps everything but its git details")
+            release.set()
+            A._status_wt_reads[slow].join(10)
+            rows = {a["worktree"]: a for a in A.status_agents(self.store(fast, slow), T, records=[])}
+            self.assertEqual([c["subject"] for c in rows[slow]["commits"]], ["c1", "c0"],
+                             "the background read filled the cache for the next refresh")
+        finally:
+            release.set()
+            A.status_git = real
+            os.environ.pop("AGENTCTL_STATUS_AGENT_BOUND", None)
+
+    def test_git_log_runs_again_only_when_head_moves(self):
+        wt = self.repo("wt")
+        real, calls = A.status_git, []
+        A.status_git = lambda w, *a, **k: calls.append(a[0]) or real(w, *a, **k)
+        try:
+            A.status_worktree(wt, 5)
+            self.assertEqual(sorted(calls), ["log", "log", "status"])
+            calls.clear()
+            A.status_worktree(wt, 5)
+            self.assertEqual(calls, [], "HEAD unchanged, status young: all from the cache")
+            self.commit(wt, 7)
+            out = A.status_worktree(wt, 5)
+            self.assertEqual(calls, ["log", "log"])
+            self.assertEqual(out["commits"][0]["subject"], "c7")
+        finally:
+            A.status_git = real
+
+    def test_head_from_the_files(self):
+        wt = self.repo("main-repo")
+        self.git(wt, "worktree", "add", "-q", "-b", "side", os.path.join(self.root, "linked"))
+        linked = os.path.join(self.root, "linked")
+        self.commit(linked, 9)
+        self.git(wt, "pack-refs", "--all")
+        for w in (wt, linked):
+            want = subprocess.run(["git", "-C", w, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+            self.assertEqual(A.status_head(w), want, w)
+        self.assertIsNone(A.status_head(os.path.join(self.root, "nope")))
 
 
 class LogPathTest(Base):
@@ -298,6 +411,8 @@ class StartTest(Base):
         self.saved_ports = A.STATUS_PAGE_PORT, A.STATUS_PAGE_FALLBACK, dict(A._status_page)
         A._status_page.clear()
         A.port_open = self.patched["port_open"]
+        self.saved_warm = A.status_warm
+        A.status_warm = lambda: None
 
     def tearDown(self):
         srv = A._status_page.get("server")
@@ -307,6 +422,7 @@ class StartTest(Base):
         A.STATUS_PAGE_PORT, A.STATUS_PAGE_FALLBACK, saved = self.saved_ports
         A._status_page.clear()
         A._status_page.update(saved)
+        A.status_warm = self.saved_warm
         super().tearDown()
 
     def free_port(self):

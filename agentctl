@@ -13339,24 +13339,49 @@ def status_err(e):
     return {"error": f"{type(e).__name__}: {str(e).replace('agentctl: ', '')[:300]}"}
 
 
-def status_sources(sources, bound):
-    """{name: what fn returned, or {"error": ...}}: every (name, fn, factor) in a daemon thread of its own, joined against
-    one deadline (bound * factor s each); a source still running then is an error, the others are kept."""
+_status_last = {}      # source name -> (finished at, result, took s) of its last read (the server's own reads only)
+_status_reading = {}   # source name -> the thread reading it
+
+
+def status_sources(sources, bound, keep=False):
+    """({name: what fn returned, or {"error": ...}}, {"stale": {name: why}, "took": {name: s}}): every (name, fn, factor)
+    in a daemon thread of its own, joined against one deadline (bound * factor s each). keep (the server's): a source
+    still reading then shows its LAST finished read, `stale` saying since when, and its read goes on in the background
+    for the next refresh (one read per source at a time) -- a slow source never empties its section; else it is an
+    error."""
     out, threads = {}, []
 
     def work(name, fn):
+        t0 = time.time()
         try:
-            out[name] = fn()
+            v = fn()
         except (Exception, SystemExit) as e:
-            out[name] = status_err(e)
+            v = status_err(e)
+        out[name] = (time.time(), v, round(time.time() - t0, 2))
+        if keep:
+            _status_last[name] = out[name]
     start = time.time()
     for name, fn, factor in sources:
-        th = threading.Thread(target=work, args=(name, fn), daemon=True, name=f"status:{name}")
-        th.start()
+        th = _status_reading.get(name) if keep else None
+        if not (th and th.is_alive()):
+            th = threading.Thread(target=work, args=(name, fn), daemon=True, name=f"status:{name}")
+            th.start()
+            if keep:
+                _status_reading[name] = th
         threads.append((name, th, bound * factor))
     for _name, th, b in threads:
         th.join(max(0.0, start + b - time.time()))
-    return {name: out[name] if name in out else {"error": f"no answer within {b:.0f} s"} for name, _th, b in threads}
+    res, stale, took = {}, {}, {}
+    for name, th, b in threads:
+        got = out.get(name) or (_status_last.get(name) if keep and not th.is_alive() else None)
+        if got:
+            res[name], took[name] = got[1], got[2]
+        elif keep and name in _status_last:
+            at, res[name], _took = _status_last[name]
+            stale[name] = f"still reading after {b:.0f} s; shown as of {time.strftime('%H:%M:%S', time.localtime(at))}"
+        else:
+            res[name] = {"error": f"no answer within {b:.0f} s"}
+    return res, {"stale": stale, "took": took}
 
 
 def status_strip_lease(r, t):
@@ -13495,24 +13520,189 @@ def status_agent_logs(run):
             for p in files[:4]]
 
 
-def status_agent_enrich(a):
-    wt = a.get("worktree")
-    if wt and os.path.isdir(wt):
-        try:
-            a["commits"] = [dict(zip(("sha", "when", "subject"), ln.split("\x1f", 2)))
-                            for ln in status_git(wt, "log", "-3", "--format=%h\x1f%cr\x1f%s").splitlines() if ln]
-            a["dirty"] = [ln for ln in status_git(wt, "status", "--porcelain").splitlines() if ln][:20]
+# THE AGENTS' DETAILS ARE BOUNDED PER AGENT AND CACHED PER WORKTREE HEAD (2026-10-29: the section was "no answer within
+# 16 s" on every refresh -- the processor runs at launchd's background QoS, where three git calls in each of 10 movies
+# worktrees, one after the other, took 117 s; the same pass in a shell took 3 s). Each agent's details are read in a
+# thread of their own, all at once; the page waits STATUS_AGENT_BOUND s for each and shows a slower one from its last
+# read (marked stale) while the read finishes in the background for the next refresh (one read per worktree at a time).
+# The commits and their files are read again only when the worktree's HEAD (read from its files, no git) moved; `git
+# status` at most every STATUS_DIRTY_TTL s. Logs and transcripts are read by seeking from their end.
+STATUS_AGENT_BOUND = 4      # s the page waits for one agent's details ($AGENTCTL_STATUS_AGENT_BOUND)
+STATUS_GIT_TIMEOUT = 120    # s one git call may run (in its background read; never the page's wait)
+STATUS_DIRTY_TTL = 60       # s a worktree's `git status` is shown again before it is read again
+_status_wt = {}             # worktree -> {"head", "commits", "recent_files", "dirty", "dirty_at", "error", "at"}
+_status_wt_reads = {}       # worktree -> the thread reading it
+_status_said = {}           # transcript path -> ((size, mtime), (text, at))
+_status_wt_lock = threading.Lock()
+
+
+def status_head(wt):
+    """The worktree's HEAD sha from its files (no git, no subprocess); None when it cannot be read that way."""
+    try:
+        gd = os.path.join(wt, ".git")
+        if os.path.isfile(gd):
+            with open(gd) as f:
+                line = f.read().strip()
+            if not line.startswith("gitdir:"):
+                return None
+            gd = os.path.normpath(os.path.join(wt, line[7:].strip()))
+        common = gd
+        if os.path.isfile(os.path.join(gd, "commondir")):
+            with open(os.path.join(gd, "commondir")) as f:
+                common = os.path.normpath(os.path.join(gd, f.read().strip()))
+        with open(os.path.join(gd, "HEAD")) as f:
+            head = f.read().strip()
+        if not head.startswith("ref:"):
+            return head if re.fullmatch(r"[0-9a-f]{40,64}", head) else None
+        ref = head[4:].strip()
+        for base in (gd, common):
+            try:
+                with open(os.path.join(base, ref)) as f:
+                    return f.read().strip() or None
+            except OSError:
+                pass
+        with open(os.path.join(common, "packed-refs")) as f:
+            for ln in f:
+                parts = ln.split()
+                if len(parts) == 2 and parts[1] == ref:
+                    return parts[0]
+    except OSError:
+        return None
+    return None
+
+
+def status_git(wt, *args, timeout=None):
+    r = subprocess.run(["git", "-C", wt] + list(args), capture_output=True, text=True,
+                       timeout=timeout or STATUS_GIT_TIMEOUT, stdin=subprocess.DEVNULL,
+                       env=dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0"))
+    return r.stdout if r.returncode == 0 else ""
+
+
+def status_worktree_read(wt, head):
+    """One background read of a worktree into _status_wt: the commits again only when HEAD moved (or is unknown)."""
+    c = dict(_status_wt.get(wt) or {})
+    try:
+        if head is None or c.get("head") != head or "commits" not in c:
+            commits = [dict(zip(("sha", "when", "subject"), ln.split("\x1f", 2)))
+                       for ln in status_git(wt, "log", "-3", "--format=%h\x1f%cr\x1f%s").splitlines() if ln]
             recent = []
             for ln in status_git(wt, "log", "-3", "--name-only", "--format=").splitlines():
                 if ln and ln not in recent:
                     recent.append(ln)
-            a["recent_files"] = recent[:20]
-        except (OSError, subprocess.TimeoutExpired) as e:
-            a["git_error"] = str(e)[:200]
+            c.update(head=head, commits=commits, recent_files=recent[:20])
+        if time.time() - float(c.get("dirty_at") or 0) >= STATUS_DIRTY_TTL:
+            c["dirty"] = [ln for ln in status_git(wt, "status", "--porcelain").splitlines() if ln][:20]
+            c["dirty_at"] = time.time()
+        c.pop("error", None)
+    except (OSError, subprocess.SubprocessError) as e:
+        c["error"] = str(e)[:200]
+    c["at"] = time.time()
+    with _status_wt_lock:
+        _status_wt[wt] = c
+
+
+def status_worktree(wt, bound):
+    """{commits, recent_files, dirty} of a worktree: from the cache when its HEAD has not moved and its status is young;
+    else from a read (one per worktree at a time) the caller waits `bound` s for -- a slower read is shown from the last
+    one, `git_stale` saying so, and fills the cache for the next refresh."""
+    head = status_head(wt)
+    c = _status_wt.get(wt)
+    fresh = c and "commits" in c and head is not None and c.get("head") == head \
+        and time.time() - float(c.get("dirty_at") or 0) < STATUS_DIRTY_TTL
+    if not fresh:
+        with _status_wt_lock:
+            th = _status_wt_reads.get(wt)
+            if not (th and th.is_alive()):
+                th = threading.Thread(target=status_worktree_read, args=(wt, head), daemon=True, name="status:git")
+                _status_wt_reads[wt] = th
+                th.start()
+        th.join(bound)
+        c = _status_wt.get(wt)
+        if th.is_alive():
+            out = {k: (c or {}).get(k) for k in ("commits", "recent_files", "dirty")}
+            out["git_stale"] = (f"git still reading after {bound:.0f} s; shown from the read at "
+                                f"{time.strftime('%H:%M:%S', time.localtime(c['at']))}" if c
+                                else f"git still reading after {bound:.0f} s; shown at a later refresh")
+            return out
+    c = c or {}
+    out = {k: c.get(k) for k in ("commits", "recent_files", "dirty")}
+    if c.get("error"):
+        out["git_error"] = c["error"]
+    if c.get("head") != head:
+        out["git_stale"] = "HEAD moved since the last read"
+    return out
+
+
+def status_said(path):
+    """status_transcript_last, cached by the transcript's size and mtime."""
+    try:
+        sig = (os.path.getsize(path), mtime(path))
+    except (OSError, TypeError):
+        return None, None
+    hit = _status_said.get(path)
+    if hit and hit[0] == sig:
+        return hit[1]
+    v = status_transcript_last(path)
+    _status_said[path] = (sig, v)
+    return v
+
+
+def status_agent_enrich(a, bound=None):
+    b = bound if bound is not None else env_num("AGENTCTL_STATUS_AGENT_BOUND", STATUS_AGENT_BOUND)
+    if a.get("alive") is None and a.get("pid"):
+        try:
+            a["alive"] = proc_alive(a["pid"])
+        except (Exception, SystemExit):
+            a["alive"] = None
+    wt = a.get("worktree")
+    if wt and os.path.isdir(wt):
+        a.update({k: v for k, v in status_worktree(wt, b).items() if v is not None})
     a["logs"] = status_agent_logs(a.get("run"))
     if a.get("transcript"):
-        a["said"], a["said_at"] = status_transcript_last(a["transcript"])
+        a["said"], a["said_at"] = status_said(a["transcript"])
     return a
+
+
+def status_enrich_all(agents, bound=None):
+    """Every agent's details at once, each in a thread of its own; the wait is one agent's bound (plus a margin), and an
+    agent still unread then keeps its row with `detail_error`."""
+    b = bound if bound is not None else env_num("AGENTCTL_STATUS_AGENT_BOUND", STATUS_AGENT_BOUND)
+    done = set()
+
+    def work(i, a):
+        try:
+            status_agent_enrich(a, b)
+        except (Exception, SystemExit) as e:
+            a["detail_error"] = f"{type(e).__name__}: {str(e)[:200]}"
+        done.add(i)
+    ths = [threading.Thread(target=work, args=(i, a), daemon=True, name="status:agent") for i, a in enumerate(agents)]
+    for th in ths:
+        th.start()
+    end = time.time() + b + 2
+    for th in ths:
+        th.join(max(0.0, end - time.time()))
+    for i, a in enumerate(agents):
+        if i not in done:
+            a.setdefault("detail_error", f"details not read within {b + 2:.0f} s")
+    return agents
+
+
+STATUS_RECORD_MAX_AGE = 8 * 3600  # s: an older fixer record (by mtime) is neither alive nor recently ended
+
+
+def status_fixer_records(t):
+    """fixer_records, of the records written in the last STATUS_RECORD_MAX_AGE s only (a fixer's wall time is bounded
+    and its record is rewritten when it ends): ~150 old ones are never opened, nor their pids checked."""
+    out = []
+    for p in glob.glob(reds_dir("*", "fixer*.json")):
+        if t - mtime(p) > STATUS_RECORD_MAX_AGE:
+            continue
+        r = read_record(p)
+        if r:
+            r["path"] = p
+            r["alive"] = not r.get("ended") and proc_alive(r.get("pid"), r.get("process_start"))
+            out.append(r)
+    return out
 
 
 def status_agents(st, t, records=None):
@@ -13528,7 +13718,7 @@ def status_agents(st, t, records=None):
                                   "tier": ls.get("tier"), "workflow": ls.get("workflow"), "run": ls.get("run"),
                                   "worktree": ls.get("worktree"), "transcript": ls.get("log"), "leases": []})
         a["leases"].append(ls)
-    for rec in records if records is not None else fixer_records():
+    for rec in records if records is not None else status_fixer_records(t):
         ended = status_iso_epoch(rec.get("ended"))
         if not rec.get("alive") and (not ended or t - ended > STATUS_AGENT_RECENT):
             continue
@@ -13537,15 +13727,14 @@ def status_agents(st, t, records=None):
         for f in ("workflow", "run", "worktree", "transcript"):
             a[f] = a.get(f) or rec.get(f)
         a["tier"] = a.get("tier") or str(rec.get("why") or "").replace("tier ", "") or None
+        a["alive"] = a.get("alive") or bool(rec.get("alive"))  # fixer_records' own pid check
         a.update({"record": rec.get("path"), "started": rec.get("started"), "ended": rec.get("ended"), "rc": rec.get("rc"),
                   "verdict": rec.get("verdict"), "label": rec.get("label"), "key": rec.get("key"),
                   "jobs": rec.get("jobs")})
     out = []
     for a in agents.values():
-        try:
-            a["alive"] = bool(a.get("pid")) and proc_alive(a["pid"])
-        except (Exception, SystemExit):
-            a["alive"] = None
+        if not a.get("pid"):
+            a["alive"] = False
         prog = [x.get("renewed_at") for x in a["leases"] if x.get("renewed_at")]
         a["last_progress"] = max(prog) if prog else None
         a["started"] = a.get("started") or (min(x["acquired_at"] for x in a["leases"] if x.get("acquired_at"))
@@ -13554,11 +13743,8 @@ def status_agents(st, t, records=None):
     def started(a):
         s = a.get("started")
         return float(s) if isinstance(s, (int, float)) else status_iso_epoch(s) or 0.0
-    out.sort(key=lambda a: (not a["leases"], not a["alive"], -started(a)))
-    out = out[:STATUS_AGENTS_MAX]
-    for a in out:
-        status_agent_enrich(a)
-    return out
+    out.sort(key=lambda a: (not a["leases"], not a.get("alive"), -started(a)))
+    return status_enrich_all(out[:STATUS_AGENTS_MAX])
 
 
 def status_landing(st, t):
@@ -13601,7 +13787,7 @@ def status_events(st, n=STATUS_EVENTS):
             for e in reversed(evs)]
 
 
-def status_data(store=None, now_=None, bound=None):
+def status_data(store=None, now_=None, bound=None, keep=False):
     """/api/status: every section from its own bounded source; a failing one is {"error": ...} in its place."""
     t = now_ if now_ is not None else time.time()
     b = bound if bound is not None else env_num("AGENTCTL_STATUS_BOUND", STATUS_SOURCE_BOUND)
@@ -13616,17 +13802,17 @@ def status_data(store=None, now_=None, bound=None):
         if st is None:
             raise RuntimeError(st_err["error"])
         return st
-    res = status_sources((("header", lambda: status_header(t, d), 1),
+    res, meta = status_sources((("header", lambda: status_header(t, d), 1),
                           ("store", lambda: status_store_probe(need(), t), 1),
                           ("dispatcher", lambda: status_dispatcher(need(), t), 1),
                           ("reds", lambda: status_reds(need(), t, repo), 1),
                           ("agents", lambda: status_agents(need(), t), 2),
                           ("landing", lambda: status_landing(need(), t), 1),
                           ("conditions", lambda: status_conditions(need(), t), 1),
-                          ("events", lambda: status_events(need()), 1)), b)
+                          ("events", lambda: status_events(need()), 1)), b, keep=keep)
     if "error" in res["store"]:
         res["store"] = {**res["store"], "remote": store_url(), "reachable": False}
-    return {"at": t, "repo": repo, "home": HOME, "forgejo": FORGEJO_WEB, **res}
+    return {"at": t, "repo": repo, "home": HOME, "forgejo": FORGEJO_WEB, **res, **meta}
 
 
 _status_cache = {"at": 0.0, "data": None}
@@ -13636,7 +13822,7 @@ _status_cache_lock = threading.Lock()
 def status_cached():
     with _status_cache_lock:  # one assembly at a time: refreshing tabs share it
         if _status_cache["data"] is None or time.time() - _status_cache["at"] >= STATUS_CACHE:
-            _status_cache["data"] = status_data()
+            _status_cache["data"] = status_data(keep=True)
             _status_cache["at"] = time.time()
         return _status_cache["data"]
 
@@ -13756,6 +13942,7 @@ def status_page_start():
             why.append(f"port {p}: {e}")
             continue
         threading.Thread(target=srv.serve_forever, daemon=True, name="status-page").start()
+        threading.Thread(target=status_warm, daemon=True, name="status-warm").start()  # the first refresh has data
         url = f"http://{STATUS_PAGE_HOST}/" if p == 80 else f"http://{STATUS_PAGE_HOST}:{p}/"
         _status_page.update(url=url, server=srv)
         if why:
@@ -13768,6 +13955,13 @@ def status_page_start():
         return url
     err(f"status page: not served ({'; '.join(why)})")
     return None
+
+
+def status_warm():
+    try:
+        status_cached()
+    except (Exception, SystemExit) as e:
+        err(f"status page: the first read failed: {str(e)[:200]}")
 
 
 def status_page_url():
@@ -13829,7 +14023,8 @@ const link=(u,t)=>u?`<a href="${E(u)}" target="_blank" rel="noopener">${E(t)}</a
 const tilde=p=>{p=String(p||"");return HOME&&p.startsWith(HOME)?"~"+p.slice(HOME.length):p};
 const logLink=p=>`<a href="/log?path=${encodeURIComponent(p)}" target="_blank">full log</a>`;
 let HOME="";
-function sec(title,sub,data,fn){let h=`<h2>${E(title)} <small>${sub||""}</small></h2>`;
+let STALE={};
+function sec(title,sub,data,fn,key){const st=key&&STALE[key];let h=`<h2>${E(title)} <small>${sub||""}</small>${st?` <span class="chip warn">${E(st)}</span>`:""}</h2>`;
  if(data&&data.error)return h+`<div class="err">${E(data.error)}</div>`;try{return h+fn(data)}catch(e){return h+`<div class="err">render: ${E(e)}</div>`}}
 function table(cols,rows){if(!rows.length)return`<div class="mute">none</div>`;
  return`<div class="tw"><table><thead><tr>${cols.map(c=>`<th>${E(c)}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`}
@@ -13876,7 +14071,8 @@ function agents(as){if(!as.length)return`<div class="mute">none</div>`;return as
  ${a.said?`<div class="said"><span class="mute">last said ${ago(a.said_at)}:</span> ${E(a.said)}</div>`:""}
  ${commits?`<ul class="c">${commits}</ul>`:""}
  ${files.length?`<details data-k="files:${E(a.pid)}:${E(a.worktree)}"><summary>${files.length} files changed recently</summary><pre>${E(files.join("\n"))}</pre></details>`:""}
- ${a.git_error?`<div class="err">git: ${E(a.git_error)}</div>`:""}${logs}</div>`}).join("")}
+ ${a.git_error?`<div class="err">git: ${E(a.git_error)}</div>`:""}${a.git_stale?`<div class="mute">${E(a.git_stale)}</div>`:""}
+ ${a.detail_error?`<div class="err">${E(a.detail_error)}</div>`:""}${logs}</div>`}).join("")}
 function landing(l){const row=c=>[`<span class="mono">${E(c.id)}</span>`,chip(c.state)+(c.level?" "+chip("escalated","bad"):""),
  E(tilde(c.worktree||""))+(c.branch?` <span class="mute">${E(c.branch)}</span>`:""),`<span class="mono">${E(c.head||"")}</span>`,
  `<span class="n">${ago(c.entered_at)}</span>`,`<span class="n">${c.past_deadline?chip("past "+hm(c.deadline),"bad"):hm(c.deadline)+" ("+ago(c.deadline)+")"}</span>`,E(c.why||"")];
@@ -13888,13 +14084,13 @@ function conds(cs){return table(["condition","since","probe","last result","next
  `<span class="n">${ago(c.next_check)}</span>`,E(c.text)]))}
 function events(es){return table(["#","when","kind","item","→","text"],es.map(e=>[`<span class="mono">${E(e.seq)}</span>`,`<span class="n">${hm(e.at)} <span class="mute">${ago(e.at)}</span></span>`,
  chip(e.kind,e.severity==="info"?"info":e.severity==="escalate"?"bad":"warn"),`<span class="mono">${E(e.item||"")}</span>`,e.to?`${E(e.from||"")} → ${chip(e.to)}`:"",E(e.text)]))}
-function render(s){NOW=s.at;HOME=s.home||"";const n=x=>Array.isArray(x)?x.length:"?";
+function render(s){NOW=s.at;HOME=s.home||"";STALE=s.stale||{};const n=x=>Array.isArray(x)?x.length:"?";
  document.getElementById("root").innerHTML=header(s)
- +sec("Reds",n(s.reds)+" open",s.reds,reds)
- +sec("Agents",n(s.agents)+" (lease holders and fixers alive or ended in the last 3 h)",s.agents,agents)
- +sec("Waiting / landing","",s.landing,landing)
- +sec("Open conditions",n(s.conditions),s.conditions,conds)
- +sec("Events","last "+n(s.events),s.events,events);
+ +sec("Reds",n(s.reds)+" open",s.reds,reds,"reds")
+ +sec("Agents",n(s.agents)+" (lease holders and fixers alive or ended in the last 3 h)",s.agents,agents,"agents")
+ +sec("Waiting / landing","",s.landing,landing,"landing")
+ +sec("Open conditions",n(s.conditions),s.conditions,conds,"conditions")
+ +sec("Events","last "+n(s.events),s.events,events,"events");
  document.querySelectorAll("details[data-k]").forEach(d=>{if(OPEN.has(d.dataset.k))d.open=true});
  document.getElementById("stamp").textContent="· "+new Date(s.at*1000).toLocaleTimeString()+" · refreshes every 15 s"}
 async function load(){try{const r=await fetch("/api/status",{cache:"no-store"});if(!r.ok)throw new Error("HTTP "+r.status);render(await r.json())}
