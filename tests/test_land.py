@@ -291,8 +291,13 @@ class LandTest(Base):
         loop): a timer of 1.5 s expired before a lander slowed by a loaded machine (load 25) ever reached the lock."""
         got = self.hold_lock(3600)
         st, name, sleep = A.Store(), A.land_lease_name(self.r.path), self.sleep
+        lander = __import__("threading").get_ident()  # `land` runs in-process, on this thread
 
         def first_wait(secs):
+            # A.time.sleep is the process's time.sleep: a thread left running by an earlier test that sleeps must not
+            # count as the lander's wait (it released the lease before the lander reached it: a flake under load)
+            if __import__("threading").get_ident() != lander:
+                return sleep(secs)
             st.release(name, got["epoch"], got["secret"])
             A.time.sleep = sleep
             return sleep(min(secs, 0.2))
