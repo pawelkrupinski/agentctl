@@ -4991,13 +4991,17 @@ def red_block(o_r, a):
                        meta={"kind": "block", "owner_cause": owner_cause, "cmd": a.owner_cmd, "cause": cause,
                              "probe": {"kind": iprobe.kind, "args": iprobe.args}, "until": words, "keys": keys,
                              "text": text, "details": details, "verify": verify, "probed_at": time.time()})
-        if "held" in r:
+        same = st.get(lname) if "held" in r else None
+        if "held" in r and not (lease_meta(same).get("kind") == "block" and set(keys) <= set(lease_meta(same).get("keys") or [])):
             print(f"NOT BLOCKED: {lname} is held by {r['held']['holder']}")
             return 1
-        line = (f"RED BLOCKED ON OWNER: {cause} down (blocks {what}): {details}" if cause else
-                f"RED BLOCKED ON OWNER: {what}: {details}")
-        inbox_write("red", line, [line], [], 1)
-        print(line + f" ({iprobe.detail}; `agentctl red status`)")
+        if same:  # this red's own block is already up (a block run earlier, before its fixer's lease was handed over)
+            print(f"already blocked: {what}: {lease_meta(same).get('text')}")
+        else:
+            line = (f"RED BLOCKED ON OWNER: {cause} down (blocks {what}): {details}" if cause else
+                    f"RED BLOCKED ON OWNER: {what}: {details}")
+            inbox_write("red", line, [line], [], 1)
+            print(line + f" ({iprobe.detail}; `agentctl red status`)")
     for it in items:
         cur = st.item("red", it["id"])
         st.update_item("red", it["id"], cur["version"], {"block": lname})

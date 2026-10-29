@@ -431,6 +431,21 @@ class OwnerTest(RedsBase):
         self.tick()
         self.assertEqual(self.only()["state"], "blocked-external")
 
+    def test_a_fixer_hands_its_lease_to_a_block_already_up_for_its_red(self):
+        # #2426 again: a block lease for the red was already live beside the fixer's lease, and the second `red block`
+        # answered "block/<key> is held by owner:credentials" without handing the fixer's lease over
+        it, path = self.held_by_a_fixer("s-mine")
+        lease = self.st.get(A.red_lease(it["data"]["key"]))
+        self.st.acquire(A.block_lease(it["data"]["key"]), "owner:credentials", A.BLOCK_TTL, A.BLOCK_MAX, progress="p",
+                        meta={"kind": "block", "owner_cause": "credentials", "cmd": "set the key",
+                              "keys": [it["data"]["key"]], "text": "BLOCKED ON OWNER: set the key"})
+        os.environ.update(CLAUDE_CODE_SESSION_ID="s-mine", AGENTCTL_FIXER_RECORD=path)
+        rc, out = self.tool("red", "block", "20", "--owner-cause", "credentials", "--cmd", "set the key",
+                            "--until-http", "http://127.0.0.1:9/x", "--repo", "movies", cwd=self.r.path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("already blocked", out)
+        self.assertFalse(A.lease_is_live(self.st.get(A.red_lease(it["data"]["key"])), time.time()), lease)
+
     def test_another_fixers_lease_still_refuses_a_block(self):
         _it, path = self.held_by_a_fixer("s-other")
         os.environ.update(CLAUDE_CODE_SESSION_ID="s-mine", AGENTCTL_FIXER_RECORD=path)  # a spare's leaked environment
