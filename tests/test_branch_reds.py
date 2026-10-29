@@ -207,6 +207,97 @@ class BranchRedTest(BranchBase):
         self.assertIn("BRANCH_RED", A.WAIT_KINDS_DEFAULT.split(","))
 
 
+IDRUN, IDRUN_FILE = "Identity run", "identity-run.yml"
+
+
+class OrphanBranchRedTest(BranchBase):
+    """The three real shapes (status page, 2026-10-29: `branch reds: 3 → NOBODY`): identity run #2365 on
+    measure/pawel/3757d1ecc-b148ea (its commit here, not on main, its worktree removed) and #2370 / #2371 on
+    measure/pawel/3f34bbab5-d458ee / -f16735 (one commit, on main; main runs no Identity run)."""
+
+    def setUp(self):
+        super().setUp()
+        gone_wt = self.r.worktree("movies-wt-removed", branch="removed")
+        self.r.write("removed.txt", "x\n", at=gone_wt)
+        self.off = self.r.commit("measured, never landed", at=gone_wt)
+        sh(self.r.path, "git", "worktree", "remove", "--force", gone_wt)
+        landed = self.r.worktree("movies-wt-landed", branch="landed")  # landed on main by a worktree since removed
+        self.r.write("landed.txt", "x\n", at=landed)
+        self.on = self.r.commit("measured and landed", at=landed)
+        sh(landed, "git", "push", "-q", "forgejo", f"{self.on}:main")
+        sh(self.r.path, "git", "fetch", "-q", "forgejo")
+        sh(self.r.path, "git", "worktree", "remove", "--force", landed)
+        self.b65 = f"measure/pawel/{self.off[:9]}-b148ea"
+        self.b70, self.b71 = f"measure/pawel/{self.on[:9]}-d458ee", f"measure/pawel/{self.on[:9]}-f16735"
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 600))
+        self.put("runs.json", [brun(3548, 2365, self.off, self.b65, created=now, wf=IDRUN, wfile=IDRUN_FILE),
+                               brun(3553, 2370, self.on, self.b70, created=now, wf=IDRUN, wfile=IDRUN_FILE),
+                               brun(3554, 2371, self.on, self.b71, created=now, wf=IDRUN, wfile=IDRUN_FILE),
+                               dict(run(40, 20, "Main", "main.yml", self.sha), event="push"),
+                               dict(run(39, 19, CONV, CONV_FILE, self.sha), event="workflow_dispatch")])
+        self.store = A.Store()
+
+    def reds(self, snap):
+        return {e["run"]["number"]: e for e in snap["branches"] if e.get("red")}
+
+    def test_the_three_shapes_close_themselves_with_an_event_saying_why_and_leave_the_status_line(self):
+        snap = self.snap()
+        e = self.reds(snap)
+        self.assertIn("is not on main", e[2365]["orphan"])
+        self.assertIn("main runs no such workflow", e[2370]["orphan"])
+        self.assertIn("main runs no such workflow", e[2371]["orphan"])
+        self.assertEqual(A.branch_reds(snap), [])
+        texts = A.settle_branch_reds(MOVIES, snap, self.store)
+        self.assertEqual(len(texts), 3, texts)
+        t65 = next(t for t in texts if "#2365" in t)
+        self.assertTrue(t65.startswith(f"branch red closed itself: {IDRUN} #2365 on {self.b65}: no owner record"), t65)
+        self.assertIn("`agentctl cleanup`", t65)
+        evs = [x for x in self.store.events() if x["kind"] == "branch-red.orphaned"]
+        self.assertEqual(sorted(x["refs"]["run"] for x in evs), [2365, 2370, 2371])
+        self.assertEqual(A.settle_branch_reds(MOVIES, snap, self.store), [])  # once
+        self.assertEqual(A.route_branch_reds(MOVIES, snap), [])
+        self.assertEqual([x for x in A.inbox_entries() if x["kind"] == "BRANCH_RED"], [])
+        line = A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path)[1]
+        self.assertNotIn("NOBODY", line)
+        self.assertNotIn("branch reds", line)
+
+    def test_a_commit_on_main_whose_workflow_main_runs_keeps_today_s_behaviour(self):
+        b = f"measure/pawel/{self.on[:9]}-0c0c0c"
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 600))
+        self.put("runs.json", [brun(3600, 2400, self.on, b, created=now),
+                               dict(run(39, 19, CONV, CONV_FILE, self.sha), event="workflow_dispatch")])
+        e = self.reds(self.snap())[2400]
+        self.assertIsNone(e["orphan"])
+        self.assertIsNone(e["owner"])
+        self.assertEqual(len(A.branch_reds(self.snap())), 1)
+
+    def test_it_reopens_routed_to_the_owner_when_its_commit_turns_up_in_a_worktree_or_an_owner_record(self):
+        A.settle_branch_reds(MOVIES, self.snap(), self.store)
+        saved = A.OWNER_REMATCH
+        A.OWNER_REMATCH = 0  # the hourly re-match, now
+        self.addCleanup(setattr, A, "OWNER_REMATCH", saved)
+        back = self.r.worktree("movies-wt-back", base=self.off, branch="back")  # its commit turns up in a worktree
+        A.save_dispatch({"branch": self.b70, "run_id": 3553, "worktree": self.wt, "source": "registered"})
+        snap = self.snap()
+        texts = A.settle_branch_reds(MOVIES, snap, self.store)
+        self.assertEqual(sorted(t.split(" on ")[0] for t in texts),
+                         [f"branch red reopened: {IDRUN} #2365", f"branch red reopened: {IDRUN} #2370"])
+        self.assertEqual(self.store.item("branch-red", A.branch_red_id(MOVIES, 3553))["state"], "open")
+        self.assertEqual(self.store.item("branch-red", A.branch_red_id(MOVIES, 3554))["state"], "orphaned")
+        lines = A.route_branch_reds(MOVIES, snap, now_=time.time() + 2 * A.BRANCH_ROUTE_MAX_AGE)  # old, still routed
+        self.assertEqual(len(lines), 2, lines)
+        cwds = {os.path.realpath(x["cwd"]) for x in A.inbox_entries() if x["kind"] == "BRANCH_RED"}
+        self.assertEqual(cwds, {os.path.realpath(back), os.path.realpath(self.wt)})
+        self.assertEqual(len(A.branch_reds(snap)), 2)
+
+    def test_it_is_gone_when_its_branch_is_deleted(self):
+        A.settle_branch_reds(MOVIES, self.snap(), self.store)
+        A.branch_exists = lambda o_r, b: b != self.b65
+        texts = A.settle_branch_reds(MOVIES, self.snap(), self.store)
+        self.assertEqual(texts, [f"branch red gone: {IDRUN} #2365 on {self.b65} (its branch deleted or green)"])
+        self.assertEqual(self.store.item("branch-red", A.branch_red_id(MOVIES, 3548))["state"], "gone")
+
+
 class SweepOrphansTest(BranchBase):
     def test_a_finished_measure_branch_whose_owner_is_gone_is_deleted_others_listed_or_kept(self):
         for b in ("measure/pawel/aaaaaaaaa-1", "check/20261027-1-movies-wt-gone-1", "measure/pawel/bbbbbbbbb-2",

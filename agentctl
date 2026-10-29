@@ -2033,6 +2033,36 @@ def owner_gone(rec):
     return False
 
 
+def commit_on_main(repo, base):
+    """True/False: base is on main (ancestor or patch-equivalent); None: unknown here (no repo or no base). A commit
+    this clone does not hold is not on main."""
+    if not repo or not base:
+        return None
+    if not git_ok(repo, "cat-file", "-e", f"{base}^{{commit}}"):
+        return False
+    try:
+        return bool(merged_reason(repo, base, f"refs/remotes/{REMOTE}/main"))
+    except (Exception, SystemExit):
+        return None
+
+
+def orphan_why(repo, rec, base, main_runs_it=True):
+    """Why a branch red is an ORPHAN, else None: no owner record and no worktree holding its commit, AND nothing on main
+    to compare it with -- its commit is not on main, or it is but main runs no such workflow (it can never PREDICT MAIN
+    RED). A commit on main whose workflow main runs keeps today's behaviour; an unknown answer is never an orphan."""
+    if rec:
+        return None
+    on = commit_on_main(repo, base)
+    if on is None:
+        return None
+    sha = str(base)[:9]
+    if not on:
+        return f"no owner record, no worktree holds its commit {sha}, and it is not on main"
+    if not main_runs_it:
+        return f"no owner record, no worktree holds its commit {sha}, and main runs no such workflow"
+    return None
+
+
 def owner_text(rec, short=False):
     if not rec:
         return "NOBODY (no owner record, no worktree holds its commit)"
@@ -2307,15 +2337,73 @@ def branch_state(o_r, repo, prev=None):
             mine, theirs = inputs.get(r["databaseId"]), inputs.get(m["databaseId"]) if m else None
             pred, why = predicts_main(repo, base, m, mine, theirs)
             e.update(owner=rec, owner_gone=owner_gone(rec), base=base, alive=branch_exists(o_r, b), predicts=pred,
-                     why=why, main_run=m and {"databaseId": m["databaseId"], "number": m.get("number")},
+                     why=why, orphan=orphan_why(repo, rec, base, main_runs_it=bool(m)), main_run=m and {"databaseId": m["databaseId"], "number": m.get("number")},
                      newer_recording=newer_recording(mine, theirs) if mine is not None and theirs is not None else None)
         out.append(e)
     return out
 
 
 def branch_reds(snap):
-    """The snapshot's live branch reds: failed, branch still there (newest run of that workflow on it)."""
-    return [e for e in (snap or {}).get("branches") or [] if e.get("red") and e.get("alive")]
+    """The snapshot's live branch reds: failed, branch still there (newest run of that workflow on it), not an orphan
+    (an orphan closed itself: settle_branch_reds)."""
+    return [e for e in (snap or {}).get("branches") or [] if e.get("red") and e.get("alive") and not e.get("orphan")]
+
+
+# -- an ORPHAN branch red closes itself (the owner, 2026-10-29: `branch reds: 3 → NOBODY` -- identity runs #2365, #2370,
+# #2371 on measure/* branches whose worktrees were removed -- sat unassigned forever). The "branch-red" machine holds
+# the ones that closed: orphaned (no owner, nothing on main to compare with; its measure/* branch is for `agentctl
+# cleanup`) -> open again when its commit turns up in a worktree or an owner record (routed to that owner) -> gone when
+# its branch is deleted or a newer run on it is green.
+def branch_red_id(o_r, rid):
+    return f"{o_r}#{rid}"
+
+
+def settle_branch_reds(o_r, snap, store=None):
+    """Close the orphan branch reds (event: why), reopen the ones that found an owner (marked `reopened` in the snapshot
+    so route_branch_reds tells that owner), retire the ones gone from the snapshot. Returns the event texts."""
+    st = store or Store()
+    out, live = [], set()
+    for e in (snap or {}).get("branches") or []:
+        if not e.get("red") or not e.get("alive"):
+            continue
+        r = e["run"]
+        iid = branch_red_id(o_r, r["databaseId"])
+        live.add(iid)
+        what = f"{e['workflow']} #{r.get('number')} on {e['branch']}"
+        refs = {"run": r.get("number"), "workflow": e["workflow"], "branch": e["branch"]}
+        it = st.item("branch-red", iid)
+        if e.get("orphan"):
+            if it and it["state"] == "orphaned":
+                continue
+            it = it or st.put_item("branch-red", iid, "open", {"branch": e["branch"], "workflow": e["workflow"],
+                                                                "run": r})
+            cleanup = "; its finished branch is for `agentctl cleanup`" if e["branch"].startswith("measure/") else ""
+            text = f"branch red closed itself: {what}: {e['orphan']}{cleanup}"
+            st.transition("branch-red", iid, "orphaned", it["version"], data={"why": e["orphan"]},
+                          event={"text": text, "refs": refs})
+            out.append(text)
+        elif it and it["state"] == "orphaned":
+            text = f"branch red reopened: {what} → owner {owner_text(e.get('owner'))}"
+            st.transition("branch-red", iid, "open", it["version"], data={"why": None},
+                          event={"text": text, "refs": refs})
+            try:
+                os.unlink(routed_path(r["databaseId"]))
+            except OSError:
+                pass
+            e["reopened"] = True
+            out.append(text)
+    t = st.clock()
+    for it in st.items("branch-red", ["open", "orphaned"]):
+        if not it["id"].startswith(f"{o_r}#"):
+            continue
+        gone = it["id"] not in live
+        if gone or it["deadline"] < t:
+            d = it["data"]
+            text = (f"branch red gone: {d.get('workflow')} #{(d.get('run') or {}).get('number')} on {d.get('branch')}"
+                    + (" (its branch deleted or green)" if gone else " (past its deadline)"))
+            st.transition("branch-red", it["id"], "gone", it["version"], event={"text": text})
+            out.append(text)
+    return out
 
 
 def routed_path(rid):
@@ -2349,11 +2437,13 @@ def route_branch_reds(o_r, snap, now_=None):
         r = e["run"]
         if not e.get("red") or not e.get("alive") or os.path.exists(routed_path(r["databaseId"])):
             continue  # a run on a deleted branch is dropped silently: its owner finished with it
+        if e.get("orphan"):
+            continue  # nobody to tell: it closed itself (settle_branch_reds); routed if it reopens
         try:
             done = dt.datetime.fromisoformat(str(r.get("updatedAt")).replace("Z", "+00:00")).timestamp()
         except ValueError:
             done = t
-        if t - done > BRANCH_ROUTE_MAX_AGE:
+        if t - done > BRANCH_ROUTE_MAX_AGE and not e.get("reopened"):
             write_json(routed_path(r["databaseId"]), {"at": ts(), "routed": False, "why": "older than the route window"})
             continue
         try:
@@ -2612,6 +2702,11 @@ def maybe_publish_gate(repo):
         except (Exception, SystemExit) as e:
             err(f"gate summary: skipped ({str(e).replace('agentctl: ', '')[:200]})")
             return
+        try:
+            for text in settle_branch_reds(o_r, snap):
+                err(f"branch reds: {text}")
+        except (Exception, SystemExit) as e:
+            err(f"branch reds: not settled ({str(e).replace('agentctl: ', '')[:200]})")
         try:
             for routed in route_branch_reds(o_r, snap):
                 err(f"branch reds: {routed}")
@@ -12683,6 +12778,14 @@ MACHINES["red"] = {
     "blocked-external": StateSpec(7 * 86400, "offered", ("offered", "fix-pending", "leased", "cleared", "verified")),
     "verified": StateSpec(ARCHIVE, "verified", (), terminal=True),
     "cleared": StateSpec(ARCHIVE, "cleared", (), terminal=True),
+}
+
+
+# an orphan branch red (settle_branch_reds): the deadlines only retire a forgotten one
+MACHINES["branch-red"] = {
+    "open": StateSpec(ARCHIVE, "gone", ("orphaned", "gone")),
+    "orphaned": StateSpec(ARCHIVE, "gone", ("open", "gone")),
+    "gone": StateSpec(ARCHIVE, "gone", (), terminal=True),
 }
 
 
