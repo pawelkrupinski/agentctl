@@ -8854,6 +8854,8 @@ def status_line(now_=None):
 
 
 def cmd_status(a):
+    if getattr(a, "open", False):
+        return status_page_open()
     if a.line:
         print(status_line())
         return 0
@@ -8894,6 +8896,8 @@ def waiting_run(repo, once=False, service=False):
         stack.callback(drop.close)
         errors = 0
         role = host_role()
+        if service and role != "server":
+            status_page_start()  # the read-only status page, a daemon thread (see "the status page"); never fatal
         steps = sync_steps(repo, d, o_r) if role == "sync" else tuple(
             (n, f) for n, f in (("change items", lambda: project_changes(d)),
                                 ("change tick", lambda: [wlog(d, f"tick: {x}") for x in tick_changes(repo, d)]),
@@ -13285,6 +13289,623 @@ def cmd_inbox(a):
     return 0
 
 
+# ---------------------------------------------------------------- the status page (2026-10-29)
+# The owner: "write a status page for the agentctl - all reds and agents assigned, status, progress, logs etc". The
+# laptop's processor (the sync; phase 1's local processor too) serves a READ-ONLY page at http://agentctl.localhost/:
+# 127.0.0.1:80, else 127.0.0.1:3015 (logged) when port 80 cannot be bound or something already listens on it (Rancher
+# Desktop's ssh forward holds *:80 on this laptop: a loopback bind beside it would shadow it). *.localhost resolves to
+# loopback in Chrome and curl without /etc/hosts. Routes: `/` (the page; it renders /api/status every 15 s),
+# `/api/status` (JSON), `/log?path=<a .log/.out/.txt file under the state root>` (its tail). Only the Host names
+# agentctl.localhost, 127.0.0.1 and localhost are answered (DNS rebinding). Every source is read in a thread of its own
+# against a bound; a failing source is an error in its own section and never the page's or the tick's. It only reads:
+# no `secrets` (the remote store's token is the one the sync already holds), no transitions, no TCC-protected folders,
+# and lease secrets never leave the process.
+STATUS_PAGE_HOST = "agentctl.localhost"
+STATUS_PAGE_PORT = 80
+STATUS_PAGE_FALLBACK = 3015
+STATUS_PAGE_HOSTS = (STATUS_PAGE_HOST, "127.0.0.1", "localhost")
+STATUS_SOURCE_BOUND = 8         # s a source may take ($AGENTCTL_STATUS_BOUND); the agents' source twice that
+STATUS_STORE_TIMEOUT = 5        # s per remote store call
+STATUS_CACHE = 5                # s an assembled status is served again
+STATUS_LOG_TAIL = 40            # lines of each log shown in the page
+STATUS_LOG_MAX = 2 << 20        # bytes /log serves (the file's tail)
+STATUS_EVENTS = 50
+STATUS_AGENT_RECENT = 3 * 3600  # s an ended fixer stays on the page
+STATUS_AGENTS_MAX = 16
+STATUS_LOG_SUFFIXES = (".log", ".out", ".txt")
+STATUS_CHANGE_OPEN = ("queued", "checking", "checked", "pushing", "waiting")
+STATUS_BATCH_OPEN = ("blocked-red", "assembling", "checking", "pushing", "bisecting", "held")
+FORGEJO_WEB = "http://localhost:3000"
+
+
+def status_store():
+    """The store the page reads: the remote one with short timeouts when the laptop is the sync, else the local one."""
+    url = store_url()
+    return RemoteStore(url, timeout=STATUS_STORE_TIMEOUT) if url else Store()
+
+
+def status_run_url(repo, number):
+    return f"{FORGEJO_WEB}/{repo or SHORT['movies']}/actions/runs/{number}" if number not in (None, "") else None
+
+
+def status_iso_epoch(s):
+    try:
+        return dt.datetime.strptime(str(s), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def status_err(e):
+    return {"error": f"{type(e).__name__}: {str(e).replace('agentctl: ', '')[:300]}"}
+
+
+def status_sources(sources, bound):
+    """{name: what fn returned, or {"error": ...}}: every (name, fn, factor) in a daemon thread of its own, joined against
+    one deadline (bound * factor s each); a source still running then is an error, the others are kept."""
+    out, threads = {}, []
+
+    def work(name, fn):
+        try:
+            out[name] = fn()
+        except (Exception, SystemExit) as e:
+            out[name] = status_err(e)
+    start = time.time()
+    for name, fn, factor in sources:
+        th = threading.Thread(target=work, args=(name, fn), daemon=True, name=f"status:{name}")
+        th.start()
+        threads.append((name, th, bound * factor))
+    for _name, th, b in threads:
+        th.join(max(0.0, start + b - time.time()))
+    return {name: out[name] if name in out else {"error": f"no answer within {b:.0f} s"} for name, _th, b in threads}
+
+
+def status_strip_lease(r, t):
+    """A lease row for the page: never its secret."""
+    if not r:
+        return None
+    m = lease_meta(r)
+    return {"name": r.get("name"), "holder": r.get("holder") or None, "live": lease_is_live(r, t), "epoch": r.get("epoch"),
+            "acquired_at": r.get("acquired_at"), "renewed_at": r.get("renewed_at"), "expires_at": r.get("expires_at"),
+            "max_until": r.get("max_until"), "progress": r.get("progress"), "kind": m.get("kind"), "note": m.get("note"),
+            "worktree": m.get("worktree"), "pid": m.get("pid"), "tier": m.get("tier"), "run": m.get("run"),
+            "workflow": m.get("workflow"), "log": m.get("log")}
+
+
+def status_header(t, d=None):
+    """The gate (state.json's CI snapshot and the published line), the tick, the network and the tunnel."""
+    d = state_read() if d is None else d
+    ci = d.get("ci") or {}
+    gate = []
+    for g in ci.get("gate") or []:
+        dec, new = g.get("decided") or {}, g.get("newer") or {}
+        gate.append({"name": g.get("name"), "number": dec.get("number"), "conclusion": dec.get("conclusion"),
+                     "url": status_run_url(ci.get("repo"), dec.get("number")), "title": dec.get("displayTitle"),
+                     "newer": new.get("number"), "newer_status": new.get("status"),
+                     "newer_url": status_run_url(ci.get("repo"), new.get("number")), "since": g.get("since"),
+                     "count": g.get("count")})
+    tunnel = read_json_file(tunnel_state_path())
+    tick = d.get("tick_at")
+    return {"line": status_line(t), "gate": gate, "gate_red": any(x["conclusion"] in RED_CONCLUSIONS for x in gate),
+            "summary": (d.get("summary") or {}).get("line"), "summary_at": (d.get("summary") or {}).get("at"),
+            "ci_at": ci.get("at"), "repo": ci.get("repo") or SHORT["movies"],
+            "tick_at": tick, "tick_age": t - float(tick) if tick else None, "fetched_at": d.get("fetched_at"),
+            "code": d.get("version"), "network": d.get("network"), "waiting": d.get("waiting") or [],
+            "queued": d.get("queued") or [],
+            "tunnel": {k: tunnel.get(k) for k in ("fails", "last_kick", "pending_since", "escalated", "network")},
+            "forgejo_port": port_open(3000, timeout=1.0)}
+
+
+def status_store_probe(st, t):
+    """Is the store answering, and the reconciler's own tick (the remote /v1/state's tick_at) when it is remote."""
+    t0 = time.time()
+    if isinstance(st, RemoteStore):
+        snap = st.state() or {}
+        tick = snap.get("tick_at")
+        return {"remote": st.url, "reachable": True, "ms": int((time.time() - t0) * 1000), "tick_at": tick,
+                "tick_age": t - float(tick) if tick else None, "code": snap.get("version")}
+    st.meta_get("last_alive", 0)
+    return {"remote": None, "reachable": True, "ms": int((time.time() - t0) * 1000)}
+
+
+def status_dispatcher(st, t):
+    alive = red_fixers_alive(st, t)
+    return {"blocker": cached_dispatch_blocker(), "off_flag": os.path.exists(reds_dir("DISPATCH_OFF")),
+            "gate_alive": sum(1 for r in alive if lease_meta(r).get("gate")), "gate_cap": red_cap("gate"),
+            "other_alive": sum(1 for r in alive if not lease_meta(r).get("gate")), "other_cap": red_cap("other"),
+            "escalated": [{"type": typ, "id": it["id"], "words": words} for typ, it, words in escalated_now(st)]}
+
+
+def status_reds(st, t, repo=None):
+    """Every open red: its machine state, its run, its holder and when the hold lapses, its last note."""
+    leases = {r["name"]: r for r in st.list("red/")}
+    out = []
+    for it in sorted(red_active(st).values(), key=lambda i: (not i["data"].get("gate"), i["entered_at"])):
+        d = it["data"]
+        key = d.get("key") or it["id"]
+        try:
+            text, short = red_view(st, it, t)
+        except (Exception, SystemExit) as e:
+            text, short = f"(view failed: {str(e)[:120]})", it["state"]
+        lease = status_strip_lease(leases.get(red_lease(key)), t)
+        hist = d.get("history") or []
+        lr = d.get("last_run") or {}
+        opened = d.get("opened_at") or it["entered_at"]
+        out.append({"key": key, "id": it["id"], "state": it["state"], "short": short, "text": text,
+                    "workflow": d.get("workflow"), "run": lr.get("number"), "run_url": status_run_url(repo, lr.get("number")),
+                    "jobs": [str(j) for j in d.get("jobs") or [d.get("job")] if j], "line": d.get("line"),
+                    "gate": bool(d.get("gate")), "kind": d.get("kind"), "red_kind": d.get("red_kind"), "tier": d.get("tier"),
+                    "opened_at": opened, "age": t - float(opened), "entered_at": it["entered_at"],
+                    "deadline": it["deadline"], "level": it.get("level"), "lease": lease,
+                    "fix": d.get("fix"), "attempts": d.get("attempts"),
+                    "note": (lease or {}).get("note") or (str(hist[-1].get("outcome"))[:400] if hist else None),
+                    "history": [{"at": h.get("at"), "holder": h.get("holder"), "outcome": str(h.get("outcome"))[:300]}
+                                for h in hist[-5:]]})
+    return out
+
+
+def status_git(wt, *args, timeout=3):
+    r = subprocess.run(["git", "-C", wt] + list(args), capture_output=True, text=True, timeout=timeout,
+                       stdin=subprocess.DEVNULL, env=dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0"))
+    return r.stdout if r.returncode == 0 else ""
+
+
+def status_tail(path, lines=STATUS_LOG_TAIL, max_bytes=64 << 10):
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - max_bytes))
+            data = f.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    return "\n".join(data.splitlines()[-lines:])
+
+
+def status_transcript_last(path, max_bytes=256 << 10):
+    """(the last assistant text, its time) of a claude transcript (.jsonl): what the agent last said it is doing."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - max_bytes))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except (OSError, TypeError):
+        return None, None
+    for ln in reversed(lines):
+        try:
+            rec = json.loads(ln)
+        except ValueError:
+            continue
+        if rec.get("type") != "assistant":
+            continue
+        content = (rec.get("message") or {}).get("content")
+        texts = [c.get("text") for c in content if isinstance(c, dict) and c.get("type") == "text" and c.get("text")] \
+            if isinstance(content, list) else [content] if isinstance(content, str) else []
+        if texts:
+            return texts[-1][-600:], rec.get("timestamp")
+    return None, None
+
+
+def status_agent_logs(run):
+    """The fixer's logs in its run's reds dir (fixer.log, claude-N.log, ...), newest first, each with its tail."""
+    if run in (None, ""):
+        return []
+    files = [p for p in glob.glob(reds_dir(str(run), "*")) if p.endswith(STATUS_LOG_SUFFIXES) and os.path.isfile(p)]
+    files.sort(key=mtime, reverse=True)
+    return [{"path": p, "name": os.path.basename(p), "size": os.path.getsize(p), "mtime": mtime(p), "tail": status_tail(p)}
+            for p in files[:4]]
+
+
+def status_agent_enrich(a):
+    wt = a.get("worktree")
+    if wt and os.path.isdir(wt):
+        try:
+            a["commits"] = [dict(zip(("sha", "when", "subject"), ln.split("\x1f", 2)))
+                            for ln in status_git(wt, "log", "-3", "--format=%h\x1f%cr\x1f%s").splitlines() if ln]
+            a["dirty"] = [ln for ln in status_git(wt, "status", "--porcelain").splitlines() if ln][:20]
+            recent = []
+            for ln in status_git(wt, "log", "-3", "--name-only", "--format=").splitlines():
+                if ln and ln not in recent:
+                    recent.append(ln)
+            a["recent_files"] = recent[:20]
+        except (OSError, subprocess.TimeoutExpired) as e:
+            a["git_error"] = str(e)[:200]
+    a["logs"] = status_agent_logs(a.get("run"))
+    if a.get("transcript"):
+        a["said"], a["said_at"] = status_transcript_last(a["transcript"])
+    return a
+
+
+def status_agents(st, t, records=None):
+    """Every agent holding a red lease (fixer or claim) and every fixer dispatched (alive, or ended within
+    STATUS_AGENT_RECENT): pid alive, worktree, tier, lease progress, its worktree's last commits, its logs."""
+    agents = {}
+    for r in st.list("red/"):
+        if not lease_is_live(r, t):
+            continue
+        ls = status_strip_lease(r, t)
+        k = f"pid:{ls['pid']}" if ls.get("pid") else f"holder:{r.get('holder')}"
+        a = agents.setdefault(k, {"pid": ls.get("pid"), "holder": r.get("holder"), "kind": ls.get("kind"),
+                                  "tier": ls.get("tier"), "workflow": ls.get("workflow"), "run": ls.get("run"),
+                                  "worktree": ls.get("worktree"), "transcript": ls.get("log"), "leases": []})
+        a["leases"].append(ls)
+    for rec in records if records is not None else fixer_records():
+        ended = status_iso_epoch(rec.get("ended"))
+        if not rec.get("alive") and (not ended or t - ended > STATUS_AGENT_RECENT):
+            continue
+        k = f"pid:{rec.get('pid')}"
+        a = agents.setdefault(k, {"pid": rec.get("pid"), "holder": None, "kind": "fixer", "leases": []})
+        for f in ("workflow", "run", "worktree", "transcript"):
+            a[f] = a.get(f) or rec.get(f)
+        a["tier"] = a.get("tier") or str(rec.get("why") or "").replace("tier ", "") or None
+        a.update({"record": rec.get("path"), "started": rec.get("started"), "ended": rec.get("ended"), "rc": rec.get("rc"),
+                  "verdict": rec.get("verdict"), "label": rec.get("label"), "key": rec.get("key"),
+                  "jobs": rec.get("jobs")})
+    out = []
+    for a in agents.values():
+        try:
+            a["alive"] = bool(a.get("pid")) and proc_alive(a["pid"])
+        except (Exception, SystemExit):
+            a["alive"] = None
+        prog = [x.get("renewed_at") for x in a["leases"] if x.get("renewed_at")]
+        a["last_progress"] = max(prog) if prog else None
+        a["started"] = a.get("started") or (min(x["acquired_at"] for x in a["leases"] if x.get("acquired_at"))
+                                            if any(x.get("acquired_at") for x in a["leases"]) else None)
+        out.append(a)
+    def started(a):
+        s = a.get("started")
+        return float(s) if isinstance(s, (int, float)) else status_iso_epoch(s) or 0.0
+    out.sort(key=lambda a: (not a["leases"], not a["alive"], -started(a)))
+    out = out[:STATUS_AGENTS_MAX]
+    for a in out:
+        status_agent_enrich(a)
+    return out
+
+
+def status_landing(st, t):
+    """The open change items and the batch, each with its deadline (and whether it is past)."""
+    def row(it):
+        d = it["data"]
+        return {"id": it["id"], "state": it["state"], "entered_at": it["entered_at"], "deadline": it["deadline"],
+                "past_deadline": it["deadline"] < t, "level": it.get("level"), "worktree": d.get("worktree"),
+                "branch": d.get("branch"), "head": str(d.get("head") or "")[:10] or None,
+                "submitted_at": d.get("submitted_at"), "why": d.get("why") or d.get("reason"),
+                "changes": d.get("changes") or d.get("entries")}
+    return {"changes": [row(it) for it in st.items("change", list(STATUS_CHANGE_OPEN))],
+            "batch": [row(it) for it in st.items("batch", list(STATUS_BATCH_OPEN))]}
+
+
+def status_conditions(st, t):
+    out = []
+    for c in open_conditions(st):
+        lr = c.get("last_result") or {}
+        out.append({"kind": c.get("kind"), "key": c.get("key"), "text": str(c.get("text") or "")[:400],
+                    "opened": c.get("opened"), "level": c.get("level"), "until": c.get("until"),
+                    "probe": (c.get("probe") or {}).get("kind"), "ok": lr.get("ok"), "detail": lr.get("detail"),
+                    "last_checked": c.get("last_checked"), "next_check": c.get("next_check"), "fails": c.get("fails")})
+    return out
+
+
+def status_events(st, n=STATUS_EVENTS):
+    """The last n events of the feed (from just before the projector's cursor on, a few pages at most)."""
+    after = max(0, int(st.meta_get("projector_seq", 0) or 0) - n)
+    evs = []
+    for _page in range(5):
+        got = st.events(after=after, limit=500)
+        evs = (evs + got)[-n:]
+        if len(got) < 500:
+            break
+        after = got[-1]["seq"]
+    return [{"seq": e.get("seq"), "at": e.get("at"), "kind": e.get("kind"), "severity": e.get("severity"),
+             "item": f"{e.get('item_type')}:{e.get('item_id')}" if e.get("item_type") else None,
+             "from": e.get("from_state"), "to": e.get("to_state"), "text": str(e.get("text") or "")[:400]}
+            for e in reversed(evs)]
+
+
+def status_data(store=None, now_=None, bound=None):
+    """/api/status: every section from its own bounded source; a failing one is {"error": ...} in its place."""
+    t = now_ if now_ is not None else time.time()
+    b = bound if bound is not None else env_num("AGENTCTL_STATUS_BOUND", STATUS_SOURCE_BOUND)
+    d = state_read()
+    repo = (d.get("ci") or {}).get("repo") or SHORT["movies"]
+    try:
+        st = store if store is not None else status_store()
+    except (Exception, SystemExit) as e:
+        st, st_err = None, status_err(e)
+
+    def need():
+        if st is None:
+            raise RuntimeError(st_err["error"])
+        return st
+    res = status_sources((("header", lambda: status_header(t, d), 1),
+                          ("store", lambda: status_store_probe(need(), t), 1),
+                          ("dispatcher", lambda: status_dispatcher(need(), t), 1),
+                          ("reds", lambda: status_reds(need(), t, repo), 1),
+                          ("agents", lambda: status_agents(need(), t), 2),
+                          ("landing", lambda: status_landing(need(), t), 1),
+                          ("conditions", lambda: status_conditions(need(), t), 1),
+                          ("events", lambda: status_events(need()), 1)), b)
+    if "error" in res["store"]:
+        res["store"] = {**res["store"], "remote": store_url(), "reachable": False}
+    return {"at": t, "repo": repo, "home": HOME, "forgejo": FORGEJO_WEB, **res}
+
+
+_status_cache = {"at": 0.0, "data": None}
+_status_cache_lock = threading.Lock()
+
+
+def status_cached():
+    with _status_cache_lock:  # one assembly at a time: refreshing tabs share it
+        if _status_cache["data"] is None or time.time() - _status_cache["at"] >= STATUS_CACHE:
+            _status_cache["data"] = status_data()
+            _status_cache["at"] = time.time()
+        return _status_cache["data"]
+
+
+def status_host_ok(host):
+    """Only agentctl.localhost, 127.0.0.1 and localhost (any port): another name pointing here is a rebinding page."""
+    h = (host or "").strip().lower()
+    if not h or h.startswith("["):
+        return False
+    name, _, port = h.partition(":")
+    return name in STATUS_PAGE_HOSTS and (not port or port.isdigit())
+
+
+def status_log_path(p):
+    """The real path of a log /log may serve: a regular .log/.out/.txt file under the state root or the reds dir (after
+    symlinks: no traversal out); else None."""
+    if not p or "\0" in p or not os.path.isabs(os.path.expanduser(p)):
+        return None
+    real = os.path.realpath(os.path.expanduser(p))
+    if not real.endswith(STATUS_LOG_SUFFIXES) or not os.path.isfile(real):
+        return None
+    for root in {os.path.realpath(state_root()), os.path.realpath(reds_dir())}:
+        if real.startswith(root.rstrip(os.sep) + os.sep):
+            return real
+    return None
+
+
+def status_page_server(host, port):
+    """The page's HTTP server (not started)."""
+    import http.server
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        server_version = "agentctl-status"
+
+        def log_message(self, *_a):
+            pass
+
+        def send(self, code, body, ctype):
+            data = body.encode() if isinstance(body, str) else body
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; "
+                             "style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'")
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(data)
+
+        def do_HEAD(self):
+            self.do_GET()
+
+        def do_GET(self):
+            try:
+                if not status_host_ok(self.headers.get("Host")):
+                    return self.send(403, "forbidden host\n", "text/plain; charset=utf-8")
+                u = urllib.parse.urlsplit(self.path)
+                if u.path == "/":
+                    return self.send(200, STATUS_PAGE_HTML, "text/html; charset=utf-8")
+                if u.path == "/api/status":
+                    return self.send(200, json.dumps(status_cached(), default=str), "application/json")
+                if u.path == "/log":
+                    q = urllib.parse.parse_qs(u.query).get("path") or [""]
+                    real = status_log_path(q[0])
+                    if not real:
+                        return self.send(403, "only a .log/.out/.txt file under ~/.cache/agentctl\n",
+                                         "text/plain; charset=utf-8")
+                    with open(real, "rb") as f:
+                        f.seek(0, 2)
+                        size = f.tell()
+                        f.seek(max(0, size - STATUS_LOG_MAX))
+                        body = f.read()
+                    head = f"{real} ({size} bytes" + (f"; the last {STATUS_LOG_MAX} shown" if size > STATUS_LOG_MAX else "") + ")\n\n"
+                    return self.send(200, head.encode() + body, "text/plain; charset=utf-8")
+                return self.send(404, "not found\n", "text/plain; charset=utf-8")
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except Exception as e:  # never the processor's: one request's error is that request's
+                try:
+                    self.send(500, f"error: {type(e).__name__}: {str(e)[:300]}\n", "text/plain; charset=utf-8")
+                except OSError:
+                    pass
+
+    class Server(http.server.ThreadingHTTPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+    return Server((host, port), Handler)
+
+
+_status_page = {}
+
+
+def status_page_file():
+    return state_root("status-page.json")
+
+
+def status_page_start():
+    """Serve the page from a daemon thread of this process, once: 127.0.0.1:80, else :3015 ($AGENTCTL_STATUS_PORT: that
+    port alone; AGENTCTL_STATUS_PAGE=off: none). Writes status-page.json (its URL, for `status --open`). Returns the URL
+    or None. Never raises."""
+    if _status_page.get("url"):
+        return _status_page["url"]
+    if os.environ.get("AGENTCTL_STATUS_PAGE", "").lower() in ("0", "off", "no"):
+        return None
+    ports = ([int(os.environ["AGENTCTL_STATUS_PORT"])] if os.environ.get("AGENTCTL_STATUS_PORT")
+             else [STATUS_PAGE_PORT, STATUS_PAGE_FALLBACK])
+    why = []
+    for p in ports:
+        try:
+            if p == STATUS_PAGE_PORT and port_open(p, timeout=0.5):
+                why.append(f"port {p}: something already listens on it (not shadowed)")
+                continue
+            srv = status_page_server("127.0.0.1", p)
+        except (OSError, ValueError) as e:
+            why.append(f"port {p}: {e}")
+            continue
+        threading.Thread(target=srv.serve_forever, daemon=True, name="status-page").start()
+        url = f"http://{STATUS_PAGE_HOST}/" if p == 80 else f"http://{STATUS_PAGE_HOST}:{p}/"
+        _status_page.update(url=url, server=srv)
+        if why:
+            err(f"status page: {'; '.join(why)}: serving {url} instead")
+        err(f"status page: {url} (127.0.0.1:{p})")
+        try:
+            write_json(status_page_file(), {"url": url, "port": p, "pid": os.getpid(), "at": time.time(), "fallback": why})
+        except OSError as e:
+            err(f"status page: {status_page_file()} not written: {e}")
+        return url
+    err(f"status page: not served ({'; '.join(why)})")
+    return None
+
+
+def status_page_url():
+    return read_json_file(status_page_file()).get("url") or f"http://{STATUS_PAGE_HOST}/"
+
+
+def status_page_open():
+    url = status_page_url()
+    print(url)
+    subprocess.run([os.environ.get("AGENTCTL_OPEN", "open"), url], capture_output=True, timeout=30)
+    return 0
+
+
+STATUS_PAGE_HTML = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>agentctl status</title>
+<style>
+:root{--bg:#fbfbfa;--fg:#1d1f21;--mute:#6a6f75;--line:#e2e2df;--card:#fff;--link:#0b62c4;
+--ok:#1e7a3b;--okb:#e3f3e7;--bad:#b42318;--badb:#fde8e6;--warn:#8a5a00;--warnb:#fdf1d8;--info:#1f4f8f;--infob:#e5eefa;--nb:#eeeeec}
+@media (prefers-color-scheme:dark){:root{--bg:#141517;--fg:#e4e4e2;--mute:#9a9ea4;--line:#2c2e31;--card:#1b1c1f;--link:#7fb2ff;
+--ok:#7ad495;--okb:#18321f;--bad:#ff8f84;--badb:#3d1a17;--warn:#f2c46b;--warnb:#3a2d10;--info:#9cc2ff;--infob:#1a2840;--nb:#26282b}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{max-width:1500px;margin:0 auto;padding:12px 16px 40px}
+h1{font-size:17px;margin:0 0 8px}h2{font-size:14px;margin:22px 0 6px;display:flex;gap:8px;align-items:baseline}
+h2 small{color:var(--mute);font-weight:400}
+a{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:8px 10px}
+.card .k{color:var(--mute);font-size:11px;text-transform:uppercase;letter-spacing:.04em}.card .v{font-size:14px;margin-top:2px}
+.line{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 10px;margin:8px 0;font-family:ui-monospace,Menlo,monospace;font-size:12px;overflow-wrap:anywhere}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:6px}
+th,td{text-align:left;padding:4px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:11px;color:var(--mute);font-weight:600;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
+tr:last-child td{border-bottom:0}td.n{white-space:nowrap}.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+.mute{color:var(--mute)}.chip{display:inline-block;padding:0 7px;border-radius:9px;font-size:11px;font-weight:600;white-space:nowrap;background:var(--nb)}
+.ok{background:var(--okb);color:var(--ok)}.bad{background:var(--badb);color:var(--bad)}.warn{background:var(--warnb);color:var(--warn)}.info{background:var(--infob);color:var(--info)}
+.err{background:var(--badb);color:var(--bad);border-radius:6px;padding:6px 10px}
+.agent{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin-bottom:8px}
+.agent .top{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline}.agent .said{margin:6px 0;white-space:pre-wrap;overflow-wrap:anywhere}
+details{margin-top:4px}summary{cursor:pointer;color:var(--mute)}pre{margin:4px 0;padding:6px 8px;background:var(--bg);border:1px solid var(--line);border-radius:4px;overflow-x:auto;font-size:11.5px;max-height:420px}
+ul.c{margin:2px 0;padding-left:16px}#stamp{color:var(--mute);font-weight:400;font-size:12px}
+</style></head><body><main>
+<h1>agentctl <span id="stamp">loading…</span></h1>
+<div id="root"></div>
+</main>
+<script>
+"use strict";
+const E=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let NOW=Date.now()/1000;
+function ago(t){if(t==null||t==="")return"–";if(typeof t==="string"){const p=Date.parse(t);if(isNaN(p))return E(t);t=p/1000}
+ const s=Math.round(NOW-t),a=Math.abs(s),f=a<90?a+"s":a<5400?Math.round(a/60)+"m":a<172800?(a/3600).toFixed(1)+"h":Math.round(a/86400)+"d";return s>=0?f+" ago":"in "+f}
+function hm(t){if(!t)return"–";const d=new Date(t*1000);return d.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}
+function chipClass(s){s=String(s||"").toLowerCase();
+ if(/^(success|green|ok|on|live|alive|landed|verified|cleared|checked|yes)/.test(s))return"ok";
+ if(/(failure|timed_out|red|offered|escalat|dead|off|unreachable|error|rejected|blocked|stalled|no$)/.test(s))return"bad";
+ if(/(leased|fix-pending|checking|pushing|queued|waiting|held|assembling|bisecting|verif|running|pending|warn)/.test(s))return"warn";return"info"}
+const chip=(s,c)=>`<span class="chip ${c||chipClass(s)}">${E(s)}</span>`;
+const link=(u,t)=>u?`<a href="${E(u)}" target="_blank" rel="noopener">${E(t)}</a>`:E(t);
+const tilde=p=>{p=String(p||"");return HOME&&p.startsWith(HOME)?"~"+p.slice(HOME.length):p};
+const logLink=p=>`<a href="/log?path=${encodeURIComponent(p)}" target="_blank">full log</a>`;
+let HOME="";
+function sec(title,sub,data,fn){let h=`<h2>${E(title)} <small>${sub||""}</small></h2>`;
+ if(data&&data.error)return h+`<div class="err">${E(data.error)}</div>`;try{return h+fn(data)}catch(e){return h+`<div class="err">render: ${E(e)}</div>`}}
+function table(cols,rows){if(!rows.length)return`<div class="mute">none</div>`;
+ return`<div class="tw"><table><thead><tr>${cols.map(c=>`<th>${E(c)}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`}
+function header(s){const h=s.header||{},st=s.store||{},dp=s.dispatcher||{};let o="";
+ if(h.error)o+=`<div class="err">header: ${E(h.error)}</div>`;
+ const tickAge=st.tick_age!=null?st.tick_age:h.tick_age, tickSrc=st.tick_age!=null?"remote store":"state.json";
+ const gate=h.gate||[];const gateTxt=h.error?"?":(h.gate_red?"RED":(gate.length?"GREEN":"?"));
+ const net=h.network&&h.network.at&&(NOW-h.network.at)<600?`lossy (${Math.round((h.network.loss||0)*100)}% loss)`:"ok";
+ const tun=h.tunnel||{};const tunTxt=h.forgejo_port===false?"DOWN (:3000 refused)":tun.escalated?"escalated":(tun.fails?`${tun.fails} fails`:"ok");
+ const disp=dp.error?"?":(dp.blocker?"OFF":"ON");
+ o+=`<div class="cards">
+ <div class="card"><div class="k">gate</div><div class="v">${chip(gateTxt)} ${gate.map(g=>`${E(g.name)} ${link(g.url,"#"+(g.number??"?"))} ${chip(g.conclusion||"?")}${g.newer?` <span class="mute">→ ${link(g.newer_url,"#"+g.newer)} ${E(g.newer_status)}</span>`:""}`).join("<br>")}</div></div>
+ <div class="card"><div class="k">reconciler tick</div><div class="v">${tickAge==null?chip("never","bad"):chip(Math.round(tickAge)+" s ago",tickAge>120?"bad":"ok")} <span class="mute">${tickSrc}</span></div></div>
+ <div class="card"><div class="k">store</div><div class="v">${st.reachable?chip("reachable","ok"):chip("unreachable","bad")} <span class="mute mono">${E(st.remote||"local")}${st.ms!=null?" · "+st.ms+" ms":""}</span>${st.error?`<div class="mute">${E(st.error)}</div>`:""}</div></div>
+ <div class="card"><div class="k">network / tunnel</div><div class="v">${chip("net "+net,net==="ok"?"ok":"bad")} ${chip("tunnel "+tunTxt,tunTxt==="ok"?"ok":"bad")}</div></div>
+ <div class="card"><div class="k">dispatcher · fixers</div><div class="v">${chip(disp)} gate ${E(dp.gate_alive??"?")}/${E(dp.gate_cap??"?")} · other ${E(dp.other_alive??"?")}/${E(dp.other_cap??"?")}${dp.blocker?`<div class="mute">${E(dp.blocker)}</div>`:""}${dp.error?`<div class="mute">${E(dp.error)}</div>`:""}</div></div>
+ <div class="card"><div class="k">waiting · checking</div><div class="v">${(h.waiting||[]).length} · ${(h.queued||[]).length} <span class="mute">code ${E(h.code||"?")}</span></div></div>
+ </div>`;
+ if(h.line)o+=`<div class="line">${E(h.line)}</div>`;
+ if(dp.escalated&&dp.escalated.length)o+=`<div class="err">ESCALATED: ${dp.escalated.map(x=>E(x.type+" "+x.id+": "+x.words)).join("<br>")}</div>`;
+ return o}
+function reds(rs){return table(["state","red","run","failing jobs","age","holder","deadline / lapse","last note"],rs.map(r=>{
+ const l=r.lease;const holder=l&&l.live?`${E(l.holder)}${l.worktree?`<div class="mute mono">${E(tilde(l.worktree))}</div>`:""}`:`<span class="mute">–</span>`;
+ const lapse=l&&l.live?`lapses ${hm(l.expires_at)} (${ago(l.expires_at)})<div class="mute">max ${hm(l.max_until)}</div>`:"";
+ return[chip(r.state)+(r.level?" "+chip("escalated","bad"):"")+`<div class="mute">${E(r.short)}</div>`,
+  `${E(r.workflow)} ${r.gate?chip("gate","bad"):chip(r.red_kind||"other","info")}<div class="mute mono">${E(r.key)} · ${E(r.tier||"")} ${E(r.kind||"")}</div>`,
+  `<span class="n">${link(r.run_url,"#"+(r.run??"?"))}</span>`,
+  E((r.jobs||[]).join(", "))+(r.line?`<div class="mute mono">${E(String(r.line).slice(0,200))}</div>`:""),
+  `<span class="n">${ago(r.opened_at)}</span>`,holder,
+  `<span class="n">${hm(r.deadline)} (${ago(r.deadline)})</span>${lapse}`,
+  `<div>${E(r.note||r.text||"")}</div>`]}))}
+function agents(as){if(!as.length)return`<div class="mute">none</div>`;return as.map(a=>{
+ const ls=(a.leases||[]);const lease=ls.map(l=>`${E(l.name)} ${chip(l.kind||"lease")} renewed ${ago(l.renewed_at)}, lapses ${hm(l.expires_at)}${l.note?` — ${E(l.note)}`:""}`).join("<br>");
+ const commits=(a.commits||[]).map(c=>`<li><span class="mono">${E(c.sha)}</span> <span class="mute">${E(c.when)}</span> ${E(c.subject)}</li>`).join("");
+ const files=[...(a.dirty||[]).map(x=>"(uncommitted) "+x),...(a.recent_files||[])];
+ const logs=(a.logs||[]).map(g=>`<details data-k="${E(g.path)}"><summary>${E(g.name)} <span class="mute">${g.size} B, ${ago(g.mtime)}</span> · ${logLink(g.path)}</summary><pre>${E(g.tail)}</pre></details>`).join("");
+ return`<div class="agent"><div class="top"><b>${E(a.label||a.holder||("pid "+a.pid))}</b>
+ ${a.alive===true?chip("alive","ok"):a.alive===false?chip("dead"+(a.rc!=null?" rc "+a.rc:""),"bad"):chip("?")}
+ <span>pid <span class="mono">${E(a.pid??"–")}</span></span><span>${E(a.kind||"")}${a.tier?" · tier "+E(a.tier):""}</span>
+ <span>${E(a.workflow||"")} ${a.run!=null?"#"+E(a.run):""}</span><span class="mono mute">${E(tilde(a.worktree))}</span>
+ <span>started ${ago(a.started)}</span>${a.ended?`<span>ended ${ago(a.ended)}</span>`:""}<span>last progress ${ago(a.last_progress)}</span></div>
+ ${lease?`<div class="mute">${lease}</div>`:""}
+ ${a.verdict?`<div class="said"><b>verdict:</b> ${E(a.verdict)}</div>`:""}
+ ${a.said?`<div class="said"><span class="mute">last said ${ago(a.said_at)}:</span> ${E(a.said)}</div>`:""}
+ ${commits?`<ul class="c">${commits}</ul>`:""}
+ ${files.length?`<details data-k="files:${E(a.pid)}:${E(a.worktree)}"><summary>${files.length} files changed recently</summary><pre>${E(files.join("\n"))}</pre></details>`:""}
+ ${a.git_error?`<div class="err">git: ${E(a.git_error)}</div>`:""}${logs}</div>`}).join("")}
+function landing(l){const row=c=>[`<span class="mono">${E(c.id)}</span>`,chip(c.state)+(c.level?" "+chip("escalated","bad"):""),
+ E(tilde(c.worktree||""))+(c.branch?` <span class="mute">${E(c.branch)}</span>`:""),`<span class="mono">${E(c.head||"")}</span>`,
+ `<span class="n">${ago(c.entered_at)}</span>`,`<span class="n">${c.past_deadline?chip("past "+hm(c.deadline),"bad"):hm(c.deadline)+" ("+ago(c.deadline)+")"}</span>`,E(c.why||"")];
+ const cols=["id","state","worktree","head","in state","deadline","why"];
+ return`<div class="mute">batch</div>${table(cols,(l.batch||[]).map(row))}<div class="mute" style="margin-top:6px">changes</div>${table(cols,(l.changes||[]).map(row))}`}
+function conds(cs){return table(["condition","since","probe","last result","next check","text"],cs.map(c=>[
+ `${chip(c.kind,"bad")}${c.level?" "+chip("escalated","bad"):""}<div class="mute mono">${E(c.key)}</div>`,`<span class="n">${E(c.opened)}</span>`,
+ `${E(c.probe)}<div class="mute">clears when ${E(c.until)}</div>`,`${c.ok==null?"cannot tell":"fails"} (${E(c.detail)}) · fails ${E(c.fails||0)}`,
+ `<span class="n">${ago(c.next_check)}</span>`,E(c.text)]))}
+function events(es){return table(["#","when","kind","item","→","text"],es.map(e=>[`<span class="mono">${E(e.seq)}</span>`,`<span class="n">${hm(e.at)} <span class="mute">${ago(e.at)}</span></span>`,
+ chip(e.kind,e.severity==="info"?"info":e.severity==="escalate"?"bad":"warn"),`<span class="mono">${E(e.item||"")}</span>`,e.to?`${E(e.from||"")} → ${chip(e.to)}`:"",E(e.text)]))}
+function render(s){NOW=s.at;HOME=s.home||"";const n=x=>Array.isArray(x)?x.length:"?";
+ document.getElementById("root").innerHTML=header(s)
+ +sec("Reds",n(s.reds)+" open",s.reds,reds)
+ +sec("Agents",n(s.agents)+" (lease holders and fixers alive or ended in the last 3 h)",s.agents,agents)
+ +sec("Waiting / landing","",s.landing,landing)
+ +sec("Open conditions",n(s.conditions),s.conditions,conds)
+ +sec("Events","last "+n(s.events),s.events,events);
+ document.querySelectorAll("details[data-k]").forEach(d=>{if(OPEN.has(d.dataset.k))d.open=true});
+ document.getElementById("stamp").textContent="· "+new Date(s.at*1000).toLocaleTimeString()+" · refreshes every 15 s"}
+async function load(){try{const r=await fetch("/api/status",{cache:"no-store"});if(!r.ok)throw new Error("HTTP "+r.status);render(await r.json())}
+ catch(e){document.getElementById("stamp").textContent="· refresh failed: "+e+" (retrying)"}}
+const OPEN=new Set();  // the <details> the reader opened stay open across refreshes
+document.addEventListener("toggle",e=>{const k=e.target.dataset&&e.target.dataset.k;if(!k)return;e.target.open?OPEN.add(k):OPEN.delete(k)},true);
+load();setInterval(load,15000);
+</script></body></html>
+"""
+
+
 # ---------------------------------------------------------------- main
 def main(argv=None):
     if (sys.argv[1:] if argv is None else argv) == ["--selftest"]:
@@ -13474,6 +14095,7 @@ def main(argv=None):
     sta = sub.add_parser("status", help="the snapshot (state.json): `--line` is the status line; else the open items "
                          "with their states and deadlines, and the leases")
     sta.add_argument("--line", action="store_true", help="the one status line (no git, no Forgejo: state.json only)")
+    sta.add_argument("--open", action="store_true", help="open the status page (http://agentctl.localhost/) in the browser")
     sub.add_parser("watchdog", help="the invariant watchdog's pass (launchd every 60 s): W1 oldest unlanded change, W2 "
                    "gate red nobody holds, W5 processor beat, W6 escalations notified, WM maintain ran")
     rcv = sub.add_parser("recover", help="the recovery registry: each open non-green condition, its probe, its next check")

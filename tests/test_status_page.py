@@ -1,0 +1,351 @@
+"""The status page (http://agentctl.localhost/): its data assembly from a mocked store and filesystem, the bounds that
+keep one failing source to its own section, the log route's path restriction, the Host check, the server, the port
+fallback and `status --open`."""
+import contextlib, io, json, os, socket, subprocess, sys, tempfile, time, unittest, urllib.error, urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from test_agentctl import A  # noqa: E402
+
+T = 1_800_000_000.0
+
+
+def lease(name, holder, meta, expires, **k):
+    return {"name": name, "holder": holder, "epoch": 2, "secret": "SECRET-must-not-leak", "acquired_at": T - 600,
+            "renewed_at": T - 30, "expires_at": expires, "max_until": T + 3600, "progress": "p", "item": None,
+            "meta": json.dumps(meta), **k}
+
+
+def item(typ, iid, state, data, entered=T - 900, deadline=T + 600, level=0):
+    return {"type": typ, "id": iid, "state": state, "version": 1, "entered_at": entered, "deadline": deadline,
+            "level": level, "data": data}
+
+
+class FakeStore:
+    """The Store methods the page reads, over plain lists."""
+    def __init__(self, items=(), leases=(), events=(), meta=None, fail=()):
+        self._items, self._leases, self._events = list(items), list(leases), list(events)
+        self._meta, self.fail = dict(meta or {}), set(fail)
+
+    def _f(self, m):
+        if m in self.fail:
+            raise A.StoreUnavailable(f"{m}: the tunnel is down")
+
+    def clock(self):
+        return T
+
+    def items(self, typ, states=None):
+        self._f("items")
+        return [i for i in self._items if i["type"] == typ and (states is None or i["state"] in states)]
+
+    def list(self, prefix=""):
+        self._f("list")
+        return [r for r in self._leases if r["name"].startswith(prefix)]
+
+    def get(self, name):
+        return next((r for r in self._leases if r["name"] == name), None)
+
+    def offer_of(self, _key):
+        return {"reason": "awaiting a taker"}
+
+    def meta_get(self, k, default=None):
+        self._f("meta_get")
+        return self._meta.get(k, default)
+
+    def events(self, after=0, limit=500):
+        self._f("events")
+        return [e for e in self._events if e["seq"] > after][:limit]
+
+
+class Base(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = os.path.realpath(self.tmp.name)
+        self.env = {"AGENTCTL_STATE_ROOT": os.path.join(self.root, "state"),
+                    "AGENTCTL_REDS_DIR": os.path.join(self.root, "state", "reds"),
+                    "AGENTCTL_STATE_FILE": os.path.join(self.root, "state", "state.json"),
+                    "AGENTCTL_TUNNEL_STATE": os.path.join(self.root, "state", "tunnel-health.json")}
+        self.saved = {k: os.environ.get(k) for k in list(self.env) + ["AGENTCTL_STORE_URL", "AGENTCTL_STATUS_PORT",
+                                                                      "AGENTCTL_OPEN"]}
+        os.environ.update(self.env)
+        os.environ.pop("AGENTCTL_STORE_URL", None)
+        os.makedirs(self.env["AGENTCTL_REDS_DIR"])
+        self.patched = {n: getattr(A, n) for n in ("cached_dispatch_blocker", "port_open", "proc_alive", "status_line")}
+        A.cached_dispatch_blocker = lambda ttl=60: None
+        A.port_open = lambda port, host="127.0.0.1", timeout=2.0: True
+        A.proc_alive = lambda pid, start=None: pid == 4242
+        A.status_line = lambda now_=None: "gate GREEN · waiting: 0"
+
+    def tearDown(self):
+        for n, f in self.patched.items():
+            setattr(A, n, f)
+        for k, v in self.saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        self.tmp.cleanup()
+
+    def git(self, wt, *args):
+        subprocess.run(["git", "-C", wt] + list(args), check=True, capture_output=True,
+                       env=dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+                                GIT_COMMITTER_EMAIL="t@t"))
+
+    def world(self):
+        """A red leased by a live fixer (pid 4242) with a worktree, logs and a transcript; an offered red; changes (one
+        past its deadline) and a batch; a condition; 80 events."""
+        wt = os.path.join(self.root, "movies-wt-red-2473-5")
+        os.makedirs(wt)
+        self.git(wt, "init", "-q")
+        for i in range(4):
+            with open(os.path.join(wt, f"f{i}.scala"), "w") as f:
+                f.write(str(i))
+            self.git(wt, "add", ".")
+            self.git(wt, "commit", "-qm", f"step {i}")
+        with open(os.path.join(wt, "dirty.txt"), "w") as f:
+            f.write("x")
+        run_dir = os.path.join(self.env["AGENTCTL_REDS_DIR"], "2473")
+        os.makedirs(run_dir)
+        with open(os.path.join(run_dir, "fixer.log"), "w") as f:
+            f.write("".join(f"line {i}\n" for i in range(100)))
+        transcript = os.path.join(self.root, "t.jsonl")
+        with open(transcript, "w") as f:
+            f.write(json.dumps({"type": "assistant", "timestamp": "2026-10-29T12:00:00Z",
+                                "message": {"content": [{"type": "text", "text": "bisecting the takes drift"}]}}) + "\n")
+            f.write(json.dumps({"type": "user", "message": {"content": "ok"}}) + "\n")
+        with open(os.path.join(run_dir, "fixer-5.json"), "w") as f:
+            json.dump({"pid": 4242, "run": 2473, "workflow": "Identity model convergence", "worktree": wt,
+                       "started": "2026-10-29T11:00:00Z", "why": "tier deep", "transcript": transcript,
+                       "label": "red fixer #2473"}, f)
+        with open(os.path.join(run_dir, "fixer-1.json"), "w") as f:  # ended long ago: not on the page
+            json.dump({"pid": 1111, "run": 2473, "worktree": wt, "started": "2020-01-01T00:00:00Z",
+                       "ended": "2020-01-01T01:00:00Z"}, f)
+        with open(self.env["AGENTCTL_STATE_FILE"], "w") as f:
+            json.dump({"tick_at": T - 7, "version": "abc", "summary": {"at": T - 5, "line": "gate GREEN"},
+                       "ci": {"repo": "pawelkrupinski/movies", "gate": [
+                           {"name": "Main", "decided": {"number": 2515, "conclusion": "success"}, "newer": None},
+                           {"name": "Identity model convergence", "decided": {"number": 2473, "conclusion": "failure"},
+                            "newer": {"number": 2480, "status": "in_progress"}}]}}, f)
+        reds = [item("red", "k1", "leased", {"key": "k1", "workflow": "Identity model convergence", "gate": True,
+                                              "jobs": ["leg (poland)"], "last_run": {"number": 2473}, "opened_at": T - 7200,
+                                              "history": [{"at": "x", "holder": "h", "outcome": "refuted"}]}),
+                item("red", "k2", "offered", {"key": "k2", "workflow": "Archive recording", "job": "report",
+                                               "last_run": {"number": 823}, "tier": "infra"}, level=1),
+                item("red", "k3", "verified", {"key": "k3", "workflow": "Main", "last_run": {"number": 1}})]
+        changes = [item("change", "c-late", "waiting", {"worktree": "/w/a", "head": "a" * 40}, deadline=T - 60),
+                   item("change", "c-ok", "checking", {"worktree": "/w/b", "head": "b" * 40}),
+                   item("change", "c-done", "landed", {"worktree": "/w/c"}),
+                   item("batch", "b1", "blocked-red", {}, deadline=T + 60)]
+        cond = item("condition", "cond1", "open", {"kind": "TUNNEL", "key": "tunnel", "text": "the tunnel is down",
+                                                    "probe": {"kind": "port_open", "args": {}}, "until": "it answers",
+                                                    "last_result": {"ok": False, "detail": "refused"}})
+        leases = [lease("red/k1", "laptop:fixer:red-k1-5", {"kind": "fixer", "gate": True, "pid": 4242, "worktree": wt,
+                                                            "tier": "deep", "run": 2473, "note": "found the drift",
+                                                            "log": transcript}, T + 900),
+                  lease("red/old", "laptop:fixer:gone", {"kind": "fixer"}, T - 10)]
+        events = [{"seq": i, "at": T - 100 + i, "kind": "red.offered", "severity": "info", "item_type": "red",
+                   "item_id": "k2", "from_state": "red", "to_state": "offered", "text": f"event {i}"} for i in range(1, 81)]
+        return FakeStore(reds + changes + [cond], leases, events, {"projector_seq": 70}), wt
+
+
+class DataTest(Base):
+    def test_every_section_from_the_store_and_the_filesystem(self):
+        st, wt = self.world()
+        d = A.status_data(store=st, now_=T)
+        self.assertNotIn("SECRET", json.dumps(d, default=str), "a lease's secret never leaves the process")
+        h = d["header"]
+        self.assertTrue(h["gate_red"])
+        self.assertEqual(h["tick_age"], 7)
+        self.assertEqual(h["gate"][1]["url"], "http://localhost:3000/pawelkrupinski/movies/actions/runs/2473")
+        self.assertEqual(d["store"]["reachable"], True)
+        self.assertEqual((d["dispatcher"]["gate_alive"], d["dispatcher"]["other_alive"]), (1, 0))
+        self.assertEqual([e["id"] for e in d["dispatcher"]["escalated"]], ["k2"])
+        reds = d["reds"]
+        self.assertEqual([r["key"] for r in reds], ["k1", "k2"], "open reds only, gate first")
+        self.assertEqual(reds[0]["lease"]["holder"], "laptop:fixer:red-k1-5")
+        self.assertEqual(reds[0]["note"], "found the drift")
+        self.assertEqual(reds[0]["age"], 7200)
+        self.assertEqual(reds[1]["run_url"], "http://localhost:3000/pawelkrupinski/movies/actions/runs/823")
+        self.assertEqual(reds[1]["jobs"], ["report"])
+        self.assertIsNone(reds[1]["lease"])
+        [a] = d["agents"]
+        self.assertEqual((a["pid"], a["alive"], a["tier"], a["worktree"]), (4242, True, "deep", wt))
+        self.assertEqual(a["last_progress"], T - 30)
+        self.assertEqual([c["subject"] for c in a["commits"]], ["step 3", "step 2", "step 1"])
+        self.assertEqual(a["dirty"], ["?? dirty.txt"])
+        self.assertEqual(a["recent_files"], ["f3.scala", "f2.scala", "f1.scala"])
+        self.assertEqual(a["said"], "bisecting the takes drift")
+        [log] = a["logs"]
+        self.assertEqual(log["name"], "fixer.log")
+        self.assertEqual(log["tail"].splitlines()[-1], "line 99")
+        self.assertEqual(len(log["tail"].splitlines()), A.STATUS_LOG_TAIL)
+        ch = {c["id"]: c for c in d["landing"]["changes"]}
+        self.assertEqual(set(ch), {"c-late", "c-ok"})
+        self.assertTrue(ch["c-late"]["past_deadline"])
+        self.assertFalse(ch["c-ok"]["past_deadline"])
+        self.assertEqual([b["id"] for b in d["landing"]["batch"]], ["b1"])
+        self.assertEqual(d["conditions"][0]["kind"], "TUNNEL")
+        self.assertEqual([e["seq"] for e in d["events"]][:3], [80, 79, 78])
+        self.assertEqual(len(d["events"]), A.STATUS_EVENTS)
+
+    def test_a_failing_source_is_an_error_in_its_own_section_only(self):
+        st, _wt = self.world()
+        st.fail = {"items"}
+        d = A.status_data(store=st, now_=T)
+        for k in ("reds", "landing", "conditions"):
+            self.assertIn("tunnel is down", d[k]["error"])
+        self.assertIsInstance(d["agents"], list)
+        self.assertIsInstance(d["events"], list)
+        self.assertTrue(d["header"]["gate_red"])
+
+    def test_a_hanging_source_is_cut_at_its_bound(self):
+        st, _wt = self.world()
+        orig = st.events
+        st.events = lambda after=0, limit=500: time.sleep(3) or orig(after, limit)
+        t0 = time.time()
+        d = A.status_data(store=st, now_=T, bound=0.5)
+        self.assertLess(time.time() - t0, 2.5)
+        self.assertIn("no answer within", d["events"]["error"])
+        self.assertIsInstance(d["reds"], list)
+
+    def test_an_unreachable_remote_store(self):
+        os.environ["AGENTCTL_STORE_URL"] = "http://127.0.0.1:9"
+        try:
+            d = A.status_data(store=A.RemoteStore("http://127.0.0.1:9", tok="x", timeout=1), now_=T)
+        finally:
+            os.environ.pop("AGENTCTL_STORE_URL", None)
+        self.assertFalse(d["store"]["reachable"])
+        self.assertIn("error", d["reds"])
+        self.assertIn("line", d["header"])
+
+
+class LogPathTest(Base):
+    def test_only_text_logs_under_the_state_root(self):
+        ok = os.path.join(self.env["AGENTCTL_REDS_DIR"], "2473", "claude-1.log")
+        os.makedirs(os.path.dirname(ok))
+        for p in (ok, os.path.join(self.env["AGENTCTL_STATE_ROOT"], "store.db"), os.path.join(self.root, "outside.log")):
+            with open(p, "w") as f:
+                f.write("x")
+        os.symlink(os.path.join(self.root, "outside.log"), os.path.join(self.env["AGENTCTL_STATE_ROOT"], "escape.log"))
+        self.assertEqual(A.status_log_path(ok), ok)
+        for bad in (os.path.join(self.env["AGENTCTL_STATE_ROOT"], "store.db"), os.path.join(self.root, "outside.log"),
+                    os.path.join(self.env["AGENTCTL_REDS_DIR"], "..", "..", "outside.log"),
+                    os.path.join(self.env["AGENTCTL_STATE_ROOT"], "escape.log"), "reds/2473/claude-1.log", "",
+                    ok + "\0", "/etc/passwd", os.path.join(self.env["AGENTCTL_STATE_ROOT"], "missing.log")):
+            self.assertIsNone(A.status_log_path(bad), bad)
+
+    def test_host_names(self):
+        for h in ("agentctl.localhost", "agentctl.localhost:3015", "127.0.0.1", "127.0.0.1:80", "localhost:3015",
+                  "AGENTCTL.localhost"):
+            self.assertTrue(A.status_host_ok(h), h)
+        for h in (None, "", "evil.com", "agentctl.localhost.evil.com", "evil.localhost", "[::1]:80", "127.0.0.1:x",
+                  "localhost:80:80"):
+            self.assertFalse(A.status_host_ok(h), h)
+
+
+class ServerTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.saved_cached = A.status_cached
+        A.status_cached = lambda: {"at": T, "reds": []}
+        self.srv = A.status_page_server("127.0.0.1", 0)
+        self.port = self.srv.server_address[1]
+        import threading
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+        A.status_cached = self.saved_cached
+        super().tearDown()
+
+    def get(self, path, host="agentctl.localhost"):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", headers={"Host": host})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status, r.read().decode(), r.headers
+        except urllib.error.HTTPError as e:
+            with e:
+                return e.code, e.read().decode(), e.headers
+
+    def test_routes(self):
+        code, body, hd = self.get("/")
+        self.assertEqual(code, 200)
+        self.assertIn("/api/status", body)
+        self.assertIn("prefers-color-scheme:dark", body)
+        self.assertIn("default-src 'none'", hd["Content-Security-Policy"])
+        code, body, _ = self.get("/api/status", host=f"127.0.0.1:{self.port}")
+        self.assertEqual((code, json.loads(body)["at"]), (200, T))
+        self.assertEqual(self.get("/nope")[0], 404)
+
+    def test_other_hosts_are_refused(self):
+        self.assertEqual(self.get("/api/status", host="rebind.example.com")[0], 403)
+
+    def test_log_route(self):
+        p = os.path.join(self.env["AGENTCTL_REDS_DIR"], "fixer.log")
+        with open(p, "w") as f:
+            f.write("hello fixer\n")
+        code, body, _ = self.get("/log?path=" + urllib.request.quote(p))
+        self.assertEqual(code, 200)
+        self.assertIn("hello fixer", body)
+        self.assertEqual(self.get("/log?path=/etc/passwd")[0], 403)
+        self.assertEqual(self.get("/log?path=" + urllib.request.quote(p + "/../../../../etc/hosts"))[0], 403)
+
+
+class StartTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.saved_ports = A.STATUS_PAGE_PORT, A.STATUS_PAGE_FALLBACK, dict(A._status_page)
+        A._status_page.clear()
+        A.port_open = self.patched["port_open"]
+
+    def tearDown(self):
+        srv = A._status_page.get("server")
+        if srv:
+            srv.shutdown()
+            srv.server_close()
+        A.STATUS_PAGE_PORT, A.STATUS_PAGE_FALLBACK, saved = self.saved_ports
+        A._status_page.clear()
+        A._status_page.update(saved)
+        super().tearDown()
+
+    def free_port(self):
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            return s.getsockname()[1]
+
+    def test_a_taken_first_port_falls_back_and_open_names_it(self):
+        taken = socket.socket()
+        taken.bind(("127.0.0.1", 0))
+        taken.listen(1)
+        A.STATUS_PAGE_PORT, A.STATUS_PAGE_FALLBACK = taken.getsockname()[1], self.free_port()
+        try:
+            with contextlib.redirect_stderr(io.StringIO()) as e:
+                url = A.status_page_start()
+        finally:
+            taken.close()
+        self.assertEqual(url, f"http://agentctl.localhost:{A.STATUS_PAGE_FALLBACK}/")
+        self.assertIn("already listens", e.getvalue())
+        self.assertEqual(A.status_page_start(), url, "once per process")
+        self.assertEqual(A.status_page_url(), url)
+        opened = os.path.join(self.root, "opened")
+        os.environ["AGENTCTL_OPEN"] = os.path.join(self.root, "fake-open")
+        with open(os.environ["AGENTCTL_OPEN"], "w") as f:
+            f.write(f"#!/bin/sh\necho \"$1\" > {opened}\n")
+        os.chmod(os.environ["AGENTCTL_OPEN"], 0o755)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(A.main(["status", "--open"]), 0)
+        self.assertEqual(out.getvalue().strip(), url)
+        with open(opened) as f:
+            self.assertEqual(f.read().strip(), url)
+
+    def test_switched_off(self):
+        os.environ["AGENTCTL_STATUS_PAGE"] = "off"
+        try:
+            self.assertIsNone(A.status_page_start())
+        finally:
+            os.environ.pop("AGENTCTL_STATUS_PAGE")
+
+
+if __name__ == "__main__":
+    unittest.main()
