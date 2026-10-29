@@ -21,15 +21,15 @@ Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wai
      deleted afterwards). The checks are the pre-push hook's: the red gate (at push), the path-selected checks, the
      BASIC tests (`scripts/hooks/local-tests.txt`'s `basic` set) and, when your paths touch an AREA, that area's local
      tests -- `identity` or `page`;
-  2. main green (or a tools-only / Fixes-Red change): pushes it -> `LANDED <sha>`, then a detached watch of main's Main
-     and convergence runs for it -> `WATCH OK / RED / UNKNOWN`;
-  3. main red and a production change: puts it on the ONE `waiting` branch -> `WAITING ...`; it lands with the batch at
-     the next green.
+  2. main green (or a tools-only / Fixes-Red change): pushes it -> `LANDED <sha>`, then watches main's Main and
+     convergence runs for it -> `WATCH OK / RED / UNKNOWN`;
+  3. main red and a production change: holds it -> `WAITING ...`; it lands with the batch (checked once) at the next
+     green.
 - Every verdict (QUEUED, LANDED, WAITING, NOT LANDED with the failing checks' tail, WATCH ...) goes to
   `~/bin/agentctl inbox` with your worktree as its cwd; the orchestrator reads and routes it. A NOT LANDED or WATCH RED
   of yours comes back to you as a new message. Your final report names your worktree and the QUEUED id.
 - `land` itself refuses at once (`NOT LANDED: <why>`) only for a dirty tree, a rebase conflict or the squash guard: fix,
-  commit, land again. `agentctl waiting status` lists the queue; `agentctl waiting cancel <id>` drops your change.
+  commit, land again. `agentctl land status` lists the queue; `agentctl land cancel <id>` drops your change (the old `waiting status|cancel` names answer until 2026-11-05).
   (A dispatched red fixer's land, and `land --follow`, still run the checks in-process and end at `LANDED`.)
 - Assigned a red build (a run number)? Run `~/bin/agentctl red claim <run> --note "<one line>"` FIRST, so the gate
   status names you as its fixer (`agentctl ci-why`, the status line); land the fix with `Fixes-Red: <run>`.
@@ -40,7 +40,7 @@ Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wai
   change touches (CLAUDE.md). `scripts/identity-measure --footprint` / `identity-landing-check` stay available as
   optional confidence tools for a risky identity change; neither is required, and never run their `--full` mode
   "to be safe" -- main's convergence runs it after the merge.
-- There are no PRs and no other branches on the remote (the tools' own `measure/` and `check/` run refs aside).
+- There are no PRs and no other branches on the remote (the tools' own `measure/`, `check/` and `land/` refs aside).
 - Never squash, always rebase against upstream (owner): `git fetch forgejo && git rebase forgejo/main`, never a local main; one commit per logical step; no squash, no `reset --soft` recommit.
 - Never use `PREPUSH_SKIP` or `--no-verify` -- on ANY commit or push, throwaway `measure/` branches included. Never
   `reset --soft` onto a moved main. `agentctl land --no-watch` is for scripts only.

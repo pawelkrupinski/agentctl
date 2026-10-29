@@ -296,12 +296,12 @@ class WaitingTest(Base):
     def test_status_pause_and_cancel(self):
         wt1, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         self.land(wt1)
-        self.run_tool("waiting", "pause", cwd=self.r.path)
+        self.run_tool("land", "hold", cwd=self.r.path)
         self.assertEqual(self.drive(), ["paused"])
-        rc, out = self.run_tool("waiting", "status", cwd=self.r.path)
-        self.assertIn("PAUSED", out)
-        self.run_tool("waiting", "resume", cwd=self.r.path)
-        rc, out = self.run_tool("waiting", "cancel", "-1", cwd=self.r.path)
+        rc, out = self.run_tool("land", "status", cwd=self.r.path)
+        self.assertIn("HELD", out)
+        self.run_tool("land", "release", cwd=self.r.path)
+        rc, out = self.run_tool("land", "cancel", "-1", cwd=self.r.path)
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.entries()["1"]["status"], "cancelled")
 
@@ -397,10 +397,10 @@ class WaitingTest(Base):
             for k in ("AGENTCTL_LAUNCHCTL", "AGENTCTL_LAUNCH_AGENTS"):
                 os.environ.pop(k, None)
 
-    def test_the_queue_points_at_waiting(self):
+    def test_the_queue_points_at_land(self):
         rc, out = self.run_tool("queue", "add", cwd=self.r.path)
         self.assertEqual(rc, 2)
-        self.assertIn("waiting", out)
+        self.assertIn("agentctl land status", out)
 
 
 if __name__ == "__main__":

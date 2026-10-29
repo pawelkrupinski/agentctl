@@ -4708,7 +4708,7 @@ def infra_check(o_r):
         token(o_r)
         parts.append("token: present")
     except (Exception, SystemExit):
-        parts.append("token: MISSING (hand it over: `~/bin/agentctl waiting status` from a session with the vault "
+        parts.append("token: MISSING (hand it over: `~/bin/agentctl land status` from a session with the vault "
                      "unlocked, or `! secrets unlock movies`)")
     return "; ".join(parts)
 
@@ -5920,7 +5920,19 @@ def precheck_hook(repo):
     return hook if os.access(hook, os.X_OK) else None
 
 
+LAND_SUBCOMMANDS = {"status": "status", "hold": "pause", "release": "resume", "cancel": "cancel"}
+WAITING_RENAMED = {"status": "land status", "pause": "land hold", "resume": "land release", "cancel": "land cancel <id>",
+                   "run": "tick", "service": "tick service"}
+ALIASES_UNTIL = "2026-11-05"  # the old command names (design §14.5) answer until then, each naming its new one
+
+
 def cmd_land(a):
+    if getattr(a, "lcmd", None):  # land status | hold | release | cancel <id>: the queue (design §14.5)
+        if a.lcmd == "cancel" and not a.entry:
+            print("usage: agentctl land cancel <id>")
+            return 2
+        w = argparse.Namespace(wcmd=LAND_SUBCOMMANDS[a.lcmd], repo=a.repo, entry=a.entry, renamed=True)
+        return cmd_waiting(w)
     if os.environ.get("PREPUSH_SKIP"):
         print("NOT LANDED: PREPUSH_SKIP is set in the environment; agentctl land never skips checks. `unset PREPUSH_SKIP`.")
         return 1
@@ -6713,11 +6725,12 @@ batch item: its tip assembled in a check tree (main plus the changes, Fixes-Red 
 --fast-only, a fresh sbt server; a stall retried once, then HELD), pushed in one push; a failing batch is bisected and
 only the confirmed culprit rejected. No `waiting` branch. Every verdict goes to `agentctl inbox`.
 
-  agentctl waiting status                       # the changes, the batch, the gate, the processor (hands it the token)
-  agentctl waiting cancel <id>                  # drop a change
-  agentctl waiting pause|resume                 # stop / restart taking batches (changes still queue)
-  agentctl waiting run [--once] [--service]     # the processor
-  agentctl waiting service install|uninstall|status   # it as the launchd agent net.bitcashier.agentctl-waiting"""
+  agentctl land status                          # the changes, the batch, the gate, the processor (hands it the token)
+  agentctl land cancel <id>                     # drop a change
+  agentctl land hold|release                    # stop / restart taking batches (changes still queue)
+  agentctl tick [--once]                        # the processor
+  agentctl tick service install|uninstall|status   # it as the launchd agent net.bitcashier.agentctl-waiting
+The old names (`waiting status|pause|resume|cancel|run|service`) answer until 2026-11-05, each naming its new one."""
 
 
 def is_production_path(p):
@@ -7966,7 +7979,7 @@ def _await_entry(repo, eid, own):
             return 1, None, None
         if time.time() - t0 > timeout:
             print(f"NOT LANDED (still waiting): entry {eid} on `{WAITING_BRANCH}` after {int(timeout // 3600)} h; "
-                  "`agentctl waiting status`")
+                  "`agentctl land status`")
             return 2, None, None
         spawn_waiting_processor(repo)
         restart_if_changed([own])
@@ -8196,7 +8209,7 @@ def unread_note(d, reds, entries):
         return
     wlog(d, f"the gate is unread ({gate_unread_why[0]}): taken as red")
     open_condition("UNKNOWN", f"UNKNOWN: the waiting processor cannot read the gate ({gate_unread_why[0]}); {len(entries)} "
-                              "change(s) wait, taken as red. Hand it the token: `~/bin/agentctl waiting status` from a "
+                              "change(s) wait, taken as red. Hand it the token: `~/bin/agentctl land status` from a "
                               "session with the vault unlocked",
                    run_probe("gate_read", {"since": time.time()}), [], key="gate-unread-waiting", command="waiting",
                    exit_code=2, cwd=entries[0].get("worktree") if entries else None)
@@ -8691,6 +8704,10 @@ def waiting_service(action, repo):
 
 
 def cmd_waiting(a):
+    if a.wcmd in WAITING_RENAMED and not getattr(a, "renamed", False) and \
+            (a.wcmd not in ("run", "service") or sys.stdin.isatty()):
+        err(f"`agentctl waiting {a.wcmd}` is now `agentctl {WAITING_RENAMED[a.wcmd]}` (the old name answers until "
+            f"{ALIASES_UNTIL})")
     repo = main_clone(a.repo or safe_cwd()) if a.wcmd == "await" else git(a.repo or os.getcwd(), "rev-parse", "--show-toplevel").strip()
     d, _c, wt = waiting_state(repo)
     if a.wcmd == "run":
@@ -8709,7 +8726,7 @@ def cmd_waiting(a):
         return watch_landed(repo, sha, pushed_at, close=a.close) if rc == 0 and sha else rc
     if a.wcmd == "pause":
         open(os.path.join(d, "PAUSED"), "a").close()
-        print(f"paused: the processor takes no batch until `agentctl waiting resume` ({d}/PAUSED); joins still queue")
+        print(f"held: the processor takes no batch until `agentctl land release` ({d}/PAUSED); changes still queue")
         return 0
     if a.wcmd == "resume":
         try:
@@ -8719,13 +8736,13 @@ def cmd_waiting(a):
         recover_clear_hold(None, {"d": d})  # a held batch is assembled again at once
         spawn_waiting_processor(repo)
         offer_token(repo)
-        print("resumed: the processor takes the next batch")
+        print("released: the processor takes the next batch")
         return 0
     if a.wcmd == "status":
         entries = waiting_entries(d)
         print(f"waiting {d}")
         print(f"processor: {'running' if waiting_processor_alive(d) else 'not running'}"
-              + ("; PAUSED (`agentctl waiting resume`)" if os.path.exists(os.path.join(d, "PAUSED")) else ""))
+              + ("; HELD (`agentctl land release`)" if os.path.exists(os.path.join(d, "PAUSED")) else ""))
         bt = current_batch(Store(), d)
         if bt:
             dd = bt["data"]
@@ -8760,7 +8777,7 @@ def cmd_waiting(a):
         if len(queued) == 1:
             e = queued[0]
             set_change(d, e, "cancelled", event={"text": f"{e['id']}: cancelled"},
-                       why="cancelled by `agentctl waiting cancel`", decided=ts())
+                       why="cancelled by `agentctl land cancel`", decided=ts())
             cancel_entry_remote(e, "its queue entry was cancelled")
             h = read_record(entry_owned(e["id"]).record) or {}
             if lock_held(entry_owned(e["id"]).lockpath) and h.get("pid"):
@@ -8769,10 +8786,10 @@ def cmd_waiting(a):
             return 0
         hits = [e for e in waiting_entries(d) if a.entry in e["id"]]
         if len(hits) != 1:
-            print(f"no single waiting change matches {a.entry!r}: `agentctl waiting status`")
+            print(f"no single waiting change matches {a.entry!r}: `agentctl land status`")
             return 1
         e = hits[0]
-        set_change(d, e, "cancelled", event={"text": f"{e['id']}: cancelled"}, why="cancelled by `agentctl waiting cancel`",
+        set_change(d, e, "cancelled", event={"text": f"{e['id']}: cancelled"}, why="cancelled by `agentctl land cancel`",
                    decided=ts())  # the next batch is assembled without it
         print(f"cancelled {e['id']}")
         return 0
@@ -8782,9 +8799,22 @@ def cmd_waiting(a):
 # ---------------------------------------------------------------- queue (retired)
 QUEUE_RETIRED = """NOT QUEUED: the merge queue is RETIRED (2026-10-26). There is no pre-merge CI left to batch: the landing check
 is no merge requirement any more. Land every change -- identity changes included -- with `~/bin/agentctl land` (Bash
-run_in_background=true): it waits for the repository's landing lock, rebases, and runs the pre-push hook, which runs
-the basic checks plus the identity / page area tests your paths select, locally. While main is red, a production
-change waits on the `waiting` branch and lands with the others once main is green (`agentctl waiting status`)."""
+run_in_background=true): it queues the change at once, and the reconciler checks it (the basic checks plus the identity /
+page area tests your paths select) and pushes it. While main is red, a production change waits and lands with the batch
+once main is green (`agentctl land status`)."""
+
+
+def cmd_tick(a):
+    """`agentctl tick`: the processor (the reconciler's loop of ticks); `tick service install|uninstall|status`: it as the
+    launchd agent (design §14.5: `waiting run` / `waiting service`, renamed)."""
+    repo = a.repo or (git(safe_cwd(), "rev-parse", "--show-toplevel", check=False).stdout.strip()
+                      if git_ok(safe_cwd(), "rev-parse", "--show-toplevel") else movies_repo_path())
+    w = argparse.Namespace(wcmd="service" if a.tcmd == "service" else "run", repo=repo, once=a.once, service=not a.once,
+                           action=a.action, renamed=True)
+    if a.tcmd == "service" and not a.action:
+        print("usage: agentctl tick service install|uninstall|status")
+        return 2
+    return cmd_waiting(w)
 
 
 def cmd_queue_retired(a):
@@ -12122,6 +12152,10 @@ def main(argv=None):
     cw.add_argument("--cached", action="store_true", help="with --summary: the line the waiting processor published if under 3 min old, else a live read, else `gate UNREAD (as of HH:MM ...)`")
     ld = sub.add_parser("land", help="fetch, rebase onto forgejo/main, prepush-check, push (hook runs), verify: LANDED <sha>",
                         description=LAND_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ld.add_argument("lcmd", nargs="?", choices=sorted(LAND_SUBCOMMANDS), metavar="status|hold|release|cancel",
+                    help="the queue instead of a land: status (the changes, the batch, the gate), hold / release (take "
+                         "no batch until release), cancel <id>")
+    ld.add_argument("entry", nargs="?", help="cancel: the change's id (a unique part of it)")
     ld.add_argument("--repo", help="checkout to land from (default: cwd)")
     ld.add_argument("--branch", help="local branch to land (default: the checked-out HEAD)")
     ld.add_argument("--stash", action="store_true", help="set uncommitted changes aside in a NAMED stash and restore them after")
@@ -12195,6 +12229,12 @@ def main(argv=None):
     sw.add_argument("--idle-days", type=float, default=SWEEP_IDLE_DAYS)
     sw.add_argument("--dry-run", action="store_true")
     sw.add_argument("--no-report", action="store_true", help="do not write ~/.cache/agentctl/sweep/<date>.txt")
+    tk = sub.add_parser("tick", help="the processor: the reconciler's loop of ticks (`tick service install|uninstall|status`: "
+                        "it as the launchd agent)")
+    tk.add_argument("tcmd", nargs="?", choices=("service",), help="service: the launchd agent")
+    tk.add_argument("action", nargs="?", choices=("install", "uninstall", "status"))
+    tk.add_argument("--once", action="store_true", help="one tick, then exit")
+    tk.add_argument("--repo", help="the repository (default: the cwd's, else the movies clone)")
     q = sub.add_parser("queue", help="RETIRED 2026-10-26: use `agentctl land` (prints this and exits 2)")
     q.add_argument("rest", nargs=argparse.REMAINDER)
     ck = sub.add_parser("checks", help="the pre-commit check slots: status, and stats per concurrency level")
@@ -12312,7 +12352,7 @@ def main(argv=None):
     rp_.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
     handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": cmd_red, "dispatch": cmd_dispatch, "gov": cmd_gov, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
+               "red": cmd_red, "dispatch": cmd_dispatch, "gov": cmd_gov, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)
 

@@ -72,7 +72,7 @@ moves it forward; nothing is a detached process that can die with its state in i
   slot `slot/check/<repo>/<n>`, a change's check `check/<entry>` (10 min, max 3 h), a red's fixer or claim
   `red/<key>` (a fixer 15 min / 3 h, a claim 30 min / 8 h), an owner block a block lease renewed by its probe.
   `agentctl lease list [--all]` shows them.
-- **The tick.** The processor (launchd `net.bitcashier.agentctl-waiting`, `agentctl waiting run --service`) runs one
+- **The tick.** The processor (launchd `net.bitcashier.agentctl-waiting`, `agentctl tick`) runs one
   loop every 5 s, each step bounded: the change items (start an executor for a queued change, push a checked one),
   the batch, the watches, the `land/*` refs sweep, the lease archive, events → inbox, the notifier, the network and
   tunnel watches, the gate line, the red tick (observe, offer, dispatch), the conditions. It writes the snapshot
@@ -102,7 +102,7 @@ moves it forward; nothing is a detached process that can die with its state in i
 - **Never unlocks the vault.** `env` only runs `secrets status <ns>`. When the vault is locked, it tells you which
   `!` command to hand to the user. Background code never calls `secrets` (it would prompt).
 - **Never prints a secret.** Tokens are read inside the call that uses them and go only into a request header, a
-  child's environment, or to the processor over a 0600 unix socket (see "waiting"): never on a command line or on disk.
+  child's environment, or to the processor over a 0600 unix socket (see "tick"): never on a command line or on disk.
 - **The DB is read-only.** `db-q` runs `sqlite3 -readonly -safe` and refuses anything but one SELECT, WITH or PRAGMA
   read.
 - **Never deletes unmerged work.** `cleanup` deletes only what is proven merged: the worktree's HEAD is an ancestor of
@@ -399,7 +399,7 @@ agent must be assigned to it".
   hitting it is `RED UNCLAIMED: ... NOBODY -- gate fixer cap 3 reached`, escalated at once (below). Reds outside the
   gate: 2 alive in all (`$AGENTCTL_RED_MAX_FIXERS`), 1 of them outside (`$AGENTCTL_RED_MAX_OUTSIDE`), and 6 a day
   (`$AGENTCTL_RED_DAILY_CAP`, with the Fixes-Red verifications); past it, ONE `RED BUDGET` inbox entry per red a day.
-- **Refunds.** A dispatch that did nothing is not counted (`red list` says `[refunded: ...]`): `GAVE UP` / `NOT LANDED`
+- **Refunds.** A dispatch that did nothing is not counted (`red status` says `[refunded: ...]`): `GAVE UP` / `NOT LANDED`
   because it is already fixed or there is nothing to do; `STOPPED` (superseded) and `red cleared`; a fixer killed
   before any verdict; `BLOCKED ON OWNER` only for a CI read (`forgejo-gh run view|download`: the fixer carries the
   token); a DUPLICATE -- a fixer whose red someone else claimed between the dispatch decision and its start steps
@@ -483,8 +483,8 @@ agent must be assigned to it".
 ```
 agentctl land [--repo PATH] [--branch B] [--stash] [--keep-worktree]   # movies: QUEUED <id> (<sha>): END YOUR TURN
 agentctl land --follow              # scripts and red fixers: the checks here, the push, then the watch, in-process
-agentctl waiting status             # the changes with their states, the batch, the gate, the processor
-agentctl waiting cancel <id>        # drop a queued or waiting change (its executor is stopped)
+agentctl land status                # the changes with their states, the batch, the gate, the processor
+agentctl land cancel <id>           # drop a queued or waiting change (its executor is stopped)
 ```
 
 The owner: "agents never wait on a land". In movies (a repo whose hook can check a change apart), `land`:
@@ -564,28 +564,32 @@ past them it is checked locally. The push to main then carries `PREPUSH_REMOTE_R
 only once Forgejo says it is precommit-check.yml, a success, on exactly the pushed commit. Superseding or cancelling an
 entry cancels its undecided run.
 
-### waiting: the processor, the token, the gate
+### tick: the processor, the token, the gate
 
 ```
-agentctl waiting status                      # the changes, the batch, a HELD batch, the gate, the processor
-agentctl waiting cancel <id>                 # drop one change
-agentctl waiting pause|resume                # take no batch until resume (changes still queue); resume ends a HELD wait
-agentctl waiting run [--once] [--service]    # the processor (the tick loop)
-agentctl waiting service install|uninstall|status   # the processor as launchd agent net.bitcashier.agentctl-waiting
+agentctl land status                         # the changes, the batch, a HELD batch, the gate, the processor
+agentctl land cancel <id>                    # drop one change
+agentctl land hold|release                   # take no batch until release (changes still queue); release ends a HELD wait
+agentctl tick [--once]                       # the processor (the tick loop)
+agentctl tick service install|uninstall|status   # the processor as launchd agent net.bitcashier.agentctl-waiting
 ```
 
-(`waiting check <id>`, `waiting check-batch <id>` and `waiting await` are internal: the executors and `land --follow`.)
+The old names (design §14.5) answer until 2026-11-05, each printing its new one: `waiting status` → `land status`,
+`waiting pause|resume` → `land hold|release`, `waiting cancel` → `land cancel`, `waiting run|service` → `tick
+[service]`, `red list|patrol` → `red status`. `queue` stays retired.
+
+(`waiting check <id>`, `waiting check-batch <id>`, `waiting await` and `watch` are internal: the executors and `land --follow`.)
 
 - **An unread gate is RED** (the owner, 2026-10-27). When the processor cannot read the gate (Forgejo, the tunnel or
   the token down) a production change waits and no batch is taken; one `UNKNOWN: ... cannot read the gate (…)` per
-  spell, and `waiting status` prints `gate: UNREAD, taken as red (…)`.
+  spell, and `land status` prints `gate: UNREAD, taken as red (…)`.
 - **The token hand-off.** A launchd service gets no answer from the vault, so the processor listens on a unix socket
-  (`/tmp/agentctl-<uid>/<hash>.sock`, 0600 in a 0700 dir; `$AGENTCTL_SOCK_DIR`). Every `land`, and `waiting status` /
+  (`/tmp/agentctl-<uid>/<hash>.sock`, 0600 in a 0700 dir; `$AGENTCTL_SOCK_DIR`). Every `land`, and `land status` /
   `resume` run where the vault answers, hand it the Forgejo token, kept in its memory and environment only (a re-exec
   keeps it; executors and fixers inherit it). After a reboot or a service restart: `AGENTCTL_INTERACTIVE=1
-  ~/bin/agentctl waiting status` from `~/projects/movies` with the vault unlocked (the service log then says `the
+  ~/bin/agentctl land status` from `~/projects/movies` with the vault unlocked (the service log then says `the
   Forgejo token was handed over`).
-- **As a service** (`waiting service install`, which the owner runs): KeepAlive, RunAtLoad, log
+- **As a service** (`tick service install`, which the owner runs): KeepAlive, RunAtLoad, log
   `~/.cache/agentctl/waiting/<repo>/service.log`. Wall-clock sleeps only, so it carries on after the laptop sleeps; a
   batch lands with no agent alive, its verdicts in the inbox.
 
@@ -953,8 +957,8 @@ replaces `net.bitcashier.agentctl-reap`, `net.bitcashier.agentctl-sweep` and `de
 - **`wait run` says "attached to existing waiter".** That is expected: another agent is already polling that run, and
   you will get the same verdict.
 - **The gate reads UNREAD and nothing lands.** The processor lost its Forgejo token (a service restart). Hand it over:
-  `cd ~/projects/movies && AGENTCTL_INTERACTIVE=1 ~/bin/agentctl waiting status` with the vault unlocked.
-- **The status line says `RECONCILER not running`.** `state.json` is stale: `agentctl waiting service status`, the
+  `cd ~/projects/movies && AGENTCTL_INTERACTIVE=1 ~/bin/agentctl land status` with the vault unlocked.
+- **The status line says `RECONCILER not running`.** `state.json` is stale: `agentctl tick service status`, the
   service log `~/.cache/agentctl/waiting/<repo>/service.log`, and `agentctl watchdog` (W5).
 - **Where is the fixer for red #N?** `claude agents` (by name), `agentctl red status`, `agentctl lease list red/`.
 - **WB: uncommitted edits in ~/bin.** Someone edited ~/bin's own checkout. Agentctl changes go in a worktree
