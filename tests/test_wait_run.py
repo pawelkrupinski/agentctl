@@ -100,13 +100,13 @@ class WaitRunTest(FakeForge):
         self.put("api-repos_pawelkrupinski_movies_actions_runs_9_artifacts.json",
                  {"artifacts": [{"name": "identity-takes-pl"}, {"name": "convergence-diagnostics-pl"}]})
         self.put("art-9-identity-takes-pl.txt", "identity takes (pl): lost 0, changed 0, gained 0")
-        rc, out, _ = self.tool("wait", "run", "9", "--until", "landable", "--timeout", "5")
+        rc, out, _ = self.tool("wait", "run", "9", "--repo", "movies", "--until", "landable", "--timeout", "5")
         self.assertEqual(rc, 0, out)
         self.assertIn("takes rows ended (2): all green", out)
         self.assertIn("[identity-takes-pl] identity takes (pl): lost 0", out)
         self.assertIn("scripts/identity-measure --run 9", out)
         # --until done waits for the whole run (its tail is still queued)
-        rc, out, _ = self.tool("wait", "run", "9", "--timeout", "1")
+        rc, out, _ = self.tool("wait", "run", "9", "--repo", "movies", "--timeout", "1")
         self.assertEqual(rc, 2, out)
 
     def test_landable_on_an_ordinary_run_waits_for_completion(self):
