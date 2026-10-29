@@ -1,7 +1,7 @@
 """A red's key is its failure, read the same way in every run (2026-10-29: Verify scrape recording's GermanyConvergenceSpec
 failure -- Bambi '(1989)' served as a B-Movie -- was three reds: #2406 keyed by a WARN line, #2481 by a
 FileNotFoundException, #2493 by its `::error` annotation; the fix waiting under `Fixes-Red: 2406` never held #2493's)."""
-import os, re, sys, time, unittest
+import json, os, re, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -176,6 +176,83 @@ class FixerClaimsAnotherRedTest(RedsBase):
         self.assertEqual(rc, 0, out)
         self.assertIn("noted on your lease", out)
         self.assertEqual(self.st.get(A.red_lease(key))["holder"], primary["holder"])
+
+
+class FixerIdentityTest(RedsBase):
+    """2026-10-29: the claude daemon (pid 31762) was spawned by #2473 fixer-5's wrapper, and every background session
+    since inherits its environment -- AGENTCTL_AGENT_NAME=red-fixer-2473, AGENTCTL_RED_FIXER=2473,
+    AGENTCTL_FIXER_RECORD=reds/2473/fixer-5.json -- so reds were 'RELEASED by red-fixer-2473' by whoever released them."""
+
+    def stale_env(self, sid):
+        os.makedirs(A.reds_dir("2473"), exist_ok=True)
+        rec = A.reds_dir("2473", "fixer-5.json")
+        A.write_json(rec, {"run": 2473, "workflow": "Identity model convergence", "session": "s-fixer-5",
+                           "started": "2026-10-29T10:28:58Z", "lease": "red/a0762f14066e"})
+        os.environ.update(AGENTCTL_AGENT_NAME="red-fixer-2473", AGENTCTL_RED_FIXER="2473", AGENTCTL_FIXER_RECORD=rec,
+                          CLAUDE_CODE_SESSION_ID=sid)
+        return rec
+
+    def tearDown(self):
+        for k in ("AGENTCTL_AGENT_NAME", "AGENTCTL_RED_FIXER", "AGENTCTL_FIXER_RECORD", "CLAUDE_CODE_SESSION_ID"):
+            os.environ.pop(k, None)
+        super().tearDown()
+
+    def test_an_inherited_fixer_environment_names_nobody(self):
+        self.stale_env("s-owner-1")
+        self.assertIsNone(A.own_fixer_record_path())
+        self.assertEqual(A.claimant(), "session s-owner-")
+        self.assertFalse(A.in_fixer())  # its `land` queues like any session's
+        self.tick()
+        it = self.only()
+        wt = self.r.worktree("movies-wt-owner", branch="owner")
+        rc, out = self.tool("red", "claim", "20", "--repo", "movies", cwd=wt)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("for session s-owner-", out)
+        rc, out = self.tool("red", "release", "20", "--repo", "movies", cwd=wt)
+        self.assertEqual(rc, 0, out)
+        row = self.st.get(A.red_lease(it["data"]["key"]))
+        self.assertEqual(A.lease_meta(row)["outcome"], "RELEASED by session s-owner-")
+
+    def test_a_fixer_says_who_it_is_and_its_session_is_bound(self):
+        self.stale_env("s-new-fixer")
+        os.makedirs(A.reds_dir("2527"), exist_ok=True)
+        mine = A.reds_dir("2527", "fixer-6.json")  # its wrapper has not yet seen its session id
+        A.write_json(mine, {"run": 2527, "workflow": "Identity model convergence", "lease": "red/a0762f14066e",
+                            "started": "2026-10-29T16:00:00Z"})
+        self.assertIsNone(A.own_fixer_record_path())
+        rc, out = self.tool("red", "claim", "2527", "--fixer", mine, "--note", "uk takes-drift", "--repo", "movies")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("noted on your lease", out)
+        self.assertEqual(A.own_fixer_record_path(), os.path.realpath(mine))
+        self.assertEqual(A.claimant(), "red-fixer-2527-6")
+        self.assertEqual(A.read_record(mine)["note"], "uk takes-drift")
+
+    def test_a_session_cannot_bind_another_sessions_record(self):
+        rec = self.stale_env("s-other")
+        rc, out = self.tool("red", "claim", "2473", "--fixer", rec, "--repo", "movies")
+        self.assertEqual(rc, 2, out)
+        self.assertIsNone(A.own_fixer_record_path())
+
+    def test_the_wrapper_starts_its_session_without_a_fixer_environment(self):
+        self.stale_env("s-dispatcher")
+        os.environ["FAKE_CLAUDE_SLEEP"] = "30"
+        try:
+            self.tick(dispatch=True)
+            recs = lambda: [r for r in A.fixer_records() if r.get("run") == 20]
+            t0 = time.time()
+            while not (recs() and recs()[0].get("session")
+                       and os.path.exists(A.fixer_session_path(recs()[0]["session"]))) and time.time() - t0 < 30:
+                time.sleep(0.1)
+            [rec] = recs()
+            out = os.environ["FAKE_CLAUDE_OUT"]
+            [started] = [json.load(open(os.path.join(out, n))) for n in os.listdir(out) if n.endswith(".json")]
+            for k in A.FIXER_IDENTITY_ENV:
+                self.assertNotIn(k, started["env"], k)
+            self.assertIn(f"red claim 20 --fixer {rec['path']}", " ".join(started["argv"]))
+            bound = A.read_record(A.fixer_session_path(rec["session"]))
+            self.assertEqual(bound["record"], rec["path"])
+        finally:
+            os.environ["FAKE_CLAUDE_SLEEP"] = "0"
 
 
 if __name__ == "__main__":
