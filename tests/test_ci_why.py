@@ -1,5 +1,5 @@
 """agentctl ci-why: the gate's two workflows (Main, convergence), newest decided run, infra vs test, the clearing rule."""
-import contextlib, io, os, sys, unittest
+import contextlib, io, os, subprocess, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -345,7 +345,13 @@ class CachedGateTest(CiWhyTest):
         self.assertEqual(sorted(os.listdir(os.path.dirname(self.gs))), ["state.json", "state.json.lock"])
 
     def test_processor_publishes_the_gate(self):
+        # A clone of its own whose forgejo remote names movies: never the laptop's ~/projects/movies (it read the real
+        # clone, ran the red tick on it and took 38 s, and failed where there is none -- a CI container)
+        import tempfile
+        clone = tempfile.mkdtemp()
+        subprocess.run(["git", "init", "-q", clone], check=True)
+        subprocess.run(["git", "-C", clone, "remote", "add", "forgejo", "ssh://forgejo-git/pawelkrupinski/movies.git"], check=True)
         self.scenario([])
         A._last_gate_publish[0] = 0
-        A.maybe_publish_gate(os.path.expanduser("~/projects/movies"))
-        self.assertTrue(A.cached_gate_summary(A.slug(os.path.expanduser("~/projects/movies")))[0] or os.path.exists(self.gs))
+        A.maybe_publish_gate(clone)
+        self.assertTrue(A.cached_gate_summary(A.slug(clone))[0] or os.path.exists(self.gs))

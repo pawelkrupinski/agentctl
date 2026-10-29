@@ -2995,6 +2995,7 @@ def allowed_roots():
 
 
 _skipped_paths = set()
+PROTECTED_DIRS = ("Desktop", "Documents", "Downloads")  # under HOME: never touched, even below an allowed root
 
 
 def allowed_path(path):
@@ -3004,8 +3005,9 @@ def allowed_path(path):
         return False
     n = os.path.normpath(path)
     h = HOME
-    ok = (n == f"{h}/bin" or n.startswith(f"{h}/bin/") or n.startswith(f"{h}/bin-wt-")
-          or any(n == r or n.startswith(r.rstrip("/") + "/") for r in allowed_roots()))
+    protected = any(n == f"{h}/{d}" or n.startswith(f"{h}/{d}/") for d in PROTECTED_DIRS)  # whatever root holds it
+    ok = not protected and (n == f"{h}/bin" or n.startswith(f"{h}/bin/") or n.startswith(f"{h}/bin-wt-")
+                            or any(n == r or n.startswith(r.rstrip("/") + "/") for r in allowed_roots()))
     if not ok and n not in _skipped_paths:
         _skipped_paths.add(n)
         err(f"skipped {n}: outside the roots background code may touch")
@@ -7284,11 +7286,12 @@ def laptop_pressure(m=None, swap=None):
 
 
 def cmd_suite(a):
-    """`agentctl suite [unittest args]`: agentctl's own test suite (default `discover -s tests`, in this directory)
-    under a governor ticket of class `suite` (SUITE_CAP at once): parallel agents queue here instead of piling up."""
-    args = list(a.args or []) or ["discover", "-s", "tests"]
+    """`agentctl suite [tests/run.py args]`: agentctl's own test suite (tests/run.py: parallel, a timeout per test; in
+    this directory) under a governor ticket of class `suite` (SUITE_CAP at once): parallel agents queue here instead of
+    piling up. Arguments are run.py's (-j N, --timeout S, PATTERN...)."""
+    args = list(a.args or [])
     with gov_ticket("suite", label=f"agentctl suite {os.path.basename(os.getcwd())}"):
-        return subprocess.run([sys.executable, "-m", "unittest"] + args).returncode
+        return subprocess.run([sys.executable, os.path.join("tests", "run.py")] + args).returncode
 
 
 def gov_class_of(repo, commits, reds):
@@ -17336,8 +17339,8 @@ def main(argv=None):
     gad.add_argument("--force", action="store_true", help="admit at once (memory already counted elsewhere)")
     gev = gvs.add_parser("evict", help="stop the idle kept sbt server unused longest")
     sui = sub.add_parser("suite", help="agentctl's own tests under the governor's `suite` ticket (one run at once): "
-                                       "`agentctl suite` = python3 -m unittest discover -s tests")
-    sui.add_argument("args", nargs=argparse.REMAINDER, help="unittest's arguments (default: discover -s tests)")
+                                       "`agentctl suite` = python3 tests/run.py (parallel, a timeout per test)")
+    sui.add_argument("args", nargs=argparse.REMAINDER, help="tests/run.py's arguments (-j N, --timeout S, PATTERN...)")
     gev.add_argument("--dry-run", action="store_true")
     ls_ = sub.add_parser("lease", help="the store's leases (debugging): `lease list [prefix]`")
     ls_.add_argument("lcmd", choices=("list",))
