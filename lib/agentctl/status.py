@@ -242,9 +242,8 @@ def render_red_status(m, verbose=False):
     if "error" in dp:
         out.append(f"dispatcher: unread ({dp['error']})")
     else:
-        ov = f", {dp['overflow_alive']}/{dp['overflow_cap']} overflow" if dp.get("overflow_alive") else ""
         out.append(f"dispatcher: {'OFF -- ' + dp['blocker'] if dp.get('blocker') else 'ON'}; fixers alive: "
-                   f"{dp['gate_alive']}/{dp['gate_cap']} gate, {dp['other_alive']}/{dp['other_cap']} other{ov}")
+                   f"{dp['alive']}/{dp['cap']}")
     return "\n".join(out)
 
 
@@ -277,10 +276,8 @@ def status_store_probe(st, t):
 
 
 def status_dispatcher(st, t):
-    sl, _alive = red_slots(st, t)
     return {"blocker": cached_dispatch_blocker(), "off_flag": os.path.exists(reds_dir("DISPATCH_OFF")),
-            "gate_alive": sl["gate"][0], "gate_cap": sl["gate"][1], "other_alive": sl["other"][0],
-            "other_cap": sl["other"][1], "overflow_alive": sl["overflow"][0], "overflow_cap": sl["overflow"][1],
+            "alive": len(red_fixers_alive(st, t)), "cap": red_cap(),
             "escalated": [{"type": typ, "id": it["id"], "words": words} for typ, it, words in escalated_now(st)]}
 
 

@@ -160,7 +160,7 @@ class DataTest(Base):
         self.assertEqual(h["tick_age"], 7)
         self.assertEqual(h["gate"][1]["url"], "http://localhost:3000/pawelkrupinski/movies/actions/runs/2473")
         self.assertEqual(d["store"]["reachable"], True)
-        self.assertEqual((d["dispatcher"]["gate_alive"], d["dispatcher"]["other_alive"]), (1, 0))
+        self.assertEqual((d["dispatcher"]["alive"], d["dispatcher"]["cap"]), (1, A.RED_FIXERS))
         self.assertEqual([e["id"] for e in d["dispatcher"]["escalated"]], ["k2"])
         reds = d["reds"]
         self.assertEqual([r["key"] for r in reds], ["k1", "k2"], "open reds only, gate first")

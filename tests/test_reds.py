@@ -150,11 +150,11 @@ class NeverNobodyTest(RedsBase):
         self.assertNotIn("NOBODY", self.why()[1])
 
     def test_at_capacity_the_offer_waits_saying_so(self):
-        os.environ["AGENTCTL_RED_GATE_MAX_FIXERS"] = "0"
+        os.environ["AGENTCTL_RED_FIXERS"] = "0"
         try:
             self.tick(dispatch=True)
         finally:
-            os.environ.pop("AGENTCTL_RED_GATE_MAX_FIXERS")
+            os.environ.pop("AGENTCTL_RED_FIXERS")
         it = self.only()
         self.assertEqual(it["state"], "offered")
         self.assertIn("capacity 0/0", self.st.offer_of(f"red:{it['id']}")["reason"])

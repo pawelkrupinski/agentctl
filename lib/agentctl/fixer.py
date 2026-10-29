@@ -978,6 +978,12 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
             obs = red_observe(o_r, repo, snap)
         except (Exception, SystemExit) as e:
             err(f"red tick: could not observe ({str(e)[:160]}): nothing opens or clears this tick")
+    try:
+        n = red_migrate(store)
+        if n:
+            acts.append(f"red model {RED_MODEL}: {n} open red(s) migrated in place")
+    except (Exception, SystemExit) as e:
+        err(f"red tick: the red model migration failed ({str(e)[:160]}); tried again next tick")
     facts = facts if facts is not None else red_fix_facts(repo, store)
     active, settled = red_active(store), None
     for key, ob in (obs or {}).items():

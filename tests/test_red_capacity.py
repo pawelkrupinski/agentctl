@@ -1,7 +1,8 @@
-"""FAIR FIXER CAPACITY (the owner, 2026-10-29: two reds of Verify scrape recording #2493 sat "offered, capacity 2/2"
-for 73 min while other fixers held every slot for hours). Each class keeps its reserved slots; a red that waited
-RED_CAPACITY_BORROW borrows an idle slot of the other class (the lender keeps one idle); at RED_CAPACITY_WINDOW it takes
-the overflow slot; with that taken too it is STARVED and escalates. Every wait names what it waits for and when."""
+"""THE RED QUEUE (docs/simplification-2026-10.md item 5; it replaced the gate/other/overflow classes of 2026-10-29's FAIR
+FIXER CAPACITY, when two reds of Verify scrape recording #2493 sat "offered, capacity 2/2" for 73 min while other
+fixers held every slot for hours): one priority queue, EXACTLY ONE FIXER PER FAMILY (a configured family, else the
+red's run), at most RED_FIXERS fixers in all; an offer waiting RED_STARVE with no slot is STARVED and escalates. Every
+wait names what it waits for and when."""
 import os, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -36,11 +37,10 @@ class CapacityBase(unittest.TestCase):
             os.environ[k] = str(v)
             self.envs[k] = v
 
-    def fixer(self, key, gate, run, slot=None, sibling_of=None):
+    def fixer(self, key, gate, run, sibling_of=None):
         meta = {"kind": "sibling" if sibling_of else "fixer", "gate": gate, "run": run, "workflow": "W"}
-        if slot:
-            meta["slot"] = slot
         holder = sibling_of or f"laptop:fixer:red-{key}-1"
+        self.st.put_item("red", key, "leased", {"key": key, "workflow": "W", "gate": gate, "last_run": {"number": run}})
         return self.st.acquire(A.red_lease(key), holder, A.RED_FIXER_TTL * 100, A.RED_FIXER_MAX, meta=meta)
 
     def offer(self, key, gate, run):
@@ -57,96 +57,94 @@ class CapacityBase(unittest.TestCase):
         return (self.st.offer_of(f"red:{key}") or {}).get("reason") or ""
 
 
-class FairCapacityTest(CapacityBase):
-    def other_full(self):
-        self.fixer("o1", False, 101)
-        self.fixer("o2", False, 102)
+class QueueTest(CapacityBase):
+    def full(self):
+        self.env(AGENTCTL_RED_FIXERS=2)
+        self.fixer("a", False, 101)
+        self.fixer("b", True, 102)
 
-    def test_a_full_class_waits_naming_its_own_classs_fixer_and_an_eta(self):
-        self.other_full()
-        self.fixer("g1", True, 200)  # the gate fixer frees no slot of the other class: never named as "next"
+    def test_at_capacity_an_offer_waits_naming_the_first_fixer_to_end_and_when(self):
+        self.full()
         self.offer("x", False, 300)
         self.dispatch()
-        r = self.reason("x")
-        self.assertIn("capacity 2/2 other", r)
-        self.assertNotIn("red-g1-1", r)
-        self.assertRegex(r, r"next slot when laptop:fixer:red-o[12]-1 ends by \d\d:\d\d or borrows an idle gate slot at "
-                            r"\d\d:\d\d or overflow at \d\d:\d\d")
+        self.assertRegex(self.reason("x"), r"^capacity 2/2, waiting 0 min; next slot when laptop:fixer:red-[ab]-1 ends "
+                                           r"by \d\d:\d\d$")
         self.assertEqual(self.spawned, [])
 
-    def test_past_the_borrow_wait_it_takes_an_idle_gate_slot_leaving_one_idle(self):
-        self.other_full()
-        self.fixer("g1", True, 200)
+    def test_past_its_window_the_waiting_offer_is_starved(self):
+        self.full()
         self.offer("x", False, 300)
-        self.offer("y", False, 301)
-        self.dispatch()
-        self.dispatch(advance=A.RED_CAPACITY_BORROW + 1)
-        self.assertEqual(self.spawned, ["x"])
-        self.assertEqual(A.lease_meta(self.st.get(A.red_lease("x")))["slot"], "gate")
-        sl, _ = A.red_slots(self.st, self.t[0])
-        self.assertEqual((sl["gate"], sl["other"]), ((2, 3), (2, 2)))
-        # the gate's last idle slot is its reserve: the second waiting red does not borrow it
-        self.assertIn("capacity 2/2 other", self.reason("y"))
+        self.dispatch(advance=A.RED_STARVE + 1)
+        self.assertTrue(self.reason("x").startswith("STARVED: capacity 2/2"), self.reason("x"))
 
-    def test_at_its_window_it_takes_the_overflow_slot_and_past_that_it_is_starved(self):
-        self.env(AGENTCTL_RED_GATE_MAX_FIXERS=1)
-        self.other_full()
-        self.fixer("g1", True, 200)
-        self.offer("x", False, 300)
-        self.offer("y", False, 301)
-        self.dispatch()
-        self.dispatch(advance=A.RED_CAPACITY_BORROW + 1)
-        self.assertEqual(self.spawned, [])  # nothing idle to borrow
-        self.dispatch(advance=A.RED_CAPACITY_WINDOW - A.RED_CAPACITY_BORROW)
-        self.assertEqual(self.spawned, ["x"])
-        self.assertEqual(A.lease_meta(self.st.get(A.red_lease("x")))["slot"], "overflow")
-        self.assertTrue(self.reason("y").startswith("STARVED: capacity 2/2 other"), self.reason("y"))
-        self.assertIn("overflow 1/1 taken", self.reason("y"))
-        self.assertIn("1/1 overflow", A.red_slots_line(self.st, self.t[0]))
+    def test_a_freed_slot_goes_to_the_highest_priority_offer(self):
+        self.env(AGENTCTL_RED_FIXERS=1)
+        took = self.fixer("a", False, 101)
+        self.offer("outside", False, 300)
+        self.dispatch(advance=60)
+        self.offer("gate", True, 301)  # newer, but the gate's
+        self.st.release(A.red_lease("a"), took["epoch"], took["secret"])
+        self.dispatch(advance=60)
+        self.assertEqual(self.spawned, ["gate"])
+        self.assertIn("capacity 1/1", self.reason("outside"))
 
-    def test_the_gate_keeps_its_reserve_and_borrows_too(self):
-        self.env(AGENTCTL_RED_GATE_MAX_FIXERS=1)
-        self.fixer("g1", True, 200)
-        self.offer("g2", True, 201)
+    def test_one_family_one_fixer_its_other_reds_taken_with_it(self):
+        self.offer("x", True, 300)
+        self.offer("y", True, 300)   # the same run: the same queue family
+        self.offer("z", True, 301)   # another run: a family of its own
         self.dispatch()
-        self.assertIn("capacity 1/1 gate", self.reason("g2"))
-        self.dispatch(advance=A.RED_CAPACITY_BORROW + 1)  # the other class has 2 idle: lends one, keeps one
-        self.assertEqual(self.spawned, ["g2"])
-        self.assertEqual(A.lease_meta(self.st.get(A.red_lease("g2")))["slot"], "other")
+        self.assertEqual(sorted(self.spawned), ["x", "z"])
+        self.assertEqual(self.st.get(A.red_lease("y"))["holder"], self.st.get(A.red_lease("x"))["holder"])
+        self.assertEqual(A.lease_meta(self.st.get(A.red_lease("x")))["family"], "run:W#300")
 
-    def test_one_fixer_holding_its_runs_several_reds_is_one_slot(self):
+    def test_one_fixer_holding_several_reds_is_one_slot(self):
         self.fixer("g1", True, 200)
         self.fixer("g1b", True, 200, sibling_of="laptop:fixer:red-g1-1")
         self.fixer("g1c", True, 200, sibling_of="laptop:fixer:red-g1-1")
-        sl, _ = A.red_slots(self.st, self.t[0])
-        self.assertEqual(sl["gate"], (1, 3))
+        self.assertEqual(A.red_slots_line(self.st, self.t[0]), f"1/{A.RED_FIXERS}")
 
-    def test_a_slot_frees_and_the_waiting_red_takes_its_own_class(self):
-        took = self.fixer("o1", False, 101)
-        self.fixer("o2", False, 102)
-        self.offer("x", False, 300)
-        self.dispatch()
-        self.assertEqual(self.spawned, [])
-        self.st.release(A.red_lease("o1"), took["epoch"], took["secret"])
-        self.dispatch(advance=60)
-        self.assertEqual(self.spawned, ["x"])
-        self.assertEqual(A.lease_meta(self.st.get(A.red_lease("x")))["slot"], "other")
+
+class MigrationTest(CapacityBase):
+    """The store's open reds are migrated in place to the queue model: old data in, the identity fields out, once."""
+
+    def test_old_red_data_is_migrated_in_place_once_and_terminal_reds_are_left_alone(self):
+        old = {"key": "k1", "workflow": "Identity model convergence", "jobs": ["leg (poland)"],
+               "line": "[info] - FooSpec should bar *** FAILED *** (12 ms)", "last_run": {"number": 7}}
+        self.st.put_item("red", "k1", "offered", old)
+        self.st.put_item("red", "k2", "verified", {"key": "k2", "workflow": "Main", "line": "x"})
+        self.st.acquire(A.red_lease("k1"), "laptop:fixer:red-k1-1", 600, 3600,
+                        meta={"kind": "fixer", "gate": True, "slot": "overflow"})  # the capacity classes' lease meta
+        self.assertIsNone(self.st.meta_get("red_model"))
+        self.assertEqual(A.red_migrate(self.st), 1)
+        d = self.st.item("red", "k1")["data"]
+        self.assertEqual(d["family"], A.red_family(old))
+        self.assertEqual(d["signature"], A.norm_line(old["line"]))
+        self.assertEqual({k: d[k] for k in old}, old, "nothing else changes")
+        self.assertNotIn("signature", self.st.item("red", "k2")["data"])
+        self.assertEqual(int(self.st.meta_get("red_model")), A.RED_MODEL)
+        self.assertEqual(A.red_migrate(self.st), 0, "once")
+        self.assertEqual(len(A.red_fixers_alive(self.st, self.t[0])), 1, "an old lease still counts as its fixer")
+
+    def test_a_new_red_is_born_in_the_model(self):
+        self.st.meta_set("red_model", A.RED_MODEL)
+        ob = {"key": "k3", "workflow": "W", "jobs": ["j"], "job": "j", "kind": "infra", "line": None, "red_kind": "outside",
+              "gate": False, "names": {"5"}, "run": {"number": 5}, "runs_list": []}
+        d = A.red_open(self.st, ob, None, self.t[0])["data"]
+        self.assertEqual((d["signature"], d["family"]), (None, None))
+        self.assertEqual(A.red_queue_family(d), "run:W#5")
 
 
 class StarvedEscalatesTest(RedsBase):
     def test_a_red_past_its_capacity_window_escalates_as_starved_and_stays_offered(self):
-        os.environ["AGENTCTL_RED_GATE_MAX_FIXERS"] = "0"
-        os.environ["AGENTCTL_RED_MAX_FIXERS"] = "0"
-        os.environ["AGENTCTL_RED_OVERFLOW_FIXERS"] = "0"
+        os.environ["AGENTCTL_RED_FIXERS"] = "0"
         try:
             self.tick(dispatch=True)
             it = self.only()
-            self.assertIn("capacity 0/0 gate, waiting", self.st.offer_of(f"red:{it['id']}")["reason"])
-            self.tick(dispatch=True, advance=A.RED_CAPACITY_WINDOW + 1, snap=False)  # the dispatcher marks it starved
+            self.assertIn("capacity 0/0, waiting", self.st.offer_of(f"red:{it['id']}")["reason"])
+            self.tick(dispatch=True, advance=A.RED_STARVE + 1, snap=False)  # the dispatcher marks it starved
             self.tick(dispatch=True, advance=1, snap=False)  # the tick escalates it
         finally:
-            for k in ("AGENTCTL_RED_GATE_MAX_FIXERS", "AGENTCTL_RED_MAX_FIXERS", "AGENTCTL_RED_OVERFLOW_FIXERS"):
-                os.environ.pop(k)
+            os.environ.pop("AGENTCTL_RED_FIXERS")
         it = self.only()
         self.assertEqual(it["state"], "offered")
         esc = [e for e in self.st.events() if e["severity"] == "escalate" and "RED STARVED" in e["text"]]
@@ -167,8 +165,7 @@ class LaptopPressureTest(CapacityBase):
         self.assertEqual(self.spawned, [])
         self.assertEqual(self.reason("x"), "waiting: laptop pressure (swap 30.4 of 31.7 GB used)")
         self.assertIsNone(self.st.get(A.red_lease("x")))
-        sl, _ = A.red_slots(self.st, self.t[0])
-        self.assertEqual(sl["gate"][0], 0)
+        self.assertEqual(A.red_fixers_alive(self.st, self.t[0]), [])
         self.env(AGENTCTL_LAPTOP_PRESSURE="-")
         self.dispatch(advance=60)
         self.assertEqual(self.spawned, ["x"])

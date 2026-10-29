@@ -39,7 +39,6 @@ RED_FIX_DECIDE = 3 * 3600
 # on-demand workflow never gets, a fix id that is None) is offered again with that fix set aside (`unverified`): a
 # fixer decides, never a resting state.
 RED_FIX_GIVEUP = 2 * RED_FIX_DECIDE
-RED_CAPS = {"gate": ("AGENTCTL_RED_GATE_MAX_FIXERS", 3), "other": ("AGENTCTL_RED_MAX_FIXERS", 2)}
 RED_PRIORITY = {"gate": 0, "fix": 1, "outside": 2, "flake": 3}
 RED_RECURRING = 3            # landed fixes the same failure outlived: `recurring`, and its fixer hunts the root cause
 RED_TICK_INTERVAL = 15       # seconds between the processor's red ticks ($AGENTCTL_RED_TICK)
@@ -947,6 +946,7 @@ def red_open(store, ob, repo, t):
             "line": ob["line"], "red_kind": ob["red_kind"], "gate": ob["gate"], "predicts": ob.get("predicts"),
             "runs": sorted(ob["names"]), "last_run": ob["run"], "opened_at": t, "attempts": 0, "history": [],
             "derived": ob.get("derived") or [], "classifier": classifier_version()}
+    data.update(red_identity(data))
     if ob["kind"] == "test" and ob["red_kind"] in ("gate", "outside"):
         try:
             data["author"] = red_author(repo, ob, t)
@@ -1142,7 +1142,7 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
             return [f"blocked {red_what(d)}"]
         off = store.offer_of(f"red:{it['id']}") or {}
         if str(off.get("reason") or "").startswith("STARVED") and d.get("starved") != off.get("id"):
-            # past its capacity window with even the overflow slot taken: escalated NOW (then every cycle, below)
+            # waited past RED_STARVE with no free fixer slot: escalated NOW (then every cycle, below)
             text = f"RED STARVED: {red_what(d)}: no fixer slot for {fmt_age(t - float(off.get('opened_at') or t))} ({off['reason']})"
             red_offer(store, it, text, data={"starved": off.get("id")}, escalate=True,
                       verdict=text + f" -- `~/bin/agentctl red claim {key} --worktree <yours>` to take it")
@@ -1694,7 +1694,7 @@ def red_import_claims(store, active, t):
 
 # -- the dispatcher (the phase-2 shape: offers and leases only)
 def red_fixers_alive(store, t):
-    """One row per live FIXER (a fixer holding its run's several red leases counts once)."""
+    """One row per live FIXER (a fixer holding several reds' leases counts once)."""
     out = {}
     for r in store.list("red/"):
         if lease_is_live(r, t) and lease_meta(r).get("kind") in ("fixer", "legacy-fixer", "sibling"):
@@ -1702,105 +1702,113 @@ def red_fixers_alive(store, t):
     return list(out.values())
 
 
-def red_cap(cls):
-    if cls == "overflow":
-        return int(env_num("AGENTCTL_RED_OVERFLOW_FIXERS", RED_OVERFLOW))
-    env, default = RED_CAPS[cls]
-    return int(env_num(env, default))
+# ONE RED MODEL (docs/simplification-2026-10.md item 5; replaces the gate/other/overflow capacity classes, the borrow
+# and the separate one-run and one-family rules). A red is (workflow, failing job, signature) -- `key` hashes the
+# workflow and the signature (the normalized first error line; the job when none was read), `jobs` are every job
+# failing that way and `derived` the cascade jobs that only fail because of it. Every red belongs to ONE QUEUE FAMILY:
+# its configured family (red-families.json: convergence, ...), else its run (`run:<workflow>#<number>`). The open
+# fixer offers are ONE PRIORITY QUEUE (gate < fix < outside < flake, then a test failure first, then the oldest), and
+# the dispatcher keeps EXACTLY ONE FIXER PER FAMILY: a family whose fixer is at work gets each new red under that
+# fixer's lease (a sibling, told in RED-INBOX.md); a family with none gets one fixer, its other open offers taken with
+# it, while fewer than RED_FIXERS fixers are alive in all. One family never holds two slots, so no class reserves are
+# needed for fairness; an offer that waits RED_STARVE with no slot escalates as STARVED (then every cycle). Every wait
+# names what it waits for and when.
+RED_FIXERS = 5           # live fixers at once, every family together ($AGENTCTL_RED_FIXERS)
+RED_STARVE = 45 * 60     # an offer waiting this long for a slot is STARVED ($AGENTCTL_RED_STARVE)
 
 
-# FAIR CAPACITY (the owner, 2026-10-29: two reds outside the gate sat "offered, capacity 2/2" for 73 min while the gate
-# red's 9th fixer ran for hours). Each class keeps its own reserved slots (gate 3, other 2: a class never takes the
-# other's last idle slot). A red that waited RED_CAPACITY_BORROW for its class may BORROW an idle slot of the other
-# class, leaving the lender at least one idle; a red still waiting at RED_CAPACITY_WINDOW takes an OVERFLOW slot (one,
-# beyond the caps) and, when even that is taken, ESCALATES as starved (RED STARVED) every cycle. No running fixer is
-# killed for it: its work is never thrown away, and the window bounds every wait. One fixer holding its run's several
-# reds is one slot (red_fixers_alive counts holders, not leases).
-RED_CAPACITY_BORROW = 20 * 60   # $AGENTCTL_RED_CAPACITY_BORROW
-RED_CAPACITY_WINDOW = 45 * 60   # $AGENTCTL_RED_CAPACITY_WINDOW
-RED_OVERFLOW = 1                # $AGENTCTL_RED_OVERFLOW_FIXERS
+def red_queue_family(d):
+    """The queue family of a red (its data, its picture, a fixer record): the configured family, else its run."""
+    fam = red_family(d)
+    if fam:
+        return fam
+    run = d.get("run") if d.get("run") is not None else d.get("last_run")
+    num = run.get("number") if isinstance(run, dict) else run
+    return f"run:{d.get('workflow')}#{num}"
 
 
-def red_slot_of(row):
-    """The slot a live fixer holds: its lease's `slot` (gate, other, overflow), else its class."""
-    m = lease_meta(row)
-    return m.get("slot") or ("gate" if m.get("gate") else "other")
+RED_MODEL = 2  # the store's red data model (meta red_model): 2 = the queue (item 5); red_migrate brings older data up
 
 
-def red_slots(store, t, alive=None):
-    """{gate, other, overflow: (alive, cap)} and the live fixers, by the slot each holds."""
-    alive = red_fixers_alive(store, t) if alive is None else alive
-    out = {c: (sum(1 for r in alive if red_slot_of(r) == c), red_cap(c)) for c in ("gate", "other", "overflow")}
-    return out, alive
+def red_identity(d):
+    """A red's identity fields: its signature (the normalized first error line, None when none was read) and its
+    configured family (None: its run is its queue family)."""
+    return {"signature": norm_line(d.get("line")) or None, "family": red_family(d)}
+
+
+def red_migrate(store):
+    """IN-PLACE MIGRATION to RED_MODEL, once per store (meta red_model), run by the tick: every open red gets its
+    identity fields (signature, family). The capacity classes' lease meta (`slot`) needs nothing: it is no longer read,
+    and a fixer's lease ends with it. Idempotent; a red another writer moved meanwhile is done at the next tick.
+    Returns how many reds it updated."""
+    if int(store.meta_get("red_model", 1) or 1) >= RED_MODEL:
+        return 0
+    n, left = 0, 0
+    for it in store.items("red"):
+        if it["state"] in RED_TERMINAL:
+            continue
+        want = red_identity(it["data"])
+        if all(k in it["data"] and it["data"][k] == v for k, v in want.items()):
+            continue
+        try:
+            store.update_item("red", it["id"], it["version"], want)
+            n += 1
+        except StaleVersion:
+            left += 1
+    if not left:
+        store.meta_set("red_model", RED_MODEL)
+    return n
+
+
+def red_cap():
+    return int(env_num("AGENTCTL_RED_FIXERS", RED_FIXERS))
 
 
 def red_slots_line(store, t):
-    sl, _alive = red_slots(store, t)
-    ov = f", {sl['overflow'][0]}/{sl['overflow'][1]} overflow" if sl["overflow"][0] else ""
-    return f"{sl['gate'][0]}/{sl['gate'][1]} gate, {sl['other'][0]}/{sl['other'][1]} other{ov}"
+    return f"{len(red_fixers_alive(store, t))}/{red_cap()}"
 
 
-def red_capacity(store, cls, waited, t, alive=None):
-    """(slot, why): the slot an offer of class `cls` that has waited `waited` seconds takes now (its own class, a
-    borrowed idle one, overflow), or None and why it waits -- with what it waits for and WHEN (its ETA)."""
-    sl, alive = red_slots(store, t, alive)
-    n, cap = sl[cls]
+def red_capacity(store, waited, t, alive=None):
+    """(True, None) when a fixer may start now (fewer than RED_FIXERS alive), else (False, why): what it waits for and
+    WHEN, `STARVED: ...` past RED_STARVE."""
+    alive = red_fixers_alive(store, t) if alive is None else alive
+    n, cap = len(alive), red_cap()
     if n < cap:
-        return cls, None
-    lender = "other" if cls == "gate" else "gate"
-    borrow_at, window_at = env_num("AGENTCTL_RED_CAPACITY_BORROW", RED_CAPACITY_BORROW), \
-        env_num("AGENTCTL_RED_CAPACITY_WINDOW", RED_CAPACITY_WINDOW)
-    if waited >= borrow_at and sl[lender][1] - sl[lender][0] >= 2:
-        return lender, None
-    if waited >= window_at and sl["overflow"][0] < sl["overflow"][1]:
-        return "overflow", None
-    mine = [r for r in alive if red_slot_of(r) in (cls, "overflow")]
-    first = min(mine, key=lambda r: float(r.get("max_until") or r.get("expires_at") or 0)) if mine else None
+        return True, None
+    first = min(alive, key=lambda r: float(r.get("max_until") or r.get("expires_at") or 0)) if alive else None
     hm = lambda x: time.strftime("%H:%M", time.localtime(x))
-    eta = []
-    if first:
-        eta.append(f"{first['holder']} ends by {hm(float(first.get('max_until') or first.get('expires_at')))}")
-    since = t - waited
-    if waited < borrow_at:
-        eta.append(f"borrows an idle {lender} slot at {hm(since + borrow_at)}" if sl[lender][1] > 1 else "")
-    if waited < window_at:
-        eta.append(f"overflow at {hm(since + window_at)}" if sl["overflow"][1] else "")
-    eta = [e for e in eta if e]
-    head = f"capacity {n}/{cap} {cls}, waiting {fmt_age(waited)}"
-    if waited >= window_at:
-        return None, (f"STARVED: {head}, past its {fmt_age(window_at)} window, overflow "
-                      f"{sl['overflow'][0]}/{sl['overflow'][1]} taken" + (f"; next slot when {eta[0]}" if eta else ""))
-    return None, head + (f"; next slot when {' or '.join(eta)}" if eta else "")
+    eta = f"; next slot when {first['holder']} ends by {hm(float(first.get('max_until') or first.get('expires_at')))}" \
+        if first else ""
+    starve = env_num("AGENTCTL_RED_STARVE", RED_STARVE)
+    head = f"capacity {n}/{cap}, waiting {fmt_age(waited)}"
+    if waited >= starve:
+        return False, f"STARVED: {head}, past its {fmt_age(starve)} window{eta}"
+    return False, head + eta
 
 
 def red_run_of(pic):
     return (pic.get("workflow"), str((pic.get("run") or {}).get("number")))
 
 
-def red_run_holder(store, run, t):
-    """The live red lease on any red of this (workflow, run number), or None: one run, one fixer, whoever holds it."""
-    for it in red_active(store).values():
-        d = it["data"]
-        if (d.get("workflow"), str((d.get("last_run") or {}).get("number"))) != run:
+def red_family_holder(store, fam, t, active=None):
+    """The live primary lease (a fixer's own, not a sibling) on a red of queue family fam, or None."""
+    if not fam:
+        return None
+    active = active if active is not None else red_active(store)
+    for row in store.list("red/"):
+        if not lease_is_live(row, t) or lease_meta(row).get("kind") not in ("fixer", "legacy-fixer"):
             continue
-        row = store.get(red_lease(d["key"]))
-        if lease_is_live(row, t):
+        it = active.get(row["name"].split("/", 1)[1])
+        if it and red_queue_family(it["data"]) == fam:
             return row
-    # a fixer process still alive on the run without a lease (one from before the leases, whose imported lease lapsed):
-    # it is still at work, so no second fixer goes beside it -- the wrapper's wall time bounds it
-    for r in fixer_records():
-        if r["alive"] and (r.get("workflow"), str(r.get("run"))) == run:
-            return {"holder": f"pid {r.get('pid')} ({str(r.get('worktree') or '?').replace(HOME, '~')}, no lease)",
-                    "acquired_at": 0}
-    return None
+    return None  # a fixer still alive on it WITHOUT a lease is previous_fixer_working's: never a second one beside it
 
 
 def red_dispatcher(store, o_r, repo, t):
-    """Take the open fixer offers, highest priority first (within a run: a test failure first), within the slots
-    (red_capacity: gate 3 and other 2 reserved, an idle slot borrowed after RED_CAPACITY_BORROW, one overflow past
-    RED_CAPACITY_WINDOW) and while dispatch can run. ONE RUN, ONE FIXER: the run's other open offers are taken with it,
-    under the same holder (its fixer renews and releases them all); a run whose fixer is already on it waits for that
-    fixer. An offer that cannot be taken says why (its escalation names it)."""
+    """THE QUEUE (see ONE RED MODEL above): the open fixer offers, highest priority first; per queue family exactly one
+    fixer -- a new red of a family at work joins its fixer, a family with none is dispatched once (its other open
+    offers taken with it) while a slot is free and dispatch can run. An offer that cannot be taken says why (its
+    escalation names it)."""
     acts = []
     offs = store.offers("fixer")
     if not offs:
@@ -1822,35 +1830,22 @@ def red_dispatcher(store, o_r, repo, t):
     for off in offs:
         if off["id"] in gone:
             continue
-        pic, cls = off["picture"], ("gate" if off["picture"].get("gate") else "other")
-        alive = red_fixers_alive(store, t)
-        slot, cap_why = red_capacity(store, cls, t - float(off.get("opened_at") or t), t, alive)
-        fam = red_family(pic)
-        fam_row = red_family_holder(store, fam, t) if fam and off["tier"] not in ("revert",) else None
-        if fam_row and fam_row["name"] != off["lease"]:
+        pic = off["picture"]
+        fam = red_queue_family(pic)
+        holder = red_family_holder(store, fam, t) if off["tier"] != "revert" else None
+        if holder and holder["name"] != off["lease"]:
             # ONE FIXER PER FAMILY: a new red of a family whose fixer is at work is that fixer's -- under its lease
-            took = store.take(off["id"], fam_row["holder"], RED_FIXER_TTL, RED_FIXER_MAX,
-                              meta={**lease_meta(fam_row), "kind": "sibling", "primary": fam_row["name"], "family": fam,
+            took = store.take(off["id"], holder["holder"], RED_FIXER_TTL, RED_FIXER_MAX,
+                              meta={**lease_meta(holder), "kind": "sibling", "primary": holder["name"], "family": fam,
                                     "outcome": None, "notes": None})
             if took and "epoch" in took:
-                red_family_tell(fam_row, pic, fam)
+                red_family_tell(holder, pic, fam)
                 acts.append(f"{pic.get('workflow')} #{(pic.get('run') or {}).get('number')}: red {pic['key']} joined "
-                            f"its family {fam}'s fixer {fam_row['holder']}")
-            continue
-        on_run = red_run_holder(store, red_run_of(pic), t)
-        if on_run and on_run.get("name", "").startswith("red/") and off["tier"] not in ("revert",):
-            # ONE RUN, ONE FIXER: a red of a run whose fixer is at work is that fixer's -- leased to it at once, renewed
-            # while the fixer's own lease lives (the same truth in the state, the status line and the escalations)
-            took = store.take(off["id"], on_run["holder"], RED_FIXER_TTL, RED_FIXER_MAX,
-                              meta={**lease_meta(on_run), "kind": "sibling",
-                                    "primary": lease_meta(on_run).get("primary") or on_run["name"],
-                                    "outcome": None, "notes": None})
-            if took and "epoch" in took:
-                acts.append(f"{off['picture'].get('workflow')} #{(off['picture'].get('run') or {}).get('number')}: "
-                            f"red {off['picture']['key']} joined its run's fixer {on_run['holder']}")
+                            f"its family {fam}'s fixer {holder['holder']}")
             continue
         item = store.item("red", off["item"].split(":", 1)[1]) or {"data": {}}
         after = float(item["data"].get("dispatch_after") or 0)
+        free, cap_why = red_capacity(store, t - float(off.get("opened_at") or t), t)
         if off["tier"] == "author":
             why = f"offered to its author ({str((pic.get('author') or {}).get('worktree') or '?').replace(HOME, '~')})"
         elif after > t:
@@ -1860,12 +1855,10 @@ def red_dispatcher(store, o_r, repo, t):
             why = blocker
         elif laptop():  # no new fixer on a laptop under pressure: offered still, no slot taken
             why = f"waiting: laptop pressure ({laptop()})"
-        elif on_run:
-            why = f"its run's fixer {on_run['holder']} is on the run; this red is offered again when it ends"
-        elif (prev := previous_fixer_working(pic.get("key"), red_run_of(pic), sessions, fam)):
+        elif (prev := previous_fixer_working(pic.get("key"), red_run_of(pic), sessions, red_family(pic))):
             why = (f"its previous fixer {prev} is still at work on it: it stays the holder (its lease is taken again "
                    "for it); this red is offered again when it ends")
-        elif slot is None:
+        elif not free:
             why = cap_why
         else:
             why = None
@@ -1874,18 +1867,18 @@ def red_dispatcher(store, o_r, repo, t):
                 store.offer_reason(off["id"], why)
             continue
         num = (pic.get("run") or {}).get("number")
-        holder = f"laptop:fixer:red-{pic['key']}-{int(pic.get('attempts') or 0) + 1}"
-        meta = {"kind": "fixer", "gate": cls == "gate", "slot": slot, "tier": off["tier"], "run": num,
+        holder_id = f"laptop:fixer:red-{pic['key']}-{int(pic.get('attempts') or 0) + 1}"
+        meta = {"kind": "fixer", "gate": bool(pic.get("gate")), "family": fam, "tier": off["tier"], "run": num,
                 "workflow": pic.get("workflow")}
-        took = store.take(off["id"], holder, RED_FIXER_TTL, RED_FIXER_MAX, meta=meta)
+        took = store.take(off["id"], holder_id, RED_FIXER_TTL, RED_FIXER_MAX, meta=meta)
         if not took or "held" in took or "gone" in took:
             continue
         extra = []
         if off["tier"] not in ("revert", "resume"):
             for sib in offs:
                 if sib["id"] != off["id"] and sib["id"] not in gone and sib["tier"] not in ("author", "revert", "resume") \
-                        and (red_run_of(sib["picture"]) == red_run_of(pic) or (fam and red_family(sib["picture"]) == fam)):
-                    st_ = store.take(sib["id"], holder, RED_FIXER_TTL, RED_FIXER_MAX, meta=meta)
+                        and red_queue_family(sib["picture"]) == fam:
+                    st_ = store.take(sib["id"], holder_id, RED_FIXER_TTL, RED_FIXER_MAX, meta=meta)
                     if st_ and "epoch" in st_:
                         extra.append({"name": sib["lease"], "epoch": st_["epoch"], "secret": st_["secret"],
                                       "picture": sib["picture"]})

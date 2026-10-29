@@ -671,7 +671,7 @@ function header(s){const h=s.header||{},st=s.store||{},dp=s.dispatcher||{};let o
  <div class="card"><div class="k">reconciler tick</div><div class="v">${tickAge==null?chip("never","bad"):chip(Math.round(tickAge)+" s ago",tickAge>120?"bad":"ok")} <span class="mute">${tickSrc}</span></div></div>
  <div class="card"><div class="k">store</div><div class="v">${st.reachable?chip("reachable","ok"):chip("unreachable","bad")} <span class="mute mono">${E(st.remote||"local")}${st.ms!=null?" · "+st.ms+" ms":""}</span>${st.error?`<div class="mute">${E(st.error)}</div>`:""}</div></div>
  <div class="card"><div class="k">network / tunnel</div><div class="v">${chip("net "+net,net==="ok"?"ok":"bad")} ${chip("tunnel "+tunTxt,tunTxt==="ok"?"ok":"bad")}</div></div>
- <div class="card"><div class="k">dispatcher · fixers</div><div class="v">${chip(disp)} gate ${E(dp.gate_alive??"?")}/${E(dp.gate_cap??"?")} · other ${E(dp.other_alive??"?")}/${E(dp.other_cap??"?")}${dp.overflow_alive?` · overflow ${E(dp.overflow_alive)}/${E(dp.overflow_cap)}`:""}${dp.blocker?`<div class="mute">${E(dp.blocker)}</div>`:""}${dp.error?`<div class="mute">${E(dp.error)}</div>`:""}</div></div>
+ <div class="card"><div class="k">dispatcher · fixers</div><div class="v">${chip(disp)} fixers ${E(dp.alive??"?")}/${E(dp.cap??"?")}${dp.blocker?`<div class="mute">${E(dp.blocker)}</div>`:""}${dp.error?`<div class="mute">${E(dp.error)}</div>`:""}</div></div>
  <div class="card"><div class="k">waiting · checking</div><div class="v">${(h.waiting||[]).length} · ${(h.queued||[]).length} <span class="mute">code ${E(h.code||"?")}</span></div></div>
  </div>`;
  if(h.line)o+=`<div class="line">${E(h.line)}</div>`;

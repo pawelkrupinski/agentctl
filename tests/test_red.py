@@ -42,7 +42,7 @@ class RedBase(unittest.TestCase):
                     "CLAUDE_CODE_SESSION_ID": "", "AGENTCTL_AGENT_NAME": "", "AGENTCTL_CLAIM_PID": "",
                     # a dispatched fixer running these tests: its own record is never a test's lease to note on
                     "AGENTCTL_RED_FIXER": "", "AGENTCTL_FIXER_RECORD": "", "AGENTCTL_RED_MAX_FIXERS": "", "AGENTCTL_RED_DAILY_CAP": "",
-                    "AGENTCTL_RED_MAX_OUTSIDE": "", "AGENTCTL_RED_GATE_MAX_FIXERS": "",
+                    "AGENTCTL_RED_FIXERS": "",
                     "AGENTCTL_NOTIFY": "true", "AGENTCTL_INBOX_ESCALATE_MIN": "",
                     "AGENTCTL_LAPTOP_PRESSURE": "-"}
         self.env["AGENTCTL_STATE_ROOT"] = os.path.join(t, "state-root")  # its own store: no other test's items or leases
