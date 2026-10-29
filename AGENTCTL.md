@@ -436,13 +436,17 @@ The owner (2026-10-27): "i want gate status to point to agent(s) fixing the red 
 agent must be assigned to it".
 
 - **One cause, many reds.** A red is keyed by its failure SIGNATURE: workflow + failing job + its first relevant log
-  line, normalized (numbers, shas, 0x hex, timestamps, temp paths out). A newer run failing the same way is the same
+  line, normalized (numbers, shas, 0x hex, timestamps, temp paths out). The first relevant line: a STRONG line of the
+  failed step's slice, else the job's own `::error` annotations (its whole log), else the slice's weak lines. Cached
+  signatures carry the classifier version (patterns and line choice); stale ones are read again, a few streak runs per
+  tick, and a red keyed by an older classifier whose run now fails under another red's key is MERGED into it (runs,
+  history, refuted fixes: a `Fixes-Red:` link carries over). A newer run failing the same way is the same
   red: a claim or a `Fixes-Red:` naming any run WITH THAT SIGNATURE still counts. A red's run names are only the runs
   that failed with its signature, never the whole streak, and a claim counts for the signatures it names: a fix for
   job A never counts for job B (2026-10-27: `Fixes-Red: 2104`, a `capture (uk)` fix, was shown as a failed fix of
   #2133's `publish`). One fixer per red run covers all its signatures.
-- **Fixing it** is any of: a claim (`red claim`: the claimant is `$AGENTCTL_AGENT_NAME`, else the Claude session, else
-  the worktree; its pid the Claude Code process); a worktree with an unlanded commit carrying `Fixes-Red: N`
+- **Fixing it** is any of: a claim (`red claim`: the claimant is a dispatched fixer's name from its session's own record,
+  else the Claude session, else the worktree -- never an inherited `$AGENTCTL_AGENT_NAME` inside a session; its pid the Claude Code process); a worktree with an unlanded commit carrying `Fixes-Red: N`
   (committed; patch-equivalent on main counts as landed); a running `agentctl land` from such a worktree (landing); a
   `waiting` entry carrying one (waiting); such a commit on main whose next run is still in progress (landed, awaiting
   #M; if a run containing it fails the same way, the fix did not fix it and is shown so).
@@ -482,7 +486,9 @@ agent must be assigned to it".
   own checkout), briefed with
   `~/bin/briefs/movies-agent-preamble.md` (synced from the orchestrator's scratchpad copy), the run, its jobs and first
   error line. An `[infra]` red gets a DIAGNOSE-ONLY brief (no code change; runners, ci-runner, owner actions). The fixer
-  notes what it does on its lease (`red claim`), keeps its record under `~/.cache/agentctl/reds/<run>/`, ends at `LANDED` (or `GAVE UP:` /
+  says who it is first (`red claim N --fixer <its record>`, in its prompt: that binds its session; background sessions
+  inherit the claude daemon's environment, so a fixer is never known by its environment), notes what it does on its
+  lease (`red claim` of its own red or a sibling under its lease), claims any OTHER red with `red claim <M>`, keeps its record under `~/.cache/agentctl/reds/<run>/`, ends at `LANDED` (or `GAVE UP:` /
   `BLOCKED ON OWNER:` / `DIAGNOSED:`), and its verdict reaches the inbox (`RED FIXER <workflow> #N: ...`, kind
   FIXER_LANDED or FIXER_FAILED; `RED DISPATCHED` when it starts). Caps: one fixer per red; 3 h wall time each
   (`$AGENTCTL_RED_FIXER_WALL`). A red still failing after 2 dispatched fixers: one `RED ESCALATE` entry, never
@@ -851,7 +857,7 @@ The owner: "red not captured, make a structural fix". Convergence #2116 (run 326
 failed and nobody was told: the snapshot, the status line and the reds covered main only.
 
 - **Owner records** (`~/.cache/agentctl/dispatches/`, `$AGENTCTL_DISPATCH_DIR`): branch, run id, worktree, Claude
-  session / `$AGENTCTL_AGENT_NAME`, pid (`$CLAUDE_PID`), purpose, inputs, time. `dispatch run` wraps
+  session / its fixer name (`$AGENTCTL_AGENT_NAME` only outside a Claude session), pid (`$CLAUDE_PID`), purpose, inputs, time. `dispatch run` wraps
   `forgejo-gh workflow run` and records it; `dispatch record` registers a dispatch made another way. agentctl's own
   dispatches record themselves (the queue's `check/*` remote checks, the Fixes-Red verification on main). A run with no
   record is matched once, after the fact: `measure/<user>/<sha>-<x>` (identity-measure, identity-ci-run) or the run's
