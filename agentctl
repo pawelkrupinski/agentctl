@@ -2769,6 +2769,11 @@ RED_IMPORT_TTL = 15 * 60                              # a claim file imported as
 RED_OFFER = {"author": 10 * 60, "gate": 10 * 60, "other": 30 * 60, "flake": 2 * 3600}
 RED_FIX_RUN_START = 30 * 60  # a landed fix's verifying run must exist by then (outside the gate: dispatched)
 RED_FIX_DECIDE = 3 * 3600
+# THE STATE MACHINE IS TOTAL (the owner, 2026-10-29): no red state waits on an event that may never come. A fix-pending
+# whose fix is not proven by RED_FIX_GIVEUP after it entered fix-pending (a landed fix no run checks, a verify run an
+# on-demand workflow never gets, a fix id that is None) is offered again with that fix set aside (`unverified`): a
+# fixer decides, never a resting state.
+RED_FIX_GIVEUP = 2 * RED_FIX_DECIDE
 RED_CAPS = {"gate": ("AGENTCTL_RED_GATE_MAX_FIXERS", 3), "other": ("AGENTCTL_RED_MAX_FIXERS", 2)}
 RED_PRIORITY = {"gate": 0, "fix": 1, "outside": 2, "flake": 3}
 RED_RECURRING = 3            # landed fixes the same failure outlived: `recurring`, and its fixer hunts the root cause
@@ -3175,7 +3180,7 @@ def red_names(d):
 def red_fix_of(it, facts):
     """The fix on its way for this red, or None: {entry, status, sha?, at?}. A refuted sha counts no more."""
     d = it["data"]
-    names, refuted = red_names(d), set(d.get("refuted") or [])
+    names, refuted = red_names(d), set(d.get("refuted") or []) | set(d.get("unverified") or [])
     since = float(d.get("opened_at") or 0) - 3600
     best = None
     for e in sorted(facts.get("entries") or [], key=lambda e: e.get("created") or ""):
@@ -3561,10 +3566,21 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
         if not d.get("gate") and not f.get("verify_dispatched"):
             line = red_verify_dispatch(o_r, repo, d.get("workflow"), "")
             store.update_item("red", it["id"], it["version"], {"fix": {**f, "verify_dispatched": ts(), "verify": line}})
-            return [line]
+            if line.startswith("dispatched"):
+                return [line]
+            it = store.item("red", it["id"])
+            f = it["data"]["fix"]
+        # NO VERIFY CAN COME: its verifying dispatch failed, or no decided run came by the deadline -- a fix-pending with
+        # no fix on its way never rests (Archive recording #823, 2026-10-29: the dispatch was refused with HTTP 400, its
+        # workflow runs only on demand, and the red sat "fix None verify" for 19 h, escalating every 3 h, no fixer)
+        failed = str(f.get("verify") or "").startswith("FIX UNVERIFIED:")  # refused; "until its next scheduled run" waits
+        if failed or t - it["entered_at"] >= env_num("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP):
+            return red_fix_unverifiable(store, it, f"its verifying run could not start ({str(f.get('verify'))[:120]})"
+                                        if failed else f"no decided {d.get('workflow')} run "
+                                                       f"{fmt_age(t - it['entered_at'])} after it entered verify", t)
         if t >= it["deadline"]:
             red_move(store, it, "fix-pending", f"RED {red_what(d)}: unverified {fmt_age(t - it['entered_at'])} after its block")
-            return [f"escalated {red_what(d)}: unverified after its block"]
+            return [f"escalated {red_what(d)}: unverified"]
         return []
     if f.get("status") != "landed":
         status = red_entry_status(facts, f.get("entry"))
@@ -3613,11 +3629,28 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
         line = red_verify_dispatch(o_r, repo, d.get("workflow"), sha)
         store.update_item("red", it["id"], it["version"], {"fix": {**f, "verify_dispatched": ts(), "verify": line}})
         return [line]
+    if t - it["entered_at"] >= env_num("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP):
+        return red_fix_unverifiable(store, it, f"its fix {sha[:10] or f.get('entry')} unverified for "
+                                               f"{fmt_age(t - it['entered_at'])} (no run of {d.get('workflow')} proves it)", t)
     if t >= it["deadline"]:
         red_move(store, it, "fix-pending", f"RED {red_what(d)}: fix {sha[:10] or f.get('entry')} unverified for "
                                            f"{fmt_age(t - it['entered_at'])}")
         return [f"escalated {red_what(d)}: fix unverified"]
     return []
+
+
+def red_fix_unverifiable(store, it, why, t):
+    """A fix-pending that cannot rest any longer: offered again (escalated), its fix set aside so it does not snap back
+    to fix-pending, the reason in its history -- the dispatcher gives it a fixer."""
+    d = it["data"]
+    f = d.get("fix") or {}
+    h = {"at": iso_at(t), "holder": f.get("entry") or (f.get("sha") or "")[:10] or None, "outcome": f"UNVERIFIED: {why}"}
+    upd = {"fix": None, "history": (d.get("history") or []) + [h]}
+    if f.get("sha"):
+        upd["unverified"] = (d.get("unverified") or []) + [f["sha"]]
+    store.close_offer(f"red:{it['id']}", "unverified")
+    red_offer(store, it, f"{red_what(d)}: {why}: offered again", escalate=True, data=upd)
+    return [f"re-offered {red_what(d)} ({why[:80]})"]
 
 
 def red_verify_dispatch(o_r, repo, workflow, sha):
@@ -4544,6 +4577,10 @@ def red_view(store, it, t=None):
         if f.get("status") == "landed":
             return (f"fix landed in {str(f.get('sha'))[:9]}, awaiting a {d.get('workflow')} run containing it{rec}",
                     f"fix {str(f.get('sha'))[:7]} awaiting its run")
+        if f.get("status") == "verify":
+            return (f"verifying: the next decided {d.get('workflow')} run says whether it is fixed ({f.get('verify') or 'awaiting it'}); "
+                    f"offered again if none by {time.strftime('%H:%M', time.localtime(it['entered_at'] + env_num('AGENTCTL_RED_FIX_GIVEUP', RED_FIX_GIVEUP)))}{rec}",
+                    "verifying")
         return f"fix {f.get('entry')} {f.get('status')} (Fixes-Red){rec}", f"fix {f.get('status')}"
     if st == "blocked-external":
         b = red_block_of(it, store) or {}
@@ -4639,6 +4676,10 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=True, facts=None):
             pass  # another writer moved it: the next tick
         except (Exception, SystemExit) as e:
             err(f"red tick: {key}: {type(e).__name__}: {str(e)[:200]}")
+    try:
+        acts += red_enforce(store, facts, t)
+    except (Exception, SystemExit) as e:
+        err(f"red tick: the invariant pass failed ({str(e)[:160]})")
     if host_role() != "server":  # a claim's activity is in the laptop's worktrees: the laptop's sync renews them
         try:
             red_renew_holders(store, t)
@@ -11930,23 +11971,78 @@ def inv_w1():
         (f", main red for {fmt_age(red_since)}" if red_since else "")
 
 
-def red_unheld(store, t=None):
-    """The non-terminal reds with NOTHING behind them: no live lease, no open offer, no fix on its way, no block. The
-    tick's invariant (never NOBODY); a red the tick has not looked at yet (state `red`) counts after 2 min."""
+def red_fix_held(it, t, facts=None):
+    """A fix-pending red's holder, or None: its fix change open in the queue, or a fix landed / a verify run dispatched
+    (or a gate run due) within RED_FIX_GIVEUP of entering fix-pending. With facts the queue decides; without (the
+    watchdog), the fix the item recorded."""
+    d = it["data"]
+    f = d.get("fix") or {}
+    if facts is not None:
+        fx = red_fix_of(it, facts)
+        if fx and fx["status"] in FIX_OPEN:
+            return f"fix {fx.get('entry')} {fx['status']}"
+        if fx is None and f.get("status") != "verify":
+            return None
+    elif f.get("status") in FIX_OPEN and f.get("entry"):
+        return f"fix {f.get('entry')} {f.get('status')}"
+    if not f or (not f.get("entry") and not f.get("sha") and f.get("status") != "verify"):
+        return None  # fix None: nothing is on its way
+    if f.get("status") == "verify" and str(f.get("verify") or "").startswith("FIX UNVERIFIED:"):
+        return None  # its verifying run was refused: none will come
+    if t - it["entered_at"] >= env_num("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP):
+        return None
+    return f"fix {f.get('entry') or (f.get('sha') or '')[:10] or 'verify'} {f.get('status')}"
+
+
+def red_unheld(store, t=None, facts=None):
+    """The non-terminal reds with NOTHING live behind them: no live lease, no open offer, no fix on its way (red_fix_held),
+    no live block. The tick's invariant (never NOBODY), enforced by red_enforce; a red the tick has not looked at yet
+    (state `red`) counts after 2 min."""
     t = t if t is not None else store.clock()
     out = []
     for it in red_active(store).values():
         st = it["state"]
-        if st in ("fix-pending", "blocked-external"):
-            continue
         if st == "red" and t - it["entered_at"] < 120:
             continue
         if lease_is_live(store.get(red_lease(it["data"]["key"])), t):
+            continue
+        if st == "fix-pending" and red_fix_held(it, t, facts):
+            continue
+        if st == "blocked-external" and red_block_of(it, store):
             continue
         if st == "offered" and store.offer_of(f"red:{it['id']}"):
             continue
         out.append(it)
     return out
+
+
+def red_enforce(store, facts, t):
+    """THE INVARIANT, SELF-RECOVERING (the owner, 2026-10-29): a red with no live holder (red_unheld) is offered again,
+    escalated, its dead fix set aside -- the dispatcher, next in the same tick, gives it a fixer. Runs after every red's
+    own step, so it only catches what the step's own transitions left resting."""
+    acts = []
+    for it in red_unheld(store, t, facts):
+        it = store.item("red", it["id"])
+        if not it or it["state"] in RED_TERMINAL:
+            continue
+        d, st = it["data"], it["state"]
+        try:
+            if st == "offered":
+                red_put_offer(store, it)  # an offered red always has its open offer
+                acts.append(f"INVARIANT: {red_what(d)}: its offer reopened")
+            elif st == "fix-pending":
+                acts += red_fix_unverifiable(store, it, f"INVARIANT: no fix on its way for "
+                                                        f"{fmt_age(t - it['entered_at'])} in fix-pending", t)
+            elif st == "leased":
+                acts += red_lease_ended(store, it, store.get(red_lease(d["key"])), red_block_of(it, store), t)
+            else:
+                acts.append(f"INVARIANT: {red_what(d)}: {st} with no holder: offered")
+                red_offer(store, it, f"INVARIANT: {red_what(d)}: {st} with no holder for "
+                                     f"{fmt_age(t - it['entered_at'])}: offered", escalate=st != "red",
+                          data={"cause": None, "block": None} if st == "blocked-external" else None)
+        except StaleVersion:
+            pass
+    return acts
 
 
 def inv_w2():

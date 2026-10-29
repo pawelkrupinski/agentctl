@@ -225,6 +225,18 @@ class FixTest(RedsBase):
         self.assertEqual([i["state"] for i in self.st.items("red")], ["verified"])
         self.assertTrue(any(str(e.get("verdict")).startswith("FIX OK") for e in self.inbox()))
 
+    def test_a_landed_fix_no_run_ever_checks_is_set_aside_and_the_red_offered_again(self):
+        self.tick()
+        _wt, sha = self.fix_commit(20)
+        self.tick()
+        self.assertEqual(self.only()["state"], "fix-pending")
+        self.tick(advance=A.RED_FIX_GIVEUP)  # no Main run containing it, ever
+        it = self.only()
+        self.assertEqual((it["state"], it["data"]["unverified"]), ("offered", [sha]))
+        self.tick(advance=60)
+        self.assertEqual(self.only()["state"], "offered")  # the set-aside fix does not snap it back to fix-pending
+        self.assertEqual(self.unheld(), [])
+
     def test_a_refuted_fix_drops_its_lease_and_the_red_is_offered_again_with_the_failed_fix(self):
         self.tick()
         hw = self.r.worktree("repo-wt-holder", branch="holder")
@@ -684,6 +696,43 @@ class OldRedTest(RedsBase):
         it = self.only()
         self.assertEqual(it["state"], "offered")
         self.assertIn("HTTP Error 400", it["data"]["old_note"])
+        self.assertEqual(self.unheld(), [])
+
+    def stuck_verify(self, verify):
+        self.outside("name: Report run timings\non:\n  workflow_call: {}\n")
+        self.tick()
+        it = self.only()
+        A.red_move(self.st, it, "fix-pending", "as recorded live", data={
+            "old_checked": True, "fix": {"status": "verify", "at": self.t[0], "entry": None, "sha": "",
+                                         "verify_dispatched": A.ts(), "verify": verify}})
+        return self.only()
+
+    def test_a_fix_pending_whose_verify_was_refused_is_offered_again_at_the_next_tick(self):
+        it = self.stuck_verify("FIX UNVERIFIED: could not dispatch Archive recording (HTTP Error 400: Bad Request)")
+        self.assertEqual([i["id"] for i in self.unheld()], [it["id"]])  # the invariant sees it
+        self.tick(advance=60)
+        it = self.only()
+        self.assertEqual((it["state"], it["data"]["fix"]), ("offered", None))
+        self.assertTrue(any(e["severity"] == "escalate" and "UNVERIFIED" in str(e.get("text")) for e in self.st.events()))
+        self.assertIn("UNVERIFIED", it["data"]["history"][-1]["outcome"])
+        self.assertEqual(self.unheld(), [])
+
+    def test_a_fix_pending_whose_verify_run_never_comes_is_offered_again_after_the_give_up_window(self):
+        self.stuck_verify("dispatched Report run timings on main to verify ")
+        self.tick(advance=60)
+        self.assertEqual(self.only()["state"], "fix-pending")  # within its window: the verify run may still come
+        self.tick(advance=A.RED_FIX_GIVEUP)
+        it = self.only()
+        self.assertEqual((it["state"], it["data"]["fix"]), ("offered", None))
+        self.assertEqual(self.unheld(), [])
+
+    def test_the_invariant_reoffers_any_fix_pending_with_no_fix(self):
+        it = self.stuck_verify("dispatched")
+        A.red_move(self.st, it, "fix-pending", "fix None", data={"fix": None})
+        self.assertEqual(len(self.unheld()), 1)
+        acts = A.red_enforce(self.st, {"entries": [], "landed": []}, self.t[0])
+        self.assertTrue(acts)
+        self.assertEqual(self.only()["state"], "offered")
         self.assertEqual(self.unheld(), [])
 
     def test_an_old_red_of_a_dispatchable_workflow_is_verified_by_a_fresh_run(self):

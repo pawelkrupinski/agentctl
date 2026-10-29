@@ -64,7 +64,12 @@ moves it forward; nothing is a detached process that can die with its state in i
     on a failure, held after a stall. The batch is COMPUTED in a check tree at green; there is no `waiting` branch;
   - `watch` (a landed sha): watching → ok / red / unknown (3 h);
   - `red` (a failure signature on main): red → offered → leased → fix-pending → verified / cleared, or
-    blocked-external (an owner block);
+    blocked-external (an owner block). TOTAL: every red state ends in a dispatched fixer. A fix-pending whose fix is
+    not proven within 6 h (`RED_FIX_GIVEUP`, `$AGENTCTL_RED_FIX_GIVEUP`), whose verify dispatch was refused, or whose
+    fix is gone/None is offered again (escalated), its fix set aside (`unverified`). An old outside red no fresh run
+    can check (no `workflow_dispatch`, a refused dispatch, its file gone) is never retired: it is offered with an
+    `old_note` and a fixer decides. THE INVARIANT, enforced each tick (`red_enforce`, after every red's step): a red
+    with no live lease, open offer, fix on its way or live block is offered again and the dispatcher gives it a fixer;
   - `condition` (a non-green state with a probe, the recovery registry): open → closed.
 - **Leases.** Holding work is a lease: a name, a holder, an epoch, a secret, a TTL renewed ONLY on new progress, and a
   maximum hold. A holder that stops making progress loses the lease and the work is offered again; an old holder's
