@@ -366,10 +366,36 @@ class LandTest(Base):
         self.assertNotIn('"--no-verify"', land_src.replace('a in ("--no-verify"', ""))
 
     def test_sdkman_path_exported_for_the_hook(self):
-        env = A.tool_env()
-        for b in A.SDKMAN_BINS:
-            if os.path.isdir(b):
-                self.assertTrue(env["PATH"].startswith(b) or b in env["PATH"].split(":")[:2])
+        """HERMETIC: the test's own HOME, sdkman install and PATH -- never the machine's (it failed in a fixer's
+        environment, where PATH already held sdkman's bins behind another java)."""
+        home = os.path.join(self.tmp.name, "home")
+        sbt_bin = os.path.join(home, ".sdkman", "candidates", "sbt", "current", "bin")
+        java_bin = os.path.join(home, ".sdkman", "candidates", "java", "current", "bin")
+        os.makedirs(sbt_bin)
+        os.makedirs(java_bin)
+        saved = (A.HOME, A.SDKMAN_BINS, {k: os.environ.get(k) for k in ("HOME", "PATH", "JAVA_HOME")})
+        try:
+            A.HOME, A.SDKMAN_BINS = home, [sbt_bin, java_bin]
+            os.environ["HOME"] = home
+            os.environ.pop("JAVA_HOME", None)
+            for path in ("/usr/bin:/bin", f"/opt/other-java/bin:/usr/bin:{java_bin}:/bin:{sbt_bin}"):
+                os.environ["PATH"] = path
+                env = A.tool_env()
+                parts = env["PATH"].split(":")
+                self.assertEqual(parts[:2], [sbt_bin, java_bin], path)
+                self.assertEqual((parts.count(sbt_bin), parts.count(java_bin)), (1, 1), path)
+                self.assertEqual(parts[2:], [p for p in path.split(":") if p not in (sbt_bin, java_bin)])
+                self.assertEqual(env["JAVA_HOME"], os.path.dirname(java_bin))
+            os.environ["PATH"] = "/usr/bin:/bin"
+            A.SDKMAN_BINS = [os.path.join(home, "no-sdkman", "bin")]  # not installed: PATH as it was
+            self.assertEqual(A.tool_env()["PATH"], "/usr/bin:/bin")
+        finally:
+            A.HOME, A.SDKMAN_BINS = saved[0], saved[1]
+            for k, v in saved[2].items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
 
 
 class LandMutationTest(unittest.TestCase):

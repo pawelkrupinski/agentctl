@@ -7584,10 +7584,11 @@ def stalled(step, output, log_path):
 
 
 def tool_env():
-    """os.environ with sdkman's sbt and java first on PATH (the movies hook's sbt check needs them)."""
+    """os.environ with sdkman's sbt and java first on PATH (the movies hook's sbt check needs them) -- moved to the
+    front when PATH already holds them further back (a fixer's environment: another java ahead of sdkman's)."""
     env = dict(os.environ)
-    path = env.get("PATH", "").split(":")
-    env["PATH"] = ":".join([b for b in SDKMAN_BINS if os.path.isdir(b) and b not in path] + path)
+    bins = [b for b in SDKMAN_BINS if os.path.isdir(b)]
+    env["PATH"] = ":".join(bins + [p for p in env.get("PATH", "").split(":") if p not in bins])
     java_home = f"{HOME}/.sdkman/candidates/java/current"
     if not env.get("JAVA_HOME") and os.path.isdir(java_home):
         env["JAVA_HOME"] = java_home
