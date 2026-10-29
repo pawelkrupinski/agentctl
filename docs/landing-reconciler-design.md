@@ -379,7 +379,10 @@ Anthropic credentials (open question Q8). The loop:
 1. `offers(kind=fixer)`, highest priority first, within its slots and the governor. The slots are reserved per
    class (gate 3 alive, others 2; one fixer on its run's several reds is one slot). An offer that waited 20 min
    borrows an idle slot of the other class (the lender keeps one idle); at 45 min it takes the one overflow slot;
-   with that taken it is `STARVED` and escalates. Every capacity wait names what frees it and when;
+   with that taken it is `STARVED` and escalates. Every capacity wait names what frees it and when. A red whose
+   last 3 fixers ended with no result (crash, no verdict line, lease lost without progress) is not dispatched at
+   that tier again (G9): escalated once with their log tails and moved up to `deep`; a deep crash loop blocks it on
+   the owner (`fixer-crash-loop`), cleared by a newer run that no longer fails this way, or after 24 h;
 2. `take(offer)`, which returns the lease and the **full picture**:
    - the runs and failing jobs, with their relevant log lines;
    - every prior attempt: who, verdict, diff, and the run that refuted it;

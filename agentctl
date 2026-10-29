@@ -3033,6 +3033,8 @@ RED_LADDER = ((0, "author", "author"), (0, None, "fresh"),
 
 
 def red_tier(d, culprit=None):
+    if (d.get("crash_loop") or {}).get("stage") == "deep":  # the crash-loop breaker moved it up (red_crash_loop)
+        return "deep"
     if d.get("kind") in ("infra", "unclear") and d.get("red_kind") != "flake" and not d.get("diagnosis") \
             and int(d.get("attempts") or 0) < 3:
         return "infra"
@@ -3514,7 +3516,7 @@ def red_offer_class(d):
     return "flake" if d.get("red_kind") == "flake" else "gate" if d.get("gate") else "other"
 
 
-def red_offer(store, it, text, data=None, repo=None, escalate=False, verdict=None):
+def red_offer(store, it, text, data=None, repo=None, escalate=False, verdict=None, tail=None):
     """Into `offered`, with its tier from the ladder, its deadline and its offer (the picture a taker gets)."""
     d = {**it["data"], **(data or {})}
     tier = red_tier(d, d.get("culprit"))
@@ -3532,7 +3534,7 @@ def red_offer(store, it, text, data=None, repo=None, escalate=False, verdict=Non
         verdict = verdict or f"RED ESCALATE: {red_what(d)} still red after {d.get('attempts')} attempts: a deep investigation is offered"
     if verdict:
         sev["refs"] = {"key": d.get("key"), "run": (d.get("last_run") or {}).get("number"), "workflow": d.get("workflow"),
-                       "verdict": verdict, "tail": [d.get("line") or ""], "command": "red"}
+                       "verdict": verdict, "tail": tail or [d.get("line") or ""], "command": "red"}
     it = red_move(store, it, "offered", text, data={**(data or {}), "tier": tier}, deadline_s=deadline, **sev, **aud)
     red_put_offer(store, it)
     return it
@@ -3911,8 +3913,113 @@ def red_lease_ended(store, it, row, block, t):
         red_move(store, it, "blocked-external", f"{red_what(d)}: {block['text']}",
                  data={**upd, "cause": block.get("cause"), "block": block["name"]})
         return [f"blocked {red_what(d)}"]
+    streak = red_crash_streak({**d, **upd})
+    if len(streak) >= env_num("AGENTCTL_RED_CRASH_LOOP", RED_CRASH_LOOP):
+        return red_crash_loop(store, it, upd, streak, t)
     red_offer(store, it, f"{red_what(d)}: {h['holder']} ended ({h['outcome'][:120]}): offered again", data=upd)
     return [f"re-offered {red_what(d)} after {h['outcome'][:60]}"]
+
+
+# THE CRASH-LOOP BREAKER (G9, convergence-failures-2026-10-29 §4: in E9 fixers were launched 52 times over 9 reds, #2335
+# 18 and #2375 16 times, mostly `exit 1 with no LANDED / GAVE UP line`): RED_CRASH_LOOP dispatched fixers in a row that
+# ended with NO RESULT (a crash, an exit with no verdict line, a lease lost or expired without progress, a time-out, a
+# start that never got going) and the same tier is not dispatched blindly again. ONE escalation with the evidence (each
+# launch's outcome and log tail), and the red moves UP: to the deep tier (crash_loop.stage `deep`) -- or, when the deep
+# tier itself crash-looped, onto an OWNER BLOCK (block/<key>, cause `fixer-crash-loop`): the fixers, not the code, are
+# what fails, so this is the one owner block a test red may have. It recovers by itself: its probe passes when a newer
+# decided run of the red's workflow no longer fails this way (or the run is green), and it lapses after
+# RED_CRASH_BLOCK_MAX (offered again, the streak counted afresh from crash_loop.mark). A launch with a result (LANDED,
+# NOT LANDED, GAVE UP, BLOCKED ON OWNER, DIAGNOSED, a refuted fix) ends the streak; a release by hand is no launch.
+RED_CRASH_LOOP = 3                 # $AGENTCTL_RED_CRASH_LOOP
+RED_CRASH_BLOCK_MAX = 24 * 3600    # $AGENTCTL_RED_CRASH_BLOCK_MAX
+RED_CRASH_OUTCOME = re.compile(r"(NOT STARTED|ended with no|exit -?\d+ with no|TIMED OUT|lease expired|"
+                               r"STOPPED: the red's lease was lost)")
+RED_CRASH_NEUTRAL = re.compile(r"(RELEASED|STOPPED: the fixer's wrapper was stopped)")
+CRASH_LOOP_CAUSE = "fixer-crash-loop"
+
+
+def red_crash_streak(d):
+    """The newest fixer launches (newest first) since the red's last crash-loop step that ended with no result -- up to
+    the first launch (or fix) with one."""
+    hist = d.get("history") or []
+    out = []
+    for h in reversed(hist[int((d.get("crash_loop") or {}).get("mark") or 0):]):
+        o = str(h.get("outcome") or "")
+        if RED_CRASH_NEUTRAL.match(o):
+            continue
+        if not h.get("dispatched") or not RED_CRASH_OUTCOME.match(o):
+            break
+        out.append(h)
+    return out
+
+
+def red_crash_evidence(streak):
+    """The escalation's tail: each crashed launch's outcome, then the last lines of its log."""
+    tail = []
+    for h in reversed(streak):
+        tail.append(f"{h.get('at')} {h.get('holder')}: {str(h.get('outcome'))[:200]}")
+        tail += [f"    {l[:200]}" for l in str(h.get("notes") or "").splitlines()[-4:] if l.strip()]
+    return tail[-30:]
+
+
+def red_crash_loop(store, it, upd, streak, t):
+    """RED_CRASH_LOOP launches in a row with no result: escalated once, with the evidence, and moved up -- deep tier,
+    or (the deep tier crash-looped too) an owner block that clears itself."""
+    d = {**it["data"], **upd}
+    key, n = d["key"], len(streak)
+    tail = red_crash_evidence(streak)
+    mark = len(d.get("history") or [])
+    tier = it["data"].get("tier")
+    run = (d.get("last_run") or {}).get("number")
+    if not (d.get("crash_loop") or {}).get("stage") and tier != "deep":
+        verdict = (f"RED ESCALATE: {red_what(d)}: CRASH LOOP -- {n} fixer launches in a row ({tier}) ended with no "
+                   f"LANDED / GAVE UP; not dispatched that way again: moved up to the deep tier "
+                   f"(`~/bin/agentctl red status -v`)")
+        upd = {**upd, "crash_loop": {"stage": "deep", "mark": mark, "at": t, "from": tier, "launches": n},
+               "start_failures": 0, "dispatch_after": 0}
+        red_offer(store, it, verdict, data=upd, escalate=True, verdict=verdict, tail=tail)
+        return [f"crash loop on {red_what(d)}: moved up to deep"]
+    until = f"a newer {d.get('workflow')} run than #{run} no longer fails this way"
+    cmd = f"~/bin/agentctl red status -v; less {str((streak[0].get('worktree') or '?')).replace(HOME, '~')}"
+    text = (f"BLOCKED ON OWNER: the fixers crash on {red_what(d)}: {n} launches in a row at the {tier} tier ended with "
+            f"no LANDED / GAVE UP (newest: {str(streak[0].get('outcome'))[:160]}). The fixer harness, not the code, is "
+            f"what fails: look at their logs (`! {cmd}`). Auto-clears when {until}, or in "
+            f"{fmt_age(env_num('AGENTCTL_RED_CRASH_BLOCK_MAX', RED_CRASH_BLOCK_MAX))} (offered again)")
+    lname = block_lease(key)
+    probe = {"kind": "red_newer_verdict", "args": {"workflow": d.get("workflow"), "item": it["id"],
+                                                    "run_id": (d.get("last_run") or {}).get("databaseId"),
+                                                    "run": run}}
+    got = store.acquire(lname, f"owner:{CRASH_LOOP_CAUSE}", BLOCK_TTL,
+                        env_num("AGENTCTL_RED_CRASH_BLOCK_MAX", RED_CRASH_BLOCK_MAX), progress=f"crash-loop@{int(t)}",
+                        meta={"kind": "block", "crash_loop": True, "cause": CRASH_LOOP_CAUSE, "cmd": cmd, "probe": probe,
+                              "until": until, "keys": [key], "text": text, "details": text, "probed_at": t})
+    if "held" in got:  # somebody's block already holds the red: it stands, the red joins it
+        row = store.get(lname)
+        store.set_meta(lname, row["epoch"], row["secret"], {"keys": sorted(set(lease_meta(row).get("keys") or []) | {key})})
+    upd = {**upd, "crash_loop": {"stage": "owner", "mark": mark, "at": t, "from": tier, "launches": n},
+           "cause": CRASH_LOOP_CAUSE, "block": lname}
+    line = f"RED BLOCKED ON OWNER: {red_what(d)}: {text}"
+    store.close_offer(f"red:{it['id']}", "blocked")
+    red_move(store, it, "blocked-external", line, data=upd, severity="escalate",
+             refs={"key": key, "run": run, "workflow": d.get("workflow"), "verdict": line, "tail": tail, "command": "red"})
+    return [f"crash loop on {red_what(d)}: blocked on the owner"]
+
+
+def probe_red_newer_verdict(a):
+    """A newer decided run of the red's workflow on main changed its verdict: green, or no longer attached to the red
+    (a run failing the same way is attached to it by the tick's observation, before the blocks are probed)."""
+    snap = ci_state_load(a.get("repo") or SHORT["movies"])
+    last = ((snap or {}).get("latest") or {}).get(a.get("workflow"))
+    if not last:
+        return None, f"no decided run of {a.get('workflow')} on main in the snapshot"
+    if int(last.get("databaseId") or 0) <= int(a.get("run_id") or 0):
+        return False, f"no {a.get('workflow')} run newer than #{a.get('run')}"
+    if last.get("conclusion") == "success":
+        return True, f"{a.get('workflow')} #{last.get('number')} green"
+    it = Store().item("red", a.get("item")) if a.get("item") else None
+    if it and str((it["data"].get("last_run") or {}).get("databaseId")) == str(last.get("databaseId")):
+        return False, f"{a.get('workflow')} #{last.get('number')} still fails this way"
+    return True, f"{a.get('workflow')} #{last.get('number')} {last.get('conclusion')}, no longer this failure"
 
 
 RED_OLD_RUN = 2 * 86400  # an outside red whose newest run is older than this is checked by a fresh run before it is fixed
@@ -5792,6 +5899,9 @@ def red_block_of(it, store=None):
 def block_invalid(store, it, m, t):
     """Why this block no longer justifies holding red `it`, or None (checked at the block AND every tick)."""
     d = it["data"]
+    if m.get("crash_loop"):  # the fixers crash-looped on it (red_crash_loop): the harness, never the code, is the cause
+        row = store.get(red_lease(d["key"]))
+        return f"a live fixer is on it: {row['holder']}" if lease_is_live(row, t) else None
     if m.get("wait_cause") in WAIT_CAUSES:  # an external wait (a spent quota): no owner cause, no owner command
         if d.get("kind") == "test":
             return "its red is a TEST FAILURE: a code red is a fixer's"
@@ -14233,10 +14343,10 @@ PROBES = {"disk_free": lambda a: probe_disk_free(a), "quota_reset": lambda a: pr
           "route": probe_route, "tunnel": probe_tunnel, "gate_read": probe_gate_read, "token": probe_token,
           "processor": probe_processor, "git_fetch": probe_git_fetch, "laptop_load": probe_laptop_load,
           "queue_entry": probe_queue_entry, "clone_health": probe_clone_health,
-          "infra_requeue": probe_infra_requeue}
+          "infra_requeue": probe_infra_requeue, "red_newer_verdict": lambda a: probe_red_newer_verdict(a)}
 PROBE_EVERY = {"disk_free": 300, "quota_reset": 300, "invariant": 60, "waiting_ok": 30, "owner_block": 60, "orphan_landed": 300, "batch_hold": 60, "route": 5, "tunnel": 10, "gate_read": 15, "processor": 30, "queue_entry": 60,
                "workflow_green": 60, "token": 60, "laptop_load": 60, "tcp": 60, "http": 120, "git_fetch": 120,
-               "clone_health": 120, "infra_requeue": 60}
+               "clone_health": 120, "infra_requeue": 60, "red_newer_verdict": 60}
 
 
 def probe_words(kind, a):
@@ -14253,7 +14363,8 @@ def probe_words(kind, a):
             "orphan_landed": lambda: "its commits are on main or somebody works in it",
             "queue_entry": lambda: f"queue entry {a.get('eid')} moves",
             "clone_health": lambda: f"{a.get('repo')} verifies and fetches {REMOTE}/main",
-            "infra_requeue": lambda: f"queue entry {a.get('eid')} gets past {a.get('reason')}"}.get(kind, lambda: kind)()
+            "infra_requeue": lambda: f"queue entry {a.get('eid')} gets past {a.get('reason')}",
+            "red_newer_verdict": lambda: f"a newer {a.get('workflow')} run than #{a.get('run')} no longer fails this way"}.get(kind, lambda: kind)()
 
 
 def run_probe(kind, args=None):

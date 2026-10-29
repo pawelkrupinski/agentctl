@@ -494,6 +494,16 @@ agent must be assigned to it".
   then every cycle. No running fixer is killed for it. The wait reads, in `red status`, `ci-why` and the status page:
   `capacity 2/2 other, waiting 12m; next slot when <fixer> ends by 15:09 or borrows an idle gate slot at 14:20 or
   overflow at 14:45`; `fixers alive:` shows the overflow slot when it is in use.
+- **Crash-loop breaker (G9, 2026-10-29: in E9 fixers were launched 52 times over 9 reds, #2335 18 times, mostly
+  `exit 1 with no LANDED / GAVE UP line`).** 3 dispatched fixers in a row on one red that end with NO RESULT -- a
+  crash, an exit with no verdict line, a lease lost or expired without progress, a time-out, a start that never got
+  going -- and that tier is not dispatched again: ONE escalation (`RED ESCALATE: ... CRASH LOOP ...`, each launch's
+  outcome and log tail in it) moves the red up to the deep tier. When the deep tier crash-loops too (or it was already
+  there), the red is BLOCKED ON OWNER with cause `fixer-crash-loop` -- the one owner block a test red may hold, since
+  the fixers, not the code, fail -- and it clears itself: its probe passes when a newer decided run of the workflow no
+  longer fails this way (or is green), and it lapses after 24 h (`$AGENTCTL_RED_CRASH_BLOCK_MAX`), offered again with
+  the streak counted afresh. A launch with a result (LANDED, NOT LANDED, GAVE UP, BLOCKED ON OWNER, DIAGNOSED, a
+  refuted fix) ends the streak; a release by hand is no launch. `$AGENTCTL_RED_CRASH_LOOP` (3).
 - **Refunds.** A dispatch that did nothing is not counted (`red status` says `[refunded: ...]`): `GAVE UP` / `NOT LANDED`
   because it is already fixed or there is nothing to do; `STOPPED` (superseded) and `red cleared`; a fixer killed
   before any verdict; `BLOCKED ON OWNER` only for a CI read (`forgejo-gh run view|download`: the fixer carries the
