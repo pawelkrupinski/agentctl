@@ -374,6 +374,17 @@ The owner: "why unclaimed ... should always claim, fix structurally".
   only to pass the gate; its `Red-Unrelated: <why>` trailer keeps it, queued or landed, from counting as the red's fix
   (so it never stops the red's fixer, nor is it refuted) and from making a red that passed by chance read as fixed
   (2026-10-28: four speed-ups landed this way stopped #2392's fixer, then went down as #2432's "4 fixes refuted").
+- **A `Fixes-Red:` must touch what the red reads (G9, 2026-10-29: d21ac5e81 and 1548eb448, unit-test speed-ups,
+  named 2390/2375/2392 while touching nothing their jobs read).** At land time (land / submit, the queue, the batch)
+  and when the tick reads landed fixes, each `Fixes-Red: <run>` naming a known test red is checked against the paths
+  its failing job reads -- its workflow job's steps, the reusable workflows and local actions it uses, the scripts they
+  name (to three levels), the failing test's own sources -- conservatively. It does not count only when every path the
+  commit changes is plainly unread: another workflow's file, documentation, android/ or ios/ (unless the job names
+  them), or another spec while the job runs only named specs (`testOnly X`, no whole `test` task). Unsure (an unknown
+  red, an infra red, `local`, no workflow found) counts. A trailer that does not count leaves the red where it is (no
+  fix-pending, its fixer kept); the change lands as an ordinary one -- it waits while the gate is red -- and its
+  author gets one `FIX NOT COUNTED: ...` inbox entry with the reason (a default `inbox wait` kind). Cached per sha
+  under `~/.cache/agentctl/reds/fixcheck/`.
 - **No daily budget.** A red that cannot get a fixer now (a concurrency cap, or dispatch unavailable) waits in a FIFO
   queue per class: `queued for a fixer (#k, next slot when <x> ends)`. That is a recovery condition (probe
   `fixer_slot`, on recover: the red tick runs). Gate reds keep their own cap of 3 alive.

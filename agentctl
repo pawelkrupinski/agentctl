@@ -3396,7 +3396,9 @@ def landed_fix_commits(repo):
     for line in (r.stdout if r.returncode == 0 else "").splitlines():
         sha, ct, unrelated, vals, subj = (line.split("\t", 4) + ["", "", "", "", ""])[:5]
         if trailer_values(vals) and not unrelated.strip():
-            out.append((sha, float(ct or 0), trailer_values(vals), subj))
+            counted = fix_check(repo, sha, trailer_values(vals))[0]  # a trailer touching nothing the red reads: no fix
+            if counted:
+                out.append((sha, float(ct or 0), counted, subj))
     return out
 
 
@@ -3408,6 +3410,220 @@ def red_unrelated(repo, e):
         if r.returncode == 0 and r.stdout.strip():
             return True
     return False
+
+
+# A FIXES-RED TRAILER MUST TOUCH WHAT THE RED READS (G9, convergence-failures-2026-10-29 §4: d21ac5e81 and 1548eb448,
+# unit-test speed-ups, carried `Fixes-Red: 2390;2375;2392` while touching nothing those reds' jobs read). At land time --
+# the land / submit path, the queue and the batch, and the tick reading landed fixes -- a commit's `Fixes-Red: <run>`
+# that names a known red is checked against the paths the red's failing job reads, derived CONSERVATIVELY from its
+# workflow (the job's steps, the reusable workflows and local actions it uses, the repository scripts they name, one
+# level down) plus the failing test's own sources. A commit counts as that red's fix unless it PLAINLY touches none
+# of them: every path it changes is another workflow's file, documentation, the mobile apps (android/, ios/) the job
+# never names, or another test spec while the job runs only named specs (`testOnly X` / `runMain X`, no whole test
+# task). Unsure -- the red unknown, not a test failure, its workflow or job not found, `local` -- it counts. A trailer
+# that does not count leaves the red where it is (no fix-pending, its fixer kept) and the change lands as any other
+# change (it waits while the gate is red); its author is told once (`FIX NOT COUNTED`, the inbox). Cached per sha.
+FIX_UNREAD_DOC = re.compile(r"(^|/)docs?/|(^|/)(README|CHANGELOG|LICENSE)[^/]*$|\.md$")
+FIX_UNREAD_TOP = ("android", "ios")
+FIX_WORKFLOW_FILE = re.compile(r"^\.(github|forgejo)/workflows/[^/]+\.ya?ml$")
+FIX_SPEC_FILE = re.compile(r"/src/(test|it|e2e)/\w+/(.*/)?([A-Z]\w*(Spec|Test|Tests|Suite|IT))\.(scala|java|kt)$")
+FIX_BROAD_TEST = re.compile(r"(?<![\w-])(test|testQuick|testUnit\w*|Test/test|it:test|[\w-]+/test|"
+                            r"testOnly\s+[^\n\"']*\*)(?![\w-])")
+FIX_SBT = re.compile(r"\bsbt\b|sbt-warm|sbtw?\b")
+FIX_REPO_PATH = re.compile(r"(?<![\w/.-])(?:\./)?((?:scripts|\.github|\.forgejo|tools|bin)/[\w./-]+)")
+
+
+def fix_tree_files(repo, sha):
+    r = git(repo, "ls-tree", "-r", "--name-only", sha, check=False)
+    return (r.stdout if r.returncode == 0 else "").splitlines()
+
+
+def fix_show(repo, sha, path):
+    r = git(repo, "show", f"{sha}:{path}", check=False)
+    return r.stdout if r.returncode == 0 else None
+
+
+def workflow_jobs(text):
+    """{job key: (its block's text, its `name:`)} of a workflow file, by indentation (no YAML parser here)."""
+    lines = text.splitlines()
+    try:
+        start = next(i for i, l in enumerate(lines) if re.match(r"^jobs:\s*$", l))
+    except StopIteration:
+        return {}
+    jobs, ind, cur = {}, None, None
+    for l in lines[start + 1:]:
+        if l.strip() and not l.startswith((" ", "\t")):
+            break
+        m = re.match(r"^(\s+)([\w-]+):\s*$", l)
+        if m and (ind is None or len(m.group(1)) == ind):
+            ind, cur = len(m.group(1)), m.group(2)
+            jobs[cur] = []
+            continue
+        if cur:
+            jobs[cur].append(l)
+    out = {}
+    for k, ls in jobs.items():
+        body = "\n".join(ls)
+        nm = re.search(r"^\s+name:\s*['\"]?([^'\"\n]+)", body, re.M)
+        out[k] = (body, (nm.group(1).strip() if nm else k))
+    return out
+
+
+def red_job_reads(repo, sha, d):
+    """What red d's failing job reads, from the tree of `sha`: {files, prefixes, text, broad, sbt} -- or None when it
+    cannot be told (no workflow file of that name, nothing readable)."""
+    files = fix_tree_files(repo, sha)
+    wfs = [f for f in files if FIX_WORKFLOW_FILE.match(f)]
+    want = str(d.get("workflow") or "")
+    wf = None
+    for f in wfs:
+        txt = fix_show(repo, sha, f) or ""
+        m = re.search(r"^name:\s*['\"]?([^'\"\n]+)", txt, re.M)
+        if (m and m.group(1).strip() == want) or os.path.basename(f) == want:
+            wf = (f, txt)
+            break
+    if not wf:
+        return None
+    reads, texts = {wf[0]}, []
+    jobs = workflow_jobs(wf[1])
+    names = [str(j) for j in d.get("jobs") or [d.get("job")] if j]
+    heads = {re.split(r" / | \(", n, maxsplit=1)[0].strip().lower() for n in names}
+    picked = [body for k, (body, nm) in jobs.items()
+              if k.lower() in heads or re.sub(r"\$\{\{.*?\}\}", "", nm).strip().lower() in heads] if heads else []
+    texts.append("\n".join(picked) if picked else wf[1])  # its job's steps, or (unsure which) the whole workflow
+    seen = set()
+    todo = list(texts)
+    depth = 0
+    while todo and depth < 3:
+        nxt = []
+        for t in todo:
+            for m in re.finditer(r"uses:\s*\./([\w./-]+)", t):
+                p = m.group(1).rstrip("/")
+                reads.add(p)
+                if p in seen:
+                    continue
+                seen.add(p)
+                body = fix_show(repo, sha, p) if FIX_WORKFLOW_FILE.match(p) else \
+                    (fix_show(repo, sha, p + "/action.yml") or fix_show(repo, sha, p + "/action.yaml"))
+                if body:
+                    nxt.append(body)
+            for m in FIX_REPO_PATH.finditer(t):
+                p = m.group(1).rstrip("/.")
+                reads.add(p)
+                if p in seen or p not in files:
+                    continue
+                seen.add(p)
+                body = fix_show(repo, sha, p)
+                if body and len(body) < 400_000:
+                    nxt.append(body)
+        texts += nxt
+        todo, depth = nxt, depth + 1
+    text = "\n".join(texts)
+    sbt = bool(FIX_SBT.search(text))
+    return {"files": reads, "text": text, "sbt": sbt, "broad": sbt and bool(FIX_BROAD_TEST.search(text)),
+            "named": set(re.findall(r"\b[A-Z]\w+\b", text + " " + str(d.get("line") or "") + " " + " ".join(names)))}
+
+
+def fix_path_unread(p, rd):
+    """True when the job plainly does not read path p."""
+    if p in rd["files"] or any(p.startswith(f.rstrip("/") + "/") for f in rd["files"]):
+        return False
+    if FIX_WORKFLOW_FILE.match(p):
+        return True
+    if FIX_UNREAD_DOC.search(p) and p not in rd["text"]:
+        return True
+    top = p.split("/", 1)[0]
+    if top in FIX_UNREAD_TOP and not re.search(rf"(?<![\w-]){re.escape(top)}/", rd["text"]):
+        return True
+    m = FIX_SPEC_FILE.search(p)
+    if m and not rd["broad"] and m.group(3) not in rd["named"]:
+        return True
+    return False
+
+
+def fix_check(repo, sha, values, store=None):
+    """(the values that count as fixes, {value: why not} for those that do not): each `Fixes-Red:` value of commit sha
+    against the reds it names (see above). Cached per sha; a value naming no known red counts (unsure) and is not
+    cached, so a red opened later is still checked."""
+    values = {str(v).strip().lstrip("#") for v in values if str(v).strip()}
+    if not values or not repo:
+        return values, {}
+    path = reds_dir("fixcheck", f"{sha}.json")
+    cache = read_record(path) or {}
+    ok, bad, todo = set(), {}, []
+    for v in sorted(values):
+        c = cache.get(v)
+        if c is None:
+            todo.append(v)
+        elif c.get("ok"):
+            ok.add(v)
+        else:
+            bad[v] = c.get("why") or "touches nothing its job reads"
+    if not todo:
+        return ok, bad
+    try:
+        st = store or Store()
+        items = [it for it in st.items("red") if it["data"].get("key")]
+    except Exception:
+        items = []
+    changed = None
+    fresh = {}
+    for v in todo:
+        its = [it for it in items if v in {str(x) for x in red_names(it["data"]) if x is not None}]
+        if not its or v == "local" or any(it["data"].get("kind") != "test" for it in its):
+            ok.add(v)  # unsure: the red unknown (not cached), local, or not a test failure
+            if its:
+                fresh[v] = {"ok": True, "why": "not a test failure" if v != "local" else "local"}
+            continue
+        if changed is None:
+            r = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", sha, check=False)
+            changed = [p for p in (r.stdout if r.returncode == 0 else "").splitlines() if p]
+        verdict = None
+        for it in its:
+            try:
+                rd = red_job_reads(repo, sha, it["data"])
+            except (Exception, SystemExit):
+                rd = None
+            if rd is None or not changed or not all(fix_path_unread(p, rd) for p in changed):
+                verdict = {"ok": True}
+                break
+            verdict = {"ok": False, "why": (f"it touches nothing {red_what(it['data'])} reads "
+                                            f"({', '.join(changed[:4])}{' ...' if len(changed) > 4 else ''})")}
+        fresh[v] = verdict
+        if verdict["ok"]:
+            ok.add(v)
+        else:
+            bad[v] = verdict["why"]
+    if fresh:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            write_json(path, {**cache, **fresh})
+        except OSError:
+            pass
+        for v, c in fresh.items():
+            if not c.get("ok"):
+                fix_not_counted_tell(repo, sha, v, c["why"])
+    return ok, bad
+
+
+def fix_not_counted_tell(repo, sha, v, why):
+    """The author is told, once per (sha, value): the trailer does not count, and what that means for the change."""
+    line = (f"FIX NOT COUNTED: {sha[:10]}'s `Fixes-Red: {v}`: {why}. The red stays where it is (its fixer keeps it); "
+            f"the change lands as an ordinary one (it waits while the gate is red). Name the red only in a commit that "
+            f"changes what its failing job runs or reads")
+    err(line)
+    try:
+        cwd = repo if repo and os.path.isdir(repo) else None
+        inbox_write("land", line, [line], [], 1, cwd=cwd)
+    except Exception:
+        pass
+
+
+def commit_fixes(repo, sha, store=None):
+    """The `Fixes-Red:` values of commit sha that count as fixes (fix_check)."""
+    v = git(repo, "log", "-1", "--format=%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", sha, check=False)
+    vals = {f.strip().lstrip("#") for f in (v.stdout if v.returncode == 0 else "").split(",") if f.strip()}
+    return fix_check(repo, sha, vals, store)[0] if vals else set()
 
 
 _trailer_fixes = {}
@@ -3422,8 +3638,8 @@ def entry_fixes(repo, e):
     for c in e.get("commits") or []:
         if c not in _trailer_fixes:
             r = git(repo, "log", "-1", "--format=%(trailers:key=Fixes-Red,valueonly)", c, check=False)
-            _trailer_fixes[c] = [x.strip().lstrip("#") for x in re.split(r"[\s,]+", r.stdout) if x.strip()] \
-                if r.returncode == 0 else []
+            vals = {x.strip().lstrip("#") for x in re.split(r"[\s,]+", r.stdout) if x.strip()} if r.returncode == 0 else set()
+            _trailer_fixes[c] = sorted(fix_check(repo, c, vals)[0]) if vals else []  # only those that count
         out += _trailer_fixes[c]
     return out
 
@@ -7965,8 +8181,7 @@ def must_wait(repo, commits, reds):
         paths = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", c).split("\n")
         if not any(p and is_production_path(p) for p in paths):
             continue
-        fixes = git(repo, "log", "-1", "--format=%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", c).strip()
-        if not ({f.strip().lstrip("#") for f in fixes.split(",") if f.strip()} & reds):
+        if not (commit_fixes(repo, c) & reds):  # a trailer that does not count (fix_check) is no fix: it waits
             return True
     return False
 
@@ -8164,11 +8379,10 @@ def batching(repo):
 
 
 def fixes_of(repo, commits):
-    """The run ids/numbers the commits' Fixes-Red: trailers name."""
+    """The run ids/numbers the commits' Fixes-Red: trailers name -- those that count as fixes (fix_check)."""
     out = set()
     for c in commits:
-        v = git(repo, "log", "-1", "--format=%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", c).strip()
-        out |= {f.strip().lstrip("#") for f in v.split(",") if f.strip()}
+        out |= commit_fixes(repo, c)  # only those that count: touching what the red's job reads (fix_check)
     return out
 
 
@@ -14014,13 +14228,13 @@ def safe_cwd():
 INBOX_KINDS = [("INVARIANT", r"INVARIANT "), ("CLOSED", r"CLOSED"), ("UNLANDED_ORPHAN", r"UNLANDED ORPHAN:"), ("RECOVERED", r"RECOVERED:"), ("RELANDING", r"RELANDING:"), ("NETWORK", r"NETWORK:"),  # first: they quote others
                ("BRANCH_RED", r"BRANCH RED"), ("RED_UNCLAIMED", r"RED UNCLAIMED"), ("RED_BUDGET", r"RED BUDGET"), ("RED_AUTHOR", r"RED AUTHOR"), ("RED_ESCALATE", r"RED ESCALATE"), ("BLOCKED", r"RED BLOCKED ON OWNER"),
                ("RED_DISPATCHED", r"RED DISPATCHED"), ("RED_REVERT", r"RED REVERT"), ("RED_FLAKE", r"RED FLAKE"), ("FIXER_LANDED", r"RED FIXER [^:]*: LANDED "), ("DIAGNOSED", r"RED FIXER [^:]*: DIAGNOSED:"),
-               ("FIXER_FAILED", r"RED FIXER "), ("RED_CLEARED", r"RED CLEARED"), ("FIX_FAILED", r"FIX FAILED"), ("FIX_OK", r"FIX OK"), ("FIX_UNVERIFIED", r"FIX UNVERIFIED"),
+               ("FIXER_FAILED", r"RED FIXER "), ("RED_CLEARED", r"RED CLEARED"), ("FIX_FAILED", r"FIX FAILED"), ("FIX_NOT_COUNTED", r"FIX NOT COUNTED"), ("FIX_OK", r"FIX OK"), ("FIX_UNVERIFIED", r"FIX UNVERIFIED"),
                ("RED", r"WATCH RED"), ("OK", r"WATCH OK"), ("STALLED", r"WATCH STALLED|STALLED:|.*\bstalled\b"),
                # a crash, a signal or an exit with no verdict: whatever it watched is unknown now
                ("UNKNOWN", r"WATCH UNKNOWN|UNKNOWN:|crashed:|exited:|ended by signal|exit \d+ with no verdict"),
                ("NOT_LANDED", r"NOT LANDED"), ("SUPERSEDED", r"SUPERSEDED "), ("LANDED", r"LANDED "), ("WAITING", r"WAITING "), ("QUEUED", r"QUEUED "), ("HELD", r"HELD:"),
                ("CHECK", r"CHECK CAP")]
-WAIT_KINDS_DEFAULT = "RED,BRANCH_RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_BUDGET,RED_AUTHOR,RED_ESCALATE,BLOCKED,FIXER_FAILED,DIAGNOSED,UNLANDED_ORPHAN,RED_REVERT"
+WAIT_KINDS_DEFAULT = "RED,BRANCH_RED,FIX_FAILED,FIX_NOT_COUNTED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_BUDGET,RED_AUTHOR,RED_ESCALATE,BLOCKED,FIXER_FAILED,DIAGNOSED,UNLANDED_ORPHAN,RED_REVERT"
 
 
 def inbox_kind(verdict, final=True):

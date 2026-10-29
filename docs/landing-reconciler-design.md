@@ -517,6 +517,7 @@ the reconciler unit. It reads only the snapshot and the store, read-only.
 
 | Incident | Mechanism that removes it |
 |---|---|
+| G9 a `Fixes-Red:` on a commit unrelated to the red (E9: unit-test speed-ups naming three convergence reds) | `fix_check`: a trailer counts only when the commit touches a path the red's failing job reads (its job's steps, called workflows, actions and scripts, the failing test's sources; unsure counts). One that does not count moves nothing to `fix-pending`; the change lands as an ordinary one, and its author is told (`FIX NOT COUNTED`). |
 | I1 dead worktree counted as a "committed" fixer | A fixer is only a lease renewed by progress. An unlanded `Fixes-Red` commit in a worktree counts for nothing; only a submitted change item counts (`fix-pending`), and it has its own deadlines. |
 | I2 stale owner block re-created by the patrol | A block is a lease the tick renews only while its probe fails and its owner cause holds. Nothing re-creates a block: after expiry, a new block is an explicit `red block` call, evented and counted. |
 | I3 push hung on a dropped tunnel, holding the lock 30 min | The landing lease has a 300 s maximum, and the push runs under a 120 s timeout. After expiry the step is verify-then-retry (idempotent). The batch is not blocked past 5 min. In phase 2 the push runs on ci-runner to local Forgejo, with no tunnel at all. |
