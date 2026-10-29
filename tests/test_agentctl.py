@@ -18,6 +18,20 @@ _spec = importlib.util.spec_from_loader("agentctl", _loader)
 A = importlib.util.module_from_spec(_spec)
 _loader.exec_module(A)
 
+
+class _AgentctlTime(type(time)):
+    """agentctl's OWN `time`: the real module's attributes, except what a test assigns. Tests fake the clock and the
+    waits with `A.time.sleep = ...`; on the shared stdlib module that also replaced the sleep inside subprocess's
+    `wait(timeout=...)` poll, so a git call that outlived its busy-loop window (a loaded laptop) hit the fake: a
+    die-on-sleep fake killed the checker inside `git checkout`, before its remote run existed (test_queue's
+    test_superseding_an_entry_cancels_its_run, 2026-10-29), and a no-op one turned the poll into a busy loop."""
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+A.time = _AgentctlTime("time")
+
 # No test writes to the real inbox (~/.cache/agentctl/inbox): every land / watch / wait a test runs writes its verdict
 # here instead (test_inbox sets its own per test).
 # THE STATE ROOT (2026-10-28: tests wrote ~200 waiting/ dirs, the sweep reports and 176 checks/runs.jsonl rows into the
