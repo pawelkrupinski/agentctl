@@ -3817,7 +3817,7 @@ def red_resolve_old(store, it, age, o_r, repo, t):
     d = it["data"]
     path, txt = workflow_file_of(repo, f"{REMOTE}/main", d.get("workflow")) if repo else (None, "")
     if path and "workflow_dispatch" in txt:
-        line = red_verify_dispatch(o_r, repo, d.get("workflow"), "")
+        line = red_verify_dispatch(o_r, repo, d.get("workflow"), "", (d.get("last_run") or {}).get("databaseId"))
         if line.startswith("dispatched"):
             store.close_offer(f"red:{it['id']}", "old run")
             red_move(store, it, "fix-pending", f"{red_what(d)}: its newest run is {fmt_age(age)} old: {line}",
@@ -3852,7 +3852,7 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
             red_offer(store, it, f"{red_what(d)}: still red after its block cleared: offered again", data={"fix": None})
             return [f"re-offered {red_what(d)} (still red after its block)"]
         if not d.get("gate") and not f.get("verify_dispatched"):
-            line = red_verify_dispatch(o_r, repo, d.get("workflow"), "")
+            line = red_verify_dispatch(o_r, repo, d.get("workflow"), "", (d.get("last_run") or {}).get("databaseId"))
             store.update_item("red", it["id"], it["version"], {"fix": {**f, "verify_dispatched": ts(), "verify": line}})
             if line.startswith("dispatched"):
                 return [line]
@@ -3914,7 +3914,7 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
         return [f"cleared {red_what(d)}"]
     if not holds and not d.get("gate") and not f.get("verify_dispatched") and t - float(f.get("at") or t) > RED_FIX_RUN_START \
             and d.get("red_kind") in ("outside",):
-        line = red_verify_dispatch(o_r, repo, d.get("workflow"), sha)
+        line = red_verify_dispatch(o_r, repo, d.get("workflow"), sha, (d.get("last_run") or {}).get("databaseId"))
         store.update_item("red", it["id"], it["version"], {"fix": {**f, "verify_dispatched": ts(), "verify": line}})
         return [line]
     if t - it["entered_at"] >= env_num("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP):
@@ -3941,20 +3941,46 @@ def red_fix_unverifiable(store, it, why, t):
     return [f"re-offered {red_what(d)} ({why[:80]})"]
 
 
-def red_verify_dispatch(o_r, repo, workflow, sha):
-    """The red's workflow dispatched on main to verify a landed fix (no wait: the next tick reads its run)."""
+def red_verify_dispatch(o_r, repo, workflow, sha, run_id=None):
+    """The red's workflow dispatched on main to verify a landed fix (no wait: the next tick reads its run), with the
+    failing run's own inputs (run_id's) so the verifying run repeats it. Archive recording #823 (2026-10-29): dispatched
+    with no inputs, its required `runs` input made Forgejo refuse it (HTTP 400), so no run could ever verify the red."""
     path, txt = workflow_file_of(repo, f"{REMOTE}/main", workflow) if repo and workflow else (None, "")
     if not path:
         return f"FIX UNVERIFIED: no workflow file named {workflow!r} on main"
     if "workflow_dispatch" not in txt:
         return f"FIX UNVERIFIED until {workflow}'s next scheduled run (no workflow_dispatch)"
+    inputs = run_dispatch_inputs(o_r, run_id) if run_id else {}
     try:
-        api(o_r, "POST", f"actions/workflows/{os.path.basename(path)}/dispatches", body={"ref": "main", "inputs": {}})
-        record_dispatch(branch="main", workflow=workflow, sha=sha, agent="red verify", pid=os.getpid(), inputs={},
+        api(o_r, "POST", f"actions/workflows/{os.path.basename(path)}/dispatches", body={"ref": "main", "inputs": inputs})
+        record_dispatch(branch="main", workflow=workflow, sha=sha, agent="red verify", pid=os.getpid(), inputs=inputs,
                         purpose=f"verify the fix {sha[:10]}", key=f"verify-{os.path.basename(path)}-{int(time.time())}")
     except (Exception, SystemExit) as e:
-        return f"FIX UNVERIFIED: could not dispatch {workflow} ({str(e)[:120]})"
-    return f"dispatched {workflow} on main to verify {sha[:10]}"
+        return f"FIX UNVERIFIED: could not dispatch {workflow} ({http_error_text(e)[:240]})"
+    return f"dispatched {workflow} on main to verify {sha[:10]}" + (f" with {json.dumps(inputs)}" if inputs else "")
+
+
+def run_dispatch_inputs(o_r, run_id):
+    """The workflow_dispatch inputs run_id was started with ({} for any other event, or when its run cannot be read)."""
+    try:
+        payload = json.loads((api(o_r, "GET", f"actions/runs/{run_id}") or {}).get("event_payload") or "{}")
+    except (Exception, SystemExit):
+        return {}
+    inputs = payload.get("inputs") if isinstance(payload, dict) else None
+    return {str(k): str(v) for k, v in inputs.items()} if isinstance(inputs, dict) else {}
+
+
+def http_error_text(e):
+    """An exception's text, with the response body when it is an HTTP error (Forgejo names a refusal's cause there)."""
+    text = str(e)
+    if isinstance(e, urllib.error.HTTPError):
+        try:
+            body = e.read().decode("utf-8", "replace").strip()
+        except Exception:
+            body = ""
+        if body:
+            text += f": {body}"
+    return text
 
 
 def red_flake_check(store, it, snap, repo, facts):

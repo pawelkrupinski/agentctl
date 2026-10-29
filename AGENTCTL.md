@@ -611,7 +611,7 @@ The reconciler then takes it, a step per tick:
   convergence #m green` closes the worktree you landed from when proven merged (unless `--keep-worktree`); `WATCH RED:
   <workflow> #n <failed jobs>` the moment either is red (fix forward with `Fixes-Red: <n>`); `WATCH UNKNOWN` after
   3 h undecided. A landed `Fixes-Red: N` is verified: `FIX OK` / `FIX FAILED` / `FIX UNVERIFIED`, each an inbox entry;
-  a fix for a red outside the gate gets its workflow dispatched on main to verify it.
+  a fix for a red outside the gate gets its workflow dispatched on main to verify it, with the failing run's own inputs (a required input left out is refused: Archive recording #823).
 
 **Never an empty commit** (2026-10-27: overlapping entries landed four empty duplicates on main): re-queueing
 replaces; a commit already on main is dropped at the rebuild; `prepush-check` refuses a range carrying an empty commit

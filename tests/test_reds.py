@@ -788,6 +788,36 @@ class OldRedTest(RedsBase):
         self.assertIn(("POST", "actions/workflows/report-timings.yml/dispatches"), calls)
 
 
+    def test_an_old_reds_fresh_run_repeats_the_failing_runs_inputs(self):
+        # Archive recording #823 (2026-10-29): dispatched with no inputs, its required `runs` input was refused (HTTP 400)
+        self.outside("name: Report run timings\non:\n  workflow_dispatch:\n    inputs:\n      runs: {required: true}\n")
+        calls, saved = [], (A.api, A.record_dispatch)
+
+        def api(o_r, method, path, params=None, body=None):
+            calls.append((method, path, body))
+            if method == "GET" and path.startswith("actions/runs/"):
+                return {"event_payload": json.dumps({"inputs": {"runs": "528 573"}, "ref": "refs/heads/main"})}
+            return None
+        A.api, A.record_dispatch = api, (lambda **kw: None)
+        try:
+            self.tick(dispatch=True)
+        finally:
+            A.api, A.record_dispatch = saved
+        it = self.only()
+        self.assertEqual((it["state"], it["data"]["fix"]["status"]), ("fix-pending", "verify"))
+        rid = it["data"]["last_run"]["databaseId"]
+        self.assertIn(("GET", f"actions/runs/{rid}", None), calls)
+        self.assertIn(("POST", "actions/workflows/report-timings.yml/dispatches",
+                       {"ref": "main", "inputs": {"runs": "528 573"}}), calls)
+        self.assertIn('with {"runs": "528 573"}', it["data"]["fix"]["verify"])
+
+    def test_a_refused_verify_dispatch_names_forgejos_reason(self):
+        import email.message, io as _io, urllib.error
+        e = urllib.error.HTTPError("http://f/x", 400, "Bad Request", email.message.Message(),
+                                   _io.BytesIO(b'{"message":"Require value for input: runs"}'))
+        self.assertEqual(A.http_error_text(e), 'HTTP Error 400: Bad Request: {"message":"Require value for input: runs"}')
+
+
 class AttachTest(RedsBase):
     def test_watch_red_attaches_by_run_number_with_its_author(self):
         its = A.red_attach(self.st, "Main", 20, author={"session": "s1", "worktree": "/w"})
