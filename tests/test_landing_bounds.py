@@ -18,7 +18,9 @@ class PushBoundTest(unittest.TestCase):
             f.write("#!/bin/sh\necho 'Connection to localhost closed by remote host.'\nexec sleep 300\n")
         os.chmod(script, 0o755)
         t0 = time.monotonic()
-        rc, out = A.run_watched([script], d, dict(os.environ), os.path.join(d, "log"), "push", stall=1)
+        # stall 5 s, not 1: at load 25 the shell had not even printed its line within a second, so the output read
+        # empty (2026-10-29)
+        rc, out = A.run_watched([script], d, dict(os.environ), os.path.join(d, "log"), "push", stall=5)
         self.assertIsNone(rc)  # stalled: its group ended
         self.assertLess(time.monotonic() - t0, 90)  # generous: the full suite loads the machine
         self.assertTrue(A.TRANSIENT_PUSH.search(out))
