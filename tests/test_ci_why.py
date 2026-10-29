@@ -189,7 +189,7 @@ class CiWhyTest(FakeForge):
                       "preflight\tOMDb and TMDB\t2026-10-28T23:31:40Z ::error::OMDb refuses the key (HTTP 401: Request limit "
                       "reached) — spent daily quota or a bad key\n")
         rc, out, _ = self.why()
-        self.assertIn("[infra] preflight: KEY REFUSED, an outside service refused the run's key", out)
+        self.assertIn("[infra] preflight: QUOTA SPENT, an outside service's quota for the run's key is used up", out)
         self.assertNotIn("TEST FAILURE", out)
 
     def test_a_run_classified_by_an_older_classifier_is_classified_again(self):
