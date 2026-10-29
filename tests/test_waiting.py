@@ -113,6 +113,33 @@ class WaitingTest(Base):
     def calls_of(self, mode):
         return [l for l in open(self.calls).read().splitlines() if l.startswith(mode)] if os.path.exists(self.calls) else []
 
+    def test_network_shaped_failure_on_change_and_main_is_infra_requeue_not_a_known_red(self):
+        """2026-10-29 ~18:50 (#823): fetch-gitops reached neither Forgejo nor GitHub, on the change and on plain main;
+        land recorded "Local checks" as a KNOWN RED. Now: no reds/local.json, the change re-queued as infra."""
+        self.reds = set()
+        self.r.write("scripts/hooks/pre-push",
+                     "#!/bin/sh\n# --checks-only\n"
+                     "echo '    fetch-gitops: ssh://forgejo-git/o/movies-gitops.git unreachable'\n"
+                     "echo \"    fatal: unable to access 'https://github.com/o/g.git/': Could not resolve host: github.com\"\n"
+                     "echo '! pre-push GitOps manifests STALE: infra/bin/fetch-gitops could not fetch movies-gitops main'\n"
+                     "echo '! pre-push sbt FAILED (3s)'\nexit 1\n")
+        os.chmod(os.path.join(self.r.path, "scripts/hooks/pre-push"), 0o755)
+        self.r.commit("a hook that cannot reach the network")
+        self.r.push()
+        wt, sha = self.agent("net", "web/src/main/N.scala", "n\n")
+        before = sh(self.r.root, "git", "--git-dir", self.r.bare, "rev-parse", "main")
+        rc, out = self.land(wt)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("KNOWN RED", out)
+        self.assertRegex(out, r"QUEUED \S+ \([0-9a-f]{10}\): infra, not a known red")
+        self.assertFalse(os.path.exists(A.reds_dir("local.json")), "a network failure is never main's known red")
+        self.assertFalse(os.listdir(A.reds_dir("baseline-out")) if os.path.isdir(A.reds_dir("baseline-out")) else [])
+        (e,) = self.entries().values()
+        self.assertEqual((e["status"], e["head"], e["infra_reason"], e["infra_same"]),
+                         ("queued", sha, A.NETWORK_REASON, 1))
+        self.assertGreater(e["retry_after"], time.time(), "checked again later, not now")
+        self.assertEqual(sh(self.r.root, "git", "--git-dir", self.r.bare, "rev-parse", "main"), before, "nothing landed")
+
     def test_green_main_lands_directly_after_its_own_checks(self):
         self.reds = set()
         wt, sha = self.agent("a", "web/src/main/A.scala", "a\n")

@@ -611,6 +611,14 @@ agent must be assigned to it".
   runs the dry run once more, and the hook passes a check that fails only as it fails on plain main (`KNOWN RED: <check>
   ...`), its pass stored, so the push reuses it. A change that fixes main's red just passes. Fail-closed: no baseline
   for the push's base, and every failure blocks as before.
+- **A network failure is infra, never a known red** (2026-10-29 ~18:50: during ci-runner packet loss #823's land
+  recorded `Local checks` as a KNOWN RED). When the dry run's failure and its baseline on plain main both carry a
+  network signature (`fetch-gitops ... unreachable / could not fetch`, `GitOps manifests STALE`, git's `unable to
+  access`, `Could not resolve host`, `ssh: connect to host`, connection reset/refused/timed out, DNS failures), nothing
+  is recorded (no `reds/local.json`, no baseline) and the change goes to the land queue as an infra re-queue
+  (`QUEUED <id> (<sha>): infra, not a known red -- ...`, checked again after the infra back-off). Its queued check
+  failing on the network again is re-queued for the same reason; the third time (or 30 min) opens the change's
+  `STALLED` condition, which clears when it gets past it.
 - **A stale local red.** `reds/local.json` is keyed to the main sha it was computed on. Once forgejo/main moves past it
   the record is shown as `Local checks: stale, rechecking` (never RED, no unit, no dispatch) and the failing checks are
   run again on the new main (the hook over <recorded main>..main, other checks skipped, governor check class): in the
