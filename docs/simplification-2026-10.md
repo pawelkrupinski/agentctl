@@ -141,3 +141,16 @@ Commit 8f054a9.
 
 Commits: a843bb1 (groundwork), 955ad34 .. 2ce6ce6 (one part per commit, the suite green before each).
 Pin bump: needed for ci-runner to run it (behaviour unchanged, so it can ride with item 4's bump).
+
+## Agent A: item 4 (owner's item 5), one status model -- DONE
+
+- `status_data()` (= `/api/status`) is the model; `status_data(only=(...))` assembles just the sections a renderer
+  needs. Its header carries the gate text, the store's reachability, the tick, the changes, the open items and pins.
+- One gate formatter, `status_gate_text` (fresh line, else `gate ?` / `gate NETWORK` / `gate UNREAD (as of ...)`).
+- Renderers: `render_status_line`, `render_status`, `render_red_status`; `ci-why --summary --cached` prints the
+  header's gate text. Deleted: the batch part's own status_line/cmd_status formatter, `red_status`'s own store walk,
+  ci-why --cached's own staleness formatter. The page's JS renders the same JSON.
+- New model sections: `families` (each family's one fixer), each red's `what`.
+- tests/test_status_model.py: the line, the page header, ci-why and red status agree.
+
+Commit: a092a1b. Pin bump: laptop-side mostly (status rendering); ride with item 5's.
