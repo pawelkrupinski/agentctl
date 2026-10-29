@@ -230,3 +230,26 @@ then, it does the bump itself once CI is green.)
 
 Commit: c51cb40. Laptop-side (the dispatcher and the wrapper run on the laptop): live at once, no pin bump needed for
 it beyond the items 2-5 bump.
+
+## Agent A: item 7 (owner's item 4), the config file -- DONE
+
+- `~/.config/agentctl/agentctl.toml`, under `/etc/agentctl/agentctl.toml` (the server copy), both under the
+  environment (`$AGENTCTL_CONFIG` names one file; `-` none). Keys are the old variable names without `AGENTCTL_`
+  (`red_fixers = 5`, or `[red] fixers = 5`); every existing `$AGENTCTL_*` name keeps working. A re-exec re-reads the
+  file (`AGENTCTL_CONFIG_SET` marks what the file set).
+- `agentctl config` (what applies, from where), `config defaults` (a complete commented file), `config doc --write`
+  (AGENTCTL.md's "Config" reference: 129 knobs, generated from the code; tests/test_config.py keeps it in step).
+- For Agent C (infra, optional): ci-runner can get the server copy with
+  `environment.etc."agentctl/agentctl.toml".text = ''...'';` in nix/hosts/ci-runner/agentctl.nix -- nothing needs
+  it today (the units' env vars still apply and override it).
+
+Commit: 458c913. Laptop: nothing changes until a file exists. Pin bump: rides with the items 2-5 bump.
+
+## Agent A: summary (2026-10-30)
+
+Items 2-7 done and on forgejo main (item 1 done before the split of work). Counts, single file 67cd130 -> now:
+17,444 lines in one file -> 18,274 lines in a 73-line entry plus 29 files under lib/agentctl/ (removals in items 2, 4
+and 5; additions for the owners, the config and the status/red models); argparse parsers 59 -> 62 (+config, +issue
+(Agent B), +the hidden `red owner`; -`store import`, -`store use --local`); 601 -> 639 tests, ~55 s in parallel.
+Owner actions: ONE pin bump (above, items 2-5 milestone) covers everything server-side; the infra branch `agentctl-ci`
+(Actions on) is Agent C's to hand over now.
