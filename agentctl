@@ -5691,6 +5691,11 @@ def red_claim(store, o_r, target, note="", wt=None):
     here = safe_cwd()
     items = None
     if own:
+        t = str(target).lstrip("#")
+        if t in (str(rec.get("run")), str(rec.get("lease") or "").split("/", 1)[-1]):  # its own red, by run or key
+            rec["note"] = note or rec.get("note") or "working"
+            write_json(own, rec)
+            return 0, [f"noted on your lease {rec.get('lease')}: {rec['note']}"]
         items = red_targets(store, o_r, target)
         primary = store.get(rec["lease"]) if rec.get("lease") else None
         mine = primary["holder"] if lease_is_live(primary, store.clock()) else None
