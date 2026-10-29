@@ -7,29 +7,21 @@
   first by the last run's timings (~/.cache/agentctl-tests/durations.json, or the module order when there are none).
   Each worker is its own process with its own temp root and state root (test_agentctl sets them per process), so no
   two workers share a file.
-- A PER-TEST TIMEOUT (default 60 s, $AGENTCTL_TEST_TIMEOUT): SIGALRM raises TestTimeout inside the test (a blocked
-  syscall included), so the test FAILS with its traceback instead of hanging the suite; a test that does not come back
-  from that within 30 s more has its worker killed (faulthandler dumps every thread first), and the test is reported
-  as WORKER DIED. The suite as a whole is bounded too (--suite-timeout, default 600 s).
+- A PER-TEST TIMEOUT (default 60 s, $AGENTCTL_TEST_TIMEOUT): the harness's (tests/harness.py) SIGALRM raises
+  TestTimeout inside the test (a blocked syscall included), so the test FAILS with its traceback instead of hanging the
+  suite; a test that does not come back from that within 30 s more has its worker killed here (faulthandler dumps
+  every thread first), and the test is reported as WORKER DIED. The suite as a whole is bounded too (--suite-timeout, default 600 s).
 - PATTERN: only tests whose id (module.Class.test) contains one of the patterns.
-Exit 0 when every test passed, 1 otherwise. The hermetic harness (HOME, PATH, git config) is test_agentctl's."""
-import argparse, json, os, signal, subprocess, sys, threading, time, traceback, unittest
+Exit 0 when every test passed, 1 otherwise. The hermetic harness (HOME, PATH, git config, timeout) is tests/harness.py."""
+import argparse, json, os, subprocess, sys, threading, time, traceback, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DURATIONS = os.path.join(os.path.expanduser("~"), ".cache", "agentctl-tests", "durations.json")
 GRACE = 30
 
 
-class TestTimeout(Exception):
-    pass
-
-
-def _alarm(signum, frame):
-    raise TestTimeout(f"test exceeded the per-test timeout ({os.environ.get('AGENTCTL_TEST_TIMEOUT')} s)")
-
-
 class TimedResult(unittest.TestResult):
-    """Arms the alarm per test; a hard backstop (faulthandler + exit) for a test that ignores the exception."""
+    """Times each test; a hard backstop (faulthandler + exit) for a test that ignores the harness's TestTimeout."""
 
     def __init__(self, timeout, *a, **kw):
         super().__init__(*a, **kw)
@@ -38,13 +30,11 @@ class TimedResult(unittest.TestResult):
     def startTest(self, test):
         import faulthandler
         self._t0 = time.monotonic()
-        signal.alarm(self.timeout)
         faulthandler.dump_traceback_later(self.timeout + GRACE, exit=True, file=sys.stderr)
         super().startTest(test)
 
     def stopTest(self, test):
         import faulthandler
-        signal.alarm(0)
         faulthandler.cancel_dump_traceback_later()
         self.times[test.id()] = time.monotonic() - self._t0
         super().stopTest(test)
@@ -78,7 +68,6 @@ def list_tests(patterns):
 def worker(timeout):
     """Reads test ids from stdin, runs each, writes one JSON line per test to stdout (the protocol's only output)."""
     sys.path.insert(0, HERE)
-    signal.signal(signal.SIGALRM, _alarm)
     proto = os.fdopen(os.dup(1), "w", buffering=1)
     os.dup2(2, 1)  # the tests' own prints go to stderr, never into the protocol
     loader = unittest.TestLoader()

@@ -2,6 +2,8 @@
 import contextlib, re, datetime as dt, importlib.machinery, importlib.util, io, json, os, subprocess, sys, tempfile, threading, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import harness  # noqa: E402  -- FIRST: HOME, PATH, git config, the per-test timeout, the clock rule (tests/harness.py)
 
 # EVERY TEMP DIR OF A TEST RUN UNDER ONE, removed when the run ends (the owner, 2026-10-29: 3,009 leaked `agentctl-*`
 # dirs, a full disk): tempfile's own dir, and TMPDIR for every child process; a killed run's leftovers the processor
@@ -19,18 +21,12 @@ A = importlib.util.module_from_spec(_spec)
 _loader.exec_module(A)
 
 
-class _AgentctlTime(type(time)):
-    """agentctl's OWN `time`: the real module's attributes, except what a test assigns. Tests fake the clock and the
-    waits with `A.time.sleep = ...`; on the shared stdlib module that also replaced the sleep inside subprocess's
-    `wait(timeout=...)` poll, so a git call that outlived its busy-loop window (a loaded laptop) hit the fake: a
-    die-on-sleep fake killed the checker inside `git checkout`, before its remote run existed (test_queue's
-    test_superseding_an_entry_cancels_its_run, 2026-10-29), and a no-op one turned the poll into a busy loop."""
-
-    def __getattr__(self, name):
-        return getattr(time, name)
-
-
-A.time = _AgentctlTime("time")
+# agentctl's OWN `time` and `subprocess` (82fdc89, made universal by the harness): tests fake the clock and the waits
+# with `A.time.sleep = ...`; on the shared stdlib module that also replaced the sleep inside subprocess's
+# `wait(timeout=...)` poll, so a git call that outlived its busy-loop window (a loaded laptop) hit the fake: a
+# die-on-sleep fake killed the checker inside `git checkout`, before its remote run existed (test_queue's
+# test_superseding_an_entry_cancels_its_run, 2026-10-29), and a no-op one turned the poll into a busy loop.
+harness.register(A)
 
 # No test writes to the real inbox (~/.cache/agentctl/inbox): every land / watch / wait a test runs writes its verdict
 # here instead (test_inbox sets its own per test).
@@ -49,7 +45,7 @@ os.environ.setdefault("AGENTCTL_STORE_DEFAULT_URL", "http://127.0.0.1:9")
 def _real_cache_marks():
     """What a test leak into the real cache would add: test-repo dirs under waiting/, test rows in checks/runs.jsonl,
     a test repo in a sweep report."""
-    root = os.path.join(os.path.expanduser("~"), ".cache", "agentctl")
+    root = os.path.join(harness.REAL_HOME, ".cache", "agentctl")
     temp = ("var_folders", "_tmp_", "agentctl-", "/var/folders/", "/tmp/")
     marks = set()
     w = os.path.join(root, "waiting")
@@ -113,8 +109,8 @@ os.environ.setdefault("AGENTCTL_GOV_LOAD_PROBE", "echo 1")
 os.environ.setdefault("AGENTCTL_QUEUE", "0")
 os.environ.setdefault("KINOWO_SBT_WARM_STATE", tempfile.mkdtemp(prefix="agentctl-sbt-warm-test-"))
 
-ENV = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
-           GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
+ENV = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+# (GIT_CONFIG_GLOBAL / GIT_CONFIG_NOSYSTEM: the harness's gitconfig, already in os.environ)
 
 
 class StallSamples:

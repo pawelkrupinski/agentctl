@@ -6,6 +6,7 @@ import contextlib, io, json, os, re, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, TOOL  # noqa: E402
+import harness  # noqa: E402
 
 
 class StateRootTest(unittest.TestCase):
@@ -30,7 +31,7 @@ class StateRootTest(unittest.TestCase):
 
     def test_the_test_run_itself_is_under_a_temp_root(self):
         self.assertNotEqual(os.path.realpath(A.state_root()),
-                            os.path.realpath(os.path.join(os.path.expanduser("~"), ".cache", "agentctl")))
+                            os.path.realpath(os.path.join(harness.REAL_HOME, ".cache", "agentctl")))
 
 
 class CachedSummaryTest(unittest.TestCase):
