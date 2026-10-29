@@ -266,7 +266,8 @@ class FixTest(RedsBase):
         it = self.only()
         self.assertEqual((it["state"], it["data"]["fix"]["entry"]), ("fix-pending", e["id"]))
         self.assertEqual(self.st.offers("fixer"), [])
-        self.assertIn("waiting to land", A.red_view(self.st, it, self.t[0])[1])
+        # the gate is red on this very red (run 20; the fix names run 19 of the same key): it lands on red
+        self.assertEqual(A.red_view(self.st, it, self.t[0])[1], "landing on red (Fixes-Red), waiting")
         self.tick(advance=3 * A.RED_FIX_GIVEUP)  # hours in the queue behind the red gate: still its holder
         self.assertEqual(self.only()["state"], "fix-pending")
         self.assertEqual(self.unheld(), [])
@@ -1182,6 +1183,39 @@ class AuditTest(RedsBase):
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60))
         self.assertEqual(self.stuck_after([{"name": "preflight", "status": "in_progress", "startedAt": now}], busy=4), [])
 
+
+
+class GateOwnRedLabelTest(unittest.TestCase):
+    """2026-10-29 19:20: convergence #2550's fix (Fixes-Red: 2527, the same red key) read "blocked by gate convergence
+    #2550" -- blocked by the very red it fixes. A fix of the gate's own red lands on red; any other waits on the gate."""
+    CONV = "Identity model convergence"
+
+    def setUp(self):
+        self.saved = A.state_read
+        A.state_read = lambda: {"ci": {"gate": [
+            {"name": "Main", "decided": {"number": 900, "databaseId": 9900, "conclusion": "success"}},
+            {"name": self.CONV, "decided": {"number": 2550, "databaseId": 12550, "conclusion": "failure"}}]}}
+
+    def tearDown(self):
+        A.state_read = self.saved
+
+    def item(self, workflow, runs, status):
+        return {"id": "k", "state": "fix-pending", "deadline": 0, "entered_at": 0, "level": 0,
+                "data": {"key": "k", "workflow": workflow, "runs": runs,
+                         "fix": {"entry": "20261029-1920-movies-wt-conv-guards-be7bb1", "status": status}}}
+
+    def test_a_fix_of_the_gates_own_red_lands_on_red_whichever_run_it_names(self):
+        for status in ("checking", "queued"):
+            text, short = A.red_view(None, self.item(self.CONV, ["2527", "12527", "2550", "12550"], status), 0)
+            self.assertEqual(short, f"landing on red (Fixes-Red), {status}")
+            self.assertIn("landing on red (Fixes-Red)", text)
+            self.assertNotIn("blocked by gate", text + short)
+
+    def test_a_fix_of_another_red_is_blocked_by_the_gate(self):
+        text, short = A.red_view(None, self.item(self.CONV, ["2400"], "queued"), 0)  # an older red, not the gate's
+        self.assertEqual(short, "fix waiting to land (blocked by gate convergence #2550)")
+        text, short = A.red_view(None, self.item("Main", ["2550"], "queued"), 0)  # same number, another workflow
+        self.assertIn("blocked by gate convergence #2550", short)
 
 if __name__ == "__main__":
     unittest.main()

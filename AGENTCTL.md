@@ -526,8 +526,10 @@ agent must be assigned to it".
   in its worktree's `RED-INBOX.md` tells it. A live fixer stays its reds' holder (its lease is taken again for it if it
   lapsed); no second fixer while a previous one of the red, its run or its family works, and a new one goes on in the
   previous one's worktree when that holds unlanded commits. Fixers land each verified step; commits unlanded 45 min
-  get `RED-NUDGE.md`, 90 min a `RED ESCALATE`. A queued Fixes-Red change holds its red ("fix waiting to land") and
-  verification counts from its landing.
+  get `RED-NUDGE.md`, 90 min a `RED ESCALATE`. A queued Fixes-Red change holds its red ("fix waiting to land", "blocked by
+  gate <red>" while main is red) and verification counts from its landing. A fix of the gate's OWN red (a gate run's
+  red carries its key, whichever run its Fixes-Red names) reads "landing on red (Fixes-Red), <queued|checking|...>" in
+  `red status`, `status --line` and the status page, never "blocked by gate" that same red (2026-10-29 19:20).
 - **Gate reds are never budget-starved (2026-10-27: Main #2146 sat at `NOBODY (daily dispatch budget 6 spent)` for
   85+ min).** A gate red has its own cap, 3 fixers ALIVE at once (`$AGENTCTL_RED_GATE_MAX_FIXERS`), and NO daily cap;
   hitting it is `RED UNCLAIMED: ... NOBODY -- gate fixer cap 3 reached`, escalated at once (below). Reds outside the

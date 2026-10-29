@@ -6026,14 +6026,24 @@ def red_release(store, o_r, target, any_=False):
 
 
 # -- how a red reads (ci-why, the status line, `red status`): its state, holder or offer, deadline. Never NOBODY.
+def gate_red_runs():
+    """[(workflow name, decided run)] of the gate's red workflow(s) in the snapshot."""
+    return [(g.get("name"), g.get("decided") or {}) for g in (state_read().get("ci") or {}).get("gate") or []
+            if ((g.get("decided") or {}).get("conclusion") or "") in RED_CONCLUSIONS]
+
+
 def gate_red_now_label():
     """'convergence #2473' for the gate's red workflow(s) in the snapshot, else None."""
-    out = []
-    for g in (state_read().get("ci") or {}).get("gate") or []:
-        dd = g.get("decided") or {}
-        if (dd.get("conclusion") or "") in RED_CONCLUSIONS:
-            out.append(f"{short_flow(g.get('name'))} #{dd.get('number')}")
-    return ", ".join(out) or None
+    return ", ".join(f"{short_flow(n)} #{dd.get('number')}" for n, dd in gate_red_runs()) or None
+
+
+def gate_own_red_label(d):
+    """'convergence #2550' when red d IS the gate's red (a run of the gate's red workflow carries its key), else None:
+    its Fixes-Red fix lands on red (whichever run of the key it names), never blocked by that gate."""
+    names = set(map(str, red_names(d)))
+    own = [f"{short_flow(n)} #{dd.get('number')}" for n, dd in gate_red_runs()
+           if n == d.get("workflow") and run_names(dd) & names]
+    return ", ".join(own) or None
 
 
 def red_view(store, it, t=None):
@@ -6071,6 +6081,13 @@ def red_view(store, it, t=None):
                     f"offered again if none by {time.strftime('%H:%M', time.localtime(it['entered_at'] + env_num('AGENTCTL_RED_FIX_GIVEUP', RED_FIX_GIVEUP)))}{rec}",
                     "verifying")
         if f.get("status") in FIX_OPEN:  # queued, not landed: nothing has tested it yet -- it holds the red
+            # THE FIX OF THE GATE'S OWN RED lands on red (2026-10-29 19:20: convergence #2550's fix, Fixes-Red: 2527,
+            # read "blocked by gate convergence #2550" -- blocked by the red it fixes)
+            own = gate_own_red_label(d)
+            if own:
+                return (f"fix {f.get('entry')} landing on red (Fixes-Red), {f.get('status')}: it fixes the gate's own "
+                        f"red ({own}); verified once it lands{rec}",
+                        f"landing on red (Fixes-Red), {f.get('status')}")
             by = gate_red_now_label()
             return (f"fix {f.get('entry')} waiting to land ({f.get('status')}" + (f"; blocked by gate {by}" if by else "")
                     + f"): verified once it lands (Fixes-Red){rec}",
