@@ -14,7 +14,8 @@ class Hang:
         self.s.bind(("127.0.0.1", 0))
         self.s.listen(8)
         self.conns = []
-        threading.Thread(target=self.loop, daemon=True).start()
+        self.thread = threading.Thread(target=self.loop, daemon=True)
+        self.thread.start()
         self.url = f"http://127.0.0.1:{self.s.getsockname()[1]}/api/v1"
 
     def loop(self):
@@ -25,7 +26,16 @@ class Hang:
                 return
 
     def close(self):
+        # LINUX: close() alone does not stop a listener another thread is blocked in accept() on -- that accept holds
+        # the socket, which stays bound and listening, so the port keeps taking connections ('timeout', never
+        # 'refused'). shutdown() wakes the accept (EINVAL) and ends the listen; macOS answers it with ENOTCONN, and its
+        # close() alone already releases the port.
+        try:
+            self.s.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         self.s.close()
+        self.thread.join(5)
         for c in self.conns:
             c.close()
 
