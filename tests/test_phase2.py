@@ -40,8 +40,9 @@ class Phase2Base(unittest.TestCase):
         self.tmp = tempfile.mkdtemp(prefix="agentctl-p2-")
         self.saved = {k: os.environ.get(k) for k in ("AGENTCTL_STATE_ROOT", "AGENTCTL_STORE_URL", "AGENTCTL_STORE_TOKEN",
                                                     "AGENTCTL_ROLE", "AGENTCTL_MOVIES_REPO", "NOTIFY_SOCKET",
-                                                    "AGENTCTL_STORE_RETRY_BASE")}
+                                                    "AGENTCTL_STORE_RETRY_BASE", "AGENTCTL_LAPTOP_PRESSURE")}
         os.environ["AGENTCTL_STORE_RETRY_BASE"] = "0.01"  # the retries' backoff, short here
+        os.environ["AGENTCTL_LAPTOP_PRESSURE"] = "-"  # the laptop running the tests is never the one under test
         os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp, "state")
         for k in ("AGENTCTL_STORE_URL", "AGENTCTL_STORE_TOKEN", "AGENTCTL_ROLE", "NOTIFY_SOCKET"):
             os.environ.pop(k, None)
