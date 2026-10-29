@@ -8159,7 +8159,7 @@ def watch_event(it, verdict, severity="info", code=0):
     return {"text": verdict.splitlines()[0], "severity": severity,
             "audience": {"worktree": dd.get("worktree"), "session": dd.get("session")},
             "refs": {"verdict": verdict.splitlines()[0], "tail": verdict.splitlines()[1:25], "exit": code,
-                     "command": "watch", "sha": it["id"]}}
+                     "command": "watch", "sha": it["id"], "close": dd.get("close")}}
 
 
 def tick_watches(now_=None):
@@ -11448,12 +11448,27 @@ def sync_steps(repo, d, o_r):
         return red_dispatcher(Store(), o_r, repo, time.time())
     return (("outbox", flush_outbox), ("state mirror", mirror),
             ("events", project_events), ("notifier", notify_escalations),
+            ("landed worktrees", lambda: [err(x) for x in close_landed_worktrees()]),
             ("claims", lambda: red_renew_holders(Store(), time.time())),
             ("dispatcher", dispatch),
             ("network watch", network_watch), ("tunnel probe", tunnel_watch))
 
 
 LAPTOP_ONLY_STEPS = ("events", "notifier", "network watch", "tunnel probe")
+
+
+def close_landed_worktrees(store=None):
+    """The sync's half of WATCH OK while the reconciler runs on ci-runner: the worktree a change was landed from is on
+    this laptop, so each `watch.ok` event's `close` worktree is closed here (close_worktree: only when proven merged and
+    clean). Its own cursor (meta closer_seq). Returns what it said."""
+    st = store or Store()
+    out = []
+    for ev in st.events(after=int(st.meta_get("closer_seq", 0) or 0)):
+        st.meta_set("closer_seq", ev["seq"])
+        wt = (ev.get("refs") or {}).get("close")
+        if ev["kind"] == "watch.ok" and wt and os.path.isdir(wt):
+            out.append(close_worktree(wt))
+    return out
 
 
 # ---------------------------------------------------------------- the invariant watchdog (design §10, phase 1 step 2)

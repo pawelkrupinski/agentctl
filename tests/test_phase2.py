@@ -225,7 +225,7 @@ class ServerSideTest(Phase2Base):
         os.environ["AGENTCTL_ROLE"] = "server"
         self.assertEqual(A.host_role(), "server")
         names = [n for n, _ in A.sync_steps(self.repo, self.tmp, "o/r")]
-        self.assertEqual(names, ["outbox", "state mirror", "events", "notifier", "claims", "dispatcher",
+        self.assertEqual(names, ["outbox", "state mirror", "events", "notifier", "landed worktrees", "claims", "dispatcher",
                                  "network watch", "tunnel probe"])
         self.assertTrue(set(A.LAPTOP_ONLY_STEPS) <= set(names))
 
@@ -281,6 +281,23 @@ class ImportTest(Phase2Base):
         self.assertEqual(self.st.item("red", "k9")["state"], "leased")
         self.assertEqual([x["id"] for x in A.queued_entries(A.waiting_state(self.repo)[0])], [e["id"]])
         self.assertEqual(A.store_import(local, self.remote, lrepo)["leases"], 0)  # twice is harmless
+
+
+class CloseAfterWatchTest(Phase2Base):
+    def test_the_sync_closes_the_laptop_worktree_a_watch_ok_on_ci_runner_names(self):
+        wt = os.path.join(self.tmp, "movies-wt-done")
+        os.makedirs(wt)
+        closed, saved = [], A.close_worktree
+        A.close_worktree = lambda p: closed.append(p) or f"closed worktree {p}"
+        try:
+            for sha, to, close in (("a" * 40, "ok", wt), ("b" * 40, "red", wt), ("c" * 40, "ok", "/gone/elsewhere")):
+                it = self.st.put_item("watch", sha, "watching", {"close": close, "worktree": close})
+                self.st.transition("watch", sha, to, it["version"], event=A.watch_event(it, f"WATCH {to.upper()}"))
+            self.assertEqual(A.close_landed_worktrees(self.remote), [f"closed worktree {wt}"])
+            self.assertEqual(A.close_landed_worktrees(self.remote), [])  # each event once
+        finally:
+            A.close_worktree = saved
+        self.assertEqual(closed, [wt])
 
 
 class TickEntryTest(unittest.TestCase):
