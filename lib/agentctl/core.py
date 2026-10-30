@@ -554,6 +554,8 @@ def token_env(o_r, env=None):
     answers it, so it is handed the token now (in its environment, never on a command line or on disk). Without a token
     here the child gets none and says so itself."""
     env = dict(os.environ if env is None else env)
+    if on_github():  # gh reads GitHub with its own auth: no Forgejo token handed on
+        return env
     try:
         tok = token(o_r)
     except SystemExit:
@@ -566,14 +568,15 @@ def token_env(o_r, env=None):
 
 
 def gh_json(o_r, *args):
-    return tunnel_retry(lambda: _gh_json_once(o_r, *args))
+    """A JSON read through the forge's CLI (forgejo-gh, or gh on forge = github: lib/agentctl/forge.py)."""
+    return forge_retry(lambda: _gh_json_once(o_r, *args))
 
 
 def _gh_json_once(o_r, *args):
-    env = dict(os.environ, GH_TOKEN=token(o_r))
-    r = subprocess.run([FORGEJO_GH, *args, "-R", o_r], capture_output=True, text=True, env=env, timeout=GH_JSON_TIMEOUT)
+    r = subprocess.run(forge_argv(o_r, *args), capture_output=True, text=True, env=forge_env(o_r),
+                       timeout=GH_JSON_TIMEOUT)
     if r.returncode != 0:
-        raise RuntimeError(f"forgejo-gh {' '.join(args)}: {r.stderr.strip()[:300]}")
+        raise RuntimeError(f"{forge_cli_name()} {' '.join(args)}: {r.stderr.strip()[:300]}")
     return json.loads(r.stdout)
 
 
@@ -581,6 +584,9 @@ GH_JSON_TIMEOUT = 90  # a read through a hung tunnel must fail fast enough for t
 
 
 def api(o_r, method, path, params=None, body=None):
+    """The forge's REST API under repos/<o_r>/: Forgejo's /api/v1, or GitHub's through `gh api` (forge.py)."""
+    if on_github():
+        return _gh_api_once(o_r, method, path, params, body)
     return tunnel_retry(lambda: _api_once(o_r, method, path, params, body))
 
 

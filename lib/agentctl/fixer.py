@@ -1308,6 +1308,8 @@ def fix_between(repo, rec, red_head, green_head, causes, workflows):
 
 # -- an unreadable gate: no dispatch, one UNKNOWN per spell, an infra check
 def infra_check(o_r):
+    if on_github():  # the gate is read from github.com with gh's own auth: no tunnel, no vault token in the way
+        return f"forge github: read with {GH_CLI} (`gh auth status` names its auth)"
     parts = [f"Forgejo API localhost:3000 {'open' if port_open(3000) else 'CLOSED'}",
              f"Forgejo ssh localhost:2222 {'open' if port_open(2222) else 'CLOSED'}"]
     try:

@@ -264,6 +264,8 @@ def db_inputs(run_ids):
     ($AGENTCTL_DB_INPUTS=0 never asks, =1 always)."""
     ids = sorted({int(i) for i in run_ids if str(i).isdigit()})
     mode = os.environ.get("AGENTCTL_DB_INPUTS")
+    if on_github():  # GitHub serves no run's inputs and has no DB to ask: the dispatch records are the only source
+        return {}
     if not ids or mode == "0" or (mode != "1" and not (interactive_foreground() or ssh_master_up())):
         return {}
     sql = ("select id, json_extract(event_payload, '$.inputs') from action_run where id in ("
@@ -332,16 +334,12 @@ def pin_release_tag(repo):
 def read_pins(o_r, tag):
     """{country code: pinned recording run} from the release's hermetic-<code>.txt assets."""
     rel = api(o_r, "GET", f"releases/tags/{urllib.parse.quote(tag)}")
-    base = API.split("/api/")[0]
     pins = {}
     for a in (rel or {}).get("assets") or []:
         m = re.fullmatch(r"hermetic-(\w+)\.txt", a.get("name") or "")
         if not m:
             continue
-        url = f"{base}/{o_r}/releases/download/{urllib.parse.quote(tag)}/{a['name']}"
-        req = urllib.request.Request(url, headers={"Authorization": f"token {token(o_r)}"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            first = (resp.read().decode(errors="replace").splitlines() or [""])[0].split()
+        first = (forge_release_asset(o_r, tag, a["name"]).decode(errors="replace").splitlines() or [""])[0].split()
         if first and first[0].isdigit():
             pins[m.group(1)] = first[0]
     return pins
@@ -468,7 +466,7 @@ def predicts_main(repo, base, main_run, inputs, main_inputs):
 
 
 def branch_exists(o_r, name):
-    """False only when Forgejo says the branch is gone (404); True otherwise (an unread answer keeps it)."""
+    """False only when the forge says the branch is gone (404); True otherwise (an unread answer keeps it)."""
     try:
         gh_json(o_r, "api", f"repos/{o_r}/branches/{urllib.parse.quote(name, safe='')}")
         return True
@@ -738,10 +736,10 @@ DISPATCH_HELP = """Every CI run dispatched by hand has an owner record (~/.cache
 routed to that owner (BRANCH RED in the inbox), and a run predicting main's next red is claimed and fixed like one.
 
   agentctl dispatch run <workflow> --ref <branch> [-f key=value ...] [--purpose "..."]
-      `forgejo-gh workflow run`, recorded: the worktree (the cwd's), CLAUDE_CODE_SESSION_ID / $AGENTCTL_AGENT_NAME,
+      `forgejo-gh workflow run` (`gh workflow run` on forge = github), recorded: the worktree (the cwd's), CLAUDE_CODE_SESSION_ID / $AGENTCTL_AGENT_NAME,
       $CLAUDE_PID, the inputs, the run id once it shows.
   agentctl dispatch record --branch <branch> [--run <id>] [--workflow W] [-f key=value ...] [--purpose "..."]
-      register a dispatch made another way (a script's own forgejo-gh call).
+      register a dispatch made another way (a script's own forgejo-gh / gh call).
   agentctl dispatch list
       every record: branch / run, owner, alive or gone, purpose.
 Without a record, a measure/<user>/<sha>-<x> branch is matched to the worktree that holds <sha> (HEAD or reflog), a
@@ -777,11 +775,10 @@ def cmd_dispatch(a):
         return 0
     # run
     t0 = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=60)
-    argv = [FORGEJO_GH, "workflow", "run", a.workflow, "--ref", a.ref]
+    args = ["workflow", "run", a.workflow, "--ref", a.ref]
     for k, v in inputs.items():
-        argv += ["-f", f"{k}={v}"]
-    r = subprocess.run(argv + ["-R", o_r], capture_output=True, text=True, env=dict(os.environ, GH_TOKEN=token(o_r)),
-                       timeout=300)
+        args += ["-f", f"{k}={v}"]
+    r = subprocess.run(forge_argv(o_r, *args), capture_output=True, text=True, env=forge_env(o_r), timeout=300)
     sys.stdout.write(r.stdout)
     sys.stderr.write(r.stderr)
     if r.returncode != 0:

@@ -335,7 +335,7 @@ def run_cascades(o_r, d, repo=None):
     """derive_cascades for one run view (`d`, with jobs, headSha and workflowDatabaseId: the workflow's file)."""
     if not any(job_is_phantom(j) for j in d.get("jobs") or []):
         return {}
-    wf = d.get("workflowDatabaseId")
+    wf = forge_workflow_file(o_r, d)
     if not wf or not str(wf).endswith((".yml", ".yaml")):
         return {}
     graph = workflow_jobs(workflow_text(o_r, f".github/workflows/{wf}", d.get("headSha"), repo))
@@ -655,7 +655,7 @@ def explain_run_jobs(o_r, run, tail, repo=None):
         kind, why = classify_job(j, jl, raws.get(j["name"], (0, [])), j["name"] in timed or any(STEP_TIMED_OUT in l for l in jl))
         if unread and not jl and not setup:
             kind, why = "unclear", (f"LOG UNREADABLE ({unread[-1]}): no log was read, so nothing says infra or test -- "
-                                    f"read `forgejo-gh run view {rid} --log-failed` again; never rerun on this alone")
+                                    f"read `{forge_cli_name()} run view {rid} --log-failed` again; never rerun on this alone")
         kinds.append(kind)
         # a job with no error line is known by its failing STEP (a red is its failing test or step, never its job name)
         per_job.append((j["name"], kind, jl[0] if jl else (f"step failed: {bad[0]['name']}" if bad else "")))
@@ -663,7 +663,7 @@ def explain_run_jobs(o_r, run, tail, repo=None):
         lines += [f"      {l}" for l in jl]
         if note:
             lines.append(note)
-    rerun = f"rerun: {FORGEJO_GH.replace(HOME, '~')} run rerun {rid} --failed -R {o_r}"
+    rerun = f"rerun: {forge_cli().replace(HOME, '~')} run rerun {rid} --failed -R {o_r}"
     if no_verdict:
         verdict = ("NO VERDICT (an incomplete run: only `verdict complete` failed -- a takes or takes-drift row was "
                    "skipped, cancelled or missing; not a test failure, no fixer: the next complete run decides)")
@@ -672,7 +672,7 @@ def explain_run_jobs(o_r, run, tail, repo=None):
     elif "test" in kinds:
         verdict = "TEST FAILURE"
     elif "unclear" in kinds:
-        verdict = f"UNCLEAR (a failed step logged no FAILED/error line: read `forgejo-gh run view {rid} --log-failed`; if infra, {rerun})"
+        verdict = f"UNCLEAR (a failed step logged no FAILED/error line: read `{forge_cli_name()} run view {rid} --log-failed`; if infra, {rerun})"
     else:
         verdict = f"INFRA-SHAPED ({rerun})" if kinds else "no failed job listed"
     if not kinds and d.get("status") not in (None, "completed"):  # undecided: running, or waiting for a runner slot

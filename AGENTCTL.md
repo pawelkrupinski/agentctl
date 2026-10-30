@@ -1311,10 +1311,12 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `fixer_swap_gb` | `AGENTCTL_FIXER_SWAP_GB` | `16.0` | $AGENTCTL_FIXER_SWAP_GB: swap USED, absolute -- macOS shrinks the swap total as it frees |
 | `fixer_unlanded_escalate` | `AGENTCTL_FIXER_UNLANDED_ESCALATE` | `5400` | - |
 | `fixer_unlanded_nudge` | `AGENTCTL_FIXER_UNLANDED_NUDGE` | `2700` | - |
+| `forge` | `AGENTCTL_FORGE` | `forgejo` | the forge agentctl reads runs, logs, artifacts and dispatches through: forgejo or github |
 | `forgejo_api` | `AGENTCTL_FORGEJO_API` | - | - |
 | `forgejo_gh` | `AGENTCTL_FORGEJO_GH` | `f"{HOME}/bitcashier/infra/bin/forgejo-gh"` | - |
 | `forgejo_url` | `AGENTCTL_FORGEJO_URL` | - | - |
 | `gate_publish` | `AGENTCTL_GATE_PUBLISH` | `45` | - |
+| `gh_cli` | `AGENTCTL_GH_CLI` | `gh` | the GitHub CLI forge = github runs |
 | `gov_admit_max` | `AGENTCTL_GOV_ADMIT_MAX` | `7200` | a check waits this long for the governor at most |
 | `gov_budget_gb` | `AGENTCTL_GOV_BUDGET_GB` | `round(0.6 * ram_gb(` | - |
 | `gov_dir` | `AGENTCTL_GOV_DIR` | - | - |

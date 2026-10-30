@@ -49,12 +49,12 @@ def raw_tails(log_text, n=3):
 
 
 def read_log(o_r, *args):
-    """A log forgejo-gh serves, read twice at most. A read it failed (the ci-runner actions API resetting or refusing
+    """A log the forge's CLI serves (forgejo-gh or gh), read twice at most. A read it failed (the ci-runner actions API resetting or refusing
     the connection under load) raises with its stderr: never an empty log, which ci-why read as a 0-length one, INFRA
     (convergence #2473, run 3656: the takes-drift rows' flip failures handed to a diagnose-only fixer)."""
-    env = dict(os.environ, GH_TOKEN=token(o_r))
+    env = forge_env(o_r)
     for attempt in (1, 2):
-        r = subprocess.run([FORGEJO_GH, "run", "view", *args, "-R", o_r], capture_output=True, text=True, env=env, timeout=300)
+        r = subprocess.run(forge_argv(o_r, "run", "view", *args), capture_output=True, text=True, env=env, timeout=300)
         if r.returncode == 0:
             return r.stdout
     raise RuntimeError((r.stderr.strip().splitlines() or [f"exit {r.returncode}"])[-1][:200])
@@ -66,7 +66,7 @@ def fetch_failed_log(o_r, run_id):
 
 def fetch_takes_verdicts(o_r, run_id):
     """{artifact: verdict.txt text} of a measure run's identity-takes-<cc> artifacts (the takes rows' verdict files)."""
-    env = dict(os.environ, GH_TOKEN=token(o_r))
+    env = forge_env(o_r)
     arts = gh_json(o_r, "api", f"repos/{o_r}/actions/runs/{run_id}/artifacts").get("artifacts", [])
     out = {}
     for a in arts:
@@ -75,7 +75,8 @@ def fetch_takes_verdicts(o_r, run_id):
             continue
         d = os.path.join(scratch(), "agentctl-wait", f"art-{run_id}-{name}")
         os.makedirs(d, exist_ok=True)
-        subprocess.run([FORGEJO_GH, "run", "download", str(run_id), "-n", name, "-D", d, "-R", o_r], capture_output=True, env=env, timeout=300)
+        subprocess.run(forge_argv(o_r, "run", "download", str(run_id), "-n", name, "-D", d), capture_output=True, env=env,
+                       timeout=300)
         p = os.path.join(d, "verdict.txt")
         out[name] = open(p, errors="replace").read().strip() if os.path.exists(p) else "(no verdict.txt in the artifact)"
     return out

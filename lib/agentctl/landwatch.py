@@ -86,9 +86,9 @@ def failed_jobs(o_r, rid):
 
 
 def run_id_of_number(o_r, n):
-    """The run id whose run NUMBER (Forgejo's index_in_repo, the #N of every link) is n, or None."""
+    """The run id whose run NUMBER (Forgejo's index_in_repo, the #N of every link; GitHub's run_number) is n, or None."""
     try:
-        runs = (api(o_r, "GET", "actions/runs", {"run_number": int(n), "limit": 5}) or {}).get("workflow_runs") or []
+        runs = forge_actions_runs(o_r, run_number=n, limit=5)
     except (Exception, SystemExit):
         return None
     hit = next((x for x in runs if str(x.get("index_in_repo", x.get("run_number"))) == str(n)), None)

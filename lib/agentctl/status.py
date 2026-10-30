@@ -27,7 +27,6 @@ STATUS_AGENTS_MAX = 16
 STATUS_LOG_SUFFIXES = (".log", ".out", ".txt")
 STATUS_CHANGE_OPEN = ("queued", "checking", "checked", "pushing", "waiting")
 STATUS_BATCH_OPEN = ("blocked-red", "assembling", "checking", "pushing", "bisecting", "held")
-FORGEJO_WEB = "http://localhost:3000"
 
 
 def status_store():
@@ -36,8 +35,9 @@ def status_store():
     return RemoteStore(url, timeout=STATUS_STORE_TIMEOUT) if url else Store()
 
 
-def status_run_url(repo, number):
-    return f"{FORGEJO_WEB}/{repo or SHORT['movies']}/actions/runs/{number}" if number not in (None, "") else None
+def status_run_url(repo, number, run=None):
+    """A run's page on the forge (GitHub links by the run's id: `run`, the run's record, carries it)."""
+    return forge_run_url(repo or SHORT["movies"], number, run)
 
 
 def status_iso_epoch(s):
@@ -148,9 +148,9 @@ def status_header(t, d=None, probes=True):
     for g in ci.get("gate") or []:
         dec, new = g.get("decided") or {}, g.get("newer") or {}
         gate.append({"name": g.get("name"), "number": dec.get("number"), "conclusion": dec.get("conclusion"),
-                     "url": status_run_url(ci.get("repo"), dec.get("number")), "title": dec.get("displayTitle"),
+                     "url": status_run_url(ci.get("repo"), dec.get("number"), dec), "title": dec.get("displayTitle"),
                      "newer": new.get("number"), "newer_status": new.get("status"),
-                     "newer_url": status_run_url(ci.get("repo"), new.get("number")), "since": g.get("since"),
+                     "newer_url": status_run_url(ci.get("repo"), new.get("number"), new), "since": g.get("since"),
                      "count": g.get("count")})
     tick = d.get("tick_at")
     fetched = float(d.get("fetched_at") or 0) if url else None
@@ -305,7 +305,7 @@ def status_reds(st, t, repo=None):
         lr = d.get("last_run") or {}
         opened = d.get("opened_at") or it["entered_at"]
         out.append({"key": key, "id": it["id"], "state": it["state"], "short": short, "text": text,
-                    "workflow": d.get("workflow"), "run": lr.get("number"), "run_url": status_run_url(repo, lr.get("number")),
+                    "workflow": d.get("workflow"), "run": lr.get("number"), "run_url": status_run_url(repo, lr.get("number"), lr),
                     "jobs": [str(j) for j in d.get("jobs") or [d.get("job")] if j], "line": d.get("line"),
                     "gate": bool(d.get("gate")), "kind": d.get("kind"), "red_kind": d.get("red_kind"), "tier": d.get("tier"),
                     "opened_at": opened, "age": t - float(opened), "entered_at": it["entered_at"],
@@ -685,7 +685,7 @@ def status_data(store=None, now_=None, bound=None, keep=False, only=None):
     res, meta = status_sources(tuple(x for x in sources if not only or x[0] in only), b, keep=keep)
     if "error" in res.get("store", {}):
         res["store"] = {**res["store"], "remote": store_url(), "reachable": False}
-    return {"at": t, "repo": repo, "home": HOME, "forgejo": FORGEJO_WEB, **res, **meta}
+    return {"at": t, "repo": repo, "home": HOME, "forgejo": FORGEJO_WEB, "forge": forge(), **res, **meta}
 
 
 _status_cache = {"at": 0.0, "data": None}

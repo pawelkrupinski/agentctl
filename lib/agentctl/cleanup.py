@@ -109,15 +109,7 @@ def plan_worktrees(repo, main, min_age_h, cwds, include_caches=False):
 def plan_measure(o_r, runs_for, now_=None):
     """Remote measure/* branches: [(action, name, sha, reason)]. runs_for(name) -> list of run dicts."""
     now_ = now_ or now()
-    plan, page = [], 1
-    while True:
-        bs = api(o_r, "GET", "branches", {"limit": 50, "page": page})
-        for b in bs:
-            if b["name"].startswith("measure/"):
-                plan.append(measure_decision(b["name"], b["commit"]["id"], parse_time(b["commit"]["timestamp"]), runs_for(b["name"]), now_))
-        if len(bs) < 50:
-            return plan
-        page += 1
+    return [measure_decision(name, sha, when, runs_for(name), now_) for name, sha, when in forge_branches(o_r, "measure/")]
 
 
 def measure_decision(name, sha, commit_time, runs, now_):
@@ -196,10 +188,9 @@ def cmd_cleanup(a):
             if dry:
                 continue
             try:
-                cur = api(o_r, "GET", f"branches/{urllib.parse.quote(bname, safe='')}")["commit"]["id"]
-                if cur != sha:
+                if forge_branch_sha(o_r, bname) != sha:
                     print("    moved since planning; kept"); continue
-                api(o_r, "DELETE", f"branches/{urllib.parse.quote(bname, safe='')}")
+                forge_delete_branch(o_r, bname)
                 log_deletion("remote-branch", o_r, bname, sha, why)
             except Exception as e:
                 print(f"    delete failed: {e}"); rc = 1
@@ -278,11 +269,10 @@ def close_worktree(wt):
 
 def delete_remote_branch(repo, o_r, name, sha):
     """Delete a forge branch through the API, only if it still points at sha."""
-    q = urllib.parse.quote(name, safe="")
-    cur = api(o_r, "GET", f"branches/{q}")["commit"]["id"]
+    cur = forge_branch_sha(o_r, name)
     if cur != sha:
         raise RuntimeError(f"moved to {cur[:10]} since it was read")
-    api(o_r, "DELETE", f"branches/{q}")
+    forge_delete_branch(o_r, name)
 
 
 FETCH_TIMEOUT = 180  # an unattended fetch's bound ($AGENTCTL_FETCH_TIMEOUT)

@@ -66,11 +66,10 @@ def read_record(path):
 
 
 def cancel_run(o_r, rid, why):
-    """Cancel a CI run this tool started (Forgejo's cancel is a no-op on a finished run)."""
+    """Cancel a CI run this tool started (a cancel is a no-op on a finished run, on either forge)."""
     try:
-        env = dict(os.environ, GH_TOKEN=token(o_r))
-        r = subprocess.run([FORGEJO_GH, "run", "cancel", str(rid), "-R", o_r], capture_output=True, text=True, env=env,
-                           timeout=120)
+        r = subprocess.run(forge_argv(o_r, "run", "cancel", str(rid)), capture_output=True, text=True,
+                           env=forge_env(o_r), timeout=120)
         err(f"cancelled {o_r} run {rid} ({why})" if r.returncode == 0 else
             f"could not cancel {o_r} run {rid} ({why}): {r.stderr.strip()[:160]}")
     except (Exception, SystemExit) as e:

@@ -1564,9 +1564,13 @@ def red_verify_dispatch(o_r, repo, workflow, sha, run_id=None):
 
 
 def run_dispatch_inputs(o_r, run_id):
-    """The workflow_dispatch inputs run_id was started with ({} for any other event, or when its run cannot be read)."""
+    """The workflow_dispatch inputs run_id was started with ({} for any other event, or when its run cannot be read).
+    GitHub serves no run's inputs: there, the dispatch record's (agentctl's own, written by `dispatch run`)."""
+    if on_github():
+        rec = read_record(dispatches_dir("inputs", f"{run_id}.json"))
+        return {str(k): str(v) for k, v in rec.items()} if isinstance(rec, dict) else {}
     try:
-        payload = json.loads((api(o_r, "GET", f"actions/runs/{run_id}") or {}).get("event_payload") or "{}")
+        payload = json.loads((forge_actions_run(o_r, run_id) or {}).get("event_payload") or "{}")
     except (Exception, SystemExit):
         return {}
     inputs = payload.get("inputs") if isinstance(payload, dict) else None

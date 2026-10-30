@@ -37,14 +37,13 @@ def remote_poll(o_r, rem):
     Forgejo cannot be read."""
     rem = dict(rem)
     if rem.get("run") is None:
-        runs = (api(o_r, "GET", "actions/runs", {"workflow_id": REMOTE_WORKFLOW, "limit": 50})
-                or {}).get("workflow_runs") or []
+        runs = forge_actions_runs(o_r, workflow=REMOTE_WORKFLOW, limit=50)
         hit = next((x for x in runs if x.get("commit_sha") == rem["tip"]
                     and x.get("prettyref") in (rem["branch"], f"refs/heads/{rem['branch']}")), None)
         if not hit:
             return rem
         rem["run"] = hit["id"]
-    run = api(o_r, "GET", f"actions/runs/{rem['run']}") or {}
+    run = forge_actions_run(o_r, rem["run"])
     status = run.get("status")
     rem["run_status"] = status
     if status in ("success", "failure", "cancelled", "skipped") and not rem.get("status"):
@@ -79,7 +78,7 @@ def save_remote(d, e, rem):
 
 def delete_check_branch(o_r, branch):
     try:
-        api(o_r, "DELETE", f"branches/{urllib.parse.quote(branch, safe='')}")
+        forge_delete_branch(o_r, branch)
     except Exception as ex:
         err(f"could not delete {branch} ({str(ex)[:120]}): `agentctl sweep` lists it")
 

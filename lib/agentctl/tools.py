@@ -135,11 +135,15 @@ def cmd_env(a):
         (report if ok else problems).append(f"tunnel localhost:{port} ({what}): {'open' if ok else 'REFUSED'}")
     if not tunnel_ok:
         problems.append("  fix: launchctl kickstart -k gui/$(id -u)/net.bitcashier.forgejo-tunnel")
-    if st == "unlocked" and port_open(TUNNEL_PORTS[0][0]):
-        ok, detail = token_works(ns)
-        (report if ok else problems).append(f"forgejo-gh token ({ns}): {detail}")
-    gh = os.path.exists(FORGEJO_GH)
-    (report if gh else problems).append(f"forgejo-gh: {FORGEJO_GH if gh else 'MISSING ' + FORGEJO_GH}")
+    if on_github():  # forge = github: runs are read with gh's own auth
+        gh = (GH_CLI if os.path.isabs(GH_CLI) and os.access(GH_CLI, os.X_OK) else None) or which(GH_CLI)
+        (report if gh else problems).append(f"forge github: gh {gh or 'MISSING (' + GH_CLI + ')'}")
+    else:
+        if st == "unlocked" and port_open(TUNNEL_PORTS[0][0]):
+            ok, detail = token_works(ns)
+            (report if ok else problems).append(f"forgejo-gh token ({ns}): {detail}")
+        gh = os.path.exists(FORGEJO_GH)
+        (report if gh else problems).append(f"forgejo-gh: {FORGEJO_GH if gh else 'MISSING ' + FORGEJO_GH}")
     for l in report:
         print(f"ok   {l}")
     for l in problems:
