@@ -455,11 +455,6 @@ def red_fixer(a):
     extra = [(x["name"], x["epoch"], json.loads(os.environ.get("AGENTCTL_LEASE_SECRETS") or "{}").get(x["name"]))
              for x in rec.get("extra_leases") or []]
     os.environ.pop("AGENTCTL_LEASE_SECRETS", None)
-    if not name and not rec.get("orphan"):  # dispatched by older code: no lease stands behind it
-        rec.update(pid=me, ended=ts(), rc=0, verdict="STOPPED: dispatched without a lease (older code)")
-        write_json(a.record, rec)
-        print(f"RED FIXER {rec['workflow']} #{num}: STOPPED (no lease)")
-        return 0
     if not name:  # an orphan's fixer (no offer): it takes a lease of its own
         name = red_lease(f"orphan-{os.path.basename(wt)}")
         took = st.acquire(name, f"laptop:fixer:{who}", RED_FIXER_TTL, RED_FIXER_MAX, progress="start",
@@ -909,12 +904,6 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
         acts += red_merge_rekeyed(store, active, obs)
     except (Exception, SystemExit) as e:
         err(f"red tick: merging re-keyed reds failed ({str(e)[:160]})")
-    if glob.glob(reds_dir("claims", "*.json")) or os.path.exists(reds_dir("fixer-queue.json")):
-        acts += red_import_claims(store, active, t)
-    try:
-        acts += red_adopt_fixers(store, active, t)
-    except (Exception, SystemExit) as e:
-        err(f"red tick: adopting live fixers failed ({str(e)[:160]})")
     try:
         acts += red_renew_blocks(store, t)
     except (Exception, SystemExit) as e:

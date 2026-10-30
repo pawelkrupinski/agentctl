@@ -987,12 +987,8 @@ def sync_steps(repo, d, o_r):
             mirror_state()
 
     def sync_claims():
-        """The laptop's holders on ci-runner's store: its live fixers whose leases are not held there adopted (their
-        wrappers may renew another store), then every claim and adopted fixer renewed by its worktree's activity."""
-        st, t = Store(), time.time()
-        for x in red_adopt_fixers(st, red_active(st), t):
-            err(f"red: {x}")
-        red_renew_holders(st, t)
+        """The laptop's holders on ci-runner's store: every claim renewed by its worktree's activity."""
+        red_renew_holders(Store(), time.time())
 
     def pins():
         """The convergence pins read with the owner's token the processor holds and written into the store: the

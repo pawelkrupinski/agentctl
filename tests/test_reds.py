@@ -215,17 +215,6 @@ class ClaimTest(RedsBase):
         it = self.only()
         self.assertEqual((it["state"], it["data"]["attempts"]), ("offered", 0))
 
-    def test_claim_files_are_imported_as_leases_that_lapse_unless_busy(self):
-        self.tick()
-        wt = self.r.worktree("repo-wt-old", branch="old")
-        A.write_json(A.reds_dir("claims", "old.json"), {"who": "old-agent", "worktree": wt, "run": "20", "runs": ["20"],
-                                                        "workflow": "Main", "state": "claimed"})
-        self.tick()
-        self.assertEqual(os.listdir(A.reds_dir("claims")), [])
-        it = self.only()
-        self.assertEqual(it["state"], "leased")
-        row = self.st.get(A.red_lease(it["data"]["key"]))
-        self.assertEqual(row["expires_at"] - row["acquired_at"], A.RED_IMPORT_TTL)
 
 
 class FixTest(RedsBase):
@@ -678,32 +667,6 @@ class DispatchTest(RedsBase):
         self.assertIsNone(A.red_stop_holder(self.st, it["data"]["key"], "x", "red cleared"))
         self.assertFalse(os.path.exists(os.path.join(wt, "RED-STOP.md")))
         self.assertTrue(A.lease_is_live(self.st.get("red/otherkey"), self.t[0]))
-
-
-    def test_a_live_fixer_from_before_the_leases_is_adopted_as_the_runs_holder_until_it_ends(self):
-        import subprocess
-        sleeper = subprocess.Popen(["sleep", "60"], start_new_session=True)
-        self.addCleanup(lambda: (sleeper.poll() is None) and (sleeper.kill(), sleeper.wait()))
-        wt = self.r.worktree("repo-wt-old-fixer", branch="old-fixer")
-        os.makedirs(A.reds_dir("20"), exist_ok=True)
-        A.write_json(A.reds_dir("20", "fixer.json"), {"workflow": "Main", "run": 20, "pid": sleeper.pid,
-                                                      "process_start": A.process_start(sleeper.pid), "worktree": wt,
-                                                      "log": A.reds_dir("20", "claude-1.log")})
-        self.t[0] = time.time()
-        self.tick(dispatch=True)
-        self.tick(dispatch=True)
-        it = self.only()
-        self.assertEqual(it["state"], "leased")  # one truth: leased in the state, the view, W2 and the escalations
-        self.assertEqual(self.unheld(), [])
-        self.assertIn(f"pid-{sleeper.pid}", self.st.get(A.red_lease(it["data"]["key"]))["holder"])
-        self.assertIn("leased", A.red_view(self.st, it)[0])
-        self.assertEqual(len(A.fixer_records()), 1)  # no second fixer
-        sleeper.kill()
-        sleeper.wait()
-        self.tick()
-        self.tick()
-        it = self.only()
-        self.assertEqual((it["state"], it["data"]["attempts"]), ("offered", 1))
 
 
 class OldRedTest(RedsBase):

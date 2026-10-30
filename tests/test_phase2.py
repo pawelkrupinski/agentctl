@@ -412,43 +412,6 @@ class DispatcherRemoteTest(Phase2Base):
         self.assertEqual(self.st.offers("fixer"), [])
 
 
-class StaleStoreFixerTest(Phase2Base):
-    def test_a_live_fixer_whose_lease_lapsed_is_adopted_and_no_second_fixer_goes(self):
-        # 2026-10-29: the gate fixer's wrapper (pid 31738) renewed its lease on another store; ci-runner's copy
-        # expired and its reds were offered again
-        os.environ.pop("AGENTCTL_REDS_DIR", None)
-        os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp, "laptop")  # (one process plays both hosts here)
-        t = time.time()
-        self.lapsed_lease("red/k1", "laptop:fixer:red-k1-7", 1, t)
-        took = {"epoch": 1}
-        it = self.st.put_item("red", "k1", "offered", {"key": "k1", "workflow": "Main", "last_run": {"number": 20}})
-        pic = {"key": "k1", "workflow": "Main", "job": "test", "run": {"number": 20, "databaseId": 40}, "kind": "test"}
-        self.st.offer("fixer", f"red:{it['id']}", A.red_lease("k1"), "fresh", 1, t + 600, pic)
-        log = os.path.join(self.tmp, "fixer.log")
-        with open(log, "w") as f:
-            f.write("working\n")
-        A.write_json(A.reds_dir("20", "fixer-1.json"),
-                     {"workflow": "Main", "run": 20, "pid": os.getpid(), "process_start": A.process_start(os.getpid()),
-                      "worktree": self.tmp, "log": log, "lease": "red/k1", "epoch": took["epoch"]})
-        acts = A.red_adopt_fixers(self.remote, A.red_active(self.remote), t)
-        self.assertEqual(len(acts), 1, acts)
-        held = self.st.get("red/k1")
-        self.assertTrue(held["holder"].startswith(f"laptop:fixer:pid-{os.getpid()}@"))
-        self.assertEqual(A.lease_meta(held)["kind"], "legacy-fixer")
-        self.assertTrue(A.lease_is_live(held, t))
-        A.red_renew_holders(self.remote, t)  # renewed by its log's growth and its worktree's activity
-        spawned, saved = [], (A.red_spawn, A.cached_dispatch_blocker)
-        A.red_spawn = lambda *a, **k: spawned.append(a) or (True, "ok")
-        A.cached_dispatch_blocker = lambda: None
-        try:
-            A.red_dispatcher(self.remote, "o/r", self.repo, t)
-        finally:
-            A.red_spawn, A.cached_dispatch_blocker = saved
-        self.assertEqual(spawned, [])  # its run's fixer is alive: no duplicate
-        # a fixer whose lease IS held on the store in use is its own wrapper's: never adopted
-        self.assertEqual(A.red_adopt_fixers(self.remote, A.red_active(self.remote), t), [])
-
-
 def git_tree(tmp, name):
     """A clone with refs/remotes/forgejo/main and a worktree `name` off it: (clone, worktree)."""
     clone = os.path.join(tmp, "clone")
@@ -488,38 +451,6 @@ class FixerContinuityTest(Phase2Base):
             rec.update(pid=999999, ended="2026-10-29T12:00:00Z")
         A.write_json(A.reds_dir(str(run), f"fixer-{n}.json"), rec)
         return rec
-
-    def test_a_live_fixer_keeps_its_red_on_a_newer_run_and_no_second_fixer_is_dispatched(self):
-        # 2026-10-29: fixer -7 worked on #2473's red; the red moved on to run #2517 and -8 was dispatched beside it
-        t = time.time()
-        self.record(2473, "k1", self.tmp, alive=True)
-        it = self.st.put_item("red", "k1", "offered", {"key": "k1", "workflow": "Identity model convergence",
-                                                       "last_run": {"number": 2517}})
-        self.lapsed_lease("red/k1", "laptop:fixer:red-k1-8", 3, t)  # -8's: its watcher died, the lease lapsed
-        pic = {"key": "k1", "workflow": "Identity model convergence", "job": "leg", "run": {"number": 2517, "databaseId": 9},
-               "kind": "test"}
-        self.st.offer("fixer", f"red:{it['id']}", "red/k1", "fresh", 1, t + 600, pic)
-        # the tick adopts before it dispatches: the live fixer is the holder again through a real lease, and only that
-        acts = A.red_adopt_fixers(self.remote, A.red_active(self.remote), t + 5)
-        self.assertEqual(len(acts), 1, acts)
-        self.assertTrue(self.st.get("red/k1")["holder"].startswith(f"laptop:fixer:pid-{os.getpid()}@"))
-        spawned, saved = [], (A.red_spawn, A.cached_dispatch_blocker)
-        A.red_spawn = lambda *a, **k: spawned.append(a) or (True, "ok")
-        A.cached_dispatch_blocker = lambda: None
-        try:
-            A.red_dispatcher(self.remote, "o/r", self.repo, t + 5)
-        finally:
-            A.red_spawn, A.cached_dispatch_blocker = saved
-        self.assertEqual(spawned, [])
-
-    def test_a_lease_ended_on_purpose_is_not_taken_back(self):
-        t = time.time()
-        took = self.st.acquire("red/k2", "laptop:fixer:red-k2-1", 600, 3600)
-        self.record(2473, "k2", self.tmp, alive=True, epoch=took["epoch"])
-        self.st.put_item("red", "k2", "fix-pending", {"key": "k2", "workflow": "Identity model convergence",
-                                                      "last_run": {"number": 2473}})
-        self.st.revoke("red/k2", "fix submitted")
-        self.assertEqual(A.red_adopt_fixers(self.remote, A.red_active(self.remote), t), [])
 
     def test_a_new_fixer_continues_the_previous_fixers_worktree_and_its_unlanded_commits(self):
         _clone, old = git_tree(self.tmp, "movies-wt-red-2473-5")
@@ -644,14 +575,21 @@ class RedFamilyTest(Phase2Base):
         return self.st.put_item("red", "c2527", "offered", {"key": "c2527", "workflow": "Identity model convergence",
                                                             "job": "leg (uk)", "last_run": {"number": 2527}})
 
-    def test_a_live_family_fixer_holds_only_through_its_adopted_lease(self):
-        """A holder is ONLY a live lease: a family fixer alive on its own open red gets that red's lease back
-        (red_adopt_fixers, renewed by its liveness), and a new red of its family joins it under that lease."""
+    def test_a_live_family_fixer_without_a_live_lease_holds_nothing(self):
+        """A holder is ONLY a live lease: a family fixer process alive on its own open red, its lease lapsed, holds
+        nothing (its wrapper stops itself at its next poll); the family's reds get a fixer of their own."""
         self.family_fixer()
         self.own_red()
         self.red("c3", "Verify scrape recording", "convergence (spain)", 2531)
+        A.red_dispatcher(self.st, "o/r", self.repo, time.time())
+        self.assertEqual(len(self.spawned), 1)
+
+    def test_a_family_fixer_with_a_live_lease_takes_a_new_red_of_its_family(self):
+        self.family_fixer()
+        self.own_red()
+        self.st.acquire("red/c2527", "laptop:fixer:red-c2527-5", 900, 3600, meta={"kind": "fixer"})
+        self.red("c3", "Verify scrape recording", "convergence (spain)", 2531)
         t = time.time()
-        self.assertEqual(len(A.red_adopt_fixers(self.st, A.red_active(self.st), t)), 1)
         acts = A.red_dispatcher(self.st, "o/r", self.repo, t)
         self.assertEqual(self.spawned, [])
         self.assertTrue(any("joined its family convergence's fixer" in a for a in acts), acts)
@@ -670,20 +608,8 @@ class RedFamilyTest(Phase2Base):
         self.family_fixer(alive=alive)  # its own red, c2527, is not open
         self.red("c3", "Verify scrape recording", "convergence (spain)", 2531)
         t = time.time()
-        self.assertEqual(A.red_adopt_fixers(self.st, A.red_active(self.st), t), [])
         A.red_dispatcher(self.st, "o/r", self.repo, t)
         self.assertEqual([o["picture"]["key"] for o, _x in self.spawned], ["c3"])
-
-    def test_an_adopted_fixer_lease_ends_with_its_process_or_its_record(self):
-        self.family_fixer()
-        self.own_red()
-        t = time.time()
-        A.red_adopt_fixers(self.st, A.red_active(self.st), t)
-        self.assertTrue(A.lease_is_live(self.st.get("red/c2527"), t))
-        rec = A.read_record(A.reds_dir("2527", "fixer-5.json"))
-        A.write_json(A.reds_dir("2527", "fixer-5.json"), {**rec, "ended": "2026-10-30T04:00:00Z"})
-        A.red_renew_holders(self.st, t)
-        self.assertFalse(A.lease_is_live(self.st.get("red/c2527"), t))
 
     def test_invariant_an_offered_red_whose_stated_holder_has_no_live_lease_is_offered_again(self):
         """The watchdog's invariant: an offer whose reason names a holder with no live lease is a violation, and it

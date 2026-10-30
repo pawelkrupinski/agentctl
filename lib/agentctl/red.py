@@ -30,7 +30,6 @@ fix-pending (a Fixes-Red change submitted or landed, until a run proves it) -> v
 longer fails that way. Reference: ~/bin/AGENTCTL.md ("red")."""
 RED_CLAIM_TTL, RED_CLAIM_MAX = 30 * 60, 8 * 3600      # an interactive claim
 RED_FIXER_TTL, RED_FIXER_MAX = 15 * 60, 3 * 3600      # a dispatched fixer
-RED_IMPORT_TTL = 15 * 60                              # a claim file imported as a lease: lapses unless it shows progress
 RED_OFFER = {"author": 10 * 60, "gate": 10 * 60, "other": 30 * 60, "flake": 2 * 3600}
 RED_FIX_RUN_START = 30 * 60  # a landed fix's verifying run must exist by then (outside the gate: dispatched)
 RED_FIX_DECIDE = 3 * 3600
@@ -906,7 +905,7 @@ def red_family_holder(store, fam, t, active=None):
         return None
     active = active if active is not None else red_active(store)
     for row in store.list("red/"):
-        if not lease_is_live(row, t) or lease_meta(row).get("kind") not in ("fixer", "legacy-fixer"):
+        if not lease_is_live(row, t) or lease_meta(row).get("kind") != "fixer":
             continue
         it = active.get(row["name"].split("/", 1)[1])
         if it and red_family(it["data"]) == fam:
@@ -1596,8 +1595,8 @@ def red_wt_mark(wt):
 
 
 def red_renew_holders(store, t):
-    """Each live interactive claim renewed by its worktree's activity (no activity: it lapses at its TTL); each imported
-    legacy fixer by its log's growth."""
+    """Each live interactive claim renewed by its worktree's activity (no activity: it lapses at its TTL); each sibling
+    exactly as long as its run's fixer's own lease."""
     for row in store.list("red/"):
         if not lease_is_live(row, t):
             continue
@@ -1611,16 +1610,6 @@ def red_renew_holders(store, t):
                 store.revoke(row["name"], "its run's fixer ended")
                 continue
             mark, ttl = f"with {prim['renewed_at']}", RED_FIXER_TTL
-        elif m.get("kind") == "legacy-fixer":
-            if m.get("pid") and not proc_alive(m.get("pid"), m.get("process_start")):
-                store.revoke(row["name"], "its fixer process ended")  # ended: its attempt is counted now
-                continue
-            if m.get("record") and (read_record(m["record"]) or {}).get("ended"):
-                store.revoke(row["name"], "its fixer record ended")
-                continue
-            mark = f"{os.path.getsize(m['log']) if m.get('log') and os.path.exists(m['log']) else 0}:" \
-                   f"{red_wt_mark(m.get('worktree'))}"
-            ttl = RED_IMPORT_TTL
         else:
             continue
         if mark:
@@ -1634,87 +1623,12 @@ def fixer_keys(r):
     return keys | ({r["key"]} if r.get("key") else set())
 
 
-def red_adopt_fixers(store, active, t):
-    """ONE SOURCE OF TRUTH FOR WHO HOLDS A RED, AND A LIVE FIXER STAYS ITS HOLDER: a fixer process alive on a red -- by
-    the red's key (a newer run of the same red is still its red) or by its run -- whose lease is not live on the store
-    in use is granted the red's lease again: holder its pid and worktree, renewed by its transcript's growth and its
-    worktree's activity, revoked when the process ends. So the red is `leased` in the state, the status line and the
-    escalations alike, and no second fixer is dispatched beside it. Cases (2026-10-29): a fixer from before the leases;
-    one whose wrapper renewed the laptop's store across `store use`, ci-runner's imported copy lapsing; one whose red
-    moved on to a newer run (#2473 -> #2517) while it worked. A lease that LAPSED (or is missing) is taken again; one
-    released or revoked on purpose (a fix, a block, cleared) is not: its wrapper stops."""
-    out = []
-    for r in fixer_records():
-        if not r["alive"]:
-            continue
-        run, keys = (r.get("workflow"), str(r.get("run"))), fixer_keys(r)
-        for it in active.values():
-            d = it["data"]
-            if d.get("key") not in keys and (d.get("workflow"), str((d.get("last_run") or {}).get("number"))) != run:
-                continue
-            name = red_lease(d["key"])
-            row = store.get(name)
-            if lease_is_live(row, t):
-                continue
-            if row and not row["holder"] and r.get("lease"):
-                continue  # released or revoked on purpose (a fix, a block, cleared, its run's fixer ended): never retaken
-            got = store.acquire(name, f"laptop:fixer:pid-{r.get('pid')}@{r.get('worktree')}",
-                                RED_IMPORT_TTL, RED_FIXER_MAX, progress="adopted", item=f"red:{it['id']}",
-                                meta={"kind": "legacy-fixer", "pid": r.get("pid"), "process_start": r.get("process_start"),
-                                      "record": r.get("path"),
-                                      "log": r.get("log"), "worktree": r.get("worktree"), "who": f"red-fixer-{r.get('run')}",
-                                      "workflow": d.get("workflow"), "run": r.get("run"), "gate": bool(d.get("gate"))})
-            if "held" not in got:
-                out.append(f"adopted the live fixer pid {r.get('pid')} as the holder of {red_what(d)}")
-    return out
-
-
-def red_import_claims(store, active, t):
-    """Step 10's migration: every claim file (not a block) becomes a lease of RED_IMPORT_TTL on the red its runs name,
-    lapsing unless its worktree shows progress; the file goes. The fixer queue and its conditions go too."""
-    out = []
-    for p in sorted(glob.glob(reds_dir("claims", "*.json"))):
-        c = read_record(p) or {}
-        if c.get("state") == "blocked":
-            continue
-        names = set(map(str, c.get("runs") or [])) | {str(c.get("run"))}
-        hit = next((it for it in active.values() if names & set(it["data"].get("runs") or [])), None)
-        if hit:
-            kind = "legacy-fixer" if c.get("dispatched") else "claim"
-            who = c.get("who") or "?"
-            holder = (f"laptop:fixer:{who}" if kind == "legacy-fixer" else f"laptop:claim:{who}@{c.get('worktree')}")
-            r = store.acquire(red_lease(hit["data"]["key"]), holder, RED_IMPORT_TTL, RED_CLAIM_MAX, progress="imported",
-                              item=f"red:{hit['id']}", meta={"kind": kind, "worktree": c.get("worktree"), "who": who, "ttl": RED_IMPORT_TTL,
-                                                             "note": c.get("note"), "log": c.get("log"), "pid": c.get("pid"),
-                                                             "process_start": c.get("process_start"), "imported": p})
-            out.append(f"imported the claim {os.path.basename(p)} as {red_lease(hit['data']['key'])}"
-                       + (" (held already)" if "held" in r else ""))
-        else:
-            out.append(f"dropped the claim {os.path.basename(p)}: no open red names its runs")
-        try:
-            os.unlink(p)
-        except OSError:
-            pass
-    for p in glob.glob(recovery_dir("slot-wait-*.json")) + glob.glob(recovery_dir("red-RED_*.json")) + \
-            [reds_dir("fixer-queue.json")]:
-        try:
-            os.unlink(p)
-            out.append(f"dropped {os.path.basename(p)}")
-        except OSError:
-            pass
-    if out:
-        with open(reds_dir("import.log"), "a") as f:
-            for line in out:
-                f.write(f"{ts()} {line}\n")
-    return out
-
-
 # -- the dispatcher (the phase-2 shape: offers and leases only)
 def red_fixers_alive(store, t):
     """One row per live FIXER (a fixer holding several reds' leases counts once)."""
     out = {}
     for r in store.list("red/"):
-        if lease_is_live(r, t) and lease_meta(r).get("kind") in ("fixer", "legacy-fixer", "sibling", "owned"):
+        if lease_is_live(r, t) and lease_meta(r).get("kind") in ("fixer", "sibling", "owned"):
             out.setdefault(r["holder"], r)
     return list(out.values())
 
@@ -1805,12 +1719,12 @@ def red_family_holder(store, fam, t, active=None):
         return None
     active = active if active is not None else red_active(store)
     for row in store.list("red/"):
-        if not lease_is_live(row, t) or lease_meta(row).get("kind") not in ("fixer", "legacy-fixer"):
+        if not lease_is_live(row, t) or lease_meta(row).get("kind") != "fixer":
             continue
         it = active.get(row["name"].split("/", 1)[1])
         if it and red_queue_family(it["data"]) == fam:
             return row
-    return None  # a holder is ONLY a live lease: a live fixer without one gets it back from red_adopt_fixers first
+    return None  # a holder is ONLY a live lease
 
 
 def red_dispatcher(store, o_r, repo, t):
