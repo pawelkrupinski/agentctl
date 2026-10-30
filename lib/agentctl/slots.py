@@ -563,10 +563,15 @@ def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False
     run), watched for a stall: None when it passed, else land's rc (0: handed to the queue as infra)."""
     err(f"checking {head[:10]}: {os.path.relpath(hook, repo)} {mode} {REMOTE}/main..HEAD (log: {log_path})")
     lock_note(f"checks of {head[:10]}")
-    with check_slot(repo, f"land {os.path.basename(repo)} {head[:10]}", cls) as slot:
-        rc, out = run_watched([hook, mode, f"{REMOTE}/main..{head}"], repo, slot.env(tool_env()), log_path, "checks",
-                              sampler=slot.sample)
-        slot.done(rc, out)
+    try:
+        with check_slot(repo, f"land {os.path.basename(repo)} {head[:10]}", cls) as slot:
+            rc, out = run_watched([hook, mode, f"{REMOTE}/main..{head}"], repo, slot.env(tool_env()), log_path,
+                                  "checks", sampler=slot.sample)
+            slot.done(rc, out)
+    except GovTimeout as ex:  # the machine stayed too busy for a check: a verdict, never a traceback
+        print(f"NOT LANDED: {ex}; nothing of the change was judged -- land again once `agentctl gov status` has room",
+              flush=True)
+        return 1
     with open(log_path, "a") as f:
         f.write(f"=== check {attempt} {ts()} {head}\n{out}\n")
     if rc is None:

@@ -154,6 +154,24 @@ class GovBoundTest(unittest.TestCase):
         finally:
             A.gov_fits, A.gov_waiters = saved
 
+    def test_land_says_not_landed_when_the_governor_never_admits_its_check(self):
+        import contextlib, io
+
+        @contextlib.contextmanager
+        def never(*a, **k):
+            raise A.GovTimeout("the governor did not admit check work (land x) in 120 min: no memory")
+            yield
+        saved = A.check_slot
+        A.check_slot = never
+        out = io.StringIO()
+        try:
+            with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(out):
+                rc = A.dry_run(d, "/bin/true", "a" * 40, os.path.join(d, "log"), 1)
+        finally:
+            A.check_slot = saved
+        self.assertEqual(rc, 1)
+        self.assertIn("NOT LANDED: the governor did not admit", out.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
