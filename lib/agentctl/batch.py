@@ -366,7 +366,11 @@ def spawn_batch_executor(repo, d, bid):
 IDENTITY_MODEL_GLOBS = ("identity/*", "worker/src/main/*/identity/*", "worker/src/main/identity/*",
                         "worker/src/test/scala/scripts/IdentityDrift*")
 DRIFT_CI = "scripts/identity-drift-ci"
-DRIFT_STALL = 30 * 60  # the script prints a line per poll (at most every 5 min)
+DRIFT_STALL = 30 * 60  # s with no output before the drift check is ended (no verdict: the batch goes on)
+# THE DRIFT CHECK WAITS QUIETLY (2026-10-30): identity-drift-ci prints its header and then nothing while its CI run goes
+# on, so the batch executor's leases (CHECK_LEASE_TTL, 10 min, renewed on output or CPU only) lapsed at 10 min every
+# time (#1, #3, #4: "lease ... was lost: ending drift", no verdict), and the freed check tree went to a change. It runs
+# quiet_ok: every poll renews, and DRIFT_STALL alone ends it.
 
 
 def identity_model_commits(repo, commits):
@@ -409,7 +413,7 @@ def batch_drift_check(repo, d, tree, base, tip, against_main=False):
     argv = [os.path.join(tree, DRIFT_CI), tip] + (["--against", "main"] if against_main else [])
     wlog(d, f"the batch {tip[:10]} holds {n} identity-model commits: drift check of its tip ({' '.join(argv[1:])})")
     rc, out = run_watched(argv, tree, tool_env(), os.path.join(d, f"drift-{tip[:10]}"), "drift",
-                          stall=env_num("AGENTCTL_DRIFT_STALL", DRIFT_STALL))
+                          stall=env_num("AGENTCTL_DRIFT_STALL", DRIFT_STALL), quiet_ok=True)
     with open(os.path.join(d, "checks.log"), "a") as f:
         f.write(f"=== drift {ts()} {base[:10]}..{tip[:10]} rc {rc}\n{out}\n")
     last = ([l for l in (out or "").splitlines() if l.strip()] or ["(no output)"])[-1]

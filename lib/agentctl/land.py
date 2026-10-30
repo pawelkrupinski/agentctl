@@ -48,11 +48,14 @@ def stall_clock():
 WATCHED_GROUPS = set()  # process groups run_watched started and that may still run: the watchdog ends them first
 
 
-def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None, cpu=None, clock=None, wall=None):
+def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None, cpu=None, clock=None, wall=None,
+                quiet_ok=False):
     """Run argv (its own process group, stdin closed), its output into a file beside log_path. (returncode, output);
     returncode None when it STALLED: no output and no CPU in its process group for `stall` seconds, after which the
     group is ended. Waits with Popen.wait, never time.sleep. `cpu` (pgid -> CPU seconds) and `clock` are the samples the
-    verdict reads: group_cpu_seconds and stall_clock unless given."""
+    verdict reads: group_cpu_seconds and stall_clock unless given. quiet_ok: a step that legitimately waits quietly
+    (a remote run polled without output) renews the leases this process holds at every poll, so its own `stall`
+    bound ends it, not the leases' TTL."""
     cpu_of, clock = cpu or group_cpu_seconds, clock or stall_clock
     stall = stall if stall is not None else env_num("AGENTCTL_LAND_STALL_MIN", LAND_STALL_MIN) * 60
     out_path = f"{log_path}.{re.sub(r'[^A-Za-z0-9_-]', '_', step)}.out"
@@ -61,7 +64,7 @@ def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None, cpu=No
                              start_new_session=True)
     WATCHED_GROUPS.add(p.pid)
     try:
-        stalled = _watch_group(p, out_path, step, stall, sampler, cpu_of, clock, wall)
+        stalled = _watch_group(p, out_path, step, stall, sampler, cpu_of, clock, wall, quiet_ok)
     except BaseException:  # a store error, a signal: never a child group left running, untracked
         _end_group(p)
         WATCHED_GROUPS.discard(p.pid)
@@ -89,9 +92,15 @@ def _end_group(p):
             continue
 
 
-def _watch_group(p, out_path, step, stall, sampler, cpu_of, clock, wall):
+def beat_mark(step, size, cpu, polls=0, quiet_ok=False):
+    """The progress mark a poll renews the leases with: output bytes and whole CPU seconds -- and, for a quiet_ok step,
+    the poll count (every poll is progress: its own stall bound judges it)."""
+    return f"{step}:{size}:{int(cpu or 0)}" + (f":{polls}" if quiet_ok else "")
+
+
+def _watch_group(p, out_path, step, stall, sampler, cpu_of, clock, wall, quiet_ok=False):
     """run_watched's wait: True when it stalled (and its group was ended), False when it exited."""
-    size, cpu, changed, stalled = -1, None, clock(), False
+    size, cpu, changed, stalled, polls = -1, None, clock(), False, 0
     poll = max(0.2, min(15.0, stall / 4))
     need = env_num("AGENTCTL_STALL_CPU_SECONDS", STALL_CPU_SECONDS)
     t_start = time.monotonic()
@@ -105,7 +114,8 @@ def _watch_group(p, out_path, step, stall, sampler, cpu_of, clock, wall):
             sampler()
         now_size, now_cpu = os.path.getsize(out_path), cpu_of(p.pid)
         try:  # the landing lease's holder renews on real progress only (output bytes, whole CPU seconds)
-            lock_beat(f"{step}:{now_size}:{int(now_cpu or 0)}")
+            polls += 1
+            lock_beat(beat_mark(step, now_size, now_cpu, polls, quiet_ok))
         except LeaseLost as ex:
             err(f"{ex}: ending {step}")
             stalled = True

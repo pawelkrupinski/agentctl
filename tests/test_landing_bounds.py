@@ -52,6 +52,27 @@ class LeaseTest(unittest.TestCase):
         self.assertNotIn("held", st.acquire("land/x", "the batch", 120, 300))  # the next lander takes it at once
 
 
+class QuietStepTest(unittest.TestCase):
+    """2026-10-30: the batch's drift check (identity-drift-ci: a header, then silence while its CI run goes on) lost the
+    executor's leases at their 10-min TTL every time -- no verdict, and its check tree went to a change."""
+    def test_a_quiet_ok_step_renews_at_every_poll_and_a_plain_one_only_on_output_or_cpu(self):
+        self.assertEqual(A.beat_mark("push", 10, 2.7, 1), A.beat_mark("push", 10, 2.7, 2))
+        self.assertNotEqual(A.beat_mark("drift", 10, 2.7, 1, True), A.beat_mark("drift", 10, 2.7, 2, True))
+
+    def test_a_quiet_ok_step_keeps_its_lease_past_the_ttl(self):
+        d = tempfile.mkdtemp()
+        st = A.Store(path=os.path.join(d, "store.db"))
+        h = A.LeaseHold("check/batch-x#1", 3, 300, store=st)
+        self.assertTrue(h.acquire())
+        try:
+            rc, _out = A.run_watched(["sleep", "7"], d, dict(os.environ), os.path.join(d, "log"), "drift", stall=8,
+                                     quiet_ok=True)
+            self.assertEqual(rc, 0, "quiet for twice the TTL, within its stall bound: it ran to the end")
+            self.assertEqual(h.renew("after"), "ok", "the lease is still this holder's")
+        finally:
+            h.release()
+
+
 class UnboundTest(unittest.TestCase):
     def test_a_store_error_mid_wait_ends_the_child_group_and_propagates(self):
         """run_watched caught only LeaseLost: a StoreUnavailable escaped with the push still running, untracked."""

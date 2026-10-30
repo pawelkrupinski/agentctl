@@ -1301,7 +1301,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `dispatch_dir` | `AGENTCTL_DISPATCH_DIR` | - | - |
 | `dispatch_find` | `AGENTCTL_DISPATCH_FIND` | `12` | - |
 | `dispatch_find_poll` | `AGENTCTL_DISPATCH_FIND_POLL` | `5` | - |
-| `drift_stall` | `AGENTCTL_DRIFT_STALL` | `1800` | the script prints a line per poll (at most every 5 min) |
+| `drift_stall` | `AGENTCTL_DRIFT_STALL` | `1800` | s with no output before the drift check is ended (no verdict: the batch goes on) |
 | `fetch_timeout` | `AGENTCTL_FETCH_TIMEOUT` | `180` | an unattended fetch's bound |
 | `fixer_free_gb` | `AGENTCTL_FIXER_FREE_GB` | `4.0` | $AGENTCTL_FIXER_FREE_GB |
 | `fixer_land_watch` | `AGENTCTL_FIXER_LAND_WATCH` | `60` | - |
