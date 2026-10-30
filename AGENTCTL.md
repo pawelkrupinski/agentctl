@@ -1281,7 +1281,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `live_globs` | `AGENTCTL_LIVE_GLOBS` | - | - |
 | `live_poll` | `AGENTCTL_LIVE_POLL` | `1.0` | s between looks at a quiet file |
 | `max_checks` | `AGENTCTL_MAX_CHECKS` | - | - |
-| `max_foreign` | `AGENTCTL_MAX_FOREIGN` | `2` | - |
+| `max_foreign` | `AGENTCTL_MAX_FOREIGN` | `2` | files a push may revert to an older main before prepush-check refuses |
 | `min_interval` | `AGENTCTL_MIN_INTERVAL` | `60` | - |
 | `movies_remote` | `AGENTCTL_MOVIES_REMOTE` | - | - |
 | `movies_repo` | `AGENTCTL_MOVIES_REPO` | - | - |

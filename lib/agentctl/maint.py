@@ -101,7 +101,7 @@ def sbt_stuck_reasons(pid, cwd, cpu, clients, serving, state, now):
         state[str(pid)] = {"cpu": cpu, "since": now}
     elif clients.get(cwd):
         mins = (now - rec["since"]) / 60
-        limit = float(os.environ.get("AGENTCTL_SBT_STALL_MIN", SBT_STALL_MIN))
+        limit = env_num("AGENTCTL_SBT_STALL_MIN", SBT_STALL_MIN)
         if mins >= limit:
             reasons.append(f"a command running (sbtn pid {clients[cwd][0]}) and no CPU for {int(mins)} min")
     return reasons

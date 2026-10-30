@@ -61,7 +61,7 @@ def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None, cpu=No
     group is ended. Waits with Popen.wait, never time.sleep. `cpu` (pgid -> CPU seconds) and `clock` are the samples the
     verdict reads: group_cpu_seconds and stall_clock unless given."""
     cpu_of, clock = cpu or group_cpu_seconds, clock or stall_clock
-    stall = stall if stall is not None else float(os.environ.get("AGENTCTL_LAND_STALL_MIN", LAND_STALL_MIN)) * 60
+    stall = stall if stall is not None else env_num("AGENTCTL_LAND_STALL_MIN", LAND_STALL_MIN) * 60
     out_path = f"{log_path}.{re.sub(r'[^A-Za-z0-9_-]', '_', step)}.out"
     with open(out_path, "w") as out:
         p = subprocess.Popen(argv, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
@@ -69,7 +69,7 @@ def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None, cpu=No
     WATCHED_GROUPS.add(p.pid)
     size, cpu, changed, stalled = -1, None, clock(), False
     poll = max(0.2, min(15.0, stall / 4))
-    need = float(os.environ.get("AGENTCTL_STALL_CPU_SECONDS", STALL_CPU_SECONDS))
+    need = env_num("AGENTCTL_STALL_CPU_SECONDS", STALL_CPU_SECONDS)
     t_start = time.monotonic()
     while True:
         try:

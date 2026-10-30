@@ -206,7 +206,7 @@ def inbox_wait(kinds, since_ack=False, timeout=0, verbose=False, forever=False):
     os.makedirs(d, exist_ok=True)
     want = {k.strip().upper().replace("-", "_") for k in kinds.split(",") if k.strip()}
     floor = last_ack(d) if since_ack else 0.0
-    poll = float(os.environ.get("AGENTCTL_INBOX_POLL", INBOX_WAIT_POLL))
+    poll = env_num("AGENTCTL_INBOX_POLL", INBOX_WAIT_POLL)
     t0, seen, printed = time.time(), None, set()
     while True:
         try:

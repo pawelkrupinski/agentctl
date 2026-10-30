@@ -34,5 +34,40 @@ class RunCmdTest(unittest.TestCase):
                 os.environ["AGENTCTL_GOV_FREE_PROBE"] = saved
 
 
+
+class HostDifferencesTest(unittest.TestCase):
+    def test_the_upkeep_sweep_never_removes_the_processors_socket_dir_where_the_user_tmp_is_tmp(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            sock = os.path.join(tmp, "agentctl-501")
+            other = os.path.join(tmp, "agentctl-test-x")
+            os.makedirs(sock)
+            os.makedirs(other)
+            old = time.time() - 10 * 86400
+            for p in (sock, other):
+                os.utime(p, (old, old))
+            saved = (A.user_tmp_dir, os.environ.get("AGENTCTL_SOCK_DIR"))
+            A.user_tmp_dir = lambda: tmp  # Linux: the user temp dir is /tmp, where the socket dir lives
+            os.environ["AGENTCTL_SOCK_DIR"] = sock
+            try:
+                A.sweep_test_tmp()
+            finally:
+                A.user_tmp_dir = saved[0]
+                if saved[1] is None:
+                    os.environ.pop("AGENTCTL_SOCK_DIR")
+                else:
+                    os.environ["AGENTCTL_SOCK_DIR"] = saved[1]
+            self.assertTrue(os.path.isdir(sock))
+            self.assertFalse(os.path.isdir(other))
+
+    def test_a_garbled_knob_falls_back_to_its_default(self):
+        os.environ["AGENTCTL_WATCH_POLL"] = "sixty"
+        try:
+            self.assertEqual(A.env_num("AGENTCTL_WATCH_POLL", 60), 60)
+        finally:
+            os.environ.pop("AGENTCTL_WATCH_POLL")
+        self.assertTrue(A.TOOL_PATH.endswith("agentctl") and os.path.isfile(A.TOOL_PATH))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -48,6 +48,8 @@ def sweep_test_tmp(now_=None):
     n = 0
     for pat in (os.path.join(user_tmp_dir(), "agentctl-*"), "/tmp/agentctl-sock-*"):
         for p in glob.glob(pat):
+            if os.path.realpath(p) == os.path.realpath(os.path.dirname(token_sock_path("x"))):
+                continue  # the processor's own socket dir (Linux: the user temp dir IS /tmp)
             try:
                 if os.path.isdir(p) and not os.path.islink(p) and t - os.lstat(p).st_mtime > TEST_TMP_MAX_AGE:
                     shutil.rmtree(p, ignore_errors=True)

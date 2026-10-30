@@ -799,7 +799,7 @@ def tick_changes(repo, d, now_=None):
 def spawn_executor(repo, d, eid):
     """`agentctl waiting check <eid>`, detached: the change's checks (check_entry)."""
     with open(os.path.join(d, "processor.log"), "a") as logf:
-        spawn_detached([sys.executable, os.path.realpath(__file__), "waiting", "check", eid, "--repo", repo],
+        spawn_detached([sys.executable, TOOL_PATH, "waiting", "check", eid, "--repo", repo],
                          stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=repo,
                          env=detached_env(repo))
     time.sleep(1)  # it takes its tree slot before the next looks

@@ -107,17 +107,17 @@ def workflow_file_of(repo, sha, name):
 
 
 def _watch(repo, sha, pushed_at, o_r, flows, own, fixes=()):
-    timeout = float(os.environ.get("AGENTCTL_WATCH_TIMEOUT", WATCH_TIMEOUT))
-    conv_start = float(os.environ.get("AGENTCTL_WATCH_CONV_START", WATCH_CONV_START))
+    timeout = env_num("AGENTCTL_WATCH_TIMEOUT", WATCH_TIMEOUT)
+    conv_start = env_num("AGENTCTL_WATCH_CONV_START", WATCH_CONV_START)
     t0 = time.time()
     err(f"watching Main and the convergence for {sha[:10]} (up to {int(timeout // 60)} min; `--no-watch` skips this)"
         + (f"; its Fixes-Red {', '.join(fixes)} is verified by the red's own item (`agentctl red status`)" if fixes else ""))
     done, said, listed = {}, set(), {}  # kind -> (run, ok | None for none started); kind -> the runs last listed
     # NO PROGRESS: nothing about the followed runs (which run, its status, its last update) changed for this long ends
     # the watch with a named verdict (a queue Forgejo never serves, a runner lost mid-run), not a silent 3 h wait
-    stall = float(os.environ.get("AGENTCTL_WATCH_STALL_MIN", WATCH_STALL_MIN)) * 60
+    stall = env_num("AGENTCTL_WATCH_STALL_MIN", WATCH_STALL_MIN) * 60
     state, changed = None, time.time()
-    delays = backoff(float(os.environ.get("AGENTCTL_WATCH_POLL", 60)), 300)
+    delays = backoff(env_num("AGENTCTL_WATCH_POLL", 60), 300)
     # UNREACHABLE: a failed read backs off (to 5 min) and is retried until the watch's own bound; only then UNKNOWN,
     # saying for how long Forgejo could not be read (2026-10-27: ten failures in a row used to end it in minutes)
     unreachable, failures, last_error, err_delays = None, 0, "", None
@@ -158,7 +158,7 @@ def _watch(repo, sha, pushed_at, o_r, flows, own, fixes=()):
             failures += 1
             last_error = str(e)[:160]
             if unreachable is None:
-                unreachable, err_delays = time.time(), backoff(float(os.environ.get("AGENTCTL_WATCH_ERROR_POLL", 30)), 300)
+                unreachable, err_delays = time.time(), backoff(env_num("AGENTCTL_WATCH_ERROR_POLL", 30), 300)
             err(f"watch: could not read the runs ({last_error}) [{failures} failed, unreachable for "
                 f"{red_for(iso_at(unreachable))}]")
         reds = [(k, r) for k, (r, ok) in done.items() if ok is False]

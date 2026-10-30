@@ -225,7 +225,7 @@ def reland_worktree(cond, a):
         return f"not landed again: {wt} has uncommitted changes"
     os.makedirs(recovery_dir(), exist_ok=True)
     with open(recovery_dir("reland.log"), "a") as f:
-        spawn_detached([sys.executable, os.path.realpath(__file__), "land"], stdin=subprocess.DEVNULL, stdout=f,
+        spawn_detached([sys.executable, TOOL_PATH, "land"], stdin=subprocess.DEVNULL, stdout=f,
                          stderr=f, start_new_session=True, cwd=wt,
                          env={**os.environ, "AGENTCTL_NO_SECRETS": "1"})
     return f"landing {wt.replace(HOME, '~')} again (attempt {a.get('attempt')})"

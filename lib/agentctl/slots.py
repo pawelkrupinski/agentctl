@@ -223,7 +223,7 @@ def cmd_checks(a):
 
 
 def stalled(step, output, log_path):
-    mins = float(os.environ.get("AGENTCTL_LAND_STALL_MIN", LAND_STALL_MIN))
+    mins = env_num("AGENTCTL_LAND_STALL_MIN", LAND_STALL_MIN)
     print(f"NOT LANDED: stalled {step}: no output and no CPU for {mins:g} min, so it was ended (the landing lock is free "
           f"again). Last lines (full log {log_path}):\n  {tail_of(output)}")
     return 1
@@ -405,8 +405,8 @@ def land_lock(repo):
             meta = json.loads(h.get("meta") or "{}")
             return f"{h['holder']} (pid {meta.get('pid')}), {meta.get('note') or 'working'}; expires in {int(h['expires_at'] - time.time())} s"
         err(f"waiting for the landing lease {name}, held by {said(got['held'])}")
-        deadline = time.monotonic() + float(os.environ.get("AGENTCTL_LAND_LOCK_TIMEOUT", LAND_LOCK_TIMEOUT))
-        every = float(os.environ.get("AGENTCTL_LAND_WAIT_REPORT_MIN", LAND_WAIT_REPORT_MIN)) * 60
+        deadline = time.monotonic() + env_num("AGENTCTL_LAND_LOCK_TIMEOUT", LAND_LOCK_TIMEOUT)
+        every = env_num("AGENTCTL_LAND_WAIT_REPORT_MIN", LAND_WAIT_REPORT_MIN) * 60
         report_at = time.monotonic() + every
         while "held" in got:
             if time.monotonic() > deadline:
@@ -556,7 +556,7 @@ def sync(repo, main_ref, sh):
     if landed(repo, head, main_ref):
         print(f"LANDED {head} (the rebase left nothing: already on {REMOTE}/main)")
         return 0, None
-    problems = check_range(repo, f"{REMOTE}/main", head, [], int(os.environ.get("AGENTCTL_MAX_FOREIGN", "2")))
+    problems = check_range(repo, f"{REMOTE}/main", head, [], int(env_num("AGENTCTL_MAX_FOREIGN", MAX_FOREIGN)))
     if problems:
         print("NOT LANDED: prepush-check refused:\n  " + "\n  ".join(problems))
         return 1, None

@@ -187,11 +187,18 @@ def sql_refusal(sql):
     return None
 
 
+def has_tunnel():
+    """The laptop reaches Forgejo through its tunnel (a launchd agent); ci-runner directly, with nothing to kick."""
+    return host_role() == "sync"
+
+
 def launchctl_kick():
-    try:
-        subprocess.run(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{TUNNEL_LABEL}"], capture_output=True,
-                       timeout=30)
-    except subprocess.TimeoutExpired:
+    """Kickstart the laptop's Forgejo tunnel. Never on ci-runner (no launchctl there: it raised FileNotFoundError over
+    the real error, after a pointless 15 s wait)."""
+    if not has_tunnel():
+        return
+    r = run_cmd(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{TUNNEL_LABEL}"], timeout=30)
+    if r.returncode == 124:
         err(f"launchctl kickstart {TUNNEL_LABEL}: no answer in 30 s")
 
 
@@ -270,8 +277,8 @@ def tunnel_retry(fn):
         if not tunnel_down(e):
             raise
         err(f"the Forgejo tunnel refused or timed out ({str(e)[:80]}); reopening it ({TUNNEL_LABEL}) once and retrying")
-        if read_json_file(tunnel_state_path()).get("network"):  # the uplink loses packets (tunnel_watch): a restart only
-            return fn()  # churns the tunnel, and a wait for it to answer costs every read 15 s -- one plain retry
+        if not has_tunnel() or read_json_file(tunnel_state_path()).get("network"):  # no tunnel on ci-runner; a
+            return fn()  # lossy uplink (tunnel_watch): a restart only churns the tunnel -- one plain retry
         if tunnel_kick_rate_limited():
             launchctl_kick()
         for _ in range(15):
@@ -571,7 +578,7 @@ def check_range(repo, base, head, allow, max_foreign):
 def cmd_prepush(a):
     repo = os.getcwd()
     allow = (a.allow or []) + os.environ.get("AGENTCTL_ALLOW", "").split()
-    max_foreign = a.max_foreign if a.max_foreign is not None else int(os.environ.get("AGENTCTL_MAX_FOREIGN", "2"))
+    max_foreign = a.max_foreign if a.max_foreign is not None else int(env_num("AGENTCTL_MAX_FOREIGN", MAX_FOREIGN))
     problems = []
     if a.hook:
         remote = a.hook[0]

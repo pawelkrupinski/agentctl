@@ -16,6 +16,8 @@
 #   * `agentctl orphans` reads the records: a dead process's record, an owner on old code, an owner whose cwd is gone.
 OWNERS_RESTART_CHECK = 30  # seconds between code-version checks ($AGENTCTL_RESTART_CHECK)
 TOOL_PATH = os.path.realpath(__file__)
+if TOOL_PATH.endswith(os.path.join("lib", "agentctl", "__init__.py")):  # imported as a package: the entry beside lib/
+    TOOL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(TOOL_PATH))), "agentctl")
 
 
 def owners_dir():
@@ -264,7 +266,7 @@ def restart_if_changed(owned=(), argv=None):
     """Re-exec this process on agentctl's new code (same pid; argv: given, else the first owner's, else this process's)
     once the file on disk changed.
     The owned locks are released without cancelling: the new process takes them back and adopts their runs."""
-    every = float(os.environ.get("AGENTCTL_RESTART_CHECK", OWNERS_RESTART_CHECK))
+    every = env_num("AGENTCTL_RESTART_CHECK", OWNERS_RESTART_CHECK)
     if time.time() - _last_code_check[0] < every:
         return
     _last_code_check[0] = time.time()
@@ -371,7 +373,7 @@ class Waiter:
 def wait_all(waiters, timeout, floor, cap):
     """Block until every waiter has a verdict. Prints each verdict as it lands. Exit 0 all ok, 1 any failed, 2 timeout."""
     deadline = time.time() + timeout
-    attach_poll = float(os.environ.get("AGENTCTL_ATTACH_POLL", "15"))
+    attach_poll = env_num("AGENTCTL_ATTACH_POLL", 15)
     for w in waiters:
         if not w.acquire():
             err(f"{w.key}: attached to existing waiter pid {w.holder.get('pid')} (since {w.holder.get('started')}); not polling Forgejo")
@@ -410,7 +412,7 @@ def wait_all(waiters, timeout, floor, cap):
 
 
 def cmd_wait(a):
-    floor = float(os.environ.get("AGENTCTL_MIN_INTERVAL", "60"))
+    floor = env_num("AGENTCTL_MIN_INTERVAL", 60)
     cap = max(floor, min(300, a.interval))
     if a.kind == "run":
         ids = list(a.ids)

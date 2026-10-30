@@ -129,6 +129,7 @@ API = os.environ.get("AGENTCTL_FORGEJO_API") or (os.environ["AGENTCTL_FORGEJO_UR
                                                   if os.environ.get("AGENTCTL_FORGEJO_URL") else "http://localhost:3000/api/v1")
 REMOTE = "forgejo"
 PROTECTED_BRANCHES = {"main", "master"}
+MAX_FOREIGN = 2  # files a push may revert to an older main before prepush-check refuses ($AGENTCTL_MAX_FOREIGN)
 ZERO = "0" * 40
 
 
@@ -346,9 +347,10 @@ def token(o_r):
                 why += "; no `secrets` command found"
             else:
                 try:
-                    r = subprocess.run([sec, "get", ns, "FORGEJO_API_TOKEN"], capture_output=True, text=True,
-                                       stdin=subprocess.DEVNULL)
+                    r = run_cmd([sec, "get", ns, "FORGEJO_API_TOKEN"], timeout=120)  # a keychain prompt loop: bounded
                     tok = r.stdout.strip() if r.returncode == 0 else ""
+                    if r.returncode == 124:
+                        why += "; `secrets get` did not answer in 120 s (a keychain prompt nobody answered?)"
                 except OSError as e:
                     tok, why = "", why + f"; secrets: {e.strerror}"
                 if not tok:

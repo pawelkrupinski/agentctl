@@ -45,6 +45,9 @@ class TunnelTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.saved = (A.API, A.TUNNEL_PROBE_TIMEOUT, A.launchctl_kick, A.inbox_write, A.TUNNEL_KICK_MIN_GAP,
                       os.environ.get("AGENTCTL_TUNNEL_STATE"))
+        saved_has = A.has_tunnel
+        A.has_tunnel = lambda: True  # the laptop's: its tunnel is kicked (the store stays this process's own)
+        self.addCleanup(setattr, A, "has_tunnel", saved_has)
         os.environ["AGENTCTL_TUNNEL_STATE"] = os.path.join(self.tmp.name, "t.json")
         self.saved_rec = os.environ.get("AGENTCTL_RECOVERY_DIR")  # its own registry: no other test's tunnel condition
         os.environ["AGENTCTL_RECOVERY_DIR"] = os.path.join(self.tmp.name, "rec")
@@ -212,6 +215,25 @@ class TunnelTest(unittest.TestCase):
         A.tunnel_watch(1030, lambda: "refused")
         self.assertEqual(A.tunnel_watch(1040, lambda: "ok"), "restored")
         self.assertEqual(self.inbox, [])
+
+
+
+class ServerTunnelTest(unittest.TestCase):
+    def test_ci_runner_retries_a_read_once_and_kicks_nothing(self):
+        saved = A.launchctl_kick
+        kicked, calls = [], []
+        A.launchctl_kick = lambda: kicked.append(1)
+        try:
+            def read():
+                calls.append(1)
+                if len(calls) == 1:
+                    raise TimeoutError("timed out")
+                return "ok"
+            self.assertFalse(A.has_tunnel())  # the tests' role is the server's
+            self.assertEqual(A.tunnel_retry(read), "ok")
+        finally:
+            A.launchctl_kick = saved
+        self.assertEqual((len(calls), kicked), (2, []))
 
 
 if __name__ == "__main__":

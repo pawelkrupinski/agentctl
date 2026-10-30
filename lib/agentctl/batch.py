@@ -140,7 +140,7 @@ def tick_batch(repo, d, now_=None):
 
 def spawn_batch_executor(repo, d, bid):
     with open(os.path.join(d, "processor.log"), "a") as logf:
-        spawn_detached([sys.executable, os.path.realpath(__file__), "waiting", "check-batch", bid, "--repo", repo],
+        spawn_detached([sys.executable, TOOL_PATH, "waiting", "check-batch", bid, "--repo", repo],
                          stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=repo,
                          env=detached_env(repo))
 
@@ -524,7 +524,7 @@ def launchctl(*args):
 
 def service_plist(repo, log):
     from xml.sax.saxutils import escape
-    argv = [sys.executable, os.path.realpath(__file__), "waiting", "run", "--service", "--repo", repo]
+    argv = [sys.executable, TOOL_PATH, "waiting", "run", "--service", "--repo", repo]
     args = "".join(f"\n        <string>{escape(x)}</string>" for x in argv)
     # phase 2: installed with $AGENTCTL_STORE_URL set, the agent is the laptop's SYNC against ci-runner's store
     store_env = (f"\n        <key>AGENTCTL_STORE_URL</key>\n        <string>{escape(os.environ['AGENTCTL_STORE_URL'])}</string>"

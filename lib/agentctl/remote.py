@@ -183,7 +183,7 @@ def spawn_waiting_processor(repo):
         return
     repo = clone if os.path.isdir(clone) else repo  # the clone, not a joiner's worktree: that one closes after WATCH OK
     with open(os.path.join(d, "processor.log"), "a") as logf:
-        spawn_detached([sys.executable, os.path.realpath(__file__), "waiting", "run", "--repo", repo],
+        spawn_detached([sys.executable, TOOL_PATH, "waiting", "run", "--repo", repo],
                          stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=repo,
                          env=detached_env(repo))
 
@@ -317,7 +317,7 @@ def _await_entry(repo, eid, own):
     d, _c, _w = waiting_state(repo)
     p = os.path.join(d, "entries", f"{eid}.json")
     t0, delays = time.time(), backoff(15, 60)
-    timeout = float(os.environ.get("AGENTCTL_WAITING_TIMEOUT", WAITING_AWAIT_TIMEOUT))
+    timeout = env_num("AGENTCTL_WAITING_TIMEOUT", WAITING_AWAIT_TIMEOUT)
     while True:
         with open(p) as f:
             e = json.load(f)
@@ -502,7 +502,7 @@ def tick_watches(now_=None):
 def watch_eval(repo, sha, pushed_at, o_r, flows, now_):
     """One look at the runs that contain sha: ('ok', line), ('red', line) or None (undecided)."""
     done = {}
-    conv_start = float(os.environ.get("AGENTCTL_WATCH_CONV_START", WATCH_CONV_START))
+    conv_start = env_num("AGENTCTL_WATCH_CONV_START", WATCH_CONV_START)
     for kind, (name, wfile) in flows.items():
         runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30", "--json", RUN_FIELDS)
         run = pick_main_run(repo, sha, runs) if kind == "main" else pick_convergence_run(repo, sha, runs, pushed_at, o_r)
