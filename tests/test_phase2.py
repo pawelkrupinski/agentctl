@@ -576,6 +576,18 @@ class RedFamilyTest(Phase2Base):
         self.assertEqual(A.red_family({"workflow": "Verify scrape recording", "jobs": ["verify (germany)"]}), "scrapes")
         self.assertIsNone(A.red_family({"workflow": "Identity model convergence", "jobs": ["leg (poland)"]}))
 
+    def test_the_shipped_families_put_a_failing_main_test_step_in_main_tests_never_infra(self):
+        """2026-10-30: Main #2647's e2e (rest) failed in step `sbt e2eRest` with no FAILED line (kind unclear) and went
+        to the infra family. A test step failure is main-tests'; infra is runner and setup failures."""
+        self.addCleanup(os.environ.__setitem__, "AGENTCTL_RED_FAMILIES", os.environ["AGENTCTL_RED_FAMILIES"])
+        os.environ["AGENTCTL_RED_FAMILIES"] = os.path.join(os.path.dirname(HERE), "red-families.json")
+        fam = lambda wf, job, kind: A.red_family({"workflow": wf, "job": job, "jobs": [job], "kind": kind})
+        self.assertEqual(fam("Main", "e2e (rest)", "unclear"), "main-tests")
+        self.assertEqual(fam("Main", "unit-test", "test"), "main-tests")
+        self.assertEqual(fam("Main", "ci", "infra"), "infra")  # a setup / runner failure
+        self.assertEqual(fam("Report run timings", "judge", "unclear"), "infra")
+        self.assertEqual(fam("Identity model convergence", "leg (pl)", "unclear"), "convergence")
+
     def test_a_new_convergence_red_goes_under_the_live_family_fixers_lease_and_it_is_told(self):
         t = time.time()
         wt = os.path.join(self.tmp, "movies-wt-red-2527")
