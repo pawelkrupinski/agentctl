@@ -527,6 +527,50 @@ def probe_orphan_landed(a):
     return False, f"{len(_c)} commit(s) still not on main, nobody in it"
 
 
+# AN ORPHAN IS SUBMITTED ONLY WHEN NOTHING ELSE CARRIES IT (ISSUE 20261030T165514-e5f431). At 15:50:59Z maintain
+# re-submitted ~/projects/movies-wt-review with no session behind it: its commits were checked only against
+# forgejo/main, while the open change movies-wt-ci-5 already carried them -- a duplicate in the shared queue. Now, before
+# the one submit: (a) an open change item whose head carries every one of its commits (cherry_landed, the landed-by-
+# content helper, against that head) covers it: no submit, no condition -- that change's verdict reaches its author, and
+# once it lands the orphan is gone by the same helper; (b) a worktree whose last change item was CANCELLED is never
+# re-submitted: a person cancelled it, so UNLANDED ORPHAN goes to a person at once. Any other orphan still gets its
+# one submit (design §11 I9) -- turning every orphan into a condition (option c) would leave real finished work, the
+# common case, waiting on the owner.
+def worktree_change_items(wt, store=None):
+    """{"open": [the open change items], "last": this worktree's newest change item (any state) or None}."""
+    try:
+        items = (store or Store()).items("change")
+    except (Exception, SystemExit):
+        return {"open": [], "last": None}
+    rw = os.path.realpath(wt)
+    mine = sorted((i for i in items if os.path.realpath(str((i.get("data") or {}).get("worktree") or "")) == rw),
+                  key=lambda i: i["id"])
+    return {"open": [i for i in items if not machine_state("change", i["state"]).terminal],
+            "last": mine[-1] if mine else None}
+
+
+def orphan_covered_by(wt, items):
+    """The id of an open change item whose head carries every commit of the orphan (by patch or content), else None."""
+    for it in items.get("open") or []:
+        head = (it.get("data") or {}).get("head")
+        if not head or not git_ok(wt, "cat-file", "-e", f"{head}^{{commit}}"):
+            continue
+        commits, left = cherry_landed(wt, head, "HEAD")
+        if commits is not None and not left:
+            return it["id"]
+    return None
+
+
+def orphan_escalate(repo, wt, name, commits, key, rec, verdict):
+    text = (f"UNLANDED ORPHAN: {wt.replace(HOME, '~')}: {len(commits)} commit(s) not on forgejo/main, its author "
+            f"gone, still not landed after a {rec['actions'][-1]['what']} ({verdict or 'never landed'}) -- land it, "
+            "hand it to an agent, or drop it")
+    c = open_condition("UNLANDED_ORPHAN", text, run_probe("orphan_landed", {"worktree": wt, "key": key, "repo": repo}),
+                       [], key=re.sub(r"[^\w.-]+", "_", f"orphan-{name}"), command="maintain", cwd=wt)
+    rec["escalated"] = ts() if c else None
+    return [f"orphan {name}: escalated UNLANDED ORPHAN" if c else f"orphan {name}: cleared"]
+
+
 def orphan_duty(repo=None, dry_run=False, now_=None):
     """One maintain pass over the orphans: one action each, then UNLANDED ORPHAN. Returns what it did."""
     repo = repo or movies_repo_path()
@@ -542,6 +586,21 @@ def orphan_duty(repo=None, dry_run=False, now_=None):
             did.append(f"orphan {name}: {len(commits)} commit(s); last verdict: {verdict or 'never landed'}")
             continue
         if not rec["actions"]:
+            items = worktree_change_items(wt)
+            cover = orphan_covered_by(wt, items)
+            if cover:  # (a) already in the queue under another change: its verdict is that change's
+                if rec.get("covered_by") != cover:
+                    did.append(f"orphan {name}: carried by open change {cover}: not submitted")
+                rec["covered_by"] = cover
+                st[key] = rec
+                continue
+            rec.pop("covered_by", None)
+            last = items.get("last")
+            if last and last["state"] == "cancelled":  # (b) somebody cancelled it: only a person submits it again
+                rec["actions"].append({"at": ts(), "what": f"none (its last change {last['id']} was cancelled)"})
+                did += orphan_escalate(repo, wt, name, commits, key, rec, verdict or f"cancelled ({last['id']})")
+                st[key] = rec
+                continue
             if acted >= ORPHAN_PER_PASS:  # a few a pass: the queue is shared
                 continue
             acted += 1  # SUBMITTED ONCE (design §11 I9): its checks then decide; a rejection is its red's to rescue
@@ -550,13 +609,7 @@ def orphan_duty(repo=None, dry_run=False, now_=None):
             did.append(f"orphan {name}: {rec['actions'][-1]['what']} ({verdict or 'never landed'})")
         elif not rec.get("escalated") and time.time() - parse_time(rec["actions"][-1]["at"]).timestamp() \
                 >= env_num("AGENTCTL_ORPHAN_IDLE", ORPHAN_IDLE):  # its action had its time
-            text = (f"UNLANDED ORPHAN: {wt.replace(HOME, '~')}: {len(commits)} commit(s) not on forgejo/main, its author "
-                    f"gone, still not landed after a {rec['actions'][-1]['what']} ({verdict or 'never landed'}) -- land it, "
-                    "hand it to an agent, or drop it")
-            c = open_condition("UNLANDED_ORPHAN", text, run_probe("orphan_landed", {"worktree": wt, "key": key, "repo": repo}),
-                               [], key=re.sub(r"[^\w.-]+", "_", f"orphan-{name}"), command="maintain", cwd=wt)
-            rec["escalated"] = ts() if c else None
-            did.append(f"orphan {name}: escalated UNLANDED ORPHAN" if c else f"orphan {name}: cleared")
+            did += orphan_escalate(repo, wt, name, commits, key, rec, verdict)
         st[key] = rec
     if not dry_run:
         write_json(path, st)
