@@ -92,6 +92,33 @@ class SameProbeTest(RegistryBase):
         self.assertIn("kicked", lines[0])
 
 
+class HostTest(RegistryBase):
+    """A condition is probed on the host role that opened it; escalations are the server's alone."""
+
+    def role(self, r):
+        saved = os.environ.get("AGENTCTL_ROLE")
+        os.environ["AGENTCTL_ROLE"] = r
+        self.addCleanup(lambda: os.environ.__setitem__("AGENTCTL_ROLE", saved) if saved is not None
+                        else os.environ.pop("AGENTCTL_ROLE", None))
+
+    def test_the_laptops_condition_is_probed_on_the_laptop_never_on_ci_runner(self):
+        st = A.Store()  # one store, both hosts (the laptop's is ci-runner's through the API)
+        rec = Recorder(fails=1)
+        A.PROBES["processor"] = rec
+        self.role("sync-test")
+        c = A.open_condition("WATCHDOG", "W5: the processor is down", A.run_probe("processor", {}), [], key="w5",
+                             store=st)
+        self.assertEqual(c["host"], "sync")
+        self.role("server")
+        t = time.time() + 3 * 3600
+        self.assertEqual(A.recovery_tick(t, force=True, store=st), [])
+        self.assertEqual(len(rec.calls), 1, "ci-runner never runs the laptop's probe")
+        self.assertEqual(st.item("condition", "w5")["level"], 1, "the server escalates it")
+        self.role("sync-test")
+        self.assertEqual(A.recovery_tick(t + 1, force=True, store=st)[0][:10], "RECOVERED:")
+        self.assertEqual(len(rec.calls), 2)
+
+
 class ConditionItemTest(RegistryBase):
     """Step 12: a condition is an item of the "condition" machine -- it escalates (an event the notifier delivers) 10 min
     after opening and every 2 h after, and only its own probe passing closes it."""

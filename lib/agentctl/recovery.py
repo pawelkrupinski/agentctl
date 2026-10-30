@@ -315,7 +315,7 @@ def open_condition(kind, text, probe, on_recover, key=None, inbox=True, command=
     data = {"key": key, "kind": kind, "text": text, "probe": {"kind": probe.kind, "args": probe.args},
             "until": probe_words(probe.kind, probe.args), "on_recover": new, "opened": ts(), "opened_at": t,
             "inbox": ids, "last_checked": t, "last_result": {"ok": probe.ok, "detail": probe.detail}, "fails": 0,
-            "next_check": t + PROBE_EVERY.get(probe.kind, 60), "command": command, "cwd": cwd}
+            "next_check": t + PROBE_EVERY.get(probe.kind, 60), "command": command, "cwd": cwd, "host": host_role()}
     return condition_dict(st.put_item("condition", iid, "open", data))
 
 
@@ -386,21 +386,30 @@ def migrate_condition_files(store):
     return out
 
 
+def probed_here(c):
+    """A condition's probe runs on the host role that opened it (its `host`; before it was recorded: the server's):
+    the laptop's watchdog, tunnel or token conditions read the laptop -- on ci-runner a W5 probe found no plist and
+    closed, `route -n get default` never answered, and the laptop's inbox entries were acked in the server's."""
+    return c.get("host", "server") == host_role()
+
+
 def recovery_tick(now_=None, force=False, store=None):
-    """The processor's look: each open condition whose next check is due re-runs ITS probe; a pass closes it.
-    Backoff: PROBE_EVERY x 2^fails, at most RECOVER_BACKOFF_MAX. Past its deadline (10 min after opening, then every
-    2 h) an open condition escalates: the state's self-transition, an escalate event the notifier delivers. Returns the
-    RECOVERED lines."""
+    """Each host's look (the server's tick and the laptop's sync both run it): each open condition OPENED ON THIS HOST
+    whose next check is due re-runs ITS probe; a pass closes it. Backoff: PROBE_EVERY x 2^fails, at most
+    RECOVER_BACKOFF_MAX. Past its deadline (10 min after opening, then every 2 h) an open condition escalates -- on the
+    server only (one writer of escalations): the state's self-transition, an escalate event the notifier delivers.
+    Returns the RECOVERED lines."""
     st = store or Store()
     t = now_ if now_ is not None else time.time()
     out = []
+    server = host_role() == "server"
     try:
         out += migrate_condition_files(st)
     except (Exception, SystemExit) as e:
         err(f"recover: could not migrate the condition files ({str(e)[:160]})")
     for it in st.items("condition", ["open"]):
         c = condition_dict(it)
-        if force or float(c.get("next_check") or 0) <= t:
+        if probed_here(c) and (force or float(c.get("next_check") or 0) <= t):
             r = run_probe(c["probe"]["kind"], c["probe"]["args"])
             if r.ok:
                 line = close_condition(c, r, store=st)
@@ -416,7 +425,7 @@ def recovery_tick(now_=None, force=False, store=None):
             except StaleVersion:
                 continue
             it = st.item("condition", it["id"])
-        if it["state"] == "open" and t >= max(it["deadline"], float(it["data"].get("escalate_after") or 0)):
+        if server and it["state"] == "open" and t >= max(it["deadline"], float(it["data"].get("escalate_after") or 0)):
             age = fmt_age(t - float(it["data"].get("opened_at") or t))
             line = f"ESCALATED: {it['data'].get('kind')} open for {age}: {str(it['data'].get('text'))[:200]}"
             try:
@@ -432,7 +441,7 @@ def recovery_recheck(kind, store=None):
     """An event that may have cleared conditions of probe `kind`: probe those now."""
     try:
         for c in open_conditions(store):
-            if c["probe"]["kind"] == kind:
+            if c["probe"]["kind"] == kind and probed_here(c):
                 r = run_probe(kind, c["probe"]["args"])
                 if r.ok:
                     close_condition(c, r, store=store)

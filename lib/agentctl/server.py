@@ -1038,7 +1038,8 @@ def sync_steps(repo, d, o_r):
             ("pins", pins),
             ("fixer landing", lambda: [err(f"red: {x}") for x in fixers_land_watch()]),
             ("network watch", network_watch), ("tunnel probe", tunnel_watch),
-            ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep()]))
+            ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep()]),
+            ("recovery", maybe_recovery_tick))
 
 
 def close_landed_worktrees(store=None):

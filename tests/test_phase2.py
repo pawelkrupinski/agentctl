@@ -334,7 +334,7 @@ class ServerSideTest(Phase2Base):
             os.environ.pop("AGENTCTL_HOST")
         names = [n for n, _ in A.sync_steps(self.repo, self.tmp, "o/r")]
         self.assertEqual(names, ["outbox", "state mirror", "children", "events", "notifier", "landed worktrees", "local queue", "landed changes", "claims", "dispatcher", "pins", "fixer landing",
-                                 "network watch", "tunnel probe", "upkeep"])
+                                 "network watch", "tunnel probe", "upkeep", "recovery"])
         server = [n for n, _ in A.server_steps(self.repo, self.tmp, lambda f: f)]
         self.assertEqual(server, ["clone health", "change items", "landed changes", "stranded changes", "change tick", "batch tick", "watches", "land refs",
                                   "lease archive", "children", "gate summary", "red time", "red tick", "recovery"])
