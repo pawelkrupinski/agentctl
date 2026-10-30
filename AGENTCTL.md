@@ -1229,7 +1229,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `bg_poll` | `AGENTCTL_BG_POLL` | `5` | seconds between the wrapper's looks at its session |
 | `bin_repo` | `AGENTCTL_BIN_REPO` | - | - |
 | `brief` | `AGENTCTL_BRIEF` | `~/bin/briefs/movies-agent-preamble.md` | - |
-| `brief_src` | `AGENTCTL_BRIEF_SRC` | `/private/tmp/claude-501/-Users-pawel-bitcashier/974d50a6-c3f9-4d25-a24f-55345ffa6de5/scratchpad/movies-agent-preamble.md` | - |
+| `brief_src` | `AGENTCTL_BRIEF_SRC` | - | a newer copy of the brief to take over (an orchestrator's scratchpad; $AGENTCTL_BRIEF_SRC): none by default |
 | `cache_expire_days` | `AGENTCTL_CACHE_EXPIRE_DAYS` | `7` | - |
 | `checks_dir` | `AGENTCTL_CHECKS_DIR` | - | - |
 | `check_lease_ttl` | `AGENTCTL_CHECK_LEASE_TTL` | `600` | - |

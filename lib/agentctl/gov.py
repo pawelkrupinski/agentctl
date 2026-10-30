@@ -165,10 +165,6 @@ def gov_waiters():
     return sorted(out, key=lambda r: (GOV_CLASSES.get(r.get("class"), 9), r.get("at", 0)))
 
 
-def sbt_warm_state():
-    return os.environ.get("KINOWO_SBT_WARM_STATE") or os.path.join(HOME, ".cache", "kinowo-sbt-warm")
-
-
 def idle_servers(min_idle=None):
     """The kept sbt servers the governor may evict, unused longest first: [(idle seconds, root, key prefix)]. Never the
     root checkout's (the owner's own), a serving one, or one a call is running in (its busy lock held)."""

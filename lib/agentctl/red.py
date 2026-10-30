@@ -46,7 +46,7 @@ RED_RENEW_EVERY = 60         # a fixer's wrapper renews its lease this often
 RED_RELEASE_ASKS = 12        # ...and asks a store that does not answer this many times, a poll apart, to release it
 STUCK_FACTOR, STUCK_FLOOR = 3, 30 * 60  # audit #8: a run undecided past max(3 x its workflow's p90, 30 min) is a red
 BRIEF = os.path.join(HOME, "bin", "briefs", "movies-agent-preamble.md")
-BRIEF_SRC = "/private/tmp/claude-501/-Users-pawel-bitcashier/974d50a6-c3f9-4d25-a24f-55345ffa6de5/scratchpad/movies-agent-preamble.md"
+BRIEF_SRC = ""  # a newer copy of the brief to take over (an orchestrator's scratchpad; $AGENTCTL_BRIEF_SRC): none by default
 RED_TERMINAL = ("verified", "cleared")
 
 
@@ -896,20 +896,6 @@ def red_family(d):
         by_kind = not fam.get("kinds") or d.get("kind") in fam["kinds"]
         if (by_name or not named) and by_kind and (named or fam.get("kinds")):
             return fam["name"]
-    return None
-
-
-def red_family_holder(store, fam, t, active=None):
-    """The live primary lease (a fixer's own, not a sibling) on a red of family fam, or None."""
-    if not fam:
-        return None
-    active = active if active is not None else red_active(store)
-    for row in store.list("red/"):
-        if not lease_is_live(row, t) or lease_meta(row).get("kind") != "fixer":
-            continue
-        it = active.get(row["name"].split("/", 1)[1])
-        if it and red_family(it["data"]) == fam:
-            return row
     return None
 
 
@@ -1869,10 +1855,11 @@ SECRET_ENV = re.compile(r"TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|PRIVATE|CREDENTIA
 
 
 def sync_brief():
-    """~/bin/briefs/movies-agent-preamble.md, refreshed from the orchestrator's scratchpad copy when that one is newer."""
+    """~/bin/briefs/movies-agent-preamble.md, refreshed from $AGENTCTL_BRIEF_SRC (an orchestrator's scratchpad copy) when
+    that one is newer. No default source: a hardcoded session scratchpad is gone on ci-runner and after the session."""
     src = os.environ.get("AGENTCTL_BRIEF_SRC", BRIEF_SRC)
     dst = os.environ.get("AGENTCTL_BRIEF", BRIEF)
-    if os.path.exists(src) and mtime(src) > mtime(dst):
+    if src and os.path.exists(src) and mtime(src) > mtime(dst):
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         with open(src) as f, open(dst + ".tmp", "w") as g:
             g.write(f.read())
