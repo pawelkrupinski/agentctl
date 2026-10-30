@@ -114,6 +114,28 @@ class GovernorTest(unittest.TestCase):
         p.wait()
         self.assertIsNotNone(self.admit("agent"))
 
+    def test_a_waiter_whose_pid_was_reused_holds_nobody_up(self):
+        """Waiter liveness was the pid alone: a killed waiter's reused pid sat at the head until GovTimeout (2 h)."""
+        A.write_json(os.path.join(A.gov_dir(), "w-1.000000-1.json"),
+                     {"class": "red", "mem": 1, "label": "gone", "pid": os.getpid(), "at": time.time() - 10,
+                      "start": "Thu Jan  1 00:00:00 1970"})  # this pid, but not the process that wrote it
+        self.assertIsNotNone(self.admit("agent"))
+
+    def test_the_ticket_exists_before_the_waiter_record_goes(self):
+        seen = []
+        real = A.os.unlink
+
+        def unlink(p):
+            if os.path.basename(p).startswith("w-"):
+                seen.append(len(A.gov_tickets()))
+            return real(p)
+        A.os.unlink = unlink
+        try:
+            self.assertIsNotNone(self.admit("agent"))
+        finally:
+            A.os.unlink = real
+        self.assertEqual(seen, [1], "the next head never sees neither")
+
     def server(self, name, idle, main_clone=False):
         """A kept server in sbt-warm's registry: its checkout (with an sbt-warm whose --stop ends it and frees memory)."""
         root = os.path.join(self.d, name)

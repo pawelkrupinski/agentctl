@@ -328,6 +328,9 @@ class LandTest(Base):
     def test_the_lock_is_shared_by_every_worktree_of_the_clone(self):
         wt = self.r.worktree("wt-lock", branch="lock")
         self.assertEqual(A.land_lease_name(wt), A.land_lease_name(self.r.path))
+        other = os.path.join(self.tmp.name, "second-clone")  # another clone of the repository (ci-runner's): the same
+        subprocess.run(["git", "clone", "-q", "-o", "forgejo", self.r.bare, other], check=True)
+        self.assertEqual(A.land_lease_name(other), A.land_lease_name(self.r.path))
 
     def test_lock_wait_times_out_without_pushing(self):
         self.hook("exit 0")

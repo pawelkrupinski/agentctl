@@ -317,9 +317,14 @@ LAND_LEASE_MAX = 45 * 60  # the design's 300 s once checks no longer run in the 
 
 
 def land_lease_name(repo):
-    """One lease per repository: every worktree of a clone shares its git common dir."""
-    common = os.path.realpath(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
-    return "land/" + re.sub(r"[^A-Za-z0-9._-]", "_", common.strip("/"))
+    """One lease per REPOSITORY (its Forgejo slug): every clone and worktree of it, on every host -- keyed by the
+    local clone's path, the laptop's `land --follow` and ci-runner's pushes took different leases on one store. A
+    checkout without the forgejo remote: its git common dir."""
+    try:
+        key = slug(repo)
+    except (SystemExit, RuntimeError):
+        key = os.path.realpath(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
+    return "land/" + re.sub(r"[^A-Za-z0-9._-]", "_", key.strip("/"))
 
 
 _held_lock = [None]  # (store, name, lease) of the landing lease this process holds

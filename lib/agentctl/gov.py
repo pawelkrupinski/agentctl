@@ -154,7 +154,7 @@ def gov_waiters():
     out = []
     for p in glob.glob(os.path.join(gov_dir(), "w-*.json")):
         rec = read_record(p)
-        if not rec or not pid_alive(int(rec.get("pid", 0))):
+        if not rec or not proc_alive(int(rec.get("pid", 0)), rec.get("start")):  # a reused pid is not the waiter
             try:
                 os.unlink(p)
             except OSError:
@@ -250,7 +250,8 @@ def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=Tr
     d = gov_dir()
     t0 = time.time()
     me = os.path.join(d, f"w-{t0:.6f}-{os.getpid()}.json")
-    write_json(me, {"class": cls, "mem": mem, "label": label, "kind": kind, "pid": os.getpid(), "at": t0})
+    write_json(me, {"class": cls, "mem": mem, "label": label, "kind": kind, "pid": os.getpid(), "at": t0,
+                    "start": process_start(os.getpid())})
     said, report_at, why = False, 0.0, None
     report = report or err
     try:
@@ -284,27 +285,28 @@ def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=Tr
                        f"{len(tickets)} admitted, {gov_committed(tickets):.0f}/{gov_budget():.0f} GB")
                 said, report_at = True, time.monotonic() + GOV_REPORT
             time.sleep(env_num("AGENTCTL_GOV_POLL", GOV_POLL))
+        # THE TICKET BEFORE THE WAITER GOES: the next head never looks between the two and misses this admission
+        path = ticket or os.path.join(d, f"t-{t0:.6f}-{os.getpid()}.lock")
+        f = None
+        if fd is not None:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        else:
+            f = open(path, "a+")
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        waited = round(time.time() - t0, 1)
+        rec = {"class": cls, "mem": mem, "label": label, "kind": kind, "pid": pid or os.getpid(), "cwd": cwd or os.getcwd(),
+               "at": time.time(), "since": ts(), "waited": waited, "waited_on": why if waited >= 1 else None}
+        write_json(path[:-5] + ".json", rec)
+        with open(os.path.join(d, "admits.jsonl"), "a") as af:
+            af.write(json.dumps({k: rec[k] for k in ("class", "mem", "label", "kind", "at", "waited", "waited_on")}) + "\n")
+        if said:
+            report(f"admitted by the governor after {int(waited)} s ({cls}, {mem:g} GB, {label})")
+        return GovTicket(path, rec, f)
     finally:
         try:
             os.unlink(me)
         except OSError:
             pass
-    path = ticket or os.path.join(d, f"t-{t0:.6f}-{os.getpid()}.lock")
-    f = None
-    if fd is not None:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    else:
-        f = open(path, "a+")
-        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    waited = round(time.time() - t0, 1)
-    rec = {"class": cls, "mem": mem, "label": label, "kind": kind, "pid": pid or os.getpid(), "cwd": cwd or os.getcwd(),
-           "at": time.time(), "since": ts(), "waited": waited, "waited_on": why if waited >= 1 else None}
-    write_json(path[:-5] + ".json", rec)
-    with open(os.path.join(d, "admits.jsonl"), "a") as af:
-        af.write(json.dumps({k: rec[k] for k in ("class", "mem", "label", "kind", "at", "waited", "waited_on")}) + "\n")
-    if said:
-        report(f"admitted by the governor after {int(waited)} s ({cls}, {mem:g} GB, {label})")
-    return GovTicket(path, rec, f)
 
 
 @contextlib.contextmanager
