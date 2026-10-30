@@ -260,6 +260,7 @@ def enqueue(repo, main_ref, sh, a):
                   "`agentctl env --check`, then land again")
             return 1
         r = submit_remote(Store(), e)
+        offer_token(repo)  # this agent's token to the laptop processor, which holds none after a restart
         if r.get("outbox"):
             print(f"QUEUED-LOCAL {e['id']} ({head[:10]}): the store is unreachable ({r['outbox']}); the sync submits it "
                   "when it answers. LANDED / WAITING / NOT LANDED goes to `agentctl inbox`", flush=True)

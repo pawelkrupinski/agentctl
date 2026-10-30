@@ -920,7 +920,7 @@ def submit_remote(st, e):
     """Submit a change to the remote store; unreachable: kept in the outbox (QUEUED-LOCAL) for the sync to send."""
     try:
         return st.submit(e)
-    except StoreUnavailable as ex:
+    except (StoreUnavailable, NoToken) as ex:  # no token here: the sync (the laptop processor) sends it with its own
         os.makedirs(sync_outbox_dir(), exist_ok=True)
         write_json(os.path.join(sync_outbox_dir(), f"{e['id']}.json"), e)
         return {"id": e["id"], "outbox": str(ex)[:200]}

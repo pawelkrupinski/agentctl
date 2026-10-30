@@ -78,6 +78,43 @@ class TokenResolutionTest(Base):
             A.token(MOVIES)
         self.assertFalse(os.path.exists(marker), "the processor never prompts, even told interactive")
 
+    def test_an_agents_own_land_reads_the_vault_itself_and_background_code_never_does(self):
+        """2026-10-30: agents' `land` failed NoToken (no TTY in a Claude Code command, and the processor held none), so
+        they wrapped it in `secrets run movies FORGEJO_API_TOKEN --`. An agent's own command, in its session, may run
+        `secrets`; anything agentctl started in the background (spawn_detached: AGENTCTL_DETACHED) never does."""
+        marker = os.path.join(self.tmp.name, "ran")
+        self.fake_secrets(f"touch {marker}; echo vault-token-0123456789")
+        self.saved.update({k: os.environ.get(k) for k in ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "AGENTCTL_DETACHED")})
+        os.environ.pop("AGENTCTL_INTERACTIVE")
+        os.environ.update(CLAUDECODE="1", CLAUDE_CODE_SESSION_ID="7aaaf20a-ffd4-4bdd-bc99-07b7f259075e",
+                          AGENTCTL_DETACHED="1")
+        with self.assertRaises(A.NoToken):
+            A.token(MOVIES)
+        self.assertFalse(os.path.exists(marker), "a detached agentctl process never runs secrets")
+        os.environ.pop("AGENTCTL_DETACHED")
+        self.assertEqual(A.token(MOVIES), "vault-token-0123456789")
+        self.assertTrue(os.path.exists(marker))
+        A._tokens.clear()
+        A._IN_PROCESSOR[0] = True
+        with self.assertRaises(A.NoToken):
+            A.token(MOVIES)  # the processor: never, in a Claude session or not
+
+    def test_spawn_detached_marks_its_child_as_background(self):
+        out = os.path.join(self.tmp.name, "env.txt")
+        with open(out, "w") as f:
+            p = A.spawn_detached([sys.executable, "-c", "import os; print(os.environ.get('AGENTCTL_DETACHED'))"],
+                                 stdout=f, stdin=subprocess.DEVNULL, env={"PATH": "/usr/bin:/bin"})
+            p.wait(30)
+        self.assertEqual(open(out).read().strip(), "1")
+
+    def test_a_submission_with_no_token_goes_to_the_outbox_for_the_sync(self):
+        class NoTokStore:
+            def submit(self, e):
+                raise A.NoToken("agentctl: could not read the movies FORGEJO_API_TOKEN (test)")
+        r = A.submit_remote(NoTokStore(), {"id": "20261030-x-abc"})
+        self.assertIn("FORGEJO_API_TOKEN", r["outbox"])
+        self.assertTrue(os.path.exists(os.path.join(A.sync_outbox_dir(), "20261030-x-abc.json")))
+
     def test_processor_without_token_falls_through_to_secrets(self):
         self.serve(tok=None)
         self.fake_secrets("echo vault-token-0123456789")

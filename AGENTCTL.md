@@ -811,6 +811,11 @@ The old names (design §14.5) answer until 2026-11-05, each printing its new one
   keeps it; executors and fixers inherit it). After a reboot or a service restart: `AGENTCTL_INTERACTIVE=1
   ~/bin/agentctl land status` from `~/projects/movies` with the vault unlocked (the service log then says `the
   Forgejo token was handed over`).
+- **Who may run `secrets`.** A TTY, `AGENTCTL_INTERACTIVE=1`, or an agent's own command in its Claude Code session
+  (`CLAUDECODE` and `CLAUDE_CODE_SESSION_ID` set): an agent's `land` reads the vault itself, submits, and hands the
+  token to the laptop processor. Never the processor, a launchd job, or anything agentctl started in the background
+  (`spawn_detached` marks it `AGENTCTL_DETACHED`). No `secrets run ... --` wrapper is needed. A submission that still
+  finds no token goes to the outbox (`QUEUED-LOCAL`) and the sync sends it with its own.
 - **As a service** (`tick service install`, which the owner runs): KeepAlive, RunAtLoad, log
   `~/.cache/agentctl/waiting/<repo>/service.log`. Wall-clock sleeps only, so it carries on after the laptop sleeps; a
   batch lands with no agent alive, its verdicts in the inbox.

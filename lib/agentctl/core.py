@@ -235,10 +235,15 @@ def movies_repo_path():
 
 def interactive_foreground():
     """Only an interactive, foreground invocation may run `secrets` (it can pop a Touch ID / keychain prompt): a TTY on
-    stdin or stderr, or AGENTCTL_INTERACTIVE=1. Never the processor, a launchd job, a detached watch or the statusline."""
-    if _IN_PROCESSOR[0] or os.environ.get("AGENTCTL_NO_SECRETS"):
+    stdin or stderr, AGENTCTL_INTERACTIVE=1, or an agent's own command in its Claude Code session (CLAUDECODE and
+    CLAUDE_CODE_SESSION_ID: the session's processes are the ones its vault unlock answers -- 2026-10-30: agents' `land`
+    failed NoToken and had to be wrapped in `secrets run movies FORGEJO_API_TOKEN --`). Never the processor, a launchd
+    job, or anything agentctl started in the background (spawn_detached marks it AGENTCTL_DETACHED)."""
+    if _IN_PROCESSOR[0] or os.environ.get("AGENTCTL_NO_SECRETS") or os.environ.get("AGENTCTL_DETACHED"):
         return False
     if os.environ.get("AGENTCTL_INTERACTIVE") == "1":
+        return True
+    if os.environ.get("CLAUDECODE") and os.environ.get("CLAUDE_CODE_SESSION_ID"):
         return True
     try:
         return sys.stdin.isatty() or sys.stderr.isatty()
@@ -411,6 +416,10 @@ _zombies_seen = set()
 
 
 def spawn_detached(argv, **kw):
+    """agentctl's own background process (a processor, executor, watch, fixer wrapper, owner): marked
+    AGENTCTL_DETACHED, so it never runs `secrets` (interactive_foreground) -- its token comes in its environment or from
+    the processor's socket."""
+    kw["env"] = {**(kw.get("env") if kw.get("env") is not None else os.environ), "AGENTCTL_DETACHED": "1"}
     p = subprocess.Popen(argv, **kw)
     _DETACHED.append(p)
     return p

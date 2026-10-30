@@ -569,7 +569,7 @@ def red_fixer(a):
     # NO FIXER IDENTITY IN THE SESSION'S ENVIRONMENT: `claude --bg` may start the claude daemon with it, and every
     # later background session -- other fixers', the owner's -- inherits the daemon's (2026-10-29: the daemon spawned by
     # #2473 fixer-5's wrapper named them all 'red-fixer-2473'). The prompt names the record; the session binds to it.
-    env = {k: v for k, v in os.environ.items() if k not in FIXER_IDENTITY_ENV}
+    env = {k: v for k, v in os.environ.items() if k not in FIXER_IDENTITY_ENV and k != "AGENTCTL_DETACHED"}  # an agent
     if rec.get("session"):
         bind_fixer_session(rec["session"], a.record)
     wall = env_num("AGENTCTL_RED_FIXER_WALL", RED_FIXER_WALL)

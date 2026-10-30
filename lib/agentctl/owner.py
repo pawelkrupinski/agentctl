@@ -215,7 +215,7 @@ def red_owner(a):
     rec.update(pid=me, process_start=process_start(me))
     write_json(path, rec)
     cli = claude_cli()
-    env = {k: v for k, v in os.environ.items() if k not in FIXER_IDENTITY_ENV}
+    env = {k: v for k, v in os.environ.items() if k not in FIXER_IDENTITY_ENV and k != "AGENTCTL_DETACHED"}  # an agent
     every = env_num("AGENTCTL_RED_RENEW", RED_RENEW_EVERY)
     poll = env_num("AGENTCTL_BG_POLL", BG_POLL)
     idle_max = env_num("AGENTCTL_OWNER_IDLE", OWNER_IDLE)
