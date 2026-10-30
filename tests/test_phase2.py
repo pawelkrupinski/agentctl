@@ -587,6 +587,14 @@ class RedFamilyTest(Phase2Base):
         self.assertEqual(fam("Main", "ci", "infra"), "infra")  # a setup / runner failure
         self.assertEqual(fam("Report run timings", "judge", "unclear"), "infra")
         self.assertEqual(fam("Identity model convergence", "leg (pl)", "unclear"), "convergence")
+        # the real #2647 shape, kind from its failing step (classify_job), family from the one mapping
+        e2e = {"name": "e2e (rest)", "conclusion": "failure",
+               "steps": [{"name": "Set up job", "conclusion": "success"}, {"name": "sbt e2eRest", "conclusion": "failure"}]}
+        kind, _why = A.classify_job(e2e, [], (9947, ["[info] Resolving ...", "##[error]Process completed with exit code 1."]))
+        self.assertEqual(fam("Main", "e2e (rest)", kind), "main-tests")
+        setup = {"name": "e2e (rest)", "conclusion": "failure", "steps": [{"name": "Set up job", "conclusion": "failure"}]}
+        kind, _why = A.classify_job(setup, [], (0, []))
+        self.assertEqual((kind, fam("Main", "e2e (rest)", kind)), ("infra", "infra"))
 
     def test_a_new_convergence_red_goes_under_the_live_family_fixers_lease_and_it_is_told(self):
         t = time.time()
