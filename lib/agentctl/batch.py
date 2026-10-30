@@ -13,6 +13,9 @@
 BATCH_RETRY_MAX = 3
 
 
+BATCH_LEASE_MAX = 6 * 3600  # the batch executor's leases: its check (2 h) and its bisect (4 h), its machine's bounds
+
+
 def batch_key(d):
     return os.path.basename(d.rstrip("/"))
 
@@ -247,11 +250,14 @@ def check_batch(repo, bid):
     it = st.item("batch", bid)
     if not it or it["state"] not in ("checking", "bisecting"):
         return 0
-    lease = LeaseHold(f"check/batch-{bid}", env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL), CHECK_LEASE_MAX)
+    # ONE EXECUTOR HOLDS THE BATCH THROUGH ITS CHECK AND ITS WHOLE BISECT (several checks of up to 2 h each): under a
+    # change's CHECK_LEASE_MAX (3 h) the bisect lost its lease mid-way, read as a stall, and blamed "flaky" -- the culprit
+    # was never rejected. Its machine bounds it (checking 2 h + bisecting 4 h); the leases' max hold matches.
+    lease = LeaseHold(f"check/batch-{bid}", env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL), BATCH_LEASE_MAX)
     if not lease.acquire():
         return 0
     i = it["data"]["tree"]
-    slot = tree_slot(d, i)
+    slot = tree_slot(d, i, BATCH_LEASE_MAX)
     try:
         if not slot.acquire():
             return 0

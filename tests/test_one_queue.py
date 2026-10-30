@@ -242,5 +242,16 @@ class TreeSlotTest(OneQueueBase):
             other.release()
 
 
+
+class BatchLeaseTest(OneQueueBase):
+    def test_the_batch_executor_holds_its_leases_through_check_and_bisect(self):
+        it = self.st.put_item("batch", A.batch_key(self.d) + "#1", "checking",
+                              {"tree": 1, "base": "7" * 40, "tip": "6" * 40, "members": []})
+        A.check_batch(self.r.path, it["id"])
+        for name in (f"check/batch-{it['id']}", f"slot/check/{A.batch_key(self.d)}/1"):
+            row = self.st.get(name)
+            self.assertAlmostEqual(row["max_until"] - row["acquired_at"], A.BATCH_LEASE_MAX, delta=5, msg=name)
+
+
 if __name__ == "__main__":
     unittest.main()

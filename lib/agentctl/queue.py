@@ -291,10 +291,10 @@ CHECK_LEASE_TTL = 10 * 60
 CHECK_LEASE_MAX = 3 * 3600
 
 
-def tree_slot(d, i):
+def tree_slot(d, i, max_hold=None):
     """THE lease of check tree i: whoever touches the tree -- a checker, the batch, a push -- holds it."""
     return LeaseHold(f"slot/check/{os.path.basename(d.rstrip('/'))}/{i}",
-                     env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL), CHECK_LEASE_MAX)
+                     env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL), max_hold or CHECK_LEASE_MAX)
 
 
 def check_tree_slot(repo, d):
