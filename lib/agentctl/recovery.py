@@ -542,8 +542,9 @@ def cmd_inbox(a):
                     print(f"    {line}")
     if a.ack and entries:
         # ACK ONLY YOUR OWN (2026-10-29 19:00: an agent's `inbox --unread --ack` marked every agent's verdicts read):
-        # named ids and --all (the owner, the orchestrator) ack what was listed; otherwise only the caller's entries
-        mine = entries if (a.ids or getattr(a, "all", False)) else [e for e in entries if own_inbox_entry(e)]
+        # --all (the owner, the orchestrator) acks what was listed; an entry named by its WHOLE id is acked whoever's;
+        # otherwise only the caller's. A prefix is no name: `inbox 2026 --ack` matches every entry ever written.
+        mine = entries if getattr(a, "all", False) else [e for e in entries if e["id"] in (a.ids or ()) or own_inbox_entry(e)]
         os.makedirs(os.path.join(inbox_dir(), "acked"), exist_ok=True)
         for e in mine:
             open(os.path.join(inbox_dir(), "acked", e["id"]), "a").close()

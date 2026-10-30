@@ -133,7 +133,10 @@ class InboxTest(unittest.TestCase):
             self.assertIn("acknowledged 2 entries; 2 left unread", out)
             read = {e["id"]: e["read"] for e in self.entries()}
             self.assertEqual(read, {own: True, in_my_tree: True, theirs: False, named: False})
-            self.run_main(["inbox", named, "--ack"])  # an entry named by id: acked, whoever's
+            _, out = self.run_main(["inbox", named[:8], "--ack"])  # a prefix (a date) is no name: theirs stay unread
+            self.assertIn("2 left unread", out)
+            self.assertFalse({e["id"]: e["read"] for e in self.entries()}[named])
+            self.run_main(["inbox", named, "--ack"])  # an entry named by its whole id: acked, whoever's
             self.assertEqual({e["id"]: e["read"] for e in self.entries()}[theirs], False)
             self.assertTrue({e["id"]: e["read"] for e in self.entries()}[named])
             os.chdir(self.tmp.name)  # outside any worktree, another session: nothing of its own
