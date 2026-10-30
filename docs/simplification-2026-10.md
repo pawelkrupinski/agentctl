@@ -253,3 +253,19 @@ and 5; additions for the owners, the config and the status/red models); argparse
 (Agent B), +the hidden `red owner`; -`store import`, -`store use --local`); 601 -> 639 tests, ~55 s in parallel.
 Owner actions: ONE pin bump (above, items 2-5 milestone) covers everything server-side; the infra branch `agentctl-ci`
 (Actions on) is Agent C's to hand over now.
+
+## Review of the session's changes (2026-10-30)
+
+Reviewed 353c4f7..main for correctness first, then simplification. On forgejo main, each step with a test.
+- Correctness: the one queue (landed-by-content closing, the laptop's local queue migrated, stranded items, W1 counts
+  only unlanded work), host-scoped condition probing, the notifier, projector and closer cursors, the status page's
+  masking and lease-meta paths, owner turns (wall time, progress, the self-perpetuating RED-STOP), pid-based adoption
+  removed, check-tree slots held by pushes, batch leases over the bisect, governor waiters and tickets, one landing
+  lease per repository, bounded subprocesses (run_cmd), Linux memory (mem_stats), tunnel and outage handling.
+- Simplified: dead code, the REST lease/offer/event routes, unused probes, duplicate helpers (tail_bytes, tree_slot,
+  watch_look/watch_verdict, tosec, land_lock on LeaseHold), old aliases (red list/patrol), gov_pressure.
+- Lines: lib 18,354 -> 18,367 (about 560 removed, about 570 added, mostly the one-queue fix and the bounded owner);
+  tests 12,862 -> 13,376; 649 -> 679 tests. hooks/pre-push runs the suite on the pushed commit.
+- Not done (a plan, not a cleanup): injecting Store / Clock / Runner / Forgejo instead of module globals and env
+  reads, and moving the tests from monkeypatching to fakes. That is a migration of every module and most tests, not a
+  behaviour-preserving step; it wants its own owner-approved plan.
