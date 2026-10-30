@@ -253,6 +253,50 @@ def classify_job(job, lines, raw=(0, []), timed_out=False):
 
 _gate_lists, _outside_lists = {}, {}  # workflow -> the runs on main gate_runs / outside_gate last listed (newest first)
 
+# AN INCOMPLETE RUN IS NO VERDICT (movies 4da98c308, 2026-10-30: convergence's `verdict complete` job fails a main run
+# whose takes or takes-drift rows were skipped, cancelled or missing -- "no false green"). A failed run whose ONLY real
+# failure (phantom cascades aside) is that job decided nothing: like a cancelled run it says nothing to the gate -- no
+# red, no streak, no fixer -- and ci-why names it NO VERDICT. Recovery is the next complete run.
+VERDICT_COMPLETE_JOB = re.compile(r"(^|/\s*)verdict complete$")
+NO_VERDICT_FLOWS = {"Identity model convergence"}  # the workflows with a `verdict complete` job (only they are read)
+_gate_no_verdict = {}  # workflow -> its newest no-verdict run newer than its decided one (gate_runs), or None
+_no_verdict_mem = {}
+
+
+def jobs_no_verdict(jobs):
+    """True when the failed jobs that really ran are all `verdict complete` (and there is one)."""
+    real = [j for j in jobs or [] if j.get("conclusion") in RED_CONCLUSIONS and not job_is_phantom(j)]
+    return bool(real) and all(VERDICT_COMPLETE_JOB.search(str(j.get("name") or "")) for j in real)
+
+
+def run_no_verdict(o_r, r):
+    """A completed failed run that is incomplete (jobs_no_verdict): read once per run, kept (a decided run never
+    changes); an unreadable run is a verdict as listed (never cached)."""
+    if r.get("status") != "completed" or r.get("conclusion") != "failure" or not r.get("databaseId"):
+        return False
+    rid = str(r["databaseId"])
+    if rid in _no_verdict_mem:
+        return _no_verdict_mem[rid]
+    path = state_root("no-verdict-runs.json")
+    known = read_record(path) or {}
+    if rid in known:
+        _no_verdict_mem[rid] = bool(known[rid])
+        return _no_verdict_mem[rid]
+    try:
+        d = gh_json(o_r, "run", "view", rid, "--json", "jobs")
+    except (Exception, SystemExit):
+        return False
+    nv = _no_verdict_mem[rid] = jobs_no_verdict(d.get("jobs"))
+    try:
+        known = read_record(path) or {}
+        known[rid] = nv
+        if len(known) > 500:
+            known = dict(list(known.items())[-500:])
+        write_json(path, known)
+    except OSError:
+        pass
+    return nv
+
 
 def gate_runs(o_r):
     """[(workflow, newest decided run on main | None, newer unfinished run | None, red_streak of its runs)]."""
@@ -263,20 +307,30 @@ def gate_runs(o_r):
     out = []
     for name, wfile in flows:
         runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30", "--json", RUN_FIELDS)
-        decided = next((r for r in runs if r.get("status") == "completed" and r.get("conclusion") in ("success", "failure", "timed_out")), None)
+        decided, nov = None, None
+        nv = (lambda r: run_no_verdict(o_r, r)) if name in NO_VERDICT_FLOWS else (lambda r: False)
+        for r in runs:
+            if r.get("status") == "completed" and r.get("conclusion") in ("success", "failure", "timed_out"):
+                if nv(r):
+                    nov = nov or r  # the newest incomplete run: no verdict, it says nothing
+                    continue
+                decided = r
+                break
         newer = next((r for r in runs if r.get("status") != "completed"), None)
         if newer and decided and newer["databaseId"] < decided["databaseId"]:
             newer = None
-        _gate_lists[name] = runs
-        out.append((name, decided, newer, red_streak(runs)))
+        _gate_lists[name], _gate_no_verdict[name] = runs, nov
+        out.append((name, decided, newer, red_streak(runs, skip=nv)))
     return out
 
 
-def red_streak(runs):
+def red_streak(runs, skip=None):
     """(since, count) of the red streak that `runs` (one workflow's on main, newest first) ends on: its decided runs up
-    to the newest success, `since` the oldest failure's completion (when CI first said red). (None, 0) when green."""
-    decided = [r for r in runs if r.get("status") == "completed" and r.get("conclusion") in ("success",) + RED_CONCLUSIONS]
-    streak = list(itertools.takewhile(lambda r: r.get("conclusion") in RED_CONCLUSIONS, decided))
+    to the newest success, `since` the oldest failure's completion (when CI first said red). (None, 0) when green.
+    skip(run): a failed run that decided nothing (run_no_verdict), left out like a cancelled one."""
+    decided = (r for r in runs if r.get("status") == "completed" and r.get("conclusion") in ("success",) + RED_CONCLUSIONS)
+    streak = [r for r in itertools.takewhile(lambda r: r.get("conclusion") in RED_CONCLUSIONS, decided)
+              if not (skip and skip(r))]
     if not streak:
         return None, 0
     oldest = streak[-1]
@@ -429,8 +483,9 @@ def explain_run_jobs(o_r, run, tail, repo=None):
         cascades = {}
         err(f"could not read run {rid}'s workflow graph: {e}")
     unread = []  # why the failed log, and a job's own, could not be read: no log was read, so none is 0-length
+    no_verdict = jobs_no_verdict(d.get("jobs"))
     try:
-        log = fetch_failed_log(o_r, rid) if failed else ""
+        log = fetch_failed_log(o_r, rid) if failed and not no_verdict else ""
     except Exception as e:
         log = ""
         unread.append(str(e))
@@ -445,6 +500,10 @@ def explain_run_jobs(o_r, run, tail, repo=None):
             per_job.append((j["name"], "derived", "", cascades[j["name"]]))
             lines.append(f"  [derived] {j['name']}: never started: {CASCADE_PREFIX}{', '.join(cascades[j['name']])} "
                          "(through `needs:`; follows that red)")
+            continue
+        if no_verdict:  # an incomplete run: its `verdict complete` job is no failure of the code
+            per_job.append((j["name"], "incomplete", ""))
+            lines.append(f"  [incomplete] {j['name']}: a takes or takes-drift row was skipped, cancelled or missing")
             continue
         jl, strong = per.get(j["name"]) or [], j["name"] in strong_jobs
         if fetched < MAX_JOB_LOG_FETCHES and "precommit" in str(d.get("workflowName", "")).lower().replace("-", ""):
@@ -476,7 +535,10 @@ def explain_run_jobs(o_r, run, tail, repo=None):
         if note:
             lines.append(note)
     rerun = f"rerun: {FORGEJO_GH.replace(HOME, '~')} run rerun {rid} --failed -R {o_r}"
-    if any(l.startswith("  [test]") and ": TIMEOUT: " in l for l in lines):
+    if no_verdict:
+        verdict = ("NO VERDICT (an incomplete run: only `verdict complete` failed -- a takes or takes-drift row was "
+                   "skipped, cancelled or missing; not a test failure, no fixer: the next complete run decides)")
+    elif any(l.startswith("  [test]") and ": TIMEOUT: " in l for l in lines):
         verdict = "TIMEOUT (a step ran past its own timeout-minutes: a code/config red, not a rerun)"
     elif "test" in kinds:
         verdict = "TEST FAILURE"
@@ -550,6 +612,11 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
 
     for name, decided, newer, (since, count) in gate:
         pending = f"; newer run {newer['databaseId']} (#{newer.get('number')}) {newer.get('status')} may clear it" if newer else ""
+        nov = _gate_no_verdict.get(name)
+        if nov and not summary:
+            out.append(f"{name}: newest run {nov['databaseId']} #{nov.get('number')}: NO VERDICT (incomplete: only "
+                       "`verdict complete` failed -- a takes row skipped, cancelled or missing; no red, no fixer); the "
+                       "gate reads the newest complete run, and the next complete run decides")
         if not decided:
             out.append(f"{name}: no decided run on main")
             parts.append(f"{short_flow(name)} ?")
@@ -691,7 +758,7 @@ def ci_state_refresh(o_r, write=True):
     gate = gate_runs(o_r)
     snap = {"at": time.time(), "repo": o_r, "outside_error": None, "outside": [],
             "gate": [{"name": n, "decided": d, "newer": nw, "since": st[0], "count": st[1],
-                      "runs": _gate_lists.get(n, [])} for n, d, nw, st in gate]}
+                      "runs": _gate_lists.get(n, []), "no_verdict": _gate_no_verdict.get(n)} for n, d, nw, st in gate]}
     if o_r in GATING:
         try:
             snap["outside"] = [{"name": n, "decided": r, "since": since, "count": count,
@@ -706,7 +773,8 @@ def ci_state_refresh(o_r, write=True):
         snap["branches_error"] = str(e)[:200]
     latest = {}  # each workflow's newest decided run on main: what workflow_green probes read
     for name, runs in list(_outside_lists.items()) + list(_gate_lists.items()):
-        d = next((r for r in runs if r.get("status") == "completed" and not is_cancelled(r)), None)
+        d = next((r for r in runs if r.get("status") == "completed" and not is_cancelled(r)
+                  and not (name in NO_VERDICT_FLOWS and run_no_verdict(o_r, r))), None)
         if d:
             latest[name] = {k: d.get(k) for k in ("number", "databaseId", "conclusion", "headSha", "updatedAt")}
     snap["latest"] = latest
@@ -734,7 +802,7 @@ def ci_state_load(o_r, now=None):
 def gate_from_snap(snap):
     out = []
     for g in snap["gate"]:
-        _gate_lists[g["name"]] = g["runs"]
+        _gate_lists[g["name"]], _gate_no_verdict[g["name"]] = g["runs"], g.get("no_verdict")
         out.append((g["name"], g["decided"], g["newer"], (g["since"], g["count"])))
     return out
 

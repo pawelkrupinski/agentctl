@@ -510,7 +510,7 @@ def watch_eval(repo, sha, pushed_at, o_r, flows, now_):
     conv_start = float(os.environ.get("AGENTCTL_WATCH_CONV_START", WATCH_CONV_START))
     for kind, (name, wfile) in flows.items():
         runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30", "--json", RUN_FIELDS)
-        run = pick_main_run(repo, sha, runs) if kind == "main" else pick_convergence_run(repo, sha, runs, pushed_at)
+        run = pick_main_run(repo, sha, runs) if kind == "main" else pick_convergence_run(repo, sha, runs, pushed_at, o_r)
         if run is None:
             if kind == "convergence" and now_ - float(pushed_at) >= conv_start:
                 done[kind] = (None, None)

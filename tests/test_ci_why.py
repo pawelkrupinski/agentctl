@@ -57,6 +57,48 @@ class CiWhyTest(FakeForge):
         self.assertIn("Agent Smith <a@b>: resolver: tweak", out)
         self.assertIn("`Fixes-Red: 19` (or `Fixes-Red: 39`)", out)
 
+    def test_a_run_failing_only_verdict_complete_is_no_verdict_not_a_red(self):
+        """movies 4da98c308: `verdict complete` fails a convergence run whose takes rows were skipped, cancelled or
+        missing. When it is the run's ONLY failure the run decided nothing: no red, no fixer, NO VERDICT; the gate
+        reads the newest complete run, and the next complete run decides."""
+        conv = ("Identity model convergence", "identity-model-convergence.yml")
+        self.put("runs.json", [run(40, 20, "Main", "main.yml"),
+                               run(42, 22, *conv, conclusion="failure"),  # incomplete
+                               run(41, 21, *conv, conclusion="failure"),  # incomplete too: no streak either
+                               run(39, 19, *conv)])
+        incomplete = [job("preflight"), job("takes (poland)", conclusion="cancelled"),
+                      {**job("verdict complete", conclusion="failure"),
+                       "startedAt": "2026-10-30T03:00:00Z",
+                       "steps": [step("Set up job", "success"), step("Did every takes and takes-drift row decide?", "failure")]}]
+        for rid, num in ((42, 22), (41, 21)):
+            self.put(f"run-{rid}.json", {"jobs": incomplete, "headSha": SHA, "url": f"http://f/runs/{num}", "number": num,
+                                         "status": "completed", "conclusion": "failure"})
+            self.put(f"run-{rid}.log", "")
+        rc, out, _ = self.why()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("main is green for the gate", out)
+        self.assertIn("Identity model convergence: GREEN (run 39 #19)", out)
+        self.assertIn("newest run 42 #22: NO VERDICT", out)
+        self.assertNotIn("TEST FAILURE", out)
+        self.assertEqual(A.red_streak([run(42, 22, *conv, conclusion="failure"), run(39, 19, *conv)],
+                                      skip=lambda r: True), (None, 0))
+        rc, out, _ = self.why("42")
+        self.assertIn("verdict: NO VERDICT", out)
+        self.assertIn("[incomplete] verdict complete", out)
+        # a real failure beside it is a red as ever
+        self.put("run-42.json", {"jobs": incomplete[:2] + [{**job("takes (spain)", conclusion="failure"),
+                                                             "startedAt": "2026-10-30T03:00:00Z",
+                                                             "steps": [step("Check takes", "failure")]}] + incomplete[2:],
+                                 "headSha": SHA, "url": "http://f/runs/22", "number": 22, "status": "completed",
+                                 "conclusion": "failure"})
+        self.assertFalse(A.jobs_no_verdict(A.read_record(os.path.join(self.d, "run-42.json"))["jobs"]))
+        self.assertTrue(A.jobs_no_verdict(incomplete))
+        # its signatures open no red (gate_red_units, red_attach): only a real failure beside it does
+        self.assertTrue(A.sigs_no_verdict([{"job": "verdict complete", "kind": "incomplete"}]))
+        self.assertFalse(A.sigs_no_verdict([{"job": "verdict complete", "kind": "incomplete"},
+                                            {"job": "takes (spain)", "kind": "test"}]))
+        self.assertFalse(A.sigs_no_verdict([]))
+
     def test_reds_outside_the_gate_are_listed_with_how_long_they_have_been_red(self):
         def r(rid, wf, conclusion, at, status="completed"):
             return {**run(rid, rid, wf, wf.lower().replace(" ", "-") + ".yml", status, conclusion), "updatedAt": at}

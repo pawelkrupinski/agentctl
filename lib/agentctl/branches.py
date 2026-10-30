@@ -1031,7 +1031,7 @@ def classifier_version():
     of another version is read again (#2426: cached a TEST FAILURE before KEY_REFUSED_LOG, `red block` kept reading it;
     #2406 / #2481 / #2493: one failure cached under three lines, the older two from before annotations came first)."""
     import hashlib, inspect
-    parts = [inspect.getsource(classify_job), inspect.getsource(derive_cascades), inspect.getsource(workflow_jobs),
+    parts = [VERDICT_COMPLETE_JOB.pattern, inspect.getsource(jobs_no_verdict), inspect.getsource(classify_job), inspect.getsource(derive_cascades), inspect.getsource(workflow_jobs),
              inspect.getsource(job_is_phantom), SETUP_STEP.pattern, INFRA_LOG.pattern, UNKNOWN_LOG.pattern,
              KEY_REFUSED_LOG.pattern, STEP_TIMED_OUT, inspect.getsource(relevant_lines), inspect.getsource(job_log_lines),
              inspect.getsource(choose_job_lines), STRONG.pattern, WEAK.pattern, NOISE.pattern, ANNOTATION.pattern]

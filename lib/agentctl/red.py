@@ -164,6 +164,12 @@ def red_units(o_r, name, decided, runs, sigs, gate, budget=None):
     return units
 
 
+def sigs_no_verdict(sigs):
+    """A run's signatures say it decided nothing: its only failures are `verdict complete` (kind incomplete)."""
+    kinds = {s.get("kind") for s in sigs or []} - {"derived"}
+    return kinds == {"incomplete"}
+
+
 def gate_red_units(o_r, rows, others=(), rereads=None):
     """The red units of ci-why's rows: [(name, decided, runs, gate)] -> units (signatures read, cached; at most
     `rereads` (STREAK_REREADS) stale streak runs read again per call -- the tick's; the status line's summary none)."""
@@ -177,6 +183,8 @@ def gate_red_units(o_r, rows, others=(), rereads=None):
         except (Exception, SystemExit) as e:
             err(f"red: could not read the failed jobs of run {decided.get('databaseId')} ({str(e)[:120]})")
             sigs = []
+        if sigs_no_verdict(sigs):
+            continue  # an incomplete run (only `verdict complete` failed): no verdict, no red, no fixer
         units += red_units(o_r, name, decided, runs, sigs, gate, budget)
     return units
 
@@ -992,6 +1000,8 @@ def red_attach(store, workflow, run, author=None, o_r=None):
         sigs = run_sigs(o_r, run, workflow)
     except (Exception, SystemExit):
         sigs = []
+    if sigs_no_verdict(sigs):
+        return []  # an incomplete run: no verdict, no red to open
     gate = workflow in {g for g, _ in GATING.get(o_r, [])}
     obs = red_obs_of_units(red_units(o_r, workflow, run, [run], sigs, gate))
     active, out = red_active(store), []
