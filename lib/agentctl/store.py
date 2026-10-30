@@ -487,6 +487,15 @@ MACHINES["branch-red"] = {
 }
 
 
+# the land hold (`land hold|release`): an item in the store, so ci-runner's reconciler honours a hold made on the laptop
+# (the PAUSED file it replaced was the laptop's own, read by no tick since the phase 2 cutover). Its deadline is its
+# expiry: a forgotten hold lifts itself (`expired`), never a manual-ack-only state.
+MACHINES["hold"] = {
+    "held": StateSpec(LAND_HOLD_DEFAULT, "expired", ("held", "released", "expired")),
+    "released": StateSpec(ARCHIVE, "released", (), terminal=True),
+    "expired": StateSpec(ARCHIVE, "expired", (), terminal=True),
+}
+
 def machine_state(typ, state):
     try:
         return MACHINES[typ][state]

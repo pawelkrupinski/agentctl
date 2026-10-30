@@ -969,6 +969,7 @@ def server_steps(repo, d, shared):
             ("landed changes", shared(lambda: [wlog(d, f"tick: {x}") for x in close_landed_changes(repo, d)])),
             ("stranded changes", lambda: stranded_changes(repo, d)),
             ("change tick", shared(lambda: [wlog(d, f"tick: {x}") for x in tick_changes(repo, d)])),
+            ("land hold", tick_land_hold),
             ("batch tick", shared(lambda: [wlog(d, f"tick: {x}") for x in tick_batch(repo, d)])),
             ("watches", lambda: [wlog(d, f"tick: {x}") for x in tick_watches()]),
             ("land refs", shared(lambda: [wlog(d, f"tick: {x}") for x in sweep_land_refs(repo, d)])),

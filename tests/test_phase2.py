@@ -1,6 +1,6 @@
 """Phase 2 (design §6.3, §13 phase 2): the store over HTTP with Forgejo token auth, RemoteStore, the laptop's sync, the
 reconciler's entry point on ci-runner -- against a local server on a temp port, with a fake Forgejo for the auth."""
-import contextlib, io, json, os, re, signal, socket, subprocess, sys, tempfile, threading, time, unittest, urllib.request
+import argparse, contextlib, io, json, os, re, signal, socket, subprocess, sys, tempfile, threading, time, unittest, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -370,7 +370,7 @@ class ServerSideTest(Phase2Base):
         self.assertEqual(names, ["outbox", "state mirror", "children", "events", "notifier", "landed worktrees", "local queue", "landed changes", "claims", "dispatcher", "pins", "fixer landing",
                                  "network watch", "tunnel probe", "upkeep", "recovery"])
         server = [n for n, _ in A.server_steps(self.repo, self.tmp, lambda f: f)]
-        self.assertEqual(server, ["clone health", "change items", "landed changes", "stranded changes", "change tick", "batch tick", "watches", "land refs",
+        self.assertEqual(server, ["clone health", "change items", "landed changes", "stranded changes", "change tick", "land hold", "batch tick", "watches", "land refs",
                                   "lease archive", "children", "gate summary", "red time", "red tick", "recovery"])
         laptop_only = {"events", "notifier", "network watch", "tunnel probe", "upkeep", "fixer landing", "dispatcher",
                        "claims"}
@@ -729,6 +729,66 @@ class LandAsYouGoTest(Phase2Base):
             os.environ.pop("AGENTCTL_BRIEF_SRC", None)
             if saved is not None:
                 os.environ["AGENTCTL_BRIEF_SRC"] = saved
+
+
+class LandHoldTest(Phase2Base):
+    """SERVER MODE (2026-10-30: `land hold` on the laptop wrote a PAUSED file ci-runner's reconciler never read): the
+    laptop's hold and release go through the store, and the reconciler's tick honours them."""
+
+    def setUp(self):
+        super().setUp()
+        self.saved_spawn = A.spawn_waiting_processor, A.offer_token
+        A.spawn_waiting_processor, A.offer_token = (lambda repo: None), (lambda repo: False)
+
+    def tearDown(self):
+        A.spawn_waiting_processor, A.offer_token = self.saved_spawn
+        super().tearDown()
+
+    def land(self, cmd, **kw):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = A.cmd_waiting(argparse.Namespace(wcmd=cmd, repo=self.repo, entry=None, renamed=True, **kw))
+        return rc, out.getvalue()
+
+    def test_a_hold_made_on_the_laptop_holds_ci_runners_batch_until_released(self):
+        self.sync()  # the laptop
+        rc, out = self.land("pause", hold_for=45, hold_why="infra deploy")
+        self.assertEqual(rc, 0, out)
+        [h] = self.st.items("hold", ["held"])  # ci-runner's own database has it
+        self.assertEqual(h["data"]["why"], "infra deploy")
+        os.environ["AGENTCTL_ROLE"] = "server"  # ci-runner's reconciler
+        os.environ.pop("AGENTCTL_STORE_URL")
+        d, _c, _w = A.waiting_state(self.repo)
+        self.assertIsNotNone(A.land_hold(A.Store()))
+        saved = A.waiting_entries, A.current_batch
+        A.waiting_entries = lambda d_, **kw: [{"id": "e1"}]  # a change waits: only the hold stops the batch
+        try:
+            self.assertEqual(A.tick_batch(self.repo, d), ["held"])
+        finally:
+            A.waiting_entries, A.current_batch = saved
+        A.write_snapshot(d)
+        self.sync()
+        st = A.state_read()
+        self.assertEqual(st["hold"]["why"], "infra deploy")
+        line = A.status_header(time.time(), d=st, probes=False)["line"]
+        self.assertIn("LAND HELD until", line)
+        rc, out = self.land("status")
+        self.assertIn("HELD until", out)
+        rc, out = self.land("resume")
+        self.assertIn(h["id"], out)
+        self.assertEqual(self.st.items("hold", ["held"]), [])
+        self.assertEqual(self.st.item("hold", h["id"])["state"], "released")
+
+    def test_the_reconcilers_step_expires_a_forgotten_hold(self):
+        self.sync()
+        self.land("pause", hold_for=1)
+        os.environ["AGENTCTL_ROLE"] = "server"
+        os.environ.pop("AGENTCTL_STORE_URL")
+        self.assertIsNotNone(A.land_hold(self.st))
+        self.assertIsNone(A.land_hold(self.st, time.time() + 120))
+        self.assertEqual(self.st.items("hold", ["held"]), [])
+        self.assertTrue(any(e["kind"] == "hold.expired" for e in self.st.events()))
+        self.assertIn(("land hold", A.tick_land_hold), A.server_steps(self.repo, "/d", lambda f: f))
 
 class CurrentStoreTest(Phase2Base):
     def test_a_long_running_holder_follows_store_use(self):

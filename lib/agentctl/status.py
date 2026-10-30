@@ -163,7 +163,7 @@ def status_header(t, d=None, probes=True):
          "tick_at": tick, "tick_age": t - float(tick) if tick else None, "fetched_at": d.get("fetched_at"),
          "store_url": url, "store_unreachable": unreachable, "store_error": d.get("store_error"),
          "code": d.get("version"), "network": d.get("network"), "waiting": d.get("waiting") or [],
-         "queued": d.get("queued") or [],
+         "queued": d.get("queued") or [], "hold": d.get("hold"),
          "items": {k: d.get(k) or [] for k in ("changes", "batch", "reds", "conditions")},
          "pins": pins_status(now_=t)}
     if probes:
@@ -188,6 +188,9 @@ def render_status_line(h, t):
     elif not tick or t - float(tick) > 120:
         parts.insert(0, (f"RECONCILER STALLED since {hm(tick)}" if tick else "RECONCILER not running")
                      + (" (ci-runner)" if url else ""))
+    hold = h.get("hold")
+    if hold and float(hold.get("until") or 0) > t:  # the store's land hold (expired ones lift at the next tick)
+        parts.append("LAND " + hold_text(hold))
     waiting, queued = h["waiting"], h["queued"]
     parts.append(f"waiting: {len(waiting)}" + (f" — {short(waiting)}" if waiting else "")
                  + (f" · checking: {len(queued)} — {short(queued)}" if queued else ""))
@@ -607,7 +610,8 @@ def status_landing(st, t):
                 "submitted_at": d.get("submitted_at"), "why": d.get("why") or d.get("reason"),
                 "changes": d.get("changes") or d.get("entries")}
     return {"changes": [row(it) for it in st.items("change", list(STATUS_CHANGE_OPEN))],
-            "batch": [row(it) for it in st.items("batch", list(STATUS_BATCH_OPEN))]}
+            "batch": [row(it) for it in st.items("batch", list(STATUS_BATCH_OPEN))],
+            "hold": hold_row(land_hold(st, t, expire=False))}
 
 
 def status_conditions(st, t):

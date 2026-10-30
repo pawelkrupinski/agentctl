@@ -69,6 +69,91 @@ def batch_members(d, it):
     return [es[i] for i in ids if i in es]
 
 
+# ---------------------------------------------------------------- the land hold (`land hold|release`)
+LAND_HOLD_DEFAULT = 4 * 3600  # s a `land hold` lasts unless --for says otherwise: it then lifts itself (expired)
+LAND_HOLD_MAX = 24 * 3600     # s: the longest --for a hold takes
+
+
+def hold_by():
+    """Who holds or releases: the agent's name, else the user and host."""
+    try:
+        name = agent_name()
+    except (Exception, SystemExit):
+        name = None
+    return name or f"{os.environ.get('USER', '?')}@{os.uname().nodename.split('.')[0]}"
+
+
+def land_holds(st):
+    return st.items("hold", ["held"])
+
+
+def land_hold(st, now_=None, expire=True):
+    """The land hold in force, or None. A hold past its deadline is moved to `expired` here (an event says so): every
+    reader -- the tick, `land status`, the snapshot -- lifts a forgotten hold the moment it is due. expire=False: only
+    read (the status page never writes)."""
+    t = now_ if now_ is not None else time.time()
+    live = None
+    for it in land_holds(st):
+        if it["deadline"] <= t:
+            if not expire:
+                continue
+            try:
+                st.transition("hold", it["id"], "expired", it["version"],
+                              event={"text": f"land hold {it['id']} expired (held by {it['data'].get('by')}: "
+                                             f"{it['data'].get('why') or 'no reason given'})"})
+            except (StaleVersion, TerminalState):
+                pass
+        elif live is None or it["deadline"] > live["deadline"]:
+            live = it
+    return live
+
+
+def hold_text(h, t=None):
+    """`HELD until HH:MM (by, why)` for a hold row ({deadline, data} or the snapshot's {until, by, why})."""
+    until = h.get("until") or h.get("deadline")
+    d = h.get("data") or h
+    return (f"HELD until {time.strftime('%H:%M', time.localtime(float(until)))} (`agentctl land release`; "
+            f"by {d.get('by') or '?'}" + (f": {d['why']}" if d.get("why") else "") + ")")
+
+
+def land_hold_set(st, secs, why, by):
+    """Hold, or extend the hold in force to now + secs. Returns the hold item."""
+    secs = max(60, min(int(secs), LAND_HOLD_MAX))
+    cur = land_hold(st)
+    data = {"by": by, "why": why or "", "at": time.time()}
+    if cur:
+        st.transition("hold", cur["id"], "held", cur["version"], data=data, deadline_s=secs,
+                      event={"text": f"land hold {cur['id']} extended by {by}: {why or 'no reason given'}",
+                             "dedupe": f"hold:{cur['id']}:extend:{cur['version'] + 1}"})
+        return st.item("hold", cur["id"])
+    n = int(st.meta_get("hold_seq", 0) or 0) + 1
+    st.meta_set("hold_seq", n)
+    it = st.put_item("hold", f"land#{n}", "held", data)
+    if secs != LAND_HOLD_DEFAULT:  # its own expiry: a self-transition re-deadlines it
+        st.transition("hold", it["id"], "held", it["version"], deadline_s=secs,
+                      event={"text": f"land hold {it['id']} by {by} for {secs // 60} min: {why or 'no reason given'}"})
+        it = st.item("hold", it["id"])
+    return it
+
+
+def land_hold_release(st, by):
+    """Release every hold in force. Returns their ids."""
+    out = []
+    for it in land_holds(st):
+        try:
+            st.transition("hold", it["id"], "released", it["version"], data={"released_by": by},
+                          event={"text": f"land hold {it['id']} released by {by}"})
+            out.append(it["id"])
+        except (StaleVersion, TerminalState):
+            pass
+    return out
+
+
+def tick_land_hold(st=None):
+    """The reconciler's step: a hold past its deadline expires even while no batch ticks."""
+    land_hold(st or Store())
+    return []
+
 def tick_batch(repo, d, now_=None):
     """One tick of the repository's batch. Returns what it did."""
     t = now_ if now_ is not None else time.time()
@@ -77,8 +162,8 @@ def tick_batch(repo, d, now_=None):
     it = current_batch(st, d)
     if not waiting and not it:
         return []
-    if os.path.exists(os.path.join(d, "PAUSED")):
-        return ["paused"]
+    if land_hold(st, t):  # the store's hold: honoured wherever `land hold` ran
+        return ["held"]
     reds = gate_reds(repo)
     did = []
     waiting = waiting_entries(d)
@@ -371,6 +456,10 @@ def _push_batch_item(repo, d, st, it, members, tip, base, i):
 ROUND_ERRORS_MAX = 3
 
 
+def hold_row(it):
+    return {"id": it["id"], "until": it["deadline"], "by": it["data"].get("by"), "why": it["data"].get("why")} if it else None
+
+
 def write_snapshot(d, store=None):
     """The tick's part of state.json: the open items and the tick's own time and code version."""
     st = store or Store()
@@ -382,6 +471,7 @@ def write_snapshot(d, store=None):
                  changes=[brief(i) for i in open_("change")], batch=[brief(i) for i in open_("batch")],
                  reds=[brief(i) for i in open_("red")] if "red" in MACHINES else [],
                  conditions=[brief(i) for i in open_("condition")] if "condition" in MACHINES else [],
+                 hold=hold_row(land_hold(st)),
                  waiting=[r["worktree"] for r in rows if r["state"] == "waiting"],
                  queued=[r["worktree"] for r in rows if r["state"] != "waiting"])
 
@@ -643,26 +733,34 @@ def cmd_waiting(a):
         os.chdir(repo)
         rc, sha, pushed_at = await_entry(repo, a.entry)
         return watch_landed(repo, sha, pushed_at, close=a.close) if rc == 0 and sha else rc
-    if a.wcmd == "pause":
-        open(os.path.join(d, "PAUSED"), "a").close()
-        print(f"held: the processor takes no batch until `agentctl land release` ({d}/PAUSED); changes still queue")
+    if a.wcmd == "pause":  # `land hold`: an item in the store (the reconciler's, wherever this runs)
+        st = Store()
+        secs = int(float(getattr(a, "hold_for", None) or LAND_HOLD_DEFAULT // 60) * 60)
+        it = land_hold_set(st, secs, getattr(a, "hold_why", None), hold_by())
+        print(f"held: the processor takes no batch until `agentctl land release` or "
+              f"{time.strftime('%H:%M', time.localtime(it['deadline']))} (then the hold expires); changes still queue")
         return 0
     if a.wcmd == "resume":
+        st = Store()
+        gone = land_hold_release(st, hold_by())
         try:
-            os.unlink(os.path.join(d, "PAUSED"))
+            os.unlink(os.path.join(d, "PAUSED"))  # the pre-store hold file, if an old version left one
         except FileNotFoundError:
             pass
         recover_clear_hold(None, {"d": d})  # a held batch is assembled again at once
         spawn_waiting_processor(repo)
         offer_token(repo)
-        print("released: the processor takes the next batch")
+        print("released" + (f" ({', '.join(gone)})" if gone else " (no hold was in force)")
+              + ": the processor takes the next batch")
         return 0
     if a.wcmd == "status":  # ONE QUEUE: the store's change items, on either host
         st = Store()
         rows = change_rows(st)
         print(f"queue: {store_url() or 'this host'}")
-        print(f"processor: {'running' if waiting_processor_alive(d) else 'not running'}"
-              + ("; HELD (`agentctl land release`)" if os.path.exists(os.path.join(d, "PAUSED")) else ""))
+        print(f"processor: {'running' if waiting_processor_alive(d) else 'not running'}")
+        hold = land_hold(st)
+        if hold:
+            print(f"land: {hold_text(hold)}")
         bt = current_batch(st, d)
         if bt:
             dd = bt["data"]

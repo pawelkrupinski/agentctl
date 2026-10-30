@@ -99,7 +99,7 @@ class WaitingTest(Base):
             for _ in range(n):
                 did = A.close_landed_changes(self.r.path, d) + A.tick_batch(self.r.path, d)  # the server's order
                 out += did
-                if not did or did == ["paused"]:
+                if not did or did == ["held"]:
                     break
         finally:
             A.spawn_batch_executor = saved
@@ -324,14 +324,46 @@ class WaitingTest(Base):
     def test_status_pause_and_cancel(self):
         wt1, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         self.land(wt1)
-        self.run_tool("land", "hold", cwd=self.r.path)
-        self.assertEqual(self.drive(), ["paused"])
+        self.run_tool("land", "hold", "--why", "deploy window", cwd=self.r.path)
+        self.assertEqual(self.drive(), ["held"])
         rc, out = self.run_tool("land", "status", cwd=self.r.path)
-        self.assertIn("HELD", out)
+        self.assertIn("HELD until", out)
+        self.assertIn("deploy window", out)
         self.run_tool("land", "release", cwd=self.r.path)
+        self.assertIsNone(A.land_hold(A.Store()))
         rc, out = self.run_tool("land", "cancel", "-1", cwd=self.r.path)
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.entries()["1"]["status"], "cancelled")
+
+    def test_a_hold_is_the_stores_and_expires_by_itself(self):
+        """LOCAL MODE (this process is the reconciler): `land hold` writes the store's hold item, never a file; the tick
+        honours it; past its --for it expires (an event says so) and the batch moves again with no release."""
+        wt1, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        self.land(wt1)
+        d, _c, _w = A.waiting_state(self.r.path)
+        rc, out = self.run_tool("land", "hold", "--for", "30", "--why", "infra deploy", cwd=self.r.path)
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.exists(os.path.join(d, "PAUSED")), "no local file: the store holds it")
+        [h] = A.Store().items("hold", ["held"])
+        self.assertEqual(h["data"]["why"], "infra deploy")
+        self.assertAlmostEqual(h["deadline"] - time.time(), 30 * 60, delta=60)
+        self.assertEqual(self.drive(), ["held"])
+        A.write_snapshot(d)
+        line = A.status_line()
+        self.assertIn("LAND HELD until", line)
+        self.assertIn("infra deploy", line)
+        self.assertIn("infra deploy", A.status_landing(A.Store(), time.time())["hold"]["why"])
+        # a second hold extends the one in force (one hold, never two)
+        self.run_tool("land", "hold", "--for", "60", cwd=self.r.path)
+        self.assertEqual(len(A.Store().items("hold", ["held"])), 1)
+        # past its deadline: the next reader expires it, with an event; the tick moves the batch again
+        later = time.time() + 61 * 60
+        self.assertIsNone(A.land_hold(A.Store(), later))
+        self.assertEqual(A.Store().items("hold", ["held"]), [])
+        self.assertTrue([e for e in A.Store().events() if e["kind"] == "hold.expired"])
+        self.assertNotEqual(self.drive(), ["held"])
+        A.write_snapshot(d)
+        self.assertNotIn("HELD", A.status_line())
 
     def test_an_unread_gate_holds_the_batch_and_says_so_once(self):
         # 08:05Z 10-27: the processor could not read the gate (no token under launchd), took it for green, and pushed

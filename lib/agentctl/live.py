@@ -707,7 +707,8 @@ function landing(l){const row=c=>[`<span class="mono">${E(c.id)}</span>`,chip(c.
  E(tilde(c.worktree||""))+(c.branch?` <span class="mute">${E(c.branch)}</span>`:""),`<span class="mono">${E(c.head||"")}</span>`,
  `<span class="n">${ago(c.entered_at)}</span>`,`<span class="n">${c.past_deadline?chip("past "+hm(c.deadline),"bad"):hm(c.deadline)+" ("+ago(c.deadline)+")"}</span>`,E(c.why||"")];
  const cols=["id","state","worktree","head","in state","deadline","why"];
- return`<div class="mute">batch</div>${table(cols,(l.batch||[]).map(row))}<div class="mute" style="margin-top:6px">changes</div>${table(cols,(l.changes||[]).map(row))}`}
+ const hold=l.hold?`<div class="err">land HELD until ${hm(l.hold.until)} by ${E(l.hold.by||"?")}${l.hold.why?": "+E(l.hold.why):""} (<span class="mono">agentctl land release</span>; it expires by itself then)</div>`:"";
+ return`${hold}<div class="mute">batch</div>${table(cols,(l.batch||[]).map(row))}<div class="mute" style="margin-top:6px">changes</div>${table(cols,(l.changes||[]).map(row))}`}
 function conds(cs){return table(["condition","since","probe","last result","next check","text"],cs.map(c=>[
  `${chip(c.kind,"bad")}${c.level?" "+chip("escalated","bad"):""}<div class="mute mono">${E(c.key)}</div>`,`<span class="n">${E(c.opened)}</span>`,
  `${E(c.probe)}<div class="mute">clears when ${E(c.until)}</div>`,`${c.ok==null?"cannot tell":"fails"} (${E(c.detail)}) · fails ${E(c.fails||0)}`,

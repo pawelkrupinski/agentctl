@@ -436,7 +436,8 @@ def cmd_land(a):
         if a.lcmd == "cancel" and not a.entry:
             print("usage: agentctl land cancel <id>")
             return 2
-        w = argparse.Namespace(wcmd=LAND_SUBCOMMANDS[a.lcmd], repo=a.repo, entry=a.entry, renamed=True)
+        w = argparse.Namespace(wcmd=LAND_SUBCOMMANDS[a.lcmd], repo=a.repo, entry=a.entry, renamed=True,
+                               hold_for=getattr(a, "hold_for", None), hold_why=getattr(a, "hold_why", None))
         return cmd_waiting(w)
     if os.environ.get("PREPUSH_SKIP"):
         print("NOT LANDED: PREPUSH_SKIP is set in the environment; agentctl land never skips checks. `unset PREPUSH_SKIP`.")

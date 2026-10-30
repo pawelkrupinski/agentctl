@@ -62,8 +62,11 @@ def main(argv=None):
                         description=LAND_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     ld.add_argument("lcmd", nargs="?", choices=sorted(LAND_SUBCOMMANDS), metavar="status|hold|release|cancel",
                     help="the queue instead of a land: status (the changes, the batch, the gate), hold / release (take "
-                         "no batch until release), cancel <id>")
+                         "no batch until release or the hold's expiry, on ci-runner's store), cancel <id>")
     ld.add_argument("entry", nargs="?", help="cancel: the change's id (a unique part of it)")
+    ld.add_argument("--for", dest="hold_for", type=float, metavar="MIN",
+                    help="hold: minutes until the hold expires by itself (default 240, at most 1440)")
+    ld.add_argument("--why", dest="hold_why", help="hold: the reason, shown on the status line and page")
     ld.add_argument("--repo", help="checkout to land from (default: cwd)")
     ld.add_argument("--branch", help="local branch to land (default: the checked-out HEAD)")
     ld.add_argument("--stash", action="store_true", help="set uncommitted changes aside in a NAMED stash and restore them after")
