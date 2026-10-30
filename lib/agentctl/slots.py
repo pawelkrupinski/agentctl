@@ -650,6 +650,8 @@ def network_requeue(repo, head, out, log_path, a=None):
         return refused(repo, out, log_path, f"the pre-push checks failed on the network, not on the change ({why}); "
                        "land again once Forgejo answers")
     d, _clone, _wt = waiting_state(repo)
+    if host_role() == "sync":  # ONE QUEUE: ci-runner's (its checks run there, its own network)
+        return submit_to_server(repo, d, change_fields(repo, f"{REMOTE}/main", head, a), note=f" after {why}")
     e, _ahead = queue_change(d, change_fields(repo, f"{REMOTE}/main", head, a))
     submit_ref(repo, d, e)
     requeue_infra(d, e, why, reason=NETWORK_REASON, detail=out, repo=repo)

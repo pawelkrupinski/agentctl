@@ -97,7 +97,7 @@ class WaitingTest(Base):
         out = []
         try:
             for _ in range(n):
-                did = A.tick_batch(self.r.path, d)
+                did = A.close_landed_changes(self.r.path, d) + A.tick_batch(self.r.path, d)  # the server's order
                 out += did
                 if not did or did == ["paused"]:
                     break

@@ -107,7 +107,7 @@ def waiting_entries(d, open_only=True):
     return sorted(out, key=lambda e: e["seq"])
 
 
-ENTRY_FINAL = ("landed", "rejected", "superseded", "cancelled", "joined")
+ENTRY_FINAL = ("landed", "rejected", "superseded", "cancelled", "joined", "migrated")  # migrated: the laptop's, to ci-runner
 
 
 def save_entry(d, e):

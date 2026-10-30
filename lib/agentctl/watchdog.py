@@ -42,13 +42,17 @@ def watchdog_state():
 
 
 def inv_w1():
-    """W1: the oldest non-terminal change is younger than W1_MAX (while main is red: past the red's own start)."""
-    d, _c, _w = waiting_state(movies_repo_path())
-    open_ = [e for e in waiting_entries(d, open_only=False) if e.get("status") in ("queued", "checking", "waiting")]
+    """W1: the oldest UNLANDED change of the one queue (the store's open items, after the landed-by-content look) is
+    younger than W1_MAX (while main is red: past the red's own start). Names the change and why it has not landed."""
+    repo = movies_repo_path()
+    st = Store()
+    if os.path.isdir(repo):
+        close_landed_changes(repo, store=st)
+    open_ = [r for r in change_rows(st) if r["state"] in ("queued", "checking", "checked", "waiting")]
     if not open_:
         return True, "no change waits"
-    oldest = min(open_, key=lambda e: e.get("created") or "")
-    age = time.time() - parse_time(oldest.get("created") or ts()).timestamp()
+    oldest = min(open_, key=lambda r: r["since"])
+    age = time.time() - oldest["since"]
     line, _e = cached_gate_summary(SHORT["movies"])
     red_since = 0.0
     if line and line.startswith("gate RED"):
@@ -57,7 +61,11 @@ def inv_w1():
         red_since = (time.time() - min(starts)) if starts else 0.0
     lim = env_num("AGENTCTL_W1_MAX", W1_MAX)
     ok = age < lim or (red_since and age < red_since + lim)
-    return ok, f"oldest unlanded change {oldest['id']} ({oldest.get('status')}) is {fmt_age(age)} old" + \
+    stranded = any(c["key"] == f"change-stranded-{oldest['id']}" for c in open_conditions(st))
+    why = {"queued": "waiting for a check slot", "checking": "its checks run", "checked": "waiting for its push",
+           "waiting": "waiting for main to turn green"}[oldest["state"]]
+    return ok, f"oldest unlanded change {oldest['id']} ({oldest['state']}: " + \
+        ("STRANDED, no queue entry carries it" if stranded else why) + f") is {fmt_age(age)} old" + \
         (f", main red for {fmt_age(red_since)}" if red_since else "")
 
 

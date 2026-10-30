@@ -244,6 +244,28 @@ def change_fields(repo, main_ref, head, a):
             "base": git(repo, "rev-parse", main_ref).strip(), "host": os.uname().nodename}
 
 
+def submit_to_server(repo, d, fields, note=""):
+    """THE LAPTOP'S ONLY WAY INTO THE QUEUE (phase 2; it holds no queue of its own): the change pushed to
+    refs/heads/land/<id>, then submitted to ci-runner's queue (the store unreachable: the outbox, which the sync sends).
+    Prints QUEUED / QUEUED-LOCAL / NOT LANDED; returns land's exit code."""
+    head = fields["head"]
+    e = {**fields, "id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{os.urandom(3).hex()}"}
+    if not submit_ref(repo, d, e, remote=True):
+        print(f"NOT LANDED: could not push the change to refs/heads/land/{e['id']} (ci-runner checks it from there): "
+              "`agentctl env --check`, then land again")
+        return 1
+    r = submit_remote(Store(), e)
+    offer_token(repo)  # this agent's token to the laptop processor, which holds none after a restart
+    if r.get("outbox"):
+        print(f"QUEUED-LOCAL {e['id']} ({head[:10]}){note}: the store is unreachable ({r['outbox']}); the sync submits it "
+              "when it answers. LANDED / WAITING / NOT LANDED goes to `agentctl inbox`", flush=True)
+        return 0
+    ahead = r.get("ahead") or 0
+    print(f"QUEUED {r['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}){note}: its checks run on ci-runner; "
+          "LANDED / WAITING / NOT LANDED goes to `agentctl inbox`", flush=True)
+    return 0
+
+
 def enqueue(repo, main_ref, sh, a):
     """Rebase, squash guard, then the change becomes a queued entry: prints QUEUED and starts the processor."""
     rc, head = sync(repo, main_ref, sh)
@@ -251,23 +273,8 @@ def enqueue(repo, main_ref, sh, a):
         return rc
     d, _clone, _wt = waiting_state(repo)
     fields = change_fields(repo, main_ref, head, a)
-    if host_role() == "sync":  # PHASE 2: the change goes to ci-runner's queue -- its ref first, then the submission
-        e = {**fields, "id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-"
-                             f"{os.urandom(3).hex()}"}
-        if not submit_ref(repo, d, e, remote=True):
-            print(f"NOT LANDED: could not push the change to refs/heads/land/{e['id']} (ci-runner checks it from there): "
-                  "`agentctl env --check`, then land again")
-            return 1
-        r = submit_remote(Store(), e)
-        offer_token(repo)  # this agent's token to the laptop processor, which holds none after a restart
-        if r.get("outbox"):
-            print(f"QUEUED-LOCAL {e['id']} ({head[:10]}): the store is unreachable ({r['outbox']}); the sync submits it "
-                  "when it answers. LANDED / WAITING / NOT LANDED goes to `agentctl inbox`", flush=True)
-            return 0
-        ahead = r.get("ahead") or 0
-        print(f"QUEUED {r['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}): its checks run on ci-runner; "
-              "LANDED / WAITING / NOT LANDED goes to `agentctl inbox`", flush=True)
-        return 0
+    if host_role() == "sync":
+        return submit_to_server(repo, d, fields)
     e, ahead = queue_change(d, fields)
     submit_ref(repo, d, e)
     print(f"QUEUED {e['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}): its checks run in the background; "
@@ -366,6 +373,164 @@ def queue_verdict(d, e, status, verdict, tail=(), code=1, **fields):
     set_change(d, e, {"joined": "waiting"}.get(status, status), event=change_event(e, verdict, tail, code),
                decided=ts(), why=verdict, **fields)
     wlog(d, f"{e['id']}: {verdict.splitlines()[0]}")
+
+
+# ONE QUEUE, CLOSED BY CONTENT (2026-10-30 split brain: six pre-cutover entries in the laptop's local waiting dir and
+# four store items mirrored from them sat "waiting" for 11 h, every one already on main under rebased shas, and W1
+# escalated). A change whose commits are on main BY CONTENT (`git cherry`: landing rebases, so never by sha) is LANDED,
+# looked at every LANDED_LOOK_EVERY s per change, every tick: the server's entries and items, and on the laptop the
+# store's items its clone has the commits of. The laptop holds no queue of its own: what its local dir still holds
+# goes to ci-runner's queue (migrate_local_queue). A store item no queue carries is a STRANDED CHANGE condition.
+LANDED_LOOK_EVERY = 600
+_landed_looked = {}
+
+
+def change_landed(repo, head, commits=None):
+    """(landed, via): landed True when the change at head is on main by content (head an ancestor, or every commit of it
+    patch-equivalent there), False when not, None when this clone cannot tell (head unknown here); via the main commit
+    carrying its last commit, when known."""
+    main = f"refs/remotes/{REMOTE}/main"
+    if not head or not git_ok(repo, "cat-file", "-e", f"{head}^{{commit}}"):
+        return None, None
+    if git_ok(repo, "merge-base", "--is-ancestor", head, main):
+        return True, head
+    limit = [f"{commits[0]}^"] if commits and git_ok(repo, "cat-file", "-e", f"{commits[0]}^^{{commit}}") else []
+    ch = git(repo, "cherry", main, head, *limit, check=False)
+    if ch.returncode != 0:
+        return None, None
+    lines = [l for l in ch.stdout.splitlines() if l.strip()]
+    if not lines or not all(l.startswith("- ") for l in lines):
+        return False, None
+    return True, equivalent_on(repo, head, main)
+
+
+def landed_look_due(cid, t):
+    if t - _landed_looked.get(cid, 0) < env_num("AGENTCTL_LANDED_LOOK", LANDED_LOOK_EVERY):
+        return False
+    _landed_looked[cid] = t
+    return True
+
+
+def close_item_landed(st, cid, why):
+    """The store's change item cid, unless terminal (or missing), LANDED with an event saying why. True when moved."""
+    it = st.item("change", cid)
+    if not it or machine_state("change", it["state"]).terminal:
+        return False
+    try:
+        st.transition("change", cid, "landed", it["version"], data={"why": why},
+                      event={"text": f"LANDED {cid}: {why}", "refs": {"entry": cid}})
+        return True
+    except (StaleVersion, TerminalState):
+        return False
+
+
+def close_landed_changes(repo, d=None, store=None, now_=None):
+    """Every open change whose commits are on main by content closes as LANDED: the queue entries of d (with their
+    items), then the store's other open items (by their head). Returns what it did."""
+    st, t = store or Store(), now_ if now_ is not None else time.time()
+    did, carried = [], set()
+    for e in waiting_entries(d, open_only=False) if d else []:
+        if e.get("status") in ENTRY_FINAL or e.get("status") == "pushing":
+            continue
+        carried.add(e["id"])
+        landed, via = change_landed(repo, e.get("head"), e.get("commits")) if landed_look_due(e["id"], t) else (0, 0)
+        if landed:
+            already_landed(d, e, via)
+            did.append(f"{e['id']}: its commits are on main (by content): landed")
+            carried.discard(e["id"])
+    for it in st.items("change"):
+        if machine_state("change", it["state"]).terminal or it["state"] == "pushing" or it["id"] in carried:
+            continue
+        if landed_look_due(it["id"], t) and change_landed(repo, (it.get("data") or {}).get("head"))[0] and \
+                close_item_landed(st, it["id"], "its commits are on main (by content)"):
+            did.append(f"{it['id']}: its commits are on main (by content): landed")
+    return did
+
+
+def stranded_changes(repo, d, store=None, now_=None):
+    """THE SERVER'S: each open store change item its queue (d) has no entry for -- no source, nothing will ever check,
+    push or close it -- opens a STRANDED CHANGE condition naming it; its probe (the item closed, or an entry for it)
+    closes it. Returns the ids."""
+    st = store or Store()
+    entries = {e["id"] for e in waiting_entries(d, open_only=False)}
+    out = []
+    for it in st.items("change"):
+        if machine_state("change", it["state"]).terminal or it["id"] in entries:
+            continue
+        r = run_probe("change_source", {"id": it["id"], "repo": repo})
+        if r.ok is False:
+            dd = it.get("data") or {}
+            open_condition("change-stranded", f"STRANDED CHANGE {it['id']} ({it['state']}, head "
+                           f"{str(dd.get('head') or '?')[:10]}, {dd.get('worktree') or '?'}): no queue entry carries it, "
+                           "so nothing checks, pushes or closes it. Landed: it closes itself once a clone with its "
+                           f"commits sees them on main. Else `agentctl land cancel {it['id']}`, and land it again.",
+                           r, [], key=f"change-stranded-{it['id']}", store=st)
+            out.append(it["id"])
+    return out
+
+
+def probe_change_source(a):
+    """The change item is closed, or the server's queue carries it again."""
+    it = Store().item("change", a["id"])
+    if not it or machine_state("change", it["state"]).terminal:
+        return True, f"change {a['id']} is {it['state'] if it else 'gone'}"
+    d = waiting_state(a.get("repo") or movies_repo_path())[0]
+    if os.path.exists(os.path.join(d, "entries", f"{a['id']}.json")):
+        return True, f"change {a['id']} is in the queue"
+    return False, f"change {a['id']} is {it['state']} and no queue entry carries it"
+
+
+def migrate_local_queue(repo, store=None):
+    """THE LAPTOP'S (sync role): its local waiting dir holds no queue. Each open entry there is LANDED when its commits
+    are on main by content, else pushed to refs/heads/land/<id> and submitted to ci-runner's queue under its own id
+    (the entry: `migrated`). One that cannot move is said loudly (stderr, and its author's inbox once an hour).
+    Returns what it did."""
+    if host_role() != "sync" or not os.path.isdir(repo):
+        return []
+    d = waiting_state(repo)[0]
+    st = store or Store()
+    did = []
+    for e in waiting_entries(d, open_only=False):
+        if e.get("status") in ENTRY_FINAL:
+            continue
+        landed, via = change_landed(repo, e.get("head"), e.get("commits"))
+        if landed:
+            e.update(status="landed", landed_sha=via, decided=ts(), why="its commits are on main (by content)")
+            save_entry(d, e)
+            close_item_landed(st, e["id"], "its commits are on main (by content)")
+            did.append(f"{e['id']}: its commits are on main (by content): landed")
+            continue
+        why = None
+        if not submit_ref(repo, d, e, remote=True):
+            why = f"could not push refs/heads/land/{e['id']}"
+        else:
+            try:
+                st.submit({**{k: e.get(k) for k in SUBMIT_FIELDS}, "id": e["id"]})
+            except (Exception, SystemExit) as ex:
+                why = f"ci-runner's store refused or did not answer ({str(ex)[:160]})"
+        if why is None:
+            e.update(status="migrated", decided=ts(), why="moved to ci-runner's queue")
+            save_entry(d, e)
+            did.append(f"{e['id']}: moved to ci-runner's queue")
+            continue
+        line = (f"LOCAL QUEUE: {e['id']} ({e.get('worktree')}) is in the laptop's local queue, which nothing runs: {why}; "
+                "tried again every sync cycle")
+        did.append(line)
+        if time.time() - float(e.get("migrate_told_at") or 0) > 3600:
+            e["migrate_told_at"] = time.time()
+            save_entry(d, e)
+            inbox_write("land", line, [line], [], 1, cwd=e.get("worktree") or safe_cwd())
+    return did
+
+
+def change_rows(store=None):
+    """THE QUEUE as everyone reads it (`land status`, the status line, the page): the store's open change items,
+    by id, as {id, state, worktree, head, deadline, level, since (submitted)}."""
+    rows = [{"id": i["id"], "state": i["state"], "worktree": (i.get("data") or {}).get("worktree"),
+             "head": (i.get("data") or {}).get("head"), "deadline": i["deadline"], "level": i["level"],
+             "since": float((i.get("data") or {}).get("submitted_at") or i.get("entered_at") or 0)}
+            for i in (store or Store()).items("change") if not machine_state("change", i["state"]).terminal]
+    return sorted(rows, key=lambda r: r["id"])
 
 
 def rebase_in_tree(d, tree, e, base):

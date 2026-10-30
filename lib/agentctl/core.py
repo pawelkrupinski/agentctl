@@ -241,7 +241,10 @@ def secrets_bin():
 
 
 def movies_repo_path():
-    return os.environ.get("AGENTCTL_MOVIES_REPO") or os.path.join(HOME, "projects", "movies")
+    """THE movies clone of this host: $AGENTCTL_MOVIES_REPO, else the server's own clone (~/movies) on ci-runner, else
+    ~/projects/movies. Every invariant, probe and step resolves the repository here."""
+    return os.environ.get("AGENTCTL_MOVIES_REPO") or os.path.join(
+        HOME, "movies" if host_role() == "server" else os.path.join("projects", "movies"))
 
 
 def interactive_foreground():

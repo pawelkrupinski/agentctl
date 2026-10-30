@@ -788,6 +788,16 @@ entry cancels its undecided run.
 
 ### tick: the processor, the token, the gate
 
+ONE QUEUE (2026-10-30): the queue is ci-runner's store. `land status`, the status line and the status page all read
+its change items; `land cancel <id>` reaches any open item (on the laptop through the store API), one no entry carries
+included. The laptop holds no queue: `land` (and its network re-queue) push `refs/heads/land/<id>` and submit; what its
+local waiting dir still holds, the sync moves to ci-runner's queue each cycle (`migrated`), or says `LOCAL QUEUE: …`
+loudly. A change whose commits are on main BY CONTENT (`git cherry`: landing rebases, so never by sha) closes itself as
+LANDED, every tick (each change looked at every 10 min, `$AGENTCTL_LANDED_LOOK`), on the server and on the laptop
+(its clone has the commits of the laptop's worktrees). A submission supersedes the older open items of its worktree.
+An open item no queue entry carries is a STRANDED CHANGE condition, closed by its own probe once the item closes. W1
+counts only those open items, after that landed look, and names the oldest with why it has not landed.
+
 ```
 agentctl land status                         # the changes, the batch, a HELD batch, the gate, the processor (any cwd)
 agentctl land cancel <id>                    # drop one change
@@ -1260,6 +1270,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `inbox_poll` | `AGENTCTL_INBOX_POLL` | `1.0` | seconds between stat()s of the inbox directory |
 | `infra_same_max` | `AGENTCTL_INFRA_SAME_MAX` | `1800` | - |
 | `internal_trees_dir` | `AGENTCTL_INTERNAL_TREES_DIR` | - | - |
+| `landed_look` | `AGENTCTL_LANDED_LOOK` | `600` | - |
 | `land_lease_max` | `AGENTCTL_LAND_LEASE_MAX` | `2700` | the design's 300 s once checks no longer run in the push's hook under the lease (step 6) |
 | `land_lease_ttl` | `AGENTCTL_LAND_LEASE_TTL` | `120` | - |
 | `land_lock_timeout` | `AGENTCTL_LAND_LOCK_TIMEOUT` | `14400` | - |

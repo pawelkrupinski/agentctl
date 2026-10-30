@@ -59,15 +59,15 @@ class WatchdogTest(unittest.TestCase):
         self.assertEqual(A.open_conditions(), [])  # the invariant holds again: closed, its entry acked
         self.assertTrue(all(e["read"] for e in A.inbox_entries() if e.get("kind") == "INVARIANT"))
 
-    def test_w1_from_the_queue_and_w2_from_the_store(self):
-        d, _c, _w = A.waiting_state(self.env["AGENTCTL_MOVIES_REPO"])
-        os.makedirs(os.path.join(d, "entries"), exist_ok=True)
-        old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3 * 3600))
-        A.write_json(os.path.join(d, "entries", "e1.json"), {"id": "e1", "seq": 1, "status": "queued", "created": old})
-        self.assertFalse(A.inv_w1()[0])
-        A.write_json(os.path.join(d, "entries", "e1.json"), {"id": "e1", "seq": 1, "status": "landed", "created": old})
-        self.assertTrue(A.inv_w1()[0])
-        st_ = A.Store()  # W2 (step 10): a red with no live lease, open offer, fix or block -- read from the store
+    def test_w1_from_the_store_and_w2_from_the_store(self):
+        st_ = A.Store()  # W1: the one queue, the store's open change items, by their submission time
+        st_.put_item("change", "e1", "waiting", {"head": "0" * 40, "submitted_at": time.time() - 3 * 3600})
+        ok, detail = A.inv_w1()
+        self.assertFalse(ok)
+        self.assertIn("e1 (waiting: waiting for main to turn green) is 3 h", detail)
+        it = st_.item("change", "e1")
+        st_.transition("change", "e1", "landed", it["version"])
+        self.assertTrue(A.inv_w1()[0])  # W2 (step 10): a red with no live lease, open offer, fix or block -- read from the store
         st_.put_item("red", "k9", "leased", {"key": "k9", "workflow": "Main", "last_run": {"number": 9}, "runs": ["9"]})
         self.assertTrue(A.inv_w2()[0])  # first seen now
         st = A.watchdog_state()

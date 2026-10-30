@@ -156,10 +156,11 @@ PROBES = {"disk_free": lambda a: probe_disk_free(a), "quota_reset": lambda a: pr
           "route": probe_route, "tunnel": probe_tunnel, "gate_read": probe_gate_read, "token": probe_token,
           "processor": probe_processor, "git_fetch": probe_git_fetch, "laptop_load": probe_laptop_load,
           "queue_entry": probe_queue_entry, "clone_health": probe_clone_health,
+          "change_source": lambda a: probe_change_source(a),
           "infra_requeue": probe_infra_requeue, "red_newer_verdict": lambda a: probe_red_newer_verdict(a)}
 PROBE_EVERY = {"disk_free": 300, "quota_reset": 300, "invariant": 60, "waiting_ok": 30, "owner_block": 60, "orphan_landed": 300, "batch_hold": 60, "route": 5, "tunnel": 10, "gate_read": 15, "processor": 30, "queue_entry": 60,
                "workflow_green": 60, "token": 60, "laptop_load": 60, "tcp": 60, "http": 120, "git_fetch": 120,
-               "clone_health": 120, "infra_requeue": 60, "red_newer_verdict": 60}
+               "clone_health": 120, "infra_requeue": 60, "change_source": 60, "red_newer_verdict": 60}
 
 
 def probe_words(kind, a):
@@ -175,6 +176,7 @@ def probe_words(kind, a):
             "invariant": lambda: f"invariant {a.get('id')} holds", "waiting_ok": lambda: "a waiting round completes",
             "orphan_landed": lambda: "its commits are on main or somebody works in it",
             "queue_entry": lambda: f"queue entry {a.get('eid')} moves",
+            "change_source": lambda: f"change {a.get('id')} closes or is queued again",
             "clone_health": lambda: f"{a.get('repo')} verifies and fetches {REMOTE}/main",
             "infra_requeue": lambda: f"queue entry {a.get('eid')} gets past {a.get('reason')}",
             "red_newer_verdict": lambda: f"a newer {a.get('workflow')} run than #{a.get('run')} no longer fails this way"}.get(kind, lambda: kind)()

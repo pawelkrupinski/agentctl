@@ -189,9 +189,9 @@ def store_grace(st, now_=None):
 
 
 def server_repo():
-    """The reconciler's own clone on ci-runner ($AGENTCTL_MOVIES_REPO, else ~/movies; `tick` clones it from
-    $AGENTCTL_MOVIES_REMOTE as remote `forgejo`)."""
-    return os.environ.get("AGENTCTL_MOVIES_REPO") or os.path.join(HOME, "movies")
+    """The reconciler's own clone on ci-runner (movies_repo_path; `tick` clones it from $AGENTCTL_MOVIES_REMOTE as
+    remote `forgejo`)."""
+    return movies_repo_path()
 
 
 # THE SERVER CLONE IS ATOMIC (2026-10-29: the reconciler crash-looped at 11:33 mid-clone; the half clone's .git -- an
@@ -600,14 +600,39 @@ def submit_change(body, repo=None):
         raise ValueError("a bad change id")
     d = waiting_state(repo)[0]
     e, ahead = queue_change(d, {k: body.get(k) for k in SUBMIT_FIELDS}, body.get("id"))
+    supersede_stranded(d, e)
     return {"id": e["id"], "seq": e["seq"], "ahead": ahead}
+
+
+def supersede_stranded(d, e, store=None):
+    """A submission replaces every older open item of the same worktree that no entry carries (queue_change supersedes
+    the entries; an item mirrored from another host's queue has none): SUPERSEDED, never left waiting."""
+    st = store or Store()
+    carried = {x["id"] for x in waiting_entries(d, open_only=False)}
+    for it in st.items("change"):
+        dd = it.get("data") or {}
+        if it["id"] in carried or machine_state("change", it["state"]).terminal or \
+                os.path.realpath(dd.get("worktree") or "") != os.path.realpath(e.get("worktree") or ""):
+            continue
+        try:
+            st.transition("change", it["id"], "superseded", it["version"], data={"superseded_by": e["id"]},
+                          event={"text": f"SUPERSEDED {it['id']} by {e['id']}: {e['worktree']} submitted again",
+                                 "refs": {"entry": it["id"]}})
+        except (StaleVersion, TerminalState):
+            pass
 
 
 def cancel_submitted(eid, how="cancel", repo=None):
     d = waiting_state(repo or server_repo())[0]
     hits = [e for e in queued_entries(d) + waiting_entries(d) if e["id"] == eid]
-    if not hits:
-        raise KeyError(eid)
+    if not hits:  # an item no entry carries (stranded): the item alone
+        st = Store()
+        it = st.item("change", eid)
+        if not it or machine_state("change", it["state"]).terminal:
+            raise KeyError(eid)
+        st.transition("change", eid, "cancelled", it["version"], data={"why": f"{how}led through the store API"},
+                      event={"text": f"{eid}: {how}led", "refs": {"entry": eid}})
+        return {"id": eid, "status": "cancelled"}
     e = hits[0]
     set_change(d, e, "cancelled", event={"text": f"{e['id']}: {how}led"}, why=f"{how}led through the store API",
                decided=ts())
@@ -965,6 +990,8 @@ def server_steps(repo, d, shared):
     return (("clone health", lambda: [wlog(d, f"tick: {x}") for x in [clone_heal_tick(repo)] if x]
              if heal_enabled(repo) else None),
             ("change items", lambda: project_changes(d)),
+            ("landed changes", shared(lambda: [wlog(d, f"tick: {x}") for x in close_landed_changes(repo, d)])),
+            ("stranded changes", lambda: stranded_changes(repo, d)),
             ("change tick", shared(lambda: [wlog(d, f"tick: {x}") for x in tick_changes(repo, d)])),
             ("batch tick", shared(lambda: [wlog(d, f"tick: {x}") for x in tick_batch(repo, d)])),
             ("watches", lambda: [wlog(d, f"tick: {x}") for x in tick_watches()]),
@@ -1004,6 +1031,8 @@ def sync_steps(repo, d, o_r):
     return (("outbox", flush_outbox), ("state mirror", mirror), ("children", reap_children),
             ("events", project_events), ("notifier", notify_escalations),
             ("landed worktrees", lambda: [err(x) for x in close_landed_worktrees()]),
+            ("local queue", lambda: [err(f"land: {x}") for x in migrate_local_queue(repo)]),
+            ("landed changes", lambda: [err(f"land: {x}") for x in close_landed_changes(repo)]),
             ("claims", sync_claims),
             ("dispatcher", dispatch),
             ("pins", pins),

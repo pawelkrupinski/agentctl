@@ -77,7 +77,7 @@ def tick_batch(repo, d, now_=None):
     if os.path.exists(os.path.join(d, "PAUSED")):
         return ["paused"]
     reds = gate_reds(repo)
-    did = landed_meanwhile(repo, d, waiting, t) if reds else []  # at green the assembly finds them (with their commit)
+    did = []
     waiting = waiting_entries(d)
     if not waiting and not it:
         return did
@@ -136,32 +136,6 @@ def tick_batch(repo, d, now_=None):
     if state == "pushing":
         return [push_batch_item(repo, d, st, it)]
     return []
-
-
-LANDED_LOOK_EVERY = 600
-
-
-def landed_meanwhile(repo, d, waiting, now_):
-    """§5.1's exit, for waiting changes while the batch waits on a red: one whose every commit is patch-equivalent on
-    main (someone landed it meanwhile) is LANDED at once -- looked at every LANDED_LOOK_EVERY s per entry."""
-    main = f"refs/remotes/{REMOTE}/main"
-    did = []
-    for e in waiting:
-        if float(e.get("landed_look_at") or 0) > now_ - LANDED_LOOK_EVERY or not e.get("commits"):
-            continue
-        e["landed_look_at"] = now_
-        save_entry(d, e)
-        last = e["commits"][-1]
-        if git_ok(repo, "merge-base", "--is-ancestor", last, main):  # pushed as it is
-            already_landed(d, e, last)
-            did.append(f"{e['id']}: its commits are on main: landed")
-            continue
-        ch = git(repo, "cherry", main, last, f"{e['commits'][0]}^", check=False)
-        lines = [l for l in (ch.stdout if ch.returncode == 0 else "").splitlines() if l.strip()]
-        if lines and all(l.startswith("- ") for l in lines):  # landed as an equivalent patch
-            already_landed(d, e, None)
-            did.append(f"{e['id']}: its commits are on main: landed")
-    return did
 
 
 def spawn_batch_executor(repo, d, bid):
@@ -388,13 +362,13 @@ def write_snapshot(d, store=None):
     open_ = lambda typ: [i for i in st.items(typ) if typ in MACHINES and not machine_state(typ, i["state"]).terminal]
     brief = lambda i: {"id": i["id"], "state": i["state"], "deadline": i["deadline"], "level": i["level"],
                        "worktree": (i["data"] or {}).get("worktree")}
-    queued = queued_entries(d)
-    waiting = waiting_entries(d)
+    rows = change_rows(st)  # ONE QUEUE: the store's items, never a host's entry files
     state_update(tick_at=time.time(), version=code_version(),
                  changes=[brief(i) for i in open_("change")], batch=[brief(i) for i in open_("batch")],
                  reds=[brief(i) for i in open_("red")] if "red" in MACHINES else [],
                  conditions=[brief(i) for i in open_("condition")] if "condition" in MACHINES else [],
-                 waiting=[e["worktree"] for e in waiting], queued=[e["worktree"] for e in queued])
+                 waiting=[r["worktree"] for r in rows if r["state"] == "waiting"],
+                 queued=[r["worktree"] for r in rows if r["state"] != "waiting"])
 
 
 NETWORK_SHOWN_FOR = 600  # a lossy-uplink reading this recent turns the status line's UNREAD into NETWORK
@@ -669,12 +643,13 @@ def cmd_waiting(a):
         offer_token(repo)
         print("released: the processor takes the next batch")
         return 0
-    if a.wcmd == "status":
-        entries = waiting_entries(d)
-        print(f"waiting {d}")
+    if a.wcmd == "status":  # ONE QUEUE: the store's change items, on either host
+        st = Store()
+        rows = change_rows(st)
+        print(f"queue: {store_url() or 'this host'}")
         print(f"processor: {'running' if waiting_processor_alive(d) else 'not running'}"
               + ("; HELD (`agentctl land release`)" if os.path.exists(os.path.join(d, "PAUSED")) else ""))
-        bt = current_batch(Store(), d)
+        bt = current_batch(st, d)
         if bt:
             dd = bt["data"]
             print(f"batch {bt['id']}: {bt['state']}" + (f", {len(dd.get('members') or [])} change(s) at "
@@ -684,24 +659,25 @@ def cmd_waiting(a):
         reds = gate_reds(repo)
         print("gate: " + (f"UNREAD, taken as red ({gate_unread_why[0]})" if GATE_UNREAD in reds else
                           f"RED ({', '.join(sorted(reds))})" if reds else "green"))
-        for e in entries:
-            print(f"  {e['id']}  {e['worktree']}  {len(e['commits'])} commit(s), tip {e.get('tip', '')[:10]}, since {e['created']}")
-        if not entries:
-            print("  (no change waiting)")
-        queued = queued_entries(d)
-        print(f"queued for their checks: {len(queued)}")
-        for e in queued:
-            print(f"  {e['id']}  {e['status']}{' since ' + e['since'] if e.get('since') else ''}  {e['worktree']}  "
-                  f"{e['head'][:10]}{'  remote run ' + str(e['remote_run']) if e.get('remote_run') else ''}")
-        try:
-            items = [i for i in project_changes(d) if not machine_state("change", i["state"]).terminal]
-            print(f"change items: {len(items)}")
-            for i in items:
-                left = int(i["deadline"] - time.time())
-                print(f"  {i['id']}  {i['state']}  deadline in {left // 60} min"
-                      + (f"  PAST ITS DEADLINE (level {i['level']})" if left < 0 else ""))
-        except (Exception, SystemExit) as ex:
-            print(f"change items: unreadable ({str(ex)[:120]})")
+        print(f"changes: {len(rows)}")
+        for r in rows:
+            left = int(r["deadline"] - time.time())
+            print(f"  {r['id']}  {r['state']}  {r['worktree']}  {str(r['head'] or '')[:10]}  deadline in {left // 60} min"
+                  + (f"  PAST ITS DEADLINE (level {r['level']})" if left < 0 else ""))
+        if not rows:
+            print("  (no change queued or waiting)")
+        local = [e for e in waiting_entries(d, open_only=False) if e.get("status") not in ENTRY_FINAL]
+        if host_role() == "sync" and local:
+            print(f"LOCAL QUEUE: {len(local)} entr(ies) in {d}, which nothing runs; the sync moves them to ci-runner's "
+                  f"queue: {', '.join(e['id'] for e in local)}")
+        return 0
+    if a.wcmd == "cancel" and host_role() == "sync":  # ONE QUEUE: ci-runner's, through the store API
+        hits = [r["id"] for r in change_rows() if a.entry in r["id"]]
+        if len(hits) != 1:
+            print(f"no single open change matches {a.entry!r}: `agentctl land status`")
+            return 1
+        Store().cancel_change(hits[0])
+        print(f"cancelled {hits[0]}")
         return 0
     if a.wcmd == "cancel":
         queued = [e for e in queued_entries(d) if a.entry in e["id"]]
@@ -716,6 +692,12 @@ def cmd_waiting(a):
             print(f"cancelled {e['id']}")
             return 0
         hits = [e for e in waiting_entries(d) if a.entry in e["id"]]
+        if not hits:  # an item no entry carries (stranded): the item alone
+            ids = [r["id"] for r in change_rows() if a.entry in r["id"]]
+            if len(ids) == 1:
+                cancel_submitted(ids[0], repo=repo)
+                print(f"cancelled {ids[0]}")
+                return 0
         if len(hits) != 1:
             print(f"no single waiting change matches {a.entry!r}: `agentctl land status`")
             return 1
