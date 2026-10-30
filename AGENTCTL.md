@@ -464,8 +464,39 @@ agentctl red release <run> [--any]
 agentctl red status [-v]                       # every red: its state, holder or offer, deadline
 agentctl red dispatch <run> [--force]          # the red's offer at top priority: the dispatcher takes it now
 agentctl red auto [on|off|status]              # the processor's automatic dispatch
+agentctl red owner-push <run> [--note "<what; which units restart>"]
+                                               # an owner-only repo's (infra's) fixer files its prepared branch
 claude agents                                  # every dispatched fixer, by name (attach / logs / stop <id>)
 ```
+
+**EVERY WATCHED REPO, NOT ONLY MOVIES (2026-10-30, ci-failures recommendation 4: infra's Stage NixOS closures was red
+29 h and core's Main Pipeline 21 h with no fixer).** `~/bin/red-repos.json` (`$AGENTCTL_RED_REPOS`) lists the repos
+the red machine watches, each with its gate workflows, its `family` and its `push` policy:
+
+| repo | gate | family | push |
+|---|---|---|---|
+| pawelkrupinski/movies (the primary) | Main, Identity model convergence | red-families.json | land |
+| bitcashier/infra | Stage NixOS closures | infra-repo | **owner-only** |
+| bitcashier/core | Main Pipeline | core-repo | land |
+
+- The primary keeps everything it had (its keys, outside workflows, local checks, its landing gate `GATING`); the
+  others are read through their gate workflows only, once a minute (`$AGENTCTL_RED_OTHERS_EVERY`), after the
+  primary's red tick, each in its own try. Watching a repo puts NO red gate in front of its landings.
+- Another repo's red carries `repo`, its key is bound to the repo (`red_repo_key`), its records live under
+  `reds/<repo>-<run>/` (run numbers are per repo), and it shows as `infra Stage NixOS closures #3455` everywhere. Only
+  its own repo's tick observes, steps or clears it. A run number given to `red claim|block|owner-push|dispatch` is the
+  current directory's repo (or `--repo`); a key is global.
+- Every red of a repo is in its `family` (one fixer per family, red_family_holder). Its fixer works in a worktree of
+  that repo's `clone` (`<clone>-wt-red-<run>`); no clone on this machine: the offer says so and waits.
+- The fixer brief (`docs/fixer-brief.md`) has a `### REPO <owner/name>` section per repo under "Per-repo rules"; a
+  fixer gets only its own repo's section.
+- **owner-only (infra): the fixer never pushes or deploys.** Its prompt overrides every "land it", its session denies
+  `agentctl land`, `git push`, `bin/deploy`, `forgejo-bootstrap`, `nixos-rebuild` and `switch-to-configuration`, and
+  `agentctl land` itself refuses inside such a fixer. It prepares the fix on its local branch and runs
+  `agentctl red owner-push <run> --note "..."`: the red goes to fix-pending (fix status `owner`), one escalation
+  `RED OWNER PUSH: ... `! git -C <wt> pull --rebase forgejo main && git -C <wt> push forgejo HEAD:main`` reaches the
+  inbox, a green gate run verifies it (FIX OK), the reminder repeats at each deadline, and unproven after
+  `RED_FIX_GIVEUP` (6 h) it is offered again -- the next fixer continues in the same worktree.
 
 A claim is a LEASE (`red/<key>`, 30 min, renewed by your worktree's activity or a new note, at most 8 h); a fixer's is
 renewed by its session's transcript and worktree (15 min, at most 3 h). A lease that lapses offers the red again.
@@ -1311,8 +1342,10 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `red_fixer_wall` | `AGENTCTL_RED_FIXER_WALL` | `10800` | a dispatched fixer's maximum wall time |
 | `red_fix_giveup` | `AGENTCTL_RED_FIX_GIVEUP` | `21600` | - |
 | `red_old_run` | `AGENTCTL_RED_OLD_RUN` | `172800` | an outside red whose newest run is older than this is checked by a fresh run before it is fixed |
+| `red_others_every` | `AGENTCTL_RED_OTHERS_EVERY` | `60` | seconds between the other watched repos' red ticks: one gate read each |
 | `red_renew` | `AGENTCTL_RED_RENEW` | `60` | a fixer's wrapper renews its lease this often |
 | `red_repo` | `AGENTCTL_RED_REPO` | - | - |
+| `red_repos` | `AGENTCTL_RED_REPOS` | - | - |
 | `red_starve` | `AGENTCTL_RED_STARVE` | `2700` | an offer waiting this long for a slot is STARVED |
 | `red_tick` | `AGENTCTL_RED_TICK` | `15` | seconds between the processor's red ticks |
 | `restart_check` | `AGENTCTL_RESTART_CHECK` | `30` | seconds between code-version checks |
