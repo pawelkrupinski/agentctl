@@ -68,6 +68,60 @@ class EventsTest(unittest.TestCase):
         finally:
             A.Store = saved
 
+    def test_a_change_never_leaves_the_queue_without_its_authors_inbox_entry(self):
+        """2026-10-30 `…-76336e`: its NOT LANDED entry did not carry the item id (a search by id found nothing), and
+        terminal moves written without an audience -- a cancel, a landed-by-content close, a stranded supersede -- reached
+        nobody. Every terminal transition now carries an event addressed to the item's worktree, naming the item."""
+        for i, to in enumerate(("landed", "rejected", "superseded", "cancelled")):
+            self.st.put_item("change", f"c{i}", "queued", {"worktree": "/w/flips", "head": "83af2cb4"})
+            self.st.transition("change", f"c{i}", "checking" if to == "rejected" else to, 1)
+            if to == "rejected":
+                self.st.transition("change", f"c{i}", "rejected", 2,
+                                   event={"text": "NOT LANDED: the pre-push checks failed"})  # no audience given
+        self.st.put_item("change", "nowt", "queued")  # no worktree known: still an entry (the owner's)
+        self.st.transition("change", "nowt", "cancelled", 1)
+        self.assertEqual(A.change_exits_unannounced(self.st), [])
+        self.assertEqual(A.project_events(self.st), 5)
+        by = {e["entry"]: e for e in A.inbox_entries()}
+        self.assertEqual(set(by), {"c0", "c1", "c2", "c3", "nowt"})
+        self.assertEqual(by["c1"]["cwd"], "/w/flips")
+        self.assertEqual((by["c1"]["kind"], by["c1"]["exit"]), ("NOT_LANDED", 1))
+        self.assertEqual((by["c0"]["kind"], by["c0"]["exit"]), ("LANDED", 0))
+        self.assertTrue(by["c2"]["verdict"].startswith("SUPERSEDED c2"))
+        self.assertTrue(by["c3"]["verdict"].startswith("CANCELLED c3"))
+        # `agentctl inbox <item id>` finds the entry by the item id
+        out = self.run_inbox(["c1"])
+        self.assertIn("NOT LANDED", out)
+        self.assertNotIn("CANCELLED", out)
+
+    def run_inbox(self, ids):
+        import argparse, contextlib, io
+        a = argparse.Namespace(ids=ids, unread=False, ack=False, all=False, limit=50, json=False, verbose=False,
+                               kinds=None, since_ack=False, timeout=0)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            A.cmd_inbox(a)
+        return buf.getvalue()
+
+    def test_w8_names_a_change_that_left_the_queue_silently(self):
+        self.st.put_item("change", "s1", "queued", {"worktree": "/w/a"})
+        self.st.transition("change", "s1", "cancelled", 1)
+        c = self.st.db()
+        c.execute("UPDATE events SET audience='{}', severity='info' WHERE item_id='s1'")  # a writer around transition
+        c.close()
+        self.assertEqual(A.change_exits_unannounced(self.st), ["s1"])
+        saved = A.Store
+        A.Store = lambda *a, **k: self.st
+        try:
+            ok, why = A.inv_w8()
+            self.assertFalse(ok)
+            self.assertIn("s1", why)
+            os.environ["AGENTCTL_W8_WINDOW"] = "-60"  # it ages out of the window: the condition clears itself
+            self.addCleanup(os.environ.pop, "AGENTCTL_W8_WINDOW", None)
+            self.assertTrue(A.inv_w8()[0])
+        finally:
+            A.Store = saved
+
     def test_the_projector_keeps_its_cursor_before_an_entry_it_could_not_write(self):
         e = {"id": "e5", "worktree": "/w/a", "session": "s1"}
         self.st.put_item("change", "e5", "pushing")

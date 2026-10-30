@@ -500,7 +500,8 @@ def cmd_inbox(a):
         return inbox_wait(a.kinds, a.since_ack, a.timeout, a.verbose, getattr(a, "forever", False))
     entries = inbox_entries()
     if a.ids:
-        entries = [e for e in entries if any(e["id"].startswith(i) for i in a.ids)]
+        entries = [e for e in entries if any(e["id"].startswith(i) or (e.get("entry") or "").endswith(i)
+                                              or e.get("entry") == i for i in a.ids)]
     if a.unread:
         entries = [e for e in entries if not e["read"]]
     if a.limit:

@@ -12,6 +12,7 @@ W1_MAX = 2 * 3600       # the oldest unlanded change ($AGENTCTL_W1_MAX); while m
 W2_MAX = 10 * 60        # a gate red with nobody on it
 W5_MAX = 300            # the processor's duties beat (its bounded steps take up to 2 min)
 W6_MAX = 5 * 60         # a due escalation not notified
+W8_WINDOW = 3600         # W8 looks at the change items that closed within this ($AGENTCTL_W8_WINDOW)
 W7_MAX = 5 * 60         # phase 2: an event ci-runner wrote that the laptop's sync has not projected (60x its 5 s tick)
 WM_MAX = 45 * 60        # maintain's last pass (launchd every 15 min)
 WATCHDOG_KICK_GAP = 600
@@ -223,6 +224,19 @@ def inv_w7():
         f"the sync is behind ci-runner's events: #{behind[0]['seq']} unprojected for {fmt_age(age)}"
 
 
+def inv_w8():
+    """W8: no change item left the queue (landed, rejected, superseded, cancelled) without an event addressed to its
+    author's inbox -- Store.transition completes every such event (change_exit_event); this catches a writer around it.
+    Looks at the items closed within W8_WINDOW, so it clears itself once a stray one ages out (and the fix lands)."""
+    try:
+        st = Store()
+        silent = change_exits_unannounced(st, st.clock() - env_num("AGENTCTL_W8_WINDOW", W8_WINDOW))
+    except Exception as e:
+        return None, f"cannot read the store ({str(e)[:120]})"
+    return not silent, (f"{len(silent)} change(s) left the queue with no inbox entry: {', '.join(silent[:3])}"
+                        if silent else "every change that left the queue told its author")
+
+
 def inv_wm():
     """WM: maintain (the reaper; the watchdog's own watcher) ran within WM_MAX."""
     if not os.path.exists(os.path.join(launch_agents_dir(), "net.bitcashier.agentctl-maintain.plist")):
@@ -262,7 +276,7 @@ def inv_wb():
                    ": commit them in a worktree of ~/bin")
 
 
-INVARIANTS = {"WB": inv_wb, "W1": inv_w1, "W2": inv_w2, "W5": inv_w5, "W6": inv_w6, "W7": inv_w7, "WM": inv_wm}
+INVARIANTS = {"WB": inv_wb, "W1": inv_w1, "W2": inv_w2, "W5": inv_w5, "W6": inv_w6, "W7": inv_w7, "W8": inv_w8, "WM": inv_wm}
 
 
 def probe_invariant(a):

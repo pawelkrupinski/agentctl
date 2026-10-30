@@ -310,6 +310,8 @@ class Store:
                        now_ + (spec.deadline if deadline_s is None else float(deadline_s)), level,
                        json.dumps(merged), typ, iid))
             ev = dict(event or {})
+            if typ == "change" and spec.terminal and not same:
+                ev = change_exit_event(iid, to, merged, ev)
             c.execute("INSERT OR IGNORE INTO events (at, kind, item_type, item_id, from_state, to_state, severity, "
                       "audience, text, refs, dedupe) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                       (now_, ev.get("kind") or f"{typ}.{to}", typ, iid, cur["state"], to,
@@ -580,7 +582,7 @@ def project_events(store=None):
                "exit": refs.get("exit", 0 if ev["severity"] == "info" else 1), "verdict": verdict,
                "kind": inbox_kind(verdict, final), "owner": aud.get("session") or aud.get("worktree") or "?",
                "claude_pid": aud.get("claude_pid"), "verdicts": [verdict], "tail": list(refs.get("tail") or [])[-25:],
-               "event": ev["seq"]}
+               "event": ev["seq"], "entry": refs.get("entry")}
         try:
             os.makedirs(d, exist_ok=True)
             write_json(path, rec)
@@ -626,6 +628,57 @@ def notify_escalations(store=None):
             cur = ev["seq"]
             st.meta_set("notifier_seq", cur)
     return n
+
+
+# A CHANGE NEVER LEAVES THE QUEUE SILENTLY (2026-10-30: `…-76336e`'s NOT LANDED reached the inbox without its item id,
+# so a search by id found nothing and it looked vanished; and terminal moves written without an audience -- a cancel
+# through the store API, a landed-by-content close, a supersede of a stranded item, a mirrored entry's move -- reached
+# nobody's inbox at all). Every terminal transition of a change (landed, rejected, superseded, cancelled) carries an
+# event addressed to its author: Store.transition completes whatever the caller gave -- the audience from the item's
+# worktree, refs.entry (the item id, which the projector copies into the inbox entry), a verdict line. An item with no
+# worktree still gets an entry: severity warn (non-info: the projector writes it, the owner reads it).
+CHANGE_EXIT_VERDICT = {"landed": "LANDED", "rejected": "NOT LANDED", "superseded": "SUPERSEDED",
+                       "cancelled": "CANCELLED"}
+
+
+def change_exit_event(iid, to, data, ev):
+    """The event of a change's terminal transition to `to`, completed so that it reaches its author's inbox."""
+    ev = dict(ev)
+    aud = {k: v for k, v in (ev.get("audience") or {}).items() if v}
+    for k in ("worktree", "session", "claude_pid"):
+        if not aud.get(k) and data.get(k):
+            aud[k] = data[k]
+    refs = dict(ev.get("refs") or {})
+    refs.setdefault("entry", iid)
+    text = ev.get("text") or refs.get("verdict") or ""
+    if not text:
+        text = f"{CHANGE_EXIT_VERDICT.get(to, to.upper())} {iid}" + (f": {data['why']}" if data.get("why") else "")
+    refs.setdefault("verdict", text.splitlines()[0])
+    refs.setdefault("final", True)
+    refs.setdefault("command", "land")
+    refs.setdefault("exit", 0 if to == "landed" else 1)
+    ev.update(audience=aud, refs=refs, text=text)
+    if not aud.get("worktree") and (ev.get("severity") or "info") == "info":
+        ev["severity"] = "warn"
+    return ev
+
+
+def change_exits_unannounced(store, since=0):
+    """THE INVARIANT's check: the terminal change items (entered their state at or after `since`) whose terminal
+    transition has no event that reaches an inbox (an audience or a non-info severity). Empty is healthy."""
+    evs = {}
+    for ev in store.events(after=0, limit=10 ** 9):
+        if ev.get("item_type") == "change" and ev.get("to_state") in CHANGE_EXIT_VERDICT:
+            evs.setdefault(ev["item_id"], []).append(ev)
+    out = []
+    for it in store.items("change"):
+        if it["state"] not in CHANGE_EXIT_VERDICT or it["entered_at"] < since:
+            continue
+        if not any(e.get("to_state") == it["state"] and ((e.get("audience") or {}).get("worktree")
+                                                          or e["severity"] != "info")
+                   for e in evs.get(it["id"], [])):
+            out.append(it["id"])
+    return out
 
 
 def change_event(e, verdict, tail=(), code=1, final=True, severity="info", **refs):

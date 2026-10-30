@@ -110,7 +110,9 @@ moves it forward; nothing is a detached process that can die with its state in i
   is red), W2 every red has a holder, an offer, a fix on its way or an owner block, W5 the processor beats, W6 every
   escalation was notified, WM maintain ran, WB nobody leaves uncommitted edits in ~/bin's own checkout for over 10 min
   (it names the processes working there), W7 (phase 2, the sync role) the sync has projected every event older than
-  5 min. A violation is a condition and a notification.
+  5 min, W8 no change left the queue in the last hour (landed, rejected, superseded, cancelled) without an event
+  addressed to its author's inbox (Store.transition completes every such event; the entry carries the item id, so
+  `agentctl inbox <item id>` finds it). A violation is a condition and a notification.
 - **Upkeep** (the laptop's processor, at most hourly, in its own thread; log `~/.cache/agentctl/upkeep.log`): the
   standing-OK `cleanup --execute --no-remote` (clean, idle, proven-merged worktrees and their branches), each ended
   fixer's worktree whose red is closed (when proven merged and clean), and the test suite's `agentctl-*` temp dirs
@@ -1399,6 +1401,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `w5_max` | `AGENTCTL_W5_MAX` | `300` | the processor's duties beat (its bounded steps take up to 2 min) |
 | `w6_max` | `AGENTCTL_W6_MAX` | `300` | a due escalation not notified |
 | `w7_max` | `AGENTCTL_W7_MAX` | `300` | phase 2: an event ci-runner wrote that the laptop's sync has not projected (60x its 5 s tick) |
+| `w8_window` | `AGENTCTL_W8_WINDOW` | `3600` | W8 looks at the change items that closed within this |
 | `waiting_green_ticks` | `AGENTCTL_WAITING_GREEN_TICKS` | `100` | ticks (~10 min) changes may wait at a green gate with no batch moving: then STALLED |
 | `waiting_timeout` | `AGENTCTL_WAITING_TIMEOUT` | `86400` | - |
 | `watch_conv_start` | `AGENTCTL_WATCH_CONV_START` | `3600` | no convergence run containing the sha started by then: said, not waited for |
