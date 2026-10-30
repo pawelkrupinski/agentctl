@@ -78,6 +78,93 @@ def close_finished_fixer_trees(store=None):
     return out
 
 
+# LOGS ROTATE BY SIZE (2026-10-30: the laptop processor's service.log had grown to 141 MB, never rotated). Every
+# agentctl log -- each *.log under the state root and the reds dir (a check's own run output, in *.d / work / target,
+# is its check's and expires with it), and launchd's ~/Library/Logs/agentctl-*.log -- over LOG_ROTATE_MAX bytes is
+# rotated by COPY-TRUNCATE: its newest LOG_ROTATE_MAX bytes (from a line start) become <log>.1, the older parts shift
+# to .2 .. .LOG_ROTATE_KEEP (the oldest goes), and the file itself is truncated IN PLACE. In place because its writers
+# (launchd's StandardOutPath, the processor's appends) hold it open with O_APPEND: they go on writing at its new end,
+# where a rename would leave them writing into .1. The status page's /log serves .1's tail before a short current
+# file's, and a live pane reads a truncated file again from 0. Run by `maintain` (every 15 min) and the upkeep.
+LOG_ROTATE_MAX = 10 << 20  # bytes over which an agentctl log is rotated (copy-truncate; its newest part kept as .1)
+LOG_ROTATE_KEEP = 3  # rotated parts kept per log (<log>.1 newest .. <log>.N oldest)
+LOG_ROTATE_PRUNE = ("work", "target", ".git")
+
+
+def agentctl_logs():
+    """Every agentctl log (see above), by real path."""
+    out = set()
+    for root in {os.path.realpath(state_root()), os.path.realpath(reds_dir())}:
+        for d, dirs, files in os.walk(root):
+            dirs[:] = [x for x in dirs if x not in LOG_ROTATE_PRUNE and not x.endswith(".d")]
+            out |= {os.path.join(d, f) for f in files if f.endswith(".log")}
+    out |= set(glob.glob(os.path.join(HOME, "Library", "Logs", "agentctl-*.log")))
+    return sorted(p for p in out if os.path.isfile(p) and not os.path.islink(p))
+
+
+def rotate_log(path, max_bytes=None, keep=None):
+    """Rotate one log when it is over max_bytes (see LOGS ROTATE BY SIZE): its newest max_bytes become .1, older parts
+    shift, the file is truncated in place (no line lost to an O_APPEND writer but those appended in the instant between
+    the last read and the truncate). Returns what it did, or None."""
+    max_bytes = int(max_bytes or env_num("AGENTCTL_LOG_ROTATE_MAX", LOG_ROTATE_MAX))
+    keep = max(1, int(keep or env_num("AGENTCTL_LOG_ROTATE_KEEP", LOG_ROTATE_KEEP)))
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return None
+    if size <= max_bytes:
+        return None
+    with open(path, "rb") as f:
+        start = size - max_bytes
+        f.seek(start)
+        data = f.read(max_bytes)
+        i = data.find(b"\n")
+        if 0 <= i < len(data) - 1:  # from a line start: the partial first line goes with the older bytes
+            start, data = start + i + 1, data[i + 1:]
+        data += f.read()  # what was appended meanwhile
+        pos = f.tell()
+    gone = os.path.exists(f"{path}.{keep}")
+    for n in range(keep - 1, 0, -1):
+        if os.path.exists(f"{path}.{n}"):
+            os.replace(f"{path}.{n}", f"{path}.{n + 1}")
+    tmp = f"{path}.1.tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, f"{path}.1")
+    with open(path, "r+b") as f:  # the instant's appends, then the truncate: they are written back at the new end
+        f.seek(pos)
+        late = f.read()
+        f.truncate(0)
+    if late:
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND)
+        try:
+            os.write(fd, late)
+        finally:
+            os.close(fd)
+    return (f"rotated {path.replace(HOME, '~')} ({size >> 20} MB): its newest {len(data) >> 10} KB kept as .1"
+            + (f", {start >> 20} MB older dropped" if start > (1 << 20) else "") + (f", .{keep} dropped" if gone else ""))
+
+
+def rotate_logs():
+    """Rotate every agentctl log over the size (one rotator at a time: a lock in the state root). Returns the lines."""
+    import fcntl
+    os.makedirs(state_root(), exist_ok=True)
+    with open(state_root("log-rotate.lock"), "w") as lk:
+        try:
+            fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return []
+        out = []
+        for p in agentctl_logs():
+            try:
+                line = rotate_log(p)
+            except OSError as e:
+                line = f"could not rotate {p.replace(HOME, '~')}: {e.strerror or e}"
+            if line:
+                out.append(line)
+        return out
+
+
 def run_upkeep():
     """One upkeep pass (see above); its lines, also appended to the state root's upkeep.log."""
     lines = []
@@ -90,6 +177,7 @@ def run_upkeep():
     except (OSError, subprocess.TimeoutExpired) as e:
         lines.append(f"cleanup failed: {str(e)[:200]}")
     lines += close_finished_fixer_trees()
+    lines += rotate_logs()
     n = sweep_test_tmp()
     if n:
         lines.append(f"removed {n} test temp dir(s) older than {TEST_TMP_MAX_AGE // 60} min")

@@ -1225,6 +1225,14 @@ and, once a day at the first pass from 09:00 local (`$AGENTCTL_SWEEP_HOUR`), the
 replaces `net.bitcashier.agentctl-reap`, `net.bitcashier.agentctl-sweep` and `dev.kinowo.jvm-reaper` (their plists:
 `~/bin/launchd/retired/`); `~/.local/bin/reap-stale-jvms.sh` is now a shim calling `agentctl reap`.
 
+Each pass also ROTATES THE LOGS (`rotate_logs`, and the hourly upkeep too; 2026-10-30: the processor's service.log
+had grown to 141 MB): every `*.log` under `~/.cache/agentctl` and the reds dir (not a check's own run output in `*.d`,
+`work`, `target`) and `~/Library/Logs/agentctl-*.log`, once over 10 MB (`$AGENTCTL_LOG_ROTATE_MAX`), is copy-truncated
+IN PLACE: its newest 10 MB (from a line start) become `<log>.1`, older parts shift to `.2`/`.3` (keep 3,
+`$AGENTCTL_LOG_ROTATE_KEEP`; the oldest goes). In place because launchd and the processor hold it open with O_APPEND:
+they go on writing at its new end. The status page's `/log` also serves `<log>.N`, and shows the end of `.1` before a
+short current file; a live pane reads a truncated file again from 0.
+
 Each pass also expires the cache (`expire_cache`): under `~/.cache/agentctl` it removes the per-land logs
 (`agentctl-land-*`, with their `.checks.out` / `.push.out` / `.baseline.out`), `phase2-apply-*.log`, `sbt-dumps/*`,
 `reds/baseline*/*`, a `reds/<run>/` dir that is untouched as a whole and has no running fixer, and an `internal-trees/`
@@ -1326,6 +1334,8 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `launch_agents` | `AGENTCTL_LAUNCH_AGENTS` | - | - |
 | `live_globs` | `AGENTCTL_LIVE_GLOBS` | - | - |
 | `live_poll` | `AGENTCTL_LIVE_POLL` | `1.0` | s between looks at a quiet file |
+| `log_rotate_keep` | `AGENTCTL_LOG_ROTATE_KEEP` | `3` | rotated parts kept per log (<log>.1 newest .. <log>.N oldest) |
+| `log_rotate_max` | `AGENTCTL_LOG_ROTATE_MAX` | `10485760` | bytes over which an agentctl log is rotated (copy-truncate; its newest part kept as .1) |
 | `max_checks` | `AGENTCTL_MAX_CHECKS` | - | - |
 | `max_foreign` | `AGENTCTL_MAX_FOREIGN` | `2` | files a push may revert to an older main before prepush-check refuses |
 | `min_interval` | `AGENTCTL_MIN_INTERVAL` | `60` | - |

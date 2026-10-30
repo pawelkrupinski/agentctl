@@ -314,6 +314,10 @@ def cmd_maintain(a):
             print(f"== the watchdog last ran {fmt_age(wd) + ' ago' if wd else 'never'}: notified")
     print("== reap")
     cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True))
+    print("== logs")
+    rotated = [] if a.dry_run else rotate_logs()
+    for line in rotated or ["(dry run)" if a.dry_run else "none over the size"]:
+        print(f"  {line}")
     path = state_root("maintain.json")
     st = read_record(path) or {}
     today, hour = dt.date.today().isoformat(), dt.datetime.now().hour

@@ -327,6 +327,18 @@ def tail_bytes(path, max_bytes):
         return f.read(max_bytes), size
 
 
+def status_log_body(path, max_bytes=None):
+    """(/log's body, the file's size): the file's tail, and when it is short (just rotated), the tail of its newest
+    rotated part (<path>.1) before it, marked."""
+    max_bytes = max_bytes or STATUS_LOG_MAX
+    body, size = tail_bytes(path, max_bytes)
+    prev = f"{path}.1"
+    if size < max_bytes and os.path.isfile(prev):
+        older, _s = tail_bytes(prev, max_bytes - size)
+        body = older + f"\n---- rotated: the above is the end of {os.path.basename(prev)} ----\n".encode() + body
+    return body, size
+
+
 def status_tail(path, lines=STATUS_LOG_TAIL, max_bytes=64 << 10):
     """The log's last lines, MASKED (live_mask_text): the page serves them."""
     try:
@@ -703,7 +715,7 @@ def status_log_path(p):
     if not p or "\0" in p or not os.path.isabs(os.path.expanduser(p)):
         return None
     real = os.path.realpath(os.path.expanduser(p))
-    if not real.endswith(STATUS_LOG_SUFFIXES) or not os.path.isfile(real):
+    if not (real.endswith(STATUS_LOG_SUFFIXES) or re.search(r"\.log\.\d+$", real)) or not os.path.isfile(real):
         return None
     for root in {os.path.realpath(state_root()), os.path.realpath(reds_dir())}:
         if real.startswith(root.rstrip(os.sep) + os.sep):
@@ -797,7 +809,7 @@ def status_page_server(host, port):
                     if not real:
                         return self.send(403, "only a .log/.out/.txt file under ~/.cache/agentctl\n",
                                          "text/plain; charset=utf-8")
-                    body, size = tail_bytes(real, STATUS_LOG_MAX)
+                    body, size = status_log_body(real)
                     body = live_mask_text(body.decode("utf-8", "replace")).encode()
                     head = f"{real} ({size} bytes" + (f"; the last {STATUS_LOG_MAX} shown" if size > STATUS_LOG_MAX else "") + ")\n\n"
                     return self.send(200, head.encode() + body, "text/plain; charset=utf-8")
