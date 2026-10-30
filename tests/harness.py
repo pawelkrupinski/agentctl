@@ -48,8 +48,9 @@ def _hermetic_environment():
         f.write("[user]\n\tname = t\n\temail = t@t\n[init]\n\tdefaultBranch = main\n"
                 "[advice]\n\tdetachedHead = false\n[protocol \"file\"]\n\tallow = always\n")
     for k in list(os.environ):
-        if k in _DROP or k.startswith(_DROP_PREFIXES):
-            del os.environ[k]
+        if k in _DROP or k.startswith(_DROP_PREFIXES) or (k.startswith("AGENTCTL_") and not k.startswith("AGENTCTL_TEST")):
+            del os.environ[k]  # every agentctl knob of the shell running the tests too: AGENTCTL_STORE_URL, AGENTCTL_HOST,
+            # AGENTCTL_MOVIES_REPO... would point the suite at a real store or clone (the tests set their own)
     # AGENTCTL_LAPTOP_PRESSURE "-": the machine running the tests is never the one under test (2026-10-30: ci-runner
     # at load 95 on 32 cores held every fixer and owner dispatch back -- the owner-restart test failed 3 runs in a row)
     os.environ.update(HOME=home, PATH=f"{hbin}:{SYSTEM_PATH}", GIT_CONFIG_GLOBAL=gitconfig, GIT_CONFIG_NOSYSTEM="1",
