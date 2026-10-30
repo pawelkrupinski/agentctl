@@ -499,26 +499,43 @@ def tick_watches(now_=None):
     return did
 
 
-def watch_eval(repo, sha, pushed_at, o_r, flows, now_):
-    """One look at the runs that contain sha: ('ok', line), ('red', line) or None (undecided)."""
-    done = {}
+def watch_look(repo, sha, o_r, flows, done, pushed_at, since, now_, on_run=None):
+    """ONE look at the runs that contain sha (the tick's watch item and `land --follow`'s own watch alike): each
+    undecided flow's run is picked; a completed (not cancelled) one goes into `done` as (run, green?), a convergence
+    that has not started CONV_START s after `since` as (None, None). on_run(kind, run or None) hears each pick.
+    Returns {kind: (run id, status, updatedAt)} of the runs followed (the stall judge's state)."""
     conv_start = env_num("AGENTCTL_WATCH_CONV_START", WATCH_CONV_START)
+    seen = {}
     for kind, (name, wfile) in flows.items():
+        if kind in done:
+            continue
         runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30", "--json", RUN_FIELDS)
         run = pick_main_run(repo, sha, runs) if kind == "main" else pick_convergence_run(repo, sha, runs, pushed_at, o_r)
         if run is None:
-            if kind == "convergence" and now_ - float(pushed_at) >= conv_start:
+            if kind == "convergence" and now_ - float(since) >= conv_start:
                 done[kind] = (None, None)
+                if on_run:
+                    on_run(kind, None)
             continue
+        seen[kind] = (run.get("databaseId"), run.get("status"), run.get("updatedAt"))
         if run.get("status") == "completed" and not is_cancelled(run):
             done[kind] = (run, run.get("conclusion") == "success")
+        if on_run:
+            on_run(kind, run)
+    return seen
+
+
+def watch_verdict(o_r, sha, flows, done):
+    """('red', lines, [(workflow, number)]) when a decided run is red, ('ok', line, []) when every flow is decided
+    green (or the convergence never started), else None."""
     reds = [(k, r) for k, (r, ok) in done.items() if ok is False]
     if reds:
         lines = []
         for kind, r in reds:
             try:
                 failed = failed_jobs(o_r, r["databaseId"])
-            except (Exception, SystemExit):
+            except (Exception, SystemExit) as e:  # the verdict stands without the job names
+                err(f"could not read the jobs of run {r['databaseId']} ({str(e)[:120]})")
                 failed = []
             lines.append(f"WATCH RED: {flows[kind][0]} #{r.get('number')} {', '.join(failed) or r.get('conclusion')} "
                          f"(it contains your {sha[:10]}: if your change broke it, fix forward now with `Fixes-Red: "
@@ -527,8 +544,16 @@ def watch_eval(repo, sha, pushed_at, o_r, flows, now_):
     if len(done) == len(flows):
         parts = [f"{flows[k][0].split()[0] if k == 'main' else 'convergence'} " +
                  (f"#{r.get('number')} green" if r else "none started") for k, (r, ok) in done.items()]
-        return "ok", "WATCH OK: " + ", ".join(sorted(parts, key=lambda x: not x.startswith("Main"))) + f" ({sha[:10]})", []
+        return "ok", "WATCH OK: " + ", ".join(sorted(parts, key=lambda x: not x.startswith("Main"))), []
     return None
+
+
+def watch_eval(repo, sha, pushed_at, o_r, flows, now_):
+    """The tick's look at a watch item: ('ok', line, []), ('red', lines, reds) or None (undecided)."""
+    done = {}
+    watch_look(repo, sha, o_r, flows, done, pushed_at, pushed_at, now_)
+    v = watch_verdict(o_r, sha, flows, done)
+    return (v[0], v[1] + f" ({sha[:10]})", v[2]) if v and v[0] == "ok" else v
 
 
 def bisect(repo, d, batch, base, bwt):

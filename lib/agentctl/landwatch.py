@@ -112,7 +112,7 @@ def _watch(repo, sha, pushed_at, o_r, flows, own, fixes=()):
     t0 = time.time()
     err(f"watching Main and the convergence for {sha[:10]} (up to {int(timeout // 60)} min; `--no-watch` skips this)"
         + (f"; its Fixes-Red {', '.join(fixes)} is verified by the red's own item (`agentctl red status`)" if fixes else ""))
-    done, said, listed = {}, set(), {}  # kind -> (run, ok | None for none started); kind -> the runs last listed
+    done, said = {}, set()  # kind -> (run, ok | None for none started)
     # NO PROGRESS: nothing about the followed runs (which run, its status, its last update) changed for this long ends
     # the watch with a named verdict (a queue Forgejo never serves, a runner lost mid-run), not a silent 3 h wait
     stall = env_num("AGENTCTL_WATCH_STALL_MIN", WATCH_STALL_MIN) * 60
@@ -126,28 +126,21 @@ def _watch(repo, sha, pushed_at, o_r, flows, own, fixes=()):
         print(line, flush=True)
         return rc
 
+    def on_run(kind, run):
+        name = flows[kind][0]
+        if run is None:
+            print(f"convergence: none started within {int(conv_start // 60)} min of the push", flush=True)
+            return
+        if (kind, run["databaseId"]) not in said:
+            said.add((kind, run["databaseId"]))
+            err(f"{name}: following run #{run.get('number')} ({run.get('status')}, head {str(run.get('headSha'))[:10]})")
+        if kind in done:
+            print(f"{name} #{run.get('number')}: {run.get('conclusion')}", flush=True)
+
     while True:
         seen = {}
         try:
-            for kind, (name, wfile) in flows.items():
-                if kind in done:
-                    continue
-                runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30",
-                               "--json", RUN_FIELDS)
-                listed[kind] = runs
-                run = pick_main_run(repo, sha, runs) if kind == "main" else pick_convergence_run(repo, sha, runs, pushed_at, o_r)
-                if run is None:
-                    if kind == "convergence" and time.time() - t0 >= conv_start:
-                        done[kind] = (None, None)
-                        print(f"convergence: none started within {int(conv_start // 60)} min of the push", flush=True)
-                    continue
-                seen[kind] = (run.get("databaseId"), run.get("status"), run.get("updatedAt"))
-                if (kind, run["databaseId"]) not in said:
-                    said.add((kind, run["databaseId"]))
-                    err(f"{name}: following run #{run.get('number')} ({run.get('status')}, head {str(run.get('headSha'))[:10]})")
-                if run.get("status") == "completed" and not is_cancelled(run):
-                    done[kind] = (run, run.get("conclusion") == "success")
-                    print(f"{name} #{run.get('number')}: {run.get('conclusion')}", flush=True)
+            seen = watch_look(repo, sha, o_r, flows, done, pushed_at, t0, time.time(), on_run)
             if unreachable is not None:
                 err(f"watch: Forgejo answers again after {red_for(iso_at(unreachable))} ({failures} failed reads)")
             unreachable, failures, err_delays = None, 0, None
@@ -161,26 +154,16 @@ def _watch(repo, sha, pushed_at, o_r, flows, own, fixes=()):
                 unreachable, err_delays = time.time(), backoff(env_num("AGENTCTL_WATCH_ERROR_POLL", 30), 300)
             err(f"watch: could not read the runs ({last_error}) [{failures} failed, unreachable for "
                 f"{red_for(iso_at(unreachable))}]")
-        reds = [(k, r) for k, (r, ok) in done.items() if ok is False]
-        if reds:
-            for kind, r in reds:
-                try:
-                    failed = failed_jobs(o_r, r["databaseId"])
-                except (Exception, SystemExit) as e:  # the verdict stands without the job names
-                    err(f"could not read the jobs of run {r['databaseId']} ({str(e)[:120]})")
-                    failed = []
-                print(f"WATCH RED: {flows[kind][0]} #{r.get('number')} {', '.join(failed) or r.get('conclusion')} "
-                      f"(it contains your {sha[:10]}: if your change broke it, fix forward now with `Fixes-Red: "
-                      f"{r.get('number')}`)", flush=True)
+        v = watch_verdict(o_r, sha, flows, done)
+        if v and v[0] == "red":
+            print(v[1], flush=True)
             try:
                 print(ci_why(o_r, 4, repo=repo)[1])
             except (Exception, SystemExit) as e:
                 print(f"(agentctl ci-why failed: {e})")
             return 3
-        if len(done) == len(flows):
-            parts = [f"{flows[k][0].split()[0] if k == 'main' else 'convergence'} " +
-                     (f"#{r.get('number')} green" if r else "none started") for k, (r, ok) in done.items()]
-            return verdict(0, "WATCH OK: " + ", ".join(sorted(parts, key=lambda x: not x.startswith("Main"))))
+        if v:
+            return verdict(0, v[1])
         if time.time() - t0 >= timeout:
             left = ", ".join(flows[k][0] for k in flows if k not in done)
             if unreachable is not None:
