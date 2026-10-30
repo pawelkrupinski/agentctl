@@ -240,6 +240,7 @@ class Base(unittest.TestCase):
         self.r = Repo(os.path.realpath(self.tmp.name))
         self.saved_root = os.environ.get("AGENTCTL_STATE_ROOT")  # a store per test: items and leases never leak across
         os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp.name, "state")
+        A._token_missing.clear()  # a missing token is said on its transition: per process, so per test
 
     def tearDown(self):
         os.environ["AGENTCTL_STATE_ROOT"] = self.saved_root

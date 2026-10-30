@@ -266,9 +266,11 @@ class TokenDrop:
                     return
             except (OSError, UnicodeDecodeError):
                 return
-            if TOKEN_SHAPE.fullmatch(tok):
-                os.environ["FORGEJO_API_TOKEN" if token_ns(self.o_r) == "movies" else "GH_TOKEN"] = tok
+            key = "FORGEJO_API_TOKEN" if token_ns(self.o_r) == "movies" else "GH_TOKEN"
+            if TOKEN_SHAPE.fullmatch(tok) and os.environ.get(key) != tok:  # said once per real change, never per offer
+                os.environ[key] = tok
                 err("the Forgejo token was handed over: the gate is read again")
+                token_back(token_ns(self.o_r))
 
     def close(self):
         if self.sock:
@@ -281,15 +283,20 @@ class TokenDrop:
 
 
 def offer_token(repo):
-    """Hand this process's Forgejo token to the repo's waiting processor when it listens (see THE TOKEN HAND-OFF). Never
-    fatal; True when handed over."""
+    """Hand this process's Forgejo token to the repo's waiting processor when it listens (see THE TOKEN HAND-OFF) AND
+    lacks it: asked first (one socket round trip), so an interactive command hands over only on a real transition
+    (2026-10-30: every `land` / `waiting status` handed it over, 175 "handed over" lines in 400). Never fatal; True when
+    handed over."""
     import socket
     try:
         d, _c, _w = waiting_state(repo)
         path = token_sock_path(d)
         if not os.path.exists(path):
             return False
+        held = token_request(path)
         tok = token(slug(repo))
+        if held == tok:
+            return False
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.settimeout(3)
             s.connect(path)

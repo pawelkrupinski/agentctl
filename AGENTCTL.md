@@ -863,7 +863,10 @@ The old names (design §14.5) answer until 2026-11-05, each printing its new one
   `resume` run where the vault answers, hand it the Forgejo token, kept in its memory and environment only (a re-exec
   keeps it; executors and fixers inherit it). After a reboot or a service restart: `AGENTCTL_INTERACTIVE=1
   ~/bin/agentctl land status` from `~/projects/movies` with the vault unlocked (the service log then says `the
-  Forgejo token was handed over`).
+  Forgejo token was handed over`). A command first ASKS the processor for the token it holds and hands it over only
+  when it holds none or another one, so `handed over` is logged once per real change. A process without the token
+  says so once, on the transition (`the movies Forgejo token is missing (…)`, with its inbox note), then at most a
+  summary every 10 min (`$AGENTCTL_TOKEN_SUMMARY`), and `… is back` when it returns; its steps' NoToken is quiet.
 - **Who may run `secrets`.** A TTY, `AGENTCTL_INTERACTIVE=1`, or an agent's own command in its Claude Code session
   (`CLAUDECODE` and `CLAUDE_CODE_SESSION_ID` set): an agent's `land` reads the vault itself, submits, and hands the
   token to the laptop processor. Never the processor, a launchd job, or anything agentctl started in the background
@@ -1375,6 +1378,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `sweep_hour` | `AGENTCTL_SWEEP_HOUR` | `9` | local time: the daily sweep runs at the first maintain pass from 09:00 |
 | `sync_mirror` | `AGENTCTL_SYNC_MIRROR` | `10` | s between the laptop's copies of /v1/state into state.json |
 | `tick` | `AGENTCTL_TICK` | `5` | seconds between ticks ; every step is bounded or rate-limited inside |
+| `token_summary` | `AGENTCTL_TOKEN_SUMMARY` | `600` | s between the summaries of a still-missing Forgejo token (said on its transition first) |
 | `tunnel_state` | `AGENTCTL_TUNNEL_STATE` | - | - |
 | `unkicked_after` | `AGENTCTL_UNKICKED_AFTER` | `3600` | a convergence-relevant main push with no convergence run on main by then is a red |
 | `upkeep_every` | `AGENTCTL_UPKEEP_EVERY` | `3600` | - |

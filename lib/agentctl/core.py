@@ -428,6 +428,8 @@ def token(o_r):
         return os.environ["GH_TOKEN"]
     ns = token_ns(o_r)
     if ns == "movies" and os.environ.get("FORGEJO_API_TOKEN"):  # a token the environment already carries
+        if _token_missing:
+            token_back(ns)
         return os.environ["FORGEJO_API_TOKEN"]
     if ns not in _tokens:
         tok = token_from_processor(o_r)
@@ -449,10 +451,49 @@ def token(o_r):
                 if not tok:
                     why += "; the vault is locked for this process (its session ended, or `! secrets unlock " + ns + "`)"
         if not tok:
-            token_unavailable_note(ns, why)
+            token_missing(ns, why)
             raise NoToken(f"agentctl: could not read the {ns} FORGEJO_API_TOKEN ({why})")
         _tokens[ns] = tok
+        token_back(ns)
     return _tokens[ns]
+
+
+# A MISSING TOKEN IS SAID ON ITS TRANSITION (2026-10-30: the laptop processor's service.log held ~842,000 lines of
+# "could not read the movies FORGEJO_API_TOKEN" -- every step of every tick, and the inbox note's own failure, said it
+# again). A long-lived process says it once when the token goes missing (and notes the condition then), then at most a
+# summary every TOKEN_MISSING_SUMMARY s, and once more when it is back. Its callers' NoToken is quiet (run_step).
+TOKEN_MISSING_SUMMARY = 600  # s between the summaries of a still-missing Forgejo token (said on its transition first)
+_token_missing = {}  # ns -> {"since", "reads", "said"}
+
+
+def token_missing(ns, why, now_=None):
+    """A failed token read: said (and noted in the inbox) on the transition to missing, then a summary at most every
+    TOKEN_MISSING_SUMMARY s ($AGENTCTL_TOKEN_SUMMARY). Returns the line said, or None."""
+    t = now_ if now_ is not None else time.time()
+    m = _token_missing.get(ns)
+    if m is None:
+        _token_missing[ns] = {"since": t, "reads": 1, "said": t}
+        token_unavailable_note(ns, why)
+        line = f"the {ns} Forgejo token is missing ({why}); said again only as a summary every " \
+               f"{env_num('AGENTCTL_TOKEN_SUMMARY', TOKEN_MISSING_SUMMARY) / 60:.0f} min"
+    else:
+        m["reads"] += 1
+        if t - m["said"] < env_num("AGENTCTL_TOKEN_SUMMARY", TOKEN_MISSING_SUMMARY):
+            return None
+        line = f"the {ns} Forgejo token is still missing: {m['reads']} read(s) failed in the " \
+               f"{fmt_age(t - m['since'])} since it went ({why})"
+        m["said"] = t
+        token_unavailable_note(ns, why)  # the condition again, in case the first note could not be written
+    if not interactive_foreground():  # a foreground command prints its NoToken itself: the log is the long-lived ones'
+        err(line)
+    return line
+
+
+def token_back(ns):
+    """The token is there again: said once, when it had been missing."""
+    m = _token_missing.pop(ns, None)
+    if m:
+        err(f"the {ns} Forgejo token is back ({m['reads']} read(s) failed while it was missing)")
 
 
 def detached_env(repo):

@@ -288,3 +288,78 @@ class FixtureServerReapTest(unittest.TestCase):
         self.assertIsNone(A.fixture_reason(self.CMD, 1, "01:00:00", isdir=live))
         self.assertIsNone(A.fixture_reason(self.CMD, 4242, "08-22:22:54", isdir=live), "a live parent test")
         self.assertIsNone(A.fixture_reason("vim serve.pyx", 1, "9-00:00:00", isdir=live) if False else None)
+
+
+class TokenSaidOnTransitionTest(unittest.TestCase):
+    """2026-10-30: ~842,000 log lines of the missing token, and a hand-over line from every interactive command."""
+
+    def setUp(self):
+        import io
+        self.saved = A.token_unavailable_note, A.interactive_foreground, sys.stderr
+        self.notes, self.err = [], io.StringIO()
+        A.token_unavailable_note = lambda ns, why: self.notes.append(why)
+        A.interactive_foreground = lambda: False
+        sys.stderr = self.err
+        A._token_missing.clear()
+
+    def tearDown(self):
+        A.token_unavailable_note, A.interactive_foreground, sys.stderr = self.saved
+        A._token_missing.clear()
+
+    def lines(self):
+        return [l for l in self.err.getvalue().splitlines() if l]
+
+    def test_missing_is_said_once_then_a_summary_then_back_once(self):
+        for i in range(50):
+            A.token_missing("movies", "locked", now_=1000 + i)
+        self.assertEqual(len(self.lines()), 1, self.lines())
+        self.assertIn("the movies Forgejo token is missing (locked)", self.lines()[0])
+        self.assertEqual(self.notes, ["locked"])  # the inbox condition: on the transition, not per read
+        A.token_missing("movies", "locked", now_=1000 + 600)
+        self.assertEqual(len(self.lines()), 2)
+        self.assertIn("still missing: 51 read(s) failed", self.lines()[1])
+        A.token_missing("movies", "locked", now_=1000 + 700)
+        self.assertEqual(len(self.lines()), 2)
+        A.token_back("movies")
+        A.token_back("movies")
+        self.assertEqual(len(self.lines()), 3)
+        self.assertIn("is back (52 read(s) failed", self.lines()[2])
+        A.token_missing("movies", "locked again", now_=5000)  # a new transition: said again
+        self.assertIn("is missing (locked again)", self.lines()[3])
+
+    def test_a_step_without_token_is_quiet(self):
+        def step():
+            raise A.NoToken("agentctl: could not read the movies FORGEJO_API_TOKEN (test)")
+        self.assertFalse(A.run_step("t-notoken", step))
+        self.assertEqual(self.lines(), [])
+        self.assertFalse(A.run_step("t-other", lambda: 1 / 0))
+        self.assertEqual(len(self.lines()), 1)
+        self.assertIn("t-other failed", self.lines()[0])
+
+    def test_the_token_is_handed_over_only_when_the_processor_lacks_it(self):
+        base = tempfile.mkdtemp(dir=os.environ["AGENTCTL_TEST_RUN_SOCK"], prefix="s-")
+        saved = {k: os.environ.get(k) for k in ("AGENTCTL_SOCK_DIR", "FORGEJO_API_TOKEN", "GH_TOKEN")}
+        saved_ws, saved_tok, saved_slug = A.waiting_state, A.token, A.slug
+        os.environ["AGENTCTL_SOCK_DIR"] = base
+        os.environ.pop("GH_TOKEN", None)
+        os.environ.pop("FORGEJO_API_TOKEN", None)
+        d = tempfile.mkdtemp()
+        A.waiting_state = lambda repo: (d, None, None)
+        A.slug = lambda repo: MOVIES
+        A.token = lambda o_r: TOK
+        try:
+            drop = A.TokenDrop(d, MOVIES).open()
+            self.addCleanup(drop.close)
+            self.assertTrue(A.offer_token("/x"))  # it holds none: handed over
+            deadline = time.time() + 5
+            while os.environ.get("FORGEJO_API_TOKEN") != TOK and time.time() < deadline:
+                time.sleep(0.05)
+            self.assertEqual(os.environ.get("FORGEJO_API_TOKEN"), TOK)
+            for _ in range(5):
+                self.assertFalse(A.offer_token("/x"), "it holds this token: nothing to hand over")
+            handed = [l for l in self.lines() if "handed over" in l]
+            self.assertEqual(len(handed), 1, self.lines())
+        finally:
+            A.waiting_state, A.token, A.slug = saved_ws, saved_tok, saved_slug
+            for k, v in saved.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)

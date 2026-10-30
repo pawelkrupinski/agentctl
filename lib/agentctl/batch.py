@@ -598,22 +598,32 @@ def run_step(name, step):
         try:
             step()
             _step_errors[name] = None
+        except NoToken:  # token_missing said it, on its transition: a step never repeats it every tick
+            _step_errors[name] = STEP_NO_TOKEN
         except (Exception, SystemExit) as e:  # one step's error is that step's, never the loop's (audit #9)
             _step_errors[name] = str(e).replace("agentctl: ", "")[:200]
     t = _bounded.get(f"step:{name}")
     if t and t.is_alive():
         return None
     if _step_errors.get(name):  # it failed after the tick stopped waiting for it
-        err(f"{name} failed: {_step_errors.pop(name)}")
+        step_failed(name, _step_errors.pop(name))
     if not run_bounded(f"step:{name}", work, env_num("AGENTCTL_STEP_JOIN", STEP_JOIN)):
         err(f"{name}: still running after {env_num('AGENTCTL_STEP_JOIN', STEP_JOIN):.0f} s; the tick goes on (it ends "
             "in its own thread)")
         return None
     why = _step_errors.pop(name, None)
     if why:
-        err(f"{name} failed: {why}")
+        step_failed(name, why)
         return False
     return True
+
+
+STEP_NO_TOKEN = "no Forgejo token"
+
+
+def step_failed(name, why):
+    if why is not STEP_NO_TOKEN:
+        err(f"{name} failed: {why}")
 
 SERVICE_LABEL = "net.bitcashier.agentctl-waiting"
 

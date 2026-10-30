@@ -26,6 +26,7 @@ class RedBase(unittest.TestCase):
                   "GIT_CONFIG_NOSYSTEM"):
             os.environ[k] = ENV[k]
         self.r = Repo(t)
+        A._token_missing.clear()
         self.d = os.path.join(t, "gh")
         os.makedirs(self.d)
         self.settings = os.path.join(t, "settings.json")
