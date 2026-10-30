@@ -50,8 +50,10 @@ def _hermetic_environment():
     for k in list(os.environ):
         if k in _DROP or k.startswith(_DROP_PREFIXES):
             del os.environ[k]
+    # AGENTCTL_LAPTOP_PRESSURE "-": the machine running the tests is never the one under test (2026-10-30: ci-runner
+    # at load 95 on 32 cores held every fixer and owner dispatch back -- the owner-restart test failed 3 runs in a row)
     os.environ.update(HOME=home, PATH=f"{hbin}:{SYSTEM_PATH}", GIT_CONFIG_GLOBAL=gitconfig, GIT_CONFIG_NOSYSTEM="1",
-                      AGENTCTL_TEST_HOME=home)
+                      AGENTCTL_TEST_HOME=home, AGENTCTL_LAPTOP_PRESSURE="-")
 
 
 _hermetic_environment()

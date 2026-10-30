@@ -28,14 +28,14 @@ class CapacityBase(unittest.TestCase):
 
     def tearDown(self):
         A.red_spawn, A.cached_dispatch_blocker, A.fixer_records = self.saved
-        for k in self.envs:
-            os.environ.pop(k, None)
+        for k, v in self.envs.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
         self.tmp.cleanup()
 
     def env(self, **kw):
         for k, v in kw.items():
+            self.envs.setdefault(k, os.environ.get(k))  # restored at tearDown: the harness's own value included
             os.environ[k] = str(v)
-            self.envs[k] = v
 
     def fixer(self, key, gate, run, sibling_of=None):
         meta = {"kind": "sibling" if sibling_of else "fixer", "gate": gate, "run": run, "workflow": "W"}
@@ -171,7 +171,7 @@ class LaptopPressureTest(CapacityBase):
         self.assertEqual(self.spawned, ["x"])
 
     def test_the_thresholds_swap_load_and_free_memory(self):
-        os.environ.pop("AGENTCTL_LAPTOP_PRESSURE", None)
+        os.environ.pop("AGENTCTL_LAPTOP_PRESSURE", None)  # the real thresholds (m and swap given; tearDown restores it)
         calm = {"free": 12.0, "load1": 10.0, "cores": 14, "pressure": 30}
         self.assertIsNone(A.laptop_pressure(calm, (10_000.0, 32_000.0)))
         self.assertIn("swap", A.laptop_pressure(calm, (30_400.0, 31_700.0)))
