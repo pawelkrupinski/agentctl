@@ -69,7 +69,7 @@ def free_gb():
     probe = os.environ.get("AGENTCTL_GOV_FREE_PROBE")
     if probe:
         try:
-            return float(subprocess.run(probe, shell=True, capture_output=True, text=True).stdout.strip())
+            return float(run_cmd(probe, shell=True).stdout.strip())
         except ValueError:
             return None
     try:
@@ -85,11 +85,9 @@ def gov_machine():
     """{free, pressure, load1, cores}: live memory and CPU ($AGENTCTL_GOV_PRESSURE_PROBE / _LOAD_PROBE: the tests')."""
     load1, _cpu, pressure, _swap = machine_sample()
     if os.environ.get("AGENTCTL_GOV_PRESSURE_PROBE"):
-        pressure = float(subprocess.run(os.environ["AGENTCTL_GOV_PRESSURE_PROBE"], shell=True, capture_output=True,
-                                        text=True).stdout.strip() or 0)
+        pressure = float(run_cmd(os.environ["AGENTCTL_GOV_PRESSURE_PROBE"], shell=True).stdout.strip() or 0)
     if os.environ.get("AGENTCTL_GOV_LOAD_PROBE"):
-        load1 = float(subprocess.run(os.environ["AGENTCTL_GOV_LOAD_PROBE"], shell=True, capture_output=True,
-                                     text=True).stdout.strip() or 0)
+        load1 = float(run_cmd(os.environ["AGENTCTL_GOV_LOAD_PROBE"], shell=True).stdout.strip() or 0)
     return {"free": free_gb(), "pressure": pressure, "load1": load1, "cores": os.cpu_count() or 1}
 
 

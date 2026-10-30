@@ -621,7 +621,7 @@ def cmd_orphans(a):
     except (OSError, ValueError):
         cpu_state = {}
     procs_cpu, children = {}, {}
-    for line in subprocess.run(["ps", "-A", "-o", "pid=,ppid=,time="], capture_output=True, text=True).stdout.splitlines():
+    for line in run_cmd(["ps", "-A", "-o", "pid=,ppid=,time="]).stdout.splitlines():
         f3 = line.split()
         if len(f3) == 3:
             secs = 0.0
@@ -688,7 +688,7 @@ def cmd_orphans(a):
         for kind, pid, *_ in found:
             if kind == "sbt" and "java" in (next((c for p, _pp, _e, c in procs if p == pid), "").split(" ", 1)[0]):
                 print(f"thread dump of sbt server pid {pid}: {thread_dump(pid, cwds.get(pid, ''))}")
-            kids = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True).stdout.split()
+            kids = run_cmd(["pgrep", "-P", str(pid)]).stdout.split()
             for p in [pid] + [int(k) for k in kids]:
                 try:
                     os.kill(p, signal.SIGTERM)

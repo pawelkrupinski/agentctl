@@ -154,7 +154,7 @@ def patch_id(repo, c):
     diff = git(repo, "show", "--format=", "--no-color", "--no-ext-diff", c, check=False).stdout
     if not diff.strip():
         return None
-    r = subprocess.run(["git", "patch-id", "--stable"], cwd=repo, input=diff, capture_output=True, text=True)
+    r = run_cmd(["git", "patch-id", "--stable"], cwd=repo, input=diff)
     return (r.stdout.split() or [None])[0]
 
 

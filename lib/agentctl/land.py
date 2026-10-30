@@ -28,7 +28,7 @@ LAND_PRECHECK_ROUNDS = 2  # main moved under the lock this often: the next check
 
 def group_cpu_seconds(pgid):
     """The CPU seconds every live process of process group `pgid` has used (ps's cumulative TIME), or 0."""
-    r = subprocess.run(["ps", "-A", "-o", "pgid=,time="], capture_output=True, text=True)
+    r = run_cmd(["ps", "-A", "-o", "pgid=,time="])
     total = 0.0
     for line in r.stdout.splitlines():
         parts = line.split()

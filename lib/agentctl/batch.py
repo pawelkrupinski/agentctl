@@ -545,8 +545,7 @@ def launch_agents_dir():
 
 
 def launchctl(*args):
-    return subprocess.run([os.environ.get("AGENTCTL_LAUNCHCTL", "launchctl")] + list(args), capture_output=True,
-                          text=True)
+    return run_cmd([os.environ.get("AGENTCTL_LAUNCHCTL", "launchctl")] + list(args))
 
 
 def service_plist(repo, log):

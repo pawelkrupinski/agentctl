@@ -3,7 +3,7 @@
 
 # ---------------------------------------------------------------- orphans
 def ps():
-    r = subprocess.run(["ps", "-axo", "pid=,ppid=,etime=,command="], capture_output=True, text=True)
+    r = run_cmd(["ps", "-axo", "pid=,ppid=,etime=,command="])
     out = []
     for line in r.stdout.splitlines():
         parts = line.split(None, 3)
@@ -294,7 +294,7 @@ def jvm_scan():
         if os.environ.get(env):
             with open(os.environ[env]) as f:
                 return f.read()
-        return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout
+        return run_cmd(cmd, shell=True).stdout
     rows = []
     for line in read("AGENTCTL_JVM_PS", "ps -Ao pid=,ppid=,tty=,etime=,cputime=,args=").splitlines():
         f = line.split(None, 5)
@@ -318,7 +318,7 @@ def jvm_scan():
     ports = set()
     if not os.environ.get("AGENTCTL_JVM_PS"):
         for port in str(jvm_knob("PROTECTED_PORTS", "9000")).split():
-            r = subprocess.run(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"], capture_output=True, text=True)
+            r = run_cmd(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"])
             ports |= {int(x) for x in r.stdout.split() if x.isdigit()}
     return rows, cwd, kept, ports
 
@@ -353,7 +353,7 @@ def jvm_reap(cands, kill, procs):
     for pid, ppid, age, cpu, pct, rule, args in cands:
         why = None
         if rule == "dup-sbt-server":
-            r = subprocess.run(["ps", "-o", "%cpu=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+            r = run_cmd(["ps", "-o", "%cpu=", "-p", str(pid)]).stdout.strip()
             try:
                 if float(r) > float(jvm_knob("DUP_MAX_RECENT_CPU_PERCENT", 5)):
                     why = f"busy now ({r}% CPU), not idle"

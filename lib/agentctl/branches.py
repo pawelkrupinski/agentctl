@@ -1118,7 +1118,7 @@ def worktree_of(path):
 def proc_alive(pid, start=None):
     if not pid or not pid_alive(int(pid)):
         return False
-    r = subprocess.run(["ps", "-o", "stat=", "-p", str(int(pid))], capture_output=True, text=True)
+    r = run_cmd(["ps", "-o", "stat=", "-p", str(int(pid))])
     if r.stdout.strip().startswith("Z"):  # a defunct process its parent never reaped: ended
         return False
     # the same words in any order: records written before process_start ran ps under LC_ALL=C hold a locale's order

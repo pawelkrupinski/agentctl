@@ -34,8 +34,7 @@ def lsof_cwds(pids):
     pids = [int(x) for x in pids]
     res = {}
     for i in range(0, len(pids), 200):
-        r = subprocess.run(["lsof", "-nP", "-a", "-p", ",".join(map(str, pids[i:i + 200])), "-d", "cwd", "-Fpn"],
-                           capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        r = run_cmd(["lsof", "-nP", "-a", "-p", ",".join(map(str, pids[i:i + 200])), "-d", "cwd", "-Fpn"])
         pid = None
         for line in r.stdout.splitlines():
             if line.startswith("p"):

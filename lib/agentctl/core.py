@@ -182,6 +182,17 @@ def git(repo, *args, check=True, input=None):
     return r.stdout if check else r
 
 
+def run_cmd(args, timeout=60, text=True, **kw):
+    """THE subprocess runner for a short local command (ps, lsof, pgrep, launchctl, a probe, a quick git): output
+    captured, stdin closed, and BOUNDED -- a hung command reads as exit 124 with empty output, never a hung caller."""
+    kw.setdefault("stdin", None if "input" in kw else subprocess.DEVNULL)
+    try:
+        return subprocess.run(args, capture_output=True, text=text, timeout=timeout, **kw)
+    except subprocess.TimeoutExpired:
+        empty = "" if text else b""
+        return subprocess.CompletedProcess(args, 124, empty, empty or f"timed out after {timeout} s")
+
+
 def git_ok(repo, *args):
     try:
         return subprocess.run(["git", "-C", repo, *args], capture_output=True, timeout=120).returncode == 0

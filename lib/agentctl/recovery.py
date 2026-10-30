@@ -557,7 +557,7 @@ def caller_identity():
     """(session, worktree, agent name) of the process running agentctl: its Claude session, the git worktree of its cwd
     (None outside one, or at $HOME), its agent name (agent_name)."""
     here = safe_cwd()
-    r = subprocess.run(["git", "-C", here, "rev-parse", "--show-toplevel"], capture_output=True, text=True) \
+    r = run_cmd(["git", "-C", here, "rev-parse", "--show-toplevel"]) \
         if os.path.isdir(here) else None
     top = os.path.realpath(r.stdout.strip()) if r is not None and r.returncode == 0 and r.stdout.strip() else None
     if top in (os.path.realpath(HOME), "/"):

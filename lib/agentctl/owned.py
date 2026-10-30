@@ -51,7 +51,7 @@ def process_start(pid):
     """The process's start time as ps prints it: with the pid, it names one process even after the pid is reused."""
     # LC_ALL=C: one format whoever asks (2026-10-27: launchd's processor wrote "Tue Oct 27 …", a session's en_GB ps read
     # "Tue 27 Oct …", and a live red fixer looked dead)
-    r = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, env=dict(os.environ, LC_ALL="C"))
+    r = run_cmd(["ps", "-o", "lstart=", "-p", str(pid)], env=dict(os.environ, LC_ALL="C"))
     return r.stdout.strip()
 
 
@@ -216,7 +216,7 @@ def restart_gate():
     head = head.stdout.strip()
     shown = {}
     for rel, p in code_files(TOOL_PATH):  # every part, each equal to HEAD's: a dirty or untracked part is no code
-        r = subprocess.run(["git", "-C", d, "show", f"HEAD:{rel}"], capture_output=True)
+        r = run_cmd(["git", "-C", d, "show", f"HEAD:{rel}"], text=False)
         try:
             with open(p, "rb") as f:
                 same = r.returncode == 0 and f.read() == r.stdout
