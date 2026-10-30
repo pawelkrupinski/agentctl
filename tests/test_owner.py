@@ -95,6 +95,29 @@ class OwnerTest(OwnerBase):
         self.assertIn("NEXT TURN", argv[argv.index("--bg") + 1])
         self.assertEqual(len({s["sessionId"] for s in self.sessions()}), 1)
 
+    def test_a_turn_past_its_wall_time_is_stopped_and_its_leases_released_the_owner_lives_on(self):
+        """An owner turn was unbounded: a hung session held its family's reds `leased` for up to OWNER_MAX (7 days)."""
+        os.environ["FAKE_CLAUDE_SLEEP"] = "60"
+        self.addCleanup(os.environ.__setitem__, "FAKE_CLAUDE_SLEEP", "0")
+        os.environ["AGENTCTL_RED_FIXER_WALL"] = "2"
+        self.addCleanup(os.environ.pop, "AGENTCTL_RED_FIXER_WALL", None)
+        self.tick(dispatch=True)
+        row = self.st.get(A.red_lease(self.only()["data"]["key"]))
+        self.assertTrue(self.wait(lambda: str(A.lease_meta(self.st.get(row["name"])).get("outcome") or "")
+                                  .startswith("TIMED OUT")))
+        self.assertIsNone(self.rec().get("ended"), "one turn timed out; the owner goes on")
+
+    def test_a_red_cleared_under_its_owner_never_stops_the_owner(self):
+        """red_stop_holder wrote RED-STOP.md into the owner's ONE permanent worktree: every later turn stopped at once."""
+        wt = os.path.join(self.tmp.name, "owner-wt")
+        os.makedirs(wt)
+        self.st.acquire("red/kx", A.owner_holder(FAM), 600, 3600, meta={"kind": "owned", "worktree": wt})
+        self.assertEqual(A.red_stop_holder(self.st, "kx", "cleared", "red cleared"), A.owner_holder(FAM))
+        self.assertFalse(A.lease_is_live(self.st.get("red/kx"), time.time()), "revoked: its next beat drops it")
+        self.assertFalse(os.path.exists(os.path.join(wt, "RED-STOP.md")))
+        self.assertTrue(A.red_history(self.st.get("red/kx"), time.time())["dispatched"],
+                        "an owner's turn counts for the crash-loop breaker as a fixer's does")
+
     def test_an_owner_that_died_is_restarted_in_its_worktree_with_its_notebook_and_session(self):
         os.environ["FAKE_CLAUDE_SLEEP"] = "60"
         self.addCleanup(os.environ.__setitem__, "FAKE_CLAUDE_SLEEP", "0")

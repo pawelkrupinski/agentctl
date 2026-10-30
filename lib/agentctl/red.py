@@ -1031,6 +1031,8 @@ def red_stop_holder(store, key, why, outcome):
     if not lease_is_live(row, store.clock()):
         return None
     store.revoke(red_lease(key), outcome)
+    if lease_meta(row).get("kind") == "owned":  # a family owner's: its next beat drops the lease; never a STOP in its
+        return row["holder"]                    # one permanent worktree, which would stop every later turn too
     if any(lease_is_live(r, store.clock()) and r["holder"] == row["holder"] for r in store.list("red/")):
         return None  # it still holds other reds of its run: only this lease goes, never its work
     wt = lease_meta(row).get("worktree")
@@ -1047,7 +1049,7 @@ def red_history(row, t):
     m = lease_meta(row)
     return {"at": iso_at(t), "holder": row.get("holder") if row else None, "outcome": m.get("outcome") or "lease expired",
             "notes": (m.get("notes") or m.get("note") or "")[:600], "session": m.get("session"),
-            "worktree": m.get("worktree"), "dispatched": m.get("kind") == "fixer"}
+            "worktree": m.get("worktree"), "dispatched": m.get("kind") in ("fixer", "owned")}
 
 
 def red_close(store, it, to, text):

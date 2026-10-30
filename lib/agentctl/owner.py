@@ -151,6 +151,10 @@ def owner_spawn(store, o_r, repo, fam, off, took, extra=()):
                turn=0, bg_id=None, pid=None,
                restarts=int(rec.get("restarts", -1)) + 1, log=os.path.join(owner_dir(fam), "owner.log"))
     write_json(owner_record_path(fam), rec)
+    try:  # a STOP left by an earlier spell would stop this one at its first pass
+        os.unlink(os.path.join(wt, "RED-STOP.md"))
+    except OSError:
+        pass
     env = fixer_env(o_r, f"owner-{fam}")
     with open(rec["log"], "a") as logf:
         p = spawn_detached([sys.executable, TOOL_PATH, "red", "owner", "--family", fam, "--repo", repo],
@@ -199,7 +203,9 @@ def owner_turn_prompt(fam, rec, st, names, first):
 
 def red_owner(a):
     """THE OWNER'S WRAPPER (detached; `agentctl red owner --family F`): its heartbeat lease, its reds' leases renewed
-    with it, one session resumed turn after turn, each turn's leases released with the turn's verdict."""
+    by the turn's progress, one session resumed turn after turn, each turn's leases released with the turn's verdict.
+    A turn is bounded as a fixer's is: RED_FIXER_WALL, and a session missing from `claude agents` three polls running
+    has ended. Whatever raises, the session is stopped and every lease released (never a live session nobody holds)."""
     fam = a.family
     path = owner_record_path(fam)
     rec = read_record(path) or {}
@@ -219,8 +225,9 @@ def red_owner(a):
     every = env_num("AGENTCTL_RED_RENEW", RED_RENEW_EVERY)
     poll = env_num("AGENTCTL_BG_POLL", BG_POLL)
     idle_max = env_num("AGENTCTL_OWNER_IDLE", OWNER_IDLE)
-    bid, turn, turn_names, empty, last_beat, idle_since, first = None, 0, [], 0, 0.0, time.time(), True
-    stop = None
+    wall = env_num("AGENTCTL_RED_FIXER_WALL", RED_FIXER_WALL)
+    s = {"bid": None, "turn": 0, "names": [], "empty": 0, "beat": 0.0, "idle_since": time.time(), "first": True,
+         "missing": 0, "turn_at": 0.0}
 
     def release(names, outcome, notes=""):
         leases = owner_leases(fam)
@@ -234,8 +241,8 @@ def red_owner(a):
         owner_drop(fam, names)
 
     def cancelled(signum, _frame):
-        if bid:
-            bg_stop(cli, bid)
+        if s["bid"]:
+            bg_stop(cli, s["bid"])
         release(list(owner_leases(fam)), "STOPPED: the owner's wrapper was stopped")
         try:
             st.release(owner_lease(fam), hb["epoch"], hb["secret"], outcome="STOPPED")
@@ -244,71 +251,89 @@ def red_owner(a):
         os._exit(143)
     for sg in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
         signal.signal(sg, cancelled)
-    while stop is None:
-        now = time.time()
-        if now - last_beat >= every:  # THE HEARTBEAT: the owner's lease and every red lease it holds
+
+    def end_turn(outcome_if_none, text=None):
+        if text is None:
+            text = bg_final_text(rec.get("transcript") or bg_transcript(rec.get("session") or ""))
+        verdict = fixer_verdict(text)
+        tail = [l[:300] for l in text.splitlines()[-INBOX_TAIL:]]
+        s["empty"] = 0 if verdict else s["empty"] + 1
+        outcome = verdict or outcome_if_none
+        line = f"RED OWNER {fam} turn {s['turn']}: {outcome[:300]}"
+        inbox_write("red fixer", line, [line], tail, 0 if outcome.startswith("LANDED") else 1, cwd=wt)
+        release(s["names"], outcome, "\n".join(tail[-8:]))
+        s["bid"], s["missing"] = None, 0
+        return f"ENDED: {s['empty']} turns in a row with no verdict" if s["empty"] >= OWNER_EMPTY_TURNS else None
+
+    def step(now):
+        """One pass; returns the stop reason, or None to go on."""
+        if now - s["beat"] >= every:  # THE HEARTBEAT: the owner's lease; its reds' leases by the turn's progress
             try:
                 if st.renew(owner_lease(fam), hb["epoch"], hb["secret"], f"beat {int(now)}", OWNER_TTL) == "lost":
-                    stop = "STOPPED: the owner's heartbeat lease was lost"
-                    break
+                    return "STOPPED: the owner's heartbeat lease was lost"
+                mark = fixer_mark({"log": rec.get("transcript") or rec.get("log") or ""}, wt)
                 lost = [n for n, x in owner_leases(fam).items()
-                        if st.renew(n, x["epoch"], x["secret"], f"beat {int(now)}", OWNER_TTL) == "lost"]
-                if lost:  # cleared, released by hand, or revoked: no longer the owner's
+                        if st.renew(n, x["epoch"], x["secret"], mark, OWNER_TTL) == "lost"]
+                if lost:  # cleared, released by hand, revoked, or no progress for OWNER_TTL: no longer the owner's
                     owner_drop(fam, lost)
-                last_beat = now
+                s["beat"] = now
             except StoreUnavailable as e:
                 print(f"{ts()} the store did not answer ({e}): asked again at the next beat", flush=True)
-        if os.path.exists(os.path.join(wt, "RED-STOP.md")):
-            stop = "STOPPED: " + open(os.path.join(wt, "RED-STOP.md")).readline().strip()
-            break
+        stop_file = os.path.join(wt, "RED-STOP.md")
+        if os.path.exists(stop_file):
+            try:
+                with open(stop_file) as f:
+                    return "STOPPED: " + f.readline().strip()
+            except OSError:
+                pass
         held = list(owner_leases(fam))
-        if bid is None:  # between turns: a new turn when the owner holds reds, else idle
-            if held:
-                idle_since = now
-                prompt = owner_turn_prompt(fam, rec, st, held, first)
-                if prompt is None:  # its reds closed meanwhile
-                    owner_drop(fam, held)
-                    continue
-                argv = [cli, "--bg", prompt, "--permission-mode", interactive_mode(), "--permission-prompts", "none",
-                        "-n", f"red owner · {fam}", "--disallowedTools", "Bash(git push:*)", "Bash(*--no-verify*)",
-                        "Bash(*PREPUSH_SKIP*)"]
-                if rec.get("session"):
-                    argv += ["--resume", rec["session"]]
-                bid, why = bg_start(argv, wt, env)
-                if not bid:
-                    release(held, f"NOT STARTED: `claude --bg` {why}")
-                    stop = f"NOT STARTED: `claude --bg` {why}"
-                    break
-                turn, turn_names, first = turn + 1, held, False
-                rec.update(bg_id=bid, turn=turn)
-                write_json(path, rec)
-            elif now - idle_since >= idle_max:
-                stop = f"IDLE: no red of {fam} for {fmt_age(idle_max)}"
-                break
-        else:
-            ent = bg_session(cli, bid)
-            if ent and ent.get("sessionId") and rec.get("session") != ent["sessionId"]:
-                rec.update(session=ent["sessionId"], transcript=bg_transcript(ent["sessionId"]))
-                write_json(path, rec)
-                bind_fixer_session(rec["session"], path)  # the session is a fixer's: ~/bin refuses its commits
-            if ent is None or (ent or {}).get("state") == "done":  # the turn ended
-                text = bg_final_text(rec.get("transcript") or bg_transcript(rec.get("session") or ""))
-                verdict = fixer_verdict(text)
-                tail = [l[:300] for l in text.splitlines()[-INBOX_TAIL:]]
-                empty = 0 if verdict else empty + 1
-                outcome = verdict or "ended with no LANDED / GAVE UP line"
-                line = f"RED OWNER {fam} turn {turn}: {outcome[:300]}"
-                inbox_write("red fixer", line, [line], tail, 0 if outcome.startswith("LANDED") else 1, cwd=wt)
-                release(turn_names, outcome, "\n".join(tail[-8:]))
-                bid = None
-                if empty >= OWNER_EMPTY_TURNS:
-                    stop = f"ENDED: {empty} turns in a row with no verdict"
-        time.sleep(poll)
-    if bid:
-        bg_stop(cli, bid)
-    release(list(owner_leases(fam)), stop or "ENDED")
+        if s["bid"] is None:  # between turns: a new turn when the owner holds reds, else idle
+            if not held:
+                return f"IDLE: no red of {fam} for {fmt_age(idle_max)}" if now - s["idle_since"] >= idle_max else None
+            s["idle_since"] = now
+            prompt = owner_turn_prompt(fam, rec, st, held, s["first"])
+            if prompt is None:  # its reds closed meanwhile
+                owner_drop(fam, held)
+                return None
+            argv = [cli, "--bg", prompt, "--permission-mode", interactive_mode(), "--permission-prompts", "none",
+                    "-n", f"red owner · {fam}", "--disallowedTools", "Bash(git push:*)", "Bash(*--no-verify*)",
+                    "Bash(*PREPUSH_SKIP*)"]
+            if rec.get("session"):
+                argv += ["--resume", rec["session"]]
+            bid, why = bg_start(argv, wt, env)
+            if not bid:
+                release(held, f"NOT STARTED: `claude --bg` {why}")
+                return f"NOT STARTED: `claude --bg` {why}"
+            s.update(bid=bid, turn=s["turn"] + 1, names=held, first=False, turn_at=now, missing=0)
+            rec.update(bg_id=bid, turn=s["turn"])
+            write_json(path, rec)
+            return None
+        ent = bg_session(cli, s["bid"])
+        if ent and ent.get("sessionId") and rec.get("session") != ent["sessionId"]:
+            rec.update(session=ent["sessionId"], transcript=bg_transcript(ent["sessionId"]))
+            write_json(path, rec)
+            bind_fixer_session(rec["session"], path)  # the session is a fixer's: ~/bin refuses its commits
+        s["missing"] = s["missing"] + 1 if ent is None else 0
+        if (ent or {}).get("state") == "done" or s["missing"] >= 3:  # the turn ended (or the session is gone)
+            return end_turn("ended with no LANDED / GAVE UP line")
+        if now - s["turn_at"] > wall:
+            bg_stop(cli, s["bid"])
+            return end_turn(f"TIMED OUT after {int(wall // 60)} min (maximum wall time of a turn)")
+        return None
+
+    stop = None
     try:
-        st.release(owner_lease(fam), hb["epoch"], hb["secret"], outcome=stop or "ENDED")
+        while stop is None:
+            stop = step(time.time())
+            if stop is None:
+                time.sleep(poll)
+    except Exception as ex:  # never a dead wrapper with a live session and held leases
+        stop = f"STOPPED: the owner's wrapper failed ({type(ex).__name__}: {str(ex)[:200]})"
+    if s["bid"]:
+        bg_stop(cli, s["bid"])
+    release(list(owner_leases(fam)), stop)
+    try:
+        st.release(owner_lease(fam), hb["epoch"], hb["secret"], outcome=stop)
     except StoreUnavailable:
         pass
     rec.update(ended=ts(), verdict=stop)

@@ -522,53 +522,56 @@ def red_fixer(a):
 
         def held(row):
             return bool(row) and row["epoch"] == epoch and lease_is_live(row, time.time())
-        while verdict is None:
-            time.sleep(poll)
-            ent = bg_session(cli, bid)
-            if ent and ent.get("sessionId") and not rec.get("transcript"):
-                rec.update(session=ent["sessionId"], transcript=bg_transcript(ent["sessionId"]))
-                write_json(a.record, rec)
-                bind_fixer_session(rec["session"], a.record)
-                if rec["transcript"]:
-                    rec["log"] = rec["transcript"]
-                meta.update(session=rec["session"], log=rec["log"], bg_id=bid)
-                meta_due = not fixer_meta_sent(st, leases, meta)
-                write_json(a.record, rec)
-            missing = missing + 1 if ent is None else 0
-            if (ent or {}).get("state") == "done" or missing >= 3:  # finished its turn, or gone from `claude agents`
-                break
-            stop = None
-            if time.time() - t0 > wall:
-                stop = f"TIMED OUT after {int(wall // 60)} min (maximum wall time)"
-            elif os.path.exists(os.path.join(wt, "RED-STOP.md")):
-                stop = "STOPPED: " + open(os.path.join(wt, "RED-STOP.md")).readline().strip()
-            else:
-                # A store that does not answer decides nothing: it is asked again at the next poll, and a lease that
-                # lapsed meanwhile reads as lost once it answers. 2026-10-29, #2517: `POST /v1/store/get: Connection
-                # reset by peer` (ci-runner's store, through the tunnel) ended the wrapper a minute in; nothing renewed
-                # its lease, and a second fixer was dispatched onto the red its session was still working on.
-                try:
-                    if meta_due:
-                        meta_due = not fixer_meta_sent(st, leases, meta)
-                    row = st.get(name)
-                    if not held(row):  # revoked (the red cleared, a release, its own block): stop at once
-                        outcome = str(lease_meta(row).get("outcome") or "")
-                        stop = (outcome if outcome.startswith("BLOCKED ON OWNER") else
-                                "STOPPED: the red's lease was lost (expired without progress, past its max hold, or "
-                                "revoked)")
-                    elif time.time() - last_renew >= every:
-                        note = (read_record(a.record) or {}).get("note")
-                        mark = fixer_mark(rec, wt)
-                        for n_, e_, s_ in extra:  # the run's other reds: renewed with it (a revoked one simply ends)
-                            st.renew(n_, e_, s_, mark, RED_FIXER_TTL, note=note)
-                        if st.renew(name, epoch, secret, mark, RED_FIXER_TTL, note=note) == "lost":
-                            stop = ("STOPPED: the red's lease was lost (expired without progress, past its max hold, "
-                                    "or revoked)")
-                        last_renew = time.time()
-                except StoreUnavailable as e:
-                    print(f"{ts()} the store did not answer ({e}): asked again at the next poll", flush=True)
-            if stop:
-                verdict = stop
+        try:
+            while verdict is None:
+                time.sleep(poll)
+                ent = bg_session(cli, bid)
+                if ent and ent.get("sessionId") and not rec.get("transcript"):
+                    rec.update(session=ent["sessionId"], transcript=bg_transcript(ent["sessionId"]))
+                    write_json(a.record, rec)
+                    bind_fixer_session(rec["session"], a.record)
+                    if rec["transcript"]:
+                        rec["log"] = rec["transcript"]
+                    meta.update(session=rec["session"], log=rec["log"], bg_id=bid)
+                    meta_due = not fixer_meta_sent(st, leases, meta)
+                    write_json(a.record, rec)
+                missing = missing + 1 if ent is None else 0
+                if (ent or {}).get("state") == "done" or missing >= 3:  # finished its turn, or gone from `claude agents`
+                    break
+                stop = None
+                if time.time() - t0 > wall:
+                    stop = f"TIMED OUT after {int(wall // 60)} min (maximum wall time)"
+                elif os.path.exists(os.path.join(wt, "RED-STOP.md")):
+                    stop = "STOPPED: " + open(os.path.join(wt, "RED-STOP.md")).readline().strip()
+                else:
+                    # A store that does not answer decides nothing: it is asked again at the next poll, and a lease that
+                    # lapsed meanwhile reads as lost once it answers. 2026-10-29, #2517: `POST /v1/store/get: Connection
+                    # reset by peer` (ci-runner's store, through the tunnel) ended the wrapper a minute in; nothing renewed
+                    # its lease, and a second fixer was dispatched onto the red its session was still working on.
+                    try:
+                        if meta_due:
+                            meta_due = not fixer_meta_sent(st, leases, meta)
+                        row = st.get(name)
+                        if not held(row):  # revoked (the red cleared, a release, its own block): stop at once
+                            outcome = str(lease_meta(row).get("outcome") or "")
+                            stop = (outcome if outcome.startswith("BLOCKED ON OWNER") else
+                                    "STOPPED: the red's lease was lost (expired without progress, past its max hold, or "
+                                    "revoked)")
+                        elif time.time() - last_renew >= every:
+                            note = (read_record(a.record) or {}).get("note")
+                            mark = fixer_mark(rec, wt)
+                            for n_, e_, s_ in extra:  # the run's other reds: renewed with it (a revoked one simply ends)
+                                st.renew(n_, e_, s_, mark, RED_FIXER_TTL, note=note)
+                            if st.renew(name, epoch, secret, mark, RED_FIXER_TTL, note=note) == "lost":
+                                stop = ("STOPPED: the red's lease was lost (expired without progress, past its max hold, "
+                                        "or revoked)")
+                            last_renew = time.time()
+                    except StoreUnavailable as e:
+                        print(f"{ts()} the store did not answer ({e}): asked again at the next poll", flush=True)
+                if stop:
+                    verdict = stop
+        except Exception as ex:  # never a dead wrapper with a live session and its leases held
+            verdict = f"STOPPED: the fixer's wrapper failed ({type(ex).__name__}: {str(ex)[:200]})"
         bg_stop(cli, bid)  # done or stopped: the session ends (`claude agents --all` keeps it, `claude attach` reopens it)
     if not rec.get("transcript") and rec.get("session"):
         rec["transcript"] = bg_transcript(rec["session"])
