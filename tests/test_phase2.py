@@ -108,6 +108,48 @@ class AuthTest(Phase2Base):
         self.assertEqual(len(self.fj_calls), n)  # cached: Forgejo asked once per token per 5 min
 
 
+class HardeningTest(Phase2Base):
+    def raw(self, headers, body=b""):
+        import http.client
+        c = http.client.HTTPConnection("127.0.0.1", self.srv.server_port, timeout=10)
+        c.putrequest("POST", "/v1/store/get")
+        for k, v in headers.items():
+            c.putheader(k, v)
+        c.endheaders()
+        if body:
+            c.send(body)
+        r = c.getresponse()
+        return r.status, r.read()
+
+    def test_no_token_or_a_huge_body_is_answered_without_reading_the_body(self):
+        self.assertEqual(self.raw({"Content-Length": str(1 << 30)})[0], 401)  # 1 GiB announced, never read
+        self.assertEqual(self.raw({"Content-Length": str(A.STORE_BODY_MAX + 1), "Authorization": "token tok-pawel"})[0],
+                         413)
+
+    def test_a_safe_call_rides_out_a_500_and_an_unsafe_one_does_not(self):
+        calls = []
+        real = A.urllib.request.urlopen
+
+        def flaky(req, timeout=None):
+            if "/v1/store/" not in req.full_url:  # the server's own login to Forgejo (this process plays both)
+                return real(req, timeout=timeout)
+            calls.append(req.full_url)
+            if len(calls) == 1:
+                raise A.urllib.error.HTTPError(req.full_url, 500, "database is locked", {}, io.BytesIO(b"{}"))
+            return real(req, timeout=timeout)
+        A.urllib.request.urlopen = flaky
+        os.environ["AGENTCTL_STORE_RETRY_BASE"] = "0"
+        try:
+            self.assertIsNone(self.remote.get("red/nothing"))
+            self.assertEqual(len(calls), 2, calls)
+            calls.clear()
+            with self.assertRaises(A.StoreUnavailable):
+                self.remote.revoke("red/nothing", "x")
+        finally:
+            A.urllib.request.urlopen = real
+            os.environ.pop("AGENTCTL_STORE_RETRY_BASE", None)
+
+
 class RemoteStoreTest(Phase2Base):
     def test_remote_store_is_the_store_over_http(self):
         r = self.remote

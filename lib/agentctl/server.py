@@ -21,6 +21,8 @@ STORE_RPC = ("acquire", "renew", "note", "release", "revoke", "set_meta", "offer
              "close_offer", "take", "get", "item", "items", "put_item", "transition", "update_item", "mark_notified",
              "meta_get", "meta_set", "events", "archive_free_leases", "list")
 STORE_AUTH_CACHE = 300   # s a token's login is trusted before Forgejo is asked again (§15)
+STORE_AUTH_CACHE_MAX = 1000  # tokens remembered at once
+STORE_BODY_MAX = 4 << 20     # bytes: a larger request body is refused unread (413)
 EVENTS_WAIT_MAX = 25     # s a GET /v1/events long-poll waits for a new event
 STORE_PORT = 3014
 SYNC_MIRROR_EVERY = 10   # s between the laptop's copies of /v1/state into state.json
@@ -129,7 +131,8 @@ class RemoteStore:
             cls = store_errors().get(b.get("error"))
             if cls:
                 raise cls(b.get("message") or "")
-            if e.code in (502, 503, 504):  # the tunnel or the service between restarts
+            if e.code in (500, 502, 503, 504):  # the tunnel, the service between restarts, a busy database (a 500:
+                # retried only when the call is safe -- `database is locked` after the 30 s busy timeout)
                 raise _StoreTransient(f"{method} {path}: HTTP {e.code} {b.get('message') or e.reason}", e.code == 503) \
                     from None
             raise StoreUnavailable(f"{method} {path}: HTTP {e.code} {b.get('message') or e.reason}") from None
@@ -731,7 +734,10 @@ class StoreAPI:
                 return hit[0]
         who = self.user_of(tok)
         with self.lock:
-            self.cache[k] = (who, now_)
+            if len(self.cache) >= STORE_AUTH_CACHE_MAX:  # bounded: unknown tokens never grow it without end
+                self.cache = {x: v for x, v in self.cache.items() if now_ - v[1] < STORE_AUTH_CACHE}
+            if len(self.cache) < STORE_AUTH_CACHE_MAX:
+                self.cache[k] = (who, now_)
         return who
 
     @staticmethod
@@ -840,8 +846,15 @@ def store_server(api, host, port):
         def _go(self, method):
             try:
                 n = int(self.headers.get("Content-Length") or 0)
-                body = self.rfile.read(n) if n else b""
-                code, ctype, out = api.handle(method, self.path, dict(self.headers), body)
+                if not (self.headers.get("Authorization") or "").strip():  # no token: answered before any body is read
+                    code, ctype, out = api.handle(method, self.path, dict(self.headers), b"")
+                    self.close_connection = True
+                elif n > STORE_BODY_MAX:
+                    code, ctype, out = api._json(413, {"error": "TooLarge", "message": f"a body over {STORE_BODY_MAX} bytes"})
+                    self.close_connection = True
+                else:
+                    body = self.rfile.read(n) if n else b""
+                    code, ctype, out = api.handle(method, self.path, dict(self.headers), body)
             except Exception as e:  # the last resort (handle() answers its own errors): a 500, never a dropped connection
                 code, ctype, out = api.internal_error(method, self.path, e)
             self.send_response(code)
