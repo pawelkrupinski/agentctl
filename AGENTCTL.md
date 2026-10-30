@@ -386,7 +386,9 @@ the FAILED result of the check that found it (`run_probe`, no default). The tick
 (`condition.closed`), its actions run (dispatch a red's workflow to verify it, reset the tunnel state, lift a batch
 hold, land again) and one `RECOVERED:` event is written. Unacknowledged past its deadline, a condition escalates
 (an event of severity `escalate`, which the notifier delivers). Probes: workflow_green, http, tcp, red_resolved,
-route, tunnel, gate_read, token, processor, git_fetch, laptop_load, queue_entry, invariant -- none calls `secrets`.
+route, tunnel, gate_read, token, git_fetch, clone_health, infra_requeue, change_source, invariant -- none calls
+`secrets`. A condition is probed on the host role that opened it (its `host`: the laptop's sync, or ci-runner's
+tick); only the server escalates.
 `tests/test_recovery.py` lints the source for a bypass. Owner blocks are block LEASES renewed by their probe (see
 "always claimed"), not conditions.
 
@@ -518,9 +520,9 @@ agent must be assigned to it".
 - **Dispatch (the processor's red tick).** A red with nobody on it is an OFFER; the dispatcher takes offers (gate
   reds first, within the caps) and each taken offer is a LEASE its fixer holds. The fixer is a Claude Code background
   session, `claude --bg -n "<label>"` (`claude agents` lists it by that label), in a fresh worktree
-  `~/projects/movies-wt-red-<run>` off forgejo/main plus `~/bin-wt-red-<run>` for any agentctl change (never ~/bin's
-  own checkout), briefed with
-  `~/bin/briefs/movies-agent-preamble.md` (synced from the orchestrator's scratchpad copy), the run, its jobs and first
+  `~/projects/movies-wt-red-<run>` off forgejo/main (a fixer never edits ~/bin: `agentctl issue`), briefed with
+  `~/bin/briefs/movies-agent-preamble.md` (synced from `$AGENTCTL_BRIEF_SRC` when that copy is newer), the run, its
+  jobs and first
   error line. An `[infra]` red gets a DIAGNOSE-ONLY brief (no code change; runners, ci-runner, owner actions). The fixer
   says who it is first (`red claim N --fixer <its record>`, in its prompt: that binds its session; background sessions
   inherit the claude daemon's environment, so a fixer is never known by its environment), notes what it does on its
