@@ -322,15 +322,14 @@ Owner steps, kept in step with ~/Desktop/"claude docs"/agentctl-autopin.md (+ .p
 ci-runner runs one pinned revision of ~/bin (agentctl store and reconciler). The auto-pin moves that pin to agentctl
 main's newest revision whose `tests.yml` run is GREEN, and restarts only the agentctl units. You keep the veto.
 
-### What is prepared (infra, local, NOT pushed)
+### State (2026-10-30): LIVE on ci-runner
 
-Branch `agentctl-autopin` (worktree `~/bitcashier/infra-agentctl-autopin`), on top of `agentctl-ci`:
-
-| commit | what |
-|---|---|
-| a539a9f1 | `forgejo-settings.nix`: Actions on for `pawelkrupinski/agentctl` (its `tests.yml` runs on the `ubuntu-26.04` tier; no secret or new label needed) |
-| 736ce8a5 | `agentctl.nix`: `agentctl-autopin.timer` (every 5 min) + the `agentctl-pin` tool; `bin/prove-agentctl-pin` |
-| 6d46c9e2 | `bin/agentctl-pin-bump`: the manual bump, refusing a revision whose CI is not green |
+The auto-pin is deployed: `agentctl-autopin.timer` runs `agentctl-pin auto` every 5 minutes, agentctl's `tests.yml`
+runs on every push to main (the `ubuntu-26.04` tier), and agentctl-src, -store and -reconciler run
+`/var/lib/agentctl-src/current`. `ssh ci-runner sudo agentctl-pin status` shows what runs (`exported`), the infra pin
+it sits on, main's newest revision with its `tests.yml` verdict, the previous revision and whether a hold is set.
+~/bin's own `hooks/pre-push` runs the suite on the pushed commit, so a red revision should not reach main at all; when
+one does, nothing ships until a later revision is green.
 
 How it decides: a commit of agentctl main that descends from what runs now, is not marked bad, and whose latest
 `tests.yml` run on main is `success` (read read-only from Forgejo's database on ci-runner; no token). Red, running,
@@ -339,26 +338,12 @@ cancelled or untested revisions are never shipped; it never goes backwards. It r
 that does not stay up 45 s is rolled back from automatically, marked bad, and raised as an `escalate` event.
 
 Two pins: infra's `agentctl-pin.nix` (yours) always wins; the host pin counts only on top of the infra pin it was
-written over. So a manual bump or an infra rollback always takes effect, and auto-bumps continue from it.
+written over. So a manual bump or an infra rollback always takes effect, and auto-bumps continue from it. A BACKWARDS
+infra pin (one below what runs: `bin/agentctl-pin-bump <rev> --backwards`) is a rollback: the next `auto` pass writes
+the hold file, marks the abandoned revision bad and records a `pin.held` event, exactly as `agentctl-pin rollback`
+does -- or it would climb straight back. It stays held until `ssh ci-runner sudo agentctl-pin release`.
 
-### 1. Push and apply (one push: Actions on + the auto-pin)
-
-```
-! cd ~/bitcashier/infra && git fetch -q forgejo && git -C ../infra-agentctl-autopin rebase -q forgejo/main && git checkout -q main && git pull --rebase -q forgejo main && git merge --ff-only -q agentctl-autopin && git push forgejo main && bin/forgejo-settings --dry-run && bin/forgejo-settings && bin/deploy ci-runner
-```
-
-The settings dry run should show agentctl's `has_actions` changing to true. The deploy preview should restart only
-`agentctl-src`, `agentctl-store`, `agentctl-reconciler` (their ExecStart now runs `/var/lib/agentctl-src/current`)
-and start `agentctl-autopin.timer`. Then:
-
-```
-! cd ~/bitcashier/infra && bin/deploy ci-runner --apply && ssh ci-runner sudo agentctl-pin status
-```
-
-From then on every push to ~/bin main runs `tests.yml`; once it is green, ci-runner moves to it within ~5 minutes.
-Until the first green run nothing moves.
-
-### 2. Hold, release, roll back (on ci-runner)
+### Hold, release, roll back (on ci-runner)
 
 ```
 ! ssh ci-runner sudo agentctl-pin status
