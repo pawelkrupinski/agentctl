@@ -824,11 +824,15 @@ ONE QUEUE (2026-10-30): the queue is ci-runner's store. `land status`, the statu
 its change items; `land cancel <id>` reaches any open item (on the laptop through the store API), one no entry carries
 included. The laptop holds no queue: `land` (and its network re-queue) push `refs/heads/land/<id>` and submit; what its
 local waiting dir still holds, the sync moves to ci-runner's queue each cycle (`migrated`), or says `LOCAL QUEUE: …`
-loudly. A change whose commits are on main BY CONTENT (`git cherry`: landing rebases, so never by sha) closes itself as
-LANDED, every tick (each change looked at every 10 min, `$AGENTCTL_LANDED_LOOK`), on the server and on the laptop
+loudly. A change whose commits are on main BY CONTENT (landing rebases, so never by sha) closes itself as LANDED, every tick (each change looked at every 10 min, `$AGENTCTL_LANDED_LOOK`), on the server and on the laptop
 (its clone has the commits of the laptop's worktrees). A submission supersedes the older open items of its worktree.
 An open item no queue entry carries is a STRANDED CHANGE condition, closed by its own probe once the item closes. W1
 counts only those open items, after that landed look, and names the oldest with why it has not landed.
+**Landed by content** is ONE helper (`cherry_landed`) for every such check -- orphans, queue entries, change items, W1,
+fixers' worktrees, the closers: a commit is on main when main has a patch-equivalent commit (`git cherry`'s `-`) OR a
+twin with the same subject, author and author date and identical changed (+/-) lines per file, context and line
+numbers left out (2026-10-30: a commit landed 3 days earlier escalated UNLANDED ORPHAN because main had since changed
+the lines around it, so its patch-id differed).
 
 ```
 agentctl land status                         # the changes, the batch, a HELD batch, the gate, the processor (any cwd)

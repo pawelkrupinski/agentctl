@@ -258,12 +258,11 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
 
 
 def unlanded_commits(wt):
-    """[(sha, author time)] of the worktree's commits not on forgejo/main (git cherry: a rebased copy on main counts as
+    """[(sha, author time)] of the worktree's commits not on forgejo/main (cherry_landed: a rebased copy on main counts as
     landed), oldest first; [] when it is not a worktree."""
     if not wt or not os.path.isdir(wt):
         return []
-    ch = git(wt, "cherry", f"refs/remotes/{REMOTE}/main", "HEAD", check=False)
-    shas = [l[2:].strip() for l in (ch.stdout if ch.returncode == 0 else "").splitlines() if l.startswith("+ ")]
+    shas = cherry_landed(wt, f"refs/remotes/{REMOTE}/main", "HEAD")[1] or []
     out = []
     for sha in shas:
         r = git(wt, "log", "-1", "--format=%at", sha, check=False)

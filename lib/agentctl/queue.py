@@ -388,7 +388,7 @@ _landed_looked = {}
 
 def change_landed(repo, head, commits=None):
     """(landed, via): landed True when the change at head is on main by content (head an ancestor, or every commit of it
-    patch-equivalent there), False when not, None when this clone cannot tell (head unknown here); via the main commit
+    patch-equivalent there or with a content twin, cherry_landed), False when not, None when this clone cannot tell (head unknown here); via the main commit
     carrying its last commit, when known."""
     main = f"refs/remotes/{REMOTE}/main"
     if not head or not git_ok(repo, "cat-file", "-e", f"{head}^{{commit}}"):
@@ -396,11 +396,10 @@ def change_landed(repo, head, commits=None):
     if git_ok(repo, "merge-base", "--is-ancestor", head, main):
         return True, head
     limit = [f"{commits[0]}^"] if commits and git_ok(repo, "cat-file", "-e", f"{commits[0]}^^{{commit}}") else []
-    ch = git(repo, "cherry", main, head, *limit, check=False)
-    if ch.returncode != 0:
+    commits, left = cherry_landed(repo, main, head, *limit)
+    if commits is None:
         return None, None
-    lines = [l for l in ch.stdout.splitlines() if l.strip()]
-    if not lines or not all(l.startswith("- ") for l in lines):
+    if not commits or left:
         return False, None
     return True, equivalent_on(repo, head, main)
 

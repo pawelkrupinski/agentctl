@@ -1250,8 +1250,7 @@ def red_lease_ended(store, it, row, block, t):
         upd["diagnosis"] = h["outcome"][len("DIAGNOSED:"):].strip()[:600]
     wt = h.get("worktree")
     if wt and os.path.isdir(wt) and allowed_path(wt):  # its unlanded commits are never lost: the next fixer starts there
-        ch = git(wt, "cherry", f"refs/remotes/{REMOTE}/main", "HEAD", check=False)
-        left = [l[2:].strip()[:10] for l in (ch.stdout if ch.returncode == 0 else "").splitlines() if l.startswith("+ ")]
+        left = [c[:10] for c in cherry_landed(wt, f"refs/remotes/{REMOTE}/main", "HEAD")[1] or []]
         if left:
             upd["prior_work"] = {"worktree": wt, "commits": left[:20]}
     if block:

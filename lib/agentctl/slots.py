@@ -289,8 +289,8 @@ class Stash:
 def landed(repo, sha, main_ref):
     if git_ok(repo, "merge-base", "--is-ancestor", sha, main_ref):
         return "ancestor"
-    lines = git(repo, "cherry", main_ref, sha).splitlines()
-    if lines and all(l.startswith("-") for l in lines):
+    commits, left = cherry_landed(repo, main_ref, sha)
+    if commits and not left:
         return "patch-equivalent"
     return None
 

@@ -160,7 +160,7 @@ def patch_id(repo, c):
 
 def equivalent_on(repo, c, upstream, limit=400):
     """The commit of `upstream` (since its merge-base with c) that carries c's patch, or None (`git cherry`'s test,
-    naming the commit)."""
+    naming the commit), else its content twin (content_twin: same subject, author, date and changed lines)."""
     pid = patch_id(repo, c)
     if not pid:
         return None
@@ -169,7 +169,7 @@ def equivalent_on(repo, c, upstream, limit=400):
     for u in git(repo, "rev-list", "--no-merges", "-n", str(limit), rng, check=False).stdout.split():
         if patch_id(repo, u) == pid:
             return u
-    return None
+    return content_twin(repo, c, upstream)
 
 
 def pick(wt, commits, dropped=None):

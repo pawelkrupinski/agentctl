@@ -60,9 +60,9 @@ def gitdir_activity(repo, wt_path):
 def merged_reason(repo, head, main):
     if git_ok(repo, "merge-base", "--is-ancestor", head, main):
         return "ancestor of forgejo/main"
-    lines = git(repo, "cherry", main, head).splitlines()
-    if lines and all(l.startswith("-") for l in lines):
-        return f"all {len(lines)} commit(s) patch-equivalent on forgejo/main"
+    commits, left = cherry_landed(repo, main, head)
+    if commits and not left:
+        return f"all {len(commits)} commit(s) patch-equivalent on forgejo/main (by patch-id or changed lines)"
     return None
 
 
@@ -258,7 +258,9 @@ def close_worktree(wt):
     git(wt, "fetch", "--quiet", REMOTE, "main", check=False)
     main = f"refs/remotes/{REMOTE}/main"
     head = git(wt, "rev-parse", "HEAD").strip()
-    ahead = [l for l in git(wt, "cherry", main, head).splitlines() if l.startswith("+")]
+    _commits, ahead = cherry_landed(wt, main, head)
+    if ahead is None:
+        return f"worktree {wt} kept: git cherry could not compare it with forgejo/main"
     if ahead:
         return f"worktree {wt} kept: {len(ahead)} commit(s) not on forgejo/main"
     why = merged_reason(root, head, main) or "nothing of its own left"

@@ -439,8 +439,7 @@ ORPHAN_PER_PASS = 3
 def orphan_key(repo, wt):
     """The change's identity across rebases: its commits' patch-ids (not HEAD, which every rebase moves)."""
     main = f"refs/remotes/{REMOTE}/main"
-    ch = git(repo, "-C", wt, "cherry", main, "HEAD", check=False)
-    plus = [l[2:].strip() for l in (ch.stdout if ch.returncode == 0 else "").splitlines() if l.startswith("+ ")]
+    plus = cherry_landed(wt, main, "HEAD")[1] or []  # landed by patch or by content: not the orphan's
     ids = []
     for sha in plus:  # bytes: a commit may carry binary content
         show = subprocess.run(["git", "-C", wt, "show", sha], capture_output=True, timeout=60).stdout
