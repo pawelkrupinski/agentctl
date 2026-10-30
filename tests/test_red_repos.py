@@ -168,18 +168,19 @@ class TickTest(RedReposBase):
 
     def on_ci_runner(self, token_file):
         """The reconciler's environment: role server, ci-lander's push-only GH_TOKEN, the reader's token file."""
-        saved = (A.on_ci_runner, os.environ.get("GH_TOKEN"), os.environ.get("AGENTCTL_RED_READ_TOKEN_FILE"))
+        # GH_TOKEN is RedBase's (its tearDown puts it back; a cleanup here would run after that and leak it into
+        # the worker's next test -- test_harness caught it)
+        saved = (A.on_ci_runner, os.environ.get("AGENTCTL_RED_READ_TOKEN_FILE"))
         A.on_ci_runner = lambda: True
         os.environ["GH_TOKEN"] = "ci-lander-push-only"
         os.environ["AGENTCTL_RED_READ_TOKEN_FILE"] = token_file
 
         def restore():
             A.on_ci_runner = saved[0]
-            for k, v in (("GH_TOKEN", saved[1]), ("AGENTCTL_RED_READ_TOKEN_FILE", saved[2])):
-                if v is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = v
+            if saved[1] is None:
+                os.environ.pop("AGENTCTL_RED_READ_TOKEN_FILE", None)
+            else:
+                os.environ["AGENTCTL_RED_READ_TOKEN_FILE"] = saved[1]
         self.addCleanup(restore)
 
     def test_ci_runner_reads_other_repos_with_the_reader_token_never_ci_landers(self):
