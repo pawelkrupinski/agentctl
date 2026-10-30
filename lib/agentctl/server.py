@@ -1048,8 +1048,8 @@ def close_landed_worktrees(store=None):
     st = store or Store()
     out = []
     for ev in st.events(after=int(st.meta_get("closer_seq", 0) or 0)):
-        st.meta_set("closer_seq", ev["seq"])
         wt = (ev.get("refs") or {}).get("close")
         if ev["kind"] == "watch.ok" and wt and os.path.isdir(wt):
-            out.append(close_worktree(wt))
+            out.append(close_worktree(wt))  # raising: the cursor stays before it, tried again next cycle
+        st.meta_set("closer_seq", ev["seq"])
     return out

@@ -552,9 +552,9 @@ def project_events(store=None):
     cur = int(st.meta_get("projector_seq", 0) or 0)
     n = 0
     for ev in st.events(after=cur):
-        cur = ev["seq"]
         aud, refs = ev.get("audience") or {}, ev.get("refs") or {}
         if not aud and ev["severity"] == "info":
+            cur = ev["seq"]
             continue
         verdict = refs.get("verdict") or ev.get("text") or ev["kind"]
         eid = (dt.datetime.fromtimestamp(ev["at"], dt.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
@@ -562,6 +562,7 @@ def project_events(store=None):
         d = inbox_dir()
         path = os.path.join(d, eid + ".json")
         if os.path.exists(path):
+            cur = ev["seq"]
             continue
         final = refs.get("final", True)
         rec = {"id": eid, "time": dt.datetime.fromtimestamp(ev["at"], dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -575,24 +576,46 @@ def project_events(store=None):
             os.makedirs(d, exist_ok=True)
             write_json(path, rec)
             n += 1
-        except OSError as ex:
+        except OSError as ex:  # the cursor stays before it: written at the next cycle, never lost
             err(f"projector: could not write {eid} ({ex})")
             break
+        cur = ev["seq"]
     st.meta_set("projector_seq", cur)
     return n
 
 
+NOTIFY_LOOKBACK = 500  # events before the notifier's cursor looked at again: the window W6 reads
+
+
+def escalation_resolved(st, ev):
+    """The escalation's item is closed (terminal) or gone: nothing left to tell."""
+    if not ev.get("item_type") or not ev.get("item_id"):
+        return False
+    it = st.item(ev["item_type"], ev["item_id"])
+    try:
+        return not it or machine_state(ev["item_type"], it["state"]).terminal
+    except (KeyError, ValueError):
+        return False
+
+
 def notify_escalations(store=None):
-    """One macOS notification per severity=escalate event (notified_at marks it); returns how many."""
+    """One macOS notification per severity=escalate event not yet notified (notified_at marks it, before the
+    notification: never twice) -- in W6's window, NOT only past the cursor: an event the cursor passed unmarked (a store
+    that failed mid-cycle, the 2026-10-29 cutover's carried-over cursor) is delivered still, never 'not notified'
+    forever (W6, 2026-10-30: RED UNCLAIMED #2560). One whose item has closed meanwhile is marked without a
+    notification. Returns how many were shown."""
     st = store or Store()
+    cur = int(st.meta_get("notifier_seq", 0) or 0)
     n = 0
-    for ev in st.events(after=int(st.meta_get("notifier_seq", 0) or 0)):
-        st.meta_set("notifier_seq", ev["seq"])
-        if ev["severity"] != "escalate" or ev.get("notified_at"):
-            continue
-        st.mark_notified(ev["seq"])
-        notify(f"agentctl: {ev['kind']}", str((ev.get("refs") or {}).get("verdict") or ev.get("text") or "")[:220])
-        n += 1
+    for ev in st.events(after=max(0, cur - NOTIFY_LOOKBACK), limit=5000):
+        if ev["severity"] == "escalate" and not ev.get("notified_at"):
+            st.mark_notified(ev["seq"])
+            if not escalation_resolved(st, ev):
+                notify(f"agentctl: {ev['kind']}", str((ev.get("refs") or {}).get("verdict") or ev.get("text") or "")[:220])
+                n += 1
+        if ev["seq"] > cur:
+            cur = ev["seq"]
+            st.meta_set("notifier_seq", cur)
     return n
 
 
