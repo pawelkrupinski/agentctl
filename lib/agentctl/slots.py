@@ -327,14 +327,14 @@ def land_lease_name(repo):
     return "land/" + re.sub(r"[^A-Za-z0-9._-]", "_", key.strip("/"))
 
 
-_held_lock = [None]  # (store, name, lease) of the landing lease this process holds
+_landing = [None]  # the LeaseHold of the landing lease this process holds (land_lock)
 
 
 def lock_note(step):
     """Say in the held landing lease what the holder is doing now (waiters print it)."""
-    if _held_lock[0]:
-        st, name, lease = _held_lock[0]
-        st.note(name, lease["epoch"], lease["secret"], f"{step} since {ts()}")
+    h = _landing[0]
+    if h and h.lease:
+        h.store.note(h.name, h.lease["epoch"], h.lease["secret"], f"{step} since {ts()}")
 
 
 def lock_beat(progress=None):
@@ -342,13 +342,10 @@ def lock_beat(progress=None):
     with its progress mark (run_watched: output bytes and CPU). Raises LeaseLost when one is gone: the work must stop."""
     if progress is None:
         return
-    if _held_lock[0]:
-        st, name, lease = _held_lock[0]
-        if st.renew(name, lease["epoch"], lease["secret"], progress, lease["ttl"]) == "lost":
-            raise LeaseLost(f"the landing lease {name} (epoch {lease['epoch']}) was lost")
     for h in list(_held_leases):
         if h.renew(progress) == "lost":
-            raise LeaseLost(f"the lease {h.name} (epoch {h.lease['epoch']}) was lost")
+            raise LeaseLost(f"the {'landing ' if h is _landing[0] else ''}lease {h.name} (epoch {h.lease['epoch']}) "
+                            "was lost")
 
 
 _held_leases = []  # the LeaseHold objects this process holds (renewed together on progress)
@@ -398,38 +395,32 @@ def land_lock(repo, timeout=None):
     """Hold the repository's landing lease, waiting for it with a line saying who holds it and doing what, repeated
     every LAND_WAIT_REPORT_MIN minutes. Yields True when held, False when the wait timed out (timeout s; default
     LAND_LOCK_TIMEOUT -- the tick's pushes pass 0: busy now is tried again next tick, never a tick held for hours)."""
-    st, name = Store(), land_lease_name(repo)
-    holder = f"{socket_host()}:land:{os.getpid()}"
-    ttl = env_num("AGENTCTL_LAND_LEASE_TTL", LAND_LEASE_TTL)
-    got = st.acquire(name, holder, ttl, env_num("AGENTCTL_LAND_LEASE_MAX", LAND_LEASE_MAX), progress="acquired",
-                     meta={"pid": os.getpid(), "repo": repo})
-    if "held" in got:
-        def said(h):
-            meta = json.loads(h.get("meta") or "{}")
-            return f"{h['holder']} (pid {meta.get('pid')}), {meta.get('note') or 'working'}; expires in {int(h['expires_at'] - time.time())} s"
-        err(f"waiting for the landing lease {name}, held by {said(got['held'])}")
+    h = LeaseHold(land_lease_name(repo), env_num("AGENTCTL_LAND_LEASE_TTL", LAND_LEASE_TTL),
+                  env_num("AGENTCTL_LAND_LEASE_MAX", LAND_LEASE_MAX), meta={"repo": repo})
+    if not h.acquire():
+        def said(r):
+            meta = json.loads(r.get("meta") or "{}")
+            return f"{r['holder']} (pid {meta.get('pid')}), {meta.get('note') or 'working'}; expires in {int(r['expires_at'] - time.time())} s"
+        err(f"waiting for the landing lease {h.name}, held by {said(h.held)}")
         deadline = time.monotonic() + (env_num("AGENTCTL_LAND_LOCK_TIMEOUT", LAND_LOCK_TIMEOUT) if timeout is None
                                        else timeout)
         every = env_num("AGENTCTL_LAND_WAIT_REPORT_MIN", LAND_WAIT_REPORT_MIN) * 60
         report_at = time.monotonic() + every
-        while "held" in got:
+        while not h.acquire():
             if time.monotonic() > deadline:
                 yield False
                 return
             if time.monotonic() > report_at:
-                err(f"still waiting for the landing lease: {said(got['held'])}")
+                err(f"still waiting for the landing lease: {said(h.held)}")
                 report_at = time.monotonic() + every
             time.sleep(2)
-            got = st.acquire(name, holder, ttl, env_num("AGENTCTL_LAND_LEASE_MAX", LAND_LEASE_MAX),
-                             progress="acquired", meta={"pid": os.getpid(), "repo": repo})
         err("got the landing lease")
-    got["ttl"] = ttl
-    _held_lock[0] = (st, name, got)
+    _landing[0] = h
     try:
         yield True
     finally:
-        _held_lock[0] = None
-        st.release(name, got["epoch"], got["secret"])
+        _landing[0] = None
+        h.release()
 
 
 def socket_host():

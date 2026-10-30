@@ -34,9 +34,9 @@ class LeaseTest(unittest.TestCase):
     def test_a_push_hanging_under_the_landing_lease_loses_it_and_ends(self):
         d = tempfile.mkdtemp()
         st = A.Store(path=os.path.join(d, "store.db"))
-        got = st.acquire("land/x", "me", 2, 300, progress="acquired")
-        got["ttl"] = 2
-        A._held_lock[0] = (st, "land/x", got)
+        h = A.LeaseHold("land/x", 2, 300, store=st)
+        self.assertTrue(h.acquire())
+        A._landing[0] = h
         script = os.path.join(d, "push.sh")
         with open(script, "w") as f:
             f.write("#!/bin/sh\necho 'Connection to localhost closed by remote host.'\nexec sleep 300\n")
@@ -45,7 +45,8 @@ class LeaseTest(unittest.TestCase):
             t0 = time.monotonic()
             rc, _out = A.run_watched([script], d, dict(os.environ), os.path.join(d, "log"), "push", stall=600)
         finally:
-            A._held_lock[0] = None
+            A._landing[0] = None
+            h.release()
         self.assertIsNone(rc)  # the lease lapsed (no progress): its group ended, long before the stall bound
         self.assertLess(time.monotonic() - t0, 60)
         self.assertNotIn("held", st.acquire("land/x", "the batch", 120, 300))  # the next lander takes it at once
