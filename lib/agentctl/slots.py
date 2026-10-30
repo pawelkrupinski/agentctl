@@ -378,9 +378,6 @@ class LeaseHold:
             self.store.release(self.name, self.lease["epoch"], self.lease["secret"])
             self.lease = None
 
-    def close(self):  # the old slot file's name for it
-        self.release()
-
 
 def lease_live(name, store=None):
     """The live lease `name` (its row, meta decoded), or None."""
@@ -392,9 +389,10 @@ def lease_live(name, store=None):
 
 
 @contextlib.contextmanager
-def land_lock(repo):
+def land_lock(repo, timeout=None):
     """Hold the repository's landing lease, waiting for it with a line saying who holds it and doing what, repeated
-    every LAND_WAIT_REPORT_MIN minutes. Yields True when held, False when the wait timed out."""
+    every LAND_WAIT_REPORT_MIN minutes. Yields True when held, False when the wait timed out (timeout s; default
+    LAND_LOCK_TIMEOUT -- the tick's pushes pass 0: busy now is tried again next tick, never a tick held for hours)."""
     st, name = Store(), land_lease_name(repo)
     holder = f"{socket_host()}:land:{os.getpid()}"
     ttl = env_num("AGENTCTL_LAND_LEASE_TTL", LAND_LEASE_TTL)
@@ -405,7 +403,8 @@ def land_lock(repo):
             meta = json.loads(h.get("meta") or "{}")
             return f"{h['holder']} (pid {meta.get('pid')}), {meta.get('note') or 'working'}; expires in {int(h['expires_at'] - time.time())} s"
         err(f"waiting for the landing lease {name}, held by {said(got['held'])}")
-        deadline = time.monotonic() + env_num("AGENTCTL_LAND_LOCK_TIMEOUT", LAND_LOCK_TIMEOUT)
+        deadline = time.monotonic() + (env_num("AGENTCTL_LAND_LOCK_TIMEOUT", LAND_LOCK_TIMEOUT) if timeout is None
+                                       else timeout)
         every = env_num("AGENTCTL_LAND_WAIT_REPORT_MIN", LAND_WAIT_REPORT_MIN) * 60
         report_at = time.monotonic() + every
         while "held" in got:

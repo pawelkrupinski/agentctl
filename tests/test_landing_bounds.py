@@ -51,6 +51,36 @@ class LeaseTest(unittest.TestCase):
         self.assertNotIn("held", st.acquire("land/x", "the batch", 120, 300))  # the next lander takes it at once
 
 
+class UnboundTest(unittest.TestCase):
+    def test_a_store_error_mid_wait_ends_the_child_group_and_propagates(self):
+        """run_watched caught only LeaseLost: a StoreUnavailable escaped with the push still running, untracked."""
+        with tempfile.TemporaryDirectory() as d:
+            calls = []
+
+            def boom():
+                calls.append(1)
+                if len(calls) == 2:
+                    raise KeyError("a bug in the sampler")
+            with self.assertRaises(KeyError):
+                A.run_watched(["sh", "-c", "echo $$ > pid; exec sleep 60"], d, dict(os.environ), os.path.join(d, "log"),
+                              "push", stall=5, sampler=boom)
+            pid = int(open(os.path.join(d, "pid")).read())
+            with self.assertRaises(ProcessLookupError):
+                os.killpg(pid, 0)
+            self.assertNotIn(pid, A.WATCHED_GROUPS)
+
+    def test_the_ticks_push_never_waits_for_a_busy_landing_lease(self):
+        with tempfile.TemporaryDirectory() as d:
+            st = A.Store()
+            subprocess.run(["git", "init", "-q", d], check=True)
+            name = A.land_lease_name(d)
+            st.acquire(name, "other:land:1", 600, 3600)
+            t0 = time.monotonic()
+            with A.land_lock(d, timeout=0) as held:
+                self.assertFalse(held)
+            self.assertLess(time.monotonic() - t0, 5)
+
+
 class BatchRetryTest(unittest.TestCase):
     def test_three_failed_landings_hold_the_batch_with_a_condition(self):
         d = tempfile.mkdtemp()

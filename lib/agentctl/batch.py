@@ -251,8 +251,7 @@ def check_batch(repo, bid):
     if not lease.acquire():
         return 0
     i = it["data"]["tree"]
-    slot = LeaseHold(f"slot/check/{batch_key(d)}/{i}", env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL),
-                     CHECK_LEASE_MAX)
+    slot = tree_slot(d, i)
     try:
         if not slot.acquire():
             return 0
@@ -310,9 +309,19 @@ def push_batch_item(repo, d, st, it):
     if not members:
         batch_move(st, it, "assembling", text=f"batch {it['id']}: its changes are gone")
         return f"batch {it['id']}: nothing to push"
+    slot = tree_slot(d, i)  # its tree: never touched under a checker that took the slot since the batch's check
+    if not slot.acquire():
+        return f"batch {it['id']}: its check tree is busy"
+    try:
+        return _push_batch_item(repo, d, st, it, members, tip, base, i)
+    finally:
+        slot.release()
+
+
+def _push_batch_item(repo, d, st, it, members, tip, base, i):
     _d, clone, _w = waiting_state(repo)
     tree = f"{clone}-wt-check-{i}"
-    with land_lock(repo) as held:
+    with land_lock(repo, timeout=0) as held:
         if not held:
             return f"batch {it['id']}: the landing lease is busy"
         git(repo, "fetch", "--quiet", REMOTE, "main", check=False)

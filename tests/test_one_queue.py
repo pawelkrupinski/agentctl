@@ -223,5 +223,24 @@ class OneViewTest(OneQueueBase):
                 os.environ["AGENTCTL_MOVIES_REPO"] = saved
 
 
+
+class TreeSlotTest(OneQueueBase):
+    def test_a_push_never_touches_a_check_tree_another_checker_holds(self):
+        other = A.tree_slot(self.d, 1)
+        self.assertTrue(other.acquire())
+        try:
+            e = {"id": "c-1", "tree": 1, "tip": "6" * 40, "status": "checked"}
+            self.assertEqual(A.push_change(self.r.path, self.d, e), "busy")
+            it = {"id": "b-1", "data": {"tip": "6" * 40, "base": "7" * 40, "tree": 1, "members": ["c-1"]}}
+            saved = A.batch_members
+            A.batch_members = lambda d, it_: [e]
+            try:
+                self.assertEqual(A.push_batch_item(self.r.path, self.d, self.st, it), "batch b-1: its check tree is busy")
+            finally:
+                A.batch_members = saved
+        finally:
+            other.release()
+
+
 if __name__ == "__main__":
     unittest.main()

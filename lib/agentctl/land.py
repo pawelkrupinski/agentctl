@@ -67,6 +67,37 @@ def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None, cpu=No
         p = subprocess.Popen(argv, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                              start_new_session=True)
     WATCHED_GROUPS.add(p.pid)
+    try:
+        stalled = _watch_group(p, out_path, step, stall, sampler, cpu_of, clock, wall)
+    except BaseException:  # a store error, a signal: never a child group left running, untracked
+        _end_group(p)
+        WATCHED_GROUPS.discard(p.pid)
+        raise
+    WATCHED_GROUPS.discard(p.pid)
+    with open(out_path, errors="replace") as f:
+        output = f.read()
+    try:
+        os.unlink(out_path)
+    except OSError:
+        pass
+    return (None if stalled else p.returncode), output
+
+
+def _end_group(p):
+    for sig, grace in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
+        try:
+            os.killpg(p.pid, sig)
+        except ProcessLookupError:
+            return
+        try:
+            p.wait(timeout=grace)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _watch_group(p, out_path, step, stall, sampler, cpu_of, clock, wall):
+    """run_watched's wait: True when it stalled (and its group was ended), False when it exited."""
     size, cpu, changed, stalled = -1, None, clock(), False
     poll = max(0.2, min(15.0, stall / 4))
     need = env_num("AGENTCTL_STALL_CPU_SECONDS", STALL_CPU_SECONDS)
@@ -85,6 +116,8 @@ def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None, cpu=No
         except LeaseLost as ex:
             err(f"{ex}: ending {step}")
             stalled = True
+        except StoreUnavailable as ex:  # no verdict: renewed at the next poll (a lease that lapsed meanwhile is lost)
+            err(f"{step}: the store did not answer the lease renewal ({str(ex)[:120]})")
         # progress: output grew, or the group used a real second of CPU since the last progress (the hook idle in
         # `wait` with only its watchdog polling used ~0.08 s in 50 min, 2026-10-27: that is not progress)
         now_c = clock()
@@ -95,22 +128,6 @@ def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None, cpu=No
         if wall is not None and time.monotonic() - t_start > wall:  # busy or not: the wall bound (a push's)
             stalled = True
         if stalled:
-            for sig, grace in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
-                try:
-                    os.killpg(p.pid, sig)
-                except ProcessLookupError:
-                    break
-                try:
-                    p.wait(timeout=grace)
-                    break
-                except subprocess.TimeoutExpired:
-                    continue
-            break
-    WATCHED_GROUPS.discard(p.pid)
-    with open(out_path, errors="replace") as f:
-        output = f.read()
-    try:
-        os.unlink(out_path)
-    except OSError:
-        pass
-    return (None if stalled else p.returncode), output
+            _end_group(p)
+            return True
+    return False

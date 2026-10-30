@@ -292,14 +292,16 @@ CHECK_LEASE_TTL = 10 * 60
 CHECK_LEASE_MAX = 3 * 3600
 
 
+def tree_slot(d, i):
+    """THE lease of check tree i: whoever touches the tree -- a checker, the batch, a push -- holds it."""
+    return LeaseHold(f"slot/check/{os.path.basename(d.rstrip('/'))}/{i}",
+                     env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL), CHECK_LEASE_MAX)
+
+
 def check_tree_slot(repo, d):
     """(index, LeaseHold) of a free check tree slot, or None when all QUEUE_POOL are busy."""
-    n = int(env_num("AGENTCTL_CHECK_TREES", QUEUE_POOL))
-    key = os.path.basename(d.rstrip("/"))
-    for i in range(1, n + 1):
-        if lock_held(os.path.join(d, f"check-tree-{i}.lock")):  # MIGRATION ONLY: a checker from before step 4 (its flock);
-            continue  # never two checkers in one tree across the deploy. Deleted in step 6 with the checkers.
-        h = LeaseHold(f"slot/check/{key}/{i}", env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL), CHECK_LEASE_MAX)
+    for i in range(1, int(env_num("AGENTCTL_CHECK_TREES", QUEUE_POOL)) + 1):
+        h = tree_slot(d, i)
         if h.acquire():
             return i, h
     return None
@@ -651,10 +653,20 @@ def push_change(repo, d, e):
     landed overlaps: a new round, queued), joined to `waiting` while main is red and it must wait, else pushed with
     the push's bounds and verified. pushing -> landed, or back to checked (a push never rejects); after
     PUSH_ATTEMPTS_MAX failures a condition on the git route, and it waits for it."""
+    slot = tree_slot(d, e.get("tree") or 1)  # its tree: never checked out under a checker that took the slot since
+    if not slot.acquire():
+        return "busy"
+    try:
+        return _push_change(repo, d, e)
+    finally:
+        slot.release()
+
+
+def _push_change(repo, d, e):
     hook = precheck_hook(repo)
     log_path = os.path.join(d, f"check-{e['id']}")
     tree = check_tree_for_push(repo, e)
-    with land_lock(repo) as held:
+    with land_lock(repo, timeout=0) as held:
         if not held:
             return "busy"
         now_ = read_record(os.path.join(d, "entries", f"{e['id']}.json")) or {}
