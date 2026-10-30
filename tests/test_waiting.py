@@ -303,6 +303,71 @@ class WaitingTest(Base):
         self.assertTrue(verdicts["land"]["verdict"].startswith(f"LANDED {sha}"))
         self.assertEqual(verdicts["land"]["cwd"], wa, "its author's inbox, no land process alive")
 
+    def test_changes_waiting_at_green_with_no_batch_open_a_stalled_condition_that_clears_itself(self):
+        """2026-10-30: two flips changes sat `waiting` at green with nothing said anywhere. Waiting at green while no
+        batch checks, bisects, pushes or is held is counted per tick; past the limit a STALLED condition opens, and
+        the same count clears it once the batch moves."""
+        os.environ["AGENTCTL_WAITING_GREEN_TICKS"] = "3"
+        self.addCleanup(os.environ.pop, "AGENTCTL_WAITING_GREEN_TICKS", None)
+        wa, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        self.land(wa)  # red: it waits
+        d, _c, _w = A.waiting_state(self.r.path)
+        self.reds = set()
+        saved = A.check_tree_slot
+        A.check_tree_slot = lambda repo, d_: None  # every check tree busy: the batch cannot be assembled
+        try:
+            for _ in range(2):
+                A.tick_batch(self.r.path, d)
+            self.assertEqual([c for c in A.open_conditions() if c["key"].startswith("waiting-green")], [])
+            A.tick_batch(self.r.path, d)
+            conds = [c for c in A.open_conditions() if c["key"].startswith("waiting-green")]
+            self.assertEqual(len(conds), 1)
+            self.assertIn("waiting while the gate is green for 3 ticks", conds[0]["text"])
+            self.assertIn("waiting for a check tree", conds[0]["text"])
+            self.assertFalse(A.run_probe("batch_progress", {"d": d}).ok)
+        finally:
+            A.check_tree_slot = saved
+        self.drive()
+        self.assertEqual(self.entries()["1"]["status"], "landed")
+        self.assertTrue(A.run_probe("batch_progress", {"d": d}).ok)
+        A.recovery_tick(force=True)
+        self.assertEqual([c for c in A.open_conditions() if c["key"].startswith("waiting-green")], [])
+
+    def test_waiting_while_red_or_while_the_batch_checks_is_no_stall(self):
+        os.environ["AGENTCTL_WAITING_GREEN_TICKS"] = "2"
+        self.addCleanup(os.environ.pop, "AGENTCTL_WAITING_GREEN_TICKS", None)
+        wa, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        self.land(wa)
+        d, _c, _w = A.waiting_state(self.r.path)
+        for _ in range(4):  # red: waiting is right
+            A.tick_batch(self.r.path, d)
+        self.reds = set()
+        saved = A.spawn_batch_executor
+        A.spawn_batch_executor = lambda repo, d_, bid: None  # its executor runs elsewhere: the batch stays checking
+        try:
+            for _ in range(4):
+                A.tick_batch(self.r.path, d)
+        finally:
+            A.spawn_batch_executor = saved
+        self.assertEqual(self.batch()["state"], "checking")
+        self.assertEqual([c for c in A.open_conditions() if c["key"].startswith("waiting-green")], [])
+
+    def test_status_on_the_laptop_shows_the_batch_ci_runner_keys_by_its_own_waiting_dir(self):
+        """2026-10-30: batch var_lib_agentctl_movies_.git#4 checked for an hour; the laptop's `land status` looked
+        under its own key and showed no batch, and its members as plain `waiting`."""
+        wa, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        self.land(wa)
+        d, _c, _w = A.waiting_state(self.r.path)
+        eid = A.waiting_entries(d)[0]["id"]
+        A.project_changes(d)
+        st = A.Store()
+        it = st.put_item("batch", "var_lib_agentctl_movies_.git#4", "checking", {"retries": 0})
+        st.update_item("batch", it["id"], it["version"], {"members": [eid], "tip": "340057e4d3c7", "base": "24e95ec1a217"})
+        rc, out = self.run_tool("land", "status", cwd=self.r.path)
+        self.assertIn("batch var_lib_agentctl_movies_.git#4: checking, 1 change(s) at 340057e4d3", out)
+        self.assertIn(f"{eid}  waiting", out)
+        self.assertIn("(in batch var_lib_agentctl_movies_.git#4: checking)", out)
+
     def test_the_tick_stays_cheap_while_nothing_waits(self):
         d, _c, _w = A.waiting_state(self.r.path)
         saved = A.gate_reds

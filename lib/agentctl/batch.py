@@ -20,12 +20,19 @@ def batch_key(d):
     return os.path.basename(d.rstrip("/"))
 
 
-def current_batch(st, d):
-    """The repository's open batch item, or None."""
+def current_batch(st, d, any_key=False):
+    """The repository's open batch item, or None. any_key: whichever host's key it carries -- the laptop's `land
+    status` reads ci-runner's store, whose batch is keyed by ci-runner's waiting dir (var_lib_agentctl_movies_.git),
+    never the laptop's (2026-10-30: batch #4 checked for an hour while `land status` showed no batch at all)."""
     key = batch_key(d)
-    open_ = [it for it in st.items("batch") if it["id"].startswith(key + "#")
+    open_ = [it for it in st.items("batch") if (any_key or it["id"].startswith(key + "#"))
              and not machine_state("batch", it["state"]).terminal]
     return max(open_, key=lambda it: int(it["id"].rsplit("#", 1)[1])) if open_ else None
+
+
+def status_batch(st, d):
+    """The batch `land status` shows: this host's, else (the laptop) the one ci-runner's reconciler runs."""
+    return current_batch(st, d) or current_batch(st, d, any_key=True)
 
 
 def new_batch(st, d, state):
@@ -154,17 +161,94 @@ def tick_land_hold(st=None):
     land_hold(st or Store())
     return []
 
+# NO SILENT WAIT AT GREEN (2026-10-30). Changes waiting while the gate is green, with no hold and no batch checking,
+# bisecting, pushing or held, are a stall: counted per tick (batch-progress.json in the waiting dir) and, past
+# WAITING_GREEN_TICKS ticks, a STALLED condition. Its probe (batch_progress) reads the same count, so the tick that
+# finds the batch moving again -- or nothing waiting, or the gate red -- is the one that clears it.
+WAITING_GREEN_TICKS = 100  # ticks (~10 min) changes may wait at a green gate with no batch moving: then STALLED
+BATCH_MOVING = ("checking", "bisecting", "pushing", "held")  # held: its own STALLED condition says so
+
+
+def batch_progress_path(d):
+    return os.path.join(d, "batch-progress.json")
+
+
+def note_batch_progress(d, seen, now_=None):
+    """Count this tick: stalled (changes wait, gate green, no hold, no batch moving) or not. Returns the count."""
+    t = now_ if now_ is not None else time.time()
+    waiting, it = seen.get("waiting") or [], seen.get("batch")
+    stalled = (bool(waiting) and seen.get("reds") is not None and not seen["reds"] and not seen.get("held")
+               and not (it and it["state"] in BATCH_MOVING))
+    p = batch_progress_path(d)
+    rec = read_json_file(p)
+    if not stalled:
+        if rec.get("ticks"):
+            write_json_file(p, {"ticks": 0, "at": t})
+        return 0
+    n = int(rec.get("ticks") or 0) + 1
+    since = float(rec.get("since") or t) if rec.get("ticks") else t
+    why = (f"batch {it['id']} is {it['state']}" + (f" ({seen['last']})" if seen.get("last") else "")) if it else \
+        "no batch was formed" + (f" ({seen['last']})" if seen.get("last") else "")
+    write_json_file(p, {"ticks": n, "at": t, "since": since, "why": why, "waiting": [e["id"] for e in waiting]})
+    limit = env_num("AGENTCTL_WAITING_GREEN_TICKS", WAITING_GREEN_TICKS)
+    if n >= limit:
+        ids = ", ".join(e["id"] for e in waiting)
+        open_condition("STALLED", f"STALLED: {len(waiting)} change(s) waiting while the gate is green for {n} ticks "
+                                  f"({fmt_age(t - since)}): {why}; waiting: {ids}",
+                       run_probe("batch_progress", {"d": d}), [], key=f"waiting-green-{batch_key(d)}",
+                       command="waiting")
+    return n
+
+
+def probe_batch_progress(a):
+    """The batch tick no longer counts a stall at green (batch-progress.json under the limit)."""
+    rec = read_json_file(batch_progress_path(a["d"]))
+    n = int(rec.get("ticks") or 0)
+    limit = env_num("AGENTCTL_WAITING_GREEN_TICKS", WAITING_GREEN_TICKS)
+    return n < limit, (f"{n} stalled tick(s) at green: {rec.get('why')}" if n else "no change waits at green")
+
+
 def tick_batch(repo, d, now_=None):
-    """One tick of the repository's batch. Returns what it did."""
+    """One tick of the repository's batch, then its stall count (note_batch_progress). Returns what it did."""
+    seen = {}
+    did = _tick_batch(repo, d, now_, seen)
+    try:
+        seen["last"] = did[-1] if did else None
+        if seen.get("waiting"):  # the batch as this tick left it (assembled -> checking is no stall)
+            seen["batch"] = current_batch(Store(), d)
+        note_batch_progress(d, seen, now_)
+    except (Exception, SystemExit) as e:  # never the batch's own step
+        err(f"batch progress: {str(e)[:160]}")
+    return did
+
+
+_batch_said = [None]
+
+
+def say_batch(d, lines):
+    """The batch tick's lines: every one in processor.log, and in the reconciler's journal when they change (the
+    journal had no batch line at all; a repeated `waiting for a check tree` is said once)."""
+    for x in lines:
+        wlog(d, f"tick: {x}")
+    if lines and lines != _batch_said[0]:
+        err("batch: " + "; ".join(lines))
+    _batch_said[0] = lines or _batch_said[0]
+    return lines
+
+
+def _tick_batch(repo, d, now_, seen):
     t = now_ if now_ is not None else time.time()
     st = Store()
     waiting = waiting_entries(d)
     it = current_batch(st, d)
+    seen.update(waiting=waiting, batch=it)
     if not waiting and not it:
         return []
     if land_hold(st, t):  # the store's hold: honoured wherever `land hold` ran
+        seen["held"] = True
         return ["held"]
     reds = gate_reds(repo)
+    seen["reds"] = reds
     did = []
     waiting = waiting_entries(d)
     if not waiting and not it:
@@ -224,6 +308,16 @@ def tick_batch(repo, d, now_=None):
     if state == "pushing":
         return [push_batch_item(repo, d, st, it)]
     return []
+
+
+def batch_row_ids(bt, rows):
+    """The change rows the batch carries: its members, and a change that joined one of them (the same worktree: a
+    queued change that met a red gate becomes a waiting entry of its own, so its item follows that entry)."""
+    if not bt:
+        return set()
+    members = set((bt.get("data") or {}).get("members") or [])
+    wts = {r["worktree"] for r in rows if r["id"] in members}
+    return {r["id"] for r in rows if r["id"] in members or (r["state"] == "waiting" and r["worktree"] in wts)}
 
 
 def spawn_batch_executor(repo, d, bid):
@@ -771,7 +865,7 @@ def cmd_waiting(a):
         hold = land_hold(st)
         if hold:
             print(f"land: {hold_text(hold)}")
-        bt = current_batch(st, d)
+        bt = status_batch(st, d)
         if bt:
             dd = bt["data"]
             print(f"batch {bt['id']}: {bt['state']}" + (f", {len(dd.get('members') or [])} change(s) at "
@@ -782,10 +876,15 @@ def cmd_waiting(a):
         print("gate: " + (f"UNREAD, taken as red ({gate_unread_why[0]})" if GATE_UNREAD in reds else
                           f"RED ({', '.join(sorted(reds))})" if reds else "green"))
         print(f"changes: {len(rows)}")
+        in_batch = batch_row_ids(bt, rows)
         for r in rows:
             left = int(r["deadline"] - time.time())
             print(f"  {r['id']}  {r['state']}  {r['worktree']}  {str(r['head'] or '')[:10]}  deadline in {left // 60} min"
+                  + (f"  (in batch {bt['id']}: {bt['state']})" if r["id"] in in_batch else "")
                   + (f"  PAST ITS DEADLINE (level {r['level']})" if left < 0 else ""))
+        prog = read_json_file(batch_progress_path(d)) if host_role() == "server" else {}
+        if prog.get("ticks"):
+            print(f"stall at green: {prog['ticks']} tick(s): {prog.get('why')}")
         if not rows:
             print("  (no change queued or waiting)")
         local = [e for e in waiting_entries(d, open_only=False) if e.get("status") not in ENTRY_FINAL]

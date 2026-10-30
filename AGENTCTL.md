@@ -1397,6 +1397,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `w5_max` | `AGENTCTL_W5_MAX` | `300` | the processor's duties beat (its bounded steps take up to 2 min) |
 | `w6_max` | `AGENTCTL_W6_MAX` | `300` | a due escalation not notified |
 | `w7_max` | `AGENTCTL_W7_MAX` | `300` | phase 2: an event ci-runner wrote that the laptop's sync has not projected (60x its 5 s tick) |
+| `waiting_green_ticks` | `AGENTCTL_WAITING_GREEN_TICKS` | `100` | ticks (~10 min) changes may wait at a green gate with no batch moving: then STALLED |
 | `waiting_timeout` | `AGENTCTL_WAITING_TIMEOUT` | `86400` | - |
 | `watch_conv_start` | `AGENTCTL_WATCH_CONV_START` | `3600` | no convergence run containing the sha started by then: said, not waited for |
 | `watch_error_poll` | `AGENTCTL_WATCH_ERROR_POLL` | `30` | - |
