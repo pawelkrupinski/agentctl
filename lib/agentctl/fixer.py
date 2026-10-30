@@ -156,69 +156,11 @@ def fixer_verdict(text):
     return None
 
 
-def stop_group(pgid, grace=10.0, proc=None):
-    """End a whole process group: TERM, then KILL after `grace` s (a `claude -p` may ignore TERM). True when it is gone."""
-    def alive():
-        if proc is not None:
-            proc.poll()  # reap the leader: a zombie still answers killpg(0)
-        try:
-            os.killpg(pgid, 0)
-            return True
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-    if not alive():
-        return True
-    for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 5.0)):
-        try:
-            os.killpg(pgid, sig)
-        except ProcessLookupError:
-            return True
-        end = time.time() + wait
-        while time.time() < end:
-            if not alive():
-                return True
-            time.sleep(0.1)
-    return not alive()
-
-
-# A FIXER'S ~/bin WORKTREE (the owner, 2026-10-28: red fixer #2385 edited ~/bin's own checkout, uncommitted, and blocked
-# every other agent's merge): each dispatched fixer gets a worktree of the agentctl repository too, ~/bin-wt-red-<run>
-# (branch red-<run>, off master); its brief says agentctl changes go there, landed by rebase + `merge --ff-only`, never in
-# ~/bin itself. Removed when the fixer ends without commits in it. $AGENTCTL_BIN_REPO ('-': none, the tests').
+# THE agentctl REPOSITORY (~/bin): a fixer never edits it (`agentctl issue`); watchdog WB checks its checkout stays clean.
+# $AGENTCTL_BIN_REPO ('-': none, the tests').
 def bin_repo():
     r = os.environ.get("AGENTCTL_BIN_REPO") or os.path.dirname(TOOL_PATH)
     return None if r == "-" or not os.path.isdir(os.path.join(r, ".git")) else r
-
-
-def bin_worktree_for(num, resume=None):
-    if resume and resume.get("bin_worktree") and os.path.isdir(resume["bin_worktree"]):
-        return resume["bin_worktree"]
-    br = bin_repo()
-    if not br:
-        return None
-    wt, branch, n = f"{br}-wt-red-{num}", f"red-{num}", 1
-    while os.path.exists(wt) or git_ok(br, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"):
-        n += 1
-        wt, branch = f"{br}-wt-red-{num}-{n}", f"red-{num}-{n}"
-    git(br, "worktree", "prune", check=False)
-    r = git(br, "worktree", "add", "-q", "-b", branch, wt, "master", check=False)
-    return wt if r.returncode == 0 else None
-
-
-def drop_bin_worktree(wt):
-    """The fixer's ~/bin worktree, when it ended with nothing in it (no commit beyond master, nothing uncommitted)."""
-    br = bin_repo()
-    if not wt or not br or not os.path.isdir(wt):
-        return
-    if git(wt, "status", "--porcelain", check=False).stdout.strip() or \
-            git(wt, "rev-list", "--count", "master..HEAD", check=False).stdout.strip() not in ("", "0"):
-        return
-    branch = git(wt, "rev-parse", "--abbrev-ref", "HEAD", check=False).stdout.strip()
-    git(br, "worktree", "remove", wt, check=False)
-    if branch.startswith("red-"):
-        git(br, "branch", "-D", branch, check=False)
 
 
 def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=None, took=None, extra=()):
@@ -247,8 +189,7 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
         r = git(repo, "worktree", "add", "-q", "-b", branch, wt, f"{REMOTE}/main", check=False)
         if r.returncode != 0:
             return False, dispatch_log(u, f"NOT DISPATCHED: git worktree add failed ({r.stderr.strip()[:160]})")
-    bin_wt = None  # a fixer never edits ~/bin (`agentctl issue`): no ~/bin worktree (an old record's is dropped at its end)
-    rec = {"bin_worktree": bin_wt, "key": u.get("key"), "lease": lease, "epoch": (took or {}).get("epoch"),
+    rec = {"key": u.get("key"), "lease": lease, "epoch": (took or {}).get("epoch"),
            "jobs": u.get("jobs") or [u.get("job")],
            "run": num, "run_id": u["run"].get("databaseId"), "workflow": u["workflow"], "job": u.get("job"),
            "kind": u.get("kind"), "line": u.get("line"), "flake": bool(u.get("flake")), "worktree": wt, "started": ts(),
@@ -287,16 +228,6 @@ def unlanded_commits(wt):
         r = git(wt, "log", "-1", "--format=%at", sha, check=False)
         out.append((sha, int(r.stdout.strip() or 0) if r.returncode == 0 and r.stdout.strip().isdigit() else 0))
     return out
-
-
-def bg_sessions():
-    try:
-        r = subprocess.run([claude_cli(), "agents", "--json", "--all"], capture_output=True, text=True, timeout=60,
-                           stdin=subprocess.DEVNULL)
-        rows = json.loads(r.stdout) if r.returncode == 0 else []
-    except (OSError, subprocess.TimeoutExpired, ValueError, SystemExit):
-        rows = []
-    return rows if isinstance(rows, list) else []
 
 
 def fixers_of(key, run, fam=None):
@@ -554,7 +485,6 @@ def red_fixer(a):
     u = {"workflow": rec["workflow"], "job": rec.get("job"), "jobs": rec.get("jobs"), "kind": rec.get("kind") or "test",
          "line": rec.get("line"), "flake": rec.get("flake"), "diagnosis": rec.get("diagnosis"), "orphan": rec.get("orphan"),
          "refuted": rec.get("refuted"), "predicts": rec.get("predicts"), "prior_work": rec.get("prior_work"),
-         "bin_worktree": rec.get("bin_worktree"),
          "run": {"number": num, "databaseId": rec.get("run_id")}}
     u["record"] = a.record
     prompt = fixer_prompt(u, wt, sync_brief(), rec.get("resume_note"))
@@ -666,7 +596,6 @@ def red_fixer(a):
     write_json(a.record, rec)
     if not rec.get("orphan"):  # an orphan's tree is its author's, never litter
         mark_internal(wt)  # its fixer ended: the tree is agentctl's litter now, never a fixer or owner
-    drop_bin_worktree(rec.get("bin_worktree"))
     print(line)
     return 0 if verdict.startswith("LANDED") else 1
 
@@ -1294,16 +1223,6 @@ OWNER_CAUSES = {"external-account": "an external account only the owner holds (a
                 "deploy": "a deploy only the owner may run",
                 "billing": "a billing action in an account only the owner holds",
                 "dashboard": "an action in a dashboard only the owner can reach"}
-
-
-def red_verdict_kinds(o_r, n, name=None):
-    """{test, infra, unclear} of red run n (its jobs' verdicts), from the run-signature cache; set() unknown."""
-    kinds = set()
-    for p_ in glob.glob(reds_dir("runsig", "*.json")):
-        r = read_record(p_) or {}
-        if str(r.get("number")) == str(n) and (name is None or r.get("workflow") == name):
-            kinds |= {x.get("kind") for x in r.get("sigs") or []}
-    return kinds - {None}
 
 
 def owner_details(o_r, n, name, units, cmd, words, owner_cause):

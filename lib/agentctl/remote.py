@@ -18,10 +18,6 @@ def remote_checks_supported(tree):
     return os.path.exists(os.path.join(tree, ".github", "workflows", REMOTE_WORKFLOW))
 
 
-REMOTE_EXPECTED_MIN = 30  # a check's expected duration ($AGENTCTL_CHECK_EXPECTED_MIN): an entry checking 2x that is re-examined
-REMOTE_COLLECT_GRACE = 300  # a run decided this long ago and still uncollected: its checker is stranded, stopped, replaced
-
-
 class Terminated(SystemExit):
     """A signal's exit (Owned's handler): never swallowed by a wait loop that rides out a token or tunnel outage."""
 
@@ -379,7 +375,6 @@ def sbt_stop(tree):
 
 
 STALL_SIGNAL = re.compile(r"(^|\s)(pre-push |sbt-warm )?STALLED:", re.M)
-BATCH_HOLD = 30 * 60
 
 
 def batch_mode(hook):

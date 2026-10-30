@@ -101,7 +101,7 @@ class QueueTest(CapacityBase):
         self.fixer("g1", True, 200)
         self.fixer("g1b", True, 200, sibling_of="laptop:fixer:red-g1-1")
         self.fixer("g1c", True, 200, sibling_of="laptop:fixer:red-g1-1")
-        self.assertEqual(A.red_slots_line(self.st, self.t[0]), f"1/{A.RED_FIXERS}")
+        self.assertEqual(len(A.red_fixers_alive(self.st, self.t[0])), 1)
 
 
 class MigrationTest(CapacityBase):

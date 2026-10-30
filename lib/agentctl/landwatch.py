@@ -95,10 +95,6 @@ def run_id_of_number(o_r, n):
     return hit and hit.get("id")
 
 
-def repo_for_verify(o_r):
-    return scan_repo_for(o_r) or repo_path_for(o_r)
-
-
 def workflow_file_of(repo, sha, name):
     """(path in the tree, text) of the workflow file whose `name:` is `name`, at sha."""
     for d in (".forgejo/workflows", ".github/workflows"):

@@ -1,4 +1,4 @@
-"""Submission by ref and the fixers' ~/bin worktrees (reconciler phase 1, step 14)."""
+"""A fixer never edits ~/bin; ~/bin's own checkout stays clean (watchdog WB)."""
 import os, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -18,15 +18,9 @@ class BinWorktreeTest(unittest.TestCase):
     def tearDown(self):
         os.environ["AGENTCTL_BIN_REPO"] = self.saved
 
-    def test_a_fixer_gets_its_own_bin_worktree_dropped_when_unused(self):
-        wt = A.bin_worktree_for(2385)
-        self.assertEqual(wt, f"{self.br}-wt-red-2385")
-        self.assertTrue(os.path.isdir(wt))
-        self.assertEqual(A.bin_worktree_for(2385), f"{self.br}-wt-red-2385-2")  # a second fixer of the run
-        A.drop_bin_worktree(wt)
-        self.assertFalse(os.path.isdir(wt))
-        p = A.fixer_prompt({"run": {"number": 2385, "databaseId": 1}, "workflow": "Main", "job": "j", "kind": "test",
-                            "bin_worktree": f"{self.br}-wt-red-2385-2"}, "/wt", "/brief")
+    def test_a_fixer_never_edits_bin_it_files_an_issue(self):
+        p = A.fixer_prompt({"run": {"number": 2385, "databaseId": 1}, "workflow": "Main", "job": "j", "kind": "test"},
+                           "/wt", "/brief")
         self.assertNotIn("AGENTCTL CHANGES", p)  # a fixer never edits ~/bin (Agent B item 4): it files `agentctl issue`
         self.assertIn("never edit ~/bin", p)
         self.assertIn('~/bin/agentctl issue "<what is wrong', p)

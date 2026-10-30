@@ -391,10 +391,6 @@ def lease_live(name, store=None):
     return None
 
 
-def held_for(lease):
-    return f"{int((time.time() - float(lease.get('acquired_at') or time.time())) // 60)} min"
-
-
 @contextlib.contextmanager
 def land_lock(repo):
     """Hold the repository's landing lease, waiting for it with a line saying who holds it and doing what, repeated

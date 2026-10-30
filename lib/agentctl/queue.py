@@ -25,7 +25,6 @@ QUEUE_INFRA_DELAY = 300
 TRANSIENT_PUSH = re.compile(r"Connection (reset|refused|timed out|closed)|closed by remote host|Could not resolve host|ssh: connect to host|"
                             r"kex_exchange_identification|[Bb]roken pipe|early EOF|remote end hung up|RPC failed|"
                             r"unable to access|HTTP (502|503|504)|timed out|Operation timed out|tunnel", re.I)
-SLOT_WAIT_MAX = 2 * 3600  # a checker waits this long for a check tree, then the entry is re-queued
 
 
 INFRA_BACKOFF = (300, 600, 1800, 3600)  # infra re-queues back off; from the third, each one escalates

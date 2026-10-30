@@ -104,7 +104,6 @@ def probe_token(a):
     return bool(tok), f"{ns} token " + ("held by the processor" if tok else "unavailable")
 
 
-PROCESS_T0 = time.time()
 LOOP_CYCLED = [False]  # the processor's loop made a full cycle in this process
 
 

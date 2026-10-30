@@ -380,7 +380,6 @@ def push_batch_item(repo, d, st, it):
 
 
 ROUND_ERRORS_MAX = 3
-SERVICE_IDLE_POLL = 30  # seconds between looks at an empty `waiting` (a directory listing: no git, no network)
 
 
 def write_snapshot(d, store=None):

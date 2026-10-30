@@ -18,7 +18,6 @@ def waiting_dir():
 PRODUCTION_GLOBS = ("*/src/main/*", "conf/*", "*/conf/*", "build.sbt", "project/*", "infra/nix/*", "infra/kubernetes/*",
                     "Dockerfile")
 WAITING_AWAIT_TIMEOUT = 24 * 3600
-WAITING_POLL = 60          # the processor's gate poll floor (backs off to 300 s)
 WAITING_HELP = """The processor (one loop of ticks, launchd net.bitcashier.agentctl-waiting) and its queue: every landed change is
 an item -- queued, checking, checked, pushing, landed; or waiting while main is red. At green the waiting changes are ONE
 batch item: its tip assembled in a check tree (main plus the changes, Fixes-Red first), checked once (pre-push
@@ -247,26 +246,6 @@ def supersede(d, e, by, why):
         except OSError:
             pass
     wlog(d, line)
-
-
-def run_hook(wt, mode, base):
-    """(ok, output) of the checkout's scripts/hooks/pre-push <mode> base..HEAD; (True, '') when the repo has no hook."""
-    hook = precheck_hook(wt)
-    if not hook:
-        return True, ""
-    with open(hook) as f:
-        has_checks_only = "--checks-only" in f.read()
-    if mode == "--checks-only" and not has_checks_only:
-        return False, ("scripts/hooks/pre-push has no --checks-only mode (the checks without the red gate) at this base: "
-                       "the waiting branch needs the hook from movies' 'waiting' change")
-    head = git(wt, "rev-parse", "HEAD").strip()
-    lock_note(f"{mode} checks on `{WAITING_BRANCH}`")
-    rc, out = run_watched([hook, mode, f"{base}..{head}"], wt, tool_env(), os.path.join(scratch(), f"agentctl-waiting-{os.getpid()}"),
-                          "waiting-checks")
-    if rc is None:
-        mins = float(os.environ.get("AGENTCTL_LAND_STALL_MIN", LAND_STALL_MIN))
-        return False, f"{out}\nstalled: scripts/hooks/pre-push {mode}: no output and no CPU for {mins:g} min, so it was ended"
-    return rc == 0, out
 
 
 def tail_of(out, n=25):

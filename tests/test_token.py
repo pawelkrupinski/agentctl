@@ -276,20 +276,6 @@ class BackgroundTouchesOnlyAllowedRootsTest(unittest.TestCase):
         self.assertEqual(touched, [])
 
 
-class StopGroupTest(unittest.TestCase):
-    def test_a_term_ignoring_group_is_killed_whole(self):
-        import signal, time
-        # a leader that ignores TERM, with a child of its own (the fixer's `claude -p` and its tools)
-        p = subprocess.Popen(["/bin/sh", "-c", "trap '' TERM; sleep 60 & sleep 60"], start_new_session=True)
-        time.sleep(0.5)
-        t0 = time.time()
-        self.assertTrue(A.stop_group(p.pid, grace=1, proc=p))
-        p.wait(5)
-        self.assertLess(time.time() - t0, 8)
-        with self.assertRaises(ProcessLookupError):
-            os.killpg(p.pid, 0)
-
-
 class FixtureServerReapTest(unittest.TestCase):
     CMD = "/opt/homebrew/Python -I /var/folders/jq/x/T/tmp.VZ12/serve.py 8123"
 

@@ -1781,10 +1781,6 @@ def red_cap():
     return int(env_num("AGENTCTL_RED_FIXERS", RED_FIXERS))
 
 
-def red_slots_line(store, t):
-    return f"{len(red_fixers_alive(store, t))}/{red_cap()}"
-
-
 def red_capacity(store, waited, t, alive=None):
     """(True, None) when a fixer may start now (fewer than RED_FIXERS alive), else (False, why): what it waits for and
     WHEN, `STARVED: ...` past RED_STARVE."""
@@ -1801,10 +1797,6 @@ def red_capacity(store, waited, t, alive=None):
     if waited >= starve:
         return False, f"STARVED: {head}, past its {fmt_age(starve)} window{eta}"
     return False, head + eta
-
-
-def red_run_of(pic):
-    return (pic.get("workflow"), str((pic.get("run") or {}).get("number")))
 
 
 def red_family_holder(store, fam, t, active=None):
