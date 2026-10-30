@@ -74,6 +74,32 @@ class OrphanTest(RedBase):
                                                               "orphan repo-wt-review: submit (never landed)"])
         self.assertEqual(sorted(self.relands), sorted([wt, ci5]))
 
+    def test_an_escalated_orphan_clears_while_an_open_change_carries_it_and_reopens_when_that_closes_unlanded(self):
+        """2026-10-30: orphan-movies-wt-ci-1..3, escalated before 588ffd9, stayed ESCALATED while the open change
+        …-ci-5-45426e carried all their commits: the probe ignored the rule orphan_duty already used."""
+        wt, sha = self.worktree_commit("repo-wt-ci-1", "ci-1: a fix")
+        self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-ci-1: submit (never landed)"])
+        self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-ci-1: escalated UNLANDED ORPHAN"])
+        self.assertEqual(len(A.open_conditions()), 1)
+        ci5 = self.r.worktree("repo-wt-ci-5", base="forgejo/main", branch="ci-5")
+        sh(ci5, "git", "cherry-pick", sha)
+        self.r.write("ci5.txt", "ci-5\n", at=ci5)
+        head = self.r.commit("ci-5: its own", at=ci5)
+        st = A.Store()
+        cid = "20261030-175250-repo-wt-ci-5-45426e"
+        st.put_item("change", cid, "checking", {"worktree": ci5, "head": head})
+        self.assertEqual(len(A.recovery_tick(force=True)), 1)  # the probe: covered by the open change
+        self.assertEqual(A.open_conditions(), [])
+        self.assertIn(f"orphan repo-wt-ci-1: carried by open change {cid}: not submitted", A.orphan_duty(self.r.path))
+        self.assertEqual(A.open_conditions(), [])
+        it = st.item("change", cid)
+        st.transition("change", cid, "rejected", it["version"])  # ci-5 did not land: the orphan reopens
+        did = A.orphan_duty(self.r.path)
+        self.assertIn("orphan repo-wt-ci-1: escalated UNLANDED ORPHAN", did)
+        [c] = A.open_conditions()
+        self.assertIn(f"{cid} closed unlanded", c["text"])
+        self.assertEqual(self.relands.count(wt), 1, "never re-submitted (ci-5's own tree gets its one submit)")
+
     def test_an_orphan_whose_last_change_was_cancelled_goes_to_a_person_not_the_queue(self):
         wt, _sha = self.worktree_commit("repo-wt-dropped", "dropped: cancelled on purpose")
         st = A.Store()

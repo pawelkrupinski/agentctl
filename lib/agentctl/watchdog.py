@@ -538,6 +538,9 @@ def probe_orphan_landed(a):
     rp = os.path.realpath(wt)
     if rp in live_lease_worktrees():
         return True, "a live claim works in it"
+    cover = orphan_covered_by(wt, worktree_change_items(wt))  # orphan_duty's rule (a): an open change carries it
+    if cover:
+        return True, f"covered by {cover}"
     return False, f"{len(_c)} commit(s) still not on main, nobody in it"
 
 
@@ -599,16 +602,22 @@ def orphan_duty(repo=None, dry_run=False, now_=None):
         if dry_run:
             did.append(f"orphan {name}: {len(commits)} commit(s); last verdict: {verdict or 'never landed'}")
             continue
+        items = worktree_change_items(wt)
+        cover = orphan_covered_by(wt, items)
+        if cover:  # (a) already in the queue under another change: its verdict is that change's (the probe clears too)
+            if rec.get("covered_by") != cover:
+                did.append(f"orphan {name}: carried by open change {cover}: not submitted")
+            rec["covered_by"] = cover
+            st[key] = rec
+            continue
+        was = rec.pop("covered_by", None)
+        if was and rec["actions"]:  # escalated before its carrier came; the carrier closed (rejected, cancelled)
+            # without landing it: the orphan reopens, to a person. Never acted on yet: its one submit, as before.
+            rec["actions"].append({"at": ts(), "what": f"none (the change carrying it, {was}, closed unlanded)"})
+            did += orphan_escalate(repo, wt, name, commits, key, rec, verdict or f"{was} closed unlanded")
+            st[key] = rec
+            continue
         if not rec["actions"]:
-            items = worktree_change_items(wt)
-            cover = orphan_covered_by(wt, items)
-            if cover:  # (a) already in the queue under another change: its verdict is that change's
-                if rec.get("covered_by") != cover:
-                    did.append(f"orphan {name}: carried by open change {cover}: not submitted")
-                rec["covered_by"] = cover
-                st[key] = rec
-                continue
-            rec.pop("covered_by", None)
             last = items.get("last")
             if last and last["state"] == "cancelled":  # (b) somebody cancelled it: only a person submits it again
                 rec["actions"].append({"at": ts(), "what": f"none (its last change {last['id']} was cancelled)"})
