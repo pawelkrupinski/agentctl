@@ -1,6 +1,6 @@
 """Tunnel health: a hung endpoint counts like a refusal -- one kickstart + retry for reads, the processor probe
 (2 failures -> kick, 1/min, inbox entry after 2 min unrestored)."""
-import os, socket, sys, tempfile, threading, unittest, urllib.error
+import os, socket, sys, tempfile, threading, time, unittest, urllib.error
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -234,6 +234,34 @@ class ServerTunnelTest(unittest.TestCase):
         finally:
             A.launchctl_kick = saved
         self.assertEqual((len(calls), kicked), (2, []))
+
+
+
+class OutageWithoutStoreTest(unittest.TestCase):
+    def test_a_tunnel_outage_moves_the_watch_on_when_the_store_is_behind_that_tunnel(self):
+        """tunnel_watch opened its conditions in ci-runner's store, reached through the very tunnel that was down:
+        StoreUnavailable raised before the watch saved its state, so it never counted, kicked or escalated."""
+        saved = A.open_condition, A.launchctl_kick, os.environ.get("AGENTCTL_TUNNEL_STATE")
+        import tempfile
+        tmp = tempfile.TemporaryDirectory()
+        os.environ["AGENTCTL_TUNNEL_STATE"] = os.path.join(tmp.name, "t.json")
+
+        def down(*a, **k):
+            raise A.StoreUnavailable("POST /v1/store/items: Connection refused")
+        A.open_condition, A.launchctl_kick = down, lambda: None
+        try:
+            t = time.time()
+            self.assertEqual(A.tunnel_watch(t, probe=lambda: "refused"), "down")
+            self.assertEqual(A.tunnel_watch(t + 1, probe=lambda: "refused"), "kicked")
+            self.assertEqual(A.tunnel_watch(t + 1 + A.TUNNEL_RESTORE_WAIT, probe=lambda: "refused"), "escalated")
+            self.assertTrue(A.read_json_file(A.tunnel_state_path())["escalated"])
+        finally:
+            A.open_condition, A.launchctl_kick = saved[0], saved[1]
+            if saved[2] is None:
+                os.environ.pop("AGENTCTL_TUNNEL_STATE")
+            else:
+                os.environ["AGENTCTL_TUNNEL_STATE"] = saved[2]
+            tmp.cleanup()
 
 
 if __name__ == "__main__":
