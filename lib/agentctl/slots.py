@@ -443,6 +443,15 @@ def cmd_land(a):
         print("NOT LANDED: PREPUSH_SKIP is set in the environment; agentctl land never skips checks. `unset PREPUSH_SKIP`.")
         return 1
     repo = git(a.repo or os.getcwd(), "rev-parse", "--show-toplevel").strip()
+    try:
+        owner_only = red_owner_only(slug(repo))
+    except (Exception, SystemExit):
+        owner_only = False
+    if owner_only and in_fixer():  # red-repos.json owner-only: a fixer's push there is a deploy, and the owner's
+        print(f"NOT LANDED: {slug(repo)} is owner-only (red-repos.json): a red fixer never lands or pushes there. File "
+              "your prepared branch with `~/bin/agentctl red owner-push <run> --note \"<what; which units restart>\"` and "
+              "end with `BLOCKED ON OWNER: <its one-liner>`.")
+        return 1
     main_ref = f"refs/remotes/{REMOTE}/main"
     env = tool_env()
     log_path = os.path.join(scratch(), f"agentctl-land-{os.path.basename(repo)}-{os.getpid()}.log")

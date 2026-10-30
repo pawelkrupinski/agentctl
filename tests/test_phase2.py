@@ -709,7 +709,7 @@ class LandAsYouGoTest(Phase2Base):
         u = {"workflow": "Main", "run": {"number": 20, "databaseId": 40}, "job": "j", "kind": "test"}
         self.assertTrue(A.FIXER_BRIEF.endswith(os.path.join("docs", "fixer-brief.md")), A.FIXER_BRIEF)
         with open(A.FIXER_BRIEF) as f:
-            tracked = f.read().strip()
+            tracked = A.fixer_brief_for(f.read().strip(), A.RED_PRIMARY)  # the primary's sections
         for rule in ("FAST REPRODUCER FIRST", "MECHANISM ONLY", "identity-drift-allow.tsv", "LAND AS YOU GO",
                      "Fixes-Red", "agentctl issue", "never edit ~/bin", "timeout -s KILL", "ONE sbt"):
             self.assertIn(rule, tracked)

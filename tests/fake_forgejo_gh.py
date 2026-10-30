@@ -3,7 +3,8 @@
   run view <id> --json ...   -> run-<id>.json            run view <id> --log-failed -> run-<id>.log
   run view <id> --log --job <j> -> run-<id>-job-<j>.log
   run download <id> -n <a> -D <dir> -> art-<id>-<a>.txt copied to <dir>/verdict.txt
-  run list [--workflow W] [--branch B] ... -> runs.json filtered (W matches workflowName or the workflow file)
+  run list [--workflow W] [--branch B] ... -> runs.json filtered (W matches workflowName or the workflow file);
+                               runs-<owner>_<repo>.json instead when it exists for -R <owner>/<repo>
   api <path>                 -> api-<path with / as _>.json
   run cancel <id>, workflow run ..., api -X <METHOD> <path> -> recorded only
 Every call is appended to calls.log as `<caller pid> <argv>`."""
@@ -13,8 +14,10 @@ d = os.environ["FAKE_GH_DIR"]
 argv = sys.argv[1:]
 with open(os.path.join(d, "calls.log"), "a") as f:
     f.write(f"{os.getppid()} {' '.join(argv)}\n")
+repo = None
 if "-R" in argv:
     i = argv.index("-R")
+    repo = argv[i + 1] if i + 1 < len(argv) else None
     argv = argv[:i] + argv[i + 2:]
 
 
@@ -40,7 +43,8 @@ elif argv[:2] == ["run", "download"]:
     os.makedirs(dest, exist_ok=True)
     shutil.copy(os.path.join(d, f"art-{rid}-{name}.txt"), os.path.join(dest, "verdict.txt"))
 elif argv[:2] == ["run", "list"]:
-    runs = json.load(open(os.path.join(d, "runs.json")))
+    per_repo = os.path.join(d, f"runs-{repo.replace('/', '_')}.json") if repo else None
+    runs = json.load(open(per_repo if per_repo and os.path.exists(per_repo) else os.path.join(d, "runs.json")))
     w, b = opt("--workflow"), opt("--branch")
     runs = [r for r in runs if (not w or w in (r.get("workflowName"), r.get("workflowFile"))) and (not b or r.get("headBranch") == b)]
     print(json.dumps(runs[: int(opt("--limit") or 20)]))

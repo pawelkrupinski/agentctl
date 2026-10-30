@@ -12,8 +12,9 @@
 # state. An offer nobody takes escalates every cycle, naming why (capacity, dispatch OFF); a code red is never parked
 # on the owner (the tier ladder has no owner rung); a refuted fix drops its holder's lease; the observation that opened
 # a red (its failing run) is the observation that clears it (a newer decided run without the failure).
-RED_HELP = """Reds on main (movies) as items, each held by a LEASE red/<key>. A red is keyed by its failing test or step
-(workflow + normalized first error line): a newer run failing the same way is the same red.
+RED_HELP = """Reds on main of every watched repo (red-repos.json: movies, infra, core) as items, each held by a LEASE
+red/<key>. A red is keyed by its failing test or step (workflow + normalized first error line): a newer run failing
+the same way is the same red. A run number is per repo: --repo, or the repo of the current directory.
 
   agentctl red status [-v]                       every red: state, holder or offer, deadline
   agentctl red claim <run|key> [--worktree DIR] [--note "<what>"]
@@ -22,6 +23,9 @@ RED_HELP = """Reds on main (movies) as items, each held by a LEASE red/<key>. A 
   agentctl red release <run|key> [--any]         drop your lease (--any: anyone's)
   agentctl red block <run> --owner-cause KIND --cmd "<command>" [--cause NAME] [--until-green WF | --until-http URL | --until-tcp HOST:PORT]
                                                  an external cause only the owner can act on (never a test failure)
+  agentctl red owner-push <run> [--note "<what; which units restart>"]
+                                                 an owner-only repo's (infra's) prepared fix, filed with the owner as a
+                                                 one-liner; the red waits in fix-pending until a green gate run
   agentctl red dispatch <run|key>                its offer at top priority: the dispatcher takes it now
   agentctl red auto [on|off|status]              the dispatcher on or off
 
@@ -104,6 +108,23 @@ def red_active(store):
     for it in store.items("red"):
         if it["state"] not in RED_TERMINAL:
             out[it["data"].get("key") or it["id"]] = it
+    return out
+
+
+def red_active_of(store, o_r):
+    """red_active, only o_r's reds: another watched repo's own, else the primary's (a red with no `repo`)."""
+    mine = o_r if red_is_other(o_r) else RED_PRIMARY
+    return {k: it for k, it in red_active(store).items() if red_repo_of(it["data"]) == mine}
+
+
+def red_obs_for(o_r, obs):
+    """Observations keyed for the store: another repo's keys bound to it (red_repo_key), the primary's as they are."""
+    if not red_is_other(o_r):
+        return obs
+    out = {}
+    for key, ob in obs.items():
+        k = red_repo_key(o_r, key)
+        out[k] = dict(ob, key=k)
     return out
 
 
@@ -826,7 +847,8 @@ def red_move(store, it, to, text, data=None, deadline_s=None, **ev):
 
 def red_what(d):
     jobs = [str(j) for j in d.get("jobs") or [d.get("job")] if j]
-    return f"{d.get('workflow')} #{(d.get('last_run') or {}).get('number')}" + (f" [{', '.join(jobs)}]" if jobs else "")
+    o_r = red_repo_of(d)
+    return ("" if o_r == RED_PRIMARY else f"{red_repo_short(o_r)} ") + f"{d.get('workflow')} #{(d.get('last_run') or {}).get('number')}" + (f" [{', '.join(jobs)}]" if jobs else "")
 
 
 def red_offer_class(d):
@@ -889,6 +911,9 @@ def red_family(d):
     """The family of a red (its data, its picture, a fixer record: workflow, job, jobs), or None."""
     if not d:
         return None
+    o_r = red_repo_of(d)
+    if o_r != RED_PRIMARY:  # ANOTHER WATCHED REPO: its red-repos.json family, every red of it (red-families.json's
+        return (red_repo_conf(o_r) or {}).get("family") or None  # families are the primary's)
     jobs = [str(j) for j in (d.get("jobs") or []) + [d.get("job")] if j]
     for fam in red_families():  # the first family that matches: its workflows or jobs (if it names any) AND its kinds
         named = bool(fam.get("workflows") or fam["_jobs"])
@@ -920,7 +945,7 @@ def red_picture(d):
             "red_kind": d.get("red_kind"), "attempts": int(d.get("attempts") or 0), "history": (d.get("history") or [])[-6:],
             "refuted": d.get("refuted") or [], "diagnosis": d.get("diagnosis"), "predicts": d.get("predicts"),
             "author": d.get("author"), "culprit": d.get("culprit"), "names": sorted(red_names(d) - {None}),
-            "prior_work": d.get("prior_work"), "old_note": d.get("old_note")}
+            "prior_work": d.get("prior_work"), "old_note": d.get("old_note"), "repo": d.get("repo")}
 
 
 def red_put_offer(store, it):
@@ -931,8 +956,9 @@ def red_put_offer(store, it):
                        int(d.get("priority", pri)), it["deadline"], red_picture(d))
 
 
-def red_open(store, ob, repo, t):
-    """A new red item (state red) from its first observation; its author recorded from the change that landed it."""
+def red_open(store, ob, repo, t, o_r=None):
+    """A new red item (state red) from its first observation; its author recorded from the change that landed it. o_r:
+    its repo (red_repo_key already in ob's key); the primary's reds carry none."""
     key = ob["key"]
     iid, n = key, 1
     while store.item("red", iid) is not None:  # an earlier spell of the same red is terminal: a new item
@@ -942,6 +968,8 @@ def red_open(store, ob, repo, t):
             "line": ob["line"], "red_kind": ob["red_kind"], "gate": ob["gate"], "predicts": ob.get("predicts"),
             "runs": sorted(ob["names"]), "last_run": ob["run"], "opened_at": t, "attempts": 0, "history": [],
             "derived": ob.get("derived") or [], "classifier": classifier_version()}
+    if o_r and red_is_other(o_r):
+        data["repo"] = o_r
     data.update(red_identity(data))
     if ob["kind"] == "test" and ob["red_kind"] in ("gate", "outside"):
         try:
@@ -987,11 +1015,11 @@ def red_attach(store, workflow, run, author=None, o_r=None):
         sigs = []
     if sigs_no_verdict(sigs):
         return []  # an incomplete run: no verdict, no red to open
-    gate = workflow in {g for g, _ in GATING.get(o_r, [])}
-    obs = red_obs_of_units(red_units(o_r, workflow, run, [run], sigs, gate))
+    gate = workflow in {g for g, _ in red_gate_flows(o_r)}
+    obs = red_obs_for(o_r, red_obs_of_units(red_units(o_r, workflow, run, [run], sigs, gate)))
     active, out = red_active(store), []
     for key, ob in obs.items():
-        it = active.get(key) or red_open(store, ob, None, store.clock())
+        it = active.get(key) or red_open(store, ob, None, store.clock(), o_r)
         it = red_attach_obs(store, it, ob)
         if author and it["state"] == "red" and not it["data"].get("author"):
             store.update_item("red", it["id"], it["version"], {"author": dict(author, shas=[run.get("headSha")])})
@@ -1392,6 +1420,22 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
             store.update_item("red", it["id"], it["version"], {"fix": {**f, **fix}})
             it = store.item("red", it["id"])
         d, f = it["data"], it["data"]["fix"]
+    if f.get("status") == "owner":  # an owner-only repo's fix, filed with the owner (red owner-push): a green run proves it
+        if obs is not None and gone:
+            line = f"FIX OK: {red_what(d)} cleared after its fix went to the owner ({f.get('entry')})"
+            inbox_write("red", line, [line], [], 0)
+            store.close_offer(f"red:{it['id']}", "verified")
+            red_move(store, it, "verified", line)
+            return [line]
+        if t - red_fix_since(it) >= env_num("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP):
+            return red_fix_unverifiable(store, it, f"its owner push ({f.get('entry')}: `{f.get('cmd')}`) is unproven "
+                                                   f"{fmt_age(t - red_fix_since(it))} after it was filed", t)
+        if t >= it["deadline"]:  # the owner has not pushed yet, or no gate run has decided since: said again
+            line = f"RED OWNER PUSH WAITING: {red_what(d)}: `! {f.get('cmd')}` ({fmt_age(t - red_fix_since(it))} since filed)"
+            inbox_write("red", line, [line], [], 1)
+            red_move(store, it, "fix-pending", line)
+            return [line]
+        return []
     if f.get("status") == "verify":  # an owner block's check passed: the next decided run says whether it is fixed
         last = ((snap or {}).get("latest") or {}).get(d.get("workflow")) or {}
         after = bool(last.get("updatedAt")) and parse_time(last["updatedAt"]).timestamp() > float(f.get("at") or 0)
@@ -1643,7 +1687,8 @@ def red_queue_family(d):
         return fam
     run = d.get("run") if d.get("run") is not None else d.get("last_run")
     num = run.get("number") if isinstance(run, dict) else run
-    return f"run:{d.get('workflow')}#{num}"
+    o_r = red_repo_of(d)
+    return f"run:{d.get('workflow')}#{num}" if o_r == RED_PRIMARY else f"run:{o_r}:{d.get('workflow')}#{num}"
 
 
 RED_MODEL = 2  # the store's red data model (meta red_model): 2 = the queue (item 5); red_migrate brings older data up
@@ -1784,6 +1829,14 @@ def red_dispatcher(store, o_r, repo, t):
             if why != off.get("reason"):
                 store.offer_reason(off["id"], why)
             continue
+        # ANOTHER WATCHED REPO'S RED: its fixer works in that repo's clone on this machine (red-repos.json `clone`)
+        po = pic.get("repo") or o_r
+        prepo = repo if po == o_r else red_repo_clone(po)
+        if po != o_r and not prepo:
+            why = f"no clone of {po} on this machine (red-repos.json `clone`)"
+            if why != off.get("reason"):
+                store.offer_reason(off["id"], why)
+            continue
         num = (pic.get("run") or {}).get("number")
         holder_id = owner_holder(fam) if owned else f"laptop:fixer:red-{pic['key']}-{int(pic.get('attempts') or 0) + 1}"
         meta = {"kind": "owned" if owned else "fixer", "gate": bool(pic.get("gate")), "family": fam,
@@ -1802,7 +1855,7 @@ def red_dispatcher(store, o_r, repo, t):
                         extra.append({"name": sib["lease"], "epoch": st_["epoch"], "secret": st_["secret"],
                                       "picture": sib["picture"]})
                         gone.add(sib["id"])
-        ok, msg = (owner_spawn if owned else red_spawn)(store, o_r, repo, *((fam,) if owned else ()), off, took, extra)
+        ok, msg = (owner_spawn if owned else red_spawn)(store, po, prepo, *((fam,) if owned else ()), off, took, extra)
         if not ok:
             for x in [{"name": off["lease"], **took}] + extra:
                 store.release(x["name"], x["epoch"], x["secret"], outcome=f"NOT STARTED: {str(msg)[:200]}")
@@ -1818,7 +1871,7 @@ def red_spawn(store, o_r, repo, off, took, extra=()):
          "line": pic.get("line"), "run": pic.get("run") or {}, "refuted": pic.get("refuted"), "predicts": pic.get("predicts"),
          "flake": pic.get("red_kind") == "flake", "diagnosis": pic.get("diagnosis"), "key": pic["key"],
          "names": set(pic.get("names") or []), "prior_work": pic.get("prior_work"), "old_note": pic.get("old_note"),
-         "history": pic.get("history") or []}
+         "history": pic.get("history") or [], "repo": pic.get("repo")}
     for x in extra:  # the run's other reds, under the same fixer
         u["jobs"] = sorted(set(u.get("jobs") or [u["job"]]) | set(x["picture"].get("jobs") or []))
     if tier == "revert":

@@ -79,7 +79,7 @@ def red_fix_held(it, t, facts=None):
         fx = red_fix_of(it, facts)
         if fx and fx["status"] in FIX_OPEN:
             return f"fix {fx.get('entry')} {fx['status']}"
-        if fx is None and f.get("status") != "verify":
+        if fx is None and f.get("status") not in ("verify", "owner"):  # owner: filed with the owner (red owner-push)
             return None
     elif f.get("status") in FIX_OPEN and f.get("entry"):
         return f"fix {f.get('entry')} {f.get('status')}"

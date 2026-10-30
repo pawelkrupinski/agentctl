@@ -7,6 +7,134 @@
 # exactly the newest decided Main run and the newest decided Identity model convergence run on main. Verify scrape
 # recording no longer gates; ci-why lists it, and every other red, as information only.
 GATING = {"pawelkrupinski/movies": [("Main", "main.yml"), ("Identity model convergence", "identity-model-convergence.yml")]}
+
+# THE WATCHED REPOS (the owner, 2026-10-30, ci-failures recommendation 4: infra's Stage NixOS closures was red 29 h and
+# core's Main Pipeline 21 h with no fixer, because the red tick read movies only). Which repos the red machine watches
+# is config: red-repos.json beside the entry ($AGENTCTL_RED_REPOS names another file), one entry per Forgejo repo --
+# its gate workflows (the newest decided run of each is what opens and clears its reds), its family (every red of the
+# repo goes to that ONE fixer; red-families.json says how the family is held) and its push policy: "land" (the fixer
+# lands with `agentctl land`) or "owner-only" (an infra push is a deploy: the fixer prepares the fix on a local
+# branch and files the owner a one-liner with `agentctl red owner-push`; it never pushes or deploys). The PRIMARY
+# repo (movies) keeps everything it had -- its reds' keys, its outside workflows, its local checks, its landing gate
+# (GATING above, which stays movies' alone: watching a repo's reds does not put a red gate in front of its landings).
+# The other repos are read through their gate workflows only.
+RED_PRIMARY = "pawelkrupinski/movies"
+RED_REPOS_DEFAULT = [{"repo": RED_PRIMARY, "gate": [list(g) for g in GATING[RED_PRIMARY]], "push": "land"}]
+RED_PUSH_POLICIES = ("land", "owner-only")
+_red_repos_cache = {}
+
+
+def red_repos_path():
+    return os.environ.get("AGENTCTL_RED_REPOS") or os.path.join(os.path.dirname(TOOL_PATH), "red-repos.json")
+
+
+def red_repos_parse(raw):
+    """The watched repos from red-repos.json's parsed JSON: [{repo, gate: [(name, file)], family, push, clone}], the
+    primary first (added when the file lacks it). Raises ValueError on a malformed entry: a typo must not quietly
+    stop a repo being watched."""
+    out = []
+    for x in (raw or {}).get("repos") or []:
+        repo = x.get("repo")
+        if not isinstance(repo, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+            raise ValueError(f"a repo entry needs `repo: <owner>/<name>`: {x!r}")
+        gate = x.get("gate") or []
+        if not gate or not all(isinstance(g, list) and len(g) == 2 and all(isinstance(v, str) and v for v in g)
+                               for g in gate):
+            raise ValueError(f"{repo}: `gate` must be [[<workflow name>, <workflow file>], ...]")
+        push = x.get("push") or "land"
+        if push not in RED_PUSH_POLICIES:
+            raise ValueError(f"{repo}: `push` must be one of {', '.join(RED_PUSH_POLICIES)}, not {push!r}")
+        clone = x.get("clone")
+        out.append({"repo": repo, "gate": [tuple(g) for g in gate], "family": x.get("family"), "push": push,
+                    "clone": os.path.expanduser(clone) if clone else None})
+    if len({c["repo"] for c in out}) != len(out):
+        raise ValueError("a repo is listed twice")
+    if not any(c["repo"] == RED_PRIMARY for c in out):
+        out.insert(0, red_repos_parse({"repos": RED_REPOS_DEFAULT})[0])
+    return sorted(out, key=lambda c: c["repo"] != RED_PRIMARY)
+
+
+def red_repos():
+    """The watched repos (red_repos_parse), re-read when the file changes; the primary alone when it is missing or
+    unreadable (said once per change)."""
+    path = red_repos_path()
+    try:
+        m = os.path.getmtime(path)
+    except OSError:
+        m = None
+    hit = _red_repos_cache.get(path)
+    if hit and hit[0] == m:
+        return hit[1]
+    repos = red_repos_parse({"repos": RED_REPOS_DEFAULT})
+    if m is not None:
+        try:
+            with open(path) as f:
+                repos = red_repos_parse(json.load(f))
+        except (OSError, ValueError) as e:
+            err(f"red repos: {path} unreadable ({str(e)[:200]}): only {RED_PRIMARY} is watched")
+    _red_repos_cache[path] = (m, repos)
+    return repos
+
+
+def red_repo_conf(o_r):
+    return next((c for c in red_repos() if c["repo"] == o_r), None)
+
+
+def red_is_other(o_r):
+    """True for a watched repo other than the primary (red-repos.json). Any other name -- the primary, or a repo nobody
+    configured (the tests' `o/r`) -- is treated as the primary, exactly as before 2026-10-30."""
+    return o_r != RED_PRIMARY and red_repo_conf(o_r) is not None
+
+
+def red_repo_of(d):
+    """The repo a red (its data, its picture, a fixer record) belongs to: its `repo`, else the primary (every red from
+    before 2026-10-30 is movies')."""
+    return (d or {}).get("repo") or RED_PRIMARY
+
+
+def red_gate_flows(o_r):
+    """[(name, file)] of a watched repo's gate workflows: GATING's for the primary, its config's for the others."""
+    if o_r in GATING:
+        return GATING[o_r]
+    c = red_repo_conf(o_r)
+    return list(c["gate"]) if c else []
+
+
+def red_owner_only(o_r):
+    """True for a repo whose fixer never pushes (red-repos.json `"push": "owner-only"`)."""
+    c = red_repo_conf(o_r)
+    return bool(c and c["push"] == "owner-only")
+
+
+def red_repo_short(o_r):
+    return o_r.split("/", 1)[-1]
+
+
+def red_repo_tag(o_r, num):
+    """A red run's directory name under reds/: the run number for the primary (as always), `<repo>-<number>` for the
+    others -- run numbers are per repo, so infra #3455 and movies #3455 are two runs."""
+    return f"{red_repo_short(o_r)}-{num}" if red_is_other(o_r) else str(num)
+
+
+def red_repo_key(o_r, key):
+    """A red's key in the store: as it always was for the primary; for another repo, its key bound to the repo, so the
+    same workflow name and line in two repos are two reds."""
+    if not red_is_other(o_r):
+        return key
+    import hashlib
+    return hashlib.sha1(f"{o_r}\0{key}".encode()).hexdigest()[:12]
+
+
+def red_repo_clone(o_r):
+    """This machine's clone of o_r: its config's `clone` when it is a git checkout, else a known clone (REPOS); None."""
+    c = red_repo_conf(o_r) or {}
+    p = c.get("clone")
+    if p and os.path.isdir(p) and git_ok(p, "rev-parse", "--git-dir"):
+        return p
+    try:
+        return repo_path_for(o_r)
+    except (Exception, SystemExit):
+        return None
 SETUP_STEP = re.compile(r"^(Set up job|Initialize containers|actions/checkout|Checkout|.*(download|upload)-artifact|.*cache@|Set up .*runner)", re.I)
 INFRA_LOG = re.compile(r"artifact already exists|ENOENT|No space left on device|Cannot connect to the Docker daemon|"
                        r"connection (refused|reset)|Could not resolve host|TLS handshake timeout|runner .* lost|context deadline exceeded|"
@@ -298,9 +426,10 @@ def run_no_verdict(o_r, r):
     return nv
 
 
-def gate_runs(o_r):
-    """[(workflow, newest decided run on main | None, newer unfinished run | None, red_streak of its runs)]."""
-    flows = GATING.get(o_r)
+def gate_runs(o_r, flows=None):
+    """[(workflow, newest decided run on main | None, newer unfinished run | None, red_streak of its runs)]. flows: the
+    workflows to read ([(name, file)]); default the repo's GATING row, else every workflow with a recent run on main."""
+    flows = flows or GATING.get(o_r)
     if not flows:
         recent = gh_json(o_r, "run", "list", "--branch", "main", "--limit", "40", "--json", RUN_FIELDS)
         flows = [(n, n) for n in dict.fromkeys(r["workflowName"] for r in recent)]

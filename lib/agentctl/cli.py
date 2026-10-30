@@ -238,6 +238,11 @@ def main(argv=None):
                     "never the owner's): " + "; ".join(f"{k}: {v}" for k, v in OWNER_CAUSES.items()))
     rb.add_argument("--cause", metavar="NAME", help="an outside outage (e.g. decodo): ONE condition for every red it "
                     "explains; attach to the open one, or open it with --until-*")
+    rop = rds.add_parser("owner-push", help="an owner-only repo's fix (red-repos.json, infra): file your prepared branch "
+                         "with the owner as a one-liner; the red waits for it (fix-pending) until a green gate run")
+    rop.add_argument("run")
+    rop.add_argument("--note", default="", help="what it fixes, and which units a deploy restarts")
+    rop.add_argument("--worktree", help="the worktree holding the fix (default: the current one)")
     rr = rds.add_parser("release", help="drop your red lease")
     rr.add_argument("run")
     rr.add_argument("--any", action="store_true", help="release anyone's claim of it")
@@ -251,7 +256,7 @@ def main(argv=None):
     rf.add_argument("--record", required=True)
     rfo = rds.add_parser("owner", help=argparse.SUPPRESS)  # a family owner's wrapper (lib/agentctl/owner.py)
     rfo.add_argument("--family", required=True)
-    for p_ in [rc_, rbt, rb, rr, rdp, ra, rf, rfo, rl]:
+    for p_ in [rc_, rbt, rb, rop, rr, rdp, ra, rf, rfo, rl]:
         p_.add_argument("--repo")
     ram = rds.add_parser("am-fixer", help="exit 0 (and print who) inside a dispatched red fixer, else 1 (~/bin's "
                          "pre-commit hook asks)")

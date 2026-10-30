@@ -8,18 +8,53 @@
 FIXER_BRIEF = os.path.join(os.path.dirname(TOOL_PATH), "docs", "fixer-brief.md")
 
 
-def fixer_brief():
+REPO_SECTION = re.compile(r"^### REPO (\S+)\s*$", re.M)
+
+
+def fixer_brief_for(text, o_r):
+    """The brief for a red of o_r: everything but the `### REPO <owner/name>` sections of OTHER repos (each section
+    runs to the next `#`/`##`/`### REPO` heading)."""
+    out, pos = [], 0
+    for m in REPO_SECTION.finditer(text):
+        out.append(text[pos:m.start()])
+        nxt = re.compile(r"^(#{1,2} |### REPO )", re.M).search(text, m.end())
+        end = nxt.start() if nxt else len(text)
+        if m.group(1) == o_r:
+            out.append(text[m.start():end])
+        pos = end
+    out.append(text[pos:])
+    return re.sub(r"\n{3,}", "\n\n", "".join(out)).strip()
+
+
+def fixer_brief(o_r=None):
     """(path, text) of the fixer brief: $AGENTCTL_BRIEF_SRC when it names a readable file (an override, for trying a
-    wording out), else the tracked docs/fixer-brief.md. Never raises: a missing brief is said in the prompt."""
+    wording out), else the tracked docs/fixer-brief.md -- with only o_r's per-repo section (default the primary). Never
+    raises: a missing brief is said in the prompt."""
     for p in (os.environ.get("AGENTCTL_BRIEF_SRC", BRIEF_SRC), FIXER_BRIEF):
         if p:
             try:
                 with open(p) as f:
-                    return p, f.read().strip()
+                    return p, fixer_brief_for(f.read().strip(), o_r or RED_PRIMARY)
             except OSError:
                 pass
     return FIXER_BRIEF, (f"(THE FIXER BRIEF IS MISSING at {FIXER_BRIEF}: file it with `~/bin/agentctl issue`, then go on "
                          "under ~/bin/AGENTCTL.md's rules.)")
+
+
+# OWNER-ONLY REPOS (red-repos.json `"push": "owner-only"`; infra: a push to main is a deploy). Their fixers never land,
+# push or deploy: the prompt says so (red_owner_rules, after every task text that says "land it"), the session denies
+# the commands (OWNER_ONLY_DENIED), `agentctl land` refuses inside such a fixer, and `agentctl red owner-push` files the
+# prepared branch with the owner as a one-liner.
+OWNER_ONLY_DENIED = ("Bash(*agentctl land*)", "Bash(*bin/deploy*)", "Bash(*forgejo-bootstrap*)", "Bash(*nixos-rebuild*)",
+                     "Bash(*switch-to-configuration*)", "Bash(*git*push*)")
+
+
+def red_owner_rules(o_r, num):
+    return (f" OWNER-ONLY REPO ({o_r}): this overrides every `land` above. NEVER `agentctl land`, never push, never "
+            "deploy: a push to its main IS a deploy, and it is the owner's. Prepare the fix on your worktree's branch "
+            f"(rebased on forgejo/main, one commit per step, a `Fixes-Red: {num}` trailer, the repo's own checks run), "
+            f"then `~/bin/agentctl red owner-push {num} --note \"<what it fixes; which units a deploy restarts>\"` from "
+            "your worktree, and end with `BLOCKED ON OWNER: <the one-liner it printed>`.")
 
 
 def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
@@ -33,8 +68,12 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
     who = (owner_intro(owner) if owner else
            "You are an unattended red-build fixer dispatched by agentctl (nobody else was fixing this red), a background "
            "session the owner sees in `claude agents`. ")
-    bpath, btext = fixer_brief()
-    common = (who + f"Read {brief} and ~/bin/AGENTCTL.md first. Your worktree is {wt} (branch off forgejo/main, already "
+    o_r = red_repo_of(u)
+    bpath, btext = fixer_brief(o_r)
+    if o_r != RED_PRIMARY:  # the movies preamble is movies'; the repo's own CLAUDE.md is the first read here
+        brief = f"{o_r}'s CLAUDE.md in your worktree"
+    common = (who + (f"YOUR RED IS IN {o_r} (its per-repo rules are in the brief below). " if o_r != RED_PRIMARY else "")
+              + f"Read {brief} and ~/bin/AGENTCTL.md first. Your worktree is {wt} (branch off forgejo/main, already "
               "created): work only there. " + first + "Commits unlanded for "
               f"{FIXER_UNLANDED_NUDGE // 60} min get a RED-NUDGE.md in your worktree (read it, land, delete it), then an "
               f"escalation to the owner.\n\n=== THE FIXER BRIEF ({bpath.replace(HOME, '~')}) ===\n{btext}\n"
@@ -85,6 +124,8 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
                 "`~/bin/agentctl land` in the foreground. End at `LANDED <sha>`. If you cannot fix it, end with a line "
                 "`GAVE UP: <why>`; if it needs the owner, `~/bin/agentctl red block " + str(num) + " --owner-cause <kind> --cmd \"<command>\"` (only for a cause outside the code that only the owner can act on: never a code red) "
                 "and end `BLOCKED ON OWNER: <command>`.")
+    if red_owner_only(o_r):  # every task above says "land it": not in an owner-only repo
+        task += red_owner_rules(o_r, num)
     if u.get("old_note"):
         task += (f" This red's newest run is old and {u['old_note']}: decide whether it still fails (fix it), or why it "
                  "cannot recur (land the change that makes that so, e.g. its workflow fixed or removed), and say which.")
@@ -165,7 +206,8 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
     (resume: the same worktree and session), then a detached `agentctl red fixer` that runs `claude -p` there, renews
     the lease by its progress, and releases it with its verdict. (ok, message)."""
     num = u["run"].get("number")
-    d = reds_dir(str(num))
+    o_r = u.get("repo") or o_r
+    d = reds_dir(red_repo_tag(o_r, num))
     os.makedirs(d, exist_ok=True)
     k = 1 + len(glob.glob(os.path.join(d, "fixer*.json")))
     rec_path = os.path.join(d, "fixer.json" if k == 1 else f"fixer-{k}.json")
@@ -195,6 +237,8 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
            "continued_from": (cont or {}).get("worktree"), "diagnosis": u.get("diagnosis"),
            "effort": effort, "refuted": u.get("refuted") or [], "predicts": u.get("predicts"), "orphan": u.get("orphan"),
            "extra_leases": [{"name": x["name"], "epoch": x["epoch"]} for x in extra], "prior_work": u.get("prior_work")}
+    if red_is_other(o_r):
+        rec["repo"] = o_r
     write_json(rec_path, rec)
     env = fixer_env(o_r, num)
     if took:
@@ -285,6 +329,8 @@ def fixers_land_watch(now_=None, force=False):
     for r in fixer_records():
         wt = r.get("worktree")
         if not r.get("alive") or not wt or not os.path.isdir(wt):
+            continue
+        if red_owner_only(red_repo_of(r)):  # its commits are never landed by it: filed with `red owner-push`
             continue
         sp, nudge = r["path"] + ".land.json", os.path.join(wt, "RED-NUDGE.md")
         st = read_record(sp) or {}
@@ -477,13 +523,15 @@ def red_fixer(a):
     u = {"workflow": rec["workflow"], "job": rec.get("job"), "jobs": rec.get("jobs"), "kind": rec.get("kind") or "test",
          "line": rec.get("line"), "flake": rec.get("flake"), "diagnosis": rec.get("diagnosis"), "orphan": rec.get("orphan"),
          "refuted": rec.get("refuted"), "predicts": rec.get("predicts"), "prior_work": rec.get("prior_work"),
-         "run": {"number": num, "databaseId": rec.get("run_id")}}
+         "run": {"number": num, "databaseId": rec.get("run_id")}, "repo": rec.get("repo")}
     u["record"] = a.record
     prompt = fixer_prompt(u, wt, sync_brief(), rec.get("resume_note"))
     cli = claude_cli()
     label = fixer_label(rec)
     argv = [cli, "--bg", prompt, "--permission-mode", interactive_mode(), "--permission-prompts", "none", "-n", label,
             "--disallowedTools", "Bash(git push:*)", "Bash(*--no-verify*)", "Bash(*PREPUSH_SKIP*)"]
+    if red_owner_only(red_repo_of(rec)):  # an owner-only repo's fixer: no landing, no push, no deploy (red_owner_rules)
+        argv += list(OWNER_ONLY_DENIED)
     if rec.get("resume") and rec.get("session"):
         argv += ["--resume", rec["session"]]
     if rec.get("effort"):  # a deep investigation
@@ -603,13 +651,15 @@ def red_targets(store, o_r, target, create=True):
     active = red_active(store)
     if t in active:
         return [active[t]]
-    hits = red_item_of_run(store, t)
+    # A RUN NUMBER is per repo: o_r's reds when it is another watched repo, else the primary's (as before 2026-10-30)
+    mine = o_r if red_is_other(o_r) else RED_PRIMARY
+    hits = [h for h in red_item_of_run(store, t) if red_repo_of(h["data"]) == mine]
     if hits or not create:
         return hits
     name, r, units = red_run_units(o_r, t)
     out = []
-    for key, ob in red_obs_of_units(units).items():
-        it = active.get(key) or red_open(store, ob, None, store.clock())
+    for key, ob in red_obs_for(o_r, red_obs_of_units(units)).items():
+        it = active.get(key) or red_open(store, ob, None, store.clock(), o_r)
         out.append(red_attach_obs(store, it, ob))
     return out
 
@@ -876,19 +926,23 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
     t = now_ if now_ is not None else store.clock()
     acts = []
     obs = None
+    # THE PRIMARY'S TICK also runs the store-wide passes (the migration, the blocks, the invariant); another watched
+    # repo's tick only observes, opens and steps ITS OWN reds -- the primary's observation never clears another repo's
+    # red (it is simply absent from it), nor the other way round
+    primary = not red_is_other(o_r)
     if snap:
         try:
-            obs = red_observe(o_r, repo, snap)
+            obs = red_obs_for(o_r, red_observe(o_r, repo, snap) if primary else red_observe_gate(o_r, snap))
         except (Exception, SystemExit) as e:
             err(f"red tick: could not observe ({str(e)[:160]}): nothing opens or clears this tick")
     try:
-        n = red_migrate(store)
+        n = red_migrate(store) if primary else 0
         if n:
             acts.append(f"red model {RED_MODEL}: {n} open red(s) migrated in place")
     except (Exception, SystemExit) as e:
         err(f"red tick: the red model migration failed ({str(e)[:160]}); tried again next tick")
     facts = facts if facts is not None else red_fix_facts(repo, store)
-    active, settled = red_active(store), None
+    active, settled = red_active_of(store, o_r), None
     for key, ob in (obs or {}).items():
         try:
             it = active.get(key)
@@ -897,7 +951,7 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
                 continue
             settled = red_settled_runs(store) if settled is None else settled
             if (key, str(ob["run"].get("databaseId"))) not in settled:
-                active[key] = red_open(store, ob, repo, t)
+                active[key] = red_open(store, ob, repo, t, o_r)
         except (Exception, SystemExit) as e:
             err(f"red tick: {key}: {str(e)[:160]}")
     try:
@@ -905,7 +959,7 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
     except (Exception, SystemExit) as e:
         err(f"red tick: merging re-keyed reds failed ({str(e)[:160]})")
     try:
-        acts += red_renew_blocks(store, t)
+        acts += red_renew_blocks(store, t) if primary else []
     except (Exception, SystemExit) as e:
         err(f"red tick: renewing the blocks failed ({str(e)[:160]})")
     try:
@@ -920,7 +974,7 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
         except (Exception, SystemExit) as e:
             err(f"red tick: {key}: {type(e).__name__}: {str(e)[:200]}")
     try:
-        acts += red_enforce(store, facts, t)
+        acts += red_enforce(store, facts, t) if primary else []
     except (Exception, SystemExit) as e:
         err(f"red tick: the invariant pass failed ({str(e)[:160]})")
     if sync or dispatch:  # the sync's half on the same store (claims renewed; with dispatch its dispatcher): the tests'
@@ -949,6 +1003,70 @@ def red_tick_repo(repo, snap=None, dispatch=False):
     return acts
 
 
+def red_gate_snap(o_r):
+    """Another watched repo's snapshot: its gate workflows only (red-repos.json), read once. The shared run lists the
+    primary's snapshot fills (_gate_lists, _outside_lists) are put back as they were: workflow names repeat across
+    repos (movies has a `Stage NixOS closures` too)."""
+    saved = (dict(_gate_lists), dict(_outside_lists), dict(_gate_no_verdict))
+    try:
+        gate = gate_runs(o_r, red_gate_flows(o_r))
+        return {"at": time.time(), "repo": o_r, "outside": [], "outside_error": None,
+                "gate": [{"name": n, "decided": d, "newer": nw, "since": st[0], "count": st[1],
+                          "runs": _gate_lists.get(n, []), "no_verdict": _gate_no_verdict.get(n)} for n, d, nw, st in gate],
+                "latest": {n: {k: d.get(k) for k in ("number", "databaseId", "conclusion", "headSha", "updatedAt")}
+                           for n, d, _nw, _st in gate if d}}
+    finally:
+        for live, old in zip((_gate_lists, _outside_lists, _gate_no_verdict), saved):
+            live.clear()
+            live.update(old)
+
+
+def red_observe_gate(o_r, snap):
+    """{key: observation} of another watched repo: its gate workflows' red runs (no outside workflows, local checks,
+    branch predictions or convergence kicks -- those are the primary's), and its stuck gate runs. The shared run lists
+    are restored afterwards (red_gate_snap)."""
+    saved = (dict(_gate_lists), dict(_outside_lists), dict(_gate_no_verdict))
+    try:
+        rows = [(n, d, _gate_lists.get(n, []), True) for n, d, _nw, _s in gate_from_snap(snap)]
+        obs = red_obs_of_units(gate_red_units(o_r, rows))
+        obs.update(stuck_obs(snap))
+        return obs
+    finally:
+        for live, old in zip((_gate_lists, _outside_lists, _gate_no_verdict), saved):
+            live.clear()
+            live.update(old)
+
+
+RED_OTHERS_EVERY = 60        # seconds between the other watched repos' red ticks: one gate read each ($AGENTCTL_RED_OTHERS_EVERY)
+_last_others_tick = [0.0]
+
+
+def red_tick_others(store=None, now_=None, dispatch=False, force=True):
+    """The red tick of every watched repo but the primary (red-repos.json): its gate read, its reds observed and
+    stepped, each repo inside its own try (one unreadable repo never stops the others or the primary). Its clone is
+    this machine's when there is one (Fixes-Red trailers, authors); without one (ci-runner) its reds open and clear
+    by its gate runs alone."""
+    acts = []
+    if not force and time.time() - _last_others_tick[0] < env_num("AGENTCTL_RED_OTHERS_EVERY", RED_OTHERS_EVERY):
+        return acts
+    _last_others_tick[0] = time.time()
+    for c in red_repos():
+        o_r = c["repo"]
+        if o_r == RED_PRIMARY:
+            continue
+        try:
+            snap = red_gate_snap(o_r)
+            clone = red_repo_clone(o_r)
+            with _red_lock:
+                acts += [f"{red_repo_short(o_r)}: {x}" for x in
+                         red_tick(store or Store(), o_r, clone, snap, now_=now_, dispatch=dispatch)]
+        except (Exception, SystemExit) as e:
+            err(f"red tick: {o_r}: skipped ({str(e).replace('agentctl: ', '')[:200]})")
+    for line in acts:
+        err(f"red: {line}")
+    return acts
+
+
 def maybe_red_tick(repo):
     """At most every RED_TICK_INTERVAL s, from the processor's duties. Bounded; never fatal."""
     if time.time() - _last_red_tick[0] < env_num("AGENTCTL_RED_TICK", RED_TICK_INTERVAL):
@@ -963,6 +1081,7 @@ def maybe_red_tick(repo):
                 gate_unread_spell(slug(repo), str(e)[:200])
             except (Exception, SystemExit):
                 pass
+        red_tick_others(force=False)  # the other watched repos (red-repos.json); never fatal, never the primary's gate spell
     if not run_bounded("red-tick", work, env_num("AGENTCTL_STEP_BOUND", 120)):
         err("red tick: still running from an earlier cycle (the loop goes on)")
 
@@ -983,6 +1102,10 @@ def cmd_red(a):
     st = Store()
     if a.rcmd == "block":
         return red_block(o_r, a)
+    if a.rcmd == "owner-push":
+        rc, lines = red_owner_push(st, o_r, a.run, a.note or "", getattr(a, "worktree", None))
+        print("\n".join(lines))
+        return rc
     if a.rcmd in ("claim", "beat", "release"):
         if a.rcmd == "claim":
             if getattr(a, "fixer", None):  # the dispatched fixer says who it is (its prompt): bound to its session
@@ -1060,6 +1183,8 @@ def red_revert(o_r, repo, u, culprit):
     """The revert fallback: a revert of the culprit with `Fixes-Red: N`, landed by a detached `agentctl land` through
     the normal hook (its verdicts reach the inbox). (ok, message)."""
     num = u["run"].get("number")
+    if red_owner_only(u.get("repo") or o_r):
+        return False, f"no revert in {u.get('repo') or o_r}: its pushes are the owner's (red-repos.json owner-only)"
     _d, clone, _w = waiting_state(repo)
     wt, branch = f"{clone}-wt-revert-{num}", f"revert-{num}"
     if os.path.exists(wt) or git_ok(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"):
@@ -1191,7 +1316,7 @@ def red_run_units(o_r, n):
         return name, None, []
     if r.get("status") == "completed" and r.get("conclusion") in RED_CONCLUSIONS:
         runs = _gate_lists.get(name) or _outside_lists.get(name) or [r]
-        gate = name in {g for g, _ in GATING.get(o_r, [])}
+        gate = name in {g for g, _ in red_gate_flows(o_r)}
         try:
             sigs = run_sigs(o_r, r, name)
         except (Exception, SystemExit):
@@ -1377,7 +1502,7 @@ def red_quota_waits(store, o_r, repo, t):
     """Each open red whose line says a quota is spent, held by nobody (no fixer lease, no block): put on the WAIT lease
     of its service; each wait past its window's reset with no run since: its workflow dispatched once per window."""
     out = []
-    for it in red_active(store).values():
+    for it in red_active_of(store, o_r).values():
         d = it["data"]
         if not QUOTA_LOG.search(str(d.get("line") or "")) or d.get("kind") == "test":
             continue
@@ -1415,6 +1540,49 @@ def red_quota_waits(store, o_r, repo, t):
             out.append(f"{m['redispatch']} after {m.get('cause')}'s reset (re-checks the key): {msg}")
             store.set_meta(row["name"], row["epoch"], row["secret"], {"dispatched_at": t})
     return out
+
+
+def red_owner_push(store, o_r, target, note="", wt=None):
+    """(rc, lines) of `red owner-push`: an owner-only repo's fix (red-repos.json; infra, whose push is a deploy), prepared
+    on the worktree's local branch, filed with the owner. The red goes to fix-pending with a fix of status `owner` (its
+    branch, head and the owner's one-liner) and one escalation reaches the inbox with the command; a green gate run
+    verifies it, and unproven after RED_FIX_GIVEUP it is offered again (red_fix_pending). Never pushes."""
+    if not red_owner_only(o_r):
+        return 2, [f"NOT FILED: {o_r} is not owner-only (red-repos.json): land the fix with `~/bin/agentctl land`"]
+    here = safe_cwd()
+    wt = os.path.realpath(wt or worktree_of(here) or here)
+    if not os.path.isdir(wt) or root_checkout(wt, o_r):
+        return 2, [f"NOT FILED: {wt.replace(HOME, '~')} is not a worktree of your own: `--worktree <yours>`"]
+    try:
+        if slug(wt) != o_r:
+            return 2, [f"NOT FILED: {wt.replace(HOME, '~')} is a clone of {slug(wt)}, not {o_r}"]
+    except (Exception, SystemExit) as e:
+        return 2, [f"NOT FILED: {wt.replace(HOME, '~')} is no clone of {o_r} ({str(e)[:120]})"]
+    if git(wt, "status", "--porcelain", "--untracked-files=no", check=False).stdout.strip():
+        return 1, ["NOT FILED: the worktree has uncommitted changes: commit each step first"]
+    git(wt, "fetch", "--quiet", REMOTE, "main", check=False)
+    ahead = unlanded_commits(wt)
+    if not ahead:
+        return 1, [f"NOT FILED: nothing in {wt.replace(HOME, '~')} that is not on {REMOTE}/main"]
+    items = red_targets(store, o_r, target, create=False)
+    if not items:
+        return 1, [f"NOT FILED: #{target} names no open red of {o_r}"]
+    head = git(wt, "rev-parse", "HEAD").strip()
+    branch = git(wt, "rev-parse", "--abbrev-ref", "HEAD", check=False).stdout.strip() or head[:10]
+    tw = wt.replace(HOME, "~")
+    cmd = f"git -C {tw} pull --rebase {REMOTE} main && git -C {tw} push {REMOTE} HEAD:main"
+    t = store.clock()
+    what = ", ".join(red_what(it["data"]) for it in items)
+    line = (f"RED OWNER PUSH: {what}: a fix is ready on {branch} ({len(ahead)} commit(s), "
+            f"{', '.join(s[:10] for s, _ in ahead[:6])}) in {wt.replace(HOME, '~')}"
+            + (f" -- {note}" if note else "") + f". {o_r} is owner-only (a push is a deploy): `! {cmd}`")
+    for it in items:
+        cur = store.item("red", it["id"])
+        red_move(store, cur, "fix-pending", line, data={"fix": {"status": "owner", "entry": f"owner-push:{branch}",
+                                                                "sha": head, "at": t, "worktree": wt, "cmd": cmd,
+                                                                "note": note, "verify_since": t}})
+    inbox_write("red", line, [line], [], 1, cwd=wt)
+    return 0, [line, f"BLOCKED ON OWNER: {cmd}"]
 
 
 def red_block(o_r, a):

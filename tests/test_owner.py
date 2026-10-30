@@ -72,7 +72,8 @@ class OwnerTest(OwnerBase):
         self.assertIn(A.OWNER_NOTEBOOK, prompt)
         self.assertIn("FAST REPRODUCER FIRST", prompt)
         with open(A.FIXER_BRIEF) as f:
-            self.assertIn(f.read().strip(), prompt, "the owner's prompt carries docs/fixer-brief.md word for word")
+            self.assertIn(A.fixer_brief_for(f.read().strip(), A.RED_PRIMARY), prompt,
+                          "the owner's prompt carries docs/fixer-brief.md word for word (its repo's section only)")
         self.assertNotIn("FIRST run `~/bin/agentctl red claim", prompt, "its leases are held for it")
         # the turn ends LANDED: that red's lease is released with the verdict; the owner lives on, heartbeating
         self.assertTrue(self.wait(lambda: str(A.lease_meta(self.st.get(row["name"])).get("outcome") or "")
