@@ -1605,6 +1605,9 @@ def red_renew_holders(store, t):
             if m.get("pid") and not proc_alive(m.get("pid"), m.get("process_start")):
                 store.revoke(row["name"], "its fixer process ended")  # ended: its attempt is counted now
                 continue
+            if m.get("record") and (read_record(m["record"]) or {}).get("ended"):
+                store.revoke(row["name"], "its fixer record ended")
+                continue
             mark = f"{os.path.getsize(m['log']) if m.get('log') and os.path.exists(m['log']) else 0}:" \
                    f"{red_wt_mark(m.get('worktree'))}"
             ttl = RED_IMPORT_TTL
@@ -1648,6 +1651,7 @@ def red_adopt_fixers(store, active, t):
             got = store.acquire(name, f"laptop:fixer:pid-{r.get('pid')}@{r.get('worktree')}",
                                 RED_IMPORT_TTL, RED_FIXER_MAX, progress="adopted", item=f"red:{it['id']}",
                                 meta={"kind": "legacy-fixer", "pid": r.get("pid"), "process_start": r.get("process_start"),
+                                      "record": r.get("path"),
                                       "log": r.get("log"), "worktree": r.get("worktree"), "who": f"red-fixer-{r.get('run')}",
                                       "workflow": d.get("workflow"), "run": r.get("run"), "gate": bool(d.get("gate"))})
             if "held" not in got:
@@ -1804,7 +1808,7 @@ def red_family_holder(store, fam, t, active=None):
         it = active.get(row["name"].split("/", 1)[1])
         if it and red_queue_family(it["data"]) == fam:
             return row
-    return None  # a fixer still alive on it WITHOUT a lease is previous_fixer_working's: never a second one beside it
+    return None  # a holder is ONLY a live lease: a live fixer without one gets it back from red_adopt_fixers first
 
 
 def red_dispatcher(store, o_r, repo, t):
@@ -1868,10 +1872,6 @@ def red_dispatcher(store, o_r, repo, t):
             why = blocker
         elif laptop():  # no new fixer on a laptop under pressure: offered still, no slot taken
             why = f"waiting: laptop pressure ({laptop()})"
-        elif (prev := previous_fixer_working(pic.get("key"), red_run_of(pic), None, red_family(pic),
-                                                     red_active(store), store, t)):
-            why = (f"its previous fixer {prev} is still at work on it: it stays the holder (its lease is taken again "
-                   "for it); this red is offered again when it ends")
         elif not free:
             why = cap_why
         else:

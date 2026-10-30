@@ -84,6 +84,17 @@ def red_fix_held(it, t, facts=None):
     return f"fix {f.get('entry') or (f.get('sha') or '')[:10] or 'verify'} {f.get('status')}"
 
 
+# A HOLDER IS ONLY A LIVE LEASE (2026-10-30: Main #2647 sat offered for hours, its offer saying "its previous fixer pid
+# 20496 ... is still at work on it: it stays the holder" -- a dead fixer of another, closed red, and no lease anywhere).
+# An open offer whose reason names a holder, while the red has no live lease, is a violation: its reason is cleared
+# and the dispatcher takes it again.
+HOLDER_CLAIM = re.compile(r"stays the holder|still at work on it|is its holder", re.I)
+
+
+def offer_names_holder(off):
+    return bool(off and HOLDER_CLAIM.search(str(off.get("reason") or "")))
+
+
 def red_unheld(store, t=None, facts=None):
     """The non-terminal reds with NOTHING live behind them: no live lease, no open offer, no fix on its way (red_fix_held),
     no live block. The tick's invariant (never NOBODY), enforced by red_enforce; a red the tick has not looked at yet
@@ -100,7 +111,7 @@ def red_unheld(store, t=None, facts=None):
             continue
         if st == "blocked-external" and red_block_of(it, store):
             continue
-        if st == "offered" and store.offer_of(f"red:{it['id']}"):
+        if st == "offered" and (off := store.offer_of(f"red:{it['id']}")) and not offer_names_holder(off):
             continue
         out.append(it)
     return out
@@ -118,8 +129,14 @@ def red_enforce(store, facts, t):
         d, st = it["data"], it["state"]
         try:
             if st == "offered":
-                red_put_offer(store, it)  # an offered red always has its open offer
-                acts.append(f"INVARIANT: {red_what(d)}: its offer reopened")
+                off = store.offer_of(f"red:{it['id']}")
+                if offer_names_holder(off):  # a stated holder with no live lease: no holder at all
+                    store.offer_reason(off["id"], None)
+                    acts.append(f"INVARIANT: {red_what(d)}: its offer named a holder with no live lease "
+                                f"({str(off.get('reason'))[:120]}): offered again")
+                else:
+                    red_put_offer(store, it)  # an offered red always has its open offer
+                    acts.append(f"INVARIANT: {red_what(d)}: its offer reopened")
             elif st == "fix-pending":
                 acts += red_fix_unverifiable(store, it, f"INVARIANT: no fix on its way for "
                                                         f"{fmt_age(t - it['entered_at'])} in fix-pending", t)

@@ -305,63 +305,6 @@ def fixers_of(key, run, fam=None):
             or (fam and red_family(r) == fam)]
 
 
-# AT WORK MEANS ALL THREE (2026-10-30: Main #2647's red sat offered with no fixer, "its previous fixer pid 20496 is
-# still at work on it" -- 20496 was dead, the fixer of the CLOSED red #38, found through the shared family and its idle
-# Claude session): its fixer process alive, its OWN red still open, and busy (its log or worktree moved within
-# FIXER_BUSY_SECS, or its lease live on the store). A fixer whose own red is closed never inherits a red by family.
-FIXER_BUSY_SECS = 15 * 60
-
-
-def fixer_busy(r, store=None, t=None):
-    """Its lease live on the store, or its log or worktree changed within FIXER_BUSY_SECS."""
-    t = t or time.time()
-    if store is not None and r.get("lease"):
-        try:
-            if lease_is_live(store.get(r["lease"]), t):
-                return True
-        except Exception:
-            pass
-    for p in (r.get("log"), r.get("worktree")):
-        try:
-            if p and t - os.path.getmtime(p) < FIXER_BUSY_SECS:
-                return True
-        except OSError:
-            pass
-    wt = r.get("worktree")
-    if wt and os.path.isdir(wt):
-        for name in (".git", "RED-INBOX.md", "HANDOFF.md"):
-            try:
-                if t - os.path.getmtime(os.path.join(wt, name)) < FIXER_BUSY_SECS:
-                    return True
-            except OSError:
-                pass
-    return False
-
-
-def fixer_own_red_open(r, active):
-    """Its own red (by its keys, or its run) is among the open reds (red_active's items)."""
-    keys, run = fixer_keys(r), (r.get("workflow"), str(r.get("run")))
-    return any(it["data"].get("key") in keys
-               or (it["data"].get("workflow"), str((it["data"].get("last_run") or {}).get("number"))) == run
-               for it in (active or {}).values())
-
-
-def previous_fixer_working(key, run, sessions=None, fam=None, active=None, store=None, t=None):
-    """'<who> (<worktree>)' of a fixer of this red still at work, else None: while it works it is the holder (the sync
-    re-acquires its lease), never a second fixer beside it. At work: its process alive, its own red open (this red, by
-    key or run; or, matched by family only, its own red in `active`), and busy (fixer_busy). sessions: unused (an idle
-    Claude session is no proof of work)."""
-    for r in fixers_of(key, run, fam):
-        if not r.get("alive"):
-            continue
-        own = key in fixer_keys(r) or (r.get("workflow"), str(r.get("run"))) == run
-        if not own and not fixer_own_red_open(r, active):
-            continue  # a fixer of a closed red never inherits a red by family
-        if fixer_busy(r, store, t):
-            return f"pid {r.get('pid')} ({str(r.get('worktree') or '?').replace(HOME, '~')})"
-    return None
-
-
 def previous_fixer_tree(u):
     """FIXER CONTINUITY (the owner, 2026-10-29: fixer -8 of #2473's red started fresh in movies-wt-red-2517 while -7's
     five commits sat unlanded in movies-wt-red-2473-5): a new fixer of the same red -- its key, any run of it -- goes on

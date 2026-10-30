@@ -499,6 +499,10 @@ class FixerContinuityTest(Phase2Base):
         pic = {"key": "k1", "workflow": "Identity model convergence", "job": "leg", "run": {"number": 2517, "databaseId": 9},
                "kind": "test"}
         self.st.offer("fixer", f"red:{it['id']}", "red/k1", "fresh", 1, t + 600, pic)
+        # the tick adopts before it dispatches: the live fixer is the holder again through a real lease, and only that
+        acts = A.red_adopt_fixers(self.remote, A.red_active(self.remote), t + 5)
+        self.assertEqual(len(acts), 1, acts)
+        self.assertTrue(self.st.get("red/k1")["holder"].startswith(f"laptop:fixer:pid-{os.getpid()}@"))
         spawned, saved = [], (A.red_spawn, A.cached_dispatch_blocker)
         A.red_spawn = lambda *a, **k: spawned.append(a) or (True, "ok")
         A.cached_dispatch_blocker = lambda: None
@@ -507,10 +511,6 @@ class FixerContinuityTest(Phase2Base):
         finally:
             A.red_spawn, A.cached_dispatch_blocker = saved
         self.assertEqual(spawned, [])
-        self.assertIn("previous fixer", self.st.offers("fixer")[0]["reason"])
-        acts = A.red_adopt_fixers(self.remote, A.red_active(self.remote), t + 5)  # it is the holder again
-        self.assertEqual(len(acts), 1, acts)
-        self.assertTrue(self.st.get("red/k1")["holder"].startswith(f"laptop:fixer:pid-{os.getpid()}@"))
 
     def test_a_lease_ended_on_purpose_is_not_taken_back(self):
         t = time.time()
@@ -621,49 +621,73 @@ class RedFamilyTest(Phase2Base):
         off, extra = self.spawned[0]
         self.assertEqual(sorted([off["picture"]["key"]] + [x["picture"]["key"] for x in extra]), ["c1", "c2"])
 
-    def family_fixer(self, alive=True, log_age=0, key="c2527"):
+    def family_fixer(self, alive=True, key="c2527"):
         log = os.path.join(self.tmp, "fixer-2527.log")
         with open(log, "w") as f:
             f.write("working\n")
-        os.utime(log, (time.time() - log_age,) * 2)
         wt = os.path.join(self.tmp, "movies-wt-red-2527")
         os.makedirs(wt, exist_ok=True)
-        os.utime(wt, (time.time() - log_age,) * 2)
         rec = {"workflow": "Identity model convergence", "run": 2527, "key": key, "job": "leg (uk)", "jobs": ["leg (uk)"],
                "worktree": wt, "log": log, "bg_id": "abc46699"}
         rec.update({"pid": os.getpid(), "process_start": A.process_start(os.getpid())} if alive else {"pid": 999999})
         A.write_json(A.reds_dir("2527", "fixer-5.json"), rec)
 
-    def test_a_family_fixer_alive_without_a_lease_means_no_second_fixer(self):
+    def own_red(self):
+        return self.st.put_item("red", "c2527", "offered", {"key": "c2527", "workflow": "Identity model convergence",
+                                                            "job": "leg (uk)", "last_run": {"number": 2527}})
+
+    def test_a_live_family_fixer_holds_only_through_its_adopted_lease(self):
+        """A holder is ONLY a live lease: a family fixer alive on its own open red gets that red's lease back
+        (red_adopt_fixers, renewed by its liveness), and a new red of its family joins it under that lease."""
         self.family_fixer()
-        self.st.put_item("red", "c2527", "offered", {"key": "c2527", "workflow": "Identity model convergence",
-                                                     "job": "leg (uk)", "last_run": {"number": 2527}})  # its own: open
+        self.own_red()
         self.red("c3", "Verify scrape recording", "convergence (spain)", 2531)
-        A.red_dispatcher(self.st, "o/r", self.repo, time.time())
+        t = time.time()
+        self.assertEqual(len(A.red_adopt_fixers(self.st, A.red_active(self.st), t)), 1)
+        acts = A.red_dispatcher(self.st, "o/r", self.repo, t)
         self.assertEqual(self.spawned, [])
-        self.assertIn("previous fixer", self.st.offers("fixer")[0]["reason"])
+        self.assertTrue(any("joined its family convergence's fixer" in a for a in acts), acts)
+        self.assertEqual(A.lease_meta(self.st.get("red/c3"))["kind"], "sibling")
 
     def test_a_fixer_of_a_closed_red_never_holds_a_new_red_of_its_family(self):
-        """2026-10-30: Main #2647 sat offered, "its previous fixer pid 20496 is still at work on it" -- the CLOSED red
-        #38's fixer, matched by family. Its own red closed: it is no holder, alive or not."""
-        self.family_fixer()  # alive and busy, but its own red (c2527) is not open
+        """2026-10-30: Main #2647 sat offered, "its previous fixer pid 20496 is still at work on it: it stays the
+        holder" -- 20496 was dead, the fixer of the CLOSED red #38, matched by family; `red release --any` found no
+        lease. Dead or alive, a fixer whose own red is closed holds nothing: the new red is dispatched."""
+        self.closed_reds_fixer(alive=False)
+
+    def test_a_live_fixer_of_a_closed_red_never_holds_a_new_red_of_its_family(self):
+        self.closed_reds_fixer(alive=True)
+
+    def closed_reds_fixer(self, alive):
+        self.family_fixer(alive=alive)  # its own red, c2527, is not open
         self.red("c3", "Verify scrape recording", "convergence (spain)", 2531)
-        self.assertIsNone(A.previous_fixer_working("c3", ("Verify scrape recording", "2531"), None, "convergence",
-                                                   A.red_active(self.st), self.st, time.time()))
-        A.red_dispatcher(self.st, "o/r", self.repo, time.time())
+        t = time.time()
+        self.assertEqual(A.red_adopt_fixers(self.st, A.red_active(self.st), t), [])
+        A.red_dispatcher(self.st, "o/r", self.repo, t)
         self.assertEqual([o["picture"]["key"] for o, _x in self.spawned], ["c3"])
 
-    def test_a_dead_or_idle_fixer_is_not_at_work_on_its_own_red(self):
-        own = ("Identity model convergence", "2527")
-        self.st.put_item("red", "c2527", "offered", {"key": "c2527", "workflow": "Identity model convergence",
-                                                     "job": "leg (uk)", "last_run": {"number": 2527}})
-        args = lambda: ("c2527", own, None, "convergence", A.red_active(self.st), self.st, time.time())
-        self.family_fixer(alive=False)  # its process is dead: its listed (idle) session is no proof of work
-        self.assertIsNone(A.previous_fixer_working(*args()))
-        self.family_fixer(alive=True, log_age=2 * A.FIXER_BUSY_SECS)  # alive, but nothing moved and no live lease
-        self.assertIsNone(A.previous_fixer_working(*args()))
-        self.family_fixer(alive=True)
-        self.assertIn(f"pid {os.getpid()}", A.previous_fixer_working(*args()))
+    def test_an_adopted_fixer_lease_ends_with_its_process_or_its_record(self):
+        self.family_fixer()
+        self.own_red()
+        t = time.time()
+        A.red_adopt_fixers(self.st, A.red_active(self.st), t)
+        self.assertTrue(A.lease_is_live(self.st.get("red/c2527"), t))
+        rec = A.read_record(A.reds_dir("2527", "fixer-5.json"))
+        A.write_json(A.reds_dir("2527", "fixer-5.json"), {**rec, "ended": "2026-10-30T04:00:00Z"})
+        A.red_renew_holders(self.st, t)
+        self.assertFalse(A.lease_is_live(self.st.get("red/c2527"), t))
+
+    def test_invariant_an_offered_red_whose_stated_holder_has_no_live_lease_is_offered_again(self):
+        """The watchdog's invariant: an offer whose reason names a holder with no live lease is a violation, and it
+        recovers itself: the offer's reason is cleared and the dispatcher takes it again."""
+        off = self.red("c4", "Verify scrape recording", "convergence (spain)", 2532)
+        self.st.offer_reason(off, "its previous fixer pid 20496 (~/x) is still at work on it: it stays the holder")
+        t = time.time() + 300
+        self.assertEqual([it["id"] for it in A.red_unheld(self.st, t)], ["c4"])
+        acts = A.red_enforce(self.st, None, t)
+        self.assertTrue(any("no live lease" in a for a in acts), acts)
+        self.assertIsNone(self.st.offers("fixer")[0]["reason"])
+        self.assertEqual(A.red_unheld(self.st, t), [])
 
 
 class LandAsYouGoTest(Phase2Base):
