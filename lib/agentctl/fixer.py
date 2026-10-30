@@ -1049,9 +1049,15 @@ def red_tick_others(store=None, now_=None, dispatch=False, force=True):
     if not force and time.time() - _last_others_tick[0] < env_num("AGENTCTL_RED_OTHERS_EVERY", RED_OTHERS_EVERY):
         return acts
     _last_others_tick[0] = time.time()
+    unread = []
     for c in red_repos():
         o_r = c["repo"]
         if o_r == RED_PRIMARY:
+            continue
+        try:
+            red_read_token(o_r)
+        except NoReadAccess:
+            unread.append(o_r)  # one condition for all of them, below: no line per tick
             continue
         try:
             snap = red_gate_snap(o_r)
@@ -1059,11 +1065,54 @@ def red_tick_others(store=None, now_=None, dispatch=False, force=True):
             with _red_lock:
                 acts += [f"{red_repo_short(o_r)}: {x}" for x in
                          red_tick(store or Store(), o_r, clone, snap, now_=now_, dispatch=dispatch)]
+            _others_said.pop(o_r, None)
         except (Exception, SystemExit) as e:
-            err(f"red tick: {o_r}: skipped ({str(e).replace('agentctl: ', '')[:200]})")
+            red_others_skipped(o_r, str(e).replace('agentctl: ', '')[:200])
+    if unread:
+        try:
+            red_no_read_access(unread, store)
+        except (Exception, SystemExit) as e:
+            err(f"red tick: could not note the missing read access ({str(e)[:120]})")
     for line in acts:
         err(f"red: {line}")
     return acts
+
+
+_others_said = {}  # repo -> (why, when said): a skipped repo's line is said when it changes, else every RED_SKIP_SAY s
+RED_SKIP_SAY = 600  # s between the lines of another repo whose tick keeps failing for the same reason
+
+
+def red_others_skipped(o_r, why, now_=None):
+    """Another repo's tick failed: said on a new reason, else at most every RED_SKIP_SAY s (it was every tick)."""
+    t = now_ if now_ is not None else time.time()
+    last = _others_said.get(o_r)
+    if last and last[0] == why and t - last[1] < env_num("AGENTCTL_RED_SKIP_SAY", RED_SKIP_SAY):
+        return None
+    _others_said[o_r] = (why, t)
+    line = f"red tick: {o_r}: skipped ({why})" + (" (still)" if last and last[0] == why else "")
+    err(line)
+    return line
+
+
+def red_no_read_access(repos, store=None):
+    """ONE condition while ci-runner cannot read the other watched repos: cleared by the red_read probe (a reader token
+    on the host that reads their runs)."""
+    return open_condition("UNKNOWN", f"NO READ ACCESS: {', '.join(repos)}: the reconciler cannot read their runs -- "
+                                     "ci-lander is push-only on movies (needs the agentctl-red-reader deploy); their "
+                                     "reds are not watched until then",
+                          run_probe("red_read", {"repos": list(repos)}), [], key="red-read-access", command="red",
+                          exit_code=2, store=store)
+
+
+def probe_red_read(a):
+    """Every repo in a["repos"] has a reader token and its runs read."""
+    for o_r in a.get("repos") or []:
+        try:
+            red_read_token(o_r)
+            gh_json(o_r, "run", "list", "--limit", "1", "--json", "databaseId")
+        except (Exception, SystemExit) as e:
+            return False, f"{o_r}: {str(e).replace('agentctl: ', '')[:160]}"
+    return True, "every watched repo's runs read"
 
 
 def maybe_red_tick(repo):

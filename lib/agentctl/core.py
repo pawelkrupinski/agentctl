@@ -421,9 +421,54 @@ def token_unavailable_note(ns, why):
 _noting_token = [False]  # token_unavailable_note is running: the remote store's own token read must not recurse
 
 
+# THE READ-ONLY RED READER (2026-10-30). On ci-runner the reconciler runs as ci-lander, whose token is push-only on
+# pawelkrupinski/movies by the owner's decision: it can read no other repository, so the red tick of infra and core
+# failed every tick ("failed to get runs"). Another repo's runs are read there with ci-red-reader's token instead -- a
+# Forgejo bot with read on infra and core and nothing else, minted on the host by infra's agentctl-red-reader-bot unit
+# into RED_READ_TOKEN_FILE (GH_TOKEN=...). ci-lander's GH_TOKEN is never offered to another repo.
+RED_READ_TOKEN_FILE = "/var/lib/agentctl-red-reader/token.env"  # $AGENTCTL_RED_READ_TOKEN_FILE
+
+
+class NoReadAccess(NoToken):
+    """ci-runner has no read token for a repo other than movies (the agentctl-red-reader deploy is not on the host)."""
+
+
+def red_read_token_file():
+    return os.environ.get("AGENTCTL_RED_READ_TOKEN_FILE") or RED_READ_TOKEN_FILE
+
+
+def on_ci_runner():
+    """The reconciler's own host (infra's agentctl.nix sets AGENTCTL_HOST=ci-runner), not a test's server role."""
+    return os.environ.get("AGENTCTL_HOST") == "ci-runner"
+
+
+def red_read_token(o_r):
+    """The read-only token for o_r on ci-runner: None for movies or off ci-runner (the usual path); NoReadAccess when the
+    host has no reader token."""
+    if token_ns(o_r) == "movies" or not on_ci_runner():
+        return None
+    path = red_read_token_file()
+    tok = ""
+    try:
+        with open(path) as f:
+            for line in f:
+                k, _, v = line.strip().partition("=")
+                if k == "GH_TOKEN":
+                    tok = v.strip().strip("'\"")
+    except OSError:
+        pass
+    if not tok:
+        raise NoReadAccess(f"agentctl: no read access to {o_r} (needs the agentctl-red-reader deploy: no token in {path})")
+    return tok
+
+
 def token(o_r):
     """ONE credential path for every agentctl process: the environment, then the processor's socket, then `secrets`
-    (absolute path). No source: NoToken naming the cause, and one inbox entry."""
+    (absolute path). No source: NoToken naming the cause, and one inbox entry. On ci-runner a repo other than movies
+    is read with the red reader's token alone (red_read_token)."""
+    rt = red_read_token(o_r)
+    if rt:
+        return rt
     if os.environ.get("GH_TOKEN"):
         return os.environ["GH_TOKEN"]
     ns = token_ns(o_r)

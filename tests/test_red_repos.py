@@ -166,6 +166,66 @@ class TickTest(RedReposBase):
             A.gate_runs = saved
         self.assertIn(INFRA, self.by_repo())
 
+    def on_ci_runner(self, token_file):
+        """The reconciler's environment: role server, ci-lander's push-only GH_TOKEN, the reader's token file."""
+        saved = (A.on_ci_runner, os.environ.get("GH_TOKEN"), os.environ.get("AGENTCTL_RED_READ_TOKEN_FILE"))
+        A.on_ci_runner = lambda: True
+        os.environ["GH_TOKEN"] = "ci-lander-push-only"
+        os.environ["AGENTCTL_RED_READ_TOKEN_FILE"] = token_file
+
+        def restore():
+            A.on_ci_runner = saved[0]
+            for k, v in (("GH_TOKEN", saved[1]), ("AGENTCTL_RED_READ_TOKEN_FILE", saved[2])):
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        self.addCleanup(restore)
+
+    def test_ci_runner_reads_other_repos_with_the_reader_token_never_ci_landers(self):
+        tf = os.path.join(self.tmp.name, "red-reader", "token.env")
+        self.on_ci_runner(tf)
+        os.makedirs(os.path.dirname(tf))
+        with open(tf, "w") as f:
+            f.write("GH_TOKEN=reader-tok\n")
+        self.assertEqual(A.token(INFRA), "reader-tok")
+        self.assertEqual(A.token(CORE), "reader-tok")
+        self.assertEqual(A.token(MOVIES), "ci-lander-push-only", "movies keeps ci-lander's own token")
+
+    def test_ci_runner_without_the_reader_token_says_no_read_access_once_as_a_condition(self):
+        """2026-10-30: every tick logged `red tick: bitcashier/infra: skipped (... failed to get runs)`: ci-lander can
+        read movies only. Now: one condition naming the deploy it needs, no line per tick, cleared once it reads."""
+        import contextlib, io
+        tf = os.path.join(self.tmp.name, "red-reader", "token.env")
+        self.on_ci_runner(tf)
+        with self.assertRaises(A.NoReadAccess):
+            A.token(INFRA)
+        errb = io.StringIO()
+        with contextlib.redirect_stderr(errb):
+            for _ in range(3):
+                self.others(advance=60)
+        self.assertNotIn("skipped", errb.getvalue())
+        self.assertNotIn(INFRA, self.by_repo())
+        conds = [c for c in A.open_conditions() if c["key"] == "red-read-access"]
+        self.assertEqual(len(conds), 1)
+        self.assertIn("needs the agentctl-red-reader deploy", conds[0]["text"])
+        self.assertIn(INFRA, conds[0]["text"])
+        self.assertIn(CORE, conds[0]["text"])
+        os.makedirs(os.path.dirname(tf))
+        with open(tf, "w") as f:
+            f.write("GH_TOKEN=reader-tok\n")  # the deploy: the unit minted it
+        A.recovery_tick(force=True)
+        self.assertEqual([c for c in A.open_conditions() if c["key"] == "red-read-access"], [])
+        self.others(advance=60)
+        self.assertIn(INFRA, self.by_repo())
+
+    def test_a_repo_that_keeps_failing_is_said_on_a_new_reason_or_every_ten_minutes(self):
+        A._others_said.clear()
+        self.assertIsNotNone(A.red_others_skipped(CORE, "HTTP 500", now_=1000))
+        self.assertIsNone(A.red_others_skipped(CORE, "HTTP 500", now_=1060))
+        self.assertIsNotNone(A.red_others_skipped(CORE, "HTTP 502", now_=1070))
+        self.assertIn("(still)", A.red_others_skipped(CORE, "HTTP 502", now_=1070 + A.RED_SKIP_SAY))
+
     def test_the_shared_run_lists_are_put_back(self):
         A._gate_lists["Main"] = ["movies"]
         self.others()

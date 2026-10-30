@@ -1360,9 +1360,11 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `red_fix_giveup` | `AGENTCTL_RED_FIX_GIVEUP` | `21600` | - |
 | `red_old_run` | `AGENTCTL_RED_OLD_RUN` | `172800` | an outside red whose newest run is older than this is checked by a fresh run before it is fixed |
 | `red_others_every` | `AGENTCTL_RED_OTHERS_EVERY` | `60` | seconds between the other watched repos' red ticks: one gate read each |
+| `red_read_token_file` | `AGENTCTL_RED_READ_TOKEN_FILE` | - | - |
 | `red_renew` | `AGENTCTL_RED_RENEW` | `60` | a fixer's wrapper renews its lease this often |
 | `red_repo` | `AGENTCTL_RED_REPO` | - | - |
 | `red_repos` | `AGENTCTL_RED_REPOS` | - | - |
+| `red_skip_say` | `AGENTCTL_RED_SKIP_SAY` | `600` | s between the lines of another repo whose tick keeps failing for the same reason |
 | `red_starve` | `AGENTCTL_RED_STARVE` | `2700` | an offer waiting this long for a slot is STARVED |
 | `red_tick` | `AGENTCTL_RED_TICK` | `15` | seconds between the processor's red ticks |
 | `restart_check` | `AGENTCTL_RESTART_CHECK` | `30` | seconds between code-version checks |
