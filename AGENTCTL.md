@@ -773,11 +773,9 @@ hook runs), verifies with `merge-base --is-ancestor` or `git cherry`, and prints
 
 Use it for every push to main. Don't use it for `measure/` branches: `identity-measure` pushes those itself.
 
-### remote checks: ci-runner's check tier under pressure
+### remote checks: ci-runner's check tier
 
-When the governor reports memory or CPU pressure (`gov status`'s `pressure:` line: memory pressure over 75%, under
-3 + 5 GB free with no idle sbt server to evict, or load over 2x the cores; `$AGENTCTL_REMOTE_PRESSURE`,
-`$AGENTCTL_REMOTE_LOAD`; `AGENTCTL_REMOTE_CHECKS=0` turns it off), a queued change's checks run on ci-runner instead:
+Whenever the checkout's hook supports it (owner decision 1), a queued change's checks run on ci-runner's check tier:
 the executor pushes the checked tip to `check/<entry id>` (movies' hook checks nothing for a check/ branch), whose push
 runs `.github/workflows/precommit-check.yml` on the check tier: the same hook, `--checks-only <merge-base>..HEAD`. The
 run is the ENTRY's, not the executor's: its record is saved the moment the branch is pushed, a replacement executor
@@ -1307,8 +1305,6 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `red_repo` | `AGENTCTL_RED_REPO` | - | - |
 | `red_starve` | `AGENTCTL_RED_STARVE` | `2700` | an offer waiting this long for a slot is STARVED |
 | `red_tick` | `AGENTCTL_RED_TICK` | `15` | seconds between the processor's red ticks |
-| `remote_load` | `AGENTCTL_REMOTE_LOAD` | `2.0` | - |
-| `remote_pressure` | `AGENTCTL_REMOTE_PRESSURE` | `75` | - |
 | `restart_check` | `AGENTCTL_RESTART_CHECK` | `30` | seconds between code-version checks |
 | `runners_page_cache` | `AGENTCTL_RUNNERS_PAGE_CACHE` | `f"{HOME}/.cache/ci-runners-page/last-good.json"` | - |
 | `sbt_reap` | `AGENTCTL_SBT_REAP` | - | the tests never reap this machine's servers |

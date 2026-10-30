@@ -35,7 +35,7 @@ class QueueTest(WaitingTest):
         with open(os.path.join(hooks, "pre-push"), "w") as f:
             f.write(f'#!/bin/sh\ncat > /dev/null\n'
                     f'echo "push remote=${{PREPUSH_REMOTE_RUN:-}}${{PREPUSH_SKIP:+ skip=$PREPUSH_SKIP}}" >> "{self.pushes}"\n')
-        self.saved_q = (A.gov_pressure, A.remote_check)
+        self.saved_q = A.remote_check
         # the repo's hook answers the dry-run queries the re-check rule reads: its compile plan (common <- worker,
         # web) and its plan of checks
         self.r.write("scripts/hooks/pre-push", PLAN_HOOK + REPO_HOOK.format(calls=self.calls).split("\n", 1)[1])
@@ -47,7 +47,7 @@ class QueueTest(WaitingTest):
                 os.remove(p)
 
     def tearDown(self):
-        A.gov_pressure, A.remote_check = self.saved_q
+        A.remote_check = self.saved_q
         os.environ["AGENTCTL_QUEUE"] = "0"
         super().tearDown()
 
@@ -247,7 +247,6 @@ class QueueTest(WaitingTest):
         os.remove(self.pushes)
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         eid, _ = self.queued(wt)
-        A.gov_pressure = lambda: "load 40 on 14 cores"
         A.remote_check = lambda repo, e, base, head, mode, own=None: (None, "no run started")
         self.assertEqual(self.check(eid), 0)
         self.assertEqual(len(self.calls_of("--range")), 1)
@@ -388,7 +387,6 @@ class RemotePickupTest(QueueTest):
         self.r.commit("the remote check workflow")
         self.r.push()
         os.remove(self.pushes)
-        A.gov_pressure = lambda: "load 99 on 14 cores"
         self.state = {"status": "running", "polls": 0, "branch_pushes": [], "cancelled": [], "fail_api": False}
         saved = (A.api, A.slug, A.git, A.cancel_run, A.fetch_failed_log)
         self.addCleanup(lambda: setattr(A, "api", saved[0]) or setattr(A, "slug", saved[1])

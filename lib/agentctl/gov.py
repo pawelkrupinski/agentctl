@@ -347,20 +347,6 @@ def gov_ticket(cls, mem=None, label="", kind="job", report=None):
         t.release()
 
 
-def gov_pressure():
-    """Why the laptop is under pressure now (memory pressure, free memory or load past the governor's limits for a
-    check), or None: `land` runs a change's checks on ci-runner while it says so."""
-    m = gov_machine()
-    if m.get("pressure") is not None and m["pressure"] >= env_num("AGENTCTL_REMOTE_PRESSURE", GOV_PRESSURE_DEFAULT):
-        return f"memory pressure {m['pressure']:.0f}%"
-    if m.get("free") is not None and m["free"] < env_num("AGENTCTL_GOV_RESERVE_GB", GOV_RESERVE_GB) + GOV_MEM_GB["check"] \
-            and not idle_servers():
-        return f"{m['free']:.1f} GB free and no idle sbt server to evict"
-    if m.get("load1") is not None and m["load1"] > env_num("AGENTCTL_REMOTE_LOAD", 2.0) * m["cores"]:
-        return f"load {m['load1']:.0f} on {m['cores']} cores"
-    return None
-
-
 # NO NEW FIXER ON A LAPTOP UNDER PRESSURE (the owner's coordinator, 2026-10-29: load 56-72 on 14 cores, swap 30.4 of
 # 31.7 GB). The dispatcher starts no fixer while swap used is over FIXER_SWAP_GB, the load over FIXER_LOAD x the cores,
 # or free memory under FIXER_FREE_GB: the red stays offered (`waiting: laptop pressure (...)`), takes no slot, and
@@ -433,7 +419,7 @@ def cmd_gov(a):
         idle = idle_servers()
         if idle:
             print("evictable: " + ", ".join(f"{os.path.basename(r)} ({int(i // 60)} min)" for i, r, _p in idle))
-        why = gov_pressure()
+        why = laptop_pressure()  # what the dispatcher reads
         print(f"pressure: {why} (no new fixer starts)" if why else "pressure: none")
         return 0
     if a.gcmd == "stats":
