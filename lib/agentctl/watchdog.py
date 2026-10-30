@@ -632,12 +632,7 @@ def cmd_orphans(a):
     for line in run_cmd(["ps", "-A", "-o", "pid=,ppid=,time="]).stdout.splitlines():
         f3 = line.split()
         if len(f3) == 3:
-            secs = 0.0
-            for x in re.split(r"[:-]", f3[2]):
-                try:
-                    secs = secs * 60 + float(x)
-                except ValueError:
-                    pass
+            secs = tosec(f3[2])
             procs_cpu[int(f3[0])] = secs
             children.setdefault(int(f3[1]), []).append(int(f3[0]))
     clients = {}

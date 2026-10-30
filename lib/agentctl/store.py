@@ -565,7 +565,7 @@ def project_events(store=None):
             cur = ev["seq"]
             continue
         final = refs.get("final", True)
-        rec = {"id": eid, "time": dt.datetime.fromtimestamp(ev["at"], dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        rec = {"id": eid, "time": iso_at(ev["at"]),
                "at": ev["at"], "command": refs.get("command") or ev["kind"].split(".")[0], "argv": [],
                "cwd": aud.get("worktree") or safe_cwd(), "pid": os.getpid(), "final": final,
                "exit": refs.get("exit", 0 if ev["severity"] == "info" else 1), "verdict": verdict,

@@ -32,15 +32,8 @@ def group_cpu_seconds(pgid):
     total = 0.0
     for line in r.stdout.splitlines():
         parts = line.split()
-        if len(parts) != 2 or parts[0] != str(pgid):
-            continue
-        secs = 0.0
-        for field in re.split(r"[:-]", parts[1]):
-            try:
-                secs = secs * 60 + float(field)
-            except ValueError:
-                pass
-        total += secs
+        if len(parts) == 2 and parts[0] == str(pgid):
+            total += tosec(parts[1])  # ps's d-hh:mm:ss: a day is 86400 s (the old split read it as 60 s)
     return total
 
 

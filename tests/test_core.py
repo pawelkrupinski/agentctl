@@ -69,5 +69,18 @@ class HostDifferencesTest(unittest.TestCase):
         self.assertTrue(A.TOOL_PATH.endswith("agentctl") and os.path.isfile(A.TOOL_PATH))
 
 
+
+class PsTimeTest(unittest.TestCase):
+    def test_one_parser_for_ps_times_and_a_day_is_a_day(self):
+        self.assertEqual(A.tosec("1-02:03:04"), 86400 + 2 * 3600 + 3 * 60 + 4)
+        self.assertEqual(A.tosec("03:04.50"), 184.5)
+        saved = A.run_cmd
+        A.run_cmd = lambda args, **kw: A.subprocess.CompletedProcess(args, 0, "  77 1-00:00:01\n  78 9:00\n", "")
+        try:
+            self.assertEqual(A.group_cpu_seconds(77), 86401)
+        finally:
+            A.run_cmd = saved
+
+
 if __name__ == "__main__":
     unittest.main()
