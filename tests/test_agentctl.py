@@ -454,7 +454,9 @@ class WaitAndStateTest(Base):
         os.environ["AGENTCTL_ATTACH_POLL"] = "0.2"
         target = os.path.join(self.tmp.name, "done.flag")
         proc = subprocess.Popen([sys.executable, TOOL, "wait", "file", target, "--interval", "1"], stdout=subprocess.PIPE, text=True, env=os.environ)
-        time.sleep(1.0)
+        t0 = time.time()  # the waiter's start (a cold interpreter on a loaded runner: over 1 s on CI run 3969)
+        while not A.owner_records() and time.time() - t0 < 20:
+            time.sleep(0.1)
         records = A.owner_records()
         self.assertEqual([(r["kind"], r["alive"]) for r in records], [("wait", True)])
         second = subprocess.Popen([sys.executable, TOOL, "wait", "file", target], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=os.environ)

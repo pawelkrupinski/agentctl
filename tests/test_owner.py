@@ -107,7 +107,9 @@ class OwnerTest(OwnerBase):
         self.wait(lambda: not A.pid_alive(first["pid"]) or os.waitpid(first["pid"], os.WNOHANG)[0])
         it = self.only()
         c = self.st.db()
-        c.execute("UPDATE leases SET expires_at=? WHERE holder=?", (time.time() - 1, A.owner_holder(FAM)))
+        # lapsed on the TICKS' clock (self.t), not the wall clock: on a slow runner the wall clock is well past self.t,
+        # and a lease that lapsed at wall-1 was still live at self.t+2 (CI run 3969)
+        c.execute("UPDATE leases SET expires_at=? WHERE holder=?", (self.t[0] - 1, A.owner_holder(FAM)))
         c.close()
         self.tick(dispatch=True, advance=1)   # the red's lease lapsed: offered again
         self.tick(dispatch=True, advance=1)   # ...and its owner, dead, started again
