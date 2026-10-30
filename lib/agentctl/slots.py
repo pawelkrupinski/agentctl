@@ -43,20 +43,8 @@ def machine_sample():
     """(load1, cpu %, memory pressure %, swap used MB) of this machine, cheaply; None where unreadable."""
     load1 = os.getloadavg()[0]
     cpu = min(100.0, 100.0 * load1 / (os.cpu_count() or 1))
-    pressure = swap = None
-    try:
-        r = subprocess.run(["memory_pressure", "-Q"], capture_output=True, text=True, timeout=10)
-        m = re.search(r"free percentage:\s*(\d+)", r.stdout)
-        pressure = 100 - int(m.group(1)) if m else None
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-    try:
-        r = subprocess.run(["sysctl", "-n", "vm.swapusage"], capture_output=True, text=True, timeout=10)
-        m = re.search(r"used = ([\d.]+)M", r.stdout)
-        swap = float(m.group(1)) if m else None
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-    return load1, cpu, pressure, swap
+    m = mem_stats()
+    return load1, cpu, m["pressure"], m["swap_used_mb"]
 
 
 class Slot:

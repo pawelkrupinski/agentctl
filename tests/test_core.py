@@ -82,5 +82,25 @@ class PsTimeTest(unittest.TestCase):
             A.run_cmd = saved
 
 
+
+class MemStatsTest(unittest.TestCase):
+    def test_linux_reads_proc_meminfo(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix="meminfo", delete=False) as f:
+            f.write("MemTotal:       33554432 kB\nMemFree:  1000 kB\nMemAvailable:    8388608 kB\n"
+                    "SwapTotal:       2097152 kB\nSwapFree:        1048576 kB\n")
+        real = A.read_meminfo
+        A.read_meminfo = lambda path="/proc/meminfo": real(f.name)
+        try:
+            m = A.mem_stats()
+            self.assertEqual((m["ram_gb"], m["free_gb"], m["pressure"]), (32.0, 8.0, 75))
+            self.assertEqual((m["swap_used_mb"], m["swap_total_mb"]), (1024.0, 2048.0))
+            self.assertEqual(A.ram_gb(), 32.0)
+            self.assertEqual(A.swap_usage(), (1024.0, 2048.0))
+        finally:
+            A.read_meminfo = real
+            os.unlink(f.name)
+
+
 if __name__ == "__main__":
     unittest.main()

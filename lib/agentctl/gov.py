@@ -51,12 +51,51 @@ def gov_log(msg):
         f.write(f"{ts()} {msg}\n")
 
 
-def ram_gb():
+def read_meminfo(path="/proc/meminfo"):
+    """{field: kB} of Linux's /proc/meminfo ({} elsewhere)."""
     try:
-        r = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=10)
-        return int(r.stdout.strip()) / 2 ** 30
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        return 36.0
+        with open(path) as f:
+            return {m.group(1): int(m.group(2)) for m in re.finditer(r"^(\w+):\s+(\d+)", f.read(), re.M)}
+    except OSError:
+        return {}
+
+
+def mem_stats():
+    """THE machine's memory, macOS or Linux alike: {ram_gb, free_gb, pressure (% of RAM not available), swap_used_mb,
+    swap_total_mb}, each None when unreadable. macOS: sysctl, vm_stat, memory_pressure; Linux (ci-runner, where a check
+    may fall back to running locally): /proc/meminfo (MemAvailable). Before, Linux read none of it: the budget assumed
+    36 GB and free memory, pressure and swap were unknown, so the governor admitted blind."""
+    out = dict.fromkeys(("ram_gb", "free_gb", "pressure", "swap_used_mb", "swap_total_mb"))
+    mi = read_meminfo()
+    if mi.get("MemTotal"):
+        out["ram_gb"] = mi["MemTotal"] / 2 ** 20
+        if "MemAvailable" in mi:
+            out["free_gb"] = mi["MemAvailable"] / 2 ** 20
+            out["pressure"] = round(100 * (1 - mi["MemAvailable"] / mi["MemTotal"]))
+        if "SwapTotal" in mi and "SwapFree" in mi:
+            out["swap_total_mb"] = mi["SwapTotal"] / 1024
+            out["swap_used_mb"] = (mi["SwapTotal"] - mi["SwapFree"]) / 1024
+        return out
+    r = run_cmd(["sysctl", "-n", "hw.memsize"], timeout=10)
+    if r.stdout.strip().isdigit():
+        out["ram_gb"] = int(r.stdout.strip()) / 2 ** 30
+    vm = run_cmd(["vm_stat"], timeout=10).stdout
+    page = re.search(r"page size of (\d+) bytes", vm)
+    if page:
+        pages = sum(int(m.group(2)) for m in re.finditer(r"Pages (free|inactive|speculative):\s+(\d+)", vm))
+        out["free_gb"] = pages * int(page.group(1)) / 2 ** 30
+    m = re.search(r"free percentage:\s*(\d+)", run_cmd(["memory_pressure", "-Q"], timeout=10).stdout)
+    if m:
+        out["pressure"] = 100 - int(m.group(1))
+    sw = run_cmd(["sysctl", "-n", "vm.swapusage"], timeout=10).stdout
+    tot, used = re.search(r"total = ([\d.]+)M", sw), re.search(r"used = ([\d.]+)M", sw)
+    if tot and used:
+        out["swap_total_mb"], out["swap_used_mb"] = float(tot.group(1)), float(used.group(1))
+    return out
+
+
+def ram_gb():
+    return mem_stats()["ram_gb"] or 36.0
 
 
 def gov_budget():
@@ -72,13 +111,7 @@ def free_gb():
             return float(run_cmd(probe, shell=True).stdout.strip())
         except ValueError:
             return None
-    try:
-        out = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=10).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    page = re.search(r"page size of (\d+) bytes", out)
-    pages = sum(int(m.group(2)) for m in re.finditer(r"Pages (free|inactive|speculative):\s+(\d+)", out))
-    return pages * int(page.group(1)) / 2 ** 30 if page else None
+    return mem_stats()["free_gb"]
 
 
 def gov_machine():
@@ -340,12 +373,8 @@ FIXER_FREE_GB = 4.0     # $AGENTCTL_FIXER_FREE_GB
 
 def swap_usage():
     """(used MB, total MB) of swap, or (None, None)."""
-    try:
-        r = subprocess.run(["sysctl", "-n", "vm.swapusage"], capture_output=True, text=True, timeout=10)
-        tot, used = re.search(r"total = ([\d.]+)M", r.stdout), re.search(r"used = ([\d.]+)M", r.stdout)
-        return (float(used.group(1)), float(tot.group(1))) if tot and used else (None, None)
-    except (OSError, subprocess.TimeoutExpired):
-        return None, None
+    m = mem_stats()
+    return m["swap_used_mb"], m["swap_total_mb"]
 
 
 def laptop_pressure(m=None, swap=None):
