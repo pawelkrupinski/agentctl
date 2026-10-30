@@ -373,6 +373,35 @@ DRIFT_STALL = 30 * 60  # s with no output before the drift check is ended (no ve
 # quiet_ok: every poll renews, and DRIFT_STALL alone ends it.
 
 
+# THE DRIFT CHECK'S TOOLS (2026-10-30, batch #4: "could not push measure/ci-lander/f3b716998-drift-aed681"). It was no
+# permission: ci-lander has write on movies and only main is protected, the same as the check/<id> branches it pushes
+# for every change. The reconciler's systemd PATH has no python3 and no gh. movies' lock_take (jvm-gate.sh) flocks
+# through `python3`, so identity_push_measure_branch waited 3600 s on a lock that could never be taken and gave up
+# before it pushed. forge-gh, the script's `gh`, is python3 too, and it reads $FORGEJO_API_TOKEN. drift_env gives the
+# script both: python3 (a shim to this interpreter, on the PATH only when none is there) and the repository's token
+# (the repository's, as $FORGEJO_API_TOKEN), so the push and the dispatch run as ci-lander with the rights it already has.
+def drift_env(repo, env=None):
+    env = tool_env() if env is None else dict(env)
+    try:
+        env["FORGEJO_API_TOKEN"] = token(slug(repo))  # movies' forge-gh reads this one
+    except (Exception, SystemExit) as ex:  # no token: the script says so itself (NO VERDICT)
+        err(f"drift check: no Forgejo token for the script ({str(ex)[:120]})")
+    parts = [p for p in env.get("PATH", "").split(":") if p]
+    if not any(os.access(os.path.join(p, "python3"), os.X_OK) for p in parts):
+        shim = state_root("tool-bin")
+        link = os.path.join(shim, "python3")
+        try:
+            os.makedirs(shim, exist_ok=True)
+            if os.path.realpath(link) != os.path.realpath(sys.executable):
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(link)
+                os.symlink(sys.executable, link)
+            env["PATH"] = ":".join(parts + [shim])
+        except OSError as ex:
+            err(f"drift check: no python3 for the script ({ex})")
+    return env
+
+
 def identity_model_commits(repo, commits):
     """The commits among `commits` that touch the identity model."""
     out = []
@@ -412,7 +441,7 @@ def batch_drift_check(repo, d, tree, base, tip, against_main=False):
     git(tree, "checkout", "-q", "--force", "--detach", tip, check=False)
     argv = [os.path.join(tree, DRIFT_CI), tip] + (["--against", "main"] if against_main else [])
     wlog(d, f"the batch {tip[:10]} holds {n} identity-model commits: drift check of its tip ({' '.join(argv[1:])})")
-    rc, out = run_watched(argv, tree, tool_env(), os.path.join(d, f"drift-{tip[:10]}"), "drift",
+    rc, out = run_watched(argv, tree, drift_env(repo), os.path.join(d, f"drift-{tip[:10]}"), "drift",
                           stall=env_num("AGENTCTL_DRIFT_STALL", DRIFT_STALL), quiet_ok=True)
     with open(os.path.join(d, "checks.log"), "a") as f:
         f.write(f"=== drift {ts()} {base[:10]}..{tip[:10]} rc {rc}\n{out}\n")

@@ -1,7 +1,7 @@
 """THE BATCH TIP'S DRIFT CHECK (G5, convergence-failures-2026-10-29 §4: E4's 13-commit and E9's 24-commit batches masked
 which identity change broke convergence). A batch with more than one identity-model commit runs movies'
 scripts/identity-drift-ci on its tip before the push; no script: a logged no-op; DRIFT RED splits the batch."""
-import os, stat, sys, tempfile, unittest
+import os, shutil, stat, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -109,6 +109,36 @@ class SplitTest(DriftBase):
     def batch(self, members, tip):
         return self.st.put_item("batch", "k#1", "checking", {"members": [e["id"] for e in members], "tip": tip,
                                                               "base": self.base, "tree": 0, "cls": "check"})
+
+    def test_the_script_gets_python3_and_the_token_the_reconcilers_path_lacks(self):
+        """2026-10-30 batch #4: ci-runner's reconciler PATH has no python3, so movies' lock_take (python3 flock) never
+        took the measure-push lock: 3600 s, then 'could not push measure/ci-lander/...' and no verdict. ci-lander may
+        push that branch (only main is protected); the script lacked its tools, not a permission."""
+        empty = os.path.join(self.tmp.name, "nobin")
+        os.makedirs(empty)
+        os.environ["GH_TOKEN"] = "tok-lander"
+        self.addCleanup(os.environ.pop, "GH_TOKEN", None)
+        env = A.drift_env(self.r.path, {"PATH": empty})
+        py = shutil.which("python3", path=env["PATH"])
+        self.assertTrue(py)
+        self.assertEqual(os.path.realpath(py), os.path.realpath(sys.executable))
+        self.assertEqual(env["FORGEJO_API_TOKEN"], "tok-lander")
+        self.assertEqual(env["PATH"].split(":")[0], empty, "its own PATH first; the shim only appended")
+        here = os.path.dirname(os.path.realpath(sys.executable))
+        if os.access(os.path.join(here, "python3"), os.X_OK):  # a python3 on the PATH already: the PATH as it was
+            self.assertEqual(A.drift_env(self.r.path, {"PATH": here})["PATH"], here)
+        # and the drift check runs the script with it
+        seen = []
+        saved = A.drift_env
+        A.drift_env = lambda repo, env=None: seen.append(repo) or saved(repo, env)
+        try:
+            self.script()
+            self.change("identity/a.scala")
+            tip = self.change("identity/b.scala")
+            A.batch_drift_check(self.r.path, self.d, self.r.path, self.base, tip)
+        finally:
+            A.drift_env = saved
+        self.assertEqual(seen, [self.r.path])
 
     def test_drift_red_with_several_identity_changes_splits_them_one_per_batch(self):
         self.script()
