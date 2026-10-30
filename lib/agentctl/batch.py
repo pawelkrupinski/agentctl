@@ -310,6 +310,34 @@ def _tick_batch(repo, d, now_, seen):
     return []
 
 
+# THE BATCH GOES FIRST (2026-10-30). Batch #4 (the flips and filmweb changes) passed its 45-min check at 14:34Z, but a
+# solo change (identity-solid) had pushed at 14:05Z, so its push found main moved and assembled it again; and the moment
+# its executor freed check tree 3 the change tick (it runs before the batch tick) started a change's check in it, so
+# the batch could neither push from its tree nor, assembling, get any tree: it waited behind every solo change, for
+# ever. Now, while the batch is open with changes waiting, a checked change does not push (assembling, checking,
+# bisecting, pushing: a push moves main under it) and no new change check takes a tree while the batch needs one
+# (assembling, pushing). Its deadlines bound the wait: a held or blocked-red batch lets solo changes go.
+BATCH_FIRST = ("assembling", "checking", "bisecting", "pushing")
+
+
+def batch_goes_first(st, d, states=BATCH_FIRST):
+    """The open batch, when solo changes wait for it (its state in `states`, changes waiting in it), else None."""
+    it = current_batch(st, d)
+    return it if it and it["state"] in states and waiting_entries(d) else None
+
+
+_behind_said = {}  # (entry id, what) -> batch id: said once per batch
+
+
+def behind_batch(e, it, what):
+    """The tick's line for a change held behind the batch: once per change, batch and kind."""
+    k = (e["id"], what)
+    if _behind_said.get(k) == it["id"]:
+        return []
+    _behind_said[k] = it["id"]
+    return [f"{e['id']}: its {what} waits for batch {it['id']} ({it['state']})"]
+
+
 def batch_row_ids(bt, rows):
     """The change rows the batch carries: its members, and a change that joined one of them (the same worktree: a
     queued change that met a red gate becomes a waiting entry of its own, so its item follows that entry)."""

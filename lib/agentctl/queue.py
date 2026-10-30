@@ -788,6 +788,10 @@ def tick_changes(repo, d, now_=None):
         if state == "checked":
             if e.get("retry_after", 0) > t:
                 continue
+            first = batch_goes_first(st, d)
+            if first:  # a solo push now moves main under the batch, and its whole check is thrown away
+                did += behind_batch(e, first, "push")
+                continue
             did.append(f"{e['id']}: {push_change(repo, d, e)}")
             continue
         alive = checker_alive(e["id"])
@@ -801,6 +805,10 @@ def tick_changes(repo, d, now_=None):
                                          f"{e.get('waiting_on') or 'a check slot' if not e.get('retry_after', 0) > t else 'its retry'}",
                                  "audience": {"worktree": e.get("worktree")}})
         if alive or e.get("retry_after", 0) > t:
+            continue
+        first = batch_goes_first(st, d, ("assembling", "pushing"))
+        if first:  # the next free check tree is the batch's: to assemble it, or to push from its own tree
+            did += behind_batch(e, first, "check")
             continue
         slot = check_tree_slot(repo, d)
         if not slot:

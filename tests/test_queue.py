@@ -94,6 +94,56 @@ class QueueTest(WaitingTest):
         _d, clone, _w = A.waiting_state(self.r.path)
         self.assertTrue(os.path.isdir(f"{clone}-wt-check-1"), "checked in a check tree, kept warm")
 
+    def test_a_solo_change_waits_while_the_batch_checks_and_lands_after_it(self):
+        """2026-10-30: batch #4 passed its 45-min check, but a solo change had pushed meanwhile, so it was assembled
+        again; then the change tick took its freed check tree for another change: the batch never landed. While the
+        batch is open, a checked change does not push, and no change takes a tree the batch needs."""
+        def entry(eid):
+            return A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+
+        def tick():
+            started = []
+            saved = A.spawn_executor
+            A.spawn_executor = lambda repo, d_, eid: started.append(eid)
+            try:
+                return A.tick_changes(self.r.path, d), started
+            finally:
+                A.spawn_executor = saved
+        d, _c, _w = A.waiting_state(self.r.path)
+        self.reds = {"7"}
+        wa, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: waits")
+        ea, _ = self.queued(wa)
+        self.check(ea)  # red: it joins `waiting`
+        self.reds = set()
+        saved = A.spawn_batch_executor
+        A.spawn_batch_executor = lambda repo, d_, bid: None  # its executor runs elsewhere
+        try:
+            self.assertIn("checking", A.tick_batch(self.r.path, d)[0])
+        finally:
+            A.spawn_batch_executor = saved
+        wb, _ = self.agent("b", "worker/src/main/B.scala", "b\n", msg="b: solo")
+        eb, _ = self.queued(wb)
+        A.check_entry(self.r.path, eb)
+        self.assertEqual(entry(eb)["status"], "checked")
+        did, _started = tick()
+        self.assertIn(f"{eb}: its push waits for batch", " ".join(did))
+        self.assertEqual(entry(eb)["status"], "checked", "no solo push under the checking batch")
+        self.assertEqual(self.remote_log()[0], "the hook's plans")
+        st = A.Store()
+        bt = self.batch()
+        st.transition("batch", bt["id"], "pushing", bt["version"])  # passed: its tree is about to be pushed from
+        wc, _ = self.agent("c", "worker/src/main/C.scala", "c\n", msg="c: queued")
+        ec, _ = self.queued(wc)
+        _did, started = tick()
+        self.assertNotIn(ec, started, "no change check takes a tree the batch needs")
+        self.drive()  # the batch pushes
+        self.assertEqual(entry(entry(ea)["waiting_id"])["status"], "landed")
+        self.assertEqual(self.remote_log()[0], "a: waits", "the batch first")
+        _did, started = tick()
+        self.assertIn(ec, started, "the batch landed: changes go again")
+        tick()  # b: main moved by the batch, no overlap: pushed
+        self.assertEqual(entry(eb)["status"], "landed")
+
     def test_red_main_the_checked_change_joins_waiting(self):
         self.reds = {"7"}
         wt, sha = self.agent("a", "web/src/main/A.scala", "a\n")
