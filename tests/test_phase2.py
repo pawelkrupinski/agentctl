@@ -1,6 +1,6 @@
 """Phase 2 (design §6.3, §13 phase 2): the store over HTTP with Forgejo token auth, RemoteStore, the laptop's sync, the
 reconciler's entry point on ci-runner -- against a local server on a temp port, with a fake Forgejo for the auth."""
-import contextlib, io, json, os, signal, socket, subprocess, sys, tempfile, threading, time, unittest, urllib.request
+import contextlib, io, json, os, re, signal, socket, subprocess, sys, tempfile, threading, time, unittest, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -172,18 +172,17 @@ class RemoteStoreTest(Phase2Base):
         evs = r.events(after=0)
         self.assertTrue(any(e["kind"] == "condition.closed" for e in evs))
 
-    def test_store_returns_a_remote_store_when_the_url_is_set_and_the_rest_routes_answer(self):
+    def test_store_returns_a_remote_store_when_the_url_is_set_and_every_method_goes_through_the_rpc(self):
         self.sync()
         s = A.Store()
         self.assertIsInstance(s, A.RemoteStore)
         self.assertIsInstance(A.Store(path=os.path.join(self.tmp, "x.db")), A.Store)  # a path: always local
-        took = s.call("POST", "/v1/leases/land/movies:acquire", {"holder": "h", "ttl_s": 60, "max_hold_s": 120})["result"]
-        self.assertEqual(s.call("POST", "/v1/leases/land/movies:renew",
-                                {"epoch": took["epoch"], "secret": took["secret"], "progress": "a", "ttl_s": 60})["result"],
-                         "ok")
-        self.assertEqual([x["name"] for x in s.call("GET", "/v1/leases?prefix=land/")["leases"]], ["land/movies"])
-        self.assertEqual(s.call("POST", "/v1/leases/land/movies:release",
-                                {"epoch": took["epoch"], "secret": took["secret"]})["result"], "ok")
+        took = s.acquire("land/movies", "h", 60, 120)  # every Store method through POST /v1/store/<method>
+        self.assertEqual(s.renew("land/movies", took["epoch"], took["secret"], "a", 60), "ok")
+        self.assertEqual([x["name"] for x in s.list("land/")], ["land/movies"])
+        s.release("land/movies", took["epoch"], took["secret"])
+        self.assertFalse(s.get("land/movies")["holder"])
+        self.assertEqual(self.status_of("GET", "/v1/leases"), 404, "the REST lease routes are gone: one transport")
 
     def test_store_use_switches_every_process_here_and_there_is_no_local_store(self):
         os.environ.pop("AGENTCTL_ROLE")
@@ -201,20 +200,13 @@ class RemoteStoreTest(Phase2Base):
         with self.assertRaises(SystemExit):
             A.main(["store", "import", "--to", self.url])  # gone: a lost store is rebuilt on ci-runner (design §16)
 
-    def test_events_long_poll_wakes_on_a_new_event_and_acks(self):
-        it = self.st.put_item("condition", "c2", "open", {})
-        got = []
-        th = threading.Thread(target=lambda: got.extend(self.remote.wait_events(after=999999, wait=5)))
-        t0 = time.time()
-        th.start()
-        th.join()
-        self.assertEqual(got, [])
-        self.assertGreaterEqual(time.time() - t0, 4)
-        self.st.transition("condition", "c2", "closed", it["version"], event={"text": "x", "severity": "escalate"})
-        seq = max(e["seq"] for e in self.st.events())
-        [ev] = self.remote.wait_events(after=seq - 1, wait=5)
-        self.remote.call("POST", f"/v1/events/{ev['seq']}:ack", {})
-        self.assertTrue(self.st.events(after=seq - 1)[0]["notified_at"])
+    def status_of(self, method, path):
+        try:
+            self.remote.call(method, path)
+        except A.StoreUnavailable as e:
+            return int(re.search(r"HTTP (\d+)", str(e)).group(1))
+        return 200
+
 
 
 class SubmitTest(Phase2Base):

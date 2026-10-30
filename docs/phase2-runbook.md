@@ -258,8 +258,9 @@ The header of `agentctl.rules` defines each one.
 
 ### What the code does (2026-10-29), and where it differs from the design
 
-- `store serve`: the §6.3 routes, plus `POST /v1/store/<method>` for every Store method (RemoteStore's
-  transport) and `GET /v1/leases`. A store error (StaleVersion, TerminalState, LeaseLost) answers 409 and is
+- `store serve`: ONE transport, `POST /v1/store/<method>` for every Store method (RemoteStore's), plus
+  `GET /v1/state`, `POST /v1/changes[/<id>:cancel]`, `POST /v1/tick` and `GET /metrics` (the §6.3 REST lease, offer and
+  event routes had no client and are gone, 2026-10-30). A store error (StaleVersion, TerminalState, LeaseLost) answers 409 and is
   raised as itself on the laptop. At start every live lease is extended by the store's downtime (§6.2).
   `POST /v1/reds/{sig}:block` is not a route: `red block` runs on the laptop through the RPC.
 - `tick` (AGENTCTL_HOST=ci-runner): clones `$AGENTCTL_MOVIES_REMOTE` to `$HOME/movies` as remote `forgejo`

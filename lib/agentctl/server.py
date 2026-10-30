@@ -23,7 +23,6 @@ STORE_RPC = ("acquire", "renew", "note", "release", "revoke", "set_meta", "offer
 STORE_AUTH_CACHE = 300   # s a token's login is trusted before Forgejo is asked again (§15)
 STORE_AUTH_CACHE_MAX = 1000  # tokens remembered at once
 STORE_BODY_MAX = 4 << 20     # bytes: a larger request body is refused unread (413)
-EVENTS_WAIT_MAX = 25     # s a GET /v1/events long-poll waits for a new event
 STORE_PORT = 3014
 SYNC_MIRROR_EVERY = 10   # s between the laptop's copies of /v1/state into state.json
 
@@ -145,10 +144,6 @@ class RemoteStore:
 
     def state(self):
         return self.call("GET", "/v1/state")
-
-    def wait_events(self, after, wait=EVENTS_WAIT_MAX, limit=500):
-        return self.call("GET", f"/v1/events?after={int(after)}&wait={int(wait)}&limit={int(limit)}",
-                         timeout=wait + 30)["events"]
 
     def submit(self, entry):
         return self.call("POST", "/v1/changes", entry, safe=bool(entry.get("id")))  # an id: the same change twice
@@ -787,38 +782,6 @@ class StoreAPI:
             return 200, "text/plain; version=0.0.4", metrics_text(st).encode()
         if method == "GET" and p == "/v1/state":
             return self._json(200, state_read())
-        if method == "GET" and p == "/v1/leases":
-            return self._json(200, {"leases": st.list(q.get("prefix", ""))})
-        if method == "POST" and p.startswith("/v1/leases/") and ":" in p:
-            name, op = urllib.parse.unquote(p[len("/v1/leases/"):]).rsplit(":", 1)
-            if op == "acquire":
-                r = st.acquire(name, b["holder"], float(b["ttl_s"]), float(b["max_hold_s"]), b.get("progress") or "",
-                               b.get("item"), b.get("meta"))
-            elif op == "renew":
-                r = st.renew(name, int(b["epoch"]), b["secret"], b.get("progress") or "", float(b["ttl_s"]),
-                             note=b.get("note"))
-            elif op == "release":
-                r = st.release(name, int(b["epoch"]), b["secret"], b.get("outcome"), b.get("notes"))
-            else:
-                raise KeyError(op)
-            return self._json(200, {"result": r})
-        if method == "GET" and p == "/v1/offers":
-            return self._json(200, {"offers": st.offers(q.get("kind"))})
-        if method == "POST" and re.fullmatch(r"/v1/offers/\d+:take", p):
-            r = st.take(int(p.split("/")[3].split(":")[0]), b["holder"], float(b["ttl_s"]),
-                        float(b.get("max_hold_s") or b["ttl_s"]), b.get("meta"))
-            return self._json(200, {"result": r})
-        if method == "GET" and p == "/v1/events":
-            after, wait = int(q.get("after", 0)), min(float(q.get("wait", 0)), EVENTS_WAIT_MAX)
-            end = time.time() + wait
-            while True:
-                evs = st.events(after=after, limit=int(q.get("limit", 500)))
-                if evs or time.time() >= end:
-                    return self._json(200, {"events": evs})
-                time.sleep(0.5)
-        if method == "POST" and re.fullmatch(r"/v1/events/\d+:ack", p):
-            st.mark_notified(int(p.split("/")[3].split(":")[0]))
-            return self._json(200, {"result": "ok"})
         if method == "POST" and p == "/v1/changes":
             return self._json(200, submit_change(b, self.repo))
         if method == "POST" and re.fullmatch(r"/v1/changes/[^/]+:(cancel|abandon)", p):
