@@ -131,7 +131,7 @@ class RequeueTest(unittest.TestCase):
         try:
             waits = []
             for _ in range(4):
-                self.assertTrue(A.requeue_infra(d, e, "the push failed on infra (closed by remote host)"))
+                A.requeue_infra(d, e, "the push failed on infra (closed by remote host)")
                 waits.append(round(e["retry_after"] - time.time()))
                 self.assertEqual(e["status"], "queued")
                 st.transition("change", "e1", "checking", st.item("change", "e1")["version"])

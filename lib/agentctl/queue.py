@@ -35,7 +35,7 @@ def requeue_infra(d, e, why, delay=None, reason=None, detail=None, repo=None):
     QUEUE_INFRA_RETRIES on, each re-queue is an escalation (its event's severity). NEVER SILENTLY FOREVER (2026-10-29:
     a corrupt clone's fetch of main re-queued every change for hours, and nobody was told): re-queued for the same
     reason (reason: why without its details) QUEUE_INFRA_RETRIES times or for INFRA_SAME_MAX, it opens a condition
-    with the exact error (detail), which its own probe clears. Returns True."""
+    with the exact error (detail), which its own probe clears."""
     n = e.get("infra_retries", 0) + 1
     wait = delay if delay is not None else INFRA_BACKOFF[min(n - 1, len(INFRA_BACKOFF) - 1)]
     sev = "escalate" if n >= QUEUE_INFRA_RETRIES else "info"
@@ -56,7 +56,6 @@ def requeue_infra(d, e, why, delay=None, reason=None, detail=None, repo=None):
             infra_requeue_condition(d, e, why, reason, n_same, t - since, detail, repo)
         except (Exception, SystemExit) as x:
             err(f"{e['id']}: re-queued {n_same} times for {reason}, and its condition could not be opened ({str(x)[:160]})")
-    return True
 
 
 INFRA_SAME_MAX = 30 * 60
@@ -585,17 +584,19 @@ def _check_entry(repo, d, e, i, own=None):
     fetched, ferr = fetch_main(repo)  # a corruption signature marks the clone for repair (clone_heal_tick)
     if not fetched:  # never checked on a stale main; git's own words say why (2026-10-29: "Could not read 409b8bb...")
         last = (ferr.strip().splitlines() or ["?"])[-1][:240]
-        return 0 if requeue_infra(d, e, f"{FETCH_MAIN_FAILED}: {last}", reason=FETCH_MAIN_FAILED, detail=ferr,
-                                  repo=repo) else 1
+        requeue_infra(d, e, f"{FETCH_MAIN_FAILED}: {last}", reason=FETCH_MAIN_FAILED, detail=ferr,
+                      repo=repo)
+        return 0
     base = git(repo, "rev-parse", f"{REMOTE}/main").strip()
     if not git_ok(repo, "cat-file", "-e", f"{e['head']}^{{commit}}"):  # phase 2: the change is on Forgejo, as land/<id>
         lr = git(repo, "fetch", "--quiet", REMOTE, f"refs/heads/land/{e['id']}", check=False)
         if not git_ok(repo, "cat-file", "-e", f"{e['head']}^{{commit}}"):
             lerr = (lr.stderr or "").strip()
             note_clone_suspect(repo, lerr)
-            return 0 if requeue_infra(d, e, f"its commits are not here and refs/heads/land/{e['id']} gave none"
-                                      + (f": {lerr.splitlines()[-1][:240]}" if lerr else ""), detail=lerr,
-                                      repo=repo) else 1
+            requeue_infra(d, e, f"its commits are not here and refs/heads/land/{e['id']} gave none"
+                          + (f": {lerr.splitlines()[-1][:240]}" if lerr else ""), detail=lerr,
+                          repo=repo)
+            return 0
     rem = e.get("remote") or {}
     adopt = (rem.get("head") == e["head"] and rem.get("base") == base and not rem.get("collected_at")
              and rem.get("status") not in ("cancelled", "skipped", "abandoned")
@@ -630,13 +631,16 @@ def _check_entry(repo, d, e, i, own=None):
     if hook:
         ok, out, where = run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own)
         if ok is None:  # stalled: the laptop's, not the change's
-            return 0 if requeue_infra(d, e, f"its checks stalled ({where})") else 1
+            requeue_infra(d, e, f"its checks stalled ({where})")
+            return 0
         if not ok and INFRA_CHECK_FAILURE.search(out or ""):
-            return 0 if requeue_infra(d, e, f"its checks failed on the laptop, not on the change "
-                                           f"({INFRA_CHECK_FAILURE.search(out).group(0)})") else 1
+            requeue_infra(d, e, f"its checks failed on the laptop, not on the change "
+                             f"({INFRA_CHECK_FAILURE.search(out).group(0)})")
+            return 0
         if not ok and e.get("infra_reason") == NETWORK_REASON and network_failure(out):
-            return 0 if requeue_infra(d, e, f"{NETWORK_REASON} ({network_failure(out)})", reason=NETWORK_REASON,
-                                      detail=out, repo=repo) else 1
+            requeue_infra(d, e, f"{NETWORK_REASON} ({network_failure(out)})", reason=NETWORK_REASON,
+                          detail=out, repo=repo)
+            return 0
         if not ok:
             queue_verdict(d, e, "rejected", f"NOT LANDED: the pre-push checks failed ({where}); the change "
                           f"{e['head'][:10]} stays in {e['worktree']}", (out or "").splitlines())
