@@ -609,14 +609,49 @@ class RedFamilyTest(Phase2Base):
         off, extra = self.spawned[0]
         self.assertEqual(sorted([off["picture"]["key"]] + [x["picture"]["key"] for x in extra]), ["c1", "c2"])
 
+    def family_fixer(self, alive=True, log_age=0, key="c2527"):
+        log = os.path.join(self.tmp, "fixer-2527.log")
+        with open(log, "w") as f:
+            f.write("working\n")
+        os.utime(log, (time.time() - log_age,) * 2)
+        wt = os.path.join(self.tmp, "movies-wt-red-2527")
+        os.makedirs(wt, exist_ok=True)
+        os.utime(wt, (time.time() - log_age,) * 2)
+        rec = {"workflow": "Identity model convergence", "run": 2527, "key": key, "job": "leg (uk)", "jobs": ["leg (uk)"],
+               "worktree": wt, "log": log, "bg_id": "abc46699"}
+        rec.update({"pid": os.getpid(), "process_start": A.process_start(os.getpid())} if alive else {"pid": 999999})
+        A.write_json(A.reds_dir("2527", "fixer-5.json"), rec)
+
     def test_a_family_fixer_alive_without_a_lease_means_no_second_fixer(self):
-        A.write_json(A.reds_dir("2527", "fixer-5.json"),
-                     {"workflow": "Identity model convergence", "run": 2527, "job": "leg (uk)", "jobs": ["leg (uk)"],
-                      "worktree": self.tmp, "pid": os.getpid(), "process_start": A.process_start(os.getpid())})
+        self.family_fixer()
+        self.st.put_item("red", "c2527", "offered", {"key": "c2527", "workflow": "Identity model convergence",
+                                                     "job": "leg (uk)", "last_run": {"number": 2527}})  # its own: open
         self.red("c3", "Verify scrape recording", "convergence (spain)", 2531)
         A.red_dispatcher(self.st, "o/r", self.repo, time.time())
         self.assertEqual(self.spawned, [])
         self.assertIn("previous fixer", self.st.offers("fixer")[0]["reason"])
+
+    def test_a_fixer_of_a_closed_red_never_holds_a_new_red_of_its_family(self):
+        """2026-10-30: Main #2647 sat offered, "its previous fixer pid 20496 is still at work on it" -- the CLOSED red
+        #38's fixer, matched by family. Its own red closed: it is no holder, alive or not."""
+        self.family_fixer()  # alive and busy, but its own red (c2527) is not open
+        self.red("c3", "Verify scrape recording", "convergence (spain)", 2531)
+        self.assertIsNone(A.previous_fixer_working("c3", ("Verify scrape recording", "2531"), None, "convergence",
+                                                   A.red_active(self.st), self.st, time.time()))
+        A.red_dispatcher(self.st, "o/r", self.repo, time.time())
+        self.assertEqual([o["picture"]["key"] for o, _x in self.spawned], ["c3"])
+
+    def test_a_dead_or_idle_fixer_is_not_at_work_on_its_own_red(self):
+        own = ("Identity model convergence", "2527")
+        self.st.put_item("red", "c2527", "offered", {"key": "c2527", "workflow": "Identity model convergence",
+                                                     "job": "leg (uk)", "last_run": {"number": 2527}})
+        args = lambda: ("c2527", own, None, "convergence", A.red_active(self.st), self.st, time.time())
+        self.family_fixer(alive=False)  # its process is dead: its listed (idle) session is no proof of work
+        self.assertIsNone(A.previous_fixer_working(*args()))
+        self.family_fixer(alive=True, log_age=2 * A.FIXER_BUSY_SECS)  # alive, but nothing moved and no live lease
+        self.assertIsNone(A.previous_fixer_working(*args()))
+        self.family_fixer(alive=True)
+        self.assertIn(f"pid {os.getpid()}", A.previous_fixer_working(*args()))
 
 
 class LandAsYouGoTest(Phase2Base):

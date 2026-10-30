@@ -289,18 +289,6 @@ def unlanded_commits(wt):
     return out
 
 
-def fixer_working(r, sessions=None):
-    """A fixer record still at work: its wrapper alive, or (its wrapper gone without an end) its background session
-    still listed as not done. sessions: `claude agents --json --all`'s rows, read once by the caller."""
-    if r.get("alive"):
-        return True
-    if r.get("ended") or not r.get("bg_id") or not sessions:
-        return False
-    row = next((x for x in sessions if x.get("id") == r["bg_id"] or str(x.get("sessionId") or "").startswith(r["bg_id"])),
-               None)
-    return bool(row) and row.get("state") not in ("done", "stopped", "failed")
-
-
 def bg_sessions():
     try:
         r = subprocess.run([claude_cli(), "agents", "--json", "--all"], capture_output=True, text=True, timeout=60,
@@ -317,16 +305,59 @@ def fixers_of(key, run, fam=None):
             or (fam and red_family(r) == fam)]
 
 
-def previous_fixer_working(key, run, sessions=None, fam=None):
+# AT WORK MEANS ALL THREE (2026-10-30: Main #2647's red sat offered with no fixer, "its previous fixer pid 20496 is
+# still at work on it" -- 20496 was dead, the fixer of the CLOSED red #38, found through the shared family and its idle
+# Claude session): its fixer process alive, its OWN red still open, and busy (its log or worktree moved within
+# FIXER_BUSY_SECS, or its lease live on the store). A fixer whose own red is closed never inherits a red by family.
+FIXER_BUSY_SECS = 15 * 60
+
+
+def fixer_busy(r, store=None, t=None):
+    """Its lease live on the store, or its log or worktree changed within FIXER_BUSY_SECS."""
+    t = t or time.time()
+    if store is not None and r.get("lease"):
+        try:
+            if lease_is_live(store.get(r["lease"]), t):
+                return True
+        except Exception:
+            pass
+    for p in (r.get("log"), r.get("worktree")):
+        try:
+            if p and t - os.path.getmtime(p) < FIXER_BUSY_SECS:
+                return True
+        except OSError:
+            pass
+    wt = r.get("worktree")
+    if wt and os.path.isdir(wt):
+        for name in (".git", "RED-INBOX.md", "HANDOFF.md"):
+            try:
+                if t - os.path.getmtime(os.path.join(wt, name)) < FIXER_BUSY_SECS:
+                    return True
+            except OSError:
+                pass
+    return False
+
+
+def fixer_own_red_open(r, active):
+    """Its own red (by its keys, or its run) is among the open reds (red_active's items)."""
+    keys, run = fixer_keys(r), (r.get("workflow"), str(r.get("run")))
+    return any(it["data"].get("key") in keys
+               or (it["data"].get("workflow"), str((it["data"].get("last_run") or {}).get("number"))) == run
+               for it in (active or {}).values())
+
+
+def previous_fixer_working(key, run, sessions=None, fam=None, active=None, store=None, t=None):
     """'<who> (<worktree>)' of a fixer of this red still at work, else None: while it works it is the holder (the sync
-    re-acquires its lease), never a second fixer beside it."""
-    recs = fixers_of(key, run, fam)
-    if not recs:
-        return None
-    if sessions is None and any(not r.get("alive") and not r.get("ended") and r.get("bg_id") for r in recs):
-        sessions = bg_sessions()
-    for r in recs:
-        if fixer_working(r, sessions):
+    re-acquires its lease), never a second fixer beside it. At work: its process alive, its own red open (this red, by
+    key or run; or, matched by family only, its own red in `active`), and busy (fixer_busy). sessions: unused (an idle
+    Claude session is no proof of work)."""
+    for r in fixers_of(key, run, fam):
+        if not r.get("alive"):
+            continue
+        own = key in fixer_keys(r) or (r.get("workflow"), str(r.get("run"))) == run
+        if not own and not fixer_own_red_open(r, active):
+            continue  # a fixer of a closed red never inherits a red by family
+        if fixer_busy(r, store, t):
             return f"pid {r.get('pid')} ({str(r.get('worktree') or '?').replace(HOME, '~')})"
     return None
 

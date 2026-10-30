@@ -1828,8 +1828,6 @@ def red_dispatcher(store, o_r, repo, t):
                 pressure[0] = None
         return pressure[0]
     gone = set()
-    sessions = None if not offs else (bg_sessions() if any(not r.get("alive") and not r.get("ended") and r.get("bg_id")
-                                                            for r in fixer_records()) else [])
     for off in offs:
         if off["id"] in gone:
             continue
@@ -1870,7 +1868,8 @@ def red_dispatcher(store, o_r, repo, t):
             why = blocker
         elif laptop():  # no new fixer on a laptop under pressure: offered still, no slot taken
             why = f"waiting: laptop pressure ({laptop()})"
-        elif (prev := previous_fixer_working(pic.get("key"), red_run_of(pic), sessions, red_family(pic))):
+        elif (prev := previous_fixer_working(pic.get("key"), red_run_of(pic), None, red_family(pic),
+                                                     red_active(store), store, t)):
             why = (f"its previous fixer {prev} is still at work on it: it stays the holder (its lease is taken again "
                    "for it); this red is offered again when it ends")
         elif not free:
