@@ -461,11 +461,21 @@ class WaitAndStateTest(Base):
         records = A.owner_records()
         self.assertEqual([(r["kind"], r["alive"]) for r in records], [("wait", True)])
         second = subprocess.Popen([sys.executable, TOOL, "wait", "file", target], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=os.environ)
-        time.sleep(0.8)
+        # the file appears only once the second has attached (CI run 4194: a fixed 0.8 s, and on a loaded runner the
+        # second's cold interpreter first saw the file itself -- nothing attached, nothing said)
+        errs = []
+        reader = threading.Thread(target=lambda: errs.extend(second.stderr), daemon=True)
+        reader.start()
+        t1 = time.time()
+        while not any("attached to existing waiter" in l for l in errs) and second.poll() is None and time.time() - t1 < 60:
+            time.sleep(0.1)
         with open(target, "w") as f:
             f.write("ok")
         o1, _ = proc.communicate(timeout=180)
-        o2, e2 = second.communicate(timeout=180)
+        o2 = second.stdout.read()
+        second.wait(timeout=180)
+        reader.join(timeout=10)
+        e2 = "".join(errs)
         self.assertIn("present", o1)
         self.assertIn("attached to existing waiter", e2)
         self.assertEqual(o1.strip(), o2.strip())
