@@ -93,7 +93,12 @@ class RedBase(unittest.TestCase):
                 except ChildProcessError:
                     pass
                 time.sleep(0.1)
-        self.tmp.cleanup()
+        for _ in range(20):  # a detached child (a fake claude session, an owner's last record write) may still be
+            try:             # writing into the tree for a moment: removed again until it is gone (CI runs 3992, 4013)
+                self.tmp.cleanup()
+                break
+            except OSError:
+                time.sleep(0.25)
 
     def put(self, name, obj):
         with open(os.path.join(self.d, name), "w") as f:
