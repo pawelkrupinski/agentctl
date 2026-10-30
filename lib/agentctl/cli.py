@@ -266,10 +266,10 @@ def main(argv=None):
     iss.add_argument("--all", action="store_true", help="with --list: closed ones too")
     iss.add_argument("--close", metavar="ID", help="close an issue (the maintainer, once fixed)")
     iss.add_argument("--note", help="with --close: what fixed it")
-    dp = sub.add_parser("dispatch", help="own every CI dispatch: run (forgejo-gh workflow run, recorded) / record / list",
+    dp = sub.add_parser("dispatch", help="own every CI dispatch: run (the forge CLI's workflow run, recorded) / record / list",
                         description=DISPATCH_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     dps = dp.add_subparsers(dest="dcmd", required=True)
-    dpr = dps.add_parser("run", help="forgejo-gh workflow run, with an owner record")
+    dpr = dps.add_parser("run", help="forgejo-gh (gh on forge = github) workflow run, with an owner record")
     dpr.add_argument("workflow", help="the workflow file, e.g. identity-model-convergence.yml")
     dpr.add_argument("--ref", required=True)
     dpc = dps.add_parser("record", help="register a dispatch made another way")

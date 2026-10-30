@@ -1000,7 +1000,7 @@ failed and nobody was told: the snapshot, the status line and the reds covered m
 
 - **Owner records** (`~/.cache/agentctl/dispatches/`, `$AGENTCTL_DISPATCH_DIR`): branch, run id, worktree, Claude
   session / its fixer name (`$AGENTCTL_AGENT_NAME` only outside a Claude session), pid (`$CLAUDE_PID`), purpose, inputs, time. `dispatch run` wraps
-  `forgejo-gh workflow run` and records it; `dispatch record` registers a dispatch made another way. agentctl's own
+  `forgejo-gh workflow run` (`gh workflow run` on forge = github) and records it; `dispatch record` registers a dispatch made another way. agentctl's own
   dispatches record themselves (the queue's `check/*` remote checks, the Fixes-Red verification on main). A run with no
   record is matched once, after the fact: `measure/<user>/<sha>-<x>` (identity-measure, identity-ci-run) or the run's
   head commit to the worktree whose HEAD is that commit or whose HEAD reflog holds it; `check/<entry>` to its queue
@@ -1267,6 +1267,15 @@ agentctl config            # the knobs that are set, each with its value and whe
 agentctl config defaults   # a complete agentctl.toml: every knob commented out at its default, with its doc
 agentctl config doc --write  # regenerate the reference below from the code (a test keeps it in step)
 ```
+
+**The forge** (`forge = "forgejo" | "github"`, `$AGENTCTL_FORGE`; github-return plan §4.1, W5a): where agentctl
+READS CI -- run lists and views, failed and job logs, takes artifacts, release pins, `dispatch run`, run cancels, the
+actions API (remote checks, the Fixes-Red verify dispatch, measure-branch cleanup). `forgejo` (the default until Phase
+3 flips it) is the forgejo-gh shim with the vault's Forgejo token through the tunnel; `github` is the real `gh`
+(`gh_cli`) with gh's own auth (`$GH_TOKEN` or `gh auth login`), and run links go to github.com by run id. GitHub
+serves no dispatch inputs: there they come from the dispatch records alone (no db-q). Pushing, the landing identity
+and the store's auth do not follow the switch yet (W5b). Code: `lib/agentctl/forge.py`; tests: `tests/test_forge.py`
+runs the same scenarios against `fake_forgejo_gh.py` and `fake_gh.py`.
 
 Not knobs (never in a file): a process's identity (`AGENT_NAME`, `RED_FIXER`, `FIXER_RECORD`, lease secrets), the
 store token, the role (`ROLE`, `HOST`), and the tests' hooks.
