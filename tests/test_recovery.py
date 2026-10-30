@@ -104,9 +104,9 @@ class HostTest(RegistryBase):
     def test_the_laptops_condition_is_probed_on_the_laptop_never_on_ci_runner(self):
         st = A.Store()  # one store, both hosts (the laptop's is ci-runner's through the API)
         rec = Recorder(fails=1)
-        A.PROBES["processor"] = rec
+        A.PROBES["tcp"] = rec
         self.role("sync-test")
-        c = A.open_condition("WATCHDOG", "W5: the processor is down", A.run_probe("processor", {}), [], key="w5",
+        c = A.open_condition("WATCHDOG", "W5: the processor is down", A.run_probe("tcp", {}), [], key="w5",
                              store=st)
         self.assertEqual(c["host"], "sync")
         self.role("server")

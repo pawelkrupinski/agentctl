@@ -447,7 +447,6 @@ def waiting_run(repo, once=False, service=False):
             if TICK_STOP[0]:  # SIGTERM (systemd's stop): between ticks, never inside one
                 return 0
             write_beat("processor")
-            LOOP_CYCLED[0] = True
             if not any(t.is_alive() for k, t in _bounded.items() if k.startswith("step:")):
                 restart_if_changed([own], argv)  # never under a step still at work in its thread (a push, say)
             failed = False

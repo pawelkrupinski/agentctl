@@ -104,16 +104,6 @@ def probe_token(a):
     return bool(tok), f"{ns} token " + ("held by the processor" if tok else "unavailable")
 
 
-LOOP_CYCLED = [False]  # the processor's loop made a full cycle in this process
-
-
-def probe_processor(a):
-    """The processor's loop beats again (its beat file, written each tick) since the condition opened."""
-    age = beat_age("processor")
-    ok = age is not None and time.time() - age > float(a.get("since") or 0) and age < env_num("AGENTCTL_W5_MAX", W5_MAX)
-    return ok, f"the processor beat {int(age) if age is not None else '?'} s ago"
-
-
 def probe_git_fetch(a):
     """The remote's main can be read over git (what a land's `git fetch` needs)."""
     repo = a.get("repo") or movies_repo_path()
@@ -126,40 +116,19 @@ def probe_git_fetch(a):
         + (r.stderr.strip()[-120:] if r.returncode else "ok")
 
 
-def probe_laptop_load(_a):
-    p = gov_pressure()
-    return p is None, p or "the laptop is not under pressure"
-
-
-def probe_queue_entry(a):
-    """Queue entry a['eid'] is no longer checking in the round that stalled (decided, re-queued or a new round)."""
-    d, _c, _w = waiting_state(a.get("repo") or movies_repo_path())
-    e = read_record(os.path.join(d, "entries", f"{a['eid']}.json")) or {}
-    moving = e.get("status") != "checking" or (e.get("round_since") or e.get("since")) != a.get("round")
-    return moving, f"entry {a['eid']}: {e.get('status') or 'gone'}"
-
-
-def probe_batch_hold(a):
-    """The batch is no longer held (its hold ran out: its deadline moved it on)."""
-    it = current_batch(Store(), a["d"])
-    held = bool(it and it["state"] == "held")
-    return not held, (f"held until {iso_at(it['deadline'])}" if held else "not held")
-
-
 def probe_waiting_ok(a):
     """A waiting round completed after the condition opened."""
     at = float((read_record(os.path.join(a["d"], "round-ok.json")) or {}).get("at") or 0)
     return at > float(a.get("since") or 0), f"last good round {iso_at(at)}" if at else "no good round yet"
 
 
-PROBES = {"disk_free": lambda a: probe_disk_free(a), "quota_reset": lambda a: probe_quota_reset(a), "invariant": probe_invariant, "waiting_ok": probe_waiting_ok, "orphan_landed": probe_orphan_landed, "batch_hold": probe_batch_hold, "workflow_green": probe_workflow_green, "http": probe_http, "tcp": probe_tcp,
+PROBES = {"disk_free": lambda a: probe_disk_free(a), "quota_reset": lambda a: probe_quota_reset(a), "invariant": probe_invariant, "waiting_ok": probe_waiting_ok, "orphan_landed": probe_orphan_landed, "workflow_green": probe_workflow_green, "http": probe_http, "tcp": probe_tcp,
           "route": probe_route, "tunnel": probe_tunnel, "gate_read": probe_gate_read, "token": probe_token,
-          "processor": probe_processor, "git_fetch": probe_git_fetch, "laptop_load": probe_laptop_load,
-          "queue_entry": probe_queue_entry, "clone_health": probe_clone_health,
+          "git_fetch": probe_git_fetch, "clone_health": probe_clone_health,
           "change_source": lambda a: probe_change_source(a),
           "infra_requeue": probe_infra_requeue, "red_newer_verdict": lambda a: probe_red_newer_verdict(a)}
-PROBE_EVERY = {"disk_free": 300, "quota_reset": 300, "invariant": 60, "waiting_ok": 30, "owner_block": 60, "orphan_landed": 300, "batch_hold": 60, "route": 5, "tunnel": 10, "gate_read": 15, "processor": 30, "queue_entry": 60,
-               "workflow_green": 60, "token": 60, "laptop_load": 60, "tcp": 60, "http": 120, "git_fetch": 120,
+PROBE_EVERY = {"disk_free": 300, "quota_reset": 300, "invariant": 60, "waiting_ok": 30, "orphan_landed": 300, "route": 5, "tunnel": 10, "gate_read": 15,
+               "workflow_green": 60, "token": 60, "tcp": 60, "http": 120, "git_fetch": 120,
                "clone_health": 120, "infra_requeue": 60, "change_source": 60, "red_newer_verdict": 60}
 
 
@@ -171,11 +140,9 @@ def probe_words(kind, a):
             "tcp": lambda: f"{a.get('host')}:{a.get('port')} accepts",
             "route": lambda: "the network is back", "tunnel": lambda: "the Forgejo tunnel answers",
             "gate_read": lambda: "the gate is read", "token": lambda: "the processor holds a token",
-            "processor": lambda: "the processor cycles again", "git_fetch": lambda: f"git can read {REMOTE}/main",
-            "laptop_load": lambda: "the laptop's load is normal", "batch_hold": lambda: "the batch hold ends",
+            "git_fetch": lambda: f"git can read {REMOTE}/main",
             "invariant": lambda: f"invariant {a.get('id')} holds", "waiting_ok": lambda: "a waiting round completes",
             "orphan_landed": lambda: "its commits are on main or somebody works in it",
-            "queue_entry": lambda: f"queue entry {a.get('eid')} moves",
             "change_source": lambda: f"change {a.get('id')} closes or is queued again",
             "clone_health": lambda: f"{a.get('repo')} verifies and fetches {REMOTE}/main",
             "infra_requeue": lambda: f"queue entry {a.get('eid')} gets past {a.get('reason')}",
@@ -192,11 +159,6 @@ def run_probe(kind, args=None):
     except (Exception, SystemExit) as e:
         ok, detail = None, f"probe error: {str(e)[:160]}"
     return ProbeResult(kind, args, ok, detail, _made_by_run_probe=_RUN_PROBE_TOKEN)
-
-
-def recover_kick_tunnel(cond, a):
-    launchctl_kick()
-    return f"kickstarted {TUNNEL_LABEL}"
 
 
 def recover_tunnel_reset(cond, a):
@@ -239,8 +201,7 @@ def recover_clear_hold(cond, a):
     return "the batch hold is lifted"
 
 
-RECOVER_ACTIONS = {"clear_hold": recover_clear_hold, "kick_tunnel": recover_kick_tunnel,
-                   "tunnel_reset": recover_tunnel_reset, "clear_flag": recover_clear_flag}
+RECOVER_ACTIONS = {"clear_hold": recover_clear_hold, "tunnel_reset": recover_tunnel_reset, "clear_flag": recover_clear_flag}
 
 
 def condition_key(kind, probe):

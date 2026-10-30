@@ -324,10 +324,6 @@ def token_unavailable_note(ns, why):
 _noting_token = [False]  # token_unavailable_note is running: the remote store's own token read must not recurse
 
 
-def token_found(ns):
-    pass  # the hourly flag stands: a flapping token does not re-announce
-
-
 def token(o_r):
     """ONE credential path for every agentctl process: the environment, then the processor's socket, then `secrets`
     (absolute path). No source: NoToken naming the cause, and one inbox entry."""
@@ -358,7 +354,6 @@ def token(o_r):
         if not tok:
             token_unavailable_note(ns, why)
             raise NoToken(f"agentctl: could not read the {ns} FORGEJO_API_TOKEN ({why})")
-        token_found(ns)
         _tokens[ns] = tok
     return _tokens[ns]
 
