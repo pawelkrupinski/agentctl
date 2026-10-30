@@ -37,7 +37,7 @@ class RedBase(unittest.TestCase):
                     "AGENTCTL_RED_REPO": self.r.path, "AGENTCTL_CLAUDE": FAKE_CLAUDE,
                     "AGENTCTL_CLAUDE_SETTINGS": self.settings, "FAKE_CLAUDE_OUT": os.path.join(t, "claude-out"),
                     "AGENTCTL_CLAUDE_PROJECTS": os.path.join(t, "claude-projects"), "AGENTCTL_BG_POLL": "0.2",
-                    "AGENTCTL_BRIEF": os.path.join(t, "brief.md"), "AGENTCTL_BRIEF_SRC": os.path.join(t, "brief-src.md"),
+                    "AGENTCTL_BRIEF": os.path.join(t, "brief.md"), "AGENTCTL_BRIEF_SRC": "",
                     "AGENTCTL_WAITING_DIR_UNUSED": "", "FAKE_CLAUDE_SLEEP": "0", "CLAUDE_PID": "",
                     "CLAUDE_CODE_SESSION_ID": "", "AGENTCTL_AGENT_NAME": "", "AGENTCTL_CLAIM_PID": "",
                     # a dispatched fixer running these tests: its own record is never a test's lease to note on
@@ -51,8 +51,6 @@ class RedBase(unittest.TestCase):
         for k, v in self.env.items():
             if v == "":
                 os.environ.pop(k, None)
-        with open(self.env["AGENTCTL_BRIEF_SRC"], "w") as f:
-            f.write("# brief\n")
         self.saved_a = A.FORGEJO_GH, A.WAITING_DIR, A.land_cwds
         A.FORGEJO_GH, A.WAITING_DIR = FAKE, os.path.join(t, "waiting-state")
         A.land_cwds = lambda: {}

@@ -705,6 +705,31 @@ class LandAsYouGoTest(Phase2Base):
         self.assertIn("FAIL before your fix and PASS after", p)
 
 
+    def test_the_fixer_brief_is_the_tracked_file_and_the_env_var_only_overrides_it(self):
+        u = {"workflow": "Main", "run": {"number": 20, "databaseId": 40}, "job": "j", "kind": "test"}
+        self.assertTrue(A.FIXER_BRIEF.endswith(os.path.join("docs", "fixer-brief.md")), A.FIXER_BRIEF)
+        with open(A.FIXER_BRIEF) as f:
+            tracked = f.read().strip()
+        for rule in ("FAST REPRODUCER FIRST", "MECHANISM ONLY", "identity-drift-allow.tsv", "LAND AS YOU GO",
+                     "Fixes-Red", "agentctl issue", "never edit ~/bin", "timeout -s KILL", "ONE sbt"):
+            self.assertIn(rule, tracked)
+        saved = os.environ.pop("AGENTCTL_BRIEF_SRC", None)
+        try:
+            self.assertIn(tracked, A.fixer_prompt(u, "/wt", "/brief"))
+            other = os.path.join(self.tmp, "trial-brief.md")
+            with open(other, "w") as f:
+                f.write("TRIAL WORDING\n")
+            os.environ["AGENTCTL_BRIEF_SRC"] = other
+            p = A.fixer_prompt(u, "/wt", "/brief")
+            self.assertIn("TRIAL WORDING", p)
+            self.assertNotIn(tracked, p)
+            os.environ["AGENTCTL_BRIEF_SRC"] = os.path.join(self.tmp, "gone.md")  # unreadable: the tracked file
+            self.assertIn(tracked, A.fixer_prompt(u, "/wt", "/brief"))
+        finally:
+            os.environ.pop("AGENTCTL_BRIEF_SRC", None)
+            if saved is not None:
+                os.environ["AGENTCTL_BRIEF_SRC"] = saved
+
 class CurrentStoreTest(Phase2Base):
     def test_a_long_running_holder_follows_store_use(self):
         os.environ.pop("AGENTCTL_ROLE")

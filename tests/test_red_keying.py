@@ -249,6 +249,9 @@ class FixerIdentityTest(RedsBase):
             for k in A.FIXER_IDENTITY_ENV:
                 self.assertNotIn(k, started["env"], k)
             self.assertIn(f"red claim 20 --fixer {rec['path']}", " ".join(started["argv"]))
+            prompt = started["argv"][started["argv"].index("--bg") + 1]
+            with open(A.FIXER_BRIEF) as f:
+                self.assertIn(f.read().strip(), prompt, "the dispatched prompt carries docs/fixer-brief.md word for word")
             bound = A.read_record(A.fixer_session_path(rec["session"]))
             self.assertEqual(bound["record"], rec["path"])
         finally:

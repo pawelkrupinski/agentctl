@@ -71,6 +71,8 @@ class OwnerTest(OwnerBase):
         self.assertIn("LONG-LIVED OWNER", prompt)
         self.assertIn(A.OWNER_NOTEBOOK, prompt)
         self.assertIn("FAST REPRODUCER FIRST", prompt)
+        with open(A.FIXER_BRIEF) as f:
+            self.assertIn(f.read().strip(), prompt, "the owner's prompt carries docs/fixer-brief.md word for word")
         self.assertNotIn("FIRST run `~/bin/agentctl red claim", prompt, "its leases are held for it")
         # the turn ends LANDED: that red's lease is released with the verdict; the owner lives on, heartbeating
         self.assertTrue(self.wait(lambda: str(A.lease_meta(self.st.get(row["name"])).get("outcome") or "")
@@ -145,14 +147,14 @@ class OwnerTest(OwnerBase):
         self.assertEqual(argv[argv.index("--resume") + 1], first["session"], "the same session goes on")
         self.assertEqual(self.st.get(A.red_lease(it["data"]["key"]))["holder"], A.owner_holder(FAM))
 
-    def test_the_convergence_owner_is_briefed_mechanism_only(self):
+    def test_every_owner_is_briefed_mechanism_only_for_identity_flips(self):
         owner = {"family": "convergence", "notebook": "/wt/RED-NOTEBOOK.md", "reds": ["x"]}
         u = {"workflow": "Identity model convergence", "job": "leg (poland)", "kind": "test", "line": "drift",
              "run": {"number": 7, "databaseId": 9}}
         p = A.fixer_prompt(u, "/wt", "/brief", owner=owner)
         self.assertIn("MECHANISM ONLY", p)
         self.assertIn("FAST REPRODUCER FIRST", p)
-        self.assertNotIn("MECHANISM ONLY", A.fixer_prompt(u, "/wt", "/brief", owner={**owner, "family": FAM}))
+        self.assertIn("MECHANISM ONLY", A.fixer_prompt(u, "/wt", "/brief", owner={**owner, "family": FAM}))
 
     def test_status_shows_each_owner(self):
         self.tick(dispatch=True)

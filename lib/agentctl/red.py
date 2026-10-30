@@ -46,7 +46,7 @@ RED_RENEW_EVERY = 60         # a fixer's wrapper renews its lease this often
 RED_RELEASE_ASKS = 12        # ...and asks a store that does not answer this many times, a poll apart, to release it
 STUCK_FACTOR, STUCK_FLOOR = 3, 30 * 60  # audit #8: a run undecided past max(3 x its workflow's p90, 30 min) is a red
 BRIEF = os.path.join(HOME, "bin", "briefs", "movies-agent-preamble.md")
-BRIEF_SRC = ""  # a newer copy of the brief to take over (an orchestrator's scratchpad; $AGENTCTL_BRIEF_SRC): none by default
+BRIEF_SRC = ""  # a file to use instead of the tracked docs/fixer-brief.md in fixers' prompts (an override): none by default
 RED_TERMINAL = ("verified", "cleared")
 
 
@@ -1855,13 +1855,6 @@ SECRET_ENV = re.compile(r"TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|PRIVATE|CREDENTIA
 
 
 def sync_brief():
-    """~/bin/briefs/movies-agent-preamble.md, refreshed from $AGENTCTL_BRIEF_SRC (an orchestrator's scratchpad copy) when
-    that one is newer. No default source: a hardcoded session scratchpad is gone on ci-runner and after the session."""
-    src = os.environ.get("AGENTCTL_BRIEF_SRC", BRIEF_SRC)
-    dst = os.environ.get("AGENTCTL_BRIEF", BRIEF)
-    if src and os.path.exists(src) and mtime(src) > mtime(dst):
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        with open(src) as f, open(dst + ".tmp", "w") as g:
-            g.write(f.read())
-        os.replace(dst + ".tmp", dst)
-    return dst
+    """The movies agents' preamble a fixer reads first (~/bin/briefs/movies-agent-preamble.md, $AGENTCTL_BRIEF). The
+    fixer's own rules are docs/fixer-brief.md, in its prompt (fixer_brief); nothing is copied from a scratchpad."""
+    return os.environ.get("AGENTCTL_BRIEF", BRIEF)

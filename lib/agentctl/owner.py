@@ -25,14 +25,6 @@ OWNER_IDLE = 6 * 3600        # no red held this long: the owner ends ($AGENTCTL_
 OWNER_EMPTY_TURNS = 2        # turns in a row ending with no verdict line: the owner ends (its reds are offered again)
 OWNER_NOTEBOOK = "RED-NOTEBOOK.md"
 
-MECHANISM_ONLY = (
-    "MECHANISM ONLY (the owner's rule for convergence flips and drift): a fix names and fixes the INCREMENTAL STATE that "
-    "diverges from a whole resolve (stage lag, the corrections budget, question-queue order, a cache, a restart key). "
-    "Never add an identity resolver rule tuned on one recording (a rule change is identity design, measured on the full "
-    "corpus, all countries, outside red fixing), and never add a row to the known-flip baseline or the allow-list to "
-    "get green. ")
-
-
 def owner_lease(fam):
     return f"owner/{fam}"
 
@@ -178,7 +170,6 @@ def owner_intro(owner):
             "from it and this same worktree. Your reds' leases are held for you by agentctl while you work (do not "
             "`red claim` them); new reds of your family arrive in RED-INBOX.md and as your next turn. "
             + (f"This turn's reds: {reds}. " if reds else "")
-            + (MECHANISM_ONLY if fam == "convergence" else "")
             + "End each turn with ONE verdict line for the turn's reds (LANDED <sha> / GAVE UP: / DIAGNOSED: / BLOCKED "
               "ON OWNER:). ")
 

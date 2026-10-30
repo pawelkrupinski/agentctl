@@ -521,9 +521,10 @@ agent must be assigned to it".
   reds first, within the caps) and each taken offer is a LEASE its fixer holds. The fixer is a Claude Code background
   session, `claude --bg -n "<label>"` (`claude agents` lists it by that label), in a fresh worktree
   `~/projects/movies-wt-red-<run>` off forgejo/main (a fixer never edits ~/bin: `agentctl issue`), briefed with
-  `~/bin/briefs/movies-agent-preamble.md` (synced from `$AGENTCTL_BRIEF_SRC` when that copy is newer), the run, its
-  jobs and first
-  error line. An `[infra]` red gets a DIAGNOSE-ONLY brief (no code change; runners, ci-runner, owner actions). The fixer
+  `~/bin/briefs/movies-agent-preamble.md` to read, then `docs/fixer-brief.md` word for word in its prompt (THE fixer
+  brief, the single source of every fixer's and family owner's rules: fast reproducer first, mechanism-only identity
+  fixes, no allow-list or baseline edits, land as you go, `agentctl issue`, bounded commands; `$AGENTCTL_BRIEF_SRC`
+  names another file only to try a wording out), and the run, its jobs and first error line. An `[infra]` red gets a DIAGNOSE-ONLY brief (no code change; runners, ci-runner, owner actions). The fixer
   says who it is first (`red claim N --fixer <its record>`, in its prompt: that binds its session; background sessions
   inherit the claude daemon's environment, so a fixer is never known by its environment), notes what it does on its
   lease (`red claim` of its own red or a sibling under its lease), claims any OTHER red with `red claim <M>`, keeps its record under `~/.cache/agentctl/reds/<run>/`, ends at `LANDED` (or `GAVE UP:` /
@@ -1229,7 +1230,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `bg_poll` | `AGENTCTL_BG_POLL` | `5` | seconds between the wrapper's looks at its session |
 | `bin_repo` | `AGENTCTL_BIN_REPO` | - | - |
 | `brief` | `AGENTCTL_BRIEF` | `~/bin/briefs/movies-agent-preamble.md` | - |
-| `brief_src` | `AGENTCTL_BRIEF_SRC` | - | a newer copy of the brief to take over (an orchestrator's scratchpad; $AGENTCTL_BRIEF_SRC): none by default |
+| `brief_src` | `AGENTCTL_BRIEF_SRC` | - | a file to use instead of the tracked docs/fixer-brief.md in fixers' prompts (an override): none by default |
 | `cache_expire_days` | `AGENTCTL_CACHE_EXPIRE_DAYS` | `7` | - |
 | `checks_dir` | `AGENTCTL_CHECKS_DIR` | - | - |
 | `check_lease_ttl` | `AGENTCTL_CHECK_LEASE_TTL` | `600` | - |
