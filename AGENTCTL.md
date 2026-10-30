@@ -802,10 +802,17 @@ counts only those open items, after that landed look, and names the oldest with 
 ```
 agentctl land status                         # the changes, the batch, a HELD batch, the gate, the processor (any cwd)
 agentctl land cancel <id>                    # drop one change
-agentctl land hold|release                   # take no batch until release (changes still queue); release ends a HELD wait
+agentctl land hold [--for MIN] [--why TEXT]  # take no batch until release or expiry (default 240 min; changes still queue)
+agentctl land release                        # lift the hold; also ends a HELD batch's wait
 agentctl tick [--once]                       # the processor (the tick loop)
 agentctl tick service install|uninstall|status   # the processor as launchd agent net.bitcashier.agentctl-waiting
 ```
+
+The hold is an item in ci-runner's store (machine `hold`: held -> released | expired), so the reconciler honours a
+hold made on the laptop (until 2026-10-30 it was a local PAUSED file no tick read after the phase 2 cutover). One hold
+at a time: a second `hold` extends it. Its deadline is its expiry: a forgotten hold lifts itself at the reconciler's
+next tick (`hold.expired` event), never a manual-only state. The status line says `LAND HELD until HH:MM (by …: why)`,
+and the status page shows it above the batch.
 
 The old names (design §14.5) answer until 2026-11-05, each printing its new one: `waiting status` → `land status`,
 `waiting pause|resume` → `land hold|release`, `waiting cancel` → `land cancel`, `waiting run|service` → `tick
