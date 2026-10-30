@@ -1000,7 +1000,7 @@ def cmd_red(a):
             rc, lines = red_release(st, o_r, a.run, a.any)
         print("\n".join(lines))
         return rc
-    if a.rcmd in ("status", "list", "patrol"):
+    if a.rcmd == "status":
         if a.rcmd != "status":
             print(f"(`red {a.rcmd}` is now `red status`: the tick acts on every red)")
         return red_status(st, getattr(a, "verbose", False))

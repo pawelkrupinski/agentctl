@@ -238,22 +238,17 @@ def main(argv=None):
     rr = rds.add_parser("release", help="drop your red lease")
     rr.add_argument("run")
     rr.add_argument("--any", action="store_true", help="release anyone's claim of it")
-    rls = []
-    for nm in ("status", "list"):
-        rl = rds.add_parser(nm, help="every red: its state, holder or offer, deadline" + (" (old name)" if nm == "list" else ""))
-        rl.add_argument("-v", "--verbose", action="store_true", help="also each red's attempts")
-        rls.append(rl)
+    rl = rds.add_parser("status", help="every red: its state, holder or offer, deadline")
+    rl.add_argument("-v", "--verbose", action="store_true", help="also each red's attempts")
     rdp = rds.add_parser("dispatch", help="a red's offer at top priority: the dispatcher takes it now")
     rdp.add_argument("run")
     ra = rds.add_parser("auto", help="automatic dispatch by the waiting processor: on / off / status")
     ra.add_argument("state", nargs="?", choices=("on", "off", "status"), default="status")
-    rp = rds.add_parser("patrol", help="old name: `red status` (the tick acts on every red)")
-    rp.add_argument("--dispatch", action="store_true")
     rf = rds.add_parser("fixer", help=argparse.SUPPRESS)
     rf.add_argument("--record", required=True)
     rfo = rds.add_parser("owner", help=argparse.SUPPRESS)  # a family owner's wrapper (lib/agentctl/owner.py)
     rfo.add_argument("--family", required=True)
-    for p_ in [rc_, rbt, rb, rr, rdp, ra, rp, rf, rfo] + rls:
+    for p_ in [rc_, rbt, rb, rr, rdp, ra, rf, rfo, rl]:
         p_.add_argument("--repo")
     ram = rds.add_parser("am-fixer", help="exit 0 (and print who) inside a dispatched red fixer, else 1 (~/bin's "
                          "pre-commit hook asks)")

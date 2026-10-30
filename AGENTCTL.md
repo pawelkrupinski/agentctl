@@ -459,7 +459,7 @@ agentctl red block <run> --cmd "<command>" [--cause <outage>] [--until-green <wo
 agentctl red beat <run> --note "<what>"       # renew your lease by hand (a new note is progress; in a dispatched
                                                # fixer only its note: its wrapper renews the lease)
 agentctl red release <run> [--any]
-agentctl red status [-v]                       # every red: its state, holder or offer, deadline (`red list`: old name)
+agentctl red status [-v]                       # every red: its state, holder or offer, deadline
 agentctl red dispatch <run> [--force]          # the red's offer at top priority: the dispatcher takes it now
 agentctl red auto [on|off|status]              # the processor's automatic dispatch
 claude agents                                  # every dispatched fixer, by name (attach / logs / stop <id>)
@@ -808,7 +808,7 @@ agentctl tick service install|uninstall|status   # the processor as launchd agen
 
 The old names (design §14.5) answer until 2026-11-05, each printing its new one: `waiting status` → `land status`,
 `waiting pause|resume` → `land hold|release`, `waiting cancel` → `land cancel`, `waiting run|service` → `tick
-[service]`, `red list|patrol` → `red status`. `queue` stays retired.
+[service]`. `queue` stays retired (it prints the retirement note). `red list|patrol` are gone (2026-10-30): `red status`.
 
 (`waiting check <id>`, `waiting check-batch <id>`, `waiting await` and `watch` are internal: the executors and `land --follow`.)
 
