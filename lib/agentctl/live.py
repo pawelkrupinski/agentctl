@@ -187,9 +187,7 @@ def live_tail_info(path, max_bytes=256 << 10):
         return dict(hit[1])
     info = {"stop": None, "last_ts": None, "api_error": False}
     try:
-        with open(path, "rb") as f:
-            f.seek(max(0, sig[0] - max_bytes))
-            lines = f.read(max_bytes).decode("utf-8", "replace").splitlines()
+        lines = tail_bytes(path, max_bytes)[0].decode("utf-8", "replace").splitlines()
     except OSError:
         return {}
     for ln in lines:

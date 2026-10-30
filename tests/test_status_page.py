@@ -64,7 +64,8 @@ class Base(unittest.TestCase):
         self.env = {"AGENTCTL_STATE_ROOT": os.path.join(self.root, "state"),
                     "AGENTCTL_REDS_DIR": os.path.join(self.root, "state", "reds"),
                     "AGENTCTL_STATE_FILE": os.path.join(self.root, "state", "state.json"),
-                    "AGENTCTL_TUNNEL_STATE": os.path.join(self.root, "state", "tunnel-health.json")}
+                    "AGENTCTL_TUNNEL_STATE": os.path.join(self.root, "state", "tunnel-health.json"),
+                    "AGENTCTL_CLAUDE_PROJECTS": os.path.join(self.root, "projects")}
         self.saved = {k: os.environ.get(k) for k in list(self.env) + ["AGENTCTL_STORE_URL", "AGENTCTL_STATUS_PORT",
                                                                       "AGENTCTL_OPEN"]}
         os.environ.update(self.env)
@@ -110,7 +111,8 @@ class Base(unittest.TestCase):
         os.makedirs(run_dir)
         with open(os.path.join(run_dir, "fixer.log"), "w") as f:
             f.write("".join(f"line {i}\n" for i in range(100)))
-        transcript = os.path.join(self.root, "t.jsonl")
+        transcript = os.path.join(self.root, "projects", "t.jsonl")  # under the Claude projects root (Base)
+        os.makedirs(os.path.dirname(transcript), exist_ok=True)
         with open(transcript, "w") as f:
             f.write(json.dumps({"type": "assistant", "timestamp": "2026-10-29T12:00:00Z",
                                 "message": {"content": [{"type": "text", "text": "bisecting the takes drift"}]}}) + "\n")
@@ -403,6 +405,38 @@ class ServerTest(Base):
         self.assertIn("hello fixer", body)
         self.assertEqual(self.get("/log?path=/etc/passwd")[0], 403)
         self.assertEqual(self.get("/log?path=" + urllib.request.quote(p + "/../../../../etc/hosts"))[0], 403)
+
+    def test_log_route_masks_credentials_like_the_stream(self):
+        p = os.path.join(self.env["AGENTCTL_REDS_DIR"], "claude-1.log")
+        with open(p, "w") as f:
+            f.write("export FORGEJO_API_TOKEN=abc123def456ghi789\nAuthorization: Bearer ghp_" + "a1" * 20 + "\n")
+        code, body, _ = self.get("/log?path=" + urllib.request.quote(p))
+        self.assertEqual(code, 200)
+        self.assertNotIn("abc123def456ghi789", body)
+        self.assertNotIn("a1a1a1a1", body)
+        self.assertIn(A.LIVE_MASKED, body)
+
+
+class AgentMetaPathTest(Base):
+    """An agent row's run and transcript come from a lease's meta (any store user's): never a path of their own."""
+
+    def test_logs_and_said_are_masked_and_a_crafted_run_or_transcript_reads_nothing(self):
+        d = os.path.join(self.env["AGENTCTL_REDS_DIR"], "77")
+        os.makedirs(d)
+        with open(os.path.join(d, "fixer.log"), "w") as f:
+            f.write("password=s3cretValue12345\n")
+        logs = A.status_agent_logs("77")
+        self.assertEqual(len(logs), 1)
+        self.assertNotIn("s3cretValue12345", logs[0]["tail"])
+        with open(os.path.join(self.root, "state", "x.log"), "w") as f:
+            f.write("outside the run\n")
+        self.assertEqual(A.status_agent_logs(".."), [])
+        self.assertEqual(A.status_agent_logs("../.."), [])
+        outside = os.path.join(self.root, "elsewhere.jsonl")
+        with open(outside, "w") as f:
+            f.write('{"type": "assistant", "message": {"content": "leaked"}}\n')
+        a = A.status_agent_enrich({"transcript": outside, "run": None}, bound=1)
+        self.assertNotIn("said", a)
 
 
 class StartTest(Base):

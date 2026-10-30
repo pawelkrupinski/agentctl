@@ -315,31 +315,28 @@ def status_reds(st, t, repo=None):
     return out
 
 
-def status_git(wt, *args, timeout=3):
-    r = subprocess.run(["git", "-C", wt] + list(args), capture_output=True, text=True, timeout=timeout,
-                       stdin=subprocess.DEVNULL, env=dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0"))
-    return r.stdout if r.returncode == 0 else ""
+def tail_bytes(path, max_bytes):
+    """(the last max_bytes of the file, its size). Raises OSError/TypeError."""
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        f.seek(max(0, size - max_bytes))
+        return f.read(max_bytes), size
 
 
 def status_tail(path, lines=STATUS_LOG_TAIL, max_bytes=64 << 10):
+    """The log's last lines, MASKED (live_mask_text): the page serves them."""
     try:
-        with open(path, "rb") as f:
-            f.seek(0, 2)
-            size = f.tell()
-            f.seek(max(0, size - max_bytes))
-            data = f.read().decode("utf-8", "replace")
+        data = tail_bytes(path, max_bytes)[0].decode("utf-8", "replace")
     except OSError:
         return None
-    return "\n".join(data.splitlines()[-lines:])
+    return live_mask_text("\n".join(data.splitlines()[-lines:]))
 
 
 def status_transcript_last(path, max_bytes=256 << 10):
     """(the last assistant text, its time) of a claude transcript (.jsonl): what the agent last said it is doing."""
     try:
-        with open(path, "rb") as f:
-            f.seek(0, 2)
-            f.seek(max(0, f.tell() - max_bytes))
-            lines = f.read().decode("utf-8", "replace").splitlines()
+        lines = tail_bytes(path, max_bytes)[0].decode("utf-8", "replace").splitlines()
     except (OSError, TypeError):
         return None, None
     for ln in reversed(lines):
@@ -353,13 +350,13 @@ def status_transcript_last(path, max_bytes=256 << 10):
         texts = [c.get("text") for c in content if isinstance(c, dict) and c.get("type") == "text" and c.get("text")] \
             if isinstance(content, list) else [content] if isinstance(content, str) else []
         if texts:
-            return texts[-1][-600:], rec.get("timestamp")
+            return live_mask_text(texts[-1][-600:]), rec.get("timestamp")
     return None, None
 
 
 def status_agent_logs(run):
     """The fixer's logs in its run's reds dir (fixer.log, claude-N.log, ...), newest first, each with its tail."""
-    if run in (None, ""):
+    if not re.fullmatch(r"\d+", str(run or "")):  # a lease's meta (any store user's): never a path of its own
         return []
     files = [p for p in glob.glob(reds_dir(str(run), "*")) if p.endswith(STATUS_LOG_SUFFIXES) and os.path.isfile(p)]
     files.sort(key=mtime, reverse=True)
@@ -505,8 +502,9 @@ def status_agent_enrich(a, bound=None):
     if wt and os.path.isdir(wt):
         a.update({k: v for k, v in status_worktree(wt, b).items() if v is not None})
     a["logs"] = status_agent_logs(a.get("run"))
-    if a.get("transcript"):
-        a["said"], a["said_at"] = status_said(a["transcript"])
+    transcript = live_transcript_ok(a.get("transcript"))  # a lease's meta: only a transcript the page may stream
+    if transcript:
+        a["said"], a["said_at"] = status_said(transcript)
     return a
 
 
@@ -795,11 +793,8 @@ def status_page_server(host, port):
                     if not real:
                         return self.send(403, "only a .log/.out/.txt file under ~/.cache/agentctl\n",
                                          "text/plain; charset=utf-8")
-                    with open(real, "rb") as f:
-                        f.seek(0, 2)
-                        size = f.tell()
-                        f.seek(max(0, size - STATUS_LOG_MAX))
-                        body = f.read()
+                    body, size = tail_bytes(real, STATUS_LOG_MAX)
+                    body = live_mask_text(body.decode("utf-8", "replace")).encode()
                     head = f"{real} ({size} bytes" + (f"; the last {STATUS_LOG_MAX} shown" if size > STATUS_LOG_MAX else "") + ")\n\n"
                     return self.send(200, head.encode() + body, "text/plain; charset=utf-8")
                 return self.send(404, "not found\n", "text/plain; charset=utf-8")
