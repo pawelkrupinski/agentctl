@@ -441,10 +441,63 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+# RETIRED ON GITHUB (github-return plan W5b). With agentctl's forge = github ($AGENTCTL_FORGE, else `forge` in
+# agentctl.toml) the runners are GitHub's -- bitcashier's self-hosted ones on ci-runner, movies' hosted ones -- and
+# GitHub's own pages show them: this page polls nothing, writes no last-good.json (agentctl's queue_full then knows
+# nothing and says nothing), answers /healthz for its watchdog and links those pages.
+GITHUB_PAGES = (("bitcashier's self-hosted runners (ci-runner)",
+                 "https://github.com/organizations/bitcashier/settings/actions/runners"),
+                ("movies' runs", "https://github.com/pawelkrupinski/movies/actions"),
+                ("bitcashier core's runs", "https://github.com/bitcashier/core/actions"),
+                ("bitcashier infra's runs", "https://github.com/bitcashier/infra/actions"))
+
+
+def agentctl_forge():
+    import os
+    f = os.environ.get("AGENTCTL_FORGE")
+    if f:
+        return f.strip().lower()
+    try:
+        import tomllib
+    except ImportError:
+        return "forgejo"
+    for path in ("/etc/agentctl/agentctl.toml", str(Path.home() / ".config" / "agentctl" / "agentctl.toml")):
+        try:
+            with open(path, "rb") as fh:
+                f = str(tomllib.load(fh).get("forge") or f or "")
+        except (OSError, ValueError):
+            continue
+    return (f or "forgejo").strip().lower()
+
+
+class RetiredHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path.startswith("/healthz"):
+            body, kind = b"ok\n", "text/plain"
+        elif self.path.startswith("/data.json"):
+            body, kind = json.dumps({"forge": "github", "retired": True}).encode(), "application/json"
+        else:
+            links = "".join(f'<li><a href="{html.escape(u)}">{html.escape(t)}</a></li>' for t, u in GITHUB_PAGES)
+            body = (f"<!doctype html><title>CI runners</title><h1>CI runs on GitHub</h1><p>agentctl's forge is github: "
+                    f"this page is retired. GitHub's own pages:</p><ul>{links}</ul>").encode()
+            kind = "text/html; charset=utf-8"
+        self.send_response(200)
+        self.send_header("Content-Type", kind)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *a):
+        pass
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=8790)
     port = ap.parse_args().port
+    if agentctl_forge() == "github":
+        print(f"ci-runners-page on http://runners.localhost:{port}: retired (forge github), linking GitHub's pages",
+              flush=True)
+        ThreadingHTTPServer(("127.0.0.1", port), RetiredHandler).serve_forever()
     load_good()
     threading.Thread(target=poll_forever, daemon=True).start()
     print(f"ci-runners-page on http://runners.localhost:{port}", flush=True)
