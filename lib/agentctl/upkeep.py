@@ -22,7 +22,8 @@ def disk_free_gb(path=None):
     """GB free on path ($AGENTCTL_DISK_PATH, else HOME); the fixed machine's disk_free_gb for the default path."""
     import shutil
     fixed = machine_fixed()
-    if not path and not os.environ.get("AGENTCTL_DISK_PATH") and fixed and fixed.get("disk_free_gb") is not None:
+    if path in (None, "", HOME) and not os.environ.get("AGENTCTL_DISK_PATH") and fixed and \
+            fixed.get("disk_free_gb") is not None:  # the default path (maybe_upkeep names HOME itself)
         return float(fixed["disk_free_gb"])
     return shutil.disk_usage(path or os.environ.get("AGENTCTL_DISK_PATH") or HOME).free / 1e9
 
