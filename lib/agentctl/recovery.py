@@ -98,7 +98,7 @@ def probe_gate_read(a):
 def probe_token(a):
     """A token without `secrets`: the environment, this processor's own, or the processor's socket."""
     ns = a.get("ns") or "movies"
-    if os.environ.get("GH_TOKEN") or (ns == "movies" and os.environ.get("FORGEJO_API_TOKEN")) or _tokens.get(ns):
+    if os.environ.get("GH_TOKEN") or (ns == "movies" and os.environ.get(token_env_name(SHORT["movies"]))) or _tokens.get(ns):
         return True, f"{ns} token present"
     tok = token_from_processor(SHORT["movies"]) if ns == "movies" else None
     return bool(tok), f"{ns} token " + ("held by the processor" if tok else "unavailable")

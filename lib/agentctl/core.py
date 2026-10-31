@@ -490,6 +490,25 @@ def red_read_token(o_r):
     return tok
 
 
+def store_credential(o_r):
+    """forge = github: movies' credential is the agentctl STORE TOKEN (`agentctl store token issue`; gh reads GitHub
+    with its own auth), carried in $AGENTCTL_STORE_TOKEN and kept in the vault as bitcashier/AGENTCTL_STORE_TOKEN.
+    On Forgejo it is movies' Forgejo token, which the store checks against Forgejo."""
+    return token_ns(o_r) == "movies" and on_github()
+
+
+def token_env_name(o_r):
+    """The environment variable o_r's credential travels in (to a detached child, a fixer, the processor)."""
+    if token_ns(o_r) != "movies":
+        return "GH_TOKEN"
+    return "AGENTCTL_STORE_TOKEN" if on_github() else "FORGEJO_API_TOKEN"
+
+
+def token_vault_key(o_r):
+    """(vault namespace, key) of o_r's credential."""
+    return ("bitcashier", "AGENTCTL_STORE_TOKEN") if store_credential(o_r) else (token_ns(o_r), "FORGEJO_API_TOKEN")
+
+
 def token(o_r):
     """ONE credential path for every agentctl process: the environment, then the processor's socket, then `secrets`
     (absolute path). No source: NoToken naming the cause, and one inbox entry. On ci-runner a repo other than movies
@@ -497,13 +516,13 @@ def token(o_r):
     rt = red_read_token(o_r)
     if rt:
         return rt
-    if os.environ.get("GH_TOKEN"):
+    if os.environ.get("GH_TOKEN") and not store_credential(o_r):  # on GitHub a gh token is never the store's
         return os.environ["GH_TOKEN"]
     ns = token_ns(o_r)
-    if ns == "movies" and os.environ.get("FORGEJO_API_TOKEN"):  # a token the environment already carries
+    if ns == "movies" and os.environ.get(token_env_name(o_r)):  # a token the environment already carries
         if _token_missing:
             token_back(ns)
-        return os.environ["FORGEJO_API_TOKEN"]
+        return os.environ[token_env_name(o_r)]
     if ns not in _tokens:
         tok = token_from_processor(o_r)
         why = "the waiting processor holds none"
@@ -515,7 +534,7 @@ def token(o_r):
                 why += "; no `secrets` command found"
             else:
                 try:
-                    r = run_cmd([sec, "get", ns, "FORGEJO_API_TOKEN"], timeout=120)  # a keychain prompt loop: bounded
+                    r = run_cmd([sec, "get", *token_vault_key(o_r)], timeout=120)  # a keychain prompt loop: bounded
                     tok = r.stdout.strip() if r.returncode == 0 else ""
                     if r.returncode == 124:
                         why += "; `secrets get` did not answer in 120 s (a keychain prompt nobody answered?)"
@@ -525,7 +544,7 @@ def token(o_r):
                     why += "; the vault is locked for this process (its session ended, or `! secrets unlock " + ns + "`)"
         if not tok:
             token_missing(ns, why)
-            raise NoToken(f"agentctl: could not read the {ns} FORGEJO_API_TOKEN ({why})")
+            raise NoToken(f"agentctl: could not read the {'/'.join(token_vault_key(o_r))} token ({why})")
         _tokens[ns] = tok
         token_back(ns)
     return _tokens[ns]
@@ -588,6 +607,12 @@ def token_env(o_r, env=None):
                 env["GH_TOKEN"] = ghapp_token(o_r)
             except (Exception, SystemExit):
                 pass
+        elif store_credential(o_r):  # the laptop: the store token this process holds (never a vault prompt here)
+            with no_vault():
+                try:
+                    env[token_env_name(o_r)] = token(o_r)
+                except (Exception, SystemExit):
+                    pass
         return env
     try:
         tok = token(o_r)

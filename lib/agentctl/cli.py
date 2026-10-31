@@ -147,6 +147,17 @@ def main(argv=None):
     sts.add_argument("--forgejo-url", help="Forgejo's base URL: each caller's token is checked with its /api/v1/user")
     sts.add_argument("--allow-user", action="append", help="a login with the whole API (repeatable)")
     sts.add_argument("--metrics-user", action="append", help="a login with GET /metrics only (repeatable)")
+    sts.add_argument("--auth", choices=STORE_AUTHS, default="forgejo",
+                     help="forgejo: each token checked with Forgejo's /api/v1/user; store-tokens: the store's own "
+                          "(`store token issue`), no forge needed")
+    stt = stos.add_parser("token", help="the store's own tokens (`store serve --auth store-tokens`), on the store's host")
+    stts = stt.add_subparsers(dest="tcmd", required=True)
+    sti = stts.add_parser("issue", help="print a new token for USER (once; keep it in the vault)")
+    sti.add_argument("--user", required=True, help="the login it names (an --allow-user or --metrics-user)")
+    sti.add_argument("--name", default="", help="what holds it: laptop, scrape, ...")
+    str_ = stts.add_parser("revoke", help="revoke a token by its id (`store token list`)")
+    str_.add_argument("id")
+    stts.add_parser("list", help="every token: id, user, name, issued, revoked")
     stu = stos.add_parser("use", help=f"the laptop's switch: every agentctl process here uses the store at URL "
                                       f"(default without one: {DEFAULT_STORE_URL}, ci-runner's through the tunnel)")
     stu.add_argument("url", help="http://localhost:3014 (through the tunnel)")

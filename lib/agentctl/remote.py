@@ -230,7 +230,7 @@ class TokenDrop:
         return self
 
     def held(self):
-        return os.environ.get("FORGEJO_API_TOKEN" if token_ns(self.o_r) == "movies" else "GH_TOKEN", "")
+        return os.environ.get(token_env_name(self.o_r), "")
 
     def serve(self):
         import select
@@ -265,7 +265,7 @@ class TokenDrop:
                     return
             except (OSError, UnicodeDecodeError):
                 return
-            key = "FORGEJO_API_TOKEN" if token_ns(self.o_r) == "movies" else "GH_TOKEN"
+            key = token_env_name(self.o_r)
             if TOKEN_SHAPE.fullmatch(tok) and os.environ.get(key) != tok:  # said once per real change, never per offer
                 os.environ[key] = tok
                 err("the Forgejo token was handed over: the gate is read again")

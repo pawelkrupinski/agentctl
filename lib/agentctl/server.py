@@ -718,13 +718,117 @@ def metrics_text(st, now_=None):
     return "\n".join(out) + "\n"
 
 
+# THE STORE'S OWN TOKENS (github-return plan §4.1 W5b): `store serve --auth store-tokens` checks each caller's token
+# itself -- no forge in the way, so the store outlives Forgejo. A token is `ast.<id>.<user>.<mac>`, mac = HMAC-SHA256 of
+# "<id>.<user>" under the host's secret ($AGENTCTL_STORE_SECRET, default /var/lib/agentctl/store-secret: 32 random
+# bytes, 0600, made by the first `store token issue`), and counts while <id> is in the registry beside the secret
+# (store-tokens.json, 0600) unrevoked. Issued and revoked on the host as the store's user:
+#   agentctl store token issue --user pawel [--name laptop]   (prints the token once; the laptop keeps it in the vault
+#                                                              as bitcashier/AGENTCTL_STORE_TOKEN)
+#   agentctl store token revoke <id>   /   agentctl store token list
+# The check is a file read and an HMAC, so it is never cached: a revoke counts at the next request.
+STORE_SECRET = "/var/lib/agentctl/store-secret"
+STORE_AUTHS = ("forgejo", "store-tokens")
+
+
+def store_secret_path():
+    return os.environ.get("AGENTCTL_STORE_SECRET") or STORE_SECRET
+
+
+def store_tokens_path():
+    return os.path.join(os.path.dirname(store_secret_path()), "store-tokens.json")
+
+
+def store_secret(create=False):
+    """The HMAC secret's bytes; made (32 random bytes, 0600, never overwritten) when create and absent."""
+    path = store_secret_path()
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except FileNotFoundError:
+        if not create:
+            return None
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(os.urandom(32))
+    except FileExistsError:
+        pass
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def store_token_mac(secret, tid, user):
+    import hashlib, hmac
+    return hmac.new(secret, f"{tid}.{user}".encode(), hashlib.sha256).hexdigest()
+
+
+def store_tokens_load():
+    try:
+        with open(store_tokens_path()) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+
+def store_tokens_save(reg):
+    path = store_tokens_path()
+    fd = os.open(path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(reg, f, indent=1, sort_keys=True)
+    os.replace(path + ".new", path)
+
+
+def store_token_issue(user, name=""):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", user or ""):
+        raise SystemExit(f"agentctl store token: {user!r} is not a user name (letters, digits, _ and -)")
+    secret = store_secret(create=True)
+    import secrets as _secrets
+    tid = _secrets.token_hex(6)
+    reg = store_tokens_load()
+    reg[tid] = {"user": user, "name": name or "", "issued": ts()}
+    store_tokens_save(reg)
+    return tid, f"ast.{tid}.{user}.{store_token_mac(secret, tid, user)}"
+
+
+def store_token_revoke(tid):
+    reg = store_tokens_load()
+    if tid not in reg:
+        raise SystemExit(f"agentctl store token: no token {tid}")
+    reg[tid]["revoked"] = ts()
+    store_tokens_save(reg)
+    return reg[tid]
+
+
+def store_token_user(tok):
+    """The user a store token names, or None (malformed, a wrong mac, unknown, revoked, or no secret here)."""
+    import hmac
+    parts = (tok or "").split(".")
+    if len(parts) != 4 or parts[0] != "ast":
+        return None
+    _, tid, user, mac = parts
+    secret = store_secret()
+    if not secret or not hmac.compare_digest(mac, store_token_mac(secret, tid, user)):
+        return None
+    try:
+        rec = store_tokens_load().get(tid)
+    except (OSError, ValueError):
+        return None
+    if not rec or rec.get("revoked") or rec.get("user") != user:
+        return None
+    return user
+
+
 class StoreAPI:
     """The HTTP API's logic, apart from the socket (tests call handle() directly too)."""
 
-    def __init__(self, store, forgejo_url, allow=(), metrics=(), user_of=None, repo=None):
+    def __init__(self, store, forgejo_url, allow=(), metrics=(), user_of=None, repo=None, auth="forgejo"):
         self.store, self.forgejo = store, (forgejo_url or "").rstrip("/")
         self.allow, self.metrics = set(allow), set(metrics)
-        self.user_of, self.repo = user_of or self._forgejo_user, repo
+        self.auth = auth
+        self.user_of = user_of or (store_token_user if auth == "store-tokens" else self._forgejo_user)
+        self.repo = repo
         self.cache, self.lock = {}, threading.Lock()
 
     def _forgejo_user(self, tok):
@@ -739,6 +843,8 @@ class StoreAPI:
 
     def login(self, tok):
         import hashlib
+        if self.auth == "store-tokens":  # a local check: never cached, so a revoke counts at once
+            return self.user_of(tok)
         k, now_ = hashlib.sha256(tok.encode()).hexdigest(), time.time()
         with self.lock:
             hit = self.cache.get(k)
@@ -762,11 +868,12 @@ class StoreAPI:
         auth = headers.get("Authorization") or headers.get("authorization") or ""
         m = re.match(r"(?i)(?:token|bearer)\s+(\S+)$", auth.strip())
         if not m:
-            return self._json(401, {"error": "Unauthorized", "message": "Authorization: token <Forgejo token> required"})
+            what = "an agentctl store token" if self.auth == "store-tokens" else "a Forgejo token"
+            return self._json(401, {"error": "Unauthorized", "message": f"Authorization: token <{what}> required"})
         try:
             who = self.login(m.group(1))
         except Exception as e:
-            return self._json(503, {"error": "Unavailable", "message": f"Forgejo could not check the token: {e}"})
+            return self._json(503, {"error": "Unavailable", "message": f"the token could not be checked: {e}"})
         if who not in self.allow and not (who in self.metrics and method == "GET" and u.path == "/metrics"):
             return self._json(403, {"error": "Forbidden", "message": f"{who or 'this token'} may not call {u.path}"})
         try:
@@ -861,6 +968,19 @@ def store_server(api, host, port):
 def cmd_store(a):
     """`agentctl store serve --listen ADDR:PORT --forgejo-url URL --allow-user U... --metrics-user U...` (ci-runner);
     `agentctl store use URL` (the laptop: which store its sync and agents use)."""
+    if a.scmd == "token":
+        if a.tcmd == "issue":
+            tid, tok = store_token_issue(a.user, a.name)
+            err(f"store token {tid} for {a.user} issued (revoke: agentctl store token revoke {tid})")
+            print(tok)
+        elif a.tcmd == "revoke":
+            rec = store_token_revoke(a.id)
+            print(f"revoked {a.id} ({rec.get('user')} {rec.get('name') or ''})".rstrip())
+        else:
+            for tid, rec in sorted(store_tokens_load().items(), key=lambda x: x[1].get("issued", "")):
+                print(f"{tid}  {rec.get('user'):<14} {rec.get('name') or '-':<14} issued {rec.get('issued')}"
+                      + (f"  REVOKED {rec['revoked']}" if rec.get("revoked") else ""))
+        return 0
     if a.scmd == "use":
         RemoteStore(a.url).state()  # it answers, with this token, before anything relies on it
         os.makedirs(state_root(), exist_ok=True)
@@ -873,8 +993,11 @@ def cmd_store(a):
     gap = store_grace(st)
     if gap:
         err(f"store: down {int(gap)} s; every live lease extended by that")
+    if a.auth == "store-tokens" and not store_secret():
+        raise SystemExit(f"agentctl store serve --auth store-tokens: no secret at {store_secret_path()} yet "
+                         "(`agentctl store token issue --user <login>` makes it)")
     api = StoreAPI(st, a.forgejo_url or os.environ.get("AGENTCTL_FORGEJO_URL") or "", a.allow_user or [],
-                   a.metrics_user or [])
+                   a.metrics_user or [], auth=a.auth)
     srv = store_server(api, host or "127.0.0.1", int(port or STORE_PORT))
 
     def alive():
@@ -886,7 +1009,7 @@ def cmd_store(a):
                 err(f"store: last_alive not written ({e})")
     threading.Thread(target=alive, daemon=True).start()
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=srv.shutdown, daemon=True).start())
-    err(f"store: serving {state_root('store.db')} on {host}:{port} (allow {','.join(api.allow) or '-'}; metrics "
+    err(f"store: serving {state_root('store.db')} on {host}:{port}, auth {a.auth} (allow {','.join(api.allow) or '-'}; metrics "
         f"{','.join(api.metrics) or '-'})")
     srv.serve_forever()
     return 0

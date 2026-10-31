@@ -156,7 +156,7 @@ def fixer_env(o_r, num, wrapper_pid=None):
            and not SECRET_ENV.search(k)}
     try:
         tok = token(o_r)
-        env["FORGEJO_API_TOKEN" if token_ns(o_r) == "movies" else "GH_TOKEN"] = tok
+        env[token_env_name(o_r)] = tok
     except (Exception, SystemExit):
         pass
     env.update(AGENTCTL_AGENT_NAME=f"red-fixer-{num}", AGENTCTL_RED_FIXER=str(num))

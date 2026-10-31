@@ -922,3 +922,83 @@ class TickEntryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StoreTokensTest(Phase2Base):
+    """`store serve --auth store-tokens` (github-return W5b): the store's own HMAC tokens, no forge asked."""
+
+    def setUp(self):
+        super().setUp()
+        self.saved_secret = os.environ.get("AGENTCTL_STORE_SECRET")
+        os.environ["AGENTCTL_STORE_SECRET"] = os.path.join(self.tmp, "secret", "store-secret")
+        self.srv.shutdown()
+        self.api = A.StoreAPI(self.st, "", ["pawel"], ["ci-metrics"], repo=self.repo, auth="store-tokens")
+        self.srv = A.store_server(self.api, "127.0.0.1", 0)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.srv.server_port}"
+
+    def tearDown(self):
+        if self.saved_secret is None:
+            os.environ.pop("AGENTCTL_STORE_SECRET", None)
+        else:
+            os.environ["AGENTCTL_STORE_SECRET"] = self.saved_secret
+        super().tearDown()
+
+    def test_issued_tokens_decide_what_a_login_may_call_and_a_revoke_counts_at_once(self):
+        tid, pawel = A.store_token_issue("pawel", "laptop")
+        _, metrics = A.store_token_issue("ci-metrics", "scrape")
+        _, other = A.store_token_issue("someone")
+        self.assertEqual(os.stat(A.store_secret_path()).st_mode & 0o777, 0o600)
+        self.assertEqual(os.stat(A.store_tokens_path()).st_mode & 0o777, 0o600)
+        self.assertTrue(A.TOKEN_SHAPE.fullmatch(pawel))  # the processor's socket carries it
+        self.assertEqual(self.get("/v1/state")[0], 401)
+        self.assertEqual(self.get("/v1/state", "tok-pawel")[0], 403)  # a Forgejo token means nothing here
+        self.assertEqual(self.get("/v1/state", other)[0], 403)
+        self.assertEqual(self.get("/v1/state", metrics)[0], 403)
+        self.assertEqual(self.get("/metrics", metrics)[0], 200)
+        self.assertEqual(self.get("/v1/state", pawel)[0], 200)
+        forged = pawel.rsplit(".", 1)[0] + "." + "0" * 64
+        self.assertEqual(self.get("/v1/state", forged)[0], 403)
+        renamed = ".".join(["ast", tid, "someone", pawel.rsplit(".", 1)[1]])  # pawel's mac under another login
+        self.assertEqual(self.get("/v1/state", renamed)[0], 403)
+        A.store_token_revoke(tid)
+        self.assertEqual(self.get("/v1/state", pawel)[0], 403)
+        self.assertEqual(self.fj_calls, [])  # Forgejo never asked
+
+    def test_the_cli_issues_lists_and_revokes(self):
+        import contextlib, io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(A.main(["store", "token", "issue", "--user", "pawel", "--name", "laptop"]), 0)
+        tok = out.getvalue().strip()
+        self.assertEqual(A.store_token_user(tok), "pawel")
+        tid = tok.split(".")[1]
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            A.main(["store", "token", "list"])
+        self.assertIn(f"{tid}  pawel", out.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()):
+            A.main(["store", "token", "revoke", tid])
+        self.assertIsNone(A.store_token_user(tok))
+        with self.assertRaises(SystemExit):
+            A.store_token_issue("no spaces please")
+
+    def test_on_github_the_laptop_sends_the_store_token_never_a_gh_token(self):
+        _, pawel = A.store_token_issue("pawel")
+        saved = {k: os.environ.get(k) for k in ("AGENTCTL_FORGE", "GH_TOKEN", "FORGEJO_API_TOKEN")}
+        try:
+            os.environ.update(AGENTCTL_FORGE="github", GH_TOKEN="gho_the_owners", FORGEJO_API_TOKEN="tok-pawel",
+                              AGENTCTL_STORE_TOKEN=pawel)
+            self.assertEqual(A.token(A.SHORT["movies"]), pawel)
+            self.assertEqual(A.token_env_name(A.SHORT["movies"]), "AGENTCTL_STORE_TOKEN")
+            self.assertEqual(A.token_vault_key(A.SHORT["movies"]), ("bitcashier", "AGENTCTL_STORE_TOKEN"))
+            self.assertEqual(A.RemoteStore(self.url)._token(), pawel)
+            os.environ["AGENTCTL_FORGE"] = "forgejo"
+            self.assertEqual(A.token_vault_key(A.SHORT["movies"]), ("movies", "FORGEJO_API_TOKEN"))
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            os.environ.pop("AGENTCTL_STORE_TOKEN", None)
