@@ -1403,6 +1403,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `red_repo` | `AGENTCTL_RED_REPO` | - | - |
 | `red_repos` | `AGENTCTL_RED_REPOS` | - | - |
 | `red_skip_say` | `AGENTCTL_RED_SKIP_SAY` | `600` | s between the lines of another repo whose tick keeps failing for the same reason |
+| `red_stale_days` | `AGENTCTL_RED_STALE_DAYS` | `14` | $AGENTCTL_RED_STALE_DAYS |
 | `red_stall` | `AGENTCTL_RED_STALL` | `1800` | a turn with no progress (transcript, worktree) this long is stalled: stopped |
 | `red_starve` | `AGENTCTL_RED_STARVE` | `2700` | an offer waiting this long for a slot is STARVED |
 | `red_tick` | `AGENTCTL_RED_TICK` | `15` | seconds between the processor's red ticks |

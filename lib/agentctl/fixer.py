@@ -1083,8 +1083,10 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
                 active[key] = red_attach_obs(store, it, ob)
                 continue
             settled = red_settled_runs(store) if settled is None else settled
-            if (key, str(ob["run"].get("databaseId"))) not in settled:
-                active[key] = red_open(store, ob, repo, t, o_r)
+            if (key, str(ob["run"].get("databaseId"))) not in settled \
+                    and not red_retired(o_r, {"red_kind": ob["red_kind"], "workflow": ob["workflow"],
+                                              "last_run": ob["run"], "jobs": ob["jobs"]}, t):
+                active[key] = red_open(store, ob, repo, t, o_r)  # a retired check's run opens no red
         except (Exception, SystemExit) as e:
             err(f"red tick: {key}: {str(e)[:160]}")
     try:

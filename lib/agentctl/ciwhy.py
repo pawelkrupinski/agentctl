@@ -592,7 +592,7 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
 
     # A RUN ITS CALLERS PROVED FIXED is no red, though it stays its callable-only workflow's newest run on main for good
     proven = [o for o in others if (fixing(o[0], o[1])[1] or {}).get("state") == "verified"]
-    others = [o for o in others if o not in proven]
+    others = [o for o in others if o not in proven and not red_run_retired(o_r, o[0], o[1])]
 
     for name, decided, newer, (since, count) in gate:
         pending = f"; newer run {newer['databaseId']} (#{newer.get('number')}) {newer.get('status')} may clear it" if newer else ""
@@ -608,6 +608,12 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
         if decided["conclusion"] == "success":
             out.append(f"{name}: GREEN (run {decided['databaseId']} #{decided.get('number')})")
             parts.append(f"{short_flow(name)} green")
+            continue
+        retired = red_run_retired(o_r, name, decided)
+        if retired:  # its check is gone from main: no run can clear it, it gates nothing and no fixer is offered it
+            out.append(f"{name}: RETIRED (run {decided['databaseId']} #{decided.get('number')}, {decided['conclusion']}): "
+                       f"{retired} -- no red")
+            parts.append(f"{short_flow(name)} retired")
             continue
         red = True
         streak = f"; red for {red_for(since)} ({count} failed run{'s' if count != 1 else ''})" if count else ""
