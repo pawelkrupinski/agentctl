@@ -1,0 +1,639 @@
+#!/usr/bin/env python3
+"""Live page: what each GitHub Actions runner is running now, and what waits for which label.
+
+  ~/bin/ci-runners-page [--port 8790]     then open http://runners.localhost:8790
+
+- bitcashier's self-hosted runners on ci-runner (bitcashier-gh-builder-*, -deployer-*): online/offline, busy, labels,
+  the job each runs, and the jobs queued for a self-hosted label;
+- the hosted runners of pawelkrupinski's repos (HOSTED_REPOS): the jobs in progress and queued, the runner image, and
+  the concurrency in use against GitHub's hosted limit (HOSTED_LIMIT jobs per account);
+- ci-runner's health (load, CPU per tier and per runner, memory, swap, disk), read-only over ssh, and its last 24 h
+  from the fleet Prometheus.
+
+Reads GitHub through `gh api` (the owner's own gh auth: no token of its own). ONE background poller, never a page load,
+asks GitHub: at most one request a second, each answer cached 15 s (60 s for a repo with nothing running, an hour for
+the org's repo list) and re-asked with its ETag, so an unchanged answer is a 304, which GitHub does not count against
+the 5,000/h budget. Below LOW_REMAINING requests left it slows to one every LOW_GAP s; at 0 it waits for the reset.
+The last good reading is kept in ~/.cache/ci-runners-page/last-good.json (served marked stale after a restart; agentctl's
+red queue_full reads its `running`/`waiting_jobs`/`limits`). Binds 127.0.0.1 and answers only runners.localhost,
+localhost and 127.0.0.1 (another name pointing here is a rebinding page). Read-only: GET alone.
+"""
+import argparse, collections, datetime, html, json, os, shutil, subprocess, threading, time, urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+ORG = "bitcashier"  # its self-hosted runners, and its repos' runs (the ones pushed to in REPO_RECENT)
+HOSTED_OWNER = "pawelkrupinski"
+HOSTED_REPOS = ("movies", "agentctl", "recommend", "movies-gitops")
+HOSTED_LIMIT = 20  # GitHub's concurrent hosted-runner jobs per account (Free plan: 20)
+REPO_RECENT = 14 * 86400
+ACTIVE = {"queued", "in_progress", "waiting", "requested", "pending"}
+EVERY = 15  # seconds between polls (and each answer's cache age)
+IDLE_AGE = 60  # a repo with no run in progress is re-asked at most this often
+MIN_GAP = 1.0  # seconds between two GitHub requests
+LOW_REMAINING, LOW_GAP = 1000, 10.0
+HOSTS = {"runners.localhost", "localhost", "127.0.0.1"}
+SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "ci-runner"]
+SAVED = Path.home() / ".cache" / "ci-runners-page" / "last-good.json"
+GH = shutil.which("gh") or "/opt/homebrew/bin/gh"
+
+
+def epoch(s):
+    try:
+        return datetime.datetime.fromisoformat(str(s).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+# ---------------------------------------------------------------- GitHub, politely
+def parse_http(text):
+    """(status, {lower-case header: value}, body) of `gh api -i` output."""
+    text = text.replace("\r\n", "\n")
+    head, _, body = text.partition("\n\n")
+    lines = head.split("\n")
+    parts = lines[0].split()
+    if len(parts) < 2 or not parts[0].startswith("HTTP/") or not parts[1].isdigit():
+        raise RuntimeError(f"no HTTP status in gh's answer: {text[:200]!r}")
+    headers = {}
+    for line in lines[1:]:
+        k, _, v = line.partition(":")
+        headers[k.strip().lower()] = v.strip()
+    return int(parts[1]), headers, body
+
+
+def gh_raw(path, etag=None):
+    cmd = [GH, "api", "-i", path] + (["-H", f"If-None-Match: {etag}"] if etag else [])
+    out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)  # a 304 exits 1: the status line tells
+    if not out.stdout.strip():
+        raise RuntimeError((out.stderr or f"gh api exited {out.returncode}").strip()[-300:])
+    return parse_http(out.stdout)
+
+
+class GitHub:
+    """GET with a per-path cache, ETags and one request at a time at most every MIN_GAP s (LOW_GAP when the budget runs
+    low, none at all until the reset when it is spent)."""
+
+    def __init__(self, raw=gh_raw, clock=time.time, sleep=time.sleep, beat=lambda: None):
+        self.raw, self.clock, self.sleep, self.beat = raw, clock, sleep, beat
+        self.cache = {}  # path -> {"etag", "body", "at", "used"}
+        self.last = 0.0
+        self.remaining = self.limit = self.reset = None
+        self.calls = collections.deque()  # (time, status) of the last hour's requests
+
+    def gap(self):
+        return LOW_GAP if self.remaining is not None and self.remaining < LOW_REMAINING else MIN_GAP
+
+    def get(self, path, max_age=EVERY):
+        now = self.clock()
+        c = self.cache.get(path)
+        if c:
+            c["used"] = now
+            if now - c["at"] < max_age:
+                return c["body"]
+        if self.remaining == 0 and self.reset and now < self.reset:
+            if c:
+                return c["body"]
+            raise RuntimeError(f"GitHub's rate limit is spent until {time.strftime('%H:%M', time.localtime(self.reset))}")
+        wait = self.last + self.gap() - now
+        if wait > 0:
+            self.sleep(wait)
+        self.beat()
+        self.last = self.clock()
+        status, headers, body = self.raw(path, c["etag"] if c else None)
+        self.calls.append((self.last, status))
+        while self.calls and self.calls[0][0] < self.last - 3600:
+            self.calls.popleft()
+        for k, attr in (("x-ratelimit-remaining", "remaining"), ("x-ratelimit-limit", "limit"),
+                        ("x-ratelimit-reset", "reset")):
+            if headers.get(k, "").isdigit():
+                setattr(self, attr, int(headers[k]))
+        if status == 304 and c:
+            c["at"] = self.last
+            if headers.get("etag"):
+                c["etag"] = headers["etag"]
+            return c["body"]
+        if status == 200:
+            data = json.loads(body or "null")
+            self.cache[path] = {"etag": headers.get("etag"), "body": data, "at": self.last, "used": self.last}
+            return data
+        raise RuntimeError(f"GitHub {path}: HTTP {status} {body.strip()[:200]}")
+
+    def prune(self, older=3600):
+        """Forget answers nobody asked for in an hour (a finished run's jobs)."""
+        now = self.clock()
+        for p in [p for p, c in self.cache.items() if now - c["used"] > older]:
+            del self.cache[p]
+
+    def budget(self):
+        return {"remaining": self.remaining, "limit": self.limit, "reset": self.reset,
+                "calls": len(self.calls), "not_modified": sum(1 for _, s in self.calls if s == 304)}
+
+
+def watched_repos(gh, now):
+    """bitcashier's repos pushed to within REPO_RECENT (the org list asked hourly), then HOSTED_REPOS."""
+    rs = gh.get(f"orgs/{ORG}/repos?per_page=100&type=all", 3600) or []
+    org = sorted(f"{ORG}/{r['name']}" for r in rs
+                 if not r.get("archived") and now - (epoch(r.get("pushed_at")) or 0) <= REPO_RECENT)
+    return org + [f"{HOSTED_OWNER}/{n}" for n in HOSTED_REPOS]
+
+
+def job_row(o_r, run, j, now):
+    labels = list(j.get("labels") or [])
+    start = epoch(j.get("started_at")) if j.get("status") == "in_progress" else epoch(j.get("created_at"))
+    return {"repo": o_r, "run": run.get("run_number"), "run_id": run.get("id"), "workflow": run.get("name") or
+            j.get("workflow_name") or "", "job": j.get("name") or "", "ref": run.get("head_branch") or "",
+            "sha": (run.get("head_sha") or "")[:9], "status": j.get("status"), "labels": labels,
+            "label": json.dumps(labels), "runner": j.get("runner_name") or "", "job_id": j.get("id"),
+            "url": j.get("html_url") or run.get("html_url") or "", "secs": max(0, int(now - start)) if start else 0}
+
+
+def collect(gh, now, active_repos):
+    """(runners, active job rows, errors) from GitHub. One repo's failure is that repo's line in errors, never a blank
+    page. active_repos (mutated): the repos whose last listing had a run in progress, re-asked every EVERY s."""
+    runners = (gh.get(f"orgs/{ORG}/actions/runners?per_page=100") or {}).get("runners") or []
+    jobs, errors = [], []
+    for o_r in watched_repos(gh, now):
+        try:
+            runs = (gh.get(f"repos/{o_r}/actions/runs?per_page=40", EVERY if o_r in active_repos else IDLE_AGE)
+                    or {}).get("workflow_runs") or []
+            live = [r for r in runs if r.get("status") in ACTIVE]
+            (active_repos.add if live else active_repos.discard)(o_r)
+            for r in live:
+                for j in (gh.get(f"repos/{o_r}/actions/runs/{r['id']}/jobs?per_page=100") or {}).get("jobs") or []:
+                    if j.get("status") in ACTIVE:
+                        jobs.append(job_row(o_r, r, j, now))
+        except Exception as e:
+            errors.append(f"{o_r}: {e}"[:300])
+    gh.prune()
+    return runners, jobs, errors
+
+
+# ---------------------------------------------------------------- ci-runner, read-only
+HOST_PROBE = r"""
+printf 'H\t%s\t%s\n' "$(cut -d' ' -f1-3 /proc/loadavg)" "$(nproc)"
+awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree):/{printf "M\t%s\t%s\n", $1, $2}' /proc/meminfo
+df -Pk / /mnt/data 2>/dev/null | awk 'NR>1{printf "D\t%s\t%s\t%s\n", $6, $2, $3}'
+for t in deploy gate check measure; do d=/sys/fs/cgroup/ci.slice/ci-$t.slice; [ -d $d ] || continue
+  printf 'T\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$t" "$(cat $d/cpu.weight 2>/dev/null)" \
+    "$(cat $d/cpuset.cpus.effective 2>/dev/null || cat $d/cpuset.cpus 2>/dev/null)" \
+    "$(awk '/usage_usec/{print $2}' $d/cpu.stat)" "$(cat $d/memory.current 2>/dev/null)" \
+    "$(cat $d/memory.max 2>/dev/null)" "$(head -1 $d/cpu.pressure 2>/dev/null | sed 's/.*avg10=\([0-9.]*\).*/\1/')"
+  for s in $d/github-runner-*.service; do [ -d "$s" ] || continue; n=${s##*/github-runner-}; n=${n%.service}
+    printf 'R\t%s\t%s\t%s\t%s\n' "$n" "$t" "$(awk '/usage_usec/{print $2}' $s/cpu.stat)" \
+      "$(systemctl show -p SubState --value github-runner-$n.service)"
+  done
+done
+printf 'P\t%s\n' "$(head -1 /proc/stat)"
+true
+"""
+
+
+def parse_host(text, t):
+    """One sample of ci-runner: host figures, tiers and runners, with cumulative CPU counters for rates."""
+    h = {"t": t, "load": None, "cpus": None, "mem": {}, "disks": [], "tiers": {}, "runners": {}, "busy": None}
+    for line in text.splitlines():
+        f = line.split("\t")
+        if f[0] == "H" and len(f) >= 3:
+            h["load"], h["cpus"] = f[1], int(f[2]) if f[2].isdigit() else None
+        elif f[0] == "M" and len(f) >= 3 and f[2].isdigit():
+            h["mem"][f[1].rstrip(":")] = int(f[2]) * 1024
+        elif f[0] == "D" and len(f) >= 4 and f[2].isdigit() and f[3].isdigit():
+            h["disks"].append({"mount": f[1], "size": int(f[2]) * 1024, "used": int(f[3]) * 1024})
+        elif f[0] == "T" and len(f) >= 8:
+            h["tiers"][f[1]] = {"weight": f[2], "cpus": f[3], "usage": int(f[4]) if f[4].isdigit() else None,
+                                "mem": f[5], "max": f[6], "pressure": f[7]}
+        elif f[0] == "R" and len(f) >= 5:
+            h["runners"][f[1]] = {"tier": f[2], "usage": int(f[3]) if f[3].isdigit() else None, "state": f[4]}
+        elif f[0] == "P" and len(f) >= 2:
+            j = [int(x) for x in f[1].split()[1:] if x.isdigit()]
+            if len(j) > 4:
+                h["busy"] = (sum(j) - j[3] - j[4], sum(j))  # (busy, total) jiffies: idle and iowait out
+    return h
+
+
+def host_sample():
+    out = subprocess.run(SSH + [HOST_PROBE], capture_output=True, text=True, timeout=60)
+    if out.returncode != 0:
+        raise RuntimeError((out.stderr or "ssh to ci-runner failed").strip()[-300:])
+    return parse_host(out.stdout, time.time())
+
+
+def cpu_count(cpuset, default):
+    n = 0
+    for part in (cpuset or "").split(","):
+        if "-" in part:
+            a, b = part.split("-")
+            n += int(b) - int(a) + 1
+        elif part.strip().isdigit():
+            n += 1
+    return n or default
+
+
+PROM = "10.0.0.25"
+DAY_QUERY = '100 * count(node_cpu_seconds_total{mode="idle",instance=~"10.1.0.3:.*"}) * ' \
+            '(1 - avg(rate(node_cpu_seconds_total{mode=~"idle|iowait",instance=~"10.1.0.3:.*"}[5m])))'
+
+
+def day_history():
+    """ci-runner's last 24 h of CPU busy in centicores, every 5 min, from the fleet Prometheus (private address: asked
+    over ssh on the monitoring host)."""
+    end = int(time.time())
+    cmd = (f"curl -s -G 'http://{PROM}:9090/api/v1/query_range' --data-urlencode 'query={DAY_QUERY}' "
+           f"--data-urlencode start={end - 86400} --data-urlencode end={end} --data-urlencode step=300")
+    out = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", PROM, cmd], capture_output=True,
+                         text=True, timeout=60)
+    res = json.loads(out.stdout)["data"]["result"]
+    return [[int(float(t)), round(float(v))] for t, v in res[0]["values"]] if res else []
+
+
+# ---------------------------------------------------------------- the page's data
+class Rates:
+    """Centicores (1 core = 100) per tier, per runner and for the host between consecutive samples; each runner's peak
+    for the job it runs now; the last hour of (time, host, {tier: cc})."""
+
+    def __init__(self):
+        self.prev, self.peaks, self.history = None, {}, collections.deque()
+
+    def update(self, now, job_of):
+        prev, self.prev = self.prev, now
+        if not prev or now["t"] <= prev["t"]:
+            return None
+        dt = now["t"] - prev["t"]
+
+        def rate(a, b):
+            return max(0, round((a - b) / dt / 10000)) if a is not None and b is not None else None
+        tiers = {t: rate(v["usage"], prev["tiers"].get(t, {}).get("usage")) for t, v in now["tiers"].items()}
+        runners = {n: rate(v["usage"], prev["runners"].get(n, {}).get("usage")) for n, v in now["runners"].items()}
+        for n, cc in runners.items():
+            job = job_of.get(n)
+            old = self.peaks.get(n)
+            if job is None:
+                self.peaks.pop(n, None)
+            elif cc is not None:
+                self.peaks[n] = (job, max(cc, old[1] if old and old[0] == job else 0))
+        host = None
+        if now["busy"] and prev["busy"]:
+            (b1, t1), (b0, t0) = now["busy"], prev["busy"]
+            host = round(100 * (now["cpus"] or 1) * (b1 - b0) / max(1, t1 - t0))
+        self.history.append((round(now["t"]), host, {t: v for t, v in tiers.items() if v is not None}))
+        while self.history and self.history[0][0] < now["t"] - 3600:
+            self.history.popleft()
+        return {"tiers": tiers, "runners": runners, "peaks": {n: p[1] for n, p in self.peaks.items()}, "host": host}
+
+
+def is_self_hosted(row, names):
+    return row["runner"] in names or "self-hosted" in row["labels"]
+
+
+def assemble(runners, jobs, host=None, cpu=None):
+    """The page's (and last-good.json's) data. Keys agentctl's red.queue_full reads keep the old page's shape:
+    running[].runner/repo/run, waiting_jobs[].label/repo/run/secs (label: the job's runs-on as a JSON list), and
+    limits.runners[name].labels (JSON list)/capacity/state ("running" when online)."""
+    names = {r.get("name") for r in runners}
+    host = host or {}
+    rows = []
+    for r in sorted(runners, key=lambda r: r.get("name") or ""):
+        n = r.get("name")
+        h = (host.get("runners") or {}).get(n, {})
+        rows.append({"name": n, "status": r.get("status"), "busy": bool(r.get("busy")),
+                     "labels": [x.get("name") for x in r.get("labels") or []], "tier": h.get("tier"),
+                     "unit": h.get("state")})
+    self_hosted = [j for j in jobs if is_self_hosted(j, names)]
+    hosted = [j for j in jobs if not is_self_hosted(j, names)]
+    running = [j for j in self_hosted if j["status"] == "in_progress" and j["runner"]]
+    waiting_jobs = sorted((j for j in self_hosted if j["status"] != "in_progress"), key=lambda j: (j["label"], -j["secs"]))
+    by_label = collections.OrderedDict()
+    for j in waiting_jobs:
+        by_label.setdefault(j["label"], []).append(j)
+    waiting = sorted(({"label": label, "jobs": len(js), "oldest": max(j["secs"] for j in js),
+                       "runs": ",".join(sorted({f"{j['repo'].split('/')[1]} {j['workflow']}" for j in js}))}
+                      for label, js in by_label.items()), key=lambda w: -w["jobs"])
+    used = collections.Counter(j["repo"].split("/")[0] for j in hosted if j["status"] == "in_progress")
+    tiers = {t: {k: v for k, v in x.items() if k != "usage"} for t, x in (host.get("tiers") or {}).items()}
+    return {
+        "runners": rows, "running": running, "waiting": waiting, "waiting_jobs": waiting_jobs,
+        "hosted": {"limit": HOSTED_LIMIT, "owner": HOSTED_OWNER, "used": dict(used),
+                   "running": sorted((j for j in hosted if j["status"] == "in_progress"), key=lambda j: -j["secs"]),
+                   "queued": sorted((j for j in hosted if j["status"] != "in_progress"), key=lambda j: -j["secs"])},
+        "limits": {"runners": {r["name"]: {"labels": json.dumps(r["labels"]), "capacity": 1, "tier": r["tier"],
+                                            "state": "running" if r["status"] == "online" else r["status"]}
+                               for r in rows},
+                   "tiers": tiers,
+                   "host": {k: host.get(k) for k in ("load", "cpus", "mem", "disks")} if host else None},
+        "cpu": cpu,
+    }
+
+
+# ---------------------------------------------------------------- the poller and its state
+STATE = {"at": None, "ok": None, "runners": [], "running": [], "waiting": [], "waiting_jobs": [],
+         "hosted": {"limit": HOSTED_LIMIT, "owner": HOSTED_OWNER, "used": {}, "running": [], "queued": []},
+         "limits": {"runners": {}, "tiers": {}, "host": None}, "cpu": None, "history": [], "day": [],
+         "error": "first read in progress", "polled": time.time()}
+LOCK = threading.Lock()
+
+
+def beat():
+    """The poller is making progress (stamped before each GitHub request and ssh read): /healthz tells a stuck poller
+    from a slow network."""
+    with LOCK:
+        STATE["polled"] = time.time()
+
+
+def save_good():
+    try:
+        SAVED.parent.mkdir(parents=True, exist_ok=True)
+        with LOCK:
+            data = json.dumps(STATE)
+        tmp = SAVED.with_suffix(".tmp")
+        tmp.write_text(data)
+        tmp.replace(SAVED)
+    except OSError:
+        pass
+
+
+def load_good(rates):
+    """The last good reading from before a restart, served marked stale until the first read succeeds."""
+    try:
+        data = json.loads(SAVED.read_text())
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict) or "runners" not in data:
+        return
+    for x in data.get("history") or []:
+        if time.time() - x[0] < 3600:
+            rates.history.append(tuple(x))
+    data.update(history=list(rates.history), error="first read since a restart in progress", polled=time.time())
+    with LOCK:
+        STATE.update(data)
+
+
+def poll_once(gh, rates, active_repos, n, sample=host_sample, day=day_history):
+    fresh, notes = {}, []
+    runners, jobs, errors = collect(gh, time.time(), active_repos)
+    notes += errors
+    host, cpu = None, None
+    try:
+        beat()
+        host = sample()
+        job_of = {j["runner"]: j["job_id"] for j in jobs if j["status"] == "in_progress" and j["runner"]}
+        cpu = rates.update(host, job_of)
+    except Exception as e:  # ci-runner's figures are extra: their failure never blanks the jobs
+        notes.append(f"ci-runner: {e}"[:300])
+    if n % 8 == 0:
+        try:
+            beat()
+            fresh["day"] = day()
+        except Exception as e:
+            fresh["day_error"] = str(e)[:300]
+    fresh.update(assemble(runners, jobs, host, cpu))
+    if host is None:  # keep the last host figures rather than none
+        with LOCK:
+            fresh["limits"]["host"] = (STATE.get("limits") or {}).get("host")
+            fresh["limits"]["tiers"] = (STATE.get("limits") or {}).get("tiers") or {}
+    fresh.update(history=list(rates.history), notes=notes, github=gh.budget())
+    return fresh
+
+
+def poll_forever(gh, rates):
+    active_repos, n = set(), 0
+    while True:
+        started = time.time()
+        try:
+            fresh = poll_once(gh, rates, active_repos, n)
+            with LOCK:
+                STATE.update(fresh, at=time.strftime("%H:%M:%S"), ok=time.time(), error=None)
+            save_good()
+        except Exception as e:
+            with LOCK:
+                STATE["error"] = str(e)[:500]
+        n += 1
+        beat()
+        time.sleep(max(1.0, EVERY - (time.time() - started)))
+
+
+def snapshot():
+    with LOCK:
+        s = dict(STATE)
+    s["stale_secs"] = int(time.time() - s["ok"]) if s.get("ok") else None
+    return s
+
+
+PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>CI runners</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{--bg:#fff;--fg:#1d1d1f;--muted:#6e6e73;--line:#e5e5ea;--card:#f5f5f7;--accent:#0a66c2;--warn:#b25000}
+@media (prefers-color-scheme: dark){:root{--bg:#1c1c1e;--fg:#f2f2f7;--muted:#98989d;--line:#38383a;--card:#2c2c2e;--accent:#64a8ff;--warn:#ffb340}}
+body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:14px/1.4 -apple-system,system-ui,sans-serif}
+h1{font-size:20px;margin:0 0 4px}.sub{color:var(--muted);margin-bottom:16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}
+.card{background:var(--card);border-radius:10px;padding:12px}.card h2{font-size:15px;margin:0 0 8px;display:flex;justify-content:space-between}
+.count{color:var(--muted);font-weight:normal}.job{border-top:1px solid var(--line);padding:6px 0}
+.job a,td a{color:var(--accent);text-decoration:none}.meta{color:var(--muted);font-size:12px}
+.old{color:var(--warn)}.wrow{cursor:pointer}.wrow:hover{background:var(--card)}.wjob td{border-top:none;padding-top:2px;padding-bottom:2px}table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:6px 8px;border-top:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:normal}.err{color:var(--warn);margin-bottom:12px}
+.tiers{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-bottom:16px}
+.tier{background:var(--card);border-radius:10px;padding:8px 12px;font-size:13px}.tier b{font-size:14px}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:6px 0 4px}.bar i{display:block;height:100%;background:var(--accent)}
+.full .bar i{background:var(--warn)}.chartcard{background:var(--card);border-radius:10px;padding:10px 12px;margin-bottom:12px}
+.charthead{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}.range{margin-left:auto;display:flex;gap:4px}
+.range button{font:inherit;font-size:12px;border:1px solid var(--line);background:var(--bg);color:var(--fg);border-radius:6px;padding:2px 8px;cursor:pointer}
+.range button.on{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+#chart svg{display:block;width:100%;height:auto}#chart text{fill:var(--muted);font-size:10px}#chart .grid{stroke:var(--line)}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:4px}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+.spark{display:block;width:100%;height:34px;margin:4px 0 2px}.spark polyline{fill:none;stroke:var(--accent);stroke-width:1.5;vector-effect:non-scaling-stroke}.free{color:var(--muted);font-weight:normal}
+@media (max-width:420px){.grid{grid-template-columns:1fr}}
+</style></head><body>
+<h1>CI runners</h1><div class="sub" id="sub">loading…</div><div id="err" class="err"></div>
+<div class="chartcard"><div class="charthead"><b>ci-runner</b> <span class="meta" id="chartnote"></span>
+<span class="range"><button data-r="hour">Last hour, by tier</button><button data-r="day">Last 24 h</button></span></div>
+<div id="chart"></div></div>
+<div class="tiers" id="tiers"></div>
+<div class="grid" id="runners"></div>
+<h1 style="margin-top:24px">Waiting for a self-hosted runner</h1><table id="waiting"></table>
+<h1 style="margin-top:24px">Hosted runners</h1><div class="tiers" id="hostedmeter"></div>
+<div class="grid" id="hosted"></div>
+<h2 style="font-size:15px;margin:16px 0 4px">Queued on hosted runners</h2><table id="hostedq"></table>
+<script>
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const dur = s => { s = +s || 0; return s >= 3600 ? Math.floor(s/3600)+"h"+String(Math.floor(s%3600/60)).padStart(2,"0") : Math.floor(s/60)+"m"+String(s%60).padStart(2,"0")+"s"; };
+const gib = b => isNaN(+b) || b === "" ? b : (+b / 2**30).toFixed(0) + "G";
+const link = j => /^https:\\/\\/github\\.com\\//.test(j.url || "") ? `<a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.repo.split("/")[1])} #${esc(j.run)}</a>` : `${esc(j.repo.split("/")[1])} #${esc(j.run)}`;
+const old = (s, lim) => `<span class="${+s > lim ? "old" : ""}">${dur(s)}</span>`;
+const ncpu = (set, dflt) => (set || "").split(",").reduce((a, p) => a + (p.includes("-") ? p.split("-")[1] - p.split("-")[0] + 1 : (p.trim() ? 1 : 0)), 0) || dflt;
+const spark = (vals, max) => { if (vals.length < 2) return ""; const w = 176, h = 34;
+  const pts = vals.map((v, i) => `${(i * w / (vals.length - 1)).toFixed(1)},${(h - Math.min(1, (v || 0) / max) * h).toFixed(1)}`).join(" ");
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="${pts}"/></svg>`; };
+const ccLine = (now, max) => now == null ? "" : `<span class="${now > 0.9 * max ? "old" : ""}">${now}</span> / ${max} cc`;
+async function tick() {
+  try {
+    const d = await (await fetch("data.json", {cache: "no-store"})).json();
+    const notes = (d.notes || []).map(esc).join("<br>");
+    document.getElementById("err").innerHTML = (d.error ? "Could not read GitHub" + (d.at ? " (showing " + esc(d.at) + ", " + dur(d.stale_secs) + " old)" : "") + ": " + esc(d.error) : "") + (notes ? (d.error ? "<br>" : "") + notes : "");
+    const L = d.limits || {runners: {}, tiers: {}}, C = d.cpu || {tiers: {}, runners: {}, peaks: {}}, H = d.history || [];
+    const host = L.host || {}, CPUS = host.cpus || 32, HMAX = 100 * CPUS;
+    drawChart(d, HMAX);
+    const m = host.mem || {}, memUsed = m.MemTotal ? m.MemTotal - m.MemAvailable : null, swapUsed = m.SwapTotal ? m.SwapTotal - m.SwapFree : null;
+    const tierCards = Object.keys(L.tiers || {}).filter(t => (d.runners || []).some(r => r.tier === t)).map(t => { const x = L.tiers[t];
+      const mine = (d.runners || []).filter(r => r.tier === t), used = mine.filter(r => r.busy).length, cap = mine.length, max = 100 * ncpu(x.cpus, CPUS);
+      return `<div class="tier ${used >= cap ? "full" : ""}"><b>${esc(t)}</b> <span class="free">weight ${esc(x.weight)}</span>
+        <div class="bar"><i style="width:${cap ? Math.min(100, 100*used/cap) : 0}%"></i></div>${used}/${cap} runners busy<br>
+        CPU pressure <span class="${+x.pressure > 40 ? "old" : ""}">${esc(x.pressure)}%</span> · mem ${gib(x.mem)}${x.max && x.max !== "max" ? " (max " + gib(x.max) + ")" : ""}<br>
+        CPU ${ccLine((C.tiers || {})[t], max)}${spark(H.map(h => (h[2] || {})[t]), max)}</div>`; }).join("");
+    document.getElementById("tiers").innerHTML = (host.load ? `<div class="tier ${memUsed > 0.9 * m.MemTotal ? "full" : ""}"><b>Host</b> <span class="free">load ${esc(host.load)}</span><br>CPU ${ccLine(C.host, HMAX)}
+      ${spark(H.map(x => x[1]), HMAX)}<span class="meta">last hour · ${esc(CPUS)} threads = ${HMAX} cc</span><br>
+      mem ${gib(memUsed)} / ${gib(m.MemTotal)}${swapUsed != null ? " · swap " + gib(swapUsed) + " / " + gib(m.SwapTotal) : ""}<br>
+      ${(host.disks || []).map(k => `disk ${esc(k.mount)} <span class="${k.used > 0.9 * k.size ? "old" : ""}">${gib(k.used)} / ${gib(k.size)}</span>`).join("<br>")}</div>` : "") + tierCards;
+    const g = d.github || {};
+    document.getElementById("sub").textContent = (d.running || []).length + " self-hosted and " + ((d.hosted || {}).running || []).length + " hosted jobs running · data from " + (d.at || "—") + " · every 15 s" +
+      (g.remaining != null ? " · GitHub API " + g.remaining + "/" + g.limit + " left, " + g.calls + " calls in the last hour (" + g.not_modified + " unchanged)" : "");
+    const jobOf = {}; for (const j of d.running || []) jobOf[j.runner] = j;
+    document.getElementById("runners").innerHTML = (d.runners || []).map(r => { const j = jobOf[r.name], off = r.status !== "online";
+      return `<div class="card ${r.busy ? "full" : ""}"><h2>${esc(r.name)}<span class="count ${off ? "old" : ""}">${off ? esc(r.status) : r.busy ? "busy" : "idle"}</span></h2>` +
+        `<div class="meta">${r.tier ? "tier " + esc(r.tier) + " · " : ""}${esc(r.labels.join(", "))}${r.unit && r.unit !== "running" ? " · <span class='old'>unit " + esc(r.unit) + "</span>" : ""}</div>` +
+        (j ? `<div class="job">${link(j)} · ${esc(j.workflow)} · ${esc(j.job)}
+          <div class="meta">${esc(j.ref)} @ ${esc(j.sha)} · ${old(j.secs, 1800)}${(C.runners || {})[r.name] != null ? ` · CPU <b>${C.runners[r.name]}</b> cc, peak ${(C.peaks || {})[r.name] ?? "?"}` : ""}</div></div>`
+           : r.busy ? `<div class="job meta">busy with a job outside the watched repos</div>` : "") + "</div>"; }).join("") || "<div class='sub'>No runners.</div>";
+    const jobsOf = {};
+    for (const j of (d.waiting_jobs || [])) (jobsOf[j.label] ??= []).push(j);
+    const lbl = l => { try { return JSON.parse(l).join(", "); } catch { return l; } };
+    document.getElementById("waiting").innerHTML = (d.waiting || []).length ? "<tr><th>Label</th><th>Jobs</th><th>Oldest wait</th><th>From</th></tr>" +
+      d.waiting.map(w => `<tr class="wrow" data-label="${esc(w.label)}"><td>${open.has(w.label) ? "▾" : "▸"} ${esc(lbl(w.label))}</td><td>${esc(w.jobs)}</td><td>${old(w.oldest, 1800)}</td><td class="meta">${esc((w.runs||"").split(",").join(", "))}</td></tr>` +
+        (open.has(w.label) ? (jobsOf[w.label] || []).map(j => `<tr class="wjob"><td></td><td colspan="3">${link(j)} · ${esc(j.workflow)} · ${esc(j.job)} <span class="meta">· ${esc(j.ref)} @ ${esc(j.sha)} · waiting ${old(j.secs, 1800)}</span></td></tr>`).join("") : "")).join("")
+      : "<tr><td class='meta'>Nothing waiting.</td></tr>";
+    const Hd = d.hosted || {}, lim = Hd.limit || 20, used = Hd.used || {};
+    const owners = [...new Set([Hd.owner, ...Object.keys(used)])].filter(Boolean);
+    document.getElementById("hostedmeter").innerHTML = owners.map(o => { const u = used[o] || 0;
+      return `<div class="tier ${u >= lim ? "full" : ""}"><b>${esc(o)}</b> <span class="free">concurrent jobs</span><div class="bar"><i style="width:${Math.min(100, 100*u/lim)}%"></i></div>${u}/${lim} in use${u >= lim ? " · <span class='old'>at the limit: new jobs queue</span>" : ""}</div>`; }).join("");
+    const byRepo = {}; for (const j of Hd.running || []) (byRepo[j.repo] ??= []).push(j);
+    document.getElementById("hosted").innerHTML = Object.keys(byRepo).sort().map(o_r => `<div class="card"><h2>${esc(o_r)}<span class="count">${byRepo[o_r].length} running</span></h2>` +
+      byRepo[o_r].map(j => `<div class="job">${link(j)} · ${esc(j.workflow)} · ${esc(j.job)}
+        <div class="meta">${esc(j.ref)} @ ${esc(j.sha)} · ${esc(j.labels.join(", "))}${j.runner ? " · " + esc(j.runner) : ""} · ${old(j.secs, 1800)}</div></div>`).join("") + "</div>").join("") || "<div class='sub'>Nothing running on hosted runners.</div>";
+    document.getElementById("hostedq").innerHTML = (Hd.queued || []).length ? "<tr><th>Job</th><th>Image</th><th>Waiting</th></tr>" + Hd.queued.map(j =>
+      `<tr><td>${link(j)} · ${esc(j.workflow)} · ${esc(j.job)} <span class="meta">· ${esc(j.ref)} @ ${esc(j.sha)}${j.status !== "queued" ? " · " + esc(j.status) : ""}</span></td><td class="meta">${esc(j.labels.join(", "))}</td><td>${old(j.secs, 600)}</td></tr>`).join("")
+      : "<tr><td class='meta'>Nothing queued.</td></tr>";
+  } catch (e) { document.getElementById("err").textContent = "Page server unreachable: " + e; }
+}
+// The machine chart: the last hour stacked by tier (a sample every poll, kept by the page server), or the last 24 h of
+// the host's CPU from the fleet Prometheus. Y axis: centicores, 100 per thread.
+const TIER_COLORS = {deploy: "#2e7d32", gate: "#0a66c2", check: "#b25000", measure: "#8e44ad"};
+let range = (() => { try { return localStorage.getItem("ci-runners-range") || "hour"; } catch { return "hour"; } })();
+let lastData = null, lastMax = 3200;
+function drawChart(d, MAX) {
+  lastData = d; lastMax = MAX;
+  document.querySelectorAll(".range button").forEach(b => b.classList.toggle("on", b.dataset.r === range));
+  const W = 1000, H = 180, L = 40, B = 18, T = 6, R = W - 4;
+  const y = v => T + (H - T - B) * (1 - Math.min(1, (v || 0) / MAX));
+  let series = [], t0, t1, legend = "", note = "";
+  if (range === "day") {
+    const pts = (d.day || []).filter(p => p[1] != null);
+    if (pts.length < 2) { document.getElementById("chart").innerHTML = "<div class='meta'>No 24 h data yet" + (d.day_error ? ": " + esc(d.day_error) : "") + "</div>"; return; }
+    t0 = pts[0][0]; t1 = pts[pts.length - 1][0];
+    series = [{color: "var(--accent)", area: pts.map(p => [p[0], p[1]]), base: pts.map(p => [p[0], 0])}];
+    const avg = Math.round(pts.reduce((a, p) => a + p[1], 0) / pts.length);
+    note = `avg ${avg} cc (${Math.round(100 * avg / MAX)}%), peak ${Math.max(...pts.map(p => p[1]))} cc · 5 min steps`;
+  } else {
+    const h = (d.history || []).filter(x => x[1] != null);
+    if (h.length < 2) { document.getElementById("chart").innerHTML = "<div class='meta'>Collecting the last hour (one sample every poll)…</div>"; return; }
+    t0 = h[0][0]; t1 = h[h.length - 1][0];
+    let below = h.map(x => [x[0], 0]);
+    for (const tier of Object.keys(TIER_COLORS)) {
+      const top = h.map((x, i) => [x[0], below[i][1] + ((x[2] || {})[tier] || 0)]);
+      series.push({color: TIER_COLORS[tier], area: top, base: below});
+      below = top;
+    }
+    series.push({color: "var(--fg)", line: h.map(x => [x[0], x[1]])});
+    legend = Object.entries(TIER_COLORS).map(([t, c]) => `<span><i style="background:${c}"></i>${t}</span>`).join("") + `<span><i style="background:var(--fg)"></i>host total</span>`;
+    const avg = Math.round(h.reduce((a, x) => a + x[1], 0) / h.length);
+    note = `now ${h[h.length - 1][1]} cc · avg ${avg} cc (${Math.round(100 * avg / MAX)}%) over ${dur(t1 - t0)}`;
+  }
+  const x = t => L + (R - L) * (t - t0) / Math.max(1, t1 - t0);
+  const path = pts => pts.map((p, i) => (i ? "L" : "M") + x(p[0]).toFixed(1) + "," + y(p[1]).toFixed(1)).join("");
+  let svg = "";
+  for (let i = 0; i <= 4; i++) { const v = Math.round(MAX * i / 4); svg += `<line class="grid" x1="${L}" x2="${R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 4}" y="${y(v) + 3}" text-anchor="end">${v}</text>`; }
+  for (let i = 0; i <= 4; i++) { const t = t0 + (t1 - t0) * i / 4, dt = new Date(t * 1000);
+    svg += `<text x="${x(t)}" y="${H - 4}" text-anchor="${i === 0 ? "start" : i === 4 ? "end" : "middle"}">${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}</text>`; }
+  for (const s of series) {
+    if (s.area) svg += `<path d="${path(s.area)}L${[...s.base].reverse().map(p => x(p[0]).toFixed(1) + "," + y(p[1]).toFixed(1)).join("L")}Z" fill="${s.color}" fill-opacity="0.55" stroke="none"/>`;
+    if (s.line) svg += `<path d="${path(s.line)}" fill="none" stroke="${s.color}" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`;
+  }
+  document.getElementById("chart").innerHTML = `<svg viewBox="0 0 ${W} ${H}">${svg}</svg>` + (legend ? `<div class="legend">${legend}</div>` : "");
+  document.getElementById("chartnote").textContent = note + ` · ${MAX} cc = all threads`;
+}
+document.querySelector(".range").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  range = b.dataset.r; try { localStorage.setItem("ci-runners-range", range); } catch {}
+  if (lastData) drawChart(lastData, lastMax);
+});
+// Unfolded labels survive the refresh and a reload.
+const open = new Set((() => { try { return JSON.parse(localStorage.getItem("ci-runners-open") || "[]"); } catch { return []; } })());
+document.getElementById("waiting").addEventListener("click", e => {
+  const row = e.target.closest(".wrow");
+  if (!row || e.target.closest("a")) return;
+  const l = row.dataset.label;
+  open.has(l) ? open.delete(l) : open.add(l);
+  try { localStorage.setItem("ci-runners-open", JSON.stringify([...open])); } catch {}
+  tick();
+});
+tick(); setInterval(tick, 15000);
+</script></body></html>"""
+
+
+def host_ok(host):
+    """Only runners.localhost, localhost and 127.0.0.1 (any port)."""
+    h = (host or "").strip().lower()
+    if not h or h.startswith("["):
+        return False
+    name, _, port = h.partition(":")
+    return name in HOSTS and (not port or port.isdigit())
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "ci-runners-page"
+
+    def send(self, code, body, kind):
+        data = body.encode() if isinstance(body, str) else body
+        self.send_response(code)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; "
+                         "style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(data)
+
+    def do_GET(self):
+        if not host_ok(self.headers.get("Host")):
+            return self.send(403, "forbidden host\n", "text/plain; charset=utf-8")
+        path = urllib.parse.urlsplit(self.path).path
+        if path == "/healthz":
+            with LOCK:
+                alive = time.time() - STATE["polled"] < 180
+            return self.send(200 if alive else 503, "ok\n" if alive else "poller stalled\n", "text/plain")
+        if path == "/data.json":
+            return self.send(200, json.dumps(snapshot()), "application/json")
+        if path in ("/", "/index.html"):
+            return self.send(200, PAGE, "text/html; charset=utf-8")
+        return self.send(404, "not found\n", "text/plain")
+
+    do_HEAD = do_GET
+
+    def do_POST(self):  # read-only
+        self.send(405, "read-only: GET only\n", "text/plain")
+    do_PUT = do_DELETE = do_PATCH = do_POST
+
+    def log_message(self, *a):
+        pass
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--port", type=int, default=8790)
+    port = ap.parse_args().port
+    rates = Rates()
+    load_good(rates)
+    threading.Thread(target=poll_forever, args=(GitHub(beat=beat), rates), daemon=True).start()
+    print(f"ci-runners-page on http://runners.localhost:{port}", flush=True)
+    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()

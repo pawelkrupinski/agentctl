@@ -299,7 +299,7 @@ def run_jobs(o_r, run):
         return None
 
 
-RUNNERS_PAGE_MAX_AGE = 5 * 60  # ci-runners-page reads Forgejo every 10 s and ci-runner's runners every minute
+RUNNERS_PAGE_MAX_AGE = 5 * 60  # ci-runners-page reads GitHub's runners and jobs every ~15 s
 
 
 def runner_queue(now_=None):

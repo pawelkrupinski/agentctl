@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  The live GitHub Actions runners page, http://runners.localhost:8790 (~/bin/ci-runners-page): bitcashier's
+  self-hosted runners on ci-runner, pawelkrupinski's hosted jobs, ci-runner's health. ci-runners-page-run.sh
+  supervises the server (restart with backoff); KeepAlive brings the supervisor back.
+  Source: ~/bin/launchd/; installed as a copy.
+  Install: cp ~/bin/launchd/net.bitcashier.ci-runners-page.plist ~/Library/LaunchAgents/ &&
+           launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/net.bitcashier.ci-runners-page.plist
+  Unload:  launchctl bootout gui/$(id -u)/net.bitcashier.ci-runners-page
+-->
+<dict>
+    <key>Label</key>
+    <string>net.bitcashier.ci-runners-page</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>/Users/pawel/bin/ci-runners-page-run.sh</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/pawel/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/pawel</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>Nice</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/pawel/Library/Logs/ci-runners-page.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/pawel/Library/Logs/ci-runners-page.log</string>
+</dict>
+</plist>
