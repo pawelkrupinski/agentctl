@@ -53,12 +53,13 @@ def _hermetic_environment():
             # AGENTCTL_MOVIES_REPO... would point the suite at a real store or clone (the tests set their own)
     # AGENTCTL_LAPTOP_PRESSURE "-": the machine running the tests is never the one under test (2026-10-30: ci-runner
     # at load 95 on 32 cores held every fixer and owner dispatch back -- the owner-restart test failed 3 runs in a row)
-    # AGENTCTL_MACHINE: an idle 12-core 36 GB machine in place of the runner's own (lib/agentctl/gov.py machine_fixed):
+    # AGENTCTL_MACHINE: an idle 12-core 36 GB machine with 500 GB of disk in place of the runner's own (lib/agentctl/gov.py machine_fixed):
     # a 4-core GitHub runner or a loaded laptop must not change what the governor, the check cap or land decide.
     os.environ.update(HOME=home, PATH=f"{hbin}:{SYSTEM_PATH}", GIT_CONFIG_GLOBAL=gitconfig, GIT_CONFIG_NOSYSTEM="1",
                       AGENTCTL_TEST_HOME=home, AGENTCTL_LAPTOP_PRESSURE="-",
                       AGENTCTL_MACHINE='{"ram_gb": 36, "free_gb": 20, "pressure": 40, "swap_used_mb": 0, '
-                                       '"swap_total_mb": 0, "load1": 1.0, "cores": 12, "free_pct": 60, "level": 1}')
+                                       '"swap_total_mb": 0, "load1": 1.0, "cores": 12, "free_pct": 60, "level": 1, '
+                                       '"disk_free_gb": 500}')
 
 
 _hermetic_environment()

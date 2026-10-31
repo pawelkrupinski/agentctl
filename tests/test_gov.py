@@ -99,7 +99,7 @@ class GovernorTest(unittest.TestCase):
             os.environ["AGENTCTL_LAPTOP_PRESSURE"] = "-"
 
     def test_cpu_load_holds_measurements_then_agents_then_checks_never_red(self):
-        cores = os.cpu_count()
+        cores = A.machine_cores()  # the harness's fixed machine, as the governor reads it
         os.environ["AGENTCTL_GOV_LOAD_PROBE"] = f"echo {int(cores * 1.2)}"
         self.assertIsNone(self.admit("measure"))
         self.assertIsNotNone(self.admit("agent"))

@@ -19,13 +19,18 @@ _last_upkeep = [0.0]
 
 
 def disk_free_gb(path=None):
+    """GB free on path ($AGENTCTL_DISK_PATH, else HOME); the fixed machine's disk_free_gb for the default path."""
     import shutil
+    fixed = machine_fixed()
+    if not path and not os.environ.get("AGENTCTL_DISK_PATH") and fixed and fixed.get("disk_free_gb") is not None:
+        return float(fixed["disk_free_gb"])
     return shutil.disk_usage(path or os.environ.get("AGENTCTL_DISK_PATH") or HOME).free / 1e9
 
 
 def probe_disk_free(a):
     free = disk_free_gb(a.get("path"))
-    return free >= float(a.get("min_gb") or DISK_MIN_GB), f"{free:.1f} GB free on {a.get('path') or HOME}"
+    floor = DISK_MIN_GB if a.get("min_gb") in (None, "") else float(a["min_gb"])  # 0 is a floor, not "unset"
+    return free >= floor, f"{free:.1f} GB free on {a.get('path') or HOME}"
 
 
 def user_tmp_dir():
