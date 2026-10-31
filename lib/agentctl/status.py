@@ -917,7 +917,7 @@ def status_page_open():
 # with `agentctl issue "<text>"`. An issue is a store item (type `issue`): open until the maintainer closes it, shown
 # on the status page, escalated each week it stays open.
 MACHINES["issue"] = {
-    "open": StateSpec(7 * 86400, "open", ("closed",), escalate=True),
+    "open": StateSpec(7 * 86400, "open", ("closed",), escalate=True, wait=True),
     "closed": StateSpec(ARCHIVE, "closed", (), terminal=True),
 }
 ISSUE_TEXT_MAX = 4000

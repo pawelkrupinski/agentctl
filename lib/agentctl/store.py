@@ -420,11 +420,16 @@ class TerminalState(RuntimeError):
 
 
 class StateSpec:
-    __slots__ = ("deadline", "on_deadline", "exits", "terminal", "escalate")
+    """A state: its deadline, the state that deadline moves it to, the other states it may go to. A deadline LOOPS BACK
+    INTO ITS OWN STATE only in a WAIT state (`wait=True`: waiting on something outside the machine -- a checker slot, the
+    land lease, a fixer, the gate -- re-escalating each time) and never in a state that does work: a working state
+    whose deadline re-entered itself spun silently (2026-10-31: an `assembling` batch that built nothing, re-assembled
+    every 5 min for an hour while three changes waited behind it). test_machines holds the rule."""
+    __slots__ = ("deadline", "on_deadline", "exits", "terminal", "escalate", "wait")
 
-    def __init__(self, deadline, on_deadline, exits=(), terminal=False, escalate=False):
+    def __init__(self, deadline, on_deadline, exits=(), terminal=False, escalate=False, wait=False):
         self.deadline, self.on_deadline, self.exits = float(deadline), on_deadline, tuple(exits)
-        self.terminal, self.escalate = terminal, escalate
+        self.terminal, self.escalate, self.wait = terminal, escalate, wait
 
 
 ARCHIVE = 14 * 86400
@@ -433,10 +438,10 @@ H = 3600
 MACHINES = {
     # §5.1 a submitted change
     "change": {
-        "queued": StateSpec(15 * M, "queued", ("checking", "superseded", "cancelled", "landed"), escalate=True),
+        "queued": StateSpec(15 * M, "queued", ("checking", "superseded", "cancelled", "landed"), escalate=True, wait=True),
         "checking": StateSpec(2 * H, "queued", ("checked", "rejected", "queued")),
-        "checked": StateSpec(5 * M, "checked", ("pushing", "waiting", "queued"), escalate=True),
-        "waiting": StateSpec(6 * H, "waiting", ("landed", "rejected", "queued"), escalate=True),
+        "checked": StateSpec(5 * M, "checked", ("pushing", "waiting", "queued"), escalate=True, wait=True),
+        "waiting": StateSpec(6 * H, "waiting", ("landed", "rejected", "queued"), escalate=True, wait=True),
         "pushing": StateSpec(300, "checked", ("landed", "checked")),
         "landed": StateSpec(ARCHIVE, "landed", (), terminal=True),
         "rejected": StateSpec(ARCHIVE, "rejected", (), terminal=True),
@@ -452,8 +457,9 @@ MACHINES = {
     },
     # §5.2 + §14.1 the batch: a computed item, no branch
     "batch": {
-        "blocked-red": StateSpec(6 * H, "blocked-red", ("assembling",), escalate=True),
-        "assembling": StateSpec(300, "assembling", ("checking", "held", "landed"), escalate=True),
+        "blocked-red": StateSpec(6 * H, "blocked-red", ("assembling",), escalate=True, wait=True),
+        # assembling WORKS (it builds the tip): past its deadline it is held, and assembles again after the hold
+        "assembling": StateSpec(300, "held", ("checking", "held", "landed"), escalate=True),
         "checking": StateSpec(2 * H, "held", ("pushing", "bisecting", "assembling", "held")),
         "bisecting": StateSpec(4 * H, "held", ("pushing", "assembling", "held")),
         "pushing": StateSpec(300, "assembling", ("landed", "assembling")),
@@ -465,16 +471,16 @@ MACHINES = {
 # §5.4 a condition (the recovery registry folded in), phase 1 step 12: open escalates 10 min after opening, then every
 # 2 h (recovery_tick's re-deadline); only its own probe passing closes it
 MACHINES["condition"] = {
-    "open": StateSpec(10 * 60, "open", ("closed",), escalate=True),
+    "open": StateSpec(10 * 60, "open", ("closed",), escalate=True, wait=True),
     "closed": StateSpec(ARCHIVE, "closed", (), terminal=True),
 }
 # §5.3 a red (keyed by its failing test or step), phase 1 step 10; -> verified outside fix-pending: red_callable_evidence
 MACHINES["red"] = {
     "red": StateSpec(60, "offered", ("offered", "fix-pending", "leased", "blocked-external", "cleared", "verified")),
     "offered": StateSpec(RED_OFFER["other"], "offered", ("leased", "fix-pending", "blocked-external", "cleared",
-                                                         "verified"), escalate=True),
+                                                         "verified"), escalate=True, wait=True),
     "leased": StateSpec(RED_CLAIM_MAX, "offered", ("fix-pending", "offered", "blocked-external", "cleared", "verified")),
-    "fix-pending": StateSpec(RED_FIX_DECIDE, "fix-pending", ("offered", "verified", "cleared"), escalate=True),
+    "fix-pending": StateSpec(RED_FIX_DECIDE, "fix-pending", ("offered", "verified", "cleared"), escalate=True, wait=True),
     "blocked-external": StateSpec(7 * 86400, "offered", ("offered", "fix-pending", "leased", "cleared", "verified")),
     "verified": StateSpec(ARCHIVE, "verified", (), terminal=True),
     "cleared": StateSpec(ARCHIVE, "cleared", (), terminal=True),

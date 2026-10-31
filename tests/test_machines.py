@@ -24,6 +24,16 @@ class MachinesTest(unittest.TestCase):
                 terminal, escalates = A.deadline_walk(typ, name)
                 self.assertTrue(terminal or escalates, f"{typ}.{name} can time out into silence")
 
+    def test_a_deadline_loops_back_into_its_own_state_only_in_a_wait_state_which_escalates(self):
+        """The simplification plan's state-machine check: a working state whose deadline re-entered itself spun silently
+        (the `assembling` batch of 2026-10-31). Only a state waiting on something outside the machine may, escalating."""
+        for typ, states in A.MACHINES.items():
+            for name, spec in states.items():
+                if spec.terminal or spec.on_deadline != name:
+                    continue
+                self.assertTrue(spec.wait, f"{typ}.{name}: its deadline loops back into it, but it is no wait state")
+                self.assertTrue(spec.escalate, f"{typ}.{name}: a wait state that loops must escalate")
+
     def test_transition_is_compare_and_set_never_out_of_terminal_and_writes_its_event(self):
         t = [1000.0]
         st = A.Store(path=os.path.join(tempfile.mkdtemp(), "store.db"), clock=lambda: t[0])
