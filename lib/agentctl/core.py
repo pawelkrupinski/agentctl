@@ -327,6 +327,18 @@ def token_ns(o_r):
 
 SECRETS_FALLBACKS = (os.path.join(HOME, ".local", "bin", "secrets"), "/opt/homebrew/bin/secrets", "/usr/local/bin/secrets")
 _IN_PROCESSOR = [False]  # the processor serves the socket itself: it must never ask it
+_NO_VAULT = [False]  # inside no_vault(): `secrets` is never run, whoever runs this
+
+
+@contextlib.contextmanager
+def no_vault():
+    """A block that never runs `secrets` (token() takes the environment and the processor's socket only): the laptop's
+    side of `land`, whose submission the sync carries with its own token when this process has none."""
+    was, _NO_VAULT[0] = _NO_VAULT[0], True
+    try:
+        yield
+    finally:
+        _NO_VAULT[0] = was
 
 
 def secrets_bin():
@@ -351,7 +363,7 @@ def interactive_foreground():
     CLAUDE_CODE_SESSION_ID: the session's processes are the ones its vault unlock answers -- 2026-10-30: agents' `land`
     failed NoToken and had to be wrapped in `secrets run movies FORGEJO_API_TOKEN --`). Never the processor, a launchd
     job, or anything agentctl started in the background (spawn_detached marks it AGENTCTL_DETACHED)."""
-    if _IN_PROCESSOR[0] or os.environ.get("AGENTCTL_NO_SECRETS") or os.environ.get("AGENTCTL_DETACHED"):
+    if _IN_PROCESSOR[0] or _NO_VAULT[0] or os.environ.get("AGENTCTL_NO_SECRETS") or os.environ.get("AGENTCTL_DETACHED"):
         return False
     if os.environ.get("AGENTCTL_INTERACTIVE") == "1":
         return True

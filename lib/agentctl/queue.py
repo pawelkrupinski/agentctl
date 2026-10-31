@@ -243,10 +243,16 @@ def change_fields(repo, main_ref, head, a):
             "base": git(repo, "rev-parse", main_ref).strip(), "host": os.uname().nodename}
 
 
+# THE LAPTOP'S LAND NEEDS NO VAULT (2026-10-31: agents' `land` still died NoToken -- a `Fixes-Red:` trailer made
+# change_fields read the reds from ci-runner's store, the token read failed in a session whose vault was locked, and
+# fix_check let the NoToken (a SystemExit) through; the 10-30 fix had only let agents run `secrets` themselves, which
+# prompts). The submission's git half is the land/<id> push over ssh; its store half takes a token from the
+# environment or the processor's socket, never `secrets` (no_vault). With none, the change waits in the outbox and the
+# laptop's sync -- which holds the token -- submits it; the reconciler checks the Fixes-Red trailers again at the push.
 def submit_to_server(repo, d, fields, note=""):
     """THE LAPTOP'S ONLY WAY INTO THE QUEUE (phase 2; it holds no queue of its own): the change pushed to
-    refs/heads/land/<id>, then submitted to ci-runner's queue (the store unreachable: the outbox, which the sync sends).
-    Prints QUEUED / QUEUED-LOCAL / NOT LANDED; returns land's exit code."""
+    refs/heads/land/<id>, then submitted to ci-runner's queue (the store unreachable, or no token here: the outbox,
+    which the sync sends). Prints QUEUED / QUEUED-LOCAL / NOT LANDED; returns land's exit code."""
     head = fields["head"]
     e = {**fields, "id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{os.urandom(3).hex()}"}
     if not submit_ref(repo, d, e, remote=True):
@@ -256,8 +262,11 @@ def submit_to_server(repo, d, fields, note=""):
     r = submit_remote(Store(), e)
     offer_token(repo)  # this agent's token to the laptop processor, which holds none after a restart
     if r.get("outbox"):
-        print(f"QUEUED-LOCAL {e['id']} ({head[:10]}){note}: the store is unreachable ({r['outbox']}); the sync submits it "
-              "when it answers. LANDED / WAITING / NOT LANDED goes to `agentctl inbox`", flush=True)
+        why = ("no Forgejo token in this process (none in its environment, the processor's socket held none; land "
+               "never runs `secrets`): the sync submits it with its own token" if "FORGEJO_API_TOKEN" in r["outbox"]
+               else f"the store is unreachable ({r['outbox']}); the sync submits it when it answers")
+        print(f"QUEUED-LOCAL {e['id']} ({head[:10]}){note}: {why}. LANDED / WAITING / NOT LANDED goes to "
+              "`agentctl inbox`", flush=True)
         return 0
     ahead = r.get("ahead") or 0
     print(f"QUEUED {r['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}){note}: its checks run on ci-runner; "
@@ -271,9 +280,10 @@ def enqueue(repo, main_ref, sh, a):
     if rc is not None:
         return rc
     d, _clone, _wt = waiting_state(repo)
+    if host_role() == "sync":  # THE LAPTOP'S LAND NEEDS NO VAULT (see submit_to_server)
+        with no_vault():
+            return submit_to_server(repo, d, change_fields(repo, main_ref, head, a))
     fields = change_fields(repo, main_ref, head, a)
-    if host_role() == "sync":
-        return submit_to_server(repo, d, fields)
     e, ahead = queue_change(d, fields)
     submit_ref(repo, d, e)
     print(f"QUEUED {e['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}): its checks run in the background; "

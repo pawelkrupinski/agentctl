@@ -686,7 +686,7 @@ def fix_check(repo, sha, values, store=None):
     try:
         st = store or Store()
         items = [it for it in st.items("red") if it["data"].get("key")]
-    except Exception:
+    except (Exception, SystemExit):  # SystemExit: NoToken (the laptop's land with no token: the server checks again)
         items = []
     changed = None
     fresh = {}

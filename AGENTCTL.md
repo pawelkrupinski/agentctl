@@ -870,10 +870,12 @@ The old names (design §14.5) answer until 2026-11-05, each printing its new one
   says so once, on the transition (`the movies Forgejo token is missing (…)`, with its inbox note), then at most a
   summary every 10 min (`$AGENTCTL_TOKEN_SUMMARY`), and `… is back` when it returns; its steps' NoToken is quiet.
 - **Who may run `secrets`.** A TTY, `AGENTCTL_INTERACTIVE=1`, or an agent's own command in its Claude Code session
-  (`CLAUDECODE` and `CLAUDE_CODE_SESSION_ID` set): an agent's `land` reads the vault itself, submits, and hands the
-  token to the laptop processor. Never the processor, a launchd job, or anything agentctl started in the background
-  (`spawn_detached` marks it `AGENTCTL_DETACHED`). No `secrets run ... --` wrapper is needed. A submission that still
-  finds no token goes to the outbox (`QUEUED-LOCAL`) and the sync sends it with its own.
+  (`CLAUDECODE` and `CLAUDE_CODE_SESSION_ID` set; ci-why and other reads). Never the processor, a launchd job,
+  anything agentctl started in the background (`spawn_detached` marks it `AGENTCTL_DETACHED`) -- and never the
+  laptop's `land` (2026-10-31: it died NoToken in agents whose vault was locked). Its submission is the land/<id> push
+  over ssh plus a store call with a token from the environment or the processor's socket only; with none it prints
+  `QUEUED-LOCAL ... the sync submits it with its own token` and the laptop's sync sends it. Its `Fixes-Red:` trailers
+  are checked again by the reconciler at the push. No `secrets run ... --` wrapper is needed.
 - **As a service** (`tick service install`, which the owner runs): KeepAlive, RunAtLoad, log
   `~/.cache/agentctl/waiting/<repo>/service.log`. Wall-clock sleeps only, so it carries on after the laptop sleeps; a
   batch lands with no agent alive, its verdicts in the inbox.

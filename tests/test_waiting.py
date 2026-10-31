@@ -458,6 +458,64 @@ class WaitingTest(Base):
         self.assertIn("WAITING", out)
         self.assertEqual(self.pushes_count(), 0)
 
+    def test_an_agents_land_on_the_laptop_needs_no_token_and_never_runs_secrets(self):
+        """2026-10-31: agents' `land` still died NoToken: a `Fixes-Red:` trailer read the reds from ci-runner's store,
+        the vault was locked for the agent's session, and the NoToken escaped fix_check. The laptop's land never runs
+        `secrets` (even in a Claude session, which may elsewhere); with no token the change goes to the outbox, and the
+        sync, which holds one, submits it."""
+        import threading
+        from test_phase2 import fake_forgejo
+        fj, _calls = fake_forgejo()
+        self.addCleanup(fj.shutdown)
+        srv_state = os.path.join(self.tmp.name, "ci-runner")
+        server_store = A.Store(path=os.path.join(srv_state, "store.db"))
+        server_repo = os.path.join(srv_state, "movies")
+        sh(self.tmp.name, "git", "clone", "-q", self.r.bare, server_repo)
+        api = A.StoreAPI(server_store, f"http://127.0.0.1:{fj.server_port}", ["pawel"], [], repo=server_repo)
+        srv = A.store_server(api, "127.0.0.1", 0)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        url = f"http://127.0.0.1:{srv.server_port}"
+        marker = os.path.join(self.tmp.name, "secrets-ran")
+        fake = os.path.join(self.tmp.name, "secrets")
+        with open(fake, "w") as f:
+            f.write(f"#!/bin/sh\ntouch {marker}\necho vault-token-0123456789\n")
+        os.chmod(fake, 0o755)
+        keys = ("AGENTCTL_STORE_URL", "AGENTCTL_STORE_TOKEN", "AGENTCTL_QUEUE", "AGENTCTL_ROLE", "CLAUDECODE",
+                "CLAUDE_CODE_SESSION_ID", "GH_TOKEN", "FORGEJO_API_TOKEN", "AGENTCTL_SOCK_DIR", "AGENTCTL_MOVIES_REPO")
+        saved, saved_fb = {k: os.environ.get(k) for k in keys}, A.SECRETS_FALLBACKS
+
+        def restore():
+            A.SECRETS_FALLBACKS = saved_fb
+            for k, v in saved.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        self.addCleanup(restore)
+        for k in ("AGENTCTL_STORE_TOKEN", "AGENTCTL_ROLE", "GH_TOKEN", "FORGEJO_API_TOKEN"):
+            os.environ.pop(k, None)
+        A.SECRETS_FALLBACKS = (fake,)  # an agent's session would find `secrets`: land must not run it
+        import tempfile
+        os.environ.update(AGENTCTL_STORE_URL=url, AGENTCTL_QUEUE="1", CLAUDECODE="1", AGENTCTL_MOVIES_REPO=self.r.path,
+                          CLAUDE_CODE_SESSION_ID="5b1e0c3a-agent-session",
+                          AGENTCTL_SOCK_DIR=tempfile.mkdtemp(dir=os.environ["AGENTCTL_TEST_RUN_SOCK"], prefix="s-"))
+        self.r.write("scripts/hooks/pre-push", REPO_HOOK.format(calls=self.calls) + "# nothing on refs/heads/land/*\n")
+        self.r.commit("the hook skips land refs")
+        self.r.push()
+        sh(server_repo, "git", "pull", "-q")
+        wt, sha = self.agent("fixer", "web/src/main/F.scala", "f\n", msg="f: the fix\n\nFixes-Red: 7")
+        rc, out = self.land(wt)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("QUEUED-LOCAL", out)
+        self.assertIn("the sync submits it with its own token", out)
+        self.assertNotIn("NoToken", out)
+        self.assertFalse(os.path.exists(marker), "the laptop's land never runs `secrets`")
+        [p] = os.listdir(A.sync_outbox_dir())
+        self.assertEqual(json.load(open(os.path.join(A.sync_outbox_dir(), p)))["fixes"], ["7"],
+                         "unchecked here (no store): the reconciler checks the trailer again at the push")
+        os.environ["AGENTCTL_STORE_TOKEN"] = "tok-pawel"  # the sync's own token (the server thread's Store() too)
+        self.assertEqual(A.flush_outbox(), 1)
+        [e] = A.queued_entries(A.waiting_state(server_repo)[0])
+        self.assertEqual((e["worktree"], e["commits"]), (wt, [sha]))
+
     def test_the_token_is_handed_to_a_listening_processor(self):
         import tempfile
         sockdir = tempfile.mkdtemp(dir=os.environ["AGENTCTL_TEST_RUN_SOCK"], prefix="s-")

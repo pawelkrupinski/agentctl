@@ -116,9 +116,10 @@ def _reset_process_state():
     """agentctl's process-wide flags a test may leave set (a processor run marks the process as the processor; a
     token read caches the token): every test starts as a fresh, non-processor process with no cached token."""
     for mod in _agentctl_modules():
-        flag = mod.__dict__.get("_IN_PROCESSOR")
-        if isinstance(flag, list) and flag:
-            flag[0] = False
+        for name in ("_IN_PROCESSOR", "_NO_VAULT"):
+            flag = mod.__dict__.get(name)
+            if isinstance(flag, list) and flag:
+                flag[0] = False
         toks = mod.__dict__.get("_tokens")
         if isinstance(toks, dict):
             toks.clear()
