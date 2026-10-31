@@ -450,7 +450,7 @@ def pressure_summary(r=None):
     q = lambda v, f="{}": "?" if v is None else f.format(v)
     lvl = f"{r['level']} ({PRESSURE_LEVELS.get(r['level'], '?')})" if r.get("level") is not None else "?"
     swap = "swap ?" if r.get("swap_mb") is None else (
-        f"swap {r['swap_mb'] / 1024:.1f} GB (+{(r.get('swap_growth_mb') or 0) / 1024:.1f} GB in "
+        f"swap {r['swap_mb'] / 1024:.1f} GB ({round((r.get('swap_growth_mb') or 0) / 1024, 1) + 0.0:+.1f} GB in "
         f"{(r.get('swap_span') or 0) / 60:.0f} min)")
     return f"memory {q(r.get('free_pct'))}% free, level {lvl}, load {q(r.get('load1'), '{:.1f}')}/{r['cores']} cores, {swap}"
 
