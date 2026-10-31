@@ -236,6 +236,19 @@ def say_batch(d, lines):
     return lines
 
 
+# BLOCKED BY WHAT MUST WAIT (2026-10-31 06:44-07:50Z). Main #2877 red; the one waiting change named it (Fixes-Red: 2877
+# on one commit) but carried a production commit naming no red, so must_wait kept it for green. "A fix waits" sent the
+# batch to assembling; assembling built nothing (every change must wait), said nothing, and its deadline set it
+# assembling again every 5 min -- and an assembling batch goes first, so three checked changes that could land on red
+# waited behind it for over an hour. Now red, a batch assembles only when something in it may land now (batch_ready);
+# otherwise it is blocked-red, which holds no solo change, until the gate turns or a change that may go joins.
+def batch_ready(repo, waiting, reds):
+    """The changes a batch takes now, in batch order: red, only those that may land on red; after a drift-red batch at
+    most one identity-model change (drift_serialize)."""
+    order = batch_order(repo, waiting, reds)
+    return drift_serialize(repo, [e for e in order if not reds or not must_wait(repo, e["commits"], reds)])
+
+
 def _tick_batch(repo, d, now_, seen):
     t = now_ if now_ is not None else time.time()
     st = Store()
@@ -255,24 +268,27 @@ def _tick_batch(repo, d, now_, seen):
         return did
     unread_note(d, reds, waiting)
     fix_waits = bool(reds) and any(set(e.get("fixes") or []) & reds for e in waiting)
+    ready = (batch_ready(repo, waiting, reds) if (not reds or fix_waits)
+             and (not it or it["state"] in ("blocked-red", "assembling")) else [])
+    go = bool(ready)  # red: a fix waits AND something may land on red now (see BLOCKED BY WHAT MUST WAIT)
     if not it:
-        it = new_batch(st, d, "assembling" if (not reds or fix_waits) else "blocked-red")
+        it = new_batch(st, d, "assembling" if go else "blocked-red")
     spec = machine_state("batch", it["state"])
     if t > it["deadline"] and it["state"] != "checking" and it["state"] != "bisecting":
         it = batch_move(st, it, spec.on_deadline, text=f"batch {it['id']}: {it['state']} past its deadline")
         return [f"batch {it['id']}: deadline -> {it['state']}"]
     state = it["state"]
     if state == "blocked-red":
-        if not reds or fix_waits:
+        if go:
             batch_move(st, it, "assembling")
             return [f"batch {it['id']}: assembling"]
         return []
     if state == "assembling":
-        if reds and not fix_waits:
+        if reds and not go:
             batch_move(st, it, "blocked-red")
-            return [f"batch {it['id']}: blocked by the red gate"]
-        order = batch_order(repo, waiting, reds)
-        batch = drift_serialize(repo, [e for e in order if not reds or not must_wait(repo, e["commits"], reds)])
+            return [f"batch {it['id']}: blocked by the red gate"
+                    + (" (its fix waits for green: a production commit names no red)" if fix_waits else "")]
+        batch = ready
         if not batch:
             if not waiting:
                 batch_move(st, it, "landed", {"members": []}, text=f"batch {it['id']}: nothing left to land")

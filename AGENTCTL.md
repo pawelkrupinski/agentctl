@@ -68,7 +68,9 @@ moves it forward; nothing is a detached process that can die with its state in i
   - `change` (a landed entry): queued → checking → checked → pushing → landed, or waiting (main red), rejected,
     superseded, cancelled;
   - `batch` (the changes held while main was red): blocked-red → assembling → checking → pushing → landed, bisecting
-    on a failure, held after a stall. The batch is COMPUTED in a check tree at green; there is no `waiting` branch;
+    on a failure, held after a stall. The batch is COMPUTED in a check tree at green; there is no `waiting` branch.
+    While red it assembles only when a fix waits AND something in it may land on red now (a fix whose other
+    production commits name no red waits for green); otherwise it is blocked-red, which holds no solo change;
   - `watch` (a landed sha): watching → ok / red / unknown (3 h);
   - `red` (a failure signature on main): red → offered → leased → fix-pending → verified / cleared, or
     blocked-external (an owner block). TOTAL: every red state ends in a dispatched fixer. A fix-pending whose fix is

@@ -333,6 +333,36 @@ class QueueTest(WaitingTest):
         self.assertIn("[error] BROKEN is in the tree", out)
         self.assertIn(("DELETE", "branches/check%2Fe1"), calls)
 
+    def test_a_fix_that_must_still_wait_is_blocked_red_and_holds_no_solo_change(self):
+        """2026-10-31 06:44-07:50Z: Main #2877 red; the only waiting change named it (Fixes-Red: 2877 on one commit) but
+        carried a production commit with no trailer, so it must wait for green: the assembling batch built nothing,
+        said nothing, and its deadline set it assembling again every 5 min -- while three checked changes that could land
+        on red waited behind it ("its push waits for batch #5 (assembling)"). A batch with nothing that may land on red
+        is blocked-red (it holds no solo change), and stays so until the gate or its changes let it build."""
+        def entry(eid):
+            return A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+        d, _c, _w = A.waiting_state(self.r.path)
+        self.reds = {"7"}
+        wa, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: the fix\n\nFixes-Red: 7")
+        self.r.write("web/src/main/A2.scala", "a2\n", at=wa)
+        self.r.commit("a: beside it, a production change naming no red", at=wa)
+        ea, _ = self.queued(wa)
+        self.check(ea)
+        wid = entry(ea)["waiting_id"]
+        self.assertEqual(entry(wid)["fixes"], ["7"], "the entry names the red")
+        for _ in range(2):  # the second tick: it stays blocked, never flips back to assembling
+            A.tick_batch(self.r.path, d)
+            self.assertEqual(self.batch()["state"], "blocked-red", "nothing in it may land on red")
+        self.assertIsNone(A.batch_goes_first(A.Store(), d))
+        wb, _ = self.agent("b", "scripts/b.sh", "echo b\n", msg="b: tools only")
+        eb, _ = self.queued(wb)
+        self.assertEqual(self.check(eb), 0)
+        self.assertEqual(entry(eb)["status"], "landed", "a change that may land on red is not held by the batch")
+        self.assertEqual(self.remote_log()[0], "b: tools only")
+        self.reds = set()  # green: the batch builds
+        self.drive()
+        self.assertEqual(entry(wid)["status"], "landed")
+
     def test_the_batchs_check_on_ci_runner_is_the_fast_only_set_on_a_check_fast_branch(self):
         head = sh(self.r.path, "git", "rev-parse", "HEAD").strip()
         calls = self.fake_forgejo("success", head, ref="check/fast-batch-x")
