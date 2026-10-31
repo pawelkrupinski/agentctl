@@ -1,7 +1,0 @@
-# recorded at 11635d5cc (the same at 5f8b24cc, #2473's head): the job graph lines of movies' .github/workflows/country-convergence-leg.yml
-name: Country convergence leg
-    workflow_call:
-jobs:
-    convergence:
-        name: ${{ matrix.phase }} (${{ inputs.country }})
-        if: ${{ inputs.reused-from == '' && (inputs.countries == '' || contains(format(',{0},', inputs.countries), format(',{0},', inputs.code))) && (!inputs.takes-only || inputs.takes-countries == '' || contains(format(',{0},', inputs.takes-countries), format(',{0},', inputs.code))) }}

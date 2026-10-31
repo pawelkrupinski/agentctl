@@ -586,7 +586,7 @@ def route_branch_reds(o_r, snap, now_=None):
             save_run_sigs(o_r, r, e["workflow"], per_job)
         except (Exception, SystemExit) as ex:
             lines, per_job = [f"  (could not read the run: {str(ex)[:160]})"], []
-        kinds = {p[1] for p in per_job} - {"derived", "incomplete"}
+        kinds = {p[1] for p in per_job} - {"incomplete"}
         rec = {"at": ts(), "routed": True, "infra": bool(kinds) and kinds <= {"infra"},
                "blocks_promoting": e.get("newer_recording") if "test" in kinds else None}
         write_json(routed_path(r["databaseId"]), rec)
@@ -989,7 +989,7 @@ def classifier_version():
     #2406 / #2481 / #2493: one failure cached under three lines, the older two from before annotations came first)."""
     import hashlib, inspect
     parts = [VERDICT_COMPLETE_JOB.pattern, inspect.getsource(jobs_no_verdict), inspect.getsource(job_is_verdict_report),
-             "verdict complete beside a real failure: incomplete", inspect.getsource(classify_job), inspect.getsource(derive_cascades), inspect.getsource(workflow_jobs),
+             "verdict complete beside a real failure: incomplete", inspect.getsource(classify_job),
              inspect.getsource(job_is_phantom), SETUP_STEP.pattern, INFRA_LOG.pattern, UNKNOWN_LOG.pattern,
              KEY_REFUSED_LOG.pattern, STEP_TIMED_OUT, inspect.getsource(relevant_lines), inspect.getsource(job_log_lines),
              inspect.getsource(choose_job_lines), STRONG.pattern, WEAK.pattern, NOISE.pattern, ANNOTATION.pattern]
@@ -999,11 +999,8 @@ def classifier_version():
 def save_run_sigs(o_r, run, workflow, per_job):
     """per_job: [(job, kind, first relevant line)] of a completed red run -> its signatures, cached on disk."""
     sigs = []
-    for p in per_job:  # (job, kind, line[, derived from])
-        j, k, l = p[:3]
+    for j, k, l in per_job:
         sigs.append({"job": j, "kind": k, "line": (l or "")[:300], "sig": signature(workflow, j, l)})
-        if len(p) > 3:
-            sigs[-1]["derived_from"] = list(p[3])
     rec = {"run": run.get("databaseId"), "number": run.get("number"), "workflow": workflow, "sigs": sigs,
            "headSha": run.get("headSha"), "classifier": classifier_version()}
     try:

@@ -316,13 +316,6 @@ main. For each red run it shows:
   - `TEST FAILURE`;
   - `INFRA-SHAPED`, with the `rerun --failed` command. Covers failures in a setup step, a 0-length log,
     `artifact already exists`, ENOENT, docker, disk or connection errors;
-  - `[derived]` rows are no verdict of their own: a job the forge failed in "Set up job" without ever starting it
-    (no runner time) because a job it depends on failed -- a reusable caller such as `leg (<country>)`,
-    `verify (<country>)` or `timings`. Told apart by the workflow's `needs:` graph (read at the run's head) and the
-    run's job results: `[derived] leg (poland): never started: needs: cascade of takes-drift-2 (germany)`. It opens
-    no red: it is listed on the red of what it cascades from (`derived`), never takes or waits for a fixer slot,
-    and clears with it. A setup failure with nothing failed upstream (a job that started, or no readable graph)
-    stays `INFRA-SHAPED`, an infra red of its own;
   - `NO VERDICT`, when convergence's `verdict complete` is the run's only real failure (a takes or takes-drift row
     was skipped, cancelled or missing): reporting, not a test failure -- no red, no streak, no fixer; the gate reads
     the newest complete run. Beside another failed job, `verdict complete` is an `[incomplete]` row with no verdict of
@@ -350,7 +343,6 @@ Identity model convergence: RED (run 1934 #945, failure); newer run 1988 (#973) 
   verdict: UNCLEAR (a failed step logged no FAILED/error line: read `gh run view 1934 --log-failed`; if infra, rerun: gh run rerun 1934 --failed -R pawelkrupinski/movies)
   run id 1934 (#945) https://github.com/pawelkrupinski/movies/actions/runs/1934
   commit 2f0fdcd3c Paweł Krupiński <…> 10-23 11:32: order-phases.sh: no mapfile -- the pre-push hook runs scripts under macOS's bash 3.2
-  [derived] leg (germany): never started: needs: cascade of takes (united-kingdom) (through `needs:`; follows that red)
   [unclear] takes (united-kingdom): 8-line log with no FAILED/error/assert line (truncated? runner lost?) in step '…'; ends: …
   clears when: a later Identity model convergence run on main is green, or every pushed commit touching a production path carries `Fixes-Red: 945` (or `Fixes-Red: 1934`); tools-only commits land while red
 Outside the gate (red, not blocking a push; oldest first):
@@ -600,7 +592,7 @@ agent must be assigned to it".
   recording, never a baseline or allow-list row). `red status` lists each owner (`owner <family>: ALIVE, turn n, ...`).
   Records: `<reds dir>/owners/<family>/` (`owner.json`, `owner.log`, `leases.json` 0600).
 - **ONE RED QUEUE (simplification item 5, 2026-10-30; replaced the per-class caps, the borrow and the overflow slot).**
-  A red is (workflow, failing job, signature); its cascade jobs are derived. Every red belongs to ONE queue family:
+  A red is (workflow, failing job, signature). Every red belongs to ONE queue family:
   its configured family (`red-families.json`), else its run (`run:<workflow>#<number>`). The open offers are one
   priority queue -- the gate's first, then a fix's, then outside reds, flakes last; a test failure before an infra one;
   then the oldest -- and the dispatcher keeps EXACTLY ONE FIXER PER FAMILY: a family at work takes each new red under

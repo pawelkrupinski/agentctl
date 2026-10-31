@@ -168,7 +168,7 @@ class RecoveryTest(CrashLoopBase):
         it, args = self.blocked()
         self.snap(9400, 2400, "failure")
         A.red_attach_obs(self.st, it, {"names": ["2400", "9400"], "run": {"number": 2400, "databaseId": 9400},
-                                       "jobs": it["data"].get("jobs") or [], "derived": []})
+                                       "jobs": it["data"].get("jobs") or []})
         ok, detail = self.probe(args)
         self.assertFalse(ok)
         self.assertIn("still fails this way", detail)

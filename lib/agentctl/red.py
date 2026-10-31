@@ -163,9 +163,8 @@ def red_units(o_r, name, decided, runs, sigs, gate, budget=None):
     budget = budget if budget is not None else [int(env_num("AGENTCTL_STREAK_REREADS", STREAK_REREADS))]
     streak = {}
     units = []
-    derived = [s for s in sigs if s.get("kind") == "derived"]
-    sigs = [s for s in sigs if s.get("kind") not in ("derived", "incomplete")]  # a phantom is no red: it is folded
-    # into its source's; nor is a `verdict complete` beside a real failure (job_is_verdict_report: reporting only)
+    sigs = [s for s in sigs if s.get("kind") != "incomplete"]  # a `verdict complete` beside a real failure is no red
+    # (job_is_verdict_report: reporting only)
     for s in sigs:
         names = set(run_names(decided))
         for r in sruns:  # the streak's runs that failed THIS way (their signatures, by this classifier)
@@ -177,8 +176,7 @@ def red_units(o_r, name, decided, runs, sigs, gate, budget=None):
             if any(x.get("job") == s["job"] and norm_line(x.get("line")) == norm_line(s["line"]) for x in streak[rid]):
                 names |= run_names(r)
         units.append({"workflow": name, "job": s["job"], "kind": s["kind"], "line": s["line"], "run": decided,
-                      "runs": runs, "names": names, "gate": gate,
-                      "derived": sorted(x["job"] for x in derived if s["job"] in (x.get("derived_from") or []))})
+                      "runs": runs, "names": names, "gate": gate})
     if not units:  # no failed job listed (or none readable): the run itself is the red
         units.append({"workflow": name, "job": "?", "kind": "unclear", "line": "", "run": decided, "runs": runs,
                       "names": set(run_names(decided)), "gate": gate})
@@ -187,8 +185,7 @@ def red_units(o_r, name, decided, runs, sigs, gate, budget=None):
 
 def sigs_no_verdict(sigs):
     """A run's signatures say it decided nothing: its only failures are `verdict complete` (kind incomplete)."""
-    kinds = {s.get("kind") for s in sigs or []} - {"derived"}
-    return kinds == {"incomplete"}
+    return {s.get("kind") for s in sigs or []} == {"incomplete"}
 
 
 def gate_red_units(o_r, rows, others=(), rereads=None):
@@ -230,9 +227,8 @@ def red_obs_of_units(units):
             obs[key] = {"key": key, "workflow": u["workflow"], "jobs": [u["job"]], "job": u["job"], "kind": u["kind"],
                         "line": (u.get("line") or "")[:300], "run": run, "names": set(u.get("names") or ()),
                         "gate": bool(u["gate"]), "red_kind": red_kind, "predicts": u.get("predicts"),
-                        "runs_list": u.get("runs") or [], "derived": sorted(u.get("derived") or [])}
+                        "runs_list": u.get("runs") or []}
         else:
-            o["derived"] = sorted(set(o.get("derived") or []) | set(u.get("derived") or []))
             o["jobs"] = sorted(set(o["jobs"]) | {u["job"]})
             o["names"] |= set(u.get("names") or ())
     return obs
@@ -968,7 +964,7 @@ def red_open(store, ob, repo, t, o_r=None):
     data = {"key": key, "workflow": ob["workflow"], "jobs": ob["jobs"], "job": ob["job"], "kind": ob["kind"],
             "line": ob["line"], "red_kind": ob["red_kind"], "gate": ob["gate"], "predicts": ob.get("predicts"),
             "runs": sorted(ob["names"]), "last_run": ob["run"], "opened_at": t, "attempts": 0, "history": [],
-            "derived": ob.get("derived") or [], "classifier": classifier_version()}
+            "classifier": classifier_version()}
     if o_r and red_is_other(o_r):
         data["repo"] = o_r
     data.update(red_identity(data))
@@ -989,12 +985,11 @@ def red_attach_obs(store, it, ob):
     d = it["data"]
     runs = sorted(set(d.get("runs") or []) | set(ob["names"]))
     newer = int(ob["run"].get("databaseId") or 0) > int((d.get("last_run") or {}).get("databaseId") or 0)
-    derived = sorted(set(d.get("derived") or []) | set(ob.get("derived") or []))
     cv = classifier_version()
     if runs == d.get("runs") and not newer and sorted(ob["jobs"]) == sorted(d.get("jobs") or []) \
-            and derived == sorted(d.get("derived") or []) and d.get("classifier") == cv:
+            and d.get("classifier") == cv:
         return it
-    upd = {"runs": runs, "jobs": sorted(set(d.get("jobs") or []) | set(ob["jobs"])), "derived": derived,
+    upd = {"runs": runs, "jobs": sorted(set(d.get("jobs") or []) | set(ob["jobs"])),
            "classifier": cv}  # observed under this classifier's key
     if newer:
         upd["last_run"] = ob["run"]
@@ -1754,7 +1749,7 @@ def red_fixers_alive(store, t):
 # ONE RED MODEL (docs/simplification-2026-10.md item 5; replaces the gate/other/overflow capacity classes, the borrow
 # and the separate one-run and one-family rules). A red is (workflow, failing job, signature) -- `key` hashes the
 # workflow and the signature (the normalized first error line; the job when none was read), `jobs` are every job
-# failing that way and `derived` the cascade jobs that only fail because of it. Every red belongs to ONE QUEUE FAMILY:
+# failing that way. Every red belongs to ONE QUEUE FAMILY:
 # its configured family (red-families.json: convergence, ...), else its run (`run:<workflow>#<number>`). The open
 # fixer offers are ONE PRIORITY QUEUE (gate < fix < outside < flake, then a test failure first, then the oldest), and
 # the dispatcher keeps EXACTLY ONE FIXER PER FAMILY: a family whose fixer is at work gets each new red under that

@@ -192,159 +192,12 @@ def timed_out_jobs(log_text):
     return {raw.split("\t", 1)[0] for raw in log_text.splitlines() if STEP_TIMED_OUT in raw and "\t" in raw}
 
 
-# PHANTOM "Set up job" JOBS (the owner, 2026-10-29; ~/Desktop/claude docs/convergence-failures-2026-10-29.md): Forgejo
-# fails a reusable-workflow caller (`leg (<country>)`, `verify (<country>)`, `timings`) in "Set up job" when a job it
-# depends on failed -- it never takes a runner (no start time). Such a job is no red of its own: it is DERIVED from the
-# real failure upstream of it (its `needs:` closure, and a caller's own child jobs), follows that red and clears with
-# it, and never takes or waits for a fixer slot. A job failing in setup with no real failure upstream (a runner or
-# infra fault) stays an infra red. Told apart by the workflow's `needs:` graph and the run's job results.
-CASCADE_PREFIX = "needs: cascade of "
-_JOB_LINE = re.compile(r"^( *)([A-Za-z_][\w-]*):\s*(#.*)?$")
-_PROP_LINE = re.compile(r"^( *)([A-Za-z_][\w-]*):\s*(.*)$")
-
-
-def _yaml_scalar(v):
-    v = v.strip()
-    if v[:1] in ("'", '"'):
-        end = v.find(v[0], 1)
-        return v[1:end] if end > 0 else v[1:]
-    return re.sub(r"(^|\s+)#.*$", "", v).strip()
-
-
-def workflow_jobs(text):
-    """{job id: {needs: [ids], uses: str|None, name: str|None}} of a workflow file's top-level `jobs:` -- a small
-    indentation reader (the hosts have no YAML library); None when there is no `jobs:` block."""
-    lines = (text or "").splitlines()
-    try:
-        start = next(i for i, l in enumerate(lines) if re.match(r"^jobs:\s*(#.*)?$", l))
-    except StopIteration:
-        return None
-    jobs, job, ind, prop_ind, block = {}, None, None, None, None
-    for l in lines[start + 1:]:
-        if not l.strip() or l.lstrip().startswith("#"):
-            continue
-        n = len(l) - len(l.lstrip(" "))
-        if n == 0:
-            break
-        if ind is None:
-            ind = n
-        m = _JOB_LINE.match(l)
-        if n == ind and m:
-            job, prop_ind, block = m.group(2), None, None
-            jobs[job] = {"needs": [], "uses": None, "name": None}
-            continue
-        if job is None or n <= ind:
-            continue
-        if prop_ind is None:
-            prop_ind = n
-        if n == prop_ind:
-            block = None
-            pm = _PROP_LINE.match(l)
-            if not pm:
-                continue
-            k, v = pm.group(2), pm.group(3)
-            if k == "needs":
-                v = _yaml_scalar(v)
-                if v.startswith("["):
-                    jobs[job]["needs"] = [x.strip().strip("'\"") for x in v.strip("[]").split(",") if x.strip()]
-                elif v:
-                    jobs[job]["needs"] = [v]
-                else:
-                    block = "needs"
-            elif k in ("uses", "name"):
-                jobs[job][k] = _yaml_scalar(v) or None
-        elif block == "needs" and l.strip().startswith("- "):
-            jobs[job]["needs"].append(_yaml_scalar(l.strip()[2:]).strip("'\""))
-    return jobs
-
-
-def _name_pattern(tmpl):
-    """(regex, literal length) of a job's display name template (`verify (${{ matrix.country }})`)."""
-    parts = re.split(r"\$\{\{.*?\}\}", tmpl)
-    return re.compile(".+?".join(re.escape(p) for p in parts) + r"\Z"), sum(len(p) for p in parts)
-
-
 def job_is_phantom(j):
     """Failed before it ever ran: no start time, failing in a setup step (or with no step at all)."""
     if j.get("conclusion") not in ("failure", "timed_out") or j.get("startedAt"):
         return False
     bad = [s for s in j.get("steps") or [] if s.get("conclusion") in ("failure", "timed_out")]
     return not bad or bool(SETUP_STEP.match(bad[0]["name"]))
-
-
-def derive_cascades(jobs, graph, called=None):
-    """{failed job name: [the real failures it cascades from]} for the run's phantom jobs (job_is_phantom) that have a
-    real failure upstream: in the `needs:` closure of their workflow job (its jobs and, for a reusable caller, its child
-    jobs), or among their own child jobs when they are a caller. jobs: the run's jobs; graph: workflow_jobs of the
-    run's workflow; called: {`uses:` path: workflow_jobs of it or None (unreadable)}. No graph: nothing is derived (a
-    setup failure stays infra)."""
-    if not graph:
-        return {}
-    called = called or {}
-    pats = []  # (literal length, regex, owner: (top-level id, is_child))
-    for jid, g in graph.items():
-        rx, lit = _name_pattern(g.get("name") or jid)
-        pats.append((lit + 1000, rx, (jid, False)))  # a top-level name beats a child template that also matches it
-        sub = called.get(g.get("uses")) if g.get("uses") else None
-        for cid, cg in (sub or {}).items():
-            rx, lit = _name_pattern(cg.get("name") or cid)
-            pats.append((lit, rx, (jid, True)))
-    blind = [jid for jid, g in graph.items() if g.get("uses") and called.get(g["uses"]) is None]
-    owner = {}
-    for j in jobs:
-        hits = sorted((p for p in pats if p[1].match(j["name"])), key=lambda p: -p[0])
-        if hits:
-            owner[j["name"]] = hits[0][2]
-        elif len(blind) == 1:  # the one caller whose children could not be read: theirs
-            owner[j["name"]] = (blind[0], True)
-    real = [j["name"] for j in jobs if j.get("conclusion") in ("failure", "timed_out") and not job_is_phantom(j)]
-    out = {}
-    for j in jobs:
-        if not job_is_phantom(j) or j["name"] not in owner or owner[j["name"]][1]:
-            continue
-        top = owner[j["name"]][0]
-        up, todo = set(), list(graph.get(top, {}).get("needs") or [])
-        while todo:
-            x = todo.pop()
-            if x not in up and x in graph:
-                up.add(x)
-                todo += graph[x].get("needs") or []
-        src = [r for r in real if r in owner and (owner[r][0] in up or (owner[r][0] == top and owner[r][1]))]
-        if src:
-            out[j["name"]] = sorted(src)
-    return out
-
-
-def workflow_text(o_r, path, sha, repo=None):
-    """A workflow file's text at a commit: the local clone first, then the forge's contents API; None if neither."""
-    repo = repo or repo_path_for(o_r)
-    if repo:
-        for ref in (sha, f"{remote()}/main"):
-            r = git(repo, "show", f"{ref}:{path}", check=False) if ref else None
-            if r is not None and r.returncode == 0:
-                return r.stdout
-    try:
-        import base64
-        c = gh_json(o_r, "api", f"repos/{o_r}/contents/{path}" + (f"?ref={sha}" if sha else ""))
-        return base64.b64decode(c.get("content") or "").decode("utf-8", "replace") or None
-    except Exception:
-        return None
-
-
-def run_cascades(o_r, d, repo=None):
-    """derive_cascades for one run view (`d`, with jobs, headSha and workflowDatabaseId: the workflow's file)."""
-    if not any(job_is_phantom(j) for j in d.get("jobs") or []):
-        return {}
-    wf = forge_workflow_file(o_r, d)
-    if not wf or not str(wf).endswith((".yml", ".yaml")):
-        return {}
-    graph = workflow_jobs(workflow_text(o_r, f".github/workflows/{wf}", d.get("headSha"), repo))
-    called = {}
-    for g in (graph or {}).values():
-        u = g.get("uses")
-        if u and u.startswith("./") and u not in called:
-            called[u] = workflow_jobs(workflow_text(o_r, u[2:], d.get("headSha"), repo))
-    return derive_cascades(d.get("jobs") or [], graph, called)
 
 
 def classify_job(job, lines, raw=(0, []), timed_out=False):
@@ -383,7 +236,7 @@ _gate_lists, _outside_lists = {}, {}  # workflow -> the runs on main gate_runs /
 
 # AN INCOMPLETE RUN IS NO VERDICT (movies 4da98c308, 2026-10-30: convergence's `verdict complete` job fails a main run
 # whose takes or takes-drift rows were skipped, cancelled or missing -- "no false green"). A failed run whose ONLY real
-# failure (phantom cascades aside) is that job decided nothing: like a cancelled run it says nothing to the gate -- no
+# failure (jobs that never started aside) is that job decided nothing: like a cancelled run it says nothing to the gate -- no
 # red, no streak, no fixer -- and ci-why names it NO VERDICT. Recovery is the next complete run.
 VERDICT_COMPLETE_JOB = re.compile(r"(^|/\s*)verdict complete$")
 NO_VERDICT_FLOWS = {"Identity model convergence"}  # the workflows with a `verdict complete` job (only they are read)
@@ -617,11 +470,6 @@ def explain_run_jobs(o_r, run, tail, repo=None):
                 "jobs,headSha,url,number,status,conclusion,workflowName,workflowDatabaseId")
     num = d.get("number") or run.get("number")
     failed = [j for j in d.get("jobs") or [] if j.get("conclusion") in ("failure", "timed_out")]
-    try:
-        cascades = run_cascades(o_r, d, repo)
-    except Exception as e:  # unread: every setup failure stays an infra red of its own
-        cascades = {}
-        err(f"could not read run {rid}'s workflow graph: {e}")
     unread = []  # why the failed log, and a job's own, could not be read: no log was read, so none is 0-length
     no_verdict = jobs_no_verdict(d.get("jobs"))
     try:
@@ -636,11 +484,6 @@ def explain_run_jobs(o_r, run, tail, repo=None):
              f"  commit {commit_line(o_r, d.get('headSha') or run.get('headSha'), repo)}"]
     kinds, fetched, per_job = [], 0, []
     for j in failed:
-        if j["name"] in cascades:  # a phantom: no red of its own, it follows the red of what it cascades from
-            per_job.append((j["name"], "derived", "", cascades[j["name"]]))
-            lines.append(f"  [derived] {j['name']}: never started: {CASCADE_PREFIX}{', '.join(cascades[j['name']])} "
-                         "(through `needs:`; follows that red)")
-            continue
         if no_verdict or job_is_verdict_report(j):  # reporting, never a failure of the code (see above)
             per_job.append((j["name"], "incomplete", ""))
             lines.append(f"  [incomplete] {j['name']}: a takes or takes-drift row was skipped, cancelled or missing"

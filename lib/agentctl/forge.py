@@ -8,7 +8,7 @@
 #                                       repo's App installation token, ghapp.py)
 #   api                                 `gh api` under repos/<o_r>/
 #   forge_branches / forge_branch_sha / forge_delete_branch / forge_actions_runs / forge_actions_run /
-#   forge_workflow_file / forge_release_asset / forge_run_url
+#   forge_release_asset / forge_run_url
 #                                       the calls whose answers are folded into agentctl's run record (run_record)
 # The push remote is core's remote(); the landing identity on ci-runner is ghapp.py's (github-app).
 GH_CLI = os.environ.get("AGENTCTL_GH_CLI", "gh")  # the GitHub CLI
@@ -118,18 +118,6 @@ def forge_branch_sha(o_r, name):
 def forge_delete_branch(o_r, name):
     """Delete a branch through the API (its ref)."""
     api(o_r, "DELETE", f"git/refs/heads/{urllib.parse.quote(name, safe='/')}")
-
-
-def forge_workflow_file(o_r, view):
-    """The workflow FILE (basename) of a `run view --json workflowDatabaseId` answer: GitHub serves the workflow's
-    numeric id there, read once more for its path (a file name is taken as it is)."""
-    wf = view.get("workflowDatabaseId")
-    if wf in (None, "") or str(wf).endswith((".yml", ".yaml")):
-        return wf
-    try:
-        return os.path.basename((gh_json(o_r, "api", f"repos/{o_r}/actions/workflows/{wf}") or {}).get("path") or "") or None
-    except (Exception, SystemExit):
-        return None
 
 
 def forge_release_asset(o_r, tag, name):

@@ -157,10 +157,6 @@ class GithubForgeTest(unittest.TestCase):
         self.assertEqual(A.run_dispatch_inputs(O_R, 10), {})
         self.assertEqual(self.calls(), [])
 
-    def test_the_workflow_file_of_a_run_view(self):
-        self.gh_api(f"repos/{O_R}/actions/workflows/555", {"id": 555, "path": ".github/workflows/main.yml"})
-        self.assertEqual(A.forge_workflow_file(O_R, {"workflowDatabaseId": 555}), "main.yml")
-
     def test_release_pins_download_through_gh(self):
         self.gh_api(f"repos/{O_R}/releases/tags/fixtures", {"assets": [{"name": "hermetic-pl.txt"}, {"name": "x.bin"}]})
         self.put("release-fixtures-hermetic-pl.txt", "4242 recorded\n")
