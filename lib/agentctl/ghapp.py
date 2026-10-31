@@ -13,7 +13,7 @@
 # state root (git's credential helper runs as a fresh process for every fetch and push).
 #
 # ONLY WITH $AGENTCTL_IDENTITY=github-app (infra's agentctl.nix sets it on ci-runner once forge = github): the laptop
-# keeps gh's own auth, and forge = forgejo ignores all of this.
+# keeps gh's own auth.
 #
 # GIT never sees the token on its command line or in .git/config: agentctl puts itself in as git's credential helper
 # for https://github.com (GIT_CONFIG_* in its own environment, inherited by every git it runs), and the helper answers

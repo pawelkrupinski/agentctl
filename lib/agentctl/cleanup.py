@@ -279,8 +279,8 @@ FETCH_TIMEOUT = 180  # an unattended fetch's bound ($AGENTCTL_FETCH_TIMEOUT)
 
 
 def bounded_fetch(repo, *extra):
-    """`git fetch forgejo` for an unattended run (maintain's sweep): bounded, ssh keepalives on, never prompting. True,
-    or why not (2026-10-27: Forgejo's ssh accepted the connection and never answered, and the first maintain pass hung
+    """`git fetch <remote>` for an unattended run (maintain's sweep): bounded, ssh keepalives on, never prompting. True,
+    or why not (2026-10-27: the remote's ssh accepted the connection and never answered, and the first maintain pass hung
     in the sweep's fetch)."""
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_SSH_COMMAND=GIT_NET_SSH)
     try:

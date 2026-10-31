@@ -8,7 +8,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, TOOL  # noqa: E402
 
-FAKE = os.path.join(HERE, "fake_forgejo_gh.py")
+FAKE = os.path.join(HERE, "fake_gh.py")
 
 HOLDER = """
 import importlib.machinery, importlib.util, sys, time
@@ -29,12 +29,12 @@ class OwnedTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.gh = os.path.join(self.tmp.name, "gh")
         os.makedirs(self.gh)
-        self.env = {"AGENTCTL_OWNERS_DIR": os.path.join(self.tmp.name, "owners"), "AGENTCTL_FORGEJO_GH": FAKE,
+        self.env = {"AGENTCTL_OWNERS_DIR": os.path.join(self.tmp.name, "owners"), "AGENTCTL_GH_CLI": FAKE,
                     "FAKE_GH_DIR": self.gh, "GH_TOKEN": "dummy", "AGENTCTL_SCRATCH": os.path.join(self.tmp.name, "s"),
                     "AGENTCTL_MIN_INTERVAL": "0.2", "AGENTCTL_ATTACH_POLL": "0.2", "AGENTCTL_RESTART_CHECK": "0.2"}
         self.saved = {k: os.environ.get(k) for k in self.env}
         os.environ.update(self.env)
-        self.saved_gh, A.FORGEJO_GH = A.FORGEJO_GH, FAKE
+        self.saved_gh, A.GH_CLI = A.GH_CLI, FAKE
         self.procs = []
 
     def tearDown(self):
@@ -42,7 +42,7 @@ class OwnedTest(unittest.TestCase):
             if p.poll() is None:
                 p.kill()
                 p.wait()
-        A.FORGEJO_GH = self.saved_gh
+        A.GH_CLI = self.saved_gh
         for k, v in self.saved.items():
             if v is None:
                 os.environ.pop(k, None)

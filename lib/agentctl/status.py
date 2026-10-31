@@ -139,7 +139,7 @@ def status_gate_text(d, t, o_r=None, unreachable=False):
 def status_header(t, d=None, probes=True):
     """The cheap section every renderer starts from: state.json (on the sync refreshed from ci-runner's /v1/state when
     its mirror is old, at most one GET), the gate text, the reconciler's tick, the store's reachability, the waiting and
-    checking changes, the open items, the pins. probes: also the tunnel's state and Forgejo's port (the page's)."""
+    checking changes, the open items, the pins. probes: also the tunnel's state and the store port it forwards (the page's)."""
     url = store_url()
     if d is None:
         d = remote_status_state(url, t) if url else state_read()
@@ -169,7 +169,7 @@ def status_header(t, d=None, probes=True):
     if probes:
         tunnel = read_json_file(tunnel_state_path())
         h["tunnel"] = {k: tunnel.get(k) for k in ("fails", "last_kick", "pending_since", "escalated", "network")}
-        h["forgejo_port"] = port_open(3000, timeout=1.0)
+        h["store_port"] = port_open(tunnel_ports()[0][0], timeout=1.0)
     h["line"] = render_status_line(h, t)
     return h
 
@@ -198,7 +198,7 @@ def render_status_line(h, t):
 
 
 def status_line(now_=None):
-    """`status --line`: the header's line (no git, no Forgejo; on the sync at most one GET /v1/state)."""
+    """`status --line`: the header's line (no git, no GitHub; on the sync at most one GET /v1/state)."""
     t = now_ if now_ is not None else time.time()
     return status_header(t, probes=False)["line"]
 
@@ -696,7 +696,7 @@ def status_data(store=None, now_=None, bound=None, keep=False, only=None):
     res, meta = status_sources(tuple(x for x in sources if not only or x[0] in only), b, keep=keep)
     if "error" in res.get("store", {}):
         res["store"] = {**res["store"], "remote": store_url(), "reachable": False}
-    return {"at": t, "repo": repo, "home": HOME, "forgejo": FORGEJO_WEB, "forge": forge(), **res, **meta}
+    return {"at": t, "repo": repo, "home": HOME, **res, **meta}
 
 
 _status_cache = {"at": 0.0, "data": None}

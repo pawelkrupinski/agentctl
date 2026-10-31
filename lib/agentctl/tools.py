@@ -35,13 +35,12 @@ def cmd_queue_retired(a):
 
 
 # ---------------------------------------------------------------- env
-TUNNEL_PORTS = [(3000, "Forgejo web/API"), (2222, "Forgejo ssh")]  # forge = forgejo (switched off 2026-10-31)
-STORE_TUNNEL_PORTS = [(3014, "agentctl store")]  # what the laptop tunnel carries now
+TUNNEL_PORTS = [(3014, "agentctl store")]  # what the laptop tunnel carries
 
 
 def tunnel_ports():
-    """The ports the laptop's tunnel must hold: the store's alone on github, Forgejo's two on the forgejo forge."""
-    return STORE_TUNNEL_PORTS if on_github() else TUNNEL_PORTS
+    """The ports the laptop's tunnel must hold: the agentctl store's."""
+    return TUNNEL_PORTS
 
 
 def default_ns():
@@ -85,23 +84,6 @@ def export_lines():
     return lines
 
 
-def token_works(ns):
-    """Read the Forgejo token inside this call (never printed) and ask the API who it is. (ok, detail)."""
-    r = subprocess.run([secrets_bin() or "secrets", "get", ns, "FORGEJO_API_TOKEN"], capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL)
-    tok = r.stdout.strip()
-    if r.returncode or not tok:
-        return False, f"no FORGEJO_API_TOKEN in vault {ns}"
-    try:
-        req = urllib.request.Request(f"{API}/user", headers={"Authorization": f"token {tok}"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            login = json.loads(resp.read()).get("login")
-        return True, f"token valid (user {login})"
-    except Exception as e:
-        return False, f"token rejected or API unreachable: {str(e)[:80]}"
-    finally:
-        tok = None
-
-
 def cmd_env(a):
     ns = a.ns or default_ns()
     if not a.check:
@@ -140,16 +122,9 @@ def cmd_env(a):
         tunnel_ok &= ok
         (report if ok else problems).append(f"tunnel localhost:{port} ({what}): {'open' if ok else 'REFUSED'}")
     if not tunnel_ok:
-        problems.append("  fix: launchctl kickstart -k gui/$(id -u)/net.bitcashier.forgejo-tunnel")
-    if on_github():  # forge = github: runs are read with gh's own auth
-        gh = (GH_CLI if os.path.isabs(GH_CLI) and os.access(GH_CLI, os.X_OK) else None) or which(GH_CLI)
-        (report if gh else problems).append(f"forge github: gh {gh or 'MISSING (' + GH_CLI + ')'}")
-    else:
-        if st == "unlocked" and port_open(TUNNEL_PORTS[0][0]):
-            ok, detail = token_works(ns)
-            (report if ok else problems).append(f"forgejo-gh token ({ns}): {detail}")
-        gh = os.path.exists(FORGEJO_GH)
-        (report if gh else problems).append(f"forgejo-gh: {FORGEJO_GH if gh else 'MISSING ' + FORGEJO_GH}")
+        problems.append(f"  fix: launchctl kickstart -k gui/$(id -u)/{TUNNEL_LABEL}")
+    gh = (GH_CLI if os.path.isabs(GH_CLI) and os.access(GH_CLI, os.X_OK) else None) or which(GH_CLI)  # gh's own auth
+    (report if gh else problems).append(f"github: gh {gh or 'MISSING (' + GH_CLI + ')'}")
     for l in report:
         print(f"ok   {l}")
     for l in problems:
@@ -157,22 +132,19 @@ def cmd_env(a):
     return 1 if problems else 0
 
 
-# ---------------------------------------------------------------- the Forgejo DB (forge = forgejo only: branches.db_inputs)
-DB_ENVS = {
-    "forgejo": ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "pawel@10.1.0.3",
-                'sudo -u forgejo nix --extra-experimental-features "nix-command flakes" shell nixpkgs#sqlite -c '
-                "sqlite3 -readonly -safe -bail -header -tabs /mnt/data/forgejo/data/forgejo.db"],
-}
+# The laptop tunnel's launchd agent and its log: names it got before Forgejo was switched off (infra's plist; it now
+# carries only the agentctl store).
 TUNNEL_LABEL = "net.bitcashier.forgejo-tunnel"
+TUNNEL_LOG = "~/Library/Logs/forgejo-tunnel.log"
 
 
 def has_tunnel():
-    """The laptop reaches Forgejo through its tunnel (a launchd agent); ci-runner directly, with nothing to kick."""
+    """The laptop reaches the agentctl store through its tunnel (a launchd agent); ci-runner directly, with nothing to kick."""
     return host_role() == "sync"
 
 
 def launchctl_kick():
-    """Kickstart the laptop's Forgejo tunnel. Never on ci-runner (no launchctl there: it raised FileNotFoundError over
+    """Kickstart the laptop's tunnel. Never on ci-runner (no launchctl there: it raised FileNotFoundError over
     the real error, after a pointless 15 s wait)."""
     if not has_tunnel():
         return
@@ -191,40 +163,15 @@ def kick_tunnel():
 
 
 # ---- THE TUNNEL HEALTH (2026-10-27: the tunnel's ssh was alive but its connections hung; only a *refused* connection
-# was kicked). A timeout is a refusal for every Forgejo read (tunnel_retry: ONE kickstart + retry), and the always-on
-# processor probes GET <API>/version each cycle (5 s): 2 failures in a row kick it (at most once a minute, logged), and a
+# was kicked). The always-on processor probes GET <store>/ each cycle (5 s): 2 failures in a row kick it (at most once a minute, logged), and a
 # kick that does not restore it within 2 min is ONE STALLED inbox entry.
 TUNNEL_PROBE_TIMEOUT = 5
 TUNNEL_KICK_MIN_GAP = 60
 TUNNEL_RESTORE_WAIT = 120
-TUNNEL_DOWN_TEXT = re.compile(r"Connection refused|timed? ?out|timeout|deadline exceeded|Connection reset|EOF", re.I)
 
 
 def tunnel_state_path():
     return os.environ.get("AGENTCTL_TUNNEL_STATE") or state_root("tunnel-health.json")
-
-
-def tunnel_down(e):
-    """True when the exception says the tunnel refused or hung (not an HTTP answer such as 401/404)."""
-    import socket
-    if isinstance(e, urllib.error.HTTPError):
-        return False
-    if isinstance(e, urllib.error.URLError):
-        return tunnel_down(e.reason) if isinstance(e.reason, BaseException) else bool(TUNNEL_DOWN_TEXT.search(str(e.reason)))
-    if isinstance(e, (socket.timeout, TimeoutError, ConnectionError, subprocess.TimeoutExpired)):
-        return True
-    return isinstance(e, RuntimeError) and bool(TUNNEL_DOWN_TEXT.search(str(e)))
-
-
-def tunnel_kick_rate_limited(now_=None):
-    """Claim the right to kickstart: False (and nothing done) when one happened less than TUNNEL_KICK_MIN_GAP ago."""
-    t = now_ if now_ is not None else time.time()
-    st = read_json_file(tunnel_state_path())
-    if t - st.get("last_kick", 0) < TUNNEL_KICK_MIN_GAP:
-        return False
-    st["last_kick"] = t
-    write_json_file(tunnel_state_path(), st)
-    return True
 
 
 def read_json_file(path):
@@ -247,31 +194,10 @@ def write_json_file(path, d):
         pass
 
 
-def tunnel_retry(fn):
-    """Run a Forgejo read; on a refusal OR a timeout kickstart the tunnel once (rate-limited across processes) and retry
-    once. Any other error, and the retry's own, propagate."""
-    try:
-        return fn()
-    except Exception as e:
-        if not tunnel_down(e):
-            raise
-        err(f"the tunnel refused or timed out ({str(e)[:80]}); reopening it ({TUNNEL_LABEL}) once and retrying")
-        if not has_tunnel() or read_json_file(tunnel_state_path()).get("network"):  # no tunnel on ci-runner; a
-            return fn()  # lossy uplink (tunnel_watch): a restart only churns the tunnel -- one plain retry
-        if tunnel_kick_rate_limited():
-            launchctl_kick()
-        for _ in range(15):
-            if tunnel_probe() == "ok":
-                break
-            time.sleep(1)
-        return fn()
-
-
 def tunnel_probe():
-    """'ok' (any HTTP answer), 'timeout' or 'refused' for GET <store>/ (forge = github: the tunnel carries only the
-    agentctl store since Forgejo was switched off, 2026-10-31) or <API>/version (forge = forgejo)."""
+    """'ok' (any HTTP answer), 'timeout' or 'refused' for GET <store>/ (the tunnel carries the agentctl store)."""
     import socket
-    url = (store_url() or default_store_url()).rstrip("/") + "/" if on_github() else f"{API}/version"
+    url = (store_url() or default_store_url()).rstrip("/") + "/"
     try:
         with urllib.request.urlopen(url, timeout=TUNNEL_PROBE_TIMEOUT) as resp:
             resp.read()
@@ -381,7 +307,7 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
                            command="tunnel")
         st.update(network=True, pending_since=None, escalated=False)  # the kick/escalation clock starts on a good uplink
         write_json_file(tunnel_state_path(), st)
-        state_update(network={"loss": loss, "at": t, "forgejo": r})  # the status line says NETWORK, not a bare UNREAD
+        state_update(network={"loss": loss, "at": t, "tunnel": r})  # the status line says NETWORK, not a bare UNREAD
         return "network"
     if (state_read().get("network") or {}).get("at"):
         state_update(network=None)  # the uplink is fine: a dead forward is the tunnel's (the kickstart below)
@@ -394,17 +320,13 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
         did = "kicked"
     if st.get("pending_since") and t - st["pending_since"] >= TUNNEL_RESTORE_WAIT and not st.get("escalated"):
         msg = (f"STALLED: the tunnel (localhost:{tunnel_ports()[0][0]}) still {r} {int((t - st['pending_since']) // 60)} min after a "
-               f"kickstart; run `launchctl kickstart -k gui/$(id -u)/{TUNNEL_LABEL}` and check ~/Library/Logs/forgejo-tunnel.log")
+               f"kickstart; run `launchctl kickstart -k gui/$(id -u)/{TUNNEL_LABEL}` and check {TUNNEL_LOG}")
         open_outage("STALLED", msg, res or run_probe("tunnel"), [("tunnel_reset", {})], key="tunnel-stalled",
                        command="tunnel", exit_code=2)
         st["escalated"] = True
         did = "escalated"
     write_json_file(tunnel_state_path(), st)
     return did
-
-
-def run_db(argv, sql):
-    return subprocess.run(argv, input=sql.rstrip().rstrip(";") + ";\n", capture_output=True, text=True, timeout=300)
 
 
 # ---------------------------------------------------------------- state

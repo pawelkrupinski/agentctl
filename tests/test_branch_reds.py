@@ -27,6 +27,7 @@ class BranchBase(RedBase):
         self.addCleanup(os.environ.pop, "AGENTCTL_DISPATCH_DIR", None)
         self.saved_exists = A.branch_exists
         self.addCleanup(setattr, A, "branch_exists", self.saved_exists)
+        A.branch_exists = lambda o_r, b: True  # every branch is alive (GitHub serves it) unless a test deletes it
         # an agent's worktree: it committed X, dispatched a measurement of X, and moved on (X now only in its reflog)
         self.wt = self.r.worktree("movies-wt-drift", branch="drift")
         self.r.write("drift.txt", "x\n", at=self.wt)
@@ -50,8 +51,8 @@ class BranchBase(RedBase):
         A.write_json(A.dispatches_dir("inputs", f"{rid}.json"), d)
 
     def land_x(self):
-        sh(self.wt, "git", "push", "-q", "forgejo", f"{self.x}:main")
-        sh(self.r.path, "git", "fetch", "-q", "forgejo")
+        sh(self.wt, "git", "push", "-q", "origin", f"{self.x}:main")
+        sh(self.r.path, "git", "fetch", "-q", "origin")
 
     def snap(self):
         A._gate_lists.clear()
@@ -124,8 +125,8 @@ class BranchRedTest(BranchBase):
             os.makedirs(os.path.join(self.r.path, ".github", "workflows"), exist_ok=True)
             self.r.write(A.CONVERGENCE_WORKFLOW, f"jobs:\n  legs:\n    env:\n      FIXTURE_RELEASE_TAG: {tag}\n")
             self.r.commit("convergence workflow")
-            sh(self.r.path, "git", "push", "-q", "forgejo", "HEAD:main")
-            sh(self.r.path, "git", "fetch", "-q", "forgejo")
+            sh(self.r.path, "git", "push", "-q", "origin", "HEAD:main")
+            sh(self.r.path, "git", "fetch", "-q", "origin")
         saved = A.read_pins
         self.addCleanup(setattr, A, "read_pins", saved)
         seen = []
@@ -175,7 +176,7 @@ class BranchRedTest(BranchBase):
         self.assertEqual(A.branch_reds(self.snap()), [])
         self.assertEqual(A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path)[1],
                          "gate green · no reds")
-        A.branch_exists = self.saved_exists
+        A.branch_exists = lambda o_r, b: True
         runs = json.load(open(os.path.join(self.d, "runs.json")))
         self.put("runs.json", [brun(66, 2118, self.x, self.branch, conclusion="success")] + runs)
         self.assertEqual(A.branch_reds(self.snap()), [])
@@ -188,12 +189,12 @@ class BranchRedTest(BranchBase):
         self.assertEqual([x for x in A.inbox_entries() if x["kind"] == "BRANCH_RED"], [])
         self.assertEqual(A.branch_reds(snap), [])
 
-    def test_branch_exists_reads_forgejo_s_404_as_deleted(self):
+    def test_branch_exists_reads_a_404_as_deleted(self):
         A.branch_exists = self.saved_exists
         self.put(f"api-repos_pawelkrupinski_movies_branches_{self.branch.replace('/', '%2F')}.json", {"name": self.branch})
         self.assertTrue(A.branch_exists(MOVIES, self.branch))
         saved = A.gh_json
-        A.gh_json = lambda *a: (_ for _ in ()).throw(RuntimeError("forgejo-gh api: gh: The target couldn't be found. (HTTP 404)"))
+        A.gh_json = lambda *a: (_ for _ in ()).throw(RuntimeError("gh api: gh: Not Found (HTTP 404)"))
         self.addCleanup(setattr, A, "gh_json", saved)
         self.assertFalse(A.branch_exists(MOVIES, "measure/de-speed-conf-1"))
 
@@ -224,8 +225,8 @@ class OrphanBranchRedTest(BranchBase):
         landed = self.r.worktree("movies-wt-landed", branch="landed")  # landed on main by a worktree since removed
         self.r.write("landed.txt", "x\n", at=landed)
         self.on = self.r.commit("measured and landed", at=landed)
-        sh(landed, "git", "push", "-q", "forgejo", f"{self.on}:main")
-        sh(self.r.path, "git", "fetch", "-q", "forgejo")
+        sh(landed, "git", "push", "-q", "origin", f"{self.on}:main")
+        sh(self.r.path, "git", "fetch", "-q", "origin")
         sh(self.r.path, "git", "worktree", "remove", "--force", landed)
         self.b65 = f"measure/pawel/{self.off[:9]}-b148ea"
         self.b70, self.b71 = f"measure/pawel/{self.on[:9]}-d458ee", f"measure/pawel/{self.on[:9]}-f16735"
@@ -299,7 +300,7 @@ class OrphanBranchRedTest(BranchBase):
 
     def test_its_finished_measure_branch_is_deleted_by_cleanup_an_open_one_is_not(self):
         for b in (self.b65, self.b70):
-            sh(self.r.path, "git", "push", "-q", "forgejo", f"HEAD:refs/heads/{b}")
+            sh(self.r.path, "git", "push", "-q", "origin", f"HEAD:refs/heads/{b}")
         A.settle_branch_reds(MOVIES, self.snap(), self.store)
         A.save_dispatch({"branch": self.b70, "run_id": 3553, "worktree": self.wt, "source": "registered"})
         A.settle_branch_reds(MOVIES, self.snap(), self.store)  # #2370 reopened: its owner is back
@@ -320,7 +321,7 @@ class SweepOrphansTest(BranchBase):
     def test_a_finished_measure_branch_whose_owner_is_gone_is_deleted_others_listed_or_kept(self):
         for b in ("measure/pawel/aaaaaaaaa-1", "check/20261027-1-movies-wt-gone-1", "measure/pawel/bbbbbbbbb-2",
                   "measure/pawel/ccccccccc-3"):
-            sh(self.r.path, "git", "push", "-q", "forgejo", f"HEAD:refs/heads/{b}")
+            sh(self.r.path, "git", "push", "-q", "origin", f"HEAD:refs/heads/{b}")
         gone = os.path.join(self.tmp.name, "removed-wt")
         A.save_dispatch({"branch": "measure/pawel/aaaaaaaaa-1", "worktree": gone, "source": "registered"})
         A.save_dispatch({"branch": "check/20261027-1-movies-wt-gone-1", "worktree": gone, "source": "registered"})

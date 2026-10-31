@@ -7,7 +7,7 @@ RACE = re.compile(r"non-fast-forward|cannot lock ref|fetch first|failed to updat
                   r"reference already exists|remote rejected.*(lock|update)", re.I)
 # The hook REFUSING for red (its "is RED on main" warnings also print when tools-only commits land while red: not a refusal)
 REDGATE = re.compile(r"main is red: only a fix|carries no Fixes-Red")
-TUNNEL_TROUBLE = re.compile(r"GitOps manifests STALE|Connection to localhost closed|forgejo\.internal.*(refused|unreachable)|"
+TUNNEL_TROUBLE = re.compile(r"GitOps manifests STALE|Connection to localhost closed|"
                             r"Could not read from remote repository|Connection refused", re.I)
 LAND_RETRIES = 3
 # One lander per repository: with no pre-merge CI left (movies, 2026-10-26) a landing is the hook's local tests --

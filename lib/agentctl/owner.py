@@ -96,7 +96,7 @@ def owner_drop(fam, names):
 
 def owner_worktree(repo, fam, rec):
     """The owner's ONE worktree: the recorded one while it exists, else <clone>-wt-owner-<family> (created off
-    forgejo/main, or its branch taken up again). The notebook and RED-INBOX.md are excluded from commits."""
+    origin/main, or its branch taken up again). The notebook and RED-INBOX.md are excluded from commits."""
     if rec.get("worktree") and os.path.isdir(rec["worktree"]):
         return rec["worktree"]
     _d, clone, _w = waiting_state(repo)

@@ -1,5 +1,9 @@
 # agentctl simplification, 2026-10-29 onward: progress log
 
+> **Historical (2026-10-31):** written while CI ran on Forgejo. Forgejo was switched off on 2026-10-31 and agentctl
+> now reads GitHub only (`gh`, remote `origin`, the store's own tokens); the Forgejo commands, ports, tokens and
+> settings named below no longer exist. Current reference: `~/bin/AGENTCTL.md`.
+
 **PACKAGE SPLIT LANDED 23:30 (Agent A, 2ce6ce6): agentctl's code is lib/agentctl/*.py now; edit the parts, not the 73-line entry.**
 
 Agents (owner, 2026-10-29 evening): **Agent A** (core: items 2-7, this log's Agent A sections), **Agent B** (item 1's
@@ -7,7 +11,7 @@ workflow and suite speed, 9, 10, 8), **Agent C** (infra: the Actions branch, ite
 before the split of work (below).
 
 One maintainer, items strictly in order, each pushed to forgejo `main` before the next. The coordinator reads this.
-Baseline (2026-10-29, forgejo/main 67cd130): agentctl 17,335 lines, 798 functions, 58 subcommands; 601 tests, 702 s
+Baseline (2026-10-29, origin/main 67cd130): agentctl 17,335 lines, 798 functions, 58 subcommands; 601 tests, 702 s
 serial.
 
 ## Item 1 (owner's item 7): CI for the agentctl repository -- DONE
@@ -59,7 +63,7 @@ ci-runner still runs the older pinned revision; item 2 changes the server's code
 the CI tier). Bump the pin, preview, apply:
 
 ```
-! cd ~/bitcashier/infra && git pull --rebase -q forgejo main && rev=$(git -C ~/bin rev-parse forgejo/main) && sed -i '' "s/rev = \"[0-9a-f]*\";/rev = \"$rev\";/" nix/hosts/ci-runner/agentctl-pin.nix && git diff --stat && git commit -qam "agentctl: pin ~/bin $rev (simplification item 2)" && git push forgejo main && bin/deploy ci-runner
+! cd ~/bitcashier/infra && git pull --rebase -q forgejo main && rev=$(git -C ~/bin rev-parse origin/main) && sed -i '' "s/rev = \"[0-9a-f]*\";/rev = \"$rev\";/" nix/hosts/ci-runner/agentctl-pin.nix && git diff --stat && git commit -qam "agentctl: pin ~/bin $rev (simplification item 2)" && git push forgejo main && bin/deploy ci-runner
 ```
 
 then `! cd ~/bitcashier/infra && bin/deploy ci-runner --apply` (restarts only agentctl-src/store/reconciler).
@@ -204,7 +208,7 @@ ci-runner still runs its older pin. Items 3 (package: the pinned tree must conta
 commit does), 4 and 5 (the red migration runs on ci-runner's tick) all ride on one bump:
 
 ```
-! cd ~/bitcashier/infra && git pull --rebase -q forgejo main && rev=$(git -C ~/bin rev-parse forgejo/main) && sed -i '' "s/rev = \"[0-9a-f]*\";/rev = \"$rev\";/" nix/hosts/ci-runner/agentctl-pin.nix && git diff --stat && git commit -qam "agentctl: pin ~/bin $rev (simplification items 2-5)" && git push forgejo main && bin/deploy ci-runner
+! cd ~/bitcashier/infra && git pull --rebase -q forgejo main && rev=$(git -C ~/bin rev-parse origin/main) && sed -i '' "s/rev = \"[0-9a-f]*\";/rev = \"$rev\";/" nix/hosts/ci-runner/agentctl-pin.nix && git diff --stat && git commit -qam "agentctl: pin ~/bin $rev (simplification items 2-5)" && git push forgejo main && bin/deploy ci-runner
 ```
 
 then `! cd ~/bitcashier/infra && bin/deploy ci-runner --apply`. After it: `~/bin/agentctl red status` shows

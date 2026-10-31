@@ -119,7 +119,7 @@ class WaitingTest(Base):
         self.reds = set()
         self.r.write("scripts/hooks/pre-push",
                      "#!/bin/sh\n# --checks-only\n"
-                     "echo '    fetch-gitops: ssh://forgejo-git/o/movies-gitops.git unreachable'\n"
+                     "echo '    fetch-gitops: git@github.com:o/movies-gitops.git unreachable'\n"
                      "echo \"    fatal: unable to access 'https://github.com/o/g.git/': Could not resolve host: github.com\"\n"
                      "echo '! pre-push GitOps manifests STALE: infra/bin/fetch-gitops could not fetch movies-gitops main'\n"
                      "echo '! pre-push sbt FAILED (3s)'\nexit 1\n")
@@ -435,7 +435,7 @@ class WaitingTest(Base):
         wt1, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         self.land(wt1)
         self.reds = {A.GATE_UNREAD}
-        A.gate_unread_why[0] = "could not read the movies FORGEJO_API_TOKEN from the vault"
+        A.gate_unread_why[0] = "could not read the movies AGENTCTL_STORE_TOKEN from the vault"
         self.drive()
         self.drive()
         self.assertEqual(self.pushes_count(), 0, "an unread gate is never green")
@@ -464,14 +464,11 @@ class WaitingTest(Base):
         `secrets` (even in a Claude session, which may elsewhere); with no token the change goes to the outbox, and the
         sync, which holds one, submits it."""
         import threading
-        from test_phase2 import fake_forgejo
-        fj, _calls = fake_forgejo()
-        self.addCleanup(fj.shutdown)
         srv_state = os.path.join(self.tmp.name, "ci-runner")
         server_store = A.Store(path=os.path.join(srv_state, "store.db"))
         server_repo = os.path.join(srv_state, "movies")
         sh(self.tmp.name, "git", "clone", "-q", self.r.bare, server_repo)
-        api = A.StoreAPI(server_store, f"http://127.0.0.1:{fj.server_port}", ["pawel"], [], repo=server_repo)
+        api = A.StoreAPI(server_store, ["pawel"], [], user_of={"tok-pawel": "pawel"}.get, repo=server_repo)
         srv = A.store_server(api, "127.0.0.1", 0)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         self.addCleanup(srv.shutdown)
@@ -482,7 +479,7 @@ class WaitingTest(Base):
             f.write(f"#!/bin/sh\ntouch {marker}\necho vault-token-0123456789\n")
         os.chmod(fake, 0o755)
         keys = ("AGENTCTL_STORE_URL", "AGENTCTL_STORE_TOKEN", "AGENTCTL_QUEUE", "AGENTCTL_ROLE", "CLAUDECODE",
-                "CLAUDE_CODE_SESSION_ID", "GH_TOKEN", "FORGEJO_API_TOKEN", "AGENTCTL_SOCK_DIR", "AGENTCTL_MOVIES_REPO")
+                "CLAUDE_CODE_SESSION_ID", "GH_TOKEN", "AGENTCTL_STORE_TOKEN", "AGENTCTL_SOCK_DIR", "AGENTCTL_MOVIES_REPO")
         saved, saved_fb = {k: os.environ.get(k) for k in keys}, A.SECRETS_FALLBACKS
 
         def restore():
@@ -490,7 +487,7 @@ class WaitingTest(Base):
             for k, v in saved.items():
                 os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
         self.addCleanup(restore)
-        for k in ("AGENTCTL_STORE_TOKEN", "AGENTCTL_ROLE", "GH_TOKEN", "FORGEJO_API_TOKEN"):
+        for k in ("AGENTCTL_STORE_TOKEN", "AGENTCTL_ROLE", "GH_TOKEN", "AGENTCTL_STORE_TOKEN"):
             os.environ.pop(k, None)
         A.SECRETS_FALLBACKS = (fake,)  # an agent's session would find `secrets`: land must not run it
         import tempfile
@@ -519,10 +516,10 @@ class WaitingTest(Base):
     def test_the_token_is_handed_to_a_listening_processor(self):
         import tempfile
         sockdir = tempfile.mkdtemp(dir=os.environ["AGENTCTL_TEST_RUN_SOCK"], prefix="s-")
-        saved = {k: os.environ.get(k) for k in ("AGENTCTL_SOCK_DIR", "FORGEJO_API_TOKEN", "GH_TOKEN")}
+        saved = {k: os.environ.get(k) for k in ("AGENTCTL_SOCK_DIR", "AGENTCTL_STORE_TOKEN", "GH_TOKEN")}
         os.environ["AGENTCTL_SOCK_DIR"] = sockdir
         os.environ.pop("GH_TOKEN", None)
-        os.environ.pop("FORGEJO_API_TOKEN", None)
+        os.environ.pop("AGENTCTL_STORE_TOKEN", None)
         saved_slug, saved_token = A.slug, A.token
         A.slug = lambda repo: "pawelkrupinski/movies"
         try:
@@ -532,7 +529,7 @@ class WaitingTest(Base):
             A.token = lambda o_r: "tok-0123456789abcdef"
             self.assertTrue(A.offer_token(self.r.path))
             drop.nap(0.5)
-            self.assertEqual(os.environ.get("FORGEJO_API_TOKEN"), "tok-0123456789abcdef")
+            self.assertEqual(os.environ.get("AGENTCTL_STORE_TOKEN"), "tok-0123456789abcdef")
             drop.close()
             self.assertFalse(os.path.exists(drop.path))
             self.assertFalse(A.offer_token(self.r.path), "nobody listens: nothing handed over")
@@ -546,7 +543,7 @@ class WaitingTest(Base):
         A.token = lambda o_r: "tok-abcdef0123456789"
         try:
             env = A.token_env("pawelkrupinski/movies", {})
-            self.assertEqual(env, {"FORGEJO_API_TOKEN": "tok-abcdef0123456789"})
+            self.assertEqual(env, {"AGENTCTL_STORE_TOKEN": "tok-abcdef0123456789"})
 
             def none(o_r):
                 raise A.NoToken("locked")

@@ -12,7 +12,7 @@ GIT_ID = ["-c", "user.email=t@t", "-c", "user.name=t"]
 
 
 def make_source(root):
-    """A source repository (the Forgejo stand-in) with main at two commits. Returns its path."""
+    """A source repository (the remote's stand-in) with main at two commits. Returns its path."""
     src = os.path.join(root, "src")
     subprocess.run(["git", "init", "-q", "-b", "main", src], check=True)
     for i in (1, 2):
@@ -62,7 +62,7 @@ class AtomicCloneTest(unittest.TestCase):
     def test_a_clone_that_does_not_verify_is_never_renamed_into_place(self):
         real_run = A.run_clone
 
-        def no_refs(cmd, what):  # git said 0 but the clone has no forgejo/main
+        def no_refs(cmd, what):  # git said 0 but the clone has no origin/main
             subprocess.run(["git", "init", "-q", cmd[-1]], check=True)
             return A.subprocess.CompletedProcess(cmd, 0, "", "")
         A.run_clone = no_refs

@@ -1,5 +1,6 @@
-"""Phase 2 (design §6.3, §13 phase 2): the store over HTTP with Forgejo token auth, RemoteStore, the laptop's sync, the
-reconciler's entry point on ci-runner -- against a local server on a temp port, with a fake Forgejo for the auth."""
+"""Phase 2 (design §6.3, §13 phase 2): the store over HTTP with token auth, RemoteStore, the laptop's sync, the
+reconciler's entry point on ci-runner -- against a local server on a temp port (USERS stands in for the store's own
+tokens; StoreTokensTest checks the real ones)."""
 import argparse, contextlib, io, json, os, re, signal, socket, subprocess, sys, tempfile, threading, time, unittest, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -8,31 +9,6 @@ sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
 
 USERS = {"tok-pawel": "pawel", "tok-metrics": "ci-metrics", "tok-other": "mallory"}
-
-
-def fake_forgejo():
-    """GET /api/v1/user: the login of a known token, 401 otherwise (counts its calls)."""
-    calls = []
-
-    class H(BaseHTTPRequestHandler):
-        def do_GET(self):
-            calls.append(self.path)
-            tok = (self.headers.get("Authorization") or "").split()[-1]
-            if self.path == "/api/v1/user" and tok in USERS:
-                body = json.dumps({"login": USERS[tok]}).encode()
-                self.send_response(200)
-            else:
-                body = b'{"message":"token is required"}'
-                self.send_response(401)
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, *a):
-            pass
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    return srv, calls
 
 
 class Phase2Base(unittest.TestCase):
@@ -48,12 +24,10 @@ class Phase2Base(unittest.TestCase):
             os.environ.pop(k, None)
         # This process is ci-runner (the store's thread, the tick); a test playing the laptop's sync says so (sync())
         os.environ["AGENTCTL_ROLE"] = "server"
-        self.fj, self.fj_calls = fake_forgejo()
         self.st = A.Store(path=os.path.join(self.tmp, "state", "store.db"))
         self.repo = os.path.join(self.tmp, "movies")
         subprocess.run(["git", "init", "-q", self.repo], check=True)
-        self.api = A.StoreAPI(self.st, f"http://127.0.0.1:{self.fj.server_port}", ["pawel"], ["ci-metrics"],
-                              repo=self.repo)
+        self.api = A.StoreAPI(self.st, ["pawel"], ["ci-metrics"], user_of=USERS.get, repo=self.repo)
         self.srv = A.store_server(self.api, "127.0.0.1", 0)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.url = f"http://127.0.0.1:{self.srv.server_port}"
@@ -61,7 +35,6 @@ class Phase2Base(unittest.TestCase):
 
     def tearDown(self):
         self.srv.shutdown()
-        self.fj.shutdown()
         for k, v in self.saved.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -92,9 +65,9 @@ class Phase2Base(unittest.TestCase):
 
 
 class AuthTest(Phase2Base):
-    def test_a_token_is_checked_with_forgejo_and_its_login_decides_what_it_may_call(self):
+    def test_a_tokens_login_decides_what_it_may_call(self):
         self.assertEqual(self.get("/v1/state")[0], 401)                    # no token
-        self.assertEqual(self.get("/v1/state", "tok-unknown")[0], 403)     # Forgejo does not know it
+        self.assertEqual(self.get("/v1/state", "tok-unknown")[0], 403)     # the store does not know it
         self.assertEqual(self.get("/v1/state", "tok-other")[0], 403)       # a real user, not allowed
         self.assertEqual(self.get("/v1/state", "tok-metrics")[0], 403)     # the metrics identity: /metrics only
         code, body = self.get("/metrics", "tok-metrics")
@@ -103,9 +76,6 @@ class AuthTest(Phase2Base):
                   "agentctl_red_unleased_seconds", "agentctl_leases_expired_unreaped", "agentctl_items_past_deadline"):
             self.assertIn(f"\n{g} ", "\n" + body)
         self.assertEqual(self.get("/v1/state", "tok-pawel")[0], 200)
-        n = len(self.fj_calls)
-        self.get("/v1/state", "tok-pawel")
-        self.assertEqual(len(self.fj_calls), n)  # cached: Forgejo asked once per token per 5 min
 
 
 class HardeningTest(Phase2Base):
@@ -131,7 +101,7 @@ class HardeningTest(Phase2Base):
         real = A.urllib.request.urlopen
 
         def flaky(req, timeout=None):
-            if "/v1/store/" not in req.full_url:  # the server's own login to Forgejo (this process plays both)
+            if "/v1/store/" not in req.full_url:  # anything but the store call under test
                 return real(req, timeout=timeout)
             calls.append(req.full_url)
             if len(calls) == 1:
@@ -447,16 +417,16 @@ class DispatcherRemoteTest(Phase2Base):
 
 
 def git_tree(tmp, name):
-    """A clone with refs/remotes/forgejo/main and a worktree `name` off it: (clone, worktree)."""
+    """A clone with refs/remotes/origin/main and a worktree `name` off it: (clone, worktree)."""
     clone = os.path.join(tmp, "clone")
     if not os.path.isdir(clone):
         subprocess.run(["git", "init", "-q", "-b", "main", clone], check=True)
         sh = lambda *a: subprocess.run(["git", "-C", clone, "-c", "user.name=t", "-c", "user.email=t@t", *a], check=True,
                                        capture_output=True)
         sh("commit", "-q", "--allow-empty", "-m", "base")
-        sh("update-ref", "refs/remotes/forgejo/main", "HEAD")
+        sh("update-ref", "refs/remotes/origin/main", "HEAD")
     wt = os.path.join(tmp, name)
-    subprocess.run(["git", "-C", clone, "worktree", "add", "-q", "-b", name, wt, "forgejo/main"], check=True,
+    subprocess.run(["git", "-C", clone, "worktree", "add", "-q", "-b", name, wt, "origin/main"], check=True,
                    capture_output=True)
     return clone, wt
 
@@ -676,7 +646,7 @@ class LandAsYouGoTest(Phase2Base):
         esc = A.fixers_land_watch(t + 65 * 60, force=True)
         self.assertTrue(esc[0].startswith("RED ESCALATE: "), esc)
         self.assertEqual(A.fixers_land_watch(t + 70 * 60, force=True), [])
-        subprocess.run(["git", "-C", clone, "update-ref", "refs/remotes/forgejo/main",
+        subprocess.run(["git", "-C", clone, "update-ref", "refs/remotes/origin/main",
                         subprocess.run(["git", "-C", wt, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()],
                        check=True)  # landed
         self.assertIn("everything landed", A.fixers_land_watch(t + 75 * 60, force=True)[0])
@@ -899,7 +869,7 @@ class TickEntryTest(unittest.TestCase):
         env = dict(os.environ, AGENTCTL_ROLE="server", AGENTCTL_HOST="ci-runner", NOTIFY_SOCKET=sock,
                    AGENTCTL_STATE_ROOT=os.path.join(tmp, "state"), AGENTCTL_MOVIES_REPO=os.path.join(tmp, "movies"),
                    AGENTCTL_MOVIES_REMOTE=origin, AGENTCTL_OWNERS_DIR=os.path.join(tmp, "owners"),
-                   AGENTCTL_FORGEJO_GH="/usr/bin/false", GH_TOKEN="x", AGENTCTL_WAITING_DIR=os.path.join(tmp, "waiting"),
+                   AGENTCTL_GH_CLI="/usr/bin/false", GH_TOKEN="x", AGENTCTL_WAITING_DIR=os.path.join(tmp, "waiting"),
                    AGENTCTL_INBOX_DIR=os.path.join(tmp, "inbox"), AGENTCTL_REDS_DIR=os.path.join(tmp, "reds"),
                    AGENTCTL_RECOVERY_DIR=os.path.join(tmp, "recovery"), AGENTCTL_NOTIFY="true")
         env.pop("AGENTCTL_STORE_URL", None)
@@ -913,7 +883,7 @@ class TickEntryTest(unittest.TestCase):
         self.assertTrue(got and got[0].startswith(b"EXTEND_TIMEOUT_USEC="), got[:1])  # the clone, before READY
         got = [m for m in got if not m.startswith(b"EXTEND_TIMEOUT_USEC=")]
         self.assertEqual(got[:2], [b"READY=1", b"WATCHDOG=1"])
-        url = subprocess.run(["git", "-C", os.path.join(tmp, "movies"), "remote", "get-url", "forgejo"],
+        url = subprocess.run(["git", "-C", os.path.join(tmp, "movies"), "remote", "get-url", "origin"],
                              capture_output=True, text=True).stdout.strip()
         self.assertEqual(url, origin)
         self.assertNotIn("events failed", p.stderr)  # the laptop's steps never run there
@@ -925,14 +895,14 @@ if __name__ == "__main__":
 
 
 class StoreTokensTest(Phase2Base):
-    """`store serve --auth store-tokens` (github-return W5b): the store's own HMAC tokens, no forge asked."""
+    """`store serve` (github-return W5b): the store's own HMAC tokens, no forge asked."""
 
     def setUp(self):
         super().setUp()
         self.saved_secret = os.environ.get("AGENTCTL_STORE_SECRET")
         os.environ["AGENTCTL_STORE_SECRET"] = os.path.join(self.tmp, "secret", "store-secret")
         self.srv.shutdown()
-        self.api = A.StoreAPI(self.st, "", ["pawel"], ["ci-metrics"], repo=self.repo, auth="store-tokens")
+        self.api = A.StoreAPI(self.st, ["pawel"], ["ci-metrics"], repo=self.repo)
         self.srv = A.store_server(self.api, "127.0.0.1", 0)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.url = f"http://127.0.0.1:{self.srv.server_port}"
@@ -952,7 +922,7 @@ class StoreTokensTest(Phase2Base):
         self.assertEqual(os.stat(A.store_tokens_path()).st_mode & 0o777, 0o600)
         self.assertTrue(A.TOKEN_SHAPE.fullmatch(pawel))  # the processor's socket carries it
         self.assertEqual(self.get("/v1/state")[0], 401)
-        self.assertEqual(self.get("/v1/state", "tok-pawel")[0], 403)  # a Forgejo token means nothing here
+        self.assertEqual(self.get("/v1/state", "tok-pawel")[0], 403)  # a token the store did not issue means nothing
         self.assertEqual(self.get("/v1/state", other)[0], 403)
         self.assertEqual(self.get("/v1/state", metrics)[0], 403)
         self.assertEqual(self.get("/metrics", metrics)[0], 200)
@@ -963,7 +933,6 @@ class StoreTokensTest(Phase2Base):
         self.assertEqual(self.get("/v1/state", renamed)[0], 403)
         A.store_token_revoke(tid)
         self.assertEqual(self.get("/v1/state", pawel)[0], 403)
-        self.assertEqual(self.fj_calls, [])  # Forgejo never asked
 
     def test_the_cli_issues_lists_and_revokes(self):
         import contextlib, io
@@ -983,18 +952,15 @@ class StoreTokensTest(Phase2Base):
         with self.assertRaises(SystemExit):
             A.store_token_issue("no spaces please")
 
-    def test_on_github_the_laptop_sends_the_store_token_never_a_gh_token(self):
+    def test_the_laptop_sends_the_store_token_never_a_gh_token(self):
         _, pawel = A.store_token_issue("pawel")
-        saved = {k: os.environ.get(k) for k in ("AGENTCTL_FORGE", "GH_TOKEN", "FORGEJO_API_TOKEN")}
+        saved = {k: os.environ.get(k) for k in ("GH_TOKEN",)}
         try:
-            os.environ.update(AGENTCTL_FORGE="github", GH_TOKEN="gho_the_owners", FORGEJO_API_TOKEN="tok-pawel",
-                              AGENTCTL_STORE_TOKEN=pawel)
+            os.environ.update(GH_TOKEN="gho_the_owners", AGENTCTL_STORE_TOKEN=pawel)
             self.assertEqual(A.token(A.SHORT["movies"]), pawel)
             self.assertEqual(A.token_env_name(A.SHORT["movies"]), "AGENTCTL_STORE_TOKEN")
             self.assertEqual(A.token_vault_key(A.SHORT["movies"]), ("bitcashier", "AGENTCTL_STORE_TOKEN"))
             self.assertEqual(A.RemoteStore(self.url)._token(), pawel)
-            os.environ["AGENTCTL_FORGE"] = "forgejo"
-            self.assertEqual(A.token_vault_key(A.SHORT["movies"]), ("movies", "FORGEJO_API_TOKEN"))
         finally:
             for k, v in saved.items():
                 if v is None:

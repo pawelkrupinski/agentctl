@@ -128,13 +128,13 @@ class Base(unittest.TestCase):
             json.dump({"tick_at": T - 7, "version": "abc", "summary": {"at": T - 5, "line": "gate GREEN"},
                        "ci": {"repo": "pawelkrupinski/movies", "gate": [
                            {"name": "Main", "decided": {"number": 2515, "conclusion": "success"}, "newer": None},
-                           {"name": "Identity model convergence", "decided": {"number": 2473, "conclusion": "failure"},
+                           {"name": "Identity model convergence", "decided": {"number": 2473, "databaseId": 9473, "conclusion": "failure"},
                             "newer": {"number": 2480, "status": "in_progress"}}]}}, f)
         reds = [item("red", "k1", "leased", {"key": "k1", "workflow": "Identity model convergence", "gate": True,
                                               "jobs": ["leg (poland)"], "last_run": {"number": 2473}, "opened_at": T - 7200,
                                               "history": [{"at": "x", "holder": "h", "outcome": "refuted"}]}),
                 item("red", "k2", "offered", {"key": "k2", "workflow": "Archive recording", "job": "report",
-                                               "last_run": {"number": 823}, "tier": "infra"}, level=1),
+                                               "last_run": {"number": 823, "databaseId": 9823}, "tier": "infra"}, level=1),
                 item("red", "k3", "verified", {"key": "k3", "workflow": "Main", "last_run": {"number": 1}})]
         changes = [item("change", "c-late", "waiting", {"worktree": "/w/a", "head": "a" * 40}, deadline=T - 60),
                    item("change", "c-ok", "checking", {"worktree": "/w/b", "head": "b" * 40}),
@@ -160,7 +160,7 @@ class DataTest(Base):
         h = d["header"]
         self.assertTrue(h["gate_red"])
         self.assertEqual(h["tick_age"], 7)
-        self.assertEqual(h["gate"][1]["url"], "http://localhost:3000/pawelkrupinski/movies/actions/runs/2473")
+        self.assertEqual(h["gate"][1]["url"], "https://github.com/pawelkrupinski/movies/actions/runs/9473")
         self.assertEqual(d["store"]["reachable"], True)
         self.assertEqual((d["dispatcher"]["alive"], d["dispatcher"]["cap"]), (1, A.RED_FIXERS))
         self.assertEqual([e["id"] for e in d["dispatcher"]["escalated"]], ["k2"])
@@ -169,7 +169,7 @@ class DataTest(Base):
         self.assertEqual(reds[0]["lease"]["holder"], "laptop:fixer:red-k1-5")
         self.assertEqual(reds[0]["note"], "found the drift")
         self.assertEqual(reds[0]["age"], 7200)
-        self.assertEqual(reds[1]["run_url"], "http://localhost:3000/pawelkrupinski/movies/actions/runs/823")
+        self.assertEqual(reds[1]["run_url"], "https://github.com/pawelkrupinski/movies/actions/runs/9823")
         self.assertEqual(reds[1]["jobs"], ["report"])
         self.assertIsNone(reds[1]["lease"])
         [a] = d["agents"]
@@ -409,7 +409,7 @@ class ServerTest(Base):
     def test_log_route_masks_credentials_like_the_stream(self):
         p = os.path.join(self.env["AGENTCTL_REDS_DIR"], "claude-1.log")
         with open(p, "w") as f:
-            f.write("export FORGEJO_API_TOKEN=abc123def456ghi789\nAuthorization: Bearer ghp_" + "a1" * 20 + "\n")
+            f.write("export AGENTCTL_STORE_TOKEN=abc123def456ghi789\nAuthorization: Bearer ghp_" + "a1" * 20 + "\n")
         code, body, _ = self.get("/log?path=" + urllib.request.quote(p))
         self.assertEqual(code, 200)
         self.assertNotIn("abc123def456ghi789", body)

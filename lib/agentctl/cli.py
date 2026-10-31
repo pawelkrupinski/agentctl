@@ -9,10 +9,10 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     w = sub.add_parser("wait")
     wsub = w.add_subparsers(dest="kind", required=True)
-    wr = wsub.add_parser("run", help="block until Forgejo runs finish; print only the verdicts",
+    wr = wsub.add_parser("run", help="block until GitHub Actions runs finish; print only the verdicts",
                          description=WAIT_RUN_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     wr.add_argument("ids", nargs="+", metavar="ID", help="run ids (action_run.id); a leading repo name is accepted (legacy form)")
-    wr.add_argument("--repo", "-R", help="o/r or short name (movies, core, infra, ...); default: the cwd's forgejo remote, else movies")
+    wr.add_argument("--repo", "-R", help="o/r or short name (movies, core, infra, ...); default: the cwd's remote, else movies")
     wr.add_argument("--until", choices=("done", "landable"), default="done",
                     help="landable: for an Identity model convergence measure/ run, stop once the takes rows end and print their verdict files")
     wr.add_argument("--tail", type=int, default=8, metavar="N", help="relevant log lines (FAILED/error/assert) per failed job (default 8; 0 = none)")
@@ -39,7 +39,7 @@ def main(argv=None):
     pp.add_argument("--max-foreign", type=int)
     pp.add_argument("--hook", nargs="+", metavar="REMOTE [URL]")
     c = sub.add_parser("cleanup", help="remove ONLY proven-merged worktrees/branches and finished measure/* branches",
-                       description="Removes only clean, idle worktrees whose HEAD is on forgejo/main (ancestor or all commits "
+                       description="Removes only clean, idle worktrees whose HEAD is on origin/main (ancestor or all commits "
                        "patch-equivalent), their branches, and remote measure/* branches whose runs finished. Every deletion "
                        "is logged to scratchpad/agentctl-deleted.log. Dry run by default on a TTY; --execute acts.")
     g = c.add_mutually_exclusive_group()
@@ -58,7 +58,7 @@ def main(argv=None):
     cw.add_argument("--tail", type=int, default=6, metavar="N", help="relevant log lines per failed job")
     cw.add_argument("--summary", action="store_true", help="one line for the status line: each gate row, and who is fixing a red one")
     cw.add_argument("--cached", action="store_true", help="with --summary: the line the waiting processor published if under 3 min old, else a live read, else `gate UNREAD (as of HH:MM ...)`")
-    ld = sub.add_parser("land", help="fetch, rebase onto forgejo/main, prepush-check, push (hook runs), verify: LANDED <sha>",
+    ld = sub.add_parser("land", help="fetch, rebase onto origin/main, prepush-check, push (hook runs), verify: LANDED <sha>",
                         description=LAND_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     ld.add_argument("lcmd", nargs="?", choices=sorted(LAND_SUBCOMMANDS), metavar="status|hold|release|cancel",
                     help="the queue instead of a land: status (the changes, the batch, the gate), hold / release (take "
@@ -80,7 +80,7 @@ def main(argv=None):
                         description=ENV_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     eg = ev.add_mutually_exclusive_group()
     eg.add_argument("--print", action="store_true", help="export lines for eval (default)")
-    eg.add_argument("--check", action="store_true", help="check sbt, java, the vault, the tunnel and the Forgejo token")
+    eg.add_argument("--check", action="store_true", help="check sbt, java, the vault, the store tunnel and gh")
     ev.add_argument("--ns", choices=("movies", "bitcashier"), help="vault namespace (default: movies inside ~/projects/movies, else bitcashier)")
     o = sub.add_parser("orphans", help="list stray owners, wait loops and sbt servers (worktree, owner or runs gone; old code)",
                        description="Lists owner records that are strays (a dead process's record and its uncancelled runs, "
@@ -139,13 +139,11 @@ def main(argv=None):
     stos = sto.add_subparsers(dest="scmd", required=True)
     sts = stos.add_parser("serve", help="serve $AGENTCTL_STATE_ROOT/store.db: the §6.3 API and GET /metrics")
     sts.add_argument("--listen", default=f"127.0.0.1:{STORE_PORT}", help="ADDR:PORT")
-    sts.add_argument("--forgejo-url", help="Forgejo's base URL: each caller's token is checked with its /api/v1/user")
     sts.add_argument("--allow-user", action="append", help="a login with the whole API (repeatable)")
     sts.add_argument("--metrics-user", action="append", help="a login with GET /metrics only (repeatable)")
-    sts.add_argument("--auth", choices=STORE_AUTHS, default="forgejo",
-                     help="forgejo: each token checked with Forgejo's /api/v1/user; store-tokens: the store's own "
-                          "(`store token issue`), no forge needed")
-    stt = stos.add_parser("token", help="the store's own tokens (`store serve --auth store-tokens`), on the store's host")
+    sts.add_argument("--auth", choices=STORE_AUTHS, default="store-tokens",
+                     help="store-tokens (the only one): the store's own tokens (`store token issue`)")
+    stt = stos.add_parser("token", help="the store's own tokens (`store serve`), on the store's host")
     stts = stt.add_subparsers(dest="tcmd", required=True)
     sti = stts.add_parser("issue", help="print a new token for USER (once; keep it in the vault)")
     sti.add_argument("--user", required=True, help="the login it names (an --allow-user or --metrics-user)")
@@ -204,7 +202,7 @@ def main(argv=None):
     ls_.add_argument("--all", action="store_true", help="also the leases free for over an hour")
     sta = sub.add_parser("status", help="the snapshot (state.json): `--line` is the status line; else the open items "
                          "with their states and deadlines, and the leases")
-    sta.add_argument("--line", action="store_true", help="the one status line (no git, no Forgejo: state.json only)")
+    sta.add_argument("--line", action="store_true", help="the one status line (no git, no GitHub: state.json only)")
     sta.add_argument("--open", action="store_true", help="open the status page (http://agentctl.localhost/) in the browser")
     sub.add_parser("watchdog", help="the invariant watchdog's pass (launchd every 60 s): W1 oldest unlanded change, W2 "
                    "gate red nobody holds, W5 processor beat, W6 escalations notified, WM maintain ran")
@@ -283,7 +281,7 @@ def main(argv=None):
     dp = sub.add_parser("dispatch", help="own every CI dispatch: run (the forge CLI's workflow run, recorded) / record / list",
                         description=DISPATCH_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     dps = dp.add_subparsers(dest="dcmd", required=True)
-    dpr = dps.add_parser("run", help="forgejo-gh (gh on forge = github) workflow run, with an owner record")
+    dpr = dps.add_parser("run", help="gh workflow run, with an owner record")
     dpr.add_argument("workflow", help="the workflow file, e.g. identity-model-convergence.yml")
     dpr.add_argument("--ref", required=True)
     dpc = dps.add_parser("record", help="register a dispatch made another way")
@@ -320,44 +318,5 @@ def main(argv=None):
     a = ap.parse_args(argv)
     handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
                "red": cmd_red, "config": cmd_config, "issue": cmd_issue, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "github-app": cmd_github_app, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env}[a.cmd]
-    forge_for_command(a)
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)
-
-
-# MOVIES FIRST (owner, 2026-10-31): movies cuts over to GitHub before bitcashier. `forgejo_owners` in agentctl.toml
-# ($AGENTCTL_FORGEJO_OWNERS, e.g. "bitcashier") names the owners still primary on Forgejo while forge = github: a
-# repo-scoped command run for one of their repos (its --repo, else the cwd's clone) runs on forge forgejo for its whole
-# process -- it lands, fetches and reads CI on Forgejo, never on GitHub, where their main is still Forgejo's mirror.
-FORGEJO_OWNER_COMMANDS = ("land", "wait", "ci-why", "dispatch", "prepush-check", "env")
-
-
-def command_repo_owner(a):
-    """The owner of the repository a command acts on (its --repo, else the cwd's clone), or None."""
-    r = getattr(a, "repo", None)
-    if r and not os.path.isdir(os.path.expanduser(r)):
-        try:
-            return slug(r).split("/")[0]
-        except (Exception, SystemExit):
-            return None
-    path = os.path.expanduser(r) if r else os.getcwd()
-    for name in (remote(), "origin", "forgejo"):
-        u = git(path, "remote", "get-url", name, check=False)
-        m = re.search(r"[:/]([^/:]+)/[^/]+?(?:\.git)?/?$", u.stdout.strip()) if u.returncode == 0 else None
-        if m:
-            return m.group(1)
-    return None
-
-
-def forge_for_command(a):
-    """Switch this process to forge forgejo when its command acts on a repo of a `forgejo_owners` owner (forge =
-    github only). Returns the owner it switched for, or None."""
-    owners = [o.strip() for o in (os.environ.get("AGENTCTL_FORGEJO_OWNERS") or "").split(",") if o.strip()]
-    if not owners or getattr(a, "cmd", None) not in FORGEJO_OWNER_COMMANDS or not on_github():
-        return None
-    owner = command_repo_owner(a)
-    if owner not in owners:
-        return None
-    os.environ["AGENTCTL_FORGE"] = "forgejo"
-    err(f"{owner} is still primary on Forgejo (forgejo_owners): this `{a.cmd}` runs on forge forgejo")
-    return owner

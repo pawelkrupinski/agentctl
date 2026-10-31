@@ -375,7 +375,7 @@ def wait_all(waiters, timeout, floor, cap):
     attach_poll = env_num("AGENTCTL_ATTACH_POLL", 15)
     for w in waiters:
         if not w.acquire():
-            err(f"{w.key}: attached to existing waiter pid {w.holder.get('pid')} (since {w.holder.get('started')}); not polling Forgejo")
+            err(f"{w.key}: attached to existing waiter pid {w.holder.get('pid')} (since {w.holder.get('started')}); not polling GitHub")
     delays = backoff(floor, cap)
     next_check, last = 0.0, {}
     try:

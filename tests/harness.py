@@ -5,7 +5,7 @@ No test depends on the machine it runs on (docs/simplification-2026-10.md, Agent
   it); the machine's real home is REAL_HOME, for the guards that check nothing leaked into it.
 - PATH is fixed: a harness bin dir holding only `python3` (this interpreter), `git` and `node` (the ones this process
   found), then the system's /usr/bin:/bin:/usr/sbin:/sbin. No sdkman, Homebrew, nix profile or ~/bin on it.
-- No sdkman, Java, tokens or git identity from the environment: SDKMAN_*, JAVA_HOME, GH_TOKEN, FORGEJO_API_TOKEN and
+- No sdkman, Java, tokens or git identity from the environment: SDKMAN_*, JAVA_HOME, GH_TOKEN and
   every GIT_* variable are dropped; git reads the harness's own gitconfig (identity, init.defaultBranch=main) and no
   system config.
 - A GLOBAL PER-TEST TIMEOUT ($AGENTCTL_TEST_TIMEOUT, default 60 s): SIGALRM raises TestTimeout inside the test, so a
@@ -24,7 +24,7 @@ _REAL_WHICH = {"python3": sys.executable, "git": shutil.which("git"), "node": sh
 TIMEOUT = int(os.environ.get("AGENTCTL_TEST_TIMEOUT") or 60)
 SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 _DROP_PREFIXES = ("SDKMAN_", "GIT_")
-_DROP = {"JAVA_HOME", "GH_TOKEN", "FORGEJO_API_TOKEN", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
+_DROP = {"JAVA_HOME", "GH_TOKEN", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
          "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "AGENTCTL_INTERACTIVE", "AGENTCTL_NO_SECRETS",
          "AGENTCTL_DETACHED"}
 
@@ -55,10 +55,8 @@ def _hermetic_environment():
     # at load 95 on 32 cores held every fixer and owner dispatch back -- the owner-restart test failed 3 runs in a row)
     # AGENTCTL_MACHINE: an idle 12-core 36 GB machine with 500 GB of disk in place of the runner's own (lib/agentctl/gov.py machine_fixed):
     # a 4-core GitHub runner or a loaded laptop must not change what the governor, the check cap or land decide.
-    # AGENTCTL_FORGE "forgejo": the default became github when Forgejo was switched off (2026-10-31), but most fixtures
-    # are still written against the forgejo-gh fake (tests/fake_forgejo_gh.py); a github test sets the forge itself.
     os.environ.update(HOME=home, PATH=f"{hbin}:{SYSTEM_PATH}", GIT_CONFIG_GLOBAL=gitconfig, GIT_CONFIG_NOSYSTEM="1",
-                      AGENTCTL_TEST_HOME=home, AGENTCTL_LAPTOP_PRESSURE="-", AGENTCTL_FORGE="forgejo",
+                      AGENTCTL_TEST_HOME=home, AGENTCTL_LAPTOP_PRESSURE="-",
                       AGENTCTL_MACHINE='{"ram_gb": 36, "free_gb": 20, "pressure": 40, "swap_used_mb": 0, '
                                        '"swap_total_mb": 0, "load1": 1.0, "cores": 12, "free_pct": 60, "level": 1, '
                                        '"disk_free_gb": 500}')

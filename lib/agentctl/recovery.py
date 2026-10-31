@@ -85,7 +85,7 @@ def probe_route(_a):
 
 def probe_tunnel(_a):
     r = tunnel_probe()
-    return r == "ok", f"Forgejo (localhost:3000) {r}"
+    return r == "ok", f"the store tunnel (localhost:{tunnel_ports()[0][0]}) {r}"
 
 
 def probe_gate_read(a):
@@ -149,7 +149,7 @@ def probe_words(kind, a):
             "clone_health": lambda: f"{a.get('repo')} verifies and fetches {remote()}/main",
             "infra_requeue": lambda: f"queue entry {a.get('eid')} gets past {a.get('reason')}",
             "batch_progress": lambda: "the waiting changes form a batch (or the gate turns red)",
-            "red_read": lambda: f"ci-runner reads {', '.join(a.get('repos') or [])} (the agentctl-red-reader deploy)",
+            "red_read": lambda: f"ci-runner reads {', '.join(a.get('repos') or [])} (the agentctl-reader App)",
             "red_newer_verdict": lambda: f"a newer {a.get('workflow')} run than #{a.get('run')} no longer fails this way"}.get(kind, lambda: kind)()
 
 

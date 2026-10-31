@@ -12,8 +12,8 @@ the code; the rules below are the same for every fixer.
   what agentctl reads itself, and nothing in prod.
 - You are unattended, and your final answer is your verdict. Run every command in the FOREGROUND: no
   run_in_background, no waiting for CI.
-- CI reads (runs, logs, artifacts: `forgejo-gh run view|download`, `agentctl ci-why`) work in your environment, which
-  carries the Forgejo token. NEVER block on the owner or the vault for them.
+- CI reads (runs, logs, artifacts: `gh run view|download`, `agentctl ci-why`) work in your environment: gh reads
+  GitHub with its own auth. NEVER block on the owner or the vault for them.
 - BLOCKED ON OWNER is only for real owner actions (prod, a deploy, an infra push, a secret write).
 
 ## FAST REPRODUCER FIRST
@@ -65,7 +65,7 @@ Everything above applies as written.
 ### REPO bitcashier/infra
 - OWNER-ONLY PUSHES. A push to infra's main IS A DEPLOY (`fleet.autoApply` restarts units on 25 hosts within ~20 min
   of the stage job). You NEVER push, NEVER run `agentctl land`, NEVER deploy (`bin/deploy ... --apply`,
-  `bin/forgejo-bootstrap`, `nixos-rebuild`, `switch-to-configuration`, `systemctl` on a host). agentctl refuses `land`
+  `nixos-rebuild`, `switch-to-configuration`, `systemctl` on a host). agentctl refuses `land`
   from an infra fixer, and the session denies those commands.
 - Prepare the fix on your worktree's local branch, one commit per step, rebased on `<remote>/main`, with a
   `Fixes-Red: <run>` trailer. Run what the repo runs locally: `bin/check-nix-formatting` for any .nix change, the

@@ -27,7 +27,7 @@ class EnvTest(unittest.TestCase):
         os.chmod(p, os.stat(p).st_mode | stat.S_IEXEC)
         self.saved = {k: os.environ.get(k) for k in ("PATH", "SECRETS_STATE")}
         os.environ["PATH"] = self.bin + ":" + os.environ["PATH"]
-        self.saved_ports, self.saved_api = A.TUNNEL_PORTS, A.API
+        self.saved_ports = A.TUNNEL_PORTS
 
     def tearDown(self):
         for k, v in self.saved.items():
@@ -35,7 +35,7 @@ class EnvTest(unittest.TestCase):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-        A.TUNNEL_PORTS, A.API = self.saved_ports, self.saved_api
+        A.TUNNEL_PORTS = self.saved_ports
         self.tmp.cleanup()
 
     def tool(self, *argv):
@@ -74,35 +74,16 @@ class EnvTest(unittest.TestCase):
         self.assertEqual(out.strip().splitlines(), ["vault movies locked: ask the user to run `! secrets unlock movies`"])
         self.assertFalse(any(c.startswith("unlock") for c in self.secrets_calls()))
 
-    def test_check_tunnel_down_and_token_never_printed(self):
+    def test_check_tunnel_down_and_no_token_read(self):
         os.environ["SECRETS_STATE"] = "unlocked"
-        seen = {}
-
-        class H(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                seen["auth"] = self.headers.get("Authorization")
-                body = json.dumps({"login": "bot"}).encode()
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(body)
-
-            def log_message(self, *a):
-                pass
-        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        port = srv.server_address[1]
-        A.API = f"http://127.0.0.1:{port}/api/v1"
-        A.TUNNEL_PORTS = [(port, "api"), (free_port(), "ssh")]
-        try:
-            rc, out, errs = self.tool("env", "--check", "--ns", "movies")
-        finally:
-            srv.shutdown()
+        A.TUNNEL_PORTS = [(free_port(), "agentctl store")]
+        rc, out, errs = self.tool("env", "--check", "--ns", "movies")
         self.assertEqual(rc, 1, out)
-        self.assertIn("token valid (user bot)", out)
-        self.assertEqual(seen["auth"], f"token {TOKEN}")
+        self.assertIn("agentctl store): REFUSED", out)
+        self.assertIn(A.TUNNEL_LABEL, out)
+        self.assertIn("github: gh", out)
         self.assertNotIn(TOKEN, out + errs)
-        self.assertIn("REFUSED", out)
-        self.assertIn("net.bitcashier.forgejo-tunnel", out)
+        self.assertFalse(any(c.startswith("get") for c in self.secrets_calls()))
 
 
 class EnvMutationTest(unittest.TestCase):

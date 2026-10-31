@@ -1,4 +1,4 @@
-"""The red tests' shared base (a movies-like repo, a fake Forgejo and a fake `claude`), and the signature's
+"""The red tests' shared base (a movies-like repo, a fake gh and a fake `claude`), and the signature's
 normalization. The red machine itself (items, leases, offers, the dispatcher) is tested in test_reds.py."""
 import contextlib, glob, io, json, os, sys, tempfile, time, unittest
 
@@ -32,7 +32,7 @@ class RedBase(unittest.TestCase):
         self.settings = os.path.join(t, "settings.json")
         with open(self.settings, "w") as f:
             json.dump({"permissions": {"defaultMode": "auto"}}, f)
-        self.env = {"AGENTCTL_STATE_ROOT": os.path.join(t, "state"), "AGENTCTL_SCRATCH": os.path.join(t, "scratch"), "AGENTCTL_FORGEJO_GH": FAKE, "FAKE_GH_DIR": self.d,
+        self.env = {"AGENTCTL_STATE_ROOT": os.path.join(t, "state"), "AGENTCTL_SCRATCH": os.path.join(t, "scratch"), "AGENTCTL_GH_CLI": FAKE, "FAKE_GH_DIR": self.d,
                     "GH_TOKEN": "dummy", "AGENTCTL_OWNERS_DIR": os.path.join(t, "owners"),
                     "AGENTCTL_REDS_DIR": os.path.join(t, "reds"), "AGENTCTL_INTERNAL_TREES_DIR": os.path.join(t, "internal"), "AGENTCTL_INBOX_DIR": os.path.join(t, "inbox"),
                     "AGENTCTL_RED_REPO": self.r.path, "AGENTCTL_CLAUDE": FAKE_CLAUDE,
@@ -52,8 +52,8 @@ class RedBase(unittest.TestCase):
         for k, v in self.env.items():
             if v == "":
                 os.environ.pop(k, None)
-        self.saved_a = A.FORGEJO_GH, A.WAITING_DIR, A.land_cwds
-        A.FORGEJO_GH, A.WAITING_DIR = FAKE, os.path.join(t, "waiting-state")
+        self.saved_a = A.GH_CLI, A.WAITING_DIR, A.land_cwds
+        A.GH_CLI, A.WAITING_DIR = FAKE, os.path.join(t, "waiting-state")
         A.land_cwds = lambda: {}
         A._gate_lists.clear()
         A._outside_lists.clear()
@@ -64,7 +64,7 @@ class RedBase(unittest.TestCase):
         self.main_red(40, 20)
 
     def tearDown(self):
-        A.FORGEJO_GH, A.WAITING_DIR, A.land_cwds = self.saved_a
+        A.GH_CLI, A.WAITING_DIR, A.land_cwds = self.saved_a
         for k, v in self.saved.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -144,7 +144,7 @@ class RedBase(unittest.TestCase):
             time.sleep(0.2)
         self.fail("no fixer verdict in the inbox")
 
-    def worktree_commit(self, name, msg, base="forgejo/main"):
+    def worktree_commit(self, name, msg, base="origin/main"):
         wt = self.r.worktree(name, base=base, branch=name)
         self.r.write("fix.txt", f"{name}\n", at=wt)
         return wt, self.r.commit(msg, at=wt)

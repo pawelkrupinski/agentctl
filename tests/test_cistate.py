@@ -28,7 +28,7 @@ class SnapshotTest(RedBase):
     def test_one_snapshot_drives_gate_and_reds_and_the_summary_names_the_non_gate_red(self):
         snap = A.ci_state_refresh(MOVIES)
         self.assertTrue(os.path.exists(A.state_path()))
-        self.put("runs.json", [])  # Forgejo is gone: everything below reads the snapshot only
+        self.put("runs.json", [])  # no runs to read: everything below reads the snapshot only
         A._gate_lists.clear()
         A._outside_lists.clear()
         red, line = A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path)
@@ -90,9 +90,10 @@ class SummaryLogReadsTest(RedBase):
 
 class FixerTokenTest(RedBase):
     def test_a_headless_fixer_gets_the_token_and_is_told_ci_reads_never_block_on_the_owner(self):
-        os.environ["GH_TOKEN"] = "tok-123"
+        os.environ["AGENTCTL_STORE_TOKEN"] = "tok-123"
+        self.addCleanup(os.environ.pop, "AGENTCTL_STORE_TOKEN", None)
         env = A.fixer_env(MOVIES, 20)
-        self.assertEqual(env.get("FORGEJO_API_TOKEN"), "tok-123")
+        self.assertEqual(env.get("AGENTCTL_STORE_TOKEN"), "tok-123")
         u = {"workflow": "Main", "run": {"number": 20, "databaseId": 40}, "job": "j", "kind": "test"}
         p = A.fixer_prompt(u, "/wt", "/brief")
         self.assertIn("NEVER block on the owner or the vault", p)
@@ -114,7 +115,7 @@ class StaleLocalRedTest(RedBase):
         self.r.write("BROKEN", "x\n")
         self.r.commit("main is broken")
         self.r.push()
-        self.old = sh(self.r.path, "git", "rev-parse", "forgejo/main")
+        self.old = sh(self.r.path, "git", "rev-parse", "origin/main")
         A.note_local_red(self.old, {"sbt": {"BrokenSpec"}}, set())
         self.put("runs.json", green_gate(self, self.sha))
         # main moves on and fixes it
@@ -122,7 +123,7 @@ class StaleLocalRedTest(RedBase):
         os.unlink(os.path.join(self.r.path, "BROKEN"))
         self.fix = self.r.commit("fix main")
         self.r.push()
-        self.new = sh(self.r.path, "git", "rev-parse", "forgejo/main")
+        self.new = sh(self.r.path, "git", "rev-parse", "origin/main")
 
     def patrol_now(self):
         saved = A.slug
@@ -141,7 +142,7 @@ class StaleLocalRedTest(RedBase):
         self.assertIn("local → stale, rechecking", self.why("--summary")[1])
 
     def test_a_passing_recheck_clears_and_tidies_the_fixers_worktrees(self):
-        wt = self.r.worktree("red-local", base="forgejo/main~1", branch="red-local")
+        wt = self.r.worktree("red-local", base="origin/main~1", branch="red-local")
         os.unlink(os.path.join(wt, "BROKEN"))
         self.r.commit("same fix", at=wt)
         d = A.reds_dir("local")
@@ -155,7 +156,7 @@ class StaleLocalRedTest(RedBase):
         self.assertNotIn("Local checks", self.why()[1].replace("Local checks pass", ""))
 
     def test_a_fixer_worktree_that_is_not_patch_equivalent_is_listed_not_deleted(self):
-        wt = self.r.worktree("red-local", base="forgejo/main", branch="red-local")
+        wt = self.r.worktree("red-local", base="origin/main", branch="red-local")
         self.r.write("other.txt", "unrelated\n", at=wt)
         self.r.commit("something else", at=wt)
         d = A.reds_dir("local")
@@ -171,7 +172,7 @@ class StaleLocalRedTest(RedBase):
         self.r.commit("breaks again")
         self.r.push()
         self.patrol_now()
-        self.assertEqual(A.local_red()["main"], sh(self.r.path, "git", "rev-parse", "forgejo/main"))
+        self.assertEqual(A.local_red()["main"], sh(self.r.path, "git", "rev-parse", "origin/main"))
         self.assertIn("Local checks: RED", self.why()[1])
 
 

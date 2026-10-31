@@ -19,13 +19,13 @@ class RedReposBase(RedsBase):
     def setUp(self):
         super().setUp()
         t = os.path.realpath(self.tmp.name)
-        # an infra clone whose forgejo remote slugs as bitcashier/infra (a copy of the movies-like fixture repo)
+        # an infra clone whose remote slugs as bitcashier/infra (a copy of the movies-like fixture repo)
         os.makedirs(os.path.join(t, "bitcashier"))
         self.infra_bare = os.path.join(t, "bitcashier", "infra.git")
         shutil.copytree(self.r.bare, self.infra_bare, symlinks=True)
         self.infra = os.path.join(t, "infra")
         shutil.copytree(self.r.path, self.infra, symlinks=True)
-        sh(self.infra, "git", "remote", "set-url", "forgejo", self.infra_bare)
+        sh(self.infra, "git", "remote", "set-url", "origin", self.infra_bare)
         self.repos_file = os.path.join(t, "red-repos.json")
         with open(self.repos_file, "w") as f:
             json.dump({"repos": [
@@ -166,39 +166,24 @@ class TickTest(RedReposBase):
             A.gate_runs = saved
         self.assertIn(INFRA, self.by_repo())
 
-    def on_ci_runner(self, token_file):
-        """The reconciler's environment: role server, ci-lander's push-only GH_TOKEN, the reader's token file."""
-        # GH_TOKEN is RedBase's (its tearDown puts it back; a cleanup here would run after that and leak it into
-        # the worker's next test -- test_harness caught it)
-        saved = (A.on_ci_runner, os.environ.get("AGENTCTL_RED_READ_TOKEN_FILE"))
+    def on_ci_runner(self):
+        """The reconciler's environment: role server, no reader App configured yet (reader_app() configures it)."""
+        saved = A.on_ci_runner, A.ghapp_enabled, A.ghapp_config, A.ghapp_token
         A.on_ci_runner = lambda: True
-        os.environ["GH_TOKEN"] = "ci-lander-push-only"
-        os.environ["AGENTCTL_RED_READ_TOKEN_FILE"] = token_file
+        self.apps = set()
+        A.ghapp_enabled = lambda: bool(self.apps)
+        A.ghapp_config = lambda role: ("1", "key") if role in self.apps else None
+        A.ghapp_token = lambda o_r: "reader-tok"
 
         def restore():
-            A.on_ci_runner = saved[0]
-            if saved[1] is None:
-                os.environ.pop("AGENTCTL_RED_READ_TOKEN_FILE", None)
-            else:
-                os.environ["AGENTCTL_RED_READ_TOKEN_FILE"] = saved[1]
+            A.on_ci_runner, A.ghapp_enabled, A.ghapp_config, A.ghapp_token = saved
         self.addCleanup(restore)
 
-    def test_ci_runner_reads_other_repos_with_the_reader_token_never_ci_landers(self):
-        tf = os.path.join(self.tmp.name, "red-reader", "token.env")
-        self.on_ci_runner(tf)
-        os.makedirs(os.path.dirname(tf))
-        with open(tf, "w") as f:
-            f.write("GH_TOKEN=reader-tok\n")
-        self.assertEqual(A.token(INFRA), "reader-tok")
-        self.assertEqual(A.token(CORE), "reader-tok")
-        self.assertEqual(A.token(MOVIES), "ci-lander-push-only", "movies keeps ci-lander's own token")
-
-    def test_ci_runner_without_the_reader_token_says_no_read_access_once_as_a_condition(self):
-        """2026-10-30: every tick logged `red tick: bitcashier/infra: skipped (... failed to get runs)`: ci-lander can
-        read movies only. Now: one condition naming the deploy it needs, no line per tick, cleared once it reads."""
+    def test_ci_runner_without_the_reader_app_says_no_read_access_once_as_a_condition(self):
+        """2026-10-30: every tick logged `red tick: bitcashier/infra: skipped (... failed to get runs)`: the lander can
+        read movies only. Now: one condition naming the App it needs, no line per tick, cleared once it reads."""
         import contextlib, io
-        tf = os.path.join(self.tmp.name, "red-reader", "token.env")
-        self.on_ci_runner(tf)
+        self.on_ci_runner()
         with self.assertRaises(A.NoReadAccess):
             A.token(INFRA)
         errb = io.StringIO()
@@ -209,12 +194,11 @@ class TickTest(RedReposBase):
         self.assertNotIn(INFRA, self.by_repo())
         conds = [c for c in A.open_conditions() if c["key"] == "red-read-access"]
         self.assertEqual(len(conds), 1)
-        self.assertIn("needs the agentctl-red-reader deploy", conds[0]["text"])
+        self.assertIn("needs the agentctl-reader App", conds[0]["text"])
         self.assertIn(INFRA, conds[0]["text"])
         self.assertIn(CORE, conds[0]["text"])
-        os.makedirs(os.path.dirname(tf))
-        with open(tf, "w") as f:
-            f.write("GH_TOKEN=reader-tok\n")  # the deploy: the unit minted it
+        self.apps.add("reader")  # the App configured on the host
+        self.assertIsNone(A.red_read_token(INFRA))
         A.recovery_tick(force=True)
         self.assertEqual([c for c in A.open_conditions() if c["key"] == "red-read-access"], [])
         self.others(advance=60)
@@ -304,8 +288,8 @@ class BriefTest(RedReposBase):
 class OwnerPushTest(RedReposBase):
     def fixer_tree(self):
         wt = os.path.join(os.path.realpath(self.tmp.name), "infra-wt-red-3455")
-        sh(self.infra, "git", "fetch", "-q", "forgejo")
-        sh(self.infra, "git", "worktree", "add", "-q", "-b", "red-3455", wt, "forgejo/main")
+        sh(self.infra, "git", "fetch", "-q", "origin")
+        sh(self.infra, "git", "worktree", "add", "-q", "-b", "red-3455", wt, "origin/main")
         with open(os.path.join(wt, "bin-nix-container"), "w") as f:
             f.write("ro\n")
         sh(wt, "git", "add", "-A")
@@ -321,7 +305,7 @@ class OwnerPushTest(RedReposBase):
         wt = self.fixer_tree()
         rc, lines = A.red_owner_push(self.st, INFRA, "3455", "the store read-only; restarts nothing", wt)
         self.assertEqual(rc, 0, lines)
-        cmd = f"git -C {wt} pull --rebase forgejo main && git -C {wt} push forgejo HEAD:main"
+        cmd = f"git -C {wt} pull --rebase origin main && git -C {wt} push origin HEAD:main"
         self.assertEqual(lines[-1], f"BLOCKED ON OWNER: {cmd}")
         it = self.infra_item()
         self.assertEqual(it["state"], "fix-pending")
@@ -351,8 +335,8 @@ class OwnerPushTest(RedReposBase):
         self.assertEqual(rc, 2)
         self.assertIn("not owner-only", lines[0])
         wt = os.path.join(os.path.realpath(self.tmp.name), "infra-wt-empty")
-        sh(self.infra, "git", "fetch", "-q", "forgejo")
-        sh(self.infra, "git", "worktree", "add", "-q", "-b", "empty", wt, "forgejo/main")
+        sh(self.infra, "git", "fetch", "-q", "origin")
+        sh(self.infra, "git", "worktree", "add", "-q", "-b", "empty", wt, "origin/main")
         rc, lines = A.red_owner_push(self.st, INFRA, "3455", "", wt)
         self.assertEqual(rc, 1)
         self.assertIn("nothing in", lines[0])
@@ -369,7 +353,7 @@ class OwnerPushTest(RedReposBase):
                 os.environ["CLAUDE_CODE_SESSION_ID"] = saved_sid
         self.assertEqual(rc, 1, out)
         self.assertIn("NOT LANDED: bitcashier/infra is owner-only", out)
-        for cmd in ("agentctl land", "bin/deploy", "forgejo-bootstrap", "nixos-rebuild", "git*push"):
+        for cmd in ("agentctl land", "bin/deploy", "nixos-rebuild", "git*push"):
             self.assertTrue(any(cmd in d for d in A.OWNER_ONLY_DENIED), cmd)
 
 

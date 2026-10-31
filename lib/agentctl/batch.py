@@ -390,20 +390,17 @@ DRIFT_STALL = 30 * 60  # s with no output before the drift check is ended (no ve
 
 
 # THE DRIFT CHECK'S TOOLS (2026-10-30, batch #4: "could not push measure/ci-lander/f3b716998-drift-aed681"). It was no
-# permission: ci-lander has write on movies and only main is protected, the same as the check/<id> branches it pushes
+# permission: the lander has write on movies and only main is protected, the same as the check/<id> branches it pushes
 # for every change. The reconciler's systemd PATH has no python3 and no gh. movies' lock_take (jvm-gate.sh) flocks
 # through `python3`, so identity_push_measure_branch waited 3600 s on a lock that could never be taken and gave up
-# before it pushed. forge-gh, the script's `gh`, is python3 too, and it reads $FORGEJO_API_TOKEN. drift_env gives the
-# script both: python3 (a shim to this interpreter, on the PATH only when none is there) and the repository's token
-# (the repository's, as $FORGEJO_API_TOKEN), so the push and the dispatch run as ci-lander with the rights it already has.
+# before it pushed. forge-gh, the script's `gh`, is python3 too. drift_env gives the script both: python3 (a shim to
+# this interpreter, on the PATH only when none is there) and the repository's App token on ci-runner (forge_env), so
+# the push and the dispatch run as the lander with the rights it already has.
 def drift_env(repo, env=None):
     env = tool_env() if env is None else dict(env)
     try:
-        if on_github():  # forge = github: forge-gh is the real gh (KINOWO_FORGE), with the repo's App token on ci-runner
-            env = forge_env(slug(repo), env)
-            env["KINOWO_FORGE"] = "github"
-        else:
-            env["FORGEJO_API_TOKEN"] = token(slug(repo))  # movies' forge-gh reads this one
+        env = forge_env(slug(repo), env)  # forge-gh is the real gh (KINOWO_FORGE), with the repo's App token on ci-runner
+        env["KINOWO_FORGE"] = "github"
     except (Exception, SystemExit) as ex:  # no token: the script says so itself (NO VERDICT)
         err(f"drift check: no forge token for the script ({str(ex)[:120]})")
     parts = [p for p in env.get("PATH", "").split(":") if p]
@@ -731,7 +728,7 @@ def waiting_run(repo, once=False, service=False):
             if errors >= ROUND_ERRORS_MAX and not stalled_noted:
                 # NEVER FATAL (2026-10-29 22:31: the network dropped, every step failed, and this condition's own store
                 # call -- the store is remote on the laptop -- raised StoreUnavailable out of the loop: the processor
-                # died, launchd restarted it, and the restart holds no Forgejo token until the owner hands it over).
+                # died, launchd restarted it, and the restart holds no token until the owner hands it over).
                 # Not noted now: tried again next round.
                 try:
                     open_condition("STALLED", f"STALLED: the waiting processor's ticks failed {errors} times in a row; "
@@ -757,7 +754,7 @@ def waiting_run(repo, once=False, service=False):
 TICK_STOP = [False]  # set by SIGTERM in `agentctl tick`: the loop returns between ticks
 
 # EVERY STEP OF THE TICK IS BOUNDED (2026-10-29, RECONCILER STALLED 05:37-05:41: during a tunnel hang the gate's
-# Forgejo reads -- gh calls of up to 90 s each, one kickstart and a retry, ten workflows -- held the loop for minutes,
+# forge reads -- gh calls of up to 90 s each, one kickstart and a retry, ten workflows -- held the loop for minutes,
 # and state.json's tick_at aged past 2 min). A step runs in a thread of its own and the tick waits at most STEP_JOIN s
 # for it; one still running is not started again until it ends (run_bounded), and the tick goes on to the next step.
 # Its error, when it ends, is reported at the next look. The steps' writes are store transitions (compare-and-set) and
@@ -793,7 +790,7 @@ def run_step(name, step):
     return True
 
 
-STEP_NO_TOKEN = "no Forgejo token"
+STEP_NO_TOKEN = "no token"
 
 
 def step_failed(name, why):

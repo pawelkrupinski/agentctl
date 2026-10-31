@@ -41,11 +41,11 @@ class OrphanTest(RedBase):
         self.assertEqual(A.orphan_duty(self.r.path), [])  # once
         self.assertEqual(self.relands, [wt])  # one re-land, never a loop
         [e] = self.inbox("UNLANDED_ORPHAN")
-        self.assertIn("repo-wt-flipflop: 1 commit(s) not on forgejo/main", e["verdict"])
+        self.assertIn("repo-wt-flipflop: 1 commit(s) not on origin/main", e["verdict"])
         self.assertEqual([c["kind"] for c in A.open_conditions()], ["UNLANDED_ORPHAN"])  # an item: it escalates by its machine
         self.assertEqual(A.recovery_tick(force=True), [])  # still not on main
-        sh(wt, "git", "push", "-q", "forgejo", "HEAD:main")  # it lands
-        sh(self.r.path, "git", "fetch", "-q", "forgejo")
+        sh(wt, "git", "push", "-q", "origin", "HEAD:main")  # it lands
+        sh(self.r.path, "git", "fetch", "-q", "origin")
         self.assertEqual(len(A.recovery_tick(force=True)), 1)
         self.assertTrue(all(x["read"] for x in self.inbox("UNLANDED_ORPHAN")))
         self.assertTrue(os.path.isdir(wt))  # nothing deleted
@@ -66,7 +66,7 @@ class OrphanTest(RedBase):
         """ISSUE 20261030T165514-e5f431: maintain re-submitted movies-wt-review with no session behind it while the open
         change movies-wt-ci-5 already carried its commits -- a duplicate in the queue."""
         wt, sha = self.worktree_commit("repo-wt-review", "review: a fix")
-        ci5 = self.r.worktree("repo-wt-ci-5", base="forgejo/main", branch="ci-5")
+        ci5 = self.r.worktree("repo-wt-ci-5", base="origin/main", branch="ci-5")
         sh(ci5, "git", "cherry-pick", sha)  # the same change, another sha, plus ci-5's own
         self.r.write("ci5.txt", "ci-5\n", at=ci5)
         head = self.r.commit("ci-5: its own", at=ci5)
@@ -91,7 +91,7 @@ class OrphanTest(RedBase):
         self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-ci-1: submit (never landed)"])
         self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-ci-1: escalated UNLANDED ORPHAN"])
         self.assertEqual(len(A.open_conditions()), 1)
-        ci5 = self.r.worktree("repo-wt-ci-5", base="forgejo/main", branch="ci-5")
+        ci5 = self.r.worktree("repo-wt-ci-5", base="origin/main", branch="ci-5")
         sh(ci5, "git", "cherry-pick", sha)
         self.r.write("ci5.txt", "ci-5\n", at=ci5)
         head = self.r.commit("ci-5: its own", at=ci5)
@@ -128,7 +128,7 @@ class OrphanTest(RedBase):
         wt, sha = self.worktree_commit("repo-wt-ci-1", "ci-1: a fix")
         self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-ci-1: submit (never landed)"])
         self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-ci-1: escalated UNLANDED ORPHAN"])
-        ci5 = self.r.worktree("repo-wt-ci-5", base="forgejo/main", branch="ci-5")
+        ci5 = self.r.worktree("repo-wt-ci-5", base="origin/main", branch="ci-5")
         self.r.write("fix.txt", "repo-wt-ci-1, resolved against ci-5\n", at=ci5)  # carried, its lines changed
         self.r.write("ci5.txt", "ci-5\n", at=ci5)
         self.r.commit("ci-5: ci-1's fix and its own", at=ci5)
@@ -142,8 +142,8 @@ class OrphanTest(RedBase):
         self.assertEqual(self.relands.count(wt), 1)
         rc, out = self.run_tool("supersede")
         self.assertIn("repo-wt-ci-1: SUPERSEDED BY repo-wt-ci-5 (open", out)
-        sh(ci5, "git", "push", "-q", "forgejo", "HEAD:main")  # the successor lands
-        sh(self.r.path, "git", "fetch", "-q", "forgejo")
+        sh(ci5, "git", "push", "-q", "origin", "HEAD:main")  # the successor lands
+        sh(self.r.path, "git", "fetch", "-q", "origin")
         did = A.orphan_duty(self.r.path)
         [line] = [x for x in did if "repo-wt-ci-1" in x]
         self.assertIn("superseded repo-wt-ci-1: repo-wt-ci-5 landed", line)
@@ -182,7 +182,7 @@ class OrphanTest(RedBase):
 
     def test_a_successor_that_carries_nothing_yet_is_refused(self):
         wt, _sha = self.worktree_commit("repo-wt-a", "a")
-        empty = self.r.worktree("repo-wt-b", base="forgejo/main", branch="b")
+        empty = self.r.worktree("repo-wt-b", base="origin/main", branch="b")
         rc, out = self.run_tool("supersede", wt, "--by", empty)
         self.assertEqual(rc, 2, out)
         self.assertIn("carries nothing that is not on main yet", out)
@@ -196,8 +196,8 @@ class OrphanTest(RedBase):
         self.r.write("other.txt", "main moves\n")
         self.r.commit("main moves")
         self.r.push()
-        sh(self.r.path, "git", "fetch", "-q", "forgejo")
-        sh(wt, "git", "rebase", "-q", "forgejo/main")
+        sh(self.r.path, "git", "fetch", "-q", "origin")
+        sh(wt, "git", "rebase", "-q", "origin/main")
         _c, k2 = A.orphan_key(self.r.path, wt)
         self.assertEqual(k1, k2)
 

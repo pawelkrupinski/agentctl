@@ -153,11 +153,11 @@ class WatchTest(Base):
         self.assertGreater(len(sleeps), 10, "no give-up after 10 failed reads: it reads again until the bound")
         self.assertEqual(sleeps[:3], [30, 45, 67.5])
         self.assertEqual(max(sleeps), 300)
-        self.assertIn("WATCH UNKNOWN: Forgejo's runs could not be read for 0m", out)
+        self.assertIn("WATCH UNKNOWN: GitHub's runs could not be read for 0m", out)
         self.assertIn("connection refused", out.splitlines()[-1])
         self.assertNotIn("STALLED", out, "a failed read says nothing about the runs")
 
-    def test_forgejo_back_after_failures_is_read_again(self):
+    def test_github_back_after_failures_is_read_again(self):
         calls = []
         self.main = [run(11, self.sha)]
         self.conv = [run(21, self.sha)]
@@ -172,15 +172,15 @@ class WatchTest(Base):
         rc, out = self.watch()
         self.assertEqual(rc, 0, out)
         self.assertIn("WATCH OK: Main #11 green, convergence #21 green", out)
-        self.assertIn("Forgejo answers again", out)
+        self.assertIn("GitHub answers again", out)
 
     def test_no_token_ends_at_once_with_the_cause(self):
         def no_token(o_r, *args):
-            raise A.NoToken("agentctl: could not read the movies FORGEJO_API_TOKEN from the vault (locked)")
+            raise A.NoToken("agentctl: could not read the movies AGENTCTL_STORE_TOKEN from the vault (locked)")
         A.gh_json = no_token
         rc, out = self.watch()
         self.assertEqual(rc, 2, out)
-        self.assertIn("WATCH UNKNOWN: no Forgejo token (could not read the movies FORGEJO_API_TOKEN", out)
+        self.assertIn("WATCH UNKNOWN: no token (could not read the movies AGENTCTL_STORE_TOKEN", out)
 
     def test_a_watch_whose_worktree_was_removed_after_landed_still_ends_with_its_verdict(self):
         # 2026-10-27: `crashed: RuntimeError: git rev-parse --show-toplevel in ~/projects/movies-wt-gate-closed`: the

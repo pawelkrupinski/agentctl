@@ -385,7 +385,7 @@ class FixTest(RedsBase):
                                  "url": "u", "number": 2104, "status": "completed", "conclusion": "failure",
                                  "workflowName": "Identity capture"})
         self.put("run-70.log", "capture (uk)\tRun\t2026-10-27T08:00:00Z [info] - CaptureSpec *** FAILED ***\n")
-        self.r.write(".forgejo/workflows/identity-capture.yml",
+        self.r.write(".github/workflows/identity-capture.yml",
                      "name: Identity capture\non:\n  schedule:\n    - cron: '0 3 * * 1'\n  workflow_dispatch:\n")
         self.r.commit("the workflow")
         self.r.push()
@@ -747,7 +747,7 @@ class OldRedTest(RedsBase):
                                  "workflowName": "Report run timings"})
         self.put("run-90.log", "report\tReport\t2026-10-19T21:10:26Z [error] boom\n")
         if wf_text:
-            self.r.write(".forgejo/workflows/report-timings.yml", wf_text)
+            self.r.write(".github/workflows/report-timings.yml", wf_text)
             self.r.commit("wf")
             self.r.push()
 
@@ -771,9 +771,9 @@ class OldRedTest(RedsBase):
         self.outside("name: Report run timings\non:\n  schedule:\n    - cron: \"0 3 * * *\"\n")
         self.tick()
         it = self.only()
-        self.r.write(".forgejo/workflows/report-timings.yml", "name: Report run timings\non:\n  workflow_call: {}\n")
-        self.r.write(".forgejo/workflows/nightly.yml", "name: Nightly\non:\n  schedule:\n    - cron: \"0 1 * * *\"\n"
-                     "jobs:\n  timings:\n    uses: ./.forgejo/workflows/report-timings.yml\n")
+        self.r.write(".github/workflows/report-timings.yml", "name: Report run timings\non:\n  workflow_call: {}\n")
+        self.r.write(".github/workflows/nightly.yml", "name: Nightly\non:\n  schedule:\n    - cron: \"0 1 * * *\"\n"
+                     "jobs:\n  timings:\n    uses: ./.github/workflows/report-timings.yml\n")
         self.head = self.r.commit(message)
         self.r.push()
         self.caller_runs(caller_runs, other_callers)
@@ -799,8 +799,8 @@ class OldRedTest(RedsBase):
     def test_a_callable_only_workflows_red_is_verified_by_a_green_caller_whatever_its_other_callers_do(self):
         # Report run timings has 36 callers on main and some are red at any hour for their own reasons (2026-10-29:
         # Archive recording #823, Verify scrape recording #2493): with "none failed", #38 stayed red under f8f51e8
-        self.r.write(".forgejo/workflows/weekly.yml", "name: Weekly\non:\n  schedule:\n    - cron: \"0 2 * * 1\"\n"
-                     "jobs:\n  timings:\n    uses: ./.forgejo/workflows/report-timings.yml\n")
+        self.r.write(".github/workflows/weekly.yml", "name: Weekly\non:\n  schedule:\n    - cron: \"0 2 * * 1\"\n"
+                     "jobs:\n  timings:\n    uses: ./.github/workflows/report-timings.yml\n")
         it = self.made_callable_only([(True, "success")], other_callers=[("Weekly", "weekly.yml", "failure")])
         self.assertEqual([(i["id"], i["state"]) for i in self.st.items("red") if i["data"]["workflow"] ==
                           "Report run timings"], [(it["id"], "verified")])
@@ -914,11 +914,10 @@ class OldRedTest(RedsBase):
         # Archive recording #823 (2026-10-29): dispatched with no inputs, its required `runs` input was refused (HTTP 400)
         self.outside("name: Report run timings\non:\n  workflow_dispatch:\n    inputs:\n      runs: {required: true}\n")
         calls, saved = [], (A.api, A.record_dispatch)
+        A.write_json(A.dispatches_dir("inputs", "90.json"), {"runs": "528 573"})  # `dispatch run` recorded them
 
         def api(o_r, method, path, params=None, body=None):
             calls.append((method, path, body))
-            if method == "GET" and path.startswith("actions/runs/"):
-                return {"event_payload": json.dumps({"inputs": {"runs": "528 573"}, "ref": "refs/heads/main"})}
             return None
         A.api, A.record_dispatch = api, (lambda **kw: None)
         try:
@@ -927,13 +926,12 @@ class OldRedTest(RedsBase):
             A.api, A.record_dispatch = saved
         it = self.only()
         self.assertEqual((it["state"], it["data"]["fix"]["status"]), ("fix-pending", "verify"))
-        rid = it["data"]["last_run"]["databaseId"]
-        self.assertIn(("GET", f"actions/runs/{rid}", None), calls)
+        self.assertEqual(it["data"]["last_run"]["databaseId"], 90)
         self.assertIn(("POST", "actions/workflows/report-timings.yml/dispatches",
                        {"ref": "main", "inputs": {"runs": "528 573"}}), calls)
         self.assertIn('with {"runs": "528 573"}', it["data"]["fix"]["verify"])
 
-    def test_a_refused_verify_dispatch_names_forgejos_reason(self):
+    def test_a_refused_verify_dispatch_names_the_forges_reason(self):
         import email.message, io as _io, urllib.error
         e = urllib.error.HTTPError("http://f/x", 400, "Bad Request", email.message.Message(),
                                    _io.BytesIO(b'{"message":"Require value for input: runs"}'))
@@ -1221,8 +1219,8 @@ class AuditTest(RedsBase):
         # main_workflow_files read nothing and audit #7 listed no workflow outside the newest 200 runs
         clone = os.path.join(self.tmp.name, "server-movies")
         subprocess.run(["git", "init", "-q", clone], check=True)
-        subprocess.run(["git", "-C", clone, "remote", "add", "forgejo",
-                        "ssh://forgejo@forgejo.internal:2222/pawelkrupinski/movies.git"], check=True)
+        subprocess.run(["git", "-C", clone, "remote", "add", "origin",
+                        "git@github.com:pawelkrupinski/movies.git"], check=True)
         saved = A.REPOS, os.environ.pop("AGENTCTL_RED_REPO", None), os.environ.get("AGENTCTL_MOVIES_REPO")
         A.REPOS = [os.path.join(self.tmp.name, "no-such-clone")]
         os.environ["AGENTCTL_MOVIES_REPO"] = clone

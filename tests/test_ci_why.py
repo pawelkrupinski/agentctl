@@ -184,7 +184,7 @@ class CiWhyTest(FakeForge):
         saved = A.slug, A.gh_json
         A.slug = lambda repo: "pawelkrupinski/movies"
         try:
-            for exc in (A.NoToken("agentctl: could not read the movies FORGEJO_API_TOKEN from the vault"),
+            for exc in (A.NoToken("agentctl: could not read the movies AGENTCTL_STORE_TOKEN from the vault"),
                         FileNotFoundError(2, "No such file or directory: 'secrets'"), RuntimeError("tunnel down")):
                 def broken(o_r, *args, exc=exc):
                     raise exc
@@ -296,7 +296,7 @@ class CiWhyTest(FakeForge):
         self.assertNotIn("TEST FAILURE", out)
 
     def shifted(self):
-        """Forgejo's step slice shifted: --log-failed shows the failed step's neighbours' checkout/cache lines, while the
+        """The step slice shifted: --log-failed shows the failed step's neighbours' checkout/cache lines, while the
         step's `::error` annotation sits just past the slice in the whole job log (run 1988, takes (united-kingdom))."""
         self.scenario([{**job("takes (united-kingdom)", conclusion="failure"), "databaseId": 16512,
                         "steps": [step("Set up job", "success"), step("Check that the incremental state ends where a whole resolve does", "failure")]}],
@@ -413,12 +413,12 @@ class CachedGateTest(CiWhyTest):
         self.assertEqual(sorted(os.listdir(os.path.dirname(self.gs))), ["state.json", "state.json.lock"])
 
     def test_processor_publishes_the_gate(self):
-        # A clone of its own whose forgejo remote names movies: never the laptop's ~/projects/movies (it read the real
+        # A clone of its own whose remote names movies: never the laptop's ~/projects/movies (it read the real
         # clone, ran the red tick on it and took 38 s, and failed where there is none -- a CI container)
         import tempfile
         clone = tempfile.mkdtemp()
         subprocess.run(["git", "init", "-q", clone], check=True)
-        subprocess.run(["git", "-C", clone, "remote", "add", "forgejo", "ssh://forgejo-git/pawelkrupinski/movies.git"], check=True)
+        subprocess.run(["git", "-C", clone, "remote", "add", "origin", "git@github.com:pawelkrupinski/movies.git"], check=True)
         self.scenario([])
         A._last_gate_publish[0] = 0
         A.maybe_publish_gate(clone)

@@ -377,7 +377,7 @@ def convergence_relevant(repo, base, head, paths_file, matcher):
 
 def unkicked_obs(o_r, repo, snap, now_=None):
     """THE MISSING RUN IS A RED (2026-10-28: main had no convergence run for six hours while its kick diffed against a
-    measurement's run): forgejo/main's head, when it touches the suite's paths since the suite's newest MAIN run and is
+    measurement's run): origin/main's head, when it touches the suite's paths since the suite's newest MAIN run and is
     older than UNKICKED_AFTER, with no main run of the suite started since it, is an infra red until one runs."""
     spec = UNKICKED.get(o_r)
     if not spec or not repo or not snap:
@@ -507,7 +507,7 @@ FIX_OPEN = ("queued", "checking", "checked", "waiting", "joined", "pushing")
 
 
 def landed_fix_commits(repo):
-    """[(sha, commit time, {values}, subject)]: Fixes-Red commits on forgejo/main in the last 3 days -- but for one whose
+    """[(sha, commit time, {values}, subject)]: Fixes-Red commits on origin/main in the last 3 days -- but for one whose
     `Red-Unrelated:` trailer says it names the red only to pass the gate (`red_unrelated`): landed, it is no more a fix
     than queued. Identity model convergence #2432 (2026-10-28): four CI speed-ups carrying `Fixes-Red: 2392` beside one
     were each read as the red's fix on its way, its live fixer stopped, then refuted -- "recurring: 4 fixes refuted"."""
@@ -548,12 +548,12 @@ def red_unrelated(repo, e):
 # change (it waits while the gate is red); its author is told once (`FIX NOT COUNTED`, the inbox). Cached per sha.
 FIX_UNREAD_DOC = re.compile(r"(^|/)docs?/|(^|/)(README|CHANGELOG|LICENSE)[^/]*$|\.md$")
 FIX_UNREAD_TOP = ("android", "ios")
-FIX_WORKFLOW_FILE = re.compile(r"^\.(github|forgejo)/workflows/[^/]+\.ya?ml$")
+FIX_WORKFLOW_FILE = re.compile(r"^\.github/workflows/[^/]+\.ya?ml$")
 FIX_SPEC_FILE = re.compile(r"/src/(test|it|e2e)/\w+/(.*/)?([A-Z]\w*(Spec|Test|Tests|Suite|IT))\.(scala|java|kt)$")
 FIX_BROAD_TEST = re.compile(r"(?<![\w-])(test|testQuick|testUnit\w*|Test/test|it:test|[\w-]+/test|"
                             r"testOnly\s+[^\n\"']*\*)(?![\w-])")
 FIX_SBT = re.compile(r"\bsbt\b|sbt-warm|sbtw?\b")
-FIX_REPO_PATH = re.compile(r"(?<![\w/.-])(?:\./)?((?:scripts|\.github|\.forgejo|tools|bin)/[\w./-]+)")
+FIX_REPO_PATH = re.compile(r"(?<![\w/.-])(?:\./)?((?:scripts|\.github|tools|bin)/[\w./-]+)")
 
 
 def fix_tree_files(repo, sha):
@@ -1078,8 +1078,8 @@ def red_close(store, it, to, text):
 def red_callable_evidence(d, snap, repo, o_r):
     """For an outside red of a workflow that on main runs only when called (snap's callable_only): the line proving it
     fixed, else None. Proof is BOTH: its file changed on main since the failing run (the first such commit C), and a
-    caller's newest decided run on main that contains C passed -- Forgejo expands the called file into the caller's
-    run, so a green one says Forgejo parses and runs the new file. A red caller vetoes nothing: it fails for reasons of
+    caller's newest decided run on main that contains C passed -- the forge expands the called file into the caller's
+    run, so a green one says the forge parses and runs the new file. A red caller vetoes nothing: it fails for reasons of
     its own (Report run timings has 36 callers, some red at any hour; a "none failed" rule never let #38 clear).
     "Report run timings" #38 (2026-10-19, a `workflow_call.secrets` block Forgejo 15 rejected; 32d1805de fixed it that
     night) stayed red for 10 days: no run of its own could come to clear it. Never closed on the trigger alone:
@@ -1655,20 +1655,13 @@ def red_verify_dispatch(o_r, repo, workflow, sha, run_id=None):
 
 def run_dispatch_inputs(o_r, run_id):
     """The workflow_dispatch inputs run_id was started with ({} for any other event, or when its run cannot be read).
-    GitHub serves no run's inputs: there, the dispatch record's (agentctl's own, written by `dispatch run`)."""
-    if on_github():
-        rec = read_record(dispatches_dir("inputs", f"{run_id}.json"))
-        return {str(k): str(v) for k, v in rec.items()} if isinstance(rec, dict) else {}
-    try:
-        payload = json.loads((forge_actions_run(o_r, run_id) or {}).get("event_payload") or "{}")
-    except (Exception, SystemExit):
-        return {}
-    inputs = payload.get("inputs") if isinstance(payload, dict) else None
-    return {str(k): str(v) for k, v in inputs.items()} if isinstance(inputs, dict) else {}
+    GitHub serves no run's inputs: they are the dispatch record's (agentctl's own, written by `dispatch run`)."""
+    rec = read_record(dispatches_dir("inputs", f"{run_id}.json"))
+    return {str(k): str(v) for k, v in rec.items()} if isinstance(rec, dict) else {}
 
 
 def http_error_text(e):
-    """An exception's text, with the response body when it is an HTTP error (Forgejo names a refusal's cause there)."""
+    """An exception's text, with the response body when it is an HTTP error (the forge names a refusal's cause there)."""
     text = str(e)
     if isinstance(e, urllib.error.HTTPError):
         try:

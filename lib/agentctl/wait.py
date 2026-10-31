@@ -11,7 +11,7 @@ MEASURE_WORKFLOWS = {"Identity model convergence"}
 
 
 def relevant_lines(log_text, tail, strong_jobs=None):
-    """{job: [last `tail` relevant lines]} from `forgejo-gh run view --log-failed` output (job<TAB>step<TAB>line).
+    """{job: [last `tail` relevant lines]} from `gh run view --log-failed` output (job<TAB>step<TAB>line).
     Strong markers (*** FAILED, [error], ::error::, assertion, exit code) win; plain fail/error words only when a job
     has none, and never from INFO/DEBUG log lines. strong_jobs, a set: the jobs with a STRONG line are added to it."""
     strong, weak, follow = {}, {}, {}
@@ -49,7 +49,7 @@ def raw_tails(log_text, n=3):
 
 
 def read_log(o_r, *args):
-    """A log the forge's CLI serves (forgejo-gh or gh), read twice at most. A read it failed (the ci-runner actions API resetting or refusing
+    """A log gh serves, read twice at most. A read it failed (the ci-runner actions API resetting or refusing
     the connection under load) raises with its stderr: never an empty log, which ci-why read as a 0-length one, INFRA
     (convergence #2473, run 3656: the takes-drift rows' flip failures handed to a diagnose-only fixer)."""
     env = forge_env(o_r)
@@ -95,7 +95,7 @@ MAX_JOB_LOG_FETCHES = 5
 
 
 def job_log_lines(o_r, run_id, job, tail, unread=None, annotated=None):
-    """Relevant lines from a job's WHOLE log. Forgejo's per-step slices (what --log-failed prints) are shifted by a
+    """Relevant lines from a job's WHOLE log. The per-step slices (what --log-failed prints) are shifted by a
     few lines from the stored log, so a failed step's slice can hold only its neighbours' checkout/cache lines while
     its `::error` annotation and output sit just past it (run 1988, takes (united-kingdom)). `::error` annotations
     first, else the strong/weak markers. `unread`, a list: a failed read's error is appended to it. `annotated`, a
@@ -175,7 +175,7 @@ def failure_detail(o_r, run_id, failed, tail):
 
 
 def run_verdict(o_r, run_id, until="done", tail=0):
-    """(done, ok, text) for a Forgejo run. until=landable: a measure run is done once its takes rows ended."""
+    """(done, ok, text) for a CI run. until=landable: a measure run is done once its takes rows ended."""
     d = gh_json(o_r, "run", "view", str(run_id), "--json", "status,conclusion,jobs,workflowName,headBranch")
     jobs = d.get("jobs") or []
     head = f"run {o_r}#{run_id}"

@@ -8,7 +8,7 @@
 # hook, `--checks-only <merge-base with main>..HEAD`, on the check tier's runner. agentctl follows that run (owned: the run
 # is cancelled if the checker dies), reads the verdict -- the same (ok, output) shape as a local check, the failed jobs'
 # relevant lines as output -- and deletes the branch. The push to main then carries PREPUSH_REMOTE_RUN=<run id>: the hook
-# takes that run's pass for its checks only after Forgejo confirms it (the workflow, success, the pushed commit itself).
+# takes that run's pass for its checks only after GitHub confirms it (the workflow, success, the pushed commit itself).
 REMOTE_WORKFLOW = "precommit-check.yml"
 REMOTE_TIMEOUT = 2 * 3600
 REMOTE_START = 15 * 60  # no run for the pushed branch by then: no verdict (checked locally instead)
@@ -32,14 +32,14 @@ def remote_matches(e, base, head, mode):
 
 
 def remote_poll(o_r, rem):
-    """STATELESS: the remote check's state from Forgejo alone -- the run (found by its check/ branch and tip when its id
+    """STATELESS: the remote check's state from the forge alone -- the run (found by its check/ branch and tip when its id
     is not known yet), its status, and for a decided run the verdict. Returns the updated record (a copy); raises when
-    Forgejo cannot be read."""
+    the forge cannot be read."""
     rem = dict(rem)
     if rem.get("run") is None:
         runs = forge_actions_runs(o_r, workflow=REMOTE_WORKFLOW, limit=50)
-        hit = next((x for x in runs if x.get("commit_sha") == rem["tip"]
-                    and x.get("prettyref") in (rem["branch"], f"refs/heads/{rem['branch']}")), None)
+        hit = next((x for x in runs if x.get("head_sha") == rem["tip"]
+                    and x.get("head_branch") in (rem["branch"], f"refs/heads/{rem['branch']}")), None)
         if not hit:
             return rem
         rem["run"] = hit["id"]
@@ -48,7 +48,7 @@ def remote_poll(o_r, rem):
     rem["run_status"] = status
     if status in ("success", "failure", "cancelled", "skipped") and not rem.get("status"):
         rem["status"], rem["decided_at"] = status, time.time()
-        name = f"{REMOTE_WORKFLOW} run {rem['run']} (#{run.get('index_in_repo')})"
+        name = f"{REMOTE_WORKFLOW} run {rem['run']} (#{run.get('run_number')})"
         if status == "success":
             rem["out"] = f"{name}: success"
         elif status == "failure":
@@ -87,7 +87,7 @@ def remote_check(repo, e, base, head, mode, own=None):
     """(ok, output) of the change's checks on ci-runner; ok None when no verdict came (the caller checks locally).
     The run belongs to the ENTRY, not to this process: its record (`remote` in the entry) is saved the moment the branch is
     pushed and again when the run is found, so a checker that dies or is replaced mid-wait strands nothing -- the next one
-    ADOPTS the run (no new push, no new run) and the processor re-derives its state from Forgejo every cycle. Its time
+    ADOPTS the run (no new push, no new run) and the processor re-derives its state from GitHub every cycle. Its time
     bounds count from the push, not from this process's start."""
     o_r = slug(repo)
     try:
@@ -127,7 +127,7 @@ def remote_check(repo, e, base, head, mode, own=None):
                 save_remote(d, e, rem)
         except Terminated:
             raise
-        except (Exception, SystemExit) as ex:  # Forgejo down for a while: keep reading until the bound
+        except (Exception, SystemExit) as ex:  # GitHub down for a while: keep reading until the bound
             err(f"remote check of {e['id']}: {str(ex)[:160]}")
         try:  # the CI run is the check's work: its status (and, while it runs, the minute) is the progress mark
             lock_beat(f"remote:{rem.get('run')}:{rem.get('status') or rem.get('run_status') or 'pending'}:"
@@ -268,7 +268,7 @@ class TokenDrop:
             key = token_env_name(self.o_r)
             if TOKEN_SHAPE.fullmatch(tok) and os.environ.get(key) != tok:  # said once per real change, never per offer
                 os.environ[key] = tok
-                err("the Forgejo token was handed over: the gate is read again")
+                err("the store token was handed over: the gate is read again")
                 token_back(token_ns(self.o_r))
 
     def close(self):
@@ -282,7 +282,7 @@ class TokenDrop:
 
 
 def offer_token(repo):
-    """Hand this process's Forgejo token to the repo's waiting processor when it listens (see THE TOKEN HAND-OFF) AND
+    """Hand this process's store token to the repo's waiting processor when it listens (see THE TOKEN HAND-OFF) AND
     lacks it: asked first (one socket round trip), so an interactive command hands over only on a real transition
     (2026-10-30: every `land` / `waiting status` handed it over, 175 "handed over" lines in 400). Never fatal; True when
     handed over."""

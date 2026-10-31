@@ -2,9 +2,9 @@
 # Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
 
 # ---------------------------------------------------------------- phase 2: the store over HTTP (design §6.3, §13 phase 2)
-# `agentctl store serve` puts the store behind a small HTTP API on ci-runner (:3014, reached through the Forgejo tunnel;
-# nix/hosts/ci-runner/agentctl.nix runs it). Every request carries `Authorization: token <a Forgejo token>`, checked
-# against Forgejo's /api/v1/user (the answer cached STORE_AUTH_CACHE s): an --allow-user login gets the whole API, a
+# `agentctl store serve` puts the store behind a small HTTP API on ci-runner (:3014, reached through the laptop's
+# tunnel; nix/hosts/ci-runner/agentctl.nix runs it). Every request carries `Authorization: token <a store token>`,
+# checked by the store itself (THE STORE'S OWN TOKENS below): an --allow-user login gets the whole API, a
 # --metrics-user login GET /metrics alone, anyone else 403, no token 401. The reconciler (`agentctl tick` there) opens
 # the same database in-process: two units, one WAL file, so a reconciler crash leaves leases, submissions and the event
 # feed up. RemoteStore is Store's twin over the API: on the laptop `Store()` IS one, so the laptop's sync, its
@@ -15,19 +15,17 @@
 # and `store serve` on ci-runner, AGENTCTL_HOST=ci-runner or AGENTCTL_ROLE=server: the database in-process, the tick,
 # never the laptop's duties) and "sync" (everywhere else: submit, events -> inbox, the notifier, the state mirror, the
 # claims' activity, the fixer dispatcher; it never ticks and has no database of its own). DISASTER RECOVERY needs no
-# laptop copy: a lost store.db is rebuilt from the land/* refs and Forgejo's runs (design §16), the backup timer keeps
+# laptop copy: a lost store.db is rebuilt from the land/* refs and GitHub's runs (design §16), the backup timer keeps
 # 24 hourly copies on ci-runner.
 STORE_RPC = ("acquire", "renew", "note", "release", "revoke", "set_meta", "offer", "offers", "offer_of", "offer_reason",
              "close_offer", "take", "get", "item", "items", "put_item", "transition", "update_item", "mark_notified",
              "meta_get", "meta_set", "events", "archive_free_leases", "list")
-STORE_AUTH_CACHE = 300   # s a token's login is trusted before Forgejo is asked again (§15)
-STORE_AUTH_CACHE_MAX = 1000  # tokens remembered at once
 STORE_BODY_MAX = 4 << 20     # bytes: a larger request body is refused unread (413)
 STORE_PORT = 3014
 SYNC_MIRROR_EVERY = 10   # s between the laptop's copies of /v1/state into state.json
 
 
-DEFAULT_STORE_URL = f"http://localhost:{STORE_PORT}"  # ci-runner's store through the Forgejo tunnel
+DEFAULT_STORE_URL = f"http://localhost:{STORE_PORT}"  # ci-runner's store through the laptop's tunnel
 
 
 def store_url():
@@ -89,7 +87,7 @@ STORE_RPC_SAFE = ("get", "item", "items", "offers", "offer_of", "meta_get", "eve
 
 class RemoteStore:
     """Store's methods over the phase-2 API (`POST /v1/store/<method>`), plus the §6.3 calls the sync needs. The token
-    is the caller's own Forgejo token ($AGENTCTL_STORE_TOKEN, else the movies token agentctl reads)."""
+    is the caller's own store token ($AGENTCTL_STORE_TOKEN, else the one agentctl reads for movies)."""
 
     def __init__(self, url, tok=None, clock=None, timeout=60, retries=None):
         self.url, self._tok, self.clock, self.timeout = url.rstrip("/"), tok, clock or time.time, timeout
@@ -188,13 +186,13 @@ def store_grace(st, now_=None):
 
 def server_repo():
     """The reconciler's own clone on ci-runner (movies_repo_path; `tick` clones it from $AGENTCTL_MOVIES_REMOTE as
-    remote `forgejo`)."""
+    remote()'s name)."""
     return movies_repo_path()
 
 
 # THE SERVER CLONE IS ATOMIC (2026-10-29: the reconciler crash-looped at 11:33 mid-clone; the half clone's .git -- an
 # incomplete object store, a stray shallow_* temp file -- passed for a clone, and every landing check's fetch of main
-# failed for hours). A clone goes into a temp directory beside the target, is verified (forgejo/main resolves, its
+# failed for hours). A clone goes into a temp directory beside the target, is verified (origin/main resolves, its
 # commits and its tree are all there) and only then renamed into place: a clone cut off anywhere leaves a temp
 # directory (removed at the next start), never a target that looks complete.
 CLONE_TMP = ".clone-tmp-"
@@ -223,7 +221,7 @@ def clean_clone_tmps(repo):
 
 
 def clone_verify(path):
-    """(ok, detail): the clone at path is usable: forgejo/main resolves, every commit behind it and its tip's tree are
+    """(ok, detail): the clone at path is usable: origin/main resolves, every commit behind it and its tip's tree are
     readable (the cheap connectivity check: commits, not every blob of history)."""
     for args in (("rev-parse", "--verify", "-q", f"{remote()}/main^{{commit}}"),
                  ("rev-list", "--quiet", f"{remote()}/main"),
@@ -324,9 +322,8 @@ def ensure_server_clone(repo=None):
 
 
 def server_clone_remote(repo):
-    """THE FORGE SWITCH ON AN EXISTING CLONE (W5b): the clone was made with the old forge's remote (`forgejo`); the
-    forge's remote() must exist and point at $AGENTCTL_MOVIES_REMOTE, so it is added (and fetched once) or re-pointed
-    here. The old remote stays: a rollback flips back without a re-clone."""
+    """The clone's remote() must exist and point at $AGENTCTL_MOVIES_REMOTE: added (and fetched once) or re-pointed
+    here (a clone made under another remote name keeps working without a re-clone)."""
     url = os.environ.get("AGENTCTL_MOVIES_REMOTE")
     if not url:
         return
@@ -441,7 +438,7 @@ def fetch_main(repo):
 
 def probe_clone_health(a):
     """The clone verifies and a fetch of main works. A fetch failing without a corruption signature (the network,
-    Forgejo) cannot tell (None)."""
+    GitHub) cannot tell (None)."""
     repo = a.get("repo") or server_repo()
     with clone_shared(repo):
         if not os.path.isdir(os.path.join(repo, ".git")):
@@ -718,8 +715,8 @@ def metrics_text(st, now_=None):
     return "\n".join(out) + "\n"
 
 
-# THE STORE'S OWN TOKENS (github-return plan §4.1 W5b): `store serve --auth store-tokens` checks each caller's token
-# itself -- no forge in the way, so the store outlives Forgejo. A token is `ast.<id>.<user>.<mac>`, mac = HMAC-SHA256 of
+# THE STORE'S OWN TOKENS (github-return plan §4.1 W5b): `store serve` checks each caller's token itself -- no forge in
+# the way. A token is `ast.<id>.<user>.<mac>`, mac = HMAC-SHA256 of
 # "<id>.<user>" under the host's secret ($AGENTCTL_STORE_SECRET, default /var/lib/agentctl/store-secret: 32 random
 # bytes, 0600, made by the first `store token issue`), and counts while <id> is in the registry beside the secret
 # (store-tokens.json, 0600) unrevoked. Issued and revoked on the host as the store's user:
@@ -728,7 +725,7 @@ def metrics_text(st, now_=None):
 #   agentctl store token revoke <id>   /   agentctl store token list
 # The check is a file read and an HMAC, so it is never cached: a revoke counts at the next request.
 STORE_SECRET = "/var/lib/agentctl/store-secret"
-STORE_AUTHS = ("forgejo", "store-tokens")
+STORE_AUTHS = ("store-tokens",)  # `store serve --auth`: the one way the store checks a token
 
 
 def store_secret_path():
@@ -823,40 +820,15 @@ def store_token_user(tok):
 class StoreAPI:
     """The HTTP API's logic, apart from the socket (tests call handle() directly too)."""
 
-    def __init__(self, store, forgejo_url, allow=(), metrics=(), user_of=None, repo=None, auth="forgejo"):
-        self.store, self.forgejo = store, (forgejo_url or "").rstrip("/")
+    def __init__(self, store, allow=(), metrics=(), user_of=None, repo=None):
+        self.store = store
         self.allow, self.metrics = set(allow), set(metrics)
-        self.auth = auth
-        self.user_of = user_of or (store_token_user if auth == "store-tokens" else self._forgejo_user)
+        self.user_of = user_of or store_token_user
         self.repo = repo
-        self.cache, self.lock = {}, threading.Lock()
-
-    def _forgejo_user(self, tok):
-        req = urllib.request.Request(f"{self.forgejo}/api/v1/user", headers={"Authorization": f"token {tok}"})
-        try:
-            with urllib.request.urlopen(req, timeout=15) as r:
-                return json.loads(r.read()).get("login")
-        except urllib.error.HTTPError as e:
-            if e.code in (401, 403):
-                return None
-            raise
 
     def login(self, tok):
-        import hashlib
-        if self.auth == "store-tokens":  # a local check: never cached, so a revoke counts at once
-            return self.user_of(tok)
-        k, now_ = hashlib.sha256(tok.encode()).hexdigest(), time.time()
-        with self.lock:
-            hit = self.cache.get(k)
-            if hit and now_ - hit[1] < STORE_AUTH_CACHE:
-                return hit[0]
-        who = self.user_of(tok)
-        with self.lock:
-            if len(self.cache) >= STORE_AUTH_CACHE_MAX:  # bounded: unknown tokens never grow it without end
-                self.cache = {x: v for x, v in self.cache.items() if now_ - v[1] < STORE_AUTH_CACHE}
-            if len(self.cache) < STORE_AUTH_CACHE_MAX:
-                self.cache[k] = (who, now_)
-        return who
+        """The token's login (None: unknown or revoked). A local check: never cached, so a revoke counts at once."""
+        return self.user_of(tok)
 
     @staticmethod
     def _json(code, obj):
@@ -868,8 +840,8 @@ class StoreAPI:
         auth = headers.get("Authorization") or headers.get("authorization") or ""
         m = re.match(r"(?i)(?:token|bearer)\s+(\S+)$", auth.strip())
         if not m:
-            what = "an agentctl store token" if self.auth == "store-tokens" else "a Forgejo token"
-            return self._json(401, {"error": "Unauthorized", "message": f"Authorization: token <{what}> required"})
+            return self._json(401, {"error": "Unauthorized",
+                                    "message": "Authorization: token <an agentctl store token> required"})
         try:
             who = self.login(m.group(1))
         except Exception as e:
@@ -966,7 +938,7 @@ def store_server(api, host, port):
 
 
 def cmd_store(a):
-    """`agentctl store serve --listen ADDR:PORT --forgejo-url URL --allow-user U... --metrics-user U...` (ci-runner);
+    """`agentctl store serve --listen ADDR:PORT --allow-user U... --metrics-user U...` (ci-runner);
     `agentctl store use URL` (the laptop: which store its sync and agents use)."""
     if a.scmd == "token":
         if a.tcmd == "issue":
@@ -993,11 +965,10 @@ def cmd_store(a):
     gap = store_grace(st)
     if gap:
         err(f"store: down {int(gap)} s; every live lease extended by that")
-    if a.auth == "store-tokens" and not store_secret():
-        raise SystemExit(f"agentctl store serve --auth store-tokens: no secret at {store_secret_path()} yet "
+    if not store_secret():
+        raise SystemExit(f"agentctl store serve: no secret at {store_secret_path()} yet "
                          "(`agentctl store token issue --user <login>` makes it)")
-    api = StoreAPI(st, a.forgejo_url or os.environ.get("AGENTCTL_FORGEJO_URL") or "", a.allow_user or [],
-                   a.metrics_user or [], auth=a.auth)
+    api = StoreAPI(st, a.allow_user or [], a.metrics_user or [])
     srv = store_server(api, host or "127.0.0.1", int(port or STORE_PORT))
 
     def alive():

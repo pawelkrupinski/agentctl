@@ -95,7 +95,7 @@ class CloseAfterWatchTest(Base):
         self.r.write("f4.txt", "more work\n", at=wt)
         self.r.commit("unpushed follow-up", at=wt)
         rc, out = self.watch(wt, sha)
-        self.assertIn("not on forgejo/main", out)
+        self.assertIn("not on origin/main", out)
         self.assertTrue(os.path.isdir(wt))
 
     def test_never_the_root_checkout_nor_a_tree_another_process_is_in(self):
@@ -120,7 +120,7 @@ class SweepTest(Base):
         self.saved = A.delete_remote_branch, A.process_cwds
         self.deleted = []
         A.delete_remote_branch = lambda repo, o_r, name, sha: (self.deleted.append(name),
-                                                               sh(repo, "git", "push", "-q", "forgejo", "--delete", name))[0]
+                                                               sh(repo, "git", "push", "-q", "origin", "--delete", name))[0]
         A.process_cwds = lambda: {}
 
     def tearDown(self):
@@ -144,10 +144,10 @@ class SweepTest(Base):
         # remote branches: one merged into main, one not
         merged = self.r.worktree("wt-merged", branch="merged")
         self.old_commit(merged, "m.txt", "m\n", "merged work", 4)
-        sh(merged, "git", "push", "-q", "forgejo", "merged:merged")
+        sh(merged, "git", "push", "-q", "origin", "merged:merged")
         self.r.push(at=merged)  # and onto main
-        sh(stale, "git", "push", "-q", "forgejo", "stale:stale")
-        sh(self.r.path, "git", "push", "-q", "forgejo", "main:waiting")  # the waiting branch is never swept
+        sh(stale, "git", "push", "-q", "origin", "stale:stale")
+        sh(self.r.path, "git", "push", "-q", "origin", "main:waiting")  # the waiting branch is never swept
         rc, out = self.run_tool("sweep", "--repo", self.r.path)
         self.assertEqual(rc, 0, out)
         self.assertIn("wt-stale", out)
@@ -157,7 +157,7 @@ class SweepTest(Base):
         self.assertEqual(self.deleted, ["merged"])
         self.assertIn("deleted remote branch merged", out)
         self.assertIn("stale", out.split("remote")[-1])
-        remote = sh(self.r.path, "git", "ls-remote", "--heads", "forgejo")
+        remote = sh(self.r.path, "git", "ls-remote", "--heads", "origin")
         self.assertNotIn("refs/heads/merged", remote)
         self.assertIn("refs/heads/stale", remote)
         self.assertIn("refs/heads/waiting", remote)
@@ -167,7 +167,7 @@ class SweepTest(Base):
     def test_dry_run_deletes_nothing(self):
         merged = self.r.worktree("wt-merged", branch="merged")
         self.old_commit(merged, "m.txt", "m\n", "merged work", 4)
-        sh(merged, "git", "push", "-q", "forgejo", "merged:merged")
+        sh(merged, "git", "push", "-q", "origin", "merged:merged")
         self.r.push(at=merged)
         rc, out = self.run_tool("sweep", "--repo", self.r.path, "--dry-run")
         self.assertEqual(self.deleted, [])

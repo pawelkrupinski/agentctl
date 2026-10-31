@@ -1,12 +1,10 @@
 # Shared brief for movies-repo agents (2026-10-27)
 
 Repo: the movies monorepo (Scala 3, sbt; modules common, identity, worker, web, e2e, testkit; Mongo, one db per country
-plus the fleet db). `<remote>` below is the forge's remote: `forgejo` (ssh alias `forgejo-git`, never the Secure Enclave
-key, never retry loops on git auth) until the cut-over to GitHub, `origin` (github.com) after it -- `~/bin/agentctl
-config show --all` names the forge. Main checkout `~/projects/movies` is the USER's dev and local-mirror checkout: do NOT work in it. Make your own worktree:
+plus the fleet db). `<remote>` below is `origin` (github.com; never retry loops on git auth). Main checkout `~/projects/movies` is the USER's dev and local-mirror checkout: do NOT work in it. Make your own worktree:
 `git -C ~/projects/movies worktree add -b <branch> ~/projects/movies-wt-<name> <remote>/main` (after `git fetch <remote>`).
 
-Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wait, ci-why, db-q, prepush-check. Also read the repo's CLAUDE.md.
+Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wait, ci-why, prepush-check. Also read the repo's CLAUDE.md.
 
 ## Landing" section, 2026-10-26)
 
@@ -65,9 +63,8 @@ Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wai
 - One wait loop per CI run. `agentctl wait` runs in the background; don't poll `run view` repeatedly.
 - Clean up your own CI runs (measurements, landing-check groups, dispatches: any run you started). The moment one of
   your runs is no longer needed (superseded by a newer commit,
-  question answered, branch abandoned), cancel it: `secrets unlock bitcashier`, then
-  `~/bitcashier/infra/bin/forgejo-gh run cancel <run id>` (on GitHub: `gh run cancel <run id> -R pawelkrupinski/movies`),
-  using the run id, not the index. Delete the measure branch
+  question answered, branch abandoned), cancel it: `gh run cancel <run id> -R pawelkrupinski/movies`,
+  using the run id, not the run number. Delete the measure branch
   too. You decide what is superseded, and a deliberate before/after or bisect pair stays. Never cancel another
   agent's runs. Before reporting done, list your still-running runs and cancel the ones you no longer need.
 - If you'd wait more than 30 min, write a state file `~/projects/movies-wt-<name>/STATE.md` and end with a report, rather than idling.

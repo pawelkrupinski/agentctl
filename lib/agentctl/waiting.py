@@ -6,7 +6,7 @@
 # use the same name) and merge it when main is green". While the gate is red, `land` puts a production change onto the
 # local branch `waiting` (worktree <main clone>-wt-waiting) instead of being refused: rebased onto it, the local checks
 # run on the combined tip, `WAITING <sha> (n changes queued on waiting)`. One processor (`waiting run`, detached, locked)
-# watches the gate; once main is green it rebuilds `waiting` on forgejo/main, runs the hook's dry run, pushes the whole
+# watches the gate; once main is green it rebuilds `waiting` on origin/main, runs the hook's dry run, pushes the whole
 # branch in ONE push, deletes it, and every waiting `land` goes on to its LANDED and WATCH. Tools-only commits and
 # Fixes-Red fixes never wait (the hook lets them land while red). Replaces the merge queue.
 WAITING_BRANCH = "waiting"
@@ -45,7 +45,7 @@ def gate_reds(repo):
     """The ids (run numbers and run ids) of the gating workflows' red runs on main; empty when green or not gated.
     When the gate cannot be read: {GATE_UNREAD}, which every caller takes as RED -- a production change waits, the
     processor takes no batch (the owner, 2026-10-27: an unread gate is never green; at 08:05Z a launchd processor with
-    no Forgejo token read it as green, and the hook, with no token either, skipped its own gate: a push onto red #2047)."""
+    no token read it as green, and the hook, with no token either, skipped its own gate: a push onto red #2047)."""
     try:
         o_r = slug(repo)
         if o_r not in GATING:

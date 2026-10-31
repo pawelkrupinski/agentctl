@@ -2,7 +2,7 @@
 """agentctl: cheaper, safer Claude subagent orchestration for the bitcashier repos and movies.
 
   agentctl wait run <id>... [--repo R] [--until done|landable] [--tail N] [--interval S] [--timeout S]
-        Blocks on Forgejo's actions API (backoff 60 s -> x1.5 -> cap 300 s) and prints ONLY the verdict per run:
+        Blocks on GitHub's actions API (backoff 60 s -> x1.5 -> cap 300 s) and prints ONLY the verdict per run:
         `run <o/r>#<id>: <conclusion>[; failed: job, ...]` plus each failed job's last N relevant log lines
         (FAILED / error / assert). ONE waiter per run (lock in the scratchpad); a second call attaches to the live
         waiter's verdict file instead of polling. --until landable: an Identity model convergence measure/ run is
@@ -49,7 +49,7 @@
 Full reference, examples and the standard agent workflow: ~/bin/AGENTCTL.md
 
 Scratchpad: $AGENTCTL_SCRATCH, else /private/tmp/claude-<uid>/*/<$CLAUDE_CODE_SESSION_ID>/scratchpad, else
-~/.cache/agentctl. Forgejo tokens come from $GH_TOKEN / $FORGEJO_API_TOKEN, else the waiting processor's private socket, else `secrets get <ns> FORGEJO_API_TOKEN` (absolute path); never printed.
+~/.cache/agentctl. gh reads GitHub with its own auth ($GH_TOKEN, else `gh auth login`'s). The store token comes from $AGENTCTL_STORE_TOKEN, else the waiting processor's private socket, else `secrets get bitcashier AGENTCTL_STORE_TOKEN` (absolute path); never printed.
 """
 
 # ---- THE PACKAGE: all of agentctl's code (lib/agentctl/, see its __init__.py) runs in THIS namespace, in order,

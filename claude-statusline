@@ -16,7 +16,7 @@ cat >/dev/null # the session JSON Claude Code sends on stdin; not needed
 refresh() {
   local gate inbox esc line
   # `agentctl status --line`: the processor's snapshot (state.json) alone -- the gate line, waiting / checking, and
-  # `RECONCILER STALLED since HH:MM` when its tick is old. No git, no Forgejo (design §9).
+  # `RECONCILER STALLED since HH:MM` when its tick is old. No git, no GitHub (design §9).
   gate=$(~/bin/agentctl status --line 2>/dev/null | tail -1)
   inbox=$(~/bin/agentctl inbox --unread 2>/dev/null | grep -c UNREAD)
   # an unacked escalation: notified (macOS) and following the gate, in bold

@@ -2,7 +2,7 @@
 # Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
 
 # ---------------------------------------------------------------- the land queue: agents never wait on a land
-# The owner (2026-10-27): "agents never wait on a land". `land` rebases the change onto forgejo/main, runs the squash
+# The owner (2026-10-27): "agents never wait on a land". `land` rebases the change onto origin/main, runs the squash
 # guard, enqueues it and returns at once: `QUEUED <id> (<sha>)`. The always-on `waiting` processor (launchd
 # net.bitcashier.agentctl-waiting) runs each queued change's checks in a CHECK TREE of its own (a pool of detached
 # worktrees <clone>-wt-check-<n>, kept warm between checks, seeded from the shared build cache when cold), admitted by
@@ -180,7 +180,7 @@ def queue_mode(repo, a):
     return os.environ.get("AGENTCTL_QUEUE", "1") != "0" and batching(repo)
 
 
-# SUBMISSION BY REF (design §13 step 14, §14.2): a queued change is also pushed to Forgejo as refs/heads/land/<entry>
+# SUBMISSION BY REF (design §13 step 14, §14.2): a queued change is also pushed to the remote as refs/heads/land/<entry>
 # (its own ref: the movies hook checks nothing on it, no workflow runs on it), so the change no longer lives only in a
 # worktree -- an author that ends, a worktree removed, leave it reachable. The tick deletes every land/* ref whose change
 # is decided (or unknown). Checks rebuild from the commits, never from the worktree.
@@ -189,7 +189,7 @@ _last_ref_sweep = [0.0]
 
 
 def land_refs_supported(repo):
-    """The repository's hook at forgejo/main checks nothing on a land/ ref (else the push would run its full checks)."""
+    """The repository's hook at origin/main checks nothing on a land/ ref (else the push would run its full checks)."""
     hook = git(repo, "show", f"{remote()}/main:scripts/hooks/pre-push", check=False).stdout
     return "refs/heads/land/" in hook
 
@@ -262,8 +262,8 @@ def submit_to_server(repo, d, fields, note=""):
     r = submit_remote(Store(), e)
     offer_token(repo)  # this agent's token to the laptop processor, which holds none after a restart
     if r.get("outbox"):
-        why = ("no Forgejo token in this process (none in its environment, the processor's socket held none; land "
-               "never runs `secrets`): the sync submits it with its own token" if "FORGEJO_API_TOKEN" in r["outbox"]
+        why = ("no store token in this process (none in its environment, the processor's socket held none; land "
+               "never runs `secrets`): the sync submits it with its own token" if "AGENTCTL_STORE_TOKEN" in r["outbox"]
                else f"the store is unreachable ({r['outbox']}); the sync submits it when it answers")
         print(f"QUEUED-LOCAL {e['id']} ({head[:10]}){note}: {why}. LANDED / WAITING / NOT LANDED goes to "
               "`agentctl inbox`", flush=True)
@@ -597,7 +597,7 @@ def _check_entry(repo, d, e, i, own=None):
                       repo=repo)
         return 0
     base = git(repo, "rev-parse", f"{remote()}/main").strip()
-    if not git_ok(repo, "cat-file", "-e", f"{e['head']}^{{commit}}"):  # phase 2: the change is on Forgejo, as land/<id>
+    if not git_ok(repo, "cat-file", "-e", f"{e['head']}^{{commit}}"):  # phase 2: the change is on the remote, as land/<id>
         lr = git(repo, "fetch", "--quiet", remote(), f"refs/heads/land/{e['id']}", check=False)
         if not git_ok(repo, "cat-file", "-e", f"{e['head']}^{{commit}}"):
             lerr = (lr.stderr or "").strip()
@@ -724,7 +724,7 @@ def _push_change(repo, d, e):
         set_change(d, e, "pushing", event={"text": f"{e['id']}: pushing {head[:10]}"})
         pushed_at = time.time()
         env = tool_env()
-        if e.get("remote_run"):  # the hook takes ci-runner's pass once Forgejo confirms it (remote checks)
+        if e.get("remote_run"):  # the hook takes ci-runner's pass once GitHub confirms it (remote checks)
             env["PREPUSH_REMOTE_RUN"] = str(e["remote_run"])
         if skip:  # checked on the old base, no overlap with what landed since: the hook judges the red gate only
             env["PREPUSH_SKIP"] = " ".join(skip)
@@ -869,8 +869,8 @@ def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own=None
         if ok is not None:
             return ok, out, f"on ci-runner ({why})"
         wlog(d, f"{e['id']}: the remote check gave no verdict ({out.splitlines()[-1] if out else '?'}): checking here")
-    # the range through the remote's ref (forgejo/main is `base` now, fetched just before): the hook finds the remote, and
-    # with it Forgejo's red gate, from it -- given bare shas it fell back to gh (GitHub, suspended): the gate unread
+    # the range through the remote's ref (origin/main is `base` now, fetched just before): the hook finds the remote, and
+    # with it the forge's red gate, from it -- given bare shas it fell back to the wrong forge: the gate unread
     rng = f"{remote()}/main..{head}" if git(tree, "rev-parse", f"{remote()}/main").strip() == base else f"{base}..{head}"
     e["waiting_on"] = "the governor (a check slot)"
     save_entry(d, e)

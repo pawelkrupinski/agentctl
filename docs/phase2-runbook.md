@@ -1,5 +1,9 @@
 # Landing reconciler, phase 2: owner runbook
 
+> **Historical (2026-10-31):** written while CI ran on Forgejo. Forgejo was switched off on 2026-10-31 and agentctl
+> now reads GitHub only (`gh`, remote `origin`, the store's own tokens); the Forgejo commands, ports, tokens and
+> settings named below no longer exist. Current reference: `~/bin/AGENTCTL.md`.
+
 Status: prepared on 2026-10-28 and updated the same day with the owner's answers. Updated 2026-10-29: the
 agentctl side is implemented and tested (~/bin master, "agentctl phase 2" commits; `tests/test_phase2.py`), and
 the agentctl alerts go to a null receiver (owner: "No Slack integration"). Nothing is deployed, created or
@@ -99,14 +103,14 @@ warning `user ci-metrics missing: created on ci-runner by its own unit`, which i
 on 2026-10-28 for keys and tokens, and none were found.
 
 ```
-! git -C ~/bin remote add forgejo ssh://forgejo-git/pawelkrupinski/agentctl.git && git -C ~/bin push forgejo master:main && git -C ~/bin branch -q --set-upstream-to=forgejo/main master && git -C ~/bin log --oneline -1 forgejo/main
+! git -C ~/bin remote add forgejo ssh://forgejo-git/pawelkrupinski/agentctl.git && git -C ~/bin push forgejo master:main && git -C ~/bin branch -q --set-upstream-to=origin/main master && git -C ~/bin log --oneline -1 origin/main
 ```
 
 **4. Pin the phase-1 revision and merge the enable branch.** Do this once phase 1 is done and its code
 implements the contract below.
 
 ```
-! cd ~/bitcashier/infra && git -C ~/bin push forgejo master:main && rev=$(git -C ~/bin rev-parse forgejo/main) && git pull --rebase -q forgejo main && git rebase -q main agentctl-phase2-enable && git checkout -q main && git merge --ff-only -q agentctl-phase2-enable && sed -i '' "s/rev = \"[0-9a-f]*\";/rev = \"$rev\";/" nix/hosts/ci-runner/agentctl-pin.nix && git diff --stat && git commit -qam "agentctl phase 2: pin ~/bin $rev" && git push forgejo main
+! cd ~/bitcashier/infra && git -C ~/bin push forgejo master:main && rev=$(git -C ~/bin rev-parse origin/main) && git pull --rebase -q forgejo main && git rebase -q main agentctl-phase2-enable && git checkout -q main && git merge --ff-only -q agentctl-phase2-enable && sed -i '' "s/rev = \"[0-9a-f]*\";/rev = \"$rev\";/" nix/hosts/ci-runner/agentctl-pin.nix && git diff --stat && git commit -qam "agentctl phase 2: pin ~/bin $rev" && git push forgejo main
 ```
 
 **5. Deploy ci-runner.** This creates `ci-lander` and `ci-metrics`. Preview first, then apply. The
@@ -271,7 +275,7 @@ The header of `agentctl.rules` defines each one.
   CI tier (`precommit-check.yml`, decision 1). A change's commits are fetched from `land/<id>`.
 - The clone heals itself (2026-10-29: a clone cut off by a crash loop passed for a clone and blocked all
   landing for hours). It is cloned into `.<name>.clone-tmp-<pid>-<ms>` beside the target, verified
-  (`forgejo/main` resolves, its commits and tip tree are readable) and renamed into place. A fetch failing
+  (`origin/main` resolves, its commits and tip tree are readable) and renamed into place. A fetch failing
   with a corruption signature marks it suspect (`.<name>.suspect.json`); the "clone health" step probes it
   (`clone_health`) and, broken, re-clones and swaps under `.<name>.clone.lock` (every clone user holds it
   shared). The broken copy stays as `<repo>.broken-<ts>` (one only); a CLONE condition carries git's

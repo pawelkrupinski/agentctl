@@ -45,7 +45,7 @@ def fixer_brief(o_r=None):
 # push or deploy: the prompt says so (red_owner_rules, after every task text that says "land it"), the session denies
 # the commands (OWNER_ONLY_DENIED), `agentctl land` refuses inside such a fixer, and `agentctl red owner-push` files the
 # prepared branch with the owner as a one-liner.
-OWNER_ONLY_DENIED = ("Bash(*agentctl land*)", "Bash(*bin/deploy*)", "Bash(*forgejo-bootstrap*)", "Bash(*nixos-rebuild*)",
+OWNER_ONLY_DENIED = ("Bash(*agentctl land*)", "Bash(*bin/deploy*)", "Bash(*nixos-rebuild*)",
                      "Bash(*switch-to-configuration*)", "Bash(*git*push*)")
 
 
@@ -149,7 +149,7 @@ FIXER_IDENTITY_ENV = ("AGENTCTL_AGENT_NAME", "AGENTCTL_RED_FIXER", "AGENTCTL_FIX
 
 
 def fixer_env(o_r, num, wrapper_pid=None):
-    """A clean environment for a dispatched fixer: no parent Claude session, no secret but the Forgejo token agentctl
+    """A clean environment for a dispatched fixer: no parent Claude session, no secret but the credential agentctl
     itself reads, never PREPUSH_SKIP."""
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(("CLAUDE_CODE_", "CLAUDECODE")) and k not in ("CLAUDE_PID", "PREPUSH_SKIP", "AI_AGENT")
@@ -202,7 +202,7 @@ def bin_repo():
 
 
 def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=None, took=None, extra=()):
-    """Start a headless fixer for red u under its taken lease: a fresh worktree <clone>-wt-red-<run> off forgejo/main
+    """Start a headless fixer for red u under its taken lease: a fresh worktree <clone>-wt-red-<run> off origin/main
     (resume: the same worktree and session), then a detached `agentctl red fixer` that runs `claude -p` there, renews
     the lease by its progress, and releases it with its verdict. (ok, message)."""
     num = u["run"].get("number")
@@ -258,7 +258,7 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
 
 
 def unlanded_commits(wt):
-    """[(sha, author time)] of the worktree's commits not on forgejo/main (cherry_landed: a rebased copy on main counts as
+    """[(sha, author time)] of the worktree's commits not on origin/main (cherry_landed: a rebased copy on main counts as
     landed), oldest first; [] when it is not a worktree."""
     if not wt or not os.path.isdir(wt):
         return []
@@ -279,7 +279,7 @@ def fixers_of(key, run, fam=None):
 def previous_fixer_tree(u):
     """FIXER CONTINUITY (the owner, 2026-10-29: fixer -8 of #2473's red started fresh in movies-wt-red-2517 while -7's
     five commits sat unlanded in movies-wt-red-2473-5): a new fixer of the same red -- its key, any run of it -- goes on
-    in the previous fixer's worktree when that holds commits not on forgejo/main (the most recently committed one),
+    in the previous fixer's worktree when that holds commits not on origin/main (the most recently committed one),
     and is told to cherry-pick any other's. {worktree, note} or None. Read on the laptop at dispatch: the worktrees are
     here, never on ci-runner."""
     run = (u.get("workflow"), str((u.get("run") or {}).get("number")))
@@ -310,7 +310,7 @@ def previous_fixer_tree(u):
 
 # LAND AS YOU GO (the owner, 2026-10-29: fixer -7 of #2473 sat on five unlanded commits for hours, and the import that
 # took its lease away left them stranded). The laptop watches every working fixer's worktree: commits not on
-# forgejo/main for FIXER_UNLANDED_NUDGE (by author time: a rebase keeps it) get a RED-NUDGE.md there, which its prompt
+# origin/main for FIXER_UNLANDED_NUDGE (by author time: a rebase keeps it) get a RED-NUDGE.md there, which its prompt
 # tells it to act on; still unlanded at FIXER_UNLANDED_ESCALATE, one RED ESCALATE inbox entry. Both clear themselves
 # once the commits are on main (RECOVERED after an escalation).
 FIXER_UNLANDED_NUDGE = 45 * 60
@@ -1167,10 +1167,10 @@ def red_others_skipped(o_r, why, now_=None):
 
 
 def red_no_read_access(repos, store=None):
-    """ONE condition while ci-runner cannot read the other watched repos: cleared by the red_read probe (a reader token
-    on the host that reads their runs)."""
+    """ONE condition while ci-runner cannot read the other watched repos: cleared by the red_read probe (the reader App
+    configured on the host, and their runs read)."""
     return open_condition("UNKNOWN", f"NO READ ACCESS: {', '.join(repos)}: the reconciler cannot read their runs -- "
-                                     "ci-lander is push-only on movies (needs the agentctl-red-reader deploy); their "
+                                     "the lander App is push-only on movies (needs the agentctl-reader App); their "
                                      "reds are not watched until then",
                           run_probe("red_read", {"repos": list(repos)}), [], key="red-read-access", command="red",
                           exit_code=2, store=store)
@@ -1380,17 +1380,8 @@ def fix_between(repo, rec, red_head, green_head, causes, workflows):
 
 # -- an unreadable gate: no dispatch, one UNKNOWN per spell, an infra check
 def infra_check(o_r):
-    if on_github():  # the gate is read from github.com with gh's own auth: no tunnel, no vault token in the way
-        return f"forge github: read with {GH_CLI} (`gh auth status` names its auth)"
-    parts = [f"Forgejo API localhost:3000 {'open' if port_open(3000) else 'CLOSED'}",
-             f"Forgejo ssh localhost:2222 {'open' if port_open(2222) else 'CLOSED'}"]
-    try:
-        token(o_r)
-        parts.append("token: present")
-    except (Exception, SystemExit):
-        parts.append("token: MISSING (hand it over: `~/bin/agentctl land status` from a session with the vault "
-                     "unlocked, or `! secrets unlock movies`)")
-    return "; ".join(parts)
+    """The gate is read from github.com with gh's own auth: no tunnel, no vault token in the way."""
+    return f"read with {GH_CLI} (`gh auth status` names its auth; https://www.githubstatus.com for an outage)"
 
 
 def gate_unread_spell(o_r, why):

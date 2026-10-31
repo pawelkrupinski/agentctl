@@ -35,14 +35,14 @@ class LandedByContentTest(RedBase):
         sh(self.r.path, "git", "commit", "-q", "-m", "identity: impact", f"--date={date}")
         twin = sh(self.r.path, "git", "rev-parse", "HEAD")
         self.r.push()
-        sh(wt, "git", "fetch", "-q", "forgejo")
-        cherry = sh(wt, "git", "cherry", "forgejo/main", "HEAD")
+        sh(wt, "git", "fetch", "-q", "origin")
+        cherry = sh(wt, "git", "cherry", "origin/main", "HEAD")
         self.assertTrue(cherry.startswith("+ "), cherry)  # the shape: git cherry alone calls it unlanded
         return wt, sha, twin
 
     def test_a_twin_with_drifted_context_counts_as_landed_everywhere(self):
         wt, sha, twin = self.drifted()
-        main = "refs/remotes/forgejo/main"
+        main = "refs/remotes/origin/main"
         self.assertEqual(A.content_twin(wt, sha, main), twin)
         self.assertEqual(A.cherry_landed(wt, main, "HEAD"), ([sha], []))
         self.assertEqual(A.orphan_key(self.r.path, wt), ([], None))  # no UNLANDED ORPHAN
@@ -54,7 +54,7 @@ class LandedByContentTest(RedBase):
 
     def test_the_same_subject_and_date_with_other_lines_is_not_landed(self):
         wt, sha, _twin = self.drifted(same_lines=False)
-        main = "refs/remotes/forgejo/main"
+        main = "refs/remotes/origin/main"
         self.assertIsNone(A.content_twin(wt, sha, main))
         self.assertEqual(A.cherry_landed(wt, main, "HEAD"), ([sha], [sha]))
         self.assertEqual(A.orphan_key(self.r.path, wt)[0], [sha])

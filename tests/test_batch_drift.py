@@ -116,13 +116,11 @@ class SplitTest(DriftBase):
         push that branch (only main is protected); the script lacked its tools, not a permission."""
         empty = os.path.join(self.tmp.name, "nobin")
         os.makedirs(empty)
-        os.environ["GH_TOKEN"] = "tok-lander"
-        self.addCleanup(os.environ.pop, "GH_TOKEN", None)
         env = A.drift_env(self.r.path, {"PATH": empty})
         py = shutil.which("python3", path=env["PATH"])
         self.assertTrue(py)
         self.assertEqual(os.path.realpath(py), os.path.realpath(sys.executable))
-        self.assertEqual(env["FORGEJO_API_TOKEN"], "tok-lander")
+        self.assertEqual(env["KINOWO_FORGE"], "github")  # forge-gh reads GitHub (the App token on ci-runner)
         self.assertEqual(env["PATH"].split(":")[0], empty, "its own PATH first; the shim only appended")
         here = os.path.dirname(os.path.realpath(sys.executable))
         if os.access(os.path.join(here, "python3"), os.X_OK):  # a python3 on the PATH already: the PATH as it was

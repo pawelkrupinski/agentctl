@@ -1,5 +1,5 @@
-"""Tunnel health: a hung endpoint counts like a refusal -- one kickstart + retry for reads, the processor probe
-(2 failures -> kick, 1/min, inbox entry after 2 min unrestored)."""
+"""Tunnel health (the laptop's tunnel carries the agentctl store): a hung endpoint counts like a refusal in the
+processor probe (2 failures -> kick, 1/min, inbox entry after 2 min unrestored)."""
 import os, socket, sys, tempfile, threading, time, unittest, urllib.error
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -16,7 +16,7 @@ class Hang:
         self.conns = []
         self.thread = threading.Thread(target=self.loop, daemon=True)
         self.thread.start()
-        self.url = f"http://127.0.0.1:{self.s.getsockname()[1]}/api/v1"
+        self.url = f"http://127.0.0.1:{self.s.getsockname()[1]}"
 
     def loop(self):
         while True:
@@ -43,8 +43,8 @@ class Hang:
 class TunnelTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.saved = (A.API, A.TUNNEL_PROBE_TIMEOUT, A.launchctl_kick, A.inbox_write, A.TUNNEL_KICK_MIN_GAP,
-                      os.environ.get("AGENTCTL_TUNNEL_STATE"))
+        self.saved = (os.environ.get("AGENTCTL_STORE_URL"), A.TUNNEL_PROBE_TIMEOUT, A.launchctl_kick, A.inbox_write,
+                      A.TUNNEL_KICK_MIN_GAP, os.environ.get("AGENTCTL_TUNNEL_STATE"))
         saved_has = A.has_tunnel
         A.has_tunnel = lambda: True  # the laptop's: its tunnel is kicked (the store stays this process's own)
         self.addCleanup(setattr, A, "has_tunnel", saved_has)
@@ -62,96 +62,23 @@ class TunnelTest(unittest.TestCase):
         A.inbox_write = lambda *a, **k: self.inbox.append(a[1])
         A.TUNNEL_PROBE_TIMEOUT = 0.3
         self.hang = Hang()
-        A.API = self.hang.url
+        os.environ["AGENTCTL_STORE_URL"] = self.hang.url  # the store across the tunnel: it accepts, never answers
 
     def tearDown(self):
         self.hang.close()
-        A.API, A.TUNNEL_PROBE_TIMEOUT, A.launchctl_kick, A.inbox_write, A.TUNNEL_KICK_MIN_GAP, st = self.saved
+        url, A.TUNNEL_PROBE_TIMEOUT, A.launchctl_kick, A.inbox_write, A.TUNNEL_KICK_MIN_GAP, st = self.saved
+        os.environ.pop("AGENTCTL_STORE_URL", None) if url is None else os.environ.__setitem__("AGENTCTL_STORE_URL", url)
         os.environ.pop("AGENTCTL_TUNNEL_STATE", None) if st is None else os.environ.__setitem__("AGENTCTL_TUNNEL_STATE", st)
         self.tmp.cleanup()
 
     def test_probe_timeout_and_refused(self):
-        self.assertEqual(A.tunnel_probe(), "timeout")
-        self.hang.close()
-        self.assertEqual(A.tunnel_probe(), "refused")
-
-    def test_on_github_the_probe_asks_the_store_not_forgejo(self):
-        # Forgejo was switched off on 2026-10-31: the tunnel carries only the store, so a dead :3000 must not read as
-        # a dead tunnel (it would kick and escalate for ever).
-        saved = {k: os.environ.get(k) for k in ("AGENTCTL_FORGE", "AGENTCTL_STORE_URL")}
+        self.assertEqual(A.tunnel_ports(), [(3014, "agentctl store")])
         saved_role = A.host_role
         A.host_role = lambda: "sync"  # the laptop's: the store is across the tunnel
         self.addCleanup(setattr, A, "host_role", saved_role)
-        try:
-            os.environ["AGENTCTL_FORGE"] = "github"
-            os.environ["AGENTCTL_STORE_URL"] = self.hang.url.rsplit("/api/v1", 1)[0]
-            A.API = "http://127.0.0.1:1/api/v1"  # Forgejo's address: refused, and not asked
-            self.assertEqual(A.tunnel_ports(), [(3014, "agentctl store")])
-            self.assertEqual(A.tunnel_probe(), "timeout")
-            self.hang.close()
-            self.assertEqual(A.tunnel_probe(), "refused")
-        finally:
-            for k, v in saved.items():
-                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
-
-    def test_timeout_classified_as_down(self):
-        self.assertTrue(A.tunnel_down(socket.timeout()))
-        self.assertTrue(A.tunnel_down(urllib.error.URLError(socket.timeout("timed out"))))
-        self.assertTrue(A.tunnel_down(urllib.error.URLError(ConnectionRefusedError())))
-        self.assertTrue(A.tunnel_down(RuntimeError("forgejo-gh: dial tcp: i/o timeout")))
-        self.assertFalse(A.tunnel_down(urllib.error.HTTPError("u", 404, "nf", {}, None)))
-        self.assertFalse(A.tunnel_down(RuntimeError("HTTP 404 not found")))
-
-    def test_read_on_hung_endpoint_kicks_once_and_retries(self):
-        calls = []
-
-        def fn():
-            calls.append(1)
-            if len(calls) == 1:
-                raise socket.timeout("timed out")
-            return "ok"
-        A.tunnel_probe, saved = (lambda: "ok"), A.tunnel_probe
-        try:
-            self.assertEqual(A.tunnel_retry(fn), "ok")
-        finally:
-            A.tunnel_probe = saved
-        self.assertEqual((len(calls), len(self.kicks)), (2, 1))
-
-    def test_read_gives_up_after_one_retry(self):
-        calls = []
-
-        def fn():
-            calls.append(1)
-            raise socket.timeout("timed out")
-        A.tunnel_probe, saved = (lambda: "ok"), A.tunnel_probe
-        try:
-            with self.assertRaises(socket.timeout):
-                A.tunnel_retry(fn)
-        finally:
-            A.tunnel_probe = saved
-        self.assertEqual((len(calls), len(self.kicks)), (2, 1))
-
-    def test_non_tunnel_error_not_retried(self):
-        calls = []
-
-        def fn():
-            calls.append(1)
-            raise ValueError("x")
-        with self.assertRaises(ValueError):
-            A.tunnel_retry(fn)
-        self.assertEqual((len(calls), self.kicks), (1, []))
-
-    def test_api_against_hung_endpoint(self):
-        A.API_TIMEOUT, saved = 0.3, A.API_TIMEOUT
-        A.token, st = (lambda o: "t"), A.token
-        A.tunnel_probe, sp = (lambda: "timeout"), A.tunnel_probe
-        A.time.sleep, ss = (lambda s: None), A.time.sleep
-        try:
-            with self.assertRaises(Exception):
-                A.api("o/r", "GET", "branches")
-        finally:
-            A.API_TIMEOUT, A.token, A.tunnel_probe, A.time.sleep = saved, st, sp, ss
-        self.assertEqual(len(self.kicks), 1)
+        self.assertEqual(A.tunnel_probe(), "timeout")
+        self.hang.close()
+        self.assertEqual(A.tunnel_probe(), "refused")
 
     def test_watch_kicks_after_two_rate_limited_then_escalates(self):
         down = lambda: "timeout"
@@ -179,7 +106,7 @@ class TunnelTest(unittest.TestCase):
         self.assertEqual(A.tunnel_watch(1520, down, uplink=clean), "down")
         self.assertEqual(A.tunnel_watch(1530, down, uplink=clean), "kicked")
 
-    def test_a_lossy_uplink_shows_the_gate_as_network_not_unread_and_reads_retry_without_a_kick(self):
+    def test_a_lossy_uplink_shows_the_gate_as_network_not_unread(self):
         # 2026-10-29: ~20% loss to 1.1.1.1 and the jump host kept the forward timing out; restarts only churned it
         down, lossy, clean = (lambda: "timeout"), (lambda: A.UPLINK_LOSS_MAX), (lambda: 0.0)  # AT the bound: lossy
         A.publish_gate_summary("o/r", "gate green · no reds", epoch=A.time.time() - 3600)
@@ -188,18 +115,7 @@ class TunnelTest(unittest.TestCase):
         line = A.status_line()
         self.assertIn("gate NETWORK (lossy uplink: 20% loss", line)
         self.assertNotIn("UNREAD", line)
-        calls = []
-
-        def read():
-            calls.append(1)
-            raise RuntimeError("forgejo-gh run list: timed out")
-        A.tunnel_down, saved = (lambda e: True), A.tunnel_down
-        try:
-            with self.assertRaises(RuntimeError):
-                A.tunnel_retry(read)
-        finally:
-            A.tunnel_down = saved
-        self.assertEqual((len(calls), self.kicks), (2, []))  # one plain retry, no restart, no 15 s wait
+        self.assertEqual(self.kicks, [])  # no restart
         self.assertEqual(A.tunnel_watch(A.time.time(), lambda: "ok"), "restored")
         self.assertIn("gate UNREAD", A.status_line())  # the NETWORK reading is gone with the outage
         # the uplink fine and the forward dead (05:27-05:50): the end-to-end probe kicks after two failures
@@ -234,25 +150,6 @@ class TunnelTest(unittest.TestCase):
         A.tunnel_watch(1030, lambda: "refused")
         self.assertEqual(A.tunnel_watch(1040, lambda: "ok"), "restored")
         self.assertEqual(self.inbox, [])
-
-
-
-class ServerTunnelTest(unittest.TestCase):
-    def test_ci_runner_retries_a_read_once_and_kicks_nothing(self):
-        saved = A.launchctl_kick
-        kicked, calls = [], []
-        A.launchctl_kick = lambda: kicked.append(1)
-        try:
-            def read():
-                calls.append(1)
-                if len(calls) == 1:
-                    raise TimeoutError("timed out")
-                return "ok"
-            self.assertFalse(A.has_tunnel())  # the tests' role is the server's
-            self.assertEqual(A.tunnel_retry(read), "ok")
-        finally:
-            A.launchctl_kick = saved
-        self.assertEqual((len(calls), kicked), (2, []))
 
 
 

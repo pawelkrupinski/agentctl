@@ -229,12 +229,11 @@ def tool_env():
     # the movies hook's known-red baseline: `<dir>/<main sha>`, written by baseline_failures (a hook without the mode
     # ignores it)
     env.setdefault("PREPUSH_BASELINE_DIR", reds_dir("baseline-out"))
-    if on_github():  # the movies hook's gate and tools read GitHub (scripts/forge-gh), as the lander App on ci-runner
-        env["KINOWO_FORGE"] = "github"
-        try:
-            env = forge_env(SHORT["movies"], env)
-        except (Exception, SystemExit) as e:
-            err(f"tool env: no GitHub App token for movies ({str(e)[:120]}); the hook reads without one")
+    env["KINOWO_FORGE"] = "github"  # the movies hook's gate and tools read GitHub (scripts/forge-gh)
+    try:  # as the lander App on ci-runner
+        env = forge_env(SHORT["movies"], env)
+    except (Exception, SystemExit) as e:
+        err(f"tool env: no GitHub App token for movies ({str(e)[:120]}); the hook reads without one")
     return env
 
 
@@ -311,9 +310,9 @@ LAND_LEASE_MAX = 45 * 60  # the design's 300 s once checks no longer run in the 
 
 
 def land_lease_name(repo):
-    """One lease per REPOSITORY (its Forgejo slug): every clone and worktree of it, on every host -- keyed by the
+    """One lease per REPOSITORY (its GitHub slug): every clone and worktree of it, on every host -- keyed by the
     local clone's path, the laptop's `land --follow` and ci-runner's pushes took different leases on one store. A
-    checkout without the forgejo remote: its git common dir."""
+    checkout without the remote: its git common dir."""
     try:
         key = slug(repo)
     except (SystemExit, RuntimeError):
@@ -527,11 +526,11 @@ def cmd_land(a):
                         fixes=getattr(a, "fixes", None) or ())
 
 
-MAIN_MOVED = "main moved"  # land_loop: the check outside the lock no longer covers forgejo/main
+MAIN_MOVED = "main moved"  # land_loop: the check outside the lock no longer covers origin/main
 
 
 def sync(repo, main_ref, sh):
-    """Fetch, rebase onto forgejo/main, the squash guard: (rc, None) when land is decided here, else (None, head)."""
+    """Fetch, rebase onto origin/main, the squash guard: (rc, None) when land is decided here, else (None, head)."""
     r = sh("git", "fetch", "--quiet", remote(), "main")
     if r.returncode:  # a tunnel restart is seconds long: one more try before giving up
         err(f"git fetch failed ({r.stderr.strip()[:120]}); retrying once in 15 s")
@@ -563,7 +562,7 @@ def sync(repo, main_ref, sh):
 
 
 def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False, cls="check", a=None):
-    """The repo hook's dry run over forgejo/main..head, admitted by the governor as a check (`red` for a fix of a red
+    """The repo hook's dry run over origin/main..head, admitted by the governor as a check (`red` for a fix of a red
     run), watched for a stall: None when it passed, else land's rc (0: handed to the queue as infra)."""
     err(f"checking {head[:10]}: {os.path.relpath(hook, repo)} {mode} {remote()}/main..HEAD (log: {log_path})")
     lock_note(f"checks of {head[:10]}")
@@ -612,9 +611,9 @@ def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False
     return None
 
 
-# THE KNOWN-RED BASELINE (the owner, 2026-10-27: "pre-push fails on plain forgejo/main" is itself a claimed red, and
+# THE KNOWN-RED BASELINE (the owner, 2026-10-27: "pre-push fails on plain origin/main" is itself a claimed red, and
 # while it is open a change is judged against main's known-failing checks). When a change's dry run fails, the same
-# checks run on plain forgejo/main's tree: a commit with main's tree on top of the change (`git commit-tree
+# checks run on plain origin/main's tree: a commit with main's tree on top of the change (`git commit-tree
 # main^{tree} -p <head>`), checked with `--checks-only <head>..<that>` -- the change's paths select the checks, main's
 # tree is checked. Checks failing there the same way (the same normalized failure lines) are main's own red: recorded
 # in reds/local.json, shown by ci-why as `Local checks`, claimable (`red claim local`) and dispatched like any red, and
@@ -652,7 +651,7 @@ def network_requeue(repo, head, out, log_path, a=None):
         f.write(f"=== infra {ts()} {head}: {why}\n")
     if not batching(repo):
         return refused(repo, out, log_path, f"the pre-push checks failed on the network, not on the change ({why}); "
-                       "land again once Forgejo answers")
+                       "land again once the remote answers")
     d, _clone, _wt = waiting_state(repo)
     if host_role() == "sync":  # ONE QUEUE: ci-runner's (its checks run there, its own network)
         return submit_to_server(repo, d, change_fields(repo, f"{remote()}/main", head, a), note=f" after {why}")
@@ -693,7 +692,7 @@ def local_red():
 
 
 def baseline_failures(repo, hook, head, log_path):
-    """The change's checks run on plain forgejo/main's tree: {check: lines} failing there (cached per main tree and
+    """The change's checks run on plain origin/main's tree: {check: lines} failing there (cached per main tree and
     change paths), or None when it could not be run."""
     import hashlib
     main = git(repo, "rev-parse", f"{remote()}/main").strip()
@@ -773,7 +772,7 @@ def local_lock():
 
 
 def note_local_red(main, fails, passes):
-    """Keep reds/local.json: the checks failing on plain forgejo/main (added), those seen passing (cleared)."""
+    """Keep reds/local.json: the checks failing on plain origin/main (added), those seen passing (cleared)."""
     with local_lock():
         rec = local_red()
         checks = rec.get("checks") or {}
@@ -789,8 +788,8 @@ def note_local_red(main, fails, passes):
             os.unlink(reds_dir("local.json"))
 
 
-# A STALE LOCAL RED (2026-10-27: `Local checks: RED on plain forgejo/main ac65cbbd7e` outlived the commit that fixed it).
-# reds/local.json is keyed to the main sha it was computed on. Once forgejo/main moves past it the record is stale: shown as
+# A STALE LOCAL RED (2026-10-27: `Local checks: RED on plain origin/main ac65cbbd7e` outlived the commit that fixed it).
+# reds/local.json is keyed to the main sha it was computed on. Once origin/main moves past it the record is stale: shown as
 # `stale, rechecking` (never RED), and the failing checks are run again on the new main's tree -- in the background by the
 # processor's patrol (the governor's check class), synchronously by `red patrol`, or by the next land's dry run. A pass
 # clears the red, releases its claims, stops its dispatched fixer (process groups) and puts FIX OK in the inbox; the
@@ -800,7 +799,7 @@ HOOK_CHECKS = ("eslint drift snapshot sbt dashboards scripttests actionlint shel
 
 
 def recheck_local(repo, wait=True):
-    """Recompute a stale local red on the current forgejo/main. Returns action lines (when it ran synchronously)."""
+    """Recompute a stale local red on the current origin/main. Returns action lines (when it ran synchronously)."""
     main = local_stale(repo)
     if not main:
         return release_local_leftovers(repo)
@@ -925,7 +924,7 @@ def release_local_leftovers(repo):
 
 
 def judge_against_baseline(repo, hook, head, out, log_path):
-    """(new failures, known): the change's failures that plain forgejo/main does not share, and those it does.
+    """(new failures, known): the change's failures that plain origin/main does not share, and those it does.
     known is NETWORK_SHAPED when both runs failed with a network signature (infra: no verdict on either)."""
     mine = check_failures(out)
     if not mine:
@@ -945,7 +944,7 @@ def current_main(repo):
 
 
 def local_stale(repo):
-    """forgejo/main's sha when the recorded local red was computed on an older one (the record is stale), else None."""
+    """origin/main's sha when the recorded local red was computed on an older one (the record is stale), else None."""
     rec = local_red()
     if not rec.get("checks"):
         return None
@@ -1063,7 +1062,7 @@ def refused(repo, out, log_path, what):
         return 1
     hint = ""
     if TUNNEL_TROUBLE.search(out):
-        hint = ("\n  HINT: the hook could not reach Forgejo (tunnel dropped?): `~/bin/agentctl env --check` "
-                "(it says the kickstart fix), then land again.")
+        hint = ("\n  HINT: the hook could not reach the remote (network?): `~/bin/agentctl env --check`, "
+                "`gh auth status`, then land again.")
     print(f"NOT LANDED: {what}. Last lines (full log {log_path}):\n  {tail}{hint}")
     return 1

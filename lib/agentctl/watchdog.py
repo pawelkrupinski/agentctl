@@ -446,7 +446,7 @@ def expire_cache(root=None, days=None, now=None, dry_run=False):
 # ORPHANED WORK (the owner, 2026-10-28: "review and fix landing code ... so things don't get missed or stalled"; the
 # audit found movies-wt-workflow-prune rejected 6x and idle 15 h, identity-impact / unit-before-push / red-local idle
 # 12-19 h, flipflop / nodrift-cadence / unify / mongo-csot never landed at all): every maintain pass, a worktree whose
-# commits are not on forgejo/main (by patch) and whose author is gone -- no process in it, no land, no live claim,
+# commits are not on origin/main (by patch) and whose author is gone -- no process in it, no land, no live claim,
 # idle ORPHAN_IDLE -- gets ONE action: a re-land (its last verdict infra, unknown or none), or a dispatched fixer (a
 # real failure: the checks rejected it). Still orphaned after that: UNLANDED ORPHAN, a condition whose probe clears
 # when its commits are on main, or somebody works in it again. Nothing is ever deleted.
@@ -764,7 +764,7 @@ def cmd_supersede(a):
 
 # AN ORPHAN IS SUBMITTED ONLY WHEN NOTHING ELSE CARRIES IT (ISSUE 20261030T165514-e5f431). At 15:50:59Z maintain
 # re-submitted ~/projects/movies-wt-review with no session behind it: its commits were checked only against
-# forgejo/main, while the open change movies-wt-ci-5 already carried them -- a duplicate in the shared queue. Now, before
+# origin/main, while the open change movies-wt-ci-5 already carried them -- a duplicate in the shared queue. Now, before
 # the one submit: (a) an open change item whose head carries every one of its commits (cherry_landed, the landed-by-
 # content helper, against that head) covers it: no submit, no condition -- that change's verdict reaches its author, and
 # once it lands the orphan is gone by the same helper; (b) a worktree whose last change item was CANCELLED is never

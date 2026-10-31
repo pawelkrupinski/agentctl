@@ -8,9 +8,9 @@
 #
 # OWNER RECORDS, ~/.cache/agentctl/dispatches/<key>.json ($AGENTCTL_DISPATCH_DIR): every CI run agentctl or an agent
 # dispatches -- the branch and/or run id, the worktree, the session or agent name, the pid, the purpose, the inputs, the
-# time. `agentctl dispatch run` (a `forgejo-gh workflow run` wrapper) and `agentctl dispatch record` write one; so do
+# time. `agentctl dispatch run` (a `gh workflow run` wrapper) and `agentctl dispatch record` write one; so do
 # agentctl's own dispatches (the queue's remote checks, the Fixes-Red verification). A branch run with none (the movies
-# scripts call forgejo-gh themselves) is matched after the fact: measure/<user>/<sha>-<x> (else the run's head commit) to
+# scripts call gh themselves) is matched after the fact: measure/<user>/<sha>-<x> (else the run's head commit) to
 # the worktree whose HEAD is that commit or whose HEAD reflog holds it; check/<entry> to that queue entry's worktree. The
 # match is recorded, so it is made once.
 #
@@ -32,7 +32,7 @@ INPUTS_NOT_PREDICTIVE = frozenset({"tier", "runner", "profile", "jvm-options", "
                                    "takes-countries", "countries"})
 # What main's convergence replays when its `recording` input is empty: each country's pin, the first word of the
 # `hermetic-<code>.txt` asset of the release convergence-setup.sh reads ($FIXTURE_RELEASE_TAG in the convergence
-# workflow on forgejo/main). Read from the movies repo by the laptop's processor with the owner's token
+# workflow on origin/main). Read from the movies repo by the laptop's processor with the owner's token
 # (refresh_pinned_recording; the local processor, or the sync in remote-store mode, which also writes them into the
 # store as the meta record PIN_META), cached in pinned-recording.json; $AGENTCTL_PINNED_RECORDING overrides. The
 # reconciler on ci-runner NEVER reads release assets (ci-lander is push-only: repo.code + repo.actions, no releases):
@@ -46,7 +46,6 @@ PIN_META = "pinned_recording"
 BRANCH_RUNS_LIMIT = 150
 BRANCH_ROUTE_MAX_AGE = 24 * 3600  # a failure first seen older than this is recorded, not routed (no flood on upgrade)
 OWNER_REMATCH = 3600  # an unmatched branch is matched again after this long
-DB_HOST = "pawel@10.1.0.3"
 
 
 def dispatches_dir(*parts):
@@ -250,46 +249,10 @@ def owner_text(rec, short=False):
     return wt.replace(HOME, "~") + (f" ({who})" if who and who != os.path.basename(wt) else "") if wt else (who or "?")
 
 
-def ssh_master_up(host=DB_HOST):
-    """An open ssh control connection to the DB host: asking it costs no Touch ID prompt."""
-    try:
-        return subprocess.run(["ssh", "-O", "check", host], capture_output=True, timeout=10).returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-
-
-def db_inputs(run_ids):
-    """{run id: its workflow_dispatch inputs} from Forgejo's DB (the API does not serve them), for the ids not cached.
-    Asked only from an interactive foreground or over an open ssh control connection: never a prompt from the processor
-    ($AGENTCTL_DB_INPUTS=0 never asks, =1 always)."""
-    ids = sorted({int(i) for i in run_ids if str(i).isdigit()})
-    mode = os.environ.get("AGENTCTL_DB_INPUTS")
-    if on_github():  # GitHub serves no run's inputs and has no DB to ask: the dispatch records are the only source
-        return {}
-    if not ids or mode == "0" or (mode != "1" and not (interactive_foreground() or ssh_master_up())):
-        return {}
-    sql = ("select id, json_extract(event_payload, '$.inputs') from action_run where id in ("
-           + ",".join(map(str, ids)) + ")")
-    try:
-        r = run_db(DB_ENVS["forgejo"], sql)
-    except (OSError, subprocess.TimeoutExpired):
-        return {}
-    out = {}
-    for line in r.stdout.splitlines()[1:] if r.returncode == 0 else []:
-        rid, _, js = line.partition("\t")
-        try:
-            out[int(rid)] = json.loads(js) if js.strip() else {}
-        except ValueError:
-            continue
-    for rid, inputs in out.items():
-        write_json(dispatches_dir("inputs", f"{rid}.json"), inputs)
-    return out
-
-
 def run_inputs(runs, recs=None):
     """{run id: inputs or None (unread)} for runs: {} for a run not dispatched by hand (a push), else the owner record's,
-    the cache, Forgejo's DB."""
-    out, want = {}, []
+    the cache (GitHub serves no run's inputs)."""
+    out = {}
     for run in runs:
         rid = run.get("databaseId")
         rec = (recs or {}).get(rid)
@@ -302,9 +265,6 @@ def run_inputs(runs, recs=None):
             out[rid] = cached
         else:
             out[rid] = None
-            want.append(rid)
-    for rid, inputs in db_inputs(want).items():
-        out[rid] = inputs
     return out
 
 
@@ -736,10 +696,10 @@ DISPATCH_HELP = """Every CI run dispatched by hand has an owner record (~/.cache
 routed to that owner (BRANCH RED in the inbox), and a run predicting main's next red is claimed and fixed like one.
 
   agentctl dispatch run <workflow> --ref <branch> [-f key=value ...] [--purpose "..."]
-      `forgejo-gh workflow run` (`gh workflow run` on forge = github), recorded: the worktree (the cwd's), CLAUDE_CODE_SESSION_ID / $AGENTCTL_AGENT_NAME,
+      `gh workflow run`, recorded: the worktree (the cwd's), CLAUDE_CODE_SESSION_ID / $AGENTCTL_AGENT_NAME,
       $CLAUDE_PID, the inputs, the run id once it shows.
   agentctl dispatch record --branch <branch> [--run <id>] [--workflow W] [-f key=value ...] [--purpose "..."]
-      register a dispatch made another way (a script's own forgejo-gh / gh call).
+      register a dispatch made another way (a script's own gh call).
   agentctl dispatch list
       every record: branch / run, owner, alive or gone, purpose.
 Without a record, a measure/<user>/<sha>-<x> branch is matched to the worktree that holds <sha> (HEAD or reflog), a
@@ -883,7 +843,7 @@ def maybe_publish_gate(repo):
     def work():
         try:
             o_r = slug(repo)
-            snap = ci_state_refresh(o_r, write=False)  # ONE read of Forgejo per cycle; everything below reads it
+            snap = ci_state_refresh(o_r, write=False)  # ONE read of GitHub per cycle; everything below reads it
             refresh_pinned_recording(o_r, repo)  # what PREDICTS MAIN RED compares a branch run's recording with
             ci_state_write(snap)
             # THE RED TICK ON THIS SNAPSHOT before its line is published: every red it shows is an item, offered or

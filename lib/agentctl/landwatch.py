@@ -9,7 +9,7 @@ WATCH = {"pawelkrupinski/movies": {"main": ("Main", "main.yml"),
                                    "convergence": ("Identity model convergence", "identity-model-convergence.yml")}}
 WATCH_TIMEOUT = 3 * 3600          # either run undecided by then: exit 2, could not tell
 WATCH_CONV_START = 3600           # no convergence run containing the sha started by then: said, not waited for
-WATCH_SLACK = 120                 # clock skew between the laptop and Forgejo's createdAt
+WATCH_SLACK = 120                 # clock skew between the laptop and GitHub's createdAt
 WATCH_STALL_MIN = 120  # a watch with no change in its runs for this long ends WATCH STALLED
 UNDECIDED = ("cancelled", "skipped", "neutral", "")
 
@@ -86,18 +86,18 @@ def failed_jobs(o_r, rid):
 
 
 def run_id_of_number(o_r, n):
-    """The run id whose run NUMBER (Forgejo's index_in_repo, the #N of every link; GitHub's run_number) is n, or None."""
+    """The run id whose run NUMBER (run_number, the #N of every link) is n, or None."""
     try:
         runs = forge_actions_runs(o_r, run_number=n, limit=5)
     except (Exception, SystemExit):
         return None
-    hit = next((x for x in runs if str(x.get("index_in_repo", x.get("run_number"))) == str(n)), None)
+    hit = next((x for x in runs if str(x.get("run_number")) == str(n)), None)
     return hit and hit.get("id")
 
 
 def workflow_file_of(repo, sha, name):
     """(path in the tree, text) of the workflow file whose `name:` is `name`, at sha."""
-    for d in (".forgejo/workflows", ".github/workflows"):
+    for d in (".github/workflows",):
         r = git(repo, "ls-tree", "--name-only", sha, f"{d}/", check=False)
         for path in r.stdout.split():
             txt = git(repo, "show", f"{sha}:{path}", check=False).stdout
@@ -114,12 +114,12 @@ def _watch(repo, sha, pushed_at, o_r, flows, own, fixes=()):
         + (f"; its Fixes-Red {', '.join(fixes)} is verified by the red's own item (`agentctl red status`)" if fixes else ""))
     done, said = {}, set()  # kind -> (run, ok | None for none started)
     # NO PROGRESS: nothing about the followed runs (which run, its status, its last update) changed for this long ends
-    # the watch with a named verdict (a queue Forgejo never serves, a runner lost mid-run), not a silent 3 h wait
+    # the watch with a named verdict (a queue no runner serves, a runner lost mid-run), not a silent 3 h wait
     stall = env_num("AGENTCTL_WATCH_STALL_MIN", WATCH_STALL_MIN) * 60
     state, changed = None, time.time()
     delays = backoff(env_num("AGENTCTL_WATCH_POLL", 60), 300)
     # UNREACHABLE: a failed read backs off (to 5 min) and is retried until the watch's own bound; only then UNKNOWN,
-    # saying for how long Forgejo could not be read (2026-10-27: ten failures in a row used to end it in minutes)
+    # saying for how long GitHub could not be read (2026-10-27: ten failures in a row used to end it in minutes)
     unreachable, failures, last_error, err_delays = None, 0, "", None
 
     def verdict(rc, line):
@@ -142,12 +142,12 @@ def _watch(repo, sha, pushed_at, o_r, flows, own, fixes=()):
         try:
             seen = watch_look(repo, sha, o_r, flows, done, pushed_at, t0, time.time(), on_run)
             if unreachable is not None:
-                err(f"watch: Forgejo answers again after {red_for(iso_at(unreachable))} ({failures} failed reads)")
+                err(f"watch: GitHub answers again after {red_for(iso_at(unreachable))} ({failures} failed reads)")
             unreachable, failures, err_delays = None, 0, None
         except NoToken as e:  # no vault for this process: retrying cannot help
-            return verdict(2, f"WATCH UNKNOWN: no Forgejo token ({str(e).replace('agentctl: ', '')}); "
+            return verdict(2, f"WATCH UNKNOWN: no token ({str(e).replace('agentctl: ', '')}); "
                               f"check `agentctl ci-why` for {sha[:10]}")
-        except Exception as e:  # a tunnel blip, Forgejo down: read again, backing off, until the bound
+        except Exception as e:  # a network blip, GitHub down: read again, backing off, until the bound
             failures += 1
             last_error = str(e)[:160]
             if unreachable is None:
@@ -167,7 +167,7 @@ def _watch(repo, sha, pushed_at, o_r, flows, own, fixes=()):
         if time.time() - t0 >= timeout:
             left = ", ".join(flows[k][0] for k in flows if k not in done)
             if unreachable is not None:
-                return verdict(2, f"WATCH UNKNOWN: Forgejo's runs could not be read for {red_for(iso_at(unreachable))} "
+                return verdict(2, f"WATCH UNKNOWN: GitHub's runs could not be read for {red_for(iso_at(unreachable))} "
                                   f"({failures} failed reads, the last: {last_error}); {left} undecided after "
                                   f"{int(timeout // 60)} min; check `agentctl ci-why` later")
             return verdict(2, f"WATCH UNKNOWN: {left} undecided after {int(timeout // 60)} min; check `agentctl ci-why` "

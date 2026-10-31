@@ -200,7 +200,7 @@ INBOX_WAIT_POLL = 1.0  # seconds between stat()s of the inbox directory ($AGENTC
 def inbox_wait(kinds, since_ack=False, timeout=0, verbose=False, forever=False):
     """THE NOTIFIER: block until an unread entry of `kinds` exists, print it (every one there is), exit 0; 2 at the
     timeout. Cheap: one stat() of the inbox directory (and of acked/) a second, the entries read again only when either
-    changed (a new entry is an os.replace into the directory, an ack a file in acked/). No Forgejo, no git.
+    changed (a new entry is an os.replace into the directory, an ack a file in acked/). No forge, no git.
     forever: never exits; streams each such entry once, one line each, as it appears (one background task a session)."""
     d = inbox_dir()
     os.makedirs(d, exist_ok=True)

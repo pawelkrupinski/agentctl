@@ -110,7 +110,7 @@ class NoEmptyWaitingTest(QueueTest):
         self.assertEqual(self.land(wb)[0], 0)
         # meanwhile someone lands a's very change on main
         other, _ = self.agent("c", "web/src/main/A.scala", "a\n", msg="a: one, by hand")
-        sh(other, "git", "push", "-q", "forgejo", "HEAD:main")
+        sh(other, "git", "push", "-q", "origin", "HEAD:main")
         via = sh(other, "git", "rev-parse", "HEAD")
         self.reds = set()
         self.drive()
@@ -129,8 +129,8 @@ class NoEmptyWaitingTest(QueueTest):
         os.environ["AGENTCTL_QUEUE"] = "0"
         wa, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
         self.assertEqual(self.land(wa)[0], 0)
-        sh(wa, "git", "push", "-q", "forgejo", "HEAD:main")  # the owner pushes it by hand
-        sh(self.r.path, "git", "fetch", "-q", "forgejo")
+        sh(wa, "git", "push", "-q", "origin", "HEAD:main")  # the owner pushes it by hand
+        sh(self.r.path, "git", "fetch", "-q", "origin")
         self.drive()  # still red
         self.assertEqual(self.entries()["1"]["status"], "landed")
         self.assertIn("already on main", [x for x in self.inbox() if x["cwd"] == wa][-1]["verdict"])
@@ -189,8 +189,8 @@ class EmptyCommitGuardTest(Base):
         self.r.commit("real change")
         sh(self.r.path, "git", "commit", "-q", "--allow-empty", "-m", "empty")
         head = sh(self.r.path, "git", "rev-parse", "HEAD")
-        remote = sh(self.r.path, "git", "rev-parse", "forgejo/main")
-        rc, out = self.run_tool("prepush-check", "--hook", "forgejo", "url",
+        remote = sh(self.r.path, "git", "rev-parse", "origin/main")
+        rc, out = self.run_tool("prepush-check", "--hook", "origin", "url",
                                 stdin=f"refs/heads/main {head} refs/heads/main {remote}\n", cwd=self.r.path)
         self.assertEqual(rc, 1, out)
         self.assertIn("1 EMPTY commit", out)

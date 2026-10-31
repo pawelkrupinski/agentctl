@@ -138,7 +138,7 @@ class LandTest(LandBase):
         self.assertIn("NOT LANDED: the push failed", out)
         self.assertNotIn("red gate", out)
         self.assertNotIn("ci-why SUMMARY", out)
-        self.assertIn("HINT: the hook could not reach Forgejo", out)
+        self.assertIn("HINT: the hook could not reach the remote", out)
 
     def test_hook_failure_is_reported_not_bypassed(self):
         self.hook('echo "sbt FAILED: SomeSpec" >&2\nexit 1')
@@ -168,7 +168,7 @@ class LandTest(LandBase):
         sha = self.r.commit("mine")
         rc, out = self.land()
         self.assertEqual(rc, 0, out)
-        self.assertEqual(open(calls).read().split(), ["--range", f"forgejo/main..{sha}"])
+        self.assertEqual(open(calls).read().split(), ["--range", f"origin/main..{sha}"])
         self.assertEqual(self.remote_main(), sha)
 
     def test_check_first_failure_is_not_landed_and_nothing_is_pushed(self):
@@ -332,7 +332,7 @@ class LandTest(LandBase):
         wt = self.r.worktree("wt-lock", branch="lock")
         self.assertEqual(A.land_lease_name(wt), A.land_lease_name(self.r.path))
         other = os.path.join(self.tmp.name, "second-clone")  # another clone of the repository (ci-runner's): the same
-        subprocess.run(["git", "clone", "-q", "-o", "forgejo", self.r.bare, other], check=True)
+        subprocess.run(["git", "clone", "-q", "-o", "origin", self.r.bare, other], check=True)
         self.assertEqual(A.land_lease_name(other), A.land_lease_name(self.r.path))
 
     def test_lock_wait_times_out_without_pushing(self):
@@ -364,9 +364,9 @@ class LandTest(LandBase):
         self.assertIn("PREPUSH_SKIP", out)
 
     def test_never_no_verify(self):
-        argv = A.push_argv("forgejo", "abc")
+        argv = A.push_argv("origin", "abc")
         self.assertNotIn("--no-verify", argv)
-        self.assertEqual(argv, ["git", "push", "forgejo", "abc:refs/heads/main"])
+        self.assertEqual(argv, ["git", "push", "origin", "abc:refs/heads/main"])
         src = code_source()
         land_src = src[src.index("# ---------------------------------------------------------------- land"):src.index("# ---------------------------------------------------------------- state")]
         self.assertNotIn('"--no-verify"', land_src.replace('a in ("--no-verify"', ""))
@@ -423,32 +423,16 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class LandOnGithubTest(LandBase):
-    """forge = github (W5b): land rebases onto and pushes to the forge's remote, `origin`, never `forgejo` -- the same
-    land, with the clone's remote named as GitHub's is on the laptop."""
+class LandRemoteTest(LandBase):
+    """land rebases onto and pushes to `origin` (GitHub's remote in every clone), or $AGENTCTL_REMOTE."""
 
-    def setUp(self):
-        super().setUp()
-        sh(self.r.path, "git", "remote", "rename", "forgejo", "origin")
-        self.saved_forge = os.environ.get("AGENTCTL_FORGE")
-        os.environ["AGENTCTL_FORGE"] = "github"
-
-    def tearDown(self):
-        if self.saved_forge is None:
-            os.environ.pop("AGENTCTL_FORGE", None)
-        else:
-            os.environ["AGENTCTL_FORGE"] = self.saved_forge
-        super().tearDown()
-
-    def test_the_remote_is_the_forges(self):
+    def test_the_remote_is_origin_unless_set(self):
         self.assertEqual(A.remote(), "origin")
         os.environ["AGENTCTL_REMOTE"] = "gh"
         try:
             self.assertEqual(A.remote(), "gh")
         finally:
             os.environ.pop("AGENTCTL_REMOTE")
-        os.environ["AGENTCTL_FORGE"] = "forgejo"
-        self.assertEqual(A.remote(), "forgejo")
 
     def test_lands_on_origin_main(self):
         self.hook("exit 0")

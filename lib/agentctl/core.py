@@ -1,10 +1,10 @@
 # agentctl, part `core`: the help texts, imports, constants and helpers every part uses.
 # Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
 
-WAIT_RUN_HELP = """Block until Forgejo runs finish; print only the verdicts.
+WAIT_RUN_HELP = """Block until GitHub Actions runs finish; print only the verdicts.
 
 Agents: start this with the Bash tool's run_in_background=true and END YOUR TURN -- you are re-invoked when it
-exits. Never wrap it (or forgejo-gh) in a foreground sleep/until loop. A second `wait run` on the same id attaches to
+exits. Never wrap it (or gh run watch) in a foreground sleep/until loop. A second `wait run` on the same id attaches to
 the first waiter (single waiter per target), so it is safe to call again after a resume.
 
 Examples:
@@ -19,15 +19,15 @@ the gate's clearing rule (a later green run, or `Fixes-Red: <#number|run id>` on
   agentctl ci-why                 # movies (or the cwd's repo)
   agentctl ci-why 1934            # explain one run
 Exit: 0 green, 1 red (or a run explained)."""
-LAND_HELP = """Land the current commit(s) on forgejo/main, safely, in one command.
-MOVIES (the reconciler, ~/bin/AGENTCTL.md "land"): fetch -> rebase onto forgejo/main -> prepush-check (the squash
+LAND_HELP = """Land the current commit(s) on origin/main, safely, in one command.
+MOVIES (the reconciler, ~/bin/AGENTCTL.md "land"): fetch -> rebase onto origin/main -> prepush-check (the squash
 guard) -> a queued change item, its commits pushed to refs/heads/land/<id> -> `QUEUED <id> (<sha>)` at once: END YOUR
 TURN. The processor's tick checks it in a check tree (an executor holding check/<id>, within the governor; on ci-runner
 under pressure), pushes it under the land/<repo> lease -> LANDED and a watch item (Main and the convergence for the sha:
 WATCH OK / RED / UNKNOWN); main red and the change must wait (a production path, no Fixes-Red: for the red run):
 WAITING, landed with the batch checked once at green. Every verdict goes to `agentctl inbox`, naming your worktree.
 IN-PROCESS (--follow, --no-watch, a dispatched red fixer, AGENTCTL_QUEUE=0; other repos always): the checks here
-(movies: the hook's dry run --range forgejo/main..<sha>), then under the land/<repo> lease fetch, push (the repo's
+(movies: the hook's dry run --range origin/main..<sha>), then under the land/<repo> lease fetch, push (the repo's
 pre-push hook runs, reusing the dry run's pass), on a race refetch, rebase and retry up to 3 times, verify with
 merge-base / git cherry: `LANDED <sha>` or `NOT LANDED: <exact reason>` (red gate: + the ci-why summary). --follow then
 waits for a WAITING change's batch and watches in-process; --no-watch exits at LANDED.
@@ -38,7 +38,7 @@ RED."""
 ENV_HELP = """Agent environment, without secrets.
   eval "$(agentctl env --print)"   # sdkman's sbt + java first on PATH, JAVA_HOME; exit 1 (one line on stderr) on a locked vault
   agentctl env --check            # sbt, a java that runs, `secrets status <ns>`, the tunnel's localhost:3014 (the
-                                  # agentctl store) and gh (forge = forgejo, retired 2026-10-31: :3000/:2222, its token)
+                                  # agentctl store) and gh
 A locked vault prints exactly: vault <ns> locked: ask the user to run `! secrets unlock <ns>`  -- and exits 1.
 agentctl never runs `secrets unlock` (Touch ID is the user's). Output never contains a token: tools read it at use."""
 import argparse, contextlib, io, datetime as dt, fcntl, fnmatch, glob, itertools, json, os, re, shlex, signal, subprocess, sys, threading, time, traceback, urllib.error, urllib.parse, urllib.request
@@ -116,21 +116,13 @@ SHORT = {
     "movies": "pawelkrupinski/movies",
     **{r: f"bitcashier/{r}" for r in ("infra", "core", "dashboard", "invoice-page", "version-dashboard")},
 }
-FORGEJO_GH = os.environ.get("AGENTCTL_FORGEJO_GH", f"{HOME}/bitcashier/infra/bin/forgejo-gh")
-API = os.environ.get("AGENTCTL_FORGEJO_API") or (os.environ["AGENTCTL_FORGEJO_URL"].rstrip("/") + "/api/v1"
-                                                  if os.environ.get("AGENTCTL_FORGEJO_URL") else "http://localhost:3000/api/v1")
-REMOTES = {"forgejo": "forgejo", "github": "origin"}  # each forge's remote name in every clone (laptop and ci-runner)
+DEFAULT_REMOTE = "origin"  # GitHub's remote name in every clone (laptop and ci-runner)
 
 
 def remote():
-    """THE PUSH AND FETCH REMOTE of every clone agentctl lands, queues, waits, fixes and batches through (github-return
-    plan §4.1, W5b): $AGENTCTL_REMOTE, else the configured forge's (forge = forgejo -> `forgejo`, github -> `origin`).
-    Read at EVERY call, like forge(): a test or a config change applies at once."""
-    r = (os.environ.get("AGENTCTL_REMOTE") or "").strip()
-    if r:
-        return r
-    f = (os.environ.get("AGENTCTL_FORGE") or "forgejo").strip().lower()
-    return REMOTES.get(f, "forgejo")
+    """THE PUSH AND FETCH REMOTE of every clone agentctl lands, queues, waits, fixes and batches through:
+    $AGENTCTL_REMOTE, else `origin`. Read at EVERY call: a test or a config change applies at once."""
+    return (os.environ.get("AGENTCTL_REMOTE") or "").strip() or DEFAULT_REMOTE
 PROTECTED_BRANCHES = {"main", "master"}
 MAX_FOREIGN = 2  # files a push may revert to an older main before prepush-check refuses ($AGENTCTL_MAX_FOREIGN)
 ZERO = "0" * 40
@@ -171,7 +163,7 @@ GIT_NET_SSH = "ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=
 
 def git(repo, *args, check=True, input=None):
     env = None
-    if args and args[0] in ("fetch", "ls-remote"):  # never hang on a Forgejo whose ssh accepts and does not answer
+    if args and args[0] in ("fetch", "ls-remote"):  # never hang on a remote whose ssh accepts and does not answer
         env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
         env.setdefault("GIT_SSH_COMMAND", GIT_NET_SSH)
     try:
@@ -319,7 +311,7 @@ _tokens = {}
 
 
 class NoToken(SystemExit):
-    """The vault would not give the Forgejo token. A process whose launching session ended (a detached watch once land
+    """The vault would not give the token. A process whose launching session ended (a detached watch once land
     exits, a launchd service) is never authorized: `secrets` anchors an unlock to the session's processes (2026-10-27:
     two detached watches died on it with no verdict, and the waiting processor read the gate as green)."""
 
@@ -364,7 +356,7 @@ def interactive_foreground():
     """Only an interactive, foreground invocation may run `secrets` (it can pop a Touch ID / keychain prompt): a TTY on
     stdin or stderr, AGENTCTL_INTERACTIVE=1, or an agent's own command in its Claude Code session (CLAUDECODE and
     CLAUDE_CODE_SESSION_ID: the session's processes are the ones its vault unlock answers -- 2026-10-30: agents' `land`
-    failed NoToken and had to be wrapped in `secrets run movies FORGEJO_API_TOKEN --`). Never the processor, a launchd
+    failed NoToken and had to be wrapped in `secrets run <ns> <key> --`). Never the processor, a launchd
     job, or anything agentctl started in the background (spawn_detached marks it AGENTCTL_DETACHED)."""
     if _IN_PROCESSOR[0] or _NO_VAULT[0] or os.environ.get("AGENTCTL_NO_SECRETS") or os.environ.get("AGENTCTL_DETACHED"):
         return False
@@ -436,20 +428,11 @@ def token_unavailable_note(ns, why):
 _noting_token = [False]  # token_unavailable_note is running: the remote store's own token read must not recurse
 
 
-# THE READ-ONLY RED READER (2026-10-30). On ci-runner the reconciler runs as ci-lander, whose token is push-only on
-# pawelkrupinski/movies by the owner's decision: it can read no other repository, so the red tick of infra and core
-# failed every tick ("failed to get runs"). Another repo's runs are read there with ci-red-reader's token instead -- a
-# Forgejo bot with read on infra and core and nothing else, minted on the host by infra's agentctl-red-reader-bot unit
-# into RED_READ_TOKEN_FILE (GH_TOKEN=...). ci-lander's GH_TOKEN is never offered to another repo.
-RED_READ_TOKEN_FILE = "/var/lib/agentctl-red-reader/token.env"  # $AGENTCTL_RED_READ_TOKEN_FILE
-
-
+# THE READ-ONLY RED READER (2026-10-30). On ci-runner the reconciler lands movies as the lander App, which can read no
+# other repository; another repo's runs (infra, core: the red tick) are read there with the agentctl-reader App's
+# installation token (ghapp.py), never the lander's.
 class NoReadAccess(NoToken):
-    """ci-runner has no read token for a repo other than movies (the agentctl-red-reader deploy is not on the host)."""
-
-
-def red_read_token_file():
-    return os.environ.get("AGENTCTL_RED_READ_TOKEN_FILE") or RED_READ_TOKEN_FILE
+    """ci-runner has no read credential for a repo other than movies (the agentctl-reader App is not configured)."""
 
 
 def on_ci_runner():
@@ -458,69 +441,42 @@ def on_ci_runner():
 
 
 def red_read_token(o_r):
-    """The read-only token for o_r on ci-runner: None for movies or off ci-runner (the usual path); NoReadAccess when the
-    host has no reader token."""
+    """None when o_r can be read (movies, off ci-runner, or the reader App configured: forge_env takes its token);
+    NoReadAccess when ci-runner has no reader App."""
     if token_ns(o_r) == "movies" or not on_ci_runner():
         return None
-    if on_github():  # forge = github: the reader App's installation token (ghapp.py), read through forge_env
-        if ghapp_enabled() and ghapp_config("reader"):
-            return None
-        raise NoReadAccess(f"agentctl: no read access to {o_r} (forge github needs the agentctl-reader App: "
-                           "AGENTCTL_IDENTITY=github-app and AGENTCTL_GITHUB_READER_APP_ID/_KEY_FILE)")
-    path = red_read_token_file()
-    tok = ""
-    try:
-        with open(path) as f:
-            for line in f:
-                k, _, v = line.strip().partition("=")
-                if k == "GH_TOKEN":
-                    tok = v.strip().strip("'\"")
-    except OSError:
-        pass
-    if not tok:
-        raise NoReadAccess(f"agentctl: no read access to {o_r} (needs the agentctl-red-reader deploy: no token in {path})")
-    return tok
-
-
-def store_auth():
-    """How the store checks this process's calls: `store_auth` in agentctl.toml ($AGENTCTL_STORE_AUTH) --
-    "store-tokens" (the store's own tokens) or "forgejo" (movies' Forgejo token) -- else the forge's: store-tokens on
-    github, forgejo on forgejo. Set it explicitly while some owners still run on Forgejo (forgejo_owners): a command
-    switched to forge forgejo for their repo must still call the store with the store token."""
-    a = (os.environ.get("AGENTCTL_STORE_AUTH") or "").strip().lower()
-    if a in ("store-tokens", "forgejo"):
-        return a
-    return "store-tokens" if on_github() else "forgejo"
+    if ghapp_enabled() and ghapp_config("reader"):
+        return None
+    raise NoReadAccess(f"agentctl: no read access to {o_r} (needs the agentctl-reader App: "
+                       "AGENTCTL_IDENTITY=github-app and AGENTCTL_GITHUB_READER_APP_ID/_KEY_FILE)")
 
 
 def store_credential(o_r):
-    """Movies' credential is the agentctl STORE TOKEN (`agentctl store token issue`) when the store checks its own
-    tokens (store_auth): carried in $AGENTCTL_STORE_TOKEN, kept in the vault as bitcashier/AGENTCTL_STORE_TOKEN; gh
-    reads GitHub with its own auth. Else it is movies' Forgejo token, which the store checks against Forgejo."""
-    return token_ns(o_r) == "movies" and store_auth() == "store-tokens"
+    """Movies' credential is the agentctl STORE TOKEN (`agentctl store token issue`): carried in $AGENTCTL_STORE_TOKEN,
+    kept in the vault as bitcashier/AGENTCTL_STORE_TOKEN. gh reads GitHub with its own auth."""
+    return token_ns(o_r) == "movies"
 
 
 def token_env_name(o_r):
     """The environment variable o_r's credential travels in (to a detached child, a fixer, the processor)."""
-    if token_ns(o_r) != "movies":
-        return "GH_TOKEN"
-    return "AGENTCTL_STORE_TOKEN" if store_credential(o_r) else "FORGEJO_API_TOKEN"
+    return "AGENTCTL_STORE_TOKEN" if store_credential(o_r) else "GH_TOKEN"
 
 
 def token_vault_key(o_r):
-    """(vault namespace, key) of o_r's credential."""
-    return ("bitcashier", "AGENTCTL_STORE_TOKEN") if store_credential(o_r) else (token_ns(o_r), "FORGEJO_API_TOKEN")
+    """(vault namespace, key) of o_r's credential: the store token (only movies has one; the other repos are read
+    with gh's own auth)."""
+    return ("bitcashier", "AGENTCTL_STORE_TOKEN")
 
 
 def token(o_r):
     """ONE credential path for every agentctl process: the environment, then the processor's socket, then `secrets`
     (absolute path). No source: NoToken naming the cause, and one inbox entry. On ci-runner a repo other than movies
-    is read with the red reader's token alone (red_read_token)."""
-    rt = red_read_token(o_r)
-    if rt:
-        return rt
-    if os.environ.get("GH_TOKEN") and not store_credential(o_r):  # on GitHub a gh token is never the store's
+    is read with the reader App alone (red_read_token)."""
+    red_read_token(o_r)
+    if os.environ.get("GH_TOKEN") and not store_credential(o_r):  # a gh token is never the store's
         return os.environ["GH_TOKEN"]
+    if not store_credential(o_r):  # read with gh's own auth: agentctl holds no credential of its own for it
+        raise NoToken(f"agentctl: no token for {o_r} (gh reads it with its own auth)")
     ns = token_ns(o_r)
     if ns == "movies" and os.environ.get(token_env_name(o_r)):  # a token the environment already carries
         if _token_missing:
@@ -554,10 +510,10 @@ def token(o_r):
 
 
 # A MISSING TOKEN IS SAID ON ITS TRANSITION (2026-10-30: the laptop processor's service.log held ~842,000 lines of
-# "could not read the movies FORGEJO_API_TOKEN" -- every step of every tick, and the inbox note's own failure, said it
+# "could not read the movies token" -- every step of every tick, and the inbox note's own failure, said it
 # again). A long-lived process says it once when the token goes missing (and notes the condition then), then at most a
 # summary every TOKEN_MISSING_SUMMARY s, and once more when it is back. Its callers' NoToken is quiet (run_step).
-TOKEN_MISSING_SUMMARY = 600  # s between the summaries of a still-missing Forgejo token (said on its transition first)
+TOKEN_MISSING_SUMMARY = 600  # s between the summaries of a still-missing token (said on its transition first)
 _token_missing = {}  # ns -> {"since", "reads", "said"}
 
 
@@ -569,13 +525,13 @@ def token_missing(ns, why, now_=None):
     if m is None:
         _token_missing[ns] = {"since": t, "reads": 1, "said": t}
         token_unavailable_note(ns, why)
-        line = f"the {ns} Forgejo token is missing ({why}); said again only as a summary every " \
+        line = f"the {ns} token is missing ({why}); said again only as a summary every " \
                f"{env_num('AGENTCTL_TOKEN_SUMMARY', TOKEN_MISSING_SUMMARY) / 60:.0f} min"
     else:
         m["reads"] += 1
         if t - m["said"] < env_num("AGENTCTL_TOKEN_SUMMARY", TOKEN_MISSING_SUMMARY):
             return None
-        line = f"the {ns} Forgejo token is still missing: {m['reads']} read(s) failed in the " \
+        line = f"the {ns} token is still missing: {m['reads']} read(s) failed in the " \
                f"{fmt_age(t - m['since'])} since it went ({why})"
         m["said"] = t
         token_unavailable_note(ns, why)  # the condition again, in case the first note could not be written
@@ -588,7 +544,7 @@ def token_back(ns):
     """The token is there again: said once, when it had been missing."""
     m = _token_missing.pop(ns, None)
     if m:
-        err(f"the {ns} Forgejo token is back ({m['reads']} read(s) failed while it was missing)")
+        err(f"the {ns} token is back ({m['reads']} read(s) failed while it was missing)")
 
 
 def detached_env(repo):
@@ -600,67 +556,40 @@ def detached_env(repo):
 
 
 def token_env(o_r, env=None):
-    """env (default os.environ) plus the Forgejo token, for a DETACHED child: once its parent exits the vault no longer
-    answers it, so it is handed the token now (in its environment, never on a command line or on disk). Without a token
-    here the child gets none and says so itself."""
+    """env (default os.environ) plus o_r's credential, for a DETACHED child: once its parent exits the vault no longer
+    answers it, so it is handed the credential now (in its environment, never on a command line or on disk): the repo's
+    App token on ci-runner, else the store token this process holds (never a vault prompt here). gh reads GitHub with
+    its own auth."""
     env = dict(os.environ if env is None else env)
-    if on_github():  # gh reads GitHub with its own auth (on ci-runner the repo's App token): no Forgejo token
-        if ghapp_enabled():
+    if ghapp_enabled():
+        try:
+            env["GH_TOKEN"] = ghapp_token(o_r)
+        except (Exception, SystemExit):
+            pass
+    elif store_credential(o_r):
+        with no_vault():
             try:
-                env["GH_TOKEN"] = ghapp_token(o_r)
+                env[token_env_name(o_r)] = token(o_r)
             except (Exception, SystemExit):
                 pass
-        elif store_credential(o_r):  # the laptop: the store token this process holds (never a vault prompt here)
-            with no_vault():
-                try:
-                    env[token_env_name(o_r)] = token(o_r)
-                except (Exception, SystemExit):
-                    pass
-        return env
-    try:
-        tok = token(o_r)
-    except SystemExit:
-        return env
-    if token_ns(o_r) == "movies":
-        env["FORGEJO_API_TOKEN"] = tok
-    else:
-        env["GH_TOKEN"] = tok
     return env
 
 
 def gh_json(o_r, *args):
-    """A JSON read through the forge's CLI (forgejo-gh, or gh on forge = github: lib/agentctl/forge.py)."""
-    return forge_retry(lambda: _gh_json_once(o_r, *args))
-
-
-def _gh_json_once(o_r, *args):
+    """A JSON read through gh (lib/agentctl/forge.py)."""
     r = subprocess.run(forge_argv(o_r, *args), capture_output=True, text=True, env=forge_env(o_r),
                        timeout=GH_JSON_TIMEOUT)
     if r.returncode != 0:
-        raise RuntimeError(f"{forge_cli_name()} {' '.join(args)}: {r.stderr.strip()[:300]}")
+        raise RuntimeError(f"gh {' '.join(args)}: {r.stderr.strip()[:300]}")
     return json.loads(r.stdout)
 
 
-GH_JSON_TIMEOUT = 90  # a read through a hung tunnel must fail fast enough for the one kickstart + retry
+GH_JSON_TIMEOUT = 90  # a read must fail, not hang a step
 
 
 def api(o_r, method, path, params=None, body=None):
-    """The forge's REST API under repos/<o_r>/: Forgejo's /api/v1, or GitHub's through `gh api` (forge.py)."""
-    if on_github():
-        return _gh_api_once(o_r, method, path, params, body)
-    return tunnel_retry(lambda: _api_once(o_r, method, path, params, body))
-
-
-def _api_once(o_r, method, path, params=None, body=None):
-    url = f"{API}/repos/{o_r}/{path}" + ("?" + urllib.parse.urlencode(params) if params else "")
-    headers = {"Authorization": f"token {token(o_r)}"}
-    if body is not None:
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, method=method, headers=headers,
-                                 data=json.dumps(body).encode() if body is not None else None)
-    with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
-        body = resp.read()
-    return json.loads(body) if body else None
+    """GitHub's REST API under repos/<o_r>/, through `gh api` (forge.py)."""
+    return _gh_api_once(o_r, method, path, params, body)
 
 
 API_TIMEOUT = 60

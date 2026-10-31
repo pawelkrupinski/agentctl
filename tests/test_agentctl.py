@@ -109,8 +109,6 @@ os.environ.setdefault("AGENTCTL_REDS_DIR", tempfile.mkdtemp(prefix="agentctl-red
 os.environ.setdefault("AGENTCTL_RED_OLD_RUN", "1e12")  # the fixtures' fixed dates never age into old reds
 os.environ.setdefault("AGENTCTL_RED_REPO", "-")
 os.environ.setdefault("AGENTCTL_RED_PATROL", "0")
-# ...nor asks Forgejo's DB (over ssh) for a run's dispatch inputs.
-os.environ.setdefault("AGENTCTL_DB_INPUTS", "0")
 os.environ.setdefault("AGENTCTL_CLAUDE", "/nonexistent/claude")
 # ...nor takes this machine's pre-commit check slots, nor writes its measurements or cap.
 os.environ.setdefault("AGENTCTL_CHECKS_DIR", tempfile.mkdtemp(prefix="agentctl-checks-test-"))
@@ -170,20 +168,20 @@ def _repo_template():
         bare, path = os.path.join(root, "remote.git"), os.path.join(root, "repo")
         sh(root, "git", "init", "-q", "--bare", "-b", "main", bare)
         sh(root, "git", "init", "-q", "-b", "main", path)
-        sh(path, "git", "remote", "add", "forgejo", bare)
+        sh(path, "git", "remote", "add", "origin", bare)
         for i in range(5):
             with open(os.path.join(path, f"f{i}.txt"), "w") as f:
                 f.write(f"v1 {i}\n")
         sh(path, "git", "add", "-A")
         sh(path, "git", "commit", "-q", "-m", "init")
-        sh(path, "git", "push", "-q", "forgejo", "HEAD:main")
-        sh(path, "git", "fetch", "-q", "forgejo")
+        sh(path, "git", "push", "-q", "origin", "HEAD:main")
+        sh(path, "git", "fetch", "-q", "origin")
         _REPO_TEMPLATE.append((bare, path))
     return _REPO_TEMPLATE[0]
 
 
 class Repo:
-    """A bare 'forgejo' remote plus a clone with a few commits on main (a copy of the process's template)."""
+    """A bare 'origin' remote plus a clone with a few commits on main (a copy of the process's template)."""
 
     def __init__(self, root):
         self.root = root
@@ -210,10 +208,10 @@ class Repo:
         return sh(at or self.path, "git", "rev-parse", "HEAD")
 
     def push(self, at=None, ref="HEAD:main"):
-        sh(at or self.path, "git", "push", "-q", "forgejo", ref)
-        sh(self.path, "git", "fetch", "-q", "forgejo")
+        sh(at or self.path, "git", "push", "-q", "origin", ref)
+        sh(self.path, "git", "fetch", "-q", "origin")
 
-    def worktree(self, name, base="forgejo/main", branch=None):
+    def worktree(self, name, base="origin/main", branch=None):
         p = os.path.join(self.root, name)
         sh(self.path, "git", "worktree", "add", "-q", *(["-b", branch] if branch else ["--detach"]), p, base)
         return p
@@ -331,7 +329,7 @@ class CleanupTest(Base):
 
     def test_keeps_recently_active_and_main(self):
         fresh = self.r.worktree("wt-fresh")
-        mainwt = self.r.worktree("wt-main-branch", base="forgejo/main", branch="master")
+        mainwt = self.r.worktree("wt-main-branch", base="origin/main", branch="master")
         make_old(mainwt)
         rc, out = self.cleanup("-v")
         self.assertTrue(os.path.isdir(fresh))
@@ -379,8 +377,8 @@ class PrepushTest(Base):
         self.r.write("added.txt", "new on main\n")
         self.r.commit("others' work")
         self.r.push()
-        sh(wt, "git", "fetch", "-q", "forgejo")
-        sh(wt, "git", "reset", "-q", "--soft", "forgejo/main")  # the bad squash
+        sh(wt, "git", "fetch", "-q", "origin")
+        sh(wt, "git", "reset", "-q", "--soft", "origin/main")  # the bad squash
         sh(wt, "git", "commit", "-q", "-m", "squash")
         rc, out = self.check(cwd=wt)
         self.assertEqual(rc, 1, out)
@@ -424,7 +422,7 @@ class PrepushTest(Base):
         rc, out = self.check(cwd=wt)
         self.assertEqual(rc, 0, out)
         # undeclared deletions still count
-        sh(wt, "git", "reset", "-q", "--hard", "forgejo/main")
+        sh(wt, "git", "reset", "-q", "--hard", "origin/main")
         sh(wt, "git", "rm", "-q", "f1.txt", "f2.txt", "f3.txt")
         sh(wt, "git", "commit", "-q", "-m", "retire, one only\n\nRetires: f1.txt")
         rc, out = self.check("--max-foreign", "1", cwd=wt)
@@ -438,14 +436,14 @@ class PrepushTest(Base):
             self.r.write(f"f{i}.txt", f"main {i}\n")
         self.r.commit("main moves")
         self.r.push()
-        sh(wt, "git", "fetch", "-q", "forgejo")
-        sh(wt, "git", "reset", "-q", "--soft", "forgejo/main")
+        sh(wt, "git", "fetch", "-q", "origin")
+        sh(wt, "git", "reset", "-q", "--soft", "origin/main")
         head = self.r.commit("squash", at=wt)
-        remote = sh(wt, "git", "rev-parse", "forgejo/main")
+        remote = sh(wt, "git", "rev-parse", "origin/main")
         stdin = f"refs/heads/h {head} refs/heads/main {remote}\n"
-        rc, out = self.run_tool("prepush-check", "--hook", "forgejo", "url", stdin=stdin, cwd=wt)
+        rc, out = self.run_tool("prepush-check", "--hook", "origin", "url", stdin=stdin, cwd=wt)
         self.assertEqual(rc, 1, out)
-        rc, out = self.run_tool("prepush-check", "--hook", "forgejo", stdin=f"(delete) {A.ZERO} refs/heads/x {remote}\n", cwd=wt)
+        rc, out = self.run_tool("prepush-check", "--hook", "origin", stdin=f"(delete) {A.ZERO} refs/heads/x {remote}\n", cwd=wt)
         self.assertEqual(rc, 0, out)
 
 
@@ -488,7 +486,7 @@ class WaitAndStateTest(Base):
         self.assertIn("run ids: 11, 12", out)
 
     def test_orphan_classifiers(self):
-        loop = "/bin/zsh -c source x && eval 'for id in 1292 1289; do while :; do s=$(bin/forgejo-gh run view $id -R bitcashier/infra); sleep 60; done; done' < /dev/null"
+        loop = "/bin/zsh -c source x && eval 'for id in 1292 1289; do while :; do s=$(gh run view $id -R bitcashier/infra); sleep 60; done; done' < /dev/null"
         self.assertTrue(A.is_wait_loop(loop))
         self.assertEqual(A.loop_targets(A.loop_body(loop)), ("bitcashier/infra", ["1289", "1292"]))
         self.assertFalse(A.is_wait_loop("/bin/zsh -c source x && eval 'sleep 1800; status.sh' < /dev/null"))

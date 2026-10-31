@@ -662,7 +662,7 @@ function header(s){const h=s.header||{},st=s.store||{},dp=s.dispatcher||{};let o
  const tickAge=st.tick_age!=null?st.tick_age:h.tick_age, tickSrc=st.tick_age!=null?"remote store":"state.json";
  const gate=h.gate||[];const gateTxt=h.error?"?":(h.gate_red?"RED":(gate.length?"GREEN":"?"));
  const net=h.network&&h.network.at&&(NOW-h.network.at)<600?`lossy (${Math.round((h.network.loss||0)*100)}% loss)`:"ok";
- const tun=h.tunnel||{};const tunTxt=h.forgejo_port===false?"DOWN (:3000 refused)":tun.escalated?"escalated":(tun.fails?`${tun.fails} fails`:"ok");
+ const tun=h.tunnel||{};const tunTxt=h.store_port===false?"DOWN (:3014 refused)":tun.escalated?"escalated":(tun.fails?`${tun.fails} fails`:"ok");
  const disp=dp.error?"?":(dp.blocker?"OFF":"ON");
  o+=`<div class="cards">
  <div class="card"><div class="k">gate</div><div class="v">${chip(gateTxt)} ${gate.map(g=>`${E(g.name)} ${link(g.url,"#"+(g.number??"?"))} ${chip(g.conclusion||"?")}${g.newer?` <span class="mute">→ ${link(g.newer_url,"#"+g.newer)} ${E(g.newer_status)}</span>`:""}`).join("<br>")}</div></div>

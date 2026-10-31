@@ -1,5 +1,9 @@
 # agentctl: a dependency-injection plan
 
+> **Historical (2026-10-31):** written while CI ran on Forgejo. Forgejo was switched off on 2026-10-31 and agentctl
+> now reads GitHub only (`gh`, remote `origin`, the store's own tokens); the Forgejo commands, ports, tokens and
+> settings named below no longer exist. Current reference: `~/bin/AGENTCTL.md`.
+
 Status: a plan for the owner to review (2026-10-30). No code has changed for it. It follows the item left open in
 docs/simplification-2026-10.md: "injecting Store / Clock / Runner / Forgejo instead of module globals and env reads,
 and moving the tests from monkeypatching to fakes".

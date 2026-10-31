@@ -10,7 +10,7 @@ GATING = {"pawelkrupinski/movies": [("Main", "main.yml"), ("Identity model conve
 
 # THE WATCHED REPOS (the owner, 2026-10-30, ci-failures recommendation 4: infra's Stage NixOS closures was red 29 h and
 # core's Main Pipeline 21 h with no fixer, because the red tick read movies only). Which repos the red machine watches
-# is config: red-repos.json beside the entry ($AGENTCTL_RED_REPOS names another file), one entry per Forgejo repo --
+# is config: red-repos.json beside the entry ($AGENTCTL_RED_REPOS names another file), one entry per repo --
 # its gate workflows (the newest decided run of each is what opens and clears its reds), its family (every red of the
 # repo goes to that ONE fixer; red-families.json says how the family is held) and its push policy: "land" (the fixer
 # lands with `agentctl land`) or "owner-only" (an infra push is a deploy: the fixer prepares the fix on a local
@@ -499,7 +499,7 @@ _flow_runs = {}    # workflow file -> (listed at, its runs on main)
 
 
 def main_workflow_files(o_r):
-    """{workflow name: file} of the workflow files on forgejo/main (cached per main sha); {} when unreadable."""
+    """{workflow name: file} of the workflow files on origin/main (cached per main sha); {} when unreadable."""
     repo = scan_repo_for(o_r)
     if not repo or not os.path.isdir(repo):
         return {}
@@ -508,7 +508,7 @@ def main_workflow_files(o_r):
         return {}
     if main not in _flow_files:
         out, meta = {}, {"callable": set(), "paths": {}, "callers": {}}
-        for d in (".forgejo/workflows", ".github/workflows"):
+        for d in (".github/workflows",):
             r = git(repo, "ls-tree", "--name-only", main, f"{d}/", check=False)
             for path in r.stdout.split():
                 if path.endswith((".yml", ".yaml")):
@@ -519,7 +519,7 @@ def main_workflow_files(o_r):
                     meta["paths"][name] = path
                     if workflow_triggers(txt) == {"workflow_call"}:
                         meta["callable"].add(name)
-                    for called in re.findall(r"^\s*(?:-\s*)?uses:\s*\./\.(?:github|forgejo)/workflows/([\w.-]+)\s*$", txt, re.M):
+                    for called in re.findall(r"^\s*(?:-\s*)?uses:\s*\./\.github/workflows/([\w.-]+)\s*$", txt, re.M):
                         meta["callers"].setdefault(called, []).append(name)
         _flow_files.clear()
         _flow_files[main] = out
@@ -529,13 +529,13 @@ def main_workflow_files(o_r):
 
 
 def main_flow_meta(o_r):
-    """main_workflow_files' by-products for forgejo/main: callable-only names, each name's path, each file's callers."""
+    """main_workflow_files' by-products for origin/main: callable-only names, each name's path, each file's callers."""
     main_workflow_files(o_r)
     return next(iter(_flow_meta.values()), {"callable": set(), "paths": {}, "callers": {}})
 
 
 def main_callable_flows(o_r):
-    """The workflows on forgejo/main whose only trigger is workflow_call: they never run on their own, so no newer run
+    """The workflows on origin/main whose only trigger is workflow_call: they never run on their own, so no newer run
     of theirs can ever clear a red run of theirs on main (red_callable_evidence does)."""
     return main_flow_meta(o_r)["callable"]
 
@@ -667,7 +667,7 @@ def explain_run_jobs(o_r, run, tail, repo=None):
         kind, why = classify_job(j, jl, raws.get(j["name"], (0, [])), j["name"] in timed or any(STEP_TIMED_OUT in l for l in jl))
         if unread and not jl and not setup:
             kind, why = "unclear", (f"LOG UNREADABLE ({unread[-1]}): no log was read, so nothing says infra or test -- "
-                                    f"read `{forge_cli_name()} run view {rid} --log-failed` again; never rerun on this alone")
+                                    f"read `gh run view {rid} --log-failed` again; never rerun on this alone")
         kinds.append(kind)
         # a job with no error line is known by its failing STEP (a red is its failing test or step, never its job name)
         per_job.append((j["name"], kind, jl[0] if jl else (f"step failed: {bad[0]['name']}" if bad else "")))
@@ -675,7 +675,7 @@ def explain_run_jobs(o_r, run, tail, repo=None):
         lines += [f"      {l}" for l in jl]
         if note:
             lines.append(note)
-    rerun = f"rerun: {forge_cli().replace(HOME, '~')} run rerun {rid} --failed -R {o_r}"
+    rerun = f"rerun: {GH_CLI.replace(HOME, '~')} run rerun {rid} --failed -R {o_r}"
     if no_verdict:
         verdict = ("NO VERDICT (an incomplete run: only `verdict complete` failed -- a takes or takes-drift row was "
                    "skipped, cancelled or missing; not a test failure, no fixer: the next complete run decides)")
@@ -684,7 +684,7 @@ def explain_run_jobs(o_r, run, tail, repo=None):
     elif "test" in kinds:
         verdict = "TEST FAILURE"
     elif "unclear" in kinds:
-        verdict = f"UNCLEAR (a failed step logged no FAILED/error line: read `{forge_cli_name()} run view {rid} --log-failed`; if infra, {rerun})"
+        verdict = f"UNCLEAR (a failed step logged no FAILED/error line: read `gh run view {rid} --log-failed`; if infra, {rerun})"
     else:
         verdict = f"INFRA-SHAPED ({rerun})" if kinds else "no failed job listed"
     if not kinds and d.get("status") not in (None, "completed"):  # undecided: running, or waiting for a runner slot
@@ -851,7 +851,7 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
 
 
 # THE ONE CI-STATE SNAPSHOT (the owner, 2026-10-27: the watch, the gate summary, ci-why's outside list and the red patrol
-# each polled Forgejo on their own and disagreed). The processor reads every main workflow once per cycle, writes
+# each polled the forge on their own and disagreed). The processor reads every main workflow once per cycle, writes
 # ci-state.json atomically; the gate verdict, the outside-the-gate reds, the published summary and the patrol read it.
 # One older than CI_STATE_MAX_AGE is UNREAD (never green).
 CI_STATE_MAX_AGE = 180

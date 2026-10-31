@@ -30,7 +30,7 @@ class StepBoundTest(unittest.TestCase):
 
     def test_a_steps_error_is_reported_now_or_at_the_next_look(self):
         def boom():
-            raise RuntimeError("forgejo said no")
+            raise RuntimeError("github said no")
         self.assertFalse(A.run_step("t-boom", boom))
         gate = threading.Event()
 
@@ -56,7 +56,7 @@ if __name__ == "__main__":
 class StoreDownNeverEndsTheLoopTest(unittest.TestCase):
     """2026-10-29 22:31: the network dropped, every step failed for ROUND_ERRORS_MAX rounds, and the STALLED condition's
     own call to the (remote) store raised out of the loop: the processor died, launchd restarted it, and a restarted
-    processor holds no Forgejo token. The loop must outlive its store; a re-exec onto new code must keep the token."""
+    processor holds no token. The loop must outlive its store; a re-exec onto new code must keep the token."""
 
     def test_failing_rounds_and_an_unreachable_store_never_end_the_processor(self):
         from test_agentctl import Repo
@@ -86,19 +86,19 @@ class StoreDownNeverEndsTheLoopTest(unittest.TestCase):
 
     def test_a_re_exec_onto_new_code_keeps_the_token_in_the_environment(self):
         seen = {}
-        saved = (A.os.execv, A.START_CODE, A.restart_gate, A.code_version, os.environ.get("FORGEJO_API_TOKEN"))
-        A.os.execv = lambda exe, argv: seen.update(argv=argv, tok=os.environ.get("FORGEJO_API_TOKEN"))
+        saved = (A.os.execv, A.START_CODE, A.restart_gate, A.code_version, os.environ.get("AGENTCTL_STORE_TOKEN"))
+        A.os.execv = lambda exe, argv: seen.update(argv=argv, tok=os.environ.get("AGENTCTL_STORE_TOKEN"))
         A.START_CODE, A.restart_gate, A.code_version = "old", (lambda: (True, "")), (lambda *a: "new")
         A._last_code_check[0] = 0
-        os.environ["FORGEJO_API_TOKEN"] = "tok-handed-over"
+        os.environ["AGENTCTL_STORE_TOKEN"] = "tok-handed-over"
         try:
             A.restart_if_changed(argv=["waiting", "run", "--service"])
         finally:
             A.os.execv, A.START_CODE, A.restart_gate, A.code_version, tok = saved
             if tok is None:
-                os.environ.pop("FORGEJO_API_TOKEN", None)
+                os.environ.pop("AGENTCTL_STORE_TOKEN", None)
             else:
-                os.environ["FORGEJO_API_TOKEN"] = tok
+                os.environ["AGENTCTL_STORE_TOKEN"] = tok
         # execv (never execve with a filtered env): the new image inherits this environment, the token with it
         self.assertEqual(seen["tok"], "tok-handed-over")
         self.assertEqual(seen["argv"][-3:], ["waiting", "run", "--service"])

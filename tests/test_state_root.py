@@ -34,7 +34,7 @@ class StateRootTest(unittest.TestCase):
 
 
 class CachedSummaryTest(unittest.TestCase):
-    """`ci-why --summary --cached` (the status line's, every 15 s) does no live work: no subprocess, no Forgejo."""
+    """`ci-why --summary --cached` (the status line's, every 15 s) does no live work: no subprocess, no GitHub."""
     def run_cached(self, content):
         path = os.path.join(tempfile.mkdtemp(), "state.json")
         epoch, repo, line = content.rstrip("\n").split("\t", 2)

@@ -12,8 +12,8 @@ TOK = "tok-0123456789abcdef"
 class TokenResolutionTest(Base):
     def setUp(self):
         super().setUp()
-        self.saved = {k: os.environ.get(k) for k in ("GH_TOKEN", "FORGEJO_API_TOKEN", "AGENTCTL_MOVIES_REPO", "AGENTCTL_INBOX_DIR", "PATH")}
-        for k in ("GH_TOKEN", "FORGEJO_API_TOKEN"):
+        self.saved = {k: os.environ.get(k) for k in ("GH_TOKEN", "AGENTCTL_STORE_TOKEN", "AGENTCTL_MOVIES_REPO", "AGENTCTL_INBOX_DIR", "PATH")}
+        for k in ("GH_TOKEN", "AGENTCTL_STORE_TOKEN"):
             os.environ.pop(k, None)
         os.environ["AGENTCTL_MOVIES_REPO"] = self.r.path
         os.environ["AGENTCTL_INBOX_DIR"] = os.path.join(self.tmp.name, "inbox")
@@ -51,7 +51,7 @@ class TokenResolutionTest(Base):
         return drop
 
     def test_1_environment_wins(self):
-        os.environ["FORGEJO_API_TOKEN"] = "env-token-0123456789"
+        os.environ["AGENTCTL_STORE_TOKEN"] = "env-token-0123456789"
         self.fake_secrets("echo vault-token-0123456789")
         self.assertEqual(A.token(MOVIES), "env-token-0123456789")
 
@@ -80,7 +80,7 @@ class TokenResolutionTest(Base):
 
     def test_an_agents_own_land_reads_the_vault_itself_and_background_code_never_does(self):
         """2026-10-30: agents' `land` failed NoToken (no TTY in a Claude Code command, and the processor held none), so
-        they wrapped it in `secrets run movies FORGEJO_API_TOKEN --`. An agent's own command, in its session, may run
+        they wrapped it in `secrets run movies AGENTCTL_STORE_TOKEN --`. An agent's own command, in its session, may run
         `secrets`; anything agentctl started in the background (spawn_detached: AGENTCTL_DETACHED) never does."""
         marker = os.path.join(self.tmp.name, "ran")
         self.fake_secrets(f"touch {marker}; echo vault-token-0123456789")
@@ -110,9 +110,9 @@ class TokenResolutionTest(Base):
     def test_a_submission_with_no_token_goes_to_the_outbox_for_the_sync(self):
         class NoTokStore:
             def submit(self, e):
-                raise A.NoToken("agentctl: could not read the movies FORGEJO_API_TOKEN (test)")
+                raise A.NoToken("agentctl: could not read the movies AGENTCTL_STORE_TOKEN (test)")
         r = A.submit_remote(NoTokStore(), {"id": "20261030-x-abc"})
-        self.assertIn("FORGEJO_API_TOKEN", r["outbox"])
+        self.assertIn("AGENTCTL_STORE_TOKEN", r["outbox"])
         self.assertTrue(os.path.exists(os.path.join(A.sync_outbox_dir(), "20261030-x-abc.json")))
 
     def test_processor_without_token_falls_through_to_secrets(self):
@@ -313,7 +313,7 @@ class TokenSaidOnTransitionTest(unittest.TestCase):
         for i in range(50):
             A.token_missing("movies", "locked", now_=1000 + i)
         self.assertEqual(len(self.lines()), 1, self.lines())
-        self.assertIn("the movies Forgejo token is missing (locked)", self.lines()[0])
+        self.assertIn("the movies token is missing (locked)", self.lines()[0])
         self.assertEqual(self.notes, ["locked"])  # the inbox condition: on the transition, not per read
         A.token_missing("movies", "locked", now_=1000 + 600)
         self.assertEqual(len(self.lines()), 2)
@@ -329,7 +329,7 @@ class TokenSaidOnTransitionTest(unittest.TestCase):
 
     def test_a_step_without_token_is_quiet(self):
         def step():
-            raise A.NoToken("agentctl: could not read the movies FORGEJO_API_TOKEN (test)")
+            raise A.NoToken("agentctl: could not read the movies AGENTCTL_STORE_TOKEN (test)")
         self.assertFalse(A.run_step("t-notoken", step))
         self.assertEqual(self.lines(), [])
         self.assertFalse(A.run_step("t-other", lambda: 1 / 0))
@@ -338,11 +338,11 @@ class TokenSaidOnTransitionTest(unittest.TestCase):
 
     def test_the_token_is_handed_over_only_when_the_processor_lacks_it(self):
         base = tempfile.mkdtemp(dir=os.environ["AGENTCTL_TEST_RUN_SOCK"], prefix="s-")
-        saved = {k: os.environ.get(k) for k in ("AGENTCTL_SOCK_DIR", "FORGEJO_API_TOKEN", "GH_TOKEN")}
+        saved = {k: os.environ.get(k) for k in ("AGENTCTL_SOCK_DIR", "AGENTCTL_STORE_TOKEN", "GH_TOKEN")}
         saved_ws, saved_tok, saved_slug = A.waiting_state, A.token, A.slug
         os.environ["AGENTCTL_SOCK_DIR"] = base
         os.environ.pop("GH_TOKEN", None)
-        os.environ.pop("FORGEJO_API_TOKEN", None)
+        os.environ.pop("AGENTCTL_STORE_TOKEN", None)
         d = tempfile.mkdtemp()
         A.waiting_state = lambda repo: (d, None, None)
         A.slug = lambda repo: MOVIES
@@ -352,9 +352,9 @@ class TokenSaidOnTransitionTest(unittest.TestCase):
             self.addCleanup(drop.close)
             self.assertTrue(A.offer_token("/x"))  # it holds none: handed over
             deadline = time.time() + 5
-            while os.environ.get("FORGEJO_API_TOKEN") != TOK and time.time() < deadline:
+            while os.environ.get("AGENTCTL_STORE_TOKEN") != TOK and time.time() < deadline:
                 time.sleep(0.05)
-            self.assertEqual(os.environ.get("FORGEJO_API_TOKEN"), TOK)
+            self.assertEqual(os.environ.get("AGENTCTL_STORE_TOKEN"), TOK)
             for _ in range(5):
                 self.assertFalse(A.offer_token("/x"), "it holds this token: nothing to hand over")
             handed = [l for l in self.lines() if "handed over" in l]

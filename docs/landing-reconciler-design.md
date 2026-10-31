@@ -1,5 +1,9 @@
 # Landing and red handling: a level-triggered reconciler with leases
 
+> **Historical (2026-10-31):** written while CI ran on Forgejo. Forgejo was switched off on 2026-10-31 and agentctl
+> now reads GitHub only (`gh`, remote `origin`, the store's own tokens); the Forgejo commands, ports, tokens and
+> settings named below no longer exist. Current reference: `~/bin/AGENTCTL.md`.
+
 Status: design, approved in outline by the owner on 2026-10-28. Nothing here is implemented yet.
 Scope: movies landing (`agentctl land`, the queue and checkers, the `waiting` batch) and red handling (claims, the
 patrol, dispatch, owner blocks, the recovery registry, inbox escalation) in `~/bin/agentctl`, plus where they run.
@@ -120,7 +124,7 @@ For each repo (only movies is gated today):
 
 1. Every submitted change is in a state of its machine (§5.1), within its deadline. If it is not
    terminal, a live lease or a live CI run stands behind it.
-2. The `waiting` branch equals forgejo/main plus the checked waiting entries, in batch order. Otherwise it
+2. The `waiting` branch equals origin/main plus the checked waiting entries, in batch order. Otherwise it
    is rebuilt.
 3. Every red signature on main has exactly one of the following, within the state's deadline:
    - a live fixer lease;
@@ -153,7 +157,7 @@ lets the test assert "every state has a deadline and an exit" uniformly.
 | `checking` | A check lease is held (local), or a precommit-check run for (tip, base) is undecided (CI). | The lease TTL (10 min, renewed on progress); max hold `max(2×p90, 30 min)`. A CI run: 15 min to start, 2 h to decide. | → `queued` with `infra_attempts+1` (lease lost, run cancelled, executor dead). At `infra_attempts ≥ 3`: still → `queued` with backoff 10→60 min, plus an escalation each cycle. Infra never rejects a change. | Pass → `checked`. A test failure (the run's conclusion is failure on a non-setup step, per `classify_job`) → `rejected`. Conflict on the rebase → `rejected`. |
 | `checked` | A pass is recorded for (tip tree, base). The gate decides what happens next. | 5 min while the gate is unread | Escalate a `gate unread` condition (§5.4). Stay `checked`; re-evaluated every tick. | Gate green, or the change may land while red (tools-only or `Fixes-Red` for a red run) → `pushing`. Gate red and the change must wait → `waiting`. Main moved with overlap (the existing `recheck_reason`) → `queued` (a new round, not an attempt). |
 | `waiting` | The entry's commits are on `waiting` (a cherry-pick of the checked change). | 6 h | Escalate `waiting 6 h behind red <sig>`, then every 6 h. This is the oldest-unlanded invariant's per-item twin. | The batch (§5.2) lands it → `landed`. The batch confirms it as culprit → `rejected`. It no longer applies to the new main → `rejected (conflict)`. |
-| `pushing` | The reconciler holds the landing lease `land/<repo>`, with this entry named in the lease meta. | Lease max 300 s (TTL 120 s). The push subprocess runs under a hard 120 s timeout. | Verify: if the tip (or its patch-equivalent) is on forgejo/main → `landed`. Otherwise → `checked` with `push_attempts+1`. At ≥ 3: escalate a `push failing` condition (probe: `git ls-remote` plus the tunnel probe), with backoff. Never `rejected`. | Race (non-fast-forward) → `checked` (not an attempt). Red-gate refusal → `checked`. |
+| `pushing` | The reconciler holds the landing lease `land/<repo>`, with this entry named in the lease meta. | Lease max 300 s (TTL 120 s). The push subprocess runs under a hard 120 s timeout. | Verify: if the tip (or its patch-equivalent) is on origin/main → `landed`. Otherwise → `checked` with `push_attempts+1`. At ≥ 3: escalate a `push failing` condition (probe: `git ls-remote` plus the tunnel probe), with backoff. Never `rejected`. | Race (non-fast-forward) → `checked` (not an attempt). Red-gate refusal → `checked`. |
 | `landed` | Patch-equivalent on main. | Watch: 3 h for main's Main run and convergence run containing the sha. | Undecided runs past the deadline become a `stuck run` red (§5.3). Archive after 14 d. | Each watch verdict is an event: `WATCH OK`, or `WATCH RED` (which creates or attaches a red, with the change's author offered first). |
 | `rejected` | A test failure, a conflict, a confirmed batch culprit, or a squash-guard refusal. | 30 min for its author to re-submit (supersede) or `land abandon` | Create a `rescue` red item (§5.3, kind `rejected-change`) carrying the change's picture. Its author's session no longer owns it. Archive after 14 d. | A re-submission from the same worktree supersedes the rescue. |
 | `superseded`, `cancelled` | Terminal. | 14 d | Archive. | none |
@@ -168,7 +172,7 @@ One per repo. A batch exists only while `waiting` entries exist.
 | State | Means | Deadline | On deadline | Other exits |
 |---|---|---|---|---|
 | `blocked-red` | Main is red, and no `Fixes-Red` entry for the red waits. | Tied to the red's own machine. Re-evaluated every tick; 6 h. | Escalate, through the reds' invariant: a red main with entries waiting > 6 h. | Gate green, or a fix entry arrives → `assembling`. |
-| `assembling` | The reconciler holds `land/<repo>`, rebuilds `waiting` on forgejo/main and takes the batch. | Lease max 300 s | `attempts+1` → `assembling` again. At 3: → `held`. | Done → `checking`. Nothing left → no batch. |
+| `assembling` | The reconciler holds `land/<repo>`, rebuilds `waiting` on origin/main and takes the batch. | Lease max 300 s | `attempts+1` → `assembling` again. At 3: → `held`. | Done → `checking`. Nothing left → no batch. |
 | `checking` | A fast-check lease or CI run on the batch tip. | As for the change's `checking` | Infra retry once on a fresh server or the CI tier, then → `held`. | Pass → `pushing`. Fail → `bisecting`. |
 | `bisecting` | Prefix checks, one lease or run each. | As for each check | As above | A culprit fails twice, on its own prefix and again as a confirmation (audit #10) → that entry `rejected`, the passing prefix → `pushing`, the rest → `assembling`. Every prefix passes → `assembling` once more; the second time → `held`, plus a flake red for a determinism fix. |
 | `pushing` | As for the change's `pushing` | 300 s | As for the change | → `landed` |
@@ -387,7 +391,7 @@ Anthropic credentials (open question Q8). The loop:
    - the runs and failing jobs, with their relevant log lines;
    - every prior attempt: who, verdict, diff, and the run that refuted it;
    - the diagnosis, the culprit candidates, the tier's brief, and `recurring: N` when it applies;
-3. create the worktree `~/projects/movies-wt-red-<sig8>-<attempt>` off forgejo/main and spawn
+3. create the worktree `~/projects/movies-wt-red-<sig8>-<attempt>` off origin/main and spawn
    `claude -p` (`--resume` for the same-fixer tier), exactly as `red_dispatch` does today;
 4. every 60 s: compute the progress mark and `renew`. `no_progress` for the TTL means the lease lapses on
    its own. On `lost`, stop the process group and write `RED-STOP.md`;

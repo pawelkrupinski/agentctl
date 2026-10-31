@@ -5,7 +5,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, TOOL  # noqa: E402
 
-FAKE = os.path.join(HERE, "fake_forgejo_gh.py")
+FAKE = os.path.join(HERE, "fake_gh.py")
 
 
 def job(name, status="completed", conclusion="success"):
@@ -17,7 +17,7 @@ class FakeForge(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.d = os.path.join(self.tmp.name, "gh")
         os.makedirs(self.d)
-        self.env = {"AGENTCTL_SCRATCH": os.path.join(self.tmp.name, "scratch"), "AGENTCTL_FORGEJO_GH": FAKE,
+        self.env = {"AGENTCTL_SCRATCH": os.path.join(self.tmp.name, "scratch"), "AGENTCTL_GH_CLI": FAKE,
                     "FAKE_GH_DIR": self.d, "GH_TOKEN": "dummy", "AGENTCTL_MIN_INTERVAL": "0.3", "AGENTCTL_ATTACH_POLL": "0.2",
                     "AGENTCTL_OWNERS_DIR": os.path.join(self.tmp.name, "owners"),
                     # the reds' caches (runsig/<run id>.json) per test: run 39's signatures cached by one ci-why test
@@ -25,10 +25,10 @@ class FakeForge(unittest.TestCase):
                     "AGENTCTL_REDS_DIR": os.path.join(self.tmp.name, "reds")}
         self.saved = {k: os.environ.get(k) for k in self.env}
         os.environ.update(self.env)
-        self.saved_gh, A.FORGEJO_GH = A.FORGEJO_GH, FAKE
+        self.saved_gh, A.GH_CLI = A.GH_CLI, FAKE
 
     def tearDown(self):
-        A.FORGEJO_GH = self.saved_gh
+        A.GH_CLI = self.saved_gh
         for k, v in self.saved.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -118,7 +118,7 @@ class WaitRunTest(FakeForge):
         self.assertEqual(rc, 2, out)
 
     def test_attaches_to_a_live_waiter_without_polling(self):
-        """An owner holding the target's lock + its verdict: the second caller reads the verdict and never calls Forgejo."""
+        """An owner holding the target's lock + its verdict: the second caller reads the verdict and never calls GitHub."""
         key = "run-pawelkrupinski_movies-5"
         own = A.Owned("wait", key)
         holder = subprocess.Popen([sys.executable, "-c", "import fcntl, sys, time\n"

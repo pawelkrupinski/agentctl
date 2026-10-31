@@ -171,7 +171,7 @@ class QueueTest(WaitingTest):
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
         eid, _ = self.queued(wt)
         other, _ = self.agent("b", "worker/src/main/B.scala", "b\n", msg="b: two")
-        sh(other, "git", "push", "-q", "forgejo", "HEAD:main")
+        sh(other, "git", "push", "-q", "origin", "HEAD:main")
         self.assertEqual(self.check(eid), 0)
         self.assertEqual(self.remote_log()[:2], ["a: one", "b: two"])
 
@@ -185,7 +185,7 @@ class QueueTest(WaitingTest):
             n.append(1)
             if len(n) <= 2:  # the same sbt module (web): an overlap, so each move means a new round
                 other, _ = self.agent(f"m{len(n)}", f"web/src/main/M{len(n)}.scala", "m\n", msg=f"main moves {len(n)}")
-                sh(other, "git", "push", "-q", "forgejo", "HEAD:main")
+                sh(other, "git", "push", "-q", "origin", "HEAD:main")
             return real(repo, d, e, tree, base, head, mode, cls, log_path, own)
         A.run_entry_checks = moving
         self.addCleanup(setattr, A, "run_entry_checks", real)
@@ -204,7 +204,7 @@ class QueueTest(WaitingTest):
             if len(n) == 1:
                 for i, (path, text) in enumerate(moves):
                     other, _ = self.agent(f"m{i}", path, text, msg=f"main moves {i}")
-                    sh(other, "git", "push", "-q", "forgejo", "HEAD:main")
+                    sh(other, "git", "push", "-q", "origin", "HEAD:main")
             return real(repo, d, e, tree, base, head, mode, cls, log_path, own)
         A.run_entry_checks = moving
         self.addCleanup(setattr, A, "run_entry_checks", real)
@@ -266,7 +266,7 @@ class QueueTest(WaitingTest):
         wt, _ = self.agent("a", "web/src/main/Shared.scala", "mine\n")
         eid, _ = self.queued(wt)
         other, _ = self.agent("b", "web/src/main/Shared.scala", "theirs\n")
-        sh(other, "git", "push", "-q", "forgejo", "HEAD:main")
+        sh(other, "git", "push", "-q", "origin", "HEAD:main")
         self.assertEqual(self.check(eid), 1)
         self.assertIn("no longer applies", [e for e in self.inbox() if e["kind"] == "NOT_LANDED"][0]["verdict"])
 
@@ -302,15 +302,16 @@ class QueueTest(WaitingTest):
         self.assertEqual(len(self.calls_of("--range")), 1)
         self.assertEqual(self.pushed(), ["push remote="])
 
-    def fake_forgejo(self, status, head, ref="check/e1"):
+    def fake_github(self, status, head, ref="check/e1"):
         calls = []
 
-        def api(o_r, method, path, params=None):
+        def api(o_r, method, path, params=None, body=None):
             calls.append((method, path))
-            if path == "actions/runs":
-                return {"workflow_runs": [{"id": 99, "commit_sha": head, "prettyref": ref}]}
+            if path.startswith("actions/workflows/") and path.endswith("/runs"):
+                return {"workflow_runs": [{"id": 99, "head_sha": head, "head_branch": ref}]}
             if path == "actions/runs/99":
-                return {"id": 99, "index_in_repo": 7, "status": status, "html_url": "http://f/runs/7"}
+                return {"id": 99, "run_number": 7, "status": "completed", "conclusion": status,
+                        "html_url": "http://f/runs/7"}
             return None
         saved = (A.api, A.fetch_failed_log, A.slug)
         A.api, A.slug = api, (lambda repo: "o/movies")
@@ -321,17 +322,17 @@ class QueueTest(WaitingTest):
 
     def test_remote_check_pushes_a_check_branch_reads_the_verdict_and_deletes_the_branch(self):
         head = sh(self.r.path, "git", "rev-parse", "HEAD").strip()
-        calls = self.fake_forgejo("success", head)
+        calls = self.fake_github("success", head)
         ok, out = A.remote_check(self.r.path, {"id": "e1"}, "base", head, "--checks-only")
         self.assertTrue(ok, out)
         self.assertIn("check/e1", sh(self.r.root, "git", "--git-dir", self.r.bare, "branch", "--list", "check/*"),
                       "pushed for the run (deleted through the API, faked here)")
-        self.assertIn(("DELETE", "branches/check%2Fe1"), calls)
-        calls = self.fake_forgejo("failure", head)
+        self.assertIn(("DELETE", "git/refs/heads/check/e1"), calls)
+        calls = self.fake_github("failure", head)
         ok, out = A.remote_check(self.r.path, {"id": "e1"}, "base", head, "--checks-only")
         self.assertFalse(ok)
         self.assertIn("[error] BROKEN is in the tree", out)
-        self.assertIn(("DELETE", "branches/check%2Fe1"), calls)
+        self.assertIn(("DELETE", "git/refs/heads/check/e1"), calls)
 
     def test_a_fix_that_must_still_wait_is_blocked_red_and_holds_no_solo_change(self):
         """2026-10-31 06:44-07:50Z: Main #2877 red; the only waiting change named it (Fixes-Red: 2877 on one commit) but
@@ -365,10 +366,10 @@ class QueueTest(WaitingTest):
 
     def test_the_batchs_check_on_ci_runner_is_the_fast_only_set_on_a_check_fast_branch(self):
         head = sh(self.r.path, "git", "rev-parse", "HEAD").strip()
-        calls = self.fake_forgejo("success", head, ref="check/fast-batch-x")
+        calls = self.fake_github("success", head, ref="check/fast-batch-x")
         ok, out = A.remote_check(self.r.path, {"id": "batch-x"}, "base", head, "--fast-only")
         self.assertTrue(ok, out)
-        self.assertIn(("DELETE", "branches/check%2Ffast-batch-x"), calls)  # the branch names the mode for the workflow
+        self.assertIn(("DELETE", "git/refs/heads/check/fast-batch-x"), calls)  # the branch names the mode for the workflow
         seen, saved = [], (A.remote_check, A.remote_checks_supported, A.precheck_hook, A.batch_mode)
         A.remote_check = lambda repo, e, base, tip, mode, own=None: seen.append((e["id"], mode)) or (True, "ok")
         A.remote_checks_supported = lambda tree: True
@@ -404,11 +405,11 @@ class QueueTest(WaitingTest):
         evs = [x for x in A.Store().events() if x["item_id"] == eid and x["severity"] == "escalate"]
         self.assertTrue(evs, "from the third infra re-queue on, each one escalates")
 
-    def test_the_hook_is_given_the_remotes_ref_so_it_reads_forgejos_gate(self):
+    def test_the_hook_is_given_the_remotes_ref_so_it_reads_its_gate(self):
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         eid, _ = self.queued(wt)
         self.check(eid)
-        self.assertRegex(self.calls_of("--range")[0], r"^--range forgejo/main\.\.[0-9a-f]{40}$")
+        self.assertRegex(self.calls_of("--range")[0], r"^--range origin/main\.\.[0-9a-f]{40}$")
 
     def test_follow_keeps_the_in_process_land(self):
         wt, sha = self.agent("a", "web/src/main/A.scala", "a\n")
@@ -426,7 +427,7 @@ class QueueTest(WaitingTest):
 
 
     def remote_refs(self):
-        out = sh(self.r.path, "git", "ls-remote", "--heads", "forgejo", "refs/heads/land/*")
+        out = sh(self.r.path, "git", "ls-remote", "--heads", "origin", "refs/heads/land/*")
         return [l.split()[-1] for l in out.splitlines() if l.strip()]
 
     def test_a_queued_change_is_pushed_to_its_land_ref_and_the_ref_goes_when_it_is_decided(self):
@@ -448,7 +449,7 @@ class QueueTest(WaitingTest):
     def test_no_land_ref_while_the_repositorys_hook_would_check_it(self):
         wt, _sha = self.agent("a", "web/src/main/A.scala", "a\n")
         self.queued(wt)
-        self.assertEqual(self.remote_refs(), [], "the hook at forgejo/main knows no land/ refs: nothing pushed")
+        self.assertEqual(self.remote_refs(), [], "the hook at origin/main knows no land/ refs: nothing pushed")
 
 
 class Died(BaseException):
@@ -459,7 +460,7 @@ class RemotePickupTest(QueueTest):
     """2026-10-27: entry -45's remote run 3344 finished green yet the entry showed `checking ... remote run 3344` for an
     hour: the run belonged to the checker process (cancelled or orphaned when it ended), a replacement re-dispatched from
     scratch, and the saved remote_run was never cleared. Now the run is the ENTRY's: saved at once, adopted by a
-    replacement checker, re-derived by the processor from Forgejo every cycle."""
+    replacement checker, re-derived by the processor from GitHub every cycle."""
 
     def setUp(self):
         super().setUp()
@@ -484,12 +485,14 @@ class RemotePickupTest(QueueTest):
         def api(o_r, method, path, params=None, body=None):
             if st["fail_api"]:
                 raise RuntimeError("Connection refused")
-            if path == "actions/runs":
-                return {"workflow_runs": [{"id": 99, "commit_sha": ref.split(":")[0],
-                                           "prettyref": ref.split("refs/heads/")[1]} for ref in st["branch_pushes"]]}
+            if path.startswith("actions/workflows/") and path.endswith("/runs"):
+                return {"workflow_runs": [{"id": 99, "head_sha": ref.split(":")[0],
+                                           "head_branch": ref.split("refs/heads/")[1]} for ref in st["branch_pushes"]]}
             if path == "actions/runs/99":
                 st["polls"] += 1
-                return {"id": 99, "index_in_repo": 7, "status": st["status"], "html_url": "http://f/runs/7"}
+                done = st["status"] not in ("running", "waiting")
+                return {"id": 99, "run_number": 7, "status": "completed" if done else "in_progress",
+                        "conclusion": st["status"] if done else None, "html_url": "http://f/runs/7"}
             return None
         A.api, A.slug, A.git = api, (lambda repo: "o/movies"), git
         A.cancel_run = lambda o_r, rid, why: st["cancelled"].append(rid)
@@ -612,7 +615,7 @@ class RemotePickupTest(QueueTest):
     def test_a_new_round_clears_the_old_runs_record(self):
         d, e = self.checking_entry()
         other, _ = self.agent("b", "worker/src/main/B.scala", "b\n", msg="b: two")
-        sh(other, "git", "push", "-q", "forgejo", "HEAD:main")
+        sh(other, "git", "push", "-q", "origin", "HEAD:main")
         saved_rc = A.remote_check
         A.remote_check = lambda repo, e_, base, head, mode, own=None: (True, "precommit-check.yml: success")
         self.addCleanup(setattr, A, "remote_check", saved_rc)

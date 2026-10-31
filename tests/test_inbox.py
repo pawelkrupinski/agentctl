@@ -156,12 +156,12 @@ class InboxTest(unittest.TestCase):
     def test_a_systemexit_message_is_the_verdict(self):
         # 2026-10-27: two detached watches died on the vault's SystemExit and their entries said "(no output)"
         def handler(a):
-            raise SystemExit("agentctl: could not read the movies FORGEJO_API_TOKEN from the vault")
+            raise SystemExit("agentctl: could not read the movies AGENTCTL_STORE_TOKEN from the vault")
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()), \
                 self.assertRaises(SystemExit):
             A.with_inbox("watch", handler, None)
         [e] = self.entries()
-        self.assertEqual(e["verdict"], "exited: could not read the movies FORGEJO_API_TOKEN from the vault")
+        self.assertEqual(e["verdict"], "exited: could not read the movies AGENTCTL_STORE_TOKEN from the vault")
         self.assertEqual((e["exit"], e["kind"]), (1, "UNKNOWN"))
 
     def test_a_bare_exit_1_names_what_it_said_last(self):

@@ -176,8 +176,8 @@ class MaskTest(unittest.TestCase):
         for secret in ("ghp_" + "a1B2" * 9, "github_pat_" + "x1" * 25, "sk-ant-api03-" + "Ab3" * 10, "AKIAIOSFODNN7EXAMPLE",
                        "hvs.CAESIJ" + "q9" * 12, "xoxb-1234-5678-abcdEFGH", "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4"):
             self.assertEqual(A.live_mask_text(f"use {secret} now"), f"use {M} now", secret)
-        self.assertEqual(A.live_mask_text("export FORGEJO_TOKEN=3f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a"),
-                         f"export FORGEJO_TOKEN={M}")
+        self.assertEqual(A.live_mask_text("export GITHUB_TOKEN=3f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a"),
+                         f"export GITHUB_TOKEN={M}")
         self.assertEqual(A.live_mask_text('{"password": "hunter2hunter2X9"}'), '{"password": "' + M + '"}')
         self.assertEqual(A.live_mask_text("Authorization: Bearer abcdef0123456789abcdef01"), f"Authorization: Bearer {M}")
         self.assertEqual(A.live_mask_text("git push https://pawel:s3cretPass@host/r.git"),
@@ -189,7 +189,7 @@ class MaskTest(unittest.TestCase):
         for s in ("commit 0f24259a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e", "inputTokens: 207", "token budget exhausted",
                   "val token = readToken()", "password: $VAULT_PASSWORD", "the secret sauce is caching",
                   "/Users/pawel/.claude/projects/-Users-pawel-projects-movies/2bee16b9-f06c-4c34.jsonl",
-                  "https://forgejo.example/o/r/actions/runs/3785"):
+                  "https://github.example/o/r/actions/runs/3785"):
             self.assertEqual(A.live_mask_text(s), s)
 
     def test_json_values_under_secret_keys(self):
