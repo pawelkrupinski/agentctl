@@ -10,7 +10,7 @@ from test_agentctl import A  # noqa: E402
 
 ENV_KEYS = ("AGENTCTL_IDENTITY", "AGENTCTL_GITHUB_API", "AGENTCTL_GITHUB_LANDER_APP_ID", "AGENTCTL_GITHUB_LANDER_KEY_FILE",
             "AGENTCTL_GITHUB_READER_APP_ID", "AGENTCTL_GITHUB_READER_KEY_FILE", "AGENTCTL_GITHUB_LANDER_REPOS",
-            "AGENTCTL_FORGE", "AGENTCTL_HOST", "GH_TOKEN", "GIT_CONFIG_COUNT", "AGENTCTL_GHAPP_GIT")
+            "AGENTCTL_FORGE", "AGENTCTL_HOST", "GH_TOKEN", "GIT_CONFIG_COUNT", "AGENTCTL_GHAPP_GIT", "AGENTCTL_STATE_ROOT")
 
 
 def b64d(s):
@@ -68,6 +68,8 @@ class GhAppTest(unittest.TestCase):
         A._ghapp_tokens.clear()
         for k in ENV_KEYS:
             os.environ.pop(k, None)
+        self.state = tempfile.TemporaryDirectory()  # each test its own token cache files
+        os.environ["AGENTCTL_STATE_ROOT"] = self.state.name
         os.environ.update({"AGENTCTL_IDENTITY": "github-app",
                            "AGENTCTL_GITHUB_API": f"http://127.0.0.1:{self.srv.server_address[1]}",
                            "AGENTCTL_GITHUB_LANDER_APP_ID": "101", "AGENTCTL_GITHUB_LANDER_KEY_FILE": self.key,
@@ -77,6 +79,7 @@ class GhAppTest(unittest.TestCase):
         self.srv.shutdown()
         self.srv.server_close()
         A._ghapp_tokens.clear()
+        self.state.cleanup()
         for k, v in self.saved.items():
             if v is None:
                 os.environ.pop(k, None)
