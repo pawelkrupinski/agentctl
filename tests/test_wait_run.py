@@ -19,7 +19,10 @@ class FakeForge(unittest.TestCase):
         os.makedirs(self.d)
         self.env = {"AGENTCTL_SCRATCH": os.path.join(self.tmp.name, "scratch"), "AGENTCTL_FORGEJO_GH": FAKE,
                     "FAKE_GH_DIR": self.d, "GH_TOKEN": "dummy", "AGENTCTL_MIN_INTERVAL": "0.3", "AGENTCTL_ATTACH_POLL": "0.2",
-                    "AGENTCTL_OWNERS_DIR": os.path.join(self.tmp.name, "owners")}
+                    "AGENTCTL_OWNERS_DIR": os.path.join(self.tmp.name, "owners"),
+                    # the reds' caches (runsig/<run id>.json) per test: run 39's signatures cached by one ci-why test
+                    # were another's in the same worker (main red 2026-10-31, tests.yml #53)
+                    "AGENTCTL_REDS_DIR": os.path.join(self.tmp.name, "reds")}
         self.saved = {k: os.environ.get(k) for k in self.env}
         os.environ.update(self.env)
         self.saved_gh, A.FORGEJO_GH = A.FORGEJO_GH, FAKE
