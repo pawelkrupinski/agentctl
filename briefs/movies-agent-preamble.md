@@ -1,9 +1,10 @@
 # Shared brief for movies-repo agents (2026-10-27)
 
 Repo: the movies monorepo (Scala 3, sbt; modules common, identity, worker, web, e2e, testkit; Mongo, one db per country
-plus the fleet db). Remote `forgejo` (ssh alias `forgejo-git`, never the Secure Enclave key, never retry loops on git
-auth). Main checkout `~/projects/movies` is the USER's dev and local-mirror checkout: do NOT work in it. Make your own worktree:
-`git -C ~/projects/movies worktree add -b <branch> ~/projects/movies-wt-<name> forgejo/main` (after `git fetch forgejo`).
+plus the fleet db). `<remote>` below is the forge's remote: `forgejo` (ssh alias `forgejo-git`, never the Secure Enclave
+key, never retry loops on git auth) until the cut-over to GitHub, `origin` (github.com) after it -- `~/bin/agentctl
+config show --all` names the forge. Main checkout `~/projects/movies` is the USER's dev and local-mirror checkout: do NOT work in it. Make your own worktree:
+`git -C ~/projects/movies worktree add -b <branch> ~/projects/movies-wt-<name> <remote>/main` (after `git fetch <remote>`).
 
 Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wait, ci-why, db-q, prepush-check. Also read the repo's CLAUDE.md.
 
@@ -12,7 +13,7 @@ Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wai
 ## Landing
 - No pre-merge CI (the owner, 2026-10-26). EVERY change -- identity included -- lands with `~/bin/agentctl land`
   from your worktree. There is no merge queue CI step, and no identity-landing-check LANDABLE is required.
-- AGENTS NEVER WAIT ON A LAND (the owner, 2026-10-27). `land` fetches, rebases onto forgejo/main, runs the squash guard
+- AGENTS NEVER WAIT ON A LAND (the owner, 2026-10-27). `land` fetches, rebases onto <remote>/main, runs the squash guard
   and prints `QUEUED <id> (<sha>)` within seconds. END YOUR TURN AT QUEUED. The always-on `waiting` processor then, on
   its own:
   1. checks the change in a check tree of its own (`<clone>-wt-check-<n>`, warm), admitted by the laptop's governor
@@ -37,13 +38,13 @@ Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wai
   edits ~/bin (agentctl has one editor; ~/bin's pre-commit hook refuses a fixer's commit).
 - On a WATCH RED routed back to you: if your change caused it, fix forward AT ONCE with a `Fixes-Red: <n>` trailer
   (same final trailer block as Co-Authored-By) and land again; if not, say so with the run number.
-- Before committing, run the unit tests of the modules you touched and their dependents, through scripts/sbt-warm (`git diff --name-only forgejo/main | scripts/unit-shards run` does it, split as CI splits them).
-- Before landing, check that `git diff --stat forgejo/main...HEAD` lists only your files, and run the test layers your
+- Before committing, run the unit tests of the modules you touched and their dependents, through scripts/sbt-warm (`git diff --name-only <remote>/main | scripts/unit-shards run` does it, split as CI splits them).
+- Before landing, check that `git diff --stat <remote>/main...HEAD` lists only your files, and run the test layers your
   change touches (CLAUDE.md). `scripts/identity-measure --footprint` / `identity-landing-check` stay available as
   optional confidence tools for a risky identity change; neither is required, and never run their `--full` mode
   "to be safe" -- main's convergence runs it after the merge.
 - There are no PRs and no other branches on the remote (the tools' own `measure/`, `check/` and `land/` refs aside).
-- Never squash, always rebase against upstream (owner): `git fetch forgejo && git rebase forgejo/main`, never a local main; one commit per logical step; no squash, no `reset --soft` recommit.
+- Never squash, always rebase against upstream (owner): `git fetch <remote> && git rebase <remote>/main`, never a local main; one commit per logical step; no squash, no `reset --soft` recommit.
 - Never use `PREPUSH_SKIP` or `--no-verify` -- on ANY commit or push, throwaway `measure/` branches included. Never
   `reset --soft` onto a moved main. `agentctl land --no-watch` is for scripts only.
 - Merge on green means MAIN green: while a gating workflow is red on main, a production commit waits on `waiting`
@@ -65,7 +66,8 @@ Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wai
 - Clean up your own CI runs (measurements, landing-check groups, dispatches: any run you started). The moment one of
   your runs is no longer needed (superseded by a newer commit,
   question answered, branch abandoned), cancel it: `secrets unlock bitcashier`, then
-  `~/bitcashier/infra/bin/forgejo-gh run cancel <run id>`, using the run id, not the index. Delete the measure branch
+  `~/bitcashier/infra/bin/forgejo-gh run cancel <run id>` (on GitHub: `gh run cancel <run id> -R pawelkrupinski/movies`),
+  using the run id, not the index. Delete the measure branch
   too. You decide what is superseded, and a deliberate before/after or bisect pair stays. Never cancel another
   agent's runs. Before reporting done, list your still-running runs and cancel the ones you no longer need.
 - If you'd wait more than 30 min, write a state file `~/projects/movies-wt-<name>/STATE.md` and end with a report, rather than idling.

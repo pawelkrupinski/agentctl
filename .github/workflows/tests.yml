@@ -1,0 +1,29 @@
+# agentctl's own suite on a GitHub-hosted runner (github-return plan W5b/W6): GREEN here is what ci-runner's auto-pin
+# reads once it reads GitHub (infra agentctl.nix: agentctl-pin with CI_SOURCE=github, as the agentctl-reader App).
+# Forgejo runs .forgejo/workflows/tests.yml instead (it reads only .forgejo/ when that directory exists).
+#
+# A fresh runner: no HOME state, sdkman or movies clone; the tests set HOME, PATH and git config themselves
+# (tests/harness.py). tests/run.py runs them in parallel, the harness bounds each test (60 s), and the job is bounded.
+name: tests
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  suite:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Suite (parallel, 60 s per test)
+        run: |
+          python3 --version
+          timeout -s KILL 420 python3 tests/run.py -j 4 --timeout 60 --suite-timeout 360 --durations 15

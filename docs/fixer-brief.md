@@ -39,7 +39,7 @@ trade, with the before and after in the commit message.
 ## LAND AS YOU GO
 Land each verified step at once with `~/bin/agentctl land`. While the gate is red, a change lands only with a
 `Fixes-Red: <run>` trailer naming the run it fixes, in the same final trailer block as Co-Authored-By. Never sit on
-unlanded commits. Fetch and rebase onto `forgejo/main`, never squash, one commit per step.
+unlanded commits. Fetch and rebase onto `<remote>/main`, never squash, one commit per step.
 
 ## RED FAMILIES
 Reds of your red's family (e.g. all convergence work) are added to your lease while you work, each as a line in
@@ -67,7 +67,7 @@ Everything above applies as written.
   of the stage job). You NEVER push, NEVER run `agentctl land`, NEVER deploy (`bin/deploy ... --apply`,
   `bin/forgejo-bootstrap`, `nixos-rebuild`, `switch-to-configuration`, `systemctl` on a host). agentctl refuses `land`
   from an infra fixer, and the session denies those commands.
-- Prepare the fix on your worktree's local branch, one commit per step, rebased on `forgejo/main`, with a
+- Prepare the fix on your worktree's local branch, one commit per step, rebased on `<remote>/main`, with a
   `Fixes-Red: <run>` trailer. Run what the repo runs locally: `bin/check-nix-formatting` for any .nix change, the
   touched guard's `bin/prove-*` harness and check (CLAUDE.md: a guard that cannot fail proves nothing). Read infra's
   CLAUDE.md first.

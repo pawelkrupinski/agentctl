@@ -2,7 +2,9 @@
 
 `~/bin/agentctl` is the orchestration tool for Claude subagents working in the bitcashier repos
 (`~/bitcashier/{infra,core,dashboard,invoice-page,version-dashboard}`) and in movies (`~/projects/movies`). All of
-these repos have the remote `forgejo`. It replaces the hand-written shell that agents kept getting wrong: poll loops,
+these repos have the remotes `forgejo` and `origin` (GitHub). THE FORGE SWITCH, `forge` in agentctl.toml
+($AGENTCTL_FORGE), picks the one agentctl reads, lands and pushes through, `<remote>` on this page: `forgejo` (forge =
+forgejo, the default until the cut-over to GitHub) or `origin` (forge = github). It replaces the hand-written shell that agents kept getting wrong: poll loops,
 fetch/rebase/push/verify sequences, log trawling, DB spelunking. It does that work in fewer, cheaper and safer tool
 calls.
 
@@ -15,7 +17,9 @@ calls.
   70 s on the laptop. `agentctl suite test_reds` runs the tests whose id contains a pattern. Mutation tests included.
   Run the touched modules while working and the full suite once, before landing.
 - CI: `.forgejo/workflows/tests.yml` runs the same suite on ci-runner's container tier for every push to main (a
-  fresh container: no HOME, sdkman or movies clone to lean on). Green there is what the auto-pin reads.
+  fresh container: no HOME, sdkman or movies clone to lean on), and `.github/workflows/tests.yml` on a GitHub-hosted
+  runner (Forgejo reads only `.forgejo/` when it exists). Green there is what the auto-pin reads: Forgejo's run, or
+  GitHub's once ci-runner's agentctl-pin reads GitHub (infra branch agentctl-github).
 - `agentctl --help` and `agentctl <cmd> --help` match this page.
 - The design behind it: `~/bin/docs/landing-reconciler-design.md`. Phase 2 (the store and the reconciler on
   ci-runner): `~/bin/docs/phase2-runbook.md`.
@@ -133,7 +137,7 @@ moves it forward; nothing is a detached process that can die with its state in i
 - **The DB is read-only.** `db-q` runs `sqlite3 -readonly -safe` and refuses anything but one SELECT, WITH or PRAGMA
   read.
 - **Never deletes unmerged work.** `cleanup` deletes only what is proven merged: the worktree's HEAD is an ancestor of
-  forgejo/main, or every one of its commits is patch-equivalent there per `git cherry`. The tree must also be clean and
+  <remote>/main, or every one of its commits is patch-equivalent there per `git cherry`. The tree must also be clean and
   idle. Every deletion is re-verified just before it happens and logged.
 - **One push to main at a time.** Every push to main happens under the `land/<repo>` lease, after the pushed tip's own
   checks passed on the base it is pushed onto.
@@ -147,7 +151,7 @@ moves it forward; nothing is a detached process that can die with its state in i
 
 The user has standing-OKed `agentctl cleanup --execute` for exactly what it deletes:
 
-- clean, idle (at least 2 h) worktrees of the six repos whose HEAD is merged into forgejo/main (ancestor, or all
+- clean, idle (at least 2 h) worktrees of the six repos whose HEAD is merged into <remote>/main (ancestor, or all
   commits patch-equivalent);
 - their local branches, but never `main` or `master`, and never a branch checked out elsewhere;
 - remote `measure/*` branches whose runs have all finished, or that are more than 24 h old with no run;
@@ -502,7 +506,7 @@ the red machine watches, each with its gate workflows, its `family` and its `pus
   `agentctl land`, `git push`, `bin/deploy`, `forgejo-bootstrap`, `nixos-rebuild` and `switch-to-configuration`, and
   `agentctl land` itself refuses inside such a fixer. It prepares the fix on its local branch and runs
   `agentctl red owner-push <run> --note "..."`: the red goes to fix-pending (fix status `owner`), one escalation
-  `RED OWNER PUSH: ... `! git -C <wt> pull --rebase forgejo main && git -C <wt> push forgejo HEAD:main`` reaches the
+  `RED OWNER PUSH: ... `! git -C <wt> pull --rebase <remote> main && git -C <wt> push <remote> HEAD:main`` reaches the
   inbox, a green gate run verifies it (FIX OK), the reminder repeats at each deadline, and unproven after
   `RED_FIX_GIVEUP` (6 h) it is offered again -- the next fixer continues in the same worktree.
 
@@ -559,7 +563,7 @@ agent must be assigned to it".
 - **Dispatch (the processor's red tick).** A red with nobody on it is an OFFER; the dispatcher takes offers (gate
   reds first, within the caps) and each taken offer is a LEASE its fixer holds. The fixer is a Claude Code background
   session, `claude --bg -n "<label>"` (`claude agents` lists it by that label), in a fresh worktree
-  `~/projects/movies-wt-red-<run>` off forgejo/main (a fixer never edits ~/bin: `agentctl issue`), briefed with
+  `~/projects/movies-wt-red-<run>` off <remote>/main (a fixer never edits ~/bin: `agentctl issue`), briefed with
   `~/bin/briefs/movies-agent-preamble.md` to read, then `docs/fixer-brief.md` word for word in its prompt (THE fixer
   brief, the single source of every fixer's and family owner's rules: fast reproducer first, mechanism-only identity
   fixes, no allow-list or baseline edits, land as you go, `agentctl issue`, bounded commands; `$AGENTCTL_BRIEF_SRC`
@@ -670,7 +674,7 @@ agent must be assigned to it".
   `~/.cache/agentctl/reds/flakes.json`), shown by ci-why under `Flaky`, kept open (and its claim) until a fix naming it
   lands, and dispatched after the gate's reds, most frequent first, briefed "make it deterministic". Nothing ever reruns
   a run to green.
-- **Main's own local checks.** When a change's pre-push dry run fails, land runs the same checks on plain forgejo/main's
+- **Main's own local checks.** When a change's pre-push dry run fails, land runs the same checks on plain <remote>/main's
   tree (`git commit-tree main^{tree} -p <head>`, `--checks-only <head>..<that>`). Failures that main shares (same check,
   same normalized lines) are main's own red: `KNOWN RED: … not held against this change`, recorded in
   `reds/local.json`, shown by ci-why as `Local checks` (and in the status line), claimable as `red claim local`,
@@ -687,7 +691,7 @@ agent must be assigned to it".
   (`QUEUED <id> (<sha>): infra, not a known red -- ...`, checked again after the infra back-off). Its queued check
   failing on the network again is re-queued for the same reason; the third time (or 30 min) opens the change's
   `STALLED` condition, which clears when it gets past it.
-- **A stale local red.** `reds/local.json` is keyed to the main sha it was computed on. Once forgejo/main moves past it
+- **A stale local red.** `reds/local.json` is keyed to the main sha it was computed on. Once <remote>/main moves past it
   the record is shown as `Local checks: stale, rechecking` (never RED, no unit, no dispatch) and the failing checks are
   run again on the new main (the hook over <recorded main>..main, other checks skipped, governor check class): in the
   background by the processor's red tick, or by a land's passing dry run. A pass clears the
@@ -746,7 +750,7 @@ agentctl land cancel <id>           # drop a queued or waiting change (its execu
 
 The owner: "agents never wait on a land". In movies (a repo whose hook can check a change apart), `land`:
 
-1. fetches (retried once after 15 s) and rebases onto forgejo/main (a conflict: `NOT LANDED` listing the files);
+1. fetches (retried once after 15 s) and rebases onto <remote>/main (a conflict: `NOT LANDED` listing the files);
 2. runs `prepush-check`, the squash guard (below);
 3. writes the change as a `change` item in state `queued` (re-landing from the same worktree and branch SUPERSEDES the
    older item: `SUPERSEDED <old> by <new>` to the inbox, its executor stopped);
@@ -758,7 +762,7 @@ The reconciler then takes it, a step per tick:
 
 - **queued → checking.** The tick starts an executor, `agentctl waiting check <id>` (Fixes-Red changes first), holding
   `check/<id>` and a check slot (`$AGENTCTL_CHECK_TREES`, 3): a CHECK TREE `<clone>-wt-check-<n>`, kept between checks so
-  its build stays warm. It rebuilds the change on forgejo/main there (each commit picked; one already on main is
+  its build stays warm. It rebuilds the change on <remote>/main there (each commit picked; one already on main is
   dropped; nothing left: `LANDED <head> (already on main via <commit>)`), then runs the hook's dry run -- `--range`, or
   `--checks-only` when main is red and the change must wait -- as a check of the governor (`gov`), under the
   20-min no-progress bound; or, under laptop pressure, on ci-runner (see "remote checks"). Pass: `checked`. Fail:
@@ -774,7 +778,7 @@ The reconciler then takes it, a step per tick:
 - **checked → waiting** while main is red and the change must wait (a production path, no `Fixes-Red:` for the red
   run): `WAITING <sha> (entry <id>, n in batch)`. Tools-only changes and Fixes-Red changes land while red.
 - **The batch.** When main turns green, the waiting changes are ONE `batch` item. The tick assembles its tip in a
-  throwaway check tree (forgejo/main plus the changes in queue order, Fixes-Red first; a change that no longer applies
+  throwaway check tree (<remote>/main plus the changes in queue order, Fixes-Red first; a change that no longer applies
   is rejected alone), and an executor, `waiting check-batch <id>`, checks it ONCE (`pre-push --fast-only`: every test
   config compiled and the fast tests; each change already passed its own full checks) on a fresh sbt server. Pass: one
   push of the tip; every change is LANDED with its own watch. Fail: bisect by prefix, the culprit confirmed before it
@@ -805,7 +809,7 @@ conflict with the changes ahead of it in the batch; `stalled <step>` (no progres
 by the `ci-why` summary).
 
 **In-process land** (`--follow`, `--no-watch`, a dispatched red fixer, `AGENTCTL_QUEUE=0`): the same checks run in
-land's own process, outside the lock (the hook's dry run `--range forgejo/main..<sha>`), then under the `land/<repo>`
+land's own process, outside the lock (the hook's dry run `--range <remote>/main..<sha>`), then under the `land/<repo>`
 lease it fetches, pushes when main has not moved since the check (moved: checked again outside the lock, twice; the
 third time under it) and verifies; main red and the change must wait: it joins the queue as `waiting` and `--follow`
 waits for its batch. `--follow` then watches in-process; otherwise LANDED starts a watch item and land exits.
@@ -1127,7 +1131,7 @@ branch: x
 ### prepush-check: the squash guard
 
 ```
-agentctl prepush-check [--base forgejo/main] [--head HEAD] [--allow GLOB ...] [--max-foreign N]
+agentctl prepush-check [--base <remote>/main] [--head HEAD] [--allow GLOB ...] [--max-foreign N]
 agentctl prepush-check --hook <remote> [<url>]        # movies' pre-push hook mode (reads git's stdin)
 ```
 
@@ -1138,14 +1142,14 @@ final trailer block with Co-Authored-By); undeclared deletions and modifications
 an `Allow-Empty: <why>` trailer. `land` runs it, and so does movies' hook. Exit 0 ok, 1 refused.
 
 ```
-prepush-check: forgejo/main...c972d56a2b49: 1 file changed, 8 insertions(+)
+prepush-check: <remote>/main...c972d56a2b49: 1 file changed, 8 insertions(+)
 prepush-check: ok
 ```
 
 ### The lifecycle closes itself (2026-10-26)
 
 **After `WATCH OK`, the tick closes the worktree the change was landed from**: it removes the worktree and its local branch, only when
-proven merged -- `git cherry forgejo/main HEAD` shows no commit of its own and the tree is clean, untracked files
+proven merged -- `git cherry <remote>/main HEAD` shows no commit of its own and the tree is clean, untracked files
 included (a STATE.md keeps it) -- and never the root checkout, a locked tree, or a tree another process is in (the
 lander's own shell aside). It logs `closed worktree <path> and branch <b> (...)` or `worktree <path> kept: <why>`,
 and logs to `agentctl-deleted.log`. `--keep-worktree` skips it. WATCH RED or UNKNOWN closes nothing.
@@ -1176,13 +1180,13 @@ if something could not be removed.
 ```
 agentctl cleanup (DRY RUN); log: /…/scratchpad/agentctl-deleted.log
 
-== movies (forgejo/main cac5af8ce0)
-  would delete worktree /Users/pawel/projects/movies-wt-hookguard [hookguard] 6a2a075956: ancestor of forgejo/main
+== movies (<remote>/main cac5af8ce0)
+  would delete worktree /Users/pawel/projects/movies-wt-hookguard [hookguard] 6a2a075956: ancestor of <remote>/main
 ```
 
 ### orphan worktrees: submitted once
 
-A worktree with commits not on forgejo/main whose author is gone (no live lease, no process in it, idle) is SUBMITTED
+A worktree with commits not on <remote>/main whose author is gone (no live lease, no process in it, idle) is SUBMITTED
 ONCE by the tick, whatever its last verdict: it becomes a queued change like any other (its checks then decide; a
 rejection is its red's to rescue), and an `UNLANDED ORPHAN` inbox entry names it. Nothing fixes an orphan on its own.
 
@@ -1427,6 +1431,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `step_join` | `AGENTCTL_STEP_JOIN` | `20` | - |
 | `store_retries` | `AGENTCTL_STORE_RETRIES` | `4` | - |
 | `store_retry_base` | `AGENTCTL_STORE_RETRY_BASE` | `0.5` | s; doubled each attempt: 0.5 + 1 + 2 + 4 = 7.5 s at most |
+| `store_secret` | `AGENTCTL_STORE_SECRET` | - | - |
 | `store_url` | `AGENTCTL_STORE_URL` | - | - |
 | `streak_rereads` | `AGENTCTL_STREAK_REREADS` | `3` | stale or missing streak run signatures read again per tick |
 | `suite_cap` | `AGENTCTL_SUITE_CAP` | `1` | agentctl's own test-suite runs at once : parallel agents queue, never pile up |

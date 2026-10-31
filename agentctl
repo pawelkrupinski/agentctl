@@ -14,10 +14,10 @@
         Why main is red: the red gate's two workflows (movies: Main, convergence), their newest decided runs, failed jobs + log lines,
         commit/author, INFRA-SHAPED vs TEST FAILURE, and the clearing rule (later green run / Fixes-Red:). Exit 1 red.
   agentctl land [--repo PATH] [--branch B] [--stash]
-        fetch, rebase onto forgejo/main, prepush-check, push (the hook runs, sdkman sbt/java on PATH), retry push races
+        fetch, rebase onto <remote>/main, prepush-check, push (the hook runs, sdkman sbt/java on PATH), retry push races
         x3, verify: last line `LANDED <sha>` or `NOT LANDED: <reason>` (+ ci-why on a red gate). Never --no-verify.
         One lander per repository at a time (an flock): the next waits, then rebases onto what the previous landed.
-        In a repo with scripts/hooks/pre-push the hook runs FIRST as a dry run (--range forgejo/main..HEAD; the long
+        In a repo with scripts/hooks/pre-push the hook runs FIRST as a dry run (--range <remote>/main..HEAD; the long
         area tests run there), then the push reuses its pass. The identity/page area tests take minutes: run land
         with run_in_background=true.
   agentctl queue ...
@@ -33,14 +33,14 @@
   agentctl state <topic> [--set field=value ...] [--add field=value ...]
         Print scratchpad/state-<topic>.md, creating it from the template first; --set replaces a field,
         --add appends to a comma-separated one (commits, run ids).
-  agentctl prepush-check [--base forgejo/main] [--head HEAD] [--allow GLOB ...] [--max-foreign N]
+  agentctl prepush-check [--base <remote>/main] [--head HEAD] [--allow GLOB ...] [--max-foreign N]
   agentctl prepush-check --hook <remote> [<url>]       (pre-push hook mode: reads the hook's stdin)
         Refuses when `base...head` touches a file outside the allowed set ($AGENTCTL_ALLOW, whitespace-separated
         globs, or --allow), or when it deletes/reverts more than N (default 2, $AGENTCTL_MAX_FOREIGN) files back to
         an older version of main -- the `reset --soft` squash onto a moved main. `git revert` commits are exempt
         for the files of the commit they revert.
   agentctl cleanup [--dry-run|--execute] [--repo PATH ...] [--no-fetch] [--no-remote] [--min-age-hours H]
-        Removes ONLY proven-merged items: clean, idle worktrees whose HEAD is an ancestor of forgejo/main or whose
+        Removes ONLY proven-merged items: clean, idle worktrees whose HEAD is an ancestor of <remote>/main or whose
         commits are all patch-equivalent on it (`git cherry`), their local branches, and remote measure/* branches
         whose runs all finished (or >24 h old with no run in progress). Every deletion -> agentctl-deleted.log.
         Dry run by default when stdin is a TTY.
