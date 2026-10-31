@@ -591,6 +591,19 @@ agent must be assigned to it".
   MECHANISM-ONLY rule (fix the incremental state that diverges from a whole resolve; never a resolver rule tuned on one
   recording, never a baseline or allow-list row). `red status` lists each owner (`owner <family>: ALIVE, turn n, ...`).
   Records: `<reds dir>/owners/<family>/` (`owner.json`, `owner.log`, `leases.json` 0600).
+- **A LEASE IS HELD BY WORK, NEVER BY A LIVING PROCESS (2026-10-31, issue 20261031T203744-4a4a59).** A wrapper (a
+  fixer's or an owner's) ends a turn whose session `claude agents` shows ended -- `done`, `stopped` or `blocked` (its
+  turn over, waiting for input that never comes) -- or that made no progress (transcript, worktree) for
+  `$AGENTCTL_RED_STALL` (30 min: `STALLED`, the session stopped); the turn's leases go with it. Whatever a wrapper
+  does, the laptop's tick (`red_reap_orphans`) checks every laptop-held fixer and owner lease against the evidence: the
+  wrapper's process, its session's row, the transcript's progress. A holder not at work for
+  `$AGENTCTL_RED_ORPHAN_GRACE` (5 min) has its leases revoked (`ORPHANED: <why>`): the red is offered again at once,
+  and a wrapper still running reads its next renewal as lost and exits (the next owner starts after it has). `red
+  status` never shows a lease "none at work": an orphaned one reads `ORPHANED LEASE (...) -> revoked and re-offered at
+  the next tick`. A 401/403 from the store is `StoreAuthFailed`, never "asked again": the wrapper takes a fresh store
+  token once (the processor's), else ends with `store auth failed: <detail>` (its leases released, or revoked by the
+  tick). STALLED, ORPHANED and store auth failures count for the crash-loop breaker. Every fixer and owner session is
+  launched with `$AGENTCTL_STORE_TOKEN`, whatever its repo.
 - **ONE RED QUEUE (simplification item 5, 2026-10-30; replaced the per-class caps, the borrow and the overflow slot).**
   A red is (workflow, failing job, signature). Every red belongs to ONE queue family:
   its configured family (`red-families.json`), else its run (`run:<workflow>#<number>`). The open offers are one
@@ -1384,11 +1397,13 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `red_fix_giveup` | `AGENTCTL_RED_FIX_GIVEUP` | `21600` | - |
 | `red_fix_requeue_grace` | `AGENTCTL_RED_FIX_REQUEUE_GRACE` | `900` | $AGENTCTL_RED_FIX_REQUEUE_GRACE |
 | `red_old_run` | `AGENTCTL_RED_OLD_RUN` | `172800` | an outside red whose newest run is older than this is checked by a fresh run before it is fixed |
+| `red_orphan_grace` | `AGENTCTL_RED_ORPHAN_GRACE` | `300` | an ended session's turn still held this long is orphaned |
 | `red_others_every` | `AGENTCTL_RED_OTHERS_EVERY` | `60` | seconds between the other watched repos' red ticks: one gate read each |
 | `red_renew` | `AGENTCTL_RED_RENEW` | `60` | a fixer's wrapper renews its lease this often |
 | `red_repo` | `AGENTCTL_RED_REPO` | - | - |
 | `red_repos` | `AGENTCTL_RED_REPOS` | - | - |
 | `red_skip_say` | `AGENTCTL_RED_SKIP_SAY` | `600` | s between the lines of another repo whose tick keeps failing for the same reason |
+| `red_stall` | `AGENTCTL_RED_STALL` | `1800` | a turn with no progress (transcript, worktree) this long is stalled: stopped |
 | `red_starve` | `AGENTCTL_RED_STARVE` | `2700` | an offer waiting this long for a slot is STARVED |
 | `red_tick` | `AGENTCTL_RED_TICK` | `15` | seconds between the processor's red ticks |
 | `remote` | `AGENTCTL_REMOTE` | - | - |

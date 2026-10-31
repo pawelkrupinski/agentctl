@@ -238,9 +238,14 @@ def render_red_status(m, verbose=False):
         if verbose:
             out += [f"      {h.get('at')} {h.get('holder')}: {str(h.get('outcome'))[:140]}" for h in r["history"]]
     for f in m.get("families") or []:
-        out.append(f"family {f['family']}: {f['open']} open red(s), ONE fixer: "
-                   + (f"{f['holder']} ({str(f.get('worktree') or '?').replace(HOME, '~')})" if f.get("holder")
-                      else "none at work"))
+        if f.get("holder") and f.get("at_work") is False:  # never "leased ... none at work": orphaned, re-offered
+            who = f"ORPHANED LEASE ({f['holder']}: {f.get('work')}) -> revoked and re-offered at the next tick"
+        elif f.get("holder"):
+            who = (f"{f['holder']} ({str(f.get('worktree') or '?').replace(HOME, '~')})"
+                   + (f": {f['work']}" if f.get("at_work") else ""))
+        else:
+            who = "none at work"
+        out.append(f"family {f['family']}: {f['open']} open red(s), ONE fixer: {who}")
     for o in m.get("owners") or []:
         if o.get("worktree"):
             out.append(f"owner {o['family']}: {'ALIVE' if o['alive'] else 'not running'}, turn {o.get('turn') or 0}, "
@@ -266,10 +271,17 @@ def status_families(st, t):
         if f:
             fams[f] = fams.get(f, 0) + 1
     out = []
+    leases = [r for r in st.list("red/") if lease_is_live(r, t)]
+    cache = {}
     for f in sorted(fams):
         row = red_family_holder(st, f, t, active=active)
+        if not row:  # an owner's (or any other) live lease on a red of the family is its holder too
+            row = next((r for r in leases if (active.get(r["name"].split("/", 1)[1]) or {}).get("data")
+                        and red_family(active[r["name"].split("/", 1)[1]]["data"]) == f), None)
+        work, why = holder_work(row, t, cache) if row else (None, None)
         out.append({"family": f, "open": fams[f], "holder": row["holder"] if row else None,
-                    "worktree": lease_meta(row).get("worktree") if row else None})
+                    "worktree": lease_meta(row).get("worktree") if row else None,
+                    "at_work": work, "work": why})
     return out
 
 

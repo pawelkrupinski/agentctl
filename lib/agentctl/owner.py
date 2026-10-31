@@ -140,7 +140,7 @@ def owner_spawn(store, o_r, repo, fam, off, took, extra=()):
                     "restarts: reproducers, hypotheses tried (and how they ended), what is left.\n")
     restarted = bool(rec.get("started"))
     rec.update(family=fam, worktree=wt, notebook=nb, repo=repo, o_r=o_r, started=ts(), ended=None, verdict=None,
-               turn=0, bg_id=None, pid=None,
+               turn=0, bg_id=None, pid=None, in_turn=False, progress_at=None,
                restarts=int(rec.get("restarts", -1)) + 1, log=os.path.join(owner_dir(fam), "owner.log"))
     write_json(owner_record_path(fam), rec)
     try:  # a STOP left by an earlier spell would stop this one at its first pass
@@ -217,8 +217,14 @@ def red_owner(a):
     poll = env_num("AGENTCTL_BG_POLL", BG_POLL)
     idle_max = env_num("AGENTCTL_OWNER_IDLE", OWNER_IDLE)
     wall = env_num("AGENTCTL_RED_FIXER_WALL", RED_FIXER_WALL)
+    stall = env_num("AGENTCTL_RED_STALL", RED_STALL)
     s = {"bid": None, "turn": 0, "names": [], "empty": 0, "beat": 0.0, "idle_since": time.time(), "first": True,
-         "missing": 0, "turn_at": 0.0}
+         "missing": 0, "turn_at": 0.0, "mark": None, "progress_at": 0.0}
+
+    def turn_state(in_turn, now):
+        """What the laptop's tick reads to tell an owner at work from an orphan (red_reap_orphans)."""
+        rec.update(in_turn=in_turn, progress_at=s["progress_at"] if in_turn else now)
+        write_json(path, rec)
 
     def release(names, outcome, notes=""):
         leases = owner_leases(fam)
@@ -254,20 +260,49 @@ def red_owner(a):
         inbox_write("red fixer", line, [line], tail, 0 if outcome.startswith("LANDED") else 1, cwd=wt)
         release(s["names"], outcome, "\n".join(tail[-8:]))
         s["bid"], s["missing"] = None, 0
+        turn_state(False, time.time())
         return f"ENDED: {s['empty']} turns in a row with no verdict" if s["empty"] >= OWNER_EMPTY_TURNS else None
 
     def step(now):
-        """One pass; returns the stop reason, or None to go on."""
+        """One pass; returns the stop reason, or None to go on. PROOF OF WORK FIRST: a turn whose session ended (done,
+        stopped, blocked, gone) or made no progress for RED_STALL ends -- its reds' leases released with that -- before
+        any lease is renewed: a living wrapper alone never holds a red."""
+        if s["bid"] is not None:
+            ent = bg_session(cli, s["bid"])
+            if ent and ent.get("sessionId") and rec.get("session") != ent["sessionId"]:
+                rec.update(session=ent["sessionId"], transcript=bg_transcript(ent["sessionId"]))
+                write_json(path, rec)
+                bind_fixer_session(rec["session"], path)  # the session is a fixer's: ~/bin refuses its commits
+            s["missing"] = s["missing"] + 1 if ent is None else 0
+            if bg_ended(ent) or s["missing"] >= 3:  # the turn ended (done, stopped, blocked) or the session is gone
+                why = (f"ended with no LANDED / GAVE UP line (session {s['bid']}: "
+                       f"{(ent or {}).get('state') or 'gone from `claude agents`'})")
+                return end_turn(why)
+            if now - s["turn_at"] > wall:
+                bg_stop(cli, s["bid"])
+                return end_turn(f"TIMED OUT after {int(wall // 60)} min (maximum wall time of a turn)")
         if now - s["beat"] >= every:  # THE HEARTBEAT: the owner's lease; its reds' leases by the turn's progress
             try:
+                if s["bid"] is not None:
+                    mark = fixer_mark({"log": rec.get("transcript") or rec.get("log") or ""}, wt)
+                    if mark != s["mark"]:
+                        s["mark"], s["progress_at"] = mark, now
+                        turn_state(True, now)
+                    elif now - s["progress_at"] > stall:
+                        bg_stop(cli, s["bid"])
+                        return end_turn(f"STALLED: no progress (transcript, worktree) for {fmt_age(stall)}")
                 if st.renew(owner_lease(fam), hb["epoch"], hb["secret"], f"beat {int(now)}", OWNER_TTL) == "lost":
                     return "STOPPED: the owner's heartbeat lease was lost"
-                mark = fixer_mark({"log": rec.get("transcript") or rec.get("log") or ""}, wt)
                 lost = [n for n, x in owner_leases(fam).items()
-                        if st.renew(n, x["epoch"], x["secret"], mark, OWNER_TTL) == "lost"]
+                        if st.renew(n, x["epoch"], x["secret"], s["mark"] or f"held {int(now)}", OWNER_TTL) == "lost"]
                 if lost:  # cleared, released by hand, revoked, or no progress for OWNER_TTL: no longer the owner's
                     owner_drop(fam, lost)
                 s["beat"] = now
+            except StoreAuthFailed as e:  # never "asked again" forever: a fresh store token once, else the owner ends
+                if not store_reauth():
+                    return f"store auth failed: {e}"
+                env["AGENTCTL_STORE_TOKEN"] = os.environ["AGENTCTL_STORE_TOKEN"]
+                print(f"{ts()} the store refused the token ({e}): a fresh store token taken", flush=True)
             except StoreUnavailable as e:
                 print(f"{ts()} the store did not answer ({e}): asked again at the next beat", flush=True)
         stop_file = os.path.join(wt, "RED-STOP.md")
@@ -295,21 +330,11 @@ def red_owner(a):
             if not bid:
                 release(held, f"NOT STARTED: `claude --bg` {why}")
                 return f"NOT STARTED: `claude --bg` {why}"
-            s.update(bid=bid, turn=s["turn"] + 1, names=held, first=False, turn_at=now, missing=0)
+            s.update(bid=bid, turn=s["turn"] + 1, names=held, first=False, turn_at=now, missing=0, mark=None,
+                     progress_at=now)
             rec.update(bg_id=bid, turn=s["turn"])
-            write_json(path, rec)
+            turn_state(True, now)
             return None
-        ent = bg_session(cli, s["bid"])
-        if ent and ent.get("sessionId") and rec.get("session") != ent["sessionId"]:
-            rec.update(session=ent["sessionId"], transcript=bg_transcript(ent["sessionId"]))
-            write_json(path, rec)
-            bind_fixer_session(rec["session"], path)  # the session is a fixer's: ~/bin refuses its commits
-        s["missing"] = s["missing"] + 1 if ent is None else 0
-        if (ent or {}).get("state") == "done" or s["missing"] >= 3:  # the turn ended (or the session is gone)
-            return end_turn("ended with no LANDED / GAVE UP line")
-        if now - s["turn_at"] > wall:
-            bg_stop(cli, s["bid"])
-            return end_turn(f"TIMED OUT after {int(wall // 60)} min (maximum wall time of a turn)")
         return None
 
     stop = None
@@ -318,6 +343,8 @@ def red_owner(a):
             stop = step(time.time())
             if stop is None:
                 time.sleep(poll)
+    except StoreAuthFailed as ex:
+        stop = f"store auth failed: {str(ex)[:300]}"
     except Exception as ex:  # never a dead wrapper with a live session and held leases
         stop = f"STOPPED: the owner's wrapper failed ({type(ex).__name__}: {str(ex)[:200]})"
     if s["bid"]:
@@ -327,8 +354,12 @@ def red_owner(a):
         st.release(owner_lease(fam), hb["epoch"], hb["secret"], outcome=stop)
     except StoreUnavailable:
         pass
-    rec.update(ended=ts(), verdict=stop)
-    write_json(path, rec)
+    rec.update(ended=ts(), verdict=stop, in_turn=False)
+    if (read_record(path) or {}).get("pid") in (None, me):  # a restarted owner's record is its own, never overwritten
+        write_json(path, rec)
+    if stop.startswith("store auth failed"):
+        inbox_write("red", f"RED OWNER {fam}: {stop[:300]} (its reds offered again; the next owner starts with a fresh "
+                    "store token)", [], [], 1, cwd=wt)
     print(f"RED OWNER {fam}: {stop}")
     return 0
 
@@ -346,3 +377,114 @@ def owners_status(store, t):
                     "restarts": rec.get("restarts"), "started": rec.get("started"), "ended": rec.get("ended"),
                     "verdict": rec.get("verdict"), "reds": len(owner_leases(f["name"]))})
     return out
+
+
+# ---------------------------------------------------------------- PROOF OF WORK: orphaned leases (2026-10-31)
+# A lease is held by WORK, never by a living process. 2026-10-31 (issue 20261031T203744-4a4a59): the main-tests owner's
+# session stopped at 20:12 (its turn ended `blocked`), while its wrapper (pid 51249) waited for `done` and kept renewing
+# the owner's heartbeat; every red of the family was handed to it, held "leased ... none at work" and never fixed. The
+# wrappers now end a turn whose session ended or stalled (red_owner, red_fixer). And whatever a wrapper does -- older
+# code, a hang -- the laptop's tick checks every laptop-held fixer and owner lease against the evidence of work: the
+# wrapper's process, its session's row in `claude agents`, the transcript's and the worktree's progress. A holder not at
+# work for RED_ORPHAN_GRACE loses its leases at once (revoked `ORPHANED: <why>`): the red is offered again, and a
+# wrapper still running reads its next renewal as lost and exits. `red status` shows such a lease as orphaned, never
+# "leased ... none at work".
+RED_ORPHAN_GRACE = 5 * 60    # an ended session's turn still held this long is orphaned ($AGENTCTL_RED_ORPHAN_GRACE)
+
+
+def owner_work(fam, t):
+    """(True|False|None, why): is family fam's owner at work? None when this machine cannot tell."""
+    rec = read_record(owner_record_path(fam)) or {}
+    pid = rec.get("pid")
+    if not pid:
+        return None, "no owner record on this machine"
+    if rec.get("ended"):
+        return False, f"its wrapper ended ({str(rec.get('verdict') or '?')[:160]})"
+    if not proc_alive(pid, rec.get("process_start")):
+        return False, f"its wrapper (pid {pid}) is gone"
+    if not rec.get("in_turn", bool(rec.get("bg_id"))):  # older records have no in_turn: a recorded session is a turn
+        return True, "between turns"
+    grace = env_num("AGENTCTL_RED_ORPHAN_GRACE", RED_ORPHAN_GRACE)
+    idle = t - max(float(rec.get("progress_at") or 0), mtime(rec.get("transcript")))
+    bid = rec.get("bg_id")
+    if bid:
+        ent = bg_session(claude_cli(), bid)
+        if ent == {}:
+            return None, "`claude agents` unread"
+        if (ent is None or bg_ended(ent)) and idle > grace:
+            return False, (f"its session {bid} is {(ent or {}).get('state') or 'gone'} while its wrapper (pid {pid}) "
+                           f"still holds the turn, {fmt_age(idle)} without progress")
+    if idle > env_num("AGENTCTL_RED_STALL", RED_STALL) + grace:
+        return False, f"turn {rec.get('turn')}: no progress (transcript) for {fmt_age(idle)}"
+    return True, f"turn {rec.get('turn')} at work"
+
+
+def fixer_work(row, t):
+    """(True|False|None, why): is a dispatched fixer's lease held by work? Its wrapper alive, its session not ended
+    (beyond RED_ORPHAN_GRACE since the lease's last progress)."""
+    m = lease_meta(row)
+    pid = m.get("pid")
+    if pid and not pid_alive(int(pid)):
+        return False, f"its wrapper (pid {pid}) is gone"
+    bid = m.get("bg_id")
+    if not bid:
+        return None, "its session is starting"
+    ent = bg_session(claude_cli(), bid)
+    if ent == {}:
+        return None, "`claude agents` unread"
+    idle = t - max(float(row.get("renewed_at") or row.get("acquired_at") or 0), mtime(m.get("log")))
+    if (ent is None or bg_ended(ent)) and idle > env_num("AGENTCTL_RED_ORPHAN_GRACE", RED_ORPHAN_GRACE):
+        return False, (f"its session {bid} is {(ent or {}).get('state') or 'gone'}, "
+                       f"{fmt_age(idle)} without progress")
+    return True, "at work"
+
+
+def holder_work(row, t, cache=None):
+    """(True|False|None, why) for a live lease's holder: an owner's (its heartbeat or a red it holds) or a dispatched
+    fixer's. None for what this machine cannot judge: a claim (renewed by its worktree's activity), a sibling (lives
+    with its primary), a holder on another machine, or anything read on ci-runner."""
+    if on_ci_runner() or not str(row.get("holder") or "").startswith("laptop:"):
+        return None, "not this machine's"
+    cache = {} if cache is None else cache
+    m = lease_meta(row)
+    if row["name"].startswith("owner/") or m.get("kind") in ("owner", "owned"):
+        fam = m.get("family") or row["name"].split("/", 1)[1]
+        if ("owner", fam) not in cache:
+            cache[("owner", fam)] = owner_work(fam, t)
+        return cache[("owner", fam)]
+    if m.get("kind") == "fixer":
+        return fixer_work(row, t)
+    return None, "not judged here"
+
+
+def red_reap_orphans(store, t):
+    """The laptop's tick: every live laptop-held fixer and owner lease whose holder is not at work is revoked
+    (`ORPHANED: <why>`) -- the red offered again at once, its wrapper's next renewal lost. An orphaned fixer's session,
+    if any still runs, is stopped (its wrapper is gone)."""
+    acts, cache = [], {}
+    for row in list(store.list("owner/")) + list(store.list("red/")):
+        if not lease_is_live(row, t):
+            continue
+        ok, why = holder_work(row, t, cache)
+        if ok is not False:
+            continue
+        if store.revoke(row["name"], f"ORPHANED: {row['holder']} holds it with no work ({why})"):
+            m = lease_meta(row)
+            if "wrapper" in why and "gone" in why and m.get("bg_id"):
+                bg_stop(claude_cli(), m["bg_id"])
+            line = f"RED ORPHANED LEASE: {row['name']} ({row['holder']}): {why}: revoked, offered again"
+            inbox_write("red", line, [line], [], 1)
+            acts.append(line)
+    return acts
+
+
+def owner_still_ending(store, fam, t):
+    """Why the family's next owner waits, or None: its last wrapper lost its heartbeat less than OWNER_TTL ago and its
+    process still runs (it exits at its next beat; a new one now would race it for the record and the leases)."""
+    rec = read_record(owner_record_path(fam)) or {}
+    if not rec.get("pid") or rec.get("ended") or not proc_alive(rec["pid"], rec.get("process_start")):
+        return None
+    gone = float(lease_meta(store.get(owner_lease(fam))).get("released_at") or 0)
+    if not gone or t - gone > OWNER_TTL:
+        return None
+    return f"its owner's last wrapper (pid {rec['pid']}) lost its heartbeat and is ending: the next owner starts after it"

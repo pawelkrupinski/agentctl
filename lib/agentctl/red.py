@@ -1273,7 +1273,7 @@ def red_lease_ended(store, it, row, block, t):
 RED_CRASH_LOOP = 3                 # $AGENTCTL_RED_CRASH_LOOP
 RED_CRASH_BLOCK_MAX = 24 * 3600    # $AGENTCTL_RED_CRASH_BLOCK_MAX
 RED_CRASH_OUTCOME = re.compile(r"(NOT STARTED|ended with no|exit -?\d+ with no|TIMED OUT|lease expired|"
-                               r"STOPPED: the red's lease was lost)")
+                               r"STOPPED: the red's lease was lost|STALLED|ORPHANED|store auth failed)")
 RED_CRASH_NEUTRAL = re.compile(r"(RELEASED|STOPPED: the fixer's wrapper was stopped)")
 CRASH_LOOP_CAUSE = "fixer-crash-loop"
 
@@ -1859,7 +1859,13 @@ def red_dispatcher(store, o_r, repo, t):
         pic = off["picture"]
         fam = red_queue_family(pic)
         owned = family_owned(fam) and off["tier"] not in ("revert", "author")
-        if owned and (live := owner_alive(store, fam, t)):
+        live = owner_alive(store, fam, t) if owned else None
+        if owned and not live and (ending := owner_still_ending(store, fam, t)):
+            # its last wrapper lost its heartbeat (orphaned, revoked) and is still ending: the next starts after it
+            if ending != off.get("reason"):
+                store.offer_reason(off["id"], ending)
+            continue
+        if owned and live:
             # THE FAMILY'S OWNER IS ALIVE: the red is its next turn -- its lease taken for the owner and handed over
             took = store.take(off["id"], owner_holder(fam), OWNER_TTL, OWNER_MAX,
                               meta={"kind": "owned", "family": fam, "owner": owner_lease(fam),

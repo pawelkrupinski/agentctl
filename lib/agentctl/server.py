@@ -63,6 +63,13 @@ class StoreUnavailable(RuntimeError):
     """The remote store did not answer (the tunnel, ci-runner, the service): no verdict either way."""
 
 
+class StoreAuthFailed(StoreUnavailable):
+    """The store refused the caller's credential (HTTP 401/403): never transient. A wrapper holding leases takes a fresh
+    store token once and, refused again, ends at once -- its leases released (or revoked by the tick) with `store auth
+    failed: <detail>` -- instead of 'asking again at the next beat' forever (2026-10-31: an owner session started
+    before the store-only-token switch got 403s while its wrapper kept its reds leased)."""
+
+
 class _StoreTransient(Exception):
     """One failed attempt of a store call; unsent: it never reached the server (safe to send again)."""
 
@@ -125,6 +132,8 @@ class RemoteStore:
                 b = json.loads(e.read() or b"{}")
             except ValueError:
                 b = {}
+            if e.code in (401, 403):
+                raise StoreAuthFailed(f"{method} {path}: HTTP {e.code} {b.get('message') or e.reason}") from None
             cls = store_errors().get(b.get("error"))
             if cls:
                 raise cls(b.get("message") or "")
@@ -1102,8 +1111,11 @@ def sync_steps(repo, d, o_r):
             mirror_state()
 
     def sync_claims():
-        """The laptop's holders on ci-runner's store: every claim renewed by its worktree's activity."""
-        red_renew_holders(Store(), time.time())
+        """The laptop's holders on ci-runner's store: every claim renewed by its worktree's activity; every fixer and
+        owner lease held by no work revoked (red_reap_orphans)."""
+        st = Store()
+        red_renew_holders(st, time.time())
+        red_reap_orphans(st, time.time())
 
     def pins():
         """The convergence pins read with the owner's token the processor holds and written into the store: the

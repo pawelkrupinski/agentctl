@@ -159,6 +159,14 @@ def fixer_env(o_r, num, wrapper_pid=None):
         env[token_env_name(o_r)] = tok
     except (Exception, SystemExit):
         pass
+    # EVERY FIXER TALKS TO THE STORE (`red claim | beat | release`, `land`) with the STORE TOKEN, whatever its repo: the
+    # filter above drops it with every other secret, and a non-movies repo's credential is gh's own (none here)
+    if "AGENTCTL_STORE_TOKEN" not in env:
+        try:
+            with no_vault():
+                env["AGENTCTL_STORE_TOKEN"] = token(SHORT["movies"])
+        except (Exception, SystemExit):
+            pass
     env.update(AGENTCTL_AGENT_NAME=f"red-fixer-{num}", AGENTCTL_RED_FIXER=str(num))
     # launchd gives the processor neither USER nor LOGNAME, and without them `claude` finds no login in the keychain
     # ("Not logged in", 2026-10-27); nor ~/.local/bin on PATH
@@ -492,6 +500,45 @@ def bg_session(cli, bid):
     return next((x for x in rows if x.get("id") == bid or str(x.get("sessionId") or "").startswith(bid)), None)
 
 
+# A SESSION AT WORK is one `claude agents` lists in a working state. `done` and `stopped` are ended turns; so is
+# `blocked` (or `idle`) with no live process behind it -- its turn over, waiting for input that never comes (2026-10-31:
+# the main-tests owner's session after a 403, pid gone; its wrapper waited for `done` and kept its reds leased for
+# hours). A `blocked` row with a live pid may still be waiting on its own background work: judged by its progress.
+BG_ENDED_STATES = ("done", "stopped", "failed", "error")
+BG_WAITING_STATES = ("blocked", "idle")
+RED_STALL = 30 * 60   # a turn with no progress (transcript, worktree) this long is stalled: stopped ($AGENTCTL_RED_STALL)
+
+
+def bg_ended(ent):
+    """The session's row says its turn is over (ent: bg_session's row; {} -- unread -- and None -- not listed -- say
+    nothing here)."""
+    if not ent:
+        return False
+    if ent.get("state") in BG_ENDED_STATES:
+        return True
+    pid = ent.get("pid")
+    return ent.get("state") in BG_WAITING_STATES and not (pid and pid_alive(int(pid)))
+
+
+def store_reauth():
+    """After StoreAuthFailed: forget the store token this process holds (its environment, the cache) and read it again
+    -- the processor's socket, never a vault prompt. The new token (also in os.environ), or None when there is no other
+    one: the caller then ends, its leases released or revoked with `store auth failed`."""
+    old = os.environ.pop("AGENTCTL_STORE_TOKEN", None)
+    _tokens.pop(token_ns(SHORT["movies"]), None)
+    try:
+        with no_vault():
+            new = token(SHORT["movies"])
+    except (Exception, SystemExit):
+        new = None
+    if new and new != old:
+        os.environ["AGENTCTL_STORE_TOKEN"] = new
+        return new
+    if old:
+        os.environ["AGENTCTL_STORE_TOKEN"] = old
+    return None
+
+
 def bg_stop(cli, bid):
     try:
         subprocess.run([cli, "stop", bid], capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
@@ -615,6 +662,8 @@ def red_fixer(a):
         for sg in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
             signal.signal(sg, cancelled)
         missing, unclaimed_told = 0, False
+        stall = env_num("AGENTCTL_RED_STALL", RED_STALL)
+        last_mark, progress_at = None, time.time()
         claim_within = env_num("AGENTCTL_FIXER_CLAIM_WITHIN", FIXER_CLAIM_WITHIN)
 
         def held(row):
@@ -633,7 +682,7 @@ def red_fixer(a):
                     meta_due = not fixer_meta_sent(st, leases, meta)
                     write_json(a.record, rec)
                 missing = missing + 1 if ent is None else 0
-                if (ent or {}).get("state") == "done" or missing >= 3:  # finished its turn, or gone from `claude agents`
+                if bg_ended(ent) or missing >= 3:  # finished its turn (done, stopped, blocked), or gone from the list
                     break
                 stop = None
                 late = time.time() - t0 > claim_within
@@ -676,12 +725,22 @@ def red_fixer(a):
                         elif time.time() - last_renew >= every:
                             note = (read_record(a.record) or {}).get("note")
                             mark = fixer_mark(rec, wt)
-                            for n_, e_, s_ in extra:  # the run's other reds: renewed with it (a revoked one simply ends)
+                            if mark != last_mark:
+                                last_mark, progress_at = mark, time.time()
+                            elif time.time() - progress_at > stall:  # PROOF OF WORK: a living wrapper is not one
+                                stop = f"STALLED: no progress (transcript, worktree) for {fmt_age(stall)}"
+                            for n_, e_, s_ in extra if not stop else ():  # the run's other reds: renewed with it
                                 st.renew(n_, e_, s_, mark, RED_FIXER_TTL, note=note)
-                            if st.renew(name, epoch, secret, mark, RED_FIXER_TTL, note=note) == "lost":
+                            if not stop and st.renew(name, epoch, secret, mark, RED_FIXER_TTL, note=note) == "lost":
                                 stop = ("STOPPED: the red's lease was lost (expired without progress, past its max hold, "
                                         "or revoked)")
                             last_renew = time.time()
+                    except StoreAuthFailed as e:  # never "asked again" forever: a fresh token once, else the end
+                        if store_reauth():
+                            env["AGENTCTL_STORE_TOKEN"] = os.environ["AGENTCTL_STORE_TOKEN"]
+                            print(f"{ts()} the store refused the token ({e}): a fresh store token taken", flush=True)
+                        else:
+                            stop = f"store auth failed: {e}"
                     except StoreUnavailable as e:
                         print(f"{ts()} the store did not answer ({e}): asked again at the next poll", flush=True)
                 if stop:
@@ -702,6 +761,9 @@ def red_fixer(a):
         for left in range(RED_RELEASE_ASKS, 0, -1):  # a store that does not answer is asked again, a poll apart
             try:
                 st.release(n_, e_, s_, outcome=verdict[:600], notes="\n".join(tail[-8:]))
+                break
+            except StoreAuthFailed as e:  # refused, not unanswered: the laptop's tick revokes it (red_reap_orphans)
+                print(f"{ts()} could not release {n_} ({e}): the tick revokes it", flush=True)
                 break
             except StoreUnavailable as e:  # never answered: the lease lapses by its TTL, and the red is offered again
                 print(f"{ts()} could not release {n_} ({e}){'' if left > 1 else ': it lapses by its TTL'}", flush=True)
@@ -1051,6 +1113,7 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
     if sync or dispatch:  # the sync's half on the same store (claims renewed; with dispatch its dispatcher): the tests'
         try:  # one-process stand-in for the two hosts. In production the laptop's sync runs these (sync_steps)
             red_renew_holders(store, t)
+            acts += red_reap_orphans(store, t)
         except (Exception, SystemExit) as e:
             err(f"red tick: renewing the claims failed ({str(e)[:160]})")
     if dispatch:  # fixers run on the laptop (owner decision 8): its sync dispatches

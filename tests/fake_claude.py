@@ -10,7 +10,8 @@
   stop <id>                   ends that session (its row stays, state done, stopped: true)
   _session <id>               (internal) the session: transcript at $AGENTCTL_CLAUDE_PROJECTS/fake/<sessionId>.jsonl,
                               sleeps $FAKE_CLAUDE_SLEEP s, answers $FAKE_CLAUDE_RESULT (default `LANDED abcdef1234`; for
-                              an implementer briefed with a diagnosis, $FAKE_CLAUDE_RESULT_IMPLEMENT when set), done.
+                              an implementer briefed with a diagnosis, $FAKE_CLAUDE_RESULT_IMPLEMENT when set), done
+                              (or $FAKE_CLAUDE_END_STATE: `blocked`, `stopped`).
 """
 import json, os, signal, subprocess, sys, time, uuid
 
@@ -87,8 +88,8 @@ if argv[:1] == ["_session"]:
         result = os.environ["FAKE_CLAUDE_RESULT_IMPLEMENT"]
     say(path, "assistant", "Done.\n" + result)
     r = read_row(argv[1])
-    if r and not r.get("stopped"):
-        r.update(state="done", pid=None)
+    if r and not r.get("stopped"):  # $FAKE_CLAUDE_END_STATE: how its turn ends (`blocked`: waiting for input, no pid)
+        r.update(state=os.environ.get("FAKE_CLAUDE_END_STATE") or "done", pid=None)
         write_row(r)
     sys.exit(0)
 if "--bg" in argv and os.environ.get("FAKE_CLAUDE_BG_FAIL"):  # the launch refused (e.g. an untrusted workspace)
