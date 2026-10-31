@@ -91,6 +91,7 @@ class MemStatsTest(unittest.TestCase):
                     "SwapTotal:       2097152 kB\nSwapFree:        1048576 kB\n")
         real = A.read_meminfo
         A.read_meminfo = lambda path="/proc/meminfo": real(f.name)
+        fixed = os.environ.pop("AGENTCTL_MACHINE", None)  # this test reads the reader itself, not the harness's machine
         try:
             m = A.mem_stats()
             self.assertEqual((m["ram_gb"], m["free_gb"], m["pressure"]), (32.0, 8.0, 75))
@@ -98,6 +99,8 @@ class MemStatsTest(unittest.TestCase):
             self.assertEqual(A.ram_gb(), 32.0)
         finally:
             A.read_meminfo = real
+            if fixed is not None:
+                os.environ["AGENTCTL_MACHINE"] = fixed
             os.unlink(f.name)
 
 

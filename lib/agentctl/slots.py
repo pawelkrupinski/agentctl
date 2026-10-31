@@ -41,8 +41,8 @@ def checks_cap():
 
 def machine_sample():
     """(load1, cpu %, memory pressure %, swap used MB) of this machine, cheaply; None where unreadable."""
-    load1 = os.getloadavg()[0]
-    cpu = min(100.0, 100.0 * load1 / (os.cpu_count() or 1))
+    load1 = machine_load1()
+    cpu = min(100.0, 100.0 * load1 / machine_cores())
     m = mem_stats()
     return load1, cpu, m["pressure"], m["swap_used_mb"]
 

@@ -1401,6 +1401,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `live_poll` | `AGENTCTL_LIVE_POLL` | `1.0` | s between looks at a quiet file |
 | `log_rotate_keep` | `AGENTCTL_LOG_ROTATE_KEEP` | `3` | rotated parts kept per log (<log>.1 newest .. <log>.N oldest) |
 | `log_rotate_max` | `AGENTCTL_LOG_ROTATE_MAX` | `10485760` | bytes over which an agentctl log is rotated (copy-truncate; its newest part kept as .1) |
+| `machine` | `AGENTCTL_MACHINE` | - | - |
 | `max_checks` | `AGENTCTL_MAX_CHECKS` | - | - |
 | `max_foreign` | `AGENTCTL_MAX_FOREIGN` | `2` | files a push may revert to an older main before prepush-check refuses |
 | `min_interval` | `AGENTCTL_MIN_INTERVAL` | `60` | - |

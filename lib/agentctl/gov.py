@@ -61,12 +61,40 @@ def read_meminfo(path="/proc/meminfo"):
         return {}
 
 
+# A FIXED MACHINE ($AGENTCTL_MACHINE, JSON): ram_gb, free_gb, pressure, swap_used_mb, swap_total_mb, load1, cores,
+# free_pct, level -- read in place of this host's (sysctl, vm_stat, /proc/meminfo, the load, the CPU count). The tests'
+# one seam: tests/harness.py pins an idle 12-core 36 GB machine, so no test depends on the runner it runs on
+# (2026-10-31: GitHub's 4-core hosted runner, with its own load and RAM, failed a dozen governor, check-cap and land
+# tests that pass on the laptop and on ci-runner). A test of a reader passes its own input or sets its own probe.
+def machine_fixed():
+    raw = os.environ.get("AGENTCTL_MACHINE")
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return None
+
+
+def machine_load1():
+    m = machine_fixed()
+    return float(m["load1"]) if m and m.get("load1") is not None else os.getloadavg()[0]
+
+
+def machine_cores():
+    m = machine_fixed()
+    return int(m["cores"]) if m and m.get("cores") else (os.cpu_count() or 1)
+
+
 def mem_stats():
     """THE machine's memory, macOS or Linux alike: {ram_gb, free_gb, pressure (% of RAM not available), swap_used_mb,
     swap_total_mb}, each None when unreadable. macOS: sysctl, vm_stat, memory_pressure; Linux (ci-runner, where a check
     may fall back to running locally): /proc/meminfo (MemAvailable). Before, Linux read none of it: the budget assumed
     36 GB and free memory, pressure and swap were unknown, so the governor admitted blind."""
     out = dict.fromkeys(("ram_gb", "free_gb", "pressure", "swap_used_mb", "swap_total_mb"))
+    fixed = machine_fixed()
+    if fixed is not None:
+        return {k: fixed.get(k) for k in out}
     mi = read_meminfo()
     if mi.get("MemTotal"):
         out["ram_gb"] = mi["MemTotal"] / 2 ** 20
@@ -127,7 +155,7 @@ def gov_machine():
         laptop = laptop_pressure(None if "AGENTCTL_LAPTOP_PRESSURE" in os.environ else pressure_reading(), load=False)
     except Exception:
         laptop = None
-    return {"free": free_gb(), "pressure": pressure, "load1": load1, "cores": os.cpu_count() or 1, "laptop": laptop}
+    return {"free": free_gb(), "pressure": pressure, "load1": load1, "cores": machine_cores(), "laptop": laptop}
 
 
 def gov_tickets():
@@ -402,10 +430,13 @@ def pressure_reading(sysctl_out=None, meminfo=None, load1=None, cores=None, now_
     """{free_pct, level, load1, cores, swap_mb, swap_growth_mb, swap_span}: this machine now, None where unreadable.
     The readers are the tests' seams: sysctl_out (pressure_sysctl's text), meminfo (read_meminfo's dict)."""
     now_ = time.time() if now_ is None else now_
-    r = {"free_pct": None, "level": None, "swap_mb": None, "load1": os.getloadavg()[0] if load1 is None else load1,
-         "cores": cores or os.cpu_count() or 1}
-    mi = read_meminfo() if meminfo is None else meminfo
-    if mi.get("MemTotal"):
+    r = {"free_pct": None, "level": None, "swap_mb": None, "load1": machine_load1() if load1 is None else load1,
+         "cores": cores or machine_cores()}
+    fixed = machine_fixed() if meminfo is None and sysctl_out is None else None
+    mi = {} if fixed is not None else read_meminfo() if meminfo is None else meminfo
+    if fixed is not None:
+        r["free_pct"], r["level"], r["swap_mb"] = fixed.get("free_pct"), fixed.get("level"), fixed.get("swap_used_mb")
+    elif mi.get("MemTotal"):
         if "MemAvailable" in mi:
             r["free_pct"] = round(100 * mi["MemAvailable"] / mi["MemTotal"])
         if "SwapTotal" in mi and "SwapFree" in mi:
