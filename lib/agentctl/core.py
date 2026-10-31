@@ -490,18 +490,29 @@ def red_read_token(o_r):
     return tok
 
 
+def store_auth():
+    """How the store checks this process's calls: `store_auth` in agentctl.toml ($AGENTCTL_STORE_AUTH) --
+    "store-tokens" (the store's own tokens) or "forgejo" (movies' Forgejo token) -- else the forge's: store-tokens on
+    github, forgejo on forgejo. Set it explicitly while some owners still run on Forgejo (forgejo_owners): a command
+    switched to forge forgejo for their repo must still call the store with the store token."""
+    a = (os.environ.get("AGENTCTL_STORE_AUTH") or "").strip().lower()
+    if a in ("store-tokens", "forgejo"):
+        return a
+    return "store-tokens" if on_github() else "forgejo"
+
+
 def store_credential(o_r):
-    """forge = github: movies' credential is the agentctl STORE TOKEN (`agentctl store token issue`; gh reads GitHub
-    with its own auth), carried in $AGENTCTL_STORE_TOKEN and kept in the vault as bitcashier/AGENTCTL_STORE_TOKEN.
-    On Forgejo it is movies' Forgejo token, which the store checks against Forgejo."""
-    return token_ns(o_r) == "movies" and on_github()
+    """Movies' credential is the agentctl STORE TOKEN (`agentctl store token issue`) when the store checks its own
+    tokens (store_auth): carried in $AGENTCTL_STORE_TOKEN, kept in the vault as bitcashier/AGENTCTL_STORE_TOKEN; gh
+    reads GitHub with its own auth. Else it is movies' Forgejo token, which the store checks against Forgejo."""
+    return token_ns(o_r) == "movies" and store_auth() == "store-tokens"
 
 
 def token_env_name(o_r):
     """The environment variable o_r's credential travels in (to a detached child, a fixer, the processor)."""
     if token_ns(o_r) != "movies":
         return "GH_TOKEN"
-    return "AGENTCTL_STORE_TOKEN" if on_github() else "FORGEJO_API_TOKEN"
+    return "AGENTCTL_STORE_TOKEN" if store_credential(o_r) else "FORGEJO_API_TOKEN"
 
 
 def token_vault_key(o_r):

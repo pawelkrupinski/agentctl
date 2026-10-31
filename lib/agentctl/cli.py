@@ -325,5 +325,44 @@ def main(argv=None):
     a = ap.parse_args(argv)
     handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
                "red": cmd_red, "config": cmd_config, "issue": cmd_issue, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "github-app": cmd_github_app, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
+    forge_for_command(a)
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)
+
+
+# MOVIES FIRST (owner, 2026-10-31): movies cuts over to GitHub before bitcashier. `forgejo_owners` in agentctl.toml
+# ($AGENTCTL_FORGEJO_OWNERS, e.g. "bitcashier") names the owners still primary on Forgejo while forge = github: a
+# repo-scoped command run for one of their repos (its --repo, else the cwd's clone) runs on forge forgejo for its whole
+# process -- it lands, fetches and reads CI on Forgejo, never on GitHub, where their main is still Forgejo's mirror.
+FORGEJO_OWNER_COMMANDS = ("land", "wait", "ci-why", "dispatch", "prepush-check", "env")
+
+
+def command_repo_owner(a):
+    """The owner of the repository a command acts on (its --repo, else the cwd's clone), or None."""
+    r = getattr(a, "repo", None)
+    if r and not os.path.isdir(os.path.expanduser(r)):
+        try:
+            return slug(r).split("/")[0]
+        except (Exception, SystemExit):
+            return None
+    path = os.path.expanduser(r) if r else os.getcwd()
+    for name in (remote(), "origin", "forgejo"):
+        u = git(path, "remote", "get-url", name, check=False)
+        m = re.search(r"[:/]([^/:]+)/[^/]+?(?:\.git)?/?$", u.stdout.strip()) if u.returncode == 0 else None
+        if m:
+            return m.group(1)
+    return None
+
+
+def forge_for_command(a):
+    """Switch this process to forge forgejo when its command acts on a repo of a `forgejo_owners` owner (forge =
+    github only). Returns the owner it switched for, or None."""
+    owners = [o.strip() for o in (os.environ.get("AGENTCTL_FORGEJO_OWNERS") or "").split(",") if o.strip()]
+    if not owners or getattr(a, "cmd", None) not in FORGEJO_OWNER_COMMANDS or not on_github():
+        return None
+    owner = command_repo_owner(a)
+    if owner not in owners:
+        return None
+    os.environ["AGENTCTL_FORGE"] = "forgejo"
+    err(f"{owner} is still primary on Forgejo (forgejo_owners): this `{a.cmd}` runs on forge forgejo")
+    return owner

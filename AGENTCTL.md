@@ -4,7 +4,10 @@
 (`~/bitcashier/{infra,core,dashboard,invoice-page,version-dashboard}`) and in movies (`~/projects/movies`). All of
 these repos have the remotes `forgejo` and `origin` (GitHub). THE FORGE SWITCH, `forge` in agentctl.toml
 ($AGENTCTL_FORGE), picks the one agentctl reads, lands and pushes through, `<remote>` on this page: `forgejo` (forge =
-forgejo, the default until the cut-over to GitHub) or `origin` (forge = github). It replaces the hand-written shell that agents kept getting wrong: poll loops,
+forgejo, the default until the cut-over to GitHub) or `origin` (forge = github). MOVIES FIRST (2026-10-31): while
+bitcashier is still primary on Forgejo, `forgejo_owners = "bitcashier"` keeps `land`, `wait`, `ci-why`, `dispatch`,
+`prepush-check` and `env` for its repos on forge forgejo (said once on stderr), and `store_auth = "store-tokens"` keeps
+the store token for every command. It replaces the hand-written shell that agents kept getting wrong: poll loops,
 fetch/rebase/push/verify sequences, log trawling, DB spelunking. It does that work in fewer, cheaper and safer tool
 calls.
 
@@ -1353,6 +1356,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `forge` | `AGENTCTL_FORGE` | `forgejo` | the forge agentctl reads runs, logs, artifacts and dispatches through: forgejo or github |
 | `forgejo_api` | `AGENTCTL_FORGEJO_API` | - | - |
 | `forgejo_gh` | `AGENTCTL_FORGEJO_GH` | `f"{HOME}/bitcashier/infra/bin/forgejo-gh"` | - |
+| `forgejo_owners` | `AGENTCTL_FORGEJO_OWNERS` | - | - |
 | `forgejo_url` | `AGENTCTL_FORGEJO_URL` | - | - |
 | `gate_publish` | `AGENTCTL_GATE_PUBLISH` | `45` | - |
 | `gh_cli` | `AGENTCTL_GH_CLI` | `gh` | the GitHub CLI forge = github runs |
@@ -1429,6 +1433,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `status_port` | `AGENTCTL_STATUS_PORT` | - | - |
 | `step_bound` | `AGENTCTL_STEP_BOUND` | `120` | - |
 | `step_join` | `AGENTCTL_STEP_JOIN` | `20` | - |
+| `store_auth` | `AGENTCTL_STORE_AUTH` | - | - |
 | `store_retries` | `AGENTCTL_STORE_RETRIES` | `4` | - |
 | `store_retry_base` | `AGENTCTL_STORE_RETRY_BASE` | `0.5` | s; doubled each attempt: 0.5 + 1 + 2 + 4 = 7.5 s at most |
 | `store_secret` | `AGENTCTL_STORE_SECRET` | - | - |
