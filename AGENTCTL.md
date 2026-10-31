@@ -1184,6 +1184,24 @@ A worktree with commits not on forgejo/main whose author is gone (no live lease,
 ONCE by the tick, whatever its last verdict: it becomes a queued change like any other (its checks then decide; a
 rejection is its red's to rescue), and an `UNLANDED ORPHAN` inbox entry names it. Nothing fixes an orphan on its own.
 
+**Superseded work.** When a worktree's work was carried into another change by hand (rebased with real conflict
+resolution, so landed-by-content cannot see it -- movies-wt-ci-1/2/3 and -review went into ci-5 on 2026-10-30 and
+escalated until removed by hand), mark it:
+
+```bash
+~/bin/agentctl supersede ~/projects/movies-wt-ci-1 --by movies-wt-ci-5   # or --by <change id> (a unique part)
+~/bin/agentctl supersede                                                 # the open marks (--all: closed, lapsed too)
+~/bin/agentctl supersede ~/projects/movies-wt-ci-1 --undo
+```
+
+A superseded worktree is never submitted or escalated as an orphan (an open `UNLANDED ORPHAN` for it clears: its probe
+says `superseded by`). Each maintain pass reads the successor again: once it lands (a change of the successor's
+worktree LANDED since the mark, the named change -- or its re-submission -- LANDED, or the successor's head at the mark
+on main by content), the superseded worktree closes itself: removed when clean and idle, its branch with it, both in
+`agentctl-deleted.log`, and a `CLOSED` inbox entry. The successor ending unlanded (its worktree gone with nothing
+landed, or the named change rejected or cancelled with no new change from its worktree) lapses the mark: the orphan
+rules apply again. `--by` refuses a successor worktree with nothing off main yet.
+
 ### orphans: leftover loops and sbt servers
 
 ```

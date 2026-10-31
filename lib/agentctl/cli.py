@@ -286,6 +286,16 @@ def main(argv=None):
                                          "the cache expiry (7 days), and once a day the sweep")
     mt.add_argument("--dry-run", action="store_true", help="list what would be reaped / swept, kill and delete nothing")
     mt.add_argument("--sweep", action="store_true", help="run the sweep now, whatever the hour")
+    sup = sub.add_parser("supersede", help="mark a worktree SUPERSEDED BY another change: no orphan escalation; it closes "
+                         "itself when that change lands (no worktree: list the marks)",
+                         description="A worktree whose work was carried into another change (rebased with real conflict "
+                         "resolution, so landed-by-content matching cannot see it) is marked SUPERSEDED BY that change: "
+                         "maintain never submits or escalates it as an orphan, and removes it (clean and idle; logged, its "
+                         "branch with it) once the successor lands. The successor ending unlanded lapses the mark.")
+    sup.add_argument("worktree", nargs="?", help="the superseded worktree (default: list the marks)")
+    sup.add_argument("--by", help="the successor: its worktree (path or name beside this one) or its change id")
+    sup.add_argument("--undo", action="store_true", help="drop the mark")
+    sup.add_argument("--all", action="store_true", help="list: the closed and lapsed marks too")
     rp_ = sub.add_parser("reap", help="the reap alone: orphans --kill --safe (stale JVMs included); --dry-run lists")
     rp_.add_argument("--dry-run", action="store_true")
     cf = sub.add_parser("config", help="the knobs: what applies and from where (default), `defaults` (a complete "
@@ -295,6 +305,6 @@ def main(argv=None):
     cf.add_argument("--write", action="store_true", help="doc: regenerate AGENTCTL.md's config reference")
     a = ap.parse_args(argv)
     handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": cmd_red, "config": cmd_config, "issue": cmd_issue, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
+               "red": cmd_red, "config": cmd_config, "issue": cmd_issue, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)
