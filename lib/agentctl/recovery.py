@@ -140,7 +140,7 @@ def probe_words(kind, a):
             "quota_reset": lambda: f"the quota resets and {a.get('workflow')}'s {a.get('job')} passes",
             "workflow_green": lambda: f"{a.get('workflow')} is green", "http": lambda: f"{a.get('url')} answers",
             "tcp": lambda: f"{a.get('host')}:{a.get('port')} accepts",
-            "route": lambda: "the network is back", "tunnel": lambda: "the Forgejo tunnel answers",
+            "route": lambda: "the network is back", "tunnel": lambda: "the tunnel answers",
             "gate_read": lambda: "the gate is read", "token": lambda: "the processor holds a token",
             "git_fetch": lambda: f"git can read {remote()}/main",
             "invariant": lambda: f"invariant {a.get('id')} holds", "waiting_ok": lambda: "a waiting round completes",

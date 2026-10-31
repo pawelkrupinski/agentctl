@@ -75,6 +75,25 @@ class TunnelTest(unittest.TestCase):
         self.hang.close()
         self.assertEqual(A.tunnel_probe(), "refused")
 
+    def test_on_github_the_probe_asks_the_store_not_forgejo(self):
+        # Forgejo was switched off on 2026-10-31: the tunnel carries only the store, so a dead :3000 must not read as
+        # a dead tunnel (it would kick and escalate for ever).
+        saved = {k: os.environ.get(k) for k in ("AGENTCTL_FORGE", "AGENTCTL_STORE_URL")}
+        saved_role = A.host_role
+        A.host_role = lambda: "sync"  # the laptop's: the store is across the tunnel
+        self.addCleanup(setattr, A, "host_role", saved_role)
+        try:
+            os.environ["AGENTCTL_FORGE"] = "github"
+            os.environ["AGENTCTL_STORE_URL"] = self.hang.url.rsplit("/api/v1", 1)[0]
+            A.API = "http://127.0.0.1:1/api/v1"  # Forgejo's address: refused, and not asked
+            self.assertEqual(A.tunnel_ports(), [(3014, "agentctl store")])
+            self.assertEqual(A.tunnel_probe(), "timeout")
+            self.hang.close()
+            self.assertEqual(A.tunnel_probe(), "refused")
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
     def test_timeout_classified_as_down(self):
         self.assertTrue(A.tunnel_down(socket.timeout()))
         self.assertTrue(A.tunnel_down(urllib.error.URLError(socket.timeout("timed out"))))

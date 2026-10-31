@@ -1,4 +1,4 @@
-# agentctl, part `tools`: env, db-q, the tunnel, state, prepush-check.
+# agentctl, part `tools`: env, the tunnel, state, prepush-check.
 # Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
 
 # ---------------------------------------------------------------- queue (retired)
@@ -35,7 +35,13 @@ def cmd_queue_retired(a):
 
 
 # ---------------------------------------------------------------- env
-TUNNEL_PORTS = [(3000, "Forgejo web/API"), (2222, "Forgejo ssh")]
+TUNNEL_PORTS = [(3000, "Forgejo web/API"), (2222, "Forgejo ssh")]  # forge = forgejo (switched off 2026-10-31)
+STORE_TUNNEL_PORTS = [(3014, "agentctl store")]  # what the laptop tunnel carries now
+
+
+def tunnel_ports():
+    """The ports the laptop's tunnel must hold: the store's alone on github, Forgejo's two on the forgejo forge."""
+    return STORE_TUNNEL_PORTS if on_github() else TUNNEL_PORTS
 
 
 def default_ns():
@@ -129,7 +135,7 @@ def cmd_env(a):
         return 1
     (report if st == "unlocked" else problems).append(f"vault {ns}: {st}")
     tunnel_ok = True
-    for port, what in TUNNEL_PORTS:
+    for port, what in tunnel_ports():
         ok = port_open(port)
         tunnel_ok &= ok
         (report if ok else problems).append(f"tunnel localhost:{port} ({what}): {'open' if ok else 'REFUSED'}")
@@ -151,44 +157,13 @@ def cmd_env(a):
     return 1 if problems else 0
 
 
-# ---------------------------------------------------------------- db-q
+# ---------------------------------------------------------------- the Forgejo DB (forge = forgejo only: branches.db_inputs)
 DB_ENVS = {
     "forgejo": ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "pawel@10.1.0.3",
                 'sudo -u forgejo nix --extra-experimental-features "nix-command flakes" shell nixpkgs#sqlite -c '
                 "sqlite3 -readonly -safe -bail -header -tabs /mnt/data/forgejo/data/forgejo.db"],
 }
-# Defence in depth: sqlite3 already runs -readonly -safe. One statement, starting SELECT / WITH / PRAGMA, and none of
-# these (a CTE can front an INSERT/UPDATE/DELETE; -safe already blocks the file functions).
-WRITE_WORDS = re.compile(r"\bINSERT\b|\bREPLACE\s+INTO\b|\bUPDATE\b\s+\S+\s+SET\b|\bDELETE\s+FROM\b|"
-                         r"\b(DROP|ALTER|CREATE|ATTACH|DETACH|VACUUM|REINDEX)\s+\w|"
-                         r"\b(load_extension|writefile|readfile|edit|fts3_tokenizer)\s*\(", re.I)
 TUNNEL_LABEL = "net.bitcashier.forgejo-tunnel"
-
-
-def strip_sql(sql):
-    """The SQL with comments and string/identifier literals blanked (keywords inside them say nothing), in one pass."""
-    tok = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|`[^`]*`|\[[^\]]*\]|--[^\n]*|/\*.*?\*/", re.S)
-    return tok.sub(lambda m: " " if m.group(0)[:2] in ("--", "/*") else "''", sql)
-
-
-def sql_refusal(sql):
-    """None when the SQL is a single read-only SELECT / WITH ... SELECT / PRAGMA read; else why it is refused."""
-    if any(l.lstrip().startswith(".") for l in sql.splitlines()):
-        return "sqlite3 dot-commands are refused"
-    bare = strip_sql(sql).strip()
-    if not bare:
-        return "empty query"
-    if ";" in bare.rstrip(";").rstrip():
-        return "one statement only"
-    first = bare.split(None, 1)[0].upper()
-    if first not in ("SELECT", "WITH", "PRAGMA"):
-        return f"only SELECT, WITH and PRAGMA are allowed (got {first})"
-    m = WRITE_WORDS.search(bare)
-    if m:
-        return f"write/side-effect keyword {m.group(0)!r} is refused"
-    if first == "PRAGMA" and "=" in bare:
-        return "PRAGMA assignments are refused (reads only)"
-    return None
 
 
 def has_tunnel():
@@ -209,7 +184,7 @@ def launchctl_kick():
 def kick_tunnel():
     launchctl_kick()
     for _ in range(15):
-        if port_open(TUNNEL_PORTS[0][0]):
+        if port_open(tunnel_ports()[0][0]):
             return True
         time.sleep(1)
     return False
@@ -280,7 +255,7 @@ def tunnel_retry(fn):
     except Exception as e:
         if not tunnel_down(e):
             raise
-        err(f"the Forgejo tunnel refused or timed out ({str(e)[:80]}); reopening it ({TUNNEL_LABEL}) once and retrying")
+        err(f"the tunnel refused or timed out ({str(e)[:80]}); reopening it ({TUNNEL_LABEL}) once and retrying")
         if not has_tunnel() or read_json_file(tunnel_state_path()).get("network"):  # no tunnel on ci-runner; a
             return fn()  # lossy uplink (tunnel_watch): a restart only churns the tunnel -- one plain retry
         if tunnel_kick_rate_limited():
@@ -293,10 +268,12 @@ def tunnel_retry(fn):
 
 
 def tunnel_probe():
-    """'ok' (any HTTP answer), 'timeout' or 'refused' for GET <API>/version."""
+    """'ok' (any HTTP answer), 'timeout' or 'refused' for GET <store>/ (forge = github: the tunnel carries only the
+    agentctl store since Forgejo was switched off, 2026-10-31) or <API>/version (forge = forgejo)."""
     import socket
+    url = (store_url() or default_store_url()).rstrip("/") + "/" if on_github() else f"{API}/version"
     try:
-        with urllib.request.urlopen(f"{API}/version", timeout=TUNNEL_PROBE_TIMEOUT) as resp:
+        with urllib.request.urlopen(url, timeout=TUNNEL_PROBE_TIMEOUT) as resp:
             resp.read()
         return "ok"
     except urllib.error.HTTPError:
@@ -385,7 +362,7 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
     if r == "ok":
         did = "restored" if st.get("pending_since") or st.get("network") else "ok"
         if did == "restored":
-            err("the Forgejo tunnel answers again: the gate is read at once")
+            err("the tunnel answers again: the gate is read at once")
             mark_gate_dirty()  # the status line leaves `gate UNREAD` at the next duties tick, not at the 45 s mark
         if st.get("fails") or st.get("pending_since") or st.get("network"):
             st.update(fails=0, pending_since=None, escalated=False, network=False)
@@ -397,7 +374,7 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
     loss = (uplink or (uplink_loss if probe is None else (lambda: 0.0)))()
     if loss >= UPLINK_LOSS_MAX:
         if not st.get("network"):
-            msg = (f"NETWORK: the laptop's uplink loses {int(loss * 100)}% of packets to 1.1.1.1, so Forgejo (localhost:3000) "
+            msg = (f"NETWORK: the laptop's uplink loses {int(loss * 100)}% of packets to 1.1.1.1, so the tunnel (localhost:{tunnel_ports()[0][0]}) "
                    f"{r}s; not a tunnel fault, nothing to restart -- the gate reads come back with the network")
             err(msg)
             open_outage("NETWORK", msg, res or run_probe("tunnel"), [("tunnel_reset", {})], key="tunnel",
@@ -410,13 +387,13 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
         state_update(network=None)  # the uplink is fine: a dead forward is the tunnel's (the kickstart below)
     did = "down"
     if st["fails"] >= 2 and t - st.get("last_kick", 0) >= TUNNEL_KICK_MIN_GAP:
-        err(f"the Forgejo tunnel {r} {st['fails']} probes in a row; kickstarting {TUNNEL_LABEL}")
+        err(f"the tunnel {r} {st['fails']} probes in a row; kickstarting {TUNNEL_LABEL}")
         (kick or launchctl_kick)()
         st["last_kick"] = t
         st["pending_since"] = st.get("pending_since") or t
         did = "kicked"
     if st.get("pending_since") and t - st["pending_since"] >= TUNNEL_RESTORE_WAIT and not st.get("escalated"):
-        msg = (f"STALLED: the Forgejo tunnel (localhost:3000) still {r} {int((t - st['pending_since']) // 60)} min after a "
+        msg = (f"STALLED: the tunnel (localhost:{tunnel_ports()[0][0]}) still {r} {int((t - st['pending_since']) // 60)} min after a "
                f"kickstart; run `launchctl kickstart -k gui/$(id -u)/{TUNNEL_LABEL}` and check ~/Library/Logs/forgejo-tunnel.log")
         open_outage("STALLED", msg, res or run_probe("tunnel"), [("tunnel_reset", {})], key="tunnel-stalled",
                        command="tunnel", exit_code=2)
@@ -428,28 +405,6 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
 
 def run_db(argv, sql):
     return subprocess.run(argv, input=sql.rstrip().rstrip(";") + ";\n", capture_output=True, text=True, timeout=300)
-
-
-def cmd_db_q(a):
-    why = sql_refusal(a.sql)
-    if why:
-        print(f"agentctl db-q: REFUSED: {why}", file=sys.stderr)
-        return 2
-    argv = DB_ENVS[a.env]
-    r = run_db(argv, a.sql)
-    if r.returncode != 0 and re.search(r"Connection refused|Connection timed out|No route to host", r.stderr):
-        err(f"connection refused; reopening the tunnel ({TUNNEL_LABEL}) once")
-        kick_tunnel()
-        r = run_db(argv, a.sql)
-    if r.returncode != 0:
-        print(f"agentctl db-q: failed (exit {r.returncode}): {r.stderr.strip()[-500:]}", file=sys.stderr)
-        return 1
-    lines = r.stdout.splitlines()
-    head, rows = lines[:1], lines[1:]
-    print("\n".join(head + rows[: a.max_rows]))
-    if len(rows) > a.max_rows:
-        print(f"... {len(rows) - a.max_rows} more row(s) not shown (capped at {a.max_rows}; add LIMIT/WHERE or --max-rows)")
-    return 0
 
 
 # ---------------------------------------------------------------- state

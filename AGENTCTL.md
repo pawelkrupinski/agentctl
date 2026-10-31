@@ -137,8 +137,6 @@ moves it forward; nothing is a detached process that can die with its state in i
   `!` command to hand to the user. Background code never calls `secrets` (it would prompt).
 - **Never prints a secret.** Tokens are read inside the call that uses them and go only into a request header, a
   child's environment, or to the processor over a 0600 unix socket (see "tick"): never on a command line or on disk.
-- **The DB is read-only.** `db-q` runs `sqlite3 -readonly -safe` and refuses anything but one SELECT, WITH or PRAGMA
-  read.
 - **Never deletes unmerged work.** `cleanup` deletes only what is proven merged: the worktree's HEAD is an ancestor of
   <remote>/main, or every one of its commits is patch-equivalent there per `git cherry`. The tree must also be clean and
   idle. Every deletion is re-verified just before it happens and logged.
@@ -998,36 +996,6 @@ ok   forgejo-gh token (movies): token valid (user pawel)
 ok   forgejo-gh: /Users/pawel/bitcashier/infra/bin/forgejo-gh
 ```
 
-### db-q: read-only Forgejo DB query
-
-```
-agentctl db-q [--env forgejo] [--max-rows N] "<sql>"
-```
-
-It runs `ssh -o BatchMode=yes pawel@10.1.0.3 'sudo -u forgejo nix shell nixpkgs#sqlite -c sqlite3 -readonly -safe …'`
-with the SQL on stdin.
-
-- Refused: more than one statement; anything not starting with SELECT, WITH or PRAGMA; DML or DDL anywhere (a CTE can
-  front a DELETE); file functions; `PRAGMA x = y`; any sqlite dot-command line.
-- Output is tab-separated with a header, capped at `--max-rows` (default 200), with a count of the rows not shown.
-- On a refused connection it reopens the tunnel once (`launchctl kickstart -k gui/$UID/net.bitcashier.forgejo-tunnel`)
-  and retries.
-- Exit: 0 ok, 1 query or connection failed, 2 refused.
-
-Tables: `action_run` (`"index"` is the number in the URL), `action_run_job`, `action_task`, `action_task_step`.
-Status values: 1 ok, 2 fail, 3 cancelled, 4 skipped, 5 waiting, 6 running.
-
-```
-$ agentctl db-q 'select id, "index", status, substr(title,1,40) from action_run order by id desc limit 3'
-id	index	status	substr(title,1,40)
-2007	988	5	keyboard-nav page test: load Torun's lis
-2006	987	5	Page test repeat
-2005	986	3	keyboard-nav page test: load Torun's lis
-```
-
-Use it only as the fallback, when `forgejo-gh` or `ci-why` cannot answer, for example for queue analysis. It never
-writes.
-
 ### dispatch: every CI dispatch has an owner; branch reds are routed (2026-10-27)
 
 ```
@@ -1377,7 +1345,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `fixer_land_watch` | `AGENTCTL_FIXER_LAND_WATCH` | `60` | - |
 | `fixer_unlanded_escalate` | `AGENTCTL_FIXER_UNLANDED_ESCALATE` | `5400` | - |
 | `fixer_unlanded_nudge` | `AGENTCTL_FIXER_UNLANDED_NUDGE` | `2700` | - |
-| `forge` | `AGENTCTL_FORGE` | `forgejo` | the forge agentctl reads runs, logs, artifacts and dispatches through: forgejo or github |
+| `forge` | `AGENTCTL_FORGE` | `github` | the forge agentctl reads runs, logs, artifacts and dispatches through (Forgejo was switched off 2026-10-31) |
 | `forgejo_api` | `AGENTCTL_FORGEJO_API` | - | - |
 | `forgejo_gh` | `AGENTCTL_FORGEJO_GH` | `f"{HOME}/bitcashier/infra/bin/forgejo-gh"` | - |
 | `forgejo_owners` | `AGENTCTL_FORGEJO_OWNERS` | - | - |
@@ -1503,7 +1471,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
   and never try to unlock.
 - **Tunnel down** (`Connection refused` on localhost:3000/2222/3010, `GitOps manifests STALE`, a fetch failing).
   Run `agentctl env --check`. The fix is `launchctl kickstart -k gui/$(id -u)/net.bitcashier.forgejo-tunnel`. The
-  tunnel restarts itself under launchd, so wait a few seconds and land again. `db-q` kicks it once by itself.
+  tunnel restarts itself under launchd, so wait a few seconds and land again.
 - **The red gate refused the push.** `land` already printed `ci-why`. For a tools-only change, it lands while red. For
   a production change, wait for the green run that `ci-why` names (in the background, with `wait run`), or add
   `Fixes-Red: <#|id>` only if your commit really fixes that run. Never use PREPUSH_SKIP or `--no-verify`.

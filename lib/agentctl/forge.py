@@ -14,7 +14,7 @@
 #                                       the calls whose paths or answers differ: the GitHub side answers in the
 #                                       Forgejo shape the callers were written against
 # The push remote is core's remote(); the landing identity on ci-runner is ghapp.py's (github-app).
-FORGE_DEFAULT = "forgejo"  # the forge agentctl reads runs, logs, artifacts and dispatches through: forgejo or github
+FORGE_DEFAULT = "github"  # the forge agentctl reads runs, logs, artifacts and dispatches through (Forgejo was switched off 2026-10-31)
 FORGES = ("forgejo", "github")
 GH_CLI = os.environ.get("AGENTCTL_GH_CLI", "gh")  # the GitHub CLI forge = github runs
 GITHUB_WEB = "https://github.com"

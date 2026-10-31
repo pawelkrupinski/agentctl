@@ -25,8 +25,6 @@
   agentctl env [--print|--check] [--ns movies|bitcashier]
         eval "$(agentctl env --print)" puts sdkman sbt/java on PATH; --check checks sbt, java, vault, tunnel, token.
         Locked vault: one line `vault <ns> locked: ask the user to run `! secrets unlock <ns>``, exit 1. Never unlocks.
-  agentctl db-q [--env forgejo] [--max-rows N] "<sql>"
-        Read-only Forgejo DB query (sqlite3 -readonly -safe); only one SELECT/WITH/PRAGMA read; rows capped.
   agentctl inbox [ID...] [--unread] [--ack [--all]] [--limit N] [--json] [-v]
         Every final verdict of land / watch / wait / waiting await (and land's WAITING line), one JSON file each in
         ~/.cache/agentctl/inbox/, written however the command ended. The orchestrator reads it, agent alive or not.

@@ -145,10 +145,10 @@ class ForgejoForgeTest(ForgeCase, unittest.TestCase):
         for r in rs:
             self.rest[("GET", f"actions/runs/{r['id']}")] = r
 
-    def test_the_default_is_forgejo(self):
+    def test_the_default_is_github(self):
+        # Forgejo was switched off on 2026-10-31: with no setting, agentctl reads github.com.
         os.environ.pop("AGENTCTL_FORGE")
-        self.assertEqual(A.forge(), "forgejo")
-        self.assertEqual(A.forge_argv(O_R, "api", "repos/x"), [FAKE_FORGEJO, "api", "repos/x", "-R", O_R])
+        self.assertEqual(A.forge(), "github")
 
     def test_forgejo_api_paths_are_unchanged(self):
         self.serve_runs([dict(id=5, number=1, sha="e" * 40, branch="main", done=True, ok=True)])

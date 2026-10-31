@@ -82,11 +82,6 @@ def main(argv=None):
     eg.add_argument("--print", action="store_true", help="export lines for eval (default)")
     eg.add_argument("--check", action="store_true", help="check sbt, java, the vault, the tunnel and the Forgejo token")
     ev.add_argument("--ns", choices=("movies", "bitcashier"), help="vault namespace (default: movies inside ~/projects/movies, else bitcashier)")
-    dq = sub.add_parser("db-q", help="read-only query of the Forgejo DB (SELECT/WITH/PRAGMA only)",
-                        description=DBQ_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
-    dq.add_argument("sql")
-    dq.add_argument("--env", choices=sorted(DB_ENVS), default="forgejo")
-    dq.add_argument("--max-rows", type=int, default=200)
     o = sub.add_parser("orphans", help="list stray owners, wait loops and sbt servers (worktree, owner or runs gone; old code)",
                        description="Lists owner records that are strays (a dead process's record and its uncancelled runs, "
                        "an owner on old code, an owner whose cwd is gone), and wait loops and sbt servers that are orphaned: "
@@ -324,7 +319,7 @@ def main(argv=None):
     cf.add_argument("--write", action="store_true", help="doc: regenerate AGENTCTL.md's config reference")
     a = ap.parse_args(argv)
     handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": cmd_red, "config": cmd_config, "issue": cmd_issue, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "github-app": cmd_github_app, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
+               "red": cmd_red, "config": cmd_config, "issue": cmd_issue, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "github-app": cmd_github_app, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env}[a.cmd]
     forge_for_command(a)
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)

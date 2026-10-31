@@ -37,18 +37,10 @@ Exit: 0 queued / landed (and watched green), 1 not landed, 2 landed but the watc
 RED."""
 ENV_HELP = """Agent environment, without secrets.
   eval "$(agentctl env --print)"   # sdkman's sbt + java first on PATH, JAVA_HOME; exit 1 (one line on stderr) on a locked vault
-  agentctl env --check            # sbt, a java that runs, `secrets status <ns>`, tunnel localhost:3000 and :2222, the
-                                  # Forgejo token (read inside the check, sent to /api/v1/user, never printed), forgejo-gh
+  agentctl env --check            # sbt, a java that runs, `secrets status <ns>`, the tunnel's localhost:3014 (the
+                                  # agentctl store) and gh (forge = forgejo, retired 2026-10-31: :3000/:2222, its token)
 A locked vault prints exactly: vault <ns> locked: ask the user to run `! secrets unlock <ns>`  -- and exits 1.
 agentctl never runs `secrets unlock` (Touch ID is the user's). Output never contains a token: tools read it at use."""
-DBQ_HELP = """Read-only query of the Forgejo database (sqlite3 -readonly -safe over ssh to ci-runner).
-Refuses anything but ONE SELECT / WITH ... SELECT / PRAGMA read (no DML in a CTE, no dot-commands, no PRAGMA x = y).
-Output: tab-separated with a header, capped at --max-rows (default 200). On a refused or timed-out connection it reopens the laptop
-tunnel once (launchctl kickstart -k gui/$UID/net.bitcashier.forgejo-tunnel) and retries.
-Tables: action_run, action_run_job, action_task, action_task_step (status 1 ok, 2 fail, 3 cancelled, 4 skipped,
-5 waiting, 6 running). Prefer `forgejo-gh` / `agentctl ci-why` for runs and logs; db-q is the fallback.
-  agentctl db-q 'select id, "index", status, substr(title, 1, 60) from action_run order by id desc limit 10'
-Exit: 0 ok, 1 query/connection failed, 2 refused."""
 import argparse, contextlib, io, datetime as dt, fcntl, fnmatch, glob, itertools, json, os, re, shlex, signal, subprocess, sys, threading, time, traceback, urllib.error, urllib.parse, urllib.request
 
 HOME = os.path.expanduser("~")
