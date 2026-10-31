@@ -4,6 +4,8 @@
   --help                      a help naming --bg and --permission-mode
   --bg <prompt> ... -n <name> records {argv, cwd, env} to $FAKE_CLAUDE_OUT/<id>.json, starts a detached session process
                               and prints `backgrounded · <id> · <name>`
+  --bg with $FAKE_CLAUDE_BG_FAIL  prints it and exits 1 (a refused launch); with $FAKE_CLAUDE_NO_SESSION it backgrounds
+                              a row (state `starting`) whose session never starts
   agents --json --all         the sessions ($FAKE_CLAUDE_OUT/agents/<id>.json rows: id, sessionId, name, cwd, state)
   stop <id>                   ends that session (its row stays, state done, stopped: true)
   _session <id>               (internal) the session: transcript at $AGENTCTL_CLAUDE_PROJECTS/fake/<sessionId>.jsonl,
@@ -89,6 +91,9 @@ if argv[:1] == ["_session"]:
         r.update(state="done", pid=None)
         write_row(r)
     sys.exit(0)
+if "--bg" in argv and os.environ.get("FAKE_CLAUDE_BG_FAIL"):  # the launch refused (e.g. an untrusted workspace)
+    print(os.environ["FAKE_CLAUDE_BG_FAIL"], file=sys.stderr)
+    sys.exit(1)
 if "--bg" in argv:
     prompt = argv[argv.index("--bg") + 1]
     name = argv[argv.index("-n") + 1] if "-n" in argv else "session"
@@ -97,6 +102,11 @@ if "--bg" in argv:
     os.makedirs(OUT, exist_ok=True)
     with open(os.path.join(OUT, f"{bid}.json"), "w") as f:
         json.dump({"argv": argv, "cwd": os.getcwd(), "env": dict(os.environ)}, f)
+    if os.environ.get("FAKE_CLAUDE_NO_SESSION"):  # backgrounded, and its session never starts (no id, no transcript)
+        write_row({"id": bid, "name": name, "cwd": os.getcwd(), "kind": "background", "state": "starting",
+                   "prompt": prompt})
+        print(f"backgrounded · {bid} · {name}")
+        sys.exit(0)
     write_row({"id": bid, "sessionId": sid, "name": name, "cwd": os.getcwd(), "kind": "background", "state": "working",
                "prompt": prompt})
     subprocess.Popen([sys.executable, os.path.abspath(__file__), "_session", bid], start_new_session=True,

@@ -1122,7 +1122,7 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
     row = store.get(red_lease(key))
     live = lease_is_live(row, t)
     gone = obs is not None and red_gone(it, obs, snap)
-    fix = red_fix_of(it, facts)
+    fix = red_fix_fresh(store, red_fix_of(it, facts))
     block = red_block_of(it, store)
     acts = []
     # fix-pending too: the usual end of such a red is its fixer's own `Fixes-Red:` landing, and no dispatch can verify a
@@ -1238,7 +1238,7 @@ def red_lease_ended(store, it, row, block, t):
     m = lease_meta(row)
     quick = float(m.get("released_at") or t) - float((row or {}).get("acquired_at") or 0) < RED_QUICK_EXIT
     if quick and re.match(r"(exit -?\d+|ended) with no|NOT STARTED", str(h["outcome"])):  # it never got going (a crash at start): not an
-        h["outcome"] = f"NOT STARTED: {h['outcome']}"                  # attempt, and no instant re-dispatch either
+        h["outcome"] = re.sub(r"^(NOT STARTED: )*", "NOT STARTED: ", str(h["outcome"]))  # attempt, nor an instant re-dispatch
     counted = not str(h["outcome"]).startswith(("NOT STARTED", "RELEASED"))
     upd = {"history": (d.get("history") or []) + [h], "holder": None,
            "attempts": int(d.get("attempts") or 0) + (1 if counted else 0)}
@@ -1406,6 +1406,73 @@ def red_resolve_old(store, it, age, o_r, repo, t):
     return None
 
 
+# A FIX FOLLOWS ITS WORK, NOT ITS CHANGE ID (2026-10-31, Main #2877): "fix 20261031-073114-movies-wt-flakes-9f6bc4
+# waiting to land (joined)" for hours -- the change was CANCELLED (the store's item said so; the entry the facts read
+# still said `waiting`) and the same worktree re-queued as ...-ed6118, which LANDED d677b1bb6. The store's change item
+# is the truth about a change; a fix whose change ended without landing follows its worktree to the later change that
+# carries its work (open: waiting on it; landed: verifying from its landing), or its own commits found on main by
+# content; with neither, it is offered again once RED_FIX_REQUEUE_GRACE passed since the cancel (a re-queue is quick).
+CHANGE_ENDED = ("cancelled", "superseded", "rejected")
+RED_FIX_REQUEUE_GRACE = 900  # $AGENTCTL_RED_FIX_REQUEUE_GRACE
+
+
+def red_change(store, eid):
+    try:
+        return store.item("change", eid) if eid else None
+    except Exception:  # an unread store decides nothing: the facts stand
+        return None
+
+
+def red_fix_fresh(store, fix):
+    """The fix red_fix_of read from the facts, corrected by its change's store item: None when that change ended
+    without landing, landed when the store says so; as read when the store has no word on it."""
+    if not fix or not fix.get("entry") or fix.get("status") == "landed":
+        return fix
+    ch = red_change(store, fix["entry"])
+    if not ch:
+        return fix
+    if ch["state"] in CHANGE_ENDED:
+        return None
+    if ch["state"] == "landed":
+        sha = ch["data"].get("landed_sha") or ch["data"].get("tip")
+        return {**fix, "status": "landed", "sha": sha, "at": float(ch.get("entered_at") or store.clock())} if sha else fix
+    return {**fix, "status": ENTRY_STATUS.get(ch["state"], fix.get("status"))}
+
+
+def red_fix_follow(store, f, repo, t):
+    """(fix, its change's state) for a not-yet-landed fix f whose change ENDED without landing: the change that carries
+    its work since -- the earliest later change of the same worktree (landed, or still open) -- or f's own commits
+    landed on main by content; (None, state) when there is none; (None, None) when its change has not ended."""
+    ch = red_change(store, f.get("entry"))
+    if not ch or ch["state"] not in CHANGE_ENDED:
+        return None, None
+    cd = ch["data"] or {}
+    wt, since = cd.get("worktree"), float(cd.get("submitted_at") or 0)
+    later = []
+    try:
+        later = sorted((o for o in store.items("change") if o["id"] != ch["id"] and wt and o["data"].get("worktree") == wt
+                        and float(o["data"].get("submitted_at") or 0) >= since and o["state"] not in CHANGE_ENDED),
+                       key=lambda o: float(o["data"].get("submitted_at") or 0))
+    except Exception:
+        pass
+    for o in later:
+        od = o["data"]
+        sha = od.get("landed_sha") or od.get("tip")
+        if o["state"] == "landed" and sha:
+            return {"entry": o["id"], "status": "landed", "sha": sha, "at": float(o.get("entered_at") or t),
+                    "followed": f.get("entry"), "author": f.get("author")}, ch["state"]
+        if o["state"] != "landed":
+            return {"entry": o["id"], "status": ENTRY_STATUS.get(o["state"], o["state"]), "followed": f.get("entry"),
+                    "author": f.get("author")}, ch["state"]
+    head, base = cd.get("head"), cd.get("base")
+    if repo and head:
+        commits, left = cherry_landed(repo, f"refs/remotes/{remote()}/main", head, *((base,) if base else ()))
+        if commits and left == []:
+            return {"entry": f.get("entry"), "status": "landed", "sha": head, "at": t, "followed": f.get("entry"),
+                    "by_content": True, "author": f.get("author")}, ch["state"]
+    return None, ch["state"]
+
+
 def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
     d = it["data"]
     f = d.get("fix") or {}
@@ -1468,6 +1535,28 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
         return []
     if f.get("status") != "landed":
         status = red_entry_status(facts, f.get("entry"))
+        cur = red_fix_fresh(store, f)
+        if cur is not f and cur:  # the store's word on its change outranks the entry the facts read
+            if cur.get("status") == "landed":
+                line = f"{red_what(d)}: fix {f.get('entry')} landed ({str(cur['sha'])[:10]}): verifying"
+                red_move(store, it, "fix-pending", line, data={"fix": {**cur, "verify_since": t}})
+                return [line]
+            status = cur.get("status")
+        moved, ended = red_fix_follow(store, f, repo, t)
+        if moved and moved["status"] == "landed":
+            line = (f"{red_what(d)}: its fix {f.get('entry')} ended {ended}; its work landed in {moved['entry']} "
+                    f"({str(moved['sha'])[:10]}): verifying")
+            red_move(store, it, "fix-pending", line, data={"fix": {**moved, "verify_since": t}})
+            return [line]
+        if moved:
+            if moved["entry"] != f.get("entry"):
+                store.update_item("red", it["id"], it["version"], {"fix": moved})
+            return []
+        if ended:
+            ch = red_change(store, f.get("entry")) or {}
+            if t - float(ch.get("entered_at") or 0) < env_num("AGENTCTL_RED_FIX_REQUEUE_GRACE", RED_FIX_REQUEUE_GRACE):
+                return []  # a re-queue of its worktree may follow the cancel
+            status = ended
         if status in FIX_OPEN:
             return []
         if not fix:  # its change was rejected, cancelled or superseded, and no other fix is on its way
@@ -1812,8 +1901,11 @@ def red_dispatcher(store, o_r, repo, t):
         if off["tier"] == "author":
             why = f"offered to its author ({str((pic.get('author') or {}).get('worktree') or '?').replace(HOME, '~')})"
         elif after > t:
+            last = next((str(h.get("outcome") or "") for h in reversed(item["data"].get("history") or [])
+                         if str(h.get("outcome") or "").startswith("NOT STARTED")), "")
+            last = re.sub(r"^(NOT STARTED: )+", "", last)
             why = (f"its last {item['data'].get('start_failures')} fixer(s) never got going; the next at "
-                   f"{time.strftime('%H:%M', time.localtime(after))}")
+                   f"{time.strftime('%H:%M', time.localtime(after))}" + (f"; launch error: {last[:240]}" if last else ""))
         elif blocker:
             why = blocker
         elif not free:
@@ -1831,6 +1923,13 @@ def red_dispatcher(store, o_r, repo, t):
             why = f"no clone of {po} on this machine (red-repos.json `clone`)"
             if why != off.get("reason"):
                 store.offer_reason(off["id"], why)
+            continue
+        gap = claude_trust_gap(prepo)
+        if gap:  # never a launch claude refuses: said on its offer (and the inbox, once), dispatched once trusted
+            why = f"NOT DISPATCHABLE: {gap}"
+            if why != off.get("reason"):
+                store.offer_reason(off["id"], why)
+                inbox_write("red", f"RED NOT DISPATCHABLE: {pic.get('workflow')} #{(pic.get("run") or {}).get("number")}: {gap}", [], [], 1)
             continue
         num = (pic.get("run") or {}).get("number")
         holder_id = owner_holder(fam) if owned else f"laptop:fixer:red-{pic['key']}-{int(pic.get('attempts') or 0) + 1}"

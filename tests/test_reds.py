@@ -286,6 +286,56 @@ class FixTest(RedsBase):
         self.tick(advance=240)  # RED_FIX_GIVEUP after it LANDED, no run proving it: set aside, offered
         self.assertEqual(self.only()["state"], "offered")
 
+    def test_a_cancelled_fix_follows_its_worktree_to_the_change_that_landed_it(self):
+        # 2026-10-31, Main #2877: "fix 20261031-073114-movies-wt-flakes-9f6bc4 waiting to land (joined)" for hours: the
+        # change was CANCELLED in the store (its entry still read `waiting`) and the same worktree re-queued as
+        # ...-ed6118, which LANDED d677b1bb6. The red follows the worktree: verified by the run containing the landing.
+        self.tick()
+        wt = self.r.worktree("repo-wt-flakes", branch="repo-wt-flakes")
+        self.r.write("fix.txt", "flakes\n", at=wt)
+        sha = self.r.commit("fix FooSpec\n\nFixes-Red: 20", at=wt)
+        d = A.waiting_state(self.r.path)[0]
+        e, _ = A.queue_change(d, {"worktree": wt, "branch": "repo-wt-flakes", "head": sha, "commits": [sha]})
+        e["status"] = "waiting"
+        A.save_entry(d, e)
+        self.tick()
+        self.assertEqual(self.only()["data"]["fix"]["entry"], e["id"])
+        ch = self.st.put_item("change", e["id"], "queued", {"worktree": wt, "head": sha, "submitted_at": self.t[0]})
+        self.st.transition("change", e["id"], "cancelled", ch["version"])  # the entry file keeps `waiting` (stale)
+        self.tick(advance=60)
+        self.assertEqual(self.only()["state"], "fix-pending")  # nothing landed yet: no re-offer while it is re-queued
+        nx = self.st.put_item("change", "zz-requeued", "queued", {"worktree": wt, "head": sha,
+                                                                  "submitted_at": self.t[0] + 1})  # re-queued, new id
+        self.tick(advance=A.RED_FIX_REQUEUE_GRACE + 60)  # past the grace: it waits on the re-queued change
+        it = self.only()
+        self.assertEqual((it["state"], it["data"]["fix"]["entry"]), ("fix-pending", "zz-requeued"))
+        self.r.push(at=wt, ref=f"{sha}:main")  # ...which lands
+        self.st.transition("change", "zz-requeued", "landed", nx["version"], data={"tip": sha})
+        self.tick(advance=60)
+        it = self.only()
+        self.assertEqual((it["state"], it["data"]["fix"]["entry"], it["data"]["fix"]["status"], it["data"]["fix"]["sha"]),
+                         ("fix-pending", "zz-requeued", "landed", sha))
+        self.tick(advance=60)  # the stale `waiting` entry never snaps it back
+        self.assertEqual(self.only()["data"]["fix"]["entry"], "zz-requeued")
+        self.put("runs.json", [run(50, 23, "Main", "main.yml", sha)] + json.load(open(os.path.join(self.d, "runs.json"))))
+        self.tick()
+        self.assertEqual([i["state"] for i in self.st.items("red")], ["verified"])
+
+    def test_a_cancelled_fix_with_no_successor_is_offered_again(self):
+        self.tick()
+        wt = self.r.worktree("repo-wt-gone", branch="repo-wt-gone")
+        self.r.write("fix.txt", "gone\n", at=wt)
+        sha = self.r.commit("fix FooSpec\n\nFixes-Red: 20", at=wt)
+        d = A.waiting_state(self.r.path)[0]
+        e, _ = A.queue_change(d, {"worktree": wt, "branch": "repo-wt-gone", "head": sha, "commits": [sha]})
+        e["status"] = "waiting"
+        A.save_entry(d, e)
+        self.tick()
+        ch = self.st.put_item("change", e["id"], "queued", {"worktree": wt, "head": sha, "submitted_at": self.t[0]})
+        self.st.transition("change", e["id"], "cancelled", ch["version"])
+        self.tick(advance=A.RED_FIX_GIVEUP + 60)  # never re-queued, never landed
+        self.assertEqual(self.only()["state"], "offered")
+
     def test_a_landed_fix_no_run_ever_checks_is_set_aside_and_the_red_offered_again(self):
         self.tick()
         _wt, sha = self.fix_commit(20)
@@ -1067,6 +1117,77 @@ class QuickExitTest(RedsBase):
         self.assertEqual((it["state"], it["data"]["attempts"]), ("offered", 0))
         self.assertEqual(len(A.fixer_records()), 1)  # no instant re-dispatch
         self.assertIn("never got going", self.st.offer_of(f"red:{it['id']}")["reason"])
+
+
+class WorkspaceTrustTest(RedsBase):
+    """2026-10-31, core #277: 9 fixers in a row ended `claude --bg` exit 1 "Workspace not trusted" (a core worktree; claude
+    trusts a worktree through its repo's MAIN checkout, and ~/bitcashier/core never was). No launch is burnt on an
+    untrusted repo: the red's offer says why with the owner's one-liner, and it dispatches the tick after trust."""
+
+    def config(self, trusted):
+        path = os.path.join(os.environ["HOME"], ".claude.json")
+        root = os.path.realpath(self.r.path)
+        with open(path, "w") as f:
+            json.dump({"projects": {root: {"hasTrustDialogAccepted": trusted},
+                                    os.path.dirname(root): {"hasTrustDialogAccepted": True}}}, f)  # a parent: no trust
+        return path
+
+    def test_an_untrusted_repo_is_never_launched_and_its_offer_names_the_fix(self):
+        path = self.config(False)
+        try:
+            self.tick(dispatch=True)
+            it = self.only()
+            self.assertEqual(A.fixer_records(), [])  # nothing launched, no worktree
+            reason = self.st.offer_of(f"red:{it['id']}")["reason"]
+            self.assertIn("does not trust", reason)
+            self.assertIn(f"cd {os.path.realpath(self.r.path)}", reason.replace("~", os.environ["HOME"]))
+            self.assertEqual(int(it["data"].get("start_failures") or 0), 0)  # no backoff: it is not a launch
+            self.config(True)
+            self.tick(dispatch=True)
+            self.assertEqual(len(A.fixer_records()), 1)  # trusted: dispatched at once
+        finally:
+            os.remove(path)
+
+    def test_an_unreadable_config_decides_nothing(self):
+        self.assertIsNone(A.claude_trust_gap(self.r.path))  # no ~/.claude.json in the test HOME
+
+
+class LaunchErrorTest(RedsBase):
+    def test_a_backed_off_red_shows_its_last_launch_error(self):
+        os.environ["FAKE_CLAUDE_BG_FAIL"] = "Workspace not trusted. Run `claude` in /x once and accept the trust prompt"
+        try:
+            self.tick(dispatch=True)
+            it = self.only()
+            t0 = time.time()
+            while A.lease_is_live(self.st.get(A.red_lease(it["data"]["key"])), time.time()) and time.time() - t0 < 60:
+                time.sleep(0.2)
+            self.t[0] = time.time()
+            self.tick(dispatch=True)
+            self.tick(dispatch=True)
+        finally:
+            os.environ.pop("FAKE_CLAUDE_BG_FAIL")
+        it = self.only()
+        reason = self.st.offer_of(f"red:{it['id']}")["reason"]
+        self.assertIn("never got going", reason)
+        self.assertIn("Workspace not trusted", reason)  # the actual launch error, not just "never got going"
+
+
+class UnclaimedFixerTest(RedsBase):
+    def test_a_session_that_never_starts_its_transcript_is_stopped_with_its_launch_state(self):
+        os.environ.update(FAKE_CLAUDE_NO_SESSION="1", AGENTCTL_FIXER_CLAIM_WITHIN="2", AGENTCTL_BG_POLL="0.2")
+        try:
+            self.tick(dispatch=True)
+            it = self.only()
+            t0 = time.time()
+            while A.lease_is_live(self.st.get(A.red_lease(it["data"]["key"])), time.time()) and time.time() - t0 < 60:
+                time.sleep(0.2)
+        finally:
+            for k in ("FAKE_CLAUDE_NO_SESSION", "AGENTCTL_FIXER_CLAIM_WITHIN", "AGENTCTL_BG_POLL"):
+                os.environ.pop(k)
+        rec = A.fixer_records()[0]
+        self.assertTrue(rec["verdict"].startswith("NOT STARTED: "), rec["verdict"])
+        self.assertIn("never claimed", rec["verdict"])
+        self.assertIn("state", rec["verdict"])  # what `claude agents` says about it
 
 
 class AuditTest(RedsBase):

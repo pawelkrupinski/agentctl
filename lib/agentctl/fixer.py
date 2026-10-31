@@ -405,6 +405,17 @@ def fixer_meta_sent(st, leases, meta):
 # transcript (~/.claude/projects/*/<session>.jsonl) is its progress and holds its final answer, `claude stop` ends it.
 BG_POLL = 5  # seconds between the wrapper's looks at its session ($AGENTCTL_BG_POLL)
 BG_STARTED = re.compile(r"backgrounded\W+([0-9a-f]{6,})")
+FIXER_CLAIM_WITHIN = 600  # s a started session has to start its transcript / run `red claim` ($AGENTCTL_FIXER_CLAIM_WITHIN)
+
+
+def bg_row_brief(ent):
+    """What `claude agents` says of a session, in one line."""
+    if ent is None:
+        return "not listed"
+    if not ent:
+        return "unreadable"
+    keys = ("state", "status", "error", "reason", "exitCode", "cwd")
+    return ", ".join(f"{k} {str(ent[k])[:160]}" for k in keys if ent.get(k) not in (None, "")) or "no state"
 
 
 def fixer_label(rec):
@@ -414,6 +425,47 @@ def fixer_label(rec):
         return f"orphan · {os.path.basename(rec.get('worktree') or '?')}"
     wf = (rec.get("workflow") or "").split()
     return f"red fixer #{rec.get('run')} · {(wf[-1].lower() + ' ') if wf else ''}{rec.get('job') or ''}".strip()[:80]
+
+
+# WORKSPACE TRUST (2026-10-31, core Main Pipeline #277: 9 fixers in a row ended `claude --bg` exit 1 "Workspace not
+# trusted. Run `claude` in ~/bitcashier/core-wt-red-277-9 once and accept the trust prompt"): a background session
+# starts only in a workspace the owner trusted. claude keys that trust by the repo's MAIN checkout (a worktree of
+# ~/projects/movies is trusted through ~/projects/movies) or a dir between the cwd and its worktree root -- never a
+# parent of the repo (~/bitcashier did not count for ~/bitcashier/core). agentctl only READS the trust (granting it is
+# the owner's one prompt): an untrusted repo's red is never launched, its offer says so with the owner's one-liner, and
+# it dispatches the tick after the owner trusted it.
+def claude_config_path():
+    d = os.environ.get("CLAUDE_CONFIG_DIR")
+    return os.path.join(d, ".claude.json") if d else os.path.join(HOME, ".claude.json")
+
+
+def claude_trust_gap(path):
+    """None when claude trusts `path` (a checkout or worktree) for a background session -- or its config cannot be
+    read (no verdict: the launch decides) -- else why not, with the owner's one-liner that trusts it."""
+    try:
+        with open(claude_config_path()) as f:
+            projects = (json.load(f) or {}).get("projects")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(projects, dict) or not path or not os.path.isdir(path):
+        return None
+    p = os.path.realpath(path)
+    r = git(p, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir", check=False)
+    out = r.stdout.splitlines() if r.returncode == 0 else []
+    top = os.path.realpath(out[0]) if out else p
+    common = os.path.realpath(out[1]) if len(out) > 1 else ""
+    main = os.path.dirname(common) if os.path.basename(common) == ".git" else top
+    cands, q = {main}, p
+    while True:
+        cands.add(q)
+        if q == top or q == os.path.dirname(q):
+            break
+        q = os.path.dirname(q)
+    if any(isinstance(projects.get(c), dict) and projects[c].get("hasTrustDialogAccepted") is True for c in cands):
+        return None
+    return (f"claude does not trust {main.replace(HOME, '~')} (`claude --bg` refuses an untrusted workspace; a "
+            f"worktree is trusted through its main checkout): owner, once: `! cd {shlex.quote(main)} && claude` -- "
+            f"accept the trust prompt, then /exit; the red dispatches at the next tick")
 
 
 def bg_start(argv, cwd, env):
@@ -562,7 +614,8 @@ def red_fixer(a):
             os._exit(143)
         for sg in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
             signal.signal(sg, cancelled)
-        missing = 0
+        missing, unclaimed_told = 0, False
+        claim_within = env_num("AGENTCTL_FIXER_CLAIM_WITHIN", FIXER_CLAIM_WITHIN)
 
         def held(row):
             return bool(row) and row["epoch"] == epoch and lease_is_live(row, time.time())
@@ -583,7 +636,26 @@ def red_fixer(a):
                 if (ent or {}).get("state") == "done" or missing >= 3:  # finished its turn, or gone from `claude agents`
                     break
                 stop = None
-                if time.time() - t0 > wall:
+                late = time.time() - t0 > claim_within
+                if late and not rec.get("transcript") and not (read_record(a.record) or {}).get("note"):
+                    # NEVER CLAIMED (2026-10-31): a session that in claim_within neither started its transcript nor ran
+                    # its first `red claim` never got going -- ended with what `claude agents` says of it, never a
+                    # silent "never got going"
+                    stop = (f"NOT STARTED: session {bid} never claimed in {fmt_age(claim_within)} (`claude agents`: "
+                            f"{bg_row_brief(ent)})")
+                elif late and not unclaimed_told and not (read_record(a.record) or {}).get("note"):
+                    unclaimed_told = True  # it works but never ran `red claim`: said once, on its lease and the inbox
+                    tail = " | ".join(l.strip() for l in bg_final_text(rec.get("transcript")).splitlines()[-3:] if l.strip())
+                    line = (f"RED FIXER {rec['workflow']} #{num}: session {bid} has not claimed in "
+                            f"{fmt_age(claim_within)} (`claude agents`: {bg_row_brief(ent)}); its last words: {tail[:300]}")
+                    inbox_write("red fixer", line, [line], [], 1, cwd=wt)
+                    try:
+                        st.note(name, epoch, secret, line[:300])
+                    except StoreUnavailable:
+                        pass
+                if stop:
+                    pass
+                elif time.time() - t0 > wall:
                     stop = f"TIMED OUT after {int(wall // 60)} min (maximum wall time)"
                 elif os.path.exists(os.path.join(wt, "RED-STOP.md")):
                     stop = "STOPPED: " + open(os.path.join(wt, "RED-STOP.md")).readline().strip()

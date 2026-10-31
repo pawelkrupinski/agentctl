@@ -585,7 +585,11 @@ agent must be assigned to it".
   lapsed); no second fixer while a previous one of the red, its run or its family works, and a new one goes on in the
   previous one's worktree when that holds unlanded commits. Fixers land each verified step; commits unlanded 45 min
   get `RED-NUDGE.md`, 90 min a `RED ESCALATE`. A queued Fixes-Red change holds its red ("fix waiting to land", "blocked by
-  gate <red>" while main is red) and verification counts from its landing. A fix of the gate's OWN red (a gate run's
+  gate <red>" while main is red) and verification counts from its landing. The fix follows its WORK, not its change
+  id (2026-10-31, Main #2877): the store's change item is the truth (a stale entry file never holds a red), and a fix
+  whose change was cancelled / superseded / rejected follows its worktree to the later change that carries it (waiting
+  on it; verifying once it lands) or its commits found on main by content; with neither, the red is offered again
+  `$AGENTCTL_RED_FIX_REQUEUE_GRACE` (15 min) after the cancel. A fix of the gate's OWN red (a gate run's
   red carries its key, whichever run its Fixes-Red names) reads "landing on red (Fixes-Red), <queued|checking|...>" in
   `red status`, `status --line` and the status page, never "blocked by gate" that same red (2026-10-29 19:20).
 - **LONG-LIVED FAMILY OWNERS (simplification item 6, 2026-10-30).** A family marked `"owner": true` in
@@ -639,6 +643,15 @@ agent must be assigned to it".
   it (`laptop pressure: <why>`; the load there is each class's own factor); `agentctl gov status` prints
   `pressure: <why with numbers>` or `pressure: none [memory 58% free, level 1 (normal), load 5.0/14 cores, swap 17.7
   GB (+0.0 GB in 10 min)]`.
+- **Launch errors are said, never "never got going" alone (2026-10-31, core #277: 9 fixers in a row ended
+  `claude --bg` exit 1 "Workspace not trusted").** `claude --bg` starts only in a workspace the owner trusted, and
+  claude keys that trust by the repo's MAIN checkout (a worktree of ~/projects/movies is trusted through it; a parent
+  like ~/bitcashier does not count). The dispatcher reads `~/.claude.json` (never writes it): an untrusted repo's red is
+  not launched, its offer reads `NOT DISPATCHABLE: claude does not trust <repo> ... owner, once: ! cd <repo> && claude`
+  (one inbox line), and it dispatches the tick after. A backed-off red's offer ends `; launch error: <the actual
+  error>`. A session that in `$AGENTCTL_FIXER_CLAIM_WITHIN` (10 min) never started its transcript ends `NOT STARTED:
+  session <id> never claimed ... (`claude agents`: state ...)`; one that works but never ran `red claim` is reported
+  once (lease note + inbox) with its last words.
 - **Crash-loop breaker (G9, 2026-10-29: in E9 fixers were launched 52 times over 9 reds, #2335 18 times, mostly
   `exit 1 with no LANDED / GAVE UP line`).** 3 dispatched fixers in a row on one red that end with NO RESULT -- a
   crash, an exit with no verdict line, a lease lost or expired without progress, a time-out, a start that never got
@@ -1360,6 +1373,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `dispatch_find_poll` | `AGENTCTL_DISPATCH_FIND_POLL` | `5` | - |
 | `drift_stall` | `AGENTCTL_DRIFT_STALL` | `1800` | s with no output before the drift check is ended (no verdict: the batch goes on) |
 | `fetch_timeout` | `AGENTCTL_FETCH_TIMEOUT` | `180` | an unattended fetch's bound |
+| `fixer_claim_within` | `AGENTCTL_FIXER_CLAIM_WITHIN` | `600` | s a started session has to start its transcript / run `red claim` |
 | `fixer_land_watch` | `AGENTCTL_FIXER_LAND_WATCH` | `60` | - |
 | `fixer_unlanded_escalate` | `AGENTCTL_FIXER_UNLANDED_ESCALATE` | `5400` | - |
 | `fixer_unlanded_nudge` | `AGENTCTL_FIXER_UNLANDED_NUDGE` | `2700` | - |
@@ -1424,6 +1438,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `red_fixers` | `AGENTCTL_RED_FIXERS` | `5` | live fixers at once, every family together |
 | `red_fixer_wall` | `AGENTCTL_RED_FIXER_WALL` | `10800` | a dispatched fixer's maximum wall time |
 | `red_fix_giveup` | `AGENTCTL_RED_FIX_GIVEUP` | `21600` | - |
+| `red_fix_requeue_grace` | `AGENTCTL_RED_FIX_REQUEUE_GRACE` | `900` | $AGENTCTL_RED_FIX_REQUEUE_GRACE |
 | `red_old_run` | `AGENTCTL_RED_OLD_RUN` | `172800` | an outside red whose newest run is older than this is checked by a fresh run before it is fixed |
 | `red_others_every` | `AGENTCTL_RED_OTHERS_EVERY` | `60` | seconds between the other watched repos' red ticks: one gate read each |
 | `red_read_token_file` | `AGENTCTL_RED_READ_TOKEN_FILE` | - | - |
