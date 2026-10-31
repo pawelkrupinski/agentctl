@@ -391,10 +391,21 @@ _gate_no_verdict = {}  # workflow -> its newest no-verdict run newer than its de
 _no_verdict_mem = {}
 
 
+def job_is_verdict_report(j):
+    """The job is a `verdict complete` (it reports on the other rows, it tests nothing)."""
+    return bool(VERDICT_COMPLETE_JOB.search(str(j.get("name") or "")))
+
+
 def jobs_no_verdict(jobs):
     """True when the failed jobs that really ran are all `verdict complete` (and there is one)."""
     real = [j for j in jobs or [] if j.get("conclusion") in RED_CONCLUSIONS and not job_is_phantom(j)]
-    return bool(real) and all(VERDICT_COMPLETE_JOB.search(str(j.get("name") or "")) for j in real)
+    return bool(real) and all(job_is_verdict_report(j) for j in real)
+
+
+# A `verdict complete` BESIDE A REAL FAILURE IS NO RED OF ITS OWN (2026-10-31): it fails because a row did not decide,
+# so next to a leg's failure it only repeats it -- yet its own log's error line read as [test], made the run a TEST
+# FAILURE even when the leg was infra, and opened a red (and a fixer) keyed on `verdict complete`. It is [incomplete]
+# whatever else failed: the run's verdict and its reds are the other jobs' alone.
 
 
 def run_no_verdict(o_r, r):
@@ -630,9 +641,10 @@ def explain_run_jobs(o_r, run, tail, repo=None):
             lines.append(f"  [derived] {j['name']}: never started: {CASCADE_PREFIX}{', '.join(cascades[j['name']])} "
                          "(through `needs:`; follows that red)")
             continue
-        if no_verdict:  # an incomplete run: its `verdict complete` job is no failure of the code
+        if no_verdict or job_is_verdict_report(j):  # reporting, never a failure of the code (see above)
             per_job.append((j["name"], "incomplete", ""))
-            lines.append(f"  [incomplete] {j['name']}: a takes or takes-drift row was skipped, cancelled or missing")
+            lines.append(f"  [incomplete] {j['name']}: a takes or takes-drift row was skipped, cancelled or missing"
+                         + ("" if no_verdict else " -- no verdict of its own: it follows the other failed jobs"))
             continue
         jl, strong = per.get(j["name"]) or [], j["name"] in strong_jobs
         if fetched < MAX_JOB_LOG_FETCHES and "precommit" in str(d.get("workflowName", "")).lower().replace("-", ""):

@@ -99,6 +99,32 @@ class CiWhyTest(FakeForge):
                                             {"job": "takes (spain)", "kind": "test"}]))
         self.assertFalse(A.sigs_no_verdict([]))
 
+    def test_verdict_complete_beside_a_real_failure_is_no_red_of_its_own(self):
+        """2026-10-31: next to a failed leg, `verdict complete` only repeats that a row did not decide -- yet its own
+        log's error line read as [test]: the run said TEST FAILURE though the leg was infra, and a red keyed on
+        `verdict complete` was opened. It is [incomplete] whatever else failed; the verdict and the reds are the leg's."""
+        verdict = {**job("verdict complete", conclusion="failure"), "startedAt": "2026-10-31T03:00:00Z",
+                   "steps": [step("Set up job", "success"), step("Did every takes and takes-drift row decide?", "failure")]}
+        leg = {**job("leg (spain)", conclusion="failure"), "startedAt": "2026-10-31T02:00:00Z",
+               "steps": [step("Set up job", "success"), step("Run the leg", "failure")]}
+        self.scenario([job("preflight"), leg, verdict],
+                      "leg (spain)\tRun the leg\t2026-10-31T02:10:00Z Error: No space left on device\n"
+                      "verdict complete\tDid every takes and takes-drift row decide?\t2026-10-31T03:00:01Z "
+                      "Error: takes (spain) FAILED: no verdict\n")
+        rc, out, _ = self.why("39")
+        self.assertIn("[incomplete] verdict complete", out)
+        self.assertIn("no verdict of its own", out)
+        self.assertNotIn("[test]", out)
+        self.assertNotIn("TEST FAILURE", out)
+        self.assertIn("[infra] leg (spain)", out)
+        sigs = A.run_sigs("pawelkrupinski/movies", {"databaseId": 39, "number": 19}, "Identity model convergence")
+        self.assertEqual({(x["job"], x["kind"]) for x in sigs},
+                         {("leg (spain)", "infra"), ("verdict complete", "incomplete")})
+        self.assertFalse(A.sigs_no_verdict(sigs), "the leg's failure is a red as ever")
+        units = A.red_units("pawelkrupinski/movies", "Identity model convergence",
+                            {"databaseId": 39, "number": 19}, [], sigs, True, [0])
+        self.assertEqual([u["job"] for u in units], ["leg (spain)"], "no red keyed on `verdict complete`")
+
     def test_reds_outside_the_gate_are_listed_with_how_long_they_have_been_red(self):
         def r(rid, wf, conclusion, at, status="completed"):
             return {**run(rid, rid, wf, wf.lower().replace(" ", "-") + ".yml", status, conclusion), "updatedAt": at}

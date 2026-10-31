@@ -164,7 +164,8 @@ def red_units(o_r, name, decided, runs, sigs, gate, budget=None):
     streak = {}
     units = []
     derived = [s for s in sigs if s.get("kind") == "derived"]
-    sigs = [s for s in sigs if s.get("kind") != "derived"]  # a phantom is no red: it is folded into its source's
+    sigs = [s for s in sigs if s.get("kind") not in ("derived", "incomplete")]  # a phantom is no red: it is folded
+    # into its source's; nor is a `verdict complete` beside a real failure (job_is_verdict_report: reporting only)
     for s in sigs:
         names = set(run_names(decided))
         for r in sruns:  # the streak's runs that failed THIS way (their signatures, by this classifier)

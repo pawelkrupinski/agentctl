@@ -322,6 +322,10 @@ main. For each red run it shows:
     no red: it is listed on the red of what it cascades from (`derived`), never takes or waits for a fixer slot,
     and clears with it. A setup failure with nothing failed upstream (a job that started, or no readable graph)
     stays `INFRA-SHAPED`, an infra red of its own;
+  - `NO VERDICT`, when convergence's `verdict complete` is the run's only real failure (a takes or takes-drift row
+    was skipped, cancelled or missing): reporting, not a test failure -- no red, no streak, no fixer; the gate reads
+    the newest complete run. Beside another failed job, `verdict complete` is an `[incomplete]` row with no verdict of
+    its own: the run's verdict and its reds are the other jobs' (an infra leg stays `INFRA-SHAPED`);
   - `UNCLEAR`, when a log has lines but no failure marker (truncated, or the runner was lost);
     also `LOG UNREADABLE`, when forgejo-gh could not serve the log (read twice; its error named): no log was read, so
     it is never a 0-length one (convergence #2473 was handed to a diagnose-only fixer as INFRA that way);
