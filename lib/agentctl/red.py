@@ -1394,8 +1394,8 @@ def red_run_retired(o_r, workflow, run, jobs=None, now=None):
                 whys.append(w)
         return f"check retired at {sha[:10]}: " + "; ".join(whys)
     except (Exception, SystemExit) as e:
-        _retire_fail(o_r)
-        err(f"red: could not tell whether {workflow} #{(run or {}).get('number')} is retired ({str(e)[:120]}): it stays")
+        _retire_fail(o_r)  # silent (the status line and ci-why call this): the red stays, the reason kept for a look
+        _retire_cache[("why", o_r)] = (time.time(), f"{workflow} #{(run or {}).get('number')}: {str(e)[:200]}")
         return None
 
 
