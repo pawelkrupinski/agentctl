@@ -96,7 +96,6 @@ class MemStatsTest(unittest.TestCase):
             self.assertEqual((m["ram_gb"], m["free_gb"], m["pressure"]), (32.0, 8.0, 75))
             self.assertEqual((m["swap_used_mb"], m["swap_total_mb"]), (1024.0, 2048.0))
             self.assertEqual(A.ram_gb(), 32.0)
-            self.assertEqual(A.swap_usage(), (1024.0, 2048.0))
         finally:
             A.read_meminfo = real
             os.unlink(f.name)

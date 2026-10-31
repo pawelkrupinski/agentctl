@@ -1775,15 +1775,6 @@ def red_dispatcher(store, o_r, repo, t):
         return acts
     offs.sort(key=lambda o: (o["priority"], KIND_ORDER.get(o["picture"].get("kind"), 1), o["opened_at"]))
     blocker = cached_dispatch_blocker()
-    pressure = [False]  # read once per pass, when an offer gets that far
-
-    def laptop():
-        if pressure[0] is False:
-            try:
-                pressure[0] = laptop_pressure()
-            except Exception:
-                pressure[0] = None
-        return pressure[0]
     gone = set()
     for off in offs:
         if off["id"] in gone:
@@ -1815,7 +1806,9 @@ def red_dispatcher(store, o_r, repo, t):
             continue
         item = store.item("red", off["item"].split(":", 1)[1]) or {"data": {}}
         after = float(item["data"].get("dispatch_after") or 0)
-        free, cap_why = red_capacity(store, t - float(off.get("opened_at") or t), t)
+        # NOTHING STOPS A GATE FIX, EVER (the owner, 2026-10-31): a gate red's fixer starts past the cap, and no fixer
+        # waits on laptop pressure (that holds only other work: gov_fits); a gate fixer still counts toward the cap
+        free, cap_why = (True, None) if pic.get("gate") else red_capacity(store, t - float(off.get("opened_at") or t), t)
         if off["tier"] == "author":
             why = f"offered to its author ({str((pic.get('author') or {}).get('worktree') or '?').replace(HOME, '~')})"
         elif after > t:
@@ -1823,8 +1816,6 @@ def red_dispatcher(store, o_r, repo, t):
                    f"{time.strftime('%H:%M', time.localtime(after))}")
         elif blocker:
             why = blocker
-        elif laptop():  # no new fixer on a laptop under pressure: offered still, no slot taken
-            why = f"waiting: laptop pressure ({laptop()})"
         elif not free:
             why = cap_why
         else:

@@ -251,7 +251,9 @@ def render_red_status(m, verbose=False):
         out.append(f"dispatcher: unread ({dp['error']})")
     else:
         out.append(f"dispatcher: {'OFF -- ' + dp['blocker'] if dp.get('blocker') else 'ON'}; fixers alive: "
-                   f"{dp['alive']}/{dp['cap']}")
+                   f"{dp['alive']}/{dp['cap']}; gate reds never wait (no slot cap, no laptop pressure)")
+        if dp.get("pressure"):
+            out.append(f"laptop: {dp['pressure']} (holds other work only, never a red fix)")
     return "\n".join(out)
 
 
@@ -283,9 +285,18 @@ def status_store_probe(st, t):
     return {"remote": None, "reachable": True, "ms": int((time.time() - t0) * 1000)}
 
 
+def status_pressure():
+    """The laptop's pressure reading, with its numbers (why it holds other work, else the plain reading)."""
+    try:
+        why, summary = pressure_report()
+    except Exception as e:
+        return f"unread ({e})"
+    return f"UNDER PRESSURE: {why} [{summary}]" if why else summary
+
+
 def status_dispatcher(st, t):
     return {"blocker": cached_dispatch_blocker(), "off_flag": os.path.exists(reds_dir("DISPATCH_OFF")),
-            "alive": len(red_fixers_alive(st, t)), "cap": red_cap(),
+            "alive": len(red_fixers_alive(st, t)), "cap": red_cap(), "pressure": status_pressure(),
             "escalated": [{"type": typ, "id": it["id"], "words": words} for typ, it, words in escalated_now(st)]}
 
 

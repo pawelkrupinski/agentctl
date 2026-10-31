@@ -18,7 +18,9 @@
 #   default 60% of RAM), and what it needs NOW ($AGENTCTL_GOV_FREE_NEED_GB, 2.5, or less) must fit into FREE memory
 #   (free + inactive + speculative pages) less a reserve ($AGENTCTL_GOV_RESERVE_GB, 1) less what the tickets admitted in
 #   the last 2 min will still grow into (a JVM takes its heap over its first minutes); and memory pressure (100 -
-#   memory_pressure's free %) must be under 75% (90% for red).
+#   memory_pressure's free %) must be under 75%, and the laptop not under pressure (laptop_pressure, below).
+# - RED NEVER WAITS (the owner, 2026-10-31: "nothing should stop gate fixes ever"): a red fix's ticket is admitted at
+#   once, whatever the budget, free memory, pressure or load.
 # - CPU: checks wait while the 1-min load is over 4x the cores (a load of ~250 kept an sbt server from starting in 5 min
 #   and failed two checks, 2026-10-27), agent work over 1.5x, measurements over 1x; red never.
 # - EVICTION: when the head waiter does not fit on memory, the governor stops the idle kept sbt server unused longest
@@ -32,8 +34,7 @@ SUITE_CAP = 1  # agentctl's own test-suite runs at once ($AGENTCTL_SUITE_CAP): p
 GOV_RAMP = 120          # seconds a new ticket's JVM is still growing into its expected memory
 GOV_RESERVE_GB = 1.0
 GOV_FREE_NEED_GB = 2.5  # free memory a new JVM needs NOW (beyond the reserve); its heap grows into the budget's share later
-GOV_PRESSURE_STOP = {"red": 90}  # memory pressure (%) at which a class waits; others: GOV_PRESSURE_DEFAULT
-GOV_PRESSURE_DEFAULT = 75
+GOV_PRESSURE_DEFAULT = 75  # memory pressure (100 - free %) at which every class but red waits
 GOV_LOAD = {"check": 4.0, "agent": 1.5, "measure": 1.0}  # waits while load1 > factor x cores; red never waits on CPU
 GOV_EVICT_IDLE = 60     # a kept server unused this long (seconds) may be evicted
 GOV_POLL = 2.0
@@ -84,9 +85,9 @@ def mem_stats():
     if page:
         pages = sum(int(m.group(2)) for m in re.finditer(r"Pages (free|inactive|speculative):\s+(\d+)", vm))
         out["free_gb"] = pages * int(page.group(1)) / 2 ** 30
-    m = re.search(r"free percentage:\s*(\d+)", run_cmd(["memory_pressure", "-Q"], timeout=10).stdout)
-    if m:
-        out["pressure"] = 100 - int(m.group(1))
+    lvl = run_cmd(["sysctl", "-n", "kern.memorystatus_level"], timeout=10).stdout.strip()  # memory_pressure's free %
+    if lvl.isdigit():
+        out["pressure"] = 100 - int(lvl)
     sw = run_cmd(["sysctl", "-n", "vm.swapusage"], timeout=10).stdout
     tot, used = re.search(r"total = ([\d.]+)M", sw), re.search(r"used = ([\d.]+)M", sw)
     if tot and used:
@@ -115,13 +116,18 @@ def free_gb():
 
 
 def gov_machine():
-    """{free, pressure, load1, cores}: live memory and CPU ($AGENTCTL_GOV_PRESSURE_PROBE / _LOAD_PROBE: the tests')."""
+    """{free, pressure, load1, cores, laptop}: live memory and CPU, and why the laptop is under pressure (laptop_pressure
+    without the load: each class has its own) ($AGENTCTL_GOV_PRESSURE_PROBE / _LOAD_PROBE: the tests')."""
     load1, _cpu, pressure, _swap = machine_sample()
     if os.environ.get("AGENTCTL_GOV_PRESSURE_PROBE"):
         pressure = float(run_cmd(os.environ["AGENTCTL_GOV_PRESSURE_PROBE"], shell=True).stdout.strip() or 0)
     if os.environ.get("AGENTCTL_GOV_LOAD_PROBE"):
         load1 = float(run_cmd(os.environ["AGENTCTL_GOV_LOAD_PROBE"], shell=True).stdout.strip() or 0)
-    return {"free": free_gb(), "pressure": pressure, "load1": load1, "cores": os.cpu_count() or 1}
+    try:
+        laptop = laptop_pressure(None if "AGENTCTL_LAPTOP_PRESSURE" in os.environ else pressure_reading(), load=False)
+    except Exception:
+        laptop = None
+    return {"free": free_gb(), "pressure": pressure, "load1": load1, "cores": os.cpu_count() or 1, "laptop": laptop}
 
 
 def gov_tickets():
@@ -154,7 +160,9 @@ def gov_ramp(tickets, now=None):
 
 
 def gov_fits(cls, mem, tickets, m, kind="job"):
-    """(True, None) when work of class cls expecting `mem` GB may start now; else (False, why, on_memory)."""
+    """(True, None) when work of class cls expecting `mem` GB may start now; else (False, why, on_memory). Red: always."""
+    if cls == "red":  # nothing stops a gate fix, ever
+        return True, None, False
     if cls == "suite":  # agentctl's own test suite (`agentctl suite`): at most SUITE_CAP at once
         suites = sum(1 for t in tickets if t.get("class") == "suite")
         if suites >= env_num("AGENTCTL_SUITE_CAP", SUITE_CAP):
@@ -173,9 +181,11 @@ def gov_fits(cls, mem, tickets, m, kind="job"):
         if need > room:
             return False, (f"{m['free']:.1f} GB free, {gov_ramp(tickets):.0f} GB still growing: {max(room, 0):.1f} GB "
                            f"for the {need:g} GB it needs now"), True
-    stop = GOV_PRESSURE_STOP.get(cls, GOV_PRESSURE_DEFAULT)
+    stop = GOV_PRESSURE_DEFAULT
     if m.get("pressure") is not None and m["pressure"] >= stop:
         return False, f"memory pressure {m['pressure']:.0f}% (waits at {stop}%)", True
+    if m.get("laptop"):
+        return False, f"laptop pressure: {m['laptop']}", True
     factor = GOV_LOAD.get(cls)
     if factor and m.get("load1") is not None and m["load1"] > factor * m["cores"]:
         return False, f"load {m['load1']:.0f} over {factor:g}x {m['cores']} cores", False
@@ -347,36 +357,111 @@ def gov_ticket(cls, mem=None, label="", kind="job", report=None):
         t.release()
 
 
-# NO NEW FIXER ON A LAPTOP UNDER PRESSURE (the owner's coordinator, 2026-10-29: load 56-72 on 14 cores, swap 30.4 of
-# 31.7 GB). The dispatcher starts no fixer while swap used is over FIXER_SWAP_GB, the load over FIXER_LOAD x the cores,
-# or free memory under FIXER_FREE_GB: the red stays offered (`waiting: laptop pressure (...)`), takes no slot, and
-# dispatches when the pressure clears; its offer's own deadline still escalates it (RED UNCLAIMED / STARVED).
-FIXER_SWAP_GB = 16.0    # $AGENTCTL_FIXER_SWAP_GB: swap USED, absolute -- macOS shrinks the swap total as it frees,
-                        # so a share of the total never drops (15.0 GB total, 13.9 used read as 93% with 57% RAM free)
-FIXER_LOAD = 3.0        # $AGENTCTL_FIXER_LOAD (x cores)
-FIXER_FREE_GB = 4.0     # $AGENTCTL_FIXER_FREE_GB
+# THE LAPTOP'S PRESSURE, read as it is NOW. Two movies reds sat `waiting: laptop pressure (swap 17.7 of 19.0 GB used)`
+# for want of a fixer (2026-10-31) while memory_pressure said 58% free at load 5: macOS keeps pages swapped out hours
+# ago counted as swap USED until they are touched, so swap's level -- as a share (7c3c342 dropped that) or in GB -- is
+# no signal. The signals are macOS's free % (kern.memorystatus_level: memory_pressure's "free percentage", one cheap
+# sysctl; Linux: MemAvailable of MemTotal), the kernel's own pressure level (kern.memorystatus_vm_pressure_level: 1
+# normal, 2 warn, 4 critical), the 1-min load, and swap only while it GROWS (over the last LAPTOP_SWAP_WINDOW, from
+# samples kept in <gov>/swap-samples.json). Under pressure the governor holds every class but red (gov_fits): NOTHING
+# STOPS A GATE FIX, EVER (the owner, 2026-10-31) -- the red dispatcher never reads it, and a red fix's ticket never
+# waits. `agentctl gov status` and `agentctl red status` show the reading with its numbers.
+LAPTOP_FREE_PCT = 20          # holds other work while macOS's memory free % is under this
+LAPTOP_PRESSURE_LEVEL = 2     # holds other work at this kernel pressure level or over (1 normal, 2 warn, 4 critical)
+LAPTOP_LOAD = 2.0             # holds other work while the 1-min load is over this x the cores
+LAPTOP_SWAP_GROWTH_MB = 1024  # holds other work while swap grew this much (MB) within LAPTOP_SWAP_WINDOW
+LAPTOP_SWAP_WINDOW = 600      # seconds of swap samples the growth is read over
+PRESSURE_LEVELS = {1: "normal", 2: "warn", 4: "critical"}
 
 
-def swap_usage():
-    """(used MB, total MB) of swap, or (None, None)."""
-    m = mem_stats()
-    return m["swap_used_mb"], m["swap_total_mb"]
+def pressure_sysctl():
+    """macOS: free %, pressure level and vm.swapusage, one sysctl call ("" elsewhere)."""
+    if sys.platform != "darwin":
+        return ""
+    return run_cmd(["sysctl", "-n", "kern.memorystatus_level", "kern.memorystatus_vm_pressure_level", "vm.swapusage"],
+                   timeout=10).stdout
 
 
-def laptop_pressure(m=None, swap=None):
-    """Why no new fixer may start on this laptop now, or None (gov_machine's free memory and load, vm.swapusage).
-    $AGENTCTL_LAPTOP_PRESSURE set (the tests'): its value is the answer, `-` or empty for none."""
-    if m is None and swap is None and "AGENTCTL_LAPTOP_PRESSURE" in os.environ:
+def swap_growth(mb, now_):
+    """(MB swap grew since the oldest sample within LAPTOP_SWAP_WINDOW, seconds that spans); this sample is kept."""
+    if mb is None:
+        return None, 0
+    window = env_num("AGENTCTL_LAPTOP_SWAP_WINDOW", LAPTOP_SWAP_WINDOW)
+    path = os.path.join(gov_dir(), "swap-samples.json")
+    samples = [s for s in (read_record(path) or []) if now_ - window <= s[0] <= now_]
+    samples.append([now_, mb])
+    try:
+        write_json(path, samples)
+    except OSError:
+        pass
+    first = samples[0]
+    return mb - first[1], now_ - first[0]
+
+
+def pressure_reading(sysctl_out=None, meminfo=None, load1=None, cores=None, now_=None):
+    """{free_pct, level, load1, cores, swap_mb, swap_growth_mb, swap_span}: this machine now, None where unreadable.
+    The readers are the tests' seams: sysctl_out (pressure_sysctl's text), meminfo (read_meminfo's dict)."""
+    now_ = time.time() if now_ is None else now_
+    r = {"free_pct": None, "level": None, "swap_mb": None, "load1": os.getloadavg()[0] if load1 is None else load1,
+         "cores": cores or os.cpu_count() or 1}
+    mi = read_meminfo() if meminfo is None else meminfo
+    if mi.get("MemTotal"):
+        if "MemAvailable" in mi:
+            r["free_pct"] = round(100 * mi["MemAvailable"] / mi["MemTotal"])
+        if "SwapTotal" in mi and "SwapFree" in mi:
+            r["swap_mb"] = (mi["SwapTotal"] - mi["SwapFree"]) / 1024
+    else:
+        lines = (pressure_sysctl() if sysctl_out is None else sysctl_out).splitlines()
+        if len(lines) >= 2 and lines[0].strip().isdigit() and lines[1].strip().isdigit():
+            r["free_pct"], r["level"] = int(lines[0]), int(lines[1])
+        used = re.search(r"used = ([\d.]+)M", "\n".join(lines))
+        if used:
+            r["swap_mb"] = float(used.group(1))
+    r["swap_growth_mb"], r["swap_span"] = swap_growth(r["swap_mb"], now_)
+    return r
+
+
+def laptop_pressure(r=None, load=True):
+    """Why this machine is under pressure now, with its numbers ("; "-joined), or None. load=False leaves the load out
+    (the governor holds each class on its own load factor). $AGENTCTL_LAPTOP_PRESSURE set (the tests'): its value is
+    the answer, `-` or empty for none."""
+    if r is None and "AGENTCTL_LAPTOP_PRESSURE" in os.environ:
         return os.environ["AGENTCTL_LAPTOP_PRESSURE"].strip("-") or None  # `-` or empty: none
-    m = m or gov_machine()
-    used, total = swap or swap_usage()
-    if used is not None and used / 1024 > env_num("AGENTCTL_FIXER_SWAP_GB", FIXER_SWAP_GB):
-        return f"swap {used / 1024:.1f} of {total / 1024:.1f} GB used"
-    if m.get("load1") is not None and m["load1"] > env_num("AGENTCTL_FIXER_LOAD", FIXER_LOAD) * m["cores"]:
-        return f"load {m['load1']:.0f} on {m['cores']} cores"
-    if m.get("free") is not None and m["free"] < env_num("AGENTCTL_FIXER_FREE_GB", FIXER_FREE_GB):
-        return f"{m['free']:.1f} GB free"
-    return None
+    r = r or pressure_reading()
+    why = []
+    free_pct = env_num("AGENTCTL_LAPTOP_FREE_PCT", LAPTOP_FREE_PCT)
+    if r.get("free_pct") is not None and r["free_pct"] < free_pct:
+        why.append(f"memory {r['free_pct']}% free (holds under {free_pct:g}%)")
+    if r.get("level") is not None and r["level"] >= env_num("AGENTCTL_LAPTOP_PRESSURE_LEVEL", LAPTOP_PRESSURE_LEVEL):
+        why.append(f"kernel memory pressure {PRESSURE_LEVELS.get(r['level'], '?')} (level {r['level']})")
+    factor = env_num("AGENTCTL_LAPTOP_LOAD", LAPTOP_LOAD)
+    if load and r.get("load1") is not None and r["load1"] > factor * r["cores"]:
+        why.append(f"load {r['load1']:.1f} on {r['cores']} cores (holds over {factor * r['cores']:g})")
+    bar = env_num("AGENTCTL_LAPTOP_SWAP_GROWTH_MB", LAPTOP_SWAP_GROWTH_MB)
+    if r.get("swap_growth_mb") is not None and r["swap_growth_mb"] >= bar:
+        why.append(f"swap growing +{r['swap_growth_mb'] / 1024:.1f} GB in {r['swap_span'] / 60:.0f} min (holds at "
+                   f"+{bar / 1024:.1f} GB in {env_num('AGENTCTL_LAPTOP_SWAP_WINDOW', LAPTOP_SWAP_WINDOW) / 60:.0f} min)")
+    return "; ".join(why) or None
+
+
+def pressure_summary(r=None):
+    """Every number of the reading, for a status line."""
+    r = r or pressure_reading()
+    q = lambda v, f="{}": "?" if v is None else f.format(v)
+    lvl = f"{r['level']} ({PRESSURE_LEVELS.get(r['level'], '?')})" if r.get("level") is not None else "?"
+    swap = "swap ?" if r.get("swap_mb") is None else (
+        f"swap {r['swap_mb'] / 1024:.1f} GB (+{(r.get('swap_growth_mb') or 0) / 1024:.1f} GB in "
+        f"{(r.get('swap_span') or 0) / 60:.0f} min)")
+    return f"memory {q(r.get('free_pct'))}% free, level {lvl}, load {q(r.get('load1'), '{:.1f}')}/{r['cores']} cores, {swap}"
+
+
+def pressure_report():
+    """(why or None, summary) of this machine now: the tests' $AGENTCTL_LAPTOP_PRESSURE stands for both."""
+    if "AGENTCTL_LAPTOP_PRESSURE" in os.environ:
+        why = laptop_pressure()
+        return why, why or "none (test)"
+    r = pressure_reading()
+    return laptop_pressure(r), pressure_summary(r)
 
 
 def cmd_suite(a):
@@ -419,8 +504,8 @@ def cmd_gov(a):
         idle = idle_servers()
         if idle:
             print("evictable: " + ", ".join(f"{os.path.basename(r)} ({int(i // 60)} min)" for i, r, _p in idle))
-        why = laptop_pressure()  # what the dispatcher reads
-        print(f"pressure: {why} (no new fixer starts)" if why else "pressure: none")
+        why, summary = pressure_report()
+        print(f"pressure: {why} -- holds all but red fixes [{summary}]" if why else f"pressure: none [{summary}]")
         return 0
     if a.gcmd == "stats":
         rc = cmd_checks(argparse.Namespace(ccmd="stats", days=a.days))

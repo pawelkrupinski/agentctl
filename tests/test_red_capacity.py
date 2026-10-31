@@ -136,6 +136,8 @@ class MigrationTest(CapacityBase):
 
 class StarvedEscalatesTest(RedsBase):
     def test_a_red_past_its_capacity_window_escalates_as_starved_and_stays_offered(self):
+        offers = self.st.offers  # an outside red (a gate red never waits for a slot)
+        self.st.offers = lambda kind=None: [dict(o, picture=dict(o["picture"], gate=False)) for o in offers(kind)]
         os.environ["AGENTCTL_RED_FIXERS"] = "0"
         try:
             self.tick(dispatch=True)
@@ -154,31 +156,97 @@ class StarvedEscalatesTest(RedsBase):
 
 
 
-class LaptopPressureTest(CapacityBase):
-    """No new fixer on a laptop under pressure (2026-10-29: load 56-72 on 14 cores, swap 30.4 of 31.7 GB): the red stays
-    offered, `waiting: laptop pressure (...)`, takes no slot, and dispatches when the pressure clears."""
+class GateFixesNeverWaitTest(CapacityBase):
+    """NOTHING STOPS A GATE FIX, EVER (the owner, 2026-10-31): laptop pressure holds no fixer (2026-10-31: two movies
+    reds sat `waiting: laptop pressure (swap 17.7 of 19.0 GB used)` on a laptop 58% free at load 5), and a gate red's
+    fixer takes no slot it must wait for: the cap and every throttle are for other work."""
 
-    def test_under_pressure_no_fixer_starts_no_slot_is_taken_and_it_dispatches_when_it_clears(self):
+    def test_laptop_pressure_never_holds_a_fixer(self):
         self.offer("x", True, 300)
-        self.env(AGENTCTL_LAPTOP_PRESSURE="swap 30.4 of 31.7 GB used")
+        self.offer("o", False, 301)
+        self.env(AGENTCTL_LAPTOP_PRESSURE="memory 5% free (holds under 20%)")
         self.dispatch()
-        self.assertEqual(self.spawned, [])
-        self.assertEqual(self.reason("x"), "waiting: laptop pressure (swap 30.4 of 31.7 GB used)")
-        self.assertIsNone(self.st.get(A.red_lease("x")))
-        self.assertEqual(A.red_fixers_alive(self.st, self.t[0]), [])
-        self.env(AGENTCTL_LAPTOP_PRESSURE="-")
-        self.dispatch(advance=60)
-        self.assertEqual(self.spawned, ["x"])
+        self.assertEqual(sorted(self.spawned), ["o", "x"])
+        self.assertNotIn("pressure", self.reason("x") + self.reason("o"))
 
-    def test_the_thresholds_swap_load_and_free_memory(self):
-        os.environ.pop("AGENTCTL_LAPTOP_PRESSURE", None)  # the real thresholds (m and swap given; tearDown restores it)
-        calm = {"free": 12.0, "load1": 10.0, "cores": 14, "pressure": 30}
-        self.assertIsNone(A.laptop_pressure(calm, (10_000.0, 32_000.0)))
-        self.assertIn("swap", A.laptop_pressure(calm, (30_400.0, 31_700.0)))
-        # macOS shrinks the swap total as it frees: 13.9 of 15.0 GB with RAM to spare is no pressure (2026-10-29 22:55)
-        self.assertIsNone(A.laptop_pressure(calm, (14_104.0, 15_360.0)))
-        self.assertIn("load 56 on 14", A.laptop_pressure({**calm, "load1": 56.0}, (0.0, 1.0)))
-        self.assertIn("3.0 GB free", A.laptop_pressure({**calm, "free": 3.0}, (None, None)))
+    def test_a_gate_red_never_waits_for_a_slot(self):
+        self.env(AGENTCTL_RED_FIXERS=1)
+        self.fixer("a", False, 101)
+        self.offer("outside", False, 300)
+        self.offer("gate", True, 301)
+        self.dispatch()
+        self.assertEqual(self.spawned, ["gate"], "the gate's past the full cap; the outside red waits")
+        self.assertIn("capacity", self.reason("outside"))
+        self.env(AGENTCTL_RED_FIXERS=0)
+        self.offer("gate2", True, 302)
+        self.dispatch(advance=60)
+        self.assertEqual(self.spawned, ["gate", "gate2"], "a cap of 0 holds no gate red either")
+
+    def test_red_status_states_the_invariant(self):
+        out = A.render_red_status({"reds": [], "dispatcher": {"alive": 0, "cap": 5,
+                                                           "pressure": "memory 58% free, level 1 (normal)"}})
+        self.assertIn("gate reds never wait", out)
+        self.assertIn("memory 58% free", out)
+
+
+class LaptopPressureTest(unittest.TestCase):
+    """THE LAPTOP'S PRESSURE, read as it is NOW (2026-10-31): macOS's free % (kern.memorystatus_level, memory_pressure's
+    number), the kernel's pressure level (1 normal, 2 warn, 4 critical), the 1-min load, and swap only while it GROWS --
+    never swap used: macOS keeps pages swapped out hours ago counted until touched (17.7 of 19.0 GB at 58% free)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = {k: os.environ.get(k) for k in ("AGENTCTL_LAPTOP_PRESSURE", "AGENTCTL_GOV_DIR")}
+        os.environ.pop("AGENTCTL_LAPTOP_PRESSURE", None)
+        os.environ["AGENTCTL_GOV_DIR"] = self.tmp.name
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        self.tmp.cleanup()
+
+    @staticmethod
+    def sysctl(free, level, used):
+        return f"{free}\n{level}\ntotal = 19456.00M  used = {used:.2f}M  free = 1334.44M  (encrypted)\n"
+
+    def read(self, free=58, level=1, used=18124.8, load=5.0, now_=1000.0):
+        return A.pressure_reading(sysctl_out=self.sysctl(free, level, used), meminfo={}, load1=load, cores=14, now_=now_)
+
+    def test_macos_reads_free_percent_level_load_and_swap(self):
+        r = self.read()
+        self.assertEqual((r["free_pct"], r["level"], r["load1"], r["cores"]), (58, 1, 5.0, 14))
+        self.assertAlmostEqual(r["swap_mb"], 18124.8)
+
+    def test_linux_reads_meminfo(self):
+        r = A.pressure_reading(sysctl_out="", load1=3.0, cores=32, now_=1000.0,
+                               meminfo={"MemTotal": 1000, "MemAvailable": 150, "SwapTotal": 2048, "SwapFree": 1024})
+        self.assertEqual((r["free_pct"], r["level"], r["swap_mb"]), (15, None, 1.0))
+        self.assertIn("memory 15% free", A.laptop_pressure(r))
+
+    def test_sticky_swap_is_no_pressure_the_owners_laptop_2026_10_31(self):
+        self.assertIsNone(A.laptop_pressure(self.read(now_=1000.0)))
+        self.assertIsNone(A.laptop_pressure(self.read(now_=1300.0)), "17.7 GB swap used, not growing, 58% free")
+
+    def test_each_signal_holds_with_its_numbers(self):
+        self.assertEqual(A.laptop_pressure(self.read(free=12)), "memory 12% free (holds under 20%)")
+        self.assertEqual(A.laptop_pressure(self.read(level=2)), "kernel memory pressure warn (level 2)")
+        self.assertEqual(A.laptop_pressure(self.read(level=4)), "kernel memory pressure critical (level 4)")
+        self.assertEqual(A.laptop_pressure(self.read(load=29.0)), "load 29.0 on 14 cores (holds over 28)")
+        self.assertEqual(A.laptop_pressure(self.read(load=29.0, level=2)),
+                         "kernel memory pressure warn (level 2); load 29.0 on 14 cores (holds over 28)")
+
+    def test_swap_counts_only_while_it_grows(self):
+        self.assertIsNone(A.laptop_pressure(self.read(used=10_000.0, now_=1000.0)))
+        self.assertIsNone(A.laptop_pressure(self.read(used=10_500.0, now_=1120.0)), "+0.5 GB: under the 1 GB bar")
+        why = A.laptop_pressure(self.read(used=11_600.0, now_=1240.0))
+        self.assertEqual(why, "swap growing +1.6 GB in 4 min (holds at +1.0 GB in 10 min)")
+        self.assertIsNone(A.laptop_pressure(self.read(used=11_600.0, now_=1240.0 + 601 + 60)),
+                          "flat again past the window: the old level no longer counts")
+
+    def test_summary_shows_every_number(self):
+        r = self.read()
+        self.assertEqual(A.pressure_summary(r),
+                         "memory 58% free, level 1 (normal), load 5.0/14 cores, swap 17.7 GB (+0.0 GB in 0 min)")
 
 
 class SuiteGateTest(unittest.TestCase):

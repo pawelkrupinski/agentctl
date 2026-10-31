@@ -622,11 +622,23 @@ agent must be assigned to it".
   scripts.IdentityDriftSpec -- -z "<case>"'`), else a CI rerun of only the failing job or row
   (`scripts/identity-drift-ci --for-red <run>`); it fails before the fix and passes after; iterate on it, the full
   suites give only the final verdict.
-- **No new fixer on a laptop under pressure (2026-10-29: load 56-72 on 14 cores, swap 30.4 of 31.7 GB).** The
-  dispatcher starts no fixer while swap USED is over 16 GB (`$AGENTCTL_FIXER_SWAP_GB`; absolute, since macOS shrinks the swap total), the load over 3x the cores
-  (`$AGENTCTL_FIXER_LOAD`) or free memory under 4 GB (`$AGENTCTL_FIXER_FREE_GB`). The red stays offered, reading
-  `waiting: laptop pressure (<which>)`, and takes no slot; it dispatches when the pressure clears, and its offer's
-  deadline still escalates it (`RED UNCLAIMED`, `RED STARVED`) as before.
+- **Nothing stops a gate fix, ever (the owner, 2026-10-31).** The dispatcher never holds a fixer for laptop
+  pressure, and a GATE red's fixer starts past the slot cap (`$AGENTCTL_RED_FIXERS`; it still counts toward it, so
+  outside reds wait while gate fixers fill it). A red fix's governor ticket (class `red`) is admitted at once, whatever
+  the budget, free memory, pressure or load. What still stops a dispatch is functional, not a throttle: dispatch OFF,
+  no usable `claude` CLI, the red offered to its author, or the crash-loop backoff below. `agentctl red status` states
+  the invariant on its `dispatcher:` line and shows the laptop's reading on a `laptop:` line. (2026-10-31: two movies
+  reds sat `waiting: laptop pressure (swap 17.7 of 19.0 GB used)` for want of a fixer at 58% free and load 5.)
+- **Laptop pressure, read as it is now: it holds other work only.** macOS keeps pages swapped out hours ago counted as
+  swap USED until touched, so swap's level is never a signal. The signals: macOS's memory free % (`sysctl
+  kern.memorystatus_level`, the number `memory_pressure` prints; Linux: MemAvailable of MemTotal) under 20%
+  (`$AGENTCTL_LAPTOP_FREE_PCT`); the kernel's pressure level (`kern.memorystatus_vm_pressure_level`: 1 normal, 2 warn,
+  4 critical) at 2 or over (`$AGENTCTL_LAPTOP_PRESSURE_LEVEL`); the 1-min load over 2x the cores
+  (`$AGENTCTL_LAPTOP_LOAD`); swap GROWING by 1 GB (`$AGENTCTL_LAPTOP_SWAP_GROWTH_MB`) within 10 min
+  (`$AGENTCTL_LAPTOP_SWAP_WINDOW`; samples in `<gov>/swap-samples.json`). The governor holds every class but red on
+  it (`laptop pressure: <why>`; the load there is each class's own factor); `agentctl gov status` prints
+  `pressure: <why with numbers>` or `pressure: none [memory 58% free, level 1 (normal), load 5.0/14 cores, swap 17.7
+  GB (+0.0 GB in 10 min)]`.
 - **Crash-loop breaker (G9, 2026-10-29: in E9 fixers were launched 52 times over 9 reds, #2335 18 times, mostly
   `exit 1 with no LANDED / GAVE UP line`).** 3 dispatched fixers in a row on one red that end with NO RESULT -- a
   crash, an exit with no verdict line, a lease lost or expired without progress, a time-out, a start that never got
@@ -915,7 +927,8 @@ sbt-warm's kept servers each holding a slot, idle or not).
 - **Memory:** the expected GB (5 for a JVM and for a check, whose hook's `sbt -batch` takes no ticket of its own; an
   sbt server the hook starts through sbt-warm does, at the check's priority, `KINOWO_GOV_CLASS`) must fit the budget (sum of live tickets, `$AGENTCTL_GOV_BUDGET_GB`, 60% of RAM), and
   2.5 GB (`$AGENTCTL_GOV_FREE_NEED_GB`) must be free now (free + inactive + speculative) beyond a 1 GB reserve and what
-  tickets admitted in the last 2 min still grow into; memory pressure under 75% (red: 90%).
+  tickets admitted in the last 2 min still grow into; memory pressure under 75%; the laptop not under pressure
+  (see the red queue's "Laptop pressure"). Red waits on none of it: a red fix is admitted at once.
 - **CPU:** checks wait while load1 > 4x the cores, agent work > 1.5x, measurements > 1x; red never.
 - **Eviction first:** when the head waiter does not fit on memory, the idle kept sbt server unused longest (no call in
   it, unused 1 min, not serving, never the root checkout's) is stopped (`sbt-warm --stop`, its busy lock held), then it
@@ -1347,10 +1360,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `dispatch_find_poll` | `AGENTCTL_DISPATCH_FIND_POLL` | `5` | - |
 | `drift_stall` | `AGENTCTL_DRIFT_STALL` | `1800` | s with no output before the drift check is ended (no verdict: the batch goes on) |
 | `fetch_timeout` | `AGENTCTL_FETCH_TIMEOUT` | `180` | an unattended fetch's bound |
-| `fixer_free_gb` | `AGENTCTL_FIXER_FREE_GB` | `4.0` | $AGENTCTL_FIXER_FREE_GB |
 | `fixer_land_watch` | `AGENTCTL_FIXER_LAND_WATCH` | `60` | - |
-| `fixer_load` | `AGENTCTL_FIXER_LOAD` | `3.0` | $AGENTCTL_FIXER_LOAD (x cores) |
-| `fixer_swap_gb` | `AGENTCTL_FIXER_SWAP_GB` | `16.0` | $AGENTCTL_FIXER_SWAP_GB: swap USED, absolute -- macOS shrinks the swap total as it frees |
 | `fixer_unlanded_escalate` | `AGENTCTL_FIXER_UNLANDED_ESCALATE` | `5400` | - |
 | `fixer_unlanded_nudge` | `AGENTCTL_FIXER_UNLANDED_NUDGE` | `2700` | - |
 | `forge` | `AGENTCTL_FORGE` | `forgejo` | the forge agentctl reads runs, logs, artifacts and dispatches through: forgejo or github |
@@ -1381,6 +1391,11 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `land_ref_sweep` | `AGENTCTL_LAND_REF_SWEEP` | `600` | - |
 | `land_stall_min` | `AGENTCTL_LAND_STALL_MIN` | `20` | - |
 | `land_wait_report_min` | `AGENTCTL_LAND_WAIT_REPORT_MIN` | `10` | - |
+| `laptop_free_pct` | `AGENTCTL_LAPTOP_FREE_PCT` | `20` | holds other work while macOS's memory free % is under this |
+| `laptop_load` | `AGENTCTL_LAPTOP_LOAD` | `2.0` | holds other work while the 1-min load is over this x the cores |
+| `laptop_pressure_level` | `AGENTCTL_LAPTOP_PRESSURE_LEVEL` | `2` | holds other work at this kernel pressure level or over (1 normal, 2 warn, 4 critical) |
+| `laptop_swap_growth_mb` | `AGENTCTL_LAPTOP_SWAP_GROWTH_MB` | `1024` | holds other work while swap grew this much (MB) within LAPTOP_SWAP_WINDOW |
+| `laptop_swap_window` | `AGENTCTL_LAPTOP_SWAP_WINDOW` | `600` | seconds of swap samples the growth is read over |
 | `launch_agents` | `AGENTCTL_LAUNCH_AGENTS` | - | - |
 | `live_globs` | `AGENTCTL_LIVE_GLOBS` | - | - |
 | `live_poll` | `AGENTCTL_LIVE_POLL` | `1.0` | s between looks at a quiet file |

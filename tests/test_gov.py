@@ -82,6 +82,22 @@ class GovernorTest(unittest.TestCase):
         self.assertIsNone(self.admit("check"))
         self.assertIsNotNone(self.admit("red"))
 
+    def test_a_red_fix_is_admitted_whatever_the_memory_budget_or_pressure(self):
+        """Nothing stops a gate fix, ever (the owner, 2026-10-31): no budget, free memory or pressure wait for red."""
+        os.environ.update(AGENTCTL_GOV_PRESSURE_PROBE="echo 99", AGENTCTL_GOV_BUDGET_GB="1")
+        self.set_free(0)
+        self.assertIsNone(self.admit("check"))
+        self.assertIsNotNone(self.admit("red", 5))
+
+    def test_laptop_pressure_holds_other_work_with_its_reason(self):
+        os.environ["AGENTCTL_LAPTOP_PRESSURE"] = "kernel memory pressure warn (level 2)"
+        try:
+            ok, why, _ = A.gov_fits("agent", 1, [], A.gov_machine())
+            self.assertEqual((ok, why), (False, "laptop pressure: kernel memory pressure warn (level 2)"))
+            self.assertTrue(A.gov_fits("red", 1, [], A.gov_machine())[0])
+        finally:
+            os.environ["AGENTCTL_LAPTOP_PRESSURE"] = "-"
+
     def test_cpu_load_holds_measurements_then_agents_then_checks_never_red(self):
         cores = os.cpu_count()
         os.environ["AGENTCTL_GOV_LOAD_PROBE"] = f"echo {int(cores * 1.2)}"

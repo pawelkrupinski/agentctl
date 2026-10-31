@@ -149,7 +149,9 @@ class NeverNobodyTest(RedsBase):
         self.assertTrue(any("RED UNCLAIMED" in str(e.get("verdict")) for e in self.inbox()))
         self.assertNotIn("NOBODY", self.why()[1])
 
-    def test_at_capacity_the_offer_waits_saying_so(self):
+    def test_at_capacity_an_outside_red_waits_saying_so(self):
+        offers = self.st.offers  # an outside red (a gate red never waits for a slot: the next test)
+        self.st.offers = lambda kind=None: [dict(o, picture=dict(o["picture"], gate=False)) for o in offers(kind)]
         os.environ["AGENTCTL_RED_FIXERS"] = "0"
         try:
             self.tick(dispatch=True)
@@ -161,6 +163,17 @@ class NeverNobodyTest(RedsBase):
         self.assertEqual(self.unheld(), [])
         rc, out = self.why()
         self.assertIn("fixing: offered", out)
+
+    def test_at_capacity_a_gate_red_gets_its_fixer_anyway(self):
+        """Nothing stops a gate fix, ever (the owner, 2026-10-31): the cap holds no gate red's fixer."""
+        os.environ["AGENTCTL_RED_FIXERS"] = "0"
+        try:
+            self.tick(dispatch=True)
+        finally:
+            os.environ.pop("AGENTCTL_RED_FIXERS")
+        it = self.only()
+        self.assertIsNone(self.st.offer_of(f"red:{it['id']}"), "taken: no offer waits")
+        self.assertEqual(A.lease_meta(self.st.get(A.red_lease(it["data"]["key"])))["kind"], "fixer")
 
     def test_the_tick_repairs_a_missing_offer(self):
         self.tick()
