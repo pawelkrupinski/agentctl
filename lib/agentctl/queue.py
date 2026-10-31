@@ -617,7 +617,6 @@ def _check_entry(repo, d, e, i, own=None):
         if rem.get("run") is not None and not rem.get("status"):
             cancel_entry_remote(e, "superseded by a new round of its checks")
         e.pop("remote", None)
-        e.pop("remote_run", None)
         e["round_since"] = ts()
         save_entry(d, e)
         tree = check_tree(repo, i, base)
@@ -714,7 +713,6 @@ def _push_change(repo, d, e):
             note = f"{moved_by}, no overlap: pushed without re-check"
             wlog(d, f"{e['id']}: {note}")
             where = f"{where}; {note}"
-            e.pop("remote_run", None)
             base, head, e["tip"] = moved, new_head, new_head
         commits = waiting_commits(tree, base, head)
         reds = gate_reds(repo) if waiting_supported(repo) else set()
@@ -724,8 +722,6 @@ def _push_change(repo, d, e):
         set_change(d, e, "pushing", event={"text": f"{e['id']}: pushing {head[:10]}"})
         pushed_at = time.time()
         env = tool_env()
-        if e.get("remote_run"):  # the hook takes ci-runner's pass once GitHub confirms it (remote checks)
-            env["PREPUSH_REMOTE_RUN"] = str(e["remote_run"])
         if skip:  # checked on the old base, no overlap with what landed since: the hook judges the red gate only
             env["PREPUSH_SKIP"] = " ".join(skip)
         rc, out = run_watched(push_argv(remote(), head), tree, env, log_path, "push", **push_bounds())

@@ -34,7 +34,7 @@ class QueueTest(WaitingTest):
         hooks = os.path.join(self.tmp.name, "hooks")
         with open(os.path.join(hooks, "pre-push"), "w") as f:
             f.write(f'#!/bin/sh\ncat > /dev/null\n'
-                    f'echo "push remote=${{PREPUSH_REMOTE_RUN:-}}${{PREPUSH_SKIP:+ skip=$PREPUSH_SKIP}}" >> "{self.pushes}"\n')
+                    f'echo "push${{PREPUSH_SKIP:+ skip=$PREPUSH_SKIP}}" >> "{self.pushes}"\n')
         self.saved_q = A.remote_check
         # the repo's hook answers the dry-run queries the re-check rule reads: its compile plan (common <- worker,
         # web) and its plan of checks
@@ -222,7 +222,7 @@ class QueueTest(WaitingTest):
         self.assertEqual(len(self.calls_of("--range")), 1)
         self.assertEqual(self.remote_log()[0], "a: one", "rebased onto the moved main and pushed")
         self.assertIn("main moved by 2 commits, no overlap: pushed without re-check", self.landed_verdict())
-        self.assertEqual(self.pushed()[-1], "push remote= skip=sbt identity", "the push skips the checks already passed")
+        self.assertEqual(self.pushed()[-1], "push skip=sbt identity", "the push skips the checks already passed")
 
     def test_a_file_both_touch_rechecks(self):
         self.r.write("docs/notes.md", "".join(f"line {i}\n" for i in range(12)))
@@ -236,7 +236,7 @@ class QueueTest(WaitingTest):
         self.assertEqual(len(rounds), 2, "checked again on the moved main")
         self.assertEqual(self.remote_log()[0], "a: one")
         self.assertNotIn("without re-check", self.landed_verdict())
-        self.assertEqual(self.pushed()[-1], "push remote=", "the push's hook skips nothing")
+        self.assertEqual(self.pushed()[-1], "push", "the push's hook skips nothing")
 
     def test_a_module_the_change_depends_on_rechecks(self):
         wt, _ = self.agent("a", "worker/src/main/A.scala", "a\n", msg="a: one")
@@ -244,7 +244,7 @@ class QueueTest(WaitingTest):
         rounds = self.moves_once(("common/src/main/C.scala", "c\n"))  # worker depends on common
         self.assertEqual(self.check(eid), 0)
         self.assertEqual(len(rounds), 2)
-        self.assertEqual(self.pushed()[-1], "push remote=")
+        self.assertEqual(self.pushed()[-1], "push")
 
     def rechecked_when_landing(self, path, text):
         wt, _ = self.agent("a", "docs/A.md", "a\n", msg="a: one")
@@ -281,13 +281,12 @@ class QueueTest(WaitingTest):
 
         def remote(repo, e, base, head, mode, own=None):
             seen.append((base, head, mode))
-            e["remote_run"] = 4242
             return True, "precommit-check.yml run 4242 (#77): success"
         A.remote_check = remote
         self.assertEqual(self.check(eid), 0)
         self.assertEqual(len(seen), 1)
         self.assertEqual(self.calls_of("--range"), [], "nothing checked on the laptop")
-        self.assertEqual(self.pushed(), ["push remote=4242"])
+        self.assertEqual(self.pushed(), ["push"])
         self.assertIn("on ci-runner (the CI tier", [e for e in self.inbox() if e["kind"] == "LANDED"][0]["verdict"])
 
     def test_a_remote_check_without_a_verdict_is_checked_locally(self):
@@ -300,7 +299,7 @@ class QueueTest(WaitingTest):
         A.remote_check = lambda repo, e, base, head, mode, own=None: (None, "no run started")
         self.assertEqual(self.check(eid), 0)
         self.assertEqual(len(self.calls_of("--range")), 1)
-        self.assertEqual(self.pushed(), ["push remote="])
+        self.assertEqual(self.pushed(), ["push"])
 
     def fake_github(self, status, head, ref="check/e1"):
         calls = []
@@ -513,14 +512,14 @@ class RemotePickupTest(QueueTest):
         with self.assertRaises(Died):
             self.check(eid)
         e = self.entry(eid)
-        self.assertEqual((e["status"], e["remote"]["run"], e["remote_run"]), ("checking", 99, 99),
+        self.assertEqual((e["status"], e["remote"]["run"]), ("checking", 99),
                          "the run is saved in the entry the moment it is found")
         self.assertEqual(self.state["cancelled"], [], "a dead checker's run is the entry's: never cancelled")
         self.state["status"] = "success"  # it finishes while no checker runs
         A.time.sleep = lambda s: None
         self.assertEqual(self.check(eid), 0)
         self.assertEqual(len(self.state["branch_pushes"]), 1, "adopted: no second check/ push, no second run")
-        self.assertEqual(self.pushed(), ["push remote=", "push remote=99"], "the check/ branch, then main with the run")
+        self.assertEqual(self.pushed(), ["push", "push"], "the check/ branch, then main with the run")
         self.assertEqual(self.calls_of("--range"), [], "nothing checked on the laptop")
         self.assertEqual(self.entry(eid)["status"], "landed")
 
@@ -541,7 +540,7 @@ class RemotePickupTest(QueueTest):
         self.assertEqual(self.check(eid), 0)
         self.assertEqual(len(polls), 3)
         self.assertEqual(len(self.state["branch_pushes"]), 1)
-        self.assertEqual(self.pushed(), ["push remote=", "push remote=99"], "the check/ branch, then main with the run")
+        self.assertEqual(self.pushed(), ["push", "push"], "the check/ branch, then main with the run")
 
     def test_a_terminate_is_never_swallowed_by_the_outage_handler(self):
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
@@ -590,7 +589,7 @@ class RemotePickupTest(QueueTest):
         self.assertEqual(self.tick(d)[1], [e["id"]])
         self.state["status"] = "success"
         self.assertEqual(self.check(e["id"]), 0, "the replacement adopts the verdict")
-        self.assertEqual(self.pushed(), ["push remote=", "push remote=99"], "the check/ branch, then main with the run")
+        self.assertEqual(self.pushed(), ["push", "push"], "the check/ branch, then main with the run")
 
     def test_checking_past_its_deadline_with_no_checker_is_queued_again_as_infra(self):
         d, e = self.checking_entry()
@@ -628,9 +627,9 @@ class RemotePickupTest(QueueTest):
         A.run_entry_checks = spy
         self.addCleanup(setattr, A, "run_entry_checks", real)
         self.assertEqual(self.check(e["id"]), 0)
-        self.assertNotIn("remote_run", seen[0], "main moved: the old run's record is gone from the saved entry")
+        self.assertNotIn("remote", seen[0], "main moved: the old run's record is gone from the saved entry")
         self.assertEqual(self.state["cancelled"], [99], "the old, undecided run is cancelled")
-        self.assertEqual(self.pushed()[-1], "push remote=")
+        self.assertEqual(self.pushed()[-1], "push")
 
 
 def own_tests_only(cls, *bases):

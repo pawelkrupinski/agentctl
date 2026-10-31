@@ -7,8 +7,7 @@
 # for a check/ branch: it is a run's ref, never landed), whose push runs .github/workflows/precommit-check.yml: the same
 # hook, `--checks-only <merge-base with main>..HEAD`, on the check tier's runner. agentctl follows that run (owned: the run
 # is cancelled if the checker dies), reads the verdict -- the same (ok, output) shape as a local check, the failed jobs'
-# relevant lines as output -- and deletes the branch. The push to main then carries PREPUSH_REMOTE_RUN=<run id>: the hook
-# takes that run's pass for its checks only after GitHub confirms it (the workflow, success, the pushed commit itself).
+# relevant lines as output -- and deletes the branch.
 REMOTE_WORKFLOW = "precommit-check.yml"
 REMOTE_TIMEOUT = 2 * 3600
 REMOTE_START = 15 * 60  # no run for the pushed branch by then: no verdict (checked locally instead)
@@ -65,13 +64,8 @@ def remote_poll(o_r, rem):
 
 
 def save_remote(d, e, rem):
-    """The remote check's record in the entry, saved at once (a replacement checker adopts it); `remote_run` mirrors the
-    run for the push's hook and `waiting status`."""
+    """The remote check's record in the entry, saved at once (a replacement checker adopts it)."""
     e["remote"] = rem
-    if rem.get("run") is not None:
-        e["remote_run"] = rem["run"]
-    else:
-        e.pop("remote_run", None)
     if d and e.get("seq") is not None:
         save_entry(d, e)
 

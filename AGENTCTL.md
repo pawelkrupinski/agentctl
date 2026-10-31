@@ -851,9 +851,7 @@ the executor pushes the checked tip to `check/<entry id>` (movies' hook checks n
 runs `.github/workflows/precommit-check.yml` on the check tier: the same hook, `--checks-only <merge-base>..HEAD`. The
 run is the ENTRY's, not the executor's: its record is saved the moment the branch is pushed, a replacement executor
 ADOPTS it (no new push, no new run), and the 15-min (no run started) / 2-h (undecided) bounds count from the push;
-past them it is checked locally. The push to main then carries `PREPUSH_REMOTE_RUN=<run id>`: the hook takes that run
-only once GitHub says it is precommit-check.yml, a success, on exactly the pushed commit. Superseding or cancelling an
-entry cancels its undecided run.
+past them it is checked locally. Superseding or cancelling an entry cancels its undecided run.
 
 ### tick: the processor, the token, the gate
 
