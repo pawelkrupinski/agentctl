@@ -109,7 +109,7 @@ class LocalQueueTest(OneQueueBase):
         self.saved_role, self.saved_ref = os.environ.get("AGENTCTL_ROLE"), A.submit_ref
         os.environ["AGENTCTL_ROLE"] = "sync-test"  # the laptop
         self.refs = []
-        A.submit_ref = lambda repo, d, e, remote=False: self.refs.append(e["id"]) or f"refs/heads/land/{e['id']}"
+        A.submit_ref = lambda repo, d, e, to_server=False: self.refs.append(e["id"]) or f"refs/heads/land/{e['id']}"
 
     def tearDown(self):
         os.environ["AGENTCTL_ROLE"] = self.saved_role

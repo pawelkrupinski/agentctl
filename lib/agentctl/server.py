@@ -225,13 +225,13 @@ def clean_clone_tmps(repo):
 def clone_verify(path):
     """(ok, detail): the clone at path is usable: forgejo/main resolves, every commit behind it and its tip's tree are
     readable (the cheap connectivity check: commits, not every blob of history)."""
-    for args in (("rev-parse", "--verify", "-q", f"{REMOTE}/main^{{commit}}"),
-                 ("rev-list", "--quiet", f"{REMOTE}/main"),
-                 ("rev-list", "--quiet", "--objects", "--no-walk", f"{REMOTE}/main")):
+    for args in (("rev-parse", "--verify", "-q", f"{remote()}/main^{{commit}}"),
+                 ("rev-list", "--quiet", f"{remote()}/main"),
+                 ("rev-list", "--quiet", "--objects", "--no-walk", f"{remote()}/main")):
         r = git(path, *args, check=False)
         if r.returncode != 0:
             return False, f"git {' '.join(args)}: exit {r.returncode} {(r.stderr or '').strip()[-300:]}"
-    return True, f"{REMOTE}/main resolves and is connected"
+    return True, f"{remote()}/main resolves and is connected"
 
 
 # A CLONE NEVER TRIPS SYSTEMD (2026-10-29: the reconciler is Type=notify, TimeoutStartSec=300, WatchdogSec=120; movies
@@ -287,7 +287,7 @@ def clone_into_tmp(repo, url):
     os.makedirs(parent, exist_ok=True)
     tmp = os.path.join(parent, f".{base}{CLONE_TMP}{os.getpid()}-{int(time.time() * 1000)}")
     try:
-        r = run_clone(["git", "clone", "--quiet", "--origin", REMOTE, url, tmp], f"cloning {url} into {tmp}")
+        r = run_clone(["git", "clone", "--quiet", "--origin", remote(), url, tmp], f"cloning {url} into {tmp}")
     except subprocess.TimeoutExpired as x:
         shutil.rmtree(tmp, ignore_errors=True)
         raise SystemExit(f"agentctl tick: git clone {url} timed out after {x.timeout:.0f} s")
@@ -314,11 +314,28 @@ def ensure_server_clone(repo=None):
         elif os.path.lexists(repo):  # something that is no clone: kept aside, never overwritten
             os.rename(repo, f"{repo}.broken-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}")
         os.rename(tmp, repo)
-    elif heal_enabled(repo):  # at startup: a clone that does not verify is repaired before the first tick
-        ok, detail = clone_verify(repo)
-        if not ok:
-            repair_clone(repo, f"at startup the clone did not verify: {detail}")
+    else:
+        server_clone_remote(repo)
+        if heal_enabled(repo):  # at startup: a clone that does not verify is repaired before the first tick
+            ok, detail = clone_verify(repo)
+            if not ok:
+                repair_clone(repo, f"at startup the clone did not verify: {detail}")
     return repo
+
+
+def server_clone_remote(repo):
+    """THE FORGE SWITCH ON AN EXISTING CLONE (W5b): the clone was made with the old forge's remote (`forgejo`); the
+    forge's remote() must exist and point at $AGENTCTL_MOVIES_REMOTE, so it is added (and fetched once) or re-pointed
+    here. The old remote stays: a rollback flips back without a re-clone."""
+    url = os.environ.get("AGENTCTL_MOVIES_REMOTE")
+    if not url:
+        return
+    have = git(repo, "remote", "get-url", remote(), check=False)
+    if have.returncode != 0:
+        git(repo, "remote", "add", remote(), url)
+        git(repo, "fetch", "--quiet", remote(), "main", check=False)
+    elif have.stdout.strip() != url:
+        git(repo, "remote", "set-url", remote(), url)
 
 
 # THE CLONE HEALS ITSELF (2026-10-29: `git fetch --refetch` could not repair the half clone either: "shallow roots
@@ -411,13 +428,13 @@ def note_clone_suspect(repo, error):
 
 
 def fetch_main(repo):
-    """git fetch REMOTE main in repo: (ok, git's stderr). A corruption signature marks the clone suspect."""
-    r = git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
+    """git fetch <the forge remote> main in repo: (ok, git's stderr). A corruption signature marks the clone suspect."""
+    r = git(repo, "fetch", "--quiet", remote(), "main", check=False)
     out = (r.stderr or "").strip()
-    if r.returncode == 0 and git_ok(repo, "rev-parse", "--verify", "-q", f"{REMOTE}/main"):
+    if r.returncode == 0 and git_ok(repo, "rev-parse", "--verify", "-q", f"{remote()}/main"):
         return True, out
     if not out:
-        out = f"exit {r.returncode}" + ("" if r.returncode else f"; {REMOTE}/main does not resolve")
+        out = f"exit {r.returncode}" + ("" if r.returncode else f"; {remote()}/main does not resolve")
     note_clone_suspect(repo, out)
     return False, out
 
@@ -432,10 +449,10 @@ def probe_clone_health(a):
         ok, detail = clone_verify(repo)
         if not ok:
             return False, detail
-        r = git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
+        r = git(repo, "fetch", "--quiet", remote(), "main", check=False)
         err_ = (r.stderr or "").strip()
         if r.returncode != 0:
-            return (False if CORRUPT_GIT.search(err_) else None), f"git fetch {REMOTE} main: {err_[-240:]}"
+            return (False if CORRUPT_GIT.search(err_) else None), f"git fetch {remote()} main: {err_[-240:]}"
         ok, detail = clone_verify(repo)
         return ok, ("fetched and verified: " if ok else "") + detail
 
@@ -445,7 +462,7 @@ def relink_worktrees(repo, broken):
     anew (the same paths: the clone's path did not change), HEAD on their branch when the new clone has it (carried
     over from the broken copy where readable), else detached at main, and their index rebuilt. Returns their paths."""
     out = []
-    main_sha = git(repo, "rev-parse", f"{REMOTE}/main").strip()
+    main_sha = git(repo, "rev-parse", f"{remote()}/main").strip()
     for b in git(broken, "for-each-ref", "--format=%(refname:short)", "refs/heads/", check=False).stdout.split():
         if b != "main":
             git(repo, "fetch", "--quiet", "--no-tags", broken, f"+refs/heads/{b}:refs/heads/{b}", check=False)

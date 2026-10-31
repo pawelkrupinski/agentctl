@@ -86,7 +86,7 @@ class AtomicCloneTest(unittest.TestCase):
 
     def test_a_missing_blob_of_mains_tree_fails_the_verification(self):
         A.ensure_server_clone(self.repo)
-        blob = A.git(self.repo, "rev-parse", f"{A.REMOTE}/main:d/f2").strip()
+        blob = A.git(self.repo, "rev-parse", f"{A.remote()}/main:d/f2").strip()
         os.unlink(os.path.join(self.repo, ".git", "objects", blob[:2], blob[2:]))
         ok, detail = A.clone_verify(self.repo)
         self.assertFalse(ok)
@@ -95,7 +95,7 @@ class AtomicCloneTest(unittest.TestCase):
 
 def corrupt(repo):
     """The incident's clone: main's commit object gone from the store, a stray shallow_* temp file."""
-    sha = A.git(repo, "rev-parse", f"{A.REMOTE}/main").strip()
+    sha = A.git(repo, "rev-parse", f"{A.remote()}/main").strip()
     subprocess.run(["git", "-C", repo, "repack", "-q", "-a", "-d"], check=True)  # one pack: then unpack, minus one
     pack = [f for f in os.listdir(os.path.join(repo, ".git", "objects", "pack")) if f.endswith(".pack")][0]
     with open(os.path.join(repo, ".git", "objects", "pack", pack), "rb") as f:
@@ -168,7 +168,7 @@ class HealTest(unittest.TestCase):
         self.assertEqual(A.clone_tmp_dirs(self.repo), [])
 
     def test_a_fetch_failing_on_the_network_marks_nothing_and_repairs_nothing(self):
-        A.git(self.repo, "remote", "set-url", A.REMOTE, os.path.join(self.root, "gone"))
+        A.git(self.repo, "remote", "set-url", A.remote(), os.path.join(self.root, "gone"))
         ok, why = A.fetch_main(self.repo)
         self.assertFalse(ok)
         self.assertFalse(os.path.exists(A.clone_side(self.repo, "suspect.json")))
@@ -188,12 +188,12 @@ class HealTest(unittest.TestCase):
 
     def test_the_check_trees_are_relinked_and_keep_their_build(self):
         tree = f"{self.repo}-wt-check-1"
-        A.git(self.repo, "worktree", "add", "-q", "--detach", tree, f"{A.REMOTE}/main")
+        A.git(self.repo, "worktree", "add", "-q", "--detach", tree, f"{A.remote()}/main")
         os.makedirs(os.path.join(tree, "target"))
         open(os.path.join(tree, "target", "warm"), "w").close()
         corrupt(self.repo)
         A.repair_clone(self.repo, "a test")
-        self.assertEqual(A.git(tree, "rev-parse", "HEAD").strip(), A.git(self.repo, "rev-parse", f"{A.REMOTE}/main").strip())
+        self.assertEqual(A.git(tree, "rev-parse", "HEAD").strip(), A.git(self.repo, "rev-parse", f"{A.remote()}/main").strip())
         A.git(tree, "reset", "-q", "--hard")
         self.assertTrue(os.path.exists(os.path.join(tree, "target", "warm")))
         listed = [os.path.realpath(l.split()[0]) for l in A.git(self.repo, "worktree", "list").splitlines()]

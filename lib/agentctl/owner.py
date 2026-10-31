@@ -104,9 +104,9 @@ def owner_worktree(repo, fam, rec):
     wt, branch = f"{clone}-wt-owner-{slug_}", f"owner-{slug_}"
     if not os.path.isdir(wt):
         git(repo, "worktree", "prune", check=False)
-        git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
+        git(repo, "fetch", "--quiet", remote(), "main", check=False)
         has = git_ok(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}")
-        r = git(repo, "worktree", "add", "-q", *([wt, branch] if has else ["-b", branch, wt, f"{REMOTE}/main"]),
+        r = git(repo, "worktree", "add", "-q", *([wt, branch] if has else ["-b", branch, wt, f"{remote()}/main"]),
                 check=False)
         if r.returncode != 0:
             return None

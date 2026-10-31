@@ -58,7 +58,7 @@ def batch_fail(st, d, it, why, n_changes=0):
         wlog(d, f"the batch {it['id']} did not land ({why}): retry {n}/{BATCH_RETRY_MAX}")
         return batch_move(st, it, "assembling", {"retries": n})
     text = (f"HELD: the batch {it['id']} ({n_changes} change(s)) did not land {n} times ({why}); it is assembled again "
-            f"when git can read {REMOTE}/main, or in 30 min")
+            f"when git can read {remote()}/main, or in 30 min")
     wlog(d, text)
     it = batch_move(st, it, "held", {"retries": 0, "why": why}, text=text, severity="escalate")
     open_condition("STALLED", text, run_probe("git_fetch", {"repo": repo_of_waiting(d)}),
@@ -298,8 +298,8 @@ def _tick_batch(repo, d, now_, seen):
             return [f"batch {it['id']}: waiting for a check tree"]
         i, h = slot
         try:
-            git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
-            base = git(repo, "rev-parse", f"{REMOTE}/main").strip()
+            git(repo, "fetch", "--quiet", remote(), "main", check=False)
+            base = git(repo, "rev-parse", f"{remote()}/main").strip()
             tree = check_tree(repo, i, base)
             kept = assemble(repo, d, tree, batch, base)
             tip = git(tree, "rev-parse", "HEAD").strip()
@@ -399,9 +399,13 @@ DRIFT_STALL = 30 * 60  # s with no output before the drift check is ended (no ve
 def drift_env(repo, env=None):
     env = tool_env() if env is None else dict(env)
     try:
-        env["FORGEJO_API_TOKEN"] = token(slug(repo))  # movies' forge-gh reads this one
+        if on_github():  # forge = github: forge-gh is the real gh (KINOWO_FORGE), with the repo's App token on ci-runner
+            env = forge_env(slug(repo), env)
+            env["KINOWO_FORGE"] = "github"
+        else:
+            env["FORGEJO_API_TOKEN"] = token(slug(repo))  # movies' forge-gh reads this one
     except (Exception, SystemExit) as ex:  # no token: the script says so itself (NO VERDICT)
-        err(f"drift check: no Forgejo token for the script ({str(ex)[:120]})")
+        err(f"drift check: no forge token for the script ({str(ex)[:120]})")
     parts = [p for p in env.get("PATH", "").split(":") if p]
     if not any(os.access(os.path.join(p, "python3"), os.X_OK) for p in parts):
         shim = state_root("tool-bin")
@@ -586,8 +590,8 @@ def _push_batch_item(repo, d, st, it, members, tip, base, i):
     with land_lock(repo, timeout=0) as held:
         if not held:
             return f"batch {it['id']}: the landing lease is busy"
-        git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
-        if git(repo, "rev-parse", f"{REMOTE}/main").strip() != base:
+        git(repo, "fetch", "--quiet", remote(), "main", check=False)
+        if git(repo, "rev-parse", f"{remote()}/main").strip() != base:
             batch_move(st, it, "assembling", text=f"batch {it['id']}: main moved during its check: assembled again")
             return f"batch {it['id']}: main moved"
         lock_note(f"push of the batch {tip[:10]}")
@@ -597,12 +601,12 @@ def _push_batch_item(repo, d, st, it, members, tip, base, i):
         git(tree, "checkout", "-q", "--force", "--detach", tip, check=False)
         pushed_at = time.time()
         env = dict(tool_env(), PREPUSH_REUSE_FAST="1")
-        rc, out = run_watched(push_argv(REMOTE, tip), tree, env, os.path.join(d, f"push-{tip[:10]}"), "push",
+        rc, out = run_watched(push_argv(remote(), tip), tree, env, os.path.join(d, f"push-{tip[:10]}"), "push",
                               **push_bounds())
         with open(os.path.join(d, "checks.log"), "a") as f:
             f.write(f"=== push {ts()} {tip[:10]} rc {rc}\n{out}\n")
-        git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
-        if not landed(repo, tip, f"refs/remotes/{REMOTE}/main"):
+        git(repo, "fetch", "--quiet", remote(), "main", check=False)
+        if not landed(repo, tip, f"refs/remotes/{remote()}/main"):
             if rc is not None and REDGATE.search(out or ""):
                 batch_move(st, it, "assembling", text=f"batch {it['id']}: the gate went red before the push")
                 return f"batch {it['id']}: red"

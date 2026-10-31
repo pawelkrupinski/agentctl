@@ -59,10 +59,10 @@ def gitdir_activity(repo, wt_path):
 
 def merged_reason(repo, head, main):
     if git_ok(repo, "merge-base", "--is-ancestor", head, main):
-        return "ancestor of forgejo/main"
+        return f"ancestor of {remote()}/main"
     commits, left = cherry_landed(repo, main, head)
     if commits and not left:
-        return f"all {len(commits)} commit(s) patch-equivalent on forgejo/main (by patch-id or changed lines)"
+        return f"all {len(commits)} commit(s) patch-equivalent on {remote()}/main (by patch-id or changed lines)"
     return None
 
 
@@ -101,7 +101,7 @@ def plan_worktrees(repo, main, min_age_h, cwds, include_caches=False):
         why = merged_reason(repo, sha, main)
         if not why:
             n = len(git(repo, "rev-list", f"{main}..{sha}").split())
-            skip(f"unmerged ({n} commit(s) not on forgejo/main)"); continue
+            skip(f"unmerged ({n} commit(s) not on {remote()}/main)"); continue
         plan.append(("delete", path, branch, sha, why))
     return plan
 
@@ -139,11 +139,11 @@ def cmd_cleanup(a):
             continue
         try:
             if not a.no_fetch:
-                git(repo, "fetch", "--quiet", REMOTE, "main")
-            main = git(repo, "rev-parse", f"refs/remotes/{REMOTE}/main").strip()
+                git(repo, "fetch", "--quiet", remote(), "main")
+            main = git(repo, "rev-parse", f"refs/remotes/{remote()}/main").strip()
         except RuntimeError as e:
             err(f"{name}: {e}; skipping repo"); rc = 1; continue
-        print(f"\n== {name} (forgejo/main {main[:10]})")
+        print(f"\n== {name} ({remote()}/main {main[:10]})")
         for action, path, branch, sha, why in plan_worktrees(repo, main, a.min_age_hours, cwds, a.include_caches):
             label = f"worktree {path} [{branch or 'detached'}] {sha[:10]}"
             if action == "skip":
@@ -246,14 +246,14 @@ def close_worktree(wt):
     dirty = git(wt, "status", "--porcelain", "--untracked-files=all", check=False)
     if dirty.returncode or dirty.stdout.strip():
         return f"worktree {wt} kept: the tree is not clean ({len(dirty.stdout.splitlines())} changed/untracked)"
-    git(wt, "fetch", "--quiet", REMOTE, "main", check=False)
-    main = f"refs/remotes/{REMOTE}/main"
+    git(wt, "fetch", "--quiet", remote(), "main", check=False)
+    main = f"refs/remotes/{remote()}/main"
     head = git(wt, "rev-parse", "HEAD").strip()
     _commits, ahead = cherry_landed(wt, main, head)
     if ahead is None:
-        return f"worktree {wt} kept: git cherry could not compare it with forgejo/main"
+        return f"worktree {wt} kept: git cherry could not compare it with {remote()}/main"
     if ahead:
-        return f"worktree {wt} kept: {len(ahead)} commit(s) not on forgejo/main"
+        return f"worktree {wt} kept: {len(ahead)} commit(s) not on {remote()}/main"
     why = merged_reason(root, head, main) or "nothing of its own left"
     r = git(root, "worktree", "remove", wt, check=False)
     if r.returncode:
@@ -284,7 +284,7 @@ def bounded_fetch(repo, *extra):
     in the sweep's fetch)."""
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_SSH_COMMAND=GIT_NET_SSH)
     try:
-        r = subprocess.run(["git", "-C", repo, "fetch", "--quiet", *extra, REMOTE], capture_output=True, text=True, env=env,
+        r = subprocess.run(["git", "-C", repo, "fetch", "--quiet", *extra, remote()], capture_output=True, text=True, env=env,
                            timeout=env_num("AGENTCTL_FETCH_TIMEOUT", FETCH_TIMEOUT), stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return f"timed out after {int(env_num('AGENTCTL_FETCH_TIMEOUT', FETCH_TIMEOUT))} s"
@@ -295,10 +295,10 @@ def sweep_repo(repo, idle_days, dry, out):
     name = os.path.basename(repo)
     now_ = time.time()
     fetched = bounded_fetch(repo, "--prune")
-    main = f"refs/remotes/{REMOTE}/main"
+    main = f"refs/remotes/{remote()}/main"
     if fetched is not True:
         out.append(f"== {name}: fetch failed ({fetched}): from the last fetched state")
-    out.append(f"== {name} (forgejo/main {git(repo, 'rev-parse', main).strip()[:10]})")
+    out.append(f"== {name} ({remote()}/main {git(repo, 'rev-parse', main).strip()[:10]})")
     idle_wt, checked_out = [], set()
     for w in worktrees(repo)[1:]:
         path, sha = w["worktree"], w.get("HEAD", "")
@@ -324,13 +324,13 @@ def sweep_repo(repo, idle_days, dry, out):
             lonely.append(f"  UNMERGED branch {b} (no worktree): tip {sha[:10]}, idle {int(days)} d")
     out += lonely
     o_r = None
-    for line in git(repo, "ls-remote", "--heads", REMOTE).splitlines():
+    for line in git(repo, "ls-remote", "--heads", remote()).splitlines():
         sha, ref = line.split()
         b = ref.removeprefix("refs/heads/")
         if b in SWEEP_KEEP_REMOTE or b.startswith("measure/"):
             continue  # measure/* is `agentctl cleanup`'s, by its runs
         if not git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}"):
-            git(repo, "fetch", "--quiet", REMOTE, b, check=False)
+            git(repo, "fetch", "--quiet", remote(), b, check=False)
         why = git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}") and merged_reason(repo, sha, main)
         if not why:
             t = int(git(repo, "log", "-1", "--format=%ct", sha, check=False).stdout.strip() or now_)

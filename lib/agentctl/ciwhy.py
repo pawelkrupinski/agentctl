@@ -160,7 +160,7 @@ def repo_path_for(o_r):
     # main_workflow_files reads nothing there -- no workflow outside the newest 200 runs is listed and no callable-only
     # red is ever proven (2026-10-29: Report run timings #38 stayed offered under f8f51e8)
     for p in REPOS + [server_repo()]:
-        if os.path.isdir(p) and git_ok(p, "remote", "get-url", REMOTE):
+        if os.path.isdir(p) and git_ok(p, "remote", "get-url", remote()):
             try:
                 if slug(p) == o_r:
                     return p
@@ -319,7 +319,7 @@ def workflow_text(o_r, path, sha, repo=None):
     """A workflow file's text at a commit: the local clone first, then the forge's contents API; None if neither."""
     repo = repo or repo_path_for(o_r)
     if repo:
-        for ref in (sha, f"{REMOTE}/main"):
+        for ref in (sha, f"{remote()}/main"):
             r = git(repo, "show", f"{ref}:{path}", check=False) if ref else None
             if r is not None and r.returncode == 0:
                 return r.stdout
@@ -503,7 +503,7 @@ def main_workflow_files(o_r):
     repo = scan_repo_for(o_r)
     if not repo or not os.path.isdir(repo):
         return {}
-    main = git(repo, "rev-parse", f"refs/remotes/{REMOTE}/main", check=False).stdout.strip()
+    main = git(repo, "rev-parse", f"refs/remotes/{remote()}/main", check=False).stdout.strip()
     if not main:
         return {}
     if main not in _flow_files:
@@ -783,12 +783,12 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
     local = [u for u in units_of.get((LOCAL_FLOW, (lus or [{"run": {}}])[0]["run"].get("databaseId")), [])]
     if lstale:
         out.append(f"{LOCAL_FLOW}: stale, rechecking (recorded on {str(local_red().get('main'))[:10]}; "
-                   f"{REMOTE}/main is {lstale[:10]} now)")
+                   f"{remote()}/main is {lstale[:10]} now)")
         parts.append("local \u2192 stale, rechecking")
     if local:
         lr = local_red()
         main = str(lr.get("main"))[:10]
-        out.append(f"{LOCAL_FLOW}: RED on plain {REMOTE}/main {main} ({', '.join(u['job'] for u in local)}: pre-push fails "
+        out.append(f"{LOCAL_FLOW}: RED on plain {remote()}/main {main} ({', '.join(u['job'] for u in local)}: pre-push fails "
                    f"there without any change) -- claim: `agentctl red claim local`")
         flines, finfos = fixing(LOCAL_FLOW, local[0]["run"])
         out += flines

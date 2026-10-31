@@ -8,7 +8,7 @@ from test_agentctl import A, Base, StallSamples, sh, code_source  # noqa: E402
 HOOK_HEAD = "#!/bin/sh\nunset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE\ncat > /dev/null\n"
 
 
-class LandTest(Base):
+class LandBase(Base):
     def setUp(self):
         super().setUp()
         self.hooks = os.path.join(self.tmp.name, "hooks")
@@ -38,6 +38,9 @@ class LandTest(Base):
     def remote_main(self):
         return sh(self.r.root, "git", "--git-dir", self.r.bare, "rev-parse", "main")
 
+
+
+class LandTest(LandBase):
     def test_lands_and_verifies(self):
         self.hook("exit 0")
         self.r.write("f1.txt", "mine\n")
@@ -418,3 +421,41 @@ class LandMutationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LandOnGithubTest(LandBase):
+    """forge = github (W5b): land rebases onto and pushes to the forge's remote, `origin`, never `forgejo` -- the same
+    land, with the clone's remote named as GitHub's is on the laptop."""
+
+    def setUp(self):
+        super().setUp()
+        sh(self.r.path, "git", "remote", "rename", "forgejo", "origin")
+        self.saved_forge = os.environ.get("AGENTCTL_FORGE")
+        os.environ["AGENTCTL_FORGE"] = "github"
+
+    def tearDown(self):
+        if self.saved_forge is None:
+            os.environ.pop("AGENTCTL_FORGE", None)
+        else:
+            os.environ["AGENTCTL_FORGE"] = self.saved_forge
+        super().tearDown()
+
+    def test_the_remote_is_the_forges(self):
+        self.assertEqual(A.remote(), "origin")
+        os.environ["AGENTCTL_REMOTE"] = "gh"
+        try:
+            self.assertEqual(A.remote(), "gh")
+        finally:
+            os.environ.pop("AGENTCTL_REMOTE")
+        os.environ["AGENTCTL_FORGE"] = "forgejo"
+        self.assertEqual(A.remote(), "forgejo")
+
+    def test_lands_on_origin_main(self):
+        self.hook("exit 0")
+        self.r.write("f1.txt", "mine\n")
+        sha = self.r.commit("mine")
+        rc, out = self.land()
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"LANDED {sha}", out)
+        self.assertEqual(self.remote_main(), sha)
+        self.assertEqual(sh(self.r.path, "git", "rev-parse", "origin/main"), sha)

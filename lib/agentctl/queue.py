@@ -190,21 +190,21 @@ _last_ref_sweep = [0.0]
 
 def land_refs_supported(repo):
     """The repository's hook at forgejo/main checks nothing on a land/ ref (else the push would run its full checks)."""
-    hook = git(repo, "show", f"{REMOTE}/main:scripts/hooks/pre-push", check=False).stdout
+    hook = git(repo, "show", f"{remote()}/main:scripts/hooks/pre-push", check=False).stdout
     return "refs/heads/land/" in hook
 
 
-def submit_ref(repo, d, e, remote=False):
+def submit_ref(repo, d, e, to_server=False):
     """Push the change to refs/heads/land/<entry> (bounded); the entry records it. Never fatal in phase 1 (the queue does
-    not need it); in phase 2 (remote: ci-runner fetches the change from it) the caller refuses without it."""
+    not need it); in phase 2 (to_server: ci-runner fetches the change from it) the caller refuses without it."""
     if not land_refs_supported(repo):
         return None
     ref = f"refs/heads/land/{e['id']}"
-    rc, out = run_watched(["git", "push", "--quiet", REMOTE, f"{e['head']}:{ref}"], repo, tool_env(),
+    rc, out = run_watched(["git", "push", "--quiet", remote(), f"{e['head']}:{ref}"], repo, tool_env(),
                           os.path.join(d, f"submit-{e['id']}"), "submit", **push_bounds())
     if rc == 0:
         e["ref"] = ref
-        if not remote:
+        if not to_server:
             save_entry(d, e)
         return ref
     err(f"submit: could not push {ref} ({tail_of(out or '', 2)[:160]}); the change is queued all the same")
@@ -217,7 +217,7 @@ def sweep_land_refs(repo, d, now_=None):
     if t - _last_ref_sweep[0] < env_num("AGENTCTL_LAND_REF_SWEEP", LAND_REF_SWEEP_EVERY):
         return []
     _last_ref_sweep[0] = t
-    r = git(repo, "ls-remote", "--heads", REMOTE, "refs/heads/land/*", check=False)
+    r = git(repo, "ls-remote", "--heads", remote(), "refs/heads/land/*", check=False)
     if r.returncode != 0:
         return []
     every = {e["id"]: e for e in waiting_entries(d, open_only=False)}
@@ -228,14 +228,14 @@ def sweep_land_refs(repo, d, now_=None):
         e = every.get(eid)
         if e and e.get("status") not in ENTRY_FINAL:
             continue
-        dr = git(repo, "push", "--quiet", REMOTE, f":{ref}", check=False)
+        dr = git(repo, "push", "--quiet", remote(), f":{ref}", check=False)
         did.append(f"{ref}: deleted" if dr.returncode == 0 else f"{ref}: could not delete")
     return did
 
 
 def change_fields(repo, main_ref, head, a):
     """A queue entry's fields for the change at head in repo (land's own submission)."""
-    commits = waiting_commits(repo, f"{REMOTE}/main", head)
+    commits = waiting_commits(repo, f"{remote()}/main", head)
     return {"worktree": repo, "branch": branch_of(repo), "head": head, "commits": commits,
             "fixes": sorted(fixes_of(repo, commits)), "keep_worktree": bool(getattr(a, "keep_worktree", False)),
             "claude_pid": int(os.environ["CLAUDE_PID"]) if (os.environ.get("CLAUDE_PID") or "").isdigit() else None,
@@ -255,7 +255,7 @@ def submit_to_server(repo, d, fields, note=""):
     which the sync sends). Prints QUEUED / QUEUED-LOCAL / NOT LANDED; returns land's exit code."""
     head = fields["head"]
     e = {**fields, "id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{os.urandom(3).hex()}"}
-    if not submit_ref(repo, d, e, remote=True):
+    if not submit_ref(repo, d, e, to_server=True):
         print(f"NOT LANDED: could not push the change to refs/heads/land/{e['id']} (ci-runner checks it from there): "
               "`agentctl env --check`, then land again")
         return 1
@@ -400,7 +400,7 @@ def change_landed(repo, head, commits=None):
     """(landed, via): landed True when the change at head is on main by content (head an ancestor, or every commit of it
     patch-equivalent there or with a content twin, cherry_landed), False when not, None when this clone cannot tell (head unknown here); via the main commit
     carrying its last commit, when known."""
-    main = f"refs/remotes/{REMOTE}/main"
+    main = f"refs/remotes/{remote()}/main"
     if not head or not git_ok(repo, "cat-file", "-e", f"{head}^{{commit}}"):
         return None, None
     if git_ok(repo, "merge-base", "--is-ancestor", head, main):
@@ -511,7 +511,7 @@ def migrate_local_queue(repo, store=None):
             did.append(f"{e['id']}: its commits are on main (by content): landed")
             continue
         why = None
-        if not submit_ref(repo, d, e, remote=True):
+        if not submit_ref(repo, d, e, to_server=True):
             why = f"could not push refs/heads/land/{e['id']}"
         else:
             try:
@@ -596,9 +596,9 @@ def _check_entry(repo, d, e, i, own=None):
         requeue_infra(d, e, f"{FETCH_MAIN_FAILED}: {last}", reason=FETCH_MAIN_FAILED, detail=ferr,
                       repo=repo)
         return 0
-    base = git(repo, "rev-parse", f"{REMOTE}/main").strip()
+    base = git(repo, "rev-parse", f"{remote()}/main").strip()
     if not git_ok(repo, "cat-file", "-e", f"{e['head']}^{{commit}}"):  # phase 2: the change is on Forgejo, as land/<id>
-        lr = git(repo, "fetch", "--quiet", REMOTE, f"refs/heads/land/{e['id']}", check=False)
+        lr = git(repo, "fetch", "--quiet", remote(), f"refs/heads/land/{e['id']}", check=False)
         if not git_ok(repo, "cat-file", "-e", f"{e['head']}^{{commit}}"):
             lerr = (lr.stderr or "").strip()
             note_clone_suspect(repo, lerr)
@@ -626,8 +626,8 @@ def _check_entry(repo, d, e, i, own=None):
         already_landed(d, e, via if via != "an equivalent commit" else None)
         return 0
     if not head:
-        queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {REMOTE}/main {base[:10]} "
-                      f"(main moved since QUEUED): rebase onto forgejo/main and land again")
+        queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {remote()}/main {base[:10]} "
+                      f"(main moved since QUEUED): rebase onto {remote()}/main and land again")
         return 1
     e["tip"] = head
     save_entry(d, e)
@@ -686,7 +686,7 @@ def _push_change(repo, d, e):
         if now_.get("status") != "checked":  # superseded / cancelled since its checks: no push
             return now_.get("status")
         fetch_main(repo)  # a corrupt clone is marked for repair; a failed fetch pushes onto the last known main
-        moved = git(repo, "rev-parse", f"{REMOTE}/main").strip()
+        moved = git(repo, "rev-parse", f"{remote()}/main").strip()
         base, head, where, skip = e["checked_base"], e["tip"], e.get("checked_where") or "", None
         if moved != base:
             new_head, via = rebase_in_tree(d, tree, e, moved)
@@ -694,8 +694,8 @@ def _push_change(repo, d, e):
                 already_landed(d, e, via if via != "an equivalent commit" else None)
                 return "landed"
             if not new_head:
-                queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {REMOTE}/main "
-                              f"{moved[:10]} (main moved during its checks): rebase onto forgejo/main and land again")
+                queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {remote()}/main "
+                              f"{moved[:10]} (main moved during its checks): rebase onto {remote()}/main and land again")
                 return "rejected"
             tree_hook = precheck_hook(tree) if hook else None
             mine = range_paths(tree, moved, new_head)
@@ -728,9 +728,9 @@ def _push_change(repo, d, e):
             env["PREPUSH_REMOTE_RUN"] = str(e["remote_run"])
         if skip:  # checked on the old base, no overlap with what landed since: the hook judges the red gate only
             env["PREPUSH_SKIP"] = " ".join(skip)
-        rc, out = run_watched(push_argv(REMOTE, head), tree, env, log_path, "push", **push_bounds())
-        git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
-        if landed(repo, head, f"refs/remotes/{REMOTE}/main"):  # verify: the tip is on main, whatever rc said
+        rc, out = run_watched(push_argv(remote(), head), tree, env, log_path, "push", **push_bounds())
+        git(repo, "fetch", "--quiet", remote(), "main", check=False)
+        if landed(repo, head, f"refs/remotes/{remote()}/main"):  # verify: the tip is on main, whatever rc said
             mark_gate_dirty()
             queue_verdict(d, e, "landed", f"LANDED {head} (queued {e['id']}, checked {where})", code=0,
                           landed_sha=head, pushed_at=pushed_at)
@@ -751,7 +751,7 @@ def _push_change(repo, d, e):
         wlog(d, f"{e['id']}: {why} (push attempt {n}); its tail: {tail_of(out or '')[:300]}")
         if n >= PUSH_ATTEMPTS_MAX:
             open_condition("STALLED", f"STALLED: the push of {e['id']} failed {n} times ({why}); it is tried again when "
-                                      f"git can read {REMOTE}/main", run_probe("git_fetch", {"repo": repo}), [],
+                                      f"git can read {remote()}/main", run_probe("git_fetch", {"repo": repo}), [],
                            key=f"push-failing-{e['id']}", command="land", cwd=e.get("worktree"),
                            tail=(out or "").splitlines()[-15:])
         return "checked"
@@ -843,7 +843,7 @@ def queue_join(repo, d, e, tree, head):
     a = argparse.Namespace(follow=False)
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        rc = join(repo, f"refs/remotes/{REMOTE}/main", lambda *x: subprocess.run(x, cwd=tree, capture_output=True,
+        rc = join(repo, f"refs/remotes/{remote()}/main", lambda *x: subprocess.run(x, cwd=tree, capture_output=True,
                                                                                   text=True, env=tool_env()),
                   os.path.join(d, f"check-{e['id']}"), a, head=head, worktree=e["worktree"],
                   branch=e.get("branch") or "")
@@ -871,7 +871,7 @@ def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own=None
         wlog(d, f"{e['id']}: the remote check gave no verdict ({out.splitlines()[-1] if out else '?'}): checking here")
     # the range through the remote's ref (forgejo/main is `base` now, fetched just before): the hook finds the remote, and
     # with it Forgejo's red gate, from it -- given bare shas it fell back to gh (GitHub, suspended): the gate unread
-    rng = f"{REMOTE}/main..{head}" if git(tree, "rev-parse", f"{REMOTE}/main").strip() == base else f"{base}..{head}"
+    rng = f"{remote()}/main..{head}" if git(tree, "rev-parse", f"{remote()}/main").strip() == base else f"{base}..{head}"
     e["waiting_on"] = "the governor (a check slot)"
     save_entry(d, e)
     try:

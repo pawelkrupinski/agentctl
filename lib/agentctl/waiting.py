@@ -218,7 +218,7 @@ def apply_entry(d, wt, e, base):
         e["commits"] = [c for c in e["commits"] if c not in gone]
         e.setdefault("dropped", []).extend([[c, v] for c, v in on_main])
         save_entry(d, e)
-        wlog(d, f"{e['id']}: {len(on_main)} commit(s) already on {REMOTE}/main, dropped: "
+        wlog(d, f"{e['id']}: {len(on_main)} commit(s) already on {remote()}/main, dropped: "
                 + ", ".join(f"{c[:10]} (via {v[:10] if v else 'an empty pick'})" for c, v in on_main))
         if not e["commits"]:
             return "landed", next((v for _c, v in reversed(on_main) if v), None)
@@ -286,7 +286,7 @@ def join(repo, main_ref, sh, log_path, a, head=None, worktree=None, branch=None)
         if rc is not None:
             return rc
     d, _clone, _wt = waiting_state(repo)
-    commits = waiting_commits(repo, f"{REMOTE}/main", head)
+    commits = waiting_commits(repo, f"{remote()}/main", head)
     branch = branch_of(repo) if branch is None else branch
     with open(os.path.join(d, "seq.lock"), "a+") as seq_lock:  # a seq of its own, beside a land queueing meanwhile
         fcntl.flock(seq_lock, fcntl.LOCK_EX)

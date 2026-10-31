@@ -386,7 +386,7 @@ def unkicked_obs(o_r, repo, snap, now_=None):
     runs = next((g.get("runs") or [] for g in snap.get("gate") or [] if g["name"] == name), [])
     if not runs:
         return {}
-    head = git(repo, "rev-parse", f"refs/remotes/{REMOTE}/main", check=False).stdout.strip()
+    head = git(repo, "rev-parse", f"refs/remotes/{remote()}/main", check=False).stdout.strip()
     ct = git(repo, "log", "-1", "--format=%ct", head, check=False).stdout.strip() if head else ""
     if not head or not ct.isdigit():
         return {}
@@ -514,7 +514,7 @@ def landed_fix_commits(repo):
     if not repo:
         return []
     fmt = "%H%x09%ct%x09%(trailers:key=Red-Unrelated,valueonly,separator=%x2C)%x09%(trailers:key=Fixes-Red,valueonly,separator=%x2C)%x09%s"
-    r = git(repo, "log", f"refs/remotes/{REMOTE}/main", "--since=3.days", f"--format={fmt}", check=False)
+    r = git(repo, "log", f"refs/remotes/{remote()}/main", "--since=3.days", f"--format={fmt}", check=False)
     out = []
     for line in (r.stdout if r.returncode == 0 else "").splitlines():
         sha, ct, unrelated, vals, subj = (line.split("\t", 4) + ["", "", "", "", ""])[:5]
@@ -1087,7 +1087,7 @@ def red_callable_evidence(d, snap, repo, o_r):
     if not repo or d.get("red_kind") != "outside" or d.get("workflow") not in ((snap or {}).get("callable_only") or ()):
         return None
     run = d.get("last_run") or {}
-    main = f"refs/remotes/{REMOTE}/main"
+    main = f"refs/remotes/{remote()}/main"
     meta = main_flow_meta(o_r)
     path = meta["paths"].get(d.get("workflow"))
     if not path or not run.get("headSha"):
@@ -1251,7 +1251,7 @@ def red_lease_ended(store, it, row, block, t):
         upd["diagnosis"] = h["outcome"][len("DIAGNOSED:"):].strip()[:600]
     wt = h.get("worktree")
     if wt and os.path.isdir(wt) and allowed_path(wt):  # its unlanded commits are never lost: the next fixer starts there
-        left = [c[:10] for c in cherry_landed(wt, f"refs/remotes/{REMOTE}/main", "HEAD")[1] or []]
+        left = [c[:10] for c in cherry_landed(wt, f"refs/remotes/{remote()}/main", "HEAD")[1] or []]
         if left:
             upd["prior_work"] = {"worktree": wt, "commits": left[:20]}
     if block:
@@ -1388,7 +1388,7 @@ def red_resolve_old(store, it, age, o_r, repo, t):
     "Report run timings" #38 (2026-10-29, a workflow_call-only workflow) was retired, re-opened by the next tick's same
     observation and retired again 811 times in 19 h, never offered, while ci-why showed it "offering" for 9 days."""
     d = it["data"]
-    path, txt = workflow_file_of(repo, f"{REMOTE}/main", d.get("workflow")) if repo else (None, "")
+    path, txt = workflow_file_of(repo, f"{remote()}/main", d.get("workflow")) if repo else (None, "")
     if path and "workflow_dispatch" in txt:
         line = red_verify_dispatch(o_r, repo, d.get("workflow"), "", (d.get("last_run") or {}).get("databaseId"))
         if line.startswith("dispatched"):
@@ -1549,7 +1549,7 @@ def red_verify_dispatch(o_r, repo, workflow, sha, run_id=None):
     """The red's workflow dispatched on main to verify a landed fix (no wait: the next tick reads its run), with the
     failing run's own inputs (run_id's) so the verifying run repeats it. Archive recording #823 (2026-10-29): dispatched
     with no inputs, its required `runs` input made Forgejo refuse it (HTTP 400), so no run could ever verify the red."""
-    path, txt = workflow_file_of(repo, f"{REMOTE}/main", workflow) if repo and workflow else (None, "")
+    path, txt = workflow_file_of(repo, f"{remote()}/main", workflow) if repo and workflow else (None, "")
     if not path:
         return f"FIX UNVERIFIED: no workflow file named {workflow!r} on main"
     if "workflow_dispatch" not in txt:

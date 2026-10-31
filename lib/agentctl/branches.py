@@ -218,7 +218,7 @@ def commit_on_main(repo, base):
     if not git_ok(repo, "cat-file", "-e", f"{base}^{{commit}}"):
         return False
     try:
-        return bool(merged_reason(repo, base, f"refs/remotes/{REMOTE}/main"))
+        return bool(merged_reason(repo, base, f"refs/remotes/{remote()}/main"))
     except (Exception, SystemExit):
         return None
 
@@ -326,7 +326,7 @@ def pinned_path():
 
 def pin_release_tag(repo):
     """The release the convergence pins live in: FIXTURE_RELEASE_TAG as main's convergence workflow sets it."""
-    r = git(repo, "show", f"refs/remotes/{REMOTE}/main:{CONVERGENCE_WORKFLOW}", check=False) if repo else None
+    r = git(repo, "show", f"refs/remotes/{remote()}/main:{CONVERGENCE_WORKFLOW}", check=False) if repo else None
     tags = re.findall(r"FIXTURE_RELEASE_TAG:\s*['\"]?([\w.-]+)", r.stdout if r and r.returncode == 0 else "")
     return tags[0] if tags else None
 
@@ -453,7 +453,7 @@ def predicts_main(repo, base, main_run, inputs, main_inputs):
         return False, "its commit is unknown here"
     if not git_ok(repo, "cat-file", "-e", f"{base}^{{commit}}"):
         return False, f"its commit {base[:9]} is not here"
-    if not merged_reason(repo, base, f"refs/remotes/{REMOTE}/main"):
+    if not merged_reason(repo, base, f"refs/remotes/{remote()}/main"):
         return False, f"its commit {base[:9]} is not on main"
     if not main_run:
         return False, "main runs no such workflow"
@@ -698,7 +698,7 @@ def orphan_branches(repo, o_r, dry, out, runs_for=None, store=None):
         st = store or Store()
     except (Exception, SystemExit):
         st = None
-    for line in git(repo, "ls-remote", "--heads", REMOTE, check=False).stdout.splitlines():
+    for line in git(repo, "ls-remote", "--heads", remote(), check=False).stdout.splitlines():
         sha, ref = line.split()
         b = ref.removeprefix("refs/heads/")
         if not tracked_branch(b, recorded) or b in SWEEP_KEEP_REMOTE:

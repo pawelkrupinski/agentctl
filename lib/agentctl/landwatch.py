@@ -21,7 +21,7 @@ def contains(repo, sha, head):
     if head == sha:
         return True
     if not git_ok(repo, "cat-file", "-e", f"{head}^{{commit}}"):
-        git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
+        git(repo, "fetch", "--quiet", remote(), "main", check=False)
     return git_ok(repo, "merge-base", "--is-ancestor", sha, head)
 
 

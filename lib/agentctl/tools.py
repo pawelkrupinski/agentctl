@@ -588,7 +588,7 @@ def check_range(repo, base, head, allow, max_foreign):
     if len(reverts) > max_foreign:
         problems.append(
             f"{len(reverts)} file(s) would be reverted/deleted back to an older main version (max {max_foreign}) -- "
-            "a squash onto a moved main? `git rebase forgejo/main` and re-check. "
+            f"a squash onto a moved main? `git rebase {remote()}/main` and re-check. "
             + ", ".join(f"{p} (undoes {c})" for p, c in reverts[:20])
         )
     return problems

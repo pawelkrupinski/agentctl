@@ -102,7 +102,7 @@ def remote_check(repo, e, base, head, mode, own=None):
         # the branch NAMES the hook's mode for precommit-check.yml: check/fast-<id> runs `--fast-only` (the batch's
         # combined check, as on the laptop), any other check/<id> `--checks-only`
         branch = f"check/{'fast-' if mode == '--fast-only' else ''}{e['id']}"
-        r = git(repo, "push", "--quiet", "--force", REMOTE, f"{head}:refs/heads/{branch}", check=False)
+        r = git(repo, "push", "--quiet", "--force", remote(), f"{head}:refs/heads/{branch}", check=False)
         if r.returncode != 0:
             return None, f"push of {branch} failed: {r.stderr.strip()[:300]}"
         rem = {"branch": branch, "head": e.get("head"), "base": base, "tip": head, "mode": mode, "run": None,
@@ -353,7 +353,7 @@ def assemble(repo, d, wt, entries, base):
         how, x = apply_entry(d, wt, e, base)
         if how == "conflict":
             queue_verdict(d, e, "rejected", f"NOT LANDED: main moved while it waited and the change no longer applies "
-                                            f"(conflicts in: {', '.join(x)}): rebase onto forgejo/main and land again")
+                                            f"(conflicts in: {', '.join(x)}): rebase onto {remote()}/main and land again")
             continue
         if how == "landed":  # all of it reached main meanwhile: LANDED, and nothing of it is pushed again
             already_landed(d, e, x)

@@ -456,7 +456,7 @@ ORPHAN_PER_PASS = 3
 
 def orphan_key(repo, wt):
     """The change's identity across rebases: its commits' patch-ids (not HEAD, which every rebase moves)."""
-    main = f"refs/remotes/{REMOTE}/main"
+    main = f"refs/remotes/{remote()}/main"
     plus = cherry_landed(wt, main, "HEAD")[1] or []  # landed by patch or by content: not the orphan's
     ids = []
     for sha in plus:  # bytes: a commit may carry binary content
@@ -707,7 +707,7 @@ def resolve_successor(by, repo, store=None):
         top = git(path, "rev-parse", "--show-toplevel", check=False).stdout.strip()
         if not top:
             raise ValueError(f"{by} is no git worktree")
-        _c, left = cherry_landed(top, f"refs/remotes/{REMOTE}/main", "HEAD")
+        _c, left = cherry_landed(top, f"refs/remotes/{remote()}/main", "HEAD")
         if not left:
             raise ValueError(f"{os.path.basename(top)} carries nothing that is not on main yet: mark it superseded once "
                              "its successor holds the work (commit it there first)")
@@ -797,7 +797,7 @@ def orphan_covered_by(wt, items):
 
 
 def orphan_escalate(repo, wt, name, commits, key, rec, verdict):
-    text = (f"UNLANDED ORPHAN: {wt.replace(HOME, '~')}: {len(commits)} commit(s) not on forgejo/main, its author "
+    text = (f"UNLANDED ORPHAN: {wt.replace(HOME, '~')}: {len(commits)} commit(s) not on {remote()}/main, its author "
             f"gone, still not landed after a {rec['actions'][-1]['what']} ({verdict or 'never landed'}) -- land it, "
             "hand it to an agent, or drop it")
     c = open_condition("UNLANDED_ORPHAN", text, run_probe("orphan_landed", {"worktree": wt, "key": key, "repo": repo}),

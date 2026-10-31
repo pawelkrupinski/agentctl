@@ -13,7 +13,7 @@
 #   forge_workflow_file / forge_release_asset / forge_run_url
 #                                       the calls whose paths or answers differ: the GitHub side answers in the
 #                                       Forgejo shape the callers were written against
-# Not here (Phase 3, W5b): the push remote (REMOTE), the landing identity and the store's auth.
+# The push remote is core's remote(); the landing identity on ci-runner is ghapp.py's (github-app).
 FORGE_DEFAULT = "forgejo"  # the forge agentctl reads runs, logs, artifacts and dispatches through: forgejo or github
 FORGES = ("forgejo", "github")
 GH_CLI = os.environ.get("AGENTCTL_GH_CLI", "gh")  # the GitHub CLI forge = github runs
@@ -48,6 +48,8 @@ def forge_env(o_r, env=None):
     env = dict(os.environ if env is None else env)
     if on_github():
         env.update(GH_PROMPT_DISABLED="1", GH_NO_UPDATE_NOTIFIER="1", NO_COLOR="1")
+        if ghapp_enabled():  # ci-runner: the repo's App installation token (ghapp.py), never a person's
+            env["GH_TOKEN"] = ghapp_token(o_r)
         return env
     env["GH_TOKEN"] = token(o_r)
     return env

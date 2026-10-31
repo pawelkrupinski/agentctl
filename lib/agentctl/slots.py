@@ -229,6 +229,12 @@ def tool_env():
     # the movies hook's known-red baseline: `<dir>/<main sha>`, written by baseline_failures (a hook without the mode
     # ignores it)
     env.setdefault("PREPUSH_BASELINE_DIR", reds_dir("baseline-out"))
+    if on_github():  # the movies hook's gate and tools read GitHub (scripts/forge-gh), as the lander App on ci-runner
+        env["KINOWO_FORGE"] = "github"
+        try:
+            env = forge_env(SHORT["movies"], env)
+        except (Exception, SystemExit) as e:
+            err(f"tool env: no GitHub App token for movies ({str(e)[:120]}); the hook reads without one")
     return env
 
 
@@ -452,7 +458,7 @@ def cmd_land(a):
               "your prepared branch with `~/bin/agentctl red owner-push <run> --note \"<what; which units restart>\"` and "
               "end with `BLOCKED ON OWNER: <its one-liner>`.")
         return 1
-    main_ref = f"refs/remotes/{REMOTE}/main"
+    main_ref = f"refs/remotes/{remote()}/main"
     env = tool_env()
     log_path = os.path.join(scratch(), f"agentctl-land-{os.path.basename(repo)}-{os.getpid()}.log")
 
@@ -499,7 +505,7 @@ def cmd_land(a):
                 rc = land_loop(repo, main_ref, sh, log_path, a)
             if rc != MAIN_MOVED:
                 break
-            err(f"{REMOTE}/main moved since the check: checking again on it, outside the lock")
+            err(f"{remote()}/main moved since the check: checking again on it, outside the lock")
     finally:
         if stash and not stash.restore():
             print(f"WARNING: local changes are in stash {stash.name}, not restored")
@@ -526,30 +532,30 @@ MAIN_MOVED = "main moved"  # land_loop: the check outside the lock no longer cov
 
 def sync(repo, main_ref, sh):
     """Fetch, rebase onto forgejo/main, the squash guard: (rc, None) when land is decided here, else (None, head)."""
-    r = sh("git", "fetch", "--quiet", REMOTE, "main")
+    r = sh("git", "fetch", "--quiet", remote(), "main")
     if r.returncode:  # a tunnel restart is seconds long: one more try before giving up
         err(f"git fetch failed ({r.stderr.strip()[:120]}); retrying once in 15 s")
         time.sleep(15)
-        r = sh("git", "fetch", "--quiet", REMOTE, "main")
+        r = sh("git", "fetch", "--quiet", remote(), "main")
     if r.returncode:
-        print(f"NOT LANDED: git fetch {REMOTE} main failed: {r.stderr.strip()[:300]} (tunnel? `agentctl env --check`)")
+        print(f"NOT LANDED: git fetch {remote()} main failed: {r.stderr.strip()[:300]} (tunnel? `agentctl env --check`)")
         return 1, None
     head = git(repo, "rev-parse", "HEAD").strip()
     if landed(repo, head, main_ref):
-        print(f"LANDED {head} (already on {REMOTE}/main)")
+        print(f"LANDED {head} (already on {remote()}/main)")
         return 0, None
-    r = sh("git", "rebase", "--quiet", f"{REMOTE}/main")
+    r = sh("git", "rebase", "--quiet", f"{remote()}/main")
     if r.returncode:
         conflicts = git(repo, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
         sh("git", "rebase", "--abort")
-        print(f"NOT LANDED: rebase onto {REMOTE}/main conflicts in: {', '.join(conflicts) or r.stderr.strip()[:300]}. "
-              "Resolve by hand (git rebase forgejo/main), then land again.")
+        print(f"NOT LANDED: rebase onto {remote()}/main conflicts in: {', '.join(conflicts) or r.stderr.strip()[:300]}. "
+              f"Resolve by hand (git rebase {remote()}/main), then land again.")
         return 1, None
     head = git(repo, "rev-parse", "HEAD").strip()
     if landed(repo, head, main_ref):
-        print(f"LANDED {head} (the rebase left nothing: already on {REMOTE}/main)")
+        print(f"LANDED {head} (the rebase left nothing: already on {remote()}/main)")
         return 0, None
-    problems = check_range(repo, f"{REMOTE}/main", head, [], int(env_num("AGENTCTL_MAX_FOREIGN", MAX_FOREIGN)))
+    problems = check_range(repo, f"{remote()}/main", head, [], int(env_num("AGENTCTL_MAX_FOREIGN", MAX_FOREIGN)))
     if problems:
         print("NOT LANDED: prepush-check refused:\n  " + "\n  ".join(problems))
         return 1, None
@@ -559,11 +565,11 @@ def sync(repo, main_ref, sh):
 def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False, cls="check", a=None):
     """The repo hook's dry run over forgejo/main..head, admitted by the governor as a check (`red` for a fix of a red
     run), watched for a stall: None when it passed, else land's rc (0: handed to the queue as infra)."""
-    err(f"checking {head[:10]}: {os.path.relpath(hook, repo)} {mode} {REMOTE}/main..HEAD (log: {log_path})")
+    err(f"checking {head[:10]}: {os.path.relpath(hook, repo)} {mode} {remote()}/main..HEAD (log: {log_path})")
     lock_note(f"checks of {head[:10]}")
     try:
         with check_slot(repo, f"land {os.path.basename(repo)} {head[:10]}", cls) as slot:
-            rc, out = run_watched([hook, mode, f"{REMOTE}/main..{head}"], repo, slot.env(tool_env()), log_path,
+            rc, out = run_watched([hook, mode, f"{remote()}/main..{head}"], repo, slot.env(tool_env()), log_path,
                                   "checks", sampler=slot.sample)
             slot.done(rc, out)
     except GovTimeout as ex:  # the machine stayed too busy for a check: a verdict, never a traceback
@@ -581,12 +587,12 @@ def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False
                 return network_requeue(repo, head, out, log_path, a)
             if known and not new:
                 checks = ", ".join(sorted(known))
-                print(f"KNOWN RED: {checks} fail{'s' if len(known) == 1 else ''} the same way on plain {REMOTE}/main "
+                print(f"KNOWN RED: {checks} fail{'s' if len(known) == 1 else ''} the same way on plain {remote()}/main "
                       f"(see `agentctl ci-why`, `Local checks`): not held against this change", flush=True)
                 if not rechecked:  # the hook again, now with main's baseline written: it passes known reds (stored)
                     return dry_run(repo, hook, head, log_path, f"{attempt}, against the known-red baseline", mode,
                                    rechecked=True, cls=cls, a=a)
-                return refused(repo, out, log_path, f"the pre-push checks failed only where plain {REMOTE}/main fails "
+                return refused(repo, out, log_path, f"the pre-push checks failed only where plain {remote()}/main fails "
                                f"too ({checks}; a known red, claimable as `local`), and the hook still held them "
                                "against it (no baseline mode, or no baseline for this main), so this change lands once "
                                "they are fixed on main (or with the fix)")
@@ -595,7 +601,7 @@ def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False
                       f"{', '.join(sorted(new))}", flush=True)
         return refused(repo, out, log_path, "the pre-push checks failed")
     if os.path.exists(reds_dir("local.json")):  # passing checks clear main's known red
-        main_ = git(repo, "rev-parse", f"{REMOTE}/main").strip()
+        main_ = git(repo, "rev-parse", f"{remote()}/main").strip()
         had = bool(local_red().get("checks"))
         note_local_red(main_, {}, check_passes(out))
         if had and not os.path.exists(reds_dir("local.json")):
@@ -641,7 +647,7 @@ def network_requeue(repo, head, out, log_path, a=None):
     """A dry run that failed on the network, on the change and on plain main: the change goes to the land queue as an
     infra re-queue (bounded by requeue_infra's STALLED condition). A repo without a queue: NOT LANDED, nothing recorded."""
     sig = network_failure(out)
-    why = f"{NETWORK_REASON} ({sig}), on the change and on plain {REMOTE}/main"
+    why = f"{NETWORK_REASON} ({sig}), on the change and on plain {remote()}/main"
     with open(log_path, "a") as f:
         f.write(f"=== infra {ts()} {head}: {why}\n")
     if not batching(repo):
@@ -649,8 +655,8 @@ def network_requeue(repo, head, out, log_path, a=None):
                        "land again once Forgejo answers")
     d, _clone, _wt = waiting_state(repo)
     if host_role() == "sync":  # ONE QUEUE: ci-runner's (its checks run there, its own network)
-        return submit_to_server(repo, d, change_fields(repo, f"{REMOTE}/main", head, a), note=f" after {why}")
-    e, _ahead = queue_change(d, change_fields(repo, f"{REMOTE}/main", head, a))
+        return submit_to_server(repo, d, change_fields(repo, f"{remote()}/main", head, a), note=f" after {why}")
+    e, _ahead = queue_change(d, change_fields(repo, f"{remote()}/main", head, a))
     submit_ref(repo, d, e)
     requeue_infra(d, e, why, reason=NETWORK_REASON, detail=out, repo=repo)
     e = read_record(os.path.join(d, "entries", f"{e['id']}.json")) or e
@@ -690,14 +696,14 @@ def baseline_failures(repo, hook, head, log_path):
     """The change's checks run on plain forgejo/main's tree: {check: lines} failing there (cached per main tree and
     change paths), or None when it could not be run."""
     import hashlib
-    main = git(repo, "rev-parse", f"{REMOTE}/main").strip()
-    paths = git(repo, "diff", "--name-only", f"{REMOTE}/main...{head}").split()
+    main = git(repo, "rev-parse", f"{remote()}/main").strip()
+    paths = git(repo, "diff", "--name-only", f"{remote()}/main...{head}").split()
     key = hashlib.sha1("\n".join([git(repo, "rev-parse", f"{main}^{{tree}}").strip()] + sorted(paths)).encode()).hexdigest()[:16]
     cache = reds_dir("baseline", f"{key}.json")
     rec = read_record(cache)
     if rec is not None:
         return {k: set(v) for k, v in rec["fails"].items()}
-    synth = git(repo, "commit-tree", f"{main}^{{tree}}", "-p", head, "-m", f"agentctl baseline: {REMOTE}/main {main[:10]}",
+    synth = git(repo, "commit-tree", f"{main}^{{tree}}", "-p", head, "-m", f"agentctl baseline: {remote()}/main {main[:10]}",
                 check=False)
     if synth.returncode != 0:
         return None
@@ -707,7 +713,7 @@ def baseline_failures(repo, hook, head, log_path):
     if git(repo, "worktree", "add", "-q", "--detach", mark_internal(tree), synth, check=False).returncode != 0:
         return None
     try:
-        err(f"the change's checks failed: running them on plain {REMOTE}/main {main[:10]} (the known-red baseline)")
+        err(f"the change's checks failed: running them on plain {remote()}/main {main[:10]} (the known-red baseline)")
         with check_slot(repo, f"baseline {main[:10]}") as slot:
             rc, out = run_watched([os.path.join(tree, os.path.relpath(hook, repo)), "--checks-only", f"{head}..{synth}"],
                                   tree, {**slot.env(tool_env()), "PREPUSH_BASELINE_DIR": ""}, log_path, "baseline",
@@ -718,7 +724,7 @@ def baseline_failures(repo, hook, head, log_path):
     if rc is None:
         return None
     if rc and network_failure(out):  # the network's failure, not main's: no baseline, no cache, no reds/local.json
-        err(f"the baseline on plain {REMOTE}/main {main[:10]} could not reach the network ({network_failure(out)})")
+        err(f"the baseline on plain {remote()}/main {main[:10]} could not reach the network ({network_failure(out)})")
         return NETWORK_SHAPED
     write_baseline_out(main, out)
     fails = check_failures(out) if rc else {}
@@ -840,7 +846,7 @@ def run_local_recheck(repo, main):
     else:
         empty = git(repo, "hash-object", "-t", "tree", "-w", "--stdin", input="").strip()
         base = git(repo, "commit-tree", empty, "-m", "agentctl recheck base").strip()
-    synth = git(repo, "commit-tree", f"{main}^{{tree}}", "-p", base, "-m", f"agentctl recheck: {REMOTE}/main {main[:10]}").strip()
+    synth = git(repo, "commit-tree", f"{main}^{{tree}}", "-p", base, "-m", f"agentctl recheck: {remote()}/main {main[:10]}").strip()
     _d, clone, _w = waiting_state(repo)
     for w in worktrees(repo)[1:]:  # a killed recheck's tree (its pid is gone)
         m = re.fullmatch(re.escape(clone) + r"-wt-recheck-(\d+)", w["worktree"])
@@ -852,7 +858,7 @@ def run_local_recheck(repo, main):
     log_path = reds_dir("local", "recheck.log")
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     try:
-        err(f"local checks were recorded on an older main: rechecking {', '.join(failing)} on {REMOTE}/main {main[:10]}")
+        err(f"local checks were recorded on an older main: rechecking {', '.join(failing)} on {remote()}/main {main[:10]}")
         with check_slot(repo, f"local recheck {main[:10]}", "check") as slot:
             env = {**slot.env(tool_env()), "PREPUSH_BASELINE_DIR": "",
                    "PREPUSH_SKIP": " ".join(c for c in HOOK_CHECKS if c not in failing)}
@@ -879,14 +885,14 @@ def apply_local_recheck(repo, main, rc, out):
     write_baseline_out(main, out)
     note_local_red(main, fails, passes)
     if os.path.exists(reds_dir("local.json")):
-        return [f"local checks still fail on {REMOTE}/main {main[:10]}: {', '.join(sorted(fails))}"]
+        return [f"local checks still fail on {remote()}/main {main[:10]}: {', '.join(sorted(fails))}"]
     return local_cleared(repo, main)
 
 
 def local_cleared(repo, main):
     """The local red is gone (its red item clears at the next tick, its holder told to stop): FIX OK to the inbox, the
     fixer's worktrees tidied."""
-    line = f"FIX OK: Local checks pass on {REMOTE}/main {main[:10]}; the red is cleared"
+    line = f"FIX OK: Local checks pass on {remote()}/main {main[:10]}; the red is cleared"
     inbox_write("red", line, [line], [], 0)
     return [line] + release_local_leftovers(repo)
 
@@ -934,7 +940,7 @@ def judge_against_baseline(repo, hook, head, out, log_path):
 
 
 def current_main(repo):
-    r = git(repo, "rev-parse", "--verify", "-q", f"{REMOTE}/main", check=False) if repo else None
+    r = git(repo, "rev-parse", "--verify", "-q", f"{remote()}/main", check=False) if repo else None
     return r.stdout.strip() if r is not None and r.returncode == 0 else None
 
 
@@ -976,7 +982,7 @@ def precheck(repo, main_ref, sh, log_path, a):
     # red, merge to waiting"): main red and the change one that must wait, without the gate (--checks-only), since it
     # will join `waiting` and land with the batch at green.
     reds = gate_reds(repo) if waiting_supported(repo) else set()
-    commits = waiting_commits(repo, f"{REMOTE}/main", head)
+    commits = waiting_commits(repo, f"{remote()}/main", head)
     joining = bool(reds) and must_wait(repo, commits, reds)
     rc = dry_run(repo, hook, head, log_path, "before the lock", mode="--checks-only" if joining else "--range",
                  cls=gov_class_of(repo, commits, reds), a=a)
@@ -993,7 +999,7 @@ def land_loop(repo, main_ref, sh, log_path, a):
         if rc is not None:
             return rc
         reds = gate_reds(repo) if waiting_supported(repo) else set()
-        if reds and must_wait(repo, waiting_commits(repo, f"{REMOTE}/main", head), reds):
+        if reds and must_wait(repo, waiting_commits(repo, f"{remote()}/main", head), reds):
             # checked already (before the lock, without the gate): only the cherry-pick onto `waiting` here
             return join(repo, main_ref, sh, log_path, a, head=head)
         hook = precheck_hook(repo)
@@ -1007,18 +1013,18 @@ def land_loop(repo, main_ref, sh, log_path, a):
             # hook run reuses it in seconds). A long hook inside `git push` holds the push's ssh connection idle, and a
             # tunnel drop kills it after "all clear" (2026-10-23); the area tests make long hooks the norm.
             rc = dry_run(repo, hook, head, log_path, attempt + 1,
-                         cls=gov_class_of(repo, waiting_commits(repo, f"{REMOTE}/main", head), reds), a=a)
+                         cls=gov_class_of(repo, waiting_commits(repo, f"{remote()}/main", head), reds), a=a)
             if rc is not None:
                 return rc
         a.prechecked = None  # a retry after a push race checks its new base again
         try:  # the runs the pushed commits claim to fix: the watch verifies them
-            a.fixes = sorted(fixes_of(repo, waiting_commits(repo, f"{REMOTE}/main", head)))
+            a.fixes = sorted(fixes_of(repo, waiting_commits(repo, f"{remote()}/main", head)))
         except Exception:
             a.fixes = []
-        err(f"pushing {head[:10]} to {REMOTE}/main (attempt {attempt + 1}/{LAND_RETRIES + 1}; hook log: {log_path})")
+        err(f"pushing {head[:10]} to {remote()}/main (attempt {attempt + 1}/{LAND_RETRIES + 1}; hook log: {log_path})")
         lock_note(f"push of {head[:10]}")
         a.pushed_at = time.time()
-        rc, out = run_watched(push_argv(REMOTE, head), repo, tool_env(), log_path, "push", **push_bounds())
+        rc, out = run_watched(push_argv(remote(), head), repo, tool_env(), log_path, "push", **push_bounds())
         if rc == 0:
             mark_gate_dirty()
         with open(log_path, "a") as f:
@@ -1026,13 +1032,13 @@ def land_loop(repo, main_ref, sh, log_path, a):
         if rc is None:
             return stalled("push (git push and its pre-push hook)", out, log_path)
         if rc == 0:
-            sh("git", "fetch", "--quiet", REMOTE, "main")
+            sh("git", "fetch", "--quiet", remote(), "main")
             how = landed(repo, head, main_ref)
             if how:
                 print(f"LANDED {head}" + ("" if how == "ancestor" else f" ({how})"), flush=True)
                 a.landed_sha = head
                 return 0
-            print(f"NOT LANDED: the push exited 0 but {head[:10]} is not on {REMOTE}/main after a fetch; see {log_path}")
+            print(f"NOT LANDED: the push exited 0 but {head[:10]} is not on {remote()}/main after a fetch; see {log_path}")
             return 1
         if RACE.search(out) and attempt < LAND_RETRIES:
             err(f"push race ({RACE.search(out).group(0)}): refetch, rebase, retry")

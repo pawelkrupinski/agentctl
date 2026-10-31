@@ -1352,6 +1352,8 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `forgejo_url` | `AGENTCTL_FORGEJO_URL` | - | - |
 | `gate_publish` | `AGENTCTL_GATE_PUBLISH` | `45` | - |
 | `gh_cli` | `AGENTCTL_GH_CLI` | `gh` | the GitHub CLI forge = github runs |
+| `github_api` | `AGENTCTL_GITHUB_API` | - | - |
+| `github_lander_repos` | `AGENTCTL_GITHUB_LANDER_REPOS` | - | - |
 | `gov_admit_max` | `AGENTCTL_GOV_ADMIT_MAX` | `7200` | a check waits this long for the governor at most |
 | `gov_budget_gb` | `AGENTCTL_GOV_BUDGET_GB` | `round(0.6 * ram_gb(` | - |
 | `gov_dir` | `AGENTCTL_GOV_DIR` | - | - |
@@ -1359,6 +1361,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `gov_free_need_gb` | `AGENTCTL_GOV_FREE_NEED_GB` | `2.5` | free memory a new JVM needs NOW (beyond the reserve); its heap grows into the budget's share later |
 | `gov_poll` | `AGENTCTL_GOV_POLL` | `2.0` | - |
 | `gov_reserve_gb` | `AGENTCTL_GOV_RESERVE_GB` | `1.0` | - |
+| `identity` | `AGENTCTL_IDENTITY` | - | - |
 | `inbox_dir` | `AGENTCTL_INBOX_DIR` | - | - |
 | `inbox_poll` | `AGENTCTL_INBOX_POLL` | `1.0` | seconds between stat()s of the inbox directory |
 | `infra_same_max` | `AGENTCTL_INFRA_SAME_MAX` | `1800` | - |
@@ -1406,6 +1409,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `red_skip_say` | `AGENTCTL_RED_SKIP_SAY` | `600` | s between the lines of another repo whose tick keeps failing for the same reason |
 | `red_starve` | `AGENTCTL_RED_STARVE` | `2700` | an offer waiting this long for a slot is STARVED |
 | `red_tick` | `AGENTCTL_RED_TICK` | `15` | seconds between the processor's red ticks |
+| `remote` | `AGENTCTL_REMOTE` | - | - |
 | `restart_check` | `AGENTCTL_RESTART_CHECK` | `30` | seconds between code-version checks |
 | `runners_page_cache` | `AGENTCTL_RUNNERS_PAGE_CACHE` | `f"{HOME}/.cache/ci-runners-page/last-good.json"` | - |
 | `sbt_reap` | `AGENTCTL_SBT_REAP` | - | the tests never reap this machine's servers |

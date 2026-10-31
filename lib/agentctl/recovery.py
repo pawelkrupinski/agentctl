@@ -108,11 +108,11 @@ def probe_git_fetch(a):
     """The remote's main can be read over git (what a land's `git fetch` needs)."""
     repo = a.get("repo") or movies_repo_path()
     try:
-        r = subprocess.run(["git", "-C", repo, "ls-remote", "--heads", REMOTE, "main"], capture_output=True, text=True,
+        r = subprocess.run(["git", "-C", repo, "ls-remote", "--heads", remote(), "main"], capture_output=True, text=True,
                            timeout=60, stdin=subprocess.DEVNULL, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
     except (OSError, subprocess.SubprocessError) as e:
-        return False, f"git ls-remote {REMOTE}: {str(e)[:120]}"
-    return r.returncode == 0 and "refs/heads/main" in r.stdout, f"git ls-remote {REMOTE} main: exit {r.returncode} " \
+        return False, f"git ls-remote {remote()}: {str(e)[:120]}"
+    return r.returncode == 0 and "refs/heads/main" in r.stdout, f"git ls-remote {remote()} main: exit {r.returncode} " \
         + (r.stderr.strip()[-120:] if r.returncode else "ok")
 
 
@@ -142,11 +142,11 @@ def probe_words(kind, a):
             "tcp": lambda: f"{a.get('host')}:{a.get('port')} accepts",
             "route": lambda: "the network is back", "tunnel": lambda: "the Forgejo tunnel answers",
             "gate_read": lambda: "the gate is read", "token": lambda: "the processor holds a token",
-            "git_fetch": lambda: f"git can read {REMOTE}/main",
+            "git_fetch": lambda: f"git can read {remote()}/main",
             "invariant": lambda: f"invariant {a.get('id')} holds", "waiting_ok": lambda: "a waiting round completes",
             "orphan_landed": lambda: "its commits are on main or somebody works in it",
             "change_source": lambda: f"change {a.get('id')} closes or is queued again",
-            "clone_health": lambda: f"{a.get('repo')} verifies and fetches {REMOTE}/main",
+            "clone_health": lambda: f"{a.get('repo')} verifies and fetches {remote()}/main",
             "infra_requeue": lambda: f"queue entry {a.get('eid')} gets past {a.get('reason')}",
             "batch_progress": lambda: "the waiting changes form a batch (or the gate turns red)",
             "red_read": lambda: f"ci-runner reads {', '.join(a.get('repos') or [])} (the agentctl-red-reader deploy)",

@@ -52,7 +52,7 @@ OWNER_ONLY_DENIED = ("Bash(*agentctl land*)", "Bash(*bin/deploy*)", "Bash(*forge
 def red_owner_rules(o_r, num):
     return (f" OWNER-ONLY REPO ({o_r}): this overrides every `land` above. NEVER `agentctl land`, never push, never "
             "deploy: a push to its main IS a deploy, and it is the owner's. Prepare the fix on your worktree's branch "
-            f"(rebased on forgejo/main, one commit per step, a `Fixes-Red: {num}` trailer, the repo's own checks run), "
+            f"(rebased on {remote()}/main, one commit per step, a `Fixes-Red: {num}` trailer, the repo's own checks run), "
             f"then `~/bin/agentctl red owner-push {num} --note \"<what it fixes; which units a deploy restarts>\"` from "
             "your worktree, and end with `BLOCKED ON OWNER: <the one-liner it printed>`.")
 
@@ -73,7 +73,7 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
     if o_r != RED_PRIMARY:  # the movies preamble is movies'; the repo's own CLAUDE.md is the first read here
         brief = f"{o_r}'s CLAUDE.md in your worktree"
     common = (who + (f"YOUR RED IS IN {o_r} (its per-repo rules are in the brief below). " if o_r != RED_PRIMARY else "")
-              + f"Read {brief} and ~/bin/AGENTCTL.md first. Your worktree is {wt} (branch off forgejo/main, already "
+              + f"Read {brief} and ~/bin/AGENTCTL.md first. Your worktree is {wt} (branch off {remote()}/main, already "
               "created): work only there. " + first + "Commits unlanded for "
               f"{FIXER_UNLANDED_NUDGE // 60} min get a RED-NUDGE.md in your worktree (read it, land, delete it), then an "
               f"escalation to the owner.\n\n=== THE FIXER BRIEF ({bpath.replace(HOME, '~')}) ===\n{btext}\n"
@@ -83,10 +83,10 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
                    "each treated a symptom. Read them (`git show`), find the ROOT CAUSE they all missed, and fix that; "
                    "another symptom fix is not a fix. ")
     if u.get("orphan"):  # an unlanded change whose author ended (orphan_duty)
-        common = common.replace(first, "").replace("(branch off forgejo/main, already created)", "(the ended author's own)")
-        task = (f"This worktree holds commits that are NOT on forgejo/main, and the agent that wrote them has ended. Its last "
-                f"verdict: {str(u.get('line') or 'none')[:400]!r}. Make it land: `git fetch forgejo && git rebase "
-                "forgejo/main` (never squash), fix what the checks reject (read the failing checks' output; never loosen a "
+        common = common.replace(first, "").replace(f"(branch off {remote()}/main, already created)", "(the ended author's own)")
+        task = (f"This worktree holds commits that are NOT on {remote()}/main, and the agent that wrote them has ended. Its last "
+                f"verdict: {str(u.get('line') or 'none')[:400]!r}. Make it land: `git fetch {remote()} && git rebase "
+                f"{remote()}/main` (never squash), fix what the checks reject (read the failing checks' output; never loosen a "
                 "test, never skip a check), then `~/bin/agentctl land --follow` in the foreground. If the change is wrong or "
                 "already on main in another form, say so. End at `LANDED <sha>`, or `GAVE UP: <why>`.")
     elif u.get("diagnosis"):  # a diagnose-only fixer found the cause: this one makes the durable fix
@@ -101,7 +101,7 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
                 "`GAVE UP: <why>`; if it needs the owner, `~/bin/agentctl red block " + str(num) + " --owner-cause <kind> --cmd \"<command>\"` (only for a cause outside the code that only the owner can act on: never a code red) "
                 "and end `BLOCKED ON OWNER: <command>`.")
     elif u["workflow"] == LOCAL_FLOW:
-        task = (f"The pre-push check `{u['job']}` FAILS ON PLAIN forgejo/main {str(u['run'].get('headSha'))[:10]} (no "
+        task = (f"The pre-push check `{u['job']}` FAILS ON PLAIN {remote()}/main {str(u['run'].get('headSha'))[:10]} (no "
                 f"change needed to see it; first failure line: {u.get('line', '')[:200]!r}). scripts/hooks/pre-push "
                 "documents each check; reproduce it in your worktree, root-cause and fix it (never loosen the check), "
                 "commit with a `Fixes-Red: local` trailer and land with `~/bin/agentctl land` in the foreground. End "
@@ -131,8 +131,8 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
                  "cannot recur (land the change that makes that so, e.g. its workflow fixed or removed), and say which.")
     pw = u.get("prior_work") or {}
     if pw.get("commits"):
-        task += (f" A PREVIOUS FIXER of this red left commits not on forgejo/main in {pw['worktree']} "
-                 f"({', '.join(pw['commits'])}): read them first (`git -C {pw['worktree']} log -p forgejo/main..HEAD`). If "
+        task += (f" A PREVIOUS FIXER of this red left commits not on {remote()}/main in {pw['worktree']} "
+                 f"({', '.join(pw['commits'])}): read them first (`git -C {pw['worktree']} log -p {remote()}/main..HEAD`). If "
                  "they are (part of) the fix, cherry-pick them into your worktree (never squash; keep their messages, add "
                  f"the `Fixes-Red: {num}` trailer) and land them; never leave them behind unexamined.")
     if u.get("predicts"):
@@ -224,8 +224,8 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
             n += 1
             wt, branch = f"{clone}-wt-red-{num}-{n}", f"red-{num}-{n}"
         git(repo, "worktree", "prune", check=False)
-        git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
-        r = git(repo, "worktree", "add", "-q", "-b", branch, wt, f"{REMOTE}/main", check=False)
+        git(repo, "fetch", "--quiet", remote(), "main", check=False)
+        r = git(repo, "worktree", "add", "-q", "-b", branch, wt, f"{remote()}/main", check=False)
         if r.returncode != 0:
             return False, dispatch_log(u, f"NOT DISPATCHED: git worktree add failed ({r.stderr.strip()[:160]})")
     rec = {"key": u.get("key"), "lease": lease, "epoch": (took or {}).get("epoch"),
@@ -262,7 +262,7 @@ def unlanded_commits(wt):
     landed), oldest first; [] when it is not a worktree."""
     if not wt or not os.path.isdir(wt):
         return []
-    shas = cherry_landed(wt, f"refs/remotes/{REMOTE}/main", "HEAD")[1] or []
+    shas = cherry_landed(wt, f"refs/remotes/{remote()}/main", "HEAD")[1] or []
     out = []
     for sha in shas:
         r = git(wt, "log", "-1", "--format=%at", sha, check=False)
@@ -298,8 +298,8 @@ def previous_fixer_tree(u):
     others = {w: c for w, c in found.items() if w != wt}
     num = (u.get("run") or {}).get("number")
     note = (f"CONTINUE, NEVER START OVER: {wt} is the previous fixer's worktree of this red, with {len(found[wt])} "
-            f"commit(s) not on forgejo/main ({', '.join(s[:10] for s, _ in found[wt][:10])}). Read them first (`git log -p "
-            f"forgejo/main..HEAD`), `git fetch forgejo && git rebase forgejo/main` (never squash), carry the fix on from "
+            f"commit(s) not on {remote()}/main ({', '.join(s[:10] for s, _ in found[wt][:10])}). Read them first (`git log -p "
+            f"{remote()}/main..HEAD`), `git fetch {remote()} && git rebase {remote()}/main` (never squash), carry the fix on from "
             f"there (add `Fixes-Red: {num}` to what you commit) and land each verified step with `~/bin/agentctl land`.")
     if others:
         note += " Other earlier fixers of it left unlanded commits too: " + "; ".join(
@@ -352,7 +352,7 @@ def fixers_land_watch(now_=None, force=False):
         shas = ", ".join(s_[:10] for s_, _ in left[:8])
         if t - oldest >= env_num("AGENTCTL_FIXER_UNLANDED_NUDGE", FIXER_UNLANDED_NUDGE) and not st.get("nudged_at"):
             with open(nudge, "w") as f:
-                f.write(f"LAND NOW (agentctl, {ts()}): {len(left)} commit(s) here are not on forgejo/main, the oldest "
+                f.write(f"LAND NOW (agentctl, {ts()}): {len(left)} commit(s) here are not on {remote()}/main, the oldest "
                         f"{mins} min old ({shas}). Land each verified step with `~/bin/agentctl land` (Fixes-Red lands on "
                         f"red); if one is not ready, say why in `agentctl red claim {r.get('run')} --note`. Delete this "
                         "file once they are queued.\n")
@@ -1237,8 +1237,8 @@ def red_revert(o_r, repo, u, culprit):
     wt, branch = f"{clone}-wt-revert-{num}", f"revert-{num}"
     if os.path.exists(wt) or git_ok(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"):
         return False, f"revert worktree {wt} or branch {branch} exists already"
-    git(repo, "fetch", "--quiet", REMOTE, "main", check=False)
-    if git(repo, "worktree", "add", "-q", "-b", branch, wt, f"{REMOTE}/main", check=False).returncode != 0:
+    git(repo, "fetch", "--quiet", remote(), "main", check=False)
+    if git(repo, "worktree", "add", "-q", "-b", branch, wt, f"{remote()}/main", check=False).returncode != 0:
         return False, "git worktree add failed"
     r = git(wt, "revert", "--no-edit", culprit, check=False)
     if r.returncode != 0:
@@ -1610,17 +1610,17 @@ def red_owner_push(store, o_r, target, note="", wt=None):
         return 2, [f"NOT FILED: {wt.replace(HOME, '~')} is no clone of {o_r} ({str(e)[:120]})"]
     if git(wt, "status", "--porcelain", "--untracked-files=no", check=False).stdout.strip():
         return 1, ["NOT FILED: the worktree has uncommitted changes: commit each step first"]
-    git(wt, "fetch", "--quiet", REMOTE, "main", check=False)
+    git(wt, "fetch", "--quiet", remote(), "main", check=False)
     ahead = unlanded_commits(wt)
     if not ahead:
-        return 1, [f"NOT FILED: nothing in {wt.replace(HOME, '~')} that is not on {REMOTE}/main"]
+        return 1, [f"NOT FILED: nothing in {wt.replace(HOME, '~')} that is not on {remote()}/main"]
     items = red_targets(store, o_r, target, create=False)
     if not items:
         return 1, [f"NOT FILED: #{target} names no open red of {o_r}"]
     head = git(wt, "rev-parse", "HEAD").strip()
     branch = git(wt, "rev-parse", "--abbrev-ref", "HEAD", check=False).stdout.strip() or head[:10]
     tw = wt.replace(HOME, "~")
-    cmd = f"git -C {tw} pull --rebase {REMOTE} main && git -C {tw} push {REMOTE} HEAD:main"
+    cmd = f"git -C {tw} pull --rebase {remote()} main && git -C {tw} push {remote()} HEAD:main"
     t = store.clock()
     what = ", ".join(red_what(it["data"]) for it in items)
     line = (f"RED OWNER PUSH: {what}: a fix is ready on {branch} ({len(ahead)} commit(s), "

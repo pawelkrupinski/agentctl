@@ -127,7 +127,18 @@ SHORT = {
 FORGEJO_GH = os.environ.get("AGENTCTL_FORGEJO_GH", f"{HOME}/bitcashier/infra/bin/forgejo-gh")
 API = os.environ.get("AGENTCTL_FORGEJO_API") or (os.environ["AGENTCTL_FORGEJO_URL"].rstrip("/") + "/api/v1"
                                                   if os.environ.get("AGENTCTL_FORGEJO_URL") else "http://localhost:3000/api/v1")
-REMOTE = "forgejo"
+REMOTES = {"forgejo": "forgejo", "github": "origin"}  # each forge's remote name in every clone (laptop and ci-runner)
+
+
+def remote():
+    """THE PUSH AND FETCH REMOTE of every clone agentctl lands, queues, waits, fixes and batches through (github-return
+    plan §4.1, W5b): $AGENTCTL_REMOTE, else the configured forge's (forge = forgejo -> `forgejo`, github -> `origin`).
+    Read at EVERY call, like forge(): a test or a config change applies at once."""
+    r = (os.environ.get("AGENTCTL_REMOTE") or "").strip()
+    if r:
+        return r
+    f = (os.environ.get("AGENTCTL_FORGE") or "forgejo").strip().lower()
+    return REMOTES.get(f, "forgejo")
 PROTECTED_BRANCHES = {"main", "master"}
 MAX_FOREIGN = 2  # files a push may revert to an older main before prepush-check refuses ($AGENTCTL_MAX_FOREIGN)
 ZERO = "0" * 40
@@ -302,7 +313,7 @@ def slug(repo_arg):
     if repo_arg in SHORT:
         return SHORT[repo_arg]
     if os.path.isdir(repo_arg):
-        url = git(repo_arg, "remote", "get-url", REMOTE).strip()
+        url = git(repo_arg, "remote", "get-url", remote()).strip()
         m = re.search(r"[:/]([^/:]+/[^/]+?)(?:\.git)?/?$", url)
         if not m:
             raise SystemExit(f"agentctl: cannot parse remote url of {repo_arg}")
@@ -459,6 +470,11 @@ def red_read_token(o_r):
     host has no reader token."""
     if token_ns(o_r) == "movies" or not on_ci_runner():
         return None
+    if on_github():  # forge = github: the reader App's installation token (ghapp.py), read through forge_env
+        if ghapp_enabled() and ghapp_config("reader"):
+            return None
+        raise NoReadAccess(f"agentctl: no read access to {o_r} (forge github needs the agentctl-reader App: "
+                           "AGENTCTL_IDENTITY=github-app and AGENTCTL_GITHUB_READER_APP_ID/_KEY_FILE)")
     path = red_read_token_file()
     tok = ""
     try:
@@ -566,7 +582,12 @@ def token_env(o_r, env=None):
     answers it, so it is handed the token now (in its environment, never on a command line or on disk). Without a token
     here the child gets none and says so itself."""
     env = dict(os.environ if env is None else env)
-    if on_github():  # gh reads GitHub with its own auth: no Forgejo token handed on
+    if on_github():  # gh reads GitHub with its own auth (on ci-runner the repo's App token): no Forgejo token
+        if ghapp_enabled():
+            try:
+                env["GH_TOKEN"] = ghapp_token(o_r)
+            except (Exception, SystemExit):
+                pass
         return env
     try:
         tok = token(o_r)

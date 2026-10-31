@@ -33,7 +33,7 @@ def main(argv=None):
                         description="Refuses when base...head touches a file outside the allowed set, or returns more than "
                         "--max-foreign (2) files to an older main version (the `reset --soft` squash onto a moved main). "
                         "movies' pre-push hook calls it with --hook; `agentctl land` runs it before every push. Exit 1 refused.")
-    pp.add_argument("--base", default=f"{REMOTE}/main")
+    pp.add_argument("--base", default=f"{remote()}/main")
     pp.add_argument("--head", default="HEAD")
     pp.add_argument("--allow", action="append")
     pp.add_argument("--max-foreign", type=int)
@@ -150,6 +150,14 @@ def main(argv=None):
     stu = stos.add_parser("use", help=f"the laptop's switch: every agentctl process here uses the store at URL "
                                       f"(default without one: {DEFAULT_STORE_URL}, ci-runner's through the tunnel)")
     stu.add_argument("url", help="http://localhost:3014 (through the tunnel)")
+    gha = sub.add_parser("github-app", help="ci-runner's GitHub App identity (AGENTCTL_IDENTITY=github-app): an "
+                         "installation token, or git's credential helper")
+    ghs = gha.add_subparsers(dest="gcmd", required=True)
+    ght = ghs.add_parser("token", help="print an installation token scoped to one repository")
+    ght.add_argument("--repo", required=True, help="owner/name")
+    ght.add_argument("--role", choices=GHAPP_ROLES, help="default: lander on its repos, reader elsewhere")
+    ghc = ghs.add_parser("credential", help="git's credential helper protocol (get only)")
+    ghc.add_argument("op", nargs="?", default="get")
     tk = sub.add_parser("tick", help="the processor: the reconciler's loop of ticks (`tick service install|uninstall|status`: "
                         "it as the launchd agent)")
     tk.add_argument("tcmd", nargs="?", choices=("service",), help="service: the launchd agent")
@@ -305,6 +313,6 @@ def main(argv=None):
     cf.add_argument("--write", action="store_true", help="doc: regenerate AGENTCTL.md's config reference")
     a = ap.parse_args(argv)
     handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": cmd_red, "config": cmd_config, "issue": cmd_issue, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
+               "red": cmd_red, "config": cmd_config, "issue": cmd_issue, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "github-app": cmd_github_app, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env, "db-q": cmd_db_q}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)
