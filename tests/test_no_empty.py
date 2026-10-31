@@ -43,6 +43,29 @@ class NoEmptyQueueTest(QueueTest):
         self.assertEqual(self.remote_log().count("a: one"), 1)
         self.assertEqual(empty_commits_on_main(self), [])
 
+    def test_a_change_main_has_already_landed_and_since_reverted_is_not_landed_again(self):
+        """Item 10's duplicate landings: the same patch, picked onto a main that reverted it, applies cleanly and
+        non-empty -- it is dropped by patch-id before the pick, LANDED via the first copy, and nothing is pushed."""
+        wa, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
+        wb, _ = self.agent("b", "web/src/main/A.scala", "a\n", msg="a: one, again")  # the same patch
+        e1, _ = self.queued(wa)
+        e2, _ = self.queued(wb)  # both queued before either lands
+        self.assertEqual(self.check(e1), 0)
+        first = sh(self.r.root, "git", "--git-dir", self.r.bare, "rev-parse", "main")
+        wr, _ = self.agent("r", "worker/src/main/R.scala", "r\n", msg="r: unrelated")
+        sh(wr, "git", "fetch", "-q", "origin")
+        sh(wr, "git", "reset", "-q", "--hard", "origin/main")
+        sh(wr, "git", "rm", "-q", "web/src/main/A.scala")
+        sh(wr, "git", "commit", "-q", "-m", "Revert a: one")
+        sh(wr, "git", "push", "-q", "origin", "HEAD:main")
+        n_pushes = len(self.pushed())
+        self.assertEqual(self.check(e2), 0)
+        self.assertEqual(len(self.pushed()), n_pushes, "the reverted change is not pushed again")
+        self.assertNotIn("a: one, again", self.remote_log())
+        e = self.entries()[self.key(e2)]
+        self.assertEqual(e["status"], "landed")
+        self.assertIn(first, [x for x in self.inbox() if x["kind"] == "LANDED" and x["cwd"] == wb][0]["verdict"])
+
     def test_another_worktree_is_not_superseded(self):
         wa, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         wb, _ = self.agent("b", "web/src/main/B.scala", "b\n")

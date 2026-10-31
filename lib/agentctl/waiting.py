@@ -172,14 +172,36 @@ def equivalent_on(repo, c, upstream, limit=400):
     return content_twin(repo, c, upstream)
 
 
+def upstream_patch_ids(repo, since_commit, upstream, limit=400):
+    """{patch-id: commit} of `upstream`'s non-merge commits since its merge-base with `since_commit`, in one pass."""
+    mb = git(repo, "merge-base", since_commit, upstream, check=False).stdout.strip()
+    rng = f"{mb}..{upstream}" if mb else upstream
+    log = git(repo, "log", "-p", "--no-merges", "--no-color", "--no-ext-diff", "-n", str(limit), "--format=commit %H",
+              rng, check=False).stdout
+    if not log.strip():
+        return {}
+    r = run_cmd(["git", "patch-id", "--stable"], cwd=repo, input=log)
+    return {pid: c for pid, c in (l.split() for l in r.stdout.splitlines() if len(l.split()) == 2)}
+
+
 def pick(wt, commits, dropped=None):
     """Cherry-pick commits onto wt's HEAD, one at a time: None, or the conflicting files (the pick aborted, HEAD back
     where it was). A commit already in HEAD's history (patch-equivalent), or empty once picked, is DROPPED, never kept
     as an empty commit: appended to `dropped` as (commit, the commit of HEAD carrying it, or None). A deliberate empty
-    commit (an Allow-Empty: trailer) is kept."""
+    commit (an Allow-Empty: trailer) is kept.
+
+    PATCH-EQUIVALENT COMMITS ARE DROPPED BEFORE THE PICK, not only when the pick comes out empty: a change whose patch
+    main carries already, but whose lines main has since changed back (a revert), applies cleanly and non-empty --
+    and landed the same change a second time (simplification-2026-10-31 item 10: three subjects landed 2-3 times)."""
     start = git(wt, "rev-parse", "HEAD").strip()
+    on_head = upstream_patch_ids(wt, commits[0], start) if commits else {}
     for c in commits:
         before = git(wt, "rev-parse", "HEAD").strip()
+        via = on_head.get(patch_id(wt, c) or "")
+        if via and not deliberate_empty(wt, c):
+            if dropped is not None:
+                dropped.append((c, via))
+            continue
         r = git(wt, "cherry-pick", "--allow-empty", "--keep-redundant-commits", c, check=False)
         if r.returncode != 0:
             files = git(wt, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
