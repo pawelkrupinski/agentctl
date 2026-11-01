@@ -5,7 +5,8 @@
   run download <id> -n <a> -D <dir> -> art-<id>-<a>.txt copied to <dir>/verdict.txt
   run list [--workflow W] [--branch B] ... -> runs.json filtered (W matches workflowName or the workflow file);
                                runs-<owner>_<repo>.json instead when it exists for -R <owner>/<repo>
-  api [-X M] [-H h] <path>   GET -> api-<path with /?&= as _>.json (GitHub's REST shapes); missing -> `HTTP 404`;
+  api [-X M] [-H h] [-i] <path>   GET -> api-<path with /?&= as _>.json (GitHub's REST shapes); missing -> `HTTP 404`;
+                             -i: headers first, an ETag per body, and a 304 for a matching If-None-Match;
                              any other method -> recorded (its --input body as `<pid> BODY <json>`), answers nothing
   api ... -R <repo>          refused, as gh does: `gh api` takes no -R (its path names the repo)
   release download <tag> -p <name> -O -  -> release-<tag>-<name>
@@ -40,11 +41,16 @@ if argv[:1] == ["api"]:
     if "-R" in argv or "--repo" in argv:
         sys.stderr.write("unknown shorthand flag: 'R' in -R\n")
         sys.exit(1)
-    method, rest, i = "GET", [], 1
+    method, rest, i, headers, include = "GET", [], 1, [], False
     while i < len(argv):
+        if argv[i] in ("-i", "--include"):
+            include, i = True, i + 1
+            continue
         if argv[i] in ("-X", "--method", "-H", "--header", "--input", "-f", "-F"):
             if argv[i] in ("-X", "--method"):
                 method = argv[i + 1]
+            if argv[i] in ("-H", "--header"):
+                headers.append(argv[i + 1])
             i += 2
             continue
         rest.append(argv[i])
@@ -58,7 +64,17 @@ if argv[:1] == ["api"]:
     if not os.path.exists(f):
         sys.stderr.write("gh: Not Found (HTTP 404)\n")
         sys.exit(1)
-    sys.stdout.write(open(f).read())
+    body = open(f).read()
+    if include:  # GitHub's conditional GET: an ETag per body; a matching If-None-Match is a 304 with no body
+        import hashlib
+        etag = 'W/"%s"' % hashlib.sha1(body.encode()).hexdigest()
+        if any(h.lower().startswith("if-none-match:") and h.split(":", 1)[1].strip() == etag for h in headers):
+            sys.stdout.write("HTTP/2.0 304 Not Modified\r\nEtag: %s\r\n\r\n" % etag)
+            sys.stderr.write("gh: HTTP 304\n")
+            sys.exit(1)
+        sys.stdout.write("HTTP/2.0 200 OK\r\nEtag: %s\r\n\r\n" % etag + body)
+        sys.exit(0)
+    sys.stdout.write(body)
     sys.exit(0)
 repo = None
 if "-R" in argv:

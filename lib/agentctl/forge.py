@@ -46,16 +46,49 @@ class ForgeHTTPError(RuntimeError):
     """`gh api` refused: its stderr (gh names the status there: `HTTP 404`)."""
 
 
+# CONDITIONAL GETS (simplification-2026-10-31 item 4): every agent and the runners page share one 5,000-an-hour budget,
+# and a GET GitHub answers 304 Not Modified to (If-None-Match: the ETag it sent last) costs none of it. Every GET keeps
+# its last answer and ETag under <cache>/etag/; an unchanged resource is read from there.
+def etag_path(url):
+    import hashlib
+    return state_root("etag", hashlib.sha1(url.encode()).hexdigest() + ".json")
+
+
+def _split_response(text):
+    """(status code, {header lower: value}, body) of `gh api -i` output."""
+    head, _, body = text.replace("\r\n", "\n").partition("\n\n")
+    lines = head.splitlines()
+    m = re.match(r"HTTP/\S+ (\d+)", lines[0]) if lines else None
+    hdrs = {k.strip().lower(): v.strip() for k, _, v in (l.partition(":") for l in lines[1:]) if k}
+    return (int(m.group(1)) if m else None), hdrs, body
+
+
 def _gh_api_once(o_r, method, path, params=None, body=None):
     url = f"repos/{o_r}/{path}" + ("?" + urllib.parse.urlencode(params) if params else "")
     argv = [GH_CLI, "api", "-X", method, "-H", "Accept: application/vnd.github+json", url]
+    cached = read_record(etag_path(url)) if method == "GET" else None
+    if method == "GET":
+        argv[2:2] = ["-i"] + (["-H", f"If-None-Match: {cached['etag']}"] if cached and cached.get("etag") else [])
     if body is not None:
         argv += ["--input", "-"]
     r = subprocess.run(argv, capture_output=True, text=True, env=forge_env(o_r), timeout=API_TIMEOUT,
                        input=json.dumps(body) if body is not None else None)
+    if method != "GET":
+        if r.returncode != 0:
+            raise ForgeHTTPError(f"gh api {method} {url}: {(r.stderr or r.stdout).strip()[:300]}")
+        return json.loads(r.stdout) if r.stdout.strip() else None
+    status, hdrs, text = _split_response(r.stdout)
+    if status == 304 and cached is not None:
+        return cached.get("body")
     if r.returncode != 0:
-        raise ForgeHTTPError(f"gh api {method} {url}: {(r.stderr or r.stdout).strip()[:300]}")
-    return json.loads(r.stdout) if r.stdout.strip() else None
+        raise ForgeHTTPError(f"gh api {method} {url}: {(r.stderr or text or r.stdout).strip()[:300]}")
+    out = json.loads(text) if text.strip() else None
+    if hdrs.get("etag"):
+        try:
+            write_json(etag_path(url), {"etag": hdrs["etag"], "body": out})
+        except OSError:
+            pass
+    return out
 
 
 # -- GitHub's runs as agentctl's run record

@@ -171,3 +171,37 @@ class GithubForgeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConditionalGetTest(GithubForgeTest):
+    """Item 4 (simplification-2026-10-31): a GET GitHub answers 304 costs no rate budget; the forge sends the ETag it
+    was last given and reads an unchanged resource from its own copy."""
+
+    def setUp(self):
+        super().setUp()
+        self.saved_root = os.environ.get("AGENTCTL_STATE_ROOT")
+        os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp.name, "state")
+
+    def tearDown(self):
+        if self.saved_root is None:
+            os.environ.pop("AGENTCTL_STATE_ROOT", None)
+        else:
+            os.environ["AGENTCTL_STATE_ROOT"] = self.saved_root
+        super().tearDown()
+
+    def test_an_unchanged_resource_is_read_again_with_its_etag_and_answered_from_the_copy(self):
+        self.gh_api(f"repos/{O_R}/actions/runs/7", {"id": 7, "status": "completed"})
+        self.assertEqual(A.api(O_R, "GET", "actions/runs/7"), {"id": 7, "status": "completed"})
+        self.assertEqual(A.api(O_R, "GET", "actions/runs/7"), {"id": 7, "status": "completed"})
+        second = self.calls()[-1]
+        self.assertIn("If-None-Match: W/", second, "the second read is conditional")
+
+    def test_a_changed_resource_is_read_afresh(self):
+        self.gh_api(f"repos/{O_R}/actions/runs/7", {"id": 7, "status": "in_progress"})
+        A.api(O_R, "GET", "actions/runs/7")
+        self.gh_api(f"repos/{O_R}/actions/runs/7", {"id": 7, "status": "completed"})
+        self.assertEqual(A.api(O_R, "GET", "actions/runs/7")["status"], "completed")
+
+    def test_a_missing_resource_still_fails(self):
+        with self.assertRaises(A.ForgeHTTPError):
+            A.api(O_R, "GET", "actions/runs/404")
