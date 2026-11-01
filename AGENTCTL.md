@@ -139,6 +139,9 @@ moves it forward; nothing is a detached process that can die with its state in i
   PROTOTYPE / WIP / DO NOT LAND (any case), or a commit carries a `Do-Not-Land:` trailer (`do_not_land`, tools.py).
 - **One push to main at a time.** Every push to main happens under the `land/<repo>` lease, after the pushed tip's own
   checks passed on the base it is pushed onto.
+- **A dead blame revert never lands (2026-11-02).** A revert blame WITHDREW or saw REFUTED (`Reverts-Change: <change>`
+  for a change marked not the culprit), and the worktree blame made for it, are refused by land, the server's
+  submission, the queue's checker, a recovery re-land and orphan duty (`blame_land_refusal`, blame.py). See "blame".
 - **Every long wait is OWNED**: `wait` holds one flock per target under `~/.cache/agentctl/owners/`
   (`$AGENTCTL_OWNERS_DIR`), freed by the kernel when the process dies, with a record (owner, pid, start time, argv,
   cwd, code version, the CI runs it started). A second `wait` on the same target attaches; the runs a dead owner
@@ -467,6 +470,7 @@ agentctl red beat <run> --note "<what>"       # renew your lease by hand (a new 
 agentctl red release <run> [--any]
 agentctl red status [-v]                       # every red: its state, holder or offer, deadline
 agentctl red dispatch <run> [--force]          # the red's offer at top priority: the dispatcher takes it now
+agentctl red unblame <run> --why "<why>"       # WITHDRAW its blame (culprit wrongly decided, revert unlanded): see "blame"
 agentctl red auto [on|off|status]              # the processor's automatic dispatch
 agentctl red owner-push <run> [--note "<what; which units restart>"]
                                                # an owner-only repo's (infra's) fixer files its prepared branch
@@ -845,6 +849,19 @@ land`: a gate fix, it lands while main is red and is never throttled. `RED REVER
 <change>` on the status line. If it does not clear the red (`FIX FAILED` on a commit carrying `Reverts-Change:`), the
 culprit was wrong: `RED REVERT REFUTED`, the revived lander is stopped, the revert is reverted (`Relands-Change:`,
 `RED RELAND`; it lands at the next green, a production change) before the normal fixer starts.
+
+**Withdrawn or refuted: the revert is dead** (2026-11-02: #629's wrong revert was withdrawn by hand, yet maintain's
+orphan duty found its leftover `movies-wt-revert-629`, "author gone", and submitted it -- re-queued, checking, landing on
+red through its `Fixes-Red: 629`). `agentctl red unblame <run> --why "..."` (`blame_withdraw`) withdraws a confirmed
+blame whose revert has not landed: the blame becomes undetermined with the revert under `withdrawn`, the revived
+lander's lease is stopped, the red goes to the normal fixer, and the revert worktree is REMOVED (only when every commit
+in it is blame's revert, its tree clean and nobody in it; its open queue entries cancelled; `agentctl-deleted.log`). A
+landed revert is never withdrawn (that is a refutation: FIX FAILED relands it). `blame_land_refusal` reads every red's
+blame (`withdrawn`, state `refuted`) and refuses a commit carrying `Reverts-Change: <change>` for such a change -- unless a
+confirmed blame of a newer red reverts it again under its own `Fixes-Red:` -- and anything from the worktree blame made
+for it. It is asked by `land` (on the laptop only with a token already in hand: a land never runs `secrets`), the
+server's submission, the queue's checker (a revert queued before its withdrawal is rejected), a recovery re-land and
+orphan duty, which never submits such a worktree and removes it when it holds only blame's reverts.
 
 **4. The lander revived** (`LANDER REVIVED` in the inbox, `lander · <change> · #<run>` in `claude agents`), under the
 red's lease (`tier: lander` in its meta), the same way fixers are launched (wrapper, lease, caffeinate, the workspace
@@ -1319,6 +1336,10 @@ agentctl cleanup (DRY RUN); log: /…/scratchpad/agentctl-deleted.log
 A worktree with commits not on <remote>/main whose author is gone (no live lease, no process in it, idle) is SUBMITTED
 ONCE by the tick, whatever its last verdict: it becomes a queued change like any other (its checks then decide; a
 rejection is its red's to rescue), and an `UNLANDED ORPHAN` inbox entry names it. Nothing fixes an orphan on its own.
+
+**A dead blame revert is no orphan** (2026-11-02, revert-629): a worktree whose commits are a withdrawn or refuted
+blame revert, or that carry `Reverts-Change:` for a change blame marked not the culprit, is never submitted (`orphan
+<name>: not submitted (...)`); one holding only blame's reverts is removed (logged), any other is kept for a person.
 
 **Superseded work.** When a worktree's work was carried into another change by hand (rebased with real conflict
 resolution, so landed-by-content cannot see it -- movies-wt-ci-1/2/3 and -review went into ci-5 on 2026-10-30 and
