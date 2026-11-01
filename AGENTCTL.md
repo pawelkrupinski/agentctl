@@ -1358,6 +1358,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `infra_same_max` | `AGENTCTL_INFRA_SAME_MAX` | `1800` | - |
 | `internal_trees_dir` | `AGENTCTL_INTERNAL_TREES_DIR` | - | - |
 | `landed_look` | `AGENTCTL_LANDED_LOOK` | `600` | - |
+| `lander_landed_every` | `AGENTCTL_LANDER_LANDED_EVERY` | `300` | s between the tick's notes of landed changes' commits on main |
 | `land_lease_max` | `AGENTCTL_LAND_LEASE_MAX` | `2700` | the design's 300 s once checks no longer run in the push's hook under the lease (step 6) |
 | `land_lease_ttl` | `AGENTCTL_LAND_LEASE_TTL` | `120` | - |
 | `land_lock_timeout` | `AGENTCTL_LAND_LOCK_TIMEOUT` | `14400` | - |

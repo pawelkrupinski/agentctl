@@ -1076,6 +1076,11 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
     except (Exception, SystemExit) as e:
         err(f"red tick: the red model migration failed ({str(e)[:160]}); tried again next tick")
     facts = facts if facts is not None else red_fix_facts(repo, store)
+    if primary:
+        try:  # THE LANDER (lander.py): each landed change's commits on main, noted while its keys still find them
+            acts += lander_note_landed(store, repo, o_r, t)
+        except (Exception, SystemExit) as e:
+            err(f"red tick: noting the landed changes' commits failed ({str(e)[:160]})")
     active, settled = red_active_of(store, o_r), None
     for key, ob in (obs or {}).items():
         try:

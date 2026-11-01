@@ -606,7 +606,8 @@ def queue_change(d, fields, entry_id=None):
     return e, max(len(queued_entries(d)) - 1, 0)
 
 
-SUBMIT_FIELDS = ("worktree", "branch", "head", "commits", "fixes", "keep_worktree", "claude_pid", "session", "base", "host")
+SUBMIT_FIELDS = ("worktree", "branch", "head", "commits", "fixes", "keep_worktree", "claude_pid", "session", "base", "host",
+                 "lander", "commit_keys")  # lander.py: who landed it, and its commits' keys
 
 
 def submit_change(body, repo=None):

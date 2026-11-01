@@ -1009,6 +1009,10 @@ def land_loop(repo, main_ref, sh, log_path, a):
             a.fixes = sorted(fixes_of(repo, waiting_commits(repo, f"{remote()}/main", head)))
         except Exception:
             a.fixes = []
+        try:  # THE LANDER (lander.py): what this push carries, keyed so the commits are found on main again
+            a.lander_keys = commit_keys(repo, f"{remote()}/main", head)
+        except Exception:
+            a.lander_keys = []
         err(f"pushing {head[:10]} to {remote()}/main (attempt {attempt + 1}/{LAND_RETRIES + 1}; hook log: {log_path})")
         lock_note(f"push of {head[:10]}")
         a.pushed_at = time.time()
@@ -1025,6 +1029,7 @@ def land_loop(repo, main_ref, sh, log_path, a):
             if how:
                 print(f"LANDED {head}" + ("" if how == "ancestor" else f" ({how})"), flush=True)
                 a.landed_sha = head
+                lander_note_direct(repo, head, getattr(a, "lander_keys", None))
                 return 0
             print(f"NOT LANDED: the push exited 0 but {head[:10]} is not on {remote()}/main after a fetch; see {log_path}")
             return 1

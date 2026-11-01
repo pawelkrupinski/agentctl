@@ -240,7 +240,9 @@ def change_fields(repo, main_ref, head, a):
             "fixes": sorted(fixes_of(repo, commits)), "keep_worktree": bool(getattr(a, "keep_worktree", False)),
             "claude_pid": int(os.environ["CLAUDE_PID"]) if (os.environ.get("CLAUDE_PID") or "").isdigit() else None,
             "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or None,
-            "base": git(repo, "rev-parse", main_ref).strip(), "host": os.uname().nodename}
+            "base": git(repo, "rev-parse", main_ref).strip(), "host": os.uname().nodename,
+            # THE LANDER (lander.py): who landed it, and each commit's keys to find it on main after the rebase
+            "lander": lander_record(repo), "commit_keys": commit_keys(repo, main_ref, head)}
 
 
 # THE LAPTOP'S LAND NEEDS NO VAULT (2026-10-31: agents' `land` still died NoToken -- a `Fixes-Red:` trailer made
@@ -367,7 +369,7 @@ def set_change(d, e, to, data=None, event=None, store=None, **fields):
     """THE writer of a change's state: its item (transition + event) and its entry's status, together."""
     st = store or Store()
     cur = st.put_item("change", e["id"], ENTRY_STATE.get(e.get("status"), "queued"),
-                      {"worktree": e.get("worktree"), "head": e.get("head")})
+                      {"worktree": e.get("worktree"), "head": e.get("head"), **lander_fields(e)})
     try:
         if not machine_state("change", cur["state"]).terminal:
             st.transition("change", e["id"], to, cur["version"], data=data, event=event)
@@ -790,7 +792,7 @@ def tick_changes(repo, d, now_=None):
     did = []
     for e in [e for e in todo if e["id"] in newest]:
         it = st.put_item("change", e["id"], ENTRY_STATE.get(e["status"], "queued"),
-                         {"worktree": e.get("worktree"), "head": e.get("head")})
+                         {"worktree": e.get("worktree"), "head": e.get("head"), **lander_fields(e)})
         state = it["state"]
         if state == "pushing":  # a tick that died mid-push: verified next, never pushed twice blindly
             set_change(d, e, "checked", event={"text": f"{e['id']}: its push was interrupted: verified, then tried again"})
