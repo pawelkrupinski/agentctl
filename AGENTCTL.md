@@ -1318,6 +1318,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `brief` | `AGENTCTL_BRIEF` | `~/bin/briefs/movies-agent-preamble.md` | - |
 | `brief_src` | `AGENTCTL_BRIEF_SRC` | - | a file to use instead of the tracked docs/fixer-brief.md in fixers' prompts (an override): none by default |
 | `cache_expire_days` | `AGENTCTL_CACHE_EXPIRE_DAYS` | `7` | - |
+| `caffeinate` | `AGENTCTL_CAFFEINATE` | `/usr/bin/caffeinate` | - |
 | `checks_dir` | `AGENTCTL_CHECKS_DIR` | - | - |
 | `check_lease_ttl` | `AGENTCTL_CHECK_LEASE_TTL` | `600` | - |
 | `check_trees` | `AGENTCTL_CHECK_TREES` | `3` | check trees, so at most this many queued changes are checked at once |
@@ -1413,6 +1414,8 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `sbt_reap` | `AGENTCTL_SBT_REAP` | - | the tests never reap this machine's servers |
 | `sbt_stall_min` | `AGENTCTL_SBT_STALL_MIN` | `20` | - |
 | `scratch` | `AGENTCTL_SCRATCH` | - | - |
+| `sleep_log` | `AGENTCTL_SLEEP_LOG` | - | - |
+| `sleep_min` | `AGENTCTL_SLEEP_MIN` | `120` | s of sleep inside a lapse's window that count as "the host was asleep" |
 | `sock_dir` | `AGENTCTL_SOCK_DIR` | - | short: a socket path is <= 104 bytes |
 | `stall_cpu_seconds` | `AGENTCTL_STALL_CPU_SECONDS` | `1.0` | CPU that counts as progress per window: a watchdog's polls are not work |
 | `state_file` | `AGENTCTL_STATE_FILE` | - | - |

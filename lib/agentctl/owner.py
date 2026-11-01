@@ -211,6 +211,7 @@ def red_owner(a):
         return 0
     rec.update(pid=me, process_start=process_start(me))
     write_json(path, rec)
+    keep_awake()  # the laptop must not idle-sleep past OWNER_TTL under a held heartbeat (host_slept)
     cli = claude_cli()
     env = {k: v for k, v in os.environ.items() if k not in FIXER_IDENTITY_ENV and k != "AGENTCTL_DETACHED"}  # an agent
     every = env_num("AGENTCTL_RED_RENEW", RED_RENEW_EVERY)

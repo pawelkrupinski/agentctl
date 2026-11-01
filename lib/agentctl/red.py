@@ -1611,14 +1611,86 @@ RED_CRASH_NEUTRAL = re.compile(r"(RELEASED|STOPPED: the fixer's wrapper was stop
 CRASH_LOOP_CAUSE = "fixer-crash-loop"
 
 
+# THE HOST SLEEPING IS NO CRASH (2026-11-01, core/movies main #2046 `fixer-crash-loop`: both family owners' wrappers froze
+# in a macOS maintenance sleep -- 03:05:44 to 03:21:11, longer than OWNER_TTL -- so their heartbeat leases lapsed
+# ("lease expired"), the wrappers woke to "heartbeat lease was lost" and exited, the dispatcher restarted them, and three
+# such cycles blocked the red on the owner with the harness' "cause" being nothing but a closed lid). A wrapper now holds
+# a `caffeinate -i` assertion for its life (keep_awake), and a lease lapse that overlaps a host sleep is neutral to the
+# breaker (host_slept) and says so in the evidence.
+LEASE_LAPSE = re.compile(r"(lease expired|ORPHANED|STOPPED: the (red's|owner's) (heartbeat )?lease was lost)")
+SLEEP_MIN = 120      # s of sleep inside a lapse's window that count as "the host was asleep" ($AGENTCTL_SLEEP_MIN)
+_SLEEP_CACHE = [0.0, []]
+
+
+def keep_awake(pid=None):
+    """Hold a no-idle-sleep assertion for `pid` (default: this process) so a held lease is never starved by the laptop's
+    maintenance sleep. Best effort: the Popen, or None (no caffeinate, $AGENTCTL_CAFFEINATE empty)."""
+    exe = os.environ.get("AGENTCTL_CAFFEINATE", "/usr/bin/caffeinate")
+    if not exe or not os.access(exe, os.X_OK):
+        return None
+    try:
+        return spawn_detached([exe, "-i", "-w", str(pid or os.getpid())], stdin=subprocess.DEVNULL,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        return None
+
+
+def sleep_intervals():
+    """[(start, end)] epoch seconds of the host's recent sleeps, from `pmset -g log` (or $AGENTCTL_SLEEP_LOG, a file in
+    its format). [] when unreadable. Cached for a minute."""
+    now = time.time()
+    if now - _SLEEP_CACHE[0] < 60 and not os.environ.get("AGENTCTL_SLEEP_LOG"):
+        return _SLEEP_CACHE[1]
+    try:
+        path = os.environ.get("AGENTCTL_SLEEP_LOG")
+        if path:
+            text = open(path).read()
+        else:
+            text = subprocess.run(["pmset", "-g", "log"], capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        text = ""
+    out, start = [], None
+    for m in re.finditer(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d{4}) (Sleep|Wake|DarkWake)\b", text, re.M):
+        try:
+            at = dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S %z").timestamp()
+        except ValueError:
+            continue
+        if m.group(2) == "Sleep":
+            start = at
+        elif start is not None:
+            out.append((start, at))
+            start = None
+    if not os.environ.get("AGENTCTL_SLEEP_LOG"):
+        _SLEEP_CACHE[:] = [now, out]
+    return out
+
+
+def host_slept(end, window):
+    """Seconds the host slept in [end - window, end] (end: epoch seconds)."""
+    lo = end - window
+    return sum(max(0.0, min(b, end) - max(a, lo)) for a, b in sleep_intervals())
+
+
+def lapse_in_sleep(h):
+    """True for a launch whose lease merely lapsed (no work seen) while the host slept: not a crash."""
+    o = str(h.get("outcome") or "")
+    if not LEASE_LAPSE.search(o):
+        return False
+    try:
+        end = dt.datetime.strptime(str(h.get("at")), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp()
+    except ValueError:
+        return False
+    return host_slept(end, OWNER_TTL + 300) >= env_num("AGENTCTL_SLEEP_MIN", SLEEP_MIN)
+
+
 def red_crash_streak(d):
     """The newest fixer launches (newest first) since the red's last crash-loop step that ended with no result -- up to
-    the first launch (or fix) with one."""
+    the first launch (or fix) with one. A lease lapse while the host slept is no launch (host_slept)."""
     hist = d.get("history") or []
     out = []
     for h in reversed(hist[int((d.get("crash_loop") or {}).get("mark") or 0):]):
         o = str(h.get("outcome") or "")
-        if RED_CRASH_NEUTRAL.match(o):
+        if RED_CRASH_NEUTRAL.match(o) or (h.get("dispatched") and lapse_in_sleep(h)):
             continue
         if not h.get("dispatched") or not RED_CRASH_OUTCOME.match(o):
             break

@@ -586,6 +586,7 @@ def red_fixer(a):
     lease by its progress every RED_RENEW_EVERY s, `claude stop` it when the lease is lost (RED-STOP.md), release the
     lease with the verdict from the session's final answer."""
     rec = read_record(a.record)
+    keep_awake()  # the laptop must not idle-sleep past the lease's TTL while the fixer holds it (host_slept)
     num, wt = rec["run"], rec["worktree"]
     session = rec.get("session")  # known once `claude agents` lists the session (--bg picks its id)
     me = os.getpid()

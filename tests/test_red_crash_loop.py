@@ -196,3 +196,40 @@ class RecoveryTest(CrashLoopBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HostSleepTest(CrashLoopBase):
+    """2026-11-01 main #2046: both owners' wrappers froze in a laptop maintenance sleep longer than OWNER_TTL, their leases
+    lapsed ("lease expired"), and the breaker blocked the red as a `fixer-crash-loop`. A lapse over a sleep is no crash."""
+    SLEEP_LOG = ("2026-11-01 03:03:28 +0100 DarkWake            DarkWake from Deep Idle\n"
+                 "2026-11-01 03:05:44 +0100 Sleep               Entering Sleep state due to 'Maintenance Sleep'\n"
+                 "2026-11-01 03:21:11 +0100 DarkWake            DarkWake from Deep Idle\n")
+
+    def setUp(self):
+        super().setUp()
+        path = os.path.join(self.tmp.name, "pmset.log")
+        with open(path, "w") as f:
+            f.write(self.SLEEP_LOG)
+        os.environ["AGENTCTL_SLEEP_LOG"] = path
+        self.addCleanup(os.environ.pop, "AGENTCTL_SLEEP_LOG", None)
+
+    def test_a_lease_that_lapsed_over_a_host_sleep_is_no_launch_a_lapse_awake_is(self):
+        slept = {"dispatched": True, "outcome": "lease expired", "at": "2026-11-01T02:20:21Z"}
+        awake = {"dispatched": True, "outcome": "lease expired", "at": "2026-11-01T01:23:00Z"}
+        self.assertEqual(len(A.red_crash_streak({"history": [slept, slept, slept]})), 0)
+        self.assertEqual(len(A.red_crash_streak({"history": [awake, slept, awake]})), 2)
+        crash = {"dispatched": True, "outcome": CRASH, "at": "2026-11-01T02:20:21Z"}
+        self.assertEqual(len(A.red_crash_streak({"history": [crash]})), 1, "only a lapse is excused, never a crash")
+
+    def test_the_wrappers_hold_a_no_idle_sleep_assertion_for_their_life(self):
+        out = os.path.join(self.tmp.name, "caff.argv")
+        fake = os.path.join(self.tmp.name, "caffeinate")
+        with open(fake, "w") as f:
+            f.write(f"#!/bin/sh\necho \"$@\" > {out}\n")
+        os.chmod(fake, 0o755)
+        os.environ["AGENTCTL_CAFFEINATE"] = fake
+        self.addCleanup(os.environ.pop, "AGENTCTL_CAFFEINATE", None)
+        A.keep_awake().wait(10)
+        self.assertEqual(open(out).read().split(), ["-i", "-w", str(os.getpid())])
+        os.environ["AGENTCTL_CAFFEINATE"] = ""
+        self.assertIsNone(A.keep_awake())
