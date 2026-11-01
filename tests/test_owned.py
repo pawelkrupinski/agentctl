@@ -213,3 +213,49 @@ class OwnedTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CodeRevTest(unittest.TestCase):
+    """The status line names the git revision the reconciler runs (2026-11-01: `code d1677f40` named no commit, and a
+    running fix looked like one never picked up)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def tool_in(self, root):
+        os.makedirs(os.path.join(root, "lib", "agentctl"), exist_ok=True)
+        with open(os.path.join(root, "agentctl"), "w") as f:
+            f.write("#!/usr/bin/env python3\n")
+        with open(os.path.join(root, "lib", "agentctl", "core.py"), "w") as f:
+            f.write("x = 1\n")
+        return os.path.join(root, "agentctl")
+
+    def test_ci_runners_export_is_named_by_its_rev_through_the_current_symlink(self):
+        rev = "4d0fc921c9e6fbc329bba40ba2d3c8ca79b9151f"
+        self.tool_in(os.path.join(self.tmp.name, rev))
+        os.symlink(rev, os.path.join(self.tmp.name, "current"))
+        self.assertEqual(A.code_rev(os.path.join(self.tmp.name, "current", "agentctl")), "4d0fc921c9e6")
+
+    def test_a_checkout_names_its_head_and_dirty_code(self):
+        root = os.path.join(self.tmp.name, "bin")
+        tool = self.tool_in(root)
+        g = lambda *a: subprocess.run(["git", "-C", root, *a], capture_output=True, text=True, check=True).stdout.strip()
+        g("init", "-q")
+        g("add", "-A")
+        g("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x")
+        head = g("rev-parse", "--short=12", "HEAD")
+        self.assertEqual(A.code_rev(tool), head)
+        with open(os.path.join(root, "notes.txt"), "w") as f:
+            f.write("not code\n")
+        self.assertEqual(A.code_rev(tool), head)
+        with open(os.path.join(root, "lib", "agentctl", "core.py"), "a") as f:
+            f.write("y = 2\n")
+        self.assertEqual(A.code_rev(tool), head + "+dirty")
+        self.assertEqual(A.code_rev(os.path.join(self.tmp.name, "nowhere", "agentctl")), "")
+
+    def test_the_status_says_the_rev_then_the_hash(self):
+        self.assertEqual(A.code_text({"code": "d1677f40615fe544", "rev": "4d0fc921c9e6"}), "4d0fc921c9e6 (code d1677f40)")
+        self.assertEqual(A.code_text({"code": "d1677f40615fe544"}), "d1677f40615fe544")

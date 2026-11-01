@@ -49,6 +49,36 @@ def code_version(path=TOOL_PATH):
 START_CODE = code_version()
 
 
+def code_rev(path=TOOL_PATH):
+    """The git revision agentctl's code is, for people (the code hash names no commit: d1677f40 was 4d0fc92): ci-runner
+    runs an export at /var/lib/agentctl-src/<rev> (agentctl-src's `git archive`, the directory named by the full rev);
+    a checkout says its HEAD, `+dirty` when agentctl's code differs from it; '' when neither tells."""
+    root = os.path.dirname(os.path.realpath(path))
+    base = os.path.basename(root)
+    if re.fullmatch(r"[0-9a-f]{40}", base):
+        return base[:12]
+    try:
+        r = subprocess.run(["git", "-C", root, "rev-parse", "--short=12", "HEAD"], capture_output=True, text=True,
+                           timeout=10, stdin=subprocess.DEVNULL)
+        if r.returncode != 0:
+            return ""
+        d = subprocess.run(["git", "-C", root, "status", "--porcelain", "--", os.path.basename(path), "lib/agentctl"],
+                           capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
+        return r.stdout.strip() + ("+dirty" if d.stdout.strip() else "")
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+_start_rev = []
+
+
+def start_rev():
+    """code_rev() of the code this process started on (read once, at its first ask)."""
+    if not _start_rev:
+        _start_rev.append(code_rev() if code_version() == START_CODE else "")
+    return _start_rev[0]
+
+
 def process_start(pid):
     """The process's start time as ps prints it: with the pid, it names one process even after the pid is reused."""
     # LC_ALL=C: one format whoever asks (2026-10-27: launchd's processor wrote "Tue Oct 27 …", a session's en_GB ps read

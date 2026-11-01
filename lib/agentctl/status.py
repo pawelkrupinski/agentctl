@@ -162,7 +162,7 @@ def status_header(t, d=None, probes=True):
          "ci_at": ci.get("at"), "repo": ci.get("repo") or SHORT["movies"],
          "tick_at": tick, "tick_age": t - float(tick) if tick else None, "fetched_at": d.get("fetched_at"),
          "store_url": url, "store_unreachable": unreachable, "store_error": d.get("store_error"),
-         "code": d.get("version"), "network": d.get("network"), "waiting": d.get("waiting") or [],
+         "code": d.get("version"), "rev": d.get("rev"), "network": d.get("network"), "waiting": d.get("waiting") or [],
          "queued": d.get("queued") or [], "hold": d.get("hold"),
          "items": {k: d.get(k) or [] for k in ("changes", "batch", "reds", "conditions")},
          "pins": pins_status(now_=t)}
@@ -203,6 +203,13 @@ def status_line(now_=None):
     return status_header(t, probes=False)["line"]
 
 
+def code_text(h):
+    """The reconciler's code: its git revision first (`4d0fc921c9e6 (code d1677f40)`), the hash alone from a tick
+    that predates `rev`."""
+    code = str(h.get("code") or "?")
+    return f"{h['rev']} (code {code[:8]})" if h.get("rev") else code
+
+
 def render_status(h, t):
     """`agentctl status`: the line, the open items with their states and deadlines, the tick, the pins."""
     out = [h["line"]]
@@ -212,7 +219,7 @@ def render_status(h, t):
         out += [f"  {r['id']}  {r['state']}  deadline in {int((r['deadline'] - t) // 60)} min"
                 + (f"  (level {r['level']})" if r.get("level") else "") for r in rows]
     tick = h["tick_at"]
-    out.append(f"tick: {int(t - tick)} s ago, code {h['code']}" if tick else "tick: never")
+    out.append(f"tick: {int(t - tick)} s ago, code {code_text(h)}" if tick else "tick: never")
     out.append(h["pins"])
     return "\n".join(out)
 

@@ -639,7 +639,7 @@ def write_snapshot(d, store=None):
     brief = lambda i: {"id": i["id"], "state": i["state"], "deadline": i["deadline"], "level": i["level"],
                        "worktree": (i["data"] or {}).get("worktree")}
     rows = change_rows(st)  # ONE QUEUE: the store's items, never a host's entry files
-    state_update(tick_at=time.time(), version=code_version(),
+    state_update(tick_at=time.time(), version=code_version(), rev=start_rev(),
                  changes=[brief(i) for i in open_("change")], batch=[brief(i) for i in open_("batch")],
                  reds=[brief(i) for i in open_("red")] if "red" in MACHINES else [],
                  conditions=[brief(i) for i in open_("condition")] if "condition" in MACHINES else [],
