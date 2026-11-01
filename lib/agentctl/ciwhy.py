@@ -135,22 +135,6 @@ def red_repo_clone(o_r):
         return repo_path_for(o_r)
     except (Exception, SystemExit):
         return None
-SETUP_STEP = re.compile(r"^(Set up job|Initialize containers|actions/checkout|Checkout|.*(download|upload)-artifact|.*cache@|Set up .*runner)", re.I)
-INFRA_LOG = re.compile(r"artifact already exists|ENOENT|No space left on device|Cannot connect to the Docker daemon|"
-                       r"connection (refused|reset)|Could not resolve host|TLS handshake timeout|runner .* lost|context deadline exceeded|"
-                       r"The operation was canceled|exit code 137|Killed", re.I)
-# A job that says it could not judge because something OUTSIDE the code was unreachable (movies' recording health:
-# `::error::UNKNOWN: proxy unreachable -- ...`, Record scrape fixtures #2238, the Decodo proxy down): an UNKNOWN, read as
-# infra -- never a TEST FAILURE that sends a fixer after a code change.
-# Security headers (live) / OG cards say `proxy unavailable (Decodo ...` when every proxy port failed; the Decodo probe
-# workflow says `DECODO DOWN:` -- the proxy, not the code.
-UNKNOWN_LOG = re.compile(r"::(error|warning)[^:]*::UNKNOWN: |\bUNKNOWN: proxy unreachable\b|proxy unavailable \(Decodo|"
-                         r"\bDECODO DOWN: ")
-# A job that stopped because an outside service refused the run's key -- a spent quota, a rotated or bad key -- before
-# any code was judged (movies' scripts/ci/recording-preflight.sh: `::error::OMDb refuses the key (HTTP 401: Request
-# limit reached) ...`, Record scrape fixtures #2426, CI's OMDb key still prod's shared one): the owner's credentials,
-# read as infra -- never a TEST FAILURE, which no code change clears and `red block` refuses.
-KEY_REFUSED_LOG = re.compile(r"::error[^:]*::\w+ refuses the key\b")
 RUN_FIELDS = "databaseId,number,status,conclusion,headSha,url,displayTitle,workflowName,createdAt,updatedAt"
 RED_CONCLUSIONS = ("failure", "timed_out")
 
@@ -197,39 +181,7 @@ def job_is_phantom(j):
     if j.get("conclusion") not in ("failure", "timed_out") or j.get("startedAt"):
         return False
     bad = [s for s in j.get("steps") or [] if s.get("conclusion") in ("failure", "timed_out")]
-    return not bad or bool(SETUP_STEP.match(bad[0]["name"]))
-
-
-def classify_job(job, lines, raw=(0, []), timed_out=False):
-    """('infra'|'unclear'|'test', why) for one failed job, from its steps, relevant log lines and raw (count, tail).
-    timed_out: a step of it ran past its own timeout-minutes -- the row's work outgrew its bound, a code/config red
-    (`TIMEOUT`), never infra: a rerun meets the same bound."""
-    bad = [s for s in job.get("steps") or [] if s.get("conclusion") in ("failure", "timed_out")]
-    step = bad[0]["name"] if bad else None
-    if timed_out and not any("*** FAILED" in l or "[error]" in l for l in lines):
-        return "test", (f"TIMEOUT: step '{step}' ran past its timeout-minutes" if step else "TIMEOUT: a step ran past its timeout-minutes") + \
-            " (bounded-step.sh reaped what it left): its work outgrew its bound -- shorten the work or let it stop itself, never rerun"
-    if step and SETUP_STEP.match(step):
-        return "infra", f"failed in setup step '{step}' (often a `needs:` cascade or runner/setup trouble)"
-    if not raw[0] and not lines:
-        return "infra", "0-length log" + (f" (step '{step}')" if step else "")
-    unknown = next((l for l in lines if UNKNOWN_LOG.search(l)), None)
-    if unknown and not any("*** FAILED" in l or "[error]" in l for l in lines):
-        return "infra", f"UNKNOWN, an outside dependency unreachable (not a code red): {unknown.strip()[:160]}"
-    refused = next((l for l in lines if KEY_REFUSED_LOG.search(l)), None)
-    if refused and not any("*** FAILED" in l or "[error]" in l for l in lines):
-        if QUOTA_LOG.search(refused):
-            return "infra", ("QUOTA SPENT, an outside service's quota for the run's key is used up; it resets on its "
-                             f"own (an external wait, not the owner's, not a code red): {refused.strip()[:160]}")
-        return "infra", ("KEY REFUSED, an outside service refused the run's key (credentials: the owner's, not a code "
-                         f"red): {refused.strip()[:160]}")
-    hit = next((l for l in lines if INFRA_LOG.search(l)), None)
-    if hit and not any("*** FAILED" in l or "[error]" in l for l in lines):
-        return "infra", f"infra-shaped log line: {hit[:120]}"
-    if not lines:
-        tail = " | ".join(raw[1])
-        return "unclear", f"{raw[0]}-line log with no FAILED/error/assert line (truncated? runner lost?) in step '{step}'; ends: {tail}"
-    return "test", f"failed step '{step}'" if step else "test failure"
+    return not bad or bool(SETUP_STEP.search(bad[0]["name"]))
 
 
 _gate_lists, _outside_lists = {}, {}  # workflow -> the runs on main gate_runs / outside_gate last listed (newest first)
@@ -495,7 +447,7 @@ def explain_run_jobs(o_r, run, tail, repo=None):
             if hl:
                 fetched, jl, strong = fetched + 1, hl, True
         bad = [st for st in j.get("steps") or [] if st.get("conclusion") in ("failure", "timed_out")]
-        setup = bool(bad) and bool(SETUP_STEP.match(bad[0]["name"]))
+        setup = bool(bad) and bool(SETUP_STEP.search(bad[0]["name"]))
         note = None
         if not strong and not setup and fetched < MAX_JOB_LOG_FETCHES:
             # no STRONG line in the step's slice (a shifted slice, or only weak words): the job's own `::error`

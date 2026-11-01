@@ -1632,8 +1632,6 @@ def red_renew_blocks(store, t):
 # cheap way the workflow itself does: the red's workflow dispatched on main once the quota's window has reset (OMDb's
 # daily window: midnight UTC), whose first job (the recording preflight: one OMDb call) fails within minutes if the key
 # is still refused; the wait clears when a run of the workflow created after the block got past that job.
-QUOTA_LOG = re.compile(r"request limit reached|daily limit|quota (exceeded|reached|exhausted)|rate limit(ed)? reached|"
-                       r"too many requests", re.I)
 WAIT_CAUSES = {"quota": "an outside service's quota for the run's key, spent; it resets on its own"}
 QUOTA_RESET_HOUR_UTC = 0
 

@@ -627,19 +627,8 @@ HOOK_STATUS = re.compile(r"pre-push (\S+) (ok|FAILED) \(\d+s\)")
 # main alike). A dry run failing with one of these signatures, and its baseline on plain main too, is no verdict on
 # either: no reds/local.json, no baseline; the change is handed to the land queue as an infra re-queue (requeue_infra:
 # the same reason QUEUE_INFRA_RETRIES times or INFRA_SAME_MAX opens its STALLED condition), checked again later.
-NETWORK_CHECK_FAILURE = re.compile(
-    r"fetch-gitops: .*(unreachable|could not fetch)|GitOps manifests STALE|"
-    r"unable to access '[^']*'|Could not resolve host|Could not resolve hostname|ssh: connect to host|"
-    r"Connection (reset|refused|timed out)|Operation timed out|Network is unreachable|No route to host|"
-    r"Temporary failure in name resolution|nodename nor servname provided|kex_exchange_identification", re.I)
 NETWORK_SHAPED = "network-shaped"
 NETWORK_REASON = "its checks could not reach the network"
-
-
-def network_failure(out):
-    """The first network signature in a check's output (stripped), else None."""
-    m = NETWORK_CHECK_FAILURE.search(out or "")
-    return m.group(0).strip() if m else None
 
 
 def network_requeue(repo, head, out, log_path, a=None):

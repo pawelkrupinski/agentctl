@@ -4,9 +4,6 @@
 # ---------------------------------------------------------------- wait
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 LOG_TS = re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ")
-STRONG = re.compile(r"\*\*\* FAILED|\[error\]|::error::|(?i:assertion|assert(ion)? failed)|\bError:|ENOENT|artifact already exists|(?i:exit code [1-9])|\bFAILED\b")
-WEAK = re.compile(r"\bfail(ed|ure)?\b|\berror\b|exception|assert", re.I)
-NOISE = re.compile(r"Setting level of logger|\|-INFO in ch\.qos|\berrors?[=:] ?0\b|\b0 (errors?|failed)\b|\b(INFO|DEBUG|TRACE)\b", re.I)
 MEASURE_WORKFLOWS = {"Identity model convergence"}
 
 
