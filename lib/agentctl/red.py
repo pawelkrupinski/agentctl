@@ -87,12 +87,20 @@ def red_tier(d, culprit=None):
     return "deep"
 
 
+def canon_job(job):
+    """A job's name as red keys have always spelled it: ci.yml's page tests were `page tests (<engine> / <variant>)` until
+    2026-11-01 and are now `page-tests-<engine> (<variant>)`; the new name keys as the old, so an open red keeps its key."""
+    import re
+    m = re.fullmatch(r"((?:\S+ / )*)page-tests-(safari|chrome) \((.+)\)", job or "")
+    return f"{m.group(1)}page tests ({m.group(2)} / {m.group(3)})" if m else job
+
+
 def red_key(workflow, job, line):
     """A red's identity: its workflow and normalized first error line (the failing test or step); the job only when no
     line was read. Never the job name alone: matrix jobs failing the same way are one red."""
     import hashlib
     n = norm_line(line)
-    return hashlib.sha1((f"{workflow}\0{n}" if n else f"{workflow}\0job {job}").encode()).hexdigest()[:12]
+    return hashlib.sha1((f"{workflow}\0{n}" if n else f"{workflow}\0job {canon_job(job)}").encode()).hexdigest()[:12]
 
 
 def red_lease(key):

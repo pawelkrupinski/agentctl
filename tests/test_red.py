@@ -160,6 +160,17 @@ class SignatureTest(RedBase):
         self.assertEqual(a, A.red_key("Main", "other", "2026-10-28T09:11:00.9Z FooSpec failed after 13 ms at 9f8e7d6c5b"
                                                        " (/tmp/q/z)"))
 
+    def test_the_renamed_page_tests_key_as_they_always_did(self):
+        # ci.yml 2026-11-01: `page tests (chrome / stable)` is now `page-tests-chrome (stable)`; a red with no error line is
+        # keyed by its job name, and an open one must not be orphaned by the rename
+        self.assertEqual(A.red_key("Main", "ci / page-tests-chrome (stable)", ""),
+                         A.red_key("Main", "ci / page tests (chrome / stable)", ""))
+        self.assertEqual(A.red_key("Main", "page-tests-safari (pw phones 1/2)", ""),
+                         A.red_key("Main", "page tests (safari / pw phones 1/2)", ""))
+        self.assertNotEqual(A.red_key("Main", "page-tests-safari (pw phones 1/2)", ""),
+                            A.red_key("Main", "page-tests-safari (pw phones 2/2)", ""))
+        self.assertEqual(A.canon_job("e2e (rest)"), "e2e (rest)")
+
 
 if __name__ == "__main__":
     unittest.main()
