@@ -134,6 +134,39 @@ class BreakerTest(CrashLoopBase):
         self.assertNotIn("crash_loop", it["data"])
 
 
+class BlockTextTest(CrashLoopBase):
+    """2026-11-01, #579: the block said `less ?` -- the owner's lapses carried no worktree -- and only the newest
+    launch's outcome. It names the real log (the owner's wrapper log, its stderr) and every launch's stop reason."""
+
+    def owned_launch(self, it, outcome="lease expired"):
+        key = it["data"]["key"]
+        self.st.acquire(A.red_lease(key), A.owner_holder("convergence"), A.OWNER_TTL, A.OWNER_MAX,
+                        meta={"kind": "owned", "family": "convergence"})  # handed while the owner was restarting
+        self.t[0] += 16 * 60  # lapsed
+        it = self.st.item("red", it["id"])
+        if it["state"] != "leased":
+            it = A.red_move(self.st, it, "leased", "taken again")
+        A.red_lease_ended(self.st, it, self.st.get(A.red_lease(key)), None, self.t[0])
+        return self.st.item("red", it["id"])
+
+    def test_the_owner_block_names_the_owners_log_and_each_launchs_reason(self):
+        log = os.path.join(self.tmp.name, "owner.log")
+        with open(log, "w") as f:
+            f.write("RED OWNER convergence: STOPPED: the owner's heartbeat lease was lost\n")
+        os.makedirs(A.owner_dir("convergence"), exist_ok=True)
+        A.write_json(A.owner_record_path("convergence"), {"family": "convergence", "log": log,
+                                                          "worktree": self.tmp.name})
+        it = self.red(tier="deep", attempts=3)
+        for _ in range(3):
+            it = self.owned_launch(it)
+        self.assertEqual(it["state"], "blocked-external")
+        text = A.red_block_of(it, self.st)["text"]
+        self.assertNotIn("less ?", text)
+        self.assertIn(f"less {log}".replace(A.HOME, "~"), text)
+        self.assertEqual(text.count("lease expired -- RED OWNER convergence: STOPPED"), 3, text)
+        self.assertEqual(it["data"]["history"][-1]["worktree"], self.tmp.name)
+
+
 class RecoveryTest(CrashLoopBase):
     def snap(self, rid, num, conclusion):
         snap = {"latest": {"Identity model convergence": {"databaseId": rid, "number": num, "conclusion": conclusion}}}

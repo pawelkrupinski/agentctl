@@ -1108,11 +1108,28 @@ def red_stop_holder(store, key, why, outcome, force=False):
     return row["holder"]
 
 
+def tail_lines(path, n):
+    """The last n non-empty lines of a text file (its last 8 KiB), [] when unreadable."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(max(0, os.path.getsize(path) - 8192))
+            return [l for l in f.read().decode(errors="replace").splitlines() if l.strip()][-n:]
+    except (OSError, TypeError):
+        return []
+
+
 def red_history(row, t):
     m = lease_meta(row)
+    wt, log = m.get("worktree"), m.get("log")
+    if m.get("kind") == "owned" and m.get("family"):  # a family owner's: its worktree and its wrapper's log (stderr)
+        rec = read_record(owner_record_path(m["family"])) or {}
+        wt, log = wt or rec.get("worktree"), log or rec.get("log")
+    notes = m.get("notes") or m.get("note") or ""
+    if not notes and log and not str(log).endswith(".jsonl"):  # a lapse says nothing: its wrapper's last words do
+        notes = "\n".join(tail_lines(log, 4))
     return {"at": iso_at(t), "holder": row.get("holder") if row else None, "outcome": m.get("outcome") or "lease expired",
-            "notes": (m.get("notes") or m.get("note") or "")[:600], "session": m.get("session"),
-            "worktree": m.get("worktree"), "dispatched": m.get("kind") in ("fixer", "owned")}
+            "notes": notes[:600], "session": m.get("session"),
+            "worktree": wt, "log": log, "dispatched": m.get("kind") in ("fixer", "owned")}
 
 
 def red_close(store, it, to, text):
@@ -1738,9 +1755,31 @@ def red_crash_evidence(streak):
     """The escalation's tail: each crashed launch's outcome, then the last lines of its log."""
     tail = []
     for h in reversed(streak):
-        tail.append(f"{h.get('at')} {h.get('holder')}: {str(h.get('outcome'))[:200]}")
+        tail.append(f"{h.get('at')} {h.get('holder')}: {str(h.get('outcome'))[:200]}"
+                    + (f" (log: {str(h['log']).replace(HOME, '~')})" if h.get("log") else ""))
         tail += [f"    {l[:200]}" for l in str(h.get("notes") or "").splitlines()[-4:] if l.strip()]
     return tail[-30:]
+
+
+def red_crash_cmd(streak):
+    """The owner's look at the crashes: `red status -v`, then the newest crashed launch's log (its wrapper's stderr or its
+    transcript), else its worktree -- never a `less ?`."""
+    for h in streak:
+        for p in (h.get("log"), h.get("worktree")):
+            if p:
+                return (f"~/bin/agentctl red status -v; " + (f"less {p}" if not os.path.isdir(p) else f"cd {p}")
+                        ).replace(HOME, "~")
+    return "~/bin/agentctl red status -v"
+
+
+def red_crash_launches(streak):
+    """Each crashed launch, oldest first: when, and how it ended (its stop reason, or its log's last line)."""
+    out = []
+    for h in reversed(streak):
+        last = [l.strip() for l in str(h.get("notes") or "").splitlines() if l.strip()]
+        why = str(h.get("outcome"))[:120] + (f" -- {last[-1][:100]}" if last else "")
+        out.append(f"{str(h.get('at'))[11:16]}Z {why}")
+    return "; ".join(out)
 
 
 def red_crash_loop(store, it, upd, streak, t):
@@ -1761,10 +1800,10 @@ def red_crash_loop(store, it, upd, streak, t):
         red_offer(store, it, verdict, data=upd, escalate=True, verdict=verdict, tail=tail)
         return [f"crash loop on {red_what(d)}: moved up to deep"]
     until = f"a newer {d.get('workflow')} run than #{run} no longer fails this way"
-    cmd = f"~/bin/agentctl red status -v; less {str((streak[0].get('worktree') or '?')).replace(HOME, '~')}"
+    cmd = red_crash_cmd(streak)
     text = (f"BLOCKED ON OWNER: the fixers crash on {red_what(d)}: {n} launches in a row at the {tier} tier ended with "
-            f"no LANDED / GAVE UP (newest: {str(streak[0].get('outcome'))[:160]}). The fixer harness, not the code, is "
-            f"what fails: look at their logs (`! {cmd}`). Auto-clears when {until}, or in "
+            f"no LANDED / GAVE UP ({red_crash_launches(streak)}). The fixer harness, not the code, is what fails: look "
+            f"at their logs (`! {cmd}`). Auto-clears when {until}, or in "
             f"{fmt_age(env_num('AGENTCTL_RED_CRASH_BLOCK_MAX', RED_CRASH_BLOCK_MAX))} (offered again)")
     lname = block_lease(key)
     probe = {"kind": "red_newer_verdict", "args": {"workflow": d.get("workflow"), "item": it["id"],
