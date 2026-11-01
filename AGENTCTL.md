@@ -1311,6 +1311,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `assign_bound` | `AGENTCTL_ASSIGN_BOUND` | `20` | - |
 | `attach_poll` | `AGENTCTL_ATTACH_POLL` | `15` | - |
 | `author_active_min` | `AGENTCTL_AUTHOR_ACTIVE_MIN` | `15` | live = a pid alive and activity within this |
+| `awake_pid` | `AGENTCTL_AWAKE_PID` | - | - |
 | `baseline` | `AGENTCTL_BASELINE` | `1` | - |
 | `batch_retry_max` | `AGENTCTL_BATCH_RETRY_MAX` | `3` | - |
 | `bg_poll` | `AGENTCTL_BG_POLL` | `5` | seconds between the wrapper's looks at its session |

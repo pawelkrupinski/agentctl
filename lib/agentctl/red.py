@@ -1615,21 +1615,26 @@ CRASH_LOOP_CAUSE = "fixer-crash-loop"
 # in a macOS maintenance sleep -- 03:05:44 to 03:21:11, longer than OWNER_TTL -- so their heartbeat leases lapsed
 # ("lease expired"), the wrappers woke to "heartbeat lease was lost" and exited, the dispatcher restarted them, and three
 # such cycles blocked the red on the owner with the harness' "cause" being nothing but a closed lid). A wrapper now holds
-# a `caffeinate -i` assertion for its life (keep_awake), and a lease lapse that overlaps a host sleep is neutral to the
-# breaker (host_slept) and says so in the evidence.
+# a `caffeinate -s` assertion for its life (keep_awake), and a lease lapse that overlaps a host sleep is neutral to the
+# breaker (host_slept) and says so in the evidence. `-s` holds only on AC power (owner 2026-11-01: "prevent laptop going
+# to sleep when agentctl is running and power supply is on"); on battery the laptop sleeps and host_slept covers it.
+# The service (waiting run --service) holds the same assertion, so a plugged-in laptop never sleeps under agentctl.
 LEASE_LAPSE = re.compile(r"(lease expired|ORPHANED|STOPPED: the (red's|owner's) (heartbeat )?lease was lost)")
 SLEEP_MIN = 120      # s of sleep inside a lapse's window that count as "the host was asleep" ($AGENTCTL_SLEEP_MIN)
 _SLEEP_CACHE = [0.0, []]
 
 
 def keep_awake(pid=None):
-    """Hold a no-idle-sleep assertion for `pid` (default: this process) so a held lease is never starved by the laptop's
-    maintenance sleep. Best effort: the Popen, or None (no caffeinate, $AGENTCTL_CAFFEINATE empty)."""
+    """Hold a no-system-sleep assertion, valid on AC power only, for `pid` (default: this process) so a held lease is
+    never starved by the laptop's sleep. Once per pid: an exec'd restart keeps the assertion it already has. Best
+    effort: the Popen, or None (already held, no caffeinate, $AGENTCTL_CAFFEINATE empty)."""
     exe = os.environ.get("AGENTCTL_CAFFEINATE", "/usr/bin/caffeinate")
-    if not exe or not os.access(exe, os.X_OK):
+    pid = str(pid or os.getpid())
+    if not exe or not os.access(exe, os.X_OK) or os.environ.get("AGENTCTL_AWAKE_PID") == pid:
         return None
+    os.environ["AGENTCTL_AWAKE_PID"] = pid
     try:
-        return spawn_detached([exe, "-i", "-w", str(pid or os.getpid())], stdin=subprocess.DEVNULL,
+        return spawn_detached([exe, "-s", "-w", pid], stdin=subprocess.DEVNULL,
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     except OSError:
         return None

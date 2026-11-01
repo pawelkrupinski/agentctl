@@ -703,6 +703,8 @@ def waiting_run(repo, once=False, service=False):
         stack.callback(drop.close)
         errors, stalled_noted = 0, False
         role = host_role()
+        if service:
+            keep_awake()  # a plugged-in laptop never sleeps under the service (no-op off macOS)
         if service and role != "server":
             status_page_start()  # the read-only status page, a daemon thread (see "the status page"); never fatal
         def shared(fn):  # a step that uses the clone holds it shared: a repair's swap waits for it

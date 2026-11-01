@@ -229,7 +229,11 @@ class HostSleepTest(CrashLoopBase):
         os.chmod(fake, 0o755)
         os.environ["AGENTCTL_CAFFEINATE"] = fake
         self.addCleanup(os.environ.pop, "AGENTCTL_CAFFEINATE", None)
+        self.addCleanup(os.environ.pop, "AGENTCTL_AWAKE_PID", None)
+        os.environ.pop("AGENTCTL_AWAKE_PID", None)
         A.keep_awake().wait(10)
-        self.assertEqual(open(out).read().split(), ["-i", "-w", str(os.getpid())])
+        self.assertEqual(open(out).read().split(), ["-s", "-w", str(os.getpid())])  # AC power only
+        self.assertIsNone(A.keep_awake())  # once per pid: an exec'd restart doesn't stack assertions
+        os.environ.pop("AGENTCTL_AWAKE_PID")
         os.environ["AGENTCTL_CAFFEINATE"] = ""
         self.assertIsNone(A.keep_awake())
