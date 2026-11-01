@@ -635,6 +635,10 @@ def _check_entry(repo, d, e, i, own=None):
     save_entry(d, e)
     reds = gate_reds(repo) if waiting_supported(repo) else set()
     commits = waiting_commits(tree, base, head)
+    dead = blame_land_refusal(tree, commits, e.get("worktree"))
+    if dead:  # queued before its blame was withdrawn or refuted (2026-11-01: revert-629 re-queued by orphan duty)
+        queue_verdict(d, e, "rejected", f"NOT LANDED: {dead}")
+        return 1
     joining = bool(reds) and must_wait(repo, commits, reds)
     cls = gov_class_of(repo, commits, reds)
     mode = "--checks-only" if joining else "--range"

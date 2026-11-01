@@ -624,6 +624,10 @@ def submit_change(body, repo=None):
                       body.get("branch") or "")
     if why:
         raise ValueError(f"NOT LANDED: {why}")
+    why = blame_land_refusal(repo, body["commits"] if isinstance(body["commits"], list) else
+                             str(body["commits"]).split(), body.get("worktree"))
+    if why:
+        raise ValueError(f"NOT LANDED: {why}")
     d = waiting_state(repo)[0]
     e, ahead = queue_change(d, {k: body.get(k) for k in SUBMIT_FIELDS}, body.get("id"))
     supersede_stranded(d, e)

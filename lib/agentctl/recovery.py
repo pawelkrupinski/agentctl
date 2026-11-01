@@ -189,6 +189,10 @@ def reland_worktree(cond, a):
         return f"not landed again: {wt} is gone"
     if git(wt, "status", "--porcelain", "--untracked-files=no", check=False).stdout.strip():
         return f"not landed again: {wt} has uncommitted changes"
+    commits = git(wt, "rev-list", f"{remote()}/main..HEAD", check=False).stdout.split()
+    why = blame_land_refusal(wt, commits, wt)
+    if why:
+        return f"not landed again: {why}"
     os.makedirs(recovery_dir(), exist_ok=True)
     with open(recovery_dir("reland.log"), "a") as f:
         spawn_detached([sys.executable, TOOL_PATH, "land"], stdin=subprocess.DEVNULL, stdout=f,

@@ -548,6 +548,12 @@ def sync(repo, main_ref, sh):
         print(f"NOT LANDED: {why}. Throwaway work never lands; remove the marker (rename the branch, reword the commit, "
               "drop the Do-Not-Land: trailer) only if the owner wants it landed.")
         return 1, None
+    why = blame_land_refusal(repo, waiting_commits(repo, f"{remote()}/main", head), repo,
+                             records=blame_records_quiet())
+    if why:
+        print(f"NOT LANDED: {why}. A withdrawn or refuted blame revert is dead: drop this worktree "
+              "(`git worktree remove`), never land it.")
+        return 1, None
     r = sh("git", "rebase", "--quiet", f"{remote()}/main")
     if r.returncode:
         conflicts = git(repo, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
