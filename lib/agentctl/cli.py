@@ -266,9 +266,15 @@ def main(argv=None):
     ra.add_argument("state", nargs="?", choices=("on", "off", "status"), default="status")
     rf = rds.add_parser("fixer", help=argparse.SUPPRESS)
     rf.add_argument("--record", required=True)
+    rpb = rds.add_parser("probe", help=argparse.SUPPRESS)  # one boundary of a red's culprit search, judged on CI (blame.py)
+    rpb.add_argument("--kind", required=True, choices=("drift", "checks"))
+    rpb.add_argument("--commit", required=True)
+    rpb.add_argument("--run", required=True)
+    rpb.add_argument("--out", required=True)
+    rpb.add_argument("--tokens", default="")
     rfo = rds.add_parser("owner", help=argparse.SUPPRESS)  # a family owner's wrapper (lib/agentctl/owner.py)
     rfo.add_argument("--family", required=True)
-    for p_ in [rc_, rbt, rb, rop, rr, rdp, ra, rf, rfo, rl]:
+    for p_ in [rc_, rbt, rb, rop, rr, rdp, ra, rf, rfo, rl, rpb]:
         p_.add_argument("--repo")
     ram = rds.add_parser("am-fixer", help="exit 0 (and print who) inside a dispatched red fixer, else 1 (~/bin's "
                          "pre-commit hook asks)")

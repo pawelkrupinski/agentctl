@@ -65,6 +65,14 @@ RED_LADDER = ((0, "author", "author"), (0, None, "fresh"),
 def red_tier(d, culprit=None):
     if (d.get("crash_loop") or {}).get("stage") == "deep":  # the crash-loop breaker moved it up (red_crash_loop)
         return "deep"
+    # THE DECISION RULE (blame.py, blame_decision): while its culprit is decided the red waits (tier `blame`); a
+    # determined culprit is reverted and its lander revived (tier `lander`, once); only an undetermined one goes up the
+    # ladder below to a fresh fixer
+    who, _why = blame_decision(d.get("blame")) if d.get("blame") else ("fixer", None)
+    if who is None:
+        return "blame"
+    if who in ("lander", "owner") and not d.get("lander_tried"):
+        return "lander"
     if d.get("kind") in ("infra", "unclear") and d.get("red_kind") != "flake" and not d.get("diagnosis") \
             and int(d.get("attempts") or 0) < 3:
         return "infra"
@@ -889,6 +897,9 @@ def red_offer(store, it, text, data=None, repo=None, escalate=False, verdict=Non
     d = {**it["data"], **(data or {})}
     tier = red_tier(d, d.get("culprit"))
     deadline = RED_OFFER["author"] if tier == "author" else RED_OFFER[red_offer_class(d)]
+    if tier == "blame":  # waits for its culprit, at most BLAME_MAX: never escalated UNCLAIMED meanwhile
+        deadline = max(60, float((d.get("blame") or {}).get("since") or 0) + env_num("AGENTCTL_BLAME_MAX", BLAME_MAX)
+                       - store.clock() + 60)
     sev = {"severity": "escalate"} if escalate or tier == "deep" else {}
     aud = {"audience": {k: v for k, v in (d.get("author") or {}).items() if k in ("worktree", "session")}} \
         if tier == "author" else {}
@@ -974,7 +985,8 @@ def red_picture(d):
             "red_kind": d.get("red_kind"), "attempts": int(d.get("attempts") or 0), "history": (d.get("history") or [])[-6:],
             "refuted": d.get("refuted") or [], "diagnosis": d.get("diagnosis"), "predicts": d.get("predicts"),
             "author": d.get("author"), "culprit": d.get("culprit"), "names": sorted(red_names(d) - {None}),
-            "prior_work": d.get("prior_work"), "old_note": d.get("old_note"), "repo": d.get("repo")}
+            "prior_work": d.get("prior_work"), "old_note": d.get("old_note"), "repo": d.get("repo"),
+            "blame": d.get("blame"), "lander_tried": d.get("lander_tried")}
 
 
 def red_put_offer(store, it):
@@ -1009,6 +1021,10 @@ def red_open(store, ob, repo, t, o_r=None):
             data["culprit"] = culprit_of(repo, {"runs": ob["runs_list"]})
         except (Exception, SystemExit):
             pass
+    try:  # THE CULPRIT (blame.py): searched from the red's opening; a gate test red only
+        data["blame"] = blame_open(store, repo, o_r or RED_PRIMARY, ob, t)
+    except (Exception, SystemExit) as e:
+        data["blame"] = {"state": "none", "why": f"its range could not be read ({str(e)[:120]})"}
     return store.put_item("red", iid, "red", data)
 
 
@@ -1475,7 +1491,10 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
             d = it["data"]
     if st == "red":
         it = red_offer(store, it, f"{red_what(d)} is red: offered")
-        return [f"offered {red_what(d)} ({it['data']['tier']})"]
+        acts = [f"offered {red_what(d)} ({it['data']['tier']})"]
+        if it["data"]["tier"] == "blame":  # a culprit decided by what is known already (Main's green parent): now
+            acts += blame_step(store, it, repo, o_r, t) or []
+        return acts
     if st == "offered":
         if gone and not fix:
             red_close(store, it, "cleared", red_gone_why(d, obs))
@@ -1497,6 +1516,10 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
             red_move(store, it, "blocked-external", f"{red_what(d)}: {block['text']}",
                      data={"cause": block.get("cause"), "block": block["name"]})
             return [f"blocked {red_what(d)}"]
+        if (d.get("blame") or {}).get("state") == "probing":  # its culprit is being decided: no escalation meanwhile
+            if not store.offer_of(f"red:{it['id']}"):
+                red_put_offer(store, it)
+            return blame_step(store, it, repo, o_r, t) or []
         off = store.offer_of(f"red:{it['id']}") or {}
         if str(off.get("reason") or "").startswith("STARVED") and d.get("starved") != off.get("id"):
             # waited past RED_STARVE with no free fixer slot: escalated NOW (then every cycle, below)
@@ -2268,7 +2291,7 @@ def red_dispatcher(store, o_r, repo, t):
             continue
         pic = off["picture"]
         fam = red_queue_family(pic)
-        owned = family_owned(fam) and off["tier"] not in ("revert", "author")
+        owned = family_owned(fam) and off["tier"] not in ("revert", "author", "lander", "blame")
         live = owner_alive(store, fam, t) if owned else None
         if owned and not live and (ending := owner_still_ending(store, fam, t)):
             # its last wrapper lost its heartbeat (orphaned, revoked) and is still ending: the next starts after it
@@ -2286,7 +2309,7 @@ def red_dispatcher(store, o_r, repo, t):
                 acts.append(f"{pic.get('workflow')} #{(pic.get('run') or {}).get('number')}: red {pic['key']} handed "
                             f"to its family {fam}'s owner")
             continue
-        holder = red_family_holder(store, fam, t) if off["tier"] != "revert" else None
+        holder = red_family_holder(store, fam, t) if off["tier"] not in ("revert", "lander", "blame") else None
         if holder and holder["name"] != off["lease"]:
             # ONE FIXER PER FAMILY: a new red of a family whose fixer is at work is that fixer's -- under its lease
             took = store.take(off["id"], holder["holder"], RED_FIXER_TTL, RED_FIXER_MAX,
@@ -2304,6 +2327,8 @@ def red_dispatcher(store, o_r, repo, t):
         free, cap_why = (True, None) if pic.get("gate") else red_capacity(store, t - float(off.get("opened_at") or t), t)
         if off["tier"] == "author":
             why = f"offered to its author ({str((pic.get('author') or {}).get('worktree') or '?').replace(HOME, '~')})"
+        elif off["tier"] == "blame":
+            why = blame_waiting(pic.get("blame"))
         elif after > t:
             last = next((str(h.get("outcome") or "") for h in reversed(item["data"].get("history") or [])
                          if str(h.get("outcome") or "").startswith("NOT STARTED")), "")
@@ -2344,9 +2369,10 @@ def red_dispatcher(store, o_r, repo, t):
         if not took or "held" in took or "gone" in took:
             continue
         extra = []
-        if off["tier"] not in ("revert", "resume"):
+        if off["tier"] not in ("revert", "resume", "lander"):
             for sib in offs:
-                if sib["id"] != off["id"] and sib["id"] not in gone and sib["tier"] not in ("author", "revert", "resume") \
+                if sib["id"] != off["id"] and sib["id"] not in gone and sib["tier"] not in ("author", "revert", "resume",
+                                                                                             "lander", "blame") \
                         and red_queue_family(sib["picture"]) == fam:
                     st_ = store.take(sib["id"], holder_id, ttl, max_, meta=meta)
                     if st_ and "epoch" in st_:

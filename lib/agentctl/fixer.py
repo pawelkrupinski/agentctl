@@ -1289,6 +1289,8 @@ def red_am_fixer():
 def cmd_red(a):
     if a.rcmd == "am-fixer":
         return red_am_fixer()
+    if a.rcmd == "probe":
+        return cmd_red_probe(a)
     o_r = slug(a.repo) if getattr(a, "repo", None) and a.rcmd not in ("fixer", "owner") else default_repo()
     st = Store()
     if a.rcmd == "block":

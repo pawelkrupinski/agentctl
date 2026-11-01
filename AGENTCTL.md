@@ -1316,6 +1316,9 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `batch_retry_max` | `AGENTCTL_BATCH_RETRY_MAX` | `3` | - |
 | `bg_poll` | `AGENTCTL_BG_POLL` | `5` | seconds between the wrapper's looks at its session |
 | `bin_repo` | `AGENTCTL_BIN_REPO` | - | - |
+| `blame_max` | `AGENTCTL_BLAME_MAX` | `5400` | s a red may wait for its culprit to be decided before a fresh fixer gets it |
+| `blame_probes` | `AGENTCTL_BLAME_PROBES` | `4` | CI probes one red's culprit search may start |
+| `blame_probe_wall` | `AGENTCTL_BLAME_PROBE_WALL` | `7200` | s one probe may run before it is no verdict |
 | `brief` | `AGENTCTL_BRIEF` | `~/bin/briefs/movies-agent-preamble.md` | - |
 | `brief_src` | `AGENTCTL_BRIEF_SRC` | - | a file to use instead of the tracked docs/fixer-brief.md in fixers' prompts (an override): none by default |
 | `cache_expire_days` | `AGENTCTL_CACHE_EXPIRE_DAYS` | `7` | - |
@@ -1335,6 +1338,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `dispatch_dir` | `AGENTCTL_DISPATCH_DIR` | - | - |
 | `dispatch_find` | `AGENTCTL_DISPATCH_FIND` | `12` | - |
 | `dispatch_find_poll` | `AGENTCTL_DISPATCH_FIND_POLL` | `5` | - |
+| `drift_ci` | `AGENTCTL_DRIFT_CI` | - | - |
 | `drift_stall` | `AGENTCTL_DRIFT_STALL` | `1800` | s with no output before the drift check is ended (no verdict: the batch goes on) |
 | `fetch_timeout` | `AGENTCTL_FETCH_TIMEOUT` | `180` | an unattended fetch's bound |
 | `fixer_claim_within` | `AGENTCTL_FIXER_CLAIM_WITHIN` | `600` | s a started session has to start its transcript / run `red claim` |
