@@ -41,6 +41,10 @@ BLAME_PROBES = 4                 # CI probes one red's culprit search may start 
 BLAME_PROBE_WALL = 2 * 3600      # s one probe may run before it is no verdict ($AGENTCTL_BLAME_PROBE_WALL)
 BLAME_RANGE_MAX = 200            # commits a red's range may hold to be searched at all
 CONVERGENCE_FLOW = "Identity model convergence"
+# A drift row's job name as GitHub lists it: `leg (united-kingdom) / takes-drift-2 (united-kingdom)` (a reusable call's
+# inner job, prefixed by its caller), or bare `takes-drift-2 (united-kingdom)` -- read like movies'
+# scripts/ci/convergence_reuse.py jobs_by_name (the inner name after ` / `). 2026-11-01: `^takes-drift` missed the
+# prefixed name, #629's kind came out None, and #628's green on the parent (OTHER rotating seeds) was taken as a pass.
 DRIFT_JOB = re.compile(r"^takes-drift-\d+ \(")
 BOT_AUTHOR = re.compile(r"dependabot|renovate|scala-steward|github-actions\[bot\]", re.I)
 TEST_TOKEN = re.compile(r"\b([A-Z][A-Za-z0-9]+(?:Spec|Test|Tests|Suite|IT))\b")
@@ -64,6 +68,16 @@ def blame_hint(repo, groups, d):
     return hit[0] if len(hit) == 1 else None
 
 
+def job_inner(name):
+    """A job's own name: the part after ` / ` of GitHub's `<caller> / <job>` (convergence_reuse.py's jobs_by_name)."""
+    caller, sep, inner = str(name).partition(" / ")
+    return inner if sep else caller
+
+
+def is_drift_job(name):
+    return bool(DRIFT_JOB.match(job_inner(name)))
+
+
 def blame_kind(o_r, d):
     """How a boundary is judged on CI: `drift` (the convergence drift rows, re-run with the red run's own seeds),
     `checks` (movies: the boundary's tree through precommit-check.yml), `run` (only a decided run of the workflow on that
@@ -71,7 +85,7 @@ def blame_kind(o_r, d):
     nightly)."""
     jobs = [str(j) for j in d.get("jobs") or [d.get("job")] if j]
     if d.get("workflow") == CONVERGENCE_FLOW:
-        return "drift" if jobs and all(DRIFT_JOB.match(j) for j in jobs) else None
+        return "drift" if jobs and all(is_drift_job(j) for j in jobs) else None
     return "checks" if o_r == RED_PRIMARY else "run"
 
 
@@ -175,8 +189,10 @@ def lander_name(l):
 
 def blame_free(o_r, d, b, i, runs):
     """A boundary's verdict that costs nothing: a decided run of the red's own (unseeded) workflow on exactly that commit
-    -- pass on success; None for a drift check (its seeds rotate: never the same inputs) and when no such run exists."""
-    if b.get("kind") == "drift":
+    -- pass on success; None when no such run exists, and ALWAYS None for a convergence red: its drift seeds rotate per
+    run (a green run on other seeds is never evidence, #628 for #629) and its other legs' pinned pairs rotate nightly.
+    Only a re-run with the red's own seeds forced (probe_drift) judges a convergence boundary."""
+    if b.get("kind") not in ("run", "checks") or d.get("workflow") == CONVERGENCE_FLOW:
         return None
     sha = blame_boundary(b, i)
     for r in runs or []:
@@ -207,6 +223,8 @@ def blame_finish(store, it, b, why, t):
     tier the decision gives (red_offer). Returns the act lines."""
     d = it["data"]
     if why is None:
+        why = blame_unproven(d, b)
+    if why is None:
         k = b["hi"] - 1
         g = b["groups"][k]
         if g.get("bot"):
@@ -227,6 +245,23 @@ def blame_finish(store, it, b, why, t):
     dispatch_log({"workflow": d.get("workflow"), "run": d.get("last_run") or {}, "job": d.get("job")}, line)
     red_offer(store, it, line, data={"blame": b}, quiet=True)
     return [line]
+
+
+def blame_unproven(d, b):
+    """Why the search's passing parent (boundary lo) is no proof for this red, or None. A convergence red's parent
+    passes ONLY on a drift probe that replayed the red's own seeds, each row's verdict line naming the seed it pinned
+    (probe_drift: `seeds: True`); anything else -- a green run on rotating seeds, an unknown kind -- leaves the culprit
+    undetermined: the normal fixer, never a revert."""
+    if d.get("workflow") != CONVERGENCE_FLOW:
+        return None
+    if b.get("kind") != "drift":
+        return "no CI check repeats this red with its own seeds (not a takes-drift row): the culprit is undetermined"
+    lo = b.get("lo")
+    proof = [p for p in b.get("probes") or [] if p.get("boundary") == lo and p.get("verdict") == "pass"]
+    if not any(p.get("ci") and p.get("kind") == "drift" and p.get("seeds") is True for p in proof):
+        return (f"the parent {str(blame_boundary(b, lo or 0))[:10]} was never re-run with the red's own seeds "
+                f"({'; '.join(str(p.get('evidence') or '') for p in proof)[:160] or 'no pass'}): no evidence for a culprit")
+    return None
 
 
 def blame_step(store, it, repo, o_r, t):
@@ -382,6 +417,7 @@ def probe_drift(repo, commit, run, wall):
         wrong = drift_seed_check((r.stdout or "") + "\n" + (r.stderr or ""))
         if wrong:
             return {"verdict": "none", "evidence": f"{said}; NOT THE RED'S SEEDS: {wrong}"}
+        return {"verdict": v, "evidence": said, "seeds": True}  # every row replayed the seed it pinned
     return {"verdict": v, "evidence": said}
 
 

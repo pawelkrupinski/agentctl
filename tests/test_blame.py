@@ -28,8 +28,9 @@ class BlameBase(RedsBase):
             self.probed.append((b["kind"], commit))
             out = os.path.join(self.tmp.name, f"probe-{len(self.probed)}.json")
             v = self.verdicts.get(commit)
-            if v:
-                A.write_json(out, {"verdict": v, "evidence": f"fake CI: {v} on {commit[:10]}"})
+            if v:  # a drift probe's verdict proves the red's own seeds (probe_drift's `seeds`), as the real one does
+                A.write_json(out, {"verdict": v, "evidence": f"fake CI: {v} on {commit[:10]}", "kind": b["kind"],
+                                   **({"seeds": True} if b["kind"] == "drift" and v != "none" else {})})
             me = os.getpid()  # no verdict scripted: a probe still running on CI (a live pid)
             return {"boundary": i, "commit": commit, "out": out, "pid": None if v else me,
                     "start": None if v else A.process_start(me), "at": time.time(), "kind": b["kind"]}
@@ -216,6 +217,89 @@ class DriftTest(BlameBase):
         self.assertIn("row 1 replayed seed 1-2, not 7", v["evidence"])
         self.assertEqual(A.drift_seed_check("no pins here\ntakes-drift-1 (poland) [seed 7]: ok"),
                          "the run never said which seeds it pinned")
+
+
+class Convergence629Test(BlameBase):
+    """THE FIRST LIVE DECISION, WRONG (2026-11-01): convergence #629 failed `leg (united-kingdom) / takes-drift-2
+    (united-kingdom)` on seed 42 (a Keswick Alhambra flip). DRIFT_JOB (`^takes-drift`) missed GitHub's prefixed job
+    name, the kind came out None, and blame_free took #628 -- green on the parent 8dfe177522 with OTHER rotating seeds
+    -- as the parent passing: change ...-retained-input was reverted and its lander revived. The flip was pre-existing
+    (the parent, re-run with seed 42 forced, is red). Replayed here: never a revert on that evidence."""
+    JOB = "leg (united-kingdom) / takes-drift-2 (united-kingdom)"
+    LINE = ("##[error]0 divergence(s) from a whole resolve and 1 flip(s) on the way, beyond the allow-lists and 0 known "
+            "flip(s) -- seed 42 -- each named in the step log; reproduce: IdentityDrift uk --seed 42")
+
+    def replay(self, job=JOB):
+        parent = self.sha
+        head = self.land("retained-input", {"identity/ListingRetention.scala": "restored\n"})
+        self.r.push()
+        wf, wfile = CONV, "identity-model-convergence.yml"
+        self.put("runs.json", [run(41341105019, 629, wf, wfile, head, conclusion="failure",
+                                   created="2026-11-01T19:18:54Z"),
+                               run(41330000628, 628, wf, wfile, parent, created="2026-11-01T18:30:00Z"),
+                               run(41330000001, 300, "Main", "main.yml", head, created="2026-11-01T19:10:00Z")])
+        self.put("run-41341105019.json", {
+            "jobs": [{"name": "preflight", "status": "completed", "conclusion": "success"},
+                     {"name": "leg (united-kingdom) / takes-drift-1 (united-kingdom)", "status": "completed",
+                      "conclusion": "success"},
+                     {"name": job, "status": "completed", "conclusion": "failure",
+                      "steps": [{"name": "Check that the incremental state ends where a whole resolve does",
+                                 "conclusion": "failure"}]}],
+            "headSha": head, "url": "u", "number": 629, "status": "completed", "conclusion": "failure",
+            "workflowName": wf})
+        self.put("run-41341105019.log", f"{job}\tCheck that the incremental state ends where a whole resolve does\t"
+                                        f"2026-11-01T19:50:00Z {self.LINE}\n")
+        return parent, head
+
+    def assert_never_reverted(self):
+        b = self.blame()
+        self.assertNotEqual(b.get("state"), "confirmed", b)
+        self.assertNotIn("revert", b)
+        self.assertNotEqual(A.blame_decision(b)[0], "lander")
+        self.assertNotIn(self.only()["data"]["tier"], ("lander", "owner"))
+        for p in b.get("probes") or []:
+            self.assertNotIn("#628", str(p.get("evidence")), "a green run on other seeds is never evidence")
+
+    def test_the_real_job_name_is_a_drift_row_and_the_parent_is_replayed_with_the_reds_seeds(self):
+        self.assertTrue(A.is_drift_job(self.JOB))
+        self.assertTrue(A.is_drift_job("takes-drift-1 (germany)"))
+        self.assertFalse(A.is_drift_job("leg (united-kingdom) / takes (united-kingdom)"))
+        parent, _ = self.replay()
+        self.tick()
+        self.assertEqual(self.blame()["kind"], "drift")
+        self.assertEqual(self.probed, [("drift", parent)])  # never #628's green: the parent re-run on seed 42
+        self.assert_never_reverted()
+
+    def test_the_parent_red_on_the_reds_own_seed_is_pre_existing_never_a_revert(self):
+        parent, _ = self.replay()
+        self.verdicts[parent] = "fail"  # run 41345615165: the parent with seed 42 forced is red with the same flip
+        self.tick()
+        self.tick()
+        b = self.blame()
+        self.assertEqual(b["state"], "undetermined", b)
+        self.assertIn("pre-existing", b["why"])
+        self.assert_never_reverted()
+
+    def test_an_unknown_kind_is_undetermined_at_once_never_a_revert(self):
+        self.replay(job="leg (united-kingdom) / takes (united-kingdom)")  # a leg no CI check repeats
+        self.tick()
+        self.tick()
+        b = self.blame()
+        self.assertEqual((b["state"], b["kind"]), ("undetermined", None), b)
+        self.assertEqual(self.probed, [])
+        self.assertEqual(A.blame_decision(b)[0], "fixer")
+        self.assert_never_reverted()
+
+    def test_a_pass_that_did_not_prove_the_reds_seeds_never_confirms(self):
+        b = {"state": "probing", "kind": "drift", "base": "p" * 40, "lo": 0, "hi": 1,
+             "groups": [{"change": "ch", "commits": ["h" * 40], "end": "h" * 40}],
+             "probes": [{"boundary": 0, "verdict": "pass", "evidence": "Identity model convergence #628 green on pppp"}]}
+        d = {"workflow": CONV}
+        self.assertIn("never re-run with the red's own seeds", A.blame_unproven(d, b))
+        b["probes"][0].update(ci=True, kind="drift", seeds=True)
+        self.assertIsNone(A.blame_unproven(d, b))
+        self.assertIn("not a takes-drift row", A.blame_unproven(d, dict(b, kind=None)))
+        self.assertIsNone(A.blame_free("o/r", d, dict(b, kind="run"), 0, [run(1, 628, CONV, "x", "p" * 40)]))
 
 
 class BatchTest(BlameBase):
