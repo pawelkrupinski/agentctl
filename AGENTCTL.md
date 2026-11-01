@@ -658,7 +658,17 @@ agent must be assigned to it".
   the fixers, not the code, fail -- and it clears itself: its probe passes when a newer decided run of the workflow no
   longer fails this way (or is green), and it lapses after 24 h (`$AGENTCTL_RED_CRASH_BLOCK_MAX`), offered again with
   the streak counted afresh. A launch with a result (LANDED, NOT LANDED, GAVE UP, BLOCKED ON OWNER, DIAGNOSED, a
-  refuted fix) ends the streak; a release by hand is no launch. `$AGENTCTL_RED_CRASH_LOOP` (3).
+  refuted fix) ends the streak; a release by hand is no launch. `$AGENTCTL_RED_CRASH_LOOP` (3). The block names the
+  newest crash's log (an owner's wrapper log, else the fixer's transcript or worktree) and each launch's stop reason.
+  A turn is read from its transcript: a background session whose process lives on after its turn (`blocked` / `idle`
+  with a live pid) has ended it when its answer carries a verdict, or -- nothing of its own pending -- after
+  `$AGENTCTL_BG_IDLE_GRACE` (60 s) of quiet; one waiting on its own backgrounded task (`agentctl wait`) is at work, and
+  its lease is renewed by the wait.
+- **Owner decision.** `DIAGNOSED: <cause>; decide: <the decision>` -- or a second DIAGNOSED in a row on one red (lapses
+  between them skipped) -- puts the red on an owner block with cause `owner-decision` whose text carries the diagnosis
+  and the decision; never a crash. It clears itself like the crash-loop block (a newer run no longer failing this way,
+  or 24 h, `$AGENTCTL_RED_DECISION_BLOCK_MAX`). The owner lifts either block at once with
+  `agentctl red release <key> --any`: the red is offered again at the next tick.
 - **Refunds.** A dispatch that did nothing is not counted (`red status` says `[refunded: ...]`): `GAVE UP` / `NOT LANDED`
   because it is already fixed or there is nothing to do; `STOPPED` (superseded) and `red cleared`; a fixer killed
   before any verdict; `BLOCKED ON OWNER` only for a CI read (`gh run view|download`: gh reads with its own
@@ -1497,6 +1507,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `reds_dir` | `AGENTCTL_REDS_DIR` | - | - |
 | `red_crash_block_max` | `AGENTCTL_RED_CRASH_BLOCK_MAX` | `86400` | $AGENTCTL_RED_CRASH_BLOCK_MAX |
 | `red_crash_loop` | `AGENTCTL_RED_CRASH_LOOP` | `3` | $AGENTCTL_RED_CRASH_LOOP |
+| `red_decision_block_max` | `AGENTCTL_RED_DECISION_BLOCK_MAX` | `86400` | an owner-decision block lapses after this: the red offered again |
 | `red_families` | `AGENTCTL_RED_FAMILIES` | - | - |
 | `red_fixers` | `AGENTCTL_RED_FIXERS` | `5` | live fixers at once, every family together |
 | `red_fixer_wall` | `AGENTCTL_RED_FIXER_WALL` | `10800` | a dispatched fixer's maximum wall time |

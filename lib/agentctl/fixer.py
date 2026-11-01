@@ -103,7 +103,8 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
                 "CdpDriver discards), a retry-free guard that names the cause. `~/bin/agentctl ci-why " + str(rid) + "` "
                 "explains the run. Never rerun to green, never loosen a test. Commit with a `Fixes-Red: " + str(num) + "` "
                 "trailer and land it with `~/bin/agentctl land` in the foreground. End at `LANDED <sha>`; if you cannot, "
-                "`GAVE UP: <why>`; if it needs the owner, `~/bin/agentctl red block " + str(num) + " --owner-cause <kind> --cmd \"<command>\"` (only for a cause outside the code that only the owner can act on: never a code red) "
+                "`GAVE UP: <why>`; if the fix needs the owner's decision (a design change the red rules do not let you "
+                "make), `DIAGNOSED: <cause>; decide: <the decision>` (the red waits on the owner with it); if it needs the owner, `~/bin/agentctl red block " + str(num) + " --owner-cause <kind> --cmd \"<command>\"` (only for a cause outside the code that only the owner can act on: never a code red) "
                 "and end `BLOCKED ON OWNER: <command>`.")
     elif u["workflow"] == LOCAL_FLOW:
         task = (f"The pre-push check `{u['job']}` FAILS ON PLAIN {remote()}/main {str(u['run'].get('headSha'))[:10]} (no "
@@ -1032,6 +1033,18 @@ def red_release(store, o_r, target, any_=False):
     for it in red_targets(store, o_r, target, create=False):
         name = red_lease(it["data"]["key"])
         row = store.get(name)
+        blk = red_block_of(it, store) if any_ and not lease_is_live(row, store.clock()) else None
+        if blk and (blk["meta"].get("crash_loop") or blk["meta"].get("decision")):
+            # THE OWNER LIFTS A BLOCK OF THE HARNESS'S OR A DECISION: the red is offered again at the next tick
+            keys = [k for k in blk["meta"].get("keys") or [] if k != it["data"]["key"]]
+            brow = store.get(blk["name"])
+            if keys:  # the block holds other reds too: only this one leaves it
+                store.set_meta(blk["name"], brow["epoch"], brow["secret"], {"keys": keys})
+            else:
+                store.revoke(blk["name"], f"RELEASED by {me}: offered again")
+            rc = 0
+            out.append(f"lifted the owner block of {red_what(it['data'])} ({blk['cause']}): offered again at the next tick")
+            continue
         if not lease_is_live(row, store.clock()):
             continue
         if not any_ and lease_meta(row).get("who") != me:
@@ -1685,7 +1698,8 @@ def red_block_of(it, store=None):
 def block_invalid(store, it, m, t):
     """Why this block no longer justifies holding red `it`, or None (checked at the block AND every tick)."""
     d = it["data"]
-    if m.get("crash_loop"):  # the fixers crash-looped on it (red_crash_loop): the harness, never the code, is the cause
+    if m.get("crash_loop") or m.get("decision"):  # the fixers crash-looped on it (red_crash_loop), or it waits on the
+        # owner's decision (red_decision_block): the harness, or the owner's call, never the code, holds it
         row = store.get(red_lease(d["key"]))
         return f"a live fixer is on it: {row['holder']}" if lease_is_live(row, t) else None
     if m.get("wait_cause") in WAIT_CAUSES:  # an external wait (a spent quota): no owner cause, no owner command

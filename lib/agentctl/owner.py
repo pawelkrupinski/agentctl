@@ -171,7 +171,9 @@ def owner_intro(owner):
             "`red claim` them); new reds of your family arrive in RED-INBOX.md and as your next turn. "
             + (f"This turn's reds: {reds}. " if reds else "")
             + "End each turn with ONE verdict line for the turn's reds (LANDED <sha> / GAVE UP: / DIAGNOSED: / BLOCKED "
-              "ON OWNER:). ")
+              "ON OWNER:). When the durable fix needs the OWNER'S DECISION (a design change the red rules do not let "
+              "you make), end `DIAGNOSED: <cause>; decide: <the decision only the owner can make>`: the red then waits "
+              "on the owner with it, never offered back to you meanwhile. ")
 
 
 def owner_turn_prompt(fam, rec, st, names, first):

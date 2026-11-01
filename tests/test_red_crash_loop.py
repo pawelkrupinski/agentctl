@@ -167,6 +167,50 @@ class BlockTextTest(CrashLoopBase):
         self.assertEqual(it["data"]["history"][-1]["worktree"], self.tmp.name)
 
 
+class DecisionTest(CrashLoopBase):
+    """2026-11-01, #579: DIAGNOSED "resolver design ... needs your design call" went back to its fixer turn after turn.
+    A diagnosis that needs the owner becomes an owner-decision block carrying it -- never the crash-loop breaker's."""
+    DIAG = "DIAGNOSED: the UK flip is resolver design (partial-input grouping)"
+
+    def test_a_diagnosis_naming_the_decision_blocks_on_the_owner_with_it(self):
+        it, acts = self.launch(self.red(), outcome=self.DIAG + "; decide: change the threshold or accept the flip")
+        self.assertEqual(it["state"], "blocked-external", acts)
+        blk = A.red_block_of(it, self.st)
+        self.assertEqual(blk["cause"], A.DECISION_CAUSE)
+        self.assertIn("resolver design (partial-input grouping)", blk["text"])
+        self.assertIn("DECIDE: change the threshold or accept the flip", blk["text"])
+        self.assertIn(f"red release {it['data']['key']} --any", blk["text"])
+        self.assertIsNone(A.block_invalid(self.st, it, blk["meta"], self.t[0]), "a test red may hold THIS block")
+        self.assertEqual(A.red_crash_streak(it["data"]), [], "never a crash")
+        self.assertNotIn("crash_loop", it["data"])
+        self.assertEqual(A.red_unheld(self.st, self.t[0]), [])
+
+    def test_one_diagnosis_goes_to_an_implementer_a_second_in_a_row_needs_the_owner(self):
+        it, _ = self.launch(self.red(), outcome=self.DIAG)
+        self.assertEqual(it["state"], "offered", "the implementer is briefed with it, as before")
+        it, _ = self.launch(it, outcome="lease expired", notes="")  # a lapse between them is skipped
+        it, _ = self.launch(it, outcome=self.DIAG + " again")
+        self.assertEqual(it["state"], "blocked-external")
+        self.assertIn("DIAGNOSED twice in a row", A.red_block_of(it, self.st)["text"])
+
+    def test_a_result_between_two_diagnoses_keeps_the_implementer(self):
+        it, _ = self.launch(self.red(), outcome=self.DIAG)
+        it, _ = self.launch(it, outcome="GAVE UP: cannot reproduce")
+        it, _ = self.launch(it, outcome=self.DIAG)
+        self.assertEqual(it["state"], "offered")
+
+    def test_the_owner_lifts_a_decision_or_crash_loop_block_with_red_release_any(self):
+        for outcome, tier, n in ((self.DIAG + "; decide: x", "fresh", 1), (CRASH, "deep", 3)):
+            it = self.red(key=f"k-{n}", tier=tier, attempts=3)
+            for _ in range(n):
+                it, _ = self.launch(it, outcome=outcome)
+            self.assertEqual(it["state"], "blocked-external")
+            rc, out = A.red_release(self.st, "pawelkrupinski/movies", it["data"]["key"], any_=True)
+            self.assertEqual(rc, 0, out)
+            self.assertIn("lifted the owner block", out[0])
+            self.assertIsNone(A.red_block_of(it, self.st))
+
+
 class RecoveryTest(CrashLoopBase):
     def snap(self, rid, num, conclusion):
         snap = {"latest": {"Identity model convergence": {"databaseId": rid, "number": num, "conclusion": conclusion}}}
