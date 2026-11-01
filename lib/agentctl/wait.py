@@ -39,21 +39,25 @@ def relevant_lines(log_text, tail, strong_jobs=None):
 # flip, marked #595's Dracula fix and #549's slice refuted). The step log names each listing as
 # `<venue> | <raw title>: <takes...>` under `## <cc> flips: ...`; the red is keyed by those, not the seed or the count.
 DRIFT_LINE = re.compile(r"\b(?:divergence|flip)\(s\)")
+# IdentityDrift.scala prints `## <cc> flips: ...` and `## <cc> known flips: ...` (two summary lines), then the rows:
+# `      FIXED, remove its row: ...` and `      KNOWN: <row>` (the baseline's: never the red), then each reason's
+# `  N listing(s)  flip: <reason>` and its fresh rows `      <venue> | <title>: <film> [<take>] -> ... [seed S]`, <film>
+# `none` or `tmdb:N` (#629: `Keswick Alhambra | Scottish Ballet: These Violent Delights: none [1 boot: ...`).
 FLIP_HEADER = re.compile(r"^## ([a-z]{2,}(?:-[a-z]+)*)\b(.*)$")
-FLIP_ROW = re.compile(r"^\s{4,}(?!FIXED\b)(\S.*? \| .+)$")
-FLIP_TAKES = re.compile(r": (?=[a-z]+:\S|\[)")
+FLIP_ROW = re.compile(r"^\s{4,}(?!FIXED\b|KNOWN:)(\S.*? \| .+)$")
+FLIP_TAKES = re.compile(r": (?=(?:none|[a-z]+:\S+) \[|[a-z]+:\S|\[)")
 FLIP_KEY_MAX = 5  # listings named in a key; more are a stable hash of the whole set
 
 
 def flip_listings(log):
     """The sorted set of `cc:venue|title` (lowercased, spaces collapsed) the report of a takes-drift job names: the rows
-    under each `## <cc>` header (flips and divergences; never the `known` baseline's)."""
+    under each `## <cc>` header (flips and divergences; never a `KNOWN:` baseline row or a `FIXED,` one)."""
     out, cc = set(), None
     for raw in log.splitlines():
         line = LOG_TS.sub("", ANSI.sub("", raw.split("\t", 2)[2] if raw.count("\t") >= 2 else raw)).rstrip()
         h = FLIP_HEADER.match(line)
         if h:
-            cc = None if "known" in h.group(2).split(":")[0] else h.group(1)
+            cc = h.group(1)
             continue
         m = FLIP_ROW.match(line)
         if m and cc:
@@ -75,14 +79,23 @@ def flip_key_line(listings):
     return f"flips: {len(listings)} listings #" + "".join(chr(ord("g") + int(c, 16)) for c in h)
 
 
+# A JOB LOG HOLDS ANSI COLOURS, and gh refuses to print a response with terminal escape sequences unless
+# --allow-escape-sequences is passed (2026-11-01: #629's flipped listings went unread, LOG UNREADABLE, so it was keyed
+# by its seed line and "refuted" the fixes of two other flips). A gh too old to know the flag never refused: without it.
+ESCAPE_FLAG = "--allow-escape-sequences"
+
+
 def fetch_job_log_api(o_r, job_id):
     """A job's whole log through the REST API (`gh run view --log` can hit stream cancels); raises with stderr."""
     env = forge_env(o_r)
-    for attempt in (1, 2):
-        r = subprocess.run(forge_argv(o_r, "api", f"repos/{o_r}/actions/jobs/{job_id}/logs"), capture_output=True, text=True,
-                           env=env, timeout=300)
+    flag = [ESCAPE_FLAG]
+    for attempt in (1, 2, 3):
+        r = subprocess.run(forge_argv(o_r, "api", *flag, f"repos/{o_r}/actions/jobs/{job_id}/logs"), capture_output=True,
+                           text=True, env=env, timeout=300)
         if r.returncode == 0:
             return r.stdout
+        if flag and "unknown flag" in (r.stderr or "") and ESCAPE_FLAG in (r.stderr or ""):
+            flag = []
     raise RuntimeError((r.stderr.strip().splitlines() or [f"exit {r.returncode}"])[-1][:200])
 
 

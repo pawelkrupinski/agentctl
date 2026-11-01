@@ -20,13 +20,21 @@ def seed_line(seed, n=1):
 
 
 def job_log(listings, seed):
-    out = ["2026-11-01T10:00:00.0000000Z ## uk: 900 listings, 2 seed(s), 0 divergence(s) (0 listings), 0 allow-listed",
-           f"2026-11-01T10:00:01.0000000Z ## uk flips: {len(listings)} flip(s) ({len(listings)} listings), 0 allow-listed"]
+    """IdentityDrift.scala's report as a job log: both summary lines, then the KNOWN (baseline) and FIXED rows, then each
+    reason's fresh rows (the order #629's real log has; tests/fixtures/drift-629-uk-takes-drift-2.log)."""
+    # a real job log carries ANSI colours (the step's command echo), which gh refuses to print without
+    # --allow-escape-sequences (#629's listings went unread and it was keyed by its seed line)
+    out = ["2026-11-01T09:59:59.0000000Z \x1b[36;1mscripts/ci/identity-drift uk\x1b[0m",
+           "2026-11-01T10:00:00.0000000Z ## uk: 900 listings, 2 seed(s), 0 divergence(s) (0 listings), 0 allow-listed",
+           f"2026-11-01T10:00:01.0000000Z ## uk flips: {len(listings) + 1} flip(s) ({len(listings) + 1} listings), 0 allow-listed, 1 known",
+           "2026-11-01T10:00:01.5000000Z ## uk known flips: 1 known flip(s) remaining (1 listings in identity-flips-baseline.tsv), 1 fixed",
+           "2026-11-01T10:00:01.6000000Z       FIXED, remove its row: Kino Fixed | Gone [seed 3] — no flip in this run",
+           "2026-11-01T10:00:01.7000000Z       KNOWN: Kino Known | Baselined: tmdb:1 [2 fill: OwnMatch: x] -> none [3 boot: y] [seed 1]"]
+    if listings:
+        out.append("2026-11-01T10:00:02.0000000Z   %d listing(s)  flip: back to a film it left" % len(listings))
     for l in listings:
-        out += ["2026-11-01T10:00:02.0000000Z   1 listing(s)  flip: back to a film it left",
-                f"2026-11-01T10:00:03.0000000Z       {l}: tmdb:11 [3 scrape: OwnMatch: own] -> tmdb:22 [4 answer] [seed {seed}]"]
-    out.append("2026-11-01T10:00:04.0000000Z ## uk known flips: 2 known flip(s) remaining (2 listings in the baseline), 0 fixed")
-    out.append("2026-11-01T10:00:05.0000000Z       Kino Known | Baselined: tmdb:1 [seed 1]")
+        out.append(f"2026-11-01T10:00:03.0000000Z       {l}: tmdb:11 [3 scrape: OwnMatch: own] -> tmdb:22 [4 answer] [seed {seed}]")
+    out.append("2026-11-01T10:00:05.0000000Z ## DRIFT VERDICT: RED")
     return "\n".join(out) + "\n"
 
 
@@ -145,6 +153,17 @@ class DriftKeyTest(DriftKeyBase):
         lines, _n, per_job = A.explain_run_jobs(MOVIES, {"databaseId": 40}, 6)
         self.assertTrue(per_job[0][2].startswith("::error"), per_job)
         self.assertTrue(any("no flipped listing named" in l for l in lines), lines)
+
+    def test_629s_real_log_is_keyed_by_its_flipped_listing(self):
+        """#629's real job log (trimmed): ANSI colours, the known header BEFORE the fresh rows, a title holding `: `,
+        and a first take of `none [...]`. It was keyed by its seed line, as #595's and #549's reds were."""
+        real = open(os.path.join(HERE, "fixtures", "drift-629-uk-takes-drift-2.log")).read()
+        self.assertIn("\x1b[", real)
+        self.assertEqual(A.flip_listings(real), ["uk:keswick alhambra|scottish ballet: these violent delights"])
+        self.drift_run(40, 20, [], seed=42)
+        self.put("api-repos_pawelkrupinski_movies_actions_jobs_400_logs.json", real)
+        _lines, _n, per_job = A.explain_run_jobs(MOVIES, {"databaseId": 40}, 6)
+        self.assertEqual(per_job[0][2], "flips: uk:keswick alhambra|scottish ballet: these violent delights")
 
     def test_the_listings_are_a_sorted_set(self):
         self.assertEqual(A.flip_listings(job_log([LADY, DRACULA, LADY], 1)),

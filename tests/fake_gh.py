@@ -46,6 +46,9 @@ if argv[:1] == ["api"]:
         if argv[i] in ("-i", "--include"):
             include, i = True, i + 1
             continue
+        if argv[i] == "--allow-escape-sequences":
+            i += 1
+            continue
         if argv[i] in ("-X", "--method", "-H", "--header", "--input", "-f", "-F"):
             if argv[i] in ("-X", "--method"):
                 method = argv[i + 1]
@@ -65,6 +68,10 @@ if argv[:1] == ["api"]:
         sys.stderr.write("gh: Not Found (HTTP 404)\n")
         sys.exit(1)
     body = open(f).read()
+    if "\x1b" in body and "--allow-escape-sequences" not in argv:  # gh 2.8x+: a job log's ANSI colours are refused
+        sys.stderr.write("the response contains terminal escape sequences; pass --allow-escape-sequences to output it "
+                         "anyway\n")
+        sys.exit(1)
     if include:  # GitHub's conditional GET: an ETag per body; a matching If-None-Match is a 304 with no body
         import hashlib
         etag = 'W/"%s"' % hashlib.sha1(body.encode()).hexdigest()

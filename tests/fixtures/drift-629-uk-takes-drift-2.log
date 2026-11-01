@@ -1,0 +1,22 @@
+2026-11-01T19:25:36.7590424Z [36;1mpython3 "$GITHUB_WORKSPACE/scripts/ci/job_metrics.py" start || true[0m
+2026-11-01T19:26:16.7935368Z takes-drift-2 (uk) replays seed 42 (run #629, pins '41,42')
+2026-11-01T19:45:01.0123485Z ## uk: 36649 listings, 1 seed(s), 0 divergence(s) (0 listings), 0 allow-listed, in 912s
+2026-11-01T19:45:01.0124792Z ## uk pending takes vs the final take, by awaited input (listing-projections, all seeds):
+2026-11-01T19:45:01.0125784Z       kind           pending   differ   share
+2026-11-01T19:45:01.0126836Z       page            280265     1151    0.4%
+2026-11-01T19:45:01.0127484Z       poster          235719       38    0.0%
+2026-11-01T19:45:01.0128106Z       search          194337     1461    0.8%
+2026-11-01T19:45:01.0128720Z       pool-record     192701     1486    0.8%
+2026-11-01T19:45:01.0129196Z       family           94518      164    0.2%
+2026-11-01T19:45:01.0129558Z       find              9752        0    0.0%
+2026-11-01T19:45:01.0129910Z       any             523675     1742    0.3%
+2026-11-01T19:45:01.0131063Z ## uk pending [seed 42]: pending at projection: peak 31620 of 36649, mean 16892.7, last 9888; 35765 listing(s) ever Pending; 50023 stretch(es) decided, projections p50 7 p90 26 max 26, minutes p50 35 p90 141 max 141; 9888 still Pending at the end (longest 31 projections, 161 min)
+2026-11-01T19:45:01.0132256Z ## uk flips: 1 flip(s) (1 listings), 0 allow-listed, 0 known
+2026-11-01T19:45:01.0133306Z ## uk known flips: 0 known flip(s) remaining (0 listings in identity-flips-baseline.tsv), 0 fixed
+2026-11-01T19:45:01.0133893Z   1 listing(s)  flip: back to a film it left
+2026-11-01T19:45:01.0139073Z       Keswick Alhambra | Scottish Ballet: These Violent Delights: none [1 boot: Vetoed: node Native(Keswick Alhambra,https://keswickalhambra.co.uk/KeswickAlhambra.dll/WhatsOn?f=1933481,Scottish Ballet: These Violent Delights)] -> tmdb:1462368 [2 fill: OwnMatch: node Native(Chichester Cinema at New Park,https://bookings.chichestercinema.org/ChichesterCinema.dll/TSelectItems.waSelectItemsPrompt.TcsWebMenuItem_979.TcsWebTab_980.TcsProgramme_14226783,These Violent Delights)] -> tmdb:1462368 [8 fill+answer: OwnMatch: node Published(Brewery Arts Centre Kendal,These Violent Delights,None,List())] -> none [9 scrape: Vetoed: node Native(Keswick Alhambra,https://keswickalhambra.co.uk/KeswickAlhambra.dll/WhatsOn?f=1933481,Scottish Ballet: These Violent Delights)] -> tmdb:1462368 [13 scrape: OwnMatch: node Published(BEAM (Hertford Theatre),BEAM Seniors: These Violent Delights,Some(2026),List(Christopher Hampson, Oscar Sansom))] -> tmdb:1462368 [14 settle (settled): OwnMatch: node Published(BEAM (Hertford Theatre),BEAM Seniors: These Violent Delights,Some(2026),List(Christopher Hampson, Oscar Sansom))] (back to a film it left) [seed 42]
+2026-11-01T19:45:01.0144987Z ## DRIFT VERDICT: RED
+2026-11-01T19:45:01.0801409Z identity drift (uk): seed 42 is red -- reproduce: IdentityDrift uk --seed 42
+2026-11-01T19:45:01.0866495Z ##[error]0 divergence(s) from a whole resolve and 1 flip(s) on the way, beyond the allow-lists and 0 known flip(s) -- seed 42 -- each named in the step log; reproduce: IdentityDrift uk --seed 42
+2026-11-01T19:45:01.0877550Z ##[error]Process completed with exit code 1.
+2026-11-01T19:45:01.0940380Z ##[group]Run scripts/ci/bounded-step.sh --reap
