@@ -490,8 +490,9 @@ def live_lease_worktrees():
     return out
 
 
-def orphan_candidates(repo, now_=None):
-    """[(worktree, commits, key, last verdict)] of the orphans now."""
+def orphan_candidates(repo, now_=None, dead=None):
+    """[(worktree, commits, key, last verdict)] of the orphans now. A worktree holding a withdrawn or refuted blame
+    revert (blame_land_refusal) is never one: it goes to `dead` [(worktree, why)] when given."""
     t = now_ if now_ is not None else time.time()
     try:
         cwds = {os.path.realpath(c) for c in process_cwds().values()}
@@ -502,6 +503,7 @@ def orphan_candidates(repo, now_=None):
     except (Exception, SystemExit):
         landers = set()
     live = live_lease_worktrees()
+    records = blame_records()
     try:  # a change in the land queue (queued, checking, waiting) is not orphaned
         d, _c, _w = waiting_state(repo)
         live |= {os.path.realpath(e.get("worktree") or "") for e in waiting_entries(d, open_only=False)
@@ -524,6 +526,11 @@ def orphan_candidates(repo, now_=None):
             continue
         commits, key = orphan_key(repo, p)
         if commits and key:
+            why = blame_land_refusal(p, commits, p, records=records)
+            if why:  # 2026-11-01: movies-wt-revert-629 submitted as an orphan after its blame was withdrawn
+                if dead is not None:
+                    dead.append((p, why))
+                continue
             out.append((p, commits, key, last_land_verdict(p)))
     return out
 
@@ -541,6 +548,9 @@ def probe_orphan_landed(a):
     sup = superseded_mark(rp)
     if sup:
         return True, f"superseded by {sup['by']}"
+    dead = blame_land_refusal(wt, _c, wt)
+    if dead:
+        return True, f"never landed: {dead}"
     if rp in live_lease_worktrees():
         return True, "a live claim works in it"
     cover = orphan_covered_by(wt, worktree_change_items(wt))  # orphan_duty's rule (a): an open change carries it
@@ -813,8 +823,13 @@ def orphan_duty(repo=None, dry_run=False, now_=None):
         return []
     path = recovery_dir("orphans.json")
     st = read_record(path) or {}
-    did, acted = superseded_duty(repo, dry_run), 0
-    for wt, commits, key, verdict in orphan_candidates(repo, now_):
+    did, acted, dead = superseded_duty(repo, dry_run), 0, []
+    cands = orphan_candidates(repo, now_, dead)
+    for wt, why in dead:  # a dead blame revert: never submitted; blame's own worktree removed (only its reverts in it)
+        name = os.path.basename(wt)
+        did.append(f"orphan {name}: not submitted ({why})" if dry_run else
+                   f"orphan {name}: not submitted ({why}); {blame_drop_revert_worktree(repo, wt, None, why)}")
+    for wt, commits, key, verdict in cands:
         rec = st.get(key) or {"worktree": wt, "first": ts(), "actions": []}
         name = os.path.basename(wt)
         if dry_run:
