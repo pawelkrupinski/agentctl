@@ -620,6 +620,10 @@ def submit_change(body, repo=None):
         raise ValueError(f"a change needs worktree, head (a full sha) and commits; missing or bad: {missing or ['head']}")
     if body.get("id") and not re.fullmatch(r"[\w.-]{1,120}", body["id"]):
         raise ValueError("a bad change id")
+    why = do_not_land(repo, body["commits"] if isinstance(body["commits"], list) else str(body["commits"]).split(),
+                      body.get("branch") or "")
+    if why:
+        raise ValueError(f"NOT LANDED: {why}")
     d = waiting_state(repo)[0]
     e, ahead = queue_change(d, {k: body.get(k) for k in SUBMIT_FIELDS}, body.get("id"))
     supersede_stranded(d, e)

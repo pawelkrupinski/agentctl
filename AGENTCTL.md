@@ -134,6 +134,9 @@ moves it forward; nothing is a detached process that can die with its state in i
 - **Never deletes unmerged work.** `cleanup` deletes only what is proven merged: the worktree's HEAD is an ancestor of
   <remote>/main, or every one of its commits is patch-equivalent there per `git cherry`. The tree must also be clean and
   idle. Every deletion is re-verified just before it happens and logged.
+- **Throwaway work never lands (2026-11-01).** `land` (and so every re-land: recovery, orphan duty, blame, fixer) and a
+  laptop submission refuse with `NOT LANDED` when the branch is `measure/*` or `experiment/*`, a commit's subject starts
+  PROTOTYPE / WIP / DO NOT LAND (any case), or a commit carries a `Do-Not-Land:` trailer (`do_not_land`, tools.py).
 - **One push to main at a time.** Every push to main happens under the `land/<repo>` lease, after the pushed tip's own
   checks passed on the base it is pushed onto.
 - **Every long wait is OWNED**: `wait` holds one flock per target under `~/.cache/agentctl/owners/`

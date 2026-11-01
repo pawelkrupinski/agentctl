@@ -441,6 +441,28 @@ def allowed(path, globs):
     return any(fnmatch.fnmatch(path, g) or path.startswith(g.rstrip("/") + "/") for g in globs)
 
 
+DO_NOT_LAND_BRANCH = re.compile(r"^(measure|experiment)/")
+DO_NOT_LAND_SUBJECT = re.compile(r"^\s*(PROTOTYPE|WIP|DO[ _-]?NOT[ _-]?LAND)(?![\w-])", re.I)
+DO_NOT_LAND_TRAILER = re.compile(r"^Do-Not-Land:", re.I | re.M)
+
+
+def do_not_land(repo, commits, branch=""):
+    """Why this work must never reach main (throwaway: a measure/* or experiment/* branch, a commit whose subject starts
+    PROTOTYPE / WIP / DO NOT LAND, a `Do-Not-Land:` trailer), or None. 2026-11-01: `agentctl land` from a prototype
+    worktree (measure/chain-settle-proto, "PROTOTYPE: ... measure only, do not land") queued twice. Every path that queues
+    a worktree's commits (land, a re-land, an orphan or blame re-land, a laptop submission) passes through here."""
+    if DO_NOT_LAND_BRANCH.match(branch or ""):
+        return f"branch {branch} is throwaway work (measure/* and experiment/* never land)"
+    for c in commits or []:
+        msg = git(repo, "log", "-1", "--format=%B", c, check=False).stdout
+        subject = msg.strip().splitlines()[0] if msg.strip() else ""
+        if DO_NOT_LAND_SUBJECT.match(subject):
+            return f"commit {c[:10]} is marked not for landing (subject: {subject[:80]!r})"
+        if DO_NOT_LAND_TRAILER.search(msg):
+            return f"commit {c[:10]} carries a Do-Not-Land: trailer"
+    return None
+
+
 def check_range(repo, base, head, allow, max_foreign):
     problems = []
     mb = git(repo, "merge-base", base, head).strip()
