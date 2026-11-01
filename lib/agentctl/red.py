@@ -745,7 +745,7 @@ def commit_fixes(repo, sha, store=None):
     return fix_check(repo, sha, vals, store)[0] if vals else set()
 
 
-_trailer_fixes = {}
+_trailer_fixes = process_cache({})
 
 
 def entry_fixes(repo, e):
@@ -914,7 +914,7 @@ def red_offer(store, it, text, data=None, repo=None, escalate=False, verdict=Non
 # its own) and tells it in RED-INBOX.md in its worktree, never a second fixer; when it ends, the next fixer of the
 # family goes on in its worktree (previous_fixer_tree). The families are config: red-families.json beside agentctl
 # ($AGENTCTL_RED_FAMILIES names another file).
-_families_cache = {}
+_families_cache = process_cache({})
 
 
 def red_families():
@@ -1155,7 +1155,7 @@ def red_settled_runs(store):
 RED_STALE_DAYS = 14          # $AGENTCTL_RED_STALE_DAYS
 RETIRE_MAIN_TTL = 60         # s: main's head is read again after this
 RETIRE_FAIL_TTL = 60         # s: an unreadable repo is not asked again before this
-_retire_cache = {}
+_retire_cache = process_cache({})
 
 
 def _retire_get(key, ttl, f):

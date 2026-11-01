@@ -393,7 +393,7 @@ def queue_verdict(d, e, status, verdict, tail=(), code=1, **fields):
 # store's items its clone has the commits of. The laptop holds no queue of its own: what its local dir still holds
 # goes to ci-runner's queue (migrate_local_queue). A store item no queue carries is a STRANDED CHANGE condition.
 LANDED_LOOK_EVERY = 600
-_landed_looked = {}
+_landed_looked = process_cache({})
 
 
 def change_landed(repo, head, commits=None):

@@ -1215,7 +1215,7 @@ def red_tick_others(store=None, now_=None, dispatch=False, force=True):
     return acts
 
 
-_others_said = {}  # repo -> (why, when said): a skipped repo's line is said when it changes, else every RED_SKIP_SAY s
+_others_said = process_cache({})  # repo -> (why, when said): a skipped repo's line is said when it changes, else every RED_SKIP_SAY s
 RED_SKIP_SAY = 600  # s between the lines of another repo whose tick keeps failing for the same reason
 
 

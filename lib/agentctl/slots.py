@@ -341,7 +341,7 @@ def lock_beat(progress=None):
                             "was lost")
 
 
-_held_leases = []  # the LeaseHold objects this process holds (renewed together on progress)
+_held_leases = process_cache([])  # the LeaseHold objects this process holds (renewed together on progress)
 
 
 class LeaseHold:

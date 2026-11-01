@@ -51,8 +51,8 @@ def status_err(e):
     return {"error": f"{type(e).__name__}: {str(e).replace('agentctl: ', '')[:300]}"}
 
 
-_status_last = {}      # source name -> (finished at, result, took s) of its last read (the server's own reads only)
-_status_reading = {}   # source name -> the thread reading it
+_status_last = process_cache({})      # source name -> (finished at, result, took s) of its last read (the server's own reads only)
+_status_reading = process_cache({})   # source name -> the thread reading it
 
 
 def status_sources(sources, bound, keep=False):
@@ -412,9 +412,9 @@ def status_agent_logs(run):
 STATUS_AGENT_BOUND = 4      # s the page waits for one agent's details ($AGENTCTL_STATUS_AGENT_BOUND)
 STATUS_GIT_TIMEOUT = 120    # s one git call may run (in its background read; never the page's wait)
 STATUS_DIRTY_TTL = 60       # s a worktree's `git status` is shown again before it is read again
-_status_wt = {}             # worktree -> {"head", "commits", "recent_files", "dirty", "dirty_at", "error", "at"}
-_status_wt_reads = {}       # worktree -> the thread reading it
-_status_said = {}           # transcript path -> ((size, mtime), (text, at))
+_status_wt = process_cache({})             # worktree -> {"head", "commits", "recent_files", "dirty", "dirty_at", "error", "at"}
+_status_wt_reads = process_cache({})       # worktree -> the thread reading it
+_status_said = process_cache({})           # transcript path -> ((size, mtime), (text, at))
 _status_wt_lock = threading.Lock()
 
 
@@ -851,7 +851,7 @@ def status_page_server(host, port):
     return Server((host, port), Handler)
 
 
-_status_page = {}
+_status_page = process_cache({})
 
 
 def status_page_file():

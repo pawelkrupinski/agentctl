@@ -186,7 +186,7 @@ _last_code_check = [0.0]
 
 
 _restart_refused = [None]
-_smoked = {}
+_smoked = process_cache({})
 
 
 def smoke_check(path):

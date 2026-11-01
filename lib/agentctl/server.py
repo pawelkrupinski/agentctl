@@ -360,7 +360,7 @@ CLONE_REPAIR_RETRY = 15 * 60  # a repair that failed is tried again after this
 CLONE_LOCK_WAIT = 300         # the swap waits this long for the clone's users to finish, then tries again next tick
 _clone_lock_depth = threading.local()
 _clone_repairing = threading.Lock()
-_clone_repair_at = {}
+_clone_repair_at = process_cache({})
 
 
 def heal_enabled(repo):

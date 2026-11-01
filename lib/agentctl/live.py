@@ -20,10 +20,10 @@ LIVE_ROWS_MAX = 12              # extra rows (sessions, subagents) on the page
 LIVE_STALL = 30 * 60            # s without output mid-turn: a subagent (no pid to check) is taken as failed
 LIVE_REGISTRY_TTL = 5           # s a registry read is reused
 LIVE_ID_RE = re.compile(r"(?:fixer|session|task)-[A-Za-z0-9_-]{1,100}")
-_live_leased = {}               # agent id -> entry, of the lease holders the last Agents read saw (no store read here)
+_live_leased = process_cache({})               # agent id -> entry, of the lease holders the last Agents read saw (no store read here)
 _live_reg = {"at": 0.0, "reg": None}
 _live_reg_lock = threading.Lock()
-_live_info = {}                 # transcript -> ((size, mtime), tail info)
+_live_info = process_cache({})                 # transcript -> ((size, mtime), tail info)
 
 
 def claude_projects_root():
@@ -71,7 +71,7 @@ def live_id_part(s):
     return re.sub(r"[^A-Za-z0-9_-]", "_", str(s))[:100]
 
 
-_live_metas = {}                # subagent .meta.json -> (mtime, its JSON)
+_live_metas = process_cache({})                # subagent .meta.json -> (mtime, its JSON)
 
 
 def live_meta(p):

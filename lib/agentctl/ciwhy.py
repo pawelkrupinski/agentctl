@@ -21,7 +21,7 @@ GATING = {"pawelkrupinski/movies": [("Main", "main.yml"), ("Identity model conve
 RED_PRIMARY = "pawelkrupinski/movies"
 RED_REPOS_DEFAULT = [{"repo": RED_PRIMARY, "gate": [list(g) for g in GATING[RED_PRIMARY]], "push": "land"}]
 RED_PUSH_POLICIES = ("land", "owner-only")
-_red_repos_cache = {}
+_red_repos_cache = process_cache({})
 
 
 def red_repos_path():
@@ -184,7 +184,7 @@ def job_is_phantom(j):
     return not bad or bool(SETUP_STEP.search(bad[0]["name"]))
 
 
-_gate_lists, _outside_lists = {}, {}  # workflow -> the runs on main gate_runs / outside_gate last listed (newest first)
+_gate_lists, _outside_lists = process_cache({}), process_cache({})  # workflow -> the runs on main gate_runs / outside_gate last listed (newest first)
 
 # AN INCOMPLETE RUN IS NO VERDICT (movies 4da98c308, 2026-10-30: convergence's `verdict complete` job fails a main run
 # whose takes or takes-drift rows were skipped, cancelled or missing -- "no false green"). A failed run whose ONLY real
@@ -192,8 +192,8 @@ _gate_lists, _outside_lists = {}, {}  # workflow -> the runs on main gate_runs /
 # red, no streak, no fixer -- and ci-why names it NO VERDICT. Recovery is the next complete run.
 VERDICT_COMPLETE_JOB = re.compile(r"(^|/\s*)verdict complete$")
 NO_VERDICT_FLOWS = {"Identity model convergence"}  # the workflows with a `verdict complete` job (only they are read)
-_gate_no_verdict = {}  # workflow -> its newest no-verdict run newer than its decided one (gate_runs), or None
-_no_verdict_mem = {}
+_gate_no_verdict = process_cache({})  # workflow -> its newest no-verdict run newer than its decided one (gate_runs), or None
+_no_verdict_mem = process_cache({})
 
 
 def job_is_verdict_report(j):
@@ -297,10 +297,10 @@ def red_for(since, now=None):
 
 
 OUTSIDE_FLOW_RECHECK = 1800  # a workflow outside the newest-200 window is listed on its own this often (audit #7)
-_flow_files = {}   # main sha -> {workflow name: file}
-_flow_meta = {}    # main sha -> {"callable": {name whose only trigger is workflow_call}, "paths": {name: path},
+_flow_files = process_cache({})   # main sha -> {workflow name: file}
+_flow_meta = process_cache({})    # main sha -> {"callable": {name whose only trigger is workflow_call}, "paths": {name: path},
 #                                  "callers": {called file's basename: [caller names]}}
-_flow_runs = {}    # workflow file -> (listed at, its runs on main)
+_flow_runs = process_cache({})    # workflow file -> (listed at, its runs on main)
 
 
 def main_workflow_files(o_r):

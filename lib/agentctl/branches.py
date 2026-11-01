@@ -797,7 +797,7 @@ def cached_gate_summary(o_r, now=None):
 
 
 _last_gate_publish = [0.0]
-_bounded = {}
+_bounded = process_cache({})
 
 
 def run_bounded(name, fn, secs):
@@ -1109,7 +1109,7 @@ def allowed_roots():
     return roots + [x for x in os.environ.get("AGENTCTL_ALLOWED_ROOTS", "").split(":") if x]
 
 
-_skipped_paths = set()
+_skipped_paths = process_cache(set())
 PROTECTED_DIRS = ("Desktop", "Documents", "Downloads")  # under HOME: never touched, even below an allowed root
 
 
@@ -1157,7 +1157,7 @@ def fmt_age(secs):
     return f"{secs // 86400} d" if secs >= 86400 else f"{secs // 3600} h" if secs >= 3600 else f"{secs // 60} min"
 
 
-_blocker_cache = {}
+_blocker_cache = process_cache({})
 
 
 def cached_dispatch_blocker(ttl=60):

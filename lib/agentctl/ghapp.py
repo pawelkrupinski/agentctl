@@ -81,7 +81,7 @@ def _ghapp_http(method, path, bearer, body=None):
             from None
 
 
-_ghapp_tokens = {}  # (role, o_r) -> {"token", "expires"}
+_ghapp_tokens = process_cache({})  # (role, o_r) -> {"token", "expires"}
 
 
 def _ghapp_cache_path(role, o_r):

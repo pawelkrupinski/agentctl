@@ -342,7 +342,7 @@ def batch_goes_first(st, d, states=BATCH_FIRST):
     return it if it and it["state"] in states and waiting_entries(d) else None
 
 
-_behind_said = {}  # (entry id, what) -> batch id: said once per batch
+_behind_said = process_cache({})  # (entry id, what) -> batch id: said once per batch
 
 
 def behind_batch(e, it, what):
@@ -760,7 +760,7 @@ TICK_STOP = [False]  # set by SIGTERM in `agentctl tick`: the loop returns betwe
 # Its error, when it ends, is reported at the next look. The steps' writes are store transitions (compare-and-set) and
 # atomic entry files, so a slow step overlapping the next tick's other steps is safe.
 STEP_JOIN = 20
-_step_errors = {}
+_step_errors = process_cache({})
 
 
 def run_step(name, step):

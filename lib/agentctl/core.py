@@ -43,6 +43,16 @@ A locked vault prints exactly: vault <ns> locked: ask the user to run `! secrets
 agentctl never runs `secrets unlock` (Touch ID is the user's). Output never contains a token: tools read it at use."""
 import argparse, contextlib, io, datetime as dt, fcntl, fnmatch, glob, itertools, json, os, re, shlex, signal, subprocess, sys, threading, time, traceback, urllib.error, urllib.parse, urllib.request
 
+# THE PROCESS-WIDE CACHES, IN ONE REGISTRY (simplification-2026-10-31 item 10): every module-level dict, list or set a
+# part keeps between calls is made with `process_cache(...)`, so the test harness clears them all between tests
+# (tests/test_agentctl.py Base) -- 33 of them leaked from one test into the next. test_caches holds the rule.
+PROCESS_CACHES = []
+
+
+def process_cache(empty):
+    PROCESS_CACHES.append(empty)
+    return empty
+
 HOME = os.path.expanduser("~")
 
 
@@ -202,7 +212,7 @@ def git_ok(repo, *args):
 # when main has a patch-equivalent commit (git cherry's "-") OR a TWIN: the same subject, author and author date with
 # identical changed lines per file (context and line numbers left out). Every "is it landed" check asks this: the
 # orphans, the queue's entries and change items (W1 with them), the fixers' worktrees, the closers.
-_changed_lines_cache, _main_index_cache = {}, {}
+_changed_lines_cache, _main_index_cache = process_cache({}), process_cache({})
 
 
 def changed_lines(repo, c):
@@ -307,7 +317,7 @@ def slug(repo_arg):
     raise SystemExit(f"agentctl: unknown repo {repo_arg!r}")
 
 
-_tokens = {}
+_tokens = process_cache({})
 
 
 class NoToken(SystemExit):
@@ -514,7 +524,7 @@ def token(o_r):
 # again). A long-lived process says it once when the token goes missing (and notes the condition then), then at most a
 # summary every TOKEN_MISSING_SUMMARY s, and once more when it is back. Its callers' NoToken is quiet (run_step).
 TOKEN_MISSING_SUMMARY = 600  # s between the summaries of a still-missing token (said on its transition first)
-_token_missing = {}  # ns -> {"since", "reads", "said"}
+_token_missing = process_cache({})  # ns -> {"since", "reads", "said"}
 
 
 def token_missing(ns, why, now_=None):
@@ -602,7 +612,7 @@ API_TIMEOUT = 60
 # once it has been a zombie at two looks in a row, so a child a subprocess.run in another thread is about to wait for is
 # never taken from it.
 _DETACHED = []
-_zombies_seen = set()
+_zombies_seen = process_cache(set())
 
 
 def spawn_detached(argv, **kw):
