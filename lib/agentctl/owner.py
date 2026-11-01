@@ -215,6 +215,9 @@ def red_owner(a):
     write_json(path, rec)
     keep_awake()  # the laptop must not idle-sleep past OWNER_TTL under a held heartbeat (host_slept)
     cli = claude_cli()
+    prev = bg_session(cli, rec["session"][:8]) if rec.get("session") else None
+    if prev and prev.get("id") and prev.get("pid"):  # a restart: the dead wrapper's session still runs, and `--resume`
+        bg_stop(cli, prev["id"])  # of a running session starts a copy beside it -- stopped, it goes on under its own id
     env = {k: v for k, v in os.environ.items() if k not in FIXER_IDENTITY_ENV and k != "AGENTCTL_DETACHED"}  # an agent
     every = env_num("AGENTCTL_RED_RENEW", RED_RENEW_EVERY)
     poll = env_num("AGENTCTL_BG_POLL", BG_POLL)
