@@ -516,6 +516,20 @@ agent must be assigned to it".
   that failed with its signature, never the whole streak, and a claim counts for the signatures it names: a fix for
   job A never counts for job B (2026-10-27: `Fixes-Red: 2104`, a `capture (uk)` fix, was shown as a failed fix of
   #2133's `publish`). One fixer per red run covers all its signatures.
+- **A drift / flip row is keyed by its flipped LISTINGS (2026-11-01).** The first error line of a `takes-drift-*` row is
+  the same for any listing on any seed ("0 divergence(s) ... N flip(s) on the way ... seed S ... reproduce: IdentityDrift
+  uk --seed S"), so every new unrelated flip was the same red and "refuted" the fixes landed for earlier ones (#624, a
+  Ladykillers flip, marked #595's Dracula fix and #549's slice refuted). Now the job's whole log is read through
+  `gh api repos/<o>/<r>/actions/jobs/<id>/logs` and the rows `<venue> | <raw title>: <takes...>` under each `## <cc> flips:`
+  (and divergences; never the `known` baseline's) become the key line `flips: cc:venue|title; ...` (sorted, lowercased;
+  past `FLIP_KEY_MAX` listings, 5, or 150 chars a stable letters-only hash of the set). The red key is workflow + that
+  line, so two failures share a red only if they share the same set of flipped listings, a landed `Fixes-Red:` is
+  refuted only by a newer failure with its own key, and a different listing is a new red with its own fixer. ci-why
+  prints `red key: ...` under the job. A log that cannot be read keys the job the old way (its seed line) and says
+  `LOG UNREADABLE: ... flipped listings` (never cached, read again next tick); a log naming no listing says so (cached).
+  Migration is the classifier version (it covers `flip_listings`, `flip_key_line`, `drift_key`): cached signatures are
+  read again a few per tick, and an open red keyed the old way whose run now fails under a listing red is MERGED into it
+  (runs, history, refuted fixes), as for any re-keyed red; one whose runs no longer fail is cleared by the usual rule.
 - **Fixing it** is any of: a claim (`red claim`: the claimant is a dispatched fixer's name from its session's own record,
   else the Claude session, else the worktree -- never an inherited `$AGENTCTL_AGENT_NAME` inside a session; its pid the Claude Code process); a worktree with an unlanded commit carrying `Fixes-Red: N`
   (committed; patch-equivalent on main counts as landed); a running `agentctl land` from such a worktree (landing); a

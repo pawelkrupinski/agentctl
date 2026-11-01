@@ -992,7 +992,9 @@ def classifier_version():
              "verdict complete beside a real failure: incomplete", inspect.getsource(classify_job),
              inspect.getsource(job_is_phantom), SETUP_STEP.pattern, INFRA_LOG.pattern, UNKNOWN_LOG.pattern,
              KEY_REFUSED_LOG.pattern, STEP_TIMED_OUT, inspect.getsource(relevant_lines), inspect.getsource(job_log_lines),
-             inspect.getsource(choose_job_lines), STRONG.pattern, WEAK.pattern, NOISE.pattern, ANNOTATION.pattern]
+             inspect.getsource(choose_job_lines), inspect.getsource(flip_listings),
+             inspect.getsource(flip_key_line), inspect.getsource(drift_key), DRIFT_LINE.pattern, FLIP_HEADER.pattern,
+             FLIP_ROW.pattern, FLIP_TAKES.pattern, str(FLIP_KEY_MAX), STRONG.pattern, WEAK.pattern, NOISE.pattern, ANNOTATION.pattern]
     return hashlib.sha1("\n".join(parts).encode()).hexdigest()[:12]
 
 

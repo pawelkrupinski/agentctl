@@ -33,6 +33,74 @@ def relevant_lines(log_text, tail, strong_jobs=None):
     return {j: (strong.get(j) or weak.get(j))[-tail:] for j in set(strong) | set(weak)}
 
 
+# A DRIFT / FLIP ROW'S RED IS ITS LISTINGS (2026-11-01): the first error line of a takes-drift row ("0 divergence(s) ... and
+# N flip(s) on the way ... seed S ... reproduce: IdentityDrift uk --seed S") is the same for any listing on any seed, so
+# every new unrelated flip was the same red and "refuted" the fixes landed for the earlier ones (#624, a Ladykillers
+# flip, marked #595's Dracula fix and #549's slice refuted). The step log names each listing as
+# `<venue> | <raw title>: <takes...>` under `## <cc> flips: ...`; the red is keyed by those, not the seed or the count.
+DRIFT_LINE = re.compile(r"\b(?:divergence|flip)\(s\)")
+FLIP_HEADER = re.compile(r"^## ([a-z]{2,}(?:-[a-z]+)*)\b(.*)$")
+FLIP_ROW = re.compile(r"^\s{4,}(?!FIXED\b)(\S.*? \| .+)$")
+FLIP_TAKES = re.compile(r": (?=[a-z]+:\S|\[)")
+FLIP_KEY_MAX = 5  # listings named in a key; more are a stable hash of the whole set
+
+
+def flip_listings(log):
+    """The sorted set of `cc:venue|title` (lowercased, spaces collapsed) the report of a takes-drift job names: the rows
+    under each `## <cc>` header (flips and divergences; never the `known` baseline's)."""
+    out, cc = set(), None
+    for raw in log.splitlines():
+        line = LOG_TS.sub("", ANSI.sub("", raw.split("\t", 2)[2] if raw.count("\t") >= 2 else raw)).rstrip()
+        h = FLIP_HEADER.match(line)
+        if h:
+            cc = None if "known" in h.group(2).split(":")[0] else h.group(1)
+            continue
+        m = FLIP_ROW.match(line)
+        if m and cc:
+            body = re.sub(r"\s*\[seed \d+\]\s*$", "", m.group(1))
+            venue, _, rest = body.partition(" | ")
+            title = FLIP_TAKES.split(rest, 1)[0]
+            out.add(f"{cc}:{' '.join(venue.split())}|{' '.join(title.split())}".lower())
+    return sorted(out)
+
+
+def flip_key_line(listings):
+    """The red's key line for a set of flipped listings: the listings themselves, or past FLIP_KEY_MAX a stable hash of
+    them (letters only: norm_line reads hex runs and digits as noise)."""
+    import hashlib
+    line = "flips: " + "; ".join(listings)
+    if len(listings) <= FLIP_KEY_MAX and len(line) <= 150:
+        return line
+    h = hashlib.sha1("\n".join(listings).encode()).hexdigest()[:16]
+    return f"flips: {len(listings)} listings #" + "".join(chr(ord("g") + int(c, 16)) for c in h)
+
+
+def fetch_job_log_api(o_r, job_id):
+    """A job's whole log through the REST API (`gh run view --log` can hit stream cancels); raises with stderr."""
+    env = forge_env(o_r)
+    for attempt in (1, 2):
+        r = subprocess.run(forge_argv(o_r, "api", f"repos/{o_r}/actions/jobs/{job_id}/logs"), capture_output=True, text=True,
+                           env=env, timeout=300)
+        if r.returncode == 0:
+            return r.stdout
+    raise RuntimeError((r.stderr.strip().splitlines() or [f"exit {r.returncode}"])[-1][:200])
+
+
+def drift_key(o_r, job, first_line):
+    """(key line, note) of a failed takes-drift job: the flipped listings' key line, or (None, why) when the job is no
+    drift row, or its log was not read ("LOG UNREADABLE": never cached, read again) or names no listing (fallback)."""
+    if not (job.get("databaseId") and first_line and DRIFT_LINE.search(first_line)):
+        return None, None
+    try:
+        found = flip_listings(fetch_job_log_api(o_r, job["databaseId"]))
+    except Exception as e:
+        return None, (f"      (LOG UNREADABLE: {job['name']}'s flipped listings: {str(e)[:160]}; keyed by its seed line "
+                      "like any drift row until they are read, read again next time)")
+    if not found:
+        return None, f"      (no flipped listing named in {job['name']}'s log: keyed by its first error line)"
+    return flip_key_line(found), None
+
+
 def raw_tails(log_text, n=3):
     """{job: (line count, last n cleaned lines)} of a --log-failed output."""
     out = {}

@@ -465,9 +465,14 @@ def explain_run_jobs(o_r, run, tail, repo=None):
                                     f"read `gh run view {rid} --log-failed` again; never rerun on this alone")
         kinds.append(kind)
         # a job with no error line is known by its failing STEP (a red is its failing test or step, never its job name)
-        per_job.append((j["name"], kind, jl[0] if jl else (f"step failed: {bad[0]['name']}" if bad else "")))
+        key_line, drift_note = drift_key(o_r, j, jl[0] if jl else "")
+        per_job.append((j["name"], kind, key_line or (jl[0] if jl else (f"step failed: {bad[0]['name']}" if bad else ""))))
         lines.append(f"  [{kind}] {j['name']}: {why}")
+        if key_line:
+            lines.append(f"      red key: {key_line}")
         lines += [f"      {l}" for l in jl]
+        if drift_note:
+            lines.append(drift_note)
         if note:
             lines.append(note)
     rerun = f"rerun: {GH_CLI.replace(HOME, '~')} run rerun {rid} --failed -R {o_r}"
