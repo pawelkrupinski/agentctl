@@ -792,18 +792,50 @@ def red_fix_facts(repo, store=None):
             key_runs.setdefault(k, set()).update(map(str, it["data"].get("runs") or []))
     except Exception:
         pass
-    return {"entries": entries, "landed": landed, "key_runs": {k: sorted(v) for k, v in key_runs.items()}}
+    # THE FIXES' CONTENT (simplification-2026-10-31 item 3): the patch-id of every fix commit a red could take and of
+    # every fix it refuted or set aside, so a rebased copy of a refuted fix -- another sha, the same change -- counts no
+    # more than the original (red_fix_of). A sha whose patch cannot be read is matched by sha alone.
+    shas = {e.get("landed_sha") for e in entries if e.get("landed_sha")} | {row[0] for row in landed}
+    try:
+        for it in (store.items("red") if store is not None else []):
+            shas |= set(it["data"].get("refuted") or []) | set(it["data"].get("unverified") or [])
+    except Exception:
+        pass
+    patches = {}
+    for sha in shas:
+        try:
+            pid = patch_id(repo, sha)
+        except (Exception, SystemExit):
+            pid = None
+        if pid:
+            patches[sha] = pid
+    return {"entries": entries, "landed": landed, "key_runs": {k: sorted(v) for k, v in key_runs.items()},
+            "patches": patches}
 
 
 def red_names(d):
     return set(d.get("runs") or []) | {d.get("key")} | ({"local"} if d.get("workflow") == LOCAL_FLOW else set())
 
 
+def red_set_aside(d, facts):
+    """(shas, patch-ids) of the fixes this red refuted or set aside unverified: a candidate fix is one of them when its
+    sha (or a prefix) is, or its CONTENT is -- the same patch-id under another sha (a rebase, a cherry-pick)."""
+    shas = set(d.get("refuted") or []) | set(d.get("unverified") or [])
+    patches = facts.get("patches") or {}
+    return shas, {patches[x] for x in shas if patches.get(x)}
+
+
+def red_fix_is_set_aside(sha, aside, facts):
+    shas, pids = aside
+    return sha in shas or any(sha.startswith(x) for x in shas) or (facts.get("patches") or {}).get(sha) in pids
+
+
 def red_fix_of(it, facts):
-    """The fix on its way for this red, or None: {entry, status, sha?, at?}. A refuted sha counts no more."""
+    """The fix on its way for this red, or None: {entry, status, sha?, at?}. A refuted or unverified fix -- by sha or
+    by content -- counts no more."""
     d = it["data"]
     names = red_names(d) | set((facts.get("key_runs") or {}).get(d.get("key")) or [])
-    refuted = set(d.get("refuted") or []) | set(d.get("unverified") or [])
+    aside = red_set_aside(d, facts)
     since = float(d.get("opened_at") or 0) - 3600
     best = None
     for e in sorted(facts.get("entries") or [], key=lambda e: e.get("created") or ""):
@@ -812,13 +844,13 @@ def red_fix_of(it, facts):
         if e.get("status") in FIX_OPEN:
             best = {"entry": e["id"], "status": e["status"], "author": {"worktree": e.get("worktree"),
                                                                         "session": e.get("session")}}
-        elif e.get("status") == "landed" and e.get("landed_sha") and e["landed_sha"] not in refuted:
+        elif e.get("status") == "landed" and e.get("landed_sha") and not red_fix_is_set_aside(e["landed_sha"], aside, facts):
             best = {"entry": e["id"], "status": "landed", "sha": e["landed_sha"],
                     "at": parse_time(e.get("landed_at") or e.get("updated") or e.get("created") or ts()).timestamp()}
     if best:
         return best
     for sha, ct, vals, _s in facts.get("landed") or []:
-        if vals & names and ct >= since and sha not in refuted and not any(sha.startswith(x) for x in refuted):
+        if vals & names and ct >= since and not red_fix_is_set_aside(sha, aside, facts):
             return {"entry": None, "status": "landed", "sha": sha, "at": ct}
     return None
 

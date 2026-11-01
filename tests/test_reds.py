@@ -1315,3 +1315,24 @@ class GateOwnRedLabelTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SetAsideByContentTest(unittest.TestCase):
+    """Item 3 (simplification-2026-10-31): a refuted fix rebased onto a moved main is another sha with the same patch --
+    it is set aside like the original, by content; a different change naming the same red still counts."""
+
+    def red(self, **d):
+        return {"data": {"key": "k1", "runs": ["2473"], "opened_at": 1000.0, **d}}
+
+    def test_a_rebased_copy_of_a_refuted_fix_is_no_fix(self):
+        facts = {"landed": [("b" * 40, 5000.0, {"2473"}, "fix")], "patches": {"a" * 40: "p1", "b" * 40: "p1"}}
+        self.assertIsNone(A.red_fix_of(self.red(refuted=["a" * 40]), facts))
+        self.assertIsNone(A.red_fix_of(self.red(unverified=["a" * 40]), facts))
+
+    def test_another_change_naming_the_red_is_still_its_fix(self):
+        facts = {"landed": [("c" * 40, 5000.0, {"2473"}, "fix")], "patches": {"a" * 40: "p1", "c" * 40: "p2"}}
+        self.assertEqual(A.red_fix_of(self.red(refuted=["a" * 40]), facts)["sha"], "c" * 40)
+
+    def test_a_patch_that_cannot_be_read_falls_back_to_the_sha(self):
+        facts = {"landed": [("a" * 40, 5000.0, {"2473"}, "fix")], "patches": {}}
+        self.assertIsNone(A.red_fix_of(self.red(refuted=["a" * 9]), facts))
