@@ -392,3 +392,184 @@ def cmd_red_probe(a):
     write_json(a.out, {**v, "at": ts(), "commit": a.commit, "kind": a.kind})
     print(f"{v['verdict']}: {v.get('evidence')}")
     return 0
+
+
+# -- 3. the revert: the culprit's commits undone, landed as a gate fix
+def blame_culprit(b):
+    """The culprit's group (confirmed, or refuted since), or None."""
+    b = b or {}
+    return b["groups"][b["culprit"]] if b.get("culprit") is not None and b.get("groups") else None
+
+
+def blame_worktree(repo, kind, num):
+    """A fresh <clone>-wt-<kind>-<run>[-n] off <remote>/main (its branch named the same): (path, None) or (None, why)."""
+    _d, clone, _w = waiting_state(repo)
+    wt, branch, n = f"{clone}-wt-{kind}-{num}", f"{kind}-{num}", 1
+    while os.path.exists(wt) or git_ok(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"):
+        n += 1
+        wt, branch = f"{clone}-wt-{kind}-{num}-{n}", f"{kind}-{num}-{n}"
+    git(repo, "worktree", "prune", check=False)
+    git(repo, "fetch", "--quiet", remote(), "main", check=False)
+    r = git(repo, "worktree", "add", "-q", "-b", branch, wt, f"{remote()}/main", check=False)
+    if r.returncode != 0:
+        return None, f"git worktree add failed ({r.stderr.strip()[:160]})"
+    return wt, None
+
+
+def blame_revert(o_r, repo, u, b):
+    """ONE `git revert` of the culprit's commits (newest first, one commit) with `Reverts-Change:` and `Fixes-Red:`,
+    landed by a detached `agentctl land` (a gate fix: it lands while main is red, through the normal hook). Returns
+    {ok, msg, worktree, at}; a revert that does not apply is aborted (ok False)."""
+    g = blame_culprit(b)
+    num = u["run"].get("number")
+    rec = {"at": ts(), "commits": g["commits"], "change": g.get("change")}
+    if red_owner_only(u.get("repo") or o_r):
+        return {**rec, "ok": False, "msg": f"no revert in {u.get('repo') or o_r}: its pushes are the owner's"}
+    wt, why = blame_worktree(repo, "revert", num)
+    if not wt:
+        return {**rec, "ok": False, "msg": why}
+    r = git(wt, "revert", "--no-commit", *reversed(g["commits"]), check=False)
+    if r.returncode != 0:
+        git(wt, "revert", "--abort", check=False)
+        git(wt, "reset", "-q", "--hard", f"{remote()}/main", check=False)
+        return {**rec, "ok": False, "worktree": wt, "conflict": True,
+                "msg": f"the revert of {blame_change_name(g)} does not apply ({(r.stderr or r.stdout).strip()[:160]})"}
+    name = g.get("change") or g["commits"][0]
+    msg = (f"Revert {blame_change_name(g)}: {str(g.get('subject') or '')[:60]}\n\n"
+           f"agentctl blame: {u['workflow']} #{num} turned red with it; its parent {str(b.get('parent'))[:10]} passes the "
+           f"same check, its end fails ({str(b.get('evidence') or '')[:300]}).\nReverted: "
+           f"{', '.join(c[:10] for c in g['commits'])}. Its lander, {lander_name(g.get('lander'))}, re-applies it with "
+           f"its fix.\n\n" + "".join(f"This reverts commit {c}.\n" for c in reversed(g["commits"]))  # prepush-check's
+           + f"\nReverts-Change: {name}\nFixes-Red: {num}\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n")
+    c = git(wt, "commit", "-q", "-m", msg, check=False)
+    if c.returncode != 0:
+        return {**rec, "ok": False, "worktree": wt, "msg": f"git commit of the revert failed ({c.stderr.strip()[:160]})"}
+    pid = spawn_land(wt, fixer_env(o_r, num), reds_dir(f"revert-{num}.log"))
+    return {**rec, "ok": True, "worktree": wt, "sha": git(wt, "rev-parse", "HEAD").strip(),
+            "msg": f"landing a revert of {blame_change_name(g)} from {wt} (pid {pid})"}
+
+
+def blame_reland(o_r, repo, u, b):
+    """The revert did not clear the red, so the culprit was wrong: its revert reverted (`Relands-Change:`), landed by
+    `agentctl land` (no Fixes-Red: a production change, it lands at the next green). {ok, msg, worktree, at}."""
+    rv = (b.get("revert") or {}).get("landed") or (b.get("revert") or {}).get("sha")
+    num = u["run"].get("number")
+    g = blame_culprit(b) or {}
+    if not rv:
+        return {"ok": False, "at": ts(), "msg": "no landed revert to undo"}
+    wt, why = blame_worktree(repo, "reland", num)
+    if not wt:
+        return {"ok": False, "at": ts(), "msg": why}
+    r = git(wt, "revert", "--no-edit", rv, check=False)
+    if r.returncode != 0:
+        git(wt, "revert", "--abort", check=False)
+        return {"ok": False, "at": ts(), "worktree": wt, "msg": f"the revert {rv[:10]} cannot be undone ({(r.stderr or r.stdout).strip()[:160]})"}
+    body = git(wt, "log", "-1", "--format=%B").strip()
+    git(wt, "commit", "--amend", "-q", "-m", f"{body}\n\nagentctl blame: reverting {rv[:10]} did not clear {u['workflow']} "
+        f"#{num}: {blame_change_name(g)} was not its culprit, so it is relanded.\n\nRelands-Change: "
+        f"{g.get('change') or (g.get('commits') or ['?'])[0]}\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n")
+    pid = spawn_land(wt, fixer_env(o_r, num), reds_dir(f"reland-{num}.log"))
+    return {"ok": True, "at": ts(), "worktree": wt, "msg": f"relanding {blame_change_name(g)} (reverting {rv[:10]}) from {wt} (pid {pid})"}
+
+
+def blame_refuted(repo, b, sha):
+    """The landed fix `sha` that a run refuted is this red's revert (its `Reverts-Change:` trailer): the culprit was
+    wrong. The blame, marked refuted with the reland due -- the laptop's dispatcher relands it (blame_reland)."""
+    if (b or {}).get("state") != "confirmed" or not (b.get("revert") or {}).get("ok") or not sha:
+        return None
+    body = git(repo, "log", "-1", "--format=%B", sha, check=False).stdout if repo else ""
+    if "Reverts-Change:" not in body:
+        return None
+    return dict(b, state="refuted", why=f"its revert {sha[:10]} did not clear the red: the culprit was wrong",
+                revert=dict(b["revert"], landed=sha), reland_due=sha)
+
+
+def blame_note(b):
+    """What a fresh fixer is told of a red's blame (its change's diff and worktree), or ''."""
+    b = b or {}
+    g = blame_culprit(b)
+    if not g:
+        return ""
+    rv = b.get("revert") or {}
+    shas = " ".join(c[:10] for c in g["commits"])
+    if b.get("state") == "refuted":
+        return (f" THE BLAME WAS WRONG: {blame_change_name(g)} ({shas}) was reverted and that did not clear this red, so "
+                f"it is being relanded ({(b.get('reland') or {}).get('msg') or 'due'}). Look elsewhere for the cause.")
+    if rv.get("ok"):
+        return (f" THE OFFENDING CHANGE is {blame_change_name(g)} ({shas}: `git show {shas}`), landed from "
+                f"{str(g.get('worktree') or '?').replace(HOME, '~')}; its parent passes the same check, its end fails "
+                f"({str(b.get('evidence') or '')[:200]}). It was REVERTED ({rv.get('msg')}): your job is to make it land "
+                f"again, fixed -- in your worktree, after `git fetch {remote()} && git rebase {remote()}/main`, "
+                f"`git revert <the revert's sha>` re-applies it; add the fix and land it (`Fixes-Red:` not needed: the "
+                f"revert fixed the red). Its lander could not be revived: {b.get('revive_failed') or 'none recorded'}.")
+    return (f" THE OFFENDING CHANGE is {blame_change_name(g)} ({shas}: `git show {shas}`), landed from "
+            f"{str(g.get('worktree') or '?').replace(HOME, '~')}; its parent passes the same check, its end fails. Its "
+            f"revert could not be landed ({rv.get('msg') or 'not tried'}): fix it forward (`Fixes-Red:`).")
+
+
+def blame_status(d):
+    """The red's blame for the status line and `red status`: (text, short) or None."""
+    b = d.get("blame") or {}
+    g = blame_culprit(b)
+    if not g:
+        return None
+    rv = b.get("revert") or {}
+    who = lander_name(g.get("lander")) if (g.get("lander") or {}).get("session") else "the owner (by hand)"
+    if b.get("state") == "refuted":
+        return (f"blame refuted: the revert of {blame_change_name(g)} did not clear it; relanded",
+                f"revert of {g.get('change') or g['commits'][0][:9]} refuted")
+    if rv.get("ok"):
+        rev = "; lander revived" if b.get("revived") else ""
+        return (f"REVERTED {blame_change_name(g)} ({rv.get('msg')}), landed by {who}{rev}",
+                f"reverted {g.get('change') or g['commits'][0][:9]}{rev}")
+    if rv:
+        return f"revert of {blame_change_name(g)} failed: {rv.get('msg')}", "revert failed"
+    return f"culprit: {blame_change_name(g)}, landed by {who}", f"culprit {g.get('change') or g['commits'][0][:9]}"
+
+
+def lander_spawn(store, o_r, repo, off, took, u):
+    """Tier `lander` (the decision rule's determined culprit), under the taken lease: the culprit reverted, then its
+    lander revived; an owner's change (no session): reverted and the owner told. Whatever cannot be done falls back to
+    a fresh fixer under the same lease, briefed with the change (never a loop). (ok, message)."""
+    pic = off["picture"]
+    b = dict(pic.get("blame") or {})
+    num = u["run"].get("number")
+    it_id = off["item"].split(":", 1)[1]
+    g = blame_culprit(b)
+    who, why = blame_decision(b)
+    rv = b.get("revert") or blame_revert(o_r, repo, u, b)
+    b["revert"] = rv
+    line = (f"RED REVERT: {red_what(pic)}: {blame_change_name(g)} ({', '.join(c[:10] for c in g['commits'][:5])}), "
+            f"landed by {lander_name(g.get('lander')) if who == 'lander' else 'the owner, by hand'}: {rv['msg']}")
+    if who == "owner" and rv.get("ok"):
+        line += (" -- OWNER: it was yours (no agent session landed it); re-apply it with a fix once you know why "
+                 f"(`git revert <the revert>`), see `~/bin/agentctl ci-why {u['run'].get('databaseId')}`")
+    inbox_write("red", line, [line], [], 0 if rv.get("ok") and who != "owner" else 1)
+    dispatch_log(u, line)
+    store.note(off["lease"], took["epoch"], took["secret"], line[:300])
+    it = store.item("red", it_id)
+    if it:
+        store.update_item("red", it_id, it["version"], {"blame": b, "lander_tried": True})
+    if who == "owner" and rv.get("ok"):
+        return True, line  # nobody to revive: the lease lapses by its TTL, the revert's Fixes-Red holds the red meanwhile
+    if who == "lander" and rv.get("ok"):
+        return lander_revive(store, o_r, repo, off, took, u, b)
+    b["revive_failed"] = "its revert did not land" if not rv.get("ok") else "an owner's change"
+    return lander_fallback(store, o_r, repo, off, took, u, b, f"revert failed ({rv['msg'][:120]})")
+
+
+def lander_fallback(store, o_r, repo, off, took, u, b, why):
+    """A FRESH FIXER, under the same lease: the decision rule's only other way -- the culprit or its lander could not be
+    acted on. Briefed with the change (blame_note)."""
+    it_id = off["item"].split(":", 1)[1]
+    it = store.item("red", it_id)
+    if it:
+        store.update_item("red", it_id, it["version"], {"blame": b, "lander_tried": True})
+    u = dict(u, blame_note=blame_note(b))
+    return red_dispatch(o_r, repo, u, why=f"tier lander: {why} -> a fresh fixer", lease=off["lease"], took=took)
+
+
+def lander_revive(store, o_r, repo, off, took, u, b):
+    """Piece 4 (the lander revived) -- until then, a fresh fixer briefed with the change."""
+    b = dict(b, revive_failed="no revival yet")
+    return lander_fallback(store, o_r, repo, off, took, u, b, "no revival")

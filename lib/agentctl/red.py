@@ -1083,10 +1083,14 @@ def red_author(repo, ob, t):
 
 
 # -- the red step: one item, one small idempotent step per tick
-def red_stop_holder(store, key, why, outcome):
-    """Revoke the red's lease (its holder's next renewal answers lost) and tell its worktree."""
+def red_stop_holder(store, key, why, outcome, force=False):
+    """Revoke the red's lease (its holder's next renewal answers lost) and tell its worktree. A REVIVED LANDER (lease
+    tier `lander`, blame.py) is spared unless force: the revert is the red's fix, and the lander's work -- its change
+    re-applied with its fix -- goes on after it; only a refuted revert (the culprit was wrong) stops it."""
     row = store.get(red_lease(key))
     if not lease_is_live(row, store.clock()):
+        return None
+    if lease_meta(row).get("tier") == "lander" and not force:
         return None
     store.revoke(red_lease(key), outcome)
     if lease_meta(row).get("kind") == "owned":  # a family owner's: its next beat drops the lease; never a STOP in its
@@ -2012,7 +2016,9 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
         return [line]
     if obs is not None and holds and d["key"] in obs and str(obs[d["key"]]["run"].get("databaseId")) == str(last.get("databaseId")):
         # THE FIX DID NOT FIX IT: refuted, its holder's lease dropped, offered again with the failed fix in the picture
-        red_stop_holder(store, d["key"], f"your fix {sha[:10]} is refuted by #{last.get('number')}", "fix refuted")
+        red_stop_holder(store, d["key"], f"your fix {sha[:10]} is refuted by #{last.get('number')}", "fix refuted",
+                        force=True)
+        refuted_blame = blame_refuted(repo, d.get("blame"), sha)  # the red's own revert: the culprit was wrong
         line = f"FIX FAILED: {red_what(d)}: #{last.get('number')} still fails this way (fix {sha[:10]})"
         inbox_write("red", line, [line], [d.get("line") or ""], 1)
         refuted = (d.get("refuted") or []) + [sha]
@@ -2020,7 +2026,13 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
              "session": f.get("session"), "worktree": f.get("worktree")}
         red_offer(store, it, line, data={"attempts": int(d.get("attempts") or 0) + 1, "refuted": refuted, "fix": None,
                                          "history": (d.get("history") or []) + [h],
-                                         "recurring": len(refuted) >= RED_RECURRING})
+                                         "recurring": len(refuted) >= RED_RECURRING,
+                                         **({"blame": refuted_blame} if refuted_blame else {})})
+        if refuted_blame:
+            line2 = (f"RED REVERT REFUTED: {red_what(d)}: reverting {sha[:10]} did not clear it, so its change was not "
+                     "the culprit: it is relanded (its revert reverted) and the red goes to the normal fixer")
+            inbox_write("red", line2, [line2], [], 1)
+            line = f"{line}\n{line2}"
         return [line]
     if obs is not None and gone and not holds:
         red_close(store, it, "cleared", f"a run before its fix {sha[:10]} no longer fails this way")
@@ -2398,6 +2410,18 @@ def red_spawn(store, o_r, repo, off, took, extra=()):
          "history": pic.get("history") or [], "repo": pic.get("repo")}
     for x in extra:  # the run's other reds, under the same fixer
         u["jobs"] = sorted(set(u.get("jobs") or [u["job"]]) | set(x["picture"].get("jobs") or []))
+    if tier == "lander":  # THE DECISION RULE's determined culprit: reverted, its lander revived (blame.py)
+        return lander_spawn(store, o_r, repo, off, took, u)
+    b = pic.get("blame") or {}
+    if b.get("reland_due") and not b.get("reland"):  # its revert was refuted: the change relanded before a fixer starts
+        rl = blame_reland(o_r, repo, u, b)
+        it_ = store.item("red", off["item"].split(":", 1)[1])
+        if it_:
+            store.update_item("red", it_["id"], it_["version"], {"blame": dict(b, reland=rl)})
+        inbox_write("red", f"RED RELAND: {red_what(pic)}: {rl['msg']}", [], [], 0 if rl.get("ok") else 1)
+        b = dict(b, reland=rl)
+    if b.get("culprit") is not None:
+        u["blame_note"] = blame_note(b)
     if tier == "revert":
         ok, msg = red_revert(o_r, repo, u, pic.get("culprit"))
         store.note(off["lease"], took["epoch"], took["secret"], msg)

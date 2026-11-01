@@ -141,6 +141,8 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
     if u.get("flake"):
         task += (" This red PASSED on the next run: it is a FLAKE. Make it deterministic (find the race, the clock, "
                  "the ordering); do not just retry it.")
+    if u.get("blame_note"):  # the red's blame (blame.py): the offending change, its revert, what to do with it
+        task += u["blame_note"]
     return common + task + (f" {resume_note}" if resume_note else "")
 
 
@@ -244,7 +246,8 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
            "resume": bool(resume and resume.get("session")), "resume_note": resume.get("note") if resume else None,
            "continued_from": (cont or {}).get("worktree"), "diagnosis": u.get("diagnosis"),
            "effort": effort, "refuted": u.get("refuted") or [], "predicts": u.get("predicts"), "orphan": u.get("orphan"),
-           "extra_leases": [{"name": x["name"], "epoch": x["epoch"]} for x in extra], "prior_work": u.get("prior_work")}
+           "extra_leases": [{"name": x["name"], "epoch": x["epoch"]} for x in extra], "prior_work": u.get("prior_work"),
+           "blame_note": u.get("blame_note"), "lander": u.get("lander")}
     if red_is_other(o_r):
         rec["repo"] = o_r
     write_json(rec_path, rec)
@@ -622,7 +625,8 @@ def red_fixer(a):
     u = {"workflow": rec["workflow"], "job": rec.get("job"), "jobs": rec.get("jobs"), "kind": rec.get("kind") or "test",
          "line": rec.get("line"), "flake": rec.get("flake"), "diagnosis": rec.get("diagnosis"), "orphan": rec.get("orphan"),
          "refuted": rec.get("refuted"), "predicts": rec.get("predicts"), "prior_work": rec.get("prior_work"),
-         "run": {"number": num, "databaseId": rec.get("run_id")}, "repo": rec.get("repo")}
+         "run": {"number": num, "databaseId": rec.get("run_id")}, "repo": rec.get("repo"),
+         "blame_note": rec.get("blame_note"), "lander": rec.get("lander")}
     u["record"] = a.record
     prompt = fixer_prompt(u, wt, sync_brief(), rec.get("resume_note"))
     cli = claude_cli()
@@ -959,7 +963,14 @@ def gate_own_red_label(d):
 
 
 def red_view(store, it, t=None):
-    """(text, short) of one red."""
+    """(text, short) of one red, its blame (a revert, its lander revived: blame.py) said with it."""
+    text, short = red_view_state(store, it, t)
+    bl = blame_status(it["data"])
+    return (f"{text} -- {bl[0]}", f"{short}; {bl[1]}") if bl else (text, short)
+
+
+def red_view_state(store, it, t=None):
+    """(text, short) of one red's state."""
     t = t if t is not None else store.clock()
     d, st = it["data"], it["state"]
     at = time.strftime("%H:%M", time.localtime(it["deadline"]))

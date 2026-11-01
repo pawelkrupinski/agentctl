@@ -8,7 +8,7 @@ import json, os, stat, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, sh  # noqa: E402
-from test_red import run, FAIL_LINE  # noqa: E402
+from test_red import run, FAIL_LINE, MOVIES  # noqa: E402
 from test_reds import RedsBase  # noqa: E402
 
 CONV = "Identity model convergence"
@@ -212,3 +212,94 @@ class BatchTest(BlameBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RevertTest(BlameBase):
+    """Piece 3: a determined culprit is reverted (Reverts-Change + Fixes-Red), landed as a gate fix."""
+
+    def setUp(self):
+        super().setUp()
+        self.lands = []
+        self.saved_land = A.spawn_land
+        A.spawn_land = lambda wt, env, log: self.lands.append(wt) or 4242
+        os.environ["FAKE_CLAUDE_SLEEP"] = "30"
+
+    def tearDown(self):
+        A.spawn_land = self.saved_land
+        os.environ["FAKE_CLAUDE_SLEEP"] = "0"
+        super().tearDown()
+
+    def red_one(self, lander=True):
+        g = self.sha
+        h = self.land("a", {"a.txt": "a\n"}, lander=lander)
+        self.red_at(g, h)
+        return h
+
+    def test_the_culprit_is_reverted_with_its_trailers_and_landed_through_land(self):
+        h = self.red_one()
+        self.tick(dispatch=True)
+        [wt] = self.lands
+        msg = sh(wt, "git", "log", "-1", "--format=%B")
+        self.assertIn("Reverts-Change: ch-a", msg)
+        self.assertIn("Fixes-Red: 20", msg)
+        self.assertIn(f"This reverts commit {h}.", msg)  # what prepush-check's revert exemption reads
+        self.assertIn("a.txt", A.reverted_commits(wt, "origin/main", "HEAD"))  # prepush-check exempts it
+        self.assertEqual(sh(wt, "git", "rev-parse", "HEAD^"), h)  # on main, the one revert commit
+        self.assertFalse(os.path.exists(os.path.join(wt, "a.txt")))
+        it = self.only()
+        self.assertTrue(it["data"]["lander_tried"])
+        self.assertTrue(it["data"]["blame"]["revert"]["ok"])
+        self.assertTrue(any(e["verdict"].startswith("RED REVERT") and "ch-a" in e["verdict"] for e in A.inbox_entries()))
+        self.assertIn("reverted ch-a", A.red_view(self.st, it)[1])  # the status line says so
+
+    def test_an_owners_change_is_reverted_and_the_owner_told_no_agent_started(self):
+        self.red_one(lander=False)
+        self.tick(dispatch=True)
+        self.assertEqual(len(self.lands), 1)
+        self.assertEqual(A.fixer_records(), [])
+        self.assertTrue(any("OWNER: it was yours" in e["verdict"] for e in A.inbox_entries()))
+
+    def test_a_revert_that_conflicts_falls_back_to_a_fresh_fixer_briefed_with_the_change(self):
+        self.red_one()
+        self.r.write("a.txt", "a changed since\n")
+        self.r.commit("later: touch a.txt")
+        self.r.push()
+        self.tick(dispatch=True)
+        self.assertEqual(self.lands, [])
+        [rec] = A.fixer_records()
+        self.assertIn("THE OFFENDING CHANGE is change ch-a", rec["blame_note"])
+        self.assertIn("could not be landed", rec["blame_note"])
+        self.assertFalse(self.only()["data"]["blame"]["revert"]["ok"])
+
+    def test_the_revived_landers_lease_survives_the_revert_its_fix_but_not_a_refuted_revert(self):
+        self.st.acquire("red/k1", "laptop:fixer:x", 900, 3600, meta={"kind": "fixer", "tier": "lander"})
+        self.assertIsNone(A.red_stop_holder(self.st, "k1", "its fix is on its way", "fix submitted"))
+        self.assertTrue(A.lease_is_live(self.st.get("red/k1"), self.t[0]))
+        self.assertEqual(A.red_stop_holder(self.st, "k1", "refuted", "fix refuted", force=True), "laptop:fixer:x")
+        self.assertFalse(A.lease_is_live(self.st.get("red/k1"), time.time()))
+
+    def test_a_refuted_revert_relands_the_change_before_the_normal_fixer_starts(self):
+        self.red_one()
+        self.tick(dispatch=True)
+        [wt] = self.lands
+        self.r.push(at=wt)  # the revert landed
+        rv = sh(self.r.path, "git", "rev-parse", "origin/main")
+        b = self.only()["data"]["blame"]
+        self.assertIsNone(A.blame_refuted(self.r.path, b, self.sha))  # not its revert: no reland
+        nb = A.blame_refuted(self.r.path, b, rv)
+        self.assertEqual((nb["state"], nb["reland_due"]), ("refuted", rv))
+        self.assertEqual(A.blame_decision(nb)[0], "fixer")  # the normal fixer flow
+        it = self.only()
+        self.st.update_item("red", it["id"], it["version"], {"blame": nb, "refuted": [rv]})  # as red_fix_pending does
+        it = self.st.item("red", it["id"])
+        A.red_offer(self.st, it, "refuted")
+        self.lands.clear()
+        off = self.st.offer_of(f"red:{it['id']}")
+        for row in self.st.list("red/"):  # its first holder gone
+            self.st.revoke(row["name"], "test")
+        took = self.st.take(off["id"], "laptop:fixer:test", 900, 3600, meta={"kind": "fixer", "tier": off["tier"]})
+        A.red_spawn(self.st, MOVIES, self.r.path, off, took)  # what the dispatcher starts for the next fixer
+        [rl] = self.lands
+        self.assertIn(f"Relands-Change: ch-a", sh(rl, "git", "log", "-1", "--format=%B"))
+        self.assertTrue(os.path.exists(os.path.join(rl, "a.txt")))  # the change is back
+        self.assertTrue(any(e["verdict"].startswith("RED RELAND") for e in A.inbox_entries()))
