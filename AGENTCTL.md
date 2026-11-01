@@ -1412,6 +1412,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `awake_pid` | `AGENTCTL_AWAKE_PID` | - | - |
 | `baseline` | `AGENTCTL_BASELINE` | `1` | - |
 | `batch_retry_max` | `AGENTCTL_BATCH_RETRY_MAX` | `3` | - |
+| `bg_idle_grace` | `AGENTCTL_BG_IDLE_GRACE` | `60` | s a waiting session with no pending task of its own and no verdict stays quiet: its turn ended |
 | `bg_poll` | `AGENTCTL_BG_POLL` | `5` | seconds between the wrapper's looks at its session |
 | `bin_repo` | `AGENTCTL_BIN_REPO` | - | - |
 | `blame_max` | `AGENTCTL_BLAME_MAX` | `5400` | s a red may wait for its culprit to be decided before a fresh fixer gets it |

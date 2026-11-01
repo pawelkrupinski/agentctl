@@ -251,8 +251,8 @@ def red_owner(a):
         signal.signal(sg, cancelled)
 
     def end_turn(outcome_if_none, text=None):
-        if text is None:
-            text = bg_final_text(rec.get("transcript") or bg_transcript(rec.get("session") or ""))
+        if text is None:  # THIS turn's answer: a resumed session's transcript also holds the turns before it
+            text = bg_turn(rec.get("transcript") or bg_transcript(rec.get("session") or ""))["final"]
         verdict = fixer_verdict(text)
         tail = [l[:300] for l in text.splitlines()[-INBOX_TAIL:]]
         s["empty"] = 0 if verdict else s["empty"] + 1
@@ -275,7 +275,9 @@ def red_owner(a):
                 write_json(path, rec)
                 bind_fixer_session(rec["session"], path)  # the session is a fixer's: ~/bin refuses its commits
             s["missing"] = s["missing"] + 1 if ent is None else 0
-            if bg_ended(ent) or s["missing"] >= 3:  # the turn ended (done, stopped, blocked) or the session is gone
+            s["ent"] = ent
+            if bg_turn_over(ent, rec.get("transcript"), now) or s["missing"] >= 3:  # the turn ended (done, stopped,
+                # blocked; or waiting with its verdict said, bg_turn_over) or the session is gone
                 why = (f"ended with no LANDED / GAVE UP line (session {s['bid']}: "
                        f"{(ent or {}).get('state') or 'gone from `claude agents`'})")
                 return end_turn(why)
@@ -285,7 +287,8 @@ def red_owner(a):
         if now - s["beat"] >= every:  # THE HEARTBEAT: the owner's lease; its reds' leases by the turn's progress
             try:
                 if s["bid"] is not None:
-                    mark = fixer_mark({"log": rec.get("transcript") or rec.get("log") or ""}, wt)
+                    mark = fixer_mark({"log": rec.get("transcript") or rec.get("log") or ""}, wt) + \
+                        bg_wait_mark(s.get("ent"), rec.get("transcript"), now, every)
                     if mark != s["mark"]:
                         s["mark"], s["progress_at"] = mark, now
                         turn_state(True, now)
@@ -412,7 +415,7 @@ def owner_work(fam, t):
         ent = bg_session(claude_cli(), bid)
         if ent == {}:
             return None, "`claude agents` unread"
-        if (ent is None or bg_ended(ent)) and idle > grace:
+        if (ent is None or bg_turn_over(ent, rec.get("transcript"), t)) and idle > grace:
             return False, (f"its session {bid} is {(ent or {}).get('state') or 'gone'} while its wrapper (pid {pid}) "
                            f"still holds the turn, {fmt_age(idle)} without progress")
     if idle > env_num("AGENTCTL_RED_STALL", RED_STALL) + grace:
@@ -434,7 +437,7 @@ def fixer_work(row, t):
     if ent == {}:
         return None, "`claude agents` unread"
     idle = t - max(float(row.get("renewed_at") or row.get("acquired_at") or 0), mtime(m.get("log")))
-    if (ent is None or bg_ended(ent)) and idle > env_num("AGENTCTL_RED_ORPHAN_GRACE", RED_ORPHAN_GRACE):
+    if (ent is None or bg_turn_over(ent, m.get("log"), t)) and idle > env_num("AGENTCTL_RED_ORPHAN_GRACE", RED_ORPHAN_GRACE):
         return False, (f"its session {bid} is {(ent or {}).get('state') or 'gone'}, "
                        f"{fmt_age(idle)} without progress")
     return True, "at work"

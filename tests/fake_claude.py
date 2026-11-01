@@ -11,7 +11,11 @@
   _session <id>               (internal) the session: transcript at $AGENTCTL_CLAUDE_PROJECTS/fake/<sessionId>.jsonl,
                               sleeps $FAKE_CLAUDE_SLEEP s, answers $FAKE_CLAUDE_RESULT (default `LANDED abcdef1234`; for
                               an implementer briefed with a diagnosis, $FAKE_CLAUDE_RESULT_IMPLEMENT when set), done
-                              (or $FAKE_CLAUDE_END_STATE: `blocked`, `stopped`).
+                              (or $FAKE_CLAUDE_END_STATE: `blocked`, `stopped`). $FAKE_CLAUDE_LINGER: its process lives
+                              on after the turn (`claude bg-spare`), its row `blocked` / `idle` with that live pid.
+                              $FAKE_CLAUDE_BG_WAIT=<s>: it first backgrounds a task (`agentctl wait`), ends its turn
+                              waiting on it (row `blocked`, live pid, no answer) for <s> s, then the task's notification
+                              comes and it answers.
 """
 import json, os, signal, subprocess, sys, time, uuid
 
@@ -83,11 +87,31 @@ if argv[:1] == ["_session"]:
     say(path, "user", r["prompt"])
     say(path, "assistant", "working")
     time.sleep(float(os.environ.get("FAKE_CLAUDE_SLEEP", "0")))
+    if os.environ.get("FAKE_CLAUDE_BG_WAIT"):  # `agentctl wait` backgrounded, the turn ended waiting on it
+        with open(path, "a") as f:
+            f.write(json.dumps({"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "Command running in background with ID: "
+                 "bwait1. Output is being written to: /tmp/x/bwait1.output"}]},
+                "toolUseResult": {"backgroundTaskId": "bwait1"}}) + "\n")
+        say(path, "assistant", "Waiting for my CI run.")
+        r = read_row(argv[1])
+        r.update(state="blocked", status="idle")
+        write_row(r)
+        time.sleep(float(os.environ["FAKE_CLAUDE_BG_WAIT"]))
+        say(path, "user", "<task-notification>\n<task-id>bwait1</task-id>\n<status>completed</status>\n"
+                          "</task-notification>")
+        r = read_row(argv[1])
+        r.update(state="working", status="busy")
+        write_row(r)
     result = os.environ.get("FAKE_CLAUDE_RESULT", "LANDED abcdef1234")
     if os.environ.get("FAKE_CLAUDE_RESULT_IMPLEMENT") and "was DIAGNOSED" in r["prompt"]:  # an implementer's brief
         result = os.environ["FAKE_CLAUDE_RESULT_IMPLEMENT"]
     say(path, "assistant", "Done.\n" + result)
     r = read_row(argv[1])
+    if r and not r.get("stopped") and os.environ.get("FAKE_CLAUDE_LINGER"):  # the turn over, the process lives on
+        r.update(state="blocked", status="idle")
+        write_row(r)
+        time.sleep(3600)  # until `stop` ends its group
     if r and not r.get("stopped"):  # $FAKE_CLAUDE_END_STATE: how its turn ends (`blocked`: waiting for input, no pid)
         r.update(state=os.environ.get("FAKE_CLAUDE_END_STATE") or "done", pid=None)
         write_row(r)

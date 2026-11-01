@@ -531,6 +531,95 @@ def bg_ended(ent):
     return ent.get("state") in BG_WAITING_STATES and not (pid and pid_alive(int(pid)))
 
 
+# A FINISHED TURN WHOSE PROCESS LIVES ON (2026-11-01, convergence #579 / Verify #1 `fixer-crash-loop`): claude now keeps
+# a background session's process (`claude bg-spare`) after its turn, its row `blocked` / `idle` with a live pid. bg_ended
+# read that as "maybe waiting on its own background work" and the wrapper waited for progress that never came: the
+# owner's turns ended with GAVE UP / DIAGNOSED, the wrapper never read it, each red's lease lapsed OWNER_TTL later as
+# "lease expired", and three such lapses blocked the red on the owner as a crash loop. The transcript decides now
+# (bg_turn): a waiting session whose turn's final answer carries a verdict has ended its turn; one with no background
+# task of its own pending, quiet for BG_IDLE_GRACE, has ended it with no verdict; one waiting on its own background task
+# (`agentctl wait`, backgrounded before it ended its turn, as agents are told) is at work, and each beat of that wait is
+# progress (bg_wait_mark), so its lease never lapses under it.
+BG_IDLE_GRACE = 60   # s a waiting session with no pending task of its own and no verdict stays quiet: its turn ended
+BG_TASK_STARTED = re.compile(r'"backgroundTaskId": ?"([\w-]+)"|Command running in background with ID: ([\w-]+)')
+BG_TASK_REPORTED = re.compile(r"<task-id>([\w-]+)</task-id>")  # a notification: a user entry or one absorbed mid-turn
+BG_TASK_STOPPED = re.compile(r'"(?:task_id|shell_id)": ?"([\w-]+)"')  # TaskStop / KillShell: stopped by the session
+_BG_TURN_CACHE = {}
+
+
+def bg_turn(path):
+    """What the transcript says of the session's current turn: {"final": its last answer since the latest input (a
+    prompt or a task notification), "pending": its background tasks started since its prompt and neither reported
+    nor stopped}. Cached on the
+    file's size and mtime; empty for an unreadable one."""
+    try:
+        sig = (os.path.getsize(path), os.path.getmtime(path))
+    except (OSError, TypeError):
+        return {"final": "", "pending": []}
+    hit = _BG_TURN_CACHE.get(path)
+    if hit and hit[0] == sig:
+        return hit[1]
+    final, started, reported = "", [], set()
+    try:
+        with open(path, errors="replace") as f:
+            for line in f:
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                m = e.get("message") if isinstance(e, dict) else None
+                c = m.get("content") if isinstance(m, dict) else None
+                if isinstance(e, dict) and e.get("type") == "user":
+                    blocks = [{"type": "text", "text": c}] if isinstance(c, str) else c if isinstance(c, list) else []
+                    for b in blocks:
+                        if isinstance(b, dict) and b.get("type") == "text":
+                            final = ""  # new input: the turn's answer is what comes after it
+                            if "<task-notification>" not in str(b.get("text")):  # a prompt: a new turn (a resume
+                                started = []                                      # is a new process: no older task)
+                elif isinstance(e, dict) and e.get("type") == "assistant" and isinstance(c, list):
+                    t = "\n".join(b.get("text") or "" for b in c if isinstance(b, dict) and b.get("type") == "text")
+                    if t.strip():
+                        final = t
+                started += [x or y for x, y in BG_TASK_STARTED.findall(line)]
+                reported.update(BG_TASK_REPORTED.findall(line) + BG_TASK_STOPPED.findall(line))
+    except OSError:
+        return {"final": "", "pending": []}
+    out = {"final": final, "pending": [x for x in dict.fromkeys(started) if x not in reported]}
+    _BG_TURN_CACHE[path] = (sig, out)
+    return out
+
+
+def bg_waiting(ent):
+    """The row is a turn over with its process alive (claude's spare keeps it): what it waits for is the transcript's."""
+    pid = (ent or {}).get("pid")
+    return bool(ent) and (ent.get("state") or ent.get("status")) in BG_WAITING_STATES and bool(pid) and pid_alive(int(pid))
+
+
+def bg_turn_over(ent, path, now=None):
+    """The session's turn is over: its row says so (bg_ended), or it waits with its process alive and its transcript
+    says the turn ended -- a verdict in its final answer, or no background task of its own pending for BG_IDLE_GRACE."""
+    if bg_ended(ent):
+        return True
+    if not bg_waiting(ent):
+        return False
+    turn = bg_turn(path)
+    if fixer_verdict(turn["final"]):
+        return True
+    if turn["pending"]:
+        return False
+    quiet = (now or time.time()) - mtime(path)
+    return quiet >= env_num("AGENTCTL_BG_IDLE_GRACE", BG_IDLE_GRACE)
+
+
+def bg_wait_mark(ent, path, now, every):
+    """'' -- or, for a session waiting with its process alive on its own background tasks, a mark that changes every
+    renewal period: waiting on its own CI run is work, and its lease is renewed by it (bounded by the wall time)."""
+    if not bg_waiting(ent):
+        return ""
+    pending = bg_turn(path)["pending"]
+    return f":waiting {','.join(pending)} @{int(now // max(every, 1))}" if pending else ""
+
+
 def store_reauth():
     """After StoreAuthFailed: forget the store token this process holds (its environment, the cache) and read it again
     -- the processor's socket, never a vault prompt. The new token (also in os.environ), or None when there is no other
@@ -699,7 +788,8 @@ def red_fixer(a):
                     meta_due = not fixer_meta_sent(st, leases, meta)
                     write_json(a.record, rec)
                 missing = missing + 1 if ent is None else 0
-                if bg_ended(ent) or missing >= 3:  # finished its turn (done, stopped, blocked), or gone from the list
+                if bg_turn_over(ent, rec.get("transcript")) or missing >= 3:  # finished its turn (done, stopped,
+                    # blocked; or waiting with its verdict said, bg_turn_over), or gone from the list
                     break
                 stop = None
                 late = time.time() - t0 > claim_within
@@ -741,7 +831,7 @@ def red_fixer(a):
                                     "revoked)")
                         elif time.time() - last_renew >= every:
                             note = (read_record(a.record) or {}).get("note")
-                            mark = fixer_mark(rec, wt)
+                            mark = fixer_mark(rec, wt) + bg_wait_mark(ent, rec.get("transcript"), time.time(), every)
                             if mark != last_mark:
                                 last_mark, progress_at = mark, time.time()
                             elif time.time() - progress_at > stall:  # PROOF OF WORK: a living wrapper is not one
@@ -767,7 +857,7 @@ def red_fixer(a):
         bg_stop(cli, bid)  # done or stopped: the session ends (`claude agents --all` keeps it, `claude attach` reopens it)
     if not rec.get("transcript") and rec.get("session"):
         rec["transcript"] = bg_transcript(rec["session"])
-    text = bg_final_text(rec.get("transcript"))
+    text = bg_turn(rec.get("transcript"))["final"]  # THIS turn's: a resumed session's transcript holds earlier ones
     verdict = verdict or fixer_verdict(text) or "ended with no LANDED / GAVE UP line"
     line = f"RED FIXER {rec['workflow']} #{num}: {verdict[:300]}"
     tail = [l[:300] for l in text.splitlines()[-INBOX_TAIL:]]
