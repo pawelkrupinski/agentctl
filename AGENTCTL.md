@@ -616,6 +616,9 @@ agent must be assigned to it".
   `RED-STOP.md`, or after 2 turns in a row with no verdict. Its brief: fast reproducer first, and for convergence the
   MECHANISM-ONLY rule (fix the incremental state that diverges from a whole resolve; never a resolver rule tuned on one
   recording, never a baseline or allow-list row). `red status` lists each owner (`owner <family>: ALIVE, turn n, ...`).
+  Each turn's session is `claude stop`ped when the turn ends (claude keeps a finished session's process as a spare, and
+  `--resume` of a running session starts a copy), so a family has ONE session; the laptop's tick also stops any
+  agentctl-labelled session idle with its process alive that is no live wrapper's current turn (`RED SESSION SPENT`).
   Records: `<reds dir>/owners/<family>/` (`owner.json`, `owner.log`, `leases.json` 0600).
 - **A LEASE IS HELD BY WORK, NEVER BY A LIVING PROCESS (2026-10-31, issue 20261031T203744-4a4a59).** A wrapper (a
   fixer's or an owner's) ends a turn whose session `claude agents` shows ended -- `done`, `stopped` or `blocked` (its
@@ -1473,6 +1476,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `batch_retry_max` | `AGENTCTL_BATCH_RETRY_MAX` | `3` | - |
 | `bg_idle_grace` | `AGENTCTL_BG_IDLE_GRACE` | `60` | s a waiting session with no pending task of its own and no verdict stays quiet: its turn ended |
 | `bg_poll` | `AGENTCTL_BG_POLL` | `5` | seconds between the wrapper's looks at its session |
+| `bg_spent_grace` | `AGENTCTL_BG_SPENT_GRACE` | `120` | s a session must have run before the reaper judges it |
 | `bin_repo` | `AGENTCTL_BIN_REPO` | - | - |
 | `blame_max` | `AGENTCTL_BLAME_MAX` | `5400` | s a red may wait for its culprit to be decided before a fresh fixer gets it |
 | `blame_probes` | `AGENTCTL_BLAME_PROBES` | `4` | CI probes one red's culprit search may start |
