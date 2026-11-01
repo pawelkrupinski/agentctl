@@ -1459,6 +1459,17 @@ def cmd_red(a):
         return red_owner(a)
     if a.rcmd == "fixer":
         return red_fixer(a)
+    if a.rcmd == "unblame":
+        items = red_targets(st, o_r, a.run, create=False)
+        if not items:
+            print(f"NOT WITHDRAWN: #{a.run} names no red")
+            return 1
+        rc = 0
+        for it in items:
+            ok, line = blame_withdraw(st, it, a.why, scan_repo_for(o_r, None))
+            print(line)
+            rc = rc or (0 if ok else 1)
+        return rc
     if a.rcmd == "dispatch":
         b = dispatch_blocker()
         if b:

@@ -262,6 +262,10 @@ def main(argv=None):
     rl.add_argument("-v", "--verbose", action="store_true", help="also each red's attempts")
     rdp = rds.add_parser("dispatch", help="a red's offer at top priority: the dispatcher takes it now")
     rdp.add_argument("run")
+    rub = rds.add_parser("unblame", help="WITHDRAW a red's blame (its culprit was wrongly decided, its revert not landed): "
+                         "the revert never lands, its worktree is removed, the red goes to the normal fixer")
+    rub.add_argument("run")
+    rub.add_argument("--why", required=True, help="why the culprit was wrong (recorded; every land refusal quotes it)")
     ra = rds.add_parser("auto", help="automatic dispatch by the waiting processor: on / off / status")
     ra.add_argument("state", nargs="?", choices=("on", "off", "status"), default="status")
     rf = rds.add_parser("fixer", help=argparse.SUPPRESS)
