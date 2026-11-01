@@ -290,7 +290,7 @@ class QueueTest(WaitingTest):
         self.assertEqual(self.pushed(), ["push remote=4242"])
         self.assertIn("on ci-runner (the CI tier", [e for e in self.inbox() if e["kind"] == "LANDED"][0]["verdict"])
 
-    def test_a_remote_check_without_a_verdict_is_checked_locally(self):
+    def test_on_the_laptop_a_remote_check_without_a_verdict_is_checked_locally(self):
         self.r.write(".github/workflows/precommit-check.yml", "name: Pre-commit check\n")
         self.r.commit("the remote check workflow")
         self.r.push()
@@ -298,9 +298,25 @@ class QueueTest(WaitingTest):
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         eid, _ = self.queued(wt)
         A.remote_check = lambda repo, e, base, head, mode, own=None: (None, "no run started")
+        saved = A.checks_here
+        A.checks_here = lambda: True  # the laptop: its own tools
+        self.addCleanup(setattr, A, "checks_here", saved)
         self.assertEqual(self.check(eid), 0)
         self.assertEqual(len(self.calls_of("--range")), 1)
         self.assertEqual(self.pushed(), ["push remote="])
+
+    def test_on_ci_runner_a_remote_check_without_a_verdict_is_never_checked_in_a_local_tree(self):
+        """ci-runner's check trees have none of the hook's tools: no verdict there is re-queued, never run locally."""
+        self.r.write(".github/workflows/precommit-check.yml", "name: Pre-commit check\n")
+        self.r.commit("the remote check workflow")
+        self.r.push()
+        os.remove(self.pushes)
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        eid, _ = self.queued(wt)
+        A.remote_check = lambda repo, e, base, head, mode, own=None: (None, "no run started")
+        self.check(eid, rounds=1)  # the tests run as ci-runner (AGENTCTL_ROLE=server)
+        self.assertEqual(self.calls_of("--range"), [], "nothing checked in a ci-runner tree")
+        self.assertEqual(self.pushed(), [])
 
     def fake_github(self, status, head, ref="check/e1"):
         calls = []

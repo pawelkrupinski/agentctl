@@ -857,6 +857,12 @@ def queue_join(repo, d, e, tree, head):
     return 1
 
 
+def checks_here():
+    """Whether this machine may run a change's checks itself: the laptop (its tools), never ci-runner (its check trees
+    have none of the hook's tools: perl, shellcheck, sbt)."""
+    return host_role() != "server"
+
+
 def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own=None):
     """(ok, output, where) of the change's checks: on the CI tier when the repo has the remote check workflow (owner
     decision 1; the reconciler is ci-runner's, the laptop runs no checks since its tick went), else in the tree,
@@ -868,6 +874,11 @@ def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own=None
         ok, out = remote_check(repo, e, base, head, mode, own)
         if ok is not None:
             return ok, out, f"on ci-runner ({why})"
+        if not checks_here():
+            # NOT CHECKED HERE: ci-runner's check trees are no checking machine (no perl, shellcheck or sbt there; the
+            # rate-limit agent's issue, 2026-11-01) -- a remote check without a verdict is no verdict, re-queued as infra
+            wlog(d, f"{e['id']}: the remote check gave no verdict ({out.splitlines()[-1] if out else '?'}): re-queued")
+            return None, out, "on ci-runner (no verdict)"
         wlog(d, f"{e['id']}: the remote check gave no verdict ({out.splitlines()[-1] if out else '?'}): checking here")
     # the range through the remote's ref (origin/main is `base` now, fetched just before): the hook finds the remote, and
     # with it the forge's red gate, from it -- given bare shas it fell back to the wrong forge: the gate unread
