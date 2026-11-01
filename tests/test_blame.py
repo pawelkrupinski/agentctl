@@ -205,6 +205,28 @@ class DriftTest(BlameBase):
             for k in ("AGENTCTL_DRIFT_CI", "FAKE_DRIFT", "FAKE_SEED"):
                 os.environ.pop(k, None)
 
+    def test_the_overlay_works_outside_a_checkout_of_the_old_commit(self):
+        """`git rm --cached` refuses a path whose staged content differs from both the file and HEAD -- every path
+        under scripts/ci/ main changed since the old commit, when the clone is not checked out at it (ci-runner's
+        and the laptop's clones never are): it needs -f, else the overlay was None and the probe no verdict."""
+        self.r.write("scripts/ci/drift_seeds.py", "ignores forced seeds\n")
+        self.r.write(".github/workflows/identity-model-convergence.yml", "no drift-seeds input\n")
+        self.r.commit("ci: the old drift script")
+        old = sh(self.r.path, "git", "rev-parse", "HEAD")
+        self.r.write("scripts/ci/drift_seeds.py", "honours forced seeds\n")
+        self.r.write(".github/workflows/identity-model-convergence.yml", "drift-seeds input\n")
+        self.r.write("identity/x.scala", "main's code\n")
+        self.r.commit("ci: forced seeds")
+        self.r.push()
+        self.r.write("scripts/ci/drift_seeds.py", "a dirty worktree edit\n")  # neither old, HEAD nor main
+        probe = A.drift_overlay(self.r.path, old)
+        self.assertIsNotNone(probe)
+        self.assertEqual(sh(self.r.path, "git", "rev-parse", f"{probe}^"), old)
+        self.assertEqual(sh(self.r.path, "git", "show", f"{probe}:scripts/ci/drift_seeds.py"), "honours forced seeds")
+        self.assertEqual(sh(self.r.path, "git", "show", f"{probe}:.github/workflows/identity-model-convergence.yml"),
+                         "drift-seeds input")
+        self.assertNotIn("identity/x.scala", sh(self.r.path, "git", "ls-tree", "-r", "--name-only", probe))  # old code
+
     def test_a_row_that_replayed_another_seed_is_no_verdict_never_a_pass(self):
         old = self.old_parent()
         os.environ.update(AGENTCTL_DRIFT_CI=self.drift_script(), FAKE_SEED="1-2", FAKE_DRIFT="DRIFT CLEAN")

@@ -370,7 +370,10 @@ def drift_overlay(repo, commit):
         if g("read-tree", commit).returncode != 0:
             return None
         for d in DRIFT_OVERLAY:
-            g("rm", "-r", "-q", "--cached", "--ignore-unmatch", d)
+            # -f: outside a checkout of `commit` its files differ from the worktree and HEAD, and a plain
+            # `rm --cached` refuses ("staged content different from both the file and the HEAD")
+            if g("rm", "-r", "-q", "-f", "--cached", "--ignore-unmatch", d).returncode != 0:
+                return None
             if g("cat-file", "-e", f"{remote()}/main:{d}").returncode == 0 and \
                     g("read-tree", f"--prefix={d}/", f"{remote()}/main:{d}").returncode != 0:
                 return None
