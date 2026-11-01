@@ -262,6 +262,8 @@ def red_owner(a):
         line = f"RED OWNER {fam} turn {s['turn']}: {outcome[:300]}"
         inbox_write("red fixer", line, [line], tail, 0 if outcome.startswith("LANDED") else 1, cwd=wt)
         release(s["names"], outcome, "\n".join(tail[-8:]))
+        if s["bid"]:  # THE TURN'S SESSION STOPPED (bg_spent): claude keeps its process on as a spare, and the next
+            bg_stop(cli, s["bid"])  # turn's `--resume` of a running session starts a COPY -- one more per turn
         s["bid"], s["missing"] = None, 0
         turn_state(False, time.time())
         return f"ENDED: {s['empty']} turns in a row with no verdict" if s["empty"] >= OWNER_EMPTY_TURNS else None

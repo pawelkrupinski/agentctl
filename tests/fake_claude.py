@@ -3,7 +3,8 @@
 
   --help                      a help naming --bg and --permission-mode
   --bg <prompt> ... -n <name> records {argv, cwd, env} to $FAKE_CLAUDE_OUT/<id>.json, starts a detached session process
-                              and prints `backgrounded · <id> · <name>`
+                              and prints `backgrounded · <id> · <name>`; `--resume <sid>` continues that session under
+                              the same id -- or, when its process still runs (a spare), starts a COPY under a new id
   --bg with $FAKE_CLAUDE_BG_FAIL  prints it and exits 1 (a refused launch); with $FAKE_CLAUDE_NO_SESSION it backgrounds
                               a row (state `starting`) whose session never starts
   agents --json --all         the sessions ($FAKE_CLAUDE_OUT/agents/<id>.json rows: id, sessionId, name, cwd, state)
@@ -123,6 +124,13 @@ if "--bg" in argv:
     prompt = argv[argv.index("--bg") + 1]
     name = argv[argv.index("-n") + 1] if "-n" in argv else "session"
     sid = argv[argv.index("--resume") + 1] if "--resume" in argv else str(uuid.uuid4())
+    was, copy = read_row(sid[:8]) if "--resume" in argv else None, False
+    if was and was.get("pid") and not was.get("stopped"):  # the session still runs (a spare): claude starts a copy
+        try:
+            os.kill(was["pid"], 0)
+            sid, copy = str(uuid.uuid4()), True
+        except OSError:
+            pass
     bid = sid[:8]
     os.makedirs(OUT, exist_ok=True)
     with open(os.path.join(OUT, f"{bid}.json"), "w") as f:
@@ -136,7 +144,7 @@ if "--bg" in argv:
                "prompt": prompt})
     subprocess.Popen([sys.executable, os.path.abspath(__file__), "_session", bid], start_new_session=True,
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    print(f"backgrounded · {bid} · {name}")
+    print(f"backgrounded · {bid} · {name}" + (f" (a copy of {was['id']}, which is still running)" if copy else ""))
     sys.exit(0)
 print("fake claude: unsupported " + " ".join(argv), file=sys.stderr)
 sys.exit(2)

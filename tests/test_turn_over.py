@@ -4,12 +4,12 @@ nothing crashed): claude keeps a background session's process after its turn (`c
 DIAGNOSED, and each red's lease lapsed as "lease expired" -- three of those, and the breaker blocked the red on the owner.
 The transcript decides now (bg_turn, bg_turn_over); and a session waiting on its own background task (`agentctl wait`)
 is at work, its lease renewed by the wait (bg_wait_mark)."""
-import json, os, signal, sys, time, unittest
+import json, os, signal, subprocess, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
-from test_owner import OwnerBase  # noqa: E402
+from test_owner import FAM, OwnerBase  # noqa: E402
 from test_reds import RedsBase  # noqa: E402
 
 
@@ -106,7 +106,8 @@ class OwnerTurnTest(LingerMixin, OwnerBase):
         self.tick(dispatch=True)
         name = A.red_lease(self.only()["data"]["key"])
         self.assertTrue(self.wait(lambda: self.outcome(name).startswith("GAVE UP"), limit=40), self.outcome(name))
-        self.assertTrue(any(s.get("pid") and s["state"] == "blocked" for s in self.sessions()), "its process lived on")
+        self.assertTrue(self.wait(lambda: not any(s.get("pid") for s in self.sessions())),
+                        "the turn's session (its process alive: claude's spare) is stopped with the turn")
         self.assertEqual(A.red_crash_streak({"history": [{"dispatched": True, "outcome": self.outcome(name)}]}), [],
                          "a verdict is a result: never a crash")
 
@@ -117,6 +118,24 @@ class OwnerTurnTest(LingerMixin, OwnerBase):
         self.tick(dispatch=True)
         name = A.red_lease(self.only()["data"]["key"])
         self.assertTrue(self.wait(lambda: self.outcome(name).startswith("LANDED"), limit=40), self.outcome(name))
+
+
+class SpentSessionTest(LingerMixin, OwnerBase):
+    """2026-11-02: each owner turn `--resume`d the last turn's session while claude's spare kept its process running, so
+    claude started a COPY each turn and nobody stopped the old one: 11 idle `red owner · convergence` sessions, 4 GB."""
+
+    def test_n_turns_leave_exactly_one_session_each_stopped_when_its_turn_ends(self):
+        self.linger()
+        self.tick(dispatch=True)
+        self.assertTrue(self.wait(lambda: self.rec().get("turn") == 1 and not self.rec().get("in_turn"), limit=40))
+        for n, (rid, num) in enumerate([(41, 21), (42, 22)], start=2):
+            self.main_red(rid, num, line=f"[info] - Spec{n} should work *** FAILED ***")
+            self.tick(dispatch=True, advance=1)
+            self.assertTrue(self.wait(lambda: self.rec().get("turn") == n and not self.rec().get("in_turn"), limit=40),
+                            self.rec())
+        owners = [s for s in self.sessions() if s["name"].startswith("red owner")]
+        self.assertEqual(len({s["sessionId"] for s in owners}), 1, "every turn resumed the SAME session, never a copy")
+        self.assertEqual([s for s in owners if s.get("pid")], [], "no spare left running after the turns")
 
 
 class FixerTurnTest(LingerMixin, RedsBase):
