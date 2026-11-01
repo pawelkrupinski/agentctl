@@ -167,6 +167,53 @@ class BlockTextTest(CrashLoopBase):
         self.assertEqual(it["data"]["history"][-1]["worktree"], self.tmp.name)
 
 
+class LaunchFailedTest(CrashLoopBase):
+    """A launch `claude --bg` refused never wrote a log: the block shows its stderr as LAUNCH FAILED, and points at no
+    log that does not exist (it read `less ?`, then `less <a claude-*.log never written>`)."""
+    ERR = "Error: workspace not trusted\n  run claude in it once"
+
+    def test_the_block_shows_each_failed_launchs_stderr(self):
+        never = os.path.join(self.tmp.name, "claude-never.log")
+        it = self.red(tier="deep", attempts=3)
+        for _ in range(3):
+            key = it["data"]["key"]
+            took = self.st.acquire(A.red_lease(key), "laptop:fixer:x", A.RED_FIXER_TTL, A.RED_FIXER_MAX,
+                                   meta={"kind": "fixer", "log": never})
+            self.t[0] += 30
+            self.st.release(A.red_lease(key), took["epoch"], took["secret"],
+                            outcome=f"NOT STARTED: `claude --bg` exit 1: {self.ERR}", notes="")
+            it = self.st.item("red", it["id"])
+            if it["state"] != "leased":
+                it = A.red_move(self.st, it, "leased", "taken again")
+            A.red_lease_ended(self.st, it, self.st.get(A.red_lease(key)), None, self.t[0])
+            it = self.st.item("red", it["id"])
+        self.assertEqual(it["state"], "blocked-external")
+        text = A.red_block_of(it, self.st)["text"]
+        self.assertEqual(text.count("LAUNCH FAILED: exit 1: Error: workspace not trusted run claude in it once"), 3, text)
+        self.assertNotIn("less ", text)
+        self.assertIn("`! ~/bin/agentctl red status -v`", text)
+
+    def test_launch_failure_reads_only_a_refused_launch(self):
+        self.assertEqual(A.launch_failure("NOT STARTED: NOT STARTED: `claude --bg` exit 2: boom"), "exit 2: boom")
+        self.assertEqual(A.launch_failure("NOT STARTED: `claude --bg` failed (timed out)"), "failed (timed out)")
+        self.assertIsNone(A.launch_failure("NOT STARTED: session b1 never claimed in 10 min"))
+        self.assertIsNone(A.launch_failure(CRASH))
+        evidence = A.red_crash_evidence([{"at": "2026-11-01T10:00:00Z", "holder": "h", "log": "/nowhere",
+                                          "outcome": "NOT STARTED: `claude --bg` exit 1: boom"}])
+        self.assertEqual(evidence, ["2026-11-01T10:00:00Z h: LAUNCH FAILED: exit 1: boom"])
+
+    def test_bg_start_reports_the_launchs_stderr_over_its_stdout(self):
+        cli = os.path.join(self.tmp.name, "claude")
+        with open(cli, "w") as f:
+            f.write("#!/bin/sh\necho 'some banner'\necho 'Error: not logged in' >&2\nexit 1\n")
+        os.chmod(cli, 0o755)
+        self.assertEqual(A.bg_start([cli, "--bg", "p"], self.tmp.name, dict(os.environ)),
+                         (None, "exit 1: Error: not logged in"))
+        with open(cli, "w") as f:
+            f.write("#!/bin/sh\necho 'only stdout'\nexit 3\n")
+        self.assertEqual(A.bg_start([cli], self.tmp.name, dict(os.environ)), (None, "exit 3: only stdout"))
+
+
 class DecisionTest(CrashLoopBase):
     """2026-11-01, #579: DIAGNOSED "resolver design ... needs your design call" went back to its fixer turn after turn.
     A diagnosis that needs the owner becomes an owner-decision block carrying it -- never the crash-loop breaker's."""

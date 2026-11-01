@@ -1762,10 +1762,24 @@ def red_crash_streak(d):
     return out
 
 
+LAUNCH_FAILURE = re.compile(r"^(?:NOT STARTED: )+`claude --bg` (.*)$", re.S)
+
+
+def launch_failure(outcome):
+    """A launch `claude --bg` refused (fixer.bg_start: `exit N: <its stderr>`, or `failed (<error>)`): that text, which
+    is the whole story -- the session never started, so there is no log to read. None for any other outcome."""
+    m = LAUNCH_FAILURE.match(str(outcome or ""))
+    return " ".join(m.group(1).split()) if m else None
+
+
 def red_crash_evidence(streak):
     """The escalation's tail: each crashed launch's outcome, then the last lines of its log."""
     tail = []
     for h in reversed(streak):
+        failed = launch_failure(h.get("outcome"))
+        if failed is not None:
+            tail.append(f"{h.get('at')} {h.get('holder')}: LAUNCH FAILED: {failed[:400]}")
+            continue
         tail.append(f"{h.get('at')} {h.get('holder')}: {str(h.get('outcome'))[:200]}"
                     + (f" (log: {str(h['log']).replace(HOME, '~')})" if h.get("log") else ""))
         tail += [f"    {l[:200]}" for l in str(h.get("notes") or "").splitlines()[-4:] if l.strip()]
@@ -1774,21 +1788,26 @@ def red_crash_evidence(streak):
 
 def red_crash_cmd(streak):
     """The owner's look at the crashes: `red status -v`, then the newest crashed launch's log (its wrapper's stderr or its
-    transcript), else its worktree -- never a `less ?`."""
+    transcript), else its worktree -- never a `less ?`, nor a log that was never written (a launch that failed)."""
     for h in streak:
         for p in (h.get("log"), h.get("worktree")):
-            if p:
+            if p and os.path.exists(p):
                 return (f"~/bin/agentctl red status -v; " + (f"less {p}" if not os.path.isdir(p) else f"cd {p}")
                         ).replace(HOME, "~")
     return "~/bin/agentctl red status -v"
 
 
 def red_crash_launches(streak):
-    """Each crashed launch, oldest first: when, and how it ended (its stop reason, or its log's last line)."""
+    """Each crashed launch, oldest first: when, and how it ended (its stop reason, or its log's last line; a launch
+    `claude --bg` refused: LAUNCH FAILED and its stderr)."""
     out = []
     for h in reversed(streak):
-        last = [l.strip() for l in str(h.get("notes") or "").splitlines() if l.strip()]
-        why = str(h.get("outcome"))[:120] + (f" -- {last[-1][:100]}" if last else "")
+        failed = launch_failure(h.get("outcome"))
+        if failed is not None:
+            why = f"LAUNCH FAILED: {failed[:300]}"
+        else:
+            last = [l.strip() for l in str(h.get("notes") or "").splitlines() if l.strip()]
+            why = str(h.get("outcome"))[:120] + (f" -- {last[-1][:100]}" if last else "")
         out.append(f"{str(h.get('at'))[11:16]}Z {why}")
     return "; ".join(out)
 
