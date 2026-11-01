@@ -180,7 +180,9 @@ agentctl watchdog                 # one invariant pass (launchd every 60 s)
 ```
 
 `status` reads only `state.json` (written each tick), and prints each item with its state and deadline and how long
-ago the tick ran. `lease list` prints holder, epoch, expiry, max hold and the holder's note; leases free for over a day
+ago the tick ran, and on what code: `code 4d0fc921c9e6 (code d1677f40)`, the git revision first (ci-runner's export
+directory is named by it; a checkout says its HEAD, `+dirty` when agentctl's code differs), then the code hash the
+restart check compares (2026-11-01: the hash alone named no commit, and code that ran looked unpicked). `lease list` prints holder, epoch, expiry, max hold and the holder's note; leases free for over a day
 are archived into the events by the tick, so the table stays small.
 
 **The status page** (2026-10-29): the laptop's processor (the sync; launchd `net.bitcashier.agentctl-waiting`) serves a
@@ -521,12 +523,15 @@ agent must be assigned to it".
   uk --seed S"), so every new unrelated flip was the same red and "refuted" the fixes landed for earlier ones (#624, a
   Ladykillers flip, marked #595's Dracula fix and #549's slice refuted). Now the job's whole log is read through
   `gh api repos/<o>/<r>/actions/jobs/<id>/logs` and the rows `<venue> | <raw title>: <takes...>` under each `## <cc> flips:`
-  (and divergences; never the `known` baseline's) become the key line `flips: cc:venue|title; ...` (sorted, lowercased;
+  (and divergences; never a `KNOWN:` baseline row or a `FIXED,` one -- they follow the `## <cc> known flips:` summary
+  line, which the fresh rows follow too) become the key line `flips: cc:venue|title; ...` (sorted, lowercased;
   past `FLIP_KEY_MAX` listings, 5, or 150 chars a stable letters-only hash of the set). The red key is workflow + that
   line, so two failures share a red only if they share the same set of flipped listings, a landed `Fixes-Red:` is
   refuted only by a newer failure with its own key, and a different listing is a new red with its own fixer. ci-why
   prints `red key: ...` under the job. A log that cannot be read keys the job the old way (its seed line) and says
   `LOG UNREADABLE: ... flipped listings` (never cached, read again next tick); a log naming no listing says so (cached).
+  A job log holds ANSI colours, which gh refuses to print without `--allow-escape-sequences` (2026-11-01: every drift
+  log was LOG UNREADABLE until it was passed, and #629 was keyed by its seed line).
   Migration is the classifier version (it covers `flip_listings`, `flip_key_line`, `drift_key`): cached signatures are
   read again a few per tick, and an open red keyed the old way whose run now fails under a listing red is MERGED into it
   (runs, history, refuted fixes), as for any re-keyed red; one whose runs no longer fail is cleared by the usual rule.
@@ -820,6 +825,12 @@ parent passes and its end fails:
   "parent" runs on 73f1dcfcbb replayed seed 2). Every row's verdict line names the seed it replayed (`[seed S]`); one
   that is not the pinned seed is NO VERDICT (a fresh fixer), never "the parent passes".
   Other convergence legs (their pinned pair rotates nightly): undetermined.
+  A drift row is named the way GitHub lists it, `leg (united-kingdom) / takes-drift-2 (united-kingdom)` (the inner
+  job after ` / `, as movies' `convergence_reuse.py` reads it). **A convergence parent passes ONLY on such a re-run
+  whose every verdict line confirms the pinned seed** (`blame_unproven`): a green run with other seeds is never
+  evidence, and a convergence red whose kind is unknown is undetermined at once -- the normal fixer, never a revert
+  (2026-11-01: `^takes-drift` missed the prefixed name, and #628's green on the parent "proved" #629's culprit; the
+  flip was pre-existing).
 - Another watched repo (core): only decided runs of its gate on the exact commit; one change per push is the usual case.
 - The failing test's files (its `...Spec`/`...Test` name, a path in its first line) pick the first boundary to probe
   (the hinted change's parent, then its end), else halving. At most `$AGENTCTL_BLAME_PROBES` (4) CI probes, each a
