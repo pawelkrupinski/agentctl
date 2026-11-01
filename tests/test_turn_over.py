@@ -137,6 +137,42 @@ class SpentSessionTest(LingerMixin, OwnerBase):
         self.assertEqual(len({s["sessionId"] for s in owners}), 1, "every turn resumed the SAME session, never a copy")
         self.assertEqual([s for s in owners if s.get("pid")], [], "no spare left running after the turns")
 
+    def spare(self, name):
+        """A finished session whose process lives on (claude's spare), launched outside any wrapper."""
+        env = {**os.environ, "FAKE_CLAUDE_LINGER": "1"}
+        env.pop("FAKE_CLAUDE_BG_WAIT", None)
+        r = subprocess.run([os.environ["AGENTCTL_CLAUDE"], "--bg", "x", "-n", name], capture_output=True, text=True,
+                           env=env)
+        bid = A.BG_STARTED.search(r.stdout).group(1)
+        self.assertTrue(self.wait(lambda: (A.bg_session(A.claude_cli(), bid) or {}).get("state") == "blocked"))
+        return bid
+
+    def test_the_reaper_stops_spent_agentctl_sessions_never_a_live_turn_nor_a_session_it_did_not_launch(self):
+        self.linger(FAKE_CLAUDE_BG_WAIT="60")  # the owner's live turn: waiting on its own task, its process alive
+        self.tick(dispatch=True)
+        self.assertTrue(self.wait(lambda: self.rec().get("in_turn") and (A.bg_session(
+            A.claude_cli(), self.rec().get("bg_id") or "-") or {}).get("state") == "blocked", limit=40))
+        live = self.rec()["bg_id"]
+        old = self.spare(f"red owner · {FAM}")        # an earlier turn's leftover
+        mine = self.spare("probe · not agentctl's")   # someone else's session
+        acts = A.bg_reap_spent(time.time())
+        self.assertEqual([a.split()[3] for a in acts], [old], acts)
+        rows = {s["id"]: s for s in self.sessions()}
+        self.assertTrue(rows[old].get("stopped"))
+        self.assertTrue(rows[live].get("pid") and not rows[live].get("stopped"), "the live turn is never touched")
+        self.assertTrue(rows[mine].get("pid") and not rows[mine].get("stopped"), "nor a session agentctl did not launch")
+
+    def test_spent_is_idle_with_a_live_process_past_the_grace(self):
+        me, t = os.getpid(), 10_000
+        row = {"id": "aaaa1111", "sessionId": "aaaa1111-x", "kind": "background", "name": "red fixer #5 · main",
+               "state": "blocked", "pid": me, "startedAt": 1_000_000}
+        self.assertEqual(A.bg_spent([row], set(), t), [row])
+        self.assertEqual(A.bg_spent([{**row, "state": "working"}], set(), t), [], "at work")
+        self.assertEqual(A.bg_spent([{**row, "pid": None}], set(), t), [], "no process: nothing to free")
+        self.assertEqual(A.bg_spent([row], {"aaaa1111"}, t), [], "a live wrapper's turn")
+        self.assertEqual(A.bg_spent([{**row, "startedAt": (t - 5) * 1000}], set(), t), [], "just started")
+        self.assertEqual(A.bg_spent([{**row, "kind": "interactive"}], set(), t), [])
+
 
 class FixerTurnTest(LingerMixin, RedsBase):
     def test_a_fixer_turn_ending_with_its_process_alive_releases_its_red_with_the_verdict(self):

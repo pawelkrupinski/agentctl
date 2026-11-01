@@ -483,6 +483,71 @@ def red_reap_orphans(store, t):
             line = f"RED ORPHANED LEASE: {row['name']} ({row['holder']}): {why}: revoked, offered again"
             inbox_write("red", line, [line], [], 1)
             acts.append(line)
+    return acts + bg_reap_spent(t)
+
+
+# ---------------------------------------------------------------- SPENT SESSIONS (2026-11-02)
+# claude keeps a background session's process after its turn (`claude bg-spare`), and `claude --bg --resume <id>` of a
+# session whose process still runs starts a COPY under a new id. The owner's wrapper stopped no finished turn: each
+# turn resumed the last one's still-running session as a copy, and the spares piled up -- 11 idle `red owner ·
+# convergence` sessions in 40 min, ~25 claude processes, 4 GB. The wrapper now stops each turn's session when the turn
+# ends (end_turn: the next `--resume` continues the SAME session, under the same id, as the owner's design says); and
+# whatever older code or a crash leaves, the laptop's tick stops every agentctl-launched session (by its label) that
+# waits idle with its process alive and is not the current turn of a live wrapper. `claude stop` keeps the
+# conversation (`claude attach` reopens it); sessions agentctl did not launch are never touched.
+BG_LABELS = ("red owner · ", "red fixer #", "orphan · ", "lander · ")  # owner_turn's -n and fixer_label's
+BG_SPENT_GRACE = 120  # s a session must have run before the reaper judges it ($AGENTCTL_BG_SPENT_GRACE)
+
+
+def bg_live_turns():
+    """The background ids that are the current turn of a live wrapper (an owner in its turn, a fixer running)."""
+    live = set()
+    for p in glob.glob(reds_dir("owners", "*", "owner.json")):
+        r = read_record(p) or {}
+        if (r.get("bg_id") and not r.get("ended") and r.get("in_turn", True)
+                and proc_alive(r.get("pid"), r.get("process_start"))):
+            live.add(r["bg_id"])
+    live.update(r["bg_id"] for r in fixer_records() if r.get("alive") and r.get("bg_id"))
+    return live
+
+
+def bg_spent(rows, live, t):
+    """The rows of `claude agents --json --all` that are agentctl's spent sessions: launched by it (BG_LABELS), waiting
+    idle with their process alive (bg_waiting), not a live wrapper's current turn, and older than BG_SPENT_GRACE."""
+    grace = env_num("AGENTCTL_BG_SPENT_GRACE", BG_SPENT_GRACE)
+    out = []
+    for x in rows:
+        if not isinstance(x, dict) or x.get("kind") != "background":
+            continue
+        if not str(x.get("name") or "").startswith(BG_LABELS):  # never a session agentctl did not launch
+            continue
+        bid = str(x.get("id") or "")
+        if not bid or bid in live or any(str(x.get("sessionId") or "").startswith(b) for b in live):
+            continue
+        if not bg_waiting(x) or t - float(x.get("startedAt") or 0) / 1000 < grace:
+            continue
+        out.append(x)
+    return out
+
+
+def bg_reap_spent(t):
+    """The laptop's tick: every spent agentctl session stopped (bg_spent). Lines for what it did."""
+    if on_ci_runner():
+        return []
+    cli = claude_cli()
+    try:
+        r = subprocess.run([cli, "agents", "--json", "--all"], capture_output=True, text=True, timeout=60,
+                           stdin=subprocess.DEVNULL)
+        rows = json.loads(r.stdout) if r.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        rows = None
+    if not isinstance(rows, list):
+        return []
+    acts = []
+    for x in bg_spent(rows, bg_live_turns(), t):
+        bg_stop(cli, x["id"])
+        acts.append(f"RED SESSION SPENT: {x['id']} ({x.get('name')}) idle with its process alive, no wrapper's turn: "
+                    "stopped")
     return acts
 
 
