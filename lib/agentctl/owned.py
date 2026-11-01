@@ -69,7 +69,7 @@ def code_rev(path=TOOL_PATH):
         return ""
 
 
-_start_rev = []
+_start_rev = process_cache([])
 
 
 def start_rev():
