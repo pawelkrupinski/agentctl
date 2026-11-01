@@ -495,7 +495,8 @@ def bg_start(argv, cwd, env):
     except (OSError, subprocess.TimeoutExpired) as e:
         return None, f"failed ({e})"
     m = BG_STARTED.search(r.stdout + r.stderr)
-    return (m.group(1), None) if m else (None, f"exit {r.returncode}: {(r.stdout + r.stderr).strip()[-300:]}")
+    # refused: its stderr says why (stdout only when stderr is empty) -- the block's LAUNCH FAILED text (red_crash_launches)
+    return (m.group(1), None) if m else (None, f"exit {r.returncode}: {(r.stderr.strip() or r.stdout.strip())[-300:]}")
 
 
 def bg_session(cli, bid):
