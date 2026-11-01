@@ -892,15 +892,16 @@ def red_offer_class(d):
     return "flake" if d.get("red_kind") == "flake" else "gate" if d.get("gate") else "other"
 
 
-def red_offer(store, it, text, data=None, repo=None, escalate=False, verdict=None, tail=None):
-    """Into `offered`, with its tier from the ladder, its deadline and its offer (the picture a taker gets)."""
+def red_offer(store, it, text, data=None, repo=None, escalate=False, verdict=None, tail=None, quiet=False):
+    """Into `offered`, with its tier from the ladder, its deadline and its offer (the picture a taker gets). quiet: a
+    re-offer that is no escalation (its culprit decided: blame.py)."""
     d = {**it["data"], **(data or {})}
     tier = red_tier(d, d.get("culprit"))
     deadline = RED_OFFER["author"] if tier == "author" else RED_OFFER[red_offer_class(d)]
     if tier == "blame":  # waits for its culprit, at most BLAME_MAX: never escalated UNCLAIMED meanwhile
         deadline = max(60, float((d.get("blame") or {}).get("since") or 0) + env_num("AGENTCTL_BLAME_MAX", BLAME_MAX)
                        - store.clock() + 60)
-    sev = {"severity": "escalate"} if escalate or tier == "deep" else {}
+    sev = {"severity": "escalate"} if escalate or tier == "deep" else {"severity": "info"} if quiet else {}
     aud = {"audience": {k: v for k, v in (d.get("author") or {}).items() if k in ("worktree", "session")}} \
         if tier == "author" else {}
     if tier == "author":  # addressed to the change's recorded author (the projector writes it to their inbox)

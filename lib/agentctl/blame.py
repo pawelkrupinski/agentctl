@@ -34,8 +34,8 @@
 #    to the normal fixer.
 # 4. THE LANDER REVIVED: `claude --bg --resume <session>` in its own worktree (a subagent: a session in its worktree
 #    briefed with its transcript), told the red run, the failing step and lines, that its change was reverted, and to
-#    fix, rebase, re-apply its change with the fix and land again. It holds the red's lease (kind `lander`), which the
-#    revert's own fix never takes from it.
+#    fix, rebase, re-apply its change with the fix and land again (a revert that conflicts: fix forward). It holds the
+#    red's lease (tier `lander`), which the revert's own fix never takes from it.
 BLAME_MAX = 90 * 60              # s a red may wait for its culprit to be decided before a fresh fixer gets it ($AGENTCTL_BLAME_MAX)
 BLAME_PROBES = 4                 # CI probes one red's culprit search may start ($AGENTCTL_BLAME_PROBES)
 BLAME_PROBE_WALL = 2 * 3600      # s one probe may run before it is no verdict ($AGENTCTL_BLAME_PROBE_WALL)
@@ -220,12 +220,12 @@ def blame_finish(store, it, b, why, t):
                     f"{b['parent'][:10]} passes the same check, its end fails ({b['evidence'][:200]})")
             inbox_write("red", line, [line], [], 0)
             dispatch_log({"workflow": d.get("workflow"), "run": d.get("last_run") or {}, "job": d.get("job")}, line)
-            red_offer(store, it, line, data={"blame": b})
+            red_offer(store, it, line, data={"blame": b}, quiet=True)
             return [line]
     b = dict(b, state="undetermined", why=why, decided_at=t)
     line = f"RED BLAME: {red_what(d)}: no culprit determined ({why}): the normal fixer flow"
     dispatch_log({"workflow": d.get("workflow"), "run": d.get("last_run") or {}, "job": d.get("job")}, line)
-    red_offer(store, it, line, data={"blame": b})
+    red_offer(store, it, line, data={"blame": b}, quiet=True)
     return [line]
 
 
@@ -552,7 +552,7 @@ def lander_spawn(store, o_r, repo, off, took, u):
         store.update_item("red", it_id, it["version"], {"blame": b, "lander_tried": True})
     if who == "owner" and rv.get("ok"):
         return True, line  # nobody to revive: the lease lapses by its TTL, the revert's Fixes-Red holds the red meanwhile
-    if who == "lander" and rv.get("ok"):
+    if who == "lander" and (rv.get("ok") or rv.get("conflict")):  # a revert that conflicts: it fixes forward instead
         return lander_revive(store, o_r, repo, off, took, u, b)
     b["revive_failed"] = "its revert did not land" if not rv.get("ok") else "an owner's change"
     return lander_fallback(store, o_r, repo, off, took, u, b, f"revert failed ({rv['msg'][:120]})")
@@ -608,7 +608,8 @@ def lander_revive(store, o_r, repo, off, took, u, b):
     name = g.get("change") or g["commits"][0]
     brief = {"mode": "transcript" if l.get("agent") else "resume", "session": sid, "agent": l.get("agent"),
              "transcript": tr, "change": name, "shas": [c[:10] for c in g["commits"]], "subject": g.get("subject"),
-             "revert": rv.get("msg"), "worktree": wt, "moved_from": moved, "evidence": b.get("evidence"),
+             "revert": rv.get("msg"), "reverted": bool(rv.get("ok")), "worktree": wt, "moved_from": moved,
+             "evidence": b.get("evidence"),
              "ci_why": lander_ci_why(rid) if rid else ""}
     cwd = l.get("session_cwd") if not l.get("agent") and l.get("session_cwd") and os.path.isdir(l["session_cwd"]) else wt
     resume = {"worktree": wt, "note": None, "launch_cwd": cwd}
@@ -622,7 +623,8 @@ def lander_revive(store, o_r, repo, off, took, u, b):
     if it:
         store.update_item("red", it["id"], it["version"], {"blame": dict(b, revived={"at": ts(), "how": brief["mode"],
                                                                                     "worktree": wt})})
-    line = (f"LANDER REVIVED: {red_what(u)}: {lander_name(l)} -- its change {name} was reverted -- "
+    line = (f"LANDER REVIVED: {red_what(u)}: {lander_name(l)} -- its change {name} "
+            f"{'was reverted' if rv.get('ok') else 'could not be reverted (it fixes forward)'} -- "
             f"{'resumed' if brief['mode'] == 'resume' else 'continued from its transcript'} in {wt.replace(HOME, '~')} "
             "to fix it and land it again (`claude agents`)")
     inbox_write("red", line, [line], [], 0, cwd=wt)
@@ -640,6 +642,14 @@ def lander_prompt(u, wt):
     moved = (f"Your old worktree {l['moved_from']} is gone: work in {wt} (off {remote()}/main). " if l.get("moved_from")
              else "")
     why = f"\n\n`agentctl ci-why {rid}` says:\n{l['ci_why']}\n\n" if l.get("ci_why") else " "
+    if l.get("reverted") is False:  # its revert did not apply: fix forward, as a gate fix
+        return (head + f"agentctl REVIVED YOU: your change {name} ({', '.join(l.get('shas') or [])}) turned main red -- "
+                f"{u['workflow']} #{num} (run id {rid}) failed in job `{u.get('job')}` with "
+                f"{str(u.get('line') or '')[:300]!r}; its parent passes the same check, its end fails. It COULD NOT BE "
+                f"REVERTED ({l.get('revert')}).{why}" + moved + f"FIX IT FORWARD in your worktree {wt}: `git fetch "
+                f"{remote()} && git rebase {remote()}/main`, fix the failure (never loosen the test), commit it with a "
+                f"`Fixes-Red: {num}` trailer and land it with `~/bin/agentctl land` (a gate fix: it lands while main is "
+                "red). End at `LANDED <sha>`, or `GAVE UP: <why>`.")
     return (head + f"agentctl REVIVED YOU: your change {name} ({', '.join(l.get('shas') or [])}: "
             f"{str(l.get('subject') or '')[:80]}) turned main red -- {u['workflow']} #{num} (run id {rid}) failed in job "
             f"`{u.get('job')}` with {str(u.get('line') or '')[:300]!r}; its parent passes the same check, its end fails "

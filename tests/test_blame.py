@@ -305,7 +305,7 @@ class RevertTest(BlameBase):
         self.assertTrue(any(e["verdict"].startswith("RED RELAND") for e in A.inbox_entries()))
 
 
-class ReviveTest(BlameBase):
+class ReviveBase(BlameBase):
     """Piece 4: the lander's own session revived -- resumed (a top-level session) or continued from its transcript (a
     subagent) -- in its worktree; a fresh fixer only when it cannot be (no session, transcript gone, launch refused)."""
 
@@ -353,6 +353,9 @@ class ReviveTest(BlameBase):
         [p] = [os.path.join(out, n) for n in os.listdir(out) if n.endswith(".json")]
         return json.load(open(p))
 
+
+
+class ReviveTest(ReviveBase):
     def test_a_top_level_landers_own_session_is_resumed_in_its_cwd_and_holds_the_reds_lease(self):
         wt, _tr = self.red_landed_by()
         self.tick(dispatch=True)
@@ -413,3 +416,35 @@ class ReviveTest(BlameBase):
         self.assertEqual(len(fresh), 1)
         self.assertIn("could not be revived", fresh[0]["blame_note"])
         self.assertEqual(len(self.lands), 1)  # reverted once, never again
+
+
+class ConflictReviveTest(ReviveBase):
+    def test_a_revert_that_conflicts_revives_the_lander_to_fix_forward(self):
+        self.red_landed_by()
+        self.r.write("a.txt", "a changed since\n")
+        self.r.commit("later: touch a.txt")
+        self.r.push()
+        self.tick(dispatch=True)
+        self.assertEqual(self.lands, [])  # nothing reverted
+        [rec] = A.fixer_records()
+        self.assertTrue(rec["resume"])
+        prompt = self.session_argv()["argv"]
+        prompt = prompt[prompt.index("--bg") + 1]
+        self.assertIn("COULD NOT BE REVERTED", prompt)
+        self.assertIn("Fixes-Red: 20", prompt)
+        self.assertTrue(any("could not be reverted" in e["verdict"] for e in A.inbox_entries()
+                            if e["verdict"].startswith("LANDER REVIVED")))
+
+
+class QuietTest(BlameBase):
+    def test_deciding_the_culprit_is_no_escalation(self):
+        g = self.sha
+        h = self.land("d", {"identity/x.scala": "x\n"})
+        self.red_at(g, h, wf=CONV, wfile="identity-model-convergence.yml", job=DRIFT_JOB, line=DRIFT_LINE)
+        self.verdicts[g] = "pass"
+        self.tick()
+        self.tick()
+        it = self.only()
+        self.assertEqual((it["data"]["tier"], it["level"]), ("lander", 0))
+        evs = [e for e in self.st.events(after=0) if e["item_type"] == "red"]
+        self.assertFalse([e for e in evs if e["severity"] == "escalate"], evs)

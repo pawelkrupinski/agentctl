@@ -303,7 +303,10 @@ class Store:
                 raise TerminalState(f"{typ} {iid} is {cur['state']}: terminal")
             now_ = self.clock()
             same = to == cur["state"]
-            level = cur["level"] + 1 if same and spec.escalate else (cur["level"] if same else 0)
+            # a self-transition whose event says severity `info` re-deadlines without escalating (a red's culprit decided:
+            # blame.py), never a level up
+            quiet = same and (event or {}).get("severity") == "info"
+            level = cur["level"] + 1 if same and spec.escalate and not quiet else (cur["level"] if same else 0)
             merged = {**cur["data"], **(data or {})}
             c.execute("UPDATE items SET state=?, version=?, entered_at=?, deadline=?, level=?, data=? WHERE type=? AND id=?",
                       (to, cur["version"] + 1, now_ if not same else cur["entered_at"],
