@@ -1597,7 +1597,10 @@ def red_lease_ended(store, it, row, block, t):
     counted = not str(h["outcome"]).startswith(("NOT STARTED", "RELEASED"))
     upd = {"history": (d.get("history") or []) + [h], "holder": None,
            "attempts": int(d.get("attempts") or 0) + (1 if counted else 0)}
-    if str(h["outcome"]).startswith("NOT STARTED"):
+    if str(h["outcome"]).startswith("NOT STARTED") and m.get("tier") == "lander" and d.get("blame"):
+        # THE LANDER COULD NOT BE REVIVED (LAUNCH FAILED): a fresh fixer at once, briefed with the change -- no backoff
+        upd["blame"] = dict(d["blame"], revive_failed=str(h["outcome"])[:300])
+    elif str(h["outcome"]).startswith("NOT STARTED"):
         fails = int(d.get("start_failures") or 0) + 1
         upd.update(start_failures=fails, dispatch_after=t + min(RED_START_BACKOFF * 2 ** (fails - 1), 3600))
     elif counted:

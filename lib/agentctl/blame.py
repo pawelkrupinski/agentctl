@@ -569,7 +569,83 @@ def lander_fallback(store, o_r, repo, off, took, u, b, why):
     return red_dispatch(o_r, repo, u, why=f"tier lander: {why} -> a fresh fixer", lease=off["lease"], took=took)
 
 
+# -- 4. the lander revived
+def lander_ci_why(rid, limit=25):
+    """The failing step and its log lines, as `agentctl ci-why <run id>` says them (bounded; '' when it cannot)."""
+    try:
+        r = subprocess.run([sys.executable, TOOL_PATH, "ci-why", str(rid)], capture_output=True, text=True, timeout=90,
+                           stdin=subprocess.DEVNULL, env={**os.environ, "AGENTCTL_DETACHED": "1"})
+        return "\n".join((r.stdout or "").strip().splitlines()[-limit:])
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
 def lander_revive(store, o_r, repo, off, took, u, b):
-    """Piece 4 (the lander revived) -- until then, a fresh fixer briefed with the change."""
-    b = dict(b, revive_failed="no revival yet")
-    return lander_fallback(store, o_r, repo, off, took, u, b, "no revival")
+    """THE LANDER REVIVED, under the red's lease (tier `lander`): its own Claude session resumed in its worktree
+    (`claude --bg --resume <session>`, launched in the session's own cwd); a SUBAGENT -- which has no session of its own
+    to resume -- as a session in its worktree that reads its transcript first. Told the red run, the failing step and
+    lines (ci-why), that its change was reverted, and to fix it, rebase, re-apply it with the fix and land again. No
+    session, its transcript gone, no worktree to work in, or the launch refused: a fresh fixer (lander_fallback)."""
+    g = blame_culprit(b)
+    l = g.get("lander") or {}
+    num, rid = u["run"].get("number"), u["run"].get("databaseId")
+    sid = l.get("session")
+    tr = l.get("transcript") if l.get("transcript") and os.path.exists(l["transcript"]) else \
+        (None if l.get("agent") else bg_transcript(sid) if sid else None)
+    if not sid:
+        return lander_fallback(store, o_r, repo, off, took, u, dict(b, revive_failed="no session recorded"),
+                               "no lander session")
+    if not tr:
+        why = f"its transcript is gone ({l.get('transcript') or 'session ' + sid[:8]})"
+        return lander_fallback(store, o_r, repo, off, took, u, dict(b, revive_failed=why), why)
+    wt, moved = l.get("worktree"), None
+    if not wt or not os.path.isdir(wt) or not allowed_path(wt):
+        moved = wt
+        wt, why = blame_worktree(repo, "lander", num)
+        if not wt:
+            return lander_fallback(store, o_r, repo, off, took, u, dict(b, revive_failed=why), why)
+    rv = b.get("revert") or {}
+    name = g.get("change") or g["commits"][0]
+    brief = {"mode": "transcript" if l.get("agent") else "resume", "session": sid, "agent": l.get("agent"),
+             "transcript": tr, "change": name, "shas": [c[:10] for c in g["commits"]], "subject": g.get("subject"),
+             "revert": rv.get("msg"), "worktree": wt, "moved_from": moved, "evidence": b.get("evidence"),
+             "ci_why": lander_ci_why(rid) if rid else ""}
+    cwd = l.get("session_cwd") if not l.get("agent") and l.get("session_cwd") and os.path.isdir(l["session_cwd"]) else wt
+    resume = {"worktree": wt, "note": None, "launch_cwd": cwd}
+    if not l.get("agent"):
+        resume["session"] = sid
+    ok, msg = red_dispatch(o_r, repo, dict(u, lander=brief, blame_note=None),
+                           why=f"tier lander: {lander_name(l)} revived", resume=resume, lease=off["lease"], took=took)
+    if not ok:
+        return lander_fallback(store, o_r, repo, off, took, u, dict(b, revive_failed=msg), f"revival failed ({msg[:120]})")
+    it = store.item("red", off["item"].split(":", 1)[1])
+    if it:
+        store.update_item("red", it["id"], it["version"], {"blame": dict(b, revived={"at": ts(), "how": brief["mode"],
+                                                                                    "worktree": wt})})
+    line = (f"LANDER REVIVED: {red_what(u)}: {lander_name(l)} -- its change {name} was reverted -- "
+            f"{'resumed' if brief['mode'] == 'resume' else 'continued from its transcript'} in {wt.replace(HOME, '~')} "
+            "to fix it and land it again (`claude agents`)")
+    inbox_write("red", line, [line], [], 0, cwd=wt)
+    return True, line
+
+
+def lander_prompt(u, wt):
+    """The revived lander's task (fixer_prompt's, for tier `lander`)."""
+    l = u["lander"]
+    num, rid = u["run"].get("number"), u["run"].get("databaseId")
+    name = l.get("change")
+    head = (f"YOU ARE THE AGENT THAT LANDED {name}, continued from your transcript {l.get('transcript')} (subagent "
+            f"{l.get('agent')} of session {str(l.get('session'))[:8]}): read its last part first, it is your own context. "
+            if l.get("mode") == "transcript" else "")
+    moved = (f"Your old worktree {l['moved_from']} is gone: work in {wt} (off {remote()}/main). " if l.get("moved_from")
+             else "")
+    why = f"\n\n`agentctl ci-why {rid}` says:\n{l['ci_why']}\n\n" if l.get("ci_why") else " "
+    return (head + f"agentctl REVIVED YOU: your change {name} ({', '.join(l.get('shas') or [])}: "
+            f"{str(l.get('subject') or '')[:80]}) turned main red -- {u['workflow']} #{num} (run id {rid}) failed in job "
+            f"`{u.get('job')}` with {str(u.get('line') or '')[:300]!r}; its parent passes the same check, its end fails "
+            f"({str(l.get('evidence') or '')[:200]}). IT WAS REVERTED ({l.get('revert')}).{why}" + moved +
+            f"FIX IT in your worktree {wt}: `git fetch {remote()} && git rebase {remote()}/main` (your original commits "
+            "drop out as already upstream), re-apply your change with `git revert <the revert's sha>` once the revert is "
+            f"on {remote()}/main (`git log {remote()}/main --grep 'Reverts-Change: {name}'`), add the fix, reproduce the "
+            "failure and see it pass (the failing test, fast; never loosen it), then land again with "
+            "`~/bin/agentctl land` (no Fixes-Red: the revert fixed the red). End at `LANDED <sha>`, or `GAVE UP: <why>`.")

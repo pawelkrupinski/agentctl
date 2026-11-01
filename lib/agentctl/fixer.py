@@ -66,6 +66,8 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
     fx = f" --fixer {u['record']}" if u.get("record") else ""
     first = "" if owner else f"FIRST run `~/bin/agentctl red claim {num}{fx} --note \"<one line: what you are doing>\"`. "
     who = (owner_intro(owner) if owner else
+           "agentctl revived you (tier lander, blame.py), a background session the owner sees in `claude agents`. "
+           if u.get("lander") else
            "You are an unattended red-build fixer dispatched by agentctl (nobody else was fixing this red), a background "
            "session the owner sees in `claude agents`. ")
     o_r = red_repo_of(u)
@@ -89,6 +91,9 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
                 f"{remote()}/main` (never squash), fix what the checks reject (read the failing checks' output; never loosen a "
                 "test, never skip a check), then `~/bin/agentctl land --follow` in the foreground. If the change is wrong or "
                 "already on main in another form, say so. End at `LANDED <sha>`, or `GAVE UP: <why>`.")
+    elif u.get("lander"):  # THE LANDER REVIVED (blame.py): its change reverted, it fixes and re-lands it
+        common = common.replace(f"(branch off {remote()}/main, already created)", "(yours)")
+        task = lander_prompt(u, wt)
     elif u.get("diagnosis"):  # a diagnose-only fixer found the cause: this one makes the durable fix
         task = (f"Red run {u['workflow']} #{num} (run id {rid}), job `{u['job']}`, was DIAGNOSED by a diagnose-only fixer: "
                 f"{u['diagnosis'][:600]!r}. The diagnosis is not the end, and nor is a 'one-off' verdict: make the DURABLE "
@@ -247,7 +252,8 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
            "continued_from": (cont or {}).get("worktree"), "diagnosis": u.get("diagnosis"),
            "effort": effort, "refuted": u.get("refuted") or [], "predicts": u.get("predicts"), "orphan": u.get("orphan"),
            "extra_leases": [{"name": x["name"], "epoch": x["epoch"]} for x in extra], "prior_work": u.get("prior_work"),
-           "blame_note": u.get("blame_note"), "lander": u.get("lander")}
+           "blame_note": u.get("blame_note"), "lander": u.get("lander"),
+           "launch_cwd": (resume or {}).get("launch_cwd")}
     if red_is_other(o_r):
         rec["repo"] = o_r
     write_json(rec_path, rec)
@@ -434,6 +440,8 @@ def fixer_label(rec):
     'orphan · movies-wt-proxy-park'."""
     if rec.get("orphan"):
         return f"orphan · {os.path.basename(rec.get('worktree') or '?')}"
+    if rec.get("lander"):  # a revived lander (blame.py)
+        return f"lander · {rec['lander'].get('change')} · #{rec.get('run')}"[:80]
     wf = (rec.get("workflow") or "").split()
     return f"red fixer #{rec.get('run')} · {(wf[-1].lower() + ' ') if wf else ''}{rec.get('job') or ''}".strip()[:80]
 
@@ -649,9 +657,13 @@ def red_fixer(a):
     every = env_num("AGENTCTL_RED_RENEW", RED_RENEW_EVERY)
     poll = env_num("AGENTCTL_BG_POLL", BG_POLL)
     t0, verdict, last_renew = time.time(), None, time.time()
-    bid, why = bg_start(argv, wt, env)
+    launch = rec.get("launch_cwd") if rec.get("launch_cwd") and os.path.isdir(rec["launch_cwd"]) else wt
+    bid, why = bg_start(argv, launch, env)  # a revived lander: in its session's own cwd, where `--resume` finds it
     if not bid:
         verdict = f"NOT STARTED: `claude --bg` {why}"
+        if rec.get("lander"):  # said, never looped: the red's next dispatch is a fresh fixer (red_lease_ended)
+            line = f"LAUNCH FAILED: {why[:400]} (reviving the lander of {rec['lander'].get('change')}, {rec['workflow']} #{num})"
+            inbox_write("red fixer", line, [line], [], 1, cwd=wt)
     else:
         rec.update(bg_id=bid, label=label)
         write_json(a.record, rec)

@@ -303,3 +303,113 @@ class RevertTest(BlameBase):
         self.assertIn(f"Relands-Change: ch-a", sh(rl, "git", "log", "-1", "--format=%B"))
         self.assertTrue(os.path.exists(os.path.join(rl, "a.txt")))  # the change is back
         self.assertTrue(any(e["verdict"].startswith("RED RELAND") for e in A.inbox_entries()))
+
+
+class ReviveTest(BlameBase):
+    """Piece 4: the lander's own session revived -- resumed (a top-level session) or continued from its transcript (a
+    subagent) -- in its worktree; a fresh fixer only when it cannot be (no session, transcript gone, launch refused)."""
+
+    def setUp(self):
+        super().setUp()
+        self.lands = []
+        self.saved_land = A.spawn_land
+        A.spawn_land = lambda wt, env, log: self.lands.append(wt) or 4242
+        os.environ["FAKE_CLAUDE_SLEEP"] = "30"
+        self.projects = os.environ["AGENTCTL_CLAUDE_PROJECTS"]
+
+    def tearDown(self):
+        A.spawn_land = self.saved_land
+        os.environ["FAKE_CLAUDE_SLEEP"] = "0"
+        os.environ.pop("FAKE_CLAUDE_BG_FAIL", None)
+        super().tearDown()
+
+    def red_landed_by(self, agent=None, transcript=True):
+        """A Main red whose one change was landed by session sess-a (or its subagent `agent`) from a real worktree."""
+        g = self.sha
+        wt = self.r.worktree("repo-wt-lander", branch="lander")
+        h = self.land("a", {"a.txt": "a\n"})
+        tr = os.path.join(self.projects, "-proj", "sess-a", "subagents", f"agent-{agent}.jsonl") if agent else \
+            os.path.join(self.projects, "-proj", "sess-a.jsonl")
+        if transcript:
+            os.makedirs(os.path.dirname(tr), exist_ok=True)
+            with open(tr, "w") as f:
+                f.write(json.dumps({"cwd": wt, "type": "user"}) + "\n")
+        it = self.st.item("change", "ch-a")
+        self.st.update_item("change", "ch-a", it["version"], {"lander": {
+            "session": "sess-a", "agent": agent, "transcript": tr, "session_cwd": wt, "worktree": wt, "branch": "lander",
+            "repo": A.RED_PRIMARY}})
+        self.red_at(g, h)
+        return wt, tr
+
+    def wait(self, cond, limit=30):
+        t0 = time.time()
+        while not cond() and time.time() - t0 < limit:
+            time.sleep(0.1)
+        return cond()
+
+    def session_argv(self):
+        out = os.environ["FAKE_CLAUDE_OUT"]
+        self.assertTrue(self.wait(lambda: any(n.endswith(".json") for n in os.listdir(out)) if os.path.isdir(out) else False))
+        [p] = [os.path.join(out, n) for n in os.listdir(out) if n.endswith(".json")]
+        return json.load(open(p))
+
+    def test_a_top_level_landers_own_session_is_resumed_in_its_cwd_and_holds_the_reds_lease(self):
+        wt, _tr = self.red_landed_by()
+        self.tick(dispatch=True)
+        self.assertEqual(len(self.lands), 1)  # reverted first
+        [rec] = A.fixer_records()
+        self.assertEqual((rec["session"], rec["resume"], rec["worktree"]), ("sess-a", True, wt))
+        launched = self.session_argv()
+        argv = launched["argv"]
+        self.assertEqual(argv[argv.index("--resume") + 1], "sess-a")
+        self.assertEqual(os.path.realpath(launched["cwd"]), os.path.realpath(wt))
+        prompt = argv[argv.index("--bg") + 1]
+        self.assertIn("agentctl REVIVED YOU: your change ch-a", prompt)
+        self.assertIn("IT WAS REVERTED", prompt)
+        self.assertIn("land again", prompt)
+        self.assertIn("test (rest)", prompt)  # the failing step
+        it = self.only()
+        row = self.st.get(A.red_lease(it["data"]["key"]))
+        self.assertEqual(A.lease_meta(row)["tier"], "lander")
+        self.assertTrue(it["data"]["blame"]["revived"])
+        self.assertTrue(any(e["verdict"].startswith("LANDER REVIVED") for e in A.inbox_entries()))
+        self.assertIn("lander revived", A.red_view(self.st, it)[1])
+
+    def test_a_subagent_lander_continues_from_its_transcript_in_its_worktree(self):
+        wt, tr = self.red_landed_by(agent="abc123")
+        self.tick(dispatch=True)
+        [rec] = A.fixer_records()
+        self.assertFalse(rec["resume"])  # a subagent has no session of its own to resume
+        argv = self.session_argv()["argv"]
+        self.assertNotIn("--resume", argv)
+        prompt = argv[argv.index("--bg") + 1]
+        self.assertIn(f"continued from your transcript {tr}", prompt)
+        self.assertEqual(rec["worktree"], wt)
+
+    def test_a_lander_whose_transcript_is_gone_gets_a_fresh_fixer_briefed_with_the_change(self):
+        self.red_landed_by(transcript=False)
+        self.tick(dispatch=True)
+        [rec] = A.fixer_records()
+        self.assertIsNone(rec.get("lander"))
+        self.assertIn("transcript is gone", rec["blame_note"])
+        self.assertIn("It was REVERTED", rec["blame_note"])
+
+    def test_a_refused_launch_is_said_once_and_a_fresh_fixer_follows_at_once(self):
+        self.red_landed_by()
+        os.environ["FAKE_CLAUDE_BG_FAIL"] = "Workspace not trusted. Run `claude` in the repo once"
+        self.tick(dispatch=True)
+        self.assertTrue(self.wait(lambda: (A.fixer_records() or [{}])[0].get("ended")))
+        os.environ.pop("FAKE_CLAUDE_BG_FAIL")
+        fails = [e for e in A.inbox_entries() if e["verdict"].startswith("LAUNCH FAILED")]
+        self.assertEqual(len(fails), 1)
+        self.assertIn("Workspace not trusted", fails[0]["verdict"])
+        self.t[0] = time.time()
+        self.tick(dispatch=True)
+        it = self.only()
+        self.assertIn("Workspace not trusted", it["data"]["blame"]["revive_failed"])
+        recs = sorted(A.fixer_records(), key=lambda r: r["path"])
+        self.assertEqual(len(recs), 2, [r.get("why") for r in recs])
+        fresh = [r for r in recs if not r.get("lander")]
+        self.assertEqual(len(fresh), 1)
+        self.assertIn("could not be revived", fresh[0]["blame_note"])
+        self.assertEqual(len(self.lands), 1)  # reverted once, never again
