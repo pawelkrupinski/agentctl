@@ -165,21 +165,57 @@ class DriftTest(BlameBase):
         self.assertEqual(b["state"], "undetermined")
         self.assertIn("no decision", b["why"])
 
-    def test_the_drift_probe_reads_identity_drift_ci_with_the_red_runs_seeds(self):
+    def drift_script(self):
         script = os.path.join(self.tmp.name, "drift-ci")
-        with open(script, "w") as f:
-            f.write('#!/bin/sh\necho "$@" > "$0.args"\necho "row 1: ..."\necho "$FAKE_DRIFT"\n')
+        with open(script, "w") as f:  # identity-drift-ci's shape: its pins on stderr, each row's seed, the verdict last
+            f.write('#!/bin/sh\necho "$@" > "$0.args"\n'
+                    'echo "identity-drift-ci: run 20\'s red drift rows: takes-drift-1 (poland) -> countries pl, seeds 7, '
+                    '(the red\'s own)" >&2\n'
+                    'echo "takes-drift-1 (poland) [seed $FAKE_SEED]: failure -- 0 divergence(s)"\necho "$FAKE_DRIFT"\n')
         os.chmod(script, os.stat(script).st_mode | stat.S_IEXEC)
-        os.environ["AGENTCTL_DRIFT_CI"] = script
+        return script
+
+    def old_parent(self):
+        """An old commit, then main's CI changed after it (its drift script ignores a forced seed)."""
+        old = self.sha
+        self.r.write("scripts/ci/drift_seeds.py", "honours forced seeds\n")
+        self.r.write(".github/workflows/identity-model-convergence.yml", "drift-seeds input\n")
+        self.r.commit("ci: forced seeds")
+        self.r.push()
+        return old
+
+    def test_the_drift_probe_runs_the_parents_code_under_mains_ci_with_the_red_runs_seeds(self):
+        old = self.old_parent()
+        os.environ.update(AGENTCTL_DRIFT_CI=self.drift_script(), FAKE_SEED="7")
         try:
             for last, want in (("DRIFT CLEAN", "pass"), ("DRIFT RED: takes-drift-1 (poland)", "fail"),
                                ("DRIFT PROGRESS: fewer flips", "fail"), ("NO VERDICT: gh down", "none")):
                 os.environ["FAKE_DRIFT"] = last
-                self.assertEqual(A.probe_drift(self.r.path, self.sha, 20, 600)["verdict"], want, last)
-            self.assertEqual(open(script + ".args").read().split(), [self.sha, "--for-red", "20", "--timeout", "10"])
+                self.assertEqual(A.probe_drift(self.r.path, old, 20, 600)["verdict"], want, last)
+            args = open(os.path.join(self.tmp.name, "drift-ci.args")).read().split()
+            probe = args[0]
+            self.assertEqual(args[1:], ["--for-red", "20", "--timeout", "10"])
+            self.assertNotEqual(probe, old)  # never the old commit itself
+            self.assertEqual(sh(self.r.path, "git", "rev-parse", f"{probe}^"), old)
+            self.assertEqual(sh(self.r.path, "git", "show", f"{probe}:scripts/ci/drift_seeds.py"), "honours forced seeds")
+            self.assertEqual(sh(self.r.path, "git", "diff", "--name-only", old, probe).split(),
+                             [".github/workflows/identity-model-convergence.yml", "scripts/ci/drift_seeds.py"])
         finally:
-            os.environ.pop("AGENTCTL_DRIFT_CI")
-            os.environ.pop("FAKE_DRIFT")
+            for k in ("AGENTCTL_DRIFT_CI", "FAKE_DRIFT", "FAKE_SEED"):
+                os.environ.pop(k, None)
+
+    def test_a_row_that_replayed_another_seed_is_no_verdict_never_a_pass(self):
+        old = self.old_parent()
+        os.environ.update(AGENTCTL_DRIFT_CI=self.drift_script(), FAKE_SEED="1-2", FAKE_DRIFT="DRIFT CLEAN")
+        try:
+            v = A.probe_drift(self.r.path, old, 20, 600)
+        finally:
+            for k in ("AGENTCTL_DRIFT_CI", "FAKE_DRIFT", "FAKE_SEED"):
+                os.environ.pop(k, None)
+        self.assertEqual(v["verdict"], "none")
+        self.assertIn("row 1 replayed seed 1-2, not 7", v["evidence"])
+        self.assertEqual(A.drift_seed_check("no pins here\ntakes-drift-1 (poland) [seed 7]: ok"),
+                         "the run never said which seeds it pinned")
 
 
 class BatchTest(BlameBase):

@@ -788,6 +788,10 @@ parent passes and its end fails:
 - **Convergence drift rows** (`takes-drift-N (...)`): the seeds rotate per run, so the parent's green run is NOT the same
   check -- every boundary, the green head included, is re-run with the red run's own seeds
   (`scripts/identity-drift-ci <commit> --for-red <run>`): `DRIFT CLEAN` passes, `DRIFT RED` / `DRIFT PROGRESS` fails.
+  The probe runs on a synthetic commit -- the boundary's code with <remote>/main's `.github/` and `scripts/ci/` laid
+  over it -- because an old commit's drift script ignores a forced seed and replays its default (2026-11-01: four
+  "parent" runs on 73f1dcfcbb replayed seed 2). Every row's verdict line names the seed it replayed (`[seed S]`); one
+  that is not the pinned seed is NO VERDICT (a fresh fixer), never "the parent passes".
   Other convergence legs (their pinned pair rotates nightly): undetermined.
 - Another watched repo (core): only decided runs of its gate on the exact commit; one change per push is the usual case.
 - The failing test's files (its `...Spec`/`...Test` name, a path in its first line) pick the first boundary to probe
