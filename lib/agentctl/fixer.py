@@ -1272,18 +1272,45 @@ def red_tick_repo(repo, snap=None, dispatch=False):
     return acts
 
 
-def red_gate_snap(o_r):
+def red_open_flows(o_r, store=None):
+    """The workflows of o_r's open reds that are not its gate's: their newest decided run on main must be read too, or
+    such a red can never clear (core Dependabot Updates #154, 2026-11-02: green #155/#156 came, nothing read them)."""
+    try:
+        its = (store or Store()).items("red")
+    except (Exception, SystemExit):
+        return []
+    gate = {n for n, _f in red_gate_flows(o_r)}
+    return sorted({it["data"].get("workflow") for it in its if it["state"] not in RED_TERMINAL
+                   and it["data"].get("repo") == o_r and it["data"].get("workflow")} - gate)
+
+
+def newest_decided_main(o_r, workflow):
+    """The newest decided (success / failure / timed_out) run of a workflow on main, or None."""
+    runs = gh_json(o_r, "run", "list", "--workflow", workflow, "--branch", "main", "--limit", "10", "--json", RUN_FIELDS)
+    return next((r for r in runs if r.get("status") == "completed"
+                 and r.get("conclusion") in ("success", "failure", "timed_out")), None)
+
+
+def red_gate_snap(o_r, store=None):
     """Another watched repo's snapshot: its gate workflows only (red-repos.json), read once. The shared run lists the
     primary's snapshot fills (_gate_lists, _outside_lists) are put back as they were: workflow names repeat across
     repos (movies has a `Stage NixOS closures` too)."""
     saved = (dict(_gate_lists), dict(_outside_lists), dict(_gate_no_verdict))
     try:
         gate = gate_runs(o_r, red_gate_flows(o_r))
+        fields = ("number", "databaseId", "conclusion", "headSha", "updatedAt")
+        latest = {n: {k: d.get(k) for k in fields} for n, d, _nw, _st in gate if d}
+        for wf in red_open_flows(o_r, store):  # an open red's own workflow, outside the gate: read so it can clear
+            try:
+                r = newest_decided_main(o_r, wf)
+            except (Exception, SystemExit):
+                r = None
+            if r:
+                latest[wf] = {k: r.get(k) for k in fields}
         return {"at": time.time(), "repo": o_r, "outside": [], "outside_error": None,
                 "gate": [{"name": n, "decided": d, "newer": nw, "since": st[0], "count": st[1],
                           "runs": _gate_lists.get(n, []), "no_verdict": _gate_no_verdict.get(n)} for n, d, nw, st in gate],
-                "latest": {n: {k: d.get(k) for k in ("number", "databaseId", "conclusion", "headSha", "updatedAt")}
-                           for n, d, _nw, _st in gate if d}}
+                "latest": latest}
     finally:
         for live, old in zip((_gate_lists, _outside_lists, _gate_no_verdict), saved):
             live.clear()
@@ -1330,7 +1357,7 @@ def red_tick_others(store=None, now_=None, dispatch=False, force=True):
             unread.append(o_r)  # one condition for all of them, below: no line per tick
             continue
         try:
-            snap = red_gate_snap(o_r)
+            snap = red_gate_snap(o_r, store)
             clone = red_repo_clone(o_r)
             with _red_lock:
                 acts += [f"{red_repo_short(o_r)}: {x}" for x in

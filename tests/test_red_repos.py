@@ -152,6 +152,23 @@ class TickTest(RedReposBase):
         (done,) = [i for i in self.st.items("red") if A.red_repo_of(i["data"]) == INFRA]
         self.assertEqual(done["state"], "cleared")
 
+    def test_a_red_on_a_workflow_outside_its_repos_gate_clears_on_its_own_newer_green_run(self):
+        """core Dependabot Updates #154 (2026-11-02): a red on a workflow that is not core's gate never cleared -- the
+        other repos' snapshot read the gate's runs only, so green #155/#156 were never seen."""
+        dep = "Dependabot Updates"
+        data = {"key": A.red_repo_key(INFRA, A.red_key(dep, "Dependabot", "update_files failed")), "workflow": dep,
+                "jobs": ["Dependabot"], "job": "Dependabot", "kind": "test", "line": "update_files failed",
+                "red_kind": "outside", "gate": False, "runs": ["#154"], "repo": INFRA, "attempts": 0, "history": [],
+                "last_run": {"databaseId": 8000, "number": 154}, "opened_at": self.t[0]}
+        it = self.st.put_item("red", data["key"], "red", data)
+        runs = json.load(open(os.path.join(self.d, "runs-bitcashier_infra.json")))
+        self.others()
+        self.assertNotIn(self.st.item("red", it["id"])["state"], A.RED_TERMINAL, "no newer run yet: it stays")
+        self.put("runs-bitcashier_infra.json", [run(8100, 156, dep, "dynamic/dependabot/dependabot-updates", self.sha)] + runs)
+        self.assertIn(dep, A.red_gate_snap(INFRA, self.st)["latest"])
+        self.others(advance=60)
+        self.assertEqual(self.st.item("red", it["id"])["state"], "cleared")
+
     def test_an_unreadable_repo_is_skipped_and_the_others_still_tick(self):
         saved = A.gate_runs
 
