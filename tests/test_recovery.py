@@ -118,6 +118,17 @@ class HostTest(RegistryBase):
         self.assertEqual(A.recovery_tick(t + 1, force=True, store=st)[0][:10], "RECOVERED:")
         self.assertEqual(len(rec.calls), 2)
 
+    def test_a_token_condition_the_server_opened_is_cleared_by_the_laptops_probe(self):
+        st = A.Store()
+        rec = Recorder(fails=1)
+        A.PROBES["token"] = rec
+        self.role("server")
+        c = A.open_condition("UNKNOWN", "UNKNOWN: token unavailable", A.run_probe("token", {"ns": "movies"}), [],
+                             key="token-movies", store=st)
+        self.assertEqual(c["host"], "server")
+        self.role("sync-test")  # only the laptop has the processor's socket
+        self.assertEqual(A.recovery_tick(time.time() + 1, force=True, store=st)[0][:10], "RECOVERED:")
+
 
 class ConditionItemTest(RegistryBase):
     """Step 12: a condition is an item of the "condition" machine -- it escalates (an event the notifier delivers) 10 min

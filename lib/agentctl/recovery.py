@@ -359,6 +359,9 @@ def probed_here(c):
     """A condition's probe runs on the host role that opened it (its `host`; before it was recorded: the server's):
     the laptop's watchdog, tunnel or token conditions read the laptop -- on ci-runner a W5 probe found no plist and
     closed, `route -n get default` never answered, and the laptop's inbox entries were acked in the server's."""
+    if c["probe"]["kind"] == "token" and host_role() == "sync":
+        return True  # the processor's socket is the laptop's: a token condition the server opened (2026-11-02:
+        # token-movies stayed open for good, ci-runner has no socket) is cleared by the laptop's probe
     return c.get("host", "server") == host_role()
 
 
