@@ -180,10 +180,14 @@ def owner_of(repo, branch, run):
     if rec and owner_gone(rec):  # its worktree removed / pid dead: a live worktree holding its commit takes it over
         base = branch_base(branch, run)
         wt = repo and base and commit_on_main(repo, base) is False and worktree_holding(repo, base)  # main's are everywhere
-        if wt and os.path.realpath(wt) != os.path.realpath(rec.get("worktree") or ""):
-            return save_dispatch({"branch": branch, "run_id": rid, "workflow": run.get("workflowName"), "worktree": wt,
-                                  "sha": base, "purpose": f"re-matched: its owner {rec.get('worktree')} is gone",
-                                  "source": "matched", "at": ts(), "epoch": time.time()}, dispatch_key(branch))
+        if wt:  # another worktree, or the same one outliving its agent's process: the worktree owns it now
+            new = {"branch": branch, "run_id": rid, "workflow": run.get("workflowName"), "worktree": wt, "sha": base,
+                   "purpose": f"re-matched: its owner {owner_text(rec)} is gone", "source": "matched", "at": ts(),
+                   "epoch": time.time()}
+            for key in ([dispatch_key(None, rid)] if rid else []) + [dispatch_key(branch)]:  # REPLACED, not merged:
+                if key == dispatch_key(branch) or os.path.exists(dispatches_dir(f"{key}.json")):  # no dead pid stays
+                    write_json(dispatches_dir(f"{key}.json"), new)
+            return new
         return rec  # nobody holds it: orphan_why closes it, naming the gone owner
     if rec:
         return rec
@@ -230,7 +234,7 @@ def commit_on_main(repo, base):
         return None
 
 
-def orphan_why(repo, rec, base, main_runs_it=True):
+def orphan_why(repo, rec, base, main_runs_it=True, main_since=None):
     """Why a branch red is an ORPHAN, else None: no LIVE owner (no record, or its worktree removed / pid dead -- 2026-11-02:
     eight reds sat on the status line naming worktrees removed days before) and no worktree holding its commit, AND nothing on main
     to compare it with -- its commit is not on main, or it is but main runs no such workflow (it can never PREDICT MAIN
@@ -242,12 +246,16 @@ def orphan_why(repo, rec, base, main_runs_it=True):
     if on is None:
         return None
     sha = str(base)[:9]
-    who = (f"its owner's worktree is gone ({rec.get('worktree') or 'pid ' + str(rec.get('pid'))})" if gone
-           else "no owner record") + f", no worktree holds its commit {sha}"
+    why_gone = ("its worktree removed" if rec and rec.get("worktree") and not os.path.isdir(rec["worktree"])
+                else "its process ended")
+    who = (f"its owner {owner_text(rec, short=True)} is gone ({why_gone})" if gone else "no owner record") \
+        + f", no worktree holds its commit {sha}"
     if not on:
         return f"{who}, and it is not on main"
     if not main_runs_it:
         return f"{who}, and main runs no such workflow"
+    if main_since:  # main's own run of the workflow came after it, on a commit holding this one: it predicts nothing
+        return f"{who}, and main's own run #{main_since} came since"
     return None
 
 
@@ -484,7 +492,8 @@ def branch_state(o_r, repo, prev=None):
             mine, theirs = inputs.get(r["databaseId"]), inputs.get(m["databaseId"]) if m else None
             pred, why = predicts_main(repo, base, m, mine, theirs)
             e.update(owner=rec, owner_gone=owner_gone(rec), base=base, alive=branch_exists(o_r, b), predicts=pred,
-                     why=why, orphan=orphan_why(repo, rec, base, main_runs_it=bool(m)), main_run=m and {"databaseId": m["databaseId"], "number": m.get("number")},
+                     why=why, orphan=orphan_why(repo, rec, base, main_runs_it=bool(m),
+                                                  main_since=m.get("number") if m and m["databaseId"] > r["databaseId"] else None), main_run=m and {"databaseId": m["databaseId"], "number": m.get("number")},
                      newer_recording=newer_recording(mine, theirs) if mine is not None and theirs is not None else None)
         out.append(e)
     return out

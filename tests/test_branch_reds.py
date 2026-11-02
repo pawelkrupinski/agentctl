@@ -272,6 +272,25 @@ class OrphanBranchRedTest(BranchBase):
         self.assertIsNone(e["owner"])
         self.assertEqual(len(A.branch_reds(self.snap())), 1)
 
+    def test_main_s_own_newer_run_supersedes_an_ownerless_red_on_a_main_commit(self):
+        """2026-11-02: `branch reds: 5 → NOBODY (convergence #592); ... #558; #557` -- drift runs on commits now on
+        main, long after main's own convergence #691 ran: they predict nothing any more."""
+        b = f"measure/pawel/{self.on[:9]}-0c0c0c"
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 600))
+        self.put("runs.json", [dict(run(4000, 691, CONV, CONV_FILE, self.sha), event="workflow_dispatch"),
+                               brun(3600, 592, self.on, b, created=now)])
+        e = self.reds(self.snap())[592]
+        self.assertIn("main's own run #691 came since", e["orphan"])
+        self.assertEqual(A.branch_reds(self.snap()), [])
+
+    def test_a_dead_agent_s_red_stays_with_its_worktree_while_it_holds_the_commit(self):
+        A.save_dispatch({"branch": self.b65, "run_id": 3548, "worktree": self.wt, "pid": 999999, "source": "registered"})
+        sh(self.wt, "git", "update-ref", "refs/heads/keep-off", self.off)  # the worktree's repo holds it...
+        holder = self.r.worktree("movies-wt-holder", base=self.off, branch="holder")  # ...and a worktree has it checked out
+        e = self.reds(self.snap())[2365]
+        self.assertIsNone(e["orphan"])
+        self.assertFalse(e["owner_gone"])
+
     def test_it_reopens_routed_to_the_owner_when_its_commit_turns_up_in_a_worktree_or_an_owner_record(self):
         A.settle_branch_reds(MOVIES, self.snap(), self.store)
         saved = A.OWNER_REMATCH
@@ -298,7 +317,7 @@ class OrphanBranchRedTest(BranchBase):
                          "source": "matched"})
         e = self.reds(self.snap())
         self.assertTrue(e[2365]["owner_gone"])
-        self.assertIn("its owner's worktree is gone", e[2365]["orphan"])
+        self.assertIn("movies-wt-gone is gone (its worktree removed)", e[2365]["orphan"])
         self.assertIn("is not on main", e[2365]["orphan"])
         self.assertEqual(A.branch_reds(self.snap()), [])
 
