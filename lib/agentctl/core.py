@@ -426,7 +426,7 @@ def token_unavailable_note(ns, why):
         return
     _noting_token[0] = True
     try:
-        open_condition("UNKNOWN", f"UNKNOWN: token unavailable ({why}): run `secrets unlock {ns}` in any session; the "
+        open_condition("UNKNOWN", f"UNKNOWN: token unavailable ({why}): run `secrets unlock {token_vault_key('pawelkrupinski/movies')[0]}` in any session (the store token's vault); the "
                                   "next land or `waiting status` re-seeds the processor",
                        run_probe("token", {"ns": ns}), [], key=f"token-{ns}", command="token", exit_code=2)
     except (Exception, SystemExit) as e:
@@ -510,7 +510,7 @@ def token(o_r):
                 except OSError as e:
                     tok, why = "", why + f"; secrets: {e.strerror}"
                 if not tok:
-                    why += "; the vault is locked for this process (its session ended, or `! secrets unlock " + ns + "`)"
+                    why += "; the vault is locked for this process (its session ended, or `! secrets unlock " + token_vault_key(o_r)[0] + "`)"
         if not tok:
             token_missing(ns, why)
             raise NoToken(f"agentctl: could not read the {'/'.join(token_vault_key(o_r))} token ({why})")

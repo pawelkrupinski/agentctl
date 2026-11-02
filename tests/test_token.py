@@ -137,7 +137,7 @@ class TokenResolutionTest(Base):
         inbox = os.environ["AGENTCTL_INBOX_DIR"]
         entries = [json.load(open(os.path.join(inbox, f))) for f in os.listdir(inbox)] if os.path.isdir(inbox) else []
         self.assertEqual(len(entries), 1, entries)
-        self.assertIn("run `secrets unlock movies` in any session", entries[0]["verdict"])
+        self.assertIn("run `secrets unlock bitcashier` in any session", entries[0]["verdict"])
 
     def test_detached_env_i_run_succeeds_through_the_socket(self):
         self.serve()
