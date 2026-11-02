@@ -177,6 +177,14 @@ def owner_of(repo, branch, run):
     """The owner record of a branch run, matched after the fact (and recorded) when nobody recorded one."""
     rid = run.get("databaseId")
     rec = dispatch_for(branch, rid)
+    if rec and owner_gone(rec):  # its worktree removed / pid dead: a live worktree holding its commit takes it over
+        base = branch_base(branch, run)
+        wt = repo and base and commit_on_main(repo, base) is False and worktree_holding(repo, base)  # main's are everywhere
+        if wt and os.path.realpath(wt) != os.path.realpath(rec.get("worktree") or ""):
+            return save_dispatch({"branch": branch, "run_id": rid, "workflow": run.get("workflowName"), "worktree": wt,
+                                  "sha": base, "purpose": f"re-matched: its owner {rec.get('worktree')} is gone",
+                                  "source": "matched", "at": ts(), "epoch": time.time()}, dispatch_key(branch))
+        return rec  # nobody holds it: orphan_why closes it, naming the gone owner
     if rec:
         return rec
     key = dispatch_key(branch)
@@ -223,19 +231,23 @@ def commit_on_main(repo, base):
 
 
 def orphan_why(repo, rec, base, main_runs_it=True):
-    """Why a branch red is an ORPHAN, else None: no owner record and no worktree holding its commit, AND nothing on main
+    """Why a branch red is an ORPHAN, else None: no LIVE owner (no record, or its worktree removed / pid dead -- 2026-11-02:
+    eight reds sat on the status line naming worktrees removed days before) and no worktree holding its commit, AND nothing on main
     to compare it with -- its commit is not on main, or it is but main runs no such workflow (it can never PREDICT MAIN
     RED). A commit on main whose workflow main runs keeps today's behaviour; an unknown answer is never an orphan."""
-    if rec:
+    gone = owner_gone(rec)
+    if rec and not gone:  # a live owner (or one we can't judge: no worktree or pid recorded) keeps it
         return None
     on = commit_on_main(repo, base)
     if on is None:
         return None
     sha = str(base)[:9]
+    who = (f"its owner's worktree is gone ({rec.get('worktree') or 'pid ' + str(rec.get('pid'))})" if gone
+           else "no owner record") + f", no worktree holds its commit {sha}"
     if not on:
-        return f"no owner record, no worktree holds its commit {sha}, and it is not on main"
+        return f"{who}, and it is not on main"
     if not main_runs_it:
-        return f"no owner record, no worktree holds its commit {sha}, and main runs no such workflow"
+        return f"{who}, and main runs no such workflow"
     return None
 
 

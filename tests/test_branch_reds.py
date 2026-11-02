@@ -291,6 +291,26 @@ class OrphanBranchRedTest(BranchBase):
         self.assertEqual(cwds, {os.path.realpath(back), os.path.realpath(self.wt)})
         self.assertEqual(len(A.branch_reds(snap)), 2)
 
+    def test_an_owner_record_whose_worktree_was_removed_is_no_owner(self):
+        """The status line, 2026-11-02: `branch reds: 8 → movies-wt-simplify (pre-commit check #29); ...` -- each red
+        had an owner record naming a worktree removed days before, so it never closed as an orphan."""
+        A.save_dispatch({"branch": self.b65, "run_id": 3548, "worktree": os.path.join(self.tmp.name, "movies-wt-gone"),
+                         "source": "matched"})
+        e = self.reds(self.snap())
+        self.assertTrue(e[2365]["owner_gone"])
+        self.assertIn("its owner's worktree is gone", e[2365]["orphan"])
+        self.assertIn("is not on main", e[2365]["orphan"])
+        self.assertEqual(A.branch_reds(self.snap()), [])
+
+    def test_a_gone_owner_s_red_moves_to_a_live_worktree_holding_its_commit(self):
+        A.save_dispatch({"branch": self.b65, "run_id": 3548, "worktree": os.path.join(self.tmp.name, "movies-wt-gone"),
+                         "source": "matched"})
+        back = self.r.worktree("movies-wt-heir", base=self.off, branch="heir")
+        e = self.reds(self.snap())[2365]
+        self.assertIsNone(e["orphan"])
+        self.assertEqual(os.path.realpath(e["owner"]["worktree"]), os.path.realpath(back))
+        self.assertEqual(len(A.branch_reds(self.snap())), 1)
+
     def test_it_is_gone_when_its_branch_is_deleted(self):
         A.settle_branch_reds(MOVIES, self.snap(), self.store)
         A.branch_exists = lambda o_r, b: b != self.b65
