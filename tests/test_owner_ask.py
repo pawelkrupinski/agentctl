@@ -60,7 +60,7 @@ class AskBase(CrashLoopBase):
 class QuestionShownTest(AskBase):
     def test_a_decision_block_reads_waiting_on_you_with_its_question_never_owner_decision_down(self):
         text, short = self.view(self.decision_blocked())
-        self.assertEqual(short, "WAITING ON YOU: baseline the 2 Titans flips, or change the resolver")
+        self.assertTrue(short.startswith("WAITING ON YOU: baseline the 2 Titans flips, or change the resolver -- answer:"), short)
         self.assertNotIn("owner-decision down", short)
         self.assertIn('agentctl decide k "<your answer>"', text)
 
@@ -77,6 +77,19 @@ class QuestionShownTest(AskBase):
         it = self.red(key="q")
         blk = {"name": "block/q", "meta": {"wait_cause": "quota", "until": "the reset"}}
         self.assertIsNone(A.red_ask(it, blk))
+
+
+class LongQuestionTest(AskBase):
+    Q = " ".join(f"word{i}" for i in range(120))[:600]
+
+    def test_a_600_char_question_reaches_the_owner_whole_and_the_short_line_cuts_at_a_word(self):
+        it = self.decision_blocked()
+        blk = self.st.item("red", it["id"])
+        d = blk["data"]
+        ask = {"q": self.Q, "how": "answer: `! agentctl decide k \"x\"`", "until": None}
+        self.assertIn(self.Q, A.red_ask_line(d, ask))
+        self.assertEqual(A.trim_words(self.Q).split(" ")[-1][-1], "\u2026")
+        self.assertIn(A.trim_words(self.Q)[:-1].split(" ")[-1], self.Q.split(" "))
 
 
 class ReminderTest(AskBase):

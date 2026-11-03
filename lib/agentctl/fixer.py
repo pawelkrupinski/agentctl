@@ -1145,7 +1145,7 @@ def red_view_state(store, it, t=None):
             more = "" if str(b.get("text") or "").startswith("WAITING ON YOU") else f" -- {b.get('text')}"
             return (f"WAITING ON YOU: {ask['q']} -- {ask['how']}" + (f"; auto-clears when {ask['until']}" if ask.get("until")
                                                                      else "") + more,
-                    f"WAITING ON YOU: {ask['q'][:160]}")
+                    f"WAITING ON YOU: {trim_words(ask['q'])} -- {ask['how']}")
         if red_decision(d):  # answered: its block is lifted, offered again at the next tick
             return "the owner's answer is in: offered again at the next tick", "re-dispatching"
         return b.get("text") or "BLOCKED ON OWNER", (f"BLOCKED: {d.get('cause')} down" if d.get("cause") else "BLOCKED ON OWNER")
@@ -1176,7 +1176,7 @@ def red_view_of_units(store, units):
         blk = red_block_of(it, store) if it["state"] == "blocked-external" else None
         ask = red_ask(it, blk)
         out[k] = {"state": it["state"], "text": text + more, "short": short, "cause": it["data"].get("cause"),
-                  "until": (blk or {}).get("until"), "ask": ask["q"] if ask else None}
+                  "until": (blk or {}).get("until"), "ask": ask["q"] if ask else None, "ask_how": ask["how"] if ask else None}
     return out
 
 

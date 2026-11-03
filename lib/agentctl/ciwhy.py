@@ -638,11 +638,11 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
             cause = (st or {}).get("cause") if (st or {}).get("state") == "blocked-external" else None
             if cause and cause not in (DECISION_CAUSE, CRASH_LOOP_CAUSE):  # ONE line per outage, naming the reds it
                 # blocks; a decision or the fixers' crash loop is no outage: its red reads WAITING ON YOU: <question>
-                causes.setdefault(cause, (st.get("until"), [], st.get("ask")))[1].append(name)
+                causes.setdefault(cause, (st.get("until"), [], (st.get("ask"), st.get("ask_how"))))[1].append(name)
                 continue
             reds_.append(f"{name} #{r.get('number')} \u2192 {short(st)}")
         reds_ = [f"{c} down \u2192 blocks: {', '.join(ns)}" + (f" (auto-clears when {u_})" if u_ else "")
-                 + (f" -- WAITING ON YOU: {q_[:160]}" if q_ else "") for c, (u_, ns, q_) in causes.items()] + reds_
+                 + (f" -- WAITING ON YOU: {trim_words(q_[0])} -- {q_[1]}" if q_ and q_[0] else "") for c, (u_, ns, q_) in causes.items()] + reds_
         reds_ += [p_ for p_ in parts if p_.startswith("local")]
         if len(reds_) > SUMMARY_MAX_REDS:
             reds_ = reds_[:SUMMARY_MAX_REDS] + [f"+{len(reds_) - SUMMARY_MAX_REDS} more"]

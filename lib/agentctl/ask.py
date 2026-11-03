@@ -27,6 +27,14 @@ def decide_cmd(key, answer="<your answer>"):
     return f'~/bin/agentctl decide {key} "{answer}"'
 
 
+def trim_words(text, n=160):
+    """text shortened at a word boundary with an ellipsis (whole when it fits n): never cut mid-word."""
+    text = str(text)
+    if len(text) <= n:
+        return text
+    return text[:n].rsplit(" ", 1)[0].rstrip(" ,;:-") + "\u2026"
+
+
 def red_ask(it, b):
     """{q, how, until} of the owner's question for red `it` held by block b (red_block_of), or None when the block
     waits on nothing the owner does (a spent quota resets on its own)."""
@@ -75,7 +83,7 @@ def ask_interval(n):
 def red_ask_line(d, ask, n=0):
     what = red_what(d)
     head = f"REMINDER {n}: " if n else ""
-    return (f"RED BLOCKED ON OWNER: {head}WAITING ON YOU: {what}: {ask['q'][:400]} -- {ask['how']}"
+    return (f"RED BLOCKED ON OWNER: {head}WAITING ON YOU: {what}: {ask['q']} -- {ask['how']}"
             + (f" -- auto-clears when {ask['until']}" if ask.get("until") else ""))
 
 
