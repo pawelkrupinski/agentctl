@@ -25,16 +25,25 @@ def failing_job_step(jobs, names=None):
     return pick.get("databaseId"), step
 
 
+# A decided run's jobs never change: read once per process (2026-11-03: a `gh run view` per notification, 10-20 s each
+# over a lossy uplink, made the notifier ~4 events/min -- slower than five unclaimed reds escalating, 3 h behind, W6).
+_run_jobs = process_cache({})
+
+
 def red_url(d, read_jobs=None):
     """The click target of red data d: failing step's line, else the failing job, else the run, else None."""
     run_id = (d.get("last_run") or {}).get("databaseId")
     if not run_id:
         return None
     o_r = red_repo_of(d)
-    try:
-        jobs = (read_jobs or (lambda: gh_json(o_r, "run", "view", str(run_id), "--json", "jobs").get("jobs")))()
-    except (Exception, SystemExit):
-        jobs = None
+    jobs = None if read_jobs else _run_jobs.get((o_r, str(run_id)))
+    if jobs is None:
+        try:
+            jobs = (read_jobs or (lambda: gh_json(o_r, "run", "view", str(run_id), "--json", "jobs").get("jobs")))()
+            if jobs and not read_jobs:
+                _run_jobs[(o_r, str(run_id))] = jobs
+        except (Exception, SystemExit):
+            jobs = None
     job_id, step = failing_job_step(jobs, set(str(j) for j in d.get("jobs") or [d.get("job")] if j))
     return job_step_url(o_r, run_id, job_id, step) if job_id else run_page_url(o_r, run_id)
 
