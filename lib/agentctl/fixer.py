@@ -130,6 +130,12 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
                 "`~/bin/agentctl land` in the foreground. End at `LANDED <sha>`. If you cannot fix it, end with a line "
                 "`GAVE UP: <why>`; if it needs the owner, `~/bin/agentctl red block " + str(num) + " --owner-cause <kind> --cmd \"<command>\"` (only for a cause outside the code that only the owner can act on: never a code red) "
                 "and end `BLOCKED ON OWNER: <command>`.")
+    if u.get("decision"):  # THE OWNER ANSWERED this red's question (`agentctl decide`): act on that answer
+        dec = u["decision"]
+        task = (f"THE OWNER DECIDED this red: asked {str(dec.get('question'))[:400]!r}, the owner answered "
+                f"{str(dec.get('answer'))[:600]!r}. Act on exactly that answer (it settles what the fixers could not "
+                "decide) and land the result. If acting on it fails (the land is NOT LANDED, a check rejects it, it "
+                "cannot be done), end `NOT LANDED: <why>` or `GAVE UP: <why>`: the owner is told at once. ") + task
     if red_owner_only(o_r):  # every task above says "land it": not in an owner-only repo
         task += red_owner_rules(o_r, num)
     if u.get("old_note"):
@@ -253,7 +259,7 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
            "continued_from": (cont or {}).get("worktree"), "diagnosis": u.get("diagnosis"),
            "effort": effort, "refuted": u.get("refuted") or [], "predicts": u.get("predicts"), "orphan": u.get("orphan"),
            "extra_leases": [{"name": x["name"], "epoch": x["epoch"]} for x in extra], "prior_work": u.get("prior_work"),
-           "blame_note": u.get("blame_note"), "lander": u.get("lander"),
+           "blame_note": u.get("blame_note"), "lander": u.get("lander"), "decision": u.get("decision"),
            "launch_cwd": (resume or {}).get("launch_cwd")}
     if red_is_other(o_r):
         rec["repo"] = o_r
@@ -725,7 +731,7 @@ def red_fixer(a):
          "line": rec.get("line"), "flake": rec.get("flake"), "diagnosis": rec.get("diagnosis"), "orphan": rec.get("orphan"),
          "refuted": rec.get("refuted"), "predicts": rec.get("predicts"), "prior_work": rec.get("prior_work"),
          "run": {"number": num, "databaseId": rec.get("run_id")}, "repo": rec.get("repo"),
-         "blame_note": rec.get("blame_note"), "lander": rec.get("lander")}
+         "blame_note": rec.get("blame_note"), "lander": rec.get("lander"), "decision": rec.get("decision")}
     u["record"] = a.record
     prompt = fixer_prompt(u, wt, sync_brief(), rec.get("resume_note"))
     cli = claude_cli()
@@ -1080,7 +1086,7 @@ def gate_own_red_label(d):
 
 def red_view(store, it, t=None):
     """(text, short) of one red, its blame (a revert, its lander revived: blame.py) said with it."""
-    text, short = red_view_state(store, it, t)
+    text, short = red_decided_view(it["data"], *red_view_state(store, it, t))
     bl = blame_status(it["data"])
     return (f"{text} -- {bl[0]}", f"{short}; {bl[1]}") if bl else (text, short)
 
@@ -1134,6 +1140,14 @@ def red_view_state(store, it, t=None):
         return f"fix {f.get('entry')} {f.get('status')} (Fixes-Red){rec}", f"fix {f.get('status')}"
     if st == "blocked-external":
         b = red_block_of(it, store) or {}
+        ask = red_ask(it, b)
+        if ask:  # WAITING ON YOU (ask.py): the question itself, never a bare cause
+            more = "" if str(b.get("text") or "").startswith("WAITING ON YOU") else f" -- {b.get('text')}"
+            return (f"WAITING ON YOU: {ask['q']} -- {ask['how']}" + (f"; auto-clears when {ask['until']}" if ask.get("until")
+                                                                     else "") + more,
+                    f"WAITING ON YOU: {ask['q'][:160]}")
+        if red_decision(d):  # answered: its block is lifted, offered again at the next tick
+            return "the owner's answer is in: offered again at the next tick", "re-dispatching"
         return b.get("text") or "BLOCKED ON OWNER", (f"BLOCKED: {d.get('cause')} down" if d.get("cause") else "BLOCKED ON OWNER")
     return st, st
 
@@ -1159,8 +1173,10 @@ def red_view_of_units(store, units):
         it = min(its, key=lambda x: rank.get(x["state"], 5))
         text, short = red_view(store, it)
         more = f" (+{len(its) - 1} more red{'s' if len(its) > 2 else ''} in this run)" if len(its) > 1 else ""
+        blk = red_block_of(it, store) if it["state"] == "blocked-external" else None
+        ask = red_ask(it, blk)
         out[k] = {"state": it["state"], "text": text + more, "short": short, "cause": it["data"].get("cause"),
-                  "until": (red_block_of(it, store) or {}).get("until") if it["state"] == "blocked-external" else None}
+                  "until": (blk or {}).get("until"), "ask": ask["q"] if ask else None}
     return out
 
 
@@ -1241,6 +1257,10 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
             pass  # another writer moved it: the next tick
         except (Exception, SystemExit) as e:
             err(f"red tick: {key}: {type(e).__name__}: {str(e)[:200]}")
+    try:  # WAITING ON YOU: each red on the owner told once, then reminded (ask.py)
+        acts += red_owner_reminders(store, t) if primary else []
+    except (Exception, SystemExit) as e:
+        err(f"red tick: the owner's reminders failed ({str(e)[:160]})")
     try:
         acts += red_enforce(store, facts, t) if primary else []
     except (Exception, SystemExit) as e:
@@ -2014,6 +2034,8 @@ def red_block(o_r, a):
         lname = lname or block_lease(keys[0])
         r = st.acquire(lname, f"owner:{owner_cause}", BLOCK_TTL, BLOCK_MAX, progress=f"{iprobe.detail}@{int(time.time())}",
                        meta={"kind": "block", "owner_cause": owner_cause, "cmd": a.owner_cmd, "cause": cause,
+                             "question": f"run `! {a.owner_cmd}` ({OWNER_CAUSES[owner_cause]})" +
+                                         (f" -- {a.note}" if getattr(a, "note", "") else ""),
                              "probe": {"kind": iprobe.kind, "args": iprobe.args}, "until": words, "keys": keys,
                              "text": text, "details": details, "verify": verify, "probed_at": time.time()})
         same = st.get(lname) if "held" in r else None
@@ -2027,7 +2049,7 @@ def red_block(o_r, a):
         else:
             line = (f"RED BLOCKED ON OWNER: {cause} down (blocks {what}): {details}" if cause else
                     f"RED BLOCKED ON OWNER: {what}: {details}")
-            inbox_write("red", line, [line], [], 1)
+            # the owner is told by the tick (red_owner_reminders: ONE inbox entry and a notification, then reminders)
             print(line + f" ({iprobe.detail}; `agentctl red status`)")
     for it in items:
         cur = st.item("red", it["id"])

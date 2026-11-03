@@ -636,12 +636,13 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
         for name, r, _since, _count in others:
             st = fixing(name, r)[1]
             cause = (st or {}).get("cause") if (st or {}).get("state") == "blocked-external" else None
-            if cause:  # ONE line per outage, naming the reds it blocks
-                causes.setdefault(cause, (st.get("until"), []))[1].append(name)
+            if cause and cause not in (DECISION_CAUSE, CRASH_LOOP_CAUSE):  # ONE line per outage, naming the reds it
+                # blocks; a decision or the fixers' crash loop is no outage: its red reads WAITING ON YOU: <question>
+                causes.setdefault(cause, (st.get("until"), [], st.get("ask")))[1].append(name)
                 continue
             reds_.append(f"{name} #{r.get('number')} \u2192 {short(st)}")
         reds_ = [f"{c} down \u2192 blocks: {', '.join(ns)}" + (f" (auto-clears when {u_})" if u_ else "")
-                 for c, (u_, ns) in causes.items()] + reds_
+                 + (f" -- WAITING ON YOU: {q_[:160]}" if q_ else "") for c, (u_, ns, q_) in causes.items()] + reds_
         reds_ += [p_ for p_ in parts if p_.startswith("local")]
         if len(reds_) > SUMMARY_MAX_REDS:
             reds_ = reds_[:SUMMARY_MAX_REDS] + [f"+{len(reds_) - SUMMARY_MAX_REDS} more"]

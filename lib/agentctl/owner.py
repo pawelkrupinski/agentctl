@@ -187,7 +187,8 @@ def owner_turn_prompt(fam, rec, st, names, first):
     u = {"workflow": d.get("workflow"), "job": d.get("job") or (d.get("jobs") or ["?"])[0], "jobs": d.get("jobs"),
          "kind": d.get("kind") or "test", "line": d.get("line"), "run": d.get("last_run") or {}, "key": d.get("key"),
          "refuted": d.get("refuted"), "predicts": d.get("predicts"), "flake": d.get("red_kind") == "flake",
-         "diagnosis": d.get("diagnosis"), "prior_work": d.get("prior_work"), "old_note": d.get("old_note")}
+         "diagnosis": d.get("diagnosis"), "prior_work": d.get("prior_work"), "old_note": d.get("old_note"),
+         "decision": red_decision(d)}
     note = None if first else ("NEXT TURN: the reds above are new or offered to you again (a previous verdict did not "
                                "clear them): read RED-INBOX.md and your notebook, then go on.")
     return fixer_prompt(u, rec["worktree"], sync_brief(), note,

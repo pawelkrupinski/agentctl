@@ -696,8 +696,18 @@ agent must be assigned to it".
 - **Owner decision.** `DIAGNOSED: <cause>; decide: <the decision>` -- or a second DIAGNOSED in a row on one red (lapses
   between them skipped) -- puts the red on an owner block with cause `owner-decision` whose text carries the diagnosis
   and the decision; never a crash. It clears itself like the crash-loop block (a newer run no longer failing this way,
-  or 24 h, `$AGENTCTL_RED_DECISION_BLOCK_MAX`). The owner lifts either block at once with
+  or 7 d, `$AGENTCTL_RED_DECISION_BLOCK_MAX`). The owner lifts either block at once with
   `agentctl red release <key> --any`: the red is offered again at the next tick.
+- **WAITING ON YOU (ask.py, 2026-11-03).** Every owner-blocked red (a decision, a fixer crash loop, a `red block
+  --owner-cause --cmd`) carries its QUESTION: the status line and ci-why read `<red> → WAITING ON YOU: <question>`,
+  never a bare `owner-decision down`. The tick tells the owner ONCE per block (one escalate event: one inbox entry of
+  kind BLOCKED and one macOS notification on the laptop), then reminds by notification alone (no inbox entry) after
+  1 h, 2 h, then every 4 h (`$AGENTCTL_ASK_REMIND_FIRST` / `_MAX`) until the block ends. The owner answers with
+  `agentctl decide <red key | run> "<answer>"` (`done` after running an asked command): stored on the red, the block
+  lifted, the red reads `IN PROGRESS (decided: <answer>)` and is offered again, its fixer briefed with the answer (no
+  RED ESCALATE meanwhile). If the decided action fails (`NOT LANDED`, `GAVE UP`, `DIAGNOSED`, its fix change ended
+  unlanded) the red goes straight back to the owner: `WAITING ON YOU: you decided '<answer>'; the action failed:
+  <why>`. A block still clears itself by its probe (a newer run no longer failing this way), and its reminders with it.
 - **Refunds.** A dispatch that did nothing is not counted (`red status` says `[refunded: ...]`): `GAVE UP` / `NOT LANDED`
   because it is already fixed or there is nothing to do; `STOPPED` (superseded) and `red cleared`; a fixer killed
   before any verdict; `BLOCKED ON OWNER` only for a CI read (`gh run view|download`: gh reads with its own
@@ -1468,6 +1478,8 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 |---|---|---|---|
 | `allow` | `AGENTCTL_ALLOW` | - | - |
 | `allowed_roots` | `AGENTCTL_ALLOWED_ROOTS` | - | - |
+| `ask_remind_first` | `AGENTCTL_ASK_REMIND_FIRST` | `3600` | the first reminder this long after the owner was told |
+| `ask_remind_max` | `AGENTCTL_ASK_REMIND_MAX` | `14400` | ...then doubling up to this |
 | `assign_bound` | `AGENTCTL_ASSIGN_BOUND` | `20` | - |
 | `attach_poll` | `AGENTCTL_ATTACH_POLL` | `15` | - |
 | `author_active_min` | `AGENTCTL_AUTHOR_ACTIVE_MIN` | `15` | live = a pid alive and activity within this |
@@ -1560,7 +1572,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `reds_dir` | `AGENTCTL_REDS_DIR` | - | - |
 | `red_crash_block_max` | `AGENTCTL_RED_CRASH_BLOCK_MAX` | `86400` | $AGENTCTL_RED_CRASH_BLOCK_MAX |
 | `red_crash_loop` | `AGENTCTL_RED_CRASH_LOOP` | `3` | $AGENTCTL_RED_CRASH_LOOP |
-| `red_decision_block_max` | `AGENTCTL_RED_DECISION_BLOCK_MAX` | `86400` | an owner-decision block lapses after this: the red offered again |
+| `red_decision_block_max` | `AGENTCTL_RED_DECISION_BLOCK_MAX` | `604800` | an owner-decision block lapses after this: the red offered again (2026-11-03: was |
 | `red_families` | `AGENTCTL_RED_FAMILIES` | - | - |
 | `red_fixers` | `AGENTCTL_RED_FIXERS` | `5` | live fixers at once, every family together |
 | `red_fixer_wall` | `AGENTCTL_RED_FIXER_WALL` | `10800` | a dispatched fixer's maximum wall time |

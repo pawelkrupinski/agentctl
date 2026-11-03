@@ -500,7 +500,9 @@ class OwnerTest(RedsBase):
             self.tick(advance=9 * 60)
         self.assertEqual({self.st.item("red", i["id"])["state"] for i in decodo}, {"blocked-external"})
         esc = [e for e in self.st.events() if e["severity"] == "escalate" and e["item_id"] in {i["id"] for i in decodo}]
-        self.assertEqual(esc, [])  # the reds do not escalate one by one: the cause does (its own lease)
+        # the reds do not escalate one by one: the owner is told ONCE for the cause (ask.py), never per tick or red
+        self.assertEqual([e["kind"] for e in esc], ["red.ask"])
+        self.assertIn("WAITING ON YOU", esc[0]["refs"]["verdict"])
         lease = self.st.get("block/cause/Decodo")
         self.assertTrue(A.lease_is_live(lease, self.t[0]))  # it survives every tick while its probe fails
         lease = self.st.get("block/cause/Decodo")

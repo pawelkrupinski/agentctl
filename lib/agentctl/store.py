@@ -573,8 +573,8 @@ def project_events(store=None):
     n = 0
     for ev in st.events(after=cur):
         aud, refs = ev.get("audience") or {}, ev.get("refs") or {}
-        if not aud and ev["severity"] == "info":
-            cur = ev["seq"]
+        if (not aud and ev["severity"] == "info") or refs.get("no_inbox"):  # no_inbox: a reminder (ask.py) is a
+            cur = ev["seq"]  # notification alone -- the owner's ONE inbox entry for the red was written when told
             continue
         verdict = refs.get("verdict") or ev.get("text") or ev["kind"]
         eid = (dt.datetime.fromtimestamp(ev["at"], dt.timezone.utc).strftime("%Y%m%dT%H%M%S%f")

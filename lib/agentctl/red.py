@@ -918,7 +918,9 @@ def red_offer(store, it, text, data=None, repo=None, escalate=False, verdict=Non
                    f"({str(a.get('worktree')).replace(HOME, '~')}): offered to you for {deadline // 60} min -- "
                    f"`~/bin/agentctl red claim {d['key']} --worktree .` and fix it "
                    f"(`Fixes-Red: {(d.get('last_run') or {}).get('number')}`); else a fixer takes it")
-    if tier == "deep":
+    if tier == "deep" and not verdict and not escalate and red_decision(d):  # the owner decided it: no escalation
+        sev = {"severity": "info"}
+    elif tier == "deep":
         verdict = verdict or f"RED ESCALATE: {red_what(d)} still red after {d.get('attempts')} attempts: a deep investigation is offered"
     if verdict:
         sev["refs"] = {"key": d.get("key"), "run": (d.get("last_run") or {}).get("number"), "workflow": d.get("workflow"),
@@ -995,7 +997,7 @@ def red_picture(d):
             "refuted": d.get("refuted") or [], "diagnosis": d.get("diagnosis"), "predicts": d.get("predicts"),
             "author": d.get("author"), "culprit": d.get("culprit"), "names": sorted(red_names(d) - {None}),
             "prior_work": d.get("prior_work"), "old_note": d.get("old_note"), "repo": d.get("repo"),
-            "blame": d.get("blame"), "lander_tried": d.get("lander_tried")}
+            "blame": d.get("blame"), "lander_tried": d.get("lander_tried"), "decision": red_decision(d)}
 
 
 def red_put_offer(store, it):
@@ -1601,7 +1603,8 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
                          data={"fix": {"status": "verify", "at": t, "entry": None, "sha": ""}, "block": None})
                 return [f"verifying {red_what(d)} (its block cleared)"]
             red_offer(store, it, f"{red_what(d)}: its block ended ({out[:120]}): offered again",
-                      data={"cause": None, "block": None}, escalate=not out.startswith(("INVALID", "RELEASED")))
+                      data={"cause": None, "block": None},
+                      escalate=not (out.startswith(("INVALID", "RELEASED")) or red_decision(d)))
             return [f"re-offered {red_what(d)} (block ended: {out[:60]})"]
         return acts
     return acts
@@ -1642,6 +1645,8 @@ def red_lease_ended(store, it, row, block, t):
         red_move(store, it, "blocked-external", f"{red_what(d)}: {block['text']}",
                  data={**upd, "cause": block.get("cause"), "block": block["name"]})
         return [f"blocked {red_what(d)}"]
+    if red_decision(d) and DECISION_FAILED.match(str(h["outcome"])):  # THE OWNER'S DECIDED ACTION FAILED: told
+        return red_decision_failed(store, it, upd, h["outcome"], t)
     decide = red_decision_needed(d, h) if str(h["outcome"]).startswith("DIAGNOSED:") else None
     if decide:
         return red_decision_block(store, it, upd, decide, t)
@@ -1842,7 +1847,9 @@ def red_crash_loop(store, it, upd, streak, t):
     got = store.acquire(lname, f"owner:{CRASH_LOOP_CAUSE}", BLOCK_TTL,
                         env_num("AGENTCTL_RED_CRASH_BLOCK_MAX", RED_CRASH_BLOCK_MAX), progress=f"crash-loop@{int(t)}",
                         meta={"kind": "block", "crash_loop": True, "cause": CRASH_LOOP_CAUSE, "cmd": cmd, "probe": probe,
-                              "until": until, "keys": [key], "text": text, "details": text, "probed_at": t})
+                              "until": until, "keys": [key], "text": text, "details": text, "probed_at": t,
+                              "question": f"the fixers crash on {red_what(d)} ({n} launches in a row): repair the "
+                                          "fixer harness"})
     if "held" in got:  # somebody's block already holds the red: it stands, the red joins it
         row = store.get(lname)
         store.set_meta(lname, row["epoch"], row["secret"], {"keys": sorted(set(lease_meta(row).get("keys") or []) | {key})})
@@ -1850,8 +1857,9 @@ def red_crash_loop(store, it, upd, streak, t):
            "cause": CRASH_LOOP_CAUSE, "block": lname}
     line = f"RED BLOCKED ON OWNER: {red_what(d)}: {text}"
     store.close_offer(f"red:{it['id']}", "blocked")
-    red_move(store, it, "blocked-external", line, data=upd, severity="escalate",
-             refs={"key": key, "run": run, "workflow": d.get("workflow"), "verdict": line, "tail": tail, "command": "red"})
+    red_ask_mark(store, red_move(store, it, "blocked-external", line, data=upd, severity="escalate",
+                                 refs={"key": key, "run": run, "workflow": d.get("workflow"), "verdict": line,
+                                       "tail": tail, "command": "red"}), t)
     return [f"crash loop on {red_what(d)}: blocked on the owner"]
 
 
@@ -1863,7 +1871,9 @@ def red_crash_loop(store, it, upd, streak, t):
 # the diagnosis and the decision -- never a crash, never the crash-loop breaker's. Like the crash-loop block it is one
 # a test red may hold, and it clears itself: a newer run of the red's workflow no longer failing this way, or
 # RED_DECISION_BLOCK_MAX (offered again); the owner lifts it at once with `agentctl red release <key> --any`.
-RED_DECISION_BLOCK_MAX = 24 * 3600   # an owner-decision block lapses after this: the red offered again
+RED_DECISION_BLOCK_MAX = 7 * 86400   # an owner-decision block lapses after this: the red offered again (2026-11-03: was
+# 24 h -- each lapse re-offered the red to fixers who could not decide it, and the RED ESCALATE / GAVE UP entries
+# piled up; the owner is reminded instead (ask.py), and the block's probe still clears it)
 DECISION_CAUSE = "owner-decision"
 RED_DECIDE = re.compile(r";\s*decide:\s*(.+)$", re.S | re.I)
 
@@ -1893,24 +1903,24 @@ def red_decision_block(store, it, upd, decide, t):
     cmd = f"~/bin/agentctl red status -v" + (f"; less {nb}" if nb else "")
     until = f"a newer {d.get('workflow')} run than #{run} no longer fails this way"
     maxh = env_num("AGENTCTL_RED_DECISION_BLOCK_MAX", RED_DECISION_BLOCK_MAX)
-    text = (f"BLOCKED ON OWNER (decision): {red_what(d)}: DIAGNOSED: {diag[:400]}. DECIDE: {decide[:300]}. Then tell its "
-            f"fixer (RED-INBOX.md of its worktree) or offer it again: `! ~/bin/agentctl red release {key} --any` "
-            f"(`{cmd}`). Auto-clears when {until}, or in {fmt_age(maxh)} (offered again)").replace(HOME, "~")
+    text = (f"WAITING ON YOU: {decide[:400]} -- {red_what(d)} waits on it. Answer: `! {decide_cmd(key)}` (its fixer "
+            f"is dispatched with your answer). " + (f"Why: DIAGNOSED: {diag[:400]}. " if diag else "") +
+            f"Look: `{cmd}`. Auto-clears when {until}, or in {fmt_age(maxh)} (offered again)").replace(HOME, "~")
     lname = block_lease(key)
     probe = {"kind": "red_newer_verdict", "args": {"workflow": d.get("workflow"), "item": it["id"],
                                                     "run_id": (d.get("last_run") or {}).get("databaseId"), "run": run}}
     got = store.acquire(lname, f"owner:{DECISION_CAUSE}", BLOCK_TTL, maxh, progress=f"decision@{int(t)}",
                         meta={"kind": "block", "decision": True, "cause": DECISION_CAUSE, "cmd": cmd, "probe": probe,
                               "until": until, "keys": [key], "text": text, "details": diag, "decide": decide,
-                              "probed_at": t})
+                              "question": decide, "probed_at": t})
     if "held" in got:  # somebody's block already holds the red: it stands, the red joins it
         row = store.get(lname)
         store.set_meta(lname, row["epoch"], row["secret"], {"keys": sorted(set(lease_meta(row).get("keys") or []) | {key})})
     line = f"RED BLOCKED ON OWNER: {text}"
     store.close_offer(f"red:{it['id']}", "blocked")
-    red_move(store, it, "blocked-external", line, data={**upd, "cause": DECISION_CAUSE, "block": lname},
-             severity="escalate", refs={"key": key, "run": run, "workflow": d.get("workflow"), "verdict": line,
-                                        "command": "red"})
+    red_ask_mark(store, red_move(store, it, "blocked-external", line, data={**upd, "cause": DECISION_CAUSE, "block": lname},
+                                 severity="escalate", refs={"key": key, "run": run, "workflow": d.get("workflow"),
+                                                            "verdict": line, "command": "red"}), t)
     return [f"decision needed on {red_what(d)}: blocked on the owner"]
 
 
@@ -2125,6 +2135,10 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
             return []
         if not fix:  # its change was rejected, cancelled or superseded, and no other fix is on its way
             h = {"at": iso_at(t), "holder": f.get("entry"), "outcome": f"its fix change {f.get('entry')} ended {status}"}
+            if red_decision(d):  # the owner's decided action: its change did not land -- the owner is told
+                return red_decision_failed(store, it, {"attempts": int(d.get("attempts") or 0) + 1, "fix": None,
+                                                       "history": (d.get("history") or []) + [h]},
+                                           f"NOT LANDED: {h['outcome']}", t)
             red_offer(store, it, f"{red_what(d)}: {h['outcome']}: offered again",
                       data={"attempts": int(d.get("attempts") or 0) + 1, "history": (d.get("history") or []) + [h],
                             "fix": None})
@@ -2539,7 +2553,7 @@ def red_spawn(store, o_r, repo, off, took, extra=()):
          "line": pic.get("line"), "run": pic.get("run") or {}, "refuted": pic.get("refuted"), "predicts": pic.get("predicts"),
          "flake": pic.get("red_kind") == "flake", "diagnosis": pic.get("diagnosis"), "key": pic["key"],
          "names": set(pic.get("names") or []), "prior_work": pic.get("prior_work"), "old_note": pic.get("old_note"),
-         "history": pic.get("history") or [], "repo": pic.get("repo")}
+         "history": pic.get("history") or [], "repo": pic.get("repo"), "decision": pic.get("decision")}
     for x in extra:  # the run's other reds, under the same fixer
         u["jobs"] = sorted(set(u.get("jobs") or [u["job"]]) | set(x["picture"].get("jobs") or []))
     if tier == "lander":  # THE DECISION RULE's determined culprit: reverted, its lander revived (blame.py)

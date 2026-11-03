@@ -288,7 +288,8 @@ class UntilGreenTest(RedBase):
         self.tick(self.snap("failure"))
         it = [i for i in self.st.items("red")][0]
         self.assertEqual(it["state"], "blocked-external")
-        self.assertIn("main #20 → BLOCKED ON OWNER", self.why("--summary")[1])
+        # the status line names the question itself (ask.py, 2026-11-03), never a bare BLOCKED
+        self.assertIn("main #20 → WAITING ON YOU: run `! Check the Decodo dashboard`", self.why("--summary")[1])
         meta = json.loads(lease[0]["meta"])
         self.st.set_meta(lease[0]["name"], lease[0]["epoch"], lease[0]["secret"], {"probed_at": 0})
         self.tick(self.snap("success"))  # the probe passes: the lease lapses
