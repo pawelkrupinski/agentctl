@@ -8,6 +8,26 @@ class LeaseLost(RuntimeError):
     """A lease this process held is gone (expired and taken, past its max hold, or released): stop its work."""
 
 
+# A SILENT MACHINE'S LEASE CLOCKS PAUSE (2026-11-03: the family owners restarted 22 / 11 / 3 times, ended "STOPPED: the
+# owner's heartbeat lease was lost" -- the laptop asleep on battery, or the tunnel to this store down (Errno 61 every
+# ~30 min that day), past OWNER_TTL: every laptop lease lapsed at once and the reconciler re-offered their reds). The
+# store records each machine's last contact (contact(): every store RPC the laptop's agentctl makes says which machine
+# it is). A lease whose holder's machine (its holder's prefix, `laptop:`) has been silent past CONTACT_GAP has its clock
+# paused from then on: read (get, list, renew, acquire, take) as extended by the silence beyond CONTACT_GAP, and on the
+# machine's next contact extended by that for real -- so a lease live when its machine went quiet is still live when it
+# comes back, and nobody takes it meanwhile. A machine still talking (its sync loop beats every minute) pauses nothing:
+# a dead wrapper's leases on a laptop that is awake lapse as before. Bounded: CONTACT_PAUSE_MAX, then they lapse.
+CONTACT_GAP = 120               # s of a machine's silence before its leases' clocks pause ($AGENTCTL_CONTACT_GAP)
+CONTACT_PAUSE_MAX = 12 * 3600   # s a silent machine's leases are paused at most ($AGENTCTL_CONTACT_PAUSE_MAX)
+CONTACT_MACHINE = re.compile(r"[a-z][a-z0-9-]{0,31}")
+
+
+def lease_machine(holder):
+    """The machine a holder names (`laptop:owner:x` -> laptop), or None."""
+    m = str(holder or "").split(":", 1)[0]
+    return m if ":" in str(holder or "") and CONTACT_MACHINE.fullmatch(m) else None
+
+
 class Store:
     """Leases (design §6): a holder plus a TTL, renewed only on real progress (a new progress mark), capped by an
     absolute max hold; an expired lease is free. Every acquire bumps the epoch (a fencing token) and draws a secret that
@@ -46,7 +66,49 @@ class Store:
 
     def _row(self, c, name):
         r = c.execute("SELECT * FROM leases WHERE name=?", (name,)).fetchone()
-        return dict(r) if r else None
+        return self._paused(c, dict(r)) if r else None
+
+    def _pause_of(self, c, machine, now_):
+        """(seconds the machine's lease clocks are paused now, the instant the pause began) -- (0, None) when it is
+        in contact or never made one."""
+        if not machine:
+            return 0.0, None
+        r = c.execute("SELECT v FROM meta WHERE k=?", (f"contact:{machine}",)).fetchone()
+        if not r:
+            return 0.0, None
+        since = float(r["v"]) + env_num("AGENTCTL_CONTACT_GAP", CONTACT_GAP)
+        if now_ <= since:
+            return 0.0, None
+        return min(now_ - since, env_num("AGENTCTL_CONTACT_PAUSE_MAX", CONTACT_PAUSE_MAX)), since
+
+    def _paused(self, c, row, now_=None):
+        """The row as its paused clock reads it (A SILENT MACHINE'S LEASE CLOCKS PAUSE): a lease live when its
+        machine's pause began is extended by the pause so far."""
+        if not row or not row.get("holder"):
+            return row
+        p, since = self._pause_of(c, lease_machine(row["holder"]), self.clock() if now_ is None else now_)
+        if p and row["expires_at"] > since:
+            row = dict(row, expires_at=row["expires_at"] + p, max_until=row["max_until"] + p, paused=p)
+        return row
+
+    def contact(self, machine):
+        """The machine talks to the store: a pause of its leases' clocks ends, each lease it covered extended by it
+        for real. The seconds applied (0 when there was none)."""
+        if not CONTACT_MACHINE.fullmatch(str(machine or "")):
+            return 0
+        c = self.db()
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            now_ = self.clock()
+            p, since = self._pause_of(c, machine, now_)
+            if p:
+                c.execute("UPDATE leases SET expires_at=expires_at+?, max_until=max_until+? "
+                          "WHERE holder LIKE ? AND expires_at>?", (p, p, f"{machine}:%", since))
+            c.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", (f"contact:{machine}", str(now_)))
+            c.execute("COMMIT")
+            return p
+        finally:
+            c.close()
 
     def acquire(self, name, holder, ttl, max_hold, progress="", item=None, meta=None):
         """{'epoch', 'secret', 'expires_at', 'max_until'} when acquired, else {'held': the live lease}."""
@@ -405,7 +467,8 @@ class Store:
     def list(self, prefix=""):
         c = self.db()
         try:
-            return [dict(r) for r in c.execute("SELECT * FROM leases WHERE name LIKE ? ORDER BY name", (prefix + "%",))]
+            return [self._paused(c, dict(r))
+                    for r in c.execute("SELECT * FROM leases WHERE name LIKE ? ORDER BY name", (prefix + "%",))]
         finally:
             c.close()
 

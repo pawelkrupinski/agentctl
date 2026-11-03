@@ -55,6 +55,15 @@ def host_role():
     return "sync"
 
 
+def contact_machine():
+    """The machine this process's store calls speak for (A SILENT MACHINE'S LEASE CLOCKS PAUSE): $AGENTCTL_MACHINE, else
+    `laptop` for the laptop's agentctl (the sync role on macOS: its holders are `laptop:...`), else None."""
+    m = os.environ.get("AGENTCTL_MACHINE")
+    if m is not None:
+        return m or None
+    return "laptop" if host_role() == "sync" and sys.platform == "darwin" else None
+
+
 def store_errors():
     return {"StaleVersion": StaleVersion, "TerminalState": TerminalState, "LeaseLost": LeaseLost}
 
@@ -121,9 +130,10 @@ class RemoteStore:
 
     def _call_once(self, method, path, body=None, timeout=None):
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(self.url + path, data=data, method=method,
-                                     headers={"Authorization": f"token {self._token()}",
-                                              "Content-Type": "application/json"})
+        hdrs = {"Authorization": f"token {self._token()}", "Content-Type": "application/json"}
+        if contact_machine():
+            hdrs["X-Agentctl-Machine"] = contact_machine()
+        req = urllib.request.Request(self.url + path, data=data, method=method, headers=hdrs)
         try:
             with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
                 return json.loads(r.read() or b"null")
@@ -867,6 +877,12 @@ class StoreAPI:
         if who not in self.allow and not (who in self.metrics and method == "GET" and u.path == "/metrics"):
             return self._json(403, {"error": "Forbidden", "message": f"{who or 'this token'} may not call {u.path}"})
         try:
+            mach = next((v for k, v in headers.items() if k.lower() == "x-agentctl-machine"), None)
+            if mach and u.path.startswith("/v1/store/"):  # its leases' clocks run again (Store.contact)
+                gap = self.store.contact(mach.strip())
+                if gap:
+                    sys.stderr.write(f"agentctl-store: {mach.strip()} back after its silence: its leases paused "
+                                     f"{int(gap)} s\n")
             if body:
                 args = json.loads(body)
             else:

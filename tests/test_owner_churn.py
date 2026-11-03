@@ -15,6 +15,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
 from test_owner import OwnerBase, FAM  # noqa: E402
+from test_phase2 import Phase2Base  # noqa: E402
 
 
 class SessionActivityTest(unittest.TestCase):
@@ -131,6 +132,56 @@ class OwnerRestartTest(OwnerBase):
         self.assertEqual(argv[argv.index("--resume") + 1], sid)
         self.assertIn("RESUMED AFTER A RESTART, NEVER START OVER", argv[argv.index("--bg") + 1])
         self.assertTrue(self.wait(lambda: self.rec().get("turn") == 2), "the turn count goes on (1, then 2)")
+
+
+class LeaseClockPauseTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.t = [1_000_000.0]
+        self.st = A.Store(path=os.path.join(self.tmp.name, "store.db"), clock=lambda: self.t[0])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_a_silent_laptops_leases_are_paused_and_resume_on_its_next_contact(self):
+        self.st.contact("laptop")
+        hb = self.st.acquire("owner/convergence", "laptop:owner:convergence", 900, 7 * 86400, progress="beat 0")
+        self.t[0] += 3600  # the laptop asleep, or the tunnel down, for an hour
+        self.assertTrue(A.lease_is_live(self.st.get("owner/convergence"), self.t[0]), "paused, never lapsed")
+        self.assertIn("held", self.st.acquire("owner/convergence", "laptop:owner:convergence", 900, 3600),
+                      "nobody takes a paused lease")
+        self.assertTrue(self.st.contact("laptop") > 3000)  # it is back
+        self.assertEqual(self.st.renew("owner/convergence", hb["epoch"], hb["secret"], "beat 1", 900), "ok")
+
+    def test_a_laptop_still_talking_pauses_nothing(self):
+        self.st.contact("laptop")
+        self.st.acquire("red/k", "laptop:owner:convergence", 900, 3600, progress="p")
+        for _ in range(20):  # its sync loop beats every minute; the lease's own holder is dead
+            self.t[0] += 60
+            self.st.contact("laptop")
+        self.assertFalse(A.lease_is_live(self.st.get("red/k"), self.t[0]))
+
+    def test_a_lease_of_a_machine_that_never_made_contact_lapses_as_before(self):
+        self.st.acquire("red/k", "ci-runner:x", 900, 3600, progress="p")
+        self.t[0] += 3600
+        self.assertFalse(A.lease_is_live(self.st.get("red/k"), self.t[0]))
+
+    def test_a_pause_is_bounded(self):
+        self.st.contact("laptop")
+        self.st.acquire("red/k", "laptop:fixer:x", 900, 30 * 86400, progress="p")
+        self.t[0] += A.CONTACT_PAUSE_MAX + 3600
+        self.assertFalse(A.lease_is_live(self.st.get("red/k"), self.t[0]))
+
+
+class ContactOverTheApiTest(Phase2Base):
+    def test_the_laptops_store_calls_say_which_machine_they_are(self):
+        saved = os.environ.get("AGENTCTL_MACHINE")
+        os.environ["AGENTCTL_MACHINE"] = "laptop"
+        self.addCleanup(lambda: os.environ.pop("AGENTCTL_MACHINE", None) if saved is None
+                        else os.environ.__setitem__("AGENTCTL_MACHINE", saved))
+        self.remote.get("owner/convergence")
+        self.assertIsNotNone(self.st.meta_get("contact:laptop"))
 
 
 if __name__ == "__main__":

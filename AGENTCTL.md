@@ -1544,6 +1544,8 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `clone_lock_wait` | `AGENTCTL_CLONE_LOCK_WAIT` | `300` | the swap waits this long for the clone's users to finish, then tries again next tick |
 | `clone_repair_retry` | `AGENTCTL_CLONE_REPAIR_RETRY` | `900` | a repair that failed is tried again after this |
 | `clone_timeout` | `AGENTCTL_CLONE_TIMEOUT` | `1800` | - |
+| `contact_gap` | `AGENTCTL_CONTACT_GAP` | `120` | s of a machine's silence before its leases' clocks pause |
+| `contact_pause_max` | `AGENTCTL_CONTACT_PAUSE_MAX` | `43200` | s a silent machine's leases are paused at most |
 | `disk_min_gb` | `AGENTCTL_DISK_MIN_GB` | `50` | the Data volume's free space below which the upkeep runs at once, then WD opens |
 | `disk_path` | `AGENTCTL_DISK_PATH` | - | - |
 | `dispatch_dir` | `AGENTCTL_DISPATCH_DIR` | - | - |

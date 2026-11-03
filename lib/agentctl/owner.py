@@ -245,7 +245,7 @@ def red_owner(a):
     stall = env_num("AGENTCTL_RED_STALL", RED_STALL)
     s = {"bid": None, "turn": int(rec.get("turn") or 0), "names": [], "empty": 0, "beat": 0.0,
          "idle_since": time.time(), "first": not rec.get("session"), "resumed": bool(rec.get("session")),
-         "missing": 0, "turn_at": 0.0, "mark": None, "progress_at": 0.0}
+         "missing": 0, "turn_at": 0.0, "mark": None, "progress_at": 0.0, "hb": hb}
 
     def turn_state(in_turn, now):
         """What the laptop's tick reads to tell an owner at work from an orphan (red_reap_orphans)."""
@@ -268,7 +268,7 @@ def red_owner(a):
             bg_stop(cli, s["bid"])
         release(list(owner_leases(fam)), "STOPPED: the owner's wrapper was stopped")
         try:
-            st.release(owner_lease(fam), hb["epoch"], hb["secret"], outcome="STOPPED")
+            st.release(owner_lease(fam), s["hb"]["epoch"], s["hb"]["secret"], outcome="STOPPED")
         except StoreUnavailable:
             pass
         os._exit(143)
@@ -322,7 +322,8 @@ def red_owner(a):
                     elif now - s["progress_at"] > stall:
                         bg_stop(cli, s["bid"])
                         return end_turn(f"STALLED: no progress (transcript, worktree) for {fmt_age(stall)}")
-                if st.renew(owner_lease(fam), hb["epoch"], hb["secret"], f"beat {int(now)}", OWNER_TTL) == "lost":
+                if st.renew(owner_lease(fam), s["hb"]["epoch"], s["hb"]["secret"], f"beat {int(now)}",
+                            OWNER_TTL) == "lost" and not owner_beat_again(st, fam, s, wt, me, rec):
                     return "STOPPED: the owner's heartbeat lease was lost"
                 # THE WRAPPER JUDGES PROGRESS (RED_STALL, above), so its reds' leases renew with each beat of a turn
                 # not stalled (and between turns). Renewed only on a new mark, they lapsed after OWNER_TTL (15 min)
@@ -394,7 +395,7 @@ def red_owner(a):
         bg_stop(cli, s["bid"])
     release(list(owner_leases(fam)), stop)
     try:
-        st.release(owner_lease(fam), hb["epoch"], hb["secret"], outcome=stop)
+        st.release(owner_lease(fam), s["hb"]["epoch"], s["hb"]["secret"], outcome=stop)
     except StoreUnavailable:
         pass
     rec.update(ended=ts(), verdict=stop, in_turn=False)
@@ -405,6 +406,24 @@ def red_owner(a):
                     "store token)", [], [], 1, cwd=wt)
     print(f"RED OWNER {fam}: {stop}")
     return 0
+
+
+def owner_beat_again(st, fam, s, wt, me, rec):
+    """The heartbeat's renewal answered lost. When it merely LAPSED -- the laptop asleep, the store out of reach past
+    OWNER_TTL -- and nobody took it, this living wrapper takes it again and goes on (its turn, its session and the reds
+    still its own); a revoked (orphaned), released or re-taken heartbeat ends it. True when it goes on."""
+    row = st.get(owner_lease(fam))
+    m = lease_meta(row)
+    if not row or row.get("epoch") != s["hb"]["epoch"] or m.get("revoked") or m.get("outcome") or \
+            (row.get("holder") and row["holder"] != owner_holder(fam)):
+        return False
+    hb = st.acquire(owner_lease(fam), owner_holder(fam), OWNER_TTL, OWNER_MAX, progress=f"beat {int(time.time())}",
+                    meta={"kind": "owner", "family": fam, "worktree": wt, "pid": me, "notebook": rec.get("notebook")})
+    if "held" in hb:
+        return False
+    s["hb"] = hb
+    print(f"{ts()} RED OWNER {fam}: its heartbeat had lapsed (asleep or out of the store's reach): taken again", flush=True)
+    return True
 
 
 def owners_status(store, t):
