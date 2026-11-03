@@ -295,7 +295,7 @@ def red_owner(a):
         if now - s["beat"] >= every:  # THE HEARTBEAT: the owner's lease; its reds' leases by the turn's progress
             try:
                 if s["bid"] is not None:
-                    mark = fixer_mark({"log": rec.get("transcript") or rec.get("log") or ""}, wt) + \
+                    mark = fixer_mark({"log": rec.get("transcript") or rec.get("log") or "", "bg_id": s["bid"]}, wt) + \
                         bg_wait_mark(s.get("ent"), rec.get("transcript"), now, every)
                     if mark != s["mark"]:
                         s["mark"], s["progress_at"] = mark, now
@@ -305,9 +305,14 @@ def red_owner(a):
                         return end_turn(f"STALLED: no progress (transcript, worktree) for {fmt_age(stall)}")
                 if st.renew(owner_lease(fam), hb["epoch"], hb["secret"], f"beat {int(now)}", OWNER_TTL) == "lost":
                     return "STOPPED: the owner's heartbeat lease was lost"
-                lost = [n for n, x in owner_leases(fam).items()
-                        if st.renew(n, x["epoch"], x["secret"], s["mark"] or f"held {int(now)}", OWNER_TTL) == "lost"]
-                if lost:  # cleared, released by hand, revoked, or no progress for OWNER_TTL: no longer the owner's
+                # THE WRAPPER JUDGES PROGRESS (RED_STALL, above), so its reds' leases renew with each beat of a turn
+                # not stalled (and between turns). Renewed only on a new mark, they lapsed after OWNER_TTL (15 min)
+                # while the turn was inside its 30 min stall budget: "lease expired" every 15-30 min (2026-11-03,
+                # convergence red 8fbdbe0d5a86), each a crash for the breaker and a re-offer
+                beat = f"{s['mark'] or 'held'} beat {int(now)}"
+                leases = owner_leases(fam)
+                lost = [n for n, x in leases.items() if st.renew(n, x["epoch"], x["secret"], beat, OWNER_TTL) == "lost"]
+                if lost:  # cleared, released by hand, revoked, or lapsed: no longer the owner's
                     owner_drop(fam, lost)
                 s["beat"] = now
             except StoreAuthFailed as e:  # never "asked again" forever: a fresh store token once, else the owner ends

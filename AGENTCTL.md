@@ -1536,8 +1536,10 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `check_lease_ttl` | `AGENTCTL_CHECK_LEASE_TTL` | `600` | - |
 | `check_trees` | `AGENTCTL_CHECK_TREES` | `3` | check trees, so at most this many queued changes are checked at once |
 | `claude` | `AGENTCTL_CLAUDE` | - | set: that one only (the tests' fake) |
+| `claude_jobs` | `AGENTCTL_CLAUDE_JOBS` | - | - |
 | `claude_projects` | `AGENTCTL_CLAUDE_PROJECTS` | - | - |
 | `claude_settings` | `AGENTCTL_CLAUDE_SETTINGS` | - | - |
+| `claude_tmp` | `AGENTCTL_CLAUDE_TMP` | - | - |
 | `clone_keepalive` | `AGENTCTL_CLONE_KEEPALIVE` | `20` | - |
 | `clone_lock_wait` | `AGENTCTL_CLONE_LOCK_WAIT` | `300` | the swap waits this long for the clone's users to finish, then tries again next tick |
 | `clone_repair_retry` | `AGENTCTL_CLONE_REPAIR_RETRY` | `900` | a repair that failed is tried again after this |

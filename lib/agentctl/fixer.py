@@ -403,12 +403,71 @@ def dispatch_log(u, what):
 
 
 def fixer_mark(rec, wt):
-    """A dispatched fixer's progress mark: its transcript's bytes, its worktree's HEAD and `git status`."""
+    """A dispatched fixer's (or an owner's) progress mark: its transcript's bytes, its worktree's HEAD and `git status`,
+    and the session's other real activity (session_activity: its sub-agents' transcripts, its commands' output, its job
+    directory's files)."""
     import hashlib
     size = os.path.getsize(rec["log"]) if os.path.exists(rec["log"]) else 0
     head = git(wt, "rev-parse", "HEAD", check=False).stdout.strip()[:12] if os.path.isdir(wt) else ""
     st = git(wt, "status", "--porcelain", check=False).stdout if os.path.isdir(wt) else ""
-    return f"{size}:{head}:{hashlib.sha1(st.encode()).hexdigest()[:10]}"
+    return f"{size}:{head}:{hashlib.sha1(st.encode()).hexdigest()[:10]}" + session_activity(rec["log"], rec.get("bg_id"))
+
+
+# REAL ACTIVITY IS PROGRESS (2026-11-03, convergence red 8fbdbe0d5a86: ~8 h through several owners, "lease expired" every
+# 15-30 min and "STALLED: no progress (transcript, worktree) for 30 min"). The mark read the session's own transcript
+# and the worktree only, and a session at work is often silent in both: a sub-agent it delegated to writes ITS
+# transcript (<session>/subagents/*.jsonl), a long command writes its output (claude's tmp <project>/<session>/tasks/),
+# a bisect or a measure collector writes under $CLAUDE_JOB_DIR (~/.claude/jobs/<id>/tmp) -- 09:20 to 09:51 that day
+# the owner was waiting on its own CI measure, 22:28 on, a local bisect wrote bisect.log every few seconds while the
+# owner's red lease counted down to "lapses without progress". Each of them now moves the mark.
+SESSION_ACTIVITY_FILES = 2000  # files looked at per session at most (a job dir full of logs stays cheap)
+
+
+def claude_tmp_root():
+    """claude's per-user tmp root (<root>/<project dir>/<session>/tasks/<task>.output), $AGENTCTL_CLAUDE_TMP."""
+    env = os.environ.get("AGENTCTL_CLAUDE_TMP")
+    if env:
+        return env
+    for d in (f"/private/tmp/claude-{os.getuid()}", f"/tmp/claude-{os.getuid()}"):
+        if os.path.isdir(d):
+            return d
+    return f"/tmp/claude-{os.getuid()}"
+
+
+def claude_jobs_root():
+    return os.environ.get("AGENTCTL_CLAUDE_JOBS") or os.path.join(HOME, ".claude", "jobs")
+
+
+def session_activity_dirs(transcript, bid=None):
+    """The directories a session writes to besides its transcript (see REAL ACTIVITY IS PROGRESS)."""
+    if not transcript or not str(transcript).endswith(".jsonl"):
+        return []
+    base = str(transcript)[:-len(".jsonl")]
+    session, project = os.path.basename(base), os.path.basename(os.path.dirname(base))
+    out = [os.path.join(base, "subagents"), os.path.join(claude_tmp_root(), project, session, "tasks")]
+    jid = str(bid or session[:8])
+    if re.fullmatch(r"[0-9a-f]{6,}", jid):
+        out.append(os.path.join(claude_jobs_root(), jid, "tmp"))
+    return out
+
+
+def session_activity(transcript, bid=None):
+    """':act <bytes>@<newest mtime>' over session_activity_dirs, '' when there is none: a mark part that moves while
+    the session's sub-agents, commands or job files grow."""
+    total, newest, n = 0, 0.0, 0
+    for d in session_activity_dirs(transcript, bid):
+        for root, _dirs, files in os.walk(d):
+            for fn in files:
+                n += 1
+                if n > SESSION_ACTIVITY_FILES:
+                    break
+                try:
+                    s = os.stat(os.path.join(root, fn))
+                except OSError:
+                    continue
+                total += s.st_size
+                newest = max(newest, s.st_mtime)
+    return f":act {total}@{int(newest)}" if newest else ""
 
 
 def fixer_meta_sent(st, leases, meta):
@@ -620,9 +679,12 @@ def bg_turn_over(ent, path, now=None):
 
 
 def bg_wait_mark(ent, path, now, every):
-    """'' -- or, for a session waiting with its process alive on its own background tasks, a mark that changes every
-    renewal period: waiting on its own CI run is work, and its lease is renewed by it (bounded by the wall time)."""
-    if not bg_waiting(ent):
+    """'' -- or, for a session with its process alive and its own background tasks pending (waiting on them, or
+    working beside them), a mark that changes every renewal period: waiting on its own CI run is work, and its lease is
+    renewed by it (bounded by the wall time). 2026-11-03: only a `blocked` / `idle` row counted, and an owner whose row
+    read `working` while its own measure ran in the background stalled at 30 min."""
+    pid = (ent or {}).get("pid")
+    if not ent or bg_ended(ent) or not (pid and pid_alive(int(pid))):
         return ""
     pending = bg_turn(path)["pending"]
     return f":waiting {','.join(pending)} @{int(now // max(every, 1))}" if pending else ""
@@ -844,9 +906,13 @@ def red_fixer(a):
                                 last_mark, progress_at = mark, time.time()
                             elif time.time() - progress_at > stall:  # PROOF OF WORK: a living wrapper is not one
                                 stop = f"STALLED: no progress (transcript, worktree) for {fmt_age(stall)}"
+                            # THE WRAPPER JUDGES PROGRESS (RED_STALL), the lease renews with each beat of a turn
+                            # not stalled: renewed only on a new mark, a lease of RED_FIXER_TTL (15 min) lapsed under
+                            # a fixer still inside its 30 min stall budget ("lease expired", a crash for the breaker)
+                            beat = f"{mark} beat {int(time.time())}"
                             for n_, e_, s_ in extra if not stop else ():  # the run's other reds: renewed with it
-                                st.renew(n_, e_, s_, mark, RED_FIXER_TTL, note=note)
-                            if not stop and st.renew(name, epoch, secret, mark, RED_FIXER_TTL, note=note) == "lost":
+                                st.renew(n_, e_, s_, beat, RED_FIXER_TTL, note=note)
+                            if not stop and st.renew(name, epoch, secret, beat, RED_FIXER_TTL, note=note) == "lost":
                                 stop = ("STOPPED: the red's lease was lost (expired without progress, past its max hold, "
                                         "or revoked)")
                             last_renew = time.time()
