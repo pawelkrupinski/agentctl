@@ -245,7 +245,7 @@ def red_owner(a):
     stall = env_num("AGENTCTL_RED_STALL", RED_STALL)
     s = {"bid": None, "turn": int(rec.get("turn") or 0), "names": [], "empty": 0, "beat": 0.0,
          "idle_since": time.time(), "first": not rec.get("session"), "resumed": bool(rec.get("session")),
-         "missing": 0, "turn_at": 0.0, "mark": None, "progress_at": 0.0, "hb": hb}
+         "missing": 0, "turn_at": 0.0, "mark": None, "progress_at": 0.0, "hb": hb, "meta": {}}
 
     def turn_state(in_turn, now):
         """What the laptop's tick reads to tell an owner at work from an orphan (red_reap_orphans)."""
@@ -334,6 +334,7 @@ def red_owner(a):
                 lost = [n for n, x in leases.items() if st.renew(n, x["epoch"], x["secret"], beat, OWNER_TTL) == "lost"]
                 if lost:  # cleared, released by hand, revoked, or lapsed: no longer the owner's
                     owner_drop(fam, lost)
+                owner_tell_leases(st, {n: x for n, x in leases.items() if n not in lost}, s, wt, me, rec)
                 s["beat"] = now
             except StoreAuthFailed as e:  # never "asked again" forever: a fresh store token once, else the owner ends
                 if not store_reauth():
@@ -424,6 +425,18 @@ def owner_beat_again(st, fam, s, wt, me, rec):
     s["hb"] = hb
     print(f"{ts()} RED OWNER {fam}: its heartbeat had lapsed (asleep or out of the store's reach): taken again", flush=True)
     return True
+
+
+def owner_tell_leases(st, leases, s, wt, me, rec):
+    """Each red lease the owner holds carries its worktree, notebook, wrapper pid and session (`red status` shows the
+    holder's worktree, never "?"): sent once per lease epoch and session."""
+    for n, x in leases.items():
+        key = (x.get("epoch"), rec.get("session"), s.get("bid"))
+        if s["meta"].get(n) == key:
+            continue
+        st.set_meta(n, x["epoch"], x["secret"], {"worktree": wt, "notebook": rec.get("notebook"), "pid": me,
+                                                  "session": rec.get("session"), "bg_id": s.get("bid")})
+        s["meta"][n] = key
 
 
 def owners_status(store, t):

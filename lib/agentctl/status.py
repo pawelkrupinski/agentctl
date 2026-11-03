@@ -290,8 +290,10 @@ def status_families(st, t):
             row = next((r for r in leases if (active.get(r["name"].split("/", 1)[1]) or {}).get("data")
                         and red_family(active[r["name"].split("/", 1)[1]]["data"]) == f), None)
         work, why = holder_work(row, t, cache) if row else (None, None)
-        out.append({"family": f, "open": fams[f], "holder": row["holder"] if row else None,
-                    "worktree": lease_meta(row).get("worktree") if row else None,
+        wt = lease_meta(row).get("worktree") if row else None
+        if row and not wt and lease_meta(row).get("kind") in ("owned", "owner"):  # an owner's: its ONE worktree
+            wt = (read_record(owner_record_path(lease_meta(row).get("family") or f)) or {}).get("worktree")
+        out.append({"family": f, "open": fams[f], "holder": row["holder"] if row else None, "worktree": wt,
                     "at_work": work, "work": why})
     return out
 

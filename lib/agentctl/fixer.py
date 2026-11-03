@@ -1176,9 +1176,13 @@ def red_view_state(store, it, t=None):
         row = store.get(red_lease(d["key"])) or {}
         m = lease_meta(row)
         who = m.get("who") or str(row.get("holder") or "?").split(":")[-1]
-        wt = str(m.get("worktree") or "?").replace(HOME, "~")
+        wt = m.get("worktree")
+        if not wt and m.get("kind") == "owned" and m.get("family"):  # an owner's red: the owner's ONE worktree
+            wt = (read_record(owner_record_path(m["family"])) or {}).get("worktree")
+        wt = str(wt or "?").replace(HOME, "~")
         exp = time.strftime("%H:%M", time.localtime(row.get("expires_at") or t))
-        fam = f" [family {m['family']}, with {str(m.get('primary') or '').split('/')[-1]}]" if m.get("family") else ""
+        prim = str(m.get("primary") or "").split("/")[-1]  # a sibling's primary red; an owner's red has none
+        fam = f" [family {m['family']}{', with ' + prim if prim else ''}]" if m.get("family") else ""
         return (f"{who} ({wt}, leased{fam}; lapses {exp} without progress)" + (f" -- {m['note']}" if m.get("note") else "")
                 + rec,
                 f"{who.replace('movies-wt-', '').replace('red-fixer-', 'fixer ')} leased")

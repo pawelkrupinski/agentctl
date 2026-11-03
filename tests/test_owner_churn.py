@@ -86,6 +86,23 @@ class OwnerLeaseRenewTest(OwnerBase):
         self.assertTrue(self.wait(lambda: self.st.get(name)["renewed_at"] > first + 0.5, limit=5),
                         "renewed by the wrapper's beat while the turn is not stalled")
 
+    def test_the_holders_worktree_is_recorded_on_its_reds_and_shown(self):
+        os.environ["FAKE_CLAUDE_SLEEP"] = "60"
+        self.addCleanup(os.environ.__setitem__, "FAKE_CLAUDE_SLEEP", "0")
+        self.tick(dispatch=True)
+        it = self.only()
+        name = A.red_lease(it["data"]["key"])
+        self.assertTrue(self.wait(lambda: self.rec().get("worktree")))
+        wt = self.rec()["worktree"]
+        self.assertTrue(self.wait(lambda: A.lease_meta(self.st.get(name)).get("worktree") == wt),
+                        A.lease_meta(self.st.get(name)))
+        self.tick()  # the reconciler reads the red leased
+        text, _short = A.red_view_state(self.st, self.only(), time.time())
+        self.assertIn(wt.replace(A.HOME, "~"), text)
+        self.assertNotIn("(?,", text)
+        self.assertNotIn("with ]", text)
+
+
 class OwnerRestartTest(OwnerBase):
     def kill_wrapper(self):
         first = self.rec()
