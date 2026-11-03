@@ -631,7 +631,12 @@ def notify_escalations(store=None):
         if ev["severity"] == "escalate" and not ev.get("notified_at"):
             st.mark_notified(ev["seq"])
             if not escalation_resolved(st, ev):
-                notify(f"agentctl: {ev['kind']}", str((ev.get("refs") or {}).get("verdict") or ev.get("text") or "")[:220])
+                try:
+                    url = notification_url(ev, st)
+                except Exception:
+                    url = None
+                notify(f"agentctl: {ev['kind']}", str((ev.get("refs") or {}).get("verdict") or ev.get("text") or "")[:220],
+                       url=url, group=f"agentctl-{ev.get('item_type')}-{ev.get('item_id')}")
                 n += 1
         if ev["seq"] > cur:
             cur = ev["seq"]

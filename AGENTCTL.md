@@ -1559,6 +1559,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `min_interval` | `AGENTCTL_MIN_INTERVAL` | `60` | - |
 | `movies_remote` | `AGENTCTL_MOVIES_REMOTE` | - | - |
 | `movies_repo` | `AGENTCTL_MOVIES_REPO` | - | - |
+| `notifier` | `AGENTCTL_NOTIFIER` | - | - |
 | `notify` | `AGENTCTL_NOTIFY` | - | - |
 | `orphan_idle` | `AGENTCTL_ORPHAN_IDLE` | `7200` | its action had its time |
 | `owners_dir` | `AGENTCTL_OWNERS_DIR` | - | - |

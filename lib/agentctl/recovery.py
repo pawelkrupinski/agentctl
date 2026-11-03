@@ -482,14 +482,38 @@ def applescript_str(text):
     return '"' + str(text).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def notify(title, text):
-    """A macOS notification (no dialog box); $AGENTCTL_NOTIFY: a command run with (title, text) instead (the tests')."""
+def notifier_bin():
+    """terminal-notifier (clickable), from $AGENTCTL_NOTIFIER, PATH or the nix profile; None when absent."""
+    import shutil
+    return os.environ.get("AGENTCTL_NOTIFIER") or shutil.which("terminal-notifier") \
+        or next((p for p in (f"{HOME}/.nix-profile/bin/terminal-notifier",) if os.path.exists(p)), None)
+
+
+def notifier_argv(tn, title, text, url=None, group=None):
+    """terminal-notifier's argv: a click runs `open -a 'Google Chrome' URL` (Chrome forced); -group replaces the older
+    notification of the same item instead of stacking."""
+    argv = [tn, "-title", title, "-message", text, "-sound", "Basso"]
+    if group:
+        argv += ["-group", str(group)]
+    if url:
+        argv += ["-execute", f"open -a 'Google Chrome' {shlex.quote(url)}"]
+    return argv
+
+
+def notify(title, text, url=None, group=None):
+    """A macOS notification, clickable (opens `url` in Chrome) through terminal-notifier, else osascript (no click);
+    $AGENTCTL_NOTIFY: a command run with (title, text, url) instead (the tests')."""
     cmd = os.environ.get("AGENTCTL_NOTIFY")
     if cmd:
-        subprocess.run([cmd, title, text], capture_output=True, timeout=10)
+        subprocess.run([cmd, title, text, url or ""], capture_output=True, timeout=10)
         return
     if sys.platform != "darwin":
         return
+    tn = notifier_bin()
+    if tn:
+        r = subprocess.run(notifier_argv(tn, title, text, url, group), capture_output=True, timeout=10)
+        if r.returncode == 0:
+            return
     subprocess.run(["osascript", "-e", f"display notification {applescript_str(text)} with title {applescript_str(title)} "
                     'sound name "Basso"'], capture_output=True, timeout=10)
 

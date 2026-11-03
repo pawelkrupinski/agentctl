@@ -12,7 +12,7 @@ import os as _os
 
 PARTS = ("core", "forge", "ghapp", "classify", "wait", "owned", "ciwhy", "branches", "red", "fixer", "ask", "owner", "land", "gov", "slots",
          "landwatch", "waiting", "queue", "remote", "batch", "tools", "cleanup", "maint", "store", "lander", "blame", "server", "upkeep", "watchdog",
-         "inbox", "recovery", "status", "live", "config", "cli")
+         "inbox", "notifyurl", "recovery", "status", "live", "config", "cli")
 
 
 def load_into(ns):

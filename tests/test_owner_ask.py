@@ -120,7 +120,7 @@ class ReminderTest(AskBase):
         self.remind(61)
         shown = []
         saved = A.notify
-        A.notify = lambda title, text: shown.append(text)
+        A.notify = lambda title, text, **kw: shown.append(text)
         try:
             A.project_events(self.st)
             A.notify_escalations(self.st)
