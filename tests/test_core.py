@@ -35,6 +35,21 @@ class RunCmdTest(unittest.TestCase):
 
 
 
+class GitDecodeTest(unittest.TestCase):
+    def test_git_output_that_is_not_utf8_never_crashes_a_git_call(self):
+        # 2026-11-03: charlie-msi carried a Latin-1 "\xa3"; core.git's strict UTF-8 decode raised
+        # UnicodeDecodeError in rebase_in_tree on every executor start (174 times), and the stuck entry held the push slot.
+        import subprocess, tempfile
+        d = tempfile.mkdtemp()
+        subprocess.run(["git", "init", "-q", d], check=True)
+        with open(os.path.join(d, "prices.txt"), "wb") as f:
+            f.write(b"price \xa3 5\n")
+        subprocess.run(["git", "-C", d, "add", "prices.txt"], check=True)
+        subprocess.run(["git", "-C", d, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "add"], check=True)
+        out = A.git(d, "show", "HEAD:prices.txt")
+        self.assertIn("price", out)
+
+
 class HostDifferencesTest(unittest.TestCase):
     def test_the_upkeep_sweep_never_removes_the_processors_socket_dir_where_the_user_tmp_is_tmp(self):
         import tempfile

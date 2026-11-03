@@ -177,7 +177,7 @@ def git(repo, *args, check=True, input=None):
         env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
         env.setdefault("GIT_SSH_COMMAND", GIT_NET_SSH)
     try:
-        r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, input=input, env=env,
+        r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, errors="replace", input=input, env=env,
                            timeout=600)  # every git call is bounded: a stuck lock or network never holds a step
     except subprocess.TimeoutExpired:
         if check:
