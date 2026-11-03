@@ -129,6 +129,8 @@ class OwnerTest(OwnerBase):
         first = self.rec()
         with open(first["notebook"], "a") as f:
             f.write("- reproducer: FooSpec -z bar fails in 3 s\n")
+        # its session ended too (a session still at work is adopted instead: test_owner_churn.OwnerRestartTest)
+        subprocess.run([os.environ["AGENTCTL_CLAUDE"], "stop", first["session"][:8]], capture_output=True)
         os.kill(first["pid"], signal.SIGKILL)  # it dies: no release, its leases lapse
         self.wait(lambda: not A.pid_alive(first["pid"]) or os.waitpid(first["pid"], os.WNOHANG)[0])
         it = self.only()
@@ -143,7 +145,7 @@ class OwnerTest(OwnerBase):
         rec = self.rec()
         self.assertEqual((rec["worktree"], rec["notebook"], rec["restarts"]), (first["worktree"], first["notebook"], 1))
         self.assertIn("reproducer: FooSpec", open(rec["notebook"]).read())
-        self.assertTrue(self.wait(lambda: self.rec().get("turn") == 1))
+        self.assertTrue(self.wait(lambda: self.rec().get("turn") == 2), "the turn count goes on")
         argv = self.argv_of(first["session"])
         self.assertEqual(argv[argv.index("--resume") + 1], first["session"], "the same session goes on")
         self.assertEqual(self.st.get(A.red_lease(it["data"]["key"]))["holder"], A.owner_holder(FAM))

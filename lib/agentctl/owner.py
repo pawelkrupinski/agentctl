@@ -139,8 +139,11 @@ def owner_spawn(store, o_r, repo, fam, off, took, extra=()):
             f.write(f"# {fam} red family: the owner's notebook\n\nKept by the family's owner session across reds and "
                     "restarts: reproducers, hypotheses tried (and how they ended), what is left.\n")
     restarted = bool(rec.get("started"))
+    # A RESTART CONTINUES (2026-11-03): the turn count, the session (rec["session"], resumed or adopted by the wrapper),
+    # the worktree and the notebook go on; the last spell's end is kept for the resumed session's first prompt
     rec.update(family=fam, worktree=wt, notebook=nb, repo=repo, o_r=o_r, started=ts(), ended=None, verdict=None,
-               turn=0, bg_id=None, pid=None, in_turn=False, progress_at=None,
+               last_end=rec.get("verdict") or rec.get("last_end"), turn=int(rec.get("turn") or 0), bg_id=None,
+               pid=None, in_turn=False, progress_at=None,
                restarts=int(rec.get("restarts", -1)) + 1, log=os.path.join(owner_dir(fam), "owner.log"))
     write_json(owner_record_path(fam), rec)
     try:  # a STOP left by an earlier spell would stop this one at its first pass
@@ -176,8 +179,9 @@ def owner_intro(owner):
               "on the owner with it, never offered back to you meanwhile. ")
 
 
-def owner_turn_prompt(fam, rec, st, names, first):
-    """The turn's prompt: the first red's task (fixer_prompt) in the owner's voice, every red of the turn listed."""
+def owner_turn_prompt(fam, rec, st, names, first, resumed=False):
+    """The turn's prompt: the first red's task (fixer_prompt) in the owner's voice, every red of the turn listed. A
+    resumed session (its wrapper restarted) is told to continue, never to start over."""
     active = red_active(st)
     its = [active[n.split("/", 1)[1]] for n in names if n.split("/", 1)[1] in active]
     reds = [f"{red_what(i['data'])} (red {i['data'].get('key')}): {str(i['data'].get('line') or '')[:160]}" for i in its]
@@ -189,8 +193,16 @@ def owner_turn_prompt(fam, rec, st, names, first):
          "refuted": d.get("refuted"), "predicts": d.get("predicts"), "flake": d.get("red_kind") == "flake",
          "diagnosis": d.get("diagnosis"), "prior_work": d.get("prior_work"), "old_note": d.get("old_note"),
          "decision": red_decision(d)}
-    note = None if first else ("NEXT TURN: the reds above are new or offered to you again (a previous verdict did not "
-                               "clear them): read RED-INBOX.md and your notebook, then go on.")
+    if resumed:
+        note = ("RESUMED AFTER A RESTART, NEVER START OVER: your wrapper restarted (" + str(rec.get("last_end") or
+                "it had died")[:200] + "); you are the SAME session, in the same worktree, with your notebook and "
+                "your context: continue from where you left off (your notebook's `what is left`, your commits, the CI "
+                "runs you started). The reds above are yours again; read RED-INBOX.md, then go on.")
+    elif first:
+        note = None
+    else:
+        note = ("NEXT TURN: the reds above are new or offered to you again (a previous verdict did not "
+                "clear them): read RED-INBOX.md and your notebook, then go on.")
     return fixer_prompt(u, rec["worktree"], sync_brief(), note,
                         owner={"family": fam, "notebook": rec["notebook"], "reds": reds})
 
@@ -217,15 +229,22 @@ def red_owner(a):
     keep_awake()  # the laptop must not idle-sleep past OWNER_TTL under a held heartbeat (host_slept)
     cli = claude_cli()
     prev = bg_session(cli, rec["session"][:8]) if rec.get("session") else None
-    if prev and prev.get("id") and prev.get("pid"):  # a restart: the dead wrapper's session still runs, and `--resume`
-        bg_stop(cli, prev["id"])  # of a running session starts a copy beside it -- stopped, it goes on under its own id
+    # A RESTART ADOPTS A SESSION STILL AT WORK (2026-11-03): the dead wrapper's session, mid-turn (a bisect, a measure
+    # it waits on), goes on under this wrapper -- never stopped and started over. One whose turn is over but whose
+    # process lingers is stopped: `--resume` of a running session starts a copy beside it; stopped, it goes on under
+    # its own id.
+    adopt = prev if (prev and prev.get("id") and not bg_turn_over(prev, rec.get("transcript"))
+                     and owner_leases(fam)) else None
+    if prev and prev.get("id") and prev.get("pid") and not adopt:
+        bg_stop(cli, prev["id"])
     env = {k: v for k, v in os.environ.items() if k not in FIXER_IDENTITY_ENV and k != "AGENTCTL_DETACHED"}  # an agent
     every = env_num("AGENTCTL_RED_RENEW", RED_RENEW_EVERY)
     poll = env_num("AGENTCTL_BG_POLL", BG_POLL)
     idle_max = env_num("AGENTCTL_OWNER_IDLE", OWNER_IDLE)
     wall = env_num("AGENTCTL_RED_FIXER_WALL", RED_FIXER_WALL)
     stall = env_num("AGENTCTL_RED_STALL", RED_STALL)
-    s = {"bid": None, "turn": 0, "names": [], "empty": 0, "beat": 0.0, "idle_since": time.time(), "first": True,
+    s = {"bid": None, "turn": int(rec.get("turn") or 0), "names": [], "empty": 0, "beat": 0.0,
+         "idle_since": time.time(), "first": not rec.get("session"), "resumed": bool(rec.get("session")),
          "missing": 0, "turn_at": 0.0, "mark": None, "progress_at": 0.0}
 
     def turn_state(in_turn, now):
@@ -334,7 +353,7 @@ def red_owner(a):
             if not held:
                 return f"IDLE: no red of {fam} for {fmt_age(idle_max)}" if now - s["idle_since"] >= idle_max else None
             s["idle_since"] = now
-            prompt = owner_turn_prompt(fam, rec, st, held, s["first"])
+            prompt = owner_turn_prompt(fam, rec, st, held, s["first"], resumed=s["resumed"])
             if prompt is None:  # its reds closed meanwhile
                 owner_drop(fam, held)
                 return None
@@ -347,13 +366,20 @@ def red_owner(a):
             if not bid:
                 release(held, f"NOT STARTED: `claude --bg` {why}")
                 return f"NOT STARTED: `claude --bg` {why}"
-            s.update(bid=bid, turn=s["turn"] + 1, names=held, first=False, turn_at=now, missing=0, mark=None,
-                     progress_at=now)
+            s.update(bid=bid, turn=s["turn"] + 1, names=held, first=False, resumed=False, turn_at=now, missing=0,
+                     mark=None, progress_at=now)
             rec.update(bg_id=bid, turn=s["turn"])
             turn_state(True, now)
             return None
         return None
 
+    if adopt:  # the dead wrapper's turn goes on under this one (A RESTART ADOPTS A SESSION STILL AT WORK)
+        t0 = time.time()
+        s.update(bid=adopt["id"], names=list(owner_leases(fam)), first=False, resumed=False, turn_at=t0,
+                 progress_at=t0, turn=max(s["turn"], 1))
+        rec.update(bg_id=adopt["id"], turn=s["turn"])
+        turn_state(True, t0)
+        print(f"{ts()} RED OWNER {fam}: adopted its session {adopt['id']}, still at work (turn {s['turn']})", flush=True)
     stop = None
     try:
         while stop is None:

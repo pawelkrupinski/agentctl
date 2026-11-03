@@ -85,5 +85,53 @@ class OwnerLeaseRenewTest(OwnerBase):
         self.assertTrue(self.wait(lambda: self.st.get(name)["renewed_at"] > first + 0.5, limit=5),
                         "renewed by the wrapper's beat while the turn is not stalled")
 
+class OwnerRestartTest(OwnerBase):
+    def kill_wrapper(self):
+        first = self.rec()
+        os.kill(first["pid"], signal.SIGKILL)  # it dies: no release, its leases lapse
+        self.wait(lambda: not A.pid_alive(first["pid"]) or os.waitpid(first["pid"], os.WNOHANG)[0])
+        c = self.st.db()
+        c.execute("UPDATE leases SET expires_at=? WHERE holder=?", (self.t[0] - 1, A.owner_holder(FAM)))
+        c.close()
+        self.tick(dispatch=True, advance=1)   # the red's lease lapsed: offered again
+        self.tick(dispatch=True, advance=1)   # ...and its owner, dead, started again
+        self.assertTrue(self.wait(lambda: self.rec().get("pid") not in (None, first["pid"])))
+        return first
+
+    def launches(self):
+        return sorted(f for f in os.listdir(os.environ["FAKE_CLAUDE_OUT"]) if f.endswith(".json"))
+
+    def test_a_restart_adopts_the_session_still_at_work_never_stops_it(self):
+        os.environ["FAKE_CLAUDE_SLEEP"] = "60"
+        self.addCleanup(os.environ.__setitem__, "FAKE_CLAUDE_SLEEP", "0")
+        self.tick(dispatch=True)
+        self.assertTrue(self.wait(lambda: self.rec().get("session") and self.rec().get("bg_id")))
+        launched = self.launches()
+        [s0] = [s for s in self.sessions() if s["id"] == self.rec()["bg_id"]]
+        first = self.kill_wrapper()
+        self.assertTrue(self.wait(lambda: self.rec().get("bg_id") == first["bg_id"] and self.rec().get("in_turn")),
+                        self.rec())
+        self.assertEqual(self.launches(), launched, "no new launch: the same session goes on")
+        [s] = [s for s in self.sessions() if s["id"] == first["bg_id"]]
+        self.assertFalse(s.get("stopped"), "never stopped mid-turn")
+        self.assertEqual(s.get("pid"), s0.get("pid"), "the same process: its work in flight goes on")
+        self.assertNotIn("--resume", self.argv_of(first["session"]), "never started over")
+        self.assertEqual(self.rec()["turn"], first["turn"], "the turn goes on, never reset")
+
+    def test_a_restart_resumes_the_session_told_to_continue_never_start_over(self):
+        os.environ["FAKE_CLAUDE_SLEEP"] = "60"
+        self.addCleanup(os.environ.__setitem__, "FAKE_CLAUDE_SLEEP", "0")
+        self.tick(dispatch=True)
+        self.assertTrue(self.wait(lambda: self.rec().get("session") and self.rec().get("bg_id")))
+        sid, bid = self.rec()["session"], self.rec()["bg_id"]
+        subprocess.run([os.environ["AGENTCTL_CLAUDE"], "stop", bid], capture_output=True)  # its session is gone too
+        self.kill_wrapper()
+        self.assertTrue(self.wait(lambda: "--resume" in self.argv_of(sid)))
+        argv = self.argv_of(sid)
+        self.assertEqual(argv[argv.index("--resume") + 1], sid)
+        self.assertIn("RESUMED AFTER A RESTART, NEVER START OVER", argv[argv.index("--bg") + 1])
+        self.assertTrue(self.wait(lambda: self.rec().get("turn") == 2), "the turn count goes on (1, then 2)")
+
+
 if __name__ == "__main__":
     unittest.main()
