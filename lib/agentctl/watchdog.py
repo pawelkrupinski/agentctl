@@ -193,10 +193,27 @@ def inv_w5():
     return age < env_num("AGENTCTL_W5_MAX", W5_MAX), f"the processor's duties beat {int(age)} s ago"
 
 
+def inv_wn():
+    """WN: the owner's notifications get through -- the notifier's last delivery did not fail on both channels
+    (terminal-notifier and the osascript fallback). Raised once, naming the cause and the owner's fix; cleared by the
+    notifier's next delivery that gets through (or nothing left undelivered)."""
+    try:
+        f = notify_failure(Store())
+    except Exception as e:
+        return None, f"cannot read the store ({str(e)[:120]})"
+    if not f:
+        return True, "notifications reach the owner"
+    return False, (f"notifications cannot reach the owner ({str(f.get('cause'))[:140]}; {f.get('pending', '?')} waiting): "
+                   f"{NOTIFY_FIX}")
+
+
 def inv_w6():
-    """W6: no escalation event left unnotified for over W6_MAX (the notifier's delivery, from the store)."""
+    """W6: no escalation event left unnotified for over W6_MAX (the notifier's delivery, from the store). While the
+    delivery itself is broken (WN) that is WN's one condition, not a count of every escalation waiting behind it."""
     try:
         st = Store()
+        if notify_failure(st):
+            return None, "the notifier cannot deliver (see WN)"
         t = st.clock()
         late = [e for e in st.events(after=max(0, int(st.meta_get("notifier_seq", 0) or 0) - 500), limit=5000)
                 if e["severity"] == "escalate" and not e.get("notified_at") and t - e["at"] > env_num("AGENTCTL_W6_MAX", W6_MAX)]
@@ -276,7 +293,8 @@ def inv_wb():
                    ": commit them in a worktree of ~/bin")
 
 
-INVARIANTS = {"WB": inv_wb, "W1": inv_w1, "W2": inv_w2, "W5": inv_w5, "W6": inv_w6, "W7": inv_w7, "W8": inv_w8, "WM": inv_wm}
+INVARIANTS = {"WB": inv_wb, "W1": inv_w1, "W2": inv_w2, "W5": inv_w5, "W6": inv_w6, "W7": inv_w7, "W8": inv_w8, "WM": inv_wm,
+              "WN": inv_wn}
 
 
 def probe_invariant(a):

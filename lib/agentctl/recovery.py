@@ -500,22 +500,58 @@ def notifier_argv(tn, title, text, url=None, group=None):
     return argv
 
 
+NOTIFY_FIX = "allow terminal-notifier in System Settings > Notifications"
+_notify_cause = [""]
+
+
+def notify_cause():
+    """Why the last notify() reached nobody ("" when it got through)."""
+    return _notify_cause[0]
+
+
+def _delivered(ok, cause=""):
+    _notify_cause[0] = "" if ok else (cause or "no channel")
+    return ok
+
+
+def _proc_said(r):
+    out = ((r.stderr or b"") + b" " + (r.stdout or b"")).decode(errors="replace").strip()
+    return re.sub(r"\s+", " ", out)[:160] or f"exit {r.returncode}"
+
+
 def notify(title, text, url=None, group=None):
-    """A macOS notification, clickable (opens `url` in Chrome) through terminal-notifier, else osascript (no click);
-    $AGENTCTL_NOTIFY: a command run with (title, text, url) instead (the tests')."""
+    """A macOS notification, clickable (opens `url` in Chrome) through terminal-notifier; on ANY failure of it (absent,
+    not allowed in System Settings, a timeout) the osascript fallback (no click). $AGENTCTL_NOTIFY: a command run with
+    (title, text, url) instead (the tests'). Returns True only when one of them got through (exit 0); else False, the
+    cause in notify_cause() -- the notifier records a delivery only on True (2026-11-03)."""
     cmd = os.environ.get("AGENTCTL_NOTIFY")
     if cmd:
-        subprocess.run([cmd, title, text, url or ""], capture_output=True, timeout=10)
-        return
+        try:
+            r = subprocess.run([cmd, title, text, url or ""], capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError) as e:
+            return _delivered(False, f"{cmd}: {e}")
+        return _delivered(r.returncode == 0, f"{cmd}: {_proc_said(r)}")
     if sys.platform != "darwin":
-        return
+        return _delivered(False, "not macOS: no notification channel on this host")
+    causes = []
     tn = notifier_bin()
     if tn:
-        r = subprocess.run(notifier_argv(tn, title, text, url, group), capture_output=True, timeout=10)
+        try:
+            r = subprocess.run(notifier_argv(tn, title, text, url, group), capture_output=True, timeout=10)
+            if r.returncode == 0:
+                return _delivered(True)
+            causes.append(f"terminal-notifier: {_proc_said(r)}")
+        except (OSError, subprocess.SubprocessError) as e:
+            causes.append(f"terminal-notifier: {e}")
+    try:
+        r = subprocess.run(["osascript", "-e", f"display notification {applescript_str(text)} with title "
+                            f"{applescript_str(title)} " 'sound name "Basso"'], capture_output=True, timeout=10)
         if r.returncode == 0:
-            return
-    subprocess.run(["osascript", "-e", f"display notification {applescript_str(text)} with title {applescript_str(title)} "
-                    'sound name "Basso"'], capture_output=True, timeout=10)
+            return _delivered(True)
+        causes.append(f"osascript: {_proc_said(r)}")
+    except (OSError, subprocess.SubprocessError) as e:
+        causes.append(f"osascript: {e}")
+    return _delivered(False, "; ".join(causes))
 
 
 def cmd_inbox(a):

@@ -1560,6 +1560,8 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
                       verdict=text + f" -- `~/bin/agentctl red claim {key} --worktree <yours>` to take it")
             return [text]
         if t >= it["deadline"]:  # no taker in time: escalate (the state's self-transition), widen, offer again
+            if lease_is_live(store.get(red_lease(key)), t):  # taken since this step read its lease: never UNCLAIMED
+                return acts  # with a holder; the next step moves it to leased
             why = off.get("reason") or "no taker"
             mins = int((t - it["entered_at"]) // 60)
             text = f"RED UNCLAIMED: {red_what(d)}: no taker for {mins} min ({why})"

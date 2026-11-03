@@ -498,6 +498,7 @@ the reconciler unit. It reads only the snapshot and the store, read-only.
 | W4 | No item is past its state deadline by more than 2 ticks. | 2 ticks |
 | W5 | `tick_at` is younger than 2 min. | 2 min |
 | W6 | No escalate event is unnotified for more than 5 min. | 5 min |
+| WN | The notifier's deliveries get through (terminal-notifier or the osascript fallback). | next delivery |
 | W7 | Phase 2: the laptop sync's event cursor lags by less than 2 min while the laptop is online. | 2 min |
 
 - **Phase 1:** launchd `net.bitcashier.agentctl-watchdog`, every 60 s, `agentctl watchdog`. A violation

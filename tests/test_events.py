@@ -143,5 +143,125 @@ class EventsTest(unittest.TestCase):
             self.assertEqual(calls, [], f"{name} writes the inbox itself")
 
 
+class NotifierDeliveryTest(unittest.TestCase):
+    """2026-11-03, invariant-W6.9: "152 escalation(s) not notified" -- five reds re-escalated RED UNCLAIMED every 10 min
+    for 5 h, each told on its own (10-20 s apiece: a `gh run view` per click URL), the notifier 3 h behind, telling the
+    owner "no taker" about reds held for an hour; and an event was marked notified BEFORE its delivery, failed or not."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.saved = {k: os.environ.get(k) for k in ("AGENTCTL_INBOX_DIR", "AGENTCTL_NOTIFY", "AGENTCTL_NOTIFIER", "PATH")}
+        os.environ["AGENTCTL_INBOX_DIR"] = os.path.join(self.root, "inbox")
+        self.notes = os.path.join(self.root, "notes")
+        self.hook = self.script("notify.sh", f'echo "$1|$2" >> {self.notes}\n[ -e {self.root}/down ] && exit 1\nexit 0')
+        os.environ["AGENTCTL_NOTIFY"] = self.hook
+        self.t = [1_000_000.0]
+        self.st = A.Store(path=os.path.join(self.root, "store.db"), clock=lambda: self.t[0])
+        self.saved_store = A.Store
+        A.Store = lambda *a, **k: self.st
+
+    def tearDown(self):
+        A.Store = self.saved_store
+        for k, v in self.saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def script(self, name, body):
+        p = os.path.join(self.root, name)
+        with open(p, "w") as f:
+            f.write("#!/bin/sh\n" + body + "\n")
+        os.chmod(p, os.stat(p).st_mode | stat.S_IEXEC)
+        return p
+
+    def shown(self):
+        return open(self.notes).read().splitlines() if os.path.exists(self.notes) else []
+
+    def escalate(self, iid, times=1):
+        if not self.st.item("change", iid):
+            self.st.put_item("change", iid, "queued")
+        for _ in range(times):
+            self.st.transition("change", iid, "queued", self.st.item("change", iid)["version"])
+
+    def unmarked(self):
+        return [e for e in self.st.events(limit=10 ** 6) if e["severity"] == "escalate" and not e.get("notified_at")]
+
+    def test_notify_falls_back_to_osascript_when_terminal_notifier_is_not_allowed_and_says_whether_it_got_through(self):
+        os.environ.pop("AGENTCTL_NOTIFY")
+        os.environ["AGENTCTL_NOTIFIER"] = self.script(
+            "terminal-notifier", "echo 'Could not request notification permission: Notifications are not allowed for "
+            "this application' >&2; exit 3")
+        bindir = os.path.join(self.root, "bin")
+        os.makedirs(bindir)
+        osa = os.path.join(self.root, "osa-rc")
+        with open(osa, "w") as f:
+            f.write("0")
+        with open(os.path.join(bindir, "osascript"), "w") as f:
+            f.write(f"#!/bin/sh\necho \"$@\" >> {self.notes}\nexit $(cat {osa})\n")
+        os.chmod(os.path.join(bindir, "osascript"), 0o755)
+        os.environ["PATH"] = bindir + os.pathsep + os.environ["PATH"]
+        saved = A.sys.platform
+        A.sys.platform = "darwin"
+        try:
+            self.assertIs(A.notify("t", "m", url="https://u"), True)
+            self.assertIn("display notification", self.shown()[-1])  # the fallback ran
+            with open(osa, "w") as f:
+                f.write("1")
+            self.assertIs(A.notify("t", "m"), False)
+        finally:
+            A.sys.platform = saved
+        self.assertIn("Notifications are not allowed", A.notify_cause())
+        self.assertIn("osascript", A.notify_cause())
+
+    def test_a_failed_delivery_is_not_recorded_and_raises_ONE_condition_naming_the_owners_fix(self):
+        os.environ["AGENTCTL_W6_MAX"] = "0"
+        self.addCleanup(os.environ.pop, "AGENTCTL_W6_MAX", None)
+        for i in range(5):
+            self.escalate(f"d{i}")
+        open(os.path.join(self.root, "down"), "w").close()
+        self.assertEqual(A.notify_escalations(self.st), 0)
+        self.assertEqual(len(self.unmarked()), 5, "nothing reached the owner: nothing is recorded as told")
+        ok, detail = A.inv_wn()
+        self.assertIs(ok, False)
+        self.assertIn("System Settings > Notifications", detail)
+        self.assertIsNone(A.inv_w6()[0], "W6 defers to WN: one condition, not one per waiting escalation")
+        os.remove(os.path.join(self.root, "down"))
+        self.t[0] += 60
+        self.assertEqual(A.notify_escalations(self.st), 1)  # caught up: one summary
+        self.assertEqual(self.unmarked(), [])
+        self.assertIs(A.inv_wn()[0], True)
+        self.assertIs(A.inv_w6()[0], True)
+
+    def test_one_live_notification_per_item_re_notified_on_the_reminder_schedule(self):
+        self.escalate("r1", times=3)  # three re-escalations pending at once
+        self.assertEqual(A.notify_escalations(self.st), 1)
+        self.assertEqual(self.unmarked(), [])
+        for _ in range(5):  # re-escalated every 10 min: covered by the live notification, no new one
+            self.t[0] += 600
+            self.escalate("r1")
+            self.assertEqual(A.notify_escalations(self.st), 0)
+        self.assertEqual(self.unmarked(), [])
+        self.t[0] += A.ASK_REMIND_FIRST
+        self.escalate("r1")
+        self.assertEqual(A.notify_escalations(self.st), 1, "the first reminder")
+        self.assertEqual(len(self.shown()), 2)
+
+    def test_an_escalation_whose_item_moved_on_is_closed_untold(self):
+        self.escalate("m1")
+        self.st.transition("change", "m1", "checking", self.st.item("change", "m1")["version"])  # not terminal: moved on
+        self.assertEqual(A.notify_escalations(self.st), 0)
+        self.assertEqual(self.unmarked(), [])
+        self.assertEqual(self.shown(), [])
+
+    def test_a_catch_up_after_an_outage_is_one_summary_not_a_flood(self):
+        for i in range(A.NOTIFY_BURST + 3):
+            self.escalate(f"o{i}")
+        self.assertEqual(A.notify_escalations(self.st), 1)
+        [line] = self.shown()
+        self.assertIn(f"{A.NOTIFY_BURST + 3} escalations", line)
+        self.assertEqual(self.unmarked(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

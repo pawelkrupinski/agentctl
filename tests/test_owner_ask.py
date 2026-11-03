@@ -115,13 +115,15 @@ class ReminderTest(AskBase):
 
     def test_the_projector_writes_one_inbox_entry_and_the_notifier_shows_every_reminder(self):
         self.owner_cause_blocked()
-        self.assertEqual(len(self.remind(0)), 1, "an owner-command block is told by the tick")
-        self.assertEqual(self.remind(1), [])
-        self.remind(61)
         shown = []
         saved = A.notify
-        A.notify = lambda title, text, **kw: shown.append(text)
+        A.notify = lambda title, text, **kw: shown.append(text) or True
         try:
+            self.assertEqual(len(self.remind(0)), 1, "an owner-command block is told by the tick")
+            A.project_events(self.st)
+            A.notify_escalations(self.st)
+            self.assertEqual(self.remind(1), [])
+            self.remind(61)
             A.project_events(self.st)
             A.notify_escalations(self.st)
         finally:

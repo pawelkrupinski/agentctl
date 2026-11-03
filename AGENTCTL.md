@@ -111,7 +111,9 @@ moves it forward; nothing is a detached process that can die with its state in i
 - **The watchdog** (launchd `net.bitcashier.agentctl-watchdog`, every 60 s, `agentctl watchdog`) checks the invariants
   from outside the processor: W1 the oldest unlanded change is under 2 h old (counted from the red's start while main
   is red), W2 every red has a holder, an offer, a fix on its way or an owner block, W5 the processor beats, W6 every
-  escalation was notified, WM maintain ran, WB nobody leaves uncommitted edits in ~/bin's own checkout for over 10 min
+  escalation was notified, WN notifications get through (both terminal-notifier and the osascript fallback failing
+  is ONE condition naming the fix: allow terminal-notifier in System Settings > Notifications; W6 defers to it), WM
+  maintain ran, WB nobody leaves uncommitted edits in ~/bin's own checkout for over 10 min
   (it names the processes working there), W7 (phase 2, the sync role) the sync has projected every event older than
   5 min, W8 no change left the queue in the last hour (landed, rejected, superseded, cancelled) without an event
   addressed to its author's inbox (Store.transition completes every such event; the entry carries the item id, so
@@ -1239,9 +1241,13 @@ nowhere. Every verdict now reaches the inbox: a change's, a batch's and a watch'
 
 Main #2146's `RED UNCLAIMED` woke nobody: the orchestrator's `inbox wait` was not re-armed. An escalation is now an
 EVENT of severity `escalate` -- an item past its deadline in a state that escalates (a red offered too long, a
-condition left open, a stalled change) -- and the processor's notifier delivers each one ONCE: a macOS notification
-(`osascript -e 'display notification ...'`, never a dialog), marked notified in the store (W6 checks none is left
-undelivered). The status line leads with a bold `ESCALATED: N (...)` while any is current; `agentctl inbox escalated`
+condition left open, a stalled change) -- and the processor's notifier delivers it: a macOS notification
+(terminal-notifier, clickable; on any failure the `osascript -e 'display notification ...'` fallback; never a dialog),
+marked notified in the store only once a delivery got through (W6 checks none is left undelivered; WN that delivery
+works). ONE LIVE NOTIFICATION PER ITEM (2026-11-03, W6 "152 not notified"): an escalation whose item moved on (a red
+leased or cleared since, a condition closed, a new spell) is closed untold; of one item's pending escalations only the
+newest is told; a repeat (same kind and state, same spell) waits for the reminder schedule (1 h, 2 h, 4 h, 4 h, ...);
+more than 3 items at once (a catch-up after a sleep or a store outage) is ONE summary notification. The status line leads with a bold `ESCALATED: N (...)` while any is current; `agentctl inbox escalated`
 prints that line, or nothing.
 
 #### inbox wait: the orchestrator's notifier

@@ -604,13 +604,49 @@ class OwnerTest(RedsBase):
         self.assertTrue(A.escalation_line(es).startswith("ESCALATED: 1 (Main #20"))
         A.project_events(self.st)  # the projector writes the escalations into the inbox; the notifier tells
         self.assertTrue(any(str(e.get("verdict")).startswith("RED UNCLAIMED") for e in A.inbox_entries()))
-        self.assertGreaterEqual(A.notify_escalations(self.st), 2)
-        self.assertEqual(A.notify_escalations(self.st), 0)  # once each
+        # one live notification per item (2026-11-03, W6 152): three re-escalations of one red pending at once are ONE
+        self.assertEqual(A.notify_escalations(self.st), 1)
+        self.assertEqual(A.notify_escalations(self.st), 0)  # once
         wt = self.r.worktree("repo-wt-taker", branch="taker")
         self.assertEqual(self.tool("red", "claim", "20", "--repo", "movies", cwd=wt)[0], 0)
         self.t[0] = time.time()
         self.tick()
         self.assertEqual(A.escalated_now(self.st), [])  # held now: the escalation is gone by itself
+
+    def test_red_unclaimed_is_never_told_once_the_red_has_a_holder_and_a_short_lapse_is_no_new_unclaimed(self):
+        """2026-11-03: the owner got "RED UNCLAIMED: Main #2123 ... no taker" (and core #699) an hour after the reds were
+        leased -- the notifier, hours behind, told every queued escalation. One escalated before its lease and still
+        pending when the notifier runs is closed untold; a lapse re-leased within the offer's grace is no UNCLAIMED."""
+        os.makedirs(A.reds_dir(), exist_ok=True)
+        open(A.reds_dir("DISPATCH_OFF"), "w").close()
+        for _ in range(3):
+            self.tick(dispatch=True, advance=A.RED_OFFER["gate"] + 1)
+        self.assertTrue(any(str(e.get("text")).startswith("RED UNCLAIMED") and not e.get("notified_at")
+                            for e in self.st.events(limit=10 ** 6)))
+        wt = self.r.worktree("repo-wt-holder", branch="holder")
+        self.assertEqual(self.tool("red", "claim", "20", "--repo", "movies", cwd=wt)[0], 0)
+        self.t[0] = time.time()
+        self.tick()
+        self.assertEqual(self.only()["state"], "leased")
+        shown = []
+        saved = A.notify
+        A.notify = lambda title, text, **kw: shown.append(text) or True
+        try:
+            A.notify_escalations(self.st)
+        finally:
+            A.notify = saved
+        self.assertEqual([x for x in shown if "UNCLAIMED" in x], [], shown)
+        self.assertFalse([e for e in self.st.events(limit=10 ** 6) if e["severity"] == "escalate" and not e.get("notified_at")])
+        n = len(self.st.events(limit=10 ** 6))
+        self.assertEqual(self.tool("red", "release", "20", "--repo", "movies", cwd=wt)[0], 0)
+        self.t[0] = time.time()
+        self.tick(dispatch=True)
+        self.tick(dispatch=True, advance=A.RED_OFFER["gate"] - 120)  # lapsed, inside the offer's grace
+        self.assertEqual(self.tool("red", "claim", "20", "--repo", "movies", cwd=wt)[0], 0)
+        self.t[0] = time.time() + A.RED_OFFER["gate"] - 60
+        self.tick(dispatch=True, advance=0)
+        self.tick(dispatch=True, advance=A.RED_OFFER["gate"] + 1)
+        self.assertFalse([e for e in self.st.events(limit=10 ** 6)[n:] if "UNCLAIMED" in str(e.get("text"))])
 
 
 class LadderTest(RedsBase):
