@@ -1,7 +1,7 @@
 """Orphaned work (the owner, 2026-10-28: "review and fix landing code ... so things don't get missed or stalled"): a
 worktree whose commits are not on main and whose author is gone gets ONE re-land (or a fixer for a real failure), then
 UNLANDED ORPHAN, a condition that clears when its commits land or somebody works in it again. Nothing is deleted."""
-import contextlib, io, os, sys, time, unittest
+import contextlib, io, json, os, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -52,7 +52,7 @@ class OrphanTest(RedBase):
 
     def test_a_real_failure_is_submitted_once_too_and_a_live_worktree_is_no_orphan(self):
         """Step 14: an orphan is submitted once whatever its last verdict (its checks decide; a rejection is its red's to
-        rescue): no orphan fixer."""
+        rescue): a fixer comes only after that submit is rejected (test_a_pre_push_rejection_gets_one_fixer...)."""
         wt, _sha = self.worktree_commit("repo-wt-prune", "workflow prune")
         A.inbox_write("land", "NOT LANDED: the pre-push checks failed (locally, check tree x-wt-check-1)", [], [], 1, cwd=wt)
         A.process_cwds = lambda: {4242: wt}  # somebody works in it: no orphan
@@ -189,6 +189,145 @@ class OrphanTest(RedBase):
         rc, out = self.run_tool("supersede", wt, "--by", "no-such-change")
         self.assertEqual(rc, 2, out)
         self.assertEqual(A.superseded_marks(), {})
+
+    # -- PARKED, OWNERSHIP FOLLOWS ACTIVITY, INFRA RETRIES, ONE FIXER (the owner, 2026-11-03: bare-borrow, flip-stage5,
+    # order-rows, wfnames and imdbslip escalated UNLANDED ORPHAN over and over)
+    def test_a_parked_worktree_is_no_orphan_shows_in_status_and_unpark_brings_it_back(self):
+        wt, _sha = self.worktree_commit("repo-wt-bare-borrow", "bare borrow: a design")
+        self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-bare-borrow: submit (never landed)"])
+        self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-bare-borrow: escalated UNLANDED ORPHAN"])
+        rc, out = self.run_tool("park", wt, "--owner-decision", "--reason", "owner deciding, see STATE.md")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("PARKED", out)
+        self.assertEqual(len(A.recovery_tick(force=True)), 1)  # the escalation clears: "parked: ..."
+        self.assertEqual(A.open_conditions(), [])
+        for _ in range(3):
+            self.assertEqual([x for x in A.orphan_duty(self.r.path) if "bare-borrow" in x], [])
+        self.assertEqual(self.relands, [wt], "never submitted again while parked")
+        self.assertEqual(A.parked_lines(), ["parked: 1", "  repo-wt-bare-borrow  until the owner decides: owner "
+                                                         "deciding, see STATE.md"])
+        self.assertIn("parked: 1", A.render_status(A.status_header(time.time(), probes=False), time.time()))
+        rc, out = self.run_tool("unpark", wt)
+        self.assertIn("UNPARKED", out)
+        self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-bare-borrow: submit (never landed)"])
+
+    def test_parked_until_its_blocker_lands_then_it_is_submitted_again(self):
+        wt, _sha = self.worktree_commit("repo-wt-order-rows", "order rows")
+        self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-order-rows: submit (never landed)"])
+        self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-order-rows: escalated UNLANDED ORPHAN"])
+        det = self.r.worktree("repo-wt-determinism", base="origin/main", branch="determinism")
+        self.r.write("det.txt", "deterministic\n", at=det)
+        blocker = self.r.commit("determinism fix", at=det)
+        rc, out = self.run_tool("park", wt, "--until-landed", blocker, "--reason", "blocked on the determinism fix")
+        self.assertEqual(rc, 0, out)
+        A.process_cwds = lambda: {4242: det}  # the blocker's own author is at work
+        self.assertEqual([x for x in A.orphan_duty(self.r.path) if "order-rows" in x], [])
+        sh(det, "git", "push", "-q", "origin", "HEAD:main")  # the blocker lands
+        sh(self.r.path, "git", "fetch", "-q", "origin")
+        did = A.orphan_duty(self.r.path)
+        self.assertIn(f"parked repo-wt-order-rows: released (its blocker {blocker[:11]} is on main); the orphan rules "
+                      "apply again", did)
+        self.assertIn("orphan repo-wt-order-rows: submit (never landed)", did, "self-recovering: it gets landed")
+        self.assertEqual(self.relands, [wt, wt])
+        self.assertIsNone(A.parked_mark(wt))
+        self.assertTrue([e for e in self.inbox("PARKED") if e["verdict"].startswith("UNPARKED ")])
+
+    def test_parked_until_a_date_and_the_weekly_digest_of_old_parks(self):
+        wt, _sha = self.worktree_commit("repo-wt-flip-stage5", "stage 5")
+        later, _s = self.worktree_commit("repo-wt-later", "later")
+        rc, out = self.run_tool("park", wt, "--owner-decision", "--reason", "kept for reference")
+        self.assertEqual(rc, 0, out)
+        rc, out = self.run_tool("park", later, "--until", "2026-01-01", "--reason", "after new year")
+        self.assertEqual(rc, 0, out)
+        rc, out = self.run_tool("park", later, "--reason", "no condition")
+        self.assertEqual(rc, 2, out)
+        t = time.time()
+        did = A.park_duty(self.r.path, now_=t)
+        self.assertEqual(did, ["parked repo-wt-later: released (its date 2026-01-01 passed); the orphan rules apply again"])
+        self.assertEqual(A.park_duty(self.r.path, now_=t + 13 * 86400), [], "younger than 14 days: no digest")
+        [line] = A.park_duty(self.r.path, now_=t + 15 * 86400)
+        self.assertTrue(line.startswith("PARKED DIGEST: repo-wt-flip-stage5 (15 d, until the owner decides: kept for "
+                                        "reference)"), line)
+        self.assertEqual(A.park_duty(self.r.path, now_=t + 16 * 86400), [], "one a week")
+        self.assertEqual(len(A.park_duty(self.r.path, now_=t + 22.5 * 86400)), 1)
+        self.assertEqual(len([e for e in self.inbox("PARKED") if e["verdict"].startswith("PARKED DIGEST")]), 2)
+        self.assertNotIn("PARKED", A.WAIT_KINDS_DEFAULT.split(","), "a digest wakes nobody")
+        self.assertEqual(A.open_conditions(), [], "never an escalation")
+
+    def session(self, wt, minutes_ago=1, cmd=None):
+        d = os.path.join(os.environ["AGENTCTL_CLAUDE_PROJECTS"], "-Users-x-elsewhere")
+        os.makedirs(d, exist_ok=True)
+        at = A.dt.datetime.fromtimestamp(time.time() - minutes_ago * 60, A.dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        lines = [{"type": "user", "timestamp": at, "message": {"content": "go"}},
+                 {"type": "assistant", "timestamp": at, "message": {"content": [
+                     {"type": "tool_use", "name": "Bash", "input": {"command": cmd or f"git -C {wt} rebase origin/main"}}]}}]
+        p = os.path.join(d, "abcdef123456789.jsonl")
+        with open(p, "w") as f:
+            f.write("\n".join(json.dumps(x) for x in lines) + "\n")
+        return p
+
+    def test_a_live_session_working_in_the_worktree_by_path_owns_it(self):
+        """imdbslip: its agent's session ran from another directory, so no process had its cwd there."""
+        wt, _sha = self.worktree_commit("repo-wt-imdbslip", "imdb slip")
+        self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-imdbslip: submit (never landed)"])
+        self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-imdbslip: escalated UNLANDED ORPHAN"])
+        self.session(wt)
+        self.assertEqual(A.session_worktrees([wt]), {os.path.realpath(wt): "session abcdef123456"})
+        self.assertEqual(A.session_worktrees([wt + "-2"]), {}, "a sibling's name is no match")
+        self.assertEqual(len(A.recovery_tick(force=True)), 1)  # the escalation clears: a live session works in it
+        self.assertEqual(A.open_conditions(), [])
+        self.assertEqual(A.orphan_candidates(self.r.path), [])
+        self.session(wt, minutes_ago=45)  # it stopped working there: ownership lapses with the activity
+        self.assertEqual(A.session_worktrees([wt]), {})
+        self.assertEqual(len(A.orphan_candidates(self.r.path)), 1)
+
+    def test_an_infra_failed_submit_is_retried_when_the_store_answers_and_never_escalated(self):
+        """flip-stage5: `crashed: StoreUnavailable` in a tunnel outage was its final verdict, escalated for good."""
+        wt, _sha = self.worktree_commit("repo-wt-stage5", "stage 5")
+        saved = A.ORPHAN_INFRA_BACKOFF, A.store_answers
+        self.addCleanup(lambda: setattr(A, "ORPHAN_INFRA_BACKOFF", saved[0]) or setattr(A, "store_answers", saved[1]))
+        A.ORPHAN_INFRA_BACKOFF = (0,)
+        self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-stage5: submit (never landed)"])
+        crash = "crashed: StoreUnavailable: POST /v1/store/items: <urlopen error [Errno 61] Connection refused>"
+        A.inbox_write("land", crash, [], [], 1, cwd=wt, reply=True)
+        A.store_answers = lambda store=None: False
+        did = A.orphan_duty(self.r.path)
+        self.assertEqual(did, [f"orphan repo-wt-stage5: its last try failed on infra ({crash[:120]}); retried when the "
+                               "store answers"])
+        self.assertEqual(A.orphan_duty(self.r.path), [], "said once")
+        self.assertEqual(A.open_conditions(), [])
+        A.store_answers = lambda store=None: True  # the store is back
+        self.assertEqual(A.orphan_duty(self.r.path), [f"orphan repo-wt-stage5: submit again (its last try failed on "
+                                                      f"infra: {crash[:120]})"])
+        self.assertEqual(self.relands, [wt, wt])
+        self.assertEqual(A.open_conditions(), [], "never a final 'crashed' orphan")
+        self.assertTrue(A.orphan_infra("NOT LANDED: its fetch of main failed"))
+        self.assertFalse(A.orphan_infra("NOT LANDED: the pre-push checks failed (on ci-runner)"))
+
+    def test_a_pre_push_rejection_gets_one_fixer_then_a_person_and_none_when_parked(self):
+        wt, _sha = self.worktree_commit("repo-wt-wfnames", "workflow names")
+        parked, _s = self.worktree_commit("repo-wt-parked", "parked")
+        self.run_tool("park", parked, "--owner-decision", "--reason", "deciding")
+        fixers = []
+        saved = A.orphan_dispatch
+        self.addCleanup(lambda: setattr(A, "orphan_dispatch", saved))
+        A.orphan_dispatch = lambda repo, w, name, verdict: fixers.append((w, verdict)) or (True, "fixer pid 1")
+        self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-wfnames: submit (never landed)"])
+        rej = "NOT LANDED: the pre-push checks failed (on ci-runner); the change abc stays in the worktree"
+        A.inbox_write("land", rej, [], [], 1, cwd=wt)
+        A.inbox_write("land", rej, [], [], 1, cwd=parked)
+        did = A.orphan_duty(self.r.path)
+        self.assertEqual(did, [f"orphan repo-wt-wfnames: fixer dispatched ({rej[:120]}): fixer pid 1"])
+        self.assertEqual(fixers, [(wt, rej)])
+        self.assertEqual(A.open_conditions(), [], "a fixer, not an escalation")
+        self.r.write("fix2.txt", "the fixer's try\n", at=wt)  # the fixer rebased and committed: a new change key
+        self.r.commit("wfnames: the fixer's try", at=wt)
+        self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-wfnames: submit (NOT LANDED: the pre-push checks "
+                                                      "failed (on ci-runner); the change abc stays in the worktree)"])
+        A.inbox_write("land", rej, [], [], 1, cwd=wt)
+        self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-wfnames: escalated UNLANDED ORPHAN"])
+        self.assertEqual(len(fixers), 1, "one fixer per worktree, whatever its rebases do")
+        self.assertEqual(A.orphan_duty(self.r.path), [])
 
     def test_the_change_key_survives_a_rebase(self):
         wt, _sha = self.worktree_commit("repo-wt-x", "x")

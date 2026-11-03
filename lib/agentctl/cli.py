@@ -323,6 +323,20 @@ def main(argv=None):
     sup.add_argument("--by", help="the successor: its worktree (path or name beside this one) or its change id")
     sup.add_argument("--undo", action="store_true", help="drop the mark")
     sup.add_argument("--all", action="store_true", help="list: the closed and lapsed marks too")
+    pk = sub.add_parser("park", help="PARK a worktree that is deliberately not landed: no orphan escalation; it "
+                        "re-surfaces when its condition is met (no worktree: list the parked)",
+                        description="A worktree whose commits are not on main for a reason (a design the owner is "
+                        "deciding on, a change blocked on another one) is PARKED: maintain never submits, fixes or "
+                        "escalates it as an orphan, `agentctl status` shows it under `parked: N`, and once its condition "
+                        "is met (the blocking change landed, the date passed) it is released and the orphan rules apply "
+                        "again (it gets its one submit). Parked longer than 14 days: one weekly digest line.")
+    pk.add_argument("worktree", nargs="?", help="the worktree (default: list the parked)")
+    pk.add_argument("--reason", help="why it is parked (shown in status and the digest)")
+    pk.add_argument("--until-landed", metavar="CHANGE|COMMIT", help="until this change id (or a unique part) or commit is on main")
+    pk.add_argument("--until", metavar="DATE", help="until this date (YYYY-MM-DD or ISO-8601)")
+    pk.add_argument("--owner-decision", action="store_true", help="until a person unparks it")
+    upk = sub.add_parser("unpark", help="release a parked worktree: the orphan rules apply again")
+    upk.add_argument("worktree")
     rp_ = sub.add_parser("reap", help="the reap alone: orphans --kill --safe (stale JVMs included); --dry-run lists")
     rp_.add_argument("--dry-run", action="store_true")
     cf = sub.add_parser("config", help="the knobs: what applies and from where (default), `defaults` (a complete "
@@ -332,6 +346,6 @@ def main(argv=None):
     cf.add_argument("--write", action="store_true", help="doc: regenerate AGENTCTL.md's config reference")
     a = ap.parse_args(argv)
     handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": cmd_red, "decide": cmd_decide, "config": cmd_config, "issue": cmd_issue, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "github-app": cmd_github_app, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env}[a.cmd]
+               "red": cmd_red, "decide": cmd_decide, "config": cmd_config, "issue": cmd_issue, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "github-app": cmd_github_app, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "park": cmd_park, "unpark": cmd_unpark, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)

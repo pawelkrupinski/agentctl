@@ -471,12 +471,81 @@ def hashlib_sha1(text):
     return hashlib.sha1(text.encode()).hexdigest()
 
 
-def last_land_verdict(wt):
-    """The newest final land verdict in the inbox for this worktree, or None."""
+def last_land_entry(wt):
+    """The newest final land entry in the inbox for this worktree, or None."""
     rw = os.path.realpath(wt)
     es = [e for e in inbox_entries() if e.get("final", True) and e.get("command") in ("land", "waiting")
           and os.path.realpath(str(e.get("cwd") or "")) == rw]
-    return str(es[-1].get("verdict") or "") if es else None
+    return es[-1] if es else None
+
+
+def last_land_verdict(wt):
+    """The newest final land verdict in the inbox for this worktree, or None."""
+    e = last_land_entry(wt)
+    return str(e.get("verdict") or "") if e else None
+
+
+# AN INFRA FAILURE IS NO VERDICT ON AN ORPHAN (2026-11-02: movies-wt-flip-stage5's land `crashed: StoreUnavailable: POST
+# /v1/store/items: ... Connection refused` during a tunnel outage, and that crash was its final word: UNLANDED ORPHAN
+# "after a submit (crashed: StoreUnavailable ...)" for good). A verdict that says the store, the tunnel, a fetch or the
+# network failed -- not the change -- never escalates: the orphan is submitted again once the store answers, the waits
+# between tries backing off (ORPHAN_INFRA_BACKOFF), however many it takes.
+ORPHAN_INFRA = re.compile(r"crashed: (StoreUnavailable|StoreAuthFailed|URLError|ConnectionError|ConnectionRefusedError|"
+                          r"TimeoutError|RemoteDisconnected)\b|\bStoreUnavailable\b|store (did not answer|unreachable)|"
+                          r"its fetch of main failed|could not fetch|\btunnel\b|^NETWORK:", re.I)
+ORPHAN_INFRA_BACKOFF = (900, 1800, 3600, 7200, 21600)
+# A REAL FAILURE GETS ONE FIXER (the owner, 2026-11-03: movies-wfnames and -order-rows, pre-push NOT LANDED, escalated
+# again after every rebase): an orphan whose submit was rejected by its checks (or whose rebase conflicts) and that
+# nobody owns gets ONE fixer in its own worktree (the red-fixer pattern: a background Claude session under a lease of its
+# own, `orphan · <worktree>` in `claude agents`), once per worktree -- whatever its later rebases do to its commits.
+# Only when that fixer ended without landing it does UNLANDED ORPHAN go to a person. A parked worktree gets none.
+ORPHAN_REAL_FAILURE = re.compile(r"^NOT LANDED: (the pre-push checks failed|rebase onto \S+ conflicts)")
+ORPHAN_FIXERS_MAX = 2  # orphan fixers alive at once ($AGENTCTL_ORPHAN_FIXERS); one dispatched a pass
+
+
+def orphan_infra(verdict):
+    v = str(verdict or "")
+    return bool(ORPHAN_INFRA.search(v) or NETWORK_CHECK_FAILURE.search(v)) and not ORPHAN_REAL_FAILURE.search(v)
+
+
+def store_answers(store=None):
+    """True when the store answers now (an infra-failed orphan's retry waits for it)."""
+    try:
+        (store or Store()).item("change", "store-answers-probe")
+        return True
+    except (Exception, SystemExit):
+        return False
+
+
+def orphan_fixers_path():
+    return recovery_dir("orphan-fixers.json")
+
+
+def orphan_fixers_alive():
+    return [r for r in fixer_records() if r.get("orphan") and r.get("alive")]
+
+
+def orphan_dispatch(repo, wt, name, verdict):
+    """A background fixer IN the orphan's worktree (its author's), told the last verdict. (ok, message)."""
+    num = f"orphan-{name}"
+    d = reds_dir(num)
+    os.makedirs(d, exist_ok=True)
+    k = 1 + len(glob.glob(os.path.join(glob.escape(d), "fixer*.json")))
+    rec_path = os.path.join(d, "fixer.json" if k == 1 else f"fixer-{k}.json")
+    rec = {"sig": None, "sigs": [], "jobs": ["land"], "run": num, "run_id": None, "workflow": "Unlanded change",
+           "job": "land", "kind": "test", "line": (verdict or "")[:400], "gate": False, "worktree": wt, "started": ts(),
+           "why": "orphaned change, author gone, its checks rejected it", "log": os.path.join(d, f"claude-{k}.log"),
+           "names": [num], "orphan": True}
+    write_json(rec_path, rec)
+    with open(os.path.join(d, "fixer.log"), "a") as logf:
+        p = spawn_detached([sys.executable, TOOL_PATH, "red", "fixer", "--repo", repo, "--record", rec_path],
+                           stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=wt,
+                           env=fixer_env(slug(repo), num))
+    rec.update(pid=p.pid, process_start=process_start(p.pid))
+    write_json(rec_path, rec)
+    inbox_write("maintain", f"ORPHAN FIXER DISPATCHED: {wt.replace(HOME, '~')} -> fixer session 'orphan · {name}' "
+                            f"(`claude agents`): {str(verdict or '')[:200]}", [], [], 0, cwd=wt)
+    return True, f"fixer pid {p.pid} in {wt.replace(HOME, '~')}"
 
 
 def live_lease_worktrees():
@@ -503,6 +572,10 @@ def orphan_candidates(repo, now_=None, dead=None):
     except (Exception, SystemExit):
         landers = set()
     live = live_lease_worktrees()
+    try:
+        sessions = session_worktrees([w.get("worktree") for w in worktrees(repo)], t)
+    except (Exception, SystemExit):
+        sessions = {}
     records = blame_records()
     try:  # a change in the land queue (queued, checking, waiting) is not orphaned
         d, _c, _w = waiting_state(repo)
@@ -520,6 +593,10 @@ def orphan_candidates(repo, now_=None, dead=None):
         if rp in landers or rp in live or any(c == rp or c.startswith(rp + "/") for c in cwds):
             continue
         if superseded_mark(rp):  # its work went into another change (superseded_duty closes it when that lands)
+            continue
+        if parked_mark(rp):  # parked for a reason (park_duty re-surfaces it when its condition is met)
+            continue
+        if rp in sessions:  # a live Claude session works in it: it has an owner
             continue
         act = gitdir_activity(repo, p) or 0
         if t - act < env_num("AGENTCTL_ORPHAN_IDLE", ORPHAN_IDLE):
@@ -553,6 +630,12 @@ def probe_orphan_landed(a):
         return True, f"never landed: {dead}"
     if rp in live_lease_worktrees():
         return True, "a live claim works in it"
+    park = parked_mark(rp)
+    if park:
+        return True, f"parked: {park['reason']}"
+    owner = session_worktrees([rp]).get(rp)
+    if owner:
+        return True, f"a live session works in it ({owner})"
     cover = orphan_covered_by(wt, worktree_change_items(wt))  # orphan_duty's rule (a): an open change carries it
     if cover:
         return True, f"covered by {cover}"
@@ -772,6 +855,272 @@ def cmd_supersede(a):
     return 0
 
 
+# OWNERSHIP FOLLOWS ACTIVITY (the owner, 2026-11-03: movies-wt-unmatched-imdbslip escalated UNLANDED ORPHAN four times
+# while an agent was landing it -- the agent's Claude session runs from another directory and works in the worktree by
+# absolute path, so no process had its cwd there). A Claude session whose transcript was written within OWNER_ACTIVE and
+# whose recent tool calls name a path in the worktree (or whose own project directory is the worktree's) is its owner:
+# no orphan action, and an open UNLANDED ORPHAN clears ("a live session works in it"). Ownership lapses with the activity.
+OWNER_ACTIVE = 30 * 60
+OWNER_TAIL = 256 << 10
+
+
+def session_transcripts(t=None, active=None):
+    """[(path, mtime)] of the Claude transcripts (sessions and their subagents) written within `active` s."""
+    t = time.time() if t is None else t
+    active = env_num("AGENTCTL_OWNER_ACTIVE", OWNER_ACTIVE) if active is None else active
+    root = claude_projects_root()
+    out = []
+    for g in (os.path.join(glob.escape(root), "*", "*.jsonl"), os.path.join(glob.escape(root), "*", "*", "subagents", "*.jsonl")):
+        for p in glob.glob(g):
+            try:
+                m = os.stat(p).st_mtime
+            except OSError:
+                continue
+            if t - m <= active:
+                out.append((p, m))
+    return out
+
+
+def session_worktrees(wts, t=None, active=None):
+    """{realpath of a worktree of wts: the session that works in it} -- see OWNERSHIP FOLLOWS ACTIVITY."""
+    t = time.time() if t is None else t
+    active = env_num("AGENTCTL_OWNER_ACTIVE", OWNER_ACTIVE) if active is None else active
+    want = {os.path.realpath(w): re.compile(re.escape(os.path.realpath(w)) + r"(?![\w.-])")
+            for w in wts if isinstance(w, str) and w}
+    if not want:
+        return {}
+    out = {}
+    for path, _m in session_transcripts(t, active):
+        sid = os.path.basename(path)[:-len(".jsonl")]
+        proj = os.path.basename(os.path.dirname(path) if "subagents" not in path else
+                                os.path.dirname(os.path.dirname(os.path.dirname(path))))
+        for rp in want:  # its own project directory: the session runs in the worktree
+            if proj == live_slug(rp) and rp not in out:
+                out[rp] = f"session {sid[:12]}"
+        try:
+            data, _size = tail_bytes(path, OWNER_TAIL)
+        except (OSError, TypeError):
+            continue
+        for line in data.decode("utf-8", "replace").splitlines()[1:]:
+            if '"tool_use"' not in line:
+                continue
+            try:
+                rec = json.loads(line)
+                at = parse_time(rec["timestamp"]).timestamp()
+            except (ValueError, KeyError, TypeError, AttributeError):
+                continue
+            if rec.get("type") != "assistant" or t - at > active:
+                continue
+            for c in (rec.get("message") or {}).get("content") or []:
+                if not isinstance(c, dict) or c.get("type") != "tool_use":
+                    continue
+                text = json.dumps(c.get("input"))
+                for rp, rx in want.items():
+                    if rp not in out and rx.search(text):
+                        out[rp] = f"session {sid[:12]}"
+    return out
+
+
+# PARKED (the owner, 2026-11-03: "fix root cause and prevent structurally" -- movies-wt-bare-borrow (a design branch the
+# owner is still deciding on), -flip-stage5 (an unproven design kept for reference), -order-rows (blocked on another
+# change landing first) escalated UNLANDED ORPHAN over and over: an orphan was "author gone + commits not on main", with
+# no way to say "this work is parked for a reason"). `agentctl park <worktree> --reason R` with one condition:
+#   --until-landed <change id | commit>   re-surfaces once that change LANDED (or its re-submission did) or the commit
+#                                        is on main by content;
+#   --until <date>                        re-surfaces at that time;
+#   --owner-decision                      only `agentctl unpark` (a person) ends it.
+# A parked worktree gets no orphan action and no escalation (an open UNLANDED ORPHAN clears: "parked: R"); `agentctl
+# status` shows `parked: N` with the reasons. Each maintain pass reads every condition again (self-recovering): met, the
+# mark is RELEASED and the orphan rules apply afresh (its orphan records dropped, so it gets its one submit -- it lands).
+# A parked worktree older than PARK_DIGEST_DAYS is named in ONE weekly digest line (an inbox entry that wakes nobody).
+PARK_DIGEST_DAYS = 14
+PARK_DIGEST_EVERY = 7 * 86400
+
+
+def parked_path():
+    return recovery_dir("parked.json")
+
+
+def parked_marks():
+    """{realpath of the parked worktree: its mark} (state: parked | released | unparked)."""
+    return read_record(parked_path()) or {}
+
+
+def parked_mark(wt):
+    m = parked_marks().get(os.path.realpath(wt))
+    return m if m and m.get("state") == "parked" else None
+
+
+def park_until_text(m):
+    u = m.get("until") or {}
+    if u.get("kind") == "landed":
+        return f"until {u.get('change') or ''}{' / ' if u.get('change') and u.get('commit') else ''}{(u.get('commit') or '')[:11]} lands"
+    if u.get("kind") == "date":
+        return f"until {u.get('at')}"
+    return "until the owner decides"
+
+
+def park_release_why(m, repo, t=None, store=None):
+    """Why mark m's condition is met now, else None (unread: None -- the mark stands)."""
+    t = time.time() if t is None else t
+    u = m.get("until") or {}
+    if u.get("kind") == "date":
+        return f"its date {u['at']} passed" if t >= float(u.get("epoch") or 0) else None
+    if u.get("kind") != "landed":
+        return None
+    if u.get("change"):
+        try:
+            end = change_chain_end(store or Store(), u["change"])
+        except (Exception, SystemExit):
+            end = None
+        if end and end["state"] == "landed":
+            return f"its blocker {end['id']} landed"
+    if u.get("commit"):
+        done, via = change_landed(repo, u["commit"])
+        if done:
+            return f"its blocker {u['commit'][:11]} is on main" + (f" ({via[:10]})" if via and via != u["commit"] else "")
+    return None
+
+
+def drop_orphan_records(wt):
+    """Forget worktree wt's orphan records: the orphan rules start afresh for it (its one submit)."""
+    path = recovery_dir("orphans.json")
+    st = read_record(path) or {}
+    rw = os.path.realpath(wt)
+    keep = {k: v for k, v in st.items() if os.path.realpath(str((v or {}).get("worktree") or "")) != rw}
+    if len(keep) != len(st):
+        write_json(path, keep)
+
+
+def park_duty(repo, dry_run=False, now_=None):
+    """One maintain pass over the parks: a met condition releases its mark; the weekly digest of the old ones."""
+    t = time.time() if now_ is None else now_
+    marks = parked_marks()
+    did, changed, old = [], False, []
+    for wt, m in sorted(marks.items()):
+        if m.get("state") != "parked":
+            continue
+        name = os.path.basename(wt)
+        if not os.path.isdir(wt):
+            if not dry_run:
+                m.update(state="released", why="its worktree is gone", decided=ts())
+                changed = True
+            did.append(f"parked {name}: released (its worktree is gone)")
+            continue
+        why = park_release_why(m, m.get("repo") or repo, t)
+        if why:
+            if not dry_run:
+                m.update(state="released", why=why, decided=ts())
+                changed = True
+                drop_orphan_records(wt)
+                inbox_write("maintain", f"UNPARKED {wt.replace(HOME, '~')}: {why}; the orphan rules apply again "
+                                        f"(parked: {m['reason']})", [], [], 0, cwd=wt)
+            did.append(f"parked {name}: released ({why}); the orphan rules apply again")
+            continue
+        if t - float(m.get("at") or t) >= env_num("AGENTCTL_PARK_DIGEST_DAYS", PARK_DIGEST_DAYS) * 86400:
+            old.append((wt, m))
+    last = max([float(m.get("digest_at") or 0) for _w, m in old] or [0])
+    if old and t - last >= PARK_DIGEST_EVERY:
+        line = "PARKED DIGEST: " + "; ".join(
+            f"{os.path.basename(w)} ({int((t - float(m['at'])) // 86400)} d, {park_until_text(m)}: {m['reason']})" for w, m in old)
+        if not dry_run:
+            inbox_write("maintain", line, [], [], 0)
+            for _w, m in old:
+                m["digest_at"] = t
+            changed = True
+        did.append(line)
+    if changed:
+        write_json(parked_path(), marks)
+    return did
+
+
+def parked_lines():
+    """`agentctl status`'s parked section: `parked: N` and one line per parked worktree with its reason."""
+    live = sorted((w, m) for w, m in parked_marks().items() if m.get("state") == "parked")
+    return [f"parked: {len(live)}"] + [f"  {os.path.basename(w)}  {park_until_text(m)}: {m['reason']}" for w, m in live]
+
+
+def resolve_blocker(x, repo, store=None):
+    """{change, commit} of `--until-landed x`: a change id (whole or a unique part; its head the commit), else a commit
+    of repo. Raises ValueError."""
+    st = store or Store()
+    try:
+        items = st.items("change")
+    except (Exception, SystemExit):
+        items = []
+    its = [i for i in items if i["id"] == x] or [i for i in items if x in i["id"]]
+    if len(its) == 1:
+        return {"change": its[0]["id"], "commit": (its[0].get("data") or {}).get("head")}
+    if len(its) > 1:
+        raise ValueError(f"--until-landed {x}: {len(its)} change ids match it")
+    r = git(repo, "rev-parse", "--verify", "-q", f"{x}^{{commit}}", check=False)
+    if r.returncode == 0 and r.stdout.strip():
+        return {"change": None, "commit": r.stdout.strip()}
+    if re.fullmatch(r"\d{8}-\d{6}-[\w.-]+", x):  # a change id the store does not hold (yet): named, read each pass
+        return {"change": x, "commit": None}
+    raise ValueError(f"--until-landed {x}: no change id and no commit of that name")
+
+
+def park_target(path):
+    wt = os.path.realpath(os.path.expanduser(path))
+    top = git(wt, "rev-parse", "--show-toplevel", check=False).stdout.strip() if os.path.isdir(wt) else ""
+    if not top:
+        return None, None
+    common = git(top, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
+    return os.path.realpath(top), (os.path.dirname(common) if common.endswith("/.git") else common)
+
+
+def cmd_park(a):
+    marks = parked_marks()
+    if not a.worktree:
+        for line in parked_lines():
+            print(line)
+        return 0
+    wt, repo = park_target(a.worktree)
+    if not wt:
+        print(f"park: {a.worktree} is no git worktree")
+        return 2
+    conds = [c for c in (a.until_landed, a.until, a.owner_decision or None) if c]
+    if not a.reason or len(conds) != 1:
+        print('usage: agentctl park <worktree> --reason "<why>" (--until-landed <change id|commit> | --until <date> | '
+              "--owner-decision)")
+        return 2
+    if a.until_landed:
+        try:
+            until = {"kind": "landed", **resolve_blocker(a.until_landed, repo)}
+        except ValueError as e:
+            print(f"park: {e}")
+            return 2
+    elif a.until:
+        try:
+            when = dt.datetime.fromisoformat(a.until.replace("Z", "+00:00"))
+        except ValueError:
+            print(f"park: --until {a.until}: not a date (YYYY-MM-DD or an ISO-8601 time)")
+            return 2
+        until = {"kind": "date", "at": a.until, "epoch": when.timestamp()}
+    else:
+        until = {"kind": "owner"}
+    marks[wt] = {"reason": a.reason, "until": until, "at": time.time(), "parked": ts(), "state": "parked", "repo": repo}
+    write_json(parked_path(), marks)
+    print(f"PARKED {wt.replace(HOME, '~')} {park_until_text(marks[wt])}: {a.reason} -- no orphan escalation")
+    return 0
+
+
+def cmd_unpark(a):
+    marks = parked_marks()
+    wt, _repo = park_target(a.worktree)
+    wt = wt or os.path.realpath(os.path.expanduser(a.worktree))
+    m = marks.get(wt)
+    if not m or m.get("state") != "parked":
+        print(f"unpark: {wt.replace(HOME, '~')} is not parked")
+        return 0
+    m.update(state="unparked", decided=ts())
+    write_json(parked_path(), marks)
+    drop_orphan_records(wt)
+    print(f"UNPARKED {wt.replace(HOME, '~')}: the orphan rules apply again")
+    return 0
+
+
 # AN ORPHAN IS SUBMITTED ONLY WHEN NOTHING ELSE CARRIES IT (ISSUE 20261030T165514-e5f431). At 15:50:59Z maintain
 # re-submitted ~/projects/movies-wt-review with no session behind it: its commits were checked only against
 # origin/main, while the open change movies-wt-ci-5 already carried them -- a duplicate in the shared queue. Now, before
@@ -809,7 +1158,7 @@ def orphan_covered_by(wt, items):
 def orphan_escalate(repo, wt, name, commits, key, rec, verdict):
     text = (f"UNLANDED ORPHAN: {wt.replace(HOME, '~')}: {len(commits)} commit(s) not on {remote()}/main, its author "
             f"gone, still not landed after a {rec['actions'][-1]['what']} ({verdict or 'never landed'}) -- land it, "
-            "hand it to an agent, or drop it")
+            "hand it to an agent, park it (`agentctl park <worktree> --reason ...`), or drop it")
     c = open_condition("UNLANDED_ORPHAN", text, run_probe("orphan_landed", {"worktree": wt, "key": key, "repo": repo}),
                        [], key=re.sub(r"[^\w.-]+", "_", f"orphan-{name}"), command="maintain", cwd=wt)
     rec["escalated"] = ts() if c else None
@@ -821,9 +1170,11 @@ def orphan_duty(repo=None, dry_run=False, now_=None):
     repo = repo or movies_repo_path()
     if not os.path.isdir(repo):
         return []
+    did, acted, dead = superseded_duty(repo, dry_run) + park_duty(repo, dry_run, now_), 0, []
     path = recovery_dir("orphans.json")
-    st = read_record(path) or {}
-    did, acted, dead = superseded_duty(repo, dry_run), 0, []
+    st = read_record(path) or {}  # after park_duty: a released park's records are gone (its one submit again)
+    fixers = read_record(orphan_fixers_path()) or {}
+    fixers_changed = fixer_sent = False
     cands = orphan_candidates(repo, now_, dead)
     for wt, why in dead:  # a dead blame revert: never submitted; blame's own worktree removed (only its reverts in it)
         name = os.path.basename(wt)
@@ -863,12 +1214,52 @@ def orphan_duty(repo=None, dry_run=False, now_=None):
             w = reland_worktree(None, {"worktree": wt, "attempt": 1})
             rec["actions"].append({"at": ts(), "what": "submit", "msg": w})
             did.append(f"orphan {name}: {rec['actions'][-1]['what']} ({verdict or 'never landed'})")
-        elif not rec.get("escalated") and time.time() - parse_time(rec["actions"][-1]["at"]).timestamp() \
-                >= env_num("AGENTCTL_ORPHAN_IDLE", ORPHAN_IDLE):  # its action had its time
-            did += orphan_escalate(repo, wt, name, commits, key, rec, verdict)
+        elif not rec.get("escalated"):
+            last_at = parse_time(rec["actions"][-1]["at"]).timestamp()
+            e = last_land_entry(wt)
+            after = str(e.get("verdict") or "") if e and float(e.get("at") or 0) >= last_at - 1 else None
+            msg = str(rec["actions"][-1].get("msg") or "")
+            if msg.startswith("not landed again:"):  # the submit itself was refused: that is its verdict
+                after = msg
+            if after is not None and orphan_infra(after):  # (3) infra, not the change: submitted again, never escalated
+                n = int(rec.get("infra_retries") or 0)
+                wait_s = ORPHAN_INFRA_BACKOFF[min(n, len(ORPHAN_INFRA_BACKOFF) - 1)]
+                if time.time() - last_at < wait_s:
+                    pass
+                elif not store_answers():
+                    if rec.get("infra_said") != after[:120]:
+                        rec["infra_said"] = after[:120]
+                        did.append(f"orphan {name}: its last try failed on infra ({after[:120]}); retried when the "
+                                   "store answers")
+                elif acted < ORPHAN_PER_PASS:
+                    acted += 1
+                    rec["infra_retries"] = n + 1
+                    w = reland_worktree(None, {"worktree": wt, "attempt": n + 2})
+                    rec["actions"].append({"at": ts(), "what": "submit", "msg": w, "infra": after[:200]})
+                    did.append(f"orphan {name}: submit again (its last try failed on infra: {after[:120]})")
+            elif time.time() - last_at >= env_num("AGENTCTL_ORPHAN_IDLE", ORPHAN_IDLE):  # its action had its time
+                rw = os.path.realpath(wt)
+                real = after if after is not None else verdict
+                if real and ORPHAN_REAL_FAILURE.search(real) and rw not in fixers:  # (4) one fixer, then a person
+                    if not fixer_sent and len(orphan_fixers_alive()) < env_num("AGENTCTL_ORPHAN_FIXERS", ORPHAN_FIXERS_MAX):
+                        ok, line = orphan_dispatch(repo, wt, name, real)
+                        rec["actions"].append({"at": ts(), "what": "fixer", "msg": line})
+                        fixers[rw] = {"at": ts(), "key": key, "msg": line, "verdict": real[:300]}
+                        fixers_changed = True
+                        fixer_sent = True
+                        did.append(f"orphan {name}: fixer dispatched ({real[:120]}): {line}")
+                    else:
+                        did.append(f"orphan {name}: a fixer waits for a free slot ({real[:80]})")
+                else:
+                    if rw in fixers and rec["actions"][-1]["what"] != "fixer":
+                        rec["actions"].append({"at": ts(), "what": "fixer (ended unlanded)",
+                                               "msg": fixers[rw].get("msg")})
+                    did += orphan_escalate(repo, wt, name, commits, key, rec, real)
         st[key] = rec
     if not dry_run:
         write_json(path, st)
+        if fixers_changed:
+            write_json(orphan_fixers_path(), fixers)
     return did
 
 

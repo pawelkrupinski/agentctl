@@ -1348,7 +1348,36 @@ agentctl cleanup (DRY RUN); log: /…/scratchpad/agentctl-deleted.log
 
 A worktree with commits not on <remote>/main whose author is gone (no live lease, no process in it, idle) is SUBMITTED
 ONCE by the tick, whatever its last verdict: it becomes a queued change like any other (its checks then decide; a
-rejection is its red's to rescue), and an `UNLANDED ORPHAN` inbox entry names it. Nothing fixes an orphan on its own.
+rejection is its red's to rescue), and an `UNLANDED ORPHAN` inbox entry names it.
+
+- **Ownership follows activity** (2026-11-03, imdbslip): besides a process in it, a land, a live lease or a queue
+  entry, a Claude session whose transcript was written in the last 30 min (`$AGENTCTL_OWNER_ACTIVE`) and whose recent
+  tool calls name a path in the worktree (or whose project dir is the worktree) owns it: no orphan action, and an open
+  `UNLANDED ORPHAN` clears (`a live session works in it`). It lapses when the activity stops.
+- **Infra is no verdict** (2026-11-02, flip-stage5's `crashed: StoreUnavailable`): a last try that failed on the store,
+  the tunnel, a fetch or the network never escalates; it is submitted again once the store answers (backing off 15 min
+  → 6 h), however many tries it takes.
+- **A real failure gets ONE fixer**: a submit rejected by the pre-push checks (or a rebase conflict), nobody owning
+  the worktree, gets one background fixer in it (`orphan · <worktree>` in `claude agents`; at most 2 alive, one
+  dispatched a pass), once per worktree whatever later rebases do; only after it ended unlanded does `UNLANDED ORPHAN`
+  go to a person.
+
+**Parked work** (2026-11-03: design branches and blocked changes escalated over and over). A worktree that is
+deliberately not landed is parked with ONE condition:
+
+```bash
+~/bin/agentctl park ~/projects/movies-wt-x --reason "<why>" --owner-decision          # until a person unparks it
+~/bin/agentctl park ~/projects/movies-wt-x --reason "<why>" --until-landed <change id|commit>
+~/bin/agentctl park ~/projects/movies-wt-x --reason "<why>" --until 2026-11-20
+~/bin/agentctl park                                                                   # list (also in `agentctl status`)
+~/bin/agentctl unpark ~/projects/movies-wt-x
+```
+
+A parked worktree is never submitted, fixed or escalated as an orphan (an open `UNLANDED ORPHAN` clears: `parked:
+<why>`); `agentctl status` shows `parked: N` and the reasons. Each maintain pass re-reads the condition: the blocking
+change LANDED (or its re-submission) or the commit is on main by content, or the date passed → the park is released
+(`UNPARKED` inbox entry), its orphan records dropped, and the orphan rules apply afresh: it gets its one submit. Parked
+longer than 14 days: ONE `PARKED DIGEST:` inbox line a week for all of them (wakes nobody), never an escalation.
 
 **A dead blame revert is no orphan** (2026-11-02, revert-629): a worktree whose commits are a withdrawn or refuted
 blame revert, or that carry `Reverts-Change:` for a change blame marked not the culprit, is never submitted (`orphan
@@ -1561,9 +1590,12 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `movies_repo` | `AGENTCTL_MOVIES_REPO` | - | - |
 | `notifier` | `AGENTCTL_NOTIFIER` | - | - |
 | `notify` | `AGENTCTL_NOTIFY` | - | - |
+| `orphan_fixers` | `AGENTCTL_ORPHAN_FIXERS` | `2` | orphan fixers alive at once ; one dispatched a pass |
 | `orphan_idle` | `AGENTCTL_ORPHAN_IDLE` | `7200` | its action had its time |
 | `owners_dir` | `AGENTCTL_OWNERS_DIR` | - | - |
+| `owner_active` | `AGENTCTL_OWNER_ACTIVE` | `1800` | - |
 | `owner_idle` | `AGENTCTL_OWNER_IDLE` | `21600` | no red held this long: the owner ends |
+| `park_digest_days` | `AGENTCTL_PARK_DIGEST_DAYS` | `14` | - |
 | `pinned_recording` | `AGENTCTL_PINNED_RECORDING` | - | - |
 | `push_stall_secs` | `AGENTCTL_PUSH_STALL_SECS` | `180` | - |
 | `push_wall_min` | `AGENTCTL_PUSH_WALL_MIN` | `45` | - |

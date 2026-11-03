@@ -218,6 +218,10 @@ def render_status(h, t):
         out.append(f"{key}: {len(rows)}")
         out += [f"  {r['id']}  {r['state']}  deadline in {int((r['deadline'] - t) // 60)} min"
                 + (f"  (level {r['level']})" if r.get("level") else "") for r in rows]
+    try:  # parked worktrees: shown once here, never escalated (watchdog.py, PARKED)
+        out += parked_lines()
+    except (Exception, SystemExit) as e:
+        out.append(f"parked: unread ({str(e)[:120]})")
     tick = h["tick_at"]
     out.append(f"tick: {int(t - tick)} s ago, code {code_text(h)}" if tick else "tick: never")
     out.append(h["pins"])
