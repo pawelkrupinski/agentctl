@@ -19,6 +19,7 @@ class LeaseLost(RuntimeError):
 # a dead wrapper's leases on a laptop that is awake lapse as before. Bounded: CONTACT_PAUSE_MAX, then they lapse.
 CONTACT_GAP = 120               # s of a machine's silence before its leases' clocks pause ($AGENTCTL_CONTACT_GAP)
 CONTACT_PAUSE_MAX = 12 * 3600   # s a silent machine's leases are paused at most ($AGENTCTL_CONTACT_PAUSE_MAX)
+CONTACT_WRITE_EVERY = 10       # s: a machine's contact is written at most this often
 CONTACT_MACHINE = re.compile(r"[a-z][a-z0-9-]{0,31}")
 
 
@@ -98,6 +99,9 @@ class Store:
             return 0
         c = self.db()
         try:
+            r = c.execute("SELECT v FROM meta WHERE k=?", (f"contact:{machine}",)).fetchone()
+            if r and 0 <= self.clock() - float(r["v"]) < CONTACT_WRITE_EVERY:  # heard lately: no write per RPC
+                return 0
             c.execute("BEGIN IMMEDIATE")
             now_ = self.clock()
             p, since = self._pause_of(c, machine, now_)
