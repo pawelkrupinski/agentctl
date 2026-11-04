@@ -44,7 +44,10 @@ DRIFT_LINE = re.compile(r"\b(?:divergence|flip)\(s\)")
 # `  N listing(s)  flip: <reason>` and its fresh rows `      <venue> | <title>: <film> [<take>] -> ... [seed S]`, <film>
 # `none` or `tmdb:N` (#629: `Keswick Alhambra | Scottish Ballet: These Violent Delights: none [1 boot: ...`).
 FLIP_HEADER = re.compile(r"^## ([a-z]{2,}(?:-[a-z]+)*)\b(.*)$")
-FLIP_ROW = re.compile(r"^\s{4,}(?!FIXED\b|KNOWN:)(\S.*? \| .+)$")
+# The differential gate (movies scripts/ci/drift_diff.py, 2026-11-04) prints rows that are never the red too: a flip the
+# base shows as well (`pre-existing (backlog): ...`), one the head no longer has (`removed: ...`), a TEMPORARY-listed one
+# (`allow-listed (...): ...`), and the nightly explorer's finds (`explored: ...`, scripts/ci/identity-drift-check.sh).
+FLIP_ROW = re.compile(r"^\s{4,}(?!FIXED\b|KNOWN:|pre-existing\b|removed:|allow-listed\b|explored:)(\S.*? \| .+)$")
 FLIP_TAKES = re.compile(r": (?=(?:none|[a-z]+:\S+) \[|[a-z]+:\S|\[)")
 FLIP_KEY_MAX = 5  # listings named in a key; more are a stable hash of the whole set
 

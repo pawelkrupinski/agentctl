@@ -29,7 +29,14 @@ def job_log(listings, seed):
            f"2026-11-01T10:00:01.0000000Z ## uk flips: {len(listings) + 1} flip(s) ({len(listings) + 1} listings), 0 allow-listed, 1 known",
            "2026-11-01T10:00:01.5000000Z ## uk known flips: 1 known flip(s) remaining (1 listings in identity-flips-baseline.tsv), 1 fixed",
            "2026-11-01T10:00:01.6000000Z       FIXED, remove its row: Kino Fixed | Gone [seed 3] — no flip in this run",
-           "2026-11-01T10:00:01.7000000Z       KNOWN: Kino Known | Baselined: tmdb:1 [2 fill: OwnMatch: x] -> none [3 boot: y] [seed 1]"]
+           "2026-11-01T10:00:01.7000000Z       KNOWN: Kino Known | Baselined: tmdb:1 [2 fill: OwnMatch: x] -> none [3 boot: y] [seed 1]",
+           # the differential gate's rows that are never the red (movies scripts/ci/drift_diff.py, 2026-11-04)
+           "2026-11-01T10:00:01.8000000Z ## uk flips the change adds (seed 1, head vs base abc): 0 flip(s), 1 allow-listed, 1 pre-existing, 1 removed",
+           "2026-11-01T10:00:01.8100000Z       allow-listed (identity-flips-allow.tsv): Kino Listed | Temporary [seed 1]",
+           "2026-11-01T10:00:01.8200000Z       pre-existing (backlog): Kino Old | Old Flip [seed 1] -- in the base too, not failed; backlog: owner x, first seen 2026-11-02",
+           "2026-11-01T10:00:01.8300000Z       removed: Kino Gone | Fixed Flip [seed 1] -- the base flips it, the head does not",
+           "2026-11-01T10:00:01.8400000Z       explored: Kino Far | Explored [seed 311] -- not in the backlog",
+           "2026-11-01T10:00:01.9000000Z ## uk flips: 2 flip(s) (2 listings), 0 allow-listed, 0 known"]
     if listings:
         out.append("2026-11-01T10:00:02.0000000Z   %d listing(s)  flip: back to a film it left" % len(listings))
     for l in listings:
