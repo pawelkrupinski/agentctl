@@ -293,6 +293,8 @@ def inv_wb():
                    ": commit them in a worktree of ~/bin")
 
 
+WATCHDOG_MISSES = 2  # consecutive passes a self-healing invariant (W5, WM, W7) fails before its condition opens
+
 INVARIANTS = {"WB": inv_wb, "W1": inv_w1, "W2": inv_w2, "W5": inv_w5, "W6": inv_w6, "W7": inv_w7, "W8": inv_w8, "WM": inv_wm,
               "WN": inv_wn}
 
@@ -307,6 +309,7 @@ def cmd_watchdog(a):
     write_beat("watchdog")
     st = watchdog_state()
     rc = 0
+    misses = dict(st.get("misses") or {})
     for wid in INVARIANTS:
         r = run_probe("invariant", {"id": wid})
         key = f"invariant-{wid}"
@@ -314,9 +317,15 @@ def cmd_watchdog(a):
         print(f"{wid}: {'ok' if r.ok else 'cannot tell' if r.ok is None else 'VIOLATED'} -- {r.detail}")
         if r.ok is False:
             rc = 1
-            if not cond:
+            misses[wid] = int(misses.get(wid) or 0) + 1
+            # HYSTERESIS (THE ALERT MODEL, 2026-11-04: W5/WM/W7 fired 31 times in a week on a single missed beat, each
+            # cleared by itself): a self-healing invariant opens its condition only at WATCHDOG_MISSES consecutive
+            # misses, and is told to the owner only once open past its bound (alerts.py: the notifier, ESCALATED)
+            heals = wid in ALERT_SELF_HEALING_INVARIANTS
+            if not cond and (not heals or misses[wid] >= env_num("AGENTCTL_WATCHDOG_MISSES", WATCHDOG_MISSES)):
                 open_condition("INVARIANT", f"INVARIANT {wid} violated: {r.detail}", r, [], key=key, command="watchdog")
-                notify(f"agentctl watchdog: {wid}", r.detail[:220])
+                if not heals:
+                    notify(f"agentctl watchdog: {wid}", r.detail[:220])
             # a kickstart costs the processor its token (handed over again by the next interactive agentctl): only for a
             # processor silent past 3 x W5_MAX, at most every WATCHDOG_KICK_GAP
             if wid == "W5" and (beat_age("processor") or 0) > 3 * env_num("AGENTCTL_W5_MAX", W5_MAX) \
@@ -327,6 +336,9 @@ def cmd_watchdog(a):
                 print(f"W5: kickstarted {SERVICE_LABEL}")
         elif r.ok and cond:
             close_condition(cond, r)
+        if r.ok:
+            misses.pop(wid, None)
+    write_json(state_root("watchdog.json"), {**watchdog_state(), "misses": misses})
     return rc
 
 

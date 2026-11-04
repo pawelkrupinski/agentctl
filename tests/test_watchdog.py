@@ -48,10 +48,12 @@ class WatchdogTest(unittest.TestCase):
         rc, out = self.run_wd()
         self.assertEqual(rc, 1)
         self.assertIn("W5: VIOLATED", out)
-        self.assertEqual([c["key"] for c in A.open_conditions()], ["invariant-W5"])
+        self.assertEqual(A.open_conditions(), [], "hysteresis: one missed beat opens nothing (THE ALERT MODEL)")
         self.assertEqual(len(self.kicks), 1)
         self.run_wd()
+        self.assertEqual([c["key"] for c in A.open_conditions()], ["invariant-W5"], "the second miss in a row opens it")
         self.assertEqual(len(self.kicks), 1)  # rate-limited
+        self.run_wd()
         self.assertEqual(len([e for e in A.inbox_entries() if e.get("kind") == "INVARIANT"]), 1)  # one per spell
         A.write_beat("processor")
         rc, out = self.run_wd()
