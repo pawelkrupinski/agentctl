@@ -11,7 +11,22 @@ cache="${AGENTCTL_STATUSLINE_CACHE:-${HOME}/.cache/agentctl/statusline.txt}"
 lock="${cache%.txt}.lock"
 repo="${AGENTCTL_STATUSLINE_REPO:-${HOME}/projects/movies}"
 mkdir -p "$(dirname "$cache")"
-cat >/dev/null # the session JSON Claude Code sends on stdin; not needed
+# The session JSON Claude Code sends on stdin: the line shows only in a session working in a movies checkout
+# (~/projects/movies and its worktrees ~/projects/movies-*); any other session gets an empty status line.
+# AGENTCTL_STATUSLINE_ALWAYS=1 shows it everywhere; --refresh / --refresh-only (no session) always run.
+case "${1:-}" in
+  --refresh|--refresh-only) ;;
+  *)
+    dir=$(python3 -c 'import json,sys
+try: d=json.load(sys.stdin)
+except Exception: d={}
+print((d.get("workspace") or {}).get("current_dir") or d.get("cwd") or "")' 2>/dev/null)
+    case "${AGENTCTL_STATUSLINE_ALWAYS:-}:$dir/" in
+      1:*|*:"$HOME"/projects/movies/*|*:"$HOME"/projects/movies-*) ;;
+      *) exit 0 ;;
+    esac ;;
+esac
+[ -t 0 ] || cat >/dev/null 2>&1 || true
 
 refresh() {
   local gate inbox esc line
