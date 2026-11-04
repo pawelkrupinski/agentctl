@@ -682,15 +682,192 @@ def _check_entry(repo, d, e, i, own=None):
             requeue_infra(d, e, f"{NETWORK_REASON} ({network_failure(out)})", reason=NETWORK_REASON,
                           detail=out, repo=repo)
             return 0
+        if not ok and CHECK_TIMEOUT.search(out or "") and int(e.get("timeout_retries") or 0) < TIMEOUT_RETRIES:
+            e["timeout_retries"] = int(e.get("timeout_retries") or 0) + 1
+            requeue_infra(d, e, f"its checks ran past their time cap ({where}; retry {e['timeout_retries']} of "
+                                f"{TIMEOUT_RETRIES})", reason="its checks ran past their time cap", detail=out, repo=repo)
+            return 0
+        known_red = None
         if not ok:
-            queue_verdict(d, e, "rejected", f"NOT LANDED: the pre-push checks failed ({where}); the change "
-                          f"{e['head'][:10]} stays in {e['worktree']}", (out or "").splitlines())
-            return 1
+            side, what = judge_failure(repo, d, e, base, out)
+            if side == "head":
+                timed = " (and they ran past their time cap, " \
+                        f"{TIMEOUT_RETRIES + 1} times)" if CHECK_TIMEOUT.search(out or "") else ""
+                queue_verdict(d, e, "rejected", f"NOT LANDED: the pre-push checks failed ({where}){timed}; failing "
+                              f"with this change only: {keys_text(what)}; the change {e['head'][:10]} stays in "
+                              f"{e['worktree']}", (out or "").splitlines())
+                return 1
+            srcs = sorted(set(what.values()))
+            known_red = {"keys": sorted(what), "where": srcs, "base": base}
+            wlog(d, f"{e['id']}: its checks failed only where its base fails too ({keys_text(what)}; {'; '.join(srcs)})"
+                    ": it waits behind that red")
     set_change(d, e, "checked", data={"tip": head, "base": base, "mode": mode, "where": where},
-               event={"text": f"{e['id']}: checked {head[:10]} on {base[:10]} ({where})"},
-               tip=head, checked_base=base, checked_mode=mode, checked_where=where, tree=i, infra_reason=None, infra_same=0)
+               event={"text": f"{e['id']}: checked {head[:10]} on {base[:10]} ({where})"
+                      + (" -- failing only as its base fails" if known_red else "")},
+               tip=head, checked_base=base, checked_mode=mode, checked_where=where, tree=i, infra_reason=None, infra_same=0,
+               known_red=known_red)
     wlog(d, f"{e['id']}: checked {head[:10]} on {base[:10]} ({where})")
     return 0
+
+
+# THE DIFFERENTIAL LANDING CHECK (2026-11-04: two good changes, credited-memo and G1 retention, were NOT LANDED because
+# their checks failed on `uk-mowlem-theatre-purbeck-film-festival-hen-736301b7 lacks answers`, a stale slice failing on
+# main itself; each author diagnosed it, landed again and alerted). The check judged the head absolutely; now, like
+# the convergence gate, relative to its base. A failed check's FAILURE KEYS (the failing tests: a scalatest
+# `- <name> *** FAILED ***`, an sbt `Failed tests:` class) are compared with the base's: main's red gate runs' failed
+# logs (cached per run) and the other queued changes' failures on the same base (the queue's own record: two
+# unrelated changes failing the same test on one main is main's). Every failing job explained by base keys: the change
+# is no culprit -- it joins `waiting` behind that red (lands with the batch at green, or with the red's fix), ONE
+# author note naming the tests. A head-only key, or a failing job with no key to judge by: rejected, naming them.
+# And a run stopped at its 80-minute cap is no verdict on the change (69 of the week's 145 "pre-push checks failed",
+# under ci-runner load 30..90 on 14 cores): re-queued as infra, TIMEOUT_RETRIES times, then rejected as too slow.
+FAIL_TEST = re.compile(r"(?:^|\s)-\s+(.+?)\s+\*\*\* FAILED \*\*\*")
+FAIL_CLASS = re.compile(r"\[error\]\s+([a-z_][\w]*(?:\.[\w]+)*\.[A-Z]\w*)\s*$")
+CHECK_TIMEOUT = re.compile(r"ran past \d+ minutes and were stopped")
+TIMEOUT_RETRIES = 2
+BASE_CORPUS_AGE = 24 * 3600
+
+
+def test_keys(lines):
+    """{key: name} of the failing tests the lines name: the key normalized (numbers, shas out), the name as printed."""
+    out = {}
+    for raw in lines:
+        line = ANSI.sub("", raw).replace("\t", " ").rstrip()
+        m = FAIL_TEST.search(line)
+        if m:
+            out["test " + norm_line(m.group(1))] = m.group(1).strip()
+            continue
+        m = FAIL_CLASS.search(line)
+        if m:
+            out["class " + m.group(1)] = m.group(1)
+    return out
+
+
+def failure_keys(jobs):
+    """({key: name}, unjudged units) of failed jobs' lines ({job: [lines]}). The unit judged is each failed hook check
+    (`pre-push <check> FAILED`, its lines those since the check before: one job runs many checks, and a shellcheck
+    failure must not hide behind a base-red test in the same job), else the job. A unit failing with no test line is
+    unjudged (nothing to compare: its failure counts as the change's)."""
+    keys, unjudged = {}, []
+    for job, lines in (jobs or {}).items():
+        seg, failed, units = [], False, []
+        for raw in lines:
+            m = HOOK_STATUS.search(ANSI.sub("", raw))
+            if m:
+                if m.group(2) == "FAILED":
+                    failed = True
+                    units.append((f"{job}: {m.group(1)}", seg))
+                seg = []
+                continue
+            seg.append(raw)
+        if not failed:
+            units = [(job, lines)]
+        for unit, ls in units:
+            mine = test_keys(ls)
+            keys.update(mine)
+            if not mine:
+                unjudged.append(unit)
+    return keys, sorted(unjudged)
+
+
+def log_jobs(log_text):
+    """{job: [lines]} of `gh run view --log-failed` output (job<TAB>step<TAB>line), timestamps and colours off."""
+    jobs = {}
+    for raw in (log_text or "").splitlines():
+        parts = raw.split("\t", 2)
+        job, line = (parts[0], parts[2]) if len(parts) == 3 else ("?", raw)
+        jobs.setdefault(job, []).append(LOG_TS.sub("", ANSI.sub("", line)).rstrip())
+    return jobs
+
+
+def jobs_of_out(out):
+    """{job: lines} of a check's output: a remote check's `-- <job>` sections, else one job."""
+    jobs, cur = {}, "checks"
+    for line in (out or "").splitlines():
+        if line.startswith("-- "):
+            cur = line[3:].strip() or "?"
+            jobs.setdefault(cur, [])
+            continue
+        jobs.setdefault(cur, []).append(line)
+    if set(jobs) - {"checks"}:  # the run's header line (`... failed: <url>`) is no job
+        jobs.pop("checks", None)
+    return {j: ls for j, ls in jobs.items() if ls or j != "checks"}
+
+
+def head_failure_jobs(repo, e, out):
+    """The head's failed jobs, from the run's whole failed log when the remote run is known (the verdict's output
+    keeps 25 relevant lines a job, without the hook's per-check status: a head-only failure must not hide), else
+    from the output."""
+    run = (e.get("remote") or {}).get("run") or e.get("remote_run")
+    if run:
+        try:
+            return log_jobs(fetch_failed_log(slug(repo), run))
+        except (Exception, SystemExit) as ex:
+            err(f"failed log of run {run} unread ({str(ex)[:120]}): judged from the verdict's lines")
+    return jobs_of_out(out)
+
+
+def run_failure_keys(o_r, run_id):
+    """The failure keys of one finished run of main (cached: a finished run's log never changes)."""
+    cache = reds_dir("runkeys", f"{run_id}.json")
+    rec = read_record(cache)
+    if rec is not None:
+        return set(rec.get("keys") or [])
+    keys = set(test_keys(fetch_failed_log(o_r, run_id).splitlines()))
+    os.makedirs(os.path.dirname(cache), exist_ok=True)
+    write_json(cache, {"run": run_id, "at": ts(), "keys": sorted(keys)})
+    return keys
+
+
+def base_failure_keys(repo, d, e, base):
+    """{key: where} failing on the change's base: main's red gate runs, and other changes' failed checks on this
+    base (a different head) in the last day."""
+    out = {}
+    try:
+        o_r = slug(repo)
+        if o_r in GATING:
+            for name, decided, _newer, _streak in gate_runs(o_r):
+                if decided and decided.get("conclusion") != "success" and decided.get("databaseId"):
+                    try:
+                        for k in run_failure_keys(o_r, decided["databaseId"]):
+                            out.setdefault(k, f"{name} #{decided.get('number') or decided['databaseId']} on main")
+                    except (Exception, SystemExit) as ex:
+                        err(f"{name} run {decided['databaseId']}: failed log unread ({str(ex)[:120]})")
+    except (Exception, SystemExit) as ex:
+        err(f"the gate's runs unread ({str(ex)[:120]}): judged against the queue's own record only")
+    now_ = time.time()
+    for o in waiting_entries(d, open_only=False):
+        f = o.get("failed_on") or {}
+        if o.get("id") == e.get("id") or o.get("head") == e.get("head") or f.get("base") != base:
+            continue
+        if now_ - float(f.get("at") or 0) > BASE_CORPUS_AGE:
+            continue
+        for k in f.get("keys") or []:
+            out.setdefault(k, f"change {o['id']} on the same main")
+    return out
+
+
+def judge_failure(repo, d, e, base, out):
+    """('base', {key: where}) when every failing job's tests fail on the base too; else ('head', [what is the
+    change's own]). The head's keys are kept on the entry (failed_on), the queue's own record of the base."""
+    jobs = head_failure_jobs(repo, e, out)
+    keys, unjudged = failure_keys(jobs)
+    e["failed_on"] = {"base": base, "head": e.get("head"), "keys": sorted(keys), "at": time.time()}
+    save_entry(d, e)
+    if CHECK_TIMEOUT.search(out or ""):  # checks it never reached are unjudged: never a base verdict
+        return "head", sorted(keys.values()) + ["the checks' time cap"]
+    if not keys:
+        return "head", [f"{u} (no failing test named)" for u in unjudged] or ["(no failing test named)"]
+    known = base_failure_keys(repo, d, e, base)
+    mine = sorted(n for k, n in keys.items() if k not in known)
+    if mine or unjudged:
+        return "head", mine + [f"{u} (no failing test named)" for u in unjudged]
+    return "base", {keys[k]: known[k] for k in sorted(keys)}
+
+
+def keys_text(keys, n=4):
+    keys = list(keys)
+    return ", ".join(keys[:n]) + (f" (+{len(keys) - n} more)" if len(keys) > n else "")
 
 
 def push_change(repo, d, e):
@@ -750,8 +927,12 @@ def _push_change(repo, d, e):
             base, head, e["tip"] = moved, new_head, new_head
         commits = waiting_commits(tree, base, head)
         reds = gate_reds(repo) if waiting_supported(repo) else set()
-        if reds and must_wait(repo, commits, reds):
-            return "joined" if queue_join(repo, d, e, tree, head) == 0 else "rejected"
+        kr = e.get("known_red")
+        if kr or (reds and must_wait(repo, commits, reds)):
+            why = (f"its checks failed only where {remote()}/main fails too ({keys_text(kr['keys'])}: "
+                   f"{'; '.join(kr['where'])}): not held against it; it lands with the batch once main is green "
+                   "or the red's fix lands") if kr else None
+            return "joined" if queue_join(repo, d, e, tree, head, why) == 0 else "rejected"
         fixes = sorted(fixes_of(repo, commits))
         set_change(d, e, "pushing", event={"text": f"{e['id']}: pushing {head[:10]}"})
         pushed_at = time.time()
@@ -870,8 +1051,9 @@ def spawn_executor(repo, d, eid):
     time.sleep(1)  # it takes its tree slot before the next looks
 
 
-def queue_join(repo, d, e, tree, head):
-    """Under the landing lock, main red: the checked change joins `waiting` (land's join, from the check tree)."""
+def queue_join(repo, d, e, tree, head, why=None):
+    """Under the landing lock, main red (or its checks failing only as its base fails, why): the checked change joins
+    `waiting` (land's join, from the check tree); its WAITING note says why."""
     a = argparse.Namespace(follow=False)
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
@@ -881,6 +1063,7 @@ def queue_join(repo, d, e, tree, head):
                   branch=e.get("branch") or "")
     line = (out.getvalue().strip().splitlines() or [""])[-1]
     if rc == 0:
+        line = f"{line}: {why}" if why else line
         set_change(d, e, "waiting", event=change_event(e, line, code=None, final=False), decided=ts(),
                    waiting_id=a.waiting["id"])
         wlog(d, f"{e['id']}: {line}")

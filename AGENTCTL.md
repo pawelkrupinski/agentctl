@@ -958,7 +958,17 @@ The reconciler then takes it, a step per tick:
   dropped; nothing left: `LANDED <head> (already on main via <commit>)`), then runs the hook's dry run -- `--range`, or
   `--checks-only` when main is red and the change must wait -- as a check of the governor (`gov`), under the
   20-min no-progress bound; or, under laptop pressure, on ci-runner (see "remote checks"). Pass: `checked`. Fail:
-  `rejected`, `NOT LANDED: the pre-push checks failed` with the tail. A check the LAPTOP failed (sbt never came up, a
+  `rejected`, `NOT LANDED: the pre-push checks failed (...); failing with this change only: <tests>` with the tail.
+  DIFFERENTIAL (2026-11-04): a failure is judged against the change's BASE, like the convergence gate. Each failed hook
+  check (`pre-push <check> FAILED`, else each failed job) must name its failing tests (scalatest `- <name> *** FAILED
+  ***`, sbt `Failed tests:` classes); when every one also fails on the base -- in main's red gate runs' failed logs
+  (cached per run in `reds/runkeys/`), or in another change's check on the same main within a day -- the change is no
+  culprit: `checked` with `known_red`, then it joins `waiting` (one author note: `WAITING ...: its checks failed only
+  where origin/main fails too (<tests>: <where>) ...`) and lands with the batch at green. A head-only test, or a failed
+  check with no test named (shellcheck, a lint), is the change's. A remote check stopped at its 80-minute cap is infra:
+  re-queued twice, the third time rejected. A pick or rebase whose every conflicted file is prose (`docs/*`, `*.md`)
+  keeps both sides (`git merge-file --union`) and goes on; any other conflict (generated fixture TSVs included) is the
+  author's. A check the LAPTOP failed (sbt never came up, a
   script test's TIMEOUT, a stall) is no verdict: queued again 5 min later, up to 3 times. A dead executor is an
   expired lease: the tick starts another.
 - **checked → pushing → landed.** Under the `land/<repo>` lease the tick re-reads the item (a superseded one is never

@@ -184,6 +184,52 @@ def upstream_patch_ids(repo, since_commit, upstream, limit=400):
     return {pid: c for pid, c in (l.split() for l in r.stdout.splitlines() if len(l.split()) == 2)}
 
 
+# A DOCS CONFLICT IS NO VERDICT ON A CHANGE (2026-11-04: of the week's 42 conflict rejections, 6 were docs/markdown
+# only -- docs/investigations/2026-11-01-flip-unification.md alone rejected five changes, each author appending a
+# section at the same end). A pick or rebase whose every conflicted file is prose (UNION_SAFE) is resolved by keeping
+# both sides (`git merge-file --union`: the base's lines once, ours then theirs) and goes on; any other conflicted
+# file, or a delete/modify conflict, is the author's as before. Generated fixtures (derivation-hash TSVs) are never
+# union-merged: both sides' rows would be stale.
+UNION_SAFE = ("docs/*", "*.md")
+
+
+def union_safe(path):
+    return any(fnmatch.fnmatch(path, g) for g in UNION_SAFE)
+
+
+def union_resolve(wt):
+    """Resolve wt's conflicted files by keeping both sides when every one is UNION_SAFE and has all three stages:
+    the files resolved (staged), or None (nothing touched)."""
+    files = git(wt, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
+    if not files or not all(union_safe(f) for f in files):
+        return None
+    stages = {}
+    for f in files:
+        got = {}
+        for n in (1, 2, 3):
+            r = git(wt, "show", f":{n}:{f}", check=False)
+            if r.returncode != 0:  # added or deleted on one side: no union of that
+                return None
+            got[n] = r.stdout
+        stages[f] = got
+    import tempfile
+    for f, got in stages.items():
+        with tempfile.TemporaryDirectory() as td:
+            paths = []
+            for n in (2, 1, 3):  # merge-file <current> <base> <other>
+                q = os.path.join(td, str(n))
+                with open(q, "w") as fh:
+                    fh.write(got[n])
+                paths.append(q)
+            r = subprocess.run(["git", "merge-file", "-p", "--union", *paths], capture_output=True, text=True)
+            if r.returncode < 0 or r.returncode > 127:
+                return None
+        with open(os.path.join(wt, f), "w") as fh:
+            fh.write(r.stdout)
+        git(wt, "add", "--", f)
+    return files
+
+
 def pick(wt, commits, dropped=None):
     """Cherry-pick commits onto wt's HEAD, one at a time: None, or the conflicting files (the pick aborted, HEAD back
     where it was). A commit already in HEAD's history (patch-equivalent), or empty once picked, is DROPPED, never kept
@@ -203,6 +249,8 @@ def pick(wt, commits, dropped=None):
                 dropped.append((c, via))
             continue
         r = git(wt, "cherry-pick", "--allow-empty", "--keep-redundant-commits", c, check=False)
+        if r.returncode != 0 and union_resolve(wt):
+            r = git(wt, "-c", "core.editor=true", "cherry-pick", "--continue", check=False)
         if r.returncode != 0:
             files = git(wt, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
             git(wt, "cherry-pick", "--abort", check=False)
