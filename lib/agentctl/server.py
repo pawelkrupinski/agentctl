@@ -1149,6 +1149,11 @@ def sync_steps(repo, d, o_r):
                            env_num("AGENTCTL_STEP_BOUND", 120)):
             err("pinned recording: still reading from an earlier cycle")
 
+    def explorer():
+        if not run_bounded("drift explorer", lambda: [err(x) for x in explorer_tick(o_r, repo)],
+                           env_num("AGENTCTL_STEP_BOUND", 120)):
+            err("drift explorer: still running from an earlier cycle")
+
     def dispatch():
         if os.path.exists(reds_dir("DISPATCH_OFF")):
             return []
@@ -1160,7 +1165,7 @@ def sync_steps(repo, d, o_r):
             ("landed changes", lambda: [err(f"land: {x}") for x in close_landed_changes(repo)]),
             ("claims", sync_claims),
             ("dispatcher", dispatch),
-            ("pins", pins),
+            ("pins", pins), ("drift explorer", explorer),
             ("fixer landing", lambda: [err(f"red: {x}") for x in fixers_land_watch()]),
             ("network watch", network_watch), ("tunnel probe", tunnel_watch),
             ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep()]),
