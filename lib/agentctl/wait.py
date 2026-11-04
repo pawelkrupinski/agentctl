@@ -2,9 +2,41 @@
 # Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
 
 # ---------------------------------------------------------------- wait
-ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+# gh prints a log's escapes as caret text (`^[[36;1m`) when it refuses raw ones: both are colours
+ANSI = re.compile(r"(?:\x1b|\^\[)\[[0-9;]*[A-Za-z]")
 LOG_TS = re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ")
 MEASURE_WORKFLOWS = {"Identity model convergence"}
+# A STEP'S SCRIPT IS NO OUTPUT (2026-11-04): the runner echoes each `run:` step's script (cyan bold, `36;1m`) inside a
+# `##[group]Run <first line>` ... `##[endgroup]` header, with its shell and env, before running it. precommit-check.yml's
+# hook step holds `[ "$rc" != 124 ] || echo "::error::the pre-push checks ran past 80 minutes and were stopped"`, so
+# that SOURCE line was a strong `::error::` line in every failed check's verdict -- often its only one, crowding out the
+# hook's `! pre-push scripttests FAILED` -- and 69 NOT LANDED in 7 days read as "stopped at the 80-minute cap" while no
+# hook step ran past 50 min (273 precommit-check runs). The header block, and any stray echoed line (a --log-failed
+# slice can start inside it), is skipped by every reader of a failed log.
+STEP_ECHO = re.compile(r"^(?:\S+Z )?(?:\x1b|\^\[)\[36;1m")
+STEP_HEADER_MAX = 500  # an unterminated header (a truncated slice) stops hiding lines after this many
+
+
+def log_entries(log_text):
+    """(job, line) of a `gh run view --log` / `--log-failed` output (job<TAB>step<TAB>line, or bare lines: job `?`),
+    timestamps and colours off, blank lines and the runner's step-script headers (above) left out."""
+    header = {}
+    for raw in (log_text or "").splitlines():
+        parts = raw.split("\t", 2)
+        job, line = (parts[0], parts[2]) if len(parts) == 3 else ("?", raw)
+        echoed = bool(STEP_ECHO.match(line.lstrip("﻿")))
+        line = LOG_TS.sub("", ANSI.sub("", line.lstrip("﻿"))).rstrip()
+        if line.startswith("##[group]Run "):
+            header[job] = 0
+            continue
+        if job in header:
+            header[job] += 1
+            if line.startswith("##[endgroup]") or header[job] > STEP_HEADER_MAX:
+                header.pop(job)
+            continue
+        if echoed or not line:
+            continue
+        yield job, line
 
 
 def relevant_lines(log_text, tail, strong_jobs=None):
@@ -12,10 +44,7 @@ def relevant_lines(log_text, tail, strong_jobs=None):
     Strong markers (*** FAILED, [error], ::error::, assertion, exit code) win; plain fail/error words only when a job
     has none, and never from INFO/DEBUG log lines. strong_jobs, a set: the jobs with a STRONG line are added to it."""
     strong, weak, follow = {}, {}, {}
-    for raw in log_text.splitlines():
-        parts = raw.split("\t", 2)
-        job, line = (parts[0], parts[2]) if len(parts) == 3 else ("?", raw)
-        line = LOG_TS.sub("", ANSI.sub("", line)).rstrip()
+    for job, line in log_entries(log_text):
         if not line:
             continue
         if follow.get(job):  # the 2 lines after a scalatest `*** FAILED ***` carry its reason
@@ -190,7 +219,7 @@ def job_log_lines(o_r, run_id, job, tail, unread=None, annotated=None):
         if unread is not None:
             unread.append(str(e))
         return []
-    clean = [LOG_TS.sub("", ANSI.sub("", (l.split("\t", 2)[2] if l.count("\t") >= 2 else l))).rstrip() for l in log.splitlines()]
+    clean = [l for _job, l in log_entries(log)]
     notes = [l[:300] for l in clean if ANNOTATION.search(l)]
     timed = [l[:300] for l in clean if STEP_TIMED_OUT in l]  # past the failed step's slice, in the reap step's
     if annotated is not None:
@@ -228,7 +257,7 @@ def hook_lines(o_r, run_id, job, tail):
         log = fetch_job_log(o_r, run_id, jid)
     except Exception:
         return []
-    clean = [LOG_TS.sub("", ANSI.sub("", (l.split("\t", 2)[2] if l.count("\t") >= 2 else l))).rstrip() for l in log.splitlines()]
+    clean = [l for _job, l in log_entries(log)]
     if not any("blocked by:" in l or re.search(r"pre-push\S* .*FAILED", l) for l in clean):
         return []
     hits = [l[:300] for l in clean if HOOK_BLOCK.search(l)]

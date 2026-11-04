@@ -74,6 +74,28 @@ class RelevantLinesTest(unittest.TestCase):
         self.assertEqual(per["lint"], ["something went wrong: error reading file"])
         self.assertEqual(A.relevant_lines(log, 1)["test"], ["[info]   regenerate with x"])
 
+    def test_the_step_script_echo_is_never_a_failure_line(self):
+        # run 41235658578 (2026-10-31): the runner echoes a step's script before running it, so the hook step's own
+        # `echo "::error::the pre-push checks ran past 80 minutes..."` line was a STRONG line in every failed check's
+        # verdict -- 69 NOT LANDED read as "stopped at the 80-minute cap" while no hook step ever ran past 50 min.
+        # gh prints the escapes as caret text (`^[[36;1m`) when it refuses raw ones.
+        step = "check (rest)\tThe pre-push hook's checks of the change\t2026-10-31T19:59:14.04Z "
+        log = "\n".join(step + l for l in [
+            '##[group]Run mkdir -p "$TMPDIR"',
+            '^[[36;1mtimeout --kill-after=60 80m scripts/hooks/pre-push "$mode" "$range" || rc=$?^[[0m',
+            '\x1b[36;1m[ "$rc" != 124 ] || echo "::error::the pre-push checks ran past 80 minutes and were stopped"\x1b[0m',
+            "shell: /usr/bin/bash -e {0}",
+            "env:",
+            "  ERROR_MODE: fail",
+            "##[endgroup]",
+            "^[[33m! pre-push^[[0m scripttests FAILED (344s)",
+            "##[error]Process completed with exit code 1.",
+        ])
+        per = A.relevant_lines(log, 25)
+        self.assertEqual(per["check (rest)"], ["! pre-push scripttests FAILED (344s)",
+                                               "##[error]Process completed with exit code 1."])
+        self.assertNotIn("ran past", "\n".join(A.log_jobs(log)["check (rest)"]))
+
     def test_backoff_caps_at_five_minutes(self):
         self.assertEqual(list(itertools.islice(A.backoff(60, 300), 6)), [60, 90, 135, 202.5, 300, 300])
 

@@ -773,10 +773,8 @@ def failure_keys(jobs):
 def log_jobs(log_text):
     """{job: [lines]} of `gh run view --log-failed` output (job<TAB>step<TAB>line), timestamps and colours off."""
     jobs = {}
-    for raw in (log_text or "").splitlines():
-        parts = raw.split("\t", 2)
-        job, line = (parts[0], parts[2]) if len(parts) == 3 else ("?", raw)
-        jobs.setdefault(job, []).append(LOG_TS.sub("", ANSI.sub("", line)).rstrip())
+    for job, line in log_entries(log_text):  # the runner's step-script headers left out (wait.py, STEP_ECHO)
+        jobs.setdefault(job, []).append(line)
     return jobs
 
 

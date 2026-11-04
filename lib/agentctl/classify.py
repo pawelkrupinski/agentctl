@@ -60,9 +60,10 @@ QUOTA_LOG = re.compile(r"request limit reached|daily limit|quota (exceeded|reach
                        r"too many requests", re.I)
 
 # What a test runner writes when a test fails -- the only lines a TEST verdict is read from. `*** FAILED ***` is
-# anchored to scalatest's own form: a passing test named "... FAILED rows ..." is no failure (2026-10-31).
+# anchored to scalatest's own form: a passing test named "... FAILED rows ..." is no failure (2026-10-31). The pre-push
+# hook's own per-check verdict (`! pre-push scripttests FAILED (344s)`) is one too: a remote check's reason (2026-11-04).
 STRONG = re.compile(r"\*\*\* FAILED \*\*\*|\*\*\* FAILED$|\[error\]|::error::|(?i:assertion|assert(ion)? failed)|\bError:|ENOENT|"
-                    r"artifact already exists|(?i:exit code [1-9])")
+                    r"artifact already exists|(?i:exit code [1-9])|^! pre-push\S* \S+ FAILED\b")
 WEAK = re.compile(r"\bfail(ed|ure)?\b|\berror\b|exception|assert", re.I)
 NOISE = re.compile(r"Setting level of logger|\|-INFO in ch\.qos|\berrors?[=:] ?0\b|\b0 (errors?|failed)\b|\b(INFO|DEBUG|TRACE)\b", re.I)
 
