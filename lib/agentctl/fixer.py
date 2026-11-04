@@ -742,6 +742,115 @@ def bg_final_text(path):
     return last
 
 
+# ONE FIXER LIFECYCLE (2026-11-04): a dispatched fixer's wrapper (red_fixer) and a family owner's (owner.red_owner) keep
+# their leases and judge their session's progress with the SAME code below, so the two can never drift again. On
+# 2026-11-03 the owners learnt to renew by activity and to take a merely lapsed heartbeat again (aaf0082..057ba94); the
+# red fixers did not, and on 2026-11-04 13 of them ended "STOPPED: the red's lease was lost" -- each a RED FIXER failure
+# in the owner's inbox and a fresh dispatch. Most were no failure at all: their red had CLEARED (the reconciler revokes
+# the lease with `red cleared`) while they worked. A lost lease is now read for what it is (lease_loss):
+#   - LAPSED (its clock ran out -- the wrapper or its machine silent, the store out of reach -- and nobody took,
+#     revoked or released it): the living wrapper takes it again (lease_retake) and goes on;
+#   - DONE (revoked because the red needs no fixer any more: cleared, verified, retired, a fix submitted): the work is
+#     over, the wrapper ends quietly -- no failure, no attempt;
+#   - LOST (re-taken by another, released, revoked otherwise, past its max hold): the wrapper stops, as before.
+LEASE_DONE = re.compile(r"(red (cleared|verified|retired)|fix submitted)\b")
+LEASE_RETAKE_DROP = ("outcome", "notes", "released_at", "revoked", "paused")
+
+
+def lease_loss(row, epoch, holder, t):
+    """('lapsed', None), ('done', outcome) or ('lost', why) for a lease held at `epoch` by `holder` that reads lost."""
+    m = lease_meta(row)
+    if not row or row.get("epoch") != epoch:
+        return "lost", "taken by another holder"
+    out = str(m.get("outcome") or "")
+    if m.get("revoked") and LEASE_DONE.match(out):
+        return "done", out
+    if out or m.get("revoked") or (row.get("holder") and row["holder"] != holder):
+        return "lost", out or "taken by another holder"
+    if t >= float(row.get("max_until") or 0):
+        return "lost", "past its max hold"
+    return "lapsed", None
+
+
+def lease_retake(st, name, epoch, holder, ttl, progress):
+    """A LAPSED lease taken again by its living holder: the same item, meta and max hold. {'epoch', 'secret'}, or None
+    when it is no longer to be had (somebody took, revoked or released it meanwhile)."""
+    row = st.get(name)
+    now = st.clock()
+    if lease_loss(row, epoch, holder, now)[0] != "lapsed":
+        return None
+    meta = {k: v for k, v in lease_meta(row).items() if k not in LEASE_RETAKE_DROP}
+    got = st.acquire(name, holder, ttl, max(60.0, float(row["max_until"]) - now), progress=progress,
+                     item=row.get("item"), meta=meta)
+    return None if "held" in got else got
+
+
+class HeldLease:
+    """One lease a wrapper holds (ONE FIXER LIFECYCLE): renew() with each beat, check() at a poll. Each answers None
+    while it is held -- a lapsed one taken again on the way (`retaken` counts them) -- else (kind, why): 'done' or
+    'lost' (lease_loss). StoreUnavailable / StoreAuthFailed reach the caller (asked again at the next poll)."""
+
+    def __init__(self, name, epoch, secret, holder, ttl):
+        self.name, self.epoch, self.secret, self.holder, self.ttl, self.retaken = name, epoch, secret, holder, ttl, 0
+
+    def triple(self):
+        return self.name, self.epoch, self.secret
+
+    def check(self, st, row=None, progress="retaken"):
+        row = st.get(self.name) if row is None else row
+        now = st.clock()
+        if self.holder is None and row and row.get("epoch") == self.epoch:  # its holder learnt from its own epoch
+            self.holder = row.get("holder") or None
+        if row and row.get("epoch") == self.epoch and row.get("holder") == self.holder and lease_is_live(row, now):
+            return None
+        kind, why = lease_loss(row, self.epoch, self.holder, now)
+        if kind == "lapsed":
+            got = lease_retake(st, self.name, self.epoch, self.holder, self.ttl, progress)
+            if got:
+                self.epoch, self.secret, self.retaken = got["epoch"], got["secret"], self.retaken + 1
+                print(f"{ts()} {self.name} had lapsed (asleep or out of the store's reach): taken again", flush=True)
+                return None
+            kind, why = "lost", "taken by another holder after it lapsed"
+        return kind, why
+
+    def renew(self, st, progress, note=None):
+        if st.renew(self.name, self.epoch, self.secret, progress, self.ttl, note=note) != "lost":
+            return None
+        return self.check(st, progress=progress)
+
+
+class TurnProgress:
+    """THE WRAPPER JUDGES PROGRESS (RED_STALL) of a turn, for both kinds: the mark (fixer_mark + bg_wait_mark) moving is
+    progress; a turn whose mark stood still past `stall` is stalled. The leases renew with each beat of a turn not
+    stalled (2026-11-03: renewed only on a new mark, a 15 min lease lapsed inside the 30 min stall budget)."""
+
+    def __init__(self, stall, now):
+        self.stall, self.mark, self.at = stall, None, now
+
+    def judge(self, log, bid, wt, ent, transcript, now, every):
+        """(mark, moved, stalled) at this beat."""
+        mark = fixer_mark({"log": log or "", "bg_id": bid}, wt) + bg_wait_mark(ent, transcript, now, every)
+        if mark != self.mark:
+            self.mark, self.at = mark, now
+            return mark, True, False
+        return mark, False, now - self.at > self.stall
+
+
+def lease_stop_line(kind, why, what="red's"):
+    """The wrapper's stop reason for a lease no longer its own (HeldLease)."""
+    if kind == "done":
+        return f"ENDED: {why} (its lease was taken back: nothing left to fix)"
+    if str(why).startswith("BLOCKED ON OWNER"):
+        return str(why)
+    return f"STOPPED: the {what} lease was lost ({why})"
+
+
+def fixer_quiet(verdict):
+    """A verdict the reconciler acts on itself, never a RED FIXER failure in the owner's inbox: the red ended under the
+    fixer (ENDED)."""
+    return str(verdict or "").startswith("ENDED: ")
+
+
 class CurrentStore:
     """Store() resolved again at every call, so a long-running process follows `agentctl store use URL` (2026-10-29
     cutover: the gate fixer's wrapper, started on the laptop's then store, renewed its leases there for hours while
@@ -777,13 +886,23 @@ def red_fixer(a):
             print(f"RED FIXER {rec['workflow']} #{num}: DUPLICATE")
             return 0
         epoch, secret = took["epoch"], took["secret"]
-    leases = [(name, epoch, secret)] + extra
+    # ONE FIXER LIFECYCLE: its leases kept as an owner's are (HeldLease: a lapse taken again, a red that ended is no
+    # failure); the holder is the dispatcher's, read from the lease's own epoch
+    own = HeldLease(name, epoch, secret, rec.get("holder"), RED_FIXER_TTL)
+    held_ = [own] + [HeldLease(n_, e_, s_, rec.get("holder"), RED_FIXER_TTL) for n_, e_, s_ in extra]
+
+    def leases():
+        return [h.triple() for h in held_]
     meta, meta_due = {"worktree": wt, "session": session, "pid": me, "log": rec["log"]}, False
     try:
         row = st.get(name)
         if row and row["epoch"] == epoch and row["secret"] == secret:
+            own.holder = own.holder or row.get("holder") or None
+            for h in held_:
+                h.holder = h.holder or own.holder
+            rec["holder"] = own.holder
             st.note(name, epoch, secret, f"dispatched: {rec.get('why')}")
-            meta_due = not fixer_meta_sent(st, leases, meta)
+            meta_due = not fixer_meta_sent(st, leases(), meta)
     except StoreUnavailable as e:  # its lease unread: the meta is sent at the polls below
         print(f"{ts()} the store did not answer ({e}): the leases' meta is sent again", flush=True)
         meta_due = True
@@ -829,7 +948,7 @@ def red_fixer(a):
 
         def cancelled(signum, _frame):  # the wrapper is stopped: its session goes with it
             bg_stop(cli, bid)
-            for n_, e_, s_ in leases:
+            for n_, e_, s_ in leases():
                 try:
                     st.release(n_, e_, s_, outcome="STOPPED: the fixer's wrapper was stopped")
                 except StoreUnavailable:  # it lapses by its TTL instead
@@ -839,11 +958,8 @@ def red_fixer(a):
             signal.signal(sg, cancelled)
         missing, unclaimed_told = 0, False
         stall = env_num("AGENTCTL_RED_STALL", RED_STALL)
-        last_mark, progress_at = None, time.time()
+        prog = TurnProgress(stall, time.time())
         claim_within = env_num("AGENTCTL_FIXER_CLAIM_WITHIN", FIXER_CLAIM_WITHIN)
-
-        def held(row):
-            return bool(row) and row["epoch"] == epoch and lease_is_live(row, time.time())
         try:
             while verdict is None:
                 time.sleep(poll)
@@ -855,7 +971,7 @@ def red_fixer(a):
                     if rec["transcript"]:
                         rec["log"] = rec["transcript"]
                     meta.update(session=rec["session"], log=rec["log"], bg_id=bid)
-                    meta_due = not fixer_meta_sent(st, leases, meta)
+                    meta_due = not fixer_meta_sent(st, leases(), meta)
                     write_json(a.record, rec)
                 missing = missing + 1 if ent is None else 0
                 if bg_turn_over(ent, rec.get("transcript")) or missing >= 3:  # finished its turn (done, stopped,
@@ -876,7 +992,7 @@ def red_fixer(a):
                             f"{fmt_age(claim_within)} (`claude agents`: {bg_row_brief(ent)}); its last words: {tail[:300]}")
                     inbox_write("red fixer", line, [line], [], 1, cwd=wt)
                     try:
-                        st.note(name, epoch, secret, line[:300])
+                        st.note(*own.triple(), line[:300])
                     except StoreUnavailable:
                         pass
                 if stop:
@@ -892,30 +1008,26 @@ def red_fixer(a):
                     # its lease, and a second fixer was dispatched onto the red its session was still working on.
                     try:
                         if meta_due:
-                            meta_due = not fixer_meta_sent(st, leases, meta)
-                        row = st.get(name)
-                        if not held(row):  # revoked (the red cleared, a release, its own block): stop at once
-                            outcome = str(lease_meta(row).get("outcome") or "")
-                            stop = (outcome if outcome.startswith("BLOCKED ON OWNER") else
-                                    "STOPPED: the red's lease was lost (expired without progress, past its max hold, or "
-                                    "revoked)")
+                            meta_due = not fixer_meta_sent(st, leases(), meta)
+                        gone_ = own.check(st)  # revoked (the red cleared, a release, its own block): stop at once;
+                        if gone_:              # lapsed (asleep, the store out of reach): taken again, going on
+                            stop = lease_stop_line(*gone_)
                         elif time.time() - last_renew >= every:
                             note = (read_record(a.record) or {}).get("note")
-                            mark = fixer_mark(rec, wt) + bg_wait_mark(ent, rec.get("transcript"), time.time(), every)
-                            if mark != last_mark:
-                                last_mark, progress_at = mark, time.time()
-                            elif time.time() - progress_at > stall:  # PROOF OF WORK: a living wrapper is not one
+                            mark, _moved, stalled = prog.judge(rec["log"], rec.get("bg_id"), wt, ent,
+                                                               rec.get("transcript"), time.time(), every)
+                            if stalled:  # PROOF OF WORK: a living wrapper is not one
                                 stop = f"STALLED: no progress (transcript, worktree) for {fmt_age(stall)}"
-                            # THE WRAPPER JUDGES PROGRESS (RED_STALL), the lease renews with each beat of a turn
-                            # not stalled: renewed only on a new mark, a lease of RED_FIXER_TTL (15 min) lapsed under
-                            # a fixer still inside its 30 min stall budget ("lease expired", a crash for the breaker)
                             beat = f"{mark} beat {int(time.time())}"
-                            for n_, e_, s_ in extra if not stop else ():  # the run's other reds: renewed with it
-                                st.renew(n_, e_, s_, beat, RED_FIXER_TTL, note=note)
-                            if not stop and st.renew(name, epoch, secret, beat, RED_FIXER_TTL, note=note) == "lost":
-                                stop = ("STOPPED: the red's lease was lost (expired without progress, past its max hold, "
-                                        "or revoked)")
+                            for h in held_[1:] if not stop else ():  # the run's other reds: renewed with it
+                                h.renew(st, beat, note=note)
+                            gone_ = None if stop else own.renew(st, beat, note=note)
+                            if gone_:
+                                stop = lease_stop_line(*gone_)
                             last_renew = time.time()
+                        if own.epoch != rec.get("epoch"):  # taken again after a lapse: the record names its epoch
+                            rec["epoch"] = own.epoch
+                            write_json(a.record, rec)
                     except StoreAuthFailed as e:  # never "asked again" forever: a fresh token once, else the end
                         if store_reauth():
                             env["AGENTCTL_STORE_TOKEN"] = os.environ["AGENTCTL_STORE_TOKEN"]
@@ -935,10 +1047,11 @@ def red_fixer(a):
     verdict = verdict or fixer_verdict(text) or "ended with no LANDED / GAVE UP line"
     line = f"RED FIXER {rec['workflow']} #{num}: {verdict[:300]}"
     tail = [l[:300] for l in text.splitlines()[-INBOX_TAIL:]]
-    inbox_write("red fixer", line, [line], tail, 0 if verdict.startswith("LANDED") else 1, cwd=wt)
+    if not fixer_quiet(verdict):  # the red ended under it, already fixed, or the owner's decision: the reconciler's
+        inbox_write("red fixer", line, [line], tail, 0 if verdict.startswith("LANDED") else 1, cwd=wt)
     if meta_due:  # never sent while the session ran: before the release, so a resume finds its session
-        fixer_meta_sent(st, leases, meta)
-    for n_, e_, s_ in leases:
+        fixer_meta_sent(st, leases(), meta)
+    for n_, e_, s_ in leases():
         for left in range(RED_RELEASE_ASKS, 0, -1):  # a store that does not answer is asked again, a poll apart
             try:
                 st.release(n_, e_, s_, outcome=verdict[:600], notes="\n".join(tail[-8:]))
