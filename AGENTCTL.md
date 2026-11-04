@@ -1580,6 +1580,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `land_lease_ttl` | `AGENTCTL_LAND_LEASE_TTL` | `120` | - |
 | `land_lock_timeout` | `AGENTCTL_LAND_LOCK_TIMEOUT` | `14400` | - |
 | `land_ref_sweep` | `AGENTCTL_LAND_REF_SWEEP` | `600` | - |
+| `land_ref_unknown_age` | `AGENTCTL_LAND_REF_UNKNOWN_AGE` | `86400` | s: a ref of a change neither the entries nor the store know is deleted only past this |
 | `land_stall_min` | `AGENTCTL_LAND_STALL_MIN` | `20` | - |
 | `land_wait_report_min` | `AGENTCTL_LAND_WAIT_REPORT_MIN` | `10` | - |
 | `laptop_free_pct` | `AGENTCTL_LAPTOP_FREE_PCT` | `20` | holds other work while macOS's memory free % is under this |

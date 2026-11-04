@@ -2,7 +2,7 @@
 QUEUED <id>; the processor's checker runs the change's checks in a check tree of its own, within the governor, then
 pushes it (green), puts it on `waiting` (red) or rejects it, every verdict to the inbox with the agent's worktree; under
 pressure the checks run on ci-runner's check tier and the push carries the remote run for the hook to confirm."""
-import json, os, subprocess, sys, unittest
+import json, os, subprocess, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -461,6 +461,28 @@ class QueueTest(WaitingTest):
         A._last_ref_sweep[0] = 0
         self.assertEqual(A.sweep_land_refs(self.r.path, d), [f"refs/heads/land/{eid}: deleted"])
         self.assertEqual(self.remote_refs(), [])
+
+    def test_sweep_keeps_the_ref_of_a_change_only_the_store_holds_open(self):
+        """Phase 2: the change lives in the store, not in entries/ -- its land ref must survive the sweep."""
+        saved = A.land_refs_supported
+        A.land_refs_supported = lambda repo: True
+        self.addCleanup(setattr, A, "land_refs_supported", saved)
+        wt, sha = self.agent("a", "web/src/main/A.scala", "a\n")
+        eid, _out = self.queued(wt)
+        d, _c, _w = A.waiting_state(self.r.path)
+        os.remove(os.path.join(d, "entries", f"{eid}.json"))  # held by the store alone
+        A.Store().put_item("change", eid, "queued", {"worktree": wt, "head": sha})
+        A._last_ref_sweep[0] = 0
+        self.assertEqual(A.sweep_land_refs(self.r.path, d), [], "open in the store: its ref stays")
+        self.assertEqual(self.remote_refs(), [f"refs/heads/land/{eid}"])
+        # unknown to both: kept while young, deleted (and logged) past 24 h
+        sh(self.r.path, "git", "push", "--quiet", "origin", f"{sha}:refs/heads/land/20200101-000000-x-aaaaaa",
+           f"{sha}:refs/heads/land/{time.strftime('%Y%m%d-%H%M%S')}-y-bbbbbb")
+        A._last_ref_sweep[0] = 0
+        self.assertEqual(A.sweep_land_refs(self.r.path, d),
+                         ["refs/heads/land/20200101-000000-x-aaaaaa: unknown to entries and store, %d h old" % (
+                             A.entry_id_age("20200101-000000", time.time()) // 3600),
+                          "refs/heads/land/20200101-000000-x-aaaaaa: deleted"])
 
     def test_no_land_ref_while_the_repositorys_hook_would_check_it(self):
         wt, _sha = self.agent("a", "web/src/main/A.scala", "a\n")

@@ -211,8 +211,22 @@ def submit_ref(repo, d, e, to_server=False):
     return None
 
 
-def sweep_land_refs(repo, d, now_=None):
-    """Every LAND_REF_SWEEP_EVERY s: each remote land/<entry> ref whose change is decided, or unknown here, deleted."""
+LAND_REF_UNKNOWN_AGE = 24 * 3600  # s: a ref of a change neither the entries nor the store know is deleted only past this
+
+
+def entry_id_age(eid, t):
+    """Seconds since the entry id's YYYYMMDD-HHMMSS stamp (local time), or None when the id carries none."""
+    try:
+        return t - time.mktime(time.strptime(eid[:15], "%Y%m%d-%H%M%S"))
+    except (ValueError, OverflowError):
+        return None
+
+
+def sweep_land_refs(repo, d, now_=None, store=None):
+    """Every LAND_REF_SWEEP_EVERY s: each remote land/<entry> ref whose change is decided, deleted. Since phase 2 the
+    changes live in ci-runner's STORE, not in entries/ (2026-11-04: every queued change looked unknown and lost its
+    ref at the next sweep): a change either source holds open keeps its ref; one NEITHER knows is deleted only past
+    LAND_REF_UNKNOWN_AGE, and logged."""
     t = now_ if now_ is not None else time.time()
     if t - _last_ref_sweep[0] < env_num("AGENTCTL_LAND_REF_SWEEP", LAND_REF_SWEEP_EVERY):
         return []
@@ -221,13 +235,25 @@ def sweep_land_refs(repo, d, now_=None):
     if r.returncode != 0:
         return []
     every = {e["id"]: e for e in waiting_entries(d, open_only=False)}
+    try:
+        items = {it["id"]: it for it in (store or Store()).items("change")}
+    except Exception as ex:  # the store unreachable: decide nothing this tick
+        err(f"land refs: store unreadable ({ex}); no ref deleted")
+        return []
     did = []
     for line in r.stdout.splitlines():
         ref = line.split()[-1]
         eid = ref[len("refs/heads/land/"):]
-        e = every.get(eid)
+        e, it = every.get(eid), items.get(eid)
         if e and e.get("status") not in ENTRY_FINAL:
             continue
+        if it and not machine_state("change", it["state"]).terminal:
+            continue
+        if not e and not it:
+            age = entry_id_age(eid, t)
+            if age is None or age < env_num("AGENTCTL_LAND_REF_UNKNOWN_AGE", LAND_REF_UNKNOWN_AGE):
+                continue
+            did.append(f"{ref}: unknown to entries and store, {int(age // 3600)} h old")
         dr = git(repo, "push", "--quiet", remote(), f":{ref}", check=False)
         did.append(f"{ref}: deleted" if dr.returncode == 0 else f"{ref}: could not delete")
     return did
