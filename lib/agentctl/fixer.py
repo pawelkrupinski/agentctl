@@ -846,9 +846,11 @@ def lease_stop_line(kind, why, what="red's"):
 
 
 def fixer_quiet(verdict):
-    """A verdict the reconciler acts on itself, never a RED FIXER failure in the owner's inbox: the red ended under the
-    fixer (ENDED)."""
-    return str(verdict or "").startswith("ENDED: ")
+    """A verdict the reconciler acts on itself (red_lease_ended), never a RED FIXER failure in the owner's inbox: the red
+    ended under the fixer (ENDED), it is already fixed (verified by its probe), or it needs the owner's decision (one
+    WAITING ON YOU, from the reconciler)."""
+    v = str(verdict or "")
+    return v.startswith("ENDED: ") or bool(GAVE_UP_FIXED.match(v) or GAVE_UP_DECIDE.match(v))
 
 
 class CurrentStore:

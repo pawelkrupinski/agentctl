@@ -920,8 +920,12 @@ def red_offer(store, it, text, data=None, repo=None, escalate=False, verdict=Non
                    f"(`Fixes-Red: {(d.get('last_run') or {}).get('number')}`); else a fixer takes it")
     if tier == "deep" and not verdict and not escalate and red_decision(d):  # the owner decided it: no escalation
         sev = {"severity": "info"}
+    elif tier == "deep" and not verdict and not escalate and d.get("deep_told") == int(d.get("attempts") or 0):
+        sev = {"severity": "info"}  # ESCALATED ONCE PER ATTEMPT: a re-offer with no new attempt (a lease lost to infra,
+        # a red back from a block) at the deep tier is no new escalation -- 2026-11-02, #728: 58 RED ESCALATE in a day
     elif tier == "deep":
         verdict = verdict or f"RED ESCALATE: {red_what(d)} still red after {d.get('attempts')} attempts: a deep investigation is offered"
+        data = {**(data or {}), "deep_told": int(d.get("attempts") or 0)}
     if verdict:
         sev["refs"] = {"key": d.get("key"), "run": (d.get("last_run") or {}).get("number"), "workflow": d.get("workflow"),
                        "verdict": verdict, "tail": tail or [d.get("line") or ""], "command": "red"}
@@ -1622,17 +1626,41 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
 RED_QUICK_EXIT = 120       # a fixer ending this soon with no verdict never got going
 RED_START_BACKOFF = 600    # ...and its red waits this long (doubling) before the next dispatch
 
+# AN ATTEMPT IS A FIXER THAT TRIED AND FAILED TO FIX (2026-11-04: RED ESCALATE 261 and FIXER FAILED 204 in a week; #728
+# escalated 58 times on 11-02, each owner turn's "GAVE UP: ... the approved flip-unification stage 5 (a resolver rule
+# change, outside red fixing)" counted as one more attempt at the deep tier). Not an attempt:
+#   - a dispatched fixer's or owner's lease LOST TO INFRA (lapsed: the laptop asleep, the store out of reach, a wrapper
+#     gone; or orphaned): offered again quietly -- a living wrapper takes its lapsed lease again itself
+#     (fixer.HeldLease), and the crash-loop breaker still bounds launches that keep ending that way;
+#   - "GAVE UP: already fixed": checked by the red's own probe (a newer decided run no longer failing this way) -- the
+#     red is closed when it passes, else it waits in fix-pending (verify) for the run that decides it; a claim the run
+#     refutes is an attempt then;
+#   - "GAVE UP: needs the owner's decision / a design change": the red goes onto the owner ONCE, as the existing WAITING
+#     ON YOU (red_decision_block) with the fixer's words as its diagnosis -- never offered again meanwhile.
+GAVE_UP_FIXED = re.compile(r"\W*GAVE UP:.*?(\balready (?:fixed|fixes|landed|on (?:origin/)?main)\b|\bfixed upstream\b|"
+                           r"\bno fix needed\b|\bnothing (?:left )?to (?:fix|land)\b)", re.I | re.S)
+GAVE_UP_DECIDE = re.compile(r"\W*GAVE UP:.*?(\bneeds? (?:the |an? )?owner|\bowner'?s (?:choice|decision|call|approval)|"
+                            r"\boutside red fixing\b|\bdesign (?:change|call|decision)\b|\bresolver (?:rule|design)\b)",
+                            re.I | re.S)
+LEASE_INFRA = re.compile(r"(lease expired|ORPHANED|STOPPED: the red's lease was lost)")
+
 
 def red_lease_ended(store, it, row, block, t):
     """Its holder's lease ended (released with a verdict, expired without progress, revoked): one attempt (not for a
-    release by hand or a fixer that never started), the verdict in its history, offered again up the ladder."""
+    release by hand, a fixer that never started, a lease lost to infra, a red found already fixed, or one that needs the
+    owner's decision: AN ATTEMPT IS A FIXER THAT TRIED AND FAILED TO FIX), the verdict in its history, offered again up
+    the ladder."""
     d = it["data"]
     h = red_history(row, t)
     m = lease_meta(row)
     quick = float(m.get("released_at") or t) - float((row or {}).get("acquired_at") or 0) < RED_QUICK_EXIT
     if quick and re.match(r"(exit -?\d+|ended) with no|NOT STARTED", str(h["outcome"])):  # it never got going (a crash at start): not an
         h["outcome"] = re.sub(r"^(NOT STARTED: )*", "NOT STARTED: ", str(h["outcome"]))  # attempt, nor an instant re-dispatch
-    counted = not str(h["outcome"]).startswith(("NOT STARTED", "RELEASED"))
+    out = str(h["outcome"])
+    infra = bool(h.get("dispatched") and LEASE_INFRA.match(out))  # a wrapper's lease renews by its beat: a lapse is
+    # the wrapper or its machine gone (an interactive claim lapses by its own inactivity: that one counts)
+    counted = not (out.startswith(("NOT STARTED", "RELEASED")) or infra or GAVE_UP_FIXED.match(out)
+                   or GAVE_UP_DECIDE.match(out))
     upd = {"history": (d.get("history") or []) + [h], "holder": None,
            "attempts": int(d.get("attempts") or 0) + (1 if counted else 0)}
     if str(h["outcome"]).startswith("NOT STARTED") and m.get("tier") == "lander" and d.get("blame"):
@@ -1654,16 +1682,46 @@ def red_lease_ended(store, it, row, block, t):
         red_move(store, it, "blocked-external", f"{red_what(d)}: {block['text']}",
                  data={**upd, "cause": block.get("cause"), "block": block["name"]})
         return [f"blocked {red_what(d)}"]
+    if GAVE_UP_FIXED.match(out):  # ALREADY FIXED: the red's probe decides, never the fixer's word alone
+        return red_already_fixed(store, it, upd, out, t)
     if red_decision(d) and DECISION_FAILED.match(str(h["outcome"])):  # THE OWNER'S DECIDED ACTION FAILED: told
         return red_decision_failed(store, it, upd, h["outcome"], t)
     decide = red_decision_needed(d, h) if str(h["outcome"]).startswith("DIAGNOSED:") else None
+    if not decide and GAVE_UP_DECIDE.match(out):  # THE FIXER NEEDS THE OWNER'S DECISION: one WAITING ON YOU, with its
+        decide = re.sub(r"^\W*GAVE UP:\s*", "", out).strip()  # own words, never offered to the next fixer meanwhile
     if decide:
         return red_decision_block(store, it, upd, decide, t)
     streak = red_crash_streak({**d, **upd})
     if len(streak) >= env_num("AGENTCTL_RED_CRASH_LOOP", RED_CRASH_LOOP):
         return red_crash_loop(store, it, upd, streak, t)
-    red_offer(store, it, f"{red_what(d)}: {h['holder']} ended ({h['outcome'][:120]}): offered again", data=upd)
+    red_offer(store, it, f"{red_what(d)}: {h['holder']} ended ({h['outcome'][:120]}): offered again", data=upd,
+              quiet=not counted)
     return [f"re-offered {red_what(d)} after {h['outcome'][:60]}"]
+
+
+def red_already_fixed(store, it, upd, outcome, t):
+    """Its fixer found the red already fixed on main: the red's probe (a newer decided run of its workflow no longer
+    failing this way) closes it when it passes; else it waits in fix-pending (verify) for the run that decides it --
+    cleared by it, or offered again, the claim then counted as an attempt (red_fix_pending)."""
+    d = {**it["data"], **upd}
+    args = {"repo": d.get("repo") or None, "workflow": d.get("workflow"), "item": it["id"],
+            "run_id": (d.get("last_run") or {}).get("databaseId"), "run": (d.get("last_run") or {}).get("number")}
+    if not args["repo"]:
+        args.pop("repo")
+    try:
+        ok, why = probe_red_newer_verdict(args)
+    except Exception as e:  # an unreadable snapshot decides nothing: the verify state waits for the run
+        ok, why = None, f"probe failed ({type(e).__name__})"
+    store.update_item("red", it["id"], it["version"], upd)
+    it = store.item("red", it["id"])
+    if ok:
+        red_close(store, it, "cleared", f"its fixer found it already fixed, and {why}")
+        return [f"cleared {red_what(d)} (already fixed: {why})"]
+    store.close_offer(f"red:{it['id']}", "fix-pending")
+    red_move(store, it, "fix-pending", f"{red_what(d)}: its fixer found it already fixed ({outcome[:160]}): verifying "
+                                       f"({why})",
+             data={"fix": {"status": "verify", "at": t, "entry": None, "sha": "", "claimed": outcome[:300]}})
+    return [f"verifying {red_what(d)} (already fixed, says its fixer)"]
 
 
 # THE CRASH-LOOP BREAKER (G9, convergence-failures-2026-10-29 §4: in E9 fixers were launched 52 times over 9 reds, #2335
@@ -2095,6 +2153,10 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
             red_move(store, it, "verified", line)
             return [line]
         if obs is not None and after and d["key"] in obs:
+            if f.get("claimed"):  # its fixer said "already fixed" and the run refutes it: that fixer's attempt failed
+                red_offer(store, it, f"{red_what(d)}: still red after its fixer found it already fixed: offered again",
+                          data={"fix": None, "attempts": int(d.get("attempts") or 0) + 1})
+                return [f"re-offered {red_what(d)} (not fixed after all)"]
             red_offer(store, it, f"{red_what(d)}: still red after its block cleared: offered again", data={"fix": None})
             return [f"re-offered {red_what(d)} (still red after its block)"]
         if not d.get("gate") and not f.get("verify_dispatched"):

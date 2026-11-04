@@ -11,6 +11,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
 from test_owner import OwnerBase, FAM  # noqa: E402
+from test_red_crash_loop import CrashLoopBase  # noqa: E402
 from test_reds import RedsBase  # noqa: E402
 
 
@@ -109,6 +110,67 @@ class OwnerRedLeaseLapseTest(OwnerBase):
         self.assertTrue(self.wait(lambda: (self.st.get(name) or {}).get("epoch") == before["epoch"] + 1, limit=10))
         self.assertEqual(self.st.get(name)["holder"], A.owner_holder(FAM))
         self.assertEqual(A.owner_leases(FAM)[name]["epoch"], before["epoch"] + 1, "still the owner's")
+
+
+class AttemptTest(CrashLoopBase):
+    def setUp(self):
+        super().setUp()
+        self.saved_probe = A.probe_red_newer_verdict
+        self.addCleanup(setattr, A, "probe_red_newer_verdict", self.saved_probe)
+
+    def probe(self, ok, why):
+        A.probe_red_newer_verdict = lambda args: (ok, why)
+
+    def escalate_events(self):
+        return [e for e in self.st.events(after=0, limit=1000) if e["severity"] == "escalate"]
+
+    def test_a_lease_lost_to_infra_is_no_attempt(self):
+        it, _ = self.launch(self.red(), outcome="lease expired")
+        self.assertEqual((it["state"], it["data"]["attempts"]), ("offered", 0))
+        it, _ = self.launch(it, outcome="STOPPED: the red's lease was lost (taken by another holder)")
+        self.assertEqual(it["data"]["attempts"], 0)
+
+    def test_already_fixed_is_closed_by_the_reds_probe_never_an_attempt(self):
+        self.probe(True, "Main Pipeline #754 green")
+        it, acts = self.launch(self.red(), outcome="GAVE UP: already fixed on main by f9df2ea40 (V206)")
+        self.assertEqual((it["state"], it["data"]["attempts"]), ("cleared", 0), acts)
+
+    def test_already_fixed_unproven_waits_for_the_run_that_decides_it_never_an_attempt(self):
+        self.probe(False, "no Main Pipeline run newer than #752")
+        it, acts = self.launch(self.red(), outcome="GAVE UP: red 728 is already fixed upstream by `2d4479caf`")
+        self.assertEqual((it["state"], it["data"]["attempts"]), ("fix-pending", 0), acts)
+        self.assertEqual(it["data"]["fix"]["status"], "verify")
+        self.assertEqual(self.escalate_events(), [])
+
+    def test_a_give_up_that_needs_the_owners_decision_asks_once_and_is_never_offered_again(self):
+        """#728, 2026-11-02: 58 RED ESCALATE, each owner turn's give-up one more attempt at the deep tier."""
+        why = ("GAVE UP: #728's fix is the approved flip-unification stage 5 (a resolver rule change, outside red "
+               "fixing); `flip/stage5-contested` has been idle 11 hours")
+        it, acts = self.launch(self.red(attempts=14, tier="deep"), outcome=why)
+        self.assertEqual((it["state"], it["data"]["attempts"]), ("blocked-external", 14), acts)
+        self.assertEqual(it["data"]["cause"], A.DECISION_CAUSE)
+        block = A.lease_meta(self.st.get(A.block_lease("k")))
+        self.assertIn("approved flip-unification stage 5", block["text"])
+        self.assertIn("WAITING ON YOU", block["text"])
+        self.assertEqual(len(self.escalate_events()), 1, "told once")
+
+    def test_a_deep_red_re_offered_without_a_new_attempt_is_no_new_escalation(self):
+        it = self.red(attempts=3, tier="deep")
+        it, _ = self.launch(it, outcome="GAVE UP: cannot reproduce")  # a real attempt: escalated
+        self.assertEqual(it["data"]["attempts"], 4)
+        n = len(self.escalate_events())
+        self.assertEqual(n, 1)
+        it, _ = self.launch(it, outcome="lease expired")  # infra: no attempt, no new escalation
+        self.assertEqual((it["state"], it["data"]["attempts"]), ("offered", 4))
+        self.assertEqual(len(self.escalate_events()), n)
+
+    def test_the_fixer_wrapper_files_no_failure_for_what_the_reconciler_decides(self):
+        for v in ("ENDED: red cleared (its lease was taken back: nothing left to fix)",
+                  "GAVE UP: already fixed on origin/main by 917d341b6",
+                  "GAVE UP: #629's flip is resolver design, not incremental state; it needs the owner to choose"):
+            self.assertTrue(A.fixer_quiet(v), v)
+        for v in ("GAVE UP: cannot reproduce", "STALLED: no progress", "LANDED abc1234", "NOT LANDED: x"):
+            self.assertFalse(A.fixer_quiet(v), v)
 
 
 if __name__ == "__main__":
