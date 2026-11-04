@@ -1808,7 +1808,7 @@ BLOCK_PROBE_EVERY = 60
 
 
 def block_lease(key=None, cause=None):
-    return f"block/cause/{re.sub(r'[^\w.-]+', '_', cause)}" if cause else f"block/{key}"
+    return ("block/cause/" + re.sub(r'[^\w.-]+', '_', cause)) if cause else f"block/{key}"
 
 
 def red_block_of(it, store=None):

@@ -2525,7 +2525,7 @@ def red_dispatcher(store, o_r, repo, t):
             why = f"NOT DISPATCHABLE: {gap}"
             if why != off.get("reason"):
                 store.offer_reason(off["id"], why)
-                inbox_write("red", f"RED NOT DISPATCHABLE: {pic.get('workflow')} #{(pic.get("run") or {}).get("number")}: {gap}", [], [], 1)
+                inbox_write("red", f"RED NOT DISPATCHABLE: {pic.get('workflow')} #{(pic.get('run') or {}).get('number')}: {gap}", [], [], 1)
             continue
         num = (pic.get("run") or {}).get("number")
         holder_id = owner_holder(fam) if owned else f"laptop:fixer:red-{pic['key']}-{int(pic.get('attempts') or 0) + 1}"
