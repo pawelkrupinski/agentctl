@@ -41,7 +41,7 @@ refresh() {
   # `agentctl status --line`: the processor's snapshot (state.json) alone -- the gate line, waiting / checking, and
   # `RECONCILER STALLED since HH:MM` when its tick is old. No git, no GitHub (design §9).
   gate=$(~/bin/agentctl status --line 2>/dev/null | tail -1)
-  inbox=$(~/bin/agentctl inbox --unread 2>/dev/null | grep -c UNREAD)
+  inbox=$(~/bin/agentctl inbox --unread --audience owner 2>/dev/null | grep -c UNREAD)  # the owner's alerts only (THE ALERT MODEL)
   # an unacked escalation: notified (macOS) and following the gate, in bold
   esc=$(~/bin/agentctl inbox escalated 2>/dev/null | head -1)
   line="${gate:-gate ?} · ${esc:+$esc · }inbox: ${inbox:-0} unread"  # the gate first (owner)

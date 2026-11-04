@@ -1241,7 +1241,7 @@ nowhere. Every verdict now reaches the inbox: a change's, a batch's and a watch'
   and `--ack --all` everything listed (the owner's, the orchestrator's), `-v` adds each entry's output tail, an ID prefix picks entries. Exit 0.
 - The orchestrating session reads it whether or not the agent is alive: `agentctl inbox --unread --ack --all` after each
   agent's report, and before deciding an agent's land is lost.
-- Each entry has a `kind`, from its verdict: `RED`, `OK`, `STALLED`, `UNKNOWN` (also a crash, a signal, an exit with
+- Each entry has a `kind`, from its verdict: `RED`, `OK`, `STALLED`, `ENDED` (a command killed by a signal), `USAGE` (a misused command), `UNKNOWN` (also a crash, an exit with
   no verdict), `NOT_LANDED`, `SUPERSEDED`, `LANDED`, `WAITING`, `HELD`, `FIX_FAILED`, `FIX_OK`, `FIX_UNVERIFIED`, `CHECK`, `OTHER`;
   from `red`: `RED_UNCLAIMED`, `RED_BUDGET`, `RED_ESCALATE`, `BLOCKED`, `RED_DISPATCHED`, `FIXER_LANDED`,
   `FIXER_FAILED`; from the blame (see "blame"): `RED_BLAME`, `RED_REVERT` (a `RED REVERT REFUTED` too), `RED_RELAND`,
@@ -1260,11 +1260,35 @@ newest is told; a repeat (same kind and state, same spell) waits for the reminde
 more than 3 items at once (a catch-up after a sleep or a store outage) is ONE summary notification. The status line leads with a bold `ESCALATED: N (...)` while any is current; `agentctl inbox escalated`
 prints that line, or nothing.
 
+#### the alert model: who must act on what (2026-11-04)
+
+1524 owner-facing alerts in 7 days over 614 items; ~35 needed the owner. The cause: alerts were emitted per EVENT from
+many call sites with no model of who acts. Now every inbox entry -- `inbox_write` and the event projector alike -- goes
+through ONE router (`lib/agentctl/alerts.py`):
+
+- every entry is keyed by an ITEM (a red, a change's worktree, a condition, a run an author watched...) and stamped with
+  an AUDIENCE: `author` (NOT LANDED, WATCH RED, RED AUTHOR, FIX FAILED, a command's own crash/`ENDED`/`USAGE`), `fixer`
+  (RED FIXER ..., RED DISPATCHED, RED ESCALATE, RED UNCLAIMED/STARVED while a holder or a family owner is alive or
+  before `alert_red_owner_level` offer rounds, a self-healing condition before its bound), `owner` (BLOCKED ON OWNER /
+  WAITING ON YOU, RED BUDGET, UNLANDED ORPHAN after its fixer, a red nobody can take, a condition past its bound) or
+  `info`. Only the owner's reach `inbox wait` (by default), the notifier and `ESCALATED`.
+- ONE LIVE ALERT PER ITEM: a new event for an item whose alert is unread updates it in place (`verdict`, `count`,
+  `verdicts`, `at`); it is shown again (`surfaced`) only when it becomes the owner's or its red changes tier. It
+  closes by itself (acked, `closed: {at, why}`) when its item's probe clears -- the red taken or cleared, the
+  condition closed, the change landed, the worktree removed (the sync's `alerts` step, every minute) -- or when a
+  closing verdict for the item arrives (LANDED, WATCH OK, FIX OK, RED CLEARED).
+- invariants W5/WM/W7 open their condition only after 2 consecutive misses and are the owner's only past 30 min.
+- The index (item -> live entry) is `<inbox>.alerts/index.json`, beside the inbox. Its first use migrates: every unread
+  entry is stamped and one item's older unread entries are folded into its newest (acked, counted): no flood.
+- `agentctl inbox --audience owner|author|fixer|info|all` filters a listing (the status line counts `owner`).
+
 #### inbox wait: the orchestrator's notifier
 
 ```
-agentctl inbox wait [--kinds RED,BRANCH_RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_BUDGET,RED_ESCALATE,BLOCKED,FIXER_FAILED] [--since-ack] [--timeout S] [--forever]
+agentctl inbox wait [--kinds INVARIANT,NETWORK,RED_STARVED,RED,BRANCH_RED,FIX_FAILED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_BUDGET,RED_ESCALATE,BLOCKED,FIXER_FAILED,...] [--audience owner] [--since-ack] [--timeout S] [--forever]
 ```
+
+`--audience` (default `owner`; `all` is the old behaviour): only the alerts addressed to it (see the alert model).
 
 `--forever` never exits: it streams each such entry once, one line each, as it appears -- ONE long-lived background
 task (Monitor or `run_in_background`) covers the whole session, no re-arm needed; ack as you route.
@@ -1521,6 +1545,9 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 
 | key (`agentctl.toml`) | environment | default | what |
 |---|---|---|---|
+| `alert_quiet_max` | `AGENTCTL_ALERT_QUIET_MAX` | `86400` | s a READ alert stays its item's live one after its last event |
+| `alert_reconcile` | `AGENTCTL_ALERT_RECONCILE` | `60` | s between reconcile passes |
+| `alert_red_owner_level` | `AGENTCTL_ALERT_RED_OWNER_LEVEL` | `2` | offer rounds a red goes untaken (nobody holding it, no family owner) before it is the owner's |
 | `allow` | `AGENTCTL_ALLOW` | - | - |
 | `allowed_roots` | `AGENTCTL_ALLOWED_ROOTS` | - | - |
 | `ask_remind_first` | `AGENTCTL_ASK_REMIND_FIRST` | `3600` | the first reminder this long after the owner was told |
@@ -1682,6 +1709,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `w8_window` | `AGENTCTL_W8_WINDOW` | `3600` | W8 looks at the change items that closed within this |
 | `waiting_green_ticks` | `AGENTCTL_WAITING_GREEN_TICKS` | `100` | ticks (~10 min) changes may wait at a green gate with no batch moving: then STALLED |
 | `waiting_timeout` | `AGENTCTL_WAITING_TIMEOUT` | `86400` | - |
+| `watchdog_misses` | `AGENTCTL_WATCHDOG_MISSES` | `2` | consecutive passes a self-healing invariant (W5, WM, W7) fails before its condition opens |
 | `watch_conv_start` | `AGENTCTL_WATCH_CONV_START` | `3600` | no convergence run containing the sha started by then: said, not waited for |
 | `watch_error_poll` | `AGENTCTL_WATCH_ERROR_POLL` | `30` | - |
 | `watch_poll` | `AGENTCTL_WATCH_POLL` | `60` | - |

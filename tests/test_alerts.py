@@ -1,0 +1,263 @@
+"""THE ALERT MODEL (the owner, 2026-11-04: 1524 owner-facing alerts in 7 days, ~35 needed the owner; "fix root causes,
+make structural fixes"). Every inbox entry goes through ONE router: keyed by an ITEM, addressed to an AUDIENCE (author,
+fixer, owner, info); one live alert per item, updated in place; closed by its item's own probe; only the owner's reach
+the owner's `inbox wait`, the notifier and the ESCALATED count. Each test here failed before the model."""
+import contextlib, io, json, os, stat, sys, tempfile, time, unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from test_agentctl import A  # noqa: E402
+
+
+class AlertBase(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.saved = {k: os.environ.get(k) for k in ("AGENTCTL_INBOX_DIR", "AGENTCTL_NOTIFY", "AGENTCTL_RED_FAMILIES",
+                                                     "AGENTCTL_INBOX_POLL", "CLAUDE_CODE_SESSION_ID")}
+        self.inbox = os.path.join(self.root, "inbox")
+        os.environ["AGENTCTL_INBOX_DIR"] = self.inbox
+        self.notes = os.path.join(self.root, "notes")
+        hook = os.path.join(self.root, "notify.sh")
+        with open(hook, "w") as f:
+            f.write(f'#!/bin/sh\necho "$1|$2" >> {self.notes}\n')
+        os.chmod(hook, os.stat(hook).st_mode | stat.S_IEXEC)
+        os.environ["AGENTCTL_NOTIFY"] = hook
+        fams = os.path.join(self.root, "families.json")
+        with open(fams, "w") as f:
+            json.dump({"families": [{"name": "conv", "owner": True, "workflows": ["Conv"]}]}, f)
+        os.environ["AGENTCTL_RED_FAMILIES"] = fams
+        self.st = A.Store(path=os.path.join(self.root, "store.db"))
+        self.wt = os.path.join(self.root, "movies-wt-a")
+        os.makedirs(self.wt)
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def unread(self, audience=None):
+        return [e for e in A.inbox_entries() if not e["read"] and (audience is None or A.alert_audience(e) == audience)]
+
+    def owner_wait(self):
+        os.environ["AGENTCTL_INBOX_POLL"] = "0.01"
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = A.main(["inbox", "wait", "--timeout", "0.1"])
+        return code, out.getvalue()
+
+    def shown(self):
+        return open(self.notes).read().splitlines() if os.path.exists(self.notes) else []
+
+    def red(self, key="r1", workflow="Main", level_to=0):
+        it = self.st.put_item("red", key, "offered", {"key": key, "workflow": workflow, "last_run": {"number": 2123},
+                                                      "jobs": ["test"], "tier": "fixer"})
+        return it
+
+    def unclaimed(self, key="r1"):
+        """The reconciler's RED UNCLAIMED: the offered red's self-transition (escalate) with its verdict."""
+        it = self.st.item("red", key)
+        line = f"RED UNCLAIMED: {A.red_what(it['data'])}: no taker for 10 min (no taker)"
+        A.red_move(self.st, it, "offered", line, severity="escalate",
+                   refs={"key": key, "verdict": line + " -- `~/bin/agentctl red claim ...`", "command": "red"})
+        A.project_events(self.st)
+        return self.st.item("red", key)
+
+
+class RoutingTest(AlertBase):
+    def test_not_landed_is_the_authors_and_one_live_alert_per_worktree(self):
+        """84 identical `NOT LANDED: the pre-push checks failed` reached the owner in a week: the author's job."""
+        for i in range(3):
+            self.st.put_item("change", f"c{i}", "checking", {"worktree": self.wt})
+            self.st.transition("change", f"c{i}", "rejected", 1, event=A.change_event(
+                {"id": f"c{i}", "worktree": self.wt}, f"NOT LANDED: the pre-push checks failed (ci-runner); try {i}"))
+        A.project_events(self.st)
+        [e] = self.unread()
+        self.assertEqual((e["audience"], e["count"], e["kind"]), ("author", 3, "NOT_LANDED"))
+        self.assertIn("try 2", e["verdict"], "the live alert carries the newest event")
+        self.assertEqual(self.owner_wait()[0], 2, "nothing for the owner")
+
+    def test_watch_red_fan_out_is_one_per_red_per_author_and_never_the_owners(self):
+        other = os.path.join(self.root, "movies-wt-b")
+        os.makedirs(other)
+        for wt in (self.wt, self.wt, self.wt, other):  # every commit in the red's range, two authors
+            A.inbox_write("land", "WATCH RED: Main #2711 failed (your commit is in its range)", [], [], 3, cwd=wt)
+        es = self.unread()
+        self.assertEqual(sorted((os.path.basename(e["cwd"]), e["count"]) for e in es), [("movies-wt-a", 3), ("movies-wt-b", 1)])
+        self.assertEqual({e["audience"] for e in es}, {"author"})
+        self.assertEqual(self.owner_wait()[0], 2)
+
+    def test_unknown_kinds_are_classified_ended_by_signal_and_usage_are_the_agents_own(self):
+        self.assertEqual(A.inbox_kind("ended by signal 15"), "ENDED")
+        self.assertEqual(A.inbox_kind("exited: wait run needs numeric run ids (action_run.id, the GITHUB_RUN_ID)"), "USAGE")
+        for v in ("ended by signal 15", "exited: wait run needs numeric run ids (x)", "crashed: StoreUnavailable: POST"):
+            A.inbox_write("land", v, [], [], 1, cwd=self.wt, reply=True)
+        self.assertEqual({A.alert_audience(e) for e in self.unread()}, {"author"})
+        self.assertEqual(self.owner_wait()[0], 2)
+
+    def test_fixer_failures_and_dispatches_are_the_fixers(self):
+        A.inbox_write("red fixer", "RED FIXER Main #764 [x]: STOPPED: the red's lease was lost", [], [], 1)
+        A.inbox_write("red", "RED DISPATCHED: Main Pipeline #764 [x] -> fixer session 'red fixer #764'", [], [], 0)
+        self.assertEqual({A.alert_audience(e) for e in self.unread()}, {"fixer"})
+        self.assertEqual(self.owner_wait()[0], 2)
+
+    def test_a_decision_is_the_owners_at_once(self):
+        A.inbox_write("red", "RED BLOCKED ON OWNER: Conv #728 WAITING ON YOU: baseline the flips? -- `agentctl decide`",
+                      [], [], 1)
+        code, out = self.owner_wait()
+        self.assertEqual(code, 0)
+        self.assertIn("WAITING ON YOU", out)
+
+
+class RedEscalationTest(AlertBase):
+    def test_unclaimed_while_a_holder_exists_never_reaches_the_owner(self):
+        """11-03: Main #2123 x81 RED UNCLAIMED while its family owner's lease had merely lapsed."""
+        self.red()
+        self.st.acquire(A.red_lease("r1"), "laptop:fixer:x", 3600, 7200)
+        for _ in range(5):
+            self.unclaimed()
+        [e] = self.unread()
+        self.assertEqual((e["audience"], e["count"]), ("fixer", 5))
+        A.notify_escalations(self.st)
+        self.assertEqual(self.shown(), [], "never notified")
+        self.assertEqual(A.escalated_now(self.st), [])
+
+    def test_unclaimed_while_the_family_owner_is_alive_is_the_fixers(self):
+        self.red(workflow="Conv")
+        self.st.acquire(A.owner_lease("conv"), A.owner_holder("conv"), 3600, 7200)
+        for _ in range(3):
+            self.unclaimed()
+        self.assertEqual({e["audience"] for e in self.unread()}, {"fixer"})
+        A.notify_escalations(self.st)
+        self.assertEqual(self.shown(), [])
+
+    def test_a_red_nobody_can_take_becomes_the_owners_once_per_level_then_updates_silently(self):
+        self.red()
+        self.unclaimed()
+        [e] = self.unread()
+        self.assertEqual(e["audience"], "fixer", "one offer round: the fixers' still")
+        self.unclaimed()
+        [e] = self.unread()
+        self.assertEqual((e["audience"], e["surfaced"]), ("owner", 2), "nobody took it twice: the owner's, surfaced")
+        for _ in range(6):
+            self.unclaimed()
+        [e] = self.unread()
+        self.assertEqual((e["count"], e["surfaced"]), (8, 2), "the repeats update it; they surface nothing")
+        A.notify_escalations(self.st)
+        self.assertEqual(len(self.shown()), 1)
+        code, out = self.owner_wait()
+        self.assertEqual(code, 0)
+        self.assertEqual(out.count("RED UNCLAIMED"), 1)
+
+    def test_escalate_is_the_fixers_a_dispatch_follows(self):
+        it = self.red()
+        line = "RED ESCALATE: Main #2123 [test] still red after 14 attempts: a deep investigation is offered"
+        for _ in range(4):
+            it = A.red_move(self.st, it, "offered", line, severity="escalate", refs={"key": "r1", "verdict": line})
+        A.project_events(self.st)
+        [e] = self.unread()
+        self.assertEqual((e["audience"], e["count"]), ("fixer", 4))
+        A.notify_escalations(self.st)
+        self.assertEqual(self.shown(), [])
+
+
+class SelfCloseTest(AlertBase):
+    def test_an_unclaimed_alert_closes_itself_once_the_red_is_taken(self):
+        self.red()
+        self.unclaimed()
+        self.unclaimed()
+        [e] = self.unread("owner")
+        it = self.st.item("red", "r1")
+        self.st.transition("red", "r1", "leased", it["version"])
+        out = A.reconcile_alerts(self.st, force=True)
+        self.assertTrue(any("closed red:r1" in x for x in out), out)
+        self.assertEqual(self.unread(), [])
+        self.assertIn("taken", A.read_record(os.path.join(self.inbox, e["id"] + ".json"))["closed"]["why"])
+
+    def test_a_landed_verdict_closes_its_worktrees_not_landed(self):
+        A.inbox_write("land", "NOT LANDED: the pre-push checks failed", [], [], 1, cwd=self.wt)
+        A.inbox_write("land", "LANDED abc1234 (queued e9)", [], [], 0, cwd=self.wt)
+        self.assertEqual([e["kind"] for e in self.unread()], ["LANDED"])
+
+    def test_a_removed_worktree_closes_its_alerts(self):
+        A.inbox_write("land", "NOT LANDED: the pre-push checks failed", [], [], 1, cwd=self.wt)
+        os.rmdir(self.wt)
+        A.reconcile_alerts(self.st, force=True)
+        self.assertEqual(self.unread(), [])
+
+    def test_an_authors_read_alert_is_shown_again_with_each_new_verdict(self):
+        a = A.inbox_write("land", "NOT LANDED: one", [], [], 1, cwd=self.wt)
+        A.alert_ack(self.inbox, a)
+        b = A.inbox_write("land", "NOT LANDED: two", [], [], 1, cwd=self.wt)
+        self.assertEqual(a, b)
+        [e] = self.unread()
+        self.assertEqual((e["verdict"], e["count"]), ("NOT LANDED: two", 2))
+
+    def test_the_owners_read_alert_is_not_re_told_by_repeats(self):
+        """Reading an alert does not end it: the item's probe does. The owner read RED UNCLAIMED; 20 repeats later the
+        inbox holds the same read entry, updated."""
+        self.red()
+        self.unclaimed()
+        self.unclaimed()
+        [e] = self.unread("owner")
+        A.alert_ack(self.inbox, e["id"])
+        for _ in range(20):
+            self.unclaimed()
+        self.assertEqual(self.unread(), [])
+        self.assertEqual(A.read_record(os.path.join(self.inbox, e["id"] + ".json"))["count"], 22)
+
+
+class HysteresisTest(AlertBase):
+    def test_a_self_healing_invariant_is_the_fixers_until_it_outlives_its_bound(self):
+        saved = A.INVARIANTS["W5"]
+        A.INVARIANTS["W5"] = lambda: (False, "the processor has not beaten for 10 min")
+        try:
+            p = A.run_probe("invariant", {"id": "W5"})
+            A.open_condition("INVARIANT", "INVARIANT W5 violated: the processor has not beaten", p, [],
+                             key="invariant-W5", command="watchdog", store=self.st)
+        finally:
+            A.INVARIANTS["W5"] = saved
+        [e] = self.unread()
+        self.assertEqual(e["audience"], "fixer")
+        self.assertEqual(self.owner_wait()[0], 2)
+        it = A.condition_item_of(self.st, "invariant-W5")
+        self.st.update_item("condition", it["id"], it["version"], {"opened_at": time.time() - 2 * 3600})
+        A.reconcile_alerts(self.st, force=True)
+        [e] = self.unread()
+        self.assertEqual((e["audience"], e["surfaced"]), ("owner", 2), "outlived its bound: the owner's now")
+        self.assertEqual(self.owner_wait()[0], 0)
+
+    def test_other_invariants_are_the_owners_at_once(self):
+        self.assertEqual(A.alert_condition_audience("INVARIANT", {"verdict": "INVARIANT W6 violated: x"}, time.time(),
+                                                    time.time()), "owner")
+        self.assertEqual(A.alert_condition_audience("INVARIANT", {"verdict": "INVARIANT WM violated: x"}, time.time(),
+                                                    time.time()), "fixer")
+
+
+class MigrationTest(AlertBase):
+    def write_old(self, i, verdict, cwd=None, command="red"):
+        """An entry as the code before the model wrote it: no audience, no item, no index."""
+        eid = f"20261103T0000{i:02d}000000-1-{command.replace(' ', '-')}"
+        rec = {"id": eid, "time": "t", "at": 1000.0 + i, "command": command, "cwd": cwd or self.wt, "final": True,
+               "exit": 1, "verdict": verdict, "kind": A.inbox_kind(verdict), "verdicts": [verdict], "tail": []}
+        os.makedirs(self.inbox, exist_ok=True)
+        A.write_json(os.path.join(self.inbox, eid + ".json"), rec)
+        return eid
+
+    def test_the_switch_over_folds_the_backlog_and_floods_nobody(self):
+        for i in range(20):
+            self.write_old(i, f"RED UNCLAIMED: Main #2123 [test]: no taker for {10 * i} min (no taker)")
+        for i in range(20, 25):
+            self.write_old(i, "NOT LANDED: the pre-push checks failed (on ci-runner)", command="land")
+        self.write_old(30, "RED BLOCKED ON OWNER: Conv #728 WAITING ON YOU: decide")
+        code, out = self.owner_wait()
+        self.assertEqual(out.count("UNREAD"), 1, out)  # only the decision
+        self.assertIn("WAITING ON YOU", out)
+        es = self.unread()
+        self.assertEqual(sorted((e["kind"], e["count"]) for e in es),
+                         [("BLOCKED", 1), ("NOT_LANDED", 5), ("RED_UNCLAIMED", 20)])
+
+
+if __name__ == "__main__":
+    unittest.main()

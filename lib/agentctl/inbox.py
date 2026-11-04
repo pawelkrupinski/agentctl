@@ -72,10 +72,13 @@ INBOX_KINDS = [("INVARIANT", r"INVARIANT "), ("CLOSED", r"CLOSED"), ("UNLANDED_O
                ("FIXER_FAILED", r"RED FIXER "), ("RED_CLEARED", r"RED CLEARED"), ("FIX_FAILED", r"FIX FAILED"), ("FIX_NOT_COUNTED", r"FIX NOT COUNTED"), ("FIX_OK", r"FIX OK"), ("FIX_UNVERIFIED", r"FIX UNVERIFIED"),
                ("RED", r"WATCH RED"), ("OK", r"WATCH OK"), ("STALLED", r"WATCH STALLED|STALLED:|.*\bstalled\b"),
                # a crash, a signal or an exit with no verdict: whatever it watched is unknown now
+               # an agent's command killed (a reap, a restart) or misused: its own news, never an unknown state
+               ("ENDED", r"ended by signal"), ("USAGE", r"exited: .*needs numeric|exited: usage:"),
+               ("RED_STARVED", r"RED STARVED"),
                ("UNKNOWN", r"WATCH UNKNOWN|UNKNOWN:|crashed:|exited:|ended by signal|exit \d+ with no verdict"),
                ("NOT_LANDED", r"NOT LANDED"), ("SUPERSEDED", r"SUPERSEDED "), ("LANDED", r"LANDED "), ("WAITING", r"WAITING "), ("QUEUED", r"QUEUED "), ("HELD", r"HELD:"),
                ("CHECK", r"CHECK CAP")]
-WAIT_KINDS_DEFAULT = "RED,BRANCH_RED,FIX_FAILED,FIX_NOT_COUNTED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_BUDGET,RED_AUTHOR,RED_ESCALATE,BLOCKED,FIXER_FAILED,DIAGNOSED,UNLANDED_ORPHAN,RED_REVERT,LAUNCH_FAILED"
+WAIT_KINDS_DEFAULT = "INVARIANT,NETWORK,RED_STARVED,RED,BRANCH_RED,FIX_FAILED,FIX_NOT_COUNTED,NOT_LANDED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_BUDGET,RED_AUTHOR,RED_ESCALATE,BLOCKED,FIXER_FAILED,DIAGNOSED,UNLANDED_ORPHAN,RED_REVERT,LAUNCH_FAILED"
 
 
 def inbox_kind(verdict, final=True):
@@ -89,10 +92,12 @@ def inbox_kind(verdict, final=True):
     return "OTHER"
 
 
-def inbox_write(command, verdict, verdicts, tail, exit_code, final=True, cwd=None, reply=False):
+def inbox_write(command, verdict, verdicts, tail, exit_code, final=True, cwd=None, reply=False, item=None):
     """One inbox entry, written atomically; returns its id (None when the inbox cannot be written: never fatal).
     A CONDITION_KINDS entry only from open_condition (ConditionBypass otherwise: it would have no probe to clear it);
-    reply=True: a command's own verdict to the agent that ran it (with_inbox), not a standing condition."""
+    reply=True: a command's own verdict to the agent that ran it (with_inbox), not a standing condition. item: the alert
+    model's item (alerts.py; derived from the verdict when None). Routed and merged by alert_write: the id returned is the
+    entry that carries it (its item's live alert when one is unread)."""
     if final and not reply and not _OPENING[0] and inbox_kind(verdict, final) in CONDITION_KINDS:
         raise ConditionBypass(f"a {inbox_kind(verdict, final)} inbox entry outside open_condition: {str(verdict)[:160]}")
     now = dt.datetime.now(dt.timezone.utc)
@@ -104,15 +109,11 @@ def inbox_write(command, verdict, verdicts, tail, exit_code, final=True, cwd=Non
            "kind": inbox_kind(verdict, final),
            "owner": os.environ.get("CLAUDE_CODE_SESSION_ID") or f"{os.environ.get('USER', '?')}@{here}",
            "claude_pid": int(os.environ["CLAUDE_PID"]) if (os.environ.get("CLAUDE_PID") or "").isdigit() else None,
-           "agent": agent_name(), "verdicts": verdicts, "tail": tail}
+           "agent": agent_name(), "verdicts": verdicts, "tail": tail, "reply": bool(reply)}
+    if item:
+        rec["alert_item"] = item
     try:
-        d = inbox_dir()
-        os.makedirs(d, exist_ok=True)
-        tmp = os.path.join(d, f".{eid}.tmp")
-        with open(tmp, "w") as f:
-            json.dump(rec, f, indent=1)
-        os.replace(tmp, os.path.join(d, eid + ".json"))
-        return eid
+        return alert_write(rec)
     except OSError as e:
         err(f"could not write the inbox entry ({e})")
         return None
@@ -198,14 +199,19 @@ def last_ack(d):
 INBOX_WAIT_POLL = 1.0  # seconds between stat()s of the inbox directory ($AGENTCTL_INBOX_POLL)
 
 
-def inbox_wait(kinds, since_ack=False, timeout=0, verbose=False, forever=False):
+def inbox_wait(kinds, since_ack=False, timeout=0, verbose=False, forever=False, audience="owner"):
     """THE NOTIFIER: block until an unread entry of `kinds` exists, print it (every one there is), exit 0; 2 at the
     timeout. Cheap: one stat() of the inbox directory (and of acked/) a second, the entries read again only when either
     changed (a new entry is an os.replace into the directory, an ack a file in acked/). No forge, no git.
-    forever: never exits; streams each such entry once, one line each, as it appears (one background task a session)."""
+    forever: never exits; streams each such entry once, one line each, as it appears (one background task a session).
+    audience (THE ALERT MODEL, alerts.py): only entries addressed to it -- the owner's by default; "all" every one. An
+    alert updated in place is streamed again only when it is SURFACED again (it became the owner's, a new tier)."""
     d = inbox_dir()
     os.makedirs(d, exist_ok=True)
     want = {k.strip().upper().replace("-", "_") for k in kinds.split(",") if k.strip()}
+    auds = None if audience in (None, "", "all") else {x.strip() for x in str(audience).split(",") if x.strip()}
+    with alert_lock(d):
+        alert_index(d)  # the first use migrates the backlog into the model: no flood
     floor = last_ack(d) if since_ack else 0.0
     poll = env_num("AGENTCTL_INBOX_POLL", INBOX_WAIT_POLL)
     t0, seen, printed = time.time(), None, set()
@@ -218,11 +224,12 @@ def inbox_wait(kinds, since_ack=False, timeout=0, verbose=False, forever=False):
         if stamp != seen:
             seen = stamp
             hits = [e for e in inbox_entries() if not e["read"] and (e.get("at") or 0) > floor
-                    and (e.get("kind") or inbox_kind(e.get("verdict"), e.get("final", True))) in want]
+                    and (e.get("kind") or inbox_kind(e.get("verdict"), e.get("final", True))) in want
+                    and (auds is None or alert_audience(e) in auds)]
             if forever:
                 for e in hits:
-                    if e["id"] not in printed:
-                        printed.add(e["id"])
+                    if (e["id"], e.get("surfaced") or 1) not in printed:
+                        printed.add((e["id"], e.get("surfaced") or 1))
                         print(entry_line(e), flush=True)
                         if verbose:
                             for line in e.get("tail") or []:

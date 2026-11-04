@@ -126,7 +126,8 @@ class InboxTest(unittest.TestCase):
             in_my_tree = A.inbox_write("land", "WATCH RED: Main #9 test", [], [], 3, cwd=os.path.join(mine_wt, "sub"),
                                        reply=True)
             theirs = A.inbox_write("land", "NOT LANDED: theirs", [], [], 1, cwd=other_wt, reply=True)
-            named = A.inbox_write("land", "NOT LANDED: named", [], [], 1, cwd=other_wt, reply=True)
+            # another item of theirs (one live alert per item: a second NOT LANDED of that worktree would merge into it)
+            named = A.inbox_write("land", "WATCH RED: Main #10 named", [], [], 1, cwd=other_wt, reply=True)
             os.environ["CLAUDE_CODE_SESSION_ID"] = "session-mine"
             os.chdir(mine_wt)
             _, out = self.run_main(["inbox", "--unread", "--ack"])
@@ -205,7 +206,7 @@ class InboxTest(unittest.TestCase):
     def wait(self, *args):
         os.environ["AGENTCTL_INBOX_POLL"] = "0.02"
         try:
-            return self.run_main(["inbox", "wait", *args])
+            return self.run_main(["inbox", "wait", "--audience", "all", *args])  # the mechanics, whoever's (test_alerts)
         finally:
             del os.environ["AGENTCTL_INBOX_POLL"]
 

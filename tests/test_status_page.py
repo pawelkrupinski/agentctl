@@ -134,7 +134,7 @@ class Base(unittest.TestCase):
                                               "jobs": ["leg (poland)"], "last_run": {"number": 2473}, "opened_at": T - 7200,
                                               "history": [{"at": "x", "holder": "h", "outcome": "refuted"}]}),
                 item("red", "k2", "offered", {"key": "k2", "workflow": "Archive recording", "job": "report",
-                                               "last_run": {"number": 823, "databaseId": 9823}, "tier": "infra"}, level=1),
+                                               "last_run": {"number": 823, "databaseId": 9823}, "tier": "infra"}, level=2),
                 item("red", "k3", "verified", {"key": "k3", "workflow": "Main", "last_run": {"number": 1}})]
         changes = [item("change", "c-late", "waiting", {"worktree": "/w/a", "head": "a" * 40}, deadline=T - 60),
                    item("change", "c-ok", "checking", {"worktree": "/w/b", "head": "b" * 40}),

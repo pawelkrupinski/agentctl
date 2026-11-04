@@ -219,6 +219,8 @@ def main(argv=None):
     ib.add_argument("--since-ack", action="store_true", help="wait: only entries newer than the last acknowledgement")
     ib.add_argument("--timeout", type=float, default=0, help="wait: give up after S seconds, exit 2 (default: never)")
     ib.add_argument("--forever", action="store_true", help="wait: never exit; stream each entry once, one line each")
+    ib.add_argument("--audience", default=None, help="only the alerts addressed to these (owner, author, fixer, info; "
+                    "comma list, or all): `wait` defaults to owner, a listing to all (THE ALERT MODEL)")
     ib.add_argument("--unread", action="store_true", help="only the entries not acknowledged yet")
     ib.add_argument("--ack", action="store_true", help="acknowledge the entries listed that are YOURS (your session's, "
                                                         "worktree's or agent name's), or those named by ID")

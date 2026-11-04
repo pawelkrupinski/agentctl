@@ -1159,7 +1159,7 @@ def sync_steps(repo, d, o_r):
             return []
         return red_dispatcher(Store(), o_r, repo, time.time())
     return (("outbox", flush_outbox), ("state mirror", mirror), ("children", reap_children),
-            ("events", project_events), ("notifier", notify_escalations),
+            ("events", project_events), ("notifier", notify_escalations), ("alerts", reconcile_alerts),
             ("landed worktrees", lambda: [err(x) for x in close_landed_worktrees()]),
             ("local queue", lambda: [err(f"land: {x}") for x in migrate_local_queue(repo)]),
             ("landed changes", lambda: [err(f"land: {x}") for x in close_landed_changes(repo)]),

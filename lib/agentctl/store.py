@@ -658,10 +658,14 @@ def project_events(store=None):
                "exit": refs.get("exit", 0 if ev["severity"] == "info" else 1), "verdict": verdict,
                "kind": inbox_kind(verdict, final), "owner": aud.get("session") or aud.get("worktree") or "?",
                "claude_pid": aud.get("claude_pid"), "verdicts": [verdict], "tail": list(refs.get("tail") or [])[-25:],
-               "event": ev["seq"], "entry": refs.get("entry")}
+               "event": ev["seq"], "entry": refs.get("entry"), "item_type": ev.get("item_type"),
+               "item_id": ev.get("item_id")}
         try:
-            os.makedirs(d, exist_ok=True)
-            write_json(path, rec)
+            red = st.item("red", ev["item_id"]) if ev.get("item_type") == "red" and ev.get("item_id") else None
+        except Exception:
+            red = None
+        try:
+            alert_write(rec, st=st, red=red, d=d)  # THE ALERT MODEL: routed, merged into its item's live alert
             n += 1
         except OSError as ex:  # the cursor stays before it: written at the next cycle, never lost
             err(f"projector: could not write {eid} ({ex})")
@@ -745,6 +749,9 @@ def notify_escalations(store=None):
                 continue
         else:
             k = f"event:{ev['seq']}"
+        if event_audience(st, ev, items.get(k), t) != "owner":  # THE ALERT MODEL: only the owner's is told
+            covered.append(ev)
+            continue
         if k in live:
             covered.append(live[k])
         live[k] = ev

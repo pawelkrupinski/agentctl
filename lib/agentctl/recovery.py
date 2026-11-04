@@ -265,7 +265,7 @@ def open_condition(kind, text, probe, on_recover, key=None, inbox=True, command=
         text = text(extra) if callable(text) else text
         ids = []
         if inbox and not cur:
-            eid = inbox_write(command, text, [text], list(tail), exit_code, cwd=cwd)
+            eid = inbox_write(command, text, [text], list(tail), exit_code, cwd=cwd, item=f"condition:{key}")
             ids = [eid] if eid else []
     finally:
         _OPENING[0] -= 1
@@ -462,11 +462,13 @@ def escalated_now(store=None):
     """[(item type, item, words)] of the items escalated and still in that state."""
     st = store or Store()
     out = []
-    for it in st.items("red", ["offered", "fix-pending"]):
-        if it["level"]:
+    t = time.time()
+    for it in st.items("red", ["offered", "fix-pending"]):  # only what is the OWNER's (THE ALERT MODEL, alerts.py)
+        if it["level"] and alert_red_audience({"kind": "RED_UNCLAIMED"}, it, st, t) == "owner":
             out.append(("red", it, f"{red_what(it['data'])}: {red_view(st, it)[1]}"))
     for it in st.items("condition", ["open"]):
-        if it["level"]:
+        d = it["data"]
+        if it["level"] and alert_condition_audience(d.get("kind"), {"verdict": d.get("text")}, d.get("opened_at"), t) == "owner":
             out.append(("condition", it, str(it["data"].get("text") or it["data"].get("kind"))))
     return out
 
@@ -562,10 +564,15 @@ def cmd_inbox(a):
         return 0
     if a.ids[:1] == ["wait"]:
         if a.ids[1:]:
-            print("usage: agentctl inbox wait [--kinds K,...] [--since-ack] [--timeout S] [--forever]")
+            print("usage: agentctl inbox wait [--kinds K,...] [--audience A,...] [--since-ack] [--timeout S] [--forever]")
             return 2
-        return inbox_wait(a.kinds, a.since_ack, a.timeout, a.verbose, getattr(a, "forever", False))
+        return inbox_wait(a.kinds, a.since_ack, a.timeout, a.verbose, getattr(a, "forever", False),
+                          audience=getattr(a, "audience", None) or "owner")
     entries = inbox_entries()
+    aud = getattr(a, "audience", None)
+    if aud and aud != "all":
+        want = {x.strip() for x in aud.split(",") if x.strip()}
+        entries = [e for e in entries if alert_audience(e) in want]
     if a.ids:
         entries = [e for e in entries if any(e["id"].startswith(i) or (e.get("entry") or "").endswith(i)
                                               or e.get("entry") == i for i in a.ids)]
