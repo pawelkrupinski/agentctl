@@ -164,11 +164,61 @@ class DecideTest(AskBase):
         self.assertIn("THE OWNER DECIDED this red", prompt)
         self.assertIn("'yes, both'", prompt)
 
-    def test_decide_refuses_a_red_not_waiting_on_the_owner(self):
-        self.red(key="free")
-        rc, out = A.red_decide(self.st, O_R, "free", "x")
-        self.assertEqual(rc, 1)
-        self.assertIn("is not waiting on you", out[0])
+    def test_decide_accepts_the_answer_for_an_open_red_in_any_state(self):
+        # Main #2128: the question was asked for #2125; a newer run moved the red to "offered: deep" and the owner's
+        # answer was refused ("is not waiting on you") and the question lost
+        it = self.decision_blocked()
+        A.red_ask_mark(self.st, it, self.t[0])
+        self.st.revoke("block/k", "PROBE PASSED: a newer run did not attach")
+        A.red_offer(self.st, self.st.item("red", it["id"]), "its block ended: offered again", data={"cause": None, "block": None})
+        self.assertIsNone(A.red_block_of(self.st.item("red", it["id"]), self.st))
+        rc, out = A.red_decide(self.st, O_R, "k", "baseline them")
+        self.assertEqual(rc, 0, out)
+        d = self.st.item("red", it["id"])["data"]
+        self.assertEqual(d["decision"]["status"], "in-progress")
+        self.assertEqual(d["decision"]["answer"], "baseline them")
+        self.assertTrue(d["decision"]["question"], "the question is kept with the answer")
+        self.assertIn("IN PROGRESS (decided: baseline them)", self.view(self.st.item("red", it["id"]))[1])
+
+    def test_decide_retries_a_stale_version_never_a_traceback(self):
+        it = self.decision_blocked()
+        real, hits = self.st.update_item, [0]
+
+        def racing(typ, iid, version, upd, *a, **kw):
+            if typ == "red" and hits[0] < 2:  # the ticking store moves the red under the decide, twice
+                hits[0] += 1
+                cur = self.st.item("red", iid)
+                real(typ, iid, cur["version"], {"touched": hits[0]})
+            return real(typ, iid, version, upd, *a, **kw)
+
+        self.st.update_item = racing
+        try:
+            rc, out = A.red_decide(self.st, O_R, "k", "go")
+        finally:
+            self.st.update_item = real
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.st.item("red", it["id"])["data"]["decision"]["answer"], "go")
+
+    def test_a_newer_run_failing_the_same_way_is_attached_despite_a_stale_version(self):
+        # the lost attach read as "no longer this failure" to the block's probe and discarded the open question
+        it = self.decision_blocked()
+        real, hits = self.st.update_item, [0]
+
+        def racing(typ, iid, version, upd, *a, **kw):
+            if hits[0] < 1:
+                hits[0] += 1
+                cur = self.st.item("red", iid)
+                real(typ, iid, cur["version"], {"touched": 1})
+            return real(typ, iid, version, upd, *a, **kw)
+
+        ob = {"names": ["2128"], "jobs": ["takes-drift-1 (pl)"], "run": {"number": 2128, "databaseId": 9999}}
+        self.st.update_item = racing
+        try:
+            got = A.red_attach_obs(self.st, self.st.item("red", it["id"]), ob)
+        finally:
+            self.st.update_item = real
+        self.assertEqual(got["data"]["last_run"]["number"], 2128)
+        self.assertEqual(got["state"], "blocked-external")
 
     def test_a_failed_decided_action_comes_back_to_the_owner_with_its_failure(self):
         # convergence #728: decided, the land NOT LANDED on its pre-push checks -- and nobody told the owner for 15 h

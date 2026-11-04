@@ -160,20 +160,35 @@ def red_decide(store, o_r, target, answer):
     for it in items:
         d = it["data"]
         b = red_block_of(it, store)
-        ask = red_ask(it, b)
-        if not ask:
-            out.append(f"NOT DECIDED: {red_what(d)} is not waiting on you ({red_view(store, it, t)[1]})")
-            continue
-        brow = store.get(b["name"])
-        keys = [k for k in b["meta"].get("keys") or [] if k != d["key"]]
-        if keys:
-            store.set_meta(b["name"], brow["epoch"], brow["secret"], {"keys": keys})
+        # THE OWNER'S ANSWER IS ALWAYS ACCEPTED while the red is open, whatever its state (a newer run moved it off
+        # WAITING ON YOU to "offered": the question was still the owner's to answer)
+        ask = red_ask(it, b) if b else None
+        if b:
+            brow = store.get(b["name"])
+            keys = [k for k in b["meta"].get("keys") or [] if k != d["key"]]
+            if keys:
+                store.set_meta(b["name"], brow["epoch"], brow["secret"], {"keys": keys})
+            else:
+                store.revoke(b["name"], f"RELEASED: DECIDED by the owner: {answer[:200]}")
+        question = (ask or {}).get("q") or (d.get("ask") or {}).get("q") or (d.get("decision") or {}).get("question") \
+            or ((d.get("history") or [{}])[-1].get("outcome") or "")
+        for _try in range(10):  # StaleVersion: the store ticks meanwhile -- re-read and re-apply, never a traceback
+            cur = store.item("red", it["id"])
+            if cur["state"] in RED_TERMINAL:
+                break
+            try:
+                store.update_item("red", cur["id"], cur["version"],
+                                  {"decision": {"answer": answer[:600], "question": str(question)[:600], "at": t,
+                                                "status": "in-progress"}, "dispatch_after": 0, "ask": None})
+                break
+            except StaleVersion:
+                continue
         else:
-            store.revoke(b["name"], f"RELEASED: DECIDED by the owner: {answer[:200]}")
-        cur = store.item("red", it["id"])
-        store.update_item("red", cur["id"], cur["version"],
-                          {"decision": {"answer": answer[:600], "question": ask["q"][:600], "at": t,
-                                        "status": "in-progress"}, "dispatch_after": 0})
+            out.append(f"NOT DECIDED: {red_what(d)}: the store kept moving it; run the same command again")
+            continue
+        if cur["state"] in RED_TERMINAL:
+            out.append(f"NOT DECIDED: {red_what(d)} is already {cur['state']}")
+            continue
         rc = 0
         out.append(f"DECIDED: {red_what(d)}: {answer[:200]} -- IN PROGRESS: offered again at the next tick, its fixer "
                    "briefed with your answer; if the action fails you are told")

@@ -1052,7 +1052,14 @@ def red_attach_obs(store, it, ob):
            "classifier": cv}  # observed under this classifier's key
     if newer:
         upd["last_run"] = ob["run"]
-    store.update_item("red", it["id"], it["version"], upd)
+    for attempt in range(5):  # a ticking writer moved it (StaleVersion): re-read and re-apply, never lose the attach --
+        try:  # an unattached newer run reads as "no longer this failure" to a block's probe and discards its question
+            store.update_item("red", it["id"], it["version"], upd)
+            break
+        except StaleVersion:
+            if attempt == 4:
+                raise
+            it = store.item("red", it["id"])
     return store.item("red", it["id"])
 
 
