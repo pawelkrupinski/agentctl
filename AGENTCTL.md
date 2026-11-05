@@ -354,13 +354,22 @@ Identity model convergence: RED (run 1934 #945, failure); newer run 1988 (#973) 
   run id 1934 (#945) https://github.com/pawelkrupinski/movies/actions/runs/1934
   commit 2f0fdcd3c Paweł Krupiński <…> 10-23 11:32: order-phases.sh: no mapfile -- the pre-push hook runs scripts under macOS's bash 3.2
   [unclear] takes (united-kingdom): 8-line log with no FAILED/error/assert line (truncated? runner lost?) in step '…'; ends: …
-  clears when: a later Identity model convergence run on main is green, or every pushed commit touching a production path carries `Fixes-Red: 945` (or `Fixes-Red: 1934`); tools-only commits land while red
+  clears when: a later Identity model convergence run on main is green, or every pushed commit touching a production path carries `Fixes-Red: 945` (or `Fixes-Red: 1934`) or names another run of this red episode failing the same way; tools-only commits land while red
 Outside the gate (red, not blocking a push; oldest first):
   Verify scrape recording: RED for 5h 15m since 2026-10-26T23:49:43Z (1 failed run; newest run 3140 #2000) -- `agentctl ci-why 3140`
 ```
 
 Use it when the red gate refused your push, or before you decide whether a red is yours. Don't read logs by hand
 first. A genuine `Fixes-Red:` trailer is only for a commit that really fixes that run.
+
+**A fix matches the red it fixes, not one run number (2026-11-05).** Every push that lands while main is red starts a
+new run failing the same way, so a fix naming the run it was written against was stranded WAITING once the next run
+went red (Main #2164 / #2172 named while the gate read #2173 / #2174: main red ~5.5 h). A `Fixes-Red: <run>` counts when
+it names ANY run of the CURRENT red EPISODE: the gating workflow's failed runs on main since its last green that share a
+failure signature with its newest red run (`gate_reds` / `episode_names`: red_units' names, the ones a red item links
+by). A run of an older episode -- main went green in between -- never counts; neither does a run of this episode that
+failed another way. Signatures unreadable: only the newest red run counts. movies' pre-push judges the same rule from
+gh (main's runs since that workflow's last green, and their failed job names; unread: refused as before).
 
 Under each red row (the gate's and the reds outside it) ci-why prints ONE line, `fixing: <state>`, the state
 `red_state` decides for that red run -- the same function the red tick acts on, so ci-why, `--summary`, the status line
@@ -977,8 +986,8 @@ The reconciler then takes it, a step per tick:
   the hook -- else pushed at once (`main moved by 3 commits, no overlap: pushed without re-check`; the push's hook
   judges the red gate only). Re-checked twice at most; the third time it is pushed as rebased and the push's hook runs
   the checks. The push is bounded; on expiry it verifies before it retries. `LANDED <sha>`, and a `watch` item.
-- **checked → waiting** while main is red and the change must wait (a production path, no `Fixes-Red:` for the red
-  run): `WAITING <sha> (entry <id>, n in batch)`. Tools-only changes and Fixes-Red changes land while red.
+- **checked → waiting** while main is red and the change must wait (a production path, no `Fixes-Red:` naming any red
+  run of the current episode): `WAITING <sha> (entry <id>, n in batch)`. Tools-only changes and Fixes-Red changes land while red.
 - **The batch.** When main turns green, the waiting changes are ONE `batch` item. The tick assembles its tip in a
   throwaway check tree (<remote>/main plus the changes in queue order, Fixes-Red first; a change that no longer applies
   is rejected alone), and an executor, `waiting check-batch <id>`, checks it ONCE (`pre-push --fast-only`: every test

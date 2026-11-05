@@ -179,6 +179,47 @@ class CiWhyTest(FakeForge):
         finally:
             A.slug = saved
 
+    def red_run(self, rid, num, job_name, line):
+        self.put(f"run-{rid}.json", {"jobs": [{"name": job_name, "status": "completed", "conclusion": "failure",
+                                               "databaseId": rid * 10}],
+                                     "headSha": SHA, "url": f"u/{num}", "number": num, "status": "completed",
+                                     "conclusion": "failure"})
+        self.put(f"run-{rid}.log", f"{job_name}\tRun tests\t[error] {line}\n")
+        self.put(f"run-{rid}-job-{rid * 10}.log", f"[error] {line}\n")
+        return run(rid, num, "Main", "main.yml", conclusion="failure")
+
+    def test_gate_reds_names_every_run_of_the_episode_failing_the_same_way(self):
+        # 2026-11-05: a fix written against Main #2164 (then #2172) sat WAITING for hours while each push that landed
+        # meanwhile started a new Main run failing the same way (#2173, #2174): the gate named only the newest run.
+        same = "Failed: services.FooSpec should parse the title"
+        self.put("runs.json", [self.red_run(93, 43, "Unit tests", same),
+                               self.red_run(92, 42, "Unit tests", same),             # the same failure: one episode
+                               self.red_run(91, 41, "Page tests", "Failed: PageSpec renders"),  # another failure
+                               run(90, 40, "Main", "main.yml"),                       # green: the episode starts after it
+                               self.red_run(89, 39, "Unit tests", same),             # an OLD episode's run
+                               run(80, 30, "Identity model convergence", "identity-model-convergence.yml")])
+        saved, A.slug = A.slug, lambda repo: "pawelkrupinski/movies"
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                reds = A.gate_reds("/any")
+            self.assertEqual(reds, {"43", "93", "42", "92"})
+        finally:
+            A.slug = saved
+        # ...so a production fix naming #42 goes while #43 is red; one naming #39 (before the green #40) waits
+        from test_agentctl import Repo
+        r = Repo(self.tmp.name)
+        saved_store = A.Store
+        A.Store = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no store in this test"))
+        try:
+            def fix(run_no):
+                r.write("web/src/main/scala/A.scala", f"fix {run_no}\n")
+                return r.commit(f"a fix\n\nFixes-Red: {run_no}")
+            self.assertFalse(A.must_wait(r.path, [fix(42)], reds), "a fix naming the episode's earlier run goes")
+            self.assertTrue(A.must_wait(r.path, [fix(39)], reds), "a fix naming an older episode's run waits")
+            self.assertTrue(A.must_wait(r.path, [fix(41)], reds), "a fix naming a run failing another way waits")
+        finally:
+            A.Store = saved_store
+
     def test_an_unread_gate_is_never_green(self):
         # 08:05Z 10-27: a launchd processor with no token read the gate as green and pushed onto red Main #2047
         saved = A.slug, A.gh_json

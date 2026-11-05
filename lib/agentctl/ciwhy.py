@@ -583,7 +583,8 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
         lines, num = explained.get(name) or explain_run(o_r, decided, tail, repo)
         out += lines
         out.append(f"  clears when: a later {name} run on main is green, or every pushed commit touching a production path "
-                   f"carries `Fixes-Red: {num}` (or `Fixes-Red: {decided['databaseId']}`); tools-only commits land while red")
+                   f"carries `Fixes-Red: {num}` (or `Fixes-Red: {decided['databaseId']}`) or names another run of this red episode "
+                   f"failing the same way; tools-only commits land while red")
         parts.append(f"{short_flow(name)} #{decided.get('number')} \u2192 {short(finfos)}")
     lus = local_units(lrepo)
     local = [u for u in units_of.get((LOCAL_FLOW, (lus or [{"run": {}}])[0]["run"].get("databaseId")), [])]
