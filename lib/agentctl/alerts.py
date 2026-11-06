@@ -363,7 +363,7 @@ def alert_close(d, idx, item, why):
 
 
 # ---------------------------------------------------------------- the probes: each live alert closes itself
-def alert_probe(st, item, e, t):
+def alert_probe(st, item, e, t, ctx=None):
     """(closed why or None, the audience now or None): what the item's own state says of its live alert."""
     if item.startswith("red:"):
         it = st.item("red", item[4:])
@@ -395,7 +395,104 @@ def alert_probe(st, item, e, t):
         wt = item[3:].split(":", 1)[0]
         if wt and os.path.isabs(wt) and not os.path.isdir(wt):
             return "its worktree is gone", None
-    return None, None
+    return alert_probe_cleared(st, item, e, t, ctx if ctx is not None else {}), None
+
+
+# ---------------------------------------------------------------- an owner alert whose condition has cleared
+# The owner, 2026-11-06: "why is there always 30 unread in inbox" -- 44 owner alerts, nearly all for what had cleared
+# days before: 20 RED BLOCKED ON OWNER whose reds were closed, 17 UNLANDED ORPHAN of Forgejo-era worktrees, 3 NETWORK
+# long recovered, 3 WATCH UNKNOWN whose commits later runs had decided, a HELD batch that moved on. Their items were
+# keyed before the probes knew them (`run:`, `text:`, `orphan:`), so nothing ever closed them. Now each such alert's
+# CONDITION is probed from its kind and verdict, whatever its item, and closed with the reason once it has cleared.
+# What cannot be told (no red named, no gate read, git failing) stays as it is: never closed on a guess.
+ALERT_ORPHAN_PROBE_EVERY = 600  # s between git probes of one orphan's worktree ($AGENTCTL_ALERT_ORPHAN_PROBE)
+ALERT_NETWORK_GRACE = 600       # s a NETWORK alert stays before "no NETWORK condition open" closes it
+ALERT_RED_PROBED = {"BLOCKED", "RED_BUDGET", "DIAGNOSED", "FIXER_FAILED", "FIX_FAILED", "FIX_UNVERIFIED",
+                    "FIX_NOT_COUNTED", "RED_DISPATCHED", "LAUNCH_FAILED", "RED_FLAKE", "RED_AUTHOR", "RED_REVERT",
+                    "RED_BLAME", "RED_RELAND"} | ALERT_RED_KINDS
+
+
+def alert_ctx_get(ctx, name, load):
+    """One read per reconcile pass of what several alerts' probes ask (the open reds, conditions, batches, the gate)."""
+    if name not in ctx:
+        ctx[name] = load()
+    return ctx[name]
+
+
+def alert_open_reds(st):
+    return st.items("red", [s for s, spec in MACHINES["red"].items() if not spec.terminal])
+
+
+def alert_red_named(d, verdict):
+    """Does verdict name red d: its `decide <key>`, or its `<workflow> #<run>`."""
+    key = str(d.get("key") or "")
+    if key and re.search(r"\bdecide " + re.escape(key) + r"\b", verdict):
+        return True
+    return red_what(d).split(" [", 1)[0] in verdict
+
+
+def alert_gate():
+    return ((read_record(state_path()) or {}).get("ci") or {}).get("gate") or []
+
+
+def alert_gate_decided_after(gate, at):
+    """True when every gate workflow has a run decided that was created after `at` (main is linear: it covers every
+    commit landed before); None when the gate snapshot (alert_gate) cannot be read."""
+    if not gate:
+        return None
+    for g in gate:
+        created = ((g.get("decided") or {}).get("createdAt")) or ""
+        try:
+            c = dt.datetime.strptime(created, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp()
+        except ValueError:
+            return False
+        if c <= at:
+            return False
+    return True
+
+
+def alert_probe_cleared(st, item, e, t, ctx):
+    """Why the alert's condition has cleared, or None (still live, or nothing to tell by)."""
+    kind, v = alert_kind_of(e), str(e.get("verdict") or "")
+    at = float(e.get("first_at") or e.get("at") or t)
+    if kind in ALERT_RED_PROBED and not item.startswith("red:"):
+        if not (re.search(r" #\d+", v) or re.search(r"\bdecide \w+", v)):
+            return None
+        reds = alert_ctx_get(ctx, "reds", lambda: alert_open_reds(st))
+        return None if any(alert_red_named(r["data"], v) for r in reds) else "its red is closed (no open red names it)"
+    if kind == "UNLANDED_ORPHAN" or item.startswith("orphan:"):
+        m = re.search(r"(~?/\S+)", item[len("orphan:"):] if item.startswith("orphan:") else v)
+        if not m:
+            return None
+        wt = os.path.expanduser(m.group(1).rstrip(":,;"))
+        if not os.path.isdir(wt):
+            return "its worktree is gone"
+        probed = ctx.setdefault("probed", {})
+        if t - float(probed.get(item) or 0) < env_num("AGENTCTL_ALERT_ORPHAN_PROBE", ALERT_ORPHAN_PROBE_EVERY):
+            return None
+        probed[item] = t
+        commits, left = cherry_landed(wt, f"refs/remotes/{remote()}/main", "HEAD")
+        return "its commits are on main" if commits is not None and not left else None
+    if v.startswith("WATCH UNKNOWN") or item.startswith("watch:"):
+        gate = alert_ctx_get(ctx, "gate", alert_gate)
+        return "a later gate run has decided (its commit is covered)" if alert_gate_decided_after(gate, at) else None
+    if kind == "NETWORK":
+        if t - at < env_num("AGENTCTL_ALERT_NETWORK_GRACE", ALERT_NETWORK_GRACE):
+            return None
+        conds = alert_ctx_get(ctx, "conditions", lambda: open_conditions(st))
+        return None if any(c.get("kind") == "NETWORK" for c in conds) else "the network is back (no NETWORK condition open)"
+    if v.startswith("HELD:") or item.startswith("batch:"):
+        held = alert_ctx_get(ctx, "held", lambda: st.items("batch", ["held"]))
+        m = re.match(r"HELD: the batch check of ([0-9a-f]{7,})", v)
+        bid = item[len("batch:"):] if item.startswith("batch:") else (re.match(r"HELD: the batch (\S+) ", v) or [None, None])[1]
+        if m:
+            live = any(str((b["data"] or {}).get("tip") or "").startswith(m.group(1)) for b in held)
+        elif bid:
+            live = any(b["id"] == bid for b in held)
+        else:
+            return None
+        return None if live else "its batch moved on (no longer held)"
+    return None
 
 
 def reconcile_alerts(store=None, force=False):
@@ -414,6 +511,7 @@ def reconcile_alerts(store=None, force=False):
     out = []
     with alert_lock(d):
         idx = alert_index(d)
+        ctx = {"probed": idx.get("probed") or {}}  # one read per pass of what several probes ask
         for item, eid in list((idx.get("items") or {}).items()):
             p = os.path.join(d, eid + ".json")
             e = read_record(p)
@@ -422,7 +520,7 @@ def reconcile_alerts(store=None, force=False):
                 idx["items"].pop(item, None)  # gone, or read and quiet for a day: nothing live
                 continue
             try:
-                why, aud = alert_probe(st, item, e, t)
+                why, aud = alert_probe(st, item, e, t, ctx)
             except Exception as ex:  # cannot tell now: it stays as it is
                 err(f"alerts: {item}: {str(ex)[:120]}")
                 continue
@@ -438,6 +536,7 @@ def reconcile_alerts(store=None, force=False):
                     alert_unack(d, eid)
                 out.append(f"{item}: now the {aud}'s")
         idx["reconciled_at"] = t
+        idx["probed"] = {k: v for k, v in ctx["probed"].items() if k in (idx.get("items") or {})}
         alert_index_save(d, idx)
     return out
 

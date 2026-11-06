@@ -1240,7 +1240,7 @@ failed and nobody was told: the snapshot, the status line and the reds covered m
 ### inbox: every final verdict, durable
 
 ```
-agentctl inbox [ID...] [--unread] [--ack [--all]] [--limit N] [--json] [-v]
+agentctl inbox [ID...] [--unread] [--ack [--all]] [--limit N] [--count] [--json] [-v]
 ```
 
 The owner (2026-10-27): three agents ended their turns while their land/watch still ran, and the WATCH verdicts went
@@ -1297,10 +1297,16 @@ through ONE router (`lib/agentctl/alerts.py`):
   closes by itself (acked, `closed: {at, why}`) when its item's probe clears -- the red taken or cleared, the
   condition closed, the change landed, the worktree removed (the sync's `alerts` step, every minute) -- or when a
   closing verdict for the item arrives (LANDED, WATCH OK, FIX OK, RED CLEARED).
+- AN ALERT WHOSE CONDITION CLEARED CLOSES, whatever item it was keyed under (2026-11-06: 44 owner alerts, nearly all
+  cleared days before): a red alert once no open red names it (its `decide <key>` or `<workflow> #N`); UNLANDED ORPHAN
+  once its worktree is gone or its commits are on main (git, at most every 10 min a worktree); WATCH UNKNOWN once every
+  gate workflow has a run decided that started after it; NETWORK once no NETWORK condition is open (after 10 min); a
+  HELD batch once that batch is no longer held. What cannot be told (no red named, no gate snapshot) stays open.
 - invariants W5/WM/W7 open their condition only after 2 consecutive misses and are the owner's only past 30 min.
 - The index (item -> live entry) is `<inbox>.alerts/index.json`, beside the inbox. Its first use migrates: every unread
   entry is stamped and one item's older unread entries are folded into its newest (acked, counted): no flood.
-- `agentctl inbox --audience owner|author|fixer|info|all` filters a listing (the status line counts `owner`).
+- `agentctl inbox --audience owner|author|fixer|info|all` filters a listing; `--count` prints how many match, every one
+  (never the listing's `--limit`): the status line's `inbox --unread --audience owner --count`.
 
 #### inbox wait: the orchestrator's notifier
 
@@ -1565,6 +1571,8 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 
 | key (`agentctl.toml`) | environment | default | what |
 |---|---|---|---|
+| `alert_network_grace` | `AGENTCTL_ALERT_NETWORK_GRACE` | `600` | s a NETWORK alert stays before "no NETWORK condition open" closes it |
+| `alert_orphan_probe` | `AGENTCTL_ALERT_ORPHAN_PROBE` | `600` | s between git probes of one orphan's worktree |
 | `alert_quiet_max` | `AGENTCTL_ALERT_QUIET_MAX` | `86400` | s a READ alert stays its item's live one after its last event |
 | `alert_reconcile` | `AGENTCTL_ALERT_RECONCILE` | `60` | s between reconcile passes |
 | `alert_red_owner_level` | `AGENTCTL_ALERT_RED_OWNER_LEVEL` | `2` | offer rounds a red goes untaken (nobody holding it, no family owner) before it is the owner's |

@@ -578,6 +578,9 @@ def cmd_inbox(a):
                                               or e.get("entry") == i for i in a.ids)]
     if a.unread:
         entries = [e for e in entries if not e["read"]]
+    if getattr(a, "count", False):  # every match: a count capped by the listing's --limit read "30 unread" for 44
+        print(len(entries))
+        return 0
     if a.limit:
         entries = entries[-a.limit:]
     if a.json:

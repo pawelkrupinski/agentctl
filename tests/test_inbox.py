@@ -112,6 +112,14 @@ class InboxTest(unittest.TestCase):
         _, out = self.run_main(["inbox"])
         self.assertEqual(out.count("read  "), 2)
 
+    def test_count_counts_every_entry_never_the_listings_limit(self):
+        """The owner, 2026-11-06: "why is there always 30 unread in inbox" -- the status line counted the listing, whose
+        default --limit is 30; the real count was 44."""
+        for i in range(35):
+            A.inbox_write("wait", f"run o/r#{i}: success", [], [], 0)
+        code, out = self.run_main(["inbox", "--unread", "--count"])
+        self.assertEqual((code, out.strip()), (0, "35"))
+
     def test_ack_marks_only_the_callers_own_entries_and_all_is_the_owners(self):
         """2026-10-29 19:00: an agent's `inbox --unread --ack` marked every agent's verdicts read."""
         saved = (os.environ.get("CLAUDE_CODE_SESSION_ID"), os.getcwd())

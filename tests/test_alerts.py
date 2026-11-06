@@ -259,5 +259,104 @@ class MigrationTest(AlertBase):
                          [("BLOCKED", 1), ("NOT_LANDED", 5), ("RED_UNCLAIMED", 20)])
 
 
+class ClearedOwnerAlertTest(AlertBase):
+    """The owner, 2026-11-06: "why is there always 30 unread in inbox" -- 44 owner alerts, nearly all of them for things
+    that had cleared days before: reds cleared, Forgejo-era orphan worktrees gone, the network back, a watch's commit
+    long since decided, a held batch moved on. Each alert's condition is probed on the reconcile pass (bounded, at most
+    every ALERT_RECONCILE_EVERY) and acknowledged with a resolution note once it has cleared -- whatever item key an
+    older entry was written under."""
+
+    def legacy(self, verdict, item, cwd=None, command="red", at=None):
+        """An owner alert as written before its item was typed (a `run:`/`text:`/`orphan:` key no probe knew)."""
+        at = time.time() - 7200 if at is None else at
+        rec = {"id": f"20261101T000000{len(os.listdir(self.inbox)) if os.path.isdir(self.inbox) else 0:06d}-1-{command}",
+               "time": "t", "at": at, "command": command, "cwd": cwd or self.wt, "final": True, "exit": 1,
+               "verdict": verdict, "kind": A.inbox_kind(verdict), "verdicts": [verdict], "tail": [],
+               "audience": "owner", "item": item}
+        return A.alert_write(rec)
+
+    def closed_why(self, eid):
+        return (A.read_record(os.path.join(self.inbox, eid + ".json")).get("closed") or {}).get("why")
+
+    def test_a_decision_on_a_red_that_has_since_closed_is_resolved(self):
+        self.st.put_item("red", "50dd506d93c9.2", "blocked-external",
+                         {"key": "50dd506d93c9", "workflow": "Record scrape fixtures", "last_run": {"number": 172}})
+        self.st.put_item("red", "abc.1", "blocked-external",
+                         {"key": "abcabcabcabc", "workflow": "Main", "last_run": {"number": 2128}})
+        gone = self.legacy("RED BLOCKED ON OWNER: WAITING ON YOU: fix the stuck limit, and treat queue waits on b -- "
+                           "Record scrape fixtures #172 [stuck] waits on it. Answer: `! ~/bin/agentctl decide "
+                           "50dd506d93c9 \"<your answer>\"`", "run:and treat queue waits on b -- Record scrape fixtures #172")
+        live = self.legacy("RED BLOCKED ON OWNER: WAITING ON YOU: accept Hen as known-wrong. -- Main #2128",
+                           "run:or accept Hen as known-wrong. -- Main #2128")
+        it = self.st.item("red", "50dd506d93c9.2")
+        self.st.transition("red", it["id"], "cleared", it["version"])
+        A.reconcile_alerts(self.st, force=True)
+        self.assertIn("red", self.closed_why(gone) or "")
+        self.assertIsNone(self.closed_why(live), "its red is still waiting on the owner")
+        self.assertEqual([e["id"] for e in self.unread("owner")], [live])
+
+    def test_an_unlanded_orphan_closes_once_its_worktree_is_gone_or_its_commits_are_on_main(self):
+        import subprocess
+        origin = os.path.join(self.root, "origin.git")
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", origin], check=True)
+        def clone(name):
+            wt = os.path.join(self.root, name)
+            subprocess.run(["git", "clone", "-q", origin, wt], check=True, capture_output=True)
+            subprocess.run(["git", "-C", wt, "checkout", "-q", "-B", "main"], check=True)
+            return wt
+        base = clone("base")
+        subprocess.run(["git", "-C", base, "commit", "-q", "--allow-empty", "-m", "base"], check=True)
+        subprocess.run(["git", "-C", base, "push", "-q", "origin", "main"], check=True, capture_output=True)
+        landed, unlanded = clone("movies-wt-landed"), clone("movies-wt-unlanded")
+        for wt, push in ((landed, True), (unlanded, False)):
+            with open(os.path.join(wt, "f"), "w") as f:
+                f.write(wt)
+            subprocess.run(["git", "-C", wt, "add", "f"], check=True)
+            subprocess.run(["git", "-C", wt, "commit", "-q", "-m", f"change {os.path.basename(wt)}"], check=True)
+            if push:
+                subprocess.run(["git", "-C", wt, "push", "-q", "origin", "main"], check=True, capture_output=True)
+        gone_wt = os.path.join(self.root, "movies-wt-gone")
+        ids = {wt: self.legacy(f"UNLANDED ORPHAN: {wt}: 1 commit(s) not on forgejo/main, its author gone", f"orphan:{wt}",
+                               cwd=wt, command="maintain") for wt in (landed, unlanded, gone_wt)}
+        A.reconcile_alerts(self.st, force=True)
+        self.assertIn("gone", self.closed_why(ids[gone_wt]) or "")
+        self.assertIn("on main", self.closed_why(ids[landed]) or "")
+        self.assertIsNone(self.closed_why(ids[unlanded]), "its commit is still not on main: the owner's to decide")
+
+    def test_a_watch_unknown_closes_once_a_later_gate_run_has_decided(self):
+        state = os.path.join(self.root, "state.json")
+        os.environ["AGENTCTL_STATE_FILE"] = state
+        self.addCleanup(os.environ.pop, "AGENTCTL_STATE_FILE", None)
+        at = time.time() - 3600
+        eid = self.legacy("WATCH UNKNOWN: Main or the convergence still undecided for bc29c46b5e after 3 h: a stuck run",
+                          "text:x", command="watch", at=at)
+        def gate(created):
+            iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(created))
+            A.write_json(state, {"ci": {"gate": [{"name": n, "decided": {"conclusion": "success", "createdAt": iso}}
+                                                 for n in ("Main", "Identity model convergence")]}})
+        gate(at - 600)
+        A.reconcile_alerts(self.st, force=True)
+        self.assertIsNone(self.closed_why(eid), "no gate run decided since: still unknown")
+        gate(at + 600)
+        A.reconcile_alerts(self.st, force=True)
+        self.assertIn("decided", self.closed_why(eid) or "")
+
+    def test_a_network_alert_closes_once_no_network_condition_is_open(self):
+        eid = self.legacy("NETWORK: the laptop's uplink loses 40% of packets to 1.1.1.1, so Forgejo timeouts",
+                          "text:net", command="tunnel")
+        A.reconcile_alerts(self.st, force=True)
+        self.assertIn("network", self.closed_why(eid) or "")
+
+    def test_a_held_batch_closes_once_the_batch_moved_on(self):
+        self.st.put_item("batch", "b1", "held", {"tip": "1111111111aaaa", "base": "x", "tree": 1})
+        held = self.legacy("HELD: the batch check of 1111111111 (2 change(s)) stalled twice on a fresh sbt server",
+                           "text:held1", command="batch")
+        moved = self.legacy("HELD: the batch check of 7368dcc7f4 (2 change(s)) stalled twice on a fresh sbt server",
+                            "text:held2", command="batch")
+        A.reconcile_alerts(self.st, force=True)
+        self.assertIsNone(self.closed_why(held))
+        self.assertIn("batch", self.closed_why(moved) or "")
+
+
 if __name__ == "__main__":
     unittest.main()

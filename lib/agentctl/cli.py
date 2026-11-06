@@ -234,6 +234,8 @@ def main(argv=None):
                                                         "worktree's or agent name's), or those named by ID")
     ib.add_argument("--all", action="store_true", help="with --ack: every entry listed, anyone's (the owner)")
     ib.add_argument("--limit", type=int, default=30, help="the newest N (default 30; 0 = all)")
+    ib.add_argument("--count", action="store_true", help="print only how many entries match (every one: no --limit; "
+                    "the status line's)")
     ib.add_argument("--json", action="store_true")
     ib.add_argument("-v", "--verbose", action="store_true", help="each entry's last output lines too")
     dc = sub.add_parser("decide", help="answer a red WAITING ON YOU: the answer is stored, the red re-dispatched with "
