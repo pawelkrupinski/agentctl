@@ -1319,6 +1319,106 @@ class AuditTest(RedsBase):
 
 
 
+class StuckLimitTest(unittest.TestCase):
+    """The owner, 2026-11-06 (`decide 971723aec893`: "fix the stuck limit as proposed"): six false stuck reds in a week.
+    Record scrape fixtures #165/#172 (daily, 32-65 min a run) and Identity drift explorer #1 (its first run, waiting on
+    the Identity model convergence run it dispatched) were judged against the 30-minute floor: the newest-200 run list
+    held none of their finished runs. A workflow's limit now comes from its own last 30 finished runs; with fewer than
+    STUCK_MIN_HISTORY, from its jobs' timeout-minutes; a run waiting on a run it dispatched is judged by that child;
+    a run whose unfinished jobs all wait for busy runners is queued, not stuck."""
+    NOW = 2_000_000_000.0
+
+    def iso(self, ago):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.NOW - ago))
+
+    def ci_run(self, n, ago, dur=None, event="schedule", workflow=None):
+        r = {"number": n, "databaseId": 1000 + n, "createdAt": self.iso(ago), "event": event, "workflowName": workflow}
+        if dur is None:
+            r["status"] = "in_progress"
+        else:
+            r.update(status="completed", conclusion="success", updatedAt=self.iso(ago - dur))
+        return r
+
+    def jobs(self, *specs):
+        """specs: (status, started seconds ago or None)."""
+        return lambda r: [{"name": f"j{i}", "status": st, "startedAt": self.iso(ago) if ago is not None else None}
+                          for i, (st, ago) in enumerate(specs)]
+
+    def stuck(self, lists, jobs_of, history=None, timeouts=None, queue=None):
+        calls = []
+        def history_of(name):
+            calls.append(name)
+            return (history or {}).get(name, [])
+        out = A.stuck_runs(lists, now_=self.NOW, o_r=MOVIES, jobs_of=jobs_of, queue=queue or {},
+                           history_of=history_of, timeout_of=lambda name: (timeouts or {}).get(name))
+        return out, calls
+
+    def test_record_scrape_fixtures_172_is_judged_by_its_own_finished_runs(self):
+        """#172 at 32 min (the alarm) and at 2 h: its own last runs took 32-65 min, so its limit is ~3 h."""
+        name = "Record scrape fixtures"
+        own = [self.ci_run(165 + i, 86400 * (7 - i), dur=(32 + 5 * i) * 60) for i in range(7)]
+        for age in (32 * 60, 2 * 3600):
+            out, calls = self.stuck({name: [self.ci_run(172, age)]}, self.jobs(("in_progress", age)), {name: own})
+            self.assertEqual(out, [], f"at {age // 60} min")
+            self.assertEqual(calls, [name], "its own history read, once")
+        out, _ = self.stuck({name: [self.ci_run(172, 4 * 3600)]}, self.jobs(("in_progress", 4 * 3600)), {name: own})
+        self.assertEqual([s["run"]["number"] for s in out], [172], "past 3 x its p90 it is stuck")
+        self.assertAlmostEqual(out[0]["limit"], 3 * 62 * 60, delta=120)
+
+    def test_a_workflow_with_a_long_history_in_the_list_reads_nothing_more(self):
+        name = "Main"
+        runs = [self.ci_run(10 + i, 3600 * (i + 2), dur=600) for i in range(6)]
+        out, calls = self.stuck({name: [self.ci_run(99, 3600)] + runs}, self.jobs(("in_progress", 3600)))
+        self.assertEqual(([s["run"]["number"] for s in out], calls), ([99], []))
+
+    def test_identity_drift_explorer_1_a_first_run_takes_its_jobs_timeout_minutes(self):
+        name = "Identity drift explorer"
+        out, _ = self.stuck({name: [self.ci_run(1, 75 * 60)]}, self.jobs(("in_progress", 75 * 60)),
+                            timeouts={name: 305 * 60})
+        self.assertEqual(out, [])
+        out, _ = self.stuck({name: [self.ci_run(1, 6 * 3600)]}, self.jobs(("in_progress", 6 * 3600)),
+                            timeouts={name: 305 * 60})
+        self.assertEqual([s["limit"] for s in out], [305 * 60])
+
+    def test_a_parent_waiting_on_the_run_it_dispatched_is_judged_by_that_child(self):
+        """Identity drift explorer #1 started Identity model convergence #909 and waited on it: #909 healthy, #1 is."""
+        conv = "Identity model convergence"
+        hist = [self.ci_run(800 + i, 3600 * (i + 10), dur=3600, workflow=conv) for i in range(6)]
+        lists = {"Identity drift explorer": [self.ci_run(1, 3 * 3600)],
+                 conv: [self.ci_run(909, 2 * 3600, event="workflow_dispatch", workflow=conv)] + hist}
+        jobs = self.jobs(("in_progress", 2.9 * 3600))
+        out, _ = self.stuck(lists, jobs)  # no history, no timeout: the floor -- but its child decides
+        self.assertEqual([s.get("waits_on") for s in out], ["Identity model convergence #909"])
+        self.assertEqual(A.stuck_obs({"stuck": out}), {}, "no red: the child is judged on its own")
+        lists[conv][0] = self.ci_run(909, 2 * 3600, dur=600, event="workflow_dispatch", workflow=conv)
+        out, _ = self.stuck(lists, jobs)
+        self.assertEqual([(s["run"]["number"], s.get("waits_on")) for s in out], [(1, None)],
+                         "its child done, the parent past its limit is stuck")
+
+    def test_a_run_whose_unfinished_jobs_all_wait_for_busy_runners_is_queued_not_stuck(self):
+        name = "Convergence bisect"
+        page = {"ok": self.NOW, "limits": {"runners": {"rm": {"capacity": 1, "state": "running",
+                                                              "labels": '["measure"]'}}},
+                "running": [{"runner": "rm", "run": "30"}],
+                "waiting_jobs": [{"label": '["measure"]', "repo": MOVIES, "run": "5", "secs": "9000"}]}
+        jobs = lambda r: [{"name": "preflight", "status": "completed", "startedAt": self.iso(3 * 3600)},
+                          {"name": "bisect", "status": "queued", "startedAt": None}]
+        out, _ = self.stuck({name: [self.ci_run(5, 3 * 3600)]}, jobs, queue=page)
+        self.assertEqual(len(out), 1)
+        self.assertTrue(out[0].get("queued"), out)
+        self.assertEqual(A.stuck_obs({"stuck": out}), {})
+
+    def test_the_jobs_timeout_minutes_are_read_from_the_workflow_file(self):
+        txt = ("name: Identity drift explorer\non:\n    workflow_dispatch:\njobs:\n    explore:\n"
+               "        runs-on: ubuntu\n        timeout-minutes: 300\n        steps:\n"
+               "            - name: x\n              timeout-minutes: 999\n              run: y\n"
+               "    timings:\n        needs: [explore]\n        uses: ./.github/workflows/report-timings.yml\n"
+               "    report:\n        runs-on: ubuntu\n        timeout-minutes: 5\n        steps: []\n")
+        self.assertEqual(A.workflow_timeout_bound(txt), 305 * 60)
+        self.assertEqual(A.workflow_timeout_bound("jobs:\n  a:\n    runs-on: x\n"), 360 * 60,
+                         "no job sets one: GitHub's own 360-minute default")
+
+
 class GateOwnRedLabelTest(unittest.TestCase):
     """2026-10-29 19:20: convergence #2550's fix (Fixes-Red: 2527, the same red key) read "blocked by gate convergence
     #2550" -- blocked by the very red it fixes. A fix of the gate's own red lands on red; any other waits on the gate."""

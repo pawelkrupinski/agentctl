@@ -254,8 +254,8 @@ def stuck_obs(snap):
     """Audit #8: the snapshot's stuck runs (undecided past STUCK_FACTOR x their workflow's p90) as infra reds."""
     units = []
     for s in (snap or {}).get("stuck") or []:
-        if s.get("queued"):
-            continue  # waiting its turn behind busy runners: the queue, not a stuck run
+        if s.get("queued") or s.get("waits_on"):
+            continue  # waiting its turn behind busy runners, or on the run it dispatched: not a stuck run
         r = s["run"]
         units.append({"key": red_key(s["name"], "stuck", "stuck run"), "workflow": s["name"], "job": "stuck",
                       "kind": "infra", "red_kind": "stuck-run", "gate": s["name"] in {g["name"] for g in snap.get("gate") or []},
@@ -264,42 +264,103 @@ def stuck_obs(snap):
     return red_obs_of_units(units)
 
 
-def stuck_runs(lists, now_=None, o_r=None, jobs_of=None, queue=None):
-    """[{name, run, age, limit[, queued]}]: per workflow, its undecided runs older than max(STUCK_FACTOR x the p90 of its
-    decided runs' durations, STUCK_FLOOR). A run's age counts from its first job's start (Convergence bisect #2385, run
-    3568: an hour queued behind a measurement holding every `measure` slot was called a stuck red): a run none of whose
-    jobs started, waiting only on labels whose every runner is up with all slots busy, carries `queued` and is no red."""
+# THE STUCK LIMIT IS THE WORKFLOW'S OWN (the owner, 2026-11-06, deciding red 971723aec893: six false stuck reds in a
+# week). Record scrape fixtures #165/#172 (daily, 32-65 min a run) and Identity drift explorer #1 (its first run) were
+# judged against the 30-minute floor because the newest-200 run list held none of their finished runs. Now a workflow
+# with fewer than STUCK_MIN_HISTORY finished runs in the list has its own last 30 finished runs read (history_of, only
+# once one of its runs is past the floor); with fewer still, its jobs' timeout-minutes bound it (timeout_of). A run
+# waiting on a run it dispatched (a workflow_dispatch run of another workflow created after its first job started,
+# still undecided) is judged by that child: `waits_on`, no red -- the child is judged on its own. A run whose unfinished
+# jobs all wait for runners whose every slot is busy is `queued`, not stuck, whatever ran before.
+STUCK_MIN_HISTORY = 5
+GITHUB_JOB_TIMEOUT = 360 * 60  # GitHub's own timeout of a job that sets none
+UNSTARTED = ("queued", "waiting", "pending", "requested")
+
+
+def stuck_durations(runs):
+    durs = []
+    for r in runs:
+        if r.get("status") == "completed" and r.get("createdAt") and r.get("updatedAt"):
+            try:
+                durs.append(parse_time(r["updatedAt"]).timestamp() - parse_time(r["createdAt"]).timestamp())
+            except (ValueError, TypeError):
+                pass
+    return durs
+
+
+def stuck_limit(name, runs, history_of, timeout_of):
+    """max(STUCK_FACTOR x the p90 of the workflow's finished runs, STUCK_FLOOR): from the list, else its own history;
+    with too few of those, its jobs' timeout-minutes bound (when readable)."""
+    durs = stuck_durations(runs)
+    if len(durs) < STUCK_MIN_HISTORY and history_of:
+        seen = {r.get("databaseId") for r in runs if r.get("status") == "completed"}
+        durs += stuck_durations([r for r in history_of(name) or [] if r.get("databaseId") not in seen])
+    limit = max(STUCK_FACTOR * (pct(durs, 90) if durs else 0), STUCK_FLOOR)
+    if len(durs) < STUCK_MIN_HISTORY and timeout_of:
+        bound = timeout_of(name)
+        if bound:
+            limit = max(limit, bound)
+    return limit
+
+
+def stuck_child(lists, name, since):
+    """'<workflow> #N' of an undecided workflow_dispatch run of another workflow created at or after `since` (the run
+    its parent dispatched and waits on), or None."""
+    for other, runs in lists.items():
+        if other == name:
+            continue
+        for r in runs:
+            if r.get("event") == "workflow_dispatch" and r.get("status") != "completed" and r.get("createdAt"):
+                try:
+                    if parse_time(r["createdAt"]).timestamp() >= since:
+                        return f"{other} #{r.get('number')}"
+                except (ValueError, TypeError):
+                    continue
+    return None
+
+
+def stuck_runs(lists, now_=None, o_r=None, jobs_of=None, queue=None, history_of=None, timeout_of=None):
+    """[{name, run, age, limit[, queued | waits_on]}]: per workflow, its undecided runs older than its stuck limit
+    (stuck_limit). A run's age counts from its first job's start (Convergence bisect #2385, run 3568: an hour queued
+    behind a measurement holding every `measure` slot was called a stuck red): a run whose unfinished jobs all wait,
+    only on labels whose every runner is up with all slots busy, carries `queued`; one waiting on a run it dispatched,
+    `waits_on`. Neither is a red."""
     t = now_ if now_ is not None else time.time()
     jobs_of = jobs_of or (lambda r: run_jobs(o_r, r))
+    if history_of is None and o_r:
+        history_of = lambda name: stuck_history(o_r, name)  # noqa: E731
+    if timeout_of is None and o_r:
+        timeout_of = lambda name: stuck_timeout(o_r, name)  # noqa: E731
     out = []
     for name, runs in lists.items():
-        durs = []
-        for r in runs:
-            if r.get("status") == "completed" and r.get("createdAt") and r.get("updatedAt"):
-                try:
-                    durs.append(parse_time(r["updatedAt"]).timestamp() - parse_time(r["createdAt"]).timestamp())
-                except (ValueError, TypeError):
-                    pass
-        limit = max(STUCK_FACTOR * (pct(durs, 90) if durs else 0), STUCK_FLOOR)
+        limit = None  # read only once one of its runs is past the floor: the history and the file cost a read each
         for r in runs:
             if r.get("status") != "completed" and r.get("createdAt"):
                 try:
                     age = t - parse_time(r["createdAt"]).timestamp()
                 except (ValueError, TypeError):
                     continue
+                if age <= STUCK_FLOOR:
+                    continue
+                if limit is None:
+                    limit = stuck_limit(name, runs, history_of, timeout_of)
                 if age <= limit:
                     continue
                 jobs = jobs_of(r)
                 starts = sorted(parse_time(j["startedAt"]).timestamp() for j in jobs or [] if j.get("startedAt"))
-                queued = None
+                queued, waits_on = None, None
                 if starts:
                     age = t - starts[0]
-                elif jobs is not None:  # none started: queued, not stuck, when every runner that could take it is busy
+                open_jobs = [j for j in jobs or [] if j.get("status") != "completed"]
+                if jobs is not None and open_jobs and all(j.get("status") in UNSTARTED for j in open_jobs):
+                    # nothing running: queued, not stuck, when every runner that could take it is busy
                     queued = queue_full(o_r, r.get("number"), runner_queue(t) if queue is None else queue)
                 if age > limit:
+                    if starts and not queued:
+                        waits_on = stuck_child(lists, name, starts[0])
                     s = {"name": name, "run": {k: r.get(k) for k in ("number", "databaseId", "headSha", "createdAt")},
                          "age": age, "limit": limit}
-                    out.append({**s, "queued": queued} if queued else s)
+                    out.append({**s, "queued": queued} if queued else {**s, "waits_on": waits_on} if waits_on else s)
     return out
 
 

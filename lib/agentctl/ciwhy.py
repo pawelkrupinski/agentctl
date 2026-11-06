@@ -135,7 +135,7 @@ def red_repo_clone(o_r):
         return repo_path_for(o_r)
     except (Exception, SystemExit):
         return None
-RUN_FIELDS = "databaseId,number,status,conclusion,headSha,url,displayTitle,workflowName,createdAt,updatedAt"
+RUN_FIELDS = "databaseId,number,status,conclusion,headSha,url,displayTitle,workflowName,createdAt,updatedAt,event"
 RED_CONCLUSIONS = ("failure", "timed_out")
 
 
@@ -331,6 +331,71 @@ def main_workflow_files(o_r):
         _flow_meta.clear()
         _flow_meta[main] = meta
     return _flow_files[main]
+
+
+_flow_history, _flow_bounds = process_cache({}), process_cache({})
+
+
+def stuck_history(o_r, name):
+    """The workflow's own last 30 finished runs on main (stuck_limit's, for a workflow the newest-200 list holds too few
+    of): listed at most every OUTSIDE_FLOW_RECHECK; [] when its file is unknown or the list fails."""
+    wfile = main_workflow_files(o_r).get(name)
+    if not wfile:
+        return []
+    at, runs = _flow_history.get(wfile, (0.0, None))
+    if runs is None or time.time() - at >= OUTSIDE_FLOW_RECHECK:
+        try:
+            runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--status", "completed",
+                           "--limit", "30", "--json", RUN_FIELDS)
+            _flow_history[wfile] = (time.time(), runs)
+        except (Exception, SystemExit) as e:
+            err(f"stuck limit: could not list {wfile} ({str(e)[:120]})")
+            runs = runs or []
+    return runs
+
+
+def workflow_timeout_bound(txt):
+    """Seconds a run of this workflow file can take at most by its jobs' own `timeout-minutes` (summed: jobs may run
+    one after another); GitHub's 360-minute default when no job sets one; None without a jobs section."""
+    lines = [l for l in txt.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+    try:
+        i = next(n for n, l in enumerate(lines) if re.match(r"^jobs:\s*$", l))
+    except StopIteration:
+        return None
+    ind = lambda l: len(l) - len(l.lstrip())  # noqa: E731
+    job_ind = prop_ind = None
+    total, found = 0, False
+    for l in lines[i + 1:]:
+        n = ind(l)
+        if n == 0:
+            break
+        if job_ind is None:
+            job_ind = n
+        if n == job_ind:
+            prop_ind = None
+            continue
+        if prop_ind is None and n > job_ind:
+            prop_ind = n
+        m = re.match(r"^\s*timeout-minutes:\s*(\d+)\s*$", l)
+        if m and n == prop_ind:
+            total += int(m.group(1)) * 60
+            found = True
+    return total if found else GITHUB_JOB_TIMEOUT
+
+
+def stuck_timeout(o_r, name):
+    """workflow_timeout_bound of the workflow's file on origin/main (cached per main sha), or None."""
+    repo = scan_repo_for(o_r)
+    path = main_flow_meta(o_r)["paths"].get(name)
+    if not repo or not path:
+        return None
+    main = git(repo, "rev-parse", f"refs/remotes/{remote()}/main", check=False).stdout.strip()
+    if (main, path) not in _flow_bounds:
+        if len(_flow_bounds) > 200:
+            _flow_bounds.clear()
+        txt = git(repo, "show", f"{main}:{path}", check=False).stdout
+        _flow_bounds[(main, path)] = workflow_timeout_bound(txt) if txt else None
+    return _flow_bounds[(main, path)]
 
 
 def main_flow_meta(o_r):
