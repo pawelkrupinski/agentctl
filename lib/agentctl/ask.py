@@ -147,6 +147,20 @@ def red_decision_failed(store, it, upd, why, t):
     return red_decision_block(store, it, upd, decide, t)
 
 
+def red_closed_of(store, key):
+    """The newest closed (terminal) red item of a red key or id -- `key`, `key.2`, ... -- or None."""
+    base = re.sub(r"\.\d+$", "", key)
+    last, n = None, 1
+    while n < 200:
+        it = store.item("red", base if n == 1 else f"{base}.{n}")
+        if it is None:
+            break
+        last, n = it, n + 1
+    if last is None or not machine_state("red", last["state"]).terminal:
+        return None
+    return last
+
+
 def red_decide(store, o_r, target, answer):
     """`agentctl decide <red> "<answer>"`: the owner's answer to a red waiting on them. Stored on the red, its block
     lifted (only this red leaves a block that holds others): the next tick offers it again, its fixer briefed with it."""
@@ -155,6 +169,14 @@ def red_decide(store, o_r, target, answer):
         return 2, ["NOT DECIDED: the answer is empty"]
     items = red_targets(store, o_r, target, create=False)
     if not items:
+        closed = red_closed_of(store, str(target).lstrip("#"))
+        if closed:  # 2026-11-06: the owner answered a question whose red had cleared days before: no refusal, resolved
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(closed.get("entered_at") or 0)))
+            why = f"already resolved (red closed {when}, {closed['state']})"
+            n = alert_close_naming(re.compile(r"\bdecide " + re.escape(closed["data"].get("key") or target) + r"\b"),
+                                   f"{why}; the owner answered: {answer[:200]}")
+            return 0, [f"{red_what(closed['data'])}: {why}: nothing to decide"
+                       + (f"; its alert{'s' if n > 1 else ''} acknowledged" if n else "")]
         return 1, [f"NOT DECIDED: {target} names no open red (`~/bin/agentctl red status`)"]
     t, rc, out = store.clock(), 1, []
     for it in items:

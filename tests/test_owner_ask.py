@@ -180,6 +180,21 @@ class DecideTest(AskBase):
         self.assertTrue(d["decision"]["question"], "the question is kept with the answer")
         self.assertIn("IN PROGRESS (decided: baseline them)", self.view(self.st.item("red", it["id"]))[1])
 
+    def test_decide_on_a_red_closed_since_says_it_is_resolved_and_acks_its_alert(self):
+        """The owner, 2026-11-06: `decide 971723aec893 "yes: fix the stuck limit as proposed"` answered "names no open
+        red" -- its red had cleared days before, and its WAITING ON YOU alert stayed unread."""
+        it = self.decision_blocked()
+        line = 'RED BLOCKED ON OWNER: WAITING ON YOU: x -- Answer: `! ~/bin/agentctl decide k "<your answer>"`'
+        eid = A.alert_write({"id": "20261105T000000000000-1-red", "at": self.t[0], "command": "red", "cwd": "/",
+                             "final": True, "exit": 1, "verdict": line, "kind": "BLOCKED", "verdicts": [line],
+                             "tail": [], "audience": "owner", "item": "run:x -- Main #1"})
+        A.red_move(self.st, self.st.item("red", it["id"]), "cleared", "RED CLEARED: a newer run is green")
+        rc, out = A.red_decide(self.st, O_R, "k", "yes")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("already resolved (red closed", out[0])
+        self.assertTrue(A.alert_acked(A.inbox_dir(), eid), "its alert acknowledged")
+        self.assertIn("already resolved", A.read_record(os.path.join(A.inbox_dir(), eid + ".json"))["closed"]["why"])
+
     def test_decide_retries_a_stale_version_never_a_traceback(self):
         it = self.decision_blocked()
         real, hits = self.st.update_item, [0]

@@ -362,6 +362,29 @@ def alert_close(d, idx, item, why):
     return True
 
 
+def alert_close_naming(pattern, why, d=None):
+    """Close every unread alert whose verdict matches `pattern` (a question answered after its red closed). Returns
+    how many."""
+    d = d or inbox_dir()
+    n = 0
+    with alert_lock(d):
+        idx = alert_index(d)
+        live = {eid: item for item, eid in (idx.get("items") or {}).items()}
+        for e in inbox_entries():
+            if e["read"] or not pattern.search(str(e.get("verdict") or "")):
+                continue
+            if e["id"] in live:
+                alert_close(d, idx, live[e["id"]], why)
+            else:
+                rec = {k: v for k, v in e.items() if k != "read"}
+                rec["closed"] = {"at": time.time(), "why": why}
+                write_json(os.path.join(d, e["id"] + ".json"), rec)
+                alert_ack(d, e["id"])
+            n += 1
+        alert_index_save(d, idx)
+    return n
+
+
 # ---------------------------------------------------------------- the probes: each live alert closes itself
 def alert_probe(st, item, e, t, ctx=None):
     """(closed why or None, the audience now or None): what the item's own state says of its live alert."""

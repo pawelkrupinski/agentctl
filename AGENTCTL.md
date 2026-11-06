@@ -719,6 +719,13 @@ agent must be assigned to it".
   RED ESCALATE meanwhile). If the decided action fails (`NOT LANDED`, `GAVE UP`, `DIAGNOSED`, its fix change ended
   unlanded) the red goes straight back to the owner: `WAITING ON YOU: you decided '<answer>'; the action failed:
   <why>`. A block still clears itself by its probe (a newer run no longer failing this way), and its reminders with it.
+  `decide` on a red that has closed meanwhile answers `already resolved (red closed <when>, <state>)` and
+  acknowledges the alerts that asked it.
+- **Stuck runs** (an infra red, `[stuck]`): a run undecided past max(3 x its workflow's p90, 30 min), counted from its
+  first job's start. The p90 is of the workflow's own finished runs -- its own last 30 read when the newest-200 list
+  holds fewer than 5 -- and with fewer still, its jobs' `timeout-minutes` (summed) bound it. Not stuck: a run whose
+  unfinished jobs all wait for runners whose every slot is busy (`queued`), or one waiting on a workflow_dispatch run it
+  started (`waits_on`, judged by that child).
 - **Refunds.** A dispatch that did nothing is not counted (`red status` says `[refunded: ...]`): `GAVE UP` / `NOT LANDED`
   because it is already fixed or there is nothing to do; `STOPPED` (superseded) and `red cleared`; a fixer killed
   before any verdict; `BLOCKED ON OWNER` only for a CI read (`gh run view|download`: gh reads with its own
