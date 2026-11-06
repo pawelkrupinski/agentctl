@@ -361,7 +361,7 @@ def cmd_land_precheck(a):
 
 def enqueue(repo, main_ref, sh, a):
     """Rebase, squash guard, then the change becomes a queued entry: prints QUEUED and starts the processor."""
-    rc, head = sync(repo, main_ref, sh)
+    rc, head = sync(repo, main_ref, sh, getattr(a, "release_hold", False))
     if rc is not None:
         return rc
     d, _clone, _wt = waiting_state(repo)

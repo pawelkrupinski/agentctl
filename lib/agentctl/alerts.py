@@ -24,7 +24,8 @@
 #      so the switch-over floods nobody.
 ALERT_INDEX_VERSION = 1
 ALERT_AUDIENCES = ("owner", "author", "fixer", "info")
-ALERT_OWNER_KINDS = {"BLOCKED", "RED_BUDGET", "UNLANDED_ORPHAN"}  # a decision, or what its bounded fixer left undone
+ALERT_OWNER_KINDS = {"BLOCKED", "RED_BUDGET", "UNLANDED_ORPHAN", "ORPHAN_SUBMITTED"}  # a decision, what its bounded fixer
+# left undone, or recovery queueing somebody's work (its owner may need to stop it)
 ALERT_AUTHOR_KINDS = {"NOT_LANDED", "RED", "RED_AUTHOR", "FIX_FAILED", "FIX_NOT_COUNTED", "BRANCH_RED", "RED_REVERT",
                       "RED_BLAME", "RED_RELAND", "ENDED", "USAGE", "UNKNOWN", "STALLED"}
 ALERT_FIXER_KINDS = {"FIXER_FAILED", "DIAGNOSED", "RED_DISPATCHED", "ORPHAN_FIXER", "LAUNCH_FAILED", "RED_FLAKE",

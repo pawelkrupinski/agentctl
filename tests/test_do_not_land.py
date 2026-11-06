@@ -41,6 +41,24 @@ class DoNotLandTest(LandBase):
         sha = self.r.commit("Prototype-free change: wipe the cache")  # 'wipe' is no WIP
         self.assertIsNone(A.do_not_land(self.r.path, [sha], "wt-feature"))
 
+    def test_a_hold_trailer_is_refused_until_released(self):
+        """2026-11-06 es-gate-check: a gate re-enable the owner was holding was queued by the orphan re-lander. A
+        `Hold: <why>` trailer says so on the commit itself: land refuses it unless --release-hold."""
+        out = self.refused("Gate re-enable\n\nHold: the owner holds this until the drift check is clean")
+        self.assertIn("Hold:", out)
+        self.assertIn("--release-hold", out)
+        head = sh(self.r.path, "git", "rev-parse", "HEAD")
+        self.assertEqual(A.held_commit(self.r.path, [head]),
+                         f"commit {head[:10]} carries Hold: the owner holds this until the drift check is clean")
+        rc, out = self.land("--release-hold")
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("NOT LANDED", out)
+
+    def test_hold_in_a_body_line_is_no_trailer(self):
+        self.r.write("ok.txt", "x\n")
+        sha = self.r.commit("Gate: say why\n\nHold: on, this line is prose\nand the paragraph goes on.\n\nSigned-off-by: x")
+        self.assertIsNone(A.held_commit(self.r.path, [sha]))
+
     def test_laptop_submission_is_refused(self):
         self.r.write("p.txt", "x\n")
         sha = self.r.commit("PROTOTYPE: measure only")

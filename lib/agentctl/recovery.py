@@ -181,24 +181,59 @@ def recover_clear_flag(cond, a):
     return ""
 
 
+# A RE-LAND NEVER TOUCHES THE AUTHOR'S WORKTREE (2026-11-06 22:51Z: orphan duty ran `agentctl land` IN
+# ~/projects/movies-wt/es-gate-check, which rebased a live session's check worktree onto origin/main). The re-land runs
+# in a throwaway tree of agentctl's own (reland_tree_path: tagged internal, named after the author's worktree so the
+# change id still names it), detached at the author's HEAD: land rebases THAT tree; the author's branch, HEAD and files
+# stay exactly as they were. A later re-land replaces the tree; LANDED closes it like any land's tree.
+def reland_tree_path(wt):
+    return recovery_dir("reland-trees", os.path.basename(os.path.realpath(wt).rstrip("/")))
+
+
+def reland_tree(wt):
+    """A fresh detached tree at wt's HEAD (reland_tree_path), or raise RuntimeError saying why not."""
+    head = git(wt, "rev-parse", "HEAD", check=False).stdout.strip()
+    if not head:
+        raise RuntimeError(f"{wt} has no HEAD")
+    tree = reland_tree_path(wt)
+    if os.path.exists(tree):
+        git(wt, "worktree", "remove", "--force", tree, check=False)
+        if os.path.exists(tree):
+            import shutil
+            shutil.rmtree(tree, ignore_errors=True)
+    git(wt, "worktree", "prune", check=False)
+    os.makedirs(os.path.dirname(tree), exist_ok=True)
+    r = git(wt, "worktree", "add", "-q", "--detach", mark_internal(tree), head, check=False)
+    if r.returncode:
+        raise RuntimeError(f"could not make a throwaway tree at {tree}: {(r.stderr or '').strip()[:200]}")
+    return tree
+
+
 def reland_worktree(cond, a):
-    """`agentctl land` again in the change's worktree (it fetches and rebases first: a conflict is a real NOT LANDED).
-    'landing ...' when started, else why not (the caller says it: never a silent drop)."""
+    """`agentctl land` again for the change in a["worktree"], from a throwaway tree at its HEAD (it fetches and rebases
+    there: a conflict is a real NOT LANDED). 'landing ...' when started, else why not (the caller says it: never a
+    silent drop)."""
     wt = a["worktree"]
     if not os.path.isdir(wt):
         return f"not landed again: {wt} is gone"
     if git(wt, "status", "--porcelain", "--untracked-files=no", check=False).stdout.strip():
         return f"not landed again: {wt} has uncommitted changes"
     commits = git(wt, "rev-list", f"{remote()}/main..HEAD", check=False).stdout.split()
-    why = blame_land_refusal(wt, commits, wt)
+    why = blame_land_refusal(wt, commits, wt) or held_commit(wt, commits)
     if why:
         return f"not landed again: {why}"
+    try:
+        tree = reland_tree(wt)
+    except RuntimeError as e:
+        return f"not landed again: {e}"
     os.makedirs(recovery_dir(), exist_ok=True)
     with open(recovery_dir("reland.log"), "a") as f:
+        f.write(f"=== {ts()} re-land of {wt} from {tree}\n")
+        f.flush()
         spawn_detached([sys.executable, TOOL_PATH, "land"], stdin=subprocess.DEVNULL, stdout=f,
-                         stderr=f, start_new_session=True, cwd=wt,
-                         env={**os.environ, "AGENTCTL_NO_SECRETS": "1"})
-    return f"landing {wt.replace(HOME, '~')} again (attempt {a.get('attempt')})"
+                       stderr=f, start_new_session=True, cwd=tree,
+                       env={**os.environ, "AGENTCTL_NO_SECRETS": "1"})
+    return f"landing {wt.replace(HOME, '~')} again from a throwaway tree {tree.replace(HOME, '~')} (attempt {a.get('attempt')})"
 
 
 def recover_clear_hold(cond, a):

@@ -477,8 +477,9 @@ def expire_cache(root=None, days=None, now=None, dry_run=False):
 # audit found movies-wt-workflow-prune rejected 6x and idle 15 h, identity-impact / unit-before-push / red-local idle
 # 12-19 h, flipflop / nodrift-cadence / unify / mongo-csot never landed at all): every maintain pass, a worktree whose
 # commits are not on origin/main (by patch) and whose author is gone -- no process in it, no land, no live claim,
-# idle ORPHAN_IDLE -- gets ONE action: a re-land (its last verdict infra, unknown or none), or a dispatched fixer (a
-# real failure: the checks rejected it). Still orphaned after that: UNLANDED ORPHAN, a condition whose probe clears
+# idle ORPHAN_IDLE, no live session that ever named it -- gets ONE action: a re-land (its last verdict infra, unknown or
+# none; only with LAND INTENT, never work NOT FOR LANDING, and from a throwaway tree, never the author's: see below and
+# reland_worktree), or a dispatched fixer (a real failure: the checks rejected it). Still orphaned after that: UNLANDED ORPHAN, a condition whose probe clears
 # when its commits are on main, or somebody works in it again. Nothing is ever deleted.
 ORPHAN_IDLE = 2 * 3600
 ORPHAN_PER_PASS = 3
@@ -507,12 +508,6 @@ def last_land_entry(wt):
     es = [e for e in inbox_entries() if e.get("final", True) and e.get("command") in ("land", "waiting")
           and os.path.realpath(str(e.get("cwd") or "")) == rw]
     return es[-1] if es else None
-
-
-def last_land_verdict(wt):
-    """The newest final land verdict in the inbox for this worktree, or None."""
-    e = last_land_entry(wt)
-    return str(e.get("verdict") or "") if e else None
 
 
 # AN INFRA FAILURE IS NO VERDICT ON AN ORPHAN (2026-11-02: movies-wt-flip-stage5's land `crashed: StoreUnavailable: POST
@@ -589,9 +584,10 @@ def live_lease_worktrees():
     return out
 
 
-def orphan_candidates(repo, now_=None, dead=None):
+def orphan_candidates(repo, now_=None, dead=None, refused=None):
     """[(worktree, commits, key, last verdict)] of the orphans now. A worktree holding a withdrawn or refuted blame
-    revert (blame_land_refusal) is never one: it goes to `dead` [(worktree, why)] when given."""
+    revert (blame_land_refusal) is never one: it goes to `dead` [(worktree, why)] when given; one whose work is not for
+    landing (orphan_refusal) goes to `refused` [(worktree, key, why)]."""
     t = now_ if now_ is not None else time.time()
     try:
         cwds = {os.path.realpath(c) for c in process_cwds().values()}
@@ -638,8 +634,60 @@ def orphan_candidates(repo, now_=None, dead=None):
                 if dead is not None:
                     dead.append((p, why))
                 continue
-            out.append((p, commits, key, last_land_verdict(p)))
+            why = orphan_refusal(p, commits)
+            if why:  # 2026-11-06: es-gate-check (check/*, held by the owner) rebased and queued as an orphan
+                if refused is not None:
+                    refused.append((p, key, why))
+                continue
+            out.append((p, commits, key, orphan_verdict(p)))
     return out
+
+
+# NOT FOR LANDING (2026-11-06 22:51Z, es-gate-check: a check/* worktree holding a gate re-enable the owner holds was
+# queued as an orphan). Nothing submits, unasked, work that says it is not for landing: a branch named check/*,
+# measure/*, experiment/*, probe/*, prototype/*, spike/*, wip-* or wip/*, or a commit with a `Hold: <why>` trailer
+# (held_commit; `land --release-hold` is the owner's go). Such a worktree is said once (`orphan <name>: not submitted
+# (...)`) and never escalated: it is not stranded, it is kept.
+ORPHAN_NOT_FOR_LANDING = re.compile(r"^((check|measure|experiment|probe|prototype|spike)/|wip[-/])", re.I)
+
+
+def orphan_branch_refusal(branch):
+    if ORPHAN_NOT_FOR_LANDING.match(branch or ""):
+        return f"branch {branch} is not for landing"
+    return None
+
+
+def orphan_refusal(wt, commits):
+    """Why orphan duty must never submit this worktree's commits (not for landing), or None."""
+    return orphan_branch_refusal(branch_of(wt)) or held_commit(wt, commits) or do_not_land(wt, commits, branch_of(wt))
+
+
+def orphan_verdict(wt):
+    """The newest final land verdict for the orphan: from its own worktree or the throwaway tree its re-land ran in."""
+    es = [e for e in (last_land_entry(wt), last_land_entry(reland_tree_path(wt))) if e]
+    return str(max(es, key=lambda e: float(e.get("at") or 0)).get("verdict") or "") if es else None
+
+
+# LAND INTENT (2026-11-06, es-gate-check: queued though nobody had ever asked to land it). Orphan duty submits only
+# work its author once meant to land: a worktree that ran `agentctl land` itself (a land entry in the inbox with that
+# cwd) or has a change item of its own. A worktree that never did -- an agent that died mid-task, a check or design
+# tree -- goes to a person (UNLANDED ORPHAN) instead: nothing lands that its author did not ask to land.
+def land_intent(wt, items=None):
+    rw = os.path.realpath(wt)
+    if (items or {}).get("last"):
+        return True
+    return any(e.get("command") in ("land", "waiting") and os.path.realpath(str(e.get("cwd") or "")) == rw
+               for e in inbox_entries())
+
+
+def orphan_submitted_alert(wt, commits, msg):
+    """ORPHAN SUBMITTED, an owner alert: recovery put somebody's work into the queue -- say which, so it can be stopped."""
+    subjects = [f"{c[:10]} {git(wt, 'log', '-1', '--format=%s', c, check=False).stdout.strip()[:80]}" for c in commits[:5]]
+    more = f" (+{len(commits) - 5} more)" if len(commits) > 5 else ""
+    inbox_write("maintain", f"ORPHAN SUBMITTED: {wt.replace(HOME, '~')} (branch {branch_of(wt) or 'detached'}): "
+                            f"{len(commits)} commit(s) queued by orphan duty -- {'; '.join(subjects)}{more}. {msg}. "
+                            "Stop it with `agentctl land cancel <id>` and `agentctl park <worktree> --reason ...`",
+                [], [], 0, cwd=wt, item=f"orphan:{wt.replace(HOME, '~')}")
 
 
 def probe_orphan_landed(a):
@@ -658,6 +706,9 @@ def probe_orphan_landed(a):
     dead = blame_land_refusal(wt, _c, wt)
     if dead:
         return True, f"never landed: {dead}"
+    kept = orphan_refusal(wt, _c)
+    if kept:
+        return True, f"not for landing: {kept}"
     if rp in live_lease_worktrees():
         return True, "a live claim works in it"
     park = parked_mark(rp)
@@ -887,67 +938,125 @@ def cmd_supersede(a):
 
 # OWNERSHIP FOLLOWS ACTIVITY (the owner, 2026-11-03: movies-wt-unmatched-imdbslip escalated UNLANDED ORPHAN four times
 # while an agent was landing it -- the agent's Claude session runs from another directory and works in the worktree by
-# absolute path, so no process had its cwd there). A Claude session whose transcript was written within OWNER_ACTIVE and
-# whose recent tool calls name a path in the worktree (or whose own project directory is the worktree's) is its owner:
-# no orphan action, and an open UNLANDED ORPHAN clears ("a live session works in it"). Ownership lapses with the activity.
-OWNER_ACTIVE = 30 * 60
-OWNER_TAIL = 256 << 10
+# absolute path, so no process had its cwd there). A LIVE Claude session -- any transcript of it (the session's own or
+# one of its subagents') written within OWNER_ACTIVE -- owns every worktree a tool call of it EVER named (or whose
+# project directory is the worktree's): no orphan action, and an open UNLANDED ORPHAN clears ("a live session works in
+# it"). Ownership lapses when the session goes quiet.
+# 2026-11-06 22:51Z (es-gate-check): the rule used to ask for a tool call naming the worktree within the last 30 min, in
+# the transcript's last 256 KB. The subagent that made ~/projects/movies-wt/es-gate-check had named it last 104 min
+# before while it waited on CI from a sibling worktree, its transcript written minutes before: alive, and its worktree
+# was taken for an orphan, rebased and queued. Every transcript of a live session is now read whole -- incrementally,
+# from where the last pass stopped (SESSION_PATHS, a cache of the paths each one named) -- and `~/` / `$HOME/` paths
+# count as the absolute paths they are.
+OWNER_ACTIVE = 2 * 3600
+SESSION_PATHS = "session-paths.json"
+SESSION_PATH_DEPTH = 10  # path components kept per named path (a worktree is never deeper)
+NAMED_PATH = re.compile(r"(?<![\w.~/$-])(~|\$HOME|\$\{HOME\})?(/[^\s\"'`;|&<>(){}\\,*?\[\]]+)")
+
+
+def tool_call_paths(text):
+    """The absolute paths a tool call's text names (`~/` and `$HOME/` expanded), each cut to SESSION_PATH_DEPTH parts."""
+    out = set()
+    for m in NAMED_PATH.finditer(str(text or "")):
+        p = (HOME if m.group(1) else "") + m.group(2)
+        p = p.rstrip(":.")
+        parts = p.split("/")
+        if len(parts) > 1 and parts[1]:
+            out.add("/".join(parts[:SESSION_PATH_DEPTH + 1]))
+    return out
+
+
+def tool_input_strings(x):
+    if isinstance(x, str):
+        yield x
+    elif isinstance(x, dict):
+        for v in x.values():
+            yield from tool_input_strings(v)
+    elif isinstance(x, list):
+        for v in x:
+            yield from tool_input_strings(v)
 
 
 def session_transcripts(t=None, active=None):
-    """[(path, mtime)] of the Claude transcripts (sessions and their subagents) written within `active` s."""
+    """{session key: [(path, mtime)]} of every LIVE session's transcripts (its own and its subagents'): a session is live
+    while any of them was written within `active` s."""
     t = time.time() if t is None else t
     active = env_num("AGENTCTL_OWNER_ACTIVE", OWNER_ACTIVE) if active is None else active
     root = claude_projects_root()
-    out = []
+    groups = {}
     for g in (os.path.join(glob.escape(root), "*", "*.jsonl"), os.path.join(glob.escape(root), "*", "*", "subagents", "*.jsonl")):
         for p in glob.glob(g):
             try:
                 m = os.stat(p).st_mtime
             except OSError:
                 continue
-            if t - m <= active:
-                out.append((p, m))
-    return out
+            key = p[:-len(".jsonl")] if "subagents" not in p else os.path.dirname(os.path.dirname(p))
+            groups.setdefault(key, []).append((p, m))
+    return {k: v for k, v in groups.items() if any(t - m <= active for _p, m in v)}
+
+
+def transcript_paths(path, cache):
+    """The paths the tool calls of transcript `path` named, read on from where cache[path] stopped (re-read whole when
+    the file was rewritten). Updates cache in place."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            head = hashlib_sha1(f.read(512).decode("utf-8", "replace"))
+            rec = cache.get(path)
+            if not rec or rec.get("head") != head or int(rec.get("offset") or 0) > size:
+                rec = {"head": head, "offset": 0, "paths": []}
+            f.seek(int(rec["offset"]))
+            data = f.read()
+    except OSError:
+        return set((cache.get(path) or {}).get("paths") or [])
+    end = data.rfind(b"\n") + 1  # a line still being written is read next time
+    paths = set(rec["paths"])
+    for line in data[:end].split(b"\n"):
+        if b'"tool_use"' not in line or b"/" not in line:
+            continue
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if r.get("type") != "assistant":
+            continue
+        for c in (r.get("message") or {}).get("content") or []:
+            if isinstance(c, dict) and c.get("type") == "tool_use":
+                for text in tool_input_strings(c.get("input")):
+                    paths |= tool_call_paths(text)
+    rec.update(offset=int(rec["offset"]) + end, paths=sorted(paths))
+    cache[path] = rec
+    return paths
 
 
 def session_worktrees(wts, t=None, active=None):
-    """{realpath of a worktree of wts: the session that works in it} -- see OWNERSHIP FOLLOWS ACTIVITY."""
-    t = time.time() if t is None else t
-    active = env_num("AGENTCTL_OWNER_ACTIVE", OWNER_ACTIVE) if active is None else active
-    want = {os.path.realpath(w): re.compile(re.escape(os.path.realpath(w)) + r"(?![\w.-])")
-            for w in wts if isinstance(w, str) and w}
+    """{realpath of a worktree of wts: the session that owns it} -- see OWNERSHIP FOLLOWS ACTIVITY."""
+    want = {}
+    for w in wts:
+        if isinstance(w, str) and w:
+            want[os.path.realpath(w)] = {w.rstrip("/"), os.path.realpath(w)}
     if not want:
         return {}
-    out = {}
-    for path, _m in session_transcripts(t, active):
-        sid = os.path.basename(path)[:-len(".jsonl")]
-        proj = os.path.basename(os.path.dirname(path) if "subagents" not in path else
-                                os.path.dirname(os.path.dirname(os.path.dirname(path))))
-        for rp in want:  # its own project directory: the session runs in the worktree
-            if proj == live_slug(rp) and rp not in out:
-                out[rp] = f"session {sid[:12]}"
-        try:
-            data, _size = tail_bytes(path, OWNER_TAIL)
-        except (OSError, TypeError):
-            continue
-        for line in data.decode("utf-8", "replace").splitlines()[1:]:
-            if '"tool_use"' not in line:
-                continue
-            try:
-                rec = json.loads(line)
-                at = parse_time(rec["timestamp"]).timestamp()
-            except (ValueError, KeyError, TypeError, AttributeError):
-                continue
-            if rec.get("type") != "assistant" or t - at > active:
-                continue
-            for c in (rec.get("message") or {}).get("content") or []:
-                if not isinstance(c, dict) or c.get("type") != "tool_use":
+    cache_path = recovery_dir(SESSION_PATHS)
+    cache = read_record(cache_path) or {}
+    seen, out = {}, {}
+    for _key, files in session_transcripts(t, active).items():
+        for path, _m in sorted(files):
+            sid = os.path.basename(path)[:-len(".jsonl")]
+            proj = os.path.basename(os.path.dirname(path) if "subagents" not in path else
+                                    os.path.dirname(os.path.dirname(os.path.dirname(path))))
+            paths = transcript_paths(path, cache)
+            seen[path] = cache.get(path)
+            for rp, forms in want.items():
+                if rp in out:
                     continue
-                text = json.dumps(c.get("input"))
-                for rp, rx in want.items():
-                    if rp not in out and rx.search(text):
-                        out[rp] = f"session {sid[:12]}"
+                if proj == live_slug(rp) or any(p == f or p.startswith(f + "/") for p in paths for f in forms):
+                    out[rp] = f"session {sid[:12]}"
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        write_json(cache_path, {k: v for k, v in seen.items() if v})  # only live sessions' transcripts are kept
+    except OSError:
+        pass
     return out
 
 
@@ -1205,7 +1314,14 @@ def orphan_duty(repo=None, dry_run=False, now_=None):
     st = read_record(path) or {}  # after park_duty: a released park's records are gone (its one submit again)
     fixers = read_record(orphan_fixers_path()) or {}
     fixers_changed = fixer_sent = False
-    cands = orphan_candidates(repo, now_, dead)
+    refused = []
+    cands = orphan_candidates(repo, now_, dead, refused)
+    for wt, key, why in refused:  # not for landing: said once, never submitted, never escalated
+        rec = st.get(key) or {"worktree": wt, "first": ts(), "actions": []}
+        if rec.get("refused") != why:
+            did.append(f"orphan {os.path.basename(wt)}: not submitted ({why})")
+            rec["refused"] = why
+        st[key] = rec
     for wt, why in dead:  # a dead blame revert: never submitted; blame's own worktree removed (only its reverts in it)
         name = os.path.basename(wt)
         did.append(f"orphan {name}: not submitted ({why})" if dry_run else
@@ -1238,15 +1354,24 @@ def orphan_duty(repo=None, dry_run=False, now_=None):
                 did += orphan_escalate(repo, wt, name, commits, key, rec, verdict or f"cancelled ({last['id']})")
                 st[key] = rec
                 continue
+            if not land_intent(wt, items):  # LAND INTENT: its author never asked to land it -- a person decides
+                rec["actions"].append({"at": ts(), "what": "none (it never ran `agentctl land`)"})
+                did += orphan_escalate(repo, wt, name, commits, key, rec,
+                                       "its author never ran `agentctl land` there: nothing submits it unasked")
+                st[key] = rec
+                continue
             if acted >= ORPHAN_PER_PASS:  # a few a pass: the queue is shared
                 continue
             acted += 1  # SUBMITTED ONCE (design §11 I9): its checks then decide; a rejection is its red's to rescue
-            w = reland_worktree(None, {"worktree": wt, "attempt": 1})
+            w = reland_worktree(None, {"worktree": wt, "attempt": 1, "repo": repo})
             rec["actions"].append({"at": ts(), "what": "submit", "msg": w})
             did.append(f"orphan {name}: {rec['actions'][-1]['what']} ({verdict or 'never landed'})")
+            if not str(w).startswith("not landed"):
+                orphan_submitted_alert(wt, commits, w)
         elif not rec.get("escalated"):
             last_at = parse_time(rec["actions"][-1]["at"]).timestamp()
-            e = last_land_entry(wt)
+            es = [x for x in (last_land_entry(wt), last_land_entry(reland_tree_path(wt))) if x]
+            e = max(es, key=lambda x: float(x.get("at") or 0)) if es else None
             after = str(e.get("verdict") or "") if e and float(e.get("at") or 0) >= last_at - 1 else None
             msg = str(rec["actions"][-1].get("msg") or "")
             if msg.startswith("not landed again:"):  # the submit itself was refused: that is its verdict
@@ -1264,9 +1389,11 @@ def orphan_duty(repo=None, dry_run=False, now_=None):
                 elif acted < ORPHAN_PER_PASS:
                     acted += 1
                     rec["infra_retries"] = n + 1
-                    w = reland_worktree(None, {"worktree": wt, "attempt": n + 2})
+                    w = reland_worktree(None, {"worktree": wt, "attempt": n + 2, "repo": repo})
                     rec["actions"].append({"at": ts(), "what": "submit", "msg": w, "infra": after[:200]})
                     did.append(f"orphan {name}: submit again (its last try failed on infra: {after[:120]})")
+                    if not str(w).startswith("not landed"):
+                        orphan_submitted_alert(wt, commits, w)
             elif time.time() - last_at >= env_num("AGENTCTL_ORPHAN_IDLE", ORPHAN_IDLE):  # its action had its time
                 rw = os.path.realpath(wt)
                 real = after if after is not None else verdict

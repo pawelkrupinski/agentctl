@@ -70,6 +70,8 @@ def main(argv=None):
     ld.add_argument("--repo", help="checkout to land from (default: cwd)")
     ld.add_argument("--branch", help="local branch to land (default: the checked-out HEAD)")
     ld.add_argument("--stash", action="store_true", help="set uncommitted changes aside in a NAMED stash and restore them after")
+    ld.add_argument("--release-hold", action="store_true",
+                    help="land commits that carry a `Hold: <why>` trailer (only on the owner's go; refused otherwise)")
     ld.add_argument("--no-watch", action="store_true", help="exit at LANDED instead of watching Main and the convergence")
     ld.add_argument("--follow", action="store_true",
                     help="movies: run the checks here and stay until it lands, then watch (default: QUEUED at once; "

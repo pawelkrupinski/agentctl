@@ -23,6 +23,13 @@ class OrphanTest(RedBase):
         os.environ.pop("AGENTCTL_ORPHAN_IDLE", None)
         super().tearDown()
 
+    def worktree_commit(self, name, msg, base="origin/main", intent=True):
+        """intent: its author ran `agentctl land` there once (LAND INTENT), the case every older test here assumed."""
+        wt, sha = super().worktree_commit(name, msg, base)
+        if intent:
+            self.intend(wt)
+        return wt, sha
+
     def run_tool(self, *argv):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
@@ -264,6 +271,7 @@ class OrphanTest(RedBase):
         p = os.path.join(d, "abcdef123456789.jsonl")
         with open(p, "w") as f:
             f.write("\n".join(json.dumps(x) for x in lines) + "\n")
+        os.utime(p, (time.time() - minutes_ago * 60,) * 2)  # its last write: the session's last sign of life
         return p
 
     def test_a_live_session_working_in_the_worktree_by_path_owns_it(self):
@@ -277,7 +285,7 @@ class OrphanTest(RedBase):
         self.assertEqual(len(A.recovery_tick(force=True)), 1)  # the escalation clears: a live session works in it
         self.assertEqual(A.open_conditions(), [])
         self.assertEqual(A.orphan_candidates(self.r.path), [])
-        self.session(wt, minutes_ago=45)  # it stopped working there: ownership lapses with the activity
+        self.session(wt, minutes_ago=150)  # the session went quiet: ownership lapses with it
         self.assertEqual(A.session_worktrees([wt]), {})
         self.assertEqual(len(A.orphan_candidates(self.r.path)), 1)
 
@@ -328,6 +336,109 @@ class OrphanTest(RedBase):
         self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-wfnames: escalated UNLANDED ORPHAN"])
         self.assertEqual(len(fixers), 1, "one fixer per worktree, whatever its rebases do")
         self.assertEqual(A.orphan_duty(self.r.path), [])
+
+    def intend(self, wt):
+        """The author ran `agentctl land` there once (its land intent): only such a worktree is ever submitted."""
+        A.inbox_write("land", "QUEUED 20261106-000000-x-1 (abc, 1 ahead)", [], [], 0, final=False, cwd=wt)
+
+    def subagent_transcript(self, lines, mtime=None):
+        d = os.path.join(os.environ["AGENTCTL_CLAUDE_PROJECTS"], "-Users-x-movies", "d296c9e6-b2a3", "subagents")
+        os.makedirs(d, exist_ok=True)
+        p = os.path.join(d, "agent-aec18896.jsonl")
+        with open(p, "w") as f:
+            f.write("\n".join(json.dumps(x) for x in lines) + "\n")
+        if mtime is not None:
+            os.utime(p, (mtime, mtime))
+        return p
+
+    def tool_call(self, minutes_ago, command):
+        at = A.dt.datetime.fromtimestamp(time.time() - minutes_ago * 60, A.dt.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%S.000Z")
+        return {"type": "assistant", "timestamp": at, "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": command}}]}}
+
+    def test_the_es_gate_check_incident_a_live_sessions_check_worktree_is_never_submitted(self):
+        """2026-11-06 22:51Z: orphan duty rebased ~/projects/movies-wt/es-gate-check (branch check/es-gate-reenable, a
+        gate re-enable the owner holds) and queued it. Its session was alive -- its transcript written minutes before --
+        but its last tool call naming the worktree was 104 min old, past the 30 min the ownership rule looked back."""
+        wt = self.r.worktree("es-gate-check", branch="check/es-gate-reenable")
+        self.r.write("gate.txt", "on\n", at=wt)
+        self.r.commit("Gate re-enable", at=wt)
+        self.subagent_transcript([self.tool_call(104, f"cd {wt} && git cherry-pick debfb2915e"),
+                                  self.tool_call(5, "cd /elsewhere/es-absence && agentctl land")])
+        self.assertEqual(A.session_worktrees([wt]), {os.path.realpath(wt): "session agent-aec188"})
+        self.assertEqual(A.orphan_duty(self.r.path), [], "a live session's worktree is nobody's orphan")
+        self.subagent_transcript([self.tool_call(300, f"cd {wt} && git cherry-pick debfb2915e")],
+                                 mtime=time.time() - 4 * 3600)  # the session ended hours ago
+        self.assertEqual(A.session_worktrees([wt]), {})
+        self.intend(wt)  # even had it run land once: a check/* branch is not for landing
+        self.assertEqual(A.orphan_duty(self.r.path), ["orphan es-gate-check: not submitted (branch "
+                                                      "check/es-gate-reenable is not for landing)"])
+        self.assertEqual(A.orphan_duty(self.r.path), [], "said once")
+        self.assertEqual(self.relands, [])
+        self.assertEqual(A.open_conditions(), [])
+
+    def test_branches_named_not_for_landing(self):
+        for b in ("check/x", "measure/x", "experiment/x", "probe/x", "wip-x", "wip/x", "prototype/x", "spike/x"):
+            self.assertIsNotNone(A.orphan_branch_refusal(b), b)
+        for b in ("es-absence", "fix-check-order", "imdb-wipe", "", "main-probe"):
+            self.assertIsNone(A.orphan_branch_refusal(b), b)
+
+    def test_a_tool_call_by_home_relative_path_owns_the_worktree(self):
+        home = os.path.expanduser("~")
+        self.assertEqual(A.tool_call_paths("cd ~/projects/movies-wt/es-gate-check && ls; cat $HOME/x/y \"/a/b c\""),
+                         {f"{home}/projects/movies-wt/es-gate-check", f"{home}/x/y", "/a/b"})
+
+    def test_a_worktree_that_never_ran_land_goes_to_a_person_not_the_queue(self):
+        wt, _sha = self.worktree_commit("repo-wt-halfdone", "halfdone: its agent died before landing", intent=False)
+        did = A.orphan_duty(self.r.path)
+        self.assertEqual(did, ["orphan repo-wt-halfdone: escalated UNLANDED ORPHAN"])
+        self.assertEqual(self.relands, [], "never submitted: its author never asked to land it")
+        [c] = A.open_conditions()
+        self.assertIn("never ran `agentctl land`", c["text"])
+        self.assertEqual(A.orphan_duty(self.r.path), [])
+
+    def test_a_held_commit_is_never_submitted(self):
+        wt = self.r.worktree("repo-wt-held", branch="held")
+        self.r.write("gate.txt", "on\n", at=wt)
+        sha = self.r.commit("Gate re-enable\n\nHold: the owner says go after the drift check", at=wt)
+        self.intend(wt)
+        self.assertEqual(A.orphan_duty(self.r.path), [f"orphan repo-wt-held: not submitted (commit {sha[:10]} carries "
+                                                      "Hold: the owner says go after the drift check)"])
+        self.assertEqual(self.relands, [])
+        self.assertEqual(A.orphan_duty(self.r.path), [])
+
+    def test_a_submit_alerts_the_owner_naming_the_worktree_and_its_commits(self):
+        wt, sha = self.worktree_commit("repo-wt-done", "done: finished, landed once, its agent gone")
+        self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-done: submit (never landed)"])
+        [e] = self.inbox("ORPHAN_SUBMITTED")
+        self.assertIn("repo-wt-done", e["verdict"])
+        self.assertIn(f"{sha[:10]} done: finished", e["verdict"])
+        self.assertEqual(A.alert_audience(e), "owner")
+
+    def test_a_reland_runs_in_a_throwaway_tree_never_rebasing_the_authors(self):
+        wt, sha = self.worktree_commit("repo-wt-author", "author: a change")
+        self.r.write("other.txt", "main moves\n")
+        self.r.commit("main moves")
+        self.r.push()
+        A.reland_worktree = self.saved_o[1]
+        spawned = []
+        saved = A.spawn_detached
+        self.addCleanup(lambda: setattr(A, "spawn_detached", saved))
+        A.spawn_detached = lambda argv, **kw: spawned.append((argv, kw["cwd"]))
+        msg = A.reland_worktree(None, {"worktree": wt, "attempt": 1, "repo": self.r.path})
+        tree = A.reland_tree_path(wt)
+        self.assertIn("throwaway tree", msg)
+        self.assertEqual([c for _a, c in spawned], [tree])
+        self.assertEqual(sh(tree, "git", "rev-parse", "HEAD"), sha)
+        self.assertTrue(A.internal_tree(tree))
+        self.assertEqual(sh(wt, "git", "rev-parse", "HEAD"), sha, "the author's worktree is never rebased")
+        self.assertEqual(sh(wt, "git", "symbolic-ref", "--short", "HEAD"), "repo-wt-author")
+        self.assertEqual(os.path.basename(tree), "repo-wt-author", "the change id names the author's worktree")
+        self.r.write("fix.txt", "a second try\n", at=wt)
+        sha2 = self.r.commit("author: another", at=wt)
+        A.reland_worktree(None, {"worktree": wt, "attempt": 2, "repo": self.r.path})
+        self.assertEqual(sh(tree, "git", "rev-parse", "HEAD"), sha2, "the old tree replaced")
 
     def test_the_change_key_survives_a_rebase(self):
         wt, _sha = self.worktree_commit("repo-wt-x", "x")

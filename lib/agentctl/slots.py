@@ -529,8 +529,9 @@ def cmd_land(a):
 MAIN_MOVED = "main moved"  # land_loop: the check outside the lock no longer covers origin/main
 
 
-def sync(repo, main_ref, sh):
-    """Fetch, rebase onto origin/main, the squash guard: (rc, None) when land is decided here, else (None, head)."""
+def sync(repo, main_ref, sh, release_hold=False):
+    """Fetch, rebase onto origin/main, the squash guard: (rc, None) when land is decided here, else (None, head).
+    A commit with a `Hold: <why>` trailer is refused unless release_hold (`land --release-hold`: the owner's go)."""
     r = sh("git", "fetch", "--quiet", remote(), "main")
     if r.returncode:  # a tunnel restart is seconds long: one more try before giving up
         err(f"git fetch failed ({r.stderr.strip()[:120]}); retrying once in 15 s")
@@ -547,6 +548,11 @@ def sync(repo, main_ref, sh):
     if why:
         print(f"NOT LANDED: {why}. Throwaway work never lands; remove the marker (rename the branch, reword the commit, "
               "drop the Do-Not-Land: trailer) only if the owner wants it landed.")
+        return 1, None
+    why = None if release_hold else held_commit(repo, waiting_commits(repo, f"{remote()}/main", head))
+    if why:
+        print(f"NOT LANDED: {why}. Held work lands only on the owner's go: `agentctl land --release-hold` then (or "
+              "drop the trailer).")
         return 1, None
     why = blame_land_refusal(repo, waiting_commits(repo, f"{remote()}/main", head), repo,
                              records=blame_records_quiet())
@@ -975,7 +981,7 @@ def local_units(repo=None):
 def precheck(repo, main_ref, sh, log_path, a):
     """Before the lock: sync and the hook's dry run (the long part). None when land goes on to the lock (with
     a.prechecked = (head, base) when the dry run passed there), else land's rc."""
-    rc, head = sync(repo, main_ref, sh)
+    rc, head = sync(repo, main_ref, sh, getattr(a, "release_hold", False))
     if rc is not None:
         return rc
     hook = precheck_hook(repo)
@@ -998,7 +1004,7 @@ def precheck(repo, main_ref, sh, log_path, a):
 def land_loop(repo, main_ref, sh, log_path, a):
     for attempt in range(LAND_RETRIES + 1):
         lock_note("fetch and rebase")
-        rc, head = sync(repo, main_ref, sh)
+        rc, head = sync(repo, main_ref, sh, getattr(a, "release_hold", False))
         if rc is not None:
             return rc
         reds = gate_reds(repo) if waiting_supported(repo) else set()

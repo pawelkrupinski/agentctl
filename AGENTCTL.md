@@ -139,6 +139,9 @@ moves it forward; nothing is a detached process that can die with its state in i
 - **Throwaway work never lands (2026-11-01).** `land` (and so every re-land: recovery, orphan duty, blame, fixer) and a
   laptop submission refuse with `NOT LANDED` when the branch is `measure/*` or `experiment/*`, a commit's subject starts
   PROTOTYPE / WIP / DO NOT LAND (any case), or a commit carries a `Do-Not-Land:` trailer (`do_not_land`, tools.py).
+- **Held work lands only on the owner's go (2026-11-06, es-gate-check).** A commit with a `Hold: <why>` trailer (in the
+  message's trailer block) is refused by `land` with `NOT LANDED` until `agentctl land --release-hold`; orphan duty and
+  every re-land never submit it (`held_commit`, tools.py).
 - **One push to main at a time.** Every push to main happens under the `land/<repo>` lease, after the pushed tip's own
   checks passed on the base it is pushed onto.
 - **A dead blame revert never lands (2026-11-02).** A revert blame WITHDREW or saw REFUTED (`Reverts-Change: <change>`
@@ -1419,14 +1422,33 @@ agentctl cleanup (DRY RUN); log: /…/scratchpad/agentctl-deleted.log
 
 ### orphan worktrees: submitted once
 
-A worktree with commits not on <remote>/main whose author is gone (no live lease, no process in it, idle) is SUBMITTED
-ONCE by the tick, whatever its last verdict: it becomes a queued change like any other (its checks then decide; a
-rejection is its red's to rescue), and an `UNLANDED ORPHAN` inbox entry names it.
+A worktree with commits not on <remote>/main whose author is gone (no live lease, no process in it, no live session
+that ever named it, idle) and whose author once ran `agentctl land` there is SUBMITTED ONCE by the tick, whatever its
+last verdict: it becomes a queued change like any other (its checks then decide; a rejection is its red's to rescue),
+an `ORPHAN SUBMITTED` owner alert names the worktree and its commits, and an `UNLANDED ORPHAN` inbox entry follows if
+it still does not land.
 
-- **Ownership follows activity** (2026-11-03, imdbslip): besides a process in it, a land, a live lease or a queue
-  entry, a Claude session whose transcript was written in the last 30 min (`$AGENTCTL_OWNER_ACTIVE`) and whose recent
-  tool calls name a path in the worktree (or whose project dir is the worktree) owns it: no orphan action, and an open
-  `UNLANDED ORPHAN` clears (`a live session works in it`). It lapses when the activity stops.
+The 2026-11-06 incident behind the rules below: orphan duty took `~/projects/movies-wt/es-gate-check` (branch
+`check/es-gate-reenable`, a gate re-enable the owner was holding, the worktree of a live subagent waiting on CI from a
+sibling worktree) for stranded work, rebased it in place and queued it.
+
+- **Ownership follows activity** (2026-11-03, imdbslip; 2026-11-06, es-gate-check): besides a process in it, a land, a
+  live lease or a queue entry, a LIVE Claude session -- any of its transcripts (its own or a subagent's) written within
+  2 h (`$AGENTCTL_OWNER_ACTIVE`) -- owns every worktree a tool call of it EVER named (`~/` and `$HOME/` paths too), or
+  whose project dir is the worktree: no orphan action, and an open `UNLANDED ORPHAN` clears (`a live session works in
+  it`). It lapses when the session goes quiet. Transcripts are read whole, incrementally (the paths each named are
+  cached in `recovery/session-paths.json`). The old rule -- a tool call naming it in the last 30 min -- missed the
+  es-gate-check subagent, which had named it 104 min before.
+- **Land intent**: only a worktree that ran `agentctl land` itself (a land inbox entry with that cwd) or has a change
+  item of its own is ever submitted. One that never did (an agent that died mid-task, a design or check tree) goes to a
+  person at once: `UNLANDED ORPHAN ... its author never ran agentctl land there`.
+- **Not for landing**: a branch named `check/*`, `measure/*`, `experiment/*`, `probe/*`, `prototype/*`, `spike/*`,
+  `wip-*` or `wip/*`, a commit with a `Hold: <why>` trailer, or `do_not_land`'s markers: never submitted and never
+  escalated (`orphan <name>: not submitted (...)`, said once); an open `UNLANDED ORPHAN` for it clears.
+- **The author's worktree is never touched**: a submit runs `agentctl land` in a throwaway tree of agentctl's own
+  (`recovery/reland-trees/<worktree name>`, tagged internal, detached at the author's HEAD; replaced by the next
+  re-land), so the rebase happens there; the author's branch, HEAD and files stay as they were. Its verdicts (cwd: the
+  throwaway tree) are read as the orphan's.
 - **Infra is no verdict** (2026-11-02, flip-stage5's `crashed: StoreUnavailable`): a last try that failed on the store,
   the tunnel, a fetch or the network never escalates; it is submitted again once the store answers (backing off 15 min
   → 6 h), however many tries it takes.
@@ -1676,7 +1698,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `orphan_fixers` | `AGENTCTL_ORPHAN_FIXERS` | `2` | orphan fixers alive at once ; one dispatched a pass |
 | `orphan_idle` | `AGENTCTL_ORPHAN_IDLE` | `7200` | its action had its time |
 | `owners_dir` | `AGENTCTL_OWNERS_DIR` | - | - |
-| `owner_active` | `AGENTCTL_OWNER_ACTIVE` | `1800` | - |
+| `owner_active` | `AGENTCTL_OWNER_ACTIVE` | `7200` | - |
 | `owner_idle` | `AGENTCTL_OWNER_IDLE` | `21600` | no red held this long: the owner ends |
 | `park_digest_days` | `AGENTCTL_PARK_DIGEST_DAYS` | `14` | - |
 | `pinned_recording` | `AGENTCTL_PINNED_RECORDING` | - | - |

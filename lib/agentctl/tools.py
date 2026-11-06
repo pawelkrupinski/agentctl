@@ -463,6 +463,33 @@ def do_not_land(repo, commits, branch=""):
     return None
 
 
+# HELD WORK (2026-11-06 22:51Z: the orphan re-lander queued ~/projects/movies-wt/es-gate-check, a gate re-enable the
+# owner was explicitly holding, as stranded work). A `Hold: <why>` trailer says so on the commit itself: land refuses
+# it with NOT LANDED unless `--release-hold` (the owner's go), and recovery (orphan duty) never submits it at all.
+TRAILER_LINE = re.compile(r"^[A-Za-z][\w-]*:\s")
+HOLD_TRAILER = re.compile(r"^Hold:\s*(\S.*)$", re.I)
+
+
+def commit_trailers(msg):
+    """The trailer lines of a commit message: its last paragraph, when every line of it is `Token: value`."""
+    paras = [p for p in re.split(r"\n\s*\n", (msg or "").strip()) if p.strip()]
+    if len(paras) < 2:
+        return []
+    lines = [ln.strip() for ln in paras[-1].splitlines() if ln.strip()]
+    return lines if lines and all(TRAILER_LINE.match(ln) for ln in lines) else []
+
+
+def held_commit(repo, commits):
+    """`commit <sha> carries Hold: <why>` for the first commit with a Hold: trailer, or None."""
+    for c in commits or []:
+        msg = git(repo, "log", "-1", "--format=%B", c, check=False).stdout
+        for ln in commit_trailers(msg):
+            m = HOLD_TRAILER.match(ln)
+            if m:
+                return f"commit {c[:10]} carries Hold: {m.group(1).strip()}"
+    return None
+
+
 def check_range(repo, base, head, allow, max_foreign):
     problems = []
     mb = git(repo, "merge-base", base, head).strip()

@@ -372,7 +372,7 @@ def join(repo, main_ref, sh, log_path, a, head=None, worktree=None, branch=None)
     """The change (its own checks passed) waits for main to turn green: a `waiting` entry (design §14.1: no branch, no
     worktree -- the batch is computed at green, in a check tree). Prints `WAITING <head> (entry <id>, n waiting)`."""
     if head is None:
-        rc, head = sync(repo, main_ref, sh)
+        rc, head = sync(repo, main_ref, sh, getattr(a, "release_hold", False))
         if rc is not None:
             return rc
     d, _clone, _wt = waiting_state(repo)
