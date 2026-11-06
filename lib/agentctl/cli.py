@@ -74,6 +74,14 @@ def main(argv=None):
     ld.add_argument("--follow", action="store_true",
                     help="movies: run the checks here and stay until it lands, then watch (default: QUEUED at once; "
                          "the checks run in the waiting processor and every verdict goes to `agentctl inbox`)")
+    ld.add_argument("--no-fast-precheck", action="store_true",
+                    help="movies: start no scripts/land-precheck beside the queue (default: it runs alongside, and a "
+                         "refusal cancels the queued change with NOT LANDED in the inbox)")
+    lp = sub.add_parser("land-precheck", help=argparse.SUPPRESS)  # land's detached fast precheck (queue.py)
+    lp.add_argument("entry")
+    lp.add_argument("--repo", required=True)
+    lp.add_argument("--base", required=True)
+    lp.add_argument("--head", required=True)
     ld.add_argument("--keep-worktree", action="store_true",
                     help="after WATCH OK, keep the worktree land ran from (default: closed when proven merged and clean)")
     ev = sub.add_parser("env", help="print sdkman sbt/java export lines (--print) or check the agent environment (--check)",
@@ -348,6 +356,6 @@ def main(argv=None):
     cf.add_argument("--write", action="store_true", help="doc: regenerate AGENTCTL.md's config reference")
     a = ap.parse_args(argv)
     handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": cmd_red, "decide": cmd_decide, "config": cmd_config, "issue": cmd_issue, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "github-app": cmd_github_app, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "park": cmd_park, "unpark": cmd_unpark, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "env": cmd_env}[a.cmd]
+               "red": cmd_red, "decide": cmd_decide, "config": cmd_config, "issue": cmd_issue, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "github-app": cmd_github_app, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "park": cmd_park, "unpark": cmd_unpark, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "land-precheck": cmd_land_precheck, "env": cmd_env}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)

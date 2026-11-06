@@ -942,7 +942,7 @@ fixer record, and only without a Claude session by the fixer environment. Any ot
 ### land: QUEUED at once; checked, pushed and watched by the reconciler
 
 ```
-agentctl land [--repo PATH] [--branch B] [--stash] [--keep-worktree]   # movies: QUEUED <id> (<sha>): END YOUR TURN
+agentctl land [--repo PATH] [--branch B] [--stash] [--keep-worktree] [--no-fast-precheck]   # movies: QUEUED <id> (<sha>): END YOUR TURN
 agentctl land --follow              # scripts and red fixers: the checks here, the push, then the watch, in-process
 agentctl land status                # the changes with their states, the batch, the gate, the processor
 agentctl land cancel <id>           # drop a queued or waiting change (its executor is stopped)
@@ -958,6 +958,14 @@ The owner: "agents never wait on a land". In movies (a repo whose hook can check
 4. pushes the change to `refs/heads/land/<id>` on GitHub (bounded; movies' hook checks nothing on a `land/` ref and
    no workflow triggers on one), so the change lives on the remote, not only in your worktree;
 5. prints `QUEUED <id> (<sha>, n ahead)` and exits 0.
+6. (movies, a repo with an executable `scripts/land-precheck`) starts that precheck DETACHED, beside the queue -- the
+   rebase dry run, the hook's commit-rule and linter checks, the lint registry's specs for the pushed paths, ~20-60 s on
+   a warm checkout -- and prints `fast precheck of <id> running alongside the queue (log ...)`. It adds nothing to
+   land's time (the owner, 2026-11-06: landing must not take longer). A refusal (its exit 1) cancels the queued change
+   and writes `NOT LANDED: the fast precheck refused <id> (<sha>): PRECHECK FAIL: <steps>` to the inbox, its lines in
+   the tail: fix and land again. Exit 0 or 2 (could not check: sbt never came up, a bound) leaves the change to the
+   landing check. `--no-fast-precheck` starts none. Code: queue.py `start_fast_precheck` / `cmd_land_precheck`
+   (the hidden `agentctl land-precheck`); tests: `tests/test_queue.py` FastPrecheckTest.
 
 The reconciler then takes it, a step per tick:
 

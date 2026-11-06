@@ -26,6 +26,9 @@ TURN. The processor's tick checks it in a check tree (an executor holding check/
 under pressure), pushes it under the land/<repo> lease -> LANDED and a watch item (Main and the convergence for the sha:
 WATCH OK / RED / UNKNOWN); main red and the change must wait (a production path, no Fixes-Red: for the red run):
 WAITING, landed with the batch checked once at green. Every verdict goes to `agentctl inbox`, naming your worktree.
+THE FAST PRECHECK: a repo with an executable scripts/land-precheck (movies) has it run beside the queue, never before
+QUEUED; a refusal cancels the queued change with `NOT LANDED: the fast precheck refused <id>` in the inbox, minutes
+before the landing check would say it. --no-fast-precheck starts none.
 IN-PROCESS (--follow, --no-watch, a dispatched red fixer, AGENTCTL_QUEUE=0; other repos always): the checks here
 (movies: the hook's dry run --range origin/main..<sha>), then under the land/<repo> lease fetch, push (the repo's
 pre-push hook runs, reusing the dry run's pass), on a race refetch, rebase and retry up to 3 times, verify with

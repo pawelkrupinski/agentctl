@@ -277,7 +277,7 @@ def change_fields(repo, main_ref, head, a):
 # prompts). The submission's git half is the land/<id> push over ssh; its store half takes a token from the
 # environment or the processor's socket, never `secrets` (no_vault). With none, the change waits in the outbox and the
 # laptop's sync -- which holds the token -- submits it; the reconciler checks the Fixes-Red trailers again at the push.
-def submit_to_server(repo, d, fields, note=""):
+def submit_to_server(repo, d, fields, note="", after_queued=None):
     """THE LAPTOP'S ONLY WAY INTO THE QUEUE (phase 2; it holds no queue of its own): the change pushed to
     refs/heads/land/<id>, then submitted to ci-runner's queue (the store unreachable, or no token here: the outbox,
     which the sync sends). Prints QUEUED / QUEUED-LOCAL / NOT LANDED; returns land's exit code."""
@@ -295,11 +295,68 @@ def submit_to_server(repo, d, fields, note=""):
                else f"the store is unreachable ({r['outbox']}); the sync submits it when it answers")
         print(f"QUEUED-LOCAL {e['id']} ({head[:10]}){note}: {why}. LANDED / WAITING / NOT LANDED goes to "
               "`agentctl inbox`", flush=True)
+        if after_queued:
+            after_queued(e["id"])
         return 0
     ahead = r.get("ahead") or 0
     print(f"QUEUED {r['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}){note}: its checks run on ci-runner; "
           "LANDED / WAITING / NOT LANDED goes to `agentctl inbox`", flush=True)
+    if after_queued:
+        after_queued(r["id"])
     return 0
+
+
+# THE FAST PRECHECK (review 2026-11-06 P1; the owner, 11-06: "landing must not take significantly longer"): a repository
+# with an executable scripts/land-precheck (movies: the rebase dry run, the hook's commit-rule and linter checks, the
+# registry's lints, ~20-60 s warm) has it run ALONGSIDE the queue, never before it: land prints QUEUED as fast as ever,
+# and a refusal (exit 1) cancels the queued change and puts NOT LANDED in the inbox, minutes before the landing check
+# would have, sparing that check. Exit 0 or 2 (could not check) leaves the change to the landing check.
+# `land --no-fast-precheck` starts none.
+FAST_PRECHECK = "scripts/land-precheck"
+FAST_PRECHECK_BOUND = 900
+
+
+def fast_precheck_spawn(argv, **kw):
+    return spawn_detached(argv, **kw)
+
+
+def start_fast_precheck(repo, main_ref, head, eid, a):
+    """Start the precheck of queued change `eid` beside the queue; prints one line saying so."""
+    if getattr(a, "no_fast_precheck", False) or not os.access(os.path.join(repo, FAST_PRECHECK), os.X_OK):
+        return
+    base = git(repo, "rev-parse", main_ref).strip()
+    log = os.path.join(scratch(), f"agentctl-precheck-{eid}.log")
+    try:
+        with open(log, "w") as logf:
+            fast_precheck_spawn([sys.executable, TOOL_PATH, "land-precheck", eid, "--repo", repo, "--base", base,
+                                 "--head", head], cwd=repo, stdin=subprocess.DEVNULL, stdout=logf,
+                                stderr=subprocess.STDOUT, start_new_session=True)
+    except OSError as e:
+        err(f"fast precheck not started ({e}); the landing check judges the change")
+        return
+    print(f"fast precheck of {eid} running alongside the queue ({FAST_PRECHECK}; log {log}): a refusal cancels it "
+          "with NOT LANDED in `agentctl inbox`", flush=True)
+
+
+def cmd_land_precheck(a):
+    """The detached half of start_fast_precheck: run the repo's precheck, and on a refusal cancel the queued change."""
+    r = subprocess.run([os.path.join(a.repo, FAST_PRECHECK), "--base", a.base, "--head", a.head], cwd=a.repo,
+                       capture_output=True, text=True, timeout=FAST_PRECHECK_BOUND, stdin=subprocess.DEVNULL)
+    lines = (r.stdout + r.stderr).splitlines()
+    print("\n".join(lines), flush=True)
+    if r.returncode != 1:
+        return 0
+    last = next((l for l in reversed(lines) if l.startswith("PRECHECK ")), lines[-1] if lines else "exit 1")
+    cancel = argparse.Namespace(wcmd="cancel", repo=a.repo, entry=a.entry, renamed=True, hold_for=None, hold_why=None)
+    try:
+        cmd_waiting(cancel)
+    except (Exception, SystemExit) as e:  # already decided, or the store unreachable: the verdict still goes out
+        err(f"could not cancel {a.entry}: {e}")
+    verdict = (f"NOT LANDED: the fast precheck refused {a.entry} ({a.head[:10]}): {last}; its queue entry is cancelled. "
+               f"Fix it in {a.repo}, then land again")
+    inbox_write("land", verdict, [verdict], [l for l in lines if l.strip()][-40:], 1, cwd=a.repo)
+    print(verdict, flush=True)
+    return 1
 
 
 def enqueue(repo, main_ref, sh, a):
@@ -310,12 +367,14 @@ def enqueue(repo, main_ref, sh, a):
     d, _clone, _wt = waiting_state(repo)
     if host_role() == "sync":  # THE LAPTOP'S LAND NEEDS NO VAULT (see submit_to_server)
         with no_vault():
-            return submit_to_server(repo, d, change_fields(repo, main_ref, head, a))
+            return submit_to_server(repo, d, change_fields(repo, main_ref, head, a),
+                                    after_queued=lambda eid: start_fast_precheck(repo, main_ref, head, eid, a))
     fields = change_fields(repo, main_ref, head, a)
     e, ahead = queue_change(d, fields)
     submit_ref(repo, d, e)
     print(f"QUEUED {e['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}): its checks run in the background; "
           "LANDED / WAITING / NOT LANDED goes to `agentctl inbox`", flush=True)
+    start_fast_precheck(repo, main_ref, head, e["id"], a)
     spawn_waiting_processor(repo)
     offer_token(repo)
     return 0

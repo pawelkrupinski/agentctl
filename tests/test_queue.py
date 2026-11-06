@@ -490,6 +490,74 @@ class QueueTest(WaitingTest):
         self.assertEqual(self.remote_refs(), [], "the hook at origin/main knows no land/ refs: nothing pushed")
 
 
+class FastPrecheckTest(QueueTest):
+    """THE FAST PRECHECK (review 2026-11-06 P1; the owner: landing must not take longer): a repository with an
+    executable scripts/land-precheck has it run ALONGSIDE the queue -- land still prints QUEUED at once -- and a refusal
+    cancels the queued change with a NOT LANDED in the inbox minutes before the landing check would have said so."""
+    def setUp(self):
+        super().setUp()
+        self.spawned = []
+        self.saved_spawn = A.fast_precheck_spawn
+        A.fast_precheck_spawn = lambda argv, **kw: self.spawned.append(argv)
+
+    def tearDown(self):
+        A.fast_precheck_spawn = self.saved_spawn
+        super().tearDown()
+
+    def agent_with_precheck(self, name, rc, line):
+        wt, _ = self.agent(name, "web/src/main/A.scala", "a\n")
+        self.r.write("scripts/land-precheck", f"#!/bin/sh\necho 'precheck lints FAIL (3 s)'\necho '{line}'\nexit {rc}\n", at=wt)
+        os.chmod(os.path.join(wt, "scripts/land-precheck"), 0o755)
+        return wt, self.r.commit(f"{name}: precheck", at=wt)
+
+    def run_spawned(self, wt):
+        self.assertEqual(len(self.spawned), 1, self.spawned)
+        argv = self.spawned[0]
+        self.assertEqual(argv[2], "land-precheck")
+        return self.run_tool(*argv[2:], cwd=wt)
+
+    def test_land_queues_at_once_and_starts_the_precheck_alongside(self):
+        wt, sha = self.agent_with_precheck("a", 0, "PRECHECK PASS (3 s)")
+        eid, out = self.queued(wt)
+        self.assertIn("fast precheck", out)
+        self.assertEqual(self.spawned[0][3], eid)
+        self.assertIn(sha, self.spawned[0])
+
+    def test_a_passing_precheck_leaves_the_change_queued_and_it_lands(self):
+        wt, sha = self.agent_with_precheck("a", 0, "PRECHECK PASS (3 s)")
+        eid, _ = self.queued(wt)
+        rc, out = self.run_spawned(wt)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual(len(self.pushed()), 1, "the change still lands")
+
+    def test_a_failing_precheck_cancels_the_queued_change_and_says_why_in_the_inbox(self):
+        wt, _ = self.agent_with_precheck("a", 1, "PRECHECK FAIL: lints (3 s)")
+        eid, _ = self.queued(wt)
+        rc, out = self.run_spawned(wt)
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.pushed(), [], "a change the precheck refused is never pushed")
+        verdicts = [e for e in A.inbox_entries() if "fast precheck" in (e.get("verdict") or "")]
+        self.assertEqual(len(verdicts), 1, [e.get("verdict") for e in A.inbox_entries()])
+        self.assertRegex(verdicts[0]["verdict"], rf"^NOT LANDED: the fast precheck refused {eid}.*PRECHECK FAIL: lints")
+        self.assertIn("precheck lints FAIL (3 s)", verdicts[0]["tail"])
+
+    def test_a_precheck_that_could_not_run_leaves_the_change_queued(self):
+        wt, sha = self.agent_with_precheck("a", 2, "PRECHECK UNCHECKED: lints (300 s)")
+        eid, _ = self.queued(wt)
+        rc, out = self.run_spawned(wt)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.check(eid), 0)
+
+    def test_no_fast_precheck_and_a_repo_without_one_start_nothing(self):
+        wt, _ = self.agent_with_precheck("a", 1, "PRECHECK FAIL: lints (3 s)")
+        rc, out = self.land(wt, "--no-fast-precheck")
+        self.assertIn("QUEUED", out)
+        wt2, _ = self.agent("b", "web/src/main/B.scala", "b\n")
+        self.queued(wt2)
+        self.assertEqual(self.spawned, [])
+
+
 class Died(BaseException):
     """A checker that dies mid-wait (SIGKILL: no handler runs past this point in the wait loop)."""
 
@@ -687,13 +755,16 @@ def own_tests_only(cls, *bases):
 
 own_tests_only(QueueTest, WaitingTest)
 own_tests_only(RemotePickupTest, QueueTest, WaitingTest)
+own_tests_only(FastPrecheckTest, QueueTest, WaitingTest)
 
 
 def load_tests(loader, tests, pattern):
     """Only this file's own cases (QueueTest borrows WaitingTest's fixture, not its tests)."""
     return unittest.TestSuite([QueueTest(n) for n in sorted(vars(QueueTest)) if n.startswith("test_") and vars(QueueTest)[n]]
                               + [RemotePickupTest(n) for n in sorted(vars(RemotePickupTest))
-                                 if n.startswith("test_") and vars(RemotePickupTest)[n]])
+                                 if n.startswith("test_") and vars(RemotePickupTest)[n]]
+                              + [FastPrecheckTest(n) for n in sorted(vars(FastPrecheckTest))
+                                 if n.startswith("test_") and vars(FastPrecheckTest)[n]])
 
 
 if __name__ == "__main__":
