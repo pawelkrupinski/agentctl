@@ -994,6 +994,9 @@ The reconciler then takes it, a step per tick:
   the hook -- else pushed at once (`main moved by 3 commits, no overlap: pushed without re-check`; the push's hook
   judges the red gate only). Re-checked twice at most; the third time it is pushed as rebased and the push's hook runs
   the checks. The push is bounded; on expiry it verifies before it retries. `LANDED <sha>`, and a `watch` item.
+  It pushes from its own check tree when that tree's slot is free, else from the PUSH TREE `<clone>-wt-check-push`
+  (its own lease, no checker takes it): a checker holds its slot through its remote run's whole wait, and pushes that
+  waited for it sat `busy` 30 min past their deadline (2026-11-06).
 - **checked → waiting** while main is red and the change must wait (a production path, no `Fixes-Red:` naming any red
   run of the current episode): `WAITING <sha> (entry <id>, n in batch)`. Tools-only changes and Fixes-Red changes land while red.
 - **The batch.** When main turns green, the waiting changes are ONE `batch` item. The tick assembles its tip in a

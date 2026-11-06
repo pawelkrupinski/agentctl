@@ -225,12 +225,36 @@ class OneViewTest(OneQueueBase):
 
 
 class TreeSlotTest(OneQueueBase):
-    def test_a_push_never_touches_a_check_tree_another_checker_holds(self):
+    def test_a_push_whose_check_tree_another_checker_holds_pushes_from_the_push_tree(self):
+        """2026-11-06: three checked changes sat 30 min past their deadline, `busy` every tick: each check tree was held
+        by a checker waiting on its remote CI run (up to its 2.4 h max hold), and a push waited for its own tree."""
+        trees = []
+        saved = A._push_change
+        A._push_change = lambda repo, d, e, i: trees.append(i) or "landed"
         other = A.tree_slot(self.d, 1)
         self.assertTrue(other.acquire())
         try:
             e = {"id": "c-1", "tree": 1, "tip": "6" * 40, "status": "checked"}
-            self.assertEqual(A.push_change(self.r.path, self.d, e), "busy")
+            self.assertEqual(A.push_change(self.r.path, self.d, e), "landed")
+            self.assertEqual(trees, [A.PUSH_TREE], "never the tree another checker holds")
+            push = A.tree_slot(self.d, A.PUSH_TREE)
+            self.assertTrue(push.acquire(), "the push tree's lease is released after the push")
+            try:
+                self.assertEqual(A.push_change(self.r.path, self.d, e), "busy", "both held: it waits")
+            finally:
+                push.release()
+            other.release()
+            self.assertEqual(A.push_change(self.r.path, self.d, e), "landed")
+            self.assertEqual(trees[-1], 1, "its own tree, free, first: its tip and build are there")
+        finally:
+            A._push_change = saved
+            other.release()
+
+    def test_a_batch_push_never_touches_a_check_tree_another_checker_holds(self):
+        other = A.tree_slot(self.d, 1)
+        self.assertTrue(other.acquire())
+        try:
+            e = {"id": "c-1", "tree": 1, "tip": "6" * 40, "status": "checked"}
             it = {"id": "b-1", "data": {"tip": "6" * 40, "base": "7" * 40, "tree": 1, "members": ["c-1"]}}
             saved = A.batch_members
             A.batch_members = lambda d, it_: [e]

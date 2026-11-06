@@ -932,19 +932,26 @@ def push_change(repo, d, e):
     landed overlaps: a new round, queued), joined to `waiting` while main is red and it must wait, else pushed with
     the push's bounds and verified. pushing -> landed, or back to checked (a push never rejects); after
     PUSH_ATTEMPTS_MAX failures a condition on the git route, and it waits for it."""
-    slot = tree_slot(d, e.get("tree") or 1)  # its tree: never checked out under a checker that took the slot since
-    if not slot.acquire():
-        return "busy"
-    try:
-        return _push_change(repo, d, e)
-    finally:
-        slot.release()
+    # Its own tree first (its tip and build are there), never checked out under a checker that took the slot since;
+    # held, the PUSH TREE: a checker holds its slot for its remote run's whole wait (up to CHECK_LEASE_MAX), and a
+    # push waiting for it sat `busy` 30 min past its deadline (2026-11-06, three changes, every tree held).
+    for i in (e.get("tree") or 1, PUSH_TREE):
+        slot = tree_slot(d, i)
+        if slot.acquire():
+            try:
+                return _push_change(repo, d, e, i)
+            finally:
+                slot.release()
+    return "busy"
 
 
-def _push_change(repo, d, e):
+PUSH_TREE = "push"  # <clone>-wt-check-push, under its own lease; no checker ever takes it (check_tree_slot: 1..N)
+
+
+def _push_change(repo, d, e, i):
     hook = precheck_hook(repo)
     log_path = os.path.join(d, f"check-{e['id']}")
-    tree = check_tree_for_push(repo, e)
+    tree = check_tree_for_push(repo, e, i)
     with land_lock(repo, timeout=0) as held:
         if not held:
             return "busy"
@@ -1027,10 +1034,9 @@ def _push_change(repo, d, e):
         return "checked"
 
 
-def check_tree_for_push(repo, e):
-    """The tree the change was checked in (its tip is there), else a fresh check tree at its tip."""
+def check_tree_for_push(repo, e, i):
+    """Tree i (the one the change was checked in, or the push tree) at the change's tip, made when it is missing."""
     _d, clone, _w = waiting_state(repo)
-    i = e.get("tree") or 1
     tree = f"{clone}-wt-check-{i}"
     if not os.path.isdir(tree) or not git_ok(tree, "cat-file", "-e", f"{e['tip']}^{{commit}}"):
         tree = check_tree(repo, i, e["tip"])
