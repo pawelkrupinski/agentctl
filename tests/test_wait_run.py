@@ -164,13 +164,23 @@ class WaitRunTest(FakeForge):
     def test_two_processes_one_poller(self):
         self.run_json(11, "in_progress")
         cmd = [sys.executable, TOOL, "wait", "run", "11", "--repo", "movies", "--timeout", "30"]
+        # Each step waits for the state it needs, never a fixed sleep: under a loaded suite (the ~/bin pre-push, -j 8) a
+        # second waiter that had not yet started when the run completed read the verdict itself and never attached.
+        def until(cond, what):
+            deadline = time.time() + 30
+            while not cond():
+                self.assertLess(time.time(), deadline, f"not within 30 s: {what}")
+                time.sleep(0.05)
         first = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=os.environ)
-        time.sleep(1.0)
-        second = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=os.environ)
-        time.sleep(1.0)
+        until(lambda: self.calls(), "the first waiter polls")
+        err2 = os.path.join(self.d, "second.err")
+        with open(err2, "w") as ef:
+            second = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=ef, text=True, env=os.environ)
+        until(lambda: "attached" in open(err2).read(), "the second waiter attaches")
         self.run_json(11, "completed", "success")
         o1, _ = first.communicate(timeout=180)
-        o2, e2 = second.communicate(timeout=180)
+        o2, _ = second.communicate(timeout=180)
+        e2 = open(err2).read()
         self.assertEqual(o1.strip(), "run pawelkrupinski/movies#11: success")
         self.assertEqual(o1, o2)
         self.assertIn("attached", e2)

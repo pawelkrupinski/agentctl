@@ -1,0 +1,53 @@
+"""~/bin's own pre-push hook (hooks/pre-push): the suite it runs stays in the hook's process group.
+
+2026-11-06: `agentctl land` of ~/bin ended twice with "stalled push ... no output and no CPU for 20 min" and its landing
+lease lost, though the suite passed by hand in 162 s. GNU timeout puts the command in a process group of its own, so
+land's progress watcher (land.py group_cpu_seconds, by the push's process group) saw neither output nor CPU."""
+import os, pwd, shutil, subprocess, tempfile, unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+HOOK = os.path.join(os.path.dirname(HERE), "hooks", "pre-push")
+
+
+# Run from a git hook (the pre-push this suite runs in), GIT_DIR and friends name the PUSHING repository: every git
+# call here takes an environment without them, or it reads that repository instead of the scratch one.
+ENV = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+ENV.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+           GIT_COMMITTER_EMAIL="t@t")
+
+
+# The hook's GNU timeout: the harness's hermetic PATH may leave out where the laptop has it (~/.local/bin).
+TIMEOUT = shutil.which("timeout") or next((p for p in ("/usr/bin/timeout", "/opt/homebrew/bin/timeout",
+                                                         os.path.join(pwd.getpwuid(os.getuid()).pw_dir, ".local/bin/timeout"))
+                                           if os.access(p, os.X_OK)), None)
+if TIMEOUT:
+    ENV["PATH"] = os.path.dirname(TIMEOUT) + os.pathsep + ENV.get("PATH", "")
+
+
+def git(cwd, *args):
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True, env=ENV).stdout.strip()
+
+
+class BinPrePushHookTest(unittest.TestCase):
+    @unittest.skipUnless(TIMEOUT, "no GNU timeout on this machine: the hook cannot run here")
+    def test_the_suite_runs_in_the_pushs_process_group(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(os.path.join(repo, "tests"))
+            mark = os.path.join(tmp, "pgid")
+            with open(os.path.join(repo, "tests", "run.py"), "w") as f:
+                f.write(f"import os\nopen({mark!r}, 'w').write(str(os.getpgrp()))\nprint('OK')\n")
+
+            git(tmp, "init", "-q", repo)
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "base")
+            sha = git(repo, "rev-parse", "HEAD")
+            p = subprocess.Popen(["sh", HOOK, "origin", "x"], cwd=repo, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, text=True, env=ENV, start_new_session=True)
+            out, errs = p.communicate(f"refs/heads/main {sha} refs/heads/main {'0' * 39}1\n", timeout=60)
+            self.assertEqual(p.returncode, 0, errs)
+            self.assertEqual(open(mark).read(), str(p.pid), "the suite ran in a process group of its own")
+
+
+if __name__ == "__main__":
+    unittest.main()
