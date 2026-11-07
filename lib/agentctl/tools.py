@@ -471,12 +471,26 @@ HOLD_TRAILER = re.compile(r"^Hold:\s*(\S.*)$", re.I)
 
 
 def commit_trailers(msg):
-    """The trailer lines of a commit message: its last paragraph, when every line of it is `Token: value`."""
+    """The trailer lines of a commit message: every paragraph after the subject made only of `Token: value` lines (a
+    value may fold onto indented continuation lines, joined here). Not only the last paragraph (review 2026-11-07): a
+    `Hold:` block written above the attribution block, or a folded Hold: value, is a trailer to whoever wrote it, and
+    reading it as prose let held work land."""
     paras = [p for p in re.split(r"\n\s*\n", (msg or "").strip()) if p.strip()]
-    if len(paras) < 2:
-        return []
-    lines = [ln.strip() for ln in paras[-1].splitlines() if ln.strip()]
-    return lines if lines and all(TRAILER_LINE.match(ln) for ln in lines) else []
+    out = []
+    for para in paras[1:]:
+        lines = []
+        for ln in para.splitlines():
+            if not ln.strip():
+                continue
+            if ln[:1].isspace() and lines:  # a continuation of the trailer above
+                lines[-1] += " " + ln.strip()
+            elif TRAILER_LINE.match(ln):
+                lines.append(ln.strip())
+            else:
+                lines = None
+                break
+        out += lines or []
+    return out
 
 
 def held_commit(repo, commits):

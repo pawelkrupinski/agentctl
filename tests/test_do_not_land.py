@@ -59,6 +59,18 @@ class DoNotLandTest(LandBase):
         sha = self.r.commit("Gate: say why\n\nHold: on, this line is prose\nand the paragraph goes on.\n\nSigned-off-by: x")
         self.assertIsNone(A.held_commit(self.r.path, [sha]))
 
+    def test_a_hold_trailer_folded_or_in_its_own_trailer_block_is_still_held(self):
+        """Review 2026-11-07: a Hold: that git itself reads as a trailer -- its value folded onto a continuation line,
+        or a trailer block of its own above the attribution block -- was no trailer to held_commit (every line of the
+        LAST paragraph had to be `Token: value`): the held change landed."""
+        for msg in ("Gate re-enable\n\nHold: the owner holds this\n  until the drift check is clean\n"
+                    "Co-Authored-By: Claude <noreply@anthropic.com>",
+                    "Gate re-enable\n\nWhy it waits.\n\nHold: the owner holds this\n\n"
+                    "Co-Authored-By: Claude <noreply@anthropic.com>"):
+            self.r.write("ok.txt", msg)
+            sha = self.r.commit(msg)
+            self.assertRegex(A.held_commit(self.r.path, [sha]) or "", r"carries Hold: the owner holds this", msg)
+
     def test_laptop_submission_is_refused(self):
         self.r.write("p.txt", "x\n")
         sha = self.r.commit("PROTOTYPE: measure only")
