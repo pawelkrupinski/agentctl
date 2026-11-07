@@ -1546,7 +1546,9 @@ are detached (PPID 1), have no client and used no CPU for 120 min -- 30 min once
 (`sysctl vm.swapusage`; unreadable = the 120) -- and are not kept by an `sbt-warm --keep` in their checkout
 (2026-11-07: two lone idle 6 GB servers sat 3 h while swap was full). "No CPU" means under 1 CPU s/min since the
 previous reap (`AGENTCTL_SBT_PROGRESS_CPU_PER_MIN`): an idle JVM's background threads burn 0.04-0.12 s/min, which
-defeated the earlier fixed 0.5 s tolerance so neither rule ever fired (`~/.cache/agentctl/sbt-cpu.json`; a
+defeated the earlier fixed 0.5 s tolerance so neither rule ever fired; a previous reading more than 30 min old (the
+laptop asleep: wall time runs on while the JVM is frozen) or from the future starts the server over
+(`~/.cache/agentctl/sbt-cpu.json`; a
 `jcmd Thread.print` dump first, in `~/.cache/agentctl/sbt-dumps/`) -- never an
 owner merely on old code, which re-execs itself. Every kill is a line of `~/.cache/agentctl/reap.log`. The daily
 `sweep` reaps the sbt servers too.

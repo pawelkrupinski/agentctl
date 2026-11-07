@@ -9,6 +9,16 @@ from test_agentctl import A  # noqa: E402
 DEAD = 999999
 
 
+PASS_MIN = 15  # agentctl maintain runs the reaper every 15 min (launchd StartInterval 900)
+
+
+def passes_until(state, until_min, cpu, clients, **kwargs):
+    """Sample an unchanging CPU total at the real cadence from 0 up to until_min (a gap longer than
+    SBT_SAMPLE_MAX_GAP_MIN would start the server over); the reasons from the last pass."""
+    times = list(range(0, until_min, PASS_MIN)) + [until_min]
+    return [A.sbt_stuck_reasons(7, "/wt", cpu, clients, {}, state, t * 60, **kwargs) for t in times][-1]
+
+
 class SbtReaperTest(unittest.TestCase):
     def test_a_running_command_with_no_cpu_for_twenty_minutes_is_stuck(self):
         state, clients = {}, {"/wt": [42]}
@@ -28,23 +38,19 @@ class SbtReaperTest(unittest.TestCase):
         # 2026-11-07: two lone detached servers (core-wt-red-822/824, -Xmx6000M) sat idle for 3 h while swap was at
         # 40.1/40.96 GB; no rule matched (not a duplicate, under the hog CPU floor, no command running).
         state = {}
-        A.sbt_stuck_reasons(7, "/wt", 100.0, {}, {}, state, 0, ppid=1, kept=set(), swap_free_mb=10_000)
-        self.assertEqual(
-            A.sbt_stuck_reasons(7, "/wt", 100.2, {}, {}, state, 119 * 60, ppid=1, kept=set(), swap_free_mb=10_000), [])
+        self.assertEqual(passes_until(state, 119, 100.2, {}, ppid=1, kept=set(), swap_free_mb=10_000), [])
         why = A.sbt_stuck_reasons(7, "/wt", 100.3, {}, {}, state, 121 * 60, ppid=1, kept=set(), swap_free_mb=10_000)
         self.assertEqual(len(why), 1)
         self.assertIn("idle for 121 min", why[0])
 
     def test_an_idle_server_is_spared_when_kept_attached_or_in_use(self):
-        later = 300 * 60
+        later = 300
         for kwargs, clients in (
             ({"ppid": 1, "kept": {"/wt"}}, {}),  # sbt-warm --keep keeps it warm on purpose
             ({"ppid": 4242, "kept": set()}, {}),  # still attached to the client that started it
             ({"ppid": 1, "kept": set()}, {"/wt": [42]}),  # a command is connected (the stall rule judges that)
         ):
-            state = {}
-            A.sbt_stuck_reasons(7, "/wt", 100.0, clients, {}, state, 0, swap_free_mb=10_000, **kwargs)
-            why = A.sbt_stuck_reasons(7, "/wt", 100.0, clients, {}, state, later, swap_free_mb=10_000, **kwargs)
+            why = passes_until({}, later, 100.0, clients, swap_free_mb=10_000, **kwargs)
             self.assertFalse(any("idle for" in w for w in why), (kwargs, clients, why))
 
     def test_low_swap_shortens_the_idle_limit(self):
@@ -57,10 +63,7 @@ class SbtReaperTest(unittest.TestCase):
         self.assertIn("swap free 500 MB", why[0])
 
     def test_unreadable_swap_uses_the_normal_limit(self):
-        state = {}
-        A.sbt_stuck_reasons(7, "/wt", 100.0, {}, {}, state, 0, ppid=1, kept=set(), swap_free_mb=None)
-        self.assertEqual(
-            A.sbt_stuck_reasons(7, "/wt", 100.0, {}, {}, state, 60 * 60, ppid=1, kept=set(), swap_free_mb=None), [])
+        self.assertEqual(passes_until({}, 60, 100.0, {}, ppid=1, kept=set(), swap_free_mb=None), [])
 
     def test_swap_free_is_read_from_sysctl(self):
         self.assertEqual(A.parse_swap_free_mb("vm.swapusage: total = 40960.00M  used = 40105.06M  free = 854.94M  (encrypted)"), 854.94)
@@ -95,6 +98,24 @@ class SbtReaperTest(unittest.TestCase):
         for clients, kwargs in (({}, {"ppid": 1, "kept": set(), "swap_free_mb": 10_000}), ({"/wt": [42]}, {})):
             self.clients = clients
             self.assertEqual(self.run_passes(300, self.BUSY_PER_MIN, **kwargs), [])
+
+    # The laptop sleeps (pmset: 1565 sleep/wakes since boot on 2026-11-07): wall time runs on while the JVM is frozen,
+    # so the first pass after a long sleep divides the CPU of a few busy minutes by hours and reads a working server as
+    # one with no CPU since before the sleep. A gap that long is not a sample: the server starts over.
+    def test_a_busy_server_across_a_laptop_sleep_starts_over(self):
+        for clients, kwargs in (({}, {"ppid": 1, "kept": set(), "swap_free_mb": 10_000}), ({"/wt": [42]}, {})):
+            state = {}
+            A.sbt_stuck_reasons(7, "/wt", 100.0, clients, {}, state, 0, **kwargs)
+            # busy for 5 min (5 s/min), then asleep for 8 h; the next pass runs on wake
+            wake = (5 + 8 * 60) * 60
+            self.assertEqual(A.sbt_stuck_reasons(7, "/wt", 125.0, clients, {}, state, wake, **kwargs), [])
+            self.assertEqual(state["7"]["since"], wake)
+
+    def test_a_clock_that_went_back_starts_over(self):
+        state = {}
+        A.sbt_stuck_reasons(7, "/wt", 100.0, {"/wt": [42]}, {}, state, 100 * 60)
+        self.assertEqual(A.sbt_stuck_reasons(7, "/wt", 100.0, {"/wt": [42]}, {}, state, 10 * 60), [])
+        self.assertEqual(state["7"]["since"], 10 * 60)
 
     def test_a_restarted_pid_with_less_cpu_starts_over(self):
         state = {}

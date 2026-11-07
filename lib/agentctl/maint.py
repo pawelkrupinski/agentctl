@@ -58,6 +58,11 @@ SBT_STALL_MIN = 20
 # 5-155 s/min. A fixed tolerance on the CPU total since idling began was crossed by that background burn within one
 # 15-min pass, so neither the stall nor the idle rule could ever fire; CPU since the previous pass is judged per minute.
 SBT_PROGRESS_CPU_PER_MIN = 1.0  # CPU s/min since the previous pass above which an sbt server counts as working
+# A RATE NEEDS A COMPARABLE SAMPLE: the laptop sleeps (1565 sleep/wakes since boot, pmset 2026-11-07), and wall time runs
+# on while the JVM is frozen, so the first pass after a long sleep spread a busy server's few minutes of CPU over hours
+# and read it as idle since before the sleep. A previous sample older than two 15-min passes (asleep, or the pass not
+# running), or from the future (the clock went back), says nothing about CPU: the server starts over.
+SBT_SAMPLE_MAX_GAP_MIN = 30
 # IDLE DETACHED SERVERS (2026-11-07): two lone servers (core-wt-red-822/824, -Xmx6000M each) sat idle for 3 h while
 # swap stood at 40.1/40.96 GB and every other build crawled; no rule matched them (one server per checkout, under the
 # hog CPU floor, no command running). A detached server (PPID 1) with no client and no CPU for SBT_IDLE_MIN is reaped,
@@ -109,9 +114,15 @@ def tree_cpu(pid, procs_cpu, children):
     return total
 
 
+def comparable(rec, now):
+    """Whether the previous sample can be judged against: taken before now and at most SBT_SAMPLE_MAX_GAP_MIN ago. A
+    record from before 'at' existed is dated by 'since'."""
+    return 0 <= now - rec.get("at", rec["since"]) <= SBT_SAMPLE_MAX_GAP_MIN * 60
+
+
 def working(rec, cpu, now):
     """Whether the server used CPU since the previous pass faster than an idle JVM does (or its pid was reused: less CPU
-    than before). A record from before 'at' existed is judged from 'since'."""
+    than before)."""
     if cpu < rec.get("cpu", -1):
         return True
     minutes = max((now - rec.get("at", rec["since"])) / 60, 1 / 60)
@@ -122,7 +133,8 @@ def sbt_stuck_reasons(pid, cwd, cpu, clients, serving, state, now, ppid=None, ke
     """Why the sbt server pid (checkout cwd, tree CPU seconds) is stuck: an orphaned serving command, a running
     command and no CPU for SBT_STALL_MIN, or (detached, ppid 1, not kept by sbt-warm) no client and no CPU for
     SBT_IDLE_MIN (SBT_IDLE_PRESSURE_MIN under low swap); "no CPU" is under SBT_PROGRESS_CPU_PER_MIN since the
-    previous pass. Updates state[pid] = {cpu, at (that sample), since (idle from)}."""
+    previous pass, judged only against a comparable sample (SBT_SAMPLE_MAX_GAP_MIN). Updates state[pid] = {cpu, at
+    (that sample), since (idle from)}."""
     reasons = []
     serve = serving.get(cwd)
     if serve:
@@ -130,7 +142,7 @@ def sbt_stuck_reasons(pid, cwd, cpu, clients, serving, state, now, ppid=None, ke
         if not pid_alive(spid) or (owner and not pid_alive(owner)):
             reasons.append(f"serving `{cmd[:60]}` for {'sbt-warm pid ' + str(spid) if not pid_alive(spid) else 'owner pid ' + str(owner)}, which ended")
     rec = state.get(str(pid))
-    if not rec or working(rec, cpu, now):
+    if not rec or not comparable(rec, now) or working(rec, cpu, now):
         state[str(pid)] = {"cpu": cpu, "at": now, "since": now}
         return reasons
     rec.update(cpu=cpu, at=now)
