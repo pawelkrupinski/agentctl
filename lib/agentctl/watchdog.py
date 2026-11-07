@@ -502,11 +502,30 @@ def hashlib_sha1(text):
     return hashlib.sha1(text.encode()).hexdigest()
 
 
-def last_land_entry(wt):
-    """The newest final land entry in the inbox for this worktree, or None."""
-    rw = os.path.realpath(wt)
-    es = [e for e in inbox_entries() if e.get("final", True) and e.get("command") in ("land", "waiting")
-          and os.path.realpath(str(e.get("cwd") or "")) == rw]
+def land_entries_by_cwd(entries=None):
+    """{realpath of a cwd: its land/waiting inbox entries, oldest first}."""
+    out = {}
+    for e in inbox_entries() if entries is None else entries:
+        if e.get("command") in ("land", "waiting"):
+            out.setdefault(os.path.realpath(str(e.get("cwd") or "")), []).append(e)
+    return out
+
+
+def land_entries_once():
+    """land_entries_by_cwd, read on first use and kept for the caller's pass: the inbox is thousands of files (7849 on
+    2026-11-07, ~2.4 s a read), and an orphan pass asks it of every orphan twice or more (review 2026-11-07)."""
+    memo = []
+
+    def get():
+        if not memo:
+            memo.append(land_entries_by_cwd())
+        return memo[0]
+    return get
+
+
+def last_land_entry(wt, lands=None):
+    """The newest final land entry in the inbox for this worktree, or None. lands: a land_entries_once reader."""
+    es = [e for e in (lands or land_entries_once())().get(os.path.realpath(wt)) or [] if e.get("final", True)]
     return es[-1] if es else None
 
 
@@ -584,11 +603,12 @@ def live_lease_worktrees():
     return out
 
 
-def orphan_candidates(repo, now_=None, dead=None, refused=None):
+def orphan_candidates(repo, now_=None, dead=None, refused=None, lands=None):
     """[(worktree, commits, key, last verdict)] of the orphans now. A worktree holding a withdrawn or refuted blame
     revert (blame_land_refusal) is never one: it goes to `dead` [(worktree, why)] when given; one whose work is not for
-    landing (orphan_refusal) goes to `refused` [(worktree, key, why)]."""
+    landing (orphan_refusal) goes to `refused` [(worktree, key, why)]. lands: the pass's land_entries_once reader."""
     t = now_ if now_ is not None else time.time()
+    lands = lands or land_entries_once()
     try:
         cwds = {os.path.realpath(c) for c in process_cwds().values()}
     except (Exception, SystemExit):
@@ -639,7 +659,7 @@ def orphan_candidates(repo, now_=None, dead=None, refused=None):
                 if refused is not None:
                     refused.append((p, key, why))
                 continue
-            out.append((p, commits, key, orphan_verdict(p)))
+            out.append((p, commits, key, orphan_verdict(p, lands)))
     return out
 
 
@@ -662,22 +682,27 @@ def orphan_refusal(wt, commits):
     return orphan_branch_refusal(branch_of(wt)) or held_commit(wt, commits) or do_not_land(wt, commits, branch_of(wt))
 
 
-def orphan_verdict(wt):
-    """The newest final land verdict for the orphan: from its own worktree or the throwaway tree its re-land ran in."""
-    es = [e for e in (last_land_entry(wt), last_land_entry(reland_tree_path(wt))) if e]
-    return str(max(es, key=lambda e: float(e.get("at") or 0)).get("verdict") or "") if es else None
+def orphan_land_entry(wt, lands=None):
+    """The newest final land entry for the orphan: from its own worktree or the throwaway tree its re-land ran in."""
+    lands = lands or land_entries_once()
+    es = [e for e in (last_land_entry(wt, lands), last_land_entry(reland_tree_path(wt), lands)) if e]
+    return max(es, key=lambda e: float(e.get("at") or 0)) if es else None
+
+
+def orphan_verdict(wt, lands=None):
+    """The newest final land verdict for the orphan (orphan_land_entry's), or None."""
+    e = orphan_land_entry(wt, lands)
+    return str(e.get("verdict") or "") if e else None
 
 
 # LAND INTENT (2026-11-06, es-gate-check: queued though nobody had ever asked to land it). Orphan duty submits only
 # work its author once meant to land: a worktree that ran `agentctl land` itself (a land entry in the inbox with that
 # cwd) or has a change item of its own. A worktree that never did -- an agent that died mid-task, a check or design
 # tree -- goes to a person (UNLANDED ORPHAN) instead: nothing lands that its author did not ask to land.
-def land_intent(wt, items=None):
-    rw = os.path.realpath(wt)
+def land_intent(wt, items=None, lands=None):
     if (items or {}).get("last"):
         return True
-    return any(e.get("command") in ("land", "waiting") and os.path.realpath(str(e.get("cwd") or "")) == rw
-               for e in inbox_entries())
+    return bool((lands or land_entries_once())().get(os.path.realpath(wt)))
 
 
 def orphan_submitted_alert(wt, commits, msg):
@@ -1314,8 +1339,8 @@ def orphan_duty(repo=None, dry_run=False, now_=None):
     st = read_record(path) or {}  # after park_duty: a released park's records are gone (its one submit again)
     fixers = read_record(orphan_fixers_path()) or {}
     fixers_changed = fixer_sent = False
-    refused = []
-    cands = orphan_candidates(repo, now_, dead, refused)
+    refused, lands = [], land_entries_once()  # one inbox read for the whole pass
+    cands = orphan_candidates(repo, now_, dead, refused, lands)
     for wt, key, why in refused:  # not for landing: said once, never submitted, never escalated
         rec = st.get(key) or {"worktree": wt, "first": ts(), "actions": []}
         if rec.get("refused") != why:
@@ -1354,7 +1379,7 @@ def orphan_duty(repo=None, dry_run=False, now_=None):
                 did += orphan_escalate(repo, wt, name, commits, key, rec, verdict or f"cancelled ({last['id']})")
                 st[key] = rec
                 continue
-            if not land_intent(wt, items):  # LAND INTENT: its author never asked to land it -- a person decides
+            if not land_intent(wt, items, lands):  # LAND INTENT: its author never asked to land it -- a person decides
                 rec["actions"].append({"at": ts(), "what": "none (it never ran `agentctl land`)"})
                 did += orphan_escalate(repo, wt, name, commits, key, rec,
                                        "its author never ran `agentctl land` there: nothing submits it unasked")
@@ -1370,8 +1395,7 @@ def orphan_duty(repo=None, dry_run=False, now_=None):
                 orphan_submitted_alert(wt, commits, w)
         elif not rec.get("escalated"):
             last_at = parse_time(rec["actions"][-1]["at"]).timestamp()
-            es = [x for x in (last_land_entry(wt), last_land_entry(reland_tree_path(wt))) if x]
-            e = max(es, key=lambda x: float(x.get("at") or 0)) if es else None
+            e = orphan_land_entry(wt, lands)
             after = str(e.get("verdict") or "") if e and float(e.get("at") or 0) >= last_at - 1 else None
             msg = str(rec["actions"][-1].get("msg") or "")
             if msg.startswith("not landed again:"):  # the submit itself was refused: that is its verdict

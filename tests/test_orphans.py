@@ -57,6 +57,28 @@ class OrphanTest(RedBase):
         self.assertTrue(all(x["read"] for x in self.inbox("UNLANDED_ORPHAN")))
         self.assertTrue(os.path.isdir(wt))  # nothing deleted
 
+    def test_a_pass_reads_the_inbox_once_however_many_orphans(self):
+        """Review 2026-11-07: every orphan's verdict (its worktree and its throwaway tree) and its land intent read the
+        whole inbox again -- 7849 entries, ~2.4 s a read on the laptop -- so a pass over 17 escalated orphans spent
+        minutes. A pass reads it once."""
+        for i in range(4):
+            self.worktree_commit(f"repo-wt-o{i}", f"o{i}: a change nobody landed")
+        reads, real = [0], A.inbox_entries
+
+        def counted(*a, **k):
+            reads[0] += 1
+            return real(*a, **k)
+        A.inbox_entries = counted
+        try:
+            A.orphan_duty(self.r.path)
+            first = reads[0]
+            reads[0] = 0
+            A.orphan_duty(self.r.path)
+        finally:
+            A.inbox_entries = real
+        self.assertTrue(self.relands, "the orphans were submitted")
+        self.assertEqual((first, reads[0]), (1, 1), "one inbox read a pass, however many orphans")
+
     def test_a_real_failure_is_submitted_once_too_and_a_live_worktree_is_no_orphan(self):
         """Step 14: an orphan is submitted once whatever its last verdict (its checks decide; a rejection is its red's to
         rescue): a fixer comes only after that submit is rejected (test_a_pre_push_rejection_gets_one_fixer...)."""
