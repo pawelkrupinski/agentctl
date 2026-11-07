@@ -578,6 +578,37 @@ class FastPrecheckTest(QueueTest):
         e = next(e for e in A.inbox_entries() if e.get("verdict") == verdicts[0])
         self.assertEqual(A.alert_audience(e), "author", "the author's to act on, like a NOT LANDED")
 
+    def test_a_precheck_past_its_bound_is_ended_with_its_children_and_leaves_the_change_queued(self):
+        """Review 2026-11-07: on its bound only the precheck script itself was killed; what it started (sbt, a test JVM)
+        lived on, and holding the output pipe kept the precheck waiting too. The precheck runs in its own process
+        group, ended whole at the bound; the change is left to its landing check."""
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        pidfile = os.path.join(wt, "grandchild.pid")
+        self.r.write("scripts/land-precheck", f"#!/bin/sh\nsleep 30 &\necho $! > {pidfile}\nwait\n", at=wt)
+        os.chmod(os.path.join(wt, "scripts/land-precheck"), 0o755)
+        self.r.commit("a: a precheck that hangs", at=wt)
+        eid, _ = self.queued(wt)
+        saved = A.FAST_PRECHECK_BOUND
+        A.FAST_PRECHECK_BOUND = 1
+        try:
+            started = time.time()
+            rc, out = self.run_spawned(wt)
+        finally:
+            A.FAST_PRECHECK_BOUND = saved
+        self.assertLess(time.time() - started, 15, "ended at its bound, not when its child ended")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("could not check", out)
+        pid = int(open(pidfile).read())
+        for _ in range(50):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        else:
+            self.fail(f"the precheck's child {pid} outlived its bound")
+        self.assertEqual(self.check(eid), 0, "the landing check still judges it")
+
     def test_a_precheck_that_could_not_run_leaves_the_change_queued(self):
         wt, sha = self.agent_with_precheck("a", 2, "PRECHECK UNCHECKED: lints (300 s)")
         eid, _ = self.queued(wt)

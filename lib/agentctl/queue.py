@@ -340,11 +340,18 @@ def start_fast_precheck(repo, main_ref, head, eid, a):
 
 def cmd_land_precheck(a):
     """The detached half of start_fast_precheck: run the repo's precheck, and on a refusal cancel the queued change."""
-    r = subprocess.run([os.path.join(a.repo, FAST_PRECHECK), "--base", a.base, "--head", a.head], cwd=a.repo,
-                       capture_output=True, text=True, timeout=FAST_PRECHECK_BOUND, stdin=subprocess.DEVNULL)
-    lines = (r.stdout + r.stderr).splitlines()
+    # Its own process group, ended WHOLE at the bound (review 2026-11-07: subprocess.run killed only the script, so what
+    # it started -- sbt, a test JVM -- lived on, and kept the output pipe, and so this wait, open): run_watched.
+    rc, out = run_watched([os.path.join(a.repo, FAST_PRECHECK), "--base", a.base, "--head", a.head], a.repo, None,
+                          os.path.join(scratch(), f"agentctl-precheck-{a.entry}"), "precheck",
+                          stall=FAST_PRECHECK_BOUND, wall=FAST_PRECHECK_BOUND)
+    if rc is None:
+        print(f"{out or ''}PRECHECK UNCHECKED: past its {FAST_PRECHECK_BOUND} s bound, ended with its children: "
+              "could not check, its landing check judges it", flush=True)
+        return 0
+    lines = (out or "").splitlines()
     print("\n".join(lines), flush=True)
-    if r.returncode != 1:
+    if rc != 1:
         return 0
     last = next((l for l in reversed(lines) if l.startswith("PRECHECK ")), lines[-1] if lines else "exit 1")
     cancel = argparse.Namespace(wcmd="cancel", repo=a.repo, entry=a.entry, renamed=True, hold_for=None, hold_why=None)

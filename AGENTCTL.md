@@ -978,7 +978,8 @@ The owner: "agents never wait on a land". In movies (a repo whose hook can check
    the tail: fix and land again. A change its landing check decided first keeps that verdict (nothing to cancel, no
    NOT LANDED); one the cancel cannot reach (the store unreachable) gets `PRECHECK REFUSED <id> ... could not be
    cancelled` and is still judged by its landing check. Exit 0 or 2 (could not check: sbt never came up, a bound) leaves the change to the
-   landing check. `--no-fast-precheck` starts none. Code: queue.py `start_fast_precheck` / `cmd_land_precheck`
+   landing check, and so does a precheck past its 900 s bound: it runs in its own process group, ended whole there
+   (its sbt and test JVMs with it). `--no-fast-precheck` starts none. Code: queue.py `start_fast_precheck` / `cmd_land_precheck`
    (the hidden `agentctl land-precheck`); tests: `tests/test_queue.py` FastPrecheckTest.
 
 The reconciler then takes it, a step per tick:
