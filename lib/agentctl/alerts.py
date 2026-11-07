@@ -448,11 +448,15 @@ def alert_open_reds(st):
 
 
 def alert_red_named(d, verdict):
-    """Does verdict name red d: its `decide <key>`, or its `<workflow> #<run>`."""
+    """Does verdict name red d: its `decide <key>`, or `<workflow> #<run>` for ANY run the red carries -- one red item
+    spans every run failing its way (red_attach_obs moves last_run on), and an alert names the run it was written
+    against (review 2026-11-07: a FIX FAILED for #2128 closed as 'its red is closed' once the open red was at #2140)."""
     key = str(d.get("key") or "")
     if key and re.search(r"\bdecide " + re.escape(key) + r"\b", verdict):
         return True
-    return red_what(d).split(" [", 1)[0] in verdict
+    prefix = red_what(d).split(" [", 1)[0].rsplit(" #", 1)[0]  # '[<repo> ]<workflow>'
+    nums = {str((d.get("last_run") or {}).get("number") or "")} | {str(r) for r in d.get("runs") or []}
+    return any(re.search(re.escape(f"{prefix} #{n}") + r"(?!\d)", verdict) for n in nums if n and n != "None")
 
 
 def alert_gate():

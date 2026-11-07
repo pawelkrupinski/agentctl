@@ -295,6 +295,21 @@ class ClearedOwnerAlertTest(AlertBase):
         self.assertIsNone(self.closed_why(live), "its red is still waiting on the owner")
         self.assertEqual([e["id"] for e in self.unread("owner")], [live])
 
+    def test_an_alert_naming_an_earlier_run_of_a_still_open_red_stays_open(self):
+        """Review 2026-11-07: a red stays ONE item while later runs fail the same way (red_attach_obs moves its
+        last_run on), so an alert written against #2128 (FIX FAILED, RED DISPATCHED: no `decide <key>`) names a run
+        the red still carries in its runs -- it is live, never 'its red is closed'. #214, a prefix of a run the red
+        carries (#2140), is not one of them."""
+        self.st.put_item("red", "abc.1", "offered", {"key": "abcabcabcabc", "workflow": "Main",
+                                                     "last_run": {"number": 2140}, "runs": ["2128", "2140", "9001"]})
+        live = self.legacy("FIX FAILED: Main #2128 [test]: #2128 still fails this way (fix 1234567890)",
+                           "run:fix failed -- Main #2128")
+        gone = self.legacy("FIX FAILED: Main #214 [test]: #214 still fails this way (fix 1234567890)",
+                           "run:fix failed -- Main #214")
+        A.reconcile_alerts(self.st, force=True)
+        self.assertIsNone(self.closed_why(live), "its red is open, at a later run of the same failure")
+        self.assertIn("red", self.closed_why(gone) or "", "#214 is no run of the open red")
+
     def test_an_unlanded_orphan_closes_once_its_worktree_is_gone_or_its_commits_are_on_main(self):
         import subprocess
         origin = os.path.join(self.root, "origin.git")
