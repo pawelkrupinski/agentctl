@@ -356,7 +356,8 @@ def stuck_history(o_r, name):
 
 def workflow_timeout_bound(txt):
     """Seconds a run of this workflow file can take at most by its jobs' own `timeout-minutes` (summed: jobs may run
-    one after another); GitHub's 360-minute default when no job sets one; None without a jobs section."""
+    one after another). A job setting none counts GitHub's 360-minute default (review 2026-11-07: it counted 0 beside
+    a job that set one); a reusable-workflow call (`uses:`, which takes none) counts 0. None without a jobs section."""
     lines = [l for l in txt.splitlines() if l.strip() and not l.lstrip().startswith("#")]
     try:
         i = next(n for n, l in enumerate(lines) if re.match(r"^jobs:\s*$", l))
@@ -364,7 +365,7 @@ def workflow_timeout_bound(txt):
         return None
     ind = lambda l: len(l) - len(l.lstrip())  # noqa: E731
     job_ind = prop_ind = None
-    total, found = 0, False
+    jobs = []  # per job: [its timeout-minutes in s or None, a reusable call]
     for l in lines[i + 1:]:
         n = ind(l)
         if n == 0:
@@ -373,15 +374,19 @@ def workflow_timeout_bound(txt):
             job_ind = n
         if n == job_ind:
             prop_ind = None
+            jobs.append([None, False])
             continue
         if prop_ind is None and n > job_ind:
             prop_ind = n
+        if n != prop_ind or not jobs:
+            continue
         m = re.match(r"^\s*timeout-minutes:\s*(\d+)\s*$", l)
-        if m and n == prop_ind:
-            total += int(m.group(1)) * 60
-            found = True
-    return total if found else GITHUB_JOB_TIMEOUT
-
+        if m:
+            jobs[-1][0] = int(m.group(1)) * 60
+        elif re.match(r"^\s*uses:", l):
+            jobs[-1][1] = True
+    total = sum(t if t is not None else 0 if uses else GITHUB_JOB_TIMEOUT for t, uses in jobs)
+    return total or GITHUB_JOB_TIMEOUT
 
 def stuck_timeout(o_r, name):
     """workflow_timeout_bound of the workflow's file on origin/main (cached per main sha), or None."""

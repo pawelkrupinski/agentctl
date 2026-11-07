@@ -726,9 +726,11 @@ agent must be assigned to it".
   acknowledges the alerts that asked it.
 - **Stuck runs** (an infra red, `[stuck]`): a run undecided past max(3 x its workflow's p90, 30 min), counted from its
   first job's start. The p90 is of the workflow's own finished runs -- its own last 30 read when the newest-200 list
-  holds fewer than 5 -- and with fewer still, its jobs' `timeout-minutes` (summed) bound it. Not stuck: a run whose
-  unfinished jobs all wait for runners whose every slot is busy (`queued`), or one waiting on a workflow_dispatch run it
-  started (`waits_on`, judged by that child).
+  holds fewer than 5 -- and with fewer still, its jobs' `timeout-minutes` (summed; a job setting none counts GitHub's
+  360 min, a reusable-workflow call 0) bound it. Not stuck: a run whose unfinished jobs all wait for runners whose every
+  slot is busy (`queued`), or one waiting on a workflow_dispatch run it started (`waits_on`, judged by that child).
+  GitHub does not link a dispatch to its parent, so ANY undecided workflow_dispatch run on main created after the run's
+  first job started counts as its child: an unrelated dispatch can delay a stuck verdict until that run decides.
 - **Refunds.** A dispatch that did nothing is not counted (`red status` says `[refunded: ...]`): `GAVE UP` / `NOT LANDED`
   because it is already fixed or there is nothing to do; `STOPPED` (superseded) and `red cleared`; a fixer killed
   before any verdict; `BLOCKED ON OWNER` only for a CI read (`gh run view|download`: gh reads with its own
