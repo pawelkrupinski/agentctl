@@ -1524,6 +1524,8 @@ def cmd_orphans(a):
         if "sbtn" in cmd.split(" ", 1)[0] and cwds.get(pid):
             clients.setdefault(cwds[pid], []).append(pid)
     serving, now, live = sbt_serving(), time.time(), set()
+    kept = {cwds[p] for p, _pp, _e, c in procs if "sbt-warm --keep" in c and cwds.get(p)}
+    swap_free = swap_free_mb() if os.environ.get("AGENTCTL_SBT_REAP") != "0" else None
     for pid, ppid, etime, cmd in procs:
         if pid in me or not is_sbt(cmd):
             continue
@@ -1531,7 +1533,8 @@ def cmd_orphans(a):
         reasons = []
         if "java" in cmd.split(" ", 1)[0] and os.environ.get("AGENTCTL_SBT_REAP") != "0":  # tests: "0"
             live.add(str(pid))
-            reasons += sbt_stuck_reasons(pid, cwd, tree_cpu(pid, procs_cpu, children), clients, serving, cpu_state, now)
+            reasons += sbt_stuck_reasons(pid, cwd, tree_cpu(pid, procs_cpu, children), clients, serving, cpu_state, now,
+                                         ppid=ppid, kept=kept, swap_free_mb=swap_free)
         if cwd and not os.path.isdir(cwd):
             reasons.append(f"cwd gone: {cwd}")
         elif cwd and not os.path.exists(os.path.join(cwd, ".git")) and cwd.startswith(HOME + "/projects"):

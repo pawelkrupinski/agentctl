@@ -54,6 +54,24 @@ def missing_tree_paths(text):
 # runs from ~/.cache/agentctl/sbt-cpu.json. A thread dump (jcmd Thread.print) is saved first, under
 # ~/.cache/agentctl/sbt-dumps/.
 SBT_STALL_MIN = 20
+# IDLE DETACHED SERVERS (2026-11-07): two lone servers (core-wt-red-822/824, -Xmx6000M each) sat idle for 3 h while
+# swap stood at 40.1/40.96 GB and every other build crawled; no rule matched them (one server per checkout, under the
+# hog CPU floor, no command running). A detached server (PPID 1) with no client and no CPU for SBT_IDLE_MIN is reaped,
+# after SBT_IDLE_PRESSURE_MIN once swap free falls under SWAP_FREE_FLOOR_MB -- never one sbt-warm --keep keeps.
+# Ending an idle server costs only the next command's warm-up.
+SBT_IDLE_MIN = 120  # min a detached sbt server with no client may sit idle before the reaper ends it
+SBT_IDLE_PRESSURE_MIN = 30  # that limit while swap free is under the floor
+SWAP_FREE_FLOOR_MB = 2048  # swap free (MB) below which the shorter idle limit applies
+
+
+def parse_swap_free_mb(text):
+    """`sysctl vm.swapusage` -> free MB, or None when it cannot be read (then the normal idle limit applies)."""
+    m = re.search(r"free\s*=\s*([0-9.]+)M", text or "")
+    return float(m.group(1)) if m else None
+
+
+def swap_free_mb():
+    return parse_swap_free_mb(run_cmd(["sysctl", "vm.swapusage"]).stdout)
 
 
 def sbt_warm_state():
@@ -87,9 +105,10 @@ def tree_cpu(pid, procs_cpu, children):
     return total
 
 
-def sbt_stuck_reasons(pid, cwd, cpu, clients, serving, state, now):
-    """Why the sbt server pid (checkout cwd, tree CPU seconds) is stuck: an orphaned serving command, or a running
-    command and no CPU for SBT_STALL_MIN. Updates state[pid] = {cpu, since}."""
+def sbt_stuck_reasons(pid, cwd, cpu, clients, serving, state, now, ppid=None, kept=(), swap_free_mb=None):
+    """Why the sbt server pid (checkout cwd, tree CPU seconds) is stuck: an orphaned serving command, a running
+    command and no CPU for SBT_STALL_MIN, or (detached, ppid 1, not kept by sbt-warm) no client and no CPU for
+    SBT_IDLE_MIN (SBT_IDLE_PRESSURE_MIN under low swap). Updates state[pid] = {cpu, since}."""
     reasons = []
     serve = serving.get(cwd)
     if serve:
@@ -104,6 +123,17 @@ def sbt_stuck_reasons(pid, cwd, cpu, clients, serving, state, now):
         limit = env_num("AGENTCTL_SBT_STALL_MIN", SBT_STALL_MIN)
         if mins >= limit:
             reasons.append(f"a command running (sbtn pid {clients[cwd][0]}) and no CPU for {int(mins)} min")
+    elif ppid == 1 and cwd not in kept:
+        mins = (now - rec["since"]) / 60
+        floor = env_num("AGENTCTL_SWAP_FREE_FLOOR_MB", SWAP_FREE_FLOOR_MB)
+        pressed = swap_free_mb is not None and swap_free_mb < floor
+        if pressed:
+            limit = env_num("AGENTCTL_SBT_IDLE_PRESSURE_MIN", SBT_IDLE_PRESSURE_MIN)
+        else:
+            limit = env_num("AGENTCTL_SBT_IDLE_MIN", SBT_IDLE_MIN)
+        if mins >= limit:
+            reasons.append(f"detached, no client and idle for {int(mins)} min"
+                           + (f" (swap free {int(swap_free_mb)} MB)" if pressed else ""))
     return reasons
 
 

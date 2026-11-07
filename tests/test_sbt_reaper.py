@@ -24,6 +24,49 @@ class SbtReaperTest(unittest.TestCase):
         self.assertEqual(A.sbt_stuck_reasons(7, "/wt", 160.0, {"/wt": [42]}, {}, state, 30 * 60), [])  # it worked
         self.assertEqual(A.sbt_stuck_reasons(7, "/wt", 160.0, {}, {}, state, 90 * 60), [])  # idle: no client
 
+    def test_a_detached_server_idle_for_two_hours_with_no_client_is_reaped(self):
+        # 2026-11-07: two lone detached servers (core-wt-red-822/824, -Xmx6000M) sat idle for 3 h while swap was at
+        # 40.1/40.96 GB; no rule matched (not a duplicate, under the hog CPU floor, no command running).
+        state = {}
+        A.sbt_stuck_reasons(7, "/wt", 100.0, {}, {}, state, 0, ppid=1, kept=set(), swap_free_mb=10_000)
+        self.assertEqual(
+            A.sbt_stuck_reasons(7, "/wt", 100.2, {}, {}, state, 119 * 60, ppid=1, kept=set(), swap_free_mb=10_000), [])
+        why = A.sbt_stuck_reasons(7, "/wt", 100.3, {}, {}, state, 121 * 60, ppid=1, kept=set(), swap_free_mb=10_000)
+        self.assertEqual(len(why), 1)
+        self.assertIn("idle for 121 min", why[0])
+
+    def test_an_idle_server_is_spared_when_kept_attached_or_in_use(self):
+        later = 300 * 60
+        for kwargs, clients in (
+            ({"ppid": 1, "kept": {"/wt"}}, {}),  # sbt-warm --keep keeps it warm on purpose
+            ({"ppid": 4242, "kept": set()}, {}),  # still attached to the client that started it
+            ({"ppid": 1, "kept": set()}, {"/wt": [42]}),  # a command is connected (the stall rule judges that)
+        ):
+            state = {}
+            A.sbt_stuck_reasons(7, "/wt", 100.0, clients, {}, state, 0, swap_free_mb=10_000, **kwargs)
+            why = A.sbt_stuck_reasons(7, "/wt", 100.0, clients, {}, state, later, swap_free_mb=10_000, **kwargs)
+            self.assertFalse(any("idle for" in w for w in why), (kwargs, clients, why))
+
+    def test_low_swap_shortens_the_idle_limit(self):
+        state = {}
+        A.sbt_stuck_reasons(7, "/wt", 100.0, {}, {}, state, 0, ppid=1, kept=set(), swap_free_mb=500)
+        self.assertEqual(
+            A.sbt_stuck_reasons(7, "/wt", 100.0, {}, {}, state, 29 * 60, ppid=1, kept=set(), swap_free_mb=500), [])
+        why = A.sbt_stuck_reasons(7, "/wt", 100.0, {}, {}, state, 31 * 60, ppid=1, kept=set(), swap_free_mb=500)
+        self.assertEqual(len(why), 1)
+        self.assertIn("swap free 500 MB", why[0])
+
+    def test_unreadable_swap_uses_the_normal_limit(self):
+        state = {}
+        A.sbt_stuck_reasons(7, "/wt", 100.0, {}, {}, state, 0, ppid=1, kept=set(), swap_free_mb=None)
+        self.assertEqual(
+            A.sbt_stuck_reasons(7, "/wt", 100.0, {}, {}, state, 60 * 60, ppid=1, kept=set(), swap_free_mb=None), [])
+
+    def test_swap_free_is_read_from_sysctl(self):
+        self.assertEqual(A.parse_swap_free_mb("vm.swapusage: total = 40960.00M  used = 40105.06M  free = 854.94M  (encrypted)"), 854.94)
+        self.assertIsNone(A.parse_swap_free_mb(""))
+        self.assertIsNone(A.parse_swap_free_mb("garbage"))
+
     def test_a_serving_command_whose_owner_died_is_orphaned(self):
         serving = {"/wt": (os.getpid(), DEAD, "web/PageTest/runMain tools.FixtureServerMain")}
         why = A.sbt_stuck_reasons(7, "/wt", 1.0, {}, serving, {}, 0)

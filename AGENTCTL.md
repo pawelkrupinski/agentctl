@@ -1516,8 +1516,11 @@ Output is `no orphans`, or one line per stray with the reason.
 `--kill --safe` (= `agentctl reap`) is the scheduled reaper's mode (run by `agentctl maintain` every 15 min): it ends
 only strays -- a dead owner's record and its runs, wait loops whose agent or runs are
 gone or that duplicate an older one, sbt servers whose worktree is gone, whose serving command's sbt-warm or owner died
-(sbt-warm's `.serving`), or that hold a running command (an sbtn client) with no CPU for 20 min across reaps
-(`~/.cache/agentctl/sbt-cpu.json`; a `jcmd Thread.print` dump first, in `~/.cache/agentctl/sbt-dumps/`) -- never an
+(sbt-warm's `.serving`), that hold a running command (an sbtn client) with no CPU for 20 min across reaps, or that
+are detached (PPID 1), have no client and used no CPU for 120 min -- 30 min once swap free is under 2048 MB
+(`sysctl vm.swapusage`; unreadable = the 120) -- and are not kept by an `sbt-warm --keep` in their checkout
+(2026-11-07: two lone idle 6 GB servers sat 3 h while swap was full) (`~/.cache/agentctl/sbt-cpu.json`; a
+`jcmd Thread.print` dump first, in `~/.cache/agentctl/sbt-dumps/`) -- never an
 owner merely on old code, which re-execs itself. Every kill is a line of `~/.cache/agentctl/reap.log`. The daily
 `sweep` reaps the sbt servers too.
 
@@ -1735,6 +1738,8 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `remote` | `AGENTCTL_REMOTE` | - | - |
 | `restart_check` | `AGENTCTL_RESTART_CHECK` | `30` | seconds between code-version checks |
 | `runners_page_cache` | `AGENTCTL_RUNNERS_PAGE_CACHE` | `f"{HOME}/.cache/ci-runners-page/last-good.json"` | - |
+| `sbt_idle_min` | `AGENTCTL_SBT_IDLE_MIN` | `120` | min a detached sbt server with no client may sit idle before the reaper ends it |
+| `sbt_idle_pressure_min` | `AGENTCTL_SBT_IDLE_PRESSURE_MIN` | `30` | that limit while swap free is under the floor |
 | `sbt_reap` | `AGENTCTL_SBT_REAP` | - | the tests never reap this machine's servers |
 | `sbt_stall_min` | `AGENTCTL_SBT_STALL_MIN` | `20` | - |
 | `scratch` | `AGENTCTL_SCRATCH` | - | - |
@@ -1756,6 +1761,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `store_url` | `AGENTCTL_STORE_URL` | - | - |
 | `streak_rereads` | `AGENTCTL_STREAK_REREADS` | `3` | stale or missing streak run signatures read again per tick |
 | `suite_cap` | `AGENTCTL_SUITE_CAP` | `1` | agentctl's own test-suite runs at once : parallel agents queue, never pile up |
+| `swap_free_floor_mb` | `AGENTCTL_SWAP_FREE_FLOOR_MB` | `2048` | swap free (MB) below which the shorter idle limit applies |
 | `sweep_hour` | `AGENTCTL_SWEEP_HOUR` | `9` | local time: the daily sweep runs at the first maintain pass from 09:00 |
 | `sync_mirror` | `AGENTCTL_SYNC_MIRROR` | `10` | s between the laptop's copies of /v1/state into state.json |
 | `tick` | `AGENTCTL_TICK` | `5` | seconds between ticks ; every step is bounded or rate-limited inside |
