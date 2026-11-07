@@ -484,6 +484,9 @@ agentctl red beat <run> --note "<what>"       # renew your lease by hand (a new 
 agentctl red release <run> [--any]
 agentctl red status [-v]                       # every red: its state, holder or offer, deadline
 agentctl red dispatch <run> [--force]          # the red's offer at top priority: the dispatcher takes it now
+agentctl red unblock <run|key> --why "<what changed>"
+                                               # it no longer waits on the owner (done, superseded): ends its block
+                                               # lease, or strikes a BLOCKED ON OWNER verdict no probe can clear
 agentctl red unblame <run> --why "<why>"       # WITHDRAW its blame (culprit wrongly decided, revert unlanded): see "blame"
 agentctl red auto [on|off|status]              # the processor's automatic dispatch
 agentctl red owner-push <run> [--note "<what; which units restart>"]
@@ -616,9 +619,25 @@ agent must be assigned to it".
   `$AGENTCTL_RED_FIX_REQUEUE_GRACE` (15 min) after the cancel. A fix of the gate's OWN red (a gate run's
   red carries its key, whichever run its Fixes-Red names) reads "landing on red (Fixes-Red), <queued|checking|...>" in
   `red status`, `status --line` and the status page, never "blocked by gate" that same red (2026-10-29 19:20).
+- **EVERY RED OUTSIDE THE GATE TO ONE AGENT (the owner, 2026-11-07: "move all these to single agent"; Identity rule
+  ablation #1, Identity family explorer #5 and Order independence #46 had spawned three fixers).** A family with
+  `"outside_gate": true` matches a red whose workflow is not one the gate reads -- `red_gate_flows` (GATING: Main and
+  Identity model convergence; another repo's red-repos.json `gate`), the same set ci-why's "Outside the gate" leaves out,
+  never a list of its own; the Local checks count as the gate's. The family `outside-gate` (owner) comes after
+  `convergence` (a Verify scrape recording `convergence (<cc>)` job stays convergence's) and `main-tests`, and BEFORE
+  `infra`, so an infra-shaped red of a non-gating workflow (an explorer OOM-killed, exit 137) is its too.
+  A family's holder is its live fixer OR an interactive `red claim` holding one of its reds: while one holds (and the
+  family owner is not running), a new red of the family is claimed for that same holder and worktree (renewed by its
+  activity) and told in its `RED-INBOX.md` -- never a second owner session beside it.
+- **A BLOCK NO PROBE CAN CLEAR IS SHOWN WITH ITS AGE (2026-11-07).** A turn's `BLOCKED ON OWNER: <cmd>` verdict with no
+  `red block` lease behind it has no probe: it stayed the red's last word after the owner had run the command (Verify
+  scrape recording #14: "re-pin the scheduler to 362196b15a", long since re-pinned past it). Its note now reads `said
+  <age> ago, no block holds it`, and `agentctl red unblock <run|key> --why "<what changed>"` strikes it (an `UNBLOCKED:`
+  history entry) or ends a live block lease (`RELEASED`: its reds are offered again at the next tick, never escalated).
+  Prefer `red block --until-*` with a probe: a block that can tell when it is over.
 - **LONG-LIVED FAMILY OWNERS (simplification item 6, 2026-10-30).** A family marked `"owner": true` in
-  `red-families.json` (today: `convergence`, `main-tests` = Main's test failures, `infra` = every other infra-shaped or
-  unclear red) has ONE persistent owner instead of a fresh fixer per red: one `claude --bg` session (`red owner ·
+  `red-families.json` (today: `convergence`, `main-tests` = Main's test failures, `outside-gate` = every red of a
+  workflow THE GATE does not read, `infra` = every other infra-shaped or unclear red) has ONE persistent owner instead of a fresh fixer per red: one `claude --bg` session (`red owner ·
   <family>` in `claude agents`) and its wrapper (`agentctl red owner --family F`, detached), working in ONE worktree
   (`<clone>-wt-owner-<family>`, branch `owner-<family>`) with a NOTEBOOK there (`RED-NOTEBOOK.md`, never committed)
   that it reads first and keeps current. Its lease `owner/<family>` is a HEARTBEAT (renewed while the wrapper lives,

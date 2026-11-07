@@ -269,6 +269,10 @@ def main(argv=None):
                     "never the owner's): " + "; ".join(f"{k}: {v}" for k, v in OWNER_CAUSES.items()))
     rb.add_argument("--cause", metavar="NAME", help="an outside outage (e.g. decodo): ONE condition for every red it "
                     "explains; attach to the open one, or open it with --until-*")
+    rub = rds.add_parser("unblock", help="the red no longer waits on the owner (done, or superseded): ends its block, "
+                         "or strikes a BLOCKED ON OWNER verdict no probe can clear")
+    rub.add_argument("run")
+    rub.add_argument("--why", required=True, help="what changed (the owner ran it; superseded by ...)")
     rop = rds.add_parser("owner-push", help="an owner-only repo's fix (red-repos.json, infra): file your prepared branch "
                          "with the owner as a one-liner; the red waits for it (fix-pending) until a green gate run")
     rop.add_argument("run")

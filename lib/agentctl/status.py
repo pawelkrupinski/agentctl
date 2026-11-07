@@ -347,7 +347,8 @@ def status_reds(st, t, repo=None):
                     "opened_at": opened, "age": t - float(opened), "entered_at": it["entered_at"],
                     "deadline": it["deadline"], "level": it.get("level"), "lease": lease,
                     "fix": d.get("fix"), "attempts": d.get("attempts"), "family": red_family(d),
-                    "note": (lease or {}).get("note") or (str(hist[-1].get("outcome"))[:400] if hist else None),
+                    "note": (lease or {}).get("note") or block_verdict_note(it, t, st)
+                    or (str(hist[-1].get("outcome"))[:400] if hist else None),
                     "what": red_what(d),
                     "history": [{"at": h.get("at"), "holder": h.get("holder"), "outcome": str(h.get("outcome"))[:300]}
                                 for h in hist[-5:]]})

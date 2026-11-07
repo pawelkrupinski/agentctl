@@ -1,5 +1,5 @@
 {
-  "_doc": "Red families (agentctl; the owner 2026-10-29: \"give all convergence red work to one agent\"; simplification item 6: one long-lived owner session per family). Every open red of a family is held by ONE fixer; with \"owner\": true, by the family's long-lived owner (one session, one worktree, a notebook, restarted only when it dies). A red is in the FIRST family that matches: its workflow is listed or one of its failing jobs matches a `jobs` regex (Python re.search) -- when the family names any -- and its kind (test / infra / unclear) is in `kinds` -- when it names any. A red in no family is its run's own (one short-lived fixer). $AGENTCTL_RED_FAMILIES names another file. A failing test step whose log names no FAILED line is `unclear`, not infra (2026-10-30: Main #2647's e2e (rest) step `sbt e2eRest` went to infra): Main's go to main-tests; infra holds runner and setup failures (and other workflows' unclear reds).",
+  "_doc": "Red families (agentctl; the owner 2026-10-29: \"give all convergence red work to one agent\"; simplification item 6: one long-lived owner session per family). Every open red of a family is held by ONE fixer; with \"owner\": true, by the family's long-lived owner (one session, one worktree, a notebook, restarted only when it dies). A red is in the FIRST family that matches: its workflow is listed, one of its failing jobs matches a `jobs` regex (Python re.search), or -- with `\"outside_gate\": true` -- its workflow is not one THE GATE reads (red-repos.json's gate, GATING in ciwhy.py: Main and Identity model convergence; the Local checks count as the gate's) -- when the family names any of these -- and its kind (test / infra / unclear) is in `kinds` -- when it names any. A red in no family is its run's own (one short-lived fixer). $AGENTCTL_RED_FAMILIES names another file. A failing test step whose log names no FAILED line is `unclear`, not infra (2026-10-30: Main #2647's e2e (rest) step `sbt e2eRest` went to infra): Main's go to main-tests; infra holds runner and setup failures. outside-gate (the owner, 2026-11-07: \"move all these to single agent\" -- three non-gating reds had spawned three fixers): every red of a workflow outside the gate, whatever its kind (an OOM-killed explorer too: it comes before infra), under ONE owner; a Verify scrape recording `convergence (<cc>)` job stays convergence's (it comes first).",
   "families": [
     {"name": "convergence",
      "owner": true,
@@ -9,6 +9,9 @@
      "owner": true,
      "workflows": ["Main"],
      "kinds": ["test", "unclear"]},
+    {"name": "outside-gate",
+     "owner": true,
+     "outside_gate": true},
     {"name": "infra",
      "owner": true,
      "kinds": ["infra", "unclear"]}

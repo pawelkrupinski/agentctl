@@ -520,7 +520,8 @@ class RedFamilyTest(Phase2Base):
         self.assertEqual(fam("Main", "e2e (rest)", "unclear"), "main-tests")
         self.assertEqual(fam("Main", "unit-test", "test"), "main-tests")
         self.assertEqual(fam("Main", "ci", "infra"), "infra")  # a setup / runner failure
-        self.assertEqual(fam("Report run timings", "judge", "unclear"), "infra")
+        self.assertEqual(fam("Report run timings", "judge", "unclear"), "outside-gate")  # no gate workflow (2026-11-07)
+        self.assertEqual(fam("Local checks", "pre-push", "infra"), "infra")  # the landing gate's own
         self.assertEqual(fam("Identity model convergence", "leg (pl)", "unclear"), "convergence")
         # the real #2647 shape, kind from its failing step (classify_job), family from the one mapping
         e2e = {"name": "e2e (rest)", "conclusion": "failure",
@@ -530,6 +531,66 @@ class RedFamilyTest(Phase2Base):
         setup = {"name": "e2e (rest)", "conclusion": "failure", "steps": [{"name": "Set up job", "conclusion": "failure"}]}
         kind, _why = A.classify_job(setup, [], (0, []))
         self.assertEqual((kind, fam("Main", "e2e (rest)", kind)), ("infra", "infra"))
+
+    def test_the_shipped_families_put_every_red_outside_the_gate_in_one_family(self):
+        """The owner, 2026-11-07: "move all these to single agent" -- Identity rule ablation #1, Identity family explorer
+        #5 and Order independence #46 each had a fixer of their own. The gate set is red_gate_flows (GATING), never a
+        list in the config: a gate red keeps its family, a non-gate red of any kind is outside-gate's."""
+        self.addCleanup(os.environ.__setitem__, "AGENTCTL_RED_FAMILIES", os.environ["AGENTCTL_RED_FAMILIES"])
+        os.environ["AGENTCTL_RED_FAMILIES"] = os.path.join(os.path.dirname(HERE), "red-families.json")
+        fam = lambda wf, job, kind: A.red_family({"workflow": wf, "job": job, "jobs": [job], "kind": kind})
+        self.assertEqual(fam("Order independence", "scala (shuffled)", "test"), "outside-gate")
+        self.assertEqual(fam("Identity rule ablation", "ablate (0)", "unclear"), "outside-gate")
+        self.assertEqual(fam("Identity family explorer", "family walk (de 1/11)", "infra"), "outside-gate")  # exit 137
+        self.assertEqual(fam("Main", "test (worker)", "test"), "main-tests")      # the gate's reds keep their families
+        self.assertEqual(fam("Main", "ci", "infra"), "infra")
+        self.assertEqual(fam("Identity model convergence", "leg (pl)", "infra"), "convergence")
+        self.assertEqual(fam("Verify scrape recording", "verify (germany) / convergence (germany)", "test"), "convergence")
+        self.assertEqual(fam("Verify scrape recording", "verify (germany) / order-independence-p01 (germany)", "test"),
+                         "outside-gate")
+        self.assertIsNone(A.red_family({"jobs": ["x"], "kind": "test"}))  # no workflow named: cannot tell
+        self.assertTrue(A.family_owned("outside-gate"))
+        saved = dict(A.GATING)  # the gate moves, the family follows: read from GATING, not a list of its own
+        self.addCleanup(lambda: (A.GATING.clear(), A.GATING.update(saved)))
+        A.GATING[A.RED_PRIMARY] = A.GATING[A.RED_PRIMARY] + [("Order independence", "order-independence.yml")]
+        self.assertIsNone(fam("Order independence", "scala (shuffled)", "test"))
+
+    def test_a_claim_holding_an_owned_familys_red_is_its_holder_no_second_owner_starts(self):
+        """2026-11-07: a consolidated fixer had `red claim`ed the non-gate reds; the family's owner was not running, so a
+        new red of the family would have started a SECOND session (an owner) beside it. The claim is the holder: the
+        new red is claimed for it, in its worktree, and it is told."""
+        fams = os.path.join(self.tmp, "fams-og.json")
+        with open(fams, "w") as f:
+            json.dump({"families": [{"name": "outside-gate", "owner": True, "outside_gate": True}]}, f)
+        self.addCleanup(os.environ.__setitem__, "AGENTCTL_RED_FAMILIES", os.environ["AGENTCTL_RED_FAMILIES"])
+        os.environ["AGENTCTL_RED_FAMILIES"] = fams
+        owners = []
+        saved = A.owner_spawn
+        A.owner_spawn = lambda *a, **k: owners.append(a) or (True, "owner started")
+        self.addCleanup(setattr, A, "owner_spawn", saved)
+        t = time.time()
+        wt = os.path.join(self.tmp, "movies-wt-nongate")
+        os.makedirs(wt)
+        self.st.put_item("red", "ab1", "leased", {"key": "ab1", "workflow": "Identity rule ablation", "job": "collect",
+                                                  "jobs": ["collect"], "last_run": {"number": 1}})
+        claimer = f"laptop:claim:session 05c1b7f5@{wt}"
+        self.st.acquire("red/ab1", claimer, 1800, 8 * 3600, meta={"kind": "claim", "worktree": wt, "who": "session 05c1b7f5"})
+        self.red("oi1", "Order independence", "scala (reverse)", 46)
+        acts = A.red_dispatcher(self.st, "o/r", self.repo, t)
+        self.assertEqual((owners, self.spawned), ([], []), "no second session beside the live holder")
+        self.assertTrue(any("joined its family outside-gate's fixer" in a for a in acts), acts)
+        row = self.st.get("red/oi1")
+        self.assertEqual((row["holder"], A.lease_meta(row)["kind"], A.lease_meta(row)["worktree"]), (claimer, "claim", wt))
+        with open(os.path.join(wt, "RED-INBOX.md")) as f:
+            self.assertIn("RED FAMILY outside-gate: Order independence #46", f.read())
+        A.red_renew_holders(self.st, t)  # renewed by the worktree's activity, like the claim it joined
+        self.assertTrue(A.lease_is_live(self.st.get("red/oi1"), t))
+        # with nobody holding it, the family's owner starts (one session, every red of it)
+        self.st.release("red/ab1", self.st.get("red/ab1")["epoch"], self.st.get("red/ab1")["secret"], outcome="RELEASED")
+        self.st.release("red/oi1", row["epoch"], row["secret"], outcome="RELEASED")
+        self.red("oi2", "Order independence", "scala (shuffled)", 47)
+        A.red_dispatcher(self.st, "o/r", self.repo, t)
+        self.assertEqual(len(owners), 1)
 
     def test_a_new_convergence_red_goes_under_the_live_family_fixers_lease_and_it_is_told(self):
         t = time.time()

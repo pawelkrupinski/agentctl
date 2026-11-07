@@ -23,6 +23,9 @@ the same way is the same red. A run number is per repo: --repo, or the repo of t
   agentctl red release <run|key> [--any]         drop your lease (--any: anyone's)
   agentctl red block <run> --owner-cause KIND --cmd "<command>" [--cause NAME] [--until-green WF | --until-http URL | --until-tcp HOST:PORT]
                                                  an external cause only the owner can act on (never a test failure)
+  agentctl red unblock <run|key> --why "<what changed>"
+                                                 it no longer waits on the owner: its block ends, or a BLOCKED ON OWNER
+                                                 verdict no probe clears is struck (shown with its age until then)
   agentctl red owner-push <run> [--note "<what; which units restart>"]
                                                  an owner-only repo's (infra's) prepared fix, filed with the owner as a
                                                  one-liner; the red waits in fix-pending until a green gate run
@@ -1000,7 +1003,8 @@ def red_offer(store, it, text, data=None, repo=None, escalate=False, verdict=Non
 # ONE fixer. While it is alive, the dispatcher puts a new red of its family under its lease (a sibling it renews with
 # its own) and tells it in RED-INBOX.md in its worktree, never a second fixer; when it ends, the next fixer of the
 # family goes on in its worktree (previous_fixer_tree). The families are config: red-families.json beside agentctl
-# ($AGENTCTL_RED_FAMILIES names another file).
+# ($AGENTCTL_RED_FAMILIES names another file). `"outside_gate": true` matches every red of a workflow the gate does
+# not read (red_outside_gate; the owner, 2026-11-07: every non-gating red to ONE agent).
 _families_cache = process_cache({})
 
 
@@ -1031,13 +1035,22 @@ def red_family(d):
     if o_r != RED_PRIMARY:  # ANOTHER WATCHED REPO: its red-repos.json family, every red of it (red-families.json's
         return (red_repo_conf(o_r) or {}).get("family") or None  # families are the primary's)
     jobs = [str(j) for j in (d.get("jobs") or []) + [d.get("job")] if j]
-    for fam in red_families():  # the first family that matches: its workflows or jobs (if it names any) AND its kinds
-        named = bool(fam.get("workflows") or fam["_jobs"])
-        by_name = d.get("workflow") in (fam.get("workflows") or []) or any(rx.search(j) for rx in fam["_jobs"] for j in jobs)
+    for fam in red_families():  # the first family that matches: its workflows, jobs or outside_gate (if it names any)
+        named = bool(fam.get("workflows") or fam["_jobs"] or fam.get("outside_gate"))  # AND its kinds
+        by_name = d.get("workflow") in (fam.get("workflows") or []) or any(rx.search(j) for rx in fam["_jobs"] for j in jobs) \
+            or bool(fam.get("outside_gate") and red_outside_gate(d))
         by_kind = not fam.get("kinds") or d.get("kind") in fam["kinds"]
         if (by_name or not named) and by_kind and (named or fam.get("kinds")):
             return fam["name"]
     return None
+
+
+def red_outside_gate(d):
+    """A red of a workflow THE GATE does not read (the owner, 2026-11-07: "move all these to single agent"): the repo's
+    gate is red_gate_flows (GATING for movies: Main, Identity model convergence -- the set ci-why's "Outside the gate"
+    leaves out); the local checks are the landing gate's own, never outside it. No workflow named: cannot tell, no."""
+    wf = d.get("workflow")
+    return bool(wf) and wf != LOCAL_FLOW and wf not in {n for n, _f in red_gate_flows(red_repo_of(d))}
 
 
 def red_family_tell(row, pic, fam):
@@ -2551,12 +2564,14 @@ def red_capacity(store, waited, t, alive=None):
 
 
 def red_family_holder(store, fam, t, active=None):
-    """The live primary lease (a fixer's own, not a sibling) on a red of queue family fam, or None."""
+    """The live primary lease on a red of queue family fam, or None: a fixer's own (not a sibling), or an interactive
+    CLAIM's (`red claim`: a session that took the family's reds by hand is its holder, 2026-11-07 -- the dispatcher
+    started a second owner session beside the consolidated non-gate fixer)."""
     if not fam:
         return None
     active = active if active is not None else red_active(store)
     for row in store.list("red/"):
-        if not lease_is_live(row, t) or lease_meta(row).get("kind") != "fixer":
+        if not lease_is_live(row, t) or lease_meta(row).get("kind") not in ("fixer", "claim"):
             continue
         it = active.get(row["name"].split("/", 1)[1])
         if it and red_queue_family(it["data"]) == fam:
@@ -2601,10 +2616,14 @@ def red_dispatcher(store, o_r, repo, t):
             continue
         holder = red_family_holder(store, fam, t) if off["tier"] not in ("revert", "lander", "blame") else None
         if holder and holder["name"] != off["lease"]:
-            # ONE FIXER PER FAMILY: a new red of a family whose fixer is at work is that fixer's -- under its lease
-            took = store.take(off["id"], holder["holder"], RED_FIXER_TTL, RED_FIXER_MAX,
-                              meta={**lease_meta(holder), "kind": "sibling", "primary": holder["name"], "family": fam,
-                                    "outcome": None, "notes": None})
+            # ONE FIXER PER FAMILY: a new red of a family whose fixer is at work is that fixer's -- under its lease; an
+            # owned family's too while its owner is not running (never a second session beside a live holder). A
+            # claim's red is a claim of the same worktree (renewed by its activity, red_renew_holders), a fixer's a sibling
+            claim = lease_meta(holder).get("kind") == "claim"
+            took = store.take(off["id"], holder["holder"], *((RED_CLAIM_TTL, RED_CLAIM_MAX) if claim else
+                                                             (RED_FIXER_TTL, RED_FIXER_MAX)),
+                              meta={**lease_meta(holder), "family": fam, "outcome": None, "notes": None, "gate": bool(pic.get("gate")),
+                                    **({} if claim else {"kind": "sibling", "primary": holder["name"]})})
             if took and "epoch" in took:
                 red_family_tell(holder, pic, fam)
                 acts.append(f"{pic.get('workflow')} #{(pic.get('run') or {}).get('number')}: red {pic['key']} joined "

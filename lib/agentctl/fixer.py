@@ -1654,6 +1654,10 @@ def cmd_red(a):
     st = Store()
     if a.rcmd == "block":
         return red_block(o_r, a)
+    if a.rcmd == "unblock":
+        rc, lines = red_unblock(st, o_r, a.run, a.why)
+        print("\n".join(lines))
+        return rc
     if a.rcmd == "owner-push":
         rc, lines = red_owner_push(st, o_r, a.run, a.note or "", getattr(a, "worktree", None))
         print("\n".join(lines))
@@ -2138,6 +2142,67 @@ def red_owner_push(store, o_r, target, note="", wt=None):
                                                                 "note": note, "verify_since": t}})
     inbox_write("red", line, [line], [], 1, cwd=wt)
     return 0, [line, f"BLOCKED ON OWNER: {cmd}"]
+
+
+# A BLOCK NOBODY CAN SEE CLEAR (2026-11-07: Verify scrape recording #14's reds read "BLOCKED ON OWNER: ... re-pin movies
+# runner scheduler to 362196b15a" hours after the owner had re-pinned, and past it -- ci-runner ran a later scheduler).
+# That block was a turn's VERDICT, not a block lease: no probe could clear it, so it stayed the red's last word. A
+# verdict with no live block now reads with its age and how to strike it (block_verdict_note), and `red unblock` strikes
+# it -- or ends a live block lease (RELEASED: its reds go on at the next tick, re-offered, never escalated) -- leaving
+# the reason in the red's history.
+def red_blocked_verdict(d):
+    """The red's last word when it is a BLOCKED ON OWNER verdict (its history's newest entry), else None."""
+    last = (d.get("history") or [{}])[-1]
+    return last if str(last.get("outcome") or "").startswith("BLOCKED ON OWNER") else None
+
+
+def block_verdict_note(it, t, store=None):
+    """A BLOCKED ON OWNER verdict that no live block lease holds, shown as what it is: an old word, its age, and how to
+    strike it; None when the red's last word is no such verdict or a block holds it."""
+    d = it["data"]
+    last = red_blocked_verdict(d)
+    if not last or red_block_of(it, store):
+        return None
+    try:
+        age = t - dt.datetime.strptime(str(last.get("at")), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp()
+    except ValueError:
+        age = None
+    said = f"said {fmt_age(age)} ago" if age is not None else f"said at {last.get('at')}"
+    return (f"{str(last.get('outcome'))[:300]} -- {said}, no block holds it (no probe clears it): if it is done or "
+            f"superseded, `agentctl red unblock {d.get('key')} --why \"<what changed>\"`")
+
+
+def red_unblock(store, o_r, target, why, who=None):
+    """(rc, lines) of `red unblock`: the reds a target names are no longer the owner's -- a live block lease holding
+    them is ended (RELEASED: the tick offers them again, never escalated) and an UNBLOCKED entry ends their history, so a
+    stale BLOCKED ON OWNER verdict is no longer their last word."""
+    if not str(why or "").strip():
+        return 2, ["NOT UNBLOCKED: --why \"<what changed>\" (the owner did it, it is superseded by ...)"]
+    items = red_targets(store, o_r, target, create=False)
+    if not items:
+        return 1, [f"NOT UNBLOCKED: #{target} names no open red"]
+    who = who or claimant(safe_cwd())
+    t = store.clock()
+    lines = []
+    for it in items:
+        d = it["data"]
+        blk = red_block_of(it, store)
+        if blk:
+            row = store.get(blk["name"])
+            keep = [k for k in lease_meta(row).get("keys") or [] if k != d.get("key")]
+            if keep:  # an outage's ONE lease holding other reds too: only this red leaves it
+                store.set_meta(row["name"], row["epoch"], row["secret"], {"keys": keep})
+            else:
+                store.revoke(row["name"], f"RELEASED: unblocked by {who}: {why}")
+        elif not red_blocked_verdict(d):
+            lines.append(f"{red_what(d)} ({d.get('key')}): not blocked on the owner -- left as it is")
+            continue
+        cur = store.item("red", it["id"])
+        h = {"at": iso_at(t), "holder": who, "outcome": f"UNBLOCKED: {why}"}
+        store.update_item("red", it["id"], cur["version"], {"history": (cur["data"].get("history") or []) + [h]})
+        lines.append(f"unblocked {red_what(d)} ({d.get('key')})" + (f": ended {blk['name']}" if blk else
+                                                                    ": its BLOCKED ON OWNER verdict struck") + f" -- {why}")
+    return 0, lines
 
 
 def red_block(o_r, a):

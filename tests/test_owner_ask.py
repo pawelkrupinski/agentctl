@@ -57,6 +57,48 @@ class AskBase(CrashLoopBase):
         return A.red_view(self.st, self.st.item("red", it["id"]), self.t[0])
 
 
+class StaleBlockTest(AskBase):
+    """2026-11-07: Verify scrape recording #14's reds read "BLOCKED ON OWNER: ... re-pin movies runner scheduler to
+    362196b15a" hours after the owner had re-pinned past it: a turn's verdict with no block lease, so no probe could
+    ever clear it. It reads with its age and how to strike it, and `red unblock` strikes it or ends a live block."""
+
+    def stale(self, key="vsr"):
+        h = {"at": A.iso_at(self.t[0]), "holder": "laptop:owner:convergence",
+             "outcome": "BLOCKED ON OWNER: `cd ~/bitcashier/infra && ... re-pin movies runner scheduler to 362196b15a`"}
+        it = self.red(key=key, workflow="Verify scrape recording", history=[h])
+        self.t[0] += 4 * 3600 + 60
+        return A.red_move(self.st, it, "fix-pending", "fix landed", data={"fix": {"status": "landed", "sha": "709e77cd8"}})
+
+    def note(self, key):
+        return next(r["note"] for r in A.status_reds(self.st, self.t[0]) if r["key"] == key)
+
+    def test_a_blocked_verdict_no_block_holds_reads_with_its_age_and_unblock_strikes_it(self):
+        self.stale()
+        note = self.note("vsr")
+        self.assertIn("re-pin movies runner scheduler", note)
+        self.assertIn("said 4 h ago, no block holds it", note)
+        self.assertIn('agentctl red unblock vsr --why', note)
+        self.assertEqual(A.red_unblock(self.st, O_R, "vsr", "")[0], 2, "a reason is required")
+        rc, lines = A.red_unblock(self.st, O_R, "vsr", "re-pinned; ci-runner runs scheduler 36ae3557f4", who="me")
+        self.assertEqual(rc, 0, lines)
+        self.assertIn("its BLOCKED ON OWNER verdict struck", lines[0])
+        self.assertEqual(self.note("vsr"), "UNBLOCKED: re-pinned; ci-runner runs scheduler 36ae3557f4")
+        it = self.st.item("red", "vsr")
+        self.assertEqual(it["state"], "fix-pending", "its fix still waits for its run")
+        rc, lines = A.red_unblock(self.st, O_R, "vsr", "again", who="me")
+        self.assertIn("not blocked on the owner", lines[0])
+        self.assertEqual(len(self.st.item("red", "vsr")["data"]["history"]), 2)
+
+    def test_unblock_ends_a_live_block_lease_released_never_escalated(self):
+        it = self.owner_cause_blocked()
+        self.assertIsNotNone(A.red_block_of(it, self.st))
+        self.assertIsNone(A.block_verdict_note(it, self.t[0], self.st))  # a real block speaks for itself
+        rc, lines = A.red_unblock(self.st, O_R, "nix", "the owner granted it", who="me")
+        self.assertEqual(rc, 0, lines)
+        self.assertIsNone(A.red_block_of(self.st.item("red", "nix"), self.st))
+        self.assertTrue(str(A.lease_meta(self.st.get(A.block_lease("nix"))).get("outcome")).startswith("RELEASED"))
+
+
 class QuestionShownTest(AskBase):
     def test_a_decision_block_reads_waiting_on_you_with_its_question_never_owner_decision_down(self):
         text, short = self.view(self.decision_blocked())
