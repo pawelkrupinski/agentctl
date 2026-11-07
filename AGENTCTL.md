@@ -606,7 +606,7 @@ agent must be assigned to it".
   (`$AGENTCTL_RED_FIXER_WALL`). A red still failing after 2 dispatched fixers: one `RED ESCALATE` entry, never
   dispatched again. Every decision is a line of `~/.cache/agentctl/reds/dispatch.log` with its reason.
 - **One fixer per red family; continuity; land as you go (2026-10-29).** `~/bin/red-families.json` names families
-  (convergence: the Identity model convergence workflow and any `convergence (<cc>)` job): while a family's fixer is at
+  (convergence: the Identity model convergence workflow; a non-gate `convergence (<cc>)` job is outside-gate's): while a family's fixer is at
   work, a new red of it goes under its lease (`[family convergence]` in `red status` and on the status page) and a line
   in its worktree's `RED-INBOX.md` tells it. A live fixer stays its reds' holder (its lease is taken again for it if it
   lapsed); no second fixer while a previous one of the red, its run or its family works, and a new one goes on in the
@@ -623,9 +623,10 @@ agent must be assigned to it".
   ablation #1, Identity family explorer #5 and Order independence #46 had spawned three fixers).** A family with
   `"outside_gate": true` matches a red whose workflow is not one the gate reads -- `red_gate_flows` (GATING: Main and
   Identity model convergence; another repo's red-repos.json `gate`), the same set ci-why's "Outside the gate" leaves out,
-  never a list of its own; the Local checks count as the gate's. The family `outside-gate` (owner) comes after
-  `convergence` (a Verify scrape recording `convergence (<cc>)` job stays convergence's) and `main-tests`, and BEFORE
-  `infra`, so an infra-shaped red of a non-gating workflow (an explorer OOM-killed, exit 137) is its too.
+  never a list of its own; the Local checks count as the gate's. The family `outside-gate` (owner) comes FIRST:
+  a Verify scrape recording `convergence (<cc>)` job is its too, and an infra-shaped red of a non-gating workflow (an
+  explorer OOM-killed, exit 137); it matches only workflows the gate does not read, so Main's and Identity model
+  convergence's reds still reach `main-tests`, `convergence` and `infra`.
   A family's holder is its live fixer OR an interactive `red claim` holding one of its reds: while one holds (and the
   family owner is not running), a new red of the family is claimed for that same holder and worktree (renewed by its
   activity) and told in its `RED-INBOX.md` -- never a second owner session beside it.

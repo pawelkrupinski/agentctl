@@ -545,7 +545,8 @@ class RedFamilyTest(Phase2Base):
         self.assertEqual(fam("Main", "test (worker)", "test"), "main-tests")      # the gate's reds keep their families
         self.assertEqual(fam("Main", "ci", "infra"), "infra")
         self.assertEqual(fam("Identity model convergence", "leg (pl)", "infra"), "convergence")
-        self.assertEqual(fam("Verify scrape recording", "verify (germany) / convergence (germany)", "test"), "convergence")
+        self.assertEqual(fam("Verify scrape recording", "verify (germany) / convergence (germany)", "test"), "outside-gate")
+        self.assertEqual(fam("Identity model convergence", "convergence (germany)", "test"), "convergence")  # the gate's
         self.assertEqual(fam("Verify scrape recording", "verify (germany) / order-independence-p01 (germany)", "test"),
                          "outside-gate")
         self.assertIsNone(A.red_family({"jobs": ["x"], "kind": "test"}))  # no workflow named: cannot tell
