@@ -1083,9 +1083,14 @@ the executor pushes the checked tip to `check/<entry id>` (movies' hook checks n
 runs `.github/workflows/precommit-check.yml` on the check tier: the same hook, `--checks-only <merge-base>..HEAD`. The
 run is the ENTRY's, not the executor's: its record is saved the moment the branch is pushed, a replacement executor
 ADOPTS it (no new push, no new run), and the 15-min (no run started) / 2-h (undecided) bounds count from the push;
-past them it is checked locally. The push to main then carries `PREPUSH_REMOTE_RUN=<run id>`: the hook takes that run
-only once GitHub says it is precommit-check.yml, a success, on exactly the pushed commit. Superseding or cancelling an
-entry cancels its undecided run.
+past them it is checked locally. **The verdict is the check jobs'** (2026-11-07: batch #20 sat 27+ min past its last
+check job behind a queued `timings / report`): the workflow declares its verdict's jobs as a workflow-level
+`VERDICT_JOBS: <glob>, ...` of job names, read at the checked commit; once every job it names has concluded the check
+is decided, and a job outside it (a report, a publish) still queued or running holds nothing. Any job concluding in
+failure fails it at once. No declaration: the run's own conclusion decides. The push to main then carries
+`PREPUSH_REMOTE_RUN=<run id>`: the hook takes that run only once GitHub says it is precommit-check.yml on exactly the
+pushed commit, and a success -- or, still running, every job its `VERDICT_JOBS` names a success and none failed.
+Superseding or cancelling an entry cancels its undecided run.
 
 ### tick: the processor, the token, the gate
 

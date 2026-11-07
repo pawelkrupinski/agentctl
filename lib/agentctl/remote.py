@@ -31,10 +31,46 @@ def remote_matches(e, base, head, mode):
     return None
 
 
+# THE VERDICT IS THE CHECK JOBS' (the owner, 2026-11-07, "do the structural fix"): batch #20's 13 changes sat 27+ min
+# past their run's last check job, behind a `timings / report` job QUEUED for a light runner of a saturated ci-runner,
+# because the verdict waited for the RUN to complete. The workflow declares its verdict's jobs itself -- a workflow-level
+# `VERDICT_JOBS: <glob>, <glob>, ...` of job names (fnmatch), read at the very commit the run checks -- and the verdict
+# is in once every job it names has concluded: a job outside it (a report, a publish) still queued or running holds
+# nothing. Any job that concluded in failure fails the check at once, named or not. A workflow declaring none is decided
+# by the run's own conclusion, as before. The hook's remote pass (movies' scripts/hooks/pre-push) reads the same line.
+VERDICT_JOBS_LINE = re.compile(r"^[ \t]+VERDICT_JOBS:[ \t]*['\"]?([^'\"\n#]*)", re.M)
+JOB_FAILED = ("failure", "timed_out", "startup_failure", "action_required")
+
+
+def verdict_jobs(o_r, sha):
+    """The verdict's job-name globs, as REMOTE_WORKFLOW declares them at commit `sha` ([] when it declares none)."""
+    import base64
+    r = api(o_r, "GET", f"contents/.github/workflows/{REMOTE_WORKFLOW}", {"ref": sha}) or {}
+    text = base64.b64decode(r.get("content") or "").decode(errors="replace")
+    m = VERDICT_JOBS_LINE.search(text)
+    return [g.strip() for g in m.group(1).split(",") if g.strip()] if m else []
+
+
+def jobs_verdict(jobs, globs):
+    """(verdict, failed jobs, jobs still going outside the verdict) of a run from its jobs (GitHub's REST shape): verdict
+    `failure` once any job concluded in failure, `success` once at least one job matches `globs` and every one that does
+    has concluded otherwise, else None (undecided)."""
+    failed = [j for j in jobs if j.get("status") == "completed" and j.get("conclusion") in JOB_FAILED]
+    named = [j for j in jobs if any(fnmatch.fnmatchcase(j.get("name") or "", g) for g in globs)]
+    going = [j for j in jobs if j.get("status") != "completed" and j not in named]
+    if failed:
+        return "failure", failed, going
+    if named and all(j.get("status") == "completed" and j.get("conclusion") in ("success", "skipped", "neutral")
+                     for j in named):
+        return "success", [], going
+    return None, [], going
+
+
 def remote_poll(o_r, rem):
     """STATELESS: the remote check's state from the forge alone -- the run (found by its check/ branch and tip when its id
-    is not known yet), its status, and for a decided run the verdict. Returns the updated record (a copy); raises when
-    the forge cannot be read."""
+    is not known yet), its status, and for a decided run the verdict: decided by its verdict jobs while it still runs
+    (VERDICT_JOBS above), else by its conclusion. Returns the updated record (a copy); raises when the forge cannot be
+    read."""
     rem = dict(rem)
     if rem.get("run") is None:
         runs = forge_actions_runs(o_r, workflow=REMOTE_WORKFLOW, limit=50)
@@ -46,9 +82,30 @@ def remote_poll(o_r, rem):
     run = forge_actions_run(o_r, rem["run"])
     status = run.get("status")
     rem["run_status"] = status
-    if status in ("success", "failure", "cancelled", "skipped") and not rem.get("status"):
+    name = f"{REMOTE_WORKFLOW} run {rem['run']} (#{run.get('run_number')})"
+    if rem.get("status"):
+        return rem
+    if status in ("running", "waiting"):
+        if rem.get("verdict_jobs") is None:
+            rem["verdict_jobs"] = verdict_jobs(o_r, rem["tip"])
+        if not rem["verdict_jobs"]:
+            return rem
+        jobs = (api(o_r, "GET", f"actions/runs/{rem['run']}/jobs", {"per_page": 100}) or {}).get("jobs") or []
+        verdict, failed, going = jobs_verdict(jobs, rem["verdict_jobs"])
+        if verdict is None:
+            return rem
+        rem["status"], rem["decided_at"] = verdict, time.time()
+        rest = f"; not waited for: {', '.join(j.get('name', '?') for j in going)}" if going else ""
+        if verdict == "success":
+            rem["out"] = f"{name}: success (its verdict jobs: {', '.join(rem['verdict_jobs'])}{rest})"
+        else:
+            out = [f"{name} failed: {run.get('html_url')}"]
+            for j in failed:
+                out += [f"-- {j.get('name', '?')}"] + job_log_lines(o_r, rem["run"], {**j, "databaseId": j.get("id")}, 25)
+            rem["out"] = "\n".join(out)
+        return rem
+    if status in ("success", "failure", "cancelled", "skipped"):
         rem["status"], rem["decided_at"] = status, time.time()
-        name = f"{REMOTE_WORKFLOW} run {rem['run']} (#{run.get('run_number')})"
         if status == "success":
             rem["out"] = f"{name}: success"
         elif status == "failure":

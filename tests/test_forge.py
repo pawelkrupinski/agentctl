@@ -101,6 +101,46 @@ class GithubForgeTest(unittest.TestCase):
         rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7"})
         self.assertEqual((rem["run"], rem["status"]), (101, "success"))
 
+    # -- the verdict is the check jobs': a report job still queued holds nothing (batch #20, 2026-11-07)
+    CHECK_JOBS = [("plan", "completed", "success"), ("check (rest)", "completed", "success"),
+                  ("heavy rows (${{ matrix.rows }})", "completed", "skipped"), ("check (identity 1/3)", "completed", "success")]
+
+    def serve_check_run(self, jobs, declares=True):
+        import base64
+        self.serve_runs([dict(id=101, number=12, sha="c" * 40, branch="check/7", done=False, ok=None)])
+        wf = "env:\n    LANG: C.UTF-8\n" + ("    VERDICT_JOBS: plan, check (*), heavy rows (*)\n" if declares else "")
+        self.gh_api(f"repos/{O_R}/contents/.github/workflows/precommit-check.yml?ref={'c' * 40}",
+                    {"content": base64.b64encode(wf.encode()).decode()})
+        self.gh_api(f"repos/{O_R}/actions/runs/101/jobs?per_page=100",
+                    {"jobs": [{"id": 900 + i, "name": n, "status": s, "conclusion": c} for i, (n, s, c) in enumerate(jobs)]})
+
+    def test_remote_poll_is_green_once_every_verdict_job_is_while_a_report_still_queues(self):
+        self.serve_check_run(self.CHECK_JOBS + [("timings / report (timings)", "queued", None)])
+        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7"})
+        self.assertEqual((rem["run"], rem["run_status"], rem["status"]), (101, "running", "success"))
+        self.assertIn("not waited for: timings / report (timings)", rem["out"])
+
+    def test_remote_poll_fails_on_a_failed_check_job_while_the_run_goes_on(self):
+        jobs = self.CHECK_JOBS[:1] + [("check (rest)", "completed", "failure")] + [("timings / report (timings)", "queued", None)]
+        self.serve_check_run(jobs)
+        self.put("run-101-job-901.log", "check (rest)\tRun the hook\t2026-11-07T15:00:00.0Z ::error::shellcheck: SC2086\n")
+        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7"})
+        self.assertEqual(rem["status"], "failure")
+        self.assertIn("-- check (rest)", rem["out"])
+        self.assertIn("SC2086", rem["out"])
+
+    def test_remote_poll_waits_for_a_verdict_job_still_running(self):
+        self.serve_check_run(self.CHECK_JOBS + [("check (page)", "in_progress", None)])
+        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7"})
+        self.assertIsNone(rem.get("status"))
+        self.assertEqual(rem["verdict_jobs"], ["plan", "check (*)", "heavy rows (*)"])
+
+    def test_remote_poll_without_a_declaration_waits_for_the_run(self):
+        self.serve_check_run(self.CHECK_JOBS + [("timings / report (timings)", "queued", None)], declares=False)
+        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7"})
+        self.assertIsNone(rem.get("status"))
+        self.assertEqual(rem["verdict_jobs"], [])
+
     def test_run_url(self):
         url = A.forge_run_url(O_R, 12, {"databaseId": 101})
         self.assertEqual(url, f"https://github.com/{O_R}/actions/runs/101")
