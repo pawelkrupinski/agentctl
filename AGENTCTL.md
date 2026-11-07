@@ -1539,7 +1539,9 @@ gone or that duplicate an older one, sbt servers whose worktree is gone, whose s
 (sbt-warm's `.serving`), that hold a running command (an sbtn client) with no CPU for 20 min across reaps, or that
 are detached (PPID 1), have no client and used no CPU for 120 min -- 30 min once swap free is under 2048 MB
 (`sysctl vm.swapusage`; unreadable = the 120) -- and are not kept by an `sbt-warm --keep` in their checkout
-(2026-11-07: two lone idle 6 GB servers sat 3 h while swap was full) (`~/.cache/agentctl/sbt-cpu.json`; a
+(2026-11-07: two lone idle 6 GB servers sat 3 h while swap was full). "No CPU" means under 1 CPU s/min since the
+previous reap (`AGENTCTL_SBT_PROGRESS_CPU_PER_MIN`): an idle JVM's background threads burn 0.04-0.12 s/min, which
+defeated the earlier fixed 0.5 s tolerance so neither rule ever fired (`~/.cache/agentctl/sbt-cpu.json`; a
 `jcmd Thread.print` dump first, in `~/.cache/agentctl/sbt-dumps/`) -- never an
 owner merely on old code, which re-execs itself. Every kill is a line of `~/.cache/agentctl/reap.log`. The daily
 `sweep` reaps the sbt servers too.
@@ -1760,6 +1762,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `runners_page_cache` | `AGENTCTL_RUNNERS_PAGE_CACHE` | `f"{HOME}/.cache/ci-runners-page/last-good.json"` | - |
 | `sbt_idle_min` | `AGENTCTL_SBT_IDLE_MIN` | `120` | min a detached sbt server with no client may sit idle before the reaper ends it |
 | `sbt_idle_pressure_min` | `AGENTCTL_SBT_IDLE_PRESSURE_MIN` | `30` | that limit while swap free is under the floor |
+| `sbt_progress_cpu_per_min` | `AGENTCTL_SBT_PROGRESS_CPU_PER_MIN` | `1.0` | CPU s/min since the previous pass above which an sbt server counts as working |
 | `sbt_reap` | `AGENTCTL_SBT_REAP` | - | the tests never reap this machine's servers |
 | `sbt_stall_min` | `AGENTCTL_SBT_STALL_MIN` | `20` | - |
 | `scratch` | `AGENTCTL_SCRATCH` | - | - |

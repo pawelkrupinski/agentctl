@@ -54,6 +54,10 @@ def missing_tree_paths(text):
 # runs from ~/.cache/agentctl/sbt-cpu.json. A thread dump (jcmd Thread.print) is saved first, under
 # ~/.cache/agentctl/sbt-dumps/.
 SBT_STALL_MIN = 20
+# PROGRESS IS A RATE (2026-11-07, measured): idle server JVMs burn 0.04-0.12 CPU s/min in background threads, busy ones
+# 5-155 s/min. A fixed tolerance on the CPU total since idling began was crossed by that background burn within one
+# 15-min pass, so neither the stall nor the idle rule could ever fire; CPU since the previous pass is judged per minute.
+SBT_PROGRESS_CPU_PER_MIN = 1.0  # CPU s/min since the previous pass above which an sbt server counts as working
 # IDLE DETACHED SERVERS (2026-11-07): two lone servers (core-wt-red-822/824, -Xmx6000M each) sat idle for 3 h while
 # swap stood at 40.1/40.96 GB and every other build crawled; no rule matched them (one server per checkout, under the
 # hog CPU floor, no command running). A detached server (PPID 1) with no client and no CPU for SBT_IDLE_MIN is reaped,
@@ -105,10 +109,20 @@ def tree_cpu(pid, procs_cpu, children):
     return total
 
 
+def working(rec, cpu, now):
+    """Whether the server used CPU since the previous pass faster than an idle JVM does (or its pid was reused: less CPU
+    than before). A record from before 'at' existed is judged from 'since'."""
+    if cpu < rec.get("cpu", -1):
+        return True
+    minutes = max((now - rec.get("at", rec["since"])) / 60, 1 / 60)
+    return (cpu - rec["cpu"]) / minutes > env_num("AGENTCTL_SBT_PROGRESS_CPU_PER_MIN", SBT_PROGRESS_CPU_PER_MIN)
+
+
 def sbt_stuck_reasons(pid, cwd, cpu, clients, serving, state, now, ppid=None, kept=(), swap_free_mb=None):
     """Why the sbt server pid (checkout cwd, tree CPU seconds) is stuck: an orphaned serving command, a running
     command and no CPU for SBT_STALL_MIN, or (detached, ppid 1, not kept by sbt-warm) no client and no CPU for
-    SBT_IDLE_MIN (SBT_IDLE_PRESSURE_MIN under low swap). Updates state[pid] = {cpu, since}."""
+    SBT_IDLE_MIN (SBT_IDLE_PRESSURE_MIN under low swap); "no CPU" is under SBT_PROGRESS_CPU_PER_MIN since the
+    previous pass. Updates state[pid] = {cpu, at (that sample), since (idle from)}."""
     reasons = []
     serve = serving.get(cwd)
     if serve:
@@ -116,15 +130,15 @@ def sbt_stuck_reasons(pid, cwd, cpu, clients, serving, state, now, ppid=None, ke
         if not pid_alive(spid) or (owner and not pid_alive(owner)):
             reasons.append(f"serving `{cmd[:60]}` for {'sbt-warm pid ' + str(spid) if not pid_alive(spid) else 'owner pid ' + str(owner)}, which ended")
     rec = state.get(str(pid))
-    if not rec or abs(rec.get("cpu", -1) - cpu) > 0.5:
-        state[str(pid)] = {"cpu": cpu, "since": now}
-    elif clients.get(cwd):
-        mins = (now - rec["since"]) / 60
-        limit = env_num("AGENTCTL_SBT_STALL_MIN", SBT_STALL_MIN)
-        if mins >= limit:
+    if not rec or working(rec, cpu, now):
+        state[str(pid)] = {"cpu": cpu, "at": now, "since": now}
+        return reasons
+    rec.update(cpu=cpu, at=now)
+    mins = (now - rec["since"]) / 60
+    if clients.get(cwd):
+        if mins >= env_num("AGENTCTL_SBT_STALL_MIN", SBT_STALL_MIN):
             reasons.append(f"a command running (sbtn pid {clients[cwd][0]}) and no CPU for {int(mins)} min")
     elif ppid == 1 and cwd not in kept:
-        mins = (now - rec["since"]) / 60
         floor = env_num("AGENTCTL_SWAP_FREE_FLOOR_MB", SWAP_FREE_FLOOR_MB)
         pressed = swap_free_mb is not None and swap_free_mb < floor
         if pressed:

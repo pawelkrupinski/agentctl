@@ -67,6 +67,41 @@ class SbtReaperTest(unittest.TestCase):
         self.assertIsNone(A.parse_swap_free_mb(""))
         self.assertIsNone(A.parse_swap_free_mb("garbage"))
 
+    # 2026-11-07, measured: idle sbt server JVMs burn 0.04-0.12 CPU s/min (5 servers, 30 one-minute samples), busy ones
+    # 5-155 s/min. The 15-min maintain pass therefore saw ~1.5 s per pass from an idle server, over the old 0.5 s
+    # absolute tolerance, so "since" restarted on every pass and neither rule below could ever fire.
+    IDLE_PER_MIN, BUSY_PER_MIN, PASS = 0.1, 5.0, 15 * 60
+
+    def run_passes(self, minutes, per_min, **kwargs):
+        state, why, cpu = {}, [], 100.0
+        for t in range(0, minutes * 60 + 1, self.PASS):
+            why = A.sbt_stuck_reasons(7, "/wt", cpu + per_min * t / 60, kwargs.pop("clients", None) or self.clients,
+                                      {}, state, t, **kwargs)
+        return why
+
+    def test_real_idle_background_cpu_still_counts_as_idle_for_the_idle_rule(self):
+        self.clients = {}
+        why = self.run_passes(135, self.IDLE_PER_MIN, ppid=1, kept=set(), swap_free_mb=10_000)
+        self.assertEqual(len(why), 1, why)
+        self.assertIn("idle for 135 min", why[0])
+
+    def test_real_idle_background_cpu_still_counts_as_no_cpu_for_the_stall_rule(self):
+        self.clients = {"/wt": [42]}
+        why = self.run_passes(30, self.IDLE_PER_MIN)
+        self.assertEqual(len(why), 1, why)
+        self.assertIn("no CPU for 30 min", why[0])
+
+    def test_a_busy_server_is_never_idle(self):
+        for clients, kwargs in (({}, {"ppid": 1, "kept": set(), "swap_free_mb": 10_000}), ({"/wt": [42]}, {})):
+            self.clients = clients
+            self.assertEqual(self.run_passes(300, self.BUSY_PER_MIN, **kwargs), [])
+
+    def test_a_restarted_pid_with_less_cpu_starts_over(self):
+        state = {}
+        A.sbt_stuck_reasons(7, "/wt", 500.0, {}, {}, state, 0, ppid=1, kept=set(), swap_free_mb=10_000)
+        self.assertEqual(
+            A.sbt_stuck_reasons(7, "/wt", 3.0, {}, {}, state, 200 * 60, ppid=1, kept=set(), swap_free_mb=10_000), [])
+
     def test_a_serving_command_whose_owner_died_is_orphaned(self):
         serving = {"/wt": (os.getpid(), DEAD, "web/PageTest/runMain tools.FixtureServerMain")}
         why = A.sbt_stuck_reasons(7, "/wt", 1.0, {}, serving, {}, 0)
