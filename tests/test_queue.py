@@ -575,6 +575,8 @@ class FastPrecheckTest(QueueTest):
                     and "precheck" in (e.get("verdict") or "").lower()]
         self.assertEqual(len(verdicts), 1, verdicts)
         self.assertRegex(verdicts[0], rf"^PRECHECK REFUSED {eid} .*could not be cancelled.*land cancel {eid}")
+        e = next(e for e in A.inbox_entries() if e.get("verdict") == verdicts[0])
+        self.assertEqual(A.alert_audience(e), "author", "the author's to act on, like a NOT LANDED")
 
     def test_a_precheck_that_could_not_run_leaves_the_change_queued(self):
         wt, sha = self.agent_with_precheck("a", 2, "PRECHECK UNCHECKED: lints (300 s)")
