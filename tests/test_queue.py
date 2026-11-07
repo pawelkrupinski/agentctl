@@ -542,6 +542,40 @@ class FastPrecheckTest(QueueTest):
         self.assertRegex(verdicts[0]["verdict"], rf"^NOT LANDED: the fast precheck refused {eid}.*PRECHECK FAIL: lints")
         self.assertIn("precheck lints FAIL (3 s)", verdicts[0]["tail"])
 
+    def test_a_refusal_after_the_change_landed_never_says_not_landed(self):
+        """Review 2026-11-07: the precheck runs beside the queue, so the landing check can decide first. Its refusal
+        then cancels nothing -- `land cancel` finds no open change -- and must not tell the author NOT LANDED (and
+        "its queue entry is cancelled") for a change that LANDED."""
+        wt, _ = self.agent_with_precheck("a", 1, "PRECHECK FAIL: lints (3 s)")
+        eid, _ = self.queued(wt)
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual(len(self.pushed()), 1, "landed before the precheck ended")
+        rc, out = self.run_spawned(wt)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([e.get("verdict") for e in A.inbox_entries() if "fast precheck" in (e.get("verdict") or "")],
+                         [], "no NOT LANDED for a landed change")
+        self.assertIn("already decided", out)
+
+    def test_a_refusal_that_could_not_cancel_says_so_never_not_landed(self):
+        """The store unreachable: the change is still queued and its landing check still judges it -- the author is
+        told the precheck refused and how to drop it, never NOT LANDED."""
+        wt, _ = self.agent_with_precheck("a", 1, "PRECHECK FAIL: lints (3 s)")
+        eid, _ = self.queued(wt)
+        saved = A.cmd_waiting
+
+        def unreachable(a):
+            raise A.StoreUnavailable("POST /v1/changes: Connection refused")
+        A.cmd_waiting = unreachable
+        try:
+            rc, out = self.run_spawned(wt)
+        finally:
+            A.cmd_waiting = saved
+        self.assertEqual(rc, 1, out)
+        verdicts = [e["verdict"] for e in A.inbox_entries() if eid in (e.get("verdict") or "")
+                    and "precheck" in (e.get("verdict") or "").lower()]
+        self.assertEqual(len(verdicts), 1, verdicts)
+        self.assertRegex(verdicts[0], rf"^PRECHECK REFUSED {eid} .*could not be cancelled.*land cancel {eid}")
+
     def test_a_precheck_that_could_not_run_leaves_the_change_queued(self):
         wt, sha = self.agent_with_precheck("a", 2, "PRECHECK UNCHECKED: lints (300 s)")
         eid, _ = self.queued(wt)

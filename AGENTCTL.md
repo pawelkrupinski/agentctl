@@ -973,7 +973,9 @@ The owner: "agents never wait on a land". In movies (a repo whose hook can check
    a warm checkout -- and prints `fast precheck of <id> running alongside the queue (log ...)`. It adds nothing to
    land's time (the owner, 2026-11-06: landing must not take longer). A refusal (its exit 1) cancels the queued change
    and writes `NOT LANDED: the fast precheck refused <id> (<sha>): PRECHECK FAIL: <steps>` to the inbox, its lines in
-   the tail: fix and land again. Exit 0 or 2 (could not check: sbt never came up, a bound) leaves the change to the
+   the tail: fix and land again. A change its landing check decided first keeps that verdict (nothing to cancel, no
+   NOT LANDED); one the cancel cannot reach (the store unreachable) gets `PRECHECK REFUSED <id> ... could not be
+   cancelled` and is still judged by its landing check. Exit 0 or 2 (could not check: sbt never came up, a bound) leaves the change to the
    landing check. `--no-fast-precheck` starts none. Code: queue.py `start_fast_precheck` / `cmd_land_precheck`
    (the hidden `agentctl land-precheck`); tests: `tests/test_queue.py` FastPrecheckTest.
 

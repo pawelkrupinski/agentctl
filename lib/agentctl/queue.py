@@ -348,10 +348,21 @@ def cmd_land_precheck(a):
         return 0
     last = next((l for l in reversed(lines) if l.startswith("PRECHECK ")), lines[-1] if lines else "exit 1")
     cancel = argparse.Namespace(wcmd="cancel", repo=a.repo, entry=a.entry, renamed=True, hold_for=None, hold_why=None)
+    # NOT LANDED only when the cancel took: the landing check runs alongside and may have decided first (review
+    # 2026-11-07: a change that LANDED was told NOT LANDED, "its queue entry is cancelled").
     try:
-        cmd_waiting(cancel)
-    except (Exception, SystemExit) as e:  # already decided, or the store unreachable: the verdict still goes out
+        rc = cmd_waiting(cancel)
+    except (Exception, SystemExit) as e:  # the store unreachable: the change is still queued, its check judges it
         err(f"could not cancel {a.entry}: {e}")
+        verdict = (f"PRECHECK REFUSED {a.entry} ({a.head[:10]}): {last}; it could not be cancelled ({str(e)[:120]}), so "
+                   f"the landing check still judges it -- `agentctl land cancel {a.entry}` to drop it, fix it in {a.repo}")
+        inbox_write("land", verdict, [verdict], [l for l in lines if l.strip()][-40:], 1, cwd=a.repo)
+        print(verdict, flush=True)
+        return 1
+    if rc != 0:
+        print(f"the fast precheck refused {a.entry}, but it is already decided (no open change to cancel): its own "
+              "verdict stands", flush=True)
+        return 0
     verdict = (f"NOT LANDED: the fast precheck refused {a.entry} ({a.head[:10]}): {last}; its queue entry is cancelled. "
                f"Fix it in {a.repo}, then land again")
     inbox_write("land", verdict, [verdict], [l for l in lines if l.strip()][-40:], 1, cwd=a.repo)
