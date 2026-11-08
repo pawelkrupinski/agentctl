@@ -2451,7 +2451,7 @@ def red_wt_mark(wt):
 # THAT red within RED_JOIN_IDLE of joining -- a commit carrying its `Fixes-Red:` in the holder's worktree, a fix on its
 # way (the red's `fix`, or the red in fix-pending), a note on it (`red claim <it> --note` inside the fixer) -- it is
 # RELEASED (no attempt counted) and offered again, never joined to that holder again (`family_released`).
-RED_JOIN_IDLE = 30 * 60  # $AGENTCTL_RED_JOIN_IDLE (seconds)
+RED_JOIN_IDLE = 30 * 60  # s a red joined to its family holder's lease may go with no progress on it before it is released
 
 
 def red_joined_progress(store, row, why):

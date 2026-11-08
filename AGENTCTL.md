@@ -1770,6 +1770,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `red_fixer_wall` | `AGENTCTL_RED_FIXER_WALL` | `10800` | a dispatched fixer's maximum wall time |
 | `red_fix_giveup` | `AGENTCTL_RED_FIX_GIVEUP` | `21600` | - |
 | `red_fix_requeue_grace` | `AGENTCTL_RED_FIX_REQUEUE_GRACE` | `900` | $AGENTCTL_RED_FIX_REQUEUE_GRACE |
+| `red_join_idle` | `AGENTCTL_RED_JOIN_IDLE` | `1800` | s a red joined to its family holder's lease may go with no progress on it before it is released |
 | `red_old_run` | `AGENTCTL_RED_OLD_RUN` | `172800` | an outside red whose newest run is older than this is checked by a fresh run before it is fixed |
 | `red_orphan_grace` | `AGENTCTL_RED_ORPHAN_GRACE` | `300` | an ended session's turn still held this long is orphaned |
 | `red_others_every` | `AGENTCTL_RED_OTHERS_EVERY` | `60` | seconds between the other watched repos' red ticks: one gate read each |
