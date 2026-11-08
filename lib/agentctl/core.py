@@ -12,7 +12,7 @@ Examples:
   agentctl wait run 1976 1984 --repo movies --tail 12
 Exit: 0 all green, 1 any red/cancelled, 2 timeout. A waiter that vanished is taken over."""
 CI_WHY_HELP = """Why is main red? For movies: the newest DECIDED run on main (success/failure; cancelled and skipped say
-nothing) of exactly the two workflows the gate reads (the owner, 2026-10-27) -- Main and Identity model convergence;
+nothing) of exactly the three workflows the gate reads (the owner, 2026-10-27; Identity takes 2026-11-08) -- Main, Identity model convergence and Identity takes;
 every other red on main is listed after, as information only. Other repos: every workflow seen on main. For each red one: failed jobs, their relevant log lines, the commit
 and author, INFRA-SHAPED (setup-step failure, 0-length log, artifact already exists, ENOENT, ...) vs TEST FAILURE, and
 the gate's clearing rule (a later green run, or `Fixes-Red: <#number|run id>` on every production commit).

@@ -14,7 +14,7 @@ def main(argv=None):
     wr.add_argument("ids", nargs="+", metavar="ID", help="run ids (action_run.id); a leading repo name is accepted (legacy form)")
     wr.add_argument("--repo", "-R", help="o/r or short name (movies, core, infra, ...); default: the cwd's remote, else movies")
     wr.add_argument("--until", choices=("done", "landable"), default="done",
-                    help="landable: for an Identity model convergence measure/ run, stop once the takes rows end and print their verdict files")
+                    help="landable: for an Identity takes (or a --full measure's Identity model convergence) measure/ run, stop once the takes rows end and print their verdict files")
     wr.add_argument("--tail", type=int, default=8, metavar="N", help="relevant log lines (FAILED/error/assert) per failed job (default 8; 0 = none)")
     wf = wsub.add_parser("file", help="block until a file appears (and matches)")
     wf.add_argument("target")

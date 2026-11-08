@@ -5,10 +5,13 @@
 # The owner (2026-10-26): "whenever an agent pushed to main, make a script watch the corresponding convergence and main
 # build and tell the agent if it fails". With no pre-merge CI, main's CI is where a change is tested in full: land keeps
 # running after LANDED until Main and the convergence say green or red, so the agent (land in the background) hears it.
+# Every kind but `main` is a dispatched suite (pick_convergence_run): the convergence, kicked by Main, and Identity takes
+# (the takes rows split out of it, 2026-11-08), dispatched by the convergence's preflight.
 WATCH = {"pawelkrupinski/movies": {"main": ("Main", "main.yml"),
-                                   "convergence": ("Identity model convergence", "identity-model-convergence.yml")}}
+                                   "convergence": ("Identity model convergence", "identity-model-convergence.yml"),
+                                   "takes": ("Identity takes", "identity-takes.yml")}}
 WATCH_TIMEOUT = 3 * 3600          # either run undecided by then: exit 2, could not tell
-WATCH_CONV_START = 3600           # no convergence run containing the sha started by then: said, not waited for
+WATCH_CONV_START = 3600           # no convergence (or takes) run containing the sha started by then: said, not waited for
 WATCH_SLACK = 120                 # clock skew between the laptop and GitHub's createdAt
 WATCH_STALL_MIN = 120  # a watch with no change in its runs for this long ends WATCH STALLED
 UNDECIDED = ("cancelled", "skipped", "neutral", "")
@@ -129,7 +132,7 @@ def _watch(repo, sha, pushed_at, o_r, flows, own, fixes=()):
     def on_run(kind, run):
         name = flows[kind][0]
         if run is None:
-            print(f"convergence: none started within {int(conv_start // 60)} min of the push", flush=True)
+            print(f"{kind}: none started within {int(conv_start // 60)} min of the push", flush=True)
             return
         if (kind, run["databaseId"]) not in said:
             said.add((kind, run["databaseId"]))

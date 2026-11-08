@@ -1009,6 +1009,37 @@ class UnkickedTest(RedsBase):
         self.assertEqual([i["state"] for i in self.st.items("red") if i["data"]["job"] == "kick"], ["cleared"])
 
 
+    def test_a_relevant_main_push_with_a_convergence_run_but_no_identity_takes_run_is_a_red(self):
+        """2026-11-08: convergence's preflight dispatches Identity takes on the same ref: a run of convergence with none
+        of Identity takes since the push is its own unkicked red."""
+        takes = ("Identity takes", "identity-takes.yml")
+        self.put("runs.json", json.load(open(os.path.join(self.d, "runs.json"))) + [run(38, 18, *takes, self.sha)])
+        self.green(41, 21)
+        self.r.write(".github/convergence-paths.txt", "worker/**\n")
+        self.r.write(".github/actions/changed-paths/matches.sh",
+                     "#!/usr/bin/env bash\ngrep -q '^worker/' && echo true || echo false\n")
+        self.r.commit("the gate's files")
+        self.r.write("worker/x.scala", "x\n")
+        head = self.r.commit("a pipeline change")
+        self.r.push()
+        later = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 60))
+        runs = json.load(open(os.path.join(self.d, "runs.json")))
+        self.put("runs.json", [run(99, 30, "Identity model convergence", "identity-model-convergence.yml", head,
+                                   status="in_progress", created=later)] + runs)
+        os.environ["AGENTCTL_UNKICKED_AFTER"] = "0"
+        try:
+            self.tick()
+            its = [i for i in self.st.items("red") if i["data"]["job"] == "kick"]
+            self.assertEqual([(i["state"], i["data"]["workflow"]) for i in its], [("offered", "Identity takes")])
+            self.assertIn("convergence's preflight did not dispatch it", its[0]["data"]["line"])
+            self.put("runs.json", [run(98, 29, *takes, head, status="in_progress", created=later)]
+                     + json.load(open(os.path.join(self.d, "runs.json"))))
+            self.tick()
+        finally:
+            os.environ.pop("AGENTCTL_UNKICKED_AFTER")
+        self.assertEqual([i["state"] for i in self.st.items("red") if i["data"]["job"] == "kick"], ["cleared"])
+
+
 class SiblingTest(RedsBase):
     def test_a_red_appearing_in_a_run_its_fixer_holds_is_leased_to_that_fixer_and_ends_with_it(self):
         self.tick()

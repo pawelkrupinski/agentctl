@@ -636,7 +636,7 @@ def watch_look(repo, sha, o_r, flows, done, pushed_at, since, now_, on_run=None)
         runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30", "--json", RUN_FIELDS)
         run = pick_main_run(repo, sha, runs) if kind == "main" else pick_convergence_run(repo, sha, runs, pushed_at, o_r)
         if run is None:
-            if kind == "convergence" and now_ - float(since) >= conv_start:
+            if kind != "main" and now_ - float(since) >= conv_start:
                 done[kind] = (None, None)
                 if on_run:
                     on_run(kind, None)
@@ -666,7 +666,7 @@ def watch_verdict(o_r, sha, flows, done):
                          f"{r.get('number')}`)")
         return "red", "\n".join(lines), [(flows[k][0], r.get("number")) for k, r in reds]
     if len(done) == len(flows):
-        parts = [f"{flows[k][0].split()[0] if k == 'main' else 'convergence'} " +
+        parts = [f"{flows[k][0].split()[0] if k == 'main' else k} " +
                  (f"#{r.get('number')} green" if r else "none started") for k, (r, ok) in done.items()]
         return "ok", "WATCH OK: " + ", ".join(sorted(parts, key=lambda x: not x.startswith("Main"))), []
     return None

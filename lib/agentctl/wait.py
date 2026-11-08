@@ -5,7 +5,7 @@
 # gh prints a log's escapes as caret text (`^[[36;1m`) when it refuses raw ones: both are colours
 ANSI = re.compile(r"(?:\x1b|\^\[)\[[0-9;]*[A-Za-z]")
 LOG_TS = re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ")
-MEASURE_WORKFLOWS = {"Identity model convergence"}
+MEASURE_WORKFLOWS = {"Identity takes", "Identity model convergence"}  # takes rows: Identity takes (2026-11-08); a --full measure starts it from convergence
 # A STEP'S SCRIPT IS NO OUTPUT (2026-11-04): the runner echoes each `run:` step's script (cyan bold, `36;1m`) inside a
 # `##[group]Run <first line>` ... `##[endgroup]` header, with its shell and env, before running it. precommit-check.yml's
 # hook step holds `[ "$rc" != 124 ] || echo "::error::the pre-push checks ran past 80 minutes and were stopped"`, so
@@ -290,7 +290,8 @@ def run_verdict(o_r, run_id, until="done", tail=0):
     jobs = d.get("jobs") or []
     head = f"run {o_r}#{run_id}"
     if until == "landable" and is_measure_run(d):
-        takes = [j for j in jobs if j.get("name", "").startswith("takes")]
+        # Identity takes names its rows `leg (<cc>) / takes (<cc>)`: the job's own name (job_inner) after the caller's
+        takes = [j for j in jobs if job_inner(j.get("name", "")).startswith("takes")]
         if d.get("status") == "completed" or (takes and all(j.get("status") == "completed" for j in takes)):
             badj = [j for j in takes if j.get("conclusion") not in ("success", "skipped")]
             bad = [j["name"] for j in badj]

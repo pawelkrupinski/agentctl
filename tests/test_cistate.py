@@ -34,7 +34,7 @@ class SnapshotTest(RedBase):
         red, line = A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path)
         self.assertFalse(red)
         self.assertTrue(line.startswith("gate green · reds: Identity capture #2104 → offering"), line)
-        self.assertEqual([n for n, *_ in A.gate_from_snap(snap)], ["Main", "Identity model convergence"])
+        self.assertEqual([n for n, *_ in A.gate_from_snap(snap)], ["Main", "Identity model convergence", "Identity takes"])
         self.assertEqual([n for n, *_ in A.outside_from_snap(snap)], ["Identity capture"])
 
     def test_no_red_anywhere_says_no_reds(self):

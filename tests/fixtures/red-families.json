@@ -2,7 +2,7 @@
   "_doc": "The tests' red families (the harness's $AGENTCTL_RED_FAMILIES): convergence only, with no long-lived owner, so a test meets a per-red fixer unless it names an owner family of its own.",
   "families": [
     {"name": "convergence",
-     "workflows": ["Identity model convergence"],
+     "workflows": ["Identity model convergence", "Identity takes"],
      "jobs": ["^convergence\\b", "\\bconvergence \\("]}
   ]
 }

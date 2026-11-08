@@ -40,7 +40,7 @@ BLAME_MAX = 90 * 60              # s a red may wait for its culprit to be decide
 BLAME_PROBES = 4                 # CI probes one red's culprit search may start ($AGENTCTL_BLAME_PROBES)
 BLAME_PROBE_WALL = 2 * 3600      # s one probe may run before it is no verdict ($AGENTCTL_BLAME_PROBE_WALL)
 BLAME_RANGE_MAX = 200            # commits a red's range may hold to be searched at all
-CONVERGENCE_FLOW = "Identity model convergence"
+CONVERGENCE_FLOWS = {"Identity model convergence", "Identity takes"}  # the drift rows moved to Identity takes (2026-11-08)
 # A drift row's job name as GitHub lists it: `leg (united-kingdom) / takes-drift-2 (united-kingdom)` (a reusable call's
 # inner job, prefixed by its caller), or bare `takes-drift-2 (united-kingdom)` -- read like movies'
 # scripts/ci/convergence_reuse.py jobs_by_name (the inner name after ` / `). 2026-11-01: `^takes-drift` missed the
@@ -84,7 +84,7 @@ def blame_kind(o_r, d):
     very commit), or None (no CI check repeats this red: a convergence leg other than drift, whose pinned pair rotates
     nightly)."""
     jobs = [str(j) for j in d.get("jobs") or [d.get("job")] if j]
-    if d.get("workflow") == CONVERGENCE_FLOW:
+    if d.get("workflow") in CONVERGENCE_FLOWS:
         return "drift" if jobs and all(is_drift_job(j) for j in jobs) else None
     return "checks" if o_r == RED_PRIMARY else "run"
 
@@ -192,7 +192,7 @@ def blame_free(o_r, d, b, i, runs):
     -- pass on success; None when no such run exists, and ALWAYS None for a convergence red: its drift seeds rotate per
     run (a green run on other seeds is never evidence, #628 for #629) and its other legs' pinned pairs rotate nightly.
     Only a re-run with the red's own seeds forced (probe_drift) judges a convergence boundary."""
-    if b.get("kind") not in ("run", "checks") or d.get("workflow") == CONVERGENCE_FLOW:
+    if b.get("kind") not in ("run", "checks") or d.get("workflow") in CONVERGENCE_FLOWS:
         return None
     sha = blame_boundary(b, i)
     for r in runs or []:
@@ -252,7 +252,7 @@ def blame_unproven(d, b):
     passes ONLY on a drift probe that replayed the red's own seeds, each row's verdict line naming the seed it pinned
     (probe_drift: `seeds: True`); anything else -- a green run on rotating seeds, an unknown kind -- leaves the culprit
     undetermined: the normal fixer, never a revert."""
-    if d.get("workflow") != CONVERGENCE_FLOW:
+    if d.get("workflow") not in CONVERGENCE_FLOWS:
         return None
     if b.get("kind") != "drift":
         return "no CI check repeats this red with its own seeds (not a takes-drift row): the culprit is undetermined"

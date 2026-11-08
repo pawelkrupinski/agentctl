@@ -147,6 +147,19 @@ class DriftTest(BlameBase):
         b = self.blame()
         self.assertEqual((b["state"], b["groups"][b["culprit"]]["change"]), ("confirmed", "ch-d"))
 
+    def test_an_identity_takes_drift_red_is_judged_like_a_convergence_one(self):
+        """2026-11-08: the takes-drift rows moved to Identity takes: its drift red is probed with the red run's own
+        seeds (never precommit-check), and a parent passing on them blames the change."""
+        g = self.sha
+        h = self.land("d", {"identity/x.scala": "x\n"})
+        self.red_at(g, h, wf="Identity takes", wfile="identity-takes.yml", job=DRIFT_JOB, line=DRIFT_LINE)
+        self.verdicts[g] = "pass"
+        self.tick()
+        self.assertEqual(self.probed, [("drift", g)])
+        self.tick()
+        b = self.blame()
+        self.assertEqual((b["state"], b["groups"][b["culprit"]]["change"]), ("confirmed", "ch-d"))
+
     def test_while_the_culprit_is_decided_no_fixer_is_dispatched_and_the_offer_says_why(self):
         g = self.sha
         h = self.land("d", {"identity/x.scala": "x\n"})

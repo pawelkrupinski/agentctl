@@ -4,9 +4,12 @@
 # ---------------------------------------------------------------- ci-why
 # Exactly the workflows movies' scripts/hooks/pre-push check_redgate reads (GatingWorkflows / GatingWorkflowFiles).
 # THE GATE (the owner, 2026-10-27: "if the latest main and convergence runs are green, just push then, remember that"):
-# exactly the newest decided Main run and the newest decided Identity model convergence run on main. Verify scrape
-# recording no longer gates; ci-why lists it, and every other red, as information only.
-GATING = {"pawelkrupinski/movies": [("Main", "main.yml"), ("Identity model convergence", "identity-model-convergence.yml")]}
+# exactly the newest decided Main run and the newest decided Identity model convergence run on main -- and, since the
+# owner's 2026-11-08 split of convergence's takes rows into their own workflow, the newest decided Identity takes run
+# (dispatched by convergence's preflight on the same ref). Verify scrape recording no longer gates; ci-why lists it, and
+# every other red, as information only.
+GATING = {"pawelkrupinski/movies": [("Main", "main.yml"), ("Identity model convergence", "identity-model-convergence.yml"),
+                                    ("Identity takes", "identity-takes.yml")]}
 
 # THE WATCHED REPOS (the owner, 2026-10-30, ci-failures recommendation 4: infra's Stage NixOS closures was red 29 h and
 # core's Main Pipeline 21 h with no fixer, because the red tick read movies only). Which repos the red machine watches
@@ -187,11 +190,13 @@ def job_is_phantom(j):
 _gate_lists, _outside_lists = process_cache({}), process_cache({})  # workflow -> the runs on main gate_runs / outside_gate last listed (newest first)
 
 # AN INCOMPLETE RUN IS NO VERDICT (movies 4da98c308, 2026-10-30: convergence's `verdict complete` job fails a main run
-# whose takes or takes-drift rows were skipped, cancelled or missing -- "no false green"). A failed run whose ONLY real
+# whose takes or takes-drift rows were skipped, cancelled or missing -- "no false green"; since 2026-11-08 the job lives
+# in Identity takes, with the rows, and a drift-only explorer dispatch on main fails only it, by design). A failed run whose ONLY real
 # failure (jobs that never started aside) is that job decided nothing: like a cancelled run it says nothing to the gate -- no
 # red, no streak, no fixer -- and ci-why names it NO VERDICT. Recovery is the next complete run.
 VERDICT_COMPLETE_JOB = re.compile(r"(^|/\s*)verdict complete$")
-NO_VERDICT_FLOWS = {"Identity model convergence"}  # the workflows with a `verdict complete` job (only they are read)
+# the workflows with a `verdict complete` job (only they are read): Identity takes; convergence for its runs before the split
+NO_VERDICT_FLOWS = {"Identity takes", "Identity model convergence"}
 _gate_no_verdict = process_cache({})  # workflow -> its newest no-verdict run newer than its decided one (gate_runs), or None
 _no_verdict_mem = process_cache({})
 

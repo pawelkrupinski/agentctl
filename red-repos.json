@@ -3,7 +3,8 @@
   "repos": [
     {"repo": "pawelkrupinski/movies",
      "clone": "~/projects/movies",
-     "gate": [["Main", "main.yml"], ["Identity model convergence", "identity-model-convergence.yml"]],
+     "gate": [["Main", "main.yml"], ["Identity model convergence", "identity-model-convergence.yml"],
+              ["Identity takes", "identity-takes.yml"]],
      "push": "land"},
     {"repo": "bitcashier/infra",
      "clone": "~/bitcashier/infra",

@@ -274,7 +274,8 @@ agentctl wait run <id>... [--repo R] [--until done|landable] [--tail N] [--inter
   still works.
 - `--repo`: `o/r` or a short name (`movies`, `core`, `infra`, `dashboard`, `invoice-page`, `version-dashboard`).
   Default: the cwd's remote, else movies.
-- `--until landable`: for an *Identity model convergence* run on a `measure/` branch, stop as soon as every
+- `--until landable`: for an *Identity takes* run on a `measure/` branch (scripts/identity-measure dispatches it
+  directly since 2026-11-08; a `--full` measure's *Identity model convergence* run too), stop as soon as every
   `takes (<country>)` row has ended, not when the run's slow tail ends. It then prints each
   `identity-takes-<cc>/verdict.txt` and the collect command. For any other run it behaves like `done`.
 - `--tail N`: the last N relevant lines of each failed job (default 8). The per-step slices can be shifted a few lines off the stored log, so when a failed job's slice has no relevant line, agentctl reads the whole job log (`--log --job <id>`), `::error` annotations first. `ci-why` does the same. Strong markers (`*** FAILED ***` plus the 2
@@ -318,7 +319,9 @@ agentctl ci-why [main|<run id>] [--repo R] [--tail N]
 ```
 
 For movies it reads exactly THE GATE (the owner, 2026-10-27: "if the latest main and convergence runs are green, just
-push then"): *Main* and *Identity model convergence*, the same two the pre-push red gate (`check_redgate`), land's
+push then"): *Main*, *Identity model convergence* and -- since the owner's 2026-11-08 split of convergence's takes
+rows into their own workflow, dispatched by convergence's preflight -- *Identity takes*, the same three the pre-push
+red gate (`check_redgate`), land's
 red/green branch and the `waiting` processor read. Verify scrape recording no longer gates. For each, it takes the newest decided run on main
 (success or failure; cancelled and skipped runs are passed over). For other repos it reads every workflow seen on
 main. For each red run it shows:
@@ -329,7 +332,7 @@ main. For each red run it shows:
   - `TEST FAILURE`;
   - `INFRA-SHAPED`, with the `rerun --failed` command. Covers failures in a setup step, a 0-length log,
     `artifact already exists`, ENOENT, docker, disk or connection errors;
-  - `NO VERDICT`, when convergence's `verdict complete` is the run's only real failure (a takes or takes-drift row
+  - `NO VERDICT`, when `verdict complete` (Identity takes'; convergence's before the split) is the run's only real failure (a takes or takes-drift row
     was skipped, cancelled or missing): reporting, not a test failure -- no red, no streak, no fixer; the gate reads
     the newest complete run. Beside another failed job, `verdict complete` is an `[incomplete]` row with no verdict of
     its own: the run's verdict and its reds are the other jobs' (an infra leg stays `INFRA-SHAPED`);
@@ -500,7 +503,7 @@ the red machine watches, each with its gate workflows, its `family` and its `pus
 
 | repo | gate | family | push |
 |---|---|---|---|
-| pawelkrupinski/movies (the primary) | Main, Identity model convergence | red-families.json | land |
+| pawelkrupinski/movies (the primary) | Main, Identity model convergence, Identity takes | red-families.json | land |
 | bitcashier/infra | Stage NixOS closures | infra-repo | **owner-only** |
 | bitcashier/core | Main Pipeline | core-repo | land |
 
@@ -606,7 +609,7 @@ agent must be assigned to it".
   (`$AGENTCTL_RED_FIXER_WALL`). A red still failing after 2 dispatched fixers: one `RED ESCALATE` entry, never
   dispatched again. Every decision is a line of `~/.cache/agentctl/reds/dispatch.log` with its reason.
 - **One fixer per red family; continuity; land as you go (2026-10-29).** `~/bin/red-families.json` names families
-  (convergence: the Identity model convergence workflow; a non-gate `convergence (<cc>)` job is outside-gate's): while a family's fixer is at
+  (convergence: the Identity model convergence and Identity takes workflows; a non-gate `convergence (<cc>)` job is outside-gate's): while a family's fixer is at
   work, a new red of it goes under its lease (`[family convergence]` in `red status` and on the status page) and a line
   in its worktree's `RED-INBOX.md` tells it. A live fixer stays its reds' holder (its lease is taken again for it if it
   lapsed); no second fixer while a previous one of the red, its run or its family works, and a new one goes on in the
@@ -621,8 +624,8 @@ agent must be assigned to it".
   `red status`, `status --line` and the status page, never "blocked by gate" that same red (2026-10-29 19:20).
 - **EVERY RED OUTSIDE THE GATE TO ONE AGENT (the owner, 2026-11-07: "move all these to single agent"; Identity rule
   ablation #1, Identity family explorer #5 and Order independence #46 had spawned three fixers).** A family with
-  `"outside_gate": true` matches a red whose workflow is not one the gate reads -- `red_gate_flows` (GATING: Main and
-  Identity model convergence; another repo's red-repos.json `gate`), the same set ci-why's "Outside the gate" leaves out,
+  `"outside_gate": true` matches a red whose workflow is not one the gate reads -- `red_gate_flows` (GATING: Main,
+  Identity model convergence and Identity takes; another repo's red-repos.json `gate`), the same set ci-why's "Outside the gate" leaves out,
   never a list of its own; the Local checks count as the gate's. The family `outside-gate` (owner) comes FIRST:
   a Verify scrape recording `convergence (<cc>)` job is its too, and an infra-shaped red of a non-gating workflow (an
   explorer OOM-killed, exit 137); it matches only workflows the gate does not read, so Main's and Identity model
@@ -1062,9 +1065,10 @@ The reconciler then takes it, a step per tick:
   lands at once; a lone identity change red on a second run too is rejected with the drift report.
 - **The watch.** A `watch` item per landed sha, evaluated each minute by the tick: **Main** (the main.yml run whose
   head is the sha, else the newest whose head contains it) and the **convergence** (the first convergence run on main
-  created after the push whose head contains it; none within 60 min: said, not waited for). `WATCH OK: Main #n green,
-  convergence #m green` closes the worktree you landed from when proven merged (unless `--keep-worktree`); `WATCH RED:
-  <workflow> #n <failed jobs>` the moment either is red (fix forward with `Fixes-Red: <n>`); `WATCH UNKNOWN` after
+  created after the push whose head contains it; none within 60 min: said, not waited for) and **Identity takes**
+  (picked like the convergence: convergence's preflight dispatches it, 2026-11-08). `WATCH OK: Main #n green,
+  convergence #m green, takes #k green` closes the worktree you landed from when proven merged (unless
+  `--keep-worktree`); `WATCH RED: <workflow> #n <failed jobs>` the moment any is red (fix forward with `Fixes-Red: <n>`); `WATCH UNKNOWN` after
   3 h undecided. A landed `Fixes-Red: N` is verified: `FIX OK` / `FIX FAILED` / `FIX UNVERIFIED`, each an inbox entry;
   a fix for a red outside the gate gets its workflow dispatched on main to verify it, with the failing run's own inputs (a required input left out is refused: Archive recording #823).
 
@@ -1821,7 +1825,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `tick` | `AGENTCTL_TICK` | `5` | seconds between ticks ; every step is bounded or rate-limited inside |
 | `token_summary` | `AGENTCTL_TOKEN_SUMMARY` | `600` | s between the summaries of a still-missing token (said on its transition first) |
 | `tunnel_state` | `AGENTCTL_TUNNEL_STATE` | - | - |
-| `unkicked_after` | `AGENTCTL_UNKICKED_AFTER` | `3600` | a convergence-relevant main push with no convergence run on main by then is a red |
+| `unkicked_after` | `AGENTCTL_UNKICKED_AFTER` | `3600` | a convergence-relevant main push with no convergence (or Identity takes) run on main by then is a red |
 | `upkeep_every` | `AGENTCTL_UPKEEP_EVERY` | `3600` | - |
 | `w1_max` | `AGENTCTL_W1_MAX` | `7200` | the oldest unlanded change ; while main is red, counted from the red's start |
 | `w2_max` | `AGENTCTL_W2_MAX` | `600` | a gate red with nobody on it |
@@ -1832,7 +1836,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `waiting_green_ticks` | `AGENTCTL_WAITING_GREEN_TICKS` | `100` | ticks (~10 min) changes may wait at a green gate with no batch moving: then STALLED |
 | `waiting_timeout` | `AGENTCTL_WAITING_TIMEOUT` | `86400` | - |
 | `watchdog_misses` | `AGENTCTL_WATCHDOG_MISSES` | `2` | consecutive passes a self-healing invariant (W5, WM, W7) fails before its condition opens |
-| `watch_conv_start` | `AGENTCTL_WATCH_CONV_START` | `3600` | no convergence run containing the sha started by then: said, not waited for |
+| `watch_conv_start` | `AGENTCTL_WATCH_CONV_START` | `3600` | no convergence (or takes) run containing the sha started by then: said, not waited for |
 | `watch_error_poll` | `AGENTCTL_WATCH_ERROR_POLL` | `30` | - |
 | `watch_poll` | `AGENTCTL_WATCH_POLL` | `60` | - |
 | `watch_stall_min` | `AGENTCTL_WATCH_STALL_MIN` | `120` | a watch with no change in its runs for this long ends WATCH STALLED |

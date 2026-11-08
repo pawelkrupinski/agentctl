@@ -134,6 +134,19 @@ class WaitRunTest(FakeForge):
         rc, out, _ = self.tool("wait", "run", "9", "--repo", "movies", "--timeout", "1")
         self.assertEqual(rc, 2, out)
 
+    def test_landable_stops_when_an_identity_takes_measure_runs_takes_rows_end(self):
+        """2026-11-08: the takes rows moved to Identity takes; scripts/identity-measure dispatches it directly."""
+        jobs = [job("preflight"), job("leg (poland) / takes (poland)"), job("verdict complete", "queued"),
+                job("timings", "queued")]
+        self.run_json(12, "in_progress", jobs=jobs, workflow="Identity takes", branch="measure/pawel/abc-2")
+        self.put("api-repos_pawelkrupinski_movies_actions_runs_12_artifacts.json",
+                 {"artifacts": [{"name": "identity-takes-pl"}]})
+        self.put("art-12-identity-takes-pl.txt", "identity takes (pl): lost 0, changed 0, gained 0")
+        rc, out, _ = self.tool("wait", "run", "12", "--repo", "movies", "--until", "landable", "--timeout", "5")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("takes rows ended (1): all green", out)
+        self.assertIn("[identity-takes-pl] identity takes (pl): lost 0", out)
+
     def test_landable_on_an_ordinary_run_waits_for_completion(self):
         self.run_json(10, "in_progress", jobs=[job("takes (poland)")], workflow="Main", branch="main")
         rc, out, _ = self.tool("wait", "run", "10", "--until", "landable", "--timeout", "1")

@@ -24,13 +24,15 @@ class WatchTest(Base):
         self.saved = A.gh_json, A.ci_why, A.time.sleep
         A.time.sleep = lambda s: None
         A.ci_why = lambda o_r, tail=6, run_id=None, repo=None: (True, "ci-why: main is RED for the gate")
-        self.main, self.conv, self.jobs = [], [], {}
+        self.main, self.conv, self.takes, self.jobs = [], [], None, {}
         self.listed = []
 
         def gh_json(o_r, *args):
             if args[:2] == ("run", "list"):
                 wfile = args[args.index("--workflow") + 1]
                 self.listed.append(wfile)
+                if wfile == "identity-takes.yml" and self.takes is not None:
+                    return list(self.takes)
                 return list(self.main if wfile == "main.yml" else self.conv)
             if args[:2] == ("run", "view"):
                 return {"jobs": self.jobs.get(int(args[2]), [])}
@@ -84,6 +86,22 @@ class WatchTest(Base):
         rc, out = self.watch()
         self.assertEqual(rc, 3, out)
         self.assertIn("WATCH RED: Identity model convergence #21 takes (poland)", out)
+
+    def test_identity_takes_is_watched_like_the_convergence(self):
+        """2026-11-08: the takes rows moved to Identity takes (dispatched by convergence's preflight), a gate workflow:
+        the watch follows its FIRST run after the push containing the sha, and a red one is a WATCH RED."""
+        self.main = [run(11, self.sha)]
+        self.conv = [run(21, self.sha)]
+        self.takes = [run(31, self.sha)]
+        rc, out = self.watch()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("WATCH OK: Main #11 green, convergence #21 green, takes #31 green", out)
+        self.assertIn("identity-takes.yml", self.listed)
+        self.takes = [run(32, self.sha, conclusion="failure")]
+        self.jobs[32] = [{"name": "leg (poland) / takes-drift-1 (poland)", "conclusion": "failure"}]
+        rc, out = self.watch()
+        self.assertEqual(rc, 3, out)
+        self.assertIn("WATCH RED: Identity takes #32 leg (poland) / takes-drift-1 (poland)", out)
 
     def test_superseded_main_run_follows_the_newest_run_containing_the_sha(self):
         # the sha's own run cancelled by a newer push; an older red run that does NOT contain it is not blamed

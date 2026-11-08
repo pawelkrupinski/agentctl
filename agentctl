@@ -5,13 +5,13 @@
         Blocks on GitHub's actions API (backoff 60 s -> x1.5 -> cap 300 s) and prints ONLY the verdict per run:
         `run <o/r>#<id>: <conclusion>[; failed: job, ...]` plus each failed job's last N relevant log lines
         (FAILED / error / assert). ONE waiter per run (lock in the scratchpad); a second call attaches to the live
-        waiter's verdict file instead of polling. --until landable: an Identity model convergence measure/ run is
+        waiter's verdict file instead of polling. --until landable: an Identity takes (or --full convergence) measure/ run is
         done once its takes rows end; prints their verdict.txt files. Exit 0 all green, 1 any red, 2 timeout.
         AGENTS: start it with run_in_background=true and END YOUR TURN; never loop/sleep in the foreground.
   agentctl wait file <path> [--contains REGEX] [--interval S] [--timeout S]
         Same, for a file appearing (and containing REGEX).
   agentctl ci-why [main|<run id>] [--repo R] [--tail N]
-        Why main is red: the red gate's two workflows (movies: Main, convergence), their newest decided runs, failed jobs + log lines,
+        Why main is red: the red gate's three workflows (movies: Main, convergence, Identity takes), their newest decided runs, failed jobs + log lines,
         commit/author, INFRA-SHAPED vs TEST FAILURE, and the clearing rule (later green run / Fixes-Red:). Exit 1 red.
   agentctl land [--repo PATH] [--branch B] [--stash]
         fetch, rebase onto <remote>/main, prepush-check, push (the hook runs, sdkman sbt/java on PATH), retry push races

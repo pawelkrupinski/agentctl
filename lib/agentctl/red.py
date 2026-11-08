@@ -421,9 +421,12 @@ def queue_full(o_r, number, q):
     return "queued: " + "; ".join(says)
 
 
-UNKICKED_AFTER = 60 * 60  # a convergence-relevant main push with no convergence run on main by then is a red
-UNKICKED = {"pawelkrupinski/movies": ("Identity model convergence", ".github/convergence-paths.txt",
-                                      ".github/actions/changed-paths/matches.sh")}
+UNKICKED_AFTER = 60 * 60  # a convergence-relevant main push with no convergence (or Identity takes) run on main by then is a red
+# (suite, its paths, their matcher, who dispatches it): Main kicks the convergence when the paths change, and the
+# convergence's preflight dispatches Identity takes (its takes rows, split out 2026-11-08) under the same condition
+CONVERGENCE_PATHS = (".github/convergence-paths.txt", ".github/actions/changed-paths/matches.sh")
+UNKICKED = {"pawelkrupinski/movies": [("Identity model convergence", *CONVERGENCE_PATHS, "Main's kick-convergence"),
+                                      ("Identity takes", *CONVERGENCE_PATHS, "convergence's preflight")]}
 
 
 def convergence_relevant(repo, base, head, paths_file, matcher):
@@ -454,37 +457,46 @@ def convergence_relevant(repo, base, head, paths_file, matcher):
 def unkicked_obs(o_r, repo, snap, now_=None):
     """THE MISSING RUN IS A RED (2026-10-28: main had no convergence run for six hours while its kick diffed against a
     measurement's run): origin/main's head, when it touches the suite's paths since the suite's newest MAIN run and is
-    older than UNKICKED_AFTER, with no main run of the suite started since it, is an infra red until one runs."""
-    spec = UNKICKED.get(o_r)
-    if not spec or not repo or not snap:
-        return {}
-    name, paths_file, matcher = spec
+    older than UNKICKED_AFTER, with no main run of the suite started since it, is an infra red until one runs. Each
+    suite of UNKICKED is judged alone."""
+    units = []
+    for spec in UNKICKED.get(o_r) or []:
+        u = unkicked_unit(repo, snap, now_, *spec)
+        if u:
+            units.append(u)
+    return red_obs_of_units(units) if units else {}
+
+
+def unkicked_unit(repo, snap, now_, name, paths_file, matcher, kicker):
+    """unkicked_obs's red unit for one suite, or None."""
+    if not repo or not snap:
+        return None
     runs = next((g.get("runs") or [] for g in snap.get("gate") or [] if g["name"] == name), [])
     if not runs:
-        return {}
+        return None
     head = git(repo, "rev-parse", f"refs/remotes/{remote()}/main", check=False).stdout.strip()
     ct = git(repo, "log", "-1", "--format=%ct", head, check=False).stdout.strip() if head else ""
     if not head or not ct.isdigit():
-        return {}
+        return None
     t = now_ if now_ is not None else time.time()
     if t - float(ct) < env_num("AGENTCTL_UNKICKED_AFTER", UNKICKED_AFTER):
-        return {}
+        return None
     newest = runs[0]
     try:
         if parse_time(newest.get("createdAt")).timestamp() >= float(ct):
-            return {}  # a run started since the push: kicked
+            return None  # a run started since the push: kicked
     except (ValueError, TypeError, AttributeError):
-        return {}
+        return None
     base = newest.get("headSha")
     if not base or not git_ok(repo, "cat-file", "-e", f"{base}^{{commit}}") \
             or convergence_relevant(repo, base, head, paths_file, matcher) is not True:
-        return {}
+        return None
     u = {"key": red_key(name, "kick", "convergence not kicked"), "workflow": name, "job": "kick", "kind": "infra",
          "red_kind": "stuck-run", "gate": True,
          "line": f"no {name} run on main for {head[:10]} ({fmt_age(t - float(ct))} after it; the newest is "
-                 f"#{newest.get('number')} on {str(base)[:10]}): Main's kick-convergence did not dispatch it",
+                 f"#{newest.get('number')} on {str(base)[:10]}): {kicker} did not dispatch it",
          "run": {"number": f"unkicked-{head[:10]}", "databaseId": None, "headSha": head}, "runs": [], "names": set()}
-    return red_obs_of_units([u])
+    return u
 
 
 def red_observe(o_r, repo, snap):
@@ -1047,7 +1059,7 @@ def red_family(d):
 
 def red_outside_gate(d):
     """A red of a workflow THE GATE does not read (the owner, 2026-11-07: "move all these to single agent"): the repo's
-    gate is red_gate_flows (GATING for movies: Main, Identity model convergence -- the set ci-why's "Outside the gate"
+    gate is red_gate_flows (GATING for movies: Main, Identity model convergence, Identity takes -- the set ci-why's "Outside the gate"
     leaves out); the local checks are the landing gate's own, never outside it. No workflow named: cannot tell, no."""
     wf = d.get("workflow")
     return bool(wf) and wf != LOCAL_FLOW and wf not in {n for n, _f in red_gate_flows(red_repo_of(d))}

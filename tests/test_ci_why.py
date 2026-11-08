@@ -1,4 +1,4 @@
-"""agentctl ci-why: the gate's two workflows (Main, convergence), newest decided run, infra vs test, the clearing rule."""
+"""agentctl ci-why: the gate's three workflows (Main, convergence, Identity takes), newest decided run, infra vs test, the clearing rule."""
 import contextlib, io, os, subprocess, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -374,6 +374,36 @@ class CiWhyTest(FakeForge):
             self.assertEqual(A.gate_reds("/any"), set(), "land and the processor read the same gate")
         finally:
             A.slug = saved
+
+    def test_identity_takes_gates_like_main_and_convergence(self):
+        """The owner, 2026-11-08: convergence's takes rows moved to their own workflow, Identity takes, which gates on
+        main exactly like Main and convergence; its `verdict complete` job (moved from convergence) still says NO VERDICT
+        for a run whose only failure it is (a drift-only explorer dispatch on main fails just that, by design)."""
+        takes = ("Identity takes", "identity-takes.yml")
+        self.assertEqual([n for n, _f in A.GATING["pawelkrupinski/movies"]],
+                         ["Main", "Identity model convergence", "Identity takes"])
+        self.put("runs.json", [run(40, 20, "Main", "main.yml"), run(39, 19, "Identity model convergence", "identity-model-convergence.yml"),
+                               run(37, 17, *takes, conclusion="failure")])
+        self.put("run-37.json", {"jobs": [job("preflight"), {**job("takes (poland)", conclusion="failure"),
+                                                             "steps": [step("Set up job", "success"), step("Check takes", "failure")]}],
+                                 "headSha": SHA, "url": "http://f/runs/17", "number": 17, "status": "completed", "conclusion": "failure"})
+        self.put("run-37.log", "takes (poland)\tCheck takes\t2026-10-23T10:00:00Z [info] - a take *** FAILED ***\n")
+        rc, out, _ = self.why()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("Identity takes: RED (run 37 #17, failure; red for ", out.partition("Outside the gate")[0])
+        self.assertIn("verdict: TEST FAILURE", out)
+        incomplete = [job("preflight"), job("takes-drift-1 (poland)", conclusion="cancelled"),
+                      {**job("verdict complete", conclusion="failure"), "startedAt": "2026-11-08T03:00:00Z",
+                       "steps": [step("Set up job", "success"), step("Did every takes and takes-drift row decide?", "failure")]}]
+        self.put("runs.json", [run(40, 20, "Main", "main.yml"), run(39, 19, "Identity model convergence", "identity-model-convergence.yml"),
+                               run(38, 18, *takes, conclusion="failure"), run(36, 16, *takes)])
+        self.put("run-38.json", {"jobs": incomplete, "headSha": SHA, "url": "http://f/runs/18", "number": 18,
+                                 "status": "completed", "conclusion": "failure"})
+        self.put("run-38.log", "")
+        rc, out, _ = self.why()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Identity takes: GREEN (run 36 #16)", out)
+        self.assertIn("newest run 38 #18: NO VERDICT", out)
 
     def test_all_green(self):
         self.put("runs.json", [run(40, 20, "Main", "main.yml"), run(39, 19, "Identity model convergence", "identity-model-convergence.yml"),
