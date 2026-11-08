@@ -220,6 +220,23 @@ class CiWhyTest(FakeForge):
         finally:
             A.Store = saved_store
 
+    def test_a_gating_workflow_not_on_main_yet_gates_nothing_and_the_rest_is_read(self):
+        # 2026-11-08 16:35-18:10: agentctl's GATING named identity-takes.yml before the movies commit adding it reached
+        # main; GitHub answered every list of it with a 404, the whole gate read failed, the status line said
+        # `gate UNREAD (as of 16:44)` and every production landing waited on an unread (taken-as-red) gate for 1.5 h
+        self.put("workflows-absent", "identity-takes.yml\n")
+        self.put("runs.json", [run(91, 41, "Main", "main.yml", conclusion="failure"),
+                               run(90, 40, "Identity model convergence", "identity-model-convergence.yml")])
+        saved, A.slug = A.slug, lambda repo: "pawelkrupinski/movies"
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(A.gate_reds("/any"), {"41", "91"})
+                gate = {n: d for n, d, _nw, _s in A.gate_runs("pawelkrupinski/movies")}
+        finally:
+            A.slug = saved
+        self.assertIsNone(gate["Identity takes"], "no run on main: it decides nothing")
+        self.assertEqual(gate["Main"]["number"], 41)
+
     def test_an_unread_gate_is_never_green(self):
         # 08:05Z 10-27: a launchd processor with no token read the gate as green and pushed onto red Main #2047
         saved = A.slug, A.gh_json

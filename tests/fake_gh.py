@@ -4,7 +4,9 @@
   run view <id> --log --job <j> -> run-<id>-job-<j>.log
   run download <id> -n <a> -D <dir> -> art-<id>-<a>.txt copied to <dir>/verdict.txt
   run list [--workflow W] [--branch B] ... -> runs.json filtered (W matches workflowName or the workflow file);
-                               runs-<owner>_<repo>.json instead when it exists for -R <owner>/<repo>
+                               runs-<owner>_<repo>.json instead when it exists for -R <owner>/<repo>;
+                               a W listed in workflows-absent (one per line) -> GitHub's 404 for a workflow file
+                               not on the default branch
   api [-X M] [-H h] [-i] <path>   GET -> api-<path with /?&= as _>.json (GitHub's REST shapes); missing -> `HTTP 404`;
                              -i: headers first, an ETag per body, and a 304 for a matching If-None-Match;
                              any other method -> recorded (its --input body as `<pid> BODY <json>`), answers nothing
@@ -108,6 +110,11 @@ elif argv[:2] == ["run", "list"]:
     per_repo = os.path.join(d, f"runs-{repo.replace('/', '_')}.json") if repo else None
     runs = json.load(open(per_repo if per_repo and os.path.exists(per_repo) else os.path.join(d, "runs.json")))
     w, b = opt("--workflow"), opt("--branch")
+    absent = os.path.join(d, "workflows-absent")
+    if w and os.path.exists(absent) and w in open(absent).read().split():
+        sys.stderr.write(f"HTTP 404: workflow {w} not found on the default branch "
+                         f"(https://api.github.com/repos/{repo or 'o/r'}/actions/workflows/{w})\n")
+        sys.exit(1)
     runs = [r for r in runs if (not w or w in (r.get("workflowName"), r.get("workflowFile"))) and (not b or r.get("headBranch") == b)]
     print(json.dumps(runs[: int(opt("--limit") or 20)]))
 elif argv[:2] == ["workflow", "run"]:

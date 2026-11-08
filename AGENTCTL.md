@@ -323,7 +323,10 @@ push then"): *Main*, *Identity model convergence* and -- since the owner's 2026-
 rows into their own workflow, dispatched by convergence's preflight -- *Identity takes*, the same three the pre-push
 red gate (`check_redgate`), land's
 red/green branch and the `waiting` processor read. Verify scrape recording no longer gates. For each, it takes the newest decided run on main
-(success or failure; cancelled and skipped runs are passed over). For other repos it reads every workflow seen on
+(success or failure; cancelled and skipped runs are passed over). A gate workflow whose file is not on main yet
+(GitHub's `HTTP 404: workflow ... not found on the default branch`) has no run there and decides nothing -- never an
+unread gate; any other read error still is one (2026-11-08: GATING named identity-takes.yml before its file landed,
+and the gate read UNREAD for 1.5 h). For other repos it reads every workflow seen on
 main. For each red run it shows:
 
 - the failed jobs and their relevant log lines;

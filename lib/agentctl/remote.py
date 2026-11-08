@@ -633,7 +633,7 @@ def watch_look(repo, sha, o_r, flows, done, pushed_at, since, now_, on_run=None)
     for kind, (name, wfile) in flows.items():
         if kind in done:
             continue
-        runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30", "--json", RUN_FIELDS)
+        runs = main_runs(o_r, wfile)
         run = pick_main_run(repo, sha, runs) if kind == "main" else pick_convergence_run(repo, sha, runs, pushed_at, o_r)
         if run is None:
             if kind != "main" and now_ - float(since) >= conv_start:

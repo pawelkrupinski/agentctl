@@ -141,6 +141,28 @@ def red_repo_clone(o_r):
 RUN_FIELDS = "databaseId,number,status,conclusion,headSha,url,displayTitle,workflowName,createdAt,updatedAt,event"
 RED_CONCLUSIONS = ("failure", "timed_out")
 
+# A WORKFLOW NOT ON MAIN HAS NO RUNS ON MAIN (2026-11-08 16:35-18:10: agentctl's GATING named identity-takes.yml before
+# the movies commit adding the file reached main; GitHub answered each list of it `HTTP 404: workflow ... not found on
+# the default branch`, so the whole gate read failed every cycle -- the status line said `gate UNREAD (as of 16:44)` and
+# every production landing waited on a gate taken as red for 1.5 h). That 404 is GitHub's own answer, not an unread
+# gate: the workflow has no run on main, so it decides nothing until its file lands. Any other error still raises.
+WORKFLOW_NOT_ON_MAIN = re.compile(r"HTTP 404: workflow \S+ not found on the default branch")
+_not_on_main_said = process_cache(set())  # said once per workflow file per process, not every cycle
+
+
+def main_runs(o_r, wfile, limit=30):
+    """A workflow's runs on main, newest first; [] when GitHub says its file is not on the default branch."""
+    try:
+        return gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", str(limit),
+                       "--json", RUN_FIELDS)
+    except RuntimeError as e:
+        if not WORKFLOW_NOT_ON_MAIN.search(str(e)):
+            raise
+        if wfile not in _not_on_main_said:
+            _not_on_main_said.add(wfile)
+            err(f"{wfile} is not on main yet: no run of it gates anything until it lands")
+        return []
+
 
 def repo_path_for(o_r):
     # ci-runner's reconciler has none of REPOS (HOME is its state root): its own clone is movies' scan repo, or
@@ -256,7 +278,7 @@ def gate_runs(o_r, flows=None):
         flows = [(n, n) for n in dict.fromkeys(r["workflowName"] for r in recent)]
     out = []
     for name, wfile in flows:
-        runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30", "--json", RUN_FIELDS)
+        runs = main_runs(o_r, wfile)
         decided, nov = None, None
         nv = (lambda r: run_no_verdict(o_r, r)) if name in NO_VERDICT_FLOWS else (lambda r: False)
         for r in runs:
