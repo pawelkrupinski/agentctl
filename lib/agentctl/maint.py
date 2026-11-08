@@ -60,9 +60,19 @@ SBT_STALL_MIN = 20
 SBT_PROGRESS_CPU_PER_MIN = 1.0  # CPU s/min since the previous pass above which an sbt server counts as working
 # A RATE NEEDS A COMPARABLE SAMPLE: the laptop sleeps (1565 sleep/wakes since boot, pmset 2026-11-07), and wall time runs
 # on while the JVM is frozen, so the first pass after a long sleep spread a busy server's few minutes of CPU over hours
-# and read it as idle since before the sleep. A previous sample older than two 15-min passes (asleep, or the pass not
-# running), or from the future (the clock went back), says nothing about CPU: the server starts over.
+# and read it as idle since before the sleep. A previous sample older than two 15-min passes (the pass not running), or
+# from the future (another clock), says nothing about CPU: the server starts over.
 SBT_SAMPLE_MAX_GAP_MIN = 30
+# ...and a shorter sleep is no idle time either: 25 min asleep after a pass read a command's minute of CPU as no CPU for
+# 26 min, over the 20-min stall limit. The samples are dated by the AWAKE clock (CLOCK_UPTIME_RAW: it stops while the
+# laptop sleeps; Linux's CLOCK_MONOTONIC stops in suspend too), so a rate and an idle time count awake minutes only. A
+# record from another clock (an older agentctl's wall time, a previous boot's) reads as from the future: it starts over.
+SBT_SAMPLE_CLOCK = getattr(time, "CLOCK_UPTIME_RAW", time.CLOCK_MONOTONIC)
+
+
+def awake_now():
+    """Seconds of the awake clock the sbt reaper dates its CPU samples by (SBT_SAMPLE_CLOCK)."""
+    return time.clock_gettime(SBT_SAMPLE_CLOCK)
 # IDLE DETACHED SERVERS (2026-11-07): two lone servers (core-wt-red-822/824, -Xmx6000M each) sat idle for 3 h while
 # swap stood at 40.1/40.96 GB and every other build crawled; no rule matched them (one server per checkout, under the
 # hog CPU floor, no command running). A detached server (PPID 1) with no client and no CPU for SBT_IDLE_MIN is reaped,

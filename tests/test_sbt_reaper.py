@@ -1,6 +1,6 @@
 """Stuck sbt servers (2026-10-27): an orphaned serving command, or a running command with no CPU for 20 min, is reaped
 by orphans / sweep, after a thread dump; the rules on fakes."""
-import os, sys, tempfile, unittest
+import argparse, contextlib, io, os, sys, tempfile, types, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -110,6 +110,34 @@ class SbtReaperTest(unittest.TestCase):
             wake = (5 + 8 * 60) * 60
             self.assertEqual(A.sbt_stuck_reasons(7, "/wt", 125.0, clients, {}, state, wake, **kwargs), [])
             self.assertEqual(state["7"]["since"], wake)
+
+    # A sleep under SBT_SAMPLE_MAX_GAP_MIN is still a gap: a pass, 25 min of sleep, the pass on wake. On the wall clock a
+    # busy command's minute of CPU spread over 26 min reads as no CPU for 26 min, over the 20-min stall limit. The
+    # reaper's clock is the awake one (CLOCK_UPTIME_RAW stops while the laptop sleeps), so on wake one minute passed.
+    def orphans_pass(self, wt, wall, awake, cpu):
+        procs = [(7, 1, "1:00:00", "/usr/bin/java -jar sbt-launch.jar"), (8, 99, "1:00", "sbtn compile")]
+        saved = {k: getattr(A, k) for k in ("ps", "process_cwds", "sbt_serving", "run_cmd", "awake_now")}
+        A.ps, A.process_cwds, A.sbt_serving = (lambda: procs), (lambda: {7: wt, 8: wt}), (lambda: {})
+        A.run_cmd = lambda args, **kw: types.SimpleNamespace(
+            returncode=0, stdout=f"7 1 {int(cpu // 60)}:{cpu % 60:05.2f}\n" if args[0] == "ps" else "")
+        A.awake_now, A.time.time = (lambda: awake), (lambda: wall)
+        os.environ["AGENTCTL_SBT_REAP"] = "1"
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                A.cmd_orphans(argparse.Namespace(kill=False, safe=True, sbt_only=True))
+        finally:
+            os.environ["AGENTCTL_SBT_REAP"] = "0"
+            for k, v in saved.items():
+                setattr(A, k, v)
+        return out.getvalue()
+
+    def test_a_busy_command_across_a_short_sleep_is_not_stuck(self):
+        with tempfile.TemporaryDirectory() as wt:
+            os.mkdir(os.path.join(wt, ".git"))
+            self.assertNotIn("no CPU", self.orphans_pass(wt, 1_000_000, 5_000, 600.0))
+            # one awake minute at 5 s/min, then 25 min asleep
+            self.assertNotIn("no CPU", self.orphans_pass(wt, 1_000_000 + 26 * 60, 5_000 + 60, 605.0))
 
     def test_a_clock_that_went_back_starts_over(self):
         state = {}

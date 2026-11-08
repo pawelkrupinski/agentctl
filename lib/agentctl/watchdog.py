@@ -1523,7 +1523,7 @@ def cmd_orphans(a):
     for pid, ppid, etime, cmd in procs:
         if "sbtn" in cmd.split(" ", 1)[0] and cwds.get(pid):
             clients.setdefault(cwds[pid], []).append(pid)
-    serving, now, live = sbt_serving(), time.time(), set()
+    serving, now, live = sbt_serving(), awake_now(), set()
     kept = {cwds[p] for p, _pp, _e, c in procs if "sbt-warm --keep" in c and cwds.get(p)}
     swap_free = swap_free_mb() if os.environ.get("AGENTCTL_SBT_REAP") != "0" else None
     for pid, ppid, etime, cmd in procs:
