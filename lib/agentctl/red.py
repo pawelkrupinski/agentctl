@@ -2618,11 +2618,13 @@ def red_dispatcher(store, o_r, repo, t):
         if holder and holder["name"] != off["lease"]:
             # ONE FIXER PER FAMILY: a new red of a family whose fixer is at work is that fixer's -- under its lease; an
             # owned family's too while its owner is not running (never a second session beside a live holder). A
-            # claim's red is a claim of the same worktree (renewed by its activity, red_renew_holders), a fixer's a sibling
+            # claim's red is a claim of the same worktree (renewed by its activity, red_renew_holders), a fixer's a sibling;
+            # the holder's note is about its own red, never the joined one's
             claim = lease_meta(holder).get("kind") == "claim"
             took = store.take(off["id"], holder["holder"], *((RED_CLAIM_TTL, RED_CLAIM_MAX) if claim else
                                                              (RED_FIXER_TTL, RED_FIXER_MAX)),
-                              meta={**lease_meta(holder), "family": fam, "outcome": None, "notes": None, "gate": bool(pic.get("gate")),
+                              meta={**lease_meta(holder), "family": fam, "outcome": None, "note": None, "notes": None,
+                                    "gate": bool(pic.get("gate")),
                                     **({} if claim else {"kind": "sibling", "primary": holder["name"]})})
             if took and "epoch" in took:
                 red_family_tell(holder, pic, fam)

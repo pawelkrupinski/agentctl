@@ -575,13 +575,16 @@ class RedFamilyTest(Phase2Base):
         self.st.put_item("red", "ab1", "leased", {"key": "ab1", "workflow": "Identity rule ablation", "job": "collect",
                                                   "jobs": ["collect"], "last_run": {"number": 1}})
         claimer = f"laptop:claim:session 05c1b7f5@{wt}"
-        self.st.acquire("red/ab1", claimer, 1800, 8 * 3600, meta={"kind": "claim", "worktree": wt, "who": "session 05c1b7f5"})
+        self.st.acquire("red/ab1", claimer, 1800, 8 * 3600, meta={"kind": "claim", "worktree": wt, "who": "session 05c1b7f5",
+                                                                  "note": "ablation collect: OOM at 7 GB"})
         self.red("oi1", "Order independence", "scala (reverse)", 46)
         acts = A.red_dispatcher(self.st, "o/r", self.repo, t)
         self.assertEqual((owners, self.spawned), ([], []), "no second session beside the live holder")
         self.assertTrue(any("joined its family outside-gate's fixer" in a for a in acts), acts)
         row = self.st.get("red/oi1")
         self.assertEqual((row["holder"], A.lease_meta(row)["kind"], A.lease_meta(row)["worktree"]), (claimer, "claim", wt))
+        # the holder's note is about ITS red: the joined red has none of its own yet (the status page shows a lease's note)
+        self.assertIsNone(A.lease_meta(row).get("note"))
         with open(os.path.join(wt, "RED-INBOX.md")) as f:
             self.assertIn("RED FAMILY outside-gate: Order independence #46", f.read())
         A.red_renew_holders(self.st, t)  # renewed by the worktree's activity, like the claim it joined
