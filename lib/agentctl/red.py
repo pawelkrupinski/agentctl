@@ -1063,7 +1063,10 @@ def red_family_tell(row, pic, fam):
         f.write(f"{ts()} RED FAMILY {fam}: {pic.get('workflow')} #{(pic.get('run') or {}).get('number')} [{jobs}] "
                 f"(red {pic.get('key')}) is YOURS too, held under your lease: {str(pic.get('line') or '')[:300]} -- "
                 f"`agentctl ci-why {(pic.get('run') or {}).get('databaseId')}`; land its fix with `Fixes-Red: "
-                f"{(pic.get('run') or {}).get('number')}`.\n")
+                f"{(pic.get('run') or {}).get('number')}`. Show progress on it within "
+                f"{fmt_age(env_num('AGENTCTL_RED_JOIN_IDLE', RED_JOIN_IDLE))} (a commit carrying that trailer, or "
+                f"`agentctl red claim {(pic.get('run') or {}).get('number')} --note \"<what>\"`), or it goes to a fixer "
+                f"of its own.\n")
     return True
 
 
@@ -2443,13 +2446,71 @@ def red_wt_mark(wt):
     return f"{head[:12]}:{hashlib.sha1(st.encode()).hexdigest()[:10]}:{int(newest)}"
 
 
+# A JOINED RED SHOWS PROGRESS OR GOES ON (the owner, 2026-11-08). A red joined to its family holder's lease (the
+# dispatcher's join: `joined_at` on the lease) waits on a session that may be deep in its own red. With no progress on
+# THAT red within RED_JOIN_IDLE of joining -- a commit carrying its `Fixes-Red:` in the holder's worktree, a fix on its
+# way (the red's `fix`, or the red in fix-pending), a note on it (`red claim <it> --note` inside the fixer) -- it is
+# RELEASED (no attempt counted) and offered again, never joined to that holder again (`family_released`).
+RED_JOIN_IDLE = 30 * 60  # $AGENTCTL_RED_JOIN_IDLE (seconds)
+
+
+def red_joined_progress(store, row, why):
+    """Mark a joined red's lease as worked on (why: `note: ...`, `commit <sha>`, `fix <entry>`): the backstop is done."""
+    store.set_meta(row["name"], row["epoch"], row["secret"], {"progressed": str(why)[:200]})
+
+
+def red_fixes_red_commits(wt, names):
+    """The first commit in worktree wt not on any remote whose `Fixes-Red:` names one of names (runs, the key), or None."""
+    if not wt or not os.path.isdir(wt) or not allowed_path(wt):
+        return None
+    out = git(wt, "log", "HEAD", "--not", "--remotes", "-n", "200",
+              "--format=%H%x09%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", check=False).stdout
+    want = {str(n).lstrip("#") for n in names if n}
+    for line in out.splitlines():
+        sha, _tab, vals = line.partition("\t")
+        if want & {v.lstrip("#") for v in re.split(r"[,;\s]+", vals) if v}:
+            return sha
+    return None
+
+
+def red_joined_idle(store, row, t):
+    """None while a joined red is within its window or worked on (marked so), else the release outcome."""
+    m = lease_meta(row)
+    if not m.get("joined_at") or m.get("progressed"):
+        return None
+    it = store.item("red", str(row.get("item") or "").split(":", 1)[-1]) if row.get("item") else None
+    d = (it or {}).get("data") or {}
+    if it and (it["state"] in ("fix-pending",) + RED_TERMINAL or d.get("fix")):
+        red_joined_progress(store, row, f"fix {(d.get('fix') or {}).get('entry') or it['state']}")
+        return None
+    sha = red_fixes_red_commits(m.get("worktree"), red_names(d)) if it else None
+    if sha:
+        red_joined_progress(store, row, f"commit {sha[:10]}")
+        return None
+    idle = env_num("AGENTCTL_RED_JOIN_IDLE", RED_JOIN_IDLE)
+    if t - float(m["joined_at"]) < idle:
+        return None
+    if it:
+        try:
+            store.update_item("red", it["id"], it["version"],
+                              {"family_released": sorted(set(d.get("family_released") or []) | {row["holder"]})})
+        except StaleVersion:
+            return None  # another writer moved the red: the next pass
+    return (f"RELEASED: no progress on it {fmt_age(t - float(m['joined_at']))} after it joined {row['holder']}'s lease "
+            f"(no commit, land or note for it within {fmt_age(idle)}): offered to a fixer of its own")
+
+
 def red_renew_holders(store, t):
     """Each live interactive claim renewed by its worktree's activity (no activity: it lapses at its TTL); each sibling
-    exactly as long as its run's fixer's own lease."""
+    exactly as long as its run's fixer's own lease; a joined red released when it shows no progress (red_joined_idle)."""
     for row in store.list("red/"):
         if not lease_is_live(row, t):
             continue
         m = lease_meta(row)
+        why = red_joined_idle(store, row, t) if m.get("kind") in ("claim", "sibling") else None
+        if why:
+            store.revoke(row["name"], why)
+            continue
         if m.get("kind") == "claim":
             mark = red_wt_mark(m.get("worktree"))
             ttl = m.get("ttl") or RED_CLAIM_TTL
@@ -2564,14 +2625,16 @@ def red_capacity(store, waited, t, alive=None):
 
 
 def red_family_holder(store, fam, t, active=None):
-    """The live primary lease on a red of queue family fam, or None: a fixer's own (not a sibling), or an interactive
-    CLAIM's (`red claim`: a session that took the family's reds by hand is its holder, 2026-11-07 -- the dispatcher
-    started a second owner session beside the consolidated non-gate fixer)."""
+    """The live primary lease on a red of queue family fam, or None: a fixer's own (not a sibling), or a CLAIM made
+    inside a dispatched fixer (`red claim <M>` there: its record on the lease, 2026-11-07 -- the dispatcher started a
+    second owner session beside the consolidated non-gate fixer). An interactive session's claim takes ONLY its red,
+    never its family (the owner, 2026-11-08): family holding is for the sessions agentctl itself starts."""
     if not fam:
         return None
     active = active if active is not None else red_active(store)
     for row in store.list("red/"):
-        if not lease_is_live(row, t) or lease_meta(row).get("kind") not in ("fixer", "claim"):
+        m = lease_meta(row)
+        if not lease_is_live(row, t) or not (m.get("kind") == "fixer" or (m.get("kind") == "claim" and m.get("fixer"))):
             continue
         it = active.get(row["name"].split("/", 1)[1])
         if it and red_queue_family(it["data"]) == fam:
@@ -2615,6 +2678,9 @@ def red_dispatcher(store, o_r, repo, t):
                             f"to its family {fam}'s owner")
             continue
         holder = red_family_holder(store, fam, t) if off["tier"] not in ("revert", "lander", "blame") else None
+        item = store.item("red", off["item"].split(":", 1)[1]) or {"data": {}}
+        if holder and holder["holder"] in (item["data"].get("family_released") or []):
+            holder = None  # released from that holder for no progress (red_joined_idle): a fixer of its own, never back
         if holder and holder["name"] != off["lease"]:
             # ONE FIXER PER FAMILY: a new red of a family whose fixer is at work is that fixer's -- under its lease; an
             # owned family's too while its owner is not running (never a second session beside a live holder). A
@@ -2624,14 +2690,13 @@ def red_dispatcher(store, o_r, repo, t):
             took = store.take(off["id"], holder["holder"], *((RED_CLAIM_TTL, RED_CLAIM_MAX) if claim else
                                                              (RED_FIXER_TTL, RED_FIXER_MAX)),
                               meta={**lease_meta(holder), "family": fam, "outcome": None, "note": None, "notes": None,
-                                    "gate": bool(pic.get("gate")),
+                                    "gate": bool(pic.get("gate")), "joined_at": t, "progressed": None,
                                     **({} if claim else {"kind": "sibling", "primary": holder["name"]})})
             if took and "epoch" in took:
                 red_family_tell(holder, pic, fam)
                 acts.append(f"{pic.get('workflow')} #{(pic.get('run') or {}).get('number')}: red {pic['key']} joined "
                             f"its family {fam}'s fixer {holder['holder']}")
             continue
-        item = store.item("red", off["item"].split(":", 1)[1]) or {"data": {}}
         after = float(item["data"].get("dispatch_after") or 0)
         # NOTHING STOPS A GATE FIX, EVER (the owner, 2026-10-31): a gate red's fixer starts past the cap, and no fixer
         # waits on laptop pressure (that holds only other work: gov_fits); a gate fixer still counts toward the cap

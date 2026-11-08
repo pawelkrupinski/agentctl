@@ -627,9 +627,21 @@ agent must be assigned to it".
   a Verify scrape recording `convergence (<cc>)` job is its too, and an infra-shaped red of a non-gating workflow (an
   explorer OOM-killed, exit 137); it matches only workflows the gate does not read, so Main's and Identity model
   convergence's reds still reach `main-tests`, `convergence` and `infra`.
-  A family's holder is its live fixer OR an interactive `red claim` holding one of its reds: while one holds (and the
-  family owner is not running), a new red of the family is claimed for that same holder and worktree (renewed by its
-  activity) and told in its `RED-INBOX.md` -- never a second owner session beside it.
+  A family's holder is its live fixer OR a `red claim` made INSIDE a dispatched fixer (its record on the lease) holding
+  one of its reds: while one holds (and the family owner is not running), a new red of the family is claimed for that
+  same holder and worktree (renewed by its activity) and told in its `RED-INBOX.md` -- never a second owner session
+  beside it.
+- **AN INTERACTIVE CLAIM TAKES ONLY ITS RED (the owner, 2026-11-08).** A manual `agentctl red claim` from an
+  interactive session holds that red and nothing more: it never makes the session its family's holder, so a new red of
+  the family goes to the family's owner or a fixer, never onto the session's lease. Family holding is for the sessions
+  agentctl itself starts (fixers, family owners).
+- **A JOINED RED SHOWS PROGRESS WITHIN 30 MIN OR GOES ON (the owner, 2026-11-08).** A red joined to a family holder's
+  lease (`joined_at` on its lease) with no progress on THAT red within `$AGENTCTL_RED_JOIN_IDLE` (30 min) of joining
+  is released (`RELEASED: no progress on it ...`, no attempt counted) and offered again, and never joined to that
+  holder again (the red's `family_released`): it gets a fixer of its own. Progress is any of: a commit not on the
+  remote in the holder's worktree whose `Fixes-Red:` names it, a fix on its way (the red's `fix`, fix-pending), or a
+  note on it (`red claim <it> --note` inside the fixer). Once shown, the lease's `progressed` says what, and the
+  backstop is done with it (red_joined_idle, run with the claims' renewal).
 - **A BLOCK NO PROBE CAN CLEAR IS SHOWN WITH ITS AGE (2026-11-07).** A turn's `BLOCKED ON OWNER: <cmd>` verdict with no
   `red block` lease behind it has no probe: it stayed the red's last word after the owner had run the command (Verify
   scrape recording #14: "re-pin the scheduler to 362196b15a", long since re-pinned past it). Its note now reads `said

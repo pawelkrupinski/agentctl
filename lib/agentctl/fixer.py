@@ -1164,6 +1164,10 @@ def red_claim(store, o_r, target, note="", wt=None):
         if not items or all(held_by_me(it) for it in items):
             rec["note"] = note or rec.get("note") or "working"
             write_json(own, rec)
+            for it in items or []:  # a red joined to its lease, worked on: no longer one the backstop releases
+                row = store.get(red_lease(it["data"]["key"]))
+                if lease_meta(row).get("joined_at"):
+                    red_joined_progress(store, row, f"note: {rec['note']}")
             return 0, [f"noted on your lease {rec.get('lease')}: {rec['note']}"]
         items = [it for it in items if not held_by_me(it)]
         wt = wt or rec.get("worktree")
@@ -1186,7 +1190,10 @@ def red_claim(store, o_r, target, note="", wt=None):
             continue
         r = store.acquire(name, holder, RED_CLAIM_TTL, RED_CLAIM_MAX, progress=red_wt_mark(wt), item=f"red:{it['id']}",
                           meta={"kind": "claim", "worktree": wt, "who": who, "note": note,
-                                "session": os.environ.get("CLAUDE_CODE_SESSION_ID"), "gate": bool(it["data"].get("gate"))})
+                                "session": os.environ.get("CLAUDE_CODE_SESSION_ID"), "gate": bool(it["data"].get("gate")),
+                                # made inside a dispatched fixer: its family's holder (red_family_holder); an
+                                # interactive session's claim takes only its red (the owner, 2026-11-08)
+                                **({"fixer": own} if own else {})})
         if "held" in r:
             rc = 1
             lines.append(f"NOT CLAIMED: {red_what(it['data'])} is held by {r['held']['holder']} until "

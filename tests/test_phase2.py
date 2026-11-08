@@ -556,10 +556,8 @@ class RedFamilyTest(Phase2Base):
         A.GATING[A.RED_PRIMARY] = A.GATING[A.RED_PRIMARY] + [("Order independence", "order-independence.yml")]
         self.assertIsNone(fam("Order independence", "scala (shuffled)", "test"))
 
-    def test_a_claim_holding_an_owned_familys_red_is_its_holder_no_second_owner_starts(self):
-        """2026-11-07: a consolidated fixer had `red claim`ed the non-gate reds; the family's owner was not running, so a
-        new red of the family would have started a SECOND session (an owner) beside it. The claim is the holder: the
-        new red is claimed for it, in its worktree, and it is told."""
+    def outside_gate_owned(self):
+        """An owned outside-gate family; owner_spawn recorded (returns the list of starts)."""
         fams = os.path.join(self.tmp, "fams-og.json")
         with open(fams, "w") as f:
             json.dump({"families": [{"name": "outside-gate", "owner": True, "outside_gate": True}]}, f)
@@ -569,14 +567,40 @@ class RedFamilyTest(Phase2Base):
         saved = A.owner_spawn
         A.owner_spawn = lambda *a, **k: owners.append(a) or (True, "owner started")
         self.addCleanup(setattr, A, "owner_spawn", saved)
-        t = time.time()
+        return owners
+
+    def claimed_ablation(self, **meta):
+        """Red ab1 (outside the gate) held by a `red claim` in a worktree of its own: (holder, worktree)."""
         wt = os.path.join(self.tmp, "movies-wt-nongate")
-        os.makedirs(wt)
+        os.makedirs(wt, exist_ok=True)
         self.st.put_item("red", "ab1", "leased", {"key": "ab1", "workflow": "Identity rule ablation", "job": "collect",
                                                   "jobs": ["collect"], "last_run": {"number": 1}})
         claimer = f"laptop:claim:session 05c1b7f5@{wt}"
         self.st.acquire("red/ab1", claimer, 1800, 8 * 3600, meta={"kind": "claim", "worktree": wt, "who": "session 05c1b7f5",
-                                                                  "note": "ablation collect: OOM at 7 GB"})
+                                                                  "note": "ablation collect: OOM at 7 GB", **meta})
+        return claimer, wt
+
+    def test_an_interactive_claim_takes_only_its_red_never_its_family(self):
+        """The owner, 2026-11-08: a manual `red claim` from an interactive session takes ONLY that red -- it never makes
+        the session its family's holder, so a new red of the family is not joined to its lease; family holding is for
+        the sessions agentctl itself starts (a fixer, the family's owner)."""
+        owners = self.outside_gate_owned()
+        claimer, wt = self.claimed_ablation()
+        self.red("oi1", "Order independence", "scala (reverse)", 46)
+        acts = A.red_dispatcher(self.st, "o/r", self.repo, time.time())
+        self.assertFalse(any("joined" in a for a in acts), acts)
+        self.assertEqual(len(owners), 1, "the family's owner takes the new red")
+        self.assertNotEqual(self.st.get("red/oi1")["holder"], claimer)
+        self.assertEqual(self.st.get("red/ab1")["holder"], claimer, "its own red stays its")
+        self.assertFalse(os.path.exists(os.path.join(wt, "RED-INBOX.md")))
+
+    def test_a_dispatched_fixers_claim_holding_an_owned_familys_red_is_its_holder_no_second_owner_starts(self):
+        """2026-11-07: a consolidated fixer had `red claim`ed the non-gate reds; the family's owner was not running, so a
+        new red of the family would have started a SECOND session (an owner) beside it. A claim made INSIDE a dispatched
+        fixer (its record on the lease) is the holder: the new red is claimed for it, in its worktree, and it is told."""
+        owners = self.outside_gate_owned()
+        t = time.time()
+        claimer, wt = self.claimed_ablation(fixer=os.path.join(self.tmp, "fixer-5.json"))
         self.red("oi1", "Order independence", "scala (reverse)", 46)
         acts = A.red_dispatcher(self.st, "o/r", self.repo, t)
         self.assertEqual((owners, self.spawned), ([], []), "no second session beside the live holder")
@@ -619,6 +643,72 @@ class RedFamilyTest(Phase2Base):
         self.assertIn("family convergence: 2 open red(s), ONE fixer: laptop:fixer:red-a07-5", out.getvalue())
         self.assertIn("[convergence]", out.getvalue())
         self.assertEqual(A.status_reds(self.st, t)[0]["family"], "convergence")
+
+    def joined_to_a_family_fixer(self, idle_min):
+        """Red v1 joined to convergence's live fixer (a07, in a git worktree), joined idle_min minutes ago: (t, wt)."""
+        t = time.time()
+        wt = os.path.join(self.tmp, "movies-wt-red-2527")
+        subprocess.run(["git", "init", "-q", wt], check=True)
+        subprocess.run(["git", "-C", wt, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty",
+                        "-m", "its own red's step\n\nFixes-Red: 2527"], check=True)
+        self.st.put_item("red", "a07", "leased", {"key": "a07", "workflow": "Identity model convergence", "job": "leg (uk)",
+                                                  "jobs": ["leg (uk)"], "last_run": {"number": 2527}})
+        self.st.acquire("red/a07", "laptop:fixer:red-a07-5", 900, 3600, meta={"kind": "fixer", "worktree": wt})
+        self.red("v1", "Verify scrape recording", "convergence (poland)", 2530)
+        self.st.update_item("red", "v1", self.st.item("red", "v1")["version"], {"runs": ["2530"]})
+        A.red_dispatcher(self.st, "o/r", self.repo, t)
+        row = self.st.get("red/v1")
+        self.assertEqual(row["holder"], "laptop:fixer:red-a07-5")
+        self.st.set_meta("red/v1", row["epoch"], row["secret"], {"joined_at": t - idle_min * 60})
+        return t, wt
+
+    def test_a_joined_red_with_no_progress_in_30_min_is_released_and_offered_to_another_fixer(self):
+        """The owner, 2026-11-08: a red joined to a family holder's lease that shows no progress on it within ~30 min (no
+        commit, land or note for THAT red) is released and offered again -- the holder may be deep in its own red."""
+        t, wt = self.joined_to_a_family_fixer(31)
+        A.red_renew_holders(self.st, t)
+        row = self.st.get("red/v1")
+        self.assertFalse(A.lease_is_live(row, t), row)
+        self.assertRegex(A.lease_meta(row)["outcome"], r"^RELEASED: no progress on it .*laptop:fixer:red-a07-5")
+        self.assertTrue(A.lease_is_live(self.st.get("red/a07"), t), "the holder keeps its own red")
+        it = self.st.item("red", "v1")
+        self.assertEqual(it["data"]["family_released"], ["laptop:fixer:red-a07-5"])
+        A.red_lease_ended(self.st, it, row, None, t)  # the tick: offered again, no attempt counted
+        self.assertEqual(self.st.item("red", "v1")["data"]["attempts"], 0)
+        self.spawned.clear()
+        acts = A.red_dispatcher(self.st, "o/r", self.repo, t)
+        self.assertFalse(any("joined" in a for a in acts), "never joined to the same holder again")
+        self.assertEqual([o["picture"]["key"] for o, _x in self.spawned], ["v1"], "a fixer of its own")
+
+    def test_a_joined_red_within_its_30_min_or_with_progress_on_it_stays_joined(self):
+        t, _wt = self.joined_to_a_family_fixer(10)
+        A.red_renew_holders(self.st, t)
+        self.assertTrue(A.lease_is_live(self.st.get("red/v1"), t), "within its window")
+
+    def test_a_commit_for_the_joined_red_in_the_holders_worktree_is_progress(self):
+        t, wt = self.joined_to_a_family_fixer(31)
+        subprocess.run(["git", "-C", wt, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty",
+                        "-m", "v1's step\n\nFixes-Red: 2530"], check=True)
+        A.red_renew_holders(self.st, t)
+        row = self.st.get("red/v1")
+        self.assertTrue(A.lease_is_live(row, t), A.lease_meta(row))
+        self.assertIn("commit", A.lease_meta(row)["progressed"])
+        self.st.set_meta("red/v1", row["epoch"], row["secret"], {"joined_at": t - 3 * 3600})
+        A.red_renew_holders(self.st, t)  # progress once shown, the backstop is done with it
+        self.assertTrue(A.lease_is_live(self.st.get("red/v1"), t))
+
+    def test_a_note_on_the_joined_red_is_progress(self):
+        t, _wt = self.joined_to_a_family_fixer(31)
+        row = self.st.get("red/v1")
+        A.red_joined_progress(self.st, row, "note: the poland leg's seed")  # `red claim 2530 --note` inside the fixer
+        A.red_renew_holders(self.st, t)
+        self.assertTrue(A.lease_is_live(self.st.get("red/v1"), t))
+
+    def test_a_fix_on_its_way_for_the_joined_red_is_progress(self):
+        t, _wt = self.joined_to_a_family_fixer(31)
+        self.st.update_item("red", "v1", self.st.item("red", "v1")["version"], {"fix": {"entry": "q12", "status": "queued"}})
+        A.red_renew_holders(self.st, t)
+        self.assertTrue(A.lease_is_live(self.st.get("red/v1"), t))
 
     def test_with_no_family_fixer_at_work_one_fixer_takes_every_open_red_of_the_family(self):
         t = time.time()
