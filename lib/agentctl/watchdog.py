@@ -342,6 +342,37 @@ def cmd_watchdog(a):
     return rc
 
 
+IOS_SWEEP_TIMEOUT = 120  # seconds: one `scripts/ios-simulators sweep` (it calls xcrun simctl, which can hang)
+IOS_SWEPT = re.compile(r"(\d+) agent Simulator\(s\) shut down")
+
+
+def ios_simulator_sweep(root=None, dry_run=False):
+    """Shut down the iOS Simulators agents left booted (2026-11-07: three booted for days pushed the laptop to load 368):
+    movies' `scripts/ios-simulators sweep`, run from the movies root checkout, bounded, laptop only, skipped when the
+    script is absent or xcrun is missing. Its output goes to the maintain log; an inbox info entry when it shut any down."""
+    root = root or REPOS[-1]
+    script = os.path.join(root, "scripts", "ios-simulators")
+    if sys.platform != "darwin":
+        return print("  skipped (laptop only)")
+    if not os.access(script, os.X_OK):
+        return print("  skipped (no scripts/ios-simulators in the movies checkout)")
+    if not shutil_which("xcrun"):
+        return print("  skipped (no xcrun)")
+    try:
+        r = subprocess.run([script, "sweep"] + (["--dry-run"] if dry_run else []), cwd=root, capture_output=True,
+                           text=True, timeout=IOS_SWEEP_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return print(f"  timed out after {IOS_SWEEP_TIMEOUT} s")
+    except OSError as e:
+        return print(f"  could not run ({str(e)[:160]})")
+    for line in (r.stdout + r.stderr).splitlines():
+        print(f"  {line}")
+    m = IOS_SWEPT.search(r.stdout)
+    if not dry_run and r.returncode == 0 and m and int(m.group(1)) > 0:
+        inbox_write("maintain", f"INFO: shut down {m.group(1)} iOS Simulator(s) agents left booted "
+                                "(scripts/ios-simulators sweep)", [], [], 0)
+
+
 def cmd_maintain(a):
     """THE reaper (the owner, 2026-10-27: one service, not three): launchd net.bitcashier.agentctl-maintain runs it every
     15 min. Each pass: the reap (`orphans --kill --safe`: dead owners, stray wait loops, stuck sbt servers, stale JVMs);
@@ -362,6 +393,11 @@ def cmd_maintain(a):
     rotated = [] if a.dry_run else rotate_logs()
     for line in rotated or ["(dry run)" if a.dry_run else "none over the size"]:
         print(f"  {line}")
+    print("== ios simulators")
+    try:
+        ios_simulator_sweep(dry_run=a.dry_run)
+    except (Exception, SystemExit) as e:
+        print(f"  could not sweep ({str(e)[:160]})")
     path = state_root("maintain.json")
     st = read_record(path) or {}
     today, hour = dt.date.today().isoformat(), dt.datetime.now().hour

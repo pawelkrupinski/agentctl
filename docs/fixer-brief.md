@@ -51,6 +51,10 @@ commit. File each defect with `~/bin/agentctl issue "<what is wrong, where, how 
 
 ## Bounded commands and memory
 - ONE sbt per worktree, only through `scripts/sbt-warm`. Never start a second one, and never a full suite locally.
+- Any `xcodebuild test` or Simulator work (`xcrun simctl boot`, a LocalServer run) goes through
+  `scripts/ios-simulators run -- <cmd>` (movies), which shuts down the Simulators the command booted, whatever way it
+  ends; a Simulator you create yourself is named `fixer<N>-<what>` (N = your red number) so `maintain` can sweep it. A
+  bare `xcodebuild test` leaves a Simulator booted for days.
 - Run every test under a timeout (`timeout -s KILL <seconds> ...`). No unbounded loops, no `sleep` polling.
 - Keep the memory small: compile and the touched specs only. The full suites run on CI.
 

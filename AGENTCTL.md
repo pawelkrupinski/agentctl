@@ -1599,6 +1599,12 @@ and, once a day at the first pass from 09:00 local (`$AGENTCTL_SWEEP_HOUR`), the
 replaces `net.bitcashier.agentctl-reap`, `net.bitcashier.agentctl-sweep` and `dev.kinowo.jvm-reaper` (their plists:
 `~/bin/launchd/retired/`); `~/.local/bin/reap-stale-jvms.sh` is now a shim calling `agentctl reap`.
 
+Each pass also sweeps the iOS Simulators agents left booted (`ios_simulator_sweep`, 2026-11-07: three booted for days took
+the laptop to load 368): movies' `scripts/ios-simulators sweep` from the root checkout, bounded to 120 s, laptop only,
+skipped when the script or `xcrun` is missing; its output is in the maintain log, and an inbox info entry says how many
+it shut down. Fixers are told to run `xcodebuild test` / Simulator work through `scripts/ios-simulators run -- <cmd>` and
+to name a Simulator they create `fixer<N>-…` (docs/fixer-brief.md, briefs/movies-agent-preamble.md).
+
 Each pass also ROTATES THE LOGS (`rotate_logs`, and the hourly upkeep too; 2026-10-30: the processor's service.log
 had grown to 141 MB): every `*.log` under `~/.cache/agentctl` and the reds dir (not a check's own run output in `*.d`,
 `work`, `target`) and `~/Library/Logs/agentctl-*.log`, once over 10 MB (`$AGENTCTL_LOG_ROTATE_MAX`), is copy-truncated

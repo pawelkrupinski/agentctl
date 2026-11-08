@@ -60,6 +60,9 @@ Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wai
 ## Efficiency
 - Local sbt only through `scripts/sbt-warm "<cmd>" ...`, one warm server per worktree. Compile plus touched specs only.
   Full suites run on CI. No CPU-burning loops.
+- `xcodebuild test` and any Simulator work only through `scripts/ios-simulators run -- <cmd>` (it shuts down what the
+  command booted, on any exit); name a Simulator you create `agent-<what>` (a fixer: `fixer<N>-<what>`) so `agentctl
+  maintain` sweeps it if you are killed.
 - One wait loop per CI run. `agentctl wait` runs in the background; don't poll `run view` repeatedly.
 - Clean up your own CI runs (measurements, landing-check groups, dispatches: any run you started). The moment one of
   your runs is no longer needed (superseded by a newer commit,
