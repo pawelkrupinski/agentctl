@@ -103,12 +103,23 @@ class GithubForgeTest(unittest.TestCase):
 
     # -- the verdict is the check jobs': a report job still queued holds nothing (batch #20, 2026-11-07)
     CHECK_JOBS = [("plan", "completed", "success"), ("check (rest)", "completed", "success"),
-                  ("heavy rows (${{ matrix.rows }})", "completed", "skipped"), ("check (identity 1/3)", "completed", "success")]
+                  ("heavy rows (${{ matrix.rows }})", "completed", "skipped"), ("check (identity 1/3)", "completed", "success"),
+                  ("check (page)", "completed", "skipped")]
+
+    # the workflow's jobs, as precommit-check.yml lays them out (a step's `- name:` is no job's name)
+    WORKFLOW_JOBS = ("jobs:\n    # what the change selects\n    plan:\n        runs-on: x\n        steps:\n"
+                     "            - name: What the change selects\n    check:\n        name: check (rest)\n"
+                     "    check-identity:\n        name: check (identity ${{ matrix.shard }}/3)\n        needs: [ plan ]\n"
+                     "    check-page:\n        name: \"check (page)\"  # needs every other check\n"
+                     "        needs: [ plan, check, check-identity, heavy ]\n"
+                     "    heavy:\n        name: heavy rows (${{ matrix.rows }})\n"
+                     "    timings:\n        name: timings\n        uses: ./.github/workflows/timings.yml\n")
 
     def serve_check_run(self, jobs, declares=True):
         import base64
         self.serve_runs([dict(id=101, number=12, sha="c" * 40, branch="check/7", done=False, ok=None)])
-        wf = "env:\n    LANG: C.UTF-8\n" + ("    VERDICT_JOBS: plan, check (*), heavy rows (*)\n" if declares else "")
+        wf = "env:\n    LANG: C.UTF-8\n" + ("    VERDICT_JOBS: plan, check (*), heavy rows (*)\n" if declares else "") \
+            + "\n" + self.WORKFLOW_JOBS
         self.gh_api(f"repos/{O_R}/contents/.github/workflows/precommit-check.yml?ref={'c' * 40}",
                     {"content": base64.b64encode(wf.encode()).decode()})
         self.gh_api(f"repos/{O_R}/actions/runs/101/jobs?per_page=100",
@@ -134,6 +145,28 @@ class GithubForgeTest(unittest.TestCase):
         rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7"})
         self.assertIsNone(rem.get("status"))
         self.assertEqual(rem["verdict_jobs"], ["plan", "check (*)", "heavy rows (*)"])
+
+    # GitHub lists a job only once it is created, and `check (page)` (it needs every other check) is created a second
+    # after the last of them concludes (precommit-check run 42463101933, 2026-11-08): in that second every listed verdict
+    # job had concluded, and the verdict was a success without the page checks.
+    def test_remote_poll_waits_for_a_verdict_job_github_has_not_created_yet(self):
+        self.serve_check_run(self.CHECK_JOBS[:-1])
+        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7"})
+        self.assertIsNone(rem.get("status"))
+        self.assertIn("check (page)", rem["verdict_expect"])
+
+    def test_the_verdict_jobs_are_the_workflows_jobs_the_globs_name(self):
+        self.assertEqual(A.workflow_job_names(self.WORKFLOW_JOBS),
+                         ["plan", "check (rest)", "check (identity ${{ matrix.shard }}/3)", "check (page)",
+                          "heavy rows (${{ matrix.rows }})", "timings"])
+        expect = ["plan", "check (identity ${{ matrix.shard }}/3)", "timings"]
+        done = lambda *names: [{"name": n, "status": "completed", "conclusion": "success"} for n in names]
+        # a matrix job is there by any of its rows, or by its skipped template; a reusable workflow's by its inner jobs
+        self.assertEqual(A.jobs_verdict(done("plan", "check (identity 2/3)", "timings / report"), ["plan"], expect)[0],
+                         "success")
+        self.assertEqual(A.jobs_verdict(done("plan", "check (identity ${{ matrix.shard }}/3)", "timings"), ["plan"],
+                                        expect)[0], "success")
+        self.assertIsNone(A.jobs_verdict(done("plan", "timings / report"), ["plan"], expect)[0])
 
     def test_remote_poll_without_a_declaration_waits_for_the_run(self):
         self.serve_check_run(self.CHECK_JOBS + [("timings / report (timings)", "queued", None)], declares=False)

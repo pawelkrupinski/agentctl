@@ -1086,7 +1086,10 @@ ADOPTS it (no new push, no new run), and the 15-min (no run started) / 2-h (unde
 past them it is checked locally. **The verdict is the check jobs'** (2026-11-07: batch #20 sat 27+ min past its last
 check job behind a queued `timings / report`): the workflow declares its verdict's jobs as a workflow-level
 `VERDICT_JOBS: <glob>, ...` of job names, read at the checked commit; once every job it names has concluded the check
-is decided, and a job outside it (a report, a publish) still queued or running holds nothing. Any job concluding in
+is decided, and a job outside it (a report, a publish) still queued or running holds nothing. A job GitHub has not
+created yet is not listed (`check (page)`, needing every other check, appears a second after the last of them), so a
+success also waits until every job of the workflow's `jobs:` block that a glob names is listed (a `${{ }}` in its
+name matches any row); a `jobs:` block it cannot read leaves the run's conclusion to decide. Any job concluding in
 failure fails it at once. No declaration: the run's own conclusion decides. The push to main then carries
 `PREPUSH_REMOTE_RUN=<run id>`: the hook takes that run only once GitHub says it is precommit-check.yml on exactly the
 pushed commit, and a success -- or, still running, every job its `VERDICT_JOBS` names a success and none failed.

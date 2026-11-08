@@ -42,26 +42,87 @@ VERDICT_JOBS_LINE = re.compile(r"^[ \t]+VERDICT_JOBS:[ \t]*['\"]?([^'\"\n#]*)", 
 JOB_FAILED = ("failure", "timed_out", "startup_failure", "action_required")
 
 
+# A JOB GITHUB HAS NOT CREATED YET IS NOT IN THE RUN'S JOB LIST (measured 2026-11-08: precommit-check run 42463101933's
+# `check (page)`, which needs every other check, was created 1 s after `check (rest)` concluded; Main's publish-* jobs
+# are absent from a running Main's list). Judged by the listed jobs alone, every named job had concluded in that second
+# and the verdict was a success without the page checks. So the workflow's own jobs say which verdict jobs must exist:
+# each job of its `jobs:` block whose name (its `name:`, else its key) a VERDICT_JOBS glob names must be listed (a
+# `${{ ... }}` in the name matches any text, a reusable workflow's jobs are `<name> / <inner>`) before a success counts.
+JOB_KEY_LINE = re.compile(r"^( +)([A-Za-z_][\w-]*):[ \t]*(?:#.*)?$")
+JOB_NAME_LINE = re.compile(r"^( +)name:[ \t]*(.*?)[ \t]*$")
+EXPRESSION = re.compile(r"\$\{\{.*?\}\}")
+
+
+def workflow_job_names(text):
+    """The name templates of a workflow's jobs, as its text declares them (a job without `name:` is named by its key)."""
+    names, lines = [], text.splitlines()
+    try:
+        i = next(n for n, l in enumerate(lines) if re.match(r"^jobs:[ \t]*(?:#.*)?$", l)) + 1
+    except StopIteration:
+        return []
+    job_indent = job = props_indent = None
+    for line in lines[i:]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent == 0:
+            break
+        key = JOB_KEY_LINE.match(line)
+        if job_indent is None and key:
+            job_indent = indent
+        if indent == job_indent and key:
+            if job:
+                names.append(job["name"])
+            job, props_indent = {"name": key.group(2)}, None
+            continue
+        if job is None or indent <= job_indent:
+            continue
+        if props_indent is None:
+            props_indent = indent
+        named = JOB_NAME_LINE.match(line)
+        if indent == props_indent and named:
+            value = named.group(2)
+            quoted = re.match(r"""^(['"])(.*?)\1""", value)
+            job["name"] = quoted.group(2) if quoted else value.split(" #", 1)[0].rstrip()
+    if job:
+        names.append(job["name"])
+    return names
+
+
+def job_name_glob(template):
+    """The fnmatch pattern of the listed names a job name template stands for (`${{ ... }}` matches anything)."""
+    parts = EXPRESSION.split(template)
+    return "*".join(re.sub(r"([*?\[])", r"[\1]", p) for p in parts)
+
+
 def verdict_jobs(o_r, sha):
-    """The verdict's job-name globs, as REMOTE_WORKFLOW declares them at commit `sha` ([] when it declares none)."""
+    """(the verdict's job-name globs, the name templates of the workflow's jobs they name), as REMOTE_WORKFLOW declares
+    them at commit `sha`; ([], []) when it declares none, or when no job of its `jobs:` block can be read (then the run's
+    own conclusion decides: an expectation that cannot be read never lets a success in early)."""
     import base64
     r = api(o_r, "GET", f"contents/.github/workflows/{REMOTE_WORKFLOW}", {"ref": sha}) or {}
     text = base64.b64decode(r.get("content") or "").decode(errors="replace")
     m = VERDICT_JOBS_LINE.search(text)
-    return [g.strip() for g in m.group(1).split(",") if g.strip()] if m else []
+    globs = [g.strip() for g in m.group(1).split(",") if g.strip()] if m else []
+    expect = [t for t in workflow_job_names(text) if any(fnmatch.fnmatchcase(t, g) for g in globs)]
+    return (globs, expect) if expect else ([], [])
 
 
-def jobs_verdict(jobs, globs):
+def jobs_verdict(jobs, globs, expect=()):
     """(verdict, failed jobs, jobs still going outside the verdict) of a run from its jobs (GitHub's REST shape): verdict
-    `failure` once any job concluded in failure, `success` once at least one job matches `globs` and every one that does
-    has concluded otherwise, else None (undecided)."""
+    `failure` once any job concluded in failure, `success` once at least one job matches `globs`, every one that does
+    has concluded otherwise and every template of `expect` (the workflow's verdict jobs) is listed, else None
+    (undecided)."""
     failed = [j for j in jobs if j.get("status") == "completed" and j.get("conclusion") in JOB_FAILED]
     named = [j for j in jobs if any(fnmatch.fnmatchcase(j.get("name") or "", g) for g in globs)]
     going = [j for j in jobs if j.get("status") != "completed" and j not in named]
     if failed:
         return "failure", failed, going
-    if named and all(j.get("status") == "completed" and j.get("conclusion") in ("success", "skipped", "neutral")
-                     for j in named):
+    listed = [j.get("name") or "" for j in jobs]
+    created = all(any(n == t or fnmatch.fnmatchcase(n, job_name_glob(t)) or fnmatch.fnmatchcase(n, job_name_glob(t) + " / *")
+                      for n in listed) for t in expect)
+    if named and created and all(j.get("status") == "completed"
+                                 and j.get("conclusion") in ("success", "skipped", "neutral") for j in named):
         return "success", [], going
     return None, [], going
 
@@ -86,12 +147,12 @@ def remote_poll(o_r, rem):
     if rem.get("status"):
         return rem
     if status in ("running", "waiting"):
-        if rem.get("verdict_jobs") is None:
-            rem["verdict_jobs"] = verdict_jobs(o_r, rem["tip"])
+        if rem.get("verdict_jobs") is None or rem.get("verdict_expect") is None:
+            rem["verdict_jobs"], rem["verdict_expect"] = verdict_jobs(o_r, rem["tip"])
         if not rem["verdict_jobs"]:
             return rem
         jobs = (api(o_r, "GET", f"actions/runs/{rem['run']}/jobs", {"per_page": 100}) or {}).get("jobs") or []
-        verdict, failed, going = jobs_verdict(jobs, rem["verdict_jobs"])
+        verdict, failed, going = jobs_verdict(jobs, rem["verdict_jobs"], rem["verdict_expect"])
         if verdict is None:
             return rem
         rem["status"], rem["decided_at"] = verdict, time.time()
