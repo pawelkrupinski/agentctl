@@ -385,6 +385,22 @@ def changed_files(repo, a, b):
     return res
 
 
+def renamed_away(repo, a, b):
+    """Old paths that a..b MOVES (git rename detection, default 50% similarity, so a move with a small edit counts): a
+    moved file is not a deletion of main's work (2026-11-07/08: a 50-file module extraction and a renamed slice
+    directory were refused as 'undoing' the commits that created the old paths). A deletion with no matching add is
+    no rename and still counts."""
+    parts = git(repo, "diff", "-M", "--name-status", "-z", a, b).split("\0")
+    old, i = set(), 0
+    while i < len(parts) and parts[i]:
+        if parts[i][0] == "R":
+            old.add(parts[i + 1])
+            i += 3
+        else:
+            i += 2
+    return old
+
+
 def blobs(repo, specs):
     """Map 'rev:path' -> blob sha or None, in one cat-file call."""
     if not specs:
@@ -521,7 +537,7 @@ def check_range(repo, base, head, allow, max_foreign):
                         + ", ".join(f"{c[:10]} {git(repo, 'log', '-1', '--format=%s', c).strip()[:60]}" for c in empty[:10])
                         + f". Drop them (git rebase {base}); a deliberate empty commit needs an "
                           f"`{ALLOW_EMPTY_TRAILER}: <why>` trailer")
-    exempt = reverted_commits(repo, mb, head)
+    exempt = reverted_commits(repo, mb, head) | renamed_away(repo, mb, head)
     reverts = [(p, c) for p, c in foreign_reverts(repo, base, head, files) if p not in exempt]
     if allow:  # files in the allowed set are the agent's own: reverting them is its call
         reverts = [(p, c) for p, c in reverts if not allowed(p, allow)]

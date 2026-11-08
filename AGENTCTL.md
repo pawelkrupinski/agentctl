@@ -1404,7 +1404,7 @@ agentctl prepush-check --hook <remote> [<url>]        # movies' pre-push hook mo
 It refuses when `base...head` touches a file outside `--allow` / `$AGENTCTL_ALLOW`, or when it returns more than N
 files (default 2) to an older main version, which is what the `reset --soft` squash onto a moved main does. `git
 revert` commits are exempt for their own files. So is a DECLARED retirement: a deleted file named by a `Retires: <path>` trailer (one per line, in the commit's
-final trailer block with Co-Authored-By); undeclared deletions and modifications still count. It also refuses an EMPTY commit (no tree change) unless it carries
+final trailer block with Co-Authored-By); undeclared deletions and modifications still count. A file the change MOVES (git rename detection, `diff -M`, 50% similarity: a move with a small edit counts) is not a deletion: its old path is exempt, so a module extraction or a renamed directory is not "undoing" the commit that created it; a deletion with no matching add still counts. It also refuses an EMPTY commit (no tree change) unless it carries
 an `Allow-Empty: <why>` trailer. `land` runs it, and so does movies' hook. Exit 0 ok, 1 refused.
 
 ```

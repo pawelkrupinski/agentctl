@@ -430,6 +430,38 @@ class PrepushTest(Base):
         rc, out = self.check("--max-foreign", "1", cwd=wt)
         self.assertEqual(rc, 1, out)
 
+    def _main_with_files(self, n):
+        for i in range(n):
+            self.r.write(f"old/m{i}.txt", "".join(f"line {i}.{j}\n" for j in range(20)))
+        self.r.commit("main adds files")
+        self.r.push()
+        return self.r.worktree("wt-mv", branch="mv")
+
+    def test_pure_move_of_many_files_is_not_a_revert(self):
+        wt = self._main_with_files(60)
+        sh(wt, "git", "mv", "old", "new")
+        sh(wt, "git", "commit", "-q", "-m", "move")
+        rc, out = self.check(cwd=wt)
+        self.assertEqual(rc, 0, out)
+
+    def test_move_with_small_edit_is_not_a_revert(self):
+        wt = self._main_with_files(10)
+        sh(wt, "git", "mv", "old", "new")
+        for i in range(10):
+            with open(os.path.join(wt, f"new/m{i}.txt"), "a") as f:
+                f.write("one more line\n")
+        sh(wt, "git", "commit", "-q", "-am", "move and edit")
+        rc, out = self.check(cwd=wt)
+        self.assertEqual(rc, 0, out)
+
+    def test_deleting_foreign_files_without_a_matching_add_is_refused(self):
+        wt = self._main_with_files(5)
+        sh(wt, "git", "rm", "-q", "old/m0.txt", "old/m1.txt", "old/m2.txt")
+        sh(wt, "git", "commit", "-q", "-m", "delete")
+        rc, out = self.check(cwd=wt)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("old/m0.txt (undoes", out)
+
     def test_hook_mode(self):
         wt = self.r.worktree("wt-hook", branch="h")
         self.r.write("f1.txt", "x\n", at=wt)
