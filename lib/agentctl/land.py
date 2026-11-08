@@ -103,7 +103,7 @@ def _watch_group(p, out_path, step, stall, sampler, cpu_of, clock, wall, quiet_o
     size, cpu, changed, stalled, polls = -1, None, clock(), False, 0
     poll = max(0.2, min(15.0, stall / 4))
     need = env_num("AGENTCTL_STALL_CPU_SECONDS", STALL_CPU_SECONDS)
-    t_start = time.monotonic()
+    t_start = clock()  # the wall bound reads the same clock: tests drive it, so no verdict depends on the load
     while True:
         try:
             p.wait(timeout=poll)
@@ -128,7 +128,7 @@ def _watch_group(p, out_path, step, stall, sampler, cpu_of, clock, wall, quiet_o
             size, cpu, changed = now_size, now_cpu, now_c
         elif now_c - changed > stall:
             stalled = True
-        if wall is not None and time.monotonic() - t_start > wall:  # busy or not: the wall bound (a push's)
+        if wall is not None and now_c - t_start > wall:  # busy or not: the wall bound (a push's)
             stalled = True
         if stalled:
             _end_group(p)

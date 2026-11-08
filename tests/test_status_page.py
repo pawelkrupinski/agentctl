@@ -276,20 +276,29 @@ class AgentDetailTest(Base):
                                  for i, wt in enumerate(wts)])
 
     def test_a_slow_worktree_degrades_its_own_row_only(self):
+        """No wall-clock bound (2026-11-08: `< 2.5 s` failed at laptop load ~300 -- real git in the fast worktree took
+        4 s): git's answers are read up front and served at once, the slow worktree's held until released, and the test
+        asserts the work done -- the page answered while the slow read was still held, the fast row complete."""
         fast, slow = self.repo("fast"), self.repo("slow")
         real = A.status_git
         release = __import__("threading").Event()
+        asks = (("log", "-3", "--format=%h\x1f%cr\x1f%s"), ("log", "-3", "--name-only", "--format="),
+                ("status", "--porcelain"))
+        answers = {(wt, a): real(wt, *a) for wt in (fast, slow) for a in asks}
+        held = []
 
         def git(wt, *args, **k):
             if wt == slow:
-                release.wait(10)
-            return real(wt, *args, **k)
+                held.append(args)
+                release.wait(30)
+            return answers[(wt, args)]
         A.status_git = git
-        os.environ["AGENTCTL_STATUS_AGENT_BOUND"] = "0.5"
+        os.environ["AGENTCTL_STATUS_AGENT_BOUND"] = "1"
         try:
-            t0 = time.time()
             rows = {a["worktree"]: a for a in A.status_agents(self.store(fast, slow), T, records=[])}
-            self.assertLess(time.time() - t0, 2.5, "the wait is one agent's bound, not the sum")
+            self.assertFalse(release.is_set())
+            self.assertTrue(held and A._status_wt_reads[slow].is_alive(),
+                            "the page answered while the slow worktree's read was still held: it never waits for it")
             self.assertEqual([c["subject"] for c in rows[fast]["commits"]], ["c1", "c0"])
             self.assertNotIn("git_stale", rows[fast])
             self.assertIn("git still reading", rows[slow]["git_stale"])

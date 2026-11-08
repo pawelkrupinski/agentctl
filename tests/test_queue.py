@@ -6,7 +6,7 @@ import json, os, subprocess, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, sh  # noqa: E402
+from test_agentctl import A, StallSamples, sh  # noqa: E402
 from test_waiting import REPO_HOOK, WaitingTest  # noqa: E402
 
 PLAN_HOOK = """#!/bin/sh
@@ -581,10 +581,15 @@ class FastPrecheckTest(QueueTest):
     def test_a_precheck_past_its_bound_is_ended_with_its_children_and_leaves_the_change_queued(self):
         """Review 2026-11-07: on its bound only the precheck script itself was killed; what it started (sbt, a test JVM)
         lived on, and holding the output pipe kept the precheck waiting too. The precheck runs in its own process
-        group, ended whole at the bound; the change is left to its landing check."""
+        group, ended whole at the bound; the change is left to its landing check.
+        The bound is judged by the stall clock the test drives (StallSamples): it stands still until the precheck has
+        started its child and written the child's pid (atomically), so at laptop load ~300 the bound can no longer end
+        the precheck before it wrote its pid file (2026-11-08: FileNotFoundError on grandchild.pid)."""
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         pidfile = os.path.join(wt, "grandchild.pid")
-        self.r.write("scripts/land-precheck", f"#!/bin/sh\nsleep 30 &\necho $! > {pidfile}\nwait\n", at=wt)
+        StallSamples(hung=pidfile).install(self)
+        self.r.write("scripts/land-precheck",
+                     f"#!/bin/sh\nsleep 30 &\necho $! > {pidfile}.tmp\nmv {pidfile}.tmp {pidfile}\nwait\n", at=wt)
         os.chmod(os.path.join(wt, "scripts/land-precheck"), 0o755)
         self.r.commit("a: a precheck that hangs", at=wt)
         eid, _ = self.queued(wt)
