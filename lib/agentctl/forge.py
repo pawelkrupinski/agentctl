@@ -91,6 +91,85 @@ def _gh_api_once(o_r, method, path, params=None, body=None):
     return out
 
 
+# -- `gh run list` as conditional REST reads (2026-11-10)
+# THE INSTALLATION QUOTA: on ci-runner every read of movies is the kinowo-lander App installation's, 5,000 an hour, shared
+# with the external scheduler on monitoring-1 (movies infra/nix/files/scheduled_dispatch.py). It was exhausted on
+# 2026-11-09 ~23:00-23:50Z, and the nightly recording's slot was lost; at 03:27-03:31Z on 11-10, with the fleet quiet,
+# it was still spending ~42 requests a minute (~2,500 an hour, sampled from GET /rate_limit). The biggest share is the
+# gate refresh: every 45 s, and within a tick of every push to main, five `gh run list` reads, and `gh run list` sends
+# no If-None-Match (every call is charged) and costs two or three requests each: a `workflows/<file>` lookup before a
+# `--workflow` list, a `workflows` page to name the runs, and a page per 100 runs. Read here instead, through api()'s
+# conditional GET, a list GitHub has not changed since the last read is a 304 and free, and the lookups are gone.
+# Only what this answers exactly is answered here: a --workflow that is a file name (a NAME needs gh's lookup), and the
+# options below; anything else returns None and gh answers it.
+RUN_LIST_FIELDS = {"databaseId": "id", "number": "run_number", "status": "status", "headSha": "head_sha",
+                   "url": "html_url", "displayTitle": "display_title", "workflowName": "name",
+                   "createdAt": "created_at", "updatedAt": "updated_at", "startedAt": "run_started_at",
+                   "event": "event", "headBranch": "head_branch", "attempt": "run_attempt",
+                   "workflowDatabaseId": "workflow_id"}
+RUN_LIST_STATUSES = {"queued", "completed", "in_progress", "requested", "waiting", "pending", "action_required",
+                     "cancelled", "failure", "neutral", "skipped", "stale", "startup_failure", "success", "timed_out"}
+
+
+def _run_list_options(args):
+    """{option: value} of a `run list` argv gh_json may answer from REST, or None."""
+    opts, i, rest = {}, 0, list(args[2:])
+    names = {"--workflow": "workflow", "-w": "workflow", "--branch": "branch", "-b": "branch", "--limit": "limit",
+             "-L": "limit", "--json": "json", "--status": "status", "-s": "status"}
+    while i < len(rest):
+        name = names.get(rest[i])
+        if name is None or i + 1 >= len(rest) or name in opts:
+            return None
+        opts[name] = rest[i + 1]
+        i += 2
+    if "json" not in opts or any(f not in RUN_LIST_FIELDS and f != "conclusion" for f in opts["json"].split(",")):
+        return None
+    if "workflow" in opts and not opts["workflow"].endswith((".yml", ".yaml")):
+        return None
+    if "status" in opts and opts["status"] not in RUN_LIST_STATUSES:
+        return None
+    try:
+        opts["limit"] = int(opts.get("limit", 20))
+    except ValueError:
+        return None
+    return opts if opts["limit"] > 0 else None
+
+
+def forge_run_list(o_r, args):
+    """`gh run list ...` (args from `run`), as gh prints it with --json, read through api(): None when it is not one
+    this answers (gh is asked instead). A workflow file not on the default branch raises gh's own words for it."""
+    opts = _run_list_options(args)
+    if opts is None:
+        return None
+    path = (f"actions/workflows/{urllib.parse.quote(opts['workflow'], safe='')}/runs" if "workflow" in opts
+            else "actions/runs")
+    params = {"exclude_pull_requests": "true"}
+    params.update({k: opts[k] for k in ("branch", "status") if k in opts})
+    fields, runs, page = opts["json"].split(","), [], 1
+    while len(runs) < opts["limit"]:
+        per = min(100, opts["limit"]) if opts["limit"] <= 100 else 100
+        try:
+            answer = api(o_r, "GET", path, dict(params, per_page=per, page=page)) or {}
+        except ForgeHTTPError as e:
+            if "workflow" in opts and re.search(r"HTTP 404|Not Found", str(e)):
+                raise RuntimeError(f"gh run list: HTTP 404: workflow {opts['workflow']} not found on the default "
+                                   f"branch (https://api.github.com/repos/{o_r}/{path})") from None
+            raise RuntimeError(f"gh run list: {e}") from None
+        batch = answer.get("workflow_runs") or []
+        runs += batch
+        if len(batch) < per:
+            break
+        page += 1
+
+    def shaped(r):
+        out = {f: r.get(RUN_LIST_FIELDS[f]) for f in fields if f in RUN_LIST_FIELDS}
+        if "conclusion" in fields:
+            out["conclusion"] = r.get("conclusion") or ""  # gh prints a pending run's conclusion as ""
+        return out
+
+    return [shaped(r) for r in runs[:opts["limit"]]]
+
+
 # -- GitHub's runs as agentctl's run record
 def github_run_status(status, conclusion):
     """A GitHub run's (status, conclusion) as one run status (success, failure, cancelled, skipped, running, waiting)."""

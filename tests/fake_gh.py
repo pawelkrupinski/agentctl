@@ -10,6 +10,9 @@
   api [-X M] [-H h] [-i] <path>   GET -> api-<path with /?&= as _>.json (GitHub's REST shapes); missing -> `HTTP 404`;
                              -i: headers first, an ETag per body, and a 304 for a matching If-None-Match;
                              any other method -> recorded (its --input body as `<pid> BODY <json>`), answers nothing
+                             repos/<o_r>/actions/runs or .../actions/workflows/<W>/runs with no such file -> the
+                             runs.json list (runs-<owner>_<repo>.json first) in GitHub's REST shape, filtered and paged
+                             by its query as GitHub does (branch, status, per_page, page); a W in workflows-absent -> 404
   api ... -R <repo>          refused, as gh does: `gh api` takes no -R (its path names the repo)
   release download <tag> -p <name> -O -  -> release-<tag>-<name>
   run cancel <id>, run rerun ..., workflow run ... -> recorded only
@@ -30,6 +33,47 @@ log(" ".join(argv))
 
 def opt(name):
     return argv[argv.index(name) + 1] if name in argv else None
+
+
+GH_TO_REST = {"databaseId": "id", "number": "run_number", "status": "status", "conclusion": "conclusion",
+              "headSha": "head_sha", "url": "html_url", "displayTitle": "display_title", "workflowName": "name",
+              "createdAt": "created_at", "updatedAt": "updated_at", "startedAt": "run_started_at", "event": "event",
+              "headBranch": "head_branch", "attempt": "run_attempt", "workflowDatabaseId": "workflow_id"}
+
+
+def recorded_runs(repo):
+    per_repo = os.path.join(d, f"runs-{repo.replace('/', '_')}.json") if repo else None
+    return json.load(open(per_repo if per_repo and os.path.exists(per_repo) else os.path.join(d, "runs.json")))
+
+
+def workflow_absent(w):
+    absent = os.path.join(d, "workflows-absent")
+    return bool(w) and os.path.exists(absent) and w in open(absent).read().split()
+
+
+def rest_runs(path):
+    """The REST answer to a runs list path, from runs.json; None when the path is not one."""
+    import urllib.parse
+    route, _, query = path.partition("?")
+    m = re.match(r"repos/([^/]+/[^/]+)/actions/(?:workflows/([^/]+)/)?runs$", route)
+    if not m:
+        return None
+    repo, w = m.group(1), urllib.parse.unquote(m.group(2)) if m.group(2) else None
+    if workflow_absent(w):
+        sys.stderr.write("gh: Not Found (HTTP 404)\n")
+        sys.exit(1)
+    q = dict(urllib.parse.parse_qsl(query))
+    runs = [r for r in recorded_runs(repo) if (not w or w in (r.get("workflowName"), r.get("workflowFile")))
+            and (not q.get("branch") or r.get("headBranch") == q["branch"])
+            and (not q.get("status") or q["status"] in (r.get("status"), r.get("conclusion")))]
+    per, page = int(q.get("per_page", 30)), int(q.get("page", 1))
+    rest = []
+    for r in runs[(page - 1) * per: page * per]:
+        out = {GH_TO_REST.get(k, k): v for k, v in r.items()}
+        if out.get("conclusion") == "":
+            out["conclusion"] = None
+        rest.append(out)
+    return json.dumps({"total_count": len(runs), "workflow_runs": rest})
 
 
 def emit(path):
@@ -66,10 +110,10 @@ if argv[:1] == ["api"]:
     if method != "GET":
         sys.exit(0)
     f = os.path.join(d, "api-" + re.sub(r"[/?&=]", "_", path) + ".json")
-    if not os.path.exists(f):
+    body = open(f).read() if os.path.exists(f) else rest_runs(path)
+    if body is None:
         sys.stderr.write("gh: Not Found (HTTP 404)\n")
         sys.exit(1)
-    body = open(f).read()
     if "\x1b" in body and "--allow-escape-sequences" not in argv:  # gh 2.8x+: a job log's ANSI colours are refused
         sys.stderr.write("the response contains terminal escape sequences; pass --allow-escape-sequences to output it "
                          "anyway\n")
@@ -107,11 +151,9 @@ elif argv[:2] == ["run", "download"]:
     os.makedirs(dest, exist_ok=True)
     shutil.copy(os.path.join(d, f"art-{rid}-{name}.txt"), os.path.join(dest, "verdict.txt"))
 elif argv[:2] == ["run", "list"]:
-    per_repo = os.path.join(d, f"runs-{repo.replace('/', '_')}.json") if repo else None
-    runs = json.load(open(per_repo if per_repo and os.path.exists(per_repo) else os.path.join(d, "runs.json")))
+    runs = recorded_runs(repo)
     w, b = opt("--workflow"), opt("--branch")
-    absent = os.path.join(d, "workflows-absent")
-    if w and os.path.exists(absent) and w in open(absent).read().split():
+    if workflow_absent(w):
         sys.stderr.write(f"HTTP 404: workflow {w} not found on the default branch "
                          f"(https://api.github.com/repos/{repo or 'o/r'}/actions/workflows/{w})\n")
         sys.exit(1)

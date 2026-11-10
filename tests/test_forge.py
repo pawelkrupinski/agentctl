@@ -54,12 +54,42 @@ class GithubForgeTest(unittest.TestCase):
         return rc, out.getvalue(), errb.getvalue()
 
     # -- the scenarios
-    def test_run_list_goes_through_this_forges_cli(self):
-        self.put("runs.json", [{"databaseId": 9, "number": 3, "status": "completed", "conclusion": "success",
-                                "headBranch": "main", "workflowName": "Main"}])
-        runs = A.gh_json(O_R, "run", "list", "--branch", "main", "--limit", "5", "--json", A.RUN_FIELDS)
-        self.assertEqual([r["databaseId"] for r in runs], [9])
-        self.assertEqual(self.calls(), [f"run list --branch main --limit 5 --json {A.RUN_FIELDS} -R {O_R}"])
+    def test_run_list_is_one_conditional_rest_read(self):
+        # 2026-11-10: `gh run list` sent no ETag and cost 2-3 requests (a workflows lookup, a workflows page to name
+        # the runs, the runs) of the App installation's 5,000 an hour; the gate read five of them every 45 s.
+        self.put("runs.json", [{"databaseId": 9, "number": 3, "status": "in_progress", "conclusion": "",
+                                "headBranch": "main", "workflowName": "Main", "workflowFile": "main.yml"},
+                               {"databaseId": 8, "number": 2, "status": "completed", "conclusion": "success",
+                                "headBranch": "land/x", "workflowName": "Main", "workflowFile": "main.yml"}])
+        runs = A.gh_json(O_R, "run", "list", "--workflow", "main.yml", "--branch", "main", "--limit", "5",
+                         "--json", A.RUN_FIELDS)
+        self.assertEqual([(r["databaseId"], r["number"], r["status"], r["conclusion"], r["workflowName"])
+                          for r in runs], [(9, 3, "in_progress", "", "Main")])
+        self.assertEqual(sorted(runs[0]), sorted(A.RUN_FIELDS.split(",")))
+        self.assertEqual(self.calls(), [f"api -i -X GET -H Accept: application/vnd.github+json repos/{O_R}/actions/"
+                                        f"workflows/main.yml/runs?exclude_pull_requests=true&branch=main&per_page=5"
+                                        f"&page=1"])
+
+    def test_run_list_pages_past_a_hundred(self):
+        self.put("runs.json", [{"databaseId": i, "status": "completed", "conclusion": "success", "headBranch": "main",
+                                "workflowName": "Main"} for i in range(250, 0, -1)])
+        runs = A.gh_json(O_R, "run", "list", "--branch", "main", "--limit", "150", "--json", "databaseId")
+        self.assertEqual([r["databaseId"] for r in runs], list(range(250, 100, -1)))
+        self.assertEqual(len(self.calls()), 2)
+
+    def test_run_list_of_a_workflow_not_on_main_says_what_gh_says(self):
+        self.put("runs.json", [])
+        self.put("workflows-absent", "identity-takes.yml\n")
+        with self.assertRaises(RuntimeError) as e:
+            A.gh_json(O_R, "run", "list", "--workflow", "identity-takes.yml", "--branch", "main", "--json", "databaseId")
+        self.assertRegex(str(e.exception), A.WORKFLOW_NOT_ON_MAIN)
+
+    def test_a_run_list_rest_cannot_answer_exactly_goes_to_gh(self):
+        self.put("runs.json", [{"databaseId": 9, "headBranch": "main", "workflowName": "Main"}])
+        A.gh_json(O_R, "run", "list", "--workflow", "Main", "--json", "databaseId")  # a NAME: gh's lookup
+        A.gh_json(O_R, "run", "list", "--user", "me", "--json", "databaseId")
+        A.gh_json(O_R, "run", "list", "--json", "databaseId,jobs")
+        self.assertEqual([c.split(" ", 2)[:2] for c in self.calls()], [["run", "list"]] * 3)
 
     def test_failed_log_and_takes_artifacts(self):
         self.put("run-5.log", "takes (pl)\tRun\t2026-10-30T10:00:00.0Z *** FAILED *** boom\n")
@@ -268,6 +298,14 @@ class ConditionalGetTest(GithubForgeTest):
         self.assertEqual(A.api(O_R, "GET", "actions/runs/7"), {"id": 7, "status": "completed"})
         second = self.calls()[-1]
         self.assertIn("If-None-Match: W/", second, "the second read is conditional")
+
+    def test_an_unchanged_run_list_is_a_free_304(self):
+        self.put("runs.json", [{"databaseId": 9, "status": "completed", "conclusion": "failure", "headBranch": "main",
+                                "workflowName": "Main", "workflowFile": "main.yml"}])
+        args = ("run", "list", "--workflow", "main.yml", "--branch", "main", "--limit", "30", "--json", A.RUN_FIELDS)
+        first = A.gh_json(O_R, *args)
+        self.assertEqual(A.gh_json(O_R, *args), first)
+        self.assertIn("If-None-Match: W/", self.calls()[-1], "the second list is conditional")
 
     def test_a_changed_resource_is_read_afresh(self):
         self.gh_api(f"repos/{O_R}/actions/runs/7", {"id": 7, "status": "in_progress"})

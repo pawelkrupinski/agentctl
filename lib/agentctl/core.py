@@ -589,7 +589,11 @@ def token_env(o_r, env=None):
 
 
 def gh_json(o_r, *args):
-    """A JSON read through gh (lib/agentctl/forge.py)."""
+    """A JSON read through gh (lib/agentctl/forge.py). A `run list` is answered from the REST API with conditional
+    GETs instead (forge_run_list), when it can be."""
+    listed = forge_run_list(o_r, args) if args[:2] == ("run", "list") else None
+    if listed is not None:
+        return listed
     r = subprocess.run(forge_argv(o_r, *args), capture_output=True, text=True, env=forge_env(o_r),
                        timeout=GH_JSON_TIMEOUT)
     if r.returncode != 0:

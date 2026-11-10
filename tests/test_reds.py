@@ -395,7 +395,8 @@ class FixTest(RedsBase):
         it = self.only()
         self.assertEqual(it["state"], "fix-pending")
         calls, saved = [], (A.api, A.record_dispatch)
-        A.api = lambda o_r, method, path, params=None, body=None: calls.append((method, path))
+        A.api = lambda o_r, method, path, params=None, body=None: (  # reads stay real: the run lists are REST reads
+            saved[0](o_r, method, path, params, body) if method == "GET" else calls.append((method, path)))
         A.record_dispatch = lambda **kw: None
         try:  # past the window from the fix's own time (its commit's wall clock, seconds after self.t's start)
             self.tick(advance=float(it["data"]["fix"]["at"]) + A.RED_FIX_RUN_START + 1 - self.t[0])
@@ -884,7 +885,9 @@ class OldRedTest(RedsBase):
         self.outside("name: Report run timings\non:\n  workflow_dispatch:\n    inputs:\n      runs: {required: true}\n")
         saved = (A.api, A.record_dispatch)
 
-        def refuse(*a, **k):
+        def refuse(o_r, method, path, params=None, body=None):  # the dispatch refused; reads stay real
+            if method == "GET":
+                return saved[0](o_r, method, path, params, body)
             raise RuntimeError("HTTP Error 400: Bad Request")
         A.api, A.record_dispatch = refuse, (lambda **kw: None)
         try:
@@ -937,7 +940,8 @@ class OldRedTest(RedsBase):
     def test_an_old_red_of_a_dispatchable_workflow_is_verified_by_a_fresh_run(self):
         self.outside("name: Report run timings\non:\n  workflow_dispatch:\n")
         calls, saved = [], (A.api, A.record_dispatch)
-        A.api = lambda o_r, method, path, params=None, body=None: calls.append((method, path))
+        A.api = lambda o_r, method, path, params=None, body=None: (  # reads stay real: the run lists are REST reads
+            saved[0](o_r, method, path, params, body) if method == "GET" else calls.append((method, path)))
         A.record_dispatch = lambda **kw: None
         try:
             self.tick(dispatch=True)
@@ -955,6 +959,8 @@ class OldRedTest(RedsBase):
         A.write_json(A.dispatches_dir("inputs", "90.json"), {"runs": "528 573"})  # `dispatch run` recorded them
 
         def api(o_r, method, path, params=None, body=None):
+            if method == "GET":  # reads stay real: the run lists are REST reads
+                return saved[0](o_r, method, path, params, body)
             calls.append((method, path, body))
             return None
         A.api, A.record_dispatch = api, (lambda **kw: None)
