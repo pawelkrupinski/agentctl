@@ -17,12 +17,77 @@ GITHUB_WEB = "https://github.com"
 
 def forge_env(o_r, env=None):
     """The CLI's environment: gh's own auth ($GH_TOKEN as set, else `gh auth login`'s; on ci-runner the repo's App
-    installation token), and never a prompt or an update check."""
+    installation token), and never a prompt or an update check. Every call is one gh process (or, with `env`, a token
+    handed to a child process), tallied against its caller (gh_tally)."""
+    gh_tally("token handoff" if env is not None else None)
     env = dict(os.environ if env is None else env)
     env.update(GH_PROMPT_DISABLED="1", GH_NO_UPDATE_NOTIFIER="1", NO_COLOR="1")
     if ghapp_enabled():  # ci-runner: the repo's App installation token (ghapp.py), never a person's
         env["GH_TOKEN"] = ghapp_token(o_r)
     return env
+
+
+# THE QUOTA TALLY (2026-11-10): the kinowo-lander installation's 5,000 requests an hour ran out on 11-09 23:00-23:50Z, and
+# at a quiet 03:27-03:31Z on 11-10 it spent ~2,500 an hour, ~960 of them the gate refresh's `gh run list` reads
+# (dcde282). Nothing said where the rest went: ci-runner hides other users' processes, and no call was logged. Every
+# gh process (forge_env) and every REST GET answered 304 (free) is now counted by the agentctl function that asked
+# and what it ran, and each process prints its tally every GH_TALLY_SECONDS:
+#   agentctl: github calls (pid P, 300 s): 41 gh processes, 12 of them 304 (free): 20 red_tick>run_jobs: gh run view ...
+GH_TALLY_SECONDS = 300
+GH_TALLY_PLUMBING = {"forge_env", "gh_tally", "gh_json", "api", "_gh_api_once", "forge_run_list", "forge_actions_runs",
+                     "forge_actions_run", "forge_branches", "forge_branch_sha", "forge_delete_branch",
+                     "forge_release_asset", "tool_env", "drift_env",
+                     "<lambda>", "<listcomp>", "<dictcomp>", "<genexpr>", "wrapper", "inner"}
+_gh_tally_lock = threading.Lock()
+_gh_tally_state = {"since": time.time(), "calls": {}, "free": 0}
+_gh_tally_kind = threading.local()
+
+
+def gh_tally_site():
+    """`outer>inner`: the two nearest agentctl functions above the forge plumbing that made the call."""
+    names, f = [], sys._getframe(1)
+    while f is not None and len(names) < 2:
+        if f.f_code.co_name not in GH_TALLY_PLUMBING and f.f_code.co_name != "<module>":
+            names.append(f.f_code.co_name)
+        f = f.f_back
+    return ">".join(reversed(names)) or "?"
+
+
+def gh_tally(kind=None, free=False, now_=None):
+    """Count one gh process (or, `free`, mark the last one a 304) against its caller, and print the tally once
+    GH_TALLY_SECONDS have passed since the last. `kind` names what ran; None: what gh_json/_gh_api_once said."""
+    kind = kind or getattr(_gh_tally_kind, "what", None) or "gh"
+    t = time.time() if now_ is None else now_
+    with _gh_tally_lock:
+        st = _gh_tally_state
+        if free:
+            st["free"] += 1
+        else:
+            key = f"{gh_tally_site()}: {kind}"
+            st["calls"][key] = st["calls"].get(key, 0) + 1
+        if t - st["since"] < GH_TALLY_SECONDS:
+            return
+        calls, freed, span = st["calls"], st["free"], t - st["since"]
+        st.update(since=t, calls={}, free=0)
+    if calls:
+        top = sorted(calls.items(), key=lambda kv: -kv[1])
+        err(f"github calls (pid {os.getpid()}, {span:.0f} s): {sum(calls.values())} gh processes, {freed} of them 304 "
+            f"(free): " + "; ".join(f"{n} {k}" for k, n in top[:12]) + (f"; {len(top) - 12} more sites" if len(top) > 12 else ""))
+
+
+@contextlib.contextmanager
+def gh_tally_as(what):
+    """What the gh process forge_env is about to count runs (gh_json's subcommand, a REST path's shape)."""
+    before, _gh_tally_kind.what = getattr(_gh_tally_kind, "what", None), what
+    try:
+        yield
+    finally:
+        _gh_tally_kind.what = before
+
+
+def gh_tally_shape(path):
+    """A REST path or gh argument with its ids and shas folded: runs/123/jobs -> runs/N/jobs."""
+    return re.sub(r"\b[0-9a-f]{40}\b", "SHA", re.sub(r"\b\d+\b", "N", path.split("?")[0]))[:80]
 
 
 def forge_argv(o_r, *args):
@@ -71,7 +136,9 @@ def _gh_api_once(o_r, method, path, params=None, body=None):
         argv[2:2] = ["-i"] + (["-H", f"If-None-Match: {cached['etag']}"] if cached and cached.get("etag") else [])
     if body is not None:
         argv += ["--input", "-"]
-    r = subprocess.run(argv, capture_output=True, text=True, env=forge_env(o_r), timeout=API_TIMEOUT,
+    with gh_tally_as(f"api {method} {gh_tally_shape(path)}"):
+        env = forge_env(o_r)
+    r = subprocess.run(argv, capture_output=True, text=True, env=env, timeout=API_TIMEOUT,
                        input=json.dumps(body) if body is not None else None)
     if method != "GET":
         if r.returncode != 0:
@@ -79,6 +146,7 @@ def _gh_api_once(o_r, method, path, params=None, body=None):
         return json.loads(r.stdout) if r.stdout.strip() else None
     status, hdrs, text = _split_response(r.stdout)
     if status == 304 and cached is not None:
+        gh_tally(free=True)
         return cached.get("body")
     if r.returncode != 0:
         raise ForgeHTTPError(f"gh api {method} {url}: {(r.stderr or text or r.stdout).strip()[:300]}")

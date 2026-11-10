@@ -594,8 +594,9 @@ def gh_json(o_r, *args):
     listed = forge_run_list(o_r, args) if args[:2] == ("run", "list") else None
     if listed is not None:
         return listed
-    r = subprocess.run(forge_argv(o_r, *args), capture_output=True, text=True, env=forge_env(o_r),
-                       timeout=GH_JSON_TIMEOUT)
+    with gh_tally_as("gh " + " ".join(gh_tally_shape(a) for a in args[:3])):
+        env = forge_env(o_r)
+    r = subprocess.run(forge_argv(o_r, *args), capture_output=True, text=True, env=env, timeout=GH_JSON_TIMEOUT)
     if r.returncode != 0:
         raise RuntimeError(f"gh {' '.join(args)}: {r.stderr.strip()[:300]}")
     return json.loads(r.stdout)

@@ -307,6 +307,33 @@ class ConditionalGetTest(GithubForgeTest):
         self.assertEqual(A.gh_json(O_R, *args), first)
         self.assertIn("If-None-Match: W/", self.calls()[-1], "the second list is conditional")
 
+    def test_every_gh_process_is_tallied_by_its_caller_and_the_tally_printed_on_schedule(self):
+        # 2026-11-10: the lander installation spent ~1,500 requests an hour nobody could attribute (ci-runner hides
+        # other users' processes, and no call was logged); each process now prints its own tally
+        A._gh_tally_state.update(since=A.time.time(), calls={}, free=0)
+        saved, A.GH_TALLY_SECONDS = A.GH_TALLY_SECONDS, 10 ** 9
+        self.addCleanup(setattr, A, "GH_TALLY_SECONDS", saved)
+        self.gh_api(f"repos/{O_R}/actions/runs/7", {"id": 7, "status": "completed"})
+
+        def read_the_run():
+            return A.api(O_R, "GET", "actions/runs/7")
+
+        read_the_run()
+        read_the_run()  # unchanged: a 304
+        self.assertEqual(A._gh_tally_state["calls"],
+                         {"test_every_gh_process_is_tallied_by_its_caller_and_the_tally_printed_on_schedule>"
+                          "read_the_run: api GET actions/runs/N": 2})
+        self.assertEqual(A._gh_tally_state["free"], 1)
+        A.GH_TALLY_SECONDS = 300
+        errb = io.StringIO()
+        with contextlib.redirect_stderr(errb):
+            A.gh_tally("gh run view", now_=A._gh_tally_state["since"] + 301)
+        line = errb.getvalue()
+        self.assertIn("(pid", line)
+        self.assertIn("3 gh processes, 1 of them 304 (free): 2 ", line)
+        self.assertIn("read_the_run: api GET actions/runs/N", line)
+        self.assertEqual(A._gh_tally_state["calls"], {}, "a printed tally starts again")
+
     def test_a_changed_resource_is_read_afresh(self):
         self.gh_api(f"repos/{O_R}/actions/runs/7", {"id": 7, "status": "in_progress"})
         A.api(O_R, "GET", "actions/runs/7")
