@@ -228,7 +228,8 @@ class GithubForgeTest(unittest.TestCase):
     def test_gh_api_takes_no_repo_flag(self):
         self.gh_api(f"repos/{O_R}/git/commits/abc", {"message": "m"})
         self.assertEqual(A.gh_json(O_R, "api", f"repos/{O_R}/git/commits/abc"), {"message": "m"})
-        self.assertEqual(self.calls(), [f"api repos/{O_R}/git/commits/abc"])
+        self.assertNotIn("-R", self.calls()[-1].split())
+        self.assertTrue(self.calls()[-1].endswith(f" repos/{O_R}/git/commits/abc"))
 
     def test_a_missing_branch_is_a_404(self):
         self.assertFalse(A.branch_exists(O_R, "measure/gone"))
@@ -321,7 +322,7 @@ class ConditionalGetTest(GithubForgeTest):
         read_the_run()
         read_the_run()  # unchanged: a 304
         self.assertEqual(A._gh_tally_state["calls"],
-                         {"test_every_gh_process_is_tallied_by_its_caller_and_the_tally_printed_on_schedule>"
+                         {"movies test_every_gh_process_is_tallied_by_its_caller_and_the_tally_printed_on_schedule>"
                           "read_the_run: api GET actions/runs/N": 2})
         self.assertEqual(A._gh_tally_state["free"], 1)
         A.GH_TALLY_SECONDS = 300
@@ -330,9 +331,17 @@ class ConditionalGetTest(GithubForgeTest):
             A.gh_tally("gh run view", now_=A._gh_tally_state["since"] + 301)
         line = errb.getvalue()
         self.assertIn("(pid", line)
-        self.assertIn("3 gh processes, 1 of them 304 (free): 2 ", line)
+        self.assertIn("3 gh processes (movies 2, ? 1), 1 of them 304 (free): 2 movies ", line)
         self.assertIn("read_the_run: api GET actions/runs/N", line)
         self.assertEqual(A._gh_tally_state["calls"], {}, "a printed tally starts again")
+
+    def test_a_bare_gh_api_read_is_a_conditional_get(self):
+        # 2026-11-10's tally: branch_exists, the retire reads and ci-why's commit reads went through `gh api` with no
+        # If-None-Match, charged every time though the answer had not changed
+        self.gh_api(f"repos/{O_R}/commits/main", {"sha": "abc"})
+        self.assertEqual(A.gh_json(O_R, "api", f"repos/{O_R}/commits/main"), {"sha": "abc"})
+        self.assertEqual(A.gh_json(O_R, "api", f"repos/{O_R}/commits/main"), {"sha": "abc"})
+        self.assertIn("If-None-Match: W/", self.calls()[-1], "the second read is conditional")
 
     def test_a_changed_resource_is_read_afresh(self):
         self.gh_api(f"repos/{O_R}/actions/runs/7", {"id": 7, "status": "in_progress"})

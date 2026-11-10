@@ -590,10 +590,14 @@ def token_env(o_r, env=None):
 
 def gh_json(o_r, *args):
     """A JSON read through gh (lib/agentctl/forge.py). A `run list` is answered from the REST API with conditional
-    GETs instead (forge_run_list), when it can be."""
+    GETs instead (forge_run_list), when it can be, and so is a bare `api repos/<o_r>/...` read."""
     listed = forge_run_list(o_r, args) if args[:2] == ("run", "list") else None
     if listed is not None:
         return listed
+    # A bare `gh api repos/<o_r>/...` read is a GET: through api()'s conditional GET, free (304) when unchanged
+    # (2026-11-10's tally: branch_exists, the retire reads and ci-why's commit reads sent no If-None-Match)
+    if len(args) == 2 and args[0] == "api" and args[1].startswith(f"repos/{o_r}/"):
+        return _gh_api_once(o_r, "GET", args[1][len(f"repos/{o_r}/"):])
     with gh_tally_as("gh " + " ".join(gh_tally_shape(a) for a in args[:3])):
         env = forge_env(o_r)
     r = subprocess.run(forge_argv(o_r, *args), capture_output=True, text=True, env=env, timeout=GH_JSON_TIMEOUT)

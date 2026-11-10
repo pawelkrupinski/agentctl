@@ -19,7 +19,7 @@ def forge_env(o_r, env=None):
     """The CLI's environment: gh's own auth ($GH_TOKEN as set, else `gh auth login`'s; on ci-runner the repo's App
     installation token), and never a prompt or an update check. Every call is one gh process (or, with `env`, a token
     handed to a child process), tallied against its caller (gh_tally)."""
-    gh_tally("token handoff" if env is not None else None)
+    gh_tally("token handoff" if env is not None else None, o_r=o_r)
     env = dict(os.environ if env is None else env)
     env.update(GH_PROMPT_DISABLED="1", GH_NO_UPDATE_NOTIFIER="1", NO_COLOR="1")
     if ghapp_enabled():  # ci-runner: the repo's App installation token (ghapp.py), never a person's
@@ -32,7 +32,8 @@ def forge_env(o_r, env=None):
 # (dcde282). Nothing said where the rest went: ci-runner hides other users' processes, and no call was logged. Every
 # gh process (forge_env) and every REST GET answered 304 (free) is now counted by the agentctl function that asked
 # and what it ran, and each process prints its tally every GH_TALLY_SECONDS:
-#   agentctl: github calls (pid P, 300 s): 41 gh processes, 12 of them 304 (free): 20 red_tick>run_jobs: gh run view ...
+#   agentctl: github calls (pid P, 300 s): 41 gh processes (movies 30, core 11), 12 of them 304 (free): 20 movies
+#   red_tick>run_jobs: gh run view ...  -- every site, by repository (the lander's quota is movies' alone)
 GH_TALLY_SECONDS = 300
 GH_TALLY_PLUMBING = {"forge_env", "gh_tally", "gh_json", "api", "_gh_api_once", "forge_run_list", "forge_actions_runs",
                      "forge_actions_run", "forge_branches", "forge_branch_sha", "forge_delete_branch",
@@ -53,7 +54,7 @@ def gh_tally_site():
     return ">".join(reversed(names)) or "?"
 
 
-def gh_tally(kind=None, free=False, now_=None):
+def gh_tally(kind=None, free=False, now_=None, o_r=None):
     """Count one gh process (or, `free`, mark the last one a 304) against its caller, and print the tally once
     GH_TALLY_SECONDS have passed since the last. `kind` names what ran; None: what gh_json/_gh_api_once said."""
     kind = kind or getattr(_gh_tally_kind, "what", None) or "gh"
@@ -63,7 +64,7 @@ def gh_tally(kind=None, free=False, now_=None):
         if free:
             st["free"] += 1
         else:
-            key = f"{gh_tally_site()}: {kind}"
+            key = f"{(o_r or '?').split('/')[-1]} {gh_tally_site()}: {kind}"
             st["calls"][key] = st["calls"].get(key, 0) + 1
         if t - st["since"] < GH_TALLY_SECONDS:
             return
@@ -71,8 +72,12 @@ def gh_tally(kind=None, free=False, now_=None):
         st.update(since=t, calls={}, free=0)
     if calls:
         top = sorted(calls.items(), key=lambda kv: -kv[1])
-        err(f"github calls (pid {os.getpid()}, {span:.0f} s): {sum(calls.values())} gh processes, {freed} of them 304 "
-            f"(free): " + "; ".join(f"{n} {k}" for k, n in top[:12]) + (f"; {len(top) - 12} more sites" if len(top) > 12 else ""))
+        per_repo = {}
+        for k, n in top:
+            per_repo[k.split(" ", 1)[0]] = per_repo.get(k.split(" ", 1)[0], 0) + n
+        err(f"github calls (pid {os.getpid()}, {span:.0f} s): {sum(calls.values())} gh processes "
+            f"({', '.join(f'{r} {n}' for r, n in sorted(per_repo.items(), key=lambda kv: -kv[1]))}), {freed} of them 304 "
+            f"(free): " + "; ".join(f"{n} {k}" for k, n in top))
 
 
 @contextlib.contextmanager
