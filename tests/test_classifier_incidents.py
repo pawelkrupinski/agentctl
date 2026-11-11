@@ -41,6 +41,17 @@ class Incidents(unittest.TestCase):
         self.assertIsNotNone(A.INFRA_LOG.search(out))
         self.assertEqual(A.classify_job(job("Run tests"), [out], (1, [out]))[0], "infra")
 
+    def test_a_toolchain_setup_action_failure_is_infra_never_a_test_failure(self):
+        """movies Main #2388 (2026-11-11): swift-actions/setup-swift could not refresh its GPG keys from
+        keyserver.ubuntu.com; read as a TEST FAILURE, blamed on the run's only commit (mobile-ship's 2.0.17 version
+        bump, both stores already on 2.0.17) and its revert queued."""
+        lines = ["##[error]Unexpected error, unable to continue. Please report at https://github.com/swift-actions/setup-swift/issues",
+                 "Error: Failed to refresh keys from any server in the pool."]
+        for step in ("Run swift-actions/setup-swift@v2", "Run actions/setup-java@v5", "Run actions/setup-node@v5"):
+            self.assertEqual(A.classify_job(job(step), lines, (2, lines))[0], "infra", step)
+        test_line = ["[info] - should keep the order *** FAILED ***"]
+        self.assertEqual(A.classify_job(job("Run sbt test"), test_line, (1, test_line))[0], "test")
+
     def test_a_setup_step_failure_is_infra(self):
         self.assertEqual(A.classify_job(job("Set up job"), [], (0, []))[0], "infra")
 

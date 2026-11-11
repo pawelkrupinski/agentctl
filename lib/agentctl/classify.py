@@ -25,6 +25,8 @@ INFRA_STEPS = [
     ("registry login", r"(docker/login-action|^Log ?in to\b|\blogin\b.*registry|registry.*\blogin\b)",
      "2026-10-31: docker login `denied` read as a TEST FAILURE"),
     ("docker setup", r"(docker/setup-(buildx|qemu)-action|^Set up Docker)", "a buildx bootstrap that timed out"),
+    ("toolchain setup", r"^(Run )?[\w.-]+/setup-[\w.-]+@",
+     "movies Main #2388, 2026-11-11: setup-swift's keyserver refresh failed, blamed on the release commit"),
 ]
 SETUP_STEP = re.compile("|".join(f"(?:{p})" for _n, p, _i in INFRA_STEPS), re.I)
 
