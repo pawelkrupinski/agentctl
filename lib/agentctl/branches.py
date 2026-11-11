@@ -1033,14 +1033,42 @@ def save_run_sigs(o_r, run, workflow, per_job):
     return sigs
 
 
-def run_sigs(o_r, run, workflow):
-    """The signatures of a completed red run: [{job, kind, line, sig}] (cached; explain_run fills the cache)."""
-    rec = read_record(reds_dir("runsig", f"{run.get('databaseId')}.json"))
+# A RUN WHOSE LOG WENT UNREAD IS READ AGAIN WITH BACKOFF, never every tick: its answer is kept in runsig-unread/ (never
+# runsig/, whose record means a final read to every reader) and re-read after 5 min, then 10, 20, ... at most 2 h.
+# 2026-11-11: run 43014208013's failed log ("log not found: 130501277846", a job GitHub has no log for) was re-read 211
+# times in 40 min -- gh run view, --log-failed and the job's --log every tick -- until kinowo-lander's 5000/h was spent
+# and the gate itself went unread for 20 min.
+RUNSIG_UNREAD_FIRST = 300
+RUNSIG_UNREAD_MAX = 7200
+
+
+def run_sigs(o_r, run, workflow, now_=None):
+    """The signatures of a completed red run: [{job, kind, line, sig}] (cached; explain_run fills the cache). A run whose
+    log went unread answers what it last read until its backoff is due (RUNSIG_UNREAD_FIRST)."""
+    t = time.time() if now_ is None else now_
+    rid = run.get("databaseId")
+    rec = read_record(reds_dir("runsig", f"{rid}.json"))
     if rec is not None and rec.get("classifier") == classifier_version():
         return rec["sigs"]
+    unread_path = reds_dir("runsig-unread", f"{rid}.json")
+    unread = read_record(unread_path)
+    if unread and unread.get("classifier") == classifier_version() and t < float(unread.get("due") or 0):
+        return unread["sigs"]
     lines, _num, per_job = explain_run_jobs(o_r, run, 6)
-    if any("LOG UNREADABLE" in l for l in lines):  # a log not read is no verdict: read again next time, never cached
-        return [{"job": j, "kind": k, "line": (l or "")[:300], "sig": signature(workflow, j, l)} for j, k, l in per_job]
+    if any("LOG UNREADABLE" in l for l in lines):  # a log not read is no verdict: read again when due, never cached
+        sigs = [{"job": j, "kind": k, "line": (l or "")[:300], "sig": signature(workflow, j, l)} for j, k, l in per_job]
+        tries = int((unread or {}).get("tries") or 0) + 1
+        try:
+            write_json(unread_path, {"run": rid, "classifier": classifier_version(), "sigs": sigs, "tries": tries,
+                                     "due": t + min(RUNSIG_UNREAD_MAX, RUNSIG_UNREAD_FIRST * 2 ** (tries - 1))})
+        except OSError:
+            pass
+        return sigs
+    if unread:
+        try:
+            os.remove(unread_path)
+        except OSError:
+            pass
     return save_run_sigs(o_r, run, workflow, per_job)
 
 

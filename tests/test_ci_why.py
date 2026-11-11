@@ -285,6 +285,35 @@ class CiWhyTest(FakeForge):
         self.assertIn("fake gh: no run-39.log", out)
         self.assertIn("verdict: UNCLEAR", out)
 
+    def test_an_unreadable_log_is_read_again_with_backoff_never_every_tick(self):
+        # 2026-11-11: run 43014208013's failed log ("log not found: 130501277846") went unread 211 times in 40 min --
+        # every tick re-read the run (gh run view, --log-failed, the job's --log), until kinowo-lander's 5000/h was
+        # spent and the gate itself could not be read for 20 min (`gate UNREAD`).
+        self.scenario([{**job("takes-drift-2 (germany)", conclusion="failure"), "steps": [step("Check drift", "failure")]}])
+        os.remove(os.path.join(self.d, "run-39.log"))
+        red = run(39, 19, "Identity model convergence", "identity-model-convergence.yml", conclusion="failure")
+        o_r, wf, t = "pawelkrupinski/movies", "Identity model convergence", 1_800_000_000.0
+
+        def failed_log_reads():
+            with open(os.path.join(self.d, "calls.log")) as f:
+                return sum("--log-failed" in line for line in f)
+
+        first = A.run_sigs(o_r, red, wf, now_=t)
+        self.assertEqual([s["kind"] for s in first], ["unclear"])
+        reads = failed_log_reads()
+        self.assertGreater(reads, 0)
+        self.assertEqual(A.run_sigs(o_r, red, wf, now_=t + 60), first)  # the next ticks keep its answer...
+        self.assertEqual(A.run_sigs(o_r, red, wf, now_=t + A.RUNSIG_UNREAD_FIRST - 1), first)
+        self.assertEqual(failed_log_reads(), reads)  # ...without asking GitHub again
+        A.run_sigs(o_r, red, wf, now_=t + A.RUNSIG_UNREAD_FIRST)  # due: read again
+        self.assertEqual(failed_log_reads(), 2 * reads)
+        A.run_sigs(o_r, red, wf, now_=t + A.RUNSIG_UNREAD_FIRST + A.RUNSIG_UNREAD_FIRST)  # the wait doubled
+        self.assertEqual(failed_log_reads(), 2 * reads)
+        self.put("run-39.log", "takes-drift-2 (germany)\tCheck drift\t2026-10-23T10:00:00Z [info] - a take *** FAILED ***\n")
+        A.run_sigs(o_r, red, wf, now_=t + 3 * A.RUNSIG_UNREAD_FIRST)  # read once due; the log is there now
+        self.assertEqual([s["kind"] for s in A.run_sigs(o_r, red, wf, now_=t + 3 * A.RUNSIG_UNREAD_FIRST + 1)], ["test"])
+        self.assertIsNone(A.read_record(A.reds_dir("runsig-unread", "39.json")))  # read: the backoff record is gone
+
     def test_artifact_exists_is_infra_and_silent_log_is_unclear(self):
         self.scenario([{**job("a", conclusion="failure"), "steps": [step("Upload", "failure")]},
                        {**job("b", conclusion="failure"), "steps": [step("Resolve", "failure")]}],
