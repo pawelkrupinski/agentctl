@@ -376,6 +376,58 @@ class FixTest(RedsBase):
         self.assertTrue(any(str(e.get("verdict")).startswith("FIX FAILED") for e in self.inbox()))
 
 
+    def refute_with_main_23(self, sha):
+        """Main #23 contains sha and still fails the same way."""
+        self.main_red(51, 23, older_runs=[run(40, 20, "Main", "main.yml", self.sha, conclusion="failure")])
+        rj = json.load(open(os.path.join(self.d, "run-51.json")))
+        rj["headSha"] = sha
+        self.put("run-51.json", rj)
+        runs = json.load(open(os.path.join(self.d, "runs.json")))
+        runs[0]["headSha"] = sha
+        self.put("runs.json", runs)
+
+    def landed_fix_whose_entry_reads_open(self):
+        """A fix landed through the queue whose entry FILE still says `waiting` (stale) while the store's change says
+        landed -- what red_fix_of reads as on its way and red_fix_fresh turns into the landed sha."""
+        wt = self.r.worktree("repo-wt-stale", branch="repo-wt-stale")
+        self.r.write("fix.txt", "stale\n", at=wt)
+        sha = self.r.commit("fix FooSpec\n\nFixes-Red: 20", at=wt)
+        d = A.waiting_state(self.r.path)[0]
+        e, _ = A.queue_change(d, {"worktree": wt, "branch": "repo-wt-stale", "head": sha, "commits": [sha]})
+        e["status"] = "waiting"
+        A.save_entry(d, e)
+        ch = self.st.put_item("change", e["id"], "queued", {"worktree": wt, "head": sha, "submitted_at": self.t[0]})
+        self.r.push(at=wt, ref=f"{sha}:main")
+        self.st.transition("change", e["id"], "landed", ch["version"], data={"tip": sha})
+        return sha
+
+    def test_a_refuted_fix_whose_entry_still_reads_open_never_takes_the_red_back(self):
+        # 2026-11-11, Verify scrape recording #23: a red flipped offered -> fix-pending -> offered every ~50 s, 593
+        # times ("recurring: 593 fixes refuted"), each round re-adopting the same refuted 547709c1e2 through its queue
+        # entry, so no fixer was ever offered it; it then sat in fix-pending on that fix.
+        self.tick()
+        sha = self.landed_fix_whose_entry_reads_open()
+        self.tick()
+        self.assertEqual((self.only()["state"], self.only()["data"]["fix"]["sha"]), ("fix-pending", sha))
+        self.refute_with_main_23(sha)
+        self.tick()
+        self.assertEqual((self.only()["state"], self.only()["data"]["refuted"]), ("offered", [sha]))
+        self.tick(advance=60)
+        it = self.only()
+        self.assertEqual((it["state"], it["data"]["refuted"]), ("offered", [sha]))  # never snapped back to fix-pending
+
+    def test_a_red_pending_on_a_fix_it_already_refuted_is_offered_again(self):
+        # The state 784badc4406e.3 was left in: fix-pending on a fix its own `refuted` lists, waiting hours for a run
+        # to verify what a run had already refuted.
+        self.tick()
+        sha = self.landed_fix_whose_entry_reads_open()
+        self.tick()
+        it = self.only()
+        self.assertEqual(it["state"], "fix-pending")
+        self.st.update_item("red", it["id"], it["version"], {"refuted": [sha]})
+        self.tick(advance=60)
+        self.assertEqual(self.only()["state"], "offered")
+
     def test_an_outside_reds_landed_fix_gets_its_workflow_dispatched_to_verify_it(self):
         self.put("runs.json", [run(40, 20, "Main", "main.yml", self.sha), run(39, 19, "Identity model convergence",
                                                                              "identity-model-convergence.yml", self.sha),

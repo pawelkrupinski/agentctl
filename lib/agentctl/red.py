@@ -1593,7 +1593,7 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
     row = store.get(red_lease(key))
     live = lease_is_live(row, t)
     gone = obs is not None and red_gone(it, obs, snap)
-    fix = red_fix_fresh(store, red_fix_of(it, facts))
+    fix = red_fix_current(store, it, facts)
     block = red_block_of(it, store)
     acts = []
     if st not in RED_TERMINAL:
@@ -2169,6 +2169,18 @@ def red_fix_fresh(store, fix):
     return {**fix, "status": ENTRY_STATUS.get(ch["state"], fix.get("status"))}
 
 
+def red_fix_current(store, it, facts):
+    """THE fix on its way for this red: red_fix_of's, corrected by the store (red_fix_fresh) -- and, once the store has
+    turned it into a landed sha, never one the red refuted or set aside. red_fix_of can only judge the shas it reads; an
+    entry its file still calls open is upgraded to its landed sha afterwards. 2026-11-11, Verify scrape recording #23
+    (784badc4406e.3): a stale `waiting` entry came back as the refuted 547709c1e2 every tick, offered -> fix-pending ->
+    offered 593 times, and no fixer was ever offered the red."""
+    fix = red_fix_fresh(store, red_fix_of(it, facts))
+    if fix and fix.get("sha") and red_fix_is_set_aside(fix["sha"], red_set_aside(it["data"], facts), facts):
+        return None
+    return fix
+
+
 def red_fix_follow(store, f, repo, t):
     """(fix, its change's state) for a not-yet-landed fix f whose change ENDED without landing: the change that carries
     its work since -- the earliest later change of the same worktree (landed, or still open) -- or f's own commits
@@ -2206,6 +2218,11 @@ def red_fix_follow(store, f, repo, t):
 def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
     d = it["data"]
     f = d.get("fix") or {}
+    if f.get("sha") and red_fix_is_set_aside(f["sha"], red_set_aside(d, facts), facts):
+        # PENDING ON A FIX IT ALREADY REFUTED (or set aside): no run can verify it now; back to a fixer
+        line = f"{red_what(d)}: its fix {f['sha'][:10]} was already refuted: offered again"
+        red_offer(store, it, line, data={"fix": None})
+        return [f"re-offered {red_what(d)} (its fix {f['sha'][:10]} already refuted)"]
     if fix and (fix.get("entry"), fix.get("sha"), fix["status"]) != (f.get("entry"), f.get("sha"), f.get("status")):
         if fix["status"] == "landed" and f.get("status") != "landed":
             # VERIFICATION STARTS WHEN THE FIX LANDS: the state's deadline (and red_fix_since) run from here, never
