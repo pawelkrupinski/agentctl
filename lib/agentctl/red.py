@@ -909,6 +909,12 @@ def red_names(d):
     return set(d.get("runs") or []) | {d.get("key")} | ({"local"} if d.get("workflow") == LOCAL_FLOW else set())
 
 
+def red_refuted(d):
+    """The red's refuted fixes, each once, in the order they were refuted. A list that took one sha many times (784badc4406e.3,
+    2026-11-11: 2 shas stored 593 times) counts its distinct fixes, never its entries."""
+    return list(dict.fromkeys(d.get("refuted") or []))
+
+
 def red_set_aside(d, facts):
     """(shas, patch-ids) of the fixes this red refuted or set aside unverified: a candidate fix is one of them when its
     sha (or a prefix) is, or its CONTENT is -- the same patch-id under another sha (a rebase, a cherry-pick)."""
@@ -2344,7 +2350,7 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
         refuted_blame = blame_refuted(repo, d.get("blame"), sha)  # the red's own revert: the culprit was wrong
         line = f"FIX FAILED: {red_what(d)}: #{last.get('number')} still fails this way (fix {sha[:10]})"
         inbox_write("red", line, [line], [d.get("line") or ""], 1)
-        refuted = (d.get("refuted") or []) + [sha]
+        refuted = red_refuted({"refuted": (d.get("refuted") or []) + [sha]})
         h = {"at": iso_at(t), "holder": f.get("entry") or sha[:10], "outcome": f"fix {sha[:10]} refuted by #{last.get('number')}",
              "session": f.get("session"), "worktree": f.get("worktree")}
         red_offer(store, it, line, data={"attempts": int(d.get("attempts") or 0) + 1, "refuted": refuted, "fix": None,
@@ -2406,7 +2412,7 @@ def red_verify_dispatch(o_r, repo, workflow, sha, run_id=None):
         return f"FIX UNVERIFIED: no workflow file named {workflow!r} on main"
     if "workflow_dispatch" not in txt:
         return f"FIX UNVERIFIED until {workflow}'s next scheduled run (no workflow_dispatch)"
-    inputs = run_dispatch_inputs(o_r, run_id) if run_id else {}
+    inputs = (run_dispatch_inputs(o_r, run_id) or run_title_inputs(o_r, run_id, txt)) if run_id else {}
     try:
         api(o_r, "POST", f"actions/workflows/{os.path.basename(path)}/dispatches", body={"ref": "main", "inputs": inputs})
         record_dispatch(branch="main", workflow=workflow, sha=sha, agent="red verify", pid=os.getpid(), inputs=inputs,
@@ -2421,6 +2427,22 @@ def run_dispatch_inputs(o_r, run_id):
     GitHub serves no run's inputs: they are the dispatch record's (agentctl's own, written by `dispatch run`)."""
     rec = read_record(dispatches_dir("inputs", f"{run_id}.json"))
     return {str(k): str(v) for k, v in rec.items()} if isinstance(rec, dict) else {}
+
+
+RUN_TITLE_INPUT = re.compile(r"(?<!\S)([A-Za-z_][\w-]*)=(\S*)")
+
+
+def run_title_inputs(o_r, run_id, workflow_text):
+    """The dispatch inputs a run that agentctl did not start carries in its title: the workflow's `run-name` writes them
+    as `name=value` (`Verify scrape recording recording=<id> countries=<cc,...>`), and only names the workflow declares
+    as an input are taken. {} when its title names none or the run cannot be read. 2026-11-11, Verify scrape recording
+    #23: dispatched by Record scrape fixtures, its verify went out without the required `recording` (HTTP 422)."""
+    try:
+        title = gh_json(o_r, "run", "view", str(run_id), "--json", "displayTitle").get("displayTitle") or ""
+    except (Exception, SystemExit):
+        return {}
+    return {k: v for k, v in RUN_TITLE_INPUT.findall(title)
+            if re.search(rf"^\s+{re.escape(k)}:\s*$", workflow_text or "", re.M)}
 
 
 def http_error_text(e):

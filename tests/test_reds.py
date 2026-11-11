@@ -416,6 +416,17 @@ class FixTest(RedsBase):
         it = self.only()
         self.assertEqual((it["state"], it["data"]["refuted"]), ("offered", [sha]))  # never snapped back to fix-pending
 
+    def test_refuted_fixes_are_counted_once_each(self):
+        # 784badc4406e.3 stored the same two shas 593 times: "recurring: 593 fixes refuted", and a fixer brief that
+        # would have listed all 593 as the landed fixes it outlived.
+        self.tick()
+        it = self.only()
+        a, b = "a" * 40, "b" * 40
+        self.st.update_item("red", it["id"], it["version"], {"refuted": [a, b, a, b, a, a]})
+        text, _short = A.red_view_state(self.st, self.only())
+        self.assertNotIn("recurring", text)  # 2 distinct refuted fixes, under RED_RECURRING
+        self.assertEqual(A.red_refuted({"refuted": [a, b, a, b, a, a, "c" * 40]}), [a, b, "c" * 40])
+
     def test_a_red_pending_on_a_fix_it_already_refuted_is_offered_again(self):
         # The state 784badc4406e.3 was left in: fix-pending on a fix its own `refuted` lists, waiting hours for a run
         # to verify what a run had already refuted.
@@ -456,6 +467,30 @@ class FixTest(RedsBase):
             A.api, A.record_dispatch = saved
         self.assertIn(("POST", "actions/workflows/identity-capture.yml/dispatches"), calls)
         self.assertTrue(self.only()["data"]["fix"]["verify_dispatched"])
+
+    def test_a_verify_dispatch_takes_the_failing_runs_inputs_from_its_title_when_agentctl_did_not_start_it(self):
+        # 2026-11-11, Verify scrape recording #23: dispatched by Record scrape fixtures (no agentctl record of its
+        # inputs; GitHub serves none), the verifying dispatch went out without its required `recording` and GitHub
+        # refused it (HTTP 422) -- no run could verify the red. The workflow's run-name carries `name=value` inputs.
+        self.r.write(".github/workflows/verify-scrape-recording.yml",
+                     "name: Verify scrape recording\nrun-name: Verify scrape recording recording=${{ inputs.recording }} "
+                     "countries=${{ inputs.countries }}\non:\n  workflow_dispatch:\n    inputs:\n      recording:\n"
+                     "        required: true\n        type: string\n      countries:\n        required: false\n"
+                     "        type: string\n")
+        self.r.commit("the workflow")
+        self.r.push()
+        self.tick()
+        self.put("run-70.json", {"displayTitle": "Verify scrape recording recording=4242 countries=pl,de unrelated=x",
+                                 "number": 23, "status": "completed", "conclusion": "failure", "jobs": []})
+        posted, saved = [], (A.api, A.record_dispatch)
+        A.api = lambda o_r, method, path, params=None, body=None: posted.append((path, body))
+        A.record_dispatch = lambda **kw: None
+        try:
+            line = A.red_verify_dispatch("pawelkrupinski/movies", self.r.path, "Verify scrape recording", "f" * 40, 70)
+        finally:
+            A.api, A.record_dispatch = saved
+        self.assertEqual(posted, [("actions/workflows/verify-scrape-recording.yml/dispatches",
+                                   {"ref": "main", "inputs": {"recording": "4242", "countries": "pl,de"}})], line)
 
 
     def test_a_change_landing_on_red_under_the_ci_fix_rule_is_no_fix_for_the_red(self):

@@ -80,8 +80,8 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
               f"{FIXER_UNLANDED_NUDGE // 60} min get a RED-NUDGE.md in your worktree (read it, land, delete it), then an "
               f"escalation to the owner.\n\n=== THE FIXER BRIEF ({bpath.replace(HOME, '~')}) ===\n{btext}\n"
               "=== END OF THE FIXER BRIEF ===\n\n")
-    if len(u.get("refuted") or []) >= RED_RECURRING:
-        common += (f"RECURRING: this failure outlived {len(u['refuted'])} landed fixes ({', '.join(x[:10] for x in u['refuted'])}): "
+    if len(red_refuted(u)) >= RED_RECURRING:
+        common += (f"RECURRING: this failure outlived {len(red_refuted(u))} landed fixes ({', '.join(x[:10] for x in red_refuted(u))}): "
                    "each treated a symptom. Read them (`git show`), find the ROOT CAUSE they all missed, and fix that; "
                    "another symptom fix is not a fix. ")
     if u.get("orphan"):  # an unlanded change whose author ended (orphan_duty)
@@ -1284,7 +1284,7 @@ def red_view_state(store, it, t=None):
     t = t if t is not None else store.clock()
     d, st = it["data"], it["state"]
     at = time.strftime("%H:%M", time.localtime(it["deadline"]))
-    rec = f" -- recurring: {len(d.get('refuted') or [])} fixes refuted" if len(d.get("refuted") or []) >= RED_RECURRING else ""
+    rec = f" -- recurring: {len(red_refuted(d))} fixes refuted" if len(red_refuted(d)) >= RED_RECURRING else ""
     if st == "red":
         return "observed: offered at the next tick", "offering"
     if st == "offered":
