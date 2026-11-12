@@ -24,6 +24,7 @@ class GithubForgeTest(unittest.TestCase):
         self.saved_env = {k: os.environ.get(k) for k in self.env}
         os.environ.update(self.env)
         self.saved_gh, A.GH_CLI = A.GH_CLI, FAKE_GH
+        A._workflow_names.clear()  # the workflows' names another test's runs listed
 
     def tearDown(self):
         A.GH_CLI = self.saved_gh
@@ -66,9 +67,29 @@ class GithubForgeTest(unittest.TestCase):
         self.assertEqual([(r["databaseId"], r["number"], r["status"], r["conclusion"], r["workflowName"])
                           for r in runs], [(9, 3, "in_progress", "", "Main")])
         self.assertEqual(sorted(runs[0]), sorted(A.RUN_FIELDS.split(",")))
-        self.assertEqual(self.calls(), [f"api -i -X GET -H Accept: application/vnd.github+json repos/{O_R}/actions/"
-                                        f"workflows/main.yml/runs?exclude_pull_requests=true&branch=main&per_page=5"
-                                        f"&page=1"])
+        calls = self.calls()
+        self.assertEqual(calls[0], f"api -i -X GET -H Accept: application/vnd.github+json repos/{O_R}/actions/"
+                                   f"workflows/main.yml/runs?exclude_pull_requests=true&branch=main&per_page=5&page=1")
+        # and the workflows' names: once per WORKFLOW_NAMES_TTL, conditional (a free 304 while they stand)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(calls[1].endswith(f"repos/{O_R}/actions/workflows?per_page=100"), calls[1])
+        A.gh_json(O_R, "run", "list", "--workflow", "main.yml", "--branch", "main", "--limit", "5", "--json", A.RUN_FIELDS)
+        self.assertEqual(len(self.calls()), 3, "a second list reads only the runs")
+
+    def test_a_run_with_a_run_name_is_listed_under_its_workflows_name(self):
+        # 2026-11-11..12: GitHub's REST `name` is a run's RUN-NAME. Read as workflowName, every Identity takes run
+        # ("Identity takes (convergence run <id>)") was a workflow of its own: outside the gate, a red keyed per run that
+        # no later run could verify or clear (b059f05c70fa), and stuck-run limits read for a name with no history.
+        self.put("runs.json", [{"databaseId": 9, "number": 56, "status": "completed", "conclusion": "success",
+                                "headBranch": "main", "workflowName": "Identity takes", "workflowFile": "identity-takes.yml",
+                                "runName": "Identity takes (convergence run 43111958761)"},
+                               {"databaseId": 8, "number": 7, "status": "completed", "conclusion": "success",
+                                "headBranch": "main", "workflowName": "Main", "workflowFile": "main.yml"}])
+        runs = A.gh_json(O_R, "run", "list", "--branch", "main", "--limit", "5", "--json", A.RUN_FIELDS)
+        self.assertEqual([(r["workflowName"], r["displayTitle"]) for r in runs],
+                         [("Identity takes", "Identity takes (convergence run 43111958761)"), ("Main", None)])
+        A.gh_json(O_R, "run", "list", "--branch", "main", "--limit", "5", "--json", A.RUN_FIELDS)
+        self.assertEqual(sum("actions/workflows?" in c for c in self.calls()), 1, "the workflows' names are read once")
 
     def test_run_list_pages_past_a_hundred(self):
         self.put("runs.json", [{"databaseId": i, "status": "completed", "conclusion": "success", "headBranch": "main",

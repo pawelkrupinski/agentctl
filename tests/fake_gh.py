@@ -12,7 +12,10 @@
                              any other method -> recorded (its --input body as `<pid> BODY <json>`), answers nothing
                              repos/<o_r>/actions/runs or .../actions/workflows/<W>/runs with no such file -> the
                              runs.json list (runs-<owner>_<repo>.json first) in GitHub's REST shape, filtered and paged
-                             by its query as GitHub does (branch, status, per_page, page); a W in workflows-absent -> 404
+                             by its query as GitHub does (branch, status, per_page, page); a W in workflows-absent -> 404.
+                             A run's REST `name` is GitHub's: its `runName` (the workflow's `run-name`) when it has one,
+                             else its workflowName; `path` is .github/workflows/<workflowFile>
+  api repos/<o_r>/actions/workflows -> the workflows runs.json names (id, name, path), as GitHub lists them
   api ... -R <repo>          refused, as gh does: `gh api` takes no -R (its path names the repo)
   release download <tag> -p <name> -O -  -> release-<tag>-<name>
   run cancel <id>, run rerun ..., workflow run ... -> recorded only
@@ -69,11 +72,36 @@ def rest_runs(path):
     per, page = int(q.get("per_page", 30)), int(q.get("page", 1))
     rest = []
     for r in runs[(page - 1) * per: page * per]:
-        out = {GH_TO_REST.get(k, k): v for k, v in r.items()}
+        out = {GH_TO_REST.get(k, k): v for k, v in r.items() if k != "runName"}
+        out["name"] = r.get("runName") or r.get("workflowName")  # GitHub's `name` is the run-name when there is one
+        if r.get("runName"):
+            out["display_title"] = r["runName"]
+        if r.get("workflowFile"):
+            out["path"] = f".github/workflows/{r['workflowFile']}"
+            out.setdefault("workflow_id", workflow_id(r["workflowFile"]))
         if out.get("conclusion") == "":
             out["conclusion"] = None
         rest.append(out)
     return json.dumps({"total_count": len(runs), "workflow_runs": rest})
+
+
+def rest_workflows(path):
+    """GitHub's workflows page for repos/<o_r>/actions/workflows, from the workflows runs.json names; None otherwise."""
+    m = re.match(r"repos/([^/]+/[^/]+)/actions/workflows$", path.partition("?")[0])
+    if not m:
+        return None
+    flows = {}
+    for r in recorded_runs(m.group(1)):
+        if r.get("workflowFile") and r.get("workflowName"):
+            flows.setdefault(r["workflowFile"], {"id": r.get("workflowDatabaseId") or workflow_id(r["workflowFile"]),
+                                                 "name": r["workflowName"],
+                                                 "path": f".github/workflows/{r['workflowFile']}"})
+    return json.dumps({"total_count": len(flows), "workflows": list(flows.values())})
+
+
+def workflow_id(wfile):
+    import zlib
+    return zlib.crc32(wfile.encode())
 
 
 def emit(path):
@@ -110,7 +138,7 @@ if argv[:1] == ["api"]:
     if method != "GET":
         sys.exit(0)
     f = os.path.join(d, "api-" + re.sub(r"[/?&=]", "_", path) + ".json")
-    body = open(f).read() if os.path.exists(f) else rest_runs(path)
+    body = open(f).read() if os.path.exists(f) else (rest_runs(path) or rest_workflows(path))
     if body is None:
         sys.stderr.write("gh: Not Found (HTTP 404)\n")
         sys.exit(1)

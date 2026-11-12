@@ -208,6 +208,30 @@ def _run_list_options(args):
     return opts if opts["limit"] > 0 else None
 
 
+# A RUN'S `name` IS ITS RUN-NAME (2026-11-11..12): GitHub's REST run carries the workflow's `run-name` as `name` when it
+# has one, so every Identity takes run ("Identity takes (convergence run <id>)") read as a workflow of its own: outside
+# the gate, its red keyed to one run that no later run could verify or clear (b059f05c70fa), stuck limits read for a
+# name with no history (issues 20261111T121954, 20261111T182427, 20261112T011344). gh names a run by its workflow; so
+# does this, from the repo's workflows page (a conditional GET, read again at most every WORKFLOW_NAMES_TTL s).
+WORKFLOW_NAMES_TTL = 600
+_workflow_names = process_cache({})
+
+
+def forge_workflow_names(o_r):
+    """{workflow id: name, workflow path: name} of o_r's workflows; {} when the page cannot be read (a run then keeps
+    REST's own `name`)."""
+    at, names = _workflow_names.get(o_r, (0.0, None))
+    if names is None or time.time() - at >= WORKFLOW_NAMES_TTL:
+        try:
+            flows = (api(o_r, "GET", "actions/workflows", {"per_page": 100}) or {}).get("workflows") or []
+            names = {k: w["name"] for w in flows if w.get("name") for k in (w.get("id"), w.get("path")) if k}
+        except (Exception, SystemExit) as e:
+            err(f"forge: could not read {o_r}'s workflows ({str(e)[:120]}): runs keep their run-names")
+            names = names or {}
+        _workflow_names[o_r] = (time.time(), names)
+    return names
+
+
 def forge_run_list(o_r, args):
     """`gh run list ...` (args from `run`), as gh prints it with --json, read through api(): None when it is not one
     this answers (gh is asked instead). A workflow file not on the default branch raises gh's own words for it."""
@@ -234,8 +258,12 @@ def forge_run_list(o_r, args):
             break
         page += 1
 
+    names = forge_workflow_names(o_r) if "workflowName" in fields else {}
+
     def shaped(r):
         out = {f: r.get(RUN_LIST_FIELDS[f]) for f in fields if f in RUN_LIST_FIELDS}
+        if "workflowName" in fields:  # the WORKFLOW's name, as gh names it: REST's `name` is the run's run-name
+            out["workflowName"] = names.get(r.get("workflow_id")) or names.get(r.get("path")) or r.get("name")
         if "conclusion" in fields:
             out["conclusion"] = r.get("conclusion") or ""  # gh prints a pending run's conclusion as ""
         return out
