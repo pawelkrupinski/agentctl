@@ -133,8 +133,10 @@ if "--bg" in argv:
             pass
     bid = sid[:8]
     os.makedirs(OUT, exist_ok=True)
-    with open(os.path.join(OUT, f"{bid}.json"), "w") as f:
+    tmp = os.path.join(OUT, f".{bid}.json.{os.getpid()}")  # whole or not at all: a reader polls for <id>.json
+    with open(tmp, "w") as f:
         json.dump({"argv": argv, "cwd": os.getcwd(), "env": dict(os.environ)}, f)
+    os.replace(tmp, os.path.join(OUT, f"{bid}.json"))
     if os.environ.get("FAKE_CLAUDE_NO_SESSION"):  # backgrounded, and its session never starts (no id, no transcript)
         write_row({"id": bid, "name": name, "cwd": os.getcwd(), "kind": "background", "state": "starting",
                    "prompt": prompt})
