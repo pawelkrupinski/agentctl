@@ -604,8 +604,8 @@ _main_fetched = process_cache({})
 
 def red_main_current(repo, snap):
     """Fetch main into repo when the snapshot's main runs name a head commit it lacks. Returns True when it fetched."""
-    if not repo or not snap:
-        return False
+    if not repo or not snap or not git_ok(repo, "rev-parse", "--verify", "-q", f"refs/remotes/{remote()}/main"):
+        return False  # no clone, or one that never fetched main (nothing of main's to keep up to date)
     heads = {r.get("headSha") for g in snap.get("gate") or [] for r in (g.get("runs") or [])[:3]}
     heads |= {v.get("headSha") for v in (snap.get("latest") or {}).values() if isinstance(v, dict)}
     missing = frozenset(h for h in heads if h and not git_ok(repo, "cat-file", "-e", f"{h}^{{commit}}"))
