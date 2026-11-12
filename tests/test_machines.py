@@ -77,6 +77,37 @@ class MachinesTest(unittest.TestCase):
         self.assertIn("UPDATE items SET state", body[:body.index("\n    def ", 10)])
 
 
+class DeadlineTickTest(unittest.TestCase):
+    """2026-11-12 (issue 20261111T124954-ec04bd): `issue` and `lander` had deadlines nothing fired, so
+    AgentctlItemsPastDeadline counted them for days. Every machine names the step that moves it past its deadline."""
+    def test_every_machine_names_the_tick_that_fires_its_deadline(self):
+        self.assertEqual(set(A.DEADLINE_TICKS), set(A.MACHINES), "a machine with no deadline tick")
+        for typ, tick in A.DEADLINE_TICKS.items():
+            self.assertTrue(callable(getattr(A, tick, None)), (typ, tick))
+
+    def test_lander_records_and_forgotten_flips_retire_quietly_at_their_deadline(self):
+        t = [1_000_000.0]
+        st = A.Store(path=os.path.join(tempfile.mkdtemp(), "store.db"), clock=lambda: t[0])
+        st.put_item("lander", "c-old", "recorded", {"change": "c-old"})
+        st.put_item("explorer-flip", "f-old", "open", {})
+        t[0] += A.LANDER_KEEP - 60
+        st.put_item("lander", "c-new", "recorded", {"change": "c-new"})
+        self.assertEqual(A.tick_quiet_deadlines(st), [])
+        t[0] += 120
+        self.assertEqual(sorted(A.tick_quiet_deadlines(st)), ["explorer-flip f-old: closed", "lander c-old: gone"])
+        self.assertEqual(A.tick_quiet_deadlines(st), [], "a second tick moves nothing")
+        self.assertEqual([st.item("lander", i)["state"] for i in ("c-old", "c-new")], ["gone", "recorded"])
+        self.assertEqual(st.item("explorer-flip", "f-old")["state"], "closed")
+        moved = [e for e in st.events() if e["item_id"] in ("c-old", "f-old")]
+        self.assertEqual([e["severity"] for e in moved], ["info", "info"], "a retirement never notifies")
+        past = sum(1 for typ in A.MACHINES for it in st.items(typ)
+                   if not A.machine_state(typ, it["state"]).terminal and it["deadline"] < t[0])
+        self.assertEqual(past, 0)
+
+    def test_the_server_tick_runs_it(self):
+        self.assertIn("quiet deadlines", [n for n, _ in A.server_steps("/r", tempfile.mkdtemp(), lambda f: f)])
+
+
 class OneLoopTest(unittest.TestCase):
     def test_the_processor_is_one_loop_and_the_batch_no_branch(self):
         """Step 8: no duties thread, no in-process watchdog, no waiting round, no `waiting` branch or worktree."""

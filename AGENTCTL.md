@@ -891,7 +891,8 @@ SUBAGENT when the land ran inside one (the session id alone names the orchestrat
 transcript, the session's cwd, the worktree, the branch -- and each commit's KEYS (sha, patch-id, subject, author
 time; a landing rebases, so a commit on main is found again by its patch-id, or by its subject and author time). A
 queued change carries them in its change item (submitted with it); a direct land (no queue: core, the other repos)
-writes a `lander` item. Both live in the reconciler's store for 14 days, across restarts and batches. The red tick
+writes a `lander` item (past its 14 days the tick retires it quietly to `gone`: `tick_quiet_deadlines`, an info
+event, no notification). Both live in the reconciler's store for 14 days, across restarts and batches. The red tick
 notes each landed change's commits on main (`landed_commits`: main sha -> patch-id), so one push carrying several
 changes maps each commit to its own change and lander.
 
@@ -991,8 +992,11 @@ agentctl red am-fixer                                     # exit 0 inside a disp
 
 agentctl's code has ONE editor, its maintainer. Every other agent that meets an agentctl defect, and above all a red
 fixer, files it with `agentctl issue`. An issue is a store item (type `issue`), shown in the status page's "agentctl
-issues" section. While it stays open it escalates once a week. The fixer's prompt says so, and fixers no longer get a
-~/bin worktree. `~/bin/hooks/pre-commit` (`git -C ~/bin config core.hooksPath hooks`, shared by every ~/bin worktree)
+issues" section. While it stays open it escalates once a week (`tick_issues`, the reconciler on ci-runner): ONE
+notification per issue naming its id, filer and text (the owner, 2026-11-11: never a digest), its level up, its
+deadline a week on; one issue per 2 min (`$AGENTCTL_ISSUE_ESCALATE_GAP`), the most overdue first, so a backlog never
+arrives as a summary. Every machine names the step that fires its deadline (`DEADLINE_TICKS`, test_machines).
+The fixer's prompt says so, and fixers no longer get a ~/bin worktree. `~/bin/hooks/pre-commit` (`git -C ~/bin config core.hooksPath hooks`, shared by every ~/bin worktree)
 refuses a commit made from a fixer session. It identifies the fixer the way `red` does: by the session's binding or
 fixer record, and only without a Claude session by the fixer environment. Any other exit of `agentctl red am-fixer`
 (agentctl broken) lets the commit through with a warning, so a broken agentctl can always be fixed. On the laptop
@@ -1744,6 +1748,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `inbox_poll` | `AGENTCTL_INBOX_POLL` | `1.0` | seconds between stat()s of the inbox directory |
 | `infra_same_max` | `AGENTCTL_INFRA_SAME_MAX` | `1800` | - |
 | `internal_trees_dir` | `AGENTCTL_INTERNAL_TREES_DIR` | - | - |
+| `issue_escalate_gap` | `AGENTCTL_ISSUE_ESCALATE_GAP` | `120` | s between two issues' escalations |
 | `landed_look` | `AGENTCTL_LANDED_LOOK` | `600` | - |
 | `lander_landed_every` | `AGENTCTL_LANDER_LANDED_EVERY` | `300` | s between the tick's notes of landed changes' commits on main |
 | `land_lease_max` | `AGENTCTL_LAND_LEASE_MAX` | `2700` | the design's 300 s once checks no longer run in the push's hook under the lease (step 6) |

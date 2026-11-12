@@ -956,6 +956,39 @@ def issue_close(st, iid, note, by):
     return st.item("issue", iid)
 
 
+# THE WEEKLY ESCALATION (the owner, 2026-11-11, issue 20261111T143441-75a957: ONE NOTIFICATION PER ISSUE, never a
+# digest). An open issue past its deadline re-enters `open`: one escalate event naming its id, filer and text, its
+# level up, its deadline a week on. One issue per ISSUE_ESCALATE_GAP, the most overdue first: a backlog (69 overdue on
+# 2026-11-12, none ever escalated) reaches the notifier one at a time -- more than NOTIFY_BURST in one notifier pass
+# become one summary -- and their weekly deadlines stay that far apart afterwards.
+ISSUE_ESCALATE_GAP = 120  # s between two issues' escalations ($AGENTCTL_ISSUE_ESCALATE_GAP)
+
+
+def issue_escalation_text(it, t):
+    d = it.get("data") or {}
+    return (f"AGENTCTL ISSUE {it['id']} open {fmt_age(t - float(it.get('entered_at') or t))} "
+            f"(filed by {d.get('by') or '?'}): {d.get('text', '')}")[:400]
+
+
+def tick_issues(st=None, now_=None):
+    """The reconciler's step: the most overdue open issue escalated, at most one per ISSUE_ESCALATE_GAP. Returns what
+    it did."""
+    st = st or Store()
+    t = now_ if now_ is not None else st.clock()
+    if t - float(st.meta_get("issue_escalated_at", 0) or 0) < env_num("AGENTCTL_ISSUE_ESCALATE_GAP", ISSUE_ESCALATE_GAP):
+        return []
+    due = sorted((i for i in st.items("issue", ("open",)) if i["deadline"] <= t), key=lambda i: i["deadline"])
+    for it in due:
+        try:
+            st.transition("issue", it["id"], "open", it["version"],
+                          event={"text": issue_escalation_text(it, t), "refs": {"issue": it["id"]}})
+        except (StaleVersion, TerminalState):
+            continue  # closed or moved meanwhile: the next one
+        st.meta_set("issue_escalated_at", t)
+        return [f"issue {it['id']}: escalated (level {it['level'] + 1})"]
+    return []
+
+
 def status_issues(st, t):
     return [{"id": i["id"], "text": i["data"].get("text", "")[:1000], "by": i["data"].get("by"),
              "at": i["data"].get("at"), "opened": i.get("entered_at"), "level": i.get("level"),

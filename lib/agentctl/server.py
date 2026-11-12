@@ -1104,6 +1104,37 @@ def mirror_state(st=None, now_=None):
     return snap
 
 
+# WHO MOVES EACH MACHINE PAST ITS DEADLINE (2026-11-12, issue 20261111T124954-ec04bd: `issue` and `lander` had a
+# deadline and no tick, so AgentctlItemsPastDeadline fired for days). Every machine is named here with the step that
+# fires its on_deadline; test_machines refuses a machine that is not. QUIET_DEADLINE_TYPES are the machines whose
+# deadline exit is a quiet retirement nobody else ticks: tick_quiet_deadlines moves them.
+DEADLINE_TICKS = {"change": "tick_changes", "batch": "tick_batch", "watch": "tick_watches", "hold": "tick_land_hold",
+                  "red": "red_tick", "branch-red": "settle_branch_reds", "condition": "recovery_tick",
+                  "issue": "tick_issues", "lander": "tick_quiet_deadlines", "explorer-flip": "tick_quiet_deadlines"}
+QUIET_DEADLINE_TYPES = tuple(k for k, v in DEADLINE_TICKS.items() if v == "tick_quiet_deadlines")
+
+
+def tick_quiet_deadlines(st=None, now_=None):
+    """The reconciler's step: each lander record past its 14 days goes `gone` (blame reads landings that recent) and
+    each forgotten explorer flip `closed`, an info event apiece (no inbox entry, no notification). Returns what it did."""
+    st = st or Store()
+    t = now_ if now_ is not None else st.clock()
+    did = []
+    for typ in QUIET_DEADLINE_TYPES:
+        for it in st.items(typ):
+            spec = machine_state(typ, it["state"])
+            if spec.terminal or it["deadline"] > t:
+                continue
+            try:
+                st.transition(typ, it["id"], spec.on_deadline, it["version"],
+                              event={"text": f"{typ} {it['id']}: {it['state']} past its deadline -> {spec.on_deadline}",
+                                     "severity": "info"})
+            except (StaleVersion, TerminalState):
+                continue
+            did.append(f"{typ} {it['id']}: {spec.on_deadline}")
+    return did
+
+
 def server_steps(repo, d, shared):
     """The reconciler's tick on ci-runner (the one writer): the changes, the batch, the watches, the gate, the reds,
     the recovery registry. Never the laptop's duties (events -> inbox, the notifier, the network and tunnel watches, the
@@ -1123,7 +1154,9 @@ def server_steps(repo, d, shared):
             ("gate summary", lambda: maybe_publish_gate(repo)),
             ("red time", lambda: track_red_time(Store(), gate_is_red_now())),
             ("red tick", lambda: maybe_red_tick(repo)),
-            ("recovery", maybe_recovery_tick))
+            ("recovery", maybe_recovery_tick),
+            ("issues", lambda: [wlog(d, f"tick: {x}") for x in tick_issues()]),
+            ("quiet deadlines", lambda: [wlog(d, f"tick: {x}") for x in tick_quiet_deadlines()]))
 
 
 def sync_steps(repo, d, o_r):
