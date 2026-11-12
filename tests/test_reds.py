@@ -284,6 +284,70 @@ class FixTest(RedsBase):
         self.assertIsNone(A.red_block_of(it, self.st))
         self.assertEqual(A.red_owner_reminders(self.st, self.t[0] + 86400), [])
 
+    def test_a_red_named_by_its_runs_run_name_is_verified_by_its_workflows_newer_runs(self):
+        # 2026-11-12, b059f05c70fa: opened as "Identity takes (convergence run 43013487979)" #40 -- a run-name read as its
+        # workflow's name -- no newer run was ever "of" that workflow: its landed fix waited 6 h unverified, twice, while
+        # Identity takes #56 on main, containing the fix, was green. It takes its workflow's name from its run's file.
+        self.r.write(".github/workflows/identity-takes.yml", "name: Identity takes\nrun-name: Identity takes (x)\n"
+                     "on:\n  workflow_dispatch:\n")
+        self.r.commit("the workflow")
+        self.r.push()
+        _wt, sha = self.fix_commit(40)
+        takes = lambda rid, num, conclusion, head: dict(run(rid, num, "Identity takes", "identity-takes.yml", head,
+                                                            conclusion=conclusion),
+                                                        runName=f"Identity takes (convergence run {rid + 1000})")
+        self.put("runs.json", [takes(61, 56, "success", sha), run(41, 21, "Main", "main.yml", sha),
+                               run(39, 19, "Identity model convergence", "identity-model-convergence.yml", sha)])
+        self.put("api-repos_pawelkrupinski_movies_actions_runs_60.json",
+                 {"id": 60, "run_number": 40, "path": ".github/workflows/identity-takes.yml", "status": "completed",
+                  "conclusion": "failure", "head_sha": self.sha, "head_branch": "main"})
+        it = self.st.put_item("red", "k1", "fix-pending", {
+            "key": "k1", "workflow": "Identity takes (convergence run 1060)", "jobs": ["leg (us) / takes-drift-1 (us)"],
+            "kind": "unclear", "red_kind": "outside", "gate": False, "runs": ["40", "60"],
+            "last_run": {"number": 40, "databaseId": 60, "headSha": self.sha},
+            "opened_at": self.t[0], "fix": {"entry": None, "status": "landed", "sha": sha, "at": self.t[0]}})
+        self.tick(advance=60)
+        it = self.st.item("red", "k1")
+        self.assertEqual((it["state"], it["data"]["workflow"]), ("verified", "Identity takes"), it["data"].get("history"))
+
+    def test_a_landed_fix_no_run_can_ever_check_is_offered_at_once_not_after_hours(self):
+        # its workflow has no file on main (b059f05c70fa's "no workflow file named 'Identity takes (convergence run
+        # 43013487979)'"): no run will ever prove the fix, so it is not a fix on its way -- a fixer gets the red now.
+        _wt, sha = self.fix_commit(70)
+        self.st.put_item("red", "k2", "fix-pending", {
+            "key": "k2", "workflow": "Gone workflow", "jobs": ["x"], "kind": "test", "red_kind": "outside", "gate": False,
+            "runs": ["70", "77"], "last_run": {"number": 70, "databaseId": 77, "headSha": self.sha},
+            "opened_at": self.t[0], "fix": {"entry": None, "status": "landed", "sha": sha,
+                                            "at": self.t[0] - A.RED_FIX_RUN_START - 1}})
+        self.tick(advance=1)
+        it = self.st.item("red", "k2")
+        self.assertEqual((it["state"], it["data"].get("unverified")), ("offered", [sha]))
+        self.assertIn("no workflow file", it["data"]["history"][-1]["outcome"])
+
+    def test_a_set_aside_fixs_rebased_copy_never_takes_the_red_back(self):
+        # b059f05c70fa: its fix 19482f5c08 set aside unverified at 00:30, the red went back to fix-pending 23 s later on
+        # b6d3d8235 -- the same patch before its rebase, the landed tip of a change item -- for another 6 h, no fixer.
+        self.tick()
+        wt, sha = self.fix_commit(20)
+        self.tick()
+        self.assertEqual(self.only()["state"], "fix-pending")
+        self.tick(advance=A.RED_FIX_GIVEUP)
+        self.assertEqual((self.only()["state"], self.only()["data"]["unverified"]), ("offered", [sha]))
+        cw = self.r.worktree("repo-wt-copy", base=f"{sha}~1", branch="copy")
+        self.r.write("other.txt", "moves the base\n", at=cw)
+        self.r.commit("an unrelated commit under the copy", at=cw)
+        subprocess.run(["git", "-C", cw, "cherry-pick", sha], check=True, capture_output=True)
+        copy = subprocess.run(["git", "-C", cw, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        self.assertNotEqual(copy, sha)
+        d = A.waiting_state(self.r.path)[0]
+        e, _ = A.queue_change(d, {"worktree": cw, "branch": "copy", "head": copy, "commits": [copy]})
+        e["status"] = "waiting"
+        A.save_entry(d, e)
+        ch = self.st.put_item("change", e["id"], "queued", {"worktree": cw, "head": copy, "submitted_at": self.t[0]})
+        self.st.transition("change", e["id"], "landed", ch["version"], data={"tip": copy})
+        self.tick(advance=60)
+        self.assertEqual(self.only()["state"], "offered")
+
     def test_a_queued_fix_holds_its_red_until_it_lands_and_verification_runs_from_the_landing(self):
         # 2026-10-29: #2493's red showed "offered" (a fixer re-dispatched "to check why the 2406 fix did not clear it")
         # while its fix 16a683a55 sat queued behind the red gate since 00:21Z, untested; the import had lost run 2406

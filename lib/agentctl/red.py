@@ -930,7 +930,7 @@ def red_fix_facts(repo, store=None):
         if pid:
             patches[sha] = pid
     return {"entries": entries, "landed": landed, "key_runs": {k: sorted(v) for k, v in key_runs.items()},
-            "patches": patches}
+            "patches": patches, "repo": repo}
 
 
 def red_names(d):
@@ -952,8 +952,21 @@ def red_set_aside(d, facts):
 
 
 def red_fix_is_set_aside(sha, aside, facts):
+    """A candidate fix sha is one the red set aside: by sha, or by CONTENT -- its patch-id read here when the facts did
+    not read it (a sha the store supplied: a change's landed tip). 2026-11-12, b059f05c70fa: 19482f5c08 set aside
+    unverified, its pre-rebase copy b6d3d8235 (the same patch, a change item's tip) parked the red again for 6 h."""
     shas, pids = aside
-    return sha in shas or any(sha.startswith(x) for x in shas) or (facts.get("patches") or {}).get(sha) in pids
+    if sha in shas or any(sha.startswith(x) for x in shas):
+        return True
+    if not pids:
+        return False
+    patches = facts.setdefault("patches", {})
+    if sha not in patches and facts.get("repo"):
+        try:
+            patches[sha] = patch_id(facts["repo"], sha)
+        except (Exception, SystemExit):
+            patches[sha] = None
+    return patches.get(sha) in pids
 
 
 def red_fix_of(it, facts):
@@ -1621,8 +1634,40 @@ def red_retired(o_r, d, now=None):
     return red_run_retired(o_r, d.get("workflow"), d.get("last_run") or {}, d.get("jobs") or [d.get("job")], now)
 
 
+# A RED IS NAMED BY ITS WORKFLOW (2026-11-12, b059f05c70fa): opened while the forge read a run's run-name for its
+# workflow's name, the red "Identity takes (convergence run 43013487979)" #40 named a workflow no other run is in: no
+# newer run of it could verify, refute or clear it, its verify dispatch found "no workflow file named" it, and it sat in
+# fix-pending 6 h at a time. Such a red takes its workflow's name from its failing run's workflow file, once.
+def red_workflow_named(store, it, o_r):
+    """The red under its workflow's name (renamed in place when its run says another); it unchanged otherwise."""
+    d = it["data"]
+    rid = (d.get("last_run") or {}).get("databaseId")
+    if not rid or d.get("workflow_named") or d.get("workflow") == LOCAL_FLOW or d.get("red_kind") in ("local", "predicts"):
+        return it
+    files = main_workflow_files(o_r)
+    if not files or d.get("workflow") in files:
+        return it
+    try:
+        run = forge_actions_run(o_r, rid)
+    except (Exception, SystemExit):
+        run = None
+    if not run:
+        return it  # unread now: tried again next tick
+    name = {f: n for n, f in files.items()}.get(run.get("workflow_id"))
+    upd = {"workflow_named": True}
+    if name and name != d.get("workflow"):
+        upd["workflow"] = name
+        upd["history"] = (d.get("history") or []) + [{"at": iso_at(store.clock()), "holder": None,
+                                                     "outcome": f"RENAMED: {d.get('workflow')!r} is a run-name; its "
+                                                                f"workflow is {name!r} ({run.get('workflow_id')})"}]
+    store.update_item("red", it["id"], it["version"], upd)
+    return store.item("red", it["id"])
+
+
 def red_step(store, it, obs, snap, facts, repo, o_r, t):
     it = store.item("red", it["id"])
+    if it["state"] not in RED_TERMINAL:
+        it = red_workflow_named(store, it, o_r)
     d, st, key = it["data"], it["state"], it["data"]["key"]
     row = store.get(red_lease(key))
     live = lease_is_live(row, t)
@@ -2272,6 +2317,12 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
     f = d.get("fix") or {}
     if f.get("sha") and red_fix_is_set_aside(f["sha"], red_set_aside(d, facts), facts):
         # PENDING ON A FIX IT ALREADY REFUTED (or set aside): no run can verify it now; back to a fixer
+        if fix and fix.get("sha") != f["sha"]:  # another fix is on its way: it is the one verified now
+            line = (f"{red_what(d)}: its fix {f['sha'][:10]} was already set aside; fix "
+                    f"{fix.get('entry') or str(fix.get('sha'))[:10]} {fix['status']}")
+            red_move(store, it, "fix-pending", line, data={"fix": {**fix, "verify_since": t}
+                                                           if fix["status"] == "landed" else fix})
+            return [line]
         line = f"{red_what(d)}: its fix {f['sha'][:10]} was already refuted: offered again"
         red_offer(store, it, line, data={"fix": None})
         return [f"re-offered {red_what(d)} (its fix {f['sha'][:10]} already refuted)"]
@@ -2415,6 +2466,11 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
     if not holds and not d.get("gate") and not f.get("verify_dispatched") and t - float(f.get("at") or t) > RED_FIX_RUN_START \
             and d.get("red_kind") in ("outside",):
         line = red_verify_dispatch(o_r, repo, d.get("workflow"), sha, (d.get("last_run") or {}).get("databaseId"))
+        if line.startswith("FIX UNVERIFIED: no workflow file"):  # NO RUN CAN EVER PROVE IT: offered now, never parked
+            return red_fix_unverifiable(store, it, f"its fix {sha[:10]}: {line[len('FIX UNVERIFIED: '):][:160]}", t)
+        if line.startswith("FIX UNVERIFIED:"):  # the failing run's inputs cannot be dispatched again: said so, and the
+            line += (f"; the newest decided {d.get('workflow')} run on main containing {sha[:10]} decides it "  # next
+                     f"(offered again if none by {RED_FIX_GIVEUP // 3600} h after it landed)")  # natural run decides
         store.update_item("red", it["id"], it["version"], {"fix": {**f, "verify_dispatched": ts(), "verify": line}})
         return [line]
     if t - red_fix_since(it) >= env_num("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP):

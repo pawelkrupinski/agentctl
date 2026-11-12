@@ -76,7 +76,16 @@ moves it forward; nothing is a detached process that can die with its state in i
   - `red` (a failure signature on main): red → offered → leased → fix-pending → verified / cleared, or
     blocked-external (an owner block). TOTAL: every red state ends in a dispatched fixer. A fix-pending whose fix is
     not proven within 6 h (`RED_FIX_GIVEUP`, `$AGENTCTL_RED_FIX_GIVEUP`), whose verify dispatch was refused, or whose
-    fix is gone/None is offered again (escalated), its fix set aside (`unverified`). An old outside red no fresh run
+    fix is gone/None is offered again (escalated), its fix set aside (`unverified`). A set-aside fix stays aside by
+    CONTENT too: a rebased or pre-rebase copy of it (another sha, the same patch-id, read even when only a change
+    item names it) never puts the red back in fix-pending. An outside red's landed fix is verified by dispatching its
+    workflow with the failing run's inputs; when that is refused, the newest decided run of that workflow on main
+    containing the fix decides (the verify line says so), and when its workflow has no file on main no run can ever
+    prove it: it is offered at once. A red is named by its WORKFLOW, never a run's `run-name` (GitHub's REST `name`;
+    the forge names runs from the workflows page, and a red opened under a run-name takes its workflow's name from its
+    failing run's file, `RENAMED:` in its history). The red tick fetches main into its clone when the snapshot names a
+    main head the clone lacks, so a `Fixes-Red:` commit pushed from anywhere links its red; a blocked red whose fix is
+    linked goes to fix-pending with its owner block lifted and its question withdrawn. An old outside red no fresh run
     can check (no `workflow_dispatch`, a refused dispatch, its file gone) is never retired: it is offered with an
     `old_note` and a fixer decides. A red of a `workflow_call`-only workflow (only a parse failure gives one
     runs of its own: Report run timings #38) is verified, in any open state, by its callers: its file changed on main
