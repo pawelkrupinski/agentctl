@@ -250,6 +250,40 @@ class FixTest(RedsBase):
         self.assertEqual([i["state"] for i in self.st.items("red")], ["verified"])
         self.assertTrue(any(str(e.get("verdict")).startswith("FIX OK") for e in self.inbox()))
 
+    def test_a_fix_pushed_to_main_from_another_clone_links_its_red(self):
+        # 2026-11-12, Record scrape fixtures #181 (red 58f3db9e8a3d): its fix 548dfb3c76 (`Fixes-Red: 181`) was pushed
+        # from the laptop. The reconciler's own clone fetched main only to check or push a change, so the red facts never
+        # saw the commit: the red was re-offered after every LANDED, then put on the owner as WAITING ON YOU. A main the
+        # snapshot shows past the clone is fetched before the fixes are read.
+        self.tick()
+        other = os.path.join(self.tmp.name, "laptop")
+        subprocess.run(["git", "clone", "-q", self.r.bare, other], check=True)
+        self.r.write("fix.txt", "from the laptop\n", at=other)
+        sha = self.r.commit("fix FooSpec\n\nFixes-Red: 20", at=other)
+        subprocess.run(["git", "-C", other, "push", "-q", "origin", "HEAD:main"], check=True)  # never the clone's fetch
+        self.put("runs.json", [run(50, 23, "Main", "main.yml", sha, status="in_progress", created=A.iso_at(self.t[0]))]
+                 + json.load(open(os.path.join(self.d, "runs.json"))))
+        self.tick()
+        it = self.only()
+        self.assertEqual((it["state"], (it["data"].get("fix") or {}).get("sha")), ("fix-pending", sha))
+
+    def test_a_fix_linked_to_a_red_waiting_on_the_owner_lifts_the_block(self):
+        # 58f3db9e8a3d: put on the owner ("WAITING ON YOU: hold the red as fixed by 548dfb3c76 ...") only because agentctl
+        # had not linked the fix. A linked fix is the red's answer: it waits for the run that proves it, the owner's
+        # question withdrawn and its block released -- never a block a later re-offer falls back into.
+        self.tick()
+        it = self.only()
+        A.red_decision_block(self.st, it, {}, "hold the red as fixed by its landed fix", self.t[0])
+        it = self.only()
+        self.assertEqual(it["state"], "blocked-external")
+        _wt, sha = self.fix_commit(20)
+        self.tick(advance=60)
+        it = self.only()
+        self.assertEqual((it["state"], it["data"]["fix"]["sha"]), ("fix-pending", sha))
+        self.assertEqual((it["data"].get("cause"), it["data"].get("block"), it["data"].get("ask")), (None, None, None))
+        self.assertIsNone(A.red_block_of(it, self.st))
+        self.assertEqual(A.red_owner_reminders(self.st, self.t[0] + 86400), [])
+
     def test_a_queued_fix_holds_its_red_until_it_lands_and_verification_runs_from_the_landing(self):
         # 2026-10-29: #2493's red showed "offered" (a fixer re-dispatched "to check why the 2406 fix did not clear it")
         # while its fix 16a683a55 sat queued behind the red gate since 00:21Z, untested; the import had lost run 2406

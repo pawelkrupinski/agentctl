@@ -594,6 +594,34 @@ def red_gone(it, obs, snap):
 FIX_OPEN = ("queued", "checking", "checked", "waiting", "joined", "pushing")
 
 
+# THE FIXES ARE READ FROM MAIN AS IT IS (2026-11-12, Record scrape fixtures #181, red 58f3db9e8a3d): the reconciler's
+# own clone fetched main only to check or push a change, so a fix pushed from elsewhere -- 548dfb3c76, `Fixes-Red: 181`,
+# landed from the laptop -- was never in it: the red was re-offered after each LANDED and put on the owner. A head of
+# main the snapshot names that the clone has not got is fetched once, before the fixes are read.
+RED_MAIN_REFETCH = 300
+_main_fetched = process_cache({})
+
+
+def red_main_current(repo, snap):
+    """Fetch main into repo when the snapshot's main runs name a head commit it lacks. Returns True when it fetched."""
+    if not repo or not snap:
+        return False
+    heads = {r.get("headSha") for g in snap.get("gate") or [] for r in (g.get("runs") or [])[:3]}
+    heads |= {v.get("headSha") for v in (snap.get("latest") or {}).values() if isinstance(v, dict)}
+    missing = frozenset(h for h in heads if h and not git_ok(repo, "cat-file", "-e", f"{h}^{{commit}}"))
+    if not missing:
+        return False
+    at = _main_fetched.get((repo, missing))
+    if at and time.time() - at < RED_MAIN_REFETCH:  # a head main never had (a run of a commit since gone): not every tick
+        return False
+    _main_fetched.clear()
+    _main_fetched[(repo, missing)] = time.time()
+    ok, why = fetch_main(repo)
+    if not ok:
+        err(f"red tick: main moved past the clone and could not be fetched ({why[-160:]}): fixes read from the old main")
+    return True
+
+
 def landed_fix_commits(repo):
     """[(sha, commit time, {values}, subject)]: Fixes-Red commits on origin/main in the last 3 days -- but for one whose
     `Red-Unrelated:` trailer says it names the red only to pass the gate (`red_unrelated`): landed, it is no more a fix
@@ -1700,8 +1728,11 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
         if gone:
             red_close(store, it, "cleared", red_gone_why(d, obs))
             return [f"cleared {red_what(d)}"]
-        if fix:
-            red_move(store, it, "fix-pending", f"{red_what(d)}: fix {fix.get('entry') or fix.get('sha')}", data={"fix": fix})
+        if fix:  # A LINKED FIX ANSWERS THE BLOCK (58f3db9e8a3d, 2026-11-12: on the owner only because the fix was not
+            # linked): the red waits for the run that proves it; the owner's question and the block go
+            lifted = red_lift_block(store, it, block, f"its fix {fix.get('entry') or str(fix.get('sha'))[:10]} is on its way")
+            red_move(store, it, "fix-pending", f"{red_what(d)}: fix {fix.get('entry') or fix.get('sha')}"
+                     + (f" ({lifted})" if lifted else ""), data={"fix": fix, "cause": None, "block": None, "ask": None})
             return [f"fix-pending {red_what(d)}"]
         if not block:  # its block lapsed: the probe passed (verify it), or its justification or max hold is gone
             brow = store.get(d.get("block") or block_lease(key))
@@ -1716,6 +1747,21 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
             return [f"re-offered {red_what(d)} (block ended: {out[:60]})"]
         return acts
     return acts
+
+
+def red_lift_block(store, it, block, why):
+    """Release red it from its live owner block (the block itself when it holds only this red, else this red leaves its
+    keys). Returns what it did, or None when no block holds it."""
+    if not block:
+        return None
+    key = it["data"]["key"]
+    keys = [k for k in (block.get("meta") or {}).get("keys") or [] if k != key]
+    if keys:
+        row = store.get(block["name"])
+        store.set_meta(block["name"], row["epoch"], row["secret"], {"keys": keys})
+        return f"left the block {block['name']}"
+    store.revoke(block["name"], f"LIFTED: {why}")
+    return f"its block {block['name']} lifted"
 
 
 RED_QUICK_EXIT = 120       # a fixer ending this soon with no verdict never got going

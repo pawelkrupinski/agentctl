@@ -1410,6 +1410,11 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
             acts.append(f"red model {RED_MODEL}: {n} open red(s) migrated in place")
     except (Exception, SystemExit) as e:
         err(f"red tick: the red model migration failed ({str(e)[:160]}); tried again next tick")
+    if facts is None and primary:
+        try:
+            red_main_current(repo, snap)
+        except (Exception, SystemExit) as e:
+            err(f"red tick: could not bring main up to date ({str(e)[:160]})")
     facts = facts if facts is not None else red_fix_facts(repo, store)
     if primary:
         try:  # THE LANDER (lander.py): each landed change's commits on main, noted while its keys still find them
