@@ -69,6 +69,25 @@ class WithdrawnRevertOrphanTest(test_orphans.OrphanTest):
         self.assertIn("kept: it holds commits that are not blame's revert", did[0])
         self.assertTrue(os.path.isdir(wt), "somebody's other commit: never removed")
 
+    def test_2409_a_confirmed_reverts_worktree_is_dropped_once_its_red_is_over_without_it(self):
+        """Main #2409: the lander fixed forward under the same Fixes-Red, the red was verified, and the revert -- refused
+        by the precheck -- stood as an orphan and escalated. A red that is over has nothing left for its revert to fix."""
+        wt, sha = self.worktree_commit("repo-wt-revert-2409", revert_msg(run=2409))
+        self.put_red("red-2409.1", blame("confirmed", run=2409, wt=wt, sha=sha), state="verified")
+        did = A.orphan_duty(self.r.path)
+        self.assertEqual(self.relands, [], "never submitted")
+        self.assertEqual(len(did), 1, did)
+        self.assertIn("OBSOLETE for #2409", did[0])
+        self.assertIn("removed revert worktree", did[0])
+        self.assertFalse(os.path.isdir(wt))
+        self.assertIn("#2409 is verified", self.deleted_log())
+        self.assertIn("OBSOLETE for #2409", A.blame_land_refusal(self.r.path, [sha]))
+
+    def test_a_confirmed_revert_of_an_open_red_still_lands(self):
+        wt, sha = self.worktree_commit("repo-wt-revert-2409", revert_msg(run=2409))
+        self.put_red("red-2409.1", blame("confirmed", run=2409, wt=wt, sha=sha), state="offered")
+        self.assertIsNone(A.blame_land_refusal(self.r.path, [sha], worktree=wt))
+
     def test_an_ordinary_orphan_is_still_submitted(self):
         self.put_red("red-629.6", blame(None, withdrawn=True))
         wt, _sha = self.worktree_commit("repo-wt-other", "other: a change nobody landed")

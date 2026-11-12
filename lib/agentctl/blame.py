@@ -759,7 +759,10 @@ def lander_prompt(u, wt):
 # WITHDRAWN -- the red re-decided "pre-existing" -- yet maintain's orphan duty found its leftover worktree
 # movies-wt-revert-629, "author gone", and submitted it: re-queued at 22:33Z, landing on red through its Fixes-Red: 629.)
 # A blame stops calling a change the culprit in two ways: WITHDRAWN (the decision itself was wrong, before its revert
-# landed: blame_withdraw, `agentctl red unblame`) and REFUTED (its revert landed and did not clear the red). Either way
+# landed: blame_withdraw, `agentctl red unblame`) and REFUTED (its revert landed and did not clear the red). And a
+# confirmed blame's revert is OBSOLETE once its red is over (RED_TERMINAL) by anything else -- the lander's fix forward
+# under the same Fixes-Red (Main #2409, 2026-11-12: the revert sat refused, then escalated as an orphan, while the
+# change it would take out was fixed and green on main). Whichever it is,
 # its revert -- the commit carrying `Reverts-Change: <change>` and `Fixes-Red: <run>` -- and the worktree blame made for
 # it are dead: blame_land_refusal is asked by every path that lands or queues commits (land's sync, the server's
 # submission, the queue's checker, a recovery re-land, orphan duty).
@@ -768,8 +771,8 @@ FIXES_RED_TRAILER = re.compile(r"^Fixes-Red:\s*#?(\S+)", re.M)
 
 
 def blame_records(store=None):
-    """(dead, live) from every red's blame. dead: {change: [{run, why, worktree, sha}]} -- the reverts blame withdrew or
-    saw refuted ("not the culprit"); live: {"runs": {change: {run}}, "worktrees": {path}} -- the confirmed blames whose
+    """(dead, live) from every red's blame. dead: {change: [{run, why, verdict, worktree, sha}]} -- the reverts blame
+    withdrew or saw refuted ("not the culprit"), or whose red ended without them ("obsolete"); live: {"runs": {change: {run}}, "worktrees": {path}} -- the confirmed blames whose
     revert stands (a change blamed AGAIN for a newer red is reverted for that red: never refused)."""
     dead, live = {}, {"runs": {}, "worktrees": set()}
     try:
@@ -785,6 +788,7 @@ def blame_records(store=None):
             ch = w.get("change") or rv.get("change") or (rv.get("commits") or [None])[0]
             if ch:
                 dead.setdefault(ch, []).append({"run": run, "why": f"withdrawn: {str(w.get('why') or '?')[:160]}",
+                                                "verdict": f"NOT THE CULPRIT of #{run}",
                                                 "worktree": rv.get("worktree"), "sha": rv.get("sha")})
         g = blame_culprit(b)
         if not g:
@@ -793,6 +797,13 @@ def blame_records(store=None):
         rv = b.get("revert") or {}
         if b.get("state") == "refuted":
             dead.setdefault(ch, []).append({"run": run, "why": f"refuted: {str(b.get('why') or '?')[:160]}",
+                                            "verdict": f"NOT THE CULPRIT of #{run}",
+                                            "worktree": rv.get("worktree"), "sha": rv.get("sha")})
+        elif b.get("state") == "confirmed" and not w and it.get("state") in RED_TERMINAL:
+            fixed = ((it.get("data") or {}).get("fix") or {}).get("sha") or ""
+            dead.setdefault(ch, []).append({"run": run, "why": f"#{run} is {it['state']}"
+                                            + (f" by {fixed[:10]}" if fixed else "") + " without it",
+                                            "verdict": f"OBSOLETE for #{run}",
                                             "worktree": rv.get("worktree"), "sha": rv.get("sha")})
         elif b.get("state") == "confirmed" and not w:
             live["runs"].setdefault(ch, set()).add(run)
@@ -826,7 +837,7 @@ def blame_land_refusal(repo, commits, worktree=None, store=None, records=None):
             if set(FIXES_RED_TRAILER.findall(msg)) & live["runs"].get(ch, set()):
                 continue  # blamed again for a newer red: that red's revert
             d = dead[ch][-1]
-            return (f"commit {c[:10]} reverts {ch}, which agentctl's blame marked NOT THE CULPRIT of #{d['run']} "
+            return (f"commit {c[:10]} reverts {ch}, which agentctl's blame marked {d['verdict']} "
                     f"({d['why']}): its revert never lands again")
     if worktree:
         rw = os.path.realpath(worktree)
@@ -835,7 +846,7 @@ def blame_land_refusal(repo, commits, worktree=None, store=None, records=None):
                 for d in ds:
                     if d.get("worktree") and os.path.realpath(d["worktree"]) == rw:
                         return (f"{worktree.replace(HOME, '~')} is the worktree blame made to revert {ch} for #{d['run']}, "
-                                f"which is not the culprit ({d['why']}): nothing from it lands")
+                                f"marked {d['verdict']} ({d['why']}): nothing from it lands")
     return None
 
 
