@@ -919,11 +919,13 @@ def red_fix_facts(repo, store=None):
         landed = landed_fix_commits(repo)
     except (Exception, SystemExit):
         landed = []
-    key_runs = {}
+    key_runs, key_aside = {}, {}
     try:
         for it in (store.items("red") if store is not None else []):
             k = it["data"].get("key") or it["id"]
             key_runs.setdefault(k, set()).update(map(str, it["data"].get("runs") or []))
+            key_aside.setdefault(k, set()).update(set(it["data"].get("refuted") or [])
+                                                  | set(it["data"].get("unverified") or []))
     except Exception:
         pass
     # THE FIXES' CONTENT (simplification-2026-10-31 item 3): the patch-id of every fix commit a red could take and of
@@ -943,7 +945,15 @@ def red_fix_facts(repo, store=None):
             pid = None
         if pid:
             patches[sha] = pid
+    landed_at = {}
+    for e in entries:
+        sha = e.get("landed_sha")
+        if sha and not e.get("landed_at") and repo:
+            r = git(repo, "log", "-1", "--format=%ct", sha, check=False)
+            if r.returncode == 0 and r.stdout.strip().isdigit():
+                landed_at[sha] = float(r.stdout.strip())
     return {"entries": entries, "landed": landed, "key_runs": {k: sorted(v) for k, v in key_runs.items()},
+            "key_aside": {k: sorted(v) for k, v in key_aside.items() if v}, "landed_at": landed_at,
             "patches": patches, "repo": repo}
 
 
@@ -958,9 +968,11 @@ def red_refuted(d):
 
 
 def red_set_aside(d, facts):
-    """(shas, patch-ids) of the fixes this red refuted or set aside unverified: a candidate fix is one of them when its
-    sha (or a prefix) is, or its CONTENT is -- the same patch-id under another sha (a rebase, a cherry-pick)."""
-    shas = set(d.get("refuted") or []) | set(d.get("unverified") or [])
+    """(shas, patch-ids) of the fixes this red -- or any spell of its key (facts' key_aside) -- refuted or set aside
+    unverified: a candidate fix is one of them when its sha (or a prefix) is, or its CONTENT is -- the same patch-id
+    under another sha (a rebase, a cherry-pick)."""
+    shas = set(d.get("refuted") or []) | set(d.get("unverified") or []) \
+        | set((facts.get("key_aside") or {}).get(d.get("key")) or [])
     patches = facts.get("patches") or {}
     return shas, {patches[x] for x in shas if patches.get(x)}
 
@@ -1000,6 +1012,8 @@ def red_fix_candidates(d, facts):
                                                                        "session": e.get("session")}}
         elif e.get("status") == "landed" and e.get("landed_sha"):
             at = parse_time(e.get("landed_at") or e.get("updated") or e.get("created") or ts()).timestamp()
+            if not e.get("landed_at") and (facts.get("landed_at") or {}).get(e["landed_sha"]) is not None:
+                at = float(facts["landed_at"][e["landed_sha"]])  # its commit's time: a file's `updated` moves on
             if at >= since:  # landed before this spell opened: the run that opened it already outlived it
                 yield {"entry": e["id"], "status": "landed", "sha": e["landed_sha"], "at": at}
     for sha, ct, vals, _s in facts.get("landed") or []:

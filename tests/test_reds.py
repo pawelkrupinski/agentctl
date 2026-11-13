@@ -1776,6 +1776,20 @@ class SetAsideByContentTest(unittest.TestCase):
         self.assertIsNone(A.red_fix_of(self.red(refuted=["a" * 40]), facts))
         self.assertIsNone(A.red_fix_of(self.red(unverified=["a" * 40]), facts))
 
+    def test_a_fix_an_earlier_spell_of_the_red_refuted_is_no_fix_of_the_next(self):
+        # 2026-11-13, 784badc4406e.4 (Verify scrape recording #26): with the new code live it went fix-pending on
+        # 547709c1e2 -- the fix spell .3 had refuted on 11-11 -- through its queue entry (naming #42442828541, a run of
+        # the key; its file's `updated` fresh), not on 8d06b1a5ab, landed with `Fixes-Red: 26`. A fix any spell of the
+        # key refuted or set aside is aside for every later spell, and a landed entry is as old as its landing.
+        old, new = "a" * 40, "c" * 40
+        facts = {"entries": [{"id": "e129", "status": "landed", "landed_sha": old, "fixes": ["999"],
+                              "created": "1970-01-01T00:10:00Z", "updated": "1970-01-01T02:00:00Z"}],
+                 "landed": [(new, 9000.0, {"2473"}, "fix")], "key_runs": {"k1": ["999", "2473"]},
+                 "key_aside": {"k1": [old]}}
+        self.assertEqual(A.red_fix_of(self.red(opened_at=10000.0), facts)["sha"], new)
+        facts["key_aside"] = {}  # unrefuted, yet landed (its commit's time) long before this spell opened
+        self.assertEqual(A.red_fix_of(self.red(opened_at=10000.0), {**facts, "landed_at": {old: 600.0}})["sha"], new)
+
     def test_another_change_naming_the_red_is_still_its_fix(self):
         facts = {"landed": [("c" * 40, 5000.0, {"2473"}, "fix")], "patches": {"a" * 40: "p1", "c" * 40: "p2"}}
         self.assertEqual(A.red_fix_of(self.red(refuted=["a" * 40]), facts)["sha"], "c" * 40)
