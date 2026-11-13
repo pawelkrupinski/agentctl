@@ -88,7 +88,7 @@ def red_fix_held(it, t, facts=None):
         return None  # fix None: nothing is on its way
     if f.get("status") == "verify" and str(f.get("verify") or "").startswith("FIX UNVERIFIED:"):
         return None  # its verifying run was refused: none will come
-    if t - red_fix_since(it) >= env_num("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP):
+    if t - red_fix_since(it) >= red_fix_giveup(d):
         return None
     return f"fix {f.get('entry') or (f.get('sha') or '')[:10] or 'verify'} {f.get('status')}"
 

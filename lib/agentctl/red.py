@@ -45,6 +45,20 @@ RED_FIX_DECIDE = 3 * 3600
 # on-demand workflow never gets, a fix id that is None) is offered again with that fix set aside (`unverified`): a
 # fixer decides, never a resting state.
 RED_FIX_GIVEUP = 2 * RED_FIX_DECIDE
+# A NIGHTLY'S FIX WAITS FOR THE NIGHT (2026-11-13, Verify scrape recording #26): a landed fix of a red OUTSIDE the gate
+# is proven only by its workflow's next run -- a nightly's is up to a day away, and no push brings it sooner (its verify
+# dispatch may be refused). Such a fix holds its red, quietly, up to RED_FIX_NEXT_RUN: the next decided run containing
+# it verifies (green) or refutes it (the same failure: back to a fixer, never to the owner).
+RED_FIX_NEXT_RUN = 30 * 3600  # s an outside red's landed fix waits unproven for its workflow's next run
+
+
+def red_fix_giveup(d):
+    """How long red data d's fix may wait in fix-pending unproven: RED_FIX_GIVEUP, or RED_FIX_NEXT_RUN for a landed fix
+    of a red outside the gate (its workflow's next run proves it)."""
+    f = d.get("fix") or {}
+    if not d.get("gate") and d.get("red_kind") == "outside" and f.get("status") == "landed" and f.get("sha"):
+        return env_num("AGENTCTL_RED_FIX_NEXT_RUN", RED_FIX_NEXT_RUN)
+    return env_num("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP)
 RED_PRIORITY = {"gate": 0, "fix": 1, "outside": 2, "flake": 3}
 RED_RECURRING = 3            # landed fixes the same failure outlived: `recurring`, and its fixer hunts the root cause
 RED_TICK_INTERVAL = 15       # seconds between the processor's red ticks ($AGENTCTL_RED_TICK)
@@ -969,28 +983,74 @@ def red_fix_is_set_aside(sha, aside, facts):
     return patches.get(sha) in pids
 
 
-def red_fix_of(it, facts):
-    """The fix on its way for this red, or None: {entry, status, sha?, at?}. A refuted or unverified fix -- by sha or
-    by content -- counts no more."""
-    d = it["data"]
+RED_LANDED_VERDICT = re.compile(r"^LANDED ([0-9a-f]{7,40})\b")
+
+
+def red_fix_candidates(d, facts):
+    """Every fix that may be on its way for red data d, best first: the queue's changes naming one of its runs (the
+    newest first), the `Fixes-Red:` commits landed on main since it opened (the newest first), then its own fixers'
+    `LANDED <sha>` verdicts since it opened (the newest first). Unjudged: red_fix_of drops the ones set aside."""
     names = red_names(d) | set((facts.get("key_runs") or {}).get(d.get("key")) or [])
-    aside = red_set_aside(d, facts)
     since = float(d.get("opened_at") or 0) - 3600
-    best = None
-    for e in sorted(facts.get("entries") or [], key=lambda e: e.get("created") or ""):
+    for e in sorted(facts.get("entries") or [], key=lambda e: e.get("created") or "", reverse=True):
         if not set(map(str, e.get("fixes") or [])) & names:
             continue
         if e.get("status") in FIX_OPEN:
-            best = {"entry": e["id"], "status": e["status"], "author": {"worktree": e.get("worktree"),
-                                                                        "session": e.get("session")}}
-        elif e.get("status") == "landed" and e.get("landed_sha") and not red_fix_is_set_aside(e["landed_sha"], aside, facts):
-            best = {"entry": e["id"], "status": "landed", "sha": e["landed_sha"],
-                    "at": parse_time(e.get("landed_at") or e.get("updated") or e.get("created") or ts()).timestamp()}
-    if best:
-        return best
+            yield {"entry": e["id"], "status": e["status"], "author": {"worktree": e.get("worktree"),
+                                                                       "session": e.get("session")}}
+        elif e.get("status") == "landed" and e.get("landed_sha"):
+            at = parse_time(e.get("landed_at") or e.get("updated") or e.get("created") or ts()).timestamp()
+            if at >= since:  # landed before this spell opened: the run that opened it already outlived it
+                yield {"entry": e["id"], "status": "landed", "sha": e["landed_sha"], "at": at}
     for sha, ct, vals, _s in facts.get("landed") or []:
-        if vals & names and ct >= since and not red_fix_is_set_aside(sha, aside, facts):
-            return {"entry": None, "status": "landed", "sha": sha, "at": ct}
+        if vals & names and ct >= since:
+            yield {"entry": None, "status": "landed", "sha": sha, "at": ct}
+    for h in reversed(d.get("history") or []):
+        m = RED_LANDED_VERDICT.match(str(h.get("outcome") or ""))
+        try:
+            at = parse_time(h.get("at")).timestamp() if m and h.get("at") else None
+        except (ValueError, TypeError):
+            at = None
+        if m and at is not None and at >= since:
+            yield {"entry": None, "status": "landed", "sha": m.group(1), "at": at, "via": "its fixer's LANDED"}
+
+
+_landed_fetched = process_cache({})
+
+
+def red_sha_on_main(repo, sha):
+    """sha is on <remote>/main in clone repo -- main fetched (at most once per RED_MAIN_REFETCH for that sha) when the
+    clone does not show it yet: a fixer's LANDED comes seconds after its push. Never in a clone that tracks no main."""
+    ref = f"refs/remotes/{remote()}/main"
+    if not repo or not sha or not git_ok(repo, "rev-parse", "--verify", "-q", ref):
+        return False
+    if git_ok(repo, "merge-base", "--is-ancestor", sha, ref):
+        return True
+    if time.time() - _landed_fetched.get((repo, sha), 0) < RED_MAIN_REFETCH:
+        return False
+    _landed_fetched[(repo, sha)] = time.time()
+    return fetch_main(repo)[0] and git_ok(repo, "merge-base", "--is-ancestor", sha, ref)
+
+
+# ONE SET-ASIDE FIX HIDES NO OTHER (2026-11-13, Verify scrape recording #26, 784badc4406e.4): the queue entry of a refuted
+# fix whose file still read `waiting` (b6d3d8235, naming #23, a run of the same red key) was THE candidate red_fix_of
+# returned; the store turned it into its landed, set-aside sha and red_fix_current dropped it -- and with it 8d06b1a5ab,
+# landed with `Fixes-Red: 26`, which was never looked at. The red was re-offered and its fixer put "hold it as fixed by
+# 8d06b1a5ab" on the owner. Every candidate is judged in turn (corrected by the store when one is given); the first one
+# still standing is the fix.
+def red_fix_of(it, facts, store=None):
+    """The fix on its way for this red, or None: {entry, status, sha?, at?}. A refuted or unverified fix -- by sha or
+    by content -- counts no more, and is never the reason a later fix is not seen. store: each candidate corrected by
+    its change's store item first (red_fix_fresh)."""
+    d = it["data"]
+    aside = red_set_aside(d, facts)
+    for fix in red_fix_candidates(d, facts):
+        if fix.get("via") and not red_sha_on_main(facts.get("repo"), fix["sha"]):
+            continue  # a fixer's LANDED counts once its commit is on main (a verdict alone proves nothing)
+        if store is not None:
+            fix = red_fix_fresh(store, fix)
+        if fix and not (fix.get("sha") and red_fix_is_set_aside(fix["sha"], aside, facts)):
+            return fix
     return None
 
 
@@ -1721,7 +1781,7 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
             return [f"leased {red_what(d)} to {row['holder']}"]
         if row and float(lease_meta(row).get("released_at") or 0) > it["entered_at"] and \
                 float(row.get("acquired_at") or 0) >= it["entered_at"]:  # taken AND ended between two ticks: its attempt
-            return red_lease_ended(store, it, row, block, t)
+            return red_lease_ended(store, it, row, block, t, repo)
         if block:
             store.close_offer(f"red:{it['id']}", "blocked")
             red_move(store, it, "blocked-external", f"{red_what(d)}: {block['text']}",
@@ -1763,7 +1823,7 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
             if row["holder"] != d.get("holder"):
                 store.update_item("red", it["id"], it["version"], {"holder": row["holder"]})
             return acts
-        return red_lease_ended(store, it, row, block, t)
+        return red_lease_ended(store, it, row, block, t, repo)
     if st == "fix-pending":
         return red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t)
     if st == "blocked-external":
@@ -1831,7 +1891,7 @@ GAVE_UP_DECIDE = re.compile(r"\W*GAVE UP:.*?(\bneeds? (?:the |an? )?owner|\bowne
 LEASE_INFRA = re.compile(r"(lease expired|ORPHANED|STOPPED: the red's lease was lost)")
 
 
-def red_lease_ended(store, it, row, block, t):
+def red_lease_ended(store, it, row, block, t, repo=None):
     """Its holder's lease ended (released with a verdict, expired without progress, revoked): one attempt (not for a
     release by hand, a fixer that never started, a lease lost to infra, a red found already fixed, or one that needs the
     owner's decision: AN ATTEMPT IS A FIXER THAT TRIED AND FAILED TO FIX), the verdict in its history, offered again up
@@ -1864,6 +1924,15 @@ def red_lease_ended(store, it, row, block, t):
         left = [c[:10] for c in cherry_landed(wt, f"refs/remotes/{remote()}/main", "HEAD")[1] or []]
         if left:
             upd["prior_work"] = {"worktree": wt, "commits": left[:20]}
+    fix = red_fix_of({"data": {**d, **upd}}, {"repo": repo}) if RED_LANDED_VERDICT.match(out) else None
+    if fix:  # ITS FIXER LANDED ITS FIX (784badc4406e.4, 2026-11-13: `LANDED 8d06b1a5ab` was offered again, then put on
+        # the owner): the red waits for the run that proves it, its owner block (if any) answered by the fix
+        lifted = red_lift_block(store, it, block, f"its fixer landed {fix['sha'][:10]}")
+        store.close_offer(f"red:{it['id']}", "fix-pending")
+        red_move(store, it, "fix-pending", f"{red_what(d)}: {h['holder']} landed its fix {fix['sha'][:10]}: verifying"
+                 + (f" ({lifted})" if lifted else ""),
+                 data={**upd, "fix": {**fix, "verify_since": t}, "cause": None, "block": None, "ask": None})
+        return [f"fix-pending {red_what(d)} (its fixer landed {fix['sha'][:10]})"]
     if block:
         red_move(store, it, "blocked-external", f"{red_what(d)}: {block['text']}",
                  data={**upd, "cause": block.get("cause"), "block": block["name"]})
@@ -2271,11 +2340,9 @@ def red_fix_current(store, it, facts):
     turned it into a landed sha, never one the red refuted or set aside. red_fix_of can only judge the shas it reads; an
     entry its file still calls open is upgraded to its landed sha afterwards. 2026-11-11, Verify scrape recording #23
     (784badc4406e.3): a stale `waiting` entry came back as the refuted 547709c1e2 every tick, offered -> fix-pending ->
-    offered 593 times, and no fixer was ever offered the red."""
-    fix = red_fix_fresh(store, red_fix_of(it, facts))
-    if fix and fix.get("sha") and red_fix_is_set_aside(fix["sha"], red_set_aside(it["data"], facts), facts):
-        return None
-    return fix
+    offered 593 times, and no fixer was ever offered the red. Each candidate is judged in turn (red_fix_of): one set
+    aside never hides the next."""
+    return red_fix_of(it, facts, store)
 
 
 def red_fix_follow(store, f, repo, t):
@@ -2326,6 +2393,10 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
         line = f"{red_what(d)}: its fix {f['sha'][:10]} was already refuted: offered again"
         red_offer(store, it, line, data={"fix": None})
         return [f"re-offered {red_what(d)} (its fix {f['sha'][:10]} already refuted)"]
+    if fix and not fix.get("entry") and f.get("entry"):  # its own change landed that very commit: that change's fix
+        cur = f if f.get("status") == "landed" else red_fix_fresh(store, f)
+        if cur and cur.get("status") == "landed" and cur.get("sha") == fix.get("sha"):
+            fix = cur
     if fix and (fix.get("entry"), fix.get("sha"), fix["status"]) != (f.get("entry"), f.get("sha"), f.get("status")):
         if fix["status"] == "landed" and f.get("status") != "landed":
             # VERIFICATION STARTS WHEN THE FIX LANDS: the state's deadline (and red_fix_since) run from here, never
@@ -2470,17 +2541,21 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
             return red_fix_unverifiable(store, it, f"its fix {sha[:10]}: {line[len('FIX UNVERIFIED: '):][:160]}", t)
         if line.startswith("FIX UNVERIFIED:"):  # the failing run's inputs cannot be dispatched again: said so, and the
             line += (f"; the newest decided {d.get('workflow')} run on main containing {sha[:10]} decides it "  # next
-                     f"(offered again if none by {RED_FIX_GIVEUP // 3600} h after it landed)")  # natural run decides
+                     f"(offered again if none by {red_fix_giveup(d) // 3600} h after it landed)")  # natural run decides
         store.update_item("red", it["id"], it["version"], {"fix": {**f, "verify_dispatched": ts(), "verify": line}})
         return [line]
-    if t - red_fix_since(it) >= env_num("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP):
+    if t - red_fix_since(it) >= red_fix_giveup(d):
         return red_fix_unverifiable(store, it, f"its fix {sha[:10] or f.get('entry')} unverified for "
                                                f"{fmt_age(t - red_fix_since(it))} after it landed (no run of "
                                                f"{d.get('workflow')} proves it)", t)
     if t >= it["deadline"]:
+        # awaiting its workflow's next run: no one's to act on
+        awaiting = red_fix_giveup(d) > env_num("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP)
         red_move(store, it, "fix-pending", f"RED {red_what(d)}: fix {sha[:10] or f.get('entry')} unverified for "
-                                           f"{fmt_age(t - it['entered_at'])}")
-        return [f"escalated {red_what(d)}: fix unverified"]
+                                           f"{fmt_age(t - it['entered_at'])}"
+                 + (f" (awaiting {d.get('workflow')}'s next run)" if awaiting else ""),
+                 **({"severity": "info"} if awaiting else {}))
+        return [f"{'re-deadlined' if awaiting else 'escalated'} {red_what(d)}: fix unverified"]
     return []
 
 

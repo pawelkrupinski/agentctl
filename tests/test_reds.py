@@ -514,6 +514,22 @@ class FixTest(RedsBase):
         it = self.only()
         self.assertEqual((it["state"], it["data"]["refuted"]), ("offered", [sha]))  # never snapped back to fix-pending
 
+    def test_a_stale_open_entry_of_a_refuted_fix_never_hides_the_next_fixes_red_trailer(self):
+        # 2026-11-13, Verify scrape recording #26 (784badc4406e.4): its fix 8d06b1a5ab (`Fixes-Red: 26`) landed on main,
+        # but the queue entry of the refuted fix before it (b6d3d8235, its file still `waiting`, naming #23 -- a run of
+        # the same red key) was the one red_fix_of picked; set aside, it hid every landed trailer, so the red was
+        # re-offered and its fixer put "hold it as fixed by 8d06b1a5ab" on the owner.
+        self.tick()
+        stale = self.landed_fix_whose_entry_reads_open()
+        self.tick()
+        self.refute_with_main_23(stale)
+        self.tick()
+        self.assertEqual((self.only()["state"], self.only()["data"]["refuted"]), ("offered", [stale]))
+        _wt, sha = self.fix_commit(23, name="repo-wt-next")
+        self.tick(advance=60)
+        it = self.only()
+        self.assertEqual((it["state"], (it["data"].get("fix") or {}).get("sha")), ("fix-pending", sha))
+
     def test_refuted_fixes_are_counted_once_each(self):
         # 784badc4406e.3 stored the same two shas 593 times: "recurring: 593 fixes refuted", and a fixer brief that
         # would have listed all 593 as the landed fixes it outlived.
@@ -565,6 +581,69 @@ class FixTest(RedsBase):
             A.api, A.record_dispatch = saved
         self.assertIn(("POST", "actions/workflows/identity-capture.yml/dispatches"), calls)
         self.assertTrue(self.only()["data"]["fix"]["verify_dispatched"])
+
+    def outside_capture_red(self):
+        """Identity capture #2104 red on main (an outside red: no gate run ever proves its fix)."""
+        self.put("runs.json", [run(40, 20, "Main", "main.yml", self.sha), run(39, 19, "Identity model convergence",
+                                                                             "identity-model-convergence.yml", self.sha),
+                               run(70, 2104, "Identity capture", "identity-capture.yml", self.sha, conclusion="failure")])
+        self.put("run-70.json", {"jobs": [{"name": "capture (uk)", "status": "completed", "conclusion": "failure",
+                                           "steps": [{"name": "Run", "conclusion": "failure"}]}], "headSha": self.sha,
+                                 "url": "u", "number": 2104, "status": "completed", "conclusion": "failure",
+                                 "workflowName": "Identity capture"})
+        self.put("run-70.log", "capture (uk)\tRun\t2026-10-27T08:00:00Z [info] - CaptureSpec *** FAILED ***\n")
+        self.r.write(".github/workflows/identity-capture.yml",
+                     "name: Identity capture\non:\n  schedule:\n    - cron: '0 3 * * 1'\n  workflow_dispatch:\n")
+        self.r.commit("the workflow")
+        self.r.push()
+        self.tick()
+        return self.only()
+
+    def test_a_fixers_own_landed_fix_holds_its_red_in_fix_pending_until_its_workflows_next_run(self):
+        # 2026-11-13, Verify scrape recording #26 (784badc4406e.4): its fixer ended `LANDED 8d06b1a5ab`, and the red was
+        # offered again (the fix not linked), its next fixer asked the owner to "hold the red as fixed by 8d06b1a5ab
+        # until the next nightly run proves it" (WAITING ON YOU). A fixer's own LANDED is the red's fix on its way: the
+        # red waits in fix-pending, no owner item, for as long as its workflow has not run since; the next run decides.
+        it = self.outside_capture_red()
+        key = it["data"]["key"]
+        wt = self.r.worktree("repo-wt-capture", branch="repo-wt-capture")
+        self.r.write("capture.txt", "fixed\n", at=wt)
+        sha = self.r.commit("fix CaptureSpec", at=wt)  # no trailer: only the fixer's verdict names it
+        self.r.push(at=wt, ref=f"{sha}:main")
+        lease = self.st.acquire(A.red_lease(key), "laptop:claim:fixer@" + wt, 1800, 3600,
+                                meta={"kind": "claim", "worktree": wt})
+        self.tick(advance=5)
+        self.assertEqual(self.only()["state"], "leased")
+        self.st.release(A.red_lease(key), lease["epoch"], lease["secret"], outcome=f"LANDED {sha}")
+        self.tick(advance=5)
+        it = self.only()
+        self.assertEqual((it["state"], (it["data"].get("fix") or {}).get("sha")), ("fix-pending", sha))
+        seq = max([e["seq"] for e in self.st.events()] or [0])
+        calls, saved = [], (A.api, A.record_dispatch)
+        A.api = lambda o_r, method, path, params=None, body=None: (
+            saved[0](o_r, method, path, params, body) if method == "GET" else calls.append((method, path)))
+        A.record_dispatch = lambda **kw: None
+        try:  # a nightly's day with no run of its workflow: never past RED_FIX_GIVEUP to a fixer, never to the owner
+            for _ in range(8):
+                self.tick(advance=A.RED_FIX_GIVEUP // 2)
+        finally:
+            A.api, A.record_dispatch = saved
+        it = self.only()
+        self.assertEqual((it["state"], it["data"]["fix"]["sha"]), ("fix-pending", sha))
+        later = [e for e in self.st.events(after=seq) if e.get("item_id") == it["id"]]
+        self.assertEqual([e for e in later if e.get("severity") == "escalate"], [])
+        self.assertIsNone(A.red_block_of(it, self.st))
+        # its workflow's next run contains the fix and fails the same way: back to a fixer (refuted), not the owner
+        runs = json.load(open(os.path.join(self.d, "runs.json")))
+        nxt = run(71, 2105, "Identity capture", "identity-capture.yml", sha, conclusion="failure",
+                  created=A.iso_at(self.t[0]))
+        self.put("runs.json", [nxt] + runs)
+        rj = json.load(open(os.path.join(self.d, "run-70.json")))
+        self.put("run-71.json", {**rj, "headSha": sha, "number": 2105})
+        self.put("run-71.log", open(os.path.join(self.d, "run-70.log")).read())
+        self.tick(advance=60)
+        it = self.only()
+        self.assertEqual((it["state"], it["data"]["refuted"]), ("offered", [sha]))
 
     def test_a_verify_dispatch_takes_the_failing_runs_inputs_from_its_title_when_agentctl_did_not_start_it(self):
         # 2026-11-11, Verify scrape recording #23: dispatched by Record scrape fixtures (no agentctl record of its

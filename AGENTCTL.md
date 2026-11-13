@@ -85,7 +85,12 @@ moves it forward; nothing is a detached process that can die with its state in i
     the forge names runs from the workflows page, and a red opened under a run-name takes its workflow's name from its
     failing run's file, `RENAMED:` in its history). The red tick fetches main into its clone when the snapshot names a
     main head the clone lacks, so a `Fixes-Red:` commit pushed from anywhere links its red; a blocked red whose fix is
-    linked goes to fix-pending with its owner block lifted and its question withdrawn. An old outside red no fresh run
+    linked goes to fix-pending with its owner block lifted and its question withdrawn. Every candidate fix is judged in
+    turn (queue entries, then landed `Fixes-Red:` commits, then the red's own fixers' `LANDED <sha>` verdicts once that
+    sha is on main): a refuted or set-aside one -- a stale `waiting` entry of an earlier spell -- never hides the next
+    (784badc4406e.4, 2026-11-13). A fixer ending `LANDED <sha>` with the sha on main puts its red in fix-pending at
+    once, never offered again nor on the owner; an outside red's landed fix waits, quietly, for its workflow's next
+    run up to `RED_FIX_NEXT_RUN` (30 h: a nightly), which verifies it (green) or refutes it (back to a fixer). An old outside red no fresh run
     can check (no `workflow_dispatch`, a refused dispatch, its file gone) is never retired: it is offered with an
     `old_note` and a fixer decides. A red of a `workflow_call`-only workflow (only a parse failure gives one
     runs of its own: Report run timings #38) is verified, in any open state, by its callers: its file changed on main
@@ -854,7 +859,9 @@ agent must be assigned to it".
 - **`Fixes-Red: N` is the run NUMBER** (#N, GitHub's run_number): resolved through the newest runs' numbers first,
   as a run id only when no run has that number; a number and an id naming different runs: the number, and the FIX
   verdict says so in `[...]` (2026-10-27: `Fixes-Red: 2133`, Identity capture #2133, was read as id 2133, an old
-  convergence run #1111: FIX UNVERIFIED, and capture never dispatched).
+  convergence run #1111: FIX UNVERIFIED, and capture never dispatched). A number links every open red whose runs
+  include it, whatever its workflow (Verify scrape recording #26 as much as Main #26); when two open reds share the
+  number, name the run ID instead (`Fixes-Red: 43337374729`), which is among each red's runs too.
 - **A fix for a red outside the gate** (`Fixes-Red: N` naming e.g. an Identity capture run) is verified by the watch at
   once: the workflow is dispatched on main (workflow_dispatch, default inputs), waited for, and `FIX OK` / `FIX FAILED`
   goes to the inbox, the claim is released and the snapshot refreshed. One verification at a time per workflow (a second
@@ -1796,6 +1803,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `red_fixers` | `AGENTCTL_RED_FIXERS` | `5` | live fixers at once, every family together |
 | `red_fixer_wall` | `AGENTCTL_RED_FIXER_WALL` | `10800` | a dispatched fixer's maximum wall time |
 | `red_fix_giveup` | `AGENTCTL_RED_FIX_GIVEUP` | `21600` | - |
+| `red_fix_next_run` | `AGENTCTL_RED_FIX_NEXT_RUN` | `108000` | s an outside red's landed fix waits unproven for its workflow's next run |
 | `red_fix_requeue_grace` | `AGENTCTL_RED_FIX_REQUEUE_GRACE` | `900` | $AGENTCTL_RED_FIX_REQUEUE_GRACE |
 | `red_join_idle` | `AGENTCTL_RED_JOIN_IDLE` | `1800` | s a red joined to its family holder's lease may go with no progress on it before it is released |
 | `red_old_run` | `AGENTCTL_RED_OLD_RUN` | `172800` | an outside red whose newest run is older than this is checked by a fresh run before it is fixed |
