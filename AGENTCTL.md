@@ -348,7 +348,10 @@ main. For each red run it shows:
 - a verdict:
   - `TEST FAILURE`;
   - `INFRA-SHAPED`, with the `rerun --failed` command. Covers failures in a setup step, a 0-length log,
-    `artifact already exists`, ENOENT, docker, disk or connection errors;
+    `artifact already exists`, ENOENT, docker, disk or connection errors, an OOM kill (exit 137), a runner shutdown
+    or lost runner, `No test results found for`. A test verdict is read only from a test runner's own line (scalatest's
+    `*** FAILED`, sbt's `[error]`): GitHub's `##[error]` step-end annotation is none, or no infra signature would win
+    (Identity takes #13, Verify #14, 2026-11-15);
   - `NO VERDICT`, when `verdict complete` (Identity takes'; convergence's before the split) is the run's only real failure (a takes or takes-drift row
     was skipped, cancelled or missing): reporting, not a test failure -- no red, no streak, no fixer; the gate reads
     the newest complete run. Beside another failed job, `verdict complete` is an `[incomplete]` row with no verdict of

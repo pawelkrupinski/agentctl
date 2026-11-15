@@ -47,6 +47,8 @@ INFRA_SIGNATURES = NETWORK_SIGNATURES + [
     ("docker daemon", r"Cannot connect to the Docker daemon", "a runner's docker restarting"),
     ("runner lost", r"runner .* lost|The operation was canceled", "a runner taken away mid-job"),
     ("killed", r"exit code 137|\bKilled\b", "the OOM killer"),
+    ("runner shutdown", r"The runner has received a shutdown signal|lost communication with the server", "Identity takes #13 42600045483"),
+    ("no test results", r"No test results found for", "Verify #14 42335293225"),
 ]
 NETWORK_CHECK_FAILURE = _union(NETWORK_SIGNATURES)
 INFRA_LOG = _union(INFRA_SIGNATURES)
@@ -76,8 +78,14 @@ def network_failure(out):
     return m.group(0).strip() if m else None
 
 
+# A line a test runner wrote for a failing test: scalatest's `*** FAILED` or sbt's `[error]` -- never GitHub's own
+# `##[error]` annotation, which ends every failing step (an OOM, a runner shutdown, a missing test report too), so an
+# infra signature beside it never won (2026-11-15: Identity takes #13, Verify #14 read as TEST FAILURE).
+RUNNER_FAILED = re.compile(r"\*\*\* FAILED|(?<!#)\[error\]")
+
+
 def _test_line(lines):
-    return any("*** FAILED" in l or "[error]" in l for l in lines)
+    return any(RUNNER_FAILED.search(l) for l in lines)
 
 
 def classify_job(job, lines, raw=(0, []), timed_out=False):
@@ -86,7 +94,7 @@ def classify_job(job, lines, raw=(0, []), timed_out=False):
     (`TIMEOUT`), never infra: a rerun meets the same bound."""
     bad = [s for s in job.get("steps") or [] if s.get("conclusion") in ("failure", "timed_out")]
     step = bad[0]["name"] if bad else None
-    if timed_out and not any("*** FAILED" in l or "[error]" in l for l in lines):
+    if timed_out and not _test_line(lines):
         return "test", (f"TIMEOUT: step '{step}' ran past its timeout-minutes" if step else "TIMEOUT: a step ran past its timeout-minutes") + \
             " (bounded-step.sh reaped what it left): its work outgrew its bound -- shorten the work or let it stop itself, never rerun"
     if step and SETUP_STEP.search(step):
@@ -94,17 +102,17 @@ def classify_job(job, lines, raw=(0, []), timed_out=False):
     if not raw[0] and not lines:
         return "infra", "0-length log" + (f" (step '{step}')" if step else "")
     unknown = next((l for l in lines if UNKNOWN_LOG.search(l)), None)
-    if unknown and not any("*** FAILED" in l or "[error]" in l for l in lines):
+    if unknown and not _test_line(lines):
         return "infra", f"UNKNOWN, an outside dependency unreachable (not a code red): {unknown.strip()[:160]}"
     refused = next((l for l in lines if KEY_REFUSED_LOG.search(l)), None)
-    if refused and not any("*** FAILED" in l or "[error]" in l for l in lines):
+    if refused and not _test_line(lines):
         if QUOTA_LOG.search(refused):
             return "infra", ("QUOTA SPENT, an outside service's quota for the run's key is used up; it resets on its "
                              f"own (an external wait, not the owner's, not a code red): {refused.strip()[:160]}")
         return "infra", ("KEY REFUSED, an outside service refused the run's key (credentials: the owner's, not a code "
                          f"red): {refused.strip()[:160]}")
     hit = next((l for l in lines if INFRA_LOG.search(l)), None)
-    if hit and not any("*** FAILED" in l or "[error]" in l for l in lines):
+    if hit and not _test_line(lines):
         return "infra", f"infra-shaped log line: {hit[:120]}"
     if not lines:
         tail = " | ".join(raw[1])

@@ -66,6 +66,31 @@ class Incidents(unittest.TestCase):
         lines = ["[info] - should keep the order *** FAILED ***", "[error] Failed tests: x.YSpec"]
         self.assertEqual(A.classify_job(job("Run tests"), lines, (2, lines))[0], "test")
 
+    def test_githubs_own_error_annotation_lines_never_hide_an_infra_signature(self):
+        """GitHub writes every failing step's end as `##[error]...`; the classifier's `"[error]" in line` read that as
+        sbt's `[error]`, so an infra signature never won (Identity takes #13 42600045483: a runner shutdown; Verify #14
+        42335293225: no test results; an OOM's exit 137 beside the JUnit reporter's `No test results`)."""
+        cases = {
+            "oom": ["##[error]Process completed with exit code 137.",
+                    "##[error]No test results found for **/target/test-reports/*.xml"],
+            "runner shutdown": ["##[error]The runner has received a shutdown signal. This can happen when the runner "
+                                "service is stopped, or a manually started runner is canceled.",
+                                "##[error]The operation was canceled."],
+            "lost communication": ["##[error]The hosted runner lost communication with the server."],
+            "no test results": ["##[error]No test results found for **/target/test-reports/*.xml"],
+        }
+        for name, lines in cases.items():
+            self.assertEqual(A.classify_job(job("Run tests"), lines, (len(lines), lines))[0], "infra", name)
+        for name, lines in {
+            "scalatest": ["[info] - should keep the order *** FAILED ***",
+                          "##[error]Process completed with exit code 1.",
+                          "##[error]No test results found for **/target/test-reports/*.xml"],
+            "sbt": ["[error] Failed tests: x.YSpec", "##[error]Process completed with exit code 137."],
+        }.items():
+            self.assertEqual(A.classify_job(job("Run tests"), lines, (len(lines), lines))[0], "test", name)
+        self.assertIsNone(A.RUNNER_FAILED.search("##[error]Process completed with exit code 1."))
+        self.assertIsNotNone(A.RUNNER_FAILED.search("[error] Failed tests: x.YSpec"))
+
     def test_every_pattern_row_names_its_incident(self):
         for name, pattern, incident in A.INFRA_STEPS + A.INFRA_SIGNATURES:
             self.assertTrue(name and pattern and incident, (name, pattern))
