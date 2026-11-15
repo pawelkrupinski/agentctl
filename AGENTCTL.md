@@ -466,7 +466,19 @@ The owner: "why unclaimed ... should always claim, fix structurally".
   red, an infra red, `local`, no workflow found) counts. A trailer that does not count leaves the red where it is (no
   fix-pending, its fixer kept); the change lands as an ordinary one -- it waits while the gate is red -- and its
   author gets one `FIX NOT COUNTED: ...` inbox entry with the reason (a default `inbox wait` kind). Cached per sha
-  under `~/.cache/agentctl/reds/fixcheck/`.
+  under `~/.cache/agentctl/reds/fixcheck/` (each verdict with the rules' version, `FIX_RULES`: an older one is read
+  again).
+- **Per red, per failing step (2026-11-15: 09e482c6a, an ios/KinowoUITests change with `Fixes-Red: 74`, put both reds
+  of Order independence #74 in fix-pending; its swift red was the script self-tests under bash 3.2).** A run's value
+  counts (for the gate, the batch) when any red of the run reads the commit; but each red TAKES a fix -- a queued
+  change, a landed `Fixes-Red:` commit, its fixer's `LANDED <sha>` -- only when its own failing job reads it, or the
+  trailer names its key. A red whose failing steps are known (the run's jobs read once, `reds/runsteps/<run id>.json`)
+  is judged by those steps and the setup steps before them (an action, a setup / build / install step, a write to
+  `$GITHUB_ENV` / `$GITHUB_PATH` / `$GITHUB_OUTPUT`), never the job's other legs. android/ or ios/ is read whole when
+  that text builds it (a project or build file of it, `--package-path` / `working-directory` / `cd` into it, a step
+  running a script inside it); a directory under it named alone (run-script-tests' `ios/scripts` root) is read alone.
+  Another workflow a script names is its data, never followed. A fix-pending red on a fix it does not read (another
+  red's) is offered again at the next tick.
 - **No daily budget.** A red that cannot get a fixer now (a concurrency cap, or dispatch unavailable) waits in a FIFO
   queue per class: `queued for a fixer (#k, next slot when <x> ends)`. That is a recovery condition (probe
   `fixer_slot`, on recover: the red tick runs). Gate reds keep their own cap of 3 alive.

@@ -683,7 +683,23 @@ FIX_SPEC_FILE = re.compile(r"/src/(test|it|e2e)/\w+/(.*/)?([A-Z]\w*(Spec|Test|Te
 FIX_BROAD_TEST = re.compile(r"(?<![\w-])(test|testQuick|testUnit\w*|Test/test|it:test|[\w-]+/test|"
                             r"testOnly\s+[^\n\"']*\*)(?![\w-])")
 FIX_SBT = re.compile(r"\bsbt\b|sbt-warm|sbtw?\b")
-FIX_REPO_PATH = re.compile(r"(?<![\w/.-])(?:\./)?((?:scripts|\.github|tools|bin)/[\w./-]+)")
+FIX_REPO_PATH = re.compile(r"(?<![\w/.-])(?:\./)?((?:scripts|\.github|tools|bin|(?:android|ios)/scripts)/[\w./-]+)")
+# PER RED, PER FAILING STEP (2026-11-15, Order independence #74): 09e482c6a (ios/KinowoUITests only, `Fixes-Red: 74`)
+# fixed the run's ios red and was linked to its swift red too -- a value counted for the run when ANY of its reds read
+# the commit, and every red of the run took it; the swift job reads ios/ (`swift test --package-path ios`), but its
+# failing step was the script self-tests, which read ios/scripts alone. Now (a) a red takes a fix only when ITS failing
+# job reads the commit (red_fix_reaches, red_fix_candidates), and (b) a job whose failing steps are known
+# (red_failed_steps) reads those steps, plus the steps before them that set the environment up (an action, a setup /
+# build / install step, a write to $GITHUB_ENV / $GITHUB_PATH / $GITHUB_OUTPUT) -- never its other legs. android/ or ios/
+# is read WHOLE when the text builds it (a project or build file of it, a `--package-path` / `working-directory` /
+# `cd` into it, a script file inside it); a directory under it named alone (run-script-tests' `ios/scripts` root) is
+# read alone.
+FIX_SETUP_STEP = re.compile(r"\$\{?GITHUB_(ENV|PATH|OUTPUT)\b|^\s*-?\s*uses:|\b(build|compile|assemble|install|set ?up|"
+                            r"setup|generate|prepare|bootstrap)\b", re.I | re.M)
+FIX_TOP_WHOLE = (r"(?:--package-path|--project-dir|working-directory:|\bcd|-C)\s+['\"]?{top}['\"]?(?![\w/.-])"
+                 r"|(?<![\w-]){top}/[\w./-]*?(?:\.xcodeproj|\.xcworkspace|Package\.swift|build\.gradle(?:\.kts)?|"
+                 r"settings\.gradle(?:\.kts)?|gradlew)(?![\w-])")
+FIX_STEP_FAILED = ("failure", "timed_out")
 
 
 def fix_tree_files(repo, sha):
@@ -722,6 +738,86 @@ def fix_workflow_jobs(text):
     return out
 
 
+def fix_job_steps(body):
+    """(the job block without its steps, [(step name or None, step text)]) of a job block, by indentation."""
+    pre, items, steps_ind, item_ind = [], [], None, None
+    for l in body.splitlines():
+        if steps_ind is None:
+            m = re.match(r"^(\s*)steps:\s*$", l)
+            if m:
+                steps_ind = len(m.group(1))
+            else:
+                pre.append(l)
+            continue
+        ind = len(l) - len(l.lstrip())
+        if l.strip() and not l.lstrip().startswith("#") and ind <= steps_ind:  # a job key after its steps
+            steps_ind, item_ind = -1, None
+            pre.append(l)
+            continue
+        m = re.match(r"^(\s*)-\s", l)
+        if steps_ind >= 0 and m and (item_ind is None or len(m.group(1)) == item_ind):
+            item_ind = len(m.group(1))
+            items.append([l])
+        elif items and steps_ind >= 0:
+            items[-1].append(l)
+        else:
+            pre.append(l)
+    out = []
+    for ls in items:
+        nm = None
+        for i, l in enumerate(ls):  # the step's own `name:` (never a `with:` input's)
+            m = re.match(r"^\s*(-\s+)?name:\s*['\"]?([^'\"\n]+?)['\"]?\s*$", l)
+            if m and (i == 0 and m.group(1) or len(l) - len(l.lstrip()) == item_ind + 2):
+                nm = m.group(2).strip()
+                break
+        out.append((nm, "\n".join(ls)))
+    return "\n".join(pre), out
+
+
+def fix_step_text(body, failing):
+    """The part of job block `body` its failing steps read (PER FAILING STEP, above): the job without its steps, the
+    failing steps, and the setup steps before them; the whole block when no step of it is known to have failed."""
+    pre, steps = fix_job_steps(body)
+
+    def failed(nm, txt):
+        return any(nm == f or (nm is None and f.startswith("Run ") and f[4:].strip() and f[4:].strip() in txt)
+                   for f in failing)
+    idx = [i for i, (nm, txt) in enumerate(steps) if failed(nm, txt)]
+    if not idx:
+        return body
+    keep = [txt for i, (_nm, txt) in enumerate(steps) if i in idx or (i < max(idx) and FIX_SETUP_STEP.search(txt))]
+    return "\n".join([pre] + keep)
+
+
+def red_failed_steps(d):
+    """The steps that failed in red d's jobs on its newest run (by name): its `steps`, else read once through gh and
+    kept (reds/runsteps/<run id>.json: a finished run's steps never change); [] when they cannot be read."""
+    if d.get("steps"):
+        return sorted(map(str, d["steps"]))
+    rid = (d.get("last_run") or {}).get("databaseId")
+    if not rid:
+        return []
+    path = reds_dir("runsteps", f"{rid}.json")
+    rec = read_record(path)
+    if rec is None:
+        try:
+            jobs = (gh_json(red_repo_of(d), "run", "view", str(rid), "--json", "jobs") or {}).get("jobs") or []
+        except (Exception, SystemExit):
+            return []
+        if not jobs:
+            return []
+        rec = {str(j.get("name")): [str(s.get("name")) for s in j.get("steps") or []
+                                    if s.get("conclusion") in FIX_STEP_FAILED and s.get("name")]
+               for j in jobs if j.get("conclusion") in FIX_STEP_FAILED}
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            write_json(path, rec)
+        except OSError:
+            pass
+    names = {str(j) for j in d.get("jobs") or [d.get("job")] if j}
+    return sorted({s for j, ss in rec.items() if j in names for s in ss or []})
+
+
 def red_job_reads(repo, sha, d):
     """What red d's failing job reads, from the tree of `sha`: {files, prefixes, text, broad, sbt} -- or None when it
     cannot be told (no workflow file of that name, nothing readable)."""
@@ -743,6 +839,8 @@ def red_job_reads(repo, sha, d):
     heads = {re.split(r" / | \(", n, maxsplit=1)[0].strip().lower() for n in names}
     picked = [body for k, (body, nm) in jobs.items()
               if k.lower() in heads or re.sub(r"\$\{\{.*?\}\}", "", nm).strip().lower() in heads] if heads else []
+    failing = red_failed_steps(d) if picked else []
+    picked = [fix_step_text(body, failing) for body in picked] if failing else picked
     texts.append("\n".join(picked) if picked else wf[1])  # its job's steps, or (unsure which) the whole workflow
     seen = set()
     todo = list(texts)
@@ -763,8 +861,8 @@ def red_job_reads(repo, sha, d):
             for m in FIX_REPO_PATH.finditer(t):
                 p = m.group(1).rstrip("/.")
                 reads.add(p)
-                if p in seen or p not in files:
-                    continue
+                if p in seen or p not in files or FIX_WORKFLOW_FILE.match(p):
+                    continue  # another workflow named in a script is its DATA (a lint's input): read, never run here
                 seen.add(p)
                 body = fix_show(repo, sha, p)
                 if body and len(body) < 400_000:
@@ -774,7 +872,22 @@ def red_job_reads(repo, sha, d):
     text = "\n".join(texts)
     sbt = bool(FIX_SBT.search(text))
     return {"files": reads, "text": text, "sbt": sbt, "broad": sbt and bool(FIX_BROAD_TEST.search(text)),
-            "named": set(re.findall(r"\b[A-Z]\w+\b", text + " " + str(d.get("line") or "") + " " + " ".join(names)))}
+            "named": set(re.findall(r"\b[A-Z]\w+\b", text + " " + str(d.get("line") or "") + " " + " ".join(names))),
+            "tops": {top: fix_top_reads(top, text, texts[0], files) for top in FIX_UNREAD_TOP}}
+
+
+def fix_top_reads(top, text, steps, files):
+    """What a job reads of the app directory `top` (android/, ios/), from `text` (its steps and all they name) and
+    `steps` (the job's own step text): True for all of it -- it builds it (a project or build file, a `--package-path` /
+    `working-directory` / `cd` into it) or one of its steps runs a script file inside it, which may -- else the set of
+    the paths under it named (a directory: its subtree; a file a deeper script names: that file, its own text read)."""
+    if re.search(FIX_TOP_WHOLE.format(top=re.escape(top)), text):
+        return True
+    tree = set(files)
+    named = re.compile(rf"(?<![\w.]){re.escape(top)}/([\w./-]*[\w-])")
+    if any(f"{top}/{m.group(1)}" in tree for m in named.finditer(steps)):
+        return True
+    return {f"{top}/{m.group(1)}".rstrip("/") for m in named.finditer(text)}
 
 
 def fix_path_unread(p, rd):
@@ -786,23 +899,77 @@ def fix_path_unread(p, rd):
     if FIX_UNREAD_DOC.search(p) and p not in rd["text"]:
         return True
     top = p.split("/", 1)[0]
-    if top in FIX_UNREAD_TOP and not re.search(rf"(?<![\w-]){re.escape(top)}/", rd["text"]):
-        return True
+    if top in FIX_UNREAD_TOP:
+        tr = rd["tops"][top]
+        if tr is not True and not any(p == x or p.startswith(x + "/") for x in tr):
+            return True
     m = FIX_SPEC_FILE.search(p)
     if m and not rd["broad"] and m.group(3) not in rd["named"]:
         return True
     return False
 
 
+FIX_RULES = 2  # the reading rules' version (2: per red, per failing step): a verdict cached under another is read again
+
+
+def fix_changed(repo, sha):
+    r = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", sha, check=False)
+    return [p for p in (r.stdout if r.returncode == 0 else "").splitlines() if p]
+
+
+def fix_red_verdict(repo, sha, d, changed):
+    """{ok, why?}: does commit sha (its paths `changed`) touch what red d's failing job reads? Unsure counts."""
+    if d.get("kind") != "test":
+        return {"ok": True, "why": "not a test failure"}
+    try:
+        rd = red_job_reads(repo, sha, d)
+    except (Exception, SystemExit):
+        rd = None
+    if rd is None or not changed or not all(fix_path_unread(p, rd) for p in changed):
+        return {"ok": True}
+    return {"ok": False, "why": (f"it touches nothing {red_what(d)} reads "
+                                 f"({', '.join(changed[:4])}{' ...' if len(changed) > 4 else ''})")}
+
+
+def fix_cache(sha):
+    """(path, the verdicts cached for commit sha under the current FIX_RULES)."""
+    path = reds_dir("fixcheck", f"{sha}.json")
+    cache = read_record(path) or {}
+    return path, {k: v for k, v in cache.items() if isinstance(v, dict) and v.get("rules") == FIX_RULES}
+
+
+def fix_cache_put(path, cache, fresh):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        write_json(path, {**cache, **{k: {**v, "rules": FIX_RULES} for k, v in fresh.items()}})
+    except OSError:
+        pass
+
+
+def fix_reaches_red(repo, sha, d):
+    """Commit sha is a fix THIS red can take: it touches what ITS failing job reads (fix_red_verdict), cached per sha
+    and red key. A run's `Fixes-Red:` value counts for the run when any of its reds reads the commit (fix_check); each
+    red of the run takes it only when it reads it itself (PER RED, PER FAILING STEP)."""
+    if not repo or not sha or not d.get("key"):
+        return True
+    path, cache = fix_cache(sha)
+    k = f"red:{d['key']}"
+    if k not in cache:
+        if not git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}"):
+            return True  # a commit this clone lacks: unsure counts (and is not cached)
+        fix_cache_put(path, cache, {k: fix_red_verdict(repo, sha, d, fix_changed(repo, sha))})
+        return bool(fix_cache(sha)[1].get(k, {"ok": True}).get("ok"))
+    return bool(cache[k].get("ok"))
+
+
 def fix_check(repo, sha, values, store=None):
     """(the values that count as fixes, {value: why not} for those that do not): each `Fixes-Red:` value of commit sha
-    against the reds it names (see above). Cached per sha; a value naming no known red counts (unsure) and is not
-    cached, so a red opened later is still checked."""
+    against the reds it names (see above): a value counts when any red it names reads the commit. Cached per sha; a
+    value naming no known red counts (unsure) and is not cached, so a red opened later is still checked."""
     values = {str(v).strip().lstrip("#") for v in values if str(v).strip()}
     if not values or not repo:
         return values, {}
-    path = reds_dir("fixcheck", f"{sha}.json")
-    cache = read_record(path) or {}
+    path, cache = fix_cache(sha)
     ok, bad, todo = set(), {}, []
     for v in sorted(values):
         c = cache.get(v)
@@ -823,38 +990,28 @@ def fix_check(repo, sha, values, store=None):
     fresh = {}
     for v in todo:
         its = [it for it in items if v in {str(x) for x in red_names(it["data"]) if x is not None}]
-        if not its or v == "local" or any(it["data"].get("kind") != "test" for it in its):
-            ok.add(v)  # unsure: the red unknown (not cached), local, or not a test failure
+        if not its or v == "local":
+            ok.add(v)  # unsure: the red unknown (not cached), or local
             if its:
-                fresh[v] = {"ok": True, "why": "not a test failure" if v != "local" else "local"}
+                fresh[v] = {"ok": True, "why": "local"}
             continue
         if changed is None:
-            r = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", sha, check=False)
-            changed = [p for p in (r.stdout if r.returncode == 0 else "").splitlines() if p]
+            changed = fix_changed(repo, sha)
         verdict = None
-        for it in its:
-            try:
-                rd = red_job_reads(repo, sha, it["data"])
-            except (Exception, SystemExit):
-                rd = None
-            if rd is None or not changed or not all(fix_path_unread(p, rd) for p in changed):
-                verdict = {"ok": True}
-                break
-            verdict = {"ok": False, "why": (f"it touches nothing {red_what(it['data'])} reads "
-                                            f"({', '.join(changed[:4])}{' ...' if len(changed) > 4 else ''})")}
-        fresh[v] = verdict
+        for it in its:  # each red's own verdict kept too: the red takes the fix only on its own (fix_reaches_red)
+            rv = fix_red_verdict(repo, sha, it["data"], changed)
+            fresh[f"red:{it['data']['key']}"] = rv
+            if verdict is None or not verdict["ok"]:
+                verdict = rv
+        fresh[v] = {"ok": True} if verdict["ok"] else verdict
         if verdict["ok"]:
             ok.add(v)
         else:
             bad[v] = verdict["why"]
     if fresh:
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            write_json(path, {**cache, **fresh})
-        except OSError:
-            pass
+        fix_cache_put(path, cache, fresh)
         for v, c in fresh.items():
-            if not c.get("ok"):
+            if not v.startswith("red:") and not c.get("ok"):
                 fix_not_counted_tell(repo, sha, v, c["why"])
     return ok, bad
 
@@ -1004,8 +1161,13 @@ def red_fix_candidates(d, facts):
     `LANDED <sha>` verdicts since it opened (the newest first). Unjudged: red_fix_of drops the ones set aside."""
     names = red_names(d) | set((facts.get("key_runs") or {}).get(d.get("key")) or [])
     since = float(d.get("opened_at") or 0) - 3600
+    repo = facts.get("repo")
+
+    def its_own(named, shas):  # PER RED: named by its key, or a fix its own failing job reads (fix_reaches_red)
+        return d.get("key") in named or any(fix_reaches_red(repo, x, d) for x in shas if x) or not any(shas)
     for e in sorted(facts.get("entries") or [], key=lambda e: e.get("created") or "", reverse=True):
-        if not set(map(str, e.get("fixes") or [])) & names:
+        named = set(map(str, e.get("fixes") or [])) & names
+        if not named or not its_own(named, list(e.get("commits") or []) + [e.get("landed_sha")]):
             continue
         if e.get("status") in FIX_OPEN:
             yield {"entry": e["id"], "status": e["status"], "author": {"worktree": e.get("worktree"),
@@ -1017,7 +1179,7 @@ def red_fix_candidates(d, facts):
             if at >= since:  # landed before this spell opened: the run that opened it already outlived it
                 yield {"entry": e["id"], "status": "landed", "sha": e["landed_sha"], "at": at}
     for sha, ct, vals, _s in facts.get("landed") or []:
-        if vals & names and ct >= since:
+        if vals & names and ct >= since and its_own(vals & names, [sha]):
             yield {"entry": None, "status": "landed", "sha": sha, "at": ct}
     for h in reversed(d.get("history") or []):
         m = RED_LANDED_VERDICT.match(str(h.get("outcome") or ""))
@@ -1025,7 +1187,7 @@ def red_fix_candidates(d, facts):
             at = parse_time(h.get("at")).timestamp() if m and h.get("at") else None
         except (ValueError, TypeError):
             at = None
-        if m and at is not None and at >= since:
+        if m and at is not None and at >= since and its_own(set(), [m.group(1)]):  # an owner's turn held every red
             yield {"entry": None, "status": "landed", "sha": m.group(1), "at": at, "via": "its fixer's LANDED"}
 
 
@@ -2407,6 +2569,12 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
         line = f"{red_what(d)}: its fix {f['sha'][:10]} was already refuted: offered again"
         red_offer(store, it, line, data={"fix": None})
         return [f"re-offered {red_what(d)} (its fix {f['sha'][:10]} already refuted)"]
+    if f.get("sha") and not fix and not fix_reaches_red(repo, f["sha"], d):
+        # PENDING ON ANOTHER RED'S FIX (PER RED, PER FAILING STEP: Order independence #74's swift red on 09e482c6a, the
+        # ios red's fix): no run of it can prove this red fixed -- offered again, never parked until the give-up
+        line = f"{red_what(d)}: its fix {f['sha'][:10]} touches nothing its failing job reads: offered again"
+        red_offer(store, it, line, data={"fix": None})
+        return [f"re-offered {red_what(d)} (its fix {f['sha'][:10]} is another red's)"]
     if fix and not fix.get("entry") and f.get("entry"):  # its own change landed that very commit: that change's fix
         cur = f if f.get("status") == "landed" else red_fix_fresh(store, f)
         if cur and cur.get("status") == "landed" and cur.get("sha") == fix.get("sha"):

@@ -165,5 +165,101 @@ class LandingTest(FixCheckBase):
                                                                      if x[0] == bad]}), None)
 
 
+ORDER = """name: Order independence
+on: workflow_dispatch
+jobs:
+    swift:
+        runs-on: macos-latest
+        steps:
+            - uses: actions/checkout@v5
+            - name: Every swift test case alone
+              run: ios/scripts/swift-test-shuffled.sh "$SEED"
+            - name: StateSyncModelTests at 2000 seeds
+              run: swift test --package-path ios --filter StateSyncModelTests
+            - name: GNU timeout and shellcheck
+              run: |
+                  brew install coreutils shellcheck
+                  echo "$RUNNER_TEMP/gnu-timeout" >> "$GITHUB_PATH"
+            - name: Script self-tests under macOS /bin/bash 3.2
+              run: scripts/run-script-tests --bash /bin/bash
+    ios:
+        runs-on: macos-latest
+        steps:
+            - name: Build for testing
+              run: xcodebuild build-for-testing -project ios/Kinowo.xcodeproj -scheme Kinowo
+            - name: Every XCUITest class alone
+              run: scripts/ci/xcuitest-each-class-alone.sh
+"""
+
+
+class PerRedTest(FixCheckBase):
+    """PER RED, PER FAILING STEP (2026-11-15, Order independence #74): 09e482c6a, an ios/KinowoUITests change with
+    `Fixes-Red: 74`, fixed the run's ios red and put its swift red -- the script self-tests failing under bash 3.2 -- in
+    fix-pending too: the value counted for the run, and every red of the run took it."""
+
+    def setUp(self):
+        super().setUp()
+        self.r.write(".github/workflows/order-independence.yml", ORDER)
+        self.r.write("scripts/run-script-tests", 'Roots="scripts ios/scripts"\n')
+        self.r.write("scripts/ci/xcuitest-each-class-alone.sh", 'dir="${XCUITEST_DIR:-ios/KinowoUITests}"\n')
+        self.r.write("ios/scripts/swift-test-shuffled.sh", 'swift test --package-path "$package"\n')
+        self.r.write("ios/KinowoUITests/CardShareMenuUITests.swift", "class CardShareMenuUITests\n")
+        self.r.commit("order independence")
+        self.r.push()
+        run = {"number": 74, "databaseId": 43702576373}
+        for key, job, step in (("swift74", "swift", "Script self-tests under macOS /bin/bash 3.2"),
+                               ("ios74", "ios", "Every XCUITest class alone")):
+            self.st.put_item("red", key, "offered", {"key": key, "workflow": "Order independence", "job": job,
+                                                     "jobs": [job], "kind": "test", "line": f"{job} failed",
+                                                     "runs": ["74", "43702576373"], "last_run": run, "steps": [step],
+                                                     "opened_at": 0})
+
+    def facts(self):
+        return {"entries": [], "landed": A.landed_fix_commits(self.r.path), "repo": self.r.path}
+
+    def ios_fix(self):
+        saved = A.Store
+        A.Store = lambda *a, **k: self.st
+        self.addCleanup(lambda: setattr(A, "Store", saved))
+        sha = self.change(["ios/KinowoUITests/CardShareMenuUITests.swift"], ("74",))
+        self.r.push()
+        return sha
+
+    def test_a_run_level_trailer_is_the_fix_only_of_the_reds_whose_failing_step_reads_it(self):
+        sha = self.ios_fix()
+        self.assertEqual(A.fix_check(self.r.path, sha, {"74"}, self.st)[0], {"74"}, "it fixes a red of #74: it counts")
+        facts = self.facts()
+        self.assertEqual((A.red_fix_of(self.st.item("red", "ios74"), facts) or {}).get("sha"), sha)
+        self.assertIsNone(A.red_fix_of(self.st.item("red", "swift74"), facts),
+                          "the self-test step reads ios/scripts alone, never ios/KinowoUITests")
+        self.assertFalse(A.fix_reaches_red(self.r.path, sha, self.st.item("red", "swift74")["data"]))
+
+    def test_a_red_named_by_its_key_takes_the_fix_whatever_it_touches(self):
+        sha = self.ios_fix()
+        it = self.st.item("red", "swift74")
+        self.assertEqual(A.red_fix_of(it, {"entries": [], "landed": [(sha, 1e10, {"swift74"}, "s")],
+                                           "repo": self.r.path})["sha"], sha)
+
+    def test_a_job_failing_in_a_step_that_builds_the_app_or_unknown_steps_reads_all_of_it(self):
+        sha = self.ios_fix()
+        d = dict(self.st.item("red", "swift74")["data"])
+        for steps in (["Every swift test case alone"], ["StateSyncModelTests at 2000 seeds"], None):
+            self.assertTrue(A.fix_red_verdict(self.r.path, sha, {**d, "steps": steps, "last_run": {}},
+                                              A.fix_changed(self.r.path, sha))["ok"], steps)
+
+    def test_a_fix_pending_red_on_another_reds_fix_is_offered_again(self):
+        sha = self.ios_fix()
+        it = self.st.item("red", "swift74")
+        self.st.transition("red", "swift74", "fix-pending", it["version"],
+                           data={"fix": {"entry": None, "status": "landed", "sha": sha, "at": 1.0}})
+        it = self.st.item("red", "swift74")
+        facts = self.facts()
+        out = A.red_fix_pending(self.st, it, A.red_fix_of(it, facts), False, None, {}, facts, self.r.path,
+                                A.RED_PRIMARY, 2.0)
+        self.assertIn("another red's", " ".join(out))
+        it = self.st.item("red", "swift74")
+        self.assertEqual((it["state"], it["data"].get("fix")), ("offered", None))
+
+
 if __name__ == "__main__":
     unittest.main()
