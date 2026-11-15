@@ -135,6 +135,9 @@ class RetiredTickTest(RedReposBase):
         A._retire_cache.clear()
         self.addCleanup(A._retire_cache.clear)
         self.main_at(MAIN, "2026-10-31T21:05:16Z")
+        # the ticks' clock at the fixtures' day: on the wall clock, from 2026-11-14 on, every fixture run of 10-31 was
+        # past RED_STALE_DAYS and its red cleared `stale` instead of what each test reads
+        self.t[0] = A.parse_time("2026-10-31T22:00:00Z").timestamp()
 
     def api(self, path, obj):
         self.put("api-" + path.replace("/", "_").replace("?", "_").replace("&", "_").replace("=", "_") + ".json", obj)
