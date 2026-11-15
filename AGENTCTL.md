@@ -1106,8 +1106,16 @@ The reconciler then takes it, a step per tick:
   run of the current episode): `WAITING <sha> (entry <id>, n in batch)`. Tools-only changes and Fixes-Red changes land while red.
 - **The batch.** When main turns green, the waiting changes are ONE `batch` item. The tick assembles its tip in a
   throwaway check tree (<remote>/main plus the changes in queue order, Fixes-Red first; a change that no longer applies
-  is rejected alone), and an executor, `waiting check-batch <id>`, checks it ONCE (`pre-push --fast-only`: every test
-  config compiled and the fast tests; each change already passed its own full checks) on a fresh sbt server. Pass: one
+  is rejected alone), and an executor, `waiting check-batch <id>`, checks it ONCE (`pre-push --fast-only`) on a fresh sbt server. What
+  that pass runs: the `sbt` check (every test config compiled, the lint specs, the `fast` set), the touched files'
+  shellcheck and actionlint, and every check a touched `merge=union` path selects (bar the area tests and heavy rows:
+  `judgements` for identity-judgements.tsv). Why that much and no more: each member was checked in full on its own,
+  but on the main it was queued against, alone -- so the batch's compile and fast tests judge the combination, and
+  a union-merged file is the one file the rebase WRITES from two members' edits without a conflict, which no member's
+  check ever saw (2026-11-05: batch 957f4776f kept 81469b9c1's moved and 2a4ac45c4's re-added judgement rows, its pass
+  ran `sbt` alone, and Tool self-tests #74-#76 went red on "a second row"; movies 508cb1791). What it never re-runs:
+  the area tests (identity, page) and a member's other path checks; a `known_red` member's own checks failed only where
+  main failed, so main's CI after the push is the first full run of its failing tests. Pass: one
   push of the tip; every change is LANDED with its own watch. Fail: bisect by prefix, the culprit confirmed before it
   is rejected, the passing prefix landed at once, the rest in the next batch. A stall is retried once, then the batch
   is HELD 30 min (`HELD:` in the inbox). A waiting change that reached main another way meanwhile is LANDED.

@@ -502,8 +502,9 @@ STALL_SIGNAL = re.compile(r"(^|\s)(pre-push |sbt-warm )?STALLED:", re.M)
 
 
 def batch_mode(hook):
-    """The combined check's hook mode: `--fast-only` (compile of every test config and the fast tests: every change
-    passed its own full checks before it joined) when the hook has it, else the full `--range` dry run."""
+    """The combined check's hook mode: `--fast-only` (compile of every test config, the fast tests, the touched files'
+    lints and the checks a touched merge=union file selects: each change was checked in full alone, on an older main,
+    and the rebase writes a union-merged file no member's check saw) when the hook has it, else the full `--range` dry run."""
     try:
         with open(hook) as f:
             return "--fast-only" if "--fast-only" in f.read() else "--range"
