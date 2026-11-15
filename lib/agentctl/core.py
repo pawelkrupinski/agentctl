@@ -389,14 +389,33 @@ def token_from_processor(o_r):
     if _IN_PROCESSOR[0] or token_ns(o_r) != "movies":
         return None
     try:
-        d, _c, _w = waiting_state(movies_repo_path())
-        path = token_sock_path(d)
+        path = processor_sock()
         if not os.path.exists(path):
             return None
         tok = token_request(path)
         return tok if TOKEN_SHAPE.fullmatch(tok) else None
     except (Exception, SystemExit):
         return None
+
+
+def processor_sock():
+    """The movies processor's token socket on this host."""
+    return token_sock_path(waiting_state(movies_repo_path())[0])
+
+
+def seed_processor(tok):
+    """A token this process just read from the vault goes to the processor too when it listens and holds none (THE
+    TOKEN HAND-OFF): any command allowed to run `secrets` -- an agent's ci-why or inbox in its Claude Code session, not
+    only `land status` -- re-seeds a processor a restart left tokenless (2026-11-15: tokenless 16:58-18:36). Never
+    fatal, never in the processor itself."""
+    if _IN_PROCESSOR[0]:
+        return
+    try:
+        path = processor_sock()
+        if os.path.exists(path):
+            hand_token(path, tok)
+    except (Exception, SystemExit):
+        pass
 
 
 def token_request(path, timeout=3):
@@ -514,6 +533,8 @@ def token(o_r):
                     tok, why = "", why + f"; secrets: {e.strerror}"
                 if not tok:
                     why += "; the vault is locked for this process (its session ended, or `! secrets unlock " + token_vault_key(o_r)[0] + "`)"
+                else:
+                    seed_processor(tok)  # it holds none (asked above): this read re-seeds it
         if not tok:
             token_missing(ns, why)
             raise NoToken(f"agentctl: could not read the {'/'.join(token_vault_key(o_r))} token ({why})")

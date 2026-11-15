@@ -131,7 +131,12 @@ moves it forward; nothing is a detached process that can die with its state in i
   (it names the processes working there), W7 (phase 2, the sync role) the sync has projected every event older than
   5 min, W8 no change left the queue in the last hour (landed, rejected, superseded, cancelled) without an event
   addressed to its author's inbox (Store.transition completes every such event; the entry carries the item id, so
-  `agentctl inbox <item id>` finds it). A violation is a condition and a notification.
+  `agentctl inbox <item id>` finds it). A violation is a condition and a notification. W5 kickstarts a processor
+  silent for 15 min (3 x W5_MAX) of AWAKE time only: a pass whose own previous pass is over 3 min old
+  (`$AGENTCTL_WATCHDOG_SLEEP_GAP`) slept through the gap and starts the clock again (2026-11-15 16:58: at a 2-second
+  dark wake it kicked a processor whose beat was 16 min old because the laptop had slept since 16:42). The kick keeps
+  the processor's store token: the old processor is asked for it on its socket first, and it goes to the one launchd
+  starts (within `$AGENTCTL_KICK_HANDOFF_WAIT`, 30 s), in the watchdog's memory only.
 - **Upkeep** (the laptop's processor, at most hourly, in its own thread; log `~/.cache/agentctl/upkeep.log`): the
   standing-OK `cleanup --execute --no-remote` (clean, idle, proven-merged worktrees and their branches), each ended
   fixer's worktree whose red is closed (when proven merged and clean), and the test suite's `agentctl-*` temp dirs
@@ -1217,9 +1222,16 @@ The old names (design §14.5) answer until 2026-11-05, each printing its new one
 - **The token hand-off.** A launchd service gets no answer from the vault, so the processor listens on a unix socket
   (`/tmp/agentctl-<uid>/<hash>.sock`, 0600 in a 0700 dir; `$AGENTCTL_SOCK_DIR`). Every `land`, and `land status` /
   `resume` run where the vault answers, hand it the store token, kept in its memory and environment only (a re-exec
-  keeps it; executors and fixers inherit it). After a reboot or a service restart: `AGENTCTL_INTERACTIVE=1
-  ~/bin/agentctl land status` from `~/projects/movies` with the vault unlocked (the service log then says `the
-  store token was handed over`). A command first ASKS the processor for the token it holds and hands it over only
+  onto new code keeps it: execve with the same environment, `agentctl changed on disk (...): restarting on the new
+  code`; executors and fixers inherit it). So does any other command that reads the token from the vault (an agent's
+  ci-why or inbox in its Claude Code session, a TTY): a processor holding none is handed it, so the next agent command
+  re-seeds a restarted processor. A watchdog kick hands it over itself (see "The watchdog"). Only a restart nobody
+  could ask first loses it -- a reboot, launchd restarting a crashed processor, `tick service install`: then the next
+  command that reads the vault, or by hand `AGENTCTL_INTERACTIVE=1 ~/bin/agentctl land status` from
+  `~/projects/movies` with the vault unlocked (the service log then says `the store token was handed over`). Never on
+  disk, and never the macOS Keychain: an item a launchd job reads without a prompt is readable by every process of
+  the uid while the login keychain is unlocked, past the vault's own lock and Touch ID -- the token at rest in all but
+  name. A command first ASKS the processor for the token it holds and hands it over only
   when it holds none or another one, so `handed over` is logged once per real change. A process without the token
   says so once, on the transition (`the movies token is missing (…)`, with its inbox note), then at most a
   summary every 10 min (`$AGENTCTL_TOKEN_SUMMARY`), and `… is back` when it returns; its steps' NoToken is quiet.
@@ -1796,6 +1808,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `infra_same_max` | `AGENTCTL_INFRA_SAME_MAX` | `1800` | - |
 | `internal_trees_dir` | `AGENTCTL_INTERNAL_TREES_DIR` | - | - |
 | `issue_escalate_gap` | `AGENTCTL_ISSUE_ESCALATE_GAP` | `120` | s between two issues' escalations |
+| `kick_handoff_wait` | `AGENTCTL_KICK_HANDOFF_WAIT` | `30` | s a kick waits for launchd's new processor to listen before handing it the token |
 | `landed_look` | `AGENTCTL_LANDED_LOOK` | `600` | - |
 | `lander_landed_every` | `AGENTCTL_LANDER_LANDED_EVERY` | `300` | s between the tick's notes of landed changes' commits on main |
 | `land_lease_max` | `AGENTCTL_LAND_LEASE_MAX` | `2700` | the design's 300 s once checks no longer run in the push's hook under the lease (step 6) |
@@ -1901,6 +1914,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `waiting_green_ticks` | `AGENTCTL_WAITING_GREEN_TICKS` | `100` | ticks (~10 min) changes may wait at a green gate with no batch moving: then STALLED |
 | `waiting_timeout` | `AGENTCTL_WAITING_TIMEOUT` | `86400` | - |
 | `watchdog_misses` | `AGENTCTL_WATCHDOG_MISSES` | `2` | consecutive passes a self-healing invariant (W5, WM, W7) fails before its condition opens |
+| `watchdog_sleep_gap` | `AGENTCTL_WATCHDOG_SLEEP_GAP` | `180` | s since the watchdog's own last pass (launchd: every 60 s) that mean the laptop slept |
 | `watch_conv_start` | `AGENTCTL_WATCH_CONV_START` | `3600` | no convergence (or takes) run containing the sha started by then: said, not waited for |
 | `watch_error_poll` | `AGENTCTL_WATCH_ERROR_POLL` | `30` | - |
 | `watch_poll` | `AGENTCTL_WATCH_POLL` | `60` | - |
@@ -1929,7 +1943,8 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
   the earlier run that passed only if the whole run passed.
 - **`wait run` says "attached to existing waiter".** That is expected: another agent is already polling that run, and
   you will get the same verdict.
-- **The gate reads UNREAD and nothing lands.** The processor lost its store token (a service restart). Hand it over:
+- **The gate reads UNREAD and nothing lands.** The processor lost its store token (a reboot, a crash's restart, a
+  reinstall: see "The token hand-off"). The next agentctl command that reads the vault hands it over; by hand:
   `cd ~/projects/movies && AGENTCTL_INTERACTIVE=1 ~/bin/agentctl land status` with the vault unlocked.
 - **The status line says `RECONCILER not running`.** `state.json` is stale: `agentctl tick service status`, the
   service log `~/.cache/agentctl/waiting/<repo>/service.log`, and `agentctl watchdog` (W5).

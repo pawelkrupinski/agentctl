@@ -120,6 +120,17 @@ class TokenResolutionTest(Base):
         self.fake_secrets("echo vault-token-0123456789")
         self.assertEqual(A.token(MOVIES), "vault-token-0123456789")
 
+    def test_a_vault_read_re_seeds_a_tokenless_processor(self):
+        """2026-11-15: a restarted processor held no token 16:58-18:36 while agents' own commands read the vault
+        (ci-why, inbox in their sessions) -- only `land` / `land status` handed it over. Any vault read now does."""
+        self.serve(tok=None)
+        self.fake_secrets("echo vault-token-0123456789")
+        self.assertEqual(A.token(MOVIES), "vault-token-0123456789")
+        deadline = time.time() + 5
+        while os.environ.get("AGENTCTL_STORE_TOKEN") != "vault-token-0123456789" and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(os.environ.get("AGENTCTL_STORE_TOKEN"), "vault-token-0123456789", "handed to the processor")
+
     def test_the_processor_never_asks_its_own_socket(self):
         self.serve()
         A._IN_PROCESSOR[0] = True

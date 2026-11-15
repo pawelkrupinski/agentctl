@@ -307,8 +307,8 @@ def spawn_waiting_processor(repo):
 
 # THE TOKEN HAND-OFF. The processor as a launchd service, or detached once its land exits, gets no answer from the vault
 # (an unlock belongs to the session that made it). So it listens on a unix socket (0600, in a 0700 directory) and a
-# process that can read the vault -- every `land` that joins `waiting`, and `waiting status` / `resume` -- hands it the
-# token. It lives only in the processor's memory and environment (a re-exec keeps it; the push's hook and the watches it
+# process that can read the vault -- every `land` that joins `waiting`, `waiting status` / `resume`, any command whose
+# token() read the vault (seed_processor), and the watchdog's kick (kick_processor) -- hands it the token. It lives only in the processor's memory and environment (a re-exec keeps it; the push's hook and the watches it
 # starts inherit it), never on disk. Until it has one, the gate is unread: taken as red, said once in the inbox.
 def token_sock_path(d):
     import hashlib
@@ -404,23 +404,30 @@ def offer_token(repo):
     lacks it: asked first (one socket round trip), so an interactive command hands over only on a real transition
     (2026-10-30: every `land` / `waiting status` handed it over, 175 "handed over" lines in 400). Never fatal; True when
     handed over."""
-    import socket
     try:
         d, _c, _w = waiting_state(repo)
         path = token_sock_path(d)
         if not os.path.exists(path):
             return False
-        held = token_request(path)
-        tok = token(slug(repo))
-        if held == tok:
+        return bool(hand_token(path, token(slug(repo))))
+    except (Exception, SystemExit):
+        return False
+
+
+def hand_token(path, tok):
+    """Ask the processor at socket `path` for the token it holds and hand it `tok` when it holds another or none: True
+    when handed over, False when it already held it, None when nothing answered."""
+    import socket
+    try:
+        if token_request(path) == tok:
             return False
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.settimeout(3)
             s.connect(path)
             s.sendall(tok.encode())
         return True
-    except (Exception, SystemExit):
-        return False
+    except OSError:
+        return None
 
 
 def await_entry(repo, eid, close=None):

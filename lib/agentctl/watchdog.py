@@ -6,8 +6,8 @@
 # files only -- the queue entries, the published gate line, the processor's beat file, the inbox -- and checks the
 # invariants the reconciler must converge to. A violation is a condition (INVARIANT, its probe the invariant itself:
 # it closes when the invariant holds again) and a macOS notification; on W5 (the processor's duties stopped) it also
-# kickstarts the processor, at most once per WATCHDOG_KICK_GAP. It shares no code path with the processor beyond the
-# registry and the read-only readers.
+# kickstarts the processor (silent over awake time; the kick keeps its token), at most once per WATCHDOG_KICK_GAP. It
+# shares no code path with the processor beyond the registry and the read-only readers.
 W1_MAX = 2 * 3600       # the oldest unlanded change ($AGENTCTL_W1_MAX); while main is red, counted from the red's start
 W2_MAX = 10 * 60        # a gate red with nobody on it
 W5_MAX = 300            # the processor's duties beat (its bounded steps take up to 2 min)
@@ -16,6 +16,8 @@ W8_WINDOW = 3600         # W8 looks at the change items that closed within this 
 W7_MAX = 5 * 60         # phase 2: an event ci-runner wrote that the laptop's sync has not projected (60x its 5 s tick)
 WM_MAX = 45 * 60        # maintain's last pass (launchd every 15 min)
 WATCHDOG_KICK_GAP = 600
+WATCHDOG_SLEEP_GAP = 180  # s since the watchdog's own last pass (launchd: every 60 s) that mean the laptop slept
+KICK_HANDOFF_WAIT = 30    # s a kick waits for launchd's new processor to listen before handing it the token
 
 
 def beat_path(name):
@@ -303,11 +305,50 @@ def probe_invariant(a):
     return INVARIANTS[a["id"]]()
 
 
+def awake_since(st, now_=None):
+    """When the laptop last woke, as the watchdog saw it: a pass whose own previous pass is older than
+    WATCHDOG_SLEEP_GAP slept through the gap (launchd runs no job while the laptop sleeps) and starts the clock again.
+    0 when the watchdog has never seen a gap (no evidence of sleep). Call before this pass's write_beat."""
+    t = now_ if now_ is not None else time.time()
+    gap = beat_age("watchdog")
+    if gap is not None and gap > env_num("AGENTCTL_WATCHDOG_SLEEP_GAP", WATCHDOG_SLEEP_GAP):
+        return t
+    return float(st.get("awake_since") or 0)
+
+
+def kick_processor():
+    """Kickstart the processor WITHOUT losing its store token (2026-11-15 16:58: a W5 kick left the new process
+    tokenless, nothing landed for 1 h 38 min until the owner handed it over). The old processor is asked for the token
+    on its socket first -- served on a thread of its own, it answers even when its loop is stuck -- then, once the old
+    pid is gone, the token goes to the process launchd starts, over the same 0600 socket. In this process's memory
+    only, never on disk. A processor that does not answer holds nothing to keep: the plain kick, as before."""
+    path = processor_sock()
+    try:
+        held = token_request(path) if os.path.exists(path) else ""
+    except OSError:
+        held = ""
+    try:
+        old_pid = int(open(beat_path("processor")).read().split()[1])
+    except (OSError, ValueError, IndexError):
+        old_pid = None
+    launchctl("kickstart", "-k", f"gui/{os.getuid()}/{SERVICE_LABEL}")
+    if not TOKEN_SHAPE.fullmatch(held):
+        return "it held no token"
+    end = time.time() + env_num("AGENTCTL_KICK_HANDOFF_WAIT", KICK_HANDOFF_WAIT)
+    while time.time() < end:
+        if not (old_pid and old_pid != os.getpid() and pid_alive(old_pid)):
+            if hand_token(path, held) is not None:
+                return "its token handed to the new processor"
+        time.sleep(0.5)
+    return f"the new processor did not listen within {fmt_age(env_num('AGENTCTL_KICK_HANDOFF_WAIT', KICK_HANDOFF_WAIT))}: its token is lost"
+
+
 def cmd_watchdog(a):
     """One watchdog pass: every invariant checked; a violation opens its INVARIANT condition (and notifies), a restored
     one closes it; W5 kickstarts the processor. Prints one line per invariant."""
-    write_beat("watchdog")
     st = watchdog_state()
+    woke = awake_since(st)
+    write_beat("watchdog")
     rc = 0
     misses = dict(st.get("misses") or {})
     for wid in INVARIANTS:
@@ -326,19 +367,19 @@ def cmd_watchdog(a):
                 open_condition("INVARIANT", f"INVARIANT {wid} violated: {r.detail}", r, [], key=key, command="watchdog")
                 if not heals:
                     notify(f"agentctl watchdog: {wid}", r.detail[:220])
-            # a kickstart costs the processor its token (handed over again by the next interactive agentctl): only for a
-            # processor silent past 3 x W5_MAX, at most every WATCHDOG_KICK_GAP
-            if wid == "W5" and (beat_age("processor") or 0) > 3 * env_num("AGENTCTL_W5_MAX", W5_MAX) \
+            # only for a processor silent past 3 x W5_MAX of AWAKE time (a beat the laptop slept through is no
+            # silence: 2026-11-15 16:58, a dark wake), at most every WATCHDOG_KICK_GAP; the kick keeps its token
+            silent = min(beat_age("processor") or 0, time.time() - woke)
+            if wid == "W5" and silent > 3 * env_num("AGENTCTL_W5_MAX", W5_MAX) \
                     and time.time() - float(st.get("kicked_at") or 0) >= WATCHDOG_KICK_GAP:
-                launchctl("kickstart", "-k", f"gui/{os.getuid()}/{SERVICE_LABEL}")
                 st["kicked_at"] = time.time()
                 write_json(state_root("watchdog.json"), {**watchdog_state(), "kicked_at": st["kicked_at"]})
-                print(f"W5: kickstarted {SERVICE_LABEL}")
+                print(f"W5: kickstarted {SERVICE_LABEL} ({kick_processor()})")
         elif r.ok and cond:
             close_condition(cond, r)
         if r.ok:
             misses.pop(wid, None)
-    write_json(state_root("watchdog.json"), {**watchdog_state(), "misses": misses})
+    write_json(state_root("watchdog.json"), {**watchdog_state(), "misses": misses, "awake_since": woke})
     return rc
 
 
