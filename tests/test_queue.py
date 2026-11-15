@@ -790,8 +790,41 @@ class RemotePickupTest(QueueTest):
         A.supersede(d, e, "newer", "queued again")
         self.assertEqual(self.state["cancelled"], [99])
 
+    def test_a_replacement_after_main_moved_adopts_the_run_on_its_own_base(self):
+        """2026-11-15 22:42Z: ci-runner's reconciler restarted on a new agentctl pin (KillMode=mixed: its detached
+        checkers died with it). The replacements came once the leases lapsed, after main had moved, and adopted only a
+        run on the CURRENT main: rev-identity's half-done run 43770050132 was cancelled, ci-alerts-fix's GREEN run
+        43770333199 thrown away, each a new 20-minute round on two runners. A surviving checker would have reported
+        those runs checked on their own base, and the push would have judged the move (re-check on overlap). The
+        replacement does the same now: the run is adopted on the base it checked."""
+        d, e = self.checking_entry()
+        old_base = e["remote"]["base"]
+        other, _ = self.agent("b", "worker/src/main/B.scala", "b\n", msg="b: two")
+        sh(other, "git", "push", "-q", "origin", "HEAD:main")
+        self.state["status"] = "success"  # it went green while no checker ran
+        A.check_entry(self.r.path, e["id"])
+        e2 = self.entry(e["id"])
+        self.assertEqual(self.state["cancelled"], [], "the dead checker's run is adopted, never cancelled")
+        self.assertEqual(len(self.state["branch_pushes"]), 1, "no second check/ push, no second run")
+        self.assertEqual((e2["status"], e2["checked_base"], e2["tip"]), ("checked", old_base, e["remote"]["tip"]),
+                         "checked on the base its run checked: the push judges what landed since")
+        self.assertEqual(self.check(e["id"]), 0)
+        self.assertEqual(self.entry(e["id"])["status"], "landed")
+        self.assertEqual(len(self.state["branch_pushes"]), 1, "no overlap with what landed: no new round either")
+
+    def test_a_replacement_never_adopts_a_run_whose_base_main_no_longer_holds(self):
+        d, e = self.checking_entry()
+        e["remote"]["base"] = "0" * 40  # not main's ancestor (nor any commit here): no evidence about this main
+        A.save_entry(d, e)
+        self.state["status"] = "success"
+        A.check_entry(self.r.path, e["id"])
+        self.assertEqual(self.state["cancelled"], [99], "the stray run is cancelled")
+        self.assertEqual(len(self.state["branch_pushes"]), 2, "a new round on the current main")
+
     def test_a_new_round_clears_the_old_runs_record(self):
         d, e = self.checking_entry()
+        e["remote"].update(status="success", collected_at=A.time.time())  # the last round's run: collected, over
+        A.save_entry(d, e)
         other, _ = self.agent("b", "worker/src/main/B.scala", "b\n", msg="b: two")
         sh(other, "git", "push", "-q", "origin", "HEAD:main")
         saved_rc = A.remote_check
@@ -807,7 +840,7 @@ class RemotePickupTest(QueueTest):
         self.addCleanup(setattr, A, "run_entry_checks", real)
         self.assertEqual(self.check(e["id"]), 0)
         self.assertNotIn("remote_run", seen[0], "main moved: the old run's record is gone from the saved entry")
-        self.assertEqual(self.state["cancelled"], [99], "the old, undecided run is cancelled")
+        self.assertEqual(self.state["cancelled"], [], "a decided run is never cancelled")
         self.assertEqual(self.pushed()[-1], "push remote=")
 
 

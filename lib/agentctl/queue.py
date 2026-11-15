@@ -712,12 +712,18 @@ def _check_entry(repo, d, e, i, own=None):
                           repo=repo)
             return 0
     rem = e.get("remote") or {}
-    adopt = (rem.get("head") == e["head"] and rem.get("base") == base and not rem.get("collected_at")
+    # ON ITS OWN BASE (2026-11-15 22:42Z: the reconciler's restart on a new pin killed its detached checkers; their
+    # replacements, after main had moved, cancelled one half-done run and threw a green one away -- this adoption once
+    # demanded the CURRENT main, from before the push learned to judge a moved main, e6a5b93). The run is adopted on
+    # the base it checked, while main still holds that base; the push then judges what landed since, exactly as for a
+    # checker that had survived: re-checked when it overlaps, pushed without re-check when it does not.
+    adopt = (rem.get("head") == e["head"] and bool(rem.get("base")) and not rem.get("collected_at")
              and rem.get("status") not in ("cancelled", "skipped", "abandoned")
-             and git_ok(repo, "cat-file", "-e", f"{rem.get('tip')}^{{commit}}"))
+             and git_ok(repo, "cat-file", "-e", f"{rem.get('tip')}^{{commit}}")
+             and git_ok(repo, "merge-base", "--is-ancestor", rem["base"], base))
     if adopt:  # a replacement checker (the last one lost its lease, died or re-exec'd mid-wait): the same tip, its run
         tree = check_tree(repo, i, rem["tip"])
-        head, via = rem["tip"], None
+        head, via, base = rem["tip"], None, rem["base"]
     else:
         if rem.get("run") is not None and not rem.get("status"):
             cancel_entry_remote(e, "superseded by a new round of its checks")
