@@ -669,8 +669,8 @@ def red_unrelated(repo, e):
 # unit-test speed-ups, carried `Fixes-Red: 2390;2375;2392` while touching nothing those reds' jobs read). At land time --
 # the land / submit path, the queue and the batch, and the tick reading landed fixes -- a commit's `Fixes-Red: <run>`
 # that names a known red is checked against the paths the red's failing job reads, derived CONSERVATIVELY from its
-# workflow (the job's steps, the reusable workflows and local actions it uses, the repository scripts they name, one
-# level down) plus the failing test's own sources. A commit counts as that red's fix unless it PLAINLY touches none
+# workflow (the job's steps, the reusable workflows and local actions it uses, the repository scripts they name, three
+# levels down, and the self-tests a runner among them finds: WHAT A SELF-TEST READS, below) plus the failing test's own sources. A commit counts as that red's fix unless it PLAINLY touches none
 # of them: every path it changes is another workflow's file, documentation, the mobile apps (android/, ios/) the job
 # never names, or another test spec while the job runs only named specs (`testOnly X` / `runMain X`, no whole test
 # task). Unsure -- the red unknown, not a test failure, its workflow or job not found, `local` -- it counts. A trailer
@@ -700,6 +700,17 @@ FIX_TOP_WHOLE = (r"(?:--package-path|--project-dir|working-directory:|\bcd|-C)\s
                  r"|(?<![\w-]){top}/[\w./-]*?(?:\.xcodeproj|\.xcworkspace|Package\.swift|build\.gradle(?:\.kts)?|"
                  r"settings\.gradle(?:\.kts)?|gradlew)(?![\w-])")
 FIX_STEP_FAILED = ("failure", "timed_out")
+# WHAT A SELF-TEST READS (2026-11-15, Tool self-tests #263: f872ecbe3, a .github/workflows/ change with `Fixes-Red: 263`,
+# was FIX NOT COUNTED, though the red's step -- scripts/run-script-tests -- runs download_artifact_layout_test.py, which
+# lints every .github/workflows/*.yml through the workflow_steps module it imports). A runner that finds its tests by a
+# name glob ('*-test.sh', '*_test.py') reads every test it finds under the roots it names, and each test reads what it
+# names, sources or imports (its siblings) -- the same three levels, plus the paths the last level names. What a found
+# test reaches is DATA for android/ and ios/ (a test lays out a fake ios/Kinowo.xcodeproj): it adds the paths it names,
+# never "builds the app whole", nor sbt / spec names.
+FIX_TEST_GLOB = re.compile(r"""['"]\*([\w.-]*test[\w.-]*\.\w+)['"]""", re.I)
+FIX_PY_IMPORT = re.compile(r"^\s*(?:from\s+([\w.]+)\s+import\b|import\s+([\w.]+(?:\s*,\s*[\w.]+)*))", re.M)
+FIX_SOURCED = re.compile(r"(?:^|[\s;&|(])(?:\.|source)\s+['\"]?(?:\$\{?\w+\}?/)?([\w./-]+\.(?:sh|bash))"
+                         r"|shellcheck\s+source=([\w./-]+)", re.M)
 
 
 def fix_tree_files(repo, sha):
@@ -710,6 +721,32 @@ def fix_tree_files(repo, sha):
 def fix_show(repo, sha, path):
     r = git(repo, "show", f"{sha}:{path}", check=False)
     return r.stdout if r.returncode == 0 else None
+
+
+def fix_show_many(repo, sha, paths):
+    """{path: text} of `paths` at commit sha, in one `git cat-file --batch` (a path missing there: left out)."""
+    paths = list(dict.fromkeys(paths))
+    if not paths:
+        return {}
+    try:
+        r = subprocess.run(["git", "-C", repo, "cat-file", "--batch"], input="".join(f"{sha}:{p}\n" for p in paths)
+                           .encode(), capture_output=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    out, buf, i = {}, r.stdout, 0
+    for p in paths:
+        nl = buf.find(b"\n", i)
+        if nl < 0:
+            break
+        head = buf[i:nl].split()
+        i = nl + 1
+        if len(head) == 3 and head[1] == b"blob":
+            n = int(head[2])
+            out[p] = buf[i:i + n].decode("utf-8", "replace")
+            i += n + 1
+        elif len(head) == 3:
+            i += int(head[2]) + 1
+    return out
 
 
 def fix_workflow_jobs(text):
@@ -842,33 +879,55 @@ def red_job_reads(repo, sha, d):
     failing = red_failed_steps(d) if picked else []
     picked = [fix_step_text(body, failing) for body in picked] if failing else picked
     texts.append("\n".join(picked) if picked else wf[1])  # its job's steps, or (unsure which) the whole workflow
+    tree, dirs = set(files), {f.rsplit("/", 1)[0] for f in files if "/" in f}
     seen = set()
-    todo = list(texts)
-    depth = 0
-    while todo and depth < 3:
-        nxt = []
-        for t in todo:
-            for m in re.finditer(r"uses:\s*\./([\w./-]+)", t):
-                p = m.group(1).rstrip("/")
-                reads.add(p)
-                if p in seen:
-                    continue
+
+    def scan(src, t, data):
+        """The paths text t (of file src; data: reached through a self-test a runner found) names, into reads; the
+        files to read next, as (path, data)."""
+        out = []
+        for m in re.finditer(r"uses:\s*\./([\w./-]+)", t):
+            p = m.group(1).rstrip("/")
+            reads.add(p)
+            if p not in seen:
                 seen.add(p)
-                body = fix_show(repo, sha, p) if FIX_WORKFLOW_FILE.match(p) else \
-                    (fix_show(repo, sha, p + "/action.yml") or fix_show(repo, sha, p + "/action.yaml"))
-                if body:
-                    nxt.append(body)
-            for m in FIX_REPO_PATH.finditer(t):
-                p = m.group(1).rstrip("/.")
-                reads.add(p)
-                if p in seen or p not in files or FIX_WORKFLOW_FILE.match(p):
-                    continue  # another workflow named in a script is its DATA (a lint's input): read, never run here
-                seen.add(p)
-                body = fix_show(repo, sha, p)
-                if body and len(body) < 400_000:
-                    nxt.append(body)
-        texts += nxt
-        todo, depth = nxt, depth + 1
+                out.append((p if FIX_WORKFLOW_FILE.match(p) else
+                            next((p + a for a in ("/action.yml", "/action.yaml") if p + a in tree), None), data))
+        named = [m.group(1).rstrip("/.") for m in FIX_REPO_PATH.finditer(t)]
+        base = src.rsplit("/", 1)[0] if src and "/" in src else ""
+        for m in FIX_SOURCED.finditer(t):  # a sourced or imported sibling: the file beside its user
+            for n in filter(None, (m.group(1), m.group(2))):
+                named += [c for c in (n, f"{base}/{n}") if c in tree]
+        if src and src.endswith(".py"):
+            for m in FIX_PY_IMPORT.finditer(t):
+                for n in re.split(r"\s*,\s*", m.group(1) or m.group(2)):
+                    c = f"{base}/{n.split()[0].replace('.', '/')}.py" if base else f"{n.split()[0].replace('.', '/')}.py"
+                    if c in tree:
+                        named.append(c)
+        for m in FIX_TEST_GLOB.finditer(t):  # a self-test runner: every test it finds (under the roots it names)
+            roots = {w.strip("'\"").removeprefix("./").rstrip("/") for w in re.findall(r"[\w./'\"-]+", t)} & dirs
+            for f in files:
+                if f.endswith(m.group(1)) and (not roots or any(f.startswith(r + "/") for r in roots)):
+                    reads.add(f)
+                    if f not in seen:
+                        seen.add(f)
+                        out.append((f, True))
+        for p in named:
+            reads.add(p)
+            if p in seen or p not in tree or FIX_WORKFLOW_FILE.match(p):
+                continue  # another workflow named in a script is its DATA (a lint's input): read, never run here
+            seen.add(p)
+            out.append((p, data))
+        return out
+
+    todo = [(None, texts[0], False)]
+    for _depth in range(3):
+        want_next = [x for src, t, data in todo for x in scan(src, t, data)]
+        bodies = fix_show_many(repo, sha, [p for p, _ in want_next if p])
+        todo = [(p, bodies[p], data) for p, data in want_next if bodies.get(p) and len(bodies[p]) < 400_000]
+        texts += [t for _p, t, data in todo if not data]  # a found test's reach adds paths alone (above)
+    for src, t, data in todo:  # the last level read: the paths it names are read too (never followed further)
+        scan(src, t, data)
     text = "\n".join(texts)
     sbt = bool(FIX_SBT.search(text))
     return {"files": reads, "text": text, "sbt": sbt, "broad": sbt and bool(FIX_BROAD_TEST.search(text)),
@@ -909,7 +968,7 @@ def fix_path_unread(p, rd):
     return False
 
 
-FIX_RULES = 2  # the reading rules' version (2: per red, per failing step): a verdict cached under another is read again
+FIX_RULES = 3  # the reading rules' version (2: per red, per failing step; 3: what a self-test reads): a verdict cached under another is read again
 
 
 def fix_changed(repo, sha):

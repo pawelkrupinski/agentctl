@@ -261,5 +261,65 @@ class PerRedTest(FixCheckBase):
         self.assertEqual((it["state"], it["data"].get("fix")), ("offered", None))
 
 
+SELF_TESTS = """name: Tool self-tests
+on: push
+jobs:
+    script-tests:
+        name: script self-tests
+        runs-on: x
+        steps:
+            - uses: actions/checkout@v5
+            - name: Every script self-test
+              run: scripts/run-script-tests
+"""
+
+
+class SelfTestReadsTest(FixCheckBase):
+    """WHAT A SELF-TEST READS (2026-11-15, Tool self-tests #263, red 7ef28908cfd3): f872ecbe3, a
+    .github/workflows/verify-scrape-recording.yml change with `Fixes-Red: 263`, was FIX NOT COUNTED, though the red's
+    step runs scripts/run-script-tests, which finds download_artifact_layout_test.py by name, which lints every
+    .github/workflows/*.yml through the workflow_steps module it imports. A pure ios/ commit still does not count."""
+
+    def setUp(self):
+        super().setUp()
+        self.r.write(".github/workflows/tool-self-tests.yml", SELF_TESTS)
+        self.r.write(".github/workflows/verify-scrape-recording.yml", "name: Verify scrape recording\n")
+        self.r.write("scripts/run-script-tests", 'Roots="scripts .github/scripts ios/scripts"\n'
+                     "find $Roots -type f \\( -name '*-test.sh' -o -name '*_test.py' \\) -print\n")
+        self.r.write("scripts/ci/download_artifact_layout_test.py",
+                     "import sys\nfrom workflow_steps import FILES, action_steps\n")
+        self.r.write("scripts/ci/workflow_steps.py",
+                     'FILES = sorted(glob.glob(os.path.join(ROOT, ".github/workflows/*.yml")))\n')
+        self.r.write("scripts/ios-compile-check-test.sh",  # a fake app laid out in a temp dir: data, never ios/ whole
+                     'mkdir -p "$work/ios/Kinowo.xcodeproj"; printf x > "$work/ios/Package.swift"\n')
+        self.r.write("ios/scripts/swift-test-shuffled-test.sh", "echo ok\n")
+        self.r.write("ios/KinowoUITests/CardShareMenuUITests.swift", "class CardShareMenuUITests\n")
+        self.r.commit("self-tests")
+        self.r.push()
+        self.st.put_item("red", "selftests", "offered", {
+            "key": "selftests", "workflow": "Tool self-tests", "job": "script self-tests", "jobs": ["script self-tests"],
+            "kind": "test", "line": "download_artifact_layout_test.py failed", "runs": ["263", "43740000000"],
+            "last_run": {"number": 263, "databaseId": 43740000000}, "steps": ["Every script self-test"]})
+
+    def test_a_workflow_file_a_found_self_test_lints_counts(self):
+        self.assertEqual(self.check([".github/workflows/verify-scrape-recording.yml"], ("263",))[0], {"263"})
+
+    def test_a_found_self_test_and_what_it_imports_count(self):
+        self.assertEqual(self.check(["scripts/ci/workflow_steps.py"], ("263",))[0], {"263"})
+        self.assertEqual(self.check(["ios/scripts/swift-test-shuffled-test.sh"], ("263",))[0], {"263"})
+
+    def test_a_pure_ios_commit_still_does_not_count(self):
+        ok, bad = self.check(["ios/KinowoUITests/CardShareMenuUITests.swift"], ("263",))
+        self.assertEqual(ok, set())
+        self.assertIn("touches nothing", bad["263"])
+
+    def test_a_workflow_file_no_found_test_reads_does_not_count(self):
+        self.r.write("scripts/ci/workflow_steps.py", "FILES = []\n")
+        self.r.commit("no lint of the workflows")
+        ok, bad = self.check([".github/workflows/verify-scrape-recording.yml"], ("263",))
+        self.assertEqual(ok, set())
+        self.assertIn("touches nothing", bad["263"])
+
+
 if __name__ == "__main__":
     unittest.main()

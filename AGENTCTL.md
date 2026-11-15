@@ -479,6 +479,16 @@ The owner: "why unclaimed ... should always claim, fix structurally".
   running a script inside it); a directory under it named alone (run-script-tests' `ios/scripts` root) is read alone.
   Another workflow a script names is its data, never followed. A fix-pending red on a fix it does not read (another
   red's) is offered again at the next tick.
+- **What a self-test reads (2026-11-15: f872ecbe3, a `.github/workflows/` change with `Fixes-Red: 263`, was FIX NOT
+  COUNTED for Tool self-tests #263, whose step runs scripts/run-script-tests, which finds
+  download_artifact_layout_test.py, which lints every `.github/workflows/*.yml` through the module it imports).** A
+  script that finds its tests by a name glob (`'*-test.sh'`, `'*_test.py'`) reads every test it finds under the roots
+  it names; each followed file reads what it names (a path, a glob's directory: `.github/workflows/*.yml` reads every
+  workflow), sources (`. f`, `# shellcheck source=f`) or imports (a Python sibling module) -- the same three levels,
+  plus the paths the last level names. What a found test reaches only adds paths: never android/ or ios/ whole (a test
+  lays out a fake `ios/Kinowo.xcodeproj` in a temp dir), nor sbt or spec names. So a workflow change counts for a
+  self-tests red whose suite lints the workflows, and a pure ios/ change still does not (rules version `FIX_RULES` 3:
+  cached verdicts are read again).
 - **No daily budget.** A red that cannot get a fixer now (a concurrency cap, or dispatch unavailable) waits in a FIFO
   queue per class: `queued for a fixer (#k, next slot when <x> ends)`. That is a recovery condition (probe
   `fixer_slot`, on recover: the red tick runs). Gate reds keep their own cap of 3 alive.
