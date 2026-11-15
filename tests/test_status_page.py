@@ -153,6 +153,16 @@ class Base(unittest.TestCase):
 
 
 class DataTest(Base):
+    def test_a_fix_pending_reds_note_is_never_a_holders_word_from_before_its_fix(self):
+        """Order independence #74 (2026-11-15): both reds fix-pending on 09e482c6a, no holder, read "ORPHANED:
+        laptop:owner:outside-gate holds it with no work" -- the 11:34 revoke, from before they went fix-pending."""
+        h = [{"at": "2026-11-15T11:34:52Z", "outcome": "ORPHANED: laptop:owner:outside-gate holds it with no work"}]
+        fp = {"state": "fix-pending", "entered_at": A.parse_time("2026-11-15T11:39:23Z").timestamp(),
+              "data": {"history": h}}
+        self.assertIsNone(A.red_history_note(fp))
+        self.assertEqual(A.red_history_note({**fp, "entered_at": 0.0}), h[0]["outcome"], "written since: its note")
+        self.assertEqual(A.red_history_note({**fp, "state": "offered"}), h[0]["outcome"], "why it was offered again")
+
     def test_every_section_from_the_store_and_the_filesystem(self):
         st, wt = self.world()
         d = A.status_data(store=st, now_=T)

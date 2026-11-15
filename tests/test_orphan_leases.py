@@ -154,6 +154,28 @@ class ReapTest(OwnerBase):
         self.st.acquire("red/c2", "ci-runner:fixer:x", 900, 3600, meta={"kind": "fixer", "pid": 999999})
         self.assertEqual(A.red_reap_orphans(self.st, self.now), [])
 
+    def test_a_record_of_another_spell_never_orphans_the_leases_of_the_wrapper_they_name(self):
+        """2026-11-15 11:34:52: outside-gate's wrapper (pid 37262) in its turn on Order independence #74, and
+        main-tests' on Main #2475, lost every lease `ORPHANED: ... its wrapper ended (IDLE: no red of <family> for 6 h)`:
+        the IDLE verdicts of the previous spells (main-tests' ended 2026-11-14), not of the wrappers holding them."""
+        def dead_pid():
+            p = subprocess.Popen([sys.executable, "-c", "pass"])
+            p.wait()
+            return p.pid
+        hb, reds = self.old_owner("done", pid=dead_pid(), ended="2026-11-14T04:23:12Z",
+                                  verdict=f"IDLE: no red of {FAM} for 6 h")
+        held = [(A.owner_lease(FAM), hb)] + list(zip(["red/4c51fe998db3", "red/ec55553a8060"], reds))
+        for name, x in held:
+            self.st.set_meta(name, x["epoch"], x["secret"], {"pid": os.getpid()})
+        self.assertEqual(A.red_reap_orphans(self.st, self.now), [], "the leases name a live wrapper")
+        self.assertTrue(A.lease_is_live(self.st.get("red/4c51fe998db3"), self.now))
+        gone = dead_pid()  # the wrapper they name gone: orphaned, whatever the record says
+        for name, x in held:
+            self.st.set_meta(name, x["epoch"], x["secret"], {"pid": gone})
+        acts = A.red_reap_orphans(self.st, self.now)
+        self.assertEqual(len(acts), 3, acts)
+        self.assertIn(f"its wrapper (pid {gone}) is gone", acts[0])
+
     def test_the_dispatcher_waits_for_an_orphaned_owners_wrapper_to_exit(self):
         self.old_owner("blocked")
         A.red_reap_orphans(self.st, self.now)

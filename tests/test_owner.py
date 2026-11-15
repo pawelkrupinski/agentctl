@@ -150,6 +150,22 @@ class OwnerTest(OwnerBase):
         self.assertEqual(argv[argv.index("--resume") + 1], first["session"], "the same session goes on")
         self.assertEqual(self.st.get(A.red_lease(it["data"]["key"]))["holder"], A.owner_holder(FAM))
 
+    def test_the_idle_clock_runs_from_a_turns_end_never_its_start(self):
+        """OWNER_IDLE was counted from the turn's START: a turn longer than it ended the owner `IDLE` the moment it
+        ended -- with no time left for the family's next red to reach it."""
+        os.environ.update(FAKE_CLAUDE_SLEEP="3", AGENTCTL_OWNER_IDLE="2")
+        self.addCleanup(os.environ.__setitem__, "FAKE_CLAUDE_SLEEP", "0")
+        self.addCleanup(os.environ.pop, "AGENTCTL_OWNER_IDLE", None)
+        self.tick(dispatch=True)
+        name = A.red_lease(self.only()["data"]["key"])
+        self.assertTrue(self.wait(lambda: str(A.lease_meta(self.st.get(name)).get("outcome") or "").startswith("LANDED")))
+        ended_turn = time.time()
+        time.sleep(1)
+        self.assertIsNone(self.rec().get("ended"), "idle for 1 s of its 2: alive")
+        self.assertTrue(self.wait(lambda: self.rec().get("ended")))
+        self.assertTrue(str(self.rec().get("verdict")).startswith("IDLE"), self.rec().get("verdict"))
+        self.assertGreaterEqual(A.parse_time(self.rec()["ended"]).timestamp(), int(ended_turn) + 1)
+
     def test_every_owner_is_briefed_mechanism_only_for_identity_flips(self):
         owner = {"family": "convergence", "notebook": "/wt/RED-NOTEBOOK.md", "reds": ["x"]}
         u = {"workflow": "Identity model convergence", "job": "leg (poland)", "kind": "test", "line": "drift",

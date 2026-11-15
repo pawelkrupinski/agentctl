@@ -288,7 +288,8 @@ def red_owner(a):
         release(s["names"], outcome, "\n".join(tail[-8:]))
         if s["bid"]:  # THE TURN'S SESSION STOPPED (bg_spent): claude keeps its process on as a spare, and the next
             bg_stop(cli, s["bid"])  # turn's `--resume` of a running session starts a COPY -- one more per turn
-        s["bid"], s["missing"] = None, 0
+        s["bid"], s["missing"], s["idle_since"] = None, 0, time.time()  # OWNER_IDLE counts from the turn's END: from
+        # its start, a turn longer than OWNER_IDLE left the owner "idle" the moment it ended
         turn_state(False, time.time())
         return f"ENDED: {s['empty']} turns in a row with no verdict" if s["empty"] >= OWNER_EMPTY_TURNS else None
 
@@ -460,12 +461,21 @@ def owners_status(store, t):
 RED_ORPHAN_GRACE = 5 * 60    # an ended session's turn still held this long is orphaned ($AGENTCTL_RED_ORPHAN_GRACE)
 
 
-def owner_work(fam, t):
-    """(True|False|None, why): is family fam's owner at work? None when this machine cannot tell."""
+def owner_work(fam, t, holder_pid=None):
+    """(True|False|None, why): is family fam's owner at work? None when this machine cannot tell. holder_pid: the
+    wrapper the lease itself names (its meta's pid): a record of another spell judges nothing of it."""
     rec = read_record(owner_record_path(fam)) or {}
     pid = rec.get("pid")
     if not pid:
         return None, "no owner record on this machine"
+    if holder_pid and str(holder_pid) != str(pid):
+        # THE RECORD IS ANOTHER SPELL'S (2026-11-15 11:34:52, Order independence #74 and Main #2475): the leases of
+        # two live wrappers in their turns (outside-gate pid 37262, main-tests) were revoked "ORPHANED ... its wrapper
+        # ended (IDLE: no red of <family> for 6 h)" -- the verdicts of the previous spells (main-tests' ended
+        # 2026-11-14), read from records that were not the holders'. A lease is judged by the wrapper it names.
+        if pid_alive(int(holder_pid)):
+            return None, f"its wrapper (pid {holder_pid}) lives; the owner record here is another spell's (pid {pid})"
+        return False, f"its wrapper (pid {holder_pid}) is gone"
     if rec.get("ended"):
         return False, f"its wrapper ended ({str(rec.get('verdict') or '?')[:160]})"
     if not proc_alive(pid, rec.get("process_start")):
@@ -517,9 +527,10 @@ def holder_work(row, t, cache=None):
     m = lease_meta(row)
     if row["name"].startswith("owner/") or m.get("kind") in ("owner", "owned"):
         fam = m.get("family") or row["name"].split("/", 1)[1]
-        if ("owner", fam) not in cache:
-            cache[("owner", fam)] = owner_work(fam, t)
-        return cache[("owner", fam)]
+        k = ("owner", fam, m.get("pid"))
+        if k not in cache:
+            cache[k] = owner_work(fam, t, m.get("pid"))
+        return cache[k]
     if m.get("kind") == "fixer":
         return fixer_work(row, t)
     return None, "not judged here"

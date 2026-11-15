@@ -347,12 +347,27 @@ def status_reds(st, t, repo=None):
                     "opened_at": opened, "age": t - float(opened), "entered_at": it["entered_at"],
                     "deadline": it["deadline"], "level": it.get("level"), "lease": lease,
                     "fix": d.get("fix"), "attempts": d.get("attempts"), "family": red_family(d),
-                    "note": (lease or {}).get("note") or block_verdict_note(it, t, st)
-                    or (str(hist[-1].get("outcome"))[:400] if hist else None),
+                    "note": (lease or {}).get("note") or block_verdict_note(it, t, st) or red_history_note(it),
                     "what": red_what(d),
                     "history": [{"at": h.get("at"), "holder": h.get("holder"), "outcome": str(h.get("outcome"))[:300]}
                                 for h in hist[-5:]]})
     return out
+
+
+def red_history_note(it):
+    """A red's last history entry as its note -- but for a fix-pending red, only one written since it went fix-pending:
+    an older one is a holder's word from before the fix (2026-11-15, Order independence #74: both reds, fix-pending on
+    09e482c6a with no holder, read "ORPHANED: laptop:owner:outside-gate holds it with no work" from 11:34)."""
+    hist = it["data"].get("history") or []
+    if not hist:
+        return None
+    if it["state"] == "fix-pending":
+        try:
+            if parse_time(hist[-1].get("at")).timestamp() < float(it["entered_at"]):
+                return None
+        except (ValueError, TypeError, AttributeError):
+            return None
+    return str(hist[-1].get("outcome"))[:400]
 
 
 def tail_bytes(path, max_bytes):

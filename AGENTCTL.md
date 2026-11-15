@@ -690,7 +690,7 @@ agent must be assigned to it".
   owner (kind `owned`), a line in `RED-INBOX.md` -- and become the NEXT TURN of the same session (`--resume`). A turn
   ends with one verdict line; that turn's red leases are released with it, exactly as a fixer's, so verification,
   re-offers (back to the same owner), the attempt ladder and the crash-loop breaker work as before. It is restarted
-  only when it died (same worktree, notebook and session), and ends after 6 h with no red (`$AGENTCTL_OWNER_IDLE`), on
+  only when it died (same worktree, notebook and session), and ends after 6 h with no red (`$AGENTCTL_OWNER_IDLE`, counted from its last turn's end), on
   `RED-STOP.md`, or after 2 turns in a row with no verdict. Its brief: fast reproducer first, and for convergence the
   MECHANISM-ONLY rule (fix the incremental state that diverges from a whole resolve; never a resolver rule tuned on one
   recording, never a baseline or allow-list row). `red status` lists each owner (`owner <family>: ALIVE, turn n, ...`).
@@ -711,6 +711,13 @@ agent must be assigned to it".
   token once (the processor's), else ends with `store auth failed: <detail>` (its leases released, or revoked by the
   tick). STALLED, ORPHANED and store auth failures count for the crash-loop breaker. Every fixer and owner session is
   launched with `$AGENTCTL_STORE_TOKEN`, whatever its repo.
+- **A LEASE IS JUDGED BY THE WRAPPER IT NAMES (2026-11-15 11:34:52).** The leases of two owners in their turns
+  (outside-gate on Order independence #74, main-tests on Main #2475) were revoked `ORPHANED: ... its wrapper ended
+  (IDLE: no red of <family> for 6 h)`: the verdicts of the PREVIOUS spells (main-tests' ended 2026-11-14), read from
+  owner records that were not the holders'. An owner lease's meta names its wrapper's pid; a record of another pid
+  says nothing of it -- that wrapper alive, the lease is not judged here (it lapses by its TTL if the wrapper stops
+  renewing); gone, it is orphaned. A fix-pending red's note on the status page is never a history line from before it
+  went fix-pending (both #74 reds kept showing that ORPHANED line after their fix landed, with no holder).
 - **ONE RED QUEUE (simplification item 5, 2026-10-30; replaced the per-class caps, the borrow and the overflow slot).**
   A red is (workflow, failing job, signature). Every red belongs to ONE queue family:
   its configured family (`red-families.json`), else its run (`run:<workflow>#<number>`). The open offers are one
