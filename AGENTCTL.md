@@ -831,7 +831,13 @@ agent must be assigned to it".
   alive (`secrets status` answers for its caller's session only, so it cannot tell). The laptop's sync publishes that
   word (`vault watch`, store meta `vault:<ns>`) for the reconciler on ci-runner. On the unlock the lease lapses
   `VAULT UNLOCKED` and each red is offered again as a decide would, its fixer briefed "the <ns> vault was unlocked at
-  T"; no `decide` needed. Unlocked already when the verdict arrives: offered again at once.
+  T"; no `decide` needed. Unlocked already when the verdict arrives: offered again at once. THE UNLOCK IS THE OWNER'S
+  SESSION'S, never the fixer's (review 2026-11-16; `~/projects/secrets`: an unlock is pinned to one session anchor, the
+  caller's nearest Claude Code ancestor, and the ssh agent that signs asks Touch ID once per anchor): the resumed fixer
+  is a locked session of its own, and nothing agentctl starts can probe that without a prompt for its OWN anchor. So the
+  unlock means only that the owner is at the machine: the fixer's brief has it sign a probe (`git commit-tree -S
+  HEAD^{tree} ...`) FIRST -- its own Touch ID prompt, while the owner is there -- and end `BLOCKED ON OWNER` at once
+  if that fails (the red waits on the vault's lease again), never after a whole fix.
 - **Stuck runs** (an infra red, `[stuck]`): a run undecided past max(3 x its workflow's p90, 30 min), counted from its
   first job's start. The p90 is of the workflow's own finished runs -- its own last 30 read when the newest-200 list
   holds fewer than 5 -- and with fewer still, its jobs' `timeout-minutes` (summed; a job setting none counts GitHub's

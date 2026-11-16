@@ -2049,7 +2049,13 @@ def red_renew_blocks(store, t):
 # at or after the block began, from a session still alive (`secrets status` cannot say it: it answers for the caller's
 # own session only, and the processor's is never the owner's). On the unlock the lease lapses VAULT UNLOCKED and each
 # red is offered again as a decide would (red_step: its fixer briefed "the vault was unlocked at T"); its WAITING ON YOU
-# alert closes with the block (alert_probe). The reconciler ticks on ci-runner, which has no secrets daemon: the
+# alert closes with the block (alert_probe). THE UNLOCK IS THE OWNER'S SESSION'S, NEVER THE FIXER'S (review 2026-11-16;
+# ~/projects/secrets, Daemon.swift / ProcessAncestry.swift: an unlock is pinned to one SessionAnchor, the caller's nearest
+# Claude Code ancestor, and the ssh agent that signs commits asks Touch ID once per anchor): a resumed fixer is a session
+# of its own, locked, and no process agentctl starts can probe that without raising a prompt for ITS anchor. So the unlock
+# says only that the owner is at the machine, and the resumed fixer's brief (red_vault_resume) has it sign a probe commit
+# FIRST -- its own Touch ID prompt, answered while the owner is there -- and end BLOCKED ON OWNER at once if that fails,
+# never after a whole fix. The reconciler ticks on ci-runner, which has no secrets daemon: the
 # laptop's sync publishes what its log says (vault_watch, store meta `vault:<ns>`) and the probe there reads that.
 VAULT_ASK = re.compile(r"secrets\s+unlock\s+([A-Za-z0-9_-]+)")
 VAULT_UNLOCKED = "VAULT UNLOCKED"
@@ -2148,9 +2154,14 @@ def red_vault_resume(store, it, upd, detail, t):
     """The vault red `it` waited on is unlocked: offered again as a decide would, its fixer briefed with the unlock."""
     d = {**it["data"], **(upd or {})}
     q = (d.get("ask") or {}).get("q") or "unlock the vault"
-    dec = {"answer": f"{detail}: agentctl saw it and resumed this red (no owner answer was needed): go on with the fix "
-                     "(commit it signed, land it)", "question": str(q)[:600], "at": t, "status": "in-progress",
-           "by": "agentctl"}
+    m = re.search(r"the (\S+) vault", str(detail))
+    ns = m.group(1) if m else "movies"
+    dec = {"answer": f"{detail}, in the owner's own session: agentctl saw it and resumed this red (no owner answer was "
+                     "needed). An unlock is pinned to ONE Claude Code session, never yours: your first signature raises "
+                     "a Touch ID prompt for your session. So FIRST, while the owner is at the machine, run `git "
+                     "commit-tree -S HEAD^{tree} -m 'signing probe' < /dev/null` in your worktree; if it fails, end "
+                     f"`BLOCKED ON OWNER: ! secrets unlock {ns}` at once. Then go on with the fix and land it.",
+           "question": str(q)[:600], "at": t, "status": "in-progress", "by": "agentctl"}
     store.close_offer(f"red:{it['id']}", "resumed")
     red_offer(store, it, f"{red_what(d)}: {detail}: offered again",
               data={**(upd or {}), "cause": None, "block": None, "ask": None, "decision": dec, "dispatch_after": 0})

@@ -100,7 +100,13 @@ class VaultAskTest(VaultBase):
         self.assertIsNone(it["data"].get("ask"))
         u = {"workflow": "Order independence", "job": "ios", "kind": "test", "line": "",
              "run": {"number": 77, "databaseId": 9077}, "decision": dec}
-        self.assertIn("the movies vault was unlocked at", A.fixer_prompt(u, "/w", "the brief"))
+        prompt = A.fixer_prompt(u, "/w", "the brief")
+        self.assertIn("the movies vault was unlocked at", prompt)
+        # the unlock is pinned to ONE Claude Code session (secrets' SessionAnchor: the nearest claude ancestor), never
+        # the fixer's own: its first signature raises its own Touch ID prompt, probed first while the owner is there
+        self.assertIn("commit-tree -S", prompt)
+        self.assertIn("BLOCKED ON OWNER", dec["answer"])
+        self.assertNotIn("(commit it signed, land it)", dec["answer"], "never told its own session can sign")
         self.assertNotIn("WAITING ON YOU", self.view(it)[1])
         A.reconcile_alerts(self.st, force=True)
         self.assertTrue(A.alert_acked(A.inbox_dir(), eid), "the owner's WAITING ON YOU alert closes with the block")
