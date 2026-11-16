@@ -396,6 +396,8 @@ def alert_probe(st, item, e, t, ctx=None):
         if machine_state("red", it["state"]).terminal:
             return f"its red is {it['state']}", None
         kind = alert_kind_of(e)
+        if kind == "BLOCKED" and it["state"] != "blocked-external":  # WAITING ON YOU, but its red waits on nobody now
+            return f"its red is {it['state']} now (no longer waiting on you)", None  # (resumed, decided, its fix landed)
         if kind in ("RED_UNCLAIMED", "RED_STARVED") and it["state"] != "offered":
             return f"its red is {it['state']} now (taken)", None
         if kind in ALERT_RED_KINDS:

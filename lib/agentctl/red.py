@@ -2077,6 +2077,8 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
         if not block:  # its block lapsed: the probe passed (verify it), or its justification or max hold is gone
             brow = store.get(d.get("block") or block_lease(key))
             out = str(lease_meta(brow).get("outcome") or "expired")
+            if out.startswith(VAULT_UNLOCKED):  # the vault it waited on is open: resumed, as a decide would
+                return red_vault_resume(store, it, {}, out[len(VAULT_UNLOCKED) + 2:], t)
             if out.startswith("PROBE PASSED"):
                 red_move(store, it, "fix-pending", f"{red_what(d)}: its block's check passes ({out[14:120]}): verifying",
                          data={"fix": {"status": "verify", "at": t, "entry": None, "sha": ""}, "block": None})
@@ -2174,11 +2176,14 @@ def red_lease_ended(store, it, row, block, t, repo=None):
         return [f"blocked {red_what(d)}"]
     if GAVE_UP_FIXED.match(out):  # ALREADY FIXED: the red's probe decides, never the fixer's word alone
         return red_already_fixed(store, it, upd, out, t)
-    if red_decision(d) and DECISION_FAILED.match(str(h["outcome"])):  # THE OWNER'S DECIDED ACTION FAILED: told
-        return red_decision_failed(store, it, upd, h["outcome"], t)
     decide = red_decision_needed(d, h) if str(h["outcome"]).startswith("DIAGNOSED:") else None
     if not decide and GAVE_UP_DECIDE.match(out):  # THE FIXER NEEDS THE OWNER'S DECISION: one WAITING ON YOU, with its
         decide = re.sub(r"^\W*GAVE UP:\s*", "", out).strip()  # own words, never offered to the next fixer meanwhile
+    vault = vault_ask_ns(decide or (out if out.startswith("BLOCKED ON OWNER") else ""))
+    if vault:  # ITS ONE ASK IS A VAULT UNLOCK: a wait agentctl checks itself (red_vault_block), never a decision
+        return red_vault_block(store, it, upd, vault, out, t)
+    if red_decision(d) and DECISION_FAILED.match(str(h["outcome"])):  # THE OWNER'S DECIDED ACTION FAILED: told
+        return red_decision_failed(store, it, upd, h["outcome"], t)
     if decide:
         return red_decision_block(store, it, upd, decide, t)
     streak = red_crash_streak({**d, **upd})

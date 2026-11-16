@@ -51,6 +51,8 @@ def red_ask(it, b):
     elif m.get("crash_loop"):
         q = q or f"the fixers crash on {red_what(d)}: repair the fixer harness"
         how = f"look: `! {m.get('cmd')}`; then `! {decide_cmd(key, '<what you changed>')}`"
+    elif m.get("vault"):  # red_vault_block: agentctl sees the unlock itself
+        how = f"agentctl sees the unlock and resumes it by itself (no decide needed)"
     elif str(m.get("cmd") or "").strip():
         q = q or (f"run `! {m['cmd']}` ({OWNER_CAUSES.get(m.get('owner_cause'), 'an action only you can take')})")
         how = f"it clears itself when {until}; or once done: `! {decide_cmd(key, 'done')}`"
@@ -111,7 +113,9 @@ def red_owner_reminders(store, t):
             groups.setdefault(b["name"], []).append((it, ask))
     for _name, members in groups.items():
         members.sort(key=lambda x: x[0]["id"])
-        it, ask = members[0]
+        # THE MEMBER THAT CARRIES THE TELLING speaks for the block: a red joining it later (sorting first) is no second
+        # telling (2026-11-16: ONE owner item for N reds waiting on the locked vault)
+        it, ask = max(members, key=lambda x: float((x[0]["data"].get("ask") or {}).get("last_at") or 0))
         d, a = it["data"], it["data"].get("ask") or {}
         spell = min(m[0]["entered_at"] for m in members)
         fresh = a.get("since") != spell or a.get("q") != ask["q"]
@@ -142,8 +146,9 @@ def red_decision_failed(store, it, upd, why, t):
     dec = red_decision(d) or {}
     why = " ".join(str(why).split())[:400]
     upd = {**upd, "decision": {**dec, "status": "failed", "failure": why, "failed_at": t}}
-    decide = (f"you decided {str(dec.get('answer'))[:200]!r}; the action failed: {why}. Decide again (the same answer "
-              "once its cause is fixed, or another)")
+    said = (f"agentctl resumed it ({str(dec.get('answer'))[:200]!r})" if dec.get("by") == "agentctl"
+            else f"you decided {str(dec.get('answer'))[:200]!r}")
+    decide = f"{said}; the action failed: {why}. Decide again (the same answer once its cause is fixed, or another)"
     return red_decision_block(store, it, upd, decide, t)
 
 

@@ -1958,6 +1958,9 @@ def red_block_of(it, store=None):
 def block_invalid(store, it, m, t):
     """Why this block no longer justifies holding red `it`, or None (checked at the block AND every tick)."""
     d = it["data"]
+    if m.get("vault"):  # it waits on a vault being unlocked (red_vault_block): agentctl checks that itself, any red kind
+        row = store.get(red_lease(d["key"]))
+        return f"a live fixer is on it: {row['holder']}" if lease_is_live(row, t) else None
     if m.get("crash_loop") or m.get("decision"):  # the fixers crash-looped on it (red_crash_loop), or it waits on the
         # owner's decision (red_decision_block): the harness, or the owner's call, never the code, holds it
         row = store.get(red_lease(d["key"]))
@@ -2010,14 +2013,166 @@ def red_renew_blocks(store, t):
         pr = m.get("probe") or {}
         r = run_probe(pr.get("kind"), pr.get("args")) if pr.get("kind") in PROBES else None
         store.set_meta(row["name"], row["epoch"], row["secret"], {"probed_at": t, "last": r.detail if r else "no probe"})
-        if r is not None and r.ok:
-            store.revoke(row["name"], f"PROBE PASSED: {r.detail}")
+        if r is not None and r.ok:  # a vault's unlock resumes its reds (red_step: offered again, never "verify")
+            store.revoke(row["name"], f"{VAULT_UNLOCKED if m.get('vault') else 'PROBE PASSED'}: {r.detail}")
             out.append(f"RECOVERED: {m.get('until')} ({r.detail}): the block {row['name']} lapsed")
             line = f"RECOVERED: {m.get('until')} ({r.detail}): {m.get('text', '')[:200]}"
             inbox_write("recover", line, [line], [], 0)
             continue
         store.renew(row["name"], row["epoch"], row["secret"], f"{r.detail if r else 'cannot tell'}@{int(t)}", BLOCK_TTL)
     return out
+
+
+# A BLOCK AGENTCTL CAN CHECK ITSELF IS NO OWNER DECISION (2026-11-16, Order independence #77 [ios]: its fixer's tested
+# fix waited on commit signing while the `movies` vault was locked; the red sat "WAITING ON YOU: run `! secrets unlock
+# movies` ..." as an owner-decision block from 03:49Z, the owner unlocked the vault at 04:50Z, and the block -- and his
+# status line -- stayed until he hand-ran `agentctl decide` at 05:01Z). A fixer's ask whose one condition is a vault
+# being unlocked (`secrets unlock <ns>` in a BLOCKED ON OWNER verdict or a DIAGNOSED decide) puts the red on ONE lease
+# per vault, block/cause/vault-<ns>, whatever the red's kind: the owner is told once for every red it holds (ask.py),
+# and its probe (vault_unlocked) is the unlock itself -- the secrets daemon's log line `unlocked <ns>[+...] for pid N`
+# at or after the block began, from a session still alive (`secrets status` cannot say it: it answers for the caller's
+# own session only, and the processor's is never the owner's). On the unlock the lease lapses VAULT UNLOCKED and each
+# red is offered again as a decide would (red_step: its fixer briefed "the vault was unlocked at T"); its WAITING ON YOU
+# alert closes with the block (alert_probe). The reconciler ticks on ci-runner, which has no secrets daemon: the
+# laptop's sync publishes what its log says (vault_watch, store meta `vault:<ns>`) and the probe there reads that.
+VAULT_ASK = re.compile(r"secrets\s+unlock\s+([A-Za-z0-9_-]+)")
+VAULT_UNLOCKED = "VAULT UNLOCKED"
+SECRETS_LOG = os.path.join(HOME, "Library", "Logs", "secrets", "secretsd.err.log")  # the daemon's LaunchAgent stderr
+SECRETS_LOG_TAIL = 512 * 1024  # bytes of the log read: weeks of unlocks
+VAULT_UNLOCK_LINE = re.compile(r"^\[(\S+)\] unlocked (?:namespace '([\w-]+)'|([\w+-]+)) for pid (\d+)\b")
+VAULT_LOCK_ALL = re.compile(r"^\[\S+\] lock-all:")
+VAULT_FACT_FRESH = 600  # s the laptop's word on a vault stays news on ci-runner
+VAULT_WATCH_EVERY = 30  # s between the sync's looks at the log ($AGENTCTL_VAULT_WATCH)
+_vault_watched = [0.0]
+
+
+def secrets_log_path():
+    return os.environ.get("AGENTCTL_SECRETS_LOG") or SECRETS_LOG
+
+
+def vault_ask_ns(text):
+    """The vault an owner ask waits on (`secrets unlock <ns>` in it), or None."""
+    m = VAULT_ASK.search(str(text or ""))
+    return m.group(1) if m else None
+
+
+def vault_unlock_seen(ns, since, path=None):
+    """(at, pid) of the newest unlock of vault ns at or after `since` whose session still lives, from the secrets
+    daemon's log, or None. Raises OSError when the log cannot be read on this host."""
+    path = path or secrets_log_path()
+    with open(path, "rb") as f:
+        f.seek(max(0, os.fstat(f.fileno()).st_size - SECRETS_LOG_TAIL))
+        text = f.read().decode("utf-8", "replace")
+    seen = []
+    for line in text.splitlines():
+        if VAULT_LOCK_ALL.match(line):  # every session's unlocks cleared
+            seen = []
+            continue
+        m = VAULT_UNLOCK_LINE.match(line)
+        if not m or ns not in (m.group(2) or m.group(3) or "").split("+"):
+            continue
+        try:
+            at = dt.datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp()
+        except ValueError:
+            continue
+        if at >= float(since or 0):
+            seen.append((at, int(m.group(4))))
+    return next(((at, pid) for at, pid in reversed(seen) if pid_alive(pid)), None)
+
+
+def vault_answer(ns, since, seen):
+    if seen:
+        return True, f"the {ns} vault was unlocked at {iso_at(seen[0])} (pid {seen[1]})"
+    return False, f"the {ns} vault has not been unlocked since {iso_at(float(since or 0))}"
+
+
+def probe_vault_unlocked(a):
+    """The vault a['ns'] was unlocked at or after a['since']: this host's secrets log, else the laptop's published word
+    (vault_watch); None when neither can tell."""
+    ns, since = a.get("ns") or "movies", float(a.get("since") or 0)
+    if os.path.exists(secrets_log_path()):
+        return vault_answer(ns, since, vault_unlock_seen(ns, since))
+    try:
+        fact = json.loads(Store().meta_get(f"vault:{ns}") or "{}")
+    except ValueError:
+        fact = {}
+    if time.time() - float(fact.get("at") or 0) > VAULT_FACT_FRESH:
+        return None, f"no fresh word from the laptop on the {ns} vault"
+    at = float(fact.get("unlocked_at") or 0)
+    return vault_answer(ns, since, (at, fact.get("pid")) if at and at >= since else None)
+
+
+def vault_watch(store=None, now=None):
+    """The laptop's sync step: for each vault a live block waits on, what this host's secrets log says of its unlock
+    since the block began, published as store meta `vault:<ns>` for the reconciler on ci-runner."""
+    t = time.time() if now is None else now
+    if now is None and t - _vault_watched[0] < env_num("AGENTCTL_VAULT_WATCH", VAULT_WATCH_EVERY):
+        return []
+    _vault_watched[0] = t
+    st = store or Store()
+    since = {}
+    for row in st.list("block/cause/vault-"):
+        m = lease_meta(row)
+        if lease_is_live(row, st.clock()) and m.get("vault"):
+            s = float(((m.get("probe") or {}).get("args") or {}).get("since") or 0)
+            since[m["vault"]] = min(s, since.get(m["vault"], s))
+    out = []
+    for ns, s in since.items():
+        try:
+            seen = vault_unlock_seen(ns, s)
+        except OSError:
+            continue  # no secrets daemon on this host: nothing to say
+        st.meta_set(f"vault:{ns}", json.dumps({"at": t, "since": s, "unlocked_at": seen[0] if seen else None,
+                                                "pid": seen[1] if seen else None}))
+        out.append(f"vault {ns}: " + vault_answer(ns, s, seen)[1])
+    return out
+
+
+def red_vault_resume(store, it, upd, detail, t):
+    """The vault red `it` waited on is unlocked: offered again as a decide would, its fixer briefed with the unlock."""
+    d = {**it["data"], **(upd or {})}
+    q = (d.get("ask") or {}).get("q") or "unlock the vault"
+    dec = {"answer": f"{detail}: agentctl saw it and resumed this red (no owner answer was needed): go on with the fix "
+                     "(commit it signed, land it)", "question": str(q)[:600], "at": t, "status": "in-progress",
+           "by": "agentctl"}
+    store.close_offer(f"red:{it['id']}", "resumed")
+    red_offer(store, it, f"{red_what(d)}: {detail}: offered again",
+              data={**(upd or {}), "cause": None, "block": None, "ask": None, "decision": dec, "dispatch_after": 0})
+    return [f"resumed {red_what(d)} ({detail})"]
+
+
+def red_vault_block(store, it, upd, ns, why, t):
+    """The red waits on vault ns: it joins the vault's ONE lease (opened when none is live), or -- unlocked since the
+    ask was made -- is offered again at once. Moved quietly: the tick's red_owner_reminders tells the owner once."""
+    d = {**it["data"], **upd}
+    key = d["key"]
+    lname = block_lease(cause=f"vault-{ns}")
+    row = store.get(lname)
+    live = lease_is_live(row, t) and lease_meta(row).get("vault") == ns
+    probe = (lease_meta(row).get("probe") if live else None) or {"kind": "vault_unlocked", "args": {"ns": ns, "since": t}}
+    r = run_probe(probe["kind"], probe["args"])
+    if r.ok:
+        if live:
+            store.revoke(lname, f"{VAULT_UNLOCKED}: {r.detail}")
+        return red_vault_resume(store, it, upd, r.detail, t)
+    if live:
+        store.set_meta(lname, row["epoch"], row["secret"], {"keys": sorted(set(lease_meta(row).get("keys") or []) | {key})})
+    else:
+        until = f"the {ns} vault is unlocked (`secrets unlock {ns}`; agentctl sees it in the secrets log)"
+        got = store.acquire(lname, "owner:vault", BLOCK_TTL, BLOCK_MAX, progress=f"{r.detail}@{int(t)}",
+                            meta={"kind": "block", "vault": ns, "cause": f"vault-{ns}", "cmd": f"secrets unlock {ns}",
+                                  "question": f"run `! secrets unlock {ns}`: agents' work waits on the {ns} vault "
+                                              "(commit signing, its secrets)",
+                                  "probe": probe, "until": until, "keys": [key], "probed_at": t,
+                                  "text": f"BLOCKED: the {ns} vault is locked (auto-resumes when {until})",
+                                  "details": " ".join(str(why).split())[:400]})
+        if "held" in got:  # somebody else's lease by that name: never this red's to take over
+            red_offer(store, it, f"{red_what(d)}: {lname} is held by {got['held'].get('holder')}: offered again", data=upd)
+            return [f"re-offered {red_what(d)} ({lname} held)"]
+    store.close_offer(f"red:{it['id']}", "blocked")
+    red_move(store, it, "blocked-external", f"{red_what(d)}: waits on the {ns} vault being unlocked",
+             data={**upd, "cause": f"vault-{ns}", "block": lname})
+    return [f"{red_what(d)}: waits on the {ns} vault"]
 
 
 # A SPENT QUOTA IS AN EXTERNAL WAIT, NOT THE OWNER'S (the owner's coordinator, 2026-10-29: Record scrape fixtures #2426
