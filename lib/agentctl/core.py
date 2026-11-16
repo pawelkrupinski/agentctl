@@ -29,7 +29,7 @@ WAITING, landed with the batch checked once at green. Every verdict goes to `age
 THE FAST PRECHECK: a repo with an executable scripts/land-precheck (movies) has it run beside the queue, never before
 QUEUED; a refusal cancels the queued change with `NOT LANDED: the fast precheck refused <id>` in the inbox, minutes
 before the landing check would say it. --no-fast-precheck starts none.
-IN-PROCESS (--follow, --no-watch, a dispatched red fixer, AGENTCTL_QUEUE=0; other repos always): the checks here
+IN-PROCESS (--follow, --no-watch, AGENTCTL_QUEUE=0; other repos always; a red fixer queues and waits): the checks here
 (movies: the hook's dry run --range origin/main..<sha>), then under the land/<repo> lease fetch, push (the repo's
 pre-push hook runs, reusing the dry run's pass), on a race refetch, rebase and retry up to 3 times, verify with
 merge-base / git cherry: `LANDED <sha>` or `NOT LANDED: <exact reason>` (red gate: + the ci-why summary). --follow then

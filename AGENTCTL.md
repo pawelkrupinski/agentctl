@@ -1189,7 +1189,7 @@ prepush-check refusal; the pre-push checks failed (the last 25 lines; the full l
 conflict with the changes ahead of it in the batch; `stalled <step>` (no progress for 20 min); the red gate (followed
 by the `ci-why` summary).
 
-**In-process land** (`--follow`, `--no-watch`, a dispatched red fixer, `AGENTCTL_QUEUE=0`): the same checks run in
+**In-process land** (`--follow`, `--no-watch`, `AGENTCTL_QUEUE=0`; a dispatched red fixer queues and waits, above): the same checks run in
 land's own process, outside the lock (the hook's dry run `--range <remote>/main..<sha>`), then under the `land/<repo>`
 lease it fetches, pushes when main has not moved since the check (moved: checked again outside the lock, twice; the
 third time under it) and verifies; main red and the change must wait: it joins the queue as `waiting` and `--follow`
