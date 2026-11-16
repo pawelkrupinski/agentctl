@@ -2132,8 +2132,6 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
         if not block:  # its block lapsed: the probe passed (verify it), or its justification or max hold is gone
             brow = store.get(d.get("block") or block_lease(key))
             out = str(lease_meta(brow).get("outcome") or "expired")
-            if out.startswith(VAULT_UNLOCKED):  # the vault it waited on is open: resumed, as a decide would
-                return red_vault_resume(store, it, {}, out[len(VAULT_UNLOCKED) + 2:], t)
             if out.startswith("PROBE PASSED"):
                 red_move(store, it, "fix-pending", f"{red_what(d)}: its block's check passes ({out[14:120]}): verifying",
                          data={"fix": {"status": "verify", "at": t, "entry": None, "sha": ""}, "block": None})

@@ -51,8 +51,9 @@ def red_ask(it, b):
     elif m.get("crash_loop"):
         q = q or f"the fixers crash on {red_what(d)}: repair the fixer harness"
         how = f"look: `! {m.get('cmd')}`; then `! {decide_cmd(key, '<what you changed>')}`"
-    elif m.get("vault"):  # red_vault_block: agentctl sees the unlock itself
-        how = f"agentctl sees the unlock and resumes it by itself (no decide needed)"
+    elif m.get("vault"):  # red_vault_block: ONE item per vault, resumed by one line (an unlock elsewhere is not theirs)
+        how = (f"at the machine: `! {vault_decide_cmd(m['vault'])}` resumes every red on it; each fixer's first "
+               "signature then asks Touch ID for its OWN session (your `secrets unlock` never unlocks theirs): answer it")
     elif str(m.get("cmd") or "").strip():
         q = q or (f"run `! {m['cmd']}` ({OWNER_CAUSES.get(m.get('owner_cause'), 'an action only you can take')})")
         how = f"it clears itself when {until}; or once done: `! {decide_cmd(key, 'done')}`"
@@ -172,6 +173,9 @@ def red_decide(store, o_r, target, answer):
     answer = " ".join(str(answer or "").split())
     if not answer:
         return 2, ["NOT DECIDED: the answer is empty"]
+    vault = VAULT_TARGET.fullmatch(str(target))
+    if vault:  # `decide vault-<ns>`: the owner at the machine for every red on that vault's one lease
+        return red_vault_decide(store, vault.group(1), answer)
     items = red_targets(store, o_r, target, create=False)
     if not items:
         closed = red_closed_of(store, str(target).lstrip("#"))

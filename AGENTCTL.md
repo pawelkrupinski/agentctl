@@ -823,21 +823,17 @@ agent must be assigned to it".
   `decide` on a red that has closed meanwhile answers `already resolved (red closed <when>, <state>)` and
   acknowledges the alerts that asked it. A BLOCKED alert closes by itself once its red no longer waits on the owner
   (resumed, decided, its fix landed).
-- **A vault unlock is no owner decision (2026-11-16, Order independence #77).** A fixer verdict whose one ask is
+- **A vault ask is ONE owner item per vault (2026-11-16, Order independence #77).** A fixer verdict whose one ask is
   `secrets unlock <ns>` (`BLOCKED ON OWNER: ...`, or a `DIAGNOSED: ...; decide: ...` naming it) puts the red, whatever
-  its kind, on ONE lease per vault, `block/cause/vault-<ns>`: one WAITING ON YOU for every red it holds. Its probe
-  (`vault_unlocked`) is the unlock itself: the secrets daemon's log (`$AGENTCTL_SECRETS_LOG`, default
-  `~/Library/Logs/secrets/secretsd.err.log`) records `unlocked <ns>` at or after the block began, from a session still
-  alive (`secrets status` answers for its caller's session only, so it cannot tell). The laptop's sync publishes that
-  word (`vault watch`, store meta `vault:<ns>`) for the reconciler on ci-runner. On the unlock the lease lapses
-  `VAULT UNLOCKED` and each red is offered again as a decide would, its fixer briefed "the <ns> vault was unlocked at
-  T"; no `decide` needed. Unlocked already when the verdict arrives: offered again at once. THE UNLOCK IS THE OWNER'S
-  SESSION'S, never the fixer's (review 2026-11-16; `~/projects/secrets`: an unlock is pinned to one session anchor, the
-  caller's nearest Claude Code ancestor, and the ssh agent that signs asks Touch ID once per anchor): the resumed fixer
-  is a locked session of its own, and nothing agentctl starts can probe that without a prompt for its OWN anchor. So the
-  unlock means only that the owner is at the machine: the fixer's brief has it sign a probe (`git commit-tree -S
-  HEAD^{tree} ...`) FIRST -- its own Touch ID prompt, while the owner is there -- and end `BLOCKED ON OWNER` at once
-  if that fails (the red waits on the vault's lease again), never after a whole fix.
+  its kind, on ONE lease per vault, `block/cause/vault-<ns>`: one WAITING ON YOU for every red it holds, carrying the
+  one line that resumes them all: `! ~/bin/agentctl decide vault-<ns> "here"`. Each red is offered again as a decide
+  would; its fixer signs a probe (`git commit-tree -S HEAD^{tree} ...`) FIRST -- its own Touch ID prompt, which the
+  owner answers while at the machine -- and ends `BLOCKED ON OWNER` at once if that fails (back on the vault's lease,
+  told once again), never after a whole fix. NO UNLOCK RESUMES THEM BY ITSELF (review round 3, 2026-11-16): an unlock
+  is pinned to ONE session anchor, the caller's nearest Claude Code ancestor, and signing asks Touch ID once per anchor
+  (`~/projects/secrets` README, "Session pinning"), so the owner's `secrets unlock` in his own session never lets a
+  fixer sign. The secrets-log watch that resumed on any unlock (2a8139c) never fired, and would have had a fixer raise
+  a Touch ID prompt minutes later that the owner had not asked for -- the one secrets' README says never to approve.
 - **Stuck runs** (an infra red, `[stuck]`): a run undecided past max(3 x its workflow's p90, 30 min), counted from its
   first job's start. The p90 is of the workflow's own finished runs -- its own last 30 read when the newest-200 list
   holds fewer than 5 -- and with fewer still, its jobs' `timeout-minutes` (summed; a job setting none counts GitHub's
@@ -1928,7 +1924,6 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `sbt_reap` | `AGENTCTL_SBT_REAP` | - | the tests never reap this machine's servers |
 | `sbt_stall_min` | `AGENTCTL_SBT_STALL_MIN` | `20` | - |
 | `scratch` | `AGENTCTL_SCRATCH` | - | - |
-| `secrets_log` | `AGENTCTL_SECRETS_LOG` | - | - |
 | `sleep_log` | `AGENTCTL_SLEEP_LOG` | - | - |
 | `sleep_min` | `AGENTCTL_SLEEP_MIN` | `120` | s of sleep inside a lapse's window that count as "the host was asleep" |
 | `sock_dir` | `AGENTCTL_SOCK_DIR` | - | short: a socket path is <= 104 bytes |
@@ -1955,7 +1950,6 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `tunnel_state` | `AGENTCTL_TUNNEL_STATE` | - | - |
 | `unkicked_after` | `AGENTCTL_UNKICKED_AFTER` | `3600` | a convergence-relevant main push with no convergence (or Identity takes) run on main by then is a red |
 | `upkeep_every` | `AGENTCTL_UPKEEP_EVERY` | `3600` | - |
-| `vault_watch` | `AGENTCTL_VAULT_WATCH` | `30` | s between the sync's looks at the log |
 | `w1_max` | `AGENTCTL_W1_MAX` | `7200` | the oldest unlanded change ; while main is red, counted from the red's start |
 | `w2_max` | `AGENTCTL_W2_MAX` | `600` | a gate red with nobody on it |
 | `w5_max` | `AGENTCTL_W5_MAX` | `300` | the processor's duties beat (its bounded steps take up to 2 min) |

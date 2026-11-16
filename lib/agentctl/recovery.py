@@ -127,12 +127,11 @@ PROBES = {"disk_free": lambda a: probe_disk_free(a), "quota_reset": lambda a: pr
           "git_fetch": probe_git_fetch, "clone_health": probe_clone_health,
           "change_source": lambda a: probe_change_source(a),
           "infra_requeue": probe_infra_requeue, "red_newer_verdict": lambda a: probe_red_newer_verdict(a),
-          "batch_progress": lambda a: probe_batch_progress(a), "red_read": lambda a: probe_red_read(a),
-          "vault_unlocked": lambda a: probe_vault_unlocked(a)}
+          "batch_progress": lambda a: probe_batch_progress(a), "red_read": lambda a: probe_red_read(a)}
 PROBE_EVERY = {"disk_free": 300, "quota_reset": 300, "invariant": 60, "waiting_ok": 30, "orphan_landed": 300, "route": 5, "tunnel": 10, "gate_read": 15,
                "workflow_green": 60, "token": 60, "tcp": 60, "http": 120, "git_fetch": 120,
                "clone_health": 120, "infra_requeue": 60, "change_source": 60, "red_newer_verdict": 60,
-               "batch_progress": 30, "red_read": 300, "vault_unlocked": 60}
+               "batch_progress": 30, "red_read": 300}
 
 
 def probe_words(kind, a):
@@ -151,7 +150,6 @@ def probe_words(kind, a):
             "infra_requeue": lambda: f"queue entry {a.get('eid')} gets past {a.get('reason')}",
             "batch_progress": lambda: "the waiting changes form a batch (or the gate turns red)",
             "red_read": lambda: f"ci-runner reads {', '.join(a.get('repos') or [])} (the agentctl-reader App)",
-            "vault_unlocked": lambda: f"the {a.get('ns')} vault is unlocked",
             "red_newer_verdict": lambda: f"a newer {a.get('workflow')} run than #{a.get('run')} no longer fails this way"}.get(kind, lambda: kind)()
 
 

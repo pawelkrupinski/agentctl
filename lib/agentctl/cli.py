@@ -242,7 +242,8 @@ def main(argv=None):
     ib.add_argument("-v", "--verbose", action="store_true", help="each entry's last output lines too")
     dc = sub.add_parser("decide", help="answer a red WAITING ON YOU: the answer is stored, the red re-dispatched with "
                         "it (IN PROGRESS); if the action fails you are told")
-    dc.add_argument("red", help="the red: its key, or its run number or id (as the status line / ci-why name it)")
+    dc.add_argument("red", help="the red: its key, or its run number or id (as the status line / ci-why name it); "
+                    "`vault-<ns>`: every red waiting on that vault (you are at the machine for their Touch ID prompts)")
     dc.add_argument("answer", help="your decision, or `done` once you ran the command it asked for")
     dc.add_argument("--repo", help="the red's repo when it is not the primary's (a run number is per repo)")
     rd = sub.add_parser("red", help="every red build held by a lease or offered: status / claim / beat / release / block",
