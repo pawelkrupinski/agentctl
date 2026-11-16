@@ -211,9 +211,9 @@ def cmd_checks(a):
 
 
 def stalled(step, output, log_path):
-    mins = env_num("AGENTCTL_LAND_STALL_MIN", LAND_STALL_MIN)
-    print(f"NOT LANDED: stalled {step}: no output and no CPU for {mins:g} min, so it was ended (the landing lock is free "
-          f"again). Last lines (full log {log_path}):\n  {tail_of(output)}")
+    why = stall_reason(output) or f"no output and no CPU for {env_num('AGENTCTL_LAND_STALL_MIN', LAND_STALL_MIN):g} min"
+    print(f"NOT LANDED: stalled {step}: {why}, so it was ended (the landing lock is free again). Last lines (full log "
+          f"{log_path}):\n  {tail_of(output)}")
     return 1
 
 
@@ -242,13 +242,22 @@ def tool_env():
 # progress, no exit -- holding the landing lock 30+ min while a checked batch waited behind it with the gate green): a
 # push gets a no-progress bound (no output and no CPU) of PUSH_STALL_SECS and a wall bound of PUSH_WALL_MIN, its group
 # killed on either; a stalled or dead-transport push is infra (re-queued), never a hang.
+# THE HOOK INSIDE A PUSH IS JUDGED BY THE HOOK'S BOUND (2026-11-16: movies 040934987's push lost its landing lease
+# 3 min in -- a gate run had completed since the check outside the lock, so the hook could not reuse that pass and ran
+# its checks again, silent, their CPU in a kept sbt server and a Docker container, out of the push's process group): while
+# a pre-push hook process runs in the push's group, its leases renew at every poll and the hook's own bound (the check
+# outside the lock's, LAND_STALL_MIN; movies' hook bounds each step itself) applies; the transport around it keeps
+# PUSH_STALL_SECS and progress-only renewal, so a push hung on a dead tunnel still loses the lock within minutes.
 PUSH_STALL_SECS = 180
 PUSH_WALL_MIN = 45
 
 
 def push_bounds():
+    """A push's bounds: `stall` for its transport; while its pre-push hook runs, the hook's own -- the check outside the
+    lock's (LAND_STALL_MIN), its leases renewed at every poll (run_watched hook_stall); `wall` over all of it."""
     return {"stall": env_num("AGENTCTL_PUSH_STALL_SECS", PUSH_STALL_SECS),
-            "wall": env_num("AGENTCTL_PUSH_WALL_MIN", PUSH_WALL_MIN) * 60}
+            "wall": env_num("AGENTCTL_PUSH_WALL_MIN", PUSH_WALL_MIN) * 60,
+            "hook_stall": env_num("AGENTCTL_LAND_STALL_MIN", LAND_STALL_MIN) * 60}
 
 
 def push_argv(remote, src, dst="main"):

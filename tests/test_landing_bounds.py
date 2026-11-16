@@ -3,7 +3,7 @@ or stalled", "fix root cause in a structural way"): a push that hangs after its 
 bound and is infra, a landing lock whose holder stopped working is freed, a batch that cannot land is HELD with a
 condition after 3 tries, bisect never rejects on one flaky failure, an infra re-queue resets `attempts`, and the
 governor's wait for a check is bounded."""
-import fcntl, json, os, subprocess, sys, tempfile, time, unittest
+import contextlib, fcntl, io, json, os, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -50,6 +50,74 @@ class LeaseTest(unittest.TestCase):
         self.assertIsNone(rc)  # the lease lapsed (no progress): its group ended, long before the stall bound
         self.assertLess(time.monotonic() - t0, 60)
         self.assertNotIn("held", st.acquire("land/x", "the batch", 120, 300))  # the next lander takes it at once
+
+
+class PushHookTest(unittest.TestCase):
+    """2026-11-16 ~20:18 CET: movies 040934987's first land lost its landing lease 3 min into the push and ended "stalled
+    push ... no output and no CPU for 20 min". The check outside the lock had passed, but a gate run completed meanwhile,
+    so the push's pre-push hook could not reuse that pass and ran its checks again: minutes with no output and its CPU
+    out of the push's process group (a kept sbt server, a Docker container), past the lease's 120 s TTL. The hook
+    bounds itself (movies: stall-watch, 1200 s), so while it runs the push renews its leases and is judged by the
+    hook's bound (the check outside the lock's); only the transport after it gets the strict push bound."""
+    def hook_push(self, d, hook_secs, after="echo pushed"):
+        os.makedirs(os.path.join(d, "hooks"))
+        hook = os.path.join(d, "hooks", "pre-push")
+        with open(hook, "w") as f:
+            f.write(f"#!/bin/sh\necho checking\nsleep {hook_secs}\n")
+        os.chmod(hook, 0o755)
+        script = os.path.join(d, "push.sh")
+        with open(script, "w") as f:
+            f.write(f"#!/bin/sh\n{hook} origin url || exit 1\n{after}\n")
+        os.chmod(script, 0o755)
+        return script
+
+    def test_a_quiet_pre_push_hook_keeps_the_landing_lease_past_its_ttl_and_the_push_bound(self):
+        d = tempfile.mkdtemp()
+        st = A.Store(path=os.path.join(d, "store.db"))
+        h = A.LeaseHold("land/x", 2, 300, store=st)
+        self.assertTrue(h.acquire())
+        A._landing[0] = h
+        try:
+            rc, out = A.run_watched([self.hook_push(d, 7)], d, dict(os.environ), os.path.join(d, "log"), "push",
+                                    stall=3, wall=120, hook_stall=60)
+            self.assertEqual(rc, 0, f"a quiet hook within its own bound ended the push: {out}")
+            self.assertIn("pushed", out)
+            self.assertEqual(h.renew("after"), "ok", "the landing lease is still this lander's")
+        finally:
+            A._landing[0] = None
+            h.release()
+
+    def test_a_transport_hanging_after_the_hook_still_loses_the_lease(self):
+        d = tempfile.mkdtemp()
+        st = A.Store(path=os.path.join(d, "store.db"))
+        h = A.LeaseHold("land/x", 2, 300, store=st)
+        self.assertTrue(h.acquire())
+        A._landing[0] = h
+        try:
+            t0 = time.monotonic()
+            rc, out = A.run_watched([self.hook_push(d, 0, "exec sleep 300")], d, dict(os.environ),
+                                    os.path.join(d, "log"), "push", stall=600, wall=900, hook_stall=600)
+        finally:
+            A._landing[0] = None
+            h.release()
+        self.assertIsNone(rc)
+        self.assertLess(time.monotonic() - t0, 60)
+        self.assertIn("lease land/x", A.stall_reason(out))
+
+    def test_a_stalled_verdict_says_why_it_ended_not_a_bound_it_never_used(self):
+        d = tempfile.mkdtemp()
+        rc, out = A.run_watched(["sleep", "30"], d, dict(os.environ), os.path.join(d, "log"), "push", stall=1)
+        self.assertIsNone(rc)
+        self.assertEqual(A.stall_reason(out), "no output and no CPU for 1 s")
+        o = io.StringIO()
+        with contextlib.redirect_stdout(o):
+            A.stalled("push (git push and its pre-push hook)", out, os.path.join(d, "log"))
+        self.assertIn("NOT LANDED: stalled push (git push and its pre-push hook): no output and no CPU for 1 s, so it was "
+                      "ended", o.getvalue())
+        self.assertNotIn("20 min", o.getvalue())
+
+    def test_every_push_is_judged_by_the_hooks_bound_while_its_hook_runs(self):
+        self.assertEqual(A.push_bounds()["hook_stall"], A.LAND_STALL_MIN * 60)
 
 
 class QuietStepTest(unittest.TestCase):
