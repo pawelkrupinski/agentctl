@@ -2281,7 +2281,32 @@ def red_waits_on_of(outcome, own_key, store):
     key = re.sub(r"\.\d+$", "", m.group(2))
     if key == own_key or not (red_closed_of(store, key) or store.item("red", key)):
         return None  # names no red agentctl knows: no state to wait on
+    if red_wait_cycle(store, own_key, key):
+        return None  # that red waits on this one in turn: no wait, a fixer's work (red_wait_cycle)
     return {"sha": m.group(1), "red": key}
+
+
+# A WAIT CYCLE HAS NO EXIT (review 2026-11-16): red A waiting on red B's commit while B waits (directly or through others)
+# on A's -- neither lands first, each one's holder is "the red it waits on" (red_fix_held), so W2 never fires. A wait
+# that would close a cycle is refused at the verdict (red_waits_on_of), and one found standing is offered again.
+RED_WAIT_CHAIN_MAX = 20
+
+
+def red_wait_cycle(store, own_key, other):
+    """The keys from `other` back to own_key when other waits (through its waits-on chain) on own_key, else None."""
+    chain, cur = [], other
+    while cur and len(chain) < RED_WAIT_CHAIN_MAX:
+        chain.append(cur)
+        o = red_of_key(store, cur)
+        f = ((o or {}).get("data") or {}).get("fix") or {}
+        if not o or o["state"] in RED_TERMINAL or f.get("status") != RED_WAITS_ON:
+            return None
+        cur = f.get("red")
+        if cur == own_key:
+            return chain
+        if cur in chain:
+            return None  # a cycle among others: theirs to break
+    return None
 
 
 def red_of_key(store, key):
@@ -2311,8 +2336,12 @@ def red_waits_on_step(store, it, f, repo, t):
             return [line]
     aside = set(od.get("refuted") or []) | set(od.get("unverified") or [])
     why = None
+    cycle = red_wait_cycle(store, d.get("key"), other)
     if not o:
         why = f"red {other}, whose fix {sha[:10]} it waited on, is gone"
+    elif cycle:
+        why = (f"red {other} waits on this red in turn ({' -> '.join(cycle + [str(d.get('key'))])}), a wait cycle neither "
+               f"side can end: land the fix here, or say why not")
     elif any(x.startswith(sha) or sha.startswith(x) for x in aside if x and sha):
         why = f"red {other} set aside the fix {sha[:10]} it waited on"
     elif o["state"] in RED_TERMINAL:

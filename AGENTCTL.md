@@ -95,7 +95,9 @@ moves it forward; nothing is a detached process that can die with its state in i
     `WAITS ON <sha> (red <key>): <why>` (or a NOT LANDED / GAVE UP naming `<sha> (... red <key>)`), the red goes to
     fix-pending with fix status `waits-on` -- never a failed decided action, never an owner item -- and the reconciler
     resolves it: the sha (or its copy, or that red's own landed fix) on main -> verified like any landed fix; the sha
-    set aside by that red, or that red closed without it -> offered again (e948278d144a, 2026-11-16). A fixer ending `LANDED <sha>` with the sha on main puts its red in fix-pending at
+    set aside by that red, or that red closed without it -> offered again (e948278d144a, 2026-11-16). A wait that
+    would close a CYCLE (that red waits, directly or down its chain, on this one) is no wait, and one found standing is
+    offered again: neither side could land first, and each one's holder being the other kept W2 quiet. A fixer ending `LANDED <sha>` with the sha on main puts its red in fix-pending at
     once, never offered again nor on the owner; an outside red's landed fix waits, quietly, for its workflow's next
     run up to `RED_FIX_NEXT_RUN` (30 h: a nightly), which verifies it (green) or refutes it (back to a fixer). An old outside red no fresh run
     can check (no `workflow_dispatch`, a refused dispatch, its file gone) is never retired: it is offered with an

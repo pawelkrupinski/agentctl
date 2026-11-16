@@ -679,6 +679,32 @@ class FixTest(RedsBase):
         self.assertEqual((it["state"], it["data"].get("fix")), ("offered", None))
         self.assertIn("closed", it["data"]["history"][-1]["outcome"])
 
+    def test_two_reds_waiting_on_each_others_fix_are_offered_again(self):
+        # A waits on B's commit while B waits on A's: neither can land first, and each one's holder is "the other red"
+        # (red_fix_held), so W2 never fires -- a state with no exit unless the reconciler sees the cycle.
+        _wt, sha = self.unlanded_commit()
+        self.tick()
+        mine = self.only()
+        self.st.put_item("red", "other", "fix-pending", {"key": "other", "workflow": "Main", "runs": ["2521"], "fix": {
+            "entry": None, "status": "waits-on", "sha": sha, "red": mine["data"]["key"], "at": self.t[0]}})
+        self.st.transition("red", mine["id"], "fix-pending", mine["version"], data={"fix": {
+            "entry": None, "status": "waits-on", "sha": sha, "red": "other", "at": self.t[0]}})
+        self.tick(advance=60)
+        it = self.st.item("red", mine["id"])
+        self.assertEqual((it["state"], it["data"].get("fix")), ("offered", None))
+        self.assertIn("waits on", it["data"]["history"][-1]["outcome"])
+        self.assertIn("cycle", it["data"]["history"][-1]["outcome"])
+
+    def test_a_waits_on_verdict_that_would_close_a_wait_cycle_is_no_wait(self):
+        self.tick()
+        mine = self.only()["data"]["key"]
+        self.st.put_item("red", "other", "fix-pending", {"key": "other", "workflow": "Main", "runs": ["2521"], "fix": {
+            "entry": None, "status": "waits-on", "sha": "a" * 40, "red": mine, "at": self.t[0]}})
+        self.assertIsNone(A.red_waits_on_of("WAITS ON bbbbbbbbbb (red other): its fix", mine, self.st))
+        self.st.put_item("red", "third", "leased", {"key": "third", "workflow": "Main", "runs": ["2522"]})
+        self.assertEqual(A.red_waits_on_of("WAITS ON bbbbbbbbbb (red third): its fix", mine, self.st),
+                         {"sha": "bbbbbbbbbb", "red": "third"})
+
     def test_refuted_fixes_are_counted_once_each(self):
         # 784badc4406e.3 stored the same two shas 593 times: "recurring: 593 fixes refuted", and a fixer brief that
         # would have listed all 593 as the landed fixes it outlived.
