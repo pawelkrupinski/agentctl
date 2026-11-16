@@ -89,7 +89,7 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
         task = (f"This worktree holds commits that are NOT on {remote()}/main, and the agent that wrote them has ended. Its last "
                 f"verdict: {str(u.get('line') or 'none')[:400]!r}. Make it land: `git fetch {remote()} && git rebase "
                 f"{remote()}/main` (never squash), fix what the checks reject (read the failing checks' output; never loosen a "
-                "test, never skip a check), then `~/bin/agentctl land --follow` in the foreground. If the change is wrong or "
+                "test, never skip a check), then `~/bin/agentctl land`. If the change is wrong or "
                 "already on main in another form, say so. End at `LANDED <sha>`, or `GAVE UP: <why>`.")
     elif u.get("lander"):  # THE LANDER REVIVED (blame.py): its change reverted, it fixes and re-lands it
         common = common.replace(f"(branch off {remote()}/main, already created)", "(yours)")
@@ -102,7 +102,7 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
                 "the failing process's stderr and exit status in the job log or its artifacts (e.g. Chrome's stderr, which "
                 "CdpDriver discards), a retry-free guard that names the cause. `~/bin/agentctl ci-why " + str(rid) + "` "
                 "explains the run. Never rerun to green, never loosen a test. Commit with a `Fixes-Red: " + str(num) + "` "
-                "trailer and land it with `~/bin/agentctl land` in the foreground. End at `LANDED <sha>`; if you cannot, "
+                "trailer and land it with `~/bin/agentctl land`. End at `LANDED <sha>`; if you cannot, "
                 "`GAVE UP: <why>`; if the fix needs the owner's decision (a design change the red rules do not let you "
                 "make), `DIAGNOSED: <cause>; decide: <the decision>` (the red waits on the owner with it); if it needs the owner, `~/bin/agentctl red block " + str(num) + " --owner-cause <kind> --cmd \"<command>\"` (only for a cause outside the code that only the owner can act on: never a code red) "
                 "and end `BLOCKED ON OWNER: <command>`.")
@@ -110,7 +110,7 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
         task = (f"The pre-push check `{u['job']}` FAILS ON PLAIN {remote()}/main {str(u['run'].get('headSha'))[:10]} (no "
                 f"change needed to see it; first failure line: {u.get('line', '')[:200]!r}). scripts/hooks/pre-push "
                 "documents each check; reproduce it in your worktree, root-cause and fix it (never loosen the check), "
-                "commit with a `Fixes-Red: local` trailer and land with `~/bin/agentctl land` in the foreground. End "
+                "commit with a `Fixes-Red: local` trailer and land with `~/bin/agentctl land`. End "
                 "at `LANDED <sha>`, or `GAVE UP: <why>`.")
     elif u["kind"] in ("infra", "unclear"):  # the group's primary: no test failure in the run at all
         task = (f"Red run {u['workflow']} #{num} (run id {rid}) failed in job `{u['job']}`, and ci-why calls it "
@@ -127,7 +127,7 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
                 + (f" with: {u['line'][:200]!r}" if u.get("line") else "") +
                 f". `~/bin/agentctl ci-why {rid}` explains it. Root-cause it (never rerun to green, never loosen a test "
                 "or a budget to pass), commit the fix with a `Fixes-Red: " + str(num) + "` trailer, and land it with "
-                "`~/bin/agentctl land` in the foreground. End at `LANDED <sha>`. If you cannot fix it, end with a line "
+                "`~/bin/agentctl land`. End at `LANDED <sha>`. If you cannot fix it, end with a line "
                 "`GAVE UP: <why>`; if it needs the owner, `~/bin/agentctl red block " + str(num) + " --owner-cause <kind> --cmd \"<command>\"` (only for a cause outside the code that only the owner can act on: never a code red) "
                 "and end `BLOCKED ON OWNER: <command>`.")
     if u.get("decision"):  # THE OWNER ANSWERED this red's question (`agentctl decide`): act on that answer
@@ -136,7 +136,7 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
                 f"{str(dec.get('answer'))[:600]!r}. Act on exactly that answer (it settles what the fixers could not "
                 "decide) and land the result. If acting on it fails (the land is NOT LANDED, a check rejects it, it "
                 "cannot be done), end `NOT LANDED: <why>` or `GAVE UP: <why>`: the owner is told at once. ") + task
-    task += WAITS_ON_BRIEF
+    task += WAITS_ON_BRIEF + LAND_BRIEF
     if red_owner_only(o_r):  # every task above says "land it": not in an owner-only repo
         task += red_owner_rules(o_r, num)
     if u.get("old_note"):
@@ -199,6 +199,14 @@ def fixer_env(o_r, num, wrapper_pid=None):
 WAITS_ON_BRIEF = (" If this red's fix is ANOTHER red's commit that is not on main yet, land nothing and end "
                   "`WAITS ON <sha> (red <its key>): <why>`: agentctl waits for that commit (or its rebased copy) to reach "
                   "main and verifies this red against the next run containing it -- never a NOT LANDED for such a hold.")
+# HOW A FIXER LANDS (2026-11-16, Main #2515: the fixer wrapped `agentctl land` in `timeout -s KILL` twice, then ran
+# scripts/hooks/pre-push itself; neither verdict came within its 180-min turn).
+LAND_BRIEF = (" `~/bin/agentctl land` QUEUES your fix like every change (red fixes go first, checked on the CI tier), runs "
+              "the 45-s fast precheck in the foreground -- a trailer or rule it refuses is your NOT LANDED at once: fix "
+              "it and land again -- then waits for the queue's verdict itself, bounded, and prints LANDED <sha> or NOT "
+              "LANDED: <why>. Run it with run_in_background=true and act on its last line. Never wrap it in `timeout` "
+              "(a kill leaves your change queued without you), and never run scripts/hooks/pre-push yourself: the "
+              "queue's checks are the landing checks.")
 FIXER_VERDICT = re.compile(r"^\W*(LANDED [0-9a-f]{7,40}|WAITS ON [0-9a-f]{7,40}.*|NOT LANDED\b.*|GAVE UP:.*|"
                            r"BLOCKED ON OWNER:.*|DIAGNOSED:.*)", re.M)
 

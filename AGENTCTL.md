@@ -134,7 +134,7 @@ moves it forward; nothing is a detached process that can die with its state in i
   is red), W2 every red has a holder, an offer, a fix on its way or an owner block, W5 the processor beats, W6 every
   escalation was notified, WN notifications get through (both terminal-notifier and the osascript fallback failing
   is ONE condition naming the fix: allow terminal-notifier in System Settings > Notifications; W6 defers to it), WM
-  maintain ran, WB nobody leaves uncommitted edits in ~/bin's own checkout for over 10 min
+  maintain ran, WR no red fix waits (none on `waiting`, none unlanded 40 min after it was queued), WB nobody leaves uncommitted edits in ~/bin's own checkout for over 10 min
   (it names the processes working there), W7 (phase 2, the sync role) the sync has projected every event older than
   5 min, W8 no change left the queue in the last hour (landed, rejected, superseded, cancelled) without an event
   addressed to its author's inbox (Store.transition completes every such event; the entry carries the item id, so
@@ -1067,7 +1067,13 @@ fixer record, and only without a Claude session by the fixer environment. Any ot
 
 ```
 agentctl land [--repo PATH] [--branch B] [--stash] [--keep-worktree] [--no-fast-precheck]   # movies: QUEUED <id> (<sha>): END YOUR TURN
-agentctl land --follow              # scripts and red fixers: the checks here, the push, then the watch, in-process
+agentctl land --follow              # scripts: the checks here, the push, then the watch, in-process
+# A red fixer's plain `land` QUEUES like every land (2026-11-16): the fast precheck in the foreground (its refusal is the
+# fixer's NOT LANDED in seconds), then a bounded wait for the queue's verdict (LANDED <sha> / NOT LANDED: <why>,
+# $AGENTCTL_FIXER_LAND_WAIT, 2 h). A RED FIX NEVER WAITS FOR GREEN: a change whose Fixes-Red: names a run of the open
+# gate red's episode takes the red-fix check tree (<clone>-wt-check-redfix) no ordinary change takes, goes before an open
+# batch, is never parked on `waiting` by a known red, and must_wait lets it go; the watchdog's WR escalates one that
+# is on `waiting`, or unlanded 40 min after it was queued ($AGENTCTL_WR_MAX).
 agentctl land status                # the changes with their states, the batch, the gate, the processor
 agentctl land cancel <id>           # drop a queued or waiting change (its executor is stopped)
 ```
@@ -1815,6 +1821,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `drift_stall` | `AGENTCTL_DRIFT_STALL` | `1800` | s with no output before the drift check is ended (no verdict: the batch goes on) |
 | `fetch_timeout` | `AGENTCTL_FETCH_TIMEOUT` | `180` | an unattended fetch's bound |
 | `fixer_claim_within` | `AGENTCTL_FIXER_CLAIM_WITHIN` | `600` | s a started session has to start its transcript / run `red claim` |
+| `fixer_land_wait` | `AGENTCTL_FIXER_LAND_WAIT` | `7200` | s a fixer's land waits for its queued change's verdict |
 | `fixer_land_watch` | `AGENTCTL_FIXER_LAND_WATCH` | `60` | - |
 | `fixer_unlanded_escalate` | `AGENTCTL_FIXER_UNLANDED_ESCALATE` | `5400` | - |
 | `fixer_unlanded_nudge` | `AGENTCTL_FIXER_UNLANDED_NUDGE` | `2700` | - |
@@ -1951,6 +1958,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `watch_timeout` | `AGENTCTL_WATCH_TIMEOUT` | `10800` | either run undecided by then: exit 2, could not tell |
 | `wb_max` | `AGENTCTL_WB_MAX` | `600` | - |
 | `wm_max` | `AGENTCTL_WM_MAX` | `2700` | maintain's last pass (launchd every 15 min) |
+| `wr_max` | `AGENTCTL_WR_MAX` | `2400` | a red fix still unlanded this long after it was queued ($AGENTCTL_WR_MAX; a CI-tier check ~17 min) |
 | `x` | `AGENTCTL_X` | `DEFAULT` | The knobs are what the code reads: each `env_num("AGENTCTL_X", DEFAULT)` and `os.environ.get("AGENTCTL_X", DEFAULT)` |
 
 <!-- end of the generated config reference -->

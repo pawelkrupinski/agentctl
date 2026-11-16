@@ -10,7 +10,8 @@
 # governor reports pressure (see "remote checks") -- then, under the landing lock: main green (or a change that may land
 # while red), the checked tip is pushed (`LANDED`, and a detached watch); main red, it joins `waiting` (`WAITING`). Main
 # moved meanwhile: rebased in the tree and checked again. Every verdict goes to the inbox with the agent's worktree.
-# `land --follow` keeps the old in-process land (checks, push, watch) for scripts and red fixers.
+# `land --follow` keeps the old in-process land (checks, push, watch) for scripts; a red fixer queues and waits
+# (fixer_land).
 QUEUE_POOL = 3          # check trees, so at most this many queued changes are checked at once ($AGENTCTL_CHECK_TREES)
 # A check the LAPTOP failed, not the change: sbt's server never came up or was lost, a script test cut off by its
 # time bound, a stall. Queued again after QUEUE_INFRA_DELAY, at most QUEUE_INFRA_RETRIES times, then judged as it is.
@@ -185,9 +186,9 @@ def queued_entries(d):
 
 
 def queue_mode(repo, a):
-    """Whether land queues (QUEUED, returning at once): a repo whose hook can check a change apart (movies), unless
-    --follow / --no-watch (scripts), a dispatched red fixer (its wrapper reads LANDED), or AGENTCTL_QUEUE=0."""
-    if getattr(a, "follow", False) or getattr(a, "no_watch", False) or in_fixer():
+    """Whether land queues: a repo whose hook can check a change apart (movies), unless --follow / --no-watch
+    (scripts) or AGENTCTL_QUEUE=0. A dispatched red fixer queues too (RED FIX LANDS THROUGH THE QUEUE, below)."""
+    if getattr(a, "follow", False) or getattr(a, "no_watch", False):
         return False
     return os.environ.get("AGENTCTL_QUEUE", "1") != "0" and batching(repo)
 
@@ -390,24 +391,81 @@ def cmd_land_precheck(a):
 
 
 def enqueue(repo, main_ref, sh, a):
-    """Rebase, squash guard, then the change becomes a queued entry: prints QUEUED and starts the processor."""
+    """Rebase, squash guard, then the change becomes a queued entry: prints QUEUED and starts the processor. A red
+    fixer's land then waits for the verdict (fixer_land)."""
     rc, head = sync(repo, main_ref, sh, getattr(a, "release_hold", False))
     if rc is not None:
         return rc
     d, _clone, _wt = waiting_state(repo)
+    fixer = in_fixer()
+    a.queued_id = None
+
+    def after_queued(eid):
+        a.queued_id = eid
+        if not fixer:
+            start_fast_precheck(repo, main_ref, head, eid, a)
     if host_role() == "sync":  # THE LAPTOP'S LAND NEEDS NO VAULT (see submit_to_server)
         with no_vault():
-            return submit_to_server(repo, d, change_fields(repo, main_ref, head, a),
-                                    after_queued=lambda eid: start_fast_precheck(repo, main_ref, head, eid, a))
-    fields = change_fields(repo, main_ref, head, a)
-    e, ahead = queue_change(d, fields)
-    submit_ref(repo, d, e)
-    print(f"QUEUED {e['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}): its checks run in the background; "
-          "LANDED / WAITING / NOT LANDED goes to `agentctl inbox`", flush=True)
-    start_fast_precheck(repo, main_ref, head, e["id"], a)
-    spawn_waiting_processor(repo)
-    offer_token(repo)
-    return 0
+            rc = submit_to_server(repo, d, change_fields(repo, main_ref, head, a), after_queued=after_queued)
+    else:
+        fields = change_fields(repo, main_ref, head, a)
+        e, ahead = queue_change(d, fields)
+        submit_ref(repo, d, e)
+        print(f"QUEUED {e['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}): its checks run in the "
+              "background; LANDED / WAITING / NOT LANDED goes to `agentctl inbox`", flush=True)
+        after_queued(e["id"])
+        spawn_waiting_processor(repo)
+        offer_token(repo)
+        rc = 0
+    if rc != 0 or not fixer or not a.queued_id:
+        return rc
+    return fixer_land(repo, main_ref, head, a.queued_id, a)
+
+
+# A RED FIX LANDS THROUGH THE QUEUE (2026-11-16, Main #2515: a fixer's land, in-process since the queue began, ran the
+# whole pre-push hook on the laptop -- its identitydrift step waited 75 min on the starved measure queue -- while its
+# fixer's own `timeout` killed it twice and its 180-min turn ran out; the queue's 45-s precheck would have refused the
+# missing Drift-Slice: trailer at once). A fixer's change is queued like every change -- the CI tier, red fixes first
+# -- and its land runs the fast precheck in the FOREGROUND (its refusal is the fixer's NOT LANDED in seconds), then
+# waits for the change's verdict, bounded: LANDED <sha> / NOT LANDED: <why>, the lines its wrapper reads.
+FIXER_LAND_WAIT = 2 * 3600  # s a fixer's land waits for its queued change's verdict ($AGENTCTL_FIXER_LAND_WAIT)
+FIXER_LAND_POLL = (15, 60)  # s: the await's backoff, first and cap
+
+
+def fixer_land(repo, main_ref, head, eid, a):
+    if not getattr(a, "no_fast_precheck", False) and os.access(os.path.join(repo, FAST_PRECHECK), os.X_OK):
+        base = git(repo, "rev-parse", main_ref).strip()
+        if cmd_land_precheck(argparse.Namespace(entry=eid, repo=repo, base=base, head=head)) == 1:
+            return 1  # its NOT LANDED (or PRECHECK REFUSED) line is the last printed
+    return await_queued(eid)
+
+
+def await_queued(eid, store=None):
+    """Block until queued change eid is decided (its store item; through a store blip, asked again), bounded by
+    FIXER_LAND_WAIT: LANDED <sha> (0), NOT LANDED: <why> (1), or NOT LANDED (still queued) (1)."""
+    t0, delays = time.time(), backoff(*FIXER_LAND_POLL)
+    bound = env_num("AGENTCTL_FIXER_LAND_WAIT", FIXER_LAND_WAIT)
+    state = "unread"
+    while True:
+        try:
+            it = (store or Store()).item("change", eid)
+        except StoreUnavailable as e:
+            it, state = None, f"the store did not answer ({str(e)[:80]})"
+        if it:
+            state, data = it["state"], it.get("data") or {}
+            if state == "landed":
+                sha = data.get("tip") or next(iter(data.get("landed_commits") or {}), "") or data.get("head")
+                print(f"LANDED {sha} (queued {eid})", flush=True)
+                return 0
+            if machine_state("change", state).terminal:
+                why = str(data.get("why") or f"{eid} {state}")
+                print(why if why.startswith("NOT LANDED") else f"NOT LANDED: {why}", flush=True)
+                return 1
+        if time.time() - t0 >= bound:
+            print(f"NOT LANDED (still queued): {eid} is {state} after {fmt_age(time.time() - t0)}; it stays queued as "
+                  "its red's fix (the red machine verifies it once it lands) -- `agentctl land status`", flush=True)
+            return 1
+        time.sleep(next(delays))
 
 
 # CHECK SLOTS AND A CHANGE'S CHECK ARE LEASES (design §6, §7.1; phase 1 step 4): `slot/check/<repo>/<i>` (one per
@@ -424,9 +482,23 @@ def tree_slot(d, i, max_hold=None):
                      env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL), max_hold or CHECK_LEASE_MAX)
 
 
-def check_tree_slot(repo, d):
-    """(index, LeaseHold) of a free check tree slot, or None when all QUEUE_POOL are busy."""
-    for i in range(1, int(env_num("AGENTCTL_CHECK_TREES", QUEUE_POOL)) + 1):
+# A RED FIX NEVER WAITS FOR GREEN (the owner, 2026-11-16: "Red fix should never wait for green build (obv)"): every
+# place a change can be held for main or for other changes exempts a change fixing an open gate red (red_fix): it takes
+# THE RED-FIX TREE no ordinary change may take (08:58-09:15Z: Main #2515's fix sat "queued for 15 min, waiting on a
+# check slot" behind three ordinary checks), it goes before an open batch, a known red never parks it on `waiting`,
+# must_wait lets it go (the hook's rule), and the watchdog's WR escalates one that waits anyway.
+RED_FIX_TREE = "redfix"  # <clone>-wt-check-redfix, under its own lease: only a red fix's checker takes it
+
+
+def red_fix(e, reds):
+    """Whether change entry e fixes an open gate red: a `Fixes-Red:` naming a run of the current episode."""
+    return bool(reds) and bool(set(map(str, e.get("fixes") or [])) & set(reds))
+
+
+def check_tree_slot(repo, d, fix=False):
+    """(index, LeaseHold) of a free check tree slot, or None when all QUEUE_POOL are busy; a red fix (fix) tries the
+    red-fix tree first."""
+    for i in ([RED_FIX_TREE] if fix else []) + list(range(1, int(env_num("AGENTCTL_CHECK_TREES", QUEUE_POOL)) + 1)):
         h = tree_slot(d, i)
         if h.acquire():
             return i, h
@@ -480,11 +552,19 @@ ENTRY_STATUS = {"queued": "queued", "checking": "checking", "checked": "checked"
 PUSH_ATTEMPTS_MAX = 3
 
 
+def change_item_fields(e):
+    """A change item's data at its creation, from its queue entry: where it is, its lander, and the reds it claims to
+    fix (`fixes`: the watchdog's WR reads them; a red fix never waits for green)."""
+    return {"worktree": e.get("worktree"), "head": e.get("head"), **lander_fields(e),
+            **({"fixes": sorted(e["fixes"])} if e.get("fixes") else {})}
+
+
 def set_change(d, e, to, data=None, event=None, store=None, **fields):
     """THE writer of a change's state: its item (transition + event) and its entry's status, together."""
     st = store or Store()
-    cur = st.put_item("change", e["id"], ENTRY_STATE.get(e.get("status"), "queued"),
-                      {"worktree": e.get("worktree"), "head": e.get("head"), **lander_fields(e)})
+    cur = st.put_item("change", e["id"], ENTRY_STATE.get(e.get("status"), "queued"), change_item_fields(e))
+    if fields.get("why"):  # a decided change's why, on its item: a fixer's land reads it there (await_queued)
+        data = {**(data or {}), "why": str(fields["why"])[:600]}
     try:
         if not machine_state("change", cur["state"]).terminal:
             st.transition("change", e["id"], to, cur["version"], data=data, event=event)
@@ -688,7 +768,7 @@ def check_entry(repo, eid):
         e = read_record(os.path.join(d, "entries", f"{eid}.json"))
         if not e or e.get("status") not in ("queued", "checking"):
             return 0
-        slot = check_tree_slot(repo, d)
+        slot = check_tree_slot(repo, d, fix=red_fix(e, gate_reds(repo)) if e.get("fixes") else False)
         if not slot:  # all trees busy: it stays queued, the tick starts it again when one frees
             return 0
         i, slot_h = slot
@@ -993,7 +1073,8 @@ def push_change(repo, d, e):
     return "busy"
 
 
-PUSH_TREE = "push"  # <clone>-wt-check-push, under its own lease; no checker ever takes it (check_tree_slot: 1..N)
+PUSH_TREE = "push"  # <clone>-wt-check-push, under its own lease; no checker ever takes it (check_tree_slot: 1..N,
+# and a red fix's RED_FIX_TREE)
 
 
 def _push_change(repo, d, e, i):
@@ -1048,7 +1129,7 @@ def _push_change(repo, d, e, i):
             e.pop("remote_run", None)
         commits = waiting_commits(tree, base, head)
         reds = gate_reds(repo) if waiting_supported(repo) else set()
-        kr = e.get("known_red")
+        kr = None if red_fix(e, reds) else e.get("known_red")  # a red fix failing only as main fails lands: no wait
         if kr or (reds and must_wait(repo, commits, reds)):
             why = (f"its checks failed only where {remote()}/main fails too ({keys_text(kr['keys'])}: "
                    f"{'; '.join(kr['where'])}): not held against it; it lands with the batch once main is green "
@@ -1129,8 +1210,7 @@ def tick_changes(repo, d, now_=None):
         reds = gate_reds(repo)
     except Exception:
         reds = set()
-    todo = sorted(queued_entries(d), key=lambda e: (0 if reds and set(e.get("fixes") or []) & reds else 1,
-                                                    0 if verifying(e, t) else 1, e["seq"]))
+    todo = sorted(queued_entries(d), key=lambda e: (0 if red_fix(e, reds) else 1, 0 if verifying(e, t) else 1, e["seq"]))
     newest = {}
     for e in sorted(todo, key=lambda e: e["seq"]):  # entries queued before re-queueing replaced: the newest one runs
         for k, older in list(newest.items()):
@@ -1140,20 +1220,20 @@ def tick_changes(repo, d, now_=None):
         newest[e["id"]] = e
     did = []
     for e in [e for e in todo if e["id"] in newest]:
-        it = st.put_item("change", e["id"], ENTRY_STATE.get(e["status"], "queued"),
-                         {"worktree": e.get("worktree"), "head": e.get("head"), **lander_fields(e)})
+        it = st.put_item("change", e["id"], ENTRY_STATE.get(e["status"], "queued"), change_item_fields(e))
         state = it["state"]
         if state == "pushing":  # a tick that died mid-push: verified next, never pushed twice blindly
             set_change(d, e, "checked", event={"text": f"{e['id']}: its push was interrupted: verified, then tried again"})
             state = "checked"
+        fix = red_fix(e, reds)
         if state == "checked":
             if e.get("retry_after", 0) > t:
                 continue
-            first = batch_goes_first(st, d)
+            first = None if fix else batch_goes_first(st, d)  # a red fix goes before the batch
             if first:  # a solo push now moves main under the batch, and its whole check is thrown away
                 did += behind_batch(e, first, "push")
                 continue
-            older = None if reds and set(e.get("fixes") or []) & reds else older_verifying(todo, e, t)
+            older = None if fix else older_verifying(todo, e, t)
             if older:
                 did.append(f"{e['id']}: its push waits for {older['id']}'s combined-tree verification")
                 continue
@@ -1171,11 +1251,11 @@ def tick_changes(repo, d, now_=None):
                                  "audience": {"worktree": e.get("worktree")}})
         if alive or e.get("retry_after", 0) > t:
             continue
-        first = batch_goes_first(st, d, ("assembling", "pushing"))
+        first = None if fix else batch_goes_first(st, d, ("assembling", "pushing"))
         if first:  # the next free check tree is the batch's: to assemble it, or to push from its own tree
             did += behind_batch(e, first, "check")
             continue
-        slot = check_tree_slot(repo, d)
+        slot = check_tree_slot(repo, d, fix=fix)
         if not slot:
             continue
         slot[1].release()  # the executor takes it again itself

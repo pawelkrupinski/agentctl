@@ -15,6 +15,7 @@ W6_MAX = 5 * 60         # a due escalation not notified
 W8_WINDOW = 3600         # W8 looks at the change items that closed within this ($AGENTCTL_W8_WINDOW)
 W7_MAX = 5 * 60         # phase 2: an event ci-runner wrote that the laptop's sync has not projected (60x its 5 s tick)
 WM_MAX = 45 * 60        # maintain's last pass (launchd every 15 min)
+WR_MAX = 40 * 60        # a red fix still unlanded this long after it was queued ($AGENTCTL_WR_MAX; a CI-tier check ~17 min)
 WATCHDOG_KICK_GAP = 600
 WATCHDOG_SLEEP_GAP = 180  # s since the watchdog's own last pass (launchd: every 60 s) that mean the laptop slept
 KICK_HANDOFF_WAIT = 30    # s a kick waits for launchd's new processor to listen before handing it the token
@@ -70,6 +71,50 @@ def inv_w1():
     return ok, f"oldest unlanded change {oldest['id']} ({oldest['state']}: " + \
         ("STRANDED, no queue entry carries it" if stranded else why) + f") is {fmt_age(age)} old" + \
         (f", main red for {fmt_age(red_since)}" if red_since else "")
+
+
+def snap_reds(snap):
+    """The names (numbers and ids) of the gate's red runs on main in a CI snapshot: each red gate workflow's newest
+    decided run and the failed runs of its streak since its last green; None when there is no snapshot (unread)."""
+    if not snap:
+        return None
+    out = set()
+    for g in snap.get("gate") or []:
+        d = g.get("decided") or {}
+        if not d or d.get("conclusion") == "success":
+            continue
+        out |= {str(d.get("number")), str(d.get("databaseId"))}
+        for r in g.get("runs") or []:
+            if r.get("conclusion") == "success":
+                break
+            if r.get("conclusion") in ("failure", "timed_out"):
+                out |= {str(r.get("number")), str(r.get("databaseId"))}
+    return out - {"None"}
+
+
+def inv_wr(store=None, reds=None, now_=None):
+    """WR: A RED FIX NEVER WAITS FOR GREEN (the owner, 2026-11-16). No open change claiming a fix of an open gate red
+    (its item's `fixes`) is on `waiting`, and none is still unlanded WR_MAX after it was submitted."""
+    if reds is None:
+        reds = snap_reds(ci_state_load(SHORT["movies"]))
+    if not reds:
+        return True, "main green (or its gate unread): no red fix to hold"
+    t = now_ if now_ is not None else time.time()
+    lim = env_num("AGENTCTL_WR_MAX", WR_MAX)
+    bad = []
+    for it in (store or Store()).items("change"):
+        data = it.get("data") or {}
+        if machine_state("change", it["state"]).terminal or not set(map(str, data.get("fixes") or [])) & reds:
+            continue
+        age = t - float(data.get("submitted_at") or it.get("entered_at") or t)
+        if it["state"] == "waiting":
+            bad.append(f"{it['id']} (Fixes-Red: {', '.join(data['fixes'])}) is waiting for main to turn green")
+        elif age > lim:
+            bad.append(f"{it['id']} (Fixes-Red: {', '.join(data['fixes'])}) is {it['state']} {fmt_age(age)} after it "
+                       "was queued")
+    if not bad:
+        return True, "no red fix waits"
+    return False, "a red fix waits: " + "; ".join(bad[:3]) + " -- `agentctl land status`, `agentctl ci-why`"
 
 
 def red_fix_held(it, t, facts=None):
@@ -299,7 +344,7 @@ def inv_wb():
 
 WATCHDOG_MISSES = 2  # consecutive passes a self-healing invariant (W5, WM, W7) fails before its condition opens
 
-INVARIANTS = {"WB": inv_wb, "W1": inv_w1, "W2": inv_w2, "W5": inv_w5, "W6": inv_w6, "W7": inv_w7, "W8": inv_w8, "WM": inv_wm,
+INVARIANTS = {"WB": inv_wb, "W1": inv_w1, "WR": inv_wr, "W2": inv_w2, "W5": inv_w5, "W6": inv_w6, "W7": inv_w7, "W8": inv_w8, "WM": inv_wm,
               "WN": inv_wn}
 
 

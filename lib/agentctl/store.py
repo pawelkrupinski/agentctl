@@ -613,7 +613,7 @@ def project_changes(d, store=None):
             state = ENTRY_STATE.get((w or {}).get("status"), "landed" if not w else "waiting")
         if not state:
             continue
-        cur = st.put_item("change", e["id"], state, {"worktree": e.get("worktree"), "head": e.get("head"), **lander_fields(e),
+        cur = st.put_item("change", e["id"], state, {**change_item_fields(e),
                                                      "submitted_at": st.clock(),
                                                      "red_accum0": float(st.meta_get("red_accum", 0) or 0)})
         if cur["state"] != state and not machine_state("change", cur["state"]).terminal:
