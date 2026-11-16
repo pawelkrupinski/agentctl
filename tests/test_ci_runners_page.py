@@ -141,6 +141,10 @@ def gh_world(now):
             job(5, "leg", "queued", ["ubuntu-22.04"])]},
         **{f"repos/pawelkrupinski/{n}/actions/runs?per_page=40": {"workflow_runs": []}
            for n in ("agentctl", "recommend", "movies-gitops")},
+        # every repo's live runs by status (an older live run is not among the 40 newest)
+        **{f"repos/{o_r}/actions/runs?status={st}&per_page=100&page=1": {"workflow_runs": []}
+           for o_r in ("bitcashier/core", "pawelkrupinski/movies", "pawelkrupinski/agentctl",
+                       "pawelkrupinski/recommend", "pawelkrupinski/movies-gitops") for st in P.LIVE_STATUSES},
     }
 
 
@@ -174,6 +178,33 @@ class DataTest(unittest.TestCase):
         self.assertNotIn("repos/bitcashier/old/actions/runs?per_page=40", asked, "a repo idle 60 days is not watched")
         self.assertNotIn("repos/bitcashier/gone/actions/runs?per_page=40", asked, "nor an archived one")
         self.assertNotIn("repos/bitcashier/core/actions/runs/10/jobs?per_page=100", asked, "nor a finished run's jobs")
+
+    def test_a_queued_job_of_a_run_older_than_the_newest_40_is_counted(self):
+        # 2026-11-16: Identity takes 43816825023 queued six drift rows for an hour while the page read 0 waiting --
+        # forty newer movies runs had pushed it off `runs?per_page=40`
+        world = gh_world(T)
+        older = {"id": 7, "run_number": 300, "name": "Identity takes", "status": "queued", "head_branch": "measure/x",
+                 "head_sha": "1234567abcdef", "html_url": "https://github.com/pawelkrupinski/movies/actions/runs/7"}
+        page = [dict(older, id=1000 + n) for n in range(100)]  # a full first page: the listing goes on to page 2
+        world["repos/pawelkrupinski/movies/actions/runs?status=queued&per_page=100&page=1"] = {"workflow_runs": page}
+        world["repos/pawelkrupinski/movies/actions/runs?status=queued&per_page=100&page=2"] = {"workflow_runs": [older]}
+        for n in range(100):
+            world[f"repos/pawelkrupinski/movies/actions/runs/{1000 + n}/jobs?per_page=100"] = {"jobs": []}
+        world["repos/pawelkrupinski/movies/actions/runs/7/jobs?per_page=100"] = {"jobs": [
+            {"id": 70, "name": "leg (germany) / takes-drift-1 (germany)", "status": "queued", "labels": ["movies-measure"],
+             "runner_name": "", "created_at": iso(T - 3600), "html_url": "https://github.com/x/y/actions/runs/7/job/70"}]}
+        # a live run among the newest 40 that the status listing also names is counted once
+        world["repos/pawelkrupinski/movies/actions/runs?status=in_progress&per_page=100&page=1"] = {"workflow_runs": [
+            {"id": 21, "run_number": 900, "name": "Tests", "status": "in_progress", "head_branch": "main",
+             "head_sha": "abcdef1234567", "html_url": "https://github.com/pawelkrupinski/movies/actions/runs/21"}]}
+        clock = Clock()
+        gh = P.GitHub(raw=FakeGitHub(world), clock=clock, sleep=clock.sleep)
+        _, jobs, errors = P.collect(gh, T, set())
+        self.assertEqual(errors, [])
+        movies = sorted(j["job"] for j in jobs if j["repo"] == "pawelkrupinski/movies")
+        self.assertEqual(movies, ["gates", "leg", "leg (germany) / takes-drift-1 (germany)"])
+        [drift] = [j for j in jobs if j["run_id"] == 7]
+        self.assertEqual((drift["status"], drift["secs"]), ("queued", 3600))
 
     def test_one_failing_repo_is_its_own_line(self):
         clock = Clock()

@@ -28,6 +28,9 @@ HOSTED_REPOS = ("movies", "agentctl", "recommend", "movies-gitops")
 HOSTED_LIMIT = 20  # GitHub's concurrent hosted-runner jobs per account (Free plan: 20)
 REPO_RECENT = 14 * 86400
 ACTIVE = {"queued", "in_progress", "waiting", "requested", "pending"}
+# The run statuses asked for by name, every page: a live run older than the newest 40 is still live (2026-11-16: an
+# Identity takes run's six queued drift rows read as 0 waiting for an hour, forty newer movies runs past it).
+LIVE_STATUSES = ("queued", "in_progress")
 EVERY = 15  # seconds between polls (and each answer's cache age)
 IDLE_AGE = 60  # a repo with no run in progress is re-asked at most this often
 MIN_GAP = 1.0  # seconds between two GitHub requests
@@ -147,6 +150,18 @@ def job_row(o_r, run, j, now):
             "url": j.get("html_url") or run.get("html_url") or "", "secs": max(0, int(now - start)) if start else 0}
 
 
+def runs_by_status(gh, o_r, status, age):
+    """Every run of `o_r` GitHub lists under `status`, page after page while a page is full."""
+    out, page = [], 1
+    while True:
+        got = (gh.get(f"repos/{o_r}/actions/runs?status={status}&per_page=100&page={page}", age) or {}).get(
+            "workflow_runs") or []
+        out += got
+        if len(got) < 100:
+            return out
+        page += 1
+
+
 def collect(gh, now, active_repos):
     """(runners, active job rows, errors) from GitHub. One repo's failure is that repo's line in errors, never a blank
     page. active_repos (mutated): the repos whose last listing had a run in progress, re-asked every EVERY s."""
@@ -154,9 +169,13 @@ def collect(gh, now, active_repos):
     jobs, errors = [], []
     for o_r in watched_repos(gh, now):
         try:
-            runs = (gh.get(f"repos/{o_r}/actions/runs?per_page=40", EVERY if o_r in active_repos else IDLE_AGE)
-                    or {}).get("workflow_runs") or []
-            live = [r for r in runs if r.get("status") in ACTIVE]
+            age = EVERY if o_r in active_repos else IDLE_AGE
+            runs = (gh.get(f"repos/{o_r}/actions/runs?per_page=40", age) or {}).get("workflow_runs") or []
+            live = {r["id"]: r for r in runs if r.get("status") in ACTIVE}
+            for status in LIVE_STATUSES:
+                for r in runs_by_status(gh, o_r, status, age):
+                    live.setdefault(r["id"], r)
+            live = list(live.values())
             (active_repos.add if live else active_repos.discard)(o_r)
             for r in live:
                 for j in (gh.get(f"repos/{o_r}/actions/runs/{r['id']}/jobs?per_page=100") or {}).get("jobs") or []:
