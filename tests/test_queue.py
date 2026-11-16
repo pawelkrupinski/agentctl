@@ -408,6 +408,44 @@ class QueueTest(WaitingTest):
     def test_a_change_to_the_hook_rechecks(self):
         hook = open(os.path.join(self.r.path, "scripts/hooks/pre-push")).read()
         self.rechecked_when_landing("scripts/hooks/pre-push", hook + "# a change to the hook\n")
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--range"], "a full round, not a verification")
+
+    def test_a_change_to_the_lint_registry_rechecks(self):
+        """It steers which specs the check runs: still a full trigger (the owner, 2026-11-16)."""
+        self.rechecked_when_landing("scripts/hooks/lint-registry.tsv", "# a row\n")
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--range"])
+
+    def test_only_the_hooks_own_self_tests_landing_meanwhile_get_the_verify_round(self):
+        """The owner, 2026-11-16: the hook's self-tests never steer the landing check, so they force no full round."""
+        wt, _ = self.agent("a", "docs/A.md", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        rounds = self.moves_once(("scripts/hooks/pre-push-test.sh", "# t\n"),
+                                 ("scripts/hooks/pre-push-test-lib.sh", "# l\n"),
+                                 ("scripts/hooks/lint-registry-test.sh", "# r\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual(len(rounds), 2)
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--verify-only"])
+        self.assertIn("no file overlap, the combined tree verified", self.landed_verdict())
+
+    def test_a_self_test_landing_beside_a_hook_change_still_rechecks(self):
+        wt, _ = self.agent("a", "docs/A.md", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("scripts/hooks/pre-commit-test.sh", "# t\n"), ("scripts/hooks/local-tests.txt", "basic x\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--range"])
+        self.assertNotIn("without re-check", self.landed_verdict())
+
+    def test_which_paths_force_a_full_round(self):
+        full = ["scripts/hooks/pre-push", "scripts/hooks/pre-commit", "scripts/hooks/local-tests.txt",
+                "scripts/hooks/lint-registry.tsv", "scripts/hooks/lint-registry-missing", "build.sbt",
+                "project/plugins.sbt", "scripts/hooks-path.sh", "scripts/tool-conventions.sh",
+                "scripts/ci/precommit-share.sh"]
+        not_full = ["scripts/hooks/pre-push-test.sh", "scripts/hooks/pre-push-test-lib.sh",
+                    "scripts/hooks/pre-push-gate-test.sh", "scripts/hooks/pre-commit-test.sh",
+                    "scripts/hooks/lint-registry-test.sh", "scripts/hooks/plan_test.py",
+                    "scripts/ci/precommit-share-test.sh", "worker/src/main/W.scala"]
+        self.assertEqual([p for p in full if not A.forces_full_recheck(p)], [])
+        self.assertEqual([p for p in not_full if A.forces_full_recheck(p)], [])
 
     def test_a_conflict_with_the_moved_main_is_not_landed(self):
         wt, _ = self.agent("a", "web/src/main/Shared.scala", "mine\n")

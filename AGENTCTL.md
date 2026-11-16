@@ -1124,14 +1124,16 @@ The reconciler then takes it, a step per tick:
 - **checked → pushing → landed.** Under the `land/<repo>` lease the tick re-reads the item (a superseded one is never
   pushed). Main moved since the check: rebased onto it, FULLY re-checked (a new round) ONLY when what landed since
   the change's last FULL check overlaps BY FILE (the owner, 2026-11-16; module granularity looped changes 3-4 full
-  rounds) -- build.sbt / project/ / the hook landed, a path both change, or a path one side deletes (a rename's old
+  rounds) -- build.sbt / project/ / the hook (anything under scripts/hooks/ but its own self-tests, `*-test.sh`,
+  `*-test-lib.sh`, `*_test.py`, which steer no check: the owner, 2026-11-16) / scripts/ci/precommit-share.sh landed,
+  a path both change, or a path one side deletes (a rename's old
   path too) whose file name a file the other side changes names -- else not re-checked in full, but ALWAYS VERIFIED:
   a round of `--verify-only <full base>..<tip>` on a `check/verify-<full base>-<id>` branch (every test config
   compiled, the lint and fast specs, the unit tests of every module either side touches), judged again by the
   checker on the main it starts on, then pushed (`checked ...; main moved since its full check on <sha>: no file
   overlap, the combined tree verified`; the push's hook judges the red gate only). A hook without `--verify-only`
   gets the full round. Code: queue.py `recheck_reason` (THE RULE), `_push_change`, `_check_entry`; tests:
-  `tests/test_queue.py` (`*verif*`, `*deleted_file*`).
+  `tests/test_queue.py` (`*verif*`, `*deleted_file*`, `*rechecks`, `*full_round`).
   THE OLDEST VERIFICATION PUSHES FIRST (2026-11-16: workermem verified four times, each on a main a younger change
   had pushed onto meanwhile): while a change's verification round is queued or checking (not in an infra backoff),
   every younger checked change holds its push (`its push waits for <id>'s combined-tree verification`; a red's fix

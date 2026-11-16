@@ -96,7 +96,10 @@ def probe_infra_requeue(a):
 # third time). FILE GRANULARITY (the owner, 2026-11-16, "but always recompile and unit test": at module granularity
 # nearly every change shared worker or scrapers with what landed, and changes looped 3-4 full rounds of 15-20 min, some
 # over two test files in worker/src/test). THE RULE, judged against the base of the change's last FULL check:
-#   - what landed changes the build or the hook (RECHECK_ALWAYS), or
+#   - what landed changes the build or the hook (RECHECK_ALWAYS, scripts/ci/precommit-share.sh included: it picks what
+#     each CI share of the check runs) -- but not the hook's own self-tests (HOOK_SELF_TEST: scripts/hooks/*-test.sh,
+#     *-test-lib.sh, *_test.py; the owner, 2026-11-16): no landing check runs one but by its `scripttests` check, for
+#     a change selecting it, like any script's test, so they get the verification round below -- or
 #   - a path both sides change (added, modified or deleted; a rename counts as both of its paths), or
 #   - a path one side deletes (a rename's old path included) whose file name a file the other side changes names
 #     (`git grep -F <basename>` over those files at the rebased tip: a script, fixture or test reading it by name; a
@@ -106,7 +109,9 @@ def probe_infra_requeue(a):
 # config compiled, the lint and fast specs, and the unit tests of every module either side touches -- then pushed with
 # the change's own checks skipped at the push (PREPUSH_SKIP: the hook's plan for its paths; the red gate still runs).
 # A hook without --verify-only gets the full round, as before the rule. A rebase conflict is NOT LANDED, as ever.
-RECHECK_ALWAYS = re.compile(r"^(build\.sbt|project/.*|scripts/hooks/.*|scripts/hooks-path\.sh|scripts/tool-conventions\.sh)$")
+RECHECK_ALWAYS = re.compile(r"^(build\.sbt|project/.*|scripts/hooks/.*|scripts/hooks-path\.sh|scripts/tool-conventions\.sh"
+                            r"|scripts/ci/precommit-share\.sh)$")
+HOOK_SELF_TEST = re.compile(r"^scripts/hooks/[^/]+(-test\.sh|-test-lib\.sh|_test\.py)$")
 VERIFY_MODE = "--verify-only"
 
 
@@ -148,12 +153,17 @@ def named_deletions(tree, tip, deleted, readers):
     return None
 
 
+def forces_full_recheck(path):
+    """Whether a path landing meanwhile forces a FULL re-check whatever the change touches (THE RULE's first clause)."""
+    return bool(RECHECK_ALWAYS.match(path)) and not HOOK_SELF_TEST.match(path)
+
+
 def recheck_reason(tree, base, moved, tip, change_paths):
     """(commits main moved by, why the change must be FULLY checked again or None) -- THE RULE above, of what landed in
     base..moved against the change's paths (moved..tip, the rebased change)."""
     n = len(git(tree, "rev-list", f"{base}..{moved}", check=False).stdout.split())
     landed_paths = range_paths(tree, base, moved)
-    build = sorted(p for p in landed_paths if RECHECK_ALWAYS.match(p))
+    build = sorted(p for p in landed_paths if forces_full_recheck(p))
     if build:
         return n, f"they change {build[0]}"
     same = sorted(set(landed_paths) & set(change_paths))
