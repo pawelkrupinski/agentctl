@@ -14,7 +14,9 @@ No test depends on the machine it runs on (docs/simplification-2026-10.md, Agent
   `A.subprocess.run = ...`), never the stdlib modules, so no real subprocess ever waits under a faked clock (82fdc89).
   Every test starts and ends with fresh proxies in every agentctl module (a forgotten restore cannot leak into the next
   test), and a test that leaves the stdlib's time or subprocess patched fails. agentctl's process-wide flags
-  (_IN_PROCESSOR, the token cache) are reset per test too: a leaked processor flag failed test_token at random."""
+  (_IN_PROCESSOR, the token cache) are reset per test too: a leaked processor flag failed test_token at random.
+- ONE ENVIRONMENT: every test ends with os.environ as it found it, and a test that changed a token variable
+  ($GH_TOKEN, $AGENTCTL_STORE_TOKEN, any *_TOKEN) fails, naming it."""
 import os, shutil, signal, subprocess, sys, tempfile, threading, time, types, unittest
 
 REAL_HOME = os.path.expanduser("~")
@@ -139,8 +141,24 @@ def _alarm(signum, frame):
 _real_run = unittest.TestCase.run
 
 
+TOKEN_KEYS = ("GH_TOKEN", "GITHUB_TOKEN", "AGENTCTL_STORE_TOKEN")
+
+
+def _restore_environment(before):
+    """Put os.environ back as the test found it; the token variables it changed (a token one test leaves set is the
+    next test's credential: 2026-11-16, test_token's served drop wrote $AGENTCTL_STORE_TOKEN after its tearDown and
+    test_forge, next in the worker, read it)."""
+    after = dict(os.environ)
+    leaked = sorted(k for k in set(before) | set(after)
+                    if before.get(k) != after.get(k) and (k in TOKEN_KEYS or k.endswith("_TOKEN")))
+    os.environ.clear()
+    os.environ.update(before)
+    return leaked
+
+
 def _run(self, result=None):
     main = threading.current_thread() is threading.main_thread()
+    env_before = dict(os.environ)
     _fresh_proxies()
     _reset_process_state()
     if main:
@@ -153,6 +171,13 @@ def _run(self, result=None):
             signal.alarm(0)
             signal.signal(signal.SIGALRM, prev)
     _fresh_proxies()  # a fake the test did not restore ends with it
+    leaked = _restore_environment(env_before)  # every test ends with the environment it started with
+    if leaked and result is not None:
+        try:
+            raise AssertionError(f"the test left {', '.join(leaked)} changed in os.environ (restored now): restore "
+                                 f"what it sets, and close a served token drop before restoring")
+        except AssertionError:
+            result.addFailure(self, sys.exc_info())
     bad = _stdlib_patched()
     if bad and result is not None:
         try:

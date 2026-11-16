@@ -29,6 +29,7 @@ class TokenResolutionTest(Base):
         os.environ["AGENTCTL_INTERACTIVE"] = "1"  # the test runner is not a tty
 
     def tearDown(self):
+        self.doCleanups()  # the served drop closes first: a hand-off it took must land before the environment is restored
         A.SECRETS_FALLBACKS = self.saved_fb
         A._tokens.clear()
         A._tokens.update(self.saved_cache)

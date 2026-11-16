@@ -334,7 +334,7 @@ class TokenDrop:
     """The processor's end of the hand-off."""
 
     def __init__(self, d, o_r):
-        self.path, self.o_r, self.sock = token_sock_path(d), o_r, None
+        self.path, self.o_r, self.sock, self.thread = token_sock_path(d), o_r, None, None
 
     def open(self):
         import socket
@@ -352,7 +352,8 @@ class TokenDrop:
             s.listen(4)
             self.sock = s
             import threading  # served on a thread of its own: no step of the main loop can leave a client waiting
-            threading.Thread(target=self.serve, name="token-socket", daemon=True).start()
+            self.thread = threading.Thread(target=self.serve, name="token-socket", daemon=True)
+            self.thread.start()
         except OSError as e:
             err(f"no token hand-off socket ({e}): the processor reads the vault itself")
         return self
@@ -400,6 +401,9 @@ class TokenDrop:
                 token_back(token_ns(self.o_r))
 
     def close(self):
+        """Stop serving, and wait for a hand-off already taken to finish: once close returns, no token lands in this
+        process's environment (2026-11-16: a test's drop wrote $AGENTCTL_STORE_TOKEN after its tearDown had restored
+        the environment, and test_forge, next in the same worker, saw that token)."""
         if self.sock:
             sock, self.sock = self.sock, None
             sock.close()
@@ -407,6 +411,10 @@ class TokenDrop:
                 os.unlink(self.path)
             except OSError:
                 pass
+        import threading  # the part's own import, as in open()
+        thread, self.thread = self.thread, None
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(5)
 
 
 def offer_token(repo):
