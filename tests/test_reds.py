@@ -630,6 +630,55 @@ class FixTest(RedsBase):
         self.assertEqual((it["state"], it["data"].get("fix")), ("offered", None))
         self.assertIn("landed before", it["data"]["history"][-1]["outcome"])
 
+    def waits_on(self, sha, other="other", other_state="leased", other_data=None):
+        """The red fix-pending on red `other`'s commit sha (e948278d144a on e1be6bd9fd46's 715ab5a1a)."""
+        self.tick()
+        self.st.put_item("red", other, other_state, {"key": other, "workflow": "Main", "runs": ["2521"],
+                                                     **(other_data or {})})
+        it = self.only() if other_state in A.RED_TERMINAL else next(
+            i for i in self.st.items("red") if i["id"] != other and i["state"] not in A.RED_TERMINAL)
+        self.st.transition("red", it["id"], "fix-pending", it["version"], data={"fix": {
+            "entry": None, "status": "waits-on", "sha": sha, "red": other, "at": self.t[0]}})
+        return it["id"]
+
+    def test_a_red_waiting_on_another_reds_fix_waits_while_it_is_not_on_main(self):
+        _wt, sha = self.unlanded_commit()
+        iid = self.waits_on(sha)
+        self.tick(advance=A.RED_FIX_GIVEUP + 60)
+        it = self.st.item("red", iid)
+        self.assertEqual((it["state"], it["data"]["fix"]["status"]), ("fix-pending", "waits-on"))
+        self.assertNotIn(iid, [i["id"] for i in self.unheld()])
+
+    def test_a_red_waiting_on_another_reds_fix_verifies_it_once_it_lands(self):
+        wt, sha = self.unlanded_commit()
+        iid = self.waits_on(sha)
+        lw = self.r.worktree("repo-wt-landed", base="origin/main", branch="repo-wt-landed")
+        self.r.write("other.txt", "main moved meanwhile\n", at=lw)
+        self.r.commit("an unrelated commit under the landed copy", at=lw)
+        subprocess.run(["git", "-C", lw, "cherry-pick", sha], check=True, capture_output=True)
+        landed = subprocess.run(["git", "-C", lw, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        self.r.push(at=lw, ref=f"{landed}:main")
+        self.tick(advance=60)
+        it = self.st.item("red", iid)
+        self.assertEqual((it["state"], it["data"]["fix"]["status"], it["data"]["fix"]["sha"]),
+                         ("fix-pending", "landed", landed))
+
+    def test_a_red_waiting_on_a_fix_its_red_set_aside_is_offered_again(self):
+        _wt, sha = self.unlanded_commit()
+        iid = self.waits_on(sha, other_state="offered", other_data={"refuted": [sha]})
+        self.tick(advance=60)
+        it = self.st.item("red", iid)
+        self.assertEqual((it["state"], it["data"].get("fix")), ("offered", None))
+        self.assertIn("set aside", it["data"]["history"][-1]["outcome"])
+
+    def test_a_red_waiting_on_a_red_closed_without_the_fix_is_offered_again(self):
+        _wt, sha = self.unlanded_commit()
+        iid = self.waits_on(sha, other_state="cleared")
+        self.tick(advance=60)
+        it = self.st.item("red", iid)
+        self.assertEqual((it["state"], it["data"].get("fix")), ("offered", None))
+        self.assertIn("closed", it["data"]["history"][-1]["outcome"])
+
     def test_refuted_fixes_are_counted_once_each(self):
         # 784badc4406e.3 stored the same two shas 593 times: "recurring: 593 fixes refuted", and a fixer brief that
         # would have listed all 593 as the landed fixes it outlived.

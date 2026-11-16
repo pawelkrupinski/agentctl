@@ -299,6 +299,33 @@ class DecideTest(AskBase):
         it, _acts = self.launch(it, outcome="LANDED abc1234def")
         self.assertNotEqual(it["state"], "blocked-external")
 
+    def test_a_hold_on_another_reds_fix_is_no_failed_action_and_waits_on_it(self):
+        # 2026-11-16, Order independence #78 (e948278d144a): the owner answered "hold until 715ab5a1a is on main" (the
+        # main-tests fixer's fix for red e1be6bd9fd46); the fixer held as decided, and its "NOT LANDED: holding ..."
+        # came back to the owner twice as a fresh WAITING ON YOU (ev10700, ev10709).
+        self.red(key="other", workflow="Main", runs=["2521"], last_run={"number": 2521, "databaseId": 92521})
+        it = self.decision_blocked()
+        A.red_decide(self.st, O_R, "k", "hold until 715ab5a1a is on main, then verify")
+        it = A.red_offer(self.st, self.st.item("red", it["id"]), "offered again")
+        n0 = len(self.events())
+        it, _acts = self.launch(it, outcome="NOT LANDED: holding on Identity model convergence #2375 as you decided; "
+                                             "its fix 715ab5a1a (main-tests fixer, red other) is not on main yet")
+        self.assertEqual(it["state"], "fix-pending")
+        self.assertEqual({k: it["data"]["fix"].get(k) for k in ("status", "sha", "red")},
+                         {"status": "waits-on", "sha": "715ab5a1a", "red": "other"})
+        self.assertNotEqual(it["data"]["decision"]["status"], "failed")
+        self.assertIsNone(A.red_block_of(it, self.st))
+        self.assertEqual(len(self.events()) - n0, 0, "no owner item")
+        self.assertIn("waits on red other's fix 715ab5a1a", self.view(it)[1])
+
+    def test_the_waits_on_verdict_names_its_sha_and_red(self):
+        self.red(key="other", workflow="Main")
+        it = self.red(key="k2")
+        it, _acts = self.launch(it, outcome="WAITS ON 715ab5a1a (red other): its fix is the main-tests fixer's")
+        self.assertEqual((it["state"], it["data"]["fix"]["status"], it["data"]["fix"]["red"]),
+                         ("fix-pending", "waits-on", "other"))
+        self.assertEqual(A.fixer_verdict("work...\nWAITS ON 715ab5a1a (red other): held"), "WAITS ON 715ab5a1a (red other): held")
+
     def test_no_red_escalate_while_the_owners_decision_is_acted_on(self):
         it = self.red(key="deep", tier="deep", attempts=50)
         self.st.update_item("red", it["id"], it["version"], {"decision": {"answer": "a", "status": "in-progress"}})

@@ -88,7 +88,14 @@ moves it forward; nothing is a detached process that can die with its state in i
     linked goes to fix-pending with its owner block lifted and its question withdrawn. Every candidate fix is judged in
     turn (queue entries, then landed `Fixes-Red:` commits, then the red's own fixers' `LANDED <sha>` verdicts once that
     sha is on main): a refuted or set-aside one -- a stale `waiting` entry of an earlier spell -- never hides the next
-    (784badc4406e.4, 2026-11-13). A fixer ending `LANDED <sha>` with the sha on main puts its red in fix-pending at
+    (784badc4406e.4, 2026-11-13). A landed fix is a commit ON MAIN: a change item's sha main lacks follows its patch
+    to the main commit carrying it (a re-cut on landing), else it is no fix; a fix landed before the red's spell opened
+    is none either, and a red already fix-pending on such a sha is corrected or offered again (b3f51c5166b0.2, the
+    phantom b6d3d8235, 2026-11-16). A red whose fix is ANOTHER red's commit not on main yet waits on it: the fixer ends
+    `WAITS ON <sha> (red <key>): <why>` (or a NOT LANDED / GAVE UP naming `<sha> (... red <key>)`), the red goes to
+    fix-pending with fix status `waits-on` -- never a failed decided action, never an owner item -- and the reconciler
+    resolves it: the sha (or its copy, or that red's own landed fix) on main -> verified like any landed fix; the sha
+    set aside by that red, or that red closed without it -> offered again (e948278d144a, 2026-11-16). A fixer ending `LANDED <sha>` with the sha on main puts its red in fix-pending at
     once, never offered again nor on the owner; an outside red's landed fix waits, quietly, for its workflow's next
     run up to `RED_FIX_NEXT_RUN` (30 h: a nightly), which verifies it (green) or refutes it (back to a fixer). An old outside red no fresh run
     can check (no `workflow_dispatch`, a refused dispatch, its file gone) is never retired: it is offered with an

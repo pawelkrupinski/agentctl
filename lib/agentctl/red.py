@@ -2224,6 +2224,16 @@ def red_lease_ended(store, it, row, block, t, repo=None):
                  + (f" ({lifted})" if lifted else ""),
                  data={**upd, "fix": {**fix, "verify_since": t}, "cause": None, "block": None, "ask": None})
         return [f"fix-pending {red_what(d)} (its fixer landed {fix['sha'][:10]})"]
+    waits = red_waits_on_of(out, d.get("key"), store)
+    if waits:  # A HOLD ON ANOTHER RED'S FIX (red_waits_on_of): a state agentctl resolves itself, never a failed action
+        lifted = red_lift_block(store, it, block, f"it waits on red {waits['red']}'s fix {waits['sha'][:10]}")
+        store.close_offer(f"red:{it['id']}", "fix-pending")
+        dec = d.get("decision")
+        red_move(store, it, "fix-pending", f"{red_what(d)}: waits on red {waits['red']}'s fix {waits['sha'][:10]}"
+                 + (f" ({lifted})" if lifted else ""),
+                 data={**upd, "fix": {"entry": None, "status": RED_WAITS_ON, "at": t, **waits}, "cause": None,
+                       "block": None, "ask": None, **({"decision": {**dec, "status": "waiting"}} if dec else {})})
+        return [f"fix-pending {red_what(d)} (waits on red {waits['red']}'s {waits['sha'][:10]})"]
     if block:
         red_move(store, it, "blocked-external", f"{red_what(d)}: {block['text']}",
                  data={**upd, "cause": block.get("cause"), "block": block["name"]})
@@ -2246,6 +2256,75 @@ def red_lease_ended(store, it, row, block, t, repo=None):
     red_offer(store, it, f"{red_what(d)}: {h['holder']} ended ({h['outcome'][:120]}): offered again", data=upd,
               quiet=not counted)
     return [f"re-offered {red_what(d)} after {h['outcome'][:60]}"]
+
+
+# A RED WHOSE FIX IS ANOTHER RED'S COMMIT (2026-11-16, Order independence #78, e948278d144a): its fix was the main-tests
+# fixer's 715ab5a1a for red e1be6bd9fd46, not on main yet. The owner answered "hold until 715ab5a1a is on main"; the
+# fixer held as decided, and its `NOT LANDED: holding ...` read as THE DECIDED ACTION FAILED -- a fresh WAITING ON YOU,
+# twice (ev10700, ev10709). Now that hold is a state: fix-pending with a fix of status `waits-on` {sha, red}, from the
+# verdict `WAITS ON <sha> (red <key>)` -- or a NOT LANDED / GAVE UP naming `<sha> (... red <key>)` of another red --
+# and the reconciler resolves it itself (red_waits_on_step): the sha, or its rebased copy, or the other red's own
+# landed fix on main -> a landed fix verified against the next run; the sha set aside by the other red, or that red
+# closed without it on main -> offered again. It waits as long as the other red is open: that red has its own holder.
+RED_WAITS_ON = "waits-on"
+RED_WAITS_ON_VERDICT = re.compile(r"^\W*WAITS ON ([0-9a-f]{7,40})\s*\(red ([0-9a-f]{12}(?:\.\d+)?|[\w.-]+)\)")
+RED_WAITS_ON_WORDS = re.compile(r"^\W*(?:NOT LANDED|GAVE UP)\b.*?\b([0-9a-f]{7,40})\s*\([^()]*?\bred ([\w.-]+)\)",
+                                re.S)
+
+
+def red_waits_on_of(outcome, own_key, store):
+    """{sha, red} when a fixer's verdict says this red waits on another red's commit, else None."""
+    out = str(outcome or "")
+    m = RED_WAITS_ON_VERDICT.match(out) or RED_WAITS_ON_WORDS.match(out)
+    if not m or m.group(2) == own_key:
+        return None
+    key = re.sub(r"\.\d+$", "", m.group(2))
+    if key == own_key or not (red_closed_of(store, key) or store.item("red", key)):
+        return None  # names no red agentctl knows: no state to wait on
+    return {"sha": m.group(1), "red": key}
+
+
+def red_of_key(store, key):
+    """The red item of key now: its open spell, else its newest closed one."""
+    try:
+        for it in store.items("red"):
+            if it["data"].get("key") == key and it["state"] not in RED_TERMINAL:
+                return it
+        return red_closed_of(store, key)
+    except Exception:
+        return None
+
+
+def red_waits_on_step(store, it, f, repo, t):
+    """A fix-pending red waiting on another red's commit (RED_WAITS_ON, above): resolved, or left waiting."""
+    d = it["data"]
+    sha, other = f.get("sha") or "", f.get("red")
+    o = red_of_key(store, other)
+    od = (o or {}).get("data") or {}
+    ofix = od.get("fix") or {}
+    for cand in [sha] + ([ofix["sha"]] if ofix.get("status") == "landed" and ofix.get("sha") else []):
+        on = red_main_equivalent(repo, cand)
+        if on and red_sha_on_main(repo, on):
+            line = f"{red_what(d)}: red {other}'s fix {cand[:10]} is on main ({on[:10]}): verifying"
+            red_move(store, it, "fix-pending", line, data={"fix": {"entry": None, "status": "landed", "sha": on,
+                                                                    "at": t, "verify_since": t, "waited_on": other}})
+            return [line]
+    aside = set(od.get("refuted") or []) | set(od.get("unverified") or [])
+    why = None
+    if not o:
+        why = f"red {other}, whose fix {sha[:10]} it waited on, is gone"
+    elif any(x.startswith(sha) or sha.startswith(x) for x in aside if x and sha):
+        why = f"red {other} set aside the fix {sha[:10]} it waited on"
+    elif o["state"] in RED_TERMINAL:
+        why = f"red {other} closed ({o['state']}) without the fix {sha[:10]} it waited on reaching main"
+    if why:
+        h = {"at": iso_at(t), "holder": f"waits-on:{other}", "outcome": f"{why}: offered again"}
+        red_offer(store, it, f"{red_what(d)}: {h['outcome']}", data={"fix": None, "history": (d.get("history") or []) + [h]})
+        return [f"re-offered {red_what(d)} ({why[:80]})"]
+    if t >= it["deadline"]:  # still waiting while the other red is open: its own holder works on it; said quietly
+        red_move(store, it, "fix-pending", f"{red_what(d)}: waits on red {other}'s fix {sha[:10]} (not on main yet)",
+                 severity="info")
+    return []
 
 
 def red_already_fixed(store, it, upd, outcome, t):
@@ -2676,6 +2755,8 @@ def red_fix_follow(store, f, repo, t):
 def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
     d = it["data"]
     f = d.get("fix") or {}
+    if f.get("status") == RED_WAITS_ON and not (obs is not None and gone):
+        return red_waits_on_step(store, it, f, repo, t)
     if f.get("sha") and red_fix_is_set_aside(f["sha"], red_set_aside(d, facts), facts):
         # PENDING ON A FIX IT ALREADY REFUTED (or set aside): no run can verify it now; back to a fixer
         if fix and fix.get("sha") != f["sha"]:  # another fix is on its way: it is the one verified now

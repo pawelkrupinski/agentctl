@@ -136,6 +136,7 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
                 f"{str(dec.get('answer'))[:600]!r}. Act on exactly that answer (it settles what the fixers could not "
                 "decide) and land the result. If acting on it fails (the land is NOT LANDED, a check rejects it, it "
                 "cannot be done), end `NOT LANDED: <why>` or `GAVE UP: <why>`: the owner is told at once. ") + task
+    task += WAITS_ON_BRIEF
     if red_owner_only(o_r):  # every task above says "land it": not in an owner-only repo
         task += red_owner_rules(o_r, num)
     if u.get("old_note"):
@@ -195,7 +196,11 @@ def fixer_env(o_r, num, wrapper_pid=None):
     return env
 
 
-FIXER_VERDICT = re.compile(r"^\W*(LANDED [0-9a-f]{7,40}|NOT LANDED\b.*|GAVE UP:.*|BLOCKED ON OWNER:.*|DIAGNOSED:.*)", re.M)
+WAITS_ON_BRIEF = (" If this red's fix is ANOTHER red's commit that is not on main yet, land nothing and end "
+                  "`WAITS ON <sha> (red <its key>): <why>`: agentctl waits for that commit (or its rebased copy) to reach "
+                  "main and verifies this red against the next run containing it -- never a NOT LANDED for such a hold.")
+FIXER_VERDICT = re.compile(r"^\W*(LANDED [0-9a-f]{7,40}|WAITS ON [0-9a-f]{7,40}.*|NOT LANDED\b.*|GAVE UP:.*|"
+                           r"BLOCKED ON OWNER:.*|DIAGNOSED:.*)", re.M)
 
 
 def fixer_verdict(text):
@@ -1313,6 +1318,9 @@ def red_view_state(store, it, t=None):
         if f.get("status") == "landed":
             return (f"fix landed in {str(f.get('sha'))[:9]}, awaiting a {d.get('workflow')} run containing it{rec}",
                     f"fix {str(f.get('sha'))[:7]} awaiting its run")
+        if f.get("status") == RED_WAITS_ON:
+            return (f"waits on red {f.get('red')}'s fix {str(f.get('sha'))[:10]}: verified against the next "
+                    f"{d.get('workflow')} run once main has it{rec}", f"waits on red {f.get('red')}'s fix {str(f.get('sha'))[:10]}")
         if f.get("status") == "verify":
             return (f"verifying: the next decided {d.get('workflow')} run says whether it is fixed ({f.get('verify') or 'awaiting it'}); "
                     f"offered again if none by {time.strftime('%H:%M', time.localtime(it['entered_at'] + env_num('AGENTCTL_RED_FIX_GIVEUP', RED_FIX_GIVEUP)))}{rec}",

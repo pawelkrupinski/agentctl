@@ -78,7 +78,9 @@ def red_fix_held(it, t, facts=None):
     watchdog), the fix the item recorded."""
     d = it["data"]
     f = d.get("fix") or {}
-    if facts is not None:
+    if f.get("status") == RED_WAITS_ON and f.get("red"):  # held by the red it waits on (red_waits_on_step resolves it)
+        return f"waits on red {f['red']}'s fix {str(f.get('sha'))[:10]}"
+    if facts is not None and not f.get("waited_on"):  # a waited-on fix that landed is no candidate of its own
         fx = red_fix_of(it, facts)
         if fx and fx["status"] in FIX_OPEN:
             return f"fix {fx.get('entry')} {fx['status']}"
