@@ -55,6 +55,19 @@ class InboxTest(unittest.TestCase):
         self.assertEqual((e["command"], e["exit"]), ("land", 1))
         self.assertTrue(e["verdict"].startswith("NOT LANDED: PREPUSH_SKIP"), e["verdict"])
 
+    def test_a_queue_subcommand_of_land_writes_no_entry(self):
+        # 2026-11-16: a monitor polling `agentctl land status` wrote ~37 inbox entries in an hour (2,692 over three
+        # days), each acked by hand. A queue subcommand answers its caller there and then; only a land's own verdict
+        # may outlive the agent that started it
+        saved = A.cmd_land
+        A.cmd_land = lambda a: print("  20261116-185821-movies-x-79a0ca  checking  /w  abc  deadline in 9 min") or 0
+        self.addCleanup(setattr, A, "cmd_land", saved)
+        for argv in (["land", "status"], ["land", "hold"], ["land", "release"], ["land", "cancel", "e1"]):
+            self.assertEqual(self.run_main(argv)[0], 0)
+            self.assertEqual(self.entries(), [], argv)
+        self.run_main(["land"])
+        self.assertEqual([e["command"] for e in self.entries()], ["land"], "a land's own verdict still goes there")
+
     def test_waiting_is_written_at_once_and_the_final_verdict_later(self):
         def handler(a):
             print("WAITING abc123 (1 change queued on waiting; entry e1)")

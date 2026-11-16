@@ -120,7 +120,11 @@ def inbox_write(command, verdict, verdicts, tail, exit_code, final=True, cwd=Non
 
 
 def inbox_command(a):
-    """The inbox's name for a parsed command, or None when it writes no entry."""
+    """The inbox's name for a parsed command, or None when it writes no entry. `land status|hold|release|cancel` write
+    none: a queue subcommand answers its caller there and then, and a monitor polling `land status` wrote 2,692 entries
+    in three days, acked by hand (2026-11-16). Only a verdict that may outlive the agent that started it goes there."""
+    if a.cmd == "land" and getattr(a, "lcmd", None):
+        return None
     name = a.cmd + (f" {a.wcmd}" if a.cmd == "waiting" else "")
     return name if name in INBOX_COMMANDS else None
 

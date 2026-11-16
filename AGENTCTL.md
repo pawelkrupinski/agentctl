@@ -1426,7 +1426,9 @@ agentctl inbox [ID...] [--unread] [--ack [--all]] [--limit N] [--count] [--json]
 The owner (2026-10-27): three agents ended their turns while their land/watch still ran, and the WATCH verdicts went
 nowhere. Every verdict now reaches the inbox: a change's, a batch's and a watch's as EVENTS the processor projects
 (`QUEUED`, `LANDED`, `WAITING`, `NOT LANDED`, `WATCH ...`, `FIX ...`, each naming the author's worktree); `wait` and
-`land --follow` write theirs when they end (normally, on a signal, or on a crash).
+`land --follow` write theirs when they end (normally, on a signal, or on a crash). A read-only or queue command
+(`land status|hold|release|cancel`, `status`, `red status`, `inbox`, `ci-why`) writes none: it answers its caller
+there and then (2026-11-16: a monitor polling `land status` had written 2,692 entries, acked by hand).
 
 - One JSON file per verdict under `~/.cache/agentctl/inbox/` (`$AGENTCTL_INBOX_DIR`): id, time, command, argv, cwd,
   owner (the Claude session, else user@cwd), pid, exit code, the verdict line (the last `LANDED` / `NOT LANDED` /
