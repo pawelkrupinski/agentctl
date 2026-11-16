@@ -7,7 +7,7 @@ import json, os, subprocess, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, StallSamples, sh  # noqa: E402
-from test_waiting import REPO_HOOK, WaitingTest  # noqa: E402
+from test_waiting import REPO_HOOK, WaitingTest, assert_queued_line_names_no_verdict  # noqa: E402
 
 PLAN_HOOK = """#!/bin/sh
 case "$1" in
@@ -57,6 +57,8 @@ class QueueTest(WaitingTest):
         self.assertEqual(rc, 0, out)
         self.assertRegex(out, r"QUEUED \S+-\d+ \([0-9a-f]{10}")
         eid = out.split("QUEUED ", 1)[1].split()[0]
+        assert_queued_line_names_no_verdict(self, out)
+        self.assertIn("END YOUR TURN", out)
         return eid, out
 
     def check(self, eid, rounds=6):

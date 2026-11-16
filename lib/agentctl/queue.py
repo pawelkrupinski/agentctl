@@ -300,10 +300,20 @@ def change_fields(repo, main_ref, head, a):
 # prompts). The submission's git half is the land/<id> push over ssh; its store half takes a token from the
 # environment or the processor's socket, never `secrets` (no_vault). With none, the change waits in the outbox and the
 # laptop's sync -- which holds the token -- submits it; the reconciler checks the Fixes-Red trailers again at the push.
-def submit_to_server(repo, d, fields, note="", after_queued=None):
+# THE QUEUED LINE NAMES NO VERDICT IT HAS NOT REACHED (2026-11-16: its old tail, "LANDED / WAITING / NOT LANDED goes to
+# `agentctl inbox`", read as LANDED to a watcher matching the word): QUEUED is its only verdict word, and it says what
+# the agent does next -- end its turn, or (a red fixer's land) nothing: the land waits for the verdict itself.
+def queued_tail(waits=False):
+    """The end of land's QUEUED / QUEUED-LOCAL line."""
+    return ("not on main yet: this land now waits for its verdict" if waits
+            else "not on main yet: END YOUR TURN; its verdict comes to `agentctl inbox`")
+
+
+def submit_to_server(repo, d, fields, note="", after_queued=None, waits=False):
     """THE LAPTOP'S ONLY WAY INTO THE QUEUE (phase 2; it holds no queue of its own): the change pushed to
     refs/heads/land/<id>, then submitted to ci-runner's queue (the store unreachable, or no token here: the outbox,
-    which the sync sends). Prints QUEUED / QUEUED-LOCAL / NOT LANDED; returns land's exit code."""
+    which the sync sends). Prints QUEUED / QUEUED-LOCAL / NOT LANDED; returns land's exit code. waits: this land then
+    waits for the verdict itself (a red fixer's, fixer_land)."""
     head = fields["head"]
     e = {**fields, "id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{os.urandom(3).hex()}"}
     if not submit_ref(repo, d, e, to_server=True):
@@ -316,14 +326,13 @@ def submit_to_server(repo, d, fields, note="", after_queued=None):
         why = ("no store token in this process (none in its environment, the processor's socket held none; land "
                "never runs `secrets`): the sync submits it with its own token" if "AGENTCTL_STORE_TOKEN" in r["outbox"]
                else f"the store is unreachable ({r['outbox']}); the sync submits it when it answers")
-        print(f"QUEUED-LOCAL {e['id']} ({head[:10]}){note}: {why}. LANDED / WAITING / NOT LANDED goes to "
-              "`agentctl inbox`", flush=True)
+        print(f"QUEUED-LOCAL {e['id']} ({head[:10]}){note}: {why}; {queued_tail(waits)}", flush=True)
         if after_queued:
             after_queued(e["id"])
         return 0
     ahead = r.get("ahead") or 0
     print(f"QUEUED {r['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}){note}: its checks run on ci-runner; "
-          "LANDED / WAITING / NOT LANDED goes to `agentctl inbox`", flush=True)
+          f"{queued_tail(waits)}", flush=True)
     if after_queued:
         after_queued(r["id"])
     return 0
@@ -416,13 +425,14 @@ def enqueue(repo, main_ref, sh, a):
             start_fast_precheck(repo, main_ref, head, eid, a)
     if host_role() == "sync":  # THE LAPTOP'S LAND NEEDS NO VAULT (see submit_to_server)
         with no_vault():
-            rc = submit_to_server(repo, d, change_fields(repo, main_ref, head, a), after_queued=after_queued)
+            rc = submit_to_server(repo, d, change_fields(repo, main_ref, head, a), after_queued=after_queued,
+                                  waits=fixer)
     else:
         fields = change_fields(repo, main_ref, head, a)
         e, ahead = queue_change(d, fields)
         submit_ref(repo, d, e)
         print(f"QUEUED {e['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}): its checks run in the "
-              "background; LANDED / WAITING / NOT LANDED goes to `agentctl inbox`", flush=True)
+              f"background; {queued_tail(fixer)}", flush=True)
         after_queued(e["id"])
         spawn_waiting_processor(repo)
         offer_token(repo)

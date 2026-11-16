@@ -17,6 +17,13 @@ exit 0
 """
 
 
+def assert_queued_line_names_no_verdict(test, out):
+    """land's QUEUED / QUEUED-LOCAL line names no verdict it has not reached (2026-11-16: its "LANDED / WAITING / NOT
+    LANDED goes to `agentctl inbox`" read as LANDED to a watcher matching the word): the only verdict word is QUEUED."""
+    [line] = [x for x in out.splitlines() if x.startswith(("QUEUED ", "QUEUED-LOCAL "))]
+    test.assertNotRegex(line.split(" ", 1)[1], r"\b(LANDED|WAITING|NOT LANDED)\b", line)
+
+
 class WaitingTest(Base):
     def setUp(self):
         super().setUp()
@@ -132,6 +139,7 @@ class WaitingTest(Base):
         self.assertEqual(rc, 0, out)
         self.assertNotIn("KNOWN RED", out)
         self.assertRegex(out, r"QUEUED \S+ \([0-9a-f]{10}\): infra, not a known red")
+        assert_queued_line_names_no_verdict(self, out)
         self.assertFalse(os.path.exists(A.reds_dir("local.json")), "a network failure is never main's known red")
         self.assertFalse(os.listdir(A.reds_dir("baseline-out")) if os.path.isdir(A.reds_dir("baseline-out")) else [])
         (e,) = self.entries().values()
@@ -502,6 +510,7 @@ class WaitingTest(Base):
         rc, out = self.land(wt)
         self.assertEqual(rc, 0, out)
         self.assertIn("QUEUED-LOCAL", out)
+        assert_queued_line_names_no_verdict(self, out)
         self.assertIn("the sync submits it with its own token", out)
         self.assertNotIn("NoToken", out)
         self.assertFalse(os.path.exists(marker), "the laptop's land never runs `secrets`")

@@ -670,8 +670,8 @@ def network_requeue(repo, head, out, log_path, a=None):
     requeue_infra(d, e, why, reason=NETWORK_REASON, detail=out, repo=repo)
     e = read_record(os.path.join(d, "entries", f"{e['id']}.json")) or e
     left = max(0, int((float(e.get("retry_after") or time.time()) - time.time()) // 60))
-    print(f"QUEUED {e['id']} ({head[:10]}): infra, not a known red -- {why}; checked again in {left} min. "
-          "LANDED / WAITING / NOT LANDED goes to `agentctl inbox`", flush=True)
+    print(f"QUEUED {e['id']} ({head[:10]}): infra, not a known red -- {why}; checked again in {left} min; "
+          f"{queued_tail()}", flush=True)
     spawn_waiting_processor(repo)
     return 0
 LOCAL_FLOW = "Local checks"

@@ -16,6 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
 import test_queue  # noqa: E402
+from test_waiting import assert_queued_line_names_no_verdict  # noqa: E402
 
 
 class RedFixLandsFastTest(test_queue.QueueTest):
@@ -75,6 +76,8 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         rc, out = self.land(wt)
         self.assertEqual(rc, 0, out)
         self.assertIn("QUEUED ", out, "the fixer's change went through the queue")
+        assert_queued_line_names_no_verdict(self, out)
+        self.assertNotIn("END YOUR TURN", out, "a fixer's land waits for the verdict itself")
         self.assertNotIn("agentctl: checking", out, "land itself ran no hook dry run (the queue's checker did)")
         self.assertRegex(out.strip().splitlines()[-1], r"^LANDED [0-9a-f]{40}", "the wrapper reads LANDED")
         self.assertEqual(self.remote_log()[0], "the fix")
