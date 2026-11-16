@@ -134,6 +134,31 @@ class WatchdogTest(unittest.TestCase):
         self.run_wd()
         self.assertEqual(len(self.kicks), 1, "silent for 3 x W5_MAX awake: kicked")
 
+    def test_an_open_invariant_condition_says_what_violates_it_now_not_what_did_when_it_opened(self):
+        """2026-11-16: invariant-W1.6 opened at 05:10 naming nongate; nongate landed at 06:06, but W1 stayed violated
+        by workermem (10 h old) and the condition, its escalations and the owner's ESCALATED line named the landed
+        nongate until noon. With main green W1 returned 0.0 (`age < lim or (red_since and ...)`), which the watchdog
+        neither refreshed nor closed on (`r.ok is False` / `r.ok`). Each violated pass re-describes the open
+        condition (one inbox entry, one notification per spell still); the invariant holding closes it."""
+        st_ = A.Store()
+        st_.put_item("change", "old-1", "checking", {"head": "0" * 40, "submitted_at": time.time() - 5 * 3600})
+        st_.put_item("change", "old-2", "queued", {"head": "1" * 40, "submitted_at": time.time() - 4 * 3600})
+        self.assertIs(A.inv_w1()[0], False, "a green main's W1 is violated, never 0.0 (neither held nor violated)")
+        self.run_wd()
+        [c] = [c for c in A.open_conditions() if c["key"] == "invariant-W1"]
+        self.assertIn("old-1", c["text"])
+        it = st_.item("change", "old-1")
+        st_.transition("change", "old-1", "landed", it["version"])
+        self.run_wd()
+        [c] = [c for c in A.open_conditions() if c["key"] == "invariant-W1"]
+        self.assertIn("oldest unlanded change old-2 (queued", c["text"])
+        self.assertNotIn("old-1", c["text"])
+        self.assertEqual(len([e for e in A.inbox_entries() if e.get("kind") == "INVARIANT"]), 1, "one entry per spell")
+        it = st_.item("change", "old-2")
+        st_.transition("change", "old-2", "landed", it["version"])
+        self.run_wd()
+        self.assertEqual([c for c in A.open_conditions() if c["key"] == "invariant-W1"], [])
+
     def test_w1_from_the_store_and_w2_from_the_store(self):
         st_ = A.Store()  # W1: the one queue, the store's open change items, by their submission time
         st_.put_item("change", "e1", "waiting", {"head": "0" * 40, "submitted_at": time.time() - 3 * 3600})

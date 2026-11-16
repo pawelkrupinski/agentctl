@@ -63,7 +63,7 @@ def inv_w1():
         starts = [parse_time(g["since"]).timestamp() for g in snap.get("gate") or [] if g.get("since")]
         red_since = (time.time() - min(starts)) if starts else 0.0
     lim = env_num("AGENTCTL_W1_MAX", W1_MAX)
-    ok = age < lim or (red_since and age < red_since + lim)
+    ok = age < lim or bool(red_since and age < red_since + lim)
     stranded = any(c["key"] == f"change-stranded-{oldest['id']}" for c in open_conditions(st))
     why = {"queued": "waiting for a check slot", "checking": "its checks run", "checked": "waiting for its push",
            "waiting": "waiting for main to turn green"}[oldest["state"]]
@@ -365,9 +365,11 @@ def cmd_watchdog(a):
             # cleared by itself): a self-healing invariant opens its condition only at WATCHDOG_MISSES consecutive
             # misses, and is told to the owner only once open past its bound (alerts.py: the notifier, ESCALATED)
             heals = wid in ALERT_SELF_HEALING_INVARIANTS
-            if not cond and (not heals or misses[wid] >= env_num("AGENTCTL_WATCHDOG_MISSES", WATCHDOG_MISSES)):
+            # an open one is RE-DESCRIBED each pass (2026-11-16: invariant-W1.6 named a change landed 6 h before,
+            # while another one violated W1): its text, escalations and the ESCALATED line say what violates it now
+            if cond or not heals or misses[wid] >= env_num("AGENTCTL_WATCHDOG_MISSES", WATCHDOG_MISSES):
                 open_condition("INVARIANT", f"INVARIANT {wid} violated: {r.detail}", r, [], key=key, command="watchdog")
-                if not heals:
+                if not cond and not heals:
                     notify(f"agentctl watchdog: {wid}", r.detail[:220])
             # only for a processor silent past 3 x W5_MAX of AWAKE time (a beat the laptop slept through is no
             # silence: 2026-11-15 16:58, a dark wake), at most every WATCHDOG_KICK_GAP; the kick keeps its token

@@ -164,7 +164,9 @@ def run_probe(kind, args=None):
         ok, detail = PROBES[kind](args)
     except (Exception, SystemExit) as e:
         ok, detail = None, f"probe error: {str(e)[:160]}"
-    return ProbeResult(kind, args, ok, detail, _made_by_run_probe=_RUN_PROBE_TOKEN)
+    # True, False or None, never a falsy number (2026-11-16: W1's `x or (0.0 and y)` was 0.0 on a green main: neither
+    # `ok is False`, so the watchdog never refreshed its condition, nor true, so nothing closed it)
+    return ProbeResult(kind, args, None if ok is None else bool(ok), detail, _made_by_run_probe=_RUN_PROBE_TOKEN)
 
 
 def recover_tunnel_reset(cond, a):
@@ -308,10 +310,10 @@ def open_condition(kind, text, probe, on_recover, key=None, inbox=True, command=
         _OPENING[0] -= 1
     t = time.time()
     new = [[n, {**x, **extra}] for n, x in on_recover]
-    if cur:
+    if cur:  # refreshed: re-described too, so its escalations say what is wrong NOW, not at its opening
         d = cur["data"]
         acts = list(d.get("on_recover") or []) + [x for x in new if x not in (d.get("on_recover") or [])]
-        st.update_item("condition", cur["id"], cur["version"], {"on_recover": acts, "last_checked": t,
+        st.update_item("condition", cur["id"], cur["version"], {"on_recover": acts, "last_checked": t, "text": text,
                                                                  "last_result": {"ok": probe.ok, "detail": probe.detail}})
         return condition_dict(st.item("condition", cur["id"]))
     iid, n = key, 1
