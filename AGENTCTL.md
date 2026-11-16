@@ -1126,6 +1126,10 @@ The reconciler then takes it, a step per tick:
   overlap, the combined tree verified`; the push's hook judges the red gate only). A hook without `--verify-only`
   gets the full round. Code: queue.py `recheck_reason` (THE RULE), `_push_change`, `_check_entry`; tests:
   `tests/test_queue.py` (`*verif*`, `*deleted_file*`).
+  THE OLDEST VERIFICATION PUSHES FIRST (2026-11-16: workermem verified four times, each on a main a younger change
+  had pushed onto meanwhile): while a change's verification round is queued or checking (not in an infra backoff),
+  every younger checked change holds its push (`its push waits for <id>'s combined-tree verification`; a red's fix
+  excepted), and verification rounds take the next free check tree. queue.py `older_verifying`.
   The push is bounded; on expiry it verifies before it retries. `LANDED <sha>`, and a `watch` item.
   It pushes from its own check tree when that tree's slot is free, else from the PUSH TREE `<clone>-wt-check-push`
   (its own lease, no checker takes it): a checker holds its slot through its remote run's whole wait, and pushes that
