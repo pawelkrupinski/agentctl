@@ -1016,8 +1016,9 @@ def fix_reaches_red(repo, sha, d):
     if k not in cache:
         if not git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}"):
             return True  # a commit this clone lacks: unsure counts (and is not cached)
-        fix_cache_put(path, cache, {k: fix_red_verdict(repo, sha, d, fix_changed(repo, sha))})
-        return bool(fix_cache(sha)[1].get(k, {"ok": True}).get("ok"))
+        verdict = fix_red_verdict(repo, sha, d, fix_changed(repo, sha))
+        fix_cache_put(path, cache, {k: verdict})  # kept for the next tick; this one's answer is the verdict itself
+        return bool(verdict.get("ok"))
     return bool(cache[k].get("ok"))
 
 
@@ -2818,9 +2819,11 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
             line = f"{red_what(d)}: its fix {f['sha'][:10]} landed as {on['sha'][:10]}: verifying that"
             it = red_move(store, it, "fix-pending", line, data={"fix": on})
             d, f = it["data"], it["data"]["fix"]
-    if f.get("sha") and not fix and not fix_reaches_red(repo, f["sha"], d):
+    if f.get("sha") and not fix and not f.get("waited_on") and not fix_reaches_red(repo, f["sha"], d):
         # PENDING ON ANOTHER RED'S FIX (PER RED, PER FAILING STEP: Order independence #74's swift red on 09e482c6a, the
-        # ios red's fix): no run of it can prove this red fixed -- offered again, never parked until the give-up
+        # ios red's fix): no run of it can prove this red fixed -- offered again, never parked until the give-up. Not
+        # a red whose fixer said its fix IS that red's commit (WAITS ON, red_waits_on_step: `waited_on`): the commit on
+        # main is the verification it waited for, whatever the reading rules make of its failing job (review 2026-11-16)
         line = f"{red_what(d)}: its fix {f['sha'][:10]} touches nothing its failing job reads: offered again"
         red_offer(store, it, line, data={"fix": None})
         return [f"re-offered {red_what(d)} (its fix {f['sha'][:10]} is another red's)"]

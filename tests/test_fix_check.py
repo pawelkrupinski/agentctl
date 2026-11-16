@@ -260,6 +260,29 @@ class PerRedTest(FixCheckBase):
         it = self.st.item("red", "swift74")
         self.assertEqual((it["state"], it["data"].get("fix")), ("offered", None))
 
+    def test_a_red_that_waited_on_another_reds_fix_verifies_it_whatever_its_job_reads(self):
+        # its fixer said the fix is THAT red's commit (WAITS ON, red_waits_on_step): the commit reaching main is the
+        # verification it waited for, never a re-offer for touching nothing its failing job reads
+        sha = self.ios_fix()
+        it = self.st.item("red", "swift74")
+        self.st.transition("red", "swift74", "fix-pending", it["version"], data={"fix": {
+            "entry": None, "status": "landed", "sha": sha, "at": 1.0, "verify_since": 1.0, "waited_on": "ios74"}})
+        it = self.st.item("red", "swift74")
+        facts = self.facts()
+        out = A.red_fix_pending(self.st, it, A.red_fix_of(it, facts), False, None, {}, facts, self.r.path,
+                                A.RED_PRIMARY, 2.0)
+        self.assertNotIn("another red's", " ".join(out))
+        it = self.st.item("red", "swift74")
+        self.assertEqual((it["state"], (it["data"].get("fix") or {}).get("sha")), ("fix-pending", sha))
+
+    def test_a_per_red_verdict_holds_where_the_cache_cannot_be_written(self):
+        sha = self.ios_fix()
+        d = self.st.item("red", "swift74")["data"]
+        saved = A.fix_cache_put
+        A.fix_cache_put = lambda *a, **k: None  # a reds dir it cannot write: the verdict is still this call's
+        self.addCleanup(lambda: setattr(A, "fix_cache_put", saved))
+        self.assertFalse(A.fix_reaches_red(self.r.path, sha, d))
+
 
 SELF_TESTS = """name: Tool self-tests
 on: push

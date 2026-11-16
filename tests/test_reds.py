@@ -694,6 +694,9 @@ class FixTest(RedsBase):
         self.assertEqual((it["state"], it["data"].get("fix")), ("offered", None))
         self.assertIn("waits on", it["data"]["history"][-1]["outcome"])
         self.assertIn("cycle", it["data"]["history"][-1]["outcome"])
+        other = self.st.item("red", "other")
+        self.assertFalse([h for h in other["data"].get("history") or [] if "cycle" in str(h.get("outcome"))],
+                         "ONE side of the cycle is offered again for it: the other then waits on that side's fix")
 
     def test_a_waits_on_verdict_that_would_close_a_wait_cycle_is_no_wait(self):
         self.tick()
