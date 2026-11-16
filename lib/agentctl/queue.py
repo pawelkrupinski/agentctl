@@ -1101,6 +1101,23 @@ def check_tree_for_push(repo, e, i):
     return tree
 
 
+# THE OLDEST VERIFICATION PUSHES FIRST (2026-11-16, workermem: fully checked by 09:15, then its combined tree verified
+# four times, each ~10 min, each on a main a YOUNGER change had pushed onto meanwhile, until a hook change forced a full
+# round; 10 h unlanded). Main moving under a verification sends it round again, so a change verifies until no push
+# lands during its verification -- with a steady stream of younger changes, never. While a change verifies (a round
+# queued or checking with `verify`, not in an infra backoff), every younger checked change holds its push (a red's fix
+# excepted) and the verification takes the next free check tree: it lands after ONE more round, and the younger ones
+# verify after it.
+def verifying(e, t):
+    """Whether entry e is in a combined-tree verification round that can run now."""
+    return bool(e.get("verify")) and e.get("status") in ("queued", "checking") and not e.get("retry_after", 0) > t
+
+
+def older_verifying(todo, e, t):
+    """The oldest entry queued before e whose combined-tree verification runs now (verifying), or None."""
+    return next((o for o in sorted(todo, key=lambda o: o["seq"]) if o["seq"] < e["seq"] and verifying(o, t)), None)
+
+
 def tick_changes(repo, d, now_=None):
     """One tick over the change items: re-queueing re-derived (only the newest entry per worktree and branch runs), an
     executor started for each queued or lease-less checking change (red fixes first, while a slot is free), a
@@ -1112,7 +1129,8 @@ def tick_changes(repo, d, now_=None):
         reds = gate_reds(repo)
     except Exception:
         reds = set()
-    todo = sorted(queued_entries(d), key=lambda e: (0 if reds and set(e.get("fixes") or []) & reds else 1, e["seq"]))
+    todo = sorted(queued_entries(d), key=lambda e: (0 if reds and set(e.get("fixes") or []) & reds else 1,
+                                                    0 if verifying(e, t) else 1, e["seq"]))
     newest = {}
     for e in sorted(todo, key=lambda e: e["seq"]):  # entries queued before re-queueing replaced: the newest one runs
         for k, older in list(newest.items()):
@@ -1134,6 +1152,10 @@ def tick_changes(repo, d, now_=None):
             first = batch_goes_first(st, d)
             if first:  # a solo push now moves main under the batch, and its whole check is thrown away
                 did += behind_batch(e, first, "push")
+                continue
+            older = None if reds and set(e.get("fixes") or []) & reds else older_verifying(todo, e, t)
+            if older:
+                did.append(f"{e['id']}: its push waits for {older['id']}'s combined-tree verification")
                 continue
             did.append(f"{e['id']}: {push_change(repo, d, e)}")
             continue

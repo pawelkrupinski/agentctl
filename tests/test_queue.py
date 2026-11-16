@@ -148,6 +148,52 @@ class QueueTest(WaitingTest):
         tick()
         self.assertEqual(entry(eb)["status"], "landed")
 
+    def test_a_younger_change_never_pushes_under_an_older_ones_combined_tree_verification(self):
+        """2026-11-16, workermem: fully checked by 09:15, then verified FOUR times (09:24, 09:36, 09:58, 10:10), each
+        on a main that a younger change's push had moved again during the 10-min verification (grinchrows,
+        driftthroughput, iosstall, backlogrows), until a hook change forced a full round: 10 h unlanded. While an
+        older change verifies its combined tree, a younger checked change waits, so the verification lands; its own
+        verification comes after."""
+        def entry(eid):
+            return A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+
+        def tick():
+            started = []
+            saved = A.spawn_executor
+            A.spawn_executor = lambda repo, d_, eid: started.append(eid)
+            try:
+                return A.tick_changes(self.r.path, d), started
+            finally:
+                A.spawn_executor = saved
+        d, _c, _w = A.waiting_state(self.r.path)
+        wz, _ = self.agent("z", "web/src/main/Z.scala", "z\n", msg="z: oldest, its full check not begun")
+        ez, _ = self.queued(wz)
+        wa, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: older")
+        ea, _ = self.queued(wa)
+        A.check_entry(self.r.path, ea)
+        other, _ = self.agent("m", "docs/notes.md", "n\n", msg="main moves")
+        sh(other, "git", "push", "-q", "origin", "HEAD:main")
+        tick()  # a: main moved, no file overlap: its combined tree verified
+        self.assertEqual((entry(ea)["status"], entry(ea)["verify"]), ("queued", True))
+        wb, _ = self.agent("b", "worker/src/main/B.scala", "b\n", msg="b: younger")
+        eb, _ = self.queued(wb)
+        A.check_entry(self.r.path, eb)
+        self.assertEqual(entry(eb)["status"], "checked")
+        did, started = tick()
+        self.assertIn(f"{eb}: its push waits for {ea}'s combined-tree verification", " ".join(did))
+        self.assertEqual(entry(eb)["status"], "checked", "no push under the older change's verification")
+        self.assertEqual(self.remote_log()[0], "main moves")
+        self.assertEqual(started[:2], [ea, ez], "the verification takes the next check tree first")
+        A.check_entry(self.r.path, ea)  # verified on the main it was queued on: it stands
+        tick()
+        self.assertEqual(entry(ea)["status"], "landed")
+        self.assertEqual(self.remote_log()[0], "a: older", "verified once, then pushed")
+        self.assertEqual((entry(eb)["status"], entry(eb)["verify"]), ("queued", True), "b verifies after it")
+        A.check_entry(self.r.path, eb)
+        tick()
+        self.assertEqual(entry(eb)["status"], "landed")
+        self.assertEqual(self.remote_log()[:2], ["b: younger", "a: older"])
+
     def test_red_main_the_checked_change_joins_waiting(self):
         self.reds = {"7"}
         wt, sha = self.agent("a", "web/src/main/A.scala", "a\n")
