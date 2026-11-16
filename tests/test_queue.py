@@ -22,6 +22,7 @@ case "$1" in
         exit 0 ;;
     --plan) cat > /dev/null; printf 'sbt\\nidentity\\n'; exit 0 ;;
 esac
+# --verify-only A..B: the combined tree (every test config compiled, the touched modules' unit tests)
 """
 
 
@@ -141,7 +142,10 @@ class QueueTest(WaitingTest):
         self.assertEqual(self.remote_log()[0], "a: waits", "the batch first")
         _did, started = tick()
         self.assertIn(ec, started, "the batch landed: changes go again")
-        tick()  # b: main moved by the batch, no overlap: pushed
+        tick()  # b: main moved by the batch, no file overlap: its combined tree verified, then pushed
+        self.assertEqual((entry(eb)["status"], entry(eb)["verify"]), ("queued", True))
+        A.check_entry(self.r.path, eb)
+        tick()
         self.assertEqual(entry(eb)["status"], "landed")
 
     def test_red_main_the_checked_change_joins_waiting(self):
@@ -213,16 +217,121 @@ class QueueTest(WaitingTest):
     def landed_verdict(self):
         return [e for e in self.inbox() if e["kind"] == "LANDED"][0]["verdict"]
 
-    def test_disjoint_commits_landing_meanwhile_push_without_a_recheck(self):
+    def verified(self):
+        """The checks' calls as (mode, range) pairs."""
+        return [tuple(l.split()[:2]) for l in open(self.calls).read().splitlines()] if os.path.exists(self.calls) else []
+
+    def test_disjoint_files_landing_meanwhile_verify_the_combined_tree_then_push_without_a_full_recheck(self):
+        """The owner, 2026-11-16: file granularity, "but always recompile and unit test"."""
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
         eid, _ = self.queued(wt)
+        full_base = sh(self.r.root, "git", "--git-dir", self.r.bare, "rev-parse", "main").strip()
         rounds = self.moves_once(("worker/src/main/W.scala", "w\n"), ("docs/notes.md", "n\n"))
         self.assertEqual(self.check(eid), 0)
-        self.assertEqual(len(rounds), 1, "checked once")
-        self.assertEqual(len(self.calls_of("--range")), 1)
+        self.assertEqual(len(rounds), 2, "the full check, then the combined tree's verification")
+        tip = sh(self.r.root, "git", "--git-dir", self.r.bare, "rev-parse", "main").strip()
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--verify-only"])
+        self.assertEqual(self.verified()[1][1], f"{full_base}..{tip}",
+                         "verified over what landed since the full check and the change, together")
         self.assertEqual(self.remote_log()[0], "a: one", "rebased onto the moved main and pushed")
-        self.assertIn("main moved by 2 commits, no overlap: pushed without re-check", self.landed_verdict())
+        self.assertIn("no file overlap, the combined tree verified", self.landed_verdict())
         self.assertEqual(self.pushed()[-1], "push remote= skip=sbt identity", "the push skips the checks already passed")
+        self.assertFalse(self.entries()[eid.rsplit("-", 1)[-1]].get("verify"))
+
+    def test_the_same_sbt_module_without_a_shared_file_is_verified_not_fully_rechecked(self):
+        """2026-11-15: rev-scripts was fully checked five times over `sbt modules overlap (worker and worker)`."""
+        wt, _ = self.agent("a", "worker/src/test/scala/ASpec.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("worker/src/test/scala/BSpec.scala", "b\n"), ("common/src/main/C.scala", "c\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--verify-only"])
+        self.assertEqual(self.pushed()[-1], "push remote= skip=sbt identity")
+
+    def test_a_failing_combined_tree_is_not_landed(self):
+        wt, _ = self.agent("a", "web/src/main/PartA.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("worker/src/main/PartB.scala", "b\n"))  # the fake hook fails on PartA beside PartB
+        self.assertEqual(self.check(eid), 1)
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--verify-only"])
+        self.assertNotIn("a: one", self.remote_log())
+        self.assertIn("pre-push checks failed", [e for e in self.inbox() if e["kind"] == "NOT_LANDED"][0]["verdict"])
+
+    def test_a_hook_without_the_verification_gets_the_full_round(self):
+        hook = os.path.join(self.r.path, "scripts/hooks/pre-push")
+        self.r.write("scripts/hooks/pre-push", open(hook).read().replace("--verify-only", "--other"))
+        self.r.commit("a hook from before the verification")
+        self.r.push()
+        for f in (self.pushes, self.calls):
+            if os.path.exists(f):
+                os.remove(f)
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("worker/src/main/W.scala", "w\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--range"])
+        self.assertNotIn("without re-check", self.landed_verdict())
+        self.assertEqual(self.pushed()[-1], "push remote=")
+
+    def deleted_meanwhile(self, mine_path, mine_text):
+        self.r.write("scripts/data/venues.tsv", "a\tb\n")
+        self.r.commit("venues")
+        self.r.push()
+        os.remove(self.pushes)
+        wt, _ = self.agent("a", mine_path, mine_text, msg="a: one")
+        eid, _ = self.queued(wt)
+        real, n = A.run_entry_checks, []
+
+        def moving(repo, d, e, tree, base, head, mode, cls, log_path, own=None):
+            n.append(1)
+            if len(n) == 1:
+                other = self.r.worktree("wt-del", branch="del")
+                sh(other, "git", "rm", "-q", "scripts/data/venues.tsv")
+                sh(other, "git", "commit", "-q", "-m", "venues gone")
+                sh(other, "git", "push", "-q", "origin", "HEAD:main")
+            return real(repo, d, e, tree, base, head, mode, cls, log_path, own)
+        A.run_entry_checks = moving
+        self.addCleanup(setattr, A, "run_entry_checks", real)
+        self.assertEqual(self.check(eid), 0)
+        return [m for m, _r in self.verified()]
+
+    def test_a_deleted_file_the_change_names_is_a_full_recheck(self):
+        self.assertEqual(self.deleted_meanwhile("scripts/venue-tool.sh", "cut -f1 scripts/data/venues.tsv\n"),
+                         ["--range", "--range"])
+        self.assertNotIn("without re-check", self.landed_verdict())
+
+    def test_a_deleted_file_the_change_does_not_name_is_only_verified(self):
+        self.assertEqual(self.deleted_meanwhile("scripts/other-tool.sh", "echo hi\n"), ["--range", "--verify-only"])
+
+    def test_main_moving_over_the_changes_file_before_its_verification_is_a_full_round(self):
+        """The rule is judged again by the checker, against the FULL check's base: a verification queued on one main
+        is a full round when what landed before it starts touches the change's file."""
+        self.r.write("docs/notes.md", "".join(f"line {i}\n" for i in range(12)))
+        self.r.commit("notes")
+        self.r.push()
+        for f in (self.pushes, self.calls):
+            if os.path.exists(f):
+                os.remove(f)
+        wt, _ = self.agent("a", "docs/notes.md", "mine\n" + "".join(f"line {i}\n" for i in range(1, 12)), msg="a: one")
+        eid, _ = self.queued(wt)
+        d, _c, _w = A.waiting_state(self.r.path)
+        self.moves_once(("worker/src/main/W.scala", "w\n"))
+        A.check_entry(self.r.path, eid)  # the full check, main moving under it
+        A.push_change(self.r.path, d, A.read_record(os.path.join(d, "entries", f"{eid}.json")))
+        e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+        self.assertEqual((e["status"], e.get("verify")), ("queued", True), "no overlap yet: queued to be verified")
+        other, _ = self.agent("t", "docs/notes.md", "".join(f"line {i}\n" for i in range(11)) + "theirs\n")
+        sh(other, "git", "push", "-q", "origin", "HEAD:main")
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--range"], "fully checked on the newest main")
+        self.assertEqual(self.pushed()[-1], "push remote=", "and pushed as fully checked")
+
+    def test_the_combined_trees_check_on_ci_runner_names_its_full_base_in_a_check_verify_branch(self):
+        head = sh(self.r.path, "git", "rev-parse", "HEAD").strip()
+        full = "f" * 40
+        calls = self.fake_github("success", head, ref=f"check/verify-{full}-x")
+        ok, out = A.remote_check(self.r.path, {"id": "x", "full_base": full}, "base", head, "--verify-only")
+        self.assertTrue(ok, out)
+        self.assertIn(("DELETE", f"git/refs/heads/check/verify-{full}-x"), calls)
 
     def test_a_file_both_touch_rechecks(self):
         self.r.write("docs/notes.md", "".join(f"line {i}\n" for i in range(12)))
@@ -237,14 +346,6 @@ class QueueTest(WaitingTest):
         self.assertEqual(self.remote_log()[0], "a: one")
         self.assertNotIn("without re-check", self.landed_verdict())
         self.assertEqual(self.pushed()[-1], "push remote=", "the push's hook skips nothing")
-
-    def test_a_module_the_change_depends_on_rechecks(self):
-        wt, _ = self.agent("a", "worker/src/main/A.scala", "a\n", msg="a: one")
-        eid, _ = self.queued(wt)
-        rounds = self.moves_once(("common/src/main/C.scala", "c\n"))  # worker depends on common
-        self.assertEqual(self.check(eid), 0)
-        self.assertEqual(len(rounds), 2)
-        self.assertEqual(self.pushed()[-1], "push remote=")
 
     def rechecked_when_landing(self, path, text):
         wt, _ = self.agent("a", "docs/A.md", "a\n", msg="a: one")
@@ -810,7 +911,9 @@ class RemotePickupTest(QueueTest):
                          "checked on the base its run checked: the push judges what landed since")
         self.assertEqual(self.check(e["id"]), 0)
         self.assertEqual(self.entry(e["id"])["status"], "landed")
-        self.assertEqual(len(self.state["branch_pushes"]), 1, "no overlap with what landed: no new round either")
+        self.assertEqual(len(self.state["branch_pushes"]), 2, "no file overlap with what landed: no full round, only "
+                                                              "the combined tree's verification")
+        self.assertRegex(self.state["branch_pushes"][1], rf"check/verify-{old_base}-{e['id']}$")
 
     def test_a_replacement_never_adopts_a_run_whose_base_main_no_longer_holds(self):
         d, e = self.checking_entry()

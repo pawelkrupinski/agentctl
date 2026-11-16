@@ -1099,11 +1099,17 @@ The reconciler then takes it, a step per tick:
   script test's TIMEOUT, a stall) is no verdict: queued again 5 min later, up to 3 times. A dead executor is an
   expired lease: the tick starts another.
 - **checked → pushing → landed.** Under the `land/<repo>` lease the tick re-reads the item (a superseded one is never
-  pushed). Main moved since the check: rebased onto it, re-checked (a new round) ONLY when what landed meanwhile
-  overlaps -- a path both touch, an sbt module one touches that the other's is or depends on, build.sbt / project/ /
-  the hook -- else pushed at once (`main moved by 3 commits, no overlap: pushed without re-check`; the push's hook
-  judges the red gate only). Re-checked twice at most; the third time it is pushed as rebased and the push's hook runs
-  the checks. The push is bounded; on expiry it verifies before it retries. `LANDED <sha>`, and a `watch` item.
+  pushed). Main moved since the check: rebased onto it, FULLY re-checked (a new round) ONLY when what landed since
+  the change's last FULL check overlaps BY FILE (the owner, 2026-11-16; module granularity looped changes 3-4 full
+  rounds) -- build.sbt / project/ / the hook landed, a path both change, or a path one side deletes (a rename's old
+  path too) whose file name a file the other side changes names -- else not re-checked in full, but ALWAYS VERIFIED:
+  a round of `--verify-only <full base>..<tip>` on a `check/verify-<full base>-<id>` branch (every test config
+  compiled, the lint and fast specs, the unit tests of every module either side touches), judged again by the
+  checker on the main it starts on, then pushed (`checked ...; main moved since its full check on <sha>: no file
+  overlap, the combined tree verified`; the push's hook judges the red gate only). A hook without `--verify-only`
+  gets the full round. Code: queue.py `recheck_reason` (THE RULE), `_push_change`, `_check_entry`; tests:
+  `tests/test_queue.py` (`*verif*`, `*deleted_file*`).
+  The push is bounded; on expiry it verifies before it retries. `LANDED <sha>`, and a `watch` item.
   It pushes from its own check tree when that tree's slot is free, else from the PUSH TREE `<clone>-wt-check-push`
   (its own lease, no checker takes it): a checker holds its slot through its remote run's whole wait, and pushes that
   waited for it sat `busy` 30 min past their deadline (2026-11-06).

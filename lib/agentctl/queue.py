@@ -90,18 +90,29 @@ def probe_infra_requeue(a):
     return not stuck, f"entry {a['eid']}: {e.get('status') or 'gone'}" + (f" ({e.get('why')})" if stuck else "")
 
 
-# Main moved between a change's check and its push: re-checked only when what landed meanwhile can change the verdict
-# (the owner, 2026-10-27: memo-key -41 passed runs 3341 and 3350, then main moved and it was checked a third time) --
-# a path both touch, an sbt module one touches that the other's module is (or depends on: the hook's own compile plan,
-# `pre-push --compile-plan`, build.sbt's dependsOn), or the build or the hook itself. Otherwise rebased and pushed with
-# the change's checks skipped at the push (PREPUSH_SKIP: the hook's own plan for its paths; the red gate still runs);
-# main's CI tests the combination. A rebase conflict is NOT LANDED, as ever.
+# Main moved between a change's check and its push: FULLY re-checked only when what landed meanwhile can change what the
+# full check judged (the owner, 2026-10-27: memo-key -41 passed runs 3341 and 3350, then main moved and it was checked a
+# third time). FILE GRANULARITY (the owner, 2026-11-16, "but always recompile and unit test": at module granularity
+# nearly every change shared worker or scrapers with what landed, and changes looped 3-4 full rounds of 15-20 min, some
+# over two test files in worker/src/test). THE RULE, judged against the base of the change's last FULL check:
+#   - what landed changes the build or the hook (RECHECK_ALWAYS), or
+#   - a path both sides change (added, modified or deleted; a rename counts as both of its paths), or
+#   - a path one side deletes (a rename's old path included) whose file name a file the other side changes names
+#     (`git grep -F <basename>` over those files at the rebased tip: a script, fixture or test reading it by name; a
+#     Scala reference by class name the combined compile below catches)
+# -> a new FULL round. Otherwise no full re-check, but ALWAYS the COMBINED-TREE VERIFICATION (VERIFY_MODE): the rebased
+# tip checked once more, on the CI tier like any check, with the hook's `--verify-only <full base>..<tip>` -- every test
+# config compiled, the lint and fast specs, and the unit tests of every module either side touches -- then pushed with
+# the change's own checks skipped at the push (PREPUSH_SKIP: the hook's plan for its paths; the red gate still runs).
+# A hook without --verify-only gets the full round, as before the rule. A rebase conflict is NOT LANDED, as ever.
 RECHECK_ALWAYS = re.compile(r"^(build\.sbt|project/.*|scripts/hooks/.*|scripts/hooks-path\.sh|scripts/tool-conventions\.sh)$")
+VERIFY_MODE = "--verify-only"
 
 
-def range_paths(cwd, a, b):
-    """The paths a..b changes (both sides of a rename)."""
-    return [p for p in git(cwd, "diff", "--name-only", "--no-renames", a, b).splitlines() if p]
+def range_paths(cwd, a, b, deleted=False):
+    """The paths a..b changes (both sides of a rename); deleted: only those it deletes (a rename's old path too)."""
+    flt = ["--diff-filter=D"] if deleted else []
+    return [p for p in git(cwd, "diff", "--name-only", "--no-renames", *flt, a, b).splitlines() if p]
 
 
 def hook_query(hook, tree, flag, paths):
@@ -114,26 +125,31 @@ def hook_query(hook, tree, flag, paths):
     return r.stdout.split() if r.returncode == 0 else None
 
 
-def sbt_modules(hook, tree, paths):
-    """[(module, {module and its dependents})] per path that compiles into one, from the hook's compile plan (its first
-    task is the path's own module); None when the plan cannot be read. The plan reads a path's directory and extension
-    only, so one query per (directory, extension)."""
-    reps = {}
-    for p in paths:
-        reps.setdefault((os.path.dirname(p), os.path.splitext(p)[1]), p)
-    out = []
-    for p in reps.values():
-        tasks = hook_query(hook, tree, "--compile-plan", [p])
-        if tasks is None:
-            return None
-        mods = [t.split("/", 1)[0] for t in tasks]
-        if mods:
-            out.append((mods[0], set(mods)))
-    return out
+def verify_supported(hook):
+    """Whether the hook (a path) has the combined-tree verification mode."""
+    try:
+        with open(hook) as f:
+            return VERIFY_MODE in f.read()
+    except (OSError, TypeError):
+        return False
 
 
-def recheck_reason(hook, tree, base, moved, change_paths):
-    """(commits main moved by, why the change must be checked again or None)."""
+def named_deletions(tree, tip, deleted, readers):
+    """(deleted path, reader) of a deleted path whose file name a reader names at tip; None when none does."""
+    readers = [p for p in readers if git_ok(tree, "cat-file", "-e", f"{tip}:{p}")]
+    if not deleted or not readers:
+        return None
+    for p in sorted(deleted):
+        r = git(tree, "grep", "-l", "-F", "-e", os.path.basename(p), tip, "--", *readers, check=False)
+        hits = sorted(line.split(":", 1)[1] for line in r.stdout.splitlines() if ":" in line)
+        if hits:
+            return p, hits[0]
+    return None
+
+
+def recheck_reason(tree, base, moved, tip, change_paths):
+    """(commits main moved by, why the change must be FULLY checked again or None) -- THE RULE above, of what landed in
+    base..moved against the change's paths (moved..tip, the rebased change)."""
     n = len(git(tree, "rev-list", f"{base}..{moved}", check=False).stdout.split())
     landed_paths = range_paths(tree, base, moved)
     build = sorted(p for p in landed_paths if RECHECK_ALWAYS.match(p))
@@ -142,15 +158,11 @@ def recheck_reason(hook, tree, base, moved, change_paths):
     same = sorted(set(landed_paths) & set(change_paths))
     if same:
         return n, f"both touch {same[0]}" + (f" (+{len(same) - 1} more)" if len(same) > 1 else "")
-    if not hook:
-        return n, None
-    mine, theirs = sbt_modules(hook, tree, change_paths), sbt_modules(hook, tree, landed_paths)
-    if mine is None or theirs is None:
-        return n, "the hook's compile plan could not be read"
-    for m, m_deps in mine:
-        for t, t_deps in theirs:
-            if m in t_deps or t in m_deps:
-                return n, f"sbt modules overlap ({m} and {t})"
+    for deleted, readers, whose in ((range_paths(tree, base, moved, deleted=True), change_paths, "they delete"),
+                                    (range_paths(tree, moved, tip, deleted=True), landed_paths, "it deletes")):
+        hit = named_deletions(tree, tip, deleted, readers)
+        if hit:
+            return n, f"{whose} {hit[0]}, which {hit[1]} names"
     return n, None
 
 
@@ -751,6 +763,15 @@ def _check_entry(repo, d, e, i, own=None):
     joining = bool(reds) and must_wait(repo, commits, reds)
     cls = gov_class_of(repo, commits, reds)
     mode = "--checks-only" if joining else "--range"
+    if adopt and rem.get("mode") == VERIFY_MODE:
+        mode = VERIFY_MODE
+    elif e.get("verify") and hook:  # THE RULE (recheck_reason) again, on the main this round checks on
+        _n, why = recheck_reason(tree, e.get("full_base") or e.get("checked_base") or base, base, head,
+                                 range_paths(tree, base, head))
+        if why is None and verify_supported(precheck_hook(tree)):
+            mode = VERIFY_MODE
+        else:
+            wlog(d, f"{e['id']}: {why or f'the hook has no {VERIFY_MODE}'}: fully checked, not only verified")
     where = "no hook"
     if hook:
         ok, out, where = run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own)
@@ -784,12 +805,15 @@ def _check_entry(repo, d, e, i, own=None):
             known_red = {"keys": sorted(what), "where": srcs, "base": base}
             wlog(d, f"{e['id']}: its checks failed only where its base fails too ({keys_text(what)}; {'; '.join(srcs)})"
                     ": it waits behind that red")
+    full_base = (e.get("full_base") or e.get("checked_base") or base) if mode == VERIFY_MODE else base
+    verified = f"verified {head[:10]} on {base[:10]} (fully checked on {full_base[:10]})" if mode == VERIFY_MODE \
+        else f"checked {head[:10]} on {base[:10]}"
     set_change(d, e, "checked", data={"tip": head, "base": base, "mode": mode, "where": where},
-               event={"text": f"{e['id']}: checked {head[:10]} on {base[:10]} ({where})"
+               event={"text": f"{e['id']}: {verified} ({where})"
                       + (" -- failing only as its base fails" if known_red else "")},
-               tip=head, checked_base=base, checked_mode=mode, checked_where=where, tree=i, infra_reason=None, infra_same=0,
-               known_red=known_red)
-    wlog(d, f"{e['id']}: checked {head[:10]} on {base[:10]} ({where})")
+               tip=head, checked_base=base, full_base=full_base, checked_mode=mode, checked_where=where, tree=i,
+               infra_reason=None, infra_same=0, known_red=known_red, verify=False)
+    wlog(d, f"{e['id']}: {verified} ({where})")
     return 0
 
 
@@ -985,6 +1009,7 @@ def _push_change(repo, d, e, i):
         fetch_main(repo)  # a corrupt clone is marked for repair; a failed fetch pushes onto the last known main
         moved = git(repo, "rev-parse", f"{remote()}/main").strip()
         base, head, where, skip = e["checked_base"], e["tip"], e.get("checked_where") or "", None
+        full_base = e.get("full_base") or base
         if moved != base:
             new_head, via = rebase_in_tree(d, tree, e, moved)
             if via:
@@ -995,24 +1020,32 @@ def _push_change(repo, d, e, i):
                               f"{moved[:10]} (main moved during its checks): rebase onto {remote()}/main and land again")
                 return "rejected"
             tree_hook = precheck_hook(tree) if hook else None
-            mine = range_paths(tree, moved, new_head)
-            n, why = recheck_reason(tree_hook, tree, base, moved, mine)
-            if why is None and tree_hook:
-                skip = hook_query(tree_hook, tree, "--plan", mine)
-                if skip is None:
-                    why = "the hook's plan could not be read"
+            n, why = recheck_reason(tree, full_base, moved, new_head, range_paths(tree, moved, new_head))
             moved_by = f"main moved by {n} commit{'' if n == 1 else 's'}"
-            if why is not None:  # a new round, not an attempt
+            if why is None and tree_hook and not verify_supported(tree_hook):
+                why = f"no file overlap, but the hook has no {VERIFY_MODE} for the combined tree"
+            if why is not None or tree_hook:  # a new round, not an attempt: the full checks, or the combined tree's
+                verify = why is None
+                what = ("no file overlap: its combined tree verified (every test config compiled, the touched "
+                        "modules' unit tests)") if verify else f"{why}: checked again"
                 set_change(d, e, "queued", data={"rounds": e.get("rounds", 0) + 1},
-                           event={"text": f"{e['id']}: {moved_by} since its checks, {why}: checked again"},
-                           rounds=e.get("rounds", 0) + 1, retry_after=0)
-                wlog(d, f"{e['id']}: {moved_by} during its checks, {why}: queued for a new round")
+                           event={"text": f"{e['id']}: {moved_by} since its checks, {what}"},
+                           rounds=e.get("rounds", 0) + 1, retry_after=0, verify=verify)
+                wlog(d, f"{e['id']}: {moved_by} during its checks, {what}: queued for a new round")
                 return "queued"
-            note = f"{moved_by}, no overlap: pushed without re-check"
+            note = f"{moved_by}, no file overlap: pushed without re-check"  # no hook: nothing to check it with
             wlog(d, f"{e['id']}: {note}")
             where = f"{where}; {note}"
             e.pop("remote_run", None)
             base, head, e["tip"] = moved, new_head, new_head
+        elif e.get("checked_mode") == VERIFY_MODE:  # the combined tree passed: the change's own checks stand
+            skip = hook_query(precheck_hook(tree), tree, "--plan", range_paths(tree, base, head))
+            if skip is None:
+                set_change(d, e, "queued", event={"text": f"{e['id']}: the hook's plan could not be read: checked again"},
+                           retry_after=0, verify=False)
+                return "queued"
+            where = f"{where}; main moved since its full check on {full_base[:10]}: no file overlap, the combined tree verified"
+            e.pop("remote_run", None)
         commits = waiting_commits(tree, base, head)
         reds = gate_reds(repo) if waiting_supported(repo) else set()
         kr = e.get("known_red")
@@ -1027,7 +1060,7 @@ def _push_change(repo, d, e, i):
         env = tool_env()
         if e.get("remote_run"):  # the hook takes ci-runner's pass once GitHub confirms it (remote checks)
             env["PREPUSH_REMOTE_RUN"] = str(e["remote_run"])
-        if skip:  # checked on the old base, no overlap with what landed since: the hook judges the red gate only
+        if skip:  # fully checked on an older base, the combined tree verified: the hook judges the red gate only
             env["PREPUSH_SKIP"] = " ".join(skip)
         rc, out = run_watched(push_argv(remote(), head), tree, env, log_path, "push", **push_bounds())
         git(repo, "fetch", "--quiet", remote(), "main", check=False)
@@ -1185,6 +1218,8 @@ def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own=None
     # the range through the remote's ref (origin/main is `base` now, fetched just before): the hook finds the remote, and
     # with it the forge's red gate, from it -- given bare shas it fell back to the wrong forge: the gate unread
     rng = f"{remote()}/main..{head}" if git(tree, "rev-parse", f"{remote()}/main").strip() == base else f"{base}..{head}"
+    if mode == VERIFY_MODE:  # the combined tree: what landed since the full check and the change, together
+        rng = f"{e.get('full_base') or base}..{head}"
     e["waiting_on"] = "the governor (a check slot)"
     save_entry(d, e)
     try:

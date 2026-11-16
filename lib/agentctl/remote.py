@@ -201,6 +201,15 @@ def delete_check_branch(o_r, branch):
         err(f"could not delete {branch} ({str(ex)[:120]}): `agentctl sweep` lists it")
 
 
+def remote_mode_prefix(e, base, mode):
+    """The check branch's mode prefix (remote_check): `fast-`, `verify-<full base sha>-` or none."""
+    if mode == "--fast-only":
+        return "fast-"
+    if mode == VERIFY_MODE:
+        return f"verify-{e.get('full_base') or base}-"
+    return ""
+
+
 def remote_check(repo, e, base, head, mode, own=None):
     """(ok, output) of the change's checks on ci-runner; ok None when no verdict came (the caller checks locally).
     The run belongs to the ENTRY, not to this process: its record (`remote` in the entry) is saved the moment the branch is
@@ -218,8 +227,9 @@ def remote_check(repo, e, base, head, mode, own=None):
                 f"{int((time.time() - rem['pushed_at']) // 60)} min ago)")
     if not rem:
         # the branch NAMES the hook's mode for precommit-check.yml: check/fast-<id> runs `--fast-only` (the batch's
-        # combined check, as on the laptop), any other check/<id> `--checks-only`
-        branch = f"check/{'fast-' if mode == '--fast-only' else ''}{e['id']}"
+        # combined check, as on the laptop), check/verify-<full base sha>-<id> `--verify-only <full base>..HEAD` (a
+        # change's combined tree, queue.py's THE RULE), any other check/<id> `--checks-only`
+        branch = f"check/{remote_mode_prefix(e, base, mode)}{e['id']}"
         r = git(repo, "push", "--quiet", "--force", remote(), f"{head}:refs/heads/{branch}", check=False)
         if r.returncode != 0:
             return None, f"push of {branch} failed: {r.stderr.strip()[:300]}"
