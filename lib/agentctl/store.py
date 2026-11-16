@@ -600,6 +600,19 @@ ENTRY_STATE = {"queued": "queued", "checking": "checking", "checked": "checked",
                "rejected": "rejected", "superseded": "superseded", "cancelled": "cancelled"}
 
 
+def projected_transition(e, w, frm, to):
+    """(data, event) of a projected change transition. A joined change's terminal one carries its waiting entry's
+    verdict (a batch's LANDED, a NOT LANDED) and landed sha under ITS OWN id, so a watcher on the id `land` printed
+    reads them there (2026-11-16: ...-ac68b8 got only `waiting -> landed`, its batch's LANDED went to the waiting
+    entry's id)."""
+    if w and w.get("why") and machine_state("change", to).terminal:
+        verdict = f"{str(w['why']).splitlines()[0]} (queued {e['id']}, joined `waiting` as {w['id']})"
+        sha = {"landed_sha": w["landed_sha"]} if to == "landed" and w.get("landed_sha") else {}
+        return ({"why": verdict, **({"tip": sha["landed_sha"]} if sha else {})},
+                change_event(e, verdict, code=0 if to == "landed" else 1, **sha))
+    return None, {"text": f"{e['id']}: {frm} -> {to}", "refs": {"entry": e["id"]}}
+
+
 def project_changes(d, store=None):
     """Each queue entry's change item: created in its state, moved (a transition, with its event) when the entry's
     status moved. Returns the items."""
@@ -607,7 +620,7 @@ def project_changes(d, store=None):
     out = []
     every = {x["id"]: x for x in waiting_entries(d, open_only=False)}
     for e in every.values():
-        state = ENTRY_STATE.get(e.get("status"))
+        state, w = ENTRY_STATE.get(e.get("status")), None
         if e.get("status") == "joined":  # a pre-step-8 join: the change follows the waiting entry that carries it
             w = every.get(e.get("waiting_id") or "")
             state = ENTRY_STATE.get((w or {}).get("status"), "landed" if not w else "waiting")
@@ -617,9 +630,9 @@ def project_changes(d, store=None):
                                                      "submitted_at": st.clock(),
                                                      "red_accum0": float(st.meta_get("red_accum", 0) or 0)})
         if cur["state"] != state and not machine_state("change", cur["state"]).terminal:
+            data, event = projected_transition(e, w, cur["state"], state)
             try:
-                st.transition("change", e["id"], state, cur["version"],
-                              event={"text": f"{e['id']}: {cur['state']} -> {state}", "refs": {"entry": e["id"]}})
+                st.transition("change", e["id"], state, cur["version"], data=data, event=event)
             except (StaleVersion, TerminalState):
                 pass
             cur = st.item("change", e["id"])

@@ -133,6 +133,31 @@ class ProjectionTest(unittest.TestCase):
         self.assertEqual(A.project_changes(d, st)[0]["state"], "checking")
         self.assertEqual([e["kind"] for e in st.events()], ["change.checking"])
 
+    def test_a_change_that_joined_waiting_gets_its_batchs_verdict_under_its_own_id(self):
+        """2026-11-16: queued 20261116-184811-movies-r2-ci-ac68b8 joined `waiting` as 20261116-182331-movies-r2-ci-962;
+        its batch's LANDED went to the waiting entry's id, and the queued one's own event said only `waiting -> landed`
+        (an OTHER entry): a watcher on the id `land` printed never saw LANDED."""
+        root = tempfile.mkdtemp()
+        st = A.Store(path=os.path.join(root, "store.db"))
+        d = os.path.join(root, "w")
+        os.makedirs(os.path.join(d, "entries"))
+        q = {"id": "q1", "seq": 1, "status": "joined", "waiting_id": "w1", "worktree": "/wt/q"}
+        w = {"id": "w1", "seq": 2, "status": "waiting", "worktree": "/wt/q"}
+        A.write_json(os.path.join(d, "entries", "q1.json"), q)
+        A.write_json(os.path.join(d, "entries", "w1.json"), w)
+        A.project_changes(d, st)
+        A.write_json(os.path.join(d, "entries", "w1.json"),
+                     dict(w, status="landed", landed_sha="abc123", why="LANDED abc123 (batch: 1 change(s) in one push)"))
+        A.project_changes(d, st)
+        ev = [e for e in st.events() if e["item_id"] == "q1" and e["to_state"] == "landed"]
+        self.assertEqual(len(ev), 1)
+        self.assertTrue(ev[0]["refs"]["verdict"].startswith("LANDED abc123 (batch: 1 change(s) in one push"),
+                        ev[0]["refs"]["verdict"])
+        self.assertIn("q1", ev[0]["refs"]["verdict"])
+        self.assertEqual(ev[0]["refs"]["entry"], "q1")
+        self.assertEqual(A.inbox_kind(ev[0]["refs"]["verdict"], True), "LANDED")
+        self.assertEqual(st.item("change", "q1")["data"]["tip"], "abc123", "await_queued prints the landed sha")
+
 
 if __name__ == "__main__":
     unittest.main()
