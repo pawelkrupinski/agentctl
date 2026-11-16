@@ -374,6 +374,7 @@ class FixTest(RedsBase):
         self.assertEqual(self.unheld(), [])
         self.assertEqual(A.red_enforce(self.st, A.red_fix_facts(self.r.path, self.st), self.t[0]), [])
         e = json.load(open(os.path.join(d, "entries", f"{e['id']}.json")))
+        self.r.push(at=wt, ref=f"{sha}:main")  # landed: on main (a landed sha main lacks is no fix)
         e.update(status="landed", landed_sha=sha, landed_at=A.iso_at(self.t[0]))
         A.save_entry(d, e)
         self.tick(advance=60)
@@ -529,6 +530,105 @@ class FixTest(RedsBase):
         self.tick(advance=60)
         it = self.only()
         self.assertEqual((it["state"], (it["data"].get("fix") or {}).get("sha")), ("fix-pending", sha))
+
+    def stale_entry_landed_as(self, tip, name="repo-wt-phantom", head=None):
+        """A queue entry naming run 20 whose FILE still reads open, its store change LANDED with `tip` -- the tip of the
+        change's own check tree, which the landing may have re-cut (Order independence #78, 2026-11-16)."""
+        d = A.waiting_state(self.r.path)[0]
+        e, _ = A.queue_change(d, {"worktree": name, "branch": name, "head": head or tip, "commits": [head or tip],
+                                  "fixes": ["20"]})
+        e["status"] = "joined"
+        A.save_entry(d, e)
+        ch = self.st.put_item("change", e["id"], "queued", {"worktree": name, "head": head or tip,
+                                                            "submitted_at": self.t[0]})
+        self.st.transition("change", e["id"], "landed", ch["version"], data={"tip": tip})
+        return e
+
+    def unlanded_commit(self, name="repo-wt-phantom"):
+        wt = self.r.worktree(name, base="origin/main", branch=name)
+        self.r.write("fix.txt", "the phantom fix\n", at=wt)
+        return wt, self.r.commit("fix FooSpec (its entry names the red; no trailer, so main's trailers never link it)", at=wt)
+
+    def test_a_landed_changes_tip_that_never_reached_main_is_no_fix(self):
+        # 2026-11-16, Order independence #78 (b3f51c5166b0.2): "fix landed in b6d3d8235" -- a change item's tip, its
+        # check tree's pre-rebase commit, on no main; the red sat in fix-pending, its fixer gone, on a sha no run holds.
+        self.tick()
+        _wt, phantom = self.unlanded_commit()
+        self.stale_entry_landed_as(phantom)
+        self.tick(advance=60)
+        it = self.only()
+        self.assertEqual(it["state"], "offered", it["data"].get("fix"))
+
+    def test_a_landed_changes_re_cut_tip_follows_its_content_to_main(self):
+        self.tick()
+        _wt, phantom = self.unlanded_commit()
+        lw = self.r.worktree("repo-wt-landed", base="origin/main", branch="repo-wt-landed")
+        self.r.write("other.txt", "main moved meanwhile\n", at=lw)
+        self.r.commit("an unrelated commit under the landed copy", at=lw)
+        subprocess.run(["git", "-C", lw, "cherry-pick", phantom], check=True, capture_output=True)
+        landed = subprocess.run(["git", "-C", lw, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        self.r.push(at=lw, ref=f"{landed}:main")
+        self.stale_entry_landed_as(phantom)
+        self.tick(advance=60)
+        it = self.only()
+        self.assertEqual((it["state"], it["data"]["fix"]["sha"]), ("fix-pending", landed))
+
+    def test_a_change_that_landed_before_the_red_opened_is_no_fix_for_it(self):
+        # b6d3d8235's change landed on 2026-11-11 (as 19482f5c08, Verify scrape recording #23's fix, its entry also
+        # naming "40"); Order independence #78, a run containing it, opened this spell on 2026-11-16 and took it.
+        wt = self.r.worktree("repo-wt-old", base="origin/main", branch="repo-wt-old")
+        self.r.write("fix.txt", "old\n", at=wt)
+        sha = self.r.commit("fix FooSpec (linked by its entry alone)", at=wt)
+        self.r.push(at=wt, ref=f"{sha}:main")
+        self.t[0] -= 2 * 86400
+        self.stale_entry_landed_as(sha, name="repo-wt-old")
+        self.t[0] += 2 * 86400
+        self.tick()
+        self.tick(advance=60)
+        self.assertEqual(self.only()["state"], "offered", self.only()["data"].get("fix"))
+
+    def test_a_fix_pending_on_a_sha_main_never_got_is_offered_again(self):
+        self.tick()
+        it = self.only()
+        _wt, phantom = self.unlanded_commit()
+        self.st.transition("red", it["id"], "fix-pending", it["version"],
+                           data={"fix": {"entry": None, "status": "landed", "sha": phantom, "at": self.t[0]}})
+        self.tick(advance=60)
+        it = self.only()
+        self.assertEqual((it["state"], it["data"].get("fix")), ("offered", None))
+        self.assertIn("not on main", it["data"]["history"][-1]["outcome"])
+
+    def test_a_fix_pending_on_a_re_cut_sha_follows_it_to_its_landed_copy(self):
+        self.tick()
+        it = self.only()
+        _wt, phantom = self.unlanded_commit()
+        lw = self.r.worktree("repo-wt-landed", base="origin/main", branch="repo-wt-landed")
+        self.r.write("other.txt", "main moved meanwhile\n", at=lw)
+        self.r.commit("an unrelated commit under the landed copy", at=lw)
+        subprocess.run(["git", "-C", lw, "cherry-pick", phantom], check=True, capture_output=True)
+        landed = subprocess.run(["git", "-C", lw, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        self.r.push(at=lw, ref=f"{landed}:main")
+        e = self.stale_entry_landed_as(phantom)
+        self.st.transition("red", it["id"], "fix-pending", it["version"],
+                           data={"fix": {"entry": e["id"], "status": "landed", "sha": phantom, "at": self.t[0]}})
+        self.tick(advance=60)
+        it = self.only()
+        self.assertEqual((it["state"], it["data"]["fix"]["sha"]), ("fix-pending", landed))
+
+    def test_a_fix_pending_on_a_fix_that_landed_before_it_opened_is_offered_again(self):
+        # b3f51c5166b0.2 as it stood: fix-pending since 2026-11-16 on a fix that landed on 2026-11-11.
+        self.tick()
+        it = self.only()
+        wt = self.r.worktree("repo-wt-old", base="origin/main", branch="repo-wt-old")
+        self.r.write("fix.txt", "old\n", at=wt)
+        sha = self.r.commit("fix FooSpec (linked by its entry alone)", at=wt)
+        self.r.push(at=wt, ref=f"{sha}:main")
+        self.st.transition("red", it["id"], "fix-pending", it["version"], data={"fix": {
+            "entry": None, "status": "landed", "sha": sha, "at": float(it["data"]["opened_at"]) - 5 * 86400}})
+        self.tick(advance=60)
+        it = self.only()
+        self.assertEqual((it["state"], it["data"].get("fix")), ("offered", None))
+        self.assertIn("landed before", it["data"]["history"][-1]["outcome"])
 
     def test_refuted_fixes_are_counted_once_each(self):
         # 784badc4406e.3 stored the same two shas 593 times: "recurring: 593 fixes refuted", and a fixer brief that

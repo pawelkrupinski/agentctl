@@ -1273,17 +1273,71 @@ def red_sha_on_main(repo, sha):
 # landed with `Fixes-Red: 26`, which was never looked at. The red was re-offered and its fixer put "hold it as fixed by
 # 8d06b1a5ab" on the owner. Every candidate is judged in turn (corrected by the store when one is given); the first one
 # still standing is the fix.
+# A LANDED FIX IS A COMMIT ON MAIN (2026-11-16, Order independence #78, b3f51c5166b0.2): "fix landed in b6d3d8235,
+# awaiting a run containing it" -- b6d3d8235 was a change item's `tip`, the pre-rebase commit of its check tree; the
+# landing re-cut it as 19482f5c08 (Verify scrape recording #23's Filmweb fix, 2026-11-11), so no main ever held it. The
+# change's entry FILE still read `joined` and also named "40" (a run of an earlier spell of this key), so five days
+# later the new spell took it as a fix on its way, and the store turned it into the landed phantom. Now a landed fix's
+# sha is resolved against main (red_main_equivalent): kept when main contains it, followed to the main commit carrying
+# its patch (a re-cut on landing), and no fix at all when main carries neither; and a fix that landed before this spell
+# opened is no fix for it (the run that opened it already contained it), however its entry reads. A red already
+# fix-pending on such a sha is corrected the same way (red_fix_pending).
+_main_equivalents = process_cache({})
+
+
+def red_main_equivalent(repo, sha):
+    """The commit of <remote>/main that carries landed fix sha: sha itself when main contains it, else the main commit
+    with its patch (or content twin); None when main carries neither -- it never landed. sha as given when the clone
+    cannot tell (no repo or main ref, git unsure)."""
+    ref = f"refs/remotes/{remote()}/main"
+    if not repo or not sha or not git_ok(repo, "rev-parse", "--verify", "-q", ref):
+        return sha
+    if red_sha_on_main(repo, sha):
+        return sha
+    if not git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}"):
+        return None  # main fetched (red_sha_on_main) and still no such commit: it is on no main
+    key = (repo, sha, git(repo, "rev-parse", ref, check=False).stdout.strip())
+    if key not in _main_equivalents:
+        commits, left = cherry_landed(repo, ref, sha, f"{sha}~1")
+        if commits is None:
+            _main_equivalents[key] = sha  # git cannot tell (a root commit): unsure counts
+        elif left:
+            _main_equivalents[key] = None
+        else:
+            try:
+                _main_equivalents[key] = equivalent_on(repo, sha, ref) or sha
+            except (Exception, SystemExit):
+                _main_equivalents[key] = sha
+    return _main_equivalents[key]
+
+
+def red_fix_on_main(fix, repo):
+    """A landed fix with its sha on main (red_main_equivalent: `recut` names the sha it was given), None when main never
+    got it; any other fix as given."""
+    if not fix or fix.get("status") != "landed" or not fix.get("sha"):
+        return fix
+    on = red_main_equivalent(repo, fix["sha"])
+    if on is None:
+        return None
+    return fix if on == fix["sha"] else {**fix, "sha": on, "recut": fix["sha"]}
+
+
 def red_fix_of(it, facts, store=None):
     """The fix on its way for this red, or None: {entry, status, sha?, at?}. A refuted or unverified fix -- by sha or
     by content -- counts no more, and is never the reason a later fix is not seen. store: each candidate corrected by
-    its change's store item first (red_fix_fresh)."""
+    its change's store item first (red_fix_fresh). A landed fix is a commit on main (red_fix_on_main) that landed
+    since this spell opened."""
     d = it["data"]
     aside = red_set_aside(d, facts)
+    since = float(d.get("opened_at") or 0) - 3600
     for fix in red_fix_candidates(d, facts):
         if fix.get("via") and not red_sha_on_main(facts.get("repo"), fix["sha"]):
             continue  # a fixer's LANDED counts once its commit is on main (a verdict alone proves nothing)
         if store is not None:
             fix = red_fix_fresh(store, fix)
+        fix = red_fix_on_main(fix, facts.get("repo"))
+        if fix and fix.get("status") == "landed" and fix.get("at") is not None and float(fix["at"]) < since:
+            continue  # landed before this spell opened: the run that opened it already outlived it
         if fix and not (fix.get("sha") and red_fix_is_set_aside(fix["sha"], aside, facts)):
             return fix
     return None
@@ -2633,6 +2687,27 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
         line = f"{red_what(d)}: its fix {f['sha'][:10]} was already refuted: offered again"
         red_offer(store, it, line, data={"fix": None})
         return [f"re-offered {red_what(d)} (its fix {f['sha'][:10]} already refuted)"]
+    if f.get("status") == "landed" and f.get("sha"):  # A LANDED FIX IS A COMMIT ON MAIN (above red_main_equivalent)
+        on = red_fix_on_main(f, repo)
+        if on is None and not (fix and fix.get("sha") != f["sha"]):
+            h = {"at": iso_at(t), "holder": f.get("entry") or f["sha"][:10],
+                 "outcome": f"its fix {f['sha'][:10]} is not on main (nor its content): offered again"}
+            red_offer(store, it, f"{red_what(d)}: {h['outcome']}",
+                      data={"fix": None, "history": (d.get("history") or []) + [h]})
+            return [f"re-offered {red_what(d)} (its fix {f['sha'][:10]} is not on main)"]
+        early = on is not None and f.get("at") is not None and \
+            float(f["at"]) < float(d.get("opened_at") or 0) - 3600 and not (fix and fix.get("sha") != f["sha"])
+        if early:  # landed before this spell opened: the run that opened it already contained it (red_fix_of)
+            h = {"at": iso_at(t), "holder": f.get("entry") or f["sha"][:10],
+                 "outcome": f"its fix {on['sha'][:10]} landed before this red opened (its failing run contained it): "
+                            f"offered again"}
+            red_offer(store, it, f"{red_what(d)}: {h['outcome']}",
+                      data={"fix": None, "history": (d.get("history") or []) + [h]})
+            return [f"re-offered {red_what(d)} (its fix {on['sha'][:10]} predates it)"]
+        if on is not None and on["sha"] != f["sha"]:
+            line = f"{red_what(d)}: its fix {f['sha'][:10]} landed as {on['sha'][:10]}: verifying that"
+            it = red_move(store, it, "fix-pending", line, data={"fix": on})
+            d, f = it["data"], it["data"]["fix"]
     if f.get("sha") and not fix and not fix_reaches_red(repo, f["sha"], d):
         # PENDING ON ANOTHER RED'S FIX (PER RED, PER FAILING STEP: Order independence #74's swift red on 09e482c6a, the
         # ios red's fix): no run of it can prove this red fixed -- offered again, never parked until the give-up
