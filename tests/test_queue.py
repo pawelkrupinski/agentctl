@@ -1052,13 +1052,81 @@ own_tests_only(RemotePickupTest, QueueTest, WaitingTest)
 own_tests_only(FastPrecheckTest, QueueTest, WaitingTest)
 
 
+class LandedInboxTest(QueueTest):
+    """EVERY WAY A CHANGE LANDS TELLS ITS AUTHOR ONCE (review round 7). LANDED verdicts went missing twice: 20261116-184811-
+movies-r2-ci-ac68b8 (a batch landing) and 2b8927680 (a verify-round push; its author's `inbox wait --audience author
+--kinds LANDED` timed out after 3000 s though the commit was on origin/main). Each landing -- a solo push, a batch, by
+content, the verify round's push -- writes exactly ONE unread author-audience LANDED inbox entry, under the queued
+entry's own id, in its author's worktree."""
+
+    def assert_told_once(self, eid, wt):
+        """Exactly one unread author LANDED entry for wt, and it is eid's."""
+        landed = [e for e in self.inbox() if e.get("kind") == "LANDED" and not e["read"]
+                  and os.path.realpath(e.get("cwd") or "") == os.path.realpath(wt)]
+        self.assertEqual([(e.get("entry"), A.alert_audience(e)) for e in landed], [(eid, "author")],
+                         [(e["id"], e.get("audience"), e.get("verdict")) for e in landed])
+        self.assertEqual(A.inbox_wait("LANDED", timeout=0.01, audience="author"), 0,
+                         "the author's `inbox wait --audience author --kinds LANDED` wakes on it")
+
+    def test_a_solo_push(self):
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual(self.remote_log()[0], "a: one")
+        self.assert_told_once(eid, wt)
+
+    def test_the_verify_rounds_push(self):
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("worker/src/main/W.scala", "w\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertIn("the combined tree verified", self.landed_verdict())
+        self.assert_told_once(eid, wt)
+
+    def test_a_batch(self):
+        self.reds = {"7"}
+        wa, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: waits")
+        wb, _ = self.agent("b", "worker/src/main/B.scala", "b\n", msg="b: waits")
+        ea, _ = self.queued(wa)
+        self.check(ea)
+        eb, _ = self.queued(wb)
+        self.check(eb)
+        self.reds = set()
+        self.drive()
+        self.assertEqual(set(self.remote_log()[:2]), {"a: waits", "b: waits"})
+        self.assert_told_once(ea, wa)
+        self.assert_told_once(eb, wb)
+
+    def test_by_content_a_queue_entry(self):
+        wt, head = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: by hand")
+        eid, _ = self.queued(wt)
+        sh(wt, "git", "push", "-q", "origin", "HEAD:main")  # landed meanwhile by hand
+        A._landed_looked.clear()
+        self.drive()
+        self.assertEqual(self.entries()[eid.rsplit("-", 1)[-1]]["status"], "landed")
+        self.assert_told_once(eid, wt)
+
+    def test_by_content_a_store_item_no_queue_carries(self):
+        """The laptop's look: a change item the store holds, closed by content (close_item_landed)."""
+        wt, head = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: by hand")
+        st = A.Store()
+        st.put_item("change", "x-95", "waiting", {"worktree": wt, "head": head})
+        sh(wt, "git", "push", "-q", "origin", "HEAD:main")
+        A._landed_looked.clear()
+        self.assertEqual(A.close_landed_changes(self.r.path, store=st),
+                         ["x-95: its commits are on main (by content): landed"])
+        self.assert_told_once("x-95", wt)
+
+
 def load_tests(loader, tests, pattern):
     """Only this file's own cases (QueueTest borrows WaitingTest's fixture, not its tests)."""
     return unittest.TestSuite([QueueTest(n) for n in sorted(vars(QueueTest)) if n.startswith("test_") and vars(QueueTest)[n]]
                               + [RemotePickupTest(n) for n in sorted(vars(RemotePickupTest))
                                  if n.startswith("test_") and vars(RemotePickupTest)[n]]
                               + [FastPrecheckTest(n) for n in sorted(vars(FastPrecheckTest))
-                                 if n.startswith("test_") and vars(FastPrecheckTest)[n]])
+                                 if n.startswith("test_") and vars(FastPrecheckTest)[n]]
+                              + [LandedInboxTest(n) for n in sorted(vars(LandedInboxTest))
+                                 if n.startswith("test_") and vars(LandedInboxTest)[n]])
 
 
 if __name__ == "__main__":

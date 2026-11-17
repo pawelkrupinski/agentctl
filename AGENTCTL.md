@@ -1195,10 +1195,13 @@ by the `ci-why` summary).
 land's own process, outside the lock (the hook's dry run `--range <remote>/main..<sha>`), then under the `land/<repo>`
 lease it fetches, pushes when main has not moved since the check (moved: checked again outside the lock, twice; the
 third time under it) and verifies; main red and the change must wait: it joins the queue as `waiting` and `--follow`
-waits for its batch. `--follow` then watches in-process; otherwise LANDED starts a watch item and land exits. A sha
+waits for its batch (a queued change that joined `waiting` gets that entry's final verdict under its OWN id, the one
+`land` printed: `joined_verdicts`). `--follow` then watches in-process; otherwise LANDED starts a watch item and land exits. A sha
 has ONE watch, its store item, whichever host makes it: `--follow` claims it (a lease it renews, which the tick leaves
 alone) and writes its verdict there; a second follower of the same sha, on any host, prints that verdict instead of
-watching again, and a lapsed claim is taken over.
+watching again, and a lapsed claim is taken over (a follower renews only its own claim). The item names its repo
+by its GitHub slug: each host's tick looks in its own clone of it (`watch_clone`: red-repos.json `clone`, the movies
+clone), so ci-runner carries on a dead laptop follower's watch.
 
 Other repos (no movies hook): `land` holds `land/<repo>`, fetches, rebases, runs prepush-check, pushes (the repo's
 hook runs), verifies with `merge-base --is-ancestor` or `git cherry`, and prints `LANDED <sha>`; no watch.
@@ -1468,7 +1471,8 @@ many call sites with no model of who acts. Now every inbox entry -- `inbox_write
 through ONE router (`lib/agentctl/alerts.py`):
 
 - every entry is keyed by an ITEM (a red, a change's worktree, a condition, a run an author watched...) and stamped with
-  an AUDIENCE: `author` (NOT LANDED, WATCH RED, RED AUTHOR, FIX FAILED, a command's own crash/`ENDED`/`USAGE`), `fixer`
+  an AUDIENCE: `author` (NOT LANDED, WATCH RED, RED AUTHOR, FIX FAILED, a command's own crash/`ENDED`/`USAGE`; a
+  change's LANDED / SUPERSEDED, each an entry of its own under the queued change's id, never merged), `fixer`
   (RED FIXER ..., RED DISPATCHED, RED ESCALATE, RED UNCLAIMED/STARVED while a holder or a family owner is alive or
   before `alert_red_owner_level` offer rounds, a self-healing condition before its bound), `owner` (BLOCKED ON OWNER /
   WAITING ON YOU, RED BUDGET, UNLANDED ORPHAN after its fixer, a red nobody can take, a condition past its bound) or

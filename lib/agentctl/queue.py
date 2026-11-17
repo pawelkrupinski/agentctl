@@ -580,8 +580,12 @@ def change_item_fields(e):
 
 
 def set_change(d, e, to, data=None, event=None, store=None, **fields):
-    """THE writer of a change's state: its item (transition + event) and its entry's status, together."""
+    """THE writer of a change's state: its item (transition + event) and its entry's status, together. A waiting entry
+    that queued changes joined passes a final state on to them (joined_verdicts)."""
     st = store or Store()
+    joined = joined_changes(d, e, st) if machine_state("change", to).terminal else []
+    if joined and event:  # its author hears it under the queued id alone (joined_verdicts)
+        event = {**event, "refs": {**(event.get("refs") or {}), "no_inbox": True}}
     cur = st.put_item("change", e["id"], ENTRY_STATE.get(e.get("status"), "queued"), change_item_fields(e))
     if fields.get("why"):  # a decided change's why, on its item: a fixer's land reads it there (await_queued)
         data = {**(data or {}), "why": str(fields["why"])[:600]}
@@ -598,6 +602,38 @@ def set_change(d, e, to, data=None, event=None, store=None, **fields):
             st.transition("change", e["id"], to, cur["version"], data=data, event=event)
     e.update(status=ENTRY_STATUS[to], **fields)
     save_entry(d, e)
+    joined_verdicts(st, e, joined, to, event, data)
+
+
+def joined_changes(d, w, st):
+    """The queued changes that joined waiting entry w (queue_join: a queued change meeting a red gate becomes a waiting
+    entry of its own; the queued entry is `joined`, its item `waiting`) and are still open."""
+    out = []
+    for q in waiting_entries(d, open_only=False):
+        if q.get("status") == "joined" and q.get("waiting_id") == w["id"] and q["id"] != w["id"]:
+            it = st.item("change", q["id"])
+            if it and not machine_state("change", it["state"]).terminal:
+                out.append((q, it))
+    return out
+
+
+def joined_verdicts(st, w, joined, to, event, data):
+    """Waiting entry w's final state on each queued change that joined it, under the QUEUED id -- the one its `land`
+    printed -- its author told there alone (review round 7: 20261116-184811-movies-r2-ci-ac68b8's batch LANDED went to
+    its waiting entry's id; its own item only followed later, through the projection, as a second LANDED)."""
+    refs = (event or {}).get("refs") or {}
+    verdict = refs.get("verdict") or (event or {}).get("text") or f"{w['id']}: {to}"
+    for q, it in joined:
+        line = f"{str(verdict).splitlines()[0]} (queued {q['id']}, joined `waiting` as {w['id']})"
+        sha = w.get("landed_sha") if to == "landed" else None
+        extra = {k: refs[k] for k in refs if k not in ("verdict", "tail", "exit", "final", "command", "entry", "no_inbox")}
+        ev = change_event(q, line, refs.get("tail") or (), refs.get("exit", 0 if to == "landed" else 1), **extra)
+        try:
+            st.transition("change", q["id"], to, it["version"],
+                          data={**(data or {}), "why": line[:600], **({"tip": sha, "landed_sha": sha} if sha else {})},
+                          event=ev)
+        except (StaleVersion, TerminalState):
+            pass
 
 
 def queue_verdict(d, e, status, verdict, tail=(), code=1, **fields):

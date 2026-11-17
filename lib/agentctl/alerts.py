@@ -28,6 +28,11 @@ ALERT_OWNER_KINDS = {"BLOCKED", "RED_BUDGET", "UNLANDED_ORPHAN", "ORPHAN_SUBMITT
 # left undone, or recovery queueing somebody's work (its owner may need to stop it)
 ALERT_AUTHOR_KINDS = {"NOT_LANDED", "PRECHECK_REFUSED", "RED", "RED_AUTHOR", "FIX_FAILED", "FIX_NOT_COUNTED", "BRANCH_RED", "RED_REVERT",
                       "RED_BLAME", "RED_RELAND", "ENDED", "USAGE", "UNKNOWN", "STALLED"}
+# a change's final verdict to its author (review round 7: routed `info`, a LANDED reached no `inbox wait --audience
+# author` -- 2b8927680's author waited 3000 s for it). Each is an entry of its own, under its change's id: it closes
+# its worktree's live land alert and is never one itself (a later change's NOT LANDED would merge into it, over its
+# id). A command's own reply (with_inbox) stays `info`: it printed it.
+ALERT_AUTHOR_VERDICT_KINDS = {"LANDED", "SUPERSEDED"}
 ALERT_FIXER_KINDS = {"FIXER_FAILED", "DIAGNOSED", "RED_DISPATCHED", "ORPHAN_FIXER", "LAUNCH_FAILED", "RED_FLAKE",
                      "LANDER_REVIVED", "RELANDING", "FIX_UNVERIFIED", "NETWORK"}
 ALERT_RED_KINDS = {"RED_UNCLAIMED", "RED_STARVED", "RED_ESCALATE"}  # whose audience depends on who holds the red
@@ -160,7 +165,7 @@ def alert_route(rec, st=None, t=None, red=None, condition=None):
         return alert_condition_audience(kind, rec, opened, t), item
     if kind in ALERT_OWNER_KINDS:
         return "owner", item
-    if kind in ALERT_AUTHOR_KINDS:
+    if kind in ALERT_AUTHOR_KINDS | ALERT_AUTHOR_VERDICT_KINDS:
         return "author", item
     if kind in ALERT_FIXER_KINDS:
         return "fixer", item
@@ -307,7 +312,8 @@ def alert_write(rec, st=None, red=None, condition=None, d=None):
         kind = alert_kind_of(rec)
         for family in ALERT_CLOSES.get(kind, ()):
             alert_close_family(d, idx, rec, family, f"{kind}: {str(rec.get('verdict'))[:120]}")
-        live = alert_live(d, idx, rec["item"], t) if rec["audience"] != "info" else None
+        alone = rec["audience"] == "info" or kind in ALERT_AUTHOR_VERDICT_KINDS  # never merged, never a live alert
+        live = alert_live(d, idx, rec["item"], t) if not alone else None
         if live:
             surface = (rec["audience"] == "owner" and live.get("audience") != "owner") or \
                 (rec["audience"] == "owner" and rec.get("tier") and rec.get("tier") != live.get("tier"))
@@ -329,7 +335,7 @@ def alert_write(rec, st=None, red=None, condition=None, d=None):
         with open(tmp, "w") as f:
             json.dump(rec, f, indent=1)
         os.replace(tmp, os.path.join(d, rec["id"] + ".json"))
-        if rec["audience"] != "info":
+        if not alone:
             idx.setdefault("items", {})[rec["item"]] = rec["id"]
         idx.setdefault("seen", []).append(rec["id"])
         alert_index_save(d, idx)
