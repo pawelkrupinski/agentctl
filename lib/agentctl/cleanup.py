@@ -29,10 +29,24 @@ def cwd_candidates():
     return [pid for pid, _pp, _e, cmd in ps() if not cmd.startswith(SYSTEM_CMD) and pid != os.getpid()]
 
 
+PROC_ROOT = "/proc"  # Linux: every process's cwd is <PROC_ROOT>/<pid>/cwd
+
+
 def lsof_cwds(pids):
-    """{pid: cwd} through ONE `lsof -a -p <pids> -d cwd` (always pid-scoped), keeping only allowed paths."""
+    """{pid: cwd} keeping only allowed paths: on Linux from /proc/<pid>/cwd (review 2026-11-18: a Linux host with no
+    lsof -- python:3.14's Debian image -- crashed `cleanup` and `orphans` with FileNotFoundError), elsewhere through ONE
+    `lsof -a -p <pids> -d cwd` (always pid-scoped)."""
     pids = [int(x) for x in pids]
     res = {}
+    if os.path.isdir(os.path.join(PROC_ROOT, "self")):
+        for pid in pids:
+            try:
+                cwd = os.readlink(os.path.join(PROC_ROOT, str(pid), "cwd"))
+            except OSError:  # gone, or not ours to read
+                continue
+            if allowed_path(cwd):
+                res[pid] = cwd
+        return res
     for i in range(0, len(pids), 200):
         r = run_cmd(["lsof", "-nP", "-a", "-p", ",".join(map(str, pids[i:i + 200])), "-d", "cwd", "-Fpn"])
         pid = None

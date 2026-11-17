@@ -275,6 +275,8 @@ class BackgroundTouchesOnlyAllowedRootsTest(unittest.TestCase):
             if str(p).startswith(f"{home}/Desktop"):
                 touched.append(p)
             return real_stat(p, *a, **k)
+        self.addCleanup(setattr, A, "PROC_ROOT", A.PROC_ROOT)
+        A.PROC_ROOT = os.path.join(tempfile.gettempdir(), "no-proc-here")  # the lsof route (macOS), on Linux too
         subprocess.run, os.path.isdir, os.stat = fake_run, spy_isdir, spy_stat
         try:
             cwds = A.process_cwds()

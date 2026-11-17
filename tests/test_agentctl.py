@@ -269,6 +269,28 @@ class Base(unittest.TestCase):
         return open(p).read() if os.path.exists(p) else ""  # noqa
 
 
+class ProcessCwdsTest(Base):
+    def test_on_linux_the_cwds_are_read_from_proc_with_no_lsof(self):
+        """Review 2026-11-18: 11 tests failed in python:3.14 (Debian, no lsof): `cleanup` and `orphans` crashed with
+        FileNotFoundError on a Linux host without lsof. Linux has every process's cwd in /proc/<pid>/cwd."""
+        proc = os.path.join(self.tmp.name, "proc")
+        wt = self.r.worktree("wt-busy", branch="busy")
+        for pid, cwd in ((101, wt), (102, "/etc")):
+            os.makedirs(os.path.join(proc, str(pid)))
+            os.symlink(cwd, os.path.join(proc, str(pid), "cwd"))
+        os.makedirs(os.path.join(proc, "self"))
+        saved = A.PROC_ROOT, A.run_cmd
+        self.addCleanup(lambda: (setattr(A, "PROC_ROOT", saved[0]), setattr(A, "run_cmd", saved[1])))
+        A.PROC_ROOT = proc
+
+        def no_lsof(args, **kw):
+            if args[0] == "lsof":
+                raise FileNotFoundError(2, "No such file or directory", "lsof")
+            return saved[1](args, **kw)
+        A.run_cmd = no_lsof
+        self.assertEqual(A.lsof_cwds([101, 102, 103]), {101: wt}, "allowed paths only; a gone pid is skipped")
+
+
 class CleanupTest(Base):
     def cleanup(self, *extra):
         return self.run_tool("cleanup", "--execute", "--repo", self.r.path, "--no-remote", *extra)
