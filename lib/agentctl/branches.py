@@ -197,8 +197,10 @@ def owner_of(repo, branch, run):
         return None
     wt, how = None, None
     if branch.startswith("check/"):
-        # the mode prefix off (remote_mode_prefix: check/fast-<id>, check/verify-<sha>-<id>): the entry's own id
-        wt, how = queue_entry_worktree(re.sub(r"^(fast-|verify-[0-9a-f]{40}-)", "", branch[len("check/"):])), "its queue entry"
+        # the lane and mode prefixes off (remote_check: check/red-<...>; remote_mode_prefix: check/fast-<id>,
+        # check/verify-<sha>-<id>): the entry's own id
+        wt, how = (queue_entry_worktree(re.sub(r"^(red-)?(fast-|verify-[0-9a-f]{40}-)?", "", branch[len("check/"):])),
+                   "its queue entry")
     base = branch_base(branch, run)
     if not wt and repo and base:
         wt, how = worktree_holding(repo, base), f"the worktree that holds {base[:9]}"

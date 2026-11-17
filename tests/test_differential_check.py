@@ -42,7 +42,7 @@ class DifferentialCheckTest(test_queue.QueueTest):
         verdicts = [(False, f"precommit-check.yml run {run} (#1) failed: http://x\n-- check (rest)\n" + "\n".join(lines))]
         verdicts += then or []
 
-        def remote(repo, e, base, head, mode, own=None):
+        def remote(repo, e, base, head, mode, own=None, red=False):
             e["remote_run"] = run
             return verdicts.pop(0) if len(verdicts) > 1 else verdicts[0]
         A.remote_check = remote

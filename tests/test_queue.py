@@ -382,6 +382,21 @@ class QueueTest(WaitingTest):
         self.assertTrue(ok, out)
         self.assertIn(("DELETE", f"git/refs/heads/check/verify-{full}-x"), calls)
 
+    def test_a_gate_red_fixs_check_on_ci_runner_asks_for_the_red_fix_check_lane(self):
+        """2026-11-17 10:42Z: a red fix (Fixes-Red 2564) still checking 41 min after it was queued: first in this
+        queue, its precommit-check jobs then waited for `movies-check` runners with every other landing's. Its branch
+        is check/red-<...>, which precommit-check.yml runs on movies-check-red-fix, the lane ci-runner serves first."""
+        head = sh(self.r.path, "git", "rev-parse", "HEAD").strip()
+        calls = self.fake_github("success", head, ref="check/red-x")
+        ok, out = A.remote_check(self.r.path, {"id": "x"}, "base", head, "--checks-only", red=True)
+        self.assertTrue(ok, out)
+        self.assertIn(("DELETE", "git/refs/heads/check/red-x"), calls)
+        full = "f" * 40
+        calls = self.fake_github("success", head, ref=f"check/red-verify-{full}-x")
+        ok, out = A.remote_check(self.r.path, {"id": "x", "full_base": full}, "base", head, "--verify-only", red=True)
+        self.assertTrue(ok, out)
+        self.assertIn(("DELETE", f"git/refs/heads/check/red-verify-{full}-x"), calls)
+
     def test_a_file_both_touch_rechecks(self):
         self.r.write("docs/notes.md", "".join(f"line {i}\n" for i in range(12)))
         self.r.commit("notes")
@@ -520,7 +535,7 @@ class QueueTest(WaitingTest):
         eid, _ = self.queued(wt)
         seen = []
 
-        def remote(repo, e, base, head, mode, own=None):
+        def remote(repo, e, base, head, mode, own=None, red=False):
             seen.append((base, head, mode))
             e["remote_run"] = 4242
             return True, "precommit-check.yml run 4242 (#77): success"
@@ -538,7 +553,7 @@ class QueueTest(WaitingTest):
         os.remove(self.pushes)
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         eid, _ = self.queued(wt)
-        A.remote_check = lambda repo, e, base, head, mode, own=None: (None, "no run started")
+        A.remote_check = lambda repo, e, base, head, mode, own=None, red=False: (None, "no run started")
         saved = A.checks_here
         A.checks_here = lambda: True  # the laptop: its own tools
         self.addCleanup(setattr, A, "checks_here", saved)
@@ -554,7 +569,7 @@ class QueueTest(WaitingTest):
         os.remove(self.pushes)
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         eid, _ = self.queued(wt)
-        A.remote_check = lambda repo, e, base, head, mode, own=None: (None, "no run started")
+        A.remote_check = lambda repo, e, base, head, mode, own=None, red=False: (None, "no run started")
         self.check(eid, rounds=1)  # the tests run as ci-runner (AGENTCTL_ROLE=server)
         self.assertEqual(self.calls_of("--range"), [], "nothing checked in a ci-runner tree")
         self.assertEqual(self.pushed(), [])
@@ -628,7 +643,7 @@ class QueueTest(WaitingTest):
         self.assertTrue(ok, out)
         self.assertIn(("DELETE", "git/refs/heads/check/fast-batch-x"), calls)  # the branch names the mode for the workflow
         seen, saved = [], (A.remote_check, A.remote_checks_supported, A.precheck_hook, A.batch_mode)
-        A.remote_check = lambda repo, e, base, tip, mode, own=None: seen.append((e["id"], mode)) or (True, "ok")
+        A.remote_check = lambda repo, e, base, tip, mode, own=None, red=False: seen.append((e["id"], mode)) or (True, "ok")
         A.remote_checks_supported = lambda tree: True
         A.precheck_hook = lambda tree: "/hook"
         A.batch_mode = lambda hook: "--fast-only"
@@ -1071,7 +1086,7 @@ class RemotePickupTest(QueueTest):
         other, _ = self.agent("b", "worker/src/main/B.scala", "b\n", msg="b: two")
         sh(other, "git", "push", "-q", "origin", "HEAD:main")
         saved_rc = A.remote_check
-        A.remote_check = lambda repo, e_, base, head, mode, own=None: (True, "precommit-check.yml: success")
+        A.remote_check = lambda repo, e_, base, head, mode, own=None, red=False: (True, "precommit-check.yml: success")
         self.addCleanup(setattr, A, "remote_check", saved_rc)
         seen = []
         real = A.run_entry_checks
