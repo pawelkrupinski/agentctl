@@ -952,7 +952,9 @@ tests `tests/test_lander.py`, `tests/test_blame.py`.
 
 **1. The lander.** Every `agentctl land` records who ran it: the Claude session (`$CLAUDE_CODE_SESSION_ID`), the
 SUBAGENT when the land ran inside one (the session id alone names the orchestrator: the subagent's own transcript under
-`~/.claude/projects/*/<session>/subagents/agent-<id>.jsonl` that holds the `agentctl land` call is its record), the
+`~/.claude/projects/*/<session>/subagents/agent-<id>.jsonl` whose Bash CALL runs `agentctl land` is its record:
+first the call this land process runs under -- its command in an ancestor shell's command line -- else a call naming
+the land's worktree, else the newest land call; a transcript that only mentions land never counts, 2026-11-17), the
 transcript, the session's cwd, the worktree, the branch -- and each commit's KEYS (sha, patch-id, subject, author
 time; a landing rebases, so a commit on main is found again by its patch-id, or by its subject and author time). A
 queued change carries them in its change item (submitted with it); a direct land (no queue: core, the other repos)
@@ -1139,7 +1141,12 @@ The reconciler then takes it, a step per tick:
   compiled, the lint and fast specs, the unit tests of every module either side touches), judged again by the
   checker on the main it starts on, then pushed (`checked ...; main moved since its full check on <sha>: no file
   overlap, the combined tree verified`; the push's hook judges the red gate only). A hook without `--verify-only`
-  gets the full round. Code: queue.py `recheck_reason` (THE RULE), `_push_change`, `_check_entry`; tests:
+  gets the full round. SELECTION-AWARE (2026-11-17): when every such forcing path is the hook, its lint registry or
+  local-tests.txt, the hook's selection for the change's paths is compared at the full check's tip (`full_tip`) and
+  the rebased tip (`--plan`, `--compile-plan`, `--unit-plan`, `--lint-plan`, local-tests.txt's lines for the areas
+  run): only a check `--plan` adds or an area line added forces the full round -- what the compile, unit and lint
+  plans add the verify round runs itself. build.sbt / project/ / precommit-share.sh stay a full round.
+  Code: queue.py `recheck_reason` (THE RULE), `selection_change`, `_push_change`, `_check_entry`; tests:
   `tests/test_queue.py` (`*verif*`, `*deleted_file*`, `*rechecks`, `*full_round`).
   THE OLDEST VERIFICATION PUSHES FIRST (2026-11-16: workermem verified four times, each on a main a younger change
   had pushed onto meanwhile): while a change's verification round is queued or checking (not in an infra backoff),

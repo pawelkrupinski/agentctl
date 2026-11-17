@@ -58,6 +58,48 @@ class LanderRecordTest(Base):
         self.assertNotIn("transcript", rec)
 
 
+    @staticmethod
+    def bash_call(command, at="2026-11-17T08:49:00Z"):
+        return {"type": "assistant", "timestamp": at, "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": command}}]}}
+
+    def test_a_newer_subagent_that_only_read_about_land_is_not_the_lander(self):
+        """2026-11-17: 20261117-094917-movies-dev-speed-a046a0's lander was recorded as a read-only analysis subagent
+        of the same session, written last and quoting AGENTCTL.md's `agentctl land`; the one that ran it was older."""
+        sid = "sess-4"
+        self.transcript(f"{sid}.jsonl", [{"cwd": "/orchestrator"}], age=5)
+        lander = self.transcript(f"{sid}/subagents/agent-lander.jsonl",
+                                 [{"cwd": "/orchestrator"}, self.bash_call("cd /wt-dev && ~/bin/agentctl land")], age=60)
+        self.transcript(f"{sid}/subagents/agent-reader.jsonl",
+                        [{"cwd": "/orchestrator"}, {"type": "user", "message": {"content": [
+                            {"type": "tool_result", "content": "agentctl land  # queues the change"}]}},
+                         self.bash_call("grep -n land ~/bin/AGENTCTL.md")])
+        self.assertEqual(A.lander_transcript(sid, worktree="/wt-dev", ancestry=[]), (lander, "lander"))
+
+    def test_the_land_call_this_process_runs_under_wins_over_another_subagents_land(self):
+        """Two subagents of a session both ran `agentctl land`: the one whose Bash command is this process's parent
+        shell's (the calling Claude process's own call) is the lander, even when the other is newer."""
+        sid = "sess-5"
+        mine = self.transcript(f"{sid}/subagents/agent-mine.jsonl",
+                               [{"cwd": "/o"}, self.bash_call("cd /wt-a && ~/bin/agentctl land 2>&1 | tail -3")], age=90)
+        self.transcript(f"{sid}/subagents/agent-other.jsonl", [{"cwd": "/o"}, self.bash_call("cd /wt-b && ~/bin/agentctl land")])
+        shell = "/bin/zsh -c source snap.sh && eval 'cd /wt-a && ~/bin/agentctl land 2>&1 | tail -3' < /dev/null"
+        self.assertEqual(A.lander_transcript(sid, worktree="/elsewhere", ancestry=[shell]), (mine, "mine"))
+        self.assertEqual(A.lander_transcript(sid, worktree="/wt-b", ancestry=[]),
+                         (os.path.join(self.projects, "-proj", sid, "subagents", "agent-other.jsonl"), "other"))
+
+    def test_land_status_is_not_a_land(self):
+        sid = "sess-6"
+        main = self.transcript(f"{sid}.jsonl", [{"cwd": "/o"}], age=5)
+        self.transcript(f"{sid}/subagents/agent-watcher.jsonl", [{"cwd": "/o"}, self.bash_call("~/bin/agentctl land status")])
+        self.assertEqual(A.lander_transcript(sid, worktree="/wt", ancestry=[]), (main, None))
+
+    def test_ps_escapes_in_the_parent_shell_are_read_back(self):
+        """ps prints a newline as \\012 and the eval wrapper quotes ' as '"'"'."""
+        raw = "/bin/zsh -c eval 'cd /w && echo '\"'\"'x'\"'\"'\\012~/bin/agentctl land' < /dev/null"
+        self.assertIn("cd /w && echo 'x'\n~/bin/agentctl land", A.shell_args_text(raw))
+
+
 class CommitKeysTest(Base):
     def change(self, name, files):
         wt = self.r.worktree(f"repo-wt-{name}", branch=name)

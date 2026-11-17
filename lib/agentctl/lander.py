@@ -24,28 +24,94 @@ def claude_projects_root():
     return os.environ.get("AGENTCTL_CLAUDE_PROJECTS") or os.path.join(HOME, ".claude", "projects")
 
 
-def _tail_has(path, needle, size=256 * 1024):
+LAND_CALL = re.compile(r"agentctl land(?![ \t]+(status|hold|release|cancel|--help)\b)(?=[\s;&|)'\"]|$)")
+
+
+def _tail_lines(path, size=256 * 1024):
+    """The transcript's JSON entries in its last `size` bytes (a partial first line dropped)."""
     try:
         with open(path, "rb") as f:
-            f.seek(max(0, os.path.getsize(path) - size))
-            return needle.encode() in f.read()
+            n = os.path.getsize(path)
+            f.seek(max(0, n - size))
+            data = f.read().decode(errors="replace")
     except OSError:
-        return False
+        return []
+    lines = data.splitlines()[1:] if n > size else data.splitlines()
+    out = []
+    for line in lines:
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
 
 
-def lander_transcript(sid, now_=None):
-    """(transcript path, subagent id) of the session `sid` running this land: the subagent transcript
-    (<projects>/*/<sid>/subagents/agent-<id>.jsonl) or the session's own (<projects>/*/<sid>.jsonl) written in the last
-    LANDER_TRANSCRIPT_WINDOW s that holds the `agentctl land` call -- the Bash call is in the transcript while it runs --
-    the most recent first; else the session's own transcript; (None, None) when there is none."""
+def land_calls(path):
+    """[(timestamp, command)] of the Bash calls in a transcript's tail that run `agentctl land` (not land status etc.):
+    a call, never a mention -- a subagent that only read about land is no lander (2026-11-17)."""
+    out = []
+    for d in _tail_lines(path):
+        msg = d.get("message") if isinstance(d, dict) else None
+        content = msg.get("content") if isinstance(msg, dict) else None
+        for c in content if isinstance(content, list) else []:
+            cmd = (c.get("input") or {}).get("command") if isinstance(c, dict) and c.get("type") == "tool_use" else None
+            if isinstance(cmd, str) and LAND_CALL.search(cmd):
+                out.append((str(d.get("timestamp") or ""), cmd))
+    return out
+
+
+def shell_args_text(args):
+    """A process's `ps` command line as the shell got it: ps's \\012 / \\011 escapes and the eval wrapper's '"'"'
+    quoting undone, so a Bash tool call's command reads as a substring of its shell's."""
+    return args.replace("'\"'\"'", "'").replace("\\012", "\n").replace("\\011", "\t")
+
+
+def process_ancestry(stop_pid=None, depth=8):
+    """The command lines (shell_args_text) of this process's ancestors up to the Claude process (stop_pid): the
+    calling Bash tool call's shell is among them."""
+    out, pid = [], os.getppid()
+    for _ in range(depth):
+        if pid <= 1 or pid == stop_pid:
+            break
+        r = subprocess.run(["ps", "-ww", "-o", "ppid=,args=", "-p", str(pid)], capture_output=True, text=True)
+        parts = r.stdout.strip().split(None, 1)
+        if r.returncode != 0 or len(parts) < 2 or not parts[0].isdigit():
+            break
+        out.append(shell_args_text(parts[1]))
+        pid = int(parts[0])
+    return out
+
+
+def lander_transcript(sid, now_=None, worktree=None, ancestry=None):
+    """(transcript path, subagent id) of the session `sid`'s agent that runs THIS land: among the session's own
+    transcript (<projects>/*/<sid>.jsonl) and its subagents' (<sid>/subagents/agent-<id>.jsonl) written in the last
+    LANDER_TRANSCRIPT_WINDOW s, the one whose Bash call runs `agentctl land` (land_calls) -- first the call this
+    process runs under (its command in an ancestor's command line: `ancestry`, default process_ancestry()), else a call
+    naming the land's worktree, else any land call; the newest call in that tier. A session id alone names the
+    orchestrator and every subagent alike, and the newest transcript is often not the lander's (2026-11-17: a
+    read-only analysis subagent quoting AGENTCTL.md was recorded). None of them ran land: the session's own
+    transcript; (None, None) when there is none."""
     if not sid:
         return None, None
     t = now_ if now_ is not None else time.time()
     root = claude_projects_root()
     main = glob.glob(os.path.join(root, "*", f"{sid}.jsonl"))
     subs = glob.glob(os.path.join(root, "*", sid, "subagents", "agent-*.jsonl"))
-    recent = [p for p in subs + main if t - mtime(p) <= LANDER_TRANSCRIPT_WINDOW and _tail_has(p, "agentctl land")]
-    pick = max(recent, key=mtime) if recent else (main[0] if main else None)
+    if ancestry is None:
+        pid = os.environ.get("CLAUDE_PID") or ""
+        ancestry = process_ancestry(int(pid) if pid.isdigit() else None)
+    wt = os.path.realpath(worktree) if worktree else None
+    best = None
+    for p in subs + main:
+        if t - mtime(p) > LANDER_TRANSCRIPT_WINDOW:
+            continue
+        for at, cmd in land_calls(p):
+            tier = 2 if any(cmd.strip() and cmd.strip() in a for a in ancestry) else \
+                1 if wt and (wt in cmd or (worktree or "") in cmd) else 0
+            key = (tier, at, mtime(p))
+            if best is None or key > best[0]:
+                best = (key, p)
+    pick = best[1] if best else (main[0] if main else None)
     if not pick:
         return None, None
     base = os.path.basename(pick)
@@ -83,7 +149,7 @@ def lander_record(repo):
     except (Exception, SystemExit):
         rec["repo"] = None
     if sid:
-        tr, agent = lander_transcript(sid)
+        tr, agent = lander_transcript(sid, worktree=repo)
         rec.update(transcript=tr, agent=agent, session_cwd=transcript_cwd(tr) if tr else None)
     fx = os.environ.get("AGENTCTL_RED_FIXER")
     if fx:
