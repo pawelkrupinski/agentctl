@@ -131,6 +131,23 @@ class BuildViewTest(unittest.TestCase):
         self.full = self.commit("an auto plugin")
         self.assertIsNotNone(self.judged("project/Tripwire.scala", "val x = 1", "val x = 2", paths=("docs/x.md",)))
 
+    def test_an_auto_plugin_with_a_typed_trigger_changes_every_view(self):
+        """Review 2026-11-18: `override def trigger: PluginTrigger = allRequirements` was read as no auto plugin."""
+        self.write("project/Tripwire.scala", "import sbt._\nobject Tripwire extends AutoPlugin {\n"
+                                             "  override def trigger: PluginTrigger = allRequirements\n  val x = 1\n}\n")
+        self.full = self.commit("an auto plugin")
+        self.assertIsNotNone(self.judged("project/Tripwire.scala", "val x = 1", "val x = 2", paths=("docs/x.md",)))
+
+    def test_another_root_sbt_file_is_the_build_too(self):
+        """Review 2026-11-18: sbt reads every root *.sbt (movies' coupling.sbt and identity-impact.sbt: the tasks the
+        hook's coupling ratchet and identity narrowing run). One landing meanwhile was no build change at all."""
+        self.write("identity-impact.sbt", "lazy val impactUnits = Def.task { Seq(1) }\n")
+        self.full = self.commit("a second root sbt file")
+        self.assertTrue(A.forces_full_recheck("identity-impact.sbt"))
+        self.assertIsNotNone(A.BUILD_VIEW_PATHS.match("identity-impact.sbt"))
+        self.assertIn("identity-impact.sbt", self.judged("identity-impact.sbt", "Seq(1)", "Seq(2)", paths=("docs/x.md",)))
+        self.assertIn("the change itself", A.build_view_change(self.repo, self.full, self.full, ["coupling.sbt"], {}))
+
     def test_the_modules_the_selection_names_are_seen_too(self):
         """A docs change whose selection runs worker's tests (an area line): worker's definition is in its view."""
         moves = ("build.sbt", "libraryDependencies += caffeine, forkTests", "libraryDependencies += caffeine")

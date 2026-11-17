@@ -18,13 +18,14 @@
 #   - project/*.scala: `Obj.member` (and a bare member of an object a global statement imports, `import Dependencies._`)
 #     pulls in that member, the members it names, and the object's text outside its members (imports, the signature); a
 #     bare `Obj` (`.enablePlugins(Obj)`) pulls in its whole file; an AutoPlugin with `allRequirements` is in every view.
-#   - every other file under project/ (plugins.sbt, build.properties, project/project/...) is in every view, whole.
+#   - every other file under project/ (plugins.sbt, build.properties, project/project/...) and every root *.sbt but
+#     build.sbt (coupling.sbt, identity-impact.sbt: sbt reads them all) is in every view, whole.
 # The SEEDS are the projects of the change's own module directories and of every module its selection names (the hook's
 # --plan, --unit-plan and the area lines of local-tests.txt it selects: `worker/testOnly ...`, `web/PageTest/...`) --
 # what the full round would run beyond the verification, which compiles every test config under the new build anyway.
 # Over-inclusion is the safe side: an identifier that merely LOOKS like a definition's name pulls it in. Anything that
 # cannot be read (a file, a statement, no project for a module) answers None: the full round.
-BUILD_VIEW_PATHS = re.compile(r"^(build\.sbt|project/.*)$")
+BUILD_VIEW_PATHS = re.compile(r"^([^/]+\.sbt|project/.*)$")  # every root *.sbt is the build (sbt reads them all)
 SCALA_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 SBT_DEF = re.compile(r"^(?:lazy\s+val|val|def)\s+([A-Za-z_][A-Za-z0-9_]*)")
 SBT_PROJECT_DIR = re.compile(r"\bproject\s*(?:in|\.in)\s*\(?\s*file\(\s*\"([^\"]*)\"\s*\)")
@@ -140,6 +141,15 @@ def read_build(tree, rev):
         if n:
             for name in n.group(2).split(","):
                 b["imports"][name.strip().split("=>")[0].strip()] = n.group(1).split(".")[-1]
+    roots = git(tree, "ls-tree", "--name-only", rev, check=False)
+    if roots.returncode != 0:
+        return None
+    for path in roots.stdout.split():  # another root *.sbt (coupling.sbt, identity-impact.sbt): in every view, whole
+        if path.endswith(".sbt") and path != "build.sbt":
+            blob = git(tree, "rev-parse", f"{rev}:{path}", check=False)
+            if blob.returncode != 0:
+                return None
+            b["always"].append(("file", path, blob.stdout.strip()))
     for path in listing.stdout.split():
         if "/target/" in f"/{path}":
             continue
@@ -154,7 +164,7 @@ def read_build(tree, rev):
             return None
         code = scala_code(r.stdout)
         b["files"][path] = " ".join(code.split())
-        if re.search(r"\bextends\s+AutoPlugin\b", code) and re.search(r"\btrigger\s*=\s*allRequirements\b", code):
+        if re.search(r"\bextends\s+AutoPlugin\b", code) and re.search(r"\btrigger\b[^=\n]*=\s*allRequirements\b", code):
             b["always"].append(("file", path))
         for kind, name in SCALA_TOPLEVEL.findall(code):
             b["objects"][name] = (path, scala_object_parts(code, name) if kind == "object" else None)

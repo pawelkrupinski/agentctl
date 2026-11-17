@@ -123,14 +123,15 @@ def probe_infra_requeue(a):
 # (the added selection, and only it, on top of the verification); a check --plan adds, or an area line local-tests.txt
 # adds, it does not run: then the full round. Removals need nothing. An unreadable selection or no full_tip recorded:
 # the full round. BUILD-AWARE (the owner, 2026-11-17: 6 full rounds of ~22 min that day for build.sbt / project/
-# churn): what landed changes build.sbt or project/ -> the same selection test, AND the build as the change's modules
-# see it (buildview.py's build_view_change: build.sbt's build-wide statements, the change's and its selection's module
+# churn): what landed changes a root *.sbt or project/ -> the same selection test, AND the build as the change's
+# modules see it (buildview.py's build_view_change: build.sbt's build-wide statements, the change's and its selection's module
 # definitions with everything they name -- settings helpers, configurations, the projects they dependsOn, the
 # project/ members -- at full_tip and at the rebased tip) unchanged, and no file of the change naming the changed build
 # file (`git grep -F <basename>`: a script or test reading it) -> the verify round, which compiles every test config
 # under the new build; anything changed, unreadable, or the change touching the build itself -> the full round.
 # The other forcing paths (scripts/hooks/* beyond SELECTION_PATHS, hooks-path.sh, ...) stay a full round.
-RECHECK_ALWAYS = re.compile(r"^(build\.sbt|project/.*|scripts/hooks/.*|scripts/hooks-path\.sh|scripts/tool-conventions\.sh"
+RECHECK_ALWAYS = re.compile(r"^([^/]+\.sbt|project/.*|scripts/hooks/.*|scripts/hooks-path\.sh"
+                            r"|scripts/tool-conventions\.sh"
                             r"|scripts/ci/precommit-share\.sh)$")
 HOOK_SELF_TEST = re.compile(r"^scripts/hooks/[^/]+(-test\.sh|-test-lib\.sh|_test\.py)$")
 VERIFY_MODE = "--verify-only"
