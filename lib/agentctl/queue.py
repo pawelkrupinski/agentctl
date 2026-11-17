@@ -62,6 +62,8 @@ def requeue_infra(d, e, why, delay=None, reason=None, detail=None, repo=None):
 
 
 INFRA_SAME_MAX = 30 * 60
+STALLED_REASON = "its checks stalled"
+STALL_KEEP_PLACE = 2  # stalls in a row re-queued with no backoff (the change keeps its age-order place), then backed off
 FETCH_MAIN_FAILED = "its fetch of main failed"
 
 
@@ -1060,8 +1062,12 @@ def _check_entry(repo, d, e, i, own=None):
         if ok is None:  # stalled: the laptop's, not the change's -- and what stalled it is said (2026-11-17: two
             # 13-s "stalls" whose cause no record kept)
             last = ((out or "").strip().splitlines() or [""])[-1].strip()[:240]
+            # ITS PLACE KEPT (2026-11-17, ref-srp-54ebae 2 h old: a 13-s stall's 5-min backoff let younger changes take
+            # every check tree, and it waited 15+ min more for one): the first STALL_KEEP_PLACE stalls in a row are due
+            # at once -- the tree it just freed goes to it, first by age; then the infra backoff as for any infra cause
+            same = int(e.get("infra_same") or 0) if e.get("infra_reason") == STALLED_REASON else 0
             requeue_infra(d, e, f"its checks stalled ({where}{': ' + last if last else ''})",
-                          reason="its checks stalled", detail=out, repo=repo)
+                          delay=0 if same < STALL_KEEP_PLACE else None, reason=STALLED_REASON, detail=out, repo=repo)
             return 0
         if not ok and INFRA_CHECK_FAILURE.search(out or ""):
             requeue_infra(d, e, f"its checks failed on the laptop, not on the change "

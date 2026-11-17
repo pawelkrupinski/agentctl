@@ -1246,7 +1246,10 @@ ADOPTS it (no new push, no new run) on the base it checked even when main moved 
 past them it is checked locally. A failed push of the check branch is tried again 5 s and 20 s later
 (2026-11-17: two rounds ended "its checks stalled" 13 s in, no branch created on GitHub, and lost ~20 min each to the
 infra backoff and the check-slot queue); a round with no verdict is re-queued as `its checks stalled (<where>: <what
-the remote check said>)`, so the landing round's `reason` names the cause (remote.py `check_branch_push`).
+the remote check said>)`, so the landing round's `reason` names the cause (remote.py `check_branch_push`). Such a
+stall KEEPS THE CHANGE'S PLACE (2026-11-17, ref-srp-54ebae 2 h old: the 5-min infra backoff let younger changes take
+every check tree): the first `STALL_KEEP_PLACE` (2) stalls in a row are due at once, so the tree it freed goes to it,
+first by age; then the infra backoff (queue.py `STALLED_REASON`).
 **The verdict is the check jobs'** (2026-11-07: batch #20 sat 27+ min past its last
 check job behind a queued `timings / report`): the workflow declares its verdict's jobs as a workflow-level
 `VERDICT_JOBS: <glob>, ...` of job names, read at the checked commit; once every job it names has concluded the check

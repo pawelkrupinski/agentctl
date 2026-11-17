@@ -628,6 +628,13 @@ class QueueTest(WaitingTest):
         self.assertEqual(e["why"], "infra: its checks stalled (on ci-runner (no verdict): push of check/x failed: "
                                    "remote: boom)")
         self.assertEqual(e["infra_reason"], "its checks stalled")
+        # ITS PLACE KEPT (2026-11-17, ref-srp-54ebae: a 13-s stall's 5-min backoff let younger changes take every check
+        # tree, and it queued another 15+ min): the stalled change is due at once, first by age for the freed tree
+        self.assertLessEqual(e.get("retry_after", 0), time.time())
+        for _ in range(A.STALL_KEEP_PLACE):  # stalling on and on: backed off like any infra cause
+            self.check(eid, rounds=1)
+        e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+        self.assertGreater(e["retry_after"], time.time() + 60)
 
     def fake_github(self, status, head, ref="check/e1"):
         calls = []
