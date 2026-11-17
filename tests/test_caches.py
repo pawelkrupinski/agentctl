@@ -30,5 +30,18 @@ class CachesTest(Base):
         A._gate_lists["leak"] = 1  # the next test's setUp clears it
 
 
+class EveryTestCaseTest(unittest.TestCase):
+    """Not only Base's tests: the harness clears the caches before EVERY test (2026-11-17: agentctl CI #44108162628 --
+    test_caches' deliberate `_gate_lists["leak"] = 1` reached CachedGateTest, a FakeForge test that is no Base, when
+    both ran in one worker: ci_state_refresh iterated the 1, "'int' object is not iterable", and the gate was never
+    published; the worker split decided when, so it failed now and then and never on the laptop)."""
+
+    def test_the_harness_clears_every_registered_cache_for_any_test(self):
+        import harness
+        A._gate_lists["leak"] = 1
+        harness._reset_process_state()
+        self.assertEqual([c for c in A.PROCESS_CACHES if len(c)], [])
+
+
 if __name__ == "__main__":
     unittest.main()

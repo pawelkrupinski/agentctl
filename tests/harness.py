@@ -120,8 +120,9 @@ def _stdlib_patched():
 
 
 def _reset_process_state():
-    """agentctl's process-wide flags a test may leave set (a processor run marks the process as the processor; a
-    token read caches the token): every test starts as a fresh, non-processor process with no cached token."""
+    """agentctl's process-wide state a test may leave set (a processor run marks the process as the processor; a
+    token read caches the token; the registered caches): every test starts as a fresh, non-processor process with no
+    cached token and empty caches."""
     for mod in _agentctl_modules():
         for name in ("_IN_PROCESSOR", "_NO_VAULT"):
             flag = mod.__dict__.get(name)
@@ -130,6 +131,10 @@ def _reset_process_state():
         toks = mod.__dict__.get("_tokens")
         if isinstance(toks, dict):
             toks.clear()
+        # every part's process-wide cache (core.process_cache), for every test -- not only Base's: a FakeForge test once
+        # met test_caches' deliberate `_gate_lists["leak"] = 1` when both ran in one worker (agentctl CI #44108162628)
+        for cache in mod.__dict__.get("PROCESS_CACHES") or []:
+            cache.clear()
 
 
 # --- the per-test timeout -------------------------------------------------------------------------------------------
