@@ -1827,7 +1827,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `caffeinate` | `AGENTCTL_CAFFEINATE` | `/usr/bin/caffeinate` | - |
 | `checks_dir` | `AGENTCTL_CHECKS_DIR` | - | - |
 | `check_lease_ttl` | `AGENTCTL_CHECK_LEASE_TTL` | `600` | - |
-| `check_trees` | `AGENTCTL_CHECK_TREES` | `3` | check trees, so at most this many queued changes are checked at once |
+| `check_trees` | `AGENTCTL_CHECK_TREES` | `4` | check trees, so at most this many queued changes are checked at once . |
 | `claude` | `AGENTCTL_CLAUDE` | - | set: that one only (the tests' fake) |
 | `claude_jobs` | `AGENTCTL_CLAUDE_JOBS` | - | - |
 | `claude_projects` | `AGENTCTL_CLAUDE_PROJECTS` | - | - |
