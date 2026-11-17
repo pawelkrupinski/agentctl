@@ -603,17 +603,20 @@ def batch_mode(hook):
 BATCH_FULL_MODE = "--range"  # a backlog batch's check: the full landing check a change gets (check/batch-<tip> on CI)
 
 
-def batch_check(repo, d, tree, base, tip, cls="check", depth="fast", runs=None):
+def batch_check(repo, d, tree, base, tip, cls="check", depth="fast", runs=None, range_base=None):
     """The hook's dry run over base..tip in `tree` (depth fast: batch_mode's; full, a backlog batch: the full landing
-    check, BATCH_FULL_MODE), on a fresh sbt server, under the stall abort. (ok, output, stalled): a stall -- land's 20
-    min, or the hook's exit 75 / `STALLED:` -- is retried once on a fresh server; stalled twice, `stalled` is True.
+    check, BATCH_FULL_MODE; verify, a push batch: the combined tree's VERIFY_MODE over range_base..tip, range_base the
+    oldest member's full base), on a fresh sbt server, under the stall abort. (ok, output, stalled): a stall -- land's
+    20 min, or the hook's exit 75 / `STALLED:` -- is retried once on a fresh server; stalled twice, `stalled` is True.
     runs: {tip: remote run id}, filled with this check's run (the push hands it to the hook)."""
     hook = precheck_hook(tree) or precheck_hook(repo)
     if not hook:
         return True, "", False
-    mode = BATCH_FULL_MODE if depth == "full" else batch_mode(hook)
+    mode = {"full": BATCH_FULL_MODE, "verify": VERIFY_MODE}.get(depth) or batch_mode(hook)
+    rng_base = (range_base or base) if depth == "verify" else base
     if host_role() == "server" and remote_checks_supported(tree):  # ci-runner: the CI check tier (owner decision 1)
-        e = {"id": f"batch-{tip[:10]}", "head": tip}
+        # (a push batch's branch: check/verify-<range base>-batch-<tip>, the workflow's --verify-only <range base>..HEAD)
+        e = {"id": f"batch-{tip[:10]}", "head": tip, **({"full_base": rng_base} if depth == "verify" else {})}
         ok, out = remote_check(repo, e, base, tip, mode)
         if runs is not None and e.get("remote_run"):
             runs[tip] = e["remote_run"]
@@ -624,7 +627,7 @@ def batch_check(repo, d, tree, base, tip, cls="check", depth="fast", runs=None):
         sbt_stop(tree)
         wlog(d, f"checking {base[:10]}..{tip[:10]} (attempt {attempt}, fresh sbt server)")
         with check_slot(repo, f"waiting batch {tip[:10]}", cls) as slot:
-            rc, out = run_watched([hook, mode, f"{base}..{tip}"], tree, slot.env(tool_env()),
+            rc, out = run_watched([hook, mode, f"{rng_base}..{tip}"], tree, slot.env(tool_env()),
                                   os.path.join(d, f"check-{tip[:10]}"), f"batch-check-{attempt}", sampler=slot.sample)
             slot.done(rc, out)
         sbt_stop(tree)
@@ -829,14 +832,14 @@ def watch_eval(repo, sha, pushed_at, o_r, flows, now_):
     return (v[0], v[1] + f" ({sha[:10]})", v[2]) if v and v[0] == "ok" else v
 
 
-def bisect(repo, d, batch, base, bwt, depth="fast", runs=None, failed_out=None):
+def bisect(repo, d, batch, base, bwt, depth="fast", runs=None, failed_out=None, range_base=None):
     """The batch failed: the first entry whose prefix fails (binary search over the prefixes' tips, in the batch's tree
     bwt). (index, output) of the culprit; (None, output) when the whole batch passes on its own again (flaky or infra).
-    A full-depth batch (failed_out: its check's output) is not checked whole again first: each full check is a landing
-    check's 30-40 min, and the culprit's confirmation below still clears a flaky failure."""
+    A backlog or push batch (failed_out: its check's output) is not checked whole again first: each check is a landing
+    check's 30-40 min or a verify round's ~10, and the culprit's confirmation below still clears a flaky failure."""
     lo, hi, out_hi = 0, len(batch) - 1, ""
-    check = lambda tip: batch_check(repo, d, bwt, base, tip, depth=depth, runs=runs)
-    if depth == "full" and failed_out is not None:
+    check = lambda tip: batch_check(repo, d, bwt, base, tip, depth=depth, runs=runs, range_base=range_base)
+    if depth in ("full", "verify") and failed_out is not None:
         out_hi = failed_out
     else:
         ok, out, stalled = check(batch[hi]["tip"])

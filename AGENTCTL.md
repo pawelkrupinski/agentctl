@@ -1171,7 +1171,8 @@ The reconciler then takes it, a step per tick:
   THE OLDEST VERIFICATION PUSHES FIRST (2026-11-16: workermem verified four times, each on a main a younger change
   had pushed onto meanwhile): while a change's verification round is queued or checking (not in an infra backoff),
   every younger checked change holds its push (`its push waits for <id>'s combined-tree verification`; a red's fix
-  excepted), and verification rounds take the next free check tree. queue.py `older_verifying`.
+  excepted), and verification rounds take the next free check tree. queue.py `older_verifying`. With two or more
+  changes owing a verify round, THE PUSH BATCH (below) verifies and pushes them together instead.
   The push is bounded; on expiry it verifies before it retries. `LANDED <sha>`, and a `watch` item.
   It pushes from its own check tree when that tree's slot is free, else from the PUSH TREE `<clone>-wt-check-push`
   (its own lease, no checker takes it): a checker holds its slot through its remote run's whole wait, and pushes that
@@ -1197,6 +1198,28 @@ The reconciler then takes it, a step per tick:
   queued meanwhile joins the next one. Identity changes are checked alone beside it. The same machine as the red batch:
   batch.py `backlog_candidates`, `backlog_reconcile` (members follow their batch), the `depth` of `batch_check` /
   `bisect` (remote.py); tests: `tests/test_backlog_batch.py`.
+- **THE PUSH BATCH (the owner, 2026-11-17: "combine them instead of landing them one by one", W1).** A checked change
+  pushed alone: each on a main that moved since its full check paid a verify round of its own, and THE OLDEST
+  VERIFICATION PUSHES FIRST held the younger ones meanwhile, so N checked changes landed serially (ref-scrapers
+  verifying while pr274 and postlanding, both checked, waited to verify again after it). Now, at green with no batch
+  open and no change's own verify round running, 2 or more changes that would each need a verify round on the current
+  main (`$AGENTCTL_PUSH_BATCH_MIN`) -- checked on an older main, or queued for their verify round with no checker on
+  them; never a red fix (it pushes alone, first, even while a push batch verifies), a `land --no-batch` change, one
+  with a known red or in a backoff -- are held by the change tick (`its push waits for the next push batch`) and made
+  ONE batch item with depth `verify`, the backlog batch's machine: assembled oldest first on the current main, at most
+  4 (`$AGENTCTL_BACKLOG_BATCH_MAX`), each member judged by THE RULE (`recheck_reason`) against main plus the members
+  before it. A member that needs a FULL round is left out: re-checked alone at once when what landed on main demands
+  it (`left out of the push batch`), else (only a member before it overlaps) marked `push_alone` and pushed alone
+  after the batch, its own push judging it. ONE verify round over the union -- `--verify-only <the oldest member's
+  full base>..<tip>`, on ci-runner `check/verify-<base>-batch-<tip>` -- then ONE push (`PREPUSH_SKIP`: the plan the
+  members' full checks passed; the hook judges the red gate), every member `checking` -> `checked` (`verified ... in
+  push batch <id>`) -> `pushing` -> LANDED with its own watch and landing record (`batch_id`, `batch`; its round counts
+  as a verify round). Fail: bisected by prefix as the backlog batch is, the culprit rejected only when its failure is
+  its own, the passing prefix pushed, the rest queued again for their verify round (the next push batch). More than
+  one identity-model commit in it: G5's drift check of its tip, and after a drift split one identity change per batch
+  (`drift_serialize`). A change checked while a push batch verifies is no member of it: its push waits for the batch
+  (`its push waits for batch <id>`) and it joins the next one. batch.py `push_candidates`, `push_batch_select`,
+  `union_base`; tests: `tests/test_backlog_batch.py` `PushBatchTest`.
 - **checked → waiting** while main is red and the change must wait (a production path, no `Fixes-Red:` naming any red
   run of the current episode): `WAITING <sha> (entry <id>, n in batch)`. Tools-only changes and Fixes-Red changes land while red.
 - **The batch.** (A backlog's batch is the same item with depth `full`: above.) When main turns green, the waiting
@@ -2049,6 +2072,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `owner_idle` | `AGENTCTL_OWNER_IDLE` | `21600` | no red held this long: the owner ends |
 | `park_digest_days` | `AGENTCTL_PARK_DIGEST_DAYS` | `14` | - |
 | `pinned_recording` | `AGENTCTL_PINNED_RECORDING` | - | - |
+| `push_batch_min` | `AGENTCTL_PUSH_BATCH_MIN` | `2` | changes owing a verify round that make a push batch |
 | `push_stall_secs` | `AGENTCTL_PUSH_STALL_SECS` | `180` | - |
 | `push_wall_min` | `AGENTCTL_PUSH_WALL_MIN` | `45` | - |
 | `queue` | `AGENTCTL_QUEUE` | `1` | - |

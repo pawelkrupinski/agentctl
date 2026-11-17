@@ -1107,7 +1107,7 @@ def _check_entry(repo, d, e, i, own=None):
                event={"text": f"{e['id']}: {verified} ({where})"
                       + (" -- failing only as its base fails" if known_red else "")},
                tip=head, checked_base=base, full_base=full_base, full_tip=full_tip, checked_mode=mode, checked_where=where, tree=i,
-               infra_reason=None, infra_same=0, known_red=known_red, verify=False)
+               infra_reason=None, infra_same=0, known_red=known_red, verify=False, push_alone=None)
     wlog(d, f"{e['id']}: {verified} ({where})")
     return 0
 
@@ -1436,6 +1436,7 @@ def tick_changes(repo, d, now_=None):
         newest[e["id"]] = e
     did = []
     held = backlog_held(repo, d, reds, st, t)
+    pheld = push_held(repo, d, reds, st, t)
     for e in [e for e in todo if e["id"] in newest]:
         if e.get("backlog_batch"):  # a backlog batch's member: the batch checks and pushes it (backlog_reconcile)
             continue
@@ -1451,6 +1452,11 @@ def tick_changes(repo, d, now_=None):
             first = None if fix else batch_goes_first(st, d)  # a red fix goes before the batch
             if first:  # a solo push now moves main under the batch, and its whole check is thrown away
                 did += behind_batch(e, first, "push")
+                continue
+            if not fix and e["id"] in pheld:  # THE PUSH BATCH verifies and pushes it with others
+                if not _behind_said.get((e["id"], "push batch")):
+                    _behind_said[(e["id"], "push batch")] = True
+                    did.append(f"{e['id']}: its push waits for the next push batch")
                 continue
             older = None if fix else older_verifying(todo, e, t)
             if older:
@@ -1473,6 +1479,11 @@ def tick_changes(repo, d, now_=None):
         first = None if fix else batch_goes_first(st, d, ("assembling", "pushing"))
         if first:  # the next free check tree is the batch's: to assemble it, or to push from its own tree
             did += behind_batch(e, first, "check")
+            continue
+        if not fix and e["id"] in pheld:  # THE PUSH BATCH verifies it with others
+            if not _behind_said.get((e["id"], "push batch")):
+                _behind_said[(e["id"], "push batch")] = True
+                did.append(f"{e['id']}: its verify round waits for the next push batch")
             continue
         if not fix and e["id"] in held:  # THE BACKLOG BATCH checks it with others
             if not _behind_said.get((e["id"], "backlog")):

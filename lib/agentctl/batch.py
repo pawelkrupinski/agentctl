@@ -95,7 +95,8 @@ def batch_members(d, it):
 # the batch); identity changes and red fixes are checked alone beside it, and a red fix never waits for it.
 BACKLOG_BATCH_MIN = 2  # queued changes that may share a check and make a backlog batch
 BACKLOG_BATCH_MAX = 4  # a backlog batch's members at most: its bisect is 2 prefix checks + 1 confirmation
-BACKLOG_LIVE = ("checking", "bisecting", "pushing")  # a backlog batch's states that hold its members
+BACKLOG_LIVE = ("checking", "bisecting", "pushing")  # a backlog (or push) batch's states that hold its members
+DEEP_BATCHES = ("full", "verify")  # the depths whose members are queue entries of their own: backlog and push batches
 
 
 def backlog_min():
@@ -174,10 +175,16 @@ def backlog_held(repo, d, reds, st, t=None):
     return set() if current_batch(st, d) else {c["id"] for c in backlog_candidates(repo, d, reds, t)}
 
 
+def batch_kind(it):
+    """`backlog batch` or `push batch`: how the member events name a batch item (by its depth)."""
+    return "push batch" if ((it or {}).get("data") or {}).get("depth") == "verify" else "backlog batch"
+
+
 def backlog_reconcile(d, st):
-    """A backlog batch's members follow it: once it passed (pushing), each still `checking` is checked; a member it no
-    longer carries (a prefix landing without it, the batch assembled again, held or gone) is queued again for the next
-    batch. Returns what it did."""
+    """A backlog or push batch's members follow it: once it passed (pushing), each still `checking` is checked (a push
+    batch's: verified, its own full check standing); a member it no longer carries (a prefix landing without it, the
+    batch assembled again, held or gone) is queued again for the next batch (a push batch's: for its verify round, its
+    full check kept). Returns what it did."""
     did = []
     for e in waiting_entries(d, open_only=False):
         bid = e.get("backlog_batch")
@@ -185,20 +192,137 @@ def backlog_reconcile(d, st):
             continue
         it = st.item("batch", bid)
         dd = (it or {}).get("data") or {}
+        kind = batch_kind(it) if it else "batch"
         if it and it["state"] in BACKLOG_LIVE and e["id"] in (dd.get("members") or []):
-            if it["state"] == "pushing" and e["status"] == "checking":
+            if it["state"] == "pushing" and e["status"] == "checking" and dd.get("depth") == "verify":
+                set_change(d, e, "checked", event={"text": f"{e['id']}: verified {e['tip'][:10]} on {dd['base'][:10]} "
+                                                           f"in push batch {bid} (fully checked on "
+                                                           f"{(e.get('full_base') or '?')[:10]})"},
+                           checked_base=dd["base"], checked_mode=VERIFY_MODE, checked_where=f"in push batch {bid}")
+            elif it["state"] == "pushing" and e["status"] == "checking":
                 set_change(d, e, "checked", event={"text": f"{e['id']}: checked in backlog batch {bid} ({e['tip'][:10]} "
                                                            f"on {dd['base'][:10]})"},
                            checked_base=dd["base"], full_base=dd["base"], full_tip=e["tip"], checked_mode="--range",
                            checked_where=f"in backlog batch {bid}")
             continue
         if e["status"] == "pushing":
-            set_change(d, e, "checked", event={"text": f"{e['id']}: backlog batch {bid}'s push did not land"})
-        set_change(d, e, "queued", event={"text": f"{e['id']}: queued again: backlog batch {bid} is "
+            set_change(d, e, "checked", event={"text": f"{e['id']}: {kind} {bid}'s push did not land"})
+        set_change(d, e, "queued", event={"text": f"{e['id']}: queued again: {kind} {bid} is "
                                                   f"{it['state'] if it else 'gone'} without it"},
                    backlog_batch=None, retry_after=0)
-        did.append(f"{e['id']}: queued again (backlog batch {bid})")
+        did.append(f"{e['id']}: queued again ({kind} {bid})")
     return did
+
+
+# ---------------------------------------------------------------- the push batch (the owner, 2026-11-17)
+# "COMBINE THEM INSTEAD OF LANDING THEM ONE BY ONE" (W1: the oldest unlanded change over 2 h). A checked change pushed
+# alone: on a main that moved since its full check it got a verify round of its own (THE RULE, queue.py), and THE
+# OLDEST VERIFICATION PUSHES FIRST held every younger checked change meanwhile -- so N checked changes landed serially,
+# each paying a check-runner wait plus a ~10-min verify round after the previous push moved main (ref-scrapers
+# verifying while pr274 and postlanding held their pushes behind it, each to verify again after it pushed). Now, at
+# green with no batch open and no verify round running, PUSH_BATCH_MIN or more changes that would each need a verify
+# round on the current main (push_batchable: checked on an older main, or queued for a verify round; no red fix, no
+# `land --no-batch`, no known red, none in a backoff) are THE BATCH ABOVE with depth `verify`, the backlog batch's
+# machine: assembled oldest first on the current main, each member judged by THE RULE against main plus the members
+# before it (push_batch_select: one that needs a FULL round is left out -- checked again alone now when what landed on
+# main demands it, else pushed alone after the batch, push_alone), the union verified ONCE (the hook's --verify-only
+# over <the oldest member's full base>..<tip>: every test config compiled, the lints, the fast specs and the unit
+# tests of every module a member or what landed meanwhile touches; on ci-runner check/verify-<base>-batch-<tip>), and
+# pushed ONCE (the hook skipping the plan the members' full checks passed, as a lone verified change's push does).
+# Fail: bisected by prefix as the backlog batch is (the culprit confirmed, rejected only when the failure is its own),
+# the passing prefix pushed, the rest queued again for their verify round. More than one identity-model commit in it:
+# G5's drift check of its tip (check_batch); after a drift split, one identity change per batch (drift_serialize). A
+# change checked while a push batch runs is no member: its push waits for the batch (batch_goes_first) and it joins
+# the next one. At most BACKLOG_BATCH_MAX members.
+PUSH_BATCH_MIN = 2  # changes owing a verify round that make a push batch
+
+
+def push_batchable(repo, d, e, t, main):
+    """Whether entry e would need a verify round on main (THE PUSH BATCH above) and may share one: checked on an older
+    main, or queued for its verify round with no checker on it."""
+    rem = e.get("remote") or {}
+    if e.get("backlog_batch") or e.get("no_batch") or e.get("batch_alone") or e.get("push_alone") \
+            or e.get("known_red") or float(e.get("retry_after") or 0) > t:
+        return False
+    if e.get("status") == "checked":
+        return bool(e.get("checked_base")) and e["checked_base"] != main
+    if e.get("status") != "queued" or not e.get("verify") or not e.get("full_base"):
+        return False
+    if rem.get("run") is not None and not rem.get("collected_at"):  # its own run: a checker adopts it
+        return False
+    return not checker_alive(e["id"])
+
+
+def push_candidates(repo, d, reds, t=None):
+    """The changes a push batch takes now, oldest first, at most BACKLOG_BATCH_MAX; [] while the gate is red (a red fix
+    pushes alone), while a change's own verify round runs (it pushes first), or when fewer than PUSH_BATCH_MIN may go."""
+    t = t if t is not None else time.time()
+    if reds:
+        return []
+    entries = queued_entries(d)
+    if any(e.get("status") == "checking" and e.get("verify") and not e.get("backlog_batch") for e in entries):
+        return []
+    main = git(repo, "rev-parse", f"{remote()}/main", check=False).stdout.strip()
+    out = [e for e in sorted(entries, key=lambda e: e["seq"])
+           if not red_fix(e, reds) and push_batchable(repo, d, e, t, main)]
+    out = drift_serialize(repo, out)[:int(env_num("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX))]
+    return out if len(out) >= max(2, int(env_num("AGENTCTL_PUSH_BATCH_MIN", PUSH_BATCH_MIN))) else []
+
+
+def push_held(repo, d, reds, st, t=None):
+    """The ids of the changes the change tick holds back for the next push batch: with no batch open, the candidates
+    one would take now."""
+    return set() if current_batch(st, d) else {c["id"] for c in push_candidates(repo, d, reds, t)}
+
+
+def push_batch_select(repo, d, tree, kept, base, tips):
+    """(members, tip): the assembled push batch less every member THE RULE (recheck_reason) sends to a FULL round,
+    judged against main plus the members before it; the rest assembled again without it. One left out for what landed
+    on main is queued for its full round now (as its own push would queue it); one left out only for a member before it
+    is marked push_alone (it pushes alone after the batch, its own push judging it). tips: each member's own tip, from
+    before the assembly (a checked one left out keeps it)."""
+    hook = precheck_hook(tree)
+    while kept:
+        prev, out = base, None
+        for e in kept:
+            git(tree, "checkout", "-q", "--force", "--detach", e["tip"])
+            full_base = e.get("full_base") or e.get("checked_base") or base
+            paths = range_paths(tree, prev, e["tip"])
+            why = recheck_reason(tree, full_base, prev, e["tip"], paths, full_tip=e.get("full_tip"))[1]
+            if why is None and not verify_supported(hook):
+                why = f"the hook has no {VERIFY_MODE} for the combined tree"
+            if why is not None:
+                main_why = why if prev == base else \
+                    recheck_reason(tree, full_base, base, e["tip"], paths, full_tip=e.get("full_tip"))[1]
+                out = (e, why, main_why)
+                break
+            prev = e["tip"]
+        if out is None:
+            return kept, prev
+        e, why, main_why = out
+        if e.get("status") == "checked":
+            e["tip"] = tips.get(e["id"]) or e["tip"]  # its own tip again, never the batch's
+        if main_why is not None:
+            set_change(d, e, "queued", data={"rounds": e.get("rounds", 0) + 1},
+                       event={"text": f"{e['id']}: main moved since its checks, {main_why}: checked again "
+                                      "(left out of the push batch)"},
+                       rounds=e.get("rounds", 0) + 1, retry_after=0, verify=False)
+        else:
+            e["push_alone"] = why
+            save_entry(d, e)
+        wlog(d, f"{e['id']}: left out of the push batch ({why}): "
+                + ("its full round now" if main_why is not None else "it pushes alone after the batch"))
+        kept = assemble(repo, d, tree, [k for k in kept if k["id"] != e["id"]], base, alone=True)
+    return [], base
+
+
+def union_base(tree, members, base):
+    """The push batch's verify range base: the oldest of its members' full-check bases (base when none is read)."""
+    bases = sorted({e.get("full_base") or e.get("checked_base") or base for e in members})
+    if len(bases) == 1:
+        return bases[0]
+    r = git(tree, "merge-base", "--octopus", *bases, check=False)
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else base
 
 
 # ---------------------------------------------------------------- the land hold (`land hold|release`)
@@ -394,7 +518,7 @@ def batch_step(repo, d, now_, seen, st):
     it = current_batch(st, d)
     seen.update(waiting=waiting, batch=it)
     backlog = not waiting and not it and \
-        sum(1 for e in queued_entries(d) if e.get("status") == "queued") >= backlog_min()
+        sum(1 for e in queued_entries(d) if e.get("status") in ("queued", "checked")) >= backlog_min()
     if not waiting and not it and not backlog:
         return []
     if land_hold(st, t):  # the store's hold: honoured wherever `land hold` ran
@@ -405,18 +529,20 @@ def batch_step(repo, d, now_, seen, st):
     waiting = waiting_entries(d)
     depth = (it or {}).get("data", {}).get("depth") or "fast"
     fix_waits = bool(reds) and any(set(e.get("fixes") or []) & reds for e in waiting)
-    if not waiting and (not it or (depth == "full" and it["state"] == "assembling")):
-        # THE BACKLOG BATCH: queued changes, no waiting one; created only with a check tree free for it (an assembling
-        # batch waiting for one holds every solo check behind it, and is held itself past its 5-min deadline)
-        ready = backlog_candidates(repo, d, reds, t)
+    if not waiting and (not it or (depth in DEEP_BATCHES and it["state"] == "assembling")):
+        # THE PUSH BATCH (checked changes, each owing a verify round) before THE BACKLOG BATCH (queued changes), no
+        # waiting change; created only with a check tree free for it (an assembling batch waiting for one holds every
+        # solo check behind it, and is held itself past its 5-min deadline)
+        push = push_candidates(repo, d, reds, t) if not it or depth == "verify" else []
+        ready = push or (backlog_candidates(repo, d, reds, t) if not it or depth == "full" else [])
         if not it:
             if not ready or not check_tree_slot_free(repo, d):
                 return []
-            it = new_batch(st, d, "assembling", depth="full")
-        elif not ready:  # the gate went red, or the backlog went to checks of their own: no batch to assemble
-            batch_move(st, it, "landed", {"members": []}, text=f"batch {it['id']}: no backlog left to batch")
-            return [f"batch {it['id']}: no backlog left to batch"]
-        depth = "full"
+            it = new_batch(st, d, "assembling", depth="verify" if push else "full")
+        elif not ready:  # the gate went red, or the changes went their own ways: no batch to assemble
+            batch_move(st, it, "landed", {"members": []}, text=f"batch {it['id']}: no {batch_kind(it)} left to form")
+            return [f"batch {it['id']}: no {batch_kind(it)} left to form"]
+        depth = it["data"]["depth"]
     else:
         if not waiting and not it:
             return []
@@ -450,30 +576,43 @@ def batch_step(repo, d, now_, seen, st):
         if not slot:
             return [f"batch {it['id']}: waiting for a check tree"]
         i, h = slot
-        full = depth == "full"
+        full = depth in DEEP_BATCHES
+        tips = {e["id"]: e.get("tip") for e in batch}
         try:
             git(repo, "fetch", "--quiet", remote(), "main", check=False)
             base = git(repo, "rev-parse", f"{remote()}/main").strip()
             tree = check_tree(repo, i, base)
             kept = assemble(repo, d, tree, batch, base, alone=full)
+            if depth == "verify":
+                kept, _tip = push_batch_select(repo, d, tree, kept, base, tips)
             tip = git(tree, "rev-parse", "HEAD").strip()
+            range_base = union_base(tree, kept, base) if depth == "verify" else None
         finally:
             h.release()
-        if full and len(kept) < backlog_min():  # one left: it is checked alone, as any change
-            batch_move(st, it, "landed", {"members": []}, text=f"batch {it['id']}: no backlog left to batch")
-            return [f"batch {it['id']}: no backlog left to batch"]
+        if full and len(kept) < backlog_min():  # one left: it is checked (a push batch's: pushed) alone, as any change
+            for e in kept:
+                if e.get("status") == "checked" and tips.get(e["id"]):
+                    e["tip"] = tips[e["id"]]
+                    save_entry(d, e)
+            batch_move(st, it, "landed", {"members": []}, text=f"batch {it['id']}: no {batch_kind(it)} left to form")
+            return [f"batch {it['id']}: no {batch_kind(it)} left to form"]
         if not kept:
             if not waiting_entries(d):
                 batch_move(st, it, "landed", {"members": []}, text=f"batch {it['id']}: nothing left to land")
             return [f"batch {it['id']}: nothing kept"]
         batch_move(st, it, "checking", {"members": [e["id"] for e in kept], "tip": tip, "base": base, "tree": i,
-                                        "cls": "red" if fix_waits else "check", "depth": depth},
+                                        "cls": "red" if fix_waits else "check", "depth": depth,
+                                        **({"range_base": range_base} if range_base else {})},
                    text=f"batch {it['id']}: checking {len(kept)} change(s) at {tip[:10]} on {base[:10]}"
-                        + (" (a backlog: the full landing check)" if full else ""))
+                        + {"full": " (a backlog: the full landing check)",
+                           "verify": f" (a push batch: one verify round over {(range_base or base)[:10]}..{tip[:10]})"}
+                        .get(depth, ""))
         for e in kept if full else ():  # its members are the batch's until it lands them or lets them go
-            set_change(d, e, "checking", event={"text": f"{e['id']}: checking in backlog batch {it['id']} "
+            verify = {"verify": True, "rounds": e.get("rounds", 0) + (e.get("status") == "checked")} \
+                if depth == "verify" else {}
+            set_change(d, e, "checking", event={"text": f"{e['id']}: checking in {batch_kind(it)} {it['id']} "
                                                         f"({len(kept)} change(s) at {tip[:10]})"},
-                       backlog_batch=it["id"], since=ts(), round_since=ts())
+                       backlog_batch=it["id"], since=ts(), round_since=ts(), **verify)
         spawn_batch_executor(repo, d, it["id"])
         return [f"batch {it['id']}: assembled {len(kept)} change(s), checking {tip[:10]}"]
     if state in ("checking", "bisecting"):
@@ -502,7 +641,7 @@ def batch_goes_first(st, d, states=BATCH_FIRST):
     """The open batch, when solo changes wait for it (its state in `states`, changes waiting in it or a backlog batch),
     else None."""
     it = current_batch(st, d)
-    backlog = it and (it.get("data") or {}).get("depth") == "full"
+    backlog = it and (it.get("data") or {}).get("depth") in DEEP_BATCHES
     return it if it and it["state"] in states and (backlog or waiting_entries(d)) else None
 
 
@@ -689,8 +828,10 @@ def check_batch(repo, bid):
             batch_move(st, it, "assembling", text=f"batch {bid}: its changes are gone")
             return 0
         depth, runs = it["data"].get("depth") or "fast", dict(it["data"].get("runs") or {})
+        range_base = it["data"].get("range_base")
         if it["state"] == "checking":
-            ok, out, stalled = batch_check(repo, d, tree, base, tip, it["data"].get("cls") or "check", depth, runs)
+            ok, out, stalled = batch_check(repo, d, tree, base, tip, it["data"].get("cls") or "check", depth, runs,
+                                           range_base=range_base)
             it = st.item("batch", bid)
             if stalled:
                 text = (f"HELD: the batch check of {tip[:10]} ({len(members)} change(s)) stalled twice on a fresh sbt "
@@ -710,13 +851,14 @@ def check_batch(repo, bid):
                 return 0
             it = batch_move(st, it, "bisecting", {"failed_out": (out or "")[-20000:]},
                             text=f"batch {bid}: {tip[:10]} failed its check; bisecting")
-        culprit, cout = bisect(repo, d, members, base, tree, depth, runs, it["data"].get("failed_out"))
+        culprit, cout = bisect(repo, d, members, base, tree, depth, runs, it["data"].get("failed_out"),
+                               range_base=range_base)
         it = st.item("batch", bid)
         if culprit is None:
             batch_fail(st, d, it, "it failed, then every prefix passed on its own (flaky or infra)", len(members))
             return 0
         bad = members[culprit]
-        alone = depth == "full" and not culprit_own_failure(repo, d, bad, base, cout)
+        alone = depth in DEEP_BATCHES and not culprit_own_failure(repo, d, bad, base, cout)
         if alone:  # not shown to be its own: its own check judges it (a base red, a time cap, an infra failure)
             bad["batch_alone"] = bid
             save_entry(d, bad)
@@ -779,14 +921,21 @@ def _push_batch_item(repo, d, st, it, members, tip, base, i):
             return f"batch {it['id']}: tree gone"
         git(tree, "checkout", "-q", "--force", "--detach", tip, check=False)
         pushed_at = time.time()
-        if it["data"].get("depth") == "full":  # its full check's run stands for the push, once GitHub confirms it
+        depth = it["data"].get("depth")
+        if depth == "full":  # its full check's run stands for the push, once GitHub confirms it
             run = (it["data"].get("runs") or {}).get(tip)
             env = dict(tool_env(), **({"PREPUSH_REMOTE_RUN": str(run)} if run else {}))
-            for e in members:
-                if e.get("status") == "checked":
-                    set_change(d, e, "pushing", event={"text": f"{e['id']}: pushing in batch {it['id']} ({tip[:10]})"})
+        elif depth == "verify":  # each member fully checked on an older main, the union verified: the red gate only
+            skip = hook_query(precheck_hook(tree), tree, "--plan", range_paths(tree, base, tip))
+            if skip is None:
+                batch_fail(st, d, it, "the hook's plan for its push could not be read", len(members))
+                return f"batch {it['id']}: its plan is unreadable"
+            env = dict(tool_env(), PREPUSH_SKIP=" ".join(skip))
         else:
             env = dict(tool_env(), PREPUSH_REUSE_FAST="1")
+        for e in members if depth in DEEP_BATCHES else ():
+            if e.get("status") == "checked":
+                set_change(d, e, "pushing", event={"text": f"{e['id']}: pushing in batch {it['id']} ({tip[:10]})"})
         rc, out = run_watched(push_argv(remote(), tip), tree, env, os.path.join(d, f"push-{tip[:10]}"), "push",
                               **push_bounds())
         with open(os.path.join(d, "checks.log"), "a") as f:
@@ -804,7 +953,8 @@ def _push_batch_item(repo, d, st, it, members, tip, base, i):
             return f"batch {it['id']}: {why}"
     mark_gate_dirty()
     for e in members:
-        queue_verdict(d, e, "landed", f"LANDED {e['tip']} (batch {it['id']}: {len(members)} change(s) in one push)",
+        kind = "push batch" if it["data"].get("depth") == "verify" else "batch"
+        queue_verdict(d, e, "landed", f"LANDED {e['tip']} ({kind} {it['id']}: {len(members)} change(s) in one push)",
                       code=0, landed_sha=e["tip"], pushed_at=pushed_at, batch=len(members), batch_id=it["id"])
         if not lock_held(Owned("await", e["id"]).lockpath):  # a `land --follow` waiting on it watches it itself
             start_watch(repo, e["tip"], pushed_at, worktree=e["worktree"],

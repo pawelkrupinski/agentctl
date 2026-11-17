@@ -526,7 +526,8 @@ MACHINES = {
     "change": {
         "queued": StateSpec(15 * M, "queued", ("checking", "superseded", "cancelled", "landed"), escalate=True, wait=True),
         "checking": StateSpec(2 * H, "queued", ("checked", "rejected", "queued")),
-        "checked": StateSpec(5 * M, "checked", ("pushing", "waiting", "queued"), escalate=True, wait=True),
+        # checked -> checking: a push batch's member, verified with the others on the current main (batch.py)
+        "checked": StateSpec(5 * M, "checked", ("pushing", "waiting", "queued", "checking"), escalate=True, wait=True),
         "waiting": StateSpec(6 * H, "waiting", ("landed", "rejected", "queued"), escalate=True, wait=True),
         "pushing": StateSpec(300, "checked", ("landed", "checked")),
         "landed": StateSpec(ARCHIVE, "landed", (), terminal=True),
