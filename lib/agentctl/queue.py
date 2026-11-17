@@ -1438,6 +1438,12 @@ def tick_changes(repo, d, now_=None):
     did = []
     held = backlog_held(repo, d, reds, st, t)
     pheld = push_held(repo, d, reds, st, t)
+    # THE BATCH KEEPS ITS AGE-ORDER PLACE (review 2026-11-18): this tick runs before the batch tick, and the changes
+    # held for a backlog or push batch take no tree, so a tree freed went to the next YOUNGER lone change and the
+    # batch tick found none: with a steady stream of lone changes (identity changes, --no-batch) the batch never
+    # formed. A lone change younger than the oldest held one never takes the LAST free tree: that is the batch's (a
+    # red fix excepted).
+    batch_seq = min((x["seq"] for x in todo if x["id"] in held | pheld), default=None)
     for e in [e for e in todo if e["id"] in newest]:
         if e.get("backlog_batch"):  # a backlog batch's member: the batch checks and pushes it (backlog_reconcile)
             continue
@@ -1493,6 +1499,12 @@ def tick_changes(repo, d, now_=None):
             continue
         slot = check_tree_slot(repo, d, fix=fix)
         if not slot:
+            continue
+        if not fix and batch_seq is not None and batch_seq < e["seq"] and not check_tree_slot_free(repo, d):
+            slot[1].release()  # AGE ORDER: the last free tree is the older changes' batch's
+            if not _behind_said.get((e["id"], "older batch")):
+                _behind_said[(e["id"], "older batch")] = True
+                did.append(f"{e['id']}: its check waits: the last free tree goes to the older changes' batch")
             continue
         slot[1].release()  # the executor takes it again itself
         spawn_executor(repo, d, e["id"])

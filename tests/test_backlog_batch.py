@@ -123,6 +123,35 @@ class BacklogBatchTest(test_queue.QueueTest):
         self.assertEqual(sorted(self.started), sorted([ea, eb]), "one batchable change is no backlog")
         self.assertEqual(self.drive(), [])
 
+    def test_a_younger_lone_change_never_takes_the_tree_an_older_backlog_waits_for(self):
+        """Review 2026-11-18: the change tick runs before the batch tick, and the held candidates take no tree, so the
+        tree one check freed went to the next YOUNGER lone change (an identity change, say) and the batch tick found
+        none free: with a steady stream of lone changes the backlog batch never formed, its members held for ever."""
+        os.environ["AGENTCTL_CHECK_TREES"] = "1"
+        self.addCleanup(os.environ.pop, "AGENTCTL_CHECK_TREES", None)
+        held = []
+        A.spawn_executor = lambda repo, d_, eid: (self.started.append(eid), held.append(A.tree_slot(d_, 1)),
+                                                  held[-1].acquire())
+        ei1 = self.queue("i1", "identity/src/main/I1.scala")
+        A.tick_changes(self.r.path, self.d)
+        self.assertEqual(self.started, [ei1], "the identity change takes the one tree")
+        ea = self.queue("a", "web/src/main/A.scala")
+        eb = self.queue("b", "worker/src/main/B.scala")
+        ei2 = self.queue("i2", "identity/src/main/I2.scala")  # younger than the backlog
+        self.assertEqual(A.tick_batch(self.r.path, self.d), [], "no tree free: no batch yet")
+        held.pop().release()  # i1's check ends, its tree free
+        A.set_change(self.d, self.entry(ei1), "cancelled", event={"text": "done"})
+        A.tick_changes(self.r.path, self.d)
+        self.assertNotIn(ei2, self.started, "the younger lone change waits for the older backlog's batch")
+        saved = A.spawn_batch_executor
+        A.spawn_batch_executor = lambda repo, d_, bid: None
+        try:
+            did = A.tick_batch(self.r.path, self.d)
+        finally:
+            A.spawn_batch_executor = saved
+        self.assertIn("checking", " ".join(did), "the backlog batch takes the freed tree")
+        self.assertEqual(self.batch()["data"]["members"], [ea, eb])
+
     def test_a_red_fix_is_never_delayed_behind_a_checking_batch(self):
         self.queue("a", "web/src/main/A.scala")
         self.queue("b", "worker/src/main/B.scala")
