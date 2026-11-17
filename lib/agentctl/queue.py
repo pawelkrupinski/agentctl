@@ -12,7 +12,9 @@
 # moved meanwhile: rebased in the tree and checked again. Every verdict goes to the inbox with the agent's worktree.
 # `land --follow` keeps the old in-process land (checks, push, watch) for scripts; a red fixer queues and waits
 # (fixer_land).
-QUEUE_POOL = 3          # check trees, so at most this many queued changes are checked at once ($AGENTCTL_CHECK_TREES)
+QUEUE_POOL = 4          # check trees, so at most this many queued changes are checked at once ($AGENTCTL_CHECK_TREES).
+# 4, not 3 (2026-11-17): ci-runner's check runners were 3 in effect (a lane bug let borrowed checks hold the check
+# lane: movies runner_scheduler.py), up to 2 lane + 1 CPU-admitted + 2 borrowed since; 4 is a first step, re-measure.
 # A check the LAPTOP failed, not the change: sbt's server never came up or was lost, a script test cut off by its
 # time bound, a stall. Queued again after QUEUE_INFRA_DELAY, at most QUEUE_INFRA_RETRIES times, then judged as it is.
 INFRA_CHECK_FAILURE = re.compile(r"failed to connect to server|sbt server did not start within \d+ seconds|"
