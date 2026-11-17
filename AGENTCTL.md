@@ -1147,9 +1147,19 @@ The reconciler then takes it, a step per tick:
   local-tests.txt, the hook's selection for the change's paths is compared at the full check's tip (`full_tip`) and
   the rebased tip (`--plan`, `--compile-plan`, `--unit-plan`, `--lint-plan`, local-tests.txt's lines for the areas
   run): only a check `--plan` adds or an area line added forces the full round -- what the compile, unit and lint
-  plans add the verify round runs itself. build.sbt / project/ / precommit-share.sh stay a full round.
-  Code: queue.py `recheck_reason` (THE RULE), `selection_change`, `_push_change`, `_check_entry`; tests:
-  `tests/test_queue.py` (`*verif*`, `*deleted_file*`, `*rechecks`, `*full_round`).
+  plans add the verify round runs itself. BUILD-AWARE (2026-11-17): build.sbt / project/ landed -> the same
+  selection test, then the build AS THE CHANGE'S MODULES SEE IT (buildview.py, a static read, no sbt) compared at
+  `full_tip` and the rebased tip: build.sbt's build-wide statements (`ThisBuild / scalacOptions`, aliases, ...), the
+  project definitions of the change's module directories and of every module its `--plan` / `--unit-plan` /
+  local-tests lines name, with everything they name transitively (settings helpers, configurations, the projects they
+  `dependsOn`, the `Dependencies.x` / `Obj.member` they use and the members those use, a project/ file named in a
+  string), every AutoPlugin on all projects and every non-.scala project/ file. Unchanged, and no file of the change
+  naming the changed build file -> the verify round; changed, unreadable, or the change itself touching the build ->
+  the full round (`they change build.sbt, and what web, worker build with changes (common, Dependencies.playVersion)`).
+  precommit-share.sh and the other forcing paths stay a full round.
+  Code: queue.py `recheck_reason` (THE RULE), `selection_change`, buildview.py `build_view_change`, `_push_change`,
+  `_check_entry`; tests: `tests/test_queue.py` (`*verif*`, `*deleted_file*`, `*rechecks`, `*full_round`,
+  `*build_change*`), `tests/test_buildview.py`.
   THE OLDEST VERIFICATION PUSHES FIRST (2026-11-16: workermem verified four times, each on a main a younger change
   had pushed onto meanwhile): while a change's verification round is queued or checking (not in an infra backoff),
   every younger checked change holds its push (`its push waits for <id>'s combined-tree verification`; a red's fix

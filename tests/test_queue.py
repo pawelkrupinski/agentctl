@@ -421,7 +421,56 @@ class QueueTest(WaitingTest):
         self.assertNotIn("without re-check", self.landed_verdict())
 
     def test_a_change_to_build_sbt_rechecks(self):
+        """No build.sbt at the full check's tip: the build's view cannot be compared, so a full round."""
         self.rechecked_when_landing("build.sbt", "lazy val x = 1\n")
+
+    BUILD = ('lazy val common = (project in file("common"))\n'
+             'lazy val web = (project in file("web")).dependsOn(common)\n'
+             'lazy val worker = (project in file("worker")).dependsOn(common).settings(Test / fork := true)\n')
+
+    def build_moves_under(self, path, old, new):
+        """A change to path queued on a main with a build; main moves by replacing old with new in build.sbt meanwhile."""
+        self.r.write("build.sbt", self.BUILD)
+        self.r.commit("a build")
+        self.r.push()
+        for f in (self.pushes, self.calls):
+            if os.path.exists(f):
+                os.remove(f)
+        wt, _ = self.agent("a", path, "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("build.sbt", self.BUILD.replace(old, new)))
+        self.assertEqual(self.check(eid), 0)
+        return [m for m, _r in self.verified()]
+
+    def test_a_build_change_the_changes_modules_never_see_gets_the_verify_round(self):
+        """BUILD-AWARE (the owner, 2026-11-17: 6 full rounds of ~22 min that day for build churn): worker's settings
+        are nothing web builds with."""
+        self.assertEqual(self.build_moves_under("web/src/main/A.scala", "Test / fork := true", "Test / fork := false"),
+                         ["--range", "--verify-only"])
+        self.assertIn("the combined tree verified", self.landed_verdict())
+
+    def test_a_build_change_to_the_changes_module_rechecks(self):
+        self.assertEqual(self.build_moves_under("worker/src/main/W.scala", "Test / fork := true", "Test / fork := false"),
+                         ["--range", "--range"])
+
+    def test_a_build_change_a_changed_script_reads_by_name_rechecks(self):
+        """A script reading build.sbt (the hook's worker_rows) sees what no module view does: a full round."""
+        self.r.write("build.sbt", self.BUILD)
+        self.r.commit("a build")
+        self.r.push()
+        for f in (self.pushes, self.calls):
+            if os.path.exists(f):
+                os.remove(f)
+        wt, _ = self.agent("a", "scripts/rows.sh", "grep HeavyRows build.sbt\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("build.sbt", self.BUILD.replace("Test / fork := true", "Test / fork := false")))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--range"])
+
+    def test_a_build_change_to_an_upstream_module_rechecks(self):
+        self.assertEqual(self.build_moves_under("web/src/main/A.scala", 'file("common"))',
+                                                'file("common")).settings(Test / fork := true)'),
+                         ["--range", "--range"])
 
     def test_a_hook_change_that_moves_this_changes_selection_rechecks(self):
         """SELECTION-AWARE (the owner, 2026-11-17): the hook's plan for the change's paths differs at the old and the new

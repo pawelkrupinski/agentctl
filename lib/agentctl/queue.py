@@ -119,8 +119,14 @@ def probe_infra_requeue(a):
 # config), lint plan and unit plan over full_base..tip, a superset of the change's paths, so what those add is run there
 # (the added selection, and only it, on top of the verification); a check --plan adds, or an area line local-tests.txt
 # adds, it does not run: then the full round. Removals need nothing. An unreadable selection or no full_tip recorded:
-# the full round. build.sbt, project/ and the other forcing paths stay a full round (no proof yet that what the
-# selection compiles and runs is unchanged there).
+# the full round. BUILD-AWARE (the owner, 2026-11-17: 6 full rounds of ~22 min that day for build.sbt / project/
+# churn): what landed changes build.sbt or project/ -> the same selection test, AND the build as the change's modules
+# see it (buildview.py's build_view_change: build.sbt's build-wide statements, the change's and its selection's module
+# definitions with everything they name -- settings helpers, configurations, the projects they dependsOn, the
+# project/ members -- at full_tip and at the rebased tip) unchanged, and no file of the change naming the changed build
+# file (`git grep -F <basename>`: a script or test reading it) -> the verify round, which compiles every test config
+# under the new build; anything changed, unreadable, or the change touching the build itself -> the full round.
+# The other forcing paths (scripts/hooks/* beyond SELECTION_PATHS, hooks-path.sh, ...) stay a full round.
 RECHECK_ALWAYS = re.compile(r"^(build\.sbt|project/.*|scripts/hooks/.*|scripts/hooks-path\.sh|scripts/tool-conventions\.sh"
                             r"|scripts/ci/precommit-share\.sh)$")
 HOOK_SELF_TEST = re.compile(r"^scripts/hooks/[^/]+(-test\.sh|-test-lib\.sh|_test\.py)$")
@@ -155,12 +161,13 @@ def verify_supported(hook):
         return False
 
 
-def named_deletions(tree, tip, deleted, readers):
-    """(deleted path, reader) of a deleted path whose file name a reader names at tip; None when none does."""
+def named_reader(tree, tip, paths, readers):
+    """(path, reader) of a path (a deleted one, a changed build file) whose file name a reader names at tip; None when
+    none does."""
     readers = [p for p in readers if git_ok(tree, "cat-file", "-e", f"{tip}:{p}")]
-    if not deleted or not readers:
+    if not paths or not readers:
         return None
-    for p in sorted(deleted):
+    for p in sorted(paths):
         r = git(tree, "grep", "-l", "-F", "-e", os.path.basename(p), tip, "--", *readers, check=False)
         hits = sorted(line.split(":", 1)[1] for line in r.stdout.splitlines() if ":" in line)
         if hits:
@@ -212,10 +219,10 @@ def selection_at(tree, rev, tip, paths):
         git(tree, "checkout", "-q", "--force", "--detach", tip)
 
 
-def selection_change(tree, full_tip, tip, paths):
+def selection_change(tree, full_tip, tip, paths, new=None):
     """None when the hook selects nothing at tip for paths that the verify round leaves unrun and the full check at
-    full_tip did not run (SELECTION-AWARE, above); else what it adds, in words."""
-    old, new = selection_at(tree, full_tip, tip, paths), selection_at(tree, tip, tip, paths)
+    full_tip did not run (SELECTION-AWARE, above); else what it adds, in words. new: the selection at tip, when read."""
+    old, new = selection_at(tree, full_tip, tip, paths), new or selection_at(tree, tip, tip, paths)
     if old is None or new is None:
         return "its selection at the full check cannot be read" if old is None else "its selection cannot be read"
     for key in sorted(set(old) | set(new)):
@@ -235,18 +242,26 @@ def recheck_reason(tree, base, moved, tip, change_paths, full_tip=None):
     n = len(git(tree, "rev-list", f"{base}..{moved}", check=False).stdout.split())
     landed_paths = range_paths(tree, base, moved)
     build = sorted(p for p in landed_paths if forces_full_recheck(p))
-    if build and all(p in SELECTION_PATHS for p in build):
-        moves = selection_change(tree, full_tip, tip, change_paths)
+    other = [p for p in build if p not in SELECTION_PATHS and not BUILD_VIEW_PATHS.match(p)]
+    if other:
+        return n, f"they change {other[0]}"
+    if build:
+        builds = [p for p in build if BUILD_VIEW_PATHS.match(p)]
+        new = selection_at(tree, tip, tip, change_paths) if builds else None
+        moves = selection_change(tree, full_tip, tip, change_paths, new=new)
+        if not moves and builds:
+            # a script, workflow or test reading the build file by name (production code names it in comments only)
+            named = named_reader(tree, tip, builds, [p for p in change_paths if "/src/main/" not in p])
+            moves = f"{named[1]} names {named[0]}" if named else \
+                build_view_change(tree, full_tip, tip, change_paths, new)
         if moves:
-            return n, f"they change {build[0]}, and {moves}"
-    elif build:
-        return n, f"they change {build[0]}"
+            return n, f"they change {(builds or build)[0]}, and {moves}"
     same = sorted(set(landed_paths) & set(change_paths))
     if same:
         return n, f"both touch {same[0]}" + (f" (+{len(same) - 1} more)" if len(same) > 1 else "")
     for deleted, readers, whose in ((range_paths(tree, base, moved, deleted=True), change_paths, "they delete"),
                                     (range_paths(tree, moved, tip, deleted=True), landed_paths, "it deletes")):
-        hit = named_deletions(tree, tip, deleted, readers)
+        hit = named_reader(tree, tip, deleted, readers)
         if hit:
             return n, f"{whose} {hit[0]}, which {hit[1]} names"
     return n, None
