@@ -1161,7 +1161,8 @@ The reconciler then takes it, a step per tick:
   project definitions of the change's module directories and of every module its `--plan` / `--unit-plan` /
   local-tests lines name, with everything they name transitively (settings helpers, configurations, the projects they
   `dependsOn`, the `Dependencies.x` / `Obj.member` they use and the members those use, a project/ file named in a
-  string), every AutoPlugin on all projects and every non-.scala project/ file. Unchanged, and no file of the change
+  string), every AutoPlugin on all projects, every non-.scala project/ file and every other root `*.sbt`
+  (coupling.sbt, identity-impact.sbt: a build file like build.sbt, review 2026-11-18). Unchanged, and no file of the change
   naming the changed build file -> the verify round; changed, unreadable, or the change itself touching the build ->
   the full round (`they change build.sbt, and what web, worker build with changes (common, Dependencies.playVersion)`).
   precommit-share.sh and the other forcing paths stay a full round.
@@ -1186,7 +1187,9 @@ The reconciler then takes it, a step per tick:
   entry per head), a change landed with `land --no-batch`, a red fix, a combined-tree verification round, one in an
   infra backoff or holding its own unread remote run. At most 4 members (`$AGENTCTL_BACKLOG_BATCH_MAX`), queue order,
   Fixes-Red first; a member that does not apply is left out (`batch_alone`) and checked alone; fewer than 2 kept: no
-  batch. Its tip is checked ONCE with the FULL landing check -- `pre-push --range`, on ci-runner a `check/batch-<tip>`
+  batch. None forms while a change verifies its combined tree or a checked change's push is due (THE OLDEST
+  VERIFICATION PUSHES FIRST holds it too), and while one waits for a tree, a younger lone change never takes the
+  LAST free tree (review 2026-11-18: lone changes otherwise took every freed tree first). Its tip is checked ONCE with the FULL landing check -- `pre-push --range`, on ci-runner a `check/batch-<tip>`
   precommit-check round with the area tests and heavy rows the members select, NOT `--fast-only` (no member had a check
   of its own) -- in one check tree, the members `checking` meanwhile. Pass: one push carrying that run
   (`PREPUSH_REMOTE_RUN`), every member `checked` -> `pushing` -> LANDED with its own watch and its own landing record
