@@ -140,7 +140,8 @@ moves it forward; nothing is a detached process that can die with its state in i
   (it names the processes working there), W7 (phase 2, the sync role) the sync has projected every event older than
   5 min, W8 no change left the queue in the last hour (landed, rejected, superseded, cancelled) without an event
   addressed to its author's inbox (Store.transition completes every such event; the entry carries the item id, so
-  `agentctl inbox <item id>` finds it). A violation is a condition and a notification. W5 kickstarts a processor
+  `agentctl inbox <item id>` finds it, also once merged into its worktree's live land alert, which lists every merged
+  change id under `entries`; W8 reads the items before the events, so a change exiting mid-read is not named). A violation is a condition and a notification. W5 kickstarts a processor
   silent for 15 min (3 x W5_MAX) of AWAKE time only: a pass whose own previous pass is over 3 min old
   (`$AGENTCTL_WATCHDOG_SLEEP_GAP`) slept through the gap and starts the clock again (2026-11-15 16:58: at a 2-second
   dark wake it kicked a processor whose beat was 16 min old because the laptop had slept since 16:42). The kick keeps

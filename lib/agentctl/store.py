@@ -867,15 +867,18 @@ def change_exit_event(iid, to, data, ev):
 
 def change_exits_unannounced(store, since=0):
     """THE INVARIANT's check: the terminal change items (entered their state at or after `since`) whose terminal
-    transition has no event that reaches an inbox (an audience or a non-info severity). Empty is healthy."""
+    transition has no event that reaches an inbox (an audience or a non-info severity). Empty is healthy.
+    THE ITEMS ARE READ FIRST (2026-11-17 10:14 `…-ref-scrapers-2a9c4e`, 2026-11-16 11:32 `…-keeperflake-054603`: the
+    events were read first, ~11k over the tunnel in 3 s, and a change that exited meanwhile was named -- its event,
+    committed with its transition, came after that read): a terminal item's event is in the same transaction, so a
+    later events read always holds it."""
+    exits = [it for it in store.items("change") if it["state"] in CHANGE_EXIT_VERDICT and it["entered_at"] >= since]
     evs = {}
-    for ev in store.events(after=0, limit=10 ** 9):
+    for ev in store.events(after=0, limit=10 ** 9) if exits else ():
         if ev.get("item_type") == "change" and ev.get("to_state") in CHANGE_EXIT_VERDICT:
             evs.setdefault(ev["item_id"], []).append(ev)
     out = []
-    for it in store.items("change"):
-        if it["state"] not in CHANGE_EXIT_VERDICT or it["entered_at"] < since:
-            continue
+    for it in exits:
         if not any(e.get("to_state") == it["state"] and ((e.get("audience") or {}).get("worktree")
                                                           or e["severity"] != "info")
                    for e in evs.get(it["id"], [])):

@@ -593,6 +593,11 @@ def notify(title, text, url=None, group=None):
     return _delivered(False, "; ".join(causes))
 
 
+def entry_ids(e):
+    """The change ids an inbox entry carries: its own, and those of the verdicts merged into it (alert_write)."""
+    return [x for x in [e.get("entry")] + list(e.get("entries") or []) if x]
+
+
 def cmd_inbox(a):
     if a.ids[:1] == ["escalated"]:  # the status line's: what is escalated now (the notifier already told) -- bold
         line = escalation_line(escalated_now())
@@ -611,8 +616,8 @@ def cmd_inbox(a):
         want = {x.strip() for x in aud.split(",") if x.strip()}
         entries = [e for e in entries if alert_audience(e) in want]
     if a.ids:
-        entries = [e for e in entries if any(e["id"].startswith(i) or (e.get("entry") or "").endswith(i)
-                                              or e.get("entry") == i for i in a.ids)]
+        entries = [e for e in entries if any(e["id"].startswith(i) or any(x.endswith(i) for x in entry_ids(e))
+                                              for i in a.ids)]
     if a.unread:
         entries = [e for e in entries if not e["read"]]
     if getattr(a, "count", False):  # every match: a count capped by the listing's --limit read "30 unread" for 44

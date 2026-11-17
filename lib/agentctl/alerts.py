@@ -323,6 +323,10 @@ def alert_write(rec, st=None, red=None, condition=None, d=None):
             live["count"] = int(live.get("count") or 1) + 1
             live["verdicts"] = ((live.get("verdicts") or []) + [rec.get("verdict")])[-10:]
             live["merged"] = ((live.get("merged") or []) + [rec["id"]])[-50:]
+            # the merged entry's change keeps its name on the live alert (2026-11-17 `…-ref-scrapers-2a9c4e`: its NOT
+            # LANDED merged into an earlier change's alert, and `agentctl inbox <its id>` found nothing)
+            if rec.get("entry") and rec["entry"] not in ([live.get("entry")] + (live.get("entries") or [])):
+                live["entries"] = ((live.get("entries") or []) + [rec["entry"]])[-50:]
             if surface:
                 live["surfaced"] = int(live.get("surfaced") or 1) + 1
             write_json(os.path.join(d, live["id"] + ".json"), live)

@@ -122,6 +122,34 @@ class EventsTest(unittest.TestCase):
         finally:
             A.Store = saved
 
+    def test_w8_does_not_name_a_change_that_left_the_queue_while_it_read(self):
+        """2026-11-17 10:14:46 `…-ref-scrapers-2a9c4e` (and 2026-11-16 11:32 `…-keeperflake-054603`): W8 read every
+        event (~11k, 3 s over the tunnel) and THEN the items; the change was rejected in between, its event (with its
+        author's audience) committed after the events read, so the item looked terminal with no event. The next pass
+        was ok. The items are read first: an exit the items show has its event committed with it, in the later read."""
+        self.st.put_item("change", "r1", "checking", {"worktree": "/w/a"})
+        real_events = self.st.events
+
+        def events_then_reject(*a, **k):
+            evs = real_events(*a, **k)
+            if self.st.item("change", "r1")["state"] == "checking":  # the processor rejects it mid-read
+                self.st.transition("change", "r1", "rejected", 1, event={"text": "NOT LANDED: the checks failed"})
+            return evs
+
+        self.st.events = events_then_reject
+        self.assertEqual(A.change_exits_unannounced(self.st), [])
+
+    def test_a_not_landed_merged_into_the_worktrees_live_alert_is_found_by_its_own_id(self):
+        """2026-11-17 `…-ref-scrapers-2a9c4e`: its NOT LANDED merged into its worktree's live land alert, an earlier
+        change's (`…-c77e00`) entry, which kept naming that one: `agentctl inbox <its id>` said "no entries"."""
+        for i, iid in enumerate(("old-c77e00", "new-2a9c4e")):
+            self.st.put_item("change", iid, "checking", {"worktree": "/w/scrapers", "session": "s1"})
+            self.st.transition("change", iid, "rejected", 1, event={"text": f"NOT LANDED: check {i} failed"})
+        A.project_events(self.st)
+        self.assertEqual(len(A.inbox_entries()), 1)  # one live alert for the worktree's landing
+        self.assertIn("check 1 failed", self.run_inbox(["new-2a9c4e"]))
+        self.assertIn("check 1 failed", self.run_inbox(["old-c77e00"]))  # the earlier id still finds the live alert
+
     def test_the_projector_keeps_its_cursor_before_an_entry_it_could_not_write(self):
         e = {"id": "e5", "worktree": "/w/a", "session": "s1"}
         self.st.put_item("change", "e5", "pushing")
