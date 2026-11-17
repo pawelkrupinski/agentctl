@@ -1996,6 +1996,10 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 - **Tunnel down** (`Connection refused` on localhost:3014, the store unreachable). Run `agentctl env --check`. The fix
   is `launchctl kickstart -k gui/$(id -u)/net.bitcashier.forgejo-tunnel` (the launchd agent kept its name; it carries
   only the store now). The tunnel restarts itself under launchd, so wait a few seconds and land again.
+  Its source is `~/bin/launchd/net.bitcashier.forgejo-tunnel.plist` (installed as a copy; 8192 open files, not
+  launchd's 256: a lossy uplink strands an fd per abandoned request). On a lossy uplink (any lost ping of 10 to
+  1.1.1.1, e.g. a phone hotspot) the processor never kicks it -- a restart only drops what is in flight -- and the
+  status line says NETWORK until a clean sample.
 - **The red gate refused the push.** `land` already printed `ci-why`. For a tools-only change, it lands while red. For
   a production change, wait for the green run that `ci-why` names (in the background, with `wait run`), or add
   `Fixes-Red: <#|id>` only if your commit really fixes that run. Never use PREPUSH_SKIP or `--no-verify`.

@@ -212,7 +212,13 @@ def tunnel_probe():
         return "refused"
 
 
-UPLINK_LOSS_MAX = 0.2  # packet loss to the internet above which the laptop's own uplink, not the tunnel, is the fault
+# Packet loss to the internet at or above which the laptop's own uplink, not the tunnel, is the fault: ONE lost ping of
+# the 10. 2026-11-17 (and 11-16): a phone hotspot losing 15-20% kept every request through the tunnel timing out,
+# yet each sample under the old 20% bound kicked the tunnel (11 kicks, launchd runs=260): every kick dropped all
+# in-flight requests and a fresh jump+ssh handshake over the same lossy link took longer than the next probe.
+# Once a NETWORK outage is open it stays one until a sample is clean (UPLINK_LOSS_CLEAR): no kick on a dip.
+UPLINK_LOSS_MAX = 0.1
+UPLINK_LOSS_CLEAR = 0.0
 
 
 def uplink_loss():
@@ -298,7 +304,7 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
         return did
     st["fails"] = st.get("fails", 0) + 1
     loss = (uplink or (uplink_loss if probe is None else (lambda: 0.0)))()
-    if loss >= UPLINK_LOSS_MAX:
+    if loss >= UPLINK_LOSS_MAX or (st.get("network") and loss > UPLINK_LOSS_CLEAR):
         if not st.get("network"):
             msg = (f"NETWORK: the laptop's uplink loses {int(loss * 100)}% of packets to 1.1.1.1, so the tunnel (localhost:{tunnel_ports()[0][0]}) "
                    f"{r}s; not a tunnel fault, nothing to restart -- the gate reads come back with the network")

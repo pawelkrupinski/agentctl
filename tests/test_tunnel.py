@@ -106,6 +106,30 @@ class TunnelTest(unittest.TestCase):
         self.assertEqual(A.tunnel_watch(1520, down, uplink=clean), "down")
         self.assertEqual(A.tunnel_watch(1530, down, uplink=clean), "kicked")
 
+    def test_the_tunnel_agent_has_room_for_the_connections_a_lossy_link_strands(self):
+        # 2026-11-17: launchd's default 256 open files; on a lossy uplink each forwarded connection a client gave up on
+        # holds its fd until its channel closes across that link, so ssh hit EMFILE ("accept: Too many open files", 653
+        # lines) and refused new requests even once the link came back
+        import plistlib
+        with open(os.path.join(HERE, "..", "launchd", f"{A.TUNNEL_LABEL}.plist"), "rb") as f:
+            d = plistlib.load(f)
+        self.assertEqual(d["Label"], A.TUNNEL_LABEL)
+        for k in ("SoftResourceLimits", "HardResourceLimits"):
+            self.assertGreaterEqual(d[k]["NumberOfFiles"], 4096)
+
+    def test_a_dip_in_the_loss_during_a_network_outage_does_not_kick(self):
+        # 2026-11-17: a phone hotspot losing 15-20% to 1.1.1.1; every sample under the old 20% bound kicked the tunnel
+        # (11 kicks in one outage), each dropping every in-flight request for a reconnect over the same lossy link
+        down = lambda: "timeout"
+        self.assertEqual(A.tunnel_watch(1000, down, uplink=lambda: 0.1), "network")  # one lost ping of 10 is lossy
+        self.assertEqual(A.tunnel_watch(1010, down, uplink=lambda: 0.05), "network")  # a dip: still the network's
+        self.assertEqual(A.tunnel_watch(1020, down, uplink=lambda: 0.05), "network")
+        self.assertEqual(A.tunnel_watch(1500, down, uplink=lambda: 0.05), "network")  # minutes on: no STALLED either
+        self.assertEqual(self.kicks, [])
+        self.assertEqual(len(self.inbox), 1)
+        # a clean sample ends the network's excuse: a forward still dead then is the tunnel's, kicked at once
+        self.assertEqual(A.tunnel_watch(1510, down, uplink=lambda: 0.0), "kicked")
+
     def test_a_lossy_uplink_shows_the_gate_as_network_not_unread(self):
         # 2026-10-29: ~20% loss to 1.1.1.1 and the jump host kept the forward timing out; restarts only churned it
         down, lossy, clean = (lambda: "timeout"), (lambda: A.UPLINK_LOSS_MAX), (lambda: 0.0)  # AT the bound: lossy
@@ -113,7 +137,7 @@ class TunnelTest(unittest.TestCase):
         self.assertIn("gate UNREAD", A.status_line())
         self.assertEqual(A.tunnel_watch(A.time.time(), down, uplink=lossy), "network")
         line = A.status_line()
-        self.assertIn("gate NETWORK (lossy uplink: 20% loss", line)
+        self.assertIn("gate NETWORK (lossy uplink: 10% loss", line)
         self.assertNotIn("UNREAD", line)
         self.assertEqual(self.kicks, [])  # no restart
         self.assertEqual(A.tunnel_watch(A.time.time(), lambda: "ok"), "restored")
