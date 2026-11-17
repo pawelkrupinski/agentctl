@@ -852,7 +852,7 @@ def check_batch(repo, bid):
             it = batch_move(st, it, "bisecting", {"failed_out": (out or "")[-20000:]},
                             text=f"batch {bid}: {tip[:10]} failed its check; bisecting")
         culprit, cout = bisect(repo, d, members, base, tree, depth, runs, it["data"].get("failed_out"),
-                               range_base=range_base)
+                               range_base=range_base, cls=it["data"].get("cls") or "check")
         it = st.item("batch", bid)
         if culprit is None:
             batch_fail(st, d, it, "it failed, then every prefix passed on its own (flaky or infra)", len(members))

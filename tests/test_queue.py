@@ -715,6 +715,27 @@ class QueueTest(WaitingTest):
             A.remote_check, A.remote_checks_supported, A.precheck_hook, A.batch_mode = saved
         self.assertEqual(seen, [("batch-cccccccccc", "--fast-only")])
 
+    def test_a_red_batchs_check_on_ci_runner_takes_the_red_fix_lane(self):
+        """Review 2026-11-18: a batch carrying a gate red's fix (cls red: a fix whose production commit names no red waits
+        in it) was checked on check/fast-batch-<tip>, the ordinary lane: behind every queued check on saturated
+        runners, where a lone fix's check/red-<...> is served first."""
+        seen, saved = [], (A.remote_check, A.remote_checks_supported, A.precheck_hook, A.batch_mode)
+        self.addCleanup(lambda: [setattr(A, n, v) for n, v in zip(
+            ("remote_check", "remote_checks_supported", "precheck_hook", "batch_mode"), saved)])
+        A.remote_check = lambda repo, e, base, tip, mode, own=None, red=False: seen.append((e["id"], red)) or (True, "ok")
+        A.remote_checks_supported = lambda tree: True
+        A.precheck_hook = lambda tree: "/hook"
+        A.batch_mode = lambda hook: "--fast-only"
+        A.batch_check(self.r.path, self.r.path, self.r.path, "b" * 40, "c" * 40, cls="red")
+        A.batch_check(self.r.path, self.r.path, self.r.path, "b" * 40, "d" * 40)
+        self.assertEqual(seen, [("batch-cccccccccc", True), ("batch-dddddddddd", False)])
+        lanes, real = [], A.batch_check
+        self.addCleanup(setattr, A, "batch_check", real)
+        A.batch_check = lambda *a, cls="check", **k: lanes.append(cls) or (False, "boom", False)
+        A.bisect(self.r.path, self.r.path, [{"id": "a", "tip": "a" * 40}, {"id": "b", "tip": "b" * 40}], "c" * 40,
+                 self.r.path, cls="red")
+        self.assertEqual(set(lanes), {"red"}, "and so is each check of its bisect")
+
     def test_a_check_the_laptop_failed_is_queued_again_not_rejected(self):
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         eid, _ = self.queued(wt)

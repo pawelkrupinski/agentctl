@@ -617,7 +617,8 @@ def batch_check(repo, d, tree, base, tip, cls="check", depth="fast", runs=None, 
     if host_role() == "server" and remote_checks_supported(tree):  # ci-runner: the CI check tier (owner decision 1)
         # (a push batch's branch: check/verify-<range base>-batch-<tip>, the workflow's --verify-only <range base>..HEAD)
         e = {"id": f"batch-{tip[:10]}", "head": tip, **({"full_base": rng_base} if depth == "verify" else {})}
-        ok, out = remote_check(repo, e, base, tip, mode)
+        # a gate red's fix in it (cls red): check/red-<...>, the lane ci-runner serves first, as a lone fix's check
+        ok, out = remote_check(repo, e, base, tip, mode, red=cls == "red")
         if runs is not None and e.get("remote_run"):
             runs[tip] = e["remote_run"]
         return (ok, out, False) if ok is not None else (False, out, True)
@@ -832,13 +833,13 @@ def watch_eval(repo, sha, pushed_at, o_r, flows, now_):
     return (v[0], v[1] + f" ({sha[:10]})", v[2]) if v and v[0] == "ok" else v
 
 
-def bisect(repo, d, batch, base, bwt, depth="fast", runs=None, failed_out=None, range_base=None):
+def bisect(repo, d, batch, base, bwt, depth="fast", runs=None, failed_out=None, range_base=None, cls="check"):
     """The batch failed: the first entry whose prefix fails (binary search over the prefixes' tips, in the batch's tree
     bwt). (index, output) of the culprit; (None, output) when the whole batch passes on its own again (flaky or infra).
     A backlog or push batch (failed_out: its check's output) is not checked whole again first: each check is a landing
     check's 30-40 min or a verify round's ~10, and the culprit's confirmation below still clears a flaky failure."""
     lo, hi, out_hi = 0, len(batch) - 1, ""
-    check = lambda tip: batch_check(repo, d, bwt, base, tip, depth=depth, runs=runs, range_base=range_base)
+    check = lambda tip: batch_check(repo, d, bwt, base, tip, cls=cls, depth=depth, runs=runs, range_base=range_base)
     if depth in ("full", "verify") and failed_out is not None:
         out_hi = failed_out
     else:
