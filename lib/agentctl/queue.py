@@ -619,12 +619,12 @@ def joined_changes(d, w, st):
 
 def joined_verdicts(st, w, joined, to, event, data):
     """Waiting entry w's final state on each queued change that joined it, under the QUEUED id -- the one its `land`
-    printed -- its author told there alone (review round 7: 20261116-184811-movies-r2-ci-ac68b8's batch LANDED went to
-    its waiting entry's id; its own item only followed later, through the projection, as a second LANDED)."""
+    printed -- its line the projection's (joined_verdict), its author told there alone (review round 7:
+    20261116-184811-movies-r2-ci-ac68b8's batch LANDED went to its waiting entry's id; its own item only followed later,
+    through the projection, as a second LANDED)."""
     refs = (event or {}).get("refs") or {}
-    verdict = refs.get("verdict") or (event or {}).get("text") or f"{w['id']}: {to}"
     for q, it in joined:
-        line = f"{str(verdict).splitlines()[0]} (queued {q['id']}, joined `waiting` as {w['id']})"
+        line = joined_verdict(q, w if w.get("why") else {**w, "why": f"{w['id']}: {to}"}, to)
         sha = w.get("landed_sha") if to == "landed" else None
         extra = {k: refs[k] for k in refs if k not in ("verdict", "tail", "exit", "final", "command", "entry", "no_inbox")}
         ev = change_event(q, line, refs.get("tail") or (), refs.get("exit", 0 if to == "landed" else 1), **extra)

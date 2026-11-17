@@ -158,6 +158,29 @@ class ProjectionTest(unittest.TestCase):
         self.assertEqual(A.inbox_kind(ev[0]["refs"]["verdict"], True), "LANDED")
         self.assertEqual(st.item("change", "q1")["data"]["tip"], "abc123", "await_queued prints the landed sha")
 
+    def test_a_joined_changes_verdict_reads_the_same_from_its_transition_and_its_projection(self):
+        """Review round 9: joined_verdicts built the line from the event's verdict and projected_transition from the
+        entry's why (a supersede read `SUPERSEDED w1 by w0: ...` one way, `SUPERSEDED by w0: ...` the other)."""
+        for to, why, fields in (("landed", "LANDED abc123 (batch: 1 change(s) in one push)", {"landed_sha": "abc123"}),
+                                ("superseded", "the same change already waits as w0", {"superseded_by": "w0"}),
+                                ("cancelled", "cancelled by `agentctl land cancel`", {})):
+            root = tempfile.mkdtemp()
+            st = A.Store(path=os.path.join(root, "store.db"))
+            d = os.path.join(root, "w")
+            os.makedirs(os.path.join(d, "entries"))
+            q = {"id": "q1", "seq": 1, "status": "joined", "waiting_id": "w1", "worktree": "/wt/q"}
+            w = {"id": "w1", "seq": 2, "status": "waiting", "worktree": "/wt/q"}
+            A.write_json(os.path.join(d, "entries", "q1.json"), q)
+            A.write_json(os.path.join(d, "entries", "w1.json"), w)
+            A.project_changes(d, st)
+            event_line = why if to != "superseded" else f"SUPERSEDED w1 by w0: {why}"
+            A.set_change(d, w, to, event=A.change_event(w, event_line, code=0), store=st, why=why, **fields)
+            ev = [e for e in st.events() if e["item_id"] == "q1" and e["to_state"] == to]
+            self.assertEqual(len(ev), 1, to)
+            projected = A.projected_transition(q, w, "waiting", to)[1]["refs"]["verdict"]
+            self.assertEqual(ev[0]["refs"]["verdict"], projected, to)
+            self.assertIn("(queued q1, joined `waiting` as w1)", projected)
+
     def test_a_joined_change_whose_waiting_entry_was_superseded_says_superseded_under_its_own_id(self):
         """Review round 5: the waiting entry's `why` on a supersede is the bare reason ("the same change already
         waits as ..."), so the joined change's verdict read as an OTHER entry with exit 1, never SUPERSEDED."""

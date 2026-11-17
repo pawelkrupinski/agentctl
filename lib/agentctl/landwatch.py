@@ -171,7 +171,8 @@ class WatchClaim:
         return bool(it) and watch_outcome(it) not in ("ok", "red") and (it.get("data") or {}).get("followed_by") == self.me
 
     def release(self):
-        """Its own claim given up (never another follower's): the tick carries the watch on to its own deadline."""
+        """Its own claim given up (never another follower's): the tick carries a `watching` item on to its own deadline;
+        an `unknown` one waits for the next follower."""
         try:
             st = Store()
             it = st.item("watch", self.sha)
