@@ -463,22 +463,30 @@ def await_entry(repo, eid, close=None):
 
 
 def _await_entry(repo, eid, own):
-    d, _c, _w = waiting_state(repo)
-    p = os.path.join(d, "entries", f"{eid}.json")
+    """The change's STORE ITEM decides (a RemoteStore on the laptop): an entry's JSON is only on the host whose queue
+    runs it -- ci-runner's for every change since ONE QUEUE (2026-11-16: `waiting await` on the laptop crashed with
+    FileNotFoundError on one). A joined change's item follows its waiting entry (project_changes)."""
     t0, delays = time.time(), backoff(15, 60)
     timeout = env_num("AGENTCTL_WAITING_TIMEOUT", WAITING_AWAIT_TIMEOUT)
+    state = "not in the store yet"
     while True:
-        with open(p) as f:
-            e = json.load(f)
-        if e["status"] == "landed":
-            print(f"LANDED {e['landed_sha']} (with the {e.get('batch', 1)} change(s) of `{WAITING_BRANCH}`, once main was green)",
-                  flush=True)
-            return 0, e["landed_sha"], e.get("pushed_at")
-        if e["status"] in ("rejected", "cancelled", "superseded"):  # audit S1: a superseded entry never hangs a follow
-            print(f"NOT LANDED: {e.get('why') or e['status']}")
-            return 1, None, None
+        try:
+            it = Store().item("change", eid)
+        except StoreUnavailable as ex:  # a blip: asked again at the next poll
+            it, state = None, f"unknown (the store did not answer: {str(ex)[:80]})"
+        if it:
+            state, data = it["state"], it.get("data") or {}
+            if state == "landed":
+                sha = data.get("landed_sha") or data.get("tip") or data.get("head")
+                print(f"LANDED {sha} (with the {data.get('batch', 1)} change(s) of `{WAITING_BRANCH}`, once main was "
+                      "green)", flush=True)
+                return 0, sha, data.get("pushed_at") or it.get("entered_at")
+            if machine_state("change", state).terminal:  # rejected, cancelled, superseded: never hangs a follow
+                why = str(data.get("why") or state)
+                print(why if why.startswith("NOT LANDED") else f"NOT LANDED: {why}", flush=True)
+                return 1, None, None
         if time.time() - t0 > timeout:
-            print(f"NOT LANDED (still waiting): entry {eid} on `{WAITING_BRANCH}` after {int(timeout // 3600)} h; "
+            print(f"NOT LANDED (still waiting): entry {eid} is {state} after {int(timeout // 3600)} h; "
                   "`agentctl land status`")
             return 2, None, None
         spawn_waiting_processor(repo)

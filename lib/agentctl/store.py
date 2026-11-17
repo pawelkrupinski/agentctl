@@ -606,10 +606,14 @@ def projected_transition(e, w, frm, to):
     reads them there (2026-11-16: ...-ac68b8 got only `waiting -> landed`, its batch's LANDED went to the waiting
     entry's id)."""
     if w and w.get("why") and machine_state("change", to).terminal:
-        verdict = f"{str(w['why']).splitlines()[0]} (queued {e['id']}, joined `waiting` as {w['id']})"
+        line = str(w["why"]).splitlines()[0]
+        if to == "superseded":  # its why is the bare reason: the verdict line says SUPERSEDED, as supersede's does
+            line = f"SUPERSEDED by {w.get('superseded_by') or 'another entry'}: {line}"
+        verdict = f"{line} (queued {e['id']}, joined `waiting` as {w['id']})"
         sha = {"landed_sha": w["landed_sha"]} if to == "landed" and w.get("landed_sha") else {}
-        return ({"why": verdict, **({"tip": sha["landed_sha"]} if sha else {})},
-                change_event(e, verdict, code=0 if to == "landed" else 1, **sha))
+        at = {"pushed_at": w["pushed_at"]} if sha and w.get("pushed_at") else {}
+        return ({"why": verdict, **({"tip": sha["landed_sha"]} if sha else {}), **sha, **at},
+                change_event(e, verdict, code=0 if to in ("landed", "superseded") else 1, **sha))
     return None, {"text": f"{e['id']}: {frm} -> {to}", "refs": {"entry": e["id"]}}
 
 

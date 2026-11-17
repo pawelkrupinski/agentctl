@@ -585,6 +585,9 @@ def set_change(d, e, to, data=None, event=None, store=None, **fields):
     cur = st.put_item("change", e["id"], ENTRY_STATE.get(e.get("status"), "queued"), change_item_fields(e))
     if fields.get("why"):  # a decided change's why, on its item: a fixer's land reads it there (await_queued)
         data = {**(data or {}), "why": str(fields["why"])[:600]}
+    landed = {k: fields[k] for k in ("landed_sha", "pushed_at", "batch") if fields.get(k) is not None}
+    if landed:  # where and when it landed, on its item: an awaiter on any host reads it there (await_entry)
+        data = {**(data or {}), **landed}
     try:
         if not machine_state("change", cur["state"]).terminal:
             st.transition("change", e["id"], to, cur["version"], data=data, event=event)

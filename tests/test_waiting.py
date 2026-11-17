@@ -591,6 +591,39 @@ class WaitingTest(Base):
         self.assertEqual(rc, 2)
         self.assertIn("agentctl land status", out)
 
+    def test_await_reads_the_store_so_an_entry_ci_runner_runs_is_awaited_on_the_laptop(self):
+        """2026-11-16 (round 4): `agentctl waiting await <entry>` on the laptop crashed with FileNotFoundError on an
+        entry ci-runner's queue runs: it read the entry's JSON from this host's waiting dir, which only the host that
+        runs the queue has. It reads the change's store item now (a RemoteStore on the laptop), whatever host holds
+        the entry: the landed sha and push time its verdict wrote, or a NOT LANDED with its why."""
+        import contextlib, io
+        await_entry = self.saved[3]
+        st = A.Store()
+        d = A.waiting_state(self.r.path)[0]
+        for eid, verdict, status, fields in (
+                ("e-landed", "LANDED abc123 (batch: 1 change(s) in one push)", "landed",
+                 {"landed_sha": "abc123", "pushed_at": 1234.5}),
+                ("e-rejected", "NOT LANDED: the checks failed with your change in the batch", "rejected", {})):
+            e = {"id": eid, "seq": 1, "status": "waiting", "worktree": self.r.path}
+            st.put_item("change", eid, "waiting", A.change_item_fields(e))  # the queue's host made it
+            ticks = []
+
+            def decide(_s, e=e, verdict=verdict, status=status, fields=fields):  # the queue's host decides it ...
+                ticks.append(1)
+                A.queue_verdict(d, dict(e), status, verdict, code=0 if status == "landed" else 1, **fields)
+                os.unlink(os.path.join(d, "entries", f"{e['id']}.json"))  # ... its entry on ITS disk, not this one
+            A.time.sleep = decide
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                got = await_entry(self.r.path, eid)
+            self.assertEqual(ticks, [1])
+            if status == "landed":
+                self.assertEqual(got, (0, "abc123", 1234.5))
+                self.assertTrue(buf.getvalue().startswith("LANDED abc123"), buf.getvalue())
+            else:
+                self.assertEqual(got, (1, None, None))
+                self.assertIn("NOT LANDED: the checks failed with your change in the batch", buf.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

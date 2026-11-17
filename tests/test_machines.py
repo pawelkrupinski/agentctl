@@ -158,6 +158,26 @@ class ProjectionTest(unittest.TestCase):
         self.assertEqual(A.inbox_kind(ev[0]["refs"]["verdict"], True), "LANDED")
         self.assertEqual(st.item("change", "q1")["data"]["tip"], "abc123", "await_queued prints the landed sha")
 
+    def test_a_joined_change_whose_waiting_entry_was_superseded_says_superseded_under_its_own_id(self):
+        """Review round 5: the waiting entry's `why` on a supersede is the bare reason ("the same change already
+        waits as ..."), so the joined change's verdict read as an OTHER entry with exit 1, never SUPERSEDED."""
+        root = tempfile.mkdtemp()
+        st = A.Store(path=os.path.join(root, "store.db"))
+        d = os.path.join(root, "w")
+        os.makedirs(os.path.join(d, "entries"))
+        A.write_json(os.path.join(d, "entries", "q1.json"),
+                     {"id": "q1", "seq": 1, "status": "joined", "waiting_id": "w1", "worktree": "/wt/q"})
+        w = {"id": "w1", "seq": 2, "status": "waiting", "worktree": "/wt/q"}
+        A.write_json(os.path.join(d, "entries", "w1.json"), w)
+        A.project_changes(d, st)
+        A.write_json(os.path.join(d, "entries", "w1.json"),
+                     dict(w, status="superseded", superseded_by="w0", why="the same change already waits as w0"))
+        A.project_changes(d, st)
+        [ev] = [e for e in st.events() if e["item_id"] == "q1" and e["to_state"] == "superseded"]
+        self.assertEqual(A.inbox_kind(ev["refs"]["verdict"], True), "SUPERSEDED", ev["refs"]["verdict"])
+        self.assertIn("by w0", ev["refs"]["verdict"])
+        self.assertEqual(ev["refs"]["exit"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
