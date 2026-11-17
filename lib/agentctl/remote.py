@@ -624,6 +624,24 @@ def start_watch(repo, sha, pushed_at, worktree=None, close=None, session=None, o
                                                        "next_at": 0, **(follower or {})})
 
 
+def watch_clone(dd):
+    """THIS host's clone of a watch item's repo. The item names its repo by o_r, its GitHub slug -- the same on every
+    host -- and `repo`, the clone path of the host that made it, is used only where it is that repo here (review round
+    7: a laptop follower's item, taken over by ci-runner's tick, named /Users/... there: every look failed, and the
+    watch ended UNKNOWN at its deadline)."""
+    o_r, p = dd["o_r"], dd.get("repo")
+    if p and os.path.isdir(p):
+        try:
+            if slug(p) == o_r:
+                return p
+        except (Exception, SystemExit):
+            pass
+    c = red_repo_clone(o_r)
+    if c:
+        return c
+    raise RuntimeError(f"no clone of {o_r} on {os.uname().nodename} (red-repos.json `clone`, {movies_repo_path()})")
+
+
 def watch_event(it, verdict, severity="info", code=0):
     dd = it["data"]
     return {"text": verdict.splitlines()[0], "severity": severity,
@@ -661,7 +679,7 @@ def tick_watch(st, it, t):
         return []
     flows = WATCH.get(dd["o_r"]) or {}
     try:
-        verdict = watch_eval(dd["repo"], it["id"], dd["pushed_at"], dd["o_r"], flows, t)
+        verdict = watch_eval(watch_clone(dd), it["id"], dd["pushed_at"], dd["o_r"], flows, t)
     except (Exception, SystemExit) as e:  # unreadable now: tried again at the next look, the deadline bounds it
         err(f"watch {it['id'][:10]}: could not read the runs ({str(e)[:120]})")
         verdict = None

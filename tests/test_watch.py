@@ -348,14 +348,17 @@ class WatchItemTest(unittest.TestCase):
         self.saved = {k: os.environ.get(k) for k in ("AGENTCTL_STATE_ROOT", "AGENTCTL_INBOX_DIR")}
         os.environ["AGENTCTL_STATE_ROOT"] = self.root
         os.environ["AGENTCTL_INBOX_DIR"] = os.path.join(self.root, "inbox")
-        self.saved_a = A.watch_eval, A.slug, A.main_clone, A.close_worktree
+        self.saved_a = A.watch_eval, A.slug, A.main_clone, A.close_worktree, A.red_repo_clone
         A.slug = lambda repo: "pawelkrupinski/movies"
         A.main_clone = lambda repo: repo
+        self.here = os.path.join(self.root, "this-hosts-clone")  # this host's clone of the repo (red_repo_clone)
+        os.makedirs(self.here)
+        A.red_repo_clone = lambda o_r: self.here if o_r == "pawelkrupinski/movies" else None
         self.closed = []
         A.close_worktree = lambda wt: self.closed.append(wt) or f"closed {wt}"
 
     def tearDown(self):
-        A.watch_eval, A.slug, A.main_clone, A.close_worktree = self.saved_a
+        A.watch_eval, A.slug, A.main_clone, A.close_worktree, A.red_repo_clone = self.saved_a
         for k, v in self.saved.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -385,6 +388,44 @@ class WatchItemTest(unittest.TestCase):
         self.assertEqual(looked, [])
         self.assertEqual(A.tick_watches(now_=time.time() + 4 * 3600), [f"watch {'c' * 10}: unknown"],
                          "a lapsed follower's watch is the tick's again")
+
+    def test_a_lapsed_laptop_followers_watch_is_taken_over_by_another_hosts_tick_in_its_own_clone(self):
+        """Review round 7: the item named its repo by the laptop's path; ci-runner's tick, taking over a dead laptop
+        follower's watch, looked there, failed every look and ended it UNKNOWN. The repo is its slug, resolved here."""
+        laptop = "/Users/somebody/projects/movies-wt-gone"  # no such path on this host
+        A.start_watch(laptop, "d" * 40, time.time(), worktree=laptop, close=laptop,
+                      follower={"followed_by": "laptop:4242", "followed_until": time.time() - 1})
+        looked = []
+        A.watch_eval = lambda repo, *a: looked.append(repo) or ("ok", "WATCH OK: Main #5 green (dddddddddd)", [])
+        self.assertEqual(A.tick_watches(), [f"watch {'d' * 10}: ok"])
+        self.assertEqual(looked, [self.here], "looked at in this host's clone, never the laptop's path")
+        self.assertEqual(self.closed, [], "the laptop's worktree is not this host's to close")
+        A.start_watch(self.here, "e" * 40, time.time(), worktree=self.here)  # made here: its own path, as it is
+        A.watch_eval = lambda repo, *a: looked.append(repo) or None
+        A.tick_watches()
+        self.assertEqual(looked[-1], self.here)
+
+    def test_a_watch_of_a_repo_this_host_has_no_clone_of_waits_for_its_deadline(self):
+        A.WATCH["someone/else"] = A.WATCH["pawelkrupinski/movies"]
+        self.addCleanup(A.WATCH.pop, "someone/else", None)
+        A.start_watch("/elsewhere", "f" * 40, time.time(), worktree="/w", o_r="someone/else")
+        looked = []
+        A.watch_eval = lambda *a: looked.append(a) or ("ok", "WATCH OK", [])
+        self.assertEqual(A.tick_watches(), [])
+        self.assertEqual(looked, [], "no clone here: nothing looked at")
+        self.assertEqual(A.Store().item("watch", "f" * 40)["state"], "watching")
+
+    def test_a_follower_never_renews_a_claim_another_follower_took_over(self):
+        """Review round 7: renew() wrote its lease over whoever held the item, so a follower whose claim lapsed (asleep)
+        took it back from the one that had taken it over."""
+        claim = A.WatchClaim("/repo", "g" * 40, time.time(), "pawelkrupinski/movies")
+        A.start_watch("/repo", "g" * 40, time.time(), worktree="/w",
+                      follower={"followed_by": "ci-runner:7", "followed_until": time.time() + 600})
+        claim.renew()
+        self.assertEqual(A.Store().item("watch", "g" * 40)["data"]["followed_by"], "ci-runner:7")
+        A.Store().update_item("watch", "g" * 40, A.Store().item("watch", "g" * 40)["version"], claim.lease(time.time() - 900))
+        claim.renew()
+        self.assertGreater(A.Store().item("watch", "g" * 40)["data"]["followed_until"], time.time(), "its own: renewed")
 
     def test_undecided_past_its_deadline_is_unknown_and_escalates(self):
         A.start_watch("/repo", "b" * 40, time.time(), worktree="/w")

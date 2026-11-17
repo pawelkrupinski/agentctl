@@ -158,7 +158,10 @@ class WatchClaim:
         try:
             st = Store()
             it = st.item("watch", self.sha)
-            if it and not machine_state("watch", it["state"]).terminal:
+            # only its OWN claim: one that lapsed (a laptop asleep) and was taken over is the new follower's now --
+            # renewing it would take it back from under that one, and the tick would leave both watching
+            if it and not machine_state("watch", it["state"]).terminal and \
+                    (it.get("data") or {}).get("followed_by") == self.me:
                 st.update_item("watch", self.sha, it["version"], self.lease(time.time()))
         except (Exception, SystemExit) as e:  # renewed at the next look; a lapse lets the tick evaluate it meanwhile
             err(f"watch {self.sha[:10]}: could not renew its claim ({str(e)[:120]})")
