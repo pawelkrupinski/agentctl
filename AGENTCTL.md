@@ -1195,7 +1195,10 @@ by the `ci-why` summary).
 land's own process, outside the lock (the hook's dry run `--range <remote>/main..<sha>`), then under the `land/<repo>`
 lease it fetches, pushes when main has not moved since the check (moved: checked again outside the lock, twice; the
 third time under it) and verifies; main red and the change must wait: it joins the queue as `waiting` and `--follow`
-waits for its batch. `--follow` then watches in-process; otherwise LANDED starts a watch item and land exits.
+waits for its batch. `--follow` then watches in-process; otherwise LANDED starts a watch item and land exits. A sha
+has ONE watch, its store item, whichever host makes it: `--follow` claims it (a lease it renews, which the tick leaves
+alone) and writes its verdict there; a second follower of the same sha, on any host, prints that verdict instead of
+watching again, and a lapsed claim is taken over.
 
 Other repos (no movies hook): `land` holds `land/<repo>`, fetches, rebases, runs prepush-check, pushes (the repo's
 hook runs), verifies with `merge-base --is-ancestor` or `git cherry`, and prints `LANDED <sha>`; no watch.
@@ -1962,6 +1965,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `watchdog_sleep_gap` | `AGENTCTL_WATCHDOG_SLEEP_GAP` | `180` | s since the watchdog's own last pass (launchd: every 60 s) that mean the laptop slept |
 | `watch_conv_start` | `AGENTCTL_WATCH_CONV_START` | `3600` | no convergence (or takes) run containing the sha started by then: said, not waited for |
 | `watch_error_poll` | `AGENTCTL_WATCH_ERROR_POLL` | `30` | - |
+| `watch_follow_lease` | `AGENTCTL_WATCH_FOLLOW_LEASE` | `600` | s a follower's claim on a sha's watch item lasts unrenewed; then the tick (or another follower) takes it |
 | `watch_poll` | `AGENTCTL_WATCH_POLL` | `60` | - |
 | `watch_stall_min` | `AGENTCTL_WATCH_STALL_MIN` | `120` | a watch with no change in its runs for this long ends WATCH STALLED |
 | `watch_timeout` | `AGENTCTL_WATCH_TIMEOUT` | `10800` | either run undecided by then: exit 2, could not tell |

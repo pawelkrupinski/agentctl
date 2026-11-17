@@ -607,18 +607,21 @@ def main_clone(path):
 # (no detached process, no loop): its Main run and convergence run (pick_main_run / pick_convergence_run), WATCH OK
 # -> ok (the worktree closed when proven merged), WATCH RED -> red (its author told; the red machine attaches it), still
 # undecided at its 3 h deadline -> unknown, an escalation (a stuck run). The verdicts reach the author's inbox as
-# events. `land --follow` keeps its in-process watch (the agent waits on purpose).
+# events. `land --follow` watches in-process (the agent waits on purpose) by CLAIMING the sha's item (WatchClaim): the
+# tick leaves a live claim alone, and the follower's verdict goes on the item, so one sha is watched once.
 WATCH_EVERY = 60
 
 
-def start_watch(repo, sha, pushed_at, worktree=None, close=None, session=None):
-    """The landed sha's watch item (idempotent)."""
-    o_r = slug(repo)
+def start_watch(repo, sha, pushed_at, worktree=None, close=None, session=None, o_r=None, follower=None):
+    """The landed sha's watch item: created once, a second start leaves it as it is (the sha's ONE watch, whichever
+    host or follower starts it). follower: {followed_by, followed_until}, a `land --follow` that watches it itself
+    (claim_watch)."""
+    o_r = o_r or slug(repo)
     if not WATCH.get(o_r):
         return None
     return Store().put_item("watch", sha, "watching", {"repo": main_clone(repo), "o_r": o_r, "pushed_at": pushed_at or time.time(),
                                                        "worktree": worktree or repo, "close": close, "session": session,
-                                                       "next_at": 0})
+                                                       "next_at": 0, **(follower or {})})
 
 
 def watch_event(it, verdict, severity="info", code=0):
@@ -636,35 +639,55 @@ def tick_watches(now_=None):
     did = []
     for it in st.items("watch", states=("watching",)):
         dd = it["data"]
-        if t > it["deadline"]:
-            st.transition("watch", it["id"], "unknown", it["version"],
-                          event=watch_event(it, f"WATCH UNKNOWN: Main or the convergence still undecided for {it['id'][:10]} "
-                                                f"after {int(WATCH_TIMEOUT // 3600)} h: a stuck run (`agentctl ci-why`)",
-                                            "escalate", 2))
-            did.append(f"watch {it['id'][:10]}: unknown")
+        if float(dd.get("followed_until") or 0) > t:  # a live `land --follow` watches it and writes its verdict here
             continue
-        if float(dd.get("next_at") or 0) > t:
-            continue
-        flows = WATCH.get(dd["o_r"]) or {}
         try:
-            verdict = watch_eval(dd["repo"], it["id"], dd["pushed_at"], dd["o_r"], flows, t)
-        except (Exception, SystemExit) as e:  # unreadable now: tried again at the next look, the deadline bounds it
-            err(f"watch {it['id'][:10]}: could not read the runs ({str(e)[:120]})")
-            verdict = None
-        if verdict is None:
-            st.update_item("watch", it["id"], it["version"], {"next_at": t + env_num("AGENTCTL_WATCH_POLL", WATCH_EVERY)})
-            continue
-        state, line, red_runs = verdict
-        st.transition("watch", it["id"], state, it["version"], event=watch_event(it, line, code=0 if state == "ok" else 3))
-        if state == "ok" and dd.get("close") and os.path.isdir(dd["close"]):
-            err(close_worktree(dd["close"]))
-        for wf, n in red_runs:  # the red machine takes it, its author offered first
-            try:
-                red_attach(st, wf, n, author={"session": dd.get("session"), "worktree": dd.get("worktree")})
-            except (Exception, SystemExit) as e:
-                err(f"watch {it['id'][:10]}: could not attach {wf} #{n} ({str(e)[:120]})")
-        did.append(f"watch {it['id'][:10]}: {state}")
+            did += tick_watch(st, it, t)
+        except (StaleVersion, TerminalState):  # its follower claimed or decided it meanwhile: it is that one's
+            pass
     return did
+
+
+def tick_watch(st, it, t):
+    """One evaluation of a due watch item: what it decided (StaleVersion / TerminalState when a follower took it)."""
+    dd = it["data"]
+    if t > it["deadline"]:
+        st.transition("watch", it["id"], "unknown", it["version"],
+                      event=watch_event(it, f"WATCH UNKNOWN: Main or the convergence still undecided for {it['id'][:10]} "
+                                            f"after {int(WATCH_TIMEOUT // 3600)} h: a stuck run (`agentctl ci-why`)",
+                                        "escalate", 2))
+        return [f"watch {it['id'][:10]}: unknown"]
+    if float(dd.get("next_at") or 0) > t:
+        return []
+    flows = WATCH.get(dd["o_r"]) or {}
+    try:
+        verdict = watch_eval(dd["repo"], it["id"], dd["pushed_at"], dd["o_r"], flows, t)
+    except (Exception, SystemExit) as e:  # unreadable now: tried again at the next look, the deadline bounds it
+        err(f"watch {it['id'][:10]}: could not read the runs ({str(e)[:120]})")
+        verdict = None
+    if verdict is None:
+        st.update_item("watch", it["id"], it["version"], {"next_at": t + env_num("AGENTCTL_WATCH_POLL", WATCH_EVERY)})
+        return []
+    finish_watch(st, it, *verdict)
+    return [f"watch {it['id'][:10]}: {verdict[0]}"]
+
+
+def finish_watch(st, it, state, line, red_runs, told=False):
+    """The watch item's verdict (ok / red / unknown), kept on it for a later follower (`verdict`); its event goes to
+    its author's inbox unless told (a follower printed it to the author already); on ok its worktree closed, on red
+    the red machine takes each red run, its author offered first."""
+    dd = it["data"]
+    ev = watch_event(it, line, code={"ok": 0, "red": 3}.get(state, 2))
+    if told:
+        ev["audience"] = {}
+    st.transition("watch", it["id"], state, it["version"], data={"verdict": line}, event=ev)
+    if state == "ok" and not told and dd.get("close") and os.path.isdir(dd["close"]):
+        err(close_worktree(dd["close"]))
+    for wf, n in red_runs:
+        try:
+            red_attach(st, wf, n, author={"session": dd.get("session"), "worktree": dd.get("worktree")})
+        except (Exception, SystemExit) as e:
+            err(f"watch {it['id'][:10]}: could not attach {wf} #{n} ({str(e)[:120]})")
 
 
 def watch_look(repo, sha, o_r, flows, done, pushed_at, since, now_, on_run=None):
