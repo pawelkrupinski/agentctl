@@ -1448,7 +1448,7 @@ def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own=None
     why = "its remote run, adopted" if adopted else "the CI tier (owner decision 1)"
     if adopted or remote_checks_supported(tree):
         wlog(d, f"{e['id']}: checks on {why}")
-        ok, out = remote_check(repo, e, base, head, mode, own, red=cls == "red")
+        ok, out = remote_check(repo, e, base, head, mode, own)
         if ok is not None:
             return ok, out, f"on ci-runner ({why})"
         if not checks_here():
