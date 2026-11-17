@@ -624,6 +624,71 @@ class WaitingTest(Base):
                 self.assertEqual(got, (1, None, None))
                 self.assertIn("NOT LANDED: the checks failed with your change in the batch", buf.getvalue())
 
+    def test_await_on_a_superseded_change_says_superseded_and_exits_0(self):
+        """Review round 6: the superseded change's event says SUPERSEDED with exit 0 (its newer entry lands the change),
+        but `waiting await` printed `NOT LANDED: <bare reason>` and exited 1, so a `land --follow` read it as a failure."""
+        import contextlib, io
+        await_entry = self.saved[3]
+        st = A.Store()
+        d = A.waiting_state(self.r.path)[0]
+        e = {"id": "e-old", "seq": 1, "status": "waiting", "worktree": self.r.path}
+        st.put_item("change", "e-old", "waiting", A.change_item_fields(e))
+        A.time.sleep = lambda _s: A.supersede(d, dict(e), "e-new", "a newer land of the same worktree")
+        A.cancel_entry_remote, saved = (lambda *a, **k: None), A.cancel_entry_remote
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                got = await_entry(self.r.path, "e-old")
+        finally:
+            A.cancel_entry_remote = saved
+        self.assertEqual(got, (0, None, None))
+        self.assertTrue(buf.getvalue().startswith("SUPERSEDED by e-new: a newer land of the same worktree"),
+                        buf.getvalue())
+
+    def test_await_says_what_it_waits_on_when_the_store_does_not_answer(self):
+        """Review round 6: a store outage was polled silently for up to 24 h; each change of what it waits on (the
+        store not answering, answering again, the change's state) is said once, as it happens."""
+        import contextlib, io
+        await_entry = self.saved[3]
+        d = A.waiting_state(self.r.path)[0]
+        e = {"id": "e-blip", "seq": 1, "status": "waiting", "worktree": self.r.path}
+        A.Store().put_item("change", "e-blip", "waiting", A.change_item_fields(e))
+        real, calls = A.Store, []
+
+        class Flaky:
+            def __init__(self, *a, **k):
+                self.st = real(*a, **k)
+
+            def __getattr__(self, name):
+                return getattr(self.st, name)
+
+            def item(self, typ, iid):
+                calls.append(1)
+                if len(calls) in (2, 3):  # the awaiter's 2nd and 3rd looks
+                    raise A.StoreUnavailable("connection refused")
+                return self.st.item(typ, iid)
+        polls = []
+
+        def tick(_s):
+            polls.append(1)
+            if len(polls) == 4:
+                A.queue_verdict(d, dict(e), "landed", "LANDED abc123 (batch: 1 change(s) in one push)", code=0,
+                                landed_sha="abc123", pushed_at=1.0)
+        A.time.sleep = tick
+        A.Store = Flaky
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                got = await_entry(self.r.path, "e-blip")
+        finally:
+            A.Store = real
+        self.assertEqual(got, (0, "abc123", 1.0))
+        out = buf.getvalue()
+        self.assertEqual(out.count("the store did not answer"), 1, out)
+        self.assertIn("connection refused", out)
+        self.assertIn("e-blip: it is waiting", out)
+        self.assertTrue(out.rstrip().splitlines()[-1].startswith("LANDED abc123"), out)
+
 
 if __name__ == "__main__":
     unittest.main()

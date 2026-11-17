@@ -585,8 +585,9 @@ def set_change(d, e, to, data=None, event=None, store=None, **fields):
     cur = st.put_item("change", e["id"], ENTRY_STATE.get(e.get("status"), "queued"), change_item_fields(e))
     if fields.get("why"):  # a decided change's why, on its item: a fixer's land reads it there (await_queued)
         data = {**(data or {}), "why": str(fields["why"])[:600]}
-    landed = {k: fields[k] for k in ("landed_sha", "pushed_at", "batch") if fields.get(k) is not None}
-    if landed:  # where and when it landed, on its item: an awaiter on any host reads it there (await_entry)
+    landed = {k: fields[k] for k in ("landed_sha", "pushed_at", "batch", "superseded_by") if fields.get(k) is not None}
+    if landed:  # where and when it landed (or what superseded it), on its item: an awaiter on any host reads it there
+        # (await_entry)
         data = {**(data or {}), **landed}
     try:
         if not machine_state("change", cur["state"]).terminal:
@@ -641,13 +642,14 @@ def landed_look_due(cid, t):
     return True
 
 
-def close_item_landed(st, cid, why):
-    """The store's change item cid, unless terminal (or missing), LANDED with an event saying why. True when moved."""
+def close_item_landed(st, cid, why, via=None):
+    """The store's change item cid, unless terminal (or missing), LANDED with an event saying why; via (the main
+    commit carrying it) is its landed sha, which await_entry watches. True when moved."""
     it = st.item("change", cid)
     if not it or machine_state("change", it["state"]).terminal:
         return False
     try:
-        st.transition("change", cid, "landed", it["version"], data={"why": why},
+        st.transition("change", cid, "landed", it["version"], data={"why": why, **({"landed_sha": via} if via else {})},
                       event={"text": f"LANDED {cid}: {why}", "refs": {"entry": cid}})
         return True
     except (StaleVersion, TerminalState):
@@ -671,8 +673,10 @@ def close_landed_changes(repo, d=None, store=None, now_=None):
     for it in st.items("change"):
         if machine_state("change", it["state"]).terminal or it["state"] == "pushing" or it["id"] in carried:
             continue
-        if landed_look_due(it["id"], t) and change_landed(repo, (it.get("data") or {}).get("head"))[0] and \
-                close_item_landed(st, it["id"], "its commits are on main (by content)"):
+        if not landed_look_due(it["id"], t):
+            continue
+        landed, via = change_landed(repo, (it.get("data") or {}).get("head"))
+        if landed and close_item_landed(st, it["id"], "its commits are on main (by content)", via):
             did.append(f"{it['id']}: its commits are on main (by content): landed")
     return did
 
@@ -727,7 +731,7 @@ def migrate_local_queue(repo, store=None):
         if landed:
             e.update(status="landed", landed_sha=via, decided=ts(), why="its commits are on main (by content)")
             save_entry(d, e)
-            close_item_landed(st, e["id"], "its commits are on main (by content)")
+            close_item_landed(st, e["id"], "its commits are on main (by content)", via)
             did.append(f"{e['id']}: its commits are on main (by content): landed")
             continue
         why = None

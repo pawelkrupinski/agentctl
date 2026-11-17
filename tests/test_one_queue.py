@@ -64,10 +64,14 @@ class LandedByContentTest(OneQueueBase):
     def test_a_store_item_no_entry_carries_closes_by_its_head(self):
         wt, head = self.change("proxy-park", "b\n")
         self.st.put_item("change", "x-95", "waiting", {"worktree": wt, "head": head})
-        self.land_rebased(head)
+        via = self.land_rebased(head)
         did = A.close_landed_changes(self.r.path, store=self.st)  # the laptop's look: no entries of its own
         self.assertEqual(did, ["x-95: its commits are on main (by content): landed"])
-        self.assertEqual(self.st.item("change", "x-95")["state"], "landed")
+        it = self.st.item("change", "x-95")
+        self.assertEqual(it["state"], "landed")
+        # review round 6: its landed sha is the main commit carrying it, never its pre-rebase head (await_entry watches
+        # the item's landed_sha, else its head: a sha no main run contains, watched for 3 h to UNKNOWN)
+        self.assertEqual(it["data"].get("landed_sha"), via)
 
     def test_an_unlanded_change_stays_and_a_head_this_clone_lacks_is_never_guessed(self):
         wt, head = self.change("open", "c\n")

@@ -468,11 +468,13 @@ def _await_entry(repo, eid, own):
     FileNotFoundError on one). A joined change's item follows its waiting entry (project_changes)."""
     t0, delays = time.time(), backoff(15, 60)
     timeout = env_num("AGENTCTL_WAITING_TIMEOUT", WAITING_AWAIT_TIMEOUT)
-    state = "not in the store yet"
+    state, said = "not in the store yet", None
     while True:
         try:
             it = Store().item("change", eid)
-        except StoreUnavailable as ex:  # a blip: asked again at the next poll
+            if not it:
+                state = "not in the store yet"
+        except StoreUnavailable as ex:  # a blip: asked again at the next poll, bounded by the timeout below
             it, state = None, f"unknown (the store did not answer: {str(ex)[:80]})"
         if it:
             state, data = it["state"], it.get("data") or {}
@@ -481,10 +483,18 @@ def _await_entry(repo, eid, own):
                 print(f"LANDED {sha} (with the {data.get('batch', 1)} change(s) of `{WAITING_BRANCH}`, once main was "
                       "green)", flush=True)
                 return 0, sha, data.get("pushed_at") or it.get("entered_at")
-            if machine_state("change", state).terminal:  # rejected, cancelled, superseded: never hangs a follow
+            if state == "superseded":  # its newer entry lands the change: exit 0, as its event says (supersede)
+                why = str(data.get("why") or "")
+                print(why if why.startswith("SUPERSEDED") else
+                      f"SUPERSEDED by {data.get('superseded_by') or 'another entry'}: {why or 'superseded'}", flush=True)
+                return 0, None, None
+            if machine_state("change", state).terminal:  # rejected, cancelled: never hangs a follow
                 why = str(data.get("why") or state)
                 print(why if why.startswith("NOT LANDED") else f"NOT LANDED: {why}", flush=True)
                 return 1, None, None
+        if state != said:  # what it waits on, said once each time it changes (a store outage is never silent)
+            err(f"awaiting {eid}: it is {state}")
+            said = state
         if time.time() - t0 > timeout:
             print(f"NOT LANDED (still waiting): entry {eid} is {state} after {int(timeout // 3600)} h; "
                   "`agentctl land status`")
