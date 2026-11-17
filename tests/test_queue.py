@@ -948,6 +948,10 @@ class FastPrecheckTest(QueueTest):
                 os.kill(pid, 0)
             except ProcessLookupError:
                 break
+            # a zombie is ended: in a container with no init (python:3.14 run plainly) nobody reaps the orphan
+            if subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True,
+                              text=True).stdout.strip().startswith("Z"):
+                break
             time.sleep(0.1)
         else:
             self.fail(f"the precheck's child {pid} outlived its bound")
