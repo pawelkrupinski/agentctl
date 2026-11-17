@@ -210,7 +210,7 @@ def remote_mode_prefix(e, base, mode):
     return ""
 
 
-def remote_check(repo, e, base, head, mode, own=None):
+def remote_check(repo, e, base, head, mode, own=None, red=False):
     """(ok, output) of the change's checks on ci-runner; ok None when no verdict came (the caller checks locally).
     The run belongs to the ENTRY, not to this process: its record (`remote` in the entry) is saved the moment the branch is
     pushed and again when the run is found, so a checker that dies or is replaced mid-wait strands nothing -- the next one
@@ -228,8 +228,10 @@ def remote_check(repo, e, base, head, mode, own=None):
     if not rem:
         # the branch NAMES the hook's mode for precommit-check.yml: check/fast-<id> runs `--fast-only` (the batch's
         # combined check, as on the laptop), check/verify-<full base sha>-<id> `--verify-only <full base>..HEAD` (a
-        # change's combined tree, queue.py's THE RULE), any other check/<id> `--checks-only`
-        branch = f"check/{remote_mode_prefix(e, base, mode)}{e['id']}"
+        # change's combined tree, queue.py's THE RULE), any other check/<id> `--checks-only`. A gate-red fix's (`red`)
+        # starts check/red-: its jobs ask for movies-check-red-fix, the check lane ci-runner's scheduler serves first
+        # (movies runner_scheduler.py CHECK_LANES; 2026-11-17, a red fix still checking 41 min after it was queued)
+        branch = f"check/{'red-' if red else ''}{remote_mode_prefix(e, base, mode)}{e['id']}"
         r = git(repo, "push", "--quiet", "--force", remote(), f"{head}:refs/heads/{branch}", check=False)
         if r.returncode != 0:
             return None, f"push of {branch} failed: {r.stderr.strip()[:300]}"
