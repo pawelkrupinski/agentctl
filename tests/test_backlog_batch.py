@@ -152,6 +152,34 @@ class BacklogBatchTest(test_queue.QueueTest):
         self.assertIn("checking", " ".join(did), "the backlog batch takes the freed tree")
         self.assertEqual(self.batch()["data"]["members"], [ea, eb])
 
+    def test_an_older_verification_pushes_before_a_backlog_batch_forms(self):
+        """Review 2026-11-18 (THE OLDEST VERIFICATION PUSHES FIRST, queue.py): a backlog batch formed while an older
+        change verified its combined tree, so that change's push waited behind the batch's 30-40 min check (THE BATCH
+        GOES FIRST), the batch's push moved main under it, and it verified again -- behind the next backlog batch, and
+        the next: workermem's 10 h again. A verification in flight forms no backlog batch until it pushed."""
+        wv, _ = self.agent("v", "scripts/v.sh", "v\n", msg="v: scripts/v.sh")
+        ev = self.queued(wv)[0]
+        A.check_entry(self.r.path, ev)
+        self.assertEqual(self.entry(ev)["status"], "checked")
+        other, _ = self.agent("m", "docs/notes.md", "n\n", msg="main moves")
+        sh(other, "git", "push", "-q", "origin", "HEAD:main")
+        e = self.entry(ev)  # its push found main moved: a verify round of its own (THE RULE; this hook has none)
+        A.set_change(self.d, e, "queued", event={"text": "verify"}, verify=True, full_base=e["checked_base"],
+                     full_tip=e["tip"], retry_after=0)
+        ea = self.queue("a", "web/src/main/A.scala")
+        eb = self.queue("b", "worker/src/main/B.scala")
+        self.assertEqual(A.backlog_candidates(self.r.path, self.d, set()), [], "no batch while v verifies")
+        self.assertEqual(self.drive(), [])
+        self.assertIsNone(self.batch())
+        A.check_entry(self.r.path, ev)  # its verify round, ended between the change tick and the batch tick
+        self.assertEqual(self.entry(ev)["status"], "checked")
+        self.assertEqual(self.drive(), [], "nor while its push is due")
+        A.tick_changes(self.r.path, self.d)
+        self.assertEqual(self.entry(ev)["status"], "landed", "the older verification pushes first")
+        self.drive()
+        for eid in (ea, eb):
+            self.assertEqual(self.entry(eid)["status"], "landed", "then the backlog batch, on the main it moved")
+
     def test_a_red_fix_is_never_delayed_behind_a_checking_batch(self):
         self.queue("a", "web/src/main/A.scala")
         self.queue("b", "worker/src/main/B.scala")

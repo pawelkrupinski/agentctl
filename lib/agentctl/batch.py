@@ -159,11 +159,20 @@ def backlog_batchable(repo, d, e, t):
 
 def backlog_candidates(repo, d, reds, t=None):
     """The queued changes a backlog batch takes now, in batch order (Fixes-Red first, then queue order), at most
-    BACKLOG_BATCH_MAX; [] while the gate is red or fewer than BACKLOG_BATCH_MIN may go."""
+    BACKLOG_BATCH_MAX; [] while the gate is red, a change verifies its combined tree, or fewer than BACKLOG_BATCH_MIN
+    may go."""
     t = t if t is not None else time.time()
     if reds:
         return []
-    out = [e for e in queued_entries(d) if backlog_batchable(repo, d, e, t)]
+    entries = queued_entries(d)
+    # THE OLDEST VERIFICATION PUSHES FIRST (queue.py) holds the batch too (review 2026-11-18): formed meanwhile, the
+    # batch held the verified change's push for its whole check (THE BATCH GOES FIRST), then its push moved main under
+    # it and it verified again -- behind the next backlog batch, and the next. No backlog batch while one verifies, or
+    # while a checked change's push is due (its verification may have ended since the change tick).
+    if any((verifying(e, t) or (e.get("status") == "checked" and not float(e.get("retry_after") or 0) > t))
+           and not e.get("backlog_batch") for e in entries):  # a checked change's push is due at the next change tick
+        return []
+    out = [e for e in entries if backlog_batchable(repo, d, e, t)]
     out = sorted(out, key=lambda e: (0 if e.get("fixes") else 1, e["seq"]))[
         :int(env_num("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX))]
     return out if len(out) >= backlog_min() else []
