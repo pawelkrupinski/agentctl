@@ -2,7 +2,7 @@
 QUEUED <id>; the processor's checker runs the change's checks in a check tree of its own, within the governor, then
 pushes it (green), puts it on `waiting` (red) or rejects it, every verdict to the inbox with the agent's worktree; under
 pressure the checks run on ci-runner's check tier and the push carries the remote run for the hook to confirm."""
-import json, os, subprocess, sys, time, unittest
+import json, os, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -1205,6 +1205,56 @@ class CheckPushBlipTest(unittest.TestCase):
         self.assertEqual(A.check_branch_push("/r", "abc", "check/x", sleep=slept.append).stderr, "denied")
 
 
+class RemoteRunProgressTest(unittest.TestCase):
+    """2026-11-17, ref-srp-54ebae: every check passed by 14:44, `check (page)` waited 23 min for a saturated check runner
+    and was 14 min into its work when the 2-h bound, counted from the push at 13:19, cancelled the run -- a run making
+    progress thrown away, the change queued and checked again from scratch. The bound judges progress: a run whose jobs
+    still move runs on (up to REMOTE_TIMEOUT_MAX); one idle REMOTE_IDLE past REMOTE_TIMEOUT is cancelled."""
+
+    def check(self, idle_s, age_s=2.5 * 3600):
+        tmp = tempfile.mkdtemp()
+        sh(tmp, "git", "init", "-q")
+        t0 = time.time()
+        rem = {"branch": "check/x", "head": "h", "base": "b", "tip": "t", "mode": "--checks-only", "run": 7,
+               "pushed_at": t0 - age_s, "status": None, "progress_at": t0 - idle_s}
+        e = {"id": "x", "head": "h", "remote": dict(rem)}
+        polls, cancelled = [], []
+
+        def poll(o_r, r):
+            polls.append(1)
+            return {**r, "status": "success", "out": "ok"} if len(polls) > 1 else dict(r)
+        saved = (A.remote_poll, A.cancel_run, A.slug, A.waiting_state, A.delete_check_branch, A.time.sleep)
+        A.remote_poll, A.slug, A.waiting_state = poll, (lambda repo: "o/movies"), (lambda repo: (None, None, None))
+        A.cancel_run = lambda o_r, run, why: cancelled.append(why)
+        A.delete_check_branch = lambda o_r, b: None
+        A.time.sleep = lambda s: None
+        try:
+            return A.remote_check(tmp, e, "b", "t", "--checks-only"), cancelled
+        finally:
+            (A.remote_poll, A.cancel_run, A.slug, A.waiting_state, A.delete_check_branch, A.time.sleep) = saved
+
+    def test_a_run_past_the_bound_whose_jobs_still_move_is_waited_for(self):
+        (ok, _out), cancelled = self.check(idle_s=60)
+        self.assertEqual((ok, cancelled), (True, []))
+
+    def test_a_run_idle_past_the_bound_is_cancelled(self):
+        (ok, out), cancelled = self.check(idle_s=A.REMOTE_IDLE + 60)
+        self.assertIsNone(ok)
+        self.assertEqual(len(cancelled), 1)
+        self.assertIn("no progress", out)
+
+    def test_a_run_past_the_hard_cap_is_cancelled_however_it_moves(self):
+        (ok, _out), cancelled = self.check(idle_s=60, age_s=A.REMOTE_TIMEOUT_MAX + 60)
+        self.assertIsNone(ok)
+        self.assertEqual(len(cancelled), 1)
+
+    def test_the_poll_marks_progress_when_the_runs_jobs_move(self):
+        r1 = A.remote_progress({"run": 7}, {"updated_at": "a"}, [{"name": "j", "status": "queued"}], 100.0)
+        r2 = A.remote_progress(r1, {"updated_at": "a"}, [{"name": "j", "status": "queued"}], 200.0)
+        r3 = A.remote_progress(r2, {"updated_at": "a"}, [{"name": "j", "status": "in_progress"}], 300.0)
+        self.assertEqual((r1["progress_at"], r2["progress_at"], r3["progress_at"]), (100.0, 100.0, 300.0))
+
+
 class LandedInboxTest(QueueTest):
     """EVERY WAY A CHANGE LANDS TELLS ITS AUTHOR ONCE (review round 7). LANDED verdicts went missing twice: 20261116-184811-
 movies-r2-ci-ac68b8 (a batch landing) and 2b8927680 (a verify-round push; its author's `inbox wait --audience author
@@ -1272,14 +1322,13 @@ entry's own id, in its author's worktree."""
 
 
 def load_tests(loader, tests, pattern):
-    """Only this file's own cases (QueueTest borrows WaitingTest's fixture, not its tests)."""
-    return unittest.TestSuite([QueueTest(n) for n in sorted(vars(QueueTest)) if n.startswith("test_") and vars(QueueTest)[n]]
-                              + [RemotePickupTest(n) for n in sorted(vars(RemotePickupTest))
-                                 if n.startswith("test_") and vars(RemotePickupTest)[n]]
-                              + [FastPrecheckTest(n) for n in sorted(vars(FastPrecheckTest))
-                                 if n.startswith("test_") and vars(FastPrecheckTest)[n]]
-                              + [LandedInboxTest(n) for n in sorted(vars(LandedInboxTest))
-                                 if n.startswith("test_") and vars(LandedInboxTest)[n]])
+    """Only this file's own cases (QueueTest borrows WaitingTest's fixture, not its tests): every TestCase class DEFINED
+    here, each with only its own test methods (2026-11-17: a hand-kept list left CheckPushBlipTest and
+    RemoteRunProgressTest out of every run)."""
+    here = [c for c in globals().values() if isinstance(c, type) and issubclass(c, unittest.TestCase)
+            and c.__module__ == __name__]
+    return unittest.TestSuite([c(n) for c in sorted(here, key=lambda c: c.__name__) for n in sorted(vars(c))
+                               if n.startswith("test_") and callable(vars(c)[n])])
 
 
 if __name__ == "__main__":

@@ -10,7 +10,9 @@
 # relevant lines as output -- and deletes the branch. The push to main then carries PREPUSH_REMOTE_RUN=<run id>: the hook
 # takes that run's pass for its checks only after GitHub confirms it (the workflow, success, the pushed commit itself).
 REMOTE_WORKFLOW = "precommit-check.yml"
-REMOTE_TIMEOUT = 2 * 3600
+REMOTE_TIMEOUT = 2 * 3600  # s past its push a run may be cancelled -- only when idle REMOTE_IDLE (RUN PROGRESS, below)
+REMOTE_IDLE = 30 * 60  # s with no job of the run moving after which a run past REMOTE_TIMEOUT is cancelled
+REMOTE_TIMEOUT_MAX = 4 * 3600  # s past its push a run is cancelled however its jobs move
 REMOTE_START = 15 * 60  # no run for the pushed branch by then: no verdict (checked locally instead)
 
 
@@ -127,6 +129,19 @@ def jobs_verdict(jobs, globs, expect=()):
     return None, [], going
 
 
+# RUN PROGRESS (2026-11-17, ref-srp-54ebae: every check passed by 14:44, `check (page)` waited 23 min for a saturated
+# check runner and was 14 min into its work when the 2-h bound, counted from the 13:19 push, cancelled the run: two
+# hours of passes thrown away and the change checked again from scratch behind the same queue). The poll marks
+# `progress_at` whenever the run's jobs move (a job queued, started or ended; the run's own update time); past
+# REMOTE_TIMEOUT a run is cancelled only once idle REMOTE_IDLE, and past REMOTE_TIMEOUT_MAX whatever it does.
+def remote_progress(rem, run, jobs, t):
+    """rem with progress_at moved to t when the run's jobs (or its update time) differ from the last poll's."""
+    sig = [run.get("updated_at") or run.get("updatedAt")] + sorted(f"{j.get('name')}:{j.get('status')}" for j in jobs or [])
+    if sig != rem.get("progress_sig"):
+        return {**rem, "progress_sig": sig, "progress_at": t}
+    return rem
+
+
 def remote_poll(o_r, rem):
     """STATELESS: the remote check's state from the forge alone -- the run (found by its check/ branch and tip when its id
     is not known yet), its status, and for a decided run the verdict: decided by its verdict jobs while it still runs
@@ -143,6 +158,10 @@ def remote_poll(o_r, rem):
     run = forge_actions_run(o_r, rem["run"])
     status = run.get("status")
     rem["run_status"] = status
+    jobs = []
+    if status in ("queued", "running", "waiting", "in_progress"):  # the jobs: the progress mark, and the verdict below
+        jobs = (api(o_r, "GET", f"actions/runs/{rem['run']}/jobs", {"per_page": 100}) or {}).get("jobs") or []
+        rem = remote_progress(rem, run, jobs, time.time())
     name = f"{REMOTE_WORKFLOW} run {rem['run']} (#{run.get('run_number')})"
     if rem.get("status"):
         return rem
@@ -151,7 +170,6 @@ def remote_poll(o_r, rem):
             rem["verdict_jobs"], rem["verdict_expect"] = verdict_jobs(o_r, rem["tip"])
         if not rem["verdict_jobs"]:
             return rem
-        jobs = (api(o_r, "GET", f"actions/runs/{rem['run']}/jobs", {"per_page": 100}) or {}).get("jobs") or []
         verdict, failed, going = jobs_verdict(jobs, rem["verdict_jobs"], rem["verdict_expect"])
         if verdict is None:
             return rem
@@ -295,12 +313,14 @@ def remote_check(repo, e, base, head, mode, own=None, red=False):
             save_remote(d, e, rem)
             delete_check_branch(o_r, rem["branch"])
             return None, f"no {REMOTE_WORKFLOW} run started for {rem['branch']} in {REMOTE_START // 60} min"
-        if age > REMOTE_TIMEOUT:
+        idle = time.time() - float(rem.get("progress_at") or rem["pushed_at"])
+        if age > REMOTE_TIMEOUT_MAX or (age > REMOTE_TIMEOUT and idle > REMOTE_IDLE):
             cancel_run(o_r, rem["run"], "the remote check timed out")
             rem.update(status="abandoned", collected_at=time.time())
             save_remote(d, e, rem)
             delete_check_branch(o_r, rem["branch"])
-            return None, f"{REMOTE_WORKFLOW} run {rem['run']} undecided after {REMOTE_TIMEOUT // 3600} h"
+            return None, (f"{REMOTE_WORKFLOW} run {rem['run']} undecided after {int(age // 60)} min, "
+                          f"no progress for {int(idle // 60)} min")
         time.sleep(next(delays))
 
 

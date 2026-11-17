@@ -1265,7 +1265,10 @@ the executor pushes the checked tip to `check/<entry id>` (movies' hook checks n
 runs `.github/workflows/precommit-check.yml` on the check tier: the same hook, `--checks-only <merge-base>..HEAD`. The
 run is the ENTRY's, not the executor's: its record is saved the moment the branch is pushed, a replacement executor
 ADOPTS it (no new push, no new run) on the base it checked even when main moved since -- the push then judges what landed, as for a checker that survived (2026-11-15: a reconciler restart's replacements cancelled a half-done run and threw a green one away for a moved main) -- and the 15-min (no run started) / 2-h (undecided) bounds count from the push;
-past them it is checked locally. A failed push of the check branch is tried again 5 s and 20 s later
+past them it is checked locally. The 2-h bound judges PROGRESS (2026-11-17, ref-srp-54ebae: every check had passed
+and `check (page)` was 14 min into its run, after 23 min waiting for a saturated check runner, when the 2 h from the
+push cancelled it): each poll marks `progress_at` when the run's jobs move, a run past 2 h is cancelled only once idle
+30 min (`REMOTE_IDLE`), and any run past 4 h (`REMOTE_TIMEOUT_MAX`). A failed push of the check branch is tried again 5 s and 20 s later
 (2026-11-17: two rounds ended "its checks stalled" 13 s in, no branch created on GitHub, and lost ~20 min each to the
 infra backoff and the check-slot queue); a round with no verdict is re-queued as `its checks stalled (<where>: <what
 the remote check said>)`, so the landing round's `reason` names the cause (remote.py `check_branch_push`). Such a
