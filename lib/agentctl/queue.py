@@ -445,13 +445,43 @@ def start_fast_precheck(repo, main_ref, head, eid, a):
           "with NOT LANDED in `agentctl inbox`", flush=True)
 
 
+def precheck_outcome(rc, out):
+    """(outcome, the refusing step) of a fast precheck: passed / refused / unchecked, its `PRECHECK ...` line."""
+    lines = (out or "").splitlines()
+    last = next((l for l in reversed(lines) if l.startswith("PRECHECK ")), None)
+    outcome = "unchecked" if rc is None else "refused" if rc == 1 else "passed"
+    return outcome, (last or "")[:200] if outcome == "refused" else None
+
+
+def note_precheck(eid, secs, rc, out, store=None):
+    """The precheck's duration and outcome on its change item (`precheck`: the landing record's precheck_* fields),
+    before a refusal cancels it; never fatal."""
+    outcome, step = precheck_outcome(rc, out)
+    try:
+        st = store or Store()
+        rec = {"precheck": {"duration_s": round(secs, 1), "outcome": outcome, **({"step": step} if step else {})}}
+        for _ in range(3):  # a compare-and-set: the reconciler may move the item meanwhile
+            it = st.item("change", eid)
+            if not it:
+                return
+            try:
+                st.update_item("change", eid, it["version"], rec)
+                return
+            except StaleVersion:
+                continue
+    except (Exception, SystemExit) as e:
+        err(f"the precheck of {eid} could not be noted on its item ({str(e)[:120]})")
+
+
 def cmd_land_precheck(a):
     """The detached half of start_fast_precheck: run the repo's precheck, and on a refusal cancel the queued change."""
     # Its own process group, ended WHOLE at the bound (review 2026-11-07: subprocess.run killed only the script, so what
     # it started -- sbt, a test JVM -- lived on, and kept the output pipe, and so this wait, open): run_watched.
+    t0 = time.time()
     rc, out = run_watched([os.path.join(a.repo, FAST_PRECHECK), "--base", a.base, "--head", a.head], a.repo, None,
                           os.path.join(scratch(), f"agentctl-precheck-{a.entry}"), "precheck",
                           stall=FAST_PRECHECK_BOUND, wall=FAST_PRECHECK_BOUND)
+    note_precheck(a.entry, time.time() - t0, rc, out)
     if rc is None:
         print(f"{out or ''}PRECHECK UNCHECKED: past its {FAST_PRECHECK_BOUND} s bound, ended with its children: "
               "could not check, its landing check judges it", flush=True)

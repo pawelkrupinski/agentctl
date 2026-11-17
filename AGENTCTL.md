@@ -117,7 +117,8 @@ moves it forward; nothing is a detached process that can die with its state in i
 - **The tick.** The processor (launchd `net.bitcashier.agentctl-waiting`, `agentctl tick`) runs one
   loop every 5 s, each step bounded: the change items (start an executor for a queued change, push a checked one),
   the batch, the watches, the `land/*` refs sweep, the lease archive, events → inbox, the notifier, the network and
-  tunnel watches, the gate line, the red tick (observe, offer, dispatch), the conditions. It writes the snapshot
+  tunnel watches, the gate line, the red tick (observe, offer, dispatch), the conditions, the stats (records into
+  VictoriaLogs: "stats"). It writes the snapshot
   `~/.cache/agentctl/state.json` each tick and re-execs onto agentctl's new code between ticks (only onto committed,
   self-tested code).
 - **Executors.** Long work runs in a process holding a lease, never inside the tick: `waiting check <id>` (a change's
@@ -1761,6 +1762,95 @@ a protected folder (~/Desktop, ~/Documents, ~/Downloads). `--dry-run` counts wha
 
 ---
 
+### stats: the pipeline's records in VictoriaLogs (2026-11-17)
+
+The owner, 2026-11-17: "keep landing stats -- timings, time between landing and landed in victoria logs, modules touched
+etc -- for easy analysis", then "escalations, gate builds red etc", "how long each job waited for a CI runner" and
+"consolidate with older stats". The reconciler's `stats` step (ci-runner, every 60 s, `lib/agentctl/stats.py`) writes
+ONE flat JSON record per finished thing into **victoria-logs-ci** (`http://victoria-logs-ci.service.consul:9429`, 400
+days; Grafana datasource `VictoriaLogs CI`, uid `victorialogs-ci`; the store the CI collector's `source:ci` events
+already live in), with stream fields `source:agentctl` and `record:<name>`. `$AGENTCTL_STATS_URL` names another store
+(`off` disables); off ci-runner nothing is sent.
+
+- **Derived, never kept.** Every record is built from the store's items and their events (and, for run figures, the
+  collector's `source:ci` rows), so the history is rebuilt by the same code: a record whose exit is older than the first
+  pass (meta `stats_since`) has `backfill: true` -- the backfill IS the first passes (150 records a pass). Each record is
+  sent once (meta `stats:<name>:<id>`); a refused POST leaves it for the next pass. A change's records wait 15 min after
+  its exit (`STATS_SETTLE`: the collector exports a run up to 5 min after it ends). A live (non-backfill) record is also
+  printed on the reconciler's stdout, the journal: `agentctl.<name> {json}`.
+- **Every record:** `source` (agentctl), `record`, `schema` (1), `backfill`, `_time` (the exit), `_msg` (one line),
+  `repo`. Durations are seconds (`*_s`), times ISO UTC (`*_at`). A field with no value is left out. Field names are
+  stable; a rename bumps `schema`.
+
+| record | one per | fields |
+|---|---|---|
+| `agentctl.landing` | change exit (`_time` = exit) | `change_id`, `lander_agent`, `lander_session`, `lander_host`, `worktree`, `branch`, `head_sha`, `base_sha` (main at submit), `checked_base`, `landed_sha`; `outcome` (landed/rejected/superseded/cancelled), `reason_class` (landed, superseded, checks-failed, conflict, too-slow, precheck, blame, cancelled, other), `reason`; `submitted_at`, `exited_at`, `total_s` (land -> exit, i.e. land -> LANDED), `queue_wait_s` (submit -> first check), `queued_s` (all queued time), `checking_s`, `checked_wait_s` (checked -> pushing), `pushing_s`, `push_to_landed_s`, `waiting_s` (held by a red gate); `rounds`, `full_rounds`, `verify_rounds`, `full_rechecks`, `infra_requeues`, `recheck_reasons` (comma list); `red_fix` (Fixes-Red), `fixes`; `commits_n`, `files_n`, `modules` (top-level dirs, comma list, `(root)` for root files), `sbt_modules` (dirs with a `src/`), `areas` (the precommit-check jobs that ran: rest, identity, page, oldrefs, heavy:<row>); `check_runs` (precommit-check run ids), `check_runner_wait_s` / `check_run_s` (summed critical-path queue / work of its runs), `check_jobs_n`, `check_job_queue_max_s`, `check_job_queue_sum_s`, `check_job_run_sum_s`; `precheck_s`, `precheck_outcome` (passed/refused/unchecked), `precheck_step`; `batch`, `superseded_by` |
+| `agentctl.landing_round` | check round of a change (`_time` = round start) | `change_id`, `outcome`, `lander_agent`, `round`, `mode` (full/verify), `reason_class` (first, verify, build, hook, selection, module-overlap, overlap, deletion, plan, from-waiting, infra:<reason>, other), `reason`, `started`, `ended`, `check_s`, `queued_before_s`, `result` (checked, requeued, rejected, waiting), `run_id`, `run_queue_s`, `run_work_s`, `run_wall_s` |
+| `agentctl.landing_watch` | landed sha's post-push watch | `landed_sha`, `change_id`, `verdict` (ok/red/unknown), `verdict_line`, `pushed_at`, `watch_s` |
+| `agentctl.red` | red episode (a red item, open -> verified/cleared) | `red_id`, `key`, `workflow`, `gate`, `red_kind` (gate/outside/stuck-run/flake), `verdict_class` (test-failure / infra-shaped / no-verdict), `family`, `jobs`, `signature`, `first_run`, `last_run`, `runs_n`, `opened_at`, `closed_at`, `duration_s`, `outcome`, `closed_by`; `fixers_n`, `fixer_restarts`, `fixer_holders`, `first_fixer_at`, `time_to_fixer_s`, `offered_s`, `leased_s`, `fix_pending_s`; `fix_sha`, `fix_entry`, `fix_status`, `fix_landed_at`, `red_to_fix_landed_s`, `red_to_green_s` (verified only); `waited_changes_n`, `waited_changes_s` (changes held by a gate red, their waiting inside the episode); `owner_blocked`, `blocked_s`, `decision_wait_s`; `escalations_n`, `notifications_n`, `attempts` |
+| `agentctl.condition` | condition spell (opened -> closed) | `condition_id`, `key`, `kind` (INVARIANT, NETWORK, STALLED, UNKNOWN, UNLANDED_ORPHAN, ...), `invariant` (W1, W2, W5, W8, WR, WB, WD, ...), `host`, `opened_at`, `escalated_at`, `closed_at`, `duration_s`, `violation`, `until`, `closed_by`, `manual_close`, `escalations_n`, `notifications_n` |
+| `agentctl.owner_decision` | question a red put to the owner | `red_id`, `belongs_to` (`red:<id>`), `workflow`, `gate`, `question`, `answer`, `asked_at`, `answered_at`, `wait_s`, `answer_path` (decided / auto-resolved / stale: unanswered 7 d), `red_closed_at`, `red_outcome`, `reminders_n`, `asks_n`, `decision_failed` |
+| `agentctl.gate_run` | completed gate run on main (Main, Identity model convergence, Identity takes) | `workflow`, `run_id`, `run_number`, `run_attempt`, `sha`, `event`, `conclusion`, `started_at`, `ended_at`, `duration_s`, `path_queue_s`, `path_work_s`, `critical_path`, `critical_job`, `critical_job_s`, `critical_job_queue_s`, `slowest_job`, `slowest_job_s`, `jobs_n`, `runner_min`, `runner_wait_s` (every job's queue summed), `run_s`, `job_queue_max_s`, `failed_jobs` |
+
+**Per-job runner wait is NOT an agentctl record**: the CI collector's `source:ci kind:job` events (movies'
+`scripts/ci/ci_trends.py export`, ci-runner's `ci-metrics-collector`, every workflow of movies and bitcashier/core,
+backfilled 90 days from the GitHub API) already are one per completed job -- `workflow`, `run_id`, `job`, `label`
+(matrix label), `runner_name`, `machine_hosted` (github-hosted / self-hosted), `queue_s` (queued -> started),
+`duration_s` (started -> completed), `conclusion`, `branch`. A copy would be a second truth; the queries below derive
+the host and the branch kind from it, and `agentctl.gate_run` and `agentctl.landing*` are computed FROM those rows.
+
+**Ready LogsQL** (vmui: `ssh -L 19429:victoria-logs-ci.service.consul:9429 ci-runner`, then
+`curl -s http://127.0.0.1:19429/select/logsql/query --data-urlencode 'query=...'`; or Grafana's "Landing pipeline"):
+
+```
+# land -> LANDED p50/p90 per day
+source:agentctl record:agentctl.landing outcome:landed | stats by (_time:1d) quantile(0.5, total_s) p50, quantile(0.9, total_s) p90
+# queue wait vs check time vs red-gate wait (mean seconds per landed change, per day)
+source:agentctl record:agentctl.landing outcome:landed | stats by (_time:1d) avg(queue_wait_s) queue, avg(checking_s) checking, avg(check_runner_wait_s) runner_wait, avg(checked_wait_s) to_push, avg(waiting_s) red_gate
+# rechecks by reason (rounds after the first)
+source:agentctl record:agentctl.landing_round round:>1 | stats by (reason_class) count() rounds, sum(check_s) check_s
+# slowest modules touched (land -> LANDED by top-level dir)
+source:agentctl record:agentctl.landing outcome:landed | split "," from modules as module | unroll by (module) | stats by (module) count() n, quantile(0.5, total_s) p50, quantile(0.9, total_s) p90 | sort by (p90 desc)
+# red-fix time: red fixes' land -> LANDED, and red -> fix landed / -> green per workflow
+source:agentctl record:agentctl.landing outcome:landed red_fix:true | stats quantile(0.5, total_s) p50, quantile(0.9, total_s) p90
+source:agentctl record:agentctl.red | stats by (workflow) count() reds, avg(red_to_fix_landed_s) to_fix, avg(red_to_green_s) to_green
+# reds per day by workflow and class; mean time to green; the slowest fixes
+source:agentctl record:agentctl.red | stats by (_time:1d, workflow, verdict_class) count() reds
+source:agentctl record:agentctl.red gate:true outcome:verified | stats avg(red_to_green_s) mttg, quantile(0.9, red_to_green_s) p90
+source:agentctl record:agentctl.red red_to_fix_landed_s:>0 | sort by (red_to_fix_landed_s desc) | limit 10 | fields red_id, workflow, jobs, red_to_fix_landed_s, fixers_n, fix_sha
+# the most frequent invariants / conditions, and their time open
+source:agentctl record:agentctl.condition | stats by (kind, invariant) count() spells, sum(duration_s) open_s, sum(notifications_n) notified | sort by (spells desc)
+# owner decision wait p50/p90 by answer path
+source:agentctl record:agentctl.owner_decision | stats by (answer_path) count() n, quantile(0.5, wait_s) p50, quantile(0.9, wait_s) p90
+# gate run duration trend, and its critical job
+source:agentctl record:agentctl.gate_run | stats by (_time:1d, workflow) quantile(0.5, duration_s) p50, quantile(0.9, duration_s) p90
+source:agentctl record:agentctl.gate_run workflow:Main | stats by (critical_job) count() n, avg(critical_job_s) s | sort by (n desc)
+# runner wait p50/p90 by host and branch kind (main / check / measure / renovate ...), from the collector's jobs
+source:ci kind:job | format if (runner_name:~"^GitHub Actions") "github-hosted" as host | format if (runner_name:~"^ci-runner") "ci-runner" as host | format if (runner_name:~"^bitcashier") "bitcashier-runner" as host | extract_regexp "^(?P<branch_kind>[a-z]+)" from branch | stats by (host, branch_kind) count() jobs, quantile(0.5, queue_s) p50, quantile(0.9, queue_s) p90
+# runner wait by matrix label / lane, and by hour of day (UTC)
+source:ci kind:job | stats by (workflow, label) quantile(0.5, queue_s) p50, quantile(0.9, queue_s) p90
+source:ci kind:job | format if (runner_name:~"^GitHub Actions") "github-hosted" as host | format if (runner_name:~"^ci-runner") "ci-runner" as host | format if (runner_name:~"^bitcashier") "bitcashier-runner" as host | extract "T<hour>:" from _time | stats by (hour, host) quantile(0.5, queue_s) p50, quantile(0.9, queue_s) p90 | sort by (hour)
+```
+
+The host comes from `runner_name` (`GitHub Actions N` hosted, `ci-runner*`, `bitcashier-gh*`), not `machine_hosted`,
+which older collector rows lack. A red fix's check runs are `branch_kind:check` too; `agentctl.landing`
+`red_fix:true` names them.
+
+**The older stats, consolidated (2026-11-17 inventory):**
+- `source:ci` (victoria-logs-ci) -- THE per-run/per-job CI record; agentctl's records are derived from it, never a copy.
+- movies' Prometheus `kinowo_ci_*` (monitoring-1, `scripts/ci/ci_timings.py` over OTLP from the "Report run timings"
+  workflow; the CI-regression alerts `ci-build-times.rules`, dashboard `ci-builds.json`) records the same run/job/queue
+  facts a second time, in the other fleet (monitoring-1's Grafana cannot reach victoria-logs-ci). Not merged here: moving
+  those alerts onto `source:ci` is a movies monitoring change (monitoring-1 deploys are the owner's `--apply`); named as
+  the follow-up.
+- the runners page (`ci-runners-page`, `last-good.json`): a LIVE snapshot (busy runners, the waiting jobs now) and 24 h
+  of CPU -- no per-job history, nothing duplicated; kept.
+- ci-runner's `movies-runner-scheduler` journal: free-text tick and `STARVED` lines, no consumer; per-job waits are
+  `source:ci`'s `queue_s`. Kept as the scheduler's operational log.
+- `agentctl-metrics.timer` (`/metrics` -> node-exporter textfile `agentctl.prom`: `agentctl_oldest_change_age_seconds`,
+  `agentctl_red_unleased_seconds`, ...): live health gauges for alert rules, not per-thing history; kept -- the records
+  are the history, the gauges the present.
+
 ## movies helpers that pair with agentctl
 
 - `scripts/identity-measure … --wait` / `scripts/identity-repro … --wait`: print the CI run id and an ETA (the median
@@ -1946,6 +2036,11 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `stall_cpu_seconds` | `AGENTCTL_STALL_CPU_SECONDS` | `1.0` | CPU that counts as progress per window: a watchdog's polls are not work |
 | `state_file` | `AGENTCTL_STATE_FILE` | - | - |
 | `state_root` | `AGENTCTL_STATE_ROOT` | - | - |
+| `stats_every` | `AGENTCTL_STATS_EVERY` | `60` | s between passes |
+| `stats_pass_bound` | `AGENTCTL_STATS_PASS_BOUND` | `40` | s a pass works at most (a tick step) |
+| `stats_per_pass` | `AGENTCTL_STATS_PER_PASS` | `150` | records a pass sends at most (the backfill spreads over passes) |
+| `stats_settle` | `AGENTCTL_STATS_SETTLE` | `900` | s after an exit before its record is built: the collector exports a run <= 5 min after it ends |
+| `stats_url` | `AGENTCTL_STATS_URL` | - | - |
 | `status_agent_bound` | `AGENTCTL_STATUS_AGENT_BOUND` | `4` | s the page waits for one agent's details |
 | `status_bound` | `AGENTCTL_STATUS_BOUND` | `8` | s a source may take ; the agents' source twice that |
 | `status_page` | `AGENTCTL_STATUS_PAGE` | - | - |

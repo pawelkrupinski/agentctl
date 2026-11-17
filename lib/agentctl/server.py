@@ -19,7 +19,7 @@
 # 24 hourly copies on ci-runner.
 STORE_RPC = ("acquire", "renew", "note", "release", "revoke", "set_meta", "offer", "offers", "offer_of", "offer_reason",
              "close_offer", "take", "get", "item", "items", "put_item", "transition", "update_item", "mark_notified",
-             "meta_get", "meta_set", "events", "archive_free_leases", "list")
+             "meta_get", "meta_set", "events", "item_events", "archive_free_leases", "list")
 STORE_BODY_MAX = 4 << 20     # bytes: a larger request body is refused unread (413)
 STORE_PORT = 3014
 SYNC_MIRROR_EVERY = 10   # s between the laptop's copies of /v1/state into state.json
@@ -97,7 +97,7 @@ def http_client_errors():
 # released lease is a no-op) retry on any transient failure; the rest only when the request never left (refused).
 STORE_RETRIES = 4
 STORE_RETRY_BASE = 0.5   # s; doubled each attempt: 0.5 + 1 + 2 + 4 = 7.5 s at most
-STORE_RPC_SAFE = ("get", "item", "items", "offers", "offer_of", "meta_get", "events", "list", "renew", "note",
+STORE_RPC_SAFE = ("get", "item", "items", "offers", "offer_of", "meta_get", "events", "item_events", "list", "renew", "note",
                   "set_meta", "release", "close_offer", "offer_reason", "mark_notified", "meta_set")
 
 
@@ -1156,7 +1156,8 @@ def server_steps(repo, d, shared):
             ("red tick", lambda: maybe_red_tick(repo)),
             ("recovery", maybe_recovery_tick),
             ("issues", lambda: [wlog(d, f"tick: {x}") for x in tick_issues()]),
-            ("quiet deadlines", lambda: [wlog(d, f"tick: {x}") for x in tick_quiet_deadlines()]))
+            ("quiet deadlines", lambda: [wlog(d, f"tick: {x}") for x in tick_quiet_deadlines()]),
+            ("stats", shared(lambda: maybe_stats_pass(repo, d))))
 
 
 def sync_steps(repo, d, o_r):

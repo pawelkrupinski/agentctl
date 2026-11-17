@@ -342,7 +342,7 @@ class ServerSideTest(Phase2Base):
         server = [n for n, _ in A.server_steps(self.repo, self.tmp, lambda f: f)]
         self.assertEqual(server, ["clone health", "change items", "landed changes", "stranded changes", "change tick", "land hold", "batch tick", "watches", "land refs",
                                   "lease archive", "children", "gate summary", "red time", "red tick", "recovery", "issues",
-                                  "quiet deadlines"])
+                                  "quiet deadlines", "stats"])
         laptop_only = {"events", "notifier", "alerts", "network watch", "tunnel probe", "upkeep", "fixer landing", "dispatcher",
                        "claims"}
         self.assertEqual(laptop_only & set(server), set())

@@ -49,7 +49,9 @@ class Store:
               # offers (design §6.2; step 10): open work a taker may take; take() closes it AND acquires its lease
               "CREATE TABLE IF NOT EXISTS offers (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, item TEXT NOT NULL, "
               "lease TEXT NOT NULL, tier TEXT, priority INTEGER, deadline REAL, picture TEXT, opened_at REAL, closed_at REAL, "
-              "closed_why TEXT, taken_by TEXT, reason TEXT)")
+              "closed_why TEXT, taken_by TEXT, reason TEXT)",
+              # one item's history (stats.py reads it per finished item)
+              "CREATE INDEX IF NOT EXISTS events_item ON events (item_type, item_id, seq)")
 
     def __init__(self, path=None, clock=None):
         self.path = path or state_root("store.db")
@@ -436,6 +438,20 @@ class Store:
         try:
             out = []
             for r in c.execute("SELECT * FROM events WHERE seq>? ORDER BY seq LIMIT ?", (after, limit)):
+                d = dict(r)
+                for k in ("audience", "refs"):
+                    d[k] = json.loads(d[k] or "{}")
+                out.append(d)
+            return out
+        finally:
+            c.close()
+
+    def item_events(self, typ, iid):
+        """One item's events, in order."""
+        c = self.db()
+        try:
+            out = []
+            for r in c.execute("SELECT * FROM events WHERE item_type=? AND item_id=? ORDER BY seq", (typ, iid)):
                 d = dict(r)
                 for k in ("audience", "refs"):
                     d[k] = json.loads(d[k] or "{}")
