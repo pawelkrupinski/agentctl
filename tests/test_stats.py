@@ -99,6 +99,29 @@ class LandingRecordTest(unittest.TestCase):
         self.assertEqual((rec["reason_class"], rec["precheck_outcome"], rec["precheck_s"]), ("precheck", "refused", 41.2))
         self.assertEqual(rec["precheck_step"], "PRECHECK REFUSED: drift slice missing")
 
+    def test_a_precheck_is_noted_through_a_store_blip_and_on_an_item_that_comes_late(self):
+        """2026-11-17: deploy-nix's note died on one `POST /v1/store/item: timed out`; an outbox submit's item comes
+        after its precheck ends."""
+        t = [T0]
+        st = store(t)
+        real, calls = st.item, []
+
+        def flaky(typ, iid):
+            calls.append(iid)
+            if len(calls) == 1:
+                raise A.StoreUnavailable("POST /v1/store/item: timed out")
+            if len(calls) == 2:
+                return None  # not submitted yet
+            return real(typ, iid)
+        st.item = flaky
+        st.put_item("change", "c3", "queued", {"submitted_at": t[0]})
+        slept = []
+        os.environ["AGENTCTL_NOTE_PRECHECK_WAIT"] = "110"
+        self.addCleanup(os.environ.__setitem__, "AGENTCTL_NOTE_PRECHECK_WAIT", "0")
+        self.assertTrue(A.note_precheck("c3", 60.0, 0, "PRECHECK PASS (60 s)\n", store=st, sleep=slept.append))
+        self.assertEqual(slept, [5, 15])
+        self.assertEqual(real("change", "c3")["data"]["precheck"], {"duration_s": 60.0, "outcome": "passed"})
+
     def test_recheck_classes(self):
         for text, cls in [("x: main moved by 3 commits since its checks, sbt modules overlap (worker and common): "
                            "checked again", "module-overlap"),
@@ -241,10 +264,15 @@ class StatsPassTest(unittest.TestCase):
     def test_gate_runs_walk_the_history_then_the_last_days_once_each(self):
         st, t = self.st, self.t
         at = {"start": str(T0 - 100 * 86400), "end": str(T0 - 100 * 86400 + 60), "run_conclusion": "success"}
-        rows = {"run": [{"kind": "run", "repo": "pawelkrupinski/movies", "workflow": "Main", "run_id": "7",
-                         "run_attempt": "1", "wall_s": "60", **at},
+        rows = {"run": [{"kind": "run", "repo": "pawelkrupinski/movies", "workflow": "Main", "workflow_file": "main.yml",
+                         "run_id": "7", "run_attempt": "1", "wall_s": "60", **at},
+                        # a convergence-dispatched Identity takes run: its run-name is no workflow name (2026-11-17:
+                        # 8 records in all, the last on 11-14), its file is
+                        {"kind": "run", "repo": "pawelkrupinski/movies", "workflow": "Identity takes (convergence run 6)",
+                         "workflow_file": "identity-takes.yml", "run_id": "9", "run_attempt": "1", **at},
                         # bitcashier/core's "Main Pipeline": no gate run (a phrase filter once let it in)
-                        {"kind": "run", "repo": "bitcashier/core", "workflow": "Main Pipeline", "run_id": "8", **at}]}
+                        {"kind": "run", "repo": "bitcashier/core", "workflow": "Main Pipeline",
+                         "workflow_file": "main.yml", "run_id": "8", **at}]}
         calls = []
 
         def query(url, q, start=None, end=None, limit=5000):
@@ -256,10 +284,11 @@ class StatsPassTest(unittest.TestCase):
             for i in range(20):
                 A.stats_pass(store=st, url="http://vl", now_=T0 + i)
         gates = [r for r in self.sent if r["record"] == "agentctl.gate_run"]
-        self.assertIn('repo:="pawelkrupinski/movies" workflow:in("Main", ', calls[0][0])
-        self.assertEqual([(g["run_id"], g["backfill"]) for g in gates], [("7", True)])
+        self.assertIn('repo:="pawelkrupinski/movies" workflow_file:in("main.yml", ', calls[0][0])
+        self.assertEqual(sorted((g["run_id"], g["workflow"], g["backfill"]) for g in gates),
+                         [("7", "Main", True), ("9", "Identity takes", True)])
         walked = T0 - A.STATS_GATE_HISTORY + 17 * 7 * 86400  # 17 weekly windows reach the last 3 days
-        self.assertEqual(float(st.meta_get("stats_gate_from")), walked)
+        self.assertEqual(float(st.meta_get(A.STATS_GATE_WALK)), walked)
         self.assertEqual(calls[-1][1], T0 + 19 - A.STATS_GATE_LOOKBACK)
 
     def test_no_url_no_pass_and_the_reconciler_runs_the_step(self):

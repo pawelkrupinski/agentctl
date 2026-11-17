@@ -29,6 +29,11 @@ STATS_GATE_LOOKBACK = 3 * 86400   # s of gate runs each pass looks at (markers d
 STATS_GATE_HISTORY = 120 * 86400  # s of gate runs the first passes walk back (the collector backfilled 90 days)
 STATS_URL_SERVER = "http://victoria-logs-ci.service.consul:9429"
 STATS_GATE_WORKFLOWS = tuple(w for w, _f in GATING["pawelkrupinski/movies"])  # THE GATE (ciwhy.py)
+# BY WORKFLOW FILE, NOT RUN NAME (2026-11-17: 8 Identity takes records in all, the last on 11-14): a run's `workflow`
+# is its run-name -- every convergence-dispatched Identity takes run reads "Identity takes (convergence run <id>)" --
+# so the gate runs are matched by their file, the record named by the gate workflow's own name.
+STATS_GATE_FILES = {f: w for w, f in GATING["pawelkrupinski/movies"]}
+STATS_GATE_WALK = "stats_gate_from2"  # meta: the history walk's cursor (2: walked again for the runs the name missed)
 STATS_GATE_REPO = "pawelkrupinski/movies"
 CI_FIELDS = ("kind, repo, workflow, run_id, run_number, run_attempt, sha, event, run_conclusion, job, conclusion, "
              "queue_s, duration_s, start, end, wall_s, path_queue_s, path_work_s, critical_path, runner_min")
@@ -542,21 +547,22 @@ def change_waits(st, changes):
 def gate_runs_pass(st, url, t, since, cap, out=None):
     """The gate runs the collector has exported (source:ci kind:run on main) and no record names yet: one record each.
     The first passes walk back STATS_GATE_HISTORY in 7-day windows (meta stats_gate_from); then the last 3 days."""
-    frm = _num(st.meta_get("stats_gate_from"))
+    frm = _num(st.meta_get(STATS_GATE_WALK))
     if frm is None:
         frm = t - STATS_GATE_HISTORY
     walking = frm < t - STATS_GATE_LOOKBACK
     lo, hi = (frm, min(frm + 7 * 86400, t)) if walking else (t - STATS_GATE_LOOKBACK, t)
-    flows = ", ".join(f'"{w}"' for w in STATS_GATE_WORKFLOWS)  # exact: a phrase filter `workflow:"Main"` also
-    # matched bitcashier/core's "Main Pipeline" (2026-11-17, the first backfill)
+    files = ", ".join(f'"{f}"' for f in STATS_GATE_FILES)  # exact: a phrase filter `workflow:"Main"` also matched
+    # bitcashier/core's "Main Pipeline" (2026-11-17, the first backfill)
     try:
-        rows = stats_query(url, f'source:ci kind:run branch:="main" repo:="{STATS_GATE_REPO}" workflow:in({flows}) '
-                                f'| fields {CI_FIELDS}', start=lo, end=hi)
+        rows = stats_query(url, f'source:ci kind:run branch:="main" repo:="{STATS_GATE_REPO}" workflow_file:in({files}) '
+                                f'| fields {CI_FIELDS}, workflow_file', start=lo, end=hi)
     except Exception as ex:
         err(f"stats: the gate runs could not be read ({str(ex)[:160]})")
         return 0
     n = 0
-    rows = [r for r in rows if r.get("repo") == STATS_GATE_REPO and r.get("workflow") in STATS_GATE_WORKFLOWS]
+    rows = [{**r, "run_name": r.get("workflow"), "workflow": STATS_GATE_FILES[r["workflow_file"]]} for r in rows
+            if r.get("repo") == STATS_GATE_REPO and r.get("workflow_file") in STATS_GATE_FILES]
     for run in sorted(rows, key=lambda r: _num(r.get("end")) or 0):
         rid = f"{run.get('run_id')}.{run.get('run_attempt') or 1}"
         if stats_sent(st, "gate_run", rid):
@@ -575,7 +581,7 @@ def gate_runs_pass(st, url, t, since, cap, out=None):
         stats_echo([rec], out)
         n += 1
     if walking:
-        st.meta_set("stats_gate_from", hi)
+        st.meta_set(STATS_GATE_WALK, hi)
     return n
 
 

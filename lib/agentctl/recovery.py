@@ -280,12 +280,46 @@ def condition_dict(it):
     return {**it["data"], "id": it["id"], "version": it["version"], "deadline": it["deadline"], "level": it["level"]}
 
 
+# A BLIP OPENS NOTHING (the owner, 2026-11-17: 19 UNKNOWN spells in a week, 18 closed by themselves in ~70 s --
+# "movies token present" -- each an inbox entry and a notification for nothing): a kind in CONDITION_GRACE opens only
+# once it is seen failing again at least that long after it was first seen (one sighting run: sightings no more than
+# CONDITION_PENDING_LAPSE apart; a run that lapsed starts again). Until then the sighting is a pending mark in the
+# store's meta (`condition_pending:<key>`), and open_condition answers None as for a passing probe. A store that cannot
+# keep the mark opens the condition at once, as before: loud over silent.
+UNKNOWN_GRACE = 300  # s an UNKNOWN condition must keep failing (seen again past this) before it opens
+CONDITION_PENDING_LAPSE = 1800  # s between two sightings after which a pending condition's sighting run starts again
+
+
+def condition_grace(kind):
+    return env_num("AGENTCTL_UNKNOWN_GRACE", UNKNOWN_GRACE) if kind == "UNKNOWN" else 0
+
+
+def condition_pending(st, key, grace, t):
+    """True while key's failure is younger than grace (THE BLIP rule above): the sighting is marked, nothing opens."""
+    if grace <= 0:
+        return False
+    mk = f"condition_pending:{key}"
+    try:
+        p = json.loads(st.meta_get(mk) or "null") or {}
+        lapse = env_num("AGENTCTL_CONDITION_PENDING_LAPSE", CONDITION_PENDING_LAPSE)
+        if not p or t - float(p.get("last") or 0) > lapse:
+            p = {"first": t}
+        if t - float(p["first"]) < grace:
+            st.meta_set(mk, json.dumps({"first": p["first"], "last": t}))
+            return True
+        st.meta_set(mk, "")
+    except (Exception, SystemExit) as e:
+        err(f"condition {key}: its pending mark could not be kept ({str(e)[:120]}): opened at once")
+    return False
+
+
 def open_condition(kind, text, probe, on_recover, key=None, inbox=True, command="recover", exit_code=1, cwd=None,
-                   tail=(), effect=None, store=None):
+                   tail=(), effect=None, store=None, grace=None):
     """Open (or refresh) a non-green condition: an item of the "condition" machine. probe: the FAILED ProbeResult of the
     check that found it (required: the same probe, passing, closes it); on_recover: [(action, args)] from
     RECOVER_ACTIONS. effect: a callable run inside; its dict result is merged into every on_recover args. Writes ONE
-    inbox entry (text) per spell. Returns the condition, or None when the probe passes now (nothing is wrong)."""
+    inbox entry (text) per spell. Returns the condition, or None when the probe passes now (nothing is wrong) or the
+    failure is still inside its kind's grace (grace: seconds, None for the kind's: THE BLIP rule above)."""
     if not isinstance(probe, ProbeResult):
         raise ConditionBypass(f"open_condition({kind!r}) without a ProbeResult: no condition without its recovery probe")
     for name, _a in on_recover:
@@ -296,6 +330,8 @@ def open_condition(kind, text, probe, on_recover, key=None, inbox=True, command=
     st = store or Store()
     key = key or condition_key(kind, probe)
     cur = condition_item_of(st, key)
+    if not cur and condition_pending(st, key, condition_grace(kind) if grace is None else grace, time.time()):
+        return None
     _OPENING[0] += 1
     try:
         extra = (effect() if effect else None) or {}

@@ -92,6 +92,48 @@ class SameProbeTest(RegistryBase):
         self.assertIn("kicked", lines[0])
 
 
+class BlipTest(RegistryBase):
+    """A BLIP OPENS NOTHING (the owner, 2026-11-17: 18 of 19 UNKNOWN spells in a week closed by themselves in ~70 s,
+    each an inbox entry and a notification): an UNKNOWN opens only when seen failing again past its grace."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ["AGENTCTL_UNKNOWN_GRACE"] = "300"
+        self.addCleanup(os.environ.__setitem__, "AGENTCTL_UNKNOWN_GRACE", "0")
+        A.PROBES["token"] = Recorder(fails=99)
+        self.t = [1_794_900_000.0]
+        self.saved_time = A.time.time
+        A.time.time = lambda: self.t[0]
+        self.addCleanup(setattr, A.time, "time", self.saved_time)
+
+    def sighting(self, after):
+        self.t[0] += after
+        return A.open_condition("UNKNOWN", "UNKNOWN: token unavailable", A.run_probe("token", {"ns": "movies"}), [],
+                                key="token-movies")
+
+    def test_a_failure_that_clears_inside_the_grace_opens_nothing(self):
+        self.assertIsNone(self.sighting(0))
+        self.assertIsNone(self.sighting(70))
+        self.assertEqual((A.open_conditions(), self.entries("UNKNOWN")), ([], []))
+
+    def test_a_failure_seen_again_past_the_grace_opens_once(self):
+        self.assertIsNone(self.sighting(0))
+        self.assertIsNone(self.sighting(200))
+        self.assertIsNotNone(self.sighting(150))
+        self.assertIsNotNone(self.sighting(60))  # open: refreshed, no second entry
+        self.assertEqual(len(self.entries("UNKNOWN")), 1)
+
+    def test_blips_far_apart_never_add_up(self):
+        self.assertIsNone(self.sighting(0))
+        self.assertIsNone(self.sighting(A.CONDITION_PENDING_LAPSE + 1))  # the last sighting lapsed: a new run
+        self.assertIsNone(self.sighting(100))
+        self.assertEqual(A.open_conditions(), [])
+
+    def test_other_kinds_and_a_zero_grace_open_at_once(self):
+        self.assertIsNotNone(A.open_condition("STALLED", "STALLED: x", A.run_probe("token", {}), [], key="s"))
+        self.assertIsNotNone(A.open_condition("UNKNOWN", "UNKNOWN: y", A.run_probe("token", {}), [], key="u", grace=0))
+
+
 class HostTest(RegistryBase):
     """A condition is probed on the host role that opened it; escalations are the server's alone."""
 

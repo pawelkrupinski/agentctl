@@ -618,10 +618,16 @@ class QueueTest(WaitingTest):
         os.remove(self.pushes)
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         eid, _ = self.queued(wt)
-        A.remote_check = lambda repo, e, base, head, mode, own=None, red=False: (None, "no run started")
+        A.remote_check = lambda repo, e, base, head, mode, own=None, red=False: (None, "push of check/x failed: remote: boom")
         self.check(eid, rounds=1)  # the tests run as ci-runner (AGENTCTL_ROLE=server)
         self.assertEqual(self.calls_of("--range"), [], "nothing checked in a ci-runner tree")
         self.assertEqual(self.pushed(), [])
+        d, _c, _w = A.waiting_state(self.r.path)
+        e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+        # what stalled it is kept (2026-11-17: two 13-s "stalls" whose cause no record named)
+        self.assertEqual(e["why"], "infra: its checks stalled (on ci-runner (no verdict): push of check/x failed: "
+                                   "remote: boom)")
+        self.assertEqual(e["infra_reason"], "its checks stalled")
 
     def fake_github(self, status, head, ref="check/e1"):
         calls = []
@@ -1168,6 +1174,28 @@ def own_tests_only(cls, *bases):
 own_tests_only(QueueTest, WaitingTest)
 own_tests_only(RemotePickupTest, QueueTest, WaitingTest)
 own_tests_only(FastPrecheckTest, QueueTest, WaitingTest)
+
+
+class CheckPushBlipTest(unittest.TestCase):
+    """2026-11-17: deploy-speed and ref-scrapers re-queued "its checks stalled" 13 s into a round, no check/ branch
+    created on GitHub: the push failed once, and each lost 20 min to the backoff and the slot queue."""
+
+    def test_a_failed_check_branch_push_is_tried_again_and_its_words_kept(self):
+        real, calls, slept = A.git, [], []
+
+        def flaky(repo, *args, check=True, input=None):
+            if args[:1] == ("push",):
+                calls.append(args)
+                ok = len(calls) == 3
+                return subprocess.CompletedProcess(args, 0 if ok else 1, "", "" if ok else "remote: Internal error")
+            return real(repo, *args, check=check, input=input)
+        A.git = flaky
+        self.addCleanup(setattr, A, "git", real)
+        r = A.check_branch_push("/r", "abc", "check/x", sleep=slept.append)
+        self.assertEqual((r.returncode, len(calls), slept), (0, 3, list(A.CHECK_PUSH_DELAYS)))
+        calls.clear()
+        A.git = lambda repo, *args, check=True, input=None: subprocess.CompletedProcess(args, 1, "", "denied")
+        self.assertEqual(A.check_branch_push("/r", "abc", "check/x", sleep=slept.append).stderr, "denied")
 
 
 class LandedInboxTest(QueueTest):

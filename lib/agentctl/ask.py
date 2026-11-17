@@ -18,6 +18,11 @@
 #     with "you decided X; the action failed: Y" (red_decision_failed): never silently left as it was.
 #   - It clears itself as before: the block's own probe (a newer run no longer failing this way, the workflow green),
 #     the red verified or cleared; a cleared red is no longer blocked-external, so its reminders stop with it.
+#   - THE QUESTION IS HELD AN HOUR (the owner, 2026-11-17: 28 of 42 questions resolved themselves before he answered,
+#     p50 83 min): it is RECORDED at once (the red's blocked-external move, its `ask` with n 0), but the owner is told
+#     only ASK_HOLD after its spell began -- unless the red is a GATE red (it holds every production push) or its
+#     deadline falls inside the hold: those are told at once. A red that leaves the block meanwhile was never asked.
+ASK_HOLD = 3600               # s an owner question is held (recorded, not told) unless it blocks a gate red ($AGENTCTL_ASK_HOLD)
 ASK_REMIND_FIRST = 3600       # the first reminder this long after the owner was told ($AGENTCTL_ASK_REMIND_FIRST)
 ASK_REMIND_MAX = 4 * 3600     # ...then doubling up to this ($AGENTCTL_ASK_REMIND_MAX)
 DECISION_FAILED = re.compile(r"\W*(NOT LANDED|GAVE UP|DIAGNOSED)\b")
@@ -90,15 +95,38 @@ def red_ask_line(d, ask, n=0):
             + (f" -- auto-clears when {ask['until']}" if ask.get("until") else ""))
 
 
-def red_ask_mark(store, it, t):
-    """The red just moved onto the owner with an escalation of its own (its inbox entry and notification): that is the
-    owner told for this spell -- the reminders count from here, never a second telling."""
+def ask_held_until(members, spell, t):
+    """Until when the owner's question for these reds ((item, ask) pairs) is held (THE QUESTION IS HELD, above), or
+    None: tell now (no hold, a gate red, a deadline inside the hold, or the hold over)."""
+    hold = env_num("AGENTCTL_ASK_HOLD", ASK_HOLD)
+    until = float(spell) + hold
+    if hold <= 0 or t >= until or any(m[0]["data"].get("gate") for m in members):
+        return None
+    if any(float(m[0].get("deadline") or until + 1) <= until for m in members):
+        return None
+    return until
+
+
+def red_owner_block(store, it, line, t, **ev):
+    """Move red it onto the owner (blocked-external) with its question: told at once (an escalation: its inbox entry and
+    notification) or, held (ask_held_until), recorded with an info event -- the tick tells it when the hold ends."""
+    held = ask_held_until([({"data": {**it["data"], **(ev.get("data") or {})}}, None)], t, t) is not None
+    moved = red_move(store, it, "blocked-external", line, severity="info" if held else "escalate", **ev)
+    red_ask_mark(store, moved, t, told=not held)
+    return moved
+
+
+def red_ask_mark(store, it, t, told=True):
+    """The red just moved onto the owner. told: with an escalation of its own (its inbox entry and notification): that
+    is the owner told for this spell -- the reminders count from here, never a second telling; else the question is
+    held (n 0) and red_owner_reminders tells it when the hold ends."""
     if not it or it["state"] != "blocked-external":
         return
     ask = red_ask(it, red_block_of(it, store))
     if ask:
-        store.update_item("red", it["id"], it["version"], {"ask": {"q": ask["q"], "since": it["entered_at"],
-                                                                  "first_at": t, "last_at": t, "n": 1}})
+        rec = {"q": ask["q"], "since": it["entered_at"], "first_at": t, "last_at": t, "n": 1} if told else \
+            {"q": ask["q"], "since": it["entered_at"], "held_at": t, "last_at": t, "n": 0}
+        store.update_item("red", it["id"], it["version"], {"ask": rec})
 
 
 def red_owner_reminders(store, t):
@@ -119,7 +147,15 @@ def red_owner_reminders(store, t):
         it, ask = max(members, key=lambda x: float((x[0]["data"].get("ask") or {}).get("last_at") or 0))
         d, a = it["data"], it["data"].get("ask") or {}
         spell = min(m[0]["entered_at"] for m in members)
-        fresh = a.get("since") != spell or a.get("q") != ask["q"]
+        fresh = a.get("since") != spell or a.get("q") != ask["q"] or int(a.get("n") or 0) == 0  # never told yet
+        if fresh and ask_held_until(members, spell, t) is not None:  # recorded, the owner told when the hold ends
+            if a.get("since") != spell or a.get("q") != ask["q"]:
+                try:
+                    store.update_item("red", it["id"], it["version"], {"ask": {"q": ask["q"], "since": spell,
+                                                                               "held_at": t, "last_at": t, "n": 0}})
+                except StaleVersion:
+                    pass
+            continue
         n = 1 if fresh else int(a.get("n") or 1) + 1
         if not fresh and t - float(a.get("last_at") or 0) < ask_interval(n - 1):
             continue

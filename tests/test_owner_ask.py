@@ -184,6 +184,46 @@ class ReminderTest(AskBase):
         self.assertIn("in 7 d", A.lease_meta(row)["text"])
 
 
+class HoldTest(AskBase):
+    """THE QUESTION IS HELD AN HOUR (the owner, 2026-11-17: 28 of 42 questions resolved themselves before he answered,
+    p50 83 min): recorded at once, told only once the hold is over -- a gate red's at once."""
+
+    def setUp(self):
+        super().setUp()
+        self.saved_env["AGENTCTL_ASK_HOLD"] = os.environ.get("AGENTCTL_ASK_HOLD")
+        os.environ["AGENTCTL_ASK_HOLD"] = "3600"
+
+    def test_a_question_is_recorded_at_once_and_told_after_the_hold(self):
+        it = self.decision_blocked()
+        self.assertEqual(self.events(), [], "held: no inbox entry, no notification yet")
+        ask = self.st.item("red", it["id"])["data"]["ask"]
+        self.assertEqual((ask["n"], ask["q"]), (0, "baseline the 2 Titans flips, or change the resolver"))
+        self.assertEqual(self.remind(55), [])
+        told = self.remind(10)
+        self.assertEqual(len(told), 1, told)
+        self.assertEqual([e["kind"] for e in self.events()], ["red.ask"])
+        self.assertEqual(self.remind(30), [], "then reminded at the usual interval")
+        self.assertEqual(len(self.remind(35)), 1)
+
+    def test_a_red_that_leaves_the_block_inside_the_hold_never_asks(self):
+        it = self.decision_blocked()
+        self.remind(30)
+        self.st.revoke("block/k", "PROBE PASSED: a newer run did not attach")
+        A.red_offer(self.st, self.st.item("red", it["id"]), "its block ended", data={"cause": None, "block": None})
+        self.remind(120)
+        self.assertEqual(self.events({"red.ask", "red.remind"}), [])
+
+    def test_a_gate_reds_question_is_told_at_once(self):
+        it, _acts = self.launch(self.red(key="g", gate=True), outcome=DIAG)
+        self.assertEqual(it["state"], "blocked-external")
+        self.assertEqual(len(self.events()), 1)
+
+    def test_an_owner_command_block_is_held_too(self):
+        self.owner_cause_blocked()
+        self.assertEqual(self.remind(0), [])
+        self.assertEqual(len(self.remind(61)), 1)
+
+
 class DecideTest(AskBase):
     def test_decide_stores_the_answer_lifts_the_block_and_reads_in_progress(self):
         it = self.decision_blocked()

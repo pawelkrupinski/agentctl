@@ -468,24 +468,43 @@ def precheck_outcome(rc, out):
     return outcome, (last or "")[:200] if outcome == "refused" else None
 
 
-def note_precheck(eid, secs, rc, out, store=None):
+# THE PRECHECK IS NOTED THROUGH A BLIP (2026-11-17: the first live landing records carried no precheck_s -- deploy-nix's
+# note died on one `POST /v1/store/item: timed out`, and a change submitted through the outbox has no item yet when its
+# 60-s precheck ends): an unreachable store or a missing item is tried again, NOTE_PRECHECK_DELAYS apart.
+NOTE_PRECHECK_DELAYS = (5, 15, 30, 60)
+NOTE_PRECHECK_WAIT = 110  # s a precheck's note waits at most for the store or its item (the delays above, cut at this)
+
+
+def note_precheck(eid, secs, rc, out, store=None, sleep=time.sleep):
     """The precheck's duration and outcome on its change item (`precheck`: the landing record's precheck_* fields),
     before a refusal cancels it; never fatal."""
     outcome, step = precheck_outcome(rc, out)
-    try:
-        st = store or Store()
-        rec = {"precheck": {"duration_s": round(secs, 1), "outcome": outcome, **({"step": step} if step else {})}}
-        for _ in range(3):  # a compare-and-set: the reconciler may move the item meanwhile
-            it = st.item("change", eid)
-            if not it:
-                return
-            try:
-                st.update_item("change", eid, it["version"], rec)
-                return
-            except StaleVersion:
-                continue
-    except (Exception, SystemExit) as e:
-        err(f"the precheck of {eid} could not be noted on its item ({str(e)[:120]})")
+    rec = {"precheck": {"duration_s": round(secs, 1), "outcome": outcome, **({"step": step} if step else {})}}
+    why, cap, delays = "its item does not exist", env_num("AGENTCTL_NOTE_PRECHECK_WAIT", NOTE_PRECHECK_WAIT), []
+    for d in NOTE_PRECHECK_DELAYS:
+        if sum(delays) + d <= cap:
+            delays.append(d)
+    for delay in (*delays, None):
+        try:
+            st = store or Store()
+            for _ in range(3):  # a compare-and-set: the reconciler may move the item meanwhile
+                it = st.item("change", eid)
+                if not it:
+                    why = "its item does not exist"
+                    break
+                try:
+                    st.update_item("change", eid, it["version"], rec)
+                    return True
+                except StaleVersion:
+                    why = "its item kept moving"
+        except (Exception, SystemExit) as e:
+            why = str(e)[:120]
+        if delay is None:
+            break
+        sleep(delay)
+    if why != "its item does not exist":  # no item: a change the store never held (a fixer's own land) -- nothing to say
+        err(f"the precheck of {eid} could not be noted on its item ({why})")
+    return False
 
 
 def cmd_land_precheck(a):
@@ -1038,8 +1057,11 @@ def _check_entry(repo, d, e, i, own=None):
     where = "no hook"
     if hook:
         ok, out, where = run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own)
-        if ok is None:  # stalled: the laptop's, not the change's
-            requeue_infra(d, e, f"its checks stalled ({where})")
+        if ok is None:  # stalled: the laptop's, not the change's -- and what stalled it is said (2026-11-17: two
+            # 13-s "stalls" whose cause no record kept)
+            last = ((out or "").strip().splitlines() or [""])[-1].strip()[:240]
+            requeue_infra(d, e, f"its checks stalled ({where}{': ' + last if last else ''})",
+                          reason="its checks stalled", detail=out, repo=repo)
             return 0
         if not ok and INFRA_CHECK_FAILURE.search(out or ""):
             requeue_infra(d, e, f"its checks failed on the laptop, not on the change "

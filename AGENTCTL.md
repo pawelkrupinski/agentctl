@@ -448,7 +448,11 @@ hold, land again) and one `RECOVERED:` event is written. Unacknowledged past its
 (an event of severity `escalate`, which the notifier delivers). Probes: workflow_green, http, tcp, red_resolved,
 route, tunnel, gate_read, token, git_fetch, clone_health, infra_requeue, change_source, invariant -- none calls
 `secrets`. A condition is probed on the host role that opened it (its `host`: the laptop's sync, or ci-runner's
-tick); only the server escalates.
+tick); only the server escalates. A BLIP OPENS NOTHING (2026-11-17: 18 of a week's 19 UNKNOWN spells closed by
+themselves in ~70 s, "movies token present"): an UNKNOWN opens only when it is seen failing again at least
+`$AGENTCTL_UNKNOWN_GRACE` (300 s) after its first sighting (sightings at most `$AGENTCTL_CONDITION_PENDING_LAPSE`,
+30 min, apart; until then a `condition_pending:<key>` meta mark and no inbox entry); `open_condition(..., grace=0)`
+opens at once. recovery.py `condition_pending`.
 `tests/test_recovery.py` lints the source for a bypass. Owner blocks are block LEASES renewed by their probe (see
 "always claimed"), not conditions.
 
@@ -816,7 +820,11 @@ agent must be assigned to it".
   --owner-cause --cmd`) carries its QUESTION: the status line and ci-why read `<red> → WAITING ON YOU: <question>`,
   never a bare `owner-decision down`. The tick tells the owner ONCE per block (one escalate event: one inbox entry of
   kind BLOCKED and one macOS notification on the laptop), then reminds by notification alone (no inbox entry) after
-  1 h, 2 h, then every 4 h (`$AGENTCTL_ASK_REMIND_FIRST` / `_MAX`) until the block ends. The owner answers with
+  1 h, 2 h, then every 4 h (`$AGENTCTL_ASK_REMIND_FIRST` / `_MAX`) until the block ends. THE QUESTION IS HELD AN
+  HOUR (2026-11-17: 28 of 42 questions resolved themselves before the owner answered, p50 83 min): recorded at once
+  (the red's blocked-external move, an info event, its `ask` with `n: 0`; `agentctl.owner_decision`'s `asked_at`),
+  told only `$AGENTCTL_ASK_HOLD` (3600 s) after its spell began -- a GATE red's, or one whose red's deadline falls
+  inside the hold, at once; a red that leaves the block meanwhile never asks (ask.py `ask_held_until`). The owner answers with
   `agentctl decide <red key | run> "<answer>"` (`done` after running an asked command): stored on the red, the block
   lifted, the red reads `IN PROGRESS (decided: <answer>)` and is offered again, its fixer briefed with the answer (no
   RED ESCALATE meanwhile). If the decided action fails (`NOT LANDED`, `GAVE UP`, `DIAGNOSED`, its fix change ended
@@ -1235,7 +1243,11 @@ the executor pushes the checked tip to `check/<entry id>` (movies' hook checks n
 runs `.github/workflows/precommit-check.yml` on the check tier: the same hook, `--checks-only <merge-base>..HEAD`. The
 run is the ENTRY's, not the executor's: its record is saved the moment the branch is pushed, a replacement executor
 ADOPTS it (no new push, no new run) on the base it checked even when main moved since -- the push then judges what landed, as for a checker that survived (2026-11-15: a reconciler restart's replacements cancelled a half-done run and threw a green one away for a moved main) -- and the 15-min (no run started) / 2-h (undecided) bounds count from the push;
-past them it is checked locally. **The verdict is the check jobs'** (2026-11-07: batch #20 sat 27+ min past its last
+past them it is checked locally. A failed push of the check branch is tried again 5 s and 20 s later
+(2026-11-17: two rounds ended "its checks stalled" 13 s in, no branch created on GitHub, and lost ~20 min each to the
+infra backoff and the check-slot queue); a round with no verdict is re-queued as `its checks stalled (<where>: <what
+the remote check said>)`, so the landing round's `reason` names the cause (remote.py `check_branch_push`).
+**The verdict is the check jobs'** (2026-11-07: batch #20 sat 27+ min past its last
 check job behind a queued `timings / report`): the workflow declares its verdict's jobs as a workflow-level
 `VERDICT_JOBS: <glob>, ...` of job names, read at the checked commit; once every job it names has concluded the check
 is decided, and a job outside it (a report, a publish) still queued or running holds nothing. A job GitHub has not
@@ -1794,13 +1806,13 @@ already live in), with stream fields `source:agentctl` and `record:<name>`. `$AG
 
 | record | one per | fields |
 |---|---|---|
-| `agentctl.landing` | change exit (`_time` = exit) | `change_id`, `lander_agent`, `lander_session`, `lander_host`, `worktree`, `branch`, `head_sha`, `base_sha` (main at submit), `checked_base`, `landed_sha`; `outcome` (landed/rejected/superseded/cancelled), `reason_class` (landed, superseded, checks-failed, conflict, too-slow, precheck, blame, cancelled, other), `reason`; `submitted_at`, `exited_at`, `total_s` (land -> exit, i.e. land -> LANDED), `queue_wait_s` (submit -> first check), `queued_s` (all queued time), `checking_s`, `checked_wait_s` (checked -> pushing), `pushing_s`, `push_to_landed_s`, `waiting_s` (held by a red gate); `rounds`, `full_rounds`, `verify_rounds`, `full_rechecks`, `infra_requeues`, `recheck_reasons` (comma list); `red_fix` (Fixes-Red), `fixes`; `commits_n`, `files_n`, `modules` (top-level dirs, comma list, `(root)` for root files), `sbt_modules` (dirs with a `src/`), `areas` (the precommit-check jobs that ran: rest, identity, page, oldrefs, heavy:<row>); `check_runs` (precommit-check run ids), `check_runner_wait_s` / `check_run_s` (summed critical-path queue / work of its runs), `check_jobs_n`, `check_job_queue_max_s`, `check_job_queue_sum_s`, `check_job_run_sum_s`; `precheck_s`, `precheck_outcome` (passed/refused/unchecked), `precheck_step`; `batch`, `superseded_by` |
+| `agentctl.landing` | change exit (`_time` = exit) | `change_id`, `lander_agent`, `lander_session`, `lander_host`, `worktree`, `branch`, `head_sha`, `base_sha` (main at submit), `checked_base`, `landed_sha`; `outcome` (landed/rejected/superseded/cancelled), `reason_class` (landed, superseded, checks-failed, conflict, too-slow, precheck, blame, cancelled, other), `reason`; `submitted_at`, `exited_at`, `total_s` (land -> exit, i.e. land -> LANDED), `queue_wait_s` (submit -> first check), `queued_s` (all queued time), `checking_s`, `checked_wait_s` (checked -> pushing), `pushing_s`, `push_to_landed_s`, `waiting_s` (held by a red gate); `rounds`, `full_rounds`, `verify_rounds`, `full_rechecks`, `infra_requeues`, `recheck_reasons` (comma list); `red_fix` (Fixes-Red), `fixes`; `commits_n`, `files_n`, `modules` (top-level dirs, comma list, `(root)` for root files), `sbt_modules` (dirs with a `src/`), `areas` (the precommit-check jobs that ran: rest, identity, page, oldrefs, heavy:<row>); `check_runs` (precommit-check run ids), `check_runner_wait_s` / `check_run_s` (summed critical-path queue / work of its runs), `check_jobs_n`, `check_job_queue_max_s`, `check_job_queue_sum_s`, `check_job_run_sum_s`; `precheck_s`, `precheck_outcome` (passed/refused/unchecked), `precheck_step` (noted on the item by the laptop's `land-precheck`, tried again through a store blip or a not-yet-submitted item for up to `$AGENTCTL_NOTE_PRECHECK_WAIT` s; none before 2026-11-17); `batch`, `superseded_by` |
 | `agentctl.landing_round` | check round of a change (`_time` = round start) | `change_id`, `outcome`, `lander_agent`, `round`, `mode` (full/verify), `reason_class` (first, verify, build, hook, selection, module-overlap, overlap, deletion, plan, from-waiting, infra:<reason>, other), `reason`, `started`, `ended`, `check_s`, `queued_before_s`, `result` (checked, requeued, rejected, waiting), `run_id`, `run_queue_s`, `run_work_s`, `run_wall_s` |
 | `agentctl.landing_watch` | landed sha's post-push watch | `landed_sha`, `change_id`, `verdict` (ok/red/unknown), `verdict_line`, `pushed_at`, `watch_s` |
 | `agentctl.red` | red episode (a red item, open -> verified/cleared) | `red_id`, `key`, `workflow`, `gate`, `red_kind` (gate/outside/stuck-run/flake), `verdict_class` (test-failure / infra-shaped / no-verdict), `family`, `jobs`, `signature`, `first_run`, `last_run`, `runs_n`, `opened_at`, `closed_at`, `duration_s`, `outcome`, `closed_by`; `fixers_n`, `fixer_restarts`, `fixer_holders`, `first_fixer_at`, `time_to_fixer_s`, `offered_s`, `leased_s`, `fix_pending_s`; `fix_sha`, `fix_entry`, `fix_status`, `fix_landed_at`, `red_to_fix_landed_s`, `red_to_green_s` (verified only); `waited_changes_n`, `waited_changes_s` (changes held by a gate red, their waiting inside the episode); `owner_blocked`, `blocked_s`, `decision_wait_s`; `escalations_n`, `notifications_n`, `attempts` |
 | `agentctl.condition` | condition spell (opened -> closed) | `condition_id`, `key`, `kind` (INVARIANT, NETWORK, STALLED, UNKNOWN, UNLANDED_ORPHAN, ...), `invariant` (W1, W2, W5, W8, WR, WB, WD, ...), `host`, `opened_at`, `escalated_at`, `closed_at`, `duration_s`, `violation`, `until`, `closed_by`, `manual_close`, `escalations_n`, `notifications_n` |
 | `agentctl.owner_decision` | question a red put to the owner | `red_id`, `belongs_to` (`red:<id>`), `workflow`, `gate`, `question`, `answer`, `asked_at`, `answered_at`, `wait_s`, `answer_path` (decided / auto-resolved / stale: unanswered 7 d), `red_closed_at`, `red_outcome`, `reminders_n`, `asks_n`, `decision_failed` |
-| `agentctl.gate_run` | completed gate run on main (Main, Identity model convergence, Identity takes; the first backfill also wrote ~bitcashier/core "Main Pipeline" runs, `repo:bitcashier/core`: filter on `repo`) | `workflow`, `run_id`, `run_number`, `run_attempt`, `sha`, `event`, `conclusion`, `started_at`, `ended_at`, `duration_s`, `path_queue_s`, `path_work_s`, `critical_path`, `critical_job`, `critical_job_s`, `critical_job_queue_s`, `slowest_job`, `slowest_job_s`, `jobs_n`, `runner_min`, `runner_wait_s` (every job's queue summed), `run_s`, `job_queue_max_s`, `failed_jobs` |
+| `agentctl.gate_run` | completed gate run on main (Main, Identity model convergence, Identity takes, matched by their workflow FILE: a convergence-dispatched Identity takes run's name is `Identity takes (convergence run <id>)`, kept as `run_name`; the first backfill also wrote ~bitcashier/core "Main Pipeline" runs, `repo:bitcashier/core`: filter on `repo`) | `workflow`, `run_id`, `run_number`, `run_attempt`, `sha`, `event`, `conclusion`, `started_at`, `ended_at`, `duration_s`, `path_queue_s`, `path_work_s`, `critical_path`, `critical_job`, `critical_job_s`, `critical_job_queue_s`, `slowest_job`, `slowest_job_s`, `jobs_n`, `runner_min`, `runner_wait_s` (every job's queue summed), `run_s`, `job_queue_max_s`, `failed_jobs` |
 
 **Per-job runner wait is NOT an agentctl record**: the CI collector's `source:ci kind:job` events (movies'
 `scripts/ci/ci_trends.py export`, ci-runner's `ci-metrics-collector`, every workflow of movies and bitcashier/core,
@@ -1906,6 +1918,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `alert_red_owner_level` | `AGENTCTL_ALERT_RED_OWNER_LEVEL` | `2` | offer rounds a red goes untaken (nobody holding it, no family owner) before it is the owner's |
 | `allow` | `AGENTCTL_ALLOW` | - | - |
 | `allowed_roots` | `AGENTCTL_ALLOWED_ROOTS` | - | - |
+| `ask_hold` | `AGENTCTL_ASK_HOLD` | `3600` | s an owner question is held (recorded, not told) unless it blocks a gate red |
 | `ask_remind_first` | `AGENTCTL_ASK_REMIND_FIRST` | `3600` | the first reminder this long after the owner was told |
 | `ask_remind_max` | `AGENTCTL_ASK_REMIND_MAX` | `14400` | ...then doubling up to this |
 | `assign_bound` | `AGENTCTL_ASSIGN_BOUND` | `20` | - |
@@ -1937,6 +1950,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `clone_lock_wait` | `AGENTCTL_CLONE_LOCK_WAIT` | `300` | the swap waits this long for the clone's users to finish, then tries again next tick |
 | `clone_repair_retry` | `AGENTCTL_CLONE_REPAIR_RETRY` | `900` | a repair that failed is tried again after this |
 | `clone_timeout` | `AGENTCTL_CLONE_TIMEOUT` | `1800` | - |
+| `condition_pending_lapse` | `AGENTCTL_CONDITION_PENDING_LAPSE` | `1800` | s between two sightings after which a pending condition's sighting run starts again |
 | `contact_gap` | `AGENTCTL_CONTACT_GAP` | `120` | s of a machine's silence before its leases' clocks pause |
 | `contact_pause_max` | `AGENTCTL_CONTACT_PAUSE_MAX` | `43200` | s a silent machine's leases are paused at most |
 | `disk_min_gb` | `AGENTCTL_DISK_MIN_GB` | `50` | the Data volume's free space below which the upkeep runs at once, then WD opens |
@@ -1995,6 +2009,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `min_interval` | `AGENTCTL_MIN_INTERVAL` | `60` | - |
 | `movies_remote` | `AGENTCTL_MOVIES_REMOTE` | - | - |
 | `movies_repo` | `AGENTCTL_MOVIES_REPO` | - | - |
+| `note_precheck_wait` | `AGENTCTL_NOTE_PRECHECK_WAIT` | `110` | s a precheck's note waits at most for the store or its item (the delays above, cut at this) |
 | `notifier` | `AGENTCTL_NOTIFIER` | - | - |
 | `notify` | `AGENTCTL_NOTIFY` | - | - |
 | `orphan_fixers` | `AGENTCTL_ORPHAN_FIXERS` | `2` | orphan fixers alive at once ; one dispatched a pass |
@@ -2070,6 +2085,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `token_summary` | `AGENTCTL_TOKEN_SUMMARY` | `600` | s between the summaries of a still-missing token (said on its transition first) |
 | `tunnel_state` | `AGENTCTL_TUNNEL_STATE` | - | - |
 | `unkicked_after` | `AGENTCTL_UNKICKED_AFTER` | `3600` | a convergence-relevant main push with no convergence (or Identity takes) run on main by then is a red |
+| `unknown_grace` | `AGENTCTL_UNKNOWN_GRACE` | `300` | s an UNKNOWN condition must keep failing (seen again past this) before it opens |
 | `upkeep_every` | `AGENTCTL_UPKEEP_EVERY` | `3600` | - |
 | `w1_max` | `AGENTCTL_W1_MAX` | `7200` | the oldest unlanded change ; while main is red, counted from the red's start |
 | `w2_max` | `AGENTCTL_W2_MAX` | `600` | a gate red with nobody on it |

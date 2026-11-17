@@ -210,6 +210,23 @@ def remote_mode_prefix(e, base, mode):
     return ""
 
 
+# THE CHECK BRANCH'S PUSH RIDES OUT A BLIP (2026-11-17: deploy-speed and ref-scrapers were re-queued "its checks
+# stalled (on ci-runner (no verdict))" 13 s into a round -- GitHub's activity log shows no check/ branch created then,
+# so the push itself failed -- and each lost 20 min to the infra backoff and the check-slot queue behind it): a failed
+# push is tried again CHECK_PUSH_DELAYS apart before the round gives up, and what git said reaches the re-queue.
+CHECK_PUSH_DELAYS = (5, 20)
+
+
+def check_branch_push(repo, head, branch, sleep=time.sleep):
+    """git push of head to the check branch, tried again through a transient failure; the last result."""
+    for delay in (*CHECK_PUSH_DELAYS, None):
+        r = git(repo, "push", "--quiet", "--force", remote(), f"{head}:refs/heads/{branch}", check=False)
+        if r.returncode == 0 or delay is None:
+            return r
+        err(f"push of {branch} failed ({(r.stderr or '').strip()[:160]}): again in {delay} s")
+        sleep(delay)
+
+
 def remote_check(repo, e, base, head, mode, own=None, red=False):
     """(ok, output) of the change's checks on ci-runner; ok None when no verdict came (the caller checks locally).
     The run belongs to the ENTRY, not to this process: its record (`remote` in the entry) is saved the moment the branch is
@@ -232,7 +249,7 @@ def remote_check(repo, e, base, head, mode, own=None, red=False):
         # starts check/red-: its jobs ask for movies-check-red-fix, the check lane ci-runner's scheduler serves first
         # (movies runner_scheduler.py CHECK_LANES; 2026-11-17, a red fix still checking 41 min after it was queued)
         branch = f"check/{'red-' if red else ''}{remote_mode_prefix(e, base, mode)}{e['id']}"
-        r = git(repo, "push", "--quiet", "--force", remote(), f"{head}:refs/heads/{branch}", check=False)
+        r = check_branch_push(repo, head, branch)
         if r.returncode != 0:
             return None, f"push of {branch} failed: {r.stderr.strip()[:300]}"
         rem = {"branch": branch, "head": e.get("head"), "base": base, "tip": head, "mode": mode, "run": None,

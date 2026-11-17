@@ -2580,9 +2580,8 @@ def red_crash_loop(store, it, upd, streak, t):
            "cause": CRASH_LOOP_CAUSE, "block": lname}
     line = f"RED BLOCKED ON OWNER: {red_what(d)}: {text}"
     store.close_offer(f"red:{it['id']}", "blocked")
-    red_ask_mark(store, red_move(store, it, "blocked-external", line, data=upd, severity="escalate",
-                                 refs={"key": key, "run": run, "workflow": d.get("workflow"), "verdict": line,
-                                       "tail": tail, "command": "red"}), t)
+    red_owner_block(store, it, line, t, data=upd, refs={"key": key, "run": run, "workflow": d.get("workflow"),
+                                                        "verdict": line, "tail": tail, "command": "red"})
     return [f"crash loop on {red_what(d)}: blocked on the owner"]
 
 
@@ -2641,9 +2640,8 @@ def red_decision_block(store, it, upd, decide, t):
         store.set_meta(lname, row["epoch"], row["secret"], {"keys": sorted(set(lease_meta(row).get("keys") or []) | {key})})
     line = f"RED BLOCKED ON OWNER: {text}"
     store.close_offer(f"red:{it['id']}", "blocked")
-    red_ask_mark(store, red_move(store, it, "blocked-external", line, data={**upd, "cause": DECISION_CAUSE, "block": lname},
-                                 severity="escalate", refs={"key": key, "run": run, "workflow": d.get("workflow"),
-                                                            "verdict": line, "command": "red"}), t)
+    red_owner_block(store, it, line, t, data={**upd, "cause": DECISION_CAUSE, "block": lname},
+                    refs={"key": key, "run": run, "workflow": d.get("workflow"), "verdict": line, "command": "red"})
     return [f"decision needed on {red_what(d)}: blocked on the owner"]
 
 
