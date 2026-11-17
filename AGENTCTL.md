@@ -1201,7 +1201,8 @@ has ONE watch, its store item, whichever host makes it: `--follow` claims it (a 
 alone) and writes its verdict there; a second follower of the same sha, on any host, prints that verdict instead of
 watching again, and a lapsed claim is taken over (a follower renews only its own claim). The item names its repo
 by its GitHub slug: each host's tick looks in its own clone of it (`watch_clone`: red-repos.json `clone`, the movies
-clone), so ci-runner carries on a dead laptop follower's watch.
+clone), so ci-runner carries on a dead laptop follower's watch. A follower another local watcher's lock refuses gives
+its claim back; an item that ended `unknown` is claimed and re-watched the same way, its verdict kept on it (`outcome`).
 
 Other repos (no movies hook): `land` holds `land/<repo>`, fetches, rebases, runs prepush-check, pushes (the repo's
 hook runs), verifies with `merge-base --is-ancestor` or `git cherry`, and prints `LANDED <sha>`; no watch.

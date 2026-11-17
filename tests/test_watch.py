@@ -270,13 +270,42 @@ class WatchTest(Base):
         self.assertGreater(len(self.listed), 0)
         self.assertEqual(A.Store().item("watch", self.sha)["state"], "ok")
 
-    def test_a_sha_whose_watch_ended_unknown_is_watched_afresh(self):
+    def test_a_follower_the_local_owned_lock_refuses_gives_its_claim_back(self):
+        """Review round 8: a follower that claimed the item and then met another local watcher's Owned lock returned
+        WATCH UNKNOWN with its claim still on the item: the tick left the sha alone for the claim's 600 s."""
+        held = A.Owned("watch", f"{MOVIES}-{self.sha}", ["watch"])
+        self.assertTrue(held.acquire())
+        self.addCleanup(held.release)
+        rc, out = self.watch()
+        self.assertEqual(rc, 2, out)
+        self.assertIn("already watches", out)
+        self.assertFalse(A.Store().item("watch", self.sha)["data"].get("followed_by"), "the claim was given back")
+
+    def test_a_sha_whose_watch_ended_unknown_is_rewatched_claimed_and_its_verdict_kept(self):
+        """Review round 8: the re-watch of an `unknown` item ran unclaimed, so its verdict was never stored and every
+        later follower watched GitHub again. It claims the item like any follower and keeps its verdict there."""
         it = A.start_watch(self.r.path, self.sha, self.pushed_at, o_r=MOVIES)
         A.Store().transition("watch", self.sha, "unknown", it["version"], data={"verdict": "WATCH UNKNOWN: stuck"})
         self.main, self.conv = [run(11, self.sha)], [run(21, self.sha)]
+        claimed = []
+        saved = A.watch_look
+
+        def look(*a, **kw):  # while it watches, the item is this follower's
+            claimed.append(A.Store().item("watch", self.sha)["data"].get("followed_by"))
+            return saved(*a, **kw)
+        A.watch_look = look
+        self.addCleanup(setattr, A, "watch_look", saved)
         rc, out = self.watch()
         self.assertEqual(rc, 0, out)
-        self.assertIn("WATCH OK: Main #11 green", out)
+        self.assertTrue(claimed and all(claimed), claimed)
+        it = A.Store().item("watch", self.sha)
+        self.assertEqual((it["data"].get("outcome"), it["data"].get("followed_by")), ("ok", None))
+        self.assertIn("WATCH OK: Main #11 green", it["data"]["verdict"])
+        looks = len(self.listed)
+        rc2, out2 = self.watch()
+        self.assertEqual(rc2, 0, out2)
+        self.assertEqual(len(self.listed), looks, "a later follower reads the kept verdict, not GitHub")
+        self.assertIn("WATCH OK: Main #11 green", out2)
 
     def test_other_repos_watch_nothing(self):
         import contextlib, io

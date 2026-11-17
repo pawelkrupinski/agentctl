@@ -690,15 +690,26 @@ def tick_watch(st, it, t):
     return [f"watch {it['id'][:10]}: {verdict[0]}"]
 
 
+def watch_outcome(it):
+    """A watch item's verdict: its state, or -- an `unknown` item a follower re-watched (WatchClaim) -- that
+    follower's `outcome`, kept on the item (a terminal state is never left)."""
+    return (it.get("data") or {}).get("outcome") or it["state"]
+
+
 def finish_watch(st, it, state, line, red_runs, told=False):
     """The watch item's verdict (ok / red / unknown), kept on it for a later follower (`verdict`); its event goes to
     its author's inbox unless told (a follower printed it to the author already); on ok its worktree closed, on red
-    the red machine takes each red run, its author offered first."""
+    the red machine takes each red run, its author offered first. An `unknown` item a follower re-watched keeps the
+    re-watch's verdict as its `outcome`, the claim given up with it."""
     dd = it["data"]
-    ev = watch_event(it, line, code={"ok": 0, "red": 3}.get(state, 2))
-    if told:
-        ev["audience"] = {}
-    st.transition("watch", it["id"], state, it["version"], data={"verdict": line}, event=ev)
+    if it["state"] == "unknown":
+        st.update_item("watch", it["id"], it["version"], {"verdict": line, "outcome": state, "followed_by": None,
+                                                          "followed_until": 0})
+    else:
+        ev = watch_event(it, line, code={"ok": 0, "red": 3}.get(state, 2))
+        if told:
+            ev["audience"] = {}
+        st.transition("watch", it["id"], state, it["version"], data={"verdict": line}, event=ev)
     if state == "ok" and not told and dd.get("close") and os.path.isdir(dd["close"]):
         err(close_worktree(dd["close"]))
     for wf, n in red_runs:

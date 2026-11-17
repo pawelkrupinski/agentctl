@@ -71,20 +71,20 @@ def watch_landed(repo, sha, pushed_at, o_r=None, close=None, fixes=()):
     how, it = claim.look()
     if how == "theirs":
         how, it = claim.wait_theirs(it)
-    if how == "decided" and it["state"] not in ("ok", "red"):  # undecided at its bound: looked at afresh, here
-        how = None
     if how == "decided":
-        rc = {"ok": 0, "red": 3}[it["state"]]
-        print((it.get("data") or {}).get("verdict") or f"WATCH {it['state'].upper()}: {sha[:10]} (its watch item's verdict)",
+        rc = {"ok": 0, "red": 3}[watch_outcome(it)]
+        print((it.get("data") or {}).get("verdict") or f"WATCH {watch_outcome(it).upper()}: {sha[:10]} (its watch item's verdict)",
               flush=True)
     elif how == "theirs":  # still another follower's at our bound
         print(f"WATCH UNKNOWN: {sha[:10]} is watched by {(it.get('data') or {}).get('followed_by')}, undecided after "
               f"{int(env_num('AGENTCTL_WATCH_TIMEOUT', WATCH_TIMEOUT) // 60)} min; check `agentctl ci-why` later", flush=True)
         return 2
-    else:  # mine, or None (the store did not answer, or its item ended unknown): watched here unclaimed
+    else:  # mine, or None (the store did not answer): watched here unclaimed
         own = Owned("watch", f"{o_r}-{sha}", ["watch", "--repo", repo, "--sha", sha, "--pushed-at", str(pushed_at)]
                     + (["--close", close] if close else []) + [x for f in fixes for x in ("--fixes", f)])
         if not own.acquire():
+            if how == "mine":  # another watcher here: the claim given back, so the tick is not kept off it for its lease
+                claim.release()
             h = own.holder or {}
             print(f"WATCH UNKNOWN: another agentctl (pid {h.get('pid')}, {h.get('owner')}) already watches {sha[:10]}; "
                   "its verdict is its own (`agentctl orphans` lists owners)")
@@ -101,7 +101,9 @@ def watch_landed(repo, sha, pushed_at, o_r=None, close=None, fixes=()):
 # ONE WATCH PER SHA (review round 6): the sha's watch is its store item (start_watch, created once). ci-runner's batch
 # cannot see a laptop follower's await lock, so it makes the item too: a `land --follow` CLAIMS the item (followed_by,
 # a lease it renews each look; the tick leaves a live claim alone) and writes its verdict there (finish_watch); a
-# second follower, on any host, reads that verdict instead of watching GitHub again; a lapsed claim is taken over.
+# second follower, on any host, reads that verdict instead of watching GitHub again; a lapsed claim is taken over. An
+# item that ended `unknown` (a stuck run past its 3 h) is claimed and re-watched the same way, its verdict kept as its
+# `outcome` (watch_outcome): a terminal item keeps its state.
 WATCH_FOLLOW_LEASE = 600  # s a follower's claim on a sha's watch item lasts unrenewed; then the tick (or another follower) takes it
 
 
@@ -122,7 +124,7 @@ class WatchClaim:
                              session=os.environ.get("CLAUDE_CODE_SESSION_ID"), follower=self.lease(t))
             for _ in range(3):
                 dd = it.get("data") or {}
-                if machine_state("watch", it["state"]).terminal:
+                if watch_outcome(it) in ("ok", "red"):
                     return "decided", it
                 if dd.get("followed_by") == self.me:
                     return "mine", it
@@ -160,24 +162,34 @@ class WatchClaim:
             it = st.item("watch", self.sha)
             # only its OWN claim: one that lapsed (a laptop asleep) and was taken over is the new follower's now --
             # renewing it would take it back from under that one, and the tick would leave both watching
-            if it and not machine_state("watch", it["state"]).terminal and \
-                    (it.get("data") or {}).get("followed_by") == self.me:
+            if self.mine(it):
                 st.update_item("watch", self.sha, it["version"], self.lease(time.time()))
         except (Exception, SystemExit) as e:  # renewed at the next look; a lapse lets the tick evaluate it meanwhile
             err(f"watch {self.sha[:10]}: could not renew its claim ({str(e)[:120]})")
 
-    def finish(self, state, line, red_runs=()):
-        """ok / red: the verdict on the item (finish_watch, told: this follower printed it). Anything else (unknown,
-        stalled, no token here) gives the claim up: the tick carries the watch on to its own deadline."""
+    def mine(self, it):
+        return bool(it) and watch_outcome(it) not in ("ok", "red") and (it.get("data") or {}).get("followed_by") == self.me
+
+    def release(self):
+        """Its own claim given up (never another follower's): the tick carries the watch on to its own deadline."""
         try:
             st = Store()
             it = st.item("watch", self.sha)
-            if not it or machine_state("watch", it["state"]).terminal:
-                return
-            if state in ("ok", "red"):
-                finish_watch(st, it, state, line, list(red_runs), told=True)
-            else:
+            if self.mine(it):
                 st.update_item("watch", self.sha, it["version"], {"followed_by": None, "followed_until": 0})
+        except (Exception, SystemExit) as e:  # it lapses by itself
+            err(f"watch {self.sha[:10]}: could not give its claim up ({str(e)[:120]})")
+
+    def finish(self, state, line, red_runs=()):
+        """ok / red: the verdict on the item (finish_watch, told: this follower printed it). Anything else (unknown,
+        stalled, no token here) gives the claim up (release)."""
+        if state not in ("ok", "red"):
+            return self.release()
+        try:
+            st = Store()
+            it = st.item("watch", self.sha)
+            if it and watch_outcome(it) not in ("ok", "red"):
+                finish_watch(st, it, state, line, list(red_runs), told=True)
         except (Exception, SystemExit) as e:
             err(f"watch {self.sha[:10]}: could not write its verdict to the store ({str(e)[:120]})")
 
