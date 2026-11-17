@@ -28,7 +28,8 @@ STATS_PASS_BOUND = 40       # s a pass works at most (a tick step)
 STATS_GATE_LOOKBACK = 3 * 86400   # s of gate runs each pass looks at (markers dedupe)
 STATS_GATE_HISTORY = 120 * 86400  # s of gate runs the first passes walk back (the collector backfilled 90 days)
 STATS_URL_SERVER = "http://victoria-logs-ci.service.consul:9429"
-STATS_GATE_WORKFLOWS = ("Main", "Identity model convergence", "Identity takes")
+STATS_GATE_WORKFLOWS = tuple(w for w, _f in GATING["pawelkrupinski/movies"])  # THE GATE (ciwhy.py)
+STATS_GATE_REPO = "pawelkrupinski/movies"
 CI_FIELDS = ("kind, repo, workflow, run_id, run_number, run_attempt, sha, event, run_conclusion, job, conclusion, "
              "queue_s, duration_s, start, end, wall_s, path_queue_s, path_work_s, critical_path, runner_min")
 CHANGE_EXITS = ("landed", "rejected", "superseded", "cancelled")
@@ -428,7 +429,7 @@ def check_runs_of(url, change_id, around):
     """The change's precommit-check runs (source:ci): [{run_id, path_queue_s, path_work_s, wall_s, start, jobs}]."""
     if not re.fullmatch(r"[A-Za-z0-9_-]+", change_id):  # a regexp without metacharacters: no escaping in LogsQL
         return []
-    rows = stats_query(url, f'source:ci workflow_file:"precommit-check.yml" (kind:run OR kind:job) '
+    rows = stats_query(url, f'source:ci workflow_file:="precommit-check.yml" (kind:run OR kind:job) '
                             f'branch:~"{change_id}$" | fields {CI_FIELDS}', start=around[0] - 3600, end=around[1] + 3 * 3600)
     runs = {}
     for r in rows:
@@ -546,13 +547,16 @@ def gate_runs_pass(st, url, t, since, cap, out=None):
         frm = t - STATS_GATE_HISTORY
     walking = frm < t - STATS_GATE_LOOKBACK
     lo, hi = (frm, min(frm + 7 * 86400, t)) if walking else (t - STATS_GATE_LOOKBACK, t)
-    flows = " OR ".join(f'workflow:"{w}"' for w in STATS_GATE_WORKFLOWS)
+    flows = ", ".join(f'"{w}"' for w in STATS_GATE_WORKFLOWS)  # exact: a phrase filter `workflow:"Main"` also
+    # matched bitcashier/core's "Main Pipeline" (2026-11-17, the first backfill)
     try:
-        rows = stats_query(url, f'source:ci kind:run branch:main ({flows}) | fields {CI_FIELDS}', start=lo, end=hi)
+        rows = stats_query(url, f'source:ci kind:run branch:="main" repo:="{STATS_GATE_REPO}" workflow:in({flows}) '
+                                f'| fields {CI_FIELDS}', start=lo, end=hi)
     except Exception as ex:
         err(f"stats: the gate runs could not be read ({str(ex)[:160]})")
         return 0
     n = 0
+    rows = [r for r in rows if r.get("repo") == STATS_GATE_REPO and r.get("workflow") in STATS_GATE_WORKFLOWS]
     for run in sorted(rows, key=lambda r: _num(r.get("end")) or 0):
         rid = f"{run.get('run_id')}.{run.get('run_attempt') or 1}"
         if stats_sent(st, "gate_run", rid):

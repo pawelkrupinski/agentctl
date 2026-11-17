@@ -240,8 +240,11 @@ class StatsPassTest(unittest.TestCase):
 
     def test_gate_runs_walk_the_history_then_the_last_days_once_each(self):
         st, t = self.st, self.t
-        rows = {"run": [{"kind": "run", "workflow": "Main", "run_id": "7", "run_attempt": "1", "wall_s": "60",
-                         "start": str(T0 - 100 * 86400), "end": str(T0 - 100 * 86400 + 60), "run_conclusion": "success"}]}
+        at = {"start": str(T0 - 100 * 86400), "end": str(T0 - 100 * 86400 + 60), "run_conclusion": "success"}
+        rows = {"run": [{"kind": "run", "repo": "pawelkrupinski/movies", "workflow": "Main", "run_id": "7",
+                         "run_attempt": "1", "wall_s": "60", **at},
+                        # bitcashier/core's "Main Pipeline": no gate run (a phrase filter once let it in)
+                        {"kind": "run", "repo": "bitcashier/core", "workflow": "Main Pipeline", "run_id": "8", **at}]}
         calls = []
 
         def query(url, q, start=None, end=None, limit=5000):
@@ -253,6 +256,7 @@ class StatsPassTest(unittest.TestCase):
             for i in range(20):
                 A.stats_pass(store=st, url="http://vl", now_=T0 + i)
         gates = [r for r in self.sent if r["record"] == "agentctl.gate_run"]
+        self.assertIn('repo:="pawelkrupinski/movies" workflow:in("Main", ', calls[0][0])
         self.assertEqual([(g["run_id"], g["backfill"]) for g in gates], [("7", True)])
         walked = T0 - A.STATS_GATE_HISTORY + 17 * 7 * 86400  # 17 weekly windows reach the last 3 days
         self.assertEqual(float(st.meta_get("stats_gate_from")), walked)
