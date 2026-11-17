@@ -109,10 +109,23 @@ def probe_infra_requeue(a):
 # config compiled, the lint and fast specs, and the unit tests of every module either side touches -- then pushed with
 # the change's own checks skipped at the push (PREPUSH_SKIP: the hook's plan for its paths; the red gate still runs).
 # A hook without --verify-only gets the full round, as before the rule. A rebase conflict is NOT LANDED, as ever.
+# SELECTION-AWARE (the owner, 2026-11-17: 17 full rounds of ~40 min since 11-16 06:00, nearly all for a hook or registry
+# change): when every forcing path that landed only steers WHAT the check selects (SELECTION_PATHS: the hook, its lint
+# registry, local-tests.txt), the hook is asked what it selects for the change's paths at the tip the full check passed
+# (full_tip) and at the rebased tip: its --plan, --compile-plan, --unit-plan and --lint-plan, and local-tests.txt's
+# lines for every area the plan runs (`basic` with sbt). The verify round runs the NEW hook's compile plan (every test
+# config), lint plan and unit plan over full_base..tip, a superset of the change's paths, so what those add is run there
+# (the added selection, and only it, on top of the verification); a check --plan adds, or an area line local-tests.txt
+# adds, it does not run: then the full round. Removals need nothing. An unreadable selection or no full_tip recorded:
+# the full round. build.sbt, project/ and the other forcing paths stay a full round (no proof yet that what the
+# selection compiles and runs is unchanged there).
 RECHECK_ALWAYS = re.compile(r"^(build\.sbt|project/.*|scripts/hooks/.*|scripts/hooks-path\.sh|scripts/tool-conventions\.sh"
                             r"|scripts/ci/precommit-share\.sh)$")
 HOOK_SELF_TEST = re.compile(r"^scripts/hooks/[^/]+(-test\.sh|-test-lib\.sh|_test\.py)$")
 VERIFY_MODE = "--verify-only"
+SELECTION_PATHS = frozenset({"scripts/hooks/pre-push", "scripts/hooks/lint-registry.tsv", "scripts/hooks/local-tests.txt"})
+SELECTION_MODES = ("--plan", "--compile-plan", "--unit-plan", "--lint-plan")
+VERIFY_RUNS_ADDED = frozenset({"--compile-plan", "--unit-plan", "--lint-plan"})  # the verify round runs what these add
 
 
 def range_paths(cwd, a, b, deleted=False):
@@ -158,13 +171,73 @@ def forces_full_recheck(path):
     return bool(RECHECK_ALWAYS.match(path)) and not HOOK_SELF_TEST.match(path)
 
 
-def recheck_reason(tree, base, moved, tip, change_paths):
+def hook_selection(tree, paths):
+    """What the tree's hook selects for paths (SELECTION-AWARE, above): {mode: words} for each dry-run mode the hook has,
+    and local-tests.txt's lines for the areas its plan runs; None when a mode it has cannot be read."""
+    hook = precheck_hook(tree)
+    try:
+        with open(hook or "") as f:
+            text = f.read()
+    except OSError:
+        return None
+    out = {}
+    for mode in SELECTION_MODES:
+        if f"{mode})" not in text:  # never asked: an unknown flag would run the hook's real push checks
+            continue
+        out[mode] = hook_query(hook, tree, mode, paths)
+        if out[mode] is None:
+            return None
+    areas = {"basic"} if "sbt" in out.get("--plan", []) else set()
+    areas |= set(out.get("--plan", []))
+    try:
+        with open(os.path.join(tree, "scripts", "hooks", "local-tests.txt")) as f:
+            out["local-tests"] = [line.rstrip("\n") for line in f if line.split()[:1] and line.split()[0] in areas]
+    except OSError:
+        out["local-tests"] = []
+    return out
+
+
+def selection_at(tree, rev, tip, paths):
+    """hook_selection at rev, read in tree (checked out at tip, and back at tip after); None when rev is unknown."""
+    if not rev or not git_ok(tree, "cat-file", "-e", f"{rev}^{{commit}}"):
+        return None
+    if rev == tip:
+        return hook_selection(tree, paths)
+    git(tree, "checkout", "-q", "--force", "--detach", rev)
+    try:
+        return hook_selection(tree, paths)
+    finally:
+        git(tree, "checkout", "-q", "--force", "--detach", tip)
+
+
+def selection_change(tree, full_tip, tip, paths):
+    """None when the hook selects nothing at tip for paths that the verify round leaves unrun and the full check at
+    full_tip did not run (SELECTION-AWARE, above); else what it adds, in words."""
+    old, new = selection_at(tree, full_tip, tip, paths), selection_at(tree, tip, tip, paths)
+    if old is None or new is None:
+        return "its selection at the full check cannot be read" if old is None else "its selection cannot be read"
+    for key in sorted(set(old) | set(new)):
+        if key in VERIFY_RUNS_ADDED:
+            continue
+        added = [w for w in (new.get(key) or []) if w not in set(old.get(key) or [])]
+        if key not in old and key in new or added:
+            return f"its {key.lstrip('-')} for the change adds {', '.join(added[:3]) or 'a mode'}" \
+                + (f" (+{len(added) - 3} more)" if len(added) > 3 else "")
+    return None
+
+
+def recheck_reason(tree, base, moved, tip, change_paths, full_tip=None):
     """(commits main moved by, why the change must be FULLY checked again or None) -- THE RULE above, of what landed in
-    base..moved against the change's paths (moved..tip, the rebased change)."""
+    base..moved against the change's paths (moved..tip, the rebased change; tree checked out at tip). full_tip: the tip
+    the full check passed, for SELECTION-AWARE."""
     n = len(git(tree, "rev-list", f"{base}..{moved}", check=False).stdout.split())
     landed_paths = range_paths(tree, base, moved)
     build = sorted(p for p in landed_paths if forces_full_recheck(p))
-    if build:
+    if build and all(p in SELECTION_PATHS for p in build):
+        moves = selection_change(tree, full_tip, tip, change_paths)
+        if moves:
+            return n, f"they change {build[0]}, and {moves}"
+    elif build:
         return n, f"they change {build[0]}"
     same = sorted(set(landed_paths) & set(change_paths))
     if same:
@@ -910,7 +983,7 @@ def _check_entry(repo, d, e, i, own=None):
         mode = VERIFY_MODE
     elif e.get("verify") and hook:  # THE RULE (recheck_reason) again, on the main this round checks on
         _n, why = recheck_reason(tree, e.get("full_base") or e.get("checked_base") or base, base, head,
-                                 range_paths(tree, base, head))
+                                 range_paths(tree, base, head), full_tip=e.get("full_tip"))
         if why is None and verify_supported(precheck_hook(tree)):
             mode = VERIFY_MODE
         else:
@@ -949,12 +1022,13 @@ def _check_entry(repo, d, e, i, own=None):
             wlog(d, f"{e['id']}: its checks failed only where its base fails too ({keys_text(what)}; {'; '.join(srcs)})"
                     ": it waits behind that red")
     full_base = (e.get("full_base") or e.get("checked_base") or base) if mode == VERIFY_MODE else base
+    full_tip = e.get("full_tip") if mode == VERIFY_MODE else head
     verified = f"verified {head[:10]} on {base[:10]} (fully checked on {full_base[:10]})" if mode == VERIFY_MODE \
         else f"checked {head[:10]} on {base[:10]}"
     set_change(d, e, "checked", data={"tip": head, "base": base, "mode": mode, "where": where},
                event={"text": f"{e['id']}: {verified} ({where})"
                       + (" -- failing only as its base fails" if known_red else "")},
-               tip=head, checked_base=base, full_base=full_base, checked_mode=mode, checked_where=where, tree=i,
+               tip=head, checked_base=base, full_base=full_base, full_tip=full_tip, checked_mode=mode, checked_where=where, tree=i,
                infra_reason=None, infra_same=0, known_red=known_red, verify=False)
     wlog(d, f"{e['id']}: {verified} ({where})")
     return 0
@@ -1164,7 +1238,8 @@ def _push_change(repo, d, e, i):
                               f"{moved[:10]} (main moved during its checks): rebase onto {remote()}/main and land again")
                 return "rejected"
             tree_hook = precheck_hook(tree) if hook else None
-            n, why = recheck_reason(tree, full_base, moved, new_head, range_paths(tree, moved, new_head))
+            n, why = recheck_reason(tree, full_base, moved, new_head, range_paths(tree, moved, new_head),
+                                    full_tip=e.get("full_tip"))
             moved_by = f"main moved by {n} commit{'' if n == 1 else 's'}"
             if why is None and tree_hook and not verify_supported(tree_hook):
                 why = f"no file overlap, but the hook has no {VERIFY_MODE} for the combined tree"

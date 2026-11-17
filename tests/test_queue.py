@@ -21,6 +21,7 @@ case "$1" in
         done
         exit 0 ;;
     --plan) cat > /dev/null; printf 'sbt\\nidentity\\n'; exit 0 ;;
+    --lint-plan) cat > /dev/null; [ ! -f scripts/hooks/lint-registry.tsv ] || grep -v '^#' scripts/hooks/lint-registry.tsv; exit 0 ;;
 esac
 # --verify-only A..B: the combined tree (every test config compiled, the touched modules' unit tests)
 """
@@ -407,14 +408,67 @@ class QueueTest(WaitingTest):
     def test_a_change_to_build_sbt_rechecks(self):
         self.rechecked_when_landing("build.sbt", "lazy val x = 1\n")
 
-    def test_a_change_to_the_hook_rechecks(self):
+    def test_a_hook_change_that_moves_this_changes_selection_rechecks(self):
+        """SELECTION-AWARE (the owner, 2026-11-17): the hook's plan for the change's paths differs at the old and the new
+        hook (a check added): a full round."""
         hook = open(os.path.join(self.r.path, "scripts/hooks/pre-push")).read()
-        self.rechecked_when_landing("scripts/hooks/pre-push", hook + "# a change to the hook\n")
+        self.rechecked_when_landing("scripts/hooks/pre-push", hook.replace("'sbt\\nidentity\\n'", "'sbt\\nidentity\\npage\\n'"))
         self.assertEqual([m for m, _r in self.verified()], ["--range", "--range"], "a full round, not a verification")
 
-    def test_a_change_to_the_lint_registry_rechecks(self):
-        """It steers which specs the check runs: still a full trigger (the owner, 2026-11-16)."""
-        self.rechecked_when_landing("scripts/hooks/lint-registry.tsv", "# a row\n")
+    def test_a_hook_change_that_keeps_this_changes_selection_gets_the_verify_round(self):
+        """17 full rechecks of ~40 min in a day, nearly all for a hook or registry change selecting nothing new for the
+        change (2026-11-16..17): the same plan, compile plan, unit plan and lint plan at both hooks is a verify round."""
+        wt, _ = self.agent("a", "docs/A.md", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        hook = open(os.path.join(self.r.path, "scripts/hooks/pre-push")).read()
+        self.moves_once(("scripts/hooks/pre-push", hook + "# a change to the hook\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--verify-only"])
+        self.assertIn("the combined tree verified", self.landed_verdict())
+
+    def test_a_lint_registry_row_this_change_selects_gets_the_verify_round_which_runs_it(self):
+        """The verify round runs the new registry's lint plan over full_base..tip, a superset of the change's paths: the
+        added spec runs there, no full round needed."""
+        wt, _ = self.agent("a", "docs/A.md", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("scripts/hooks/lint-registry.tsv", "common:tools.NewLintSpec\t*\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--verify-only"])
+
+    def test_a_lint_registry_change_selecting_nothing_new_gets_the_verify_round(self):
+        wt, _ = self.agent("a", "docs/A.md", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("scripts/hooks/lint-registry.tsv", "# a comment row\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--verify-only"])
+
+    def test_a_selection_path_beside_another_forcing_path_still_rechecks(self):
+        """Only the hook, its registry and local-tests.txt are judged by selection; build.sbt stays a full round."""
+        wt, _ = self.agent("a", "docs/A.md", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("scripts/hooks/lint-registry.tsv", "# a comment row\n"), ("build.sbt", "lazy val x = 1\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--range"])
+
+    def test_a_local_tests_change_to_a_selected_area_rechecks(self):
+        """--plan names the `identity` area; what it runs is local-tests.txt's identity lines: changed, a full round."""
+        self.rechecked_when_landing("scripts/hooks/local-tests.txt", "identity sbt identity/test\n")
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--range"])
+
+    def test_without_the_full_checks_tip_a_hook_change_rechecks(self):
+        """An entry fully checked before full_tip was recorded: its old selection cannot be read, so a full round."""
+        wt, _ = self.agent("a", "docs/A.md", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        real = A.set_change
+
+        def forgetting(d, e, status, **kw):
+            kw.pop("full_tip", None)
+            return real(d, e, status, **kw)
+        A.set_change = forgetting
+        self.addCleanup(setattr, A, "set_change", real)
+        hook = open(os.path.join(self.r.path, "scripts/hooks/pre-push")).read()
+        self.moves_once(("scripts/hooks/pre-push", hook + "# a change to the hook\n"))
+        self.assertEqual(self.check(eid), 0)
         self.assertEqual([m for m, _r in self.verified()], ["--range", "--range"])
 
     def test_only_the_hooks_own_self_tests_landing_meanwhile_get_the_verify_round(self):
