@@ -242,6 +242,7 @@ def landing_records(item, events, entry=None, runs=(), paths=None, since=None):
            "check_job_run_sum_s": _r(sum(_num(j.get("duration_s")) or 0 for j in jobs)) if jobs else None,
            "precheck_s": _num(pre.get("duration_s")), "precheck_outcome": pre.get("outcome"),
            "precheck_step": pre.get("step"), "batch": d.get("batch") or entry.get("batch"),
+           "batch_id": d.get("batch_id") or entry.get("batch_id"),
            "superseded_by": d.get("superseded_by") or entry.get("superseded_by")}
     rec["_msg"] = (f"agentctl.landing {item['id']}: {outcome} ({reason_class}) after {mins_of(rec['total_s'])}, "
                    f"{len(rounds)} round(s), queue {mins_of(rec['queue_wait_s'])}")

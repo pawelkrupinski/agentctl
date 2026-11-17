@@ -12,7 +12,8 @@
 # moved meanwhile: rebased in the tree and checked again. Every verdict goes to the inbox with the agent's worktree.
 # `land --follow` keeps the old in-process land (checks, push, watch) for scripts; a red fixer queues and waits
 # (fixer_land).
-QUEUE_POOL = 4          # check trees, so at most this many queued changes are checked at once ($AGENTCTL_CHECK_TREES).
+QUEUE_POOL = 4          # check trees, so at most this many queued changes are checked at once ($AGENTCTL_CHECK_TREES);
+# a backlog batch (batch.py, THE BACKLOG BATCH) is up to BACKLOG_BATCH_MAX of them checked in ONE tree.
 # 4, not 3 (2026-11-17): ci-runner's check runners were 3 in effect (a lane bug let borrowed checks hold the check
 # lane: movies runner_scheduler.py), up to 2 lane + 1 CPU-admitted + 2 borrowed since; 4 is a first step, re-measure.
 # A check the LAPTOP failed, not the change: sbt's server never came up or was lost, a script test cut off by its
@@ -379,6 +380,7 @@ def change_fields(repo, main_ref, head, a):
     commits = waiting_commits(repo, f"{remote()}/main", head)
     return {"worktree": repo, "branch": branch_of(repo), "head": head, "commits": commits,
             "fixes": sorted(fixes_of(repo, commits)), "keep_worktree": bool(getattr(a, "keep_worktree", False)),
+            "no_batch": bool(getattr(a, "no_batch", False)),
             "claude_pid": int(os.environ["CLAUDE_PID"]) if (os.environ.get("CLAUDE_PID") or "").isdigit() else None,
             "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or None,
             "base": git(repo, "rev-parse", main_ref).strip(), "host": os.uname().nodename,
@@ -730,7 +732,8 @@ def set_change(d, e, to, data=None, event=None, store=None, **fields):
     cur = st.put_item("change", e["id"], ENTRY_STATE.get(e.get("status"), "queued"), change_item_fields(e))
     if fields.get("why"):  # a decided change's why, on its item: a fixer's land reads it there (await_queued)
         data = {**(data or {}), "why": str(fields["why"])[:600]}
-    landed = {k: fields[k] for k in ("landed_sha", "pushed_at", "batch", "superseded_by") if fields.get(k) is not None}
+    landed = {k: fields[k] for k in ("landed_sha", "pushed_at", "batch", "batch_id", "superseded_by")
+              if fields.get(k) is not None}
     if landed:  # where and when it landed (or what superseded it), on its item: an awaiter on any host reads it there
         # (await_entry)
         data = {**(data or {}), **landed}
@@ -970,7 +973,7 @@ def check_entry(repo, eid):
         return 0
     try:
         e = read_record(os.path.join(d, "entries", f"{eid}.json"))
-        if not e or e.get("status") not in ("queued", "checking"):
+        if not e or e.get("status") not in ("queued", "checking") or e.get("backlog_batch"):  # a backlog batch's
             return 0
         slot = check_tree_slot(repo, d, fix=red_fix(e, gate_reds(repo)) if e.get("fixes") else False)
         if not slot:  # all trees busy: it stays queued, the tick starts it again when one frees
@@ -1432,7 +1435,10 @@ def tick_changes(repo, d, now_=None):
                 del newest[k]
         newest[e["id"]] = e
     did = []
+    held = backlog_held(repo, d, reds, st, t)
     for e in [e for e in todo if e["id"] in newest]:
+        if e.get("backlog_batch"):  # a backlog batch's member: the batch checks and pushes it (backlog_reconcile)
+            continue
         it = st.put_item("change", e["id"], ENTRY_STATE.get(e["status"], "queued"), change_item_fields(e))
         state = it["state"]
         if state == "pushing":  # a tick that died mid-push: verified next, never pushed twice blindly
@@ -1467,6 +1473,11 @@ def tick_changes(repo, d, now_=None):
         first = None if fix else batch_goes_first(st, d, ("assembling", "pushing"))
         if first:  # the next free check tree is the batch's: to assemble it, or to push from its own tree
             did += behind_batch(e, first, "check")
+            continue
+        if not fix and e["id"] in held:  # THE BACKLOG BATCH checks it with others
+            if not _behind_said.get((e["id"], "backlog")):
+                _behind_said[(e["id"], "backlog")] = True
+                did.append(f"{e['id']}: its check waits for the next backlog batch")
             continue
         slot = check_tree_slot(repo, d, fix=fix)
         if not slot:

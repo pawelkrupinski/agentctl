@@ -617,7 +617,8 @@ def queue_change(d, fields, entry_id=None):
 
 
 SUBMIT_FIELDS = ("worktree", "branch", "head", "commits", "fixes", "keep_worktree", "claude_pid", "session", "base", "host",
-                 "lander", "commit_keys")  # lander.py: who landed it, and its commits' keys
+                 "lander", "commit_keys", "no_batch")  # lander.py: who landed it, and its commits' keys; no_batch: land
+# --no-batch (never in a backlog batch)
 
 
 def submit_change(body, repo=None):

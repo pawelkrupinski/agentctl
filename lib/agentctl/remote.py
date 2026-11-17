@@ -523,14 +523,20 @@ def _await_entry(repo, eid, own):
         time.sleep(next(delays))
 
 
-def assemble(repo, d, wt, entries, base):
-    """The batch's tip in check tree wt = base + each entry's commits, in order; a conflicting entry is rejected alone,
+def assemble(repo, d, wt, entries, base, alone=False):
+    """The batch's tip in check tree wt = base + each entry's commits, in order; a conflicting entry is rejected alone
+    (alone: a backlog batch's queued change, left out and checked alone -- its own check says whether it applies),
     one already on main LANDED, a duplicate superseded. Returns the kept entries (each with its tip in the batch)."""
     git(wt, "reset", "--hard", "-q", base)
     git(wt, "checkout", "-q", "--force", "--detach", base)
     kept = []
     for e in entries:
         how, x = apply_entry(d, wt, e, base)
+        if how == "conflict" and alone:
+            e["batch_alone"] = "conflict"
+            save_entry(d, e)
+            wlog(d, f"{e['id']}: does not apply in the backlog batch (conflicts in: {', '.join(x)}): checked alone")
+            continue
         if how == "conflict":
             queue_verdict(d, e, "rejected", f"NOT LANDED: main moved while it waited and the change no longer applies "
                                             f"(conflicts in: {', '.join(x)}): rebase onto {remote()}/main and land again")
@@ -574,15 +580,23 @@ def batch_mode(hook):
         return "--range"
 
 
-def batch_check(repo, d, tree, base, tip, cls="check"):
-    """The hook's dry run over base..tip in `tree` (the basic checks plus every touched area's), on a fresh sbt server,
-    under the stall abort. (ok, output, stalled): a stall -- land's 20 min, or the hook's exit 75 / `STALLED:` -- is
-    retried once on a fresh server; stalled twice, `stalled` is True."""
+BATCH_FULL_MODE = "--range"  # a backlog batch's check: the full landing check a change gets (check/batch-<tip> on CI)
+
+
+def batch_check(repo, d, tree, base, tip, cls="check", depth="fast", runs=None):
+    """The hook's dry run over base..tip in `tree` (depth fast: batch_mode's; full, a backlog batch: the full landing
+    check, BATCH_FULL_MODE), on a fresh sbt server, under the stall abort. (ok, output, stalled): a stall -- land's 20
+    min, or the hook's exit 75 / `STALLED:` -- is retried once on a fresh server; stalled twice, `stalled` is True.
+    runs: {tip: remote run id}, filled with this check's run (the push hands it to the hook)."""
     hook = precheck_hook(tree) or precheck_hook(repo)
     if not hook:
         return True, "", False
+    mode = BATCH_FULL_MODE if depth == "full" else batch_mode(hook)
     if host_role() == "server" and remote_checks_supported(tree):  # ci-runner: the CI check tier (owner decision 1)
-        ok, out = remote_check(repo, {"id": f"batch-{tip[:10]}", "head": tip}, base, tip, batch_mode(hook))
+        e = {"id": f"batch-{tip[:10]}", "head": tip}
+        ok, out = remote_check(repo, e, base, tip, mode)
+        if runs is not None and e.get("remote_run"):
+            runs[tip] = e["remote_run"]
         return (ok, out, False) if ok is not None else (False, out, True)
     out = ""
     for attempt in (1, 2):
@@ -590,7 +604,7 @@ def batch_check(repo, d, tree, base, tip, cls="check"):
         sbt_stop(tree)
         wlog(d, f"checking {base[:10]}..{tip[:10]} (attempt {attempt}, fresh sbt server)")
         with check_slot(repo, f"waiting batch {tip[:10]}", cls) as slot:
-            rc, out = run_watched([hook, batch_mode(hook), f"{base}..{tip}"], tree, slot.env(tool_env()),
+            rc, out = run_watched([hook, mode, f"{base}..{tip}"], tree, slot.env(tool_env()),
                                   os.path.join(d, f"check-{tip[:10]}"), f"batch-check-{attempt}", sampler=slot.sample)
             slot.done(rc, out)
         sbt_stop(tree)
@@ -795,17 +809,23 @@ def watch_eval(repo, sha, pushed_at, o_r, flows, now_):
     return (v[0], v[1] + f" ({sha[:10]})", v[2]) if v and v[0] == "ok" else v
 
 
-def bisect(repo, d, batch, base, bwt):
+def bisect(repo, d, batch, base, bwt, depth="fast", runs=None, failed_out=None):
     """The batch failed: the first entry whose prefix fails (binary search over the prefixes' tips, in the batch's tree
-    bwt). (index, output) of the culprit; (None, output) when the whole batch passes on its own again (flaky or infra)."""
+    bwt). (index, output) of the culprit; (None, output) when the whole batch passes on its own again (flaky or infra).
+    A full-depth batch (failed_out: its check's output) is not checked whole again first: each full check is a landing
+    check's 30-40 min, and the culprit's confirmation below still clears a flaky failure."""
     lo, hi, out_hi = 0, len(batch) - 1, ""
-    ok, out, stalled = batch_check(repo, d, bwt, base, batch[hi]["tip"])
-    if ok or stalled:
-        return None, out
-    out_hi = out
+    check = lambda tip: batch_check(repo, d, bwt, base, tip, depth=depth, runs=runs)
+    if depth == "full" and failed_out is not None:
+        out_hi = failed_out
+    else:
+        ok, out, stalled = check(batch[hi]["tip"])
+        if ok or stalled:
+            return None, out
+        out_hi = out
     while lo < hi:
         mid = (lo + hi) // 2
-        ok, out, stalled = batch_check(repo, d, bwt, base, batch[mid]["tip"])
+        ok, out, stalled = check(batch[mid]["tip"])
         if stalled:
             return None, out
         if ok:
@@ -813,7 +833,7 @@ def bisect(repo, d, batch, base, bwt):
         else:
             hi, out_hi = mid, out
     # one flaky failure rejects nobody (audit #10): the culprit's prefix is checked once more before it is rejected
-    ok, out, stalled = batch_check(repo, d, bwt, base, batch[lo]["tip"])
+    ok, out, stalled = check(batch[lo]["tip"])
     if ok or stalled:
         wlog(d, f"bisect: the prefix through {batch[lo]['id']} passed when checked again: flaky, nobody rejected")
         return None, out

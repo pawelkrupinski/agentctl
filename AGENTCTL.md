@@ -1122,7 +1122,7 @@ The owner: "agents never wait on a land". In movies (a repo whose hook can check
 The reconciler then takes it, a step per tick:
 
 - **queued → checking.** The tick starts an executor, `agentctl waiting check <id>` (Fixes-Red changes first), holding
-  `check/<id>` and a check slot (`$AGENTCTL_CHECK_TREES`, 3): a CHECK TREE `<clone>-wt-check-<n>`, kept between checks so
+  `check/<id>` and a check slot (`$AGENTCTL_CHECK_TREES`, 4, QUEUE_POOL): a CHECK TREE `<clone>-wt-check-<n>`, kept between checks so
   its build stays warm. It rebuilds the change on <remote>/main there (each commit picked; one already on main is
   dropped; nothing left: `LANDED <head> (already on main via <commit>)`), then runs the hook's dry run -- `--range`, or
   `--checks-only` when main is red and the change must wait -- as a check of the governor (`gov`), under the
@@ -1176,9 +1176,31 @@ The reconciler then takes it, a step per tick:
   It pushes from its own check tree when that tree's slot is free, else from the PUSH TREE `<clone>-wt-check-push`
   (its own lease, no checker takes it): a checker holds its slot through its remote run's whole wait, and pushes that
   waited for it sat `busy` 30 min past their deadline (2026-11-06).
+- **THE BACKLOG BATCH (the owner, 2026-11-17: "batch whenever there's a backlog, not only on red").** At green, with
+  no batch open, when 2 or more queued changes that no checker has taken may share a check (`$AGENTCTL_BACKLOG_BATCH_MIN`),
+  the change tick gives them no check tree of their own (`its check waits for the next backlog batch`) and the batch
+  tick makes them ONE batch item with depth `full`, created only once a check tree is free for it. Never in one: an
+  IDENTITY change (the hook's `--plan` selects its `identity` area -- identity/**, worker identity code, title rules,
+  identity-judgements.tsv, the drift harness -- or a G5 identity-model commit; no plan to ask: alone too, kept on the
+  entry per head), a change landed with `land --no-batch`, a red fix, a combined-tree verification round, one in an
+  infra backoff or holding its own unread remote run. At most 4 members (`$AGENTCTL_BACKLOG_BATCH_MAX`), queue order,
+  Fixes-Red first; a member that does not apply is left out (`batch_alone`) and checked alone; fewer than 2 kept: no
+  batch. Its tip is checked ONCE with the FULL landing check -- `pre-push --range`, on ci-runner a `check/batch-<tip>`
+  precommit-check round with the area tests and heavy rows the members select, NOT `--fast-only` (no member had a check
+  of its own) -- in one check tree, the members `checking` meanwhile. Pass: one push carrying that run
+  (`PREPUSH_REMOTE_RUN`), every member `checked` -> `pushing` -> LANDED with its own watch and its own landing record
+  (`batch_id`, `batch` = the size). Fail: bisected by prefix like the red batch, but not checked whole again first (its
+  confirmation still clears a flaky failure), so at most 3 extra rounds; the culprit is rejected only when its failure
+  is its own (the differential judgement; a base red, a time cap or an infra failure sends it to a check of its own),
+  the passing prefix is pushed at once, the rest queued again for the next batch. While it is open, it goes first like
+  the red batch (no solo push under it; a red fix excepted, which keeps its red-fix tree and lands alone); a change
+  queued meanwhile joins the next one. Identity changes are checked alone beside it. The same machine as the red batch:
+  batch.py `backlog_candidates`, `backlog_reconcile` (members follow their batch), the `depth` of `batch_check` /
+  `bisect` (remote.py); tests: `tests/test_backlog_batch.py`.
 - **checked → waiting** while main is red and the change must wait (a production path, no `Fixes-Red:` naming any red
   run of the current episode): `WAITING <sha> (entry <id>, n in batch)`. Tools-only changes and Fixes-Red changes land while red.
-- **The batch.** When main turns green, the waiting changes are ONE `batch` item. The tick assembles its tip in a
+- **The batch.** (A backlog's batch is the same item with depth `full`: above.) When main turns green, the waiting
+  changes are ONE `batch` item. The tick assembles its tip in a
   throwaway check tree (<remote>/main plus the changes in queue order, Fixes-Red first; a change that no longer applies
   is rejected alone), and an executor, `waiting check-batch <id>`, checks it ONCE (`pre-push --fast-only`) on a fresh sbt server. What
   that pass runs: the `sbt` check (every test config compiled, the lint specs, the `fast` set), the touched files'
@@ -1928,6 +1950,8 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `attach_poll` | `AGENTCTL_ATTACH_POLL` | `15` | - |
 | `author_active_min` | `AGENTCTL_AUTHOR_ACTIVE_MIN` | `15` | live = a pid alive and activity within this |
 | `awake_pid` | `AGENTCTL_AWAKE_PID` | - | - |
+| `backlog_batch_max` | `AGENTCTL_BACKLOG_BATCH_MAX` | `4` | a backlog batch's members at most: its bisect is 2 prefix checks + 1 confirmation |
+| `backlog_batch_min` | `AGENTCTL_BACKLOG_BATCH_MIN` | `2` | queued changes that may share a check and make a backlog batch |
 | `baseline` | `AGENTCTL_BASELINE` | `1` | - |
 | `batch_retry_max` | `AGENTCTL_BATCH_RETRY_MAX` | `3` | - |
 | `bg_idle_grace` | `AGENTCTL_BG_IDLE_GRACE` | `60` | s a waiting session with no pending task of its own and no verdict stays quiet: its turn ended |
@@ -1943,7 +1967,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `caffeinate` | `AGENTCTL_CAFFEINATE` | `/usr/bin/caffeinate` | - |
 | `checks_dir` | `AGENTCTL_CHECKS_DIR` | - | - |
 | `check_lease_ttl` | `AGENTCTL_CHECK_LEASE_TTL` | `600` | - |
-| `check_trees` | `AGENTCTL_CHECK_TREES` | `4` | check trees, so at most this many queued changes are checked at once . |
+| `check_trees` | `AGENTCTL_CHECK_TREES` | `4` | check trees, so at most this many queued changes are checked at once |
 | `claude` | `AGENTCTL_CLAUDE` | - | set: that one only (the tests' fake) |
 | `claude_jobs` | `AGENTCTL_CLAUDE_JOBS` | - | - |
 | `claude_projects` | `AGENTCTL_CLAUDE_PROJECTS` | - | - |

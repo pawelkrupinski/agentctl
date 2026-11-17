@@ -84,6 +84,8 @@ def main(argv=None):
     lp.add_argument("--repo", required=True)
     lp.add_argument("--base", required=True)
     lp.add_argument("--head", required=True)
+    ld.add_argument("--no-batch", action="store_true",
+                    help="movies: check this change alone, never in a backlog batch with other queued changes")
     ld.add_argument("--keep-worktree", action="store_true",
                     help="after WATCH OK, keep the worktree land ran from (default: closed when proven merged and clean)")
     ev = sub.add_parser("env", help="print sdkman sbt/java export lines (--print) or check the agent environment (--check)",
