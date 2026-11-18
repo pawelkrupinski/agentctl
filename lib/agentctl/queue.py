@@ -1741,6 +1741,21 @@ def _tick_changes_pass(repo, d, st, t, reds, phase, mine, todo, held, pheld, bat
                           event={"text": f"{e['id']}: queued for {fmt_age(t - it['entered_at'])}, waiting on "
                                          f"{e.get('waiting_on') or 'a check slot' if not e.get('retry_after', 0) > t else 'its retry'}",
                                  "audience": {"worktree": e.get("worktree")}})
+        if state == "queued" and not alive:
+            gone = main_conflict(repo, e)
+            if gone:  # it no longer applies on main itself: said now, never after a wait for a tree or an older change
+                queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {remote()}/main "
+                              f"{gone[0][:10]} (main moved since QUEUED; it conflicts in {', '.join(gone[1][:3])}): "
+                              f"rebase onto {remote()}/main and land again")
+                did.append(f"{e['id']}: rejected (no longer applies on main)")
+                continue
+            hold = overlap_hold(repo, d, e, todo, reds, t)
+            if hold and fix:  # a red fix never waits: its author is told of a conflict, and it goes on
+                did += hold_for_overlap(st, d, e, *hold, waits=False)
+                hold = None
+            if hold:  # OVERLAPPING CHANGES ARE CHECKED AS ONE (below)
+                did += hold_for_overlap(st, d, e, *hold)
+                continue
         if alive or e.get("retry_after", 0) > t:
             continue
         first = None if fix else batch_goes_first(st, d, ("assembling", "pushing"))
@@ -1769,6 +1784,115 @@ def _tick_changes_pass(repo, d, st, t, reds, phase, mine, todo, held, pheld, bat
         slot[1].release()  # the executor takes it again itself
         spawn_executor(repo, d, e["id"])
         did.append(f"{e['id']}: executor started")
+    return did
+
+
+# OVERLAPPING CHANGES ARE CHECKED AS ONE (the coordinator, 2026-11-18: B1 against the CI-workflows change, the scraper
+# catalog against the scrapers refactor, the cycle-breaking change against both -- each a check, then `NOT LANDED: no
+# longer applies on origin/main ... main moved during its checks`, a rebase and a full recheck). A queued change that
+# shares a FILE with a change queued before it and still in flight (queued, checking, checked, pushing, or waiting for
+# a green gate):
+# - both queued, both batchable, and they assemble together (git merge-tree of their heads is clean): nothing held --
+#   THE BACKLOG BATCH checks them as one tree;
+# - else its check waits for the older one: once that lands, it is checked ONCE, on top of it (no check thrown away, no
+#   full recheck); once that is rejected or cancelled, it goes on as before;
+# - and when the two cannot be assembled together (a textual conflict), its author is told AT ONCE, at its first tick
+#   in the queue: `CONFLICTS <id>: ...` to the inbox, the files named -- rebase onto the older change's branch, or wait
+#   for it to land and rebase onto main. Its check waits meanwhile (one is never spent on a tree that cannot land).
+# And a queued change that no longer applies on main itself (main moved since its base) is NOT LANDED at its next
+# tick, never after a wait for a check tree (main_conflict).
+# A red fix never waits (told of a conflict all the same). queue.py overlap_hold, pair_conflict; tests: tests/test_queue_sim.py CollisionTest (the three
+# collisions of 2026-11-17 replayed), tests/test_backlog_batch.py OverlapTest.
+OVERLAP_OLDER = ("queued", "checking", "checked", "pushing", "waiting")
+_overlap_known = process_cache({})  # (older id, head, younger id, head) -> (shared files, conflicting files or None)
+
+
+def pair_conflict(repo, older, younger):
+    """The files changes `older` and `younger` conflict in when assembled together (git merge-tree of their heads:
+    exit 1 lists them), or None: they merge cleanly, or git cannot tell (an old git, a head missing)."""
+    r = git(repo, "merge-tree", "--write-tree", "--name-only", "--no-messages", older["head"], younger["head"],
+            check=False)
+    if r.returncode != 1:
+        return None
+    return [x for x in r.stdout.splitlines()[1:] if x.strip()] or ["(a file both change)"]
+
+
+def overlap_of(repo, older, younger):
+    """(the files both change, the files they conflict in or None), per pair of heads (cached in the process)."""
+    key = (older["id"], older.get("head"), younger["id"], younger.get("head"))
+    if key not in _overlap_known:
+        shared = sorted(set(change_paths_of(repo, older) or []) & set(change_paths_of(repo, younger) or []))
+        _overlap_known[key] = (shared, pair_conflict(repo, older, younger) if shared else None)
+    return _overlap_known[key]
+
+
+def main_conflict(repo, e):
+    """(main, the files) when queued change e no longer applies on the current main (main moved since its base and
+    they conflict: git merge-tree), else None; asked once per main and head."""
+    main = git(repo, "rev-parse", f"{remote()}/main", check=False).stdout.strip()
+    if not main or main == e.get("base") or not e.get("head"):
+        return None
+    key = ("main", main, e["id"], e.get("head"))
+    if key not in _overlap_known:
+        _overlap_known[key] = pair_conflict(repo, {"id": "main", "head": main}, e)
+    files = _overlap_known[key]
+    return (main, files) if files else None
+
+
+def overlap_hold(repo, d, e, entries, reds, t):
+    """(older entry, shared files, conflicting files or None) queued change e waits for (OVERLAPPING CHANGES ARE
+    CHECKED AS ONE), or None."""
+    if e.get("backlog_batch"):
+        return None
+    together, first = None, None
+    ids = {x["id"] for x in entries}
+    entries = list(entries) + [w for w in waiting_entries(d) if w["id"] not in ids]  # and those waiting for green
+    for o in sorted(entries, key=lambda x: x["seq"]):
+        if o["seq"] >= e["seq"]:
+            break
+        if o["id"] == e["id"] or o.get("status") not in OVERLAP_OLDER \
+                or same_change_source(o, e["worktree"], e.get("branch") or ""):  # its own older version: superseded
+            continue
+        shared, conflict = overlap_of(repo, o, e)
+        if not shared:
+            continue
+        if conflict is None and o.get("status") == "queued" and not o.get("backlog_batch"):
+            if together is None:
+                together = backlog_batchable(repo, d, e, t)
+            if together and backlog_batchable(repo, d, o, t):
+                continue  # the next backlog batch checks them as one
+        if conflict:  # the one it cannot be assembled with is the one its author hears of
+            return o, shared, conflict
+        first = first or (o, shared, conflict)
+    return first
+
+
+def hold_for_overlap(st, d, e, o, shared, conflict, waits=True):
+    """The change tick's lines for a change held behind an older one it overlaps (waits; a red fix's: not held); its
+    author told once of a conflict."""
+    did = []
+    if conflict and e.get("conflict_told") != o["id"]:
+        it = st.item("change", e["id"])
+        text = (f"CONFLICTS {e['id']}: it cannot be assembled with {o['id']} ({o.get('worktree')}), queued before it "
+                f"(both change {', '.join(conflict[:3])})"
+                + (f": its check waits for {o['id']}" if waits else ": a red fix, it is checked now all the same")
+                + f"; if {o['id']} lands first, this change no "
+                f"longer applies -- rebase onto it (its branch, or {remote()}/main once it landed) and land again, or "
+                "`agentctl land cancel` this one")
+        if it and not machine_state("change", it["state"]).terminal:
+            try:
+                st.transition("change", e["id"], it["state"], it["version"],
+                              event={"text": text, "audience": {"worktree": e.get("worktree")}, "severity": "info"})
+            except StaleVersion:
+                return did
+        e["conflict_told"] = o["id"]
+        save_entry(d, e)
+        wlog(d, text)
+        did.append(text)
+    if waits and _behind_said.get((e["id"], "overlap")) != o["id"]:
+        _behind_said[(e["id"], "overlap")] = o["id"]
+        did.append(f"{e['id']}: its check waits for {o['id']} ({o.get('status')}): both change {shared[0]}"
+                   + (f" (+{len(shared) - 1} more)" if len(shared) > 1 else ""))
     return did
 
 

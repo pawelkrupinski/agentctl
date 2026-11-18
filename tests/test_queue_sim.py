@@ -11,7 +11,10 @@ after every tick:
   5. the oldest change lands within a bound when nothing fails (the calm and load profiles);
   6. no change lost (entries and items agree; a LANDED change's patches are on main; every change decided once the
      gate is green and nothing arrives);
-  7. the stats: exactly one agentctl.landing record per decided change.
+  7. the stats: exactly one agentctl.landing record per decided change;
+  8. a change that no longer applies because of a change open when it was queued was told at queue time (CONFLICTS,
+     or NOT LANDED at its first tick) and never checked meanwhile;
+  9. no full recheck for a file overlap with a change that was open when it was queued (checked as one instead).
 
 200 random seeds run in the suite (8 tests of 25, in parallel); $AGENTCTL_TEST_SIM_SEEDS runs more. The fixed seeds
 replay real days (victoria-logs-ci `record:agentctl.landing`, tests/fixtures/landing-replay-7d.json) and the bugs the
@@ -59,6 +62,24 @@ class ProfileSeedsTest(unittest.TestCase):
         self.assertGreater(sum(1 for s in sims for t in s.pushes if len(t[2]) > 2), 0, "batches pushed")
 
 
+# THE CHAOS PROFILE: reds, breaking changes, conflicts, infra failures and outside pushes several times as often, many
+# changes sharing files. Its fixed seeds (one check tree): 121, a member superseded while its batch checked was pushed
+# with it (A DECIDED MEMBER IS NEVER PUSHED, batch.py); 36 and 52, a change that no longer applied on main waited for a
+# tree before it was told (main_conflict, queue.py).
+CHAOS = {"red": 0.08, "bad": 0.3, "conflict": 0.3, "infra": 0.08, "outside": 0.1, "shared_path": 0.4}
+
+
+class ChaosSeedsTest(unittest.TestCase):
+    def test_the_fixed_chaos_seeds(self):
+        sims = [queue_sim.Sim(seed, trees=1, profile=CHAOS, n_changes=14).run() for seed in (36, 52, 121)]
+        self.assertEqual(failures(sims), [])
+
+    def test_chaos_seeds(self):
+        sims = [queue_sim.Sim(seed, trees=trees, profile=CHAOS, n_changes=14).run() for seed in range(10)
+                for trees in (1, 4)]
+        self.assertEqual(failures(sims), [])
+
+
 class ReplayTest(unittest.TestCase):
     """The real arrivals of each day of 2026-11-11..18 (353 landings), as fixed seeds."""
 
@@ -69,34 +90,59 @@ for _i, _day in enumerate(queue_sim.replay_days()):
                 failures([queue_sim.Sim(1000 + i, script=queue_sim.replay_script(day)).run()]), []))
 
 
+class CollisionTest(unittest.TestCase):
+    """OVERLAPPING CHANGES (the coordinator, 2026-11-18): two queued changes sharing a FILE are checked as one -- in
+    one batch, or the younger after the older, on top of it -- never the younger alone and then again in full; two that
+    cannot be assembled together: the younger's author is told at queue time, and it is not checked meanwhile."""
+
+    def test_the_three_collisions_of_2026_11_17_cost_no_check_and_no_full_recheck(self):
+        sim = queue_sim.Sim(17, calm=True, script=list(queue_sim.COLLISIONS_2026_11_17))
+        sim.run()
+        self.assertEqual(failures([sim]), [])
+        st = {c.label: c for c in sim.changes}
+        self.assertEqual(sorted(st), ["b1", "break-cycles", "catalog", "ci-workflows", "scrapers"])
+        for label in ("scrapers", "ci-workflows", "catalog"):
+            self.assertTrue(set(st[label].patches) <= sim.patches_of(sim.main), f"{label} landed")
+        for label in ("b1", "break-cycles"):
+            self.assertFalse(set(st[label].patches) & sim.patches_of(sim.main), f"{label} conflicts: not landed")
+            self.assertEqual(sim.checks_of.get(st[label].eid, 0), 0, f"{label}: no check was spent on it")
+
+
 # THE SIMULATOR CATCHES A REVERTED FIX: agentctl copied, one fix undone, the profile run on the copy must fail an
 # invariant. A mutation whose anchor is gone fails here, naming it: update it with the code.
 MUTATIONS = {
     "ee7b744 (the batch keeps its age-order place)": (
         'if not fix and batch_seq is not None and batch_seq < e["seq"] and not check_tree_slot_free(repo, d):',
-        "if False:  # MUTATION"),
+        "if False:  # MUTATION", "load"),
     "pushes first, then the holds": (
         '    for phase in ("push", "check"):\n'
         '        held = backlog_held(repo, d, reds, st, t)\n'
         '        pheld = push_held(repo, d, reds, st, t)\n',
         '    held = backlog_held(repo, d, reds, st, t)\n'
         '    pheld = push_held(repo, d, reds, st, t)\n'
-        '    for phase in ("push", "check"):\n'),
+        '    for phase in ("push", "check"):\n', "load"),
+    "overlapping changes are checked as one": (
+        '    if e.get("backlog_batch"):\n        return None\n    together, first = None, None',
+        '    return None  # MUTATION\n    together, first = None, None', "collisions"),
 }
 RUNNER = """import json, sys
 sys.path.insert(0, sys.argv[1])
 import queue_sim, test_queue_sim as T
-bad = [v for seed in range(3) for v in queue_sim.Sim(seed, calm=True, trees=1, profile=T.LOAD,
-                                                     n_changes=T.LOAD["n"]).run().violations[:1]]
+if sys.argv[2] == "collisions":
+    bad = queue_sim.Sim(17, calm=True, script=list(queue_sim.COLLISIONS_2026_11_17)).run().violations[:1]
+else:
+    bad = [v for seed in range(3) for v in queue_sim.Sim(seed, calm=True, trees=1, profile=T.LOAD,
+                                                         n_changes=T.LOAD["n"]).run().violations[:1]]
 print(json.dumps(bad))
 """
 
 
 class MutationTest(unittest.TestCase):
-    def test_each_reverted_fix_fails_an_invariant(self):
+    def run_mutation(self, name):
         src = os.path.dirname(HERE)
-        for name, (anchor, mutant) in MUTATIONS.items():
-            with self.subTest(name), tempfile.TemporaryDirectory() as tmp:
+        anchor, mutant, scenario = MUTATIONS[name]
+        if True:
+            with tempfile.TemporaryDirectory() as tmp:
                 for x in ("agentctl", "lib", "tests"):
                     s = os.path.join(src, x)
                     (shutil.copytree if os.path.isdir(s) else shutil.copy)(
@@ -110,12 +156,15 @@ class MutationTest(unittest.TestCase):
                 runner = os.path.join(tmp, "run_mutant.py")
                 with open(runner, "w") as f:
                     f.write(RUNNER)
-                r = subprocess.run([sys.executable, runner, os.path.join(tmp, "tests")], capture_output=True,
+                r = subprocess.run([sys.executable, runner, os.path.join(tmp, "tests"), scenario], capture_output=True,
                                    text=True, timeout=50, env=dict(os.environ))
                 self.assertEqual(r.returncode, 0, r.stderr[-2000:])
                 self.assertNotEqual(r.stdout.strip().splitlines()[-1], "[]",
                                     f"mutation {name}: no invariant failed -- the simulator no longer catches it")
 
+
+for _i, _name in enumerate(MUTATIONS):
+    setattr(MutationTest, f"test_reverted_fix_{_i}_fails_an_invariant", lambda self, n=_name: self.run_mutation(n))
 
 if __name__ == "__main__":
     unittest.main()

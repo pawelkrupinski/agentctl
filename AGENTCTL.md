@@ -1221,6 +1221,20 @@ The reconciler then takes it, a step per tick:
   queued meanwhile joins the next one. Identity changes are checked alone beside it. The same machine as the red batch:
   batch.py `backlog_candidates`, `backlog_reconcile` (members follow their batch), the `depth` of `batch_check` /
   `bisect` (remote.py); tests: `tests/test_backlog_batch.py`.
+- **OVERLAPPING CHANGES ARE CHECKED AS ONE (2026-11-18: B1 against the CI-workflows change, the scraper catalog
+  against the scrapers refactor, the cycle-breaking change against both -- each checked alone, then `NOT LANDED: the
+  change no longer applies ... main moved during its checks`, a rebase and a full recheck).** A queued change sharing a
+  FILE with a change queued before it and still in flight (queued, checking, checked, pushing, waiting; never its own
+  older version): both queued, both batchable and assembling together (`git merge-tree` of their heads clean) -> no
+  hold, the backlog batch checks them as one tree; otherwise its check WAITS for the older one (`its check waits for
+  <id> (<state>): both change <file>`) and runs once on top of it when that lands (or as before when it is rejected).
+  When the two cannot be assembled together, its author is told at its first tick: `CONFLICTS <id>: it cannot be
+  assembled with <older> ... (both change <files>)` to the inbox, with what to do; a queued change that no longer
+  applies on main itself (main moved since its base: `git merge-tree`, once per main and head) is NOT LANDED at its
+  next tick, never after a wait for a check tree (`main_conflict`). A red fix never waits (it is told of a conflict all the same). queue.py `overlap_hold`,
+  `pair_conflict`, `hold_for_overlap`; tests: `tests/test_backlog_batch.py` OverlapTest, `tests/test_queue_sim.py`
+  CollisionTest (the three collisions of 2026-11-17 replayed: no check spent on a change that could not land, no full
+  recheck).
 - **THE PUSH BATCH (the owner, 2026-11-17: "combine them instead of landing them one by one", W1).** A checked change
   pushed alone: each on a main that moved since its full check paid a verify round of its own, and THE OLDEST
   VERIFICATION PUSHES FIRST held the younger ones meanwhile, so N checked changes landed serially (ref-scrapers
@@ -1238,7 +1252,9 @@ The reconciler then takes it, a step per tick:
   members' full checks passed; the hook judges the red gate), every member `checking` -> `checked` (`verified ... in
   push batch <id>`) -> `pushing` -> LANDED with its own watch and landing record (`batch_id`, `batch`; its round counts
   as a verify round). Fail: bisected by prefix as the backlog batch is, the culprit rejected only when its failure is
-  its own, the passing prefix pushed, the rest queued again for their verify round (the next push batch). More than
+  its own, the passing prefix pushed, the rest queued again for their verify round (the next push batch). A DECIDED MEMBER IS
+  NEVER PUSHED (queue simulator, 2026-11-18): a member superseded or cancelled while its batch checked left the batch's
+  members but not its assembled tip, and landed with the others; now the batch is assembled again without it. More than
   one identity-model commit in it: G5's drift check of its tip, and after a drift split one identity change per batch
   (`drift_serialize`). A change checked while a push batch verifies is no member of it: its push waits for the batch
   (`its push waits for batch <id>`) and it joins the next one. batch.py `push_candidates`, `push_batch_select`,
@@ -1319,9 +1335,13 @@ a non-red change (started and pushed when it may go, in the red-fix tree, no bat
 bisecting or held within 40 ticks; the oldest change lands within a bound when nothing fails (the calm and load
 profiles); no change lost (entries and items agree, a LANDED change is on main, every change decided once the gate
 is green and nothing arrives); exactly one stats `agentctl.landing` record per decided change; no executor for a
-decided change. `tests/test_queue_sim.py`: 200 random seeds in 8 parallel tests (`$AGENTCTL_TEST_SIM_SEEDS` for
+decided change; a change that no longer applies because of a change open when it was queued was told at queue time
+(CONFLICTS, or NOT LANDED at its first tick) and never checked meanwhile; no full recheck for a file overlap with a
+change open when it was queued; never a superseded, cancelled or rejected change's commit pushed. `tests/test_queue_sim.py`: 200 random seeds in 8 parallel tests (`$AGENTCTL_TEST_SIM_SEEDS` for
 more), the calm and load profiles, one replay per day of 2026-11-11..18 from victoria-logs-ci's `agentctl.landing`
-records (`tests/fixtures/landing-replay-7d.json`), and mutation tests: ee7b744 or PUSHES FIRST undone in a copy of
+records (`tests/fixtures/landing-replay-7d.json`), the three collisions of 2026-11-17, a chaos profile (reds,
+breaking changes, conflicts, infra failures and outside pushes far more often) with its fixed seeds, and mutation tests: ee7b744,
+PUSHES FIRST or OVERLAPPING CHANGES ARE CHECKED AS ONE undone in a copy of
 agentctl must fail an invariant (6d206ed undone fails "one open item per change" in 13 of 40 seeds). A failing seed
 replays alone: `queue_sim.Sim(<seed>).run().violations`; `$AGENTCTL_TEST_SIM_KEEP=<dir>` keeps its processor log.
 

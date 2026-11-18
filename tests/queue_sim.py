@@ -188,6 +188,8 @@ class Sim:
         self.tasks = []
         self.local = threading.local()
         self.done_at = {}  # change cid -> the tick its entry was decided
+        self.open_at_arrival = {}  # change cid -> the cids of the changes open (queued .. waiting) when it arrived
+        self.checks_of = {}  # entry id -> its own check rounds run (run_entry_checks)
         self.batch_seen = {}  # batch id -> ticks spent in assembling / checking / pushing
         self.stats = []
         self.next_cid = 0
@@ -376,6 +378,39 @@ class Sim:
         pid = self.commits.get(sha, (None, None))[1]
         return set(self.patches[pid].fixes) if pid else set()
 
+    def pair_conflict(self, repo, older, younger):
+        """The files the two queued changes conflict in when assembled together (older first), or None: the model's
+        mutual conflicts."""
+        a, b = older.get("head"), younger.get("head")
+        if a not in self.commits or b not in self.commits:
+            return None
+        common = max(self.anc(a) & self.anc(b), key=lambda c: len(self.anc(c)))  # git merge-tree: their merge base
+        mine, theirs = self.patches_of(b) - self.patches_of(common), self.patches_of(a) - self.patches_of(common)
+        if any(self.patches[p].conflicts & theirs for p in mine):
+            return sorted({x for p in mine for x in self.patches[p].paths} & {x for p in theirs for x in self.patches[p].paths}) \
+                or ["?"]
+        return None
+
+    def change_of_sha(self, sha):
+        pid = self.commits.get(sha, (None, None))[1]
+        return next((c for c in self.changes if pid in c.patches), None) if pid else None
+
+    def saw_recheck(self, base, moved, tip, why):
+        """INVARIANT 9: no FULL round for a file overlap with a change that was open when this one was queued (the two
+        are batched, or the younger waits for the older and is checked once on top of it)."""
+        if not why or not why.startswith("both touch") or moved != self.main:
+            return
+        me = self.change_of_sha(tip)
+        if not me or me.kind == "redfix":  # a red fix never waits for an older change
+            return
+        mine = {x for p in me.patches for x in self.patches[p].paths}
+        for c in self.chain(base, moved):
+            other = self.change_of_sha(c)
+            if other and other.cid in self.open_at_arrival.get(me.cid, ()) \
+                    and mine & {x for p in other.patches for x in self.patches[p].paths}:
+                self.violate(f"change {me.eid} rechecked in full ({why}) for {other.eid}, open when it was queued")
+                return
+
     def verdict(self, tip, where):
         """(ok, output) of a check of tip: a breaking patch fails it with its own named test; an infra failure is
         drawn now and then."""
@@ -395,6 +430,7 @@ class Sim:
             if not (other and other.startswith("check-") and A.red_fix(self.entry_by_id(other[6:]) or {}, reds)):
                 self.violate(f"red fix {e['id']} checked in {os.path.basename(tree)}, not the red-fix tree (the wrong "
                              f"lane; that tree held by {other or (holder or {}).get('holder')})")
+        self.checks_of[e["id"]] = self.checks_of.get(e["id"], 0) + 1
         self.local.task.block(self.rng.randint(1, 2) if mode == A.VERIFY_MODE else self.rng.randint(2, 4))
         ok, out = self.verdict(head, f"{mode} {head[:8]}")
         return ok, out, "in the simulation"
@@ -418,6 +454,11 @@ class Sim:
 
     def forge_push(self, sha, who):
         new = [self.commits[c][1] for c in self.chain(self.main, sha)]
+        for pid in new if who == "queue" else ():  # NEVER A DECIDED CHANGE PUSHED (superseded, cancelled, rejected)
+            ch = next((c for c in self.changes if pid in c.patches), None)
+            status = (self.entry(ch) or {}).get("status") if ch else None
+            if status in ("superseded", "cancelled", "rejected"):
+                self.violate(f"change {ch.eid}, {status}, pushed to main (patch {pid})")
         for pid in new:
             self.pushed_patch_count[pid] = self.pushed_patch_count.get(pid, 0) + 1
             if self.pushed_patch_count[pid] > 1:
@@ -454,11 +495,12 @@ class Sim:
              "run_entry_checks", "batch_check", "batch_drift_check", "run_watched", "start_watch", "mark_gate_dirty",
              "spawn_executor", "spawn_batch_executor", "precheck_hook", "verify_areas_supported", "remote_matches",
              "remote_checks_supported", "slug", "cancel_entry_remote", "stats_post", "check_runs_of", "gate_runs_pass",
-             "clone_shared", "spawn_waiting_processor", "offer_token", "tool_env", "stats_echo")
+             "clone_shared", "spawn_waiting_processor", "offer_token", "tool_env", "stats_echo", "pair_conflict",
+             "recheck_reason", "waiting_entries", "process_start", "code_version")
 
     def install(self):
         import contextlib
-        self.saved = {n: getattr(A, n) for n in self.FAKES + ("os",)}
+        self.saved = {n: getattr(A, n, None) for n in self.FAKES + ("os",)}
         self.saved_clock = (A.time.__dict__.get("time"), A.time.__dict__.get("sleep"))
         self.env_saved = dict(os.environ)
         self.tmp = tempfile.mkdtemp(prefix="agentctl-sim-")
@@ -516,6 +558,43 @@ class Sim:
         A.spawn_waiting_processor = lambda repo: None
         A.offer_token = lambda repo: None
         A.tool_env = lambda: dict(os.environ)
+        A.pair_conflict = self.pair_conflict
+        A.process_start = lambda pid: ""  # Owned's `ps` per record: no process of the simulation is one
+        A.code_version = lambda path=None: "sim"
+        parsed = {}
+
+        def waiting_entries(d, open_only=True):
+            """waiting.py's, each entry file parsed once per version on disk (its mtime and size): most of a seed's time
+            was these reads."""
+            out = []
+            with os.scandir(os.path.join(d, "entries")) as it:
+                for de in it:
+                    if not de.name.endswith(".json"):
+                        continue
+                    stv = de.stat()
+                    key = (stv.st_mtime_ns, stv.st_size, stv.st_ino)
+                    hit = parsed.get(de.path)
+                    if not hit or hit[0] != key:
+                        try:
+                            with open(de.path) as f:
+                                hit = parsed[de.path] = (key, f.read())
+                        except OSError:
+                            continue
+                    try:
+                        e = json.loads(hit[1])
+                    except ValueError:
+                        continue
+                    if not open_only or e.get("status") == "waiting":
+                        out.append(e)
+            return sorted(out, key=lambda e: e["seq"])
+        A.waiting_entries = waiting_entries
+        real_recheck = self.saved["recheck_reason"]
+
+        def recheck_reason(tree, base, moved, tip, change_paths, full_tip=None):
+            n, why = real_recheck(tree, base, moved, tip, change_paths, full_tip)
+            self.saw_recheck(base, moved, tip, why)
+            return n, why
+        A.recheck_reason = recheck_reason
         A.stats_echo = lambda recs, out=None: None
         self.d = A.waiting_state(self.repo)[0]
         self.saved_db = A.Store.db
@@ -531,7 +610,10 @@ class Sim:
                 t.go.set()
                 t.thread.join(10)
         for n, v in self.saved.items():
-            setattr(A, n, v)
+            if v is None:  # a seam the code under test does not have (a mutant copy from before it)
+                A.__dict__.pop(n, None)
+            else:
+                setattr(A, n, v)
         A.Store.db = self.saved_db
         for k in self.conns.values():
             k.c.close()
@@ -586,11 +668,31 @@ class Sim:
         bad = spec.get("bad")
         if bad is None:
             bad = not self.calm and self.rng.random() < self.profile.get("bad", 0.12)
+        if spec.get("paths"):
+            paths = list(spec["paths"])
         conflicts = set()
-        if spec.get("conflict") or (not self.calm and spec.get("conflict") is None
-                                    and self.rng.random() < self.profile.get("conflict", 0.1)):
-            # it conflicts with whatever lands next that touches its module (picked at its arrival: a later patch)
-            conflicts = {"*future*"}
+        # A TEXTUAL CONFLICT needs a file both change, and is mutual: whichever lands second no longer applies. A change
+        # marked to conflict conflicts with the youngest open change sharing a module (a file of it added to its own
+        # paths), else ("*future*") with the next change to arrive in one of its modules -- or with an outside push.
+        opened = [c for c in self.changes if (self.entry(c) or {}).get("status") not in A.ENTRY_FINAL
+                  and c.worktree != worktree]  # its own older version is no collision
+        self.open_at_arrival[cid] = {c.cid for c in opened}
+        mods_of = lambda ps: {x.split("/")[0] for x in ps}
+        if spec.get("conflicts_with"):
+            target = next(c for c in reversed(opened + self.changes) if c.label == spec["conflicts_with"])
+        elif spec.get("conflict") or (not self.calm and spec.get("conflict") is None
+                                      and self.rng.random() < self.profile.get("conflict", 0.1)):
+            target = next((c for c in reversed(opened) if mods_of(self.patches[c.patches[0]].paths) & mods_of(paths)), None)
+            conflicts = set() if target else {"*future*"}
+        else:
+            target = None
+        waiting_for_me = [] if target else \
+            [c for c in opened if "*future*" in self.patches[c.patches[0]].conflicts
+             and mods_of(self.patches[c.patches[0]].paths) & mods_of(paths)][:1]
+        for c in ([target] if target else waiting_for_me):
+            theirs = self.patches[c.patches[0]]
+            if theirs.paths[0] not in paths:
+                paths.append(theirs.paths[0])
         base = self.main
         pids, head = [], base
         for k in range(self.rng.choice((1, 1, 2))):
@@ -599,9 +701,15 @@ class Sim:
                                       bad=bad and k == 0, conflicts=conflicts)
             pids.append(pid)
             head = self.child(head, pid)
+        for c in ([target] if target else waiting_for_me):
+            for q in c.patches:
+                self.patches[q].conflicts = (self.patches[q].conflicts - {"*future*"}) | set(pids)
+            for q in pids:
+                self.patches[q].conflicts |= set(c.patches)
         ch = Change(cid, worktree, kind, pids, base, head, self.chain(base, head), self.tick,
                     no_batch=kind == "nobatch")
         ch.outcome = spec.get("outcome")
+        ch.label = spec.get("label") or spec.get("worktree")
         self.changes.append(ch)
         return ch
 
@@ -697,7 +805,7 @@ class Sim:
             base = self.changes_by_cid(p.cid).base
             for c in self.chain(base, self.main):
                 q = self.patches[self.commits[c][1]]
-                if q.cid != p.cid and mods & {x.split("/")[0] for x in q.paths}:
+                if q.cid < 0 and mods & {x.split("/")[0] for x in q.paths}:  # an outside push (a queued change: at arrival)
                     p.conflicts = {q.pid}
                     break
 
@@ -791,8 +899,11 @@ class Sim:
             if n > self.profile.get("batch_bound", 40):
                 self.violate(f"batch {bt['id']} {bt['state']} for {n} ticks without landing, bisecting or holding")
         for ch in self.changes:
-            if ch.cid not in self.done_at and (self.entry(ch) or {}).get("status") in A.ENTRY_FINAL:
+            e = self.entry(ch) or {}
+            if ch.cid not in self.done_at and e.get("status") in A.ENTRY_FINAL:
                 self.done_at[ch.cid] = self.tick
+                if e.get("status") == "rejected" and "no longer applies" in (e.get("why") or ""):
+                    self.saw_conflict_rejection(st, ch, e)
         # 5. THE OLDEST CHANGE LANDS WITHIN A BOUND WHEN NOTHING FAILS (a calm seed)
         if self.calm:
             bound = self.profile.get("land_bound", 60)
@@ -826,6 +937,26 @@ class Sim:
                 on = self.patches_of(self.main)
                 if not set(ch.patches) <= on:
                     self.violate(f"change {ch.eid} LANDED but {sorted(set(ch.patches) - on)} not on main: lost")
+
+    def saw_conflict_rejection(self, st, ch, e):
+        """INVARIANT 8: a change that no longer applies because of a change open when it was queued was told so at
+        queue time (a CONFLICTS event within a tick of its arrival) and never checked meanwhile."""
+        mine = set().union(*(self.patches[p].conflicts for p in ch.patches))
+        culprit = next((c for c in self.changes if c.cid in self.open_at_arrival.get(ch.cid, ())
+                        and set(c.patches) & mine and set(c.patches) <= self.patches_of(self.main)), None)
+        if not culprit or e.get("fixes"):  # a red fix never waits: told, and checked all the same
+            return
+        told = [ev for ev in st.item_events("change", ch.eid) if (ev.get("text") or "").startswith("CONFLICTS")]
+        when = min((ev["at"] for ev in told), default=None)
+        arrived_at = self.clock[0] - (self.tick - ch.arrived) * TICK
+        if self.tick <= ch.arrived + 1 and not self.checks_of.get(ch.eid):
+            return  # NOT LANDED at its first tick, no check spent: that is being told at queue time
+        if when is None or when > arrived_at + TICK:
+            self.violate(f"change {ch.eid} no longer applies after {culprit.eid} landed (open when it was queued), and "
+                         f"was not told at queue time")
+        elif self.checks_of.get(ch.eid):
+            self.violate(f"change {ch.eid} was checked {self.checks_of[ch.eid]} time(s) before it no longer applied "
+                         f"after {culprit.eid}, which it was told it conflicts with")
 
     def final_checks(self):
         st = A.Store()
@@ -875,6 +1006,27 @@ def replay_script(day):
                         "bad": c["outcome"] == "checks-failed", "conflict": c["outcome"] == "conflict",
                         "outcome": c["outcome"] if c["outcome"] in ("superseded", "cancelled", "precheck") else None}))
     return out
+
+
+# THE THREE COLLISIONS OF 2026-11-17 (victoria-logs-ci agentctl.landing, reason_class conflict): refactor/scraper-catalog
+# (18:04) and refactor/break-cycles (18:17) NOT LANDED at 19:17 when refactor/scrapers (17:50) landed; a CI-workflows
+# change NOT LANDED when another .github change landed first ("B1"). Each cost a check, a NOT LANDED, a rebase and a full
+# recheck. Here: the scrapers refactor (an identity change: checked alone) and a CI-workflows change in flight; the
+# catalog shares a file with the scrapers refactor and applies on top of it; B1 conflicts textually with the
+# CI-workflows change; the cycle-breaking change shares files with both and conflicts textually with the scrapers
+# refactor.
+COLLISIONS_2026_11_17 = [
+    (0, {"label": "scrapers", "worktree": "ref-scrapers", "kind": "identity",
+         "paths": ["scrapers/src/main/Catalog.scala", "common/src/main/Scrape.scala", "identity/src/main/Ids.scala"]}),
+    (1, {"label": "ci-workflows", "worktree": "ci-workflows",
+         "paths": [".github/workflows/main.yml", "scripts/ci/caches.sh"]}),
+    (1, {"label": "catalog", "worktree": "scraper-catalog",
+         "paths": ["scrapers/src/main/Catalog.scala", "docs/catalog.md"]}),
+    (2, {"label": "b1", "worktree": "b1", "paths": [".github/workflows/main.yml"], "conflicts_with": "ci-workflows"}),
+    (2, {"label": "break-cycles", "worktree": "break-cycles",
+         "paths": ["common/src/main/Scrape.scala", "web/src/main/Cycle.scala", ".github/workflows/main.yml"],
+         "conflicts_with": "scrapers"}),
+]
 
 
 def replay_days():

@@ -172,7 +172,7 @@ def backlog_candidates(repo, d, reds, t=None):
     if any((verifying(e, t) or (e.get("status") == "checked" and not float(e.get("retry_after") or 0) > t))
            and not e.get("backlog_batch") for e in entries):  # a checked change's push is due at the next change tick
         return []
-    out = [e for e in entries if backlog_batchable(repo, d, e, t)]
+    out = [e for e in entries if backlog_batchable(repo, d, e, t) and not overlap_hold(repo, d, e, entries, reds, t)]
     out = sorted(out, key=lambda e: (0 if e.get("fixes") else 1, e["seq"]))[
         :int(env_num("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX))]
     return out if len(out) >= backlog_min() else []
@@ -925,6 +925,14 @@ def _push_batch_item(repo, d, st, it, members, tip, base, i):
         if git(repo, "rev-parse", f"{remote()}/main").strip() != base:
             batch_move(st, it, "assembling", text=f"batch {it['id']}: main moved during its check: assembled again")
             return f"batch {it['id']}: main moved"
+        # A DECIDED MEMBER IS NEVER PUSHED (queue simulator, 2026-11-18, seed 121 of the chaos profile): a member
+        # superseded or cancelled while the batch checked dropped out of batch_members, but its commits were still in
+        # the assembled tip -- and landed with the others. The tip is assembled again without it.
+        gone = [m for m in it["data"].get("members") or [] if m not in {e["id"] for e in members}]
+        if gone:
+            batch_move(st, it, "assembling", text=f"batch {it['id']}: {', '.join(gone)} left it (decided) during its "
+                                                  "check: assembled again without")
+            return f"batch {it['id']}: {len(gone)} member(s) gone"
         lock_note(f"push of the batch {tip[:10]}")
         if not os.path.isdir(tree) or not git_ok(tree, "cat-file", "-e", f"{tip}^{{commit}}"):
             batch_move(st, it, "assembling", text=f"batch {it['id']}: its tree is gone: assembled again")

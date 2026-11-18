@@ -5,7 +5,7 @@ non-identity changes that no checker has taken are assembled into ONE batch and 
 record (the batch's id and size); fail, bisected by prefix, the culprit confirmed before it is rejected, the passing
 prefix landed at once, the rest queued again. Identity changes (the hook's `identity` area, G5's identity-model globs),
 a change landed with --no-batch and a red fix are checked alone, beside the batch."""
-import os, sys, unittest
+import json, os, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -347,6 +347,71 @@ class PushBatchTest(test_queue.QueueTest):
         self.assertEqual(len(self.pushed()), 2, "two pushes for four changes")
 
 
+class OverlapTest(BacklogBatchTest):
+    """OVERLAPPING CHANGES ARE CHECKED AS ONE (queue.py; the coordinator, 2026-11-18: B1 against the CI-workflows change,
+    the scraper catalog against the scrapers refactor, the cycle-breaking change against both -- each checked alone,
+    then NOT LANDED "no longer applies", a rebase and a full recheck)."""
+
+    def setUp(self):
+        super().setUp()
+        self.r.write("web/src/main/Ten.scala", "".join(f"line {i}\n" for i in range(1, 11)))
+        self.r.commit("a ten-line file")
+        self.r.push()
+
+    def edit(self, name, path, line, text, extra=None):
+        wt = self.r.worktree(f"wt-{name}", branch=name)
+        with open(os.path.join(wt, path)) as f:
+            lines = f.read().splitlines(True)
+        lines[line] = text + "\n"
+        self.r.write(path, "".join(lines), at=wt)
+        if extra:
+            self.r.write(extra, f"{name}\n", at=wt)
+        self.r.commit(f"{name}: {path}", at=wt)
+        return self.queued(wt)[0]
+
+    def test_a_younger_change_that_cannot_be_assembled_with_an_older_one_is_told_at_once_and_not_checked(self):
+        eo = self.edit("older", "web/src/main/Ten.scala", 4, "older's line 5", extra="identity/src/main/I.scala")
+        ey = self.edit("younger", "web/src/main/Ten.scala", 4, "younger's line 5")
+        did = A.tick_changes(self.r.path, self.d)
+        self.assertEqual(self.started, [eo], f"the older (an identity change) is checked alone, the younger waits: {did}")
+        told = [x for x in self.inbox() if x["kind"] != "QUEUED" and "CONFLICTS" in json.dumps(x)]
+        self.assertEqual(len(told), 1, "its author told at its first tick, before any check")
+        self.assertIn("web/src/main/Ten.scala", json.dumps(told[0]))
+        self.assertEqual(told[0]["cwd"], self.entry(ey)["worktree"])
+        A.tick_changes(self.r.path, self.d)
+        self.assertEqual(len([x for x in self.inbox() if "CONFLICTS" in json.dumps(x)]), 1, "told once")
+        self.assertNotIn(ey, self.started, "never checked while the older is in flight")
+
+    def test_a_younger_change_sharing_a_file_waits_and_is_checked_once_on_top_of_the_older(self):
+        eo = self.edit("older", "web/src/main/Ten.scala", 0, "older's line 1", extra="identity/src/main/I.scala")
+        ey = self.edit("younger", "web/src/main/Ten.scala", 9, "younger's line 10")
+        A.tick_changes(self.r.path, self.d)
+        self.assertEqual(self.started, [eo], "the younger waits for the older it shares a file with")
+        self.assertEqual([x for x in self.inbox() if "CONFLICTS" in json.dumps(x)], [], "no conflict to tell")
+        A.check_entry(self.r.path, eo)
+        A.tick_changes(self.r.path, self.d)  # the older pushed, then the younger's check starts on top of it
+        self.assertEqual(self.entry(eo)["status"], "landed")
+        self.assertEqual(self.started, [eo, ey])
+        A.check_entry(self.r.path, ey)
+        A.tick_changes(self.r.path, self.d)
+        e = self.entry(ey)
+        self.assertEqual(e["status"], "landed", "checked once, on top of the older one: no recheck")
+        self.assertFalse(e.get("rounds"), "no second round")
+        self.assertEqual(len(self.calls_of("--range")), 2, "one check each")
+
+    def test_two_queued_changes_sharing_a_file_that_assemble_go_in_one_backlog_batch(self):
+        ea = self.edit("a", "web/src/main/Ten.scala", 0, "a's line 1")
+        eb = self.edit("b", "web/src/main/Ten.scala", 9, "b's line 10")
+        A.tick_changes(self.r.path, self.d)
+        self.assertEqual(self.started, [], "both wait for the backlog batch")
+        self.drive()
+        self.assertEqual([self.entry(x)["status"] for x in (ea, eb)], ["landed", "landed"])
+        self.assertEqual(len(self.calls_of("--range")), 1, "checked as one tree")
+
+
+for _name in dir(BacklogBatchTest):  # its setUp only, not its tests
+    if _name.startswith("test_") and _name not in OverlapTest.__dict__:
+        setattr(OverlapTest, _name, None)
 for _name in dir(test_queue.QueueTest):  # its setUp only, not its tests
     for _cls in (BacklogBatchTest, PushBatchTest):
         if _name.startswith("test_") and _name not in _cls.__dict__:

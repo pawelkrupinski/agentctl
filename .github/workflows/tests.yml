@@ -16,7 +16,7 @@ concurrency:
 jobs:
   suite:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 13
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
@@ -25,4 +25,4 @@ jobs:
       - name: Suite (parallel, 60 s per test)
         run: |
           python3 --version
-          timeout -s KILL 420 python3 tests/run.py -j 4 --timeout 60 --suite-timeout 360 --durations 15
+          timeout -s KILL 600 python3 tests/run.py -j 4 --timeout 60 --suite-timeout 540 --durations 15
