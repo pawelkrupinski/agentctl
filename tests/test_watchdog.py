@@ -14,6 +14,7 @@ class FakeProcessor:
     def __init__(self, path, tok):
         import socket, threading
         self.tok, self.path = tok, path
+        self.handed = threading.Event()  # a hand-over is taken on the serving thread, after the sender has returned
         if os.path.exists(path):
             os.unlink(path)
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -33,6 +34,7 @@ class FakeProcessor:
                     conn.sendall(self.tok.encode())
                 elif got:
                     self.tok = got
+                    self.handed.set()
 
     def close(self):
         self.sock.close()
@@ -115,6 +117,9 @@ class WatchdogTest(unittest.TestCase):
         A.launchctl = kick
         self.run_wd()
         self.assertEqual(len(self.kicks), 1)
+        # hand_token returns once its bytes are sent; the new processor reads them on its own thread (python:3.14,
+        # full suite, 2026-11-18: read before that thread ran, '' != the token)
+        self.assertTrue(procs[-1].handed.wait(10), "no hand-over reached the new processor")
         self.assertEqual(procs[-1].tok, "tok-0123456789abcdef")
 
     def test_w5_counts_a_processors_silence_over_awake_time_only(self):
