@@ -7,7 +7,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
 
-KEYS = ("AGENTCTL_GOV_DIR", "AGENTCTL_GOV_FREE_PROBE", "AGENTCTL_GOV_PRESSURE_PROBE", "AGENTCTL_GOV_LOAD_PROBE",
+KEYS = ("AGENTCTL_GOV_CPU_FACTOR", "AGENTCTL_RUNNERS_PAGE_CACHE", "AGENTCTL_GOV_DIR", "AGENTCTL_GOV_FREE_PROBE", "AGENTCTL_GOV_PRESSURE_PROBE", "AGENTCTL_GOV_LOAD_PROBE",
         "AGENTCTL_GOV_POLL", "AGENTCTL_GOV_BUDGET_GB", "AGENTCTL_GOV_RESERVE_GB", "AGENTCTL_GOV_EVICT_SETTLE",
         "KINOWO_SBT_WARM_STATE", "AGENTCTL_CHECKS_DIR", "AGENTCTL_MAX_CHECKS")
 
@@ -225,6 +225,147 @@ class GovernorTest(unittest.TestCase):
             A.main(["gov", "status"])
         self.assertIn("1 admitted, 1.0/20 GB committed", out.getvalue())
         self.assertIn("evictable: idle1", out.getvalue())
+
+    # ---------------------------------------------------------------- cores (the owner, 2026-11-18)
+    def test_cores_are_charged_and_hold_work_past_the_machine_cores(self):
+        """8 JVMs on 40 of 77 GB drove 18 cores to a load of 100: memory alone over-admits CPU-bound work."""
+        cores = A.machine_cores()  # 12, the harness's machine
+        for _ in range(cores // 4):
+            self.assertIsNotNone(self.admit("agent", 1, job="testUnit"))
+        ok, why, on_mem = A.gov_fits("agent", 1, A.gov_tickets(), A.gov_machine(), cores=4)
+        self.assertEqual((ok, on_mem), (False, False))
+        self.assertIn(f"cores: {cores} charged", why)
+        self.assertIsNone(self.admit("agent", 1, job="compile"))
+        self.assertIsNone(self.admit("check", 1, kind="check"), "a check is charged its hook's cores too")
+        self.assertIsNotNone(self.admit("red", 1, job="testUnit"), "a red fix never waits on cores")
+
+    def test_the_load_counts_when_it_is_above_the_charged_cores(self):
+        """What holds no ticket (a browser, Xcode) is in the load; a burst not yet in the 1-min load is in the charge."""
+        self.assertIsNotNone(self.admit("agent", 1, job="testUnit"))
+        os.environ["AGENTCTL_GOV_LOAD_PROBE"] = "echo 10"
+        self.assertIsNone(self.admit("agent", 1, job="testUnit"), "max(4 charged, load 10) + 4 > 12")
+        os.environ["AGENTCTL_GOV_LOAD_PROBE"] = "echo 6"
+        self.assertIsNotNone(self.admit("agent", 1, job="testUnit"), "max(4, 6) + 4 <= 12")
+        os.environ["AGENTCTL_GOV_CPU_FACTOR"] = "2"
+        os.environ["AGENTCTL_GOV_LOAD_PROBE"] = "echo 1"
+        self.assertIsNotNone(self.admit("agent", 1, job="testUnit"), "the factor scales the cap: 8 + 4 <= 24")
+
+    def test_a_ticket_of_no_cores_never_waits_on_cores(self):
+        """A kept server's keeper holds its memory; each call through it takes a cores ticket of its own."""
+        for _ in range(3):
+            self.admit("agent", 1, job="testUnit")
+        self.assertIsNotNone(self.admit("agent", 1, job="keeper"))
+        self.assertIsNotNone(self.admit("agent", 1), "no job named (a jvm-gate.sh from before cores): memory only")
+        self.assertEqual(A.gov_charged(A.gov_tickets()), 12.0)
+
+    def test_with_nothing_charged_only_the_class_load_factor_holds(self):
+        """Outside load alone never starves the queue: the first job goes at what the class factor allows."""
+        os.environ["AGENTCTL_GOV_LOAD_PROBE"] = f"echo {int(A.machine_cores() * 1.2)}"
+        self.assertIsNotNone(self.admit("agent", 1, job="testUnit"))
+        self.assertIsNone(self.admit("agent", 1, job="testUnit"), "now charged: max(4, 14) + 4 > 12")
+
+    def usage(self, job, cores, load1=1.0, n=3, wall=100):
+        for _ in range(n):
+            A.gov_record_usage(job, wall, cores * wall, load1)
+
+    def test_a_jobs_cores_come_from_its_measured_uncontended_runs(self):
+        self.assertEqual(A.gov_job_cores("testUnit"), 4.0, "the default until measured")
+        self.usage("testUnit", 6.2, n=2)
+        self.assertEqual(A.gov_job_cores("testUnit"), 4.0, "two runs are not enough")
+        self.usage("testUnit", 1.0, load1=40, n=5)
+        self.assertEqual(A.gov_job_cores("testUnit"), 4.0, "a starved run (load over the cores) says nothing")
+        self.usage("testUnit", 6.2, n=1)
+        self.assertEqual(A.gov_job_cores("testUnit"), 6.0, "p75 of the uncontended runs, to the half core")
+        self.assertIsNone(A.gov_record_usage("testUnit", 5, 50), "a 5 s call is not recorded")
+        self.assertEqual(A.gov_job_cores("keeper"), 0.0)
+
+    def test_usage_is_recorded_from_the_command_line(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            A.main(["gov", "usage", "--job", "compile", "--wall", "100", "--cpu", "250", "--load1", "2"])
+        self.assertIn("compile: 2.5 cores", out.getvalue())
+        self.assertEqual([r["cores"] for r in A.gov_usage()], [2.5])
+
+    def test_the_admission_records_cores_what_it_waited_on_and_its_end(self):
+        for _ in range(3):
+            self.admit("agent", 1, job="testUnit")
+        import threading
+        threading.Timer(0.5, self.tickets[0].release).start()
+        t = self.admit("agent", 1, job="testUnit", wait=True)
+        self.assertIsNotNone(t)
+        rows = [json.loads(l) for l in open(os.path.join(A.gov_dir(), "admits.jsonl"))]
+        mine = [r for r in rows if r.get("id") == t.rec["id"]][0]
+        self.assertEqual((mine["cores"], mine["job"]), (4.0, "testUnit"))
+        if mine["waited"] >= 1:
+            self.assertIn("cores", mine["waited_on"], "the hold it waited on, not the None of the pass that fit")
+        self.assertIn({"end", "id"}, [set(r) for r in rows], "a released ticket's end is recorded")
+
+    def test_waited_on_names_the_hold_after_a_long_wait(self):
+        for _ in range(3):
+            self.admit("agent", 1, job="testUnit")
+        import threading
+        threading.Timer(1.3, self.tickets[0].release).start()
+        t = self.admit("agent", 1, job="testUnit", wait=True)
+        self.assertGreaterEqual(t.rec["waited"], 1)
+        self.assertIn("cores: 12 charged", t.rec["waited_on"])
+
+    def lane(self, waiting=()):
+        page = os.path.join(self.d, "runners.json")
+        A.write_json(page, {"ok": time.time(), "waiting_jobs": [{"label": json.dumps([l]), "repo": "o/r", "run": 1}
+                                                                for l in waiting], "running": [], "limits": {}})
+        os.environ["AGENTCTL_RUNNERS_PAGE_CACHE"] = page
+
+    def test_a_job_the_governor_would_hold_goes_to_a_free_ci_lane(self):
+        self.lane()
+        self.assertEqual(A.gov_route("testUnit")[0], "local", "admitted now: runs here")
+        for _ in range(3):
+            self.admit("agent", 1, job="testUnit")
+        where, why = A.gov_route("testUnit")
+        self.assertEqual(where, "ci")
+        self.assertIn("cores", why)
+        self.assertEqual(A.gov_route("testUnit", cls="red")[0], "local", "a red fix is never held")
+        self.lane(waiting=["movies-measure"])
+        where, why = A.gov_route("testUnit")
+        self.assertEqual(where, "local")
+        self.assertIn("1 job(s) already wait on movies-measure", why)
+        os.environ["AGENTCTL_RUNNERS_PAGE_CACHE"] = os.path.join(self.d, "missing.json")
+        self.assertEqual(A.gov_route("testUnit")[0], "local", "an unread lane is no free lane")
+
+    def test_a_waiter_ahead_routes_a_job_to_a_free_lane_too(self):
+        self.lane()
+        self.waiter("agent", time.time() - 10)
+        self.assertEqual(A.gov_route("testUnit")[0], "ci")
+        self.assertEqual(A.gov_route("testUnit", cls="check")[0], "local", "a check goes before a waiting agent")
+
+    def test_route_from_the_command_line_exits_0_for_ci(self):
+        self.lane()
+        for _ in range(3):
+            self.admit("agent", 1, job="testUnit")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = A.main(["gov", "route", "--job", "testUnit"])
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.getvalue().startswith("ci: "))
+
+    def test_the_replay_keeps_a_burst_under_the_cap(self):
+        """05:46Z on 2026-11-18: six waiters admitted within 7 s the moment the lagging load dipped."""
+        t0 = 1_000_000.0
+        rows = [{"class": "agent", "label": "identity-what-if", "kind": "job", "at": t0 + i, "waited": 600, "id": f"t{i}"}
+                for i in range(6)]
+        rows.append({"end": t0 + 300, "id": "t0"})
+        res = A.gov_replay(rows, 12, t0 + 10, hold=1800)
+        self.assertEqual(len(res["old"]), 6)
+        self.assertEqual(res["old_peak"], 24.0)
+        self.assertEqual(len(res["new"]), 3, "12 cores hold three 4-core what-ifs")
+        self.assertEqual(len(res["waiting"]), 2, "the first ended after 300 s (its end record), so a fourth went in")
+        self.assertLessEqual(res["new_peak"], 12.0)
+
+    def test_status_shows_the_charged_cores(self):
+        self.admit("agent", 1, job="testUnit")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            A.main(["gov", "status"])
+        self.assertIn("4/12 cores charged", out.getvalue())
 
 
 if __name__ == "__main__":

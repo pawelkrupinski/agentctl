@@ -23,6 +23,15 @@
 #   once, whatever the budget, free memory, pressure or load.
 # - CPU: checks wait while the 1-min load is over 4x the cores (a load of ~250 kept an sbt server from starting in 5 min
 #   and failed two checks, 2026-10-27), agent work over 1.5x, measurements over 1x; red never.
+# - CORES (the owner, 2026-11-18): memory alone over-admitted CPU-bound JVMs -- 8 admitted on 40 of 77 GB drove the
+#   18-core laptop to a load of 100 (15-min 82) at 05:45Z, every agent's tests 3-5x slower; the load factors only held
+#   new work past 2x the cores, and the 1-min load lags: 6 waiters went in within 7 s at 05:46Z the moment it dipped. So
+#   a ticket also carries the CORES its job is expected to use (GOV_JOB_CORES, or the job's measured p75 in
+#   <gov>/usage.jsonl once it has GOV_USAGE_MIN uncontended runs: gov_job_cores), and work is admitted only while
+#   max(the live tickets' cores, the 1-min load) + its own <= the cores x $AGENTCTL_GOV_CPU_FACTOR (1.0): the charged
+#   sum takes a burst before the load shows it, the load counts what holds no ticket. A ticket of no cores (a kept
+#   server's keeper: its memory, idle; each call through it takes a cores ticket of its own) never waits on cores; with
+#   nothing charged, only the class load factors above apply, so outside load cannot starve the queue. Red never waits.
 # - EVICTION: when the head waiter does not fit on memory, the governor stops the idle kept sbt server unused longest
 #   (sbt-warm's registry: no call running in it -- its busy lock taken exclusively for the stop, so none starts under it --
 #   unused for a minute, not serving, never the root checkout's), then looks again. Idle warm servers go first.
@@ -36,6 +45,14 @@ GOV_RESERVE_GB = 1.0
 GOV_FREE_NEED_GB = 2.5  # free memory a new JVM needs NOW (beyond the reserve); its heap grows into the budget's share later
 GOV_PRESSURE_DEFAULT = 75  # memory pressure (100 - free %) at which every class but red waits
 GOV_LOAD = {"check": 4.0, "agent": 1.5, "measure": 1.0}  # waits while load1 > factor x cores; red never waits on CPU
+GOV_CPU_FACTOR = 1.0    # charged cores (or the load) + a job's own may reach this x the cores ($AGENTCTL_GOV_CPU_FACTOR)
+# A job's expected cores, by its name (scripts/jvm-gate.sh passes --job: sbt-warm classifies its command); measured
+# history (usage.jsonl) replaces the number once a job has GOV_USAGE_MIN uncontended runs. `job`: a JVM of unknown work.
+GOV_JOB_CORES = {"testUnit": 4.0, "test": 4.0, "what-if": 4.0, "measure": 4.0, "check": 4.0, "compile": 3.0,
+                 "job": 3.0, "testOnly": 2.0, "slice": 2.0, "suite": 2.0, "serve": 1.0, "keeper": 0.0}
+GOV_USAGE_MIN = 3       # uncontended runs of a job before its measured cores replace the default
+GOV_USAGE_DAYS = 14
+GOV_USAGE_MIN_WALL = 20  # seconds: a shorter call says nothing about a job's cores
 GOV_EVICT_IDLE = 60     # a kept server unused this long (seconds) may be evicted
 GOV_POLL = 2.0
 GOV_REPORT = 600
@@ -168,6 +185,7 @@ def gov_tickets():
                 if time.time() - os.path.getmtime(p) > 30:  # never one being written
                     os.unlink(p)
                     os.unlink(lock)
+                    gov_log_end(os.path.basename(lock))
             except OSError:
                 pass
             continue
@@ -178,8 +196,76 @@ def gov_tickets():
     return sorted(out, key=lambda r: r.get("at", 0))
 
 
+def gov_log_end(ticket_id, at=None):
+    """A ticket's end, in admits.jsonl beside its admission (`gov replay` reads both): exact for a ticket released in
+    process, the first look after it for one a shell held (the kernel freed it)."""
+    with open(os.path.join(gov_dir(), "admits.jsonl"), "a") as af:
+        af.write(json.dumps({"end": round(at or time.time(), 1), "id": ticket_id}) + "\n")
+
+
 def gov_committed(tickets):
     return sum(float(t.get("mem") or 0) for t in tickets)
+
+
+def gov_charged(tickets):
+    """The cores the live tickets are charged (a ticket from before cores were charged: none)."""
+    return sum(float(t.get("cores") or 0) for t in tickets)
+
+
+def gov_usage(days=GOV_USAGE_DAYS, now=None):
+    """usage.jsonl's records of the last `days`: {at, job, wall, cpu, cores, load1, machine_cores}."""
+    cutoff = (now or time.time()) - days * 86400
+    out = []
+    try:
+        with open(os.path.join(gov_dir(), "usage.jsonl")) as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if r.get("at", 0) >= cutoff:
+                    out.append(r)
+    except OSError:
+        pass
+    return out
+
+
+def gov_measured_cores(job, usage=None):
+    """The job's p75 cores over its uncontended runs (the load at its end no more than the cores: a starved run uses
+    fewer cores than it wants), to the half core; None under GOV_USAGE_MIN such runs."""
+    runs = [float(r["cores"]) for r in (gov_usage() if usage is None else usage)
+            if r.get("job") == job and r.get("cores") is not None and float(r.get("wall") or 0) >= GOV_USAGE_MIN_WALL
+            and r.get("load1") is not None and float(r["load1"]) <= float(r.get("machine_cores") or machine_cores())]
+    if len(runs) < GOV_USAGE_MIN:
+        return None
+    return min(float(machine_cores()), max(0.5, round(2 * pct(runs, .75)) / 2))
+
+
+def gov_job_cores(job=None, cls="agent", kind="job"):
+    """The cores a ticket is charged: its job's measured cores, else its default; with no job named, a check's (agentctl's
+    own pre-commit check: the hook's sbt) or the suite's, else none (a caller from before cores were charged: memory
+    only, as it was)."""
+    if not job:
+        job = "check" if kind == "check" else "suite" if cls == "suite" else None
+        if not job:
+            return 0.0
+    if job == "keeper":
+        return 0.0
+    measured = gov_measured_cores(job)
+    return measured if measured is not None else GOV_JOB_CORES.get(job, GOV_JOB_CORES["job"])
+
+
+def gov_record_usage(job, wall, cpu, load1=None, label=""):
+    """One run's cores (CPU seconds over wall seconds) for the job's measured history; a run under GOV_USAGE_MIN_WALL
+    is not recorded."""
+    if wall < GOV_USAGE_MIN_WALL:
+        return None
+    rec = {"at": time.time(), "job": job, "label": label, "wall": round(wall, 1), "cpu": round(cpu, 1),
+           "cores": round(cpu / wall, 2), "load1": machine_load1() if load1 is None else load1,
+           "machine_cores": machine_cores()}
+    with open(os.path.join(gov_dir(), "usage.jsonl"), "a") as f:
+        f.write(json.dumps(rec) + "\n")
+    return rec
 
 
 def gov_ramp(tickets, now=None):
@@ -187,8 +273,9 @@ def gov_ramp(tickets, now=None):
     return sum(float(t.get("mem") or 0) for t in tickets if now - t.get("at", 0) < GOV_RAMP)
 
 
-def gov_fits(cls, mem, tickets, m, kind="job"):
-    """(True, None) when work of class cls expecting `mem` GB may start now; else (False, why, on_memory). Red: always."""
+def gov_fits(cls, mem, tickets, m, kind="job", cores=0.0):
+    """(True, None) when work of class cls expecting `mem` GB and `cores` cores may start now; else (False, why,
+    on_memory). Red: always."""
     if cls == "red":  # nothing stops a gate fix, ever
         return True, None, False
     if cls == "suite":  # agentctl's own test suite (`agentctl suite`): at most SUITE_CAP at once
@@ -217,6 +304,13 @@ def gov_fits(cls, mem, tickets, m, kind="job"):
     factor = GOV_LOAD.get(cls)
     if factor and m.get("load1") is not None and m["load1"] > factor * m["cores"]:
         return False, f"load {m['load1']:.0f} over {factor:g}x {m['cores']} cores", False
+    charged = gov_charged(tickets)
+    if cores and charged > 0:
+        cap = env_num("AGENTCTL_GOV_CPU_FACTOR", GOV_CPU_FACTOR) * m["cores"]
+        busy = max(charged, m.get("load1") or 0.0)
+        if busy + cores > cap:
+            return False, (f"cores: {charged:g} charged (load {m.get('load1') or 0:.1f}) + {cores:g} over "
+                           f"{cap:g} ({env_num('AGENTCTL_GOV_CPU_FACTOR', GOV_CPU_FACTOR):g}x {m['cores']} cores)"), False
     return True, None, False
 
 
@@ -291,11 +385,17 @@ class GovTicket:
         self.waited, self.why = rec.get("waited", 0.0), rec.get("waited_on")
 
     def release(self):
+        if self.f is None and not os.path.exists(self.path):
+            return
         for p in (self.path[:-5] + ".json", self.path):
             try:
                 os.unlink(p)
             except OSError:
                 pass
+        try:
+            gov_log_end(os.path.basename(self.path))
+        except OSError:
+            pass
         if self.f:
             self.f.close()
             self.f = None
@@ -309,17 +409,19 @@ GOV_ADMIT_MAX = 2 * 3600  # a check waits this long for the governor at most ($A
 
 
 def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=True, force=False, pid=None, cwd=None,
-              report=None, max_wait=None):
+              report=None, max_wait=None, cores=None, job=None):
     """Admit one unit of work: a GovTicket once it may start (None for a --try that may not). With `fd`, the lock is
-    taken on that inherited descriptor (a shell's, which then holds the ticket); else on a file this process keeps open."""
+    taken on that inherited descriptor (a shell's, which then holds the ticket); else on a file this process keeps open.
+    `cores`: what it is charged (default: its `job`'s, gov_job_cores)."""
     cls = cls if cls in GOV_CLASSES else "agent"
     mem = GOV_MEM_GB.get(cls, 5.0) if mem is None else float(mem)
+    cores = gov_job_cores(job, cls, kind) if cores is None else float(cores)
     d = gov_dir()
     t0 = time.time()
     me = os.path.join(d, f"w-{t0:.6f}-{os.getpid()}.json")
-    write_json(me, {"class": cls, "mem": mem, "label": label, "kind": kind, "pid": os.getpid(), "at": t0,
-                    "start": process_start(os.getpid())})
-    said, report_at, why = False, 0.0, None
+    write_json(me, {"class": cls, "mem": mem, "cores": cores, "job": job, "label": label, "kind": kind,
+                    "pid": os.getpid(), "at": t0, "start": process_start(os.getpid())})
+    said, report_at, why, waited_on = False, 0.0, None, None
     report = report or err
     try:
         while True:
@@ -333,9 +435,10 @@ def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=Tr
                 ok, on_mem = False, False
                 why = f"behind {w.get('class')} work ({w.get('label') or '?'}, pid {w.get('pid')})"
             else:
-                ok, why, on_mem = gov_fits(cls, mem, tickets, gov_machine(), kind)
+                ok, why, on_mem = gov_fits(cls, mem, tickets, gov_machine(), kind, cores)
             if ok:
                 break
+            waited_on = why  # the last hold, for the record: `why` is None once it fits
             if head and on_mem and cls != "measure" and gov_evict(f"{cls} {label} ({why})"):
                 time.sleep(env_num("AGENTCTL_GOV_EVICT_SETTLE", 3))  # the freed memory shows in vm_stat
                 continue
@@ -348,8 +451,9 @@ def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=Tr
             except LeaseLost as ex:
                 raise GovTimeout(f"{ex} while waiting for the governor") from None
             if time.monotonic() >= report_at:
-                report(f"{'still ' if said else ''}waiting for the governor ({cls}, {mem:g} GB, {label}): {why}; "
-                       f"{len(tickets)} admitted, {gov_committed(tickets):.0f}/{gov_budget():.0f} GB")
+                report(f"{'still ' if said else ''}waiting for the governor ({cls}, {mem:g} GB, {cores:g} cores, {label}): "
+                       f"{why}; {len(tickets)} admitted, {gov_committed(tickets):.0f}/{gov_budget():.0f} GB, "
+                       f"{gov_charged(tickets):g} cores charged")
                 said, report_at = True, time.monotonic() + GOV_REPORT
             time.sleep(env_num("AGENTCTL_GOV_POLL", GOV_POLL))
         # THE TICKET BEFORE THE WAITER GOES: the next head never looks between the two and misses this admission
@@ -361,13 +465,15 @@ def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=Tr
             f = open(path, "a+")
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
         waited = round(time.time() - t0, 1)
-        rec = {"class": cls, "mem": mem, "label": label, "kind": kind, "pid": pid or os.getpid(), "cwd": cwd or os.getcwd(),
-               "at": time.time(), "since": ts(), "waited": waited, "waited_on": why if waited >= 1 else None}
+        rec = {"class": cls, "mem": mem, "cores": cores, "job": job, "label": label, "kind": kind,
+               "pid": pid or os.getpid(), "cwd": cwd or os.getcwd(), "at": time.time(), "since": ts(), "waited": waited,
+               "waited_on": waited_on if waited >= 1 else None, "id": os.path.basename(path)}
         write_json(path[:-5] + ".json", rec)
         with open(os.path.join(d, "admits.jsonl"), "a") as af:
-            af.write(json.dumps({k: rec[k] for k in ("class", "mem", "label", "kind", "at", "waited", "waited_on")}) + "\n")
+            af.write(json.dumps({k: rec[k] for k in ("class", "mem", "cores", "job", "label", "kind", "at", "waited",
+                                                     "waited_on", "id")}) + "\n")
         if said:
-            report(f"admitted by the governor after {int(waited)} s ({cls}, {mem:g} GB, {label})")
+            report(f"admitted by the governor after {int(waited)} s ({cls}, {mem:g} GB, {cores:g} cores, {label})")
         return GovTicket(path, rec, f)
     finally:
         try:
@@ -377,12 +483,109 @@ def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=Tr
 
 
 @contextlib.contextmanager
-def gov_ticket(cls, mem=None, label="", kind="job", report=None):
-    t = gov_admit(cls, mem, label, kind=kind, report=report)
+def gov_ticket(cls, mem=None, label="", kind="job", report=None, cores=None, job=None):
+    t = gov_admit(cls, mem, label, kind=kind, report=report, cores=cores, job=job)
     try:
         yield t
     finally:
         t.release()
+
+
+# THE ROUTE of a heavy job (the owner, 2026-11-18: "stop the laptop being the bottleneck"): a whole-module test run or
+# a commit-gate proof (scripts/fail-before: two full runs) the governor would HOLD now goes to ci-runner's measure lane
+# (scripts/identity-ci-run's identity-run.yml, which runs sbt there) when that lane is free -- no job waiting on its
+# label in ci-runners-page's last good read (red.py's runner_queue) -- instead of queueing on the laptop. A red fix is
+# never held, so it stays local; so does anything the lane cannot be read for.
+MEASURE_LANE = "movies-measure"
+
+
+def measure_lane_free(q=None):
+    """(free?, why) of ci-runner's measure lane: free when the runners page is fresh and no job waits on its label."""
+    q = runner_queue() if q is None else q
+    if not q:
+        return False, "ci-runners-page has no fresh read of ci-runner"
+    waiting = [w for w in q.get("waiting_jobs") or [] if MEASURE_LANE in str(w.get("label") or "")]
+    if waiting:
+        return False, f"{len(waiting)} job(s) already wait on {MEASURE_LANE}"
+    return True, f"no job waits on {MEASURE_LANE}"
+
+
+def gov_route(job, cls="agent", mem=None, kind="job", q=None):
+    """("ci" | "local", why) for a job about to ask the governor: ci when it would be held now and the lane is free."""
+    if cls == "red":
+        return "local", "a red fix is never held"
+    cores = gov_job_cores(job, cls, kind)
+    mem = GOV_MEM_GB.get(cls, 5.0) if mem is None else float(mem)
+    ahead = [w for w in gov_waiters() if GOV_CLASSES.get(w.get("class"), 9) <= GOV_CLASSES.get(cls, 9)]
+    if ahead:
+        held = f"{len(ahead)} waiter(s) ahead of it"
+    else:
+        ok, held, _ = gov_fits(cls, mem, gov_tickets(), gov_machine(), kind, cores)
+        if ok:
+            return "local", f"the governor admits it now ({cores:g} cores)"
+    free, lane = measure_lane_free(q)
+    if free:
+        return "ci", f"the governor would hold it ({held}); {lane}"
+    return "local", f"the governor would hold it ({held}) but {lane}: it waits for the governor"
+
+
+# THE REPLAY (`agentctl gov replay`): the day's admissions (admits.jsonl) again under the cores rule, to show what it
+# would have admitted. Each admission is an arrival at at - waited, held until its end record (gov_log_end) or, where
+# none was written (before 2026-11-18), for --hold minutes; its cores are its record's, else its job's by label. The
+# replay admits oldest first while the charged cores + its own fit the cap (one at a time when none is charged).
+def replay_cores(r):
+    if r.get("cores") is not None:
+        return float(r["cores"])
+    label, cls = r.get("label") or "", r.get("class")
+    job = ("what-if" if "what-if" in label else "slice" if "identity-slice" in label else "measure" if cls == "measure"
+           else "check" if r.get("kind") == "check" or cls == "check" else "job")
+    return GOV_JOB_CORES[job]
+
+
+def gov_replay(rows, cap, at, hold=30 * 60):
+    """{old: [(label, cores)] live at `at` as admitted, new: [...] live at `at` under the cores rule, waiting: [...],
+    old_peak / new_peak: the most cores live at once}."""
+    ends = {r["id"]: r["end"] for r in rows if "end" in r and r.get("id")}
+    jobs = []
+    for r in rows:
+        if "end" in r or "at" not in r:
+            continue
+        start = float(r["at"])
+        dur = ends.get(r.get("id"), start + hold) - start
+        jobs.append({"label": r.get("label") or "?", "cores": replay_cores(r), "arrive": start - float(r.get("waited") or 0),
+                     "admitted": start, "dur": max(dur, 1.0)})
+
+    def live(js, t, key):
+        return [j for j in js if j.get(key) is not None and j[key] <= t < j[key] + j["dur"]]
+
+    def peak(js, key):
+        return max((sum(x["cores"] for x in live(js, j[key], key)) for j in js if j.get(key) is not None), default=0.0)
+    # the new rule, event by event: arrivals in order, each admitted once the charged cores leave it room
+    queue, running, t = sorted((dict(j, new=None) for j in jobs), key=lambda j: j["arrive"]), [], None
+    pending = list(queue)
+    events = sorted({j["arrive"] for j in queue})
+    while pending:
+        t = events.pop(0) if events else t
+        running = [j for j in running if j["new"] + j["dur"] > t]
+        for j in [p for p in pending if p["arrive"] <= t]:
+            charged = sum(x["cores"] for x in running)
+            if j["cores"] == 0 or charged == 0 or charged + j["cores"] <= cap:
+                j["new"] = t
+                running.append(j)
+                pending.remove(j)
+            else:
+                break  # oldest first: none overtakes the head
+        nxt = [x["new"] + x["dur"] for x in running] + [p["arrive"] for p in pending if p["arrive"] > t]
+        if pending and not nxt:
+            break
+        if nxt:
+            events = sorted(set(events) | {min(nxt)})
+    return {"old": [(j["label"], j["cores"]) for j in live(jobs, at, "admitted")],
+            "new": [(j["label"], j["cores"]) for j in live(queue, at, "new")],
+            "waiting": [(j["label"], j["cores"]) for j in queue if j["arrive"] <= at and (j["new"] is None or j["new"] > at)],
+            "old_peak": peak(jobs, "admitted"), "new_peak": peak(queue, "new"),
+            "new_wait_p50": pct([j["new"] - j["arrive"] for j in queue if j["new"] is not None], .5) or 0.0,
+            "old_wait_p50": pct([j["admitted"] - j["arrive"] for j in jobs], .5) or 0.0}
 
 
 # THE LAPTOP'S PRESSURE, read as it is NOW. Two movies reds sat `waiting: laptop pressure (swap 17.7 of 19.0 GB used)`
@@ -512,8 +715,42 @@ def gov_class_of(repo, commits, reds):
 def cmd_gov(a):
     if a.gcmd == "admit":
         t = gov_admit(a.cls, a.mem, a.label or "", kind=a.kind, fd=a.fd, ticket=a.ticket, wait=not a.try_,
-                      force=a.force, pid=a.pid, cwd=a.cwd)
+                      force=a.force, pid=a.pid, cwd=a.cwd, cores=a.cores, job=a.job)
         return 0 if t else 1
+    if a.gcmd == "usage":
+        rec = gov_record_usage(a.job, a.wall, a.cpu, a.load1, a.label or "")
+        print(f"{a.job}: {rec['cores']:g} cores over {a.wall:g} s" if rec else f"{a.job}: under {GOV_USAGE_MIN_WALL} s, not recorded")
+        return 0
+    if a.gcmd == "cores":
+        print(f"{gov_job_cores(a.job, a.cls):g}")
+        return 0
+    if a.gcmd == "route":
+        where, why = gov_route(a.job, a.cls, a.mem)
+        print(f"{where}: {why}")
+        return 0 if where == "ci" else 1
+    if a.gcmd == "replay":
+        rows = []
+        try:
+            with open(os.path.join(gov_dir(), "admits.jsonl")) as f:
+                for line in f:
+                    try:
+                        rows.append(json.loads(line))
+                    except ValueError:
+                        pass
+        except OSError:
+            pass
+        at = dt.datetime.fromisoformat(a.at.replace("Z", "+00:00")).timestamp()
+        rows = [r for r in rows if abs(float(r.get("at", r.get("end", 0))) - at) <= 12 * 3600]
+        cap = env_num("AGENTCTL_GOV_CPU_FACTOR", GOV_CPU_FACTOR) * (a.cores or machine_cores())
+        res = gov_replay(rows, cap, at, a.hold * 60)
+        fmt = lambda js: ", ".join(f"{l} {c:g}" for l, c in js) or "-"
+        print(f"replay at {a.at} (cap {cap:g} cores; a ticket with no end record held {a.hold:g} min):")
+        print(f"  as admitted:    {len(res['old'])} live, {sum(c for _, c in res['old']):g} cores: {fmt(res['old'])}")
+        print(f"  the cores rule: {len(res['new'])} live, {sum(c for _, c in res['new']):g} cores: {fmt(res['new'])}; "
+              f"{len(res['waiting'])} waiting: {fmt(res['waiting'])}")
+        print(f"  peak cores live: {res['old_peak']:g} as admitted, {res['new_peak']:g} under the rule; p50 wait "
+              f"{res['old_wait_p50'] / 60:.0f} min as admitted, {res['new_wait_p50'] / 60:.0f} min under the rule")
+        return 0
     if a.gcmd == "evict":
         if a.dry_run:
             for idle, root, _p in idle_servers():
@@ -524,14 +761,17 @@ def cmd_gov(a):
         return 0
     if a.gcmd == "status":
         tickets, m = gov_tickets(), gov_machine()
+        cap = env_num("AGENTCTL_GOV_CPU_FACTOR", GOV_CPU_FACTOR) * m["cores"]
         print(f"governor: {len(tickets)} admitted, {gov_committed(tickets):.1f}/{gov_budget():.0f} GB committed, "
-              f"{gov_ramp(tickets):.0f} GB still growing; free {m['free'] if m['free'] is None else round(m['free'], 1)} "
+              f"{gov_charged(tickets):g}/{cap:g} cores charged, {gov_ramp(tickets):.0f} GB still growing; free {m['free'] if m['free'] is None else round(m['free'], 1)} "
               f"GB, pressure {m['pressure']}%, load {m['load1']:.1f}/{m['cores']} cores; check cap {checks_cap()}")
         for t in tickets:
-            print(f"  {t.get('class'):<7} {t.get('mem'):>4} GB  {t.get('kind'):<5} {t.get('label')}  pid {t.get('pid')}  "
+            print(f"  {t.get('class'):<7} {t.get('mem'):>4} GB {float(t.get('cores') or 0):>4g} cores  {t.get('kind'):<5} "
+                  f"{t.get('label')}  pid {t.get('pid')}  "
                   f"since {t.get('since')}  {t.get('cwd')}")
         for w in gov_waiters():
-            print(f"  WAITING {w.get('class'):<7} {w.get('mem'):>4} GB  {w.get('label')}  pid {w.get('pid')}")
+            print(f"  WAITING {w.get('class'):<7} {w.get('mem'):>4} GB {float(w.get('cores') or 0):>4g} cores  "
+                  f"{w.get('label')}  pid {w.get('pid')}")
         idle = idle_servers()
         if idle:
             print("evictable: " + ", ".join(f"{os.path.basename(r)} ({int(i // 60)} min)" for i, r, _p in idle))
@@ -559,6 +799,11 @@ def cmd_gov(a):
             if rs:
                 w = [r.get("waited", 0) for r in rs]
                 print(f"{cls:>7} {len(rs):>6} {pct(w, .5):>8.0f}s {pct(w, .9):>8.0f}s {sum(1 for x in w if x > 60):>9}")
+        usage = gov_usage(a.days)
+        for job in sorted({r.get("job") for r in usage if r.get("job")}):
+            m_ = gov_measured_cores(job, usage)
+            print(f"cores {job}: {sum(1 for r in usage if r.get('job') == job)} runs, charged "
+                  f"{gov_job_cores(job):g} ({'measured p75' if m_ is not None else 'default'})")
         try:
             ev = sum(1 for l in open(os.path.join(gov_dir(), "gov.log")) if " evicted " in l)
         except OSError:

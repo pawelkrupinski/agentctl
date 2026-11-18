@@ -118,7 +118,7 @@ class SlotTest(unittest.TestCase):
         t0 = time.time()
         out = self.take()
         self.assertGreater(time.time() - t0, 1.5, "it waited for the holder")
-        self.assertIn("waiting for the governor (check, 5 GB, land test): 1/1 checks running (the check cap)", out)
+        self.assertIn("waiting for the governor (check, 5 GB, 4 cores, land test): 1/1 checks running (the check cap)", out)
         rec = [json.loads(l) for l in open(os.path.join(A.checks_dir(), "runs.jsonl"))][-1]
         self.assertGreater(rec["waited"], 1.5)
         self.assertEqual((rec["cap"], rec["running"], rec["label"]), (1, 1, "land test"))
@@ -139,6 +139,12 @@ class SlotTest(unittest.TestCase):
         with A.check_slot("/repo", "land fix", "red") as slot:
             self.assertEqual(slot.env({})["KINOWO_GOV_CLASS"], "red")
         self.assertLess(time.time() - t0, 5)
+
+    def test_a_checks_ticket_carries_its_hooks_cores(self):
+        """The hook's sbt-warm calls take no cores ticket of their own: the check's is charged them (2026-11-18)."""
+        with A.check_slot("/repo", "land x") as slot:
+            self.assertEqual(slot.env({})["KINOWO_GOV_CPU_HELD"], "1")
+            self.assertEqual(slot.ticket.rec["cores"], A.GOV_JOB_CORES["check"])
 
     def test_stats_per_concurrency_level(self):
         with open(os.path.join(A.checks_dir(), "runs.jsonl"), "w") as f:

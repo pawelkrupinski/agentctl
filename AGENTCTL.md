@@ -1395,13 +1395,17 @@ The old names (design §14.5) answer until 2026-11-05, each printing its new one
   `~/.cache/agentctl/waiting/<repo>/service.log`. Wall-clock sleeps only, so it carries on after the laptop sleeps; a
   batch lands with no agent alive, its verdicts in the inbox.
 
-### gov: THE governor -- one admission control for laptop memory and CPU
+### gov: THE governor -- one admission control for laptop memory and CPU (cores charged per job)
 
 ```
 agentctl gov status                 # admitted work, waiters, memory, evictable idle sbt servers, pressure
 agentctl gov stats [--days 7]       # checks stats, plus each class's admission waits and the evictions
 agentctl gov evict [--dry-run]      # stop the idle kept sbt server unused longest, by hand
-agentctl gov admit --class C ...    # scripts/jvm-gate.sh's call (--fd 7 --ticket <file>); --try: one look
+agentctl gov admit --class C ...    # scripts/jvm-gate.sh's call (--fd 7 --ticket <file> --job J); --try: one look
+agentctl gov route --job J          # ci (exit 0) when the governor would hold J now and ci-runner's measure lane is free
+agentctl gov usage --job J --wall S --cpu S   # one run's cores, for J's measured history (sbt-warm's call)
+agentctl gov cores --job J          # the cores J is charged (measured p75, else its default)
+agentctl gov replay --at 2026-11-18T05:45Z [--hold 30] [--cores 18]   # the admissions again under the cores rule
 agentctl suite [run.py args]       # agentctl's own tests (tests/run.py) under a `suite` ticket: one run at once (SUITE_CAP)
 ```
 
@@ -1420,6 +1424,26 @@ sbt-warm's kept servers each holding a slot, idle or not).
   tickets admitted in the last 2 min still grow into; memory pressure under 75%; the laptop not under pressure
   (see the red queue's "Laptop pressure"). Red waits on none of it: a red fix is admitted at once.
 - **CPU:** checks wait while load1 > 4x the cores, agent work > 1.5x, measurements > 1x; red never.
+- **Cores** (the owner, 2026-11-18: 8 JVMs admitted on 40 of 77 GB drove the 18-core laptop to load 100 at 05:45Z,
+  and 6 waiters went in within 7 s at 05:46Z as the lagging load dipped). Every ticket carries the cores its job is
+  expected to use (`--job`: testUnit / test / what-if / measure / check 4, compile / job 3, testOnly / slice / suite 2,
+  serve 1, keeper 0), or the job's measured p75 once `<gov>/usage.jsonl` holds 3 uncontended runs of it (load at
+  most the cores; sbt-warm records each passing call: the server's CPU, exited forks included, over its wall time). Work
+  is admitted only while max(the live tickets' cores, load1) + its own <= the cores x `$AGENTCTL_GOV_CPU_FACTOR` (1.0):
+  the charge takes a burst before the 1-min load shows it, the load counts what holds no ticket. A ticket of no cores
+  never waits on cores; with nothing charged only the class load factors above apply (outside load cannot starve the
+  queue); red never waits. A kept sbt server's keeper is charged 0 (its memory); each command through it takes a
+  cores-only ticket (`--mem 0`) for its life, as does each what-if / slice request to a kept JVM. A pre-commit check
+  is charged its hook's cores, and the hook's sbt-warm calls take none (`KINOWO_GOV_CPU_HELD`). A ticket from an older
+  jvm-gate.sh (no `--job`) is charged none. `waited_on` in `admits.jsonl` now names the last hold (it was always
+  null), and a ticket's end is a `{"end", "id"}` line there (exact in process, the next look for a shell's).
+- **Route** (`gov route`): a whole-module test run or a fail-before proof the governor would hold now (it does not
+  fit, or waiters of its class or higher are ahead) goes to ci-runner's measure lane when ci-runners-page's fresh read
+  shows no job waiting on `movies-measure`; otherwise local. Red is never routed. movies' scripts/ci-sbt runs it.
+- **Replay** (`gov replay`): admits.jsonl around `--at` again, each admission an arrival at `at - waited`, held to its
+  end record or `--hold` minutes, its cores its record's or its label's job; admitted oldest first under the cap.
+  2026-11-18T05:45Z (18 cores, 30 min holds): as admitted 7 live, 25 cores (gov status said 8, load 51.8), peak 88;
+  under the rule 4 live, 15 cores, 4 waiting, peak 18.
 - **Eviction first:** when the head waiter does not fit on memory, the idle kept sbt server unused longest (no call in
   it, unused 1 min, not serving, never the root checkout's) is stopped (`sbt-warm --stop`, its busy lock held), then it
   looks again. Logged in `gov/gov.log`; every admission in `gov/admits.jsonl`.
@@ -2043,6 +2067,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `github_lander_repos` | `AGENTCTL_GITHUB_LANDER_REPOS` | - | - |
 | `gov_admit_max` | `AGENTCTL_GOV_ADMIT_MAX` | `7200` | a check waits this long for the governor at most |
 | `gov_budget_gb` | `AGENTCTL_GOV_BUDGET_GB` | `round(0.6 * ram_gb(` | - |
+| `gov_cpu_factor` | `AGENTCTL_GOV_CPU_FACTOR` | `1.0` | charged cores (or the load) + a job's own may reach this x the cores |
 | `gov_dir` | `AGENTCTL_GOV_DIR` | - | - |
 | `gov_evict_settle` | `AGENTCTL_GOV_EVICT_SETTLE` | `3` | the freed memory shows in vm_stat |
 | `gov_free_need_gb` | `AGENTCTL_GOV_FREE_NEED_GB` | `2.5` | free memory a new JVM needs NOW (beyond the reserve); its heap grows into the budget's share later |

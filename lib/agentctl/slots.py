@@ -6,7 +6,8 @@
 # number". Every pre-commit check run (land's dry run, the `waiting` batch check, the known-red baseline) is admitted by
 # THE GOVERNOR (above) as a check-kind ticket of class `check` (`red` for a change fixing a red run, which skips the
 # cap): at most N run at once. Its ticket counts a JVM's 5 GB: the hook's `sbt -batch` takes no ticket of its own; an
-# sbt server it starts through sbt-warm does (at the check's priority, KINOWO_GOV_CLASS), counted twice for a while.
+# sbt server it starts through sbt-warm does (at the check's priority, KINOWO_GOV_CLASS), counted twice for a while. Its
+# cores are the check's (GOV_JOB_CORES["check"]): the hook's sbt-warm calls take no cores ticket (KINOWO_GOV_CPU_HELD).
 # N: $AGENTCTL_MAX_CHECKS if set, else the automatic cap (checks/cap.json, default 3, at most the budget's worth of sbt
 # servers). A waiter prints why it waits. Each run appends to checks/runs.jsonl: its duration, its wait, the cap and the
 # number of checks running, the load average, CPU % and memory pressure / swap sampled during it. After each run the cap
@@ -64,8 +65,9 @@ class Slot:
         self.rc, self.out = rc, out
 
     def env(self, env):
-        """The hook's environment: its sbt JVM is admitted at this check's priority."""
-        return dict(env, KINOWO_GOV_CLASS=self.cls)
+        """The hook's environment: its sbt JVM is admitted at this check's priority, and its sbt-warm calls take no cores
+        ticket of their own (KINOWO_GOV_CPU_HELD): this check's ticket is charged the hook's cores already."""
+        return dict(env, KINOWO_GOV_CLASS=self.cls, KINOWO_GOV_CPU_HELD="1")
 
 
 def slot_holders(cap=None):
