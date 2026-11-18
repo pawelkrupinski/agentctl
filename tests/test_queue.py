@@ -519,6 +519,99 @@ class QueueTest(WaitingTest):
         self.rechecked_when_landing("scripts/hooks/local-tests.txt", "identity sbt identity/test\n")
         self.assertEqual([m for m, _r in self.verified()], ["--range", "--range"])
 
+    SHARE = ('#!/bin/sh\n# verifyareas-<full>-<id>: the combined tree verified with the area tests\n'
+             '[ "$1" = checks ] || exit 0\n'
+             'case "$2" in plan) echo "sbt identity" ;; rest) echo sbt ;; identity) echo identity ;; *) echo ;; esac\n')
+
+    def with_share(self):
+        """The repo's scripts/ci/precommit-share.sh (a fake answering `checks <share>`), on main before the change."""
+        self.r.write("scripts/ci/precommit-share.sh", self.SHARE)
+        os.chmod(os.path.join(self.r.path, "scripts/ci/precommit-share.sh"), 0o755)
+        self.r.commit("the check's shares")
+        self.r.push()
+        for f in (self.pushes, self.calls):
+            if os.path.exists(f):
+                os.remove(f)
+
+    def share_moves_under(self, text):
+        self.with_share()
+        wt, _ = self.agent("a", "docs/A.md", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        rounds = self.moves_once(("scripts/ci/precommit-share.sh", text))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual(len(rounds), 2)
+        return [m for m, _r in self.verified()]
+
+    def test_a_share_change_selecting_nothing_new_gets_the_verify_round(self):
+        """The owner, 2026-11-18 (item 6): precommit-share.sh landing meanwhile was a full round whatever it changed
+        (2026-11-17: 5 full rounds, flux-receiver 79 min); now SELECTION-AWARE like the hook: what its shares run for
+        the change, at the full check's tip and the rebased tip -- nothing added, the verify round."""
+        self.assertEqual(self.share_moves_under(self.SHARE + "# a comment\n"), ["--range", "--verify-only"])
+        self.assertIn("the combined tree verified", self.landed_verdict())
+
+    def test_a_share_change_adding_a_check_for_the_change_rechecks(self):
+        self.assertEqual(self.share_moves_under(self.SHARE.replace('echo "sbt identity"', 'echo "sbt identity itrest"')),
+                         ["--range", "--range"])
+        self.assertNotIn("the combined tree verified", self.landed_verdict())
+
+    def test_an_unreadable_share_selection_rechecks(self):
+        self.assertEqual(self.share_moves_under("#!/bin/sh\n# verifyareas-\nexit 3\n"), ["--range", "--range"])
+
+    def test_a_module_both_sides_touch_verifies_with_the_area_tests(self):
+        """The owner, 2026-11-18 (item 6): module overlap is the verify round plus the overlapping modules' unit and
+        AREA tests; the tree's precommit-share.sh runs the area share of a check/verifyareas- branch."""
+        self.with_share()
+        wt, _ = self.agent("a", "worker/src/test/scala/ASpec.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        seen = []
+        real = A.run_entry_checks
+
+        def recording(repo, d, e, tree, base, head, mode, cls, log_path, own=None):
+            seen.append((mode, e.get("verify_areas")))
+            return real(repo, d, e, tree, base, head, mode, cls, log_path, own)
+        A.run_entry_checks = recording
+        self.addCleanup(setattr, A, "run_entry_checks", real)
+        self.moves_once(("worker/src/test/scala/BSpec.scala", "b\n"), ("docs/n.md", "n\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual(seen, [("--range", None), ("--verify-only", ["worker"])])
+        self.assertIn("worker", self.landed_verdict())
+        self.assertFalse(self.entries()[eid.rsplit("-", 1)[-1]].get("verify_areas"), "cleared after its round")
+
+    def test_disjoint_modules_verify_without_the_area_tests(self):
+        self.with_share()
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        seen = []
+        real = A.run_entry_checks
+
+        def recording(repo, d, e, tree, base, head, mode, cls, log_path, own=None):
+            seen.append((mode, e.get("verify_areas")))
+            return real(repo, d, e, tree, base, head, mode, cls, log_path, own)
+        A.run_entry_checks = recording
+        self.addCleanup(setattr, A, "run_entry_checks", real)
+        self.moves_once(("worker/src/main/W.scala", "w\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual(seen, [("--range", None), ("--verify-only", None)])
+
+    def test_a_share_without_the_area_verification_verifies_a_module_overlap_as_before(self):
+        self.SHARE = self.SHARE.replace("verifyareas", "verify")
+        self.with_share()
+        wt, _ = self.agent("a", "worker/src/test/scala/ASpec.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("worker/src/test/scala/BSpec.scala", "b\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--verify-only"])
+        self.assertNotIn("area tests", self.landed_verdict())
+
+    def test_the_area_verification_on_ci_runner_is_a_check_verifyareas_branch(self):
+        head = sh(self.r.path, "git", "rev-parse", "HEAD").strip()
+        full = "f" * 40
+        calls = self.fake_github("success", head, ref=f"check/verifyareas-{full}-x")
+        ok, out = A.remote_check(self.r.path, {"id": "x", "full_base": full, "verify_areas": ["worker"]}, "base", head,
+                                 "--verify-only")
+        self.assertTrue(ok, out)
+        self.assertIn(("DELETE", f"git/refs/heads/check/verifyareas-{full}-x"), calls)
+
     def test_without_the_full_checks_tip_a_hook_change_rechecks(self):
         """An entry fully checked before full_tip was recorded: its old selection cannot be read, so a full round."""
         wt, _ = self.agent("a", "docs/A.md", "a\n", msg="a: one")

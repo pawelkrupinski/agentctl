@@ -304,11 +304,12 @@ def delete_check_branch(o_r, branch):
 
 
 def remote_mode_prefix(e, base, mode):
-    """The check branch's mode prefix (remote_check): `fast-`, `verify-<full base sha>-` or none."""
+    """The check branch's mode prefix (remote_check): `fast-`, `verify-<full base sha>-` (`verifyareas-...`: with the
+    area tests) or none."""
     if mode == "--fast-only":
         return "fast-"
-    if mode == VERIFY_MODE:
-        return f"verify-{e.get('full_base') or base}-"
+    if mode == VERIFY_MODE:  # MODULE OVERLAP (queue.py): the area tests too, on a share script naming the mode
+        return f"{VERIFY_AREAS_MODE if e.get('verify_areas') else 'verify'}-{e.get('full_base') or base}-"
     return ""
 
 

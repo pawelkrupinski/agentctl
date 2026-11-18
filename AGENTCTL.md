@@ -1168,10 +1168,19 @@ The reconciler then takes it, a step per tick:
   (coupling.sbt, identity-impact.sbt: a build file like build.sbt, review 2026-11-18). Unchanged, and no file of the change
   naming the changed build file -> the verify round; changed, unreadable, or the change itself touching the build ->
   the full round (`they change build.sbt, and what web, worker build with changes (common, Dependencies.playVersion)`).
-  precommit-share.sh and the other forcing paths stay a full round.
-  Code: queue.py `recheck_reason` (THE RULE), `selection_change`, buildview.py `build_view_change`, `_push_change`,
+  SHARE-AWARE (2026-11-18): scripts/ci/precommit-share.sh is judged the same way -- it only splits the hook's selection
+  over the check's jobs -- and every such selection holds the union of what its shares (`checks rest|identity|oldrefs|plan`
+  on a check/<id> ref) run for the change: a check one adds forces the full round (`they change
+  scripts/ci/precommit-share.sh, and its shares for the change adds itrest`), else the verify round. A file BOTH sides
+  change stays a full round, these too. MODULE OVERLAP (2026-11-18): no shared file, but an sbt module (`<dir>/src/`)
+  both sides touch -> the verify round PLUS the area tests: the branch is `check/verifyareas-<full base>-<id>`, whose
+  precommit-share.sh runs the identity share in `--checks-only` over `<full base>..HEAD` (the rest is the verify
+  round's); a tree whose script does not name the mode gets the plain verify round. The verdict says `with the area
+  tests (sbt modules both sides touch: worker)`. A push batch's union verification runs no area tests. The other
+  forcing paths (the rest of scripts/hooks/, hooks-path.sh, tool-conventions.sh) stay a full round.
+  Code: queue.py `recheck_reason` (THE RULE), `selection_change`, `share_selection`, `module_overlap`, buildview.py `build_view_change`, `_push_change`,
   `_check_entry`; tests: `tests/test_queue.py` (`*verif*`, `*deleted_file*`, `*rechecks`, `*full_round`,
-  `*build_change*`), `tests/test_buildview.py`.
+  `*build_change*`, `*share*`, `*module*`, `*verifyareas*`), `tests/test_buildview.py`.
   THE OLDEST VERIFICATION PUSHES FIRST (2026-11-16: workermem verified four times, each on a main a younger change
   had pushed onto meanwhile): while a change's verification round is queued or checking (not in an infra backoff),
   every younger checked change holds its push (`its push waits for <id>'s combined-tree verification`; a red's fix

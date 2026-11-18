@@ -129,14 +129,31 @@ def probe_infra_requeue(a):
 # project/ members -- at full_tip and at the rebased tip) unchanged, and no file of the change naming the changed build
 # file (`git grep -F <basename>`: a script or test reading it) -> the verify round, which compiles every test config
 # under the new build; anything changed, unreadable, or the change touching the build itself -> the full round.
+# SHARE-AWARE (the owner, 2026-11-18, item 6: 1242 min of full rounds in a week for precommit-share.sh or the registry):
+# scripts/ci/precommit-share.sh is a SELECTION_PATH too -- it only splits the hook's selection over the CI check's jobs
+# -- and every selection read also holds the union of what its shares (SHARES) run for the change: a check one of
+# them adds forces the full round, as a check --plan adds does. A file BOTH sides change stays a full round, these too.
+# MODULE OVERLAP (the same decision): no shared file but an sbt module both sides touch -> the verify round plus the
+# change's AREA tests (verify_areas: a check/verifyareas- branch; module_overlap), where the tree's precommit-share.sh
+# runs that mode; the risk of a cross-change break the area tests miss is accepted (Main catches it).
 # The other forcing paths (scripts/hooks/* beyond SELECTION_PATHS, hooks-path.sh, ...) stay a full round.
 RECHECK_ALWAYS = re.compile(r"^([^/]+\.sbt|project/.*|scripts/hooks/.*|scripts/hooks-path\.sh"
                             r"|scripts/tool-conventions\.sh"
                             r"|scripts/ci/precommit-share\.sh)$")
 HOOK_SELF_TEST = re.compile(r"^scripts/hooks/[^/]+(-test\.sh|-test-lib\.sh|_test\.py)$")
 VERIFY_MODE = "--verify-only"
-SELECTION_PATHS = frozenset({"scripts/hooks/pre-push", "scripts/hooks/lint-registry.tsv", "scripts/hooks/local-tests.txt"})
+SHARE_SCRIPT = "scripts/ci/precommit-share.sh"
+SELECTION_PATHS = frozenset({"scripts/hooks/pre-push", "scripts/hooks/lint-registry.tsv", "scripts/hooks/local-tests.txt",
+                             SHARE_SCRIPT})
 SELECTION_MODES = ("--plan", "--compile-plan", "--unit-plan", "--lint-plan")
+# what each share of the CI check runs for the change (precommit-share.sh `checks <share>`, the hook's own PREPUSH_LIST
+# under the share's environment), read on a check/<id> ref -- the change's own checks, its range the change since main
+SHARES = ("rest", "identity", "oldrefs", "plan")
+SHARE_KEY = "shares"
+# MODULE OVERLAP (the owner, 2026-11-18): a verify round whose two sides touch one sbt module also runs that change's
+# AREA tests -- a check/verifyareas-<full base>-<id> branch, which a precommit-share.sh naming the mode runs with the
+# area shares (identity) in --checks-only over <full base>..HEAD; one that does not name it gets the plain verify round
+VERIFY_AREAS_MODE = "verifyareas"
 VERIFY_RUNS_ADDED = frozenset({"--compile-plan", "--unit-plan", "--lint-plan"})  # the verify round runs what these add
 
 
@@ -200,6 +217,11 @@ def hook_selection(tree, paths):
         out[mode] = hook_query(hook, tree, mode, paths)
         if out[mode] is None:
             return None
+    shares = share_selection(tree)
+    if shares is False:
+        return None
+    if shares is not None:
+        out[SHARE_KEY] = shares
     areas = {"basic"} if "sbt" in out.get("--plan", []) else set()
     areas |= set(out.get("--plan", []))
     try:
@@ -208,6 +230,48 @@ def hook_selection(tree, paths):
     except OSError:
         out["local-tests"] = []
     return out
+
+
+def share_selection(tree):
+    """The union of what precommit-share.sh's shares run for the change at the tree's HEAD (sorted words); None when the
+    tree has no such script, False when a share cannot be read. Read as a change's own check (GITHUB_REF_NAME check/<x>,
+    --checks-only): its range is HEAD since its merge base with origin/main, which in a check tree is the change."""
+    script = os.path.join(tree, SHARE_SCRIPT)
+    if not os.access(script, os.X_OK):
+        return None
+    words = set()
+    env = {**tool_env(), "GITHUB_REF_NAME": "check/selection"}
+    for share in SHARES:
+        try:
+            r = subprocess.run([script, "checks", share], cwd=tree, capture_output=True, text=True, timeout=120,
+                               env=env, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        if r.returncode != 0:
+            return False
+        words |= set(r.stdout.split())
+    return sorted(words)
+
+
+def sbt_module_of(path):
+    """The sbt module a path is in (`worker` for worker/src/...), or None."""
+    parts = path.split("/")
+    return parts[0] if len(parts) > 2 and parts[1] == "src" else None
+
+
+def module_overlap(landed_paths, change_paths):
+    """The sbt modules both sides touch (MODULE OVERLAP), sorted."""
+    landed = {sbt_module_of(p) for p in landed_paths} - {None}
+    return sorted(landed & ({sbt_module_of(p) for p in change_paths} - {None}))
+
+
+def verify_areas_supported(tree):
+    """Whether the tree's precommit-share.sh runs the area tests of a check/verifyareas- branch."""
+    try:
+        with open(os.path.join(tree, SHARE_SCRIPT)) as f:
+            return f"{VERIFY_AREAS_MODE}-" in f.read()
+    except OSError:
+        return False
 
 
 def selection_at(tree, rev, tip, paths):
@@ -1058,9 +1122,17 @@ def _check_entry(repo, d, e, i, own=None):
                                  range_paths(tree, base, head), full_tip=e.get("full_tip"))
         if why is None and verify_supported(precheck_hook(tree)):
             mode = VERIFY_MODE
+            full_base_ = e.get("full_base") or e.get("checked_base") or base
+            areas = module_overlap(range_paths(tree, full_base_, base), range_paths(tree, base, head)) \
+                if verify_areas_supported(tree) else []
+            e["verify_areas"] = areas or None
+            if areas:
+                wlog(d, f"{e['id']}: sbt modules both sides touch ({', '.join(areas)}): verified with the area tests")
         else:
             wlog(d, f"{e['id']}: {why or f'the hook has no {VERIFY_MODE}'}: fully checked, not only verified")
     where = "no hook"
+    if mode != VERIFY_MODE:
+        e.pop("verify_areas", None)
     if hook:
         ok, out, where = run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own)
         if ok is None:  # stalled: the laptop's, not the change's -- and what stalled it is said (2026-11-17: two
@@ -1102,13 +1174,16 @@ def _check_entry(repo, d, e, i, own=None):
                     ": it waits behind that red")
     full_base = (e.get("full_base") or e.get("checked_base") or base) if mode == VERIFY_MODE else base
     full_tip = e.get("full_tip") if mode == VERIFY_MODE else head
-    verified = f"verified {head[:10]} on {base[:10]} (fully checked on {full_base[:10]})" if mode == VERIFY_MODE \
-        else f"checked {head[:10]} on {base[:10]}"
+    areas = e.pop("verify_areas", None) if mode == VERIFY_MODE else None
+    verified = (f"verified {head[:10]} on {base[:10]} (fully checked on {full_base[:10]}"
+                + (f"; with the area tests: sbt modules both sides touch, {', '.join(areas)}" if areas else "") + ")") \
+        if mode == VERIFY_MODE else f"checked {head[:10]} on {base[:10]}"
     set_change(d, e, "checked", data={"tip": head, "base": base, "mode": mode, "where": where},
                event={"text": f"{e['id']}: {verified} ({where})"
                       + (" -- failing only as its base fails" if known_red else "")},
                tip=head, checked_base=base, full_base=full_base, full_tip=full_tip, checked_mode=mode, checked_where=where, tree=i,
-               infra_reason=None, infra_same=0, known_red=known_red, verify=False, push_alone=None)
+               infra_reason=None, infra_same=0, known_red=known_red, verify=False, push_alone=None,
+               verified_areas=areas)
     wlog(d, f"{e['id']}: {verified} ({where})")
     return 0
 
@@ -1324,8 +1399,11 @@ def _push_change(repo, d, e, i):
                 why = f"no file overlap, but the hook has no {VERIFY_MODE} for the combined tree"
             if why is not None or tree_hook:  # a new round, not an attempt: the full checks, or the combined tree's
                 verify = why is None
+                areas = module_overlap(range_paths(tree, full_base, moved), range_paths(tree, moved, new_head)) \
+                    if verify and verify_areas_supported(tree) else []
                 what = ("no file overlap: its combined tree verified (every test config compiled, the touched "
-                        "modules' unit tests)") if verify else f"{why}: checked again"
+                        "modules' unit tests" + (f", the area tests: sbt modules both sides touch, {', '.join(areas)}"
+                                                 if areas else "") + ")") if verify else f"{why}: checked again"
                 set_change(d, e, "queued", data={"rounds": e.get("rounds", 0) + 1},
                            event={"text": f"{e['id']}: {moved_by} since its checks, {what}"},
                            rounds=e.get("rounds", 0) + 1, retry_after=0, verify=verify)
@@ -1342,7 +1420,9 @@ def _push_change(repo, d, e, i):
                 set_change(d, e, "queued", event={"text": f"{e['id']}: the hook's plan could not be read: checked again"},
                            retry_after=0, verify=False)
                 return "queued"
-            where = f"{where}; main moved since its full check on {full_base[:10]}: no file overlap, the combined tree verified"
+            areas = e.get("verified_areas")
+            where = (f"{where}; main moved since its full check on {full_base[:10]}: no file overlap, the combined tree "
+                     "verified" + (f" with the area tests (sbt modules both sides touch: {', '.join(areas)})" if areas else ""))
             e.pop("remote_run", None)
         commits = waiting_commits(tree, base, head)
         reds = gate_reds(repo) if waiting_supported(repo) else set()
