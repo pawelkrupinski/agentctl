@@ -1368,7 +1368,12 @@ ancestry). `land --until-done` (movies, the queue) owns the tail, bounded by `--
    deleted -- a force delete, but only after that patch check (cleanup.py `close_worktree`) -- and the last line is
    `DONE <sha> (queued <id>): every local commit's patch is on origin/main; worktree removed (...)`, exit 0.
    `--keep-worktree`: `DONE ... worktree kept`. Anything unproven: `LANDED <sha> ...; NOT DONE: the worktree <wt> is
-   kept: <why>`, exit 3 -- a dirty or foreign worktree is never removed.
+   kept: <why>`, exit 3 -- a dirty or foreign worktree is never removed. Before the removal, processes still working
+   in the worktree are freed (2026-11-18: LANDED but no DONE, the agent's own kept sbt server held it): the
+   checkout's `scripts/sbt-warm --stop`, then a SIGTERM, by pid, to each process in it whose environment carries the
+   caller's `CLAUDE_CODE_SESSION_ID` (never an agent session or terminal, never another session's or a session-less
+   one), and a wait of up to 30 s (`$AGENTCTL_FREE_WAIT`). Still held: `LANDED <sha> ...; NOT DONE: ... still held`,
+   one `pid <pid>: <command>` line per holder and `next:` the command to finish, exit 4 (cleanup.py `free_worktree`).
 
 The brief (`~/bin/briefs/movies-agent-preamble.md`) makes it every movies agent's last step: run it with
 `run_in_background=true`, end the turn, report once after its last line. Code: queue.py `land_until_done`,
@@ -2139,6 +2144,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `fixer_land_watch` | `AGENTCTL_FIXER_LAND_WATCH` | `60` | - |
 | `fixer_unlanded_escalate` | `AGENTCTL_FIXER_UNLANDED_ESCALATE` | `5400` | - |
 | `fixer_unlanded_nudge` | `AGENTCTL_FIXER_UNLANDED_NUDGE` | `2700` | - |
+| `free_wait` | `AGENTCTL_FREE_WAIT` | `30` | s --until-done waits for a landed worktree to be free of processes before it keeps it |
 | `gate_publish` | `AGENTCTL_GATE_PUBLISH` | `45` | - |
 | `gh_cli` | `AGENTCTL_GH_CLI` | `gh` | the GitHub CLI |
 | `github_api` | `AGENTCTL_GITHUB_API` | - | - |

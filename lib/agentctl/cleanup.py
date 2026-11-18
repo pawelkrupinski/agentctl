@@ -281,6 +281,67 @@ def close_worktree(wt):
     return msg + f" ({why})"
 
 
+# FREEING A LANDED WORKTREE (2026-11-18: `land --until-done` LANDED 94a33a968 but printed no DONE -- the agent's own
+# kept sbt server, `scripts/sbt-warm`, still worked in the worktree, and the agent removed it by hand). Before the
+# removal, free_worktree stops what is the CALLER's in that worktree and nothing else: the checkout's own sbt server
+# (`scripts/sbt-warm --stop`, which only ever stops that checkout's), then every process whose cwd is inside it and
+# whose environment carries the caller's CLAUDE_CODE_SESSION_ID (SIGTERM, by pid -- never a pattern). It waits up to
+# FREE_WAIT s for the tree to be free; whatever still holds it (another session's, or one without a session) is
+# returned, never signalled.
+FREE_WAIT = 30  # s --until-done waits for a landed worktree to be free of processes before it keeps it
+NEVER_SIGNAL = re.compile(r"(^|/)(claude|login|tmux|ssh)(\s|$)")  # an agent session or a terminal: reported, never stopped
+
+
+def worktree_holders(wt):
+    """{pid: command} of the processes working inside wt, this process and its parents excepted."""
+    wt = os.path.realpath(wt)
+    mine = own_ancestry()
+    cmds = {p: c for p, _pp, _e, c in ps()}
+    return {p: cmds.get(p, "?") for p, c in process_cwds().items()
+            if p not in mine and (c == wt or c.startswith(wt + "/"))}
+
+
+def process_session(pid):
+    """The CLAUDE_CODE_SESSION_ID in pid's environment, or None (none, or not readable)."""
+    if os.path.isdir(os.path.join(PROC_ROOT, "self")):
+        try:
+            with open(os.path.join(PROC_ROOT, str(pid), "environ"), "rb") as f:
+                env = f.read().decode(errors="replace").split("\0")
+        except OSError:
+            return None
+        return next((e.split("=", 1)[1] for e in env if e.startswith("CLAUDE_CODE_SESSION_ID=")), None)
+    m = re.search(r"(?:^|\s)CLAUDE_CODE_SESSION_ID=(\S+)",
+                  run_cmd(["ps", "-E", "-ww", "-o", "command=", "-p", str(pid)]).stdout)
+    return m.group(1) if m else None
+
+
+def free_worktree(wt, out=print):
+    """Stop the caller's processes in worktree wt (FREEING A LANDED WORKTREE above), then wait for it to be free.
+    Returns {pid: command} of what still holds it (empty: free)."""
+    held = worktree_holders(wt)
+    if not held:
+        return held
+    warm = os.path.join(wt, "scripts", "sbt-warm")
+    if os.access(warm, os.X_OK):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        r = run_cmd([warm, "--stop"], timeout=90, cwd=wt, env=env)
+        out(f"scripts/sbt-warm --stop in {wt}: exit {r.returncode}", flush=True)
+        held = worktree_holders(wt)
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    for pid, cmd in sorted(held.items()):
+        if sid and not NEVER_SIGNAL.search(cmd) and process_session(pid) == sid:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                out(f"stopped pid {pid} of this session: {cmd[:120]}", flush=True)
+            except OSError:
+                pass
+    deadline = time.time() + env_num("AGENTCTL_FREE_WAIT", FREE_WAIT)
+    while held and time.time() < deadline:
+        time.sleep(0.5)
+        held = worktree_holders(wt)
+    return held
+
+
 def delete_remote_branch(repo, o_r, name, sha):
     """Delete a forge branch through the API, only if it still points at sha."""
     cur = forge_branch_sha(o_r, name)

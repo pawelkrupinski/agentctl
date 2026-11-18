@@ -733,7 +733,8 @@ def await_queued(eid, store=None):
 #                 this agent's own (the change's worktree, not the root checkout, no other session's) -> the worktree
 #                 removed and its branch deleted (the force delete only after that patch check, close_worktree):
 #                 `DONE <sha> (...): ... worktree removed`, exit 0. Not provable -> `LANDED <sha> ... NOT DONE: <why>`,
-#                 the worktree kept, exit 3;
+#                 the worktree kept, exit 3. The caller's own processes in it (its kept sbt server) are stopped first
+#                 (cleanup.py free_worktree); still held by another's -> each holder named and the command, exit 4;
 #   the deadline -> `NOT DONE: <id> is <state> ...`, the command to resume, exit 2.
 UNTIL_DONE_DEADLINE = 4 * 3600  # s (--deadline): a batch at green, a verify round and a push fit well inside it
 
@@ -810,6 +811,15 @@ def until_done_finish(repo, eid, sha, a, item=None):
         print(f"DONE {sha} (queued {eid}): every local commit is on {remote()}/main; worktree kept (--keep-worktree)",
               flush=True)
         return 0
+    held = free_worktree(repo)
+    if held:
+        print(f"LANDED {sha} (queued {eid}); NOT DONE: the worktree {repo} is kept: still held after "
+              f"{int(env_num('AGENTCTL_FREE_WAIT', FREE_WAIT))} s by processes not this session's to stop:", flush=True)
+        for pid, cmd in sorted(held.items()):
+            print(f"  pid {pid}: {cmd[:200]}", flush=True)
+        print(f"next: ask their owner to stop them (or `kill {' '.join(map(str, sorted(held)))}` if they are yours), "
+              f"then {UNTIL_DONE_AGAIN} from {repo}: it only cleans up", flush=True)
+        return 4
     msg = close_worktree(repo)
     if not msg.startswith("closed worktree"):
         return kept(msg.split(": ", 1)[-1])

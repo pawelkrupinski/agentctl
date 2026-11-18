@@ -3,7 +3,7 @@ partial or repeated reports, worktrees left behind, `git branch -D` by hand afte
 mode owns the whole tail: it submits (or finds its queue entry again, by worktree and head), waits for the verdict,
 bounded, and then either says exactly why it did not land and the next command (exit 1), or proves every local commit's
 patch is on origin/main, removes the clean, own worktree and its branch and prints `DONE <sha> ... worktree removed`."""
-import os, sys, unittest
+import os, subprocess, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -137,6 +137,59 @@ class UntilDoneTest(test_queue.QueueTest):
         self.assertEqual(rc, 3, out)
         self.assertIn("not this session's", out)
         self.assertTrue(os.path.isdir(wt))
+
+    def holder(self, wt, session):
+        """A real process working in wt (a kept server's stand-in) whose environment carries `session`; the machine's
+        cwd scan reports it there while it lives."""
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_SESSION_ID"}
+        if session:
+            env["CLAUDE_CODE_SESSION_ID"] = session
+        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"], cwd=wt, env=env)
+        self.addCleanup(lambda: (p.poll() is None and p.kill(), p.wait()))
+        A.process_cwds = lambda: {p.pid: os.path.realpath(wt)} if p.poll() is None else {}
+        return p
+
+    def own_session(self, sid):
+        saved = os.environ.get("CLAUDE_CODE_SESSION_ID")
+        os.environ["CLAUDE_CODE_SESSION_ID"] = sid
+        self.addCleanup(lambda: os.environ.pop("CLAUDE_CODE_SESSION_ID") if saved is None
+                        else os.environ.__setitem__("CLAUDE_CODE_SESSION_ID", saved))
+
+    def test_its_own_server_holding_the_worktree_is_stopped_then_the_worktree_removed(self):
+        # 2026-11-18: LANDED 94a33a968, no DONE -- the agent's kept sbt server still worked in the worktree
+        self.own_session("session-mine")
+        wt, _ = self.agent("s", "web/src/main/S.scala", "s\n", msg="s: server kept")
+        server = self.holder(wt, "session-mine")
+        rc, out = self.until_done(wt)
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"stopped pid {server.pid} of this session", out)
+        self.assertIsNotNone(server.poll(), "the caller's server is stopped")
+        self.assertRegex(out.strip().splitlines()[-1], r"^DONE .*worktree removed")
+        self.assertFalse(os.path.isdir(wt))
+
+    def test_a_foreign_process_holding_the_worktree_is_named_never_stopped(self):
+        self.own_session("session-mine")
+        os.environ["AGENTCTL_FREE_WAIT"] = "1"
+        self.addCleanup(os.environ.pop, "AGENTCTL_FREE_WAIT")
+        wt, _ = self.agent("g", "web/src/main/G.scala", "g\n", msg="g: someone else in it")
+        for session in ("session-other", None):  # another session's, and one with no session at all
+            with self.subTest(session=session):
+                other = self.holder(wt, session)
+                rc, out = self.until_done(wt)
+                self.assertEqual(rc, 4, out)
+                self.assertRegex(out, r"LANDED [0-9a-f]{40}")
+                self.assertIn("NOT DONE", out)
+                self.assertIn(f"pid {other.pid}: ", out, "it names the holder")
+                self.assertIn(f"kill {other.pid}", out)
+                self.assertIn("land --until-done", out.strip().splitlines()[-1], "and the command to finish")
+                self.assertIsNone(other.poll(), "another's process is never signalled")
+                self.assertTrue(os.path.isdir(wt))
+                self.assertIn("g", self.branches())
+                other.kill()
+                other.wait()
+        rc, out = self.until_done(wt)  # once it is gone, the same command finishes
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.isdir(wt))
 
     def test_the_root_checkout_is_never_removed(self):
         self.r.write("web/src/main/Root.scala", "r\n")
