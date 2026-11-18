@@ -419,10 +419,6 @@ class LandMutationTest(unittest.TestCase):
         self.assertTrue(res.failures or res.errors, "mutant survived")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class LandRemoteTest(LandBase):
     """land rebases onto and pushes to `origin` (GitHub's remote in every clone), or $AGENTCTL_REMOTE."""
 
@@ -443,3 +439,26 @@ class LandRemoteTest(LandBase):
         self.assertIn(f"LANDED {sha}", out)
         self.assertEqual(self.remote_main(), sha)
         self.assertEqual(sh(self.r.path, "git", "rev-parse", "origin/main"), sha)
+
+
+class LandingAreasTest(unittest.TestCase):
+    """2026-11-17 (movies ec5c2f3bd, the owner's "B1"): the page area and e2e run after landing, on Main only -- the
+    hook's areas before the push are `identity` alone. What agentctl tells landers (AGENTCTL.md, the agents' brief, the
+    retired-queue line) must not promise a `page` area test before the push."""
+
+    ROOT = os.path.join(HERE, "..")
+
+    def read(self, rel):
+        with open(os.path.join(self.ROOT, rel)) as f:
+            return f.read()
+
+    def test_no_page_area_is_promised_before_the_push(self):
+        promises = [r"area tests \(identity, page\)", r"`identity` or `page`", r"identity /\s+page area tests"]
+        for rel in ("AGENTCTL.md", "briefs/movies-agent-preamble.md", "lib/agentctl/tools.py"):
+            for p in promises:
+                self.assertNotRegex(self.read(rel), p, f"{rel} still names a page area test")
+        self.assertNotRegex(A.QUEUE_RETIRED, r"\bpage area\b")
+
+
+if __name__ == "__main__":
+    unittest.main()

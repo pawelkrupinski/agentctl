@@ -11,7 +11,7 @@ TUNNEL_TROUBLE = re.compile(r"GitOps manifests STALE|Connection to localhost clo
                             r"Could not read from remote repository|Connection refused", re.I)
 LAND_RETRIES = 3
 # One lander per repository: with no pre-merge CI left (movies, 2026-10-26) a landing is the hook's local tests --
-# minutes for an identity or page change -- and two landers would each test a base the other is about to move, then
+# minutes for an identity change -- and two landers would each test a base the other is about to move, then
 # race, rebase, and test again. Agents wait for the lock instead (land runs in the background), and it caps the
 # laptop at one landing hook's JVM at a time.
 LAND_LOCK_TIMEOUT = 4 * 3600

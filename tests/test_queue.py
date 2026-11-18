@@ -1290,8 +1290,8 @@ jobs:
   plan:
     runs-on: x
     timeout-minutes: 10
-  page:
-    name: check (page)
+  heavy:
+    name: heavy rows (itrest)
     timeout-minutes: 90
   identity:
     name: check (identity ${{ matrix.shard }}/2)
@@ -1304,29 +1304,29 @@ jobs:
         return {"name": name, "status": status, "started_at": A.iso_at(started)}
 
     def test_the_workflow_declares_each_jobs_timeout(self):
-        self.assertEqual(A.workflow_job_timeouts(self.FLOW), {"plan": 600, "check (page)": 5400,
+        self.assertEqual(A.workflow_job_timeouts(self.FLOW), {"plan": 600, "heavy rows (itrest)": 5400,
                                                               "check (identity ${{ matrix.shard }}/2)": None,
                                                               "report": None})
 
     def test_a_long_job_inside_its_timeout_is_progress(self):
         t = 10_000.0
-        jobs = [self.job("plan", t - 7000, "completed"), self.job("check (page)", t - 50 * 60)]
+        jobs = [self.job("plan", t - 7000, "completed"), self.job("heavy rows (itrest)", t - 50 * 60)]
         rem = {"run": 7, "progress_sig": None, "progress_at": t - 3600}
-        rem = A.remote_progress(rem, {"updated_at": "a"}, jobs, t - 1800, bounds={"check (page)": 5400})
-        again = A.remote_progress(rem, {"updated_at": "a"}, jobs, t, bounds={"check (page)": 5400})
+        rem = A.remote_progress(rem, {"updated_at": "a"}, jobs, t - 1800, bounds={"heavy rows (itrest)": 5400})
+        again = A.remote_progress(rem, {"updated_at": "a"}, jobs, t, bounds={"heavy rows (itrest)": 5400})
         self.assertEqual(again["progress_at"], t, "50 min into a 90-min job: alive, though nothing in the list moved")
 
     def test_a_job_past_its_own_bound_is_no_progress(self):
         t = 10_000.0
-        jobs = [self.job("check (page)", t - 100 * 60)]
-        rem = A.remote_progress({"run": 7}, {"updated_at": "a"}, jobs, t - 600, bounds={"check (page)": 5400})
-        self.assertEqual(A.remote_progress(rem, {"updated_at": "a"}, jobs, t, bounds={"check (page)": 5400})
+        jobs = [self.job("heavy rows (itrest)", t - 100 * 60)]
+        rem = A.remote_progress({"run": 7}, {"updated_at": "a"}, jobs, t - 600, bounds={"heavy rows (itrest)": 5400})
+        self.assertEqual(A.remote_progress(rem, {"updated_at": "a"}, jobs, t, bounds={"heavy rows (itrest)": 5400})
                          ["progress_at"], t - 600)
 
     def test_a_job_with_no_timeout_uses_its_p90_then_the_cap(self):
         flow = A.workflow_job_timeouts(self.FLOW)
         b = A.remote_job_bounds(flow, {"check (identity 1/2)": 1200.0})
-        self.assertEqual(A.remote_job_expected(b, "check (page)"), 5400)
+        self.assertEqual(A.remote_job_expected(b, "heavy rows (itrest)"), 5400)
         self.assertEqual(A.remote_job_expected(b, "check (identity 1/2)"), 1200.0 * A.REMOTE_P90_HEADROOM)
         self.assertEqual(A.remote_job_expected(b, "check (identity 2/2)"), A.REMOTE_JOB_CAP)
         self.assertEqual(A.remote_job_expected(b, "report"), A.REMOTE_JOB_CAP)

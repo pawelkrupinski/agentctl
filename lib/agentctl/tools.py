@@ -4,8 +4,8 @@
 # ---------------------------------------------------------------- queue (retired)
 QUEUE_RETIRED = """NOT QUEUED: the merge queue is RETIRED (2026-10-26). There is no pre-merge CI left to batch: the landing check
 is no merge requirement any more. Land every change -- identity changes included -- with `~/bin/agentctl land` (Bash
-run_in_background=true): it queues the change at once, and the reconciler checks it (the basic checks plus the identity /
-page area tests your paths select) and pushes it. While main is red, a production change waits and lands with the batch
+run_in_background=true): it queues the change at once, and the reconciler checks it (the basic checks plus the identity
+area tests your paths select; the page tests run after landing, on Main) and pushes it. While main is red, a production change waits and lands with the batch
 once main is green (`agentctl land status`)."""
 
 

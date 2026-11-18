@@ -19,7 +19,7 @@ Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wai
      pressure, on ci-runner's check tier (a `check/<id>` branch running .github/workflows/precommit-check.yml,
      deleted afterwards). The checks are the pre-push hook's: the red gate (at push), the path-selected checks, the
      BASIC tests (`scripts/hooks/local-tests.txt`'s `basic` set) and, when your paths touch an AREA, that area's local
-     tests -- `identity` or `page`;
+     tests -- `identity` (the page tests and e2e run after landing, on Main's gate rows: movies ec5c2f3bd);
   2. main green (or a tools-only / Fixes-Red change): pushes it -> `LANDED <sha>`, then watches main's Main and
      convergence runs for it -> `WATCH OK / RED / UNKNOWN`;
   3. main red and a production change: holds it -> `WAITING ...`; it lands with the batch (checked once) at the next

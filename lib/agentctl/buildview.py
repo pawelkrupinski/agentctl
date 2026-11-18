@@ -21,7 +21,7 @@
 #   - every other file under project/ (plugins.sbt, build.properties, project/project/...) and every root *.sbt but
 #     build.sbt (coupling.sbt, identity-impact.sbt: sbt reads them all) is in every view, whole.
 # The SEEDS are the projects of the change's own module directories and of every module its selection names (the hook's
-# --plan, --unit-plan and the area lines of local-tests.txt it selects: `worker/testOnly ...`, `web/PageTest/...`) --
+# --plan, --unit-plan and the area lines of local-tests.txt it selects: `worker/testOnly ...`, `identity/testOnly ...`) --
 # what the full round would run beyond the verification, which compiles every test config under the new build anyway.
 # Over-inclusion is the safe side: an identifier that merely LOOKS like a definition's name pulls it in. Anything that
 # cannot be read (a file, a statement, no project for a module) answers None: the full round.
