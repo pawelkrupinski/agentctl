@@ -26,6 +26,11 @@ TURN. The processor's tick checks it in a check tree (an executor holding check/
 under pressure), pushes it under the land/<repo> lease -> LANDED and a watch item (Main and the convergence for the sha:
 WATCH OK / RED / UNKNOWN); main red and the change must wait (a production path, no Fixes-Red: for the red run):
 WAITING, landed with the batch checked once at green. Every verdict goes to `agentctl inbox`, naming your worktree.
+--UNTIL-DONE (movies agents' last step, run in the background): submit -- or resume this worktree's entry at HEAD, never
+queued twice -- the fast precheck in the foreground, wait for the verdict (--deadline, default 4h), then: NOT LANDED:
+<why> + `next: <command>` (exit 1); LANDED, every local commit's patch on origin/main and the worktree clean and this
+agent's own -> worktree and branch removed, `DONE <sha> ... worktree removed` (exit 0); landed but kept (dirty,
+foreign, root, unproven) exit 3; the deadline exit 2 (call it again to resume).
 THE FAST PRECHECK: a repo with an executable scripts/land-precheck (movies) has it run beside the queue, never before
 QUEUED; a refusal cancels the queued change with `NOT LANDED: the fast precheck refused <id>` in the inbox, minutes
 before the landing check would say it. --no-fast-precheck starts none.

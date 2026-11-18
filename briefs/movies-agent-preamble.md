@@ -11,9 +11,11 @@ Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wai
 ## Landing
 - No pre-merge CI (the owner, 2026-10-26). EVERY change -- identity included -- lands with `~/bin/agentctl land`
   from your worktree. There is no merge queue CI step, and no identity-landing-check LANDABLE is required.
-- AGENTS NEVER WAIT ON A LAND (the owner, 2026-10-27). `land` fetches, rebases onto <remote>/main, runs the squash guard
-  and prints `QUEUED <id> (<sha>)` within seconds. END YOUR TURN AT QUEUED. The always-on `waiting` processor then, on
-  its own:
+- END WITH `land --until-done` (the owner, 2026-11-18). Your LAST step, once your work is committed and its test layers
+  are green: `~/bin/agentctl land --until-done` from your worktree, with the Bash tool's `run_in_background=true`, then
+  END YOUR TURN; you are re-invoked when it exits. It owns the whole tail: it rebases, queues (or, called again after an
+  interruption, resumes its own entry: never queued twice), runs the fast precheck, waits for the verdict (bounded,
+  `--deadline`, 4 h by default), and the always-on processor meanwhile:
   1. checks the change in a check tree of its own (`<clone>-wt-check-<n>`, warm), admitted by the laptop's governor
      (`agentctl gov status`; a `Fixes-Red:` fix of a red run goes first) -- or, when the laptop is under memory or CPU
      pressure, on ci-runner's check tier (a `check/<id>` branch running .github/workflows/precommit-check.yml,
@@ -21,12 +23,21 @@ Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wai
      BASIC tests (`scripts/hooks/local-tests.txt`'s `basic` set) and, when your paths touch an AREA, that area's local
      tests -- `identity` (the page tests and e2e run after landing, on Main's gate rows: movies ec5c2f3bd);
   2. main green (or a tools-only / Fixes-Red change): pushes it -> `LANDED <sha>`, then watches main's Main and
-     convergence runs for it -> `WATCH OK / RED / UNKNOWN`;
+     convergence runs for it -> `WATCH OK / RED / UNKNOWN` (to the inbox);
   3. main red and a production change: holds it -> `WAITING ...`; it lands with the batch (checked once) at the next
      green.
-- Every verdict (QUEUED, LANDED, WAITING, NOT LANDED with the failing checks' tail, WATCH ...) goes to
-  `~/bin/agentctl inbox` with your worktree as its cwd; the orchestrator reads and routes it. A NOT LANDED or WATCH RED
-  of yours comes back to you as a new message. Your final report names your worktree and the QUEUED id.
+  Its last line is the verdict you act on:
+  - `DONE <sha> ...: worktree removed` (exit 0): every local commit's patch is on <remote>/main, the worktree and branch
+    are gone (no `git branch -D` by hand). Report ONCE, now, naming the sha.
+  - `NOT LANDED: <why>` then `next: <command>` (exit 1): do exactly that (rebase / fix and commit), then run
+    `land --until-done` again.
+  - `NOT DONE: ...` (exit 2, the deadline): run `land --until-done` again; it resumes the same entry.
+  - `LANDED <sha> ...; NOT DONE: the worktree ... is kept: <why>` (exit 3): it landed; the worktree was not provably
+    yours, clean and merged. Say why in your report; never force-remove it.
+  Never report before that last line, never report the same verdict twice, never stop after the rebase.
+- Every verdict (QUEUED, LANDED, WAITING, NOT LANDED with the failing checks' tail, WATCH ...) also goes to
+  `~/bin/agentctl inbox` with your worktree as its cwd; the orchestrator reads it. A WATCH RED of yours comes back to
+  you as a new message.
 - `land` itself refuses at once (`NOT LANDED: <why>`) only for a dirty tree, a rebase conflict or the squash guard: fix,
   commit, land again. `agentctl land status` lists the queue; `agentctl land cancel <id>` drops your change (the old `waiting status|cancel` names answer until 2026-11-05).
   (A dispatched red fixer's land, and `land --follow`, still run the checks in-process and end at `LANDED`.)
@@ -77,12 +88,12 @@ Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wai
 
 ## Report
 Under 300 words:
-- what landed, with SHAs;
+- what landed, with SHAs (`land --until-done`'s DONE line);
 - what's left;
 - risks;
 - any command the user must run.
 
-When done, remove your worktree with `git worktree remove` once it is merged.
+`land --until-done` removes your worktree and branch at DONE; never remove them by hand.
 
 - Owner-run steps (prod Mongo, infra push/deploy, secret writes): report them as ONE complete `!` command the owner can paste as-is (tunnel, `secrets get`, a read-only script file, cleanup), never a bare query.
 - Any document you write for the owner (design doc, write-up, report): also put it in ~/Desktop/"claude docs"/ as .md and a rendered .pdf (`nix shell nixpkgs#pandoc -c pandoc X.md -s -o X.html`, then Chrome headless `--print-to-pdf`).

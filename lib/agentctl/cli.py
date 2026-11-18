@@ -86,6 +86,13 @@ def main(argv=None):
     lp.add_argument("--head", required=True)
     ld.add_argument("--no-batch", action="store_true",
                     help="movies: check this change alone, never in a backlog batch with other queued changes")
+    ld.add_argument("--until-done", action="store_true",
+                    help="movies agents' ending: submit (or resume this worktree's entry at HEAD), wait for the verdict, "
+                         "then NOT LANDED + the next command (exit 1), or prove every local commit on origin/main, "
+                         "remove the clean worktree and its branch: DONE <sha> ... worktree removed (exit 0); "
+                         "3 landed but kept, 2 the deadline")
+    ld.add_argument("--deadline", type=parse_duration, metavar="DUR",
+                    help="--until-done: give up waiting after DUR (90s, 30m, 3h; default 4h); called again, it resumes")
     ld.add_argument("--keep-worktree", action="store_true",
                     help="after WATCH OK, keep the worktree land ran from (default: closed when proven merged and clean)")
     ev = sub.add_parser("env", help="print sdkman sbt/java export lines (--print) or check the agent environment (--check)",

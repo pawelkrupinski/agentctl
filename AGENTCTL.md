@@ -26,7 +26,7 @@ calls.
 ```sh
 eval "$(~/bin/agentctl env --print)"        # 1. sbt/java on PATH; a locked vault stops you here with one line
 #    ... work in your own worktree, commit ...
-~/bin/agentctl land                         # 2. rebase + guard, then QUEUED <id> in seconds: END YOUR TURN (verdicts -> inbox)
+~/bin/agentctl land --until-done            # 2. movies agents' LAST step (run_in_background): submit, wait, DONE <sha> ... worktree removed
 ~/bin/agentctl wait run <id> &              # 3. Bash run_in_background=true, then END YOUR TURN
 ~/bin/agentctl ci-why                       # 4. only when land says the red gate refused, or Main is red
 ~/bin/agentctl inbox --unread --ack         # 5. your own verdicts (the orchestrator/owner: --ack --all), agent alive or not
@@ -47,8 +47,11 @@ Step by step:
 1. Run `env --print` first in any session that builds or pushes. If it prints
    `vault <ns> locked: ask the user to run `! secrets unlock <ns>``, stop there and pass that line to the lead.
 2. Work and commit in your own worktree. Never use `reset --soft` onto a moved main.
-3. Run `land` from the worktree; it prints `QUEUED <id>` within seconds (or `NOT LANDED: <why>` for a dirty tree, a
-   rebase conflict, the squash guard). END YOUR TURN at QUEUED. A NOT LANDED or WATCH RED of yours comes back to you
+3. Movies agents end with `land --until-done` from the worktree (Bash `run_in_background=true`, then END YOUR TURN):
+   it queues, waits for the verdict and ends `DONE <sha> ... worktree removed` (the worktree and branch gone, every
+   local commit's patch proven on main), or `NOT LANDED: <why>` + `next: <command>`; report once, after that line (see
+   "land --until-done"). A plain `land` prints `QUEUED <id>` within seconds (or `NOT LANDED: <why>` for a dirty tree, a
+   rebase conflict, the squash guard) and its verdicts come through the inbox. A WATCH RED of yours comes back to you
    through the inbox: fix forward (`Fixes-Red: <run>` for a red you caused) and land again.
 4. To wait for a CI run, start `wait run` with the Bash tool's `run_in_background=true` and end your turn. You are
    re-invoked when it exits. Never sleep or poll in the foreground.
@@ -1086,6 +1089,7 @@ fixer record, and only without a Claude session by the fixer environment. Any ot
 
 ```
 agentctl land [--repo PATH] [--branch B] [--stash] [--keep-worktree] [--no-fast-precheck]   # movies: QUEUED <id> (<sha>): END YOUR TURN
+agentctl land --until-done [--deadline 4h] [--keep-worktree]   # movies agents' last step: the whole tail (below)
 agentctl land --follow              # scripts: the checks here, the push, then the watch, in-process
 # A red fixer's plain `land` QUEUES like every land (2026-11-16): the fast precheck in the foreground (its refusal is the
 # fixer's NOT LANDED in seconds), then a bounded wait for the queue's verdict (LANDED <sha> / NOT LANDED: <why>,
@@ -1295,6 +1299,35 @@ Other repos (no movies hook): `land` holds `land/<repo>`, fetches, rebases, runs
 hook runs), verifies with `merge-base --is-ancestor` or `git cherry`, and prints `LANDED <sha>`; no watch.
 
 Use it for every push to main. Don't use it for `measure/` branches: `identity-measure` pushes those itself.
+
+#### land --until-done: the agent's whole tail (the owner, 2026-11-18)
+
+Agents kept ending badly: stopping after the rebase without landing, handing back partial reports or the same report
+twice, leaving worktrees behind, and `git branch -D` by hand after a landing rebased their commits (never merged by
+ancestry). `land --until-done` (movies, the queue) owns the tail, bounded by `--deadline` (default 4 h,
+`$AGENTCTL_UNTIL_DONE_DEADLINE`; `90s`, `30m`, `3h`):
+
+1. Its own entry first: a change item (or this host's queue entry) submitted from THIS worktree at THIS head. Open:
+   `RESUMING <id>` and it waits for it -- called again after an interruption it never queues the same change twice.
+   Landed: straight to step 4. None (or only a decided non-landed one): when every local commit is already on main by
+   patch, straight to step 4; else the plain land's rebase, squash guard and `QUEUED <id>`.
+2. The fast precheck runs in the FOREGROUND (as a red fixer's): a refusal is its NOT LANDED at once.
+3. It waits for the verdict (the store item, polled with backoff). `NOT LANDED: <why>` is printed with the exact
+   reason and then `next: <command>` -- a conflict: `git -C <wt> fetch origin main && git -C <wt> rebase origin/main`;
+   failed checks or a precheck refusal: fix, commit; superseded: it resumes the newer entry -- each ending
+   `~/bin/agentctl land --until-done`; exit 1. The deadline: `NOT DONE: <id> is <state> ...` and the command to
+   resume, exit 2.
+4. `LANDED <sha>`, then the proof and the cleanup: every local commit's patch on origin/main (`git cherry` plus content
+   twins, cherry_landed), the worktree not the root checkout, not another session's change (its item's `session`),
+   no other process working in it, clean (untracked files included). Then the worktree is removed and its branch
+   deleted -- a force delete, but only after that patch check (cleanup.py `close_worktree`) -- and the last line is
+   `DONE <sha> (queued <id>): every local commit's patch is on origin/main; worktree removed (...)`, exit 0.
+   `--keep-worktree`: `DONE ... worktree kept`. Anything unproven: `LANDED <sha> ...; NOT DONE: the worktree <wt> is
+   kept: <why>`, exit 3 -- a dirty or foreign worktree is never removed.
+
+The brief (`~/bin/briefs/movies-agent-preamble.md`) makes it every movies agent's last step: run it with
+`run_in_background=true`, end the turn, report once after its last line. Code: queue.py `land_until_done`,
+`own_change_item`, `until_done_finish`, `next_command`; tests: `tests/test_until_done.py`.
 
 ### remote checks: ci-runner's check tier
 

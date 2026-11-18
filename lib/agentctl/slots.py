@@ -496,6 +496,11 @@ def cmd_land(a):
             stash = Stash(repo)
             stash.save()
             err(f"stashed local changes as {stash.name} ({stash.sha[:10]})")
+        if getattr(a, "until_done", False):  # the whole tail: submit, wait, clean up (queue.py LAND --UNTIL-DONE)
+            if not queue_mode(repo, a):
+                print("NOT LANDED: --until-done is the land queue's (movies); it takes no --follow / --no-watch")
+                return 1
+            return land_until_done(repo, main_ref, sh, a)
         if queue_mode(repo, a):  # THE LAND QUEUE: rebase, guard, QUEUED -- the checks and the push are the processor's
             return enqueue(repo, main_ref, sh, a)
         a.landed_sha, a.pushed_at, a.waiting = None, None, None
