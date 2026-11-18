@@ -52,12 +52,14 @@ JOB_FAILED = ("failure", "timed_out", "startup_failure", "action_required")
 # `${{ ... }}` in the name matches any text, a reusable workflow's jobs are `<name> / <inner>`) before a success counts.
 JOB_KEY_LINE = re.compile(r"^( +)([A-Za-z_][\w-]*):[ \t]*(?:#.*)?$")
 JOB_NAME_LINE = re.compile(r"^( +)name:[ \t]*(.*?)[ \t]*$")
+JOB_TIMEOUT_LINE = re.compile(r"^ +timeout-minutes:[ \t]*(\d+)[ \t]*(?:#.*)?$")
 EXPRESSION = re.compile(r"\$\{\{.*?\}\}")
 
 
-def workflow_job_names(text):
-    """The name templates of a workflow's jobs, as its text declares them (a job without `name:` is named by its key)."""
-    names, lines = [], text.splitlines()
+def workflow_jobs(text):
+    """The jobs of a workflow, as its text declares them: [{name, timeout_s}] -- name its template (a job without
+    `name:` is named by its key), timeout_s its own `timeout-minutes` in s or None."""
+    jobs, lines = [], text.splitlines()
     try:
         i = next(n for n, l in enumerate(lines) if re.match(r"^jobs:[ \t]*(?:#.*)?$", l)) + 1
     except StopIteration:
@@ -73,22 +75,33 @@ def workflow_job_names(text):
         if job_indent is None and key:
             job_indent = indent
         if indent == job_indent and key:
-            if job:
-                names.append(job["name"])
-            job, props_indent = {"name": key.group(2)}, None
+            job, props_indent = {"name": key.group(2), "timeout_s": None}, None
+            jobs.append(job)
             continue
         if job is None or indent <= job_indent:
             continue
         if props_indent is None:
             props_indent = indent
-        named = JOB_NAME_LINE.match(line)
-        if indent == props_indent and named:
+        if indent != props_indent:
+            continue
+        named, bound = JOB_NAME_LINE.match(line), JOB_TIMEOUT_LINE.match(line)
+        if named:
             value = named.group(2)
             quoted = re.match(r"""^(['"])(.*?)\1""", value)
             job["name"] = quoted.group(2) if quoted else value.split(" #", 1)[0].rstrip()
-    if job:
-        names.append(job["name"])
-    return names
+        elif bound:
+            job["timeout_s"] = int(bound.group(1)) * 60
+    return jobs
+
+
+def workflow_job_names(text):
+    """The name templates of a workflow's jobs, as its text declares them (a job without `name:` is named by its key)."""
+    return [j["name"] for j in workflow_jobs(text)]
+
+
+def workflow_job_timeouts(text):
+    """{name template: its timeout-minutes in s, or None} of a workflow's jobs."""
+    return {j["name"]: j["timeout_s"] for j in workflow_jobs(text)}
 
 
 def job_name_glob(template):
@@ -134,11 +147,80 @@ def jobs_verdict(jobs, globs, expect=()):
 # hours of passes thrown away and the change checked again from scratch behind the same queue). The poll marks
 # `progress_at` whenever the run's jobs move (a job queued, started or ended; the run's own update time); past
 # REMOTE_TIMEOUT a run is cancelled only once idle REMOTE_IDLE, and past REMOTE_TIMEOUT_MAX whatever it does.
-def remote_progress(rem, run, jobs, t):
-    """rem with progress_at moved to t when the run's jobs (or its update time) differ from the last poll's."""
+# A RUNNING JOB INSIDE ITS OWN EXPECTED DURATION IS PROGRESS (2026-11-18: a healthy run whose only remaining job is long
+# -- one job past 30 min into its work, the others done -- moved nothing in its job list and read as idle). A job's
+# expected duration (remote_job_bounds, read once per run): its own `timeout-minutes` at the checked commit (GitHub ends
+# it there; inside it, it is alive by definition), else REMOTE_P90_HEADROOM x its recorded p90 (the CI collector's
+# source:ci job rows in victoria-logs-ci, REMOTE_P90_WINDOW back, when the store is reachable), else REMOTE_JOB_CAP.
+REMOTE_JOB_CAP = 2 * 3600       # s a running job with no timeout-minutes and no recorded p90 is taken as alive
+REMOTE_P90_HEADROOM = 1.5       # x a job's recorded p90 it is taken as alive (no timeout-minutes of its own)
+REMOTE_P90_WINDOW = 30 * 86400  # s of the collector's job rows a p90 is read from
+REMOTE_P90_MIN = 5              # runs of a job before its p90 counts
+
+
+def remote_job_bounds(timeouts, p90s):
+    """{job name template or name: s a running job is expected to take at most}: each template's timeout-minutes
+    (workflow_job_timeouts), else REMOTE_P90_HEADROOM x a listed name's p90 (p90s); a job in neither has
+    REMOTE_JOB_CAP (remote_job_expected)."""
+    out = {t: s for t, s in (timeouts or {}).items() if s}
+    bounded = [job_name_glob(t) for t in out]
+    for name, p90 in (p90s or {}).items():
+        if p90 and not any(fnmatch.fnmatchcase(name, g) for g in bounded):
+            out[name] = float(p90) * REMOTE_P90_HEADROOM
+    return out
+
+
+def remote_job_expected(bounds, name):
+    """The s job `name` is expected to run at most (remote_job_bounds), else REMOTE_JOB_CAP."""
+    if name in (bounds or {}):
+        return bounds[name]
+    for t, s in (bounds or {}).items():
+        if EXPRESSION.search(t) and fnmatch.fnmatchcase(name or "", job_name_glob(t)):
+            return s
+    return REMOTE_JOB_CAP
+
+
+def remote_job_p90s(since):
+    """{job name: p90 duration_s} of REMOTE_WORKFLOW's finished jobs (the collector's source:ci rows), {} when the store
+    is not reachable from here (stats_url) or answers nothing."""
+    url = stats_url()
+    if not url:
+        return {}
+    try:
+        rows = stats_query(url, f'source:ci workflow_file:="{REMOTE_WORKFLOW}" kind:job conclusion:="success" '
+                                f'| stats by (job) quantile(0.9, duration_s) p90, count() n', start=since)
+    except Exception:  # the store down: the timeouts and the cap still bound
+        return {}
+    return {r["job"]: float(r["p90"]) for r in rows
+            if r.get("job") and _num(r.get("p90")) and int(_num(r.get("n")) or 0) >= REMOTE_P90_MIN}
+
+
+def remote_read_bounds(o_r, sha):
+    """remote_job_bounds of REMOTE_WORKFLOW at commit sha and the recorded p90s; {} when neither can be read."""
+    import base64
+    try:
+        r = api(o_r, "GET", f"contents/.github/workflows/{REMOTE_WORKFLOW}", {"ref": sha}) or {}
+        timeouts = workflow_job_timeouts(base64.b64decode(r.get("content") or "").decode(errors="replace"))
+    except Exception:
+        timeouts = {}
+    return remote_job_bounds(timeouts, remote_job_p90s(time.time() - REMOTE_P90_WINDOW))
+
+
+def remote_progress(rem, run, jobs, t, bounds=None):
+    """rem with progress_at moved to t when the run's jobs (or its update time) differ from the last poll's, or a job
+    still runs inside its own expected duration (remote_job_expected over bounds)."""
     sig = [run.get("updated_at") or run.get("updatedAt")] + sorted(f"{j.get('name')}:{j.get('status')}" for j in jobs or [])
     if sig != rem.get("progress_sig"):
         return {**rem, "progress_sig": sig, "progress_at": t}
+    for j in jobs or []:
+        if j.get("status") != "in_progress" or not j.get("started_at"):
+            continue
+        try:
+            started = parse_time(j["started_at"]).timestamp()
+        except (ValueError, TypeError):
+            continue
+        if t - started < remote_job_expected(bounds, j.get("name")):
+            return {**rem, "progress_at": t}
     return rem
 
 
@@ -161,7 +243,9 @@ def remote_poll(o_r, rem):
     jobs = []
     if status in ("queued", "running", "waiting", "in_progress"):  # the jobs: the progress mark, and the verdict below
         jobs = (api(o_r, "GET", f"actions/runs/{rem['run']}/jobs", {"per_page": 100}) or {}).get("jobs") or []
-        rem = remote_progress(rem, run, jobs, time.time())
+        if rem.get("job_bounds") is None:
+            rem["job_bounds"] = remote_read_bounds(o_r, rem["tip"])
+        rem = remote_progress(rem, run, jobs, time.time(), rem["job_bounds"])
     name = f"{REMOTE_WORKFLOW} run {rem['run']} (#{run.get('run_number')})"
     if rem.get("status"):
         return rem

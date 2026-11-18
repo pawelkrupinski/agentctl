@@ -1297,7 +1297,10 @@ ADOPTS it (no new push, no new run) on the base it checked even when main moved 
 past them it is checked locally. The 2-h bound judges PROGRESS (2026-11-17, ref-srp-54ebae: every check had passed
 and `check (page)` was 14 min into its run, after 23 min waiting for a saturated check runner, when the 2 h from the
 push cancelled it): each poll marks `progress_at` when the run's jobs move, a run past 2 h is cancelled only once idle
-30 min (`REMOTE_IDLE`), and any run past 4 h (`REMOTE_TIMEOUT_MAX`). A failed push of the check branch is tried again 5 s and 20 s later
+30 min (`REMOTE_IDLE`), and any run past 4 h (`REMOTE_TIMEOUT_MAX`). A RUNNING JOB INSIDE ITS OWN EXPECTED DURATION
+IS PROGRESS (2026-11-18: a healthy run whose only remaining job ran past 30 min, the others done, read as idle): its
+`timeout-minutes` at the checked commit, else 1.5 x its recorded p90 (the collector's `source:ci` job rows in
+victoria-logs-ci, 30 days, >= 5 runs), else 2 h (`REMOTE_JOB_CAP`), read once per run (`job_bounds`). A failed push of the check branch is tried again 5 s and 20 s later
 (2026-11-17: two rounds ended "its checks stalled" 13 s in, no branch created on GitHub, and lost ~20 min each to the
 infra backoff and the check-slot queue); a round with no verdict is re-queued as `its checks stalled (<where>: <what
 the remote check said>)`, so the landing round's `reason` names the cause (remote.py `check_branch_push`). Such a

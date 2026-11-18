@@ -1280,6 +1280,58 @@ class RemoteRunProgressTest(unittest.TestCase):
         self.assertEqual((r1["progress_at"], r2["progress_at"], r3["progress_at"]), (100.0, 100.0, 300.0))
 
 
+class RemoteJobExpectedTest(unittest.TestCase):
+    """2026-11-18: a healthy run whose last job is long (one job > 30 min into its work, the others done) read as idle:
+    nothing in the job list moved, so past 2 h it was cancelled. A running job still inside its own expected duration
+    -- its timeout-minutes, else its recorded p90, else REMOTE_JOB_CAP -- is progress."""
+
+    FLOW = """name: precommit-check
+jobs:
+  plan:
+    runs-on: x
+    timeout-minutes: 10
+  page:
+    name: check (page)
+    timeout-minutes: 90
+  identity:
+    name: check (identity ${{ matrix.shard }}/2)
+    runs-on: x
+  report:
+    runs-on: x
+"""
+
+    def job(self, name, started, status="in_progress"):
+        return {"name": name, "status": status, "started_at": A.iso_at(started)}
+
+    def test_the_workflow_declares_each_jobs_timeout(self):
+        self.assertEqual(A.workflow_job_timeouts(self.FLOW), {"plan": 600, "check (page)": 5400,
+                                                              "check (identity ${{ matrix.shard }}/2)": None,
+                                                              "report": None})
+
+    def test_a_long_job_inside_its_timeout_is_progress(self):
+        t = 10_000.0
+        jobs = [self.job("plan", t - 7000, "completed"), self.job("check (page)", t - 50 * 60)]
+        rem = {"run": 7, "progress_sig": None, "progress_at": t - 3600}
+        rem = A.remote_progress(rem, {"updated_at": "a"}, jobs, t - 1800, bounds={"check (page)": 5400})
+        again = A.remote_progress(rem, {"updated_at": "a"}, jobs, t, bounds={"check (page)": 5400})
+        self.assertEqual(again["progress_at"], t, "50 min into a 90-min job: alive, though nothing in the list moved")
+
+    def test_a_job_past_its_own_bound_is_no_progress(self):
+        t = 10_000.0
+        jobs = [self.job("check (page)", t - 100 * 60)]
+        rem = A.remote_progress({"run": 7}, {"updated_at": "a"}, jobs, t - 600, bounds={"check (page)": 5400})
+        self.assertEqual(A.remote_progress(rem, {"updated_at": "a"}, jobs, t, bounds={"check (page)": 5400})
+                         ["progress_at"], t - 600)
+
+    def test_a_job_with_no_timeout_uses_its_p90_then_the_cap(self):
+        flow = A.workflow_job_timeouts(self.FLOW)
+        b = A.remote_job_bounds(flow, {"check (identity 1/2)": 1200.0})
+        self.assertEqual(A.remote_job_expected(b, "check (page)"), 5400)
+        self.assertEqual(A.remote_job_expected(b, "check (identity 1/2)"), 1200.0 * A.REMOTE_P90_HEADROOM)
+        self.assertEqual(A.remote_job_expected(b, "check (identity 2/2)"), A.REMOTE_JOB_CAP)
+        self.assertEqual(A.remote_job_expected(b, "report"), A.REMOTE_JOB_CAP)
+
+
 class LandedInboxTest(QueueTest):
     """EVERY WAY A CHANGE LANDS TELLS ITS AUTHOR ONCE (review round 7). LANDED verdicts went missing twice: 20261116-184811-
 movies-r2-ci-ac68b8 (a batch landing) and 2b8927680 (a verify-round push; its author's `inbox wait --audience author
