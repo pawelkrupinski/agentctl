@@ -25,14 +25,17 @@ class AskBase(CrashLoopBase):
         self.assertEqual(it["state"], "blocked-external")
         return it
 
-    def owner_cause_blocked(self, key="nix"):
-        """Nix update #1's shape: a fixer's `red block --owner-cause ... --cmd` (the block lease), the red then moved."""
+    def owner_cause_blocked(self, key="nix", probe=True):
+        """Nix update #1's shape: a fixer's `red block --owner-cause ... --cmd` (the block lease, with the probe that
+        clears it: `red block` always gives one), the red then moved."""
         it = self.red(key=key, workflow="Nix update", red_kind="outside", kind="infra",
                       last_run={"number": 1, "databaseId": 501})
         self.st.acquire(A.block_lease(key), "owner:dashboard", A.BLOCK_TTL, A.BLOCK_MAX, progress="p",
                         meta={"kind": "block", "owner_cause": "dashboard", "cmd": "open github.com/apps/sync-bot and "
                               "grant it movies-gitops", "keys": [key], "until": "Nix update is green",
-                              "text": "BLOCKED ON OWNER: ..."})
+                              "text": "BLOCKED ON OWNER: ...",
+                              **({"probe": {"kind": "workflow_green", "args": {"workflow": "Nix update"}}}
+                                 if probe else {})})
         return A.red_move(self.st, it, "blocked-external", "blocked", data={"block": A.block_lease(key)})
 
     def events(self, kinds=None):
@@ -222,6 +225,23 @@ class HoldTest(AskBase):
         self.owner_cause_blocked()
         self.assertEqual(self.remind(0), [])
         self.assertEqual(len(self.remind(61)), 1)
+
+    def test_a_block_only_the_owner_can_lift_is_told_at_once(self):
+        """2026-11-18: a question nothing but the owner answers (no probe can clear its block) blocks work NOW -- the
+        hold only waits out the questions the world may answer by itself (28 of 42 did)."""
+        self.owner_cause_blocked(probe=False)
+        self.assertEqual(len(self.remind(0)), 1, "no probe can lift it: an hour's hold only delays the work on it")
+
+    def test_a_vault_ask_is_told_at_once(self):
+        """2026-11-18: a vault-unlock ask (one owner item per vault, b755ac8) was held an hour while its fixers' tested
+        fixes waited on signing: no unlock elsewhere resumes them, only the owner's `decide vault-<ns>`."""
+        vault = ("DIAGNOSED: the fix can't be committed, signing is refused while the vault is locked; decide: run "
+                 "`! secrets unlock movies` so the fix can be committed")
+        it, _acts = self.launch(self.red(key="v"), outcome=vault)
+        self.assertEqual(A.red_block_of(it, self.st)["name"], "block/cause/vault-movies")
+        told = self.remind(0)
+        self.assertEqual(len(told), 1, told)
+        self.assertIn('decide vault-movies "here"', self.events()[0]["refs"]["verdict"])
 
 
 class DecideTest(AskBase):

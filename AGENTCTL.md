@@ -824,7 +824,10 @@ agent must be assigned to it".
   HOUR (2026-11-17: 28 of 42 questions resolved themselves before the owner answered, p50 83 min): recorded at once
   (the red's blocked-external move, an info event, its `ask` with `n: 0`; `agentctl.owner_decision`'s `asked_at`),
   told only `$AGENTCTL_ASK_HOLD` (3600 s) after its spell began -- a GATE red's, or one whose red's deadline falls
-  inside the hold, at once; a red that leaves the block meanwhile never asks (ask.py `ask_held_until`). The owner answers with
+  inside the hold, at once; a red that leaves the block meanwhile never asks (ask.py `ask_held_until`). ONLY A QUESTION
+  THE WORLD MAY ANSWER IS HELD (2026-11-18: a vault-unlock ask sat an hour while its fixers' fixes waited on signing):
+  a block no probe of its own can lift -- the vault's one lease, any block raised with no probe -- waits on the owner
+  alone, so its red's work stops until he answers and it is told at once (`ask_blocks_work`). The owner answers with
   `agentctl decide <red key | run> "<answer>"` (`done` after running an asked command): stored on the red, the block
   lifted, the red reads `IN PROGRESS (decided: <answer>)` and is offered again, its fixer briefed with the answer (no
   RED ESCALATE meanwhile). If the decided action fails (`NOT LANDED`, `GAVE UP`, `DIAGNOSED`, its fix change ended
@@ -1972,7 +1975,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `alert_red_owner_level` | `AGENTCTL_ALERT_RED_OWNER_LEVEL` | `2` | offer rounds a red goes untaken (nobody holding it, no family owner) before it is the owner's |
 | `allow` | `AGENTCTL_ALLOW` | - | - |
 | `allowed_roots` | `AGENTCTL_ALLOWED_ROOTS` | - | - |
-| `ask_hold` | `AGENTCTL_ASK_HOLD` | `3600` | s an owner question is held (recorded, not told) unless it blocks a gate red |
+| `ask_hold` | `AGENTCTL_ASK_HOLD` | `3600` | s a question its block's probe may answer is held (recorded, not told) |
 | `ask_remind_first` | `AGENTCTL_ASK_REMIND_FIRST` | `3600` | the first reminder this long after the owner was told |
 | `ask_remind_max` | `AGENTCTL_ASK_REMIND_MAX` | `14400` | ...then doubling up to this |
 | `assign_bound` | `AGENTCTL_ASSIGN_BOUND` | `20` | - |

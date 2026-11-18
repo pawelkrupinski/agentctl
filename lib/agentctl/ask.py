@@ -22,7 +22,13 @@
 #     p50 83 min): it is RECORDED at once (the red's blocked-external move, its `ask` with n 0), but the owner is told
 #     only ASK_HOLD after its spell began -- unless the red is a GATE red (it holds every production push) or its
 #     deadline falls inside the hold: those are told at once. A red that leaves the block meanwhile was never asked.
-ASK_HOLD = 3600               # s an owner question is held (recorded, not told) unless it blocks a gate red ($AGENTCTL_ASK_HOLD)
+#   - ONLY A QUESTION THE WORLD MAY ANSWER IS HELD (the owner, 2026-11-18: a vault-unlock ask sat an hour, read as "a 7-d
+#     deadline", while its fixers' tested fixes waited on signing). The 28 that resolved themselves were cleared by
+#     their block's PROBE (a newer run no longer failing, the workflow green). A block no probe can lift -- the vault's
+#     one lease (only `decide vault-<ns>` resumes it), any block a fixer raised with no probe -- waits on the owner
+#     alone: its red's work stops until he answers, so it is told at once (ask_blocks_work). Decided by the block's
+#     shape, never a per-kind list.
+ASK_HOLD = 3600               # s a question its block's probe may answer is held (recorded, not told) ($AGENTCTL_ASK_HOLD)
 ASK_REMIND_FIRST = 3600       # the first reminder this long after the owner was told ($AGENTCTL_ASK_REMIND_FIRST)
 ASK_REMIND_MAX = 4 * 3600     # ...then doubling up to this ($AGENTCTL_ASK_REMIND_MAX)
 DECISION_FAILED = re.compile(r"\W*(NOT LANDED|GAVE UP|DIAGNOSED)\b")
@@ -95,14 +101,22 @@ def red_ask_line(d, ask, n=0):
             + (f" -- auto-clears when {ask['until']}" if ask.get("until") else ""))
 
 
-def ask_held_until(members, spell, t):
+def ask_blocks_work(b):
+    """Block b (red_block_of) waits on the owner alone: no probe of its own can lift it (ONLY A QUESTION THE WORLD MAY
+    ANSWER IS HELD, above), so its reds' work stops until he answers."""
+    return not b or ((b.get("meta") or {}).get("probe") or {}).get("kind") not in PROBES
+
+
+def ask_held_until(members, spell, t, store=None):
     """Until when the owner's question for these reds ((item, ask) pairs) is held (THE QUESTION IS HELD, above), or
-    None: tell now (no hold, a gate red, a deadline inside the hold, or the hold over)."""
+    None: tell now (no hold, a gate red, a deadline inside the hold, a block only the owner lifts, or the hold over)."""
     hold = env_num("AGENTCTL_ASK_HOLD", ASK_HOLD)
     until = float(spell) + hold
     if hold <= 0 or t >= until or any(m[0]["data"].get("gate") for m in members):
         return None
     if any(float(m[0].get("deadline") or until + 1) <= until for m in members):
+        return None
+    if any(ask_blocks_work(red_block_of(m[0], store)) for m in members):
         return None
     return until
 
@@ -110,7 +124,7 @@ def ask_held_until(members, spell, t):
 def red_owner_block(store, it, line, t, **ev):
     """Move red it onto the owner (blocked-external) with its question: told at once (an escalation: its inbox entry and
     notification) or, held (ask_held_until), recorded with an info event -- the tick tells it when the hold ends."""
-    held = ask_held_until([({"data": {**it["data"], **(ev.get("data") or {})}}, None)], t, t) is not None
+    held = ask_held_until([({"data": {**it["data"], **(ev.get("data") or {})}}, None)], t, t, store) is not None
     moved = red_move(store, it, "blocked-external", line, severity="info" if held else "escalate", **ev)
     red_ask_mark(store, moved, t, told=not held)
     return moved
@@ -148,7 +162,7 @@ def red_owner_reminders(store, t):
         d, a = it["data"], it["data"].get("ask") or {}
         spell = min(m[0]["entered_at"] for m in members)
         fresh = a.get("since") != spell or a.get("q") != ask["q"] or int(a.get("n") or 0) == 0  # never told yet
-        if fresh and ask_held_until(members, spell, t) is not None:  # recorded, the owner told when the hold ends
+        if fresh and ask_held_until(members, spell, t, store) is not None:  # recorded, the owner told when the hold ends
             if a.get("since") != spell or a.get("q") != ask["q"]:
                 try:
                     store.update_item("red", it["id"], it["version"], {"ask": {"q": ask["q"], "since": spell,
