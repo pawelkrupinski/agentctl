@@ -447,6 +447,38 @@ ALIASES_UNTIL = "2026-11-05"  # the old command names (design §14.5) answer unt
 # it and needs the token handed over again), then the alias goes -- removing it first would stop the sync.
 
 
+# ONE WAITING LAND, ONE OUTPUT FILE (2026-11-18): two subagents of one session each ran `land --until-done >
+# $SCRATCH/land.log 2>&1` -- one scratchpad, so one file. The second's shell truncated the first's log, and the first's
+# agent read the second's `NOT LANDED: the fast precheck refused <its id>` there as its own verdict (its own entry was
+# still checking, and landed). land itself followed only its own entry; the file mixed the two. A land that waits for
+# its verdict (--until-done, --follow) now holds an exclusive flock on its output file while it runs; a second one
+# writing the same file does not start (exit LAND_SHARED_OUTPUT), in words no verdict uses.
+LAND_SHARED_OUTPUT = 5
+
+
+def output_file_shared(stream):
+    """When `stream` is a regular file: lock it for this process (flock, released at exit). The file's path when another
+    running process holds that lock; None otherwise (a pipe, a terminal, a StringIO, or now this process's own)."""
+    try:
+        fd = stream.fileno()
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+    except (OSError, ValueError, AttributeError):
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return None
+    except BlockingIOError:
+        pass
+    except OSError:  # a filesystem without flock: nothing to tell
+        return None
+    try:
+        return (fcntl.fcntl(fd, fcntl.F_GETPATH, b"\0" * 1024).rstrip(b"\0").decode() if hasattr(fcntl, "F_GETPATH")
+                else os.readlink(f"/proc/self/fd/{fd}"))
+    except OSError:
+        return "its output file"
+
+
 def cmd_land(a):
     if getattr(a, "lcmd", None):  # land status | hold | release | cancel <id>: the queue (design §14.5)
         if a.lcmd == "cancel" and not a.entry:
@@ -455,6 +487,12 @@ def cmd_land(a):
         w = argparse.Namespace(wcmd=LAND_SUBCOMMANDS[a.lcmd], repo=a.repo, entry=a.entry, renamed=True,
                                hold_for=getattr(a, "hold_for", None), hold_why=getattr(a, "hold_why", None))
         return cmd_waiting(w)
+    shared = (getattr(a, "until_done", False) or getattr(a, "follow", False)) and output_file_shared(sys.stdout)
+    if shared:
+        err(f"land did not start: another running land writes its output file {shared}, so their verdicts would mix "
+            "(2026-11-18). Run it again into a file of its own -- best, no redirect at all: the Bash tool's "
+            "run_in_background output is the task's own")
+        return LAND_SHARED_OUTPUT
     if os.environ.get("PREPUSH_SKIP"):
         print("NOT LANDED: PREPUSH_SKIP is set in the environment; agentctl land never skips checks. `unset PREPUSH_SKIP`.")
         return 1

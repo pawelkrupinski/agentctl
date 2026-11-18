@@ -49,7 +49,7 @@ ENV_HELP = """Agent environment, without secrets.
                                   # agentctl store) and gh
 A locked vault prints exactly: vault <ns> locked: ask the user to run `! secrets unlock <ns>`  -- and exits 1.
 agentctl never runs `secrets unlock` (Touch ID is the user's). Output never contains a token: tools read it at use."""
-import argparse, contextlib, io, datetime as dt, fcntl, fnmatch, glob, itertools, json, os, re, shlex, signal, subprocess, sys, threading, time, traceback, urllib.error, urllib.parse, urllib.request
+import argparse, contextlib, io, datetime as dt, fcntl, fnmatch, glob, itertools, json, os, re, shlex, signal, stat, subprocess, sys, threading, time, traceback, urllib.error, urllib.parse, urllib.request
 
 # THE PROCESS-WIDE CACHES, IN ONE REGISTRY (simplification-2026-10-31 item 10): every module-level dict, list or set a
 # part keeps between calls is made with `process_cache(...)`, so the test harness clears them all between tests

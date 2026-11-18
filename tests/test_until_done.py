@@ -3,7 +3,7 @@ partial or repeated reports, worktrees left behind, `git branch -D` by hand afte
 mode owns the whole tail: it submits (or finds its queue entry again, by worktree and head), waits for the verdict,
 bounded, and then either says exactly why it did not land and the next command (exit 1), or proves every local commit's
 patch is on origin/main, removes the clean, own worktree and its branch and prints `DONE <sha> ... worktree removed`."""
-import os, subprocess, sys, unittest
+import contextlib, fcntl, os, subprocess, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -198,6 +198,70 @@ class UntilDoneTest(test_queue.QueueTest):
         self.assertEqual(rc, 3, out)
         self.assertIn("root checkout", out)
         self.assertTrue(os.path.isdir(self.r.path))
+
+    def test_another_entrys_precheck_refusal_while_it_waits_is_never_its_verdict(self):
+        """2026-11-18: an agent's `--until-done` (split-credit) was read as reporting another change's precheck
+        refusal (pure-move). It follows ITS entry only: entry B, of the same repo, refused and cancelled while A waits,
+        is no verdict of A's; A keeps waiting and reports only its own LANDED."""
+        spawned, saved_spawn = [], A.fast_precheck_spawn
+        A.fast_precheck_spawn = lambda argv, **kw: spawned.append(argv)
+        self.addCleanup(setattr, A, "fast_precheck_spawn", saved_spawn)
+        wt_a, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: mine")
+        wt_b, _ = self.agent("b", "web/src/main/B.scala", "b\n", msg="b: theirs")
+        self.r.write("scripts/land-precheck", "#!/bin/sh\necho 'PRECHECK FAIL: lints (3 s)'\nexit 1\n", at=wt_b)
+        os.chmod(os.path.join(wt_b, "scripts/land-precheck"), 0o755)
+        self.r.commit("b: a precheck that refuses", at=wt_b)
+        refused = []
+
+        def b_refused_meanwhile():
+            rc, out = self.land(wt_b)  # B queues beside A, and its detached precheck refuses it
+            self.assertEqual(rc, 0, out)
+            refused.append(out.split("QUEUED ", 1)[1].split()[0])
+            rc, out = self.run_tool(*spawned[0][2:], cwd=wt_b)
+            self.assertEqual(rc, 1, out)
+            self.assertIn(f"NOT LANDED: the fast precheck refused {refused[0]}", out)
+        self.before_drive = b_refused_meanwhile
+        rc, out = self.until_done(wt_a)
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(refused, "B was refused while A waited")
+        eid_a = out.split("QUEUED ", 1)[1].split()[0]
+        self.assertNotIn(refused[0], out, "nothing of B's in A's output")
+        self.assertNotIn("NOT LANDED", out)
+        self.assertRegex(out, rf"LANDED [0-9a-f]{{40}} \(queued {eid_a}\)")
+        self.assertRegex(out.strip().splitlines()[-1], rf"^DONE [0-9a-f]{{40}} \(queued {eid_a}\)")
+        self.assertTrue(os.path.isdir(wt_b), "B's worktree is B's")
+
+    def test_a_second_land_into_the_same_output_file_does_not_start(self):
+        """The 2026-11-18 cause: two subagents of one session ran `land --until-done > $SCRATCH/land.log` -- the same
+        file -- and one read the other's refusal there as its own. A land whose output file another running land
+        writes does not start, and says so in no verdict's words; a land into a file of its own runs."""
+        wt, _ = self.agent("o", "web/src/main/O.scala", "o\n", msg="o: shared log")
+        log = os.path.join(self.tmp.name, "land.log")
+        with open(log, "w") as first:  # the earlier land, still running, writing this file
+            fcntl.flock(first.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            for mode in ("--until-done", "--follow"):
+                with self.subTest(mode=mode):
+                    rc = self.land_into(log, wt, mode)
+                    text = open(log).read()
+                    self.assertEqual(rc, 5, text)
+                    self.assertIn("did not start", text)
+                    self.assertIn(os.path.realpath(log), text)
+                    self.assertFalse([l for l in text.splitlines() if A.VERDICT_LINE.match(l)], text)
+                    self.assertEqual(A.waiting_entries(self.d, open_only=False), [], "nothing queued")
+        rc = self.land_into(log, wt, "--until-done")  # the earlier land gone: the file is this one's
+        self.assertEqual(rc, 0, open(log).read())
+        self.assertRegex(open(log).read().strip().splitlines()[-1], r"^DONE ")
+
+    def land_into(self, path, wt, *argv):
+        """`land` run in wt with stdout and stderr redirected to the file `path`, as a shell's `> path 2>&1`."""
+        old = os.getcwd()
+        with open(path, "a") as f:
+            try:
+                os.chdir(wt)
+                with contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
+                    return A.main(["land", *argv])
+            finally:
+                os.chdir(old)
 
 
 test_queue.own_tests_only(UntilDoneTest, test_queue.QueueTest)  # its fixture, not QueueTest's tests

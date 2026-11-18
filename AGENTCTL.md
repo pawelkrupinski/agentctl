@@ -1375,8 +1375,17 @@ ancestry). `land --until-done` (movies, the queue) owns the tail, bounded by `--
    one), and a wait of up to 30 s (`$AGENTCTL_FREE_WAIT`). Still held: `LANDED <sha> ...; NOT DONE: ... still held`,
    one `pid <pid>: <command>` line per holder and `next:` the command to finish, exit 4 (cleanup.py `free_worktree`).
 
+5. Its output is its own (2026-11-18): two subagents of one session each ran `land --until-done > $SCRATCH/land.log`
+   -- one scratchpad, one file -- and one read the other's `NOT LANDED: the fast precheck refused <their id>` there
+   as its verdict (its own entry was still checking, and landed; land itself followed only its own entry). A land
+   that waits for its verdict (`--until-done`, `--follow`) holds an exclusive flock on its output file while it runs;
+   a second one writing the same file does not start: `agentctl: land did not start: another running land writes
+   its output file <path> ...`, exit 5 (slots.py `output_file_shared`). Every verdict line names its entry id: one
+   naming another id is not yours.
+
 The brief (`~/bin/briefs/movies-agent-preamble.md`) makes it every movies agent's last step: run it with
-`run_in_background=true`, end the turn, report once after its last line. Code: queue.py `land_until_done`,
+`run_in_background=true` and NO redirect (the task's own output file is per task), end the turn, report once after
+its last line. Code: queue.py `land_until_done`,
 `own_change_item`, `until_done_finish`, `next_command`; tests: `tests/test_until_done.py`.
 
 ### remote checks: ci-runner's check tier

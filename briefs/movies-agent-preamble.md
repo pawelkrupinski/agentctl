@@ -12,8 +12,9 @@ Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wai
 - No pre-merge CI (the owner, 2026-10-26). EVERY change -- identity included -- lands with `~/bin/agentctl land`
   from your worktree. There is no merge queue CI step, and no identity-landing-check LANDABLE is required.
 - END WITH `land --until-done` (the owner, 2026-11-18). Your LAST step, once your work is committed and its test layers
-  are green: `~/bin/agentctl land --until-done` from your worktree, with the Bash tool's `run_in_background=true`, then
-  END YOUR TURN; you are re-invoked when it exits. It owns the whole tail: it rebases, queues (or, called again after an
+  are green: `~/bin/agentctl land --until-done` from your worktree, with the Bash tool's `run_in_background=true` and
+  NO redirect (never `> $SCRATCH/land.log`: subagents of one session share the scratchpad, so two agents' lands wrote
+  one file and one read the other's verdict, 2026-11-18; read the background task's own output), then END YOUR TURN; you are re-invoked when it exits. It owns the whole tail: it rebases, queues (or, called again after an
   interruption, resumes its own entry: never queued twice), runs the fast precheck, waits for the verdict (bounded,
   `--deadline`, 4 h by default), and the always-on processor meanwhile:
   1. checks the change in a check tree of its own (`<clone>-wt-check-<n>`, warm), admitted by the laptop's governor
@@ -34,7 +35,10 @@ Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wai
   - `NOT DONE: ...` (exit 2, the deadline): run `land --until-done` again; it resumes the same entry.
   - `LANDED <sha> ...; NOT DONE: the worktree ... is kept: <why>` (exit 3): it landed; the worktree was not provably
     yours, clean and merged. Say why in your report; never force-remove it.
-  Never report before that last line, never report the same verdict twice, never stop after the rebase.
+  Never report before that last line, never report the same verdict twice, never stop after the rebase. Every
+  verdict line names its entry id (your `QUEUED <id>` / `RESUMING <id>`): a line naming another id is not yours.
+  `agentctl: land did not start: another running land writes its output file ...` (exit 5): run it again without
+  the redirect.
 - Every verdict (QUEUED, LANDED, WAITING, NOT LANDED with the failing checks' tail, WATCH ...) also goes to
   `~/bin/agentctl inbox` with your worktree as its cwd; the orchestrator reads it. A WATCH RED of yours comes back to
   you as a new message.
