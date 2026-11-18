@@ -1678,17 +1678,35 @@ def tick_changes(repo, d, now_=None):
                 del newest[k]
         newest[e["id"]] = e
     did = []
-    held = backlog_held(repo, d, reds, st, t)
-    pheld = push_held(repo, d, reds, st, t)
-    # THE BATCH KEEPS ITS AGE-ORDER PLACE (review 2026-11-18): this tick runs before the batch tick, and the changes
-    # held for a backlog or push batch take no tree, so a tree freed went to the next YOUNGER lone change and the
-    # batch tick found none: with a steady stream of lone changes (identity changes, --no-batch) the batch never
-    # formed. A lone change younger than the oldest held one never takes the LAST free tree: that is the batch's (a
-    # red fix excepted).
-    batch_seq = min((x["seq"] for x in todo if x["id"] in held | pheld), default=None)
-    for e in [e for e in todo if e["id"] in newest]:
+    # PUSHES FIRST, THEN THE HOLDS (queue simulator, 2026-11-18): the holds below were read before this tick's pushes,
+    # and a checked change's push due holds every backlog batch back (backlog_candidates) -- so the tree a finished
+    # check had just freed went to the oldest lone check, never to the batch: under load (every tree busy, a tree
+    # freed only by a check ending) no backlog batch ever formed (seed 0 of the simulator's load profile: 40 changes,
+    # 40 lone checks, 0 batches). The checked changes are pushed in a first pass; the holds are read again for the
+    # second, which starts checks.
+    for phase in ("push", "check"):
+        held = backlog_held(repo, d, reds, st, t)
+        pheld = push_held(repo, d, reds, st, t)
+        # THE BATCH KEEPS ITS AGE-ORDER PLACE (review 2026-11-18): this tick runs before the batch tick, and the
+        # changes held for a backlog or push batch take no tree, so a tree freed went to the next YOUNGER lone change
+        # and the batch tick found none: with a steady stream of lone changes (identity changes, --no-batch) the batch
+        # never formed. A lone change younger than the oldest held one never takes the LAST free tree: that is the
+        # batch's (a red fix excepted).
+        batch_seq = min((x["seq"] for x in todo if x["id"] in held | pheld), default=None)
+        did += _tick_changes_pass(repo, d, st, t, reds, phase, [e for e in todo if e["id"] in newest], todo, held,
+                                  pheld, batch_seq)
+    return did
+
+
+def _tick_changes_pass(repo, d, st, t, reds, phase, mine, todo, held, pheld, batch_seq):
+    """One pass of tick_changes over the newest entries: `push` (the checked and interrupted pushes) or `check` (the
+    rest: executors started, deadlines)."""
+    did = []
+    for e in mine:
         if e.get("backlog_batch"):  # a backlog batch's member: the batch checks and pushes it (backlog_reconcile)
             continue
+        if e["status"] not in (("checked", "pushing") if phase == "push" else ("queued", "checking")):
+            continue  # (a push this tick made it landed, waiting or rejected: no check for it)
         it = st.put_item("change", e["id"], ENTRY_STATE.get(e["status"], "queued"), change_item_fields(e))
         state = it["state"]
         if state == "pushing":  # a tick that died mid-push: verified next, never pushed twice blindly

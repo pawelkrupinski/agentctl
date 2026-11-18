@@ -1205,7 +1205,11 @@ The reconciler then takes it, a step per tick:
   Fixes-Red first; a member that does not apply is left out (`batch_alone`) and checked alone; fewer than 2 kept: no
   batch. None forms while a change verifies its combined tree or a checked change's push is due (THE OLDEST
   VERIFICATION PUSHES FIRST holds it too), and while one waits for a tree, a younger lone change never takes the
-  LAST free tree (review 2026-11-18: lone changes otherwise took every freed tree first). Its tip is checked ONCE with the FULL landing check -- `pre-push --range`, on ci-runner a `check/batch-<tip>`
+  LAST free tree (review 2026-11-18: lone changes otherwise took every freed tree first). The change tick PUSHES
+  FIRST, THEN READS THE HOLDS (queue simulator, 2026-11-18): a checked change's push due holds every backlog batch back,
+  and the holds were read before the tick's pushes, so the tree a finished check had freed went to the oldest lone
+  check -- under load (every tree busy) no backlog batch ever formed (40 changes, 40 lone checks, waits up to 55
+  ticks; now batches, at most 13-27). Its tip is checked ONCE with the FULL landing check -- `pre-push --range`, on ci-runner a `check/batch-<tip>`
   precommit-check round with the area tests and heavy rows the members select, NOT `--fast-only` (no member had a check
   of its own) -- in one check tree, the members `checking` meanwhile. Pass: one push carrying that run
   (`PREPUSH_REMOTE_RUN`), every member `checked` -> `pushing` -> LANDED with its own watch and its own landing record
@@ -1299,6 +1303,27 @@ Other repos (no movies hook): `land` holds `land/<repo>`, fetches, rebases, runs
 hook runs), verifies with `merge-base --is-ancestor` or `git cherry`, and prints `LANDED <sha>`; no watch.
 
 Use it for every push to main. Don't use it for `measure/` branches: `identity-measure` pushes those itself.
+
+#### the queue simulator: the queue's invariants under random load (the owner, 2026-11-18)
+
+`tests/queue_sim.py` simulates the land queue, deterministically per seed, over the REAL queue, batch and push code
+(tick_changes, tick_batch, check_entry, check_batch and bisect, push_change, push_batch_item, backlog_reconcile,
+project_changes, close_landed_changes, queue_change, the store's items, leases and events). Only the world is faked:
+git is a model of (parent, patch) commits answering the queue's git calls; the forge's main, its push (a race, the
+hook's red gate) and the gate's red episodes; CI's verdicts (a breaking patch names its failing test; infra failures
+drawn); the agents (identity, plain, red-fix and `--no-batch` arrivals, re-lands after NOT LANDED, supersedes,
+cancels; pushes from outside). Executors run in cooperative threads that block inside the faked check holding their
+real leases, one thread at a time; a signal to a checker ends its thread as it would end the process. After every
+tick: one open item per change (worktree + head); never two pushes of one change; a red fix never behind a batch or
+a non-red change (started and pushed when it may go, in the red-fix tree, no batch member); a batch reaches landed,
+bisecting or held within 40 ticks; the oldest change lands within a bound when nothing fails (the calm and load
+profiles); no change lost (entries and items agree, a LANDED change is on main, every change decided once the gate
+is green and nothing arrives); exactly one stats `agentctl.landing` record per decided change; no executor for a
+decided change. `tests/test_queue_sim.py`: 200 random seeds in 8 parallel tests (`$AGENTCTL_TEST_SIM_SEEDS` for
+more), the calm and load profiles, one replay per day of 2026-11-11..18 from victoria-logs-ci's `agentctl.landing`
+records (`tests/fixtures/landing-replay-7d.json`), and mutation tests: ee7b744 or PUSHES FIRST undone in a copy of
+agentctl must fail an invariant (6d206ed undone fails "one open item per change" in 13 of 40 seeds). A failing seed
+replays alone: `queue_sim.Sim(<seed>).run().violations`; `$AGENTCTL_TEST_SIM_KEEP=<dir>` keeps its processor log.
 
 #### land --until-done: the agent's whole tail (the owner, 2026-11-18)
 
@@ -2216,6 +2241,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `tunnel_state` | `AGENTCTL_TUNNEL_STATE` | - | - |
 | `unkicked_after` | `AGENTCTL_UNKICKED_AFTER` | `3600` | a convergence-relevant main push with no convergence (or Identity takes) run on main by then is a red |
 | `unknown_grace` | `AGENTCTL_UNKNOWN_GRACE` | `300` | s an UNKNOWN condition must keep failing (seen again past this) before it opens |
+| `until_done_deadline` | `AGENTCTL_UNTIL_DONE_DEADLINE` | `14400` | s (--deadline): a batch at green, a verify round and a push fit well inside it |
 | `upkeep_every` | `AGENTCTL_UPKEEP_EVERY` | `3600` | - |
 | `w1_max` | `AGENTCTL_W1_MAX` | `7200` | the oldest unlanded change ; while main is red, counted from the red's start |
 | `w2_max` | `AGENTCTL_W2_MAX` | `600` | a gate red with nobody on it |

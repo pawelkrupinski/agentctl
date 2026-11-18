@@ -1,0 +1,4711 @@
+{
+"days": [
+{
+"changes": [
+{
+"at": 1794389878,
+"batched": false,
+"identity": false,
+"modules": [
+"android",
+"ios",
+"page-tests-playwright",
+"test",
+"web"
+],
+"outcome": "superseded",
+"red_fix": false,
+"worktree": "w0"
+},
+{
+"at": 1794389878,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"test",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w1"
+},
+{
+"at": 1794389905,
+"batched": false,
+"identity": false,
+"modules": [
+"android",
+"infra",
+"ios",
+"page-tests-playwright",
+"test",
+"web"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w0"
+},
+{
+"at": 1794390331,
+"batched": false,
+"identity": false,
+"modules": [
+"infra"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w2"
+},
+{
+"at": 1794395710,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"infra"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w3"
+},
+{
+"at": 1794399816,
+"batched": false,
+"identity": false,
+"modules": [
+"infra"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w4"
+},
+{
+"at": 1794400336,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".github",
+"docs",
+"infra",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w5"
+},
+{
+"at": 1794400972,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w5"
+},
+{
+"at": 1794402568,
+"batched": false,
+"identity": false,
+"modules": [
+"docs"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w6"
+},
+{
+"at": 1794403878,
+"batched": false,
+"identity": false,
+"modules": [
+"android"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w7"
+},
+{
+"at": 1794404065,
+"batched": false,
+"identity": false,
+"modules": [
+"docs",
+"identity",
+"worker"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w8"
+},
+{
+"at": 1794404129,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w7"
+},
+{
+"at": 1794404314,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"worker"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w8"
+},
+{
+"at": 1794404438,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w8"
+},
+{
+"at": 1794404971,
+"batched": false,
+"identity": false,
+"modules": [
+"scrapers",
+"test",
+"worker"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w9"
+},
+{
+"at": 1794407468,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w9"
+},
+{
+"at": 1794408230,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w10"
+},
+{
+"at": 1794408974,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w8"
+},
+{
+"at": 1794412546,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"scripts",
+"worker"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w10"
+},
+{
+"at": 1794413921,
+"batched": false,
+"identity": false,
+"modules": [
+"docs"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w11"
+},
+{
+"at": 1794414633,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".claude",
+"docs",
+"ios",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w12"
+},
+{
+"at": 1794415162,
+"batched": false,
+"identity": false,
+"modules": [
+".claude",
+"docs",
+"scrapers",
+"scripts",
+"test",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w9"
+},
+{
+"at": 1794416262,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w9"
+},
+{
+"at": 1794416556,
+"batched": false,
+"identity": false,
+"modules": [
+"infra"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w13"
+},
+{
+"at": 1794418014,
+"batched": false,
+"identity": true,
+"modules": [
+".github",
+"common",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": true,
+"worktree": "w14"
+},
+{
+"at": 1794419355,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "landed",
+"red_fix": true,
+"worktree": "w14"
+},
+{
+"at": 1794422069,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w10"
+},
+{
+"at": 1794428196,
+"batched": false,
+"identity": false,
+"modules": [
+".claude",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w15"
+},
+{
+"at": 1794431094,
+"batched": false,
+"identity": true,
+"modules": [
+".claude",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w15"
+},
+{
+"at": 1794434273,
+"batched": false,
+"identity": false,
+"modules": [
+"infra"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w16"
+},
+{
+"at": 1794435427,
+"batched": false,
+"identity": false,
+"modules": [
+"scrapers",
+"web",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w17"
+},
+{
+"at": 1794436103,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"test"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w18"
+},
+{
+"at": 1794437450,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"test"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w18"
+},
+{
+"at": 1794439106,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w18"
+}
+],
+"day": "2026-11-11"
+},
+{
+"changes": [
+{
+"at": 1794478343,
+"batched": false,
+"identity": false,
+"modules": [
+"infra"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w19"
+},
+{
+"at": 1794479203,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+"docs",
+"infra",
+"web"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w20"
+},
+{
+"at": 1794480072,
+"batched": false,
+"identity": false,
+"modules": [
+"common",
+"http",
+"scrapers",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w21"
+},
+{
+"at": 1794480518,
+"batched": false,
+"identity": false,
+"modules": [
+"common",
+"http",
+"infra",
+"scrapers",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w22"
+},
+{
+"at": 1794480874,
+"batched": false,
+"identity": false,
+"modules": [
+"infra"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w19"
+},
+{
+"at": 1794482778,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"identity"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w23"
+},
+{
+"at": 1794483302,
+"batched": false,
+"identity": false,
+"modules": [
+"common",
+"http",
+"scrapers",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w24"
+},
+{
+"at": 1794484967,
+"batched": false,
+"identity": false,
+"modules": [
+"http",
+"infra",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w25"
+},
+{
+"at": 1794489873,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"http",
+"scrapers",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w26"
+},
+{
+"at": 1794499902,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"test",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": true,
+"worktree": "w27"
+},
+{
+"at": 1794505524,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"test",
+"worker"
+],
+"outcome": "cancelled",
+"red_fix": true,
+"worktree": "w28"
+},
+{
+"at": 1794507933,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".github",
+"common",
+"data",
+"geodata",
+"scripts",
+"worker"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w29"
+},
+{
+"at": 1794508338,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".github",
+"common",
+"data",
+"geodata",
+"scripts",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w29"
+},
+{
+"at": 1794509167,
+"batched": false,
+"identity": false,
+"modules": [
+"docs",
+"worker"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w30"
+},
+{
+"at": 1794511281,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".github",
+"common",
+"data",
+"geodata",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w29"
+},
+{
+"at": 1794513628,
+"batched": false,
+"identity": false,
+"modules": [
+"common",
+"data",
+"docs",
+"geodata",
+"scrapers",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w31"
+},
+{
+"at": 1794514383,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w32"
+},
+{
+"at": 1794514878,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w30"
+},
+{
+"at": 1794518837,
+"batched": false,
+"identity": false,
+"modules": [
+"common",
+"data",
+"geodata",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w33"
+},
+{
+"at": 1794519060,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"common",
+"data",
+"geodata",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w34"
+},
+{
+"at": 1794520595,
+"batched": false,
+"identity": true,
+"modules": [
+".github",
+"common",
+"data",
+"docs",
+"geodata",
+"identity",
+"scrapers",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w35"
+},
+{
+"at": 1794520650,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"scrapers",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w36"
+},
+{
+"at": 1794520650,
+"batched": false,
+"identity": false,
+"modules": [
+"common",
+"data",
+"geodata",
+"scrapers",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w37"
+},
+{
+"at": 1794525978,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w37"
+},
+{
+"at": 1794527228,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w35"
+}
+],
+"day": "2026-11-12"
+},
+{
+"changes": [
+{
+"at": 1794531810,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"scripts"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w38"
+},
+{
+"at": 1794532244,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+"data",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w39"
+},
+{
+"at": 1794532312,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".github",
+"data",
+"scripts",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": true,
+"worktree": "w38"
+},
+{
+"at": 1794533635,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w40"
+},
+{
+"at": 1794535436,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w41"
+},
+{
+"at": 1794537885,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": true,
+"worktree": "w38"
+},
+{
+"at": 1794538524,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w42"
+},
+{
+"at": 1794541534,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w42"
+},
+{
+"at": 1794547384,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w43"
+},
+{
+"at": 1794547407,
+"batched": false,
+"identity": true,
+"modules": [
+"identity",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w44"
+},
+{
+"at": 1794551220,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"identity",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w45"
+},
+{
+"at": 1794554825,
+"batched": false,
+"identity": true,
+"modules": [
+"identity",
+"test"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w46"
+},
+{
+"at": 1794555742,
+"batched": false,
+"identity": true,
+"modules": [
+"identity",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w46"
+},
+{
+"at": 1794558802,
+"batched": false,
+"identity": true,
+"modules": [
+"identity",
+"test"
+],
+"outcome": "superseded",
+"red_fix": false,
+"worktree": "w45"
+},
+{
+"at": 1794559306,
+"batched": false,
+"identity": false,
+"modules": [
+"identity",
+"test"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w45"
+},
+{
+"at": 1794559358,
+"batched": false,
+"identity": false,
+"modules": [
+"identity",
+"test"
+],
+"outcome": "superseded",
+"red_fix": true,
+"worktree": "w45"
+},
+{
+"at": 1794559419,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"test"
+],
+"outcome": "landed",
+"red_fix": true,
+"worktree": "w45"
+},
+{
+"at": 1794560775,
+"batched": false,
+"identity": true,
+"modules": [
+".claude",
+"docs",
+"identity",
+"scripts",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w47"
+},
+{
+"at": 1794560920,
+"batched": false,
+"identity": true,
+"modules": [
+".claude",
+"identity",
+"scripts",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w45"
+},
+{
+"at": 1794561034,
+"batched": false,
+"identity": false,
+"modules": [
+".claude",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w48"
+},
+{
+"at": 1794563186,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"identity",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w49"
+},
+{
+"at": 1794563233,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w45"
+},
+{
+"at": 1794564702,
+"batched": false,
+"identity": true,
+"modules": [
+"identity",
+"infra"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w50"
+},
+{
+"at": 1794564861,
+"batched": false,
+"identity": true,
+"modules": [
+"identity",
+"infra",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w50"
+},
+{
+"at": 1794573125,
+"batched": false,
+"identity": true,
+"modules": [
+"identity",
+"infra",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w50"
+},
+{
+"at": 1794583257,
+"batched": false,
+"identity": true,
+"modules": [
+"scripts",
+"test"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w51"
+},
+{
+"at": 1794584796,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts",
+"test",
+"web"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w52"
+},
+{
+"at": 1794584821,
+"batched": false,
+"identity": false,
+"modules": [
+"docs",
+"identity",
+"infra",
+"worker"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w53"
+},
+{
+"at": 1794584821,
+"batched": false,
+"identity": true,
+"modules": [
+"scripts",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w51"
+},
+{
+"at": 1794585240,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"infra",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w53"
+},
+{
+"at": 1794586635,
+"batched": false,
+"identity": false,
+"modules": [
+"common",
+"identity",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w54"
+},
+{
+"at": 1794592114,
+"batched": false,
+"identity": true,
+"modules": [
+"scrapers",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w55"
+},
+{
+"at": 1794595809,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w54"
+},
+{
+"at": 1794600162,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"identity",
+"test"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w56"
+},
+{
+"at": 1794601615,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w56"
+},
+{
+"at": 1794603814,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"identity",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w56"
+}
+],
+"day": "2026-11-13"
+},
+{
+"changes": [
+{
+"at": 1794647510,
+"batched": false,
+"identity": false,
+"modules": [
+"infra"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w57"
+},
+{
+"at": 1794649233,
+"batched": false,
+"identity": false,
+"modules": [
+"docs",
+"http"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w58"
+},
+{
+"at": 1794651352,
+"batched": false,
+"identity": false,
+"modules": [
+"test"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w51"
+},
+{
+"at": 1794651447,
+"batched": false,
+"identity": true,
+"modules": [
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w59"
+},
+{
+"at": 1794652868,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"docs",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w58"
+},
+{
+"at": 1794657564,
+"batched": false,
+"identity": false,
+"modules": [
+"e2e",
+"http",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w60"
+},
+{
+"at": 1794680040,
+"batched": false,
+"identity": false,
+"modules": [
+".claude",
+"docs",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w61"
+},
+{
+"at": 1794684962,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w62"
+},
+{
+"at": 1794687725,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"docs",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w63"
+},
+{
+"at": 1794690713,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w64"
+},
+{
+"at": 1794693780,
+"batched": false,
+"identity": false,
+"modules": [
+"docs"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w63"
+},
+{
+"at": 1794695961,
+"batched": false,
+"identity": true,
+"modules": [
+"\"test",
+"docs",
+"identity",
+"test"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w65"
+}
+],
+"day": "2026-11-14"
+},
+{
+"changes": [
+{
+"at": 1794701015,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".claude",
+"scripts"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w66"
+},
+{
+"at": 1794703344,
+"batched": false,
+"identity": false,
+"modules": [
+".claude",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w67"
+},
+{
+"at": 1794703541,
+"batched": false,
+"identity": false,
+"modules": [
+".claude",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w68"
+},
+{
+"at": 1794703680,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".claude",
+"scripts"
+],
+"outcome": "conflict",
+"red_fix": false,
+"worktree": "w66"
+},
+{
+"at": 1794704667,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w69"
+},
+{
+"at": 1794705929,
+"batched": false,
+"identity": false,
+"modules": [
+"docs",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w70"
+},
+{
+"at": 1794705961,
+"batched": false,
+"identity": false,
+"modules": [
+"docs"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w71"
+},
+{
+"at": 1794708116,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w69"
+},
+{
+"at": 1794708164,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".claude",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w66"
+},
+{
+"at": 1794708706,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w72"
+},
+{
+"at": 1794718501,
+"batched": false,
+"identity": false,
+"modules": [
+"common"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w73"
+},
+{
+"at": 1794719796,
+"batched": false,
+"identity": false,
+"modules": [
+"e2e",
+"worker"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w74"
+},
+{
+"at": 1794720065,
+"batched": false,
+"identity": false,
+"modules": [
+"common",
+"docs",
+"e2e",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w74"
+},
+{
+"at": 1794720283,
+"batched": false,
+"identity": false,
+"modules": [
+"docs"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w75"
+},
+{
+"at": 1794720784,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w76"
+},
+{
+"at": 1794721340,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"scripts",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w77"
+},
+{
+"at": 1794721505,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"docs",
+"scripts",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w78"
+},
+{
+"at": 1794722616,
+"batched": false,
+"identity": true,
+"modules": [
+"\"test",
+"docs",
+"identity",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w79"
+},
+{
+"at": 1794731949,
+"batched": false,
+"identity": false,
+"modules": [
+"docs",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w78"
+},
+{
+"at": 1794735307,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w80"
+},
+{
+"at": 1794735447,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts"
+],
+"outcome": "landed",
+"red_fix": true,
+"worktree": "w80"
+},
+{
+"at": 1794736822,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"docs",
+"infra",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w81"
+},
+{
+"at": 1794737700,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"test"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w82"
+},
+{
+"at": 1794737957,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"common",
+"docs",
+"infra",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w83"
+},
+{
+"at": 1794739123,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".github",
+"docs",
+"ios",
+"scripts",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w84"
+},
+{
+"at": 1794739241,
+"batched": false,
+"identity": false,
+"modules": [
+"ios"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w85"
+},
+{
+"at": 1794739501,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"test"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w86"
+},
+{
+"at": 1794740067,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w87"
+},
+{
+"at": 1794740077,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"ios",
+"test"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w82"
+},
+{
+"at": 1794740397,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "cancelled",
+"red_fix": true,
+"worktree": "w88"
+},
+{
+"at": 1794740397,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w87"
+},
+{
+"at": 1794740565,
+"batched": false,
+"identity": true,
+"modules": [
+".github",
+"e2e",
+"scripts",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": true,
+"worktree": "w88"
+},
+{
+"at": 1794741130,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"docs",
+"e2e",
+"scripts",
+"worker"
+],
+"outcome": "conflict",
+"red_fix": false,
+"worktree": "w89"
+},
+{
+"at": 1794741263,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"scripts",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w86"
+},
+{
+"at": 1794741380,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"e2e",
+"scripts",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w90"
+},
+{
+"at": 1794741595,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "superseded",
+"red_fix": false,
+"worktree": "w81"
+},
+{
+"at": 1794742499,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"test",
+"worker"
+],
+"outcome": "superseded",
+"red_fix": false,
+"worktree": "w81"
+},
+{
+"at": 1794744310,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w82"
+},
+{
+"at": 1794744648,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".github",
+"docs",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w84"
+},
+{
+"at": 1794744916,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"docs",
+"e2e",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w89"
+},
+{
+"at": 1794746849,
+"batched": false,
+"identity": true,
+"modules": [
+"e2e",
+"worker"
+],
+"outcome": "landed",
+"red_fix": true,
+"worktree": "w88"
+},
+{
+"at": 1794747559,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".github",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w91"
+},
+{
+"at": 1794747619,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts"
+],
+"outcome": "landed",
+"red_fix": true,
+"worktree": "w92"
+},
+{
+"at": 1794764339,
+"batched": false,
+"identity": false,
+"modules": [
+"docs"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w82"
+},
+{
+"at": 1794764591,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"scripts",
+"test",
+"worker"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w81"
+},
+{
+"at": 1794765046,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"docs",
+"scripts",
+"test",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w81"
+},
+{
+"at": 1794766402,
+"batched": false,
+"identity": false,
+"modules": [
+".claude",
+"android",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w93"
+},
+{
+"at": 1794766898,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"docs",
+"scripts",
+"test",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w81"
+},
+{
+"at": 1794771228,
+"batched": false,
+"identity": false,
+"modules": [
+"common",
+"docs",
+"scripts",
+"test",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w94"
+},
+{
+"at": 1794774070,
+"batched": false,
+"identity": true,
+"modules": [
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w81"
+},
+{
+"at": 1794776036,
+"batched": false,
+"identity": true,
+"modules": [
+"docs",
+"identity",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w95"
+},
+{
+"at": 1794776357,
+"batched": false,
+"identity": false,
+"modules": [
+"docs",
+"identity",
+"scripts",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w96"
+},
+{
+"at": 1794777648,
+"batched": false,
+"identity": false,
+"modules": [
+"docs"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w97"
+},
+{
+"at": 1794778049,
+"batched": false,
+"identity": false,
+"modules": [
+"android",
+"ios"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w98"
+},
+{
+"at": 1794778145,
+"batched": false,
+"identity": false,
+"modules": [
+"android",
+"ios",
+"scrapers"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w99"
+},
+{
+"at": 1794778253,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"infra",
+"scripts",
+"web",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w100"
+},
+{
+"at": 1794778560,
+"batched": false,
+"identity": false,
+"modules": [
+"infra",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w101"
+},
+{
+"at": 1794778991,
+"batched": false,
+"identity": false,
+"modules": [
+"infra",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w102"
+},
+{
+"at": 1794779106,
+"batched": false,
+"identity": false,
+"modules": [
+"infra",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w103"
+},
+{
+"at": 1794779133,
+"batched": false,
+"identity": false,
+"modules": [
+"infra"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w104"
+},
+{
+"at": 1794779145,
+"batched": false,
+"identity": true,
+"modules": [
+"identity",
+"infra",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w105"
+},
+{
+"at": 1794779341,
+"batched": false,
+"identity": false,
+"modules": [
+"infra",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w106"
+},
+{
+"at": 1794779808,
+"batched": false,
+"identity": false,
+"modules": [
+"infra",
+"scripts",
+"web"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w98"
+},
+{
+"at": 1794780532,
+"batched": false,
+"identity": false,
+"modules": [
+"android",
+"ios",
+"web",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w107"
+},
+{
+"at": 1794781081,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+"common",
+"docs",
+"infra",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w108"
+},
+{
+"at": 1794781486,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w109"
+},
+{
+"at": 1794781570,
+"batched": false,
+"identity": false,
+"modules": [
+"common",
+"scrapers",
+"scripts",
+"test",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w109"
+},
+{
+"at": 1794784096,
+"batched": false,
+"identity": false,
+"modules": [
+"android",
+"ios",
+"web"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w110"
+},
+{
+"at": 1794784458,
+"batched": false,
+"identity": false,
+"modules": [
+"infra"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w111"
+},
+{
+"at": 1794784789,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"identity",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w112"
+}
+],
+"day": "2026-11-15"
+},
+{
+"changes": [
+{
+"at": 1794787596,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w113"
+},
+{
+"at": 1794788247,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w113"
+},
+{
+"at": 1794788594,
+"batched": false,
+"identity": true,
+"modules": [
+"identity",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w105"
+},
+{
+"at": 1794789143,
+"batched": false,
+"identity": true,
+"modules": [
+"(root)",
+".github",
+"common",
+"docs",
+"http",
+"itkit",
+"scripts",
+"test",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w113"
+},
+{
+"at": 1794789468,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w114"
+},
+{
+"at": 1794789854,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+"common",
+"docs",
+"http",
+"identity",
+"infra",
+"scrapers",
+"scripts",
+"test",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w115"
+},
+{
+"at": 1794790039,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w116"
+},
+{
+"at": 1794790051,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "superseded",
+"red_fix": false,
+"worktree": "w114"
+},
+{
+"at": 1794790374,
+"batched": false,
+"identity": true,
+"modules": [
+"identity",
+"infra",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w117"
+},
+{
+"at": 1794790862,
+"batched": false,
+"identity": false,
+"modules": [
+"docs",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w118"
+},
+{
+"at": 1794793257,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+"base",
+"common",
+"e2e",
+"http",
+"identity",
+"ios",
+"itkit",
+"scrapers",
+"scripts",
+"testkit",
+"web",
+"worker"
+],
+"outcome": "conflict",
+"red_fix": false,
+"worktree": "w114"
+},
+{
+"at": 1794797373,
+"batched": false,
+"identity": false,
+"modules": [
+"common",
+"http",
+"infra",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w115"
+},
+{
+"at": 1794804899,
+"batched": false,
+"identity": true,
+"modules": [
+"(root)",
+"base",
+"common",
+"e2e",
+"http",
+"identity",
+"itkit",
+"scrapers",
+"scripts",
+"testkit",
+"web",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w114"
+},
+{
+"at": 1794805142,
+"batched": false,
+"identity": false,
+"modules": [
+"infra"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w119"
+},
+{
+"at": 1794806423,
+"batched": false,
+"identity": false,
+"modules": [
+"docs",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w120"
+},
+{
+"at": 1794806678,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w115"
+},
+{
+"at": 1794806972,
+"batched": false,
+"identity": false,
+"modules": [
+"docs",
+"infra"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w121"
+},
+{
+"at": 1794807441,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"docs",
+"infra",
+"scripts",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w122"
+},
+{
+"at": 1794807624,
+"batched": false,
+"identity": false,
+"modules": [
+".claude",
+"scripts"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w123"
+},
+{
+"at": 1794808093,
+"batched": false,
+"identity": false,
+"modules": [
+".claude",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w123"
+},
+{
+"at": 1794808597,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w124"
+},
+{
+"at": 1794809350,
+"batched": false,
+"identity": false,
+"modules": [
+".claude",
+".github",
+"docs",
+"scripts",
+"worker"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w125"
+},
+{
+"at": 1794809796,
+"batched": false,
+"identity": true,
+"modules": [
+".claude",
+".github",
+"docs",
+"infra",
+"scripts",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w125"
+},
+{
+"at": 1794813457,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w122"
+},
+{
+"at": 1794813769,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".github",
+"project",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w124"
+},
+{
+"at": 1794814886,
+"batched": false,
+"identity": false,
+"modules": [
+"docs"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w126"
+},
+{
+"at": 1794816782,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w127"
+},
+{
+"at": 1794817161,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"docs",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w127"
+},
+{
+"at": 1794817929,
+"batched": false,
+"identity": false,
+"modules": [
+"ios"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w128"
+},
+{
+"at": 1794817996,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "cancelled",
+"red_fix": true,
+"worktree": "w129"
+},
+{
+"at": 1794818089,
+"batched": false,
+"identity": true,
+"modules": [
+"test"
+],
+"outcome": "landed",
+"red_fix": true,
+"worktree": "w129"
+},
+{
+"at": 1794819006,
+"batched": false,
+"identity": true,
+"modules": [
+".claude",
+".github",
+"docs",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w125"
+},
+{
+"at": 1794821060,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w124"
+},
+{
+"at": 1794825288,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w130"
+},
+{
+"at": 1794827103,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w131"
+},
+{
+"at": 1794840937,
+"batched": false,
+"identity": false,
+"modules": [
+"infra",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w132"
+},
+{
+"at": 1794841172,
+"batched": false,
+"identity": false,
+"modules": [
+"ios",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w133"
+},
+{
+"at": 1794841906,
+"batched": false,
+"identity": false,
+"modules": [
+"e2e",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w90"
+},
+{
+"at": 1794841930,
+"batched": false,
+"identity": true,
+"modules": [
+"identity",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w134"
+},
+{
+"at": 1794842627,
+"batched": false,
+"identity": false,
+"modules": [
+"base",
+"common",
+"e2e",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w135"
+},
+{
+"at": 1794842899,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"e2e",
+"scrapers",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w136"
+},
+{
+"at": 1794842925,
+"batched": false,
+"identity": false,
+"modules": [
+"docs",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w137"
+},
+{
+"at": 1794846579,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts"
+],
+"outcome": "landed",
+"red_fix": true,
+"worktree": "w14"
+},
+{
+"at": 1794850238,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"infra"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w138"
+},
+{
+"at": 1794850591,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w138"
+},
+{
+"at": 1794850646,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"docs",
+"infra",
+"scripts"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w139"
+},
+{
+"at": 1794851094,
+"batched": false,
+"identity": false,
+"modules": [
+"common",
+"http",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w140"
+},
+{
+"at": 1794851316,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"docs",
+"infra",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w139"
+},
+{
+"at": 1794851557,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": true,
+"worktree": "w141"
+},
+{
+"at": 1794851917,
+"batched": false,
+"identity": true,
+"modules": [
+".claude",
+"docs",
+"scripts",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w142"
+},
+{
+"at": 1794853427,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w139"
+},
+{
+"at": 1794853828,
+"batched": false,
+"identity": true,
+"modules": [
+".claude",
+"docs",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w142"
+},
+{
+"at": 1794858105,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"scripts",
+"worker"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w143"
+},
+{
+"at": 1794861537,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"scripts",
+"worker"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w143"
+},
+{
+"at": 1794865090,
+"batched": false,
+"identity": true,
+"modules": [
+"identity"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w144"
+},
+{
+"at": 1794865432,
+"batched": false,
+"identity": true,
+"modules": [
+"(root)",
+".github",
+"docs",
+"e2e",
+"identity",
+"project",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w143"
+},
+{
+"at": 1794869573,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+"infra"
+],
+"outcome": "cancelled",
+"red_fix": true,
+"worktree": "w145"
+},
+{
+"at": 1794869708,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+"infra"
+],
+"outcome": "landed",
+"red_fix": true,
+"worktree": "w145"
+},
+{
+"at": 1794871199,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w143"
+},
+{
+"at": 1794871744,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+"infra",
+"worker"
+],
+"outcome": "landed",
+"red_fix": true,
+"worktree": "w145"
+},
+{
+"at": 1794872493,
+"batched": false,
+"identity": true,
+"modules": [
+"identity",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w144"
+}
+],
+"day": "2026-11-16"
+},
+{
+"changes": [
+{
+"at": 1794877641,
+"batched": false,
+"identity": true,
+"modules": [
+"identity",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w146"
+},
+{
+"at": 1794881637,
+"batched": false,
+"identity": true,
+"modules": [
+"identity",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w147"
+},
+{
+"at": 1794881695,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"docs",
+"identity",
+"project",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w148"
+},
+{
+"at": 1794885184,
+"batched": false,
+"identity": true,
+"modules": [
+"identity"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w149"
+},
+{
+"at": 1794886545,
+"batched": false,
+"identity": false,
+"modules": [
+"docs",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w150"
+},
+{
+"at": 1794887881,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts"
+],
+"outcome": "landed",
+"red_fix": true,
+"worktree": "w14"
+},
+{
+"at": 1794890964,
+"batched": false,
+"identity": true,
+"modules": [
+"(root)",
+"common",
+"docs",
+"e2e",
+"identity",
+"project",
+"scrapers",
+"scripts",
+"testkit",
+"web",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w151"
+},
+{
+"at": 1794896802,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".claude",
+".github",
+"common",
+"infra",
+"repochecks",
+"scripts",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w152"
+},
+{
+"at": 1794897089,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"identity",
+"testkit",
+"web",
+"worker"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w153"
+},
+{
+"at": 1794897548,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".claude",
+".github",
+"common",
+"infra",
+"repochecks",
+"scripts",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w152"
+},
+{
+"at": 1794898366,
+"batched": false,
+"identity": true,
+"modules": [
+"(root)",
+"base",
+"common",
+"scripts",
+"testkit",
+"web",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w154"
+},
+{
+"at": 1794898920,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"e2e",
+"scrapers",
+"web",
+"worker"
+],
+"outcome": "conflict",
+"red_fix": false,
+"worktree": "w155"
+},
+{
+"at": 1794899071,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".claude",
+".github",
+"common",
+"infra",
+"repochecks",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w152"
+},
+{
+"at": 1794899435,
+"batched": false,
+"identity": true,
+"modules": [
+"(root)",
+"base",
+"common",
+"identity",
+"scrapers",
+"scripts",
+"testkit",
+"web",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w156"
+},
+{
+"at": 1794900165,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"common",
+"identity",
+"scrapers",
+"scripts",
+"web",
+"worker"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w157"
+},
+{
+"at": 1794900798,
+"batched": false,
+"identity": false,
+"modules": [
+"base",
+"common",
+"identity",
+"scrapers",
+"scripts",
+"worker"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w156"
+},
+{
+"at": 1794900989,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"identity",
+"testkit",
+"web",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w153"
+},
+{
+"at": 1794901264,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"common",
+"identity",
+"scrapers",
+"scripts",
+"web",
+"worker"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w157"
+},
+{
+"at": 1794901616,
+"batched": false,
+"identity": true,
+"modules": [
+"base",
+"common",
+"identity",
+"scrapers",
+"scripts",
+"testkit",
+"web",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w156"
+},
+{
+"at": 1794902224,
+"batched": false,
+"identity": true,
+"modules": [
+"identity",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w158"
+},
+{
+"at": 1794902268,
+"batched": false,
+"identity": true,
+"modules": [
+"(root)",
+".claude",
+".github",
+"common",
+"identity",
+"infra",
+"repochecks",
+"scrapers",
+"scripts",
+"web",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w157"
+},
+{
+"at": 1794905363,
+"batched": false,
+"identity": false,
+"modules": [
+".claude",
+".github",
+"common",
+"docs",
+"identity",
+"scripts",
+"testkit",
+"web",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w159"
+},
+{
+"at": 1794905414,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"e2e",
+"scrapers",
+"web",
+"worker"
+],
+"outcome": "conflict",
+"red_fix": false,
+"worktree": "w155"
+},
+{
+"at": 1794907697,
+"batched": false,
+"identity": true,
+"modules": [
+".github",
+"common",
+"identity",
+"scrapers",
+"scripts",
+"web",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w157"
+},
+{
+"at": 1794907822,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w160"
+},
+{
+"at": 1794908156,
+"batched": false,
+"identity": false,
+"modules": [
+"repochecks"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w161"
+},
+{
+"at": 1794908169,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"docs",
+"repochecks",
+"scripts"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w162"
+},
+{
+"at": 1794908410,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".github",
+"repochecks",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w163"
+},
+{
+"at": 1794908763,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w164"
+},
+{
+"at": 1794909134,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w160"
+},
+{
+"at": 1794909153,
+"batched": false,
+"identity": true,
+"modules": [
+"base",
+"common",
+"identity",
+"scrapers",
+"scripts",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w156"
+},
+{
+"at": 1794909513,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w160"
+},
+{
+"at": 1794909702,
+"batched": false,
+"identity": false,
+"modules": [
+"repochecks"
+],
+"outcome": "conflict",
+"red_fix": true,
+"worktree": "w145"
+},
+{
+"at": 1794909836,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".github",
+"project",
+"repochecks"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w165"
+},
+{
+"at": 1794909955,
+"batched": false,
+"identity": false,
+"modules": [
+"repochecks"
+],
+"outcome": "landed",
+"red_fix": true,
+"worktree": "w161"
+},
+{
+"at": 1794910297,
+"batched": false,
+"identity": false,
+"modules": [
+".claude",
+".github",
+"docs",
+"scripts"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w159"
+},
+{
+"at": 1794910488,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".github",
+"project",
+"repochecks",
+"scripts"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w165"
+},
+{
+"at": 1794910565,
+"batched": false,
+"identity": true,
+"modules": [
+"base",
+"common",
+"identity",
+"scrapers",
+"scripts",
+"worker"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w156"
+},
+{
+"at": 1794911087,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w155"
+},
+{
+"at": 1794912033,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"docs",
+"repochecks",
+"scripts"
+],
+"outcome": "superseded",
+"red_fix": false,
+"worktree": "w162"
+},
+{
+"at": 1794912662,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"docs",
+"repochecks",
+"scripts"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w162"
+},
+{
+"at": 1794912839,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".github",
+"common",
+"docs",
+"project",
+"repochecks",
+"scripts",
+"test"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w165"
+},
+{
+"at": 1794912862,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w161"
+},
+{
+"at": 1794912932,
+"batched": false,
+"identity": false,
+"modules": [
+".claude",
+".github",
+"docs",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w159"
+},
+{
+"at": 1794912959,
+"batched": false,
+"identity": false,
+"modules": [],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w163"
+},
+{
+"at": 1794913460,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+"common",
+"docs",
+"project",
+"scripts",
+"test"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w164"
+},
+{
+"at": 1794913508,
+"batched": false,
+"identity": true,
+"modules": [
+"(root)",
+".claude",
+".github",
+"common",
+"docs",
+"e2e",
+"project",
+"scrapers",
+"scripts",
+"test",
+"web",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w155"
+},
+{
+"at": 1794913537,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".github",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w163"
+},
+{
+"at": 1794913792,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"docs",
+"repochecks",
+"scripts"
+],
+"outcome": "conflict",
+"red_fix": false,
+"worktree": "w162"
+},
+{
+"at": 1794913792,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+"common",
+"docs",
+"project",
+"scripts",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w164"
+},
+{
+"at": 1794913792,
+"batched": false,
+"identity": true,
+"modules": [
+"(root)",
+".github",
+"base",
+"common",
+"docs",
+"identity",
+"project",
+"scrapers",
+"scripts",
+"test",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w156"
+},
+{
+"at": 1794916975,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w161"
+},
+{
+"at": 1794917462,
+"batched": false,
+"identity": true,
+"modules": [
+"(root)",
+"common",
+"docs",
+"project",
+"scripts",
+"test",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w163"
+},
+{
+"at": 1794918450,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"docs",
+"repochecks",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w162"
+},
+{
+"at": 1794919591,
+"batched": false,
+"identity": false,
+"modules": [
+"docs",
+"infra",
+"repochecks",
+"scripts"
+],
+"outcome": "superseded",
+"red_fix": false,
+"worktree": "w161"
+},
+{
+"at": 1794920095,
+"batched": false,
+"identity": false,
+"modules": [
+"docs",
+"infra",
+"repochecks",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w161"
+},
+{
+"at": 1794920607,
+"batched": false,
+"identity": false,
+"modules": [
+"infra"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w166"
+},
+{
+"at": 1794921382,
+"batched": false,
+"identity": true,
+"modules": [
+".github",
+"infra",
+"scripts",
+"test",
+"worker"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w163"
+},
+{
+"at": 1794921562,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"e2e",
+"scrapers",
+"test",
+"web",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w155"
+},
+{
+"at": 1794922395,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w167"
+},
+{
+"at": 1794922984,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"common",
+"docs",
+"infra",
+"repochecks",
+"scrapers",
+"scripts",
+"test",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w168"
+},
+{
+"at": 1794924283,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w169"
+},
+{
+"at": 1794924733,
+"batched": false,
+"identity": true,
+"modules": [
+".github",
+"repochecks",
+"test",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w163"
+},
+{
+"at": 1794925676,
+"batched": false,
+"identity": true,
+"modules": [
+"base",
+"common",
+"identity",
+"scrapers",
+"scripts",
+"test",
+"worker"
+],
+"outcome": "conflict",
+"red_fix": false,
+"worktree": "w156"
+},
+{
+"at": 1794927997,
+"batched": false,
+"identity": false,
+"modules": [
+"common",
+"docs",
+"scrapers",
+"test",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w168"
+},
+{
+"at": 1794928469,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w170"
+},
+{
+"at": 1794928582,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".claude",
+".github",
+"docs",
+"repochecks",
+"scripts"
+],
+"outcome": "conflict",
+"red_fix": false,
+"worktree": "w171"
+},
+{
+"at": 1794928621,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w172"
+},
+{
+"at": 1794932026,
+"batched": true,
+"identity": false,
+"modules": [
+"docs"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w173"
+},
+{
+"at": 1794933204,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".github",
+"common",
+"e2e",
+"http",
+"identity",
+"project",
+"repochecks",
+"scrapers",
+"scripts",
+"test",
+"testkit",
+"web",
+"worker"
+],
+"outcome": "precheck",
+"red_fix": false,
+"worktree": "w174"
+},
+{
+"at": 1794933268,
+"batched": true,
+"identity": false,
+"modules": [
+"docs",
+"infra"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w175"
+},
+{
+"at": 1794933625,
+"batched": false,
+"identity": true,
+"modules": [
+"(root)",
+".github",
+"common",
+"e2e",
+"http",
+"identity",
+"project",
+"repochecks",
+"scrapers",
+"scripts",
+"test",
+"testkit",
+"web",
+"worker"
+],
+"outcome": "conflict",
+"red_fix": false,
+"worktree": "w174"
+},
+{
+"at": 1794934405,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".claude",
+".github",
+"docs",
+"repochecks",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w171"
+},
+{
+"at": 1794937813,
+"batched": false,
+"identity": true,
+"modules": [
+"base",
+"common",
+"identity",
+"scrapers",
+"scripts",
+"test",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w156"
+},
+{
+"at": 1794937951,
+"batched": false,
+"identity": false,
+"modules": [
+"docs"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w176"
+},
+{
+"at": 1794938699,
+"batched": false,
+"identity": false,
+"modules": [
+"common",
+"docs",
+"scrapers",
+"test",
+"worker"
+],
+"outcome": "conflict",
+"red_fix": false,
+"worktree": "w168"
+},
+{
+"at": 1794939457,
+"batched": false,
+"identity": true,
+"modules": [
+"(root)",
+".github",
+"common",
+"e2e",
+"http",
+"identity",
+"project",
+"repochecks",
+"scrapers",
+"scripts",
+"test",
+"testkit",
+"web",
+"worker"
+],
+"outcome": "conflict",
+"red_fix": false,
+"worktree": "w174"
+},
+{
+"at": 1794942478,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w177"
+},
+{
+"at": 1794943901,
+"batched": false,
+"identity": false,
+"modules": [
+"common",
+"docs",
+"scrapers",
+"test",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w168"
+},
+{
+"at": 1794944169,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"repochecks"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w178"
+},
+{
+"at": 1794944198,
+"batched": false,
+"identity": true,
+"modules": [
+"(root)",
+".github",
+"common",
+"e2e",
+"http",
+"identity",
+"project",
+"repochecks",
+"scrapers",
+"scripts",
+"test",
+"testkit",
+"web",
+"worker"
+],
+"outcome": "conflict",
+"red_fix": false,
+"worktree": "w174"
+},
+{
+"at": 1794946451,
+"batched": false,
+"identity": false,
+"modules": [
+"web"
+],
+"outcome": "landed",
+"red_fix": true,
+"worktree": "w145"
+},
+{
+"at": 1794950108,
+"batched": false,
+"identity": true,
+"modules": [
+"(root)",
+".github",
+"common",
+"e2e",
+"http",
+"identity",
+"project",
+"repochecks",
+"scrapers",
+"scripts",
+"test",
+"testkit",
+"web",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w174"
+},
+{
+"at": 1794957955,
+"batched": false,
+"identity": false,
+"modules": [
+"data",
+"docs",
+"scripts"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w179"
+},
+{
+"at": 1794958626,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+"scripts",
+"test"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w180"
+},
+{
+"at": 1794959164,
+"batched": false,
+"identity": false,
+"modules": [
+"data",
+"docs",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w179"
+},
+{
+"at": 1794959245,
+"batched": false,
+"identity": false,
+"modules": [
+"docs",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w181"
+},
+{
+"at": 1794959393,
+"batched": false,
+"identity": false,
+"modules": [
+"(root)",
+".claude",
+"infra"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w182"
+}
+],
+"day": "2026-11-17"
+},
+{
+"changes": [
+{
+"at": 1794974900,
+"batched": false,
+"identity": false,
+"modules": [
+"common",
+"scripts",
+"test",
+"web",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w183"
+},
+{
+"at": 1794976339,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w184"
+},
+{
+"at": 1794976952,
+"batched": false,
+"identity": false,
+"modules": [
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w185"
+},
+{
+"at": 1794977047,
+"batched": false,
+"identity": false,
+"modules": [
+"scrapers",
+"test",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w186"
+},
+{
+"at": 1794977904,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"test",
+"web",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w183"
+},
+{
+"at": 1794978080,
+"batched": false,
+"identity": false,
+"modules": [
+"infra"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w187"
+},
+{
+"at": 1794978613,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"repochecks",
+"scripts"
+],
+"outcome": "precheck",
+"red_fix": false,
+"worktree": "w188"
+},
+{
+"at": 1794978810,
+"batched": true,
+"identity": false,
+"modules": [
+"infra"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w189"
+},
+{
+"at": 1794978908,
+"batched": true,
+"identity": false,
+"modules": [
+"infra"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w190"
+},
+{
+"at": 1794979009,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"repochecks",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w188"
+},
+{
+"at": 1794979380,
+"batched": false,
+"identity": false,
+"modules": [
+"docs",
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w191"
+},
+{
+"at": 1794980749,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"docs",
+"repochecks",
+"scripts"
+],
+"outcome": "precheck",
+"red_fix": false,
+"worktree": "w192"
+},
+{
+"at": 1794980819,
+"batched": false,
+"identity": false,
+"modules": [
+"common",
+"test",
+"testkit",
+"web",
+"worker"
+],
+"outcome": "precheck",
+"red_fix": false,
+"worktree": "w183"
+},
+{
+"at": 1794980922,
+"batched": false,
+"identity": false,
+"modules": [
+".github",
+"docs",
+"repochecks",
+"scripts"
+],
+"outcome": "cancelled",
+"red_fix": false,
+"worktree": "w192"
+},
+{
+"at": 1794980922,
+"batched": true,
+"identity": false,
+"modules": [
+"scrapers",
+"test",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w186"
+},
+{
+"at": 1794981121,
+"batched": true,
+"identity": true,
+"modules": [
+"base",
+"scrapers",
+"scripts",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w193"
+},
+{
+"at": 1794981185,
+"batched": false,
+"identity": false,
+"modules": [
+"infra",
+"repochecks"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w194"
+},
+{
+"at": 1794981891,
+"batched": true,
+"identity": false,
+"modules": [
+"android",
+"base",
+"common",
+"data",
+"geodata",
+"infra",
+"ios",
+"scrapers",
+"scripts",
+"test",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w195"
+},
+{
+"at": 1794981956,
+"batched": true,
+"identity": false,
+"modules": [
+"android",
+"base",
+"common",
+"data",
+"geodata",
+"infra",
+"ios",
+"repochecks",
+"scrapers",
+"scripts",
+"test",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w194"
+},
+{
+"at": 1794982120,
+"batched": true,
+"identity": false,
+"modules": [
+".github",
+"docs",
+"repochecks",
+"scrapers",
+"scripts",
+"test",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w192"
+},
+{
+"at": 1794982327,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"e2e",
+"test",
+"testkit",
+"web",
+"worker"
+],
+"outcome": "checks-failed",
+"red_fix": false,
+"worktree": "w183"
+},
+{
+"at": 1794983667,
+"batched": false,
+"identity": false,
+"modules": [
+"scripts"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w196"
+},
+{
+"at": 1794984715,
+"batched": true,
+"identity": false,
+"modules": [],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w193"
+},
+{
+"at": 1794984715,
+"batched": true,
+"identity": false,
+"modules": [],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w194"
+},
+{
+"at": 1794984715,
+"batched": true,
+"identity": false,
+"modules": [],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w195"
+},
+{
+"at": 1794984730,
+"batched": false,
+"identity": false,
+"modules": [
+"worker"
+],
+"outcome": "landed",
+"red_fix": true,
+"worktree": "w186"
+},
+{
+"at": 1794985363,
+"batched": false,
+"identity": true,
+"modules": [
+"common",
+"e2e",
+"test",
+"testkit",
+"web",
+"worker"
+],
+"outcome": "landed",
+"red_fix": false,
+"worktree": "w183"
+}
+],
+"day": "2026-11-18"
+}
+],
+"source": "victoria-logs-ci source:agentctl record:agentctl.landing, 2026-11-11..18 (7 days), one replay per day"
+}
