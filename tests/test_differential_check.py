@@ -83,7 +83,7 @@ class DifferentialCheckTest(test_queue.QueueTest):
         self.remote_fails(42, "[info] - never case-map a String *** FAILED ***", "pre-push sbt FAILED (60s)")
         self.check(eb)
         self.assertEqual(len(self.verdicts("NOT_LANDED")), 1)
-        self.assertEqual(self.entries()[eb.rsplit("-", 1)[-1]]["status"], "joined")
+        self.assertEqual(self.entries()[eb.rsplit("-", 1)[-1]]["status"], "waiting")
         self.assertEqual(self.pushed(), [])
 
     def test_a_test_only_the_head_fails_is_rejected_naming_it(self):

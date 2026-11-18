@@ -2,7 +2,7 @@
 QUEUED <id>; the processor's checker runs the change's checks in a check tree of its own, within the governor, then
 pushes it (green), puts it on `waiting` (red) or rejects it, every verdict to the inbox with the agent's worktree; under
 pressure the checks run on ci-runner's check tier and the push carries the remote run for the hook to confirm."""
-import json, os, subprocess, sys, tempfile, time, unittest
+import json, os, re, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -141,7 +141,7 @@ class QueueTest(WaitingTest):
         _did, started = tick()
         self.assertNotIn(ec, started, "no change check takes a tree the batch needs")
         self.drive()  # the batch pushes
-        self.assertEqual(entry(entry(ea)["waiting_id"])["status"], "landed")
+        self.assertEqual(entry(ea)["status"], "landed")
         self.assertEqual(self.remote_log()[0], "a: waits", "the batch first")
         _did, started = tick()
         self.assertIn(ec, started, "the batch landed: changes go again")
@@ -204,11 +204,46 @@ class QueueTest(WaitingTest):
         self.assertEqual(self.check(eid), 0)
         self.assertEqual(len(self.calls_of("--checks-only")), 1)
         es = self.entries()
-        self.assertEqual(es[eid.rsplit("-", 1)[-1]]["status"], "joined")
         waiting = [e for e in es.values() if e["status"] == "waiting"]
-        self.assertEqual([e["worktree"] for e in waiting], [wt], "the waiting entry is the agent's")
+        self.assertEqual([e["id"] for e in waiting], [eid], "the queued change itself waits: no entry of its own")
         self.assertEqual(self.pushed(), [])
         self.assertIn("WAITING", [e["kind"] for e in self.inbox()])
+
+    def test_a_held_change_is_one_item_counted_once_and_one_batch_member(self):
+        """2026-11-18 07:15Z: three checked changes held behind a red gate read `waiting: 6 — movies-sentry,
+        movies-tg-inapp, flapmem, movies-sentry, movies-tg-inapp, flapmem`: each joined `waiting` as a waiting entry
+        with an id of its own, which the server tick projected into a second open item beside the queued one. One
+        change is one item; waiting is a state of it; the batch at green carries each change once, in one push."""
+        d, _c, _w = A.waiting_state(self.r.path)
+        self.reds = {"7"}
+        wts, ids = [], []
+        for n in ("a", "b", "c"):
+            wt, _ = self.agent(n, f"web/src/main/{n.upper()}.scala", f"{n}\n", msg=f"{n}: held")
+            eid, _ = self.queued(wt)
+            self.assertEqual(self.check(eid), 0)
+            wts.append(wt)
+            ids.append(eid)
+        A.project_changes(d)  # the server tick's projection of every entry
+        rows = A.change_rows()
+        self.assertEqual([(r["id"], r["state"]) for r in rows], [(i, "waiting") for i in ids], "one item per change")
+        A.write_snapshot(d)
+        line = A.status_line()
+        self.assertIn("waiting: 3 — ", line)
+        for wt in wts:
+            self.assertEqual(line.count(re.sub(r"^.*-wt-", "", os.path.basename(wt))), 1, line)
+        self.reds = set()
+        saved = A.spawn_batch_executor
+        A.spawn_batch_executor = lambda repo, d_, bid: None
+        try:
+            self.assertIn("checking", A.tick_batch(self.r.path, d)[0])
+        finally:
+            A.spawn_batch_executor = saved
+        self.assertEqual(self.batch()["data"]["members"], ids, "the batch's members are the changes, each once")
+        self.drive()
+        self.assertEqual([self.entries()[i.rsplit("-", 1)[-1]]["status"] for i in ids], ["landed"] * 3)
+        self.assertEqual(len(self.pushed()), 1, "one push")
+        self.assertEqual(self.remote_log()[:3], ["c: held", "b: held", "a: held"])
+        self.assertEqual(A.change_rows(), [])
 
     def test_failing_checks_are_not_landed_in_the_inbox(self):
         wt, _ = self.agent("a", "BROKEN", "x\n")
@@ -776,8 +811,7 @@ class QueueTest(WaitingTest):
         self.r.commit("a: beside it, a production change naming no red", at=wa)
         ea, _ = self.queued(wa)
         self.check(ea)
-        wid = entry(ea)["waiting_id"]
-        self.assertEqual(entry(wid)["fixes"], ["7"], "the entry names the red")
+        self.assertEqual(entry(ea)["fixes"], ["7"], "the entry names the red")
         for _ in range(2):  # the second tick: it stays blocked, never flips back to assembling
             A.tick_batch(self.r.path, d)
             self.assertEqual(self.batch()["state"], "blocked-red", "nothing in it may land on red")
@@ -789,7 +823,7 @@ class QueueTest(WaitingTest):
         self.assertEqual(self.remote_log()[0], "b: tools only")
         self.reds = set()  # green: the batch builds
         self.drive()
-        self.assertEqual(entry(wid)["status"], "landed")
+        self.assertEqual(entry(ea)["status"], "landed")
 
     def test_the_batchs_check_on_ci_runner_is_the_fast_only_set_on_a_check_fast_branch(self):
         head = sh(self.r.path, "git", "rev-parse", "HEAD").strip()

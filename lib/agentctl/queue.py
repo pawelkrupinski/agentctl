@@ -775,7 +775,7 @@ def entry_owned(eid):
 # checked change under the landing lease: pushing -> landed, or back to checked (a push never rejects; after 3
 # failures a condition on the git route). Main moving with an overlap is a new round (queued), never an attempt.
 ENTRY_STATUS = {"queued": "queued", "checking": "checking", "checked": "checked", "pushing": "pushing",
-                "waiting": "joined", "landed": "landed", "rejected": "rejected", "superseded": "superseded",
+                "waiting": "waiting", "landed": "landed", "rejected": "rejected", "superseded": "superseded",
                 "cancelled": "cancelled"}
 PUSH_ATTEMPTS_MAX = 3
 
@@ -815,8 +815,8 @@ def set_change(d, e, to, data=None, event=None, store=None, **fields):
 
 
 def joined_changes(d, w, st):
-    """The queued changes that joined waiting entry w (queue_join: a queued change meeting a red gate becomes a waiting
-    entry of its own; the queued entry is `joined`, its item `waiting`) and are still open."""
+    """The queued changes that joined waiting entry w and are still open: entries from before ONE CHANGE, ONE ITEM
+    (queue_join), when a queued change meeting a red gate became a waiting entry of its own, the queued one `joined`."""
     out = []
     for q in waiting_entries(d, open_only=False):
         if q.get("status") == "joined" and q.get("waiting_id") == w["id"] and q["id"] != w["id"]:
@@ -1431,7 +1431,8 @@ def _push_change(repo, d, e, i):
             why = (f"its checks failed only where {remote()}/main fails too ({keys_text(kr['keys'])}: "
                    f"{'; '.join(kr['where'])}): not held against it; it lands with the batch once main is green "
                    "or the red's fix lands") if kr else None
-            return "joined" if queue_join(repo, d, e, tree, head, why) == 0 else "rejected"
+            queue_join(repo, d, e, tree, head, why)
+            return "joined"
         fixes = sorted(fixes_of(repo, commits))
         set_change(d, e, "pushing", event={"text": f"{e['id']}: pushing {head[:10]}"})
         pushed_at = time.time()
@@ -1601,25 +1602,29 @@ def spawn_executor(repo, d, eid):
     time.sleep(1)  # it takes its tree slot before the next looks
 
 
+# ONE CHANGE, ONE ITEM (2026-11-18 07:15Z: `waiting: 6 — movies-sentry, movies-tg-inapp, flapmem, movies-sentry, ...`
+# for the three changes of batch #36). A checked change meeting the red gate joined `waiting` through land's join: a
+# waiting entry with an id of its own beside the queued one (status `joined`), and the server tick projected that entry
+# into a second open change item -- every held change counted and listed twice by the status line, `land status`, the
+# watchdog and the stats. Now the queued change ITSELF waits: its entry joins the waiting entries the batch reads (its
+# tip the one it was checked at, its commits and counting fixes as land's join records them) and its item moves to
+# `waiting`; the batch lands, rejects or supersedes it under the id its `land` printed. A `joined` entry on disk (from
+# before) still follows the waiting entry that carries it (joined_changes, project_changes) until it is decided.
+QUEUE_ONLY_FIELDS = ("backlog_batch", "batch_alone", "push_alone", "drift_split", "remote_run")  # a check's, not a wait's
+
+
 def queue_join(repo, d, e, tree, head, why=None):
-    """Under the landing lock, main red (or its checks failing only as its base fails, why): the checked change joins
-    `waiting` (land's join, from the check tree); its WAITING note says why."""
-    a = argparse.Namespace(follow=False)
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):
-        rc = join(repo, f"refs/remotes/{remote()}/main", lambda *x: subprocess.run(x, cwd=tree, capture_output=True,
-                                                                                  text=True, env=tool_env()),
-                  os.path.join(d, f"check-{e['id']}"), a, head=head, worktree=e["worktree"],
-                  branch=e.get("branch") or "")
-    line = (out.getvalue().strip().splitlines() or [""])[-1]
-    if rc == 0:
-        line = f"{line}: {why}" if why else line
-        set_change(d, e, "waiting", event=change_event(e, line, code=None, final=False), decided=ts(),
-                   waiting_id=a.waiting["id"])
-        wlog(d, f"{e['id']}: {line}")
-        return 0
-    queue_verdict(d, e, "rejected", line or "NOT LANDED: could not join `waiting`")
-    return 1
+    """Under the landing lock, main red (or its checks failing only as its base fails, why): the checked change waits
+    for green at `head` (ONE CHANGE, ONE ITEM, above); its WAITING note says why."""
+    commits = waiting_commits(repo, f"{remote()}/main", head)
+    supersede_older_waiting(d, e["worktree"], e.get("branch") or "", e["id"])
+    for k in QUEUE_ONLY_FIELDS:
+        e.pop(k, None)
+    e.update(tip=head, commits=commits, fixes=sorted(fixes_of(repo, commits)))
+    line = note_waiting(d, os.path.join(d, f"check-{e['id']}"), head, e["id"]) + (f": {why}" if why else "")
+    set_change(d, e, "waiting", event=change_event(e, line, code=None, final=False), decided=ts())
+    wlog(d, f"{e['id']}: {line}")
+    return 0
 
 
 def checks_here():

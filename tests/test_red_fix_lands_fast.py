@@ -207,7 +207,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         e["known_red"] = {"keys": ["Local checks"], "where": ["plain main"], "base": e.get("checked_base")}
         A.save_entry(d, e)
         A.push_change(self.r.path, d, e)
-        self.assertEqual(self.entry(eo)["status"], "joined")
+        self.assertEqual(self.entry(eo)["status"], "waiting")
 
     # -- the invariant ------------------------------------------------------------------------------------------------
     def test_watchdog_wr_escalates_a_red_fix_waiting_on_green_or_queued_too_long(self):

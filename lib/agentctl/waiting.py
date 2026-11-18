@@ -368,6 +368,22 @@ def batch_order(repo, entries, reds):
     return sorted(entries, key=lambda e: (rank(e), e["seq"]))
 
 
+def supersede_older_waiting(d, worktree, branch, eid):
+    """Waiting again replaces this worktree and branch's older waiting entry: only the newest (eid) lands."""
+    for old in waiting_entries(d):
+        if old["id"] != eid and same_change_source(old, worktree, branch):
+            supersede(d, old, eid, f"{worktree} waits again; only the newest entry lands")
+
+
+def note_waiting(d, log_path, head, eid):
+    """The change's `=== waiting` line in its log, and its verdict line `WAITING <head> (entry <id>, n waiting)` (n:
+    the waiting entries, it among them, saved yet or not)."""
+    n = len({x["id"] for x in waiting_entries(d)} | {eid})
+    with open(log_path, "a") as f:
+        f.write(f"=== waiting {ts()} {head} as {eid} ({n} waiting)\n")
+    return f"WAITING {head} (entry {eid}, {n} waiting)"
+
+
 def join(repo, main_ref, sh, log_path, a, head=None, worktree=None, branch=None):
     """The change (its own checks passed) waits for main to turn green: a `waiting` entry (design §14.1: no branch, no
     worktree -- the batch is computed at green, in a check tree). Prints `WAITING <head> (entry <id>, n waiting)`."""
@@ -382,17 +398,12 @@ def join(repo, main_ref, sh, log_path, a, head=None, worktree=None, branch=None)
         fcntl.flock(seq_lock, fcntl.LOCK_EX)
         seq = max([e["seq"] for e in waiting_entries(d, open_only=False)] + [0]) + 1
         eid = f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(worktree or repo)}-{seq}"
-        for old in waiting_entries(d):  # waiting again replaces this worktree and branch's older waiting entry
-            if same_change_source(old, worktree or repo, branch):
-                supersede(d, old, eid, f"{worktree or repo} waits again; only the newest entry lands")
+        supersede_older_waiting(d, worktree or repo, branch, eid)
         e = {"id": eid, "seq": seq, "worktree": worktree or repo, "branch": branch, "head": head, "commits": commits,
              "fixes": sorted(fixes_of(repo, commits)), "status": "waiting", "created": ts(), "tip": head,
              "follow": bool(getattr(a, "follow", False))}
         save_entry(d, e)
-    n = len(waiting_entries(d))
-    with open(log_path, "a") as f:
-        f.write(f"=== waiting {ts()} {head} as {e['id']} ({n} waiting)\n")
-    print(f"WAITING {head} (entry {e['id']}, {n} waiting)", flush=True)
+    print(note_waiting(d, log_path, head, e["id"]), flush=True)
     a.waiting = e
     spawn_waiting_processor(repo)
     offer_token(repo)

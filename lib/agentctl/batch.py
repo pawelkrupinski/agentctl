@@ -668,7 +668,8 @@ def behind_batch(e, it, what):
 
 def batch_row_ids(bt, rows):
     """The change rows the batch carries: its members, and a change that joined one of them (the same worktree: a
-    queued change that met a red gate becomes a waiting entry of its own, so its item follows that entry)."""
+    queued change that met a red gate before ONE CHANGE, ONE ITEM, queue_join, became a waiting entry of its own, so
+    its item follows that entry)."""
     if not bt:
         return set()
     members = set((bt.get("data") or {}).get("members") or [])
