@@ -75,7 +75,9 @@ class ChaosSeedsTest(unittest.TestCase):
         self.assertEqual(failures(sims), [])
 
     def test_chaos_seeds(self):
-        sims = [queue_sim.Sim(seed, trees=trees, profile=CHAOS, n_changes=14).run() for seed in range(10)
+        """3 seeds in the suite; $AGENTCTL_TEST_SIM_SEEDS=N sweeps N/10 (the larger sweep: an env-flagged run)."""
+        n = int(os.environ["AGENTCTL_TEST_SIM_SEEDS"]) // 10 if os.environ.get("AGENTCTL_TEST_SIM_SEEDS") else 3
+        sims = [queue_sim.Sim(seed, trees=trees, profile=CHAOS, n_changes=14).run() for seed in range(n)
                 for trees in (1, 4)]
         self.assertEqual(failures(sims), [])
 

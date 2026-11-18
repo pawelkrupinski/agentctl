@@ -68,5 +68,30 @@ class TimeoutAndClockTest(unittest.TestCase):
         self.assertIs(A.subprocess.run, subprocess.run)
 
 
+    def test_an_agentctl_function_left_faked_fails_the_test_and_is_undone(self):
+        """2026-11-18: RecoveryTest (test_red_crash_loop) faked ci_state_load twice in one test and its tearDown put
+        the first fake back; the next test in that worker, test_cistate's snapshot test, read a snapshot without a
+        gate: KeyError 'gate', once in a suite run. A replaced agentctl function now fails the test that left it, and
+        is restored before the next one."""
+        real = A.ci_state_load
+
+        class Leaky(unittest.TestCase):
+            def fake(self):
+                self.saved = A.ci_state_load
+                A.ci_state_load = lambda o_r: {"latest": {}}
+
+            def runTest(self):
+                self.fake()
+                self.fake()  # the second fake saves the first as "real"
+
+            def tearDown(self):
+                A.ci_state_load = self.saved
+        res = unittest.TestResult()
+        Leaky().run(res)
+        self.assertIs(A.ci_state_load, real, "restored before the next test")
+        self.assertEqual(len(res.failures), 1)
+        self.assertIn("ci_state_load", res.failures[0][1])
+
+
 if __name__ == "__main__":
     unittest.main()

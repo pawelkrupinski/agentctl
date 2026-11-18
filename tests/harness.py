@@ -161,9 +161,29 @@ def _restore_environment(before):
     return leaked
 
 
+def _patchable(mod):
+    """{name: object} of the module's functions and classes: what a test fakes by assignment (`A.ci_state_load = ...`)."""
+    return {n: v for n, v in mod.__dict__.items() if isinstance(v, (types.FunctionType, type))}
+
+
+def _restore_patches(before):
+    """Put back every agentctl function or class a test replaced and did not restore; the names, for its failure.
+    2026-11-18: test_red_crash_loop's RecoveryTest faked ci_state_load twice in one test, so its tearDown "restored"
+    the first fake: the next test in the worker (test_cistate's snapshot test) read a snapshot without a gate and
+    failed with KeyError 'gate', once in a suite run, depending on which worker ran what."""
+    leaked = []
+    for mod, funcs in before:
+        for n, v in funcs.items():
+            if mod.__dict__.get(n) is not v:
+                leaked.append(n)
+                setattr(mod, n, v)
+    return sorted(set(leaked))
+
+
 def _run(self, result=None):
     main = threading.current_thread() is threading.main_thread()
     env_before = dict(os.environ)
+    patches_before = [(m, _patchable(m)) for m in _agentctl_modules()]
     _fresh_proxies()
     _reset_process_state()
     if main:
@@ -181,6 +201,13 @@ def _run(self, result=None):
         try:
             raise AssertionError(f"the test left {', '.join(leaked)} changed in os.environ (restored now): restore "
                                  f"what it sets, and close a served token drop before restoring")
+        except AssertionError:
+            result.addFailure(self, sys.exc_info())
+    patched = _restore_patches(patches_before)
+    if patched and result is not None:
+        try:
+            raise AssertionError(f"the test left agentctl's {', '.join(patched)} replaced (restored now): restore what "
+                                 "it fakes -- the next test in this worker would run against the fake")
         except AssertionError:
             result.addFailure(self, sys.exc_info())
     bad = _stdlib_patched()

@@ -261,7 +261,8 @@ class DecisionTest(CrashLoopBase):
 class RecoveryTest(CrashLoopBase):
     def snap(self, rid, num, conclusion):
         snap = {"latest": {"Identity model convergence": {"databaseId": rid, "number": num, "conclusion": conclusion}}}
-        self.saved_load = A.ci_state_load
+        if not hasattr(self, "saved_load"):  # a second snap in one test must not save the first one's fake as "real"
+            self.saved_load = A.ci_state_load
         A.ci_state_load = lambda o_r: snap
 
     def tearDown(self):
