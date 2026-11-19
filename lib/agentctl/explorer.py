@@ -76,7 +76,7 @@ def explorer_file(o_r, repo, rows, now_):
         msg = (f"Drift explorer: file {n} flip(s) found on seeds {', '.join(seeds)}\n\n" + "\n".join(
             f"- {r['country']} {r['venue']} | {r['rawTitle']} (seed {r['seed']}, slice {r.get('slice', '')})" for r in rows)
             + "\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n")
-        c = git(wt, "commit", "-q", "-m", msg, check=False)
+        c = git(wt, *NO_SIGN, "commit", "-q", "-m", msg, check=False)
         if c.returncode != 0:
             err(f"drift explorer: commit failed ({c.stderr.strip()[:160]})")
             return None

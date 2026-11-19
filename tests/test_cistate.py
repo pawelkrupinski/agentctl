@@ -100,6 +100,20 @@ class FixerTokenTest(RedBase):
         self.assertIn("only for real owner actions", p)
 
 
+    def test_a_fixer_signs_through_the_secrets_agent_not_launchds_empty_one(self):
+        """ISSUE 20261116T224456-3b788f: agentctl's launchd jobs run with launchd's SSH_AUTH_SOCK (an empty agent), so a
+        fixer's commit.gpgsign=true commit failed 'No private key found'; ~/.zshrc points signing at the secrets agent."""
+        saved = os.environ.get("SSH_AUTH_SOCK")
+        os.environ["SSH_AUTH_SOCK"] = "/private/tmp/com.apple.launchd.XXXX/Listeners"
+        self.addCleanup(lambda: os.environ.__setitem__("SSH_AUTH_SOCK", saved) if saved else os.environ.pop("SSH_AUTH_SOCK", None))
+        agent = os.path.join(A.HOME, ".ssh", "secrets-agent.sock")
+        self.assertEqual(A.fixer_env(MOVIES, 20).get("SSH_AUTH_SOCK"), os.environ["SSH_AUTH_SOCK"])  # no agent: as is
+        os.makedirs(os.path.dirname(agent), exist_ok=True)
+        open(agent, "w").close()
+        self.addCleanup(os.unlink, agent)
+        self.assertEqual(A.fixer_env(MOVIES, 20).get("SSH_AUTH_SOCK"), agent)
+
+
 FAKE_HOOK = """#!/bin/sh
 if [ -e BROKEN ]; then echo "! pre-push sbt FAILED (3s)"; exit 1; fi
 echo "pre-push sbt ok (1s)"; exit 0

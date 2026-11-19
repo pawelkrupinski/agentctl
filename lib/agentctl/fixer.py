@@ -196,6 +196,12 @@ def fixer_env(o_r, num, wrapper_pid=None):
     env.setdefault("LOGNAME", me)
     path = env.get("PATH", "/usr/bin:/bin")
     env["PATH"] = ":".join(dict.fromkeys([os.path.join(HOME, ".local", "bin"), "/opt/homebrew/bin"] + path.split(":")))
+    # SIGNING THROUGH THE SECRETS AGENT (issue 20261116T224456-3b788f): launchd hands its jobs its own SSH_AUTH_SOCK, an
+    # empty agent, while ~/.zshrc points commit.gpgsign (gpg.format ssh) at ~/.ssh/secrets-agent.sock; a fixer's or a
+    # revert's commit then failed "No private key found". Where that socket is, every spawned session signs through it.
+    agent = os.path.join(HOME, ".ssh", "secrets-agent.sock")
+    if os.path.exists(agent):
+        env["SSH_AUTH_SOCK"] = agent
     if wrapper_pid:
         env["AGENTCTL_CLAIM_PID"] = str(wrapper_pid)
     return env
@@ -1848,12 +1854,12 @@ def red_revert(o_r, repo, u, culprit):
     git(repo, "fetch", "--quiet", remote(), "main", check=False)
     if git(repo, "worktree", "add", "-q", "-b", branch, wt, f"{remote()}/main", check=False).returncode != 0:
         return False, "git worktree add failed"
-    r = git(wt, "revert", "--no-edit", culprit, check=False)
+    r = git(wt, *NO_SIGN, "revert", "--no-edit", culprit, check=False)
     if r.returncode != 0:
         git(wt, "revert", "--abort", check=False)
         return False, f"git revert {culprit[:10]} does not apply ({(r.stderr or r.stdout).strip()[:120]})"
     msg = git(wt, "log", "-1", "--format=%B").strip()
-    git(wt, "commit", "--amend", "-q", "-m", f"{msg}\n\nThe revert fallback (agentctl red): {u['workflow']} #{num} "
+    git(wt, *NO_SIGN, "commit", "--amend", "-q", "-m", f"{msg}\n\nThe revert fallback (agentctl red): {u['workflow']} #{num} "
         f"still failed after two attempts (its tier ladder).\n\nFixes-Red: {num}\n"
         "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>")
     pid = spawn_land(wt, fixer_env(o_r, num), reds_dir(f"revert-{num}.log"))

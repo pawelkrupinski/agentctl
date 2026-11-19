@@ -179,6 +179,12 @@ def scratch():
 GIT_NET_SSH = "ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
 
 
+# agentctl's own commits and rewrites (land's rebase, a blame or fallback revert, a queue cherry-pick) never sign:
+# main's commits are unsigned, and a global commit.gpgsign=true behind an empty ssh-agent fails them (issue
+# 20261115T112749-d27361).
+NO_SIGN = ("-c", "commit.gpgsign=false")
+
+
 def git(repo, *args, check=True, input=None):
     env = None
     if args and args[0] in ("fetch", "ls-remote"):  # never hang on a remote whose ssh accepts and does not answer

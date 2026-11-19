@@ -522,7 +522,7 @@ def blame_revert(o_r, repo, u, b):
     wt, why = blame_worktree(repo, "revert", num)
     if not wt:
         return {**rec, "ok": False, "msg": why}
-    r = git(wt, "revert", "--no-commit", *reversed(g["commits"]), check=False)
+    r = git(wt, *NO_SIGN, "revert", "--no-commit", *reversed(g["commits"]), check=False)
     if r.returncode != 0:
         git(wt, "revert", "--abort", check=False)
         git(wt, "reset", "-q", "--hard", f"{remote()}/main", check=False)
@@ -535,7 +535,7 @@ def blame_revert(o_r, repo, u, b):
            f"{', '.join(c[:10] for c in g['commits'])}. Its lander, {lander_name(g.get('lander'))}, re-applies it with "
            f"its fix.\n\n" + "".join(f"This reverts commit {c}.\n" for c in reversed(g["commits"]))  # prepush-check's
            + f"\nReverts-Change: {name}\nFixes-Red: {num}\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n")
-    c = git(wt, "commit", "-q", "-m", msg, check=False)
+    c = git(wt, *NO_SIGN, "commit", "-q", "-m", msg, check=False)
     if c.returncode != 0:
         return {**rec, "ok": False, "worktree": wt, "msg": f"git commit of the revert failed ({c.stderr.strip()[:160]})"}
     pid = spawn_land(wt, fixer_env(o_r, num), reds_dir(f"revert-{num}.log"))
@@ -554,12 +554,12 @@ def blame_reland(o_r, repo, u, b):
     wt, why = blame_worktree(repo, "reland", num)
     if not wt:
         return {"ok": False, "at": ts(), "msg": why}
-    r = git(wt, "revert", "--no-edit", rv, check=False)
+    r = git(wt, *NO_SIGN, "revert", "--no-edit", rv, check=False)
     if r.returncode != 0:
         git(wt, "revert", "--abort", check=False)
         return {"ok": False, "at": ts(), "worktree": wt, "msg": f"the revert {rv[:10]} cannot be undone ({(r.stderr or r.stdout).strip()[:160]})"}
     body = git(wt, "log", "-1", "--format=%B").strip()
-    git(wt, "commit", "--amend", "-q", "-m", f"{body}\n\nagentctl blame: reverting {rv[:10]} did not clear {u['workflow']} "
+    git(wt, *NO_SIGN, "commit", "--amend", "-q", "-m", f"{body}\n\nagentctl blame: reverting {rv[:10]} did not clear {u['workflow']} "
         f"#{num}: {blame_change_name(g)} was not its culprit, so it is relanded.\n\nRelands-Change: "
         f"{g.get('change') or (g.get('commits') or ['?'])[0]}\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n")
     pid = spawn_land(wt, fixer_env(o_r, num), reds_dir(f"reland-{num}.log"))

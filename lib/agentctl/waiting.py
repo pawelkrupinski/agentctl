@@ -494,10 +494,10 @@ def pick(wt, commits, dropped=None, regen=True, regenerated=None, provisional=No
             if dropped is not None:
                 dropped.append((c, via))
             continue
-        r = git(wt, "cherry-pick", "--allow-empty", "--keep-redundant-commits", c, check=False)
+        r = git(wt, *NO_SIGN, "cherry-pick", "--allow-empty", "--keep-redundant-commits", c, check=False)
         notes = []
         if r.returncode != 0 and conflict_resolve(wt, regen, notes, regenerated, provisional):
-            r = git(wt, "-c", "core.editor=true", "cherry-pick", "--continue", check=False)
+            r = git(wt, *NO_SIGN, "-c", "core.editor=true", "cherry-pick", "--continue", check=False)
         if r.returncode != 0:
             files = unmerged(wt)
             git(wt, "cherry-pick", "--abort", check=False)

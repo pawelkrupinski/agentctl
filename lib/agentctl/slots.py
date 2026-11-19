@@ -618,16 +618,21 @@ def sync(repo, main_ref, sh, release_hold=False):
     if why:
         print(f"NOT LANDED: {why}. A red whose check replays cheaply lands only a fix its replay proved.")
         return 1, None
-    r = sh("git", "rebase", "--quiet", f"{remote()}/main")
+    # agentctl's own rewrites never sign (issue 20261115T112749-d27361): main's commits are unsigned, and a global
+    # commit.gpgsign=true with an empty ssh-agent (an unattended fixer) failed every rebase behind main
+    r = sh("git", *NO_SIGN, "rebase", "--quiet", f"{remote()}/main")
     for _ in range(50):  # each stop whose conflicts are docs or generated files only: resolved (conflict_resolve), and on
         if not r.returncode or not conflict_resolve(repo):
             break
-        r = sh("git", "-c", "core.editor=true", "rebase", "--continue")
+        r = sh("git", *NO_SIGN, "-c", "core.editor=true", "rebase", "--continue")
     if r.returncode:
         conflicts = git(repo, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
         sh("git", "rebase", "--abort")
-        print(f"NOT LANDED: rebase onto {remote()}/main conflicts in: {', '.join(conflicts) or r.stderr.strip()[:300]}. "
-              f"Resolve by hand (git rebase {remote()}/main), then land again.")
+        if conflicts:
+            print(f"NOT LANDED: rebase onto {remote()}/main conflicts in: {', '.join(conflicts)}. "
+                  f"Resolve by hand (git rebase {remote()}/main), then land again.")
+        else:  # no conflicted file: git itself failed (a hook, signing, a lock), never told as a conflict
+            print(f"NOT LANDED: rebase onto {remote()}/main failed (no conflict): {r.stderr.strip()[:300]}")
         return 1, None
     head = git(repo, "rev-parse", "HEAD").strip()
     if landed(repo, head, main_ref):

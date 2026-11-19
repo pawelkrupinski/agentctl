@@ -64,6 +64,25 @@ class LandTest(LandBase):
         self.assertEqual(log.splitlines()[:2], ["agent", "other"])
         self.assertIn(other, sh(self.r.root, "git", "--git-dir", self.r.bare, "rev-list", "main"))
 
+    def test_the_rebase_never_signs_and_a_signing_failure_is_never_told_as_a_conflict(self):
+        """ISSUE 20261115T112749-d27361: land's rebase re-signs the commits with a global commit.gpgsign=true; with an
+        empty ssh-agent every land behind main failed 'NOT LANDED: rebase onto origin/main conflicts in: error: No
+        private key found'. main's commits are unsigned anyway: the rebase signs nothing (and lands)."""
+        self.hook("exit 0")
+        wt = self.r.worktree("wt-agent", branch="agent")
+        self.r.write("f1.txt", "agent\n", at=wt)
+        self.r.commit("agent", at=wt)
+        self.r.write("f2.txt", "other agent\n")
+        self.r.commit("other")
+        self.r.push()
+        for k, v in (("commit.gpgsign", "true"), ("gpg.format", "ssh"), ("user.signingkey", "/nonexistent/key.pub"),
+                     ("gpg.ssh.program", "/usr/bin/false")):  # signing that always fails, as an empty agent does
+            sh(self.r.path, "git", "config", k, v)
+        rc, out = self.land(cwd=wt)
+        self.assertNotIn("conflicts in", out, "a signing failure was told as a rebase conflict")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("LANDED", out)
+
     def race_hook(self):
         """The first push's hook lets another agent land first: our push then loses the race on the remote."""
         other = os.path.join(self.tmp.name, "other")
