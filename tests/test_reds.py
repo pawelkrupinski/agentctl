@@ -732,7 +732,9 @@ class FixTest(RedsBase):
         self.tick(advance=60)
         self.assertEqual(self.only()["state"], "offered")
 
-    def test_an_outside_reds_landed_fix_gets_its_workflow_dispatched_to_verify_it(self):
+    def test_an_outside_reds_landed_fix_gets_its_listed_workflow_dispatched_to_verify_it(self):
+        # a scheduled workflow is dispatched to verify only when the repo lists it (A VERIFY DISPATCH IS PER WORKFLOW;
+        # unlisted, it waits for its slot: test_verify_wait.py)
         self.put("runs.json", [run(40, 20, "Main", "main.yml", self.sha), run(39, 19, "Identity model convergence",
                                                                              "identity-model-convergence.yml", self.sha),
                                run(70, 2104, "Identity capture", "identity-capture.yml", self.sha, conclusion="failure")])
@@ -743,6 +745,7 @@ class FixTest(RedsBase):
         self.put("run-70.log", "capture (uk)\tRun\t2026-10-27T08:00:00Z [info] - CaptureSpec *** FAILED ***\n")
         self.r.write(".github/workflows/identity-capture.yml",
                      "name: Identity capture\non:\n  schedule:\n    - cron: '0 3 * * 1'\n  workflow_dispatch:\n")
+        self.r.write(A.VERIFY_DISPATCH_FILE, "Identity capture  # cheap: dispatched to verify a fix\n")
         self.r.commit("the workflow")
         self.r.push()
         self.tick()

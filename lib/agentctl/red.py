@@ -3212,10 +3212,13 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
     if not holds and red_waits_for_its_run(d) and "next_run_at" not in f and d.get("workflow") != LOCAL_FLOW:
         plan = red_verify_plan(o_r, repo, d.get("workflow"), float(f.get("verify_since") or f.get("at") or t))
         if plan:  # A SCHEDULED WORKFLOW'S FIX WAITS FOR ITS SLOT (red_verify_plan)
-            return red_verify_await(store, it, f, plan, t)
-        store.update_item("red", it["id"], it["version"], {"fix": {**f, "next_run_at": None}})  # no schedule
+            said = red_verify_await(store, it, f, plan, t)
+        else:
+            store.update_item("red", it["id"], it["version"], {"fix": {**f, "next_run_at": None}})  # no schedule
         it = store.item("red", it["id"])
         d, f = it["data"], it["data"]["fix"]
+        if plan and not verify_dispatchable(repo, d.get("workflow")):
+            return said  # a listed one goes on to its verify dispatch in this same tick
     if not holds and not d.get("gate") and not f.get("verify_dispatched") and t - float(f.get("at") or t) > RED_FIX_RUN_START \
             and d.get("red_kind") in ("outside",) \
             and not (f.get("next_run_at") and not verify_dispatchable(repo, d.get("workflow"))):  # its slot decides it
