@@ -544,6 +544,9 @@ class OverlapTest(BacklogBatchTest):
             lap = [e for e in evs if "queued for" in str(e.get("text"))]
             self.assertTrue(lap and f"held: its check waits for {blocker}" in lap[-1]["text"], lap)
             self.assertNotIn("a check slot", lap[-1]["text"])
+            # 2026-11-19 08:39Z/08:55Z: movies-fix-replay's held laps ("queued for 15 min, held: ...") still landed in
+            # the inbox every 15 min (an audience made the projector write each one). A quiet lap is no inbox entry.
+            self.assertEqual([e["audience"] for e in lap if e["audience"]], [], "a held lap has no audience")
             row = next(r for r in A.change_rows(st) if r["id"] == eid)
             self.assertIn(f"waits for {blocker}", row["hold"], "land status names the real hold")
         self.assertIsNone(A.change_hold_stuck(st, st.item("change", ef)["data"]["hold"], st.item("change", ef),

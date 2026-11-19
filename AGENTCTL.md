@@ -1364,7 +1364,9 @@ The reconciler then takes it, a step per tick:
   blocking change and files, `batch`, `push-batch`, `backlog-batch`, `trees` (every check tree busy), `older-batch`;
   `governor` and `retry` from its entry), and `land status` / `status` print it (`held: its check waits for <id>
   (<state>): both change <file>`). A lap of `queued`'s 15-min deadline is a QUIET re-deadline (severity info, no level
-  up, no notification) while that hold is live; it escalates only when the hold is stuck (queue.py
+  up, no notification, and NO INBOX ENTRY: the lap's event names no audience, so the projector writes none -- on
+  2026-11-19 movies-fix-replay's held laps reached the inbox every 15 min, 93 of the day's 442 entries) while that
+  hold is live; it escalates only when the hold is stuck (queue.py
   `change_hold_stuck`): nothing named holds it, its blocking change is gone, or it is older than
   `$AGENTCTL_CHANGE_HOLD_MAX` (6 h, the `waiting` state's own bound). The blocker's own machine escalates should IT
   stick. Test: `tests/test_backlog_batch.py` OverlapTest `test_overlap_held_changes_wait_quietly...`.

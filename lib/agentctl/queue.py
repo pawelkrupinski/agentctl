@@ -1964,6 +1964,11 @@ def lap_change_deadline(st, e, state, t, note=None):
     hold = change_hold_visible(st, it, e, t)
     stuck = change_hold_stuck(st, hold, it, t)
     issue = None if hold else file_unheld_change(st, it, t, "agentctl (the change tick)")  # agentctl's bug: an issue,
+    # A HELD LAP IS NO INBOX ENTRY (2026-11-19 08:39Z, 08:55Z: movies-fix-replay's "queued for 15 min / 30 min, held:
+    # ..." reached the inbox every 15 min -- 93 of the day's 442 entries -- because the lap's event named the worktree
+    # as its audience, and the projector writes every event with one). A live hold's lap is an event with no audience:
+    # `land status` and the change's events say it; only a stuck or unheld lap goes to its author.
+    quiet = bool(hold) and not stuck
     try:  # never an owner page (changekind.py, A CHANGE PAST ITS DEADLINE WITH NO RECORDED HOLD)
         it = st.item("change", e["id"]) or it
         st.transition("change", e["id"], state, it["version"],
@@ -1971,7 +1976,7 @@ def lap_change_deadline(st, e, state, t, note=None):
                                      + (f"held: {hold['why']}" if hold else "nothing holds it")
                                      + (f" -- STUCK: {stuck}" if stuck else "") + (f" ({note})" if note else "")
                                      + (f" -- filed as agentctl issue {issue}" if issue else ""),
-                             "audience": {"worktree": e.get("worktree")},
+                             **({} if quiet else {"audience": {"worktree": e.get("worktree")}}),
                              **({} if stuck and not issue else {"severity": "info"})})
     except StaleVersion:
         pass  # the next tick says it
