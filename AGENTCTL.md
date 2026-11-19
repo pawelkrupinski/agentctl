@@ -1354,7 +1354,10 @@ The reconciler then takes it, a step per tick:
 <!-- end of the change-kind priority table -->
 
   The disagreements it resolved (2026-11-19): the governor admitted only a GATE red's fix at once (`gov_class_of`) --
-  now any open red's; the backlog batch ordered ANY change carrying a `Fixes-Red:` first, even one naming a closed or
+  now any open red's, and so ci-runner's red-fix check lane (`check/red-<...>`, `movies-check-red-fix`, its full
+  check and its verification rounds alike) serves any open red's fix: before, 08010c, an outside red's fix, verified
+  on `movies-check` and waited 32 min for a runner (09:34-10:07Z); movies' `scripts/ci/lane-policy.tsv` names the
+  class `red-fix` to match; the backlog batch ordered ANY change carrying a `Fixes-Red:` first, even one naming a closed or
   unknown red -- now queue order (an open red's fix is in no batch); the overlap hold took an older red fix for a
   backlog-batch partner (`backlog_batchable` never asked), so a younger change sharing its file was checked beside
   it and rechecked in full once it landed -- now it waits for the fix; the watchdog's WR flagged only a gate red's fix
