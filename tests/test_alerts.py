@@ -310,6 +310,21 @@ class ClearedOwnerAlertTest(AlertBase):
         self.assertIsNone(self.closed_why(live), "its red is open, at a later run of the same failure")
         self.assertIn("red", self.closed_why(gone) or "", "#214 is no run of the open red")
 
+    def test_a_red_names_the_jobs_failing_in_its_newest_run_not_earlier_runs(self):
+        """Issue 20261104T040527-1b4212: convergence #834's turn prompt and RED-INBOX named `leg (germany) / takes
+        (germany)` as failing although gh showed only the UK leg failed in #834: red_attach_obs unions the jobs of every
+        attached run into the red, so a job that failed in #818 stays named after it passed."""
+        self.st.put_item("red", "8fbdbe0d5a86.1", "offered",
+                         {"key": "8fbdbe0d5a86", "workflow": "Identity model convergence", "job": "leg (germany) / takes (germany)",
+                          "jobs": ["leg (germany) / takes (germany)"], "runs": ["818"],
+                          "last_run": {"number": 818, "databaseId": 100}})
+        it = self.st.item("red", "8fbdbe0d5a86.1")
+        ob = {"names": ["834", "200"], "jobs": ["leg (united-kingdom) / takes (united-kingdom)"],
+              "run": {"number": 834, "databaseId": 200}}
+        got = A.red_attach_obs(self.st, it, ob)["data"]
+        self.assertEqual(got["last_run"]["number"], 834)
+        self.assertEqual(got["jobs"], ["leg (united-kingdom) / takes (united-kingdom)"], got["jobs"])
+
     def test_an_unlanded_orphan_closes_once_its_worktree_is_gone_or_its_commits_are_on_main(self):
         import subprocess
         origin = os.path.join(self.root, "origin.git")
