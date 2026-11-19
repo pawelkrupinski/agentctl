@@ -645,7 +645,7 @@ def sync(repo, main_ref, sh, release_hold=False):
     return None, head
 
 
-def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False, cls="check", a=None):
+def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False, cls="check", a=None, judged=None):
     """The repo hook's dry run over origin/main..head, admitted by the governor as a check (`red` for a fix of a red
     run), watched for a stall: None when it passed, else land's rc (0: handed to the queue as infra)."""
     err(f"checking {head[:10]}: {os.path.relpath(hook, repo)} {mode} {remote()}/main..HEAD (log: {log_path})")
@@ -665,6 +665,7 @@ def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False
         return stalled("checks (scripts/hooks/pre-push --range)", out, log_path)
     if rc != 0:
         if not REDGATE.search(out) and os.environ.get("AGENTCTL_BASELINE", "1") != "0":
+            main_at = git(repo, "rev-parse", f"{remote()}/main", check=False).stdout.strip()
             new, known = judge_against_baseline(repo, hook, head, out, log_path)
             if known is NETWORK_SHAPED:
                 return network_requeue(repo, head, out, log_path, a)
@@ -672,9 +673,13 @@ def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False
                 checks = ", ".join(sorted(known))
                 print(f"KNOWN RED: {checks} fail{'s' if len(known) == 1 else ''} the same way on plain {remote()}/main "
                       f"(see `agentctl ci-why`, `Local checks`): not held against this change", flush=True)
-                if not rechecked:  # the hook again, now with main's baseline written: it passes known reds (stored)
+                # the hook again, now with main's baseline written: it passes known reds (stored). MAIN MOVED UNDER THE
+                # BASELINE (issue 20261107T133552-2c7673: 35 min on 875d0d6bd7 while main moved on; the hook looked up the
+                # new main's baseline, which nobody had run): judged again on the main it reads, a bounded few times
+                moved = rechecked and judged and main_at != judged and int(rechecked) < BASELINE_RECHECKS
+                if not rechecked or moved:
                     return dry_run(repo, hook, head, log_path, f"{attempt}, against the known-red baseline", mode,
-                                   rechecked=True, cls=cls, a=a)
+                                   rechecked=int(rechecked) + 1, cls=cls, a=a, judged=main_at)
                 return refused(repo, out, log_path, f"the pre-push checks failed only where plain {remote()}/main fails "
                                f"too ({checks}; a known red, claimable as `local`), and the hook still held them "
                                "against it (no baseline mode, or no baseline for this main), so this change lands once "
@@ -693,6 +698,9 @@ def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False
             except (Exception, SystemExit) as e:
                 err(f"local red cleared, but releasing it failed ({str(e)[:120]})")
     return None
+
+
+BASELINE_RECHECKS = 3  # dry runs against a known-red baseline at most, main moving under each
 
 
 # THE KNOWN-RED BASELINE (the owner, 2026-10-27: "pre-push fails on plain origin/main" is itself a claimed red, and
@@ -774,6 +782,15 @@ def baseline_failures(repo, hook, head, log_path):
     cache = reds_dir("baseline", f"{key}.json")
     rec = read_record(cache)
     if rec is not None:
+        if rec.get("main") and rec["main"] != main:  # another main with the same tree (main moved by a commit that left
+            # it alone): the hook looks this main's baseline up by its sha, so it gets the same output (2c7673)
+            try:
+                with open(reds_dir("baseline-out", rec["main"])) as f:
+                    old = f.read().split("\n", 1)[1]
+                if not os.path.exists(reds_dir("baseline-out", main)):
+                    write_baseline_out(main, old)
+            except (OSError, IndexError):
+                pass
         return {k: set(v) for k, v in rec["fails"].items()}
     synth = git(repo, "commit-tree", f"{main}^{{tree}}", "-p", head, "-m", f"agentctl baseline: {remote()}/main {main[:10]}",
                 check=False)
