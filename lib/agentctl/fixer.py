@@ -2028,6 +2028,10 @@ def block_invalid(store, it, m, t):
         return f"a live fixer is on it: {row['holder']}" if lease_is_live(row, t) else None
     if m.get("crash_loop") or m.get("decision"):  # the fixers crash-looped on it (red_crash_loop), or it waits on the
         # owner's decision (red_decision_block): the harness, or the owner's call, never the code, holds it
+        if m.get("decision") and ask_refusal(ask_category(m), m.get("decide") or m.get("question")):
+            return "its question names no owner-only category (ask.py OWNER_ONLY): its fixers proceed"
+        if m.get("crash_loop") and not m.get("harness"):  # an owner block of a crash loop from before 2026-11-19
+            return "a fixer crash loop is a harness fault, agentctl's own, never the owner's"
         iss = store.item("issue", m["issue"]) if m.get("issue") else None
         if iss and iss["state"] == "closed":  # A HARNESS FAULT FIXED: its maintainer closed the issue (red.py)
             return f"its harness issue {m['issue']} is closed ({str((iss.get('data') or {}).get('note') or '')[:120]})"

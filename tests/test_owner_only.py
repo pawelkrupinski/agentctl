@@ -65,6 +65,19 @@ class HarnessFaultTest(OwnerOnlyBase):
         self.assertEqual(len(self.st.items("issue", ("open",))), 1)
 
 
+    def test_a_block_raised_before_the_categories_lapses_at_the_next_tick(self):
+        """A crash-loop owner block, or a decision block with no category, live when this lands: lapsed, re-offered."""
+        for key, meta in (("old-crash", {"crash_loop": True, "cause": A.CRASH_LOOP_CAUSE}),
+                          ("old-decision", {"decision": True, "cause": A.DECISION_CAUSE, "decide": "x?"})):
+            it = self.core_red(key=key)
+            self.st.acquire(A.block_lease(key), "owner:x", A.BLOCK_TTL, A.BLOCK_MAX, progress="p",
+                            meta={"kind": "block", "keys": [key], "text": "BLOCKED ON OWNER", **meta})
+            it = A.red_move(self.st, it, "blocked-external", "blocked", data={"block": A.block_lease(key)})
+            self.assertIsNotNone(A.block_invalid(self.st, it, A.red_block_of(it, self.st)["meta"], self.t[0]))
+        out = A.red_renew_blocks(self.st, self.t[0])
+        self.assertEqual(len([x for x in out if "lapsed" in x]), 2, out)
+
+
 class DecidedActionFailedTest(OwnerOnlyBase):
     """Case 2, core #1053 02:49Z: the owner answered "852acad"; the fixer then DIAGNOSED a plain test race, and the
     owner was asked to "decide again". The standing rules decide a race (root cause, test-first): the fixer proceeds."""
