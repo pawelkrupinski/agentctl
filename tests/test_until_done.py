@@ -101,6 +101,44 @@ class UntilDoneTest(test_queue.QueueTest):
         rc, out = self.land(self.r.path, "status")  # and a third call from a gone worktree is no crash: nothing to do
         self.assertEqual(rc, 0, out)
 
+    def test_a_verdict_decided_while_nothing_waited_is_given_by_the_next_call_and_by_land_status(self):
+        """2026-11-19: subagents' `--until-done` waits died with a Claude session restart and they handed back "queued,
+        waiting". The verdict is durable: decided while no call waited, the next call prints it (a rejection is never
+        queued again unchanged), and `land status <entry>` gives it after the fact."""
+        wt, _ = self.agent("v", "web/src/main/BROKEN.scala", "v\n", msg="v: broken")
+        A.time.sleep = lambda s: None
+        rc, out = self.until_done(wt, "--deadline", "0")
+        self.assertEqual(rc, 2, out)
+        eid = out.split("QUEUED ", 1)[1].split()[0]
+        for _ in range(3):  # the processor decides it while no --until-done waits
+            self.drive_queue(0)
+        self.assertEqual(A.Store().item("change", eid)["state"], "rejected")
+        A.project_events()  # its exit event's inbox entry names the worktree and the change
+        told = [x for x in self.inbox() if x.get("item_id") == eid and x["kind"] == "NOT_LANDED"]
+        self.assertEqual([x["cwd"] for x in told], [wt], self.inbox())
+        rc, out = self.until_done(wt)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("NOT LANDED: the pre-push checks failed", out)
+        self.assertNotIn("QUEUED ", out, "a decided change is reported, never submitted again unchanged")
+        self.assertEqual(len(A.waiting_entries(self.d, open_only=False)), 1)
+        rc, out = self.land(self.r.path, "status", eid.rsplit("-", 1)[-1])
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"{eid}  rejected", out)
+        self.assertIn("NOT LANDED: the pre-push checks failed", out)
+        self.assertIn(wt, out)
+
+    def test_land_status_of_a_landed_entry_gives_its_sha(self):
+        wt, _ = self.agent("s", "web/src/main/S.scala", "s\n", msg="s: status")
+        rc, out = self.until_done(wt, "--keep-worktree")
+        self.assertEqual(rc, 0, out)
+        eid = out.split("QUEUED ", 1)[1].split()[0]
+        landed = sh(self.r.root, "git", "--git-dir", self.r.bare, "rev-parse", "main")
+        rc, out = self.land(self.r.path, "status", eid)
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"LANDED {landed}", out)
+        rc, out = self.land(self.r.path, "status", "no-such-entry")
+        self.assertEqual(rc, 1, out)
+
     def test_already_landed_it_only_cleans_up(self):
         wt, _ = self.agent("l", "web/src/main/L.scala", "l\n", msg="l: landed")
         rc, out = self.until_done(wt, "--keep-worktree")

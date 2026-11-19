@@ -63,7 +63,7 @@ def main(argv=None):
     ld.add_argument("lcmd", nargs="?", choices=sorted(LAND_SUBCOMMANDS), metavar="status|hold|release|cancel",
                     help="the queue instead of a land: status (the changes, the batch, the gate), hold / release (take "
                          "no batch until release or the hold's expiry, on ci-runner's store), cancel <id>")
-    ld.add_argument("entry", nargs="?", help="cancel: the change's id (a unique part of it)")
+    ld.add_argument("entry", nargs="?", help="cancel, status: the change's id (a unique part of it); status <entry> prints that one change, open or decided, with its verdict")
     ld.add_argument("--for", dest="hold_for", type=float, metavar="MIN",
                     help="hold: minutes until the hold expires by itself (default 240, at most 1440)")
     ld.add_argument("--why", dest="hold_why", help="hold: the reason, shown on the status line and page")

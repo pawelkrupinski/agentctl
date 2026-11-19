@@ -1555,8 +1555,14 @@ ancestry). `land --until-done` (movies, the queue) owns the tail, bounded by `--
 
 1. Its own entry first: a change item (or this host's queue entry) submitted from THIS worktree at THIS head. Open:
    `RESUMING <id>` and it waits for it -- called again after an interruption it never queues the same change twice.
-   Landed: straight to step 4. None (or only a decided non-landed one): when every local commit is already on main by
-   patch, straight to step 4; else the plain land's rebase, squash guard and `QUEUED <id>`.
+   Landed: straight to step 4. REJECTED (decided while no call waited: A VERDICT IS DURABLE, 2026-11-19 -- subagents'
+   waits died with a Claude session restart and they handed back "queued, waiting"): `DECIDED <id> ...`, its `NOT
+   LANDED: <why>` and `next:` as in step 3, exit 1 -- never queued again unchanged (`agentctl land` does that, on
+   purpose). None (or only a cancelled or superseded one): when every local commit is already on main by patch,
+   straight to step 4; else the plain land's rebase, squash guard and `QUEUED <id>`. After the fact, `agentctl land
+   status <entry>` (an id or a unique part of one) prints that one change, open or decided: its state, worktree and
+   head, then `LANDED <sha>` / `NOT LANDED: <why>` / `OPEN: ... held: ...`; and its exit event's inbox entry names
+   the worktree (`cwd`) and the change (`item_id`) whether or not anything waited.
 2. The fast precheck runs in the FOREGROUND (as a red fixer's): a refusal is its NOT LANDED at once.
 3. It waits for the verdict (the store item, polled with backoff). `NOT LANDED: <why>` is printed with the exact
    reason and then `next: <command>` -- a conflict: `git -C <wt> fetch origin main && git -C <wt> rebase origin/main`;
@@ -1587,7 +1593,7 @@ ancestry). `land --until-done` (movies, the queue) owns the tail, bounded by `--
 The brief (`~/bin/briefs/movies-agent-preamble.md`) makes it every movies agent's last step: run it with
 `run_in_background=true` and NO redirect (the task's own output file is per task), end the turn, report once after
 its last line. Code: queue.py `land_until_done`,
-`own_change_item`, `until_done_finish`, `next_command`; tests: `tests/test_until_done.py`.
+`own_change_item`, `until_done_finish`, `next_command`; batch.py `land_status_entry`; tests: `tests/test_until_done.py`.
 
 ### remote checks: ci-runner's check tier
 

@@ -1043,6 +1043,32 @@ def land_status_line(r, bt, in_batch, t):
             + (f"  PAST ITS DEADLINE (level {r['level']})" if left < 0 else ""))
 
 
+def land_status_entry(st, entry, t):
+    """`land status <entry>`: ONE change -- the item whose id is `entry`, else the one whose id contains it -- open or
+    decided: its state, worktree and head, then its verdict (LANDED <sha> / NOT LANDED: <why>) or what it waits on.
+    A VERDICT IS DURABLE (queue.py): an agent whose wait died reads it here after the fact. 1 when none or several
+    match."""
+    items = st.items("change")
+    hits = [it for it in items if it["id"] == entry] or [it for it in items if entry in it["id"]]
+    if len(hits) != 1:
+        print(f"no single change matches {entry!r}" + (f": {', '.join(it['id'] for it in hits[:8])}" if hits else "")
+              + " (`agentctl land status` lists the open ones)")
+        return 1
+    it = hits[0]
+    d = it.get("data") or {}
+    print(f"{it['id']}  {it['state']}  {d.get('worktree')}  {str(d.get('head') or '')[:10]}")
+    if it["state"] == "landed":
+        print(f"LANDED {d.get('landed_sha') or landed_sha_of(it['id'], d)} (queued {it['id']})")
+    elif machine_state("change", it["state"]).terminal:
+        why = str(d.get("why") or f"{it['id']} {it['state']}")
+        print(why if why.startswith(("NOT LANDED", "SUPERSEDED")) else f"NOT LANDED: {why}")
+    else:
+        hold = (d.get("hold") or {}).get("why") if it["state"] in HOLD_SHOWN else None
+        print(f"OPEN: {it['state']} for {fmt_age(t - float(it.get('entered_at') or t))}"
+              + (f", held: {hold}" if hold else "") + f"; deadline in {int((it['deadline'] - t) // 60)} min")
+    return 0
+
+
 def write_snapshot(d, store=None):
     """The tick's part of state.json: the open items and the tick's own time and code version."""
     st = store or Store()
@@ -1350,6 +1376,8 @@ def cmd_waiting(a):
         print("released" + (f" ({', '.join(gone)})" if gone else " (no hold was in force)")
               + ": the processor takes the next batch")
         return 0
+    if a.wcmd == "status" and getattr(a, "entry", None):  # one change, open or decided (A VERDICT IS DURABLE)
+        return land_status_entry(Store(), a.entry, time.time())
     if a.wcmd == "status":  # ONE QUEUE: the store's change items, on either host
         st = Store()
         rows = change_rows(st)

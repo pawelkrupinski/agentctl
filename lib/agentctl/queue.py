@@ -736,6 +736,12 @@ def await_queued(eid, store=None):
 #                 the worktree kept, exit 3. The caller's own processes in it (its kept sbt server) are stopped first
 #                 (cleanup.py free_worktree); still held by another's -> each holder named and the command, exit 4;
 #   the deadline -> `NOT DONE: <id> is <state> ...`, the command to resume, exit 2.
+# A VERDICT IS DURABLE (2026-11-19: subagents' `--until-done` waits died with a Claude session restart, and they handed
+# back "queued, waiting" with no verdict). The change's item holds it, and its exit event reaches the inbox naming the
+# worktree and the change (the projector), whether or not a call waited; `land status <entry>` prints it after the
+# fact; and a call again from the worktree at that head finds its entry (own_change_item): open -> RESUMING, landed ->
+# the cleanup, REJECTED -> that verdict and the next command (before, a rejection decided while nothing waited was
+# silently queued again unchanged).
 UNTIL_DONE_DEADLINE = 4 * 3600  # s (--deadline): a batch at green, a verify round and a push fit well inside it
 
 
@@ -836,6 +842,12 @@ def land_until_done(repo, main_ref, sh, a):
     it = own_change_item(repo, head)
     if it and it["state"] == "landed":
         eid = it["id"]
+    elif it and it["state"] == "rejected":  # A VERDICT IS DURABLE (below): decided while no call waited, said now
+        why = str((it.get("data") or {}).get("why") or f"{it['id']} rejected")
+        print(f"DECIDED {it['id']} ({head[:10]}) while no --until-done waited:", flush=True)
+        print(why if why.startswith("NOT LANDED") else f"NOT LANDED: {why}", flush=True)
+        print(next_command(repo, why) + f" (to queue {head[:10]} again unchanged: ~/bin/agentctl land)", flush=True)
+        return 1
     elif it and not machine_state("change", it["state"]).terminal:
         eid = it["id"]
         print(f"RESUMING {eid} ({head[:10]}, {it['state']}): waiting for its verdict", flush=True)
