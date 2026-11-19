@@ -230,3 +230,25 @@ class ContactOverTheApiTest(Phase2Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LostHeartbeatVerdictTest(OwnerBase):
+    """Issue 20261116T162652-930aa9: an owner turn ended `DIAGNOSED: ...` around a lost heartbeat and the verdict never
+    reached the red (it stayed 'offered (ESCALATED)', the same diagnosis offered again)."""
+
+    def test_a_diagnosed_turn_that_ends_after_the_heartbeat_was_lost_still_reaches_its_red(self):
+        os.environ.update(FAKE_CLAUDE_SLEEP="3", FAKE_CLAUDE_RESULT="DIAGNOSED: a runner capacity cause; durable fix: none")
+        self.addCleanup(os.environ.__setitem__, "FAKE_CLAUDE_SLEEP", "0")
+        self.addCleanup(os.environ.pop, "FAKE_CLAUDE_RESULT", None)
+        self.tick(dispatch=True)
+        key = self.only()["data"]["key"]
+        self.assertTrue(self.wait(lambda: self.rec().get("in_turn")))
+        self.assertTrue(self.st.revoke(A.owner_lease(FAM), "ORPHANED: judged by another machine"))
+        self.assertTrue(self.wait(lambda: self.rec().get("ended")), self.rec())
+        time.sleep(4)  # the session ends with its DIAGNOSED verdict
+        for _ in range(3):
+            self.tick(dispatch=True, advance=1)
+        hist = " | ".join(str(h.get("outcome")) for h in (self.reds()[key]["data"].get("history") or []))
+        self.assertIn("DIAGNOSED", hist + " " + str(self.reds()[key]["data"].get("diagnosis")),
+                      f"the turn's DIAGNOSED verdict reached the red: {hist!r}")
+
