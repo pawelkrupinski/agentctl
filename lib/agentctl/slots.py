@@ -496,6 +496,11 @@ def cmd_land(a):
     if os.environ.get("PREPUSH_SKIP"):
         print("NOT LANDED: PREPUSH_SKIP is set in the environment; agentctl land never skips checks. `unset PREPUSH_SKIP`.")
         return 1
+    if a.repo and not os.path.isdir(a.repo):  # `--repo dashboard` (issue 20261104T154024-971c60): a verdict, never a
+        # traceback -- land's --repo is the CHECKOUT to land (a short name would name a root clone, never landed from)
+        print(f"NOT LANDED: --repo {a.repo} is no directory: land's --repo is the checkout (worktree) to land, a path; "
+              "run land from inside your worktree, or pass its path")
+        return 2
     repo = git(a.repo or os.getcwd(), "rev-parse", "--show-toplevel").strip()
     try:
         owner_only = red_owner_only(slug(repo))

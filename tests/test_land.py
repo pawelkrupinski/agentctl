@@ -64,6 +64,13 @@ class LandTest(LandBase):
         self.assertEqual(log.splitlines()[:2], ["agent", "other"])
         self.assertIn(other, sh(self.r.root, "git", "--git-dir", self.r.bare, "rev-list", "main"))
 
+    def test_a_repo_that_is_no_directory_is_a_verdict_not_a_traceback(self):
+        """ISSUE 20261104T154024-971c60: `land --repo dashboard` crashed in git() with 'cannot change to dashboard'."""
+        rc, out = self.land("--repo", "dashboard")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("NOT LANDED: --repo dashboard is no directory", out)
+        self.assertNotIn("Traceback", out)
+
     def test_the_rebase_never_signs_and_a_signing_failure_is_never_told_as_a_conflict(self):
         """ISSUE 20261115T112749-d27361: land's rebase re-signs the commits with a global commit.gpgsign=true; with an
         empty ssh-agent every land behind main failed 'NOT LANDED: rebase onto origin/main conflicts in: error: No
