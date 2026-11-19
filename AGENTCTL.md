@@ -1596,6 +1596,35 @@ agentctl must fail an invariant (6d206ed undone fails "one open item per change"
 classifier counting the gate's reds alone (the 08010c timeline), the tick's order without PRIORITY, and a checked
 change's batch hold left unrecorded. A failing seed
 replays alone: `queue_sim.Sim(<seed>).run().violations`; `$AGENTCTL_TEST_SIM_KEEP=<dir>` keeps its processor log.
+(11) NO UNVERIFIED COMBINED TREE REACHES MAIN (2026-11-19): every tree the queue pushes is one a check or a batch
+check passed (its mutation: a moved main pushed without its verify round). A seed REPLAYS EXACTLY: entry ids and stamps
+read the simulated clock (`sim_datetime`; ids carrying the wall clock reordered a seed from one run to the next), with
+`PYTHONHASHSEED=0` for a comparison. A profile may set the round lengths in ticks (`check_ticks`, `verify_ticks`,
+`batch_ticks`, default 2-4 / 1-2 / 2-5) and `lease_ttl` (s) for longer rounds.
+
+**Landing latency, measured (the owner's R3, 2026-11-19; nothing below shipped).** `agent-time`: waiting on `land` was
+39% of all lane time; a landed change took ~84 min after 09:00Z (re-check rounds ~28, held checked->push ~21, queued
+~13, runner wait ~15). The store's checked spells that day: 386 min held, nearly all `its push waits for <id>'s
+combined-tree verification` or `for batch <id>, which it is not in`, then a verify round of its own once that landed.
+Replayed in the simulator as that day's 90 arrivals (`agentctl.landing` records, 4 trees; mean / p90 ticks
+arrival -> LANDED; `today`: the default round lengths, 40 seeds; `today-real`: rounds of 4-10 / 3-7 / 5-11 ticks, a
+tick 5 real min, 20 seeds). Baseline: today 8.24 / 17, today-real 64.6 / 128, 722 verify rounds.
+1. SKIP THE VERIFY ROUND WHEN MAIN MOVED DISJOINTLY (the hook's `--plan`s of the two sides share no check): rejected,
+   it never applies -- 150 of the day's 151 commits on main select `sbt` (every script, workflow and .claude change
+   does: its lint specs read them), and no finer read set (per spec, per compile) is declared, so nothing narrower is
+   provably equivalent. docs-only moves select nothing but are rare.
+2. SPECULATIVE STACKING (merge-queue style): rejected, it costs more than it saves. A held checked change verified on
+   top of the older verification's tip: today-real 89.5 / 148, 2516 verify rounds (stacked rounds mostly invalidated
+   before their base landed). THE TRAIN (every verify round on the longest chain's tip, pushes in train order): today
+   8.20 / 17, today-real 68.9 / 129, 1747 verify rounds; train order alone 64.9 / 135. Each displaces the push batch
+   (175 -> 57-101 batch verifications), which already verifies up to 4 changes in one round.
+3. PUSH HOLDS: holding a younger push only behind a verification RUNNING (not one still queued for a tree): today
+   8.24 -> 7.80 / 17, but today-real 64.6 -> 68.2, 2042 verify rounds -- each extra push moves main under the
+   checked changes. Rejected; the holds stand.
+4. THE RUNNER WAIT is ci-runner capacity, not lane order: check jobs queued 17.4 runner-h that day; in the long waits
+   (20-32 min) 1-3 of the 10 movies runners were busy and the scheduler logged `STARVED check: ... held by cpu` (the
+   host's CPU, shared with bitcashier builders and main-branch rows, which queued 323 runner-h). lane-policy.tsv already
+   ranks checks first.
 
 #### land --until-done: the agent's whole tail (the owner, 2026-11-18)
 
