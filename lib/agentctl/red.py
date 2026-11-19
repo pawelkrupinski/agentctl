@@ -53,12 +53,170 @@ RED_FIX_NEXT_RUN = 30 * 3600  # s an outside red's landed fix waits unproven for
 
 
 def red_fix_giveup(d):
-    """How long red data d's fix may wait in fix-pending unproven: RED_FIX_GIVEUP, or RED_FIX_NEXT_RUN for a landed fix
-    of a red outside the gate (its workflow's next run proves it)."""
+    """How long red data d's fix may wait in fix-pending unproven: RED_FIX_GIVEUP; for a landed fix of a red outside
+    the gate (its workflow's next run proves it) one RED_FIX_DECIDE past its verify deadline (red_verify_plan) when its
+    workflow has a schedule, else RED_FIX_NEXT_RUN."""
     f = d.get("fix") or {}
-    if not d.get("gate") and d.get("red_kind") == "outside" and f.get("status") == "landed" and f.get("sha"):
+    if red_waits_for_its_run(d):
+        if f.get("verify_by"):
+            since = float(f.get("verify_since") or f.get("at") or 0)
+            return max(env_num("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP),
+                       float(f["verify_by"]) - since + env_num("AGENTCTL_RED_FIX_DECIDE", RED_FIX_DECIDE))
         return env_num("AGENTCTL_RED_FIX_NEXT_RUN", RED_FIX_NEXT_RUN)
     return env_num("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP)
+
+
+def red_waits_for_its_run(d):
+    """Red data d is a red outside the gate whose fix landed: only its workflow's own next run can prove it."""
+    f = d.get("fix") or {}
+    return not d.get("gate") and d.get("red_kind") == "outside" and f.get("status") == "landed" and bool(f.get("sha"))
+
+
+# A SCHEDULED WORKFLOW'S FIX WAITS FOR ITS SLOT (2026-11-19, Record scrape fixtures #198, 50bc15cd7369): its fix
+# 123dd6524 landed at 04:23Z; the workflow runs nightly at 23:31Z (its `on.schedule` cron, dispatched by the movies
+# scheduler, infra/nix/files/scheduled_dispatch.py, which reads the same crons), so no run could contain the fix before
+# ~23:31Z -- yet a fixed RED_FIX_DECIDE timer showed it "fix-pending escalated" at 07:23Z, and the landing itself had
+# raised its level. Now a landed fix of a red outside the gate whose workflow has a schedule is VERIFIED BY the first
+# slot after the landing plus the workflow's p90 duration (its recent finished runs) plus RED_VERIFY_SLACK, and until
+# then it rests quietly: "awaiting next scheduled run at HH:MMZ", no level, no inbox line. At that deadline a run
+# containing the fix still queued or running holds it (re-deadlined, quiet); none is an escalation: the slot passed with
+# no run verifying it, or the scheduler never dispatched it.
+# A VERIFY DISPATCH IS PER WORKFLOW (the owner, 2026-11-19): Record scrape fixtures scrapes every cinema through paid
+# proxies -- its 04:34Z verify dispatch (#200) was not cheap. A workflow WITH a schedule is dispatched to verify a fix
+# only when the repo lists it in VERIFY_DISPATCH_FILE on main (one workflow name a line, `#` comments); every other
+# scheduled workflow waits for its slot. A workflow with no schedule is dispatched as before (no other run will come).
+RED_VERIFY_SLACK = 2 * 3600     # s past a slot's expected end before its fix is called unverified ($AGENTCTL_RED_VERIFY_SLACK)
+RED_VERIFY_DURATION = 2 * 3600  # s a scheduled run is taken to last when none of its runs finished
+RED_VERIFY_HOLD = 30 * 60       # s a run that will decide the fix, still undecided at the deadline, holds it again
+VERIFY_DISPATCH_FILE = ".github/verify-dispatch.txt"
+CRON_HORIZON_DAYS = 32
+CRON_RANGES = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7))
+
+
+def cron_fields(cron):
+    """A cron's five fields as sets of values (None for `*`), or None when it cannot be read."""
+    parts = str(cron or "").split()
+    if len(parts) != 5:
+        return None
+    out = []
+    try:
+        for text, (low, high) in zip(parts, CRON_RANGES):
+            out.append(None if text == "*" else cron_values(text, low, high))
+    except ValueError:
+        return None
+    if out[4] is not None:
+        out[4] = {v % 7 for v in out[4]}  # 7 and 0 are both Sunday
+    return out
+
+
+def cron_values(text, low, high):
+    vals = set()
+    for item in text.split(","):
+        rng, _, step = item.partition("/")
+        if rng == "*":
+            a, b = low, high
+        elif "-" in rng:
+            a, b = map(int, rng.split("-"))
+        else:
+            a = int(rng)
+            b = high if step else a
+        vals |= set(range(a, b + 1, int(step) if step else 1))
+    return vals
+
+
+def cron_hit(vals, v):
+    return vals is None or v in vals
+
+
+def cron_matches(fields, at):
+    minutes, hours, days, months, weekdays = fields
+    weekday = (at.weekday() + 1) % 7  # Python's Monday=0 -> cron's Sunday=0
+    if days is not None and weekdays is not None:  # cron ORs a restricted day of month and day of week
+        day = at.day in days or weekday in weekdays
+    else:
+        day = cron_hit(days, at.day) and cron_hit(weekdays, weekday)
+    return cron_hit(minutes, at.minute) and cron_hit(hours, at.hour) and cron_hit(months, at.month) and day
+
+
+def cron_next(crons, after):
+    """The first whole minute (epoch, UTC) after `after` that any of the crons fires at; None when none does within
+    CRON_HORIZON_DAYS or none can be read."""
+    import datetime as _dt
+    fields = [f for f in (cron_fields(c) for c in crons) if f]
+    if not fields:
+        return None
+    at = _dt.datetime.fromtimestamp(int(float(after) // 60) * 60 + 60, _dt.timezone.utc)
+    end = at + _dt.timedelta(days=CRON_HORIZON_DAYS)
+    while at < end:
+        if not any(cron_hit(f[1], at.hour) for f in fields):  # no cron fires in this hour: the next one
+            at = at.replace(minute=0) + _dt.timedelta(hours=1)
+            continue
+        if any(cron_matches(f, at) for f in fields):
+            return at.timestamp()
+        at += _dt.timedelta(minutes=1)
+    return None
+
+
+def workflow_crons(text):
+    """The `on.schedule` crons of a workflow file's text."""
+    return [m.group(2) for m in re.finditer(r"^\s*-\s*cron:\s*(['\"])(.+?)\1", text or "", re.M)]
+
+
+def verify_dispatchable(repo, workflow):
+    """The repo lists `workflow` in VERIFY_DISPATCH_FILE on main: it may be dispatched to verify a fix."""
+    txt = git(repo, "show", f"{remote()}/main:{VERIFY_DISPATCH_FILE}", check=False).stdout if repo else ""
+    return workflow in {line.split("#")[0].strip() for line in (txt or "").splitlines()}
+
+
+_verify_runs = process_cache({})
+VERIFY_RUNS_TTL = 5 * 60
+
+
+def workflow_main_runs(o_r, wfile):
+    """The newest 30 runs on main of workflow file wfile (read at most every VERIFY_RUNS_TTL); [] when unread."""
+    at, runs = _verify_runs.get((o_r, wfile), (0.0, None))
+    if runs is None or time.time() - at >= VERIFY_RUNS_TTL:
+        try:
+            runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30",
+                           "--json", RUN_FIELDS) or []
+        except (Exception, SystemExit) as e:
+            err(f"red verify: could not list {wfile} ({str(e)[:120]})")
+            runs = runs or []
+        _verify_runs[(o_r, wfile)] = (time.time(), runs)
+    return runs
+
+
+def red_verify_plan(o_r, repo, workflow, after):
+    """{slot, by, file} for a fix of a red of `workflow` landed at `after`: the first scheduled slot after the landing,
+    and when its run should have decided (slot + the p90 of its finished runs + RED_VERIFY_SLACK). None when the
+    workflow has no schedule or its file cannot be read."""
+    path, txt = workflow_file_of(repo, f"{remote()}/main", workflow) if repo and workflow else (None, "")
+    slot = cron_next(workflow_crons(txt), after) if path else None
+    if slot is None:
+        return None
+    runs = [r for r in workflow_main_runs(o_r, os.path.basename(path)) if not is_cancelled(r)]
+    duration = pct(stuck_durations(runs), 0.9) or RED_VERIFY_DURATION
+    return {"slot": slot, "by": slot + duration + env_num("AGENTCTL_RED_VERIFY_SLACK", RED_VERIFY_SLACK),
+            "file": os.path.basename(path)}
+
+
+def red_verify_run_on_way(o_r, repo, f):
+    """The undecided run on main of a scheduled fix's workflow that will decide it -- created since its slot, or one
+    containing the fix -- or None."""
+    for r in workflow_main_runs(o_r, f["verify_file"]) if f.get("verify_file") else []:
+        if r.get("status") == "completed":
+            continue
+        try:
+            since_slot = parse_time(r.get("createdAt")).timestamp() >= float(f.get("next_run_at") or 0) - 60
+        except (ValueError, TypeError, AttributeError):
+            since_slot = False
+        if since_slot or (repo and r.get("headSha") and contains_local(repo, f.get("sha"), r["headSha"])):
+            return r
+    return None
+
+
+def hhmmz(t):
+    return time.strftime("%H:%MZ", time.gmtime(float(t)))
 RED_PRIORITY = {"gate": 0, "fix": 1, "outside": 2, "flake": 3}
 RED_RECURRING = 3            # landed fixes the same failure outlived: `recurring`, and its fixer hunts the root cause
 RED_TICK_INTERVAL = 15       # seconds between the processor's red ticks ($AGENTCTL_RED_TICK)
@@ -1357,9 +1515,16 @@ def red_event(it, text, **kw):
     return ev
 
 
-def red_move(store, it, to, text, data=None, deadline_s=None, **ev):
+# A FIX'S PROGRESS IS NO ESCALATION (2026-11-19, Record scrape fixtures #198): "fix ... landed (123dd6524e): verifying"
+# is a fix-pending self-move, and the store raises a self-move's level unless its event says `info` -- so the landing
+# of its fix showed the red "escalated" on the owner's board. A fix-pending self-move is quiet unless it says
+# severity="escalate" (an unverified fix past its deadline, an owner push still waiting).
+def red_move(store, it, to, text, data=None, deadline_s=None, level=None, **ev):
+    if to == "fix-pending" and it.get("state") == "fix-pending":
+        ev.setdefault("severity", "info")
+    kw = {"level": level} if level is not None else {}  # only when said: an older store server takes no `level`
     v = store.transition("red", it["id"], to, it["version"], data=data, event=red_event(it, text, **ev),
-                         deadline_s=deadline_s)
+                         deadline_s=deadline_s, **kw)
     return store.item("red", it["id"]) if v else None
 
 
@@ -2807,6 +2972,21 @@ def red_fix_current(store, it, facts):
     return red_fix_of(it, facts, store)
 
 
+# A FOLLOWED FIX IS A LATER CHANGE (2026-11-19, Alert backtest #4, 5254bffda9d2): its fix ...-8b34c0 was cancelled and
+# its worktree re-queued a minute later, but the red followed it to ...-130, a change that worktree (one owner's, reused
+# for days) landed on 11-11 -- the change items carried no `submitted_at`, so "later than the cancelled one" was "later
+# than 0", the oldest first. Its phantom tip b6d3d8235 was no fix for this spell (red_fix_of), so the same tick's
+# invariant set it aside and escalated it: "UNVERIFIED: INVARIANT: no fix on its way for 0 min in fix-pending". A
+# change's submission is its `submitted_at`, else its id's stamp; one with neither follows nothing.
+def change_submitted_at(ch):
+    """When change item ch was submitted (epoch): its `submitted_at`, else its id's YYYYMMDD-HHMMSS stamp; None."""
+    v = (ch.get("data") or {}).get("submitted_at")
+    if v:
+        return float(v)
+    age = entry_id_age(str(ch.get("id") or ""), 0.0)
+    return -age if age is not None else None
+
+
 def red_fix_follow(store, f, repo, t):
     """(fix, its change's state) for a not-yet-landed fix f whose change ENDED without landing: the change that carries
     its work since -- the earliest later change of the same worktree (landed, or still open) -- or f's own commits
@@ -2815,12 +2995,13 @@ def red_fix_follow(store, f, repo, t):
     if not ch or ch["state"] not in CHANGE_ENDED:
         return None, None
     cd = ch["data"] or {}
-    wt, since = cd.get("worktree"), float(cd.get("submitted_at") or 0)
+    wt, since = cd.get("worktree"), change_submitted_at(ch)
     later = []
     try:
         later = sorted((o for o in store.items("change") if o["id"] != ch["id"] and wt and o["data"].get("worktree") == wt
-                        and float(o["data"].get("submitted_at") or 0) >= since and o["state"] not in CHANGE_ENDED),
-                       key=lambda o: float(o["data"].get("submitted_at") or 0))
+                        and since is not None and (change_submitted_at(o) or 0) >= since
+                        and o["state"] not in CHANGE_ENDED),
+                       key=lambda o: change_submitted_at(o) or 0)
     except Exception:
         pass
     for o in later:
@@ -2914,7 +3095,7 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
         if t >= it["deadline"]:  # the owner has not pushed yet, or no gate run has decided since: said again
             line = f"RED OWNER PUSH WAITING: {red_what(d)}: `! {f.get('cmd')}` ({fmt_age(t - red_fix_since(it))} since filed)"
             inbox_write("red", line, [line], [], 1)
-            red_move(store, it, "fix-pending", line)
+            red_move(store, it, "fix-pending", line, severity="escalate")
             return [line]
         return []
     if f.get("status") == "verify":  # an owner block's check passed: the next decided run says whether it is fixed
@@ -2948,7 +3129,8 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
                                         if failed else f"no decided {d.get('workflow')} run "
                                                        f"{fmt_age(t - it['entered_at'])} after it entered verify", t)
         if t >= it["deadline"]:
-            red_move(store, it, "fix-pending", f"RED {red_what(d)}: unverified {fmt_age(t - it['entered_at'])} after its block")
+            red_move(store, it, "fix-pending", f"RED {red_what(d)}: unverified {fmt_age(t - it['entered_at'])} after its block",
+                     severity="escalate")
             return [f"escalated {red_what(d)}: unverified"]
         return []
     if f.get("status") != "landed":
@@ -3027,8 +3209,16 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
     if obs is not None and gone and not holds:
         red_close(store, it, "cleared", f"a run before its fix {sha[:10]} no longer fails this way")
         return [f"cleared {red_what(d)}"]
+    if not holds and red_waits_for_its_run(d) and "next_run_at" not in f and d.get("workflow") != LOCAL_FLOW:
+        plan = red_verify_plan(o_r, repo, d.get("workflow"), float(f.get("verify_since") or f.get("at") or t))
+        if plan:  # A SCHEDULED WORKFLOW'S FIX WAITS FOR ITS SLOT (red_verify_plan)
+            return red_verify_await(store, it, f, plan, t)
+        store.update_item("red", it["id"], it["version"], {"fix": {**f, "next_run_at": None}})  # no schedule
+        it = store.item("red", it["id"])
+        d, f = it["data"], it["data"]["fix"]
     if not holds and not d.get("gate") and not f.get("verify_dispatched") and t - float(f.get("at") or t) > RED_FIX_RUN_START \
-            and d.get("red_kind") in ("outside",):
+            and d.get("red_kind") in ("outside",) \
+            and not (f.get("next_run_at") and not verify_dispatchable(repo, d.get("workflow"))):  # its slot decides it
         line = red_verify_dispatch(o_r, repo, d.get("workflow"), sha, (d.get("last_run") or {}).get("databaseId"))
         if line.startswith("FIX UNVERIFIED: no workflow file"):  # NO RUN CAN EVER PROVE IT: offered now, never parked
             return red_fix_unverifiable(store, it, f"its fix {sha[:10]}: {line[len('FIX UNVERIFIED: '):][:160]}", t)
@@ -3041,15 +3231,49 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
         return red_fix_unverifiable(store, it, f"its fix {sha[:10] or f.get('entry')} unverified for "
                                                f"{fmt_age(t - red_fix_since(it))} after it landed (no run of "
                                                f"{d.get('workflow')} proves it)", t)
+    if t >= it["deadline"] and f.get("verify_by") and not holds:
+        return red_verify_scheduled(store, it, f, sha, o_r, repo, t)
     if t >= it["deadline"]:
         # awaiting its workflow's next run: no one's to act on
         awaiting = red_fix_giveup(d) > env_num("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP)
         red_move(store, it, "fix-pending", f"RED {red_what(d)}: fix {sha[:10] or f.get('entry')} unverified for "
                                            f"{fmt_age(t - it['entered_at'])}"
                  + (f" (awaiting {d.get('workflow')}'s next run)" if awaiting else ""),
-                 **({"severity": "info"} if awaiting else {}))
+                 severity="info" if awaiting else "escalate")
         return [f"{'re-deadlined' if awaiting else 'escalated'} {red_what(d)}: fix unverified"]
     return []
+
+
+def red_verify_scheduled(store, it, f, sha, o_r, repo, t):
+    """A scheduled fix (red_verify_plan) at its deadline with no decided run containing it: a run of its workflow
+    still undecided that will decide it holds it again, quietly; else the slot passed without verifying it --
+    escalated (the scheduler never dispatched it, or its run ended without deciding it)."""
+    d, wf = it["data"], it["data"].get("workflow")
+    r = red_verify_run_on_way(o_r, repo, f)
+    if r:
+        line = (f"{red_what(d)}: fix {sha[:10]} awaits {wf} #{r.get('number')} ({r.get('status')}), the run that "
+                f"decides it")
+        red_move(store, it, "fix-pending", line, data={"fix": {**f, "verify_by": t + RED_VERIFY_HOLD}},
+                 deadline_s=RED_VERIFY_HOLD, severity="info")
+        return [line]
+    since = [r for r in workflow_main_runs(o_r, f.get("verify_file")) if f.get("verify_file")
+             and r.get("createdAt") and parse_time(r["createdAt"]).timestamp() >= float(f.get("next_run_at") or 0) - 60]
+    why = (f"its {hhmmz(f['next_run_at'])} run #{since[-1].get('number')} ended {since[-1].get('conclusion')} "
+           f"without deciding it" if since else f"no {wf} run was dispatched for its {hhmmz(f['next_run_at'])} slot")
+    red_move(store, it, "fix-pending", f"RED {red_what(d)}: fix {sha[:10]} unverified: {why}", severity="escalate")
+    return [f"escalated {red_what(d)}: fix unverified ({why})"]
+
+
+def red_verify_await(store, it, f, plan, t):
+    """Into the quiet wait for a scheduled fix's run: its deadline is the plan's `by`, its level back to 0 (a landing
+    is no escalation)."""
+    d = it["data"]
+    fix = {**f, "next_run_at": plan["slot"], "verify_by": plan["by"], "verify_file": plan["file"]}
+    line = (f"{red_what(d)}: fix {str(f.get('sha'))[:10]} awaiting next scheduled run at {hhmmz(plan['slot'])} "
+            f"(verified by {hhmmz(plan['by'])})")
+    red_move(store, it, "fix-pending", line, data={"fix": fix}, deadline_s=max(60.0, plan["by"] - t), severity="info",
+             **({"level": 0} if it.get("level") else {}))
+    return [line]
 
 
 def red_fix_since(it):
@@ -3082,6 +3306,9 @@ def red_verify_dispatch(o_r, repo, workflow, sha, run_id=None):
         return f"FIX UNVERIFIED: no workflow file named {workflow!r} on main"
     if "workflow_dispatch" not in txt:
         return f"FIX UNVERIFIED until {workflow}'s next scheduled run (no workflow_dispatch)"
+    if workflow_crons(txt) and not verify_dispatchable(repo, workflow):  # A VERIFY DISPATCH IS PER WORKFLOW
+        return (f"FIX UNVERIFIED until {workflow}'s next scheduled run (scheduled, and not listed in "
+                f"{VERIFY_DISPATCH_FILE}: never dispatched to verify)")
     inputs = (run_dispatch_inputs(o_r, run_id) or run_title_inputs(o_r, run_id, txt)) if run_id else {}
     try:
         api(o_r, "POST", f"actions/workflows/{os.path.basename(path)}/dispatches", body={"ref": "main", "inputs": inputs})

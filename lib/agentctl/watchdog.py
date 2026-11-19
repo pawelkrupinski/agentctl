@@ -117,14 +117,20 @@ def inv_wr(store=None, reds=None, now_=None):
     return False, "a red fix waits: " + "; ".join(bad[:3]) + " -- `agentctl land status`, `agentctl ci-why`"
 
 
-def red_fix_held(it, t, facts=None):
-    """A fix-pending red's holder, or None: its fix change open in the queue, or a fix landed / a verify run dispatched
-    (or a gate run due) within RED_FIX_GIVEUP of entering fix-pending. With facts the queue decides; without (the
-    watchdog), the fix the item recorded."""
+def red_fix_held(it, t, facts=None, store=None):
+    """A fix-pending red's holder, or None: its fix change open in the queue (or ended within RED_FIX_REQUEUE_GRACE:
+    its worktree may queue it again, as red_fix_pending waits), or a fix landed / a verify run dispatched (or a gate run
+    due) within its give-up of entering fix-pending. With facts the queue decides; without (the watchdog), the fix the
+    item recorded."""
     d = it["data"]
     f = d.get("fix") or {}
     if f.get("status") == RED_WAITS_ON and f.get("red"):  # held by the red it waits on (red_waits_on_step resolves it)
         return f"waits on red {f['red']}'s fix {str(f.get('sha'))[:10]}"
+    if store is not None and f.get("entry") and f.get("status") in FIX_OPEN:  # the red's own step waits the grace out
+        ch = red_change(store, f["entry"])
+        if ch and ch["state"] in CHANGE_ENDED and \
+                t - float(ch.get("entered_at") or 0) < env_num("AGENTCTL_RED_FIX_REQUEUE_GRACE", RED_FIX_REQUEUE_GRACE):
+            return f"fix {f['entry']} {ch['state']}: its worktree may queue it again"
     if facts is not None and not f.get("waited_on"):  # a waited-on fix that landed is no candidate of its own
         fx = red_fix_of(it, facts)
         if fx and fx["status"] in FIX_OPEN:
@@ -165,7 +171,7 @@ def red_unheld(store, t=None, facts=None):
             continue
         if lease_is_live(store.get(red_lease(it["data"]["key"])), t):
             continue
-        if st == "fix-pending" and red_fix_held(it, t, facts):
+        if st == "fix-pending" and red_fix_held(it, t, facts, store):
             continue
         if st == "blocked-external" and red_block_of(it, store):
             continue

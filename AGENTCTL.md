@@ -102,7 +102,21 @@ moves it forward; nothing is a detached process that can die with its state in i
     would close a CYCLE (that red waits, directly or down its chain, on this one) is no wait, and one found standing is
     offered again: neither side could land first, and each one's holder being the other kept W2 quiet. A fixer ending `LANDED <sha>` with the sha on main puts its red in fix-pending at
     once, never offered again nor on the owner; an outside red's landed fix waits, quietly, for its workflow's next
-    run up to `RED_FIX_NEXT_RUN` (30 h: a nightly), which verifies it (green) or refutes it (back to a fixer). An old outside red no fresh run
+    run, which verifies it (green) or refutes it (back to a fixer). When that workflow has an `on.schedule` cron (the
+    movies scheduler, `infra/nix/files/scheduled_dispatch.py`, dispatches the same slots) its VERIFY DEADLINE is the
+    first slot after the landing + the p90 of its recent finished runs + `RED_VERIFY_SLACK` (2 h): until then the red
+    reads `awaiting next scheduled run at HH:MMZ` -- level 0, no escalation, no inbox line (Record scrape fixtures
+    #198, 2026-11-19: a fixed 3 h timer showed it escalated at 07:23Z for a 23:31Z nightly). At the deadline a run of
+    it still undecided that will decide the fix (created since the slot, or containing the fix) holds it again, quietly;
+    else it escalates, saying whether the slot's run ended without deciding it or the scheduler never dispatched it,
+    and a fixer gets it one `RED_FIX_DECIDE` later. With no schedule it waits up to `RED_FIX_NEXT_RUN` (30 h). A
+    scheduled workflow is DISPATCHED to verify only when the repo lists its name in `.github/verify-dispatch.txt` on
+    main (one a line, `#` comments; Record scrape fixtures, a paid-proxy scrape of every cinema, is not cheap); an
+    unscheduled one is dispatched as before. A fix-pending self-move (a fix landing, followed, re-cut) is never an
+    escalation unless it says so. A cancelled fix change follows only a change of its worktree submitted after it
+    (`submitted_at`, else the change id's stamp), and the invariant waits out `RED_FIX_REQUEUE_GRACE` as the red's own
+    step does (Alert backtest #4, 2026-11-19: it followed an 11-11 change of the reused worktree, whose phantom tip
+    made the same tick's INVARIANT fire "no fix on its way for 0 min"). An old outside red no fresh run
     can check (no `workflow_dispatch`, a refused dispatch, its file gone) is never retired: it is offered with an
     `old_note` and a fixer decides. A red of a `workflow_call`-only workflow (only a parse failure gives one
     runs of its own: Report run timings #38) is verified, in any open state, by its callers: its file changed on main
@@ -2301,6 +2315,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `red_families` | `AGENTCTL_RED_FAMILIES` | - | - |
 | `red_fixers` | `AGENTCTL_RED_FIXERS` | `5` | live fixers at once, every family together |
 | `red_fixer_wall` | `AGENTCTL_RED_FIXER_WALL` | `10800` | a dispatched fixer's maximum wall time |
+| `red_fix_decide` | `AGENTCTL_RED_FIX_DECIDE` | `10800` | - |
 | `red_fix_giveup` | `AGENTCTL_RED_FIX_GIVEUP` | `21600` | - |
 | `red_fix_next_run` | `AGENTCTL_RED_FIX_NEXT_RUN` | `108000` | s an outside red's landed fix waits unproven for its workflow's next run |
 | `red_fix_requeue_grace` | `AGENTCTL_RED_FIX_REQUEUE_GRACE` | `900` | $AGENTCTL_RED_FIX_REQUEUE_GRACE |
@@ -2316,6 +2331,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `red_stall` | `AGENTCTL_RED_STALL` | `1800` | a turn with no progress (transcript, worktree) this long is stalled: stopped |
 | `red_starve` | `AGENTCTL_RED_STARVE` | `2700` | an offer waiting this long for a slot is STARVED |
 | `red_tick` | `AGENTCTL_RED_TICK` | `15` | seconds between the processor's red ticks |
+| `red_verify_slack` | `AGENTCTL_RED_VERIFY_SLACK` | `7200` | s past a slot's expected end before its fix is called unverified |
 | `remote` | `AGENTCTL_REMOTE` | - | - |
 | `restart_check` | `AGENTCTL_RESTART_CHECK` | `30` | seconds between code-version checks |
 | `runners_page_cache` | `AGENTCTL_RUNNERS_PAGE_CACHE` | `f"{HOME}/.cache/ci-runners-page/last-good.json"` | - |

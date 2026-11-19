@@ -352,13 +352,13 @@ class Store:
         finally:
             c.close()
 
-    def transition(self, typ, iid, to, expect_version, data=None, event=None, deadline_s=None):
+    def transition(self, typ, iid, to, expect_version, data=None, event=None, deadline_s=None, level=None):
         """THE way an item changes state: compare-and-set on its version (StaleVersion on a miss), never out of a
         terminal state (TerminalState), its deadline from MACHINES, its data merged, and its event written in the same
         transaction (kind `<type>.<to>` unless given; deduped). A self-transition (an escalation) bumps the version, keeps
-        entered_at and re-deadlines; deadline_s overrides the state's deadline (e.g. a gate red's shorter offer).
-        Returns the new version."""
-        spec = machine_state(typ, to)
+        entered_at and re-deadlines; deadline_s overrides the state's deadline (e.g. a gate red's shorter offer), and
+        level its level (a quiet self-move that takes back an escalation the item never owed). Returns the new version."""
+        spec, level_ = machine_state(typ, to), level
         c = self.db()
         try:
             c.execute("BEGIN IMMEDIATE")
@@ -375,6 +375,7 @@ class Store:
             # blame.py), never a level up
             quiet = same and (event or {}).get("severity") == "info"
             level = cur["level"] + 1 if same and spec.escalate and not quiet else (cur["level"] if same else 0)
+            level = level if level_ is None else int(level_)
             merged = {**cur["data"], **(data or {})}
             c.execute("UPDATE items SET state=?, version=?, entered_at=?, deadline=?, level=?, data=? WHERE type=? AND id=?",
                       (to, cur["version"] + 1, now_ if not same else cur["entered_at"],

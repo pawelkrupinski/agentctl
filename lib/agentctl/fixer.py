@@ -1368,6 +1368,10 @@ def red_view_state(store, it, t=None):
                 f"{who.replace('movies-wt-', '').replace('red-fixer-', 'fixer ')} leased")
     if st == "fix-pending":
         f = d.get("fix") or {}
+        if f.get("status") == "landed" and f.get("next_run_at") and t < float(it["deadline"]):  # red_verify_plan
+            return (f"fix landed in {str(f.get('sha'))[:9]}, awaiting next scheduled run at {hhmmz(f['next_run_at'])} "
+                    f"({d.get('workflow')}; verified by {hhmmz(f.get('verify_by') or it['deadline'])}){rec}",
+                    f"fix {str(f.get('sha'))[:7]} awaiting next scheduled run at {hhmmz(f['next_run_at'])}")
         if f.get("status") == "landed":
             return (f"fix landed in {str(f.get('sha'))[:9]}, awaiting a {d.get('workflow')} run containing it{rec}",
                     f"fix {str(f.get('sha'))[:7]} awaiting its run")
