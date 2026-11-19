@@ -13,11 +13,13 @@ from test_agentctl import A, sh  # noqa: E402
 import test_queue  # noqa: E402 (a module, so the loader runs QueueTest's own tests there only)
 from test_waiting import REPO_HOOK  # noqa: E402
 
-# the repo's hook: its --plan selects the `identity` area for identity paths only (as movies' does)
+# the repo's hook, as movies' (2026-11-19): its --plan runs the `identity` area for the identity paths and for common/
+# (some identity specs read it), while --identity-change names only what can move takes (identity/)
 AREA_HOOK = """#!/bin/sh
 case "$1" in
-    --plan) plan=sbt; while read -r p; do case "$p" in identity/*) plan="sbt identity" ;; esac; done
+    --plan) plan=sbt; while read -r p; do case "$p" in identity/*|common/*) plan="sbt identity" ;; esac; done
             printf '%s\\n' $plan; exit 0 ;;
+    --identity-change) while read -r p; do case "$p" in identity/*) echo identity; exit 0 ;; esac; done; exit 0 ;;
 esac
 if git ls-files | grep -q SbtLost; then echo "[error] sbt server disconnected"; exit 1; fi
 if [ -n "$TEST_INFRA_ONCE" ] && [ ! -e "$TEST_INFRA_ONCE" ]; then : > "$TEST_INFRA_ONCE"; echo "[error] sbt server disconnected"; exit 1; fi
@@ -84,6 +86,19 @@ class BacklogBatchTest(test_queue.QueueTest):
         st = A.Store()
         rec = A.landing_records(st.item("change", ea), st.item_events("change", ea), self.entry(ea))[0]
         self.assertEqual((rec["batch"], rec["batch_id"], rec["outcome"], rec["rounds"]), (3, bid, "landed", 1))
+
+    def test_a_change_that_runs_identity_specs_but_moves_no_take_joins_the_batch(self):
+        """2026-11-19 (movies' `--identity-change`): a common/ change runs the hook's identity area -- the specs reading
+        what it changed -- but moves no take, so it is no identity change checked alone: it joins the batch."""
+        eb = self.queue("b", "common/src/main/B.scala")
+        ea = self.queue("a", "web/src/main/A.scala")
+        self.assertIs(A.identity_change(self.r.path, self.entry(eb)), False)
+        A.tick_changes(self.r.path, self.d)
+        self.assertEqual(self.started, [], "nothing is checked alone")
+        self.drive()
+        for eid in (ea, eb):
+            self.assertEqual(self.entry(eid)["status"], "landed", eid)
+            self.assertEqual(A.Store().item("change", eid)["data"]["batch"], 2, "b and a land as one batch")
 
     def test_a_verified_pure_move_of_identity_code_joins_the_batch(self):
         """2026-11-19 ("make it simpler and faster"): a commit saying `Pure-Move: verified` moves no take -- the hook's

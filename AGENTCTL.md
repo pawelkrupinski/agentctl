@@ -1323,8 +1323,10 @@ The reconciler then takes it, a step per tick:
   no batch open, when 2 or more queued changes that no checker has taken may share a check (`$AGENTCTL_BACKLOG_BATCH_MIN`),
   the change tick gives them no check tree of their own (`its check waits for the next backlog batch`) and the batch
   tick makes them ONE batch item with depth `full`, created only once a check tree is free for it. Never in one: an
-  IDENTITY change (the hook's `--plan` selects its `identity` area -- identity/**, worker identity code, title rules,
-  identity-judgements.tsv, the drift harness -- or a G5 identity-model commit; no plan to ask: alone too, kept on the
+  IDENTITY change (a path that can move takes: the hook's `--identity-change` names it -- movies: identity/src/main,
+  the worker's identity adapters, the title rules, words and normalizer, identity-judgements.tsv; a hook without it: its
+  `--plan` selecting the `identity` area -- or a G5 identity-model commit; since 2026-11-19 a common/ change whose
+  identity area runs some identity specs is no identity change and batches; no plan to ask: alone too, kept on the
   entry per head; a commit saying `Pure-Move: verified` counts for neither, 2026-11-19: it moves no take, and movies' hook
   leaves the identity area to the commits without the claim -- batch.py `pure_move_claimed`), a change landed with `land --no-batch`, a red fix, a combined-tree verification round, one in an
   infra backoff or holding its own unread remote run. At most 4 members (`$AGENTCTL_BACKLOG_BATCH_MAX`), queue order,

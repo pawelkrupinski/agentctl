@@ -127,8 +127,8 @@ _identity_known = process_cache({})  # (entry id, head) -> identity_change's ver
 
 
 def identity_change(repo, e):
-    """Whether the change is an identity change, checked alone: G5's identity-model commits, or the hook's --plan
-    selecting its `identity` area. None when it cannot tell (no plan, unreadable commits): checked alone too. Kept per
+    """Whether the change is an identity change, checked alone: G5's identity-model commits, or the hook's
+    --identity-change naming a path that can move takes (a hook without it: its --plan selecting the `identity` area). None when it cannot tell (no plan, unreadable commits): checked alone too. Kept per
     entry and head in the process (never written to the entry: an executor may be saving it meanwhile)."""
     key = (e["id"], e.get("head"))
     if key in _identity_known:
@@ -144,14 +144,18 @@ def identity_change(repo, e):
         return False
     paths = change_paths_of(repo, e, commits)
     hook = precheck_hook(repo)
+    # WHAT CAN MOVE TAKES, NOT WHAT RUNS IDENTITY SPECS (2026-11-19): the hook's `--identity-change` names only the
+    # take paths (movies: the resolver, its adapters, the title rules, the judgements), while its identity AREA also
+    # runs for a common/ change some identity specs read -- which still batches. A hook without it: its --plan's area.
     try:
         with open(hook or "") as f:
-            has_plan = "--plan)" in f.read()  # never asked otherwise: an unknown flag runs the hook's real checks
+            text = f.read()  # a flag is never asked unless the hook has it: an unknown flag runs the real checks
     except OSError:
-        has_plan = False
-    if paths is None or not has_plan:
+        text = ""
+    flag = "--identity-change" if "--identity-change)" in text else "--plan" if "--plan)" in text else None
+    if paths is None or flag is None:
         return None
-    plan = hook_query(hook, repo, "--plan", paths)
+    plan = hook_query(hook, repo, flag, paths)
     if plan is None:
         return None
     verdict = "identity" in plan or bool(identity_model_commits(repo, commits))
