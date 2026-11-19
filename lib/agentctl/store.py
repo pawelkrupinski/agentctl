@@ -564,12 +564,17 @@ MACHINES["condition"] = {
 }
 # §5.3 a red (keyed by its failing test or step), phase 1 step 10; -> verified outside fix-pending: red_callable_evidence
 MACHINES["red"] = {
-    "red": StateSpec(60, "offered", ("offered", "fix-pending", "leased", "blocked-external", "cleared", "verified")),
+    "red": StateSpec(60, "offered", ("offered", "fix-pending", "leased", "blocked-external", "cleared", "verified",
+                                     "dispatch-off")),
     "offered": StateSpec(RED_OFFER["other"], "offered", ("leased", "fix-pending", "blocked-external", "cleared",
-                                                         "verified"), escalate=True, wait=True),
-    "leased": StateSpec(RED_CLAIM_MAX, "offered", ("fix-pending", "offered", "blocked-external", "cleared", "verified")),
+                                                         "verified", "dispatch-off"), escalate=True, wait=True),
+    "leased": StateSpec(RED_CLAIM_MAX, "offered", ("fix-pending", "offered", "blocked-external", "cleared", "verified",
+                                                   "dispatch-off")),
     "fix-pending": StateSpec(RED_FIX_DECIDE, "fix-pending", ("offered", "verified", "cleared"), escalate=True, wait=True),
-    "blocked-external": StateSpec(7 * 86400, "offered", ("offered", "fix-pending", "leased", "cleared", "verified")),
+    "blocked-external": StateSpec(7 * 86400, "offered", ("offered", "fix-pending", "leased", "cleared", "verified",
+                                                         "dispatch-off")),
+    # its repo's dispatch is off by the owner (`red auto off --repo R`): recorded and shown, never offered or asked
+    "dispatch-off": StateSpec(7 * 86400, "dispatch-off", ("offered", "fix-pending", "cleared", "verified")),
     "verified": StateSpec(ARCHIVE, "verified", (), terminal=True),
     "cleared": StateSpec(ARCHIVE, "cleared", (), terminal=True),
 }

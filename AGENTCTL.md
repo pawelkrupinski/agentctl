@@ -624,6 +624,7 @@ agentctl red release <run> [--any]
 agentctl red status [-v]                       # every red: its state, holder or offer, deadline
 agentctl red dispatch <run> [--force]          # the red's offer at top priority: the dispatcher takes it now
 agentctl red unblock <run|key> --why "<what changed>"
+agentctl red auto on|off|status [--repo R]      # --repo: ONE repo's dispatch (the owner's "no bitcashier builds")
                                                # it no longer waits on the owner (done, superseded): ends its block
                                                # lease, or strikes a BLOCKED ON OWNER verdict no probe can clear
 agentctl red unblame <run> --why "<why>"       # WITHDRAW its blame (culprit wrongly decided, revert unlanded): see "blame"
@@ -1057,6 +1058,12 @@ agent must be assigned to it".
   and pushes fail closed (an unread gate is red).
 - **Nobody awake.** The launchd processor ticks and dispatches with no session open; every verdict waits in the
   inbox. The status line says `RECONCILER not running` when the snapshot is stale.
+
+**Dispatch off per repo (the owner, 2026-11-19: "no bitcashier builds", the laptop CPU-starved).** `red auto off --repo
+core` (a short name or o/r; in the store, so the server's tick reads it) holds every red of that repo in `dispatch-off`:
+recorded and shown, its offer closed, a live lease released, its owner block lifted (a vault ask too), never
+dispatched, never asked; a newer green run still clears it. `red status` says `dispatch off for <repo> (owner)`.
+`red auto on --repo core` offers them again at the next tick.
 
 ### blame: the offending change reverted, its lander revived (2026-11-01)
 

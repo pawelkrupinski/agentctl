@@ -2340,6 +2340,12 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
         red_move(store, it, "verified", line, data={"settled_run": (d.get("last_run") or {}).get("databaseId"),
                                                     "proof": proof})
         return [line]
+    off = repo_dispatch_off(store, red_repo_of(d))
+    if off and st in ("red", "offered", "leased", "blocked-external", "dispatch-off"):
+        return red_hold_off(store, it, row, block, gone, obs, t)
+    if st == "dispatch-off":  # its repo's dispatch is on again: offered
+        red_offer(store, it, f"{red_what(d)}: dispatch on again for {red_repo_of(d)}: offered")
+        return [f"offered {red_what(d)} (dispatch on again)"]
     if st in ("red", "offered") and not live and not fix and not block:
         old = red_old_run(d, t)
         if old:  # AN OLD RED SEEN ONLY NOW (audit #7 surfaces a rarely run workflow): verified by a fresh run, or fixed
@@ -2450,6 +2456,31 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
                       escalate=not (out.startswith(("INVALID", "RELEASED")) or red_decision(d)))
             return [f"re-offered {red_what(d)} (block ended: {out[:60]})"]
         return acts
+    return acts
+
+
+def red_hold_off(store, it, row, block, gone, obs, t):
+    """Red `it` of a repo whose dispatch the owner turned off: recorded, never offered or asked -- its offer closed, a
+    live lease released, its owner block (a vault ask included) lifted, the red held in `dispatch-off`; a newer run
+    still clears it."""
+    d = it["data"]
+    repo, acts = red_repo_of(d), []
+    if gone and obs is not None:
+        red_close(store, it, "cleared", red_gone_why(d, obs))
+        return [f"cleared {red_what(d)}"]
+    store.close_offer(f"red:{it['id']}", "dispatch-off")
+    if lease_is_live(row, t):
+        store.revoke(row["name"], f"RELEASED: dispatch off for {repo} (owner)")
+        acts.append(f"released {row['name']} ({row['holder']}): dispatch off for {repo}")
+    if block:
+        lifted = red_lift_block(store, it, block, f"dispatch off for {repo} (owner)")
+        if lifted:
+            acts.append(lifted)
+    if it["state"] != "dispatch-off":
+        red_move(store, store.item("red", it["id"]), "dispatch-off",
+                 f"{red_what(d)}: dispatch off for {repo} (owner): recorded, not offered",
+                 data={"holder": None, "block": None, "cause": None, "ask": None}, severity="info")
+        acts.append(f"held {red_what(d)}: dispatch off for {repo}")
     return acts
 
 
@@ -3812,6 +3843,9 @@ def red_dispatcher(store, o_r, repo, t):
         if off["id"] in gone:
             continue
         pic = off["picture"]
+        if repo_dispatch_off(store, red_repo_of(pic)):  # its repo's dispatch is off (the owner's): never dispatched
+            store.offer_reason(off["id"], f"dispatch off for {red_repo_of(pic)} (owner)")
+            continue
         fam = red_queue_family(pic)
         owned = family_owned(fam) and off["tier"] not in ("revert", "author", "lander", "blame")
         live = owner_alive(store, fam, t) if owned else None

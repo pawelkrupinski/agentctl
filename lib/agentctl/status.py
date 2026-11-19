@@ -272,6 +272,8 @@ def render_red_status(m, verbose=False):
     else:
         out.append(f"dispatcher: {'OFF -- ' + dp['blocker'] if dp.get('blocker') else 'ON'}; fixers alive: "
                    f"{dp['alive']}/{dp['cap']}; gate reds never wait (no slot cap, no laptop pressure)")
+        for r, rec in sorted((dp.get("repos_off") or {}).items()):
+            out.append(f"dispatch off for {r} (owner) since {rec.get('at')}: its reds recorded, never offered or asked")
         if dp.get("pressure"):
             out.append(f"laptop: {dp['pressure']} (holds other work only, never a red fix)")
     return "\n".join(out)
@@ -325,6 +327,7 @@ def status_pressure():
 
 def status_dispatcher(st, t):
     return {"blocker": cached_dispatch_blocker(), "off_flag": os.path.exists(reds_dir("DISPATCH_OFF")),
+            "repos_off": repo_dispatch_off_all(st),
             "alive": len(red_fixers_alive(st, t)), "cap": red_cap(), "pressure": status_pressure(),
             "escalated": [{"type": typ, "id": it["id"], "words": words} for typ, it, words in escalated_now(st)]}
 
