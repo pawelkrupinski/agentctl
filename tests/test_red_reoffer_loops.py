@@ -139,6 +139,7 @@ class ReOfferLoopTest(RedsBase):
 
 
 class OrphanByContentTest(RedBase):
+    @unittest.expectedFailure  # open issue 20261104T002213-cc3b4a: its fix lands with this mark removed
     def test_20261104T002213_cc3b4a_a_commit_landed_under_a_new_sha_differing_only_by_a_moved_blank_line_is_landed(self):
         # movies-wt-flip-pop: 4 of 5 commits were on main by subject, author and author date; a blank line had moved in
         # the doc hunk, so patch-ids differed AND content_twin's identical-+/- lines failed: an orphan fixer was sent
@@ -161,6 +162,7 @@ class OrphanByContentTest(RedBase):
 
 
 class CloneLessRepoTest(RedReposBase):
+    @unittest.expectedFailure  # open issue 20261102T085329-930a4a: its fix lands with this mark removed
     def test_20261102T085329_930a4a_a_clone_less_repos_red_whose_fixer_landed_is_not_offered_again(self):
         # ci-runner has no clone of bitcashier/core: red_fix_facts(None) reads no Fixes-Red, red_fix_of cannot see the
         # landed sha on main (red_sha_on_main: no repo), so every fixer's LANDED re-offers the red

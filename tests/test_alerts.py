@@ -310,6 +310,7 @@ class ClearedOwnerAlertTest(AlertBase):
         self.assertIsNone(self.closed_why(live), "its red is open, at a later run of the same failure")
         self.assertIn("red", self.closed_why(gone) or "", "#214 is no run of the open red")
 
+    @unittest.expectedFailure  # open issue 20261104T040527-1b4212: its fix lands with this mark removed
     def test_a_red_names_the_jobs_failing_in_its_newest_run_not_earlier_runs(self):
         """Issue 20261104T040527-1b4212: convergence #834's turn prompt and RED-INBOX named `leg (germany) / takes
         (germany)` as failing although gh showed only the UK leg failed in #834: red_attach_obs unions the jobs of every

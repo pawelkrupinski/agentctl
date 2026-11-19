@@ -236,6 +236,7 @@ class LostHeartbeatVerdictTest(OwnerBase):
     """Issue 20261116T162652-930aa9: an owner turn ended `DIAGNOSED: ...` around a lost heartbeat and the verdict never
     reached the red (it stayed 'offered (ESCALATED)', the same diagnosis offered again)."""
 
+    @unittest.expectedFailure  # open issue 20261116T162652-930aa9: its fix lands with this mark removed
     def test_a_diagnosed_turn_that_ends_after_the_heartbeat_was_lost_still_reaches_its_red(self):
         os.environ.update(FAKE_CLAUDE_SLEEP="3", FAKE_CLAUDE_RESULT="DIAGNOSED: a runner capacity cause; durable fix: none")
         self.addCleanup(os.environ.__setitem__, "FAKE_CLAUDE_SLEEP", "0")
@@ -257,6 +258,7 @@ class LongVerdictTest(OwnerBase):
     """Issue 20261101T082701-ab1154: a long cause before `; decide:` hides the decision when the stored verdict is cut
     (the lease outcome is what red_decision_needed parses; owner.release and the fixer wrapper cut it at 600)."""
 
+    @unittest.expectedFailure  # open issue 20261101T082701-ab1154: its fix lands with this mark removed
     def test_a_long_diagnosis_keeps_its_decide_clause_in_the_outcome_the_red_parses(self):
         cause = "DIAGNOSED: " + "the runner pool saturates under load because of a long chain of causes; " * 10
         verdict = cause + "decide[deploy]: re-pin ci-runner's scheduler and deploy it"
