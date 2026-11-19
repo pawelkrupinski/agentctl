@@ -27,14 +27,24 @@ LAND_PRECHECK_ROUNDS = 2  # main moved under the lock this often: the next check
 
 
 def group_cpu_seconds(pgid):
-    """The CPU seconds every live process of process group `pgid` has used (ps's cumulative TIME), or 0."""
-    r = run_cmd(["ps", "-A", "-o", "pgid=,time="])
-    total = 0.0
-    for line in r.stdout.splitlines():
-        parts = line.split()
-        if len(parts) == 2 and parts[0] == str(pgid):
-            total += tosec(parts[1])  # ps's d-hh:mm:ss: a day is 86400 s (the old split read it as 60 s)
-    return total
+    """The CPU seconds the step's work has used: every live process of process group `pgid` AND every descendant of its
+    leader, whatever group it runs in (ps's cumulative TIME), or 0. ISSUE 20261108T232313-7384d0: the movies hook's
+    run-script-tests runs each self-test in a process group of its own, so a push whose hook ran scripttests for 19
+    silent minutes read "no output and no CPU" and was ended twice."""
+    r = run_cmd(["ps", "-A", "-o", "pid=,ppid=,pgid=,time="])
+    rows = [line.split() for line in r.stdout.splitlines()]
+    rows = [x for x in rows if len(x) == 4]
+    kids = {}
+    for pid, ppid, _g, _t in rows:
+        kids.setdefault(ppid, []).append(pid)
+    tree, todo = set(), [str(pgid)]
+    while todo:
+        cur = todo.pop()
+        if cur not in tree:
+            tree.add(cur)
+            todo += kids.get(cur, [])
+    # ps's d-hh:mm:ss: a day is 86400 s (the old split read it as 60 s)
+    return sum(tosec(t) for pid, _pp, g, t in rows if g == str(pgid) or pid in tree)
 
 
 STALL_CPU_SECONDS = 1.0  # CPU that counts as progress per window: a watchdog's polls are not work

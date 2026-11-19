@@ -29,6 +29,22 @@ class PushBoundTest(unittest.TestCase):
         self.assertIsNone(rc)  # busy forever: the wall bound ends it
 
 
+    def test_a_silent_busy_child_in_a_process_group_of_its_own_is_progress(self):
+        """ISSUE 20261108T232313-7384d0: twice 'NOT LANDED: stalled push ... no output and no CPU for 20 min' while the
+        hook's scripttests ran -- run-script-tests runs each test in a process group of its own (stall-watch's
+        KINOWO_STALL_GROUPS), so the push's group CPU never saw them. The whole process TREE is the step's work."""
+        d = tempfile.mkdtemp()
+        script = os.path.join(d, "hook.py")
+        with open(script, "w") as f:
+            f.write("import os, subprocess, sys, time\n"
+                    "c = subprocess.Popen([sys.executable, '-c', 'import time\\nt=time.time()\\n"
+                    "while time.time()-t<8: pass'], start_new_session=True)\n"
+                    "c.wait()\nprint('done')\n")
+        rc, out = A.run_watched([sys.executable, script], d, dict(os.environ), os.path.join(d, "log"), "push",
+                                stall=3)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("done", out)
+
     def test_a_remote_side_internal_server_error_is_a_transient_push_failure_named_as_the_remotes(self):
         """ISSUE 20261104T104042-83b1c0: the remote's `fatal error in commit_refs` / `[remote rejected] ... (Internal Server
         Error)` is the forge's incident, not the change's or the hook's: it is classified with the other transient push
