@@ -1525,6 +1525,29 @@ def red_sha_on_main(repo, sha):
     return fetch_main(repo)[0] and git_ok(repo, "merge-base", "--is-ancestor", sha, ref)
 
 
+# A REPO WITH NO CLONE HERE IS ASKED (issue 20261102T085329-930a4a: ci-runner holds no clone of bitcashier/core, so
+# red_sha_on_main read False for every fixer's LANDED and the red was offered again after each -- 12 leases, 11
+# attempts): its forge's compare of the sha with main says whether main contains it.
+_api_on_main = process_cache({})
+
+
+def red_sha_on_main_api(o_r, sha):
+    """main of o_r contains sha, by the forge's compare (asked again at most once per RED_MAIN_REFETCH while it does
+    not); False when it cannot tell."""
+    if not o_r or not sha:
+        return False
+    got = _api_on_main.get((o_r, sha))
+    if got and (got[0] or time.time() - got[1] < RED_MAIN_REFETCH):
+        return got[0]
+    try:
+        c = gh_json(o_r, "api", f"repos/{o_r}/compare/{sha}...main") or {}
+        on = c.get("status") in ("ahead", "identical")
+    except (Exception, SystemExit):
+        on = False
+    _api_on_main[(o_r, sha)] = (on, time.time())
+    return on
+
+
 # ONE SET-ASIDE FIX HIDES NO OTHER (2026-11-13, Verify scrape recording #26, 784badc4406e.4): the queue entry of a refuted
 # fix whose file still read `waiting` (b6d3d8235, naming #23, a run of the same red key) was THE candidate red_fix_of
 # returned; the store turned it into its landed, set-aside sha and red_fix_current dropped it -- and with it 8d06b1a5ab,
@@ -1589,7 +1612,8 @@ def red_fix_of(it, facts, store=None):
     aside = red_set_aside(d, facts)
     since = float(d.get("opened_at") or 0) - 3600
     for fix in red_fix_candidates(d, facts):
-        if fix.get("via") and not red_sha_on_main(facts.get("repo"), fix["sha"]):
+        if fix.get("via") and not (red_sha_on_main(facts.get("repo"), fix["sha"]) if facts.get("repo") else
+                                   red_sha_on_main_api(d.get("repo"), fix["sha"])):
             continue  # a fixer's LANDED counts once its commit is on main (a verdict alone proves nothing)
         if store is not None:
             fix = red_fix_fresh(store, fix)

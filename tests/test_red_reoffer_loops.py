@@ -161,7 +161,6 @@ class OrphanByContentTest(RedBase):
 
 
 class CloneLessRepoTest(RedReposBase):
-    @unittest.expectedFailure  # open issue 20261102T085329-930a4a: its fix lands with this mark removed
     def test_20261102T085329_930a4a_a_clone_less_repos_red_whose_fixer_landed_is_not_offered_again(self):
         # ci-runner has no clone of bitcashier/core: red_fix_facts(None) reads no Fixes-Red, red_fix_of cannot see the
         # landed sha on main (red_sha_on_main: no repo), so every fixer's LANDED re-offers the red
@@ -179,6 +178,7 @@ class CloneLessRepoTest(RedReposBase):
         self.others(advance=5)
         self.assertEqual(self.st.item("red", it["id"])["state"], "leased")
         landed = "8f3f57201" + "0" * 31
+        self.put(f"api-repos_bitcashier_core_compare_{landed}...main.json", {"status": "ahead", "ahead_by": 1})
         self.st.release(A.red_lease(key), lease["epoch"], lease["secret"], outcome=f"LANDED {landed}")
         self.others(advance=5)
         it = self.st.item("red", it["id"])
