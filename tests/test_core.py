@@ -90,9 +90,12 @@ class PsTimeTest(unittest.TestCase):
         self.assertEqual(A.tosec("1-02:03:04"), 86400 + 2 * 3600 + 3 * 60 + 4)
         self.assertEqual(A.tosec("03:04.50"), 184.5)
         saved = A.run_cmd
-        A.run_cmd = lambda args, **kw: A.subprocess.CompletedProcess(args, 0, "  77 1-00:00:01\n  78 9:00\n", "")
+        # pid ppid pgid time: the group's leader 77, a process of group 78 (another's), 79 the leader's child in a
+        # group of its own (counted: the step's tree, issue 20261108T232313-7384d0)
+        A.run_cmd = lambda args, **kw: A.subprocess.CompletedProcess(
+            args, 0, "  77 1 77 1-00:00:01\n  78 1 78 9:00\n  79 77 79 0:02\n", "")
         try:
-            self.assertEqual(A.group_cpu_seconds(77), 86401)
+            self.assertEqual(A.group_cpu_seconds(77), 86403)
         finally:
             A.run_cmd = saved
 
