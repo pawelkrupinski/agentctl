@@ -31,11 +31,11 @@ def group_cpu_seconds(pgid):
     leader, whatever group it runs in (ps's cumulative TIME), or 0. ISSUE 20261108T232313-7384d0: the movies hook's
     run-script-tests runs each self-test in a process group of its own, so a push whose hook ran scripttests for 19
     silent minutes read "no output and no CPU" and was ended twice."""
-    r = run_cmd(["ps", "-A", "-o", "pid=,ppid=,pgid=,time="])
+    r = run_cmd(["ps", "-A", "-o", "pid=,ppid=,pgid=,time=,stat="])
     rows = [line.split() for line in r.stdout.splitlines()]
-    rows = [x for x in rows if len(x) == 4]
+    rows = [x if len(x) == 5 else x + [""] for x in rows if len(x) in (4, 5)]
     kids = {}
-    for pid, ppid, _g, _t in rows:
+    for pid, ppid, _g, _t, _s in rows:
         kids.setdefault(ppid, []).append(pid)
     tree, todo = set(), [str(pgid)]
     while todo:
@@ -43,8 +43,20 @@ def group_cpu_seconds(pgid):
         if cur not in tree:
             tree.add(cur)
             todo += kids.get(cur, [])
+    mine = [x for x in rows if x[2] == str(pgid) or x[0] in tree]
+    # A RUNNABLE PROCESS IS PROGRESS (as movies' stall-watch.sh counts it): under a load of 75 on 18 cores a busy child
+    # is granted ~0.25 CPU-s a second, under the judge's 1 s a window, yet it is working, not stalled. Each sample with
+    # one of the tree running or waiting for a CPU (state R) is credited STALL_CPU_SECONDS.
+    # A process new since the last sample is no progress (a hook's helper loop forks one every second).
+    seen = _tree_seen.get(pgid, set())
+    if any(x[4].startswith("R") and x[0] in seen for x in mine):
+        _runnable_credit[pgid] = _runnable_credit.get(pgid, 0.0) + env_num("AGENTCTL_STALL_CPU_SECONDS", STALL_CPU_SECONDS)
+    _tree_seen[pgid] = {x[0] for x in mine}
     # ps's d-hh:mm:ss: a day is 86400 s (the old split read it as 60 s)
-    return sum(tosec(t) for pid, _pp, g, t in rows if g == str(pgid) or pid in tree)
+    return sum(tosec(x[3]) for x in mine) + _runnable_credit.get(pgid, 0.0)
+
+
+_runnable_credit, _tree_seen = process_cache({}), process_cache({})
 
 
 STALL_CPU_SECONDS = 1.0  # CPU that counts as progress per window: a watchdog's polls are not work
