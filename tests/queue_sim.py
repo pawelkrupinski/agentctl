@@ -516,7 +516,7 @@ class Sim:
     # ---------------------------------------------------------------- set up / tear down
     FAKES = ("git", "git_ok", "fetch_main", "apply_entry", "check_tree", "range_paths", "named_reader", "cherry_landed",
              "change_landed", "hook_query", "commit_fixes", "gate_reds", "gov_class_of", "blame_land_refusal",
-             "run_entry_checks", "batch_check", "batch_drift_check", "run_watched", "start_watch", "mark_gate_dirty",
+             "fix_replay_refusal", "run_entry_checks", "batch_check", "batch_drift_check", "run_watched", "start_watch", "mark_gate_dirty",
              "spawn_executor", "spawn_batch_executor", "precheck_hook", "verify_areas_supported", "remote_matches",
              "remote_checks_supported", "slug", "cancel_entry_remote", "stats_post", "check_runs_of", "gate_runs_pass",
              "clone_shared", "spawn_waiting_processor", "offer_token", "tool_env", "stats_echo", "pair_conflict",
@@ -566,6 +566,7 @@ class Sim:
         A.gate_reds = lambda repo: set(self.reds)
         A.gov_class_of = lambda repo, commits, reds: "check"
         A.blame_land_refusal = lambda *a, **k: None
+        A.fix_replay_refusal = lambda *a, **k: None  # the sim's reds register no replay (red-workflows.tsv)
         A.run_entry_checks = self.run_entry_checks
         A.batch_check = self.batch_check
         A.batch_drift_check = lambda *a, **k: (None, "")

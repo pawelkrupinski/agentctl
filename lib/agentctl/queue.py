@@ -1324,6 +1324,10 @@ def _check_entry(repo, d, e, i, own=None):
     if dead:  # queued before its blame was withdrawn or refuted (2026-11-01: revert-629 re-queued by orphan duty)
         queue_verdict(d, e, "rejected", f"NOT LANDED: {dead}")
         return 1
+    unreplayed = fix_replay_refusal(repo, commits)  # FIX REPLAY (red.py): the laptop's land may hold no token
+    if unreplayed:
+        queue_verdict(d, e, "rejected", f"NOT LANDED: {unreplayed}")
+        return 1
     joining = bool(reds) and must_wait(repo, commits, reds)
     cls = gov_class_of(repo, commits, reds)
     mode = "--checks-only" if joining else "--range"

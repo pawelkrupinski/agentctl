@@ -3831,8 +3831,9 @@ def fix_replay_refusal(repo, commits, store=None):
     if not named:
         return None
     try:
-        items = [it for it in (store or Store()).items("red") if it["data"].get("key")
-                 and it["state"] not in RED_TERMINAL]
+        with no_vault():  # THE LAPTOP'S LAND NEEDS NO VAULT: never `secrets` for this read (no token: no refusal)
+            items = [it for it in (store or Store()).items("red") if it["data"].get("key")
+                     and it["state"] not in RED_TERMINAL]
     except (Exception, SystemExit):
         return None
     for it in items:
