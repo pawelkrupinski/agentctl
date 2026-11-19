@@ -459,6 +459,57 @@ def foreign_reverts(repo, base, head, files, depth=8, since="45.days"):
     return hits
 
 
+SUBSTANTIVE_LINE = re.compile(r"\w{3}")
+IDENTIFIER = re.compile(r"[A-Za-z_]\w{2,}")
+
+
+def diff_lines(repo, a, b, path):
+    """(removed, added): the substantive lines (stripped, with a word of 3+ characters) a..b takes out of and puts into
+    path; `}` and blank lines say nothing about whose content it is."""
+    removed, added = set(), set()
+    for ln in git(repo, "diff", "--no-renames", "-U0", a, b, "--", path).splitlines():
+        if ln.startswith(("---", "+++")) or ln[:1] not in ("+", "-"):
+            continue
+        body = ln[1:].strip()
+        if SUBSTANTIVE_LINE.search(body):
+            (removed if ln[0] == "-" else added).add(body)
+    return removed, added
+
+
+def identifiers(lines):
+    return {t for ln in lines for t in IDENTIFIER.findall(ln)}
+
+
+def coherent_edit(repo, mb, head, path, commit, files, hits):
+    """True when head's return of `path` to its content before `commit` is part of the push's own coherent edit, not an
+    undo of `commit`: the identifiers the push takes out of `path` it also takes out of another file `commit` touched,
+    where it removes lines `commit` added WITHOUT restoring what `commit` replaced there (the replacement is new content)
+    -- the definition those lines referred to changed in this same push. 2026-11-19, movies 467e9026: splitting
+    WebReadModel dropped its `threadPools`/`sleep` constructor parameters, so four controller specs dropped the arguments
+    73aad048 had added and were byte-for-byte their pre-73aad048 selves; the push also rewrote WebReadModel.scala (whose
+    `threadPools` lines 73aad048 added), which is no revert. A squash onto a moved main or a conflict resolved to an old
+    side restores `commit`'s replaced lines wherever it touches them (or touches no other file of it), so it still counts."""
+    removed, added = diff_lines(repo, mb, head, path)
+    gone = identifiers(removed) - identifiers(added)
+    if not gone:
+        return False
+    flagged = {p for p, _ in hits}
+    pushed = {p for _, p in files}
+    theirs = git(repo, "diff-tree", "--no-commit-id", "--no-renames", "--name-only", "-r", commit, check=False).stdout.split()
+    for q in theirs:
+        if q == path or q in flagged or q not in pushed:
+            continue
+        commit_removed, commit_added = diff_lines(repo, f"{commit}^", commit, q)
+        push_removed, push_added = diff_lines(repo, mb, head, q)
+        undone = push_removed & commit_added
+        if not undone or not identifiers(undone) & gone:
+            continue
+        restored = push_added & commit_removed
+        if push_added - commit_removed and 2 * len(restored) < max(len(commit_removed), 1):
+            return True
+    return False
+
+
 def allowed(path, globs):
     return any(fnmatch.fnmatch(path, g) or path.startswith(g.rstrip("/") + "/") for g in globs)
 
@@ -545,6 +596,7 @@ def check_range(repo, base, head, allow, max_foreign):
                           f"`{ALLOW_EMPTY_TRAILER}: <why>` trailer")
     exempt = reverted_commits(repo, mb, head) | renamed_away(repo, mb, head)
     reverts = [(p, c) for p, c in foreign_reverts(repo, base, head, files) if p not in exempt]
+    reverts = [(p, c) for p, c in reverts if not coherent_edit(repo, mb, head, p, c, files, reverts)]
     if allow:  # files in the allowed set are the agent's own: reverting them is its call
         reverts = [(p, c) for p, c in reverts if not allowed(p, allow)]
     if len(reverts) > max_foreign:

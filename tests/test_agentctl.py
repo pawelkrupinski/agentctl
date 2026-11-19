@@ -487,6 +487,86 @@ class PrepushTest(Base):
         self.assertEqual(rc, 1, out)
         self.assertIn("old/m0.txt (undoes", out)
 
+    # 2026-11-19, movies 467e9026 (split WebReadModel into ReadModelStreams + ReadModelUpkeep), replayed from the real
+    # diffs: 73aad048 added `threadPools` to WebReadModel and to every spec constructing one, a later commit `sleep`; the
+    # split drops both parameters, so four controller specs come back byte-for-byte to their pre-73aad048 selves.
+    MODEL_PRE = ("import tools.{DaemonExecutors, ScheduledTick, TickRecorder, TickRun}\n"
+                 "class WebReadModel(\n"
+                 "    ticks:             TickRecorder = TickRecorder.Unrecorded) extends Stoppable with Logging {\n"
+                 "  private val scheduler       = DaemonExecutors.scheduler(\"web-read-model\")\n"
+                 "}\n")
+    MODEL_POOLS = ("import tools.{ThreadPools, ScheduledTick, TickRecorder, TickRun}\n"
+                   "class WebReadModel(\n"
+                   "    ticks:             TickRecorder = TickRecorder.Unrecorded,\n"
+                   "    threadPools:       ThreadPools) extends Stoppable with Logging {\n"
+                   "  private val scheduler       = threadPools.scheduler(\"web-read-model\")\n"
+                   "}\n")
+    MODEL_SLEEP = MODEL_POOLS.replace(
+        "    threadPools:       ThreadPools) extends Stoppable with Logging {\n",
+        "    threadPools:       ThreadPools,\n"
+        "    sleep:             FiniteDuration => Unit) extends Stoppable with Logging {\n")
+    MODEL_SPLIT = ("import tools.{ScheduledTick, TickRecorder, TickRun}\n"
+                   "class WebReadModel(\n"
+                   "    ticks:             TickRecorder = TickRecorder.Unrecorded) extends Logging {\n"
+                   "  // the streams are ReadModelStreams, the schedule ReadModelUpkeep\n"
+                   "}\n")
+    SPECS = ("FilmLookupIndexSpec", "ScheduleReuseSpec", "ShareCardOgImageSpec", "SitemapRobotsControllerSpec")
+
+    def _spec(self, name, args):
+        return (f"class {name} extends AnyFlatSpec with Matchers {{\n"
+                f"    val readModel  = new WebReadModel(repository, clock = _root_.tools.SpecClock.Pinned{args})\n"
+                f"    readModel.reload()\n}}\n")
+
+    def _thread_pools_then_sleep_on_main(self):
+        model = "common/WebReadModel.scala"
+        self.r.write(model, self.MODEL_PRE)
+        for n in self.SPECS:
+            self.r.write(f"web/{n}.scala", self._spec(n, ""))
+        self.r.commit("specs and the read model")
+        self.r.write(model, self.MODEL_POOLS)
+        for n in self.SPECS:
+            self.r.write(f"web/{n}.scala", self._spec(n, ", threadPools = tools.ThreadPools.Unmanaged"))
+        pools = self.r.commit("Services take their schedulers and threads from the wiring's ThreadPools")
+        self.r.write(model, self.MODEL_SLEEP)
+        for n in self.SPECS:
+            self.r.write(f"web/{n}.scala", self._spec(n, ", threadPools = tools.ThreadPools.Unmanaged, sleep = tools.Sleep.Blocking"))
+        self.r.commit("WebReadModel takes the root's sleep")
+        self.r.push()
+        return model, pools, self.r.worktree("wt-split", branch="split")
+
+    def _specs_back_to_before_pools(self, wt):
+        for n in self.SPECS:
+            self.r.write(f"web/{n}.scala", self._spec(n, ""), at=wt)
+
+    def test_dropping_arguments_of_a_definition_the_push_changes_is_not_a_revert(self):
+        model, _, wt = self._thread_pools_then_sleep_on_main()
+        self.r.write(model, self.MODEL_SPLIT, at=wt)
+        self.r.write("common/ReadModelUpkeep.scala",
+                     "class ReadModelUpkeep(threadPools: ThreadPools) {\n"
+                     "  private val scheduler       = threadPools.scheduler(\"web-read-model\")\n}\n", at=wt)
+        self._specs_back_to_before_pools(wt)
+        self.r.commit("WebReadModel: the upkeep schedule becomes its own class", at=wt)
+        rc, out = self.check(cwd=wt)
+        self.assertEqual(rc, 0, out)
+
+    def test_the_same_spec_edits_without_the_definition_changing_are_still_a_revert(self):
+        _, pools, wt = self._thread_pools_then_sleep_on_main()
+        self._specs_back_to_before_pools(wt)
+        self.r.commit("specs only", at=wt)
+        rc, out = self.check(cwd=wt)
+        self.assertEqual(rc, 1, out)
+        self.assertIn(f"web/FilmLookupIndexSpec.scala (undoes {pools[:10]})", out)
+
+    def test_restoring_the_definitions_earlier_lines_is_still_a_revert(self):
+        model, pools, wt = self._thread_pools_then_sleep_on_main()
+        # the squash shape: the definition is edited too, but back to what the commit replaced (plus the agent's line)
+        self.r.write(model, self.MODEL_PRE.replace("}\n", "  def agentsOwn = 1\n}\n"), at=wt)
+        self._specs_back_to_before_pools(wt)
+        self.r.commit("squash onto a moved main", at=wt)
+        rc, out = self.check(cwd=wt)
+        self.assertEqual(rc, 1, out)
+        self.assertIn(f"web/ScheduleReuseSpec.scala (undoes {pools[:10]})", out)
+
     def test_hook_mode(self):
         wt = self.r.worktree("wt-hook", branch="h")
         self.r.write("f1.txt", "x\n", at=wt)
