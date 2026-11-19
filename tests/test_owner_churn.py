@@ -258,7 +258,6 @@ class LongVerdictTest(OwnerBase):
     """Issue 20261101T082701-ab1154: a long cause before `; decide:` hides the decision when the stored verdict is cut
     (the lease outcome is what red_decision_needed parses; owner.release and the fixer wrapper cut it at 600)."""
 
-    @unittest.expectedFailure  # open issue 20261101T082701-ab1154: its fix lands with this mark removed
     def test_a_long_diagnosis_keeps_its_decide_clause_in_the_outcome_the_red_parses(self):
         cause = "DIAGNOSED: " + "the runner pool saturates under load because of a long chain of causes; " * 10
         verdict = cause + "decide[deploy]: re-pin ci-runner's scheduler and deploy it"
@@ -271,3 +270,6 @@ class LongVerdictTest(OwnerBase):
                                   .startswith("DIAGNOSED")))
         outcome = str(A.lease_meta(self.st.get(row["name"])).get("outcome"))
         self.assertIsNotNone(A.RED_DECIDE.search(outcome), f"the decision survives the stored outcome ({len(outcome)} chars)")
+        self.assertTrue(outcome.endswith("decide[deploy]: re-pin ci-runner's scheduler and deploy it"), outcome)
+        gave = "GAVE UP: " + "x " * 400 + "decide[deploy]: do it"
+        self.assertEqual(A.RED_DECIDE.search(A.verdict_cut(gave)).group(2), "do it")

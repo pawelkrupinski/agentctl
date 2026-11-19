@@ -1132,7 +1132,7 @@ def red_fixer(a):
     for n_, e_, s_ in leases():
         for left in range(RED_RELEASE_ASKS, 0, -1):  # a store that does not answer is asked again, a poll apart
             try:
-                st.release(n_, e_, s_, outcome=verdict[:600], notes="\n".join(tail[-8:]))
+                st.release(n_, e_, s_, outcome=verdict_cut(verdict), notes="\n".join(tail[-8:]))
                 break
             except StoreAuthFailed as e:  # refused, not unanswered: the laptop's tick revokes it (red_reap_orphans)
                 print(f"{ts()} could not release {n_} ({e}): the tick revokes it", flush=True)

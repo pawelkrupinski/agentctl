@@ -2948,6 +2948,23 @@ DECISION_CAUSE = "owner-decision"
 RED_DECIDE = re.compile(r"(?:;|^\W*GAVE UP:.*?)\s*decide(\[[\w-]+\])?:\s*(.+)$", re.S | re.I)
 
 
+VERDICT_MAX = 600  # chars of a fixer's or owner's verdict kept as its lease's outcome
+
+
+def verdict_cut(text, n=VERDICT_MAX):
+    """A verdict cut to n chars that keeps its `decide[...]: ...` clause (issue 20261101T082701-ab1154: a long cause
+    before `; decide:` cut the decision off, and the red, whose decision is parsed from this outcome, went back to its
+    owner every turn): the cause is shortened, never the decision (itself cut only past n)."""
+    text = str(text or "")
+    m = RED_DECIDE.search(text) if len(text) > n else None
+    if not m:
+        return text[:n]
+    at = text.rfind("decide", 0, m.start(2))
+    clause = "; " + text[at:]
+    head = text[:at].rstrip().rstrip(";").rstrip()
+    return (head[:max(0, n - len(clause) - 4)].rstrip() + " ..." + clause)[:max(n, len(clause) + 40)]
+
+
 def red_decision_needed(d, h):
     """The decision the owner must make on red d, whose launch h ended DIAGNOSED, or None (an implementer goes on)."""
     m = RED_DECIDE.search(str(h["outcome"]))

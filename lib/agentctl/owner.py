@@ -274,7 +274,7 @@ def red_owner(a):
             x = leases.get(n)
             if x:
                 try:
-                    st.release(n, x["epoch"], x["secret"], outcome=outcome[:600], notes=notes)
+                    st.release(n, x["epoch"], x["secret"], outcome=verdict_cut(outcome), notes=notes)
                 except StoreUnavailable:  # it lapses by its TTL instead: the red is offered again
                     pass
         owner_drop(fam, names)
