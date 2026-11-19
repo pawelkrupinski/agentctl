@@ -69,8 +69,9 @@ class ReOfferLoopTest(RedsBase):
         self.put("runs.json", [{**r, "conclusion": "success"} if r["databaseId"] == 40 else r for r in runs])
         self.tick(advance=120)
         live = [i for i in self.st.items("red") if i["state"] not in A.RED_TERMINAL]
-        self.assertEqual([(i["state"], i["data"].get("history")[-1:]) for i in live], [],
-                         "the failing run's own rerun is green: the red is over, not offered again")
+        self.assertEqual([i["data"].get("red_kind") for i in live], ["flake"],
+                         "the failing run's own rerun is green: the red is over, not offered again -- and, no commit "
+                         "between, a flake of its own (never rerun to green)")
 
     def test_20261106T102105_327f4c_a_queued_change_touching_the_red_workflows_own_files_holds_the_red(self):
         self.outside_capture_red()

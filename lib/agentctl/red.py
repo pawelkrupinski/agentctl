@@ -775,9 +775,14 @@ def red_gone(it, obs, snap):
         return True
     # ONLY a newer DECIDED run of the same workflow ON MAIN clears it (the snapshot's `latest` reads main's runs only;
     # a branch or measure run never counts)
+    # -- or its OWN run, rerun green (issue 20261112T164528-14afee: core #987's attempt 2 concluded success, same
+    # databaseId, and the red was re-dispatched): cleared, and red_flake_check opens its flake when no commit between
+    # can have fixed it (a rerun to green is a flake, never a fix)
     last = ((snap or {}).get("latest") or {}).get(d.get("workflow"))
-    return bool(last) and last.get("headBranch", "main") == "main" and \
-        int(last.get("databaseId") or 0) > int((d.get("last_run") or {}).get("databaseId") or 0)
+    own = int((d.get("last_run") or {}).get("databaseId") or 0)
+    return bool(last) and last.get("headBranch", "main") == "main" and (
+        int(last.get("databaseId") or 0) > own
+        or int(last.get("databaseId") or 0) == own and last.get("conclusion") == "success")
 
 
 # -- fixes on their way: Fixes-Red changes in the queue, and Fixes-Red commits landed on main
