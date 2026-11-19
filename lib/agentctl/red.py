@@ -1268,7 +1268,7 @@ def fix_not_counted_tell(repo, sha, v, why):
 def commit_fixes(repo, sha, store=None):
     """The `Fixes-Red:` values of commit sha that count as fixes (fix_check)."""
     v = git(repo, "log", "-1", "--format=%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", sha, check=False)
-    vals = {f.strip().lstrip("#") for f in (v.stdout if v.returncode == 0 else "").split(",") if f.strip()}
+    vals = trailer_values(v.stdout if v.returncode == 0 else "")
     return fix_check(repo, sha, vals, store)[0] if vals else set()
 
 
@@ -1279,12 +1279,12 @@ def entry_fixes(repo, e):
     """The runs a queued change says it fixes: its `fixes` (recorded at submission from its Fixes-Red trailers), else
     read again from its commits' trailers (cached per commit) -- an entry that lost the field still links its red."""
     if e.get("fixes"):
-        return [str(x) for x in e["fixes"]]
+        return sorted(fixes_named(e))
     out = []
     for c in e.get("commits") or []:
         if c not in _trailer_fixes:
-            r = git(repo, "log", "-1", "--format=%(trailers:key=Fixes-Red,valueonly)", c, check=False)
-            vals = {x.strip().lstrip("#") for x in re.split(r"[\s,]+", r.stdout) if x.strip()} if r.returncode == 0 else set()
+            r = git(repo, "log", "-1", "--format=%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", c, check=False)
+            vals = trailer_values(r.stdout) if r.returncode == 0 else set()
             _trailer_fixes[c] = sorted(fix_check(repo, c, vals)[0]) if vals else []  # only those that count
         out += _trailer_fixes[c]
     return out
@@ -1402,7 +1402,7 @@ def red_fix_candidates(d, facts):
     def its_own(named, shas):  # PER RED: named by its key, or a fix its own failing job reads (fix_reaches_red)
         return d.get("key") in named or any(fix_reaches_red(repo, x, d) for x in shas if x) or not any(shas)
     for e in sorted(facts.get("entries") or [], key=lambda e: e.get("created") or "", reverse=True):
-        named = set(map(str, e.get("fixes") or [])) & names
+        named = fixes_named(e) & names
         if not named or not its_own(named, list(e.get("commits") or []) + [e.get("landed_sha")]):
             continue
         if e.get("status") in FIX_OPEN:
@@ -3437,7 +3437,7 @@ def red_fixes_red_commits(wt, names):
     want = {str(n).lstrip("#") for n in names if n}
     for line in out.splitlines():
         sha, _tab, vals = line.partition("\t")
-        if want & {v.lstrip("#") for v in re.split(r"[,;\s]+", vals) if v}:
+        if want & trailer_values(vals):
             return sha
     return None
 

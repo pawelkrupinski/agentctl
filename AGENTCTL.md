@@ -1173,9 +1173,10 @@ agentctl land --follow              # scripts: the checks here, the push, then t
 # A red fixer's plain `land` QUEUES like every land (2026-11-16): the fast precheck in the foreground (its refusal is the
 # fixer's NOT LANDED in seconds), then a bounded wait for the queue's verdict (LANDED <sha> / NOT LANDED: <why>,
 # $AGENTCTL_FIXER_LAND_WAIT, 2 h). A RED FIX NEVER WAITS FOR GREEN: a change whose Fixes-Red: names a run of the open
-# gate red's episode takes the red-fix check tree (<clone>-wt-check-redfix) no ordinary change takes, goes before an open
-# batch, is never parked on `waiting` by a known red, and must_wait lets it go; the watchdog's WR escalates one that
-# is on `waiting`, or unlanded 40 min after it was queued ($AGENTCTL_WR_MAX).
+# gate red's episode -- or of any other red the store has open (its KIND: changekind.py) -- takes the red-fix check tree
+# (<clone>-wt-check-redfix) no ordinary change takes, goes before an open batch, is never parked on `waiting` by a known
+# red, and must_wait lets a gate red's fix go; the watchdog's WR escalates a gate red's fix on `waiting`, or any red
+# fix unlanded 40 min after it was queued ($AGENTCTL_WR_MAX).
 agentctl land status                # the changes with their states, the batch, the gate, the processor
 agentctl land cancel <id>           # drop a queued or waiting change (its executor is stopped)
 ```
@@ -1309,14 +1310,54 @@ The reconciler then takes it, a step per tick:
   FIRST) -- `checked`, past its deadline at level 0, with nothing said -- and fix-replay waited behind it on
   infra/bin/backtest-alerts. Now where the queue ORDERS changes (the push before an open batch or an older change's
   combined-tree verification, the red-fix tree, never a push or backlog batch member) a `Fixes-Red:` naming ANY red
-  the store has open counts (queue.py `fixing_names`); where the gate decides (waiting for green, a known red) the
-  gate's reds alone still do. An ordinary checked change still waits for a batch it is not in (its push would throw
-  the batch's check away: THE BATCH GOES FIRST), but its push's hold is recorded like a queued change's (`held: its
-  push waits for batch <id> (<state>), which it is not in`, `... for the next push batch`, `... for <id>'s
-  combined-tree verification`), `land status` prints it, and its `checked` deadline laps quietly while the hold is
-  live; one past its deadline that nothing holds escalates, naming its last push's answer (queue.py `_push_checked`,
-  `lap_change_deadline`). Tests: `tests/test_backlog_batch.py` PushBatchTest `test_a_fix_of_an_open_red_outside_the_gate_*`
-  (the 2026-11-19 queue replayed), `test_a_checked_change_*`.
+  the store has open counts (the change's KIND, below: `red_fix`); where the gate decides (waiting for green, a known
+  red) the gate's reds alone still do (`gate_fix`). An ordinary checked change still waits for a batch it is not in
+  (its push would throw the batch's check away: THE BATCH GOES FIRST), but its push's hold is recorded like a queued
+  change's (`held: its push waits for batch <id> (<state>), which it is not in`, `... for the next push batch`, `...
+  for <id>'s combined-tree verification`, `its push waits for the landing lock or a push tree`, `its last push did not
+  land ...`), `land status` prints it, and its `checked` deadline laps quietly while the hold is live (queue.py
+  `_push_checked`, `lap_change_deadline`). Tests: `tests/test_backlog_batch.py` PushBatchTest
+  `test_a_fix_of_an_open_red_outside_the_gate_*` (the 2026-11-19 queue replayed), `test_a_checked_change_*`.
+- **ONE CLASSIFIER: A CHANGE'S KIND (the owner, 2026-11-19: "fix that structurally"; changekind.py).** 08010c sat
+  because "what kind of change is this" was decided ad hoc in a dozen places that disagreed. Now ONE function,
+  `classify_change`, reads a change (its entry, or its item's data) against the QUEUE FACTS (`queue_facts`: the gate's
+  current reds and every red the store has open, with its kind) and returns its KIND: the reds its `Fixes-Red:` names
+  that are open and each one's kind (`gate`, `outside`, `flake`, `stuck-run`); `red_fix` (any open red) and
+  `gate_fix` (a gate red); `identity` (asked of a queued change); why it may not join a backlog batch
+  (`backlog_batch`: `red-fix`, `no-batch`, `batch-alone: <why>`, `identity`, `identity-unknown`) or a push batch
+  (`push_batch`: those, `push-alone: <why>`, `known-red`); `verify` (its combined-tree round runs now); and its
+  PRIORITY class. The tick classifies every open change each pass and records the kind on its item
+  (`change_kind`, written only when a fact changed it: a red opening or closing, the gate flipping, a verify round
+  starting); the tick's order, the red-fix tree, the batches' membership (`backlog_batchable`, `push_batchable`), the
+  overlap hold, the known-red wait, `waiting`'s batch order, the governor's class (`gov_class_of`), the watchdog's WR,
+  `land status` (`[red fix of 6 (outside)]`) and the stats record (`red_fix`, `fix_kinds`, `priority`) all read it.
+  The `Fixes-Red:` trailer is parsed in ONE place (branches.py `trailer_values`: commas, semicolons and whitespace;
+  `fixes_red_in_message` for a whole message), a change's named reds read in one (`fixes_named`). THE PRIORITY ORDER
+  (generated from changekind.py `PRIORITY`; `tests/test_queue_sim.py` fails when this table drifts):
+
+<!-- change-kind priority table: generated from changekind.py PRIORITY; do not edit -->
+| order | class | what puts a change in it |
+|---|---|---|
+| 1 | `red-fix` | its `Fixes-Red:` names an open red (the gate's or any other the store has open): checked in the red-fix tree, pushed alone, before any batch, verification or ordinary change; never a batch member, never held behind an overlap |
+| 2 | `verify` | its combined-tree verification round runs now: its push goes before any younger change's (THE OLDEST VERIFICATION PUSHES FIRST) |
+| 3 | `ordinary` | every other change: batched where it may be (a backlog batch, a push batch), else checked alone |
+<!-- end of the change-kind priority table -->
+
+  The disagreements it resolved (2026-11-19): the governor admitted only a GATE red's fix at once (`gov_class_of`) --
+  now any open red's; the backlog batch ordered ANY change carrying a `Fixes-Red:` first, even one naming a closed or
+  unknown red -- now queue order (an open red's fix is in no batch); the overlap hold took an older red fix for a
+  backlog-batch partner (`backlog_batchable` never asked), so a younger change sharing its file was checked beside
+  it and rechecked in full once it landed -- now it waits for the fix; the watchdog's WR flagged only a gate red's fix
+  (the CI snapshot's reds) -- now a fix of any open red unlanded 40 min, `waiting` still only for a gate red's; the
+  status snapshot (`status`, the page) showed a queued change's hold but not a checked one's -- now both; a hold
+  recorded in one state was still shown in the next (a `checked` change read `its executor is starting`) -- a state
+  change now clears it; and the four trailer parsers split `Fixes-Red: 6 7` four ways -- now one.
+- **A CHANGE PAST ITS DEADLINE WITH NO RECORDED HOLD IS agentctl's BUG (changekind.py `unheld_changes`).** Every wait
+  records its hold on the change's item (an overlap, a batch, a push batch, a verification, busy trees, a retry, its
+  executor starting, the push's lock); a queued or checked change past its state's deadline with none is filed ONCE as
+  an agentctl issue (`[change-unheld <id>] ...`, `agentctl issue --list`; its item's `unheld_issue`) -- by the tick
+  that laps its deadline (its lap line says `nothing holds it ... filed as agentctl issue <id>`, severity info: the
+  owner is never paged for it) and by every watchdog pass (`unheld: ...`), not after W1's 2 h.
 - **A HELD WAIT IS NO ESCALATION (2026-11-19: phase3-f2, held behind phase3-agreement on coupling-baseline.tsv, and
   phase3-enrichment2, held behind f2 on TestWiring.scala, each escalated to the owner every 15 min as `queued for 45
   min, waiting on a check slot`).** Each tick records WHY a queued change waits on its item (`hold`: `overlap` with its
@@ -1485,12 +1526,20 @@ is green and nothing arrives); exactly one stats `agentctl.landing` record per d
 decided change; a change that no longer applies because of a change open when it was queued was told at queue time
 (CONFLICTS, or NOT LANDED at its first tick) and never checked meanwhile; no full recheck for a file overlap with a
 change open when it was queued; never a superseded, cancelled or rejected change's commit pushed; no change held behind
-another for generated files alone. `tests/test_queue_sim.py`: 200 random seeds in 8 parallel tests (`$AGENTCTL_TEST_SIM_SEEDS` for
+another for generated files alone; (a) a fix of ANY open red -- the gate's or one outside it, by the simulation's own
+truth, never the classifier's -- never waits behind a change that fixes none; (b) every queued or checked change past
+its deadline has a recorded hold; (c) no change is silent: each one past its deadline says why on its `land status`
+line (`land_status_line`); (d) executors start in THE PRIORITY ORDER within a tick. Reds outside the gate are modelled
+(store items, `gate: false`; their fixes arrive as `outside-fix` changes; a stream of draws of their own, so a seed
+without one replays as before). The 08010c timeline replays as `TIMELINE_08010C` (Timeline08010cTest: the fix lands
+within 8 ticks, never held by a batch, a push batch or a verification; fix-replay waits for it). `tests/test_queue_sim.py`: 200 random seeds in 8 parallel tests (`$AGENTCTL_TEST_SIM_SEEDS` for
 more), the calm and load profiles, one replay per day of 2026-11-11..18 from victoria-logs-ci's `agentctl.landing`
 records (`tests/fixtures/landing-replay-7d.json`), the three collisions of 2026-11-17, a chaos profile (reds,
 breaking changes, conflicts, infra failures and outside pushes far more often) with its fixed seeds, and mutation tests: ee7b744,
 PUSHES FIRST, OVERLAPPING CHANGES ARE CHECKED AS ONE or GENERATED FILES ARE NO OVERLAP undone in a copy of
-agentctl must fail an invariant (6d206ed undone fails "one open item per change" in 13 of 40 seeds). A failing seed
+agentctl must fail an invariant (6d206ed undone fails "one open item per change" in 13 of 40 seeds), and so must the
+classifier counting the gate's reds alone (the 08010c timeline), the tick's order without PRIORITY, and a checked
+change's batch hold left unrecorded. A failing seed
 replays alone: `queue_sim.Sim(<seed>).run().violations`; `$AGENTCTL_TEST_SIM_KEEP=<dir>` keeps its processor log.
 
 #### land --until-done: the agent's whole tail (the owner, 2026-11-18)

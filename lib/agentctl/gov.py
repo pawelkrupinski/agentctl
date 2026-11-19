@@ -707,9 +707,13 @@ def cmd_suite(a):
         return subprocess.run([sys.executable, os.path.join("tests", "run.py")] + args).returncode
 
 
-def gov_class_of(repo, commits, reds):
-    """red when a commit carries Fixes-Red for a red run, else check."""
-    return "red" if reds and (fixes_of(repo, commits) & reds) else "check"
+def gov_class_of(repo, commits, reds, st=None):
+    """red when the commits' Fixes-Red names an open red -- the gate's (reds) or any other the store has open: the
+    change's KIND (changekind.py classify_change) -- else check."""
+    fixes = fixes_of(repo, commits)
+    if not fixes:
+        return "check"
+    return "red" if classify_change({"fixes": sorted(fixes)}, queue_facts(reds, st))["red_fix"] else "check"
 
 
 def cmd_gov(a):

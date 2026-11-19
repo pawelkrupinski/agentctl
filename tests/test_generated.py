@@ -169,7 +169,8 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         did = A.tick_changes(self.r.path, self.d)
         self.assertEqual(self.started, [eo, ey], f"both checked at once: {did}")
         self.assertEqual([x for x in self.inbox() if "CONFLICTS" in json.dumps(x)], [], "no conflict to tell")
-        self.assertIsNone((A.Store().item("change", ey)["data"] or {}).get("hold"))
+        hold = (A.Store().item("change", ey)["data"] or {}).get("hold") or {}
+        self.assertEqual(hold.get("kind"), "starting", "not held: its executor is starting (`land status` says so)")
 
     def test_a_real_source_both_change_still_holds(self):
         eo = self.change("older", {"ce\tservices": 6}, {"identity/src/main/I.scala": "i\n",

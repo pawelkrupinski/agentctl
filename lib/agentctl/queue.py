@@ -882,38 +882,18 @@ def tree_slot(d, i, max_hold=None):
 
 
 # A RED FIX NEVER WAITS FOR GREEN (the owner, 2026-11-16: "Red fix should never wait for green build (obv)"): every
-# place a change can be held for main or for other changes exempts a change fixing an open gate red (red_fix): it takes
+# place a change can be held for main or for other changes exempts a red fix (its KIND, changekind.py): it takes
 # THE RED-FIX TREE no ordinary change may take (08:58-09:15Z: Main #2515's fix sat "queued for 15 min, waiting on a
 # check slot" behind three ordinary checks), it goes before an open batch, a known red never parks it on `waiting`,
 # must_wait lets it go (the hook's rule), and the watchdog's WR escalates one that waits anyway.
 RED_FIX_TREE = "redfix"  # <clone>-wt-check-redfix, under its own lease: only a red fix's checker takes it
 
 
-def red_fix(e, reds):
-    """Whether change entry e fixes an open red: a `Fixes-Red:` naming one of `reds` (the gate's current episode, or
-    fixing_names: every open red)."""
-    return bool(reds) and bool(set(map(str, e.get("fixes") or [])) & set(reds))
-
-
 # A FIX OF ANY OPEN RED GOES FIRST (2026-11-19, 08010c: `Fixes-Red: 6`, Alert backtest #6, red 5254bffda9d2 outside
-# the gate). red_fix was given the GATE's reds only, so at a green gate the fix was an ordinary change: checked at
-# 08:32Z, it waited 22 min behind two combined-tree verifications, was left out of push batch #47 (push_alone), then
-# waited behind that batch's whole verify round (BATCH_FIRST, deadline ~110 min) -- `checked`, past its deadline at
-# level 0, nothing said. Where the queue ORDERS changes (a push before an open batch or a combined-tree verification,
-# the red-fix tree, no batch membership) a fix of any red the store has open counts; where the GATE decides (waiting
-# for green, a known red), the gate's reds alone still do.
-def open_red_names(st):
-    """The names (run numbers, ids, keys) of every red the store has open, gate or not; empty when it cannot be read."""
-    try:
-        items = st.items("red")
-    except Exception:  # an unreadable store orders nothing: the gate's reds still do
-        return set()
-    return {str(n) for it in items if it["state"] not in RED_TERMINAL for n in red_names(it.get("data") or {}) if n}
-
-
-def fixing_names(reds, st=None):
-    """The reds a change's `Fixes-Red:` may name to go first: the gate's (reds) and every other open one."""
-    return set(reds) | open_red_names(st if st is not None else Store())
+# the gate): whether a change is a red fix -- and a GATE red's fix -- is its KIND (changekind.py classify_change), read
+# against the gate's reds and every red the store has open (queue_facts). Where the queue ORDERS changes (a push before
+# an open batch or a combined-tree verification, the red-fix tree, no batch membership) a fix of any open red counts
+# (kind red_fix); where the GATE decides (waiting for green, a known red), the gate's reds alone still do (gate_fix).
 
 
 def check_tree_slot(repo, d, fix=False):
@@ -1009,6 +989,8 @@ def set_change(d, e, to, data=None, event=None, store=None, **fields):
     if landed:  # where and when it landed (or what superseded it), on its item: an awaiter on any host reads it there
         # (await_entry)
         data = {**(data or {}), **landed}
+    if to != cur["state"] and (cur.get("data") or {}).get("hold"):  # a new state's wait is said anew (note_hold): a
+        data = {**(data or {}), "hold": None}  # hold of the state it leaves never shows on the next (no stale reason)
     try:
         if not machine_state("change", cur["state"]).terminal:
             st.transition("change", e["id"], to, cur["version"], data=data, event=event)
@@ -1214,10 +1196,11 @@ HOLD_SHOWN = ("queued", "checked")  # the states whose item's `hold` says why it
 
 def change_rows(store=None):
     """THE QUEUE as everyone reads it (`land status`, the status line, the page): the store's open change items,
-    by id, as {id, state, worktree, head, deadline, level, since (submitted)}."""
+    by id, as {id, state, worktree, head, deadline, level, hold, kind (a red fix's, changekind.py), since (submitted)}."""
     rows = [{"id": i["id"], "state": i["state"], "worktree": (i.get("data") or {}).get("worktree"),
              "head": (i.get("data") or {}).get("head"), "deadline": i["deadline"], "level": i["level"],
              "hold": ((i.get("data") or {}).get("hold") or {}).get("why") if i["state"] in HOLD_SHOWN else None,
+             "kind": kind_text((i.get("data") or {}).get("change_kind")) or None,
              "since": float((i.get("data") or {}).get("submitted_at") or i.get("entered_at") or 0)}
             for i in (store or Store()).items("change") if not machine_state("change", i["state"]).terminal]
     return sorted(rows, key=lambda r: r["id"])
@@ -1324,7 +1307,8 @@ def check_entry(repo, eid):
         e = read_record(os.path.join(d, "entries", f"{eid}.json"))
         if not e or e.get("status") not in ("queued", "checking") or e.get("backlog_batch"):  # a backlog batch's
             return 0
-        slot = check_tree_slot(repo, d, fix=red_fix(e, fixing_names(gate_reds(repo))) if e.get("fixes") else False)
+        fix = bool(e.get("fixes")) and classify_change(e, queue_facts(gate_reds(repo)))["red_fix"]
+        slot = check_tree_slot(repo, d, fix=fix)
         if not slot:  # all trees busy: it stays queued, the tick starts it again when one frees
             return 0
         i, slot_h = slot
@@ -1730,7 +1714,8 @@ def _push_change(repo, d, e, i):
             e.pop("remote_run", None)
         commits = waiting_commits(tree, base, head)
         reds = gate_reds(repo) if waiting_supported(repo) else set()
-        kr = None if red_fix(e, reds) else e.get("known_red")  # a red fix failing only as main fails lands: no wait
+        kr = None if classify_change(e, gate_facts(reds))["gate_fix"] else e.get("known_red")  # a gate red's fix
+        # failing only as main fails lands: no wait
         if kr or (reds and must_wait(repo, commits, reds)):
             why = (f"its checks failed only where {remote()}/main fails too ({keys_text(kr['keys'])}: "
                    f"{'; '.join(kr['where'])}): not held against it; it lands with the batch once main is green "
@@ -1812,8 +1797,10 @@ def tick_changes(repo, d, now_=None):
         reds = gate_reds(repo)
     except Exception:
         reds = set()
-    fixing = fixing_names(reds, st)  # A FIX OF ANY OPEN RED GOES FIRST (red_fix, above)
-    todo = sorted(queued_entries(d), key=lambda e: (0 if red_fix(e, fixing) else 1, 0 if verifying(e, t) else 1, e["seq"]))
+    facts = queue_facts(reds, st)  # A FIX OF ANY OPEN RED GOES FIRST (above): each change's KIND, recorded on its item
+    entries = queued_entries(d)
+    kinds = classify_queue(repo, d, entries, facts, t, st)
+    todo = sorted(entries, key=lambda e: kind_order(kinds, e))  # THE PRIORITY ORDER (changekind.py PRIORITY)
     newest = {}
     for e in sorted(todo, key=lambda e: e["seq"]):  # entries queued before re-queueing replaced: the newest one runs
         for k, older in list(newest.items()):
@@ -1829,22 +1816,22 @@ def tick_changes(repo, d, now_=None):
     # 40 lone checks, 0 batches). The checked changes are pushed in a first pass; the holds are read again for the
     # second, which starts checks.
     for phase in ("push", "check"):
-        held = backlog_held(repo, d, reds, st, t, fixing)
-        pheld = push_held(repo, d, reds, st, t, fixing)
+        held = backlog_held(repo, d, reds, st, t, facts)
+        pheld = push_held(repo, d, reds, st, t, facts)
         # THE BATCH KEEPS ITS AGE-ORDER PLACE (review 2026-11-18): this tick runs before the batch tick, and the
         # changes held for a backlog or push batch take no tree, so a tree freed went to the next YOUNGER lone change
         # and the batch tick found none: with a steady stream of lone changes (identity changes, --no-batch) the batch
         # never formed. A lone change younger than the oldest held one never takes the LAST free tree: that is the
         # batch's (a red fix excepted).
         batch_seq = min((x["seq"] for x in todo if x["id"] in held | pheld), default=None)
-        did += _tick_changes_pass(repo, d, st, t, reds, fixing, phase, [e for e in todo if e["id"] in newest], todo,
+        did += _tick_changes_pass(repo, d, st, t, facts, kinds, phase, [e for e in todo if e["id"] in newest], todo,
                                   held, pheld, batch_seq)
     return did
 
 
-def _tick_changes_pass(repo, d, st, t, reds, fixing, phase, mine, todo, held, pheld, batch_seq):
+def _tick_changes_pass(repo, d, st, t, facts, kinds, phase, mine, todo, held, pheld, batch_seq):
     """One pass of tick_changes over the newest entries: `push` (the checked and interrupted pushes) or `check` (the
-    rest: executors started, deadlines). fixing: the reds a red fix may name (fixing_names)."""
+    rest: executors started, deadlines). facts: queue_facts; kinds: each entry's kind (classify_queue)."""
     did = []
     for e in mine:
         if e.get("backlog_batch"):  # a backlog batch's member: the batch checks and pushes it (backlog_reconcile)
@@ -1856,9 +1843,12 @@ def _tick_changes_pass(repo, d, st, t, reds, fixing, phase, mine, todo, held, ph
         if state == "pushing":  # a tick that died mid-push: verified next, never pushed twice blindly
             set_change(d, e, "checked", event={"text": f"{e['id']}: its push was interrupted: verified, then tried again"})
             state = "checked"
-        fix = red_fix(e, fixing)
+        kind = kinds.get(e["id"]) or classify_change(e, facts, t)
+        record_change_kind(st, e, kind)  # on its item, now that it surely has one (a no-op when unchanged)
+        fix = kind["red_fix"]
         if state == "checked":
             if e.get("retry_after", 0) > t:
+                note_hold(st, e, "retry", f"its push is retried at {hhmmz(e['retry_after'])}", t)
                 continue
             did += _push_checked(repo, d, st, t, e, fix, todo, pheld)
             continue
@@ -1878,7 +1868,7 @@ def _tick_changes_pass(repo, d, st, t, reds, fixing, phase, mine, todo, held, ph
                               conflict_files=conflict_paths(gone[1]))
                 did.append(f"{e['id']}: rejected (no longer applies on main)")
                 continue
-            hold = overlap_hold(repo, d, e, todo, reds, t)
+            hold = overlap_hold(repo, d, e, todo, facts, t)
             if hold and fix:  # a red fix never waits: its author is told of a conflict, and it goes on
                 did += hold_for_overlap(st, d, e, *hold, waits=False)
                 hold = None
@@ -1892,6 +1882,8 @@ def _tick_changes_pass(repo, d, st, t, reds, fixing, phase, mine, todo, held, ph
         if e.get("regen_hold") and regen_hold_expired(d, e, t):
             continue
         if alive or e.get("retry_after", 0) > t:
+            if not alive:  # said on its item: `land status` shows every wait (changekind.py, no held change silent)
+                note_hold(st, e, "retry", f"its check is retried at {hhmmz(e['retry_after'])} (an infra failure)", t)
             continue
         first = None if fix else batch_goes_first(st, d, ("assembling", "pushing"))
         if first:  # the next free check tree is the batch's: to assemble it, or to push from its own tree
@@ -1923,7 +1915,7 @@ def _tick_changes_pass(repo, d, st, t, reds, fixing, phase, mine, todo, held, ph
             note_hold(st, e, "older-batch", "the last free check tree goes to the older changes' batch", t)
             continue
         slot[1].release()  # the executor takes it again itself
-        note_hold(st, e, None, None, t)
+        note_hold(st, e, "starting", "its executor is starting its check", t)
         spawn_executor(repo, d, e["id"])
         did.append(f"{e['id']}: executor started")
     return did
@@ -1955,6 +1947,9 @@ def _push_checked(repo, d, st, t, e, fix, todo, pheld):
         return did
     note_hold(st, e, None, None, t)
     out = push_change(repo, d, e)
+    if out in ("checked", "busy"):  # raced, met the red gate, or the landing lock / push tree was busy: tried again
+        note_hold(st, e, "push", "its push waits for the landing lock or a push tree" if out == "busy" else
+                  "its last push did not land (a race or the red gate): tried again at the next tick", t)
     lap_change_deadline(st, e, "checked", t, f"its last push: {out}")
     return did + [f"{e['id']}: {out}"]
 
@@ -1966,14 +1961,18 @@ def lap_change_deadline(st, e, state, t, note=None):
     it = st.item("change", e["id"])
     if not it or it["state"] != state or t <= it["deadline"]:
         return
-    hold = change_hold_now(it, e, t)
+    hold = change_hold_visible(st, it, e, t)
     stuck = change_hold_stuck(st, hold, it, t)
-    try:
+    issue = None if hold else file_unheld_change(st, it, t, "agentctl (the change tick)")  # agentctl's bug: an issue,
+    try:  # never an owner page (changekind.py, A CHANGE PAST ITS DEADLINE WITH NO RECORDED HOLD)
+        it = st.item("change", e["id"]) or it
         st.transition("change", e["id"], state, it["version"],
                       event={"text": f"{e['id']}: {state} for {fmt_age(t - it['entered_at'])}, "
                                      + (f"held: {hold['why']}" if hold else "nothing holds it")
-                                     + (f" -- STUCK: {stuck}" if stuck else "") + (f" ({note})" if note else ""),
-                             "audience": {"worktree": e.get("worktree")}, **({} if stuck else {"severity": "info"})})
+                                     + (f" -- STUCK: {stuck}" if stuck else "") + (f" ({note})" if note else "")
+                                     + (f" -- filed as agentctl issue {issue}" if issue else ""),
+                             "audience": {"worktree": e.get("worktree")},
+                             **({} if stuck and not issue else {"severity": "info"})})
     except StaleVersion:
         pass  # the next tick says it
 
@@ -2036,7 +2035,7 @@ def main_conflict(repo, e):
     return (main, files) if files else None
 
 
-def overlap_hold(repo, d, e, entries, reds, t):
+def overlap_hold(repo, d, e, entries, facts, t):
     """(older entry, shared files, conflicting files or None) queued change e waits for (OVERLAPPING CHANGES ARE
     CHECKED AS ONE), or None."""
     if e.get("backlog_batch"):
@@ -2055,8 +2054,8 @@ def overlap_hold(repo, d, e, entries, reds, t):
             continue
         if conflict is None and o.get("status") == "queued" and not o.get("backlog_batch"):
             if together is None:
-                together = backlog_batchable(repo, d, e, t)
-            if together and backlog_batchable(repo, d, o, t):
+                together = backlog_batchable(repo, d, e, t, facts)
+            if together and backlog_batchable(repo, d, o, t, facts):
                 continue  # the next backlog batch checks them as one
         if conflict:  # the one it cannot be assembled with is the one its author hears of
             return o, shared, conflict

@@ -67,7 +67,7 @@ class ProfileSeedsTest(unittest.TestCase):
 # changes sharing files. Its fixed seeds (one check tree): 121, a member superseded while its batch checked was pushed
 # with it (A DECIDED MEMBER IS NEVER PUSHED, batch.py); 36 and 52, a change that no longer applied on main waited for a
 # tree before it was told (main_conflict, queue.py).
-CHAOS = {"red": 0.08, "bad": 0.3, "conflict": 0.3, "infra": 0.08, "outside": 0.1, "shared_path": 0.4}
+CHAOS = {"red": 0.08, "bad": 0.3, "conflict": 0.3, "infra": 0.08, "outside": 0.1, "shared_path": 0.4, "outside_red": 0}
 
 
 class ChaosSeedsTest(unittest.TestCase):
@@ -78,8 +78,8 @@ class ChaosSeedsTest(unittest.TestCase):
     def test_chaos_seeds(self):
         """3 seeds in the suite; $AGENTCTL_TEST_SIM_SEEDS=N sweeps N/10 (the larger sweep: an env-flagged run)."""
         n = int(os.environ["AGENTCTL_TEST_SIM_SEEDS"]) // 10 if os.environ.get("AGENTCTL_TEST_SIM_SEEDS") else 3
-        sims = [queue_sim.Sim(seed, trees=trees, profile=CHAOS, n_changes=14).run() for seed in range(n)
-                for trees in (1, 4)]
+        sims = [queue_sim.Sim(seed, trees=trees, profile={**CHAOS, "outside_red": 0.08}, n_changes=14).run()
+                for seed in range(n) for trees in (1, 4)]
         self.assertEqual(failures(sims), [])
 
 
@@ -159,6 +159,40 @@ class GeneratedOverlapTest(unittest.TestCase):
             self.assertEqual(held, {("b", "a")}, "left out of the batch, it waits for a as before")
 
 
+class Timeline08010cTest(unittest.TestCase):
+    """THE 08010c TIMELINE (queue_sim.TIMELINE_08010C; 2026-11-19): a fix of a red OUTSIDE the gate, checked while two
+    ordinary changes owed combined-tree verifications and made a push batch, sat ~2 h. Replayed over 8 seeds: it is
+    classified a red fix (changekind.py), never held behind a batch, a push batch or a verification, lands within
+    FIX_08010C_BOUND ticks of arriving, and the change overlapping it waits for it -- not the other way round."""
+
+    def test_the_fix_of_a_red_outside_the_gate_goes_first(self):
+        for seed in range(8):
+            sim = queue_sim.Sim(seed, calm=True, script=list(queue_sim.TIMELINE_08010C)).run()
+            self.assertEqual(failures([sim]), [], f"seed {seed}")
+            waits = queue_sim.landing_waits(sim)
+            self.assertLessEqual(waits["fix"], queue_sim.FIX_08010C_BOUND, f"seed {seed}: {waits}")
+            label = {c.eid: c.label for c in sim.changes}
+            fix = next(c for c in sim.changes if c.label == "fix")
+            kinds = {h[1] for h in sim.holds.get(fix.eid, [])}
+            self.assertEqual(kinds & {"batch", "push-batch", "verify", "backlog-batch", "older-batch"}, set(),
+                             f"seed {seed}: the fix was held by {kinds}")
+            replay = {(k, label.get(b)) for _t, k, b, _f in sim.holds.get(
+                next(c for c in sim.changes if c.label == "replay").eid, []) if k == "overlap"}
+            self.assertEqual(replay, {("overlap", "fix")}, f"seed {seed}: fix-replay waits for the fix it overlaps")
+            st = queue_sim.A.Store()
+            self.assertEqual([i for i in st.items("issue") if "[change-unheld" in i["data"]["text"]], [],
+                             f"seed {seed}: no change was past its deadline unheld")
+
+    def test_the_priority_table_in_agentctl_md_is_the_code_s(self):
+        """(d) THE PRIORITY ORDER IS DOCUMENTED FROM THE CODE: AGENTCTL.md carries changekind.py's table verbatim."""
+        with open(os.path.join(os.path.dirname(HERE), "AGENTCTL.md")) as f:
+            doc = f.read()
+        self.assertIn(queue_sim.A.priority_table_markdown(), doc,
+                      "AGENTCTL.md's priority table drifted from changekind.py PRIORITY: paste "
+                      "`python3 -c 'import sys; sys.path.insert(0, \"lib\"); import agentctl as A; "
+                      "print(A.priority_table_markdown())'` over it")
+
+
 # THE SIMULATOR CATCHES A REVERTED FIX: agentctl copied, one fix undone, the profile run on the copy must fail an
 # invariant. A mutation whose anchor is gone fails here, naming it: update it with the code.
 MUTATIONS = {
@@ -167,11 +201,22 @@ MUTATIONS = {
         "if False:  # MUTATION", "load"),
     "pushes first, then the holds": (
         '    for phase in ("push", "check"):\n'
-        '        held = backlog_held(repo, d, reds, st, t, fixing)\n'
-        '        pheld = push_held(repo, d, reds, st, t, fixing)\n',
-        '    held = backlog_held(repo, d, reds, st, t, fixing)\n'
-        '    pheld = push_held(repo, d, reds, st, t, fixing)\n'
+        '        held = backlog_held(repo, d, reds, st, t, facts)\n'
+        '        pheld = push_held(repo, d, reds, st, t, facts)\n',
+        '    held = backlog_held(repo, d, reds, st, t, facts)\n'
+        '    pheld = push_held(repo, d, reds, st, t, facts)\n'
         '    for phase in ("push", "check"):\n', "load"),
+    # (a) ONE CLASSIFIER: a fix of a red outside the gate counted as ordinary again (c74b64f's bug, now in one place)
+    "changekind.py: a fix of any open red is a red fix": (
+        "        if n in gate or n in open_:", "        if n in gate:  # MUTATION", "08010c"),
+    # (d) the priority order dropped: queue order alone
+    "the priority order": (
+        "    todo = sorted(entries, key=lambda e: kind_order(kinds, e))",
+        '    todo = sorted(entries, key=lambda e: e["seq"])  # MUTATION', "redfix"),
+    # (b)/(c) a checked change's push held behind a batch without saying so (c74b64f's other half)
+    "a held push records its hold": (
+        '        note_hold(st, e, "batch", f"its push waits for batch {first[\'id\']} ({first[\'state\']}), which it is not in", t,\n'
+        '                  batch=first["id"])\n', "", "random"),
     "generated files are no overlap": (
         "        shared = shared if strict else without_generated(repo, shared)\n",
         "", "baselines"),
@@ -182,7 +227,13 @@ MUTATIONS = {
 RUNNER = """import json, sys
 sys.path.insert(0, sys.argv[1])
 import queue_sim, test_queue_sim as T
-if sys.argv[2] == "collisions":
+if sys.argv[2] == "08010c":
+    bad = [v for seed in range(4) for v in queue_sim.Sim(seed, calm=True, script=list(queue_sim.TIMELINE_08010C)).run().violations[:1]]
+elif sys.argv[2] == "redfix":
+    bad = [v for seed in range(4) for v in queue_sim.Sim(seed, calm=True, trees=2, script=list(T.REDFIX_BEHIND_ORDINARY)).run().violations[:1]]
+elif sys.argv[2] == "random":
+    bad = [v for seed in range(8) for v in queue_sim.Sim(seed).run().violations[:1]]
+elif sys.argv[2] == "collisions":
     bad = queue_sim.Sim(17, calm=True, script=list(queue_sim.COLLISIONS_2026_11_17)).run().violations[:1]
 elif sys.argv[2] == "baselines":
     bad = queue_sim.Sim(0, calm=True, script=list(queue_sim.BASELINES_2026_11_19)).run().violations[:1]
@@ -191,6 +242,16 @@ else:
                                                          n_changes=T.LOAD["n"]).run().violations[:1]]
 print(json.dumps(bad))
 """
+
+
+# THE RED FIX BESIDE AN ORDINARY CHANGE: two check trees, one busy; an ordinary change and a fix of a red outside the gate
+# arrive in one tick, the ordinary one first -- the fix starts first (the priority order's mutation scenario).
+REDFIX_BEHIND_ORDINARY = [
+    (0, {"label": "a", "worktree": "a", "paths": ["web/src/main/A.scala"], "kind": "nobatch"}),
+    (1, {"kind": "open-outside-red"}),
+    (1, {"label": "c", "worktree": "c", "paths": ["common/src/main/C.scala"], "kind": "nobatch"}),
+    (1, {"label": "fix", "worktree": "fix", "kind": "outside-fix", "paths": ["scripts/fix.sh"]}),
+]
 
 
 class MutationTest(unittest.TestCase):
@@ -203,10 +264,10 @@ class MutationTest(unittest.TestCase):
                     s = os.path.join(src, x)
                     (shutil.copytree if os.path.isdir(s) else shutil.copy)(
                         s, os.path.join(tmp, x), **({"ignore": shutil.ignore_patterns("__pycache__")} if os.path.isdir(s) else {}))
-                q = os.path.join(tmp, "lib", "agentctl", "queue.py")
+                q = os.path.join(tmp, "lib", "agentctl", "changekind.py" if name.startswith("changekind.py") else "queue.py")
                 with open(q) as f:
                     text = f.read()
-                self.assertIn(anchor, text, f"mutation {name}: its anchor is gone from queue.py; update it")
+                self.assertIn(anchor, text, f"mutation {name}: its anchor is gone from {os.path.basename(q)}; update it")
                 with open(q, "w") as f:
                     f.write(text.replace(anchor, mutant, 1))
                 runner = os.path.join(tmp, "run_mutant.py")

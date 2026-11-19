@@ -386,7 +386,8 @@ class PushBatchTest(test_queue.QueueTest):
         eb = self.checked("b", "worker/src/main/B.scala")
         self.checked("fix", "infra/bin/backtest-alerts", msg="backtest-alerts: the fix\n\nFixes-Red: 6")
         self.main_moves()
-        self.assertEqual([e["id"] for e in A.push_candidates(self.r.path, self.d, set(), fixing={"6"})], [ea, eb])
+        self.assertEqual([e["id"] for e in A.push_candidates(self.r.path, self.d, set(), facts=A.queue_facts(set()))],
+                         [ea, eb])
         self.assertEqual([e["id"] for e in A.push_candidates(self.r.path, self.d, set())], [ea, eb],
                          "the open reds read from the store when not given")
 
@@ -413,19 +414,28 @@ class PushBatchTest(test_queue.QueueTest):
         lap = [e for e in evs if "checked for" in str(e.get("text"))]
         self.assertTrue(lap and f"held: its push waits for batch {bid}" in lap[-1]["text"], lap)
 
-    def test_a_checked_change_past_its_deadline_that_does_not_push_escalates(self):
+    def test_a_checked_change_past_its_deadline_that_nothing_holds_is_filed_as_an_agentctl_issue_once(self):
+        """A CHANGE PAST ITS DEADLINE WITH NO RECORDED HOLD IS agentctl's BUG (changekind.py): one agentctl issue, never
+        an owner page; the lap's line still says nothing holds it and what its last push answered."""
         ec = self.checked("c", "scripts/c.sh")
         saved = A.push_change
         A.push_change = lambda repo, d, e: "the landing lease is busy"
         try:
             A.tick_changes(self.r.path, self.d, now_=time.time() + 20 * 60)
+            A.tick_changes(self.r.path, self.d, now_=time.time() + 40 * 60)
         finally:
             A.push_change = saved
-        it = A.Store().item("change", ec)
-        self.assertEqual((it["state"], it["level"]), ("checked", 1), "escalated")
-        ev = A.Store().item_events("change", ec)[-1]
-        self.assertIn("nothing holds it", ev["text"])
+        st = A.Store()
+        it = st.item("change", ec)
+        self.assertEqual((it["state"], it["level"]), ("checked", 0), "no escalation: the owner is not paged")
+        issues = [i for i in st.items("issue", ("open",)) if i["data"]["text"].startswith(f"[change-unheld {ec}]")]
+        self.assertEqual(len(issues), 1, "filed once")
+        self.assertEqual(it["data"].get("unheld_issue"), issues[0]["id"])
+        evs = st.item_events("change", ec)
+        self.assertEqual([e for e in evs if e["severity"] == "escalate"], [])
+        ev = next(e for e in evs if "nothing holds it" in str(e.get("text")))
         self.assertIn("the landing lease is busy", ev["text"], "and its last push's answer said")
+        self.assertIn(f"agentctl issue {issues[0]['id']}", ev["text"])
 
 
 class OverlapTest(BacklogBatchTest):
@@ -479,6 +489,31 @@ class OverlapTest(BacklogBatchTest):
         self.assertEqual(e["status"], "landed", "checked once, on top of the older one: no recheck")
         self.assertFalse(e.get("rounds"), "no second round")
         self.assertEqual(len(self.calls_of("--range")), 2, "one check each")
+
+    def test_a_younger_change_sharing_a_file_with_an_older_red_fix_waits_for_it(self):
+        """ONE CLASSIFIER (changekind.py): an older fix of an open red is in no batch, so it is no backlog-batch partner
+        either. Before, the overlap hold asked backlog_batchable, which never asked whether a change is a red fix: the
+        younger change sharing the fix's file was taken to be checked with it in the next batch, so it was not held --
+        and the batch left the fix out, so the two were checked apart and the younger rechecked in full once the fix
+        landed."""
+        self.r.write("infra/bin/backtest-alerts", "".join(f"line {i}\n" for i in range(1, 11)))
+        self.r.commit("the backtest")
+        self.r.push()
+        A.Store().put_item("red", "5254bffda9d2", "fix-pending",
+                           {"key": "5254bffda9d2", "workflow": "Alert backtest", "gate": False, "red_kind": "outside",
+                            "runs": ["44479918396", "5", "6"]})
+        wf = self.r.worktree("wt-fix", branch="fix")
+        self.r.write("infra/bin/backtest-alerts", "the fix\n" + "".join(f"line {i}\n" for i in range(2, 11)), at=wf)
+        self.r.commit("backtest-alerts: the fix\n\nFixes-Red: 6", at=wf)
+        ef = self.queued(wf)[0]
+        ey = self.edit("younger", "infra/bin/backtest-alerts", 9, "younger's line 10", extra="docs/y.md")
+        A.tick_changes(self.r.path, self.d)
+        self.assertEqual(self.started, [ef], "the fix goes; the younger waits for it")
+        st = A.Store()
+        self.assertEqual(st.item("change", ef)["data"]["change_kind"]["reds"],
+                         [{"name": "6", "red": "5254bffda9d2", "kind": "outside"}])
+        hold = st.item("change", ey)["data"]["hold"]
+        self.assertEqual((hold["kind"], hold["blocker"]), ("overlap", ef))
 
     def test_overlap_held_changes_wait_quietly_naming_their_blocker_and_file(self):
         """2026-11-19 02:43-03:14Z: phase3-f2 (held behind phase3-agreement on coupling-baseline.tsv) and

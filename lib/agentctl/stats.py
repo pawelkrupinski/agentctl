@@ -212,6 +212,7 @@ def landing_records(item, events, entry=None, runs=(), paths=None, since=None):
     areas = sorted({a for a in (job_area(j.get("job")) for j in jobs) if a})
     tops, sbt = path_modules(paths or [])
     fixes = sorted(d.get("fixes") or entry.get("fixes") or [])
+    kind = d.get("change_kind") or {}
     full = sum(1 for r in rounds if r["mode"] == "full")
     pre = d.get("precheck") or {}
     rec = {"record": "agentctl.landing", "change_id": item["id"], "repo": lander.get("repo") or "pawelkrupinski/movies",
@@ -230,7 +231,11 @@ def landing_records(item, events, entry=None, runs=(), paths=None, since=None):
            "verify_rounds": len(rounds) - full, "full_rechecks": max(0, full - 1),
            "infra_requeues": sum(1 for r in rounds if r["reason_class"].startswith("infra:")),
            "recheck_reasons": ",".join(r["reason_class"] for r in rounds[1:]),
-           "red_fix": bool(fixes), "fixes": ",".join(fixes),
+           # its KIND as the queue last classified it (changekind.py): a fix of an open red, and of which kinds; a
+           # change from before the classifier, by its trailer alone
+           "red_fix": bool(kind["red_fix"]) if "red_fix" in kind else bool(fixes), "fixes": ",".join(fixes),
+           "fix_kinds": ",".join(sorted({r["kind"] for r in kind.get("reds") or [] if r.get("kind")})) or None,
+           "priority": kind.get("priority"),
            "commits_n": len(d.get("commit_keys") or entry.get("commits") or []) or None,
            "files_n": None if paths is None else len(paths), "modules": ",".join(tops), "sbt_modules": ",".join(sbt),
            "areas": ",".join(areas), "check_runs": ",".join(str(r.get("run_id")) for r in ordered_runs),

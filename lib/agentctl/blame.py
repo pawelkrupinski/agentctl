@@ -767,7 +767,6 @@ def lander_prompt(u, wt):
 # it are dead: blame_land_refusal is asked by every path that lands or queues commits (land's sync, the server's
 # submission, the queue's checker, a recovery re-land, orphan duty).
 REVERTS_CHANGE = re.compile(r"^Reverts-Change:\s*(\S+)", re.M)
-FIXES_RED_TRAILER = re.compile(r"^Fixes-Red:\s*#?(\S+)", re.M)
 
 
 def blame_records(store=None):
@@ -834,7 +833,7 @@ def blame_land_refusal(repo, commits, worktree=None, store=None, records=None):
         for ch in REVERTS_CHANGE.findall(msg):
             if ch not in dead:
                 continue
-            if set(FIXES_RED_TRAILER.findall(msg)) & live["runs"].get(ch, set()):
+            if fixes_red_in_message(msg) & live["runs"].get(ch, set()):
                 continue  # blamed again for a newer red: that red's revert
             d = dead[ch][-1]
             return (f"commit {c[:10]} reverts {ch}, which agentctl's blame marked {d['verdict']} "

@@ -598,8 +598,10 @@ def fixes_of(repo, commits):
 def batch_order(repo, entries, reds):
     """The order a batch is built in: a fix for the current red first, then (main red) what may land while red -- tools
     only, or every commit carrying a Fixes-Red for a red run -- then the rest; by join order within each."""
+    facts = gate_facts(reds)
+
     def rank(e):
-        if reds and set(e.get("fixes") or []) & reds:
+        if reds and classify_change(e, facts)["gate_fix"]:  # its KIND: a fix of the gate's red (changekind.py)
             return 0
         if reds and not must_wait(repo, e["commits"], reds):
             return 1

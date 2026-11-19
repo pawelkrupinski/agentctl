@@ -188,6 +188,10 @@ class Sim:
         self.heads = {}
         self.changes, self.by_eid = [], {}
         self.reds, self.red_run, self.red_since, self.red_clears_at, self.red_fix_due = set(), 100, None, None, None
+        self.outside, self.outside_run, self.outside_clears = {}, 5000, {}  # reds outside the gate: {run: red id}
+        # their own draws (a stream of their own: a seed without one replays exactly as before they were modelled)
+        self.outside_rng = random.Random(f"outside-{seed}")
+        self.spawned = []  # (tick, entry id, its priority rank) of every executor started (invariant d)
         self.pushes = []  # (tick, sha, [patches])
         self.pushed_patch_count = {}
         self.tasks = []
@@ -447,11 +451,12 @@ class Sim:
         return True, f"checks passed {where}\n"
 
     def run_entry_checks(self, repo, d, e, tree, base, head, mode, cls, log_path, own=None):
-        reds = set(self.reds)
-        if A.red_fix(e, reds) and not tree.endswith("-wt-check-redfix"):
+        open_ = set(self.reds) | set(self.outside)
+        red_fix = lambda x: bool({str(f) for f in x.get("fixes") or []} & open_)  # the simulation's truth
+        if red_fix(e) and not tree.endswith("-wt-check-redfix"):
             holder = A.lease_live(f"slot/check/{os.path.basename(self.d.rstrip('/'))}/{A.RED_FIX_TREE}")
             other = next((t.name for t in self.tasks if holder and not t.done and str(t.pid) in holder["holder"]), None)
-            if not (other and other.startswith("check-") and A.red_fix(self.entry_by_id(other[6:]) or {}, reds)):
+            if not (other and other.startswith("check-") and red_fix(self.entry_by_id(other[6:]) or {})):
                 self.violate(f"red fix {e['id']} checked in {os.path.basename(tree)}, not the red-fix tree (the wrong "
                              f"lane; that tree held by {other or (holder or {}).get('holder')})")
         self.checks_of[e["id"]] = self.checks_of.get(e["id"], 0) + 1
@@ -491,9 +496,14 @@ class Sim:
         self.main = sha
         if self.reds and any(self.patches[p].fixes & self.reds for p in new):
             self.red_clears_at = self.tick + self.rng.randint(1, 3)  # the fix's Main run goes green
+        for p in new:  # a red outside the gate: its own workflow's next run verifies the fix a few ticks later
+            for name in self.patches[p].fixes & set(self.outside):
+                self.outside_clears.setdefault(name, self.tick + self.outside_rng.randint(1, 3))
 
     def spawn_executor(self, repo, d, eid):
         e = self.entry_by_id(eid) or {}
+        k = (A.Store().item("change", eid) or {}).get("data", {}).get("change_kind") or {}
+        self.spawned.append((self.tick, eid, k.get("rank")))
         if e.get("status") not in ("queued", "checking"):
             self.violate(f"an executor started for {eid}, which is {e.get('status')}")
         self._spawn(f"check-{eid}", lambda: A.check_entry(repo, eid))
@@ -694,7 +704,8 @@ class Sim:
             else:
                 name = f"F{letters(cid)}"
             paths.append(f"{m}/src/main/{name}.scala" if m in SBT_MODULES else f"{m}/{name}.txt")
-        fixes = {str(self.red_run)} if kind == "redfix" and self.reds else set()
+        fixes = {str(self.red_run)} if kind == "redfix" and self.reds else \
+            {max(self.outside, key=int)} if kind == "outside-fix" and self.outside else set()
         bad = spec.get("bad")
         if bad is None:
             bad = not self.calm and self.rng.random() < self.profile.get("bad", 0.12)
@@ -764,8 +775,19 @@ class Sim:
         """This tick's arrivals and agent reactions: re-lands after NOT LANDED, supersedes, cancels."""
         while self.arrivals and self.arrivals[0][0] <= self.tick:
             _t, spec = self.arrivals.pop(0)
+            if spec.get("kind") == "open-outside-red":
+                self.open_outside_red()
+                continue
+            if spec.get("kind") == "push":  # a push to main from outside the queue (a scripted one)
+                self.next_cid += 1
+                pid = f"o{self.next_cid}"
+                self.patches[pid] = Patch(pid, -self.next_cid, list(spec["paths"]))
+                self.forge_push(self.child(self.main, pid), "outside")
+                continue
             if spec.get("kind") == "redfix" and not self.reds:
                 self.open_red()
+            if spec.get("kind") == "outside-fix" and not self.outside:
+                self.open_outside_red()
             self.submit(self.make_change(spec))
         if self.calm:
             return
@@ -811,11 +833,35 @@ class Sim:
         self.red_since = self.tick
         self.red_clears_at = None
 
+    def open_outside_red(self):
+        """A red OUTSIDE the gate (08010c's Alert backtest #6): a store item, gate False; the gate stays green."""
+        self.outside_run += 1
+        name = str(self.outside_run)
+        rid = f"sim-outside-{name}"
+        A.Store().put_item("red", rid, "offered", {"key": rid, "workflow": "Alert backtest", "gate": False,
+                                                   "red_kind": "outside", "runs": [name]})
+        self.outside[name] = rid
+        return name
+
+    def close_outside_reds(self):
+        for name, at in list(self.outside_clears.items()):
+            if self.tick >= at:
+                st = A.Store()
+                it = st.item("red", self.outside[name])
+                st.transition("red", it["id"], "verified", it["version"], event={"text": "sim: fix verified"})
+                del self.outside[name], self.outside_clears[name]
+
     def forge(self):
+        self.close_outside_reds()
         if self.red_clears_at is not None and self.tick >= self.red_clears_at:
             self.reds, self.red_since, self.red_clears_at = set(), None, None
         if self.tick >= self.drain_from and self.reds and self.red_clears_at is None:
             self.red_clears_at = self.tick + 1  # the drain: the gate goes green
+        if self.tick >= self.drain_from:  # and every red outside it no open fix is on its way for clears (a later run)
+            named = {str(f) for e in A.waiting_entries(self.d, open_only=False) if e.get("status") not in A.ENTRY_FINAL
+                     for f in e.get("fixes") or []}
+            for name in set(self.outside) - named:
+                self.outside_clears.setdefault(name, self.tick + 1)
         if self.calm or self.tick >= self.drain_from:
             return
         if self.script is None and not self.reds and self.rng.random() < self.profile.get("red", 0.02):
@@ -825,6 +871,11 @@ class Sim:
                 self.arrivals.sort(key=lambda x: x[0])
             else:  # a later run goes green by itself (an infra red)
                 self.red_clears_at = self.tick + self.rng.randint(10, 30)
+        if self.script is None and self.outside_rng.random() < self.profile.get("outside_red", 0.02):
+            self.open_outside_red()
+            if self.outside_rng.random() < 0.9:  # its fixer lands a fix
+                self.arrivals.append((self.tick + self.outside_rng.randint(1, 4), {"kind": "outside-fix"}))
+                self.arrivals.sort(key=lambda x: x[0])
         if self.reds and self.red_clears_at is None and self.tick - self.red_since > 60:
             self.red_clears_at = self.tick + 1  # never red for ever: the owner's hand
         if self.rng.random() < self.profile.get("outside", 0.03):  # a push to main from outside the queue
@@ -859,6 +910,7 @@ class Sim:
             if not t.done and t.due is not None and t.due <= self.tick:
                 t.step()
         before = {e["id"]: dict(e) for e in A.queued_entries(self.d)}
+        self.open_before = set(self.reds) | set(self.outside)
         self.known_entries = {e["id"] for e in A.waiting_entries(self.d, open_only=False)}
         reds = set(self.reds)
         A.project_changes(self.d)
@@ -871,7 +923,7 @@ class Sim:
             A.stats_pass(self.repo, self.d)
         for it in A.Store().items("change"):  # what held each change, tick by tick (the overlap tests read it)
             hold = (it.get("data") or {}).get("hold")
-            if hold and it["state"] == "queued":
+            if hold and it["state"] in ("queued", "checked"):
                 self.holds.setdefault(it["id"], []).append((self.tick, hold.get("kind"), hold.get("blocker"),
                                                             tuple(hold.get("files") or ())))
                 # 10. GENERATED FILES ARE NO OVERLAP: no change held behind another for generated files alone (but
@@ -905,7 +957,7 @@ class Sim:
         return self
 
     def quiet(self):
-        return not self.reds and not [e for e in A.waiting_entries(self.d, open_only=False)
+        return not self.reds and not self.outside and not [e for e in A.waiting_entries(self.d, open_only=False)
                                       if e.get("status") not in A.ENTRY_FINAL] and not self.arrivals
 
     # ---------------------------------------------------------------- the invariants
@@ -924,11 +976,16 @@ class Sim:
                              f"{seen[k]} and {it['id']}")
             seen[k] = it["id"]
         # 2. NEVER TWO PUSHES OF ONE CHANGE: forge_push (a patch twice on main)
-        # 3. A RED FIX IS NEVER BEHIND A BATCH OR A NON-RED CHANGE
+        # 3. A RED FIX IS NEVER BEHIND A BATCH OR A NON-RED CHANGE -- (a) a fix of ANY open red, the gate's or one
+        # outside it (08010c): its KIND, as the queue classifies it (changekind.py)
         entries = {e["id"]: e for e in A.waiting_entries(self.d, open_only=False)}
         redfix_holder = A.lease_live(f"slot/check/{os.path.basename(self.d.rstrip('/'))}/{A.RED_FIX_TREE}")
+        # the simulation's own truth, never the classifier under test: its Fixes-Red names a red open before and after
+        # this tick (the gate's episode, or one outside the gate)
+        open_now = set(self.reds) | set(self.outside)
         for eid, e in entries.items():
-            if e.get("status") in A.ENTRY_FINAL or not A.red_fix(e, reds) or reds != self.reds:
+            named = {str(x) for x in e.get("fixes") or []}
+            if e.get("status") in A.ENTRY_FINAL or not named & open_now & self.open_before or reds != self.reds:
                 continue
             if e.get("backlog_batch"):
                 self.violate(f"red fix {eid} is a member of batch {e['backlog_batch']}")
@@ -941,6 +998,7 @@ class Sim:
                     self.violate(f"red fix {eid} queued and not started: held behind other work")
             if e["status"] == "checked" and due and before.get(eid, {}).get("status") == "checked":
                 self.violate(f"red fix {eid} checked and not pushed: its push held behind other work")
+        self.check_hold_invariants(st, entries)
         # 4. A BATCH REACHES LANDED, BISECTING OR HELD WITHIN N TICKS (counted in its assembling/checking/pushing ticks)
         for bt in st.items("batch"):
             if A.machine_state("batch", bt["state"]).terminal or bt["state"] in ("bisecting", "held", "blocked-red"):
@@ -987,6 +1045,31 @@ class Sim:
                 on = self.patches_of(self.main)
                 if not set(ch.patches) <= on:
                     self.violate(f"change {ch.eid} LANDED but {sorted(set(ch.patches) - on)} not on main: lost")
+
+    def check_hold_invariants(self, st, entries):
+        """(b) EVERY CHANGE PAST ITS DEADLINE HAS A RECORDED HOLD, (c) NO CHANGE IS SILENT: every held change's
+        `land status` line says why, (d) THE PRIORITY ORDER: executors start in PRIORITY's order within a tick."""
+        t = A.time.time()
+        for it, _e in A.unheld_changes(st, entries, t):
+            self.violate(f"change {it['id']} {it['state']} {int((t - it['entered_at']) // TICK)} ticks, past its "
+                         f"deadline, and nothing recorded holding it (hold {(it['data'] or {}).get('hold')})")
+        bt = A.current_batch(st, self.d)
+        rows = A.change_rows(st)
+        in_batch = A.batch_row_ids(bt, rows) if bt else set()
+        for r in rows:
+            it = st.item("change", r["id"])
+            if not it or not A.change_past_deadline(it, t):
+                continue
+            line = A.land_status_line(r, bt, in_batch, t)
+            e = entries.get(r["id"]) or {}
+            if "held:" not in line and "(in batch" not in line and not A.checker_alive(r["id"]):
+                self.violate(f"change {r['id']} {r['state']} past its deadline, silent in `land status`: {line.strip()}"
+                             + (f" (a member of {e['backlog_batch']})" if e.get("backlog_batch") else ""))
+        now = [x for x in self.spawned if x[0] == self.tick and x[2] is not None]
+        for (_t, a, ra), (_t2, b, rb) in zip(now, now[1:]):
+            if rb < ra:
+                self.violate(f"{b} ({A.PRIORITY[rb][0]}) started before {a} ({A.PRIORITY[ra][0]}) in one tick: not "
+                             "the documented priority order")
 
     def saw_conflict_rejection(self, st, ch, e):
         """INVARIANT 8: a change that no longer applies because of a change open when it was queued was told so at
@@ -1104,6 +1187,24 @@ BASELINES_2026_11_19 = [
     (2, {"label": "resolver2", "worktree": "phase3-resolver2", "kind": "identity",
          "paths": ["identity/src/main/Resolver.scala", COUPLING, LENGTH]}),
 ]
+
+
+# THE 08010c TIMELINE OF 2026-11-19 (~07:40-09:50Z; c74b64f): a red OUTSIDE the gate open (Alert backtest #6, red
+# 5254bffda9d2), the gate green. Two ordinary changes checked; main moved under them (no file overlap): each owed a
+# combined-tree verification, and the two made push batch #47. Its fix (`Fixes-Red: 6`, infra/bin/backtest-alerts)
+# arrived meanwhile and was checked at 08:32Z -- then waited 22 min behind the verifications, was left out of the
+# batch, and waited behind its whole verify round, `checked` past its deadline with nothing said. fix-replay, changing
+# the same file, queued behind it. Every invariant must hold, and the fix must land within FIX_08010C_BOUND ticks.
+TIMELINE_08010C = [
+    (0, {"kind": "open-outside-red"}),
+    (0, {"label": "a", "worktree": "phase3-a", "paths": ["web/src/main/A.scala"]}),
+    (0, {"label": "b", "worktree": "phase3-b", "paths": ["worker/src/main/B.scala"]}),
+    (3, {"kind": "push", "paths": ["docs/moved.md"]}),
+    (4, {"label": "fix", "worktree": "backtest-fix", "kind": "outside-fix", "paths": ["infra/bin/backtest-alerts"]}),
+    (5, {"label": "replay", "worktree": "fix-replay", "paths": ["infra/bin/backtest-alerts", "docs/replay.md"]}),
+    (6, {"kind": "push", "paths": ["docs/moved-again.md"]}),
+]
+FIX_08010C_BOUND = 8  # ticks from its arrival to LANDED (a check is 2-4 ticks; nothing may hold it)
 
 
 def landing_waits(sim):

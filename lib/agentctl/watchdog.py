@@ -93,25 +93,32 @@ def snap_reds(snap):
 
 
 def inv_wr(store=None, reds=None, now_=None):
-    """WR: A RED FIX NEVER WAITS FOR GREEN (the owner, 2026-11-16). No open change claiming a fix of an open gate red
-    (its item's `fixes`) is on `waiting`, and none is still unlanded WR_MAX after it was submitted."""
+    """WR: A RED FIX NEVER WAITS FOR GREEN (the owner, 2026-11-16). No open change whose KIND (changekind.py: its
+    `Fixes-Red:` against the gate's reds and every red the store has open) is a gate red's fix is on `waiting`, and no
+    fix of any open red -- the gate's or one outside it (08010c, 2026-11-19) -- is still unlanded WR_MAX after it was
+    submitted."""
     if reds is None:
         reds = snap_reds(ci_state_load(SHORT["movies"]))
-    if not reds:
-        return True, "main green (or its gate unread): no red fix to hold"
+    st = store or Store()
+    facts = queue_facts(reds or set(), st)
+    if not reds and not facts["open"]:
+        return True, "main green (or its gate unread) and no red open: no red fix to hold"
     t = now_ if now_ is not None else time.time()
     lim = env_num("AGENTCTL_WR_MAX", WR_MAX)
     bad = []
-    for it in (store or Store()).items("change"):
+    for it in st.items("change"):
         data = it.get("data") or {}
-        if machine_state("change", it["state"]).terminal or not set(map(str, data.get("fixes") or [])) & reds:
+        if machine_state("change", it["state"]).terminal:
+            continue
+        k = classify_change(data, facts, t)
+        if not k["red_fix"]:
             continue
         age = t - float(data.get("submitted_at") or it.get("entered_at") or t)
-        if it["state"] == "waiting":
-            bad.append(f"{it['id']} (Fixes-Red: {', '.join(data['fixes'])}) is waiting for main to turn green")
+        what = f"{it['id']} ({kind_text(k)})"
+        if it["state"] == "waiting" and k["gate_fix"]:
+            bad.append(f"{what} is waiting for main to turn green")
         elif age > lim:
-            bad.append(f"{it['id']} (Fixes-Red: {', '.join(data['fixes'])}) is {it['state']} {fmt_age(age)} after it "
-                       "was queued")
+            bad.append(f"{what} is {it['state']} {fmt_age(age)} after it was queued")
     if not bad:
         return True, "no red fix waits"
     return False, "a red fix waits: " + "; ".join(bad[:3]) + " -- `agentctl land status`, `agentctl ci-why`"
@@ -396,6 +403,23 @@ def kick_processor():
     return f"the new processor did not listen within {fmt_age(env_num('AGENTCTL_KICK_HANDOFF_WAIT', KICK_HANDOFF_WAIT))}: its token is lost"
 
 
+def watchdog_unheld(store=None, entries=None, now_=None):
+    """THE WATCHDOG'S HOLD CHECK (changekind.py, A CHANGE PAST ITS DEADLINE WITH NO RECORDED HOLD): every queued or
+    checked change past its state's deadline with nothing recorded holding it is agentctl's bug, filed ONCE as an
+    agentctl issue -- never an owner page, never a wait for W1's 2 h. Returns one line per change filed (or already
+    filed)."""
+    st = store or Store()
+    t = now_ if now_ is not None else time.time()
+    if entries is None:
+        try:
+            d, _c, _w = waiting_state(movies_repo_path())
+            entries = {e["id"]: e for e in waiting_entries(d, open_only=False)}
+        except (Exception, SystemExit):
+            entries = {}
+    return [f"{it['id']} ({it['state']}, past its deadline, nothing recorded holding it): agentctl issue "
+            f"{file_unheld_change(st, it, t, 'agentctl watchdog')}" for it, _e in unheld_changes(st, entries, t)]
+
+
 def cmd_watchdog(a):
     """One watchdog pass: every invariant checked; a violation opens its INVARIANT condition (and notifies), a restored
     one closes it; W5 kickstarts the processor. Prints one line per invariant."""
@@ -434,6 +458,11 @@ def cmd_watchdog(a):
             close_condition(cond, r)
         if r.ok:
             misses.pop(wid, None)
+    try:
+        for line in watchdog_unheld():
+            print(f"unheld: {line}")
+    except (Exception, SystemExit) as e:  # the store unreadable: the invariants above already say so
+        print(f"unheld: cannot tell ({str(e)[:160]})")
     write_json(state_root("watchdog.json"), {**watchdog_state(), "misses": misses, "awake_since": woke})
     return rc
 
