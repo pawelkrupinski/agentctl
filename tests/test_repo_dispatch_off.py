@@ -54,5 +54,19 @@ class RepoDispatchOffTest(RedReposBase):
         self.assertEqual(self.st.item("red", it["id"])["state"], "offered", "on: offered again")
 
 
+class HeldOffInvariantTest(RepoDispatchOffTest):
+    def test_the_never_nobody_invariant_leaves_a_red_its_owner_held_off_alone(self):
+        """2026-11-19 17:57Z, the live core #1075: the tick held it in dispatch-off and the invariant's red_enforce
+        offered it again 20 s later ("dispatch-off with no holder"), every cycle. A repo's dispatch off by the owner is
+        what holds it."""
+        it = self.core_red()
+        self.tool("red", "auto", "off", "--repo", "core")
+        self.others(advance=60)
+        self.assertEqual(self.st.item("red", it["id"])["state"], "dispatch-off")
+        self.assertEqual([x["id"] for x in A.red_unheld(self.st, self.t[0] + 600)], [])
+        A.red_enforce(self.st, {}, self.t[0] + 600)
+        self.assertEqual(self.st.item("red", it["id"])["state"], "dispatch-off")
+
+
 if __name__ == "__main__":
     unittest.main()

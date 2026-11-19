@@ -182,6 +182,8 @@ def red_unheld(store, t=None, facts=None):
             continue
         if st == "blocked-external" and red_block_of(it, store):
             continue
+        if st == "dispatch-off" and repo_dispatch_off(store, red_repo_of(it["data"])):
+            continue  # its repo's dispatch is off by the owner: that holds it (red auto off --repo)
         if st == "offered" and (off := store.offer_of(f"red:{it['id']}")) and not offer_names_holder(off):
             continue
         out.append(it)
