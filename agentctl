@@ -35,7 +35,8 @@
   agentctl prepush-check --hook <remote> [<url>]       (pre-push hook mode: reads the hook's stdin)
         Refuses when `base...head` touches a file outside the allowed set ($AGENTCTL_ALLOW, whitespace-separated
         globs, or --allow), or when it deletes/reverts more than N (default 2, $AGENTCTL_MAX_FOREIGN) files back to
-        an older version of main -- the `reset --soft` squash onto a moved main. `git revert` commits are exempt
+        an older version of main -- the `reset --soft` squash onto a moved main (not when the push also rewrites the
+        definition those lines referred to: a coherent edit). `git revert` commits are exempt
         for the files of the commit they revert.
   agentctl cleanup [--dry-run|--execute] [--repo PATH ...] [--no-fetch] [--no-remote] [--min-age-hours H]
         Removes ONLY proven-merged items: clean, idle worktrees whose HEAD is an ancestor of <remote>/main or whose
