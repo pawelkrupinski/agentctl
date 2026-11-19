@@ -139,9 +139,13 @@ class OwnerTest(OwnerBase):
         # and a lease that lapsed at wall-1 was still live at self.t+2 (CI run 3969)
         c.execute("UPDATE leases SET expires_at=? WHERE holder=?", (self.t[0] - 1, A.owner_holder(FAM)))
         c.close()
-        self.tick(dispatch=True, advance=1)   # the red's lease lapsed: offered again
-        self.tick(dispatch=True, advance=1)   # ...and its owner, dead, started again
-        self.assertTrue(self.wait(lambda: self.rec().get("pid") not in (None, first["pid"])))
+        # the red's lease lapsed: offered again, and its owner, dead, started again -- by the ticks, as the reconciler
+        # ticks every cycle: two fixed ticks raced the dispatcher under load (issue 20261101T012328-65259e, a 2-cpu
+        # python:3.14 run 2026-11-19 18:2x: no restart within 30 s)
+        def restarted():
+            self.tick(dispatch=True, advance=1)
+            return self.rec().get("pid") not in (None, first["pid"])
+        self.assertTrue(self.wait(restarted))
         rec = self.rec()
         self.assertEqual((rec["worktree"], rec["notebook"], rec["restarts"]), (first["worktree"], first["notebook"], 1))
         self.assertIn("reproducer: FooSpec", open(rec["notebook"]).read())
