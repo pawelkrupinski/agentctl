@@ -238,6 +238,14 @@ class FixTest(RedsBase):
         self.r.push(at=wt, ref=f"{sha}:main")
         return wt, sha
 
+    def test_a_fix_naming_its_red_by_the_api_run_id_links_it(self):
+        # issue 20261109T064005-9bc34e: `Fixes-Red: <API run id>` (red #20 here is run id 40) links like a run number
+        self.tick()
+        _wt, sha = self.fix_commit(40)
+        self.tick()
+        it = self.only()
+        self.assertEqual((it["state"], (it["data"].get("fix") or {}).get("sha")), ("fix-pending", sha))
+
     def test_a_landed_fix_is_verified_by_the_next_run_containing_it(self):
         self.tick()
         wt, sha = self.fix_commit(20)
