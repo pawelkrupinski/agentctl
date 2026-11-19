@@ -88,5 +88,33 @@ class FixReplayTest(unittest.TestCase):
                       A.fixer_prompt(u, "/tmp/wt", "the brief"))
 
 
+import test_backlog_batch  # noqa: E402
+
+
+class ServerRefusesUnreplayedFixTest(test_backlog_batch.BacklogBatchTest):
+    """The laptop's land often holds no store token (the sync submits it): the server's check refuses it too."""
+
+    def test_the_check_refuses_a_queued_fix_with_no_replay(self):
+        self.r.write(A.RED_WORKFLOWS_FILE, REGISTRY)
+        self.r.commit("the registry")
+        self.r.push()
+        wt = self.r.worktree("wt-guess", branch="guess")
+        self.r.write("infra/test/alert-backtest-allowlist.yml", "a guess\n", at=wt)
+        self.r.commit("backtest: a guess\n\nFixes-Red: 5", at=wt)
+        eid = self.queued(wt)[0]  # no red known when it queued: the laptop could not tell
+        A.Store().put_item("red", "5254bffda9d2", "offered", {
+            "key": "5254bffda9d2", "workflow": "Alert backtest", "jobs": ["backtest"], "runs": ["5", "44459271435"],
+            "last_run": {"number": 5, "databaseId": 44459271435}, "red_kind": "outside"})
+        A.check_entry(self.r.path, eid)
+        e = self.entry(eid)
+        self.assertEqual(e["status"], "rejected")
+        self.assertIn(f"`Fix-Replay: {CMD} base=FAIL head=PASS`", e["why"])
+
+
+for _n in dir(test_backlog_batch.BacklogBatchTest):  # its base's own tests run in their module, not again here
+    if _n.startswith("test_") and _n not in ServerRefusesUnreplayedFixTest.__dict__:
+        setattr(ServerRefusesUnreplayedFixTest, _n, None)
+
+
 if __name__ == "__main__":
     unittest.main()
