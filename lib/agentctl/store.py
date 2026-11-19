@@ -574,7 +574,8 @@ MACHINES["red"] = {
     "blocked-external": StateSpec(7 * 86400, "offered", ("offered", "fix-pending", "leased", "cleared", "verified",
                                                          "dispatch-off")),
     # its repo's dispatch is off by the owner (`red auto off --repo R`): recorded and shown, never offered or asked
-    "dispatch-off": StateSpec(7 * 86400, "dispatch-off", ("offered", "fix-pending", "cleared", "verified")),
+    # (its deadline offers it again a week on; red_step holds it at once while the repo's dispatch is still off)
+    "dispatch-off": StateSpec(7 * 86400, "offered", ("offered", "fix-pending", "cleared", "verified")),
     "verified": StateSpec(ARCHIVE, "verified", (), terminal=True),
     "cleared": StateSpec(ARCHIVE, "cleared", (), terminal=True),
 }
