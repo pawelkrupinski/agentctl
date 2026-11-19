@@ -1281,6 +1281,24 @@ The reconciler then takes it, a step per tick:
   `pair_conflict`, `hold_for_overlap`; tests: `tests/test_backlog_batch.py` OverlapTest, `tests/test_queue_sim.py`
   CollisionTest (the three collisions of 2026-11-17 replayed: no check spent on a change that could not land, no full
   recheck).
+- **GENERATED FILES ARE NO OVERLAP (2026-11-19 ~06:05Z: six movies changes -- agreement, f2, datalayer3, resolver2-b1,
+  enrichment2, resolver2 -- each `held: its check waits for <prev>` because each edits coupling-baseline.tsv: every
+  coupling or complexity lane landed one at a time).** A repo registers its generated files in red-repos.json
+  (`generated`: `[{paths, regen, timeout}]`; movies: coupling-baseline.tsv by `scripts/coupling-report --update`, the
+  complexity, length and duplication baselines by `scripts/quality-report --update`). Such a file is no overlap -- not
+  for the hold, backlog-batch membership, the CONFLICTS a queued change is told of, `main_conflict`, nor the push's
+  full-recheck rule; a real source both change (TestWiring.scala) holds as before. A conflict in one, on a rebase, a
+  batch's assembly or land's own rebase, is RESOLVED in the commit being picked (its message and trailers kept): its
+  rows merged three-way (keyed by every column but the value; disjoint rows always merge), else -- one row both sides
+  changed -- the repo's `regen` command run in the tree, which is the combined tree at that commit
+  (`$AGENTCTL_GENERATED_REGEN_TIMEOUT`, 1200 s; on the laptop only: ci-runner's reconciler has no JVM, so there a
+  same-row conflict takes the fallback below). The hook's ratchet judges the result. The push's own rebase (under the
+  landing lock) never runs a regen command: a generated-only conflict there is a new verify round. A failed resolution
+  (no JVM where the queue runs, the command's exit, its timeout) leaves the member out of the batch (`batch_alone`
+  `regen`, why in the log) and holds it behind the change it overlaps, as before; a member resolved in a batch that
+  then fails is checked alone, never rejected for it. waiting.py `conflict_resolve`, `rows_merge`, `regenerate`;
+  tests: `tests/test_generated.py`, `tests/test_queue_sim.py` GeneratedOverlapTest (the six replayed, 4 check trees,
+  seeds 0-19: mean 8.2 -> 5.3 ticks from queued to landed, max 18 -> 11).
 - **THE PUSH BATCH (the owner, 2026-11-17: "combine them instead of landing them one by one", W1).** A checked change
   pushed alone: each on a main that moved since its full check paid a verify round of its own, and THE OLDEST
   VERIFICATION PUSHES FIRST held the younger ones meanwhile, so N checked changes landed serially (ref-scrapers
@@ -1383,11 +1401,12 @@ profiles); no change lost (entries and items agree, a LANDED change is on main, 
 is green and nothing arrives); exactly one stats `agentctl.landing` record per decided change; no executor for a
 decided change; a change that no longer applies because of a change open when it was queued was told at queue time
 (CONFLICTS, or NOT LANDED at its first tick) and never checked meanwhile; no full recheck for a file overlap with a
-change open when it was queued; never a superseded, cancelled or rejected change's commit pushed. `tests/test_queue_sim.py`: 200 random seeds in 8 parallel tests (`$AGENTCTL_TEST_SIM_SEEDS` for
+change open when it was queued; never a superseded, cancelled or rejected change's commit pushed; no change held behind
+another for generated files alone. `tests/test_queue_sim.py`: 200 random seeds in 8 parallel tests (`$AGENTCTL_TEST_SIM_SEEDS` for
 more), the calm and load profiles, one replay per day of 2026-11-11..18 from victoria-logs-ci's `agentctl.landing`
 records (`tests/fixtures/landing-replay-7d.json`), the three collisions of 2026-11-17, a chaos profile (reds,
 breaking changes, conflicts, infra failures and outside pushes far more often) with its fixed seeds, and mutation tests: ee7b744,
-PUSHES FIRST or OVERLAPPING CHANGES ARE CHECKED AS ONE undone in a copy of
+PUSHES FIRST, OVERLAPPING CHANGES ARE CHECKED AS ONE or GENERATED FILES ARE NO OVERLAP undone in a copy of
 agentctl must fail an invariant (6d206ed undone fails "one open item per change" in 13 of 40 seeds). A failing seed
 replays alone: `queue_sim.Sim(<seed>).run().violations`; `$AGENTCTL_TEST_SIM_KEEP=<dir>` keeps its processor log.
 
@@ -2202,6 +2221,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `fixer_unlanded_nudge` | `AGENTCTL_FIXER_UNLANDED_NUDGE` | `2700` | - |
 | `free_wait` | `AGENTCTL_FREE_WAIT` | `30` | s --until-done waits for a landed worktree to be free of processes before it keeps it |
 | `gate_publish` | `AGENTCTL_GATE_PUBLISH` | `45` | - |
+| `generated_regen_timeout` | `AGENTCTL_GENERATED_REGEN_TIMEOUT` | `1200` | s a generated file's regen command may run before the conflict is the author's |
 | `gh_cli` | `AGENTCTL_GH_CLI` | `gh` | the GitHub CLI |
 | `github_api` | `AGENTCTL_GITHUB_API` | - | - |
 | `github_lander_repos` | `AGENTCTL_GITHUB_LANDER_REPOS` | - | - |

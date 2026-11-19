@@ -637,8 +637,8 @@ def assemble(repo, d, wt, entries, base, alone=False):
     kept = []
     for e in entries:
         how, x = apply_entry(d, wt, e, base)
-        if how == "conflict" and alone:
-            e["batch_alone"] = "conflict"
+        if how == "conflict" and alone:  # one whose generated files could not be resolved: held as before (strict)
+            e["batch_alone"] = "regen" if any(" (generated: " in f for f in x) else "conflict"
             save_entry(d, e)
             wlog(d, f"{e['id']}: does not apply in the backlog batch (conflicts in: {', '.join(x)}): checked alone")
             continue

@@ -217,21 +217,33 @@ def union_safe(path):
     return any(fnmatch.fnmatch(path, g) for g in UNION_SAFE)
 
 
-def union_resolve(wt):
-    """Resolve wt's conflicted files by keeping both sides when every one is UNION_SAFE and has all three stages:
-    the files resolved (staged), or None (nothing touched)."""
-    files = git(wt, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
-    if not files or not all(union_safe(f) for f in files):
-        return None
+def unmerged(wt):
+    return git(wt, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
+
+
+def conflict_stages(wt, files):
+    """{file: {1: base, 2: ours, 3: theirs}} of conflicted files, or None when one is added or deleted on one side."""
     stages = {}
     for f in files:
         got = {}
         for n in (1, 2, 3):
             r = git(wt, "show", f":{n}:{f}", check=False)
-            if r.returncode != 0:  # added or deleted on one side: no union of that
+            if r.returncode != 0:  # added or deleted on one side: no merge of that
                 return None
             got[n] = r.stdout
         stages[f] = got
+    return stages
+
+
+def union_resolve(wt, files=None):
+    """Resolve wt's conflicted files (or `files` of them) by keeping both sides when every one is UNION_SAFE and has
+    all three stages: the files resolved (staged), or None (nothing touched)."""
+    files = unmerged(wt) if files is None else files
+    if not files or not all(union_safe(f) for f in files):
+        return None
+    stages = conflict_stages(wt, files)
+    if stages is None:
+        return None
     import tempfile
     for f, got in stages.items():
         with tempfile.TemporaryDirectory() as td:
@@ -250,7 +262,185 @@ def union_resolve(wt):
     return files
 
 
-def pick(wt, commits, dropped=None):
+# GENERATED FILES ARE NO OVERLAP (2026-11-19 ~06:05Z: six movies changes from parallel refactoring lanes -- agreement,
+# f2, datalayer3, resolver2-b1, enrichment2, resolver2 -- sat in single file, each `held: its check waits for <prev>`
+# because each edits test/resources/coupling-baseline.tsv, several complexity- and length-baseline.tsv too: every
+# coupling or complexity lane landed strictly one at a time, hours of serial checks). Those files are GENERATED (one
+# row a class, package or method; `scripts/coupling-report --update`, `scripts/quality-report --update`), and the
+# ratchets in the pre-push hook recompute them over the tree they check, so a combined tree's right content is "the
+# rows regenerated over it" -- and two changes touching DISJOINT rows do not conflict at all. A repo registers them in
+# red-repos.json (`generated`: {paths, regen: its own --update command, timeout}); a registered file is
+# - NO OVERLAP: the hold (OVERLAPPING CHANGES ARE CHECKED AS ONE, queue.py), backlog-batch membership, the conflict a
+#   queued change is told of, `no longer applies on main` and the push's full-recheck rule all leave it out -- a real
+#   source both change (TestWiring.scala) still holds the younger as before;
+# - RESOLVED, when a rebase, a batch's assembly or land's own rebase conflicts in it: its rows merged three-way (each
+#   row keyed by its columns but the value: a row one side changed takes that side's value; disjoint rows always
+#   merge), else -- a row both sides changed differently -- the repo's own regen command run in the tree, which IS
+#   the combined tree at that commit (the other files picked), and its files staged into the commit being picked (on
+#   the laptop: ci-runner's reconciler has no JVM, its checks run on CI, so there a same-row conflict is the fallback's
+#   below; the push's own rebase, under the landing lock, never runs one: a new verify round instead). The
+#   commit keeps its message and trailers (a `Coupling:`/`Complexity:` rise still carries its own), and the hook's
+#   ratchet judges the result as it judges any baseline; a member so resolved that its batch then fails is checked
+#   alone (batch_alone), never rejected for it;
+# - else, the merge and the regen failing (no JVM where the queue runs, the command's exit, its timeout), the member
+#   is left out of the batch and checked alone (batch_alone `regen`, the files and why in the log), held as before
+#   behind the change it overlaps. Tests: tests/test_generated.py, tests/test_queue_sim.py GeneratedOverlapTest.
+GENERATED_REGEN_TIMEOUT = 1200  # s a generated file's regen command may run before the conflict is the author's ($AGENTCTL_GENERATED_REGEN_TIMEOUT)
+_generated_slugs = process_cache({})  # repo path -> its GitHub slug (None: unknown)
+
+
+def generated_registry(repo):
+    """The repo's registered generated files (red-repos.json `generated`, by the repo's GitHub slug): [] when none."""
+    key = os.path.realpath(repo or ".")
+    if key not in _generated_slugs:
+        try:
+            _generated_slugs[key] = slug(repo) if repo else None
+        except (SystemExit, Exception):  # no remote, a path that is gone: nothing registered
+            _generated_slugs[key] = None
+    conf = red_repo_conf(_generated_slugs[key]) if _generated_slugs[key] else None
+    return (conf or {}).get("generated") or []
+
+
+def generated_entry(repo, path):
+    """The registry entry a path is generated by, or None."""
+    return next((g for g in generated_registry(repo) if any(fnmatch.fnmatch(path, p) for p in g["paths"])), None)
+
+
+def without_generated(repo, paths):
+    """paths less the repo's registered generated files (GENERATED FILES ARE NO OVERLAP)."""
+    reg = generated_registry(repo)
+    return [p for p in paths if not reg or not generated_entry(repo, p)] if paths else paths
+
+
+def table_parse(text):
+    """(header lines, [(key, line)]) of a generated table: `#` and blank lines head it, every other line a row keyed
+    by all its tab-separated columns but the last; None when a header line follows a row or a key repeats."""
+    head, rows, keys = [], [], set()
+    for line in text.splitlines(True):
+        bare = line.rstrip("\n")
+        if not bare.strip() or bare.startswith("#") or "\t" not in bare:
+            if rows:
+                return None
+            head.append(line)
+            continue
+        key = bare.rsplit("\t", 1)[0]
+        if key in keys:
+            return None
+        keys.add(key)
+        rows.append((key, line if line.endswith("\n") else line + "\n"))
+    return head, rows
+
+
+def three_way(b, o, t):
+    """The merged side of one value (b base, o ours, t theirs), or KeyError when both changed it differently."""
+    if o == t or t == b:
+        return o
+    if o == b:
+        return t
+    raise KeyError
+
+
+def rows_merge(base, ours, theirs):
+    """A generated table merged row by row (GENERATED FILES ARE NO OVERLAP): ours' order, theirs' added rows after the
+    row they follow there; None when a row (or the header) changed on both sides differently, or a side cannot be
+    read as a table."""
+    parsed = [table_parse(x) for x in (base, ours, theirs)]
+    if None in parsed:
+        return None
+    (bh, br), (oh, orow), (th, trow) = parsed
+    try:
+        head = three_way(bh, oh, th)
+        b, o, t = dict(br), dict(orow), dict(trow)
+        merged = {k: three_way(b.get(k), o.get(k), t.get(k)) for k in set(b) | set(o) | set(t)}
+    except KeyError:
+        return None
+    order = [k for k, _ in orow if merged.get(k) is not None]
+    theirs_order = [k for k, _ in trow]
+    for i, k in enumerate(theirs_order):
+        if merged.get(k) is None or k in order:
+            continue
+        before = next((p for p in reversed(theirs_order[:i]) if p in order), None)
+        order.insert(order.index(before) + 1 if before else 0, k)
+    text = "".join(head) + "".join(merged[k] for k in order)
+    return text if ours.endswith("\n") or not ours else text.rstrip("\n")
+
+
+def regen_here():
+    """Whether this host runs a repo's regen commands: not the server role -- ci-runner's reconciler has no JVM (its
+    checks run on CI), and a doomed command would hold a tick step for minutes."""
+    return host_role() != "server"
+
+
+def regenerate(wt, files, regenerated=None):
+    """Resolve wt's conflicted generated files over the tree as it stands (the combined tree): each merged row by row,
+    else its registry entry's regen command run in wt and its files staged. None: resolved (staged, appended to
+    `regenerated`); else why not, in words."""
+    stages = conflict_stages(wt, files)
+    if stages is None:
+        return "added or deleted on one side"
+    pending = []
+    for f in files:
+        text = rows_merge(stages[f][1], stages[f][2], stages[f][3])
+        if text is None:
+            pending.append(f)
+            continue
+        with open(os.path.join(wt, f), "w") as fh:
+            fh.write(text)
+        git(wt, "add", "--", f)
+    for g in generated_registry(wt):  # one run of each command, however many of its files conflict
+        mine = [f for f in pending if generated_entry(wt, f) is g]
+        if not mine:
+            continue
+        if not regen_here():
+            return "a row both sides changed, and the server role runs no regen command"
+        git(wt, "checkout", "--ours", "--", *mine, check=False)  # no conflict markers in what the command reads
+        limit = g.get("timeout") or env_num("AGENTCTL_GENERATED_REGEN_TIMEOUT", GENERATED_REGEN_TIMEOUT)
+        cmd = " ".join(shlex.quote(x) for x in g["regen"])
+        try:
+            r = subprocess.run(g["regen"], cwd=wt, capture_output=True, text=True, timeout=limit, env=tool_env(),
+                               stdin=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            return f"a row both sides changed, and `{cmd}` ran past {limit:.0f} s"
+        except OSError as ex:
+            return f"a row both sides changed, and `{cmd}` could not run ({ex.strerror or ex})"
+        if r.returncode != 0:
+            last = ((r.stderr or r.stdout or "").strip().splitlines() or [""])[-1][:200]
+            return f"a row both sides changed, and `{cmd}` exited {r.returncode}" + (f": {last}" if last else "")
+        git(wt, "add", "-A", "--", *g["paths"], check=False)
+        left = sorted(set(unmerged(wt)) & set(mine))
+        if left:
+            return f"`{cmd}` left {', '.join(left)} unresolved"
+        stray = git(wt, "diff", "--name-only", check=False).stdout.split()  # what else it wrote: never picked along
+        if stray:
+            git(wt, "checkout", "--", *stray, check=False)
+    if regenerated is not None:
+        regenerated.extend(f for f in files if f not in regenerated)
+    return None
+
+
+def conflict_resolve(wt, regen=True, notes=None, regenerated=None):
+    """Resolve wt's conflicted files when each is UNION_SAFE prose (both sides kept) or a registered generated file
+    (regenerate; only with regen): the files resolved (staged), or None (nothing it can resolve; (files, why) appended
+    to `notes` when generated files' resolution failed)."""
+    files = unmerged(wt)
+    if not files:
+        return None
+    gen = [f for f in files if generated_entry(wt, f)]
+    prose = [f for f in files if f not in gen]
+    if not all(union_safe(f) for f in prose) or (gen and not regen):
+        return None
+    if prose and union_resolve(wt, prose) is None:
+        return None
+    if gen:
+        why = regenerate(wt, gen, regenerated)
+        if why:
+            if notes is not None:
+                notes.append((gen, why))
+            return None
+    return files
+
+
+def pick(wt, commits, dropped=None, regen=True, regenerated=None):
     """Cherry-pick commits onto wt's HEAD, one at a time: None, or the conflicting files (the pick aborted, HEAD back
     where it was). A commit already in HEAD's history (patch-equivalent), or empty once picked, is DROPPED, never kept
     as an empty commit: appended to `dropped` as (commit, the commit of HEAD carrying it, or None). A deliberate empty
@@ -258,7 +448,10 @@ def pick(wt, commits, dropped=None):
 
     PATCH-EQUIVALENT COMMITS ARE DROPPED BEFORE THE PICK, not only when the pick comes out empty: a change whose patch
     main carries already, but whose lines main has since changed back (a revert), applies cleanly and non-empty --
-    and landed the same change a second time (simplification-2026-10-31 item 10: three subjects landed 2-3 times)."""
+    and landed the same change a second time (simplification-2026-10-31 item 10: three subjects landed 2-3 times).
+
+    A conflict only in prose or registered generated files is resolved and the pick goes on (conflict_resolve; regen
+    False: generated files left conflicting); a generated file's failed resolution is named, with why, in the files."""
     start = git(wt, "rev-parse", "HEAD").strip()
     on_head = upstream_patch_ids(wt, commits[0], start) if commits else {}
     for c in commits:
@@ -269,10 +462,11 @@ def pick(wt, commits, dropped=None):
                 dropped.append((c, via))
             continue
         r = git(wt, "cherry-pick", "--allow-empty", "--keep-redundant-commits", c, check=False)
-        if r.returncode != 0 and union_resolve(wt):
+        notes = []
+        if r.returncode != 0 and conflict_resolve(wt, regen, notes, regenerated):
             r = git(wt, "-c", "core.editor=true", "cherry-pick", "--continue", check=False)
         if r.returncode != 0:
-            files = git(wt, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
+            files = unmerged(wt)
             git(wt, "cherry-pick", "--abort", check=False)
             via = equivalent_on(wt, c, before) if files else None
             if via:  # its patch is already there, and a later change to the same lines conflicts with it again
@@ -281,7 +475,9 @@ def pick(wt, commits, dropped=None):
                     dropped.append((c, via))
                 continue
             git(wt, "reset", "--hard", "-q", start)
-            return files or [r.stderr.strip()[:200]]
+            noted = {f for gen, _why in notes for f in gen}
+            return ([f for f in files if f not in noted] + [f"{', '.join(gen)} (generated: {why})" for gen, why in notes]
+                    if files else [r.stderr.strip()[:200]])
         if is_empty_commit(wt, "HEAD") and not deliberate_empty(wt, c):
             git(wt, "reset", "--hard", "-q", before)
             if dropped is not None:
@@ -289,14 +485,18 @@ def pick(wt, commits, dropped=None):
     return None
 
 
-def apply_entry(d, wt, e, base):
+def apply_entry(d, wt, e, base, regen=True):
     """Pick the entry's commits onto wt's HEAD (base, or base plus earlier entries): ('ok', None), ('conflict', files),
     ('landed', via) or ('duplicate', via). A commit already on MAIN (base's history) is dropped from the entry for good
     (a partly landed entry keeps only the rest); one only an earlier entry carries is left out of this build alone (that
     entry may still be rejected). Nothing left of it on main: 'landed' -- the caller says LANDED, never pushes empty."""
     first = git(wt, "rev-parse", "HEAD").strip() == base
-    dropped = []
-    conflict = pick(wt, e["commits"], dropped)
+    dropped, regenerated = [], []
+    conflict = pick(wt, e["commits"], dropped, regen, regenerated)
+    if regenerated:  # resolved by regeneration in this build (GENERATED FILES ARE NO OVERLAP): a failure is not its own
+        e["regenerated"] = sorted(regenerated)
+    else:
+        e.pop("regenerated", None)
     if conflict:
         return "conflict", conflict
     if not dropped:

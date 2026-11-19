@@ -324,7 +324,7 @@ def recheck_reason(tree, base, moved, tip, change_paths, full_tip=None):
                 build_view_change(tree, full_tip, tip, change_paths, new)
         if moves:
             return n, f"they change {(builds or build)[0]}, and {moves}"
-    same = sorted(set(landed_paths) & set(change_paths))
+    same = without_generated(tree, sorted(set(landed_paths) & set(change_paths)))  # regenerated: the ratchet judges
     if same:
         return n, f"both touch {same[0]}" + (f" (+{len(same) - 1} more)" if len(same) > 1 else "")
     for deleted, readers, whose in ((range_paths(tree, base, moved, deleted=True), change_paths, "they delete"),
@@ -1184,12 +1184,15 @@ def change_rows(store=None):
     return sorted(rows, key=lambda r: r["id"])
 
 
-def rebase_in_tree(d, tree, e, base):
-    """The entry's commits on base, in the tree: (head, None); (None, None) on a conflict (aborted); (None, via) when
-    every commit is on base already (dropped: LANDED via that commit, never an empty push)."""
+def rebase_in_tree(d, tree, e, base, regen=True, conflicts=None):
+    """The entry's commits on base, in the tree: (head, None); (None, None) on a conflict (aborted; its files appended
+    to `conflicts`); (None, via) when every commit is on base already (dropped: LANDED via that commit, never an empty
+    push). regen False: a conflict in a generated file is left a conflict (waiting.py conflict_resolve)."""
     git(tree, "checkout", "-q", "--force", "--detach", base)
-    how, x = apply_entry(d, tree, e, base)
+    how, x = apply_entry(d, tree, e, base, regen=regen)
     if how == "conflict":
+        if conflicts is not None:
+            conflicts.extend(x or [])
         return None, None
     if how in ("landed", "duplicate"):
         return None, x or "an equivalent commit"
@@ -1555,10 +1558,19 @@ def _push_change(repo, d, e, i):
         base, head, where, skip = e["checked_base"], e["tip"], e.get("checked_where") or "", None
         full_base = e.get("full_base") or base
         if moved != base:
-            new_head, via = rebase_in_tree(d, tree, e, moved)
+            conflicts = []  # no regen command under the landing lock: a generated file's conflict is a new round's
+            new_head, via = rebase_in_tree(d, tree, e, moved, regen=False, conflicts=conflicts)
             if via:
                 already_landed(d, e, via if via != "an equivalent commit" else None)
                 return "landed"
+            if not new_head and conflicts and not [f for f in without_generated(tree, conflicts) if not union_safe(f)]:
+                what = (f"main moved by what conflicts with it only in generated files ({', '.join(conflicts[:3])}): "
+                        "a new round, which regenerates them over the combined tree")
+                set_change(d, e, "queued", data={"rounds": e.get("rounds", 0) + 1},
+                           event={"text": f"{e['id']}: {what}"}, rounds=e.get("rounds", 0) + 1, retry_after=0,
+                           verify=True)
+                wlog(d, f"{e['id']}: {what}: queued for a new round")
+                return "queued"
             if not new_head:
                 queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {remote()}/main "
                               f"{moved[:10]} (main moved during its checks): rebase onto {remote()}/main and land again")
@@ -1843,12 +1855,17 @@ def pair_conflict(repo, older, younger):
     return [x for x in r.stdout.splitlines()[1:] if x.strip()] or ["(a file both change)"]
 
 
-def overlap_of(repo, older, younger):
-    """(the files both change, the files they conflict in or None), per pair of heads (cached in the process)."""
-    key = (older["id"], older.get("head"), younger["id"], younger.get("head"))
+def overlap_of(repo, older, younger, strict=False):
+    """(the files both change, the files they conflict in or None), per pair of heads (cached in the process); the
+    repo's generated files are neither (GENERATED FILES ARE NO OVERLAP, waiting.py) unless strict (a change whose
+    generated files could not be resolved: held as before)."""
+    key = (older["id"], older.get("head"), younger["id"], younger.get("head"), strict)
     if key not in _overlap_known:
         shared = sorted(set(change_paths_of(repo, older) or []) & set(change_paths_of(repo, younger) or []))
-        _overlap_known[key] = (shared, pair_conflict(repo, older, younger) if shared else None)
+        shared = shared if strict else without_generated(repo, shared)
+        conflict = pair_conflict(repo, older, younger) if shared else None
+        conflict = conflict if strict or not conflict else (without_generated(repo, conflict) or None)
+        _overlap_known[key] = (shared, conflict)
     return _overlap_known[key]
 
 
@@ -1860,7 +1877,8 @@ def main_conflict(repo, e):
         return None
     key = ("main", main, e["id"], e.get("head"))
     if key not in _overlap_known:
-        _overlap_known[key] = pair_conflict(repo, {"id": "main", "head": main}, e)
+        files = pair_conflict(repo, {"id": "main", "head": main}, e)
+        _overlap_known[key] = without_generated(repo, files) if files else files  # regenerated in its rebase
     files = _overlap_known[key]
     return (main, files) if files else None
 
@@ -1879,7 +1897,7 @@ def overlap_hold(repo, d, e, entries, reds, t):
         if o["id"] == e["id"] or o.get("status") not in OVERLAP_OLDER \
                 or same_change_source(o, e["worktree"], e.get("branch") or ""):  # its own older version: superseded
             continue
-        shared, conflict = overlap_of(repo, o, e)
+        shared, conflict = overlap_of(repo, o, e, strict=e.get("batch_alone") == "regen")
         if not shared:
             continue
         if conflict is None and o.get("status") == "queued" and not o.get("backlog_batch"):

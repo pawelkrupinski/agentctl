@@ -34,6 +34,9 @@ case "$1" in --plan) ;; esac
 exit 0
 """
 SBT_MODULES = ("web", "worker", "common", "scrapers", "geodata", "identity")
+# the simulated repo's GENERATED files (red-repos.json `generated`; waiting.py GENERATED FILES ARE NO OVERLAP)
+GENERATED = ("test/resources/coupling-baseline.tsv", "test/resources/complexity-baseline.tsv",
+             "test/resources/length-baseline.tsv", "test/resources/duplication-baseline.tsv")
 
 
 class KeptConnection:
@@ -108,6 +111,8 @@ class Patch:
     def __init__(self, pid, cid, paths, fixes=(), bad=False, conflicts=()):
         self.pid, self.cid, self.paths, self.fixes = pid, cid, list(paths), set(fixes)
         self.bad, self.conflicts = bad, set(conflicts)
+        self.gen_conflicts = set()  # the patches it conflicts with textually in GENERATED files only (adjacent rows)
+        self.regen_fails = False  # its generated files' resolution fails (no JVM where the queue runs, a timeout)
 
 
 class Change:
@@ -196,6 +201,7 @@ class Sim:
         self.rejected_handled = set()
         self.arrivals = self._plan_arrivals()
         self.n_lone_red = 0
+        self.holds = {}  # entry id -> [(tick, hold kind, blocking entry, files)]
 
     # ---------------------------------------------------------------- the model's git
     def anc(self, sha):
@@ -315,11 +321,11 @@ class Sim:
         return sorted({p for pid in self.patches_of(y) - self.patches_of(x) for p in self.patches[pid].paths})
 
     # ---------------------------------------------------------------- the fakes
-    def apply_entry(self, d, wt, e, base):
+    def apply_entry(self, d, wt, e, base, regen=True):
         wt = os.path.realpath(wt)
         head = self.heads[wt]
         on_base, on_head = self.patches_of(base), self.patches_of(head)
-        new, gone, dup = head, [], []
+        new, gone, dup, regenerated = head, [], [], set()
         for c in e["commits"]:
             pid = self.commits[c][1]
             if pid in on_base:
@@ -332,6 +338,16 @@ class Sim:
             hit = (p.conflicts & self.patches_of(new)) - self.patches_of(self.commits[c][0])
             if hit:
                 return "conflict", sorted({x for h in hit for x in self.patches[h].paths} & set(p.paths)) or p.paths
+            gen = (p.gen_conflicts & self.patches_of(new)) - self.patches_of(self.commits[c][0])
+            if gen:  # the real pick's resolution (waiting.py conflict_resolve), where the code has it
+                files = sorted({x for h in gen for x in self.patches[h].paths} & set(p.paths) & set(GENERATED))
+                known = getattr(A, "generated_entry", None)
+                if not (regen and known and all(known(wt, f) for f in files)):
+                    return "conflict", files
+                if p.regen_fails:
+                    return "conflict", [f"{', '.join(files)} (generated: a row both sides changed, and the regen "
+                                        "command could not run)"]
+                regenerated |= set(files)
             new = self.child(new, pid)
         if gone:
             dropped = {c for c, _v in gone}
@@ -341,6 +357,10 @@ class Sim:
                 return "landed", gone[-1][1]
         if dup and len(dup) == len(e["commits"]):
             return "duplicate", dup[-1][1]
+        if regenerated:
+            e["regenerated"] = sorted(regenerated)
+        else:
+            e.pop("regenerated", None)
         self.heads[wt] = new
         return "ok", None
 
@@ -386,9 +406,11 @@ class Sim:
             return None
         common = max(self.anc(a) & self.anc(b), key=lambda c: len(self.anc(c)))  # git merge-tree: their merge base
         mine, theirs = self.patches_of(b) - self.patches_of(common), self.patches_of(a) - self.patches_of(common)
+        both = sorted({x for p in mine for x in self.patches[p].paths} & {x for p in theirs for x in self.patches[p].paths})
         if any(self.patches[p].conflicts & theirs for p in mine):
-            return sorted({x for p in mine for x in self.patches[p].paths} & {x for p in theirs for x in self.patches[p].paths}) \
-                or ["?"]
+            return both or ["?"]
+        if any(self.patches[p].gen_conflicts & theirs for p in mine):  # git merge-tree names the generated files
+            return [x for x in both if x in GENERATED] or ["?"]
         return None
 
     def change_of_sha(self, sha):
@@ -511,6 +533,11 @@ class Sim:
             f.write(HOOK_TEXT)
         os.chmod(self.hook, 0o755)
         self.heads[self.repo] = ROOT
+        repos = os.path.join(self.tmp, "red-repos.json")
+        with open(repos, "w") as f:
+            json.dump({"repos": [{"repo": "sim/movies", "gate": [["Main", "main.yml"]], "push": "land",
+                                  "generated": [{"paths": list(GENERATED), "regen": "true"}]}]}, f)
+        os.environ.update(AGENTCTL_RED_REPOS=repos)
         os.environ.update(AGENTCTL_STATE_ROOT=os.path.join(self.tmp, "state"), AGENTCTL_ROLE="server",
                           AGENTCTL_CHECK_TREES=str(self.trees), AGENTCTL_CHECK_LEASE_TTL="600",
                           AGENTCTL_STATS_URL="http://sim", AGENTCTL_STATS_SETTLE="0",
@@ -706,6 +733,14 @@ class Sim:
                 self.patches[q].conflicts = (self.patches[q].conflicts - {"*future*"}) | set(pids)
             for q in pids:
                 self.patches[q].conflicts |= set(c.patches)
+        for label in spec.get("gen_conflicts_with") or ():  # adjacent rows of a generated file: a textual conflict there
+            other = next(c for c in reversed(self.changes) if c.label == label)
+            for q in other.patches:
+                self.patches[q].gen_conflicts |= set(pids)
+            for q in pids:
+                self.patches[q].gen_conflicts |= set(other.patches)
+        for q in pids:
+            self.patches[q].regen_fails = bool(spec.get("regen_fails"))
         ch = Change(cid, worktree, kind, pids, base, head, self.chain(base, head), self.tick,
                     no_batch=kind == "nobatch")
         ch.outcome = spec.get("outcome")
@@ -831,6 +866,18 @@ class Sim:
             A.wlog(self.d, f"tick {self.tick}: {x}")
         if self.tick % 10 == 0:
             A.stats_pass(self.repo, self.d)
+        for it in A.Store().items("change"):  # what held each change, tick by tick (the overlap tests read it)
+            hold = (it.get("data") or {}).get("hold")
+            if hold and it["state"] == "queued":
+                self.holds.setdefault(it["id"], []).append((self.tick, hold.get("kind"), hold.get("blocker"),
+                                                            tuple(hold.get("files") or ())))
+                # 10. GENERATED FILES ARE NO OVERLAP: no change held behind another for generated files alone (but
+                # one whose own generated files could not be resolved, held as before)
+                entry = self.entry_by_id(it["id"]) or {}
+                if hold.get("kind") == "overlap" and hold.get("files") and set(hold["files"]) <= set(GENERATED) \
+                        and entry.get("batch_alone") != "regen":
+                    self.violate(f"change {it['id']} held behind {hold.get('blocker')} for generated files alone: "
+                                 f"{', '.join(hold['files'])}")
         self.check_invariants(before, reds)
         self.tick += 1
         self.clock[0] += TICK
@@ -1032,3 +1079,32 @@ COLLISIONS_2026_11_17 = [
 def replay_days():
     with open(os.path.join(HERE, "fixtures", "landing-replay-7d.json")) as f:
         return json.load(f)["days"]
+
+
+# THE BASELINE QUEUE OF 2026-11-19 (~06:05Z): six changes from parallel refactoring lanes, each editing
+# coupling-baseline.tsv (several complexity- and length-baseline.tsv too), each `held: its check waits for <prev>`
+# behind the one queued before it; f2 and enrichment2 also share a real source, TestWiring.scala. The resolver lanes
+# and enrichment2 are identity changes (checked alone). GENERATED FILES ARE NO OVERLAP (waiting.py): only the
+# TestWiring.scala overlap still holds.
+COUPLING, COMPLEXITY, LENGTH = GENERATED[:3]
+TEST_WIRING = "worker/src/fixtures/scala/tools/TestWiring.scala"
+BASELINES_2026_11_19 = [
+    (0, {"label": "agreement", "worktree": "phase3-agreement",
+         "paths": ["web/src/main/Agreement.scala", COUPLING, COMPLEXITY]}),
+    (0, {"label": "f2", "worktree": "phase3-f2", "paths": ["web/src/main/F2.scala", TEST_WIRING, COUPLING, LENGTH]}),
+    (1, {"label": "datalayer3", "worktree": "phase3-datalayer3",
+         "paths": ["common/src/main/DataLayer.scala", COUPLING, COMPLEXITY, LENGTH]}),
+    (1, {"label": "resolver2-b1", "worktree": "phase3-resolver2-b1", "kind": "identity",
+         "paths": ["identity/src/main/ResolverB1.scala", COUPLING]}),
+    (2, {"label": "enrichment2", "worktree": "phase3-enrichment2", "kind": "identity",
+         "paths": ["identity/src/main/Enrichment.scala", TEST_WIRING, COUPLING, COMPLEXITY]}),
+    (2, {"label": "resolver2", "worktree": "phase3-resolver2", "kind": "identity",
+         "paths": ["identity/src/main/Resolver.scala", COUPLING, LENGTH]}),
+]
+
+
+def landing_waits(sim):
+    """{label: ticks from its arrival to its decision} of every scripted change that landed."""
+    on_main = sim.patches_of(sim.main)
+    return {c.label: sim.done_at[c.cid] - c.arrived for c in sim.changes
+            if c.cid in sim.done_at and set(c.patches) <= on_main}

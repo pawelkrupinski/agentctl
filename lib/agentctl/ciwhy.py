@@ -49,12 +49,30 @@ def red_repos_parse(raw):
             raise ValueError(f"{repo}: `push` must be one of {', '.join(RED_PUSH_POLICIES)}, not {push!r}")
         clone = x.get("clone")
         out.append({"repo": repo, "gate": [tuple(g) for g in gate], "family": x.get("family"), "push": push,
-                    "clone": os.path.expanduser(clone) if clone else None})
+                    "clone": os.path.expanduser(clone) if clone else None,
+                    "generated": generated_parse(repo, x.get("generated"))})
     if len({c["repo"] for c in out}) != len(out):
         raise ValueError("a repo is listed twice")
     if not any(c["repo"] == RED_PRIMARY for c in out):
         out.insert(0, red_repos_parse({"repos": RED_REPOS_DEFAULT})[0])
     return sorted(out, key=lambda c: c["repo"] != RED_PRIMARY)
+
+
+def generated_parse(repo, raw):
+    """A repo's GENERATED FILES (waiting.py): [{paths: [glob], regen: [argv], timeout: s}] from its `generated` entries
+    (`{"paths": [...], "regen": "<command run in the tree>", "timeout": <s, optional>}`). Raises ValueError."""
+    out = []
+    for g in raw or []:
+        paths, regen = (g or {}).get("paths"), (g or {}).get("regen")
+        if not paths or not all(isinstance(p, str) and p and not p.startswith("/") for p in paths) \
+                or not isinstance(regen, str) or not regen.strip():
+            raise ValueError(f"{repo}: a `generated` entry needs `paths: [<repo path or glob>, ...]` and `regen: "
+                             f"<command>`: {g!r}")
+        timeout = g.get("timeout")
+        if timeout is not None and not (isinstance(timeout, (int, float)) and timeout > 0):
+            raise ValueError(f"{repo}: a `generated` entry's `timeout` is seconds > 0: {g!r}")
+        out.append({"paths": list(paths), "regen": shlex.split(regen), "timeout": timeout})
+    return out
 
 
 def red_repos():

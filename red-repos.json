@@ -1,11 +1,15 @@
 {
-  "_doc": "The repos agentctl's red machine watches (the owner, 2026-10-30, ci-failures recommendation 4: infra's Stage NixOS closures was red 29 h and core's Main Pipeline 21 h with no fixer). One entry per GitHub repo: `gate` its gate workflows ([name, file]: the newest decided run of each opens and clears its reds), `family` the red family every red of the repo belongs to (red-families.json says how it is held: one fixer per family), `push` `land` (its fixer lands with `agentctl land`) or `owner-only` (its fixer prepares the fix on a local branch and files the owner a one-liner with `agentctl red owner-push`; it never pushes or deploys: an infra push IS a deploy), `clone` the laptop's checkout fixers' worktrees branch from. The primary repo (movies) keeps everything it had: its gate stays GATING in lib/agentctl/ciwhy.py, its outside workflows, local checks and landing gate. $AGENTCTL_RED_REPOS names another file.",
+  "_doc": "The repos agentctl's red machine watches (the owner, 2026-10-30, ci-failures recommendation 4: infra's Stage NixOS closures was red 29 h and core's Main Pipeline 21 h with no fixer). One entry per GitHub repo: `gate` its gate workflows ([name, file]: the newest decided run of each opens and clears its reds), `family` the red family every red of the repo belongs to (red-families.json says how it is held: one fixer per family), `push` `land` (its fixer lands with `agentctl land`) or `owner-only` (its fixer prepares the fix on a local branch and files the owner a one-liner with `agentctl red owner-push`; it never pushes or deploys: an infra push IS a deploy), `clone` the laptop's checkout fixers' worktrees branch from. The primary repo (movies) keeps everything it had: its gate stays GATING in lib/agentctl/ciwhy.py, its outside workflows, local checks and landing gate. $AGENTCTL_RED_REPOS names another file. `generated` (optional): the repo's GENERATED files ([{paths, regen, timeout}]: lib/agentctl/waiting.py GENERATED FILES ARE NO OVERLAP), never an overlap that holds a queued change, and resolved on a rebase or a batch's assembly row by row, else by `regen` (the repo's own --update command, run in the tree).",
   "repos": [
     {"repo": "pawelkrupinski/movies",
      "clone": "~/projects/movies",
      "gate": [["Main", "main.yml"], ["Identity model convergence", "identity-model-convergence.yml"],
               ["Identity takes", "identity-takes.yml"]],
-     "push": "land"},
+     "push": "land",
+     "generated": [
+       {"paths": ["test/resources/coupling-baseline.tsv"], "regen": "scripts/coupling-report --update"},
+       {"paths": ["test/resources/complexity-baseline.tsv", "test/resources/length-baseline.tsv",
+                  "test/resources/duplication-baseline.tsv"], "regen": "scripts/quality-report --update"}]},
     {"repo": "bitcashier/infra",
      "clone": "~/bitcashier/infra",
      "gate": [["Stage NixOS closures", "nix-stage-closures.yaml"]],

@@ -14,7 +14,8 @@ after every tick:
   7. the stats: exactly one agentctl.landing record per decided change;
   8. a change that no longer applies because of a change open when it was queued was told at queue time (CONFLICTS,
      or NOT LANDED at its first tick) and never checked meanwhile;
-  9. no full recheck for a file overlap with a change that was open when it was queued (checked as one instead).
+  9. no full recheck for a file overlap with a change that was open when it was queued (checked as one instead);
+  10. no change held behind another for generated files alone (GENERATED FILES ARE NO OVERLAP, waiting.py).
 
 200 random seeds run in the suite (8 tests of 25, in parallel); $AGENTCTL_TEST_SIM_SEEDS runs more. The fixed seeds
 replay real days (victoria-logs-ci `record:agentctl.landing`, tests/fixtures/landing-replay-7d.json) and the bugs the
@@ -110,6 +111,54 @@ class CollisionTest(unittest.TestCase):
             self.assertEqual(sim.checks_of.get(st[label].eid, 0), 0, f"{label}: no check was spent on it")
 
 
+class GeneratedOverlapTest(unittest.TestCase):
+    """GENERATED FILES ARE NO OVERLAP (waiting.py; 2026-11-19 ~06:05Z): six changes, each editing coupling-baseline.tsv,
+    each held behind the one before it -- hours of serial checks. Replayed (queue_sim.BASELINES_2026_11_19): no hold for
+    the baselines; the real source two of them share (TestWiring.scala, f2 and enrichment2) still holds. Measured over
+    seeds 0-19, 4 check trees: before, mean 8.2 ticks from queued to landed, max 18 (one at a time, whatever the trees);
+    after, mean 5.3, max 11."""
+
+    def run_seeds(self, seeds, script=None, trees=4):
+        sims = [queue_sim.Sim(seed, calm=True, trees=trees, script=list(script or queue_sim.BASELINES_2026_11_19)).run()
+                for seed in seeds]
+        self.assertEqual(failures(sims), [])
+        return sims
+
+    def test_the_baseline_queue_of_2026_11_19_holds_only_on_test_wiring(self):
+        for sim in self.run_seeds(range(4)):
+            label = {c.eid: c.label for c in sim.changes}
+            held = {(label[eid], label.get(b), f) for eid, hs in sim.holds.items() for _t, k, b, f in hs if k == "overlap"}
+            self.assertEqual(held, {("enrichment2", "f2", (queue_sim.TEST_WIRING,))}, f"seed {sim.seed}")
+            self.assertEqual(len(queue_sim.landing_waits(sim)), 6, "every change landed")
+
+    def test_the_six_changes_land_sooner(self):
+        import statistics
+        waits = [w for sim in self.run_seeds(range(20)) for w in queue_sim.landing_waits(sim).values()]
+        self.assertLessEqual(max(waits), 12, "before: 18 ticks, the six one at a time")
+        self.assertLess(statistics.mean(waits), 6.5, "before: 8.2 ticks")
+
+    def test_a_conflict_in_generated_rows_is_resolved_in_the_batch(self):
+        """Adjacent rows of coupling-baseline.tsv: git conflicts, the rows merge (or regenerate): one batch, both land."""
+        script = [(0, {"label": "a", "worktree": "a", "paths": ["web/src/main/A.scala", queue_sim.COUPLING]}),
+                  (0, {"label": "b", "worktree": "b", "paths": ["worker/src/main/B.scala", queue_sim.COUPLING],
+                       "gen_conflicts_with": ["a"]})]
+        for sim in self.run_seeds(range(3), script):
+            self.assertEqual(sorted(queue_sim.landing_waits(sim)), ["a", "b"])
+            self.assertTrue(any(len(p[2]) >= 2 for p in sim.pushes), "pushed as one batch")
+            self.assertEqual([h for hs in sim.holds.values() for h in hs if h[1] == "overlap"], [], "nothing held")
+
+    def test_a_member_whose_generated_files_cannot_be_resolved_is_checked_alone_and_held_as_before(self):
+        script = [(0, {"label": "a", "worktree": "a", "paths": ["web/src/main/A.scala", queue_sim.COUPLING]}),
+                  (0, {"label": "b", "worktree": "b", "paths": ["worker/src/main/B.scala", queue_sim.COUPLING],
+                       "gen_conflicts_with": ["a"], "regen_fails": True})]
+        for sim in self.run_seeds(range(3), script):
+            self.assertIn("a", queue_sim.landing_waits(sim))
+            self.assertNotIn("b", queue_sim.landing_waits(sim), "it no longer applies once a landed: NOT LANDED")
+            label = {c.eid: c.label for c in sim.changes}
+            held = {(label[eid], label.get(b)) for eid, hs in sim.holds.items() for _t, k, b, _f in hs if k == "overlap"}
+            self.assertEqual(held, {("b", "a")}, "left out of the batch, it waits for a as before")
+
+
 # THE SIMULATOR CATCHES A REVERTED FIX: agentctl copied, one fix undone, the profile run on the copy must fail an
 # invariant. A mutation whose anchor is gone fails here, naming it: update it with the code.
 MUTATIONS = {
@@ -123,6 +172,9 @@ MUTATIONS = {
         '    held = backlog_held(repo, d, reds, st, t)\n'
         '    pheld = push_held(repo, d, reds, st, t)\n'
         '    for phase in ("push", "check"):\n', "load"),
+    "generated files are no overlap": (
+        "        shared = shared if strict else without_generated(repo, shared)\n",
+        "", "baselines"),
     "overlapping changes are checked as one": (
         '    if e.get("backlog_batch"):\n        return None\n    together, first = None, None',
         '    return None  # MUTATION\n    together, first = None, None', "collisions"),
@@ -132,6 +184,8 @@ sys.path.insert(0, sys.argv[1])
 import queue_sim, test_queue_sim as T
 if sys.argv[2] == "collisions":
     bad = queue_sim.Sim(17, calm=True, script=list(queue_sim.COLLISIONS_2026_11_17)).run().violations[:1]
+elif sys.argv[2] == "baselines":
+    bad = queue_sim.Sim(0, calm=True, script=list(queue_sim.BASELINES_2026_11_19)).run().violations[:1]
 else:
     bad = [v for seed in range(3) for v in queue_sim.Sim(seed, calm=True, trees=1, profile=T.LOAD,
                                                          n_changes=T.LOAD["n"]).run().violations[:1]]

@@ -868,11 +868,15 @@ def check_batch(repo, bid):
             batch_fail(st, d, it, "it failed, then every prefix passed on its own (flaky or infra)", len(members))
             return 0
         bad = members[culprit]
-        alone = depth in DEEP_BATCHES and not culprit_own_failure(repo, d, bad, base, cout)
+        # a member whose generated files the batch resolved (GENERATED FILES ARE NO OVERLAP, waiting.py) failing is
+        # the resolution's as much as its own: its own check, on main, judges it
+        regenerated = bad.get("regenerated")
+        alone = depth in DEEP_BATCHES and (bool(regenerated) or not culprit_own_failure(repo, d, bad, base, cout))
         if alone:  # not shown to be its own: its own check judges it (a base red, a time cap, an infra failure)
-            bad["batch_alone"] = bid
+            bad["batch_alone"] = "regen" if regenerated else bid
             save_entry(d, bad)
-            wlog(d, f"batch {bid}: {bad['id']}'s prefix fails, but not shown to be by its own fault: checked alone")
+            wlog(d, f"batch {bid}: {bad['id']}'s prefix fails, but not shown to be by its own fault"
+                    + (f" (its {', '.join(regenerated)} resolved in the batch)" if regenerated else "") + ": checked alone")
         else:
             queue_verdict(d, bad, "rejected", f"NOT LANDED: the checks failed with your change in the batch (entry "
                                               f"{bad['id']})\n  {tail_of(cout)}", cout.splitlines()[-25:])
