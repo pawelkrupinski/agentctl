@@ -2489,6 +2489,8 @@ def red_block(o_r, a):
     except (Exception, SystemExit):
         if not known:
             name, _r = resolve_run(o_r, n)
+    if known and name and name != known[0]["data"].get("workflow"):  # a bare NUMBER another workflow's run also has
+        name, units = None, []  # (issue 20261107T072345-7bca40: `red block 14` read Report run timings #14): the red's
     if known and not units:  # issue 20261119T030011-293b9a: a key, or a run whose units no longer read (a green rerun)
         name = name or known[0]["data"].get("workflow")
         units = [{"kind": it["data"].get("kind"), "line": it["data"].get("line"), "job": it["data"].get("job")}
