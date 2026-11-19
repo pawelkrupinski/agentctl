@@ -757,7 +757,7 @@ def red_merge_rekeyed(store, active, obs):
                 or d.get("classifier") == cv:
             continue  # keyed by THIS classifier: a re-read of its run under other keys clears nothing (cf. red_gone)
         runs = set(map(str, d.get("runs") or []))
-        jobs = {str(j) for j in (d.get("jobs") or [d.get("job")]) if j and j != "?"}
+        jobs = {str(j) for j in (d.get("jobs_seen") or d.get("jobs") or [d.get("job")]) if j and j != "?"}
         into = [o for o in obs.values() if o["key"] != key and o["key"] in active and o["workflow"] == d.get("workflow")
                 and runs & set(map(str, o.get("names") or ())) and jobs & set(o.get("jobs") or ())]
         if not into:
@@ -1802,8 +1802,12 @@ def red_attach_obs(store, it, ob):
     if runs == d.get("runs") and not newer and sorted(ob["jobs"]) == sorted(d.get("jobs") or []) \
             and d.get("classifier") == cv:
         return it
-    upd = {"runs": runs, "jobs": sorted(set(d.get("jobs") or []) | set(ob["jobs"])),
-           "classifier": cv}  # observed under this classifier's key
+    # THE JOBS FAILING NOW (issue 20261104T040527-1b4212: convergence #834's prompt named the German leg, which failed
+    # in #818 and passed in #834): a newer run's failing jobs replace the red's; every job it was ever seen failing stays
+    # in jobs_seen, which the re-keyed merge matches on
+    seen = sorted(set(d.get("jobs_seen") or d.get("jobs") or []) | set(ob["jobs"]))
+    upd = {"runs": runs, "jobs": sorted(ob["jobs"]) if newer else sorted(set(d.get("jobs") or []) | set(ob["jobs"])),
+           "jobs_seen": seen, "classifier": cv}  # observed under this classifier's key
     if newer:
         upd["last_run"] = ob["run"]
     for attempt in range(5):  # a ticking writer moved it (StaleVersion): re-read and re-apply, never lose the attach --
