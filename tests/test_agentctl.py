@@ -20,6 +20,10 @@ _loader = importlib.machinery.SourceFileLoader("agentctl", TOOL)
 _spec = importlib.util.spec_from_loader("agentctl", _loader)
 A = importlib.util.module_from_spec(_spec)
 _loader.exec_module(A)
+# THE GH TALLY NEVER PRINTS INTO A TEST (2026-11-19, a042390's CI): a worker process alive past GH_TALLY_SECONDS (a
+# suite over 300 s on a slow runner) printed its `agentctl: github calls (pid ...)` tally into a fixer land's captured
+# output, and three test_red_fix_lands_fast tests read it as the land's last line. test_forge's tally test sets its own.
+A.GH_TALLY_SECONDS = 10 ** 9
 
 
 # agentctl's OWN `time` and `subprocess` (82fdc89, made universal by the harness): tests fake the clock and the waits
