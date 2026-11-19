@@ -252,3 +252,20 @@ class LostHeartbeatVerdictTest(OwnerBase):
         self.assertIn("DIAGNOSED", hist + " " + str(self.reds()[key]["data"].get("diagnosis")),
                       f"the turn's DIAGNOSED verdict reached the red: {hist!r}")
 
+
+class LongVerdictTest(OwnerBase):
+    """Issue 20261101T082701-ab1154: a long cause before `; decide:` hides the decision when the stored verdict is cut
+    (the lease outcome is what red_decision_needed parses; owner.release and the fixer wrapper cut it at 600)."""
+
+    def test_a_long_diagnosis_keeps_its_decide_clause_in_the_outcome_the_red_parses(self):
+        cause = "DIAGNOSED: " + "the runner pool saturates under load because of a long chain of causes; " * 10
+        verdict = cause + "decide[deploy]: re-pin ci-runner's scheduler and deploy it"
+        self.assertGreater(len(cause), 600)
+        os.environ["FAKE_CLAUDE_RESULT"] = verdict
+        self.addCleanup(os.environ.pop, "FAKE_CLAUDE_RESULT", None)
+        self.tick(dispatch=True)
+        row = self.st.get(A.red_lease(self.only()["data"]["key"]))
+        self.assertTrue(self.wait(lambda: str(A.lease_meta(self.st.get(row["name"])).get("outcome") or "")
+                                  .startswith("DIAGNOSED")))
+        outcome = str(A.lease_meta(self.st.get(row["name"])).get("outcome"))
+        self.assertIsNotNone(A.RED_DECIDE.search(outcome), f"the decision survives the stored outcome ({len(outcome)} chars)")
