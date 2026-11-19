@@ -250,7 +250,9 @@ def render_red_status(m, verbose=False):
                    + f": {r['text']}")
         if verbose:
             out += [f"      {h.get('at')} {h.get('holder')}: {str(h.get('outcome'))[:140]}" for h in r["history"]]
-    for f in m.get("families") or []:
+    unread = {k: m[k]["error"] for k in ("families", "owners") if isinstance(m.get(k), dict) and "error" in m[k]}
+    out += [f"{k}: unread ({e})" for k, e in unread.items()]  # a timed-out section (status_sources) is no list
+    for f in [] if "families" in unread else m.get("families") or []:
         if f.get("holder") and f.get("at_work") is False:  # never "leased ... none at work": orphaned, re-offered
             who = f"ORPHANED LEASE ({f['holder']}: {f.get('work')}) -> revoked and re-offered at the next tick"
         elif f.get("holder"):
@@ -259,7 +261,7 @@ def render_red_status(m, verbose=False):
         else:
             who = "none at work"
         out.append(f"family {f['family']}: {f['open']} open red(s), ONE fixer: {who}")
-    for o in m.get("owners") or []:
+    for o in [] if "owners" in unread else m.get("owners") or []:
         if o.get("worktree"):
             out.append(f"owner {o['family']}: {'ALIVE' if o['alive'] else 'not running'}, turn {o.get('turn') or 0}, "
                        f"{o.get('reds') or 0} red(s) in hand, {o.get('restarts') or 0} restart(s); "

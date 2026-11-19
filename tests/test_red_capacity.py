@@ -188,6 +188,15 @@ class GateFixesNeverWaitTest(CapacityBase):
         self.assertIn("gate reds never wait", out)
         self.assertIn("memory 58% free", out)
 
+    def test_red_status_says_a_timed_out_section_never_crashes(self):
+        """Issue 20261031T230940-b584c3: a families or owners section that timed out is {"error": ...} (status_sources),
+        and `red status -v` crashed iterating it (AttributeError: 'str' object has no attribute 'get')."""
+        out = A.render_red_status({"reds": [], "families": {"error": "timed out after 1 s"},
+                                   "owners": {"error": "timed out after 1 s"}, "dispatcher": {"alive": 0, "cap": 5}},
+                                  verbose=True)
+        self.assertIn("families: unread (timed out after 1 s)", out)
+        self.assertIn("owners: unread (timed out after 1 s)", out)
+
 
 class LaptopPressureTest(unittest.TestCase):
     """THE LAPTOP'S PRESSURE, read as it is NOW (2026-10-31): macOS's free % (kern.memorystatus_level, memory_pressure's
