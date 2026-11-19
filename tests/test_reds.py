@@ -2015,6 +2015,34 @@ class StuckLimitTest(unittest.TestCase):
         self.assertEqual(A.workflow_timeout_bound(txt), (30 + 360) * 60,
                          "b: GitHub's default; c (a reusable call, which takes no timeout-minutes): its own jobs'")
 
+    def test_no_op_runs_in_the_list_pull_no_workflows_limit_down(self):
+        """Issue 20261101T101427-e15fe1 (Order independence #28): the list held #27, a 31 s run whose real jobs were all
+        skipped, and runs of 40-95 min only in the workflow's own history. 5+ such no-op runs in the list also skip the
+        history read, so p90 = 31 s fell to the 30 min floor and a healthy 40 min run was a false stuck red."""
+        name = "Order independence"
+        noops = [self.ci_run(20 + i, 3600 * (i + 3), dur=31) for i in range(6)]
+        full = [self.ci_run(10 + i, 86400 * (i + 1), dur=(40 + 10 * i) * 60) for i in range(5)]
+        out, _ = self.stuck({name: [self.ci_run(28, 40 * 60)] + noops}, self.jobs(("in_progress", 40 * 60)), {name: full})
+        self.assertEqual(out, [], "a healthy 40 min run of a workflow whose full runs take 40-80 min")
+
+    def test_runs_that_failed_fast_are_no_sample_of_how_long_a_workflow_takes(self):
+        """Issue 20261108T205920-0e4015 (Identity takes #3): the workflow's only finished runs failed in ~3 min. With
+        fewer than 5 the jobs' timeout-minutes bound it (kept); five fast failures still set a 30 min limit."""
+        name = "Identity takes"
+        failed = [dict(self.ci_run(i, 3600 * (i + 3), dur=180), conclusion="failure") for i in range(1, 6)]
+        out, _ = self.stuck({name: [self.ci_run(6, 40 * 60)] + failed}, self.jobs(("completed", 40 * 60), ("in_progress", 3 * 60)),
+                            timeouts={name: 120 * 60})
+        self.assertEqual(out, [], "a 40 min run whose last job started 3 min ago, within the jobs' 120 min bound")
+
+    def test_the_stuck_line_says_how_many_runs_its_limit_came_from(self):
+        """Issue 20261101T101427-e15fe1, last sentence: print the sample count beside the limit."""
+        name = "Main"
+        runs = [self.ci_run(10 + i, 3600 * (i + 2), dur=600) for i in range(6)]
+        out, _ = self.stuck({name: [self.ci_run(99, 3 * 3600)] + runs}, self.jobs(("in_progress", 3 * 3600)))
+        line = A.stuck_obs({"stuck": out})
+        [ob] = line.values()
+        self.assertRegex(ob["line"], r"from \d+ runs", ob["line"])
+
 
 class GateOwnRedLabelTest(unittest.TestCase):
     """2026-10-29 19:20: convergence #2550's fix (Fixes-Red: 2527, the same red key) read "blocked by gate convergence
