@@ -1793,9 +1793,17 @@ def verifying(e, t):
     return bool(e.get("verify")) and e.get("status") in ("queued", "checking") and not e.get("retry_after", 0) > t
 
 
-def older_verifying(todo, e, t):
-    """The oldest entry queued before e whose combined-tree verification runs now (verifying), or None."""
-    return next((o for o in sorted(todo, key=lambda o: o["seq"]) if o["seq"] < e["seq"] and verifying(o, t)), None)
+# A RED FIX'S VERIFICATION IS NEVER THROWN AWAY BY AN ORDINARY PUSH (2026-11-19: 08010c, `Fixes-Red: 6`, verified its
+# combined tree 09:34-10:18Z; at 10:11Z ratchet-diff -- queued BEFORE it, so not held by the age rule -- pushed, main
+# moved, and the fix verified again until 10:36Z, holding 100213 and 102400 behind it the whole time). A red fix goes
+# first (changekind.py PRIORITY): while its verification runs, every ordinary checked change holds its push, older or
+# younger. Tests: tests/test_backlog_batch.py PushBatchTest ..._never_pushes_under_a_red_fixs_verification.
+def older_verifying(todo, e, t, kinds=None):
+    """The entry whose combined-tree verification runs now (verifying) and that e's push waits for: one queued before
+    e, or a red fix (its kind in kinds, classify_queue) queued at any time; the oldest such, or None."""
+    red = lambda o: bool(((kinds or {}).get(o["id"]) or {}).get("red_fix"))
+    return next((o for o in sorted(todo, key=lambda o: o["seq"])
+                 if o["id"] != e["id"] and (o["seq"] < e["seq"] or red(o)) and verifying(o, t)), None)
 
 
 def tick_changes(repo, d, now_=None):
@@ -1862,7 +1870,7 @@ def _tick_changes_pass(repo, d, st, t, facts, kinds, phase, mine, todo, held, ph
             if e.get("retry_after", 0) > t:
                 note_hold(st, e, "retry", f"its push is retried at {hhmmz(e['retry_after'])}", t)
                 continue
-            did += _push_checked(repo, d, st, t, e, fix, todo, pheld)
+            did += _push_checked(repo, d, st, t, e, fix, todo, pheld, kinds)
             continue
         alive = checker_alive(e["id"])
         if state == "checking" and not alive and t > it["deadline"]:
@@ -1933,14 +1941,14 @@ def _tick_changes_pass(repo, d, st, t, facts, kinds, phase, mine, todo, held, ph
     return did
 
 
-def _push_checked(repo, d, st, t, e, fix, todo, pheld):
+def _push_checked(repo, d, st, t, e, fix, todo, pheld, kinds=None):
     """The change tick's step for checked entry e: pushed, unless its push is held -- before an open batch it is not
     in (THE BATCH GOES FIRST), for the next push batch, or behind an older change's combined-tree verification; a red
     fix (fix) is held by none of them. The hold is recorded on its item (`land status` prints it) and its deadline laps
     quietly while it is live; a checked change past its deadline that nothing holds escalates (lap_change_deadline)."""
     did = []
     first = None if fix else batch_goes_first(st, d)  # a red fix goes before the batch
-    older = None if fix or first or e["id"] in pheld else older_verifying(todo, e, t)
+    older = None if fix or first or e["id"] in pheld else older_verifying(todo, e, t, kinds)
     if first:  # a solo push now moves main under the batch, and its whole check is thrown away
         did += behind_batch(e, first, "push")
         note_hold(st, e, "batch", f"its push waits for batch {first['id']} ({first['state']}), which it is not in", t,

@@ -283,6 +283,13 @@ def push_candidates(repo, d, reds, t=None, facts=None):
     entries = queued_entries(d)
     if any(e.get("status") == "checking" and e.get("verify") and not e.get("backlog_batch") for e in entries):
         return []
+    # NO PUSH BATCH UNDER A RED FIX IN FLIGHT (2026-11-19 10:37:14Z: push batch #48 formed 13 s before 08010c, a red
+    # fix just verified, pushed; its push moved main under the batch's verify round, which passed at 10:46 and was
+    # thrown away -- "main moved during its check: assembled again"). A red fix goes first and pushes alone, so a push
+    # batch formed meanwhile is verified for nothing: none forms until the open red fixes are decided.
+    if any(not e.get("backlog_batch") and not float(e.get("retry_after") or 0) > t
+           and classify_change(e, facts, t)["red_fix"] for e in entries):
+        return []
     main = git(repo, "rev-parse", f"{remote()}/main", check=False).stdout.strip()
     out = [e for e in sorted(entries, key=lambda e: e["seq"])
            if push_batchable(repo, d, e, t, main, facts)]

@@ -376,6 +376,30 @@ class PushBatchTest(test_queue.QueueTest):
                            {"key": "5254bffda9d2", "workflow": "Alert backtest", "gate": False, "red_kind": "outside",
                             "runs": ["44479918396", "5", "6"]})
 
+    def test_an_older_ordinary_change_never_pushes_under_a_red_fixs_verification(self):
+        """2026-11-19: 08010c (`Fixes-Red: 6`) verified its combined tree 09:34-10:18Z; at 10:11Z ratchet-diff, queued
+        BEFORE it (so the age rule held it not), pushed, and the fix verified again until 10:36Z -- 100213 and 102400
+        held behind it all the while. A red fix goes first: an ordinary push, older or younger, waits for its round."""
+        self.open_outside_red()
+        A.spawn_executor = lambda repo, d_, eid: None  # each check run below, by hand
+        wo, _ = self.agent("old", "web/src/main/Old.scala", "old\n", msg="old: web/src/main/Old.scala")
+        eo, _ = self.queued(wo)  # queued first, checked later (held, then a tree)
+        ef = self.checked("fix", "infra/bin/backtest-alerts", msg="backtest-alerts: the fix\n\nFixes-Red: 6")
+        self.main_moves()
+        did = A.tick_changes(self.r.path, self.d)
+        self.assertEqual((self.entry(ef)["status"], self.entry(ef)["verify"]), ("queued", True), did)
+        A.check_entry(self.r.path, eo)
+        self.assertEqual(self.entry(eo)["status"], "checked")
+        did = A.tick_changes(self.r.path, self.d)
+        self.assertIn(f"{eo}: its push waits for {ef}'s combined-tree verification", " ".join(did))
+        self.assertEqual(self.entry(eo)["status"], "checked", "no push under the red fix's verification")
+        hold = A.Store().item("change", eo)["data"]["hold"]
+        self.assertEqual((hold["kind"], hold["blocker"]), ("verify", ef))
+        A.check_entry(self.r.path, ef)
+        A.tick_changes(self.r.path, self.d)
+        self.assertEqual(self.entry(ef)["status"], "landed", "verified once, then pushed")
+        self.assertEqual(self.remote_log()[0], "backtest-alerts: the fix")
+
     def test_a_fix_of_an_open_red_outside_the_gate_pushes_before_a_batch_it_is_not_in(self):
         """The queue shape of 2026-11-19 ~09:30Z replayed: a push batch verifying, the red fix checked beside it, a
         change overlapping the fix held behind it."""
@@ -400,12 +424,18 @@ class PushBatchTest(test_queue.QueueTest):
                          "conflicts with what landed, so its author rebases now")
         self.assertIn("no longer applies", self.entry(ex)["why"])
 
-    def test_a_fix_of_an_open_red_outside_the_gate_is_no_push_batch_member(self):
+    def test_a_fix_of_an_open_red_outside_the_gate_is_no_push_batch_member_and_none_forms_under_it(self):
+        """NO PUSH BATCH UNDER A RED FIX IN FLIGHT (batch.py; 2026-11-19 10:37:14Z: push batch #48 formed 13 s before
+        08010c, a red fix just verified, pushed; its verify round passed at 10:46 and was thrown away)."""
         self.open_outside_red()
         ea = self.checked("a", "web/src/main/A.scala")
         eb = self.checked("b", "worker/src/main/B.scala")
-        self.checked("fix", "infra/bin/backtest-alerts", msg="backtest-alerts: the fix\n\nFixes-Red: 6")
+        ef = self.checked("fix", "infra/bin/backtest-alerts", msg="backtest-alerts: the fix\n\nFixes-Red: 6")
         self.main_moves()
+        self.assertEqual(A.push_candidates(self.r.path, self.d, set()), [], "the red fix goes first")
+        e = self.entry(ef)
+        e["status"] = "landed"
+        A.save_entry(self.d, e)
         self.assertEqual([e["id"] for e in A.push_candidates(self.r.path, self.d, set(), facts=A.queue_facts(set()))],
                          [ea, eb])
         self.assertEqual([e["id"] for e in A.push_candidates(self.r.path, self.d, set())], [ea, eb],

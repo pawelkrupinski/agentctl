@@ -1268,8 +1268,16 @@ The reconciler then takes it, a step per tick:
   THE OLDEST VERIFICATION PUSHES FIRST (2026-11-16: workermem verified four times, each on a main a younger change
   had pushed onto meanwhile): while a change's verification round is queued or checking (not in an infra backoff),
   every younger checked change holds its push (`its push waits for <id>'s combined-tree verification`; a red's fix
-  excepted), and verification rounds take the next free check tree. queue.py `older_verifying`. With two or more
-  changes owing a verify round, THE PUSH BATCH (below) verifies and pushes them together instead.
+  excepted), and verification rounds take the next free check tree. A RED FIX'S verification holds every ordinary
+  push, OLDER ones too (2026-11-19: ratchet-diff, queued before 08010c, pushed at 10:11Z under the fix's 09:34-10:18Z
+  round; the fix verified again until 10:36Z, with 100213 and 102400 held behind it), and NO PUSH BATCH forms while a
+  red fix is in flight (queued..pushing: batch #48 formed 13 s before 08010c pushed, and its passed verify round was
+  thrown away). queue.py `older_verifying`, batch.py `push_candidates`. With two or more changes owing a verify
+  round, THE PUSH BATCH (below) verifies and pushes them together instead. Pushing a disjoint checked change first is
+  NOT done: any push moves main, and THE RULE then sends the verification round again (queue simulator, 50 seeds of
+  an outside red's fix verifying while an older change is checked: the fix re-verified in 14 seeds before, 9 after;
+  over 120 random seeds the mean wait fell 6.47 -> 6.24 ticks, a red fix's 6.79 -> 6.30; the older change itself
+  waits ~1 tick longer).
   The push is bounded; on expiry it verifies before it retries. `LANDED <sha>`, and a `watch` item.
   It pushes from its own check tree when that tree's slot is free, else from the PUSH TREE `<clone>-wt-check-push`
   (its own lease, no checker takes it): a checker holds its slot through its remote run's whole wait, and pushes that
