@@ -1083,6 +1083,27 @@ class OwnerTest(RedsBase):
         self.assertEqual(rc, 1, out)
         self.assertIn("a live fixer is on #20", out)
 
+    def test_a_family_owner_blocks_a_red_handed_to_it_on_the_owner(self):
+        # issues 20261106T210149-680984, 20261119T015532-983695: the convergence family owner (the lease holder,
+        # `laptop:owner:convergence`) ran `red block N --owner-cause deploy`: "NOT BLOCKED: a live fixer is on #N:
+        # laptop:owner:convergence" -- the live fixer IS the caller. red_block only counts a lease its own record names.
+        self.main_red(40, 20, kind="infra")
+        self.tick()
+        it = self.only()
+        took = self.st.acquire(A.red_lease(it["data"]["key"]), "laptop:owner:convergence", A.OWNER_TTL, A.OWNER_MAX,
+                               progress="start", meta={"kind": "owned", "family": "convergence"})
+        path = A.owner_record_path("convergence")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        A.write_json(path, {"lease": A.owner_lease("convergence"), "family": "convergence", "session": "s-owner",
+                            "started": "2026-10-29T00:00:00Z"})
+        A.bind_fixer_session("s-owner", path)  # the owner wrapper binds its session (owner.py: bind_fixer_session)
+        os.environ.update(CLAUDE_CODE_SESSION_ID="s-owner", AGENTCTL_FIXER_RECORD=path)
+        self.assertEqual(A.own_fixer_record_path(), path)
+        rc, out = self.tool("red", "block", "20", "--owner-cause", "deploy", "--cmd", "deploy it",
+                            "--until-http", "http://127.0.0.1:9/x", "--repo", "movies", cwd=self.r.path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("RED BLOCKED ON OWNER", out)
+
     def test_a_fixer_never_notes_on_a_record_of_another_session(self):
         # a `claude --bg` spare spawned for #2432's fixer, reused for #2426's: its AGENTCTL_FIXER_RECORD is #2432's
         _it, theirs = self.held_by_a_fixer("s-other", run="32")
