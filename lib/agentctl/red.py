@@ -83,12 +83,13 @@ def red_waits_for_its_run(d):
 # no run verifying it, or the scheduler never dispatched it.
 # A VERIFY DISPATCH IS PER WORKFLOW (the owner, 2026-11-19): Record scrape fixtures scrapes every cinema through paid
 # proxies -- its 04:34Z verify dispatch (#200) was not cheap. A workflow WITH a schedule is dispatched to verify a fix
-# only when the repo lists it in VERIFY_DISPATCH_FILE on main (one workflow name a line, `#` comments); every other
-# scheduled workflow waits for its slot. A workflow with no schedule is dispatched as before (no other run will come).
+# only when the repo's ONE per-workflow policy registry, RED_WORKFLOWS_FILE on main, says `verify_dispatch` yes; every
+# other scheduled workflow waits for its slot. A workflow with no schedule is dispatched as before (no other run will
+# come). The same row's `replay` is the command a fixer runs before landing (FIX REPLAY, below).
 RED_VERIFY_SLACK = 2 * 3600     # s past a slot's expected end before its fix is called unverified ($AGENTCTL_RED_VERIFY_SLACK)
 RED_VERIFY_DURATION = 2 * 3600  # s a scheduled run is taken to last when none of its runs finished
 RED_VERIFY_HOLD = 30 * 60       # s a run that will decide the fix, still undecided at the deadline, holds it again
-VERIFY_DISPATCH_FILE = ".github/verify-dispatch.txt"
+RED_WORKFLOWS_FILE = ".github/red-workflows.tsv"  # workflow, verify_dispatch (yes|no), replay (a command or -), why
 CRON_HORIZON_DAYS = 32
 CRON_RANGES = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7))
 
@@ -162,10 +163,27 @@ def workflow_crons(text):
     return [m.group(2) for m in re.finditer(r"^\s*-\s*cron:\s*(['\"])(.+?)\1", text or "", re.M)]
 
 
+def red_workflow_policies(repo, ref=None):
+    """{workflow: {verify_dispatch: bool, replay: command or None, why}} from RED_WORKFLOWS_FILE at ref (main)."""
+    txt = git(repo, "show", f"{ref or remote() + '/main'}:{RED_WORKFLOWS_FILE}", check=False).stdout if repo else ""
+    out = {}
+    for line in (txt or "").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        cols = [c.strip() for c in line.split("\t")]
+        cols += [""] * (4 - len(cols))
+        out[cols[0]] = {"verify_dispatch": cols[1].lower() == "yes",
+                        "replay": cols[2] if cols[2] not in ("", "-") else None, "why": cols[3]}
+    return out
+
+
+def red_workflow_policy(repo, workflow, ref=None):
+    return red_workflow_policies(repo, ref).get(workflow) or {"verify_dispatch": False, "replay": None, "why": ""}
+
+
 def verify_dispatchable(repo, workflow):
-    """The repo lists `workflow` in VERIFY_DISPATCH_FILE on main: it may be dispatched to verify a fix."""
-    txt = git(repo, "show", f"{remote()}/main:{VERIFY_DISPATCH_FILE}", check=False).stdout if repo else ""
-    return workflow in {line.split("#")[0].strip() for line in (txt or "").splitlines()}
+    """The registry says `workflow` may be dispatched to verify a fix."""
+    return red_workflow_policy(repo, workflow)["verify_dispatch"]
 
 
 _verify_runs = process_cache({})
@@ -3310,8 +3328,8 @@ def red_verify_dispatch(o_r, repo, workflow, sha, run_id=None):
     if "workflow_dispatch" not in txt:
         return f"FIX UNVERIFIED until {workflow}'s next scheduled run (no workflow_dispatch)"
     if workflow_crons(txt) and not verify_dispatchable(repo, workflow):  # A VERIFY DISPATCH IS PER WORKFLOW
-        return (f"FIX UNVERIFIED until {workflow}'s next scheduled run (scheduled, and not listed in "
-                f"{VERIFY_DISPATCH_FILE}: never dispatched to verify)")
+        return (f"FIX UNVERIFIED until {workflow}'s next scheduled run (scheduled, and {RED_WORKFLOWS_FILE} does not "
+                f"say verify_dispatch yes: never dispatched to verify)")
     inputs = (run_dispatch_inputs(o_r, run_id) or run_title_inputs(o_r, run_id, txt)) if run_id else {}
     try:
         api(o_r, "POST", f"actions/workflows/{os.path.basename(path)}/dispatches", body={"ref": "main", "inputs": inputs})
@@ -3779,3 +3797,55 @@ def sync_brief():
     """The movies agents' preamble a fixer reads first (~/bin/briefs/movies-agent-preamble.md, $AGENTCTL_BRIEF). The
     fixer's own rules are docs/fixer-brief.md, in its prompt (fixer_brief); nothing is copied from a scratchpad."""
     return os.environ.get("AGENTCTL_BRIEF", BRIEF)
+
+
+# FIX REPLAY (2026-11-19, Alert backtest #1-#5, 5254bffda9d2): seven fixes landed and were refuted, one per run of the
+# backtest -- each fixer landed a guess the nightly then refuted, though the backtest replays cheaply over ci-runner's
+# Prometheus snapshot. A workflow whose RED_WORKFLOWS_FILE row names a `replay` command (`{run}`: the red's failing run
+# id) holds its fixers to it: a `Fixes-Red:` landing for such a red must carry, in one of its commits, the trailer
+# `Fix-Replay: <that command> base=FAIL head=PASS` -- the replay run at origin/main and at the fix -- or `land` refuses
+# it, naming the command.
+FIX_REPLAY_TRAILER = re.compile(r"(?i)^Fix-Replay:\s*(.+?)\s+base=(FAIL|PASS)\s+head=(FAIL|PASS)\s*$")
+
+
+def red_replay_command(repo, d):
+    """The replay command for red data d (its run id in place of `{run}`), or None."""
+    cmd = red_workflow_policy(repo, d.get("workflow"))["replay"]
+    run = (d.get("last_run") or {}).get("databaseId")
+    return cmd.replace("{run}", str(run)) if cmd and run else cmd
+
+
+def fix_replay_refusal(repo, commits, store=None):
+    """Why `land` refuses commits (a Fixes-Red: for a red with a replay, and no `Fix-Replay: ... base=FAIL head=PASS`
+    naming it), or None. An unread store or registry refuses nothing (the red's own verification still judges)."""
+    named, replays = set(), []
+    for c in commits or []:
+        msg = git(repo, "log", "-1", "--format=%B", c, check=False).stdout
+        for ln in commit_trailers(msg):
+            k, _, v = ln.partition(":")
+            if k.strip().lower() == "fixes-red":
+                named |= trailer_values(v)
+            m = FIX_REPLAY_TRAILER.match(ln)
+            if m:
+                replays.append((m.group(1).strip(), m.group(2).upper(), m.group(3).upper()))
+    if not named:
+        return None
+    try:
+        items = [it for it in (store or Store()).items("red") if it["data"].get("key")
+                 and it["state"] not in RED_TERMINAL]
+    except (Exception, SystemExit):
+        return None
+    for it in items:
+        d = it["data"]
+        if not named & {str(x) for x in red_names(d) if x is not None}:
+            continue
+        cmd = red_replay_command(repo, d)
+        if not cmd:
+            continue
+        stem = red_workflow_policy(repo, d.get("workflow"))["replay"].split("{run}")[0].strip()
+        ok = [r for r in replays if r[0].startswith(stem)]
+        if not any(r[1:] == ("FAIL", "PASS") for r in ok):
+            seen = f" (this push says base={ok[0][1]} head={ok[0][2]})" if ok else ""
+            return (f"{red_what(d)} has a replay: run `{cmd}` at origin/main and at your fix, see base=FAIL head=PASS, "
+                    f"and record it as the trailer `Fix-Replay: {cmd} base=FAIL head=PASS`{seen}")
+    return None

@@ -53,6 +53,10 @@ trade, with the before and after in the commit message.
 Land each verified step at once with `~/bin/agentctl land`. While the gate is red, a change lands only with a
 `Fixes-Red: <run>` trailer naming the run it fixes, in the same final trailer block as Co-Authored-By. Never sit on
 unlanded commits. Fetch and rebase onto `<remote>/main`, never squash, one commit per step.
+When your red's workflow names a `replay` in the repo's `.github/red-workflows.tsv` (your prompt then says REPLAY
+BEFORE LANDING), run it at `<remote>/main` and at your fix and land only on `base=FAIL head=PASS`, recorded as the
+trailer `Fix-Replay: <command> base=FAIL head=PASS`; a landing without it is refused. head=FAIL is your fix refuted
+before it lands: find the cause, never land the guess.
 
 ## RED FAMILIES
 Reds of your red's family (e.g. all convergence work) are added to your lease while you work, each as a line in

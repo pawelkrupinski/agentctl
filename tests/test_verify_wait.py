@@ -145,7 +145,7 @@ class ScheduledFixWaitsForItsSlotTest(VerifyWaitBase):
         self.assertEqual(self.posts, [])
 
     def test_a_listed_scheduled_workflow_is_dispatched_to_verify(self):
-        self.r.write(A.VERIFY_DISPATCH_FILE, "# cheap enough to run again for a fix\nRecord scrape fixtures\n")
+        self.r.write(A.RED_WORKFLOWS_FILE, "# workflow\tverify_dispatch\treplay\twhy\nRecord scrape fixtures\tyes\t-\tcheap here\n")
         self.r.commit("record is dispatchable")
         self.r.push()
         self.step("2026-11-19T04:23:15Z")

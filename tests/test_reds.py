@@ -745,7 +745,7 @@ class FixTest(RedsBase):
         self.put("run-70.log", "capture (uk)\tRun\t2026-10-27T08:00:00Z [info] - CaptureSpec *** FAILED ***\n")
         self.r.write(".github/workflows/identity-capture.yml",
                      "name: Identity capture\non:\n  schedule:\n    - cron: '0 3 * * 1'\n  workflow_dispatch:\n")
-        self.r.write(A.VERIFY_DISPATCH_FILE, "Identity capture  # cheap: dispatched to verify a fix\n")
+        self.r.write(A.RED_WORKFLOWS_FILE, "Identity capture\tyes\t-\tcheap: dispatched to verify a fix\n")
         self.r.commit("the workflow")
         self.r.push()
         self.tick()

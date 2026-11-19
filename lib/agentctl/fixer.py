@@ -80,6 +80,11 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
               f"{FIXER_UNLANDED_NUDGE // 60} min get a RED-NUDGE.md in your worktree (read it, land, delete it), then an "
               f"escalation to the owner.\n\n=== THE FIXER BRIEF ({bpath.replace(HOME, '~')}) ===\n{btext}\n"
               "=== END OF THE FIXER BRIEF ===\n\n")
+    replay = red_replay_command(red_repo_clone(o_r), u) if not owner else None
+    if replay:  # FIX REPLAY (red.py): its land is refused without the replay's base=FAIL head=PASS
+        common += (f"REPLAY BEFORE LANDING: this red's check replays cheaply: `{replay}`. Run it at {remote()}/main "
+                   "(base) and at your fix (head) and land only when it says base=FAIL head=PASS, with the trailer "
+                   f"`Fix-Replay: {replay} base=FAIL head=PASS` beside Fixes-Red (land refuses it otherwise). ")
     if len(red_refuted(u)) >= RED_RECURRING:
         common += (f"RECURRING: this failure outlived {len(red_refuted(u))} landed fixes ({', '.join(x[:10] for x in red_refuted(u))}): "
                    "each treated a symptom. Read them (`git show`), find the ROOT CAUSE they all missed, and fix that; "
@@ -2506,3 +2511,4 @@ def red_block(o_r, a):
     for x in handed:  # the dispatched fixer's own lease, handed to the owner: its wrapper ends with the block's verdict
         st.revoke(x, f"BLOCKED ON OWNER (handed over by its fixer): {a.owner_cmd or om.get('cmd')}")
     return 0
+

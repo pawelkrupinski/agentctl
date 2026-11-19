@@ -110,9 +110,13 @@ moves it forward; nothing is a detached process that can die with its state in i
     it still undecided that will decide the fix (created since the slot, or containing the fix) holds it again, quietly;
     else it escalates, saying whether the slot's run ended without deciding it or the scheduler never dispatched it,
     and a fixer gets it one `RED_FIX_DECIDE` later. With no schedule it waits up to `RED_FIX_NEXT_RUN` (30 h). A
-    scheduled workflow is DISPATCHED to verify only when the repo lists its name in `.github/verify-dispatch.txt` on
-    main (one a line, `#` comments; Record scrape fixtures, a paid-proxy scrape of every cinema, is not cheap); an
-    unscheduled one is dispatched as before. A fix-pending self-move (a fix landing, followed, re-cut) is never an
+    scheduled workflow is DISPATCHED to verify only when the repo's one per-workflow registry, `.github/red-workflows.tsv`
+    on main, says so: tab-separated `workflow  verify_dispatch (yes|no)  replay (a command, `{run}` = the red's failing
+    run id, or -)  why`, `#` comments (Record scrape fixtures, a paid-proxy scrape of every cinema, is `no`); an
+    unscheduled one is dispatched as before. FIX REPLAY: when a red's workflow row names a `replay`, `land` refuses a
+    push whose `Fixes-Red:` names that red unless one of its commits carries `Fix-Replay: <the command> base=FAIL
+    head=PASS` (the replay run at origin/main and at the fix), naming the command to run (Alert backtest 5254bffda9d2,
+    2026-11-19: seven fixes landed unreplayed and the nightly refuted each). A fix-pending self-move (a fix landing, followed, re-cut) is never an
     escalation unless it says so. A cancelled fix change follows only a change of its worktree submitted after it
     (`submitted_at`, else the change id's stamp), and the invariant waits out `RED_FIX_REQUEUE_GRACE` as the red's own
     step does (Alert backtest #4, 2026-11-19: it followed an 11-11 change of the reused worktree, whose phantom tip

@@ -614,6 +614,10 @@ def sync(repo, main_ref, sh, release_hold=False):
         print(f"NOT LANDED: {why}. A withdrawn or refuted blame revert is dead: drop this worktree "
               "(`git worktree remove`), never land it.")
         return 1, None
+    why = fix_replay_refusal(repo, waiting_commits(repo, f"{remote()}/main", head))
+    if why:
+        print(f"NOT LANDED: {why}. A red whose check replays cheaply lands only a fix its replay proved.")
+        return 1, None
     r = sh("git", "rebase", "--quiet", f"{remote()}/main")
     for _ in range(50):  # each stop whose conflicts are docs or generated files only: resolved (conflict_resolve), and on
         if not r.returncode or not conflict_resolve(repo):
