@@ -281,7 +281,11 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
            "jobs": u.get("jobs") or [u.get("job")],
            "run": num, "run_id": u["run"].get("databaseId"), "workflow": u["workflow"], "job": u.get("job"),
            "kind": u.get("kind"), "line": u.get("line"), "flake": bool(u.get("flake")), "worktree": wt, "started": ts(),
-           "why": why, "log": os.path.join(d, f"claude-{k}.log"), "session": resume.get("session") if resume else None,
+           "why": why, "log": os.path.join(d, f"claude-{k}.log"), "session": None,
+           # A RESUME IS A NEW SESSION (issues 20261119T025305-21375d, 20261103T232907-ca63b2): `claude --bg --resume
+           # <old>` reports its own id, so the record names the session it resumes apart; `session` is the new one's,
+           # written by the wrapper's first poll or bound by the fixer's own first `red claim --fixer`
+           "resumed_from": resume.get("session") if resume else None,
            "resume": bool(resume and resume.get("session")), "resume_note": resume.get("note") if resume else None,
            "continued_from": (cont or {}).get("worktree"), "diagnosis": u.get("diagnosis"),
            "effort": effort, "refuted": u.get("refuted") or [], "predicts": u.get("predicts"), "orphan": u.get("orphan"),
@@ -995,8 +999,8 @@ def red_fixer(a):
             "--disallowedTools", "Bash(git push:*)", "Bash(*--no-verify*)", "Bash(*PREPUSH_SKIP*)"]
     if red_owner_only(red_repo_of(rec)):  # an owner-only repo's fixer: no landing, no push, no deploy (red_owner_rules)
         argv += list(OWNER_ONLY_DENIED)
-    if rec.get("resume") and rec.get("session"):
-        argv += ["--resume", rec["session"]]
+    if rec.get("resume") and rec.get("resumed_from"):
+        argv += ["--resume", rec["resumed_from"]]
     if rec.get("effort"):  # a deep investigation
         argv += ["--effort", rec["effort"]]
     # NO FIXER IDENTITY IN THE SESSION'S ENVIRONMENT: `claude --bg` may start the claude daemon with it, and every
@@ -1187,7 +1191,7 @@ def own_fixer_record_path():
     if sid:
         bound = (read_record(fixer_session_path(sid)) or {}).get("record")
         rec = read_record(bound) if bound else None
-        if rec and not rec.get("ended") and rec.get("session") in (None, sid):
+        if rec and not rec.get("ended") and record_session_is(rec, sid, unset=True):
             return bound
         mine = [r for r in fixer_records() if r.get("session") == sid and not r.get("ended")]
         if mine:
@@ -1200,12 +1204,20 @@ def fixer_session_path(sid):
     return reds_dir("sessions", f"{re.sub(r'[^A-Za-z0-9_.-]', '_', sid)}.json")
 
 
+def record_session_is(rec, sid, unset=False):
+    """Fixer record rec is session sid's: it names sid, or (its wrapper's first poll not yet done) the bg session it
+    launched, whose id sid begins with (issue 20261119T025305-21375d); unset: a record naming no session yet too."""
+    have = rec.get("session")
+    return have == sid or (unset and have is None) or \
+        bool(sid and rec.get("bg_id") and not rec.get("transcript") and str(sid).startswith(str(rec["bg_id"])))
+
+
 def bind_fixer_session(sid, record):
     """The session -> fixer record binding (reds/sessions/<session id>.json): written by the wrapper once `claude
     agents` names its session, and by the fixer's own first command (`red claim N --fixer <record>`, in its prompt).
     Refused (None) for a record that ended or names another session."""
     rec = read_record(record) if sid and record else None
-    if not rec or rec.get("ended") or rec.get("session") not in (None, sid):
+    if not rec or rec.get("ended") or not record_session_is(rec, sid, unset=True):
         return None
     write_json(fixer_session_path(sid), {"record": record, "at": ts()})
     return record

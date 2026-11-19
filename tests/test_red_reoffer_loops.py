@@ -111,7 +111,8 @@ class ReOfferLoopTest(RedsBase):
         # fixer's `red claim --fixer <record>` -- the first command of its prompt -- is refused.
         os.makedirs(A.reds_dir("2473"), exist_ok=True)
         rec = A.reds_dir("2473", "fixer-5.json")
-        A.write_json(rec, {"run": 2473, "workflow": "Main", "session": "s-resumed-from", "resume": True,
+        A.write_json(rec, {"run": 2473, "workflow": "Main", "session": None, "resumed_from": "s-resumed-from",
+                           "resume": True,
                            "started": "2026-10-29T10:28:58Z", "lease": "red/a0762f14066e"})
         os.environ.update(AGENTCTL_AGENT_NAME="red-fixer-2473", AGENTCTL_RED_FIXER="2473", AGENTCTL_FIXER_RECORD=rec,
                           CLAUDE_CODE_SESSION_ID="s-the-resumed-sessions-own-id")

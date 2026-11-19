@@ -516,7 +516,7 @@ class ReviveTest(ReviveBase):
         self.tick(dispatch=True)
         self.assertEqual(len(self.lands), 1)  # reverted first
         [rec] = A.fixer_records()
-        self.assertEqual((rec["session"], rec["resume"], rec["worktree"]), ("sess-a", True, wt))
+        self.assertEqual((rec["resumed_from"], rec["resume"], rec["worktree"]), ("sess-a", True, wt))
         launched = self.session_argv()
         argv = launched["argv"]
         self.assertEqual(argv[argv.index("--resume") + 1], "sess-a")
