@@ -15,7 +15,8 @@ calls.
   the test FAILS with its traceback instead of hanging the suite), the whole suite bounded (`--suite-timeout`); about
   70 s on the laptop. `agentctl suite test_reds` runs the tests whose id contains a pattern. Mutation tests included.
   Run the touched modules while working and the full suite once, before landing.
-- CI: `.github/workflows/tests.yml` runs the same suite for every push to main (a fresh runner: no HOME, sdkman or
+- CI: `.github/workflows/tests.yml` runs the same suite, in two shards (`tests/run.py --shard K/N`: one 4-cpu runner
+  outgrew the suite's bound), for every push to main (a fresh runner: no HOME, sdkman or
   movies clone to lean on). Green there is what ci-runner's auto-pin reads.
 - `agentctl --help` and `agentctl <cmd> --help` match this page.
 - The design behind it: `~/bin/docs/landing-reconciler-design.md`. Phase 2 (the store and the reconciler on

@@ -113,8 +113,17 @@ def main():
     ap.add_argument("--durations", type=int, default=0, metavar="K", help="print the K slowest tests")
     ap.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--list", action="store_true", help="print the test ids and exit")
+    ap.add_argument("--shard", metavar="K/N", help="run only shard K (0-based) of N: a disjoint 1/N of the tests, every "
+                    "Nth by id (CI's matrix: the whole suite outgrew one 4-cpu runner's bound)")
     ap.add_argument("patterns", nargs="*")
     a = ap.parse_args()
+    shard = None
+    if a.shard:
+        try:
+            shard = tuple(int(x) for x in a.shard.split("/"))
+            assert len(shard) == 2 and 0 <= shard[0] < shard[1]
+        except (ValueError, AssertionError):
+            ap.error(f"--shard {a.shard}: K/N with 0 <= K < N")
     os.environ["AGENTCTL_TEST_TIMEOUT"] = str(a.timeout)
     if a.worker:
         return worker(a.timeout)
@@ -127,6 +136,8 @@ def main():
         sys.stderr.write(listing.stderr)
         return 1
     classes = [c for c in listing.stdout.split() if c]  # test ids
+    if shard:
+        classes = sorted(classes)[shard[0]::shard[1]]
     if a.list:
         print("\n".join(classes))
         return 0
@@ -185,8 +196,8 @@ def main():
         print("=" * 70 + f"\nFAIL: {tid}\n" + "-" * 70 + f"\n{tb}")
     if timed_out:
         print(f"SUITE TIMEOUT after {a.suite_timeout} s; not run: {', '.join(todo) or '-'}")
-    if not a.patterns:
-        save_durations({r["cls"]: r["secs"] for r in results})
+    if not a.patterns:  # a shard keeps the other shards' durations
+        save_durations({**(past if shard else {}), **{r["cls"]: r["secs"] for r in results}})
     if a.durations:
         times = sorted(((s, t) for r in results for t, s in r["times"].items()), reverse=True)[:a.durations]
         print("slowest:\n" + "\n".join(f"  {s:6.1f}s {t}" for s, t in times))

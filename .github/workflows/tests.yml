@@ -14,15 +14,23 @@ concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  # TWO SHARDS (2026-11-19): one 4-cpu runner took 290-420 s for the whole suite against its 420 s bound, and two of
+  # eight runs on main ended SUITE TIMEOUT with no test failed. Each shard runs a disjoint half (tests/run.py --shard);
+  # the run is green only when both are, which is what the auto-pin reads.
   suite:
     runs-on: ubuntu-24.04
     timeout-minutes: 11
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
-      - name: Suite (parallel, 60 s per test)
+      - name: Suite shard ${{ matrix.shard }}/2 (parallel, 60 s per test)
         run: |
           python3 --version
-          timeout -s KILL 480 python3 tests/run.py -j 4 --timeout 60 --suite-timeout 420 --durations 15
+          timeout -s KILL 480 python3 tests/run.py -j 4 --timeout 60 --suite-timeout 420 --durations 15 \
+            --shard ${{ matrix.shard }}/2
