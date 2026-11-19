@@ -2449,6 +2449,13 @@ def red_lease_ended(store, it, row, block, t, repo=None):
         return red_decision_failed(store, it, upd, h["outcome"], t)
     if decide:
         return red_decision_block(store, it, upd, decide, t)
+    issue = red_blamed_issue(store, out)
+    if issue:
+        red_harness_block(store, it, upd, issue, AGENTCTL_DEFECT_CAUSE, f"~/bin/agentctl issue --list",
+                          f"a newer {d.get('workflow')} run no longer fails this way",
+                          f"its fixer blamed agentctl: open agentctl issue {issue} ({out[:200]}). Offered again when the "
+                          "issue is closed or a newer run decides it", t)
+        return [f"blocked {red_what(d)} on agentctl issue {issue}"]
     streak = red_crash_streak({**d, **upd})
     if len(streak) >= env_num("AGENTCTL_RED_CRASH_LOOP", RED_CRASH_LOOP):
         return red_crash_loop(store, it, upd, streak, t)
@@ -2765,26 +2772,51 @@ def red_crash_loop(store, it, upd, streak, t):
             f"agentctl's own bug, filed for its maintainer as issue {issue} (logs: `{cmd}`). Auto-clears when {until}, "
             f"when the issue is closed, or in {fmt_age(env_num('AGENTCTL_RED_CRASH_BLOCK_MAX', RED_CRASH_BLOCK_MAX))} "
             "(offered again)")
+    upd = {**upd, "crash_loop": {"stage": "harness", "mark": mark, "at": t, "from": tier, "launches": n}}
+    red_harness_block(store, it, upd, issue, CRASH_LOOP_CAUSE, cmd, until, text, t, tail=tail)
+    return [f"crash loop on {red_what(d)}: a harness fault, filed as agentctl issue {issue}"]
+
+
+def red_harness_block(store, it, upd, issue, cause, cmd, until, text, t, tail=None):
+    """Red `it` waits on agentctl's own issue `issue` (a harness fault, never the owner's): a block lease the issue's
+    close, a newer run's verdict or its max hold lifts (block_invalid, red_renew_blocks), the red blocked-external."""
+    d = {**it["data"], **upd}
+    key, run = d["key"], (d.get("last_run") or {}).get("number")
     lname = block_lease(key)
-    probe = {"kind": "red_newer_verdict", "args": {"workflow": d.get("workflow"), "item": it["id"],
-                                                    "run_id": (d.get("last_run") or {}).get("databaseId"),
-                                                    "run": run}}
-    got = store.acquire(lname, f"harness:{CRASH_LOOP_CAUSE}", BLOCK_TTL,
-                        env_num("AGENTCTL_RED_CRASH_BLOCK_MAX", RED_CRASH_BLOCK_MAX), progress=f"crash-loop@{int(t)}",
+    probe = red_newer_probe(it, d)
+    got = store.acquire(lname, f"harness:{cause}", BLOCK_TTL,
+                        env_num("AGENTCTL_RED_CRASH_BLOCK_MAX", RED_CRASH_BLOCK_MAX), progress=f"{cause}@{int(t)}",
                         meta={"kind": "block", "crash_loop": True, "harness": True, "issue": issue,
-                              "cause": CRASH_LOOP_CAUSE, "cmd": cmd, "probe": probe, "until": until, "keys": [key],
+                              "cause": cause, "cmd": cmd, "probe": probe, "until": until, "keys": [key],
                               "text": text, "details": text, "probed_at": t})
     if "held" in got:  # somebody's block already holds the red: it stands, the red joins it
         row = store.get(lname)
         store.set_meta(lname, row["epoch"], row["secret"], {"keys": sorted(set(lease_meta(row).get("keys") or []) | {key})})
-    upd = {**upd, "crash_loop": {"stage": "harness", "mark": mark, "at": t, "from": tier, "launches": n},
-           "cause": CRASH_LOOP_CAUSE, "block": lname}
     line = f"RED HARNESS FAULT: {red_what(d)}: {text}"
     store.close_offer(f"red:{it['id']}", "blocked")
-    red_move(store, it, "blocked-external", line, data=upd, severity="info",
+    red_move(store, it, "blocked-external", line, data={**upd, "cause": cause, "block": lname}, severity="info",
              refs={"key": key, "run": run, "workflow": d.get("workflow"), "verdict": line, "tail": tail,
                    "command": "red", "final": False})
-    return [f"crash loop on {red_what(d)}: a harness fault, filed as agentctl issue {issue}"]
+
+
+# A RED BLAMED ON AN OPEN agentctl ISSUE WAITS ON IT (issue 20261101T030050-695594: the false stuck red 50dd506d93c9 was
+# offered back to its owner 3 times in 2 minutes, each turn ending GAVE UP naming the filed agentctl issue: no fix for it
+# can land in the red's repo). A verdict that names an OPEN agentctl issue as the cause holds the red on a harness block
+# until that issue closes (or a newer run decides it, or the max hold): agentctl's maintainer fixes it, not a fixer.
+RED_ISSUE_ID = re.compile(r"\b(\d{8}T\d{6}-[0-9a-f]{6})\b")
+RED_ISSUE_BLAME = re.compile(r"\bagentctl\b.*\b(defect|bug|issue)\b|\b(defect|bug|issue)\b.*\bagentctl\b", re.I | re.S)
+AGENTCTL_DEFECT_CAUSE = "agentctl-defect"
+
+
+def red_blamed_issue(store, out):
+    """The open agentctl issue a fixer's verdict blames its red on, or None."""
+    if not RED_ISSUE_BLAME.search(out) or not re.match(r"\W*(GAVE UP|DIAGNOSED|BLOCKED)", out):
+        return None
+    for iid in RED_ISSUE_ID.findall(out):
+        iss = store.item("issue", iid)
+        if iss and iss["state"] != "closed":
+            return iid
+    return None
 
 
 # A HARNESS FAULT IS agentctl's OWN BUG (the owner, 2026-11-19: core Main Pipeline #1053 read "BLOCKED ON OWNER: the
@@ -2875,8 +2907,7 @@ def red_decision_block(store, it, upd, decide, t, category=None):
             f"is dispatched with your answer). " + (f"Why: DIAGNOSED: {diag[:400]}. " if diag else "") +
             f"Look: `{cmd}`. Auto-clears when {until}, or in {fmt_age(maxh)} (offered again)").replace(HOME, "~")
     lname = block_lease(key)
-    probe = {"kind": "red_newer_verdict", "args": {"workflow": d.get("workflow"), "item": it["id"],
-                                                    "run_id": (d.get("last_run") or {}).get("databaseId"), "run": run}}
+    probe = red_newer_probe(it, d)
     got = store.acquire(lname, f"owner:{DECISION_CAUSE}", BLOCK_TTL, maxh, progress=f"decision@{int(t)}",
                         meta={"kind": "block", "decision": True, "cause": DECISION_CAUSE, "cmd": cmd, "probe": probe,
                               "until": until, "keys": [key], "text": text, "details": diag, "decide": decide,
@@ -2889,6 +2920,14 @@ def red_decision_block(store, it, upd, decide, t, category=None):
     red_owner_block(store, it, line, t, data={**upd, "cause": DECISION_CAUSE, "block": lname},
                     refs={"key": key, "run": run, "workflow": d.get("workflow"), "verdict": line, "command": "red"})
     return [f"decision needed on {red_what(d)}: blocked on the owner"]
+
+
+def red_newer_probe(it, d):
+    """The probe a harness or decision block of red `it` (data d) lifts on: a newer decided run of its workflow, read
+    in the red's OWN repo's snapshot (issue 20261102T085329-930a4a: a core red's block read movies')."""
+    return {"kind": "red_newer_verdict", "args": {"workflow": d.get("workflow"), "item": it["id"],
+                                                  "run_id": (d.get("last_run") or {}).get("databaseId"),
+                                                  "run": (d.get("last_run") or {}).get("number"), "repo": d.get("repo")}}
 
 
 def probe_red_newer_verdict(a):
