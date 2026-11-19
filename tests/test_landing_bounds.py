@@ -29,6 +29,16 @@ class PushBoundTest(unittest.TestCase):
         self.assertIsNone(rc)  # busy forever: the wall bound ends it
 
 
+    def test_a_remote_side_internal_server_error_is_a_transient_push_failure_named_as_the_remotes(self):
+        """ISSUE 20261104T104042-83b1c0: the remote's `fatal error in commit_refs` / `[remote rejected] ... (Internal Server
+        Error)` is the forge's incident, not the change's or the hook's: it is classified with the other transient push
+        failures (so the queue's retry says why, `the push failed (exit 1)` hides it) and never RACE or REDGATE."""
+        out = ("remote: fatal error in commit_refs\n"
+               "To github.com:o/movies.git\n ! [remote rejected] abc123 -> main (Internal Server Error)\n"
+               "error: failed to push some refs to 'github.com:o/movies.git'\n")
+        self.assertTrue(A.TRANSIENT_PUSH.search(out), "an Internal Server Error from the remote is not recognised")
+
+
 class LeaseTest(unittest.TestCase):
     """The store's leases (design §6) and the landing lease (step 3): a holder that stops progressing loses it."""
     def test_a_push_hanging_under_the_landing_lease_loses_it_and_ends(self):
