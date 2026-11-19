@@ -7,7 +7,8 @@
               ["Identity takes", "identity-takes.yml"]],
      "push": "land",
      "generated": [
-       {"paths": ["test/resources/coupling-baseline.tsv"], "regen": "scripts/coupling-report --update"},
+       {"paths": ["test/resources/coupling-baseline.tsv", "test/resources/coupling-fanout-refs.tsv"],
+        "regen": "scripts/coupling-report --update"},
        {"paths": ["test/resources/complexity-baseline.tsv", "test/resources/length-baseline.tsv",
                   "test/resources/duplication-baseline.tsv"], "regen": "scripts/quality-report --update"}]},
     {"repo": "bitcashier/infra",

@@ -310,6 +310,8 @@ class Sim:
             return 0, ""
         if cmd == "symbolic-ref":
             return 1, ""
+        if cmd == "log" and "--" in rest:  # a bounce's cause (queue.py conflict_cause): the sim keeps no subjects
+            return 0, ""
         raise Violation(f"(sim) git {' '.join(a)} is not modelled: model it in queue_sim.SimGit")
 
     def range_paths(self, cwd, a, b, deleted=False):

@@ -1184,6 +1184,40 @@ def change_rows(store=None):
     return sorted(rows, key=lambda r: r["id"])
 
 
+# A BOUNCE NAMES WHAT CAUSED IT (2026-11-19: lane F2b's `no longer applies on origin/main 2cfa0ee95e` named neither
+# file nor commit; its agent rebased blind). Only a real conflict reaches the agent (generated files are resolved in
+# the check tree, waiting.py GENERATED FILES ARE NO OVERLAP), and its verdict names each conflicting file with the
+# commit of main that last changed it since the change's base; the files are kept on the entry (`conflict_files`), so
+# the change queued again from the same source takes its old place (server.py queue_change, A RESOLVED CONFLICT
+# KEEPS ITS PLACE).
+def conflict_paths(conflicts):
+    """The file paths of a pick's conflict list (a generated file's entry carries its resolution's why)."""
+    return [c.split(" (generated: ", 1)[0] for c in conflicts or []]
+
+
+def conflict_cause(repo, since, main, conflicts, n=3):
+    """`; it conflicts in F (changed on main by <sha> <subject>), ...` for the conflict list, each file's newest
+    commit in since..main; '' when none is known."""
+    out = []
+    for c in (conflicts or [])[:n]:
+        path = c.split(" (generated: ", 1)[0]
+        line = git(repo, "log", "-1", "--format=%h %s", "--abbrev=10", f"{since}..{main}", "--", path,
+                   check=False).stdout.strip() if since and main else ""
+        out.append(f"{c} (changed on main by {line[:90]})" if line else c)
+    more = len(conflicts or []) - n
+    return f"; it conflicts in {', '.join(out)}" + (f" (+{more} more)" if more > 0 else "") if out else ""
+
+
+def provisional_hint(tree, e):
+    """`; its F kept main's rows ...: rebase, run `regen`, land again` for a change whose generated files the check
+    tree merged keeping main's side of a row both changed (MAIN'S ROW, PROVISIONALLY, waiting.py); '' otherwise."""
+    files = e.get("provisional") or []
+    cmds = sorted({" ".join(g["regen"]) for g in (generated_entry(tree, f) for f in files) if g})
+    return (f"; its {', '.join(files)} kept {remote()}/main's rows where both sides changed them (no regen command "
+            f"runs where the queue does): rebase onto {remote()}/main, run {' and '.join(f'`{c}`' for c in cmds) or 'the regen command'}, "
+            "commit and land again") if files else ""
+
+
 def rebase_in_tree(d, tree, e, base, regen=True, conflicts=None):
     """The entry's commits on base, in the tree: (head, None); (None, None) on a conflict (aborted; its files appended
     to `conflicts`); (None, via) when every commit is on base already (dropped: LANDED via that commit, never an empty
@@ -1271,13 +1305,16 @@ def _check_entry(repo, d, e, i, own=None):
         e["round_since"] = ts()
         save_entry(d, e)
         tree = check_tree(repo, i, base)
-        head, via = rebase_in_tree(d, tree, e, base)
+        conflicts = []
+        head, via = rebase_in_tree(d, tree, e, base, conflicts=conflicts)
     if via:
         already_landed(d, e, via if via != "an equivalent commit" else None)
         return 0
     if not head:
         queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {remote()}/main {base[:10]} "
-                      f"(main moved since QUEUED): rebase onto {remote()}/main and land again")
+                      f"(main moved since QUEUED{conflict_cause(tree, e.get('base'), base, conflicts)}): rebase onto "
+                      f"{remote()}/main and land again (it keeps its place in the queue)",
+                      conflict_files=conflict_paths(conflicts))
         return 1
     e["tip"] = head
     save_entry(d, e)
@@ -1340,8 +1377,8 @@ def _check_entry(repo, d, e, i, own=None):
                 timed = " (and they ran past their time cap, " \
                         f"{TIMEOUT_RETRIES + 1} times)" if CHECK_TIMEOUT.search(out or "") else ""
                 queue_verdict(d, e, "rejected", f"NOT LANDED: the pre-push checks failed ({where}){timed}; failing "
-                              f"with this change only: {keys_text(what)}; the change {e['head'][:10]} stays in "
-                              f"{e['worktree']}", (out or "").splitlines())
+                              f"with this change only: {keys_text(what)}{provisional_hint(tree, e)}; the change "
+                              f"{e['head'][:10]} stays in {e['worktree']}", (out or "").splitlines())
                 return 1
             srcs = sorted(set(what.values()))
             known_red = {"keys": sorted(what), "where": srcs, "base": base}
@@ -1573,7 +1610,9 @@ def _push_change(repo, d, e, i):
                 return "queued"
             if not new_head:
                 queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {remote()}/main "
-                              f"{moved[:10]} (main moved during its checks): rebase onto {remote()}/main and land again")
+                              f"{moved[:10]} (main moved during its checks{conflict_cause(tree, base, moved, conflicts)}"
+                              f"): rebase onto {remote()}/main and land again (it keeps its place in the queue)",
+                              conflict_files=conflict_paths(conflicts))
                 return "rejected"
             tree_hook = precheck_hook(tree) if hook else None
             n, why = recheck_reason(tree, full_base, moved, new_head, range_paths(tree, moved, new_head),
@@ -1772,8 +1811,9 @@ def _tick_changes_pass(repo, d, st, t, reds, phase, mine, todo, held, pheld, bat
             gone = main_conflict(repo, e)
             if gone:  # it no longer applies on main itself: said now, never after a wait for a tree or an older change
                 queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {remote()}/main "
-                              f"{gone[0][:10]} (main moved since QUEUED; it conflicts in {', '.join(gone[1][:3])}): "
-                              f"rebase onto {remote()}/main and land again")
+                              f"{gone[0][:10]} (main moved since QUEUED{conflict_cause(repo, e.get('base'), gone[0], gone[1])}"
+                              f"): rebase onto {remote()}/main and land again (it keeps its place in the queue)",
+                              conflict_files=conflict_paths(gone[1]))
                 did.append(f"{e['id']}: rejected (no longer applies on main)")
                 continue
             hold = overlap_hold(repo, d, e, todo, reds, t)

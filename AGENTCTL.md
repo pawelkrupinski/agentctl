@@ -1281,18 +1281,31 @@ The reconciler then takes it, a step per tick:
   `pair_conflict`, `hold_for_overlap`; tests: `tests/test_backlog_batch.py` OverlapTest, `tests/test_queue_sim.py`
   CollisionTest (the three collisions of 2026-11-17 replayed: no check spent on a change that could not land, no full
   recheck).
+- **A BOUNCE NAMES WHAT CAUSED IT; A RESOLVED CONFLICT KEEPS ITS PLACE (2026-11-19, lane F2b).** Only a real conflict
+  reaches the agent: `NOT LANDED: the change no longer applies on <remote>/main <sha> (...; it conflicts in F (changed
+  on main by <sha> <subject>), ...)`, the files kept on the entry (`conflict_files`). A change queued again from the same
+  worktree and branch within 24 h of such a rejection takes the rejected entry's `seq` -- its place in the age order --
+  (`requeued_from` names it), never the back of the queue. queue.py `conflict_cause`, server.py `conflict_bounced`;
+  tests: `tests/test_generated.py`.
 - **GENERATED FILES ARE NO OVERLAP (2026-11-19 ~06:05Z: six movies changes -- agreement, f2, datalayer3, resolver2-b1,
   enrichment2, resolver2 -- each `held: its check waits for <prev>` because each edits coupling-baseline.tsv: every
   coupling or complexity lane landed one at a time).** A repo registers its generated files in red-repos.json
-  (`generated`: `[{paths, regen, timeout}]`; movies: coupling-baseline.tsv by `scripts/coupling-report --update`, the
-  complexity, length and duplication baselines by `scripts/quality-report --update`). Such a file is no overlap -- not
+  (`generated`: `[{paths, regen, timeout}]`; movies: coupling-baseline.tsv and coupling-fanout-refs.tsv by
+  `scripts/coupling-report --update`, the complexity, length and duplication baselines by `scripts/quality-report
+  --update`). Such a file is no overlap -- not
   for the hold, backlog-batch membership, the CONFLICTS a queued change is told of, `main_conflict`, nor the push's
   full-recheck rule; a real source both change (TestWiring.scala) holds as before. A conflict in one, on a rebase, a
   batch's assembly or land's own rebase, is RESOLVED in the commit being picked (its message and trailers kept): its
-  rows merged three-way (keyed by every column but the value; disjoint rows always merge), else -- one row both sides
-  changed -- the repo's `regen` command run in the tree, which is the combined tree at that commit
-  (`$AGENTCTL_GENERATED_REGEN_TIMEOUT`, 1200 s; on the laptop only: ci-runner's reconciler has no JVM, so there a
-  same-row conflict takes the fallback below). The hook's ratchet judges the result. The push's own rebase (under the
+  rows merged three-way (keyed by every column but the value; disjoint rows always merge; a SET table, a key on many
+  lines with no number for a value -- coupling-fanout-refs.tsv -- line by line), else -- one row both sides changed --
+  the repo's `regen` command run in the tree, which is the combined tree at that commit
+  (`$AGENTCTL_GENERATED_REGEN_TIMEOUT`, 1200 s; on the laptop only). **MAIN'S ROW, PROVISIONALLY (2026-11-19 06:58Z:
+  lane F2b NOT LANDED, `no longer applies on origin/main 2cfa0ee95e`, because c3922ba26 re-measured the very rows its
+  baseline commit changed and coupling-fanout-refs.tsv was unregistered: a rebase by hand and the back of the
+  queue).** Where no regen command runs (ci-runner's reconciler, the server role: no JVM), a row both sides changed
+  keeps the tree's side (main's, or an earlier batch member's), every other row merged, the files kept on the entry
+  (`provisional`); the hook's ratchet judges the combined tree as it judges any baseline (a fall not yet recorded
+  passes, a rise fails), and a change failing its checks so is told to rebase, run the regen command and land again. The push's own rebase (under the
   landing lock) never runs a regen command: a generated-only conflict there is a new verify round. A failed resolution
   (no JVM where the queue runs, the command's exit, its timeout) leaves the member out of the batch (`batch_alone`
   `regen`, why in the log) and holds it behind the change it overlaps, as before; a member resolved in a batch that

@@ -644,7 +644,9 @@ def assemble(repo, d, wt, entries, base, alone=False):
             continue
         if how == "conflict":
             queue_verdict(d, e, "rejected", f"NOT LANDED: main moved while it waited and the change no longer applies "
-                                            f"(conflicts in: {', '.join(x)}): rebase onto {remote()}/main and land again")
+                                            f"({conflict_cause(wt, e.get('base'), base, x).lstrip('; ')}): rebase onto "
+                                            f"{remote()}/main and land again (it keeps its place in the queue)",
+                          conflict_files=conflict_paths(x))
             continue
         if how == "landed":  # all of it reached main meanwhile: LANDED, and nothing of it is pushed again
             already_landed(d, e, x)

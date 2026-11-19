@@ -597,6 +597,28 @@ def clone_heal_tick(repo):
     return repair_clone(repo, f"{r.detail}\n{sus.get('error') or ''}".strip())
 
 
+# A RESOLVED CONFLICT KEEPS ITS PLACE (2026-11-19: lane F2b, bounced for a conflict main had made, rebased and queued
+# again at the back, behind every change queued while it was out): a change queued from the same worktree and branch
+# within CONFLICT_PLACE_KEPT s of its last entry's rejection for a conflict (`conflict_files`: no longer applies on
+# main) takes that entry's seq -- the queue's age order -- instead of a new one. The rejected entry is final, so no two
+# live entries share a seq. Tests: tests/test_generated.py.
+CONFLICT_PLACE_KEPT = 24 * 3600
+
+
+def conflict_bounced(every, e, now_=None):
+    """The newest entry of e's worktree and branch, when it was rejected for a conflict within CONFLICT_PLACE_KEPT s
+    (and nothing of that source was queued since): the place e takes. None otherwise."""
+    mine = [x for x in every if x["id"] != e["id"] and same_change_source(x, e["worktree"], e.get("branch"))]
+    last = max(mine, key=lambda x: x["seq"], default=None)
+    if not last or last.get("status") != "rejected" or last.get("conflict_files") is None:
+        return None
+    try:
+        at = dt.datetime.strptime(last.get("decided") or "", "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        return None
+    return last if (now_ or now().timestamp()) - at.timestamp() <= CONFLICT_PLACE_KEPT else None
+
+
 def queue_change(d, fields, entry_id=None):
     """A submitted change as a queued entry (seq under seq.lock); re-queueing from the same source supersedes the older
     one. Returns (entry, n ahead). Shared by `land` (phase 1) and POST /v1/changes (phase 2)."""
@@ -609,6 +631,9 @@ def queue_change(d, fields, entry_id=None):
             e = next(x for x in every if x["id"] == eid)
             return e, max(len(queued_entries(d)) - 1, 0)
         e = {**fields, "id": eid, "seq": seq, "status": "queued", "created": ts()}
+        bounced = conflict_bounced(every, e)
+        if bounced:  # A RESOLVED CONFLICT KEEPS ITS PLACE
+            e.update(seq=bounced["seq"], requeued_from=bounced["id"])
         save_entry(d, e)
         for old in queued_entries(d):  # RE-QUEUEING REPLACES: only the newest entry per worktree and branch runs
             if old["id"] != e["id"] and same_change_source(old, e["worktree"], e.get("branch")):

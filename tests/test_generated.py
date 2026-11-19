@@ -13,6 +13,8 @@ from test_agentctl import A, sh  # noqa: E402
 import test_backlog_batch  # noqa: E402
 
 BASELINE = "test/resources/coupling-baseline.tsv"
+REFS = "test/resources/coupling-fanout-refs.tsv"  # a SET table: `<class><TAB><target>` a line, a class on many lines
+REFS_LINES = "A\tmodels.X\nA\tmodels.Y\nA\ttools.Z\nB\tmodels.X\n"
 HEADER = "# THE COUPLING BASELINE\n# kind<TAB>key<TAB>value\n"
 
 
@@ -51,6 +53,23 @@ class RowsMergeTest(unittest.TestCase):
         self.assertIsNone(A.rows_merge(base, "# ours\n" + base, "# theirs\n" + base))
         self.assertIsNone(A.rows_merge(base, base + "ce\tmodels\t4\n", base))
 
+    def test_a_set_table_merges_line_by_line(self):
+        """coupling-fanout-refs.tsv (2026-11-19, lane F2b's bounce): a class on many lines, no value column -- each
+        line is its own row, present or not; a line one side removed is gone, one either side added is kept."""
+        ours = REFS_LINES.replace("A\tmodels.Y\n", "")  # main: A no longer uses Y
+        theirs = REFS_LINES.replace("A\tmodels.Y\n", "A\tmodels.Y\nA\tmodels.W\n").replace("B\tmodels.X\n", "")
+        self.assertEqual(A.rows_merge(REFS_LINES, ours, theirs), "A\tmodels.X\nA\tmodels.W\nA\ttools.Z\n")
+
+    def test_prefer_ours_takes_our_value_for_a_row_both_sides_changed(self):
+        """The server role runs no regen command: a row both sides changed differently provisionally keeps OUR side's
+        (main's) value -- the checks' ratchet then measures the combined tree -- while every other row merges."""
+        base = table(ROWS)
+        ours = base.replace("fanout\tA\t12", "fanout\tA\t15")
+        theirs = base.replace("fanout\tA\t12", "fanout\tA\t10").replace("ce\ttools\t2", "ce\ttools\t1")
+        self.assertIsNone(A.rows_merge(base, ours, theirs))
+        self.assertEqual(A.rows_merge(base, ours, theirs, prefer_ours=True),
+                         base.replace("fanout\tA\t12", "fanout\tA\t15").replace("ce\ttools\t2", "ce\ttools\t1"))
+
 
 class RegistryTest(unittest.TestCase):
     def test_a_generated_entry_needs_its_paths_and_regen_command(self):
@@ -64,12 +83,13 @@ class RegistryTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 A.red_repos_parse({"repos": [{"repo": "o/r", "gate": [["Main", "main.yml"]], "generated": [bad]}]})
 
-    def test_movies_registers_its_four_baselines(self):
+    def test_movies_registers_its_baselines_and_the_fanout_refs(self):
         with open(os.path.join(os.path.dirname(HERE), "red-repos.json")) as f:
             movies = next(c for c in A.red_repos_parse(json.load(f)) if c["repo"] == "pawelkrupinski/movies")
         paths = {p: g["regen"] for g in movies["generated"] for p in g["paths"]}
         self.assertEqual(paths, {
             "test/resources/coupling-baseline.tsv": ["scripts/coupling-report", "--update"],
+            "test/resources/coupling-fanout-refs.tsv": ["scripts/coupling-report", "--update"],
             **{f"test/resources/{n}-baseline.tsv": ["scripts/quality-report", "--update"]
                for n in ("complexity", "length", "duplication")}})
 
@@ -91,6 +111,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.r.write("scripts/regen", REGEN.format(log=self.regen_log, path=BASELINE))
         os.chmod(os.path.join(self.r.path, "scripts/regen"), 0o755)
         self.r.write(BASELINE, table(ROWS))
+        self.r.write(REFS, REFS_LINES)
         self.r.write("web/src/main/A.scala", "a\n")
         self.r.write("worker/src/fixtures/scala/tools/TestWiring.scala", "".join(f"wire {i}\n" for i in range(10)))
         self.r.commit("the baseline, its regen command, the test wiring")
@@ -98,7 +119,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         repos = os.path.join(self.tmp.name, "red-repos.json")
         with open(repos, "w") as f:
             json.dump({"repos": [{"repo": A.slug(self.r.path), "gate": [["Main", "main.yml"]],
-                                  "generated": [{"paths": [BASELINE], "regen": "scripts/regen"}]}]}, f)
+                                  "generated": [{"paths": [BASELINE, REFS], "regen": "scripts/regen"}]}]}, f)
         self.saved_repos = os.environ.get("AGENTCTL_RED_REPOS")
         os.environ["AGENTCTL_RED_REPOS"] = repos
         for c in A.PROCESS_CACHES:
@@ -204,16 +225,17 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.assertEqual(self.started, [ea], "b waits behind a, as before")
         self.assertEqual(A.Store().item("change", eb)["data"]["hold"]["files"], [BASELINE])
 
-    def test_the_server_role_runs_no_regen_command_and_takes_the_fallback(self):
-        """ci-runner's reconciler has no JVM: a same-row conflict there is the member's, never minutes in a tick."""
+    def test_the_server_role_runs_no_regen_command_and_keeps_mains_row_for_the_checks_to_judge(self):
+        """ci-runner's reconciler has no JVM: a same-row conflict there takes the side already in the tree, never
+        minutes in a tick, and the batch's checks (the ratchet over the combined tree) judge it."""
         ea = self.change("a", {"fanout\tA": 13}, {"web/src/main/A.scala": "a\na2\n"})
         eb = self.change("b", {"fanout\tA": 14}, {"worker/src/main/C.scala": "c\n"})
         A.tick_changes(self.r.path, self.d)
         self.drive_as("server")
         self.assertEqual(self.regen_runs(), 0)
-        self.assertEqual(self.entry(eb)["batch_alone"], "regen")
-        self.assertIn("the server role runs no regen command", open(os.path.join(self.d, "processor.log")).read())
-        self.assertEqual(self.entry(ea)["status"], "queued")
+        self.assertEqual([self.entry(x)["status"] for x in (ea, eb)], ["landed", "landed"])
+        self.assertIn("fanout\tA\t13\n", self.baseline_on_main(), "a's row, already in the tree b was picked onto")
+        self.assertIn("kept the tree's row", open(os.path.join(self.d, "processor.log")).read())
 
     # ------------------------------------------------------------------------------------------- the push's rebase
     def test_main_moving_by_a_generated_conflict_is_a_new_round_never_a_rejection(self):
@@ -233,6 +255,95 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         A.tick_changes(self.r.path, self.d)
         self.assertEqual(self.entry(ey)["status"], "landed")
         self.assertIn("ce\tservices\t5\nce\ttools\t1\n", self.baseline_on_main())
+
+
+    # ------------------------------------------------------------------------------------------- main moved since QUEUED
+    def test_f2b_replayed_main_remeasured_the_baseline_and_its_refs_and_the_change_still_applies(self):
+        """2026-11-19 06:58Z, lane F2b (20261119-065741-movies-phase3-f2b-5c34a7): queued on 7db1859b8, main moved to
+        2cfa0ee95 by c3922ba26, which re-measured coupling-baseline.tsv (the rows F2b's own baseline commit changed,
+        differently) and coupling-fanout-refs.tsv (lines next to F2b's). Its third commit's pick conflicted in both;
+        the refs file was not registered and its rows repeat a class, the baseline's same rows needed a regen the
+        server role cannot run: NOT LANDED, a rebase by hand, a new place at the back of the queue. Now both are
+        resolved in the check tree and the change is checked where it stood."""
+        wt = self.r.worktree("wt-f2b", branch="f2b")
+        self.r.write("web/src/main/D.scala", "d\n", at=wt)
+        self.r.commit("f2b: the debug page becomes its own controller", at=wt)
+        with open(os.path.join(wt, BASELINE)) as f:
+            text = f.read()
+        self.r.write(BASELINE, text.replace("fanout\tA\t12", "fanout\tA\t10"), at=wt)
+        self.r.write(REFS, REFS_LINES.replace("A\tmodels.Y\n", ""), at=wt)
+        self.r.commit("f2b: record the falls", at=wt)
+        eid = self.queued(wt)[0]
+        main = self.r.worktree("wt-remeasure", branch="remeasure")  # c3922ba26: the measurement changes under it
+        self.r.write(BASELINE, text.replace("fanout\tA\t12", "fanout\tA\t15"), at=main)
+        self.r.write(REFS, REFS_LINES.replace("A\tmodels.Y\n", "A\tmodels.Y\nA\tmodels.V\n"), at=main)
+        self.r.commit("Coupling: a file's imports are charged to the classes using them\n\nCoupling: a measurement fix",
+                      at=main)
+        self.r.push(at=main)
+        A.check_entry(self.r.path, eid)
+        e = self.entry(eid)
+        self.assertEqual(e["status"], "checked", e.get("why"))
+        tip_file = lambda path: sh(self.r.path, "git", "show", f"{e['tip']}:{path}") + "\n"
+        self.assertIn("fanout\tA\t15\n", tip_file(BASELINE), "main's re-measured row, for the ratchet to judge")
+        self.assertEqual(tip_file(REFS), "A\tmodels.X\nA\tmodels.V\nA\ttools.Z\nB\tmodels.X\n", "both sides' lines")
+        A.tick_changes(self.r.path, self.d)
+        self.assertEqual(self.entry(eid)["status"], "landed")
+
+    def test_a_change_failing_its_checks_over_mains_rows_is_told_to_regenerate(self):
+        wt = self.r.worktree("wt-rise", branch="rise")
+        with open(os.path.join(wt, BASELINE)) as f:
+            text = f.read()
+        self.r.write(BASELINE, text.replace("fanout\tA\t12", "fanout\tA\t13"), at=wt)
+        self.r.write("web/src/main/BROKEN.scala", "the ratchet measures a rise\n", at=wt)
+        self.r.commit("rise: a dependency\n\nCoupling: needed", at=wt)
+        eid = self.queued(wt)[0]
+        main = self.r.worktree("wt-remeasure", branch="remeasure")
+        self.r.write(BASELINE, text.replace("fanout\tA\t12", "fanout\tA\t11"), at=main)
+        self.r.commit("main: a fall", at=main)
+        self.r.push(at=main)
+        A.check_entry(self.r.path, eid)
+        e = self.entry(eid)
+        self.assertEqual(e["status"], "rejected")
+        self.assertIn(f"its {BASELINE} kept origin/main's rows where both sides changed them", e["why"])
+        self.assertIn("run `scripts/regen`, commit and land again", e["why"])
+
+    def test_a_real_conflict_bounces_naming_its_files_and_the_commit_of_main_that_caused_it(self):
+        wiring = "worker/src/fixtures/scala/tools/TestWiring.scala"
+        wt = self.r.worktree("wt-mine", branch="mine")
+        self.r.write(wiring, "mine\n", at=wt)
+        self.r.commit("mine: rewire", at=wt)
+        eid = self.queued(wt)[0]
+        other = self.r.worktree("wt-other", branch="other")
+        self.r.write(wiring, "theirs\n", at=other)
+        culprit = self.r.commit("other: rewire differently", at=other)
+        self.r.push(at=other)
+        A.check_entry(self.r.path, eid)
+        e = self.entry(eid)
+        self.assertEqual(e["status"], "rejected")
+        self.assertIn(f"it conflicts in {wiring} (changed on main by {culprit[:10]} other: rewire differently)", e["why"])
+        self.assertEqual(e["conflict_files"], [wiring])
+
+    def test_the_change_requeued_after_resolving_a_conflict_keeps_its_place(self):
+        """Only a real conflict reaches the agent, and resolving it costs no queue place: the change queued again from
+        the same worktree and branch takes the rejected entry's place (its seq), ahead of what queued meanwhile."""
+        wiring = "worker/src/fixtures/scala/tools/TestWiring.scala"
+        wt = self.r.worktree("wt-mine", branch="mine")
+        self.r.write(wiring, "mine\n", at=wt)
+        self.r.commit("mine: rewire", at=wt)
+        first = self.queued(wt)[0]
+        other = self.r.worktree("wt-other", branch="other")
+        self.r.write(wiring, "theirs\n", at=other)
+        self.r.commit("other: rewire differently", at=other)
+        self.r.push(at=other)
+        A.check_entry(self.r.path, first)
+        self.assertEqual(self.entry(first)["status"], "rejected")
+        later = self.change("later", files={"web/src/main/L.scala": "l\n"})
+        sh(wt, "git", "fetch", "-q", "origin")
+        sh(wt, "git", "rebase", "-q", "-X", "theirs", "origin/main")  # the agent resolves it
+        again = self.queued(wt)[0]
+        self.assertEqual(self.entry(again)["seq"], self.entry(first)["seq"], "its old place")
+        self.assertLess(self.entry(again)["seq"], self.entry(later)["seq"])
+        self.assertEqual(self.entry(again)["requeued_from"], first)
 
 
 for _name in dir(test_backlog_batch.BacklogBatchTest):  # its setUp only, not its tests
