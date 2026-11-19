@@ -952,10 +952,24 @@ PUSH_ATTEMPTS_MAX = 3
 
 
 def change_item_fields(e):
-    """A change item's data at its creation, from its queue entry: where it is, its lander, and the reds it claims to
-    fix (`fixes`: the watchdog's WR reads them; a red fix never waits for green)."""
+    """A change item's data at its creation, from its queue entry: where it is, its lander, the reds it claims to fix
+    (`fixes`: the watchdog's WR reads them; a red fix never waits for green), and when it was submitted (`submitted_at`:
+    its queue age -- an entry queued again after a conflict keeps its first one, entry_queued_since)."""
+    since = entry_queued_since(e)
     return {"worktree": e.get("worktree"), "head": e.get("head"), **lander_fields(e),
-            **({"fixes": sorted(e["fixes"])} if e.get("fixes") else {})}
+            **({"fixes": sorted(e["fixes"])} if e.get("fixes") else {}),
+            **({"submitted_at": since} if since else {})}
+
+
+def entry_queued_since(e):
+    """When the change was first queued (epoch): `queued_since` (carried over a re-queue that kept its place), else
+    its `created`; None when neither reads."""
+    if e.get("queued_since"):
+        return float(e["queued_since"])
+    try:
+        return parse_time(e["created"]).timestamp() if e.get("created") else None
+    except (ValueError, TypeError):
+        return None
 
 
 def set_change(d, e, to, data=None, event=None, store=None, **fields):
@@ -1218,6 +1232,42 @@ def provisional_hint(tree, e):
             "commit and land again") if files else ""
 
 
+# A ROW ONLY A REGEN DECIDES IS NO BOUNCE (2026-11-19, lane F2b): main re-measured the coupling-baseline rows the change
+# changed too; ci-runner runs no JVM, so the check tree kept main's rows (MAIN'S ROW, PROVISIONALLY, waiting.py) and the
+# checks' ratchet failed over them. That is no defect of the change, only a regeneration this host cannot run: the
+# change is HELD in its place (queued, not checked again) and its agent told ONE command -- `agentctl land` in its
+# worktree, which rebases onto main and runs the regen where the JVM is (the laptop's conflict_resolve) -- and the
+# change queued again from that worktree takes the held entry's place and queue age (server.py queue_change). A hold
+# nobody answers is rejected after CONFLICT_PLACE_KEPT (THE STATE MACHINE IS TOTAL).
+def regen_hold(d, e, tree, failing, out):
+    """Hold change e for its agent's regeneration (above): queued with retry_after at the hold's end, `regen_hold` on
+    its entry, its author told the one command (the event's inbox entry). Returns 1 (nothing pushed)."""
+    files = e.get("provisional") or []
+    cmds = sorted({" ".join(g["regen"]) for g in (generated_entry(tree, f) for f in files) if g})
+    cmd = f"cd {e['worktree']} && ~/bin/agentctl land"
+    t = time.time()
+    why = (f"REGEN NEEDED {e['id']}: its {', '.join(files)} kept {remote()}/main's rows where both sides changed them "
+           f"(ci-runner runs no {' / '.join(cmds) or 'regen command'}) and its checks failed over them ({failing}); it "
+           f"keeps its place in the queue: run `{cmd}` (rebases onto {remote()}/main and runs "
+           f"{' and '.join(f'`{c}`' for c in cmds) or 'the regen'} on this machine)")
+    set_change(d, e, "queued", event=change_event(e, why, (out or "").splitlines()[-40:], code=None, final=False),
+               why=why, retry_after=t + CONFLICT_PLACE_KEPT,
+               regen_hold={"since": t, "cmd": cmd, "files": files, "head": e.get("head")})
+    wlog(d, f"{e['id']}: held for its regeneration ({', '.join(files)}): `{cmd}`")
+    return 1
+
+
+def regen_hold_expired(d, e, t):
+    """A regen hold nobody answered within CONFLICT_PLACE_KEPT: rejected, naming the command it waited for."""
+    h = e.get("regen_hold") or {}
+    if not h or t - float(h.get("since") or t) < CONFLICT_PLACE_KEPT:
+        return False
+    queue_verdict(d, e, "rejected", f"NOT LANDED: {e['id']} waited {int(CONFLICT_PLACE_KEPT // 3600)} h for "
+                  f"`{h.get('cmd')}` (its {', '.join(h.get('files') or [])} need a regen ci-runner cannot run): "
+                  "run it and land again", conflict_files=h.get("files") or [])
+    return True
+
+
 def rebase_in_tree(d, tree, e, base, regen=True, conflicts=None):
     """The entry's commits on base, in the tree: (head, None); (None, None) on a conflict (aborted; its files appended
     to `conflicts`); (None, via) when every commit is on base already (dropped: LANDED via that commit, never an empty
@@ -1377,6 +1427,8 @@ def _check_entry(repo, d, e, i, own=None):
         known_red = None
         if not ok:
             side, what = judge_failure(repo, d, e, base, out)
+            if side == "head" and e.get("provisional") and not CHECK_TIMEOUT.search(out or ""):
+                return regen_hold(d, e, tree, keys_text(what), out)  # A ROW ONLY A REGEN DECIDES IS NO BOUNCE
             if side == "head":
                 timed = " (and they ran past their time cap, " \
                         f"{TIMEOUT_RETRIES + 1} times)" if CHECK_TIMEOUT.search(out or "") else ""
@@ -1831,6 +1883,8 @@ def _tick_changes_pass(repo, d, st, t, reds, phase, mine, todo, held, pheld, bat
                           f"{', '.join(shared[:3])}" + (f" (+{len(shared) - 3} more)" if len(shared) > 3 else ""), t,
                           blocker=o["id"], files=shared[:10])
                 continue
+        if e.get("regen_hold") and regen_hold_expired(d, e, t):
+            continue
         if alive or e.get("retry_after", 0) > t:
             continue
         first = None if fix else batch_goes_first(st, d, ("assembling", "pushing"))

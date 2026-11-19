@@ -608,9 +608,12 @@ CONFLICT_PLACE_KEPT = 24 * 3600
 
 def conflict_bounced(every, e, now_=None):
     """The newest entry of e's worktree and branch, when it was rejected for a conflict within CONFLICT_PLACE_KEPT s
-    (and nothing of that source was queued since): the place e takes. None otherwise."""
+    (and nothing of that source was queued since), or is still held for its regeneration (queue.py regen_hold): the
+    place e takes. None otherwise."""
     mine = [x for x in every if x["id"] != e["id"] and same_change_source(x, e["worktree"], e.get("branch"))]
     last = max(mine, key=lambda x: x["seq"], default=None)
+    if last and last.get("regen_hold") and last.get("status") == "queued":
+        return last
     if not last or last.get("status") != "rejected" or last.get("conflict_files") is None:
         return None
     try:
@@ -626,15 +629,20 @@ def queue_change(d, fields, entry_id=None):
     with open(os.path.join(d, "seq.lock"), "a+") as seq_lock:  # a unique seq; never the landing lock (a push holds it)
         fcntl.flock(seq_lock, fcntl.LOCK_EX)
         every = waiting_entries(d, open_only=False)
-        seq = max([e["seq"] for e in every] + [0]) + 1
+        # THE COUNTER NEVER GOES BACK (queue simulator, replay 2026-11-17, seed 1006): an entry that took a bounced
+        # entry's place carries an old seq, so max(seq) + 1 handed the NEXT submission the number it had just used --
+        # two submissions of one worktree in the same second got one id, and the second was answered with the first
+        # entry: lost. The id's number is the highest ever drawn (`drawn`), whatever seq an entry ends up with.
+        seq = max([max(int(e["seq"]), int(e.get("drawn") or 0)) for e in every] + [0]) + 1
         eid = entry_id or f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(fields['worktree'])}-{seq}"
         if any(x["id"] == eid for x in every):
             e = next(x for x in every if x["id"] == eid)
             return e, max(len(queued_entries(d)) - 1, 0)
-        e = {**fields, "id": eid, "seq": seq, "status": "queued", "created": ts()}
+        e = {**fields, "id": eid, "seq": seq, "drawn": seq, "status": "queued", "created": ts()}
         bounced = conflict_bounced(every, e)
-        if bounced:  # A RESOLVED CONFLICT KEEPS ITS PLACE
-            e.update(seq=bounced["seq"], requeued_from=bounced["id"])
+        if bounced:  # A RESOLVED CONFLICT KEEPS ITS PLACE -- and its queue age (the store item's submitted_at)
+            e.update(seq=bounced["seq"], requeued_from=bounced["id"],
+                     queued_since=entry_queued_since(bounced) or entry_queued_since(e))
         save_entry(d, e)
         for old in queued_entries(d):  # RE-QUEUEING REPLACES: only the newest entry per worktree and branch runs
             if old["id"] != e["id"] and same_change_source(old, e["worktree"], e.get("branch")):

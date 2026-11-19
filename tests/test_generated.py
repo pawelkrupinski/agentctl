@@ -303,9 +303,82 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.r.push(at=main)
         A.check_entry(self.r.path, eid)
         e = self.entry(eid)
+        # A ROW ONLY A REGEN DECIDES IS NO BOUNCE: held in its place, its agent told ONE command
+        self.assertEqual(e["status"], "queued")
+        self.assertEqual(e["regen_hold"]["cmd"], f"cd {wt} && ~/bin/agentctl land")
+        self.assertIn(f"REGEN NEEDED {eid}: its {BASELINE} kept origin/main's rows where both sides changed them", e["why"])
+        self.assertIn(f"it keeps its place in the queue: run `cd {wt} && ~/bin/agentctl land`", e["why"])
+        self.assertIn("runs `scripts/regen` on this machine", e["why"])
+        A.tick_changes(self.r.path, self.d)  # held: not checked again, not rejected
+        self.assertEqual(self.entry(eid)["status"], "queued")
+        later = self.change("later", files={"web/src/main/L.scala": "l\n"})
+        self.r.write("web/src/main/BROKEN.scala", "", at=wt)  # its agent ran the command: rebased, regenerated
+        self.r.commit("rise: regenerated", at=wt)
+        again = self.queued(wt)[0]
+        self.assertEqual(self.entry(again)["seq"], self.entry(eid)["seq"], "the held change's place")
+        self.assertLess(self.entry(again)["seq"], self.entry(later)["seq"])
+        self.assertEqual(self.entry(again)["queued_since"], A.entry_queued_since(self.entry(eid)), "and its queue age")
+        self.assertEqual(self.entry(eid)["status"], "superseded")
+
+    def test_a_regen_hold_nobody_answers_is_rejected_after_its_bound(self):
+        wt = self.r.worktree("wt-rise", branch="rise")
+        with open(os.path.join(wt, BASELINE)) as f:
+            text = f.read()
+        self.r.write(BASELINE, text.replace("fanout\tA\t12", "fanout\tA\t13"), at=wt)
+        self.r.write("web/src/main/BROKEN.scala", "the ratchet measures a rise\n", at=wt)
+        self.r.commit("rise: a dependency\n\nCoupling: needed", at=wt)
+        eid = self.queued(wt)[0]
+        main = self.r.worktree("wt-remeasure", branch="remeasure")
+        self.r.write(BASELINE, text.replace("fanout\tA\t12", "fanout\tA\t11"), at=main)
+        self.r.commit("main: a fall", at=main)
+        self.r.push(at=main)
+        A.check_entry(self.r.path, eid)
+        self.assertEqual(self.entry(eid)["status"], "queued")
+        A.tick_changes(self.r.path, self.d, now_=time.time() + A.CONFLICT_PLACE_KEPT + 60)
+        e = self.entry(eid)
         self.assertEqual(e["status"], "rejected")
-        self.assertIn(f"its {BASELINE} kept origin/main's rows where both sides changed them", e["why"])
-        self.assertIn("run `scripts/regen`, commit and land again", e["why"])
+        self.assertIn(f"waited 24 h for `cd {wt} && ~/bin/agentctl land`", e["why"])
+
+    def test_a_stale_change_main_moved_under_is_rebased_in_the_check_tree_and_goes_on(self):
+        """The 3-way rebase of a non-generated change: main changed the same file in another hunk since the change
+        queued -- it is picked onto the new main in its check tree and lands, never bounced to its agent."""
+        wiring = "worker/src/fixtures/scala/tools/TestWiring.scala"
+        lines = [f"wire {i}\n" for i in range(10)]
+        wt = self.r.worktree("wt-mine", branch="mine")
+        self.r.write(wiring, "".join(lines[:9] + ["wire 9 mine\n"]), at=wt)
+        self.r.commit("mine: rewire the last", at=wt)
+        eid = self.queued(wt)[0]
+        other = self.r.worktree("wt-other", branch="other")
+        self.r.write(wiring, "".join(["wire 0 theirs\n"] + lines[1:]), at=other)
+        self.r.commit("other: rewire the first", at=other)
+        self.r.push(at=other)
+        A.check_entry(self.r.path, eid)
+        A.tick_changes(self.r.path, self.d)
+        self.assertEqual(self.entry(eid)["status"], "landed", self.entry(eid).get("why"))
+        on_main = sh(self.r.root, "git", "--git-dir", self.r.bare, "show", f"main:{wiring}")
+        self.assertIn("wire 0 theirs", on_main)
+        self.assertIn("wire 9 mine", on_main)
+
+    def test_a_place_kept_never_reuses_an_id_number(self):
+        """Queue simulator, replay 2026-11-17 seed 1006: the entry that took a bounced entry's place carried its old
+        seq, so the next submission drew the number just used -- one id for two submissions in the same second, and
+        the second answered with the first entry (lost)."""
+        d = os.path.join(self.tmp.name, "ids")
+        os.makedirs(os.path.join(d, "entries"))
+        now = A.ts()
+        A.save_entry(d, {"id": "a-1", "seq": 1, "worktree": "/w", "branch": "b", "status": "rejected",
+                         "conflict_files": ["x"], "decided": now, "created": now})
+        A.save_entry(d, {"id": "o-2", "seq": 2, "worktree": "/o", "branch": "o", "status": "queued", "created": now})
+        first, _ = A.queue_change(d, {"worktree": "/w", "branch": "b", "head": "1" * 40})
+        second, _ = A.queue_change(d, {"worktree": "/x", "branch": "x", "head": "2" * 40})
+        self.assertEqual((first["seq"], first["drawn"]), (1, 3), "its old place, a new number")
+        self.assertEqual(second["drawn"], 4)
+        self.assertNotEqual(first["id"].rsplit("-", 1)[1], second["id"].rsplit("-", 1)[1])
+
+    def test_the_change_item_carries_its_queue_age(self):
+        e = {"id": "x", "created": "2026-11-19T06:57:41Z", "worktree": "/w", "head": "h"}
+        self.assertEqual(A.change_item_fields(e)["submitted_at"], A.parse_time("2026-11-19T06:57:41Z").timestamp())
+        self.assertEqual(A.change_item_fields({**e, "queued_since": 5.0})["submitted_at"], 5.0)
 
     def test_a_real_conflict_bounces_naming_its_files_and_the_commit_of_main_that_caused_it(self):
         wiring = "worker/src/fixtures/scala/tools/TestWiring.scala"

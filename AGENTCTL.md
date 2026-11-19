@@ -1322,8 +1322,18 @@ The reconciler then takes it, a step per tick:
   reaches the agent: `NOT LANDED: the change no longer applies on <remote>/main <sha> (...; it conflicts in F (changed
   on main by <sha> <subject>), ...)`, the files kept on the entry (`conflict_files`). A change queued again from the same
   worktree and branch within 24 h of such a rejection takes the rejected entry's `seq` -- its place in the age order --
-  (`requeued_from` names it), never the back of the queue. queue.py `conflict_cause`, server.py `conflict_bounced`;
-  tests: `tests/test_generated.py`.
+  (`requeued_from` names it), never the back of the queue -- and its QUEUE AGE: `queued_since` carries the first
+  entry's, and the change item's `submitted_at` (what `land status`, the stats and the escalations read) is it. A
+  stale change main moved under is picked onto the new main in its check tree (a three-way pick per commit) and goes
+  on; only a conflict that pick cannot resolve bounces. The id's number is the highest ever DRAWN (`drawn`), never
+  the place taken: a kept place handed the next submission the number just used, and two submissions of one worktree
+  in one second shared an id, the second answered with the first (queue simulator, replay 2026-11-17 seed 1006,
+  introduced by ae6430d). **A ROW ONLY A REGEN DECIDES IS NO BOUNCE:** a change whose checks fail over its
+  provisional rows (MAIN'S ROW, PROVISIONALLY, below) stays `queued` in its place, held (`regen_hold`, not checked
+  again), and its agent is told ONE command, `REGEN NEEDED <id>: ... run \`cd <worktree> && ~/bin/agentctl land\``
+  (the laptop's land rebases and runs the regen where the JVM is); the change queued again from that worktree takes
+  the held entry's place and age. Unanswered for 24 h it is rejected naming the command. queue.py `conflict_cause`,
+  `regen_hold`, server.py `conflict_bounced`, `queue_change`; tests: `tests/test_generated.py`.
 - **GENERATED FILES ARE NO OVERLAP (2026-11-19 ~06:05Z: six movies changes -- agreement, f2, datalayer3, resolver2-b1,
   enrichment2, resolver2 -- each `held: its check waits for <prev>` because each edits coupling-baseline.tsv: every
   coupling or complexity lane landed one at a time).** A repo registers its generated files in red-repos.json
@@ -1342,7 +1352,7 @@ The reconciler then takes it, a step per tick:
   queue).** Where no regen command runs (ci-runner's reconciler, the server role: no JVM), a row both sides changed
   keeps the tree's side (main's, or an earlier batch member's), every other row merged, the files kept on the entry
   (`provisional`); the hook's ratchet judges the combined tree as it judges any baseline (a fall not yet recorded
-  passes, a rise fails), and a change failing its checks so is told to rebase, run the regen command and land again. The push's own rebase (under the
+  passes, a rise fails), and a change failing its checks so is held for its agent's regen (above), never bounced. The push's own rebase (under the
   landing lock) never runs a regen command: a generated-only conflict there is a new verify round. A failed resolution
   (no JVM where the queue runs, the command's exit, its timeout) leaves the member out of the batch (`batch_alone`
   `regen`, why in the log) and holds it behind the change it overlaps, as before; a member resolved in a batch that
