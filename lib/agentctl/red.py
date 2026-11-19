@@ -2070,7 +2070,8 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
             red_move(store, it, "leased", f"{red_what(d)}: leased by {row['holder']}", data={"holder": row["holder"]})
             return [f"leased {red_what(d)} to {row['holder']}"]
         if row and float(lease_meta(row).get("released_at") or 0) > it["entered_at"] and \
-                float(row.get("acquired_at") or 0) >= it["entered_at"]:  # taken AND ended between two ticks: its attempt
+                float(row.get("acquired_at") or 0) >= it["entered_at"] and not red_lease_read(d, row):
+            # taken AND ended between two ticks: its attempt -- once (red_lease_read: a re-offer keeps entered_at)
             return red_lease_ended(store, it, row, block, t, repo)
         if block:
             store.close_offer(f"red:{it['id']}", "blocked")
@@ -2181,6 +2182,16 @@ GAVE_UP_DECIDE = re.compile(r"\W*GAVE UP:.*?(\bneeds? (?:the |an? )?owner|\bowne
 LEASE_INFRA = re.compile(r"(lease expired|ORPHANED|STOPPED: the red's lease was lost)")
 
 
+# ONE END, ONE ATTEMPT (2026-11-18 23:42-23:49Z, core Main Pipeline #1053, 0c8eea91b712): one fixer lease, revoked
+# ORPHANED once, was read into the red's history five times a minute apart -- the `offered` step matched the same
+# ended lease at every tick, since the re-offer (a self-transition) keeps the item's entered_at -- and "3 launches in
+# a row" twice made a CRASH LOOP and then BLOCKED ON OWNER, with no fixer started after the first. The epoch of the
+# lease whose end the red read is kept (`ended_lease`); that end is never read again.
+def red_lease_read(d, row):
+    """True when the red's history already holds the end of this lease (its epoch)."""
+    return bool(row) and row.get("epoch") is not None and d.get("ended_lease") == row.get("epoch")
+
+
 def red_lease_ended(store, it, row, block, t, repo=None):
     """Its holder's lease ended (released with a verdict, expired without progress, revoked): one attempt (not for a
     release by hand, a fixer that never started, a lease lost to infra, a red found already fixed, or one that needs the
@@ -2198,7 +2209,8 @@ def red_lease_ended(store, it, row, block, t, repo=None):
     counted = not (out.startswith(("NOT STARTED", "RELEASED")) or infra or GAVE_UP_FIXED.match(out)
                    or GAVE_UP_DECIDE.match(out))
     upd = {"history": (d.get("history") or []) + [h], "holder": None,
-           "attempts": int(d.get("attempts") or 0) + (1 if counted else 0)}
+           "attempts": int(d.get("attempts") or 0) + (1 if counted else 0),
+           "ended_lease": (row or {}).get("epoch")}
     if str(h["outcome"]).startswith("NOT STARTED") and m.get("tier") == "lander" and d.get("blame"):
         # THE LANDER COULD NOT BE REVIVED (LAUNCH FAILED): a fresh fixer at once, briefed with the change -- no backoff
         upd["blame"] = dict(d["blame"], revive_failed=str(h["outcome"])[:300])
@@ -2535,7 +2547,7 @@ def red_crash_launches(streak):
             why = f"LAUNCH FAILED: {failed[:300]}"
         else:
             last = [l.strip() for l in str(h.get("notes") or "").splitlines() if l.strip()]
-            why = str(h.get("outcome"))[:120] + (f" -- {last[-1][:100]}" if last else "")
+            why = str(h.get("outcome"))[:400] + (f" -- {last[-1][:100]}" if last else "")  # a dead wrapper's last words
         out.append(f"{str(h.get('at'))[11:16]}Z {why}")
     return "; ".join(out)
 
@@ -3327,7 +3339,7 @@ def red_dispatcher(store, o_r, repo, t):
         if owned and live:
             # THE FAMILY'S OWNER IS ALIVE: the red is its next turn -- its lease taken for the owner and handed over
             took = store.take(off["id"], owner_holder(fam), OWNER_TTL, OWNER_MAX,
-                              meta={"kind": "owned", "family": fam, "owner": owner_lease(fam),
+                              meta={"kind": "owned", "family": fam, "owner": owner_lease(fam), "host": socket_host(),
                                     "worktree": lease_meta(live).get("worktree"), "gate": bool(pic.get("gate"))})
             if took and "epoch" in took:
                 owner_hand(fam, off["lease"], took)
@@ -3396,8 +3408,7 @@ def red_dispatcher(store, o_r, repo, t):
             continue
         num = (pic.get("run") or {}).get("number")
         holder_id = owner_holder(fam) if owned else f"laptop:fixer:red-{pic['key']}-{int(pic.get('attempts') or 0) + 1}"
-        meta = {"kind": "owned" if owned else "fixer", "gate": bool(pic.get("gate")), "family": fam,
-                "tier": off["tier"], "run": num, "workflow": pic.get("workflow")}
+        meta = red_dispatch_meta(pic, fam, owned, off, num)
         ttl, max_ = (OWNER_TTL, OWNER_MAX) if owned else (RED_FIXER_TTL, RED_FIXER_MAX)
         took = store.take(off["id"], holder_id, ttl, max_, meta=meta)
         if not took or "held" in took or "gone" in took:
@@ -3419,6 +3430,13 @@ def red_dispatcher(store, o_r, repo, t):
                 store.release(x["name"], x["epoch"], x["secret"], outcome=f"NOT STARTED: {str(msg)[:200]}")
         acts.append(msg)
     return acts
+
+
+def red_dispatch_meta(pic, fam, owned, off, num):
+    """The lease meta the dispatcher takes a red's offer with; `host`: the machine its wrapper runs on, the only one
+    that may judge its pid (holder_work)."""
+    return {"kind": "owned" if owned else "fixer", "gate": bool(pic.get("gate")), "family": fam,
+            "tier": off["tier"], "run": num, "workflow": pic.get("workflow"), "host": socket_host()}
 
 
 def red_spawn(store, o_r, repo, off, took, extra=()):
@@ -3461,7 +3479,7 @@ def red_spawn(store, o_r, repo, off, took, extra=()):
     if tier == "deep":
         u["diagnosis"] = red_investigation_brief(pic)
     return red_dispatch(o_r, repo, u, why=f"tier {tier}", resume=resume, effort=effort, lease=off["lease"], took=took,
-                        extra=extra)
+                        extra=extra, store=store)
 
 
 def red_investigation_brief(pic):

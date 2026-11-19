@@ -220,7 +220,8 @@ def red_owner(a):
     st = CurrentStore()
     holder = owner_holder(fam)
     hb = st.acquire(owner_lease(fam), holder, OWNER_TTL, OWNER_MAX, progress=f"beat {int(time.time())}",
-                    meta={"kind": "owner", "family": fam, "worktree": wt, "pid": me, "notebook": rec.get("notebook")})
+                    meta={"kind": "owner", "family": fam, "worktree": wt, "pid": me, "notebook": rec.get("notebook"),
+                          "host": socket_host()})
     if "held" in hb:
         print(f"RED OWNER {fam}: DUPLICATE ({hb['held']['holder']} is alive)")
         return 0
@@ -497,13 +498,21 @@ def owner_work(fam, t, holder_pid=None):
     return True, f"turn {rec.get('turn')} at work"
 
 
+def wrapper_last_words(m, n=3):
+    """The last lines a fixer's wrapper wrote to its stderr (its lease meta's wrapper_log), joined; "" when none."""
+    path = m.get("wrapper_log")
+    lines = [x.strip() for x in tail_lines(path, 40)] if path and os.path.isfile(path) else []
+    return " | ".join([x for x in lines if x][-n:])[:600]
+
+
 def fixer_work(row, t):
     """(True|False|None, why): is a dispatched fixer's lease held by work? Its wrapper alive, its session not ended
-    (beyond RED_ORPHAN_GRACE since the lease's last progress)."""
+    (beyond RED_ORPHAN_GRACE since the lease's last progress). A dead wrapper's why carries its last words (stderr)."""
     m = lease_meta(row)
     pid = m.get("pid")
     if pid and not pid_alive(int(pid)):
-        return False, f"its wrapper (pid {pid}) is gone"
+        words = wrapper_last_words(m)
+        return False, f"its wrapper (pid {pid}) is gone" + (f"; its last words: {words}" if words else "")
     bid = m.get("bg_id")
     if not bid:
         return None, "its session is starting"
@@ -525,6 +534,14 @@ def holder_work(row, t, cache=None):
         return None, "not this machine's"
     cache = {} if cache is None else cache
     m = lease_meta(row)
+    # A PID IS JUDGED ONLY WHERE IT RUNS (2026-11-18 23:42:21Z, core Main Pipeline #1053): a fixer another machine
+    # signed in as the laptop dispatched lost its lease 53 s after it was taken -- this tick found no pid 83138 among
+    # its own processes. Every "laptop:" holder names its host in its meta; an older wrapper's (no host) is ours only
+    # when its worktree is here.
+    if m.get("host") and m["host"] != socket_host():
+        return None, f"held on {m['host']}, judged there"
+    if not m.get("host") and m.get("worktree") and m.get("kind") == "fixer" and not os.path.isdir(m["worktree"]):
+        return None, "its worktree is not on this machine"
     if row["name"].startswith("owner/") or m.get("kind") in ("owner", "owned"):
         fam = m.get("family") or row["name"].split("/", 1)[1]
         k = ("owner", fam, m.get("pid"))

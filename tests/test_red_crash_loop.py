@@ -362,3 +362,58 @@ class HostSleepTest(CrashLoopBase):
         os.environ.pop("AGENTCTL_AWAKE_PID")
         os.environ["AGENTCTL_CAFFEINATE"] = ""
         self.assertIsNone(A.keep_awake())
+
+
+class OneEndOneAttemptTest(CrashLoopBase):
+    """2026-11-18 23:42-23:49Z, core Main Pipeline #1053 (0c8eea91b712): ONE fixer lease (epoch 2, wrapper pid 83138)
+    was taken and revoked ORPHANED once, yet the red's history read it five times, a minute apart -- "3 launches in a
+    row" twice: CRASH LOOP, then BLOCKED ON OWNER, with no fixer started after the first. The `offered` step reads a
+    lease "taken AND ended between two ticks" by its times against the item's entered_at, which a self-transition (the
+    re-offer itself) keeps: the same ended lease matched at every tick after. A lease's end is one attempt, read once."""
+
+    def setUp(self):
+        super().setUp()
+        saved = A.Store
+        A.Store = lambda *a, **k: self.st
+        self.addCleanup(setattr, A, "Store", saved)
+
+    def step(self, it):
+        return A.red_step(self.st, self.st.item("red", it["id"]), None, None, {}, None, "pawelkrupinski/movies",
+                          self.t[0])
+
+    def test_an_ended_lease_is_read_once_never_at_every_tick(self):
+        it = A.red_offer(self.st, self.red(tier="infra"), "red: offered")
+        self.t[0] += 10
+        off = self.st.offer_of(f"red:{it['id']}")
+        self.st.take(off["id"], "laptop:fixer:red-k-1", A.RED_FIXER_TTL, A.RED_FIXER_MAX,
+                     meta={"kind": "fixer", "pid": 83138, "note": "dispatched: tier infra"})
+        self.t[0] += 53
+        self.assertTrue(self.st.revoke(A.red_lease("k"), "ORPHANED: laptop:fixer:red-k-1 holds it with no work "
+                                                         "(its wrapper (pid 83138) is gone)"))
+        for _ in range(5):
+            self.t[0] += 65
+            self.step(it)
+        it = self.st.item("red", it["id"])
+        self.assertEqual(len(it["data"]["history"]), 1, [h["at"] for h in it["data"]["history"]])
+        self.assertEqual(it["state"], "offered")
+        self.assertNotIn("crash_loop", it["data"])
+        self.assertEqual(self.escalations(), [])
+        # the next fixer's end is read, once
+        off = self.st.offer_of(f"red:{it['id']}")
+        took = self.st.take(off["id"], "laptop:fixer:red-k-2", A.RED_FIXER_TTL, A.RED_FIXER_MAX, meta={"kind": "fixer"})
+        self.t[0] += 30
+        self.st.release(A.red_lease("k"), took["epoch"], took["secret"], outcome=CRASH)
+        for _ in range(3):
+            self.t[0] += 65
+            self.step(it)
+        self.assertEqual(len(self.st.item("red", it["id"])["data"]["history"]), 2)
+
+    def test_the_owner_block_carries_each_dead_wrappers_last_words_whole(self):
+        words = "PermissionError: [Errno 1] Operation not permitted: '/Users/x/.claude.json'"
+        out = (f"ORPHANED: laptop:fixer:red-k-1 holds it with no work (its wrapper (pid 83138) is gone; "
+               f"its last words: {words})")
+        it = self.red(tier="deep", attempts=3)
+        for _ in range(3):
+            it, _acts = self.launch(it, outcome=out, notes="dispatched: tier deep")
+        self.assertEqual(it["state"], "blocked-external")
+        self.assertEqual(A.red_block_of(it, self.st)["text"].count(words), 3)

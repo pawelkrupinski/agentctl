@@ -236,7 +236,7 @@ def bin_repo():
     return None if r == "-" or not os.path.isdir(os.path.join(r, ".git")) else r
 
 
-def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=None, took=None, extra=()):
+def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=None, took=None, extra=(), store=None):
     """Start a headless fixer for red u under its taken lease: a fresh worktree <clone>-wt-red-<run> off origin/main
     (resume: the same worktree and session), then a detached `agentctl red fixer` that runs `claude -p` there, renews
     the lease by its progress, and releases it with its verdict. (ok, message)."""
@@ -287,6 +287,15 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
                            stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=wt, env=env)
     rec.update(pid=p.pid, process_start=process_start(p.pid))
     write_json(rec_path, rec)
+    if store is not None and lease and took and "epoch" in took:
+        # its wrapper, named in the lease from the start: one that dies before its first word is judged at once
+        # (red_reap_orphans), its stderr (fixer.log) the why -- never a silent 15-min lapse
+        try:
+            store.set_meta(lease, took["epoch"], took["secret"],
+                           {"pid": p.pid, "host": socket_host(), "worktree": wt,
+                            "wrapper_log": os.path.join(d, "fixer.log")})
+        except Exception as e:  # the wrapper sends its own meta at its first poll
+            err(f"red dispatch: the lease's meta was not written ({str(e)[:160]})")
     line = dispatch_log(u, f"DISPATCHED{' (resumed)' if rec['resume'] else ' (continuing)' if cont else ''} pid {p.pid} "
                            f"in {wt} ({why}); log {rec['log']}")
     inbox_write("red", f"RED DISPATCHED: {u['workflow']} #{num} [{u.get('job')}] -> fixer session "
@@ -908,7 +917,8 @@ def red_fixer(a):
 
     def leases():
         return [h.triple() for h in held_]
-    meta, meta_due = {"worktree": wt, "session": session, "pid": me, "log": rec["log"]}, False
+    meta, meta_due = {"worktree": wt, "session": session, "pid": me, "log": rec["log"], "host": socket_host(),
+                      "wrapper_log": os.path.join(os.path.dirname(os.path.abspath(a.record)), "fixer.log")}, False
     try:
         row = st.get(name)
         if row and row["epoch"] == epoch and row["secret"] == secret:

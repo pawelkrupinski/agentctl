@@ -754,6 +754,16 @@ agent must be assigned to it".
   says nothing of it -- that wrapper alive, the lease is not judged here (it lapses by its TTL if the wrapper stops
   renewing); gone, it is orphaned. A fix-pending red's note on the status page is never a history line from before it
   went fix-pending (both #74 reds kept showing that ORPHANED line after their fix landed, with no holder).
+- **A PID IS JUDGED ONLY WHERE IT RUNS; ONE LEASE END IS ONE ATTEMPT (2026-11-18, core Main Pipeline #1053).** A
+  fixer that ANOTHER machine signed in as the laptop dispatched lost its lease 53 s after it was taken: this laptop's
+  tick found no pid 83138 among its own processes and revoked it `ORPHANED ... its wrapper (pid 83138) is gone`. Then
+  the `offered` step read that one ended lease at every tick (a re-offer keeps the item's entered_at): five history
+  lines, a CRASH LOOP and BLOCKED ON OWNER "the fixers crash", with no second fixer ever started. Every laptop-held
+  lease's meta now names its `host` (the dispatcher's, the wrapper's, the owner's); a lease of another host -- or an
+  older wrapper's, with no host, whose worktree is not here -- is never judged here. The red keeps the epoch of the
+  lease whose end it read (`ended_lease`) and never reads it again. The dispatcher writes the wrapper's pid and its
+  stderr log (`wrapper_log`, the run's reds/<run>/fixer.log) into the lease at spawn; a dead wrapper's ORPHANED reason
+  carries that log's last lines, and the crash-loop block shows each launch's reason whole.
 - **ONE RED QUEUE (simplification item 5, 2026-10-30; replaced the per-class caps, the borrow and the overflow slot).**
   A red is (workflow, failing job, signature). Every red belongs to ONE queue family:
   its configured family (`red-families.json`), else its run (`run:<workflow>#<number>`). The open offers are one

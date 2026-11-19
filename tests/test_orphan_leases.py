@@ -235,3 +235,48 @@ class StoreAuthTest(OwnerBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ForeignHolderTest(ReapTest):
+    """2026-11-18 23:42:21Z, core Main Pipeline #1053: a fixer dispatched on ANOTHER machine signed in as the laptop
+    (its worktree, its reds/core-1053 record and its session are nowhere here) lost its lease 53 s after it was taken:
+    this laptop's tick looked for its wrapper's pid 83138 among ITS OWN processes, found none, and revoked it
+    `ORPHANED ... its wrapper (pid 83138) is gone` -- the same red then "crashed" at every launch. A pid is judged
+    only on the machine that started it."""
+
+    def dead_pid(self):
+        p = subprocess.Popen([sys.executable, "-c", "pass"])
+        p.wait()
+        return p.pid
+
+    def test_a_fixer_lease_of_another_host_is_never_judged_here(self):
+        self.st.acquire("red/k1", "laptop:fixer:red-k1-1", 900, 3600,
+                        meta={"kind": "fixer", "pid": self.dead_pid(), "host": "another-mac", "bg_id": "abc46699"})
+        self.assertEqual(A.red_reap_orphans(self.st, self.now), [])
+        self.assertTrue(A.lease_is_live(self.st.get("red/k1"), self.now))
+        self.assertIsNone(A.holder_work(self.st.get("red/k1"), self.now)[0])
+
+    def test_an_older_wrappers_lease_whose_worktree_is_not_here_is_never_judged_here(self):
+        """The other machine's code writes no host: its worktree, absent here, says the wrapper is not ours."""
+        self.st.acquire("red/k1", "laptop:fixer:red-k1-1", 900, 3600,
+                        meta={"kind": "fixer", "pid": self.dead_pid(), "bg_id": "3acddaae",
+                              "worktree": os.path.join(self.tmp.name, "core-wt-red-1053")})
+        self.assertEqual(A.red_reap_orphans(self.st, self.now), [])
+
+    def test_this_hosts_dead_wrapper_is_orphaned_with_its_last_words(self):
+        wlog = os.path.join(self.tmp.name, "fixer.log")
+        with open(wlog, "w") as f:
+            f.write("Traceback (most recent call last):\n  File \"agentctl\", line 1\n"
+                    "PermissionError: [Errno 1] Operation not permitted: '/Users/x/.claude.json'\n\n")
+        self.st.acquire("red/k1", "laptop:fixer:red-k1-1", 900, 3600,
+                        meta={"kind": "fixer", "pid": self.dead_pid(), "host": A.socket_host(),
+                              "worktree": self.tmp.name, "wrapper_log": wlog})
+        acts = A.red_reap_orphans(self.st, self.now)
+        self.assertEqual(len(acts), 1, acts)
+        out = A.lease_meta(self.st.get("red/k1"))["outcome"]
+        self.assertIn("is gone", out)
+        self.assertIn("PermissionError: [Errno 1] Operation not permitted", out)
+
+    def test_the_dispatcher_and_the_wrapper_name_their_host_in_the_lease(self):
+        meta = A.red_dispatch_meta({"gate": True, "workflow": "W"}, "fam", False, {"tier": "infra"}, 7)
+        self.assertEqual(meta["host"], A.socket_host())
