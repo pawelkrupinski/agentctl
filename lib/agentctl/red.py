@@ -177,6 +177,12 @@ def red_workflow_policies(repo, ref=None):
     return out
 
 
+def red_workflows_on_main(repo, ref=None):
+    """RED_WORKFLOWS_FILE exists at ref (main). Absent is not "no workflow has a replay": a repo whose red-repos.json
+    entry says `red_workflows` refuses Fixes-Red landings while it is (fix_replay_refusal)."""
+    return bool(repo) and git_ok(repo, "cat-file", "-e", f"{ref or remote() + '/main'}:{RED_WORKFLOWS_FILE}")
+
+
 def red_workflow_policy(repo, workflow, ref=None):
     return red_workflow_policies(repo, ref).get(workflow) or {"verify_dispatch": False, "replay": None, "why": ""}
 
@@ -3996,7 +4002,9 @@ def red_replay_command(repo, d):
 
 def fix_replay_refusal(repo, commits, store=None):
     """Why `land` refuses commits (a Fixes-Red: for a red with a replay, and no `Fix-Replay: ... base=FAIL head=PASS`
-    naming it), or None. An unread store or registry refuses nothing (the red's own verification still judges)."""
+    naming it), or None. An unread store refuses nothing (the red's own verification still judges); a registry missing
+    from main refuses a red of a repo that keeps one (red-repos.json `red_workflows`: Alert backtest #7's fix landed
+    unreplayed because agentctl enforced five hours before the registry reached main)."""
     named, replays = set(), []
     for c in commits or []:
         msg = git(repo, "log", "-1", "--format=%B", c, check=False).stdout
@@ -4019,6 +4027,10 @@ def fix_replay_refusal(repo, commits, store=None):
         d = it["data"]
         if not named & {str(x) for x in red_names(d) if x is not None}:
             continue
+        if not red_workflows_on_main(repo) and (red_repo_conf(red_repo_of(d)) or {}).get("red_workflows"):
+            return (f"{RED_WORKFLOWS_FILE} is missing on {remote()}/main, though red-repos.json says "
+                    f"{red_repo_of(d)} keeps one: no Fixes-Red lands for {red_what(d)} until it is back (its rows say "
+                    "which reds need a `Fix-Replay:`)")
         cmd = red_replay_command(repo, d)
         if not cmd:
             continue

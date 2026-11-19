@@ -22,7 +22,8 @@ GATING = {"pawelkrupinski/movies": [("Main", "main.yml"), ("Identity model conve
 # (GATING above, which stays movies' alone: watching a repo's reds does not put a red gate in front of its landings).
 # The other repos are read through their gate workflows only.
 RED_PRIMARY = "pawelkrupinski/movies"
-RED_REPOS_DEFAULT = [{"repo": RED_PRIMARY, "gate": [list(g) for g in GATING[RED_PRIMARY]], "push": "land"}]
+RED_REPOS_DEFAULT = [{"repo": RED_PRIMARY, "gate": [list(g) for g in GATING[RED_PRIMARY]], "push": "land",
+                      "red_workflows": True}]
 RED_PUSH_POLICIES = ("land", "owner-only")
 _red_repos_cache = process_cache({})
 
@@ -48,9 +49,12 @@ def red_repos_parse(raw):
         if push not in RED_PUSH_POLICIES:
             raise ValueError(f"{repo}: `push` must be one of {', '.join(RED_PUSH_POLICIES)}, not {push!r}")
         clone = x.get("clone")
+        keeps = x.get("red_workflows", False)
+        if not isinstance(keeps, bool):
+            raise ValueError(f"{repo}: `red_workflows` is true or false, not {keeps!r}")
         out.append({"repo": repo, "gate": [tuple(g) for g in gate], "family": x.get("family"), "push": push,
                     "clone": os.path.expanduser(clone) if clone else None,
-                    "generated": generated_parse(repo, x.get("generated"))})
+                    "generated": generated_parse(repo, x.get("generated")), "red_workflows": keeps})
     if len({c["repo"] for c in out}) != len(out):
         raise ValueError("a repo is listed twice")
     if not any(c["repo"] == RED_PRIMARY for c in out):

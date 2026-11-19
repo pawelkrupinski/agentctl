@@ -180,6 +180,10 @@ def _repo_template():
         for i in range(5):
             with open(os.path.join(path, f"f{i}.txt"), "w") as f:
                 f.write(f"v1 {i}\n")
+        # the primary keeps its red-workflows registry on main (red-repos.json `red_workflows`): no rows, no replays
+        os.makedirs(os.path.join(path, ".github"))
+        with open(os.path.join(path, ".github", "red-workflows.tsv"), "w") as f:
+            f.write("# workflow\tverify_dispatch\treplay\twhy\n")
         sh(path, "git", "add", "-A")
         sh(path, "git", "commit", "-q", "-m", "init")
         sh(path, "git", "push", "-q", "origin", "HEAD:main")

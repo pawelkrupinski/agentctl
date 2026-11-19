@@ -65,6 +65,31 @@ class FixReplayTest(unittest.TestCase):
         self.assertIsNone(A.fix_replay_refusal(self.r.path, self.fix("Fixes-Red: 198"), self.st))
         self.assertIsNone(A.fix_replay_refusal(self.r.path, self.fix("Refs: none"), self.st))
 
+    def drop_registry(self):
+        A.git(self.r.path, "rm", "-q", A.RED_WORKFLOWS_FILE)
+        self.r.commit("main without the registry")
+        self.r.push()
+        self.base = A.git(self.r.path, "rev-parse", "HEAD").strip()
+
+    def test_a_registry_missing_from_main_refuses_a_fixes_red_landing(self):
+        # 8cc38bce6, Alert backtest #7's fix: landed 13:39Z with Fixes-Red: 7 and no replay, 12 minutes before the
+        # registry reached main (f1a5e431d) -- agentctl had enforced since 08:15Z against a file main did not have yet,
+        # and an absent file read as "no workflow has a replay"
+        self.drop_registry()
+        why = A.fix_replay_refusal(self.r.path, self.fix("Fixes-Red: 5"), self.st)
+        self.assertIn(f"{A.RED_WORKFLOWS_FILE} is missing on origin/main", why or "")
+
+    def test_a_repo_that_keeps_no_registry_needs_none(self):
+        conf = os.path.join(self.tmp.name, "red-repos.json")
+        with open(conf, "w") as f:
+            f.write('{"repos": [{"repo": "pawelkrupinski/movies", "gate": [["Main", "main.yml"]]}]}')
+        saved = os.environ.get("AGENTCTL_RED_REPOS")
+        os.environ["AGENTCTL_RED_REPOS"] = conf
+        self.addCleanup(lambda: os.environ.pop("AGENTCTL_RED_REPOS") if saved is None
+                        else os.environ.__setitem__("AGENTCTL_RED_REPOS", saved))
+        self.drop_registry()
+        self.assertIsNone(A.fix_replay_refusal(self.r.path, self.fix("Fixes-Red: 5"), self.st))
+
     def test_land_refuses_it_before_queueing(self):
         saved = A.Store
         A.Store = lambda *a, **k: self.st
