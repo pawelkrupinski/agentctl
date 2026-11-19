@@ -252,6 +252,13 @@ def render_red_status(m, verbose=False):
             out += [f"      {h.get('at')} {h.get('holder')}: {str(h.get('outcome'))[:140]}" for h in r["history"]]
     unread = {k: m[k]["error"] for k in ("families", "owners") if isinstance(m.get(k), dict) and "error" in m[k]}
     out += [f"{k}: unread ({e})" for k, e in unread.items()]  # a timed-out section (status_sources) is no list
+    never = m.get("untracked")
+    if verbose and isinstance(never, list) and never:  # for information only: no red, no fixer, no alert (red.py)
+        out.append(f"untracked (never green) ({len(never)}):")
+        for u in never:
+            short = "" if u.get("repo") == RED_PRIMARY else f"{red_repo_short(u.get('repo') or '')} "
+            out.append(f"  {short}{u.get('workflow')} #{(u.get('run') or {}).get('number')}"
+                       + (f" [{', '.join(u.get('jobs') or [])}]" if u.get("jobs") else "") + f": {u.get('why')}")
     for f in [] if "families" in unread else m.get("families") or []:
         if f.get("holder") and f.get("at_work") is False:  # never "leased ... none at work": orphaned, re-offered
             who = f"ORPHANED LEASE ({f['holder']}: {f.get('work')}) -> revoked and re-offered at the next tick"
@@ -736,6 +743,7 @@ def status_data(store=None, now_=None, bound=None, keep=False, only=None):
                ("dispatcher", lambda: status_dispatcher(need(), t), 1),
                ("reds", lambda: status_reds(need(), t, repo), 1),
                ("families", lambda: status_families(need(), t), 1),
+               ("untracked", lambda: [{"repo": o_r, **r} for o_r, r in red_untracked_list(need())], 1),
                ("owners", lambda: owners_status(need(), t), 1),
                ("agents", lambda: status_agents(need(), t), 2),
                ("landing", lambda: status_landing(need(), t), 1),

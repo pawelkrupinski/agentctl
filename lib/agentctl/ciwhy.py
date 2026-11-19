@@ -2,14 +2,176 @@
 # Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
 
 # ---------------------------------------------------------------- ci-why
-# Exactly the workflows movies' scripts/hooks/pre-push check_redgate reads (GatingWorkflows / GatingWorkflowFiles).
-# THE GATE (the owner, 2026-10-27: "if the latest main and convergence runs are green, just push then, remember that"):
-# exactly the newest decided Main run and the newest decided Identity model convergence run on main -- and, since the
-# owner's 2026-11-08 split of convergence's takes rows into their own workflow, the newest decided Identity takes run
-# (dispatched by convergence's preflight on the same ref). Verify scrape recording no longer gates; ci-why lists it, and
-# every other red, as information only.
-GATING = {"pawelkrupinski/movies": [("Main", "main.yml"), ("Identity model convergence", "identity-model-convergence.yml"),
-                                    ("Identity takes", "identity-takes.yml")]}
+# THE GATE IS movies' GATING CHECKS REGISTRY (issue 20261030T095941-7267ea; the owner, 2026-11-19). Which workflows gate
+# a push -- THE GATE (the owner, 2026-10-27: "if the latest main and convergence runs are green, just push then"; since
+# 2026-11-08 also Identity takes) -- and which of their jobs a red counts for is ONE file on movies' main,
+# GATING_CHECKS_FILE (scripts/ci/gating_checks.py), the file movies' pre-push red gate reads too. agentctl reads it from
+# origin/main as it reads red-workflows.tsv, and keeps no list of its own. Its `workflow` rows are the gate workflows;
+# a `job` row is a run number (proven: its first green run), `aggregate` (fails only because a job it waits on did) or
+# `unproven` (a new check: it REPORTS until its first green run). A gate run red only in unproven jobs and the aggregates
+# following them -- or any red of an unproven gate workflow -- is REPORT ONLY: it holds no push, it is no gate red (its
+# reds are outside the gate's), and ci-why says so. Only movies (GATED_REPOS) puts a red gate in front of its landings.
+GATING_CHECKS_FILE = ".github/gating-checks.tsv"  # kind, workflow (file), name, proven (#run | aggregate | unproven), note
+GATED_REPOS = ("pawelkrupinski/movies",)
+_gating_rows = process_cache({})      # (repo, main sha) -> rows
+_report_only_mem = process_cache({})  # run id -> (bool, why): a decided run's jobs never change
+
+
+class GateRegistryUnread(RuntimeError):
+    """The gating checks registry could not be read and none was read before: the gate is unread (never green)."""
+
+
+def gated_repo(o_r):
+    return o_r in GATED_REPOS
+
+
+def gating_checks_parse(text):
+    """The registry's rows [{kind, workflow, name, proven, note}] (gating_checks.py load's, comments and header out)."""
+    rows = []
+    for line in (text or "").splitlines():
+        if not line.strip() or line.startswith("#") or line.startswith("kind\t"):
+            continue
+        cols = line.split("\t")
+        if len(cols) < 4:
+            continue
+        rows.append({"kind": cols[0], "workflow": cols[1], "name": cols[2], "proven": cols[3].strip(),
+                     "note": cols[4] if len(cols) > 4 else ""})
+    return rows
+
+
+def gating_checks_path():
+    return state_root("gating-checks.json")
+
+
+GATING_API_TTL = 300  # s a registry (or workflow names) read through GitHub's API, with no clone here, is kept
+
+
+def gating_checks(o_r):
+    """The registry's rows at main: from the repo's clone at origin/main (cached per main sha), else -- no clone here --
+    through GitHub's contents API (kept GATING_API_TTL). Unreadable now (no file, a git or API error): the rows last read
+    (kept in the state root: a stale registry is an earlier main's, never none); never read: raises GateRegistryUnread."""
+    repo = scan_repo_for(o_r)
+    rows, main, why = [], None, "no clone of it here"
+    if repo and os.path.isdir(repo):
+        main = git(repo, "rev-parse", f"refs/remotes/{remote()}/main", check=False).stdout.strip()
+        if main and (repo, main) in _gating_rows:
+            return _gating_rows[(repo, main)]
+        r = git(repo, "show", f"{main}:{GATING_CHECKS_FILE}", check=False) if main else None
+        rows = gating_checks_parse(r.stdout) if r is not None and r.returncode == 0 else []
+        if rows:
+            _gating_rows[(repo, main)] = rows
+        why = f"{GATING_CHECKS_FILE} unread at {remote()}/main {(main or '?')[:10]}"
+    else:
+        hit = _gating_rows.get(("api", o_r))
+        if hit and time.time() - hit[0] < GATING_API_TTL:
+            return hit[1]
+        try:
+            import base64
+            c = gh_json(o_r, "api", f"repos/{o_r}/contents/{GATING_CHECKS_FILE}?ref=main")
+            rows = gating_checks_parse(base64.b64decode(c.get("content") or "").decode("utf-8", "replace"))
+            main = "api"
+        except (Exception, SystemExit) as e:  # SystemExit: NoToken
+            why = f"no clone of it here, and {GATING_CHECKS_FILE} unread through the API ({str(e)[:120]})"
+        if rows:
+            _gating_rows[("api", o_r)] = (time.time(), rows)
+    if rows:
+        try:
+            kept = read_record(gating_checks_path()) or {}
+            if kept.get(o_r, {}).get("rows") != rows:
+                kept[o_r] = {**kept.get(o_r, {}), "main": main, "rows": rows, "at": ts()}
+                write_json(gating_checks_path(), kept)
+        except OSError:
+            pass
+        return rows
+    kept = ((read_record(gating_checks_path()) or {}).get(o_r) or {}).get("rows")
+    if kept:
+        return kept
+    raise GateRegistryUnread(f"{o_r}'s gating checks registry: {why}")
+
+
+def gate_flow_names(o_r, files=()):
+    """{workflow file: name} for files (the registry's): main's own workflow files in the clone (main_workflow_files);
+    those it does not name, GitHub's workflows list (kept GATING_API_TTL); still unnamed, the names last read (kept
+    beside the registry's rows)."""
+    names = {f: n for n, f in main_workflow_files(o_r).items()}
+    if any(f not in names for f in files):
+        hit = _gating_rows.get(("names", o_r))
+        if not (hit and time.time() - hit[0] < GATING_API_TTL):
+            try:
+                flows = gh_json(o_r, "api", f"repos/{o_r}/actions/workflows").get("workflows") or []
+                api = {os.path.basename(str(w.get("path") or "")): w.get("name") for w in flows if w.get("name")}
+            except (Exception, SystemExit):
+                api = {}
+            hit = (time.time(), api)
+            if api:
+                _gating_rows[("names", o_r)] = hit
+        names = {**hit[1], **names}
+    names = {f: names[f] for f in files if names.get(f)}
+    try:
+        kept = read_record(gating_checks_path()) or {}
+        old = (kept.get(o_r) or {}).get("names") or {}
+        if any(old.get(f) != n for f, n in names.items()):
+            kept.setdefault(o_r, {})["names"] = {**old, **names}
+            write_json(gating_checks_path(), kept)
+        return {**{f: old[f] for f in files if old.get(f)}, **names}
+    except OSError:
+        return names
+
+
+def gate_flows(o_r):
+    """[(name, file)] of a gated repo's gate workflows: the registry's `workflow` rows, named as main names their files
+    (gate_flow_names; the file itself when nothing names it)."""
+    files = [r["workflow"] for r in gating_checks(o_r) if r["kind"] == "workflow" and r["proven"] != "aggregate"]
+    names = gate_flow_names(o_r, files)
+    return [(names.get(f) or f, f) for f in files]
+
+
+def registry_name(name):
+    """The registry's name of a run's job: github.com names a called workflow's job `<caller job> / <job>`."""
+    return str(name or "").split(" / ")[-1]
+
+
+def gate_report_only_jobs(rows, wfile, jobs):
+    """(True, why) when every failed job of a red run of gate workflow wfile is unproven -- or an aggregate following
+    one -- and one is; or when wfile's own row is unproven (gating_checks.py report_only, the hook's rule). One
+    difference, on the safe side: a failed job with NO row gates here (the hook reads it as unproven) -- the registry's
+    lint keeps every gate job in a row, and agentctl never lets an unknown through."""
+    wrow = next((r for r in rows if r["kind"] == "workflow" and r["workflow"] == wfile), None)
+    if wrow and wrow["proven"] == "unproven":
+        return True, f"report only: {wfile} is unproven ({wrow.get('note') or 'no green run yet'})"
+    state = {r["name"]: r["proven"] for r in rows if r["kind"] == "job" and r["workflow"] == wfile}
+    failed = [j.get("name") for j in jobs or [] if j.get("conclusion") in RED_CONCLUSIONS]
+    if not failed:
+        return False, "no failed job"
+    proven = {n: state.get(n, state.get(registry_name(n), "")) for n in failed}  # no row: it gates (below)
+    unproven = [n for n in failed if proven[n] == "unproven"]
+    gating = [n for n in failed if proven[n] not in ("unproven", "aggregate")]
+    if gating:
+        return False, "gates: " + ", ".join(gating)
+    if not unproven:
+        return False, "only aggregates failed: " + ", ".join(failed)
+    return True, "report only, unproven: " + ", ".join(unproven)
+
+
+def gate_report_only(o_r, name, run):
+    """(True, why) when gate workflow `name`'s red run holds no push (gate_report_only_jobs); (False, why) when it gates
+    -- also when its jobs or the registry cannot be read (an unread red gates, as the hook's exit 2 does)."""
+    if not gated_repo(o_r) or not run or run.get("conclusion") not in RED_CONCLUSIONS:
+        return False, "not a red gate run"
+    rid = str(run.get("databaseId") or "")
+    try:
+        rows = gating_checks(o_r)
+        wfile = next((f for n, f in gate_flows(o_r) if n == name), name)
+        if rid and rid in _report_only_mem:
+            return _report_only_mem[rid]
+        jobs = gh_json(o_r, "run", "view", rid, "--json", "jobs").get("jobs") or []
+    except (Exception, SystemExit) as e:  # SystemExit: NoToken
+        return False, f"unread ({str(e)[:120]}): it gates"
+    out = gate_report_only_jobs(rows, wfile, jobs)
+    if rid:
+        _report_only_mem[rid] = out
+    return out
+
 
 # THE WATCHED REPOS (the owner, 2026-10-30, ci-failures recommendation 4: infra's Stage NixOS closures was red 29 h and
 # core's Main Pipeline 21 h with no fixer, because the red tick read movies only). Which repos the red machine watches
@@ -19,11 +181,10 @@ GATING = {"pawelkrupinski/movies": [("Main", "main.yml"), ("Identity model conve
 # lands with `agentctl land`) or "owner-only" (an infra push is a deploy: the fixer prepares the fix on a local
 # branch and files the owner a one-liner with `agentctl red owner-push`; it never pushes or deploys). The PRIMARY
 # repo (movies) keeps everything it had -- its reds' keys, its outside workflows, its local checks, its landing gate
-# (GATING above, which stays movies' alone: watching a repo's reds does not put a red gate in front of its landings).
-# The other repos are read through their gate workflows only.
-RED_PRIMARY = "pawelkrupinski/movies"
-RED_REPOS_DEFAULT = [{"repo": RED_PRIMARY, "gate": [list(g) for g in GATING[RED_PRIMARY]], "push": "land",
-                      "red_workflows": True}]
+# (its gating checks registry above, which stays movies' alone: watching a repo's reds does not put a red gate in front
+# of its landings). The other repos are read through their gate workflows only.
+RED_PRIMARY = GATED_REPOS[0]
+RED_REPOS_DEFAULT = [{"repo": RED_PRIMARY, "push": "land", "red_workflows": True}]
 RED_PUSH_POLICIES = ("land", "owner-only")
 _red_repos_cache = process_cache({})
 
@@ -42,7 +203,9 @@ def red_repos_parse(raw):
         if not isinstance(repo, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
             raise ValueError(f"a repo entry needs `repo: <owner>/<name>`: {x!r}")
         gate = x.get("gate") or []
-        if not gate or not all(isinstance(g, list) and len(g) == 2 and all(isinstance(v, str) and v for v in g)
+        if repo == RED_PRIMARY and not gate:
+            pass  # the primary's gate is its gating checks registry (gate_flows), never a list here
+        elif not gate or not all(isinstance(g, list) and len(g) == 2 and all(isinstance(v, str) and v for v in g)
                                for g in gate):
             raise ValueError(f"{repo}: `gate` must be [[<workflow name>, <workflow file>], ...]")
         push = x.get("push") or "land"
@@ -118,9 +281,10 @@ def red_repo_of(d):
 
 
 def red_gate_flows(o_r):
-    """[(name, file)] of a watched repo's gate workflows: GATING's for the primary, its config's for the others."""
-    if o_r in GATING:
-        return GATING[o_r]
+    """[(name, file)] of a watched repo's gate workflows: the registry's for a gated repo (gate_flows), its config's for
+    the others."""
+    if gated_repo(o_r):
+        return gate_flows(o_r)
     c = red_repo_conf(o_r)
     return list(c["gate"]) if c else []
 
@@ -163,7 +327,7 @@ def red_repo_clone(o_r):
 RUN_FIELDS = "databaseId,number,status,conclusion,headSha,url,displayTitle,workflowName,createdAt,updatedAt,event"
 RED_CONCLUSIONS = ("failure", "timed_out")
 
-# A WORKFLOW NOT ON MAIN HAS NO RUNS ON MAIN (2026-11-08 16:35-18:10: agentctl's GATING named identity-takes.yml before
+# A WORKFLOW NOT ON MAIN HAS NO RUNS ON MAIN (2026-11-08 16:35-18:10: agentctl's gate list named identity-takes.yml before
 # the movies commit adding the file reached main; GitHub answered each list of it `HTTP 404: workflow ... not found on
 # the default branch`, so the whole gate read failed every cycle -- the status line said `gate UNREAD (as of 16:44)` and
 # every production landing waited on a gate taken as red for 1.5 h). That 404 is GitHub's own answer, not an unread
@@ -293,8 +457,9 @@ def run_no_verdict(o_r, r):
 
 def gate_runs(o_r, flows=None):
     """[(workflow, newest decided run on main | None, newer unfinished run | None, red_streak of its runs)]. flows: the
-    workflows to read ([(name, file)]); default the repo's GATING row, else every workflow with a recent run on main."""
-    flows = flows or GATING.get(o_r)
+    workflows to read ([(name, file)]); default a gated repo's registry (gate_flows), else every workflow with a recent
+    run on main."""
+    flows = flows or (gate_flows(o_r) if gated_repo(o_r) else None)
     if not flows:
         recent = gh_json(o_r, "run", "list", "--branch", "main", "--limit", "40", "--json", RUN_FIELDS)
         flows = [(n, n) for n in dict.fromkeys(r["workflowName"] for r in recent)]
@@ -496,7 +661,7 @@ def outside_gate(o_r):
     run is red: not blocking a push, but red, and for how long (the owner, 2026-10-27: a red nobody is shown is a red
     that gets ignored). EVERY workflow file on main is read (audit #7): those in the newest 200 runs from that list,
     the others listed on their own (at most every OUTSIDE_FLOW_RECHECK)."""
-    gated = {n for n, _ in GATING.get(o_r, [])}
+    gated = {n for n, _ in red_gate_flows(o_r)}
     runs = gh_json(o_r, "run", "list", "--branch", "main", "--limit", "200", "--json", RUN_FIELDS)
     lists = {}
     for r in runs:
@@ -819,12 +984,12 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
                 raise
             lines = [f"  no such run: {str(e)[:200]}"]
         return True, f"run {o_r}#{rid}\n" + "".join(f"  {l}\n" for l in said) + "\n".join(lines)
-    out, red, rows, units_of, parts = [], False, [], {}, []
+    out, red, rows, units_of, parts, untracked = [], False, [], {}, [], {}
     gate = gate_from_snap(snap) if snap else gate_runs(o_r)
     others, others_err = [], None
     if snap:
         others, others_err = outside_from_snap(snap), snap.get("outside_error")
-    elif o_r in GATING:
+    elif gated_repo(o_r):
         try:
             others = outside_gate(o_r)
         except Exception as e:  # the gate's verdict stands without them
@@ -847,7 +1012,7 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
                 save_run_sigs(o_r, decided, name, per_job)
     states, units, flakes_ = {}, [], []
     try:  # who holds each red: its item in the store (the tick acts; ci-why only renders)
-        rows = [(n, d, _gate_lists.get(n, []), True) for n, d, _nw, _s in gate]
+        rows = [(n, d, _gate_lists.get(n, []), not gate_report_only(o_r, n, d)[0]) for n, d, _nw, _s in gate]
         units = gate_red_units(o_r, rows, [(n, r, _outside_lists.get(n, []), False) for n, r, _s, _c in others],
                                rereads=0 if summary else None)
         units += local_units(lrepo) + predict_units(o_r, bsnap)
@@ -856,6 +1021,7 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
         store = Store()
         states = red_view_of_units(store, units)
         flakes_ = [it for it in red_active(store).values() if it["data"].get("red_kind") == "flake"]
+        untracked = red_untracked_runs(store, o_r, units)
     except (Exception, SystemExit) as e:  # who is fixing is information: the gate's verdict stands without it
         err(f"red: could not tell who is fixing ({str(e)[:160]})")
 
@@ -869,6 +1035,8 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
     # A RUN ITS CALLERS PROVED FIXED is no red, though it stays its callable-only workflow's newest run on main for good
     proven = [o for o in others if (fixing(o[0], o[1])[1] or {}).get("state") == "verified"]
     others = [o for o in others if o not in proven and not red_run_retired(o_r, o[0], o[1])]
+    never = [o for o in others if (o[0], o[1].get("databaseId")) in untracked]  # never green on main: untracked
+    others = [o for o in others if o not in never]
 
     for name, decided, newer, (since, count) in gate:
         pending = f"; newer run {newer['databaseId']} (#{newer.get('number')}) {newer.get('status')} may clear it" if newer else ""
@@ -890,6 +1058,13 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
             out.append(f"{name}: RETIRED (run {decided['databaseId']} #{decided.get('number')}, {decided['conclusion']}): "
                        f"{retired} -- no red")
             parts.append(f"{short_flow(name)} retired")
+            continue
+        report, why = gate_report_only(o_r, name, decided)
+        if report:  # red only in checks the registry calls unproven: it reports, it holds no push
+            out.append(f"{name}: RED, REPORT ONLY (run {decided['databaseId']} #{decided.get('number')}, "
+                       f"{decided['conclusion']}): {why} ({GATING_CHECKS_FILE}) -- holds no push")
+            out += fixing(name, decided)[0]
+            parts.append(f"{short_flow(name)} report-only")
             continue
         red = True
         streak = f"; red for {red_for(since)} ({count} failed run{'s' if count != 1 else ''})" if count else ""
@@ -935,6 +1110,11 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
             out.append(f"  {name}: RED for {red_for(since)} since {since} ({count} failed run{'s' if count != 1 else ''}; "
                        f"newest run {r['databaseId']} #{r.get('number')}) -- `agentctl ci-why {r['databaseId']}`")
             out += fixing(name, r, "    ")[0]
+    if never:
+        out.append("Untracked (never green on main: no red, no fixer, no alert until its first green run):")
+        for name, r, _since, _count in never:
+            out.append(f"  {name}: newest run {r['databaseId']} #{r.get('number')}: "
+                       f"{untracked[(name, r.get('databaseId'))]}")
     if proven:
         out.append("Proven fixed outside the gate (no red; it runs only when called, so its newest run on main stays red):")
         for name, r, _since, _count in proven:
@@ -1027,7 +1207,7 @@ def ci_state_refresh(o_r, write=True):
     snap = {"at": time.time(), "repo": o_r, "outside_error": None, "outside": [],
             "gate": [{"name": n, "decided": d, "newer": nw, "since": st[0], "count": st[1],
                       "runs": _gate_lists.get(n, []), "no_verdict": _gate_no_verdict.get(n)} for n, d, nw, st in gate]}
-    if o_r in GATING:
+    if gated_repo(o_r):
         try:
             snap["outside"] = [{"name": n, "decided": r, "since": since, "count": count,
                                 "runs": _outside_lists.get(n, [])} for n, r, since, count in outside_gate(o_r)]

@@ -168,6 +168,18 @@ def sh(cwd, *args, input=None):
 _REPO_TEMPLATE = []
 
 
+def seed_gating_checks():
+    """The state root's kept copy of movies' gating checks registry (ciwhy.py gating_checks): for a test with no clone
+    and no forge to read it from, the registry as last read -- THE GATE's three workflows, by name."""
+    rows = A.gating_checks_parse(GATING_CHECKS_TEMPLATE)
+    A.write_json(A.gating_checks_path(), {A.RED_PRIMARY: {"main": "seeded", "rows": rows,
+                                                          "names": {f: n for f, n in GATE_WORKFLOW_FILES}}})
+GATE_WORKFLOW_FILES = (("main.yml", "Main"), ("identity-model-convergence.yml", "Identity model convergence"),
+                       ("identity-takes.yml", "Identity takes"))
+GATING_CHECKS_TEMPLATE = "kind\tworkflow\tname\tproven\tnote\n" + "".join(
+    f"workflow\t{f}\t-\t1\tTHE GATE\n" for f, _n in GATE_WORKFLOW_FILES)
+
+
 def _repo_template():
     """The bare remote and its clone, built ONCE per process (~10 git calls, ~0.4 s on a loaded laptop) and copied for
     every Repo after that: the suite builds a few hundred."""
@@ -184,6 +196,9 @@ def _repo_template():
         os.makedirs(os.path.join(path, ".github"))
         with open(os.path.join(path, ".github", "red-workflows.tsv"), "w") as f:
             f.write("# workflow\tverify_dispatch\treplay\twhy\n")
+        # ...and its gating checks registry (ciwhy.py gate_flows): THE GATE's three workflows, each proven
+        with open(os.path.join(path, ".github", "gating-checks.tsv"), "w") as f:
+            f.write(GATING_CHECKS_TEMPLATE)
         sh(path, "git", "add", "-A")
         sh(path, "git", "commit", "-q", "-m", "init")
         sh(path, "git", "push", "-q", "origin", "HEAD:main")

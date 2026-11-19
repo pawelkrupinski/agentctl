@@ -27,13 +27,13 @@ class DifferentialCheckTest(test_queue.QueueTest):
             os.remove(self.pushes)
         self.logs = {}  # run id -> its failed log
         self.main_runs = []  # main's gate: (workflow, decided run)
-        names = ("fetch_failed_log", "gate_runs", "slug", "GATING")
+        names = ("fetch_failed_log", "gate_runs", "slug", "GATED_REPOS")
         saved = {n: getattr(A, n) for n in names}
         self.addCleanup(lambda: [setattr(A, n, v) for n, v in saved.items()])
         A.fetch_failed_log = lambda o_r, rid: self.logs[int(rid)]
         A.gate_runs = lambda o_r, flows=None: [(n, r, None, 1) for n, r in self.main_runs]
         A.slug = lambda repo: "o/movies"
-        A.GATING = {**saved["GATING"], "o/movies": [("Main", "ci.yml")]}
+        A.GATED_REPOS = saved["GATED_REPOS"] + ("o/movies",)
         os.environ["AGENTCTL_REDS_DIR"] = tempfile.mkdtemp(dir=self.tmp.name)
 
     def remote_fails(self, run, *lines, then=None):

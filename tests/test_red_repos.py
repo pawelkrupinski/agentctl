@@ -78,12 +78,14 @@ class RedReposBase(RedsBase):
 class ConfigTest(RedReposBase):
     def test_the_file_names_the_repos_and_the_primary_keeps_its_gate(self):
         self.assertEqual([c["repo"] for c in A.red_repos()], [MOVIES, INFRA, CORE])
-        self.assertEqual(A.red_gate_flows(MOVIES), A.GATING[MOVIES])
+        self.assertEqual(A.red_gate_flows(MOVIES), A.gate_flows(MOVIES))
+        self.assertEqual([f for _n, f in A.red_gate_flows(MOVIES)],
+                         ["main.yml", "identity-model-convergence.yml", "identity-takes.yml"], "the registry's rows")
         self.assertEqual(A.red_gate_flows(INFRA), [(STAGE, "nix-stage-closures.yaml")])
         self.assertTrue(A.red_owner_only(INFRA))
         self.assertFalse(A.red_owner_only(CORE))
         self.assertFalse(A.red_owner_only(MOVIES))
-        self.assertNotIn(INFRA, A.GATING, "watching a repo's reds puts no red gate in front of its landings")
+        self.assertFalse(A.gated_repo(INFRA), "watching a repo's reds puts no red gate in front of its landings")
 
     def test_a_malformed_entry_is_refused_and_only_the_primary_is_watched(self):
         for bad in ({"repos": [{"repo": INFRA}]}, {"repos": [{"repo": INFRA, "gate": [["x"]]}]},
@@ -106,7 +108,7 @@ class ConfigTest(RedReposBase):
         self.assertEqual(repos[INFRA]["gate"], [(STAGE, "nix-stage-closures.yaml")])
         self.assertEqual(repos[INFRA]["push"], "owner-only")
         self.assertEqual(repos[CORE]["gate"], [("Main Pipeline", "main-pipeline.yml")])
-        self.assertEqual(repos[MOVIES]["gate"], A.GATING[MOVIES])
+        self.assertEqual(repos[MOVIES]["gate"], [], "movies' gate is its gating checks registry, never a list here")
 
     def test_run_numbers_and_keys_are_per_repo(self):
         self.assertEqual(A.red_repo_tag(MOVIES, 3455), "3455")

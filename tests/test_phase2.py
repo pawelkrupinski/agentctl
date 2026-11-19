@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A  # noqa: E402
+from test_agentctl import A, seed_gating_checks  # noqa: E402
 
 USERS = {"tok-pawel": "pawel", "tok-metrics": "ci-metrics", "tok-other": "mallory"}
 
@@ -484,6 +484,7 @@ class RedFamilyTest(Phase2Base):
         super().setUp()
         os.environ.pop("AGENTCTL_REDS_DIR", None)
         os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp, "laptop")
+        seed_gating_checks()  # no clone, no forge: the gate's workflows as last read
         self.spawned, self.fns = [], (A.red_spawn, A.cached_dispatch_blocker)
         A.red_spawn = lambda store, o_r, repo, off, took, extra=(): self.spawned.append((off, extra)) or (True, "ok")
         A.cached_dispatch_blocker = lambda: None
@@ -535,7 +536,7 @@ class RedFamilyTest(Phase2Base):
 
     def test_the_shipped_families_put_every_red_outside_the_gate_in_one_family(self):
         """The owner, 2026-11-07: "move all these to single agent" -- Identity rule ablation #1, Identity family explorer
-        #5 and Order independence #46 each had a fixer of their own. The gate set is red_gate_flows (GATING), never a
+        #5 and Order independence #46 each had a fixer of their own. The gate set is red_gate_flows (the gating checks registry), never a
         list in the config: a gate red keeps its family, a non-gate red of any kind is outside-gate's."""
         self.addCleanup(os.environ.__setitem__, "AGENTCTL_RED_FAMILIES", os.environ["AGENTCTL_RED_FAMILIES"])
         os.environ["AGENTCTL_RED_FAMILIES"] = os.path.join(os.path.dirname(HERE), "red-families.json")
@@ -555,9 +556,10 @@ class RedFamilyTest(Phase2Base):
                          "outside-gate")
         self.assertIsNone(A.red_family({"jobs": ["x"], "kind": "test"}))  # no workflow named: cannot tell
         self.assertTrue(A.family_owned("outside-gate"))
-        saved = dict(A.GATING)  # the gate moves, the family follows: read from GATING, not a list of its own
-        self.addCleanup(lambda: (A.GATING.clear(), A.GATING.update(saved)))
-        A.GATING[A.RED_PRIMARY] = A.GATING[A.RED_PRIMARY] + [("Order independence", "order-independence.yml")]
+        # the gate moves, the family follows: read from the gating checks registry (gate_flows), not a list of its own
+        real = A.gate_flows
+        self.addCleanup(setattr, A, "gate_flows", real)
+        A.gate_flows = lambda o_r: [("Main", "main.yml"), ("Order independence", "order-independence.yml")]
         self.assertIsNone(fam("Order independence", "scala (shuffled)", "test"))
 
     def outside_gate_owned(self):

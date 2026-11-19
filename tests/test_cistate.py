@@ -4,7 +4,7 @@ import contextlib, glob, io, json, os, signal, subprocess, sys, tempfile, time, 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, sh  # noqa: E402
+from test_agentctl import A, seed_gating_checks, sh  # noqa: E402
 from test_red import RedBase, run, MOVIES  # noqa: E402
 
 
@@ -26,6 +26,7 @@ class SnapshotTest(RedBase):
         self.put("run-70.log", "capture (uk)\tRun\t2026-10-27T08:00:00Z JVM exit 1\n")
 
     def test_one_snapshot_drives_gate_and_reds_and_the_summary_names_the_non_gate_red(self):
+        seed_gating_checks()  # Identity takes has no run here, so GitHub's list cannot name it: the name last read
         snap = A.ci_state_refresh(MOVIES)
         self.assertTrue(os.path.exists(A.state_path()))
         self.put("runs.json", [])  # no runs to read: everything below reads the snapshot only

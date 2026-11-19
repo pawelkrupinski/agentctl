@@ -7,7 +7,7 @@ from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A  # noqa: E402
+from test_agentctl import A, seed_gating_checks  # noqa: E402
 
 T0 = 1_794_900_000.0
 
@@ -263,6 +263,7 @@ class StatsPassTest(unittest.TestCase):
 
     def test_gate_runs_walk_the_history_then_the_last_days_once_each(self):
         st, t = self.st, self.t
+        seed_gating_checks()  # THE GATE's workflows: movies' registry as last read (no clone, no forge here)
         at = {"start": str(T0 - 100 * 86400), "end": str(T0 - 100 * 86400 + 60), "run_conclusion": "success"}
         rows = {"run": [{"kind": "run", "repo": "pawelkrupinski/movies", "workflow": "Main", "workflow_file": "main.yml",
                          "run_id": "7", "run_attempt": "1", "wall_s": "60", **at},

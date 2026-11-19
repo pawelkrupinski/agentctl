@@ -1617,7 +1617,7 @@ def base_failure_keys(repo, d, e, base):
     out = {}
     try:
         o_r = slug(repo)
-        if o_r in GATING:
+        if gated_repo(o_r):
             for name, decided, _newer, _streak in gate_runs(o_r):
                 if decided and decided.get("conclusion") != "success" and decided.get("databaseId"):
                     try:

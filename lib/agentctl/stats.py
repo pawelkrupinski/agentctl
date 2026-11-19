@@ -28,11 +28,10 @@ STATS_PASS_BOUND = 40       # s a pass works at most (a tick step)
 STATS_GATE_LOOKBACK = 3 * 86400   # s of gate runs each pass looks at (markers dedupe)
 STATS_GATE_HISTORY = 120 * 86400  # s of gate runs the first passes walk back (the collector backfilled 90 days)
 STATS_URL_SERVER = "http://victoria-logs-ci.service.consul:9429"
-STATS_GATE_WORKFLOWS = tuple(w for w, _f in GATING["pawelkrupinski/movies"])  # THE GATE (ciwhy.py)
 # BY WORKFLOW FILE, NOT RUN NAME (2026-11-17: 8 Identity takes records in all, the last on 11-14): a run's `workflow`
 # is its run-name -- every convergence-dispatched Identity takes run reads "Identity takes (convergence run <id>)" --
-# so the gate runs are matched by their file, the record named by the gate workflow's own name.
-STATS_GATE_FILES = {f: w for w, f in GATING["pawelkrupinski/movies"]}
+# so the gate runs are matched by their file, the record named by the gate workflow's own name. THE GATE is movies'
+# gating checks registry (ciwhy.py gate_flows), read when a pass runs.
 STATS_GATE_WALK = "stats_gate_from2"  # meta: the history walk's cursor (2: walked again for the runs the name missed)
 STATS_GATE_REPO = "pawelkrupinski/movies"
 CI_FIELDS = ("kind, repo, workflow, run_id, run_number, run_attempt, sha, event, run_conclusion, job, conclusion, "
@@ -558,7 +557,12 @@ def gate_runs_pass(st, url, t, since, cap, out=None):
         frm = t - STATS_GATE_HISTORY
     walking = frm < t - STATS_GATE_LOOKBACK
     lo, hi = (frm, min(frm + 7 * 86400, t)) if walking else (t - STATS_GATE_LOOKBACK, t)
-    files = ", ".join(f'"{f}"' for f in STATS_GATE_FILES)  # exact: a phrase filter `workflow:"Main"` also matched
+    try:
+        gate_files = {f: w for w, f in gate_flows(STATS_GATE_REPO)}
+    except (Exception, SystemExit) as ex:
+        err(f"stats: the gate's workflows could not be read ({str(ex)[:160]})")
+        return 0
+    files = ", ".join(f'"{f}"' for f in gate_files)  # exact: a phrase filter `workflow:"Main"` also matched
     # bitcashier/core's "Main Pipeline" (2026-11-17, the first backfill)
     try:
         rows = stats_query(url, f'source:ci kind:run branch:="main" repo:="{STATS_GATE_REPO}" workflow_file:in({files}) '
@@ -567,8 +571,8 @@ def gate_runs_pass(st, url, t, since, cap, out=None):
         err(f"stats: the gate runs could not be read ({str(ex)[:160]})")
         return 0
     n = 0
-    rows = [{**r, "run_name": r.get("workflow"), "workflow": STATS_GATE_FILES[r["workflow_file"]]} for r in rows
-            if r.get("repo") == STATS_GATE_REPO and r.get("workflow_file") in STATS_GATE_FILES]
+    rows = [{**r, "run_name": r.get("workflow"), "workflow": gate_files[r["workflow_file"]]} for r in rows
+            if r.get("repo") == STATS_GATE_REPO and r.get("workflow_file") in gate_files]
     for run in sorted(rows, key=lambda r: _num(r.get("end")) or 0):
         rid = f"{run.get('run_id')}.{run.get('run_attempt') or 1}"
         if stats_sent(st, "gate_run", rid):

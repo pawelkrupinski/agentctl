@@ -1502,7 +1502,8 @@ def repo_dispatch_off(store, o_r):
 
 def red_status(store, verbose=False):
     """`agentctl red status`: rendered from the status model (its reds, families and dispatcher sections)."""
-    print(render_red_status(status_data(store=store, now_=store.clock(), only=("reds", "families", "owners", "dispatcher")),
+    print(render_red_status(status_data(store=store, now_=store.clock(), only=("reds", "families", "owners", "dispatcher",
+                                                                                 "untracked")),
                             verbose))
     return 0
 
@@ -1528,6 +1529,13 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
             obs = red_obs_for(o_r, red_observe(o_r, repo, snap) if primary else red_observe_gate(o_r, snap))
         except (Exception, SystemExit) as e:
             err(f"red tick: could not observe ({str(e)[:160]}): nothing opens or clears this tick")
+    untracked = {}
+    if obs is not None:  # A CHECK NEVER GREEN ON MAIN IS NOT TRACKED (red.py): set apart, listed for red status -v
+        obs, untracked = red_split_untracked(store, o_r, obs, t)
+        try:
+            red_note_untracked(store, o_r, untracked)
+        except (Exception, SystemExit) as e:
+            err(f"red tick: could not note the untracked reds ({str(e)[:160]})")
     try:
         n = red_migrate(store) if primary else 0
         if n:
@@ -1573,6 +1581,11 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
         err(f"red tick: the quota waits failed ({str(e)[:160]})")
     for key, it in list(active.items()):
         try:
+            why = red_active_untracked(store, o_r, it, untracked, obs, t)
+            if why:
+                red_untrack(store, it, why)
+                acts.append(f"untracked {red_what(it['data'])}: {why}")
+                continue
             acts += red_step(store, it, obs, snap, facts, repo, o_r, t)
         except StaleVersion:
             pass  # another writer moved it: the next tick
@@ -1602,7 +1615,7 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
 
 def red_tick_repo(repo, snap=None, dispatch=False):
     o_r = slug(repo)
-    if o_r not in GATING:
+    if not gated_repo(o_r):
         return []
     with _red_lock:
         _last_red_tick[0] = time.time()

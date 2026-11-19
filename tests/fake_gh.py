@@ -4,7 +4,10 @@
   run view <id> --log --job <j> -> run-<id>-job-<j>.log
   run view <id> --attempt <n> ... -> the same files of run-<id>-attempt-<n>
   run download <id> -n <a> -D <dir> -> art-<id>-<a>.txt copied to <dir>/verdict.txt
-  run list [--workflow W] [--branch B] ... -> runs.json filtered (W matches workflowName or the workflow file);
+  run list [--workflow W] [--branch B] [--status S] ... -> runs.json filtered (W matches workflowName or the workflow
+                               file; S a status or a conclusion, as GitHub filters;
+                               --status success for a workflow with no green run recorded: one old green run,
+                               unless workflows-never-green lists it -- the recorded runs are only the newest);
                                runs-<owner>_<repo>.json instead when it exists for -R <owner>/<repo>;
                                a W listed in workflows-absent (one per line) -> GitHub's 404 for a workflow file
                                not on the default branch
@@ -50,6 +53,22 @@ def recorded_runs(repo):
     return json.load(open(per_repo if per_repo and os.path.exists(per_repo) else os.path.join(d, "runs.json")))
 
 
+def never_green():
+    p = os.path.join(d, "workflows-never-green")
+    return set(open(p).read().split("\n")) - {""} if os.path.exists(p) else set()
+
+
+def old_green(w, status, branch):
+    """A green-only list of workflow w with no green run recorded: the recorded runs are only the newest, and its older
+    history on main is green -- unless workflows-never-green lists it (a red of a check never green is untracked,
+    red.py; the suite's fixtures predate that rule)."""
+    if status != "success" or not w or w in never_green():
+        return []
+    return [{"databaseId": 1, "number": 0, "status": "completed", "conclusion": "success", "workflowName": w,
+             "headBranch": branch or "main", "headSha": "0" * 40, "createdAt": "2026-01-01T00:00:00Z",
+             "updatedAt": "2026-01-01T00:00:00Z"}]
+
+
 def workflow_absent(w):
     absent = os.path.join(d, "workflows-absent")
     return bool(w) and os.path.exists(absent) and w in open(absent).read().split()
@@ -70,6 +89,7 @@ def rest_runs(path):
     runs = [r for r in recorded_runs(repo) if (not w or w in (r.get("workflowName"), r.get("workflowFile")))
             and (not q.get("branch") or r.get("headBranch") == q["branch"])
             and (not q.get("status") or q["status"] in (r.get("status"), r.get("conclusion")))]
+    runs = runs or old_green(w, q.get("status"), q.get("branch"))
     per, page = int(q.get("per_page", 30)), int(q.get("page", 1))
     rest = []
     for r in runs[(page - 1) * per: page * per]:
@@ -190,6 +210,9 @@ elif argv[:2] == ["run", "list"]:
                          f"(https://api.github.com/repos/{repo or 'o/r'}/actions/workflows/{w})\n")
         sys.exit(1)
     runs = [r for r in runs if (not w or w in (r.get("workflowName"), r.get("workflowFile"))) and (not b or r.get("headBranch") == b)]
+    st = opt("--status")  # GitHub's filter: a status (queued, completed, ...) or a conclusion (success, failure, ...)
+    runs = [r for r in runs if not st or st in (r.get("status"), r.get("conclusion"))]
+    runs = runs or old_green(w, st, b)
     print(json.dumps(runs[: int(opt("--limit") or 20)]))
 elif argv[:2] == ["workflow", "run"]:
     pass  # a dispatch: recorded in calls.log

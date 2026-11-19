@@ -1,9 +1,9 @@
 """agentctl wait run: verdict-only output, failed-log tails, single waiter, --until landable, backoff."""
-import contextlib, io, threading, itertools, json, os, subprocess, sys, tempfile, time, unittest
+import base64, contextlib, io, threading, itertools, json, os, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, TOOL  # noqa: E402
+from test_agentctl import A, GATING_CHECKS_TEMPLATE, TOOL  # noqa: E402
 
 FAKE = os.path.join(HERE, "fake_gh.py")
 
@@ -26,6 +26,9 @@ class FakeForge(unittest.TestCase):
         self.saved = {k: os.environ.get(k) for k in self.env}
         os.environ.update(self.env)
         self.saved_gh, A.GH_CLI = A.GH_CLI, FAKE
+        # movies' gating checks registry on main, read through the API (no clone here): THE GATE's three workflows
+        self.put("api-repos_pawelkrupinski_movies_contents_.github_gating-checks.tsv_ref_main.json",
+                 {"content": base64.b64encode(GATING_CHECKS_TEMPLATE.encode()).decode()})
 
     def tearDown(self):
         A.GH_CLI = self.saved_gh

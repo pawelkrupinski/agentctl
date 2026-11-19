@@ -42,17 +42,18 @@ gate_unread_why = [""]
 
 
 def gate_reds(repo):
-    """The ids (run numbers and run ids) of the gating workflows' red runs on main; empty when green or not gated.
+    """The ids (run numbers and run ids) of the gating workflows' red runs on main; empty when green or not gated. A
+    report-only red (gate_report_only: red only in the registry's unproven jobs) holds no push.
     When the gate cannot be read: {GATE_UNREAD}, which every caller takes as RED -- a production change waits, the
     processor takes no batch (the owner, 2026-10-27: an unread gate is never green; at 08:05Z a launchd processor with
     no token read it as green, and the hook, with no token either, skipped its own gate: a push onto red #2047)."""
     try:
         o_r = slug(repo)
-        if o_r not in GATING:
+        if not gated_repo(o_r):
             return set()
         reds = set()
         for name, decided, _newer, _streak in gate_runs(o_r):
-            if decided and decided.get("conclusion") != "success":
+            if decided and decided.get("conclusion") != "success" and not gate_report_only(o_r, name, decided)[0]:
                 reds |= {str(decided.get("number")), str(decided.get("databaseId"))} | episode_names(o_r, name, decided)
         gate_unread_why[0] = ""
         return reds

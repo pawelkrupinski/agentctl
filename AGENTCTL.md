@@ -123,7 +123,15 @@ moves it forward; nothing is a detached process that can die with its state in i
     step does (Alert backtest #4, 2026-11-19: it followed an 11-11 change of the reused worktree, whose phantom tip
     made the same tick's INVARIANT fire "no fix on its way for 0 min"). An old outside red no fresh run
     can check (no `workflow_dispatch`, a refused dispatch, its file gone) is never retired: it is offered with an
-    `old_note` and a fixer decides. A red of a `workflow_call`-only workflow (only a parse failure gives one
+    `old_note` and a fixer decides. A CHECK NEVER GREEN IS NOT TRACKED (the owner, 2026-11-19, Alert backtest #9:
+    "don't alert in status line until it gets green for the first time"): a red of a workflow with no green run on
+    main ever -- or, in a workflow that has one, of jobs that never passed there -- opens no item (no offer, fixer,
+    owner ask, inbox line, status-line or ci-why mention, invariant); an open one is closed quietly (`untracked:
+    never green ...`). `red status -v` lists them under `untracked (never green)`. Ever green comes from GitHub's run
+    history on main (the snapshot's runs, else `run list --status success`; a job: its success in a green run, every
+    green run read), kept in the store (meta `ever_green`) once seen; a never-green answer is asked again after
+    `EVER_GREEN_RECHECK` (10 min); anything unread keeps the red tracked. The first green run makes the next red an
+    ordinary one. A red of a `workflow_call`-only workflow (only a parse failure gives one
     runs of its own: Report run timings #38) is verified, in any open state, by its callers: its file changed on main
     since the failing run, and a caller's newest decided run on main containing that change passed (a red caller
     vetoes nothing). On ci-runner the reconciler's own clone is the repo these reads use. THE INVARIANT, enforced each
@@ -400,10 +408,18 @@ For movies it reads exactly THE GATE (the owner, 2026-10-27: "if the latest main
 push then"): *Main*, *Identity model convergence* and -- since the owner's 2026-11-08 split of convergence's takes
 rows into their own workflow, dispatched by convergence's preflight -- *Identity takes*, the same three the pre-push
 red gate (`check_redgate`), land's
-red/green branch and the `waiting` processor read. Verify scrape recording no longer gates. For each, it takes the newest decided run on main
+red/green branch and the `waiting` processor read. THE GATE IS movies' GATING CHECKS REGISTRY (issue 7267ea, 2026-11-19):
+`.github/gating-checks.tsv` on origin/main (`scripts/ci/gating_checks.py`; tab-separated `kind workflow name proven
+note`), read like `red-workflows.tsv` -- from the clone, else GitHub's contents API, else the copy last read (state root
+`gating-checks.json`); never read at all is an UNREAD gate (red). Its `workflow` rows ARE the gate workflows (agentctl
+keeps no list: `gate_flows`, named by main's workflow files); `red-repos.json` gives movies no `gate`. A red gate run
+whose failed jobs are all `unproven` rows (aggregates aside) -- or any red of an `unproven` workflow row -- is REPORT
+ONLY: `Main: RED, REPORT ONLY (...) -- holds no push`, no entry in `gate_reds`, its reds tracked outside the gate. A
+proven row's red gates. One deliberate difference from the hook: a failed job with no row at all gates here (the lint
+keeps every job in a row; an unknown never passes). Verify scrape recording no longer gates. For each, it takes the newest decided run on main
 (success or failure; cancelled and skipped runs are passed over). A gate workflow whose file is not on main yet
 (GitHub's `HTTP 404: workflow ... not found on the default branch`) has no run there and decides nothing -- never an
-unread gate; any other read error still is one (2026-11-08: GATING named identity-takes.yml before its file landed,
+unread gate; any other read error still is one (2026-11-08: agentctl's gate list named identity-takes.yml before its file landed,
 and the gate read UNREAD for 1.5 h). For other repos it reads every workflow seen on
 main. For each red run it shows:
 
@@ -644,7 +660,7 @@ the red machine watches, each with its gate workflows, its `family` and its `pus
 | bitcashier/infra | Stage NixOS closures | infra-repo | **owner-only** |
 | bitcashier/core | Main Pipeline | core-repo | land |
 
-- The primary keeps everything it had (its keys, outside workflows, local checks, its landing gate `GATING`); the
+- The primary keeps everything it had (its keys, outside workflows, local checks, its landing gate: its gating checks registry); the
   others are read through their gate workflows only, once a minute (`$AGENTCTL_RED_OTHERS_EVERY`), after the
   primary's red tick, each in its own try. Watching a repo puts NO red gate in front of its landings.
 - Another repo's red carries `repo`, its key is bound to the repo (`red_repo_key`), its records live under
@@ -761,7 +777,7 @@ agent must be assigned to it".
   `red status`, `status --line` and the status page, never "blocked by gate" that same red (2026-10-29 19:20).
 - **EVERY RED OUTSIDE THE GATE TO ONE AGENT (the owner, 2026-11-07: "move all these to single agent"; Identity rule
   ablation #1, Identity family explorer #5 and Order independence #46 had spawned three fixers).** A family with
-  `"outside_gate": true` matches a red whose workflow is not one the gate reads -- `red_gate_flows` (GATING: Main,
+  `"outside_gate": true` matches a red whose workflow is not one the gate reads -- `red_gate_flows` (movies' gating checks registry: Main,
   Identity model convergence and Identity takes; another repo's red-repos.json `gate`), the same set ci-why's "Outside the gate" leaves out,
   never a list of its own; the Local checks count as the gate's. The family `outside-gate` (owner) comes FIRST:
   a Verify scrape recording `convergence (<cc>)` job is its too, and an infra-shaped red of a non-gating workflow (an
@@ -2451,6 +2467,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `dispatch_find_poll` | `AGENTCTL_DISPATCH_FIND_POLL` | `5` | - |
 | `drift_ci` | `AGENTCTL_DRIFT_CI` | - | - |
 | `drift_stall` | `AGENTCTL_DRIFT_STALL` | `1800` | s with no output before the drift check is ended (no verdict: the batch goes on) |
+| `ever_green_recheck` | `AGENTCTL_EVER_GREEN_RECHECK` | `600` | s before a never-green answer is asked of GitHub again |
 | `fetch_timeout` | `AGENTCTL_FETCH_TIMEOUT` | `180` | an unattended fetch's bound |
 | `fixer_claim_within` | `AGENTCTL_FIXER_CLAIM_WITHIN` | `600` | s a started session has to start its transcript / run `red claim` |
 | `fixer_land_wait` | `AGENTCTL_FIXER_LAND_WAIT` | `7200` | s a fixer's land waits for its queued change's verdict |

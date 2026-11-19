@@ -234,7 +234,8 @@ class CiWhyTest(FakeForge):
                 gate = {n: d for n, d, _nw, _s in A.gate_runs("pawelkrupinski/movies")}
         finally:
             A.slug = saved
-        self.assertIsNone(gate["Identity takes"], "no run on main: it decides nothing")
+        takes = dict((f, n) for n, f in A.gate_flows("pawelkrupinski/movies"))["identity-takes.yml"]
+        self.assertIsNone(gate[takes], "no run on main: it decides nothing")
         self.assertEqual(gate["Main"]["number"], 41)
 
     def test_an_unread_gate_is_never_green(self):
@@ -426,10 +427,10 @@ class CiWhyTest(FakeForge):
         main exactly like Main and convergence; its `verdict complete` job (moved from convergence) still says NO VERDICT
         for a run whose only failure it is (a drift-only explorer dispatch on main fails just that, by design)."""
         takes = ("Identity takes", "identity-takes.yml")
-        self.assertEqual([n for n, _f in A.GATING["pawelkrupinski/movies"]],
-                         ["Main", "Identity model convergence", "Identity takes"])
         self.put("runs.json", [run(40, 20, "Main", "main.yml"), run(39, 19, "Identity model convergence", "identity-model-convergence.yml"),
                                run(37, 17, *takes, conclusion="failure")])
+        self.assertEqual([n for n, _f in A.gate_flows("pawelkrupinski/movies")],  # the registry's rows, named by GitHub
+                         ["Main", "Identity model convergence", "Identity takes"])
         self.put("run-37.json", {"jobs": [job("preflight"), {**job("takes (poland)", conclusion="failure"),
                                                              "steps": [step("Set up job", "success"), step("Check takes", "failure")]}],
                                  "headSha": SHA, "url": "http://f/runs/17", "number": 17, "status": "completed", "conclusion": "failure"})
@@ -470,9 +471,10 @@ class CiWhyMutationTest(unittest.TestCase):
         self.assertTrue(res.failures or res.errors, f"mutant {attr} survived")
 
     def test_mutants_die(self):
-        self.kill("test_test_failure_with_clearing_rule", "GATING", {"pawelkrupinski/movies": A.GATING["pawelkrupinski/movies"][:1]})
-        self.kill("test_the_gate_is_exactly_main_and_convergence", "GATING", {"pawelkrupinski/movies": A.GATING[
-            "pawelkrupinski/movies"] + [("Verify scrape recording", "verify-scrape-recording.yml")]})
+        real = A.gate_flows
+        self.kill("test_test_failure_with_clearing_rule", "gate_flows", lambda o_r: real(o_r)[:1])
+        self.kill("test_the_gate_is_exactly_main_and_convergence", "gate_flows",
+                  lambda o_r: real(o_r) + [("Verify scrape recording", "verify-scrape-recording.yml")])
         self.kill("test_infra_shaped", "classify_job", lambda job, lines, raw=(0, []): ("test", "x"))
         self.kill("test_artifact_exists_is_infra_and_silent_log_is_unclear", "INFRA_LOG", A.re.compile(r"$^"))
         self.kill("test_an_unknown_outside_dependency_is_infra_never_a_test_failure", "UNKNOWN_LOG", A.re.compile(r"$^"))
