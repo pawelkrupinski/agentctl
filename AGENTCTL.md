@@ -319,7 +319,11 @@ skips every laptop duty (notifier, alerts, claims and the orphan reaper, dispatc
 does not start, `agentctl status` leads with `STANDBY: ...`, and its owner is told once per holder in its inbox
 (`LAPTOP STANDBY`). Its own worktrees' steps (outbox, landed worktrees, the local queue) go on. The STORE enforces it
 too: while the role is held, an `acquire` or `take` of a `laptop:` lease from a client whose `X-Agentctl-Role` header is
-not the holder (or names none: an agentctl from before the role) is refused with 409 `Standby`. A holder silent past
+not the holder (or names none: an agentctl from before the role) is refused with 409 `Standby`; so is a `revoke` of a
+lease a `laptop:` holder holds (it needs no secret: on 2026-11-19 pawel-mbp's pre-role orphan reaper revoked every
+family owner's heartbeat as "ORPHANED", judged by its own records -- outside-gate restarted 23 times). A client
+naming no role is refused for good once a role was ever held, the holder asleep or not, and its calls are no contact
+of the laptop's (they kept the laptop's lease clocks running while the holder slept). A holder silent past
 `LAPTOP_ROLE_TTL` (10 min) is taken over by the next machine that asks; its holder has no `laptop:` prefix, so the
 laptop's contact pause never keeps a dead machine's role. `take` revokes a live holder's lease (asking first; `--yes`
 without a terminal). Why: on 2026-11-18 23:41Z a second Mac, `pawel-mbp` (its store tunnel key
@@ -764,7 +768,9 @@ agent must be assigned to it".
   ends with one verdict line; that turn's red leases are released with it, exactly as a fixer's, so verification,
   re-offers (back to the same owner), the attempt ladder and the crash-loop breaker work as before. It is restarted
   only when it died (same worktree, notebook and session), and ends after 6 h with no red (`$AGENTCTL_OWNER_IDLE`, counted from its last turn's end), on
-  `RED-STOP.md`, or after 2 turns in a row with no verdict. Its brief: fast reproducer first, and for convergence the
+  `RED-STOP.md`, or after 2 turns in a row with no verdict. A wrapper whose heartbeat is LOST (revoked, re-taken; a
+  merely lapsed one is taken again) ends `STOPPED: the owner's heartbeat lease was lost (<why, from the lease>)` and
+  leaves its turn's session at work: the next owner adopts it, never starting it over. Its brief: fast reproducer first, and for convergence the
   MECHANISM-ONLY rule (fix the incremental state that diverges from a whole resolve; never a resolver rule tuned on one
   recording, never a baseline or allow-list row). `red status` lists each owner (`owner <family>: ALIVE, turn n, ...`).
   Each turn's session is `claude stop`ped when the turn ends (claude keeps a finished session's process as a spare, and

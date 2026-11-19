@@ -133,7 +133,8 @@ class RemoteStore:
         hdrs = {"Authorization": f"token {self._token()}", "Content-Type": "application/json"}
         if contact_machine():
             hdrs["X-Agentctl-Machine"] = contact_machine()
-            hdrs["X-Agentctl-Role"] = laptop_role_holder()  # which machine this laptop is (laptop_role_refusal)
+        if host_role() == "sync":  # which machine this laptop is (laptop_role_refusal): every sync client names it
+            hdrs["X-Agentctl-Role"] = laptop_role_holder()
         req = urllib.request.Request(self.url + path, data=data, method=method, headers=hdrs)
         try:
             with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
@@ -913,7 +914,11 @@ class StoreAPI:
             return self._json(403, {"error": "Forbidden", "message": f"{who or 'this token'} may not call {u.path}"})
         try:
             mach = next((v for k, v in headers.items() if k.lower() == "x-agentctl-machine"), None)
-            if mach and u.path.startswith("/v1/store/"):  # its leases' clocks run again (Store.contact)
+            role = next((v for k, v in headers.items() if k.lower() == "x-agentctl-role"), None)
+            # its leases' clocks run again (Store.contact) -- only for the machine that holds the laptop role: a
+            # pre-role machine's calls kept "laptop" in contact while the holder slept (laptop_role_speaks)
+            if mach and u.path.startswith("/v1/store/") and not (mach.strip() == "laptop"
+                                                                 and laptop_role_speaks(self.store, role)):
                 gap = self.store.contact(mach.strip())
                 if gap:
                     sys.stderr.write(f"agentctl-store: {mach.strip()} back after its silence: its leases paused "
@@ -922,8 +927,7 @@ class StoreAPI:
                 args = json.loads(body)
             else:
                 args = {}
-            refused = laptop_role_refusal(self.store, u.path, args,
-                                          next((v for k, v in headers.items() if k.lower() == "x-agentctl-role"), None))
+            refused = laptop_role_refusal(self.store, u.path, args, role)
             if refused:
                 return self._json(409, {"error": "Standby", "message": refused})
             return self.route(method, u.path, q, args)
@@ -1409,22 +1413,43 @@ def cmd_laptop(a):
     return 0 if held else 1
 
 
-LAPTOP_HOLDER_CALLS = ("acquire", "take")
+LAPTOP_HOLDER_CALLS = ("acquire", "take", "revoke")
+# A REVOKE NEEDS NO SECRET, SO THE ROLE GUARDS IT TOO (2026-11-19: all night every family owner ended "STOPPED: the
+# owner's heartbeat lease was lost" and was restarted into the same end -- outside-gate 23 times, convergence 5,
+# main-tests 7 -- and an owner's red fixer with it. Each owner lease was revoked seconds after a good renewal,
+# "ORPHANED: ... its wrapper ended (IDLE: no red of convergence for 6 h)": a verdict this laptop's convergence owner
+# never wrote. pawel-mbp, its tunnel up all night, ran an agentctl from before the role, and its orphan reaper judged
+# Pro-2's leases by its own owner records and its own processes. The store refused it acquire and take, never revoke.)
+# A client naming no role -- an agentctl from before it -- is refused for good once a role was ever held, the holder
+# asleep or not; one naming another machine is refused while the holder's role lives (past it, it takes the role).
+
+
+def laptop_role_speaks(store, role):
+    """None when a client naming `role` (X-Agentctl-Role; None: names none) speaks for the laptop; else why not."""
+    row = store.get(LAPTOP_ROLE_LEASE)
+    if not row:  # no role ever held (a fresh store, one machine, tests): nothing to refuse
+        return None
+    if role is None:
+        return f"{laptop_role_line(row).split(';')[0]}, and this client is an agentctl from before the laptop role"
+    if not row.get("holder") or float(row.get("expires_at") or 0) <= store.clock() or row["holder"] == role:
+        return None
+    return f"{laptop_role_line(row).split(';')[0]}, and this client is {role}"
 
 
 def laptop_role_refusal(store, path, body, role):
-    """THE STORE ENFORCES THE ROLE: a `laptop:` lease (a fixer, an owner, a claim) is acquired only by the machine that
-    holds the laptop role -- a client naming another holder in X-Agentctl-Role, or none (an agentctl from before the
-    role, like pawel-mbp's on 2026-11-18), is refused while a live holder stands. The refusal's text, or None."""
+    """THE STORE ENFORCES THE ROLE: a `laptop:` lease (a fixer, an owner, a claim) is acquired, taken or revoked only by
+    the machine that holds the laptop role (laptop_role_speaks; pawel-mbp's agentctl on 2026-11-18/19 named none). The
+    refusal's text, or None."""
     m = path[len("/v1/store/"):] if path.startswith("/v1/store/") else ""
     if m not in LAPTOP_HOLDER_CALLS or not isinstance(body, dict):
         return None
     args, kw = body.get("args") or [], body.get("kwargs") or {}
-    holder = kw.get("holder") if "holder" in kw else (args[1] if len(args) > 1 else None)
+    if m == "revoke":  # its holder is the lease's own
+        name = kw.get("name") if "name" in kw else (args[0] if args else None)
+        holder = (store.get(name) or {}).get("holder") if isinstance(name, str) else None
+    else:
+        holder = kw.get("holder") if "holder" in kw else (args[1] if len(args) > 1 else None)
     if not str(holder or "").startswith("laptop:"):
         return None
-    row = store.get(LAPTOP_ROLE_LEASE)
-    if not row or not row.get("holder") or float(row.get("expires_at") or 0) <= store.clock() or row["holder"] == role:
-        return None
-    return (f"STANDBY: {holder} refused: {laptop_role_line(row).split(';')[0]}, and this client is "
-            f"{role or 'an agentctl from before the laptop role'}")
+    why = laptop_role_speaks(store, role)
+    return f"STANDBY: {holder} refused: {why}" if why else None

@@ -151,6 +151,33 @@ class OwnerRestartTest(OwnerBase):
         self.assertTrue(self.wait(lambda: self.rec().get("turn") == 2), "the turn count goes on (1, then 2)")
 
 
+    def test_a_lost_heartbeat_hands_the_turn_to_the_next_owner_never_stops_it(self):
+        """2026-11-19 05:06:52Z: outside-gate's heartbeat was revoked mid-turn; its wrapper stopped the session at work
+        on Alert backtest (ORPHANED ... its wrapper ended) and the next owner started that turn over. A wrapper whose
+        heartbeat is lost leaves its turn's session running: the next owner adopts it (A RESTART ADOPTS A SESSION
+        STILL AT WORK), and its stop line says why the lease was lost."""
+        os.environ["FAKE_CLAUDE_SLEEP"] = "60"
+        self.addCleanup(os.environ.__setitem__, "FAKE_CLAUDE_SLEEP", "0")
+        self.tick(dispatch=True)
+        self.assertTrue(self.wait(lambda: self.rec().get("session") and self.rec().get("bg_id")
+                                  and self.rec().get("in_turn")))
+        first = self.rec()
+        launched = self.launches()
+        self.assertTrue(self.st.revoke(A.owner_lease(FAM), "ORPHANED: judged by another machine"))
+        self.assertTrue(self.wait(lambda: self.rec().get("ended")), self.rec())
+        self.assertEqual(self.rec()["verdict"],
+                         "STOPPED: the owner's heartbeat lease was lost (ORPHANED: judged by another machine)")
+        [s] = [s for s in self.sessions() if s["id"] == first["bg_id"]]
+        self.assertFalse(s.get("stopped"), "the turn's session goes on for the next owner")
+        for _ in range(3):
+            self.tick(dispatch=True, advance=1)
+            if self.rec().get("pid") not in (None, first["pid"]):
+                break
+        self.assertTrue(self.wait(lambda: self.rec().get("pid") not in (None, first["pid"])
+                                  and self.rec().get("bg_id") == first["bg_id"] and self.rec().get("in_turn")),
+                        self.rec())
+        self.assertEqual(self.launches(), launched, "adopted: no new launch, never started over")
+
 class LeaseClockPauseTest(unittest.TestCase):
     def setUp(self):
         import tempfile

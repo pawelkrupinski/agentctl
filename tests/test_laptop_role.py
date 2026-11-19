@@ -126,6 +126,80 @@ class LaptopRoleTest(unittest.TestCase):
                                                 {"args": ["role/laptop", "role:pawel-mbp:41A0-MBP", 600, 1]}, None))
         self.assertIsNone(A.laptop_role_refusal(self.st, "/v1/store/renew", body, None), "renewals go on")
 
+    def api(self):
+        return A.StoreAPI(self.st, ["pawel"], [], user_of={"tok": "pawel"}.get)
+
+    def call(self, method, args, role, machine="laptop"):
+        import json
+        hdrs = {"Authorization": "token tok", "X-Agentctl-Machine": machine}
+        if role:
+            hdrs["X-Agentctl-Role"] = role
+        code, _ct, out = self.api().handle("POST", f"/v1/store/{method}", hdrs, json.dumps({"args": args}).encode())
+        return code, json.loads(out)
+
+    def test_tonights_owner_losses_a_pre_role_machine_revokes_no_laptop_lease(self):
+        # 2026-11-19: every family owner ended "STOPPED: the owner's heartbeat lease was lost", restarted and lost it
+        # again (outside-gate 23 restarts). The store's rows: each owner lease revoked "ORPHANED: ... its wrapper
+        # ended (IDLE: no red of convergence for 6 h)" seconds after a good renewal -- a verdict this laptop's owner
+        # never wrote (convergence/owner.log has no IDLE). pawel-mbp (tunnel key store-tunnel@pawel-mbp, connected
+        # all night) ran an agentctl from before the role and its orphan reaper judged Pro-2's leases by ITS OWN owner
+        # records; the store enforced the role on acquire and take, never on revoke (needs no secret).
+        pro2 = "role:Pawes-MacBook-Pro-2:8C1E-PRO-2"
+        self.t[0] = 1795076126.0  # 08:15:26Z: Pro-2 takes the role
+        self.step(PRO2)
+        self.t[0] = 1795076130.0  # 08:15:30Z the convergence owner (pid 14851, started 08:14:31) beats
+        code, got = self.call("acquire", ["owner/convergence", "laptop:owner:convergence", A.OWNER_TTL, A.OWNER_MAX,
+                                          "beat 1"], pro2)
+        self.assertEqual(code, 200, got)
+        hb = got["result"]
+        self.t[0] = 1795077173.0  # 08:32:53Z its last good beat; Pro-2's sync renews the role pass after pass
+        self.step(PRO2)
+        self.assertEqual(self.call("renew", ["owner/convergence", hb["epoch"], hb["secret"], "beat 2", A.OWNER_TTL],
+                                   pro2)[1]["result"], "ok")
+        self.t[0] = 1795077207.0  # 08:33:27Z pawel-mbp's reaper: no role header (its agentctl predates the role)
+        why = "ORPHANED: laptop:owner:convergence holds it with no work (its wrapper ended (IDLE: no red of convergence for 6 h))"
+        code, got = self.call("revoke", ["owner/convergence", why], None)
+        self.assertEqual((code, got["error"]), (409, "Standby"), got)
+        self.assertIn("an agentctl from before the laptop role", got["message"])
+        code, got = self.call("revoke", ["owner/convergence", why], "role:pawel-mbp:41A0-MBP")
+        self.assertEqual(code, 409, "a machine naming another role: refused while the holder's role lives")
+        self.t[0] = 1795077233.0  # 08:33:53Z the owner's next beat: still its lease
+        self.assertEqual(self.call("renew", ["owner/convergence", hb["epoch"], hb["secret"], "beat 3", A.OWNER_TTL],
+                                   pro2)[1]["result"], "ok")
+        # a red lease the owner holds (Alert backtest's at 05:06:52) is the role holder's too
+        self.st.acquire("red/5254bffda9d2", "laptop:owner:outside-gate", 900, 3600)
+        self.assertEqual(self.call("revoke", ["red/5254bffda9d2", "ORPHANED: x"], None)[0], 409)
+        # the role holder's own reaper and the reconciler's reasons still revoke; leases nobody's laptop holds are free
+        self.assertEqual(self.call("revoke", ["red/5254bffda9d2", "ORPHANED: x"], pro2), (200, {"result": True}))
+        self.st.acquire("watch/7", "ci:watch:7", 900, 3600)
+        self.assertEqual(self.call("revoke", ["watch/7", "done"], None), (200, {"result": True}))
+
+    def test_a_pre_role_machine_is_refused_even_while_the_role_lapsed(self):
+        # Pro-2 asleep past LAPTOP_ROLE_TTL: an agentctl from before the role must still not act for the laptop
+        self.step(PRO2)
+        self.st.acquire("owner/outside-gate", "laptop:owner:outside-gate", A.OWNER_TTL, A.OWNER_MAX)
+        self.t[0] += A.LAPTOP_ROLE_TTL + 60
+        self.assertEqual(self.call("revoke", ["owner/outside-gate", "ORPHANED: x"], None)[0], 409)
+        self.assertEqual(self.call("acquire", ["red/1", "laptop:fixer:red-1", 900, 3600], None)[0], 409)
+        self.assertEqual(self.call("acquire", ["red/1", "laptop:fixer:red-1", 900, 3600], "role:pawel-mbp:41A0-MBP")[0],
+                         200, "a role-aware machine may act once the holder's role lapsed (it takes the role itself)")
+
+    def test_a_pre_role_machine_keeps_no_laptop_contact(self):
+        # pawel-mbp's calls said X-Agentctl-Machine: laptop -- while Pro-2 slept they kept the laptop "in contact", so
+        # Pro-2's leases' clocks never paused (A SILENT MACHINE'S LEASE CLOCKS PAUSE)
+        self.step(PRO2)
+        self.st.contact("laptop")
+        t0 = self.t[0]
+        self.t[0] += A.CONTACT_WRITE_EVERY + 300
+        self.call("get", ["owner/x"], None)
+        row = self.st.get("role/laptop")
+        self.assertIsNotNone(row)
+        import sqlite3
+        c = sqlite3.connect(self.st.path)
+        self.assertEqual(float(c.execute("SELECT v FROM meta WHERE k='contact:laptop'").fetchone()[0]), t0,
+                         "a pre-role client's call is no contact of the laptop's")
+        c.close()
+
     def test_a_store_with_no_role_lease_refuses_nothing(self):
         self.on(MBP)
         self.assertIsNone(A.laptop_role_standby(self.st))

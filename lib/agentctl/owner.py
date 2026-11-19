@@ -208,6 +208,15 @@ def owner_turn_prompt(fam, rec, st, names, first, resumed=False):
                         owner={"family": fam, "notebook": rec["notebook"], "reds": reds})
 
 
+OWNER_HEARTBEAT_LOST = "STOPPED: the owner's heartbeat lease was lost"
+
+
+def in_turn_of(s, transcript):
+    """The wrapper's turn's session is still at work (its last `claude agents` row, and its transcript, not over)."""
+    ent = s.get("ent")
+    return bool(ent and ent.get("id") and not bg_turn_over(ent, transcript))
+
+
 def red_owner(a):
     """THE OWNER'S WRAPPER (detached; `agentctl red owner --family F`): its heartbeat lease, its reds' leases renewed
     by the turn's progress, one session resumed turn after turn, each turn's leases released with the turn's verdict.
@@ -334,8 +343,9 @@ def red_owner(a):
                 # wrapper; a revoked (orphaned), released or re-taken one ends it
                 gone = s["hbl"].renew(st, f"beat {int(now)}")
                 s["hb"] = dict(s["hb"], epoch=s["hbl"].epoch, secret=s["hbl"].secret)
-                if gone:
-                    return "STOPPED: the owner's heartbeat lease was lost"
+                if gone:  # why it was lost, from the lease itself (2026-11-19: the bare line hid pawel-mbp's revokes)
+                    s["handover"] = True
+                    return f"{OWNER_HEARTBEAT_LOST} ({str(gone[1])[:300]})"
                 # THE WRAPPER JUDGES PROGRESS (RED_STALL, above), so its reds' leases renew with each beat of a turn
                 # not stalled (and between turns). Renewed only on a new mark, they lapsed after OWNER_TTL (15 min)
                 # while the turn was inside its 30 min stall budget: "lease expired" every 15-30 min (2026-11-03,
@@ -410,8 +420,8 @@ def red_owner(a):
         stop = f"store auth failed: {str(ex)[:300]}"
     except Exception as ex:  # never a dead wrapper with a live session and held leases
         stop = f"STOPPED: the owner's wrapper failed ({type(ex).__name__}: {str(ex)[:200]})"
-    if s["bid"]:
-        bg_stop(cli, s["bid"])
+    if s["bid"] and not (s.get("handover") and in_turn_of(s, rec.get("transcript"))):  # A LOST HEARTBEAT HANDS THE TURN OVER: its session
+        bg_stop(cli, s["bid"])  # at work goes on, and the family's next owner adopts it (never started over)
     release(list(owner_leases(fam)), stop)
     try:
         st.release(owner_lease(fam), s["hb"]["epoch"], s["hb"]["secret"], outcome=stop)
