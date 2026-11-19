@@ -36,9 +36,11 @@ class TimeoutAndClockTest(unittest.TestCase):
         return res
 
     def test_a_hang_fails_within_the_per_test_timeout(self):
-        t0 = time.monotonic()
-        res = self.outcome(lambda self: time.sleep(30), timeout=1)
-        self.assertLess(time.monotonic() - t0, 10)
+        """The hang is CUT, not waited out: the body never reaches its end. No wall-clock bound on the run (one failed
+        once under a laptop load of 70: the alarm's handler waits for the CPU like everything else)."""
+        done = []
+        res = self.outcome(lambda self: (time.sleep(30), done.append(True)), timeout=1)
+        self.assertEqual(done, [], "the sleep ran to its end: the per-test timeout never cut it")
         self.assertEqual(len(res.errors), 1)
         self.assertIn("TestTimeout", res.errors[0][1])
 
@@ -60,8 +62,9 @@ class TimeoutAndClockTest(unittest.TestCase):
         def body(self):
             A.time.sleep = lambda s: (_ for _ in ()).throw(AssertionError("fake sleep reached"))
             A.subprocess.run = None
-            # subprocess's own poll keeps the real clock and Popen
-            subprocess.run(["sleep", "0.2"], timeout=5)
+            # subprocess's own poll keeps the real clock and Popen (its timeout only bounds a broken run: a fake
+            # sleep reached throws at once; 5 s failed once under a laptop load of 70 -- fork and exec wait for a CPU)
+            subprocess.run(["sleep", "0.2"], timeout=40)
         res = self.outcome(body)
         self.assertEqual((res.failures, res.errors), ([], []))
         self.assertIs(A.time.sleep, time.sleep)  # a forgotten restore never reaches the next test

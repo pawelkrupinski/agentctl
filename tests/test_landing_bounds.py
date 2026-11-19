@@ -40,8 +40,12 @@ class PushBoundTest(unittest.TestCase):
                     "c = subprocess.Popen([sys.executable, '-c', 'import time\\nt=time.time()\\n"
                     "while time.time()-t<8: pass'], start_new_session=True)\n"
                     "c.wait()\nprint('done')\n")
+        # THE STALL JUDGE ON AN INJECTED CLOCK: one second a poll, never the wall's -- under a laptop load of 70 the
+        # real seconds passed while the busy child waited for a CPU, and it read as stalled. Each poll sees the child
+        # (another session, the step's tree) running or runnable: progress, whatever the load.
+        ticks = iter(range(10 ** 6))
         rc, out = A.run_watched([sys.executable, script], d, dict(os.environ), os.path.join(d, "log"), "push",
-                                stall=3)
+                                stall=3, clock=lambda: float(next(ticks)))
         self.assertEqual(rc, 0, out)
         self.assertIn("done", out)
 

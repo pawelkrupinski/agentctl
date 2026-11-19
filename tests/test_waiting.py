@@ -137,6 +137,7 @@ class WaitingTest(Base):
         before = sh(self.r.root, "git", "--git-dir", self.r.bare, "rev-parse", "main")
         outs = lambda: set(os.listdir(A.reds_dir("baseline-out"))) if os.path.isdir(A.reds_dir("baseline-out")) else set()  # noqa: E731
         had = outs()  # the worker's state root outlives a test: another land test's baseline may be there already
+        t0 = time.time()
         rc, out = self.land(wt)
         self.assertEqual(rc, 0, out)
         self.assertNotIn("KNOWN RED", out)
@@ -147,7 +148,8 @@ class WaitingTest(Base):
         (e,) = self.entries().values()
         self.assertEqual((e["status"], e["head"], e["infra_reason"], e["infra_same"]),
                          ("queued", sha, A.NETWORK_REASON, 1))
-        self.assertGreater(e["retry_after"], time.time(), "checked again later, not now")
+        # judged from before the land, never from now: the test's own duration under load is no part of the backoff
+        self.assertGreaterEqual(e["retry_after"], t0 + A.INFRA_BACKOFF[0], "checked again later, not now")
         self.assertEqual(sh(self.r.root, "git", "--git-dir", self.r.bare, "rev-parse", "main"), before, "nothing landed")
 
     def test_green_main_lands_directly_after_its_own_checks(self):
