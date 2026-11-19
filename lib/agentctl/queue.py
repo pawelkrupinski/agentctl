@@ -1965,11 +1965,16 @@ def _push_checked(repo, d, st, t, e, fix, todo, pheld, kinds=None):
     if first or older or e["id"] in pheld:
         lap_change_deadline(st, e, "checked", t)
         return did
-    note_hold(st, e, None, None, t)
+    # THE PUSH IS ITS HOLD WHILE IT RUNS (issue 20261119T123823-f7d6c9): clearing the hold before push_change -- which
+    # may fetch, find main moved and re-queue the change for a verification -- left a checked change past its deadline
+    # with nothing recorded for the seconds it ran, and the watchdog's pass filed it as unheld
+    note_hold(st, e, "push", "its push is under way (re-checked first if main moved)", t)
     out = push_change(repo, d, e)
     if out in ("checked", "busy"):  # raced, met the red gate, or the landing lock / push tree was busy: tried again
         note_hold(st, e, "push", "its push waits for the landing lock or a push tree" if out == "busy" else
                   "its last push did not land (a race or the red gate): tried again at the next tick", t)
+    else:  # another answer, still checked: nothing holds it now (a new state's set_change cleared it already)
+        note_hold(st, e, None, None, t)
     lap_change_deadline(st, e, "checked", t, f"its last push: {out}")
     return did + [f"{e['id']}: {out}"]
 

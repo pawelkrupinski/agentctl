@@ -464,6 +464,25 @@ class PushBatchTest(test_queue.QueueTest):
         lap = [e for e in evs if "checked for" in str(e.get("text"))]
         self.assertTrue(lap and f"held: its push waits for batch {bid}" in lap[-1]["text"], lap)
 
+    def test_a_checked_change_whose_push_is_under_way_is_held_by_it(self):
+        """ISSUE 20261119T123823-f7d6c9: lane-policy-redfix, checked 33 min behind another change's verification, was
+        filed as unheld by the watchdog in the seconds its push ran: the tick cleared its hold BEFORE push_change, which
+        then found main moved and re-queued it. The push itself is the hold while it runs."""
+        ec = self.checked("c", "scripts/c.sh")
+        seen = []
+        saved = A.push_change
+
+        def pushing(repo, d, e):
+            later = time.time() + 40 * 60  # the watchdog's pass, mid-push, past the change's deadline
+            seen.append([it["id"] for it, _e in A.unheld_changes(A.Store(), {e["id"]: e}, later)])
+            return "the landing lease is busy"
+        A.push_change = pushing
+        try:
+            A.tick_changes(self.r.path, self.d)
+        finally:
+            A.push_change = saved
+        self.assertEqual(seen, [[]], f"a change whose push runs is held by that push ({ec})")
+
     def test_a_checked_change_past_its_deadline_that_nothing_holds_is_filed_as_an_agentctl_issue_once(self):
         """A CHANGE PAST ITS DEADLINE WITH NO RECORDED HOLD IS agentctl's BUG (changekind.py): one agentctl issue, never
         an owner page; the lap's line still says nothing holds it and what its last push answered."""
