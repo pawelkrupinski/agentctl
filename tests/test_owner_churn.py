@@ -246,11 +246,14 @@ class LostHeartbeatVerdictTest(OwnerBase):
         self.assertTrue(self.st.revoke(A.owner_lease(FAM), "ORPHANED: judged by another machine"))
         self.assertTrue(self.wait(lambda: self.rec().get("ended")), self.rec())
         time.sleep(4)  # the session ends with its DIAGNOSED verdict
-        for _ in range(3):
+
+        def reached():  # the tick offers the red again, the next owner starts (a process of its own: seconds on a
+            # loaded 4-core runner) and ends its lease with the handed turn's verdict, the next tick reads it
             self.tick(dispatch=True, advance=1)
-        hist = " | ".join(str(h.get("outcome")) for h in (self.reds()[key]["data"].get("history") or []))
-        self.assertIn("DIAGNOSED", hist + " " + str(self.reds()[key]["data"].get("diagnosis")),
-                      f"the turn's DIAGNOSED verdict reached the red: {hist!r}")
+            d = self.reds()[key]["data"]
+            return "DIAGNOSED" in " | ".join(str(h.get("outcome")) for h in d.get("history") or []) + str(d.get("diagnosis"))
+        self.assertTrue(self.wait(reached, limit=40),
+                        f"the turn's DIAGNOSED verdict reached the red: {self.reds()[key]['data'].get('history')!r}")
 
 
 class LongVerdictTest(OwnerBase):
