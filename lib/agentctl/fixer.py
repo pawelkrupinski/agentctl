@@ -2414,10 +2414,16 @@ def red_block(o_r, a):
     st = Store()
     n = str(a.run).lstrip("#")
     name, units = None, []
+    known = red_targets(st, o_r, n, create=False)  # a red key, or a run the tick has seen: as `red claim` finds it
     try:
         name, _r, units = red_run_units(o_r, n)
     except (Exception, SystemExit):
-        name, _r = resolve_run(o_r, n)
+        if not known:
+            name, _r = resolve_run(o_r, n)
+    if known and not units:  # issue 20261119T030011-293b9a: a key, or a run whose units no longer read (a green rerun)
+        name = name or known[0]["data"].get("workflow")
+        units = [{"kind": it["data"].get("kind"), "line": it["data"].get("line"), "job": it["data"].get("job")}
+                 for it in known]
     cause = getattr(a, "cause", None)
     lname = block_lease(cause=cause) if cause else None
     old = st.get(lname) if lname else None
@@ -2437,7 +2443,7 @@ def red_block(o_r, a):
         print(f"NOT BLOCKED: #{n} is a TEST FAILURE ({units[0].get('job')}): a code red is never the owner's -- "
               f"`~/bin/agentctl red claim {n}` and fix it")
         return 2
-    items = red_targets(st, o_r, n) if units else []
+    items = known or (red_targets(st, o_r, n) if units else [])
     own = read_record(own_fixer_record_path() or "") or {}
     handed = [] if not items else [red_lease(it["data"]["key"]) for it in items]
     handed = [x for x in handed if x == own.get("lease") and lease_is_live(st.get(x), st.clock())

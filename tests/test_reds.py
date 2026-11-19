@@ -1020,6 +1020,16 @@ class OwnerTest(RedsBase):
         self.assertIn(it["data"]["key"], A.lease_meta(self.st.get(A.block_lease(it["data"]["key"])))["keys"])
         self.assertFalse(A.lease_is_live(self.st.get(A.red_lease(it["data"]["key"])), time.time()), lease)
 
+    def test_a_fixer_blocks_its_own_red_named_by_its_key(self):
+        # issue 20261119T030011-293b9a: `red block 0c8eea91b712` failed looking the key up as a run, and a run whose
+        # units no longer read (a green rerun) answered "names no red on main", while `red claim` found the red
+        it, path = self.held_by_a_fixer("s-mine")
+        os.environ.update(CLAUDE_CODE_SESSION_ID="s-mine", AGENTCTL_FIXER_RECORD=path)
+        rc, out = self.tool("red", "block", it["data"]["key"], "--owner-cause", "credentials", "--cmd", "set the key",
+                            "--until-http", "http://127.0.0.1:9/x", "--repo", "movies", cwd=self.r.path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("RED BLOCKED ON OWNER", out)
+
     def test_another_fixers_lease_still_refuses_a_block(self):
         _it, path = self.held_by_a_fixer("s-other")
         os.environ.update(CLAUDE_CODE_SESSION_ID="s-mine", AGENTCTL_FIXER_RECORD=path)  # a spare's leaked environment
