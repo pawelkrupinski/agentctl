@@ -524,6 +524,111 @@ def outside_gate(o_r):
     return sorted(out, key=lambda x: str(x[2]))
 
 
+RUN_VIEW_FIELDS = "jobs,headSha,url,number,status,conclusion,workflowName,workflowDatabaseId,attempt,createdAt,updatedAt"
+
+
+def run_failed_jobs(d):
+    """The failed jobs of a run view. A completed run's job GitHub left undecided (status in_progress, conclusion null:
+    core #767, 2026-11-04) is failed when one of its steps failed."""
+    done = d.get("status") == "completed"
+    return [j for j in d.get("jobs") or [] if j.get("conclusion") in RED_CONCLUSIONS
+            or (done and not j.get("conclusion") and failed_steps(j))]
+
+
+def run_failed_attempt(o_r, rid, d):
+    """(the run view to explain, its attempt when not the latest). THE FAILED ATTEMPT, NOT THE LATEST (issues
+    20261108T070310-133a19, 20261119T024846-892cf2): a rerun replaces the run's jobs with its own -- green, or still
+    running -- so the failure that made the red is read from the newest earlier attempt that has one."""
+    latest = int(d.get("attempt") or 1)
+    if run_failed_jobs(d) or latest <= 1:
+        return d, None
+    for n in range(latest - 1, 0, -1):
+        try:
+            dn = gh_json(o_r, "run", "view", str(rid), "--attempt", str(n), "--json", RUN_VIEW_FIELDS)
+        except (Exception, SystemExit) as e:
+            err(f"could not read run {rid}'s attempt {n}: {str(e)[:160]}")
+            return d, None
+        if run_failed_jobs(dn) or dn.get("conclusion") in RED_CONCLUSIONS:
+            return dn, n
+    return d, None
+
+
+def job_annotations(o_r, job):
+    """The failure-level check-run annotations of a job (GitHub's own words for a job with no log: `The job was not
+    acquired by Runner of type hosted ...`, iOS #526), [] when none or unread."""
+    jid = job.get("databaseId")
+    if not jid:
+        return []
+    try:
+        notes = gh_json(o_r, "api", f"repos/{o_r}/check-runs/{jid}/annotations") or []
+    except (Exception, SystemExit):
+        return []
+    return [str(a.get("message") or a.get("title") or "").strip()[:300] for a in notes
+            if isinstance(a, dict) and a.get("annotation_level") == "failure" and (a.get("message") or a.get("title"))]
+
+
+def jobs_never_created(wf_jobs, run_jobs):
+    """The names of the workflow's jobs (remote.workflow_jobs) the run has no job of (a matrix's or a called
+    workflow's jobs start with the job's name; a name built from an expression is matched by what precedes it)."""
+    names = [str(j.get("name") or "") for j in run_jobs]
+    missing = []
+    for wj in wf_jobs:
+        key = str(wj.get("name") or "").split("${{")[0].strip()
+        if key and not any(n == key or n.startswith(key + " ") for n in names):
+            missing.append(wj["name"])
+    return missing
+
+
+GITHUB_STATUS_URL = "https://www.githubstatus.com/api/v2/incidents.json"
+
+
+def github_incidents(since, until):
+    """githubstatus.com incidents naming Actions that overlap since..until (+1 h): ['<name> (<shortlink>)']; [] when
+    unread ($AGENTCTL_GITHUBSTATUS_URL names another source; empty turns it off)."""
+    url = os.environ.get("AGENTCTL_GITHUBSTATUS_URL", GITHUB_STATUS_URL)
+    if not url or not since:
+        return []
+    try:
+        with urllib.request.urlopen(url, timeout=8) as f:
+            incidents = json.load(f).get("incidents") or []
+        lo = dt.datetime.fromisoformat(str(since).replace("Z", "+00:00"))
+        hi = dt.datetime.fromisoformat(str(until or since).replace("Z", "+00:00")) + dt.timedelta(hours=1)
+    except (Exception, SystemExit):
+        return []
+    out = []
+    for i in incidents:
+        words = " ".join([str(i.get("name"))] + [str(c.get("name")) for c in i.get("components") or []])
+        try:
+            start = dt.datetime.fromisoformat(str(i.get("created_at")))
+            end = dt.datetime.fromisoformat(str(i["resolved_at"])) if i.get("resolved_at") else None
+        except (ValueError, KeyError):
+            continue
+        if "Actions" in words and start <= hi and (end is None or end >= lo):
+            out.append(f"{i.get('name')} ({i.get('shortlink') or i.get('id')})")
+    return out
+
+
+def never_created_lines(o_r, d):
+    """(job label, why) when every job a failed run created passed: GitHub failed the run itself (core #911,
+    2026-11-09: promote-image never created during an Actions incident). The jobs the workflow file at the run's
+    commit names that the run lacks, and the githubstatus.com Actions incidents of its window."""
+    missing = []
+    try:
+        path = (gh_json(o_r, "api", f"repos/{o_r}/actions/workflows/{d['workflowDatabaseId']}") or {}).get("path")
+        body = gh_json(o_r, "api", f"repos/{o_r}/contents/{path}?ref={d.get('headSha')}") if path else {}
+        import base64
+        txt = base64.b64decode((body or {}).get("content") or "").decode(errors="replace")
+        missing = jobs_never_created(workflow_jobs(txt), d.get("jobs") or [])
+    except (Exception, SystemExit) as e:
+        err(f"could not read run's workflow file ({str(e)[:120]})")
+    incidents = github_incidents(d.get("createdAt"), d.get("updatedAt"))
+    why = ("GitHub-side: every job the run created passed, yet the run failed"
+           + (f"; never created: {', '.join(missing)}" if missing else "; a job GitHub never created?")
+           + (f"; githubstatus: {'; '.join(incidents)}" if incidents else "") + " -- not a code red")
+    label = f"never created: {', '.join(missing)}" if missing else "run failed with every job green"
+    return label, why
+
+
 def explain_run(o_r, run, tail, repo=None):
     """Lines explaining one red run: commit, failed jobs, their log tails, infra vs test."""
     lines, num, _per_job = explain_run_jobs(o_r, run, tail, repo)
@@ -533,14 +638,22 @@ def explain_run(o_r, run, tail, repo=None):
 def explain_run_jobs(o_r, run, tail, repo=None):
     """(lines, run number, [(failed job, infra|unclear|test, its first relevant line)])."""
     rid = run["databaseId"]
-    d = gh_json(o_r, "run", "view", str(rid), "--json",
-                "jobs,headSha,url,number,status,conclusion,workflowName,workflowDatabaseId")
+    latest = gh_json(o_r, "run", "view", str(rid), "--json", RUN_VIEW_FIELDS)
+    d, attempt = run_failed_attempt(o_r, rid, latest)
     num = d.get("number") or run.get("number")
-    failed = [j for j in d.get("jobs") or [] if j.get("conclusion") in ("failure", "timed_out")]
-    unread = []  # why the failed log, and a job's own, could not be read: no log was read, so none is 0-length
+    failed = run_failed_jobs(d)
+    annotated = {}  # a cancelled job's (or a log-less failed one's) failure annotations: GitHub's own cause
+    if not failed and d.get("status") == "completed" and d.get("conclusion") in RED_CONCLUSIONS:
+        for j in [j for j in d.get("jobs") or [] if j.get("conclusion") == "cancelled"][:MAX_JOB_LOG_FETCHES]:
+            notes_ = job_annotations(o_r, j)
+            if notes_:
+                failed.append(j)
+                annotated[j["name"]] = notes_
+    unread, notes = [], []  # why the failed log, and a job's own, could not be read: no log was read, so none is 0-length
     no_verdict = jobs_no_verdict(d.get("jobs"))
+    logged = [j for j in failed if j["name"] not in annotated]
     try:
-        log = fetch_failed_log(o_r, rid) if failed and not no_verdict else ""
+        log = failed_jobs_log(o_r, rid, logged, attempt, notes) if logged and not no_verdict else ""
     except Exception as e:
         log = ""
         unread.append(str(e))
@@ -549,8 +662,21 @@ def explain_run_jobs(o_r, run, tail, repo=None):
     per, raws, timed = relevant_lines(log, tail, strong_jobs), raw_tails(log), timed_out_jobs(log)
     lines = [f"  run id {rid} (#{num}) {d.get('url') or run.get('url')}",
              f"  commit {commit_line(o_r, d.get('headSha') or run.get('headSha'), repo)}"]
+    if attempt:
+        lines.append(f"  read attempt {attempt}, the failed one: attempt {latest.get('attempt')} (the latest) is "
+                     f"{latest.get('conclusion') or latest.get('status')}")
     kinds, fetched, per_job = [], 0, []
     for j in failed:
+        if j["name"] in annotated:
+            jl = annotated[j["name"]]
+            kind, why = classify_job(j, jl, (0, []))
+            if kind == "test" and not failed_steps(j):  # a job that ran no step tested nothing
+                kind = "unclear"
+            kinds.append(kind)
+            per_job.append((j["name"], kind, jl[0]))
+            lines.append(f"  [{kind}] {j['name']} ({j.get('conclusion')}): {why}")
+            lines += [f"      annotation: {l}" for l in jl]
+            continue
         if no_verdict or job_is_verdict_report(j):  # reporting, never a failure of the code (see above)
             per_job.append((j["name"], "incomplete", ""))
             lines.append(f"  [incomplete] {j['name']}: a takes or takes-drift row was skipped, cancelled or missing"
@@ -574,10 +700,17 @@ def explain_run_jobs(o_r, run, tail, repo=None):
                 note = (f"      (LOG UNREADABLE: {j['name']}'s whole log, which holds its ::error annotations: "
                         f"{unread[-1][:160]}; read again next time)")
             jl = choose_job_lines(jl, strong, whole, bool(ann and ann[0]))
+        if not jl and not setup and not unread and fetched < MAX_JOB_LOG_FETCHES:
+            fetched += 1
+            jl = job_annotations(o_r, j)  # no log line at all (0 steps, no runner): GitHub's annotations
         kind, why = classify_job(j, jl, raws.get(j["name"], (0, [])), j["name"] in timed or any(STEP_TIMED_OUT in l for l in jl))
         if unread and not jl and not setup:
             kind, why = "unclear", (f"LOG UNREADABLE ({unread[-1]}): no log was read, so nothing says infra or test -- "
                                     f"read `gh run view {rid} --log-failed` again; never rerun on this alone")
+        cut = next((n for n in notes if n.startswith("LOG TRUNCATED") and f" {j['name']}'s " in f" {n}"), None)
+        if cut and kind == "unclear":
+            why = f"{cut}: the log was cut short, nothing in it says infra or test -- read again, never rerun on this alone"
+            note = note or f"      ({cut})"
         kinds.append(kind)
         # a job with no error line is known by its failing STEP (a red is its failing test or step, never its job name)
         key_line, drift_note = drift_key(o_r, j, jl[0] if jl else "")
@@ -590,6 +723,14 @@ def explain_run_jobs(o_r, run, tail, repo=None):
             lines.append(drift_note)
         if note:
             lines.append(note)
+    if not failed and d.get("status") == "completed" and d.get("conclusion") in RED_CONCLUSIONS:
+        label, why = never_created_lines(o_r, d)
+        kinds.append("infra")
+        per_job.append((label, "infra", why))
+        lines.append(f"  [infra] {label}: {why}")
+    for n in notes:
+        if n.startswith("LOG UNREADABLE") and not any(n in l for l in lines):
+            lines.append(f"      ({n}; read again next time)")
     rerun = f"rerun: {GH_CLI.replace(HOME, '~')} run rerun {rid} --failed -R {o_r}"
     if no_verdict:
         verdict = ("NO VERDICT (an incomplete run: only `verdict complete` failed -- a takes or takes-drift row was "
@@ -609,12 +750,71 @@ def explain_run_jobs(o_r, run, tail, repo=None):
     return lines, num, per_job
 
 
+# A RUN NUMBER IS WHAT EVERY RED PRINTS (issue 20261031T085600-c1cbf8: `ci-why 2939` for red Main #2939 explained run
+# id 2939, another run). GitHub's run ids are ten digits and more; a run number is a workflow's own count. So a target
+# below RUN_ID_MIN is a run NUMBER, resolved on main -- the gate's workflows first, then a red run -- and the others
+# that carry it are named; anything larger is a run id.
+RUN_ID_MIN = 10 ** 8
+
+
+def runs_of_number(o_r, n):
+    """The runs on main whose run NUMBER is n, newest list first: the newest 200 on main, else each gate workflow's
+    run list paged to where #n sits (a workflow's numbers count down its list)."""
+    n = str(n)
+    seen, hits = set(), []
+
+    def take(runs):
+        for r in runs or []:
+            if str(r.get("number")) == n and r.get("databaseId") not in seen:
+                seen.add(r.get("databaseId"))
+                hits.append(r)
+    try:
+        take(gh_json(o_r, "run", "list", "--branch", "main", "--limit", "200", "--json", RUN_FIELDS))
+    except (Exception, SystemExit) as e:
+        err(f"ci-why: could not list main's runs ({str(e)[:120]})")
+    for name, wfile in red_gate_flows(o_r):
+        if any(r.get("workflowName") == name for r in hits):
+            continue
+        try:
+            newest = main_runs(o_r, wfile, limit=1)
+            gap = int(newest[0]["number"]) - int(n) if newest else -1
+            if 0 <= gap < 1000:
+                take(main_runs(o_r, wfile, limit=min(1000, gap + 50)))
+        except (Exception, SystemExit, ValueError, KeyError):
+            continue
+    gate = {g for g, _ in red_gate_flows(o_r)}
+    return sorted(hits, key=lambda r: (r.get("workflowName") not in gate, r.get("conclusion") not in RED_CONCLUSIONS))
+
+
+def run_target(o_r, target):
+    """(run id, [lines saying how it was read]) of ci-why's target: a run id, or a run NUMBER (above)."""
+    t = str(target).lstrip("#")
+    if int(t) >= RUN_ID_MIN:
+        return t, []
+    hits = runs_of_number(o_r, t)
+    if not hits:  # no run carries that number: an id, as ever (a short id is a test's, or another forge's)
+        return t, [f"no run on main numbered #{t} among the newest: read as a run id"]
+    r, others = hits[0], hits[1:]
+    said = [f"#{t} is {r.get('workflowName')} #{t}, run id {r['databaseId']} (a run NUMBER: the id is the number in "
+            f"its URL)"]
+    if others:
+        said.append("#" + t + " also numbers: " + ", ".join(f"{o.get('workflowName')} (run id {o['databaseId']})"
+                                                        for o in others[:5]) + " -- `agentctl ci-why <run id>`")
+    return r["databaseId"], said
+
+
 def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
     """(red, text). run_id: explain that one run; else the gating workflows' newest decided runs on main, each red row
     followed by who holds it (`fixing: <its state, holder or offer>`; never NOBODY). summary: text is the status line's one line."""
     if run_id:
-        lines, _ = explain_run(o_r, {"databaseId": int(run_id)}, tail, repo)
-        return True, f"run {o_r}#{run_id}\n" + "\n".join(lines)
+        rid, said = run_target(o_r, run_id)
+        try:
+            lines, _ = explain_run(o_r, {"databaseId": int(rid)}, tail, repo)
+        except RuntimeError as e:
+            if "HTTP 404" not in str(e):
+                raise
+            lines = [f"  no such run: {str(e)[:200]}"]
+        return True, f"run {o_r}#{rid}\n" + "".join(f"  {l}\n" for l in said) + "\n".join(lines)
     out, red, rows, units_of, parts = [], False, [], {}, []
     gate = gate_from_snap(snap) if snap else gate_runs(o_r)
     others, others_err = [], None

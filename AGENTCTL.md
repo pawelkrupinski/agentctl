@@ -393,7 +393,7 @@ file /…/scratchpad/done.flag: present (2 bytes, mtime 13:02:11Z)
 ### ci-why: why main is red
 
 ```
-agentctl ci-why [main|<run id>] [--repo R] [--tail N]
+agentctl ci-why [main|<run id>|<run number>|#N] [--repo R] [--tail N]
 ```
 
 For movies it reads exactly THE GATE (the owner, 2026-10-27: "if the latest main and convergence runs are green, just
@@ -433,7 +433,28 @@ first, each with how long and since when (the owner, 2026-10-27: a red nobody is
 verified, the run settled) stays that workflow's newest run on main for good: it is listed apart, under `Proven fixed
 outside the gate`, and left out of the status line (Report run timings #38 read "offering" there after its FIX OK).
 
-`ci-why <run id>` explains one run. Exit: 0 green, 1 red (or a run explained).
+`ci-why <run id>` explains one run; `ci-why <N>` / `ci-why #N` below 100,000,000 is a run NUMBER (what reds, the
+inbox and every link's `#N` print), resolved on main -- a gate workflow's run first, then a red one -- and the others
+carrying that number are named; a number no run on main carries is read as an id (issue 20261031T085600-c1cbf8).
+Exit: 0 green, 1 red (or a run explained).
+
+How it reads a run (issues of 2026-10-31..11-19, `tests/test_ci_why_accuracy.py`, one fixture each):
+
+- **The failed attempt.** A rerun replaces the run's jobs: when the latest attempt has no failed job (green, or still
+  running), the newest earlier attempt that failed is read (`gh run view --attempt N`), and the line `read attempt N,
+  the failed one` says so.
+- **The whole log, cut to the failed steps.** gh's run-zip reads (`--log-failed`, `--log --job`) no longer map lines
+  to steps (every line `UNKNOWN STEP`) and stop at ~1.3-2.6 MB. A job gh could not map is read whole through REST
+  (`jobs/<id>/logs`, with `--allow-escape-sequences`; gh's refusal text is never taken for a log) and cut to its failed
+  steps by their start and end times. A log that ends minutes before its failed step did is `LOG TRUNCATED`.
+- **Never a pass mark or chatter.** A `✓` line or a `... skipped: ...` line is never a failure's line; Playwright's own
+  report (`  1) [project] › file`, `  N failed`) is a test runner's line, as scalatest's and sbt's are.
+- **No failed job listed.** A completed failed run's job GitHub left undecided (conclusion null) is failed when a
+  step of it failed; a cancelled job's failure-level check-run annotations are its cause (`was not acquired by Runner`:
+  INFRA, no hosted runner); and a failed run whose created jobs all passed is `INFRA-SHAPED`, GitHub-side, naming the
+  workflow's jobs it never created and any githubstatus.com Actions incident of its window (`$AGENTCTL_GITHUBSTATUS_URL`).
+- **Credentials.** A step that mints the run's credentials (`create-github-app-token`, cloud auth actions) failing is
+  `KEY REFUSED`, infra: the owner's credentials or account scope, never a code red.
 
 ```
 $ agentctl ci-why
@@ -2380,6 +2401,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `gate_publish` | `AGENTCTL_GATE_PUBLISH` | `45` | - |
 | `generated_regen_timeout` | `AGENTCTL_GENERATED_REGEN_TIMEOUT` | `1200` | s a generated file's regen command may run before the conflict is the author's |
 | `gh_cli` | `AGENTCTL_GH_CLI` | `gh` | the GitHub CLI |
+| `githubstatus_url` | `AGENTCTL_GITHUBSTATUS_URL` | `https://www.githubstatus.com/api/v2/incidents.json` | - |
 | `github_api` | `AGENTCTL_GITHUB_API` | - | - |
 | `github_lander_repos` | `AGENTCTL_GITHUB_LANDER_REPOS` | - | - |
 | `gov_admit_max` | `AGENTCTL_GOV_ADMIT_MAX` | `7200` | a check waits this long for the governor at most |

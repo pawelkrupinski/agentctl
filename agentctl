@@ -10,7 +10,7 @@
         AGENTS: start it with run_in_background=true and END YOUR TURN; never loop/sleep in the foreground.
   agentctl wait file <path> [--contains REGEX] [--interval S] [--timeout S]
         Same, for a file appearing (and containing REGEX).
-  agentctl ci-why [main|<run id>] [--repo R] [--tail N]
+  agentctl ci-why [main|<run id>|<run number>] [--repo R] [--tail N]
         Why main is red: the red gate's three workflows (movies: Main, convergence, Identity takes), their newest decided runs, failed jobs + log lines,
         commit/author, INFRA-SHAPED vs TEST FAILURE, and the clearing rule (later green run / Fixes-Red:). Exit 1 red.
   agentctl land [--repo PATH] [--branch B] [--stash]

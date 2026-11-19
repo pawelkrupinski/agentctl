@@ -29,6 +29,11 @@ INFRA_STEPS = [
      "movies Main #2388, 2026-11-11: setup-swift's keyserver refresh failed, blamed on the release commit"),
 ]
 SETUP_STEP = re.compile("|".join(f"(?:{p})" for _n, p, _i in INFRA_STEPS), re.I)
+# A step that mints the run's credentials: failing there, a key or an App installation's scope refused the run before
+# any code was judged -- the owner's credentials or external account, never a code red (Nix update #1, run 41445965031,
+# 2026-11-02: create-github-app-token's 422 "not accessible to the parent installation" read as a TEST FAILURE, so
+# `red block --owner-cause external-account` refused it as "a code red").
+CREDENTIAL_STEP = re.compile(r"create-github-app-token|configure-aws-credentials|google-github-actions/auth|azure/login", re.I)
 
 # Log lines that mean the machine or the network failed, not the code. The network rows are also what a LOCAL check's
 # output is read for (network_failure): one table, not a second classifier in slots.py.
@@ -49,6 +54,7 @@ INFRA_SIGNATURES = NETWORK_SIGNATURES + [
     ("killed", r"exit code 137|\bKilled\b", "the OOM killer"),
     ("runner shutdown", r"The runner has received a shutdown signal|lost communication with the server", "Identity takes #13 42600045483"),
     ("no test results", r"No test results found for", "Verify #14 42335293225"),
+    ("no runner", r"was not acquired by Runner|not acquired by Runner of type", "iOS #526 43903912001: no hosted macOS runner"),
 ]
 NETWORK_CHECK_FAILURE = _union(NETWORK_SIGNATURES)
 INFRA_LOG = _union(INFRA_SIGNATURES)
@@ -66,9 +72,13 @@ QUOTA_LOG = re.compile(r"request limit reached|daily limit|quota (exceeded|reach
 # What a test runner writes when a test fails -- the only lines a TEST verdict is read from. `*** FAILED ***` is
 # anchored to scalatest's own form: a passing test named "... FAILED rows ..." is no failure (2026-10-31). The pre-push
 # hook's own per-check verdict (`! pre-push scripttests FAILED (344s)`) is one too: a remote check's reason (2026-11-04).
-STRONG = re.compile(r"\*\*\* FAILED \*\*\*|\*\*\* FAILED$|\[error\]|::error::|(?i:assertion|assert(ion)? failed)|\bError:|ENOENT|"
+STRONG = re.compile(r"\*\*\* FAILED \*\*\*|\*\*\* FAILED$|\*\*\* ABORTED \*\*\*|\[error\]|::error::|(?i:assertion|assert(ion)? failed)|\bError:|ENOENT|"
                     r"artifact already exists|(?i:exit code [1-9])|^! pre-push\S* \S+ FAILED\b")
 WEAK = re.compile(r"\bfail(ed|ure)?\b|\berror\b|exception|assert", re.I)
+# A line that says something PASSED or was skipped is never a failure's line, whatever words it holds: a test runner's
+# pass mark (`✓ a named error type is an error line too ...`, core #939's red key, 2026-11-10) and teardown chatter
+# (`cleanup(fixture) skipped: spawn sbt ENOENT`, printed on green runs too: core #799's red key, 2026-11-05).
+NOT_A_FAILURE = re.compile(r"^\s*[\u2713\u2714]\s|\bskipped: ")
 NOISE = re.compile(r"Setting level of logger|\|-INFO in ch\.qos|\berrors?[=:] ?0\b|\b0 (errors?|failed)\b|\b(INFO|DEBUG|TRACE)\b", re.I)
 
 
@@ -81,7 +91,9 @@ def network_failure(out):
 # A line a test runner wrote for a failing test: scalatest's `*** FAILED` or sbt's `[error]` -- never GitHub's own
 # `##[error]` annotation, which ends every failing step (an OOM, a runner shutdown, a missing test report too), so an
 # infra signature beside it never won (2026-11-15: Identity takes #13, Verify #14 read as TEST FAILURE).
-RUNNER_FAILED = re.compile(r"\*\*\* FAILED|(?<!#)\[error\]")
+# Playwright's own failure report (`  1) [chromium-user] › tests/x.spec.ts:11:1 › ...`, `  1 failed`) is one too: core #799.
+RUNNER_FAILED = re.compile(r"\*\*\* FAILED|\*\*\* \d+ TESTS? FAILED|\*\*\* ABORTED|(?<!#)\[error\]|"
+                           r"^\s*\d+\) \[[^\]]+\] \u203a |^\s*\d+ failed$")
 
 
 def _test_line(lines):
@@ -97,6 +109,10 @@ def classify_job(job, lines, raw=(0, []), timed_out=False):
     if timed_out and not _test_line(lines):
         return "test", (f"TIMEOUT: step '{step}' ran past its timeout-minutes" if step else "TIMEOUT: a step ran past its timeout-minutes") + \
             " (bounded-step.sh reaped what it left): its work outgrew its bound -- shorten the work or let it stop itself, never rerun"
+    if step and CREDENTIAL_STEP.search(step):
+        said = next((l for l in lines if "##[error]" in l or "::error" in l), "")
+        return "infra", (f"KEY REFUSED, step '{step}' could not mint the run's credentials (credentials or an external "
+                         f"account's scope: the owner's, not a code red)" + (f": {said.strip()[:160]}" if said else ""))
     if step and SETUP_STEP.search(step):
         return "infra", f"failed in setup step '{step}' (often a `needs:` cascade or runner/setup trouble)"
     if not raw[0] and not lines:

@@ -53,6 +53,8 @@ def relevant_lines(log_text, tail, strong_jobs=None):
             continue
         if "*** FAILED ***" in line:
             follow[job] = 2
+        if NOT_A_FAILURE.search(line):
+            continue
         if STRONG.search(line) and not re.search(r"Setting level of logger|-INFO in ch\.qos", line):
             strong.setdefault(job, []).append(line[:300])
         elif WEAK.search(line) and not NOISE.search(line):
@@ -117,18 +119,24 @@ def flip_key_line(listings):
 ESCAPE_FLAG = "--allow-escape-sequences"
 
 
+# gh's refusal of a body with escape sequences (when the flag is missing): never a log, wherever it lands
+ESCAPE_REFUSAL = re.compile(r"\A\s*the response contains terminal escape sequences")
+
+
 def fetch_job_log_api(o_r, job_id):
-    """A job's whole log through the REST API (`gh run view --log` can hit stream cancels); raises with stderr."""
+    """A job's whole log through the REST API (`gh run view --log` can hit stream cancels, and truncates: below); raises
+    with stderr. gh's escape-sequence refusal is a failed read, never the log (a 99-byte "log", 2026-11-19)."""
     env = forge_env(o_r)
     flag = [ESCAPE_FLAG]
     for attempt in (1, 2, 3):
         r = subprocess.run(forge_argv(o_r, "api", *flag, f"repos/{o_r}/actions/jobs/{job_id}/logs"), capture_output=True,
                            text=True, env=env, timeout=300)
-        if r.returncode == 0:
+        if r.returncode == 0 and not ESCAPE_REFUSAL.match(r.stdout or ""):
             return r.stdout
         if flag and "unknown flag" in (r.stderr or "") and ESCAPE_FLAG in (r.stderr or ""):
             flag = []
-    raise RuntimeError((r.stderr.strip().splitlines() or [f"exit {r.returncode}"])[-1][:200])
+    raise RuntimeError((r.stderr.strip().splitlines() or r.stdout.strip().splitlines()
+                        or [f"exit {r.returncode}"])[-1][:200])
 
 
 def drift_key(o_r, job, first_line):
@@ -170,8 +178,100 @@ def read_log(o_r, *args):
     raise RuntimeError((r.stderr.strip().splitlines() or [f"exit {r.returncode}"])[-1][:200])
 
 
-def fetch_failed_log(o_r, run_id):
-    return read_log(o_r, str(run_id), "--log-failed")
+def fetch_failed_log(o_r, run_id, attempt=None):
+    return read_log(o_r, str(run_id), "--log-failed", *(["--attempt", str(attempt)] if attempt else []))
+
+
+# GH'S RUN-ZIP LOGS ARE CUT AND UNMAPPED (2026-11-07..19, issues 20261107T063515-8778ed, 20261110T080020-243b55,
+# 20261110T090248-247413, 20261105T080337-49c5ae): `gh run view --log-failed` and `--log --job` read the run's log zip,
+# which no longer maps a line to its step (every line `UNKNOWN STEP`, so --log-failed prints the WHOLE job log, not the
+# failed step's) and stops at ~1.3-2.6 MB: core #934's `it 2/2` read 2090 of 5832 lines and ended mid-compile, before
+# its `*** FAILED ***` (UNCLEAR); #939's red was keyed on a PASSING `✓` line of a passed step near the log's head; #799's
+# on teardown chatter. A job whose slice gh could not map is read whole through REST (jobs/<id>/logs: the full log) and
+# cut to its failed steps by their own start and end times.
+UNMAPPED_STEP = "UNKNOWN STEP"
+STEP_TS = re.compile(r"^\ufeff?(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)")
+
+
+def failed_steps(job):
+    return [s for s in (job or {}).get("steps") or [] if s.get("conclusion") in ("failure", "timed_out")]
+
+
+def step_window_lines(log, steps):
+    """The lines of a REST job log (`<ts> <line>`) inside the windows of `steps` (startedAt..completedAt, to the
+    second): [(step name, line)]; a line with no timestamp goes with the line before it. [] when no step has times."""
+    wins = [(str(s.get("startedAt") or "")[:19], str(s.get("completedAt") or "")[:19], s.get("name") or "?")
+            for s in steps if s.get("startedAt") and s.get("completedAt")]
+    if not wins:
+        return []
+    out, cur = [], None
+    for raw in (log or "").splitlines():
+        m = STEP_TS.match(raw)
+        if m:
+            cur = next((n for a, b, n in wins if a <= m.group(1) <= b), None)
+        if cur is not None:
+            out.append((cur, raw))
+    return out
+
+
+def _ts(iso19):
+    return dt.datetime.fromisoformat(iso19 + "+00:00").timestamp()
+
+
+def log_last_ts(log):
+    return next((m.group(1) for m in (STEP_TS.match(l) for l in reversed((log or "").splitlines())) if m), None)
+
+
+def job_failed_slice(o_r, job):
+    """(lines as --log-failed prints them for `job`, note) from its whole REST log: its failed steps' windows, or the
+    whole log when the steps carry no times. note: why the read falls short (truncated, unread), else None."""
+    log = fetch_job_log_api(o_r, job["databaseId"])
+    steps = failed_steps(job)
+    picked = step_window_lines(log, steps) or [(steps[0]["name"] if steps else "-", l) for l in log.splitlines()]
+    note = None
+    ends, done = log_last_ts(log), max((str(s.get("completedAt") or "")[:19] for s in steps), default="")
+    if ends and done and _ts(done) - _ts(ends) > 120:  # the log stops minutes before its failed step ended
+        note = f"LOG TRUNCATED: {job['name']}'s log ends {ends}Z, its failed step ended {done}Z"
+    return [f"{job['name']}\t{st}\t{l}" for st, l in picked], note
+
+
+def failed_jobs_log(o_r, run_id, jobs, attempt=None, notes=None):
+    """The --log-failed text of a run's failed `jobs`, every job gh could not map (its lines all UNKNOWN STEP, or
+    none) read through REST instead (above). notes, a list: each job's shortfall is appended."""
+    try:
+        text = fetch_failed_log(o_r, run_id, attempt)
+    except Exception as e:
+        text, gh_err = "", e
+    else:
+        gh_err = None
+    by_job = {}
+    for raw in text.splitlines():
+        parts = raw.split("\t", 2)
+        by_job.setdefault(parts[0] if len(parts) == 3 else "?", []).append(raw)
+    out, read_any, rest_reads = [], gh_err is None, 0
+    for j in jobs:
+        mine = by_job.pop(j.get("name"), [])
+        mapped = any(r.split("\t", 2)[1] != UNMAPPED_STEP for r in mine if r.count("\t") >= 2)
+        failed_ = j.get("conclusion") in ("failure", "timed_out") or failed_steps(j)  # never a cancelled sibling's
+        if mapped or not j.get("databaseId") or not failed_ or rest_reads >= MAX_JOB_LOG_FETCHES:
+            out += mine
+            continue
+        rest_reads += 1
+        try:
+            lines, note = job_failed_slice(o_r, j)
+            out += lines
+            read_any = True
+            if note and notes is not None:
+                notes.append(note)
+        except Exception as e:
+            out += mine
+            if notes is not None and not mine:
+                notes.append(f"LOG UNREADABLE: {j.get('name')}: {str(e)[:160]}")
+    for rest in by_job.values():
+        out += rest
+    if not read_any and gh_err is not None:
+        raise gh_err
+    return "\n".join(out) + ("\n" if out else "")
 
 
 def fetch_takes_verdicts(o_r, run_id):
@@ -197,7 +297,11 @@ def is_measure_run(d):
 
 
 def fetch_job_log(o_r, run_id, job_id):
-    return read_log(o_r, str(run_id), "--log", "--job", str(job_id))
+    """A job's whole log: REST's (complete), else gh's run-zip read (cut at ~2 MB, see above)."""
+    try:
+        return fetch_job_log_api(o_r, job_id)
+    except Exception:
+        return read_log(o_r, str(run_id), "--log", "--job", str(job_id))
 
 
 ANNOTATION = re.compile(r"::error\b[^:]*::")
@@ -269,7 +373,7 @@ def failure_detail(o_r, run_id, failed, tail):
     if not failed or tail <= 0:
         return []
     try:
-        per = relevant_lines(fetch_failed_log(o_r, run_id), tail)
+        per = relevant_lines(failed_jobs_log(o_r, run_id, [j for j in failed if isinstance(j, dict)]), tail)
     except Exception as e:
         return [f"  (could not read the failed log: {e})"]
     out, fetched = [], 0

@@ -895,9 +895,9 @@ def maybe_publish_gate(repo):
 
 def cmd_ci_why(a):
     o_r = slug(a.repo) if a.repo else default_repo()
-    target = None if a.target in (None, "main") else a.target
-    if target and not target.isdigit():
-        raise SystemExit("agentctl: ci-why takes a run id or `main`")
+    target = None if a.target in (None, "main") else a.target.lstrip("#")
+    if target is not None and not target.isdigit():
+        raise SystemExit("agentctl: ci-why takes a run id, a run number (#N) or `main`")
     if getattr(a, "cached", False):
         if not getattr(a, "summary", False) or target:
             raise SystemExit("agentctl: ci-why --cached goes with --summary and main")
@@ -1018,7 +1018,9 @@ def classifier_version():
              KEY_REFUSED_LOG.pattern, STEP_TIMED_OUT, inspect.getsource(relevant_lines), inspect.getsource(job_log_lines),
              inspect.getsource(choose_job_lines), inspect.getsource(flip_listings),
              inspect.getsource(flip_key_line), inspect.getsource(drift_key), DRIFT_LINE.pattern, FLIP_HEADER.pattern,
-             FLIP_ROW.pattern, FLIP_TAKES.pattern, str(FLIP_KEY_MAX), STRONG.pattern, WEAK.pattern, NOISE.pattern, ANNOTATION.pattern]
+             FLIP_ROW.pattern, FLIP_TAKES.pattern, str(FLIP_KEY_MAX), STRONG.pattern, WEAK.pattern, NOISE.pattern, ANNOTATION.pattern,
+             NOT_A_FAILURE.pattern, CREDENTIAL_STEP.pattern, RUNNER_FAILED.pattern, inspect.getsource(failed_jobs_log),
+             inspect.getsource(step_window_lines), inspect.getsource(run_failed_jobs), inspect.getsource(run_failed_attempt)]
     return hashlib.sha1("\n".join(parts).encode()).hexdigest()[:12]
 
 

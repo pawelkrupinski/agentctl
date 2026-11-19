@@ -2,6 +2,7 @@
 """A stand-in for the GitHub CLI (`gh`) in agentctl's tests, served from files in $FAKE_GH_DIR:
   run view <id> --json ...   -> run-<id>.json            run view <id> --log-failed -> run-<id>.log
   run view <id> --log --job <j> -> run-<id>-job-<j>.log
+  run view <id> --attempt <n> ... -> the same files of run-<id>-attempt-<n>
   run download <id> -n <a> -D <dir> -> art-<id>-<a>.txt copied to <dir>/verdict.txt
   run list [--workflow W] [--branch B] ... -> runs.json filtered (W matches workflowName or the workflow file);
                                runs-<owner>_<repo>.json instead when it exists for -R <owner>/<repo>;
@@ -106,7 +107,8 @@ def workflow_id(wfile):
 
 def emit(path):
     if not os.path.exists(path):
-        sys.stderr.write(f"fake gh: no {os.path.basename(path)}\n")
+        sys.stderr.write(f"fake gh: no {os.path.basename(path)}"
+                         + (" (failed to get run: HTTP 404: Not Found)" if path.endswith(".json") else "") + "\n")
         sys.exit(1)
     sys.stdout.write(open(path).read())
 
@@ -170,6 +172,8 @@ if argv[:2] == ["release", "download"]:
     sys.stdout.write(open(f).read())
 elif argv[:2] == ["run", "view"]:
     rid = argv[2]
+    if "--attempt" in argv:  # one attempt of a rerun run: its own files
+        rid = f"{rid}-attempt-{opt('--attempt')}"
     if "--job" in argv:
         emit(os.path.join(d, f"run-{rid}-job-{opt('--job')}.log"))
     else:
