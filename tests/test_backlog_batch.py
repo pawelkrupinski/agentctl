@@ -346,6 +346,87 @@ class PushBatchTest(test_queue.QueueTest):
         self.assertNotIn(None, nxt)
         self.assertEqual(len(self.pushed()), 2, "two pushes for four changes")
 
+    # A FIX OF ANY OPEN RED GOES FIRST (2026-11-19, 08010c: `Fixes-Red: 6`, Alert backtest #6, red 5254bffda9d2 -- a
+    # red outside the gate, so the gate was green and red_fix, reading the GATE's reds only, called it ordinary).
+    # Checked at 08:32Z, it waited 22 min behind two combined-tree verifications, was left out of push batch #47
+    # (push_alone), then sat behind the batch's ~110-min verify round (BATCH_FIRST), `checked` and past its deadline at
+    # level 0 with nothing said; fix-replay, overlapping it on infra/bin/backtest-alerts, waited behind it.
+    def open_outside_red(self):
+        A.Store().put_item("red", "5254bffda9d2", "fix-pending",
+                           {"key": "5254bffda9d2", "workflow": "Alert backtest", "gate": False, "red_kind": "outside",
+                            "runs": ["44479918396", "5", "6"]})
+
+    def test_a_fix_of_an_open_red_outside_the_gate_pushes_before_a_batch_it_is_not_in(self):
+        """The queue shape of 2026-11-19 ~09:30Z replayed: a push batch verifying, the red fix checked beside it, a
+        change overlapping the fix held behind it."""
+        self.open_outside_red()
+        ea = self.checked("a", "web/src/main/A.scala")
+        eb = self.checked("b", "worker/src/main/B.scala")
+        self.main_moves()
+        A.spawn_batch_executor = lambda repo, d_, bid: None  # the batch's verify round runs elsewhere
+        self.run_queue([ea, eb], n=3)
+        bt = A.current_batch(A.Store(), self.d)
+        self.assertEqual((bt["state"], bt["data"]["depth"]), ("checking", "verify"))
+        ef = self.checked("fix", "infra/bin/backtest-alerts", msg="backtest-alerts: the fix\n\nFixes-Red: 6")
+        wx, _ = self.agent("replay", "infra/bin/backtest-alerts", "replay\n", msg="fix replay: backtest-alerts")
+        ex, _ = self.queued(wx)
+        did = A.tick_changes(self.r.path, self.d)
+        self.assertNotIn(f"{ef}: its push waits", " ".join(did))
+        self.assertEqual(self.entry(ef)["status"], "landed", f"the red fix lands while the batch verifies: {did}")
+        self.assertEqual(self.remote_log()[0], "backtest-alerts: the fix")
+        self.assertNotIn(ef, A.current_batch(A.Store(), self.d)["data"]["members"])
+        A.tick_changes(self.r.path, self.d)
+        self.assertEqual(self.entry(ex)["status"], "rejected", "the overlapping change no longer waits on the fix: it "
+                         "conflicts with what landed, so its author rebases now")
+        self.assertIn("no longer applies", self.entry(ex)["why"])
+
+    def test_a_fix_of_an_open_red_outside_the_gate_is_no_push_batch_member(self):
+        self.open_outside_red()
+        ea = self.checked("a", "web/src/main/A.scala")
+        eb = self.checked("b", "worker/src/main/B.scala")
+        self.checked("fix", "infra/bin/backtest-alerts", msg="backtest-alerts: the fix\n\nFixes-Red: 6")
+        self.main_moves()
+        self.assertEqual([e["id"] for e in A.push_candidates(self.r.path, self.d, set(), fixing={"6"})], [ea, eb])
+        self.assertEqual([e["id"] for e in A.push_candidates(self.r.path, self.d, set())], [ea, eb],
+                         "the open reds read from the store when not given")
+
+    def test_a_checked_change_held_behind_a_batch_says_so_and_its_deadline_laps_quietly(self):
+        """`checked`, PAST ITS DEADLINE (level 0) and no reason: the push's hold is recorded and shown as a queued
+        change's is (A HELD WAIT IS NO ESCALATION)."""
+        ea = self.checked("a", "web/src/main/A.scala")
+        eb = self.checked("b", "worker/src/main/B.scala")
+        self.main_moves()
+        A.spawn_batch_executor = lambda repo, d_, bid: None
+        self.run_queue([ea, eb], n=3)
+        bid = A.current_batch(A.Store(), self.d)["id"]
+        ec = self.checked("c", "scripts/c.sh")
+        A.tick_changes(self.r.path, self.d)
+        row = next(r for r in A.change_rows(A.Store()) if r["id"] == ec)
+        self.assertEqual(row["state"], "checked")
+        self.assertIn(f"its push waits for batch {bid}", row["hold"] or "", "land status names the hold")
+        A.tick_changes(self.r.path, self.d, now_=time.time() + 20 * 60)  # past its 5-min deadline
+        st = A.Store()
+        it = st.item("change", ec)
+        self.assertEqual((it["state"], it["level"]), ("checked", 0), "a held push is no escalation")
+        evs = st.item_events("change", ec)
+        self.assertEqual([e for e in evs if e["severity"] == "escalate"], [], "nothing reaches the owner")
+        lap = [e for e in evs if "checked for" in str(e.get("text"))]
+        self.assertTrue(lap and f"held: its push waits for batch {bid}" in lap[-1]["text"], lap)
+
+    def test_a_checked_change_past_its_deadline_that_does_not_push_escalates(self):
+        ec = self.checked("c", "scripts/c.sh")
+        saved = A.push_change
+        A.push_change = lambda repo, d, e: "the landing lease is busy"
+        try:
+            A.tick_changes(self.r.path, self.d, now_=time.time() + 20 * 60)
+        finally:
+            A.push_change = saved
+        it = A.Store().item("change", ec)
+        self.assertEqual((it["state"], it["level"]), ("checked", 1), "escalated")
+        ev = A.Store().item_events("change", ec)[-1]
+        self.assertIn("nothing holds it", ev["text"])
+        self.assertIn("the landing lease is busy", ev["text"], "and its last push's answer said")
+
 
 class OverlapTest(BacklogBatchTest):
     """OVERLAPPING CHANGES ARE CHECKED AS ONE (queue.py; the coordinator, 2026-11-18: B1 against the CI-workflows change,

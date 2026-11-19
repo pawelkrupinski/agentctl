@@ -167,10 +167,10 @@ MUTATIONS = {
         "if False:  # MUTATION", "load"),
     "pushes first, then the holds": (
         '    for phase in ("push", "check"):\n'
-        '        held = backlog_held(repo, d, reds, st, t)\n'
-        '        pheld = push_held(repo, d, reds, st, t)\n',
-        '    held = backlog_held(repo, d, reds, st, t)\n'
-        '    pheld = push_held(repo, d, reds, st, t)\n'
+        '        held = backlog_held(repo, d, reds, st, t, fixing)\n'
+        '        pheld = push_held(repo, d, reds, st, t, fixing)\n',
+        '    held = backlog_held(repo, d, reds, st, t, fixing)\n'
+        '    pheld = push_held(repo, d, reds, st, t, fixing)\n'
         '    for phase in ("push", "check"):\n', "load"),
     "generated files are no overlap": (
         "        shared = shared if strict else without_generated(repo, shared)\n",

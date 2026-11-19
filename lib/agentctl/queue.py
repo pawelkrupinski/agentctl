@@ -890,8 +890,30 @@ RED_FIX_TREE = "redfix"  # <clone>-wt-check-redfix, under its own lease: only a 
 
 
 def red_fix(e, reds):
-    """Whether change entry e fixes an open gate red: a `Fixes-Red:` naming a run of the current episode."""
+    """Whether change entry e fixes an open red: a `Fixes-Red:` naming one of `reds` (the gate's current episode, or
+    fixing_names: every open red)."""
     return bool(reds) and bool(set(map(str, e.get("fixes") or [])) & set(reds))
+
+
+# A FIX OF ANY OPEN RED GOES FIRST (2026-11-19, 08010c: `Fixes-Red: 6`, Alert backtest #6, red 5254bffda9d2 outside
+# the gate). red_fix was given the GATE's reds only, so at a green gate the fix was an ordinary change: checked at
+# 08:32Z, it waited 22 min behind two combined-tree verifications, was left out of push batch #47 (push_alone), then
+# waited behind that batch's whole verify round (BATCH_FIRST, deadline ~110 min) -- `checked`, past its deadline at
+# level 0, nothing said. Where the queue ORDERS changes (a push before an open batch or a combined-tree verification,
+# the red-fix tree, no batch membership) a fix of any red the store has open counts; where the GATE decides (waiting
+# for green, a known red), the gate's reds alone still do.
+def open_red_names(st):
+    """The names (run numbers, ids, keys) of every red the store has open, gate or not; empty when it cannot be read."""
+    try:
+        items = st.items("red")
+    except Exception:  # an unreadable store orders nothing: the gate's reds still do
+        return set()
+    return {str(n) for it in items if it["state"] not in RED_TERMINAL for n in red_names(it.get("data") or {}) if n}
+
+
+def fixing_names(reds, st=None):
+    """The reds a change's `Fixes-Red:` may name to go first: the gate's (reds) and every other open one."""
+    return set(reds) | open_red_names(st if st is not None else Store())
 
 
 def check_tree_slot(repo, d, fix=False):
@@ -1187,12 +1209,15 @@ def migrate_local_queue(repo, store=None):
     return did
 
 
+HOLD_SHOWN = ("queued", "checked")  # the states whose item's `hold` says why it waits (a check, a push)
+
+
 def change_rows(store=None):
     """THE QUEUE as everyone reads it (`land status`, the status line, the page): the store's open change items,
     by id, as {id, state, worktree, head, deadline, level, since (submitted)}."""
     rows = [{"id": i["id"], "state": i["state"], "worktree": (i.get("data") or {}).get("worktree"),
              "head": (i.get("data") or {}).get("head"), "deadline": i["deadline"], "level": i["level"],
-             "hold": ((i.get("data") or {}).get("hold") or {}).get("why") if i["state"] == "queued" else None,
+             "hold": ((i.get("data") or {}).get("hold") or {}).get("why") if i["state"] in HOLD_SHOWN else None,
              "since": float((i.get("data") or {}).get("submitted_at") or i.get("entered_at") or 0)}
             for i in (store or Store()).items("change") if not machine_state("change", i["state"]).terminal]
     return sorted(rows, key=lambda r: r["id"])
@@ -1299,7 +1324,7 @@ def check_entry(repo, eid):
         e = read_record(os.path.join(d, "entries", f"{eid}.json"))
         if not e or e.get("status") not in ("queued", "checking") or e.get("backlog_batch"):  # a backlog batch's
             return 0
-        slot = check_tree_slot(repo, d, fix=red_fix(e, gate_reds(repo)) if e.get("fixes") else False)
+        slot = check_tree_slot(repo, d, fix=red_fix(e, fixing_names(gate_reds(repo))) if e.get("fixes") else False)
         if not slot:  # all trees busy: it stays queued, the tick starts it again when one frees
             return 0
         i, slot_h = slot
@@ -1787,7 +1812,8 @@ def tick_changes(repo, d, now_=None):
         reds = gate_reds(repo)
     except Exception:
         reds = set()
-    todo = sorted(queued_entries(d), key=lambda e: (0 if red_fix(e, reds) else 1, 0 if verifying(e, t) else 1, e["seq"]))
+    fixing = fixing_names(reds, st)  # A FIX OF ANY OPEN RED GOES FIRST (red_fix, above)
+    todo = sorted(queued_entries(d), key=lambda e: (0 if red_fix(e, fixing) else 1, 0 if verifying(e, t) else 1, e["seq"]))
     newest = {}
     for e in sorted(todo, key=lambda e: e["seq"]):  # entries queued before re-queueing replaced: the newest one runs
         for k, older in list(newest.items()):
@@ -1803,22 +1829,22 @@ def tick_changes(repo, d, now_=None):
     # 40 lone checks, 0 batches). The checked changes are pushed in a first pass; the holds are read again for the
     # second, which starts checks.
     for phase in ("push", "check"):
-        held = backlog_held(repo, d, reds, st, t)
-        pheld = push_held(repo, d, reds, st, t)
+        held = backlog_held(repo, d, reds, st, t, fixing)
+        pheld = push_held(repo, d, reds, st, t, fixing)
         # THE BATCH KEEPS ITS AGE-ORDER PLACE (review 2026-11-18): this tick runs before the batch tick, and the
         # changes held for a backlog or push batch take no tree, so a tree freed went to the next YOUNGER lone change
         # and the batch tick found none: with a steady stream of lone changes (identity changes, --no-batch) the batch
         # never formed. A lone change younger than the oldest held one never takes the LAST free tree: that is the
         # batch's (a red fix excepted).
         batch_seq = min((x["seq"] for x in todo if x["id"] in held | pheld), default=None)
-        did += _tick_changes_pass(repo, d, st, t, reds, phase, [e for e in todo if e["id"] in newest], todo, held,
-                                  pheld, batch_seq)
+        did += _tick_changes_pass(repo, d, st, t, reds, fixing, phase, [e for e in todo if e["id"] in newest], todo,
+                                  held, pheld, batch_seq)
     return did
 
 
-def _tick_changes_pass(repo, d, st, t, reds, phase, mine, todo, held, pheld, batch_seq):
+def _tick_changes_pass(repo, d, st, t, reds, fixing, phase, mine, todo, held, pheld, batch_seq):
     """One pass of tick_changes over the newest entries: `push` (the checked and interrupted pushes) or `check` (the
-    rest: executors started, deadlines)."""
+    rest: executors started, deadlines). fixing: the reds a red fix may name (fixing_names)."""
     did = []
     for e in mine:
         if e.get("backlog_batch"):  # a backlog batch's member: the batch checks and pushes it (backlog_reconcile)
@@ -1830,39 +1856,19 @@ def _tick_changes_pass(repo, d, st, t, reds, phase, mine, todo, held, pheld, bat
         if state == "pushing":  # a tick that died mid-push: verified next, never pushed twice blindly
             set_change(d, e, "checked", event={"text": f"{e['id']}: its push was interrupted: verified, then tried again"})
             state = "checked"
-        fix = red_fix(e, reds)
+        fix = red_fix(e, fixing)
         if state == "checked":
             if e.get("retry_after", 0) > t:
                 continue
-            first = None if fix else batch_goes_first(st, d)  # a red fix goes before the batch
-            if first:  # a solo push now moves main under the batch, and its whole check is thrown away
-                did += behind_batch(e, first, "push")
-                continue
-            if not fix and e["id"] in pheld:  # THE PUSH BATCH verifies and pushes it with others
-                if not _behind_said.get((e["id"], "push batch")):
-                    _behind_said[(e["id"], "push batch")] = True
-                    did.append(f"{e['id']}: its push waits for the next push batch")
-                continue
-            older = None if fix else older_verifying(todo, e, t)
-            if older:
-                did.append(f"{e['id']}: its push waits for {older['id']}'s combined-tree verification")
-                continue
-            did.append(f"{e['id']}: {push_change(repo, d, e)}")
+            did += _push_checked(repo, d, st, t, e, fix, todo, pheld)
             continue
         alive = checker_alive(e["id"])
         if state == "checking" and not alive and t > it["deadline"]:
             requeue_infra(d, e, "its check passed its deadline with no live checker")
             did.append(f"{e['id']}: re-queued (checking past its deadline)")
             continue
-        if state == "queued" and t > it["deadline"]:  # waits past its deadline: said, re-deadlined -- an escalation
-            # only when its hold is stuck (A HELD WAIT IS NO ESCALATION, below)
-            hold = change_hold_now(it, e, t)
-            stuck = change_hold_stuck(st, hold, it, t)
-            st.transition("change", e["id"], "queued", it["version"],
-                          event={"text": f"{e['id']}: queued for {fmt_age(t - it['entered_at'])}, "
-                                         + (f"held: {hold['why']}" if hold else "nothing holds it")
-                                         + (f" -- STUCK: {stuck}" if stuck else ""),
-                                 "audience": {"worktree": e.get("worktree")}, **({} if stuck else {"severity": "info"})})
+        if state == "queued":  # past its deadline: said, re-deadlined -- an escalation only when its hold is stuck
+            lap_change_deadline(st, e, "queued", t)  # (A HELD WAIT IS NO ESCALATION, below)
         if state == "queued" and not alive:
             gone = main_conflict(repo, e)
             if gone:  # it no longer applies on main itself: said now, never after a wait for a tree or an older change
@@ -1921,6 +1927,55 @@ def _tick_changes_pass(repo, d, st, t, reds, phase, mine, todo, held, pheld, bat
         spawn_executor(repo, d, e["id"])
         did.append(f"{e['id']}: executor started")
     return did
+
+
+def _push_checked(repo, d, st, t, e, fix, todo, pheld):
+    """The change tick's step for checked entry e: pushed, unless its push is held -- before an open batch it is not
+    in (THE BATCH GOES FIRST), for the next push batch, or behind an older change's combined-tree verification; a red
+    fix (fix) is held by none of them. The hold is recorded on its item (`land status` prints it) and its deadline laps
+    quietly while it is live; a checked change past its deadline that nothing holds escalates (lap_change_deadline)."""
+    did = []
+    first = None if fix else batch_goes_first(st, d)  # a red fix goes before the batch
+    older = None if fix or first or e["id"] in pheld else older_verifying(todo, e, t)
+    if first:  # a solo push now moves main under the batch, and its whole check is thrown away
+        did += behind_batch(e, first, "push")
+        note_hold(st, e, "batch", f"its push waits for batch {first['id']} ({first['state']}), which it is not in", t,
+                  batch=first["id"])
+    elif e["id"] in pheld:  # THE PUSH BATCH verifies and pushes it with others (never a red fix: push_candidates)
+        if not _behind_said.get((e["id"], "push batch")):
+            _behind_said[(e["id"], "push batch")] = True
+            did.append(f"{e['id']}: its push waits for the next push batch")
+        note_hold(st, e, "push-batch", "its push waits for the next push batch", t)
+    elif older:
+        did.append(f"{e['id']}: its push waits for {older['id']}'s combined-tree verification")
+        note_hold(st, e, "verify", f"its push waits for {older['id']}'s combined-tree verification", t,
+                  blocker=older["id"])
+    if first or older or e["id"] in pheld:
+        lap_change_deadline(st, e, "checked", t)
+        return did
+    note_hold(st, e, None, None, t)
+    out = push_change(repo, d, e)
+    lap_change_deadline(st, e, "checked", t, f"its last push: {out}")
+    return did + [f"{e['id']}: {out}"]
+
+
+def lap_change_deadline(st, e, state, t, note=None):
+    """A queued or checked change past its deadline: said and re-deadlined -- quietly while its hold is live, an
+    escalation when it is stuck (change_hold_stuck: nothing holds it, its blocker is gone, held too long). note: what
+    else the line says (a checked change's last push)."""
+    it = st.item("change", e["id"])
+    if not it or it["state"] != state or t <= it["deadline"]:
+        return
+    hold = change_hold_now(it, e, t)
+    stuck = change_hold_stuck(st, hold, it, t)
+    try:
+        st.transition("change", e["id"], state, it["version"],
+                      event={"text": f"{e['id']}: {state} for {fmt_age(t - it['entered_at'])}, "
+                                     + (f"held: {hold['why']}" if hold else "nothing holds it")
+                                     + (f" -- STUCK: {stuck}" if stuck else "") + (f" ({note})" if note else ""),
+                             "audience": {"worktree": e.get("worktree")}, **({} if stuck else {"severity": "info"})})
+    except StaleVersion:
+        pass  # the next tick says it
 
 
 # OVERLAPPING CHANGES ARE CHECKED AS ONE (the coordinator, 2026-11-18: B1 against the CI-workflows change, the scraper
@@ -2048,9 +2103,9 @@ def change_hold_now(it, e, t):
 
 
 def change_hold_stuck(st, hold, it, t):
-    """Why a queued change's hold is stuck (an escalation), or None (a legitimate wait: quiet)."""
+    """Why a queued or checked change's hold is stuck (an escalation), or None (a legitimate wait: quiet)."""
     if not hold:
-        return "nothing holds it, yet it has not started"
+        return "nothing holds it, yet it has not " + ("pushed" if it["state"] == "checked" else "started")
     if t - float(it.get("entered_at") or t) > env_num("AGENTCTL_CHANGE_HOLD_MAX", CHANGE_HOLD_MAX):
         return f"held for over {fmt_age(env_num('AGENTCTL_CHANGE_HOLD_MAX', CHANGE_HOLD_MAX))}"
     if hold.get("blocker"):

@@ -1290,10 +1290,27 @@ The reconciler then takes it, a step per tick:
   confirmation still clears a flaky failure), so at most 3 extra rounds; the culprit is rejected only when its failure
   is its own (the differential judgement; a base red, a time cap or an infra failure sends it to a check of its own),
   the passing prefix is pushed at once, the rest queued again for the next batch. While it is open, it goes first like
-  the red batch (no solo push under it; a red fix excepted, which keeps its red-fix tree and lands alone); a change
-  queued meanwhile joins the next one. Identity changes are checked alone beside it. The same machine as the red batch:
+  the red batch (no solo push under it; a red fix excepted, which keeps its red-fix tree and lands alone: the batch's
+  push then finds main moved and is assembled again over it, each member judged by THE RULE on the new main -- one
+  re-verification, the price of never holding a red fix for a whole batch check); a change queued meanwhile joins the
+  next one. Identity changes are checked alone beside it. The same machine as the red batch:
   batch.py `backlog_candidates`, `backlog_reconcile` (members follow their batch), the `depth` of `batch_check` /
   `bisect` (remote.py); tests: `tests/test_backlog_batch.py`.
+- **A FIX OF ANY OPEN RED GOES FIRST (2026-11-19, 08010c: `Fixes-Red: 6`, Alert backtest #6, red 5254bffda9d2,
+  outside the gate).** The queue's red-fix exemptions read only the GATE's reds, so at a green gate a fix of a red
+  outside it was an ordinary change: checked at 08:32Z, it waited 22 min behind two combined-tree verifications, was
+  left out of push batch #47 (`push_alone`), then sat behind that batch's whole ~110-min verify round (THE BATCH GOES
+  FIRST) -- `checked`, past its deadline at level 0, with nothing said -- and fix-replay waited behind it on
+  infra/bin/backtest-alerts. Now where the queue ORDERS changes (the push before an open batch or an older change's
+  combined-tree verification, the red-fix tree, never a push or backlog batch member) a `Fixes-Red:` naming ANY red
+  the store has open counts (queue.py `fixing_names`); where the gate decides (waiting for green, a known red) the
+  gate's reds alone still do. An ordinary checked change still waits for a batch it is not in (its push would throw
+  the batch's check away: THE BATCH GOES FIRST), but its push's hold is recorded like a queued change's (`held: its
+  push waits for batch <id> (<state>), which it is not in`, `... for the next push batch`, `... for <id>'s
+  combined-tree verification`), `land status` prints it, and its `checked` deadline laps quietly while the hold is
+  live; one past its deadline that nothing holds escalates, naming its last push's answer (queue.py `_push_checked`,
+  `lap_change_deadline`). Tests: `tests/test_backlog_batch.py` PushBatchTest `test_a_fix_of_an_open_red_outside_the_gate_*`
+  (the 2026-11-19 queue replayed), `test_a_checked_change_*`.
 - **A HELD WAIT IS NO ESCALATION (2026-11-19: phase3-f2, held behind phase3-agreement on coupling-baseline.tsv, and
   phase3-enrichment2, held behind f2 on TestWiring.scala, each escalated to the owner every 15 min as `queued for 45
   min, waiting on a check slot`).** Each tick records WHY a queued change waits on its item (`hold`: `overlap` with its

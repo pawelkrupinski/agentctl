@@ -674,7 +674,7 @@ def status_landing(st, t):
                 "past_deadline": it["deadline"] < t, "level": it.get("level"), "worktree": d.get("worktree"),
                 "branch": d.get("branch"), "head": str(d.get("head") or "")[:10] or None,
                 "submitted_at": d.get("submitted_at"), "why": d.get("why") or d.get("reason"),
-                "hold": (d.get("hold") or {}).get("why") if it["state"] == "queued" else None,
+                "hold": (d.get("hold") or {}).get("why") if it["state"] in HOLD_SHOWN else None,
                 "changes": d.get("changes") or d.get("entries")}
     return {"changes": [row(it) for it in st.items("change", list(STATUS_CHANGE_OPEN))],
             "batch": [row(it) for it in st.items("batch", list(STATUS_BATCH_OPEN))],

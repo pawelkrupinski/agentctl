@@ -157,13 +157,14 @@ def backlog_batchable(repo, d, e, t):
     return identity_change(repo, e) is False
 
 
-def backlog_candidates(repo, d, reds, t=None):
+def backlog_candidates(repo, d, reds, t=None, fixing=None):
     """The queued changes a backlog batch takes now, in batch order (Fixes-Red first, then queue order), at most
     BACKLOG_BATCH_MAX; [] while the gate is red, a change verifies its combined tree, or fewer than BACKLOG_BATCH_MIN
-    may go."""
+    may go. A fix of an open red (fixing: fixing_names, read from the store when None) is checked alone."""
     t = t if t is not None else time.time()
     if reds:
         return []
+    fixing = fixing_names(reds) if fixing is None else fixing
     entries = queued_entries(d)
     # THE OLDEST VERIFICATION PUSHES FIRST (queue.py) holds the batch too (review 2026-11-18): formed meanwhile, the
     # batch held the verified change's push for its whole check (THE BATCH GOES FIRST), then its push moved main under
@@ -172,16 +173,17 @@ def backlog_candidates(repo, d, reds, t=None):
     if any((verifying(e, t) or (e.get("status") == "checked" and not float(e.get("retry_after") or 0) > t))
            and not e.get("backlog_batch") for e in entries):  # a checked change's push is due at the next change tick
         return []
-    out = [e for e in entries if backlog_batchable(repo, d, e, t) and not overlap_hold(repo, d, e, entries, reds, t)]
+    out = [e for e in entries if not red_fix(e, fixing) and backlog_batchable(repo, d, e, t)
+           and not overlap_hold(repo, d, e, entries, reds, t)]
     out = sorted(out, key=lambda e: (0 if e.get("fixes") else 1, e["seq"]))[
         :int(env_num("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX))]
     return out if len(out) >= backlog_min() else []
 
 
-def backlog_held(repo, d, reds, st, t=None):
+def backlog_held(repo, d, reds, st, t=None, fixing=None):
     """The ids of the queued changes the change tick holds back for the next backlog batch: with no batch open, the
     candidates one would take now."""
-    return set() if current_batch(st, d) else {c["id"] for c in backlog_candidates(repo, d, reds, t)}
+    return set() if current_batch(st, d) else {c["id"] for c in backlog_candidates(repo, d, reds, t, fixing)}
 
 
 def batch_kind(it):
@@ -262,26 +264,28 @@ def push_batchable(repo, d, e, t, main):
     return not checker_alive(e["id"])
 
 
-def push_candidates(repo, d, reds, t=None):
-    """The changes a push batch takes now, oldest first, at most BACKLOG_BATCH_MAX; [] while the gate is red (a red fix
-    pushes alone), while a change's own verify round runs (it pushes first), or when fewer than PUSH_BATCH_MIN may go."""
+def push_candidates(repo, d, reds, t=None, fixing=None):
+    """The changes a push batch takes now, oldest first, at most BACKLOG_BATCH_MAX; [] while the gate is red, while a
+    change's own verify round runs (it pushes first), or when fewer than PUSH_BATCH_MIN may go. A fix of an open red
+    (fixing: fixing_names, read from the store when None) pushes alone."""
     t = t if t is not None else time.time()
     if reds:
         return []
+    fixing = fixing_names(reds) if fixing is None else fixing
     entries = queued_entries(d)
     if any(e.get("status") == "checking" and e.get("verify") and not e.get("backlog_batch") for e in entries):
         return []
     main = git(repo, "rev-parse", f"{remote()}/main", check=False).stdout.strip()
     out = [e for e in sorted(entries, key=lambda e: e["seq"])
-           if not red_fix(e, reds) and push_batchable(repo, d, e, t, main)]
+           if not red_fix(e, fixing) and push_batchable(repo, d, e, t, main)]
     out = drift_serialize(repo, out)[:int(env_num("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX))]
     return out if len(out) >= max(2, int(env_num("AGENTCTL_PUSH_BATCH_MIN", PUSH_BATCH_MIN))) else []
 
 
-def push_held(repo, d, reds, st, t=None):
+def push_held(repo, d, reds, st, t=None, fixing=None):
     """The ids of the changes the change tick holds back for the next push batch: with no batch open, the candidates
     one would take now."""
-    return set() if current_batch(st, d) else {c["id"] for c in push_candidates(repo, d, reds, t)}
+    return set() if current_batch(st, d) else {c["id"] for c in push_candidates(repo, d, reds, t, fixing)}
 
 
 def push_batch_select(repo, d, tree, kept, base, tips):
@@ -542,8 +546,9 @@ def batch_step(repo, d, now_, seen, st):
         # THE PUSH BATCH (checked changes, each owing a verify round) before THE BACKLOG BATCH (queued changes), no
         # waiting change; created only with a check tree free for it (an assembling batch waiting for one holds every
         # solo check behind it, and is held itself past its 5-min deadline)
-        push = push_candidates(repo, d, reds, t) if not it or depth == "verify" else []
-        ready = push or (backlog_candidates(repo, d, reds, t) if not it or depth == "full" else [])
+        fixing = fixing_names(reds, st)
+        push = push_candidates(repo, d, reds, t, fixing) if not it or depth == "verify" else []
+        ready = push or (backlog_candidates(repo, d, reds, t, fixing) if not it or depth == "full" else [])
         if not it:
             if not ready or not check_tree_slot_free(repo, d):
                 return []
