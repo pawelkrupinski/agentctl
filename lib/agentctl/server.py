@@ -1223,13 +1223,13 @@ def sync_steps(repo, d, o_r):
         if os.path.exists(reds_dir("DISPATCH_OFF")):
             return []
         return red_dispatcher(Store(), o_r, repo, time.time())
-    role = [False]
+    role = [None]  # None: not claimed in this loop yet (a step run on its own: a test)
 
     def claim_role():
         role[0] = laptop_role_step()
 
     def duty(fn):  # ONE MACHINE HOLDS THE LAPTOP ROLE: a standby machine runs none of the laptop's duties
-        return lambda: fn() if role[0] else None
+        return lambda: None if role[0] is False else fn()
     return (("laptop role", claim_role),
             ("outbox", flush_outbox), ("state mirror", mirror), ("children", reap_children),
             ("events", project_events), ("notifier", duty(notify_escalations)), ("alerts", duty(reconcile_alerts)),
