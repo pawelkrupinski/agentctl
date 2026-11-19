@@ -2426,7 +2426,8 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `gov_dir` | `AGENTCTL_GOV_DIR` | - | - |
 | `gov_evict_settle` | `AGENTCTL_GOV_EVICT_SETTLE` | `3` | the freed memory shows in vm_stat |
 | `gov_free_need_gb` | `AGENTCTL_GOV_FREE_NEED_GB` | `2.5` | free memory a new JVM needs NOW (beyond the reserve); its heap grows into the budget's share later |
-| `gov_poll` | `AGENTCTL_GOV_POLL` | `2.0` | - |
+| `gov_idle_max` | `AGENTCTL_GOV_IDLE_MAX` | `30.0` | s a waiter behind the head waits at most between two reads of the queue |
+| `gov_poll` | `AGENTCTL_GOV_POLL` | `2.0` | a waiter behind the head backs off from here to GOV_IDLE_MAX |
 | `gov_reserve_gb` | `AGENTCTL_GOV_RESERVE_GB` | `1.0` | - |
 | `hostname` | `AGENTCTL_HOSTNAME` | - | - |
 | `identity` | `AGENTCTL_IDENTITY` | - | - |
