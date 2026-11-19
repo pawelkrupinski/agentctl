@@ -1119,6 +1119,21 @@ class OwnerTest(RedsBase):
         self.assertNotIn("Report run timings", out)
         self.assertEqual(rc, 0, out)
 
+    def test_a_resumed_fixers_first_claim_binds_its_record_though_the_record_still_names_the_old_session(self):
+        # issue 20261119T025305-21375d (core #1053, fixer-3/-4): a `resume` dispatch starts its record with the PREVIOUS
+        # fixer's session (red_dispatch: "session": resume["session"]); `claude --bg --resume` runs a NEW session (new id,
+        # its bg id the id's first 8 characters) and the wrapper writes that id into the record only when its first poll
+        # sees it. The fixer's own first command `red claim N --fixer <record>` runs before: "no live fixer record of
+        # this session (7d0ab9e2)", and the fixer's red work went unclaimed.
+        it, path = self.held_by_a_fixer("0e110e5f-old-session")
+        rec = A.read_record(path)
+        A.write_json(path, dict(rec, resume=True, bg_id="7d0ab9e2"))  # the new bg session's id, not yet in `session`
+        os.environ.update(CLAUDE_CODE_SESSION_ID="7d0ab9e2-8e4f-443a-9fd7-45609d696377")
+        os.environ.pop("AGENTCTL_FIXER_RECORD", None)
+        rc, out = self.tool("red", "claim", "20", "--fixer", path, "--repo", "movies", cwd=self.r.path)
+        self.assertNotIn("NOT CLAIMED", out)
+        self.assertEqual(rc, 0, out)
+
     def test_a_fixer_never_notes_on_a_record_of_another_session(self):
         # a `claude --bg` spare spawned for #2432's fixer, reused for #2426's: its AGENTCTL_FIXER_RECORD is #2432's
         _it, theirs = self.held_by_a_fixer("s-other", run="32")
