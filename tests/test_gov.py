@@ -8,7 +8,7 @@ sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
 
 KEYS = ("AGENTCTL_GOV_CPU_FACTOR", "AGENTCTL_RUNNERS_PAGE_CACHE", "AGENTCTL_GOV_DIR", "AGENTCTL_GOV_FREE_PROBE", "AGENTCTL_GOV_PRESSURE_PROBE", "AGENTCTL_GOV_LOAD_PROBE",
-        "AGENTCTL_GOV_POLL", "AGENTCTL_GOV_BUDGET_GB", "AGENTCTL_GOV_RESERVE_GB", "AGENTCTL_GOV_EVICT_SETTLE",
+        "AGENTCTL_GOV_POLL", "AGENTCTL_GOV_BUSY_PROBE", "AGENTCTL_GOV_PS_PROBE", "AGENTCTL_GOV_BUDGET_GB", "AGENTCTL_GOV_RESERVE_GB", "AGENTCTL_GOV_EVICT_SETTLE",
         "KINOWO_SBT_WARM_STATE", "AGENTCTL_CHECKS_DIR", "AGENTCTL_MAX_CHECKS")
 
 
@@ -98,28 +98,54 @@ class GovernorTest(unittest.TestCase):
         finally:
             os.environ["AGENTCTL_LAPTOP_PRESSURE"] = "-"
 
-    def test_outside_load_alone_never_starves_the_queue_one_job_at_a_time(self):
-        """2026-11-19 15:35Z: 0 cores charged and a load of ~60 (other agents' git storms, Spotlight, the waiters' own
-        polling) held every sbt-warm waiter on the agent load factor for 10+ min. With nothing charged and nothing just
-        admitted, the head goes; the next waits while that one ramps up (its load not yet visible)."""
-        os.environ["AGENTCTL_GOV_LOAD_PROBE"] = f"echo {A.machine_cores() * 3}"
-        self.assertIsNotNone(self.admit("agent", 1, job="keeper"), "nothing charged, nothing ramping: it goes")
-        self.assertIsNone(self.admit("agent", 1, job="keeper"), "the next waits while the first ramps up")
-        self.aged(self.tickets[0], A.GOV_RAMP + 1)
-        self.assertIsNotNone(self.admit("agent", 1, job="keeper"), "a keeper ramped up and charging nothing: the next")
+    def set_busy(self, cores):
+        os.environ["AGENTCTL_GOV_BUSY_PROBE"] = f"echo {cores}"
 
-    def test_cpu_load_holds_measurements_then_agents_then_checks_never_red(self):
-        cores = A.machine_cores()  # the harness's fixed machine, as the governor reads it
-        self.admit("red", 1, job="testOnly")  # something charged: the class load factors hold
-        os.environ["AGENTCTL_GOV_LOAD_PROBE"] = f"echo {int(cores * 1.2)}"
-        self.assertIsNone(self.admit("measure"))
-        self.assertIsNotNone(self.admit("agent"))
-        os.environ["AGENTCTL_GOV_LOAD_PROBE"] = f"echo {cores * 3}"
-        self.assertIsNone(self.admit("agent"))
-        self.assertIsNotNone(self.admit("check"))
-        os.environ["AGENTCTL_GOV_LOAD_PROBE"] = f"echo {cores * 5}"
-        self.assertIsNone(self.admit("check"), "a check waits past 4x the cores")
-        self.assertIsNotNone(self.admit("red"), "a red fix never waits on CPU")
+    def test_pause_when_starved_resume_below_the_low_mark(self):
+        """The owner, 2026-11-19: "if cpu is starved then pause until we have enough resources and resume when we have
+        too much". Work waits once the cores busy pass 1.0x the machine's and goes again only under 0.8x (hysteresis:
+        no thrashing at the line); red never waits."""
+        n = A.machine_cores()
+        self.set_busy(n * 0.9)
+        self.assertEqual(A.gov_capacity()["state"], "ok")
+        self.assertIsNotNone(self.admit("agent", 1))
+        self.set_busy(n * 1.1)
+        self.assertEqual(A.gov_capacity()["state"], "starved")
+        self.assertIsNone(self.admit("agent", 1), "starved: paused")
+        self.assertIsNone(self.admit("check", 1), "a check pauses too")
+        self.assertIsNotNone(self.admit("red", 1), "a red fix never waits")
+        self.set_busy(n * 0.9)
+        self.assertEqual(A.gov_capacity()["state"], "starved", "between the marks: still paused")
+        self.assertIsNone(self.admit("agent", 1))
+        self.set_busy(n * 0.7)
+        self.assertEqual(A.gov_capacity()["state"], "ok")
+        self.assertIsNotNone(self.admit("agent", 1), "under 0.8x: resumed")
+        self.set_busy(n * 0.2)
+        self.assertEqual(A.gov_capacity()["state"], "spare")
+
+    def test_busy_cores_are_measured_without_the_waiters_and_idle_claude_sessions(self):
+        """2026-11-19 16:33: the load average read 46 on 18 cores while the processes used 5.2 cores -- the load counts
+        threads waiting, not work. Busy is the CPU processes use, less the governor's own waiters and idle Claude
+        sessions."""
+        ps = os.path.join(self.d, "ps")
+        with open(ps, "w") as f:
+            f.write("250.0 /usr/bin/java -jar sbt-launch.jar\n"
+                    " 50.0 /usr/bin/python3 /Users/x/bin/agentctl gov admit --fd 7 --ticket t\n"
+                    "  3.0 /Users/x/.local/bin/claude --bg\n"
+                    " 80.0 /Users/x/.local/bin/claude\n"
+                    " 20.0 git status\n")
+        os.environ.pop("AGENTCTL_GOV_LOAD_PROBE", None)
+        os.environ["AGENTCTL_GOV_PS_PROBE"] = f"cat {ps}"
+        self.assertAlmostEqual(A.gov_busy_cores(), 3.5)
+
+    def test_capacity_prints_one_line(self):
+        self.set_busy(A.machine_cores() * 0.2)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            rc = A.cmd_gov(A.argparse.Namespace(gcmd="capacity"))
+        self.assertEqual(rc, 0)
+        line = out.getvalue().strip()
+        self.assertRegex(line, r"^spare: [\d.]+ of \d+ cores busy")
+        self.assertEqual(len(line.splitlines()), 1)
 
     def waiter(self, cls, at):
         p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
@@ -296,12 +322,6 @@ class GovernorTest(unittest.TestCase):
         self.assertIsNotNone(self.admit("agent", 1, job="keeper"))
         self.assertIsNotNone(self.admit("agent", 1), "no job named (a jvm-gate.sh from before cores): memory only")
         self.assertEqual(A.gov_charged(A.gov_tickets()), 12.0)
-
-    def test_with_nothing_charged_only_the_class_load_factor_holds(self):
-        """Outside load alone never starves the queue: the first job goes at what the class factor allows."""
-        os.environ["AGENTCTL_GOV_LOAD_PROBE"] = f"echo {int(A.machine_cores() * 1.2)}"
-        self.assertIsNotNone(self.admit("agent", 1, job="testUnit"))
-        self.assertIsNone(self.admit("agent", 1, job="testUnit"), "now charged: max(4, 14) + 4 > 12")
 
     def usage(self, job, cores, load1=1.0, n=3, wall=100):
         for _ in range(n):

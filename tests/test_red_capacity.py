@@ -240,9 +240,9 @@ class LaptopPressureTest(unittest.TestCase):
         self.assertEqual(A.laptop_pressure(self.read(free=12)), "memory 12% free (holds under 20%)")
         self.assertEqual(A.laptop_pressure(self.read(level=2)), "kernel memory pressure warn (level 2)")
         self.assertEqual(A.laptop_pressure(self.read(level=4)), "kernel memory pressure critical (level 4)")
-        self.assertEqual(A.laptop_pressure(self.read(load=29.0)), "load 29.0 on 14 cores (holds over 28)")
+        self.assertEqual(A.laptop_pressure(self.read(load=29.0)), "29.0 cores busy of 14 (holds over 28)")
         self.assertEqual(A.laptop_pressure(self.read(load=29.0, level=2)),
-                         "kernel memory pressure warn (level 2); load 29.0 on 14 cores (holds over 28)")
+                         "kernel memory pressure warn (level 2); 29.0 cores busy of 14 (holds over 28)")
 
     def test_swap_counts_only_while_it_grows(self):
         self.assertIsNone(A.laptop_pressure(self.read(used=10_000.0, now_=1000.0)))

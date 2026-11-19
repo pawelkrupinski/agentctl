@@ -1764,16 +1764,22 @@ sbt-warm's kept servers each holding a slot, idle or not).
   2.5 GB (`$AGENTCTL_GOV_FREE_NEED_GB`) must be free now (free + inactive + speculative) beyond a 1 GB reserve and what
   tickets admitted in the last 2 min still grow into; memory pressure under 75%; the laptop not under pressure
   (see the red queue's "Laptop pressure"). Red waits on none of it: a red fix is admitted at once.
-- **CPU:** checks wait while load1 > 4x the cores, agent work > 1.5x, measurements > 1x; red never.
+- **CPU: pause when starved, resume with room** (the owner, 2026-11-19: "if cpu is starved then pause until we have
+  enough resources and resume when we have too much"). BUSY is max(the live tickets' charged cores, the cores
+  processes use now: ps's %CPU, less the governor's own waiters and idle Claude sessions) -- never the load average,
+  which read 46 on 18 cores while processes used 5.2. Over 1.0x the cores (`$AGENTCTL_GOV_STARVED`) the laptop is
+  STARVED and every class but red pauses (its waiters block with no CPU) until busy falls under 0.8x
+  (`$AGENTCTL_GOV_RESUME`): between the two it keeps its state. Under 0.5x (`$AGENTCTL_GOV_SPARE`) it is SPARE.
+  `agentctl gov capacity` prints one line, `starved|ok|spare: B of N cores busy (C charged, M measured, load L); A
+  admitted, W waiting` -- what the orchestrator reads before starting or resuming lanes.
 - **Cores** (the owner, 2026-11-18: 8 JVMs admitted on 40 of 77 GB drove the 18-core laptop to load 100 at 05:45Z,
   and 6 waiters went in within 7 s at 05:46Z as the lagging load dipped). Every ticket carries the cores its job is
   expected to use (`--job`: testUnit / test / what-if / measure / check 4, compile / job 3, testOnly / slice / suite 2,
   serve 1, keeper 0), or the job's measured p75 once `<gov>/usage.jsonl` holds 3 uncontended runs of it (load at
   most the cores; sbt-warm records each passing call: the server's CPU, exited forks included, over its wall time). Work
-  is admitted only while max(the live tickets' cores, load1) + its own <= the cores x `$AGENTCTL_GOV_CPU_FACTOR` (1.0):
-  the charge takes a burst before the 1-min load shows it, the load counts what holds no ticket. A ticket of no cores
-  never waits on cores; with nothing charged only the class load factors above apply (outside load cannot starve the
-  queue); red never waits. A kept sbt server's keeper is charged 0 (its memory); each command through it takes a
+  is admitted only while busy (above) + its own <= the cores x `$AGENTCTL_GOV_CPU_FACTOR` (1.0): the charge takes a
+  burst before the processes show it. A ticket of no cores never waits on cores, nor does one with nothing charged;
+  red never waits. A kept sbt server's keeper is charged 0 (its memory); each command through it takes a
   cores-only ticket (`--mem 0`) for its life, as does each what-if / slice request to a kept JVM. A pre-commit check
   is charged its hook's cores, and the hook's sbt-warm calls take none (`KINOWO_GOV_CPU_HELD`). A ticket from an older
   jvm-gate.sh (no `--job`) is charged none. `waited_on` in `admits.jsonl` now names the last hold (it was always
@@ -1790,12 +1796,11 @@ sbt-warm's kept servers each holding a slot, idle or not).
   looks again. Logged in `gov/gov.log`; every admission in `gov/admits.jsonl`.
 - **Checks** keep their cap (below), now one of the governor's limits.
 
-**Waiting is cheap, and outside load never starves the queue (2026-11-19 15:35Z).** ~13 sbt-warm waiters each re-read
+**Waiting is cheap (2026-11-19 15:35Z).** ~13 sbt-warm waiters each re-read
 every waiter's liveness (two `ps` each) and the machine every 2 s: ~170 short processes a second, a load of ~60 on 18
 cores that held them all on the load factor. A waiter behind the head now re-reads the queue only when its change mark
 moves (a waiter or ticket leaving) or its backoff (2 s doubling to 30 s) runs out, a stat meanwhile; liveness is a
-signal 0 with the start time read once a minute. The class load factors hold work only while the governor's own work
-is in the load (cores charged, or a ticket admitted within GOV_RAMP): with neither, the head goes, one per GOV_RAMP.
+signal 0 with the start time read once a minute.
 
 ### checks: the pre-commit check cap
 
@@ -2429,7 +2434,11 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `gov_free_need_gb` | `AGENTCTL_GOV_FREE_NEED_GB` | `2.5` | free memory a new JVM needs NOW (beyond the reserve); its heap grows into the budget's share later |
 | `gov_idle_max` | `AGENTCTL_GOV_IDLE_MAX` | `30.0` | s a waiter behind the head waits at most between two reads of the queue |
 | `gov_poll` | `AGENTCTL_GOV_POLL` | `2.0` | a waiter behind the head backs off from here to GOV_IDLE_MAX |
+| `gov_ps_probe` | `AGENTCTL_GOV_PS_PROBE` | - | - |
 | `gov_reserve_gb` | `AGENTCTL_GOV_RESERVE_GB` | `1.0` | - |
+| `gov_resume` | `AGENTCTL_GOV_RESUME` | `0.8` | x the cores: under it, admitting again |
+| `gov_spare` | `AGENTCTL_GOV_SPARE` | `0.5` | x the cores: under it, spare |
+| `gov_starved` | `AGENTCTL_GOV_STARVED` | `1.0` | x the cores: over it, starved |
 | `hostname` | `AGENTCTL_HOSTNAME` | - | - |
 | `identity` | `AGENTCTL_IDENTITY` | - | - |
 | `inbox_dir` | `AGENTCTL_INBOX_DIR` | - | - |

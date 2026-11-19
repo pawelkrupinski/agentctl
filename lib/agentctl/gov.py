@@ -21,17 +21,13 @@
 #   memory_pressure's free %) must be under 75%, and the laptop not under pressure (laptop_pressure, below).
 # - RED NEVER WAITS (the owner, 2026-10-31: "nothing should stop gate fixes ever"): a red fix's ticket is admitted at
 #   once, whatever the budget, free memory, pressure or load.
-# - CPU: checks wait while the 1-min load is over 4x the cores (a load of ~250 kept an sbt server from starting in 5 min
-#   and failed two checks, 2026-10-27), agent work over 1.5x, measurements over 1x; red never.
+# - CPU (the owner, 2026-11-19): pause when starved, resume with room -- THE CAPACITY, below (gov_capacity).
 # - CORES (the owner, 2026-11-18): memory alone over-admitted CPU-bound JVMs -- 8 admitted on 40 of 77 GB drove the
-#   18-core laptop to a load of 100 (15-min 82) at 05:45Z, every agent's tests 3-5x slower; the load factors only held
-#   new work past 2x the cores, and the 1-min load lags: 6 waiters went in within 7 s at 05:46Z the moment it dipped. So
-#   a ticket also carries the CORES its job is expected to use (GOV_JOB_CORES, or the job's measured p75 in
-#   <gov>/usage.jsonl once it has GOV_USAGE_MIN uncontended runs: gov_job_cores), and work is admitted only while
-#   max(the live tickets' cores, the 1-min load) + its own <= the cores x $AGENTCTL_GOV_CPU_FACTOR (1.0): the charged
-#   sum takes a burst before the load shows it, the load counts what holds no ticket. A ticket of no cores (a kept
-#   server's keeper: its memory, idle; each call through it takes a cores ticket of its own) never waits on cores; with
-#   nothing charged, only the class load factors above apply, so outside load cannot starve the queue. Red never waits.
+#   18-core laptop to a load of 100 at 05:45Z. So a ticket also carries the CORES its job is expected to use
+#   (GOV_JOB_CORES, or the job's measured p75 in <gov>/usage.jsonl once it has GOV_USAGE_MIN uncontended runs:
+#   gov_job_cores), and work is admitted only while the capacity's busy cores + its own <= the cores x
+#   $AGENTCTL_GOV_CPU_FACTOR (1.0). A ticket of no cores (a kept server's keeper: its memory, idle; each call through it
+#   takes a cores ticket of its own) never waits on cores, nor one with nothing charged. Red never waits.
 # - EVICTION: when the head waiter does not fit on memory, the governor stops the idle kept sbt server unused longest
 #   (sbt-warm's registry: no call running in it -- its busy lock taken exclusively for the stop, so none starts under it --
 #   unused for a minute, not serving, never the root checkout's), then looks again. Idle warm servers go first.
@@ -44,7 +40,16 @@ GOV_RAMP = 120          # seconds a new ticket's JVM is still growing into its e
 GOV_RESERVE_GB = 1.0
 GOV_FREE_NEED_GB = 2.5  # free memory a new JVM needs NOW (beyond the reserve); its heap grows into the budget's share later
 GOV_PRESSURE_DEFAULT = 75  # memory pressure (100 - free %) at which every class but red waits
-GOV_LOAD = {"check": 4.0, "agent": 1.5, "measure": 1.0}  # waits while load1 > factor x cores; red never waits on CPU
+# THE CAPACITY (the owner, 2026-11-19: "if cpu is starved then pause until we have enough resources and resume when we
+# have too much"): BUSY is max(the live tickets' charged cores, the cores processes use now -- ps's %CPU, less the
+# governor's own waiters and idle Claude sessions; never the load average, which read 46 on 18 cores while processes
+# used 5.2). Over GOV_STARVED x the cores the laptop is STARVED: every class but red pauses, its waiters blocking with no
+# CPU; under GOV_RESUME x it is ok again (between the two it keeps its state: no thrashing at one line); under GOV_SPARE x
+# it has SPARE capacity. `agentctl gov capacity` prints it in one line.
+GOV_STARVED = 1.0       # x the cores: over it, starved ($AGENTCTL_GOV_STARVED)
+GOV_RESUME = 0.8        # x the cores: under it, admitting again ($AGENTCTL_GOV_RESUME)
+GOV_SPARE = 0.5         # x the cores: under it, spare ($AGENTCTL_GOV_SPARE)
+GOV_IDLE_CLAUDE = 10.0  # %CPU under which a Claude session is idle (not work)
 GOV_CPU_FACTOR = 1.0    # charged cores (or the load) + a job's own may reach this x the cores ($AGENTCTL_GOV_CPU_FACTOR)
 # A job's expected cores, by its name (scripts/jvm-gate.sh passes --job: sbt-warm classifies its command); measured
 # history (usage.jsonl) replaces the number once a job has GOV_USAGE_MIN uncontended runs. `job`: a JVM of unknown work.
@@ -274,10 +279,65 @@ def gov_ramp(tickets, now=None):
     return sum(float(t.get("mem") or 0) for t in tickets if now - t.get("at", 0) < GOV_RAMP)
 
 
-def gov_ramp_count(tickets, now=None):
-    """The tickets admitted within the last GOV_RAMP seconds (their job's load not yet in the load average)."""
-    now = time.time() if now is None else now
-    return sum(1 for t in tickets if now - float(t.get("at") or 0) < GOV_RAMP)
+def gov_busy_cores():
+    """The cores processes use now: ps's %CPU summed, less the governor's waiters (`agentctl gov admit`) and idle Claude
+    sessions. Seams: $AGENTCTL_GOV_BUSY_PROBE (its output: the number), the tests' $AGENTCTL_GOV_LOAD_PROBE (read as
+    busy), $AGENTCTL_GOV_PS_PROBE (ps's `pcpu args` rows)."""
+    for k in ("AGENTCTL_GOV_BUSY_PROBE", "AGENTCTL_GOV_LOAD_PROBE"):
+        if os.environ.get(k):
+            try:
+                return float(run_cmd(os.environ[k], shell=True).stdout.strip() or 0)
+            except ValueError:
+                return 0.0
+    probe = os.environ.get("AGENTCTL_GOV_PS_PROBE")
+    fixed = machine_fixed() if not probe else None
+    if fixed is not None:  # the tests' fixed machine (AGENTCTL_MACHINE): its busy cores, else its load
+        return float(fixed.get("busy", fixed.get("load1")) or 0)
+    out = run_cmd(probe, shell=True).stdout if probe else run_cmd(["ps", "-A", "-o", "pcpu=,args="]).stdout
+    total = 0.0
+    for line in out.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        try:
+            pct = float(parts[0])
+        except ValueError:
+            continue
+        args = parts[1]
+        if "agentctl gov admit" in args:
+            continue
+        if os.path.basename(args.split()[0]) == "claude" and pct < GOV_IDLE_CLAUDE:
+            continue
+        total += pct
+    return total / 100.0
+
+
+def gov_capacity(tickets=None, m=None):
+    """{state: starved | ok | spare, busy, charged, measured, cores, load1}: the laptop's CPU now, with hysteresis (the
+    last state kept in <gov>/capacity.json between GOV_RESUME and GOV_STARVED)."""
+    tickets = gov_tickets() if tickets is None else tickets
+    n = (m or {}).get("cores") or machine_cores()
+    charged, measured = gov_charged(tickets), gov_busy_cores()
+    busy = max(charged, measured)
+    path = os.path.join(gov_dir(), "capacity.json")
+    prev = (read_record(path) or {}).get("state", "ok")
+    if busy > env_num("AGENTCTL_GOV_STARVED", GOV_STARVED) * n:
+        state = "starved"
+    elif busy < env_num("AGENTCTL_GOV_SPARE", GOV_SPARE) * n:
+        state = "spare"
+    elif busy < env_num("AGENTCTL_GOV_RESUME", GOV_RESUME) * n:
+        state = "ok"
+    else:
+        state = "starved" if prev == "starved" else "ok"
+    if state != prev:
+        try:
+            write_json(path, {"state": state, "busy": busy, "at": time.time()})
+            gov_log(f"capacity {prev} -> {state}: {busy:.1f} of {n} cores busy ({charged:g} charged, {measured:.1f} "
+                    "measured)")
+        except OSError:
+            pass
+    return {"state": state, "busy": busy, "charged": charged, "measured": measured, "cores": n,
+            "load1": (m or {}).get("load1")}
 
 
 def gov_fits(cls, mem, tickets, m, kind="job", cores=0.0):
@@ -308,21 +368,17 @@ def gov_fits(cls, mem, tickets, m, kind="job", cores=0.0):
         return False, f"memory pressure {m['pressure']:.0f}% (waits at {stop}%)", True
     if m.get("laptop"):
         return False, f"laptop pressure: {m['laptop']}", True
-    factor = GOV_LOAD.get(cls)
-    charged = gov_charged(tickets)
-    # OUTSIDE LOAD ALONE NEVER STARVES THE QUEUE (2026-11-19 15:35Z: 0 cores charged, a load of ~60 from other agents'
-    # git storms, Spotlight and the waiters' own polling held every waiter 10+ min): the load factor holds work only
-    # while the governor's own work is in it -- cores charged, or a ticket still ramping up (its load not yet shown).
-    # With neither, the head goes, one job per GOV_RAMP.
-    ours = charged > 0 or gov_ramp_count(tickets) > 0
-    if factor and ours and m.get("load1") is not None and m["load1"] > factor * m["cores"]:
-        return False, f"load {m['load1']:.0f} over {factor:g}x {m['cores']} cores", False
-    if cores and charged > 0:
-        cap = env_num("AGENTCTL_GOV_CPU_FACTOR", GOV_CPU_FACTOR) * m["cores"]
-        busy = max(charged, m.get("load1") or 0.0)
-        if busy + cores > cap:
-            return False, (f"cores: {charged:g} charged (load {m.get('load1') or 0:.1f}) + {cores:g} over "
-                           f"{cap:g} ({env_num('AGENTCTL_GOV_CPU_FACTOR', GOV_CPU_FACTOR):g}x {m['cores']} cores)"), False
+    cap = gov_capacity(tickets, m)
+    if cap["state"] == "starved":  # PAUSED until the cores free up (gov_capacity): resumes by itself, no one acts
+        return False, (f"starved: {cap['busy']:.1f} of {cap['cores']} cores busy (pauses over "
+                       f"{env_num('AGENTCTL_GOV_STARVED', GOV_STARVED):g}x, resumes under "
+                       f"{env_num('AGENTCTL_GOV_RESUME', GOV_RESUME):g}x)"), False
+    if cores and cap["charged"] > 0:  # nothing charged: the head goes whatever it asks (never starved by its own size)
+        limit = env_num("AGENTCTL_GOV_CPU_FACTOR", GOV_CPU_FACTOR) * cap["cores"]
+        if cap["busy"] + cores > limit:
+            return False, (f"cores: {cap['charged']:g} charged ({cap['measured']:.1f} measured, {cap['busy']:.1f} busy) "
+                           f"+ {cores:g} over {limit:g} ({env_num('AGENTCTL_GOV_CPU_FACTOR', GOV_CPU_FACTOR):g}x "
+                           f"{cap['cores']} cores)"), False
     return True, None, False
 
 
@@ -707,7 +763,9 @@ def pressure_reading(sysctl_out=None, meminfo=None, load1=None, cores=None, now_
     """{free_pct, level, load1, cores, swap_mb, swap_growth_mb, swap_span}: this machine now, None where unreadable.
     The readers are the tests' seams: sysctl_out (pressure_sysctl's text), meminfo (read_meminfo's dict)."""
     now_ = time.time() if now_ is None else now_
-    r = {"free_pct": None, "level": None, "swap_mb": None, "load1": machine_load1() if load1 is None else load1,
+    # its CPU is the cores processes use (gov_busy_cores), never the load average, which counts threads waiting (46 on
+    # 18 cores while 5.2 were busy, 2026-11-19); `load1` passed in (the tests' seam) stands for it
+    r = {"free_pct": None, "level": None, "swap_mb": None, "load1": gov_busy_cores() if load1 is None else load1,
          "cores": cores or machine_cores()}
     fixed = machine_fixed() if meminfo is None and sysctl_out is None else None
     mi = {} if fixed is not None else read_meminfo() if meminfo is None else meminfo
@@ -744,7 +802,7 @@ def laptop_pressure(r=None, load=True):
         why.append(f"kernel memory pressure {PRESSURE_LEVELS.get(r['level'], '?')} (level {r['level']})")
     factor = env_num("AGENTCTL_LAPTOP_LOAD", LAPTOP_LOAD)
     if load and r.get("load1") is not None and r["load1"] > factor * r["cores"]:
-        why.append(f"load {r['load1']:.1f} on {r['cores']} cores (holds over {factor * r['cores']:g})")
+        why.append(f"{r['load1']:.1f} cores busy of {r['cores']} (holds over {factor * r['cores']:g})")
     bar = env_num("AGENTCTL_LAPTOP_SWAP_GROWTH_MB", LAPTOP_SWAP_GROWTH_MB)
     if r.get("swap_growth_mb") is not None and r["swap_growth_mb"] >= bar:
         why.append(f"swap growing +{r['swap_growth_mb'] / 1024:.1f} GB in {r['swap_span'] / 60:.0f} min (holds at "
@@ -836,6 +894,12 @@ def cmd_gov(a):
             return 0
         root = gov_evict("by hand (agentctl gov evict)")
         print(f"evicted {root}" if root else "no idle sbt server to evict")
+        return 0
+    if a.gcmd == "capacity":
+        cap, tickets = gov_capacity(), gov_tickets()
+        print(f"{cap['state']}: {cap['busy']:.1f} of {cap['cores']} cores busy ({cap['charged']:g} charged, "
+              f"{cap['measured']:.1f} measured, load {machine_load1():.1f}); {len(tickets)} admitted, "
+              f"{len(gov_waiters())} waiting")
         return 0
     if a.gcmd == "status":
         tickets, m = gov_tickets(), gov_machine()
