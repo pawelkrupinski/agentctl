@@ -83,6 +83,39 @@ class LandTest(LandBase):
         self.assertEqual(rc, 0, out)
         self.assertIn("LANDED", out)
 
+    def test_a_known_red_baseline_is_judged_for_the_base_the_change_is_checked_on(self):
+        """ISSUE 20261107T133552-2c7673: the baseline of a failing change runs on the CURRENT origin/main (35 min, plus a
+        governor queue), so main moves meanwhile; the hook's re-run then looked the baseline up for the new origin/main it
+        had never computed ('no known-red baseline for base ...: every failing check blocks') and the change, failing only
+        where main fails too, was NOT LANDED."""
+        self.hook("exit 0")  # the push's own hook (core.hooksPath); the repo's scripts/hooks/pre-push is the dry run's
+        marker = os.path.join(self.tmp.name, "moved")
+        other = os.path.join(self.tmp.name, "other")
+        self.r.write("scripts/hooks/pre-push", (
+            '#!/bin/sh\n# supports --checks-only\nunset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE\n'
+            'mode="$1"; shift\n'
+            'if [ "$mode" = --checks-only ]; then\n'
+            f'  if [ ! -f {marker} ]; then touch {marker}\n'
+            f'    (cd {other} && git -c core.hooksPath=/dev/null commit -q --allow-empty -m "main moves during the baseline" '
+            f'&& git -c core.hooksPath=/dev/null push -q origin HEAD:main)\n'
+            '    git fetch -q origin main\n  fi\n'
+            '  echo "  [error] main is red here"; echo "! pre-push sbt FAILED (1s)"; exit 1\n'
+            'fi\n'
+            'base="$(git rev-parse origin/main)"\n'
+            'if [ -r "$PREPUSH_BASELINE_DIR/$base" ]; then echo "! pre-push sbt ok (1s)"; exit 0; fi\n'
+            'echo "  [error] main is red here"; echo "! pre-push sbt FAILED (1s)"; exit 1\n'))
+        os.chmod(os.path.join(self.r.path, "scripts/hooks/pre-push"), 0o755)
+        self.r.commit("a dry-run hook")
+        self.r.push()
+        other = os.path.join(self.tmp.name, "other")  # cloned after the hook is on main: its push is a fast-forward
+        sh(self.r.root, "git", "clone", "-q", self.r.bare, other)
+        self.r.write("f1.txt", "mine\n")
+        self.r.commit("mine")
+        rc, out = self.land("--follow")
+        self.assertIn("KNOWN RED", out)
+        self.assertNotIn("NOT LANDED", out, "the baseline was computed for another main than the one the hook looked up")
+        self.assertEqual(rc, 0, out)
+
     def race_hook(self):
         """The first push's hook lets another agent land first: our push then loses the race on the remote."""
         other = os.path.join(self.tmp.name, "other")
