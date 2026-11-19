@@ -135,13 +135,15 @@ class WaitingTest(Base):
         self.r.push()
         wt, sha = self.agent("net", "web/src/main/N.scala", "n\n")
         before = sh(self.r.root, "git", "--git-dir", self.r.bare, "rev-parse", "main")
+        outs = lambda: set(os.listdir(A.reds_dir("baseline-out"))) if os.path.isdir(A.reds_dir("baseline-out")) else set()  # noqa: E731
+        had = outs()  # the worker's state root outlives a test: another land test's baseline may be there already
         rc, out = self.land(wt)
         self.assertEqual(rc, 0, out)
         self.assertNotIn("KNOWN RED", out)
         self.assertRegex(out, r"QUEUED \S+ \([0-9a-f]{10}\): infra, not a known red")
         assert_queued_line_names_no_verdict(self, out)
         self.assertFalse(os.path.exists(A.reds_dir("local.json")), "a network failure is never main's known red")
-        self.assertFalse(os.listdir(A.reds_dir("baseline-out")) if os.path.isdir(A.reds_dir("baseline-out")) else [])
+        self.assertEqual(outs() - had, set(), "no baseline of a network failure")
         (e,) = self.entries().values()
         self.assertEqual((e["status"], e["head"], e["infra_reason"], e["infra_same"]),
                          ("queued", sha, A.NETWORK_REASON, 1))
