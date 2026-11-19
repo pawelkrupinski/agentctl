@@ -234,7 +234,8 @@ def cmd_status(a):
         return status_page_open()
     t = time.time()
     h = status_header(t, probes=False)
-    print(h["line"] if a.line else render_status(h, t))
+    standby = None if on_ci_runner() else laptop_role_standby()  # ONE MACHINE HOLDS THE LAPTOP ROLE
+    print((f"STANDBY: {standby}\n" if standby and not a.line else "") + (h["line"] if a.line else render_status(h, t)))
     return 0
 
 

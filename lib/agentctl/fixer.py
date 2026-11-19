@@ -240,6 +240,9 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
     """Start a headless fixer for red u under its taken lease: a fresh worktree <clone>-wt-red-<run> off origin/main
     (resume: the same worktree and session), then a detached `agentctl red fixer` that runs `claude -p` there, renews
     the lease by its progress, and releases it with its verdict. (ok, message)."""
+    standby = None if on_ci_runner() else laptop_role_standby(store)
+    if standby:  # ONE MACHINE HOLDS THE LAPTOP ROLE (server.py): a standby machine starts no fixer
+        return False, f"NOT DISPATCHED: {standby}"
     num = u["run"].get("number")
     o_r = u.get("repo") or o_r
     d = reds_dir(red_repo_tag(o_r, num))

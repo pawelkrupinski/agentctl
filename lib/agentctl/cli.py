@@ -236,6 +236,9 @@ def main(argv=None):
                                        "`agentctl suite` = python3 tests/run.py (parallel, a timeout per test)")
     sui.add_argument("args", nargs=argparse.REMAINDER, help="tests/run.py's arguments (-j N, --timeout S, PATTERN...)")
     gev.add_argument("--dry-run", action="store_true")
+    lap = sub.add_parser("laptop", help="the laptop role (ONE machine holds it): `laptop status`, `laptop take [--yes]`")
+    lap.add_argument("lcmd", choices=("status", "take"))
+    lap.add_argument("--yes", action="store_true", help="take it without asking (it is held by another machine)")
     ls_ = sub.add_parser("lease", help="the store's leases (debugging): `lease list [prefix]`")
     ls_.add_argument("lcmd", choices=("list",))
     ls_.add_argument("prefix", nargs="?", default="")
@@ -395,6 +398,6 @@ def main(argv=None):
     cf.add_argument("--write", action="store_true", help="doc: regenerate AGENTCTL.md's config reference")
     a = ap.parse_args(argv)
     handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": cmd_red, "decide": cmd_decide, "config": cmd_config, "issue": cmd_issue, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "github-app": cmd_github_app, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "park": cmd_park, "unpark": cmd_unpark, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "land-precheck": cmd_land_precheck, "env": cmd_env}[a.cmd]
+               "red": cmd_red, "decide": cmd_decide, "config": cmd_config, "issue": cmd_issue, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "laptop": cmd_laptop, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "github-app": cmd_github_app, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "park": cmd_park, "unpark": cmd_unpark, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "land-precheck": cmd_land_precheck, "env": cmd_env}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)

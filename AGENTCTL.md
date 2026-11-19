@@ -305,6 +305,25 @@ Each process has one of TWO roles (owner decision 7: one writer, no laptop stand
   http://localhost:3014), so every command works unchanged. With the store down `land` prints `QUEUED-LOCAL` and the
   sync submits it later.
 
+#### laptop: ONE machine holds the laptop role (2026-11-19)
+
+`agentctl laptop status` / `agentctl laptop take [--yes]`. The laptop role is the store lease `role/laptop`, held by
+`role:<host>:<machine id>` (macOS IOPlatformUUID; `$AGENTCTL_MACHINE_ID` / `$AGENTCTL_HOSTNAME` override) and renewed
+by the sync loop's first step every pass. A machine finding it held by another live holder is STANDBY: its sync loop
+skips every laptop duty (notifier, alerts, claims and the orphan reaper, dispatcher, pins, drift explorer),
+`red_dispatch` answers `NOT DISPATCHED: laptop role held by <host> since <t>; this machine is standby`, an owner wrapper
+does not start, `agentctl status` leads with `STANDBY: ...`, and its owner is told once per holder in its inbox
+(`LAPTOP STANDBY`). Its own worktrees' steps (outbox, landed worktrees, the local queue) go on. The STORE enforces it
+too: while the role is held, an `acquire` or `take` of a `laptop:` lease from a client whose `X-Agentctl-Role` header is
+not the holder (or names none: an agentctl from before the role) is refused with 409 `Standby`. A holder silent past
+`LAPTOP_ROLE_TTL` (10 min) is taken over by the next machine that asks; its holder has no `laptop:` prefix, so the
+laptop's contact pause never keeps a dead machine's role. `take` revokes a live holder's lease (asking first; `--yes`
+without a terminal). Why: on 2026-11-18 23:41Z a second Mac, `pawel-mbp` (its store tunnel key
+`store-tunnel@pawel-mbp`), dispatched fixer red-0c8eea91b712-1 for core #1053 while Pawes-MacBook-Pro-2 ran the
+laptop's duties; each revoked the other's "orphans" (a pid not among its own processes) into a crash loop. The `laptop:`
+holder names of fixers, owners and claims are kept: with one role holder they name one machine (their meta carries
+`host`).
+
 There is no laptop store any more (`store use --local`, `store import` and the laptop's own tick were removed
 2026-10-29, docs/simplification-2026-10.md item 2). Disaster recovery needs no laptop copy: ci-runner keeps 24 hourly
 backups (`agentctl-store-backup`), and a lost store.db is rebuilt from the land/* refs and GitHub's runs (design §16).
@@ -2260,6 +2279,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `gov_free_need_gb` | `AGENTCTL_GOV_FREE_NEED_GB` | `2.5` | free memory a new JVM needs NOW (beyond the reserve); its heap grows into the budget's share later |
 | `gov_poll` | `AGENTCTL_GOV_POLL` | `2.0` | - |
 | `gov_reserve_gb` | `AGENTCTL_GOV_RESERVE_GB` | `1.0` | - |
+| `hostname` | `AGENTCTL_HOSTNAME` | - | - |
 | `identity` | `AGENTCTL_IDENTITY` | - | - |
 | `inbox_dir` | `AGENTCTL_INBOX_DIR` | - | - |
 | `inbox_poll` | `AGENTCTL_INBOX_POLL` | `1.0` | seconds between stat()s of the inbox directory |
@@ -2279,6 +2299,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `laptop_free_pct` | `AGENTCTL_LAPTOP_FREE_PCT` | `20` | holds other work while macOS's memory free % is under this |
 | `laptop_load` | `AGENTCTL_LAPTOP_LOAD` | `2.0` | holds other work while the 1-min load is over this x the cores |
 | `laptop_pressure_level` | `AGENTCTL_LAPTOP_PRESSURE_LEVEL` | `2` | holds other work at this kernel pressure level or over (1 normal, 2 warn, 4 critical) |
+| `laptop_role_ttl` | `AGENTCTL_LAPTOP_ROLE_TTL` | `600` | s a silent holder keeps the role |
 | `laptop_swap_growth_mb` | `AGENTCTL_LAPTOP_SWAP_GROWTH_MB` | `1024` | holds other work while swap grew this much (MB) within LAPTOP_SWAP_WINDOW |
 | `laptop_swap_window` | `AGENTCTL_LAPTOP_SWAP_WINDOW` | `600` | seconds of swap samples the growth is read over |
 | `launch_agents` | `AGENTCTL_LAUNCH_AGENTS` | - | - |
@@ -2287,6 +2308,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `log_rotate_keep` | `AGENTCTL_LOG_ROTATE_KEEP` | `3` | rotated parts kept per log (<log>.1 newest .. <log>.N oldest) |
 | `log_rotate_max` | `AGENTCTL_LOG_ROTATE_MAX` | `10485760` | bytes over which an agentctl log is rotated (copy-truncate; its newest part kept as .1) |
 | `machine` | `AGENTCTL_MACHINE` | - | - |
+| `machine_id` | `AGENTCTL_MACHINE_ID` | - | - |
 | `max_checks` | `AGENTCTL_MAX_CHECKS` | - | - |
 | `max_foreign` | `AGENTCTL_MAX_FOREIGN` | `2` | files a push may revert to an older main before prepush-check refuses |
 | `min_interval` | `AGENTCTL_MIN_INTERVAL` | `60` | - |

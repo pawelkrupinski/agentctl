@@ -219,6 +219,10 @@ def red_owner(a):
     wt = rec.get("worktree")
     me = os.getpid()
     st = CurrentStore()
+    standby = laptop_role_standby(st)
+    if standby:  # ONE MACHINE HOLDS THE LAPTOP ROLE (server.py): a standby machine runs no owner
+        print(f"RED OWNER {fam}: NOT STARTED ({standby})")
+        return 0
     holder = owner_holder(fam)
     hb = st.acquire(owner_lease(fam), holder, OWNER_TTL, OWNER_MAX, progress=f"beat {int(time.time())}",
                     meta={"kind": "owner", "family": fam, "worktree": wt, "pid": me, "notebook": rec.get("notebook"),
