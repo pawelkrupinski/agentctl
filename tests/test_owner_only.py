@@ -138,6 +138,50 @@ class LanePolicyTest(OwnerOnlyBase):
         self.assertIn("rule: scripts/ci/lane-policy.tsv", told[0])
 
 
+class OwnerAsksSnapshotTest(OwnerOnlyBase):
+    """THE OWNER'S PENDING DECISIONS, structured (ask.py owner_asks): state.json `asks` carries each told owner ask --
+    what the movies owner-decisions hook reads, never inbox text. 2026-11-19: an open agentctl issue QUOTING a red's
+    "WAITING ON YOU: either design and measure..." was put to the owner as a pending decision."""
+
+    def test_a_told_owner_ask_is_in_the_snapshot_with_its_category_and_command(self):
+        it, _acts = self.launch(self.core_red(), outcome="BLOCKED ON OWNER: ! secrets unlock bitcashier")
+        A.red_owner_reminders(self.st, self.t[0])
+        A.write_snapshot({}, self.st)
+        asks = A.state_read()["asks"]
+        self.assertEqual(len(asks), 1, asks)
+        self.assertEqual((asks[0]["category"], asks[0]["keys"]), ("vault", [it["data"]["key"]]))
+        self.assertIn("decide vault-bitcashier", asks[0]["how"])
+        self.st.revoke("block/cause/vault-bitcashier", "LIFTED")
+        A.write_snapshot({}, self.st)
+        self.assertEqual(A.state_read()["asks"], [], "a lapsed block is no pending decision")
+
+    def test_an_issue_quoting_waiting_on_you_and_an_uncategorised_block_are_no_asks(self):
+        A.issue_open(self.st, "a red's verdict: WAITING ON YOU: either design and measure X -- "
+                              "`! ~/bin/agentctl decide c494fec65b9d \"<your answer>\"`", "test")
+        it = self.core_red(key="old-decision")
+        self.st.acquire(A.block_lease("old-decision"), "owner:x", A.BLOCK_TTL, A.BLOCK_MAX, progress="p",
+                        meta={"kind": "block", "keys": ["old-decision"], "text": "BLOCKED ON OWNER",
+                              "decision": True, "cause": A.DECISION_CAUSE, "decide": "x?"})
+        A.red_move(self.st, it, "blocked-external", "blocked", data={"block": A.block_lease("old-decision"),
+                                                                     "ask": {"q": "x?", "n": 1}})
+        A.write_snapshot({}, self.st)
+        self.assertEqual(A.state_read()["asks"], [])
+
+    def test_a_held_question_is_not_the_owners_yet(self):
+        it = self.core_red(key="held")
+        self.st.acquire(A.block_lease("held"), "owner:x", A.BLOCK_TTL, A.BLOCK_MAX, progress="p",
+                        meta={"kind": "block", "keys": ["held"], "text": "BLOCKED ON OWNER", "decision": True,
+                              "cause": A.DECISION_CAUSE, "category": "irreversible",
+                              "decide": "force-push main?"})
+        it = A.red_move(self.st, it, "blocked-external", "blocked", data={"block": A.block_lease("held")})
+        A.red_ask_mark(self.st, self.st.item("red", it["id"]), self.t[0], told=False)
+        A.write_snapshot({}, self.st)
+        self.assertEqual(A.state_read()["asks"], [])
+        A.red_ask_mark(self.st, self.st.item("red", it["id"]), self.t[0], told=True)
+        A.write_snapshot({}, self.st)
+        self.assertEqual([a["category"] for a in A.state_read()["asks"]], ["irreversible"])
+
+
 class StaleVaultAskTest(OwnerOnlyBase):
     """Case 4. 00:09Z "decide vault-movies here", run later: "NOT DECIDED: no red waits on the movies vault". 03:01Z
     "decide vault-bitcashier here": "NOT DECIDED: ... held no red still waiting on it (released)" -- the decide revoked

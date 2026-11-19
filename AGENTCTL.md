@@ -149,7 +149,10 @@ moves it forward; nothing is a detached process that can die with its state in i
   severity into inbox entries (the format the orchestrator keys on); the notifier sends the escalations (one macOS
   notification each). Nothing in landing code writes the inbox directly.
 - **The snapshot.** `state.json` is the only source of `agentctl status --line` (the status line) and `ci-why
-  --cached`: no git, no GitHub at read time.
+  --cached`: no git, no GitHub at read time. Its `asks` are THE OWNER'S PENDING DECISIONS, structured (ask.py `owner_asks`): one row per
+  owner block whose question was told -- `{block, keys, reds, category, q, how, until, since}`, only an OWNER-ONLY
+  category -- which the movies `scripts/claude-hooks/owner-decisions` hook puts in front of the owner's sessions. Never
+  read a decision out of inbox text: an issue or a verdict may QUOTE "WAITING ON YOU".
 - **Fixers are visible.** Every red fixer is a Claude Code background session: `claude agents` lists them by name
   (`red fixer #2432 · convergence takes-drift-1 (germany)`, `orphan · movies-wt-proxy-park`); `claude attach | logs |
   stop <id>` work on them (see "red").

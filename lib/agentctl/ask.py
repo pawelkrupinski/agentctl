@@ -246,6 +246,31 @@ def red_owner_reminders(store, t):
     return out
 
 
+def owner_asks(store):
+    """THE OWNER'S PENDING DECISIONS, structured (state.json `asks`, written by every tick's snapshot): one row per
+    owner block whose question has been TOLD (n >= 1; a held question is not the owner's yet) -- {block, keys, reds,
+    category, q, how, until, since}. Read from the reds and their block leases, never from text: an inbox entry or an
+    issue QUOTING "WAITING ON YOU" is no decision (2026-11-19: the movies owner-decisions hook put an old issue's quote
+    of a red's question to the owner as a pending decision). Only an ask naming an OWNER_ONLY category (red_ask)."""
+    groups = {}
+    for it in store.items("red", ["blocked-external"]):
+        b = red_block_of(it, store)
+        ask = red_ask(it, b)
+        if ask:
+            groups.setdefault(b["name"], []).append((it, ask))
+    out = []
+    for name, members in sorted(groups.items()):
+        members.sort(key=lambda x: x[0]["id"])
+        if not any(int((m[0]["data"].get("ask") or {}).get("n") or 0) >= 1 for m in members):
+            continue
+        ask = members[0][1]
+        out.append({"block": name, "keys": [m[0]["data"].get("key") for m in members],
+                    "reds": [red_what(m[0]["data"]) for m in members], "category": ask.get("category"),
+                    "q": ask["q"], "how": ask["how"], "until": ask.get("until"),
+                    "since": min(float(m[0]["entered_at"]) for m in members)})
+    return out
+
+
 def red_decision_failed(store, it, upd, why, t):
     """The owner's decided action failed. Back on the owner only when the failure is itself owner-only: a DIAGNOSED
     naming its own owner-only `decide[<category>]`, or a NOT LANDED / GAVE UP of a decision asked in an owner-only
