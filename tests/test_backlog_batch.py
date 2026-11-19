@@ -5,7 +5,7 @@ non-identity changes that no checker has taken are assembled into ONE batch and 
 record (the batch's id and size); fail, bisected by prefix, the culprit confirmed before it is rejected, the passing
 prefix landed at once, the rest queued again. Identity changes (the hook's `identity` area, G5's identity-model globs),
 a change landed with --no-batch and a red fix are checked alone, beside the batch."""
-import json, os, sys, unittest
+import json, os, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -398,6 +398,43 @@ class OverlapTest(BacklogBatchTest):
         self.assertEqual(e["status"], "landed", "checked once, on top of the older one: no recheck")
         self.assertFalse(e.get("rounds"), "no second round")
         self.assertEqual(len(self.calls_of("--range")), 2, "one check each")
+
+    def test_overlap_held_changes_wait_quietly_naming_their_blocker_and_file(self):
+        """2026-11-19 02:43-03:14Z: phase3-f2 (held behind phase3-agreement on coupling-baseline.tsv) and
+        phase3-enrichment2 (an identity change, held behind f2 on TestWiring.scala) each escalated to the owner every
+        15 min, "queued for 45 min, waiting on a check slot". A legitimate hold is a quiet wait that names itself."""
+        self.r.write("web/src/main/TestWiring.scala", "".join(f"wire {i}\n" for i in range(1, 11)))
+        self.r.commit("the test wiring")
+        self.r.push()
+        ea = self.edit("agreement", "web/src/main/Ten.scala", 0, "agreement's line", extra="identity/src/main/I.scala")
+        ef = self.edit("f2", "web/src/main/Ten.scala", 9, "f2's line", extra="web/src/main/TestWiring.scala")
+        wt = self.r.worktree("wt-e2", branch="e2")  # the identity change, sharing TestWiring.scala with f2
+        self.r.write("web/src/main/TestWiring.scala", "e2\n", at=wt)
+        self.r.write("identity/src/main/E.scala", "e2\n", at=wt)
+        self.r.commit("e2", at=wt)
+        ee = self.queued(wt)[0]
+        A.tick_changes(self.r.path, self.d)
+        self.assertEqual(self.started, [ea])
+        A.tick_changes(self.r.path, self.d, now_=time.time() + 16 * 60)  # each past its 15-min deadline
+        st = A.Store()
+        for eid, blocker, path in ((ef, ea, "web/src/main/Ten.scala"), (ee, ef, "web/src/main/TestWiring.scala")):
+            it = st.item("change", eid)
+            self.assertEqual((it["state"], it["level"]), ("queued", 0), "a held wait is never a level up")
+            hold = it["data"]["hold"]
+            self.assertEqual((hold["kind"], hold["blocker"]), ("overlap", blocker))
+            self.assertIn(path, hold["why"])
+            evs = st.item_events("change", eid)
+            self.assertEqual([e for e in evs if e["severity"] == "escalate"], [], "nothing reaches the owner")
+            lap = [e for e in evs if "queued for" in str(e.get("text"))]
+            self.assertTrue(lap and f"held: its check waits for {blocker}" in lap[-1]["text"], lap)
+            self.assertNotIn("a check slot", lap[-1]["text"])
+            row = next(r for r in A.change_rows(st) if r["id"] == eid)
+            self.assertIn(f"waits for {blocker}", row["hold"], "land status names the real hold")
+        self.assertIsNone(A.change_hold_stuck(st, st.item("change", ef)["data"]["hold"], st.item("change", ef),
+                                              time.time()))
+        it = st.item("change", ee)
+        self.assertIn("nothing holds it", A.change_hold_stuck(st, None, it, time.time()))
+        self.assertIn("held for over", A.change_hold_stuck(st, it["data"]["hold"], it, time.time() + 7 * 3600))
 
     def test_two_queued_changes_sharing_a_file_that_assemble_go_in_one_backlog_batch(self):
         ea = self.edit("a", "web/src/main/Ten.scala", 0, "a's line 1")

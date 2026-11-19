@@ -1178,6 +1178,7 @@ def change_rows(store=None):
     by id, as {id, state, worktree, head, deadline, level, since (submitted)}."""
     rows = [{"id": i["id"], "state": i["state"], "worktree": (i.get("data") or {}).get("worktree"),
              "head": (i.get("data") or {}).get("head"), "deadline": i["deadline"], "level": i["level"],
+             "hold": ((i.get("data") or {}).get("hold") or {}).get("why") if i["state"] == "queued" else None,
              "since": float((i.get("data") or {}).get("submitted_at") or i.get("entered_at") or 0)}
             for i in (store or Store()).items("change") if not machine_state("change", i["state"]).terminal]
     return sorted(rows, key=lambda r: r["id"])
@@ -1746,11 +1747,15 @@ def _tick_changes_pass(repo, d, st, t, reds, phase, mine, todo, held, pheld, bat
             requeue_infra(d, e, "its check passed its deadline with no live checker")
             did.append(f"{e['id']}: re-queued (checking past its deadline)")
             continue
-        if state == "queued" and t > it["deadline"]:  # waits past its deadline: said, re-deadlined (an escalation)
+        if state == "queued" and t > it["deadline"]:  # waits past its deadline: said, re-deadlined -- an escalation
+            # only when its hold is stuck (A HELD WAIT IS NO ESCALATION, below)
+            hold = change_hold_now(it, e, t)
+            stuck = change_hold_stuck(st, hold, it, t)
             st.transition("change", e["id"], "queued", it["version"],
-                          event={"text": f"{e['id']}: queued for {fmt_age(t - it['entered_at'])}, waiting on "
-                                         f"{e.get('waiting_on') or 'a check slot' if not e.get('retry_after', 0) > t else 'its retry'}",
-                                 "audience": {"worktree": e.get("worktree")}})
+                          event={"text": f"{e['id']}: queued for {fmt_age(t - it['entered_at'])}, "
+                                         + (f"held: {hold['why']}" if hold else "nothing holds it")
+                                         + (f" -- STUCK: {stuck}" if stuck else ""),
+                                 "audience": {"worktree": e.get("worktree")}, **({} if stuck else {"severity": "info"})})
         if state == "queued" and not alive:
             gone = main_conflict(repo, e)
             if gone:  # it no longer applies on main itself: said now, never after a wait for a tree or an older change
@@ -1765,33 +1770,44 @@ def _tick_changes_pass(repo, d, st, t, reds, phase, mine, todo, held, pheld, bat
                 hold = None
             if hold:  # OVERLAPPING CHANGES ARE CHECKED AS ONE (below)
                 did += hold_for_overlap(st, d, e, *hold)
+                o, shared = hold[0], hold[1]
+                note_hold(st, e, "overlap", f"its check waits for {o['id']} ({o.get('status')}): both change "
+                          f"{', '.join(shared[:3])}" + (f" (+{len(shared) - 3} more)" if len(shared) > 3 else ""), t,
+                          blocker=o["id"], files=shared[:10])
                 continue
         if alive or e.get("retry_after", 0) > t:
             continue
         first = None if fix else batch_goes_first(st, d, ("assembling", "pushing"))
         if first:  # the next free check tree is the batch's: to assemble it, or to push from its own tree
             did += behind_batch(e, first, "check")
+            note_hold(st, e, "batch", f"its check waits for batch {first['id']} ({first['state']})", t,
+                      batch=first["id"])
             continue
         if not fix and e["id"] in pheld:  # THE PUSH BATCH verifies it with others
             if not _behind_said.get((e["id"], "push batch")):
                 _behind_said[(e["id"], "push batch")] = True
                 did.append(f"{e['id']}: its verify round waits for the next push batch")
+            note_hold(st, e, "push-batch", "its verify round waits for the next push batch", t)
             continue
         if not fix and e["id"] in held:  # THE BACKLOG BATCH checks it with others
             if not _behind_said.get((e["id"], "backlog")):
                 _behind_said[(e["id"], "backlog")] = True
                 did.append(f"{e['id']}: its check waits for the next backlog batch")
+            note_hold(st, e, "backlog-batch", "its check waits for the next backlog batch", t)
             continue
         slot = check_tree_slot(repo, d, fix=fix)
         if not slot:
+            note_hold(st, e, "trees", "every check tree is busy (a check slot)", t)
             continue
         if not fix and batch_seq is not None and batch_seq < e["seq"] and not check_tree_slot_free(repo, d):
             slot[1].release()  # AGE ORDER: the last free tree is the older changes' batch's
             if not _behind_said.get((e["id"], "older batch")):
                 _behind_said[(e["id"], "older batch")] = True
                 did.append(f"{e['id']}: its check waits: the last free tree goes to the older changes' batch")
+            note_hold(st, e, "older-batch", "the last free check tree goes to the older changes' batch", t)
             continue
         slot[1].release()  # the executor takes it again itself
+        note_hold(st, e, None, None, t)
         spawn_executor(repo, d, e["id"])
         did.append(f"{e['id']}: executor started")
     return did
@@ -1875,6 +1891,57 @@ def overlap_hold(repo, d, e, entries, reds, t):
             return o, shared, conflict
         first = first or (o, shared, conflict)
     return first
+
+
+# A HELD WAIT IS NO ESCALATION (2026-11-19: phase3-agreement, -f2 and -enrichment2 each escalated to the owner every
+# 15 min -- "queued for 45 min, waiting on a check slot" -- while each was held behind an older change it overlaps:
+# F2 behind agreement on coupling-baseline.tsv, E2 behind F2 on TestWiring.scala). `queued`'s deadline loops into
+# itself, and every lap raised the level and notified. Now each tick records WHY a queued change waits on its item
+# (`hold`: the overlap and its blocking change and files, the batch, every check tree busy, the governor) -- `land
+# status` and `status` show it -- and a lap past the deadline is QUIET while that hold is live: its blocker still in
+# flight (whose own machine escalates should IT stick), a batch or busy trees (their holders' deadlines bound them).
+# It escalates only when the hold is stuck: nothing named holds it, its blocking change is gone, or it is older than
+# CHANGE_HOLD_MAX (the `waiting` state's own bound).
+CHANGE_HOLD_MAX = 6 * 3600  # s ($AGENTCTL_CHANGE_HOLD_MAX)
+
+
+def note_hold(st, e, kind, why, t, blocker=None, files=None, batch=None):
+    """Record why queued change e waits (None: nothing holds it now), on its item, when that changed."""
+    it = st.item("change", e["id"])
+    if not it or machine_state("change", it["state"]).terminal:
+        return
+    cur = (it.get("data") or {}).get("hold") or {}
+    if (cur.get("why") or None) == why:
+        return
+    rec = None if not why else {"kind": kind, "why": why, "blocker": blocker, "files": files, "batch": batch,
+                                "since": cur.get("since") if cur.get("kind") == kind and cur.get("blocker") == blocker
+                                else t}
+    try:
+        st.update_item("change", e["id"], it["version"], {"hold": rec})
+    except StaleVersion:
+        pass  # the next tick records it
+
+
+def change_hold_now(it, e, t):
+    """The hold a queued change waits on now: its recorded one, its retry, or the governor's slot; None: nothing."""
+    if e.get("retry_after", 0) > t:
+        return {"kind": "retry", "why": "its retry (an infra failure of its last check)"}
+    if e.get("waiting_on"):
+        return {"kind": "governor", "why": f"waiting on {e['waiting_on']}"}
+    return (it.get("data") or {}).get("hold")
+
+
+def change_hold_stuck(st, hold, it, t):
+    """Why a queued change's hold is stuck (an escalation), or None (a legitimate wait: quiet)."""
+    if not hold:
+        return "nothing holds it, yet it has not started"
+    if t - float(it.get("entered_at") or t) > env_num("AGENTCTL_CHANGE_HOLD_MAX", CHANGE_HOLD_MAX):
+        return f"held for over {fmt_age(env_num('AGENTCTL_CHANGE_HOLD_MAX', CHANGE_HOLD_MAX))}"
+    if hold.get("blocker"):
+        b = st.item("change", hold["blocker"])
+        if b is None or machine_state("change", b["state"]).terminal:
+            return f"its blocking change {hold['blocker']} is {'gone' if b is None else b['state']}"
+    return None
 
 
 def hold_for_overlap(st, d, e, o, shared, conflict, waits=True):

@@ -217,7 +217,8 @@ def render_status(h, t):
         rows = h["items"][key]
         out.append(f"{key}: {len(rows)}")
         out += [f"  {r['id']}  {r['state']}  deadline in {int((r['deadline'] - t) // 60)} min"
-                + (f"  (level {r['level']})" if r.get("level") else "") for r in rows]
+                + (f"  (level {r['level']})" if r.get("level") else "")
+                + (f"  held: {r['hold']}" if r.get("hold") else "") for r in rows]
     try:  # parked worktrees: shown once here, never escalated (watchdog.py, PARKED)
         out += parked_lines()
     except (Exception, SystemExit) as e:
@@ -672,6 +673,7 @@ def status_landing(st, t):
                 "past_deadline": it["deadline"] < t, "level": it.get("level"), "worktree": d.get("worktree"),
                 "branch": d.get("branch"), "head": str(d.get("head") or "")[:10] or None,
                 "submitted_at": d.get("submitted_at"), "why": d.get("why") or d.get("reason"),
+                "hold": (d.get("hold") or {}).get("why") if it["state"] == "queued" else None,
                 "changes": d.get("changes") or d.get("entries")}
     return {"changes": [row(it) for it in st.items("change", list(STATUS_CHANGE_OPEN))],
             "batch": [row(it) for it in st.items("batch", list(STATUS_BATCH_OPEN))],

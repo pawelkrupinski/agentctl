@@ -994,7 +994,9 @@ def write_snapshot(d, store=None):
     st = store or Store()
     open_ = lambda typ: [i for i in st.items(typ) if typ in MACHINES and not machine_state(typ, i["state"]).terminal]
     brief = lambda i: {"id": i["id"], "state": i["state"], "deadline": i["deadline"], "level": i["level"],
-                       "worktree": (i["data"] or {}).get("worktree")}
+                       "worktree": (i["data"] or {}).get("worktree"),
+                       **({"hold": ((i["data"] or {}).get("hold") or {}).get("why")}
+                          if i["state"] == "queued" and (i["data"] or {}).get("hold") else {})}
     rows = change_rows(st)  # ONE QUEUE: the store's items, never a host's entry files
     state_update(tick_at=time.time(), version=code_version(), rev=start_rev(),
                  changes=[brief(i) for i in open_("change")], batch=[brief(i) for i in open_("batch")],
@@ -1318,6 +1320,7 @@ def cmd_waiting(a):
             left = int(r["deadline"] - time.time())
             print(f"  {r['id']}  {r['state']}  {r['worktree']}  {str(r['head'] or '')[:10]}  deadline in {left // 60} min"
                   + (f"  (in batch {bt['id']}: {bt['state']})" if r["id"] in in_batch else "")
+                  + (f"  held: {r['hold']}" if r.get("hold") else "")
                   + (f"  PAST ITS DEADLINE (level {r['level']})" if left < 0 else ""))
         prog = read_json_file(batch_progress_path(d)) if host_role() == "server" else {}
         if prog.get("ticks"):
