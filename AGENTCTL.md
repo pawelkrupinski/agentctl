@@ -415,8 +415,10 @@ note`), read like `red-workflows.tsv` -- from the clone, else GitHub's contents 
 keeps no list: `gate_flows`, named by main's workflow files); `red-repos.json` gives movies no `gate`. A red gate run
 whose failed jobs are all `unproven` rows (aggregates aside) -- or any red of an `unproven` workflow row -- is REPORT
 ONLY: `Main: RED, REPORT ONLY (...) -- holds no push`, no entry in `gate_reds`, its reds tracked outside the gate. A
-proven row's red gates. One deliberate difference from the hook: a failed job with no row at all gates here (the lint
-keeps every job in a row; an unknown never passes). Verify scrape recording no longer gates. For each, it takes the newest decided run on main
+proven row's red gates. A failed job with NO row is unproven, exactly as the hook reads it (movies' rule: a new check
+gates only once it has been green); its `why` -- in ci-why's REPORT ONLY line and the log -- names it: `no row in
+.github/gating-checks.tsv: <job> (read as unproven -- add its row)`, since the registry's lint wants a row for every
+gate job. Verify scrape recording no longer gates. For each, it takes the newest decided run on main
 (success or failure; cancelled and skipped runs are passed over). A gate workflow whose file is not on main yet
 (GitHub's `HTTP 404: workflow ... not found on the default branch`) has no run there and decides nothing -- never an
 unread gate; any other read error still is one (2026-11-08: agentctl's gate list named identity-takes.yml before its file landed,

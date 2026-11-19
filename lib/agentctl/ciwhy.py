@@ -133,9 +133,9 @@ def registry_name(name):
 
 def gate_report_only_jobs(rows, wfile, jobs):
     """(True, why) when every failed job of a red run of gate workflow wfile is unproven -- or an aggregate following
-    one -- and one is; or when wfile's own row is unproven (gating_checks.py report_only, the hook's rule). One
-    difference, on the safe side: a failed job with NO row gates here (the hook reads it as unproven) -- the registry's
-    lint keeps every gate job in a row, and agentctl never lets an unknown through."""
+    one -- and one is; or when wfile's own row is unproven: gating_checks.py report_only, the hook's rule exactly. A
+    failed job with NO row is unproven, as the hook reads it (movies' rule: a new check gates only once it has been
+    green), and `why` names the missing row -- every gate job should have one (the registry's lint)."""
     wrow = next((r for r in rows if r["kind"] == "workflow" and r["workflow"] == wfile), None)
     if wrow and wrow["proven"] == "unproven":
         return True, f"report only: {wfile} is unproven ({wrow.get('note') or 'no green run yet'})"
@@ -143,14 +143,18 @@ def gate_report_only_jobs(rows, wfile, jobs):
     failed = [j.get("name") for j in jobs or [] if j.get("conclusion") in RED_CONCLUSIONS]
     if not failed:
         return False, "no failed job"
-    proven = {n: state.get(n, state.get(registry_name(n), "")) for n in failed}  # no row: it gates (below)
+    proven = {n: state.get(n, state.get(registry_name(n))) for n in failed}
+    missing = [n for n in failed if proven[n] is None]
+    proven = {n: p or "unproven" for n, p in proven.items()}
     unproven = [n for n in failed if proven[n] == "unproven"]
     gating = [n for n in failed if proven[n] not in ("unproven", "aggregate")]
+    said = (f"; no row in {GATING_CHECKS_FILE}: {', '.join(missing)} (read as unproven -- add its row)"
+            if missing else "")
     if gating:
-        return False, "gates: " + ", ".join(gating)
+        return False, "gates: " + ", ".join(gating) + said
     if not unproven:
         return False, "only aggregates failed: " + ", ".join(failed)
-    return True, "report only, unproven: " + ", ".join(unproven)
+    return True, "report only, unproven: " + ", ".join(unproven) + said
 
 
 def gate_report_only(o_r, name, run):
@@ -168,6 +172,8 @@ def gate_report_only(o_r, name, run):
     except (Exception, SystemExit) as e:  # SystemExit: NoToken
         return False, f"unread ({str(e)[:120]}): it gates"
     out = gate_report_only_jobs(rows, wfile, jobs)
+    if "no row in" in out[1] and rid not in _report_only_mem:  # said once per run: every gate job should have a row
+        err(f"{name} run {rid}: {out[1].split('; ', 1)[-1]}")
     if rid:
         _report_only_mem[rid] = out
     return out

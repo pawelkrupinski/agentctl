@@ -176,8 +176,19 @@ def seed_gating_checks():
                                                           "names": {f: n for f, n in GATE_WORKFLOW_FILES}}})
 GATE_WORKFLOW_FILES = (("main.yml", "Main"), ("identity-model-convergence.yml", "Identity model convergence"),
                        ("identity-takes.yml", "Identity takes"))
+# the gate jobs the suite's fixtures fail, each proven: a failed job with no row is unproven (report only), as the hook
+# reads it -- a fixture red meant to gate needs its row, as on movies' main
+GATE_FIXTURE_JOBS = {
+    "main.yml": ("Unit tests", "test", "test (rest)"),
+    "identity-model-convergence.yml": (
+        "a", "b", "ablate", "check", "preflight", "timings", "convergence (united-kingdom)", "leg (spain)",
+        "takes (poland)", "takes (united-kingdom)", "takes-drift-1 (poland)", "takes-drift-2 (germany)",
+        "takes-drift-2 (united-kingdom)"),
+    "identity-takes.yml": ("takes (poland)", "takes-drift-1 (poland)"),
+}
 GATING_CHECKS_TEMPLATE = "kind\tworkflow\tname\tproven\tnote\n" + "".join(
-    f"workflow\t{f}\t-\t1\tTHE GATE\n" for f, _n in GATE_WORKFLOW_FILES)
+    f"workflow\t{f}\t-\t1\tTHE GATE\n" for f, _n in GATE_WORKFLOW_FILES) + "".join(
+    f"job\t{f}\t{j}\t1\t\n" for f, jobs in GATE_FIXTURE_JOBS.items() for j in jobs)
 
 
 def _repo_template():

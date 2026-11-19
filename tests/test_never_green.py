@@ -140,6 +140,36 @@ class RegistryGateTest(RedsBase):
         red, text = A.ci_why(MOVIES, repo=self.r.path)
         self.assertTrue(red, text)
 
+    def test_a_job_with_no_row_is_unproven_as_the_hook_reads_it_and_ci_why_names_the_missing_row(self):
+        """movies' rule (CLAUDE.md): a new check gates only once it has been green; scripts/ci/gating_checks.py
+        report_only reads a failed job with no row as unproven. agentctl reads it the same way, and says the row is
+        missing (every gate job should have one: the registry's lint)."""
+        self.put("run-30.json", {"jobs": [{"name": "brand-new", "conclusion": "success"}], "status": "completed",
+                                 "conclusion": "success", "headSha": self.sha})
+        self.main_red(40, 20, job="brand-new")
+        self.registry("2722")  # rows for deps and test (rest); none for brand-new
+        report, why = A.gate_report_only(MOVIES, "Main", {"databaseId": 40, "conclusion": "failure"})
+        self.assertTrue(report, why)
+        self.assertIn("no row in .github/gating-checks.tsv: brand-new", why)
+        self.assertEqual(self.gate_reds(), set(), "the hook's verdict: report only, no push held")
+        A._gate_lists.clear()
+        red, text = A.ci_why(MOVIES, repo=self.r.path)
+        self.assertFalse(red, text)
+        self.assertIn("Main: RED, REPORT ONLY", text)
+        self.assertIn("no row in .github/gating-checks.tsv: brand-new", text)
+
+    def test_the_rows_verdicts_match_the_hooks_report_only(self):
+        rows = A.gating_checks_parse("job\tmain.yml\ta\t1\t\njob\tmain.yml\tagg\taggregate\t\n"
+                                     "job\tmain.yml\tnew\tunproven\towner\n")
+        f = lambda *names: A.gate_report_only_jobs(rows, "main.yml", [{"name": n, "conclusion": "failure"} for n in names])[0]
+        self.assertFalse(f("a"))
+        self.assertFalse(f("agg"), "only aggregates failed: it gates")
+        self.assertTrue(f("new"))
+        self.assertTrue(f("new", "agg"))
+        self.assertTrue(f("missing"), "no row: unproven, as the hook reads it")
+        self.assertTrue(f("missing", "agg"))
+        self.assertFalse(f("missing", "a"), "a proven row's failure gates")
+
     def test_the_gate_workflows_are_the_registrys_rows_and_an_unread_registry_is_red(self):
         self.assertEqual([f for _n, f in A.gate_flows(MOVIES)],
                          ["main.yml", "identity-model-convergence.yml", "identity-takes.yml"])
