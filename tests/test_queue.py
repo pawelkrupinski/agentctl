@@ -1008,6 +1008,24 @@ class FastPrecheckTest(QueueTest):
         self.assertRegex(verdicts[0]["verdict"], rf"^NOT LANDED: the fast precheck refused {eid}.*PRECHECK FAIL: lints")
         self.assertIn("precheck lints FAIL (3 s)", verdicts[0]["tail"])
 
+    def test_a_refusing_steps_own_reason_is_in_the_not_landed_line(self):
+        """ISSUE 20261116T225455-04c3c1: the NOT LANDED line named only `PRECHECK FAIL: rules` while the rule's refusal
+        (commit_rules.py: the commit and why) sat in the step's detail lines: the fixer re-ran the rule to learn why."""
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        self.r.write("scripts/land-precheck", "#!/bin/sh\necho 'precheck rebase PASS (0 s)'\n"
+                     "echo 'precheck rules FAIL (0 s)'\n"
+                     "echo '    driftguards: 1a2b3c4d5e fixes a drift/flip red but the push commits no drift slice'\n"
+                     "echo '    ! blocked by: driftguards (0s). Fix, or bypass'\n"
+                     "echo 'PRECHECK FAIL: rules (0 s)'\nexit 1\n", at=wt)
+        os.chmod(os.path.join(wt, "scripts/land-precheck"), 0o755)
+        self.r.commit("a: precheck", at=wt)
+        self.queued(wt)
+        rc, out = self.run_spawned(wt)
+        self.assertEqual(rc, 1, out)
+        [v] = [e["verdict"] for e in A.inbox_entries() if "fast precheck" in (e.get("verdict") or "")]
+        self.assertIn("PRECHECK FAIL: rules", v)
+        self.assertIn("fixes a drift/flip red but the push commits no drift slice", v)
+
     def test_a_refusal_after_the_change_landed_never_says_not_landed(self):
         """Review 2026-11-07: the precheck runs beside the queue, so the landing check can decide first. Its refusal
         then cancels nothing -- `land cancel` finds no open change -- and must not tell the author NOT LANDED (and

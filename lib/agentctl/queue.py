@@ -579,6 +579,28 @@ def note_precheck(eid, secs, rc, out, store=None, sleep=time.sleep):
     return False
 
 
+PRECHECK_STEP_FAIL = re.compile(r"^precheck (\S+) FAIL\b")
+PRECHECK_NOISE = re.compile(r"blocked by:|^!?\s*pre-push\S* \S+ (ok|FAILED)|^\W*$")
+
+
+def precheck_reason(lines):
+    """The refusing steps' own first reason lines (the detail the precheck indents under `precheck <step> FAIL`), for
+    the NOT LANDED line (issue 20261116T225455-04c3c1: it named only `PRECHECK FAIL: rules`)."""
+    out, step = [], None
+    for line in lines:
+        m = PRECHECK_STEP_FAIL.match(line)
+        if m:
+            step = m.group(1)
+            continue
+        if step and line.startswith((" ", "\t")):
+            text = line.strip()
+            if not PRECHECK_NOISE.search(text) and len(out) < 2:
+                out.append(f"{step}: {text}" if not text.startswith(f"{step}:") else text)
+        elif not line.startswith((" ", "\t")):
+            step = None
+    return "; ".join(out)[:400]
+
+
 def cmd_land_precheck(a):
     """The detached half of start_fast_precheck: run the repo's precheck, and on a refusal cancel the queued change."""
     # Its own process group, ended WHOLE at the bound (review 2026-11-07: subprocess.run killed only the script, so what
@@ -597,6 +619,8 @@ def cmd_land_precheck(a):
     if rc != 1:
         return 0
     last = next((l for l in reversed(lines) if l.startswith("PRECHECK ")), lines[-1] if lines else "exit 1")
+    why = precheck_reason(lines)
+    last = f"{last} -- {why}" if why else last
     cancel = argparse.Namespace(wcmd="cancel", repo=a.repo, entry=a.entry, renamed=True, hold_for=None, hold_why=None)
     # NOT LANDED only when the cancel took: the landing check runs alongside and may have decided first (review
     # 2026-11-07: a change that LANDED was told NOT LANDED, "its queue entry is cancelled").
