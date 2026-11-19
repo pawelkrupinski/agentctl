@@ -295,9 +295,17 @@ def content_twin(repo, c, main):
         if u == c:
             continue
         mine = changed_lines(repo, c) if mine is None else mine
-        if mine is not None and changed_lines(repo, u) == mine:
+        if mine is not None and inked_lines(changed_lines(repo, u)) == inked_lines(mine):
             return u
     return None
+
+
+def inked_lines(changed):
+    """changed_lines without its blank +/- lines (issue 20261104T002213-cc3b4a: a blank line moved in a doc hunk on the
+    way to main made a landed commit's twin unrecognised, and its worktree got an orphan fixer); None stays None."""
+    if changed is None:
+        return None
+    return {f: [l for l in lines if not (l[:1] in "+-" and not l[1:].strip())] for f, lines in changed.items()}
 
 
 def cherry_landed(repo, main, head="HEAD", *limit):

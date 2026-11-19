@@ -139,7 +139,6 @@ class ReOfferLoopTest(RedsBase):
 
 
 class OrphanByContentTest(RedBase):
-    @unittest.expectedFailure  # open issue 20261104T002213-cc3b4a: its fix lands with this mark removed
     def test_20261104T002213_cc3b4a_a_commit_landed_under_a_new_sha_differing_only_by_a_moved_blank_line_is_landed(self):
         # movies-wt-flip-pop: 4 of 5 commits were on main by subject, author and author date; a blank line had moved in
         # the doc hunk, so patch-ids differed AND content_twin's identical-+/- lines failed: an orphan fixer was sent
