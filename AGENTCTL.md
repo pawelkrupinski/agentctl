@@ -814,22 +814,36 @@ agent must be assigned to it".
   crash, an exit with no verdict line, a lease lost or expired without progress, a time-out, a start that never got
   going -- and that tier is not dispatched again: ONE escalation (`RED ESCALATE: ... CRASH LOOP ...`, each launch's
   outcome and log tail in it) moves the red up to the deep tier. When the deep tier crash-loops too (or it was already
-  there), the red is BLOCKED ON OWNER with cause `fixer-crash-loop` -- the one owner block a test red may hold, since
-  the fixers, not the code, fail -- and it clears itself: its probe passes when a newer decided run of the workflow no
-  longer fails this way (or is green), and it lapses after 24 h (`$AGENTCTL_RED_CRASH_BLOCK_MAX`), offered again with
-  the streak counted afresh. A launch with a result (LANDED, NOT LANDED, GAVE UP, BLOCKED ON OWNER, DIAGNOSED, a
+  there), it is a HARNESS FAULT (2026-11-19): agentctl's own bug, never the owner's. ONE agentctl issue per red
+  (`[harness-fault <key>]`, its maintainer's queue) and a harness block with cause `fixer-crash-loop` (holder
+  `harness:`, no owner ask: `red status` reads `HARNESS FAULT: agentctl issue <id>`) -- the one block a test red may
+  hold besides a decision, since the fixers, not the code, fail. It clears itself: its probe passes when a newer decided
+  run of the workflow no longer fails this way (or is green), the issue is closed, or it lapses after 24 h
+  (`$AGENTCTL_RED_CRASH_BLOCK_MAX`), offered again with the streak counted afresh. A launch with a result (LANDED, NOT LANDED, GAVE UP, BLOCKED ON OWNER, DIAGNOSED, a
   refuted fix) ends the streak; a release by hand is no launch. `$AGENTCTL_RED_CRASH_LOOP` (3). The block names the
   newest crash's log (an owner's wrapper log, else the fixer's transcript or worktree) and each launch's stop reason.
   A turn is read from its transcript: a background session whose process lives on after its turn (`blocked` / `idle`
   with a live pid) has ended it when its answer carries a verdict, or -- nothing of its own pending -- after
   `$AGENTCTL_BG_IDLE_GRACE` (60 s) of quiet; one waiting on its own backgrounded task (`agentctl wait`) is at work, and
   its lease is renewed by the wait.
-- **Owner decision.** `DIAGNOSED: <cause>; decide: <the decision>` -- or a second DIAGNOSED in a row on one red (lapses
-  between them skipped) -- puts the red on an owner block with cause `owner-decision` whose text carries the diagnosis
-  and the decision; never a crash. It clears itself like the crash-loop block (a newer run no longer failing this way,
+- **OWNER-ONLY CATEGORIES (ask.py `OWNER_ONLY`, 2026-11-19: "could any of these decision things could've been handled
+  automatically? fix structurally").** Only what no agent can do reaches the owner, and every ask names its category:
+  `vault` (Touch ID), `tty-trust` (a prompt needing his terminal), `money-credentials`, `irreversible`,
+  `publish-external`, `policy-no-rule` (a policy no checked-in rule answers, asked WITH the rule row to add: `rule:
+  <file>: <row>`). `red block --owner-cause` causes map to one (`OWNER_CAUSE_CATEGORY`). Every owner line reads `RED
+  BLOCKED ON OWNER [<category>]: ...`; tests/test_owner_only.py lints every source (each `owner:` block lease names its
+  `category`) and replays that night's six asks. An ask in no category is no ask (`red_ask` returns None) and at runtime
+  is ROUTED BACK (`red_ask_route`): the red is offered again, its diagnosis the fixer's words plus "NOT AN OWNER
+  QUESTION ... proceed under the standing rules and checked-in policies" (movies `scripts/ci/lane-policy.tsv` for a
+  ci-runner lane), counted as an attempt so the ladder climbs.
+- **Owner decision.** `DIAGNOSED: <cause>; decide[<category>]: <the decision>` (or a `GAVE UP: ... decide[<category>]:
+  ...`) puts the red on an owner block with cause `owner-decision` whose text carries the diagnosis, the decision and
+  its category; never a crash. A bare `decide:`, a `policy-no-rule` ask with no `rule:`, or a second DIAGNOSED in a row
+  is routed back instead (2026-11-19: Stage NixOS closures #102 and Record scrape fixtures #198 asked the owner lane
+  placements the lane policy answers). It clears itself like the crash-loop block (a newer run no longer failing this way,
   or 7 d, `$AGENTCTL_RED_DECISION_BLOCK_MAX`). The owner lifts either block at once with
   `agentctl red release <key> --any`: the red is offered again at the next tick.
-- **WAITING ON YOU (ask.py, 2026-11-03).** Every owner-blocked red (a decision, a fixer crash loop, a `red block
+- **WAITING ON YOU (ask.py, 2026-11-03).** Every owner-blocked red (a decision, a vault, a `red block
   --owner-cause --cmd`) carries its QUESTION: the status line and ci-why read `<red> → WAITING ON YOU: <question>`,
   never a bare `owner-decision down`. The tick tells the owner ONCE per block (one escalate event: one inbox entry of
   kind BLOCKED and one macOS notification on the laptop), then reminds by notification alone (no inbox entry) after
@@ -843,17 +857,29 @@ agent must be assigned to it".
   alone, so its red's work stops until he answers and it is told at once (`ask_blocks_work`). The owner answers with
   `agentctl decide <red key | run> "<answer>"` (`done` after running an asked command): stored on the red, the block
   lifted, the red reads `IN PROGRESS (decided: <answer>)` and is offered again, its fixer briefed with the answer (no
-  RED ESCALATE meanwhile). If the decided action fails (`NOT LANDED`, `GAVE UP`, `DIAGNOSED`, its fix change ended
-  unlanded) the red goes straight back to the owner: `WAITING ON YOU: you decided '<answer>'; the action failed:
-  <why>`. A block still clears itself by its probe (a newer run no longer failing this way), and its reminders with it.
+  RED ESCALATE meanwhile). If the decided action fails, the red goes back to the owner only when the failure is
+  itself owner-only: a `DIAGNOSED` naming its own `decide[<category>]`, or a `NOT LANDED` / `GAVE UP` of a decision
+  asked in an owner-only category (`WAITING ON YOU: you decided '<answer>'; the action failed: <why>`). A new ORDINARY
+  cause (2026-11-19, core #1053: the owner answered "852acad", then the fixer DIAGNOSED a plain test race) is routed
+  back to the fixer, the decision marked `done`: the standing rules decide it, never the owner again. A block still clears itself by its probe (a newer run no longer failing this way), and its reminders with it.
   `decide` on a red that has closed meanwhile answers `already resolved (red closed <when>, <state>)` and
-  acknowledges the alerts that asked it. A BLOCKED alert closes by itself once its red no longer waits on the owner
-  (resumed, decided, its fix landed).
+  acknowledges the alerts that asked it. AN ASK IS RETRACTED WITH ITS CONDITION: a BLOCKED alert closes by itself
+  once its red no longer waits on the owner (resumed, decided, its fix landed) OR its block no longer asks him (lapsed,
+  lifted -- 2026-11-19: `decide vault-movies here` run off a still-shown ask said "no red waits on the movies vault"),
+  the pass it happens; the owner-decisions hook and the status line drop it with it (a blocked-external red with no
+  block reads `re-offering`, never BLOCKED ON OWNER). ONE ENTRY PER ASK: an owner ask is keyed by its content too
+  (alerts.py `alert_ask_digest`), so the same question under another item merges into the live entry.
+- **Workspace trust is asked when a repo is registered (fixer.py `trust_asks`, 2026-11-19).** The laptop's sync checks
+  every red-repos.json clone's claude trust each pass; an untrusted one is ONE `[tty-trust]` owner ask (item
+  `trust:<path>`), asked once per gap, retracted once trusted -- never 21 minutes into a red, nor once per flap of its
+  offer reason (the dispatcher's NOT DISPATCHABLE stays on the offer, out of the inbox).
 - **A vault ask is ONE owner item per vault (2026-11-16, Order independence #77).** A fixer verdict whose one ask is
   `secrets unlock <ns>` (`BLOCKED ON OWNER: ...`, or a `DIAGNOSED: ...; decide: ...` naming it) puts the red, whatever
   its kind, on ONE lease per vault, `block/cause/vault-<ns>`: one WAITING ON YOU for every red it holds, carrying the
   one line that resumes them all: `! ~/bin/agentctl decide vault-<ns> "here"`. Each red is offered again as a decide
-  would; its fixer signs a probe (`git commit-tree -S HEAD^{tree} ...`) FIRST -- its own Touch ID prompt, which the
+  would -- RESUMED BEFORE the lease is released (2026-11-19 03:01Z, core #1053: revoking first let the tick's
+  invariant re-offer the red bare in the same second, and the decide said NOT DECIDED; a red the invariant re-offered
+  is resumed too); its fixer signs a probe (`git commit-tree -S HEAD^{tree} ...`) FIRST -- its own Touch ID prompt, which the
   owner answers while at the machine -- and ends `BLOCKED ON OWNER` at once if that fails (back on the vault's lease,
   told once again), never after a whole fix. NO UNLOCK RESUMES THEM BY ITSELF (review round 3, 2026-11-16): an unlock
   is pinned to ONE session anchor, the caller's nearest Claude Code ancestor, and signing asks Touch ID once per anchor
@@ -1231,6 +1257,16 @@ The reconciler then takes it, a step per tick:
   queued meanwhile joins the next one. Identity changes are checked alone beside it. The same machine as the red batch:
   batch.py `backlog_candidates`, `backlog_reconcile` (members follow their batch), the `depth` of `batch_check` /
   `bisect` (remote.py); tests: `tests/test_backlog_batch.py`.
+- **A HELD WAIT IS NO ESCALATION (2026-11-19: phase3-f2, held behind phase3-agreement on coupling-baseline.tsv, and
+  phase3-enrichment2, held behind f2 on TestWiring.scala, each escalated to the owner every 15 min as `queued for 45
+  min, waiting on a check slot`).** Each tick records WHY a queued change waits on its item (`hold`: `overlap` with its
+  blocking change and files, `batch`, `push-batch`, `backlog-batch`, `trees` (every check tree busy), `older-batch`;
+  `governor` and `retry` from its entry), and `land status` / `status` print it (`held: its check waits for <id>
+  (<state>): both change <file>`). A lap of `queued`'s 15-min deadline is a QUIET re-deadline (severity info, no level
+  up, no notification) while that hold is live; it escalates only when the hold is stuck (queue.py
+  `change_hold_stuck`): nothing named holds it, its blocking change is gone, or it is older than
+  `$AGENTCTL_CHANGE_HOLD_MAX` (6 h, the `waiting` state's own bound). The blocker's own machine escalates should IT
+  stick. Test: `tests/test_backlog_batch.py` OverlapTest `test_overlap_held_changes_wait_quietly...`.
 - **OVERLAPPING CHANGES ARE CHECKED AS ONE (2026-11-18: B1 against the CI-workflows change, the scraper catalog
   against the scrapers refactor, the cycle-breaking change against both -- each checked alone, then `NOT LANDED: the
   change no longer applies ... main moved during its checks`, a rebase and a full recheck).** A queued change sharing a
@@ -2135,6 +2171,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `brief_src` | `AGENTCTL_BRIEF_SRC` | - | a file to use instead of the tracked docs/fixer-brief.md in fixers' prompts (an override): none by default |
 | `cache_expire_days` | `AGENTCTL_CACHE_EXPIRE_DAYS` | `7` | - |
 | `caffeinate` | `AGENTCTL_CAFFEINATE` | `/usr/bin/caffeinate` | - |
+| `change_hold_max` | `AGENTCTL_CHANGE_HOLD_MAX` | `21600` | s |
 | `checks_dir` | `AGENTCTL_CHECKS_DIR` | - | - |
 | `check_lease_ttl` | `AGENTCTL_CHECK_LEASE_TTL` | `600` | - |
 | `check_trees` | `AGENTCTL_CHECK_TREES` | `4` | check trees, so at most this many queued changes are checked at once |

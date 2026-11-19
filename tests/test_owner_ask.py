@@ -10,7 +10,9 @@ sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
 from test_red_crash_loop import CrashLoopBase  # noqa: E402
 
-DIAG = "DIAGNOSED: the 2 Titans flips are resolver design; decide: baseline the 2 Titans flips, or change the resolver"
+RULE = "; rule: identity-flip-backlog.tsv: the 2 Titans flips, accepted"
+DIAG = ("DIAGNOSED: the 2 Titans flips are resolver design; decide[policy-no-rule]: baseline the 2 Titans flips, or "
+        "change the resolver" + RULE)
 O_R = "pawelkrupinski/movies"
 
 
@@ -105,7 +107,7 @@ class StaleBlockTest(AskBase):
 class QuestionShownTest(AskBase):
     def test_a_decision_block_reads_waiting_on_you_with_its_question_never_owner_decision_down(self):
         text, short = self.view(self.decision_blocked())
-        self.assertTrue(short.startswith("WAITING ON YOU: baseline the 2 Titans flips, or change the resolver -- answer:"), short)
+        self.assertTrue(short.startswith("WAITING ON YOU: baseline the 2 Titans flips, or change the resolver" + RULE + " -- answer:"), short)
         self.assertNotIn("owner-decision down", short)
         self.assertIn('agentctl decide k "<your answer>"', text)
 
@@ -116,7 +118,8 @@ class QuestionShownTest(AskBase):
     def test_ci_why_rows_carry_the_question(self):
         it = self.decision_blocked()
         blk = A.red_block_of(it, self.st)
-        self.assertEqual(A.red_ask(it, blk)["q"], "baseline the 2 Titans flips, or change the resolver")
+        self.assertEqual(A.red_ask(it, blk)["q"], "baseline the 2 Titans flips, or change the resolver" + RULE)
+        self.assertEqual(A.red_ask(it, blk)["category"], "policy-no-rule")
 
     def test_a_spent_quota_is_no_question_for_the_owner(self):
         it = self.red(key="q")
@@ -156,7 +159,7 @@ class ReminderTest(AskBase):
         rem = self.events({"red.remind"})
         self.assertEqual(len(rem), 4)
         self.assertTrue(all(e["refs"].get("no_inbox") for e in rem))
-        self.assertTrue(rem[0]["refs"]["verdict"].startswith("RED BLOCKED ON OWNER: REMINDER 1: WAITING ON YOU:"))
+        self.assertTrue(rem[0]["refs"]["verdict"].startswith("RED BLOCKED ON OWNER [policy-no-rule]: REMINDER 1: WAITING ON YOU:"))
 
     def test_the_projector_writes_one_inbox_entry_and_the_notifier_shows_every_reminder(self):
         self.owner_cause_blocked()
@@ -200,7 +203,7 @@ class HoldTest(AskBase):
         it = self.decision_blocked()
         self.assertEqual(self.events(), [], "held: no inbox entry, no notification yet")
         ask = self.st.item("red", it["id"])["data"]["ask"]
-        self.assertEqual((ask["n"], ask["q"]), (0, "baseline the 2 Titans flips, or change the resolver"))
+        self.assertEqual((ask["n"], ask["q"]), (0, "baseline the 2 Titans flips, or change the resolver" + RULE))
         self.assertEqual(self.remind(55), [])
         told = self.remind(10)
         self.assertEqual(len(told), 1, told)

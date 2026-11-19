@@ -145,7 +145,8 @@ class AttemptTest(CrashLoopBase):
     def test_a_give_up_that_needs_the_owners_decision_asks_once_and_is_never_offered_again(self):
         """#728, 2026-11-02: 58 RED ESCALATE, each owner turn's give-up one more attempt at the deep tier."""
         why = ("GAVE UP: #728's fix is the approved flip-unification stage 5 (a resolver rule change, outside red "
-               "fixing); `flip/stage5-contested` has been idle 11 hours")
+               "fixing); `flip/stage5-contested` has been idle 11 hours; decide[policy-no-rule]: when stage 5 lands; "
+               "rule: docs/design/identity-no-drift.md: a red waiting on an approved design stage holds until it lands")
         it, acts = self.launch(self.red(attempts=14, tier="deep"), outcome=why)
         self.assertEqual((it["state"], it["data"]["attempts"]), ("blocked-external", 14), acts)
         self.assertEqual(it["data"]["cause"], A.DECISION_CAUSE)
@@ -153,6 +154,17 @@ class AttemptTest(CrashLoopBase):
         self.assertIn("approved flip-unification stage 5", block["text"])
         self.assertIn("WAITING ON YOU", block["text"])
         self.assertEqual(len(self.escalate_events()), 1, "told once")
+
+    def test_a_give_up_asking_the_owner_in_no_category_is_routed_back_quietly_as_an_attempt(self):
+        """2026-11-19 (ask.py OWNER_ONLY): an ask outside the owner-only categories never reaches the owner."""
+        why = "GAVE UP: needs the owner's decision: which of the two fixes to take"
+        it, acts = self.launch(self.red(attempts=14, tier="deep"), outcome=why)
+        self.assertEqual((it["state"], it["data"]["attempts"]), ("offered", 15), acts)
+        self.assertIn("NOT AN OWNER QUESTION", it["data"]["diagnosis"])
+        owner = [e for e in self.escalate_events() if A.alert_route(
+            {"verdict": (e.get("refs") or {}).get("verdict") or "", "kind": A.inbox_kind(
+                (e.get("refs") or {}).get("verdict") or "", True)})[0] == "owner"]
+        self.assertEqual(owner, [], "never the owner's: at most the deep tier's own escalation, to the fixers")
 
     def test_a_deep_red_re_offered_without_a_new_attempt_is_no_new_escalation(self):
         it = self.red(attempts=3, tier="deep")

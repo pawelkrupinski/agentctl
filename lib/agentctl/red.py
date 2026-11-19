@@ -2253,7 +2253,12 @@ def red_lease_ended(store, it, row, block, t, repo=None):
         return red_already_fixed(store, it, upd, out, t)
     decide = red_decision_needed(d, h) if str(h["outcome"]).startswith("DIAGNOSED:") else None
     if not decide and GAVE_UP_DECIDE.match(out):  # THE FIXER NEEDS THE OWNER'S DECISION: one WAITING ON YOU, with its
-        decide = re.sub(r"^\W*GAVE UP:\s*", "", out).strip()  # own words, never offered to the next fixer meanwhile
+        m = RED_DECIDE.search(out)  # own words (and the category it names), never offered to the next fixer meanwhile
+        decide = ((m.group(1) or "") + m.group(2).strip()) if m else re.sub(r"^\W*GAVE UP:\s*", "", out).strip()
+        upd["gave_up_ask"] = True  # routed back (red_ask_route), it counts as the attempt it was
+        if m:  # its words before the ask are the diagnosis the owner reads
+            upd["diagnosis"] = re.sub(r"^\W*GAVE UP:\s*", "", out[:m.start(1) if m.group(1) else m.start(2)])
+            upd["diagnosis"] = re.sub(r"[;\s]*decide\s*$", "", upd["diagnosis"]).strip()[:600]
     vault = vault_ask_ns(decide or (out if out.startswith("BLOCKED ON OWNER") else ""))
     if vault:  # ITS ONE ASK IS A VAULT UNLOCK: a wait agentctl checks itself (red_vault_block), never a decision
         return red_vault_block(store, it, upd, vault, out, t)
@@ -2571,30 +2576,51 @@ def red_crash_loop(store, it, upd, streak, t):
         return [f"crash loop on {red_what(d)}: moved up to deep"]
     until = f"a newer {d.get('workflow')} run than #{run} no longer fails this way"
     cmd = red_crash_cmd(streak)
-    text = (f"BLOCKED ON OWNER: the fixers crash on {red_what(d)}: {n} launches in a row at the {tier} tier ended with "
-            f"no LANDED / GAVE UP ({red_crash_launches(streak)}). The fixer harness, not the code, is what fails: look "
-            f"at their logs (`! {cmd}`). Auto-clears when {until}, or in "
-            f"{fmt_age(env_num('AGENTCTL_RED_CRASH_BLOCK_MAX', RED_CRASH_BLOCK_MAX))} (offered again)")
+    issue = red_harness_issue(store, d, n, tier, red_crash_launches(streak), cmd)
+    text = (f"HARNESS FAULT: the fixers crash on {red_what(d)}: {n} launches in a row at the {tier} tier ended with "
+            f"no LANDED / GAVE UP ({red_crash_launches(streak)}). The fixer harness, not the code, is what fails: "
+            f"agentctl's own bug, filed for its maintainer as issue {issue} (logs: `{cmd}`). Auto-clears when {until}, "
+            f"when the issue is closed, or in {fmt_age(env_num('AGENTCTL_RED_CRASH_BLOCK_MAX', RED_CRASH_BLOCK_MAX))} "
+            "(offered again)")
     lname = block_lease(key)
     probe = {"kind": "red_newer_verdict", "args": {"workflow": d.get("workflow"), "item": it["id"],
                                                     "run_id": (d.get("last_run") or {}).get("databaseId"),
                                                     "run": run}}
-    got = store.acquire(lname, f"owner:{CRASH_LOOP_CAUSE}", BLOCK_TTL,
+    got = store.acquire(lname, f"harness:{CRASH_LOOP_CAUSE}", BLOCK_TTL,
                         env_num("AGENTCTL_RED_CRASH_BLOCK_MAX", RED_CRASH_BLOCK_MAX), progress=f"crash-loop@{int(t)}",
-                        meta={"kind": "block", "crash_loop": True, "cause": CRASH_LOOP_CAUSE, "cmd": cmd, "probe": probe,
-                              "until": until, "keys": [key], "text": text, "details": text, "probed_at": t,
-                              "question": f"the fixers crash on {red_what(d)} ({n} launches in a row): repair the "
-                                          "fixer harness"})
+                        meta={"kind": "block", "crash_loop": True, "harness": True, "issue": issue,
+                              "cause": CRASH_LOOP_CAUSE, "cmd": cmd, "probe": probe, "until": until, "keys": [key],
+                              "text": text, "details": text, "probed_at": t})
     if "held" in got:  # somebody's block already holds the red: it stands, the red joins it
         row = store.get(lname)
         store.set_meta(lname, row["epoch"], row["secret"], {"keys": sorted(set(lease_meta(row).get("keys") or []) | {key})})
-    upd = {**upd, "crash_loop": {"stage": "owner", "mark": mark, "at": t, "from": tier, "launches": n},
+    upd = {**upd, "crash_loop": {"stage": "harness", "mark": mark, "at": t, "from": tier, "launches": n},
            "cause": CRASH_LOOP_CAUSE, "block": lname}
-    line = f"RED BLOCKED ON OWNER: {red_what(d)}: {text}"
+    line = f"RED HARNESS FAULT: {red_what(d)}: {text}"
     store.close_offer(f"red:{it['id']}", "blocked")
-    red_owner_block(store, it, line, t, data=upd, refs={"key": key, "run": run, "workflow": d.get("workflow"),
-                                                        "verdict": line, "tail": tail, "command": "red"})
-    return [f"crash loop on {red_what(d)}: blocked on the owner"]
+    red_move(store, it, "blocked-external", line, data=upd, severity="info",
+             refs={"key": key, "run": run, "workflow": d.get("workflow"), "verdict": line, "tail": tail,
+                   "command": "red", "final": False})
+    return [f"crash loop on {red_what(d)}: a harness fault, filed as agentctl issue {issue}"]
+
+
+# A HARNESS FAULT IS agentctl's OWN BUG (the owner, 2026-11-19: core Main Pipeline #1053 read "BLOCKED ON OWNER: the
+# fixers crash" -- a cross-host lease misjudgement and a re-counted lease end, agentctl's bugs fixed in 852acad). The
+# fixers crash-looping at the deep tier is the harness failing, never the owner's to repair: ONE agentctl issue per red
+# (its maintainer's queue: the status page, `agentctl issue --list`, its weekly escalation), and the red waits on a
+# harness block, never an owner ask (red_ask: no owner-only category) -- lifted by a newer run's verdict, the issue
+# closed (red_renew_blocks), or its max hold.
+def red_harness_issue(store, d, n, tier, launches, cmd):
+    """The id of the open agentctl issue for this red's harness fault, filed once (an open one is reused)."""
+    tag = f"[harness-fault {d.get('key')}]"
+    for i in store.items("issue", ("open",)):
+        if str((i.get("data") or {}).get("text") or "").startswith(tag):
+            return i["id"]
+    text = (f"{tag} the fixers crash on {red_what(d)}: {n} launches in a row at the {tier} tier ended with no LANDED / "
+            f"GAVE UP ({launches}). Diagnose agentctl (orphaned leases, wrapper deaths, lease ends counted twice, launch "
+            f"refusals) in a ~/bin-wt-<name> worktree, test-first, and close this issue with the fix's sha; its red is "
+            f"offered again once it is closed. Logs: `{cmd}`")
+    return issue_open(store, text, "agentctl (harness fault)")["id"]
 
 
 # A DIAGNOSIS THAT NEEDS THE OWNER (2026-11-01, convergence #579: "resolver design ... The gate needs your design
@@ -2609,14 +2635,14 @@ RED_DECISION_BLOCK_MAX = 7 * 86400   # an owner-decision block lapses after this
 # 24 h -- each lapse re-offered the red to fixers who could not decide it, and the RED ESCALATE / GAVE UP entries
 # piled up; the owner is reminded instead (ask.py), and the block's probe still clears it)
 DECISION_CAUSE = "owner-decision"
-RED_DECIDE = re.compile(r";\s*decide:\s*(.+)$", re.S | re.I)
+RED_DECIDE = re.compile(r"(?:;|^\W*GAVE UP:.*?)\s*decide(\[[\w-]+\])?:\s*(.+)$", re.S | re.I)
 
 
 def red_decision_needed(d, h):
     """The decision the owner must make on red d, whose launch h ended DIAGNOSED, or None (an implementer goes on)."""
     m = RED_DECIDE.search(str(h["outcome"]))
     if m:
-        return m.group(1).strip()
+        return (m.group(1) or "") + m.group(2).strip()
     for p in reversed(d.get("history") or []):
         o = str(p.get("outcome") or "")
         if RED_CRASH_OUTCOME.match(o) or RED_CRASH_NEUTRAL.match(o):
@@ -2628,8 +2654,33 @@ def red_decision_needed(d, h):
     return None
 
 
-def red_decision_block(store, it, upd, decide, t):
-    """The red waits on the owner's decision: its block carries the diagnosis and the decision, clears itself."""
+def red_ask_route(store, it, upd, why, words, t):
+    """An ask outside the owner-only categories (ask.py OWNER_ONLY) never reaches the owner: the red goes back to its
+    fixers, briefed to proceed under the repo's standing rules (CLAUDE.md: root cause, test-first, never a rerun) and its
+    checked-in policies, with the words it asked in as the diagnosis -- an attempt like any other, so the ladder climbs."""
+    d = {**it["data"], **upd}
+    note = (f"{str(words)[:400]} -- NOT AN OWNER QUESTION ({why}). Proceed: make the fix the repo's standing rules "
+            "dictate (CLAUDE.md: root cause, test-first, never rerun to green) and the checked-in policies answer (e.g. "
+            "movies scripts/ci/lane-policy.tsv for a ci-runner lane); ask the owner only in an owner-only category, "
+            "`decide[<category>]: ...` (the fixer brief)")
+    extra = {"attempts": int(d.get("attempts") or 0) + 1} if upd.get("gave_up_ask") else {}
+    store.close_offer(f"red:{it['id']}", "routed")
+    red_offer(store, it, f"{red_what(d)}: its ask is no owner's ({why}): offered again to proceed",
+              data={**upd, **extra, "gave_up_ask": None, "diagnosis": note[:900], "cause": None, "block": None,
+                    "ask": None}, quiet=True)
+    return [f"routed {red_what(d)}'s ask back to its fixer: {why[:120]}"]
+
+
+def red_decision_block(store, it, upd, decide, t, category=None):
+    """The red waits on the owner's decision: its block carries the diagnosis and the decision, clears itself. Only
+    in an owner-only category (`[<category>] <decision>`, ask_split): any other ask is routed back (red_ask_route)."""
+    cat, question = ask_split(decide)
+    category = category or cat
+    why = ask_refusal(category, question)
+    if why:
+        return red_ask_route(store, it, upd, why, question, t)
+    decide = question
+    upd = {k: v for k, v in upd.items() if k != "gave_up_ask"}
     d = {**it["data"], **upd}
     key, run = d["key"], (d.get("last_run") or {}).get("number")
     diag = RED_DECIDE.sub("", str(d.get("diagnosis") or "")).strip()
@@ -2646,11 +2697,11 @@ def red_decision_block(store, it, upd, decide, t):
     got = store.acquire(lname, f"owner:{DECISION_CAUSE}", BLOCK_TTL, maxh, progress=f"decision@{int(t)}",
                         meta={"kind": "block", "decision": True, "cause": DECISION_CAUSE, "cmd": cmd, "probe": probe,
                               "until": until, "keys": [key], "text": text, "details": diag, "decide": decide,
-                              "question": decide, "probed_at": t})
+                              "question": decide, "category": category, "probed_at": t})
     if "held" in got:  # somebody's block already holds the red: it stands, the red joins it
         row = store.get(lname)
         store.set_meta(lname, row["epoch"], row["secret"], {"keys": sorted(set(lease_meta(row).get("keys") or []) | {key})})
-    line = f"RED BLOCKED ON OWNER: {text}"
+    line = f"RED BLOCKED ON OWNER [{category}]: {text}"
     store.close_offer(f"red:{it['id']}", "blocked")
     red_owner_block(store, it, line, t, data={**upd, "cause": DECISION_CAUSE, "block": lname},
                     refs={"key": key, "run": run, "workflow": d.get("workflow"), "verdict": line, "command": "red"})
@@ -3400,11 +3451,10 @@ def red_dispatcher(store, o_r, repo, t):
                 store.offer_reason(off["id"], why)
             continue
         gap = claude_trust_gap(prepo)
-        if gap:  # never a launch claude refuses: said on its offer (and the inbox, once), dispatched once trusted
-            why = f"NOT DISPATCHABLE: {gap}"
+        if gap:  # never a launch claude refuses: said on its offer, dispatched once trusted -- the owner was asked
+            why = f"NOT DISPATCHABLE: {gap}"  # when the repo was registered (fixer.py trust_asks), never once per offer
             if why != off.get("reason"):
                 store.offer_reason(off["id"], why)
-                inbox_write("red", f"RED NOT DISPATCHABLE: {pic.get('workflow')} #{(pic.get('run') or {}).get('number')}: {gap}", [], [], 1)
             continue
         num = (pic.get("run") or {}).get("number")
         holder_id = owner_holder(fam) if owned else f"laptop:fixer:red-{pic['key']}-{int(pic.get('attempts') or 0) + 1}"

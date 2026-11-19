@@ -107,16 +107,23 @@ class BreakerTest(CrashLoopBase):
             self.assertEqual((it["state"], it["data"]["tier"]), ("offered", "deep"))
         it, acts = self.launch(it)
         self.assertEqual(it["state"], "blocked-external")
-        self.assertEqual(it["data"]["crash_loop"]["stage"], "owner")
+        self.assertEqual(it["data"]["crash_loop"]["stage"], "harness")
         blk = A.red_block_of(it, self.st)
         self.assertIsNotNone(blk)
         self.assertEqual(blk["cause"], A.CRASH_LOOP_CAUSE)
         self.assertEqual(blk["meta"]["probe"]["kind"], "red_newer_verdict")
         self.assertIsNone(A.block_invalid(self.st, it, blk["meta"], self.t[0]))  # a test red may hold THIS block
         self.assertEqual(A.red_unheld(self.st, self.t[0]), [])
-        self.assertEqual(len(self.escalations()), 2)  # the deep move and the block: once each
-        self.assertTrue(self.escalations()[-1]["refs"]["verdict"].startswith("RED BLOCKED ON OWNER"))
+        # A HARNESS FAULT IS agentctl's OWN (2026-11-19, core #1053): never the owner's -- an agentctl issue, once
+        self.assertEqual(len(self.escalations()), 1)  # the deep move only
+        self.assertIsNone(A.red_ask(it, blk), "no owner-only category: no question for the owner")
+        issues = self.st.items("issue", ("open",))
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(blk["meta"]["issue"], issues[0]["id"])
+        self.assertIn("[harness-fault k]", issues[0]["data"]["text"])
         self.assertGreaterEqual(blk["meta"]["until"].find("newer"), 0)
+        A.issue_close(self.st, issues[0]["id"], "fixed in 852acad", "maintainer")
+        self.assertIn("harness issue", A.block_invalid(self.st, it, blk["meta"], self.t[0]))
 
     def test_already_at_deep_the_first_loop_blocks_on_the_owner(self):
         it = self.red(tier="deep", attempts=3)
@@ -191,7 +198,7 @@ class LaunchFailedTest(CrashLoopBase):
         text = A.red_block_of(it, self.st)["text"]
         self.assertEqual(text.count("LAUNCH FAILED: exit 1: Error: workspace not trusted run claude in it once"), 3, text)
         self.assertNotIn("less ", text)
-        self.assertIn("`! ~/bin/agentctl red status -v`", text)
+        self.assertIn("`~/bin/agentctl red status -v`", text)
 
     def test_launch_failure_reads_only_a_refused_launch(self):
         self.assertEqual(A.launch_failure("NOT STARTED: NOT STARTED: `claude --bg` exit 2: boom"), "exit 2: boom")
@@ -220,7 +227,8 @@ class DecisionTest(CrashLoopBase):
     DIAG = "DIAGNOSED: the UK flip is resolver design (partial-input grouping)"
 
     def test_a_diagnosis_naming_the_decision_blocks_on_the_owner_with_it(self):
-        it, acts = self.launch(self.red(), outcome=self.DIAG + "; decide: change the threshold or accept the flip")
+        it, acts = self.launch(self.red(), outcome=self.DIAG + "; decide[policy-no-rule]: change the threshold or "
+                               "accept the flip; rule: identity-flip-backlog.tsv: the UK flip, accepted")
         self.assertEqual(it["state"], "blocked-external", acts)
         blk = A.red_block_of(it, self.st)
         self.assertEqual(blk["cause"], A.DECISION_CAUSE)
@@ -232,13 +240,29 @@ class DecisionTest(CrashLoopBase):
         self.assertNotIn("crash_loop", it["data"])
         self.assertEqual(A.red_unheld(self.st, self.t[0]), [])
 
-    def test_one_diagnosis_goes_to_an_implementer_a_second_in_a_row_needs_the_owner(self):
+    def test_one_diagnosis_goes_to_an_implementer_and_a_second_in_a_row_proceeds_never_the_owner(self):
+        """2026-11-19, Stage NixOS closures #102 and Record scrape fixtures #198: DIAGNOSED twice (a lane placement the
+        lane policy answers) asked the owner. A second DIAGNOSED names no owner-only category: routed back."""
         it, _ = self.launch(self.red(), outcome=self.DIAG)
         self.assertEqual(it["state"], "offered", "the implementer is briefed with it, as before")
         it, _ = self.launch(it, outcome="lease expired", notes="")  # a lapse between them is skipped
         it, _ = self.launch(it, outcome=self.DIAG + " again")
-        self.assertEqual(it["state"], "blocked-external")
-        self.assertIn("DIAGNOSED twice in a row", A.red_block_of(it, self.st)["text"])
+        self.assertEqual(it["state"], "offered")
+        self.assertIsNone(A.red_block_of(it, self.st))
+        self.assertIn("NOT AN OWNER QUESTION", it["data"]["diagnosis"])
+        self.assertIn("lane-policy.tsv", it["data"]["diagnosis"])
+        self.assertEqual([e for e in self.st.events(after=0, limit=1000) if "WAITING ON YOU" in
+                          str((e.get("refs") or {}).get("verdict"))], [])
+
+    def test_a_bare_decide_names_no_category_and_is_routed_back(self):
+        it, acts = self.launch(self.red(), outcome=self.DIAG + "; decide: change the threshold or accept the flip")
+        self.assertEqual(it["state"], "offered", acts)
+        self.assertIn("names no owner-only category", it["data"]["diagnosis"])
+
+    def test_a_policy_ask_without_its_rule_row_is_routed_back(self):
+        it, acts = self.launch(self.red(), outcome=self.DIAG + "; decide[policy-no-rule]: which lane?")
+        self.assertEqual(it["state"], "offered", acts)
+        self.assertIn("proposes the rule row", it["data"]["diagnosis"])
 
     def test_a_result_between_two_diagnoses_keeps_the_implementer(self):
         it, _ = self.launch(self.red(), outcome=self.DIAG)
@@ -247,7 +271,8 @@ class DecisionTest(CrashLoopBase):
         self.assertEqual(it["state"], "offered")
 
     def test_the_owner_lifts_a_decision_or_crash_loop_block_with_red_release_any(self):
-        for outcome, tier, n in ((self.DIAG + "; decide: x", "fresh", 1), (CRASH, "deep", 3)):
+        for outcome, tier, n in ((self.DIAG + "; decide[irreversible]: drop the stale corpus", "fresh", 1),
+                                 (CRASH, "deep", 3)):
             it = self.red(key=f"k-{n}", tier=tier, attempts=3)
             for _ in range(n):
                 it, _ = self.launch(it, outcome=outcome)

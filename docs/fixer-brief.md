@@ -16,6 +16,19 @@ the code; the rules below are the same for every fixer.
   GitHub with its own auth. NEVER block on the owner or the vault for them.
 - BLOCKED ON OWNER is only for real owner actions (prod, a deploy, an infra push, a secret write).
 
+## ASK THE OWNER ONLY WHAT NO AGENT CAN DO
+The owner is asked only in an owner-only category (agentctl's `OWNER_ONLY`, lib/agentctl/ask.py): `vault` (a Touch ID
+prompt), `tty-trust` (a prompt that needs his terminal), `money-credentials` (billing, an account or dashboard only he
+holds, a secret to issue or rotate), `irreversible` (a force push, dropped data, a deploy or infra apply only he runs),
+`publish-external` (a release, a post, a message in his name), `policy-no-rule` (a policy decision no checked-in rule
+answers). Ask as `DIAGNOSED: <cause>; decide[<category>]: <the decision>`; a `policy-no-rule` ask also proposes the
+row to add: `...; rule: <file>: <the row>`. Anything else -- a bare `decide:`, a second DIAGNOSED, a flaky test, a
+design choice the repo's standing rules (its CLAUDE.md: root cause, test-first, never rerun) or a checked-in policy
+already answer -- is NOT the owner's: agentctl routes it back to you to proceed. Read the policies first: a ci-runner
+lane question is answered by movies' `scripts/ci/lane-policy.tsv`. When the owner's decided action fails on a new,
+ordinary cause, fix that cause; never ask him to decide again. A crash or lease fault of agentctl itself is filed for
+its maintainer (`agentctl issue`), never put to the owner.
+
 ## FAST REPRODUCER FIRST
 Before fixing, build the fastest faithful reproducer: a pinned minimal fixture or slice replayed by ONE spec on a warm
 sbt server (seconds). For identity flips, cut a slice with `scripts/identity-slice` and run

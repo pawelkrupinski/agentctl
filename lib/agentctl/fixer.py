@@ -104,7 +104,7 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
                 "explains the run. Never rerun to green, never loosen a test. Commit with a `Fixes-Red: " + str(num) + "` "
                 "trailer and land it with `~/bin/agentctl land`. End at `LANDED <sha>`; if you cannot, "
                 "`GAVE UP: <why>`; if the fix needs the owner's decision (a design change the red rules do not let you "
-                "make), `DIAGNOSED: <cause>; decide: <the decision>` (the red waits on the owner with it); if it needs the owner, `~/bin/agentctl red block " + str(num) + " --owner-cause <kind> --cmd \"<command>\"` (only for a cause outside the code that only the owner can act on: never a code red) "
+                "make, in an owner-only category: the brief's ASK THE OWNER ONLY WHAT NO AGENT CAN DO), `DIAGNOSED: <cause>; decide[<category>]: <the decision>` (the red waits on the owner with it); if it needs the owner, `~/bin/agentctl red block " + str(num) + " --owner-cause <kind> --cmd \"<command>\"` (only for a cause outside the code that only the owner can act on: never a code red) "
                 "and end `BLOCKED ON OWNER: <command>`.")
     elif u["workflow"] == LOCAL_FLOW:
         task = (f"The pre-push check `{u['job']}` FAILS ON PLAIN {remote()}/main {str(u['run'].get('headSha'))[:10]} (no "
@@ -573,6 +573,41 @@ def claude_trust_gap(path):
     return (f"claude does not trust {main.replace(HOME, '~')} (`claude --bg` refuses an untrusted workspace; a "
             f"worktree is trusted through its main checkout): owner, once: `! cd {shlex.quote(main)} && claude` -- "
             f"accept the trust prompt, then /exit; the red dispatches at the next tick")
+
+
+# TRUST IS ASKED WHEN A REPO IS REGISTERED, NOT 21 MINUTES INTO A RED (the owner, 2026-11-19: "claude does not trust
+# ~/bitcashier/core" reached him as the offer reason of core #1053, and the same line was written to the inbox five
+# times on 11-18 as that offer's reason flapped). Accepting the trust prompt needs his terminal -- owner-only
+# (`tty-trust`) -- but nothing about it waits for a red: the laptop's sync checks every watched repo's clone
+# (red-repos.json; a repo newly registered, or a red family gaining one, is checked at its next pass) and asks ONCE per
+# clone, as one owner alert keyed by the clone (`trust:<path>`), retracted by alerts.py's probe the pass the clone is
+# trusted. The state file only remembers which clones were asked, so a re-ask follows only a new gap.
+TRUST_ASK_PREFIX = "trust:"
+
+
+def trust_ask_line(path, gap):
+    return (f"RED BLOCKED ON OWNER [tty-trust]: WAITING ON YOU: {gap.split(' (', 1)[0]} -- every red of that repo waits "
+            f"on it. Answer: `! cd {shlex.quote(path)} && claude` (accept the trust prompt, then /exit); this clears by "
+            "itself once it is trusted")
+
+
+def trust_asks():
+    """The sync's pass: each watched repo's clone checked for claude's workspace trust; an untrusted one asked once."""
+    path = state_root("trust-asks.json")
+    asked = read_record(path) or {}
+    out, now_asked = [], {}
+    for c in red_repos():
+        clone = red_repo_clone(c["repo"])
+        gap = claude_trust_gap(clone) if clone else None
+        if not gap:
+            continue
+        now_asked[clone] = asked.get(clone) or time.time()
+        if clone not in asked:
+            inbox_write("red", trust_ask_line(clone, gap), [], [], 1, item=TRUST_ASK_PREFIX + os.path.realpath(clone))
+            out.append(f"asked the owner to trust {clone.replace(HOME, '~')} ({c['repo']})")
+    if now_asked != asked:
+        write_json(path, now_asked)
+    return out
 
 
 def bg_start(argv, cwd, env):
@@ -1366,6 +1401,10 @@ def red_view_state(store, it, t=None):
                     f"WAITING ON YOU: {trim_words(ask['q'])} -- {ask['how']}")
         if red_decision(d):  # answered: its block is lifted, offered again at the next tick
             return "the owner's answer is in: offered again at the next tick", "re-dispatching"
+        if not b:  # its block lapsed (the tick offers it again): never a stale BLOCKED ON OWNER on the status line
+            return "no block holds it now: offered again at the next tick", "re-offering"
+        if (b.get("meta") or {}).get("harness"):  # agentctl's own fault (red.py red_harness_issue): its maintainer's
+            return b.get("text"), f"HARNESS FAULT: agentctl issue {(b.get('meta') or {}).get('issue')}"
         return b.get("text") or "BLOCKED ON OWNER", (f"BLOCKED: {d.get('cause')} down" if d.get("cause") else "BLOCKED ON OWNER")
     return st, st
 
@@ -1989,6 +2028,9 @@ def block_invalid(store, it, m, t):
         return f"a live fixer is on it: {row['holder']}" if lease_is_live(row, t) else None
     if m.get("crash_loop") or m.get("decision"):  # the fixers crash-looped on it (red_crash_loop), or it waits on the
         # owner's decision (red_decision_block): the harness, or the owner's call, never the code, holds it
+        iss = store.item("issue", m["issue"]) if m.get("issue") else None
+        if iss and iss["state"] == "closed":  # A HARNESS FAULT FIXED: its maintainer closed the issue (red.py)
+            return f"its harness issue {m['issue']} is closed ({str((iss.get('data') or {}).get('note') or '')[:120]})"
         row = store.get(red_lease(d["key"]))
         return f"a live fixer is on it: {row['holder']}" if lease_is_live(row, t) else None
     if m.get("wait_cause") in WAIT_CAUSES:  # an external wait (a spent quota): no owner cause, no owner command
@@ -2086,7 +2128,8 @@ def red_vault_resume(store, it, ns, answer, t):
                      "yours sign: your first signature raises a Touch ID prompt for YOUR session, which the owner answers "
                      "now. So FIRST run `git commit-tree -S HEAD^{tree} -m 'signing probe' < /dev/null` in your "
                      f"worktree; if it fails, end `BLOCKED ON OWNER: ! secrets unlock {ns}` at once. Then go on with the "
-                     "fix and land it.", "question": str(q)[:600], "at": t, "status": "in-progress"}
+                     "fix and land it.", "question": str(q)[:600], "at": t, "status": "in-progress",
+           "category": "vault"}
     store.close_offer(f"red:{it['id']}", "resumed")
     red_offer(store, it, f"{red_what(d)}: the owner resumed it (the {ns} vault): offered again",
               data={"cause": None, "block": None, "ask": None, "decision": dec, "dispatch_after": 0})
@@ -2101,18 +2144,24 @@ def red_vault_decide(store, ns, answer):
     if not lease_is_live(row, t) or lease_meta(row).get("vault") != ns:
         return 1, [f"NOT DECIDED: no red waits on the {ns} vault (`~/bin/agentctl red status`)"]
     keys = lease_meta(row).get("keys") or []
-    store.revoke(lname, f"RELEASED: DECIDED by the owner: {answer[:200]}")
+    # RESUMED FIRST, RELEASED AFTER (2026-11-19 03:01Z, core #1053: the owner's `decide vault-bitcashier here` revoked
+    # the lease, the tick's invariant saw the red blocked-external with no block in that same second and re-offered it
+    # bare -- and the decide, finding no red still blocked, said "NOT DECIDED" while its red went on without the
+    # signing brief). While the lease is live no invariant touches its reds; one the tick re-offered meanwhile (offered,
+    # no decision of its own) is still the owner's answer's: resumed too.
     out = []
     for key in keys:
         for _try in range(10):  # StaleVersion: the store ticks meanwhile -- re-read and re-apply
             it = red_of_key(store, key)
-            if not it or it["state"] != "blocked-external":
+            if not it or it["state"] not in ("blocked-external", "offered") or \
+                    (it["state"] == "offered" and red_decision(it["data"])):
                 break
             try:
                 out += red_vault_resume(store, it, ns, answer, t)
                 break
             except StaleVersion:
                 continue
+    store.revoke(lname, f"RELEASED: DECIDED by the owner: {answer[:200]}")
     if not out:
         return 1, [f"NOT DECIDED: the {ns} vault's lease held no red still waiting on it (released)"]
     return 0, [f"DECIDED: {line} -- IN PROGRESS: each fixer's first signature asks Touch ID for its own session: answer "
@@ -2130,7 +2179,8 @@ def red_vault_block(store, it, upd, ns, why, t):
         store.set_meta(lname, row["epoch"], row["secret"], {"keys": sorted(set(lease_meta(row).get("keys") or []) | {key})})
     else:
         got = store.acquire(lname, "owner:vault", BLOCK_TTL, BLOCK_MAX, progress=f"locked@{int(t)}",
-                            meta={"kind": "block", "vault": ns, "cause": f"vault-{ns}", "cmd": vault_decide_cmd(ns),
+                            meta={"kind": "block", "vault": ns, "category": "vault", "cause": f"vault-{ns}",
+                                  "cmd": vault_decide_cmd(ns),
                                   "question": f"agents' work waits on the {ns} vault (commit signing, its secrets) and "
                                               "only you can answer its Touch ID prompts", "keys": [key], "probed_at": t,
                                   "text": f"BLOCKED: the {ns} vault is locked for its fixers (`decide vault-{ns} here`)",
@@ -2419,7 +2469,8 @@ def red_block(o_r, a):
     else:
         lname = lname or block_lease(keys[0])
         r = st.acquire(lname, f"owner:{owner_cause}", BLOCK_TTL, BLOCK_MAX, progress=f"{iprobe.detail}@{int(time.time())}",
-                       meta={"kind": "block", "owner_cause": owner_cause, "cmd": a.owner_cmd, "cause": cause,
+                       meta={"kind": "block", "owner_cause": owner_cause, "category": OWNER_CAUSE_CATEGORY[owner_cause],
+                             "cmd": a.owner_cmd, "cause": cause,
                              "question": f"run `! {a.owner_cmd}` ({OWNER_CAUSES[owner_cause]})" +
                                          (f" -- {a.note}" if getattr(a, "note", "") else ""),
                              "probe": {"kind": iprobe.kind, "args": iprobe.args}, "until": words, "keys": keys,
@@ -2433,8 +2484,9 @@ def red_block(o_r, a):
             st.set_meta(lname, same["epoch"], same["secret"], {"keys": sorted(set(sm.get("keys") or []) | set(keys))})
             print(f"already blocked: {what} joined {lname}: {sm.get('text')}")
         else:
-            line = (f"RED BLOCKED ON OWNER: {cause} down (blocks {what}): {details}" if cause else
-                    f"RED BLOCKED ON OWNER: {what}: {details}")
+            cat = OWNER_CAUSE_CATEGORY[owner_cause]
+            line = (f"RED BLOCKED ON OWNER [{cat}]: {cause} down (blocks {what}): {details}" if cause else
+                    f"RED BLOCKED ON OWNER [{cat}]: {what}: {details}")
             # the owner is told by the tick (red_owner_reminders: ONE inbox entry and a notification, then reminders)
             print(line + f" ({iprobe.detail}; `agentctl red status`)")
     for it in items:

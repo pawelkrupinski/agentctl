@@ -309,6 +309,14 @@ def alert_write(rec, st=None, red=None, condition=None, d=None):
         idx = alert_index(d)
         if rec["id"] in (idx.get("seen") or []):
             return (idx.get("items") or {}).get(rec["item"]) or rec["id"]
+        ask = alert_ask_digest(rec)
+        if ask:  # ONE ENTRY PER ASK: the same question under another item (a red's next spell) merges into the live one
+            prior = (idx.get("asks") or {}).get(ask)
+            if prior and prior != rec["item"] and alert_live(d, idx, prior, t) is not None \
+                    and not alert_acked(d, idx["items"][prior]):
+                rec["item"] = prior
+            idx.setdefault("asks", {})[ask] = rec["item"]
+            idx["asks"] = {k: v for k, v in idx["asks"].items() if v in (idx.get("items") or {}) or k == ask}
         kind = alert_kind_of(rec)
         for family in ALERT_CLOSES.get(kind, ()):
             alert_close_family(d, idx, rec, family, f"{kind}: {str(rec.get('verdict'))[:120]}")
@@ -344,6 +352,22 @@ def alert_write(rec, st=None, red=None, condition=None, d=None):
         idx.setdefault("seen", []).append(rec["id"])
         alert_index_save(d, idx)
         return rec["id"]
+
+
+# THE SAME ASK, DELIVERED ONCE (the owner, 2026-11-19: one ask arrived as several unread entries). An owner question is
+# keyed by its content too -- the question after WAITING ON YOU, its numbers and reminder count aside -- so a red
+# re-offered into a new spell, or its ask re-raised under another item, updates the live entry instead of adding one.
+ASK_TEXT = re.compile(r"WAITING ON YOU:\s*(?:REMINDER \d+:\s*)?(.*?)(?:\s+--\s|$)", re.S)
+
+
+def alert_ask_digest(rec):
+    """The content key of an owner ask (None for anything else)."""
+    if rec.get("audience") != "owner":
+        return None
+    m = ASK_TEXT.search(str(rec.get("verdict") or ""))
+    if not m or not m.group(1).strip():
+        return None
+    return hashlib_sha1(alert_norm(" ".join(m.group(1).split())))[:16]
 
 
 def alert_close_family(d, idx, rec, family, why):
@@ -408,6 +432,11 @@ def alert_probe(st, item, e, t, ctx=None):
         kind = alert_kind_of(e)
         if kind == "BLOCKED" and it["state"] != "blocked-external":  # WAITING ON YOU, but its red waits on nobody now
             return f"its red is {it['state']} now (no longer waiting on you)", None  # (resumed, decided, its fix landed)
+        if kind == "BLOCKED" and red_ask(it, red_block_of(it, st)) is None:
+            # AN ASK IS RETRACTED WITH ITS CONDITION (2026-11-19: `decide vault-movies here`, run off the inbox and the
+            # owner-decisions hook, said "no red waits on the movies vault"): its block lapsed or no longer asks the
+            # owner, while the red still read blocked-external for a tick -- closed now, not when the red moves on
+            return "its question is no longer asked (its block lapsed or waits on no owner action)", None
         if kind in ("RED_UNCLAIMED", "RED_STARVED") and it["state"] != "offered":
             return f"its red is {it['state']} now (taken)", None
         if kind in ALERT_RED_KINDS:
@@ -427,6 +456,9 @@ def alert_probe(st, item, e, t, ctx=None):
         if it and it["state"] in ("landed", "superseded", "cancelled"):
             return f"its change is {it['state']}", None
         return None, None
+    if item.startswith(TRUST_ASK_PREFIX):  # the owner was asked to trust a clone (fixer.py trust_asks)
+        path = item[len(TRUST_ASK_PREFIX):]
+        return ("claude trusts it now" if not claude_trust_gap(path) else None), None
     if item.startswith("wt:"):
         wt = item[3:].split(":", 1)[0]
         if wt and os.path.isabs(wt) and not os.path.isdir(wt):

@@ -28,6 +28,59 @@
 #     one lease (only `decide vault-<ns>` resumes it), any block a fixer raised with no probe -- waits on the owner
 #     alone: its red's work stops until he answers, so it is told at once (ask_blocks_work). Decided by the block's
 #     shape, never a per-kind list.
+# THE OWNER-ONLY CATEGORIES (the owner, 2026-11-19: "could any of these decision things could've been handled
+# automatically? fix structurally"). That night's six asks: a crash loop of the fixer harness (agentctl's own bug,
+# already fixed in 852acad), a plain flaky-test race re-asked after the owner's answer, two ci-runner lane placements a
+# ranking policy answers, a vault ask still shown after it had cleared, a workspace-trust prompt raised 21 minutes into
+# a red, and one trust line written to the inbox five times. ONLY WHAT NO AGENT CAN DO REACHES THE OWNER: every ask
+# names one of these categories (red_ask: an ask that names none is no ask; test_owner_only lints every source of one)
+# and is routed back to its fixer otherwise (red_ask_route) -- or, for a fault of agentctl itself, to agentctl's
+# maintainer as an issue (red.py, red_harness_fault). A policy ask (`policy-no-rule`) proposes the rule row to add.
+OWNER_ONLY = {
+    "vault": "a Touch ID prompt: unlocking a vault, signing for a session -- only the owner's finger",
+    "tty-trust": "a prompt that needs the owner's terminal (claude's workspace-trust dialog)",
+    "money-credentials": "money or credentials: billing, an account or dashboard only the owner holds, a secret to "
+                         "issue or rotate",
+    "irreversible": "an irreversible or destructive action (a force push, dropped data, a deploy or infra apply only "
+                    "the owner runs)",
+    "publish-external": "publishing outside: a release, a post, a message under the owner's name",
+    "policy-no-rule": "a policy decision no checked-in rule answers -- asked as the rule row to add",
+}
+# `red block --owner-cause` (fixer.py OWNER_CAUSES): each cause is one of the categories above
+OWNER_CAUSE_CATEGORY = {"external-account": "money-credentials", "credentials": "money-credentials",
+                        "billing": "money-credentials", "dashboard": "money-credentials", "infra-apply": "irreversible",
+                        "deploy": "irreversible"}
+# A fixer asks the owner with `decide[<category>]: <the decision>` (in a DIAGNOSED or GAVE UP verdict); a policy ask
+# adds `rule: <where>: <the row to add>`. A bare `decide:` names no category: it is routed back (red_ask_route).
+ASK_CATEGORY = re.compile(r"^\s*\[\s*([\w-]+)\s*\]\s*:?\s*", re.S)
+POLICY_RULE = re.compile(r"\brule:\s*\S", re.I)
+
+
+def ask_refusal(category, question):
+    """Why an ask may not reach the owner (the lint and the runtime both ask this), or None."""
+    if category not in OWNER_ONLY:
+        return (f"it names no owner-only category ({category or 'none'}; one of {', '.join(OWNER_ONLY)}): the fixer "
+                "proceeds under the repo's standing rules and checked-in policies")
+    if category == "policy-no-rule" and not POLICY_RULE.search(str(question or "")):
+        return "a policy ask proposes the rule row to add (`rule: <file>: <row>`): none given"
+    return None
+
+
+def ask_split(decide):
+    """(category, question) of a fixer's decide text: `[<category>]: <question>` or `[<category>] <question>`."""
+    m = ASK_CATEGORY.match(str(decide or ""))
+    return (m.group(1).lower(), str(decide)[m.end():].strip()) if m else (None, str(decide or "").strip())
+
+
+def ask_category(m):
+    """The owner-only category of a block's ask (its meta), or None."""
+    if m.get("vault"):
+        return "vault"
+    if m.get("category"):
+        return m["category"]
+    return OWNER_CAUSE_CATEGORY.get(m.get("owner_cause"))
+
+
 ASK_HOLD = 3600               # s a question its block's probe may answer is held (recorded, not told) ($AGENTCTL_ASK_HOLD)
 ASK_REMIND_FIRST = 3600       # the first reminder this long after the owner was told ($AGENTCTL_ASK_REMIND_FIRST)
 ASK_REMIND_MAX = 4 * 3600     # ...then doubling up to this ($AGENTCTL_ASK_REMIND_MAX)
@@ -56,12 +109,12 @@ def red_ask(it, b):
         return None
     key, until = d.get("key"), m.get("until")
     q = m.get("question")
+    category = ask_category(m)
+    if ask_refusal(category, m.get("decide") or q):  # OWNER-ONLY: no category, no ask (a harness fault's block either)
+        return None
     if m.get("decision"):
         q = q or m.get("decide") or "decide how this red is fixed"
         how = f"answer: `! {decide_cmd(key)}` (look: `{m.get('cmd') or '~/bin/agentctl red status -v'}`)"
-    elif m.get("crash_loop"):
-        q = q or f"the fixers crash on {red_what(d)}: repair the fixer harness"
-        how = f"look: `! {m.get('cmd')}`; then `! {decide_cmd(key, '<what you changed>')}`"
     elif m.get("vault"):  # red_vault_block: ONE item per vault, resumed by one line (an unlock elsewhere is not theirs)
         how = (f"at the machine: `! {vault_decide_cmd(m['vault'])}` resumes every red on it; each fixer's first "
                "signature then asks Touch ID for its OWN session (your `secrets unlock` never unlocks theirs): answer it")
@@ -70,7 +123,8 @@ def red_ask(it, b):
         how = f"it clears itself when {until}; or once done: `! {decide_cmd(key, 'done')}`"
     else:
         return None
-    return {"q": " ".join(str(q).split()).replace(HOME, "~"), "how": how.replace(HOME, "~"), "until": until}
+    return {"q": " ".join(str(q).split()).replace(HOME, "~"), "how": how.replace(HOME, "~"), "until": until,
+            "category": category}
 
 
 def red_decision(d):
@@ -97,7 +151,7 @@ def ask_interval(n):
 def red_ask_line(d, ask, n=0):
     what = red_what(d)
     head = f"REMINDER {n}: " if n else ""
-    return (f"RED BLOCKED ON OWNER: {head}WAITING ON YOU: {what}: {ask['q']} -- {ask['how']}"
+    return (f"RED BLOCKED ON OWNER [{ask.get('category')}]: {head}WAITING ON YOU: {what}: {ask['q']} -- {ask['how']}"
             + (f" -- auto-clears when {ask['until']}" if ask.get("until") else ""))
 
 
@@ -140,6 +194,7 @@ def red_ask_mark(store, it, t, told=True):
     if ask:
         rec = {"q": ask["q"], "since": it["entered_at"], "first_at": t, "last_at": t, "n": 1} if told else \
             {"q": ask["q"], "since": it["entered_at"], "held_at": t, "last_at": t, "n": 0}
+        rec["category"] = ask.get("category")
         store.update_item("red", it["id"], it["version"], {"ask": rec})
 
 
@@ -177,7 +232,8 @@ def red_owner_reminders(store, t):
         if len(members) > 1:
             line = line.replace(f"WAITING ON YOU: {red_what(d)}:",
                                 f"WAITING ON YOU: {', '.join(red_what(m[0]['data']) for m in members)}:", 1)
-        new = {"q": ask["q"], "since": spell, "first_at": t if fresh else a.get("first_at"), "last_at": t, "n": n}
+        new = {"q": ask["q"], "since": spell, "first_at": t if fresh else a.get("first_at"), "last_at": t, "n": n,
+               "category": ask.get("category")}
         try:
             red_move(store, it, "blocked-external", line, data={"ask": new}, severity="escalate",
                      kind="red.ask" if fresh else "red.remind",
@@ -191,16 +247,31 @@ def red_owner_reminders(store, t):
 
 
 def red_decision_failed(store, it, upd, why, t):
-    """The owner's decided action failed: the red goes back on the owner with the answer and the failure, a decision
-    block like any other (its probe clears it; reminded until it is answered again)."""
+    """The owner's decided action failed. Back on the owner only when the failure is itself owner-only: a DIAGNOSED
+    naming its own owner-only `decide[<category>]`, or a NOT LANDED / GAVE UP of a decision asked in an owner-only
+    category. A failure whose cause is ordinary -- core #1053, 2026-11-19: the owner answered "852acad" and the fixer
+    then DIAGNOSED a plain test race, which the standing rules decide -- goes back to the fixer to proceed
+    (red_ask_route), the owner never re-asked for it."""
     d = {**it["data"], **upd}
     dec = red_decision(d) or {}
     why = " ".join(str(why).split())[:400]
+    own = RED_DECIDE.search(why) if why.startswith("DIAGNOSED") else None
+    category = ask_split((own.group(1) or "") if own else "")[0] if own else \
+        (None if why.startswith("DIAGNOSED") else dec.get("category"))
+    asked = own.group(2) if own else f"{why} (asked: {dec.get('question') or ''})"
+    if ask_refusal(category, asked):
+        done = {**upd, "decision": {**dec, "status": "done", "failure": why, "failed_at": t}}
+        return red_ask_route(store, it, done, "the decided action's new cause is ordinary: the standing rules decide it"
+                             if why.startswith("DIAGNOSED") else ask_refusal(category, asked), why, t)
+    if own:  # its own owner-only question, asked as it is
+        upd = {**upd, "decision": {**dec, "status": "failed", "failure": why, "failed_at": t}}
+        return red_decision_block(store, it, upd, f"[{category}] {own.group(2).strip()}", t)
     upd = {**upd, "decision": {**dec, "status": "failed", "failure": why, "failed_at": t}}
     said = (f"agentctl resumed it ({str(dec.get('answer'))[:200]!r})" if dec.get("by") == "agentctl"
             else f"you decided {str(dec.get('answer'))[:200]!r}")
-    decide = f"{said}; the action failed: {why}. Decide again (the same answer once its cause is fixed, or another)"
-    return red_decision_block(store, it, upd, decide, t)
+    decide = (f"{said}; the action failed: {why}. Decide again (the same answer once its cause is fixed, or another; "
+              f"you were asked: {str(dec.get('question') or '')[:300]})")
+    return red_decision_block(store, it, upd, decide, t, category=category)
 
 
 def red_closed_of(store, key):
@@ -260,7 +331,10 @@ def red_decide(store, o_r, target, answer):
             try:
                 store.update_item("red", cur["id"], cur["version"],
                                   {"decision": {"answer": answer[:600], "question": str(question)[:600], "at": t,
-                                                "status": "in-progress"}, "dispatch_after": 0, "ask": None})
+                                                "status": "in-progress",
+                                                "category": (ask or {}).get("category")
+                                                or (d.get("ask") or {}).get("category")},
+                                   "dispatch_after": 0, "ask": None})
                 break
             except StaleVersion:
                 continue

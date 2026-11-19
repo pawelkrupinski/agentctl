@@ -174,9 +174,10 @@ def owner_intro(owner):
             "`red claim` them); new reds of your family arrive in RED-INBOX.md and as your next turn. "
             + (f"This turn's reds: {reds}. " if reds else "")
             + "End each turn with ONE verdict line for the turn's reds (LANDED <sha> / WAITS ON <sha> (red <key>): / "
-              "GAVE UP: / DIAGNOSED: / BLOCKED ON OWNER:). When the durable fix needs the OWNER'S DECISION (a design change the red rules do not let "
-              "you make), end `DIAGNOSED: <cause>; decide: <the decision only the owner can make>`: the red then waits "
-              "on the owner with it, never offered back to you meanwhile. ")
+              "GAVE UP: / DIAGNOSED: / BLOCKED ON OWNER:). When the durable fix needs the OWNER'S DECISION in an owner-only "
+              "category (the brief's ASK THE OWNER ONLY WHAT NO AGENT CAN DO), end `DIAGNOSED: <cause>; "
+              "decide[<category>]: <the decision only the owner can make>`: the red then waits on the owner with it. "
+              "Any other question is yours: proceed under the repo's standing rules and checked-in policies. ")
 
 
 def owner_turn_prompt(fam, rec, st, names, first, resumed=False):

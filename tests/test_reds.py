@@ -273,7 +273,8 @@ class FixTest(RedsBase):
         # question withdrawn and its block released -- never a block a later re-offer falls back into.
         self.tick()
         it = self.only()
-        A.red_decision_block(self.st, it, {}, "hold the red as fixed by its landed fix", self.t[0])
+        A.red_decision_block(self.st, it, {}, "hold the red as fixed by its landed fix; rule: x", self.t[0],
+                             category="policy-no-rule")
         it = self.only()
         self.assertEqual(it["state"], "blocked-external")
         _wt, sha = self.fix_commit(20)
