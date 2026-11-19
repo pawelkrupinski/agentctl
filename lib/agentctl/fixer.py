@@ -2499,7 +2499,8 @@ def red_block(o_r, a):
     old = old if lease_is_live(old, st.clock()) else None
     om = lease_meta(old)
     owner_cause = getattr(a, "owner_cause", None) or om.get("owner_cause")
-    if owner_cause not in OWNER_CAUSES:
+    vault = vault_ask_ns(a.owner_cmd)  # a locked vault: no owner cause, any red kind (red_vault_block, below)
+    if owner_cause not in OWNER_CAUSES and not vault:
         print(f"NOT BLOCKED: a block on the owner needs --owner-cause, one of: {', '.join(OWNER_CAUSES)} (a cause outside "
               "the code that only the owner can act on). A code red is yours: claim it and fix it.")
         return 2
@@ -2508,7 +2509,7 @@ def red_block(o_r, a):
               "it is no owner action -- the tick holds the red as an external wait and re-runs its workflow after the "
               "reset (`agentctl red status`)")
         return 2
-    if any(x.get("kind") == "test" for x in units):
+    if any(x.get("kind") == "test" for x in units) and not vault:
         print(f"NOT BLOCKED: #{n} is a TEST FAILURE ({units[0].get('job')}): a code red is never the owner's -- "
               f"`~/bin/agentctl red claim {n}` and fix it")
         return 2
@@ -2520,13 +2521,26 @@ def red_block(o_r, a):
     items = known or (red_targets(st, o_r, n) if units else [])
     own = read_record(own_fixer_record_path() or "") or {}
     handed = [] if not items else [red_lease(it["data"]["key"]) for it in items]
-    handed = [x for x in handed if x == own.get("lease") and lease_is_live(st.get(x), st.clock())
-              and st.get(x)["epoch"] == own.get("epoch")]
+    fam = own.get("family")  # A FAMILY OWNER blocks a red it holds (issues 20261106T210149-680984,
+    # 20261119T015532-983695: "a live fixer is on #1005: laptop:owner:convergence" -- the owner itself)
+    handed = [x for x in handed if lease_is_live(st.get(x), st.clock()) and (
+        x == own.get("lease") and st.get(x)["epoch"] == own.get("epoch")
+        or fam and st.get(x)["holder"] == owner_holder(fam) and lease_meta(st.get(x)).get("family") == fam)]
     live = [st.get(red_lease(it["data"]["key"]))["holder"] for it in items
             if red_lease(it["data"]["key"]) not in handed and lease_is_live(st.get(red_lease(it["data"]["key"])), st.clock())]
     if live:
         print(f"NOT BLOCKED: a live fixer is on #{n}: {live[0]}")
         return 1
+    ns = vault
+    if ns and items:  # A LOCKED VAULT IS ONE WAIT, never an owner cause (issue 20261119T015532-983695): the red joins the
+        # vault's lease (red_vault_block), which the owner's `decide vault-<ns>` lifts for every red on it
+        t = st.clock()
+        for it in items:
+            for line in red_vault_block(st, st.item("red", it["id"]), {}, ns, f"`red block`: {a.owner_cmd}", t):
+                print(line)
+        for x in handed:
+            st.revoke(x, f"BLOCKED ON OWNER (handed over by its fixer): the {ns} vault is locked")
+        return 0
     if old and not (a.until_green or a.until_http or a.until_tcp):  # attach to the outage's ONE lease: its probe
         iprobe = run_probe(om["probe"]["kind"], om["probe"]["args"])
     elif cause and not (a.until_green or a.until_http or a.until_tcp):

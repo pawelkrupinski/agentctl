@@ -1134,6 +1134,18 @@ class OwnerTest(RedsBase):
         self.assertNotIn("NOT CLAIMED", out)
         self.assertEqual(rc, 0, out)
 
+    def test_a_locked_vault_block_needs_no_owner_cause_and_waits_on_the_vault(self):
+        # issue 20261119T015532-983695: "no owner-cause for a locked vault" -- a `secrets unlock <ns>` block joins
+        # the vault's ONE wait (red_vault_block), lifted by the owner's `decide vault-<ns> here`
+        self.tick()
+        rc, out = self.tool("red", "block", "20", "--cmd", "secrets unlock movies", "--repo", "movies",
+                            cwd=self.r.path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("waits on the movies vault", out)
+        self.assertEqual(A.lease_meta(self.st.get(A.block_lease(cause="vault-movies")))["vault"], "movies")
+        self.tick()
+        self.assertEqual(self.only()["state"], "blocked-external")
+
     def test_a_fixer_never_notes_on_a_record_of_another_session(self):
         # a `claude --bg` spare spawned for #2432's fixer, reused for #2426's: its AGENTCTL_FIXER_RECORD is #2432's
         _it, theirs = self.held_by_a_fixer("s-other", run="32")

@@ -1299,7 +1299,7 @@ def red_fix_facts(repo, store=None):
     """What links a red to its fix: the queue's Fixes-Red changes, the Fixes-Red commits on main, and every run any
     spell of each red key was seen in (key_runs: a red whose own item lost a run -- a duplicate spell, an import --
     still meets the change that names that run)."""
-    entries = []
+    entries, untrailered = [], []
     try:
         d, _c, _w = waiting_state(repo)
         for e in waiting_entries(d, open_only=False):
@@ -1311,6 +1311,8 @@ def red_fix_facts(repo, store=None):
             fx = entry_fixes(repo, e) if recent or e.get("fixes") else None
             if fx and not red_unrelated(repo, e):
                 entries.append({**e, "fixes": fx})
+            elif not fx and e.get("status") in FIX_OPEN:  # no Fixes-Red: linked only by the files it edits
+                untrailered.append(e)
     except (Exception, SystemExit):
         pass
     try:
@@ -1350,7 +1352,7 @@ def red_fix_facts(repo, store=None):
             r = git(repo, "log", "-1", "--format=%ct", sha, check=False)
             if r.returncode == 0 and r.stdout.strip().isdigit():
                 landed_at[sha] = float(r.stdout.strip())
-    return {"entries": entries, "landed": landed, "key_runs": {k: sorted(v) for k, v in key_runs.items()},
+    return {"entries": entries, "untrailered": untrailered, "landed": landed, "key_runs": {k: sorted(v) for k, v in key_runs.items()},
             "key_aside": {k: sorted(v) for k, v in key_aside.items() if v}, "landed_at": landed_at,
             "patches": patches, "repo": repo}
 
@@ -1419,6 +1421,12 @@ def red_fix_candidates(d, facts):
                 at = float(facts["landed_at"][e["landed_sha"]])  # its commit's time: a file's `updated` moves on
             if at >= since:  # landed before this spell opened: the run that opened it already outlived it
                 yield {"entry": e["id"], "status": "landed", "sha": e["landed_sha"], "at": at}
+    for e in facts.get("untrailered") or []:  # A QUEUED CHANGE EDITING THE RED'S OWN CI FILES (issue
+        # 20261106T102105-327f4c: family-shards fixed exactly Identity family explorer #2's shard timeouts in its
+        # workflow and script, with no trailer, while fixers were sent whose only fix would conflict with it)
+        if red_ci_files_touched(repo, d, e.get("commits") or []):
+            yield {"entry": e["id"], "status": e["status"], "linked": "its workflow's own files",
+                   "author": {"worktree": e.get("worktree"), "session": e.get("session")}}
     for sha, ct, vals, _s in facts.get("landed") or []:
         if vals & names and ct >= since and its_own(vals & names, [sha]):
             yield {"entry": None, "status": "landed", "sha": sha, "at": ct}
@@ -1430,6 +1438,50 @@ def red_fix_candidates(d, facts):
             at = None
         if m and at is not None and at >= since and its_own(set(), [m.group(1)]):  # an owner's turn held every red
             yield {"entry": None, "status": "landed", "sha": m.group(1), "at": at, "via": "its fixer's LANDED"}
+
+
+def red_run_on_way(d, snap, repo):
+    """(run, sha): an undecided run on main of red d's workflow, newer than its failing run, containing a commit since
+    that run's head that reaches its failing job (fix_reaches_red) -- a fix landed with no Fixes-Red, which that run
+    will prove or refute. None when there is none (or the clone cannot tell)."""
+    own = d.get("last_run") or {}
+    base = own.get("headSha")
+    if not repo or not base or not snap:
+        return None
+    runs = next((g.get("runs") or [] for g in (snap.get("gate") or []) + (snap.get("outside") or [])
+                 if g.get("name") == d.get("workflow")), [])
+    for r in runs:
+        if r.get("status") == "completed" or r.get("headBranch", "main") != "main" or not r.get("headSha") \
+                or int(r.get("databaseId") or 0) <= int(own.get("databaseId") or 0) or r["headSha"] == base:
+            continue
+        got = git(repo, "rev-list", "--max-count=50", f"{base}..{r['headSha']}", check=False)
+        for sha in (got.stdout.split() if got.returncode == 0 else []):
+            if fix_reaches_red(repo, sha, d):
+                return r, sha
+    return None
+
+
+_ci_reads = process_cache({})
+
+
+def red_ci_files_touched(repo, d, commits):
+    """The files of red d's own workflow and the scripts its failing job names (red_job_reads, read in main's tree)
+    that these commits edit; empty when none or when that cannot be read."""
+    if not repo or not commits:
+        return set()
+    sha = git(repo, "rev-parse", "-q", "--verify", f"refs/remotes/{remote()}/main", check=False).stdout.strip() or \
+        (d.get("last_run") or {}).get("headSha")
+    if not sha:
+        return set()
+    k = (d.get("key"), sha)
+    if k not in _ci_reads:
+        try:
+            rd = red_job_reads(repo, sha, d)
+        except (Exception, SystemExit):
+            rd = None
+        _ci_reads[k] = set((rd or {}).get("files") or ())
+    reads = _ci_reads[k]
+    return {p for c in commits for p in fix_changed(repo, c)} & reads if reads else set()
 
 
 _landed_fetched = process_cache({})
@@ -2253,6 +2305,16 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
             red_move(store, it, "fix-pending", f"{red_what(d)}: fix {fix.get('entry') or fix.get('sha')} {fix['status']}",
                      data={"fix": fix})
             return [f"fix-pending {red_what(d)}"]
+        way = None if live or block else red_run_on_way(d, snap, repo)
+        if way:  # A RUN ON THE WAY MAY HAVE FIXED IT (issue 20261107T224109-5c81e4): wait for it, never a fixer meanwhile
+            run, sha = way
+            store.close_offer(f"red:{it['id']}", "fix-pending")
+            line = (f"{red_what(d)}: {sha[:10]} on main reaches its failing job (no Fixes-Red): awaiting "
+                    f"#{run.get('number')}")
+            red_move(store, it, "fix-pending", line, data={"fix": {
+                "status": "verify", "at": t, "entry": None, "sha": "", "awaiting": run.get("number"),
+                "verify_dispatched": ts(), "verify": f"awaiting #{run.get('number')}, which contains {sha[:10]}"}})
+            return [line]
         if live:
             store.close_offer(f"red:{it['id']}", "taken")
             red_move(store, it, "leased", f"{red_what(d)}: leased by {row['holder']}", data={"holder": row["holder"]})
@@ -3173,6 +3235,10 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
                 red_offer(store, it, f"{red_what(d)}: still red after its fixer found it already fixed: offered again",
                           data={"fix": None, "attempts": int(d.get("attempts") or 0) + 1})
                 return [f"re-offered {red_what(d)} (not fixed after all)"]
+            if f.get("awaiting"):  # the run it awaited still fails this way: nobody's fix was refuted
+                red_offer(store, it, f"{red_what(d)}: still red on #{f['awaiting']}, the run it awaited: offered again",
+                          data={"fix": None})
+                return [f"re-offered {red_what(d)} (still red on #{f['awaiting']})"]
             red_offer(store, it, f"{red_what(d)}: still red after its block cleared: offered again", data={"fix": None})
             return [f"re-offered {red_what(d)} (still red after its block)"]
         if not d.get("gate") and not f.get("verify_dispatched"):
