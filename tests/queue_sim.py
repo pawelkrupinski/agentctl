@@ -94,6 +94,26 @@ class SimOs(types.ModuleType):
         task.step()
 
 
+def sim_datetime(clock):
+    """agentctl's `dt` (the datetime module) in the simulation: now() reads the simulated clock, so entry ids
+    (YYYYMMDD-HHMMSS-...) and stamps never depend on the wall clock -- ids crossing a real second boundary reordered a
+    seed's queue from one run to the next."""
+    import datetime as real
+
+    class Datetime(real.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return real.datetime.fromtimestamp(clock[0], tz)
+
+        @classmethod
+        def utcnow(cls):
+            return real.datetime.fromtimestamp(clock[0], real.timezone.utc).replace(tzinfo=None)
+    mod = types.ModuleType("datetime")
+    mod.__dict__.update({k: v for k, v in real.__dict__.items() if not k.startswith("__")})
+    mod.datetime = Datetime
+    return mod
+
+
 class SimAbort(BaseException):
     """Unwinds an executor thread still blocked at the end of a seed (its finally blocks release its leases)."""
 
@@ -206,6 +226,7 @@ class Sim:
         self.arrivals = self._plan_arrivals()
         self.n_lone_red = 0
         self.holds = {}  # entry id -> [(tick, hold kind, blocking entry, files)]
+        self.verified = set()  # every tree (its patches) a check or a batch check passed (INVARIANT 11)
 
     # ---------------------------------------------------------------- the model's git
     def anc(self, sha):
@@ -450,6 +471,7 @@ class Sim:
         if bad:
             lines = [f"[info] - sim {letters(self.patches[p].cid)} works *** FAILED ***" for p in bad]
             return False, "\n".join(lines + ["! pre-push sbt FAILED (3s)"]) + "\n"
+        self.verified.add(frozenset(self.patches_of(tip)))
         return True, f"checks passed {where}\n"
 
     def run_entry_checks(self, repo, d, e, tree, base, head, mode, cls, log_path, own=None):
@@ -462,12 +484,14 @@ class Sim:
                 self.violate(f"red fix {e['id']} checked in {os.path.basename(tree)}, not the red-fix tree (the wrong "
                              f"lane; that tree held by {other or (holder or {}).get('holder')})")
         self.checks_of[e["id"]] = self.checks_of.get(e["id"], 0) + 1
-        self.local.task.block(self.rng.randint(1, 2) if mode == A.VERIFY_MODE else self.rng.randint(2, 4))
+        self.local.task.block(self.rng.randint(*self.profile.get("verify_ticks", (1, 2))) if mode == A.VERIFY_MODE
+                              else self.rng.randint(*self.profile.get("check_ticks", (2, 4))))
         ok, out = self.verdict(head, f"{mode} {head[:8]}")
         return ok, out, "in the simulation"
 
     def batch_check(self, repo, d, tree, base, tip, cls="check", depth="fast", runs=None, range_base=None):
-        self.local.task.block(self.rng.randint(1, 2) if depth == "verify" else self.rng.randint(2, 5))
+        self.local.task.block(self.rng.randint(*self.profile.get("verify_ticks", (1, 2))) if depth == "verify"
+                              else self.rng.randint(*self.profile.get("batch_ticks", (2, 5))))
         ok, out = self.verdict(tip, f"batch {depth} {tip[:8]}")
         return ok, out, False
 
@@ -494,6 +518,8 @@ class Sim:
             self.pushed_patch_count[pid] = self.pushed_patch_count.get(pid, 0) + 1
             if self.pushed_patch_count[pid] > 1:
                 self.violate(f"patch {pid} of change {self.patches[pid].cid} pushed to main twice")
+        if who == "queue" and frozenset(self.patches_of(sha)) not in self.verified:  # INVARIANT 11
+            self.violate(f"an unverified combined tree reached main: {sha[:10]} (patches {sorted(new)}) passed no check")
         self.pushes.append((self.tick, sha, new, who))
         self.main = sha
         if self.reds and any(self.patches[p].fixes & self.reds for p in new):
@@ -532,7 +558,7 @@ class Sim:
              "spawn_executor", "spawn_batch_executor", "precheck_hook", "verify_areas_supported", "remote_matches",
              "remote_checks_supported", "slug", "cancel_entry_remote", "stats_post", "check_runs_of", "gate_runs_pass",
              "clone_shared", "spawn_waiting_processor", "offer_token", "tool_env", "stats_echo", "pair_conflict",
-             "recheck_reason", "waiting_entries", "process_start", "code_version")
+             "recheck_reason", "waiting_entries", "process_start", "code_version", "dt")
 
     def install(self):
         import contextlib
@@ -553,7 +579,8 @@ class Sim:
                                   "generated": [{"paths": list(GENERATED), "regen": "true"}]}]}, f)
         os.environ.update(AGENTCTL_RED_REPOS=repos)
         os.environ.update(AGENTCTL_STATE_ROOT=os.path.join(self.tmp, "state"), AGENTCTL_ROLE="server",
-                          AGENTCTL_CHECK_TREES=str(self.trees), AGENTCTL_CHECK_LEASE_TTL="600",
+                          AGENTCTL_CHECK_TREES=str(self.trees),
+                          AGENTCTL_CHECK_LEASE_TTL=str(self.profile.get("lease_ttl", 600)),
                           AGENTCTL_STATS_URL="http://sim", AGENTCTL_STATS_SETTLE="0",
                           AGENTCTL_INBOX_DIR=os.path.join(self.tmp, "inbox"),
                           AGENTCTL_CHECKS_DIR=os.path.join(self.tmp, "checks"))
@@ -564,6 +591,7 @@ class Sim:
         clock = self.clock = [1_800_000_000.0]
         A.time.time = lambda: clock[0]
         A.time.sleep = lambda s: None
+        A.dt = sim_datetime(clock)  # entry ids and stamps from the simulated clock: a seed replays exactly
         A.os = SimOs(self)
         A.git, A.git_ok = self.git, self.git_ok
         A.fetch_main = lambda repo: (True, "")

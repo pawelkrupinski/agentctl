@@ -15,7 +15,9 @@ after every tick:
   8. a change that no longer applies because of a change open when it was queued was told at queue time (CONFLICTS,
      or NOT LANDED at its first tick) and never checked meanwhile;
   9. no full recheck for a file overlap with a change that was open when it was queued (checked as one instead);
-  10. no change held behind another for generated files alone (GENERATED FILES ARE NO OVERLAP, waiting.py).
+  10. no change held behind another for generated files alone (GENERATED FILES ARE NO OVERLAP, waiting.py);
+  11. no unverified combined tree reaches main: every tree the queue pushes is one a check or a batch check passed
+      (the owner's R3, 2026-11-19: the invariant every landing-latency cut is held to).
 
 200 random seeds run in the suite (8 tests of 25, in parallel); $AGENTCTL_TEST_SIM_SEEDS runs more. The fixed seeds
 replay real days (victoria-logs-ci `record:agentctl.landing`, tests/fixtures/landing-replay-7d.json) and the bugs the
@@ -220,6 +222,10 @@ MUTATIONS = {
     "generated files are no overlap": (
         "        shared = shared if strict else without_generated(repo, shared)\n",
         "", "baselines"),
+    # (11) the combined tree pushed unverified: main moved with no file overlap, and no verify round ran
+    "a moved main's combined tree is verified": (
+        "            if why is not None or tree_hook:  # a new round, not an attempt",
+        "            if why is not None:  # MUTATION", "random"),
     "overlapping changes are checked as one": (
         '    if e.get("backlog_batch"):\n        return None\n    together, first = None, None',
         '    return None  # MUTATION\n    together, first = None, None', "collisions"),
