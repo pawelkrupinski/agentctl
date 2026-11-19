@@ -452,7 +452,8 @@ def stuck_obs(snap):
         r = s["run"]
         units.append({"key": red_key(s["name"], "stuck", "stuck run"), "workflow": s["name"], "job": "stuck",
                       "kind": "infra", "red_kind": "stuck-run", "gate": s["name"] in {g["name"] for g in snap.get("gate") or []},
-                      "line": f"run #{r.get('number')} undecided for {fmt_age(s['age'])} (limit {fmt_age(s['limit'])})",
+                      "line": f"run #{r.get('number')} undecided for {fmt_age(s['age'])} (limit {fmt_age(s['limit'])}"
+                              + (f", {s['limit_from']})" if s.get("limit_from") else ")"),
                       "run": r, "runs": [], "names": run_names(r)})
     return red_obs_of_units(units)
 
@@ -470,29 +471,48 @@ GITHUB_JOB_TIMEOUT = 360 * 60  # GitHub's own timeout of a job that sets none
 UNSTARTED = ("queued", "waiting", "pending", "requested")
 
 
+# A RUN THAT DID NOTHING IS NO SAMPLE (issues 20261101T101427-e15fe1, 20261108T205920-0e4015): Order independence #27
+# took 31 s with every real job skipped, and Identity takes' first runs failed in ~3 min, so the p90 fell to the floor
+# and healthy 40-min runs were stuck reds. A finished run shorter than STUCK_SAMPLE_MIN tells nothing of how long the
+# workflow takes: it is left out of the p90, and the stuck line says how many runs the limit came from.
+STUCK_SAMPLE_MIN = 5 * 60
+# A SCHEDULED BOT WAITS ITS TURN (issue 20261108T135045-06bcab: Scala Steward #145, a daily run queued behind a
+# CPU-saturated ci-runner -- checks first, by design -- was stuck at 1 h): a run its schedule started that has not
+# started a job yet waits its turn behind checks, so its limit is at least STUCK_SCHEDULED; once a job runs, the
+# workflow's own limit judges it.
+STUCK_SCHEDULED = 6 * 3600
+STUCK_SCHEDULED_EVENTS = ("schedule", "repository_dispatch")  # movies' scheduler dispatches the crons (repository_dispatch)
+
+
 def stuck_durations(runs):
+    """The durations of the finished runs that ran (STUCK_SAMPLE_MIN or longer)."""
     durs = []
     for r in runs:
         if r.get("status") == "completed" and r.get("createdAt") and r.get("updatedAt"):
             try:
-                durs.append(parse_time(r["updatedAt"]).timestamp() - parse_time(r["createdAt"]).timestamp())
+                dur = parse_time(r["updatedAt"]).timestamp() - parse_time(r["createdAt"]).timestamp()
             except (ValueError, TypeError):
-                pass
+                continue
+            if dur >= STUCK_SAMPLE_MIN:
+                durs.append(dur)
     return durs
 
 
-def stuck_limit(name, runs, history_of, timeout_of):
+def stuck_limit(name, runs, history_of, timeout_of, how=None):
     """max(STUCK_FACTOR x the p90 of the workflow's finished runs, STUCK_FLOOR): from the list, else its own history;
-    with too few of those, its jobs' timeout-minutes bound (when readable)."""
+    with too few of those, its jobs' timeout-minutes bound (when readable). how: a dict told where it came from."""
     durs = stuck_durations(runs)
     if len(durs) < STUCK_MIN_HISTORY and history_of:
         seen = {r.get("databaseId") for r in runs if r.get("status") == "completed"}
         durs += stuck_durations([r for r in history_of(name) or [] if r.get("databaseId") not in seen])
     limit = max(STUCK_FACTOR * (pct(durs, 90) if durs else 0), STUCK_FLOOR)
+    src = f"from {len(durs)} runs" if durs else "the floor"
     if len(durs) < STUCK_MIN_HISTORY and timeout_of:
         bound = timeout_of(name)
-        if bound:
-            limit = max(limit, bound)
+        if bound and bound > limit:
+            limit, src = bound, f"its jobs' timeouts ({len(durs)} runs)"
+    if how is not None:
+        how["src"] = src
     return limit
 
 
@@ -526,7 +546,7 @@ def stuck_runs(lists, now_=None, o_r=None, jobs_of=None, queue=None, history_of=
         timeout_of = lambda name: stuck_timeout(o_r, name)  # noqa: E731
     out = []
     for name, runs in lists.items():
-        limit = None  # read only once one of its runs is past the floor: the history and the file cost a read each
+        limit, how = None, {}  # read only once one of its runs is past the floor: the history and the file cost a read
         for r in runs:
             if r.get("status") != "completed" and r.get("createdAt"):
                 try:
@@ -536,8 +556,9 @@ def stuck_runs(lists, now_=None, o_r=None, jobs_of=None, queue=None, history_of=
                 if age <= STUCK_FLOOR:
                     continue
                 if limit is None:
-                    limit = stuck_limit(name, runs, history_of, timeout_of)
-                if age <= limit:
+                    limit = stuck_limit(name, runs, history_of, timeout_of, how)
+                lim = limit
+                if age <= lim:
                     continue
                 jobs = jobs_of(r)
                 starts = sorted(parse_time(j["startedAt"]).timestamp() for j in jobs or [] if j.get("startedAt"))
@@ -548,11 +569,14 @@ def stuck_runs(lists, now_=None, o_r=None, jobs_of=None, queue=None, history_of=
                 if jobs is not None and open_jobs and all(j.get("status") in UNSTARTED for j in open_jobs):
                     # nothing running: queued, not stuck, when every runner that could take it is busy
                     queued = queue_full(o_r, r.get("number"), runner_queue(t) if queue is None else queue)
-                if age > limit:
+                    if not starts and r.get("event") in STUCK_SCHEDULED_EVENTS:  # a scheduled bot not started yet
+                        lim = max(lim, STUCK_SCHEDULED)
+                if age > lim:
                     if starts and not queued:
                         waits_on = stuck_child(lists, name, starts[0])
                     s = {"name": name, "run": {k: r.get(k) for k in ("number", "databaseId", "headSha", "createdAt")},
-                         "age": age, "limit": limit}
+                         "age": age, "limit": lim,
+                         "limit_from": "its schedule" if lim != limit else how.get("src")}
                     out.append({**s, "queued": queued} if queued else {**s, "waits_on": waits_on} if waits_on else s)
     return out
 

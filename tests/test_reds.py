@@ -2046,6 +2046,18 @@ class StuckLimitTest(unittest.TestCase):
                             timeouts={name: 120 * 60})
         self.assertEqual(out, [], "a 40 min run whose last job started 3 min ago, within the jobs' 120 min bound")
 
+    def test_a_scheduled_bot_not_started_yet_waits_its_turn_behind_checks(self):
+        """Issue 20261108T135045-06bcab (Scala Steward #145): a daily run queued 1 h behind a CPU-saturated runner while
+        slots were free (the scheduler holds it: checks first) was a stuck red. Not started, scheduled: 6 h; started:
+        its workflow's own limit."""
+        name = "Scala Steward"
+        runs = [self.ci_run(140 + i, 86400 * (i + 1), dur=600) for i in range(6)]
+        out, _ = self.stuck({name: [self.ci_run(145, 2 * 3600)] + runs}, self.jobs(("queued", None)))
+        self.assertEqual(out, [], "not started, its schedule's run waits its turn")
+        out, _ = self.stuck({name: [self.ci_run(146, 2 * 3600, event="workflow_dispatch")] + runs},
+                            self.jobs(("queued", None)))
+        self.assertEqual(len(out), 1, "a dispatched run is judged as before")
+
     def test_the_stuck_line_says_how_many_runs_its_limit_came_from(self):
         """Issue 20261101T101427-e15fe1, last sentence: print the sample count beside the limit."""
         name = "Main"
