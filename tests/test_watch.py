@@ -165,15 +165,23 @@ class WatchTest(Base):
         def broken(o_r, *args):
             raise RuntimeError("connection refused")
         A.gh_json = broken
-        sleeps = []
-        A.time.sleep = sleeps.append
-        os.environ["AGENTCTL_WATCH_TIMEOUT"] = "0.3"
+        # ON A CLOCK THE SLEEPS MOVE (2026-11-19: with a 0.3 s real-time bound and no-op sleeps, how many reads fit
+        # was the machine's speed -- 10 in python:3.14 under load, and the assertion failed): each sleep advances it
+        sleeps, clock, real = [], [1795000000.0], A.time.time
+        A.time.time = lambda: clock[0]
+        self.addCleanup(setattr, A.time, "time", real)
+
+        def sleep(s):
+            sleeps.append(s)
+            clock[0] += s
+        A.time.sleep = sleep
+        os.environ["AGENTCTL_WATCH_TIMEOUT"] = "3000"
         rc, out = self.watch()
         self.assertEqual(rc, 2, out)
         self.assertGreater(len(sleeps), 10, "no give-up after 10 failed reads: it reads again until the bound")
         self.assertEqual(sleeps[:3], [30, 45, 67.5])
         self.assertEqual(max(sleeps), 300)
-        self.assertIn("WATCH UNKNOWN: GitHub's runs could not be read for 0m", out)
+        self.assertRegex(out, r"WATCH UNKNOWN: GitHub's runs could not be read for \d+")
         self.assertIn("connection refused", out.splitlines()[-1])
         self.assertNotIn("STALLED", out, "a failed read says nothing about the runs")
 
