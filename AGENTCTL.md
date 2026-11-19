@@ -599,7 +599,12 @@ The owner: "why unclaimed ... should always claim, fix structurally".
   auto-clears; `ci-why` shows all of it, while the status line shows a short form with a pointer. Every red tick
   checks each block again (the condition's probe is `owner_block`, which ANDs in the block's justification). A block
   that lost its cause, its command, or its non-test verdict, or whose red has a live fixer, is dropped at once.
-  A live fixer outranks a block. A red with 3 or more refuted fixes is `recurring: N fixes refuted`, and its fixer is told to find the root
+  A live fixer outranks a block. **An owner command that deletes is scoped and guarded** (issue
+  20261110T084827-38f01b: an unguarded `rm -rf` of runner workspaces, run 8 h later, wiped three running jobs):
+  it names each path (no brace, glob, bare variable or near-root path), checks before it deletes (if / test / [ /
+  pgrep) that the target is still unused when the owner runs it, and inside a CI runner's workspace skips a slot
+  whose Runner.Worker runs. `red block` refuses anything else (`owner_cmd_unsafe`), and a block already carrying one
+  lapses at the next tick. A red with 3 or more refuted fixes is `recurring: N fixes refuted`, and its fixer is told to find the root
   cause, with those commits listed.
 - **One outage is one condition.** `red block <n> --cmd "..." --cause Decodo --until-green "Decodo probe"` opens it, and
   later reds attach with `--cause Decodo`. When the probe passes, every attached red is released and its workflow

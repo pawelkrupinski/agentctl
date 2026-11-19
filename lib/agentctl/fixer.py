@@ -1988,6 +1988,66 @@ OWNER_CAUSES = {"external-account": "an external account only the owner holds (a
                 "dashboard": "an action in a dashboard only the owner can reach"}
 
 
+# AN OWNER COMMAND THAT DELETES IS SCOPED AND GUARDED (issue 20261110T084827-38f01b, P0). `red block` handed the owner
+# `sudo rm -rf /run/github-runner/bitcashier-gh-builder-{1,4,6,7,8,12}/core/core/docker`; he ran it 8 h later, while
+# builders 4, 6 and 12 ran Main Pipeline #939, and docker/ vanished under all three jobs (red #939). An owner command
+# runs whenever the owner gets to it, so what was idle when the fixer looked may be busy then: a deletion names each
+# path (no brace, glob, bare variable or shallow root), carries its own check before it deletes (if / test / [ /
+# pgrep), and one inside a CI runner's workspace skips a slot whose Runner.Worker runs. `red block` refuses anything
+# else, and a block raised before this rule carrying one lapses at the next tick (block_invalid).
+OWNER_CMD_DELETES = re.compile(r"^(rm|rmdir|unlink|shred|truncate)$")
+OWNER_CMD_GUARDS = {"if", "test", "[", "[[", "pgrep", "while", "until"}
+OWNER_CMD_RUNNER_WS = re.compile(r"github-runner|actions-runner|/_work(/|$)")
+OWNER_CMD_SPLIT = re.compile(r"\s*(?:&&|\|\||;|\||\n|\bdo\b|\bthen\b|\belse\b)\s*")
+
+
+def owner_cmd_target_unscoped(arg):
+    """Why one path a deletion names is not one named path, or None."""
+    if re.search(r"[*?\[\]{}`]|\$\(", arg):
+        return f"{arg!r} expands (a glob, brace or substitution): name each path"
+    if re.fullmatch(r"\$\{?\w+\}?/?", arg) or arg in (".", "..", "-"):
+        return f"{arg!r} names no path"
+    literal = re.sub(r"\$\{?\w+\}?", "x", arg)
+    if literal.startswith(("~", "$HOME", "/")) and len([p for p in literal.lstrip("~").split("/") if p]) < 3:
+        return f"{arg!r} is too near the root"
+    return None
+
+
+def owner_cmd_unsafe(cmd):
+    """Why the owner must not be handed this command as it stands (it deletes unscoped or unguarded), or None."""
+    flat = str(cmd or "").replace("'", " ").replace('"', " ")
+    segments = [s.split() for s in OWNER_CMD_SPLIT.split(flat)]
+    deleting, guarded = [], False
+    for words in segments:
+        verbs = [w for w in words if w not in ("sudo", "exec", "command", "nice", "ionice") and not w.startswith("-")]
+        if not verbs:
+            continue
+        head = verbs[0]
+        guarded = guarded or bool(OWNER_CMD_GUARDS & {words[0], head})
+        if head in ("docker", "podman") and "prune" in words or head == "find" and "-delete" in words or \
+                head == "kubectl" and "delete" in words and ("--all" in words or "-A" in words) or \
+                re.search(r"\bdrop(Database|Collection)\b|\b(DROP|TRUNCATE)\s+(TABLE|DATABASE)\b", " ".join(words)):
+            return (f"unscoped: `{' '.join(words)[:80]}` deletes whatever it matches, not named paths -- hand the owner "
+                    "a command naming each thing it removes")
+        if OWNER_CMD_DELETES.match(head) or head == "git" and ("clean" in words or "--hard" in words) or \
+                head in ("docker", "podman", "kubectl") and ({"rm", "rmi", "delete"} & set(words)):
+            targets = verbs[1:] if OWNER_CMD_DELETES.match(head) else []
+            for arg in targets:
+                why = owner_cmd_target_unscoped(arg)
+                if why:
+                    return f"unscoped: {why}"
+            deleting.append((targets, guarded))
+    for targets, was_guarded in deleting:
+        if any(OWNER_CMD_RUNNER_WS.search(t) for t in targets) and "Runner.Worker" not in flat:
+            return ("it deletes inside a CI runner's workspace without skipping a busy slot: check each slot's "
+                    "Runner.Worker first (`pgrep -f \"<slot>/.*Runner.Worker\" >/dev/null || rm -rf <its path>`), as the "
+                    "owner may run it hours later, mid-job")
+        if not was_guarded:
+            return ("unguarded: it deletes with no check before it (if / test / [ / pgrep): the owner runs it whenever "
+                    "he gets to it, so it must check what it removes is still unused then")
+    return None
+
+
 def owner_details(o_r, n, name, units, cmd, words, owner_cause):
     """The owner's whole picture, one line each part: what fails, what was tried, why only the owner, the command, how
     it clears (the owner, 2026-10-28: "more details in the future pls")."""
@@ -2060,6 +2120,9 @@ def block_invalid(store, it, m, t):
         return f"no owner cause (one of {', '.join(OWNER_CAUSES)}): only the owner's causes may block on the owner"
     if not str(m.get("cmd") or "").strip():
         return "no owner command"
+    unsafe = owner_cmd_unsafe(m.get("cmd"))
+    if unsafe:
+        return f"its owner command is unsafe: {unsafe}"
     if d.get("kind") == "test":
         return "its red is a TEST FAILURE: a code red is never the owner's"
     row = store.get(red_lease(d["key"]))
@@ -2442,6 +2505,11 @@ def red_block(o_r, a):
     if any(x.get("kind") == "test" for x in units):
         print(f"NOT BLOCKED: #{n} is a TEST FAILURE ({units[0].get('job')}): a code red is never the owner's -- "
               f"`~/bin/agentctl red claim {n}` and fix it")
+        return 2
+    unsafe = owner_cmd_unsafe(a.owner_cmd or om.get("cmd"))
+    if unsafe:
+        print(f"NOT BLOCKED: the owner command is unsafe -- {unsafe}. A command that deletes names each path and "
+              "checks, inside the command, that it is still unused when the owner runs it.")
         return 2
     items = known or (red_targets(st, o_r, n) if units else [])
     own = read_record(own_fixer_record_path() or "") or {}

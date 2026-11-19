@@ -956,6 +956,43 @@ class OwnerTest(RedsBase):
         self.assertEqual(lease["holder"], "owner:external-account")
 
 
+    def test_an_owner_command_that_deletes_is_handed_over_only_scoped_and_guarded(self):
+        # issue 20261110T084827-38f01b: `red block` for core #923 handed the owner `sudo rm -rf
+        # /run/github-runner/bitcashier-gh-builder-{1,4,6,7,8,12}/core/core/docker`; the owner ran it 8 h later while
+        # builders 4, 6 and 12 ran Main Pipeline #939, whose docker/ vanished under it: red #939
+        self.main_red(40, 20, kind="infra")
+        self.tick()
+        unsafe = {
+            "ssh ci-runner 'cd /run && sudo rm -rf /run/github-runner/gh-builder-{1,4,6}/core/core/docker'": "unscoped",
+            "sudo rm -rf /run/github-runner/gh-builder-4/core/core/*": "unscoped",
+            "ssh ci-runner 'pgrep -x dockerd && sudo rm -rf /run/github-runner/gh-builder-4/core/core/docker'":
+                "Runner.Worker",
+            "rm -rf /srv/cache/stale-dir": "unguarded",
+            "test -d ~ && rm -rf ~": "unscoped",
+            "docker system prune -af": "unscoped",
+        }
+        for cmd, why in unsafe.items():
+            rc, out = self.tool("red", "block", "20", "--owner-cause", "infra-apply", "--cmd", cmd, "--until-http",
+                                "http://127.0.0.1:9/x", "--repo", "movies", cwd=self.r.path)
+            self.assertEqual(rc, 2, f"{cmd}: {out}")
+            self.assertIn("NOT BLOCKED", out)
+            self.assertIn(why, out, cmd)
+            self.assertEqual(self.st.list("block/"), [], cmd)
+        guarded = ("ssh ci-runner 'for s in 1 4 6; do pgrep -f \"gh-builder-$s/.*Runner.Worker\" >/dev/null || "
+                   "sudo rm -rf \"/run/github-runner/gh-builder-$s/core/core/docker\"; done'")
+        self.assertIsNone(A.owner_cmd_unsafe(guarded))
+        self.assertIsNone(A.owner_cmd_unsafe("secrets unlock movies"))
+        rc, out = self.tool("red", "block", "20", "--owner-cause", "infra-apply", "--cmd", guarded, "--until-http",
+                            "http://127.0.0.1:9/x", "--repo", "movies", cwd=self.r.path)
+        self.assertEqual(rc, 0, out)
+        # a block raised before the guard, carrying an unguarded deletion, lapses at the next tick: never asked
+        lease = self.st.list("block/")[0]
+        self.st.set_meta(lease["name"], lease["epoch"], lease["secret"],
+                         {"cmd": "sudo rm -rf /run/github-runner/gh-builder-{1,4}/core/core/docker"})
+        self.tick()
+        self.assertEqual([r for r in self.st.list("block/") if A.lease_is_live(r, self.t[0])], [])
+        self.assertIn("unscoped", A.lease_meta(self.st.list("block/")[0])["outcome"])
+
     def test_a_live_fixer_outranks_a_block_whose_justification_then_lapses(self):
         self.main_red(40, 20, kind="infra")
         self.tick()
