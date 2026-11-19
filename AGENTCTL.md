@@ -1789,6 +1789,13 @@ sbt-warm's kept servers each holding a slot, idle or not).
   looks again. Logged in `gov/gov.log`; every admission in `gov/admits.jsonl`.
 - **Checks** keep their cap (below), now one of the governor's limits.
 
+**Waiting is cheap, and outside load never starves the queue (2026-11-19 15:35Z).** ~13 sbt-warm waiters each re-read
+every waiter's liveness (two `ps` each) and the machine every 2 s: ~170 short processes a second, a load of ~60 on 18
+cores that held them all on the load factor. A waiter behind the head now re-reads the queue only when its change mark
+moves (a waiter or ticket leaving) or its backoff (2 s doubling to 30 s) runs out, a stat meanwhile; liveness is a
+signal 0 with the start time read once a minute. The class load factors hold work only while the governor's own work
+is in the load (cores charged, or a ticket admitted within GOV_RAMP): with neither, the head goes, one per GOV_RAMP.
+
 ### checks: the pre-commit check cap
 
 ```
@@ -2193,6 +2200,10 @@ and, once a day at the first pass from 09:00 local (`$AGENTCTL_SWEEP_HOUR`), the
 `~/.cache/agentctl/reap.log`. Source `~/bin/launchd/net.bitcashier.agentctl-maintain.plist` (installed as a copy). It
 replaces `net.bitcashier.agentctl-reap`, `net.bitcashier.agentctl-sweep` and `dev.kinowo.jvm-reaper` (their plists:
 `~/bin/launchd/retired/`); `~/.local/bin/reap-stale-jvms.sh` is now a shim calling `agentctl reap`.
+Each pass also marks every worktree of agentctl's repos, and its `target/`, with `.metadata_never_index` (kept out of
+`git status` by the repo's shared `info/exclude`): 2026-11-19 mds indexed ~26 movies worktrees at ~1.5 cores. macOS
+honours that marker unevenly; the sure exclusion is the owner's System Settings > Spotlight > Search Privacy entry
+for `~/projects`.
 
 Each pass also sweeps the iOS Simulators agents left booted (`ios_simulator_sweep`, 2026-11-07: three booted for days took
 the laptop to load 368): movies' `scripts/ios-simulators sweep` from the root checkout, bounded to 120 s, laptop only,

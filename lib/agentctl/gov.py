@@ -186,6 +186,7 @@ def gov_tickets():
                     os.unlink(p)
                     os.unlink(lock)
                     gov_log_end(os.path.basename(lock))
+                    gov_bump()
             except OSError:
                 pass
             continue
@@ -273,6 +274,12 @@ def gov_ramp(tickets, now=None):
     return sum(float(t.get("mem") or 0) for t in tickets if now - t.get("at", 0) < GOV_RAMP)
 
 
+def gov_ramp_count(tickets, now=None):
+    """The tickets admitted within the last GOV_RAMP seconds (their job's load not yet in the load average)."""
+    now = time.time() if now is None else now
+    return sum(1 for t in tickets if now - float(t.get("at") or 0) < GOV_RAMP)
+
+
 def gov_fits(cls, mem, tickets, m, kind="job", cores=0.0):
     """(True, None) when work of class cls expecting `mem` GB and `cores` cores may start now; else (False, why,
     on_memory). Red: always."""
@@ -302,9 +309,14 @@ def gov_fits(cls, mem, tickets, m, kind="job", cores=0.0):
     if m.get("laptop"):
         return False, f"laptop pressure: {m['laptop']}", True
     factor = GOV_LOAD.get(cls)
-    if factor and m.get("load1") is not None and m["load1"] > factor * m["cores"]:
-        return False, f"load {m['load1']:.0f} over {factor:g}x {m['cores']} cores", False
     charged = gov_charged(tickets)
+    # OUTSIDE LOAD ALONE NEVER STARVES THE QUEUE (2026-11-19 15:35Z: 0 cores charged, a load of ~60 from other agents'
+    # git storms, Spotlight and the waiters' own polling held every waiter 10+ min): the load factor holds work only
+    # while the governor's own work is in it -- cores charged, or a ticket still ramping up (its load not yet shown).
+    # With neither, the head goes, one job per GOV_RAMP.
+    ours = charged > 0 or gov_ramp_count(tickets) > 0
+    if factor and ours and m.get("load1") is not None and m["load1"] > factor * m["cores"]:
+        return False, f"load {m['load1']:.0f} over {factor:g}x {m['cores']} cores", False
     if cores and charged > 0:
         cap = env_num("AGENTCTL_GOV_CPU_FACTOR", GOV_CPU_FACTOR) * m["cores"]
         busy = max(charged, m.get("load1") or 0.0)
@@ -314,14 +326,67 @@ def gov_fits(cls, mem, tickets, m, kind="job", cores=0.0):
     return True, None, False
 
 
+# WAITING IS CHEAP (2026-11-19 15:35Z: ~13 sbt-warm waiters each re-read every waiter's liveness -- two `ps` per waiter
+# -- and the machine's memory -- four more processes -- every GOV_POLL: ~170 short processes a second, a load of ~60 on 18
+# cores that held them all on the load factor, a loop feeding itself). Now a waiter behind the head re-reads the queue
+# only when the CHANGE MARK moves (gov_bump: a waiter or ticket leaving) or its backoff (GOV_POLL doubling to
+# GOV_IDLE_MAX) runs out, a stat of one file meanwhile; and a waiter's liveness is its pid (a signal 0, no process) with
+# its start time read once per GOV_ALIVE_TTL.
+GOV_IDLE_MAX = 30.0     # s a waiter behind the head waits at most between two reads of the queue
+GOV_ALIVE_TTL = 60.0    # s a waiter's start time, once read, vouches for its pid
+_gov_alive = process_cache({})
+
+
+def gov_bump():
+    """Mark that the queue changed (a waiter or a ticket left): every waiter behind the head looks again now."""
+    try:
+        with open(os.path.join(gov_dir(), "changed"), "a"):
+            pass
+        os.utime(os.path.join(gov_dir(), "changed"))
+    except OSError:
+        pass
+
+
+def gov_change_mark():
+    try:
+        return os.stat(os.path.join(gov_dir(), "changed")).st_mtime_ns
+    except OSError:
+        return 0
+
+
+def gov_wait_change(mark, secs):
+    """Sleep up to secs, returning early when the change mark moves past `mark`."""
+    end = time.monotonic() + secs
+    step = min(env_num("AGENTCTL_GOV_POLL", GOV_POLL), secs)
+    while time.monotonic() < end:
+        time.sleep(max(0.01, min(step, end - time.monotonic())))
+        if gov_change_mark() != mark:
+            return
+
+
+def gov_waiter_alive(rec):
+    pid, start = int(rec.get("pid", 0) or 0), rec.get("start")
+    if not pid or not pid_alive(pid):
+        return False
+    k = (pid, str(start))
+    at = _gov_alive.get(k)
+    if at is not None and time.time() - at < GOV_ALIVE_TTL:
+        return True
+    ok = proc_alive(pid, start)  # a reused pid is not the waiter
+    if ok:
+        _gov_alive[k] = time.time()
+    return ok
+
+
 def gov_waiters():
     """The live waiters, in admission order: (class priority, arrival)."""
     out = []
     for p in glob.glob(os.path.join(gov_dir(), "w-*.json")):
         rec = read_record(p)
-        if not rec or not proc_alive(int(rec.get("pid", 0)), rec.get("start")):  # a reused pid is not the waiter
+        if not rec or not gov_waiter_alive(rec):
             try:
                 os.unlink(p)
+                gov_bump()
             except OSError:
                 pass
             continue
@@ -399,6 +464,7 @@ class GovTicket:
         if self.f:
             self.f.close()
             self.f = None
+        gov_bump()
 
 
 class GovTimeout(RuntimeError):
@@ -423,8 +489,10 @@ def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=Tr
                     "pid": os.getpid(), "at": t0, "start": process_start(os.getpid())})
     said, report_at, why, waited_on = False, 0.0, None, None
     report = report or err
+    idle = env_num("AGENTCTL_GOV_POLL", GOV_POLL)  # a waiter behind the head backs off from here to GOV_IDLE_MAX
     try:
         while True:
+            mark = gov_change_mark()
             tickets = gov_tickets()
             waiters = gov_waiters()
             head = waiters and os.path.abspath(waiters[0]["path"]) == os.path.abspath(me)
@@ -455,7 +523,12 @@ def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=Tr
                        f"{why}; {len(tickets)} admitted, {gov_committed(tickets):.0f}/{gov_budget():.0f} GB, "
                        f"{gov_charged(tickets):g} cores charged")
                 said, report_at = True, time.monotonic() + GOV_REPORT
-            time.sleep(env_num("AGENTCTL_GOV_POLL", GOV_POLL))
+            if head:  # the head reads the machine every poll: memory and load free up with no event
+                idle = env_num("AGENTCTL_GOV_POLL", GOV_POLL)
+                time.sleep(idle)
+            else:
+                gov_wait_change(mark, idle)
+                idle = min(idle * 2, env_num("AGENTCTL_GOV_IDLE_MAX", GOV_IDLE_MAX))
         # THE TICKET BEFORE THE WAITER GOES: the next head never looks between the two and misses this admission
         path = ticket or os.path.join(d, f"t-{t0:.6f}-{os.getpid()}.lock")
         f = None
@@ -480,6 +553,7 @@ def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=Tr
             os.unlink(me)
         except OSError:
             pass
+        gov_bump()  # the next waiter is the head now: it looks at once
 
 
 @contextlib.contextmanager

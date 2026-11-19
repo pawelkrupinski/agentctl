@@ -466,3 +466,44 @@ def jvm_reap(cands, kill, procs):
 
 
 MAINTAIN_SWEEP_HOUR = 9  # local time: the daily sweep runs at the first maintain pass from 09:00 ($AGENTCTL_SWEEP_HOUR)
+
+
+# NO SPOTLIGHT IN WORKTREES (2026-11-19 15:35Z: mds_stores and mds took ~1.5 cores indexing ~26 movies worktrees and
+# their target/ trees -- sbt output rewritten on every compile -- while every agent's work waited on the load). Each
+# maintain pass drops a `.metadata_never_index` marker at the root of every worktree of agentctl's repos (whoever made
+# it: agentctl, an agent's `git worktree add`, Claude Code) and of each worktree's target/, and keeps the marker out of
+# `git status` through the repo's shared info/exclude. macOS honours the marker unevenly across releases; the owner's
+# Spotlight Privacy exclusion of ~/projects is the sure one (AGENTCTL.md, maintain).
+SPOTLIGHT_MARKER = ".metadata_never_index"
+
+
+def spotlight_exclude(repos=None):
+    """Markers into every worktree (and its target/) of the repos; returns the paths it marked."""
+    marked = []
+    for repo in repos if repos is not None else REPOS:
+        if not os.path.isdir(repo):
+            continue
+        r = git(repo, "rev-parse", "--git-common-dir", check=False)
+        if r.returncode:
+            continue
+        common = os.path.join(repo, r.stdout.strip()) if not os.path.isabs(r.stdout.strip()) else r.stdout.strip()
+        excl = os.path.join(common, "info", "exclude")
+        try:
+            have = open(excl).read() if os.path.exists(excl) else ""
+            if SPOTLIGHT_MARKER not in have.split():
+                os.makedirs(os.path.dirname(excl), exist_ok=True)
+                with open(excl, "a") as f:
+                    f.write(("" if not have or have.endswith("\n") else "\n") + SPOTLIGHT_MARKER + "\n")
+        except OSError:
+            continue  # never marks a tree whose git status the marker would dirty
+        out = git(repo, "worktree", "list", "--porcelain", check=False).stdout
+        for wt in (l[len("worktree "):] for l in out.splitlines() if l.startswith("worktree ")):
+            for d in (wt, os.path.join(wt, "target")):
+                m = os.path.join(d, SPOTLIGHT_MARKER)
+                if os.path.isdir(d) and not os.path.exists(m):
+                    try:
+                        open(m, "a").close()
+                        marked.append(d)
+                    except OSError:
+                        pass
+    return marked

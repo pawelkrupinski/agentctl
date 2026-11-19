@@ -1,7 +1,7 @@
 """THE GOVERNOR (the owner, 2026-10-27: "one governor for laptop memory and CPU"): work is admitted by its expected memory
 against the budget, live free memory and pressure, in priority order (red > check > agent > measure); an idle kept sbt
 server is evicted first when something needs room; a shell holds its ticket on an inherited descriptor."""
-import contextlib, io, json, os, subprocess, sys, tempfile, time, unittest
+import contextlib, io, json, os, subprocess, sys, tempfile, threading, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -98,8 +98,19 @@ class GovernorTest(unittest.TestCase):
         finally:
             os.environ["AGENTCTL_LAPTOP_PRESSURE"] = "-"
 
+    def test_outside_load_alone_never_starves_the_queue_one_job_at_a_time(self):
+        """2026-11-19 15:35Z: 0 cores charged and a load of ~60 (other agents' git storms, Spotlight, the waiters' own
+        polling) held every sbt-warm waiter on the agent load factor for 10+ min. With nothing charged and nothing just
+        admitted, the head goes; the next waits while that one ramps up (its load not yet visible)."""
+        os.environ["AGENTCTL_GOV_LOAD_PROBE"] = f"echo {A.machine_cores() * 3}"
+        self.assertIsNotNone(self.admit("agent", 1, job="keeper"), "nothing charged, nothing ramping: it goes")
+        self.assertIsNone(self.admit("agent", 1, job="keeper"), "the next waits while the first ramps up")
+        self.aged(self.tickets[0], A.GOV_RAMP + 1)
+        self.assertIsNotNone(self.admit("agent", 1, job="keeper"), "a keeper ramped up and charging nothing: the next")
+
     def test_cpu_load_holds_measurements_then_agents_then_checks_never_red(self):
         cores = A.machine_cores()  # the harness's fixed machine, as the governor reads it
+        self.admit("red", 1, job="testOnly")  # something charged: the class load factors hold
         os.environ["AGENTCTL_GOV_LOAD_PROBE"] = f"echo {int(cores * 1.2)}"
         self.assertIsNone(self.admit("measure"))
         self.assertIsNotNone(self.admit("agent"))
@@ -123,6 +134,34 @@ class GovernorTest(unittest.TestCase):
         self.assertIsNotNone(self.admit("check"), "a check too")
         self.assertIsNone(self.admit("agent"), "an agent that came later waits behind the earlier one")
         self.assertIsNone(self.admit("measure"))
+
+    def test_a_waiter_behind_the_head_blocks_cheaply_and_wakes_when_the_head_goes(self):
+        """2026-11-19 15:35Z: ~13 sbt-warm waiters each re-read every waiter's liveness (two `ps` per waiter) every 2 s --
+        ~170 short processes a second, a load of ~60 on 18 cores that held them all on the load factor. A waiter behind
+        the head runs no process while it waits (a stat of the change mark, backing off), and goes as soon as the head
+        leaves."""
+        head = self.waiter("red", time.time() - 10)
+        spawned = []
+        saved = A.run_cmd
+
+        def counting(args, *a, **kw):
+            spawned.append(args)
+            return saved(args, *a, **kw)
+        A.run_cmd = counting
+        got = []
+        th = threading.Thread(target=lambda: got.append(self.admit("agent", 1, wait=True)))
+        try:
+            th.start()
+            time.sleep(1.5)  # 15 polls at 0.1 s
+            waiting = len(spawned)
+            head.kill()
+            head.wait()
+            A.gov_bump()  # the head's own process removes its record and marks the change
+            th.join(10)
+        finally:
+            A.run_cmd = saved
+        self.assertLessEqual(waiting, 6, f"a waiter behind the head kept spawning: {spawned[:8]}")
+        self.assertTrue(got and got[0] is not None, "admitted once the head went")
 
     def test_a_dead_waiter_holds_nobody_up(self):
         p = self.waiter("red", time.time() - 10)

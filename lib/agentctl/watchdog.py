@@ -518,6 +518,12 @@ def cmd_maintain(a):
     rotated = [] if a.dry_run else rotate_logs()
     for line in rotated or ["(dry run)" if a.dry_run else "none over the size"]:
         print(f"  {line}")
+    print("== spotlight")
+    try:
+        marked = [] if a.dry_run else spotlight_exclude()
+        print(f"  marked {len(marked)} tree(s) never to index" if marked else "  every worktree marked")
+    except (Exception, SystemExit) as e:
+        print(f"  could not mark ({str(e)[:160]})")
     print("== ios simulators")
     try:
         ios_simulator_sweep(dry_run=a.dry_run)
