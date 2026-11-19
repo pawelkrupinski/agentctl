@@ -410,6 +410,15 @@ def red_owner(a):
         rec.update(bg_id=adopt["id"], turn=s["turn"])
         turn_state(True, t0)
         print(f"{ts()} RED OWNER {fam}: adopted its session {adopt['id']}, still at work (turn {s['turn']})", flush=True)
+    handed = rec.pop("handed_turn", None)
+    text = bg_turn(rec.get("transcript") or bg_transcript(rec.get("session") or ""))["final"] \
+        if handed and not adopt and owner_leases(fam) else ""
+    if fixer_verdict(text):  # the turn handed over ended meanwhile with a verdict: its reds (offered to this owner
+        s["names"] = list(owner_leases(fam))  # again) end their leases with it, never a new turn over the same ground
+        end_turn("", text)
+        print(f"{ts()} RED OWNER {fam}: turn {handed.get('turn')}, handed over, ended: its verdict to its reds",
+              flush=True)
+    write_json(path, rec)
     stop = None
     try:
         while stop is None:
@@ -420,8 +429,13 @@ def red_owner(a):
         stop = f"store auth failed: {str(ex)[:300]}"
     except Exception as ex:  # never a dead wrapper with a live session and held leases
         stop = f"STOPPED: the owner's wrapper failed ({type(ex).__name__}: {str(ex)[:200]})"
-    if s["bid"] and not (s.get("handover") and in_turn_of(s, rec.get("transcript"))):  # A LOST HEARTBEAT HANDS THE TURN OVER: its session
+    handed = bool(s["bid"] and s.get("handover") and in_turn_of(s, rec.get("transcript")))
+    if s["bid"] and not handed:  # A LOST HEARTBEAT HANDS THE TURN OVER: its session
         bg_stop(cli, s["bid"])  # at work goes on, and the family's next owner adopts it (never started over)
+    if handed:  # ... AND ITS VERDICT (issue 20261116T162652-930aa9: the turn's DIAGNOSED, said after this wrapper ended,
+        # reached no red, and the same diagnosis was offered again): the next owner adopts the session still at work,
+        # or -- its turn over by then -- reads that turn's verdict and ends its reds' leases with it
+        rec["handed_turn"] = {"bid": s["bid"], "turn": s["turn"], "at": ts()}
     release(list(owner_leases(fam)), stop)
     try:
         st.release(owner_lease(fam), s["hb"]["epoch"], s["hb"]["secret"], outcome=stop)
