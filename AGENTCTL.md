@@ -1294,7 +1294,9 @@ The reconciler then takes it, a step per tick:
   of its own) -- in one check tree, the members `checking` meanwhile. Pass: one push carrying that run
   (`PREPUSH_REMOTE_RUN`), every member `checked` -> `pushing` -> LANDED with its own watch and its own landing record
   (`batch_id`, `batch` = the size). Fail: bisected by prefix like the red batch, but not checked whole again first (its
-  confirmation still clears a flaky failure), so at most 3 extra rounds; the culprit is rejected only when its failure
+  confirmation still clears a flaky failure), so at most 3 extra rounds -- except an INFRA-SHAPED failure (an sbt
+  server lost, a runner or network signature with no test line: batch.py `batch_infra_failure`), which checks the
+  whole batch once more first (`BATCH_INFRA_RETRIES`, 1) and bisects only when that fails too; the culprit is rejected only when its failure
   is its own (the differential judgement; a base red, a time cap or an infra failure sends it to a check of its own),
   the passing prefix is pushed at once, the rest queued again for the next batch. While it is open, it goes first like
   the red batch (no solo push under it; a red fix excepted, which keeps its red-fix tree and lands alone: the batch's

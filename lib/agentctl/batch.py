@@ -853,8 +853,13 @@ def check_batch(repo, bid):
         depth, runs = it["data"].get("depth") or "fast", dict(it["data"].get("runs") or {})
         range_base = it["data"].get("range_base")
         if it["state"] == "checking":
-            ok, out, stalled = batch_check(repo, d, tree, base, tip, it["data"].get("cls") or "check", depth, runs,
-                                           range_base=range_base)
+            for attempt in range(BATCH_INFRA_RETRIES + 1):  # AN INFRA FAILURE IS NO BISECT (batch_infra_failure)
+                ok, out, stalled = batch_check(repo, d, tree, base, tip, it["data"].get("cls") or "check", depth,
+                                               runs, range_base=range_base)
+                infra = None if ok or stalled else batch_infra_failure(out)
+                if not infra or attempt == BATCH_INFRA_RETRIES:
+                    break
+                wlog(d, f"batch {bid}: {tip[:10]} failed on infra ({infra}): checked again, not bisected")
             it = st.item("batch", bid)
             if stalled:
                 text = (f"HELD: the batch check of {tip[:10]} ({len(members)} change(s)) stalled twice on a fresh sbt "
@@ -904,6 +909,27 @@ def check_batch(repo, bid):
     finally:
         slot.release()
         lease.release()
+
+
+# AN INFRA FAILURE IS NO BISECT (2026-11-19, review of batch #48's bisect): a batch's failed check went straight to its
+# bisect whatever failed it -- only the red gate was excepted -- while a lone change's infra-shaped failure is re-queued
+# (queue.py INFRA_CHECK_FAILURE). A lost sbt server or runner under a batch cost one prefix check per member, then
+# "every prefix passed (flaky or infra)" and a whole new round. Now the batch's own check runs once more first; a second
+# infra-shaped failure bisects as before (a member may be what loses the server: its own check then judges it, alone).
+# (#48 itself failed for real: the combined tree's coupling ratchet, `services.movies: distance D 40 past its frozen
+# row 39` -- a test failure, bisected rightly.)
+BATCH_INFRA_RETRIES = 1
+
+
+def batch_infra_failure(out):
+    """The infra signature of a failed batch check's output (an sbt server lost, a runner or network failure with no
+    test line beside it: classify.py's INFRA_LOG), else None."""
+    m = INFRA_CHECK_FAILURE.search(out or "")
+    if m:
+        return m.group(0)
+    lines = (out or "").splitlines()
+    hit = next((line for line in lines if INFRA_LOG.search(line)), None)
+    return hit.strip()[:160] if hit and not _test_line(lines) else None
 
 
 def culprit_own_failure(repo, d, e, base, out):

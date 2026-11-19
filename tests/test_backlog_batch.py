@@ -20,6 +20,7 @@ case "$1" in
             printf '%s\\n' $plan; exit 0 ;;
 esac
 if git ls-files | grep -q SbtLost; then echo "[error] sbt server disconnected"; exit 1; fi
+if [ -n "$TEST_INFRA_ONCE" ] && [ ! -e "$TEST_INFRA_ONCE" ]; then : > "$TEST_INFRA_ONCE"; echo "[error] sbt server disconnected"; exit 1; fi
 """
 
 
@@ -114,6 +115,25 @@ class BacklogBatchTest(test_queue.QueueTest):
         self.assertFalse(e.get("backlog_batch"))
         A.tick_changes(self.r.path, self.d)
         self.assertEqual(self.started, [eb], "its own check judges it")
+
+    def test_a_batch_failing_once_on_infra_is_checked_again_not_bisected(self):
+        """2026-11-19: a batch's failed check went straight to its bisect whatever failed it (only the red gate was
+        excepted), while a lone change's infra-shaped failure is re-queued -- an sbt server lost under one batch cost a
+        prefix check per member. The batch's own check runs again first; only a second failure bisects."""
+        once = os.path.join(self.r.root, "infra-once")
+        os.environ["TEST_INFRA_ONCE"] = once
+        self.addCleanup(os.environ.pop, "TEST_INFRA_ONCE", None)
+        ea = self.queue("a", "web/src/main/A.scala")
+        eb = self.queue("b", "worker/src/main/B.scala")
+        A.tick_changes(self.r.path, self.d)
+        self.drive()
+        self.assertTrue(os.path.exists(once), "the first check failed on infra")
+        self.assertEqual([self.entry(e)["status"] for e in (ea, eb)], ["landed", "landed"])
+        # the hook logs a call only past its infra line: the one logged is the batch's second check (a bisect logged 3)
+        self.assertEqual(len(self.calls_of("--range")), 1, "the batch's check once again: no prefix checks")
+        bid = A.Store().item("change", ea)["data"]["batch_id"]
+        states = [ev["to_state"] for ev in A.Store().item_events("batch", bid)]
+        self.assertNotIn("bisecting", states)
 
     def test_a_change_landed_with_no_batch_and_a_lone_change_are_checked_alone(self):
         ea = self.queue("a", "web/src/main/A.scala", "--no-batch")
