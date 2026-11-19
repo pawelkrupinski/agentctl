@@ -85,6 +85,26 @@ class BacklogBatchTest(test_queue.QueueTest):
         rec = A.landing_records(st.item("change", ea), st.item_events("change", ea), self.entry(ea))[0]
         self.assertEqual((rec["batch"], rec["batch_id"], rec["outcome"], rec["rounds"]), (3, bid, "landed", 1))
 
+    def test_a_verified_pure_move_of_identity_code_joins_the_batch(self):
+        """2026-11-19 ("make it simpler and faster"): a commit saying `Pure-Move: verified` moves no take -- the hook's
+        puremove check proves the move and leaves the identity area to the commits without the claim -- so its identity
+        paths no longer make it an identity change checked alone; one unclaimed commit on an identity path still does."""
+        wt, _ = self.agent("m", "identity/src/main/Moved.scala", "m\n",
+                           msg="m: identity/src/main/Moved.scala moves\n\nPure-Move: verified")
+        em = self.queued(wt)[0]
+        wt, _ = self.agent("n", "identity/src/main/Changed.scala", "n\n",
+                           msg="n: identity/src/main/Changed.scala\n\nPure-Move: maybe")
+        en = self.queued(wt)[0]
+        ea = self.queue("a", "web/src/main/A.scala")
+        A.tick_changes(self.r.path, self.d)
+        self.assertEqual(self.started, [en], "only the unclaimed identity change is checked alone")
+        self.assertIs(A.identity_change(self.r.path, self.entry(em)), False)
+        self.assertIs(A.identity_change(self.r.path, self.entry(en)), True)
+        self.drive()
+        for eid in (em, ea):
+            self.assertEqual(self.entry(eid)["status"], "landed", eid)
+            self.assertEqual(A.Store().item("change", eid)["data"]["batch"], 2, "the pure move and a lands as one batch")
+
     def test_a_failing_batch_lands_its_passing_prefix_and_queues_the_rest_again(self):
         ea = self.queue("a", "web/src/main/A.scala")
         eb = self.queue("b", "web/src/main/BROKEN.scala")

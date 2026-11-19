@@ -1318,7 +1318,8 @@ The reconciler then takes it, a step per tick:
   tick makes them ONE batch item with depth `full`, created only once a check tree is free for it. Never in one: an
   IDENTITY change (the hook's `--plan` selects its `identity` area -- identity/**, worker identity code, title rules,
   identity-judgements.tsv, the drift harness -- or a G5 identity-model commit; no plan to ask: alone too, kept on the
-  entry per head), a change landed with `land --no-batch`, a red fix, a combined-tree verification round, one in an
+  entry per head; a commit saying `Pure-Move: verified` counts for neither, 2026-11-19: it moves no take, and movies' hook
+  leaves the identity area to the commits without the claim -- batch.py `pure_move_claimed`), a change landed with `land --no-batch`, a red fix, a combined-tree verification round, one in an
   infra backoff or holding its own unread remote run. At most 4 members (`$AGENTCTL_BACKLOG_BATCH_MAX`), queue order,
   Fixes-Red first; a member that does not apply is left out (`batch_alone`) and checked alone; fewer than 2 kept: no
   batch. None forms while a change verifies its combined tree or a checked change's push is due (THE OLDEST

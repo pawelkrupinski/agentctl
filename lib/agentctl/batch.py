@@ -103,18 +103,24 @@ def backlog_min():
     return max(2, int(env_num("AGENTCTL_BACKLOG_BATCH_MIN", BACKLOG_BATCH_MIN)))
 
 
-def change_paths_of(repo, e):
-    """The paths the entry's commits touch (their commits fetched from refs/heads/land/<id> when this clone has none);
-    None when they cannot be read."""
+def change_paths_of(repo, e, commits=None):
+    """The paths the entry's commits (or those of them in `commits`) touch (their commits fetched from
+    refs/heads/land/<id> when this clone has none); None when they cannot be read."""
     if not git_ok(repo, "cat-file", "-e", f"{e.get('head')}^{{commit}}"):
         git(repo, "fetch", "--quiet", remote(), f"refs/heads/land/{e['id']}", check=False)
     paths = set()
-    for c in e.get("commits") or []:
+    for c in (e.get("commits") or []) if commits is None else commits:
         r = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", c, check=False)
         if r.returncode != 0:
             return None
         paths |= {p for p in r.stdout.splitlines() if p}
     return sorted(paths)
+
+
+def pure_move_claimed(repo, commit):
+    """Whether the commit's message carries the trailer `Pure-Move: verified` (movies' scripts/pure-move-check claim)."""
+    r = git(repo, "log", "-1", "--format=%(trailers:key=Pure-Move,valueonly)", commit, check=False)
+    return r.returncode == 0 and [v.strip() for v in r.stdout.splitlines() if v.strip()] == ["verified"]
 
 
 _identity_known = process_cache({})  # (entry id, head) -> identity_change's verdict
@@ -127,7 +133,16 @@ def identity_change(repo, e):
     key = (e["id"], e.get("head"))
     if key in _identity_known:
         return _identity_known[key]
-    paths = change_paths_of(repo, e)
+    if not git_ok(repo, "cat-file", "-e", f"{e.get('head')}^{{commit}}"):
+        git(repo, "fetch", "--quiet", remote(), f"refs/heads/land/{e['id']}", check=False)
+    # A VERIFIED PURE MOVE OWES NO IDENTITY AREA (movies' hook, 2026-11-19): a commit saying `Pure-Move: verified` moves
+    # no take -- the hook's puremove check proves the move -- so only the commits without the claim make an identity
+    # change; the hook selects the identity area by the same rule, so a batch holding the move runs none for it.
+    commits = [c for c in e.get("commits") or [] if not pure_move_claimed(repo, c)]
+    if not commits:
+        _identity_known[key] = False
+        return False
+    paths = change_paths_of(repo, e, commits)
     hook = precheck_hook(repo)
     try:
         with open(hook or "") as f:
@@ -139,7 +154,7 @@ def identity_change(repo, e):
     plan = hook_query(hook, repo, "--plan", paths)
     if plan is None:
         return None
-    verdict = "identity" in plan or bool(identity_model_commits(repo, e.get("commits") or []))
+    verdict = "identity" in plan or bool(identity_model_commits(repo, commits))
     _identity_known[key] = verdict
     return verdict
 
