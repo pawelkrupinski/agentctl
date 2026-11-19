@@ -109,7 +109,9 @@ class OwnerRedLeaseLapseTest(OwnerBase):
         c.close()
         self.assertTrue(self.wait(lambda: (self.st.get(name) or {}).get("epoch") == before["epoch"] + 1, limit=10))
         self.assertEqual(self.st.get(name)["holder"], A.owner_holder(FAM))
-        self.assertEqual(A.owner_leases(FAM)[name]["epoch"], before["epoch"] + 1, "still the owner's")
+        # the wrapper records the re-taken lease (owner_hand) just after the store hands it over: read once it has
+        self.assertTrue(self.wait(lambda: (A.owner_leases(FAM).get(name) or {}).get("epoch") == before["epoch"] + 1,
+                                  limit=10), "still the owner's")
 
 
 class AttemptTest(CrashLoopBase):
