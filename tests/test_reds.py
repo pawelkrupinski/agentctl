@@ -1104,6 +1104,21 @@ class OwnerTest(RedsBase):
         self.assertEqual(rc, 0, out)
         self.assertIn("RED BLOCKED ON OWNER", out)
 
+    def test_a_block_by_run_number_is_the_reds_workflow_not_another_workflows_run_of_that_number(self):
+        # issue 20261107T072345-7bca40: `red block 14` for Verify scrape recording #14 answered "NOT BLOCKED: Report run
+        # timings is green already (#16)": resolve_run took the first workflow having a run numbered 14, and red_block
+        # kept that name (`name or known[0]...workflow`) although the known red says which workflow it is.
+        it, path = self.held_by_a_fixer("s-mine")
+        os.environ.update(CLAUDE_CODE_SESSION_ID="s-mine", AGENTCTL_FIXER_RECORD=path)
+        other = run(77, 20, "Report run timings", "timings.yml", self.sha)
+        A._gate_lists.clear(), A._outside_lists.clear()
+        self.addCleanup(lambda: (A._gate_lists.clear(), A._outside_lists.clear()))
+        A._outside_lists["Report run timings"] = [other]
+        rc, out = self.tool("red", "block", "20", "--owner-cause", "credentials", "--cmd", "set the key",
+                            "--repo", "movies", cwd=self.r.path)
+        self.assertNotIn("Report run timings", out)
+        self.assertEqual(rc, 0, out)
+
     def test_a_fixer_never_notes_on_a_record_of_another_session(self):
         # a `claude --bg` spare spawned for #2432's fixer, reused for #2426's: its AGENTCTL_FIXER_RECORD is #2432's
         _it, theirs = self.held_by_a_fixer("s-other", run="32")
