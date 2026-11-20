@@ -356,7 +356,11 @@ def recheck_reason(tree, base, moved, tip, change_paths, full_tip=None):
 # rule takes. The push then skips the plan the change's checks passed (PREPUSH_SKIP) and the hook judges the red gate.
 # Every decision -- a full round, a verify round, a kept verdict -- and why is kept on the change (`rechecks`) and
 # printed by `land status <id>`.
-READ_MODES = ("--compile-plan", "--coupling-plan", "--quality-plan", "--plan", "--lint-plan")  # cheapest first
+READ_MODES = ("--compile-plan", "--coupling-plan", "--quality-plan", "--plan", "--lint-plan",
+              "--script-test-plan")  # cheapest first
+# PER TEST (2026-11-20): a hook answering --script-test-plan names the script self-tests a path selects; its `scripttests`
+# plan word -- shared by any two script changes, 33 of 131 rechecks in 3 days -- is then read per test instead
+SCRIPT_TESTS_CHECK, SCRIPT_TEST_MODE = "scripttests", "--script-test-plan"
 WHOLE_TREE_MODES = ("--coupling-plan", "--quality-plan")
 PER_FILE_CHECKS = frozenset({"shellcheck", "actionlint", "eslint"})
 
@@ -402,7 +406,8 @@ def read_overlap(tree, landed_paths, change_paths):
             return "its lint plan cannot be read"
         standing = set(standing)
     # a hook that cannot say what its whole-tree ratchets read: its `sbt` check is one check both sides may share
-    per_file = PER_FILE_CHECKS | ({"sbt"} if all(m in modes for m in WHOLE_TREE_MODES) else set())
+    per_file = PER_FILE_CHECKS | ({"sbt"} if all(m in modes for m in WHOLE_TREE_MODES) else set()) \
+        | ({SCRIPT_TESTS_CHECK} if SCRIPT_TEST_MODE in modes else set())
     for mode in modes:
         mine = check_reads(hook, tree, mode, change_paths, standing, per_file)
         theirs = check_reads(hook, tree, mode, landed_paths, standing, per_file) if mine else set()

@@ -263,7 +263,7 @@ class Sim:
         self.local = threading.local()
         self.done_at = {}  # change cid -> the tick its entry was decided
         self.open_at_arrival = {}  # change cid -> the cids of the changes open (queued .. waiting) when it arrived
-        self.waiting_at_arrival = {}  # change cid -> those of them `waiting` for green then (they hold nothing)
+        self.waiting_at_arrival = {}  # change cid -> the changes `waiting` for green when it arrived or its check began
         self.checks_of = {}  # entry id -> its own check rounds run (run_entry_checks)
         self.batch_seen = {}  # batch id -> ticks spent in assembling / checking / pushing
         self.stats = []
@@ -507,7 +507,8 @@ class Sim:
         for c in self.chain(base, moved):
             other = self.change_of_sha(c)
             # A WAITING CHANGE HOLDS NOTHING IT ASSEMBLES WITH (queue.py, 2026-11-20): the younger is checked at once and
-            # meets it in the batch at green -- or, green first, is rechecked once that batch lands it: accepted
+            # meets it in the batch at green -- or, green first, is rechecked once that batch lands it: accepted, for a
+            # change waiting when the younger arrived or when its check began (waiting_at_arrival)
             if other and other.cid in self.open_at_arrival.get(me.cid, ()) \
                     and other.cid not in self.waiting_at_arrival.get(me.cid, ()) \
                     and mine & {x for p in other.patches for x in self.patches[p].paths}:
@@ -601,6 +602,10 @@ class Sim:
         e = self.entry_by_id(eid) or {}
         k = (A.Store().item("change", eid) or {}).get("data", {}).get("change_kind") or {}
         self.spawned.append((self.tick, eid, k.get("rank")))
+        me = next((c for c in self.changes if c.eid == eid), None)
+        if me:  # who was `waiting` for green when its check began (A WAITING CHANGE HOLDS NOTHING, invariant 9)
+            self.waiting_at_arrival.setdefault(me.cid, set()).update(
+                c.cid for c in self.changes if (self.entry(c) or {}).get("status") == "waiting")
         if e.get("status") not in ("queued", "checking"):
             self.violate(f"an executor started for {eid}, which is {e.get('status')}")
         self._spawn(f"check-{eid}", lambda: A.check_entry(repo, eid))

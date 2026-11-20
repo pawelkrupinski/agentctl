@@ -1577,6 +1577,37 @@ class MinimalRecheckTest(QueueTest):
         self.assertEqual([m for m, _r in self.verified()], ["--range", "--verify-only"])
         self.assertIn("its coupling-plan reads what main changed: the whole production tree", self.status_of(eid))
 
+    def per_test_hook(self):
+        """The hook naming the script self-tests a path selects (--script-test-plan): a-test.sh reads a.sh and lib.sh,
+        b-test.sh reads b.sh and lib.sh."""
+        hook = os.path.join(self.r.path, "scripts/hooks/pre-push")
+        self.r.write("scripts/hooks/pre-push", open(hook).read().replace(
+            "    --coupling-plan)", "    --script-test-plan)\n        while read -r p; do case \"$p\" in "
+            "scripts/a.sh) echo scripts/a-test.sh ;; scripts/b.sh) echo scripts/b-test.sh ;; "
+            "scripts/lib.sh) printf 'scripts/a-test.sh\\nscripts/b-test.sh\\n' ;; esac; done | sort -u; exit 0 ;;\n"
+            "    --coupling-plan)", 1).replace("grep -q '^scripts/' && echo repo:ScriptsLint", "cat > /dev/null"))
+        self.r.commit("the hook's script-test plan")
+        self.r.push()
+
+    def test_two_script_changes_whose_self_tests_differ_keep_the_verdict(self):
+        """PER TEST (2026-11-20): the one `scripttests` word made every two script changes share a check."""
+        self.per_test_hook()
+        wt, _ = self.agent("a", "scripts/a.sh", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("scripts/b.sh", "b\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range"], "no self-test reads both: its verdict kept")
+        self.assertIn("its verdict kept", self.landed_verdict())
+
+    def test_a_self_test_reading_both_sides_forces_the_verify_round(self):
+        self.per_test_hook()
+        wt, _ = self.agent("a", "scripts/a.sh", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("scripts/lib.sh", "l\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--verify-only"])
+        self.assertIn("its script-test-plan reads what main changed: scripts/a-test.sh", self.status_of(eid))
+
     def test_a_hook_that_cannot_say_what_its_checks_read_verifies_as_before(self):
         hook = os.path.join(self.r.path, "scripts/hooks/pre-push")
         self.r.write("scripts/hooks/pre-push", open(hook).read().replace("--compile-plan)", "--other-plan)"))

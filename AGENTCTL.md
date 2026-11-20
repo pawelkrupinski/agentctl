@@ -1340,8 +1340,9 @@ The reconciler then takes it, a step per tick:
   kept, the main it was taken on and why) and printed by `land status <id>` (`recheck: 09:41Z verify on 5e2f...: main
   moved by 3 commits: its compile-plan reads what main changed: web/Test/compile`). Measured (2026-11-20) over the
   3 days' 131 rechecks of landed changes: the commonest reads both sides shared were `scripttests` (33, the hook's one
-  word for every script self-test) and `e2e/Test/compile` (30) -- a finer `scripttests` selection in the hook is the
-  next lever. queue.py `read_overlap`, `own_diff_changed`, `verdict_kept`, `recheck_logged`; tests:
+  word for every script self-test) and `e2e/Test/compile` (30). PER TEST (2026-11-20): a hook answering
+  `--script-test-plan` (movies: the self-tests `scripts/run-script-tests --paths <file> --list` selects -- a tool's own
+  test, its users' tests, the tests naming it or declaring they read it) has its `scripttests` word read per test. queue.py `read_overlap`, `own_diff_changed`, `verdict_kept`, `recheck_logged`; tests:
   `tests/test_queue.py` MinimalRecheckTest, `tests/test_queue_sim.py` MinimalRecheckSimTest (INVARIANT 11 now also
   accepts a tree holding a verified one whose extra patches no check of it reads, the simulation's own read model).
   Code: queue.py `recheck_reason` (THE RULE), `selection_change`, `share_selection`, `module_overlap`, buildview.py `build_view_change`, `_push_change`,
