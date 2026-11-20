@@ -224,6 +224,50 @@ def remote_progress(rem, run, jobs, t, bounds=None):
     return rem
 
 
+# A RUN NO SCHEDULER CAN SEE IS NO CHECK (2026-11-20, phase7-houses: precommit-check run 44682642375 sat `queued` from
+# 05:41Z, its check jobs never started, while later runs' jobs ran: GitHub's own run listing -- `actions/runs?status=
+# queued` and `?status=in_progress` -- left it out, and ci-runner's runner scheduler, which reads exactly those listings,
+# never started a runner with its pin label. agentctl waited for REMOTE_TIMEOUT (2 h) on it, the change's deadline
+# laps meanwhile). A run whose check jobs have none started and which neither listing names for REMOTE_GHOST is
+# cancelled and given up (no verdict: re-checked, keeping its place), never waited on for hours.
+REMOTE_GHOST = 10 * 60  # s ($AGENTCTL_REMOTE_GHOST)
+
+
+def remote_run_listed(o_r, rid):
+    """GitHub's queued or in-progress run listing names run rid (what the runner scheduler reads); True when it cannot
+    be read (unsure: never a ghost)."""
+    try:
+        for status in ("queued", "in_progress"):
+            got = api(o_r, "GET", "actions/runs", {"status": status, "per_page": 100}) or {}
+            if any(str(r.get("id")) == str(rid) for r in got.get("workflow_runs") or []):
+                return True
+        return False
+    except (Exception, SystemExit):
+        return True
+
+
+def remote_ghost(o_r, rem, jobs, t):
+    """rem with `unlisted_at` kept while its run waits with no check job started and GitHub's listings leave it out (a
+    GHOST, above); status `abandoned` (+ `ghost`) past REMOTE_GHOST of that."""
+    started = [j for j in jobs or [] if j.get("name") != "plan" and (j.get("status") != "queued")
+               and j.get("conclusion") != "skipped"]
+    if started or not jobs or remote_run_listed(o_r, rem["run"]):
+        return {k: v for k, v in rem.items() if k != "unlisted_at"}
+    rem = {**rem, "unlisted_at": rem.get("unlisted_at") or t}
+    if t - float(rem["unlisted_at"]) >= env_num("AGENTCTL_REMOTE_GHOST", REMOTE_GHOST):
+        rem.update(status="abandoned", ghost=True, decided_at=t,
+                   out=f"{REMOTE_WORKFLOW} run {rem['run']} queued {int((t - float(rem['unlisted_at'])) // 60)} min with "
+                       f"no check job started, and GitHub's queued/in-progress listing omits it (ci-runner's runner "
+                       f"scheduler cannot see it): cancelled, checked again")
+    return rem
+
+
+def remote_jobs_summary(jobs):
+    """The run's jobs as `land status <id>` prints them: name, status, conclusion, started."""
+    return [{"name": j.get("name"), "status": j.get("status"), "conclusion": j.get("conclusion"),
+             "started_at": j.get("started_at")} for j in jobs or []]
+
+
 def remote_poll(o_r, rem):
     """STATELESS: the remote check's state from the forge alone -- the run (found by its check/ branch and tip when its id
     is not known yet), its status, and for a decided run the verdict: decided by its verdict jobs while it still runs
@@ -246,9 +290,14 @@ def remote_poll(o_r, rem):
         if rem.get("job_bounds") is None:
             rem["job_bounds"] = remote_read_bounds(o_r, rem["tip"])
         rem = remote_progress(rem, run, jobs, time.time(), rem["job_bounds"])
+        rem["jobs"] = remote_jobs_summary(jobs)
     name = f"{REMOTE_WORKFLOW} run {rem['run']} (#{run.get('run_number')})"
     if rem.get("status"):
         return rem
+    if status == "waiting":  # queued: a ghost no runner will ever take (above)?
+        rem = remote_ghost(o_r, rem, jobs, time.time())
+        if rem.get("status"):
+            return rem
     if status in ("running", "waiting"):
         if rem.get("verdict_jobs") is None or rem.get("verdict_expect") is None:
             rem["verdict_jobs"], rem["verdict_expect"] = verdict_jobs(o_r, rem["tip"])
@@ -294,6 +343,49 @@ def save_remote(d, e, rem):
         e.pop("remote_run", None)
     if d and e.get("seq") is not None:
         save_entry(d, e)
+    remote_mirror(e.get("id"), rem)
+
+
+# WHAT A CHECKING CHANGE WAITS ON (2026-11-20: `land status <id>` said only "OPEN: checking for 25 min" for five changes
+# whose checks ran, queued or were lost on ci-runner): the remote check's run, branch, jobs and progress go on the change
+# item too, which every host's `land status` reads.
+def remote_mirror(eid, rem):
+    """rem's summary on change item eid (`check`), when it changed; quiet when the store cannot take it."""
+    if not eid:
+        return
+    keep = ("branch", "run", "run_status", "status", "pushed_at", "progress_at", "unlisted_at", "jobs", "decided_at")
+    summary = {k: rem.get(k) for k in keep if rem.get(k) is not None}
+    try:
+        st = Store()
+        it = st.item("change", eid)
+        if it and (it.get("data") or {}).get("check") != summary:
+            st.update_item("change", eid, it["version"], {"check": summary})
+    except Exception:
+        pass  # the next poll mirrors it
+
+
+def remote_check_lines(c, t):
+    """`land status <id>`'s lines for a checking change's remote check summary c (remote_mirror)."""
+    if not c:
+        return []
+    out = [f"check: {REMOTE_WORKFLOW} " + (f"run {c['run']}" if c.get("run") else "run not started yet")
+           + f" on {c.get('branch')}, pushed {fmt_age(t - float(c.get('pushed_at') or t))} ago"
+           + (f", {c['run_status']}" if c.get("run_status") else "")
+           + (f", last progress {fmt_age(t - float(c['progress_at']))} ago" if c.get("progress_at") else "")
+           + (f"; not in GitHub's run listing for {fmt_age(t - float(c['unlisted_at']))} (no runner can take it)"
+              if c.get("unlisted_at") else "")]
+    for j in c.get("jobs") or []:
+        if j.get("conclusion") == "skipped":
+            continue
+        try:
+            since = fmt_age(t - parse_time(j["started_at"]).timestamp()) if j.get("started_at") else None
+        except (ValueError, TypeError):
+            since = None
+        what = j.get("conclusion") if j.get("status") == "completed" else (
+            f"running {since}" if j.get("status") == "in_progress" and since else "waiting for a runner slot"
+            if j.get("status") == "queued" else j.get("status"))
+        out.append(f"  {j.get('name')}: {what}")
+    return out
 
 
 def delete_check_branch(o_r, branch):
@@ -386,6 +478,8 @@ def remote_check(repo, e, base, head, mode, own=None, red=False):
             err(f"remote check of {e['id']}: {ex}; a new checker adopts its run")
             return None, str(ex)
         if rem.get("status"):
+            if rem.get("ghost"):
+                cancel_run(o_r, rem["run"], "a ghost run: no runner scheduler can see it")
             rem["collected_at"] = time.time()
             save_remote(d, e, rem)
             delete_check_branch(o_r, rem["branch"])

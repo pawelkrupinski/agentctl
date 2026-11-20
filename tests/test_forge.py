@@ -225,6 +225,40 @@ class GithubForgeTest(unittest.TestCase):
         self.assertIsNone(rem.get("status"))
         self.assertEqual(rem["verdict_jobs"], [])
 
+    def serve_queued_check_run(self, listed):
+        """Run 101 queued, its plan done and its check jobs never started; GitHub's queued listing names it or not."""
+        rs = [{"id": 101, "run_number": 12, "head_sha": "c" * 40, "head_branch": "check/7", "status": "queued",
+               "conclusion": None, "path": ".github/workflows/precommit-check.yml"}]
+        self.gh_api(f"repos/{O_R}/actions/workflows/precommit-check.yml/runs?per_page=50", {"workflow_runs": rs})
+        self.gh_api(f"repos/{O_R}/actions/runs/101", rs[0])
+        self.gh_api(f"repos/{O_R}/actions/runs/101/jobs?per_page=100", {"jobs": [
+            {"id": 900, "name": "plan", "status": "completed", "conclusion": "success", "started_at": "2026-11-20T05:41:02Z"},
+            {"id": 901, "name": "check (rest)", "status": "queued", "conclusion": None}]})
+        self.gh_api(f"repos/{O_R}/actions/runs?status=queued&per_page=100", {"workflow_runs": rs if listed else []})
+        self.gh_api(f"repos/{O_R}/actions/runs?status=in_progress&per_page=100", {"workflow_runs": []})
+
+    # 2026-11-20, phase7-houses: run 44682642375 sat queued 90 min, its check jobs never started -- GitHub's queued-run
+    # listing (what ci-runner's runner scheduler reads) left it out, so no runner was ever started for it
+    def test_a_queued_run_github_lists_nowhere_is_given_up_after_its_bound_and_one_it_lists_is_waited_for(self):
+        import time
+        self.serve_queued_check_run(listed=False)
+        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7", "run": 101, "job_bounds": {}, "verdict_jobs": [], "verdict_expect": []})
+        self.assertIsNone(rem.get("status"), "unlisted only now: waited for (GitHub's listing may lag)")
+        self.assertTrue(rem.get("unlisted_at"))
+        rem["unlisted_at"] = time.time() - A.REMOTE_GHOST - 1
+        rem = A.remote_poll(O_R, rem)
+        self.assertEqual((rem["status"], rem.get("ghost")), ("abandoned", True))
+        self.assertIn("listing omits it", rem["out"])
+        self.serve_queued_check_run(listed=True)
+        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7", "run": 101, "job_bounds": {}, "verdict_jobs": [], "verdict_expect": [],
+                                  "unlisted_at": time.time() - 3600})
+        self.assertIsNone(rem.get("status"), "a listed queued run waits for its runner")
+        self.assertNotIn("unlisted_at", rem)
+        lines = A.remote_check_lines({**rem, "pushed_at": time.time() - 600}, time.time())
+        self.assertIn("run 101", lines[0])
+        self.assertIn("  check (rest): waiting for a runner slot", lines)
+        self.assertIn("  plan: success", lines)
+
     def test_run_url(self):
         url = A.forge_run_url(O_R, 12, {"databaseId": 101})
         self.assertEqual(url, f"https://github.com/{O_R}/actions/runs/101")

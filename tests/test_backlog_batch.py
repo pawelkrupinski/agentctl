@@ -683,6 +683,26 @@ class OverlapTest(BacklogBatchTest):
         self.assertIsNone(st.item("change", ey)["data"].get("hold"),
                           "no hold names a cancelled change: `land status` never shows a phantom blocker")
 
+    def test_land_status_of_a_checking_change_names_its_remote_run_and_jobs(self):
+        """2026-11-20: five changes `checking`, and `land status <id>` said only "OPEN: checking for 25 min"."""
+        import contextlib, io
+        st, t = A.Store(), time.time()
+        st.put_item("change", "20261120-055534-movies-x-1", "checking", {"worktree": "/w", "head": "a" * 40})
+        A.remote_mirror("20261120-055534-movies-x-1", {
+            "branch": "check/x-1", "run": 44682642375, "run_status": "waiting", "pushed_at": t - 5400,
+            "progress_at": t - 5300, "unlisted_at": t - 900, "jobs": [
+                {"name": "plan", "status": "completed", "conclusion": "success"},
+                {"name": "check (identity 1/2)", "status": "in_progress", "started_at": A.iso_at(t - 960)},
+                {"name": "check (rest)", "status": "queued"}]})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            A.land_status_entry(st, "movies-x-1", t)
+        text = out.getvalue()
+        self.assertIn("run 44682642375 on check/x-1, pushed 1 h ago", text)
+        self.assertIn("not in GitHub's run listing", text)
+        self.assertIn("check (identity 1/2): running 16 min", text)
+        self.assertIn("check (rest): waiting for a runner slot", text)
+
     def test_two_queued_changes_sharing_a_file_that_assemble_go_in_one_backlog_batch(self):
         ea = self.edit("a", "web/src/main/Ten.scala", 0, "a's line 1")
         eb = self.edit("b", "web/src/main/Ten.scala", 9, "b's line 10")

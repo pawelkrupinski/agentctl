@@ -1736,6 +1736,12 @@ failure fails it at once. No declaration: the run's own conclusion decides. The 
 `PREPUSH_REMOTE_RUN=<run id>`: the hook takes that run only once GitHub says it is precommit-check.yml on exactly the
 pushed commit, and a success -- or, still running, every job its `VERDICT_JOBS` names a success and none failed.
 Superseding or cancelling an entry cancels its undecided run.
+A GHOST RUN IS GIVEN UP (2026-11-20, phase7-houses: run 44682642375 queued 90 min, no check job started, while later
+runs ran): a queued run with no check job started that GitHub's `actions/runs?status=queued|in_progress` listing omits --
+the listing ci-runner's runner scheduler reads, so no runner is ever started for it -- is cancelled after
+`AGENTCTL_REMOTE_GHOST` (10 min) of that and re-checked, keeping its place (remote.py `remote_ghost`). `land status
+<id>` of a checking change prints its remote check (run, branch, pushed and last-progress ages, each job: its verdict,
+`running <age>` or `waiting for a runner slot`), mirrored on its item as `check` (`remote_mirror`).
 
 ### tick: the processor, the token, the gate
 
@@ -2584,6 +2590,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `red_tick` | `AGENTCTL_RED_TICK` | `15` | seconds between the processor's red ticks |
 | `red_verify_slack` | `AGENTCTL_RED_VERIFY_SLACK` | `7200` | s past a slot's expected end before its fix is called unverified |
 | `remote` | `AGENTCTL_REMOTE` | - | - |
+| `remote_ghost` | `AGENTCTL_REMOTE_GHOST` | `600` | s |
 | `restart_check` | `AGENTCTL_RESTART_CHECK` | `30` | seconds between code-version checks |
 | `runners_page_cache` | `AGENTCTL_RUNNERS_PAGE_CACHE` | `f"{HOME}/.cache/ci-runners-page/last-good.json"` | - |
 | `sbt_idle_min` | `AGENTCTL_SBT_IDLE_MIN` | `120` | min a detached sbt server with no client may sit idle before the reaper ends it |

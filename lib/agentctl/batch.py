@@ -1092,6 +1092,10 @@ def land_status_entry(st, entry, t):
         hold = (d.get("hold") or {}).get("why") if it["state"] in HOLD_SHOWN else None
         print(f"OPEN: {it['state']} for {fmt_age(t - float(it.get('entered_at') or t))}"
               + (f", held: {hold}" if hold else "") + f"; deadline in {int((it['deadline'] - t) // 60)} min")
+        if it["state"] == "checking":
+            for line in remote_check_lines(d.get("check"), t) or [
+                    "check: no remote check recorded (a local check tree, or its executor is starting)"]:
+                print(line)
     return 0
 
 
