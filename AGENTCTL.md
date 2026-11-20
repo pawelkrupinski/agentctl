@@ -1561,21 +1561,24 @@ The reconciler then takes it, a step per tick:
   `union_base`; tests: `tests/test_backlog_batch.py` `PushBatchTest`.
 - **THE BATCH IS THE MECHANISM (the owner, 2026-11-20: "is anyone working on batching waiting changes ... structurally,
   not just now").** Every change goes through a batch: at green the backlog batch (above: queued changes, identity ones
-  included, up to 8) and the push batch; at red the WAITING batch, which no longer waits for green to check anything.
-  While the gate is red a production change that must wait is not checked alone: it joins `waiting` at once, UNCHECKED
-  (`WAITING ...: origin/main is red, so it joins the waiting batch unchecked -- the batch pre-checks every waiting change
-  as one and lands them in one push at green`; queue.py `joins_unchecked`), and the blocked-red waiting batch PRE-CHECKS
-  every waiting change as ONE tree on the current main (depth `red`: the hook's `--checks-only`, the union of their
-  areas), again whenever its members or main change. A change that no longer applies is rejected alone (the conflict
-  names its files; a generated file is merged, not a conflict); a failure is bisected by prefix, the culprit rejected
-  when the failure is its own, and a failure only where main fails too (the red itself, judge_failure) rejects nobody --
-  those members stay unchecked. At green the batch is assembled on the new main and lands in ONE push: its members
-  exactly the pre-checked ones and main's move since read by none of their checks (MINIMAL RECHECKS) -> pushed at once,
-  no check again (`pre-checked as one on <sha>; main moved by 1 commit since, no check of it reading what changed: its
-  verdict kept`); else the combined tree's fast check, as before; a member never pre-checked -> the full landing check
-  (`--range`, depth `union`) over all of them. A red fix keeps its own lane and lands alone first: 2026-11-17..20 a red
-  fix landed in a median 14 min, a batch member in 56. batch.py `red_precheck`, `red_prechecked`, `green_batch_depth`,
-  queue.py `join_unchecked`; tests: `tests/test_waiting.py` RedPrecheckTest.
+  included, up to 8) and the push batch; at red the WAITING batch, which no longer waits for green to check its
+  combination. A production change that must wait is still checked on its own while red (in parallel, in the free check
+  trees) and joins `waiting`; the blocked-red waiting batch then PRE-CHECKS every waiting change (at most 8 a round) as
+  ONE tree on the current main (depth `red`: the hook's `--checks-only`, the union of their areas), again whenever its
+  members change -- main moving while red is judged once, at green. A change that no longer applies is rejected alone
+  (the conflict names its files; a generated file is merged, not a conflict); a failure is bisected by prefix, the
+  culprit rejected when the failure is its own, and a failure only where main fails too (the red itself) rejects
+  nobody. A red pre-check holds no push (what lands on red goes on). At green the batch is assembled on the new main and
+  lands in ONE push: its members exactly the pre-checked ones and main's move since read by none of their checks
+  (MINIMAL RECHECKS) -> no check again (`pre-checked as one on <sha>; main moved by 1 commit since, no check of it
+  reading what changed: its verdict kept`); else the combined tree's fast check, as before. Measured over the simulated
+  2026-11-18..20 (20 seeds a day, real round lengths; before = this morning's 5767210): check rounds per landed change
+  2.30 -> 1.98, check time 14.3 -> 13.1 ticks, arrival -> LANDED mean 84 -> 53 ticks, p90 158 -> 100. Rejected by the
+  same measure: production changes joining `waiting` UNCHECKED, the batch's one tree doing every check (p90 274: the
+  red's idle trees went unused), and batches of any size (21-31 members at green, one failure bisected across them). A
+  red fix keeps its own lane and lands alone first: 2026-11-17..20 a red fix landed in a median 14 min, a batch member
+  in 56. batch.py `red_precheck`, `red_prechecked`, `green_batch_depth`, `waiting_batch_max`; tests:
+  `tests/test_backlog_batch.py` RedPrecheckTest, `tests/test_waiting.py` (the in-process land's red batch).
 - **checked → waiting** while main is red and the change must wait (a production path, no `Fixes-Red:` naming any red
   run of the current episode): `WAITING <sha> (entry <id>, n in batch)`. Tools-only changes and Fixes-Red changes land while red.
 - **The batch.** (A backlog's batch is the same item with depth `full`: above.) When main turns green, the waiting

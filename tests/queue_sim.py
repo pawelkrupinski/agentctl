@@ -1107,6 +1107,8 @@ class Sim:
         self.check_hold_invariants(st, entries)
         # 4. A BATCH REACHES LANDED, BISECTING OR HELD WITHIN N TICKS (counted in its assembling/checking/pushing ticks)
         for bt in st.items("batch"):
+            if bt["state"] == "blocked-red":  # a red pre-check round ended (batch.py THE BATCH IS THE MECHANISM): the
+                self.batch_seen[bt["id"]] = 0  # bound counts the way to landing from green, not the red's length
             if A.machine_state("batch", bt["state"]).terminal or bt["state"] in ("bisecting", "held", "blocked-red"):
                 continue
             n = self.batch_seen[bt["id"]] = self.batch_seen.get(bt["id"], 0) + 1

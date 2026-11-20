@@ -730,9 +730,9 @@ class OverlapTest(BacklogBatchTest):
 
 
 class RedPrecheckTest(BacklogBatchTest):
-    """THE BATCH IS THE MECHANISM (batch.py; the owner, 2026-11-20): while the gate is red, production changes join the
-    waiting batch unchecked and it pre-checks them as ONE tree; at green they land in ONE push, checked again only as
-    MINIMAL RECHECKS says (the repo's hook answers what its checks read: test_queue.READS_HOOK)."""
+    """THE BATCH IS THE MECHANISM (batch.py; the owner, 2026-11-20): while the gate is red, the waiting changes (each
+    checked on its own first) are pre-checked as ONE tree; at green they land in ONE push, checked again only as MINIMAL
+    RECHECKS says (the repo's hook answers what its checks read: test_queue.READS_HOOK)."""
 
     def setUp(self):
         super().setUp()
@@ -751,16 +751,17 @@ class RedPrecheckTest(BacklogBatchTest):
 
     def red_batch(self, *changes):
         ids = [self.queue(n, p) for n, p in changes]
-        A.tick_changes(self.r.path, self.d)
-        self.assertEqual(self.started, [], "no change checked alone while main is red")
+        for x in ids:  # each checked on its own (in parallel, in the free trees), then waiting for green
+            self.check(x)
         self.assertEqual([self.entry(x)["status"] for x in ids], ["waiting"] * len(ids), "each joins the waiting batch")
-        self.assertTrue(all(self.entry(x).get("unchecked") for x in ids))
+        before = len(self.calls_of("--checks-only"))
         self.drive()
+        self.pre_checks = len(self.calls_of("--checks-only")) - before
         return ids
 
     def test_waiting_changes_are_pre_checked_as_one_and_land_in_one_push_with_no_check_again(self):
         ea, eb = self.red_batch(("a", "web/src/main/A.scala"), ("b", "worker/src/main/B.scala"))
-        self.assertEqual(len(self.calls_of("--checks-only")), 1, "ONE pre-check for both, while red")
+        self.assertEqual(self.pre_checks, 1, "ONE pre-check of the two as one tree, while red")
         self.assertEqual(self.batch()["data"]["prechecked"]["members"], [ea, eb])
         self.reds = set()
         self.lands_on_main("docs/fix.md")  # the red's fix: read by no check of theirs
@@ -769,8 +770,8 @@ class RedPrecheckTest(BacklogBatchTest):
         self.assertEqual([self.entry(x)["status"] for x in (ea, eb)], ["landed", "landed"])
         self.assertEqual(len(self.pushed()) - before, 1, "one push")
         self.assertIn("skip=sbt", self.pushed()[-1], "it skips the plan its pre-check passed")
-        self.assertEqual([c.split()[0] for c in open(self.calls).read().splitlines()], ["--checks-only"],
-                         "no check again at green: its verdict kept")
+        self.assertEqual([c.split()[0] for c in open(self.calls).read().splitlines()], ["--checks-only"] * 3,
+                         "their own checks and the pre-check; no check again at green: its verdict kept")
 
     def test_a_fix_their_checks_read_gets_the_fast_check_at_green(self):
         ea, eb = self.red_batch(("a", "web/src/main/A.scala"), ("b", "worker/src/main/B.scala"))
@@ -778,10 +779,11 @@ class RedPrecheckTest(BacklogBatchTest):
         self.lands_on_main("common/src/main/Fix.scala")  # compiled under both
         self.drive()
         self.assertEqual([self.entry(x)["status"] for x in (ea, eb)], ["landed", "landed"])
-        self.assertEqual([c.split()[0] for c in open(self.calls).read().splitlines()], ["--checks-only", "--fast-only"])
+        self.assertEqual([c.split()[0] for c in open(self.calls).read().splitlines()], ["--checks-only"] * 3 + ["--fast-only"])
 
     def test_a_failing_member_is_bisected_out_and_the_rest_land_pre_checked(self):
-        ea, eb = self.red_batch(("a", "web/src/main/A.scala"), ("b", "worker/src/main/BROKEN.scala"))
+        """PartA and PartB pass alone and fail together (the fixture's hook): only the combined pre-check sees it."""
+        ea, eb = self.red_batch(("a", "web/src/main/PartA.scala"), ("b", "worker/src/main/PartB.scala"))
         self.assertEqual(self.entry(eb)["status"], "rejected", "the culprit, its failure its own")
         self.assertIn("NOT LANDED", A.Store().item("change", eb)["data"]["why"])
         self.assertEqual(self.batch()["data"]["prechecked"]["members"], [ea])
@@ -794,25 +796,17 @@ class RedPrecheckTest(BacklogBatchTest):
     def test_a_change_joining_after_the_pre_check_is_pre_checked_again_with_the_others(self):
         ea, = self.red_batch(("a", "web/src/main/A.scala"))
         eb, = self.red_batch(("b", "worker/src/main/B.scala"))
-        self.assertEqual(len(self.calls_of("--checks-only")), 2)
+        self.assertEqual(self.pre_checks, 1, "pre-checked again, with the others")
         self.assertEqual(self.batch()["data"]["prechecked"]["members"], [ea, eb])
-
-    def test_an_unchecked_member_at_green_gets_the_full_landing_check_over_the_union(self):
-        ea = self.queue("a", "web/src/main/A.scala")
-        A.tick_changes(self.r.path, self.d)
-        self.reds = set()  # green before any pre-check ran
-        self.drive()
-        self.assertEqual(self.entry(ea)["status"], "landed")
-        self.assertEqual([c.split()[0] for c in open(self.calls).read().splitlines()], ["--range"])
 
     def test_a_red_fix_still_goes_alone_first(self):
         wf = self.r.worktree("wt-fix", branch="fix")
         self.r.write("web/src/main/Fix.scala", "fix\n", at=wf)
         self.r.commit("the fix\n\nFixes-Red: 7", at=wf)
         ef = self.queued(wf)[0]
-        ea = self.queue("a", "worker/src/main/A.scala")
-        A.tick_changes(self.r.path, self.d)
-        self.assertEqual(self.started, [ef], "the fix is checked alone, at once")
+        ea, = self.red_batch(("a", "worker/src/main/A.scala"))
+        self.assertEqual(self.check(ef), 0)
+        self.assertEqual(self.entry(ef)["status"], "landed", "the fix lands alone, at once, the batch waiting")
         self.assertEqual(self.entry(ea)["status"], "waiting")
 
 

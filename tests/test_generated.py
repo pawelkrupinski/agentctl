@@ -320,6 +320,10 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.assertIn("runs `scripts/regen` on this machine", e["why"])
         A.tick_changes(self.r.path, self.d)  # held: not checked again, not rejected
         self.assertEqual(self.entry(eid)["status"], "queued")
+        hold = A.Store().item("change", eid)["data"]["hold"]  # 2026-11-20, phase8-units: it read "an infra failure"
+        self.assertEqual(hold["kind"], "regen", hold)
+        self.assertIn(f"its agent's regeneration of {BASELINE}: `cd {wt} && ~/bin/agentctl land`", hold["why"])
+        self.assertNotIn("infra", hold["why"])
         later = self.change("later", files={"web/src/main/L.scala": "l\n"})
         self.r.write("web/src/main/BROKEN.scala", "", at=wt)  # its agent ran the command: rebased, regenerated
         self.r.commit("rise: regenerated", at=wt)

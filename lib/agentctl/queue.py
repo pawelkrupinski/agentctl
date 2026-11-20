@@ -2073,14 +2073,11 @@ def _tick_changes_pass(repo, d, st, t, facts, kinds, phase, mine, todo, held, ph
                           f"{', '.join(shared[:3])}" + (f" (+{len(shared) - 3} more)" if len(shared) > 3 else ""), t,
                           blocker=o["id"], files=shared[:10])
                 continue
-        if state == "queued" and not alive and joins_unchecked(repo, e, kind, facts, t):
-            did.append(join_unchecked(repo, d, e))  # THE BATCH IS THE MECHANISM (batch.py): its check is the batch's
-            continue
         if e.get("regen_hold") and regen_hold_expired(d, e, t):
             continue
         if alive or e.get("retry_after", 0) > t:
             if not alive:  # said on its item: `land status` shows every wait (changekind.py, no held change silent)
-                note_hold(st, e, "retry", f"its check is retried at {hhmmz(e['retry_after'])} (an infra failure)", t)
+                note_hold(st, e, *retry_hold(e), t)
             continue
         first = None if fix else batch_goes_first(st, d, ("assembling", "pushing"))
         if first:  # the next free check tree is the batch's: to assemble it, or to push from its own tree
@@ -2118,31 +2115,17 @@ def _tick_changes_pass(repo, d, st, t, facts, kinds, phase, mine, todo, held, ph
     return did
 
 
-def joins_unchecked(repo, e, kind, facts, t):
-    """Whether queued change e skips a check of its own and joins the waiting batch unchecked: the gate red, e a
-    production change that must wait for green (no red fix), batchable (changekind.py), no round or hold of its own due
-    (THE BATCH IS THE MECHANISM, batch.py: the waiting batch pre-checks every waiting change as one)."""
-    gate = facts.get("gate") or set()
-    if not gate or kind.get("red_fix") or kind.get("backlog_batch") is not None or e.get("verify") \
-            or e.get("regen_hold") or float(e.get("retry_after") or 0) > t or not waiting_supported(repo):
-        return False
-    rem = e.get("remote") or {}
-    if rem.get("run") is not None and not rem.get("collected_at"):  # its own run: a checker adopts it
-        return False
-    return bool(e.get("commits")) and must_wait(repo, e["commits"], gate)
-
-
-def join_unchecked(repo, d, e):
-    """Queued change e joins `waiting` unchecked (joins_unchecked); its WAITING note says the batch checks it."""
-    for k in QUEUE_ONLY_FIELDS:
-        e.pop(k, None)
-    e.update(tip=e.get("head"), fixes=sorted(fixes_of(repo, e.get("commits") or [])))
-    line = (note_waiting(d, os.path.join(d, f"check-{e['id']}"), e.get("head"), e["id"])
-            + f": {remote()}/main is red, so it joins the waiting batch unchecked -- the batch pre-checks every waiting "
-              "change as one and lands them in one push at green")
-    set_change(d, e, "waiting", event=change_event(e, line, code=None, final=False), decided=ts(), unchecked=True)
-    wlog(d, f"{e['id']}: {line}")
-    return f"{e['id']}: joined the waiting batch unchecked"
+def retry_hold(e):
+    """(kind, why) of a queued change waiting for its retry_after: an infra re-queue's retry, or -- a REGEN NEEDED
+    hold (regen_hold) -- its agent's regeneration, which no time brings (2026-11-20, phase8-units: `held: its check is
+    retried at 12:03Z (an infra failure)`, read as a retry long overdue: it was the regen hold's end, the next day)."""
+    hold = e.get("regen_hold") or {}
+    if hold:
+        wt = e.get("worktree") or ""
+        gone = "" if not wt or os.path.isdir(wt) or host_role() == "server" else f"; its worktree {wt} is gone"
+        return "regen", (f"its check waits for its agent's regeneration of {', '.join(hold.get('files') or [])}: "
+                         f"`{hold.get('cmd')}` (else NOT LANDED at {time.strftime('%Y-%m-%d %H:%MZ', time.gmtime(float(e['retry_after'])))}){gone}")
+    return "retry", f"its check is retried at {hhmmz(e['retry_after'])} (an infra failure)"
 
 
 def _push_checked(repo, d, st, t, e, fix, todo, pheld, kinds=None):

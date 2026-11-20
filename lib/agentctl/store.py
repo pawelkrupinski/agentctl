@@ -525,9 +525,7 @@ H = 3600
 MACHINES = {
     # §5.1 a submitted change
     "change": {
-        # queued -> waiting: main red, it joins the waiting batch unchecked (batch.py THE BATCH IS THE MECHANISM)
-        "queued": StateSpec(15 * M, "queued", ("checking", "superseded", "cancelled", "landed", "waiting"), escalate=True,
-                            wait=True),
+        "queued": StateSpec(15 * M, "queued", ("checking", "superseded", "cancelled", "landed"), escalate=True, wait=True),
         "checking": StateSpec(2 * H, "queued", ("checked", "rejected", "queued")),
         # checked -> checking: a push batch's member, verified with the others on the current main (batch.py)
         "checked": StateSpec(5 * M, "checked", ("pushing", "waiting", "queued", "checking"), escalate=True, wait=True),
