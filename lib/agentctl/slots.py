@@ -728,10 +728,6 @@ def sync_onto_main(repo, main_ref, sh, release_hold=False):
         print(f"NOT LANDED: {why}. A withdrawn or refuted blame revert is dead: drop this worktree "
               "(`git worktree remove`), never land it.")
         return 1, None
-    why = fix_replay_refusal(repo, waiting_commits(repo, f"{remote()}/main", head))
-    if why and policy_blocks("fix-replay", None, None, why[:160]):  # policy: fix-replay
-        print(f"NOT LANDED: {why}. A red whose check replays cheaply lands only a fix its replay proved.")
-        return 1, None
     # agentctl's own rewrites never sign (issue 20261115T112749-d27361): main's commits are unsigned, and a global
     # commit.gpgsign=true with an empty ssh-agent (an unattended fixer) failed every rebase behind main
     r = sh("git", *NO_SIGN, "rebase", "--quiet", f"{remote()}/main")
@@ -752,11 +748,43 @@ def sync_onto_main(repo, main_ref, sh, release_hold=False):
     if landed(repo, head, main_ref):
         print(f"LANDED {head} (the rebase left nothing: already on {remote()}/main)")
         return 0, None
+    if fix_replay_blocks(repo, head):
+        return 1, None
     problems = check_range(repo, f"{remote()}/main", head, [], int(env_num("AGENTCTL_MAX_FOREIGN", MAX_FOREIGN)))
     if problems:
         print("NOT LANDED: prepush-check refused:\n  " + "\n  ".join(problems))
         return 1, None
     return None, head
+
+
+# FIX REPLAY at land (red.py): on the rebased head, agentctl runs each bare `Fix-Replay: <command>` of a Fixes-Red push
+# at origin/main and at head (once per base, head and command), keeps the proof for the submission (change_fields'
+# `replays`), and refuses a gate red's fix it does not prove; a red outside the gate only warns.
+_fix_replay_proofs = process_cache({})  # (base, head) -> [proof]
+
+
+def fix_replay_proofs(repo, head):
+    """agentctl's replays of the push origin/main..head (run_fix_replays), run once per base and head."""
+    base = git(repo, "rev-parse", f"{remote()}/main").strip()
+    if (base, head) not in _fix_replay_proofs:
+        _fix_replay_proofs[(base, head)] = run_fix_replays(repo, base, head, waiting_commits(repo, base, head))
+    return _fix_replay_proofs[(base, head)]
+
+
+def fix_replay_blocks(repo, head):
+    """True (its NOT LANDED printed) when FIX REPLAY refuses the push origin/main..head."""
+    commits = waiting_commits(repo, f"{remote()}/main", head)
+    verdict = fix_replay_refusal(repo, commits, proofs=fix_replay_proofs(repo, head))
+    if not verdict:
+        return False
+    pid, why = verdict
+    if pid == "fix-replay":
+        blocks = policy_blocks("fix-replay", None, None, why[:160])  # policy: fix-replay
+    else:
+        blocks = policy_blocks("fix-replay-outside", None, None, why[:160])  # policy: fix-replay-outside
+    if blocks:
+        print(f"NOT LANDED: {why}. A red fix lands only once a replay proved it (or says why none can).")
+    return blocks
 
 
 def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False, cls="check", a=None, judged=None):

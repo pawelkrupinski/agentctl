@@ -62,16 +62,23 @@ POLICIES = {p.id: p for p in (
     Policy("blame-dead", "reject", "a withdrawn or refuted blame revert never lands",
            decided="the owner, 2026-11-01: \"revert the offending change\" -- a refuted revert reverts no offender"),
     Policy("older-batch", "hold", "a lone change younger than a held batch never takes the last free check tree",
-           decided="DERIVED from the owner's 2026-11-17 \"batch whenever there's a backlog\": without it no backlog "
-                   "batch forms under a stream of lone changes (the simulator's loadlone profile fails I5 with it "
-                   "off, tests/test_queue_sim.py ee7b744) -- the owner to confirm"),
-    # -- agent-proposed, never decided by the owner: they WARN, never block, until he approves or strikes them
-    Policy("regen-expiry", "reject", "a REGEN NEEDED hold nobody answered within 24 h is NOT LANDED (lane F2b)",
+           decided="the owner, 2026-11-20: \"4 confirm\" -- an older waiting change goes ahead of a younger one in a "
+                   "batch; red fixes keep their own lane (DERIVED from his 2026-11-17 \"batch whenever there's a "
+                   "backlog\": without it no backlog batch forms under a stream of lone changes, the simulator's "
+                   "loadlone profile fails I5 with it off, tests/test_queue_sim.py ee7b744)"),
+    Policy("regen", "delay", "a change whose generated rows only a regen decides is held for that regen (not bounced); "
+           "overdue, the regeneration is run again and, unanswered, the owner told once -- never rejected",
+           decided="the owner, 2026-11-20: \"1 approve\" (the hold) and \"2 drop the reject\" (lane F2b's 24-h "
+                   "regen-expiry reject struck: an overdue hold recovers instead)", softens="checks-failed"),
+    Policy("fix-replay", "reject", "a Fixes-Red landing for a GATE red (Main, Identity model convergence, Identity "
+           "takes) needs `Fix-Replay: <command>`, which agentctl runs to see base=FAIL head=PASS, or `Fix-Replay: none "
+           "— <why>` (a specific reason, 30+ characters, listed in the owner's weekly report)",
+           decided="the owner, 2026-11-20: \"3 approve and enforce for gate reds\""),
+    # -- rules that WARN, never block: agent-proposed and undecided, or (fix-replay-outside) kept warn-only by the
+    # owner's own decision -- 2026-11-20, "enforce for gate reds": a red outside the gate stays warn-only
+    Policy("fix-replay-outside", "reject", "a Fixes-Red landing for a red OUTSIDE the gate whose workflow names a "
+           "replay (red-workflows.tsv) needs Fix-Replay: <it> base=FAIL head=PASS (Alert backtest, 2026-11-19)",
            decided=None),
-    Policy("regen", "delay", "a change whose generated rows only a regen decides is held for that regen (not bounced)",
-           decided=None, softens="checks-failed"),
-    Policy("fix-replay", "reject", "a Fixes-Red landing for a red whose workflow names a replay needs Fix-Replay: "
-           "base=FAIL head=PASS (Alert backtest, 2026-11-19)", decided=None),
 )}
 
 
@@ -120,7 +127,7 @@ class HoldKind:
     __slots__ = ("kind", "policy", "label", "bound", "recovery", "red_fix_ok")
 
     def __init__(self, kind, policy_id, label, bound, recovery, red_fix_ok=False):
-        assert recovery in ("rederive", "escalate", "requeue"), recovery
+        assert recovery in ("rederive", "escalate", "requeue", "recover"), recovery
         self.kind, self.policy, self.label, self.bound, self.recovery = kind, policy_id, label, float(bound), recovery
         self.red_fix_ok = red_fix_ok  # a red fix may wait on it (its own resources: never on other work)
 
@@ -128,7 +135,10 @@ class HoldKind:
 # bound: how long a hold of this kind may last (from when it was first recorded) before it is STUCK. recovery: what the
 # change tick does with a stuck one -- `rederive` drops the recorded hold so the same tick decides afresh (a blocker
 # gone, a batch over: the hold describes a world that moved), `escalate` says it to its author and the watchdog (the
-# wait is real, its holder's own machine is late), `requeue` puts the change back in the queue (a push that never ended).
+# wait is real, its holder's own machine is late), `requeue` puts the change back in the queue (a push that never ended),
+# `recover` -- the hold's own recovery, run by the change tick at its bound and never a stuck lap: a REGEN NEEDED hold
+# overdue runs the regeneration again and, still held, tells the owner once (queue.py regen_hold_overdue; the owner,
+# 2026-11-20: "drop the reject").
 HOLDS = {h.kind: h for h in (
     HoldKind("trees", "trees", "every check tree is busy", 6 * 3600, "escalate", red_fix_ok=True),
     HoldKind("starting", "starting", "its executor is starting its check", 10 * 60, "rederive", red_fix_ok=True),
@@ -136,7 +146,7 @@ HOLDS = {h.kind: h for h in (
              red_fix_ok=True),
     HoldKind("retry", "retry", "an infra failure's retry", 6 * 3600, "escalate", red_fix_ok=True),
     HoldKind("governor", "governor", "the governor's check slot", 6 * 3600, "escalate", red_fix_ok=True),
-    HoldKind("regen", "regen", "its agent's regeneration", 30 * 3600, "escalate"),
+    HoldKind("regen", "regen", "its agent's regeneration", 24 * 3600, "recover"),
     HoldKind("overlap", "overlap", "an older change it overlaps", 6 * 3600, "rederive"),
     HoldKind("batch", "batch", "a batch it is not in", 4 * 3600, "rederive"),
     HoldKind("backlog-batch", "backlog-batch", "the next backlog batch", 2 * 3600, "rederive"),

@@ -121,10 +121,20 @@ moves it forward; nothing is a detached process that can die with its state in i
     scheduled workflow is DISPATCHED to verify only when the repo's one per-workflow registry, `.github/red-workflows.tsv`
     on main, says so: tab-separated `workflow  verify_dispatch (yes|no)  replay (a command, `{run}` = the red's failing
     run id, or -)  why`, `#` comments (Record scrape fixtures, a paid-proxy scrape of every cinema, is `no`); an
-    unscheduled one is dispatched as before. FIX REPLAY: when a red's workflow row names a `replay`, `land` refuses a
+    unscheduled one is dispatched as before. FIX REPLAY: when a red's workflow row names a `replay`, `land` warns on a
     push whose `Fixes-Red:` names that red unless one of its commits carries `Fix-Replay: <the command> base=FAIL
     head=PASS` (the replay run at origin/main and at the fix), naming the command to run (Alert backtest 5254bffda9d2,
-    2026-11-19: seven fixes landed unreplayed and the nightly refuted each). A fix-pending self-move (a fix landing, followed, re-cut) is never an
+    2026-11-19: seven fixes landed unreplayed and the nightly refuted each; policy `fix-replay-outside`, warn-only by
+    the owner's 2026-11-20 decision). **FOR GATE REDS IT IS ENFORCED** (the owner, 2026-11-20: "3 approve and enforce
+    for gate reds"; policy `fix-replay`): a `Fixes-Red:` naming a red of Main, Identity model convergence or Identity
+    takes must carry `Fix-Replay: <command>`, which `land` RUNS on the rebased head -- at origin/main and at the head,
+    each in a throwaway detached worktree (`$AGENTCTL_FIX_REPLAY_TIMEOUT`, 30 min a side; logs under the state root's
+    `fix-replay/`) -- and the fix counts only on base=FAIL head=PASS; the proof rides with the submission (`replays`)
+    and the server's check refuses a gate fix without one. The escape hatch, for a red that genuinely cannot replay
+    (infra, a CI-only race): `Fix-Replay: none — <why>` (`--` or `-` will do for the dash), a specific reason of 30+
+    characters with no "n/a", "flaky" or "can't"; movies' weekly Coupling exemptions report lists them
+    (`scripts/ci/fix_replay_exemptions.py --since 7d`) for the owner to strike. red.py `fix_replay_refusal`,
+    `run_fix_replays`; slots.py `fix_replay_blocks`; tests: `tests/test_fix_replay.py`. A fix-pending self-move (a fix landing, followed, re-cut) is never an
     escalation unless it says so. A cancelled fix change follows only a change of its worktree submitted after it
     (`submitted_at`, else the change id's stamp), and the invariant waits out `RED_FIX_REQUEUE_GRACE` as the red's own
     step does (Alert backtest #4, 2026-11-19: it followed an 11-11 change of the reused worktree, whose phantom tip
@@ -1254,16 +1264,22 @@ NOT LANDED) acts before approval, since switching it off would block more. `test
 hold kind a change records is in the hold table, every queue reject (`queue_verdict ... "rejected"`) and gate wait
 (`set_change ... "waiting"`) carries a `# policy: <id>` line, every unapproved rule is asked through `policy_blocks` at
 each site, and no row is stale. The owner approves a rule by filling its `decided` (date and words), or strikes it.
-Unapproved at introduction: `regen-expiry` (a REGEN NEEDED hold NOT LANDED after 24 h: lane F2b's, now it stays held
-and warns), `fix-replay` (a Fixes-Red landing without `Fix-Replay: ... base=FAIL head=PASS` refused: now it warns),
-`regen` (the hold itself; softens). `older-batch` is DERIVED from the owner's backlog-batch decision (the simulator's
-loadlone profile breaks I5 without it) and marked for his confirmation.
+Unapproved at introduction: `regen-expiry` (a REGEN NEEDED hold NOT LANDED after 24 h: lane F2b's), `fix-replay` (a
+Fixes-Red landing without `Fix-Replay: ... base=FAIL head=PASS` refused), `regen` (the hold itself; softens);
+`older-batch` DERIVED from the owner's backlog-batch decision. **The owner decided them, 2026-11-20** ("1 approve, 2
+drop the reject 3 approve and enforce for gate reds 4 confirm"): `regen` APPROVED; `regen-expiry` STRUCK -- an overdue
+regen hold recovers instead (below), never rejected; `fix-replay` APPROVED and ENFORCED for gate reds, agentctl running
+the replay (FIX REPLAY, the red section), with `fix-replay-outside` the warn-only rule for reds outside the gate;
+`older-batch` CONFIRMED -- an older waiting change goes ahead of a younger one in a batch, red fixes keep their own
+lane.
 
 **HOLDS, the hold table.** Every kind of recorded hold (`note_hold` refuses any other): its `land status` label, the
 longest it may last before it is STUCK, its recovery, and whether a red fix may wait on it (only its own resources).
 The change tick runs the recovery when a hold is stuck: `rederive` -- its blocker ended, or its kind's bound passed:
 the hold describes a world that moved, so it is dropped and the tick decides afresh, quietly (`change.rederived`),
-never a page -- or `escalate` (the 6-h cap, nothing recorded: agentctl's bug, an issue). W1 and WR read the same tables.
+never a page -- or `escalate` (the 6-h cap, nothing recorded: agentctl's bug, an issue) -- or `recover` (the `regen`
+hold: the tick's own recovery at its 24-h bound, the regeneration run again and the owner told once; never stuck). W1
+and WR read the same tables.
 
 ### issue: agentctl defects, filed (one agentctl editor)
 
@@ -1564,7 +1580,13 @@ The reconciler then takes it, a step per tick:
   provisional rows (MAIN'S ROW, PROVISIONALLY, below) stays `queued` in its place, held (`regen_hold`, not checked
   again), and its agent is told ONE command, `REGEN NEEDED <id>: ... run \`cd <worktree> && ~/bin/agentctl land\``
   (the laptop's land rebases and runs the regen where the JVM is); the change queued again from that worktree takes
-  the held entry's place and age. Unanswered for 24 h it is rejected naming the command. queue.py `conflict_cause`,
+  the held entry's place and age. **AN OVERDUE REGEN HOLD RECOVERS, NEVER REJECTED** (the owner, 2026-11-20: "drop the
+  reject"): unanswered for 24 h, the change tick runs the regeneration again -- a new `regen_round` on the change's
+  item, which the laptop's sync answers by starting `agentctl land` in the worktree once more (`regen_answered`) --
+  and when the hold still stands `$AGENTCTL_REGEN_RECOVERY_WAIT` (2 h) later (the laptop or its JVM unreachable, the
+  regen failing) it escalates ONCE to the owner (`REGEN HELD <id>: ...`, what is held and why, whether the laptop
+  answered); the change stays held in its place. Its hold kind's recovery is `recover`: never a stuck lap, nor W1.
+  queue.py `regen_hold_overdue`, server.py `answer_regen_holds`. queue.py `conflict_cause`,
   `regen_hold`, server.py `conflict_bounced`, `queue_change`; tests: `tests/test_generated.py`.
 - **GENERATED FILES ARE NO OVERLAP (2026-11-19 ~06:05Z: six movies changes -- agreement, f2, datalayer3, resolver2-b1,
   enrichment2, resolver2 -- each `held: its check waits for <prev>` because each edits coupling-baseline.tsv: every
@@ -2626,6 +2648,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `fixer_land_watch` | `AGENTCTL_FIXER_LAND_WATCH` | `60` | - |
 | `fixer_unlanded_escalate` | `AGENTCTL_FIXER_UNLANDED_ESCALATE` | `5400` | - |
 | `fixer_unlanded_nudge` | `AGENTCTL_FIXER_UNLANDED_NUDGE` | `2700` | - |
+| `fix_replay_timeout` | `AGENTCTL_FIX_REPLAY_TIMEOUT` | `1800` | s one side of agentctl's replay may run |
 | `free_wait` | `AGENTCTL_FREE_WAIT` | `30` | s --until-done waits for a landed worktree to be free of processes before it keeps it |
 | `gate_publish` | `AGENTCTL_GATE_PUBLISH` | `45` | - |
 | `generated_regen_timeout` | `AGENTCTL_GENERATED_REGEN_TIMEOUT` | `1200` | s a generated file's regen command may run before the conflict is the author's |
@@ -2721,6 +2744,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `red_starve` | `AGENTCTL_RED_STARVE` | `2700` | an offer waiting this long for a slot is STARVED |
 | `red_tick` | `AGENTCTL_RED_TICK` | `15` | seconds between the processor's red ticks |
 | `red_verify_slack` | `AGENTCTL_RED_VERIFY_SLACK` | `7200` | s past a slot's expected end before its fix is called unverified |
+| `regen_recovery_wait` | `AGENTCTL_REGEN_RECOVERY_WAIT` | `7200` | s from the re-run to the owner's one escalation |
 | `remote` | `AGENTCTL_REMOTE` | - | - |
 | `remote_ghost` | `AGENTCTL_REMOTE_GHOST` | `600` | s |
 | `restart_check` | `AGENTCTL_RESTART_CHECK` | `30` | seconds between code-version checks |

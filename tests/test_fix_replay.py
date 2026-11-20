@@ -1,6 +1,9 @@
 """FIX REPLAY (2026-11-19, Alert backtest 5254bffda9d2: seven fixes landed and each was refuted by the next backtest run).
 A workflow whose `.github/red-workflows.tsv` row names a replay holds its fixers to it: a Fixes-Red: landing for its
-red must carry `Fix-Replay: <command> base=FAIL head=PASS`, or land refuses it, naming the command."""
+red must carry `Fix-Replay: <command> base=FAIL head=PASS` -- outside the gate a WARNING only (fix-replay-outside).
+FOR GATE REDS (the owner, 2026-11-20: "3 approve and enforce for gate reds"): a Fixes-Red: for a red of Main, Identity
+model convergence or Identity takes must carry `Fix-Replay: <command>`, which agentctl runs at origin/main and at the
+fix (base=FAIL head=PASS), or `Fix-Replay: none — <a specific reason>`; land refuses it otherwise."""
 import os, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -47,12 +50,14 @@ class FixReplayTest(unittest.TestCase):
 
     def test_a_fixes_red_landing_without_its_replay_is_refused_naming_the_command(self):
         # d6bfac055, Alert backtest #5's 7th fix: Fixes-Red: 5 and no replay
-        why = A.fix_replay_refusal(self.r.path, self.fix("Fixes-Red: 5"), self.st)
+        pid, why = A.fix_replay_refusal(self.r.path, self.fix("Fixes-Red: 5"), self.st)
+        self.assertEqual(pid, "fix-replay-outside", "a red outside the gate: warn-only")
         self.assertIn(f"run `{CMD}` at origin/main and at your fix", why)
         self.assertIn(f"`Fix-Replay: {CMD} base=FAIL head=PASS`", why)
 
     def test_a_replay_that_did_not_pass_at_head_is_refused(self):
-        why = A.fix_replay_refusal(self.r.path, self.fix(f"Fixes-Red: 5\nFix-Replay: {CMD} base=FAIL head=FAIL"), self.st)
+        _pid, why = A.fix_replay_refusal(self.r.path, self.fix(f"Fixes-Red: 5\nFix-Replay: {CMD} base=FAIL head=FAIL"),
+                                         self.st)
         self.assertIn("this push says base=FAIL head=FAIL", why)
 
     def test_base_fail_head_pass_lands(self):
@@ -76,7 +81,7 @@ class FixReplayTest(unittest.TestCase):
         # registry reached main (f1a5e431d) -- agentctl had enforced since 08:15Z against a file main did not have yet,
         # and an absent file read as "no workflow has a replay"
         self.drop_registry()
-        why = A.fix_replay_refusal(self.r.path, self.fix("Fixes-Red: 5"), self.st)
+        _pid, why = A.fix_replay_refusal(self.r.path, self.fix("Fixes-Red: 5"), self.st) or (None, None)
         self.assertIn(f"{A.RED_WORKFLOWS_FILE} is missing on origin/main", why or "")
 
     def test_a_repo_that_keeps_no_registry_needs_none(self):
@@ -100,10 +105,10 @@ class FixReplayTest(unittest.TestCase):
         out, errs = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(errs):
             rc, head = A.sync(self.r.path, "origin/main", sh)
-        # THE POLICY REGISTRY: fix-replay is agent-proposed, never decided by the owner -- it warns, never blocks
+        # a red OUTSIDE the gate: warn-only (the owner, 2026-11-20) -- it warns, never blocks
         self.assertIsNone(rc)
-        self.assertIn("POLICY UNAPPROVED fix-replay", errs.getvalue())
-        with approved("fix-replay"):  # once the owner approves it, it refuses as it was written to
+        self.assertIn("POLICY UNAPPROVED fix-replay-outside", errs.getvalue())
+        with approved("fix-replay-outside"):  # were it ever approved, it refuses as it was written to
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 rc, head = A.sync(self.r.path, "origin/main", sh)
@@ -141,6 +146,117 @@ class FixReplayTest(unittest.TestCase):
             A.sync(self.r.path, "origin/main", sh)
         self.assertIsNone(A.rebase_in_progress(self.r.path), "a rebase land started is aborted on its way out")
 
+    # ---------------------------------------------------------------- gate reds (the owner, 2026-11-20)
+    def gate_red(self):
+        self.st.put_item("red", "9d1e2a7c4b10", "offered", {
+            "key": "9d1e2a7c4b10", "workflow": "Main", "jobs": ["unit (web)"], "runs": ["2600", "44470000001"],
+            "last_run": {"number": 2600, "databaseId": 44470000001}, "red_kind": "gate", "gate": True})
+
+    def test_a_gate_reds_fixes_red_without_a_fix_replay_is_refused(self):
+        self.gate_red()
+        pid, why = A.fix_replay_refusal(self.r.path, self.fix("Fixes-Red: 2600"), self.st)
+        self.assertEqual(pid, "fix-replay")
+        self.assertTrue(A.POLICIES["fix-replay"].approved, "the owner approved it for gate reds")
+        self.assertIn("Main #2600 [unit (web)] is a gate red", why)
+        self.assertIn("`Fix-Replay: <command>`", why)
+        self.assertIn("`Fix-Replay: none — <why>`", why)
+
+    def test_fix_replay_none_with_a_specific_reason_passes(self):
+        self.gate_red()
+        reason = "the runner's disk filled mid-job (infra); nothing in the code replays it"
+        self.assertIsNone(A.fix_replay_refusal(self.r.path, self.fix(f"Fixes-Red: 2600\nFix-Replay: none — {reason}"),
+                                               self.st))
+        self.assertEqual(set(A.fix_replay_none_reasons(self.r.path, self.fix(f"Fixes-Red: 2600\nFix-Replay: none -- {reason}"))),
+                         {reason}, "an ASCII dash too")
+
+    def test_fix_replay_none_outside_the_final_trailer_block_is_no_escape(self):
+        self.gate_red()
+        reason = "the runner's disk filled mid-job (infra); nothing in the code replays it"
+        pid, why = A.fix_replay_refusal(self.r.path, self.fix(f"Fix-Replay: none — {reason}\n\nFixes-Red: 2600\n"
+                                                              "Co-Authored-By: A <a@b.c>"), self.st)
+        self.assertEqual(pid, "fix-replay", "the weekly list reads git's trailers: a misplaced one would be unlisted")
+
+    def test_fix_replay_none_with_a_vague_reason_is_refused(self):
+        self.gate_red()
+        for reason in ("too slow", "flaky test on the hosted runner, nothing to replay",
+                       "n/a -- the failure was on the runner, not in code", "we can't replay this one on the laptop at all"):
+            pid, why = A.fix_replay_refusal(self.r.path, self.fix(f"Fixes-Red: 2600\nFix-Replay: none — {reason}"),
+                                            self.st)
+            self.assertEqual(pid, "fix-replay", reason)
+            self.assertIn("is no reason", why)
+
+    def test_agentctl_runs_the_replay_at_base_and_head(self):
+        self.gate_red()
+        self.r.write("marker.txt", "broken\n")
+        self.r.commit("main: broken")
+        self.r.push()
+        base = A.git(self.r.path, "rev-parse", "HEAD").strip()
+        self.r.write("marker.txt", "fixed\n")
+        self.r.commit("the fix\n\nFixes-Red: 2600\nFix-Replay: grep -q fixed marker.txt")
+        head = A.git(self.r.path, "rev-parse", "HEAD").strip()
+        commits = A.waiting_commits(self.r.path, base, head)
+        proofs = A.run_fix_replays(self.r.path, base, head, commits)
+        self.assertEqual([(p["cmd"], p["base"], p["head"]) for p in proofs],
+                         [("grep -q fixed marker.txt", "FAIL", "PASS")])
+        self.assertIsNone(A.fix_replay_refusal(self.r.path, commits, self.st, proofs=proofs))
+        self.assertEqual(A.git(self.r.path, "worktree", "list", "--porcelain").count("worktree "), 1,
+                         "its throwaway worktrees are gone")
+        # no proof at all (the server's check of a change the laptop never replayed): refused
+        pid, why = A.fix_replay_refusal(self.r.path, commits, self.st, proofs=[])
+        self.assertEqual(pid, "fix-replay")
+        self.assertIn("agentctl has not run `grep -q fixed marker.txt`", why)
+        # a replay that passes at base proves nothing
+        self.r.write("marker.txt", "fixed already\n")
+        self.r.commit("the fix\n\nFixes-Red: 2600\nFix-Replay: grep -q fixed marker.txt")
+        again = A.waiting_commits(self.r.path, head, "HEAD")
+        proofs = A.run_fix_replays(self.r.path, head, A.git(self.r.path, "rev-parse", "HEAD").strip(), again)
+        pid, why = A.fix_replay_refusal(self.r.path, again, self.st, proofs=proofs)
+        self.assertEqual(pid, "fix-replay")
+        self.assertIn("agentctl ran `grep -q fixed marker.txt`: base=PASS head=PASS", why)
+
+    def test_land_refuses_a_gate_fix_without_its_replay_and_lands_a_proven_one(self):
+        saved = A.Store
+        A.Store = lambda *a, **k: self.st
+        self.addCleanup(setattr, A, "Store", saved)
+        self.gate_red()
+        sh = lambda *args: A.subprocess.run(args, cwd=self.r.path, capture_output=True, text=True)  # noqa: E731
+        import io, contextlib
+        self.fix("Fixes-Red: 2600")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            rc, _head = A.sync(self.r.path, "origin/main", sh)
+        self.assertEqual(rc, 1)
+        self.assertIn("NOT LANDED: Main #2600 [unit (web)] is a gate red", out.getvalue())
+        A.git(self.r.path, "reset", "-q", "--hard", self.base)
+        self.r.write("marker.txt", "fixed\n")
+        self.r.commit("the fix\n\nFixes-Red: 2600\nFix-Replay: grep -q fixed marker.txt")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc, head = A.sync(self.r.path, "origin/main", sh)
+        self.assertIsNone(rc)
+        fields = A.change_fields(self.r.path, "origin/main", head, A.argparse.Namespace())
+        self.assertEqual([(p["cmd"], p["base"], p["head"]) for p in fields["replays"]],
+                         [("grep -q fixed marker.txt", "FAIL", "PASS")], "the proof rides with the submission")
+        self.assertIn("replays", A.SUBMIT_FIELDS)
+
+    def test_a_red_outside_the_gate_only_warns(self):
+        self.st.put_item("red", "50bc15cd7369", "fix-pending", {
+            "key": "50bc15cd7369", "workflow": "Alert backtest", "runs": ["9"], "last_run": {"number": 9},
+            "red_kind": "outside"})
+        pid, _why = A.fix_replay_refusal(self.r.path, self.fix("Fixes-Red: 5"), self.st)
+        self.assertEqual(pid, "fix-replay-outside")
+        self.assertFalse(A.POLICIES["fix-replay-outside"].approved, "warn-only (the owner, 2026-11-20)")
+
+    def test_a_gate_fixer_is_told_its_fix_replay(self):
+        u = {"key": "9d1e2a7c4b10", "workflow": "Main", "job": "unit (web)", "jobs": ["unit (web)"], "gate": True,
+             "red_kind": "gate", "run": {"number": 2600}, "last_run": {"number": 2600}, "line": "1 failed",
+             "kind": "test"}
+        saved = A.red_repo_clone
+        A.red_repo_clone = lambda o_r: self.r.path
+        self.addCleanup(setattr, A, "red_repo_clone", saved)
+        prompt = A.fixer_prompt(u, "/tmp/wt", "the brief")
+        self.assertIn("REPLAY YOUR GATE FIX: beside Fixes-Red, add the trailer `Fix-Replay: <command>`", prompt)
+        self.assertIn("`Fix-Replay: none — <why>`", prompt)
+
     def test_the_fixer_is_told_to_replay(self):
         u = {**self.st.item("red", "5254bffda9d2")["data"], "run": {"number": 5, "databaseId": 44459271435},
              "workflow": "Alert backtest", "job": "backtest", "line": "FAILED -- 19 problem(s)", "kind": "test"}
@@ -168,16 +284,32 @@ class ServerRefusesUnreplayedFixTest(test_backlog_batch.BacklogBatchTest):
         A.Store().put_item("red", "5254bffda9d2", "offered", {
             "key": "5254bffda9d2", "workflow": "Alert backtest", "jobs": ["backtest"], "runs": ["5", "44459271435"],
             "last_run": {"number": 5, "databaseId": 44459271435}, "red_kind": "outside"})
-        with approved("fix-replay"):  # agent-proposed: it refuses only once the owner approves it (test_policy.py)
+        with approved("fix-replay-outside"):  # outside the gate it only warns, unless approved (test_policy.py)
             A.check_entry(self.r.path, eid)
         e = self.entry(eid)
         self.assertEqual(e["status"], "rejected")
         self.assertIn(f"`Fix-Replay: {CMD} base=FAIL head=PASS`", e["why"])
 
 
-for _n in dir(test_backlog_batch.BacklogBatchTest):  # its base's own tests run in their module, not again here
-    if _n.startswith("test_") and _n not in ServerRefusesUnreplayedFixTest.__dict__:
-        setattr(ServerRefusesUnreplayedFixTest, _n, None)
+class ServerRefusesUnreplayedGateFixTest(test_backlog_batch.BacklogBatchTest):
+    def test_the_check_refuses_a_queued_gate_fix_with_no_replay(self):
+        wt = self.r.worktree("wt-gate", branch="gate")
+        self.r.write("web/src/main/Fix.scala", "a fix\n", at=wt)
+        self.r.commit("web: a fix\n\nFixes-Red: 2600", at=wt)
+        eid = self.queued(wt)[0]
+        A.Store().put_item("red", "9d1e2a7c4b10", "offered", {
+            "key": "9d1e2a7c4b10", "workflow": "Main", "jobs": ["unit (web)"], "runs": ["2600"],
+            "last_run": {"number": 2600}, "red_kind": "gate", "gate": True})
+        A.check_entry(self.r.path, eid)
+        e = self.entry(eid)
+        self.assertEqual(e["status"], "rejected")
+        self.assertIn("is a gate red", e["why"])
+
+
+for _cls in (ServerRefusesUnreplayedFixTest, ServerRefusesUnreplayedGateFixTest):
+    for _n in dir(test_backlog_batch.BacklogBatchTest):  # its base's own tests run in their module, not again here
+        if _n.startswith("test_") and _n not in _cls.__dict__:
+            setattr(_cls, _n, None)
 
 
 if __name__ == "__main__":

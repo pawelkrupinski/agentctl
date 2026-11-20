@@ -84,7 +84,14 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
     if replay:  # FIX REPLAY (red.py): its land is refused without the replay's base=FAIL head=PASS
         common += (f"REPLAY BEFORE LANDING: this red's check replays cheaply: `{replay}`. Run it at {remote()}/main "
                    "(base) and at your fix (head) and land only when it says base=FAIL head=PASS, with the trailer "
-                   f"`Fix-Replay: {replay} base=FAIL head=PASS` beside Fixes-Red (land refuses it otherwise). ")
+                   f"`Fix-Replay: {replay} base=FAIL head=PASS` beside Fixes-Red. ")
+    if u.get("gate") and not owner:  # FIX REPLAY FOR GATE REDS (red.py; the owner, 2026-11-20): enforced
+        common += ("REPLAY YOUR GATE FIX: beside Fixes-Red, add the trailer `Fix-Replay: <command>` -- the narrowest "
+                   "command that fails where this red fails (a `testOnly`, a script's self-test) -- and agentctl's "
+                   f"land runs it at {remote()}/main and at your fix: the change counts as the fix only on base=FAIL "
+                   "head=PASS. A red that genuinely cannot replay (infra, a CI-only race): `Fix-Replay: none — <why>`, "
+                   f"a specific reason of {FIX_REPLAY_NONE_MIN}+ characters (no n/a, flaky or can't), which the owner "
+                   "reads weekly. land refuses a gate fix with neither. ")
     if len(red_refuted(u)) >= RED_RECURRING:
         common += (f"RECURRING: this failure outlived {len(red_refuted(u))} landed fixes ({', '.join(x[:10] for x in red_refuted(u))}): "
                    "each treated a symptom. Read them (`git show`), find the ROOT CAUSE they all missed, and fix that; "

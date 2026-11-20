@@ -85,6 +85,20 @@ class PolicyLintTest(unittest.TestCase):
             self.assertTrue(hits, f"policy {pid} is used nowhere: strike its row")
 
 
+class OwnerDecisionsTest(unittest.TestCase):
+    def test_the_owners_2026_11_20_decisions_are_recorded(self):
+        """"1 approve, 2 drop the reject 3 approve and enforce for gate reds 4 confirm" (the owner, 2026-11-20)."""
+        for pid, words in (("regen", "1 approve"), ("fix-replay", "3 approve and enforce for gate reds"),
+                           ("older-batch", "4 confirm")):
+            self.assertTrue(A.POLICIES[pid].approved, pid)
+            self.assertIn("the owner, 2026-11-20", A.POLICIES[pid].decided, pid)
+            self.assertIn(words, A.POLICIES[pid].decided, pid)
+        self.assertIn("2 drop the reject", A.POLICIES["regen"].decided)
+        self.assertNotIn("regen-expiry", A.POLICIES, "2: the 24-h reject is struck, not left unapproved")
+        self.assertFalse(A.POLICIES["fix-replay-outside"].approved, "3: reds outside the gate stay warn-only")
+        self.assertEqual(A.HOLDS["regen"].recovery, "recover", "2: an overdue regen hold recovers")
+
+
 class PolicyBlocksTest(unittest.TestCase):
     def test_an_approved_rule_blocks_and_an_unapproved_one_warns_once(self):
         t = [1000.0]

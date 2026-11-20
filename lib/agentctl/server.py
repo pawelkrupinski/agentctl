@@ -653,8 +653,8 @@ def queue_change(d, fields, entry_id=None):
 
 
 SUBMIT_FIELDS = ("worktree", "branch", "head", "commits", "fixes", "keep_worktree", "claude_pid", "session", "base", "host",
-                 "lander", "commit_keys", "no_batch")  # lander.py: who landed it, and its commits' keys; no_batch: land
-# --no-batch (never in a backlog batch)
+                 "lander", "commit_keys", "no_batch", "replays")  # lander.py: who landed it, and its commits' keys;
+# no_batch: land --no-batch (never in a backlog batch); replays: agentctl's FIX REPLAY proofs (red.py run_fix_replays)
 
 
 def submit_change(body, repo=None):
@@ -1281,25 +1281,30 @@ def sync_steps(repo, d, o_r):
 # -- the rebase and the repo's regen in the change's own worktree. The laptop's sync now runs it: for each queued change
 # so held whose worktree is on this machine, clean and still at the held head, `agentctl land` there, detached, once per
 # change and head (it queues the change again in the held entry's place). A dirty worktree, or one moved on, is its
-# agent's: left to it, as before.
-_regen_answered = process_cache({})  # (change id, head) -> True: its `agentctl land` started
+# agent's: left to it, as before. AN OVERDUE HOLD'S RECOVERY (queue.py regen_hold_overdue) is a new `regen_round` on
+# the item: answered once more, and `regen_answered` says the round the laptop started (the owner's escalation reads it).
+_regen_answered = process_cache({})  # (change id, head, round) -> True: its `agentctl land` started
 
 
 def answer_regen_holds(d, store=None):
     """The laptop's step (above): `agentctl land` started in the worktree of each regen-held change it can answer; its
     lines."""
-    out = []
-    for it in (store or Store()).items("change"):
+    out, st = [], store or Store()
+    for it in st.items("change"):
         dd = it.get("data") or {}
         if it["state"] != "queued" or ((dd.get("hold") or {}).get("kind")) != "regen":
             continue
-        wt, head = dd.get("worktree"), dd.get("head")
-        if not wt or not head or (it["id"], head) in _regen_answered or not os.path.isdir(wt):
+        wt, head, rnd = dd.get("worktree"), dd.get("head"), int(dd.get("regen_round") or 0)
+        if not wt or not head or (it["id"], head, rnd) in _regen_answered or not os.path.isdir(wt):
             continue
         if git(wt, "rev-parse", "HEAD", check=False).stdout.strip() != head \
                 or git(wt, "status", "--porcelain", check=False).stdout.strip():
             continue  # its agent's: moved on, or at work in it
-        _regen_answered[(it["id"], head)] = True
+        _regen_answered[(it["id"], head, rnd)] = True
+        try:
+            st.update_item("change", it["id"], it["version"], {"regen_answered": rnd})
+        except Exception:
+            pass  # said for the owner's escalation only; the land runs all the same
         with open(os.path.join(d, f"regen-land-{it['id']}.log"), "a") as logf:
             spawn_detached([sys.executable, TOOL_PATH, "land"], cwd=wt, stdin=subprocess.DEVNULL, stdout=logf,
                            stderr=logf, start_new_session=True, env=tool_env())

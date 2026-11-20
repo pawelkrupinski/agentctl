@@ -581,7 +581,9 @@ def change_fields(repo, main_ref, head, a):
             "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or None,
             "base": git(repo, "rev-parse", main_ref).strip(), "host": os.uname().nodename,
             # THE LANDER (lander.py): who landed it, and each commit's keys to find it on main after the rebase
-            "lander": lander_record(repo), "commit_keys": commit_keys(repo, main_ref, head)}
+            "lander": lander_record(repo), "commit_keys": commit_keys(repo, main_ref, head),
+            # FIX REPLAY (red.py): agentctl's own replays of the push, for the server's check
+            "replays": fix_replay_proofs(repo, head) or None}
 
 
 # THE LAPTOP'S LAND NEEDS NO VAULT (2026-10-31: agents' `land` still died NoToken -- a `Fixes-Red:` trailer made
@@ -1413,7 +1415,8 @@ def provisional_hint(tree, e):
 # change is HELD in its place (queued, not checked again) and its agent told ONE command -- `agentctl land` in its
 # worktree, which rebases onto main and runs the regen where the JVM is (the laptop's conflict_resolve) -- and the
 # change queued again from that worktree takes the held entry's place and queue age (server.py queue_change). A hold
-# nobody answers is rejected after CONFLICT_PLACE_KEPT (THE STATE MACHINE IS TOTAL).
+# nobody answers within CONFLICT_PLACE_KEPT is NEVER rejected (the owner, 2026-11-20: "2 drop the reject"): it RECOVERS
+# (regen_hold_overdue, below).
 def regen_hold(d, e, tree, failing, out):
     """Hold change e for its agent's regeneration (above): queued with retry_after at the hold's end, `regen_hold` on
     its entry, its author told the one command (the event's inbox entry). Returns 1 (nothing pushed)."""
@@ -1432,17 +1435,54 @@ def regen_hold(d, e, tree, failing, out):
     return 1
 
 
-def regen_hold_expired(d, e, t):
-    """A regen hold nobody answered within CONFLICT_PLACE_KEPT: rejected, naming the command it waited for."""
+# AN OVERDUE REGEN HOLD RECOVERS (the owner, 2026-11-20: "1 approve, 2 drop the reject"; lane F2b's 24-h NOT LANDED is
+# struck). Past CONFLICT_PLACE_KEPT the change tick runs the regeneration AGAIN: a new round on the change's item
+# (`regen_round`), which the laptop's sync answers by starting `agentctl land` in its worktree once more (server.py
+# answer_regen_holds, once per change, head and round; it says so in `regen_answered`). When the hold still stands
+# REGEN_RECOVERY_WAIT later -- the laptop unreachable, its JVM down, the regen failing -- the owner is told ONCE (an
+# escalation on the change: what is held and why, whether the laptop answered). The change stays held in its place.
+REGEN_RECOVERY_WAIT = 2 * 3600  # s from the re-run to the owner's one escalation ($AGENTCTL_REGEN_RECOVERY_WAIT)
+
+
+def regen_hold_overdue(st, d, e, t):
+    """The change tick's step for regen-held entry e (above): False while within its bound (the retry decides), else
+    True -- held, never checked again nor rejected -- with the recovery's round or escalation done; lines to `did`."""
     h = e.get("regen_hold") or {}
     if not h or t - float(h.get("since") or t) < CONFLICT_PLACE_KEPT:
         return False
-    if not policy_blocks("regen-expiry", None, e["id"], f"NOT LANDED after {int(CONFLICT_PLACE_KEPT // 3600)} h"):
-        return False  # agent-proposed (lane F2b), never decided: it stays held, its warning recorded
-    # policy: regen-expiry
-    queue_verdict(d, e, "rejected", f"NOT LANDED: {e['id']} waited {int(CONFLICT_PLACE_KEPT // 3600)} h for "
-                  f"`{h.get('cmd')}` (its {', '.join(h.get('files') or [])} need a regen ci-runner cannot run): "
-                  "run it and land again", conflict_files=h.get("files") or [])
+    rec = h.get("recovery") or {}
+    wait = env_num("AGENTCTL_REGEN_RECOVERY_WAIT", REGEN_RECOVERY_WAIT)
+    if rec and (rec.get("escalated") or t - float(rec.get("at") or t) < wait):
+        return True
+    it = st.item("change", e["id"])
+    if not it or machine_state("change", it["state"]).terminal:
+        return True
+    files, cmd = ", ".join(h.get("files") or []), h.get("cmd")
+    if not rec:
+        rnd = int((it.get("data") or {}).get("regen_round") or 0) + 1
+        h["recovery"] = {"at": t, "round": rnd}
+        text = (f"REGEN RECOVERY {e['id']}: held {fmt_age(t - float(h['since']))} for its regeneration of {files}; "
+                f"running it again (the laptop's sync starts `{cmd}`), round {rnd}")
+        update, ev = {"regen_round": rnd}, {"kind": "regen.recover", "severity": "info", "text": text}
+    else:
+        answered = int((it.get("data") or {}).get("regen_answered") or 0) >= int(rec.get("round") or 1)
+        rec["escalated"] = t
+        text = (f"REGEN HELD {e['id']}: held {fmt_age(t - float(h['since']))}: its {files} need a regen only the "
+                f"laptop runs (both sides changed a row); run again {fmt_age(t - float(rec['at']))} ago, "
+                + ("the laptop started it, yet it still holds" if answered else "the laptop never answered")
+                + f" -- the laptop or its JVM is unreachable, or the regen fails: run `{cmd}` there, or "
+                f"`agentctl land cancel {e['id']}`")
+        update, ev = {}, {"kind": "regen.escalate", "severity": "escalate", "text": text}
+    e["regen_hold"], e["retry_after"] = h, t + wait
+    save_entry(d, e)
+    try:
+        if update:
+            st.update_item("change", e["id"], it["version"], update)
+            it = st.item("change", e["id"])
+        st.transition("change", e["id"], it["state"], it["version"], event=ev)
+    except StaleVersion:
+        pass  # recorded on the entry; the item catches up next tick
+    wlog(d, text)
     return True
 
 
@@ -1555,9 +1595,14 @@ def _check_entry(repo, d, e, i, own=None):
         # policy: blame-dead
         queue_verdict(d, e, "rejected", f"NOT LANDED: {dead}")
         return 1
-    unreplayed = fix_replay_refusal(repo, commits)  # FIX REPLAY (red.py): the laptop's land may hold no token
-    if unreplayed and policy_blocks("fix-replay", None, e["id"], unreplayed[:160]):
-        queue_verdict(d, e, "rejected", f"NOT LANDED: {unreplayed}")  # policy: fix-replay
+    # FIX REPLAY (red.py): the laptop's land may hold no token; its replays ride with the submission (`replays`)
+    unreplayed = fix_replay_refusal(repo, commits, proofs=e.get("replays"))
+    if unreplayed and unreplayed[0] == "fix-replay" and policy_blocks("fix-replay", None, e["id"], unreplayed[1][:160]):
+        queue_verdict(d, e, "rejected", f"NOT LANDED: {unreplayed[1]}")  # policy: fix-replay
+        return 1
+    if unreplayed and unreplayed[0] == "fix-replay-outside" \
+            and policy_blocks("fix-replay-outside", None, e["id"], unreplayed[1][:160]):
+        queue_verdict(d, e, "rejected", f"NOT LANDED: {unreplayed[1]}")  # policy: fix-replay-outside
         return 1
     joining = bool(reds) and must_wait(repo, commits, reds)
     cls = gov_class_of(repo, commits, reds)
@@ -2081,7 +2126,7 @@ def _tick_changes_pass(repo, d, st, t, facts, kinds, phase, mine, todo, held, ph
                           f"{', '.join(shared[:3])}" + (f" (+{len(shared) - 3} more)" if len(shared) > 3 else ""), t,
                           blocker=o["id"], files=shared[:10])
                 continue
-        if e.get("regen_hold") and regen_hold_expired(d, e, t):
+        if e.get("regen_hold") and regen_hold_overdue(st, d, e, t):
             continue
         if alive or e.get("retry_after", 0) > t:
             if not alive:  # said on its item: `land status` shows every wait (changekind.py, no held change silent)
@@ -2133,7 +2178,8 @@ def retry_hold(e):
         wt = e.get("worktree") or ""
         gone = "" if not wt or os.path.isdir(wt) or host_role() == "server" else f"; its worktree {wt} is gone"
         return "regen", (f"its check waits for its agent's regeneration of {', '.join(hold.get('files') or [])}: "
-                         f"`{hold.get('cmd')}` (else NOT LANDED at {time.strftime('%Y-%m-%d %H:%MZ', time.gmtime(float(e['retry_after'])))}){gone}")
+                         f"`{hold.get('cmd')}` (run again at {time.strftime('%Y-%m-%d %H:%MZ', time.gmtime(float(e['retry_after'])))} "
+                         f"if unanswered; never rejected for it){gone}")
     return "retry", f"its check is retried at {hhmmz(e['retry_after'])} (an infra failure)"
 
 
@@ -2376,6 +2422,8 @@ def change_hold_stuck(st, hold, it, t):
     """Why a queued or checked change's hold is stuck (an escalation), or None (a legitimate wait: quiet)."""
     if not hold:
         return "nothing holds it, yet it has not " + ("pushed" if it["state"] == "checked" else "started")
+    if hold_recovers_itself(hold):
+        return None  # its own recovery runs at its bound (regen_hold_overdue): never a stuck lap, the owner told once
     if t - float(it.get("entered_at") or t) > env_num("AGENTCTL_CHANGE_HOLD_MAX", CHANGE_HOLD_MAX):
         return f"held for over {fmt_age(env_num('AGENTCTL_CHANGE_HOLD_MAX', CHANGE_HOLD_MAX))}"
     if hold.get("blocker"):
@@ -2386,6 +2434,12 @@ def change_hold_stuck(st, hold, it, t):
     if hk and hold.get("since") and t - float(hold["since"]) > hk.bound:
         return f"held on {hk.label} for over {fmt_age(hk.bound)} (that hold's bound)"
     return None
+
+
+def hold_recovers_itself(hold):
+    """A hold whose kind's recovery is `recover` (THE HOLD TABLE): the change tick runs it at the bound itself."""
+    hk = HOLDS.get((hold or {}).get("kind"))
+    return bool(hk) and hk.recovery == "recover"
 
 
 def stuck_recovery(hold, stuck):

@@ -342,7 +342,11 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.assertEqual(self.entry(again)["queued_since"], A.entry_queued_since(self.entry(eid)), "and its queue age")
         self.assertEqual(self.entry(eid)["status"], "superseded")
 
-    def test_a_regen_hold_nobody_answers_is_rejected_after_its_bound(self):
+    def test_an_overdue_regen_hold_recovers_and_is_never_rejected(self):
+        """The owner, 2026-11-20: "2 drop the reject". A REGEN NEEDED hold nobody answered within its bound is never
+        NOT LANDED: the regeneration is run again (the laptop's sync starts `agentctl land` once more), and when the
+        hold still stands after REGEN_RECOVERY_WAIT, the owner is told ONCE what is held and why."""
+        self.assertNotIn("regen-expiry", A.POLICIES, "the 24-h reject is struck from the registry")
         wt = self.r.worktree("wt-rise", branch="rise")
         with open(os.path.join(wt, BASELINE)) as f:
             text = f.read()
@@ -356,16 +360,36 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.r.push(at=main)
         A.check_entry(self.r.path, eid)
         self.assertEqual(self.entry(eid)["status"], "queued")
-        # THE POLICY REGISTRY: the 24-h reject is agent-proposed (lane F2b), never decided -- it only warns
-        A.tick_changes(self.r.path, self.d, now_=time.time() + A.CONFLICT_PLACE_KEPT + 60)
-        self.assertEqual(self.entry(eid)["status"], "queued")
-        self.assertTrue(any(ev["kind"] == "policy.unapproved" and "regen-expiry" in ev["text"]
-                            for ev in A.Store().item_events("change", eid)))
-        with approved("regen-expiry"):  # once approved, it rejects as written
-            A.tick_changes(self.r.path, self.d, now_=time.time() + A.CONFLICT_PLACE_KEPT + 60)
-        e = self.entry(eid)
-        self.assertEqual(e["status"], "rejected")
-        self.assertIn(f"waited 24 h for `cd {wt} && ~/bin/agentctl land`", e["why"])
+        started = []
+        saved = A.spawn_detached
+        A.spawn_detached = lambda argv, **kw: started.append((argv[-1], kw.get("cwd")))
+        self.addCleanup(setattr, A, "spawn_detached", saved)
+        A.tick_changes(self.r.path, self.d)
+        A.answer_regen_holds(self.d)
+        self.assertEqual(started, [("land", wt)], "the laptop answers it once")
+        t0 = time.time() + A.CONFLICT_PLACE_KEPT + 60
+        for t in (t0, t0 + 60):  # overdue: recovered, once, never rejected
+            A.tick_changes(self.r.path, self.d, now_=t)
+            self.assertEqual(self.entry(eid)["status"], "queued", self.entry(eid).get("why"))
+        evs = A.Store().item_events("change", eid)
+        self.assertEqual(len([ev for ev in evs if ev["kind"] == "regen.recover"]), 1, [ev["kind"] for ev in evs])
+        self.assertFalse(any("NOT LANDED" in (ev.get("text") or "") for ev in evs))
+        self.assertEqual(A.Store().item("change", eid)["data"]["regen_round"], 1)
+        A.answer_regen_holds(self.d)
+        self.assertEqual(started, [("land", wt), ("land", wt)], "the regeneration is run again")
+        self.assertEqual(A.Store().item("change", eid)["data"]["regen_answered"], 1, "the laptop says it answered")
+        later = t0 + A.REGEN_RECOVERY_WAIT + 60
+        for t in (later, later + 60, later + A.CONFLICT_PLACE_KEPT):  # still held: the owner is told once
+            A.tick_changes(self.r.path, self.d, now_=t)
+            self.assertEqual(self.entry(eid)["status"], "queued")
+        told = [ev for ev in A.Store().item_events("change", eid) if ev["kind"] == "regen.escalate"]
+        self.assertEqual(len(told), 1, "escalated once")
+        self.assertEqual(told[0]["severity"], "escalate")
+        self.assertEqual(A.event_audience(A.Store(), told[0], A.Store().item("change", eid)), "owner")
+        self.assertIn(f"REGEN HELD {eid}", told[0]["text"])
+        self.assertIn(BASELINE, told[0]["text"])
+        self.assertIn(f"`cd {wt} && ~/bin/agentctl land`", told[0]["text"])
+        self.assertIn("laptop or its JVM", told[0]["text"])
 
     def test_a_stale_change_main_moved_under_is_rebased_in_the_check_tree_and_goes_on(self):
         """The 3-way rebase of a non-generated change: main changed the same file in another hunk since the change

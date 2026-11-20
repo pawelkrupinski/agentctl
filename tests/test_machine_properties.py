@@ -97,7 +97,7 @@ class HoldTableTest(unittest.TestCase):
             self.assertEqual(kind, h.kind)
             self.assertIn(h.policy, A.POLICIES, f"hold {kind}: its policy is not registered")
             self.assertTrue(0 < h.bound < float("inf"), kind)
-            self.assertIn(h.recovery, ("rederive", "escalate", "requeue"), kind)
+            self.assertIn(h.recovery, ("rederive", "escalate", "requeue", "recover"), kind)
 
     def test_a_red_fix_waits_only_on_its_own_resources(self):
         """A FIX OF ANY OPEN RED GOES FIRST: the holds a red fix may take are resource waits, never other work."""
