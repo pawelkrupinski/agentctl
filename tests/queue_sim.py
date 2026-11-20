@@ -30,10 +30,55 @@ ROOT = "0" * 40
 HOOK_TEXT = """#!/bin/sh
 # the simulated repo's hook: never run (the checks are the simulator's); its text tells agentctl what it supports:
 # --checks-only --fast-only --verify-only
-case "$1" in --plan) ;; esac
+case "$1" in --plan) ;; --compile-plan) ;; --lint-plan) ;; --coupling-plan) ;; --quality-plan) ;; esac
 exit 0
 """
 SBT_MODULES = ("web", "worker", "common", "scrapers", "geodata", "identity")
+# the simulated build's module graph, downstream: a module's test configs and those of every module depending on it
+# compile when it changes (movies' compile_plan), all of them meeting in e2e
+DOWNSTREAM = {"geodata": ("common",), "common": ("identity", "web"), "identity": ("scrapers",), "scrapers": ("worker",),
+              "worker": ("e2e",), "web": ("e2e",), "e2e": ()}
+
+
+def compile_plan(paths):
+    """The simulated hook's --compile-plan: every module downstream of a changed one (MINIMAL RECHECKS reads it)."""
+    out, todo = set(), [p.split("/")[0] for p in paths if p.split("/")[0] in SBT_MODULES]
+    while todo:
+        m = todo.pop()
+        if m not in out:
+            out.add(m)
+            todo.extend(DOWNSTREAM.get(m, ()))
+    return sorted(f"{m}/Test/compile" for m in out)
+
+
+def plan_checks(paths):
+    """The simulated hook's --plan: `sbt` for code, scripts and workflows, the identity area, the script tests."""
+    out = set()
+    for p in paths:
+        top = p.split("/")[0]
+        if top in SBT_MODULES or top in ("scripts", ".github", "test"):
+            out.add("sbt")
+        if top == "identity":
+            out.add("identity")
+        if top == "scripts":
+            out.add("scripttests")
+    return sorted(out)
+
+
+def lint_plan(paths):
+    """The simulated hook's --lint-plan: one standing lint, and the repo-reading lints for scripts and workflows."""
+    return ["standing"] + (["repo-lints"] if any(p.split("/")[0] in ("scripts", ".github") for p in paths) else [])
+
+
+def ratchet_plan(paths):
+    """The simulated hook's --coupling-plan / --quality-plan: production code and the baselines."""
+    return [p for p in paths if "/src/main/" in p or p.startswith("test/resources/")]
+
+
+def reads_of(paths):
+    """What the simulated hook's checks read for paths (MINIMAL RECHECKS, the simulation's own truth)."""
+    return ({("compile", x) for x in compile_plan(paths)} | {("plan", x) for x in plan_checks(paths) if x != "sbt"}
+            | {("lint", x) for x in lint_plan(paths) if x != "standing"} | ({("ratchets",)} if ratchet_plan(paths) else set()))
 # the simulated repo's GENERATED files (red-repos.json `generated`; waiting.py GENERATED FILES ARE NO OVERLAP)
 GENERATED = ("test/resources/coupling-baseline.tsv", "test/resources/complexity-baseline.tsv",
              "test/resources/length-baseline.tsv", "test/resources/duplication-baseline.tsv")
@@ -218,6 +263,7 @@ class Sim:
         self.local = threading.local()
         self.done_at = {}  # change cid -> the tick its entry was decided
         self.open_at_arrival = {}  # change cid -> the cids of the changes open (queued .. waiting) when it arrived
+        self.waiting_at_arrival = {}  # change cid -> those of them `waiting` for green then (they hold nothing)
         self.checks_of = {}  # entry id -> its own check rounds run (run_entry_checks)
         self.batch_seen = {}  # batch id -> ticks spent in assembling / checking / pushing
         self.stats = []
@@ -227,6 +273,7 @@ class Sim:
         self.n_lone_red = 0
         self.holds = {}  # entry id -> [(tick, hold kind, blocking entry, files)]
         self.verified = set()  # every tree (its patches) a check or a batch check passed (INVARIANT 11)
+        self.kept_pushes = 0  # pushes of a tree whose checks' verdict was kept (MINIMAL RECHECKS)
 
     # ---------------------------------------------------------------- the model's git
     def anc(self, sha):
@@ -420,8 +467,10 @@ class Sim:
 
     def hook_query(self, hook, tree, flag, paths):
         if flag == "--plan":
-            return ["sbt"] + (["identity"] if any(p.startswith("identity/") for p in paths) else [])
-        return []
+            return ["sbt"] + (["identity"] if any(p.startswith("identity/") for p in paths) else []) \
+                + (["scripttests"] if any(p.startswith("scripts/") for p in paths) else [])
+        return {"--compile-plan": compile_plan, "--lint-plan": lint_plan, "--coupling-plan": ratchet_plan,
+                "--quality-plan": ratchet_plan}.get(flag, lambda p: [])(paths)
 
     def commit_fixes(self, repo, sha, store=None):
         pid = self.commits.get(sha, (None, None))[1]
@@ -457,7 +506,10 @@ class Sim:
         mine = {x for p in me.patches for x in self.patches[p].paths}
         for c in self.chain(base, moved):
             other = self.change_of_sha(c)
+            # A WAITING CHANGE HOLDS NOTHING IT ASSEMBLES WITH (queue.py, 2026-11-20): the younger is checked at once and
+            # meets it in the batch at green -- or, green first, is rechecked once that batch lands it: accepted
             if other and other.cid in self.open_at_arrival.get(me.cid, ()) \
+                    and other.cid not in self.waiting_at_arrival.get(me.cid, ()) \
                     and mine & {x for p in other.patches for x in self.patches[p].paths}:
                 self.violate(f"change {me.eid} rechecked in full ({why}) for {other.eid}, open when it was queued")
                 return
@@ -518,7 +570,7 @@ class Sim:
             self.pushed_patch_count[pid] = self.pushed_patch_count.get(pid, 0) + 1
             if self.pushed_patch_count[pid] > 1:
                 self.violate(f"patch {pid} of change {self.patches[pid].cid} pushed to main twice")
-        if who == "queue" and frozenset(self.patches_of(sha)) not in self.verified:  # INVARIANT 11
+        if who == "queue" and not self.tree_verified(sha, new):  # INVARIANT 11
             self.violate(f"an unverified combined tree reached main: {sha[:10]} (patches {sorted(new)}) passed no check")
         self.pushes.append((self.tick, sha, new, who))
         self.main = sha
@@ -527,6 +579,23 @@ class Sim:
         for p in new:  # a red outside the gate: its own workflow's next run verifies the fix a few ticks later
             for name in self.patches[p].fixes & set(self.outside):
                 self.outside_clears.setdefault(name, self.tick + self.outside_rng.randint(1, 3))
+
+    def tree_verified(self, sha, new):
+        """INVARIANT 11: the pushed tree passed a check -- or (MINIMAL RECHECKS) a check passed a tree holding every
+        patch it pushes, and what else the pushed tree holds shares no file and no read check with them (the
+        simulation's own read model, reads_of)."""
+        tree = frozenset(self.patches_of(sha))
+        if tree in self.verified:
+            return True
+        paths = lambda pids: [x for p in pids for x in self.patches[p].paths]
+        mine = paths(new)
+        for v in self.verified:
+            if set(new) <= v <= tree:
+                extra = paths(tree - v)
+                if not (set(mine) & set(extra) - set(GENERATED)) and not (reads_of(mine) & reads_of(extra)):
+                    self.kept_pushes += 1
+                    return True
+        return False
 
     def spawn_executor(self, repo, d, eid):
         e = self.entry_by_id(eid) or {}
@@ -558,7 +627,7 @@ class Sim:
              "spawn_executor", "spawn_batch_executor", "precheck_hook", "verify_areas_supported", "remote_matches",
              "remote_checks_supported", "slug", "cancel_entry_remote", "stats_post", "check_runs_of", "gate_runs_pass",
              "clone_shared", "spawn_waiting_processor", "offer_token", "tool_env", "stats_echo", "pair_conflict",
-             "recheck_reason", "waiting_entries", "process_start", "code_version", "dt")
+             "recheck_reason", "waiting_entries", "process_start", "code_version", "dt", "own_diff_changed")
 
     def install(self):
         import contextlib
@@ -599,6 +668,7 @@ class Sim:
         A.check_tree = self.check_tree
         A.range_paths = self.range_paths
         A.named_reader = lambda *a, **k: None
+        A.own_diff_changed = lambda *a, **k: False  # a simulated patch is the same patch on any base
         A.cherry_landed = self.cherry_landed
         A.change_landed = self.change_landed
         A.hook_query = self.hook_query
@@ -748,6 +818,7 @@ class Sim:
         opened = [c for c in self.changes if (self.entry(c) or {}).get("status") not in A.ENTRY_FINAL
                   and c.worktree != worktree]  # its own older version is no collision
         self.open_at_arrival[cid] = {c.cid for c in opened}
+        self.waiting_at_arrival[cid] = {c.cid for c in opened if (self.entry(c) or {}).get("status") == "waiting"}
         mods_of = lambda ps: {x.split("/")[0] for x in ps}
         if spec.get("conflicts_with"):
             target = next(c for c in reversed(opened + self.changes) if c.label == spec["conflicts_with"])

@@ -2,7 +2,7 @@
 QUEUED <id>; the processor's checker runs the change's checks in a check tree of its own, within the governor, then
 pushes it (green), puts it on `waiting` (red) or rejects it, every verdict to the inbox with the agent's worktree; under
 pressure the checks run on ci-runner's check tier and the push carries the remote run for the hook to confirm."""
-import json, os, re, subprocess, sys, tempfile, time, unittest
+import contextlib, io, json, os, re, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -1475,6 +1475,131 @@ jobs:
         self.assertEqual(A.remote_job_expected(b, "check (identity 1/2)"), 1200.0 * A.REMOTE_P90_HEADROOM)
         self.assertEqual(A.remote_job_expected(b, "check (identity 2/2)"), A.REMOTE_JOB_CAP)
         self.assertEqual(A.remote_job_expected(b, "report"), A.REMOTE_JOB_CAP)
+
+
+# the repo's hook as movies' answers what its checks read (MINIMAL RECHECKS): its plan by path (code -> sbt, identity/ ->
+# the identity area, scripts/ -> the script tests, docs -> nothing), its compile plan (common <- worker, web), the
+# whole-tree ratchets (production code), and a lint plan with one standing lint
+READS_HOOK = """#!/bin/sh
+case "$1" in
+    --compile-plan)
+        while read -r p; do
+            case "$p" in
+                common/*.scala) printf 'common/Test/compile\\nworker/Test/compile\\nweb/Test/compile\\n' ;;
+                worker/*.scala) echo worker/Test/compile ;;
+                web/*.scala)    echo web/Test/compile ;;
+            esac
+        done
+        exit 0 ;;
+    --plan)
+        while read -r p; do
+            case "$p" in *.scala) echo sbt ;; esac
+            case "$p" in identity/*) echo identity ;; esac
+            case "$p" in scripts/*) printf 'scripttests\\nshellcheck\\n' ;; esac
+        done | sort -u
+        exit 0 ;;
+    --coupling-plan) grep '/src/main/' || true; exit 0 ;;
+    --quality-plan) grep '/src/main/' || true; exit 0 ;;
+    --lint-plan) echo standing:Lint; grep -q '^scripts/' && echo repo:ScriptsLint; exit 0 ;;
+esac
+# --verify-only A..B: the combined tree (every test config compiled, the touched modules' unit tests)
+"""
+
+
+class MinimalRecheckTest(QueueTest):
+    """MINIMAL RECHECKS (the owner, 2026-11-20: "so that rechecks are kept to a minimum"): main moving under a checked
+    change re-checks it only when a check its paths select reads what main changed; otherwise its verdict is kept --
+    rebased and pushed, no round -- and `land status <id>` says why each round ran, or did not."""
+
+    def setUp(self):
+        super().setUp()
+        self.r.write("scripts/hooks/pre-push", READS_HOOK + REPO_HOOK.format(calls=self.calls).split("\n", 1)[1])
+        os.chmod(os.path.join(self.r.path, "scripts/hooks/pre-push"), 0o755)
+        self.r.commit("the hook's read plans")
+        self.r.push()
+        for p in (self.pushes, self.calls):
+            if os.path.exists(p):
+                os.remove(p)
+
+    def status_of(self, eid):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            A.land_status_entry(A.Store(), eid, time.time())
+        return out.getvalue()
+
+    def test_a_main_move_outside_what_its_checks_read_keeps_the_verdict(self):
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        rounds = self.moves_once(("docs/notes.md", "n\n"), ("scripts/tool.sh", "t\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual(len(rounds), 1, "the full check only: no verify round")
+        self.assertEqual([m for m, _r in self.verified()], ["--range"])
+        self.assertEqual(self.remote_log()[0], "a: one", "rebased onto the moved main and pushed")
+        self.assertIn("no check of it reading what changed: its verdict kept", self.landed_verdict())
+        self.assertEqual(self.pushed()[-1], "push remote= skip=sbt", "the push skips the plan its checks passed")
+        self.assertRegex(self.status_of(eid), r"recheck: \d\d:\d\dZ kept on [0-9a-f]{10}: main moved by 2 commits")
+
+    def test_a_main_move_its_compile_plan_reads_forces_the_verify_round(self):
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("common/src/main/C.scala", "c\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--verify-only"], "verified: web compiles common")
+        self.assertIn("recheck: ", self.status_of(eid))
+        self.assertIn("verify on", self.status_of(eid))
+        self.assertIn("its compile-plan reads what main changed: web/Test/compile", self.status_of(eid))
+
+    def test_a_check_both_sides_select_forces_the_verify_round(self):
+        wt, _ = self.agent("a", "scripts/a.sh", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("scripts/b.sh", "b\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--verify-only"])
+        self.assertIn("its plan reads what main changed: scripttests", self.status_of(eid))
+
+    def test_a_per_file_check_or_a_standing_lint_both_select_reads_nothing_shared(self):
+        hook = os.path.join(self.r.path, "scripts/hooks/pre-push")
+        self.r.write("scripts/hooks/pre-push", open(hook).read().replace("scripttests\\n", "")
+                     .replace("grep -q '^scripts/' && echo repo:ScriptsLint", "cat > /dev/null"))
+        self.r.commit("no script tests, no repo lint")
+        self.r.push()
+        wt, _ = self.agent("a", "scripts/a.sh", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("scripts/b.sh", "b\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range"], "shellcheck reads only its own files")
+
+    def test_a_production_change_on_each_side_shares_the_whole_tree_ratchets(self):
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("worker/src/main/W.scala", "w\n"))  # no compile plan in common: the ratchets read both
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--verify-only"])
+        self.assertIn("its coupling-plan reads what main changed: the whole production tree", self.status_of(eid))
+
+    def test_a_hook_that_cannot_say_what_its_checks_read_verifies_as_before(self):
+        hook = os.path.join(self.r.path, "scripts/hooks/pre-push")
+        self.r.write("scripts/hooks/pre-push", open(hook).read().replace("--compile-plan)", "--other-plan)"))
+        self.r.commit("no compile plan")
+        self.r.push()
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("docs/notes.md", "n\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--verify-only"])
+
+    def test_the_rebase_changing_the_changes_own_diff_is_seen(self):
+        base = sh(self.r.root, "git", "--git-dir", self.r.bare, "rev-parse", "main").strip()
+        wt, tip = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
+        other, _ = self.agent("b", "docs/b.md", "b\n", msg="b")
+        moved = sh(other, "git", "rev-parse", "HEAD").strip()
+        sh(wt, "git", "rebase", "-q", moved)
+        rebased = sh(wt, "git", "rev-parse", "HEAD").strip()
+        self.assertFalse(A.own_diff_changed(wt, base, tip, moved, rebased), "the same patch on another base")
+        self.r.write("web/src/main/A.scala", "a\nmore\n", at=wt)
+        self.r.commit("a: more", at=wt)
+        grown = sh(wt, "git", "rev-parse", "HEAD").strip()
+        self.assertTrue(A.own_diff_changed(wt, base, tip, moved, grown), "its diff grew in the rebase")
 
 
 class LandedInboxTest(QueueTest):

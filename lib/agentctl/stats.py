@@ -230,6 +230,8 @@ def landing_records(item, events, entry=None, runs=(), paths=None, since=None):
            "verify_rounds": len(rounds) - full, "full_rechecks": max(0, full - 1),
            "infra_requeues": sum(1 for r in rounds if r["reason_class"].startswith("infra:")),
            "recheck_reasons": ",".join(r["reason_class"] for r in rounds[1:]),
+           # MINIMAL RECHECKS (queue.py): the times main moved under it and its verdict was kept, no round run
+           "kept_verdicts": sum(1 for r in d.get("rechecks") or [] if r.get("kind") == "kept") or None,
            # its KIND as the queue last classified it (changekind.py): a fix of an open red, and of which kinds; a
            # change from before the classifier, by its trailer alone
            "red_fix": bool(kind["red_fix"]) if "red_fix" in kind else bool(fixes), "fixes": ",".join(fixes),

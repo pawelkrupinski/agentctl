@@ -57,35 +57,49 @@ class BacklogBatchTest(test_queue.QueueTest):
             return out.split("QUEUED ", 1)[1].split()[0]
         return self.queued(wt)[0]
 
-    def test_three_queued_non_identity_changes_are_checked_as_one_batch_round(self):
+    def test_queued_changes_with_one_identity_change_are_checked_as_one_batch_round(self):
+        """BATCHED CHECKS (the owner, 2026-11-20: "batch those as well"): an identity change joins the batch -- its
+        identity area in the batch's one check -- but one per batch: a second is checked beside it, alone."""
         ea = self.queue("a", "web/src/main/A.scala")
         eb = self.queue("b", "worker/src/main/B.scala")
-        ec = self.queue("c", "scripts/c.sh")
         ei = self.queue("i", "identity/src/main/I.scala")
+        ej = self.queue("j", "identity/src/main/J.scala")
+        ec = self.queue("c", "scripts/c.sh")
         did = A.tick_changes(self.r.path, self.d)
-        self.assertEqual(self.started, [ei], f"only the identity change is checked alone: {did}")
+        self.assertEqual(self.started, [ej], f"only the second identity change is checked alone: {did}")
         out = self.drive()
         self.assertIn("checking", " ".join(out))
-        self.assertEqual(len(self.calls_of("--range")), 1, "ONE full check for the three changes")
+        self.assertEqual(len(self.calls_of("--range")), 1, "ONE full check for the four changes")
         self.assertEqual(self.calls_of("--fast-only"), [], "the full landing check, never the fast one")
         self.assertEqual(len(self.pushed()), 1, "one push")
-        self.assertEqual(self.remote_log()[:3], ["c: scripts/c.sh", "b: worker/src/main/B.scala", "a: web/src/main/A.scala"])
+        self.assertEqual(self.remote_log()[:4], ["c: scripts/c.sh", "i: identity/src/main/I.scala",
+                                                 "b: worker/src/main/B.scala", "a: web/src/main/A.scala"])
         bid = None
-        for eid in (ea, eb, ec):
+        for eid in (ea, eb, ei, ec):
             e = self.entry(eid)
             self.assertEqual(e["status"], "landed", eid)
             it = A.Store().item("change", eid)
             self.assertEqual(it["state"], "landed")
-            self.assertEqual(it["data"]["batch"], 3, "its record names the batch's size")
+            self.assertEqual(it["data"]["batch"], 4, "its record names the batch's size")
             bid = bid or it["data"]["batch_id"]
             self.assertEqual(it["data"]["batch_id"], bid, "and the one batch")
-        self.assertEqual(self.entry(ei)["status"], "queued", "the identity change was never in the batch")
-        self.assertEqual(len(self.watches), 3, "each member its own watch")
+        self.assertEqual(self.entry(ej)["status"], "queued", "the second identity change was never in the batch")
+        self.assertEqual(len(self.watches), 4, "each member its own watch")
         landed = [x for x in self.inbox() if x["kind"] == "LANDED"]
-        self.assertEqual(len(landed), 3, "each author told")
+        self.assertEqual(len(landed), 4, "each author told")
         st = A.Store()
         rec = A.landing_records(st.item("change", ea), st.item_events("change", ea), self.entry(ea))[0]
-        self.assertEqual((rec["batch"], rec["batch_id"], rec["outcome"], rec["rounds"]), (3, bid, "landed", 1))
+        self.assertEqual((rec["batch"], rec["batch_id"], rec["outcome"], rec["rounds"]), (4, bid, "landed", 1))
+
+    def test_two_identity_changes_sharing_a_file_never_meet_in_one_batch(self):
+        ei = self.queue("i", "identity/src/main/Shared.scala")
+        wt, _ = self.agent("j", "identity/src/main/Shared.scala", "j\n", msg="j: shared")
+        self.r.write("identity/src/main/Other.scala", "o\n", at=wt)
+        self.r.commit("j: other", at=wt)
+        ej = self.queued(wt)[0]
+        A.tick_changes(self.r.path, self.d)
+        self.assertEqual(self.started, [ei], "the younger identity change waits for the older, checked alone")
+        self.assertEqual(A.Store().item("change", ej)["data"]["hold"]["kind"], "overlap")
 
     def test_a_change_that_runs_identity_specs_but_moves_no_take_joins_the_batch(self):
         """2026-11-19 (movies' `--identity-change`): a common/ change runs the hook's identity area -- the specs reading
@@ -111,14 +125,17 @@ class BacklogBatchTest(test_queue.QueueTest):
                            msg="n: identity/src/main/Changed.scala\n\nPure-Move: maybe")
         en = self.queued(wt)[0]
         ea = self.queue("a", "web/src/main/A.scala")
+        wt, _ = self.agent("o", "identity/src/main/Other.scala", "o\n", msg="o: identity/src/main/Other.scala")
+        eo = self.queued(wt)[0]
         A.tick_changes(self.r.path, self.d)
-        self.assertEqual(self.started, [en], "only the unclaimed identity change is checked alone")
+        self.assertEqual(self.started, [eo], "the second unclaimed identity change is checked alone (one per batch)")
         self.assertIs(A.identity_change(self.r.path, self.entry(em)), False)
         self.assertIs(A.identity_change(self.r.path, self.entry(en)), True)
         self.drive()
-        for eid in (em, ea):
+        for eid in (em, en, ea):
             self.assertEqual(self.entry(eid)["status"], "landed", eid)
-            self.assertEqual(A.Store().item("change", eid)["data"]["batch"], 2, "the pure move and a lands as one batch")
+            self.assertEqual(A.Store().item("change", eid)["data"]["batch"], 3,
+                             "the pure move, the identity change and a land as one batch")
 
     def test_a_failing_batch_lands_its_passing_prefix_and_queues_the_rest_again(self):
         ea = self.queue("a", "web/src/main/A.scala")
@@ -192,7 +209,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         self.assertEqual(self.started, [ei1], "the identity change takes the one tree")
         ea = self.queue("a", "web/src/main/A.scala")
         eb = self.queue("b", "worker/src/main/B.scala")
-        ei2 = self.queue("i2", "identity/src/main/I2.scala")  # younger than the backlog
+        ei2 = self.queue("i2", "identity/src/main/I2.scala", "--no-batch")  # a lone change younger than the backlog
         self.assertEqual(A.tick_batch(self.r.path, self.d), [], "no tree free: no batch yet")
         held.pop().release()  # i1's check ends, its tree free
         A.set_change(self.d, self.entry(ei1), "cancelled", event={"text": "done"})
@@ -553,7 +570,8 @@ class OverlapTest(BacklogBatchTest):
         self.r.commit("a ten-line file")
         self.r.push()
 
-    def edit(self, name, path, line, text, extra=None):
+    def edit(self, name, path, line, text, extra=None, alone=False):
+        """A change editing one line of path (and writing extra); alone: landed with --no-batch, checked alone."""
         wt = self.r.worktree(f"wt-{name}", branch=name)
         with open(os.path.join(wt, path)) as f:
             lines = f.read().splitlines(True)
@@ -562,6 +580,10 @@ class OverlapTest(BacklogBatchTest):
         if extra:
             self.r.write(extra, f"{name}\n", at=wt)
         self.r.commit(f"{name}: {path}", at=wt)
+        if alone:
+            rc, out = self.land(wt, "--no-batch")
+            self.assertEqual(rc, 0, out)
+            return out.split("QUEUED ", 1)[1].split()[0]
         return self.queued(wt)[0]
 
     def test_a_younger_change_that_cannot_be_assembled_with_an_older_one_is_told_at_once_and_not_checked(self):
@@ -578,7 +600,8 @@ class OverlapTest(BacklogBatchTest):
         self.assertNotIn(ey, self.started, "never checked while the older is in flight")
 
     def test_a_younger_change_sharing_a_file_waits_and_is_checked_once_on_top_of_the_older(self):
-        eo = self.edit("older", "web/src/main/Ten.scala", 0, "older's line 1", extra="identity/src/main/I.scala")
+        eo = self.edit("older", "web/src/main/Ten.scala", 0, "older's line 1", extra="identity/src/main/I.scala",
+                       alone=True)
         ey = self.edit("younger", "web/src/main/Ten.scala", 9, "younger's line 10")
         A.tick_changes(self.r.path, self.d)
         self.assertEqual(self.started, [eo], "the younger waits for the older it shares a file with")
@@ -626,13 +649,16 @@ class OverlapTest(BacklogBatchTest):
         self.r.write("web/src/main/TestWiring.scala", "".join(f"wire {i}\n" for i in range(1, 11)))
         self.r.commit("the test wiring")
         self.r.push()
-        ea = self.edit("agreement", "web/src/main/Ten.scala", 0, "agreement's line", extra="identity/src/main/I.scala")
+        ea = self.edit("agreement", "web/src/main/Ten.scala", 0, "agreement's line", extra="identity/src/main/I.scala",
+                       alone=True)
         ef = self.edit("f2", "web/src/main/Ten.scala", 9, "f2's line", extra="web/src/main/TestWiring.scala")
         wt = self.r.worktree("wt-e2", branch="e2")  # the identity change, sharing TestWiring.scala with f2
         self.r.write("web/src/main/TestWiring.scala", "e2\n", at=wt)
         self.r.write("identity/src/main/E.scala", "e2\n", at=wt)
         self.r.commit("e2", at=wt)
-        ee = self.queued(wt)[0]
+        rc, out = self.land(wt, "--no-batch")  # checked alone, as an identity change was before it could batch
+        self.assertEqual(rc, 0, out)
+        ee = out.split("QUEUED ", 1)[1].split()[0]
         A.tick_changes(self.r.path, self.d)
         self.assertEqual(self.started, [ea])
         A.tick_changes(self.r.path, self.d, now_=time.time() + 16 * 60)  # each past its 15-min deadline

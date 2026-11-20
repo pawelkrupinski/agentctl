@@ -1296,7 +1296,7 @@ The reconciler then takes it, a step per tick:
   rounds) -- build.sbt / project/ / the hook (anything under scripts/hooks/ but its own self-tests, `*-test.sh`,
   `*-test-lib.sh`, `*_test.py`, which steer no check: the owner, 2026-11-16) / scripts/ci/precommit-share.sh landed,
   a path both change, or a path one side deletes (a rename's old
-  path too) whose file name a file the other side changes names -- else not re-checked in full, but ALWAYS VERIFIED:
+  path too) whose file name a file the other side changes names -- else not re-checked in full, but VERIFIED (unless MINIMAL RECHECKS, below, keeps its verdict):
   a round of `--verify-only <full base>..<tip>` on a `check/verify-<full base>-<id>` branch (every test config
   compiled, the lint and fast specs, the unit tests of every module either side touches), judged again by the
   checker on the main it starts on, then pushed (`checked ...; main moved since its full check on <sha>: no file
@@ -1325,6 +1325,25 @@ The reconciler then takes it, a step per tick:
   round's); a tree whose script does not name the mode gets the plain verify round. The verdict says `with the area
   tests (sbt modules both sides touch: worker)`. A push batch's union verification runs no area tests. The other
   forcing paths (the rest of scripts/hooks/, hooks-path.sh, tool-conventions.sh) stay a full round.
+  MINIMAL RECHECKS (the owner, 2026-11-20: "so that rechecks are kept to a minimum"; fix-red-2717 had sat through a
+  full re-check and a verify round after main moved by 12 commits): with no full round due, the verify round runs only
+  when a check the change's paths select READS a path main changed since its last check -- the hook's own selection,
+  read at the rebased tip: `--compile-plan` (two sides' plans meet where one's code compiles against the other's),
+  `--coupling-plan` / `--quality-plan` (production code on both sides: the whole-tree ratchets), `--plan`'s checks (an
+  area such as `identity`, `scripttests`, `drift`, ...; not `sbt`, which the plans above spell out, nor the per-file
+  checks `shellcheck`, `actionlint`, `eslint`) and `--lint-plan`'s path-selected specs (not the standing `*` rows) --
+  or when the rebase changed the change's own diff (its patch id: a merged generated row). Otherwise its VERDICT IS
+  KEPT: rebased and pushed at once, PREPUSH_SKIP the plan its checks passed (`checked ...; main moved by 2 commits since
+  its checks on <sha>, no check of it reading what changed: its verdict kept`), and it is no push batch member
+  (`verdict_kept`). A hook without `--plan` and `--compile-plan` gets the verify round. Accepted risk: a standing lint or
+  a basic line reading both sides (Main catches it). Every decision is kept on the change (`rechecks`: full / verify /
+  kept, the main it was taken on and why) and printed by `land status <id>` (`recheck: 09:41Z verify on 5e2f...: main
+  moved by 3 commits: its compile-plan reads what main changed: web/Test/compile`). Measured (2026-11-20) over the
+  3 days' 131 rechecks of landed changes: the commonest reads both sides shared were `scripttests` (33, the hook's one
+  word for every script self-test) and `e2e/Test/compile` (30) -- a finer `scripttests` selection in the hook is the
+  next lever. queue.py `read_overlap`, `own_diff_changed`, `verdict_kept`, `recheck_logged`; tests:
+  `tests/test_queue.py` MinimalRecheckTest, `tests/test_queue_sim.py` MinimalRecheckSimTest (INVARIANT 11 now also
+  accepts a tree holding a verified one whose extra patches no check of it reads, the simulation's own read model).
   Code: queue.py `recheck_reason` (THE RULE), `selection_change`, `share_selection`, `module_overlap`, buildview.py `build_view_change`, `_push_change`,
   `_check_entry`; tests: `tests/test_queue.py` (`*verif*`, `*deleted_file*`, `*rechecks`, `*full_round`,
   `*build_change*`, `*share*`, `*module*`, `*verifyareas*`), `tests/test_buildview.py`.
@@ -1348,13 +1367,18 @@ The reconciler then takes it, a step per tick:
 - **THE BACKLOG BATCH (the owner, 2026-11-17: "batch whenever there's a backlog, not only on red").** At green, with
   no batch open, when 2 or more queued changes that no checker has taken may share a check (`$AGENTCTL_BACKLOG_BATCH_MIN`),
   the change tick gives them no check tree of their own (`its check waits for the next backlog batch`) and the batch
-  tick makes them ONE batch item with depth `full`, created only once a check tree is free for it. Never in one: an
-  IDENTITY change (a path that can move takes: the hook's `--identity-change` names it -- movies: identity/src/main,
+  tick makes them ONE batch item with depth `full`, created only once a check tree is free for it. ONE IDENTITY CHANGE
+  PER BATCH (the owner, 2026-11-20: "batch those as well"): an IDENTITY change joins it, the batch's one full check
+  running the union of its members' areas (the identity area with them), but at most one (`BACKLOG_BATCH_IDENTITY_MAX`):
+  two would hide which one moved takes, so a second is checked beside the batch, alone, and one sharing a file with an
+  older identity change waits for it (queue.py `second_identity`). An IDENTITY change is a path that can move takes (the
+  hook's `--identity-change` names it -- movies: identity/src/main,
   the worker's identity adapters, the title rules, words and normalizer, identity-judgements.tsv; a hook without it: its
   `--plan` selecting the `identity` area -- or a G5 identity-model commit; since 2026-11-19 a common/ change whose
   identity area runs some identity specs is no identity change and batches; no plan to ask: alone too, kept on the
   entry per head; a commit saying `Pure-Move: verified` counts for neither, 2026-11-19: it moves no take, and movies' hook
-  leaves the identity area to the commits without the claim -- batch.py `pure_move_claimed`), a change landed with `land --no-batch`, a red fix, a combined-tree verification round, one in an
+  leaves the identity area to the commits without the claim -- batch.py `pure_move_claimed`). Never in one: an identity
+  change it cannot tell (no plan to ask), a change landed with `land --no-batch`, a red fix, a combined-tree verification round, one in an
   infra backoff or holding its own unread remote run. At most 4 members (`$AGENTCTL_BACKLOG_BATCH_MAX`), queue order,
   Fixes-Red first; a member that does not apply is left out (`batch_alone`) and checked alone; fewer than 2 kept: no
   batch. None forms while a change verifies its combined tree or a checked change's push is due (THE OLDEST
@@ -1376,7 +1400,7 @@ The reconciler then takes it, a step per tick:
   the red batch (no solo push under it; a red fix excepted, which keeps its red-fix tree and lands alone: the batch's
   push then finds main moved and is assembled again over it, each member judged by THE RULE on the new main -- one
   re-verification, the price of never holding a red fix for a whole batch check); a change queued meanwhile joins the
-  next one. Identity changes are checked alone beside it. The same machine as the red batch:
+  next one. A second identity change is checked alone beside it. The same machine as the red batch:
   batch.py `backlog_candidates`, `backlog_reconcile` (members follow their batch), the `depth` of `batch_check` /
   `bisect` (remote.py); tests: `tests/test_backlog_batch.py`.
 - **A FIX OF ANY OPEN RED GOES FIRST (2026-11-19, 08010c: `Fixes-Red: 6`, Alert backtest #6, red 5254bffda9d2,
@@ -1488,7 +1512,10 @@ The reconciler then takes it, a step per tick:
   coupling or complexity lane landed one at a time).** A repo registers its generated files in red-repos.json
   (`generated`: `[{paths, regen, timeout}]`; movies: coupling-baseline.tsv and coupling-fanout-refs.tsv by
   `scripts/coupling-report --update`, the complexity, length and duplication baselines by `scripts/quality-report
-  --update`). Such a file is no overlap -- not
+  --update`; since 2026-11-20 also the HAND-WRITTEN TABLES, registered with no `regen`: coupling-exemptions.tsv,
+  coupling-layers.tsv, identity-judgements.tsv and identity-unmatched/expected-matches.tsv -- metrics-packages sat held
+  behind phase6-data on coupling-exemptions.tsv -- merged row by row only, a row both sides changed staying the author's
+  conflict, never one side's row kept provisionally: no ratchet would judge a lost exemption). Such a file is no overlap -- not
   for the hold, backlog-batch membership, the CONFLICTS a queued change is told of, `main_conflict`, nor the push's
   full-recheck rule; a real source both change (TestWiring.scala) holds as before. A conflict in one, on a rebase, a
   batch's assembly or land's own rebase, is RESOLVED in the commit being picked (its message and trailers kept): its
@@ -2339,7 +2366,7 @@ already live in), with stream fields `source:agentctl` and `record:<name>`. `$AG
 
 | record | one per | fields |
 |---|---|---|
-| `agentctl.landing` | change exit (`_time` = exit) | `change_id`, `lander_agent`, `lander_session`, `lander_host`, `worktree`, `branch`, `head_sha`, `base_sha` (main at submit), `checked_base`, `landed_sha`; `outcome` (landed/rejected/superseded/cancelled), `reason_class` (landed, superseded, checks-failed, conflict, too-slow, precheck, blame, cancelled, other), `reason`; `submitted_at`, `exited_at`, `total_s` (land -> exit, i.e. land -> LANDED), `queue_wait_s` (submit -> first check), `queued_s` (all queued time), `checking_s`, `checked_wait_s` (checked -> pushing), `pushing_s`, `push_to_landed_s`, `waiting_s` (held by a red gate); `rounds`, `full_rounds`, `verify_rounds`, `full_rechecks`, `infra_requeues`, `recheck_reasons` (comma list); `red_fix` (Fixes-Red), `fixes`; `commits_n`, `files_n`, `modules` (top-level dirs, comma list, `(root)` for root files), `sbt_modules` (dirs with a `src/`), `areas` (the precommit-check jobs that ran: rest, identity, oldrefs, heavy:<row>; `page` only before 2026-11-17, when the page area moved to after landing); `check_runs` (precommit-check run ids), `check_runner_wait_s` / `check_run_s` (summed critical-path queue / work of its runs), `check_jobs_n`, `check_job_queue_max_s`, `check_job_queue_sum_s`, `check_job_run_sum_s`; `precheck_s`, `precheck_outcome` (passed/refused/unchecked), `precheck_step` (noted on the item by the laptop's `land-precheck`, tried again through a store blip or a not-yet-submitted item for up to `$AGENTCTL_NOTE_PRECHECK_WAIT` s; none before 2026-11-17); `batch`, `superseded_by` |
+| `agentctl.landing` | change exit (`_time` = exit) | `change_id`, `lander_agent`, `lander_session`, `lander_host`, `worktree`, `branch`, `head_sha`, `base_sha` (main at submit), `checked_base`, `landed_sha`; `outcome` (landed/rejected/superseded/cancelled), `reason_class` (landed, superseded, checks-failed, conflict, too-slow, precheck, blame, cancelled, other), `reason`; `submitted_at`, `exited_at`, `total_s` (land -> exit, i.e. land -> LANDED), `queue_wait_s` (submit -> first check), `queued_s` (all queued time), `checking_s`, `checked_wait_s` (checked -> pushing), `pushing_s`, `push_to_landed_s`, `waiting_s` (held by a red gate); `rounds`, `full_rounds`, `verify_rounds`, `full_rechecks`, `infra_requeues`, `recheck_reasons` (comma list), `kept_verdicts` (main moved under it and no round ran: MINIMAL RECHECKS); `red_fix` (Fixes-Red), `fixes`; `commits_n`, `files_n`, `modules` (top-level dirs, comma list, `(root)` for root files), `sbt_modules` (dirs with a `src/`), `areas` (the precommit-check jobs that ran: rest, identity, oldrefs, heavy:<row>; `page` only before 2026-11-17, when the page area moved to after landing); `check_runs` (precommit-check run ids), `check_runner_wait_s` / `check_run_s` (summed critical-path queue / work of its runs), `check_jobs_n`, `check_job_queue_max_s`, `check_job_queue_sum_s`, `check_job_run_sum_s`; `precheck_s`, `precheck_outcome` (passed/refused/unchecked), `precheck_step` (noted on the item by the laptop's `land-precheck`, tried again through a store blip or a not-yet-submitted item for up to `$AGENTCTL_NOTE_PRECHECK_WAIT` s; none before 2026-11-17); `batch`, `superseded_by` |
 | `agentctl.landing_round` | check round of a change (`_time` = round start) | `change_id`, `outcome`, `lander_agent`, `round`, `mode` (full/verify), `reason_class` (first, verify, build, hook, selection, module-overlap, overlap, deletion, plan, from-waiting, infra:<reason>, other), `reason`, `started`, `ended`, `check_s`, `queued_before_s`, `result` (checked, requeued, rejected, waiting), `run_id`, `run_queue_s`, `run_work_s`, `run_wall_s` |
 | `agentctl.landing_watch` | landed sha's post-push watch | `landed_sha`, `change_id`, `verdict` (ok/red/unknown), `verdict_line`, `pushed_at`, `watch_s` |
 | `agentctl.red` | red episode (a red item, open -> verified/cleared) | `red_id`, `key`, `workflow`, `gate`, `red_kind` (gate/outside/stuck-run/flake), `verdict_class` (test-failure / infra-shaped / no-verdict), `family`, `jobs`, `signature`, `first_run`, `last_run`, `runs_n`, `opened_at`, `closed_at`, `duration_s`, `outcome`, `closed_by`; `fixers_n`, `fixer_restarts`, `fixer_holders`, `first_fixer_at`, `time_to_fixer_s`, `offered_s`, `leased_s`, `fix_pending_s`; `fix_sha`, `fix_entry`, `fix_status`, `fix_landed_at`, `red_to_fix_landed_s`, `red_to_green_s` (verified only); `waited_changes_n`, `waited_changes_s` (changes held by a gate red, their waiting inside the episode); `owner_blocked`, `blocked_s`, `decision_wait_s`; `escalations_n`, `notifications_n`, `attempts` |

@@ -80,8 +80,8 @@ def batch_members(d, it):
 # ---------------------------------------------------------------- the backlog batch (the owner, 2026-11-17)
 # "BATCH WHENEVER THERE'S A BACKLOG, NOT ONLY ON RED": with 6-8 changes queued at green each paid a 30-40 min check of
 # its own, mostly waiting for a ci-runner check slot. Now, at green with no batch open, BACKLOG_BATCH_MIN or more queued
-# changes that no checker has taken and that may share a check (backlog_batchable: no identity change -- the hook's
-# `identity` area or G5's identity-model globs --, no `land --no-batch`, no red fix, no combined-tree verification
+# changes that no checker has taken and that may share a check (backlog_batchable: at most ONE identity change -- the
+# hook's `--identity-change` or G5's identity-model globs; 2026-11-20 --, no `land --no-batch`, no red fix, no combined-tree verification
 # round, none in an infra backoff or holding an unread remote run) are THE BATCH ABOVE with depth `full`: assembled in
 # queue order (Fixes-Red first; a member that does not apply is left out and checked alone, batch_alone), its tip
 # checked once with the FULL landing check (the hook's --range dry run; on ci-runner check/batch-<tip>, the same
@@ -92,9 +92,14 @@ def batch_members(d, it):
 # cap or an infra failure sends it to a check of its own instead), the passing prefix pushed at once, the rest queued
 # again (backlog_reconcile). At most BACKLOG_BATCH_MAX members, so a bisect is at most 3 extra rounds (2 prefixes and
 # the confirmation). While such candidates wait for a tree, the change tick gives them none of its own (they wait for
-# the batch); identity changes and red fixes are checked alone beside it, and a red fix never waits for it.
+# the batch); a second identity change and red fixes are checked alone beside it, and a red fix never waits for it.
 BACKLOG_BATCH_MIN = 2  # queued changes that may share a check and make a backlog batch
 BACKLOG_BATCH_MAX = 4  # a backlog batch's members at most: its bisect is 2 prefix checks + 1 confirmation
+# ONE IDENTITY CHANGE PER BATCH (2026-11-20, the owner's "check them together"): before, an identity change (a path
+# that can move takes) was never a member -- every one was checked alone. Now it joins a backlog batch, whose ONE full
+# check runs the union of its members' areas (its identity area with them), but at most one per batch: two would hide
+# which one moved takes (G5's lesson), so a second identity change waits for the next batch.
+BACKLOG_BATCH_IDENTITY_MAX = 1
 BACKLOG_LIVE = ("checking", "bisecting", "pushing")  # a backlog (or push) batch's states that hold its members
 DEEP_BATCHES = ("full", "verify")  # the depths whose members are queue entries of their own: backlog and push batches
 
@@ -127,8 +132,8 @@ _identity_known = process_cache({})  # (entry id, head) -> identity_change's ver
 
 
 def identity_change(repo, e):
-    """Whether the change is an identity change, checked alone: G5's identity-model commits, or the hook's
-    --identity-change naming a path that can move takes (a hook without it: its --plan selecting the `identity` area). None when it cannot tell (no plan, unreadable commits): checked alone too. Kept per
+    """Whether the change is an identity change, at most one per backlog batch: G5's identity-model commits, or the hook's
+    --identity-change naming a path that can move takes (a hook without it: its --plan selecting the `identity` area). None when it cannot tell (no plan, unreadable commits): checked alone. Kept per
     entry and head in the process (never written to the entry: an executor may be saving it meanwhile)."""
     key = (e["id"], e.get("head"))
     if key in _identity_known:
@@ -165,7 +170,7 @@ def identity_change(repo, e):
 
 def backlog_batchable(repo, d, e, t, facts=None):
     """Whether queued entry e may join a backlog batch now (THE BACKLOG BATCH, above): its KIND lets it (no red fix,
-    no --no-batch, no batch_alone, no identity change: changekind.py) and its state does (queued, no verify round, no
+    no --no-batch, no batch_alone, no identity change it cannot tell: changekind.py) and its state does (queued, no verify round, no
     retry due, no own run or live checker)."""
     rem = e.get("remote") or {}
     if e.get("status") != "queued" or e.get("backlog_batch") or e.get("verify") or float(e.get("retry_after") or 0) > t:
@@ -199,9 +204,17 @@ def backlog_candidates(repo, d, reds, t=None, facts=None):
     if any((verifying(e, t) or (e.get("status") == "checked" and not float(e.get("retry_after") or 0) > t))
            and not e.get("backlog_batch") for e in entries):  # a checked change's push is due at the next change tick
         return []
-    out = [e for e in entries if backlog_batchable(repo, d, e, t, facts)
-           and not overlap_hold(repo, d, e, entries, facts, t)]
-    out = sorted(out, key=lambda e: e["seq"])[:int(env_num("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX))]
+    ok = [e for e in entries if backlog_batchable(repo, d, e, t, facts)
+          and not overlap_hold(repo, d, e, entries, facts, t)]
+    out, identities = [], 0
+    for e in sorted(ok, key=lambda e: e["seq"]):  # queue order; ONE IDENTITY CHANGE PER BATCH, the next waits
+        if len(out) >= int(env_num("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX)):
+            break
+        ident = bool(identity_change(repo, e))
+        if ident and identities >= BACKLOG_BATCH_IDENTITY_MAX:
+            continue
+        identities += ident
+        out.append(e)
     return out if len(out) >= backlog_min() else []
 
 
@@ -282,8 +295,8 @@ def push_batchable(repo, d, e, t, main, facts=None):
         return False
     if kind_of(repo, e, facts, t)["push_batch"] is not None:
         return False
-    if e.get("status") == "checked":
-        return bool(e.get("checked_base")) and e["checked_base"] != main
+    if e.get("status") == "checked":  # one keeping its verdict on main (MINIMAL RECHECKS) owes no verify round
+        return bool(e.get("checked_base")) and e["checked_base"] != main and not verdict_kept(repo, e, main)
     if e.get("status") != "queued" or not e.get("verify") or not e.get("full_base"):
         return False
     if rem.get("run") is not None and not rem.get("collected_at"):  # its own run: a checker adopts it
@@ -1096,6 +1109,8 @@ def land_status_entry(st, entry, t):
             for line in remote_check_lines(d.get("check"), t) or [
                     "check: no remote check recorded (a local check tree, or its executor is starting)"]:
                 print(line)
+    for r in d.get("rechecks") or []:  # MINIMAL RECHECKS (queue.py): why each round after the first ran, or did not
+        print(f"recheck: {hhmmz(r.get('at') or 0)} {r.get('kind')} on {r.get('main') or '?'}: {r.get('why')}")
     return 0
 
 

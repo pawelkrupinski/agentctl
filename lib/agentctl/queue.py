@@ -338,6 +338,129 @@ def recheck_reason(tree, base, moved, tip, change_paths, full_tip=None):
     return n, None
 
 
+# MINIMAL RECHECKS (the owner, 2026-11-20: "batch those as well ... so that rechecks are kept to a minimum"; that
+# morning fix-red-2717 sat through a full re-check, then a verify round, after main moved by 12 commits). THE RULE above
+# decides between a FULL round and the combined tree's verify round; before this, a change main moved under always paid
+# at least the verify round. Now a third answer: its VERDICT IS KEPT -- rebased and pushed, no round -- when no check the
+# change's paths select reads a path main changed since its last check, by the hook's own path selection, read at the
+# rebased tip: its compile plan (each test config compiles its module and every module upstream of it, so the two
+# sides' plans meet where one side's code is compiled against the other's), its whole-tree ratchets (`--coupling-plan`,
+# `--quality-plan`: any path either selects reads the whole production tree), its plan's checks (an area such as
+# `identity`, `scripttests`, `drift`, ... -- but not the checks that read only the files they are handed,
+# PER_FILE_CHECKS, whose shared file THE RULE already sees, nor `sbt`, which the plans above spell out), and its lint
+# plan's path-selected specs (the standing `*` rows, which every push runs, read no path in particular). Two sides
+# selecting one such check -> the verify round, as before, the check named (`read_overlap`); the rebase changing the
+# change's own diff (its patch id: a merged generated row, a three-way pick) -> the verify round too
+# (`own_diff_changed`). A hook without `--plan` and `--compile-plan` cannot say what its checks read: the verify round.
+# The accepted risk is a standing lint or a basic line reading both sides (Main catches it), the risk the module-overlap
+# rule takes. The push then skips the plan the change's checks passed (PREPUSH_SKIP) and the hook judges the red gate.
+# Every decision -- a full round, a verify round, a kept verdict -- and why is kept on the change (`rechecks`) and
+# printed by `land status <id>`.
+READ_MODES = ("--compile-plan", "--coupling-plan", "--quality-plan", "--plan", "--lint-plan")  # cheapest first
+WHOLE_TREE_MODES = ("--coupling-plan", "--quality-plan")
+PER_FILE_CHECKS = frozenset({"shellcheck", "actionlint", "eslint"})
+
+
+def hook_modes(hook):
+    """The dry-run modes of READ_MODES the hook (a path) answers: a flag is never asked unless the hook has it."""
+    try:
+        with open(hook or "") as f:
+            text = f.read()
+    except OSError:
+        return []
+    return [m for m in READ_MODES if f"{m})" in text]
+
+
+def check_reads(hook, tree, mode, paths, standing, per_file):
+    """The checks of one dry-run mode that paths select, as words (MINIMAL RECHECKS); None when unreadable."""
+    out = hook_query(hook, tree, mode, paths)
+    if out is None:
+        return None
+    if mode in WHOLE_TREE_MODES:
+        return {"the whole production tree"} if out else set()
+    if mode == "--plan":
+        return set(out) - per_file
+    if mode == "--lint-plan":
+        return set(out) - standing
+    return set(out)
+
+
+def read_overlap(tree, landed_paths, change_paths):
+    """Why the change's checks must run again over what main changed meanwhile (landed_paths): a check both sides'
+    paths select, in words -- or None when none is (its verdict is kept). MINIMAL RECHECKS, above; tree is checked out
+    at the rebased tip."""
+    hook = precheck_hook(tree)
+    modes = hook_modes(hook)
+    if "--plan" not in modes or "--compile-plan" not in modes:
+        return "the hook has no plan saying what its checks read"
+    if not landed_paths or not change_paths:
+        return None
+    standing = set()
+    if "--lint-plan" in modes:
+        standing = hook_query(hook, tree, "--lint-plan", [])
+        if standing is None:
+            return "its lint plan cannot be read"
+        standing = set(standing)
+    # a hook that cannot say what its whole-tree ratchets read: its `sbt` check is one check both sides may share
+    per_file = PER_FILE_CHECKS | ({"sbt"} if all(m in modes for m in WHOLE_TREE_MODES) else set())
+    for mode in modes:
+        mine = check_reads(hook, tree, mode, change_paths, standing, per_file)
+        theirs = check_reads(hook, tree, mode, landed_paths, standing, per_file) if mine else set()
+        if mine is None or theirs is None:
+            return f"its {mode.lstrip('-')} cannot be read"
+        both = sorted(mine & theirs)
+        if both:
+            return (f"its {mode.lstrip('-')} reads what main changed: {', '.join(both[:3])}"
+                    + (f" (+{len(both) - 3} more)" if len(both) > 3 else ""))
+    return None
+
+
+def own_diff_changed(tree, base, tip, moved, new_head):
+    """Whether rebasing the change (base..tip) onto moved (moved..new_head) changed its own diff: their patch ids
+    differ (MINIMAL RECHECKS: a generated row merged, a three-way pick). True when either cannot be read."""
+    def pid(a, b):
+        diff = git(tree, "diff", "--no-renames", "--binary", a, b, check=False)
+        if diff.returncode != 0:
+            return None
+        try:
+            r = subprocess.run(["git", "patch-id", "--stable"], cwd=tree, input=diff.stdout, capture_output=True,
+                               text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return (r.stdout.split() or [""])[0] if r.returncode == 0 else None
+    old, new = pid(base, tip), pid(moved, new_head)
+    return old is None or new is None or old != new
+
+
+RECHECK_LOG_MAX = 12  # the rounds and kept verdicts a change keeps (`land status <id>` prints them)
+
+
+def recheck_logged(e, kind, why, main):
+    """e's recheck log with one more decision: a `full` round, a `verify` round or a `kept` verdict, why, on which
+    main."""
+    return (list(e.get("rechecks") or [])[-(RECHECK_LOG_MAX - 1):]
+            + [{"at": int(time.time()), "kind": kind, "main": (main or "")[:10], "why": str(why)[:300]}])
+
+
+_kept_known = process_cache({})  # (entry id, tip, checked base, main) -> verdict_kept's answer
+
+
+def verdict_kept(repo, e, main):
+    """Whether checked change e would keep its verdict on main (MINIMAL RECHECKS) as the repo reads it now -- no
+    shared file, no forcing path, no check reading what landed -- so it pushes alone rather than waiting for a push
+    batch's verify round. Its push decides again, at its rebased tip (_push_change)."""
+    base, tip = e.get("checked_base"), e.get("tip")
+    if not base or not tip or not main or base == main:
+        return False
+    key = (e["id"], tip, base, main)
+    if key not in _kept_known:
+        landed, mine = range_paths(repo, base, main), range_paths(repo, base, tip)
+        _kept_known[key] = bool(landed) and not any(forces_full_recheck(p) for p in landed) \
+            and not without_generated(repo, sorted(set(landed) & set(mine))) \
+            and read_overlap(repo, landed, mine) is None
+    return _kept_known[key]
+
+
 def branch_of(wt):
     """The worktree's checked-out branch ('' when detached or gone)."""
     if not os.path.isdir(wt or ""):
@@ -1273,7 +1396,7 @@ def provisional_hint(tree, e):
     """`; its F kept main's rows ...: rebase, run `regen`, land again` for a change whose generated files the check
     tree merged keeping main's side of a row both changed (MAIN'S ROW, PROVISIONALLY, waiting.py); '' otherwise."""
     files = e.get("provisional") or []
-    cmds = sorted({" ".join(g["regen"]) for g in (generated_entry(tree, f) for f in files) if g})
+    cmds = sorted({" ".join(g["regen"]) for g in (generated_entry(tree, f) for f in files) if g and g.get("regen")})
     return (f"; its {', '.join(files)} kept {remote()}/main's rows where both sides changed them (no regen command "
             f"runs where the queue does): rebase onto {remote()}/main, run {' and '.join(f'`{c}`' for c in cmds) or 'the regen command'}, "
             "commit and land again") if files else ""
@@ -1290,7 +1413,7 @@ def regen_hold(d, e, tree, failing, out):
     """Hold change e for its agent's regeneration (above): queued with retry_after at the hold's end, `regen_hold` on
     its entry, its author told the one command (the event's inbox entry). Returns 1 (nothing pushed)."""
     files = e.get("provisional") or []
-    cmds = sorted({" ".join(g["regen"]) for g in (generated_entry(tree, f) for f in files) if g})
+    cmds = sorted({" ".join(g["regen"]) for g in (generated_entry(tree, f) for f in files) if g and g.get("regen")})
     cmd = f"cd {e['worktree']} && ~/bin/agentctl land"
     t = time.time()
     why = (f"REGEN NEEDED {e['id']}: its {', '.join(files)} kept {remote()}/main's rows where both sides changed them "
@@ -1724,23 +1847,41 @@ def _push_change(repo, d, e, i):
             moved_by = f"main moved by {n} commit{'' if n == 1 else 's'}"
             if why is None and tree_hook and not verify_supported(tree_hook):
                 why = f"no file overlap, but the hook has no {VERIFY_MODE} for the combined tree"
-            if why is not None or tree_hook:  # a new round, not an attempt: the full checks, or the combined tree's
+            kept = verify_why = None
+            if why is None and tree_hook:  # MINIMAL RECHECKS: a round only when its checks read what main changed
+                verify_why = read_overlap(tree, range_paths(tree, base, moved), range_paths(tree, moved, new_head)) \
+                    or ("the rebase changed its own diff" if own_diff_changed(tree, base, head, moved, new_head)
+                        else None)
+                kept = None if verify_why else hook_query(tree_hook, tree, "--plan", range_paths(tree, moved, new_head))
+                if not verify_why and kept is None:
+                    verify_why = "the hook's plan could not be read"
+            if kept is not None:
+                note = f"{moved_by} since its checks on {base[:10]}, no check of it reading what changed: its verdict kept"
+                wlog(d, f"{e['id']}: {note}")
+                e["rechecks"] = recheck_logged(e, "kept", note, moved)
+                where, skip = f"{where}; {note}", kept
+                e.pop("remote_run", None)
+                base, head, e["tip"] = moved, new_head, new_head
+            elif why is not None or tree_hook:  # a new round, not an attempt: the full checks, or the combined tree's
                 verify = why is None
                 areas = module_overlap(range_paths(tree, full_base, moved), range_paths(tree, moved, new_head)) \
                     if verify and verify_areas_supported(tree) else []
                 what = ("no file overlap: its combined tree verified (every test config compiled, the touched "
                         "modules' unit tests" + (f", the area tests: sbt modules both sides touch, {', '.join(areas)}"
-                                                 if areas else "") + ")") if verify else f"{why}: checked again"
-                set_change(d, e, "queued", data={"rounds": e.get("rounds", 0) + 1},
+                                                 if areas else "") + ")"
+                        + (f", as {verify_why}" if verify_why else "")) if verify else f"{why}: checked again"
+                log = recheck_logged(e, "verify" if verify else "full", f"{moved_by}: {verify_why or why}", moved)
+                set_change(d, e, "queued", data={"rounds": e.get("rounds", 0) + 1, "rechecks": log},
                            event={"text": f"{e['id']}: {moved_by} since its checks, {what}"},
-                           rounds=e.get("rounds", 0) + 1, retry_after=0, verify=verify)
+                           rounds=e.get("rounds", 0) + 1, retry_after=0, verify=verify, rechecks=log)
                 wlog(d, f"{e['id']}: {moved_by} during its checks, {what}: queued for a new round")
                 return "queued"
-            note = f"{moved_by}, no file overlap: pushed without re-check"  # no hook: nothing to check it with
-            wlog(d, f"{e['id']}: {note}")
-            where = f"{where}; {note}"
-            e.pop("remote_run", None)
-            base, head, e["tip"] = moved, new_head, new_head
+            else:
+                note = f"{moved_by}, no file overlap: pushed without re-check"  # no hook: nothing to check it with
+                wlog(d, f"{e['id']}: {note}")
+                where = f"{where}; {note}"
+                e.pop("remote_run", None)
+                base, head, e["tip"] = moved, new_head, new_head
         elif e.get("checked_mode") == VERIFY_MODE:  # the combined tree passed: the change's own checks stand
             skip = hook_query(precheck_hook(tree), tree, "--plan", range_paths(tree, base, head))
             if skip is None:
@@ -1762,7 +1903,8 @@ def _push_change(repo, d, e, i):
             queue_join(repo, d, e, tree, head, why)
             return "joined"
         fixes = sorted(fixes_of(repo, commits))
-        set_change(d, e, "pushing", event={"text": f"{e['id']}: pushing {head[:10]}"})
+        set_change(d, e, "pushing", data={"rechecks": e["rechecks"]} if e.get("rechecks") else None,
+                   event={"text": f"{e['id']}: pushing {head[:10]}"})
         pushed_at = time.time()
         env = tool_env()
         if e.get("remote_run"):  # the hook takes ci-runner's pass once GitHub confirms it (remote checks)
@@ -2099,6 +2241,14 @@ def main_conflict(repo, e):
     return (main, files) if files else None
 
 
+def second_identity(repo, d, e, entries, facts, t):
+    """Whether queued change e is an identity change the next backlog batch leaves out: an older queued identity
+    change may join it (ONE IDENTITY CHANGE PER BATCH, batch.py backlog_candidates)."""
+    return bool(identity_change(repo, e)) and any(
+        o["seq"] < e["seq"] and o["id"] != e["id"] and o.get("status") == "queued" and not o.get("backlog_batch")
+        and identity_change(repo, o) and backlog_batchable(repo, d, o, t, facts) for o in entries)
+
+
 def overlap_hold(repo, d, e, entries, facts, t):
     """(older entry, shared files, conflicting files or None) queued change e waits for (OVERLAPPING CHANGES ARE
     CHECKED AS ONE), or None."""
@@ -2117,8 +2267,8 @@ def overlap_hold(repo, d, e, entries, facts, t):
         if not shared:
             continue
         if conflict is None and o.get("status") == "queued" and not o.get("backlog_batch"):
-            if together is None:
-                together = backlog_batchable(repo, d, e, t, facts)
+            if together is None:  # ONE IDENTITY CHANGE PER BATCH (batch.py): a second one is no batch member
+                together = backlog_batchable(repo, d, e, t, facts) and not second_identity(repo, d, e, entries, facts, t)
             if together and backlog_batchable(repo, d, o, t, facts):
                 continue  # the next backlog batch checks them as one
         if conflict:  # the one it cannot be assembled with is the one its author hears of

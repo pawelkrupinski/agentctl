@@ -161,6 +161,33 @@ class GeneratedOverlapTest(unittest.TestCase):
             self.assertEqual(held, {("b", "a")}, "left out of the batch, it waits for a as before")
 
 
+class MinimalRecheckSimTest(unittest.TestCase):
+    """MINIMAL RECHECKS (queue.py; the owner, 2026-11-20): over the real queue code, a change main moves under is
+    checked again only when its checks read what main changed -- by the simulated hook's own plans (queue_sim
+    reads_of) -- and INVARIANT 11 still holds: every tree pushed is one a check passed, or holds one whose extra
+    patches no check of it reads."""
+
+    def run_timeline(self, push_paths):
+        out = []
+        for seed in range(6):
+            sim = queue_sim.Sim(seed, calm=True, script=[
+                (0, {"label": "a", "worktree": "a", "paths": ["web/src/main/A.scala"]}),
+                (1, {"kind": "push", "paths": push_paths})]).run()
+            self.assertEqual(failures([sim]), [], f"seed {seed}")
+            a = next(c for c in sim.changes if c.label == "a")
+            self.assertTrue(set(a.patches) <= sim.patches_of(sim.main), f"seed {seed}: a landed")
+            out.append((sim.checks_of.get(a.eid, 0), sim.kept_pushes))
+        return out
+
+    def test_a_move_outside_its_selected_paths_keeps_the_verdict(self):
+        for checks, kept in self.run_timeline(["docs/moved.md", "scripts/tool.sh"]):
+            self.assertEqual((checks, kept), (1, 1), "one check, its verdict kept over the move")
+
+    def test_a_move_inside_its_selected_paths_forces_a_recheck(self):
+        for checks, kept in self.run_timeline(["common/src/main/Upstream.scala"]):
+            self.assertEqual((checks, kept), (2, 0), "its check, then the verify round: web compiles common")
+
+
 class Timeline08010cTest(unittest.TestCase):
     """THE 08010c TIMELINE (queue_sim.TIMELINE_08010C; 2026-11-19): a fix of a red OUTSIDE the gate, checked while two
     ordinary changes owed combined-tree verifications and made a push batch, sat ~2 h. Replayed over 8 seeds: it is
@@ -224,8 +251,11 @@ MUTATIONS = {
         "", "baselines"),
     # (11) the combined tree pushed unverified: main moved with no file overlap, and no verify round ran
     "a moved main's combined tree is verified": (
-        "            if why is not None or tree_hook:  # a new round, not an attempt",
-        "            if why is not None:  # MUTATION", "random"),
+        "            elif why is not None or tree_hook:  # a new round, not an attempt",
+        "            elif why is not None:  # MUTATION", "random"),
+    # (11) MINIMAL RECHECKS undone: a verdict kept though a check of the change reads what main changed
+    "a kept verdict needs its checks to read nothing main changed": (
+        "                verify_why = read_overlap(", "                verify_why = None and read_overlap(", "random"),
     "overlapping changes are checked as one": (
         '    if e.get("backlog_batch"):\n        return None\n    together, first = None, None',
         '    return None  # MUTATION\n    together, first = None, None', "collisions"),
