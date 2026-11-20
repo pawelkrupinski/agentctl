@@ -588,7 +588,37 @@ def cmd_land(a):
 MAIN_MOVED = "main moved"  # land_loop: the check outside the lock no longer covers origin/main
 
 
+def rebase_in_progress(repo):
+    """The worktree's rebase-merge / rebase-apply directory when a rebase is in progress there, else None."""
+    for name in ("rebase-merge", "rebase-apply"):
+        p = git(repo, "rev-parse", "--path-format=absolute", "--git-path", name, check=False).stdout.strip()
+        if p and os.path.isdir(p):
+            return p
+    return None
+
+
+# EVERY NOT LANDED LEAVES NO REBASE BEHIND (issue 20261119T162652-494caa, movies-wt-owner-outside-gate 2026-11-19: a land
+# ended NOT LANDED with its rebase onto origin/main in progress; later commits went onto the rebase's detached HEAD, and
+# the next land's `rebase --abort` reset the branch to the pre-rebase commit, dropping them). A land that finds a rebase
+# already in progress refuses -- it is the agent's to finish or abort, never land's to discard -- and a rebase land
+# started is aborted on whatever path land leaves it unfinished.
 def sync(repo, main_ref, sh, release_hold=False):
+    """sync_onto_main, never leaving a rebase it started in progress; refused when one is in progress already."""
+    pending = rebase_in_progress(repo)
+    if pending:
+        print(f"NOT LANDED: a rebase is in progress in this worktree ({pending}): finish it (`git rebase --continue`) "
+              "or abort it (`git rebase --abort`) yourself -- commits made since it started are on its detached HEAD, "
+              "and an abort resets the branch -- then land again")
+        return 1, None
+    try:
+        return sync_onto_main(repo, main_ref, sh, release_hold)
+    finally:
+        if rebase_in_progress(repo):
+            sh("git", "rebase", "--abort")
+            err("land: aborted the rebase it left in progress")
+
+
+def sync_onto_main(repo, main_ref, sh, release_hold=False):
     """Fetch, rebase onto origin/main, the squash guard: (rc, None) when land is decided here, else (None, head).
     A commit with a `Hold: <why>` trailer is refused unless release_hold (`land --release-hold`: the owner's go)."""
     r = sh("git", "fetch", "--quiet", remote(), "main")

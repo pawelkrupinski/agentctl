@@ -103,6 +103,37 @@ class FixReplayTest(unittest.TestCase):
         self.assertEqual((rc, head), (1, None))
         self.assertIn("NOT LANDED: Alert backtest #5 [backtest] has a replay", out.getvalue())
 
+    def test_a_land_never_leaves_a_rebase_in_progress_and_refuses_one_it_finds(self):
+        """Issue 20261119T162652-494caa: NOT LANDED with the rebase onto origin/main left in progress; the next land's
+        abort reset the branch, dropping the commits made on the rebase's detached HEAD."""
+        import io, contextlib
+        sh = lambda *args: A.subprocess.run(args, cwd=self.r.path, capture_output=True, text=True)  # noqa: E731
+        self.r.write("conflict.txt", "mine\n")
+        self.r.commit("mine")
+        mine = A.git(self.r.path, "rev-parse", "HEAD").strip()
+        sh("git", "checkout", "-q", "-b", "other", self.base)
+        self.r.write("conflict.txt", "theirs\n")
+        self.r.commit("theirs")
+        sh("git", "rebase", "-q", mine)  # stops on the conflict: a rebase in progress
+        self.assertTrue(A.rebase_in_progress(self.r.path))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc, _ = A.sync(self.r.path, "origin/main", sh)
+        self.assertEqual(rc, 1)
+        self.assertIn("a rebase is in progress", out.getvalue())
+        self.assertTrue(A.rebase_in_progress(self.r.path), "never land's to abort: it would reset the branch")
+        sh("git", "rebase", "--abort")
+        real = A.sync_onto_main
+
+        def leaves_one(repo, main_ref, sh_, release_hold=False):  # a path that stops mid-rebase
+            sh_("git", "rebase", "-q", mine)
+            return 1, None
+        A.sync_onto_main = leaves_one
+        self.addCleanup(setattr, A, "sync_onto_main", real)
+        with contextlib.redirect_stdout(io.StringIO()):
+            A.sync(self.r.path, "origin/main", sh)
+        self.assertIsNone(A.rebase_in_progress(self.r.path), "a rebase land started is aborted on its way out")
+
     def test_the_fixer_is_told_to_replay(self):
         u = {**self.st.item("red", "5254bffda9d2")["data"], "run": {"number": 5, "databaseId": 44459271435},
              "workflow": "Alert backtest", "job": "backtest", "line": "FAILED -- 19 problem(s)", "kind": "test"}
