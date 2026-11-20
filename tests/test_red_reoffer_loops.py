@@ -87,6 +87,72 @@ class ReOfferLoopTest(RedsBase):
                              f"{status}: a queued change editing the red's own workflow file is its fix on the way, not "
                              f"a reason to send another fixer ({it['data'].get('history')[-1:]})")
 
+    def test_a_queued_untrailered_change_editing_a_script_the_gate_reds_job_runs_is_no_fix(self):
+        """2026-11-20, Main #2716: metrics-packages (no Fixes-Red) edited scripts/ci/coupling_ratchet.py, which Main's
+        failing job reads, and was taken as the gate red's fix on its way -- "landing on red (Fixes-Red), queued" -- so
+        the red's real fixer was stopped. A gate red's fix carries `Fixes-Red:` (nothing else lands while it is red):
+        an untrailered change waiting on that very gate is never its fix."""
+        self.r.write(".github/workflows/main.yml", "name: Main\non: push\njobs:\n  test:\n    name: test (rest)\n"
+                     "    steps:\n      - name: Run tests\n        run: scripts/ci/run-tests.sh\n")
+        self.r.write("scripts/ci/run-tests.sh", "#!/bin/sh\nsbt test\n")
+        self.r.commit("the workflow")
+        self.r.push()
+        self.tick()
+        e = self.queued_entry("tidy the test runner, no trailer", "queued", path="scripts/ci/run-tests.sh")
+        self.assertFalse(e.get("fixes"))
+        reads = A.red_job_reads(self.r.path, sh(self.r.path, "git", "rev-parse", "HEAD"), self.only()["data"])
+        self.assertIn("scripts/ci/run-tests.sh", reads["files"], "the change does edit a file the failing job reads")
+        for _ in range(2):
+            self.tick(advance=120)
+        it = self.only()
+        self.assertNotEqual(it["state"], "fix-pending", f"{it['data'].get('fix')}")
+        self.assertIsNone(it["data"].get("fix"))
+
+    def test_a_fixer_lapsing_with_its_fixes_red_commit_unlanded_is_offered_again_to_land_it_despite_an_untrailered_change(self):
+        """Main #2716: its owner's lease lapsed with 256d2571c (`Fixes-Red: 2716`) committed and unlanded, while the
+        red read "fix ... landing on red" for an untrailered change -- nobody chased the real fix. The red goes back to a
+        fixer, briefed with the commits left in that worktree, never parked on a change that is no fix."""
+        self.r.write(".github/workflows/main.yml", "name: Main\non: push\njobs:\n  test:\n    name: test (rest)\n"
+                     "    steps:\n      - name: Run tests\n        run: scripts/ci/run-tests.sh\n")
+        self.r.write("scripts/ci/run-tests.sh", "#!/bin/sh\nsbt test\n")
+        self.r.commit("the workflow")
+        self.r.push()
+        self.tick()
+        key = self.only()["data"]["key"]
+        wt = self.r.worktree("repo-wt-fixer", branch="repo-wt-fixer")
+        self.st.acquire(A.red_lease(key), "laptop:claim:fixer@" + wt, 1800, 3600, meta={"kind": "claim", "worktree": wt})
+        self.tick(advance=5)
+        self.assertEqual(self.only()["state"], "leased")
+        self.r.write("FooSpec.scala", "fixed\n", at=wt)
+        fix = self.r.commit("FooSpec: the fix\n\nFixes-Red: 20", at=wt)
+        self.queued_entry("tidy the test runner, no trailer", "queued", path="scripts/ci/run-tests.sh")
+        self.tick(advance=60)
+        self.assertEqual(self.only()["state"], "leased", "an untrailered change never stops the red's fixer")
+        self.tick(advance=3700)  # the lease lapses (past its max hold) with the fix committed, unlanded
+        it = self.only()
+        self.assertEqual(it["state"], "offered", it["data"].get("history", [])[-1:])
+        self.assertEqual(it["data"]["prior_work"]["commits"], [fix[:10]], "the next fixer is pointed at the fix")
+
+    def test_a_queued_untrailered_change_editing_only_a_script_an_outside_reds_workflow_runs_is_no_fix(self):
+        """The same red (Order independence #89) took metrics-packages for its fix through
+        scripts/ci/coupling_ratchet.py, a script many jobs read. Without a trailer, only an edit of the red's OWN
+        workflow file links a change to it (20261106T102105-327f4c)."""
+        self.r.write("scripts/ci/capture.sh", "#!/bin/sh\ncapture\n")
+        self.r.commit("the capture script")
+        self.r.push()
+        self.outside_capture_red()
+        self.r.write(".github/workflows/identity-capture.yml",
+                     "name: Identity capture\non:\n  schedule:\n    - cron: '0 3 * * 1'\n  workflow_dispatch:\n"
+                     "jobs:\n  capture:\n    steps:\n      - name: Run\n        run: scripts/ci/capture.sh\n")
+        self.r.commit("the workflow runs the script")
+        self.r.push()
+        self.tick(advance=60)
+        self.queued_entry("tidy the capture script, no trailer", "waiting", path="scripts/ci/capture.sh")
+        for _ in range(2):
+            self.tick(advance=120)
+        it = self.only()
+        self.assertNotEqual(it["state"], "fix-pending", f"{it['data'].get('fix')}")
+
     def test_20261101T030050_695594_a_fixers_agentctl_defect_verdict_waits_on_the_issue_never_goes_back_to_a_fixer(self):
         self.tick()
         key = self.only()["data"]["key"]

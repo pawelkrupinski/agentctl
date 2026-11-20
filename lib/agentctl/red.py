@@ -1142,7 +1142,7 @@ def red_job_reads(repo, sha, d):
         scan(src, t, data)
     text = "\n".join(texts)
     sbt = bool(FIX_SBT.search(text))
-    return {"files": reads, "text": text, "sbt": sbt, "broad": sbt and bool(FIX_BROAD_TEST.search(text)),
+    return {"files": reads, "workflow": wf[0], "text": text, "sbt": sbt, "broad": sbt and bool(FIX_BROAD_TEST.search(text)),
             "named": set(re.findall(r"\b[A-Z]\w+\b", text + " " + str(d.get("line") or "") + " " + " ".join(names))),
             "tops": {top: fix_top_reads(top, text, texts[0], files) for top in FIX_UNREAD_TOP}}
 
@@ -1452,10 +1452,15 @@ def red_fix_candidates(d, facts):
                 at = float(facts["landed_at"][e["landed_sha"]])  # its commit's time: a file's `updated` moves on
             if at >= since:  # landed before this spell opened: the run that opened it already outlived it
                 yield {"entry": e["id"], "status": "landed", "sha": e["landed_sha"], "at": at}
-    for e in facts.get("untrailered") or []:  # A QUEUED CHANGE EDITING THE RED'S OWN CI FILES (issue
-        # 20261106T102105-327f4c: family-shards fixed exactly Identity family explorer #2's shard timeouts in its
-        # workflow and script, with no trailer, while fixers were sent whose only fix would conflict with it)
-        if red_ci_files_touched(repo, d, e.get("commits") or []):
+    for e in [] if d.get("gate") else facts.get("untrailered") or []:  # A QUEUED CHANGE EDITING THE RED'S OWN
+        # WORKFLOW FILE (issue 20261106T102105-327f4c: family-shards fixed exactly Identity family explorer #2's shard
+        # timeouts in its workflow, with no trailer, while fixers were sent whose only fix would conflict with it).
+        # NEVER A GATE RED'S, NOR BY A SCRIPT ALONE (2026-11-20, Main #2716 and Order independence #89): metrics-packages,
+        # no trailer, edited scripts/ci/coupling_ratchet.py -- read by both failing jobs, as by most -- and was taken
+        # for both reds' fix "landing on red (Fixes-Red)"; Main's own fixer was stopped for it while it waited on that
+        # very gate. A gate red's fix carries `Fixes-Red:` (nothing else lands while it is red); untrailered, only the
+        # red's own workflow file links a change to an outside red.
+        if red_workflow_file_touched(repo, d, e.get("commits") or []):
             yield {"entry": e["id"], "status": e["status"], "linked": "its workflow's own files",
                    "author": {"worktree": e.get("worktree"), "session": e.get("session")}}
     for sha, ct, vals, _s in facts.get("landed") or []:
@@ -1495,9 +1500,9 @@ def red_run_on_way(d, snap, repo):
 _ci_reads = process_cache({})
 
 
-def red_ci_files_touched(repo, d, commits):
-    """The files of red d's own workflow and the scripts its failing job names (red_job_reads, read in main's tree)
-    that these commits edit; empty when none or when that cannot be read."""
+def red_workflow_file_touched(repo, d, commits):
+    """Red d's own workflow file (red_job_reads, read in main's tree), when these commits edit it; empty when they do
+    not or when that cannot be read. The scripts its job runs are no link: shared tooling is read by most jobs."""
     if not repo or not commits:
         return set()
     sha = git(repo, "rev-parse", "-q", "--verify", f"refs/remotes/{remote()}/main", check=False).stdout.strip() or \
@@ -1510,7 +1515,7 @@ def red_ci_files_touched(repo, d, commits):
             rd = red_job_reads(repo, sha, d)
         except (Exception, SystemExit):
             rd = None
-        _ci_reads[k] = set((rd or {}).get("files") or ())
+        _ci_reads[k] = {rd["workflow"]} if rd and rd.get("workflow") else set()
     reads = _ci_reads[k]
     return {p for c in commits for p in fix_changed(repo, c)} & reads if reads else set()
 
@@ -3537,8 +3542,9 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
             it = red_move(store, it, "fix-pending", f"{red_what(d)}: fix {fix.get('entry') or fix.get('sha')} landed "
                                                     f"({str(fix.get('sha'))[:10]}): verifying",
                           data={"fix": {**f, **fix, "verify_since": t} if f.get("status") in FIX_OPEN else {**f, **fix}})
-        else:
-            store.update_item("red", it["id"], it["version"], {"fix": {**f, **fix}})
+        else:  # another change is the fix now: its own record, never the last one's fields (a stale `linked`)
+            store.update_item("red", it["id"], it["version"],
+                              {"fix": {**f, **fix} if fix.get("entry") == f.get("entry") else fix})
             it = store.item("red", it["id"])
         d, f = it["data"], it["data"]["fix"]
     if f.get("status") == "owner":  # an owner-only repo's fix, filed with the owner (red owner-push): a green run proves it
