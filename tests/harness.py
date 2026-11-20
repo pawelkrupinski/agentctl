@@ -48,7 +48,12 @@ def _hermetic_environment():
     gitconfig = os.path.join(root, "gitconfig")
     with open(gitconfig, "w") as f:
         f.write("[user]\n\tname = t\n\temail = t@t\n[init]\n\tdefaultBranch = main\n"
-                "[advice]\n\tdetachedHead = false\n[protocol \"file\"]\n\tallow = always\n")
+                "[advice]\n\tdetachedHead = false\n[protocol \"file\"]\n\tallow = always\n"
+                # NO DETACHED MAINTENANCE (2026-11-20, a full-suite run's QueueTest setUp): git >= 2.4x starts `git
+                # maintenance run --auto --detach` after a commit or fetch, holding objects/maintenance.lock a moment
+                # after the command returned (35 of 40 commits, measured), and the repo template's copytree read the
+                # lock as it vanished: "No such file or directory: .../objects/maintenance.lock"
+                "[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n")
     for k in list(os.environ):
         if k in _DROP or k.startswith(_DROP_PREFIXES) or (k.startswith("AGENTCTL_") and not k.startswith("AGENTCTL_TEST")):
             del os.environ[k]  # every agentctl knob of the shell running the tests too: AGENTCTL_STORE_URL, AGENTCTL_HOST,

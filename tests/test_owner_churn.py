@@ -123,7 +123,8 @@ class OwnerRestartTest(OwnerBase):
         os.environ["FAKE_CLAUDE_SLEEP"] = "60"
         self.addCleanup(os.environ.__setitem__, "FAKE_CLAUDE_SLEEP", "0")
         self.tick(dispatch=True)
-        self.assertTrue(self.wait(lambda: self.rec().get("session") and self.rec().get("bg_id")))
+        ok = self.wait(lambda: self.rec().get("session") and self.rec().get("bg_id"))
+        self.assertTrue(ok, self.owner_log())  # a failure says what the wrapper did, from its own log
         launched = self.launches()
         [s0] = [s for s in self.sessions() if s["id"] == self.rec()["bg_id"]]
         first = self.kill_wrapper()

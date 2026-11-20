@@ -47,6 +47,14 @@ class OwnerBase(RedsBase):
     def rec(self):
         return A.read_record(A.owner_record_path(FAM)) or {}
 
+    def owner_log(self):
+        """The owner wrapper's own log, the last lines: what it did, for a failed wait's message."""
+        try:
+            with open(self.rec().get("log") or "") as f:
+                return f"owner record {self.rec()}; its log:\n" + "".join(f.readlines()[-30:])
+        except OSError as e:
+            return f"owner record {self.rec()}; no log ({e})"
+
     def sessions(self):
         r = subprocess.run([os.environ["AGENTCTL_CLAUDE"], "agents", "--json", "--all"], capture_output=True, text=True)
         return json.loads(r.stdout)

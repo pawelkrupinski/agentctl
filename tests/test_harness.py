@@ -22,6 +22,23 @@ class HermeticEnvironmentTest(unittest.TestCase):
         self.assertEqual(os.environ["GIT_CONFIG_NOSYSTEM"], "1")
 
 
+class NoDetachedMaintenanceTest(unittest.TestCase):
+    def test_a_commit_leaves_no_maintenance_lock_behind(self):
+        """git's detached auto-maintenance held objects/maintenance.lock past the commit that started it, and a repo
+        copied right after (the template's copytree) failed on the vanishing lock: the harness turns it off."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            subprocess.run(["git", "init", "-q", d], check=True)
+            seen = 0
+            for i in range(30):
+                with open(os.path.join(d, "f"), "w") as f:
+                    f.write(f"{i}\n")
+                subprocess.run(["git", "-C", d, "add", "f"], check=True)
+                subprocess.run(["git", "-C", d, "commit", "-qm", f"c{i}"], check=True)
+                seen += os.path.exists(os.path.join(d, ".git", "objects", "maintenance.lock"))
+            self.assertEqual(seen, 0, "a detached `git maintenance run --auto` after a commit")
+
+
 class TimeoutAndClockTest(unittest.TestCase):
     def outcome(self, body, timeout=None):
         saved = harness.TIMEOUT
