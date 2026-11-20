@@ -171,7 +171,10 @@ moves it forward; nothing is a detached process that can die with its state in i
   escalation was notified, WN notifications get through (both terminal-notifier and the osascript fallback failing
   is ONE condition naming the fix: allow terminal-notifier in System Settings > Notifications; W6 defers to it), WM
   maintain ran, WR no red fix waits (none on `waiting`, none unlanded 40 min after it was queued), WB nobody leaves uncommitted edits in ~/bin's own checkout for over 10 min
-  (it names the processes working there), W7 (phase 2, the sync role) the sync has projected every event older than
+  (it names the processes working there), WF the system-wide file table (kern.num_files) stays under 70% of
+  kern.maxfiles (`$AGENTCTL_WF_PCT`; past it, it names the top three holders, and for Rancher Desktop's VM on top the
+  `rdctl shell -- sudo sh -c 'sync; echo 2 > /proc/sys/vm/drop_caches'` that releases its virtiofs descriptors: on
+  2026-11-20 ~200k of them, one per file a container had seen in ~25 worktrees, overflowed it, ENFILE everywhere), W7 (phase 2, the sync role) the sync has projected every event older than
   5 min, W8 no change left the queue in the last hour (landed, rejected, superseded, cancelled) without an event
   addressed to its author's inbox (Store.transition completes every such event; the entry carries the item id, so
   `agentctl inbox <item id>` finds it, also once merged into its worktree's live land alert, which lists every merged
@@ -2630,6 +2633,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `watch_stall_min` | `AGENTCTL_WATCH_STALL_MIN` | `120` | a watch with no change in its runs for this long ends WATCH STALLED |
 | `watch_timeout` | `AGENTCTL_WATCH_TIMEOUT` | `10800` | either run undecided by then: exit 2, could not tell |
 | `wb_max` | `AGENTCTL_WB_MAX` | `600` | - |
+| `wf_pct` | `AGENTCTL_WF_PCT` | `70` | % of kern.maxfiles open system-wide past which WF is violated |
 | `wm_max` | `AGENTCTL_WM_MAX` | `2700` | maintain's last pass (launchd every 15 min) |
 | `wr_max` | `AGENTCTL_WR_MAX` | `2400` | a red fix still unlanded this long after it was queued ($AGENTCTL_WR_MAX; a CI-tier check ~17 min) |
 | `x` | `AGENTCTL_X` | `DEFAULT` | The knobs are what the code reads: each `env_num("AGENTCTL_X", DEFAULT)` and `os.environ.get("AGENTCTL_X", DEFAULT)` |

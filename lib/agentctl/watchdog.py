@@ -357,10 +357,65 @@ def inv_wb():
                    ": commit them in a worktree of ~/bin")
 
 
+WF_PCT = 70  # % of kern.maxfiles open system-wide past which WF is violated ($AGENTCTL_WF_PCT)
+WF_VM = "com.apple.Virtualization"
+WF_VM_RELEASE = "~/.rd/bin/rdctl shell -- sudo sh -c 'sync; echo 2 > /proc/sys/vm/drop_caches'"
+
+
+def file_table_reading():
+    """(kern.num_files, kern.maxfiles), or None where there is no such sysctl (ci-runner's Linux) or it cannot say."""
+    try:
+        r = run_cmd(["sysctl", "-n", "kern.num_files", "kern.maxfiles"], timeout=10)
+        num, most = (int(x) for x in r.stdout.split())
+    except (OSError, ValueError):
+        return None
+    return (num, most) if r.returncode == 0 and most > 0 else None
+
+
+def file_holders(lsof_out):
+    """`lsof -n -F pc` -> [(descriptors, pid, command)], the most first."""
+    counts, pid, names = {}, None, {}
+    for line in lsof_out.splitlines():
+        tag, value = line[:1], line[1:]
+        if tag == "p":
+            pid = int(value) if value.isdigit() else None
+        elif tag == "c" and pid is not None:
+            names[pid] = value
+        elif tag == "f" and pid is not None:
+            counts[pid] = counts.get(pid, 0) + 1
+    return sorted(((n, p, names.get(p, "?")) for p, n in counts.items()), key=lambda x: (-x[0], x[1]))
+
+
+def inv_wf(reading=False, lsof_out=None):
+    """WF: the system-wide file table under WF_PCT of kern.maxfiles. 2026-11-20 it overflowed (ENFILE: no process
+    could open a file): Rancher Desktop's VM held ~200k virtiofs descriptors, one for every file and directory a
+    container had seen in ~25 worktrees (`run-script-tests --linux` mounted each; it now mounts fixed copies). Past the
+    bound it names the top holders, and for the VM the command that releases what its guest caches."""
+    reading = file_table_reading() if reading is False else reading
+    if not reading:
+        return True, "no kern.num_files here"
+    num, most = reading
+    pct, bound = 100 * num // most, env_num("AGENTCTL_WF_PCT", WF_PCT)
+    said = f"{num} of {most} open ({pct}%)"
+    if pct < bound:
+        return True, said
+    if lsof_out is None:
+        try:
+            lsof_out = run_cmd(["lsof", "-n", "-F", "pc"], timeout=60).stdout
+        except OSError:
+            lsof_out = ""
+    top = file_holders(lsof_out)[:3]
+    detail = f"{said}, past {bound:g}%; top: " + \
+        ", ".join(f"pid {p} {c} ({n})" for n, p, c in top)
+    if top and top[0][2].startswith(WF_VM):
+        detail += f"; Rancher Desktop's VM caches every file a container saw: release it with {WF_VM_RELEASE}"
+    return False, detail
+
+
 WATCHDOG_MISSES = 2  # consecutive passes a self-healing invariant (W5, WM, W7) fails before its condition opens
 
 INVARIANTS = {"WB": inv_wb, "W1": inv_w1, "WR": inv_wr, "W2": inv_w2, "W5": inv_w5, "W6": inv_w6, "W7": inv_w7, "W8": inv_w8, "WM": inv_wm,
-              "WN": inv_wn}
+              "WN": inv_wn, "WF": inv_wf}
 
 
 def probe_invariant(a):

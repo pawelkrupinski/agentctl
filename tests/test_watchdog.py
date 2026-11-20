@@ -193,5 +193,40 @@ class WatchdogTest(unittest.TestCase):
         self.assertTrue(A.inv_wm()[0])
 
 
+class FileTableTest(unittest.TestCase):
+    """WF: the Mac's system-wide file table (kern.num_files of kern.maxfiles) under WF_PCT, its top holder named past
+    it (2026-11-20: Rancher Desktop's VM held ~200k virtiofs descriptors, the table overflowed, ENFILE everywhere)."""
+    LSOF = "p1\ncshell\nfcwd\nf1\np39093\nccom.apple.Virtualization.VirtualMachine\n" + "f7\n" * 5 + "p7\ncjava\nf1\nf2\n"
+
+    def test_under_the_bound_it_holds_and_says_how_full(self):
+        ok, detail = A.inv_wf(reading=(217_000, 491_520), lsof_out="")
+        self.assertTrue(ok)
+        self.assertIn("217000 of 491520 open (44%)", detail)
+
+    def test_past_the_bound_it_names_the_top_holders(self):
+        ok, detail = A.inv_wf(reading=(400_000, 491_520), lsof_out=self.LSOF)
+        self.assertFalse(ok)
+        self.assertIn("400000 of 491520 open (81%", detail)
+        self.assertIn("top: pid 39093 com.apple.Virtualization.VirtualMachine (5)", detail)
+        self.assertLess(detail.index("39093"), detail.index("pid 7 java"))
+
+    def test_the_vm_on_top_says_how_to_release_its_cache(self):
+        _ok, detail = A.inv_wf(reading=(400_000, 491_520), lsof_out=self.LSOF)
+        self.assertIn("rdctl shell -- sudo sh -c 'sync; echo 2 > /proc/sys/vm/drop_caches'", detail)
+        _ok, other = A.inv_wf(reading=(400_000, 491_520), lsof_out="p7\ncjava\nf1\n")
+        self.assertNotIn("drop_caches", other)
+
+    def test_the_bound_is_configurable_and_no_reading_is_no_violation(self):
+        os.environ["AGENTCTL_WF_PCT"] = "40"
+        try:
+            self.assertFalse(A.inv_wf(reading=(217_000, 491_520), lsof_out="")[0])
+        finally:
+            del os.environ["AGENTCTL_WF_PCT"]
+        self.assertEqual((True, "no kern.num_files here"), A.inv_wf(reading=None))
+
+    def test_it_is_a_watchdog_invariant(self):
+        self.assertIn("WF", A.INVARIANTS)
+
+
 if __name__ == "__main__":
     unittest.main()
