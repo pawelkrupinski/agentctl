@@ -9,7 +9,7 @@ import json, os, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, sh  # noqa: E402
+from test_agentctl import A, sh, approved  # noqa: E402
 import test_backlog_batch  # noqa: E402
 
 BASELINE = "test/resources/coupling-baseline.tsv"
@@ -356,7 +356,13 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.r.push(at=main)
         A.check_entry(self.r.path, eid)
         self.assertEqual(self.entry(eid)["status"], "queued")
+        # THE POLICY REGISTRY: the 24-h reject is agent-proposed (lane F2b), never decided -- it only warns
         A.tick_changes(self.r.path, self.d, now_=time.time() + A.CONFLICT_PLACE_KEPT + 60)
+        self.assertEqual(self.entry(eid)["status"], "queued")
+        self.assertTrue(any(ev["kind"] == "policy.unapproved" and "regen-expiry" in ev["text"]
+                            for ev in A.Store().item_events("change", eid)))
+        with approved("regen-expiry"):  # once approved, it rejects as written
+            A.tick_changes(self.r.path, self.d, now_=time.time() + A.CONFLICT_PLACE_KEPT + 60)
         e = self.entry(eid)
         self.assertEqual(e["status"], "rejected")
         self.assertIn(f"waited 24 h for `cd {wt} && ~/bin/agentctl land`", e["why"])

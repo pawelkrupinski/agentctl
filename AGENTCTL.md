@@ -173,11 +173,14 @@ moves it forward; nothing is a detached process that can die with its state in i
   (`red fixer #2432 · convergence takes-drift-1 (germany)`, `orphan · movies-wt-proxy-park`); `claude attach | logs |
   stop <id>` work on them (see "red").
 - **The watchdog** (launchd `net.bitcashier.agentctl-watchdog`, every 60 s, `agentctl watchdog`) checks the invariants
-  from outside the processor: W1 the oldest unlanded change is under 2 h old (counted from the red's start while main
-  is red), W2 every red has a holder, an offer, a fix on its way or an owner block, W5 the processor beats, W6 every
+  from outside the processor: W1 no unlanded change over 2 h old (counted from the red's start while main is red)
+  is outside what its state's table allows -- a live checker for `checking`, a recorded hold within its kind's bound
+  for `queued` / `checked` (policy.py HOLDS), a red gate for `waiting` -- and none at all over 3 x that (2026-11-20: 13
+  of W1's 18 firings were checks simply running past 2 h, each worked out by hand), W2 every red has a holder, an offer, a fix on its way or an owner block, W5 the processor beats, W6 every
   escalation was notified, WN notifications get through (both terminal-notifier and the osascript fallback failing
   is ONE condition naming the fix: allow terminal-notifier in System Settings > Notifications; W6 defers to it), WM
-  maintain ran, WR no red fix waits (none on `waiting`, none unlanded 40 min after it was queued), WB nobody leaves uncommitted edits in ~/bin's own checkout for over 10 min
+  maintain ran, WR no red fix waits (none on `waiting`, none held by a hold kind that is other work -- a batch, an overlap, a
+  verification -- and none unlanded 40 min after it was queued unless its own check runs, or 2 h whatever), WB nobody leaves uncommitted edits in ~/bin's own checkout for over 10 min
   (it names the processes working there), WF the system-wide file table (kern.num_files) stays under 70% of
   kern.maxfiles (`$AGENTCTL_WF_PCT`; past it, it names the top three holders, and for Rancher Desktop's VM on top the
   `rdctl shell -- sudo sh -c 'sync; echo 2 > /proc/sys/vm/drop_caches'` that releases its virtiofs descriptors: on
@@ -1212,6 +1215,31 @@ briefed with the change's diff, its original worktree and why its lander could n
 - **The other repos.** core lands through `agentctl land` (direct: a `lander` item) and is blamed by its gate's decided
   runs; infra is owner-only (red-repos.json): its culprit is named but never reverted (`its pushes are the owner's`),
   and its fixer prepares the change as before.
+
+### policy: who decided each rule that holds or rejects a change (2026-11-20)
+
+The owner, 2026-11-20: "fix agentctl issues structurally". `lib/agentctl/policy.py` holds two tables.
+
+**POLICIES, the registry.** Every rule that HOLDS, REJECTS or DELAYS a change is one row: its effect, the rule in one
+line, and WHO DECIDED IT -- the owner's words and date, or none (agent-proposed). A `mechanism` row is a resource wait
+(a busy tree, an executor starting, a push under way, an infra retry) or an outcome no rule chose (the checks failed,
+the change no longer applies): nothing to decide. AN UNAPPROVED RULE NEVER BLOCKS: `policy_blocks(<id>, ...)` answers
+False for it, and its warning (`POLICY UNAPPROVED <id>: would <effect> <change> ...`) goes once on the change's events
+and to stderr. A rule that only SOFTENS a mechanism outcome (`softens`: the regen hold in place of a checks-failed
+NOT LANDED) acts before approval, since switching it off would block more. `tests/test_policy.py` is the lint: every
+hold kind a change records is in the hold table, every queue reject (`queue_verdict ... "rejected"`) and gate wait
+(`set_change ... "waiting"`) carries a `# policy: <id>` line, every unapproved rule is asked through `policy_blocks` at
+each site, and no row is stale. The owner approves a rule by filling its `decided` (date and words), or strikes it.
+Unapproved at introduction: `regen-expiry` (a REGEN NEEDED hold NOT LANDED after 24 h: lane F2b's, now it stays held
+and warns), `fix-replay` (a Fixes-Red landing without `Fix-Replay: ... base=FAIL head=PASS` refused: now it warns),
+`regen` (the hold itself; softens). `older-batch` is DERIVED from the owner's backlog-batch decision (the simulator's
+loadlone profile breaks I5 without it) and marked for his confirmation.
+
+**HOLDS, the hold table.** Every kind of recorded hold (`note_hold` refuses any other): its `land status` label, the
+longest it may last before it is STUCK, its recovery, and whether a red fix may wait on it (only its own resources).
+The change tick runs the recovery when a hold is stuck: `rederive` -- its blocker ended, or its kind's bound passed:
+the hold describes a world that moved, so it is dropped and the tick decides afresh, quietly (`change.rederived`),
+never a page -- or `escalate` (the 6-h cap, nothing recorded: agentctl's bug, an issue). W1 and WR read the same tables.
 
 ### issue: agentctl defects, filed (one agentctl editor)
 

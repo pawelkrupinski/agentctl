@@ -737,6 +737,7 @@ def assemble(repo, d, wt, entries, base, alone=False):
             wlog(d, f"{e['id']}: does not apply in the backlog batch (conflicts in: {', '.join(x)}): checked alone")
             continue
         if how == "conflict":
+            # policy: no-longer-applies
             queue_verdict(d, e, "rejected", f"NOT LANDED: main moved while it waited and the change no longer applies "
                                             f"({conflict_cause(wt, e.get('base'), base, x).lstrip('; ')}): rebase onto "
                                             f"{remote()}/main and land again (it keeps its place in the queue)",

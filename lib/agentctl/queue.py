@@ -1437,6 +1437,9 @@ def regen_hold_expired(d, e, t):
     h = e.get("regen_hold") or {}
     if not h or t - float(h.get("since") or t) < CONFLICT_PLACE_KEPT:
         return False
+    if not policy_blocks("regen-expiry", None, e["id"], f"NOT LANDED after {int(CONFLICT_PLACE_KEPT // 3600)} h"):
+        return False  # agent-proposed (lane F2b), never decided: it stays held, its warning recorded
+    # policy: regen-expiry
     queue_verdict(d, e, "rejected", f"NOT LANDED: {e['id']} waited {int(CONFLICT_PLACE_KEPT // 3600)} h for "
                   f"`{h.get('cmd')}` (its {', '.join(h.get('files') or [])} need a regen ci-runner cannot run): "
                   "run it and land again", conflict_files=h.get("files") or [])
@@ -1537,6 +1540,7 @@ def _check_entry(repo, d, e, i, own=None):
         already_landed(d, e, via if via != "an equivalent commit" else None)
         return 0
     if not head:
+        # policy: no-longer-applies
         queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {remote()}/main {base[:10]} "
                       f"(main moved since QUEUED{conflict_cause(tree, e.get('base'), base, conflicts)}): rebase onto "
                       f"{remote()}/main and land again (it keeps its place in the queue)",
@@ -1548,11 +1552,12 @@ def _check_entry(repo, d, e, i, own=None):
     commits = waiting_commits(tree, base, head)
     dead = blame_land_refusal(tree, commits, e.get("worktree"))
     if dead:  # queued before its blame was withdrawn or refuted (2026-11-01: revert-629 re-queued by orphan duty)
+        # policy: blame-dead
         queue_verdict(d, e, "rejected", f"NOT LANDED: {dead}")
         return 1
     unreplayed = fix_replay_refusal(repo, commits)  # FIX REPLAY (red.py): the laptop's land may hold no token
-    if unreplayed:
-        queue_verdict(d, e, "rejected", f"NOT LANDED: {unreplayed}")
+    if unreplayed and policy_blocks("fix-replay", None, e["id"], unreplayed[:160]):
+        queue_verdict(d, e, "rejected", f"NOT LANDED: {unreplayed}")  # policy: fix-replay
         return 1
     joining = bool(reds) and must_wait(repo, commits, reds)
     cls = gov_class_of(repo, commits, reds)
@@ -1608,6 +1613,7 @@ def _check_entry(repo, d, e, i, own=None):
             if side == "head":
                 timed = " (and they ran past their time cap, " \
                         f"{TIMEOUT_RETRIES + 1} times)" if CHECK_TIMEOUT.search(out or "") else ""
+                # policy: checks-failed
                 queue_verdict(d, e, "rejected", f"NOT LANDED: the pre-push checks failed ({where}){timed}; failing "
                               f"with this change only: {keys_text(what)}{provisional_hint(tree, e)}; the change "
                               f"{e['head'][:10]} stays in {e['worktree']}", (out or "").splitlines())
@@ -1841,6 +1847,7 @@ def _push_change(repo, d, e, i):
                 wlog(d, f"{e['id']}: {what}: queued for a new round")
                 return "queued"
             if not new_head:
+                # policy: no-longer-applies
                 queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {remote()}/main "
                               f"{moved[:10]} (main moved during its checks{conflict_cause(tree, base, moved, conflicts)}"
                               f"): rebase onto {remote()}/main and land again (it keeps its place in the queue)",
@@ -2056,6 +2063,7 @@ def _tick_changes_pass(repo, d, st, t, facts, kinds, phase, mine, todo, held, ph
         if state == "queued" and not alive:
             gone = main_conflict(repo, e)
             if gone:  # it no longer applies on main itself: said now, never after a wait for a tree or an older change
+                # policy: no-longer-applies
                 queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {remote()}/main "
                               f"{gone[0][:10]} (main moved since QUEUED{conflict_cause(repo, e.get('base'), gone[0], gone[1])}"
                               f"): rebase onto {remote()}/main and land again (it keeps its place in the queue)",
@@ -2101,7 +2109,8 @@ def _tick_changes_pass(repo, d, st, t, facts, kinds, phase, mine, todo, held, ph
         if not slot:
             note_hold(st, e, "trees", "every check tree is busy (a check slot)", t)
             continue
-        if not fix and batch_seq is not None and batch_seq < e["seq"] and not check_tree_slot_free(repo, d):
+        if not fix and batch_seq is not None and batch_seq < e["seq"] and not check_tree_slot_free(repo, d) \
+                and policy_blocks("older-batch", st, e["id"], "the last free check tree kept for the older batch"):
             slot[1].release()  # AGE ORDER: the last free tree is the older changes' batch's
             if not _behind_said.get((e["id"], "older batch")):
                 _behind_said[(e["id"], "older batch")] = True
@@ -2175,6 +2184,23 @@ def lap_change_deadline(st, e, state, t, note=None):
         return
     hold = change_hold_visible(st, it, e, t)
     stuck = change_hold_stuck(st, hold, it, t)
+    if stuck and stuck_recovery(hold, stuck) == "rederive":
+        # SELF-HEALING (2026-11-20, THE HOLD TABLE): a hold that describes a world that moved -- its blocker ended, or
+        # its kind's bound passed -- is dropped, and the tick decides afresh (it records the hold again if one still
+        # applies, its clock restarted); said quietly on the change's events, never a page
+        if state == "queued":  # its holds are derived after this lap, in the same tick: from nothing
+            note_hold(st, e, None, None, t)
+        else:  # a checked change's were derived just before it, this tick: their clock restarts
+            restart_hold(st, e, t)
+        try:
+            it = st.item("change", e["id"]) or it
+            st.transition("change", e["id"], state, it["version"],
+                          event={"kind": "change.rederived", "severity": "info",
+                                 "text": f"{e['id']}: {state} for {fmt_age(t - it['entered_at'])}; its hold "
+                                         f"({hold.get('why')}) was stuck -- {stuck} -- so it is decided afresh"})
+        except StaleVersion:
+            pass
+        return
     issue = None if hold else file_unheld_change(st, it, t, "agentctl (the change tick)")  # agentctl's bug: an issue,
     # A HELD LAP IS NO INBOX ENTRY (2026-11-19 08:39Z, 08:55Z: movies-fix-replay's "queued for 15 min / 30 min, held:
     # ..." reached the inbox every 15 min -- 93 of the day's 442 entries -- because the lap's event named the worktree
@@ -2306,7 +2332,10 @@ CHANGE_HOLD_MAX = 6 * 3600  # s ($AGENTCTL_CHANGE_HOLD_MAX)
 
 
 def note_hold(st, e, kind, why, t, blocker=None, files=None, batch=None):
-    """Record why queued change e waits (None: nothing holds it now), on its item, when that changed."""
+    """Record why queued change e waits (None: nothing holds it now), on its item, when that changed. kind is a row of
+    THE HOLD TABLE (policy.py HOLDS): an unregistered kind is refused (ValueError), so no wait goes unbounded."""
+    if kind is not None:
+        hold_kind(kind)
     it = st.item("change", e["id"])
     if not it or machine_state("change", it["state"]).terminal:
         return
@@ -2320,6 +2349,18 @@ def note_hold(st, e, kind, why, t, blocker=None, files=None, batch=None):
         st.update_item("change", e["id"], it["version"], {"hold": rec})
     except StaleVersion:
         pass  # the next tick records it
+
+
+def restart_hold(st, e, t):
+    """The recorded hold of change e, its clock (since) restarted at t: re-derived this tick (stuck_recovery)."""
+    it = st.item("change", e["id"])
+    hold = ((it or {}).get("data") or {}).get("hold")
+    if not hold:
+        return
+    try:
+        st.update_item("change", e["id"], it["version"], {"hold": {**hold, "since": t}})
+    except StaleVersion:
+        pass
 
 
 def change_hold_now(it, e, t):
@@ -2341,7 +2382,22 @@ def change_hold_stuck(st, hold, it, t):
         b = st.item("change", hold["blocker"])
         if b is None or machine_state("change", b["state"]).terminal:
             return f"its blocking change {hold['blocker']} is {'gone' if b is None else b['state']}"
+    hk = HOLDS.get(hold.get("kind"))
+    if hk and hold.get("since") and t - float(hold["since"]) > hk.bound:
+        return f"held on {hk.label} for over {fmt_age(hk.bound)} (that hold's bound)"
     return None
+
+
+def stuck_recovery(hold, stuck):
+    """What the change tick does with a stuck hold (THE HOLD TABLE's recovery): `rederive` -- the recorded hold is
+    dropped and this tick decides afresh -- when its blocker is gone or its kind's own bound passed and the table says
+    so; else `escalate` (nothing recorded, the 6-h cap: the wait is real, or agentctl's bug)."""
+    if not hold or not stuck or stuck.startswith("held for over"):
+        return "escalate"
+    if stuck.startswith("its blocking change"):
+        return "rederive"
+    hk = HOLDS.get(hold.get("kind"))
+    return hk.recovery if hk else "escalate"
 
 
 def hold_for_overlap(st, d, e, o, shared, conflict, waits=True):
@@ -2402,6 +2458,7 @@ def queue_join(repo, d, e, tree, head, why=None):
         e.pop(k, None)
     e.update(tip=head, commits=commits, fixes=sorted(fixes_of(repo, commits)))
     line = note_waiting(d, os.path.join(d, f"check-{e['id']}"), head, e["id"]) + (f": {why}" if why else "")
+    # policy: red-gate
     set_change(d, e, "waiting", event=change_event(e, line, code=None, final=False), decided=ts())
     wlog(d, f"{e['id']}: {line}")
     return 0

@@ -156,7 +156,7 @@ class WatchdogTest(unittest.TestCase):
         st_.transition("change", "old-1", "landed", it["version"])
         self.run_wd()
         [c] = [c for c in A.open_conditions() if c["key"] == "invariant-W1"]
-        self.assertIn("oldest unlanded change old-2 (queued", c["text"])
+        self.assertIn("unlanded change old-2 (queued", c["text"])
         self.assertNotIn("old-1", c["text"])
         self.assertEqual(len([e for e in A.inbox_entries() if e.get("kind") == "INVARIANT"]), 1, "one entry per spell")
         it = st_.item("change", "old-2")
@@ -169,7 +169,7 @@ class WatchdogTest(unittest.TestCase):
         st_.put_item("change", "e1", "waiting", {"head": "0" * 40, "submitted_at": time.time() - 3 * 3600})
         ok, detail = A.inv_w1()
         self.assertFalse(ok)
-        self.assertIn("e1 (waiting: waiting for main to turn green) is 3 h", detail)
+        self.assertIn("e1 (waiting: waiting for green while main is green) is 3 h", detail)
         it = st_.item("change", "e1")
         st_.transition("change", "e1", "landed", it["version"])
         self.assertTrue(A.inv_w1()[0])  # W2 (step 10): a red with no live lease, open offer, fix or block -- read from the store
@@ -226,6 +226,64 @@ class FileTableTest(unittest.TestCase):
 
     def test_it_is_a_watchdog_invariant(self):
         self.assertIn("WF", A.INVARIANTS)
+
+
+class TableJudgedInvariantsTest(unittest.TestCase):
+    """W1 AND WR READ THE TABLES (2026-11-20: W1 fired 18 times in three weeks, 13 on a change whose checks simply ran
+    past 2 h with a live checker): a change is judged by its state's table -- a live checker, a hold within its kind's
+    bound -- and violates only outside it, or past W1_HARD_FACTOR x the bound whatever it says."""
+
+    def setUp(self):
+        self.st = A.Store()
+        for it in self.st.items("change"):
+            if not A.machine_state("change", it["state"]).terminal:
+                self.st.transition("change", it["id"], "cancelled", it["version"])
+
+    def checker(self, eid):
+        self.st.acquire(f"check/{eid}", f"laptop:check:{eid}", 600, 4 * 3600, progress="x")
+
+    def test_a_long_check_with_a_live_checker_is_no_w1_violation_until_the_hard_bound(self):
+        self.st.put_item("change", "long-1", "checking", {"head": "0" * 40, "submitted_at": time.time() - 3 * 3600})
+        self.checker("long-1")
+        ok, why = A.inv_w1()
+        self.assertTrue(ok, why)
+        it = self.st.item("change", "long-1")
+        self.st.update_item("change", "long-1", it["version"], {"submitted_at": time.time() - 7 * 3600})
+        ok, why = A.inv_w1()
+        self.assertFalse(ok, why)
+        self.assertIn("past 3 x its bound", why)
+
+    def test_a_check_with_no_live_checker_violates_w1(self):
+        self.st.put_item("change", "dead-1", "checking", {"head": "1" * 40, "submitted_at": time.time() - 3 * 3600})
+        ok, why = A.inv_w1()
+        self.assertFalse(ok, why)
+        self.assertIn("no live checker", why)
+
+    def test_a_held_change_within_its_holds_bound_is_no_w1_violation(self):
+        self.st.put_item("change", "older", "checking", {"head": "2" * 40, "submitted_at": time.time() - 60})
+        self.checker("older")
+        self.st.put_item("change", "held-1", "queued", {
+            "head": "3" * 40, "submitted_at": time.time() - 3 * 3600,
+            "hold": {"kind": "overlap", "why": "its check waits for older", "blocker": "older", "since": time.time() - 600}})
+        it = self.st.item("change", "held-1")
+        self.st.transition("change", "held-1", "queued", it["version"])  # entered now: the 6-h cap is not hit
+        ok, why = A.inv_w1()
+        self.assertTrue(ok, why)
+
+    def test_wr_a_red_fix_whose_own_check_runs_is_no_wait_but_one_held_behind_work_is(self):
+        self.st.put_item("red", "r7", "offered", {"key": "r7", "runs": ["7"], "gate": True})
+        self.st.put_item("change", "fix-run", "checking", {"fixes": ["7"], "submitted_at": time.time() - 53 * 60})
+        self.checker("fix-run")
+        ok, why = A.inv_wr(store=self.st, reds={"7"})
+        self.assertTrue(ok, why)
+        self.st.put_item("change", "fix-held", "queued", {
+            "fixes": ["7"], "submitted_at": time.time() - 60,
+            "hold": {"kind": "overlap", "why": "its check waits for older", "blocker": "older", "since": time.time()}})
+        ok, why = A.inv_wr(store=self.st, reds={"7"})
+        self.assertFalse(ok, why)
+        self.assertIn("fix-held", why)
+        self.assertIn("held behind other work", why)
+        self.assertNotIn("fix-run", why)
 
 
 if __name__ == "__main__":

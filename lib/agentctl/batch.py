@@ -941,6 +941,7 @@ def batch_drift_split(repo, d, st, it, members, tree, out):
         ok, out2 = batch_drift_check(repo, d, tree, it["data"]["base"], e["tip"], it["data"].get("cls") == "red")
         it = st.item("batch", bid)
         if ok is False:
+            # policy: drift-check
             queue_verdict(d, e, "rejected", f"NOT LANDED: the drift check (scripts/identity-drift-ci) is red with your "
                                             f"identity-model change in the batch, twice (entry {e['id']})"
                                             f"\n  {tail_of(out2 or out)}", (out2 or out).splitlines()[-25:])
@@ -1041,6 +1042,7 @@ def check_batch(repo, bid):
             wlog(d, f"batch {bid}: {bad['id']}'s prefix fails, but not shown to be by its own fault"
                     + (f" (its {', '.join(regenerated)} resolved in the batch)" if regenerated else "") + ": checked alone")
         else:
+            # policy: batch-checks-failed
             queue_verdict(d, bad, "rejected", f"NOT LANDED: the checks failed with your change in the batch (entry "
                                               f"{bad['id']})\n  {tail_of(cout)}", cout.splitlines()[-25:])
         what = "checked alone" if alone else "rejected"

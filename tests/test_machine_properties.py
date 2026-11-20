@@ -5,7 +5,9 @@ state that moved, or sat, where no table said it could). Over random event seque
   version; anything else raises IllegalTransition (TerminalState out of a terminal state), changes nothing, and leaves
   one `<type>.illegal` event naming the move;
 - a deadline's own move (on_deadline) is a legal move, so the reconciler's timeout never needs an illegal one;
-- no reachable state is STUCK: every one ends in a terminal state or cycles through an escalation with no progress."""
+- no reachable state is STUCK: every one ends in a terminal state or cycles through an escalation with no progress;
+- every recorded hold kind (policy.py HOLDS) has a registered policy, a finite bound and a recovery, and a red fix
+  only waits on its own resources."""
 import os, random, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -87,6 +89,25 @@ class TransitionPropertyTest(unittest.TestCase):
             for s in seen:
                 terminal, escalates = A.deadline_walk(typ, s)
                 self.assertTrue(terminal or escalates, f"{typ}.{s} is reachable and can stall in silence")
+
+
+class HoldTableTest(unittest.TestCase):
+    def test_every_hold_kind_has_a_policy_a_bound_and_a_recovery(self):
+        for kind, h in A.HOLDS.items():
+            self.assertEqual(kind, h.kind)
+            self.assertIn(h.policy, A.POLICIES, f"hold {kind}: its policy is not registered")
+            self.assertTrue(0 < h.bound < float("inf"), kind)
+            self.assertIn(h.recovery, ("rederive", "escalate", "requeue"), kind)
+
+    def test_a_red_fix_waits_only_on_its_own_resources(self):
+        """A FIX OF ANY OPEN RED GOES FIRST: the holds a red fix may take are resource waits, never other work."""
+        for kind, h in A.HOLDS.items():
+            if h.red_fix_ok:
+                self.assertTrue(A.POLICIES[h.policy].mechanism, f"{kind}: a red fix may wait on a rule ({h.policy})")
+
+    def test_an_unknown_hold_kind_is_refused(self):
+        with self.assertRaises(ValueError):
+            A.hold_kind("nonsense")
 
 
 if __name__ == "__main__":

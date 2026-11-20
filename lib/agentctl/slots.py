@@ -638,11 +638,13 @@ def sync_onto_main(repo, main_ref, sh, release_hold=False):
         print(f"NOT LANDED: {why}. Throwaway work never lands; remove the marker (rename the branch, reword the commit, "
               "drop the Do-Not-Land: trailer) only if the owner wants it landed.")
         return 1, None
+    # policy: hold-trailer
     why = None if release_hold else held_commit(repo, waiting_commits(repo, f"{remote()}/main", head))
     if why:
         print(f"NOT LANDED: {why}. Held work lands only on the owner's go: `agentctl land --release-hold` then (or "
               "drop the trailer).")
         return 1, None
+    # policy: blame-dead
     why = blame_land_refusal(repo, waiting_commits(repo, f"{remote()}/main", head), repo,
                              records=blame_records_quiet())
     if why:
@@ -650,7 +652,7 @@ def sync_onto_main(repo, main_ref, sh, release_hold=False):
               "(`git worktree remove`), never land it.")
         return 1, None
     why = fix_replay_refusal(repo, waiting_commits(repo, f"{remote()}/main", head))
-    if why:
+    if why and policy_blocks("fix-replay", None, None, why[:160]):  # policy: fix-replay
         print(f"NOT LANDED: {why}. A red whose check replays cheaply lands only a fix its replay proved.")
         return 1, None
     # agentctl's own rewrites never sign (issue 20261115T112749-d27361): main's commits are unsigned, and a global

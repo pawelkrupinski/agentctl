@@ -109,6 +109,24 @@ class WatchdogKindTest(unittest.TestCase):
         self.assertIn("c-fix (red fix of 6 (outside)) is checked", why)
         self.assertNotIn("c-wait", why, "only a GATE red's fix may not wait for green")
 
+    def test_a_stale_hold_is_re_derived_by_the_tick_never_paged(self):
+        """THE HOLD TABLE's recovery (policy.py HOLDS, 2026-11-20): a hold whose blocker ended, or past its kind's own
+        bound, describes a world that moved -- the lap drops it (the tick derives it afresh), quietly, no issue."""
+        t = time.time()
+        for eid, hold in (("c-gone", {"kind": "overlap", "why": "its check waits for x", "blocker": "x-gone", "since": t}),
+                          ("c-old", {"kind": "backlog-batch", "why": "the next backlog batch", "since": t - 3 * 3600})):
+            self.st.put_item("change", eid, "queued", {"worktree": f"/w/{eid}", "hold": hold})
+            it = self.st.item("change", eid)
+            self.st.transition("change", eid, "queued", it["version"], deadline_s=-1)  # past its deadline
+            A.lap_change_deadline(self.st, {"id": eid, "worktree": f"/w/{eid}"}, "queued", t)
+            it = self.st.item("change", eid)
+            self.assertIsNone(it["data"].get("hold"), eid)
+            evs = [e for e in self.st.item_events("change", eid) if e["kind"] == "change.rederived"]
+            self.assertEqual(len(evs), 1, eid)
+            self.assertEqual(evs[0]["severity"], "info")
+            self.assertEqual(evs[0]["audience"], {}, "never an inbox entry")
+        self.assertEqual(self.st.items("issue", ("open",)), [], "a stale hold is no agentctl bug")
+
     def test_a_change_past_its_deadline_with_no_recorded_hold_is_filed_once_as_an_agentctl_issue(self):
         t = time.time()
         self.st.put_item("change", "c-silent", "checked", {"worktree": "/w/silent"})

@@ -34,6 +34,21 @@ A.GH_TALLY_SECONDS = 10 ** 9
 harness.register(A)
 
 
+class approved:
+    """`with approved("<policy id>"):` -- an agent-proposed rule of policy.py POLICIES as if the owner had approved it,
+    so a test reaches what it does once approved (unapproved, it only warns)."""
+
+    def __init__(self, pid):
+        self.p = A.policy(pid)
+
+    def __enter__(self):
+        self.saved, self.p.decided = self.p.decided, "approved in a test"
+        return self.p
+
+    def __exit__(self, *exc):
+        self.p.decided = self.saved
+
+
 def code_source():
     """ALL of agentctl's code as one text, in the order it runs: the entry, then lib/agentctl's PARTS (a test that
     reads the source -- "only transition writes a state" -- must see every part)."""

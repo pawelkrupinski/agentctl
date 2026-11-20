@@ -5,7 +5,7 @@ import os, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, Repo  # noqa: E402
+from test_agentctl import A, Repo, approved  # noqa: E402
 
 REGISTRY = ("# workflow\tverify_dispatch\treplay\twhy\n"
             "Alert backtest\tyes\tinfra/bin/backtest-alerts-replay --from-run {run}\t~30 min on ci-runner\n"
@@ -97,9 +97,16 @@ class FixReplayTest(unittest.TestCase):
         self.fix("Fixes-Red: 5")
         sh = lambda *args: A.subprocess.run(args, cwd=self.r.path, capture_output=True, text=True)  # noqa: E731
         import io, contextlib
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
+        out, errs = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(errs):
             rc, head = A.sync(self.r.path, "origin/main", sh)
+        # THE POLICY REGISTRY: fix-replay is agent-proposed, never decided by the owner -- it warns, never blocks
+        self.assertIsNone(rc)
+        self.assertIn("POLICY UNAPPROVED fix-replay", errs.getvalue())
+        with approved("fix-replay"):  # once the owner approves it, it refuses as it was written to
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc, head = A.sync(self.r.path, "origin/main", sh)
         self.assertEqual((rc, head), (1, None))
         self.assertIn("NOT LANDED: Alert backtest #5 [backtest] has a replay", out.getvalue())
 
@@ -161,7 +168,8 @@ class ServerRefusesUnreplayedFixTest(test_backlog_batch.BacklogBatchTest):
         A.Store().put_item("red", "5254bffda9d2", "offered", {
             "key": "5254bffda9d2", "workflow": "Alert backtest", "jobs": ["backtest"], "runs": ["5", "44459271435"],
             "last_run": {"number": 5, "databaseId": 44459271435}, "red_kind": "outside"})
-        A.check_entry(self.r.path, eid)
+        with approved("fix-replay"):  # agent-proposed: it refuses only once the owner approves it (test_policy.py)
+            A.check_entry(self.r.path, eid)
         e = self.entry(eid)
         self.assertEqual(e["status"], "rejected")
         self.assertIn(f"`Fix-Replay: {CMD} base=FAIL head=PASS`", e["why"])

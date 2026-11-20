@@ -45,9 +45,33 @@ def watchdog_state():
     return read_record(state_root("watchdog.json")) or {}
 
 
+# W1 AND WR READ THE TABLES (2026-11-20, the owner: "fix agentctl issues structurally"; W1 fired 18 times in three weeks,
+# 13 of them on a change whose checks were simply running past 2 h -- a live checker lease, renewed on progress, its own
+# bound 3 h -- each worked out by hand). A change is judged by its STATE's own table: `checking` with a live checker
+# lease progresses; `queued` / `checked` waits on a recorded hold within that hold kind's bound (policy.py HOLDS), which
+# the change tick re-derives itself when it goes stale (stuck_recovery); `waiting` waits for a red gate. Only a change
+# that is past its bound with none of that -- what the reconciler's own recoveries did not fix -- violates, and so does
+# any change past W1_HARD_FACTOR x the bound whatever it waits on (a real wait that long is the owner's to know).
+W1_HARD_FACTOR = 3
+
+
+def change_progress(st, it, t):
+    """None when open change item `it` progresses as its state's table says (a live checker; a hold within its bound;
+    waiting on a red gate is the caller's), else why not."""
+    state = it["state"]
+    if state in ("checking", "pushing"):
+        return None if checker_alive(it["id"]) or state == "pushing" else "its checks run with no live checker"
+    if state in HOLD_SHOWN:
+        hold = change_hold_visible(st, it, {}, t)
+        stuck = change_hold_stuck(st, hold, it, t)
+        return stuck
+    return None
+
+
 def inv_w1():
-    """W1: the oldest UNLANDED change of the one queue (the store's open items, after the landed-by-content look) is
-    younger than W1_MAX (while main is red: past the red's own start). Names the change and why it has not landed."""
+    """W1: no UNLANDED change of the one queue (the store's open items, after the landed-by-content look) older than
+    W1_MAX (while main is red: past the red's own start) is outside what its state's table allows (change_progress);
+    none at all older than W1_HARD_FACTOR x that. Names the change and why it has not landed."""
     repo = movies_repo_path()
     st = Store()
     if os.path.isdir(repo):
@@ -55,8 +79,8 @@ def inv_w1():
     open_ = [r for r in change_rows(st) if r["state"] in ("queued", "checking", "checked", "waiting")]
     if not open_:
         return True, "no change waits"
+    t = time.time()
     oldest = min(open_, key=lambda r: r["since"])
-    age = time.time() - oldest["since"]
     line, _e = cached_gate_summary(SHORT["movies"])
     red_since = 0.0
     if line and line.startswith("gate RED"):
@@ -64,12 +88,27 @@ def inv_w1():
         starts = [parse_time(g["since"]).timestamp() for g in snap.get("gate") or [] if g.get("since")]
         red_since = (time.time() - min(starts)) if starts else 0.0
     lim = env_num("AGENTCTL_W1_MAX", W1_MAX)
-    ok = age < lim or bool(red_since and age < red_since + lim)
-    stranded = any(c["key"] == f"change-stranded-{oldest['id']}" for c in open_conditions(st))
-    why = {"queued": "waiting for a check slot", "checking": "its checks run", "checked": "waiting for its push",
-           "waiting": "waiting for main to turn green"}[oldest["state"]]
-    return ok, f"oldest unlanded change {oldest['id']} ({oldest['state']}: " + \
-        ("STRANDED, no queue entry carries it" if stranded else why) + f") is {fmt_age(age)} old" + \
+    conds = open_conditions(st)
+    bad = None
+    for r in sorted(open_, key=lambda r: r["since"]):
+        age = t - r["since"]
+        if age < lim or (red_since and age < red_since + lim):
+            continue
+        it = st.item("change", r["id"]) or {}
+        stranded = any(c["key"] == f"change-stranded-{r['id']}" for c in conds)
+        off = "STRANDED, no queue entry carries it" if stranded else change_progress(st, it, t) if it else "no item"
+        if off is None and r["state"] == "waiting" and not red_since:
+            off = "waiting for green while main is green"
+        if off is None and age < W1_HARD_FACTOR * lim + (red_since or 0):
+            continue
+        bad = (r, age, off or f"past {W1_HARD_FACTOR} x its bound, though its state still says it progresses")
+        break
+    if not bad:
+        age = t - oldest["since"]
+        return True, (f"oldest unlanded change {oldest['id']} ({oldest['state']}) is {fmt_age(age)} old, "
+                      "within what its state's table allows")
+    r, age, off = bad
+    return False, f"unlanded change {r['id']} ({r['state']}: {off}) is {fmt_age(age)} old" + \
         (f", main red for {fmt_age(red_since)}" if red_since else "")
 
 
@@ -115,10 +154,16 @@ def inv_wr(store=None, reds=None, now_=None):
             continue
         age = t - float(data.get("submitted_at") or it.get("entered_at") or t)
         what = f"{it['id']} ({kind_text(k)})"
+        hold = (data.get("hold") or {}) if it["state"] in HOLD_SHOWN else {}
+        hk = HOLDS.get(hold.get("kind"))
         if it["state"] == "waiting" and k["gate_fix"]:
             bad.append(f"{what} is waiting for main to turn green")
-        elif age > lim:
-            bad.append(f"{what} is {it['state']} {fmt_age(age)} after it was queued")
+        elif hk and not hk.red_fix_ok:  # THE HOLD TABLE: a red fix waits on its own resources only, never other work
+            bad.append(f"{what} is held behind other work: {hold.get('why')}")
+        elif age > lim and (change_progress(st, it, t) is not None or age > W1_HARD_FACTOR * lim):
+            # its own check running, or its own tree busy, within bounds, is no wait behind anything
+            bad.append(f"{what} is {it['state']} {fmt_age(age)} after it was queued"
+                       + (f" ({change_progress(st, it, t)})" if change_progress(st, it, t) else ""))
     if not bad:
         return True, "no red fix waits"
     return False, "a red fix waits: " + "; ".join(bad[:3]) + " -- `agentctl land status`, `agentctl ci-why`"
