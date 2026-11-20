@@ -708,12 +708,26 @@ def cancel_submitted(eid, how="cancel", repo=None):
             raise KeyError(eid)
         st.transition("change", eid, "cancelled", it["version"], data={"why": f"{how}led through the store API"},
                       event={"text": f"{eid}: {how}led", "refs": {"entry": eid}})
+        clear_holds_on(st, eid)
         return {"id": eid, "status": "cancelled"}
     e = hits[0]
     set_change(d, e, "cancelled", event={"text": f"{e['id']}: {how}led"}, why=f"{how}led through the store API",
                decided=ts())
     cancel_entry_remote(e, f"its queue entry was {how}led")
+    clear_holds_on(Store(), eid)
     return {"id": eid, "status": "cancelled"}
+
+
+def clear_holds_on(st, eid):
+    """Every open change's recorded hold naming change eid as its blocker, cleared (eid is gone: the next tick reads
+    each one's hold again); never a phantom blocker in `land status`."""
+    for it in st.items("change"):
+        if machine_state("change", it["state"]).terminal or ((it.get("data") or {}).get("hold") or {}).get("blocker") != eid:
+            continue
+        try:
+            st.update_item("change", it["id"], it["version"], {"hold": None})
+        except StaleVersion:
+            pass  # moved meanwhile: the next tick records its hold
 
 
 def gate_is_red_now():

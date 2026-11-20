@@ -2038,7 +2038,7 @@ def lap_change_deadline(st, e, state, t, note=None):
 # catalog against the scrapers refactor, the cycle-breaking change against both -- each a check, then `NOT LANDED: no
 # longer applies on origin/main ... main moved during its checks`, a rebase and a full recheck). A queued change that
 # shares a FILE with a change queued before it and still in flight (queued, checking, checked, pushing, or waiting for
-# a green gate):
+# a green gate -- the last only when they conflict, below):
 # - both queued, both batchable, and they assemble together (git merge-tree of their heads is clean): nothing held --
 #   THE BACKLOG BATCH checks them as one tree;
 # - else its check waits for the older one: once that lands, it is checked ONCE, on top of it (no check thrown away, no
@@ -2048,7 +2048,14 @@ def lap_change_deadline(st, e, state, t, note=None):
 #   for it to land and rebase onto main. Its check waits meanwhile (one is never spent on a tree that cannot land).
 # And a queued change that no longer applies on main itself (main moved since its base) is NOT LANDED at its next
 # tick, never after a wait for a check tree (main_conflict).
-# A red fix never waits (told of a conflict all the same). queue.py overlap_hold, pair_conflict; tests: tests/test_queue_sim.py CollisionTest (the three
+# A red fix never waits (told of a conflict all the same).
+# A WAITING CHANGE HOLDS NOTHING IT ASSEMBLES WITH (2026-11-20, Main #2716 red): metrics-packages and phase7-houses sat `held: its check
+# waits for movies-misc-cx (waiting)`. A waiting change lands only with the batch at green, so a change held behind it
+# was held until green -- a cycle for a red fix, pointless serialisation for the rest -- and cancelling misc-cx moved
+# the hold to the next waiting change. A younger change that ASSEMBLES with a waiting one (git merge-tree clean) is
+# checked on main now and, waiting too, meets it in the batch at green, assembled in order. Only one that cannot be
+# assembled with it waits (its author told: CONFLICTS -- a check of it is spent on a tree that cannot land), and a red
+# fix never does. queue.py overlap_hold, pair_conflict; tests: tests/test_queue_sim.py CollisionTest (the three
 # collisions of 2026-11-17 replayed), tests/test_backlog_batch.py OverlapTest.
 OVERLAP_OLDER = ("queued", "checking", "checked", "pushing", "waiting")
 _overlap_known = process_cache({})  # (older id, head, younger id, head) -> (shared files, conflicting files or None)
@@ -2116,6 +2123,8 @@ def overlap_hold(repo, d, e, entries, facts, t):
                 continue  # the next backlog batch checks them as one
         if conflict:  # the one it cannot be assembled with is the one its author hears of
             return o, shared, conflict
+        if o.get("status") == "waiting":  # A WAITING CHANGE HOLDS NOTHING it assembles with: they meet in the batch
+            continue
         first = first or (o, shared, conflict)
     return first
 

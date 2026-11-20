@@ -1061,6 +1061,11 @@ agent must be assigned to it".
 - **Services re-exec only onto good code.** `restart_if_changed` needs the file to equal ~/bin's HEAD version (a dirty
   edit is never picked up) and HEAD to pass `py_compile` and `agentctl --selftest`; otherwise the old code keeps running
   and one inbox entry `CODE REFUSED` names the commit.
+- **Only a `Fixes-Red:` trailer makes a change a gate red's fix** (2026-11-20, Main #2716: metrics-packages, no
+  trailer, edited `scripts/ci/coupling_ratchet.py`, which the failing job reads, and ci-why read "fix ... landing on red
+  (Fixes-Red)" while the real fixer was stopped and its committed fix sat unlanded). An untrailered queued change links
+  only an OUTSIDE red, and only by editing that red's own workflow file (`red_workflow_file_touched`); a red's fixer
+  whose lease lapses leaves its unlanded commits as `prior_work`, and the next fixer is briefed to land them.
 - **`Fixes-Red: N` is the run NUMBER** (#N, GitHub's run_number): resolved through the newest runs' numbers first,
   as a run id only when no run has that number; a number and an id naming different runs: the number, and the FIX
   verdict says so in `[...]` (2026-10-27: `Fixes-Red: 2133`, Identity capture #2133, was read as id 2133, an old
@@ -1454,7 +1459,11 @@ The reconciler then takes it, a step per tick:
   When the two cannot be assembled together, its author is told at its first tick: `CONFLICTS <id>: it cannot be
   assembled with <older> ... (both change <files>)` to the inbox, with what to do; a queued change that no longer
   applies on main itself (main moved since its base: `git merge-tree`, once per main and head) is NOT LANDED at its
-  next tick, never after a wait for a check tree (`main_conflict`). A red fix never waits (it is told of a conflict all the same). queue.py `overlap_hold`,
+  next tick, never after a wait for a check tree (`main_conflict`). A red fix never waits (it is told of a conflict all the same).
+  A WAITING CHANGE HOLDS NOTHING IT ASSEMBLES WITH (2026-11-20, Main #2716: metrics-packages and phase7-houses sat
+  `held: its check waits for movies-misc-cx (waiting)` -- held until green, behind a change that lands only at green):
+  the younger is checked now and meets it in the batch at green; only a conflicting one waits (told `CONFLICTS`).
+  `land cancel` clears every hold naming the cancelled change (`clear_holds_on`). queue.py `overlap_hold`,
   `pair_conflict`, `hold_for_overlap`; tests: `tests/test_backlog_batch.py` OverlapTest, `tests/test_queue_sim.py`
   CollisionTest (the three collisions of 2026-11-17 replayed: no check spent on a change that could not land, no full
   recheck).

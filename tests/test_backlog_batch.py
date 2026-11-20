@@ -659,6 +659,30 @@ class OverlapTest(BacklogBatchTest):
         self.assertIn("nothing holds it", A.change_hold_stuck(st, None, it, time.time()))
         self.assertIn("held for over", A.change_hold_stuck(st, it["data"]["hold"], it, time.time() + 7 * 3600))
 
+    def test_a_change_waiting_for_a_green_gate_holds_no_younger_change_sharing_its_file(self):
+        """2026-11-20, Main #2716 red: metrics-packages and phase7-houses sat `queued ... held: its check waits for
+        movies-misc-cx (waiting)` -- a change that lands only at green, so they were held until green (and a red fix so
+        held, a cycle); cancelling misc-cx moved the hold to the next waiting change. A change is held only behind one
+        checked or landed before it: the waiting ones and it meet in the batch at green."""
+        eo = self.edit("older", "web/src/main/Ten.scala", 0, "older's line 1", extra="identity/src/main/I.scala")
+        e = self.entry(eo)
+        e["status"] = "waiting"  # checked, waiting for the gate to turn green
+        A.save_entry(self.d, e)
+        ey = self.edit("younger", "web/src/main/Ten.scala", 9, "younger's line 10", extra="identity/src/main/Y.scala")
+        A.tick_changes(self.r.path, self.d)
+        self.assertEqual(self.started, [ey], "checked now, never held behind a change waiting on the gate")
+        self.assertNotEqual(((A.Store().item("change", ey)["data"] or {}).get("hold") or {}).get("kind"), "overlap")
+
+    def test_cancelling_a_blocker_clears_the_holds_that_name_it(self):
+        eo = self.edit("older", "web/src/main/Ten.scala", 0, "older's line 1", extra="identity/src/main/I.scala")
+        ey = self.edit("younger", "web/src/main/Ten.scala", 9, "younger's line 10", extra="identity/src/main/Y.scala")
+        A.tick_changes(self.r.path, self.d)
+        st = A.Store()
+        self.assertEqual(st.item("change", ey)["data"]["hold"]["blocker"], eo)
+        A.cancel_submitted(eo, repo=self.r.path)
+        self.assertIsNone(st.item("change", ey)["data"].get("hold"),
+                          "no hold names a cancelled change: `land status` never shows a phantom blocker")
+
     def test_two_queued_changes_sharing_a_file_that_assemble_go_in_one_backlog_batch(self):
         ea = self.edit("a", "web/src/main/Ten.scala", 0, "a's line 1")
         eb = self.edit("b", "web/src/main/Ten.scala", 9, "b's line 10")
