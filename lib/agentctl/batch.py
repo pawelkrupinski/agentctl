@@ -655,6 +655,25 @@ def green_batch_depth(tree, it, kept, base, tip):
                     "no check of it reading what changed: its verdict kept")
 
 
+# A RED FIX IS NEVER A BATCH MEMBER, AT GREEN TOO (2026-11-20; the simulator gate's chaos-19-t1, and five more chaos seeds
+# of a wider sweep: a fix of a red OUTSIDE the gate waited on `waiting` while the gate was red -- its other production
+# commits name no gate red -- and at green the waiting batch took it with the rest, so it waited for their combined
+# check). At green, before a new waiting batch forms, each waiting change that fixes an open red goes back to the queue,
+# where it goes first, alone, in the red-fix tree (A FIX OF ANY OPEN RED GOES FIRST, changekind.py).
+def release_red_fixes(d, st, reds, waiting, t):
+    facts = queue_facts(reds, st)
+    out = []
+    for e in waiting:
+        k = classify_change(e, facts, t)
+        if not k["red_fix"]:
+            continue
+        set_change(d, e, "queued", event={"text": f"{e['id']}: main is green -- a fix of an open red ({kind_text(k)}) "
+                                                  "is checked alone and first, never a batch member", "severity": "info"},
+                   waiting_released=ts())
+        out.append(e["id"])
+    return out
+
+
 def batch_step(repo, d, now_, seen, st):
     t = now_ if now_ is not None else time.time()
     waiting = waiting_entries(d)
@@ -670,6 +689,10 @@ def batch_step(repo, d, now_, seen, st):
     reds = gate_reds(repo)
     seen["reds"] = reds
     waiting = waiting_entries(d)
+    released = release_red_fixes(d, st, reds, waiting, t) \
+        if not reds and (not it or it["state"] in ("blocked-red", "assembling")) else []
+    if released:
+        waiting = waiting_entries(d)
     depth = (it or {}).get("data", {}).get("depth") or "fast"
     fix_waits = bool(reds) and any(classify_change(e, gate_facts(reds), t)["gate_fix"] for e in waiting)
     if not waiting and (not it or (depth in DEEP_BATCHES and it["state"] == "assembling")):

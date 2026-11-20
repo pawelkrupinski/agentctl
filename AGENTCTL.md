@@ -1750,6 +1750,10 @@ old-definition numbers reported beside the new). A fall is a note (`--update` re
 hook after the suite (`--base <the remote's sha>`) and as tests.yml's `sim-gate` job; `--update [--bump K]` rewrites
 the registry, `--json F` keeps every scenario's result. Its baseline at its introduction (master 2ab61bf): one scenario
 (chaos-19-t1) breaks I3, a red fix made a member of a backlog batch; every other kind 0; mean landing latency 7.75 ticks.
+That I3 was real: a fix of a red OUTSIDE the gate waits on `waiting` while the gate is red, and at green the waiting
+batch took it with the rest. A RED FIX IS NEVER A BATCH MEMBER, AT GREEN TOO (batch.py `release_red_fixes`): at green,
+before a waiting batch forms, each waiting change that fixes an open red goes back to the queue, where it goes first,
+alone. I3: 1 -> 0 of the gate's scenarios (4 -> 0 of a 700-scenario sweep beyond them); latency 7.72 -> 7.89 ticks.
 
 **Landing latency, measured (the owner's R3, 2026-11-19; nothing below shipped).** `agent-time`: waiting on `land` was
 39% of all lane time; a landed change took ~84 min after 09:00Z (re-check rounds ~28, held checked->push ~21, queued

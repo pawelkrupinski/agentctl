@@ -274,8 +274,9 @@ elif sys.argv[2] == "collisions":
     bad = queue_sim.Sim(17, calm=True, script=list(queue_sim.COLLISIONS_2026_11_17)).run().violations[:1]
 elif sys.argv[2] == "baselines":
     bad = queue_sim.Sim(0, calm=True, script=list(queue_sim.BASELINES_2026_11_19)).run().violations[:1]
-elif sys.argv[2] == "chaoshold":  # chaos seeds where a checked change's push waits for a batch it is not in
-    bad = [v for seed in (3, 4) for v in queue_sim.Sim(seed, trees=4, profile={**T.CHAOS, "outside_red": 0.08},
+elif sys.argv[2] == "chaoshold":  # chaos seeds where a checked change's push waits for a batch it is not in (7, 8
+    # since 2026-11-20: 3 and 4 no longer reach it once a red fix waiting at green is released from the waiting batch)
+    bad = [v for seed in (7, 8) for v in queue_sim.Sim(seed, trees=4, profile={**T.CHAOS, "outside_red": 0.08},
                                                        n_changes=14).run().violations[:1]]
 elif sys.argv[2] == "loadlone":  # the load with many lone (--no-batch) changes: since every other change batches
     # (2026-11-20), only they compete with a backlog batch for its tree
