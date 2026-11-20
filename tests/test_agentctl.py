@@ -488,6 +488,10 @@ class PrepushTest(Base):
         sh(wt, "git", "commit", "-q", "-m", "retire, one only\n\nRetires: f1.txt")
         rc, out = self.check("--max-foreign", "1", cwd=wt)
         self.assertEqual(rc, 1, out)
+        # issue 20261120T025500-5917bb: lane A1 deleting its own scaffolding got past this with an unnamed
+        # AGENTCTL_MAX_FOREIGN=6. The refusal names the declared way, per file, and calls the cap a bypass
+        self.assertIn("Retires: f2.txt; Retires: f3.txt", out)
+        self.assertIn("AGENTCTL_MAX_FOREIGN raises the cap for every file and is a bypass", out)
 
     def _main_with_files(self, n):
         for i in range(n):
@@ -618,6 +622,42 @@ class PrepushTest(Base):
         self.assertEqual(rc, 1, out)
         rc, out = self.run_tool("prepush-check", "--hook", "origin", stdin=f"(delete) {A.ZERO} refs/heads/x {remote}\n", cwd=wt)
         self.assertEqual(rc, 0, out)
+
+
+class RootCheckoutTest(Base):
+    """Issue 20261119T140508-66d831: the movies root checkout sat 23+ commits behind main, its .claude hooks stale."""
+
+    def advance_main(self):
+        wt = self.r.worktree("wt-other", branch="other")
+        self.r.write("new.txt", "new\n", at=wt)
+        sha = self.r.commit("main moves", at=wt)
+        self.r.push(at=wt, ref="HEAD:main")
+        return sha
+
+    def test_a_clean_root_checkout_on_main_is_fast_forwarded_and_nothing_else_is(self):
+        sha = self.advance_main()
+        self.assertNotEqual(sh(self.r.path, "git", "rev-parse", "HEAD"), sha)
+        out = A.root_checkout_ff(self.r.path)
+        self.assertEqual(sh(self.r.path, "git", "rev-parse", "HEAD"), sha, out)
+        self.assertIn("fast-forwarded", out[0])
+        self.assertEqual(A.root_checkout_ff(self.r.path), [], "at main: nothing to do")
+        # dirty (tracked): never touched
+        wt = os.path.join(self.r.root, "wt-other")
+        self.r.write("new.txt", "newer\n", at=wt)
+        moved = self.r.commit("main moves again", at=wt)
+        self.r.push(at=wt, ref="HEAD:main")
+        self.r.write("new.txt", "local edit\n")
+        self.assertEqual(A.root_checkout_ff(self.r.path), [])
+        self.assertNotEqual(sh(self.r.path, "git", "rev-parse", "HEAD"), moved)
+        sh(self.r.path, "git", "checkout", "-q", "--", "new.txt")
+        # another branch: never touched
+        sh(self.r.path, "git", "checkout", "-q", "-b", "side")
+        self.assertEqual(A.root_checkout_ff(self.r.path), [])
+        sh(self.r.path, "git", "checkout", "-q", "main")
+        # a linked worktree on main-like state: never touched (it is some agent's)
+        self.assertEqual(A.root_checkout_ff(wt), [])
+        self.assertTrue(A.root_checkout_ff(self.r.path))
+        self.assertEqual(sh(self.r.path, "git", "rev-parse", "HEAD"), moved)
 
 
 class WaitAndStateTest(Base):

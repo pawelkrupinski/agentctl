@@ -600,10 +600,16 @@ def check_range(repo, base, head, allow, max_foreign):
     if allow:  # files in the allowed set are the agent's own: reverting them is its call
         reverts = [(p, c) for p, c in reverts if not allowed(p, allow)]
     if len(reverts) > max_foreign:
+        gone = [p for p, _c in reverts if git(repo, "cat-file", "-e", f"{head}:{p}", check=False).returncode != 0]
         problems.append(
             f"{len(reverts)} file(s) would be reverted/deleted back to an older main version (max {max_foreign}) -- "
             f"a squash onto a moved main? `git rebase {remote()}/main` and re-check. "
             + ", ".join(f"{p} (undoes {c})" for p, c in reverts[:20])
+            + (f". AN INTENDED DELETION (a lane removing its own scaffolding) is declared, never forced: one "
+               f"`Retires: <path>` trailer per file in the commit's final trailer block (here: "
+               + "; ".join(f"Retires: {p}" for p in gone[:10]) + (" ..." if len(gone) > 10 else "") + ")"
+               if gone else "")
+            + ". AGENTCTL_MAX_FOREIGN raises the cap for every file and is a bypass: name it in your report"
         )
     return problems
 
