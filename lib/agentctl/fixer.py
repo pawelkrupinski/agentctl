@@ -1643,6 +1643,7 @@ def red_open_flows(o_r, store=None):
 
 def newest_decided_main(o_r, workflow):
     """The newest decided (success / failure / timed_out) run of a workflow on main, or None."""
+    # listing: None here means none decided among the newest 10 -- the callers treat it as unread, not green
     runs = gh_json(o_r, "run", "list", "--workflow", workflow, "--branch", "main", "--limit", "10", "--json", RUN_FIELDS)
     return next((r for r in runs if r.get("status") == "completed"
                  and r.get("conclusion") in ("success", "failure", "timed_out")), None)
@@ -1763,6 +1764,7 @@ def probe_red_read(a):
     for o_r in a.get("repos") or []:
         try:
             red_read_token(o_r)
+            # listing: a read probe only (any answer proves the token reads)
             gh_json(o_r, "run", "list", "--limit", "1", "--json", "databaseId")
         except (Exception, SystemExit) as e:
             return False, f"{o_r}: {str(e).replace('agentctl: ', '')[:160]}"
@@ -2014,6 +2016,7 @@ def resolve_run(o_r, n):
                     if str(r.get(key)) == n:
                         return name, r
     try:
+        # listing: a number not in the newest 200 falls back to its run id (run_id_of_number), then says unknown
         runs = gh_json(o_r, "run", "list", "--branch", "main", "--limit", "200", "--json", RUN_FIELDS)
         r = next((r for r in runs if str(r.get("number")) == n), None)
         if r is None:
@@ -2374,6 +2377,7 @@ def probe_quota_reset(a):
     """The key accepted again: a run of a['workflow'] on main created after a['since'] got past its first job
     (a['job'], the preflight) -- or the whole run is green."""
     o_r = a.get("repo") or SHORT["movies"]
+    # listing: runs created since the block; none listed keeps the wait (a probe that cannot tell never clears it)
     runs = gh_json(o_r, "run", "list", "--workflow", a["workflow"], "--branch", "main", "--json", RUN_FIELDS, "-L", "10")
     since = float(a.get("since") or 0)
     for r in runs or []:

@@ -229,13 +229,13 @@ class GithubForgeTest(unittest.TestCase):
         """Run 101 queued, its plan done and its check jobs never started; GitHub's queued listing names it or not."""
         rs = [{"id": 101, "run_number": 12, "head_sha": "c" * 40, "head_branch": "check/7", "status": "queued",
                "conclusion": None, "path": ".github/workflows/precommit-check.yml"}]
-        self.gh_api(f"repos/{O_R}/actions/workflows/precommit-check.yml/runs?per_page=50", {"workflow_runs": rs})
+        self.serve_found(rs)
         self.gh_api(f"repos/{O_R}/actions/runs/101", rs[0])
         self.gh_api(f"repos/{O_R}/actions/runs/101/jobs?per_page=100", {"jobs": [
             {"id": 900, "name": "plan", "status": "completed", "conclusion": "success", "started_at": "2026-11-20T05:41:02Z"},
             {"id": 901, "name": "check (rest)", "status": "queued", "conclusion": None}]})
-        self.gh_api(f"repos/{O_R}/actions/runs?status=queued&per_page=100", {"workflow_runs": rs if listed else []})
-        self.gh_api(f"repos/{O_R}/actions/runs?status=in_progress&per_page=100", {"workflow_runs": []})
+        self.gh_api(f"repos/{O_R}/actions/runs?status=queued&per_page=100&page=1", {"workflow_runs": rs if listed else []})
+        self.gh_api(f"repos/{O_R}/actions/runs?status=in_progress&per_page=100&page=1", {"workflow_runs": []})
 
     # 2026-11-20, phase7-houses: run 44682642375 sat queued 90 min, its check jobs never started -- GitHub's queued-run
     # listing (what ci-runner's runner scheduler reads) left it out, so no runner was ever started for it
@@ -269,6 +269,13 @@ class GithubForgeTest(unittest.TestCase):
         for _n, s, t in bs:
             self.gh_api(f"repos/{O_R}/commits/{s}", {"sha": s, "commit": {"committer": {"date": t}}})
 
+    def serve_found(self, rs):
+        """GitHub's filtered answer to forge_find_run (the check run found by its workflow, branch and tip)."""
+        import urllib.parse
+        for r in rs:
+            q = urllib.parse.urlencode({"branch": r["head_branch"], "head_sha": r["head_sha"], "per_page": 10})
+            self.gh_api(f"repos/{O_R}/actions/workflows/precommit-check.yml/runs?{q}", {"workflow_runs": [r]})
+
     def serve_runs(self, runs):
         rs = [{"id": r["id"], "run_number": r["number"], "head_sha": r["sha"], "head_branch": r["branch"],
                "status": "completed" if r["done"] else "in_progress",
@@ -276,6 +283,7 @@ class GithubForgeTest(unittest.TestCase):
                "html_url": f"https://github.com/{O_R}/actions/runs/{r['id']}",
                "path": ".github/workflows/precommit-check.yml"} for r in runs]
         self.gh_api(f"repos/{O_R}/actions/workflows/precommit-check.yml/runs?per_page=50", {"workflow_runs": rs})
+        self.serve_found(rs)
         self.gh_api(f"repos/{O_R}/actions/runs?per_page=100", {"workflow_runs": rs})
         for r in rs:
             self.gh_api(f"repos/{O_R}/actions/runs/{r['id']}", r)

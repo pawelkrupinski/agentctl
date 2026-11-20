@@ -203,6 +203,7 @@ def failed_jobs(o_r, rid):
 def run_id_of_number(o_r, n):
     """The run id whose run NUMBER (run_number, the #N of every link) is n, or None."""
     try:
+        # listing: the newest 100 matched by number (GitHub filters by none); None is 'not found', callers fall back
         runs = forge_actions_runs(o_r, run_number=n, limit=5)
     except (Exception, SystemExit):
         return None

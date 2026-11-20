@@ -188,6 +188,7 @@ def cmd_cleanup(a):
             continue
         o_r = slug(repo)
         try:
+            # listing: one measure branch's runs; deleted only when every listed run finished
             runs_for = lambda b: gh_json(o_r, "run", "list", "--branch", b, "--limit", "20", "--json", "databaseId,status")
             mplan = plan_measure(o_r, runs_for)
         except Exception as e:

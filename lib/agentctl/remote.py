@@ -231,6 +231,7 @@ def remote_progress(rem, run, jobs, t, bounds=None):
 # laps meanwhile). A run whose check jobs have none started and which neither listing names for REMOTE_GHOST is
 # cancelled and given up (no verdict: re-checked, keeping its place), never waited on for hours.
 REMOTE_GHOST = 10 * 60  # s ($AGENTCTL_REMOTE_GHOST)
+REMOTE_LISTED_PAGES = 5  # pages of 100 of each status read before a ghost check says it cannot tell
 
 
 def remote_run_listed(o_r, rid):
@@ -238,9 +239,16 @@ def remote_run_listed(o_r, rid):
     be read (unsure: never a ghost)."""
     try:
         for status in ("queued", "in_progress"):
-            got = api(o_r, "GET", "actions/runs", {"status": status, "per_page": 100}) or {}
-            if any(str(r.get("id")) == str(rid) for r in got.get("workflow_runs") or []):
-                return True
+            for page in range(1, REMOTE_LISTED_PAGES + 1):
+                # listing: paged to its end; past REMOTE_LISTED_PAGES it cannot tell, which is never a ghost
+                runs = (api(o_r, "GET", "actions/runs", {"status": status, "per_page": 100, "page": page}) or {}) \
+                    .get("workflow_runs") or []
+                if any(str(r.get("id")) == str(rid) for r in runs):
+                    return True
+                if len(runs) < 100:
+                    break
+            else:
+                return True  # more than the pages read: absent from what was read proves nothing
         return False
     except (Exception, SystemExit):
         return True
@@ -275,9 +283,14 @@ def remote_poll(o_r, rem):
     read."""
     rem = dict(rem)
     if rem.get("run") is None:
-        runs = forge_actions_runs(o_r, workflow=REMOTE_WORKFLOW, limit=50)
-        hit = next((x for x in runs if x.get("head_sha") == rem["tip"]
-                    and x.get("head_branch") in (rem["branch"], f"refs/heads/{rem['branch']}")), None)
+        # listing: none -- the run agentctl's own push started is found by its workflow, branch and tip (A LISTING IS
+        # NEVER PROOF OF ABSENCE, forge.py); the newest 50 of a busy repo left it out
+        hit = forge_find_run(o_r, REMOTE_WORKFLOW, rem["branch"], rem["tip"])
+        if not hit:  # a forge whose runs API ignores the filters: the newest 50, as before, as a floor
+            # listing: the floor only; not found in it is "not started yet", bounded by REMOTE_START, never "none"
+            hit = next((x for x in forge_actions_runs(o_r, workflow=REMOTE_WORKFLOW, limit=50)
+                        if x.get("head_sha") == rem["tip"]
+                        and x.get("head_branch") in (rem["branch"], f"refs/heads/{rem['branch']}")), None)
         if not hit:
             return rem
         rem["run"] = hit["id"]

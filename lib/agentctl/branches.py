@@ -461,6 +461,7 @@ def branch_state(o_r, repo, prev=None):
     """[entry] per tracked (branch, workflow): the newest completed run, its owner, whether its branch is alive, and for
     a red one whether it PREDICTS MAIN RED (why not). A red no longer listed carries over from prev until its branch
     is gone."""
+    # listing: the newest BRANCH_RUNS_LIMIT; a red no longer listed carries over from prev until its branch is gone
     runs = gh_json(o_r, "run", "list", "--limit", str(BRANCH_RUNS_LIMIT), "--json", RUN_FIELDS + ",headBranch,event")
     recorded = {r.get("branch") for r in dispatch_records() if r.get("branch")}
     latest, newest_main = {}, {}
@@ -675,6 +676,7 @@ def orphan_branches(repo, o_r, dry, out, runs_for=None, store=None):
     """The sweep's part: remote tracked branches whose owner is gone (worktree removed or pid dead), or whose branch red
     closed as an orphan (no owner at all), and whose runs all finished. measure/* ones are deleted (the standing OK: a
     finished measure/* branch); the rest are listed."""
+    # listing: one branch's runs; a branch is swept only when every run listed finished (an unlisted older one is done)
     runs_for = runs_for or (lambda b: gh_json(o_r, "run", "list", "--branch", b, "--limit", "20", "--json", RUN_FIELDS))
     recorded = {r.get("branch") for r in dispatch_records() if r.get("branch")}
     found = []
@@ -773,6 +775,7 @@ def cmd_dispatch(a):
     rid = None
     for _ in range(int(env_num("AGENTCTL_DISPATCH_FIND", 12))):
         try:
+            # listing: the run just dispatched, created since t0; not listed yet is retried (DISPATCH_FIND), never 'none'
             runs = gh_json(o_r, "run", "list", "--workflow", a.workflow, "--branch", a.ref, "--limit", "5", "--json", RUN_FIELDS)
             fresh = [x for x in runs if str(x.get("createdAt", "")) >= t0.strftime("%Y-%m-%dT%H:%M:%SZ")]
             if fresh:

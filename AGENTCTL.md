@@ -1216,6 +1216,18 @@ briefed with the change's diff, its original worktree and why its lander could n
   runs; infra is owner-only (red-repos.json): its culprit is named but never reverted (`its pushes are the owner's`),
   and its fixer prepares the change as before.
 
+### listings: a listing is never proof of absence (2026-11-20)
+
+28 closed issues trusted a GitHub listing as complete (a run past the newest 50 or 200, a queued run GitHub's own
+listing left out, one attempt's jobs, a log cut short). forge.py's run listings return a `RunList` whose `complete`
+says whether it held everything that matched (its last page came back short); absent from an incomplete one is "cannot
+tell", never "none". A run agentctl itself started is found by its own identity: the remote check's run by workflow,
+branch and tip through GitHub's filters (`forge_find_run`), the newest 50 only as a floor for a forge that ignores
+them. The ghost check pages GitHub's queued / in-progress listing to its end (`REMOTE_LISTED_PAGES`), and past what it
+read it cannot tell, which is never a ghost (a long queue no longer gets a healthy run cancelled). Every other run
+listing in lib/agentctl/ says at its call site, in a `# listing:` line, how it treats a run it left out
+(tests/test_listings.py is the lint, and the find / ghost behaviour's tests).
+
 ### exit paths: every exit puts the worktree back (2026-11-20)
 
 11 closed issues were a path that left state behind (a NOT LANDED with its rebase in progress, a hook running 20 min

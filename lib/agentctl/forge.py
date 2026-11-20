@@ -242,7 +242,7 @@ def forge_run_list(o_r, args):
             else "actions/runs")
     params = {"exclude_pull_requests": "true"}
     params.update({k: opts[k] for k in ("branch", "status") if k in opts})
-    fields, runs, page = opts["json"].split(","), [], 1
+    fields, runs, page, complete = opts["json"].split(","), [], 1, False
     while len(runs) < opts["limit"]:
         per = min(100, opts["limit"]) if opts["limit"] <= 100 else 100
         try:
@@ -255,6 +255,7 @@ def forge_run_list(o_r, args):
         batch = answer.get("workflow_runs") or []
         runs += batch
         if len(batch) < per:
+            complete = len(runs) <= opts["limit"]
             break
         page += 1
 
@@ -268,7 +269,9 @@ def forge_run_list(o_r, args):
             out["conclusion"] = r.get("conclusion") or ""  # gh prints a pending run's conclusion as ""
         return out
 
-    return [shaped(r) for r in runs[:opts["limit"]]]
+    out = RunList(shaped(r) for r in runs[:opts["limit"]])
+    out.complete = complete
+    return out
 
 
 # -- GitHub's runs as agentctl's run record
@@ -289,15 +292,40 @@ def run_record(r):
             "workflow_id": os.path.basename(r.get("path") or "") or r.get("workflow_id")}
 
 
+# A LISTING IS NEVER PROOF OF ABSENCE (2026-11-20, the owner: "fix agentctl issues structurally"; 28 closed issues
+# trusted what GitHub listed -- a run past the newest 50 or 200, a queued run GitHub's own listing left out, a job list
+# from one attempt, a log cut short). A listing says whether it holds EVERYTHING that matched (RunList.complete: its
+# last page came back short); absent from an incomplete one is "cannot tell", never "none". A run agentctl itself
+# started is looked up by its own identity -- its workflow, branch and head sha, filtered by GitHub -- never by scanning
+# the newest N (forge_find_run). tests/test_listings.py fails any run listing in lib/agentctl/ whose call site does not
+# say, in a `# listing:` line, how it treats a run the listing left out.
+class RunList(list):
+    """A list of runs that knows whether it is everything that matched (`complete`)."""
+    complete = False
+
+
 def forge_actions_runs(o_r, workflow=None, run_number=None, limit=50):
-    """The newest action runs (run_record), optionally of one workflow file or with one run number."""
+    """The newest action runs (run_record), optionally of one workflow file or with one run number: a RunList, complete
+    when GitHub's page held every match."""
     path = f"actions/workflows/{urllib.parse.quote(workflow, safe='')}/runs" if workflow else "actions/runs"
-    runs = [run_record(r) for r in
-            (api(o_r, "GET", path, {"per_page": 100 if run_number is not None else min(int(limit), 100)}) or {})
-            .get("workflow_runs") or []]
+    per = 100 if run_number is not None else min(int(limit), 100)
+    raw = (api(o_r, "GET", path, {"per_page": per}) or {}).get("workflow_runs") or []
+    runs = [run_record(r) for r in raw]
     if run_number is not None:  # GitHub filters runs by no number: the newest 100, matched here
         runs = [r for r in runs if str(r["run_number"]) == str(run_number)]
-    return runs[:int(limit)]
+    out = RunList(runs[:int(limit)])
+    out.complete = len(raw) < per and len(runs) <= int(limit)
+    return out
+
+
+def forge_find_run(o_r, workflow, branch, head_sha):
+    """The newest run of workflow file `workflow` on `branch` at `head_sha` (run_record), found by GitHub's own filters
+    -- never a scan of the newest N, which a busy repo pushes it out of -- or None when GitHub has none."""
+    path = f"actions/workflows/{urllib.parse.quote(workflow, safe='')}/runs"
+    raw = (api(o_r, "GET", path, {"branch": branch, "head_sha": head_sha, "per_page": 10}) or {}).get("workflow_runs") or []
+    hits = [run_record(r) for r in raw if r.get("head_sha") == head_sha
+            and r.get("head_branch") in (branch, f"refs/heads/{branch}")]
+    return max(hits, key=lambda r: int(r.get("id") or 0)) if hits else None
 
 
 def forge_actions_run(o_r, rid):

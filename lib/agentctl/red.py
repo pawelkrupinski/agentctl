@@ -201,6 +201,7 @@ def workflow_main_runs(o_r, wfile):
     at, runs = _verify_runs.get((o_r, wfile), (0.0, None))
     if runs is None or time.time() - at >= VERIFY_RUNS_TTL:
         try:
+            # listing: a fix is verified by a run CONTAINING it, the newest 30 read; none there keeps it pending, never refuted
             runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30",
                            "--json", RUN_FIELDS) or []
         except (Exception, SystemExit) as e:
@@ -2352,6 +2353,7 @@ def decided_run_jobs(o_r, rid):
 def newest_green_main(o_r, workflow):
     """The newest green run of workflow on main from GitHub (its file when main names it), or None."""
     wfile = main_workflow_files(o_r).get(workflow, workflow) if not red_is_other(o_r) else workflow
+    # listing: GitHub's own success filter; [] is 'never green' only from this complete filtered answer
     runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--status", "success", "--limit", "1",
                    "--json", RUN_FIELDS)
     return next((r for r in runs or [] if r.get("conclusion") == "success"), None)

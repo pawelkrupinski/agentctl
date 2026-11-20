@@ -347,6 +347,7 @@ _not_on_main_said = process_cache(set())  # said once per workflow file per proc
 def main_runs(o_r, wfile, limit=30):
     """A workflow's runs on main, newest first; [] when GitHub says its file is not on the default branch."""
     try:
+        # listing: the newest `limit` of one workflow on main; callers read its newest decided run, never an absence
         return gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", str(limit),
                        "--json", RUN_FIELDS)
     except RuntimeError as e:
@@ -469,6 +470,7 @@ def gate_runs(o_r, flows=None):
     run on main."""
     flows = flows or (gate_flows(o_r) if gated_repo(o_r) else None)
     if not flows:
+        # listing: only names the workflows to read; each is then read on its own (main_runs)
         recent = gh_json(o_r, "run", "list", "--branch", "main", "--limit", "40", "--json", RUN_FIELDS)
         flows = [(n, n) for n in dict.fromkeys(r["workflowName"] for r in recent)]
     out = []
@@ -567,6 +569,7 @@ def stuck_history(o_r, name):
     at, runs = _flow_history.get(wfile, (0.0, None))
     if runs is None or time.time() - at >= OUTSIDE_FLOW_RECHECK:
         try:
+            # listing: samples of a workflow's run lengths (the stuck limit); fewer samples widen it, never narrow it
             runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--status", "completed",
                            "--limit", "30", "--json", RUN_FIELDS)
             _flow_history[wfile] = (time.time(), runs)
@@ -670,6 +673,7 @@ def outside_gate(o_r):
     that gets ignored). EVERY workflow file on main is read (audit #7): those in the newest 200 runs from that list,
     the others listed on their own (at most every OUTSIDE_FLOW_RECHECK)."""
     gated = {n for n, _ in red_gate_flows(o_r)}
+    # listing: the newest 200 across workflows; a workflow absent from it is listed on its own below
     runs = gh_json(o_r, "run", "list", "--branch", "main", "--limit", "200", "--json", RUN_FIELDS)
     lists = {}
     for r in runs:
@@ -681,6 +685,7 @@ def outside_gate(o_r):
         at, mine = _flow_runs.get(wfile, (0.0, None))
         if mine is None or time.time() - at >= OUTSIDE_FLOW_RECHECK:
             try:
+                # listing: the workflow's own newest 30, read because the cross-workflow 200 left it out
                 mine = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30",
                                "--json", RUN_FIELDS)
                 _flow_runs[wfile] = (time.time(), mine)
@@ -946,6 +951,7 @@ def runs_of_number(o_r, n):
                 seen.add(r.get("databaseId"))
                 hits.append(r)
     try:
+        # listing: a run number's hits in the newest 200; each gate workflow not hit is asked on its own below
         take(gh_json(o_r, "run", "list", "--branch", "main", "--limit", "200", "--json", RUN_FIELDS))
     except (Exception, SystemExit) as e:
         err(f"ci-why: could not list main's runs ({str(e)[:120]})")
