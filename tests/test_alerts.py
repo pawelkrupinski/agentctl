@@ -387,6 +387,40 @@ class ClearedOwnerAlertTest(AlertBase):
         self.assertIsNone(self.closed_why(held))
         self.assertIn("batch", self.closed_why(moved) or "")
 
+    def test_a_closed_issues_alert_retires_itself(self):
+        """2026-11-19: `AGENTCTL ISSUE 20261104T044122-55799d open 15 d` reached the owner, the issue was closed, and
+        its alert stayed unread: no probe knew an `issue:` item. An alert about a store item with a state (an issue, a
+        hold, an explorer flip...) closes, acked with why, once that item is in a terminal state or gone."""
+        quoted = ("red c494fec65b9d (Main #2128) went RED BLOCKED ON OWNER (inbox ev3602, 'WAITING ON YOU: either "
+                  "design and measure...') and 13 min later RED ESCALATE")  # the quote routes it to the owner
+        it = A.issue_open(self.st, "A red parked on the owner is offered back: " + quoted, "session 8de717dc")
+        open_one = A.issue_open(self.st, "Still open: a fixer read 'WAITING ON YOU: accept Hen as known-wrong' as no "
+                                "decision", "session x")
+        t = time.time() + 8 * 86400
+        for n in range(2):  # the reconciler's weekly escalation, one issue a pass
+            self.assertTrue(A.tick_issues(self.st, now_=t + n * 3600))
+        A.project_events(self.st)
+        alerts = {e.get("item"): e["id"] for e in self.unread("owner")}
+        self.assertIn(f"issue:{it['id']}", alerts, alerts)
+        A.issue_close(self.st, it["id"], "fixed in abc", "maintainer")
+        A.reconcile_alerts(self.st, force=True)
+        self.assertIn("issue is closed", self.closed_why(alerts[f"issue:{it['id']}"]) or "")
+        self.assertIsNone(self.closed_why(alerts[f"issue:{open_one['id']}"]), "its issue is still open")
+        self.assertNotIn(alerts[f"issue:{it['id']}"], [e["id"] for e in self.unread()])
+
+    def test_an_alert_about_a_store_item_gone_from_the_store_retires_itself(self):
+        gone = self.legacy("AGENTCTL ISSUE 20261101T000000-abcdef open 9 d (filed by x): y", "issue:20261101T000000-abcdef",
+                           command="issue")
+        self.st.put_item("hold", "main", "held", {"by": "x"})
+        hold = self.st.item("hold", "main")
+        held = self.legacy("HOLD main: landing held by x", "hold:main", command="land")
+        A.reconcile_alerts(self.st, force=True)
+        self.assertIn("gone", self.closed_why(gone) or "")
+        self.assertIsNone(self.closed_why(held), "the hold is still held")
+        self.st.transition("hold", "main", "released", hold["version"])
+        A.reconcile_alerts(self.st, force=True)
+        self.assertIn("hold is released", self.closed_why(held) or "")
+
 
 if __name__ == "__main__":
     unittest.main()

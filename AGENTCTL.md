@@ -2201,9 +2201,13 @@ agentctl inbox wait [--kinds INVARIANT,NETWORK,RED_STARVED,RED,BRANCH_RED,FIX_FA
 `--forever` never exits: it streams each such entry once, one line each, as it appears -- ONE long-lived background
 task (Monitor or `run_in_background`) covers the whole session, no re-arm needed; ack as you route.
 
-It blocks until an UNREAD entry of those kinds (the default above) exists, prints every such entry, and exits 0 (2 at
-`--timeout`). It acknowledges nothing. `--since-ack` skips entries older than the last acknowledgement (an old
-backlog). It is cheap: one `stat()` of the inbox directory and of `acked/` a second (`$AGENTCTL_INBOX_POLL`), the
+It blocks until an UNREAD entry of those kinds (the default above, and with no `--kinds` every alert addressed to the
+owner, whatever its kind) exists, prints every such entry, and exits 0 (2 at `--timeout`). It acknowledges nothing.
+Unread is judged PER ENTRY: every arming prints the whole unread backlog first, whatever was acknowledged after it.
+`--since-ack` is accepted and means just that (until 2026-11-20 it skipped everything older than the NEWEST ack, so an
+orchestrator acking one id at a time hid an older unread owner alert for a day). An alert whose subject has resolved
+(its issue closed, its red closed, its hold released, its question no longer asked...) is acked by the reconcile pass
+with its `closed` reason, so the backlog is only what is still open. It is cheap: one `stat()` of the inbox directory and of `acked/` a second (`$AGENTCTL_INBOX_POLL`), the
 entries re-read only when either changed; no forge, no git. The orchestrating Claude session's loop:
 
 1. run `~/bin/agentctl inbox wait` with the Bash tool's `run_in_background=true`, and end the turn (or go on working);

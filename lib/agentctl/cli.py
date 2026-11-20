@@ -257,10 +257,12 @@ def main(argv=None):
                                       "kept whether or not the agent that ran it is alive")
     ib.add_argument("ids", nargs="*", metavar="ID", help="only these entries (an id prefix); or `wait`: block until an "
                                                           "unread entry of --kinds exists, print it, exit 0 (the notifier)")
-    ib.add_argument("--kinds", default=WAIT_KINDS_DEFAULT,
-                    help=f"wait: the kinds that wake it (default {WAIT_KINDS_DEFAULT}; also OK, FIX_OK, FIX_UNVERIFIED, "
+    ib.add_argument("--kinds", default=None,
+                    help=f"wait: the kinds that wake it (default {WAIT_KINDS_DEFAULT}, and any alert addressed to the "
+                         "owner; also OK, FIX_OK, FIX_UNVERIFIED, "
                          "LANDED, WAITING, HELD, CHECK, OTHER)")
-    ib.add_argument("--since-ack", action="store_true", help="wait: only entries newer than the last acknowledgement")
+    ib.add_argument("--since-ack", action="store_true", help="wait: only entries not acknowledged yet, "
+                    "each judged by itself (always so: kept for the watchers that pass it)")
     ib.add_argument("--timeout", type=float, default=0, help="wait: give up after S seconds, exit 2 (default: never)")
     ib.add_argument("--forever", action="store_true", help="wait: never exit; stream each entry once, one line each")
     ib.add_argument("--audience", default=None, help="only the alerts addressed to these (owner, author, fixer, info; "

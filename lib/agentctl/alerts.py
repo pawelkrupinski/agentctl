@@ -463,6 +463,16 @@ def alert_probe(st, item, e, t, ctx=None):
         wt = item[3:].split(":", 1)[0]
         if wt and os.path.isabs(wt) and not os.path.isdir(wt):
             return "its worktree is gone", None
+    typ, _, iid = item.partition(":")
+    if typ in MACHINES and iid:
+        # ANY STORE ITEM WITH A STATE (2026-11-19: issue 55799d's escalation stayed unread a day after the issue was
+        # closed -- no probe knew `issue:`): an issue, a hold, an explorer flip, a branch red, a batch... -- its alert
+        # retires once the item is terminal or gone from the store
+        it = st.item(typ, iid)
+        if it is None:
+            return f"its {typ} is gone", None
+        if machine_state(typ, it["state"]).terminal:
+            return f"its {typ} is {it['state']}", None
     return alert_probe_cleared(st, item, e, t, ctx if ctx is not None else {}), None
 
 

@@ -250,13 +250,60 @@ class InboxTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("WATCH OK", out)
 
-    def test_inbox_wait_since_ack_skips_the_backlog(self):
-        A.inbox_write("watch", "WATCH RED: Main #1 old", [], [], 3)
-        os.makedirs(os.path.join(self.inbox, "acked"), exist_ok=True)
+    def test_inbox_wait_since_ack_wakes_on_an_old_unread_entry_after_a_newer_ack(self):
+        """2026-11-19: an owner entry (issue 55799d's alert) sat unread a day -- `--since-ack` took the NEWEST ack's time
+        as a floor, and the orchestrator acks one id at a time, so every later-acked entry hid the older unread one.
+        Unread is per entry: an entry not acknowledged wakes the watcher whatever was acked after it."""
+        old = A.inbox_write("watch", "WATCH RED: Main #1 old", [], [], 3)
         time.sleep(0.02)
-        open(os.path.join(self.inbox, "acked", "something"), "a").close()
-        code, out = self.wait("--since-ack", "--timeout", "0.2")
-        self.assertEqual(code, 2, out)
+        newer = A.inbox_write("watch", "WATCH RED: Main #2 newer", [], [], 3)
+        self.run_main(["inbox", newer, "--ack"])
+        code, out = self.wait("--since-ack", "--timeout", "5")
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"{old} UNREAD watch", out)
+        self.assertNotIn(newer, out)
+
+    def test_rearming_the_watcher_prints_the_backlog_at_once(self):
+        """An orchestrator re-arming its watcher (after a compaction, a restart) is shown every unread entry there and
+        then -- once per arming, the one-shot and the streaming one alike -- never only what arrives later."""
+        first = A.inbox_write("watch", "WATCH RED: Main #1 test", [], [], 3)
+        second = A.inbox_write("land", "NOT LANDED: the checks failed", [], [], 1)
+        for n in range(2):  # armed; a newer entry routed and acked; armed again: the same backlog
+            if n:
+                time.sleep(0.02)
+                self.run_main(["inbox", A.inbox_write("watch", "WATCH RED: Main #3 routed", [], [], 3), "--ack"])
+            code, out = self.wait("--since-ack", "--timeout", "5")
+            self.assertEqual(code, 0, out)
+            self.assertIn(first, out)
+            self.assertIn(second, out)
+        from unittest import mock
+
+        class Armed(Exception):
+            pass
+        out = io.StringIO()
+        with mock.patch("time.sleep", side_effect=Armed), contextlib.redirect_stdout(out):
+            with self.assertRaises(Armed):  # its first pass, before it sleeps: the backlog is out
+                A.inbox_wait(A.WAIT_KINDS_DEFAULT, since_ack=True, forever=True, audience="all")
+        self.assertIn(first, out.getvalue())
+        self.assertIn(second, out.getvalue())
+
+    def test_the_owners_watcher_wakes_on_any_alert_addressed_to_the_owner(self):
+        """An issue's weekly escalation is kind OTHER, addressed to the owner by the event projector: the owner's
+        default watcher wakes on it (an explicit --kinds still selects by kind alone)."""
+        rec = {"id": "20261119T121335006151-ev13287-issue-open", "time": "t", "at": time.time(), "command": "issue",
+               "final": True, "exit": 1, "verdict": "AGENTCTL ISSUE 20261104T044122-55799d open 15 d (filed by x): y",
+               "kind": "OTHER", "verdicts": [], "tail": [], "item_type": "issue", "item_id": "20261104T044122-55799d",
+               "audience": "owner"}
+        A.alert_write(rec)
+        os.environ["AGENTCTL_INBOX_POLL"] = "0.02"
+        try:
+            code, out = self.run_main(["inbox", "wait", "--since-ack", "--timeout", "5"])
+            self.assertEqual(code, 0, out)
+            self.assertIn("AGENTCTL ISSUE 20261104T044122-55799d", out)
+            code, out = self.run_main(["inbox", "wait", "--kinds", "RED", "--timeout", "0.2"])
+            self.assertEqual(code, 2, out)
+        finally:
+            del os.environ["AGENTCTL_INBOX_POLL"]
 
     def test_inbox_wait_wakes_on_a_new_entry(self):
         import threading

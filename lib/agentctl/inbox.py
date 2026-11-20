@@ -191,32 +191,29 @@ def entry_line(e):
     return f"{e['id']} {'read  ' if e['read'] else 'UNREAD'} {e.get('command')} {where} {state}: {e.get('verdict')}"
 
 
-def last_ack(d):
-    """When anything was last acknowledged (the newest file in acked/), 0 if never."""
-    acked = os.path.join(d, "acked")
-    try:
-        return max([os.stat(acked).st_mtime] + [os.stat(os.path.join(acked, n)).st_mtime for n in os.listdir(acked)])
-    except OSError:
-        return 0.0
-
-
 INBOX_WAIT_POLL = 1.0  # seconds between stat()s of the inbox directory ($AGENTCTL_INBOX_POLL)
 
 
-def inbox_wait(kinds, since_ack=False, timeout=0, verbose=False, forever=False, audience="owner"):
+def inbox_wait(kinds=None, since_ack=False, timeout=0, verbose=False, forever=False, audience="owner"):
     """THE NOTIFIER: block until an unread entry of `kinds` exists, print it (every one there is), exit 0; 2 at the
-    timeout. Cheap: one stat() of the inbox directory (and of acked/) a second, the entries read again only when either
-    changed (a new entry is an os.replace into the directory, an ack a file in acked/). No forge, no git.
+    timeout. kinds None: WAIT_KINDS_DEFAULT, and every alert addressed to the owner whatever its kind (an issue's
+    escalation is OTHER, and it is the owner's to act on).
+    UNREAD IS PER ENTRY (2026-11-19: issue 55799d's owner alert sat unread a day): an entry not acknowledged wakes it,
+    whatever was acknowledged after it. `--since-ack` once meant "newer than the newest ack", and the orchestrator acks
+    one id at a time, so every later-acked entry hid an older unread one; it is accepted and means just that now. So
+    every arming prints the whole unread backlog first: a re-armed watcher (a compaction, a restart) never misses it.
+    Cheap: one stat() of the inbox directory (and of acked/) a second, the entries read again only when either changed
+    (a new entry is an os.replace into the directory, an ack a file in acked/). No forge, no git.
     forever: never exits; streams each such entry once, one line each, as it appears (one background task a session).
     audience (THE ALERT MODEL, alerts.py): only entries addressed to it -- the owner's by default; "all" every one. An
     alert updated in place is streamed again only when it is SURFACED again (it became the owner's, a new tier)."""
     d = inbox_dir()
     os.makedirs(d, exist_ok=True)
-    want = {k.strip().upper().replace("-", "_") for k in kinds.split(",") if k.strip()}
+    owner_any = kinds is None
+    want = {k.strip().upper().replace("-", "_") for k in (kinds or WAIT_KINDS_DEFAULT).split(",") if k.strip()}
     auds = None if audience in (None, "", "all") else {x.strip() for x in str(audience).split(",") if x.strip()}
     with alert_lock(d):
         alert_index(d)  # the first use migrates the backlog into the model: no flood
-    floor = last_ack(d) if since_ack else 0.0
     poll = env_num("AGENTCTL_INBOX_POLL", INBOX_WAIT_POLL)
     t0, seen, printed = time.time(), None, set()
     while True:
@@ -227,9 +224,10 @@ def inbox_wait(kinds, since_ack=False, timeout=0, verbose=False, forever=False, 
             stamp = None
         if stamp != seen:
             seen = stamp
-            hits = [e for e in inbox_entries() if not e["read"] and (e.get("at") or 0) > floor
-                    and (e.get("kind") or inbox_kind(e.get("verdict"), e.get("final", True))) in want
-                    and (auds is None or alert_audience(e) in auds)]
+            hits = [e for e in inbox_entries() if not e["read"]
+                    and (auds is None or alert_audience(e) in auds)
+                    and ((e.get("kind") or inbox_kind(e.get("verdict"), e.get("final", True))) in want
+                         or (owner_any and alert_audience(e) == "owner"))]
             if forever:
                 for e in hits:
                     if (e["id"], e.get("surfaced") or 1) not in printed:
