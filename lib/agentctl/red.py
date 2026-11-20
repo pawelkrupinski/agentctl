@@ -3626,6 +3626,17 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
             if t - float(ch.get("entered_at") or 0) < env_num("AGENTCTL_RED_FIX_REQUEUE_GRACE", RED_FIX_REQUEUE_GRACE):
                 return []  # a re-queue of its worktree may follow the cancel
             status = ended
+        if status in FIX_OPEN and f.get("linked") and not (fix and fix.get("entry") == f.get("entry")):
+            # A LINK THAT NO LONGER HOLDS IS NO FIX (2026-11-20, Order independence #89: parked on metrics-packages,
+            # linked through a script by a rule since dropped, while its owner held the lease): back to its holder
+            why = f"{f.get('entry')} no longer links it (no Fixes-Red, nor its workflow file)"
+            row = store.get(red_lease(d["key"]))
+            if lease_is_live(row, t):
+                red_move(store, it, "leased", f"{red_what(d)}: {why}: its holder {row['holder']} keeps it",
+                         data={"fix": None, "holder": row["holder"]})
+                return [f"leased {red_what(d)} ({why})"]
+            red_offer(store, it, f"{red_what(d)}: {why}: offered again", data={"fix": None})
+            return [f"re-offered {red_what(d)} ({why})"]
         if status in FIX_OPEN:
             return []
         if not fix:  # its change was rejected, cancelled or superseded, and no other fix is on its way

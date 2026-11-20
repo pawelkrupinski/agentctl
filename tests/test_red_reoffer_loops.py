@@ -153,6 +153,26 @@ class ReOfferLoopTest(RedsBase):
         it = self.only()
         self.assertNotEqual(it["state"], "fix-pending", f"{it['data'].get('fix')}")
 
+    def test_a_red_parked_on_an_untrailered_change_that_no_longer_links_it_goes_back_to_its_holder(self):
+        """Order independence #89 sat fix-pending on metrics-packages (linked through a script before that link was
+        dropped) while its family owner still held the lease: ci-why kept naming that change as its fix. A pending fix
+        whose change no longer links the red is no fix: the red is its live holder's again (offered with none)."""
+        self.r.write("scripts/ci/capture.sh", "#!/bin/sh\ncapture\n")
+        self.r.commit("the capture script")
+        self.r.push()
+        it = self.outside_capture_red()
+        wt = self.r.worktree("repo-wt-owner", branch="repo-wt-owner")
+        self.st.acquire(A.red_lease(it["data"]["key"]), "laptop:claim:owner@" + wt, 1800, 3600,
+                        meta={"kind": "claim", "worktree": wt})
+        e = self.queued_entry("tidy the capture script, no trailer", "waiting", path="scripts/ci/capture.sh")
+        self.st.put_item("change", e["id"], "waiting", {"worktree": e["worktree"], "head": e["head"]})
+        A.red_move(self.st, self.only(), "fix-pending", "parked by the old rule", data={"fix": {
+            "entry": e["id"], "status": "waiting", "linked": "its workflow's own files"}})
+        self.tick(advance=60)
+        it = self.only()
+        self.assertEqual(it["state"], "leased", it["data"].get("fix"))
+        self.assertIsNone(it["data"].get("fix"))
+
     def test_20261101T030050_695594_a_fixers_agentctl_defect_verdict_waits_on_the_issue_never_goes_back_to_a_fixer(self):
         self.tick()
         key = self.only()["data"]["key"]
