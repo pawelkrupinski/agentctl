@@ -748,6 +748,7 @@ def sync_onto_main(repo, main_ref, sh, release_hold=False):
     if landed(repo, head, main_ref):
         print(f"LANDED {head} (the rebase left nothing: already on {remote()}/main)")
         return 0, None
+    head = land_before_queue(repo, head)
     if fix_replay_blocks(repo, head):
         return 1, None
     problems = check_range(repo, f"{remote()}/main", head, [], int(env_num("AGENTCTL_MAX_FOREIGN", MAX_FOREIGN)))
@@ -755,6 +756,41 @@ def sync_onto_main(repo, main_ref, sh, release_hold=False):
         print("NOT LANDED: prepush-check refused:\n  " + "\n  ".join(problems))
         return 1, None
     return None, head
+
+
+# THE REPO'S OWN STEP AFTER THE REBASE (2026-11-20, the movies stamp carry: a proven-equivalent identity change keeps its
+# stamps only if a lane remembers to write the carry rows, and 3-7 of 37 stamp-moving deploys would have): a repo's
+# executable LAND_BEFORE_QUEUE runs with <origin/main> <head> on the rebased change, and may commit onto it -- the commit
+# then rides the same push, judged by the same checks. It never refuses a land: a failure or a timeout is said and the
+# head stays as it was.
+LAND_BEFORE_QUEUE = "scripts/land-before-queue"
+LAND_BEFORE_QUEUE_SECONDS = 1200
+
+
+def land_before_queue(repo, head):
+    """The head after the repo's LAND_BEFORE_QUEUE step: head itself, or a descendant the step committed onto it."""
+    tool = os.path.join(repo, LAND_BEFORE_QUEUE)
+    if not os.access(tool, os.X_OK):
+        return head
+    base = git(repo, "rev-parse", f"{remote()}/main").strip()
+    branch = git(repo, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip()
+    try:
+        r = subprocess.run([tool, base, head], cwd=repo, capture_output=True, text=True, env=tool_env(),
+                           timeout=env_num("AGENTCTL_LAND_BEFORE_QUEUE_SECONDS", LAND_BEFORE_QUEUE_SECONDS))
+        for line in (r.stdout + r.stderr).strip().splitlines()[-12:]:
+            err(f"{LAND_BEFORE_QUEUE}: {line}")
+    except subprocess.TimeoutExpired:
+        err(f"{LAND_BEFORE_QUEUE}: timed out; the change lands as it was")
+    now = git(repo, "rev-parse", "HEAD").strip()
+    if now != head and git(repo, "merge-base", "--is-ancestor", head, now, check=False).returncode != 0:
+        err(f"{LAND_BEFORE_QUEUE}: left HEAD off the change ({now[:10]}): put back on {head[:10]}")
+        if branch:
+            git(repo, "checkout", "-q", "--force", branch)
+        git(repo, "reset", "-q", "--hard", head)
+        return head
+    if now != head:
+        err(f"{LAND_BEFORE_QUEUE}: added {git(repo, 'rev-list', '--count', f'{head}..{now}').strip()} commit(s) to the change")
+    return now
 
 
 # FIX REPLAY at land (red.py): on the rebased head, agentctl runs each bare `Fix-Replay: <command>` of a Fixes-Red push

@@ -121,7 +121,10 @@ moves it forward; nothing is a detached process that can die with its state in i
     scheduled workflow is DISPATCHED to verify only when the repo's one per-workflow registry, `.github/red-workflows.tsv`
     on main, says so: tab-separated `workflow  verify_dispatch (yes|no)  replay (a command, `{run}` = the red's failing
     run id, or -)  why`, `#` comments (Record scrape fixtures, a paid-proxy scrape of every cinema, is `no`); an
-    unscheduled one is dispatched as before. FIX REPLAY: when a red's workflow row names a `replay`, `land` warns on a
+    unscheduled one is dispatched as before. THE REPO'S STEP AFTER THE REBASE (2026-11-20): a repo's executable
+    `scripts/land-before-queue <origin/main> <head>` runs on the rebased change before its checks, and may commit onto it
+    (movies: the identity stamp carry's rows); the commit rides the same push. It never refuses a land: a failure or a
+    timeout (`$AGENTCTL_LAND_BEFORE_QUEUE_SECONDS`, 1200) leaves the change as it was. FIX REPLAY: when a red's workflow row names a `replay`, `land` warns on a
     push whose `Fixes-Red:` names that red unless one of its commits carries `Fix-Replay: <the command> base=FAIL
     head=PASS` (the replay run at origin/main and at the fix), naming the command to run (Alert backtest 5254bffda9d2,
     2026-11-19: seven fixes landed unreplayed and the nightly refuted each; policy `fix-replay-outside`, warn-only by
@@ -2683,6 +2686,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `kick_handoff_wait` | `AGENTCTL_KICK_HANDOFF_WAIT` | `30` | s a kick waits for launchd's new processor to listen before handing it the token |
 | `landed_look` | `AGENTCTL_LANDED_LOOK` | `600` | - |
 | `lander_landed_every` | `AGENTCTL_LANDER_LANDED_EVERY` | `300` | s between the tick's notes of landed changes' commits on main |
+| `land_before_queue_seconds` | `AGENTCTL_LAND_BEFORE_QUEUE_SECONDS` | `1200` | - |
 | `land_lease_max` | `AGENTCTL_LAND_LEASE_MAX` | `2700` | the design's 300 s once checks no longer run in the push's hook under the lease (step 6) |
 | `land_lease_ttl` | `AGENTCTL_LAND_LEASE_TTL` | `120` | - |
 | `land_lock_timeout` | `AGENTCTL_LAND_LOCK_TIMEOUT` | `14400` | - |
