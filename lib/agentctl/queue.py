@@ -2073,6 +2073,9 @@ def _tick_changes_pass(repo, d, st, t, facts, kinds, phase, mine, todo, held, ph
                           f"{', '.join(shared[:3])}" + (f" (+{len(shared) - 3} more)" if len(shared) > 3 else ""), t,
                           blocker=o["id"], files=shared[:10])
                 continue
+        if state == "queued" and not alive and joins_unchecked(repo, e, kind, facts, t):
+            did.append(join_unchecked(repo, d, e))  # THE BATCH IS THE MECHANISM (batch.py): its check is the batch's
+            continue
         if e.get("regen_hold") and regen_hold_expired(d, e, t):
             continue
         if alive or e.get("retry_after", 0) > t:
@@ -2113,6 +2116,33 @@ def _tick_changes_pass(repo, d, st, t, facts, kinds, phase, mine, todo, held, ph
         spawn_executor(repo, d, e["id"])
         did.append(f"{e['id']}: executor started")
     return did
+
+
+def joins_unchecked(repo, e, kind, facts, t):
+    """Whether queued change e skips a check of its own and joins the waiting batch unchecked: the gate red, e a
+    production change that must wait for green (no red fix), batchable (changekind.py), no round or hold of its own due
+    (THE BATCH IS THE MECHANISM, batch.py: the waiting batch pre-checks every waiting change as one)."""
+    gate = facts.get("gate") or set()
+    if not gate or kind.get("red_fix") or kind.get("backlog_batch") is not None or e.get("verify") \
+            or e.get("regen_hold") or float(e.get("retry_after") or 0) > t or not waiting_supported(repo):
+        return False
+    rem = e.get("remote") or {}
+    if rem.get("run") is not None and not rem.get("collected_at"):  # its own run: a checker adopts it
+        return False
+    return bool(e.get("commits")) and must_wait(repo, e["commits"], gate)
+
+
+def join_unchecked(repo, d, e):
+    """Queued change e joins `waiting` unchecked (joins_unchecked); its WAITING note says the batch checks it."""
+    for k in QUEUE_ONLY_FIELDS:
+        e.pop(k, None)
+    e.update(tip=e.get("head"), fixes=sorted(fixes_of(repo, e.get("commits") or [])))
+    line = (note_waiting(d, os.path.join(d, f"check-{e['id']}"), e.get("head"), e["id"])
+            + f": {remote()}/main is red, so it joins the waiting batch unchecked -- the batch pre-checks every waiting "
+              "change as one and lands them in one push at green")
+    set_change(d, e, "waiting", event=change_event(e, line, code=None, final=False), decided=ts(), unchecked=True)
+    wlog(d, f"{e['id']}: {line}")
+    return f"{e['id']}: joined the waiting batch unchecked"
 
 
 def _push_checked(repo, d, st, t, e, fix, todo, pheld, kinds=None):
@@ -2246,14 +2276,6 @@ def main_conflict(repo, e):
     return (main, files) if files else None
 
 
-def second_identity(repo, d, e, entries, facts, t):
-    """Whether queued change e is an identity change the next backlog batch leaves out: an older queued identity
-    change may join it (ONE IDENTITY CHANGE PER BATCH, batch.py backlog_candidates)."""
-    return bool(identity_change(repo, e)) and any(
-        o["seq"] < e["seq"] and o["id"] != e["id"] and o.get("status") == "queued" and not o.get("backlog_batch")
-        and identity_change(repo, o) and backlog_batchable(repo, d, o, t, facts) for o in entries)
-
-
 def overlap_hold(repo, d, e, entries, facts, t):
     """(older entry, shared files, conflicting files or None) queued change e waits for (OVERLAPPING CHANGES ARE
     CHECKED AS ONE), or None."""
@@ -2272,8 +2294,8 @@ def overlap_hold(repo, d, e, entries, facts, t):
         if not shared:
             continue
         if conflict is None and o.get("status") == "queued" and not o.get("backlog_batch"):
-            if together is None:  # ONE IDENTITY CHANGE PER BATCH (batch.py): a second one is no batch member
-                together = backlog_batchable(repo, d, e, t, facts) and not second_identity(repo, d, e, entries, facts, t)
+            if together is None:
+                together = backlog_batchable(repo, d, e, t, facts)
             if together and backlog_batchable(repo, d, o, t, facts):
                 continue  # the next backlog batch checks them as one
         if conflict:  # the one it cannot be assembled with is the one its author hears of

@@ -813,7 +813,7 @@ class QueueTest(WaitingTest):
         self.check(ea)
         self.assertEqual(entry(ea)["fixes"], ["7"], "the entry names the red")
         for _ in range(2):  # the second tick: it stays blocked, never flips back to assembling
-            A.tick_batch(self.r.path, d)
+            self.drive()  # (THE BATCH IS THE MECHANISM: its red pre-check runs, then it is blocked again)
             self.assertEqual(self.batch()["state"], "blocked-red", "nothing in it may land on red")
         self.assertIsNone(A.batch_goes_first(A.Store(), d))
         wb, _ = self.agent("b", "scripts/b.sh", "echo b\n", msg="b: tools only")

@@ -172,13 +172,13 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
 
     # ------------------------------------------------------------------------------------------- the overlap hold
     def test_a_change_sharing_only_the_baseline_with_one_in_flight_is_not_held(self):
-        eo = self.change("older", {"ce\tservices": 6}, {"identity/src/main/I.scala": "i\n"})  # identity: checked alone
+        eo = self.change("older", {"ce\tservices": 6}, {"identity/src/main/I.scala": "i\n"})
         ey = self.change("younger", {"ce\ttools": 1}, {"identity/src/main/J.scala": "j\n"})
         did = A.tick_changes(self.r.path, self.d)
-        self.assertEqual(self.started, [eo, ey], f"both checked at once: {did}")
+        self.assertEqual(self.started, [], f"both wait for the backlog batch, none for the other: {did}")
         self.assertEqual([x for x in self.inbox() if "CONFLICTS" in json.dumps(x)], [], "no conflict to tell")
         hold = (A.Store().item("change", ey)["data"] or {}).get("hold") or {}
-        self.assertEqual(hold.get("kind"), "starting", "not held: its executor is starting (`land status` says so)")
+        self.assertEqual(hold.get("kind"), "backlog-batch", "not held behind the older (`land status` says so)")
 
     def test_a_real_source_both_change_still_holds(self):
         eo = self.change("older", {"ce\tservices": 6}, {"identity/src/main/I.scala": "i\n",

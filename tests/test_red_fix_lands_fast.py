@@ -155,7 +155,8 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         self.red()
         d, held = self.busy_slots()
         try:
-            wo, _ = self.agent("plain", "web/src/main/B.scala", "b\n", msg="an ordinary change")
+            # (tools only: a production change joins the waiting batch unchecked while red, THE BATCH IS THE MECHANISM)
+            wo, _ = self.agent("plain", "scripts/b.sh", "b\n", msg="an ordinary change")
             eo, _ = self.queued(wo)
             wf, _ = self.agent("fix", "web/src/main/A.scala", "a\n", msg="the fix\n\nFixes-Red: 7")
             ef, _ = self.queued(wf)

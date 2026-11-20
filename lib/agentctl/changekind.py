@@ -98,8 +98,8 @@ def classify_change(e, facts, t=None, repo=None):
     identity = None
     if backlog_why is None and repo is not None and e.get("id") and e.get("status") == "queued":
         identity = identity_change(repo, e)
-        # ONE IDENTITY CHANGE PER BATCH (2026-11-20, BATCHED CHECKS): an identity change joins a backlog batch, its
-        # identity area in the batch's union; a second one waits for the next batch (batch.py backlog_candidates)
+        # EVERY CHANGE IS A MEMBER (2026-11-20, batch.py): an identity change joins a backlog batch, its identity area
+        # in the batch's union; only one whose kind cannot be told stays out
         backlog_why = "identity-unknown" if identity is None else None
     push_why = ("red-fix" if red_fix else "no-batch" if e.get("no_batch")
                 else f"batch-alone: {e['batch_alone']}" if e.get("batch_alone")

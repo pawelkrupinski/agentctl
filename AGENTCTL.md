@@ -1368,11 +1368,10 @@ The reconciler then takes it, a step per tick:
 - **THE BACKLOG BATCH (the owner, 2026-11-17: "batch whenever there's a backlog, not only on red").** At green, with
   no batch open, when 2 or more queued changes that no checker has taken may share a check (`$AGENTCTL_BACKLOG_BATCH_MIN`),
   the change tick gives them no check tree of their own (`its check waits for the next backlog batch`) and the batch
-  tick makes them ONE batch item with depth `full`, created only once a check tree is free for it. ONE IDENTITY CHANGE
-  PER BATCH (the owner, 2026-11-20: "batch those as well"): an IDENTITY change joins it, the batch's one full check
-  running the union of its members' areas (the identity area with them), but at most one (`BACKLOG_BATCH_IDENTITY_MAX`):
-  two would hide which one moved takes, so a second is checked beside the batch, alone, and one sharing a file with an
-  older identity change waits for it (queue.py `second_identity`). An IDENTITY change is a path that can move takes (the
+  tick makes them ONE batch item with depth `full`, created only once a check tree is free for it. EVERY CHANGE IS A
+  MEMBER (the owner, 2026-11-20: "batching waiting changes ... structurally"): an IDENTITY change joins it like any other,
+  the batch's one full check running the union of its members' areas, G5's drift check (below) telling which identity
+  change moved takes when it holds more than one. An IDENTITY change is a path that can move takes (the
   hook's `--identity-change` names it -- movies: identity/src/main,
   the worker's identity adapters, the title rules, words and normalizer, identity-judgements.tsv; a hook without it: its
   `--plan` selecting the `identity` area -- or a G5 identity-model commit; since 2026-11-19 a common/ change whose
@@ -1380,7 +1379,7 @@ The reconciler then takes it, a step per tick:
   entry per head; a commit saying `Pure-Move: verified` counts for neither, 2026-11-19: it moves no take, and movies' hook
   leaves the identity area to the commits without the claim -- batch.py `pure_move_claimed`). Never in one: an identity
   change it cannot tell (no plan to ask), a change landed with `land --no-batch`, a red fix, a combined-tree verification round, one in an
-  infra backoff or holding its own unread remote run. At most 4 members (`$AGENTCTL_BACKLOG_BATCH_MAX`), queue order,
+  infra backoff or holding its own unread remote run. At most 8 members (`$AGENTCTL_BACKLOG_BATCH_MAX`; 4 before 2026-11-20), queue order,
   Fixes-Red first; a member that does not apply is left out (`batch_alone`) and checked alone; fewer than 2 kept: no
   batch. None forms while a change verifies its combined tree or a checked change's push is due (THE OLDEST
   VERIFICATION PUSHES FIRST holds it too), and while one waits for a tree, a younger lone change never takes the
@@ -1560,6 +1559,23 @@ The reconciler then takes it, a step per tick:
   (`drift_serialize`). A change checked while a push batch verifies is no member of it: its push waits for the batch
   (`its push waits for batch <id>`) and it joins the next one. batch.py `push_candidates`, `push_batch_select`,
   `union_base`; tests: `tests/test_backlog_batch.py` `PushBatchTest`.
+- **THE BATCH IS THE MECHANISM (the owner, 2026-11-20: "is anyone working on batching waiting changes ... structurally,
+  not just now").** Every change goes through a batch: at green the backlog batch (above: queued changes, identity ones
+  included, up to 8) and the push batch; at red the WAITING batch, which no longer waits for green to check anything.
+  While the gate is red a production change that must wait is not checked alone: it joins `waiting` at once, UNCHECKED
+  (`WAITING ...: origin/main is red, so it joins the waiting batch unchecked -- the batch pre-checks every waiting change
+  as one and lands them in one push at green`; queue.py `joins_unchecked`), and the blocked-red waiting batch PRE-CHECKS
+  every waiting change as ONE tree on the current main (depth `red`: the hook's `--checks-only`, the union of their
+  areas), again whenever its members or main change. A change that no longer applies is rejected alone (the conflict
+  names its files; a generated file is merged, not a conflict); a failure is bisected by prefix, the culprit rejected
+  when the failure is its own, and a failure only where main fails too (the red itself, judge_failure) rejects nobody --
+  those members stay unchecked. At green the batch is assembled on the new main and lands in ONE push: its members
+  exactly the pre-checked ones and main's move since read by none of their checks (MINIMAL RECHECKS) -> pushed at once,
+  no check again (`pre-checked as one on <sha>; main moved by 1 commit since, no check of it reading what changed: its
+  verdict kept`); else the combined tree's fast check, as before; a member never pre-checked -> the full landing check
+  (`--range`, depth `union`) over all of them. A red fix keeps its own lane and lands alone first: 2026-11-17..20 a red
+  fix landed in a median 14 min, a batch member in 56. batch.py `red_precheck`, `red_prechecked`, `green_batch_depth`,
+  queue.py `join_unchecked`; tests: `tests/test_waiting.py` RedPrecheckTest.
 - **checked → waiting** while main is red and the change must wait (a production path, no `Fixes-Red:` naming any red
   run of the current episode): `WAITING <sha> (entry <id>, n in batch)`. Tools-only changes and Fixes-Red changes land while red.
 - **The batch.** (A backlog's batch is the same item with depth `full`: above.) When main turns green, the waiting
@@ -2486,7 +2502,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `attach_poll` | `AGENTCTL_ATTACH_POLL` | `15` | - |
 | `author_active_min` | `AGENTCTL_AUTHOR_ACTIVE_MIN` | `15` | live = a pid alive and activity within this |
 | `awake_pid` | `AGENTCTL_AWAKE_PID` | - | - |
-| `backlog_batch_max` | `AGENTCTL_BACKLOG_BATCH_MAX` | `4` | a backlog batch's members at most: its bisect is 2 prefix checks + 1 confirmation |
+| `backlog_batch_max` | `AGENTCTL_BACKLOG_BATCH_MAX` | `8` | a backlog batch's members at most: its bisect is 3 prefix checks + 1 confirmation |
 | `backlog_batch_min` | `AGENTCTL_BACKLOG_BATCH_MIN` | `2` | queued changes that may share a check and make a backlog batch |
 | `baseline` | `AGENTCTL_BASELINE` | `1` | - |
 | `batch_retry_max` | `AGENTCTL_BATCH_RETRY_MAX` | `3` | - |

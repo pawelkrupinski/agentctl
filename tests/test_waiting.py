@@ -162,7 +162,7 @@ class WaitingTest(Base):
         self.assertEqual(self.watches, [sha], "the watch is detached")
         self.assertFalse(self.entries())
 
-    def test_red_main_own_checks_first_then_join_by_cherry_pick_and_one_fast_check_and_push_at_green(self):
+    def test_red_main_own_checks_first_then_one_red_pre_check_of_the_batch_and_one_push_at_green(self):
         wt1, s1 = self.agent("a", "web/src/main/A.scala", "a\n")
         wt2, s2 = self.agent("b", "worker/src/main/B.scala", "b\n")
         rc, out = self.land(wt1)
@@ -172,11 +172,13 @@ class WaitingTest(Base):
         self.assertRegex(out, r"WAITING [0-9a-f]{40} \(entry \S+-2, 2 waiting\)")
         self.assertEqual(len(self.calls_of("--checks-only")), 2, "each change's own checks ran first, without the gate")
         self.assertEqual(self.pushes_count(), 0)
-        self.drive()  # still red: nothing moves
+        self.drive()  # still red: the waiting batch pre-checks the two as one (THE BATCH IS THE MECHANISM)
+        self.assertEqual(len(self.calls_of("--checks-only")), 3, "ONE pre-check of the combined tree, while red")
         self.assertEqual(self.calls_of("--fast-only"), [])
+        self.assertEqual(self.pushes_count(), 0, "nothing lands while red")
         self.reds = set()
         self.drive()
-        self.assertEqual(len(self.calls_of("--fast-only")), 1, "ONE fast check of the rebuilt batch")
+        self.assertEqual(self.calls_of("--fast-only"), [], "main unchanged since its pre-check: no check again")
         self.assertEqual(self.calls_of("--range"), [], "no full check of the batch: each passed its own")
         self.assertEqual(self.pushes_count(), 1, "ONE push")
         self.assertEqual(self.remote_log()[:2], ["b: worker/src/main/B.scala", "a: web/src/main/A.scala"])

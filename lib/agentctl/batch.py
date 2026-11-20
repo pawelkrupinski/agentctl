@@ -80,8 +80,8 @@ def batch_members(d, it):
 # ---------------------------------------------------------------- the backlog batch (the owner, 2026-11-17)
 # "BATCH WHENEVER THERE'S A BACKLOG, NOT ONLY ON RED": with 6-8 changes queued at green each paid a 30-40 min check of
 # its own, mostly waiting for a ci-runner check slot. Now, at green with no batch open, BACKLOG_BATCH_MIN or more queued
-# changes that no checker has taken and that may share a check (backlog_batchable: at most ONE identity change -- the
-# hook's `--identity-change` or G5's identity-model globs; 2026-11-20 --, no `land --no-batch`, no red fix, no combined-tree verification
+# changes that no checker has taken and that may share a check (backlog_batchable: identity changes too, 2026-11-20;
+# no `land --no-batch`, no red fix, no combined-tree verification
 # round, none in an infra backoff or holding an unread remote run) are THE BATCH ABOVE with depth `full`: assembled in
 # queue order (Fixes-Red first; a member that does not apply is left out and checked alone, batch_alone), its tip
 # checked once with the FULL landing check (the hook's --range dry run; on ci-runner check/batch-<tip>, the same
@@ -90,16 +90,15 @@ def batch_members(d, it):
 # watch (batch_id, batch). Fail: bisected by prefix (no whole-batch re-check first: the culprit's own confirmation
 # guards a flaky failure), the culprit rejected only when its failure is its own (judge_failure: a base red, a time
 # cap or an infra failure sends it to a check of its own instead), the passing prefix pushed at once, the rest queued
-# again (backlog_reconcile). At most BACKLOG_BATCH_MAX members, so a bisect is at most 3 extra rounds (2 prefixes and
+# again (backlog_reconcile). At most BACKLOG_BATCH_MAX members, so a bisect is at most 4 extra rounds (3 prefixes and
 # the confirmation). While such candidates wait for a tree, the change tick gives them none of its own (they wait for
-# the batch); a second identity change and red fixes are checked alone beside it, and a red fix never waits for it.
+# the batch); red fixes are checked alone beside it, and a red fix never waits for it.
 BACKLOG_BATCH_MIN = 2  # queued changes that may share a check and make a backlog batch
-BACKLOG_BATCH_MAX = 4  # a backlog batch's members at most: its bisect is 2 prefix checks + 1 confirmation
-# ONE IDENTITY CHANGE PER BATCH (2026-11-20, the owner's "check them together"): before, an identity change (a path
-# that can move takes) was never a member -- every one was checked alone. Now it joins a backlog batch, whose ONE full
-# check runs the union of its members' areas (its identity area with them), but at most one per batch: two would hide
-# which one moved takes (G5's lesson), so a second identity change waits for the next batch.
-BACKLOG_BATCH_IDENTITY_MAX = 1
+BACKLOG_BATCH_MAX = 8  # a backlog batch's members at most: its bisect is 3 prefix checks + 1 confirmation
+# EVERY CHANGE IS A MEMBER (2026-11-20, the owner: "batching waiting changes ... structurally"): an identity change joins
+# like any other -- before, it was always checked alone; for a few hours of 2026-11-20, one per batch. The batch's one
+# full check runs the union of its members' areas, and G5's drift check (check_batch) of a tip holding more than one
+# identity-model commit, with its split, tells which identity change moved takes.
 BACKLOG_LIVE = ("checking", "bisecting", "pushing")  # a backlog (or push) batch's states that hold its members
 DEEP_BATCHES = ("full", "verify")  # the depths whose members are queue entries of their own: backlog and push batches
 
@@ -132,7 +131,7 @@ _identity_known = process_cache({})  # (entry id, head) -> identity_change's ver
 
 
 def identity_change(repo, e):
-    """Whether the change is an identity change, at most one per backlog batch: G5's identity-model commits, or the hook's
+    """Whether the change is an identity change (G5's drift check of a batch holding more than one): G5's identity-model commits, or the hook's
     --identity-change naming a path that can move takes (a hook without it: its --plan selecting the `identity` area). None when it cannot tell (no plan, unreadable commits): checked alone. Kept per
     entry and head in the process (never written to the entry: an executor may be saving it meanwhile)."""
     key = (e["id"], e.get("head"))
@@ -206,15 +205,7 @@ def backlog_candidates(repo, d, reds, t=None, facts=None):
         return []
     ok = [e for e in entries if backlog_batchable(repo, d, e, t, facts)
           and not overlap_hold(repo, d, e, entries, facts, t)]
-    out, identities = [], 0
-    for e in sorted(ok, key=lambda e: e["seq"]):  # queue order; ONE IDENTITY CHANGE PER BATCH, the next waits
-        if len(out) >= int(env_num("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX)):
-            break
-        ident = bool(identity_change(repo, e))
-        if ident and identities >= BACKLOG_BATCH_IDENTITY_MAX:
-            continue
-        identities += ident
-        out.append(e)
+    out = sorted(ok, key=lambda e: e["seq"])[:int(env_num("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX))]
     return out if len(out) >= backlog_min() else []
 
 
@@ -572,6 +563,88 @@ def check_tree_slot_free(repo, d):
     return bool(slot)
 
 
+# THE BATCH IS THE MECHANISM (the owner, 2026-11-20: "batching waiting changes ... structurally, not just now"). While
+# the gate is red, a production change that must wait is not checked alone: it joins `waiting` at once, UNCHECKED
+# (queue.py join_unchecked), and the waiting batch -- blocked by the red -- PRE-CHECKS every waiting change as ONE tree
+# on the current main: assembled in queue order (one that no longer applies rejected alone, a generated file merged),
+# checked once with the hook's `--checks-only` over the union of their areas (depth `red`), a failure bisected (the
+# culprit rejected when the failure is its own), and the verdict kept on the batch (`prechecked`: its members, base and
+# tip) and on each member. It pre-checks again whenever its membership or main changes. At green the batch is assembled
+# on the new main and ONE of three things happens (green_batch_depth): a member never pre-checked or checked -> the full
+# landing check (`--range`) over the union; the members exactly the pre-checked ones and main's move since read by none
+# of their checks (MINIMAL RECHECKS, queue.py read_overlap) -> pushed at once, no check again; else the fast check of
+# the combined tree as before. A red fix keeps its lane (2026-11-17..20: a red fix landed in a median 14 min, a batch
+# member in 56).
+def red_precheck(repo, d, st, it, waiting, reds):
+    """The blocked-red waiting batch's step: pre-check every waiting change as one tree when its membership or main
+    changed since the last pre-check and a check tree is free (THE BATCH IS THE MECHANISM, above)."""
+    order = [e for e in batch_order(repo, waiting, reds) if must_wait(repo, e["commits"], reds)]
+    if not order:
+        return []
+    main = git(repo, "rev-parse", f"{remote()}/main", check=False).stdout.strip()
+    pre = it["data"].get("prechecked") or {}
+    if pre.get("base") == main and pre.get("members") == [e["id"] for e in order]:
+        return []
+    if it["data"].get("precheck_failed") == [main] + [e["id"] for e in order]:  # failed as it is: changes must come or go
+        return []
+    slot = check_tree_slot(repo, d)
+    if not slot:
+        return [f"batch {it['id']}: its red pre-check waits for a check tree"]
+    i, h = slot
+    try:
+        git(repo, "fetch", "--quiet", remote(), "main", check=False)
+        base = git(repo, "rev-parse", f"{remote()}/main").strip()
+        tree = check_tree(repo, i, base)
+        kept = assemble(repo, d, tree, order, base)
+        tip = git(tree, "rev-parse", "HEAD").strip()
+    finally:
+        h.release()
+    if not kept:
+        return [f"batch {it['id']}: nothing to pre-check"]
+    batch_move(st, it, "checking", {"members": [e["id"] for e in kept], "tip": tip, "base": base, "tree": i,
+                                    "cls": "check", "depth": "red"},
+               text=f"batch {it['id']}: pre-checking {len(kept)} waiting change(s) as one at {tip[:10]} on {base[:10]} "
+                    "while main is red")
+    spawn_batch_executor(repo, d, it["id"])
+    return [f"batch {it['id']}: red pre-check of {len(kept)} change(s) at {tip[:10]}"]
+
+
+def red_prechecked(d, st, it, members, tip, base, how, failed=None):
+    """A red pre-check passed for members (the whole batch, or the prefix before a culprit; none: nothing passed): the
+    verdict kept on the batch and on each member, the batch blocked by the red again. failed: the main and members it
+    failed for as they are (not pre-checked again until either changes)."""
+    for e in members:
+        e.update(prechecked=it["id"], checked_base=base, unchecked=False)
+        save_entry(d, e)
+    pre = {"members": [e["id"] for e in members], "base": base, "tip": tip} if members else None
+    batch_move(st, it, "blocked-red", {"prechecked": pre, "precheck_failed": failed},
+               text=f"batch {it['id']}: {how}" + (f": pre-checked {len(members)} change(s) as one at {tip[:10]}"
+                                                   if members else ""))
+
+
+def green_batch_depth(tree, it, kept, base, tip):
+    """(depth, why) of the waiting batch at green (THE BATCH IS THE MECHANISM): `union` (the full landing check) when a
+    member was never checked,
+    `kept` when its members are exactly its red pre-check's and no check of theirs reads what main changed since, else
+    `fast` (the combined tree's fast check, as before)."""
+    if any(e.get("unchecked") for e in kept):
+        return "union", "a member joined unchecked: the full landing check over the union"
+    pre = it["data"].get("prechecked") or {}
+    if not pre or pre.get("members") != [e["id"] for e in kept] or not pre.get("base"):
+        return "fast", "not its red pre-check's members"
+    if pre["base"] == base:
+        return "kept", f"pre-checked as one on {base[:10]}, main unchanged since"
+    landed, mine = range_paths(tree, pre["base"], base), range_paths(tree, base, tip)
+    if any(forces_full_recheck(p) for p in landed) or without_generated(tree, sorted(set(landed) & set(mine))):
+        return "fast", "main changed what it changes"
+    why = read_overlap(tree, landed, mine)
+    if why:
+        return "fast", why
+    n = len(git(tree, "rev-list", f"{pre['base']}..{base}", check=False).stdout.split())
+    return "kept", (f"pre-checked as one on {pre['base'][:10]}; main moved by {n} commit{'' if n == 1 else 's'} since, "
+                    "no check of it reading what changed: its verdict kept")
+
+
 def batch_step(repo, d, now_, seen, st):
     t = now_ if now_ is not None else time.time()
     waiting = waiting_entries(d)
@@ -622,7 +695,7 @@ def batch_step(repo, d, now_, seen, st):
         if go:
             batch_move(st, it, "assembling")
             return [f"batch {it['id']}: assembling"]
-        return []
+        return red_precheck(repo, d, st, it, waiting, reds)
     if state == "assembling":
         if reds and not go:
             batch_move(st, it, "blocked-red")
@@ -661,6 +734,14 @@ def batch_step(repo, d, now_, seen, st):
             if not waiting_entries(d):
                 batch_move(st, it, "landed", {"members": []}, text=f"batch {it['id']}: nothing left to land")
             return [f"batch {it['id']}: nothing kept"]
+        if not full:  # THE WAITING BATCH AT GREEN: pre-checked as one at red, its verdict kept, or checked as needed
+            depth, why = green_batch_depth(tree, it, kept, base, tip)
+            if depth == "kept":
+                batch_move(st, it, "checking", {"members": [e["id"] for e in kept], "tip": tip, "base": base, "tree": i,
+                                                "cls": "check", "depth": "fast"}, text=f"batch {it['id']}: {why}")
+                batch_move(st, st.item("batch", it["id"]), "pushing", {"kept": why},
+                           text=f"batch {it['id']}: {tip[:10]} pushed on its red pre-check, no check again")
+                return [f"batch {it['id']}: assembled {len(kept)} change(s), {why}"]
         batch_move(st, it, "checking", {"members": [e["id"] for e in kept], "tip": tip, "base": base, "tree": i,
                                         "cls": "red" if fix_waits else "check", "depth": depth,
                                         **({"range_base": range_base} if range_base else {})},
@@ -702,6 +783,8 @@ def batch_goes_first(st, d, states=BATCH_FIRST):
     """The open batch, when solo changes wait for it (its state in `states`, changes waiting in it or a backlog batch),
     else None."""
     it = current_batch(st, d)
+    if it and (it.get("data") or {}).get("depth") == "red":  # a red pre-check holds nothing: what lands on red moves
+        return None  # main under it, and it pre-checks again (THE BATCH IS THE MECHANISM)
     backlog = it and (it.get("data") or {}).get("depth") in DEEP_BATCHES
     return it if it and it["state"] in states and (backlog or waiting_entries(d)) else None
 
@@ -905,6 +988,9 @@ def check_batch(repo, bid):
                         "server; checked again in 30 min")
                 batch_move(st, it, "held", {"why": "stalled"}, text=text, severity="escalate")
                 return 0
+            if ok and depth == "red":  # pre-checked as one while red: the verdict kept, blocked by the red again
+                red_prechecked(d, st, it, members, tip, base, "its red pre-check passed")
+                return 0
             if ok:
                 drift, dout = batch_drift_check(repo, d, tree, base, tip, it["data"].get("cls") == "red")
                 it = st.item("batch", bid)
@@ -921,10 +1007,20 @@ def check_batch(repo, bid):
         culprit, cout = bisect(repo, d, members, base, tree, depth, runs, it["data"].get("failed_out"),
                                range_base=range_base, cls=it["data"].get("cls") or "check")
         it = st.item("batch", bid)
+        if culprit is None and depth == "red":  # every prefix passed: no verdict, pre-checked again at the next change
+            red_prechecked(d, st, it, [], None, base, "its red pre-check failed, then every prefix passed (flaky or "
+                           "infra)", failed=[base] + [e["id"] for e in members])
+            return 0
         if culprit is None:
             batch_fail(st, d, it, "it failed, then every prefix passed on its own (flaky or infra)", len(members))
             return 0
         bad = members[culprit]
+        if depth == "red" and not culprit_own_failure(repo, d, bad, base, cout):
+            # failing only as main fails (the red itself, judged as a lone change's check is): no culprit; the prefix
+            # before it pre-checked, the rest left unchecked -- the full landing check at green judges them
+            red_prechecked(d, st, it, members[:culprit], members[culprit - 1]["tip"] if culprit else None, base,
+                           f"{bad['id']} on fail only where main fails too", failed=[base] + [e["id"] for e in members])
+            return 0
         # a member whose generated files the batch resolved (GENERATED FILES ARE NO OVERLAP, waiting.py) failing is
         # the resolution's as much as its own: its own check, on main, judges it
         regenerated = bad.get("regenerated")
@@ -938,6 +1034,10 @@ def check_batch(repo, bid):
             queue_verdict(d, bad, "rejected", f"NOT LANDED: the checks failed with your change in the batch (entry "
                                               f"{bad['id']})\n  {tail_of(cout)}", cout.splitlines()[-25:])
         what = "checked alone" if alone else "rejected"
+        if depth == "red":  # the prefix before it pre-checked; the rest are pre-checked again at the next tick
+            red_prechecked(d, st, it, members[:culprit], members[culprit - 1]["tip"] if culprit else None, base,
+                           f"{bad['id']} {what}")
+            return 0 if alone else 1
         if culprit > 0:  # the prefix before it passed its own check: it lands now; the rest join the next batch
             prefix = members[:culprit]
             batch_move(st, it, "pushing", {"members": [e["id"] for e in prefix], "tip": prefix[-1]["tip"], "runs": runs},
@@ -1022,13 +1122,20 @@ def _push_batch_item(repo, d, st, it, members, tip, base, i):
         git(tree, "checkout", "-q", "--force", "--detach", tip, check=False)
         pushed_at = time.time()
         depth = it["data"].get("depth")
-        if depth == "full":  # its full check's run stands for the push, once GitHub confirms it
+        if depth in ("full", "union"):  # its full check's run stands for the push, once GitHub confirms it
             run = (it["data"].get("runs") or {}).get(tip)
             env = dict(tool_env(), **({"PREPUSH_REMOTE_RUN": str(run)} if run else {}))
         elif depth == "verify":  # each member fully checked on an older main, the union verified: the red gate only
             skip = hook_query(precheck_hook(tree), tree, "--plan", range_paths(tree, base, tip))
             if skip is None:
                 batch_fail(st, d, it, "the hook's plan for its push could not be read", len(members))
+                return f"batch {it['id']}: its plan is unreadable"
+            env = dict(tool_env(), PREPUSH_SKIP=" ".join(skip))
+        elif it["data"].get("kept"):  # pre-checked as one at red, nothing main changed read by it: the red gate only
+            skip = hook_query(precheck_hook(tree), tree, "--plan", range_paths(tree, base, tip))
+            if skip is None:
+                batch_move(st, it, "assembling", {"kept": None, "prechecked": None},
+                           text=f"batch {it['id']}: the hook's plan for its push could not be read: checked again")
                 return f"batch {it['id']}: its plan is unreadable"
             env = dict(tool_env(), PREPUSH_SKIP=" ".join(skip))
         else:

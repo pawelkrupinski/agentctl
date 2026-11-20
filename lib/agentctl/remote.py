@@ -781,6 +781,7 @@ def batch_mode(hook):
         return "--range"
 
 
+RED_PRECHECK_MODE = "--checks-only"  # a waiting batch's pre-check while main is red: every check, no push
 BATCH_FULL_MODE = "--range"  # a backlog batch's check: the full landing check a change gets (check/batch-<tip> on CI)
 
 
@@ -793,7 +794,10 @@ def batch_check(repo, d, tree, base, tip, cls="check", depth="fast", runs=None, 
     hook = precheck_hook(tree) or precheck_hook(repo)
     if not hook:
         return True, "", False
-    mode = {"full": BATCH_FULL_MODE, "verify": VERIFY_MODE}.get(depth) or batch_mode(hook)
+    # `red`: a waiting batch pre-checked while main is red (the checks, never the push); `union`: a waiting batch at
+    # green with a member never checked -- the full landing check (batch.py THE BATCH IS THE MECHANISM)
+    mode = {"full": BATCH_FULL_MODE, "union": BATCH_FULL_MODE, "verify": VERIFY_MODE,
+            "red": RED_PRECHECK_MODE}.get(depth) or batch_mode(hook)
     rng_base = (range_base or base) if depth == "verify" else base
     if host_role() == "server" and remote_checks_supported(tree):  # ci-runner: the CI check tier (owner decision 1)
         # (a push batch's branch: check/verify-<range base>-batch-<tip>, the workflow's --verify-only <range base>..HEAD)

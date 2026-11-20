@@ -227,7 +227,7 @@ class Timeline08010cTest(unittest.TestCase):
 MUTATIONS = {
     "ee7b744 (the batch keeps its age-order place)": (
         'if not fix and batch_seq is not None and batch_seq < e["seq"] and not check_tree_slot_free(repo, d):',
-        "if False:  # MUTATION", "load"),
+        "if False:  # MUTATION", "loadlone"),
     "pushes first, then the holds": (
         '    for phase in ("push", "check"):\n'
         '        held = backlog_held(repo, d, reds, st, t, facts)\n'
@@ -245,7 +245,7 @@ MUTATIONS = {
     # (b)/(c) a checked change's push held behind a batch without saying so (c74b64f's other half)
     "a held push records its hold": (
         '        note_hold(st, e, "batch", f"its push waits for batch {first[\'id\']} ({first[\'state\']}), which it is not in", t,\n'
-        '                  batch=first["id"])\n', "", "random"),
+        '                  batch=first["id"])\n', "", "chaoshold"),
     "generated files are no overlap": (
         "        shared = shared if strict else without_generated(repo, shared)\n",
         "", "baselines"),
@@ -273,6 +273,14 @@ elif sys.argv[2] == "collisions":
     bad = queue_sim.Sim(17, calm=True, script=list(queue_sim.COLLISIONS_2026_11_17)).run().violations[:1]
 elif sys.argv[2] == "baselines":
     bad = queue_sim.Sim(0, calm=True, script=list(queue_sim.BASELINES_2026_11_19)).run().violations[:1]
+elif sys.argv[2] == "chaoshold":  # chaos seeds where a checked change's push waits for a batch it is not in
+    bad = [v for seed in (3, 4) for v in queue_sim.Sim(seed, trees=4, profile={**T.CHAOS, "outside_red": 0.08},
+                                                       n_changes=14).run().violations[:1]]
+elif sys.argv[2] == "loadlone":  # the load with many lone (--no-batch) changes: since every other change batches
+    # (2026-11-20), only they compete with a backlog batch for its tree
+    p = dict(T.LOAD, nobatch=0.4)
+    bad = [v for seed in range(3) for v in queue_sim.Sim(seed, calm=True, trees=1, profile=p,
+                                                         n_changes=T.LOAD["n"]).run().violations[:1]]
 else:
     bad = [v for seed in range(3) for v in queue_sim.Sim(seed, calm=True, trees=1, profile=T.LOAD,
                                                          n_changes=T.LOAD["n"]).run().violations[:1]]

@@ -788,7 +788,7 @@ class Sim:
             t += self.rng.choice(self.profile.get("gaps", (0, 0, 1, 1, 2, 3, 5, 8)))
             r = self.rng.random()
             ident = self.profile.get("identity", 0.25)
-            kind = "identity" if r < ident else "nobatch" if r < ident + 0.1 else "plain"
+            kind = "identity" if r < ident else "nobatch" if r < ident + self.profile.get("nobatch", 0.1) else "plain"
             out.append((t, {"kind": kind}))
         return out
 

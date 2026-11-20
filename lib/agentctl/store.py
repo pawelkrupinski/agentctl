@@ -525,7 +525,9 @@ H = 3600
 MACHINES = {
     # §5.1 a submitted change
     "change": {
-        "queued": StateSpec(15 * M, "queued", ("checking", "superseded", "cancelled", "landed"), escalate=True, wait=True),
+        # queued -> waiting: main red, it joins the waiting batch unchecked (batch.py THE BATCH IS THE MECHANISM)
+        "queued": StateSpec(15 * M, "queued", ("checking", "superseded", "cancelled", "landed", "waiting"), escalate=True,
+                            wait=True),
         "checking": StateSpec(2 * H, "queued", ("checked", "rejected", "queued")),
         # checked -> checking: a push batch's member, verified with the others on the current main (batch.py)
         "checked": StateSpec(5 * M, "checked", ("pushing", "waiting", "queued", "checking"), escalate=True, wait=True),
@@ -545,11 +547,12 @@ MACHINES = {
     },
     # §5.2 + §14.1 the batch: a computed item, no branch
     "batch": {
-        "blocked-red": StateSpec(6 * H, "blocked-red", ("assembling",), escalate=True, wait=True),
         # assembling WORKS (it builds the tip): past its deadline it is held, and assembles again after the hold
         "assembling": StateSpec(300, "held", ("checking", "held", "landed"), escalate=True),
-        "checking": StateSpec(2 * H, "held", ("pushing", "bisecting", "assembling", "held")),
-        "bisecting": StateSpec(4 * H, "held", ("pushing", "assembling", "held")),
+        # -> blocked-red: a waiting batch's red pre-check ends (batch.py THE BATCH IS THE MECHANISM)
+        "blocked-red": StateSpec(6 * H, "blocked-red", ("assembling", "checking"), escalate=True, wait=True),
+        "checking": StateSpec(2 * H, "held", ("pushing", "bisecting", "assembling", "held", "blocked-red")),
+        "bisecting": StateSpec(4 * H, "held", ("pushing", "assembling", "held", "blocked-red")),
         "pushing": StateSpec(300, "assembling", ("landed", "assembling")),
         "held": StateSpec(30 * M, "assembling", ("assembling",), escalate=True),
         "landed": StateSpec(ARCHIVE, "landed", (), terminal=True),
