@@ -199,8 +199,11 @@ def fixer_env(o_r, num, wrapper_pid=None):
     # SIGNING THROUGH THE SECRETS AGENT (issue 20261116T224456-3b788f): launchd hands its jobs its own SSH_AUTH_SOCK, an
     # empty agent, while ~/.zshrc points commit.gpgsign (gpg.format ssh) at ~/.ssh/secrets-agent.sock; a fixer's or a
     # revert's commit then failed "No private key found". Where that socket is, every spawned session signs through it.
+    # The socket is a symlink to the secrets daemon's own (issue 20261119T155416-99cfd9, core red 1071: the daemon's end
+    # was not there when the fixer started, so os.path.exists said no and the session kept launchd's empty agent for
+    # good): the configured route counts, dangling or not -- once the daemon is up the same session signs.
     agent = os.path.join(HOME, ".ssh", "secrets-agent.sock")
-    if os.path.exists(agent):
+    if os.path.lexists(agent):
         env["SSH_AUTH_SOCK"] = agent
     if wrapper_pid:
         env["AGENTCTL_CLAIM_PID"] = str(wrapper_pid)

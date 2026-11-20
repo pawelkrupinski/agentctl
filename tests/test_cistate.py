@@ -110,7 +110,9 @@ class FixerTokenTest(RedBase):
         agent = os.path.join(A.HOME, ".ssh", "secrets-agent.sock")
         self.assertEqual(A.fixer_env(MOVIES, 20).get("SSH_AUTH_SOCK"), os.environ["SSH_AUTH_SOCK"])  # no agent: as is
         os.makedirs(os.path.dirname(agent), exist_ok=True)
-        open(agent, "w").close()
+        # issue 20261119T155416-99cfd9: the link to the secrets daemon's socket, its end not there yet (the daemon
+        # down when the fixer started): still the route, so the session signs once the daemon is up
+        os.symlink(os.path.join(os.path.dirname(agent), "daemon-not-up.sock"), agent)
         self.addCleanup(os.unlink, agent)
         self.assertEqual(A.fixer_env(MOVIES, 20).get("SSH_AUTH_SOCK"), agent)
 
