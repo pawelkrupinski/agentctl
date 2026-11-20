@@ -1216,6 +1216,18 @@ briefed with the change's diff, its original worktree and why its lander could n
   runs; infra is owner-only (red-repos.json): its culprit is named but never reverted (`its pushes are the owner's`),
   and its fixer prepares the change as before.
 
+### exit paths: every exit puts the worktree back (2026-11-20)
+
+11 closed issues were a path that left state behind (a NOT LANDED with its rebase in progress, a hook running 20 min
+after its land, a lease held past its land). `exit_guard()` (slots.py) turns SIGTERM, SIGHUP and SIGINT into an
+`Interrupted` exception inside the block, so every `finally` and context exit runs -- before it, a SIGTERM killed
+`land` with its stash unrestored and its landing lease held to its TTL. `WorktreeGuard(repo)` aborts, on every exit,
+the rebase / cherry-pick / revert / merge the block started and left in progress, and checks the branch out again if it
+left HEAD detached (an operation in progress before it began is the agent's, never touched). `land` runs under both
+(`NOT LANDED: interrupted by SIGTERM ...`, exit 130); land's rebase (sync), the blame and fallback reverts (their land
+spawned after the guard, never inside it) and the check tree's picks under WorktreeGuard. tests/test_exit_paths.py:
+each operation aborted, a real SIGTERM mid-rebase and mid-push.
+
 ### policy: who decided each rule that holds or rejects a change (2026-11-20)
 
 The owner, 2026-11-20: "fix agentctl issues structurally". `lib/agentctl/policy.py` holds two tables.

@@ -522,6 +522,17 @@ def blame_revert(o_r, repo, u, b):
     wt, why = blame_worktree(repo, "revert", num)
     if not wt:
         return {**rec, "ok": False, "msg": why}
+    with WorktreeGuard(wt):  # EVERY EXIT PUTS THE WORKTREE BACK (slots.py) -- the land starts after it, never inside
+        failed = blame_revert_commit(wt, u, b, g, rec, num)
+    if failed:
+        return failed
+    pid = spawn_land(wt, fixer_env(o_r, num), reds_dir(f"revert-{num}.log"))
+    return {**rec, "ok": True, "worktree": wt, "sha": git(wt, "rev-parse", "HEAD").strip(),
+            "msg": f"landing a revert of {blame_change_name(g)} from {wt} (pid {pid})"}
+
+
+def blame_revert_commit(wt, u, b, g, rec, num):
+    """blame_revert's revert and commit in its fresh worktree wt: None when committed, else the failed record."""
     r = git(wt, *NO_SIGN, "revert", "--no-commit", *reversed(g["commits"]), check=False)
     if r.returncode != 0:
         git(wt, "revert", "--abort", check=False)
@@ -538,9 +549,7 @@ def blame_revert(o_r, repo, u, b):
     c = git(wt, *NO_SIGN, "commit", "-q", "-m", msg, check=False)
     if c.returncode != 0:
         return {**rec, "ok": False, "worktree": wt, "msg": f"git commit of the revert failed ({c.stderr.strip()[:160]})"}
-    pid = spawn_land(wt, fixer_env(o_r, num), reds_dir(f"revert-{num}.log"))
-    return {**rec, "ok": True, "worktree": wt, "sha": git(wt, "rev-parse", "HEAD").strip(),
-            "msg": f"landing a revert of {blame_change_name(g)} from {wt} (pid {pid})"}
+    return None
 
 
 def blame_reland(o_r, repo, u, b):

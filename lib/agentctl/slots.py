@@ -268,6 +268,76 @@ def push_argv(remote, src, dst="main"):
     return argv
 
 
+# EVERY EXIT PUTS THE WORKTREE BACK (2026-11-20, the owner: "fix agentctl issues structurally"; 11 closed issues were a
+# path that left state behind: a NOT LANDED with its rebase in progress, a stash never restored, a hook left running, a
+# lease held 20 min after its land was gone). Two guards, one for each way out:
+# - exit_guard(): SIGTERM, SIGHUP and SIGINT raise Interrupted inside the block (a BaseException), so every `finally`
+#   and context exit above it runs -- the stash restored, the landing lease released, a child group ended
+#   (run_watched) -- where Python's default would have died mid-step with none of them;
+# - WorktreeGuard(repo): what a command started in a worktree and left unfinished -- a rebase, cherry-pick, revert or
+#   merge in progress -- is aborted on every exit (an error, a signal, a timeout, a return), and the branch it was on is
+#   checked out again if it left HEAD detached; an operation already in progress when it began is the agent's, never
+#   touched. Used by land (its rebase, its stash, its lease), the blame and fallback reverts and the check tree's picks.
+GIT_IN_PROGRESS = (("rebase-merge", "rebase"), ("rebase-apply", "rebase"), ("CHERRY_PICK_HEAD", "cherry-pick"),
+                   ("REVERT_HEAD", "revert"), ("MERGE_HEAD", "merge"))
+
+
+class Interrupted(BaseException):
+    """A signal received inside exit_guard: unwinds like an exception, so every cleanup on the way runs."""
+
+
+@contextlib.contextmanager
+def exit_guard(signals=(signal.SIGTERM, signal.SIGHUP, signal.SIGINT)):
+    """SIGTERM / SIGHUP / SIGINT raise Interrupted inside the block (main thread only; elsewhere a no-op)."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def raise_it(sig, _frame):
+        raise Interrupted(signal.Signals(sig).name)
+
+    saved = {sg: signal.signal(sg, raise_it) for sg in signals}
+    try:
+        yield
+    finally:
+        for sg, h in saved.items():
+            signal.signal(sg, h)
+
+
+def git_in_progress(repo):
+    """The git operations in progress in worktree repo: {name} of rebase / cherry-pick / revert / merge."""
+    args = [x for marker, _n in GIT_IN_PROGRESS for x in ("--git-path", marker)]
+    paths = git(repo, "rev-parse", "--path-format=absolute", *args, check=False).stdout.splitlines()
+    return {name for (_m, name), p in zip(GIT_IN_PROGRESS, paths) if p.strip() and os.path.exists(p.strip())}
+
+
+class WorktreeGuard:
+    """`with WorktreeGuard(repo):` -- on every exit, the operations started inside and left in progress are aborted and
+    a branch left for a detached HEAD is checked out again (EVERY EXIT PUTS THE WORKTREE BACK, above)."""
+
+    def __init__(self, repo):
+        self.repo = repo
+
+    def __enter__(self):
+        self.before = git_in_progress(self.repo)
+        self.branch = git(self.repo, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip() or None
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            for op in sorted(git_in_progress(self.repo) - self.before):
+                r = git(self.repo, op, "--abort", check=False)
+                if r.returncode and op == "rebase":  # a rebase-apply left by `git am`
+                    git(self.repo, "am", "--abort", check=False)
+                err(f"agentctl: aborted the {op} it left in progress in {self.repo}")
+            now = git(self.repo, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip() or None
+            if self.branch and now is None and not git_in_progress(self.repo):
+                git(self.repo, "checkout", "-q", self.branch, check=False)
+        except Exception as e:  # a guard never hides the exit it guards
+            err(f"agentctl: could not put {self.repo} back ({str(e)[:160]})")
+        return False
+
+
 class Stash:
     """A NAMED stash (git's stash list is shared by every worktree of a clone): found again by its own sha, never by
     position, and restored exactly once."""
@@ -511,6 +581,17 @@ def cmd_land(a):
               "your prepared branch with `~/bin/agentctl red owner-push <run> --note \"<what; which units restart>\"` and "
               "end with `BLOCKED ON OWNER: <its one-liner>`.")
         return 1
+    with exit_guard(), WorktreeGuard(repo):  # EVERY EXIT PUTS THE WORKTREE BACK: its rebase, stash and lease
+        try:
+            return land_in_worktree(repo, a)
+        except Interrupted as ex:
+            print(f"NOT LANDED: interrupted by {ex}: its stash, rebase and landing lease were put back; land again",
+                  flush=True)
+            return 130
+
+
+def land_in_worktree(repo, a):
+    """cmd_land's work in the worktree (stash, rebase, checks, push, watch), under its exit guards."""
     main_ref = f"refs/remotes/{remote()}/main"
     env = tool_env()
     log_path = os.path.join(scratch(), f"agentctl-land-{os.path.basename(repo)}-{os.getpid()}.log")
@@ -610,12 +691,8 @@ def sync(repo, main_ref, sh, release_hold=False):
               "or abort it (`git rebase --abort`) yourself -- commits made since it started are on its detached HEAD, "
               "and an abort resets the branch -- then land again")
         return 1, None
-    try:
+    with WorktreeGuard(repo):
         return sync_onto_main(repo, main_ref, sh, release_hold)
-    finally:
-        if rebase_in_progress(repo):
-            sh("git", "rebase", "--abort")
-            err("land: aborted the rebase it left in progress")
 
 
 def sync_onto_main(repo, main_ref, sh, release_hold=False):

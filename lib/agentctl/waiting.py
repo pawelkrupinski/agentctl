@@ -477,6 +477,13 @@ def conflict_resolve(wt, regen=True, notes=None, regenerated=None, provisional=N
 
 
 def pick(wt, commits, dropped=None, regen=True, regenerated=None, provisional=None):
+    """pick_commits under WorktreeGuard (EVERY EXIT PUTS THE WORKTREE BACK, slots.py): no cherry-pick is left in
+    progress in the tree, whatever ends it."""
+    with WorktreeGuard(wt):
+        return pick_commits(wt, commits, dropped, regen, regenerated, provisional)
+
+
+def pick_commits(wt, commits, dropped=None, regen=True, regenerated=None, provisional=None):
     """Cherry-pick commits onto wt's HEAD, one at a time: None, or the conflicting files (the pick aborted, HEAD back
     where it was). A commit already in HEAD's history (patch-equivalent), or empty once picked, is DROPPED, never kept
     as an empty commit: appended to `dropped` as (commit, the commit of HEAD carrying it, or None). A deliberate empty
