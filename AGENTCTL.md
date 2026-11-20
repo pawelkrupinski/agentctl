@@ -2103,6 +2103,15 @@ files (default 2) to an older main version, which is what the `reset --soft` squ
 revert` commits are exempt for their own files. So is a DECLARED retirement: a deleted file named by a `Retires: <path>` trailer (one per line, in the commit's
 final trailer block with Co-Authored-By); undeclared deletions and modifications still count. A file the change MOVES (git rename detection, `diff -M`, 50% similarity: a move with a small edit counts) is not a deletion: its old path is exempt, so a module extraction or a renamed directory is not "undoing" the commit that created it; a deletion with no matching add still counts. Nor is a COHERENT EDIT (2026-11-19, movies 467e9026: a WebReadModel split dropped constructor parameters, so four specs lost the arguments 73aad048 had added and came back byte-for-byte to their pre-73aad048 content): a file returned to its content before commit C is exempt when the identifiers it loses also leave another file of C that the push rewrites -- removing lines C added there without restoring what C replaced (the definition changed in the same push). A squash or an old-side conflict resolution restores C's replaced lines, or touches no other file of C, and still counts. It also refuses an EMPTY commit (no tree change) unless it carries
 an `Allow-Empty: <why>` trailer. `land` runs it, and so does movies' hook. Exit 0 ok, 1 refused.
+The refusal names the declared way out, a `Retires: <path>` line per deleted file it counted, and calls
+`AGENTCTL_MAX_FOREIGN` what it is: a bypass for every file, to be named in the report (issue 5917bb, 2026-11-20: a lane
+deleting its own scaffolding raised the cap to 6, unnamed).
+A land never leaves a rebase in progress (issue 494caa): it refuses to start in a worktree with one in progress (the
+agent's to `--continue` or `--abort`: commits made on its detached HEAD would be lost to an abort), and aborts any rebase
+it started on every path it ends by (slots.py `sync`).
+The sync fast-forwards the movies ROOT CHECKOUT to <remote>/main each cycle -- only on `main`, clean in its tracked files,
+no rebase/merge/cherry-pick in progress, fast-forward only -- so its `.claude` hooks run main's code (issue 66d831;
+server.py `root_checkout_ff`).
 
 ```
 prepush-check: <remote>/main...c972d56a2b49: 1 file changed, 8 insertions(+)

@@ -1269,7 +1269,38 @@ def sync_steps(repo, d, o_r):
             ("fixer landing", lambda: [err(f"red: {x}") for x in fixers_land_watch()]),
             ("network watch", network_watch), ("tunnel probe", tunnel_watch),
             ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep()]),
+            ("root checkout", lambda: [err(x) for x in root_checkout_ff(repo)]),
             ("recovery", maybe_recovery_tick))
+
+
+# THE ROOT CHECKOUT FOLLOWS MAIN (issue 20261119T140508-66d831: ~/projects/movies sat at fb326c38b while main had
+# 995f01ed's hook fix, so the main session's .claude hooks kept raising a false 'WAITING ON YOU'). Nobody works in the
+# root checkout (movies CLAUDE.md), so the sync fast-forwards it to <remote>/main each cycle -- only on `main`, clean
+# (tracked files), no rebase, merge or cherry-pick in progress, never anything but a fast-forward.
+def root_checkout_ff(repo):
+    """Fast-forward clone repo's own checkout (its root, not a worktree) to <remote>/main when that is safe; its lines."""
+    if not repo or not os.path.isdir(repo):
+        return []
+    common = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir", check=False).stdout.strip()
+    gitdir = git(repo, "rev-parse", "--path-format=absolute", "--git-dir", check=False).stdout.strip()
+    if not common or os.path.realpath(common) != os.path.realpath(gitdir):
+        return []  # a linked worktree: some agent's, never touched here
+    if git(repo, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip() != "main":
+        return []
+    if any(os.path.exists(os.path.join(gitdir, x)) for x in ("rebase-merge", "rebase-apply", "MERGE_HEAD",
+                                                            "CHERRY_PICK_HEAD", "REVERT_HEAD")):
+        return []
+    if git(repo, "status", "--porcelain", "--untracked-files=no", check=False).stdout.strip():
+        return []
+    ref = f"refs/remotes/{remote()}/main"
+    head = git(repo, "rev-parse", "HEAD", check=False).stdout.strip()
+    main = git(repo, "rev-parse", "-q", "--verify", ref, check=False).stdout.strip()
+    if not main or main == head or not git_ok(repo, "merge-base", "--is-ancestor", head, main):
+        return []
+    r = git(repo, "merge", "--ff-only", "-q", ref, check=False)
+    if r.returncode:
+        return [f"root checkout {repo}: could not fast-forward to {main[:10]}: {(r.stderr or r.stdout).strip()[:160]}"]
+    return [f"root checkout {repo}: fast-forwarded {head[:10]} -> {main[:10]}"]
 
 
 def close_landed_worktrees(store=None):
