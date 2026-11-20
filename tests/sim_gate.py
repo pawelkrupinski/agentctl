@@ -7,9 +7,10 @@ queue simulator's invariants, kind by kind, against master.
   python3 tests/sim_gate.py --update        write the measured counts and fingerprints into the registry
   python3 tests/sim_gate.py --range A..B    the commit rule alone (below), over the commits of A..B
 
-THE FIXED SCENARIOS (SCENARIOS): the suite's 200 random seeds, the calm, load and chaos profiles (with a wider chaos
+THE FIXED SCENARIOS (scenarios()): the suite's 200 random seeds, the calm, load and chaos profiles (with a wider chaos
 sweep than the suite's, so a rare violation has a count to rise from), every replayed day of real arrivals
-(tests/fixtures/landing-replay-7d.json), the 2026-11-17 collisions, the 2026-11-19 baselines and the 08010c timeline.
+(tests/fixtures/landing-replay-7d.json), the 2026-11-17 collisions, the 2026-11-19 baselines, the 08010c timeline
+and (v2) the mutation tests' own profiles: loadlone, chaoshold, the red fix beside an ordinary change.
 Each runs in COUNT MODE (Sim.run(stop=False): on past a violation) and a kind's count is the number of scenarios that
 violate it -- the measure lanes used by hand ("invariant 9: 15/60 vs master's 8/60").
 
@@ -51,6 +52,14 @@ def scenarios():
     out += [(f"baselines-2026-11-19-{s}", {"seed": s, "calm": True, "trees": 4, "script": "BASELINES_2026_11_19"})
             for s in range(4)]
     out += [(f"timeline-08010c-{s}", {"seed": s, "calm": True, "script": "TIMELINE_08010C"}) for s in range(4)]
+    # v2 (2026-11-20): the mutation tests' own profiles, so a rule they need is held here too -- the load with many
+    # lone changes (the older-batch rule: I5 fails without it), the chaos seeds where a push waits for a batch, the red
+    # fix beside an ordinary change
+    out += [(f"loadlone-{s}", {"seed": s, "calm": True, "trees": 1, "profile": "LOADLONE", "n_changes": "LOAD.n"})
+            for s in range(3)]
+    out += [(f"chaoshold-{s}", {"seed": s, "trees": 4, "profile": "CHAOS_OUTSIDE", "n_changes": 14}) for s in (3, 4)]
+    out += [(f"redfix-behind-ordinary-{s}", {"seed": s, "calm": True, "trees": 2, "script": "T.REDFIX_BEHIND_ORDINARY"})
+            for s in range(4)]
     return out
 
 
@@ -63,7 +72,8 @@ def run_one(spec):
     """One scenario in count mode: {kind: violations}, its first lines, and its landing latency (mean ticks)."""
     import queue_sim
     import test_queue_sim as T
-    profiles = {"LOAD": T.LOAD, "CHAOS": T.CHAOS, "CHAOS_OUTSIDE": {**T.CHAOS, "outside_red": 0.08}}
+    profiles = {"LOAD": T.LOAD, "CHAOS": T.CHAOS, "CHAOS_OUTSIDE": {**T.CHAOS, "outside_red": 0.08},
+                "LOADLONE": dict(T.LOAD, nobatch=0.4)}
     kw = dict(spec)
     if "profile" in kw:
         kw["profile"] = profiles[kw["profile"]]
@@ -72,7 +82,8 @@ def run_one(spec):
     if "script" in kw:
         name = kw["script"]
         kw["script"] = (queue_sim.replay_script(queue_sim.replay_days()[int(name.split(":")[1])])
-                        if name.startswith("replay:") else list(getattr(queue_sim, name)))
+                        if name.startswith("replay:") else list(getattr(T, name[2:])) if name.startswith("T.")
+                        else list(getattr(queue_sim, name)))
     seed = kw.pop("seed")
     sim = queue_sim.Sim(seed, **kw).run(stop=False)
     waits = [sim.done_at[c.cid] - c.arrived for c in sim.changes if c.cid in sim.done_at]
@@ -144,7 +155,7 @@ def fingerprints(src=None, gate_src=None, profiles_src=None):
                if isinstance(n, ast.FunctionDef) and n.name in ("scenarios", "run_one")]
     ptree = ast.parse(profiles_src)
     shared += [ast.get_source_segment(profiles_src, n) for n in ptree.body if isinstance(n, ast.Assign)
-               and any(getattr(t, "id", None) in ("LOAD", "CHAOS") for t in n.targets)]
+               and any(getattr(t, "id", None) in ("LOAD", "CHAOS", "REDFIX_BEHIND_ORDINARY") for t in n.targets)]
     base = "\n".join(shared)
     return {k: hashlib.sha1((base + "\n".join(sorted(v))).encode()).hexdigest()[:12] for k, v in by_kind.items()}
 
