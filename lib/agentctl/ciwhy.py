@@ -232,19 +232,21 @@ def red_repos_parse(raw):
 
 
 def generated_parse(repo, raw):
-    """A repo's GENERATED FILES (waiting.py): [{paths: [glob], regen: [argv], timeout: s}] from its `generated` entries
-    (`{"paths": [...], "regen": "<command run in the tree>", "timeout": <s, optional>}`). Raises ValueError."""
+    """A repo's GENERATED FILES (waiting.py): [{paths: [glob], regen: [argv] or None, timeout: s}] from its `generated`
+    entries (`{"paths": [...], "regen": "<command run in the tree>", "timeout": <s, optional>}`; no `regen`: a table
+    merged row by row only, its rows hand-written -- a row both sides changed is the author's conflict). Raises
+    ValueError."""
     out = []
     for g in raw or []:
         paths, regen = (g or {}).get("paths"), (g or {}).get("regen")
         if not paths or not all(isinstance(p, str) and p and not p.startswith("/") for p in paths) \
-                or not isinstance(regen, str) or not regen.strip():
-            raise ValueError(f"{repo}: a `generated` entry needs `paths: [<repo path or glob>, ...]` and `regen: "
-                             f"<command>`: {g!r}")
+                or (regen is not None and (not isinstance(regen, str) or not regen.strip())):
+            raise ValueError(f"{repo}: a `generated` entry needs `paths: [<repo path or glob>, ...]` and, when it has "
+                             f"one, `regen: <command>`: {g!r}")
         timeout = g.get("timeout")
         if timeout is not None and not (isinstance(timeout, (int, float)) and timeout > 0):
             raise ValueError(f"{repo}: a `generated` entry's `timeout` is seconds > 0: {g!r}")
-        out.append({"paths": list(paths), "regen": shlex.split(regen), "timeout": timeout})
+        out.append({"paths": list(paths), "regen": shlex.split(regen) if regen is not None else None, "timeout": timeout})
     return out
 
 

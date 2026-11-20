@@ -418,6 +418,8 @@ def regenerate(wt, files, regenerated=None, provisional=None):
         mine = [f for f in pending if generated_entry(wt, f) is g]
         if not mine:
             continue
+        if not g.get("regen"):  # a hand-written table merged row by row only: never a side's row kept provisionally
+            return f"a row both sides changed in {', '.join(mine)}, which no regen command decides"
         if not regen_here():
             for f in mine:
                 text = rows_merge(stages[f][1], stages[f][2], stages[f][3], prefer_ours=True)

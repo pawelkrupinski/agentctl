@@ -78,7 +78,11 @@ class RegistryTest(unittest.TestCase):
         conf = next(c for c in ok if c["repo"] == "o/r")
         self.assertEqual(conf["generated"], [{"paths": [BASELINE], "regen": ["scripts/coupling-report", "--update"],
                                               "timeout": 600}])
-        for bad in ({"paths": [BASELINE]}, {"regen": "x"}, {"paths": ["/abs"], "regen": "x"},
+        rows_only = A.red_repos_parse({"repos": [{"repo": "o/r", "gate": [["Main", "main.yml"]], "generated": [
+            {"paths": [BASELINE]}]}]})
+        self.assertEqual(next(c for c in rows_only if c["repo"] == "o/r")["generated"],
+                         [{"paths": [BASELINE], "regen": None, "timeout": None}], "a hand-written table: rows only")
+        for bad in ({"paths": [BASELINE], "regen": ""}, {"regen": "x"}, {"paths": ["/abs"], "regen": "x"},
                     {"paths": [BASELINE], "regen": "x", "timeout": 0}):
             with self.assertRaises(ValueError, msg=bad):
                 A.red_repos_parse({"repos": [{"repo": "o/r", "gate": [["Main", "main.yml"]], "generated": [bad]}]})
@@ -91,7 +95,11 @@ class RegistryTest(unittest.TestCase):
             "test/resources/coupling-baseline.tsv": ["scripts/coupling-report", "--update"],
             "test/resources/coupling-fanout-refs.tsv": ["scripts/coupling-report", "--update"],
             **{f"test/resources/{n}-baseline.tsv": ["scripts/quality-report", "--update"]
-               for n in ("complexity", "length", "duplication")}})
+               for n in ("complexity", "length", "duplication")},
+            # BATCHED CHECKS (2026-11-20): the hand-written tables, merged row by row with no regen command
+            **{p: None for p in ("test/resources/coupling-exemptions.tsv", "test/resources/coupling-layers.tsv",
+                                 "test/resources/fixtures/identity-judgements.tsv",
+                                 "test/resources/fixtures/identity-unmatched/expected-matches.tsv")}})
 
 
 # the repo's regen command: writes the baseline the way the repo's own tool would, from the combined tree (its row
@@ -420,9 +428,49 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.assertEqual(self.entry(again)["requeued_from"], first)
 
 
-for _name in dir(test_backlog_batch.BacklogBatchTest):  # its setUp only, not its tests
-    if _name.startswith("test_") and _name not in GeneratedQueueTest.__dict__:
-        setattr(GeneratedQueueTest, _name, None)
+class HandWrittenTableTest(GeneratedQueueTest):
+    """BATCHED CHECKS (the owner, 2026-11-20: "generated baselines are not conflicts"): a hand-written table merged row
+    by row -- movies' coupling-exemptions.tsv, coupling-layers.tsv, the judgements -- registered with no regen command.
+    Two changes adding or editing disjoint rows are batched, never held; a row both change stays the author's
+    conflict, and never takes one side's row provisionally (no ratchet would judge a lost exemption)."""
+
+    def setUp(self):
+        super().setUp()
+        with open(os.environ["AGENTCTL_RED_REPOS"], "w") as f:
+            json.dump({"repos": [{"repo": A.slug(self.r.path), "gate": [["Main", "main.yml"]],
+                                  "generated": [{"paths": [BASELINE]}]}]}, f)
+        for c in A.PROCESS_CACHES:
+            c.clear()
+
+    def test_disjoint_rows_are_no_hold_and_merge_in_the_batch(self):
+        ea = self.change("a", {"ce\tservices": 6}, {"web/src/main/B.scala": "b\n"})
+        eb = self.change("b", {"ce\ttools": 1}, {"worker/src/main/C.scala": "c\n"})
+        A.tick_changes(self.r.path, self.d)
+        self.assertEqual(self.started, [], "both wait for the backlog batch: no overlap hold")
+        self.drive_as("server")
+        self.assertEqual([self.entry(x)["status"] for x in (ea, eb)], ["landed", "landed"])
+        self.assertIn("ce\tservices\t6\nce\ttools\t1\n", self.baseline_on_main(), "both rows")
+        self.assertEqual(self.regen_runs(), 0)
+
+    def test_a_row_both_change_is_never_kept_provisionally(self):
+        ea = self.change("a", {"fanout\tA": 13}, {"web/src/main/A.scala": "a\na2\n"})
+        eb = self.change("b", {"fanout\tA": 14}, {"worker/src/main/C.scala": "c\n"})
+        A.tick_changes(self.r.path, self.d)
+        self.drive_as("server")
+        self.assertEqual(self.regen_runs(), 0)
+        self.assertEqual(self.entry(eb)["batch_alone"], "regen", "b falls out of the stack, its why in the log")
+        self.assertIn("a row both sides changed in test/resources/coupling-baseline.tsv, which no regen command decides",
+                      open(os.path.join(self.d, "processor.log")).read())
+        self.assertNotEqual(self.entry(eb)["status"], "landed", "never landed on a's row")
+
+
+for _cls in (GeneratedQueueTest, HandWrittenTableTest):
+    for _name in dir(test_backlog_batch.BacklogBatchTest):  # its setUp only, not its tests
+        if _name.startswith("test_") and _name not in _cls.__dict__ and _name not in GeneratedQueueTest.__dict__:
+            setattr(_cls, _name, None)
+for _name in list(GeneratedQueueTest.__dict__):  # nor the generated tests (a regen command registered) twice
+    if _name.startswith("test_") and _name not in HandWrittenTableTest.__dict__:
+        setattr(HandWrittenTableTest, _name, None)
 
 if __name__ == "__main__":
     unittest.main()
