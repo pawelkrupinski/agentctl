@@ -69,7 +69,14 @@ moves it forward; nothing is a detached process that can die with its state in i
   tracked thing, with its state, deadline and a version every transition compares and sets), `leases` (who holds
   what, below), `events` (every transition and verdict, in order: `seq` is the cursor) and `offers` (open work a taker
   may take: a red waiting for a fixer).
-- **Items and their machines.** Every state has a deadline and an automatic exit, so nothing waits forever:
+- **Items and their machines.** Every state has a deadline and an automatic exit, so nothing waits forever. THE TABLE
+  IS THE LAW (2026-11-20): `Store.transition` takes only a move `MACHINES` lists (a listed exit, or a self-move); any
+  other raises `IllegalTransition`, changes nothing and leaves one `<type>.illegal` event naming it. Turning that on
+  found nine moves the code made that the table never listed (a change cancelled, superseded or landed by content
+  from any open state but pushing; a waiting change checked in the batch at green; a pending red fix back to its
+  holder; a batch blocked-red from assembling, held after a failed push), now listed with why. tests/
+  test_machine_properties.py: random event sequences take exactly the listed moves, every deadline move is legal,
+  no reachable state can stall in silence:
   - `change` (a landed entry): queued → checking → checked → pushing → landed, or waiting (main red), rejected,
     superseded, cancelled;
   - `batch` (the changes held while main was red): blocked-red → assembling → checking → pushing → landed, bisecting

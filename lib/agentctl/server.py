@@ -65,7 +65,8 @@ def contact_machine():
 
 
 def store_errors():
-    return {"StaleVersion": StaleVersion, "TerminalState": TerminalState, "LeaseLost": LeaseLost}
+    return {"StaleVersion": StaleVersion, "TerminalState": TerminalState, "LeaseLost": LeaseLost,
+            "IllegalTransition": IllegalTransition}
 
 
 class StoreUnavailable(RuntimeError):

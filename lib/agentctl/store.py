@@ -369,6 +369,13 @@ class Store:
             if machine_state(typ, cur["state"]).terminal and to != cur["state"]:
                 c.execute("ROLLBACK")
                 raise TerminalState(f"{typ} {iid} is {cur['state']}: terminal")
+            if to != cur["state"] and to not in machine_state(typ, cur["state"]).exits:
+                # THE TABLE IS THE LAW (2026-11-20): a move MACHINES does not list is refused, and recorded (one
+                # `<type>.illegal` event per item and move) so the path that tried it is found, never silently taken
+                c.execute("ROLLBACK")
+                self._record_illegal(typ, iid, cur["state"], to, (event or {}).get("text"))
+                raise IllegalTransition(f"{typ} {iid}: {cur['state']} -> {to} is no move of machine {typ!r} "
+                                        f"(its exits: {', '.join(machine_state(typ, cur['state']).exits) or 'none'})")
             now_ = self.clock()
             same = to == cur["state"]
             # a self-transition whose event says severity `info` re-deadlines without escalating (a red's culprit decided:
@@ -392,6 +399,20 @@ class Store:
                        ev.get("dedupe") or f"{typ}:{iid}:{to}:{cur['version'] + 1}"))
             c.execute("COMMIT")
             return cur["version"] + 1
+        finally:
+            c.close()
+
+    def _record_illegal(self, typ, iid, frm, to, why):
+        c = self.db()
+        try:
+            c.execute("INSERT OR IGNORE INTO events (at, kind, item_type, item_id, from_state, to_state, severity, "
+                      "audience, text, refs, dedupe) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                      (self.clock(), f"{typ}.illegal", typ, iid, frm, to, "info", "{}",
+                       f"REFUSED {typ} {iid}: {frm} -> {to} is no move of its machine"
+                       + (f" (it would have said: {str(why)[:200]})" if why else ""), "{}",
+                       f"{typ}:{iid}:illegal:{frm}:{to}"))
+        except Exception:
+            pass  # the refusal stands whether or not it is recorded
         finally:
             c.close()
 
@@ -506,6 +527,10 @@ class TerminalState(RuntimeError):
     """A transition out of a terminal state."""
 
 
+class IllegalTransition(RuntimeError):
+    """A transition MACHINES does not list (from a state to one outside its exits): refused and recorded."""
+
+
 class StateSpec:
     """A state: its deadline, the state that deadline moves it to, the other states it may go to. A deadline LOOPS BACK
     INTO ITS OWN STATE only in a WAIT state (`wait=True`: waiting on something outside the machine -- a checker slot, the
@@ -524,12 +549,20 @@ M = 60
 H = 3600
 MACHINES = {
     # §5.1 a submitted change
+    # THE WORLD'S EXITS (2026-11-20, when transition() began refusing what this table does not list): any open change
+    # but a pushing one may end landed (its content found on main: close_landed_changes), superseded (its worktree
+    # submitted again) or cancelled (its agent's `land cancel`), and any but a pushing one rejected (NOT LANDED: it no
+    # longer applies, its checks failed, a refusal). A push in flight ends only by its own verdict.
     "change": {
-        "queued": StateSpec(15 * M, "queued", ("checking", "superseded", "cancelled", "landed"), escalate=True, wait=True),
-        "checking": StateSpec(2 * H, "queued", ("checked", "rejected", "queued")),
+        "queued": StateSpec(15 * M, "queued", ("checking", "superseded", "cancelled", "landed", "rejected"),
+                            escalate=True, wait=True),
+        "checking": StateSpec(2 * H, "queued", ("checked", "rejected", "queued", "superseded", "cancelled", "landed")),
         # checked -> checking: a push batch's member, verified with the others on the current main (batch.py)
-        "checked": StateSpec(5 * M, "checked", ("pushing", "waiting", "queued", "checking"), escalate=True, wait=True),
-        "waiting": StateSpec(6 * H, "waiting", ("landed", "rejected", "queued"), escalate=True, wait=True),
+        "checked": StateSpec(5 * M, "checked", ("pushing", "waiting", "queued", "checking", "superseded", "cancelled",
+                                                "landed", "rejected"), escalate=True, wait=True),
+        # waiting -> checking: a member of the backlog batch formed at green (batch.py batch_step, full depth)
+        "waiting": StateSpec(6 * H, "waiting", ("landed", "rejected", "queued", "superseded", "cancelled", "checking"),
+                             escalate=True, wait=True),
         "pushing": StateSpec(300, "checked", ("landed", "checked")),
         "landed": StateSpec(ARCHIVE, "landed", (), terminal=True),
         "rejected": StateSpec(ARCHIVE, "rejected", (), terminal=True),
@@ -546,12 +579,15 @@ MACHINES = {
     # §5.2 + §14.1 the batch: a computed item, no branch
     "batch": {
         # assembling WORKS (it builds the tip): past its deadline it is held, and assembles again after the hold
-        "assembling": StateSpec(300, "held", ("checking", "held", "landed"), escalate=True),
+        # assembling -> pushing: every member already checked on this main (the batch's tip needs no check of its own)
+        # assembling -> blocked-red: assembled while red, nothing in it may land on red now (THE BATCH IS THE MECHANISM)
+        "assembling": StateSpec(300, "held", ("checking", "held", "landed", "pushing", "blocked-red"), escalate=True),
         # -> blocked-red: a waiting batch's red pre-check ends (batch.py THE BATCH IS THE MECHANISM)
         "blocked-red": StateSpec(6 * H, "blocked-red", ("assembling", "checking"), escalate=True, wait=True),
         "checking": StateSpec(2 * H, "held", ("pushing", "bisecting", "assembling", "held", "blocked-red")),
         "bisecting": StateSpec(4 * H, "held", ("pushing", "assembling", "held", "blocked-red")),
-        "pushing": StateSpec(300, "assembling", ("landed", "assembling")),
+        # pushing -> held: three failed landings hold the batch with a condition (batch.py)
+        "pushing": StateSpec(300, "assembling", ("landed", "assembling", "held")),
         "held": StateSpec(30 * M, "assembling", ("assembling",), escalate=True),
         "landed": StateSpec(ARCHIVE, "landed", (), terminal=True),
     },
@@ -571,7 +607,9 @@ MACHINES["red"] = {
                                                          "verified", "dispatch-off"), escalate=True, wait=True),
     "leased": StateSpec(RED_CLAIM_MAX, "offered", ("fix-pending", "offered", "blocked-external", "cleared", "verified",
                                                    "dispatch-off")),
-    "fix-pending": StateSpec(RED_FIX_DECIDE, "fix-pending", ("offered", "verified", "cleared"), escalate=True, wait=True),
+    # fix-pending -> leased: a link that no longer holds is no fix; its live holder keeps the red (red.py, 331b586)
+    "fix-pending": StateSpec(RED_FIX_DECIDE, "fix-pending", ("offered", "verified", "cleared", "leased"), escalate=True,
+                             wait=True),
     "blocked-external": StateSpec(7 * 86400, "offered", ("offered", "fix-pending", "leased", "cleared", "verified",
                                                          "dispatch-off")),
     # its repo's dispatch is off by the owner (`red auto off --repo R`): recorded and shown, never offered or asked
