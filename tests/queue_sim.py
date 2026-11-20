@@ -26,6 +26,26 @@ sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
 
 TICK = 60  # s of simulated time per reconciler tick
+# THE INVARIANT KINDS (tests/sim-invariants.tsv: each one's version, definition fingerprint and violation baseline;
+# tests/sim_gate.py holds every agentctl change to them). The numbers are the module docstring's of test_queue_sim.py.
+INVARIANT_KINDS = {
+    "I1": "one open item per change (worktree + head)",
+    "I2": "never two pushes of one change; never a decided change's commit pushed",
+    "I3": "a red fix is never behind a batch or a non-red change (its own tree, started and pushed when it may go)",
+    "I4": "a batch reaches landed, bisecting or held within its bound",
+    "I5": "the oldest change lands within a bound when nothing fails",
+    "I6": "no change lost (entries and items agree, LANDED is on main, every change decided after the drain)",
+    "I7": "exactly one agentctl.landing record per decided change",
+    "I8": "a change that no longer applies was told at queue time and never checked meanwhile",
+    "I9": "no full recheck for a file overlap with a change open when it was queued",
+    "I10": "no change held behind another for generated files alone",
+    "I11": "no unverified combined tree reaches main",
+    "Ib": "every queued or checked change past its deadline has a recorded hold",
+    "Ic": "no change past its deadline is silent in `land status`",
+    "Id": "executors start in the documented priority order within a tick",
+    "IX": "no executor for a decided change",
+}
+VIOLATIONS_MAX = 50  # lines one scenario keeps in the gate's count mode
 ROOT = "0" * 40
 HOOK_TEXT = """#!/bin/sh
 # the simulated repo's hook: never run (the checks are the simulator's); its text tells agentctl what it supports:
@@ -247,6 +267,7 @@ class Sim:
         self.script = script  # a replay: [(tick, spec)] instead of random arrivals
         self.n_changes = n_changes if n_changes is not None else self.rng.randint(4, 10)
         self.tick, self.violations, self.log = 0, [], []
+        self.kinds_seen = {}  # invariant kind -> violations of it (tests/sim_gate.py)
         self.patches, self.commits = {}, {ROOT: (None, None)}
         self._anc = {}
         self.main = ROOT
@@ -514,7 +535,7 @@ class Sim:
             if other and other.cid in self.open_at_arrival.get(me.cid, ()) \
                     and other.cid not in self.waiting_at_arrival.get(me.cid, ()) \
                     and mine & {x for p in other.patches for x in self.patches[p].paths}:
-                self.violate(f"change {me.eid} rechecked in full ({why}) for {other.eid}, open when it was queued")
+                self.violate("I9", f"change {me.eid} rechecked in full ({why}) for {other.eid}, open when it was queued")
                 return
 
     def verdict(self, tip, where):
@@ -539,7 +560,7 @@ class Sim:
             # fix arriving while the first's fix still checks takes another tree at once -- the right call)
             if not (other and other.startswith("check-") and (red_fix(self.entry_by_id(other[6:]) or {})
                                                                or self.red_fix_checks.get(other[6:]))):
-                self.violate(f"red fix {e['id']} checked in {os.path.basename(tree)}, not the red-fix tree (the wrong "
+                self.violate("I3", f"red fix {e['id']} checked in {os.path.basename(tree)}, not the red-fix tree (the wrong "
                              f"lane; that tree held by {other or (holder or {}).get('holder')})")
         self.red_fix_checks[e["id"]] = red_fix(e)
         self.checks_of[e["id"]] = self.checks_of.get(e["id"], 0) + 1
@@ -572,13 +593,13 @@ class Sim:
             ch = next((c for c in self.changes if pid in c.patches), None)
             status = (self.entry(ch) or {}).get("status") if ch else None
             if status in ("superseded", "cancelled", "rejected"):
-                self.violate(f"change {ch.eid}, {status}, pushed to main (patch {pid})")
+                self.violate("I2", f"change {ch.eid}, {status}, pushed to main (patch {pid})")
         for pid in new:
             self.pushed_patch_count[pid] = self.pushed_patch_count.get(pid, 0) + 1
             if self.pushed_patch_count[pid] > 1:
-                self.violate(f"patch {pid} of change {self.patches[pid].cid} pushed to main twice")
+                self.violate("I2", f"patch {pid} of change {self.patches[pid].cid} pushed to main twice")
         if who == "queue" and not self.tree_verified(sha, new):  # INVARIANT 11
-            self.violate(f"an unverified combined tree reached main: {sha[:10]} (patches {sorted(new)}) passed no check")
+            self.violate("I11", f"an unverified combined tree reached main: {sha[:10]} (patches {sorted(new)}) passed no check")
         self.pushes.append((self.tick, sha, new, who))
         self.main = sha
         if self.reds and any(self.patches[p].fixes & self.reds for p in new):
@@ -613,7 +634,7 @@ class Sim:
             self.waiting_at_arrival.setdefault(me.cid, set()).update(
                 c.cid for c in self.changes if (self.entry(c) or {}).get("status") == "waiting")
         if e.get("status") not in ("queued", "checking"):
-            self.violate(f"an executor started for {eid}, which is {e.get('status')}")
+            self.violate("IX", f"an executor started for {eid}, which is {e.get('status')}")
         self._spawn(f"check-{eid}", lambda: A.check_entry(repo, eid))
 
     def spawn_batch_executor(self, repo, d, bid):
@@ -628,8 +649,11 @@ class Sim:
     def start_watch(self, repo, sha, pushed_at, **kw):
         return None
 
-    def violate(self, what):
-        self.violations.append(f"seed {self.seed} tick {self.tick}: {what}")
+    def violate(self, kind, what):
+        """A violation of invariant `kind` (tests/sim-invariants.tsv names each; tests/sim_gate.py counts them)."""
+        assert kind in INVARIANT_KINDS, kind
+        self.kinds_seen[kind] = self.kinds_seen.get(kind, 0) + 1
+        self.violations.append(f"seed {self.seed} tick {self.tick}: [{kind}] {what}")
 
     # ---------------------------------------------------------------- set up / tear down
     FAKES = ("git", "git_ok", "fetch_main", "apply_entry", "check_tree", "range_paths", "named_reader", "cherry_landed",
@@ -1043,7 +1067,7 @@ class Sim:
                 entry = self.entry_by_id(it["id"]) or {}
                 if hold.get("kind") == "overlap" and hold.get("files") and set(hold["files"]) <= set(GENERATED) \
                         and entry.get("batch_alone") != "regen":
-                    self.violate(f"change {it['id']} held behind {hold.get('blocker')} for generated files alone: "
+                    self.violate("I10", f"change {it['id']} held behind {hold.get('blocker')} for generated files alone: "
                                  f"{', '.join(hold['files'])}")
         self.check_invariants(before, reds)
         self.tick += 1
@@ -1051,18 +1075,21 @@ class Sim:
 
     keep = os.environ.get("AGENTCTL_TEST_SIM_KEEP")
 
-    def run(self, max_ticks=None, drain=400):
-        """The arrivals, then a drain (the gate green, no new arrivals) until every change is decided or the bound."""
+    def run(self, max_ticks=None, drain=400, stop=True):
+        """The arrivals, then a drain (the gate green, no new arrivals) until every change is decided or the bound.
+        stop False (the gate's count mode, tests/sim_gate.py): runs on past a violation, so every invariant kind a
+        scenario breaks is counted, not only the first (at most VIOLATIONS_MAX lines kept)."""
         self.install()
+        go = lambda: not self.violations if stop else len(self.violations) < VIOLATIONS_MAX
         try:
             last = max([t for t, _s in self.arrivals] + [0])
             self.drain_from = last + 1
             limit = (max_ticks or last + 1) + drain
-            while self.tick < limit and not self.violations:
+            while self.tick < limit and go():
                 self.step()
                 if self.tick > self.drain_from and self.quiet():
                     break
-            if not self.violations:
+            if go():
                 self.final_checks()
         finally:
             self.uninstall()
@@ -1084,7 +1111,7 @@ class Sim:
             dd = it.get("data") or {}
             k = (dd.get("worktree"), self.commits.get(dd.get("head"), (None, dd.get("head")))[1])
             if k in seen:
-                self.violate(f"two open items for one change {os.path.basename(k[0] or '?')} ({k[1]}): "
+                self.violate("I1", f"two open items for one change {os.path.basename(k[0] or '?')} ({k[1]}): "
                              f"{seen[k]} and {it['id']}")
             seen[k] = it["id"]
         # 2. NEVER TWO PUSHES OF ONE CHANGE: forge_push (a patch twice on main)
@@ -1100,16 +1127,16 @@ class Sim:
             if e.get("status") in A.ENTRY_FINAL or not named & open_now & self.open_before or reds != self.reds:
                 continue
             if e.get("backlog_batch"):
-                self.violate(f"red fix {eid} is a member of batch {e['backlog_batch']}")
+                self.violate("I3", f"red fix {eid} is a member of batch {e['backlog_batch']}")
             due = not float(e.get("retry_after") or 0) > A.time.time()
             if e["status"] == "queued" and due and not A.checker_alive(eid) \
                     and before.get(eid, {}).get("status") == "queued" \
                     and not float(before[eid].get("retry_after") or 0) > A.time.time() - TICK:
                 other = redfix_holder and eid not in json.dumps(redfix_holder.get("meta") or {})
                 if not other:
-                    self.violate(f"red fix {eid} queued and not started: held behind other work")
+                    self.violate("I3", f"red fix {eid} queued and not started: held behind other work")
             if e["status"] == "checked" and due and before.get(eid, {}).get("status") == "checked":
-                self.violate(f"red fix {eid} checked and not pushed: its push held behind other work")
+                self.violate("I3", f"red fix {eid} checked and not pushed: its push held behind other work")
         self.check_hold_invariants(st, entries)
         # 4. A BATCH REACHES LANDED, BISECTING OR HELD WITHIN N TICKS (counted in its assembling/checking/pushing ticks)
         for bt in st.items("batch"):
@@ -1124,7 +1151,7 @@ class Sim:
                 continue
             n = self.batch_seen[bt["id"]] = self.batch_seen.get(bt["id"], 0) + 1
             if n > self.profile.get("batch_bound", 40):
-                self.violate(f"batch {bt['id']} {bt['state']} for {n} ticks without landing, bisecting or holding")
+                self.violate("I4", f"batch {bt['id']} {bt['state']} for {n} ticks without landing, bisecting or holding")
         for ch in self.changes:
             e = self.entry(ch) or {}
             if ch.cid not in self.done_at and e.get("status") in A.ENTRY_FINAL:
@@ -1137,7 +1164,7 @@ class Sim:
             for ch in self.changes:
                 e = self.entry(ch)
                 if e and e.get("status") not in A.ENTRY_FINAL and self.tick - ch.arrived > bound:
-                    self.violate(f"change {ch.eid} ({ch.kind}) unlanded {self.tick - ch.arrived} ticks after it arrived "
+                    self.violate("I5", f"change {ch.eid} ({ch.kind}) unlanded {self.tick - ch.arrived} ticks after it arrived "
                                  f"with nothing failing (bound {bound})")
                     break
         # 6. NO CHANGE LOST: every entry has its item, every item its entry, and they agree on decided states
@@ -1148,29 +1175,29 @@ class Sim:
                 continue
             if it is None:
                 if eid in self.known_entries:  # one written this tick gets its item at the next projection
-                    self.violate(f"entry {eid} ({e.get('status')}) has no store item")
+                    self.violate("I6", f"entry {eid} ({e.get('status')}) has no store item")
                 continue
             if e.get("status") in A.ENTRY_FINAL and not A.machine_state("change", it["state"]).terminal:
-                self.violate(f"entry {eid} is {e['status']} but its item is {it['state']}")
+                self.violate("I6", f"entry {eid} is {e['status']} but its item is {it['state']}")
             if A.machine_state("change", it["state"]).terminal and e.get("status") not in A.ENTRY_FINAL \
                     and A.ENTRY_STATE.get(e.get("status")) != it["state"]:
-                self.violate(f"item {eid} is {it['state']} but its entry is {e.get('status')}")
+                self.violate("I6", f"item {eid} is {it['state']} but its entry is {e.get('status')}")
         for it in items:
             if it["id"] not in entries:
-                self.violate(f"item {it['id']} ({it['state']}) has no queue entry: stranded")
+                self.violate("I6", f"item {it['id']} ({it['state']}) has no queue entry: stranded")
         for ch in self.changes:
             e = self.entry(ch)
             if e and e.get("status") == "landed":
                 on = self.patches_of(self.main)
                 if not set(ch.patches) <= on:
-                    self.violate(f"change {ch.eid} LANDED but {sorted(set(ch.patches) - on)} not on main: lost")
+                    self.violate("I6", f"change {ch.eid} LANDED but {sorted(set(ch.patches) - on)} not on main: lost")
 
     def check_hold_invariants(self, st, entries):
         """(b) EVERY CHANGE PAST ITS DEADLINE HAS A RECORDED HOLD, (c) NO CHANGE IS SILENT: every held change's
         `land status` line says why, (d) THE PRIORITY ORDER: executors start in PRIORITY's order within a tick."""
         t = A.time.time()
         for it, _e in A.unheld_changes(st, entries, t):
-            self.violate(f"change {it['id']} {it['state']} {int((t - it['entered_at']) // TICK)} ticks, past its "
+            self.violate("Ib", f"change {it['id']} {it['state']} {int((t - it['entered_at']) // TICK)} ticks, past its "
                          f"deadline, and nothing recorded holding it (hold {(it['data'] or {}).get('hold')})")
         bt = A.current_batch(st, self.d)
         rows = A.change_rows(st)
@@ -1182,12 +1209,12 @@ class Sim:
             line = A.land_status_line(r, bt, in_batch, t)
             e = entries.get(r["id"]) or {}
             if "held:" not in line and "(in batch" not in line and not A.checker_alive(r["id"]):
-                self.violate(f"change {r['id']} {r['state']} past its deadline, silent in `land status`: {line.strip()}"
+                self.violate("Ic", f"change {r['id']} {r['state']} past its deadline, silent in `land status`: {line.strip()}"
                              + (f" (a member of {e['backlog_batch']})" if e.get("backlog_batch") else ""))
         now = [x for x in self.spawned if x[0] == self.tick and x[2] is not None]
         for (_t, a, ra), (_t2, b, rb) in zip(now, now[1:]):
             if rb < ra:
-                self.violate(f"{b} ({A.PRIORITY[rb][0]}) started before {a} ({A.PRIORITY[ra][0]}) in one tick: not "
+                self.violate("Id", f"{b} ({A.PRIORITY[rb][0]}) started before {a} ({A.PRIORITY[ra][0]}) in one tick: not "
                              "the documented priority order")
 
     def saw_conflict_rejection(self, st, ch, e):
@@ -1204,10 +1231,10 @@ class Sim:
         if self.tick <= ch.arrived + 1 and not self.checks_of.get(ch.eid):
             return  # NOT LANDED at its first tick, no check spent: that is being told at queue time
         if when is None or when > arrived_at + TICK:
-            self.violate(f"change {ch.eid} no longer applies after {culprit.eid} landed (open when it was queued), and "
+            self.violate("I8", f"change {ch.eid} no longer applies after {culprit.eid} landed (open when it was queued), and "
                          f"was not told at queue time")
         elif self.checks_of.get(ch.eid):
-            self.violate(f"change {ch.eid} was checked {self.checks_of[ch.eid]} time(s) before it no longer applied "
+            self.violate("I8", f"change {ch.eid} was checked {self.checks_of[ch.eid]} time(s) before it no longer applied "
                          f"after {culprit.eid}, which it was told it conflicts with")
 
     def final_checks(self):
@@ -1215,14 +1242,14 @@ class Sim:
         for ch in self.changes:
             e = self.entry(ch)
             if e is None:
-                self.violate(f"change {ch.cid} was never queued")
+                self.violate("I6", f"change {ch.cid} was never queued")
                 continue
             if e.get("status") not in A.ENTRY_FINAL:
-                self.violate(f"change {ch.eid} still {e.get('status')} after the drain (gate green, nothing arriving)")
+                self.violate("I6", f"change {ch.eid} still {e.get('status')} after the drain (gate green, nothing arriving)")
             if e.get("status") == "cancelled" and not ch.cancelled:
-                self.violate(f"change {ch.eid} cancelled, but no agent cancelled it")
+                self.violate("I6", f"change {ch.eid} cancelled, but no agent cancelled it")
             if e.get("status") == "superseded" and not any(o.worktree == ch.worktree and o.cid > ch.cid for o in self.changes):
-                self.violate(f"change {ch.eid} superseded by nothing newer")
+                self.violate("I6", f"change {ch.eid} superseded by nothing newer")
         # 7. STATS: exactly one landing record per decided change, `landed` for each landed one
         for _ in range(3):
             A.stats_pass(self.repo, self.d)
@@ -1233,13 +1260,13 @@ class Sim:
         for it in st.items("change"):
             n = len(recs.get(it["id"], []))
             if A.machine_state("change", it["state"]).terminal and it["state"] in A.CHANGE_EXITS and n != 1:
-                self.violate(f"change {it['id']} ({it['state']}): {n} landing records, not one")
+                self.violate("I7", f"change {it['id']} ({it['state']}): {n} landing records, not one")
             if it["state"] == "landed" and n == 1 and recs[it["id"]][0].get("outcome") != "landed":
-                self.violate(f"change {it['id']} landed, its record says {recs[it['id']][0].get('outcome')}")
+                self.violate("I7", f"change {it['id']} landed, its record says {recs[it['id']][0].get('outcome')}")
         landed_entries = {ch.eid for ch in self.changes if (self.entry(ch) or {}).get("status") == "landed"}
         landed_items = {it["id"] for it in st.items("change") if it["state"] == "landed"}
         if landed_entries != landed_items:
-            self.violate(f"landed entries {sorted(landed_entries ^ landed_items)} disagree with their items")
+            self.violate("I7", f"landed entries {sorted(landed_entries ^ landed_items)} disagree with their items")
 
 
 # --------------------------------------------------------------------------------------------------------- replays

@@ -34,3 +34,23 @@ jobs:
           python3 --version
           timeout -s KILL 480 python3 tests/run.py -j 4 --timeout 60 --suite-timeout 420 --durations 15 \
             --shard ${{ matrix.shard }}/2
+  # THE SIMULATOR GATE (tests/sim_gate.py): the queue simulator's fixed scenarios, every invariant kind's violations
+  # against tests/sim-invariants.tsv and the push's base (no rise, no invariant changed beside the code it measures).
+  sim-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Simulator gate
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          base=""
+          if [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then base="--base $BEFORE"; fi
+          git config --global user.email ci@example.invalid && git config --global user.name ci
+          timeout -s KILL 840 python3 tests/sim_gate.py -j 4 $base

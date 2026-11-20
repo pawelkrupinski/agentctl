@@ -1679,6 +1679,19 @@ read the simulated clock (`sim_datetime`; ids carrying the wall clock reordered 
 `PYTHONHASHSEED=0` for a comparison. A profile may set the round lengths in ticks (`check_ticks`, `verify_ticks`,
 `batch_ticks`, default 2-4 / 1-2 / 2-5) and `lease_ttl` (s) for longer rounds.
 
+**THE SIMULATOR GATE (2026-11-20, the owner's "fix agentctl issues structurally").** `tests/sim_gate.py` runs 308
+fixed scenarios (the suite's 200 random seeds, the calm / load / chaos profiles with a 30-seed x 2-tree chaos sweep,
+every replayed day, the collisions, the baselines, the 08010c timeline) in COUNT MODE (`Sim.run(stop=False)`), and
+counts, per INVARIANT KIND (`queue_sim.INVARIANT_KINDS`: I1-I11, Ib, Ic, Id, IX; every `violate()` names one), the
+scenarios that break it. `tests/sim-invariants.tsv` holds each kind's VERSION, the FINGERPRINT of its definition (the
+source of every Sim method raising it, the run loop and the scenario list) and its BASELINE count. It refuses: a count
+past its baseline; a definition changed without a new version; a baseline risen at the same version against the push's
+base; and a commit changing an invariant row beside `lib/agentctl/` (an invariant changes in a commit of its own, its
+old-definition numbers reported beside the new). A fall is a note (`--update` records it). It runs in ~/bin's pre-push
+hook after the suite (`--base <the remote's sha>`) and as tests.yml's `sim-gate` job; `--update [--bump K]` rewrites
+the registry, `--json F` keeps every scenario's result. Its baseline at its introduction (master 2ab61bf): one scenario
+(chaos-19-t1) breaks I3, a red fix made a member of a backlog batch; every other kind 0; mean landing latency 7.75 ticks.
+
 **Landing latency, measured (the owner's R3, 2026-11-19; nothing below shipped).** `agent-time`: waiting on `land` was
 39% of all lane time; a landed change took ~84 min after 09:00Z (re-check rounds ~28, held checked->push ~21, queued
 ~13, runner wait ~15). The store's checked spells that day: 386 min held, nearly all `its push waits for <id>'s
