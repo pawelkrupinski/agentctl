@@ -265,7 +265,9 @@ class Sim:
         self.open_at_arrival = {}  # change cid -> the cids of the changes open (queued .. waiting) when it arrived
         self.waiting_at_arrival = {}  # change cid -> the changes `waiting` for green when it arrived or its check began
         self.checks_of = {}  # entry id -> its own check rounds run (run_entry_checks)
+        self.red_fix_checks = {}  # entry id -> whether its latest check began as a red fix's (the simulation's truth)
         self.batch_seen = {}  # batch id -> ticks spent in assembling / checking / pushing
+        self.batch_tips = {}  # batch id -> the tip it was last seen checking
         self.stats = []
         self.next_cid = 0
         self.rejected_handled = set()
@@ -533,9 +535,13 @@ class Sim:
         if red_fix(e) and not tree.endswith("-wt-check-redfix"):
             holder = A.lease_live(f"slot/check/{os.path.basename(self.d.rstrip('/'))}/{A.RED_FIX_TREE}")
             other = next((t.name for t in self.tasks if holder and not t.done and str(t.pid) in holder["holder"]), None)
-            if not (other and other.startswith("check-") and red_fix(self.entry_by_id(other[6:]) or {})):
+            # the holder a red fix when its own check began counts: its red may have closed since (a second red's
+            # fix arriving while the first's fix still checks takes another tree at once -- the right call)
+            if not (other and other.startswith("check-") and (red_fix(self.entry_by_id(other[6:]) or {})
+                                                               or self.red_fix_checks.get(other[6:]))):
                 self.violate(f"red fix {e['id']} checked in {os.path.basename(tree)}, not the red-fix tree (the wrong "
                              f"lane; that tree held by {other or (holder or {}).get('holder')})")
+        self.red_fix_checks[e["id"]] = red_fix(e)
         self.checks_of[e["id"]] = self.checks_of.get(e["id"], 0) + 1
         self.local.task.block(self.rng.randint(*self.profile.get("verify_ticks", (1, 2))) if mode == A.VERIFY_MODE
                               else self.rng.randint(*self.profile.get("check_ticks", (2, 4))))
@@ -1107,8 +1113,13 @@ class Sim:
         self.check_hold_invariants(st, entries)
         # 4. A BATCH REACHES LANDED, BISECTING OR HELD WITHIN N TICKS (counted in its assembling/checking/pushing ticks)
         for bt in st.items("batch"):
-            if bt["state"] == "blocked-red":  # a red pre-check round ended (batch.py THE BATCH IS THE MECHANISM): the
-                self.batch_seen[bt["id"]] = 0  # bound counts the way to landing from green, not the red's length
+            # a red pre-check round ended (batch.py THE BATCH IS THE MECHANISM): the bound counts the way to landing
+            # from green, not the red's length -- seen blocked at a tick's end, or assembled anew within one
+            tip = (bt.get("data") or {}).get("tip")
+            if bt["state"] == "blocked-red" or ((bt.get("data") or {}).get("depth") == "red"
+                                                and self.batch_tips.get(bt["id"]) != tip):
+                self.batch_seen[bt["id"]] = 0
+            self.batch_tips[bt["id"]] = tip
             if A.machine_state("batch", bt["state"]).terminal or bt["state"] in ("bisecting", "held", "blocked-red"):
                 continue
             n = self.batch_seen[bt["id"]] = self.batch_seen.get(bt["id"], 0) + 1

@@ -1263,6 +1263,7 @@ def sync_steps(repo, d, o_r):
             ("landed worktrees", lambda: [err(x) for x in close_landed_worktrees()]),
             ("local queue", lambda: [err(f"land: {x}") for x in migrate_local_queue(repo)]),
             ("landed changes", lambda: [err(f"land: {x}") for x in close_landed_changes(repo)]),
+            ("regen holds", duty(lambda: [err(f"land: {x}") for x in answer_regen_holds(d)])),
             ("claims", duty(sync_claims)),
             ("dispatcher", duty(dispatch)),
             ("pins", duty(pins)), ("drift explorer", duty(explorer)),
@@ -1271,6 +1272,38 @@ def sync_steps(repo, d, o_r):
             ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep()]),
             ("root checkout", lambda: [err(x) for x in root_checkout_ff(repo)]),
             ("recovery", maybe_recovery_tick))
+
+
+# THE LAPTOP ANSWERS A REGEN HOLD ITSELF (2026-11-20, phase8-units: held a day for `cd <worktree> && agentctl land`, a
+# command its lane, finished, never ran). A REGEN NEEDED hold (queue.py regen_hold: a generated row both sides changed,
+# which ci-runner, with no JVM, kept as main's, and the checks failed over) waits for the one command the laptop can run
+# -- the rebase and the repo's regen in the change's own worktree. The laptop's sync now runs it: for each queued change
+# so held whose worktree is on this machine, clean and still at the held head, `agentctl land` there, detached, once per
+# change and head (it queues the change again in the held entry's place). A dirty worktree, or one moved on, is its
+# agent's: left to it, as before.
+_regen_answered = process_cache({})  # (change id, head) -> True: its `agentctl land` started
+
+
+def answer_regen_holds(d, store=None):
+    """The laptop's step (above): `agentctl land` started in the worktree of each regen-held change it can answer; its
+    lines."""
+    out = []
+    for it in (store or Store()).items("change"):
+        dd = it.get("data") or {}
+        if it["state"] != "queued" or ((dd.get("hold") or {}).get("kind")) != "regen":
+            continue
+        wt, head = dd.get("worktree"), dd.get("head")
+        if not wt or not head or (it["id"], head) in _regen_answered or not os.path.isdir(wt):
+            continue
+        if git(wt, "rev-parse", "HEAD", check=False).stdout.strip() != head \
+                or git(wt, "status", "--porcelain", check=False).stdout.strip():
+            continue  # its agent's: moved on, or at work in it
+        _regen_answered[(it["id"], head)] = True
+        with open(os.path.join(d, f"regen-land-{it['id']}.log"), "a") as logf:
+            spawn_detached([sys.executable, TOOL_PATH, "land"], cwd=wt, stdin=subprocess.DEVNULL, stdout=logf,
+                           stderr=logf, start_new_session=True, env=tool_env())
+        out.append(f"{it['id']}: held for its regeneration; `agentctl land` started in {wt} for it")
+    return out
 
 
 # THE ROOT CHECKOUT FOLLOWS MAIN (issue 20261119T140508-66d831: ~/projects/movies sat at fb326c38b while main had

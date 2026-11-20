@@ -688,6 +688,21 @@ class OverlapTest(BacklogBatchTest):
         self.assertEqual(self.started, [ey], "checked now, never held behind a change waiting on the gate")
         self.assertNotEqual(((A.Store().item("change", ey)["data"] or {}).get("hold") or {}).get("kind"), "overlap")
 
+    def test_a_kept_place_never_jumps_an_overlapping_check_in_flight(self):
+        """The simulated 2026-11-19 seed 0: a change queued again after a conflict took its first entry's seq and so
+        was "older" than a change it overlaps that was already checking: checked beside it, then rechecked in full."""
+        ea = self.edit("a", "web/src/main/Ten.scala", 0, "a's line 1", alone=True)
+        A.tick_changes(self.r.path, self.d)
+        self.assertEqual(self.started, [ea])
+        A.set_change(self.d, self.entry(ea), "checking")  # its check under way
+        eb = self.edit("b", "web/src/main/Ten.scala", 9, "b's line 10")
+        e = self.entry(eb)
+        e["seq"] = self.entry(ea)["seq"] - 1  # its kept place: older by seq than the change checking now
+        A.save_entry(self.d, e)
+        A.tick_changes(self.r.path, self.d)
+        self.assertNotIn(eb, self.started, "b waits for the check in flight")
+        self.assertEqual(A.Store().item("change", eb)["data"]["hold"]["blocker"], ea)
+
     def test_cancelling_a_blocker_clears_the_holds_that_name_it(self):
         eo = self.edit("older", "web/src/main/Ten.scala", 0, "older's line 1", extra="identity/src/main/I.scala",
                        alone=True)

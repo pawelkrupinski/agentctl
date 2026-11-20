@@ -324,6 +324,15 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.assertEqual(hold["kind"], "regen", hold)
         self.assertIn(f"its agent's regeneration of {BASELINE}: `cd {wt} && ~/bin/agentctl land`", hold["why"])
         self.assertNotIn("infra", hold["why"])
+        started = []  # THE LAPTOP ANSWERS A REGEN HOLD ITSELF: the sync runs the one command, once per head
+        saved = A.spawn_detached
+        A.spawn_detached = lambda argv, **kw: started.append((argv[-1], kw.get("cwd")))
+        try:
+            self.assertEqual(len(A.answer_regen_holds(self.d)), 1)
+            self.assertEqual(started, [("land", wt)])
+            self.assertEqual(A.answer_regen_holds(self.d), [], "once per change and head")
+        finally:
+            A.spawn_detached = saved
         later = self.change("later", files={"web/src/main/L.scala": "l\n"})
         self.r.write("web/src/main/BROKEN.scala", "", at=wt)  # its agent ran the command: rebased, regenerated
         self.r.commit("rise: regenerated", at=wt)

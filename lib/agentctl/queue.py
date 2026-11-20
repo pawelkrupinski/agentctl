@@ -2268,8 +2268,12 @@ def overlap_hold(repo, d, e, entries, facts, t):
     ids = {x["id"] for x in entries}
     entries = list(entries) + [w for w in waiting_entries(d) if w["id"] not in ids]  # and those waiting for green
     for o in sorted(entries, key=lambda x: x["seq"]):
-        if o["seq"] >= e["seq"]:
-            break
+        # A KEPT PLACE NEVER JUMPS A CHECK IN FLIGHT (2026-11-20, the simulated 2026-11-19 seed 0: a change queued again
+        # after a conflict took its first entry's seq, 10, and so was "older" than a change it overlaps that was
+        # already checking, seq 20 -- checked beside it, then fully rechecked once that landed). A younger-by-seq
+        # change counts too once it is past queued: its check (or push) runs now, before this one could.
+        if o["seq"] >= e["seq"] and o.get("status") == "queued":
+            continue
         if o["id"] == e["id"] or o.get("status") not in OVERLAP_OLDER \
                 or same_change_source(o, e["worktree"], e.get("branch") or ""):  # its own older version: superseded
             continue
