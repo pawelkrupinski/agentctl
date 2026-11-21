@@ -156,6 +156,11 @@ class ScheduledFixWaitsForItsSlotTest(VerifyWaitBase):
         out = self.step("2026-11-19T04:23:15Z")
         self.assertEqual(self.posts, [("POST", "actions/workflows/record-scrape-fixtures.yml/dispatches")], out)
         self.assertIn("dispatched Record scrape fixtures on main to verify", " ".join(out))
+        # 2026-11-21, Order independence #99: `red status` still said "awaiting next scheduled run at 02:40Z" with
+        # its verify run (#100) already dispatched: the view names the dispatch, never the cron slot
+        text, short = A.red_view(self.st, self.item(), self.t[0])
+        self.assertRegex(text, r"verify run dispatched \d\d:\d\dZ")
+        self.assertNotIn("awaiting next scheduled run", text + short)
 
     def test_its_run_decides_it(self):
         self.step("2026-11-19T04:23:15Z")

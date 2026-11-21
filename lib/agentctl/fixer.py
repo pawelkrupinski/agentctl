@@ -1448,6 +1448,12 @@ def red_view_state(store, it, t=None):
                 f"fix-unproven {str(f.get('sha') or f.get('entry') or '')[:7]}")
     if st == "fix-pending":
         f = d.get("fix") or {}
+        if f.get("status") == "landed" and str(f.get("verify") or "").startswith("dispatched") \
+                and t < float(it["deadline"]):  # VERIFY PROMPTLY BY DEFAULT (red.py): its dispatched run decides it,
+            at = str(f.get("verify_dispatched") or "")[11:16]  # never the cron slot (2026-11-21, Order independence
+            return (f"fix landed in {str(f.get('sha'))[:9]}, verify run dispatched {at}Z ({d.get('workflow')}; "  # #99)
+                    f"verified by {hhmmz(f.get('verify_by') or it['deadline'])}){rec}",
+                    f"fix {str(f.get('sha'))[:7]} verify run dispatched {at}Z")
         if f.get("status") == "landed" and f.get("next_run_at") and t < float(it["deadline"]):  # red_verify_plan
             return (f"fix landed in {str(f.get('sha'))[:9]}, awaiting next scheduled run at {hhmmz(f['next_run_at'])} "
                     f"({d.get('workflow')}; verified by {hhmmz(f.get('verify_by') or it['deadline'])}){rec}",
