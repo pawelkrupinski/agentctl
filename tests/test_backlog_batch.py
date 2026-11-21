@@ -787,6 +787,9 @@ class RedPrecheckTest(BacklogBatchTest):
         self.assertIn("skip=sbt", self.pushed()[-1], "it skips the plan its pre-check passed")
         self.assertEqual([c.split()[0] for c in open(self.calls).read().splitlines()], ["--checks-only"] * 3,
                          "their own checks and the pre-check; no check again at green: its verdict kept")
+        for x in (ea, eb):  # stats' kept_verdicts reads the item (2026-11-21: 0 in every landing record)
+            log = (A.Store().item("change", x)["data"] or {}).get("rechecks") or []
+            self.assertEqual([r["kind"] for r in log], ["kept"], x)
 
     def test_a_fix_their_checks_read_gets_the_fast_check_at_green(self):
         ea, eb = self.red_batch(("a", "web/src/main/A.scala"), ("b", "worker/src/main/B.scala"))

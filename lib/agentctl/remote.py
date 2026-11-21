@@ -435,6 +435,12 @@ def check_branch_push(repo, head, branch, sleep=time.sleep):
         sleep(delay)
 
 
+# A DECIDED RUN IS SEEN WITHIN REMOTE_POLL_CAP (2026-11-21: in 11-19..21 a round's verdict came a mean 1.4 min, p90 3 min,
+# after its run's last job ended -- the poll had backed off to every 120 s; ~1 min a round, at ~2 rounds a landing).
+# Every read is a conditional GET (forge.py): a poll that finds nothing changed is a 304, free of the App's quota.
+REMOTE_POLL_CAP = 30  # s
+
+
 def remote_check(repo, e, base, head, mode, own=None, red=False):
     """(ok, output) of the change's checks on ci-runner; ok None when no verdict came (the caller checks locally).
     The run belongs to the ENTRY, not to this process: its record (`remote` in the entry) is saved the moment the branch is
@@ -468,7 +474,7 @@ def remote_check(repo, e, base, head, mode, own=None, red=False):
                             agent="land queue", pid=os.getpid(), purpose=f"pre-commit check of queue entry {e['id']}")
         except (Exception, SystemExit) as ex:
             err(f"remote check of {e['id']}: owner not recorded ({str(ex)[:120]})")
-    delays = backoff(15, 120)
+    delays = backoff(15, REMOTE_POLL_CAP)
     while True:
         try:
             new = remote_poll(o_r, rem)

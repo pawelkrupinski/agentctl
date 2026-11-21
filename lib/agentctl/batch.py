@@ -770,6 +770,10 @@ def batch_step(repo, d, now_, seen, st):
         if not full:  # THE WAITING BATCH AT GREEN: pre-checked as one at red, its verdict kept, or checked as needed
             depth, why = green_batch_depth(tree, it, kept, base, tip)
             if depth == "kept":
+                moved = (it["data"].get("prechecked") or {}).get("base") != base
+                for e in kept if moved else ():  # MINIMAL RECHECKS' log, as a lone change's (land status, kept_verdicts)
+                    e["rechecks"] = recheck_logged(e, "kept", why, base)
+                    save_entry(d, e)
                 batch_move(st, it, "checking", {"members": [e["id"] for e in kept], "tip": tip, "base": base, "tree": i,
                                                 "cls": "check", "depth": "fast"}, text=f"batch {it['id']}: {why}")
                 batch_move(st, st.item("batch", it["id"]), "pushing", {"kept": why},

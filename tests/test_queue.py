@@ -502,6 +502,48 @@ class QueueTest(WaitingTest):
         self.assertEqual(self.check(eid), 0)
         self.assertEqual([m for m, _r in self.verified()], ["--range", "--range"])
 
+    READER_NAMES = 'object ReaderNames {\n  def settings = Seq()\n  val names = "repochecks"\n}\n'
+
+    def reader_names_move_under(self, *paths, build=None):
+        """2026-11-21 08:42Z, shared-followups-7be7dc: a change to the mobile apps only, queued on a main whose worker
+        builds with project/ReaderNames.scala; main moves ReaderNames (21 commits) during its checks. Its `sbt` plan
+        selects local-tests.txt's basic lines, worker's among them, so worker's view of the build moved: two FULL rounds
+        (13.5 and 16 min) for a change no check of which reads the build."""
+        self.r.write("build.sbt", build or self.BUILD.replace("settings(Test / fork := true)",
+                                                              "settings(ReaderNames.settings)"))
+        self.r.write("project/ReaderNames.scala", self.READER_NAMES)
+        self.r.write("scripts/hooks/local-tests.txt", "basic sbt worker/testOnly deploy.*\n")
+        self.r.commit("a build whose worker reads ReaderNames")
+        self.r.push()
+        for f in (self.pushes, self.calls):
+            if os.path.exists(f):
+                os.remove(f)
+        wt, _ = self.agent("a", paths[0], "a\n", msg="a: one")
+        for p in paths[1:]:
+            self.r.write(p, "a\n", at=wt)
+        if paths[1:]:
+            self.r.commit("a: two", at=wt)
+        eid, _ = self.queued(wt)
+        self.moves_once(("project/ReaderNames.scala", self.READER_NAMES.replace("Seq()", "Seq(Test / fork := true)")))
+        self.assertEqual(self.check(eid), 0)
+        return [m for m, _r in self.verified()]
+
+    def test_a_build_change_under_a_change_out_of_the_builds_reach_gets_the_verify_round(self):
+        """OUT OF THE BUILD'S REACH (queue.py; the owner, 2026-11-21): no path of the change is one the build compiles
+        or reads, so only the checks reading its files can see the new build -- the verify round's."""
+        self.assertEqual(self.reader_names_move_under("android/app/src/main/java/Auth.kt", "ios/App/List.swift"),
+                         ["--range", "--verify-only"])
+        self.assertIn("the combined tree verified", self.landed_verdict())
+
+    def test_a_build_change_under_a_change_the_build_names_rechecks(self):
+        """A file of the change the build names (a resource a setting reads) is in its reach: the full round."""
+        build = self.BUILD.replace("settings(Test / fork := true)", "settings(ReaderNames.settings)") \
+            + 'lazy val inputs = file("infra/image-inputs.txt")\n'
+        self.assertEqual(self.reader_names_move_under("infra/image-inputs.txt", build=build), ["--range", "--range"])
+
+    def test_a_build_change_under_a_change_to_shared_resources_rechecks(self):
+        self.assertEqual(self.reader_names_move_under("test/resources/fixtures/a.tsv"), ["--range", "--range"])
+
     def test_a_build_change_to_an_upstream_module_rechecks(self):
         self.assertEqual(self.build_moves_under("web/src/main/A.scala", 'file("common"))',
                                                 'file("common")).settings(Test / fork := true)'),
@@ -542,8 +584,9 @@ class QueueTest(WaitingTest):
         self.assertEqual([m for m, _r in self.verified()], ["--range", "--verify-only"])
 
     def test_a_selection_path_beside_another_forcing_path_still_rechecks(self):
-        """Only the hook, its registry and local-tests.txt are judged by selection; build.sbt stays a full round."""
-        wt, _ = self.agent("a", "docs/A.md", "a\n", msg="a: one")
+        """Only the hook, its registry and local-tests.txt are judged by selection; build.sbt stays a full round (for a
+        change the build reaches: OUT OF THE BUILD'S REACH)."""
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
         eid, _ = self.queued(wt)
         self.moves_once(("scripts/hooks/lint-registry.tsv", "# a comment row\n"), ("build.sbt", "lazy val x = 1\n"))
         self.assertEqual(self.check(eid), 0)
@@ -1538,6 +1581,39 @@ class MinimalRecheckTest(QueueTest):
         self.assertIn("no check of it reading what changed: its verdict kept", self.landed_verdict())
         self.assertEqual(self.pushed()[-1], "push remote= skip=sbt", "the push skips the plan its checks passed")
         self.assertRegex(self.status_of(eid), r"recheck: \d\d:\d\dZ kept on [0-9a-f]{10}: main moved by 2 commits")
+
+    def e2e_downstream(self):
+        """The hook's compile plan as movies' is: e2e downstream of worker and of web (compile_plan's `[ $worker = 1 ] &&
+        e2e=1`, `[ $web = 1 ] && e2e=1`)."""
+        hook = os.path.join(self.r.path, "scripts/hooks/pre-push")
+        text = open(hook).read()
+        for m in ("worker", "web"):
+            text = text.replace(f"echo {m}/Test/compile ;;", f"printf '{m}/Test/compile\\ne2e/Test/compile\\n' ;;")
+        self.r.write("scripts/hooks/pre-push", text)
+        self.r.commit("e2e downstream of worker and web")
+        self.r.push()
+
+    def test_two_changes_meeting_only_in_a_module_downstream_of_both_keep_the_verdict(self):
+        """ONE SIDE COMPILED AGAINST THE OTHER (2026-11-21): in 11-19..21 no verdict was kept; 24 verify rounds named the
+        compile plan first, most of them `e2e/Test/compile`, which every two code changes' plans hold. A worker test
+        change and a web change meet only in e2e, whose own sources neither touches: neither side's code is compiled
+        against the other's."""
+        self.e2e_downstream()
+        wt, _ = self.agent("a", "worker/src/test/scala/WSpec.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("web/src/main/W.scala", "w\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range"], "no verify round: e2e compiles both, neither the other")
+        self.assertIn("its verdict kept", self.landed_verdict())
+
+    def test_a_change_compiled_against_what_main_changed_still_verifies(self):
+        self.e2e_downstream()
+        wt, _ = self.agent("a", "worker/src/test/scala/WSpec.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("worker/src/main/W.scala", "w\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--verify-only"], "worker's tests compile its main")
+        self.assertIn("its compile-plan reads what main changed: worker/Test/compile", self.status_of(eid))
 
     def test_a_main_move_its_compile_plan_reads_forces_the_verify_round(self):
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")

@@ -1413,7 +1413,13 @@ The reconciler then takes it, a step per tick:
   `dependsOn`, the `Dependencies.x` / `Obj.member` they use and the members those use, a project/ file named in a
   string), every AutoPlugin on all projects, every non-.scala project/ file and every other root `*.sbt`
   (coupling.sbt, identity-impact.sbt: a build file like build.sbt, review 2026-11-18). Unchanged, and no file of the change
-  naming the changed build file -> the verify round; changed, unreadable, or the change itself touching the build ->
+  naming the changed build file -> the verify round. OUT OF THE BUILD'S REACH (2026-11-21: 12 of 11-19..21's 26
+  build rounds were changes to scripts, docs, workflows, infra or the mobile apps, rechecked in full because every
+  `sbt` plan selects the basic lines' e2e / worker / repochecks; 5 of them out of its reach as below): a change none of whose paths the build compiles or
+  reads -- none under an sbt project's directory or a `<dir>/src/`, no source, no root file but Markdown, nothing in
+  test/, data/ or conf/, and none whose file name
+  build.sbt or project/ names -- gets the verify round however the view moved: only the lint and script self-tests
+  its paths select read its files, and the verify round runs those under the new build. Otherwise changed, unreadable, or the change itself touching the build ->
   the full round (`they change build.sbt, and what web, worker build with changes (common, Dependencies.playVersion)`).
   SHARE-AWARE (2026-11-18): scripts/ci/precommit-share.sh is judged the same way -- it only splits the hook's selection
   over the check's jobs -- and every such selection holds the union of what its shares (`checks rest|identity|oldrefs|plan`
@@ -1428,7 +1434,10 @@ The reconciler then takes it, a step per tick:
   MINIMAL RECHECKS (the owner, 2026-11-20: "so that rechecks are kept to a minimum"; fix-red-2717 had sat through a
   full re-check and a verify round after main moved by 12 commits): with no full round due, the verify round runs only
   when a check the change's paths select READS a path main changed since its last check -- the hook's own selection,
-  read at the rebased tip: `--compile-plan` (two sides' plans meet where one's code compiles against the other's),
+  read at the rebased tip: `--compile-plan` (where one side's code is compiled against the other's: a config of one
+  side's plan standing for the other side's OWN code -- `<module>/src/test|it|page/` its config, `src/main/` its
+  module's Test config, the build every config; never a module merely downstream of both, e2e over worker and web,
+  which had made every two code changes "meet": 24 of 11-19..21's verify rounds),
   `--coupling-plan` / `--quality-plan` (production code on both sides: the whole-tree ratchets), `--plan`'s checks (an
   area such as `identity`, `scripttests`, `drift`, ...; not `sbt`, which the plans above spell out, nor the per-file
   checks `shellcheck`, `actionlint`, `eslint`) and `--lint-plan`'s path-selected specs (not the standing `*` rows) --
@@ -1944,7 +1953,9 @@ ADOPTS it (no new push, no new run) on the base it checked even when main moved 
 past them it is checked locally. The 2-h bound judges PROGRESS (2026-11-17, ref-srp-54ebae: every check had passed
 and `check (page)` was 14 min into its run, after 23 min waiting for a saturated check runner, when the 2 h from the
 push cancelled it): each poll marks `progress_at` when the run's jobs move, a run past 2 h is cancelled only once idle
-30 min (`REMOTE_IDLE`), and any run past 4 h (`REMOTE_TIMEOUT_MAX`). A RUNNING JOB INSIDE ITS OWN EXPECTED DURATION
+30 min (`REMOTE_IDLE`), and any run past 4 h (`REMOTE_TIMEOUT_MAX`). The run is polled 15 s after the push, x1.5,
+at most every 30 s (`REMOTE_POLL_CAP`; 120 s before 2026-11-21, when a round's verdict came a mean 1.4 min after its
+last job ended): an unchanged run reads as a 304, free of the App's quota. A RUNNING JOB INSIDE ITS OWN EXPECTED DURATION
 IS PROGRESS (2026-11-18: a healthy run whose only remaining job ran past 30 min, the others done, read as idle): its
 `timeout-minutes` at the checked commit, else 1.5 x its recorded p90 (the collector's `source:ci` job rows in
 victoria-logs-ci, 30 days, >= 5 runs), else 2 h (`REMOTE_JOB_CAP`), read once per run (`job_bounds`). A failed push of the check branch is tried again 5 s and 20 s later

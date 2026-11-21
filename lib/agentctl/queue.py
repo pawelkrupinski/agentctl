@@ -306,6 +306,40 @@ def selection_change(tree, full_tip, tip, paths, new=None):
     return None
 
 
+# OUT OF THE BUILD'S REACH (the owner, 2026-11-21: "narrow the 27 'build' rechecks (about 24 min each)"; 26 of them in
+# 11-19..21 were BUILD-AWARE's view moving, every view holding e2e, worker and repochecks -- the `basic` lines every sbt
+# check runs -- 12 of those 26 changes to scripts, docs, workflows, infra or the mobile apps, 5 of them touching no file
+# the build compiles, reads or names). A change none of whose paths the build reaches -- none under an sbt project's directory, the build
+# itself (a root *.sbt, project/), the shared resources (test/, data/, conf/), and none the build's own files name --
+# (a root Markdown file -- CLAUDE.md -- is no input of the build) runs under the new build only the checks that read its files, which are the lint and script self-tests its paths
+# select; the verify round runs exactly those, over the combined tree, under the new build (with every test config
+# compiled). Every other check -- the basic lines, the area tests -- reads none of its files, and main's own landing
+# check ran them under the new build: the verify round, not the full one. A file the change has that names the build
+# file still forces the full round (named_reader, above).
+BUILD_SHARED_DIRS = ("test", "data", "conf")
+
+
+def out_of_build_reach(tree, tip, paths):
+    """Whether no path of the change is one the sbt build compiles or reads at tip (OUT OF THE BUILD'S REACH); False when
+    the build cannot be read."""
+    b = read_build(tree, tip)
+    if b is None or not paths:
+        return False
+    dirs = (set(b["projects"]) - {"."}) | set(BUILD_SHARED_DIRS) | {"project"}
+    if any(("/" not in p and not p.endswith(".md")) or p.split("/", 1)[0] in dirs or p.split("/")[1:2] == ["src"]
+           or p.endswith((".scala", ".java"))
+           for p in paths):
+        return False  # a root file but Markdown (build.sbt, the Dockerfile ...) is the build's or read by it; source too
+    files = [f for f in git(tree, "ls-tree", "-r", "--name-only", tip, "--", "project", check=False).stdout.split()
+             if "/target/" not in f"/{f}"] + [f for f in git(tree, "ls-tree", "--name-only", tip, check=False).stdout.split()
+                                             if f.endswith(".sbt")]
+    if not files:
+        return False
+    names = [a for p in sorted({os.path.basename(p) for p in paths}) for a in ("-e", p)]
+    r = git(tree, "grep", "-l", "-F", *names, tip, "--", *files, check=False)
+    return r.returncode == 1  # 0: the build names one of them (it may read it); else unreadable
+
+
 def recheck_reason(tree, base, moved, tip, change_paths, full_tip=None):
     """(commits main moved by, why the change must be FULLY checked again or None) -- THE RULE above, of what landed in
     base..moved against the change's paths (moved..tip, the rebased change; tree checked out at tip). full_tip: the tip
@@ -324,7 +358,8 @@ def recheck_reason(tree, base, moved, tip, change_paths, full_tip=None):
             # a script, workflow or test reading the build file by name (production code names it in comments only)
             named = named_reader(tree, tip, builds, [p for p in change_paths if "/src/main/" not in p])
             moves = f"{named[1]} names {named[0]}" if named else \
-                build_view_change(tree, full_tip, tip, change_paths, new)
+                (None if out_of_build_reach(tree, tip, change_paths) else
+                 build_view_change(tree, full_tip, tip, change_paths, new))
         if moves:
             return n, f"they change {(builds or build)[0]}, and {moves}"
     same = without_generated(tree, sorted(set(landed_paths) & set(change_paths)))  # regenerated: the ratchet judges
@@ -375,6 +410,50 @@ def hook_modes(hook):
     return [m for m in READ_MODES if f"{m})" in text]
 
 
+def compiled_path(path):
+    """Whether sbt compiles path or builds with it: a source file, or the build (a root *.sbt, project/)."""
+    return path.endswith((".scala", ".java", ".sbt")) or path.startswith("project/")
+
+
+SOURCE_CONFIGS = {"test": "Test", "it": "It", "page": "Page"}  # <module>/src/<dir>/ -> the config compiling it
+
+
+def own_configs(plan, paths):
+    """The configs of a compile plan (`<module>/<Config>/compile` words) standing for the paths' OWN code, as compiled:
+    `<module>/src/test|it|page/` its config; `src/main/` (and fixtures) its module's Test config, which compiles main
+    with it. A compiled path under no module of the plan (the build, project/) is every config of it; a config the plan
+    does not name, every config of its module."""
+    out = set()
+    for p in paths:
+        if not compiled_path(p):
+            continue
+        parts = p.split("/")
+        module = {w for w in plan if w.split("/", 1)[0] == parts[0]} if len(parts) > 1 else set()
+        if not module:
+            return set(plan)
+        word = f"{parts[0]}/{SOURCE_CONFIGS.get(parts[2], 'Test') if len(parts) > 3 and parts[1] == 'src' else ''}/compile"
+        out |= {word} if word in module else module
+    return out
+
+
+# ONE SIDE COMPILED AGAINST THE OTHER (2026-11-21: in 3 days, kept_verdicts 0 of every landing; 24 of the verify rounds
+# run after main moved outside the change's files named the compile plan, most of them `e2e/Test/compile`): a compile
+# plan names the configs compiling against the paths -- a module's own and those of every module downstream of it -- so
+# ANY two code changes meet in e2e, which depends on everything, though neither side's code is compiled against the
+# other's there (worker and web are independent; e2e's own sources are unchanged). The two sides' compiles interact only
+# where one side's plan holds the config compiling the other side's OWN code (own_configs): common's plan holds
+# web/Test/compile, which compiles a web change; worker's plan holds none of web's; a repochecks spec's plan holds
+# worker/It/compile (worker's integration specs compile against repochecks' specs), which a worker/src/main change is
+# not compiled in alone (worker/Test/compile stands for it, and the spec's plan does not hold it).
+def compile_meets(hook, tree, mine, theirs):
+    """The configs where one side's code is compiled against the other's, as words; None when a plan is unreadable."""
+    a, b = hook_query(hook, tree, "--compile-plan", mine), hook_query(hook, tree, "--compile-plan", theirs)
+    if a is None or b is None:
+        return None
+    a, b = set(a), set(b)
+    return (a & own_configs(b, theirs)) | (b & own_configs(a, mine))
+
+
 def check_reads(hook, tree, mode, paths, standing, per_file):
     """The checks of one dry-run mode that paths select, as words (MINIMAL RECHECKS); None when unreadable."""
     out = hook_query(hook, tree, mode, paths)
@@ -409,6 +488,14 @@ def read_overlap(tree, landed_paths, change_paths):
     per_file = PER_FILE_CHECKS | ({"sbt"} if all(m in modes for m in WHOLE_TREE_MODES) else set()) \
         | ({SCRIPT_TESTS_CHECK} if SCRIPT_TEST_MODE in modes else set())
     for mode in modes:
+        if mode == "--compile-plan":
+            both = compile_meets(hook, tree, change_paths, landed_paths)
+            if both is None:
+                return "its compile-plan cannot be read"
+            if both:
+                return (f"its compile-plan reads what main changed: {', '.join(sorted(both)[:3])}"
+                        + (f" (+{len(both) - 3} more)" if len(both) > 3 else ""))
+            continue
         mine = check_reads(hook, tree, mode, change_paths, standing, per_file)
         theirs = check_reads(hook, tree, mode, landed_paths, standing, per_file) if mine else set()
         if mine is None or theirs is None:
@@ -1208,8 +1295,10 @@ def joined_verdicts(st, w, joined, to, event, data):
 
 def queue_verdict(d, e, status, verdict, tail=(), code=1, **fields):
     """A change's final verdict: its state (set_change), whose event the projector makes its author's inbox entry."""
+    # its recheck log on its item too (stats' kept_verdicts reads it there): a batch's kept verdict is logged on the
+    # entry alone
     set_change(d, e, {"joined": "waiting"}.get(status, status), event=change_event(e, verdict, tail, code),
-               decided=ts(), why=verdict, **fields)
+               data={"rechecks": e["rechecks"]} if e.get("rechecks") else None, decided=ts(), why=verdict, **fields)
     wlog(d, f"{e['id']}: {verdict.splitlines()[0]}")
 
 
