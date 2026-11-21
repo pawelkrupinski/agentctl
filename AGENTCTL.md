@@ -125,8 +125,9 @@ moves it forward; nothing is a detached process that can die with its state in i
     the repo's one per-workflow registry, `.github/red-workflows.tsv` on main, opts it out: tab-separated `workflow
     verify_dispatch (yes|no)  replay (a command, `{run}` = the red's failing run id, or -)  why`, `#` comments. No row
     is yes. A `no` row is for a costly workflow (over ~60 runner-minutes a run, or a paid service): movies opts out
-    Record scrape fixtures (paid proxies), Order independence (~204 runner-min), Nightly stress (~76), Identity drift
-    explorer (~225) and Identity family explorer (~254); those wait for their slot.
+    Record scrape fixtures (paid proxies), Nightly stress (~76 runner-min), Identity drift explorer (~225) and Identity
+    family explorer (~254); those wait for their slot. Order independence (~204) is dispatched all the same: the owner
+    approved its cost (2026-11-21, "kick off this one too": its abandoned red is what this rule is for).
     **A FIX WITH NO REPLAY KEEPS ITS FIXER** (the owner, 2026-11-21: #94's `Fixes-Red: 94`, a853b2ee4, was diagnostics
     only, and its fixer was released): for a red outside the gate, a `Fixes-Red:` change whose submission carries no
     `Fix-Replay:` agentctl ran and saw base=FAIL head=PASS (the change's `replays`) is UNPROVEN -- the red goes
