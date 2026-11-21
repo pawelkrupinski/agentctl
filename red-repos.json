@@ -10,6 +10,7 @@
         "regen": "scripts/coupling-report --update"},
        {"paths": ["test/resources/complexity-baseline.tsv", "test/resources/length-baseline.tsv",
                   "test/resources/duplication-baseline.tsv"], "regen": "scripts/quality-report --update"},
+       {"paths": ["test/resources/js-quality-baseline.tsv"], "regen": "scripts/js-quality-report --update"},
        {"_doc": "SNAPSHOTS (2026-11-21: split-shared-js held behind scrapers-2 on the page snapshots): never merged by rows, regenerated over the combined tree when both sides changed them, the output explained by the sides (waiting.py SNAPSHOTS ARE REGENERATED, NEVER MERGED); the read model first, the pages render from it",
         "merge": "regen", "timeout": 2400,
         "paths": ["test/resources/fixtures/08-06-2026/expected-schedules.txt",
