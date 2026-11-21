@@ -1645,6 +1645,40 @@ class MinimalRecheckTest(QueueTest):
         self.assertEqual(self.check(eid), 0)
         self.assertEqual([m for m, _r in self.verified()], ["--range"], "shellcheck reads only its own files")
 
+    def per_file_hook(self):
+        """The hook with no script self-tests, whose ScriptsLint judges each script alone (--per-file-lints): selected by
+        a script, or by its own code (repochecks/src/test/), and named per-file only for the scripts."""
+        hook = os.path.join(self.r.path, "scripts/hooks/pre-push")
+        self.r.write("scripts/hooks/pre-push", open(hook).read().replace("scripttests\\n", "")
+                     .replace("grep -q '^scripts/' && echo repo:ScriptsLint",
+                              "grep -qE '^(scripts/|repochecks/src/test/)' && echo repo:ScriptsLint")
+                     .replace("    --coupling-plan)",
+                              "    --per-file-lints) grep -q '^scripts/' && ! grep -q '^repochecks/' && echo repo:ScriptsLint; exit 0 ;;\n"
+                              "    --coupling-plan)"))
+        self.r.commit("a per-file script lint")
+        self.r.push()
+
+    def test_two_changes_meeting_only_in_a_per_file_lint_keep_the_verdict(self):
+        """PER-FILE LINTS (movies, 2026-11-21): NoSettingFallbackSpec reads every script but judges each alone, so two
+        changes to different scripts meet in no verdict of it."""
+        self.per_file_hook()
+        wt, _ = self.agent("a", "scripts/a.sh", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("scripts/b.sh", "b\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range"], "the per-file lint judged each script alone")
+        self.assertIn("its verdict kept", self.landed_verdict())
+
+    def test_a_per_file_lint_whose_code_one_side_changes_still_verifies(self):
+        """...but a side changing the lint itself (its rule, its allowlist) is judged against the other's scripts."""
+        self.per_file_hook()
+        wt, _ = self.agent("a", "scripts/a.sh", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.moves_once(("repochecks/src/test/ScriptsLintSpec.scala", "s\n"))
+        self.assertEqual(self.check(eid), 0)
+        self.assertEqual([m for m, _r in self.verified()], ["--range", "--verify-only"])
+        self.assertIn("its lint-plan reads what main changed: repo:ScriptsLint", self.status_of(eid))
+
     def test_a_production_change_on_each_side_shares_the_whole_tree_ratchets(self):
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
         eid, _ = self.queued(wt)

@@ -1,5 +1,5 @@
 {
- "label": "movies' lint registry naming what each spec opens (landing/lint-reads, 2026-11-21)",
+ "label": "movies' lint registry naming what each spec opens, its per-file specs marked (2026-11-21)",
  "lints": {
   ".claude": [
    "repochecks:deploy.IdentityTakesWiringSpec",
@@ -1088,6 +1088,139 @@
    "worker:tools.ProxiedMainsAllowTunnelAuthSpec",
    "worker:tools.RegisteredCollectionListsSpec",
    "worker:tools.ScraperTypeTestLintSpec"
+  ]
+ },
+ "per_file": {
+  ".claude": [],
+  ".github": [
+   "repochecks:deploy.BotPullRequestBranchSpec",
+   "repochecks:deploy.GitHubRunnerLabelSpec",
+   "repochecks:deploy.JunitReportNoCheckRunSpec",
+   "repochecks:deploy.NoExitStatusReadUnderErrexitSpec",
+   "repochecks:deploy.NoSettingFallbackSpec"
+  ],
+  "android": [],
+  "base": [
+   "common:services.movies.SideCollectionDeleteOwnershipSpec",
+   "common:tools.DeepExpressionLintSpec",
+   "common:tools.SourceControlCharactersLintSpec",
+   "worker:tools.ModelReadOnlySpec",
+   "worker:tools.NoDefaultLocaleCaseMappingSpec",
+   "worker:tools.NoFailedInTestNamesSpec",
+   "worker:tools.NoHandRolledTimingSpec"
+  ],
+  "common": [
+   "common:services.movies.SideCollectionDeleteOwnershipSpec",
+   "common:tools.DeepExpressionLintSpec",
+   "common:tools.SourceControlCharactersLintSpec",
+   "worker:tools.ModelReadOnlySpec",
+   "worker:tools.NoDefaultLocaleCaseMappingSpec",
+   "worker:tools.NoFailedInTestNamesSpec",
+   "worker:tools.NoHandRolledTimingSpec"
+  ],
+  "data": [],
+  "docs": [],
+  "e2e": [
+   "common:services.movies.SideCollectionDeleteOwnershipSpec",
+   "common:tools.DeepExpressionLintSpec",
+   "common:tools.JvmDefaultsLintSpec",
+   "common:tools.SourceControlCharactersLintSpec",
+   "worker:tools.ModelReadOnlySpec",
+   "worker:tools.NoDefaultLocaleCaseMappingSpec",
+   "worker:tools.NoFailedInTestNamesSpec",
+   "worker:tools.NoHandRolledTimingSpec",
+   "worker:tools.NoRealDependenciesInUnitSpecsSpec"
+  ],
+  "geodata": [
+   "common:services.movies.SideCollectionDeleteOwnershipSpec",
+   "common:tools.DeepExpressionLintSpec",
+   "common:tools.JvmDefaultsLintSpec",
+   "common:tools.SourceControlCharactersLintSpec",
+   "worker:tools.ModelReadOnlySpec",
+   "worker:tools.NoDefaultLocaleCaseMappingSpec",
+   "worker:tools.NoFailedInTestNamesSpec",
+   "worker:tools.NoHandRolledTimingSpec"
+  ],
+  "http": [
+   "common:services.movies.SideCollectionDeleteOwnershipSpec",
+   "common:tools.DeepExpressionLintSpec",
+   "common:tools.SourceControlCharactersLintSpec",
+   "worker:tools.ModelReadOnlySpec",
+   "worker:tools.NoDefaultLocaleCaseMappingSpec",
+   "worker:tools.NoFailedInTestNamesSpec",
+   "worker:tools.NoHandRolledTimingSpec"
+  ],
+  "identity": [
+   "common:services.movies.SideCollectionDeleteOwnershipSpec",
+   "common:tools.DeepExpressionLintSpec",
+   "common:tools.SourceControlCharactersLintSpec",
+   "worker:tools.ModelReadOnlySpec",
+   "worker:tools.NoDefaultLocaleCaseMappingSpec",
+   "worker:tools.NoFailedInTestNamesSpec",
+   "worker:tools.NoHandRolledTimingSpec"
+  ],
+  "infra": [],
+  "ios": [
+   "repochecks:deploy.IosLaunchEnvironmentDebugOnlySpec"
+  ],
+  "page-tests-playwright": [],
+  "projectfiles": [],
+  "quality": [
+   "common:services.movies.SideCollectionDeleteOwnershipSpec",
+   "common:tools.DeepExpressionLintSpec",
+   "common:tools.SourceControlCharactersLintSpec",
+   "worker:tools.ModelReadOnlySpec",
+   "worker:tools.NoDefaultLocaleCaseMappingSpec",
+   "worker:tools.NoFailedInTestNamesSpec",
+   "worker:tools.NoHandRolledTimingSpec"
+  ],
+  "repochecks": [
+   "common:services.movies.SideCollectionDeleteOwnershipSpec",
+   "common:tools.DeepExpressionLintSpec",
+   "common:tools.JvmDefaultsLintSpec",
+   "common:tools.SourceControlCharactersLintSpec",
+   "worker:tools.ModelReadOnlySpec",
+   "worker:tools.NoDefaultLocaleCaseMappingSpec",
+   "worker:tools.NoFailedInTestNamesSpec",
+   "worker:tools.NoHandRolledTimingSpec",
+   "worker:tools.NoRealDependenciesInUnitSpecsSpec"
+  ],
+  "rootfiles": [],
+  "scrapers": [
+   "common:services.movies.SideCollectionDeleteOwnershipSpec",
+   "common:tools.DeepExpressionLintSpec",
+   "common:tools.SourceControlCharactersLintSpec",
+   "worker:tools.ModelReadOnlySpec",
+   "worker:tools.NoDefaultLocaleCaseMappingSpec",
+   "worker:tools.NoFailedInTestNamesSpec",
+   "worker:tools.NoHandRolledTimingSpec"
+  ],
+  "scripts": [
+   "repochecks:deploy.NoSettingFallbackSpec"
+  ],
+  "test": [],
+  "testkit": [
+   "common:services.movies.SideCollectionDeleteOwnershipSpec",
+   "common:tools.DeepExpressionLintSpec",
+   "common:tools.SourceControlCharactersLintSpec"
+  ],
+  "web": [
+   "common:services.movies.SideCollectionDeleteOwnershipSpec",
+   "common:tools.DeepExpressionLintSpec",
+   "common:tools.SourceControlCharactersLintSpec",
+   "worker:tools.ModelReadOnlySpec",
+   "worker:tools.NoDefaultLocaleCaseMappingSpec",
+   "worker:tools.NoFailedInTestNamesSpec",
+   "worker:tools.NoHandRolledTimingSpec"
+  ],
+  "worker": [
+   "common:services.movies.SideCollectionDeleteOwnershipSpec",
+   "common:tools.DeepExpressionLintSpec",
+   "common:tools.SourceControlCharactersLintSpec",
+   "worker:tools.ModelReadOnlySpec",
+   "worker:tools.NoDefaultLocaleCaseMappingSpec",
+   "worker:tools.NoFailedInTestNamesSpec",
+   "worker:tools.NoHandRolledTimingSpec"
   ]
  },
  "probes": {

@@ -50,7 +50,7 @@ ROOT = "0" * 40
 HOOK_TEXT = """#!/bin/sh
 # the simulated repo's hook: never run (the checks are the simulator's); its text tells agentctl what it supports:
 # --checks-only --fast-only --verify-only
-case "$1" in --plan) ;; --compile-plan) ;; --lint-plan) ;; --coupling-plan) ;; --quality-plan) ;; esac
+case "$1" in --plan) ;; --compile-plan) ;; --lint-plan) ;; --per-file-lints) ;; --coupling-plan) ;; --quality-plan) ;; esac
 exit 0
 """
 SBT_MODULES = ("web", "worker", "common", "scrapers", "geodata", "identity")
@@ -96,18 +96,26 @@ LINT_PLAN_FIXTURE = "movies-lint-plan.json"
 _lint_tables = {}
 
 
-def lint_table(fixture=None):
+def lint_table(fixture=None, key="lints"):
     name = fixture or LINT_PLAN_FIXTURE
     if name not in _lint_tables:
         with open(os.path.join(HERE, "fixtures", name)) as f:
-            _lint_tables[name] = {k: tuple(v) for k, v in json.load(f)["lints"].items()}
-    return _lint_tables[name]
+            table = json.load(f)
+        _lint_tables[name] = {k: {kind: tuple(v) for kind, v in table.get(k, {}).items()} for k in ("lints", "per_file")}
+    return _lint_tables[name][key]
 
 
 def lint_plan(paths):
     """The simulated hook's --lint-plan: one standing lint, and the specs each path's kind selects (lint_table)."""
     table = lint_table()
     return ["standing"] + sorted({s for p in paths for s in table.get(p.split("/")[0], ())})
+
+
+def per_file_lints(paths):
+    """The simulated hook's --per-file-lints: of those, the `@per-file` specs (judging each file alone) a kind selects by
+    what they read (the table's `per_file`; none in a table from before the mark)."""
+    table = lint_table(key="per_file")
+    return sorted({s for p in paths for s in table.get(p.split("/")[0], ())})
 
 
 def ratchet_plan(paths):
@@ -120,7 +128,8 @@ def reads_of(paths):
     """What the simulated hook's checks read for paths, but its compiles (compiles_against): MINIMAL RECHECKS, the
     simulation's own truth."""
     return ({("plan", x) for x in plan_checks(paths) if x != "sbt"}
-            | {("lint", x) for x in lint_plan(paths) if x != "standing"} | ({("ratchets",)} if ratchet_plan(paths) else set()))
+            | {("lint", x) for x in set(lint_plan(paths)) - {"standing"} - set(per_file_lints(paths))}
+            | ({("ratchets",)} if ratchet_plan(paths) else set()))
 
 
 def compiles_against(a, b):
@@ -545,7 +554,8 @@ class Sim:
         if flag == "--plan":
             return ["sbt"] + (["identity"] if any(p.startswith("identity/") for p in paths) else []) \
                 + (["scripttests"] if any(p.startswith("scripts/") for p in paths) else [])
-        return {"--compile-plan": compile_plan, "--lint-plan": lint_plan, "--coupling-plan": ratchet_plan,
+        return {"--compile-plan": compile_plan, "--lint-plan": lint_plan, "--per-file-lints": per_file_lints,
+                "--coupling-plan": ratchet_plan,
                 "--quality-plan": ratchet_plan}.get(flag, lambda p: [])(paths)
 
     def commit_fixes(self, repo, sha, store=None):

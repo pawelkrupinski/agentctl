@@ -1455,7 +1455,13 @@ The reconciler then takes it, a step per tick:
   its own code. Replayed over 11-19..21's 46 resolvable verify rounds through `read_overlap`: kept 1 -> 3 (the lint
   plan's 19 -> 17 are specs genuinely reading both sides; the compile plan's 25 stand). The simulator models the
   registry as a table read off movies' hook (tests/fixtures/movies-lint-plan.json; `-before.json` the old one): over
-  the replay's 3 days x 20 seeds, rounds per landing 1.78 -> 1.67 (p90 3 -> 3), kept-verdict landings 74 -> 346. PER TEST (2026-11-20): a hook answering
+  the replay's 3 days x 20 seeds, rounds per landing 1.78 -> 1.67 (p90 3 -> 3), kept-verdict landings 74 -> 346. PER-FILE
+  LINTS (2026-11-21): a hook answering `--per-file-lints` names, of the lint specs some paths select, those judging each
+  file alone (movies' `@per-file` rows, proved by scripts/ci/lint_per_file_check.py) that the paths select by what they
+  read, never by their own code; one both sides name so is no overlap of the lint plan (`read_overlap`): the two meet in
+  its verdict only through a file both change, a full round already, or its code, which one side then names it for.
+  queue.py `PER_FILE_MODE`, `hook_text_modes`; tests: `tests/test_queue.py` `*per_file_lint*`; the simulator's table
+  carries each kind's per-file specs (`per_file`). PER TEST (2026-11-20): a hook answering
   `--script-test-plan` (movies: the self-tests `scripts/run-script-tests --paths <file> --list` selects -- a tool's own
   test, its users' tests, the tests naming it or declaring they read it) has its `scripttests` word read per test. queue.py `read_overlap`, `own_diff_changed`, `verdict_kept`, `recheck_logged`; tests:
   `tests/test_queue.py` MinimalRecheckTest, `tests/test_queue_sim.py` MinimalRecheckSimTest (INVARIANT 11 now also

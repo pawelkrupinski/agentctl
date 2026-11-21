@@ -397,17 +397,27 @@ READ_MODES = ("--compile-plan", "--coupling-plan", "--quality-plan", "--plan", "
 # plan word -- shared by any two script changes, 33 of 131 rechecks in 3 days -- is then read per test instead
 SCRIPT_TESTS_CHECK, SCRIPT_TEST_MODE = "scripttests", "--script-test-plan"
 WHOLE_TREE_MODES = ("--coupling-plan", "--quality-plan")
+# PER-FILE LINTS (movies, 2026-11-21, landing-speed proposal 1): a hook answering --per-file-lints names, of the lint
+# specs some paths select, those judging each file alone that the paths select by what the spec reads -- never by its
+# own code. Both sides naming one is no overlap of its lint plan: the two meet in its verdict only through a file both
+# change, which THE RULE rechecks in full, or through its code, which then selects it not "alone".
+PER_FILE_MODE = "--per-file-lints"
 PER_FILE_CHECKS = frozenset({"shellcheck", "actionlint", "eslint"})
 
 
-def hook_modes(hook):
-    """The dry-run modes of READ_MODES the hook (a path) answers: a flag is never asked unless the hook has it."""
+def hook_text_modes(hook, flags=(PER_FILE_MODE,)):
+    """The flags the hook (a path) answers, of flags: a flag is never asked unless the hook has it."""
     try:
         with open(hook or "") as f:
             text = f.read()
     except OSError:
         return []
-    return [m for m in READ_MODES if f"{m})" in text]
+    return [m for m in flags if f"{m})" in text]
+
+
+def hook_modes(hook):
+    """The dry-run modes of READ_MODES the hook (a path) answers."""
+    return hook_text_modes(hook, READ_MODES)
 
 
 def compiled_path(path):
@@ -487,6 +497,7 @@ def read_overlap(tree, landed_paths, change_paths):
     # a hook that cannot say what its whole-tree ratchets read: its `sbt` check is one check both sides may share
     per_file = PER_FILE_CHECKS | ({"sbt"} if all(m in modes for m in WHOLE_TREE_MODES) else set()) \
         | ({SCRIPT_TESTS_CHECK} if SCRIPT_TEST_MODE in modes else set())
+    per_file_mode = PER_FILE_MODE in hook_text_modes(hook)
     for mode in modes:
         if mode == "--compile-plan":
             both = compile_meets(hook, tree, change_paths, landed_paths)
@@ -500,7 +511,15 @@ def read_overlap(tree, landed_paths, change_paths):
         theirs = check_reads(hook, tree, mode, landed_paths, standing, per_file) if mine else set()
         if mine is None or theirs is None:
             return f"its {mode.lstrip('-')} cannot be read"
-        both = sorted(mine & theirs)
+        both = mine & theirs
+        if mode == "--lint-plan" and both and per_file_mode:
+            # PER-FILE LINTS: a spec judging each file alone meets both sides only through a file both change (THE
+            # RULE's full round) or its own code; one both sides select by what it reads alone is no overlap
+            alone = [hook_query(hook, tree, PER_FILE_MODE, ps) for ps in (change_paths, landed_paths)]
+            if None in alone:
+                return f"its {PER_FILE_MODE.lstrip('-')} cannot be read"
+            both -= set(alone[0]) & set(alone[1])
+        both = sorted(both)
         if both:
             return (f"its {mode.lstrip('-')} reads what main changed: {', '.join(both[:3])}"
                     + (f" (+{len(both) - 3} more)" if len(both) > 3 else ""))
