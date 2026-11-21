@@ -17,6 +17,11 @@
                               $FAKE_CLAUDE_BG_WAIT=<s>: it first backgrounds a task (`agentctl wait`), ends its turn
                               waiting on it (row `blocked`, live pid, no answer) for <s> s, then the task's notification
                               comes and it answers.
+                              $FAKE_CLAUDE_SILENT_ONCE=<file>: while <file> exists, the next session consumes it and
+                              fails before one message (a transcript of metadata only), its job's detail <file>'s text.
+  --bg ... --resume <sid>     of a session whose transcript holds no conversation: claude's refusal -- a row under a
+                              new id, `failed`, its job's detail `source session <sid> not found`
+  jobs                        $AGENTCTL_CLAUDE_JOBS/<id>/state.json ({state, detail}), as ~/.claude/jobs holds them
 """
 import json, os, signal, subprocess, sys, time, uuid
 
@@ -48,6 +53,20 @@ def transcript(sid):
     d = os.path.join(os.environ.get("AGENTCTL_CLAUDE_PROJECTS") or os.path.join(OUT, "projects"), "fake")
     os.makedirs(d, exist_ok=True)
     return os.path.join(d, f"{sid}.jsonl")
+
+
+def write_job(bid, state, detail):
+    d = os.path.join(os.environ.get("AGENTCTL_CLAUDE_JOBS") or os.path.join(OUT, "jobs"), bid)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "state.json"), "w") as f:
+        json.dump({"state": state, "detail": detail}, f)
+
+
+def has_conversation(sid):
+    try:
+        return any(json.loads(l).get("type") in ("user", "assistant") for l in open(transcript(sid)) if l.strip())
+    except OSError:
+        return False
 
 
 def say(path, role, text):
@@ -85,6 +104,16 @@ if argv[:1] == ["_session"]:
     r["pid"] = os.getpid()  # the leader of its own session: `stop` ends its group
     write_row(r)
     path = transcript(r["sessionId"])
+    once = os.environ.get("FAKE_CLAUDE_SILENT_ONCE")
+    if once and os.path.exists(once):  # it fails before its first message: a transcript of metadata only
+        detail = open(once).read().strip()
+        os.remove(once)
+        with open(path, "a") as f:
+            f.write(json.dumps({"type": "custom-title", "sessionId": r["sessionId"]}) + "\n")
+        write_job(argv[1], "failed", detail)
+        r.update(state="failed", pid=None)
+        write_row(r)
+        sys.exit(0)
     say(path, "user", r["prompt"])
     say(path, "assistant", "working")
     time.sleep(float(os.environ.get("FAKE_CLAUDE_SLEEP", "0")))
@@ -137,6 +166,14 @@ if "--bg" in argv:
     with open(tmp, "w") as f:
         json.dump({"argv": argv, "cwd": os.getcwd(), "env": dict(os.environ)}, f)
     os.replace(tmp, os.path.join(OUT, f"{bid}.json"))
+    if "--resume" in argv and not has_conversation(argv[argv.index("--resume") + 1]):  # claude refuses it
+        src, sid = argv[argv.index("--resume") + 1], str(uuid.uuid4())
+        os.replace(os.path.join(OUT, f"{bid}.json"), os.path.join(OUT, f"{sid[:8]}.json"))
+        write_row({"id": sid[:8], "sessionId": sid, "name": name, "cwd": os.getcwd(), "kind": "background",
+                   "state": "failed", "prompt": prompt})
+        write_job(sid[:8], "failed", f"source session {src} not found")
+        print(f"backgrounded · {sid[:8]} · {name}")
+        sys.exit(0)
     if os.environ.get("FAKE_CLAUDE_NO_SESSION"):  # backgrounded, and its session never starts (no id, no transcript)
         write_row({"id": bid, "name": name, "cwd": os.getcwd(), "kind": "background", "state": "starting",
                    "prompt": prompt})

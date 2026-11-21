@@ -807,6 +807,43 @@ def bg_transcript(session):
     return hits[0] if hits else None
 
 
+# A SESSION WITH NO CONVERSATION CANNOT BE RESUMED (2026-11-21, Order independence #99 HARNESS FAULT, issue
+# 20261121T191539-21372d): outside-gate's owner turn 58 (session e7d48beb, resumed from 6dcf1a0b during the laptop's
+# network trouble) sat `blocked` and was stopped before it wrote one message -- its transcript held only metadata
+# rows. The owner recorded it as THE session to resume; claude refused it (`source session e7d48beb-... not found`)
+# and the refused launch's own new id became the next turn's resume target: five launches in a row crashed within
+# seconds, each resuming the one before, and the breaker called it a harness fault. A session is resumed only when
+# its transcript holds a prompt or an answer.
+def bg_resumable(session):
+    """True when `session`'s transcript holds a conversation (a user or assistant entry): `claude --resume` finds it."""
+    path = bg_transcript(session) if session else None
+    try:
+        with open(path or "", errors="replace") as f:
+            for line in f:
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(e, dict) and e.get("type") in ("user", "assistant") and e.get("message"):
+                    return True
+    except OSError:
+        pass
+    return False
+
+
+def bg_failure(bid):
+    """Why claude says a background session failed (its job's `detail`, ~/.claude/jobs/<id>/state.json: e.g. `source
+    session ... not found`), '' when it did not fail or says nothing: a crash's verdict carries the actual error."""
+    try:
+        with open(os.path.join(claude_jobs_root(), str(bid or "")[:8], "state.json")) as f:
+            job = json.load(f)
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(job, dict) or job.get("state") not in ("failed", "error"):
+        return ""
+    return " ".join(str(job.get("detail") or "").split())[:300]
+
+
 def bg_final_text(path):
     """The session's last assistant answer (its text blocks), '' when there is none."""
     last = ""
@@ -1132,7 +1169,9 @@ def red_fixer(a):
     if not rec.get("transcript") and rec.get("session"):
         rec["transcript"] = bg_transcript(rec["session"])
     text = bg_turn(rec.get("transcript"))["final"]  # THIS turn's: a resumed session's transcript holds earlier ones
-    verdict = verdict or fixer_verdict(text) or "ended with no LANDED / GAVE UP line"
+    failure = bg_failure(rec.get("bg_id"))  # claude's own word on a failed session: the crash's actual error
+    verdict = verdict or fixer_verdict(text) or ("ended with no LANDED / GAVE UP line"
+                                                 + (f" (session {rec['bg_id']}: failed: {failure})" if failure else ""))
     line = f"RED FIXER {rec['workflow']} #{num}: {verdict[:300]}"
     tail = [l[:300] for l in text.splitlines()[-INBOX_TAIL:]]
     if not fixer_quiet(verdict):  # the red ended under it, already fixed, or the owner's decision: the reconciler's

@@ -180,6 +180,17 @@ def owner_intro(owner):
               "Any other question is yours: proceed under the repo's standing rules and checked-in policies. ")
 
 
+def owner_resume_target(rec):
+    """The session the owner's next turn resumes: its recorded one when that holds a conversation (fixer.bg_resumable),
+    else the last one that did (`resumable`, kept here), else None -- a fresh session, never a resume claude refuses."""
+    for sid in (rec.get("session"), rec.get("resumable")):
+        if sid and bg_resumable(sid):
+            rec["resumable"] = sid
+            return sid
+    rec.pop("resumable", None)
+    return None
+
+
 def owner_turn_prompt(fam, rec, st, names, first, resumed=False):
     """The turn's prompt: the first red's task (fixer_prompt) in the owner's voice, every red of the turn listed. A
     resumed session (its wrapper restarted) is told to continue, never to start over."""
@@ -322,8 +333,10 @@ def red_owner(a):
             s["ent"] = ent
             if bg_turn_over(ent, rec.get("transcript"), now) or s["missing"] >= 3:  # the turn ended (done, stopped,
                 # blocked; or waiting with its verdict said, bg_turn_over) or the session is gone
+                failure = bg_failure(s["bid"])
                 why = (f"ended with no LANDED / GAVE UP line (session {s['bid']}: "
-                       f"{(ent or {}).get('state') or 'gone from `claude agents`'})")
+                       f"{(ent or {}).get('state') or 'gone from `claude agents`'}"
+                       + (f": {failure}" if failure else "") + ")")
                 return end_turn(why)
             if now - s["turn_at"] > wall:
                 bg_stop(cli, s["bid"])
@@ -383,6 +396,12 @@ def red_owner(a):
             if not held:
                 return f"IDLE: no red of {fam} for {fmt_age(idle_max)}" if now - s["idle_since"] >= idle_max else None
             s["idle_since"] = now
+            resume = owner_resume_target(rec)
+            if resume != rec.get("session"):  # A SESSION WITH NO CONVERSATION CANNOT BE RESUMED (fixer.bg_resumable)
+                print(f"{ts()} RED OWNER {fam}: session {str(rec.get('session'))[:8]} holds no conversation: "
+                      + (f"resuming {resume[:8]}, the last one that does" if resume else "a fresh session"), flush=True)
+                rec.update(session=resume, transcript=bg_transcript(resume) if resume else None)
+                s["first"], s["resumed"] = s["first"] or not resume, s["resumed"] and bool(resume)
             prompt = owner_turn_prompt(fam, rec, st, held, s["first"], resumed=s["resumed"])
             if prompt is None:  # its reds closed meanwhile
                 owner_drop(fam, held)

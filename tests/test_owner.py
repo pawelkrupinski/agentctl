@@ -106,6 +106,36 @@ class OwnerTest(OwnerBase):
         self.assertIn("NEXT TURN", argv[argv.index("--bg") + 1])
         self.assertEqual(len({s["sessionId"] for s in self.sessions()}), 1)
 
+    def test_a_session_that_never_spoke_is_never_resumed_and_its_failure_is_named(self):
+        """2026-11-21, Order independence #99 (issue 20261121T191539-21372d): an owner turn's session failed before its
+        first message; the owner resumed it next turn, claude refused (`source session ... not found`), the refusal's
+        own id was resumed the turn after, and so on: five crashes in a row, a HARNESS FAULT reading only "ended with no
+        LANDED / GAVE UP line (session ...: failed)". The next turn starts a fresh session, and the crash's verdict
+        carries claude's own error."""
+        jobs = os.path.join(self.tmp.name, "jobs")
+        once = os.path.join(self.tmp.name, "silent-once")
+        with open(once, "w") as f:
+            f.write("API Error: Can't reach the API server (ENOTFOUND)")
+        for k, v in (("AGENTCTL_CLAUDE_JOBS", jobs), ("FAKE_CLAUDE_SILENT_ONCE", once)):
+            self.addCleanup(os.environ.pop, k, None)
+            os.environ[k] = v
+        self.tick(dispatch=True)
+        name = A.red_lease(self.only()["data"]["key"])
+        outcome = lambda: str(A.lease_meta(self.st.get(name) or {}).get("outcome") or "")
+        self.assertTrue(self.wait(lambda: outcome().startswith("ended with no")), self.owner_log())
+        dead = self.rec()["session"]
+        self.assertIn(f"failed: API Error: Can't reach the API server (ENOTFOUND)", outcome(),
+                      "the crash names claude's own error")
+        for _ in range(20):  # offered again: the owner's next turn
+            if self.rec().get("turn") == 2:
+                break
+            self.tick(dispatch=True, advance=60)
+            self.wait(lambda: self.rec().get("turn") == 2, limit=1)
+        self.assertTrue(self.wait(lambda: outcome().startswith("LANDED")), (outcome(), self.owner_log()))
+        self.assertNotEqual(self.rec()["session"], dead)
+        argv = self.argv_of(self.rec()["session"])
+        self.assertNotIn("--resume", argv, "a session with no conversation is never resumed: a fresh one")
+
     def test_a_turn_past_its_wall_time_is_stopped_and_its_leases_released_the_owner_lives_on(self):
         """An owner turn was unbounded: a hung session held its family's reds `leased` for up to OWNER_MAX (7 days)."""
         os.environ["FAKE_CLAUDE_SLEEP"] = "60"

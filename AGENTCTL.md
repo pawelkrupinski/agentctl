@@ -861,7 +861,10 @@ agent must be assigned to it".
   (`<clone>-wt-owner-<family>`, branch `owner-<family>`) with a NOTEBOOK there (`RED-NOTEBOOK.md`, never committed)
   that it reads first and keeps current. Its lease `owner/<family>` is a HEARTBEAT (renewed while the wrapper lives,
   lapsing 15 min after it dies; no 3 h maximum). New reds of the family are handed to it -- their leases taken for the
-  owner (kind `owned`), a line in `RED-INBOX.md` -- and become the NEXT TURN of the same session (`--resume`). A turn
+  owner (kind `owned`), a line in `RED-INBOX.md` -- and become the NEXT TURN of the same session (`--resume`) -- only a session whose transcript holds a conversation: one
+  that failed before its first message is never resumed (claude refuses it, `source session ... not found`; 2026-11-21,
+  Order independence #99), the turn resumes the last one that spoke, else starts a fresh one. A crashed turn's verdict
+  carries claude's own error (its job's `detail`, `~/.claude/jobs/<id>/state.json`), and so does the HARNESS FAULT. A turn
   ends with one verdict line; that turn's red leases are released with it, exactly as a fixer's, so verification,
   re-offers (back to the same owner), the attempt ladder and the crash-loop breaker work as before. It is restarted
   only when it died (same worktree, notebook and session), and ends after 6 h with no red (`$AGENTCTL_OWNER_IDLE`, counted from its last turn's end), on
