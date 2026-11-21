@@ -49,5 +49,27 @@ class BinPrePushHookTest(unittest.TestCase):
             self.assertEqual(open(mark).read(), str(p.pid), "the suite ran in a process group of its own")
 
 
+    @unittest.skipUnless(TIMEOUT, "no GNU timeout on this machine: the hook cannot run here")
+    def test_the_suites_bound_grows_with_the_laptops_load(self):
+        """2026-11-21: two pushes of d2be9d3 were refused as SUITE TIMEOUT after 280 s with no test failing (1005, then
+        1522 of 1755 run) while other agents' what-ifs held the laptop at load 30 on 18 cores. The bound scales with
+        load per core (1x to 4x)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(os.path.join(repo, "tests"))
+            mark = os.path.join(tmp, "argv")
+            with open(os.path.join(repo, "tests", "run.py"), "w") as f:
+                f.write(f"import sys\nopen({mark!r}, 'w').write(' '.join(sys.argv[1:]))\nprint('OK')\n")
+            git(tmp, "init", "-q", repo)
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "base")
+            sha = git(repo, "rev-parse", "HEAD")
+            for load, want in (("9.0", "280"), ("36.0", "560"), ("200", "1120")):
+                env = dict(ENV, AGENTCTL_PREPUSH_LOAD=load, AGENTCTL_PREPUSH_CORES="18")
+                p = subprocess.run(["sh", HOOK, "origin", "x"], cwd=repo, input=f"refs/heads/main {sha} refs/heads/main "
+                                   f"{'0' * 39}1\n", capture_output=True, text=True, env=env, timeout=60)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(open(mark).read(), f"--suite-timeout {want}", load)
+
 if __name__ == "__main__":
     unittest.main()

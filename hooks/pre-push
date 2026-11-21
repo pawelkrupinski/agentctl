@@ -12,7 +12,14 @@ while read -r _lref lsha _rref _rsha; do
   echo "pre-push: tests/run.py on ${lsha%"${lsha#????????????}"} ..." >&2
   # --foreground: the suite stays in the push's process group, where `agentctl land` reads its CPU as progress (GNU
   # timeout's own group hid it: land ended the push as stalled, 2026-11-06); run.py's own bound ends its workers.
-  if ! (cd "$tmp/tree" && timeout --foreground -s KILL 300 python3 tests/run.py --suite-timeout 280 >"$tmp/out" 2>&1); then
+  # THE BOUND GROWS WITH THE LAPTOP'S LOAD (2026-11-21: d2be9d3 refused twice as SUITE TIMEOUT after 280 s, no test
+  # failing, while other agents' what-ifs held load 30 on 18 cores): 280 s times load per core, 1x to 4x
+  cores=${AGENTCTL_PREPUSH_CORES:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)}
+  load=${AGENTCTL_PREPUSH_LOAD:-$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')}
+  [ -n "$load" ] || load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)
+  bound=$(awk -v l="${load:-0}" -v c="$cores" 'BEGIN { f = (c > 0) ? l / c : 1; if (f < 1) f = 1; if (f > 4) f = 4;
+                                                     printf "%d", 280 * f }')
+  if ! (cd "$tmp/tree" && timeout --foreground -s KILL $((bound + 20)) python3 tests/run.py --suite-timeout "$bound" >"$tmp/out" 2>&1); then
     tail -40 "$tmp/out" >&2
     echo "pre-push: REFUSED -- the suite fails on $lsha (fix forward; never --no-verify)" >&2
     rc=1
