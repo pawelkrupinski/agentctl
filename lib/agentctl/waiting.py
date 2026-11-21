@@ -850,6 +850,15 @@ def fixes_of(repo, commits):
     return out
 
 
+def diagnoses_of(repo, commits):
+    """The run ids/numbers the commits' `Diagnoses-Red:` trailers name (DIAGNOSTICS ARE NO FIX, red.py)."""
+    out = set()
+    for c in commits:
+        r = git(repo, "log", "-1", "--format=%(trailers:key=Diagnoses-Red,valueonly,separator=%x2C)", c, check=False)
+        out |= trailer_values(r.stdout) if r.returncode == 0 else set()
+    return out
+
+
 def batch_order(repo, entries, reds):
     """The order a batch is built in: a fix for the current red first, then (main red) what may land while red -- tools
     only, or every commit carrying a Fixes-Red for a red run -- then the rest; by join order within each."""

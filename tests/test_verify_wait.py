@@ -74,6 +74,9 @@ class ScheduledFixWaitsForItsSlotTest(VerifyWaitBase):
         super().setUp()
         self.r.write(".github/workflows/record-scrape-fixtures.yml", RECORD)
         self.r.write("scripts/record.sh", "echo record\n")
+        # the paid-proxy recording opts out of VERIFY PROMPTLY BY DEFAULT (red.py): its slot decides its fix
+        self.r.write(A.RED_WORKFLOWS_FILE, "# workflow\tverify_dispatch\treplay\twhy\n"
+                                           "Record scrape fixtures\tno\t-\tevery cinema through paid proxies\n")
         self.r.commit("record")
         self.r.write("scripts/record.sh", "echo record with its own lane\n")
         self.sha = self.r.commit("record: the consumer on a lane below its producer\n\nFixes-Red: 198")
@@ -136,21 +139,23 @@ class ScheduledFixWaitsForItsSlotTest(VerifyWaitBase):
         A.red_move(self.st, it, "fix-pending", "fix x landed (123dd6524e): verifying", data={})
         self.assertEqual(self.item()["level"], 0)
 
-    def test_a_scheduled_workflow_is_never_dispatched_to_verify_unless_the_repo_lists_it(self):
+    def test_a_scheduled_workflow_whose_row_says_no_is_never_dispatched_to_verify(self):
         self.step("2026-11-19T04:23:15Z")
         out = self.step("2026-11-19T05:00:00Z")  # past RED_FIX_RUN_START: where #200 was dispatched
         self.assertEqual((self.posts, out, self.item()["level"]), ([], [], 0))
-        self.assertIn("never dispatched to verify", A.red_verify_dispatch(A.RED_PRIMARY, self.r.path,
-                                                                          "Record scrape fixtures", self.sha))
+        self.assertIn("says verify_dispatch no: never dispatched to verify",
+                      A.red_verify_dispatch(A.RED_PRIMARY, self.r.path, "Record scrape fixtures", self.sha))
         self.assertEqual(self.posts, [])
 
-    def test_a_listed_scheduled_workflow_is_dispatched_to_verify(self):
-        self.r.write(A.RED_WORKFLOWS_FILE, "# workflow\tverify_dispatch\treplay\twhy\nRecord scrape fixtures\tyes\t-\tcheap here\n")
-        self.r.commit("record is dispatchable")
+    def test_with_no_row_a_scheduled_workflow_is_dispatched_to_verify_as_its_fix_lands(self):
+        """VERIFY PROMPTLY BY DEFAULT (the owner, 2026-11-21: Order independence #94's fix waited a day for its cron):
+        no row is yes, and the dispatch goes in the tick that sees the fix landed -- never after RED_FIX_RUN_START."""
+        self.r.write(A.RED_WORKFLOWS_FILE, "# workflow\tverify_dispatch\treplay\twhy\n")
+        self.r.commit("no row for the recording")
         self.r.push()
-        self.step("2026-11-19T04:23:15Z")
-        out = self.step("2026-11-19T05:00:00Z")
+        out = self.step("2026-11-19T04:23:15Z")
         self.assertEqual(self.posts, [("POST", "actions/workflows/record-scrape-fixtures.yml/dispatches")], out)
+        self.assertIn("dispatched Record scrape fixtures on main to verify", " ".join(out))
 
     def test_its_run_decides_it(self):
         self.step("2026-11-19T04:23:15Z")
@@ -174,12 +179,16 @@ class ScheduledFixWaitsForItsSlotTest(VerifyWaitBase):
         self.assertIn("awaits Record scrape fixtures #201 (queued)", " ".join(out))
         self.assertEqual((self.item()["state"], self.item()["level"]), ("fix-pending", 0))
 
-    def test_past_its_deadline_with_no_run_dispatched_it_escalates(self):
+    def test_past_its_deadline_with_no_run_dispatched_it_goes_back_to_a_fixer_escalated(self):
+        """A MISSED DEADLINE IS NEVER SILENT (2026-11-21, Order independence #94 past `verified by 06:27Z`)."""
         self.step("2026-11-19T04:23:15Z")
         by = self.item()["deadline"]
         out = self.step(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(by + 30)))
-        self.assertIn("no Record scrape fixtures run was dispatched for its 23:31Z slot", " ".join(out))
-        self.assertEqual((self.item()["state"], self.item()["level"]), ("fix-pending", 1))
+        it = self.item()
+        self.assertIn("no Record scrape fixtures run was dispatched for its 23:31Z slot",
+                      it["data"]["history"][-1]["outcome"], out)
+        self.assertEqual(it["state"], "offered")
+        self.assertIn("escalate", {e["severity"] for e in self.st.item_events("red", it["id"])})
 
     def test_past_its_deadline_a_slot_run_that_ended_without_deciding_it_escalates(self):
         self.step("2026-11-19T04:23:15Z")
@@ -187,8 +196,9 @@ class ScheduledFixWaitsForItsSlotTest(VerifyWaitBase):
         A._verify_runs.clear()
         by = self.item()["deadline"]
         out = self.step(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(by + 30)))
-        self.assertIn("its 23:31Z run #201 ended cancelled without deciding it", " ".join(out))
-        self.assertEqual(self.item()["level"], 1)
+        self.assertIn("its 23:31Z run #201 ended cancelled without deciding it",
+                      self.item()["data"]["history"][-1]["outcome"], out)
+        self.assertEqual(self.item()["state"], "offered")
 
     def test_it_gives_up_to_a_fixer_one_decide_interval_past_its_deadline(self):
         self.step("2026-11-19T04:23:15Z")

@@ -575,7 +575,8 @@ def change_fields(repo, main_ref, head, a):
     """A queue entry's fields for the change at head in repo (land's own submission)."""
     commits = waiting_commits(repo, f"{remote()}/main", head)
     return {"worktree": repo, "branch": branch_of(repo), "head": head, "commits": commits,
-            "fixes": sorted(fixes_of(repo, commits)), "keep_worktree": bool(getattr(a, "keep_worktree", False)),
+            "fixes": sorted(fixes_of(repo, commits)), "diagnoses": sorted(diagnoses_of(repo, commits)) or None,
+            "keep_worktree": bool(getattr(a, "keep_worktree", False)),
             "no_batch": bool(getattr(a, "no_batch", False)),
             "claude_pid": int(os.environ["CLAUDE_PID"]) if (os.environ.get("CLAUDE_PID") or "").isdigit() else None,
             "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or None,
@@ -1129,6 +1130,8 @@ def change_item_fields(e):
     since = entry_queued_since(e)
     return {"worktree": e.get("worktree"), "head": e.get("head"), **lander_fields(e),
             **({"fixes": sorted(e["fixes"])} if e.get("fixes") else {}),
+            **({"diagnoses": sorted(e["diagnoses"])} if e.get("diagnoses") else {}),
+            **({"replays": e["replays"]} if e.get("replays") else {}),
             **({"submitted_at": since} if since else {})}
 
 

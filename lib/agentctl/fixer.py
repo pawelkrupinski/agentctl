@@ -1402,6 +1402,11 @@ def red_view_state(store, it, t=None):
         return (f"{who} ({wt}, leased{fam}; lapses {exp} without progress)" + (f" -- {m['note']}" if m.get("note") else "")
                 + rec,
                 f"{who.replace('movies-wt-', '').replace('red-fixer-', 'fixer ')} leased")
+    if st == "fix-pending" and (d.get("fix") or {}).get("unproven"):  # A FIX WITH NO REPLAY KEEPS ITS FIXER (red.py)
+        f = d["fix"]
+        return (f"fix-unproven: {f.get('entry') or str(f.get('sha'))[:9]} ({f.get('status')}) carries no replay; "
+                f"{d.get('holder') or 'its holder'} keeps it until a {d.get('workflow')} run decides it{rec}",
+                f"fix-unproven {str(f.get('sha') or f.get('entry') or '')[:7]}")
     if st == "fix-pending":
         f = d.get("fix") or {}
         if f.get("status") == "landed" and f.get("next_run_at") and t < float(it["deadline"]):  # red_verify_plan

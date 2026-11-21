@@ -116,12 +116,33 @@ moves it forward; nothing is a detached process that can die with its state in i
     reads `awaiting next scheduled run at HH:MMZ` -- level 0, no escalation, no inbox line (Record scrape fixtures
     #198, 2026-11-19: a fixed 3 h timer showed it escalated at 07:23Z for a 23:31Z nightly). At the deadline a run of
     it still undecided that will decide the fix (created since the slot, or containing the fix) holds it again, quietly;
-    else it escalates, saying whether the slot's run ended without deciding it or the scheduler never dispatched it,
-    and a fixer gets it one `RED_FIX_DECIDE` later. With no schedule it waits up to `RED_FIX_NEXT_RUN` (30 h). A
-    scheduled workflow is DISPATCHED to verify only when the repo's one per-workflow registry, `.github/red-workflows.tsv`
-    on main, says so: tab-separated `workflow  verify_dispatch (yes|no)  replay (a command, `{run}` = the red's failing
-    run id, or -)  why`, `#` comments (Record scrape fixtures, a paid-proxy scrape of every cinema, is `no`); an
-    unscheduled one is dispatched as before. THE REPO'S STEP AFTER THE REBASE (2026-11-20): a repo's executable
+    else -- A MISSED DEADLINE IS NEVER SILENT (2026-11-21, below) -- it goes back to a fixer at once, escalated, saying
+    whether the slot's run ended without deciding it or the scheduler never dispatched it. With no schedule it waits up
+    to `RED_FIX_NEXT_RUN` (30 h). **VERIFY PROMPTLY BY DEFAULT** (the owner, 2026-11-21, "structural fix for the order
+    independence being abandoned": Order independence #94's fix waited ~24 h for its 02:40Z cron, nobody at work): a
+    workflow with `workflow_dispatch` is DISPATCHED to verify a landed fix in the tick that sees it land (a scheduled
+    one at once; an unscheduled one after `RED_FIX_RUN_START`, 30 min, for a push-triggered run to come first) unless
+    the repo's one per-workflow registry, `.github/red-workflows.tsv` on main, opts it out: tab-separated `workflow
+    verify_dispatch (yes|no)  replay (a command, `{run}` = the red's failing run id, or -)  why`, `#` comments. No row
+    is yes. A `no` row is for a costly workflow (over ~60 runner-minutes a run, or a paid service): movies opts out
+    Record scrape fixtures (paid proxies), Order independence (~204 runner-min), Nightly stress (~76), Identity drift
+    explorer (~225) and Identity family explorer (~254); those wait for their slot.
+    **A FIX WITH NO REPLAY KEEPS ITS FIXER** (the owner, 2026-11-21: #94's `Fixes-Red: 94`, a853b2ee4, was diagnostics
+    only, and its fixer was released): for a red outside the gate, a `Fixes-Red:` change whose submission carries no
+    `Fix-Replay:` agentctl ran and saw base=FAIL head=PASS (the change's `replays`) is UNPROVEN -- the red goes
+    fix-pending with `fix.unproven`, shown as `fix-unproven`, and its holder's lease is NOT revoked (RED-NOTE.md in its
+    worktree says so): the red stays in hand until its verification run decides it -- green: FIX OK, the holder
+    released; the same failure: FIX FAILED, back to that same holder (leased), the fix refuted. A gate red keeps its
+    own FIX REPLAY enforcement (below) and is released as before. **DIAGNOSTICS ARE NO FIX:** a commit that only
+    collects evidence says `Diagnoses-Red: <run>` instead: it never links its red (no fix-pending, nor through the
+    red's own workflow file), and once it lands its red's workflow -- when dispatchable as above -- is dispatched on
+    main, once per change, and the first decided run after it is told to the same holder (RED-NOTE.md). Movies'
+    pre-push trailer lint suggests `Diagnoses-Red` for a `Fixes-Red` commit touching only CI or report plumbing.
+    **A MISSED DEADLINE IS NEVER SILENT:** a fix-pending (or fix-unproven) red past its `verified by` deadline with no
+    run that decides it -- the slot passed, or its verifying dispatch never produced a run -- is offered again,
+    escalated (`red_fix_unverifiable`): its live holder takes it back, else the offer's own escalation (RED UNCLAIMED)
+    reaches the owner. red.py `red_workflow_policy`, `red_fix_proven`, `red_keep_holder`, `red_diagnosis_step`,
+    `red_verify_scheduled`; tests: `tests/test_red_in_hand.py`, `tests/test_verify_wait.py`. THE REPO'S STEP AFTER THE REBASE (2026-11-20): a repo's executable
     `scripts/land-before-queue <origin/main> <head>` runs on the rebased change before its checks, and may commit onto it
     (movies: the identity stamp carry's rows); the commit rides the same push. It never refuses a land: a failure or a
     timeout (`$AGENTCTL_LAND_BEFORE_QUEUE_SECONDS`, 1200) leaves the change as it was. FIX REPLAY: when a red's workflow row names a `replay`, `land` warns on a

@@ -83,9 +83,9 @@ def red_waits_for_its_run(d):
 # no run verifying it, or the scheduler never dispatched it.
 # A VERIFY DISPATCH IS PER WORKFLOW (the owner, 2026-11-19): Record scrape fixtures scrapes every cinema through paid
 # proxies -- its 04:34Z verify dispatch (#200) was not cheap. A workflow WITH a schedule is dispatched to verify a fix
-# only when the repo's ONE per-workflow policy registry, RED_WORKFLOWS_FILE on main, says `verify_dispatch` yes; every
-# other scheduled workflow waits for its slot. A workflow with no schedule is dispatched as before (no other run will
-# come). The same row's `replay` is the command a fixer runs before landing (FIX REPLAY, below).
+# unless the repo's ONE per-workflow policy registry, RED_WORKFLOWS_FILE on main, says `verify_dispatch` no (VERIFY
+# PROMPTLY BY DEFAULT, 2026-11-21: no row is yes, and the dispatch goes at once); a `no` workflow waits for its slot. A
+# workflow with no schedule is dispatched as before (no other run will come). The same row's `replay` is the command a fixer runs before landing (FIX REPLAY, below).
 RED_VERIFY_SLACK = 2 * 3600     # s past a slot's expected end before its fix is called unverified ($AGENTCTL_RED_VERIFY_SLACK)
 RED_VERIFY_DURATION = 2 * 3600  # s a scheduled run is taken to last when none of its runs finished
 RED_VERIFY_HOLD = 30 * 60       # s a run that will decide the fix, still undecided at the deadline, holds it again
@@ -183,8 +183,12 @@ def red_workflows_on_main(repo, ref=None):
     return bool(repo) and git_ok(repo, "cat-file", "-e", f"{ref or remote() + '/main'}:{RED_WORKFLOWS_FILE}")
 
 
+# VERIFY PROMPTLY BY DEFAULT (the owner, 2026-11-21: "structural fix for the order independence being abandoned" --
+# Order independence #94's fix landed and waited ~24 h for its 02:40Z cron, no one at work): a workflow with no row
+# in RED_WORKFLOWS_FILE MAY be dispatched to verify a landed fix -- at once, never after its next slot. A costly one
+# opts out with a row, `verify_dispatch no` and why (more than ~60 runner-minutes a run, or a paid service).
 def red_workflow_policy(repo, workflow, ref=None):
-    return red_workflow_policies(repo, ref).get(workflow) or {"verify_dispatch": False, "replay": None, "why": ""}
+    return red_workflow_policies(repo, ref).get(workflow) or {"verify_dispatch": True, "replay": None, "why": ""}
 
 
 def verify_dispatchable(repo, workflow):
@@ -1461,6 +1465,8 @@ def red_fix_candidates(d, facts):
         # for both reds' fix "landing on red (Fixes-Red)"; Main's own fixer was stopped for it while it waited on that
         # very gate. A gate red's fix carries `Fixes-Red:` (nothing else lands while it is red); untrailered, only the
         # red's own workflow file links a change to an outside red.
+        if {str(x) for x in e.get("diagnoses") or []} & {str(x) for x in names}:
+            continue  # DIAGNOSTICS ARE NO FIX: a `Diagnoses-Red:` change never links its red, whatever it edits
         if red_workflow_file_touched(repo, d, e.get("commits") or []):
             yield {"entry": e["id"], "status": e["status"], "linked": "its workflow's own files",
                    "author": {"worktree": e.get("worktree"), "session": e.get("session")}}
@@ -1896,6 +1902,73 @@ def red_author(repo, ob, t):
 
 
 # -- the red step: one item, one small idempotent step per tick
+# DIAGNOSTICS ARE NO FIX (the owner, 2026-11-21: a853b2ee4 said `Fixes-Red: 94` and only added diagnostics). A commit
+# that only collects evidence says `Diagnoses-Red: <run>`: it never links its red as a fix (no fix-pending, its fixer
+# kept). Once it lands, its red's workflow -- when dispatchable (workflow_dispatch, no `verify_dispatch no` row) -- is
+# dispatched on main to collect the new evidence, once per change, and the run's verdict goes back to the same holder
+# (RED-NOTE.md in its worktree), never to a new fixer.
+def red_diagnosis_step(store, it, row, snap, repo, o_r, t):
+    """A leased red's landed `Diagnoses-Red:` changes: each dispatched once to collect its evidence, and the first
+    decided run after that dispatch told to the holder. The lines it did."""
+    d = it["data"]
+    names = {str(x) for x in red_names(d) if x is not None}
+    done = dict(d.get("diagnosis_runs") or {})
+    did = []
+    try:
+        landed = [c for c in store.items("change", ["landed"]) if names & {str(x) for x in (c.get("data") or {}).get(
+            "diagnoses") or []} and float(c.get("entered_at") or 0) >= float(d.get("opened_at") or 0) - 3600]
+    except Exception:  # an unread store decides nothing
+        return []
+    for c in landed:
+        if c["id"] in done:
+            continue
+        sha = (c.get("data") or {}).get("landed_sha") or (c.get("data") or {}).get("tip") or ""
+        line = red_verify_dispatch(o_r, repo, d.get("workflow"), sha, (d.get("last_run") or {}).get("databaseId"))
+        done[c["id"]] = {"at": t, "dispatch": line}
+        red_keep_holder(row, f"your diagnostics {c['id']} landed: {line}; its verdict comes here")
+        did.append(f"{red_what(d)}: diagnostics {c['id']}: {line}")
+    last = ((snap or {}).get("latest") or {}).get(d.get("workflow")) or {}
+    for cid, rec in done.items():
+        if rec.get("told") or not last.get("updatedAt") or not str(rec.get("dispatch") or "").startswith("dispatched"):
+            continue
+        if parse_time(last["updatedAt"]).timestamp() > float(rec["at"]) and last.get("status", "completed") == "completed":
+            text = (f"{d.get('workflow')} #{last.get('number')} after your diagnostics {cid}: "
+                    f"{last.get('conclusion') or 'decided'} (run {last.get('databaseId')})")
+            red_keep_holder(row, text)
+            rec["told"] = t
+            did.append(f"{red_what(d)}: {text}")
+    if did:
+        store.update_item("red", it["id"], it["version"], {"diagnosis_runs": done})
+    return did
+
+
+# A FIX WITH NO REPLAY KEEPS ITS FIXER (the owner, 2026-11-21: Order independence #94's `Fixes-Red: 94` commit
+# a853b2ee4 was diagnostics only; the red went fix-pending, its fixer was released, and nobody worked it for a day). A
+# fix whose commits carry no `Fix-Replay:` that agentctl ran and saw base=FAIL head=PASS (the change's `replays`) is
+# UNPROVEN: its red goes fix-pending with `fix.unproven` -- shown as fix-unproven -- and its holder's lease is NOT
+# revoked: the red stays in hand until its verification run decides it (green: FIX OK, the holder released; the same
+# failure: FIX FAILED, back to that holder, leased). A gate red keeps its own enforcement (FIX REPLAY: refused
+# without a replay, or its `none — <why>`): its fix is taken as proven, as before.
+def red_fix_proven(store, d, fix):
+    """Whether red data d's fix is proven before landing: a gate red's (its own enforcement), else a change whose
+    `replays` holds one agentctl ran with base=FAIL head=PASS."""
+    if d.get("gate"):
+        return True
+    ch = red_change(store, (fix or {}).get("entry")) or {}
+    return any(r.get("base") == "FAIL" and r.get("head") == "PASS" for r in (ch.get("data") or {}).get("replays") or [])
+
+
+def red_keep_holder(row, text):
+    """Tell a red's live holder something, its lease kept (RED-NOTE.md in its worktree)."""
+    wt = lease_meta(row).get("worktree")
+    if wt and os.path.isdir(wt) and allowed_path(wt):
+        try:
+            with open(os.path.join(wt, "RED-NOTE.md"), "a") as f:
+                f.write(f"{text} (agentctl red, {ts()}); remove this file with your worktree.\n")
+        except OSError:
+            pass
+
+
 def red_stop_holder(store, key, why, outcome, force=False):
     """Revoke the red's lease (its holder's next renewal answers lost) and tell its worktree. A REVIVED LANDER (lease
     tier `lander`, blame.py) is spared unless force: the revert is the red's fix, and the lander's work -- its change
@@ -2652,6 +2725,13 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
             red_put_offer(store, it)
         return acts
     if st == "leased":
+        if fix and live and not red_fix_proven(store, d, fix):  # A FIX WITH NO REPLAY KEEPS ITS FIXER
+            red_keep_holder(row, f"your fix {fix.get('entry') or str(fix.get('sha'))[:10]} carries no Fix-Replay "
+                                 f"agentctl ran (base=FAIL head=PASS): the red stays yours, fix-unproven, until its "
+                                 f"verification run decides it -- FIX OK or FIX FAILED reaches your inbox")
+            red_move(store, it, "fix-pending", f"{red_what(d)}: fix {fix.get('entry') or fix.get('sha')} {fix['status']}"
+                     f", unproven: {row['holder']} keeps it", data={"fix": {**fix, "unproven": True}})
+            return [f"fix-unproven {red_what(d)} ({row['holder']} keeps it)"]
         if fix:
             red_stop_holder(store, key, f"its fix {fix.get('entry') or fix.get('sha')} is on its way", "fix submitted")
             red_move(store, it, "fix-pending", f"{red_what(d)}: fix {fix.get('entry') or fix.get('sha')} {fix['status']}",
@@ -2663,7 +2743,7 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
         if live:
             if row["holder"] != d.get("holder"):
                 store.update_item("red", it["id"], it["version"], {"holder": row["holder"]})
-            return acts
+            return acts + red_diagnosis_step(store, store.item("red", it["id"]), row, snap, repo, o_r, t)
         return red_lease_ended(store, it, row, block, t, repo)
     if st == "fix-pending":
         return red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t)
@@ -3669,7 +3749,20 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
         red_move(store, it, "verified", line)
         return [line]
     if obs is not None and holds and d["key"] in obs and str(obs[d["key"]]["run"].get("databaseId")) == str(last.get("databaseId")):
-        # THE FIX DID NOT FIX IT: refuted, its holder's lease dropped, offered again with the failed fix in the picture
+        # THE FIX DID NOT FIX IT: refuted, its holder's lease dropped, offered again with the failed fix in the picture --
+        # an UNPROVEN fix's holder keeps the red (A FIX WITH NO REPLAY KEEPS ITS FIXER): back to it, leased
+        row = store.get(red_lease(d["key"]))
+        if f.get("unproven") and lease_is_live(row, t):
+            line = f"FIX FAILED: {red_what(d)}: #{last.get('number')} still fails this way (fix {sha[:10]})"
+            inbox_write("red", line, [line], [d.get("line") or ""], 1)
+            red_keep_holder(row, f"{line}: the red is still yours -- fix it again, with a `Fix-Replay:` this time")
+            h = {"at": iso_at(t), "holder": f.get("entry") or sha[:10],
+                 "outcome": f"fix {sha[:10]} refuted by #{last.get('number')} (unproven; its holder keeps it)"}
+            red_move(store, it, "leased", f"{line}: back to {row['holder']}",
+                     data={"attempts": int(d.get("attempts") or 0) + 1, "fix": None, "holder": row["holder"],
+                           "refuted": red_refuted({"refuted": (d.get("refuted") or []) + [sha]}),
+                           "history": (d.get("history") or []) + [h]})
+            return [line]
         red_stop_holder(store, d["key"], f"your fix {sha[:10]} is refuted by #{last.get('number')}", "fix refuted",
                         force=True)
         refuted_blame = blame_refuted(repo, d.get("blame"), sha)  # the red's own revert: the culprit was wrong
@@ -3701,7 +3794,8 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
         d, f = it["data"], it["data"]["fix"]
         if plan and not verify_dispatchable(repo, d.get("workflow")):
             return said  # a listed one goes on to its verify dispatch in this same tick
-    if not holds and not d.get("gate") and not f.get("verify_dispatched") and t - float(f.get("at") or t) > RED_FIX_RUN_START \
+    if not holds and not d.get("gate") and not f.get("verify_dispatched") \
+            and (t - float(f.get("at") or t) > RED_FIX_RUN_START or f.get("next_run_at")) \
             and d.get("red_kind") in ("outside",) \
             and not (f.get("next_run_at") and not verify_dispatchable(repo, d.get("workflow"))):  # its slot decides it
         line = red_verify_dispatch(o_r, repo, d.get("workflow"), sha, (d.get("last_run") or {}).get("databaseId"))
@@ -3718,6 +3812,10 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
                                                f"{d.get('workflow')} proves it)", t)
     if t >= it["deadline"] and f.get("verify_by") and not holds:
         return red_verify_scheduled(store, it, f, sha, o_r, repo, t)
+    if t >= it["deadline"] and not holds and str(f.get("verify") or "").startswith("dispatched") \
+            and not red_verify_run_on_way(o_r, repo, f):  # A MISSED DEADLINE IS NEVER SILENT: its dispatched run never
+        return red_fix_unverifiable(store, it, f"fix {sha[:10]} unverified {fmt_age(t - red_fix_since(it))} after "  # came
+                                               f"its verifying dispatch ({str(f.get('verify'))[:100]})", t)
     if t >= it["deadline"]:
         # awaiting its workflow's next run: no one's to act on
         awaiting = red_fix_giveup(d) > env_num("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP)
@@ -3745,8 +3843,10 @@ def red_verify_scheduled(store, it, f, sha, o_r, repo, t):
              and r.get("createdAt") and parse_time(r["createdAt"]).timestamp() >= float(f.get("next_run_at") or 0) - 60]
     why = (f"its {hhmmz(f['next_run_at'])} run #{since[-1].get('number')} ended {since[-1].get('conclusion')} "
            f"without deciding it" if since else f"no {wf} run was dispatched for its {hhmmz(f['next_run_at'])} slot")
-    red_move(store, it, "fix-pending", f"RED {red_what(d)}: fix {sha[:10]} unverified: {why}", severity="escalate")
-    return [f"escalated {red_what(d)}: fix unverified ({why})"]
+    # A MISSED DEADLINE IS NEVER SILENT (the owner, 2026-11-21: Order independence #94 passed its `verified by 06:27Z`
+    # with nobody at work): no run decided it by then -- back to a fixer (its live holder first), escalated
+    return red_fix_unverifiable(store, it, f"fix {sha[:10]} unverified past its deadline "
+                                           f"{hhmmz(f.get('verify_by') or it['deadline'])}: {why}", t)
 
 
 def red_verify_await(store, it, f, plan, t):
@@ -3792,8 +3892,8 @@ def red_verify_dispatch(o_r, repo, workflow, sha, run_id=None):
     if "workflow_dispatch" not in txt:
         return f"FIX UNVERIFIED until {workflow}'s next scheduled run (no workflow_dispatch)"
     if workflow_crons(txt) and not verify_dispatchable(repo, workflow):  # A VERIFY DISPATCH IS PER WORKFLOW
-        return (f"FIX UNVERIFIED until {workflow}'s next scheduled run (scheduled, and {RED_WORKFLOWS_FILE} does not "
-                f"say verify_dispatch yes: never dispatched to verify)")
+        return (f"FIX UNVERIFIED until {workflow}'s next scheduled run (scheduled, and {RED_WORKFLOWS_FILE} says "
+                f"verify_dispatch no: never dispatched to verify)")
     inputs = (run_dispatch_inputs(o_r, run_id) or run_title_inputs(o_r, run_id, txt)) if run_id else {}
     try:
         api(o_r, "POST", f"actions/workflows/{os.path.basename(path)}/dispatches", body={"ref": "main", "inputs": inputs})
