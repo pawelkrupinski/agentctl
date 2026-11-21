@@ -632,6 +632,14 @@ class QueueTest(WaitingTest):
                          ["--range", "--range"])
         self.assertNotIn("the combined tree verified", self.landed_verdict())
 
+    def test_the_share_selection_asks_only_the_shares_the_check_has(self):
+        """2026-11-21: the landing check's `oldrefs` share went (the old-ref compile runs on Main, after landing) and
+        precommit-share.sh refuses a share it does not know, as it refuses any (exit 2): asking it made every share
+        selection unreadable, and every rebase a full round."""
+        strict = self.SHARE.replace("*) echo ;;", "*) exit 2 ;;")
+        self.SHARE = strict
+        self.assertEqual(self.share_moves_under(strict + "# a comment\n"), ["--range", "--verify-only"])
+
     def test_an_unreadable_share_selection_rechecks(self):
         self.assertEqual(self.share_moves_under("#!/bin/sh\n# verifyareas-\nexit 3\n"), ["--range", "--range"])
 

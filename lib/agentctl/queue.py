@@ -150,8 +150,9 @@ SELECTION_PATHS = frozenset({"scripts/hooks/pre-push", "scripts/hooks/lint-regis
                              SHARE_SCRIPT})
 SELECTION_MODES = ("--plan", "--compile-plan", "--unit-plan", "--lint-plan")
 # what each share of the CI check runs for the change (precommit-share.sh `checks <share>`, the hook's own PREPUSH_LIST
-# under the share's environment), read on a check/<id> ref -- the change's own checks, its range the change since main
-SHARES = ("rest", "identity", "oldrefs", "plan")
+# under the share's environment), read on a check/<id> ref -- the change's own checks, its range the change since main.
+# No `oldrefs` since 2026-11-21: the old-ref compile runs on Main, after landing, and the script refuses the name.
+SHARES = ("rest", "identity", "plan")
 SHARE_KEY = "shares"
 # MODULE OVERLAP (the owner, 2026-11-18): a verify round whose two sides touch one sbt module also runs that change's
 # AREA tests -- a check/verifyareas-<full base>-<id> branch, which a precommit-share.sh naming the mode runs with the
