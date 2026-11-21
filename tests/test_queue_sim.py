@@ -241,11 +241,25 @@ class MinimalRecheckSimTest(unittest.TestCase):
         for checks, kept in self.run_timeline(["docs/moved.md", "android/Moved.kt"]):
             self.assertEqual((checks, kept), (1, 1), "one check, its verdict kept over the move")
 
-    def test_a_script_moving_selects_the_repo_lints_a_scala_change_selects_too(self):
-        """movies' lint registry: a repo-read path (scripts/) selects every `@repo` row, the `@repo *.scala` ones among
-        them, which any Scala file selects as well (queue_sim REPO_READ)."""
+    def test_a_script_moving_under_a_scala_change_keeps_its_verdict(self):
+        """movies' lint registry names what each spec opens (queue_sim lint_table; 2026-11-21): a script selects the
+        specs reading scripts, a production source the source scans, and no spec reads both. Until then every `@repo`
+        row was selected by both, and the change was verified again."""
         for checks, kept in self.run_timeline(["scripts/tool.sh"]):
-            self.assertEqual((checks, kept), (2, 0), "its check, then the verify round: the lints read both")
+            self.assertEqual((checks, kept), (1, 1), "one check, its verdict kept over the script's move")
+
+    def test_a_workflow_moving_under_a_script_change_shares_the_workflow_wiring_specs(self):
+        """...but a spec reading workflows and the scripts they run (WorkflowScriptsRunnableSpec) reads both sides."""
+        out = []
+        for seed in range(6):
+            sim = queue_sim.Sim(seed, calm=True, script=[
+                (0, {"label": "a", "worktree": "a", "paths": ["scripts/tool.sh"]}),
+                (1, {"kind": "push", "paths": [".github/workflows/x.yml"]})]).run()
+            self.assertEqual(failures([sim]), [], f"seed {seed}")
+            a = next(c for c in sim.changes if c.label == "a")
+            out.append((sim.checks_of.get(a.eid, 0), sim.kept_pushes))
+        for checks, kept in out:
+            self.assertEqual((checks, kept), (2, 0), "its check, then the verify round: the wiring specs read both")
 
     def test_a_move_inside_its_selected_paths_forces_a_recheck(self):
         for checks, kept in self.run_timeline(["common/src/main/Upstream.scala"]):
@@ -345,8 +359,9 @@ elif sys.argv[2] == "baselines":
     bad = queue_sim.Sim(0, calm=True, script=list(queue_sim.BASELINES_2026_11_19)).run().violations[:1]
 elif sys.argv[2] == "chaoshold":  # chaos seeds where a checked change's push waits for a batch it is not in (7, 8
     # since 2026-11-20: 3 and 4 no longer reach it once a red fix waiting at green is released from the waiting batch;
-    # 0 and 2 since 2026-11-21, the lint plan modelled as movies' registry is: fewer verdicts kept, other batches)
-    bad = [v for seed in (0, 2) for v in queue_sim.Sim(seed, trees=4, profile={**T.CHAOS, "outside_red": 0.08},
+    # 0 and 2 since 2026-11-21, the lint plan modelled as movies' registry is: fewer verdicts kept, other batches; 7 and 8
+    # again once the registry names what each spec opens: more verdicts kept, the batches of before)
+    bad = [v for seed in (7, 8) for v in queue_sim.Sim(seed, trees=4, profile={**T.CHAOS, "outside_red": 0.08},
                                                        n_changes=14).run().violations[:1]]
 elif sys.argv[2] == "loadlone":  # the load with many lone (--no-batch) changes: since every other change batches
     # (2026-11-20), only they compete with a backlog batch for its tree

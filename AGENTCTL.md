@@ -1449,7 +1449,13 @@ The reconciler then takes it, a step per tick:
   kept, the main it was taken on and why) and printed by `land status <id>` (`recheck: 09:41Z verify on 5e2f...: main
   moved by 3 commits: its compile-plan reads what main changed: web/Test/compile`). Measured (2026-11-20) over the
   3 days' 131 rechecks of landed changes: the commonest reads both sides shared were `scripttests` (33, the hook's one
-  word for every script self-test) and `e2e/Test/compile` (30). PER TEST (2026-11-20): a hook answering
+  word for every script self-test) and `e2e/Test/compile` (30). THE LINT PLAN READS WHAT EACH SPEC OPENS (movies, 2026-11-21, landing-speed proposal 1): its registry's 175 `@repo`
+  rows, selected by any script, workflow, skill or test-tree path, made every two changes share a lint; each row now
+  names the files its spec opens (scripts/ci/lint_reads_trace.py runs each spec and reads the files' access times) and
+  its own code. Replayed over 11-19..21's 46 resolvable verify rounds through `read_overlap`: kept 1 -> 3 (the lint
+  plan's 19 -> 17 are specs genuinely reading both sides; the compile plan's 25 stand). The simulator models the
+  registry as a table read off movies' hook (tests/fixtures/movies-lint-plan.json; `-before.json` the old one): over
+  the replay's 3 days x 20 seeds, rounds per landing 1.78 -> 1.67 (p90 3 -> 3), kept-verdict landings 74 -> 346. PER TEST (2026-11-20): a hook answering
   `--script-test-plan` (movies: the self-tests `scripts/run-script-tests --paths <file> --list` selects -- a tool's own
   test, its users' tests, the tests naming it or declaring they read it) has its `scripttests` word read per test. queue.py `read_overlap`, `own_diff_changed`, `verdict_kept`, `recheck_logged`; tests:
   `tests/test_queue.py` MinimalRecheckTest, `tests/test_queue_sim.py` MinimalRecheckSimTest (INVARIANT 11 now also

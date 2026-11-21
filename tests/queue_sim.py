@@ -85,25 +85,35 @@ def plan_checks(paths):
     return sorted(out)
 
 
-# THE REPO-READ PATHS (movies' read_by_lint_specs): a path of one selects every `@repo` row of the lint registry -- 136
-# of its 178 specs (2026-11-21), the 63 `@repo *.scala` rows among them, which any Scala file also selects; docs/ and
-# infra/ select their own rows (SharedFileLayoutSpec's docs/*, MongoGrantsListSpec's infra/nix/*) and every @repo path
-# those too. Modelled after the registry as it is: the lint plan is why 2026-11-19..21 kept no verdict.
-REPO_READ = ("scripts", ".github", ".claude", "test", "projectfiles", "rootfiles")
+# MOVIES' LINT PLAN, AS ITS REGISTRY IS (tests/fixtures/movies-lint-plan.json): for each simulated path's kind (its
+# top-level directory), the path-selected lint specs -- `--lint-plan` less the standing `*` rows -- that a real path of
+# that kind selects, read off movies' hook (the table's `probes`). Until 2026-11-21 the registry's 175 `@repo` rows were
+# selected by any script, workflow, skill, test-tree or build path and its `*.scala` rows by any Scala file, so the
+# 11-19..21 replay kept no verdict (ad1c702); the registry now names what each spec opens (movies' landing-speed
+# proposal 1): a production source selects the source scans, a workflow the workflow specs, and the two meet only where
+# one spec reads both. LINT_PLAN_FIXTURE names another table (the measurement's before / after).
+LINT_PLAN_FIXTURE = "movies-lint-plan.json"
+_lint_tables = {}
+
+
+def lint_table(fixture=None):
+    name = fixture or LINT_PLAN_FIXTURE
+    if name not in _lint_tables:
+        with open(os.path.join(HERE, "fixtures", name)) as f:
+            _lint_tables[name] = {k: tuple(v) for k, v in json.load(f)["lints"].items()}
+    return _lint_tables[name]
 
 
 def lint_plan(paths):
-    """The simulated hook's --lint-plan: one standing lint, and the repo-reading lints the paths select (REPO_READ)."""
-    tops = {p.split("/")[0] for p in paths}
-    repo = bool(tops & set(REPO_READ))
-    return ["standing"] + (["repo-lints"] if repo else []) \
-        + (["scala-lints"] if repo or any(p.endswith(".scala") for p in paths) else []) \
-        + (["docs-lints"] if repo or "docs" in tops else []) + (["infra-lints"] if repo or "infra" in tops else [])
+    """The simulated hook's --lint-plan: one standing lint, and the specs each path's kind selects (lint_table)."""
+    table = lint_table()
+    return ["standing"] + sorted({s for p in paths for s in table.get(p.split("/")[0], ())})
 
 
 def ratchet_plan(paths):
-    """The simulated hook's --coupling-plan / --quality-plan: production code and the baselines."""
-    return [p for p in paths if "/src/main/" in p or p.startswith("test/resources/")]
+    """The simulated hook's --coupling-plan / --quality-plan: production code and the ratchets' baselines (movies'
+    coupling_paths / quality_paths), never the rest of test/resources/."""
+    return [p for p in paths if "/src/main/" in p or p in BASELINES]
 
 
 def reads_of(paths):
