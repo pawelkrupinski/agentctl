@@ -233,8 +233,10 @@ def red_repos_parse(raw):
 
 def generated_parse(repo, raw):
     """A repo's GENERATED FILES (waiting.py): [{paths: [glob], regen: [argv] or None, timeout: s}] from its `generated`
-    entries (`{"paths": [...], "regen": "<command run in the tree>", "timeout": <s, optional>}`; no `regen`: a table
-    merged row by row only, its rows hand-written -- a row both sides changed is the author's conflict). Raises
+    entries (`{"paths": [...], "regen": "<command run in the tree>", "timeout": <s, optional>, "merge": "rows" | "regen"}`;
+    no `regen`: a table merged row by row only, its rows hand-written -- a row both sides changed is the author's
+    conflict; `merge: regen`: a SNAPSHOT -- HTML, JSON, a rendered text -- never merged by rows, regenerated over the
+    combined tree whenever both sides changed it: waiting.py SNAPSHOTS ARE REGENERATED, NEVER MERGED). Raises
     ValueError."""
     out = []
     for g in raw or []:
@@ -246,7 +248,12 @@ def generated_parse(repo, raw):
         timeout = g.get("timeout")
         if timeout is not None and not (isinstance(timeout, (int, float)) and timeout > 0):
             raise ValueError(f"{repo}: a `generated` entry's `timeout` is seconds > 0: {g!r}")
-        out.append({"paths": list(paths), "regen": shlex.split(regen) if regen is not None else None, "timeout": timeout})
+        merge = g.get("merge", "rows")
+        if merge not in ("rows", "regen") or (merge == "regen" and regen is None):
+            raise ValueError(f"{repo}: a `generated` entry's `merge` is `rows` (the default) or `regen` (a SNAPSHOT: "
+                             f"never merged by rows, always regenerated: it needs `regen`): {g!r}")
+        out.append({"paths": list(paths), "regen": shlex.split(regen) if regen is not None else None, "timeout": timeout,
+                    **({"merge": "regen"} if merge == "regen" else {})})
     return out
 
 

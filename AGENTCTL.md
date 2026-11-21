@@ -1596,11 +1596,12 @@ The reconciler then takes it, a step per tick:
   coupling or complexity lane landed one at a time).** A repo registers its generated files in red-repos.json
   (`generated`: `[{paths, regen, timeout}]`; movies: coupling-baseline.tsv and coupling-fanout-refs.tsv by
   `scripts/coupling-report --update`, the complexity, length and duplication baselines by `scripts/quality-report
-  --update`; since 2026-11-20 also the HAND-WRITTEN TABLES, registered with no `regen`: coupling-exemptions.tsv,
+  --update`; since 2026-11-21 the SNAPSHOTS, `merge: regen` (below); since 2026-11-20 also the HAND-WRITTEN TABLES,
+  registered with no `regen`: coupling-exemptions.tsv,
   coupling-layers.tsv, identity-judgements.tsv and identity-unmatched/expected-matches.tsv -- metrics-packages sat held
   behind phase6-data on coupling-exemptions.tsv -- merged row by row only, a row both sides changed staying the author's
   conflict, never one side's row kept provisionally: no ratchet would judge a lost exemption). Such a file is no overlap -- not
-  for the hold, backlog-batch membership, the CONFLICTS a queued change is told of, `main_conflict`, nor the push's
+  for the hold (but A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT, below), backlog-batch membership, the CONFLICTS a queued change is told of, `main_conflict`, nor the push's
   full-recheck rule; a real source both change (TestWiring.scala) holds as before. A conflict in one, on a rebase, a
   batch's assembly or land's own rebase, is RESOLVED in the commit being picked (its message and trailers kept): its
   rows merged three-way (keyed by every column but the value; disjoint rows always merge; a SET table, a key on many
@@ -1619,6 +1620,64 @@ The reconciler then takes it, a step per tick:
   then fails is checked alone, never rejected for it. waiting.py `conflict_resolve`, `rows_merge`, `regenerate`;
   tests: `tests/test_generated.py`, `tests/test_queue_sim.py` GeneratedOverlapTest (the six replayed, 4 check trees,
   seeds 0-19: mean 8.2 -> 5.3 ticks from queued to landed, max 18 -> 11).
+- **THE BATCH TIERS (the owner, 2026-11-21: "make agentctl batch even more, merge / fix conflicts").** Two QUEUED
+  changes that overlap are checked as ONE backlog batch whenever a tier assembles them, tried in order: (1) git merges
+  them cleanly (`git merge-tree`); (2) the overlap is in registered generated files -- rows merged, else the regen
+  command; a SNAPSHOT always regenerated (below); (3) a real source conflict whose every hunk is additions on both sides,
+  resolved in the batch's assembly (below); (4) else, as before, the younger waits for the older and its author is told
+  at its first tick: `CONFLICTS <id>: ...`, now with the conflicting hunks (`The hunks: <file> line N: <older> has
+  \`...\`, this change \`...\``) and the fix (`Fix now: \`cd <worktree> && git rebase <older's branch>\`, resolve
+  those hunks, \`~/bin/agentctl land\``). Batch size: `$AGENTCTL_BACKLOG_BATCH_MAX` stays 8 -- over the 7-day replay
+  (3 seeds a day, 591 landings) a cap of 4, 8, 16 and 32 ran 1252, 1256, 1255 and 1255 checks, median 4 ticks each,
+  p90 11, 10, 10, 10: batches seldom reach 8, so a bigger cap buys nothing measurable. queue.py `overlap_of`,
+  `pair_resolvable`, `conflict_hunks`; tests: `tests/test_batch_tiers.py`, `tests/test_queue_sim.py` BatchTiersSimTest.
+- **SNAPSHOTS ARE REGENERATED, NEVER MERGED (2026-11-21 ~07:40Z: split-shared-js `held: its check waits for
+  scrapers-2`, both changing movies' page snapshots expected-{index,warszawa-index,wroclaw-index}.html).** A snapshot
+  -- rendered HTML, a JSON read model, a whole-corpus text -- has no rows: a line merge, git's or agentctl's, guesses
+  what the combined code renders. Registered with `"merge": "regen"` (movies: expected-schedules.txt,
+  read-model-snapshot.json and its inputs stamp, read-model-derivation-rows.jsonl and -hashes.tsv by
+  `FilmScheduleEndToEndSpec`; the three expected-*.html by `PageSnapshotSpec`, after the read model: the regenerate-
+  snapshots skill's commands, run through `scripts/sbt-warm`, 2400 s and 1800 s), it is generated (no overlap between
+  queued changes), and whenever BOTH sides changed it -- a conflict, or a clean textual merge of two edits -- its regen
+  command runs over the combined tree, on the laptop only (the server role never keeps a side of a snapshot: the member
+  is held). **A REGENERATED SNAPSHOT HIDES NOTHING:** its output must be EXPLAINED by the two sides -- every line it adds
+  added by one of them, every line it drops dropped by one of them, and no other snapshot of the command moved -- or the
+  resolution fails, the member is left out (`batch_alone` `regen`) and held behind the older as before: a line only the
+  combined code renders is an interaction neither author committed, and a regenerator never lands it. What passes is
+  then part of exactly the tree the batch's full check runs: movies' `basic` tests assert expected-schedules.txt and the
+  read model (FilmScheduleEndToEnd) as for each side's own regen; the page snapshots are asserted on Main (the page
+  layer runs after landing), which is why the explained rule, not the check, guards them. A regen failing on the
+  combined tree (exit, timeout, no file written) falls back to the hold, never a reject. waiting.py
+  `snapshot_unexplained`, `snapshots_both_changed`, `regenerate`; tests: `tests/test_batch_tiers.py`.
+- **A SOURCE CONFLICT IS RESOLVED IN THE BATCH WHEN BOTH SIDES ONLY ADD (tier 3).** In a BACKLOG batch's assembly only
+  (its check is the full landing check of exactly the tree that lands -- never a lone change's rebase, a push's rebase,
+  a push batch or a verify round), a source conflict is resolved hunk by hunk over `git merge-file --diff3`: past the
+  lines both sides wrote alike (their common prefix and suffix, which must cover every base line of the hunk), what is
+  left on each side must be pure addition -- kept, ours (the tree) first, then theirs; a side holding the other's lines
+  is taken; two appends to a list whose last item each gave a comma get a comma between. Anything else (a line both
+  changed differently, a deletion against an edit) is no resolution: tier 4. Between two queued changes,
+  `pair_resolvable` tries it over the heads' merge base, so a pair it resolves is batched instead of held and told;
+  with the older in flight it is a conflict as before (told, held). What was resolved is recorded: an
+  `Auto-Resolved: <file>: line N: ...` trailer on the picked commit (so on main), `autoresolved` on the entry, the
+  member's `checking in backlog batch` event to its author and `land status` (`AUTO-RESOLVED in the batch: ...`). The
+  batch failing with it: the bisect names the resolution as the culprit (`the batch's AUTO-RESOLUTION of <file> is the
+  culprit (...)`, to its author), the member is never rejected for it -- `batch_alone` `resolve`, held behind the
+  change it conflicts with (strict: the textual conflict counts) and, once that lands, told it no longer applies.
+  RepositoryReadSwallows.scala (worker-rest-2 behind review-common) is NOT a registered table: its rows are a Scala
+  Map's multi-line entries, the last one without a comma, so no row is one line; two appended entries resolve here.
+  waiting.py `hunks_resolve`, `source_resolve`, `conflict_resolve`; batch.py's bisect; tests: `tests/test_batch_tiers.py`.
+- **A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT (2026-11-21, measured before choosing).** A queued change sharing
+  only generated files with a change queued before it is no overlap (the batch takes both); with that change already
+  IN FLIGHT (checking, checked, pushing), checking the younger now spent a check main moving under it then voids (both
+  read the generated files: its push owed a verify round, often two). Over 20 seeds the six baseline lanes of 2026-11-19
+  ran 148 checks unheld and 40 held (median 5 -> 6 ticks, p90 9 -> 7, mean 5.4 both); the two holds of 2026-11-21 as
+  observed (the younger two queued while the older two checked in batch #76), 100 checks -> 40 (median 5 both, p90
+  8 -> 9). So the younger waits, quietly, and meets the others in the next batch, its generated files merged or
+  regenerated there; never behind a `waiting` change, and a red fix never waits. Queued together, the two holds of
+  2026-11-21 are one batch, one check, all four landed (before: 2 of 4, the others told they no longer applied).
+  A source overlap with a change in flight still waits as before: a check of the younger stacked on the older's tip
+  is not built. queue.py `generated_overlap`, `overlap_hold`; simulator invariant I10 (v3: no change held behind a
+  QUEUED one for generated files alone).
 - **THE PUSH BATCH (the owner, 2026-11-17: "combine them instead of landing them one by one", W1).** A checked change
   pushed alone: each on a main that moved since its full check paid a verify round of its own, and THE OLDEST
   VERIFICATION PUSHES FIRST held the younger ones meanwhile, so N checked changes landed serially (ref-scrapers

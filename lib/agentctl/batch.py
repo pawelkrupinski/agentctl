@@ -749,7 +749,7 @@ def batch_step(repo, d, now_, seen, st):
             git(repo, "fetch", "--quiet", remote(), "main", check=False)
             base = git(repo, "rev-parse", f"{remote()}/main").strip()
             tree = check_tree(repo, i, base)
-            kept = assemble(repo, d, tree, batch, base, alone=full)
+            kept = assemble(repo, d, tree, batch, base, alone=full, autoresolve=depth == "full")
             if depth == "verify":
                 kept, _tip = push_batch_select(repo, d, tree, kept, base, tips)
             tip = git(tree, "rev-parse", "HEAD").strip()
@@ -785,8 +785,13 @@ def batch_step(repo, d, now_, seen, st):
         for e in kept if full else ():  # its members are the batch's until it lands them or lets them go
             verify = {"verify": True, "rounds": e.get("rounds", 0) + (e.get("status") == "checked")} \
                 if depth == "verify" else {}
-            set_change(d, e, "checking", event={"text": f"{e['id']}: checking in {batch_kind(it)} {it['id']} "
-                                                        f"({len(kept)} change(s) at {tip[:10]})"},
+            resolved = "; ".join(f"{m['file']} ({', '.join(m['hunks'])})" for m in e.get("autoresolved") or [])
+            set_change(d, e, "checking", data={"autoresolved": resolved or None},
+                       event={"text": f"{e['id']}: checking in {batch_kind(it)} {it['id']} "
+                                      f"({len(kept)} change(s) at {tip[:10]})"
+                                      + (f"; its conflict AUTO-RESOLVED in the batch, the batch's full check its "
+                                         f"verification: {resolved}" if resolved else ""),
+                              **({"audience": {"worktree": e.get("worktree")}} if resolved else {})},
                        backlog_batch=it["id"], since=ts(), round_since=ts(), **verify)
         spawn_batch_executor(repo, d, it["id"])
         return [f"batch {it['id']}: assembled {len(kept)} change(s), checking {tip[:10]}"]
@@ -1057,18 +1062,35 @@ def check_batch(repo, bid):
             return 0
         # a member whose generated files the batch resolved (GENERATED FILES ARE NO OVERLAP, waiting.py) failing is
         # the resolution's as much as its own: its own check, on main, judges it
-        regenerated = bad.get("regenerated")
-        alone = depth in DEEP_BATCHES and (bool(regenerated) or not culprit_own_failure(repo, d, bad, base, cout))
+        # and one whose source conflict the batch auto-resolved (A SOURCE CONFLICT IS RESOLVED IN THE BATCH): the
+        # resolution is the suspect -- named, and the member held behind the change it conflicts with, never rejected
+        regenerated, resolved = bad.get("regenerated"), bad.get("autoresolved")
+        alone = depth in DEEP_BATCHES and (bool(regenerated) or bool(resolved)
+                                           or not culprit_own_failure(repo, d, bad, base, cout))
         if alone:  # not shown to be its own: its own check judges it (a base red, a time cap, an infra failure)
-            bad["batch_alone"] = "regen" if regenerated else bid
+            bad["batch_alone"] = "resolve" if resolved else "regen" if regenerated else bid
+            bad.pop("autoresolved", None)
             save_entry(d, bad)
-            wlog(d, f"batch {bid}: {bad['id']}'s prefix fails, but not shown to be by its own fault"
-                    + (f" (its {', '.join(regenerated)} resolved in the batch)" if regenerated else "") + ": checked alone")
+            said = (f"batch {bid}: {bad['id']}'s prefix fails, but not shown to be by its own fault"
+                    + (f" (its {', '.join(regenerated)} resolved in the batch)" if regenerated else "")
+                    + (f" -- the batch's AUTO-RESOLUTION of {', '.join(m['file'] for m in resolved)} is the culprit "
+                       f"({'; '.join(h for m in resolved for h in m['hunks'])}): held behind the change it "
+                       "conflicts with, as before" if resolved else "") + ": checked alone")
+            wlog(d, said)
+            if resolved:  # its author hears it (the batch says its auto-resolution failed)
+                cur = st.item("change", bad["id"])
+                if cur and not machine_state("change", cur["state"]).terminal:
+                    try:
+                        st.transition("change", bad["id"], cur["state"], cur["version"], event={
+                            "text": said, "audience": {"worktree": bad.get("worktree")}, "severity": "info"})
+                    except StaleVersion:
+                        pass  # said in the log; the hold says the rest
         else:
             # policy: batch-checks-failed
             queue_verdict(d, bad, "rejected", f"NOT LANDED: the checks failed with your change in the batch (entry "
                                               f"{bad['id']})\n  {tail_of(cout)}", cout.splitlines()[-25:])
-        what = "checked alone" if alone else "rejected"
+        what = ("checked alone" + (" (its auto-resolution failed the batch)" if alone and resolved else "")) \
+            if alone else "rejected"
         if depth == "red":  # the prefix before it pre-checked; the rest are pre-checked again at the next tick
             red_prechecked(d, st, it, members[:culprit], members[culprit - 1]["tip"] if culprit else None, base,
                            f"{bad['id']} {what}")
@@ -1221,6 +1243,7 @@ def land_status_line(r, bt, in_batch, t):
             + (f"  [{r['kind']}]" if r.get("kind") else "")
             + (f"  (in batch {bt['id']}: {bt['state']})" if bt and r["id"] in in_batch else "")
             + (f"  held: {r['hold']}" if r.get("hold") else "")
+            + (f"  AUTO-RESOLVED in the batch: {r['resolved']}" if r.get("resolved") else "")
             + (f"  PAST ITS DEADLINE (level {r['level']})" if left < 0 else ""))
 
 

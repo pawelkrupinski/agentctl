@@ -735,17 +735,21 @@ def _await_entry(repo, eid, own):
         time.sleep(next(delays))
 
 
-def assemble(repo, d, wt, entries, base, alone=False):
+def assemble(repo, d, wt, entries, base, alone=False, autoresolve=False):
     """The batch's tip in check tree wt = base + each entry's commits, in order; a conflicting entry is rejected alone
     (alone: a backlog batch's queued change, left out and checked alone -- its own check says whether it applies),
-    one already on main LANDED, a duplicate superseded. Returns the kept entries (each with its tip in the batch)."""
+    one already on main LANDED, a duplicate superseded. autoresolve (a backlog batch: its check is the full landing
+    check): a source conflict of additions on both sides is resolved (waiting.py A SOURCE CONFLICT IS RESOLVED IN THE
+    BATCH); one that is not leaves the member out, held behind the change it conflicts with (`resolve`: strict).
+    Returns the kept entries (each with its tip in the batch)."""
     git(wt, "reset", "--hard", "-q", base)
     git(wt, "checkout", "-q", "--force", "--detach", base)
     kept = []
     for e in entries:
-        how, x = apply_entry(d, wt, e, base)
+        how, x = apply_entry(d, wt, e, base, autoresolve=autoresolve)
         if how == "conflict" and alone:  # one whose generated files could not be resolved: held as before (strict)
-            e["batch_alone"] = "regen" if any(" (generated: " in f for f in x) else "conflict"
+            e["batch_alone"] = "regen" if any(" (generated: " in f for f in x) else "resolve" if autoresolve \
+                else "conflict"
             save_entry(d, e)
             wlog(d, f"{e['id']}: does not apply in the backlog batch (conflicts in: {', '.join(x)}): checked alone")
             continue

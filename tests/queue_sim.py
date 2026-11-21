@@ -38,7 +38,7 @@ INVARIANT_KINDS = {
     "I7": "exactly one agentctl.landing record per decided change",
     "I8": "a change that no longer applies was told at queue time and never checked meanwhile",
     "I9": "no full recheck for a file overlap with a change open when it was queued",
-    "I10": "no change held behind another for generated files alone",
+    "I10": "no change held behind a queued one for generated files alone",
     "I11": "no unverified combined tree reaches main",
     "Ib": "every queued or checked change past its deadline has a recorded hold",
     "Ic": "no change past its deadline is silent in `land status`",
@@ -100,8 +100,12 @@ def reads_of(paths):
     return ({("compile", x) for x in compile_plan(paths)} | {("plan", x) for x in plan_checks(paths) if x != "sbt"}
             | {("lint", x) for x in lint_plan(paths) if x != "standing"} | ({("ratchets",)} if ratchet_plan(paths) else set()))
 # the simulated repo's GENERATED files (red-repos.json `generated`; waiting.py GENERATED FILES ARE NO OVERLAP)
-GENERATED = ("test/resources/coupling-baseline.tsv", "test/resources/complexity-baseline.tsv",
+BASELINES = ("test/resources/coupling-baseline.tsv", "test/resources/complexity-baseline.tsv",
              "test/resources/length-baseline.tsv", "test/resources/duplication-baseline.tsv")
+# and its SNAPSHOTS (`merge: regen`: waiting.py SNAPSHOTS ARE REGENERATED, NEVER MERGED), movies' page snapshots
+SNAPSHOTS = tuple(f"test/resources/fixtures/08-06-2026/expected-{n}.html" for n in ("index", "warszawa-index",
+                                                                                  "wroclaw-index"))
+GENERATED = BASELINES + SNAPSHOTS
 
 
 class KeptConnection:
@@ -198,6 +202,8 @@ class Patch:
         self.bad, self.conflicts = bad, set(conflicts)
         self.gen_conflicts = set()  # the patches it conflicts with textually in GENERATED files only (adjacent rows)
         self.regen_fails = False  # its generated files' resolution fails (no JVM where the queue runs, a timeout)
+        self.resolvable = set()  # the patches it conflicts with in source a batch's assembly resolves (both only add)
+        self.resolve_bad = False  # resolved, the combined tree fails its checks (the resolution is wrong)
 
 
 class Change:
@@ -297,6 +303,8 @@ class Sim:
         self.holds = {}  # entry id -> [(tick, hold kind, blocking entry, files)]
         self.verified = set()  # every tree (its patches) a check or a batch check passed (INVARIANT 11)
         self.kept_pushes = 0  # pushes of a tree whose checks' verdict was kept (MINIMAL RECHECKS)
+        self.batch_checks = 0  # batch check rounds run (a bisect's prefixes included)
+        self.autoresolved = []  # entry ids a batch's assembly auto-resolved a source conflict of (THE BATCH TIERS)
 
     # ---------------------------------------------------------------- the model's git
     def anc(self, sha):
@@ -420,11 +428,11 @@ class Sim:
         return sorted({p for pid in self.patches_of(y) - self.patches_of(x) for p in self.patches[pid].paths})
 
     # ---------------------------------------------------------------- the fakes
-    def apply_entry(self, d, wt, e, base, regen=True):
+    def apply_entry(self, d, wt, e, base, regen=True, autoresolve=False):
         wt = os.path.realpath(wt)
         head = self.heads[wt]
         on_base, on_head = self.patches_of(base), self.patches_of(head)
-        new, gone, dup, regenerated = head, [], [], set()
+        new, gone, dup, regenerated, resolved = head, [], [], set(), []
         for c in e["commits"]:
             pid = self.commits[c][1]
             if pid in on_base:
@@ -437,6 +445,12 @@ class Sim:
             hit = (p.conflicts & self.patches_of(new)) - self.patches_of(self.commits[c][0])
             if hit:
                 return "conflict", sorted({x for h in hit for x in self.patches[h].paths} & set(p.paths)) or p.paths
+            res = (p.resolvable & self.patches_of(new)) - self.patches_of(self.commits[c][0])
+            if res:  # the real pick's source resolution (waiting.py source_resolve): in a backlog batch's assembly only
+                files = sorted({x for h in res for x in self.patches[h].paths} & set(p.paths)) or p.paths
+                if not autoresolve or self.profile.get("before_tiers"):  # before THE BATCH TIERS: no resolution
+                    return "conflict", files
+                resolved += [{"commit": c, "file": f, "hunks": ["line 1: kept both sides' added lines"]} for f in files]
             gen = (p.gen_conflicts & self.patches_of(new)) - self.patches_of(self.commits[c][0])
             if gen:  # the real pick's resolution (waiting.py conflict_resolve), where the code has it
                 files = sorted({x for h in gen for x in self.patches[h].paths} & set(p.paths) & set(GENERATED))
@@ -460,6 +474,11 @@ class Sim:
             e["regenerated"] = sorted(regenerated)
         else:
             e.pop("regenerated", None)
+        if resolved:
+            e["autoresolved"] = resolved
+            self.autoresolved.append(e["id"])
+        else:
+            e.pop("autoresolved", None)
         self.heads[wt] = new
         return "ok", None
 
@@ -512,7 +531,19 @@ class Sim:
             return both or ["?"]
         if any(self.patches[p].gen_conflicts & theirs for p in mine):  # git merge-tree names the generated files
             return [x for x in both if x in GENERATED] or ["?"]
+        if any(self.patches[p].resolvable & theirs for p in mine):
+            return both or ["?"]
         return None
+
+    def pair_resolvable(self, repo, older, younger, files):
+        """The conflicting files a backlog batch's assembly resolves: all of them when the two conflict only in source
+        of additions on both sides (the model's `resolvable`), else none."""
+        a, b = older.get("head"), younger.get("head")
+        common = max(self.anc(a) & self.anc(b), key=lambda c: len(self.anc(c)))
+        mine, theirs = self.patches_of(b) - self.patches_of(common), self.patches_of(a) - self.patches_of(common)
+        if any(self.patches[p].conflicts & theirs for p in mine) or self.profile.get("before_tiers"):
+            return []
+        return list(files) if any(self.patches[p].resolvable & theirs for p in mine) else []
 
     def change_of_sha(self, sha):
         pid = self.commits.get(sha, (None, None))[1]
@@ -543,7 +574,9 @@ class Sim:
         drawn now and then."""
         if not self.calm and self.rng.random() < self.profile.get("infra", 0.03):
             return False, "[error] failed to connect to server\n"
-        bad = sorted(pid for pid in self.patches_of(tip) - self.patches_of(ROOT) if self.patches[pid].bad)
+        on = self.patches_of(tip)
+        bad = sorted(pid for pid in on - self.patches_of(ROOT) if self.patches[pid].bad
+                     or (self.patches[pid].resolve_bad and self.patches[pid].resolvable & on))
         if bad:
             lines = [f"[info] - sim {letters(self.patches[p].cid)} works *** FAILED ***" for p in bad]
             return False, "\n".join(lines + ["! pre-push sbt FAILED (3s)"]) + "\n"
@@ -570,6 +603,7 @@ class Sim:
         return ok, out, "in the simulation"
 
     def batch_check(self, repo, d, tree, base, tip, cls="check", depth="fast", runs=None, range_base=None):
+        self.batch_checks += 1
         self.local.task.block(self.rng.randint(*self.profile.get("verify_ticks", (1, 2))) if depth == "verify"
                               else self.rng.randint(*self.profile.get("batch_ticks", (2, 5))))
         ok, out = self.verdict(tip, f"batch {depth} {tip[:8]}")
@@ -661,7 +695,7 @@ class Sim:
              "fix_replay_refusal", "run_entry_checks", "batch_check", "batch_drift_check", "run_watched", "start_watch", "mark_gate_dirty",
              "spawn_executor", "spawn_batch_executor", "precheck_hook", "verify_areas_supported", "remote_matches",
              "remote_checks_supported", "slug", "cancel_entry_remote", "stats_post", "check_runs_of", "gate_runs_pass",
-             "clone_shared", "spawn_waiting_processor", "offer_token", "tool_env", "stats_echo", "pair_conflict",
+             "clone_shared", "spawn_waiting_processor", "offer_token", "tool_env", "stats_echo", "pair_conflict", "pair_resolvable",
              "recheck_reason", "waiting_entries", "process_start", "code_version", "dt", "own_diff_changed")
 
     def install(self):
@@ -680,7 +714,9 @@ class Sim:
         repos = os.path.join(self.tmp, "red-repos.json")
         with open(repos, "w") as f:
             json.dump({"repos": [{"repo": "sim/movies", "gate": [["Main", "main.yml"]], "push": "land",
-                                  "generated": [{"paths": list(GENERATED), "regen": "true"}]}]}, f)
+                                  "generated": [{"paths": list(BASELINES), "regen": "true"}] + (
+                                      [] if self.profile.get("before_tiers") else
+                                      [{"paths": list(SNAPSHOTS), "regen": "true", "merge": "regen"}])}]}, f)
         os.environ.update(AGENTCTL_RED_REPOS=repos)
         os.environ.update(AGENTCTL_STATE_ROOT=os.path.join(self.tmp, "state"), AGENTCTL_ROLE="server",
                           AGENTCTL_CHECK_TREES=str(self.trees),
@@ -734,6 +770,7 @@ class Sim:
         A.offer_token = lambda repo: None
         A.tool_env = lambda: dict(os.environ)
         A.pair_conflict = self.pair_conflict
+        A.pair_resolvable = self.pair_resolvable
         A.process_start = lambda pid: ""  # Owned's `ps` per record: no process of the simulation is one
         A.code_version = lambda path=None: "sim"
         parsed = {}
@@ -891,6 +928,13 @@ class Sim:
                 self.patches[q].gen_conflicts |= set(other.patches)
         for q in pids:
             self.patches[q].regen_fails = bool(spec.get("regen_fails"))
+        for label in spec.get("resolvable_with") or ():  # a source conflict of additions on both sides (THE BATCH TIERS)
+            other = next(c for c in reversed(self.changes) if c.label == label)
+            for q in other.patches:
+                self.patches[q].resolvable |= set(pids)
+            for q in pids:
+                self.patches[q].resolvable |= set(other.patches)
+                self.patches[q].resolve_bad = bool(spec.get("resolve_bad"))
         ch = Change(cid, worktree, kind, pids, base, head, self.chain(base, head), self.tick,
                     no_batch=kind == "nobatch")
         ch.outcome = spec.get("outcome")
@@ -1062,11 +1106,14 @@ class Sim:
             if hold and it["state"] in ("queued", "checked"):
                 self.holds.setdefault(it["id"], []).append((self.tick, hold.get("kind"), hold.get("blocker"),
                                                             tuple(hold.get("files") or ())))
-                # 10. GENERATED FILES ARE NO OVERLAP: no change held behind another for generated files alone (but
-                # one whose own generated files could not be resolved, held as before)
+                # 10. GENERATED FILES ARE NO OVERLAP: no change held behind a QUEUED one for generated files alone
+                # (but one whose own generated files could not be resolved, held as before; and A GENERATED OVERLAP
+                # WAITS FOR A CHECK IN FLIGHT, queue.py)
                 entry = self.entry_by_id(it["id"]) or {}
+                blocker = self.entry_by_id(hold.get("blocker") or "") or {}
                 if hold.get("kind") == "overlap" and hold.get("files") and set(hold["files"]) <= set(GENERATED) \
-                        and entry.get("batch_alone") != "regen":
+                        and entry.get("batch_alone") != "regen" and blocker.get("status") not in A.IN_FLIGHT + ("landed",) and not (
+                            self.profile.get("before_tiers") and set(hold["files"]) <= set(SNAPSHOTS)):
                     self.violate("I10", f"change {it['id']} held behind {hold.get('blocker')} for generated files alone: "
                                  f"{', '.join(hold['files'])}")
         self.check_invariants(before, reds)
@@ -1333,6 +1380,26 @@ BASELINES_2026_11_19 = [
     (2, {"label": "resolver2", "worktree": "phase3-resolver2", "kind": "identity",
          "paths": ["identity/src/main/Resolver.scala", COUPLING, LENGTH]}),
 ]
+
+
+# THE TWO HOLDS OF 2026-11-21 (~07:40Z, `agentctl land status`): split-shared-js `held: its check waits for scrapers-2
+# (checking)`, both changing the page snapshots expected-{index,warszawa-index,wroclaw-index}.html; worker-rest-2 held
+# behind review-common, both changing RepositoryReadSwallows.scala, a hand-written Scala Map. Replayed with the four
+# QUEUED TOGETHER (HOLDS_2026_11_21: the snapshots conflict textually; the two appends to the Map conflict, each having
+# given its last entry a comma) and AS OBSERVED (HOLDS_2026_11_21_IN_FLIGHT: the younger two queued once the older two
+# were checking in a batch).
+SWALLOWS = "worker/src/test/scala/tools/RepositoryReadSwallows.scala"
+HOLDS_2026_11_21 = [
+    (0, {"label": "review-common", "worktree": "review-common", "paths": ["common/src/main/Common.scala", SWALLOWS]}),
+    (0, {"label": "scrapers-2", "worktree": "review-scrapers-2", "paths": ["scrapers/src/main/Scrapers.scala", *SNAPSHOTS]}),
+    (0, {"label": "worker-rest-2", "worktree": "review-worker-rest-2", "paths": ["worker/src/main/Rest.scala", SWALLOWS],
+         "resolvable_with": ["review-common"]}),
+    (0, {"label": "split-shared-js", "worktree": "split-shared-js",
+         "paths": ["web/src/main/assets/js/shared.js", *SNAPSHOTS], "gen_conflicts_with": ["scrapers-2"]}),
+]
+# as observed, each younger merges cleanly with its older (git merge-tree, 2026-11-21: 80b5396d7c, 13ee018167)
+HOLDS_2026_11_21_IN_FLIGHT = [(0, s) for _t, s in HOLDS_2026_11_21[:2]] + [
+    (1, {k: v for k, v in s.items() if k not in ("resolvable_with", "gen_conflicts_with")}) for _t, s in HOLDS_2026_11_21[2:]]
 
 
 # THE 08010c TIMELINE OF 2026-11-19 (~07:40-09:50Z; c74b64f): a red OUTSIDE the gate open (Alert backtest #6, red

@@ -126,18 +126,24 @@ class GeneratedOverlapTest(unittest.TestCase):
         self.assertEqual(failures(sims), [])
         return sims
 
-    def test_the_baseline_queue_of_2026_11_19_holds_only_on_test_wiring(self):
+    def test_the_baseline_queue_of_2026_11_19_holds_only_on_test_wiring_or_behind_a_check_in_flight(self):
+        """Behind a QUEUED change, only the TestWiring.scala overlap holds; a generated overlap waits only for a check
+        already in flight (A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT, queue.py; invariant I10 holds the rest)."""
         for sim in self.run_seeds(range(4)):
             label = {c.eid: c.label for c in sim.changes}
             held = {(label[eid], label.get(b), f) for eid, hs in sim.holds.items() for _t, k, b, f in hs if k == "overlap"}
-            self.assertEqual(held, {("enrichment2", "f2", (queue_sim.TEST_WIRING,))}, f"seed {sim.seed}")
+            source = {h for h in held if not set(h[2]) <= set(queue_sim.GENERATED)}
+            self.assertLessEqual(source, {("enrichment2", "f2", (queue_sim.TEST_WIRING,))}, f"seed {sim.seed}")
             self.assertEqual(len(queue_sim.landing_waits(sim)), 6, "every change landed")
 
     def test_the_six_changes_land_sooner(self):
         import statistics
-        waits = [w for sim in self.run_seeds(range(20)) for w in queue_sim.landing_waits(sim).values()]
+        sims = self.run_seeds(range(20))
+        waits = [w for sim in sims for w in queue_sim.landing_waits(sim).values()]
         self.assertLessEqual(max(waits), 12, "before: 18 ticks, the six one at a time")
         self.assertLess(statistics.mean(waits), 6.5, "before: 8.2 ticks")
+        checks = sum(sum(sim.checks_of.values()) + sim.batch_checks for sim in sims)
+        self.assertLessEqual(checks, 50, "A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT: 148 checks unheld, 40 held")
 
     def test_a_conflict_in_generated_rows_is_resolved_in_the_batch(self):
         """Adjacent rows of coupling-baseline.tsv: git conflicts, the rows merge (or regenerate): one batch, both land."""
@@ -159,6 +165,58 @@ class GeneratedOverlapTest(unittest.TestCase):
             label = {c.eid: c.label for c in sim.changes}
             held = {(label[eid], label.get(b)) for eid, hs in sim.holds.items() for _t, k, b, _f in hs if k == "overlap"}
             self.assertEqual(held, {("b", "a")}, "left out of the batch, it waits for a as before")
+
+
+class BatchTiersSimTest(unittest.TestCase):
+    """THE BATCH TIERS (queue.py; the owner, 2026-11-21): the two holds of 2026-11-21 replayed over the real queue code
+    (queue_sim.HOLDS_2026_11_21), before (`before_tiers`: snapshots unregistered, no source resolution) and after."""
+
+    def run_seeds(self, script, seeds=range(4), **profile):
+        sims = [queue_sim.Sim(seed, calm=True, script=list(script), profile=profile).run() for seed in seeds]
+        self.assertEqual(failures(sims), [])
+        return sims
+
+    def holds(self, sim):
+        label = {c.eid: c.label for c in sim.changes}
+        return {(label[eid], label.get(b)) for eid, hs in sim.holds.items() for _t, k, b, _f in hs if k == "overlap"}
+
+    def test_todays_two_holds_queued_together_are_one_tree_one_check(self):
+        for before, after in zip(self.run_seeds(queue_sim.HOLDS_2026_11_21, before_tiers=True),
+                                 self.run_seeds(queue_sim.HOLDS_2026_11_21)):
+            self.assertIn(("worker-rest-2", "review-common"), self.holds(before), "before: held")
+            self.assertEqual(self.holds(after), set(), f"seed {after.seed}: nothing held")
+            self.assertEqual(sorted(queue_sim.landing_waits(after)),
+                             ["review-common", "scrapers-2", "split-shared-js", "worker-rest-2"], "every change landed")
+            self.assertEqual(sum(after.checks_of.values()), 0, "no change checked alone")
+            self.assertEqual(after.batch_checks, 1, "ONE check of the four as one tree")
+            self.assertEqual(len([p for p in after.pushes if p[3] == "queue"]), 1, "one push")
+            self.assertEqual(sorted(queue_sim.landing_waits(before)), ["review-common", "scrapers-2"],
+                             "before: the younger two held, then NOT LANDED once the older landed (a rebase each)")
+
+    def test_as_observed_the_younger_two_wait_for_the_check_in_flight_and_meet_in_the_next_batch(self):
+        """The younger two queued while the older two checked in a batch (as on 2026-11-21): A GENERATED OVERLAP
+        WAITS FOR A CHECK IN FLIGHT (queue.py) -- checked beside it, split-shared-js's check was voided by the older
+        landing (100 checks over 20 seeds, against 40 held, the median the same) -- and the two meet in one batch."""
+        for before, sim in zip(self.run_seeds(queue_sim.HOLDS_2026_11_21_IN_FLIGHT, before_tiers=True),
+                               self.run_seeds(queue_sim.HOLDS_2026_11_21_IN_FLIGHT)):
+            held = {h[0] for h in self.holds(sim)}
+            self.assertEqual(held, {"split-shared-js", "worker-rest-2"}, f"seed {sim.seed}")
+            self.assertEqual(len(queue_sim.landing_waits(sim)), 4, "every change landed")
+            self.assertEqual(sum(sim.checks_of.values()), 0, "none checked alone: the younger two as one batch")
+            self.assertEqual(sim.batch_checks, 2)
+            self.assertLessEqual(sum(sim.checks_of.values()) + sim.batch_checks,
+                                 sum(before.checks_of.values()) + before.batch_checks)
+
+
+    def test_a_resolved_conflict_failing_the_batch_falls_back_to_the_hold(self):
+        script = [(0, {"label": "a", "worktree": "a", "paths": ["common/src/main/A.scala", queue_sim.SWALLOWS]}),
+                  (0, {"label": "b", "worktree": "b", "paths": ["worker/src/main/B.scala", queue_sim.SWALLOWS],
+                       "resolvable_with": ["a"], "resolve_bad": True})]
+        for sim in self.run_seeds(script):
+            self.assertIn("a", queue_sim.landing_waits(sim))
+            self.assertNotIn("b", queue_sim.landing_waits(sim), "never landed on the failed resolution")
+            b = next(c for c in sim.changes if c.label == "b")
+            self.assertEqual(sim.checks_of.get(b.eid, 0), 0, "never checked alone on a main it no longer applies on")
 
 
 class MinimalRecheckSimTest(unittest.TestCase):
@@ -249,7 +307,7 @@ MUTATIONS = {
         '                  batch=first["id"])\n', "", "chaoshold"),
     "generated files are no overlap": (
         "        shared = shared if strict else without_generated(repo, shared)\n",
-        "", "baselines"),
+        "", "nobatchgen"),
     # (11) the combined tree pushed unverified: main moved with no file overlap, and no verify round ran
     "a moved main's combined tree is verified": (
         "            elif why is not None or tree_hook:  # a new round, not an attempt",
@@ -272,6 +330,11 @@ elif sys.argv[2] == "random":
     bad = [v for seed in range(8) for v in queue_sim.Sim(seed).run().violations[:1]]
 elif sys.argv[2] == "collisions":
     bad = queue_sim.Sim(17, calm=True, script=list(queue_sim.COLLISIONS_2026_11_17)).run().violations[:1]
+elif sys.argv[2] == "nobatchgen":  # a lone (--no-batch) change and a younger one sharing only a baseline, both queued
+    script = [(0, {"label": "first", "worktree": "first", "kind": "nobatch", "paths": ["docs/first.md"]}),
+              (0, {"label": "lone", "worktree": "lone", "kind": "nobatch", "paths": ["web/src/main/A.scala", queue_sim.COUPLING]}),
+              (0, {"label": "b", "worktree": "b", "paths": ["worker/src/main/B.scala", queue_sim.COUPLING]})]
+    bad = [v for seed in range(3) for v in queue_sim.Sim(seed, calm=True, trees=1, script=script).run().violations[:1]]
 elif sys.argv[2] == "baselines":
     bad = queue_sim.Sim(0, calm=True, script=list(queue_sim.BASELINES_2026_11_19)).run().violations[:1]
 elif sys.argv[2] == "chaoshold":  # chaos seeds where a checked change's push waits for a batch it is not in (7, 8

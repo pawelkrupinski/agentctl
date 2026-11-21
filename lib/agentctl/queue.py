@@ -1370,6 +1370,7 @@ def change_rows(store=None):
              "head": (i.get("data") or {}).get("head"), "deadline": i["deadline"], "level": i["level"],
              "hold": ((i.get("data") or {}).get("hold") or {}).get("why") if i["state"] in HOLD_SHOWN else None,
              "kind": kind_text((i.get("data") or {}).get("change_kind")) or None,
+             "resolved": (i.get("data") or {}).get("autoresolved") if i["state"] == "checking" else None,
              "since": float((i.get("data") or {}).get("submitted_at") or i.get("entered_at") or 0)}
             for i in (store or Store()).items("change") if not machine_state("change", i["state"]).terminal]
     return sorted(rows, key=lambda r: r["id"])
@@ -2117,10 +2118,10 @@ def _tick_changes_pass(repo, d, st, t, facts, kinds, phase, mine, todo, held, ph
                 continue
             hold = overlap_hold(repo, d, e, todo, facts, t)
             if hold and fix:  # a red fix never waits: its author is told of a conflict, and it goes on
-                did += hold_for_overlap(st, d, e, *hold, waits=False)
+                did += hold_for_overlap(st, d, e, *hold, waits=False, repo=repo)
                 hold = None
             if hold:  # OVERLAPPING CHANGES ARE CHECKED AS ONE (below)
-                did += hold_for_overlap(st, d, e, *hold)
+                did += hold_for_overlap(st, d, e, *hold, repo=repo)
                 o, shared = hold[0], hold[1]
                 note_hold(st, e, "overlap", f"its check waits for {o['id']} ({o.get('status')}): both change "
                           f"{', '.join(shared[:3])}" + (f" (+{len(shared) - 3} more)" if len(shared) > 3 else ""), t,
@@ -2303,18 +2304,63 @@ def pair_conflict(repo, older, younger):
     return [x for x in r.stdout.splitlines()[1:] if x.strip()] or ["(a file both change)"]
 
 
+# THE BATCH TIERS (the owner, 2026-11-21: "make agentctl batch even more, merge / fix conflicts"): two queued changes
+# that overlap are one backlog batch when (1) git merges them cleanly, (2) the overlap is in generated files (rows
+# merged, else regenerated; a snapshot always regenerated, its output explained by the sides), or (3) their source
+# conflict is additions on both sides (pair_resolvable here; resolved in the batch's assembly, whose full check is the
+# verification); else (4) the younger waits and its author is told, the hunks and the fix named (conflict_hunks).
+# AGENTCTL.md THE BATCH TIERS; waiting.py SNAPSHOTS ARE REGENERATED, NEVER MERGED and A SOURCE CONFLICT IS RESOLVED IN
+# THE BATCH.
+def pair_resolvable(repo, older, younger, files):
+    """The files of `files` (where the two changes' heads conflict) that the backlog batch's assembly resolves
+    (THE BATCH TIERS): UNION_SAFE prose, and source whose conflicting hunks are additions on both sides
+    (waiting.py hunks_resolve, over the heads' merge base)."""
+    mb = git(repo, "merge-base", older["head"], younger["head"], check=False).stdout.strip()
+    out = []
+    for f in files:
+        if union_safe(f):
+            out.append(f)
+            continue
+        got = [git(repo, "show", f"{x}:{f}", check=False) for x in (mb, older["head"], younger["head"])] if mb else []
+        if got and all(r.returncode == 0 for r in got) and hunks_resolve(*(r.stdout for r in got)) is not None:
+            out.append(f)
+    return out
+
+
 def overlap_of(repo, older, younger, strict=False):
-    """(the files both change, the files they conflict in or None), per pair of heads (cached in the process); the
-    repo's generated files are neither (GENERATED FILES ARE NO OVERLAP, waiting.py) unless strict (a change whose
-    generated files could not be resolved: held as before)."""
+    """(the files both change, the files they conflict in or None, the conflicting files the batch resolves), per pair
+    of heads (cached in the process); the repo's generated files are neither (GENERATED FILES ARE NO OVERLAP,
+    waiting.py) unless strict (a change whose generated files or source conflict could not be resolved in a batch:
+    held as before), and with strict every textual conflict is one."""
     key = (older["id"], older.get("head"), younger["id"], younger.get("head"), strict)
     if key not in _overlap_known:
         shared = sorted(set(change_paths_of(repo, older) or []) & set(change_paths_of(repo, younger) or []))
         shared = shared if strict else without_generated(repo, shared)
         conflict = pair_conflict(repo, older, younger) if shared else None
         conflict = conflict if strict or not conflict else (without_generated(repo, conflict) or None)
-        _overlap_known[key] = (shared, conflict)
+        resolvable = [] if strict or not conflict else pair_resolvable(repo, older, younger, conflict)
+        conflict = [f for f in conflict or [] if f not in resolvable] or None
+        _overlap_known[key] = (shared, conflict, resolvable)
     return _overlap_known[key]
+
+
+# A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT (2026-11-21, measured in the queue simulator before choosing): a
+# queued change sharing only generated files (baselines, hand-written tables, snapshots) with a change QUEUED before it
+# is no overlap -- the backlog batch checks them as one tree (THE BATCH TIERS, tier 2). With the older already IN
+# FLIGHT (checking, checked, pushing: past the batch it could have joined), checking the younger now spent a check that
+# main moving under it then voids: both read the generated files, so its push owes a verify round, often two. Over 20
+# seeds the six baseline lanes of 2026-11-19 ran 148 checks unheld, 40 held behind the change in flight (median 5 ->
+# 6 ticks, p90 9 -> 7, mean 5.4 both); the two holds of 2026-11-21 as observed, 100 checks -> 40 (median 5 both, p90
+# 8 -> 9). So the younger waits, quietly (A HELD WAIT IS NO ESCALATION), and meets the others waiting in the next
+# batch, its generated files merged or regenerated there. Never behind a `waiting` change (it holds nothing it
+# assembles with), and a red fix never waits.
+IN_FLIGHT = ("checking", "checked", "pushing")
+
+
+def generated_overlap(repo, older, younger):
+    """The registered generated files both changes change (GENERATED FILES ARE NO OVERLAP's, for the in-flight wait)."""
+    both = sorted(set(change_paths_of(repo, older) or []) & set(change_paths_of(repo, younger) or []))
+    return [f for f in both if generated_entry(repo, f)]
 
 
 def main_conflict(repo, e):
@@ -2349,14 +2395,18 @@ def overlap_hold(repo, d, e, entries, facts, t):
         if o["id"] == e["id"] or o.get("status") not in OVERLAP_OLDER \
                 or same_change_source(o, e["worktree"], e.get("branch") or ""):  # its own older version: superseded
             continue
-        shared, conflict = overlap_of(repo, o, e, strict=e.get("batch_alone") == "regen")
+        shared, conflict, resolvable = overlap_of(repo, o, e, strict=e.get("batch_alone") in ("regen", "resolve"))
         if not shared:
+            gen = generated_overlap(repo, o, e) if o.get("status") in IN_FLIGHT else []
+            if gen:  # A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT: they meet in the next batch
+                first = first or (o, gen, None)
             continue
         if conflict is None and o.get("status") == "queued" and not o.get("backlog_batch"):
             if together is None:
                 together = backlog_batchable(repo, d, e, t, facts)
             if together and backlog_batchable(repo, d, o, t, facts):
-                continue  # the next backlog batch checks them as one
+                continue  # the next backlog batch checks them as one (its assembly resolves the `resolvable`)
+        conflict = conflict or resolvable or None  # resolved only in a batch of the two: else it cannot be assembled
         if conflict:  # the one it cannot be assembled with is the one its author hears of
             return o, shared, conflict
         if o.get("status") == "waiting":  # A WAITING CHANGE HOLDS NOTHING it assembles with: they meet in the batch
@@ -2454,18 +2504,41 @@ def stuck_recovery(hold, stuck):
     return hk.recovery if hk else "escalate"
 
 
-def hold_for_overlap(st, d, e, o, shared, conflict, waits=True):
+def conflict_hunks(repo, older, younger, files, limit=3):
+    """The first conflicting hunk of each of the files (at most `limit`), in words -- `F line N: <older's line> vs
+    <this change's line>` -- for the author told CONFLICTS (THE BATCH TIERS, tier 4); [] when git cannot tell."""
+    out = []
+    for f in [x for x in files if " (" not in x][:limit]:
+        try:
+            mb = git(repo, "merge-base", older["head"], younger["head"], check=False).stdout.strip()
+            got = [git(repo, "show", f"{x}:{f}", check=False) for x in (mb, older["head"], younger["head"])] if mb else []
+        except Exception:  # noqa: BLE001 -- a hint, never a reason the author is not told
+            got = []
+        if not got or any(r.returncode != 0 for r in got):
+            continue
+        hunk = first_hunk(*(r.stdout for r in got))
+        if hunk:
+            n, theirs, mine = hunk
+            out.append(f"{f} line {n}: {older['id']} has `{theirs[:80]}`, this change `{mine[:80]}`")
+    return out
+
+
+def hold_for_overlap(st, d, e, o, shared, conflict, waits=True, repo=None):
     """The change tick's lines for a change held behind an older one it overlaps (waits; a red fix's: not held); its
     author told once of a conflict."""
     did = []
     if conflict and e.get("conflict_told") != o["id"]:
         it = st.item("change", e["id"])
+        hunks = conflict_hunks(repo, o, e, conflict) if repo else []
         text = (f"CONFLICTS {e['id']}: it cannot be assembled with {o['id']} ({o.get('worktree')}), queued before it "
                 f"(both change {', '.join(conflict[:3])})"
                 + (f": its check waits for {o['id']}" if waits else ": a red fix, it is checked now all the same")
                 + f"; if {o['id']} lands first, this change no "
                 f"longer applies -- rebase onto it (its branch, or {remote()}/main once it landed) and land again, or "
-                "`agentctl land cancel` this one")
+                "`agentctl land cancel` this one"
+                + (f". The hunks: {'; '.join(hunks)}" if hunks else "")
+                + (f". Fix now: `cd {e.get('worktree')} && git rebase {o['branch']}`, resolve those hunks, "
+                   "`~/bin/agentctl land`" if o.get("branch") and e.get("worktree") else ""))
         if it and not machine_state("change", it["state"]).terminal:
             try:
                 st.transition("change", e["id"], it["state"], it["version"],

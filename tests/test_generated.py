@@ -90,12 +90,20 @@ class RegistryTest(unittest.TestCase):
     def test_movies_registers_its_baselines_and_the_fanout_refs(self):
         with open(os.path.join(os.path.dirname(HERE), "red-repos.json")) as f:
             movies = next(c for c in A.red_repos_parse(json.load(f)) if c["repo"] == "pawelkrupinski/movies")
-        paths = {p: g["regen"] for g in movies["generated"] for p in g["paths"]}
+        paths = {p: (next(x for x in ("e2e/testOnly services.movies.FilmScheduleEndToEndSpec",
+                                      "web/PageTest/testOnly views.PageSnapshotSpec") if x in " ".join(g["regen"]))
+                     if g.get("merge") == "regen" else g["regen"]) for g in movies["generated"] for p in g["paths"]}
         self.assertEqual(paths, {
             "test/resources/coupling-baseline.tsv": ["scripts/coupling-report", "--update"],
             "test/resources/coupling-fanout-refs.tsv": ["scripts/coupling-report", "--update"],
             **{f"test/resources/{n}-baseline.tsv": ["scripts/quality-report", "--update"]
                for n in ("complexity", "length", "duplication")},
+            # SNAPSHOTS (2026-11-21): regenerated, never merged (`merge: regen`)
+            **{f"test/resources/fixtures/08-06-2026/{n}": "e2e/testOnly services.movies.FilmScheduleEndToEndSpec"
+               for n in ("expected-schedules.txt", "read-model-snapshot.json", "read-model-snapshot.inputs.sha256",
+                         "read-model-derivation-rows.jsonl", "read-model-derivation-hashes.tsv")},
+            **{f"test/resources/fixtures/08-06-2026/expected-{n}.html": "web/PageTest/testOnly views.PageSnapshotSpec"
+               for n in ("index", "warszawa-index", "wroclaw-index")},
             # BATCHED CHECKS (2026-11-20): the hand-written tables, merged row by row with no regen command
             **{p: None for p in ("test/resources/coupling-exemptions.tsv", "test/resources/coupling-layers.tsv",
                                  "test/resources/fixtures/identity-judgements.tsv",

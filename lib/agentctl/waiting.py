@@ -393,13 +393,65 @@ def regen_here():
     return host_role() != "server"
 
 
-def regenerate(wt, files, regenerated=None, provisional=None):
+def regen_only(g):
+    """Whether a registry entry is a SNAPSHOT (`merge: regen`): never merged by rows, always regenerated."""
+    return bool(g) and g.get("merge") == "regen"
+
+
+# SNAPSHOTS ARE REGENERATED, NEVER MERGED (2026-11-21 ~07:40Z: split-shared-js `held: its check waits for scrapers-2`,
+# both changing movies' page snapshots expected-{index,warszawa-index,wroclaw-index}.html -- files PageSnapshotSpec
+# writes, which no agent edits by hand). A snapshot -- rendered HTML, a JSON read model, a whole-corpus text -- has no
+# rows: a three-way merge of its lines, git's or ours, is a guess at what the combined code renders. Registered with
+# `merge: regen`, it is no overlap (like every generated file), and whenever BOTH sides changed it -- a conflict, or a
+# clean textual merge of two edits -- its regen command runs over the combined tree and its output is what the batch
+# checks. A REGENERATED SNAPSHOT HIDES NOTHING: its output must be EXPLAINED by the two sides -- every line it adds
+# added by one of them, every line it drops dropped by one of them (snapshot_unexplained) -- or the resolution fails
+# and the member is held as before: an interaction neither side committed (a line only the combined code renders) is
+# never landed by a regenerator; its author regenerates and commits it. Where no regen command runs (the server role)
+# a snapshot is never kept provisionally: held. Then the batch's checks run over the combined tree as over any other
+# (movies: FilmScheduleEndToEnd asserts expected-schedules.txt and the read model; PageSnapshotSpec runs on Main).
+def snapshot_unexplained(base, ours, theirs, regenerated):
+    """The first line of a regenerated snapshot neither side explains (added by neither, or dropped by neither), as
+    `+line` / `-line`; None when each of its changes against the base is one of the sides' own."""
+    from collections import Counter
+    b, o, t, r = (Counter(x.splitlines()) for x in (base, ours, theirs, regenerated))
+    added, removed = r - b, b - r
+    may_add, may_remove = (o - b) | (t - b), (b - o) | (b - t)
+    for line, n in added.items():
+        if n > may_add.get(line, 0):
+            return "+" + line[:160]
+    for line, n in removed.items():
+        if n > may_remove.get(line, 0):
+            return "-" + line[:160]
+    return None
+
+
+def run_regen(wt, g):
+    """Run registry entry g's regen command in wt: None, or why it failed, in words."""
+    limit = g.get("timeout") or env_num("AGENTCTL_GENERATED_REGEN_TIMEOUT", GENERATED_REGEN_TIMEOUT)
+    cmd = " ".join(shlex.quote(x) for x in g["regen"])
+    try:
+        r = subprocess.run(g["regen"], cwd=wt, capture_output=True, text=True, timeout=limit, env=tool_env(),
+                           stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return f"`{cmd}` ran past {limit:.0f} s"
+    except OSError as ex:
+        return f"`{cmd}` could not run ({ex.strerror or ex})"
+    if r.returncode != 0:
+        last = ((r.stderr or r.stdout or "").strip().splitlines() or [""])[-1][:200]
+        return f"`{cmd}` exited {r.returncode}" + (f": {last}" if last else "")
+    return None
+
+
+def regenerate(wt, files, regenerated=None, provisional=None, sides=None):
     """Resolve wt's conflicted generated files over the tree as it stands (the combined tree): each merged row by row,
     else its registry entry's regen command run in wt and its files staged -- or, where no regen command runs (the
     server role), merged row by row keeping the tree's (ours: main's) side of a row both sides changed, the file named
-    in `provisional` (MAIN'S ROW, PROVISIONALLY). None: resolved (staged, appended to `regenerated`); else why not, in
-    words."""
-    stages = conflict_stages(wt, files)
+    in `provisional` (MAIN'S ROW, PROVISIONALLY). A SNAPSHOT (`merge: regen`) is never merged by rows: regenerated, its
+    output explained by the sides (SNAPSHOTS ARE REGENERATED, NEVER MERGED), or not resolved. `sides`: {file: {1: base,
+    2: ours, 3: theirs}} of files both sides changed that git merged cleanly (a snapshot's, regenerated all the same);
+    else the conflict's stages. None: resolved (staged, appended to `regenerated`); else why not, in words."""
+    stages = sides if sides is not None else conflict_stages(wt, files)
     if stages is None:
         return "added or deleted on one side"
     pending = []
@@ -409,7 +461,7 @@ def regenerate(wt, files, regenerated=None, provisional=None):
             fh.write(text)
         git(wt, "add", "--", f)
     for f in files:
-        text = rows_merge(stages[f][1], stages[f][2], stages[f][3])
+        text = None if regen_only(generated_entry(wt, f)) else rows_merge(stages[f][1], stages[f][2], stages[f][3])
         if text is None:
             pending.append(f)
             continue
@@ -421,6 +473,8 @@ def regenerate(wt, files, regenerated=None, provisional=None):
         if not g.get("regen"):  # a hand-written table merged row by row only: never a side's row kept provisionally
             return f"a row both sides changed in {', '.join(mine)}, which no regen command decides"
         if not regen_here():
+            if regen_only(g):
+                return f"{', '.join(mine)}: a snapshot both sides changed, and the server role runs no regen command"
             for f in mine:
                 text = rows_merge(stages[f][1], stages[f][2], stages[f][3], prefer_ours=True)
                 if text is None:
@@ -429,23 +483,32 @@ def regenerate(wt, files, regenerated=None, provisional=None):
                 if provisional is not None:
                     provisional.append(f)
             continue
-        git(wt, "checkout", "--ours", "--", *mine, check=False)  # no conflict markers in what the command reads
-        limit = g.get("timeout") or env_num("AGENTCTL_GENERATED_REGEN_TIMEOUT", GENERATED_REGEN_TIMEOUT)
-        cmd = " ".join(shlex.quote(x) for x in g["regen"])
-        try:
-            r = subprocess.run(g["regen"], cwd=wt, capture_output=True, text=True, timeout=limit, env=tool_env(),
-                               stdin=subprocess.DEVNULL)
-        except subprocess.TimeoutExpired:
-            return f"a row both sides changed, and `{cmd}` ran past {limit:.0f} s"
-        except OSError as ex:
-            return f"a row both sides changed, and `{cmd}` could not run ({ex.strerror or ex})"
-        if r.returncode != 0:
-            last = ((r.stderr or r.stdout or "").strip().splitlines() or [""])[-1][:200]
-            return f"a row both sides changed, and `{cmd}` exited {r.returncode}" + (f": {last}" if last else "")
+        if sides is None:
+            git(wt, "checkout", "--ours", "--", *mine, check=False)  # no conflict markers in what the command reads
+        before = {p: git(wt, "show", f":{p}", check=False).stdout for p in tracked(wt, g["paths"])
+                  if p not in mine} if regen_only(g) else {}
+        why = run_regen(wt, g)
+        if why:
+            return ("both sides changed the snapshot " if regen_only(g) else "a row both sides changed, and ") + why
+        if regen_only(g):  # A REGENERATED SNAPSHOT HIDES NOTHING: explained by the sides, else not resolved
+            for f in mine:
+                path = os.path.join(wt, f)
+                if not os.path.exists(path):
+                    return f"`{' '.join(g['regen'])}` did not write {f}"
+                with open(path) as fh:
+                    odd = snapshot_unexplained(stages[f][1], stages[f][2], stages[f][3], fh.read())
+                if odd:
+                    return (f"the regenerated {f} holds a change neither side made ({odd}): an interaction its "
+                            "authors regenerate and commit")
+            for p, text in before.items():
+                path = os.path.join(wt, p)
+                if os.path.exists(path) and open(path).read() != text:
+                    return (f"the regen also moved {p}, which only one side changed: an interaction its authors "
+                            "regenerate and commit")
         git(wt, "add", "-A", "--", *g["paths"], check=False)
         left = sorted(set(unmerged(wt)) & set(mine))
         if left:
-            return f"`{cmd}` left {', '.join(left)} unresolved"
+            return f"`{' '.join(g['regen'])}` left {', '.join(left)} unresolved"
         stray = git(wt, "diff", "--name-only", check=False).stdout.split()  # what else it wrote: never picked along
         if stray:
             git(wt, "checkout", "--", *stray, check=False)
@@ -454,16 +517,176 @@ def regenerate(wt, files, regenerated=None, provisional=None):
     return None
 
 
-def conflict_resolve(wt, regen=True, notes=None, regenerated=None, provisional=None):
-    """Resolve wt's conflicted files when each is UNION_SAFE prose (both sides kept) or a registered generated file
-    (regenerate; only with regen): the files resolved (staged), or None (nothing it can resolve; (files, why) appended
-    to `notes` when generated files' resolution failed)."""
+def tracked(wt, globs):
+    """The tracked paths of wt's index matching globs."""
+    out = git(wt, "ls-files", "--", *globs, check=False).stdout.split()
+    return [p for p in out if any(fnmatch.fnmatch(p, g) for g in globs)]
+
+
+def snapshots_both_changed(wt, commit, before):
+    """{file: {1: base, 2: ours, 3: theirs}} of the SNAPSHOTS (`merge: regen`) commit changes which the tree had changed
+    too since commit's parent (before: the tree's HEAD before the pick) -- git merged them cleanly, and a snapshot is
+    regenerated all the same (SNAPSHOTS ARE REGENERATED, NEVER MERGED)."""
+    reg = [g for g in generated_registry(wt) if regen_only(g)]
+    if not reg:
+        return {}
+    mine = git(wt, "diff-tree", "--no-commit-id", "--name-only", "-r", commit, check=False).stdout.split()
+    out = {}
+    for f in mine:
+        if not any(generated_entry(wt, f) is g for g in reg):
+            continue
+        if git(wt, "diff", "--quiet", f"{commit}^", before, "--", f, check=False).returncode == 0:
+            continue  # only this side changed it: its own regenerated snapshot stands
+        got = {n: git(wt, "show", f"{ref}:{f}", check=False) for n, ref in ((1, f"{commit}^"), (2, before), (3, commit))}
+        if any(r.returncode != 0 for r in got.values()):
+            continue  # added or deleted on a side: git's pick decided it
+        out[f] = {n: r.stdout for n, r in got.items()}
+    return out
+
+
+# A SOURCE CONFLICT IS RESOLVED IN THE BATCH WHEN BOTH SIDES ONLY ADD (the owner, 2026-11-21: "make agentctl batch even
+# more, merge / fix conflicts"). Tier 3 of THE BATCH TIERS (queue.py): a real source two queued changes conflict in --
+# both appended a test case, both added an import, both added a row to a hand-written Scala table -- is resolved on
+# the combined tree, hunk by hunk over `git merge-file --diff3`: a hunk is taken when, past the lines both sides wrote
+# the same (their common prefix and suffix, which must account for every base line of the hunk), what is left on each
+# side is pure addition -- kept, ours first, then theirs; a side holding the other's lines takes that side. Anything
+# else (a line both changed differently, a deletion against an edit) is no resolution. Only in a BACKLOG batch's
+# assembly, whose check is the full landing check of exactly the tree that lands: that check is the verification.
+# What was resolved is recorded -- an `Auto-Resolved:` trailer on the picked commit, `autoresolved` on the entry (`land
+# status` shows it) -- and a member so resolved that its batch then fails is checked alone and held behind the change
+# it conflicts with, as before (batch.py: the bisect names the resolution). Never in a lone change's rebase, a push's
+# rebase or a verify round.
+def hunks_resolve(base, ours, theirs):
+    """(merged text, [what each hunk took]) of a source conflict whose every conflicting hunk resolves (A SOURCE
+    CONFLICT IS RESOLVED ...), or None."""
+    import tempfile
+    texts = [x if x.endswith("\n") or not x else x + "\n" for x in (ours, base, theirs)]
+    with tempfile.TemporaryDirectory() as td:
+        paths = []
+        for n, x in zip(("ours", "base", "theirs"), texts):
+            q = os.path.join(td, n)
+            with open(q, "w") as fh:
+                fh.write(x)
+            paths.append(q)
+        r = subprocess.run(["git", "merge-file", "-p", "--diff3", "-L", "ours", "-L", "base", "-L", "theirs", *paths],
+                           capture_output=True, text=True)
+    if r.returncode < 0 or r.returncode > 127:
+        return None
+    out, how, region, part, lineno = [], [], None, None, 0
+    for line in r.stdout.splitlines(True):
+        bare = line.rstrip("\n")
+        if region is None:
+            if bare == "<<<<<<< ours":
+                region, part = {"o": [], "b": [], "t": []}, "o"
+                continue
+            if bare in ("||||||| base", "=======", ">>>>>>> theirs"):
+                return None
+            out.append(line)
+            lineno += 1
+            continue
+        if bare == "||||||| base" and part == "o":
+            part = "b"
+        elif bare == "=======" and part == "b":
+            part = "t"
+        elif bare == ">>>>>>> theirs" and part == "t":
+            took = hunk_take(region["o"], region["b"], region["t"])
+            if took is None:
+                return None
+            lines, what = took
+            how.append(f"line {lineno + 1}: {what}")
+            out.extend(lines)
+            lineno += len(lines)
+            region = None
+        elif bare.startswith(("<<<<<<< ", "||||||| ", "=======", ">>>>>>> ")):
+            return None  # a marker out of place: a file holding marker-like lines of its own
+        else:
+            region[part].append(line)
+    if region is not None:
+        return None
+    text = "".join(out)
+    return (text if ours.endswith("\n") or not ours else text.rstrip("\n")), how
+
+
+def first_hunk(base, ours, theirs):
+    """(line number, ours' first line, theirs' first line) of the first conflicting hunk of a three-way merge (diff3),
+    or None when it merges cleanly or git cannot tell."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        paths = []
+        for n, x in zip(("ours", "base", "theirs"), (ours, base, theirs)):
+            q = os.path.join(td, n)
+            with open(q, "w") as fh:
+                fh.write(x if x.endswith("\n") or not x else x + "\n")
+            paths.append(q)
+        r = subprocess.run(["git", "merge-file", "-p", "--diff3", "-L", "ours", "-L", "base", "-L", "theirs", *paths],
+                           capture_output=True, text=True)
+    lines = r.stdout.splitlines()
+    if r.returncode <= 0 or "<<<<<<< ours" not in lines:
+        return None
+    at = lines.index("<<<<<<< ours")
+    mid = lines.index("||||||| base", at)
+    sep = lines.index("=======", mid)
+    end = lines.index(">>>>>>> theirs", sep)
+    o = [x for x in lines[at + 1:mid] if x.strip()]
+    t = [x for x in lines[sep + 1:end] if x.strip()]
+    return at + 1, (o[0].strip() if o else "(nothing)"), (t[0].strip() if t else "(nothing)")
+
+
+def hunk_take(o, b, t):
+    """(lines, what) for one diff3 hunk (ours, base, theirs lines) when it resolves, else None."""
+    n = 0
+    while n < min(len(o), len(t)) and o[n] == t[n]:
+        n += 1
+    m = 0
+    while m < min(len(o), len(t)) - n and o[-1 - m] == t[-1 - m]:
+        m += 1
+    if n + m < len(b):  # a base line one side changed otherwise than the other: a real conflict
+        return None
+    mo, mt = o[n:len(o) - m], t[n:len(t) - m]
+    if not mo or not mt:
+        return o if mo else t, f"took the side holding the other's lines ({len(o)} lines)"
+    sep = ""
+    if b and n and o[n - 1].rstrip("\n") == b[-1].rstrip("\n") + "," and not mo[-1].rstrip("\n").endswith(","):
+        mo = mo[:-1] + [mo[-1].rstrip("\n") + ",\n"]  # both appended to a list whose last item each gave a comma
+        sep = ", a comma between"
+    return (o[:n] + mo + mt + o[len(o) - m:],
+            f"kept both sides' added lines ({len(mo)} ours, then {len(mt)} theirs{sep})")
+
+
+def source_resolve(wt, files, resolved):
+    """Resolve wt's conflicted SOURCE files hunk by hunk (A SOURCE CONFLICT IS RESOLVED ...): True when every one
+    resolved (written, staged, each appended to `resolved` as {file, hunks}); False and nothing written otherwise."""
+    stages = conflict_stages(wt, files)
+    if stages is None:
+        return False
+    done = {}
+    for f in files:
+        got = hunks_resolve(stages[f][1], stages[f][2], stages[f][3])
+        if got is None:
+            return False
+        done[f] = got
+    for f, (text, how) in done.items():
+        with open(os.path.join(wt, f), "w") as fh:
+            fh.write(text)
+        git(wt, "add", "--", f)
+        resolved.append({"file": f, "hunks": how})
+    return True
+
+
+def conflict_resolve(wt, regen=True, notes=None, regenerated=None, provisional=None, resolved=None):
+    """Resolve wt's conflicted files when each is UNION_SAFE prose (both sides kept), a registered generated file
+    (regenerate; only with regen) or -- with `resolved` a list, a backlog batch's assembly -- a source file whose
+    conflicting hunks are additions on both sides (source_resolve): the files resolved (staged), or None (nothing it
+    can resolve; (files, why) appended to `notes` when generated files' resolution failed)."""
     files = unmerged(wt)
     if not files:
         return None
     gen = [f for f in files if generated_entry(wt, f)]
-    prose = [f for f in files if f not in gen]
-    if not all(union_safe(f) for f in prose) or (gen and not regen):
+    prose = [f for f in files if f not in gen and union_safe(f)]
+    source = [f for f in files if f not in gen and f not in prose]
+    if (source and resolved is None) or (gen and not regen):
+        return None
+    if source and not source_resolve(wt, source, resolved):
         return None
     if prose and union_resolve(wt, prose) is None:
         return None
@@ -476,14 +699,14 @@ def conflict_resolve(wt, regen=True, notes=None, regenerated=None, provisional=N
     return files
 
 
-def pick(wt, commits, dropped=None, regen=True, regenerated=None, provisional=None):
+def pick(wt, commits, dropped=None, regen=True, regenerated=None, provisional=None, resolved=None):
     """pick_commits under WorktreeGuard (EVERY EXIT PUTS THE WORKTREE BACK, slots.py): no cherry-pick is left in
     progress in the tree, whatever ends it."""
     with WorktreeGuard(wt):
-        return pick_commits(wt, commits, dropped, regen, regenerated, provisional)
+        return pick_commits(wt, commits, dropped, regen, regenerated, provisional, resolved)
 
 
-def pick_commits(wt, commits, dropped=None, regen=True, regenerated=None, provisional=None):
+def pick_commits(wt, commits, dropped=None, regen=True, regenerated=None, provisional=None, resolved=None):
     """Cherry-pick commits onto wt's HEAD, one at a time: None, or the conflicting files (the pick aborted, HEAD back
     where it was). A commit already in HEAD's history (patch-equivalent), or empty once picked, is DROPPED, never kept
     as an empty commit: appended to `dropped` as (commit, the commit of HEAD carrying it, or None). A deliberate empty
@@ -494,7 +717,11 @@ def pick_commits(wt, commits, dropped=None, regen=True, regenerated=None, provis
     and landed the same change a second time (simplification-2026-10-31 item 10: three subjects landed 2-3 times).
 
     A conflict only in prose or registered generated files is resolved and the pick goes on (conflict_resolve; regen
-    False: generated files left conflicting); a generated file's failed resolution is named, with why, in the files."""
+    False: generated files left conflicting); a generated file's failed resolution is named, with why, in the files.
+    With `resolved` a list (a backlog batch's assembly), a source conflict of additions on both sides is resolved too,
+    each appended as {commit, file, hunks} and named on the picked commit by an `Auto-Resolved:` trailer. With regen,
+    a SNAPSHOT both sides changed is regenerated even when git merged it cleanly (SNAPSHOTS ARE REGENERATED, NEVER
+    MERGED), the commit amended with it."""
     start = git(wt, "rev-parse", "HEAD").strip()
     on_head = upstream_patch_ids(wt, commits[0], start) if commits else {}
     for c in commits:
@@ -505,9 +732,21 @@ def pick_commits(wt, commits, dropped=None, regen=True, regenerated=None, provis
                 dropped.append((c, via))
             continue
         r = git(wt, *NO_SIGN, "cherry-pick", "--allow-empty", "--keep-redundant-commits", c, check=False)
-        notes = []
-        if r.returncode != 0 and conflict_resolve(wt, regen, notes, regenerated, provisional):
+        notes, mine = [], [] if resolved is not None else None
+        if r.returncode != 0 and conflict_resolve(wt, regen, notes, regenerated, provisional, mine):
             r = git(wt, *NO_SIGN, "-c", "core.editor=true", "cherry-pick", "--continue", check=False)
+        if r.returncode == 0 and regen and regen_here():  # elsewhere git's clean merge stands, for the checks to judge
+            sides = snapshots_both_changed(wt, c, before)
+            why = regenerate(wt, sorted(sides), regenerated, provisional, sides=sides) if sides else None
+            if why:
+                git(wt, "reset", "--hard", "-q", start)
+                return [f"{', '.join(sorted(sides))} (generated: {why})"]
+            if sides and git(wt, "diff", "--cached", "--quiet", check=False).returncode != 0:
+                git(wt, *NO_SIGN, "commit", "-q", "--amend", "--no-edit", "--allow-empty", check=False)
+        if r.returncode == 0 and mine:
+            trailers = [x for m in mine for x in ("--trailer", f"Auto-Resolved: {m['file']}: {'; '.join(m['hunks'])}")]
+            git(wt, *NO_SIGN, "commit", "-q", "--amend", "--no-edit", "--allow-empty", *trailers, check=False)
+            resolved.extend({"commit": c, **m} for m in mine)
         if r.returncode != 0:
             files = unmerged(wt)
             git(wt, "cherry-pick", "--abort", check=False)
@@ -528,14 +767,20 @@ def pick_commits(wt, commits, dropped=None, regen=True, regenerated=None, provis
     return None
 
 
-def apply_entry(d, wt, e, base, regen=True):
+def apply_entry(d, wt, e, base, regen=True, autoresolve=False):
     """Pick the entry's commits onto wt's HEAD (base, or base plus earlier entries): ('ok', None), ('conflict', files),
     ('landed', via) or ('duplicate', via). A commit already on MAIN (base's history) is dropped from the entry for good
     (a partly landed entry keeps only the rest); one only an earlier entry carries is left out of this build alone (that
     entry may still be rejected). Nothing left of it on main: 'landed' -- the caller says LANDED, never pushes empty."""
     first = git(wt, "rev-parse", "HEAD").strip() == base
-    dropped, regenerated, provisional = [], [], []
-    conflict = pick(wt, e["commits"], dropped, regen, regenerated, provisional)
+    dropped, regenerated, provisional, resolved = [], [], [], [] if autoresolve else None
+    conflict = pick(wt, e["commits"], dropped, regen, regenerated, provisional, resolved)
+    if resolved and not conflict:  # A SOURCE CONFLICT IS RESOLVED IN THE BATCH: what it took, for the author and bisect
+        e["autoresolved"] = resolved
+        wlog(d, f"{e['id']}: auto-resolved in the batch, its full check the verification: "
+                + "; ".join(f"{m['file']} ({', '.join(m['hunks'])})" for m in resolved))
+    else:
+        e.pop("autoresolved", None)
     if regenerated:  # resolved by regeneration in this build (GENERATED FILES ARE NO OVERLAP): a failure is not its own
         e["regenerated"] = sorted(regenerated)
     else:
