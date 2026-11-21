@@ -85,9 +85,20 @@ def plan_checks(paths):
     return sorted(out)
 
 
+# THE REPO-READ PATHS (movies' read_by_lint_specs): a path of one selects every `@repo` row of the lint registry -- 136
+# of its 178 specs (2026-11-21), the 63 `@repo *.scala` rows among them, which any Scala file also selects; docs/ and
+# infra/ select their own rows (SharedFileLayoutSpec's docs/*, MongoGrantsListSpec's infra/nix/*) and every @repo path
+# those too. Modelled after the registry as it is: the lint plan is why 2026-11-19..21 kept no verdict.
+REPO_READ = ("scripts", ".github", ".claude", "test", "projectfiles", "rootfiles")
+
+
 def lint_plan(paths):
-    """The simulated hook's --lint-plan: one standing lint, and the repo-reading lints for scripts and workflows."""
-    return ["standing"] + (["repo-lints"] if any(p.split("/")[0] in ("scripts", ".github") for p in paths) else [])
+    """The simulated hook's --lint-plan: one standing lint, and the repo-reading lints the paths select (REPO_READ)."""
+    tops = {p.split("/")[0] for p in paths}
+    repo = bool(tops & set(REPO_READ))
+    return ["standing"] + (["repo-lints"] if repo else []) \
+        + (["scala-lints"] if repo or any(p.endswith(".scala") for p in paths) else []) \
+        + (["docs-lints"] if repo or "docs" in tops else []) + (["infra-lints"] if repo or "infra" in tops else [])
 
 
 def ratchet_plan(paths):
@@ -96,9 +107,22 @@ def ratchet_plan(paths):
 
 
 def reads_of(paths):
-    """What the simulated hook's checks read for paths (MINIMAL RECHECKS, the simulation's own truth)."""
-    return ({("compile", x) for x in compile_plan(paths)} | {("plan", x) for x in plan_checks(paths) if x != "sbt"}
+    """What the simulated hook's checks read for paths, but its compiles (compiles_against): MINIMAL RECHECKS, the
+    simulation's own truth."""
+    return ({("plan", x) for x in plan_checks(paths) if x != "sbt"}
             | {("lint", x) for x in lint_plan(paths) if x != "standing"} | ({("ratchets",)} if ratchet_plan(paths) else set()))
+
+
+def compiles_against(a, b):
+    """Whether one side's code is compiled against the other's (the simulation's truth): a config of one side's compile
+    plan compiles a module the other side changes -- never a module merely downstream of both (e2e)."""
+    own = lambda ps: {f"{p.split('/')[0]}/Test/compile" for p in ps if p.split("/")[0] in SBT_MODULES}
+    return bool(set(compile_plan(a)) & own(b) or set(compile_plan(b)) & own(a))
+
+
+def interact(a, b):
+    """Whether a check of one side reads what the other changed (MINIMAL RECHECKS, the simulation's truth)."""
+    return bool(reads_of(a) & reads_of(b)) or compiles_against(a, b)
 # the simulated repo's GENERATED files (red-repos.json `generated`; waiting.py GENERATED FILES ARE NO OVERLAP)
 BASELINES = ("test/resources/coupling-baseline.tsv", "test/resources/complexity-baseline.tsv",
              "test/resources/length-baseline.tsv", "test/resources/duplication-baseline.tsv")
@@ -645,7 +669,7 @@ class Sim:
     def tree_verified(self, sha, new):
         """INVARIANT 11: the pushed tree passed a check -- or (MINIMAL RECHECKS) a check passed a tree holding every
         patch it pushes, and what else the pushed tree holds shares no file and no read check with them (the
-        simulation's own read model, reads_of)."""
+        simulation's own read model, interact)."""
         tree = frozenset(self.patches_of(sha))
         if tree in self.verified:
             return True
@@ -654,7 +678,7 @@ class Sim:
         for v in self.verified:
             if set(new) <= v <= tree:
                 extra = paths(tree - v)
-                if not (set(mine) & set(extra) - set(GENERATED)) and not (reads_of(mine) & reads_of(extra)):
+                if not (set(mine) & set(extra) - set(GENERATED)) and not interact(mine, extra):
                     self.kept_pushes += 1
                     return True
         return False
@@ -1355,8 +1379,11 @@ COLLISIONS_2026_11_17 = [
 ]
 
 
-def replay_days():
-    with open(os.path.join(HERE, "fixtures", "landing-replay-7d.json")) as f:
+REPLAY_11_19 = "landing-replay-11-19.json"  # 2026-11-19..21's arrivals (CHEAPER RECHECKS' before and after)
+
+
+def replay_days(fixture="landing-replay-7d.json"):
+    with open(os.path.join(HERE, "fixtures", fixture)) as f:
         return json.load(f)["days"]
 
 

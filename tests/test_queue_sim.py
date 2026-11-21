@@ -238,8 +238,14 @@ class MinimalRecheckSimTest(unittest.TestCase):
         return out
 
     def test_a_move_outside_its_selected_paths_keeps_the_verdict(self):
-        for checks, kept in self.run_timeline(["docs/moved.md", "scripts/tool.sh"]):
+        for checks, kept in self.run_timeline(["docs/moved.md", "android/Moved.kt"]):
             self.assertEqual((checks, kept), (1, 1), "one check, its verdict kept over the move")
+
+    def test_a_script_moving_selects_the_repo_lints_a_scala_change_selects_too(self):
+        """movies' lint registry: a repo-read path (scripts/) selects every `@repo` row, the `@repo *.scala` ones among
+        them, which any Scala file selects as well (queue_sim REPO_READ)."""
+        for checks, kept in self.run_timeline(["scripts/tool.sh"]):
+            self.assertEqual((checks, kept), (2, 0), "its check, then the verify round: the lints read both")
 
     def test_a_move_inside_its_selected_paths_forces_a_recheck(self):
         for checks, kept in self.run_timeline(["common/src/main/Upstream.scala"]):
@@ -338,8 +344,9 @@ elif sys.argv[2] == "nobatchgen":  # a lone (--no-batch) change and a younger on
 elif sys.argv[2] == "baselines":
     bad = queue_sim.Sim(0, calm=True, script=list(queue_sim.BASELINES_2026_11_19)).run().violations[:1]
 elif sys.argv[2] == "chaoshold":  # chaos seeds where a checked change's push waits for a batch it is not in (7, 8
-    # since 2026-11-20: 3 and 4 no longer reach it once a red fix waiting at green is released from the waiting batch)
-    bad = [v for seed in (7, 8) for v in queue_sim.Sim(seed, trees=4, profile={**T.CHAOS, "outside_red": 0.08},
+    # since 2026-11-20: 3 and 4 no longer reach it once a red fix waiting at green is released from the waiting batch;
+    # 0 and 2 since 2026-11-21, the lint plan modelled as movies' registry is: fewer verdicts kept, other batches)
+    bad = [v for seed in (0, 2) for v in queue_sim.Sim(seed, trees=4, profile={**T.CHAOS, "outside_red": 0.08},
                                                        n_changes=14).run().violations[:1]]
 elif sys.argv[2] == "loadlone":  # the load with many lone (--no-batch) changes: since every other change batches
     # (2026-11-20), only they compete with a backlog batch for its tree
