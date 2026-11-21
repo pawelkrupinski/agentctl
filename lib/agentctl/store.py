@@ -749,6 +749,8 @@ def project_events(store=None):
                "claude_pid": aud.get("claude_pid"), "verdicts": [verdict], "tail": list(refs.get("tail") or [])[-25:],
                "event": ev["seq"], "entry": refs.get("entry"), "item_type": ev.get("item_type"),
                "item_id": ev.get("item_id")}
+        if refs.get("alert_item"):  # one item, several audiences (reverts.py: the lander's and the orchestrator's)
+            rec["alert_item"] = refs["alert_item"]
         try:
             red = st.item("red", ev["item_id"]) if ev.get("item_type") == "red" and ev.get("item_id") else None
         except Exception:

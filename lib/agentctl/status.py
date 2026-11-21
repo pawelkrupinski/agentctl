@@ -165,6 +165,7 @@ def status_header(t, d=None, probes=True):
          "code": d.get("version"), "rev": d.get("rev"), "network": d.get("network"), "waiting": d.get("waiting") or [],
          "queued": d.get("queued") or [], "hold": d.get("hold"),
          "items": {k: d.get(k) or [] for k in ("changes", "batch", "reds", "conditions")},
+         "reverts": d.get("reverts") or [],
          "pins": pins_status(now_=t)}
     if probes:
         tunnel = read_json_file(tunnel_state_path())
@@ -191,6 +192,8 @@ def render_status_line(h, t):
     hold = h.get("hold")
     if hold and float(hold.get("until") or 0) > t:  # the store's land hold (expired ones lift at the next tick)
         parts.append("LAND " + hold_text(hold))
+    if h.get("reverts"):  # a reverted change its lander has not taken back up (reverts.py)
+        parts.append(f"REVERTED unacked: {len(h['reverts'])}")
     waiting, queued = h["waiting"], h["queued"]
     parts.append(f"waiting: {len(waiting)}" + (f" — {short(waiting)}" if waiting else "")
                  + (f" · checking: {len(queued)} — {short(queued)}" if queued else ""))
@@ -219,6 +222,8 @@ def render_status(h, t):
         out += [f"  {r['id']}  {r['state']}  deadline in {int((r['deadline'] - t) // 60)} min"
                 + (f"  (level {r['level']})" if r.get("level") else "")
                 + (f"  held: {r['hold']}" if r.get("hold") else "") for r in rows]
+    out.append(f"reverts unacked: {len(h.get('reverts') or [])}")
+    out += [revert_line(r, t) for r in h.get("reverts") or []]
     try:  # parked worktrees: shown once here, never escalated (watchdog.py, PARKED)
         out += parked_lines()
     except (Exception, SystemExit) as e:
@@ -250,6 +255,12 @@ def render_red_status(m, verbose=False):
                    + f": {r['text']}")
         if verbose:
             out += [f"      {h.get('at')} {h.get('holder')}: {str(h.get('outcome'))[:140]}" for h in r["history"]]
+    rv = m.get("reverts")
+    if isinstance(rv, dict) and "error" in rv:
+        out.append(f"reverts: unread ({rv['error']})")
+    elif rv:  # a reverted change its lander has not acknowledged (reverts.py)
+        out.append(f"reverts ({len(rv)} unacked: `agentctl revert ack <id> --rework|--drop`):")
+        out += [revert_line(r, time.time()) for r in rv]
     unread = {k: m[k]["error"] for k in ("families", "owners") if isinstance(m.get(k), dict) and "error" in m[k]}
     out += [f"{k}: unread ({e})" for k, e in unread.items()]  # a timed-out section (status_sources) is no list
     never = m.get("untracked")
@@ -749,6 +760,7 @@ def status_data(store=None, now_=None, bound=None, keep=False, only=None):
                ("landing", lambda: status_landing(need(), t), 1),
                ("conditions", lambda: status_conditions(need(), t), 1),
                ("issues", lambda: status_issues(need(), t), 1),
+               ("reverts", lambda: [revert_brief(i) for i in need().items("revert", REVERT_OPEN)], 1),
                ("events", lambda: status_events(need()), 1))
     res, meta = status_sources(tuple(x for x in sources if not only or x[0] in only), b, keep=keep)
     if "error" in res.get("store", {}):

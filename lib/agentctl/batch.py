@@ -1296,6 +1296,7 @@ def write_snapshot(d, store=None):
                  changes=[brief(i) for i in open_("change")], batch=[brief(i) for i in open_("batch")],
                  reds=[brief(i) for i in open_("red")] if "red" in MACHINES else [],
                  conditions=[brief(i) for i in open_("condition")] if "condition" in MACHINES else [],
+                 reverts=[revert_brief(i) for i in open_("revert")] if "revert" in MACHINES else [],
                  asks=owner_asks(st) if "red" in MACHINES else [],  # THE OWNER'S PENDING DECISIONS (ask.py)
                  hold=hold_row(land_hold(st)),
                  waiting=[r["worktree"] for r in rows if r["state"] == "waiting"],

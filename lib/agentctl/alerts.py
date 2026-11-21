@@ -24,10 +24,10 @@
 #      so the switch-over floods nobody.
 ALERT_INDEX_VERSION = 1
 ALERT_AUDIENCES = ("owner", "author", "fixer", "info")
-ALERT_OWNER_KINDS = {"BLOCKED", "RED_BUDGET", "UNLANDED_ORPHAN", "ORPHAN_SUBMITTED"}  # a decision, what its bounded fixer
-# left undone, or recovery queueing somebody's work (its owner may need to stop it)
+ALERT_OWNER_KINDS = {"BLOCKED", "RED_BUDGET", "UNLANDED_ORPHAN", "ORPHAN_SUBMITTED", "REVERT_NOTICE"}  # a decision, what its bounded fixer
+# left undone, recovery queueing somebody's work (its owner may need to stop it), or a revert to route (reverts.py)
 ALERT_AUTHOR_KINDS = {"NOT_LANDED", "PRECHECK_REFUSED", "RED", "RED_AUTHOR", "FIX_FAILED", "FIX_NOT_COUNTED", "BRANCH_RED", "RED_REVERT",
-                      "RED_BLAME", "RED_RELAND", "ENDED", "USAGE", "UNKNOWN", "STALLED"}
+                      "REVERTED", "RED_BLAME", "RED_RELAND", "ENDED", "USAGE", "UNKNOWN", "STALLED"}
 # a change's final verdict to its author (review round 7: routed `info`, a LANDED reached no `inbox wait --audience
 # author` -- 2b8927680's author waited 3000 s for it). Each is an entry of its own, under its change's id: it closes
 # its worktree's live land alert and is never one itself (a later change's NOT LANDED would merge into it, over its
@@ -463,6 +463,8 @@ def alert_probe(st, item, e, t, ctx=None):
         wt = item[3:].split(":", 1)[0]
         if wt and os.path.isabs(wt) and not os.path.isdir(wt):
             return "its worktree is gone", None
+    if item.startswith("revert-owner:"):  # a revert notice's orchestrator / escalation alert (reverts.py)
+        item = "revert:" + item[len("revert-owner:"):].split("/", 1)[0]
     typ, _, iid = item.partition(":")
     if typ in MACHINES and iid:
         # ANY STORE ITEM WITH A STATE (2026-11-19: issue 55799d's escalation stayed unread a day after the issue was

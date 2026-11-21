@@ -1563,7 +1563,7 @@ def repo_dispatch_off(store, o_r):
 def red_status(store, verbose=False):
     """`agentctl red status`: rendered from the status model (its reds, families and dispatcher sections)."""
     print(render_red_status(status_data(store=store, now_=store.clock(), only=("reds", "families", "owners", "dispatcher",
-                                                                                 "untracked")),
+                                                                                 "untracked", "reverts")),
                             verbose))
     return 0
 

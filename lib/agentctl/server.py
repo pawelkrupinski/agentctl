@@ -1168,7 +1168,8 @@ def mirror_state(st=None, now_=None):
 # deadline exit is a quiet retirement nobody else ticks: tick_quiet_deadlines moves them.
 DEADLINE_TICKS = {"change": "tick_changes", "batch": "tick_batch", "watch": "tick_watches", "hold": "tick_land_hold",
                   "red": "red_tick", "branch-red": "settle_branch_reds", "condition": "recovery_tick",
-                  "issue": "tick_issues", "lander": "tick_quiet_deadlines", "explorer-flip": "tick_quiet_deadlines"}
+                  "issue": "tick_issues", "lander": "tick_quiet_deadlines", "explorer-flip": "tick_quiet_deadlines",
+                  "revert": "tick_reverts"}
 QUIET_DEADLINE_TYPES = tuple(k for k, v in DEADLINE_TICKS.items() if v == "tick_quiet_deadlines")
 
 
@@ -1214,6 +1215,7 @@ def server_steps(repo, d, shared):
             ("red tick", lambda: maybe_red_tick(repo)),
             ("recovery", maybe_recovery_tick),
             ("issues", lambda: [wlog(d, f"tick: {x}") for x in tick_issues()]),
+            ("reverts", lambda: [wlog(d, f"tick: {x}") for x in tick_reverts(repo)]),  # reverts.py: told their landers
             ("quiet deadlines", lambda: [wlog(d, f"tick: {x}") for x in tick_quiet_deadlines()]),
             ("stats", shared(lambda: maybe_stats_pass(repo, d))))
 
@@ -1268,6 +1270,7 @@ def sync_steps(repo, d, o_r):
             ("claims", duty(sync_claims)),
             ("dispatcher", duty(dispatch)),
             ("pins", duty(pins)), ("drift explorer", duty(explorer)),
+            ("revert notes", duty(lambda: [err(x) for x in revert_notes()])),
             ("fixer landing", lambda: [err(f"red: {x}") for x in fixers_land_watch()]),
             ("network watch", network_watch), ("tunnel probe", tunnel_watch),
             ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep()]),

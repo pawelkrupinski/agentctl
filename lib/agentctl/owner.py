@@ -111,17 +111,23 @@ def owner_worktree(repo, fam, rec):
         if r.returncode != 0:
             return None
     try:
-        common = git(wt, "rev-parse", "--git-common-dir", check=False).stdout.strip()
-        excl = os.path.join(wt if not os.path.isabs(common) else "", common, "info", "exclude")
-        os.makedirs(os.path.dirname(excl), exist_ok=True)
-        have = open(excl).read() if os.path.exists(excl) else ""
-        add = [p for p in (OWNER_NOTEBOOK, "RED-INBOX.md", "RED-NUDGE.md", "RED-STOP.md") if p not in have.split()]
-        if add:
-            with open(excl, "a") as f:
-                f.write("\n".join(add) + "\n")
+        worktree_exclude(wt, (OWNER_NOTEBOOK, "RED-INBOX.md", "RED-NUDGE.md", "RED-STOP.md"))
     except OSError:
         pass
     return wt
+
+
+def worktree_exclude(wt, names):
+    """Keep agentctl's notes in worktree wt out of every commit and `git status`: each name in the clone's shared
+    info/exclude (once). Raises OSError."""
+    common = git(wt, "rev-parse", "--git-common-dir", check=False).stdout.strip()
+    excl = os.path.join(wt if not os.path.isabs(common) else "", common, "info", "exclude")
+    os.makedirs(os.path.dirname(excl), exist_ok=True)
+    have = open(excl).read() if os.path.exists(excl) else ""
+    add = [p for p in names if p not in have.split()]
+    if add:
+        with open(excl, "a") as f:
+            f.write("\n".join(add) + "\n")
 
 
 def owner_spawn(store, o_r, repo, fam, off, took, extra=()):

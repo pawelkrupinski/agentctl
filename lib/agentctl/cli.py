@@ -348,6 +348,17 @@ def main(argv=None):
     iss.add_argument("--all", action="store_true", help="with --list: closed ones too")
     iss.add_argument("--close", metavar="ID", help="close an issue (the maintainer, once fixed)")
     iss.add_argument("--note", help="with --close: what fixed it")
+    rvp = sub.add_parser("revert", help="reverted changes told to their landers: list the open notices, or ack one")
+    rvs = rvp.add_subparsers(dest="rcmd")
+    rvl = rvs.add_parser("list", help="the open notices (the default)")
+    rva = rvs.add_parser("ack", help="acknowledge a notice: you rework the change (--rework) or drop it (--drop)")
+    rva.add_argument("id", help="the notice's id (a prefix will do)")
+    how = rva.add_mutually_exclusive_group(required=True)
+    how.add_argument("--rework", action="store_true", help="you re-land it (with `Rework-Of: <sha>`)")
+    how.add_argument("--drop", action="store_true", help="it stays reverted")
+    rva.add_argument("--note", help="what you will do")
+    for p_ in (rvp, rvl):
+        p_.add_argument("--all", action="store_true", help="closed notices too")
     dp = sub.add_parser("dispatch", help="own every CI dispatch: run (the forge CLI's workflow run, recorded) / record / list",
                         description=DISPATCH_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     dps = dp.add_subparsers(dest="dcmd", required=True)
@@ -401,6 +412,6 @@ def main(argv=None):
     cf.add_argument("--write", action="store_true", help="doc: regenerate AGENTCTL.md's config reference")
     a = ap.parse_args(argv)
     handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": cmd_red, "decide": cmd_decide, "config": cmd_config, "issue": cmd_issue, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "laptop": cmd_laptop, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "github-app": cmd_github_app, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "park": cmd_park, "unpark": cmd_unpark, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "land-precheck": cmd_land_precheck, "env": cmd_env}[a.cmd]
+               "red": cmd_red, "decide": cmd_decide, "config": cmd_config, "issue": cmd_issue, "revert": cmd_revert, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "laptop": cmd_laptop, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "github-app": cmd_github_app, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "park": cmd_park, "unpark": cmd_unpark, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "land-precheck": cmd_land_precheck, "env": cmd_env}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)

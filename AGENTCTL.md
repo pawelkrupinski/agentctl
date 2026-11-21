@@ -1254,6 +1254,49 @@ briefed with the change's diff, its original worktree and why its lander could n
   runs; infra is owner-only (red-repos.json): its culprit is named but never reverted (`its pushes are the owner's`),
   and its fixer prepares the change as before.
 
+### revert: a reverted change gets back to the agent that wrote it (2026-11-21)
+
+```
+agentctl revert [list] [--all]                          # the open notices (--all: closed ones too)
+agentctl revert ack <id> --rework|--drop [--note "..."] # the lander (or its orchestrator) takes it back up, or drops it
+```
+
+The owner, 2026-11-21: movies 604134d1a landed through `agentctl land`, turned Main red (#2806-#2808), and a red fixer
+reverted it as 7380cf9d7 (`Fixes-Red: 2808`, its analysis in the message) -- and nobody told the agent that wrote it,
+nor the session that spawned that agent; the rework began only when the owner asked. Blame's own reverts revived their
+lander (above); any OTHER revert -- a fixer's, the owner's, an agent's -- reached no one. Code `lib/agentctl/reverts.py`,
+tests `tests/test_reverts.py`.
+
+- **Detected on main.** The reconciler's `reverts` step (ci-runner, every tick) reads main's new commits (cursor: meta
+  `revert_scan:<repo>`; the first scan, the last 2 days). A commit reverts others by git's `This reverts commit <sha>`
+  lines or a `Reverts: <sha>` trailer. Each reverted commit is mapped to the LANDING that brought it in through the
+  lander records (lander.py: main sha, patch-id, subject and author time, 14 days) and one `revert` item opens per
+  (revert, landing): its reverted shas and subjects, the revert's sha, subject and whole message (the analysis), the
+  red it fixed (`Fixes-Red:`), the change and its lander. A reverted commit that is itself a revert is a re-land, never
+  a notice. Blame's own revert opens one too: its revived lander acknowledges it or re-lands the change.
+- **Told.** The LANDER: an inbox entry owned by its session (`REVERTED: your <sha> "<subject>" was reverted on main by
+  <revert> (Fixes-Red: N) ...`, audience `author`, cwd its worktree, the revert's message as its tail) and, while its
+  worktree is on the laptop, `REVERTED.md` in it (the sync's `revert notes` step, once; kept out of commits by the
+  clone's `info/exclude`). Its ORCHESTRATOR -- the session that spawned it when the lander was a subagent (the lander
+  record's session id names the spawner; a top-level session's spawner is not recorded: the owner) -- an entry of
+  audience `owner` (`REVERT NOTICE: ...`), the one `inbox wait` wakes on, owned by that session. A commit with no
+  landing record (the owner's own, or older than 14 days): the owner's entry alone. Each says what to do: rework or
+  drop, `agentctl revert ack <id> --rework|--drop`, and a re-land carries `Rework-Of: <sha>`.
+- **Open until acknowledged or re-landed.** `revert ack` closes it (`acked`, by whom and how); so does main carrying the
+  change again (`reworked`): a commit with `Rework-Of: <sha>` (the reverted commit's or the revert's, 7+ hex; in the
+  message's final trailer block, as git reads trailers), a revert of the revert, or blame's `Relands-Change: <change>`.
+  An `inbox --ack` only reads the entry: the notice stays open. Its alerts close with it (the alert probe).
+- **Escalated once.** Unacknowledged `REVERT_ACK_MAX` (6 h) after it was told: `open -> escalated`, ONE escalate event
+  to the owner (`REVERT UNACKED: ...`, a notification, an unread entry of its own); then it waits quietly and expires
+  after 14 days. The machine: `open` (6 h -> `escalated`), `escalated` (14 d -> `expired`), `acked` / `reworked` /
+  `expired` (terminal); `DEADLINE_TICKS["revert"] = tick_reverts`.
+- **No policy.** A notification, never a hold or a reject: it blocks no change, so it is no `POLICIES` row and needs no
+  owner decision (policy.py's registry is for rules that hold, reject or delay).
+- **Seen.** `agentctl status`'s line says `REVERTED unacked: N` and its body lists them (`reverts unacked: N`); `red
+  status` lists them under `reverts (N unacked ...)`; `agentctl revert` prints each: id, state, reverted shas, the
+  revert, its red, who was told, how long ago. Inbox kinds `REVERTED` (author) and `REVERT_NOTICE` (owner), both in
+  `inbox wait`'s default kinds.
+
 ### listings: a listing is never proof of absence (2026-11-20)
 
 28 closed issues trusted a GitHub listing as complete (a run past the newest 50 or 200, a queued run GitHub's own
@@ -2256,7 +2299,8 @@ there and then (2026-11-16: a monitor polling `land status` had written 2,692 en
   no verdict), `NOT_LANDED`, `SUPERSEDED`, `LANDED`, `WAITING`, `HELD`, `FIX_FAILED`, `FIX_OK`, `FIX_UNVERIFIED`, `CHECK`, `OTHER`;
   from `red`: `RED_UNCLAIMED`, `RED_BUDGET`, `RED_ESCALATE`, `BLOCKED`, `RED_DISPATCHED`, `FIXER_LANDED`,
   `FIXER_FAILED`; from the blame (see "blame"): `RED_BLAME`, `RED_REVERT` (a `RED REVERT REFUTED` too), `RED_RELAND`,
-  `LANDER_REVIVED`, `LAUNCH_FAILED`; from the branch runs: `BRANCH_RED` (see "dispatch").
+  `LANDER_REVIVED`, `LAUNCH_FAILED`; from the branch runs: `BRANCH_RED` (see "dispatch"); from a revert on main:
+  `REVERTED` (its lander's), `REVERT_NOTICE` (its orchestrator's or the owner's; see "revert").
 
 #### inbox escalated: an escalation that wakes somebody (2026-10-27)
 
