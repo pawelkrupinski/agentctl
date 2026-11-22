@@ -229,5 +229,42 @@ class MakeModuleTest(unittest.TestCase):
         self.assertIn("reads namespace names: [('other', 'mid')]", r.stderr)
 
 
+
+def tools_python():
+    """The quality tools' interpreter under the REAL home (the harness's HOME is a fake one), or None."""
+    import glob, pwd
+    hits = sorted(glob.glob(os.path.join(pwd.getpwuid(os.getuid()).pw_dir, ".cache", "agentctl-quality",
+                                         "tools-*", "bin", "python")))
+    return hits[-1] if hits else None
+
+
+class StatsTest(unittest.TestCase):
+    def test_start_and_now_are_measured_from_their_snapshots_with_one_ruler(self):
+        py = tools_python()
+        if not py:
+            self.skipTest("the quality tools are not installed (hooks/pre-push installs them)")
+        lib = fake_lib()
+        repo = os.path.dirname(os.path.dirname(lib))
+        os.makedirs(os.path.join(repo, "quality"))
+        with open(os.path.join(repo, "quality", "types-baseline.tsv"), "w") as f:
+            f.write("# kind\tkey\tvalue\nmypy-errors\tmid\t3\nmypy-errors\ttop\t4\n")
+        git = lambda *a: subprocess.run(["git", "-C", repo, *a], capture_output=True, text=True, check=True).stdout
+        git("init", "-q")
+        git("add", "-A")
+        git("commit", "-qm", "start")
+        start = git("rev-parse", "HEAD").strip()
+        with open(os.path.join(lib, "top.py"), "a") as f:  # a function past method-lines (50)
+            f.write("\n\ndef long():\n" + "".join(f"    x{i} = {i}\n" for i in range(60)) + "    return x0\n")
+        git("commit", "-qam", "now")
+        r = subprocess.run([sys.executable, os.path.join(DEV, "stats.py"), "--json", "--repo", repo, "--start", start,
+                            "--python", py, "HEAD"], capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = __import__("json").loads(r.stdout)
+        self.assertEqual((out["start"]["over"]["method-lines"], out["now"]["over"]["method-lines"]), (0, 1))
+        self.assertEqual((out["start"]["functions_over_any"], out["now"]["functions_over_any"]), (0, 1))
+        self.assertEqual((out["now"]["parts"], out["now"]["modules"], out["now"]["files"]), (3, 1, 4))
+        self.assertEqual(out["now"]["mypy_errors"], 7)
+        self.assertGreater(out["now"]["lines"], out["start"]["lines"])
+
 if __name__ == "__main__":
     unittest.main()
