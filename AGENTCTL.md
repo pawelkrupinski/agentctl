@@ -2896,6 +2896,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `note_precheck_wait` | `AGENTCTL_NOTE_PRECHECK_WAIT` | `110` | s a precheck's note waits at most for the store or its item (the delays above, cut at this) |
 | `notifier` | `AGENTCTL_NOTIFIER` | - | - |
 | `notify` | `AGENTCTL_NOTIFY` | - | - |
+| `notify_timeout` | `AGENTCTL_NOTIFY_TIMEOUT` | `30` | s, each channel: an overloaded laptop's osascript cold start takes 10 s and more |
 | `orphan_fixers` | `AGENTCTL_ORPHAN_FIXERS` | `2` | orphan fixers alive at once ; one dispatched a pass |
 | `orphan_idle` | `AGENTCTL_ORPHAN_IDLE` | `7200` | its action had its time |
 | `owners_dir` | `AGENTCTL_OWNERS_DIR` | - | - |
