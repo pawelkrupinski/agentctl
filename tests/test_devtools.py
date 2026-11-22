@@ -212,6 +212,16 @@ class ImportToolsTest(unittest.TestCase):
         self.assertEqual(r.stdout, "retargeted top\n", r.stderr)
         self.assertTrue(read(lib, "top").startswith("from agentctl.core import root\nfrom agentctl.base import helper\n"))
 
+    def test_a_registration_into_another_modules_table_does_not_define_it(self):
+        parts = {"core": "", "low": "from agentctl.core import TABLE\n\n\nTABLE['low'] = 1\n",  # TABLE went to base
+                 "base": "TABLE = {'base': 1}\n",
+                 "top": "from agentctl.core import TABLE\n\n\ndef entry():\n    return TABLE\n"}
+        lib = fake_lib(parts)
+        r = tool("retarget", lib)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("from agentctl.base import TABLE\n", read(lib, "top"))
+        self.assertIn("from agentctl.base import TABLE\n", read(lib, "low"))
+
     def test_retarget_refuses_an_import_block_holding_another_statement(self):
         parts = {"core": "def root():\n    return 1\n", "base": "def helper():\n    return 1\n",
                  "top": "from agentctl.core import helper\nfrom typing import Any\nfrom agentctl.core import root\n"}

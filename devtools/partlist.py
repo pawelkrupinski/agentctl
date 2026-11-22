@@ -93,5 +93,6 @@ def defined_names(tree):
             out.add(n.name)
         elif isinstance(n, (ast.Assign, ast.AnnAssign)):
             for t in n.targets if isinstance(n, ast.Assign) else [n.target]:
-                out |= {x.id for x in ast.walk(t) if isinstance(x, ast.Name)}
+                # TABLE["k"] = ... registers into TABLE (a Load of it): it defines nothing
+                out |= {x.id for x in ast.walk(t) if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Store)}
     return out
