@@ -124,7 +124,6 @@ def stuck_obs(snap):
 # still undecided) is judged by that child: `waits_on`, no red -- the child is judged on its own. A run whose unfinished
 # jobs all wait for runners whose every slot is busy is `queued`, not stuck, whatever ran before.
 STUCK_MIN_HISTORY = 5
-GITHUB_JOB_TIMEOUT = 360 * 60  # GitHub's own timeout of a job that sets none
 UNSTARTED = ("queued", "waiting", "pending", "requested")
 
 
@@ -225,36 +224,6 @@ def run_jobs(o_r, run):
         return gh_json(o_r, "run", "view", str(run.get("databaseId")), "--json", "jobs").get("jobs") or []
     except (Exception, SystemExit):
         return None
-
-
-def queue_full(o_r, number, q):
-    """'queued: <label> full (N/N busy, M ahead, oldest Xm)' when run #number of o_r waits only on labels whose every
-    serving runner is up with all its slots busy, else None (a free slot, a runner down, or nothing known: stuck)."""
-    if not q or number is None:
-        return None
-    waits = q.get("waiting_jobs") or []
-    mine = [w for w in waits if w.get("repo") == o_r and str(w.get("run")) == str(number)]
-    if not mine:
-        return None
-    says = []
-    for label in sorted({w.get("label") for w in mine}):
-        try:
-            want = set(json.loads(label))
-            serving = {n: r for n, r in ((q.get("limits") or {}).get("runners") or {}).items()
-                       if want <= set(json.loads(r.get("labels") or "[]"))}
-        except (ValueError, TypeError):
-            return None
-        if not serving or any(r.get("state") != "running" for r in serving.values()):
-            return None
-        cap = sum(int(r.get("capacity") or 0) for r in serving.values())
-        busy = sum(1 for x in q.get("running") or [] if x.get("runner") in serving)
-        if busy < cap:
-            return None
-        queue_ = [int(w.get("secs") or 0) for w in waits if w.get("label") == label]
-        own = max(int(w.get("secs") or 0) for w in mine if w.get("label") == label)
-        says.append(f"{', '.join(sorted(want))} full ({busy}/{cap} busy, {sum(1 for x in queue_ if x > own)} ahead, "
-                    f"oldest {fmt_age(max(queue_))})")
-    return "queued: " + "; ".join(says)
 
 
 UNKICKED_AFTER = 60 * 60  # a convergence-relevant main push with no convergence (or Identity takes) run on main by then is a red

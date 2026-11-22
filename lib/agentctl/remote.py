@@ -40,64 +40,7 @@ VERDICT_JOBS_LINE = re.compile(r"^[ \t]+VERDICT_JOBS:[ \t]*['\"]?([^'\"\n#]*)", 
 JOB_FAILED = ("failure", "timed_out", "startup_failure", "action_required")
 
 
-# A JOB GITHUB HAS NOT CREATED YET IS NOT IN THE RUN'S JOB LIST (measured 2026-11-08: precommit-check run 42463101933's
-# `check (page)`, which needs every other check, was created 1 s after `check (rest)` concluded; Main's publish-* jobs
-# are absent from a running Main's list). Judged by the listed jobs alone, every named job had concluded in that second
-# and the verdict was a success without the page checks. So the workflow's own jobs say which verdict jobs must exist:
-# each job of its `jobs:` block whose name (its `name:`, else its key) a VERDICT_JOBS glob names must be listed (a
-# `${{ ... }}` in the name matches any text, a reusable workflow's jobs are `<name> / <inner>`) before a success counts.
-JOB_KEY_LINE = re.compile(r"^( +)([A-Za-z_][\w-]*):[ \t]*(?:#.*)?$")
-JOB_NAME_LINE = re.compile(r"^( +)name:[ \t]*(.*?)[ \t]*$")
-JOB_TIMEOUT_LINE = re.compile(r"^ +timeout-minutes:[ \t]*(\d+)[ \t]*(?:#.*)?$")
 EXPRESSION = re.compile(r"\$\{\{.*?\}\}")
-
-
-def workflow_jobs(text):
-    """The jobs of a workflow, as its text declares them: [{name, timeout_s}] -- name its template (a job without
-    `name:` is named by its key), timeout_s its own `timeout-minutes` in s or None."""
-    jobs, lines = [], text.splitlines()
-    try:
-        i = next(n for n, l in enumerate(lines) if re.match(r"^jobs:[ \t]*(?:#.*)?$", l)) + 1
-    except StopIteration:
-        return []
-    job_indent = job = props_indent = None
-    for line in lines[i:]:
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        indent = len(line) - len(line.lstrip(" "))
-        if indent == 0:
-            break
-        key = JOB_KEY_LINE.match(line)
-        if job_indent is None and key:
-            job_indent = indent
-        if indent == job_indent and key:
-            job, props_indent = {"name": key.group(2), "timeout_s": None}, None
-            jobs.append(job)
-            continue
-        if job is None or indent <= job_indent:
-            continue
-        if props_indent is None:
-            props_indent = indent
-        if indent != props_indent:
-            continue
-        named, bound = JOB_NAME_LINE.match(line), JOB_TIMEOUT_LINE.match(line)
-        if named:
-            value = named.group(2)
-            quoted = re.match(r"""^(['"])(.*?)\1""", value)
-            job["name"] = quoted.group(2) if quoted else value.split(" #", 1)[0].rstrip()
-        elif bound:
-            job["timeout_s"] = int(bound.group(1)) * 60
-    return jobs
-
-
-def workflow_job_names(text):
-    """The name templates of a workflow's jobs, as its text declares them (a job without `name:` is named by its key)."""
-    return [j["name"] for j in workflow_jobs(text)]
-
-
-def workflow_job_timeouts(text):
-    """{name template: its timeout-minutes in s, or None} of a workflow's jobs."""
-    return {j["name"]: j["timeout_s"] for j in workflow_jobs(text)}
 
 
 def job_name_glob(template):
