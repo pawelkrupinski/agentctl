@@ -1,6 +1,6 @@
-"""The migration devtools (devtools/): the definition graph and its cycles, the pure-move tools (movedefs, split_part)
-and their proofs (sameast, samecode), and mkmodule turning a part into a real module, each on a small fake lib that
-loads through the real lib/agentctl/__init__.py."""
+"""The migration devtools (devtools/): the definition graph and its cycles, the move planner, the pure-move tools
+(movedefs, split_part) and their proofs (sameast, samecode), and mkmodule turning a part into a real module, each on a
+small fake lib that loads through the real lib/agentctl/__init__.py."""
 import os, re, shutil, subprocess, sys, tempfile, textwrap, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -13,6 +13,7 @@ sys.path.insert(0, DEV)
 import defgraph  # noqa: E402
 import partlist  # noqa: E402
 import partdeps  # noqa: E402
+import moveplan  # noqa: E402
 
 PARTS = {
     "core": """\
@@ -105,6 +106,40 @@ class PartDepsTest(unittest.TestCase):
         self.assertEqual(found, {"mid": set(), "top": {("entry", "other")}})  # mid reads core's root: a module
         r = tool("partdeps", fake_lib(), "--top", "5")
         self.assertEqual(r.stdout.splitlines(), ["0 mid ", "1 top other@mid"], r.stderr)
+
+
+TANGLE = {  # low and high read each other, though no definition cycle does
+    "core": PARTS["core"],
+    "low": "def c():\n    return 1\n\n\ndef a():\n    return b()\n\n\ndef a2():\n    return e()\n",
+    "high": "def b():\n    return c()\n\n\ndef e():\n    return 2\n\n\ndef top():\n    return b()\n",
+}
+
+
+class MovePlanTest(unittest.TestCase):
+    def test_the_order_puts_the_part_read_most_low(self):
+        g = moveplan.load(fake_lib(TANGLE))
+        self.assertEqual(moveplan.part_weights(g), {("low", "high"): 2, ("high", "low"): 1})
+        self.assertEqual(moveplan.part_order(g), ["high", "low"])  # read twice, reading once: it goes low
+        self.assertEqual(moveplan.upward(g, ["high", "low"]), [(1, "high", "low")])
+        self.assertEqual(moveplan.upward(g, ["low", "high"]), [(2, "low", "high")])
+
+    def test_up_raises_every_reader_and_hybrid_first_lowers_a_leaf_to_its_reader(self):
+        g = moveplan.load(fake_lib(TANGLE))
+        self.assertEqual(moveplan.move_plan(g, ["low", "high"], "up"), {"a": ("low", "high"), "a2": ("low", "high")})
+        self.assertEqual(moveplan.move_plan(g, ["low", "high"]), {"a": ("low", "high"), "e": ("high", "low")})
+        lib = fake_lib(TANGLE)
+        tsv = os.path.join(os.path.dirname(lib), "plan.tsv")
+        r = tool("moveplan", lib, "plan", "--tsv", tsv)
+        self.assertEqual(r.stdout, "moves 1\n  low -> high: 1 c\n", r.stderr)  # in its own order: high, low
+        self.assertEqual(open(tsv).read(), "c\tlow\thigh\n")
+
+    def test_stuck_follows_the_part_own_reads_to_another_part_and_who_says_both_sides(self):
+        lib = fake_lib(dict(PARTS, top=textwrap.dedent(PARTS["top"]) + "\n\ndef inner():\n    return entry()\n\n\ndef alone():\n    return 1\n"))
+        g = moveplan.load(lib)
+        self.assertEqual(moveplan.stuck(g, "top"), {"entry", "inner"})
+        self.assertEqual(moveplan.stuck(g, "mid"), set())  # it reads core's root: a module
+        self.assertEqual(tool("moveplan", lib, "stuck", "top").stdout, "3 defs; 2 stuck: entry inner\n")
+        self.assertEqual(tool("moveplan", lib, "who", "other").stdout, "other@mid\n  reads: \n  used by: top\n")
 
 
 class SuiteAtTest(unittest.TestCase):
