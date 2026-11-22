@@ -410,6 +410,33 @@ class RunawayProcessTest(unittest.TestCase):
         self.assertIn("mongod pid 700: RSS 8.0 GB", passes[-1][2])
         self.assertIn("past its WiredTiger cache 2.0 GB + margin", passes[-1][2])
 
+    def lima_vm(self, memory):
+        conf = os.path.join(self.d, "Library", "Application Support", "rancher-desktop", "lima", "0", "lima.yaml")
+        os.makedirs(os.path.dirname(conf))
+        with open(conf, "w") as f:
+            f.write(f"cpus: 2\nmemory: {memory}\n")
+
+    def test_a_vm_filling_its_configured_guest_memory_is_no_runaway(self):
+        """2026-11-22, a false alarm: "com.apple.Virtualization.VirtualMachine pid 39093: RSS 4.7 GB (from 3.5 GB at
+        16:25Z), past 4 GB, growing for 68 min" -- Rancher Desktop's Linux VM (6 GiB guest) touching its pages."""
+        self.lima_vm(6442450944)
+        passes = self.run_passes(self.climb(3.5, 4.7, 68), pid=39093, name="com.apple.Virtualization.VirtualMachine",
+                                 cpu=20.0, home=self.d)
+        self.assertTrue(all(ok for _, ok, _ in passes), [d for _, ok, d in passes if not ok][:1])
+
+    def test_a_vm_past_its_guest_memory_and_margin_still_climbing_is_a_runaway(self):
+        self.lima_vm('"2GiB"')
+        passes = self.run_passes(self.climb(3.0, 6.0, 40), pid=39093, name="com.apple.Virtualization.VirtualMachine",
+                                 cpu=20.0, home=self.d)
+        self.assertFalse(passes[-1][1])
+        self.assertIn("past its guest memory 2.0 GB + margin", passes[-1][2])
+
+    def test_each_known_kind_reads_its_own_ceiling_and_an_unknown_one_has_none(self):
+        self.assertEqual(A.proc_ceiling("java", "java -Xmx512m x", 16.0, self.d), (512 * 1024, "its -Xmx 0.5 GB"))
+        self.assertEqual(A.proc_ceiling("mongod", "mongod --wiredTigerCacheSizeGB 3", 16.0, self.d)[0], 3 * 1024 ** 2)
+        self.assertIsNone(A.proc_ceiling("com.apple.Virtualization.VirtualMachine", "", 16.0, self.d), "no VM config")
+        self.assertIsNone(A.proc_ceiling("fseventsd", "", 16.0, self.d))
+
     def test_a_big_server_creeping_by_a_sliver_is_no_runaway(self):
         """300 MB over 45 min on a 9 GB process is no trend: growth must reach 5% or 500 MB over the window."""
         passes = self.run_passes(self.climb(9.1, 9.4, 45), pid=900, name="postgres", cpu=5.0)

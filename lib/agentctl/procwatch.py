@@ -20,7 +20,7 @@
 #
 # 17:10Z the same day: "mongod pid 65521: RSS 9.2 GB (from 9.1 GB at 16:25Z), past 4 GB, growing for 45 min" -- the
 # local prod mirror warming WiredTiger's cache (no cacheSizeGB: 50% of (RAM - 1 GB), ~68 GB here). So a process with a
-# known memory CEILING is judged against it (CEILINGS: a JVM's -Xmx, a mongod's cache), and growth must reach
+# known memory CEILING is judged against it (CEILINGS: a JVM's -Xmx, a mongod's cache, a VM's guest memory), and growth must reach
 # WP_GROWTH_PCT or WP_GROWTH_MB over the window: 1% of a big long-lived server is its noise.
 WP_RSS_GB = 4.0
 WP_CPU_PCT = 90.0
@@ -89,18 +89,73 @@ def mongod_cache_kb(args: str, ram: float) -> int:
     return int(gb * 1024 * 1024)
 
 
-def proc_ceiling(name: str, args: str, ram: float) -> Optional[tuple[int, str]]:
+LIMA_MEMORY = re.compile(r"^memory:\s*[\"']?(\d+(?:\.\d+)?)\s*([KMGT]?)i?B?[\"']?\s*$", re.M)
+DOCKER_MEMORY = re.compile(r"\"[Mm]emoryMiB\"\s*:\s*(\d+)()")
+SIZE_UNITS = {"K": 1024, "M": 1024 ** 2, "G": 1024 ** 3, "T": 1024 ** 4}
+# Where a Linux VM's guest memory is configured, under HOME: (glob, its memory line, the bytes of a bare number).
+VM_MEMORY_CONFIGS = (
+    ("Library/Application Support/rancher-desktop/lima/*/lima.yaml", LIMA_MEMORY, 1),
+    (".lima/*/lima.yaml", LIMA_MEMORY, 1),
+    (".colima/_lima/*/lima.yaml", LIMA_MEMORY, 1),
+    (".colima/*/colima.yaml", LIMA_MEMORY, 1024 ** 3),
+    ("Library/Group Containers/group.com.docker/settings-store.json", DOCKER_MEMORY, 1024 ** 2),
+    ("Library/Group Containers/group.com.docker/settings.json", DOCKER_MEMORY, 1024 ** 2),
+)
+
+
+def _configured_kb(path: str, line: re.Pattern[str], bare: int) -> Optional[int]:
+    """The KB of the memory `line` reads in config `path` (a bare number counted in `bare` bytes), or None."""
+    try:
+        with open(path) as f:
+            m = line.search(f.read())
+    except OSError:
+        return None
+    return int(float(m.group(1)) * (SIZE_UNITS[m.group(2).upper()] if m.group(2) else bare)) // 1024 if m else None
+
+
+def vm_memory_kb(home: str) -> Optional[int]:
+    """The KB of the largest guest memory a Linux VM here is configured with (Rancher Desktop, lima, colima, Docker
+    Desktop: VM_MEMORY_CONFIGS), or None. A VM process names no instance, so the largest bounds them all."""
+    found = [_configured_kb(path, line, bare) for pattern, line, bare in VM_MEMORY_CONFIGS
+             for path in glob.glob(os.path.join(home, pattern))]
+    return max((kb for kb in found if kb), default=None)
+
+
+def _jvm_ceiling(args: str, ram: float, home: str) -> Optional[tuple[int, str]]:
+    xmx = jvm_xmx_kb(args)
+    return (xmx, f"its -Xmx {xmx / 1024 / 1024:.1f} GB") if xmx else None
+
+
+def _mongod_ceiling(args: str, ram: float, home: str) -> Optional[tuple[int, str]]:
+    cache = mongod_cache_kb(args, ram)
+    return cache, f"its WiredTiger cache {cache / 1024 / 1024:.1f} GB"
+
+
+def _vm_ceiling(args: str, ram: float, home: str) -> Optional[tuple[int, str]]:
+    guest = vm_memory_kb(home)
+    return (guest, f"its guest memory {guest / 1024 / 1024:.1f} GB") if guest else None
+
+
+# The process kinds that set their own memory ceiling, and how to read it from a command line, the RAM GB and HOME:
+# a JVM's -Xmx, a mongod's WiredTiger cache, a Linux VM's configured guest memory (Docker / colima / Rancher Desktop's,
+# which `run-script-tests --linux` and the containers use: its RSS fills toward it as the guest touches pages). Any
+# other process is held to WP_RSS_GB.
+CEILINGS: tuple[tuple[re.Pattern[str], Callable[[str, float, str], Optional[tuple[int, str]]]], ...] = (
+    (re.compile(r"^java$"), _jvm_ceiling),
+    (re.compile(r"^mongod$"), _mongod_ceiling),
+    (re.compile(r"^(com\.apple\.Virtualization\.VirtualMachine|qemu-system-\w+|vfkit|krunkit)$"), _vm_ceiling),
+)
+
+
+def ceiling_kind(name: str) -> Optional[Callable[[str, float, str], Optional[tuple[int, str]]]]:
+    """The reader of a process kind's own memory ceiling (CEILINGS), or None: an unknown kind."""
+    return next((read for kind, read in CEILINGS if kind.match(name)), None)
+
+
+def proc_ceiling(name: str, args: str, ram: float, home: str) -> Optional[tuple[int, str]]:
     """(KB, what it is) of the memory ceiling a process of `name` run with `args` sets itself, or None (CEILINGS)."""
-    if name == "java":
-        xmx = jvm_xmx_kb(args)
-        return (xmx, f"its -Xmx {xmx / 1024 / 1024:.1f} GB") if xmx else None
-    if name == "mongod":
-        cache = mongod_cache_kb(args, ram)
-        return cache, f"its WiredTiger cache {cache / 1024 / 1024:.1f} GB"
-    return None
-
-
-CEILINGS = ("java", "mongod")
+    read = ceiling_kind(name)
+    return read(args, ram, home) if read else None
 
 
 def proc_args(pid: int) -> str:
@@ -185,7 +240,7 @@ def _proc_sample(state: dict[str, Any], row: ProcRow, now_: float, ticket: Optio
     key = str(pid)
     p = state.get(key) if (state.get(key) or {}).get("name") == name else None
     p = p or {"name": name, "rss": [], "hot_since": None}
-    if name in CEILINGS and "ceiling" not in p:
+    if "ceiling" not in p and ceiling_kind(name):
         p["ceiling"] = ceiling_of(pid, name)
     p["rss"] = _keep_rss(p["rss"], rss, now_)
     p["cpu"] = cpu
@@ -233,27 +288,29 @@ def proc_fix(pid: int, name: str, cwd_of: Optional[Callable[[int], Optional[str]
 
 
 def _wp_machine(ps_out: Optional[str], tickets: Optional[list[dict[str, Any]]], args_of: Optional[Callable[[int], str]],
-                ram: Optional[float]) -> tuple[list[dict[str, Any]], Callable[[int, str], Optional[tuple[int, str]]]]:
-    """(the live governor tickets, a process's memory ceiling by pid and name): from the given tickets, command lines
-    and RAM GB, else the real machine's -- no tickets nor command lines when the processes are the tests' (`ps_out`, or
+                ram: Optional[float], home: Optional[str]
+                ) -> tuple[list[dict[str, Any]], Callable[[int, str], Optional[tuple[int, str]]]]:
+    """(the live governor tickets, a process's memory ceiling by pid and name): from the given tickets, command lines,
+    RAM GB and HOME (a VM's config), else the real machine's -- no tickets nor command lines when the processes are the tests' (`ps_out`, or
     a fixed machine)."""
     real = ps_out is None and machine_fixed() is None
     args, gb = args_of or (proc_args if real else no_args), ram if ram is not None else ram_gb()
     return (tickets if tickets is not None else gov_tickets() if real else []), \
-        lambda pid, name: proc_ceiling(name, args(pid), gb)
+        lambda pid, name: proc_ceiling(name, args(pid), gb, home or HOME)
 
 
 def inv_wp(ps_out: Optional[str] = None, now_: Optional[float] = None, state_path: Optional[str] = None,
            cwd_of: Optional[Callable[[int], Optional[str]]] = None, args_of: Optional[Callable[[int], str]] = None,
-           tickets: Optional[list[dict[str, Any]]] = None, ram: Optional[float] = None) -> tuple[bool, str]:
+           tickets: Optional[list[dict[str, Any]]] = None, ram: Optional[float] = None,
+           home: Optional[str] = None) -> tuple[bool, str]:
     """WP: no process past its own RSS limit (WP_RSS_GB; a ceiling it sets itself plus headroom: a JVM's -Xmx, a mongod's
-    WiredTiger cache; a governor ticket's charge) and
+    WiredTiger cache, a VM's guest memory; a governor ticket's charge) and
     growing for WP_PERSIST_MIN minutes, or over WP_CPU_PCT (a ticket's charged cores) for WP_CPU_MIN minutes (any
     process: a system daemon too). Its samples are kept in procwatch.json between passes. The tests give `ps_out`
-    (or a fixed machine), and with it `args_of`, `tickets` and `ram`: none read from the real machine but its RAM."""
+    (or a fixed machine), and with it `args_of`, `tickets`, `ram` and `home`: none read from the real machine but its RAM and HOME."""
     path, t = state_path or state_root("procwatch.json"), now_ if now_ is not None else time.time()
     state = read_record(path) or {}
-    found = proc_watch(proc_rows(ps_out), state, t, *_wp_machine(ps_out, tickets, args_of, ram))
+    found = proc_watch(proc_rows(ps_out), state, t, *_wp_machine(ps_out, tickets, args_of, ram, home))
     try:
         write_json(path, state)
     except OSError:
