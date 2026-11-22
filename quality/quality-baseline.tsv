@@ -12,7 +12,7 @@ cognitive	WatchClaim.look	13
 cognitive	_await_entry	35
 cognitive	_check_entry	100
 cognitive	_end_group	13
-cognitive	_gh_api_once	22
+cognitive	_gh_api_once	21
 cognitive	_main_index	12
 cognitive	_push_batch_item	41
 cognitive	_push_change	95
@@ -142,7 +142,7 @@ cognitive	gating_checks	31
 cognitive	generated_parse	22
 cognitive	github_incidents	16
 cognitive	gov_admit	42
-cognitive	gov_busy_cores	21
+cognitive	gov_busy_cores	12
 cognitive	gov_capacity	14
 cognitive	gov_fits	20
 cognitive	gov_replay	27
@@ -167,7 +167,7 @@ cognitive	land_calls	19
 cognitive	land_hold	13
 cognitive	land_in_worktree	41
 cognitive	land_lock	13
-cognitive	land_loop	46
+cognitive	land_loop	39
 cognitive	land_status_entry	29
 cognitive	land_until_done	28
 cognitive	lander_index	17
@@ -178,7 +178,7 @@ cognitive	lander_spawn	14
 cognitive	lander_transcript	32
 cognitive	landing_records	97
 cognitive	lap_change_deadline	21
-cognitive	laptop_pressure	13
+cognitive	laptop_pressure	12
 cognitive	laptop_role	15
 cognitive	laptop_role_refusal	23
 cognitive	lease_loss	11
@@ -224,7 +224,6 @@ cognitive	park_release_why	21
 cognitive	pick_commits	51
 cognitive	plan_worktrees	33
 cognitive	policy_blocks	13
-cognitive	precheck_reason	15
 cognitive	pressure_reading	23
 cognitive	previous_fixer_tree	14
 cognitive	probe_checks	14
@@ -235,6 +234,7 @@ cognitive	probe_red_newer_verdict	12
 cognitive	project_changes	18
 cognitive	project_events	27
 cognitive	projected_transition	13
+cognitive	ps_busy_cores	11
 cognitive	push_batch_select	25
 cognitive	push_batchable	11
 cognitive	queue_full	20
@@ -378,7 +378,6 @@ cognitive	successor_state	34
 cognitive	superseded_duty	19
 cognitive	sweep_land_refs	21
 cognitive	sweep_repo	36
-cognitive	sweep_test_tmp	14
 cognitive	sync_onto_main	18
 cognitive	sync_steps	11
 cognitive	table_parse	13
@@ -432,6 +431,7 @@ cycle	cleanup	1
 cycle	cli	1
 cycle	config	1
 cycle	core	1
+cycle	cpu	1
 cycle	explorer	1
 cycle	fixer	1
 cycle	fixerland	1
@@ -499,8 +499,8 @@ cyclomatic	Store.transition	32
 cyclomatic	StoreAPI.handle	26
 cyclomatic	StoreAPI.route	14
 cyclomatic	_await_entry	20
-cyclomatic	_check_entry	82
-cyclomatic	_gh_api_once	20
+cyclomatic	_check_entry	81
+cyclomatic	_gh_api_once	19
 cyclomatic	_push_batch_item	33
 cyclomatic	_push_change	66
 cyclomatic	_push_checked	14
@@ -641,7 +641,6 @@ cyclomatic	generated_parse	21
 cyclomatic	gh_tally	11
 cyclomatic	github_incidents	16
 cyclomatic	gov_admit	31
-cyclomatic	gov_busy_cores	15
 cyclomatic	gov_capacity	12
 cyclomatic	gov_fits	21
 cyclomatic	gov_measured_cores	11
@@ -673,7 +672,7 @@ cyclomatic	jvm_reap	23
 cyclomatic	jvm_scan	25
 cyclomatic	land_calls	12
 cyclomatic	land_in_worktree	31
-cyclomatic	land_loop	27
+cyclomatic	land_loop	25
 cyclomatic	land_status_entry	27
 cyclomatic	land_until_done	25
 cyclomatic	lander_note_landed	18
@@ -684,7 +683,7 @@ cyclomatic	lander_spawn	16
 cyclomatic	lander_transcript	23
 cyclomatic	landing_records	123
 cyclomatic	lap_change_deadline	20
-cyclomatic	laptop_pressure	15
+cyclomatic	laptop_pressure	13
 cyclomatic	laptop_role	17
 cyclomatic	laptop_role_refusal	16
 cyclomatic	lease_loss	13
@@ -923,12 +922,13 @@ fan-out	cli	25
 fan-out	fixer	12
 fan-out	fixerland	13
 fan-out	fixerlife	16
+fan-out	gov	10
 fan-out	owner	18
 fan-out	queuebatch	16
 fan-out	queueclose	22
 fan-out	queuediff	17
 fan-out	queuepush	13
-fan-out	queuesubmit	17
+fan-out	queuesubmit	18
 fan-out	recovery	21
 fan-out	redblock	16
 fan-out	redclaim	10
@@ -957,16 +957,16 @@ file-lines	blame	970
 file-lines	branches	1385
 file-lines	ciwhy	1319
 file-lines	cleanup	519
-file-lines	gov	955
+file-lines	gov	966
 file-lines	live	743
 file-lines	maint	502
 file-lines	owner	742
 file-lines	recovery	743
 file-lines	remote	1084
 file-lines	server	1536
-file-lines	slots	1339
+file-lines	slots	1354
 file-lines	stats	611
-file-lines	status	1062
+file-lines	status	1065
 file-lines	store	992
 file-lines	tools	616
 file-lines	waiting	911
@@ -1001,7 +1001,7 @@ method-lines	gov_admit	80
 method-lines	inbox_wait	55
 method-lines	jvm_reap	61
 method-lines	land_in_worktree	74
-method-lines	land_loop	69
+method-lines	land_loop	61
 method-lines	landing_records	109
 method-lines	live_registry_read	53
 method-lines	live_stream	53
