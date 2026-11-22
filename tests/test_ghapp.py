@@ -149,6 +149,20 @@ class GhAppTest(unittest.TestCase):
         os.environ["AGENTCTL_IDENTITY"] = ""
         self.assertNotIn("GIT_CONFIG_COUNT", A.ghapp_git_env({}))
 
+    def test_git_itself_gets_the_token_from_the_helper(self):
+        """2026-11-22: ghapp became a real module and the helper's command named lib/agentctl/ghapp.py (its __file__),
+        not the entry: git ran a script that died on `from agentctl.core import`, every check-branch push on ci-runner
+        said `fatal: could not read User`, and four changes were re-queued as "an infra failure" for hours."""
+        os.environ.pop("AGENTCTL_GHAPP_GIT", None)
+        env = A.ghapp_git_env({"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", "/"),
+                               **{k: os.environ[k] for k in ENV_KEYS if k in os.environ}})
+        r = subprocess.run(["git", "credential", "fill"], input="protocol=https\nhost=github.com\n"
+                           "path=pawelkrupinski/movies.git\n\n", capture_output=True, text=True, timeout=60,
+                           env={**env, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": ""})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("username=x-access-token", r.stdout)
+        self.assertRegex(r.stdout, r"password=ghs_11_movies_")
+
     def test_forge_github_reads_with_the_repos_app_token(self):
         os.environ["AGENTCTL_FORGE"] = "github"
         self.assertTrue(A.forge_env("pawelkrupinski/movies")["GH_TOKEN"].startswith("ghs_11_movies_"))

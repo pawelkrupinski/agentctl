@@ -12,6 +12,7 @@ import urllib.request
 from agentctl.core import NoReadAccess, err, process_cache, state_root
 from agentctl.timefmt import parse_time
 from agentctl.statefile import read_record, write_json
+from agentctl.selfcode import TOOL_PATH
 
 
 # ---------------------------------------------------------------- github-app (github-return plan §4.1 W5b, §4.2)
@@ -146,9 +147,9 @@ def ghapp_git_env(env=None):
     env = os.environ if env is None else env
     if not ghapp_enabled() or env.get("AGENTCTL_GHAPP_GIT") == "1":
         return env
-    me = os.path.realpath(globals().get("__file__") or sys.argv[0])
+    # the ENTRY, never this file's own path: a real module run as a script cannot import its package (2026-11-22)
     pairs = [("credential.https://github.com.helper", ""),  # no other helper (the osxkeychain) answers first
-             ("credential.https://github.com.helper", f"!{sys.executable} {me} github-app credential"),
+             ("credential.https://github.com.helper", f"!{sys.executable} {TOOL_PATH} github-app credential"),
              ("credential.https://github.com.useHttpPath", "true")]
     n = int(env.get("GIT_CONFIG_COUNT") or 0)
     for i, (k, v) in enumerate(pairs):
