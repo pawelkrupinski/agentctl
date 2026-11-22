@@ -15,10 +15,11 @@ from agentctl.queuesubmit import sweep_land_refs
 from agentctl.watchtick import tick_watches
 from agentctl.queueclose import close_landed_changes, stranded_changes
 from agentctl.queuepush import tick_changes
-from agentctl.batch import say_batch, tick_batch, tick_land_hold
 from agentctl.status import tick_issues
 from agentctl.redtick import maybe_publish_gate, maybe_red_tick
 from agentctl.serverclone import clone_heal_tick
+from agentctl.landhold import tick_land_hold
+from agentctl.batch import say_batch, tick_batch
 
 
 def gate_is_red_now() -> bool:

@@ -828,7 +828,6 @@ cyclomatic	workflow_triggers	12
 cyclomatic	worktree_holding	12
 cyclomatic	write_snapshot	24
 file-lines	alerts	719
-file-lines	batch	1150
 file-lines	blame	833
 file-lines	branches	843
 file-lines	ciwhy	760

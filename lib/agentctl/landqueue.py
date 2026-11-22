@@ -6,28 +6,33 @@ import os
 import signal
 import time
 from typing import Any
-from agentctl.core import git, git_ok, host_role
-from agentctl.timefmt import ts
+from agentctl.core import fmt_age, git, git_ok, host_role
+from agentctl.timefmt import hhmmz, ts
 from agentctl.statefile import read_json_file, read_record
-from agentctl.store import open_store
-from agentctl.procs import safe_cwd
+from agentctl.store import machine_state, open_store
 from agentctl.repos import movies_repo_path
 from agentctl.waitingdir import ENTRY_FINAL, waiting_entries, waiting_state
+from agentctl.procs import safe_cwd
 from agentctl.owned import lock_held
 from agentctl.clones import main_clone
 from agentctl.queueslots import entry_owned, set_change
 from agentctl.queue import hold_text, land_hold
 from agentctl.queuerecheck import queued_entries
+from agentctl.changekind import HOLD_SHOWN
 from agentctl.waiting import GATE_UNREAD, cancel_entry_remote, cancel_submitted, gate_unread_why
+from agentctl.queuesubmit import landed_sha_of
 from agentctl.redseen import gate_reds
-from agentctl.remote import await_entry, offer_token, spawn_waiting_processor, waiting_processor_alive
+from agentctl.remote import (
+    await_entry, offer_token, remote_check_lines, spawn_waiting_processor, waiting_processor_alive)
 from agentctl.remotestore import store_url
 from agentctl.watchtick import watch_landed
 from agentctl.queueclose import change_rows, check_entry
 from agentctl.recovery import recover_clear_hold
-from agentctl.batch import (
-    LAND_HOLD_DEFAULT, batch_progress_path, batch_row_ids, check_batch, hold_by, land_hold_release, land_hold_set,
-    land_status_entry, land_status_line, status_batch, waiting_service)
+from agentctl.batchitem import status_batch
+from agentctl.landhold import LAND_HOLD_DEFAULT, hold_by, land_hold_release, land_hold_set
+from agentctl.batch import batch_progress_path, batch_row_ids
+from agentctl.batchcheck import check_batch
+from agentctl.tickservice import waiting_service
 
 
 def waiting_repo(a: argparse.Namespace) -> str:
@@ -198,4 +203,48 @@ def cancel_waiting(entry: str, repo: str, d: str) -> int:
     set_change(d, e, "cancelled", event={"text": f"{e['id']}: cancelled"}, why="cancelled by `agentctl land cancel`",
                decided=ts())  # the next batch is assembled without it
     print(f"cancelled {e['id']}")
+    return 0
+
+
+def land_status_line(r: dict[str, Any], bt: dict[str, Any] | None, in_batch: set[str], t: float) -> str:
+    """`land status`'s line for change row r (change_rows): its state, its KIND when it is a red fix, the batch it is
+    in, its hold, and whether it is past its deadline -- no held change is silent (tests/queue_sim.py checks it)."""
+    left = int(r["deadline"] - t)
+    return (f"  {r['id']}  {r['state']}  {r['worktree']}  {str(r['head'] or '')[:10]}  deadline in {left // 60} min"
+            + (f"  [{r['kind']}]" if r.get("kind") else "")
+            + (f"  (in batch {bt['id']}: {bt['state']})" if bt and r["id"] in in_batch else "")
+            + (f"  held: {r['hold']}" if r.get("hold") else "")
+            + (f"  AUTO-RESOLVED in the batch: {r['resolved']}" if r.get("resolved") else "")
+            + (f"  PAST ITS DEADLINE (level {r['level']})" if left < 0 else ""))
+
+
+def land_status_entry(st: Any, entry: str, t: float) -> int:
+    """`land status <entry>`: ONE change -- the item whose id is `entry`, else the one whose id contains it -- open or
+    decided: its state, worktree and head, then its verdict (LANDED <sha> / NOT LANDED: <why>) or what it waits on.
+    A VERDICT IS DURABLE (queueuntil.py): an agent whose wait died reads it here after the fact. 1 when none or several
+    match."""
+    items = st.items("change")
+    hits = [it for it in items if it["id"] == entry] or [it for it in items if entry in it["id"]]
+    if len(hits) != 1:
+        print(f"no single change matches {entry!r}" + (f": {', '.join(it['id'] for it in hits[:8])}" if hits else "")
+              + " (`agentctl land status` lists the open ones)")
+        return 1
+    it = hits[0]
+    d = it.get("data") or {}
+    print(f"{it['id']}  {it['state']}  {d.get('worktree')}  {str(d.get('head') or '')[:10]}")
+    if it["state"] == "landed":
+        print(f"LANDED {d.get('landed_sha') or landed_sha_of(it['id'], d)} (queued {it['id']})")
+    elif machine_state("change", it["state"]).terminal:
+        why = str(d.get("why") or f"{it['id']} {it['state']}")
+        print(why if why.startswith(("NOT LANDED", "SUPERSEDED")) else f"NOT LANDED: {why}")
+    else:
+        hold = (d.get("hold") or {}).get("why") if it["state"] in HOLD_SHOWN else None
+        print(f"OPEN: {it['state']} for {fmt_age(t - float(it.get('entered_at') or t))}"
+              + (f", held: {hold}" if hold else "") + f"; deadline in {int((it['deadline'] - t) // 60)} min")
+        if it["state"] == "checking":
+            for line in remote_check_lines(d.get("check"), t) or [
+                    "check: no remote check recorded (a local check tree, or its executor is starting)"]:
+                print(line)
+    for r in d.get("rechecks") or []:  # MINIMAL RECHECKS (queuerecheck.py): why each round after the first ran, or did not
+        print(f"recheck: {hhmmz(r.get('at') or 0)} {r.get('kind')} on {r.get('main') or '?'}: {r.get('why')}")
     return 0

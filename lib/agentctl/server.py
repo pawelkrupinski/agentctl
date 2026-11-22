@@ -22,15 +22,15 @@ from agentctl.queueslots import entry_queued_since
 from agentctl.conflicts import CONFLICT_PLACE_KEPT
 from agentctl.queuerecheck import queued_entries, same_change_source
 from agentctl.cistate import state_read
+from agentctl.laptoprole import laptop_role_refusal, laptop_role_speaks
 from agentctl.waiting import cancel_submitted, supersede
 from agentctl.queuesubmit import SUBMIT_FIELDS
 from agentctl.remotestore import RemoteStore, STORE_PORT, store_url
 from agentctl.blame import blame_land_refusal
-from agentctl.batch import TICK
 from agentctl.redhold import red_unheld
-from agentctl.laptoprole import laptop_role_refusal, laptop_role_speaks
 from agentctl.storeauth import (
     store_secret, store_secret_path, store_token_issue, store_token_revoke, store_token_user, store_tokens_load)
+from agentctl.tickrun import TICK
 
 
 # ---------------------------------------------------------------- phase 2: the store over HTTP (design §6.3, §13 phase 2)
