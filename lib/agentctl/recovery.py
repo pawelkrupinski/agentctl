@@ -741,3 +741,22 @@ def own_inbox_entry(e, who=None):
                 if p == top or p.startswith(top.rstrip("/") + "/"):
                     return True
     return False
+
+
+def token_unavailable_note(ns: str, why: str) -> None:
+    """No source had the token: ONE condition per spell (UNKNOWN in the inbox), cleared by the token probe -- the
+    processor holds one again -- with its entry acked."""
+    if ns != "movies" or _noting_token[0]:  # the sync's store is remote: its call needs this very token -- once
+        return
+    _noting_token[0] = True
+    try:
+        open_condition("UNKNOWN", f"UNKNOWN: token unavailable ({why}): run `secrets unlock {token_vault_key('pawelkrupinski/movies')[0]}` in any session (the store token's vault); the "
+                                  "next land or `waiting status` re-seeds the processor",
+                       run_probe("token", {"ns": ns}), [], key=f"token-{ns}", command="token", exit_code=2)
+    except (Exception, SystemExit) as e:
+        err(f"token: could not note the missing token ({str(e)[:120]})")
+    finally:
+        _noting_token[0] = False
+
+
+_noting_token = [False]  # token_unavailable_note is running: the remote store's own token read must not recurse

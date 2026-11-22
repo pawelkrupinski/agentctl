@@ -309,15 +309,16 @@ class TokenSaidOnTransitionTest(unittest.TestCase):
 
     def setUp(self):
         import io
-        self.saved = A.token_unavailable_note, A.interactive_foreground, sys.stderr
+        self.saved = list(A._token_missing_notes), A.interactive_foreground, sys.stderr
         self.notes, self.err = [], io.StringIO()
-        A.token_unavailable_note = lambda ns, why: self.notes.append(why)
+        A.wire_token_missing_note(lambda ns, why: self.notes.append(why))  # the seam cli wires the condition through
         A.interactive_foreground = lambda: False
         sys.stderr = self.err
         A._token_missing.clear()
 
     def tearDown(self):
-        A.token_unavailable_note, A.interactive_foreground, sys.stderr = self.saved
+        notes, A.interactive_foreground, sys.stderr = self.saved
+        A._token_missing_notes[:] = notes
         A._token_missing.clear()
 
     def lines(self):

@@ -552,21 +552,6 @@ def spawn_waiting_processor(repo):
                          env=detached_env(repo))
 
 
-# THE TOKEN HAND-OFF. The processor as a launchd service, or detached once its land exits, gets no answer from the vault
-# (an unlock belongs to the session that made it). So it listens on a unix socket (0600, in a 0700 directory) and a
-# process that can read the vault -- every `land` that joins `waiting`, `waiting status` / `resume`, any command whose
-# token() read the vault (seed_processor), and the watchdog's kick (kick_processor) -- hands it the token. It lives only in the processor's memory and environment (a re-exec keeps it; the push's hook and the watches it
-# starts inherit it), never on disk. Until it has one, the gate is unread: taken as red, said once in the inbox.
-def token_sock_path(d):
-    import hashlib
-    base = os.environ.get("AGENTCTL_SOCK_DIR") or f"/tmp/agentctl-{os.getuid()}"  # short: a socket path is <= 104 bytes
-    return os.path.join(base, hashlib.sha1(os.path.abspath(d).encode()).hexdigest()[:12] + ".sock")
-
-
-TOKEN_SHAPE = re.compile(r"[\w.~+/=-]{8,512}")
-TOKEN_REQUEST = b"?token\n"  # a client asking the processor for its token (not shaped like one)
-
-
 class TokenDrop:
     """The processor's end of the hand-off."""
 
@@ -667,22 +652,6 @@ def offer_token(repo):
         return bool(hand_token(path, token(slug(repo))))
     except (Exception, SystemExit):
         return False
-
-
-def hand_token(path, tok):
-    """Ask the processor at socket `path` for the token it holds and hand it `tok` when it holds another or none: True
-    when handed over, False when it already held it, None when nothing answered."""
-    import socket
-    try:
-        if token_request(path) == tok:
-            return False
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-            s.settimeout(3)
-            s.connect(path)
-            s.sendall(tok.encode())
-        return True
-    except OSError:
-        return None
 
 
 def await_entry(repo, eid, close=None):

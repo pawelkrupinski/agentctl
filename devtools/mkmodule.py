@@ -48,7 +48,7 @@ path = os.path.join(lib, f"{part}.py")
 src = open(path).read()
 tree = ast.parse(src)
 own = top_defs(tree)
-need = reads(src, path) - own - set(dir(builtins)) - {"__file__", "__name__"}
+need = {n for n in reads(src, path) - own - set(dir(builtins)) if not n.startswith("__")}  # dunders: the compiler's
 owner = {}
 for p in parts:
     if p == part:

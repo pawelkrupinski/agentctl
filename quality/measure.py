@@ -197,7 +197,7 @@ def part_graph(parts):
     graph = {}
     for part, path in parts:
         imported, bound = imports(trees[part])
-        used = global_reads(srcs[part], path) - defs[part] - bound
+        used = {n for n in global_reads(srcs[part], path) - defs[part] - bound if not n.startswith("__")}
         graph[part] = ({o for name in used for o in owners.get(name, ())} | (imported & set(trees))) - {part}
     return graph
 

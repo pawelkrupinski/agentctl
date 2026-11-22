@@ -1,5 +1,18 @@
 # agentctl, part `storetoken`: the store token and the vault: where agentctl's credentials come from (the processor's socket, the vault, the GitHub App), and noting a missing one.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import contextlib
+import os
+import re
+import sys
+import time
+from typing import Callable
+from agentctl.core import (
+    HOME, NoReadAccess, NoToken, _tokens, env_num, err, fmt_age, on_ci_runner, process_cache, run_cmd, slug)
+from agentctl.forge import ghapp_enabled, ghapp_token
+from agentctl.ghapp import ghapp_config
+from agentctl.repos import movies_repo_path
+from agentctl.waitingdir import waiting_state
 
 
 def token_ns(o_r):
@@ -111,25 +124,6 @@ def token_request(path, timeout=3):
         return b"".join(chunks).decode().strip()
 
 
-def token_unavailable_note(ns, why):
-    """No source had the token: ONE condition per spell (UNKNOWN in the inbox), cleared by the token probe -- the
-    processor holds one again -- with its entry acked."""
-    if ns != "movies" or _noting_token[0]:  # the sync's store is remote: its call needs this very token -- once
-        return
-    _noting_token[0] = True
-    try:
-        open_condition("UNKNOWN", f"UNKNOWN: token unavailable ({why}): run `secrets unlock {token_vault_key('pawelkrupinski/movies')[0]}` in any session (the store token's vault); the "
-                                  "next land or `waiting status` re-seeds the processor",
-                       run_probe("token", {"ns": ns}), [], key=f"token-{ns}", command="token", exit_code=2)
-    except (Exception, SystemExit) as e:
-        err(f"token: could not note the missing token ({str(e)[:120]})")
-    finally:
-        _noting_token[0] = False
-
-
-_noting_token = [False]  # token_unavailable_note is running: the remote store's own token read must not recurse
-
-
 def red_read_token(o_r):
     """None when o_r can be read (movies, off ci-runner, or the reader App configured: forge_env takes its token);
     NoReadAccess when ci-runner has no reader App."""
@@ -208,6 +202,20 @@ def token(o_r):
 TOKEN_MISSING_SUMMARY = 600  # s between the summaries of a still-missing token (said on its transition first)
 
 
+# THE MISSING-TOKEN SEAM: what else a missing token does is wired at the composition root (cli: recovery's
+# token_unavailable_note, a condition in the inbox); unwired -- a part loaded on its own -- only the log line.
+_token_missing_notes: list[Callable[[str, str], None]] = []
+
+
+def wire_token_missing_note(note: Callable[[str, str], None]) -> None:
+    _token_missing_notes[:] = [note]
+
+
+def note_token_missing(ns: str, why: str) -> None:
+    for note in _token_missing_notes:
+        note(ns, why)
+
+
 _token_missing = process_cache({})  # ns -> {"since", "reads", "said"}
 
 
@@ -218,7 +226,7 @@ def token_missing(ns, why, now_=None):
     m = _token_missing.get(ns)
     if m is None:
         _token_missing[ns] = {"since": t, "reads": 1, "said": t}
-        token_unavailable_note(ns, why)
+        note_token_missing(ns, why)
         line = f"the {ns} token is missing ({why}); said again only as a summary every " \
                f"{env_num('AGENTCTL_TOKEN_SUMMARY', TOKEN_MISSING_SUMMARY) / 60:.0f} min"
     else:
@@ -228,7 +236,7 @@ def token_missing(ns, why, now_=None):
         line = f"the {ns} token is still missing: {m['reads']} read(s) failed in the " \
                f"{fmt_age(t - m['since'])} since it went ({why})"
         m["said"] = t
-        token_unavailable_note(ns, why)  # the condition again, in case the first note could not be written
+        note_token_missing(ns, why)  # the condition again, in case the first note could not be written
     if not interactive_foreground():  # a foreground command prints its NoToken itself: the log is the long-lived ones'
         err(line)
     return line
@@ -267,3 +275,36 @@ def token_env(o_r, env=None):
             except (Exception, SystemExit):
                 pass
     return env
+
+
+# THE TOKEN HAND-OFF. The processor as a launchd service, or detached once its land exits, gets no answer from the vault
+# (an unlock belongs to the session that made it). So it listens on a unix socket (0600, in a 0700 directory) and a
+# process that can read the vault -- every `land` that joins `waiting`, `waiting status` / `resume`, any command whose
+# token() read the vault (seed_processor), and the watchdog's kick (kick_processor) -- hands it the token. It lives only in the processor's memory and environment (a re-exec keeps it; the push's hook and the watches it
+# starts inherit it), never on disk. Until it has one, the gate is unread: taken as red, said once in the inbox.
+def token_sock_path(d):
+    import hashlib
+    base = os.environ.get("AGENTCTL_SOCK_DIR") or f"/tmp/agentctl-{os.getuid()}"  # short: a socket path is <= 104 bytes
+    return os.path.join(base, hashlib.sha1(os.path.abspath(d).encode()).hexdigest()[:12] + ".sock")
+
+
+TOKEN_SHAPE = re.compile(r"[\w.~+/=-]{8,512}")
+
+
+TOKEN_REQUEST = b"?token\n"  # a client asking the processor for its token (not shaped like one)
+
+
+def hand_token(path, tok):
+    """Ask the processor at socket `path` for the token it holds and hand it `tok` when it holds another or none: True
+    when handed over, False when it already held it, None when nothing answered."""
+    import socket
+    try:
+        if token_request(path) == tok:
+            return False
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(3)
+            s.connect(path)
+            s.sendall(tok.encode())
+        return True
+    except OSError:
+        return None
