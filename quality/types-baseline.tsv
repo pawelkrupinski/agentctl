@@ -5,7 +5,7 @@ mypy-errors	alerts	137
 mypy-errors	ask	76
 mypy-errors	batch	506
 mypy-errors	blame	272
-mypy-errors	branches	355
+mypy-errors	branches	353
 mypy-errors	buildview	49
 mypy-errors	changekind	32
 mypy-errors	ciwhy	290
@@ -13,13 +13,13 @@ mypy-errors	classify	9
 mypy-errors	cleanup	153
 mypy-errors	cli	7
 mypy-errors	config	22
-mypy-errors	core	130
+mypy-errors	core	52
 mypy-errors	explorer	33
 mypy-errors	fixer	34
 mypy-errors	fixerland	67
 mypy-errors	fixerlife	87
 mypy-errors	fixersession	50
-mypy-errors	forge	67
+mypy-errors	forge	75
 mypy-errors	ghapp	36
 mypy-errors	gov	227
 mypy-errors	inbox	41
@@ -67,6 +67,7 @@ mypy-errors	slots	446
 mypy-errors	stats	156
 mypy-errors	status	265
 mypy-errors	store	185
+mypy-errors	storetoken	72
 mypy-errors	tools	145
 mypy-errors	upkeep	40
 mypy-errors	wait	69

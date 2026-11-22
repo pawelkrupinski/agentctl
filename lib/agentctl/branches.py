@@ -920,13 +920,6 @@ def reds_dir(*parts):
     return os.path.join(d, *parts)
 
 
-def env_num(name, default):
-    try:
-        return float(os.environ[name]) if os.environ.get(name) else default
-    except ValueError:
-        return default
-
-
 HEXISH = re.compile(r"\b[0-9a-f]{7,40}\b")
 NUMS = re.compile(r"\d+(\.\d+)?")
 
@@ -1209,11 +1202,6 @@ def contains_local(repo, sha, head):
     if not git_ok(repo, "cat-file", "-e", f"{head}^{{commit}}"):
         return None
     return git_ok(repo, "merge-base", "--is-ancestor", sha, head)
-
-
-def fmt_age(secs):
-    secs = max(0, int(secs))
-    return f"{secs // 86400} d" if secs >= 86400 else f"{secs // 3600} h" if secs >= 3600 else f"{secs // 60} min"
 
 
 _blocker_cache = process_cache({})
