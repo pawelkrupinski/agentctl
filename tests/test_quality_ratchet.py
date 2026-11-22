@@ -64,6 +64,22 @@ class FoundationsTest(unittest.TestCase):
         self.assertNotIn("fan-out a", out)  # 9 collaborators and the leaf
         self.assertEqual(measure.foundations({"x": set(), "y": {"x"}, "z": {"y", "w"}, "w": {"z"}}), {"x", "y"})
 
+    def test_a_registration_into_a_table_defines_nothing(self):
+        """`TABLE["x"] = v` in a part fills the table another part defines: the registering part uses that part, the
+        defining part does not use it back (the store's MACHINES, each machine's row registered by its owner)."""
+        graph = measure.part_graph([(p, path) for p, path in measure.sources(tree({
+            "base": "TABLE = {}\n", "owner": "LIMIT = 3\nTABLE['owner'] = LIMIT\n"})) if p != "__init__"])
+        self.assertEqual(graph, {"base": set(), "owner": {"base"}})
+
+
+    def test_a_local_of_the_same_name_is_no_use_and_a_real_module_uses_what_it_imports(self):
+        graph = measure.part_graph([(p, path) for p, path in measure.sources(tree({
+            "base": "def helper():\n    return 1\n",
+            "shadow": "def f(helper):\n    return helper\n\n\ndef g():\n    helper = 2\n    return helper\n",
+            "module": "import os\nfrom agentctl.base import helper as h\n\n\ndef k():\n    return h(), os.sep\n"}))
+            if p != "__init__"])
+        self.assertEqual(graph, {"base": set(), "shadow": set(), "module": {"base"}})
+
 
 class FrozenRowsOnlyFallTest(unittest.TestCase):
     def test_rise_refuses_fall_passes_and_update_records_the_fall(self):

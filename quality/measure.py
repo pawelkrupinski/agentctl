@@ -17,7 +17,8 @@ ratchets' limits, CLAUDE.md "Code quality ratchets"):
   cycle        <part>       1: the part is in a reference cycle (a strong component)   0
 
 ONE NAMESPACE (lib/agentctl/__init__.py): the parts never import each other, they read the names the others define,
-so a part's dependencies are the top-level names it USES that another part DEFINES. A function is keyed by its
+so a part's dependencies are the top-level names it USES (reads as a global: symtable, a local of the same name
+is none) that another part DEFINES; a real module's (MODULES) are the parts it imports. A function is keyed by its
 qualified name alone (`red_owner.step`), so a function moved to another part keeps its row; a name defined in two
 parts is keyed `<qualname>@<part>`.
 """
@@ -25,6 +26,7 @@ import ast
 import hashlib
 import io
 import os
+import symtable
 import sys
 import tokenize
 
@@ -154,22 +156,49 @@ def defined_names(tree):
         elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             for t in targets:
-                names.update(n.id for n in ast.walk(t) if isinstance(n, ast.Name))
+                # a Name stored to (`X = ...`, `a, b = ...`); `TABLE[k] = v` registers into a table, defining nothing
+                names.update(n.id for n in ast.walk(t) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store))
     return names
 
 
+def global_reads(src, path):
+    """The names a source reads at module level or as a GLOBAL inside a function or class (symtable: a local or a
+    parameter that happens to share a top-level name elsewhere is no use of it)."""
+    def walk(table):
+        out = {s.get_name() for s in table.get_symbols()
+               if s.is_referenced() and (s.is_global() or table.get_type() == "module")}
+        for child in table.get_children():
+            out |= walk(child)
+        return out
+    return walk(symtable.symtable(src, path, "exec"))
+
+
+def imports(tree):
+    """(the parts a real module imports by `from agentctl.<part> import ...`, every name any import binds)."""
+    parts, bound = set(), set()
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("agentctl."):
+            parts.add(node.module.split(".", 1)[1])
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            bound |= {(a.asname or a.name).split(".")[0] for a in node.names}
+    return parts, bound
+
+
 def part_graph(parts):
-    """{part: {parts whose top-level names it uses}}."""
-    trees = {part: ast.parse(open(path).read(), path) for part, path in parts}
+    """{part: {parts whose top-level names it uses}}: a real module's `from agentctl.<part> import` lines, and, for a
+    namespace part, the parts defining a name it reads (as a global) without importing or defining it."""
+    srcs = {part: open(path).read() for part, path in parts}
+    trees = {part: ast.parse(src, path) for (part, path), src in zip(parts, srcs.values())}
     defs = {part: defined_names(t) for part, t in trees.items()}
     owners = {}
     for part, names in defs.items():
         for name in names:
             owners.setdefault(name, set()).add(part)
     graph = {}
-    for part, tree in trees.items():
-        used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
-        graph[part] = {o for name in used - defs[part] for o in owners.get(name, ()) if o != part}
+    for part, path in parts:
+        imported, bound = imports(trees[part])
+        used = global_reads(srcs[part], path) - defs[part] - bound
+        graph[part] = ({o for name in used for o in owners.get(name, ())} | (imported & set(trees))) - {part}
     return graph
 
 
