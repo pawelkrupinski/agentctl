@@ -357,6 +357,20 @@ class SameCodeTest(unittest.TestCase):
         self.assertIn("LOAD_FAST", ops)
         self.assertFalse([op for op in ops if op.endswith("_BORROW")], ops)
 
+    def test_a_frozen_set_constant_reads_the_same_in_any_iteration_order(self):
+        """A set display of constants compiles to a frozenset constant, whose repr follows its iteration order --
+        insertion and hash collisions, not its members (samecode once called redblock's unmoved owner_cmd_unsafe
+        changed)."""
+        import samecode
+        ns = {}
+        exec("def f(a):\n    return {1, 9, 'x'} & a\n", ns)
+        code = ns["f"].__code__
+        const = next(c for c in code.co_consts if isinstance(c, frozenset))
+        other = code.replace(co_consts=tuple(frozenset(sorted(c, key=repr, reverse=True)) if c is const else c
+                                             for c in code.co_consts))
+        self.assertNotEqual(repr(const), repr(next(c for c in other.co_consts if isinstance(c, frozenset))))
+        self.assertEqual(samecode.signature(code), samecode.signature(other))
+
 
 class StatsTest(unittest.TestCase):
     def test_start_and_now_are_measured_from_their_snapshots_with_one_ruler(self):

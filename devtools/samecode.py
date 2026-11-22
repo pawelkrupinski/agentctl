@@ -39,9 +39,15 @@ def instructions(code):
     return out
 
 
+def constant(x):
+    """A constant as compared: a frozenset by its members (its repr follows its iteration order, which insertion and
+    hash collisions decide), any other by its repr."""
+    return ("frozenset", sorted(map(repr, x))) if isinstance(x, frozenset) else repr(x)
+
+
 def signature(code):
     return (instructions(code), code.co_names, code.co_varnames,
-            tuple(signature(x) if isinstance(x, types.CodeType) else repr(x) for x in code.co_consts
+            tuple(signature(x) if isinstance(x, types.CodeType) else constant(x) for x in code.co_consts
                   if "__firstlineno__" not in code.co_names or x != code.co_firstlineno))
 
 
