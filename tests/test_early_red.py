@@ -98,6 +98,9 @@ class EarlyFailureTest(EarlyBase):
 
     def test_a_cancelled_run_withdraws_its_early_red_and_stands_its_fixer_down(self):
         self.jobs(job(501, "test (rest)", conclusion="failure"), job(502, "page tests", status="in_progress"))
+        # its fixer is still at work when the run is cancelled (it holds its lease): one that ended has no STOP to read
+        os.environ["FAKE_CLAUDE_SLEEP"] = "60"
+        self.addCleanup(os.environ.__setitem__, "FAKE_CLAUDE_SLEEP", "0")
         self.tick(dispatch=True)
         it = self.only()
         row = self.st.get(A.red_lease(it["data"]["key"]))
