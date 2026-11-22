@@ -9,11 +9,23 @@
 # `sudo killall fseventsd`, which launchd restarts, and the Spotlight exclusions), for one of ours the worktree it runs
 # in. WT counts the churn itself: test suite roots past their bound (upkeep's sweep removes the ones no runner holds)
 # and the worktrees holding build output.
+#
+# 2026-11-22 16:15Z, a false alarm: "java pid 6811: RSS 4.6 GB (from 0.5 GB at 16:14Z)" -- a bitcashier fail-before sbt
+# (-Xms1500M -Xmx6000M) growing its heap toward its own -Xmx, a JVM's normal warm-up, called a runaway from one jump
+# between two samples. So the RSS rule is now: past the process's OWN limit, and growing for WP_PERSIST_MIN minutes
+# (both halves of the kept window grew: one jump is no trend). The limit is WP_RSS_GB; a JVM's is its -Xmx plus
+# WP_JVM_MARGIN of it plus WP_JVM_NONHEAP_GB (metaspace, code cache, threads, direct buffers); a process under a live
+# governor ticket (sbt-warm, gov-run, fail-before: the shell holding it, or its descendants) may also use the memory and
+# cores it was charged.
 WP_RSS_GB = 4.0
 WP_CPU_PCT = 90.0
 WP_CPU_MIN = 20
-WP_KEEP = 6  # RSS samples kept a process
-WP_GROWTH_MB = 100  # RSS growth over the kept samples that is a trend (and at least 1%)
+WP_PERSIST_MIN = 30  # minutes the RSS growth must have held before it is a trend
+WP_WINDOW_MIN = 120  # minutes of RSS samples kept a process
+WP_SAMPLE_GAP = 300  # s between kept RSS samples (the newest always the latest pass's)
+WP_GROWTH_MB = 100  # RSS growth over the kept window that is a trend (and at least 1%); half of it in each half
+WP_JVM_MARGIN = 0.25  # x a JVM's -Xmx that its RSS may exceed it by, besides the non-heap headroom
+WP_JVM_NONHEAP_GB = 1.0
 WT_STALE_MAX = 10  # suite roots past twice the sweep's bound before WT is violated
 SPOTLIGHT_EXCLUDE = ("System Settings > Spotlight > Search Privacy: add ~/projects and /private/tmp (or `sudo mdutil "
                      "-i off /private/tmp`)")
@@ -24,60 +36,135 @@ SYSTEM_FIXES = {
     "mdworker_shared": "the owner's: " + SPOTLIGHT_EXCLUDE,
 }
 OURS = re.compile(r"^(java|python3?(\.\d+)?|claude|node|sbt|bash|git)$")
+XMX = re.compile(r"(?:^|\s)-Xmx(\d+)([kKmMgGtT]?)(?=\s|$)")
+ProcRow = tuple[int, int, int, float, str]  # (pid, ppid, rss KB, %cpu, command name)
 
 
-def proc_rows(ps_out: Optional[str] = None) -> list[tuple[int, int, float, str]]:
-    """[(pid, rss KB, %cpu, command name)] of every process (ps), or of `ps_out` (the tests')."""
+def proc_rows(ps_out: Optional[str] = None) -> list[ProcRow]:
+    """[(pid, ppid, rss KB, %cpu, command name)] of every process (ps), or of `ps_out` (the tests')."""
     fixed = machine_fixed() if ps_out is None else None  # the tests' fixed machine: its own processes, else none
     out = ps_out if ps_out is not None else str(fixed.get("ps") or "") if fixed is not None else \
-        run_cmd(["ps", "-A", "-o", "pid=,rss=,pcpu=,comm="]).stdout
+        run_cmd(["ps", "-A", "-o", "pid=,ppid=,rss=,pcpu=,comm="]).stdout
     rows = []
     for line in out.splitlines():
-        parts = line.split(None, 3)
+        parts = line.split(None, 4)
         try:
-            rows.append((int(parts[0]), int(parts[1]), float(parts[2]), os.path.basename(parts[3].strip())))
+            rows.append((int(parts[0]), int(parts[1]), int(parts[2]), float(parts[3]),
+                         os.path.basename(parts[4].strip())))
         except (ValueError, IndexError):
             continue
     return rows
 
 
-def _proc_finding(p: dict[str, Any], now_: float) -> Optional[str]:
+def jvm_xmx_kb(args: str) -> Optional[int]:
+    """The KB of a JVM command line's -Xmx (its last one wins, as in java), or None."""
+    found = XMX.findall(args or "")
+    if not found:
+        return None
+    n, unit = found[-1]
+    return int(n) * {"": 1, "k": 1024, "m": 1024 ** 2, "g": 1024 ** 3, "t": 1024 ** 4}[unit.lower()] // 1024
+
+
+def proc_args(pid: int) -> str:
+    """The process's command line (ps), or ''."""
+    try:
+        return str(run_cmd(["ps", "-ww", "-o", "args=", "-p", str(pid)], timeout=10).stdout).strip()
+    except OSError:
+        return ""
+
+
+def no_args(pid: int) -> str:
+    """No command line: the tests' processes, unless they give one."""
+    return ""
+
+
+def _ticket_of(pid: int, ppids: dict[int, int], tickets: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """The live governor ticket held by `pid` or one of its ancestors, or None."""
+    by_pid = {int(t.get("pid") or 0): t for t in tickets}
+    for _ in range(32):
+        if pid in by_pid:
+            return by_pid[pid]
+        if pid <= 1 or pid not in ppids:
+            return None
+        pid = ppids[pid]
+    return None
+
+
+def _limits(p: dict[str, Any], ticket: Optional[dict[str, Any]]) -> tuple[float, str, float]:
+    """(RSS KB past which process record `p` may not grow, what that limit is, the %CPU it may hold)."""
+    gb = 1024 * 1024
+    xmx = p.get("xmx_kb")
+    rss, said = (xmx * (1 + WP_JVM_MARGIN) + WP_JVM_NONHEAP_GB * gb, f"past its -Xmx {xmx / gb:.1f} GB + margin") \
+        if xmx else (WP_RSS_GB * gb, f"past {WP_RSS_GB:g} GB")
+    cpu = WP_CPU_PCT
+    if ticket:
+        charged = float(ticket.get("mem") or 0) * gb
+        if charged > rss:
+            rss, said = charged, f"past its governor charge {charged / gb:g} GB"
+        cpu = max(cpu, float(ticket.get("cores") or 0) * 100)
+    return rss, said, cpu
+
+
+def _growing(rss: list[list[float]]) -> bool:
+    """The kept samples span WP_PERSIST_MIN and grew in both halves: a climb that held, not one jump."""
+    if len(rss) < 3 or rss[-1][0] - rss[0][0] < WP_PERSIST_MIN * 60:
+        return False
+    mid = min(rss[1:-1], key=lambda s: abs(s[0] - (rss[0][0] + rss[-1][0]) / 2))
+    step = max(WP_GROWTH_MB * 1024, rss[0][1] / 100) / 2  # 100 MB or 1% in all: noise is no trend
+    return mid[1] - rss[0][1] >= step and rss[-1][1] - mid[1] >= step
+
+
+def _proc_finding(p: dict[str, Any], now_: float, ticket: Optional[dict[str, Any]]) -> Optional[str]:
     """Why kept process record `p` is a runaway now, or None."""
     rss = p["rss"]
-    grew = rss[-1][1] - rss[0][1] >= max(WP_GROWTH_MB * 1024, rss[0][1] / 100)  # 100 MB or 1%: noise is no trend
-    big = rss[-1][1] > WP_RSS_GB * 1024 * 1024 and len(rss) > 1 and grew
+    limit, past, _cpu = _limits(p, ticket)
+    big = rss[-1][1] > limit and _growing(rss)
     hot = p.get("hot_since") is not None and now_ - p["hot_since"] >= WP_CPU_MIN * 60
     if not (big or hot):
         return None
     gb = lambda kb: f"{kb / 1024 / 1024:.1f} GB"  # noqa: E731
-    said = [f"RSS {gb(rss[-1][1])} (from {gb(rss[0][1])} at {time.strftime('%H:%MZ', time.gmtime(rss[0][0]))})"] \
-        if big else []
+    said = [f"RSS {gb(rss[-1][1])} (from {gb(rss[0][1])} at {time.strftime('%H:%MZ', time.gmtime(rss[0][0]))}), "
+            f"{past} ({gb(limit)}), growing for {(rss[-1][0] - rss[0][0]) / 60:.0f} min"] if big else []
     if hot:
         said.append(f"CPU {p['cpu']:.0f}%, over {WP_CPU_PCT:g}% for {(now_ - p['hot_since']) / 60:.0f} min")
     return ", ".join(said)
 
 
-def _proc_sample(state: dict[str, Any], pid: int, rss: int, cpu: float, name: str, now_: float) -> dict[str, Any]:
+def _keep_rss(kept: list[list[float]], rss: int, now_: float) -> list[list[float]]:
+    """The kept RSS samples moved on by one: WP_SAMPLE_GAP apart (the newest replaced until then), WP_WINDOW_MIN long."""
+    kept = kept[:-1] if len(kept) >= 2 and now_ - kept[-2][0] < WP_SAMPLE_GAP else kept
+    return [s for s in kept if now_ - s[0] <= WP_WINDOW_MIN * 60] + [[now_, rss]]
+
+
+def _proc_sample(state: dict[str, Any], row: ProcRow, now_: float, ticket: Optional[dict[str, Any]],
+                 args_of: Callable[[int], str]) -> dict[str, Any]:
     """Process pid's kept record moved on by one sample (a new one when the pid now runs another command)."""
+    pid, _ppid, rss, cpu, name = row
     key = str(pid)
     p = state.get(key) if (state.get(key) or {}).get("name") == name else None
     p = p or {"name": name, "rss": [], "hot_since": None}
-    p["rss"] = (p["rss"] + [[now_, rss]])[-WP_KEEP:]
+    if name == "java" and "xmx_kb" not in p:
+        p["xmx_kb"] = jvm_xmx_kb(args_of(pid))
+    p["rss"] = _keep_rss(p["rss"], rss, now_)
     p["cpu"] = cpu
-    p["hot_since"] = (now_ if p["hot_since"] is None else p["hot_since"]) if cpu > WP_CPU_PCT else None
+    p["hot_since"] = (now_ if p["hot_since"] is None else p["hot_since"]) if cpu > _limits(p, ticket)[2] else None
     state[key] = p
     return p
 
 
-def proc_watch(rows: list[tuple[int, int, float, str]], state: dict[str, Any],
-               now_: float) -> list[tuple[int, str, str]]:
-    """The kept samples `state` ({pid: record}) moved on by `rows`; [(pid, name, why)] of the runaways now."""
+def proc_watch(rows: list[ProcRow], state: dict[str, Any], now_: float, tickets: Optional[list[dict[str, Any]]] = None,
+               args_of: Optional[Callable[[int], str]] = None) -> list[tuple[int, str, str]]:
+    """The kept samples `state` ({pid: record}) moved on by `rows`; [(pid, name, why)] of the runaways now. `tickets`:
+    the live governor tickets; `args_of`: a pid's command line (a JVM's -Xmx)."""
+    ppids = {pid: ppid for pid, ppid, *_ in rows}
     seen, found = set(), []
-    for pid, rss, cpu, name in rows:
-        seen.add(str(pid))
-        why = _proc_finding(_proc_sample(state, pid, rss, cpu, name, now_), now_)
+    for row in rows:
+        seen.add(str(row[0]))
+        ticket = _ticket_of(row[0], ppids, tickets or [])
+        p = _proc_sample(state, row, now_, ticket, args_of or no_args)
+        why = _proc_finding(p, now_, ticket)
         if why:
-            found.append((pid, name, why))
+            found.append((row[0], row[4], why))
     for key in set(state) - seen:  # a process gone: its episode with it
         del state[key]
     return found
@@ -103,13 +190,25 @@ def proc_fix(pid: int, name: str, cwd_of: Optional[Callable[[int], Optional[str]
     return "the owner's to look at (agentctl never stops a process it did not start)"
 
 
+def _wp_machine(ps_out: Optional[str], tickets: Optional[list[dict[str, Any]]],
+                args_of: Optional[Callable[[int], str]]) -> tuple[list[dict[str, Any]], Callable[[int], str]]:
+    """(the live governor tickets, a pid's command line): the given ones, else the real machine's -- none when the
+    processes are the tests' (`ps_out`, or a fixed machine)."""
+    real = ps_out is None and machine_fixed() is None
+    return (tickets if tickets is not None else gov_tickets() if real else []), \
+        args_of or (proc_args if real else no_args)
+
+
 def inv_wp(ps_out: Optional[str] = None, now_: Optional[float] = None, state_path: Optional[str] = None,
-           cwd_of: Optional[Callable[[int], Optional[str]]] = None) -> tuple[bool, str]:
-    """WP: no process past WP_RSS_GB and growing, or over WP_CPU_PCT for WP_CPU_MIN minutes (any process: a system
-    daemon too). Its samples are kept in procwatch.json between passes."""
+           cwd_of: Optional[Callable[[int], Optional[str]]] = None, args_of: Optional[Callable[[int], str]] = None,
+           tickets: Optional[list[dict[str, Any]]] = None) -> tuple[bool, str]:
+    """WP: no process past its own RSS limit (WP_RSS_GB; a JVM's -Xmx plus headroom; a governor ticket's charge) and
+    growing for WP_PERSIST_MIN minutes, or over WP_CPU_PCT (a ticket's charged cores) for WP_CPU_MIN minutes (any
+    process: a system daemon too). Its samples are kept in procwatch.json between passes. The tests give `ps_out`
+    (or a fixed machine), and with it `args_of` and `tickets`: none read from the real machine."""
     path, t = state_path or state_root("procwatch.json"), now_ if now_ is not None else time.time()
     state = read_record(path) or {}
-    found = proc_watch(proc_rows(ps_out), state, t)
+    found = proc_watch(proc_rows(ps_out), state, t, *_wp_machine(ps_out, tickets, args_of))
     try:
         write_json(path, state)
     except OSError:

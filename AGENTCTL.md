@@ -236,8 +236,9 @@ moves it forward; nothing is a detached process that can die with its state in i
   kern.maxfiles (`$AGENTCTL_WF_PCT`; past it, it names the top three holders, and for Rancher Desktop's VM on top the
   `rdctl shell -- sudo sh -c 'sync; echo 2 > /proc/sys/vm/drop_caches'` that releases its virtiofs descriptors: on
   2026-11-20 ~200k of them, one per file a container had seen in ~25 worktrees, overflowed it, ENFILE everywhere), WP no
-  process -- a system daemon too -- holds an RSS over 4 GB that keeps growing (100 MB or 1% over its kept samples) or a CPU
-  over 90% for 20 min (lib/agentctl/procwatch.py: samples in procwatch.json; 2026-11-22 fseventsd at 21.5 GB and over
+  process -- a system daemon too -- holds an RSS past its own limit (4 GB; a JVM's -Xmx + 25% + 1 GB; a live governor
+  ticket's charged memory) that has kept growing for 30 min (both halves of its 2 h of 5-min samples grew, 100 MB or 1%
+  in all: one jump is no trend), or a CPU over 90% (a ticket's charged cores) for 20 min (lib/agentctl/procwatch.py: samples in procwatch.json; 2026-11-22 fseventsd at 21.5 GB and over
   100% for days); it names the process, its RSS and CPU trend and the fix -- a system daemon's is the OWNER's (`sudo
   killall fseventsd`, which launchd restarts; the Spotlight exclusion of ~/projects and /private/tmp): agentctl never
   stops or reconfigures what it did not start -- and one of ours by the worktree it runs in; WT the test suite's roots

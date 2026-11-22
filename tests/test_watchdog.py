@@ -335,30 +335,75 @@ class RunawayProcessTest(unittest.TestCase):
         self.state = os.path.join(self.d, "procwatch.json")
 
     def ps(self, *rows):
-        return "\n".join(f"{pid} {rss_kb} {cpu} {name}" for pid, rss_kb, cpu, name in rows)
+        """ps's lines of (pid, ppid, rss KB, %cpu, command) rows."""
+        return "\n".join(f"{pid} {ppid} {rss_kb} {cpu} {name}" for pid, ppid, rss_kb, cpu, name in rows)
 
-    def test_a_daemon_growing_past_its_rss_bound_is_named_with_the_owners_fix(self):
-        gb = 1024 * 1024
-        ok, _ = A.inv_wp(self.ps((322, 20 * gb, 40.0, "/usr/sbin/fseventsd")), now_=1000.0, state_path=self.state)
-        self.assertTrue(ok, "one sample is no trend")
-        ok, detail = A.inv_wp(self.ps((322, int(21.5 * gb), 40.0, "/usr/sbin/fseventsd")), now_=1600.0,
-                              state_path=self.state)
-        self.assertFalse(ok)
-        self.assertIn("fseventsd pid 322: RSS 21.5 GB (from 20.0 GB", detail)
+    def run_passes(self, samples, pid=322, name="/usr/sbin/fseventsd", ppid=1, cpu=40.0, **kw):
+        """One watchdog pass a minute over `samples` [(t, rss GB)]: [(t, ok, detail)]."""
+        out = []
+        for t, gb in samples:
+            ok, detail = A.inv_wp(self.ps((pid, ppid, int(gb * 1024 * 1024), cpu, name)), now_=float(t),
+                                  state_path=self.state, **kw)
+            out.append((t, ok, detail))
+        return out
+
+    @staticmethod
+    def climb(start_gb, end_gb, minutes, t0=0.0):
+        """A steady climb, sampled every minute."""
+        return [(t0 + 60 * m, start_gb + (end_gb - start_gb) * m / minutes) for m in range(minutes + 1)]
+
+    def test_a_daemon_growing_for_hours_past_its_rss_bound_is_named_with_the_owners_fix(self):
+        """The case WP was built for: fseventsd, no -Xmx, climbing to 21.5 GB."""
+        passes = self.run_passes(self.climb(20.0, 21.5, 60))
+        early = [ok for t, ok, _ in passes if t < A.WP_PERSIST_MIN * 60]
+        self.assertTrue(all(early), "growth not yet held for WP_PERSIST_MIN: no alert")
+        t, ok, detail = passes[-1]
+        self.assertFalse(ok, "an hour of growth past the bound")
+        self.assertIn("fseventsd pid 322: RSS 21.5 GB (from 20.", detail)
+        self.assertIn("growing for 60 min", detail)
         self.assertIn("`sudo killall fseventsd`", detail)
         self.assertIn("Spotlight", detail)
-        ok, _ = A.inv_wp(self.ps((322, int(21.5 * gb), 40.0, "/usr/sbin/fseventsd")), now_=2200.0,
-                         state_path=self.state)
-        self.assertFalse(ok, "past the bound, not shrinking: still the episode")
+
+    def test_one_jump_between_two_samples_is_no_runaway(self):
+        passes = self.run_passes([(0.0, 1.0)] + [(60.0 * m, 6.0) for m in range(1, 61)], name="mds_stores")
+        self.assertTrue(all(ok for _, ok, _ in passes), [d for _, ok, d in passes if not ok][:1])
+
+    def test_a_jvm_warming_toward_its_own_xmx_is_no_runaway(self):
+        """2026-11-22 16:15Z, a false alarm: a bitcashier fail-before sbt (-Xms1500M -Xmx6000M), pid 6811, went from
+        0.5 GB to 4.6 GB in a minute and on toward its -Xmx: a JVM's normal warm-up."""
+        args = "/usr/bin/java -Xms1500M -Xmx6000M -Xss4M -jar sbt-launch.jar testOnly"
+        samples = [(0.0, 0.5), (60.0, 4.6)] + self.climb(4.6, 6.8, 60, t0=60.0)[1:]
+        passes = self.run_passes(samples, pid=6811, name="java", cpu=60.0, args_of=lambda pid: args)
+        self.assertTrue(all(ok for _, ok, _ in passes), [d for _, ok, d in passes if not ok][:1])
+
+    def test_a_jvm_past_its_xmx_and_margin_still_climbing_is_a_runaway(self):
+        args = "/usr/bin/java -Xmx2g -cp x Main"
+        passes = self.run_passes(self.climb(2.0, 6.0, 40), pid=501, name="java", cpu=30.0, args_of=lambda pid: args,
+                                 cwd_of=lambda pid: os.path.join(A.HOME, "projects", "movies-wt-x"))
+        t, ok, detail = passes[-1]
+        self.assertFalse(ok)
+        self.assertIn("java pid 501: RSS 6.0 GB", detail)
+        self.assertIn("past its -Xmx 2.0 GB", detail)
+        self.assertIn("ours: it runs in ~/projects/movies-wt-x", detail)
+
+    def test_a_process_within_its_governor_tickets_charge_is_no_runaway(self):
+        """sbt-warm, gov-run, fail-before: the governor admitted them with the memory they were charged."""
+        tickets = [{"pid": 400, "mem": 12, "cores": 4, "label": "fail-before"}]
+        passes = self.run_passes(self.climb(4.0, 11.0, 60), pid=401, ppid=400, name="node", cpu=350.0,
+                                 tickets=tickets)
+        self.assertTrue(all(ok for _, ok, _ in passes), [d for _, ok, d in passes if not ok][:1])
+        passes = self.run_passes(self.climb(11.0, 16.0, 40, t0=3660.0), pid=401, ppid=400, name="node",
+                                 cpu=50.0, tickets=tickets)
+        self.assertFalse(passes[-1][1], "past its charge and climbing: a runaway after all")
 
     def test_a_big_process_that_holds_steady_is_no_runaway(self):
         gb = 1024 * 1024
-        for t, kb in ((0.0, 8 * gb), (600.0, 8 * gb + 300), (1200.0, 8 * gb + 900)):  # mds_stores at 7.9 GB, +KB
-            ok, detail = A.inv_wp(self.ps((719, kb, 9.0, "mds_stores")), now_=t, state_path=self.state)
+        for t, kb in ((0.0, 8 * gb), (600.0, 8 * gb + 300), (1200.0, 8 * gb + 900), (2400.0, 8 * gb + 1500)):
+            ok, detail = A.inv_wp(self.ps((719, 1, kb, 9.0, "mds_stores")), now_=t, state_path=self.state)
             self.assertTrue(ok, detail)
 
     def test_a_process_hot_for_twenty_minutes_is_a_runaway_and_a_cool_one_is_not(self):
-        rows = lambda cpu: self.ps((88, 50_000, cpu, "mds_stores"))  # noqa: E731
+        rows = lambda cpu: self.ps((88, 1, 50_000, cpu, "mds_stores"))  # noqa: E731
         for t in (0, 600, 1199):
             ok, _ = A.inv_wp(rows(130.0), now_=float(t), state_path=self.state)
             self.assertTrue(ok, f"hot for {t} s only")
@@ -370,8 +415,9 @@ class RunawayProcessTest(unittest.TestCase):
 
     def test_one_of_ours_is_named_by_the_worktree_it_runs_in(self):
         for t in (0.0, 1300.0):
-            ok, detail = A.inv_wp(self.ps((501, 90_000, 99.0, "java")), now_=t, state_path=self.state,
-                                  cwd_of=lambda pid: os.path.join(A.HOME, "projects", "movies-wt-x"))
+            ok, detail = A.inv_wp(self.ps((501, 1, 90_000, 99.0, "java")), now_=t, state_path=self.state,
+                                  cwd_of=lambda pid: os.path.join(A.HOME, "projects", "movies-wt-x"),
+                                  args_of=lambda pid: "java -cp x Main")
         self.assertFalse(ok)
         self.assertIn("ours: it runs in ~/projects/movies-wt-x", detail)
         self.assertNotIn("killall", detail)

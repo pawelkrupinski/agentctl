@@ -88,7 +88,7 @@ def read_meminfo(path="/proc/meminfo"):
 # one seam: tests/harness.py pins an idle 12-core 36 GB machine, so no test depends on the runner it runs on
 # (2026-10-31: GitHub's 4-core hosted runner, with its own load and RAM, failed a dozen governor, check-cap and land
 # tests that pass on the laptop and on ci-runner). A test of a reader passes its own input or sets its own probe.
-def machine_fixed():
+def machine_fixed() -> Optional[dict[str, Any]]:
     raw = os.environ.get("AGENTCTL_MACHINE")
     if not raw:
         return None
@@ -180,7 +180,7 @@ def gov_machine():
     return {"free": free_gb(), "pressure": pressure, "load1": load1, "cores": machine_cores(), "laptop": laptop}
 
 
-def gov_tickets():
+def gov_tickets() -> list[dict[str, Any]]:
     """The live tickets' records (their lock held), oldest first; a dead ticket's files are removed."""
     out = []
     for p in sorted(glob.glob(os.path.join(gov_dir(), "t-*.json"))):
