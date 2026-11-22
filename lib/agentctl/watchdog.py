@@ -198,11 +198,19 @@ def red_fix_held(it, t, facts=None, store=None):
     f = d.get("fix") or {}
     if f.get("status") == RED_WAITS_ON and f.get("red"):  # held by the red it waits on (red_waits_on_step resolves it)
         return f"waits on red {f['red']}'s fix {str(f.get('sha'))[:10]}"
-    if store is not None and f.get("entry") and f.get("status") in FIX_OPEN:  # the red's own step waits the grace out
-        ch = red_change(store, f["entry"])
+    if store is not None and f.get("entry") and f.get("status") in FIX_OPEN:
+        ch, unread = red_change_read(store, f["entry"])
+        if unread:  # an unread store is no ended change: the fix stands as recorded
+            return f"fix {f['entry']} {f.get('status')} (its change unread: {unread[:80]})"
         if ch and ch["state"] in CHANGE_ENDED and \
                 t - float(ch.get("entered_at") or 0) < env_num("AGENTCTL_RED_FIX_REQUEUE_GRACE", RED_FIX_REQUEUE_GRACE):
-            return f"fix {f['entry']} {ch['state']}: its worktree may queue it again"
+            return f"fix {f['entry']} {ch['state']}: its worktree may queue it again"  # the red's own step waits it out
+        if ch and ch["state"] not in CHANGE_ENDED and ch["state"] != "landed":
+            # THE STORE'S QUEUE DECIDES AN OPEN CHANGE: the facts' entries are the queue's files, which only ci-runner
+            # has; a change the store holds queued or checking is on its way whatever the facts read.
+            return f"fix {f['entry']} {ch['state']}"
+    if facts is not None and facts.get("queue_unread") and f.get("entry") and f.get("status") in FIX_OPEN:
+        return f"fix {f['entry']} {f.get('status')} (the queue unread: {str(facts['queue_unread'])[:80]})"
     if facts is not None and not f.get("waited_on"):  # a waited-on fix that landed is no candidate of its own
         fx = red_fix_of(it, facts)
         if fx and fx["status"] in FIX_OPEN:
@@ -255,6 +263,19 @@ def red_unheld(store, t=None, facts=None):
     return out
 
 
+def red_fix_gone_why(store, it, t):
+    """Why a fix-pending red has no fix on its way, as its re-offer says it. 2026-11-22, Identity takes #349: "no fix on
+    its way for 23 min in fix-pending" read as a queued fix overlooked, while its fix ...-779be4 had been REJECTED at
+    04:28 (its landing check's itrest row) and the requeue grace had just run out: the change and its verdict are named."""
+    f = it["data"].get("fix") or {}
+    ch = red_change(store, f.get("entry")) if f.get("entry") else None
+    if ch and ch["state"] in CHANGE_ENDED:
+        why = str((ch.get("data") or {}).get("why") or "").strip()
+        return (f"INVARIANT: its fix {f['entry']} was {ch['state']} {fmt_age(t - float(ch['entered_at']))} ago and not "
+                f"queued again" + (f" ({why[:200]})" if why else ""))
+    return f"INVARIANT: no fix on its way for {fmt_age(t - it['entered_at'])} in fix-pending"
+
+
 def red_enforce(store, facts, t):
     """THE INVARIANT, SELF-RECOVERING (the owner, 2026-10-29): a red with no live holder (red_unheld) is offered again,
     escalated, its dead fix set aside -- the dispatcher, next in the same tick, gives it a fixer. Runs after every red's
@@ -276,8 +297,7 @@ def red_enforce(store, facts, t):
                     red_put_offer(store, it)  # an offered red always has its open offer
                     acts.append(f"INVARIANT: {red_what(d)}: its offer reopened")
             elif st == "fix-pending":
-                acts += red_fix_unverifiable(store, it, f"INVARIANT: no fix on its way for "
-                                                        f"{fmt_age(t - it['entered_at'])} in fix-pending", t)
+                acts += red_fix_unverifiable(store, it, red_fix_gone_why(store, it, t), t)
             elif st == "leased":
                 acts += red_lease_ended(store, it, store.get(red_lease(d["key"])), red_block_of(it, store), t)
             else:

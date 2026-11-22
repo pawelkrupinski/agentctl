@@ -444,6 +444,68 @@ class FixTest(RedsBase):
         self.tick(advance=A.RED_FIX_GIVEUP + 60)  # never re-queued, never landed
         self.assertEqual(self.only()["state"], "offered")
 
+    def queued_fix_pending(self, name):
+        """A fix-pending red whose fix is a queued change: (its entry, the entry's file)."""
+        self.tick()
+        wt = self.r.worktree(f"repo-wt-{name}", branch=f"repo-wt-{name}")
+        self.r.write("fix.txt", f"{name}\n", at=wt)
+        sha = self.r.commit("fix FooSpec\n\nFixes-Red: 20", at=wt)
+        d = A.waiting_state(self.r.path)[0]
+        e, _ = A.queue_change(d, {"worktree": wt, "branch": f"repo-wt-{name}", "head": sha, "commits": [sha]})
+        A.save_entry(d, e)
+        self.tick()
+        self.assertEqual((self.only()["state"], self.only()["data"]["fix"]["entry"]), ("fix-pending", e["id"]))
+        return e, os.path.join(d, "entries", f"{e['id']}.json"), wt, sha
+
+    def test_a_fix_the_store_holds_checking_is_on_its_way_though_the_queue_files_lack_it(self):
+        # 2026-11-22, Identity takes #349: the queue's entry files live on ci-runner alone; a change the store holds
+        # queued or checking is the red's fix on its way whatever the facts' entries read -- never "no fix on its way".
+        e, path, wt, sha = self.queued_fix_pending("store-only")
+        self.st.put_item("change", e["id"], "checking", {"worktree": wt, "head": sha, "submitted_at": self.t[0]})
+        os.remove(path)  # the facts' queue (the entry files) no longer has it
+        self.t[0] += 3 * A.RED_FIX_GIVEUP
+        facts = A.red_fix_facts(self.r.path, self.st)
+        self.assertEqual(facts["entries"], [])
+        it = self.only()
+        self.assertEqual(A.red_fix_held(it, self.t[0], facts, self.st), f"fix {e['id']} checking")
+        self.assertEqual(A.red_enforce(self.st, facts, self.t[0]), [])
+        self.assertEqual(self.only()["state"], "fix-pending")
+
+    def test_an_unread_queue_is_never_read_as_nothing_queued(self):
+        e, _path, _wt, _sha = self.queued_fix_pending("unread")
+        real = A.waiting_state
+
+        def unreadable(repo):
+            raise OSError("[Errno 5] Input/output error: entries")
+        A.waiting_state = unreadable
+        try:
+            facts = A.red_fix_facts(self.r.path, self.st)
+        finally:
+            A.waiting_state = real
+        self.assertIn("Input/output error", facts["queue_unread"])
+        self.t[0] += 3 * A.RED_FIX_GIVEUP
+        self.assertIn(f"fix {e['id']} ", A.red_fix_held(self.only(), self.t[0], facts, self.st) or "")
+        self.assertEqual(A.red_enforce(self.st, facts, self.t[0]), [])
+
+    def test_a_rejected_fix_past_the_requeue_grace_is_offered_again_naming_its_rejection(self):
+        # 2026-11-22, Identity takes #349: its fix ...-779be4 was rejected at 04:28:56 (the landing check's itrest row);
+        # at 04:44 the invariant said "no fix on its way for 23 min in fix-pending" -- read as a queued fix overlooked.
+        e, _path, wt, sha = self.queued_fix_pending("rejected")
+        ch = self.st.put_item("change", e["id"], "checking", {"worktree": wt, "head": sha, "submitted_at": self.t[0]})
+        self.st.transition("change", e["id"], "rejected", ch["version"],
+                           data={"why": "NOT LANDED: the pre-push checks failed: deploy.LauncherJvmFlagsSpec"})
+        A.save_entry(A.waiting_state(self.r.path)[0], {**e, "status": "rejected"})
+        self.tick(advance=60)
+        self.assertEqual(self.only()["state"], "fix-pending")  # within the grace: its worktree may queue it again
+        self.t[0] += A.RED_FIX_REQUEUE_GRACE  # the invariant meets it first (the red's own step raced the fixer's move)
+        acts = A.red_enforce(self.st, A.red_fix_facts(self.r.path, self.st), self.t[0])
+        self.assertEqual(len(acts), 1, acts)
+        it = self.only()
+        self.assertEqual(it["state"], "offered")
+        outcome = it["data"]["history"][-1]["outcome"]
+        self.assertIn(f"its fix {e['id']} was rejected", outcome)
+        self.assertIn("deploy.LauncherJvmFlagsSpec", outcome)
+
     def test_a_landed_fix_no_run_ever_checks_is_set_aside_and_the_red_offered_again(self):
         self.tick()
         _wt, sha = self.fix_commit(20)

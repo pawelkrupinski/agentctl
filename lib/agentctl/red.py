@@ -1372,8 +1372,10 @@ def red_fix_facts(repo, store=None):
                 entries.append({**e, "fixes": fx})
             elif not fx and e.get("status") in FIX_OPEN:  # no Fixes-Red: linked only by the files it edits
                 untrailered.append(e)
-    except (Exception, SystemExit):
-        pass
+    except (Exception, SystemExit) as ex:  # AN UNREAD QUEUE IS NO EMPTY QUEUE (red_fix_held): said, never "nothing queued"
+        queue_unread = str(ex)[:200] or type(ex).__name__
+    else:
+        queue_unread = None
     try:
         landed = landed_fix_commits(repo)
     except (Exception, SystemExit):
@@ -1413,7 +1415,7 @@ def red_fix_facts(repo, store=None):
                 landed_at[sha] = float(r.stdout.strip())
     return {"entries": entries, "untrailered": untrailered, "landed": landed, "key_runs": {k: sorted(v) for k, v in key_runs.items()},
             "key_aside": {k: sorted(v) for k, v in key_aside.items() if v}, "landed_at": landed_at,
-            "patches": patches, "repo": repo}
+            "patches": patches, "repo": repo, "queue_unread": queue_unread}
 
 
 def red_names(d):
@@ -3512,10 +3514,16 @@ RED_FIX_REQUEUE_GRACE = 900  # $AGENTCTL_RED_FIX_REQUEUE_GRACE
 
 
 def red_change(store, eid):
+    return red_change_read(store, eid)[0]  # an unread store decides nothing: the facts stand
+
+
+def red_change_read(store, eid):
+    """(the change's store item or None, why it could not be read or None): a caller that must tell "no such change"
+    from "the store did not answer" (red_fix_held) reads both."""
     try:
-        return store.item("change", eid) if eid else None
-    except Exception:  # an unread store decides nothing: the facts stand
-        return None
+        return (store.item("change", eid) if eid else None), None
+    except Exception as e:
+        return None, str(e) or type(e).__name__
 
 
 def red_fix_fresh(store, fix):
