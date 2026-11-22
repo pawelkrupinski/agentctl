@@ -794,6 +794,11 @@ class FixTest(RedsBase):
         # offered again (the fix not linked), its next fixer asked the owner to "hold the red as fixed by 8d06b1a5ab
         # until the next nightly run proves it" (WAITING ON YOU). A fixer's own LANDED is the red's fix on its way: the
         # red waits in fix-pending, no owner item, for as long as its workflow has not run since; the next run decides.
+        # ON A TUESDAY, whatever day the suite runs: the day of ticks below must not reach the weekly Monday 03:00Z
+        # slot's deadline, past which a missed verify is re-offered by design (a9443a6) -- run on a Sunday, the test
+        # crossed it and failed (2026-11-22, refusing every push).
+        while time.gmtime(self.t[0]).tm_wday != 1:
+            self.t[0] += 86400
         it = self.outside_capture_red()
         key = it["data"]["key"]
         wt = self.r.worktree("repo-wt-capture", branch="repo-wt-capture")
