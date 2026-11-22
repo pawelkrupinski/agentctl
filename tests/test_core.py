@@ -75,6 +75,31 @@ class HostDifferencesTest(unittest.TestCase):
             self.assertTrue(os.path.isdir(sock))
             self.assertFalse(os.path.isdir(other))
 
+    def test_the_sweep_removes_tmps_dead_suite_roots_and_never_a_live_ones(self):
+        """2026-11-22: 174 /private/tmp/agentctl-t-* roots older than 2 h (197 MB) fed a runaway fseventsd: the sweep
+        read only the user temp dir and /tmp/agentctl-sock-*. Now /tmp's suite roots too -- never one whose runner is
+        alive (its owner.pid), nor one any of whose entries changed within the bound."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            dead, live, busy = (os.path.join(tmp, f"agentctl-t-{n}") for n in ("dead", "live", "busy"))
+            for p in (dead, live, busy):
+                os.makedirs(os.path.join(p, "repo", "remote.git"))
+            with open(os.path.join(live, "owner.pid"), "w") as f:
+                f.write(str(os.getpid()))
+            old = time.time() - 3 * 3600
+            for p in (dead, live, busy, os.path.join(dead, "repo"), os.path.join(live, "repo"),
+                      os.path.join(live, "owner.pid")):
+                os.utime(p, (old, old))
+            os.utime(busy, (old, old))  # its own mtime old, an entry of it written now: in use
+            saved = A.user_tmp_dir
+            A.user_tmp_dir = lambda: os.path.join(tmp, "user")
+            try:
+                n = A.sweep_test_tmp(tmp_root=tmp)
+            finally:
+                A.user_tmp_dir = saved
+            self.assertEqual((os.path.isdir(dead), os.path.isdir(live), os.path.isdir(busy)), (False, True, True))
+            self.assertEqual(n, 1)
+
     def test_a_garbled_knob_falls_back_to_its_default(self):
         os.environ["AGENTCTL_WATCH_POLL"] = "sixty"
         try:

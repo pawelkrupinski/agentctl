@@ -13,7 +13,7 @@
   every thread first), and the test is reported as WORKER DIED. The suite as a whole is bounded too (--suite-timeout, default 600 s).
 - PATTERN: only tests whose id (module.Class.test) contains one of the patterns.
 Exit 0 when every test passed, 1 otherwise. The hermetic harness (HOME, PATH, git config, timeout) is tests/harness.py."""
-import argparse, json, os, subprocess, sys, threading, time, traceback, unittest
+import argparse, json, os, shutil, signal, subprocess, sys, tempfile, threading, time, traceback, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DURATIONS = os.path.join(os.path.expanduser("~"), ".cache", "agentctl-tests", "durations.json")
@@ -88,6 +88,86 @@ def worker(timeout):
             "skipped": len(res.skipped)}) + "\n")
 
 
+# EVERY WORKER'S TEMP ROOT IS THE RUNNER'S (2026-11-22: 174 /private/tmp/agentctl-t-* dirs older than 2 h, 197 MB of
+# fake repos, fed a runaway fseventsd): a worker's own atexit never ran for a worker killed past its timeout or at the
+# suite bound, nor under a hook's `timeout -s KILL`. The runner makes the root (agentctl-t-*, as short as before: a
+# socket path inside stays <= 104 bytes), hands it over as AGENTCTL_TEST_RUN_TMP / TMPDIR (test_agentctl then makes
+# none of its own), removes it once the worker has ended however it ended, and fails the run if one survives.
+def start_worker(timeout, env, stderr):
+    """A worker process in a fresh temp root of its own (p.root)."""
+    root = tempfile.mkdtemp(prefix="agentctl-t-")
+    with open(os.path.join(root, "owner.pid"), "w") as f:  # upkeep's sweep never removes a live runner's root
+        f.write(str(os.getpid()))
+    p = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--worker", "--timeout", str(timeout)],
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, text=True,
+                         env={**env, "AGENTCTL_TEST_RUN_TMP": root, "TMPDIR": root}, cwd=HERE)
+    p.root = root
+    return p
+
+
+def end_worker(p):
+    """The worker ended (killed if it still runs), then its root removed -- tried again briefly, for a detached child
+    of a test still writing into it."""
+    if p.poll() is None:
+        try:
+            p.kill()
+        except OSError:
+            pass
+    try:
+        p.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        pass
+    for _ in range(5):
+        shutil.rmtree(p.root, ignore_errors=True)
+        if not os.path.exists(p.root):
+            return
+        time.sleep(0.5)
+
+
+def surviving(procs):
+    """The roots of `procs` still on disk."""
+    return [p.root for p in procs if os.path.exists(p.root)]
+
+
+# EVERY SUITE RUN TAKES A GOVERNOR TICKET (2026-11-22: load 131-150 on 18 cores while lanes' `python3 tests/run.py`
+# and the pre-push hook's suite ran ticketless, eight workers each): class `suite`, charged its workers' cores, held on
+# a descriptor this process keeps open (released when it ends, as movies' jvm-gate.sh gov_hold holds one). None when
+# the caller holds one already ($AGENTCTL_SUITE_TICKET: `agentctl suite`), or with no governor here. The wait is
+# bounded (SUITE_TICKET_WAIT): past it the suite runs without one, said on stderr.
+SUITE_TICKET_WAIT = 900
+
+
+def hold_ticket(jobs, env=None):
+    """(fd, ticket path) of the suite ticket now held, or None."""
+    env = os.environ if env is None else env
+    gov = env.get("AGENTCTL_SUITE_GOVERNOR") or os.path.join(os.path.dirname(HERE), "agentctl")
+    if env.get("AGENTCTL_SUITE_TICKET") or env.get("AGENTCTL_SUITE_GOVERNOR") == "-" or not os.access(gov, os.X_OK):
+        return None
+    d = env.get("AGENTCTL_GOV_DIR") or os.path.expanduser("~/.cache/agentctl/gov")
+    os.makedirs(d, exist_ok=True)
+    ticket = os.path.join(d, f"t-suite-{os.getpid()}.lock")
+    fd = os.open(ticket, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+    try:
+        r = subprocess.run([gov, "gov", "admit", "--fd", str(fd), "--ticket", ticket, "--class", "suite", "--mem", "1",
+                            "--cores", str(jobs), "--label", f"tests/run.py {os.path.dirname(HERE)}",
+                            "--pid", str(os.getpid())], pass_fds=(fd,), timeout=SUITE_TICKET_WAIT)
+        if r.returncode == 0:
+            return fd, ticket
+    except (OSError, subprocess.TimeoutExpired) as e:
+        sys.stderr.write(f"run.py: no governor ticket ({e}); running without one\n")
+    release_ticket((fd, ticket))
+    return None
+
+
+def release_ticket(held):
+    if held:
+        os.close(held[0])
+        try:
+            os.unlink(held[1])
+        except OSError:
+            pass
+
+
 def load_durations():
     try:
         with open(DURATIONS) as f:
@@ -133,7 +213,8 @@ def main():
     if a.worker:
         return worker(a.timeout)
     # The parent never imports the tests (their import sets the per-process roots), it asks a child for the list.
-    env = {k: v for k, v in os.environ.items() if k not in ("AGENTCTL_TEST_RUN_TMP", "AGENTCTL_STATE_ROOT", "TMPDIR")}
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("AGENTCTL_TEST_RUN_TMP", "AGENTCTL_STATE_ROOT", "TMPDIR", "AGENTCTL_SUITE_TICKET")}
     listing = subprocess.run([sys.executable, "-c", f"import sys; sys.argv=['run.py']; sys.path.insert(0, {HERE!r}); "
                               f"import run; print('\\n'.join(run.list_tests({a.patterns!r})))"],
                              capture_output=True, text=True, env=env, cwd=HERE, timeout=120)
@@ -151,10 +232,10 @@ def main():
     lock, todo, results, t0 = threading.Lock(), list(order), [], time.monotonic()
     procs = []
 
+    quiet = None if os.environ.get("AGENTCTL_TEST_VERBOSE") else subprocess.DEVNULL
+
     def drive(i):
-        p = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--worker", "--timeout", str(a.timeout)],
-                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(os.devnull, "w")
-                             if not os.environ.get("AGENTCTL_TEST_VERBOSE") else None, text=True, env=env, cwd=HERE)
+        p = start_worker(a.timeout, env, quiet)
         procs.append(p)
         while True:
             with lock:
@@ -168,8 +249,8 @@ def main():
                 results.append({"cls": cid, "run": 0, "secs": 0, "times": {}, "skipped": 0,
                                 "failures": [(cid, f"WORKER DIED (exit {p.wait()}): a test past the per-test timeout "
                                                    f"+ {GRACE} s, or a crash; rerun with AGENTCTL_TEST_VERBOSE=1")]})
-                p = subprocess.Popen(p.args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.DEVNULL, text=True, env=env, cwd=HERE)
+                end_worker(p)
+                p = start_worker(a.timeout, env, quiet)
                 procs.append(p)
                 continue
             r = json.loads(line)
@@ -179,21 +260,26 @@ def main():
                 sys.stdout.write(mark)
                 sys.stdout.flush()
         p.stdin.close()
-        p.wait()
+        end_worker(p)
 
+    # a SIGTERM / SIGHUP (a hook's bound, a closed terminal) ends the run through the finally below, its roots removed
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, lambda n, _f: sys.exit(128 + n))
     threads = [threading.Thread(target=drive, args=(i,), daemon=True) for i in range(max(1, a.jobs))]
-    for t in threads:
-        t.start()
-    deadline = t0 + a.suite_timeout
-    for t in threads:
-        t.join(max(0, deadline - time.monotonic()))
-    timed_out = any(t.is_alive() for t in threads)
-    if timed_out:
-        for p in procs:
-            try:
-                p.kill()
-            except OSError:
-                pass
+    held = hold_ticket(max(1, a.jobs))
+    t0 = time.monotonic()  # the suite's bound starts once it is admitted
+    try:
+        for t in threads:
+            t.start()
+        deadline = t0 + a.suite_timeout
+        for t in threads:
+            t.join(max(0, deadline - time.monotonic()))
+        timed_out = any(t.is_alive() for t in threads)
+    finally:
+        for p in list(procs):
+            end_worker(p)
+        release_ticket(held)
+    leaked = surviving(procs)
     print()
     nrun = sum(r["run"] for r in results)
     fails = [f for r in results for f in r["failures"]]
@@ -201,6 +287,8 @@ def main():
         print("=" * 70 + f"\nFAIL: {tid}\n" + "-" * 70 + f"\n{tb}")
     if timed_out:
         print(f"SUITE TIMEOUT after {a.suite_timeout} s; not run: {', '.join(todo) or '-'}")
+    if leaked:
+        print(f"LEAKED TEMP ROOTS (a worker's agentctl-t-* survived its removal): {', '.join(leaked)}")
     if not a.patterns:  # a shard, or a run cut short, keeps the other classes' durations (the longest-first order)
         save_durations({**past, **{r["cls"]: r["secs"] for r in results}})
     if a.durations:
@@ -210,7 +298,7 @@ def main():
     skipped = sum(r["skipped"] for r in results)
     print(f"Ran {nrun} tests in {took:.1f}s ({a.jobs} workers)" +
           (f", {skipped} skipped" if skipped else ""))
-    ok = not fails and not timed_out and len(results) == len(classes)
+    ok = not fails and not timed_out and not leaked and len(results) == len(classes)
     if ok and not a.patterns and not shard:
         save_json(SUITE_WALL, {"wall": round(took, 1), "jobs": a.jobs, "tests": nrun})
     print("OK" if ok else f"FAILED (failures={len(fails)})")

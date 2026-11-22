@@ -46,20 +46,41 @@ def tempfile_dir():
     return tempfile.gettempdir()
 
 
-def sweep_test_tmp(now_=None):
+def _suite_root_in_use(p, t):
+    """A test suite root still in use: its runner alive (tests/run.py writes owner.pid), or the root or an entry of it
+    changed within TEST_TMP_MAX_AGE."""
+    try:
+        with open(os.path.join(p, "owner.pid")) as f:
+            os.kill(int(f.read().strip()), 0)
+        return True
+    except (OSError, ValueError):
+        pass
+    try:
+        newest = max([os.lstat(p).st_mtime] + [os.lstat(e.path).st_mtime for e in os.scandir(p)])
+    except OSError:
+        return True
+    return t - newest <= TEST_TMP_MAX_AGE
+
+
+def sweep_test_tmp(now_=None, tmp_root="/tmp"):
     """The test suite's leftovers older than TEST_TMP_MAX_AGE: `agentctl-*` in the user's temp dir, `agentctl-sock-*` in
-    /tmp (never the processor's own socket dir /tmp/agentctl-<uid>). Returns how many went."""
+    /tmp (never the processor's own socket dir /tmp/agentctl-<uid>), and /tmp's suite roots `agentctl-t-*` (2026-11-22:
+    174 of them, 197 MB, fed a runaway fseventsd) unless one is in use (_suite_root_in_use). Returns how many went."""
     import shutil
     t = now_ if now_ is not None else time.time()
     n = 0
-    for pat in (os.path.join(user_tmp_dir(), "agentctl-*"), "/tmp/agentctl-sock-*"):
+    roots = set(glob.glob(os.path.join(tmp_root, "agentctl-t-*")))
+    for pat in (os.path.join(user_tmp_dir(), "agentctl-*"), os.path.join(tmp_root, "agentctl-sock-*"), *roots):
         for p in glob.glob(pat):
             if os.path.realpath(p) == os.path.realpath(os.path.dirname(token_sock_path("x"))):
                 continue  # the processor's own socket dir (Linux: the user temp dir IS /tmp)
             try:
-                if os.path.isdir(p) and not os.path.islink(p) and t - os.lstat(p).st_mtime > TEST_TMP_MAX_AGE:
-                    shutil.rmtree(p, ignore_errors=True)
-                    n += 1
+                if not os.path.isdir(p) or os.path.islink(p) or t - os.lstat(p).st_mtime <= TEST_TMP_MAX_AGE:
+                    continue
+                if p in roots and _suite_root_in_use(p, t):
+                    continue
+                shutil.rmtree(p, ignore_errors=True)
+                n += 1
             except OSError:
                 pass
     return n

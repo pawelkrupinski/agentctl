@@ -909,8 +909,9 @@ def cmd_suite(a):
     this directory) under a governor ticket of class `suite` (SUITE_CAP at once): parallel agents queue here instead of
     piling up. Arguments are run.py's (-j N, --timeout S, PATTERN...)."""
     args = list(a.args or [])
-    with gov_ticket("suite", label=f"agentctl suite {os.path.basename(os.getcwd())}"):
-        return subprocess.run([sys.executable, os.path.join("tests", "run.py")] + args).returncode
+    with gov_ticket("suite", label=f"agentctl suite {os.path.basename(os.getcwd())}"):  # run.py then takes none
+        return subprocess.run([sys.executable, os.path.join("tests", "run.py")] + args,
+                              env={**os.environ, "AGENTCTL_SUITE_TICKET": "agentctl suite"}).returncode
 
 
 def gov_class_of(repo, commits, reds, st=None):
