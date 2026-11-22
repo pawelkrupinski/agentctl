@@ -379,6 +379,14 @@ def union_base(tree, members, base):
 # ---------------------------------------------------------------- the land hold (`land hold|release`)
 LAND_HOLD_DEFAULT = 4 * 3600  # s a `land hold` lasts unless --for says otherwise: it then lifts itself (expired)
 LAND_HOLD_MAX = 24 * 3600     # s: the longest --for a hold takes
+# the land hold (`land hold|release`): an item in the store, so ci-runner's reconciler honours a hold made on the laptop
+# (the PAUSED file it replaced was the laptop's own, read by no tick since the phase 2 cutover). Its deadline is its
+# expiry: a forgotten hold lifts itself (`expired`), never a manual-ack-only state.
+MACHINES["hold"] = {
+    "held": StateSpec(LAND_HOLD_DEFAULT, "expired", ("held", "released", "expired")),
+    "released": StateSpec(ARCHIVE, "released", (), terminal=True),
+    "expired": StateSpec(ARCHIVE, "expired", (), terminal=True),
+}
 
 
 def hold_by():

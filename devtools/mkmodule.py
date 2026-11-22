@@ -24,7 +24,7 @@ def top_defs(tree):
             out.add(n.name)
         elif isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
             ts = n.targets if isinstance(n, ast.Assign) else [n.target]
-            out |= {x.id for t in ts for x in ast.walk(t) if isinstance(x, ast.Name)}
+            out |= {x.id for t in ts for x in ast.walk(t) if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Store)}
         elif isinstance(n, (ast.Import, ast.ImportFrom)):
             out |= {(a.asname or a.name).split(".")[0] for a in n.names}
         elif isinstance(n, (ast.For, ast.With)):

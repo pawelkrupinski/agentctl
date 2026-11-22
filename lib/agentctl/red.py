@@ -45,6 +45,33 @@ RED_FIX_DECIDE = 3 * 3600
 # on-demand workflow never gets, a fix id that is None) is offered again with that fix set aside (`unverified`): a
 # fixer decides, never a resting state.
 RED_FIX_GIVEUP = 2 * RED_FIX_DECIDE
+# §5.3 a red (keyed by its failing test or step), phase 1 step 10; -> verified outside fix-pending: red_callable_evidence
+MACHINES["red"] = {
+    "red": StateSpec(60, "offered", ("offered", "fix-pending", "leased", "blocked-external", "cleared", "verified",
+                                     "dispatch-off")),
+    "offered": StateSpec(RED_OFFER["other"], "offered", ("leased", "fix-pending", "blocked-external", "cleared",
+                                                         "verified", "dispatch-off"), escalate=True, wait=True),
+    "leased": StateSpec(RED_CLAIM_MAX, "offered", ("fix-pending", "offered", "blocked-external", "cleared", "verified",
+                                                   "dispatch-off")),
+    # fix-pending -> leased: a link that no longer holds is no fix; its live holder keeps the red (redpending.py, 331b586)
+    "fix-pending": StateSpec(RED_FIX_DECIDE, "fix-pending", ("offered", "verified", "cleared", "leased"), escalate=True,
+                             wait=True),
+    "blocked-external": StateSpec(7 * 86400, "offered", ("offered", "fix-pending", "leased", "cleared", "verified",
+                                                         "dispatch-off")),
+    # its repo's dispatch is off by the owner (`red auto off --repo R`): recorded and shown, never offered or asked
+    # (its deadline offers it again a week on; red_step holds it at once while the repo's dispatch is still off)
+    "dispatch-off": StateSpec(7 * 86400, "offered", ("offered", "fix-pending", "cleared", "verified")),
+    "verified": StateSpec(ARCHIVE, "verified", (), terminal=True),
+    "cleared": StateSpec(ARCHIVE, "cleared", (), terminal=True),
+}
+
+
+# an orphan branch red (settle_branch_reds): the deadlines only retire a forgotten one
+MACHINES["branch-red"] = {
+    "open": StateSpec(ARCHIVE, "gone", ("orphaned", "gone")),
+    "orphaned": StateSpec(ARCHIVE, "gone", ("open", "gone")),
+    "gone": StateSpec(ARCHIVE, "gone", (), terminal=True),
+}
 # A NIGHTLY'S FIX WAITS FOR THE NIGHT (2026-11-13, Verify scrape recording #26): a landed fix of a red OUTSIDE the gate
 # is proven only by its workflow's next run -- a nightly's is up to a day away, and no push brings it sooner (its verify
 # dispatch may be refused). Such a fix holds its red, quietly, up to RED_FIX_NEXT_RUN: the next decided run containing

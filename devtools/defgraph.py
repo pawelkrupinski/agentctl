@@ -43,8 +43,11 @@ def definition_reads(node, children):
         return [node.name], used
     if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        names = [x.id for t in targets for x in ast.walk(t) if isinstance(x, ast.Name)]
+        names = [x.id for t in targets for x in ast.walk(t) if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Store)]
+        if not names:  # `TABLE[k] = v` / `C.attr = v`: no definition, a registration that reads what it names
+            names = [f"<{ast.unparse(targets[0])}>"]
         used = names_in(node.value) if node.value is not None else set()
+        used |= {x.id for t in targets for x in ast.walk(t) if isinstance(x, ast.Name) and not isinstance(x.ctx, ast.Store)}
         for inner in ast.walk(node.value) if node.value is not None else []:  # a lambda's or comprehension's own names
             if isinstance(inner, ast.Lambda):
                 used -= {a.arg for a in inner.args.args}

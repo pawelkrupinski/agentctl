@@ -3,6 +3,7 @@
 names, variables, constants, nested code alike, line numbers aside) unchanged.
 
   python3 devtools/samecode.py <old lib> <new lib>       (lib: the directory holding agentctl/)   exit 0 the same"""
+import dis
 import os
 import sys
 import types
@@ -21,8 +22,20 @@ def load(lib):
     return ns
 
 
+def instructions(code):
+    """The code's instructions, opname and argument, with what only the compiler's knowledge of its module changes left
+    out: a real module's `import time` makes `time.time()` a plain attribute load and a PUSH_NULL where the namespace
+    compiled a method load, and every jump after it moves by one."""
+    out = []
+    for i in dis.get_instructions(code):
+        if i.opname == "PUSH_NULL" or i.opname in dis.hasjrel or i.opcode in dis.hasjump:
+            continue
+        out.append((i.opname, i.argval if not isinstance(i.argval, types.CodeType) else None))
+    return out
+
+
 def signature(code):
-    return (code.co_code, code.co_names, code.co_varnames,
+    return (instructions(code), code.co_names, code.co_varnames,
             tuple(signature(x) if isinstance(x, types.CodeType) else repr(x) for x in code.co_consts))
 
 
