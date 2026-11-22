@@ -5,6 +5,7 @@ import json
 import os
 import re
 import time
+from typing import Any, Callable
 from agentctl.core import env_num, state_root
 
 
@@ -524,15 +525,15 @@ class Store:
 # THE STORE SEAM: the store a process uses is chosen once, at the composition root (cli: wire_store(process_store), the
 # remote store when a store URL is set), not by the Store class (its constructor is the file store, nothing else).
 # Until it is wired -- a part loaded on its own -- open_store() opens the file store.
-_store_opener = []
+_store_opener: list[Callable[..., Any]] = []
 
 
-def wire_store(opener):
+def wire_store(opener: Callable[..., Any]) -> None:
     """Make opener(clock=None) the store every open_store() returns (the composition root, once)."""
     _store_opener[:] = [opener]
 
 
-def open_store(clock=None):
+def open_store(clock: Callable[[], float] | None = None) -> Any:
     """The process's state store: the wired opener's, else the file store."""
     return (_store_opener[0] if _store_opener else Store)(clock=clock)
 

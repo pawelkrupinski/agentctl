@@ -395,60 +395,6 @@ def land_lease_name(repo):
     return "land/" + re.sub(r"[^A-Za-z0-9._-]", "_", key.strip("/"))
 
 
-_landing = [None]  # the LeaseHold of the landing lease this process holds (land_lock)
-
-
-def lock_note(step):
-    """Say in the held landing lease what the holder is doing now (waiters print it)."""
-    h = _landing[0]
-    if h and h.lease:
-        h.store.note(h.name, h.lease["epoch"], h.lease["secret"], f"{step} since {ts()}")
-
-
-def lock_beat(progress=None):
-    """The holder at work renews every lease this process holds -- the landing lease, a check slot, a change's check --
-    with its progress mark (run_watched: output bytes and CPU). Raises LeaseLost when one is gone: the work must stop."""
-    if progress is None:
-        return
-    for h in list(_held_leases):
-        if h.renew(progress) == "lost":
-            raise LeaseLost(f"the {'landing ' if h is _landing[0] else ''}lease {h.name} (epoch {h.lease['epoch']}) "
-                            "was lost")
-
-
-_held_leases = process_cache([])  # the LeaseHold objects this process holds (renewed together on progress)
-
-
-class LeaseHold:
-    """One lease this process holds: acquired (or not: held elsewhere), renewed on progress, released at the end."""
-
-    def __init__(self, name, ttl, max_hold, meta=None, store=None):
-        self.name, self.ttl, self.max_hold, self.meta = name, ttl, max_hold, dict(meta or {}, pid=os.getpid())
-        self.store, self.lease, self.held = store or open_store(), None, None
-
-    def acquire(self):
-        got = self.store.acquire(self.name, f"{socket_host()}:{self.name.split('/')[0]}:{os.getpid()}", self.ttl,
-                                 self.max_hold, progress="acquired", meta=self.meta)
-        if "held" in got:
-            self.held = got["held"]
-            return False
-        self.lease = got
-        _held_leases.append(self)
-        return True
-
-    def renew(self, progress):
-        if not self.lease:
-            return "lost"
-        return self.store.renew(self.name, self.lease["epoch"], self.lease["secret"], progress, self.ttl)
-
-    def release(self):
-        if self in _held_leases:
-            _held_leases.remove(self)
-        if self.lease:
-            self.store.release(self.name, self.lease["epoch"], self.lease["secret"])
-            self.lease = None
-
-
 def lease_live(name, store=None):
     """The live lease `name` (its row, meta decoded), or None."""
     r = (store or open_store()).get(name)
@@ -489,11 +435,6 @@ def land_lock(repo, timeout=None):
     finally:
         _landing[0] = None
         h.release()
-
-
-def socket_host():
-    import socket
-    return socket.gethostname().split(".")[0]
 
 
 def precheck_hook(repo):

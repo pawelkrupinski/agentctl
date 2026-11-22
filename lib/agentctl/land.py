@@ -1,5 +1,16 @@
 # agentctl, part `land`: land.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import re
+import signal
+import subprocess
+import time
+from agentctl.core import HOME, env_num, err, process_cache, run_cmd
+from agentctl.store import LeaseLost, StoreUnavailable
+from agentctl.procs import tosec
+from agentctl.leases import lock_beat
+
 
 # ---------------------------------------------------------------- land / env
 SDKMAN_BINS = [f"{HOME}/.sdkman/candidates/sbt/current/bin", f"{HOME}/.sdkman/candidates/java/current/bin"]

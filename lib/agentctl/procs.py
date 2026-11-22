@@ -58,3 +58,8 @@ def safe_cwd() -> str:
         return os.getcwd()
     except OSError:
         return os.environ.get("PWD") or "(removed)"
+
+
+def socket_host() -> str:
+    import socket
+    return socket.gethostname().split(".")[0]

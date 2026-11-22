@@ -1,5 +1,14 @@
 # agentctl, part `redretired`: retired checks: a red whose job or workflow no longer exists on main.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import re
+import time
+from agentctl.core import env_num, process_cache
+from agentctl.timefmt import parse_time
+from agentctl.forge import gh_json
+from agentctl.workflows import fix_workflow_jobs, workflow_triggers
+
 
 # -- RETIRED CHECKS (agentctl issue 20261031T210634-c53375): core 2b4d9c905 removed every dev/sandbox target, and the
 # reds of their last runs (Playwright Tests (deployed) #1080/#1081, Run Post Deployment Tests #1362) could never clear:

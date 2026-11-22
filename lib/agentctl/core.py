@@ -50,7 +50,7 @@ ENV_HELP = """Agent environment, without secrets.
 A locked vault prints exactly: vault <ns> locked: ask the user to run `! secrets unlock <ns>`  -- and exits 1.
 agentctl never runs `secrets unlock` (Touch ID is the user's). Output never contains a token: tools read it at use."""
 import argparse, contextlib, io, datetime as dt, fcntl, fnmatch, glob, itertools, json, os, re, shlex, signal, stat, subprocess, sys, threading, time, traceback, urllib.error, urllib.parse, urllib.request
-from typing import Any, Callable, Sequence  # the types ratchet (quality/typecheck.py): typed records read as dict[str, Any] until typed
+from typing import Any, Callable, Sequence, TypeVar  # the types ratchet (quality/typecheck.py): typed records read as dict[str, Any] until typed
 
 # THE PROCESS-WIDE CACHES, IN ONE REGISTRY (simplification-2026-10-31 item 10): every module-level dict, list or set a
 # part keeps between calls is made with `process_cache(...)`, so the test harness clears them all between tests
@@ -58,7 +58,11 @@ from typing import Any, Callable, Sequence  # the types ratchet (quality/typeche
 PROCESS_CACHES = []
 
 
-def process_cache(empty):
+T = TypeVar("T")
+
+
+def process_cache(empty: T) -> T:
+    """empty, registered as one of the process's caches (PROCESS_CACHES: cleared together, the tests between cases)."""
     PROCESS_CACHES.append(empty)
     return empty
 

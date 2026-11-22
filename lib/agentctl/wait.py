@@ -1,5 +1,17 @@
 # agentctl, part `wait`: wait.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import datetime as dt
+import os
+import re
+import subprocess
+from agentctl.core import scratch
+from agentctl.timefmt import iso_epoch
+from agentctl.forge import forge_argv, forge_env, gh_json
+from agentctl.classify import NOISE, NOT_A_FAILURE, STRONG, WEAK
+from agentctl.procs import ps
+from agentctl.workflows import STEP_TIMED_OUT, job_inner
+
 
 # ---------------------------------------------------------------- wait
 # gh prints a log's escapes as caret text (`^[[36;1m`) when it refuses raw ones: both are colours
