@@ -2491,7 +2491,7 @@ def job_ever_green(store, o_r, workflow, job, runs=(), now_=None):
     at = _never_green_at.get((o_r, workflow, job))
     if at is not None and t - at < env_num("AGENTCTL_EVER_GREEN_RECHECK", EVER_GREEN_RECHECK):
         return False
-    decided = [r for r in runs or [] if r.get("status") == "completed" and r.get("conclusion") in ("success",) + RED_CONCLUSIONS]
+    decided = decided_runs(runs)
     cands = sorted(decided, key=lambda r: r.get("conclusion") != "success")[:EVER_GREEN_JOB_RUNS]
     if not any(r.get("conclusion") == "success" for r in cands):
         try:

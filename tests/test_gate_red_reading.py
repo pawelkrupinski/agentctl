@@ -33,5 +33,28 @@ class GateRedReadingTest(unittest.TestCase):
         self.assertEqual(A.snapshot_gate_reds({"gate": [{"name": "Main", "decided": None}]}), [])
 
 
+class DecidedRunsTest(unittest.TestCase):
+    """One notion of a run that decided, and of the red streak a workflow's runs end on (blame, the never-green check,
+    the red tick and ci-why's streak all read it)."""
+
+    def runs(self, *spec):
+        return [{"number": n, "status": s, "conclusion": c} for n, s, c in spec]
+
+    def test_cancelled_skipped_and_running_runs_decide_nothing(self):
+        runs = self.runs((9, "in_progress", None), (8, "completed", "cancelled"), (7, "completed", "failure"),
+                         (6, "completed", "skipped"), (5, "completed", "timed_out"), (4, "completed", "success"),
+                         (3, "completed", "failure"))
+        self.assertEqual([r["number"] for r in A.decided_runs(runs)], [7, 5, 4, 3])
+        self.assertEqual([r["number"] for r in A.streak_runs(runs)], [7, 5])
+        self.assertEqual([r["number"] for r in A.streak_runs(runs, skip=lambda r: r["number"] == 7)], [5])
+        self.assertEqual(A.decided_runs(None), [])
+
+    def test_red_streak_counts_the_streak_and_dates_its_oldest_failure(self):
+        runs = self.runs((7, "completed", "failure"), (5, "completed", "failure"), (4, "completed", "success"))
+        runs[1]["updatedAt"] = "2026-11-22T09:00:00Z"
+        self.assertEqual(A.red_streak(runs), ("2026-11-22T09:00:00Z", 2))
+        self.assertEqual(A.red_streak(runs[2:]), (None, 0))
+
+
 if __name__ == "__main__":
     unittest.main()

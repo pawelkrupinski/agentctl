@@ -1003,12 +1003,6 @@ def run_names(r):
     return {str(x) for x in (r.get("number"), r.get("databaseId")) if x not in (None, "")}
 
 
-def streak_runs(runs):
-    """The red runs of the streak `runs` (one workflow's on main, newest first) ends on."""
-    decided = [r for r in runs if r.get("status") == "completed" and r.get("conclusion") in ("success",) + RED_CONCLUSIONS]
-    return list(itertools.takewhile(lambda r: r.get("conclusion") in RED_CONCLUSIONS, decided))
-
-
 def classifier_version():
     """What a cached signature was judged by: its KIND (classify_job and every pattern it reads) and its LINE, the red's
     key (relevant_lines, job_log_lines, choose_job_lines and the STRONG / WEAK / NOISE / ANNOTATION patterns). A record

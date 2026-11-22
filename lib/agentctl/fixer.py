@@ -2000,7 +2000,7 @@ def culprit_of(repo, u):
     """The commit that turned this red, when one alone can have: the only commit between the last green run's head and
     the first red run's head of the streak. None when unknown."""
     runs = u.get("runs") or []
-    decided = [r for r in runs if r.get("status") == "completed" and r.get("conclusion") in ("success",) + RED_CONCLUSIONS]
+    decided = decided_runs(runs)
     streak = streak_runs(runs)
     if not repo or not streak or len(decided) <= len(streak):
         return None

@@ -96,7 +96,7 @@ def blame_open(store, repo, o_r, ob, t):
     if not repo:
         return {"state": "none", "why": "no clone here to read its range"}
     runs = ob.get("runs_list") or []
-    decided = [r for r in runs if r.get("status") == "completed" and r.get("conclusion") in ("success",) + RED_CONCLUSIONS]
+    decided = decided_runs(runs)
     streak = streak_runs(runs)
     if not streak or len(decided) <= len(streak) or decided[len(streak)].get("conclusion") != "success":
         return {"state": "none", "why": "no green run before the red streak"}

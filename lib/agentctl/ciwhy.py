@@ -497,7 +497,7 @@ def gate_runs(o_r, flows=None):
         decided, nov = None, None
         nv = (lambda r: run_no_verdict(o_r, r)) if name in NO_VERDICT_FLOWS else (lambda r: False)
         for r in runs:
-            if r.get("status") == "completed" and r.get("conclusion") in ("success", "failure", "timed_out"):
+            if is_decided(r):
                 if nv(r):
                     nov = nov or r  # the newest incomplete run: no verdict, it says nothing
                     continue
@@ -511,13 +511,29 @@ def gate_runs(o_r, flows=None):
     return out
 
 
-def red_streak(runs, skip=None):
-    """(since, count) of the red streak that `runs` (one workflow's on main, newest first) ends on: its decided runs up
-    to the newest success, `since` the oldest failure's completion (when CI first said red). (None, 0) when green.
-    skip(run): a failed run that decided nothing (run_no_verdict), left out like a cancelled one."""
-    decided = (r for r in runs if r.get("status") == "completed" and r.get("conclusion") in ("success",) + RED_CONCLUSIONS)
-    streak = [r for r in itertools.takewhile(lambda r: r.get("conclusion") in RED_CONCLUSIONS, decided)
-              if not (skip and skip(r))]
+Run = dict[str, Any]  # a workflow run as gh lists it (RUN_FIELDS)
+
+
+def is_decided(r: Run) -> bool:
+    """A run that decided: completed green or red (a cancelled, skipped or running one says nothing)."""
+    return r.get("status") == "completed" and r.get("conclusion") in ("success",) + RED_CONCLUSIONS
+
+
+def decided_runs(runs: list[Run] | None) -> list[Run]:
+    return [r for r in runs or [] if is_decided(r)]
+
+
+def streak_runs(runs: list[Run] | None, skip: Callable[[Run], bool] | None = None) -> list[Run]:
+    """The red runs of the streak `runs` (one workflow's on main, newest first) ends on: its decided runs up to the
+    newest success. skip(run): a failed run that decided nothing (run_no_verdict), left out like a cancelled one."""
+    return [r for r in itertools.takewhile(lambda r: r.get("conclusion") in RED_CONCLUSIONS, decided_runs(runs))
+            if not (skip and skip(r))]
+
+
+def red_streak(runs: list[Run] | None, skip: Callable[[Run], bool] | None = None) -> tuple[str | None, int]:
+    """(since, count) of the red streak that `runs` (one workflow's on main, newest first) ends on, `since` the oldest
+    failure's completion (when CI first said red). (None, 0) when green."""
+    streak = streak_runs(runs, skip)
     if not streak:
         return None, 0
     oldest = streak[-1]

@@ -48,7 +48,7 @@ cognitive	blame_cancel_changes_of	12
 cognitive	blame_drop_revert_worktree	13
 cognitive	blame_land_refusal	30
 cognitive	blame_note	12
-cognitive	blame_open	25
+cognitive	blame_open	24
 cognitive	blame_records	36
 cognitive	blame_status	13
 cognitive	blame_step	26
@@ -136,7 +136,7 @@ cognitive	free_worktree	11
 cognitive	gate_flow_names	17
 cognitive	gate_report_only_jobs	11
 cognitive	gate_run_record	18
-cognitive	gate_runs	20
+cognitive	gate_runs	19
 cognitive	gate_runs_pass	17
 cognitive	gating_checks	31
 cognitive	generated_parse	22
@@ -157,7 +157,7 @@ cognitive	idle_servers	14
 cognitive	inbox_wait	65
 cognitive	inv_w1	47
 cognitive	inv_wr	28
-cognitive	job_ever_green	25
+cognitive	job_ever_green	23
 cognitive	joined_verdicts	15
 cognitive	jvm_candidates	36
 cognitive	jvm_reap	43
@@ -510,7 +510,7 @@ cyclomatic	blame_finish	12
 cyclomatic	blame_hint	14
 cyclomatic	blame_land_refusal	15
 cyclomatic	blame_note	14
-cyclomatic	blame_open	32
+cyclomatic	blame_open	29
 cyclomatic	blame_records	30
 cyclomatic	blame_reland	11
 cyclomatic	blame_status	13
@@ -572,7 +572,6 @@ cyclomatic	config_load	18
 cyclomatic	conflict_bounced	14
 cyclomatic	conflict_hunks	12
 cyclomatic	conflict_resolve	21
-cyclomatic	culprit_of	11
 cyclomatic	dry_run	20
 cyclomatic	event_audience	13
 cyclomatic	expire_cache	29
@@ -605,7 +604,7 @@ cyclomatic	gate_flow_names	22
 cyclomatic	gate_report_only	14
 cyclomatic	gate_report_only_jobs	26
 cyclomatic	gate_run_record	30
-cyclomatic	gate_runs	18
+cyclomatic	gate_runs	17
 cyclomatic	gate_runs_pass	21
 cyclomatic	gating_checks	22
 cyclomatic	generated_parse	21
@@ -634,7 +633,7 @@ cyclomatic	inv_wb	15
 cyclomatic	inv_wr	24
 cyclomatic	ios_simulator_sweep	13
 cyclomatic	job_annotations	11
-cyclomatic	job_ever_green	25
+cyclomatic	job_ever_green	21
 cyclomatic	job_log_lines	17
 cyclomatic	jobs_verdict	23
 cyclomatic	joined_verdicts	13
@@ -907,8 +906,8 @@ fan-out	watchdog	27
 file-lines	alerts	644
 file-lines	batch	1664
 file-lines	blame	970
-file-lines	branches	1411
-file-lines	ciwhy	1311
+file-lines	branches	1405
+file-lines	ciwhy	1327
 file-lines	cleanup	519
 file-lines	core	728
 file-lines	fixer	2793
