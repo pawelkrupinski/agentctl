@@ -403,7 +403,7 @@ copies	blame	4
 copies	buildview	2
 copies	cireport|redtick	2
 copies	clones|server	2
-copies	fixerland|watchdog	2
+copies	fixerland|orphans	2
 copies	owner	2
 copies	queueclose	2
 copies	queuepush	2
@@ -832,7 +832,6 @@ file-lines	batch	1148
 file-lines	blame	833
 file-lines	branches	843
 file-lines	ciwhy	760
-file-lines	cli	511
 file-lines	gov	728
 file-lines	live	755
 file-lines	owner	718
@@ -842,7 +841,6 @@ file-lines	slots	574
 file-lines	stats	623
 file-lines	status	1117
 file-lines	store	780
-file-lines	watchdog	1836
 inner-defs	red_owner	5
 inner-defs	status_page_server	8
 inner-defs	store_server	4
@@ -876,7 +874,6 @@ method-lines	land_loop	61
 method-lines	landing_records	109
 method-lines	live_registry_read	53
 method-lines	live_stream	53
-method-lines	main	417
 method-lines	notify_escalations	91
 method-lines	orphan_candidates	58
 method-lines	orphan_duty	113

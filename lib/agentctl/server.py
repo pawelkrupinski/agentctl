@@ -21,15 +21,15 @@ from agentctl.timefmt import day_hhmmz, iso_epoch, now, ts
 from agentctl.statefile import read_record, write_json
 from agentctl.store import (
     MACHINES, StaleVersion, Store, StoreUnavailable, TerminalState, machine_state, open_store, store_errors)
-from agentctl.procs import safe_cwd
 from agentctl.selfcode import TOOL_PATH
 from agentctl.repos import server_repo
 from agentctl.trailers import do_not_land
-from agentctl.leases import lease_meta
 from agentctl.waitingdir import save_entry, waiting_entries, waiting_state, wlog
+from agentctl.redrecord import red_lease
+from agentctl.procs import safe_cwd
+from agentctl.leases import lease_meta
 from agentctl.inboxentry import inbox_write
 from agentctl.land import tool_env
-from agentctl.redrecord import red_lease
 from agentctl.fixersession import trust_asks
 from agentctl.stats import maybe_stats_pass
 from agentctl.clones import CORRUPT_GIT, clone_shared, clone_side, heal_enabled
@@ -47,8 +47,8 @@ from agentctl.projector import maybe_archive_leases, notify_escalations, project
 from agentctl.laptoprole import (
     LAPTOP_ROLE_LEASE, laptop_role_holder, laptop_role_line, laptop_role_standby, machine_id, role_host)
 from agentctl.fixerland import fixers_land_watch
-from agentctl.queuesubmit import SUBMIT_FIELDS, sweep_land_refs
 from agentctl.waiting import cancel_submitted, supersede
+from agentctl.queuesubmit import SUBMIT_FIELDS, sweep_land_refs
 from agentctl.branches import refresh_pinned_recording
 from agentctl.owner import red_reap_orphans
 from agentctl.remotestore import RemoteStore, STORE_PORT, store_url
@@ -56,13 +56,13 @@ from agentctl.blame import blame_land_refusal
 from agentctl.reddispatch import red_dispatcher, red_renew_holders
 from agentctl.watchtick import tick_watches
 from agentctl.queueclose import close_landed_changes, migrate_local_queue, stranded_changes
-from agentctl.watchdog import red_unheld
 from agentctl.queuepush import tick_changes
 from agentctl.storestate import mirror_state
-from agentctl.status import tick_issues, write_red_status_snapshot
-from agentctl.redtick import maybe_publish_gate, maybe_red_tick
 from agentctl.netwatch import network_watch, tunnel_watch
 from agentctl.batch import TICK, say_batch, tick_batch, tick_land_hold
+from agentctl.status import tick_issues, write_red_status_snapshot
+from agentctl.redtick import maybe_publish_gate, maybe_red_tick
+from agentctl.redhold import red_unheld
 
 
 # ---------------------------------------------------------------- phase 2: the store over HTTP (design §6.3, §13 phase 2)

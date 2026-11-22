@@ -21,6 +21,7 @@ MODULES = ("usage", "core", "timefmt", "statefile", "moviestools", "classify", "
            "landwatch", "redblock", "rundispatch", "blameopen", "redopen", "redearly", "redclaim", "redverify",
            "redcrash", "fixerlife", "owner", "redvault", "ask", "checkslot", "redpending", "remote", "remotestore",
            "queuebatch", "blame", "reddispatch", "redstep", "queuediff", "redview", "cireport", "watchtick",
-           "queueclose", "tunnel", "launchd", "recovery", "watchdog", "queuepush", "storestate", "status",
-           "localrecheck", "redtick", "netwatch", "tools", "batch", "server", "landqueue", "processor", "queueenter",
-           "slots", "cli")
+           "queueclose", "tunnel", "launchd", "recovery", "queuepush", "storestate", "localrecheck", "netwatch",
+           "tools", "batch", "landqueue", "sessionpaths", "superseded", "park", "status", "orphans", "beats",
+           "maintain", "redhold", "redtick", "server", "processor", "queueenter", "slots", "invariants", "watchdog",
+           "cliops", "cliparser", "cli")
