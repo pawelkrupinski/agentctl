@@ -481,3 +481,10 @@ def run_bounded(name, fn, secs):
 def hashlib_sha1(text: str) -> str:
     import hashlib
     return hashlib.sha1(text.encode()).hexdigest()
+
+
+def pct(vals: Any, q: float) -> Any:
+    vals = sorted(vals)
+    if not vals:
+        return None
+    return vals[min(len(vals) - 1, int(round(q * (len(vals) - 1))))]

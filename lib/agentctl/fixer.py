@@ -1,5 +1,21 @@
 # agentctl, part `fixer`: the red fixers (dispatch, sessions, the fixer wrapper).
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import re
+from typing import Any
+from agentctl.core import HOME, remote
+from agentctl.classify import is_regression
+from agentctl.selfcode import TOOL_PATH
+from agentctl.repos import RED_PRIMARY, red_repo_clone, red_repo_of
+from agentctl.workflows import LOCAL_FLOW
+from agentctl.redrecord import RED_RECURRING
+from agentctl.fixerenv import BRIEF_SRC
+from agentctl.redfixes import red_refuted
+from agentctl.redreplay import FIX_REPLAY_NONE_MIN, red_replay_command
+from agentctl.redrepos import red_owner_only
+from agentctl.fixerland import FIXER_UNLANDED_NUDGE, LAND_BRIEF
+
 
 # THE FIXER BRIEF (the owner, 2026-10-30): the rules every dispatched fixer and family owner gets -- fast reproducer
 # first, mechanism-only identity fixes, no allow-list or baseline edits, land as you go, `agentctl issue` for defects,
@@ -195,3 +211,50 @@ FIXER_IDENTITY_ENV = ("AGENTCTL_AGENT_NAME", "AGENTCTL_RED_FIXER", "AGENTCTL_FIX
 WAITS_ON_BRIEF = (" If this red's fix is ANOTHER red's commit that is not on main yet, land nothing and end "
                   "`WAITS ON <sha> (red <its key>): <why>`: agentctl waits for that commit (or its rebased copy) to reach "
                   "main and verifies this red against the next run containing it -- never a NOT LANDED for such a hold.")
+
+
+def owner_intro(owner):
+    fam = owner["family"]
+    reds = "; ".join(owner.get("reds") or [])
+    return (f"You are the LONG-LIVED OWNER of the `{fam}` red family: one background session (the owner sees it in "
+            "`claude agents`) that keeps every red of the family, across reds and restarts, in ONE worktree. Your "
+            f"NOTEBOOK is {owner['notebook']}: read it FIRST, and keep it current after every step (the reproducer you "
+            "built and how to run it, each hypothesis and how it ended, what is left) -- a restart of you continues "
+            "from it and this same worktree. Your reds' leases are held for you by agentctl while you work (do not "
+            "`red claim` them); new reds of your family arrive in RED-INBOX.md and as your next turn. "
+            + (f"This turn's reds: {reds}. " if reds else "")
+            + "End each turn with ONE verdict line for the turn's reds (LANDED <sha> / WAITS ON <sha> (red <key>): / "
+              "GAVE UP: / DIAGNOSED: / BLOCKED ON OWNER:). When the durable fix needs the OWNER'S DECISION in an owner-only "
+              "category (the brief's ASK THE OWNER ONLY WHAT NO AGENT CAN DO), end `DIAGNOSED: <cause>; "
+              "decide[<category>]: <the decision only the owner can make>`: the red then waits on the owner with it. "
+              "Any other question is yours: proceed under the repo's standing rules and checked-in policies. ")
+
+
+def lander_prompt(u, wt):
+    """The revived lander's task (fixer_prompt's, for tier `lander`)."""
+    l = u["lander"]
+    num, rid = u["run"].get("number"), u["run"].get("databaseId")
+    name = l.get("change")
+    head = (f"YOU ARE THE AGENT THAT LANDED {name}, continued from your transcript {l.get('transcript')} (subagent "
+            f"{l.get('agent')} of session {str(l.get('session'))[:8]}): read its last part first, it is your own context. "
+            if l.get("mode") == "transcript" else "")
+    moved = (f"Your old worktree {l['moved_from']} is gone: work in {wt} (off {remote()}/main). " if l.get("moved_from")
+             else "")
+    why = f"\n\n`agentctl ci-why {rid}` says:\n{l['ci_why']}\n\n" if l.get("ci_why") else " "
+    if l.get("reverted") is False:  # its revert did not apply: fix forward, as a gate fix
+        return (head + f"agentctl REVIVED YOU: your change {name} ({', '.join(l.get('shas') or [])}) turned main red -- "
+                f"{u['workflow']} #{num} (run id {rid}) failed in job `{u.get('job')}` with "
+                f"{str(u.get('line') or '')[:300]!r}; its parent passes the same check, its end fails. It COULD NOT BE "
+                f"REVERTED ({l.get('revert')}).{why}" + moved + f"FIX IT FORWARD in your worktree {wt}: `git fetch "
+                f"{remote()} && git rebase {remote()}/main`, fix the failure (never loosen the test), commit it with a "
+                f"`Fixes-Red: {num}` trailer and land it with `~/bin/agentctl land` (a gate fix: it lands while main is "
+                "red). End at `LANDED <sha>`, or `GAVE UP: <why>`.")
+    return (head + f"agentctl REVIVED YOU: your change {name} ({', '.join(l.get('shas') or [])}: "
+            f"{str(l.get('subject') or '')[:80]}) turned main red -- {u['workflow']} #{num} (run id {rid}) failed in job "
+            f"`{u.get('job')}` with {str(u.get('line') or '')[:300]!r}; its parent passes the same check, its end fails "
+            f"({str(l.get('evidence') or '')[:200]}). IT WAS REVERTED ({l.get('revert')}).{why}" + moved +
+            f"FIX IT in your worktree {wt}: `git fetch {remote()} && git rebase {remote()}/main` (your original commits "
+            "drop out as already upstream), re-apply your change with `git revert <the revert's sha>` once the revert is "
+            f"on {remote()}/main (`git log {remote()}/main --grep 'Reverts-Change: {name}'`), add the fix, reproduce the "
+            "failure and see it pass (the failing test, fast; never loosen it), then land again with "
+            "`~/bin/agentctl land` (no Fixes-Red: the revert fixed the red). End at `LANDED <sha>`, or `GAVE UP: <why>`.")

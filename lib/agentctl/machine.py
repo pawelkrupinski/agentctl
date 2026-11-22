@@ -105,3 +105,11 @@ def disk_free_gb(path: Optional[str] = None) -> float:
             fixed.get("disk_free_gb") is not None:  # the default path (maybe_upkeep names HOME itself)
         return float(fixed["disk_free_gb"])
     return shutil.disk_usage(path or os.environ.get("AGENTCTL_DISK_PATH") or HOME).free / 1e9
+
+
+def machine_sample() -> tuple[float, float, Any, Any]:
+    """(load1, cpu %, memory pressure %, swap used MB) of this machine, cheaply; None where unreadable."""
+    load1 = machine_load1()
+    cpu = min(100.0, 100.0 * load1 / machine_cores())
+    m = mem_stats()
+    return load1, cpu, m["pressure"], m["swap_used_mb"]

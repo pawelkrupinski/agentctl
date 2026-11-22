@@ -1,5 +1,31 @@
 # agentctl, part `fixerland`: how a fixer lands: its land command, land as you go, real activity as progress.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from agentctl.core import HOME, cherry_landed, env_num, err, git, on_ci_runner, reds_dir, remote, spawn_detached
+from agentctl.timefmt import ts
+from agentctl.statefile import read_record, write_json
+from agentctl.store import StoreUnavailable
+from agentctl.procs import process_start, socket_host
+from agentctl.selfcode import TOOL_PATH
+from agentctl.repos import red_repo_of
+from agentctl.fixerrecords import fixer_keys, fixer_records
+from agentctl.inboxentry import inbox_write
+from agentctl.claudefiles import claude_jobs_root
+from agentctl.allowedpaths import allowed_path
+from agentctl.fixersession import fixer_label
+from agentctl.worktrees import fresh_worktree
+from agentctl.fixerenv import fixer_env
+from agentctl.redrepos import red_is_other, red_owner_only, red_repo_tag
+from agentctl.redfamilies import red_family
+from agentctl.laptoprole import laptop_role_standby
+
 
 # HOW A FIXER LANDS (2026-11-16, Main #2515: the fixer wrapped `agentctl land` in `timeout -s KILL` twice, then ran
 # scripts/hooks/pre-push itself; neither verdict came within its 180-min turn).

@@ -154,14 +154,6 @@ def tail_of(out, n=25):
     return "\n  ".join([l for l in out.splitlines() if l.strip()][-n:])
 
 
-def fixes_of(repo, commits):
-    """The run ids/numbers the commits' Fixes-Red: trailers name -- those that count as fixes (fix_check)."""
-    out = set()
-    for c in commits:
-        out |= commit_fixes(repo, c)  # only those that count: touching what the red's job reads (fix_check)
-    return out
-
-
 def diagnoses_of(repo, commits):
     """The run ids/numbers the commits' `Diagnoses-Red:` trailers name (DIAGNOSTICS ARE NO FIX, redmove.py)."""
     out = set()

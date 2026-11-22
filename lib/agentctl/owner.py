@@ -171,23 +171,6 @@ def owner_spawn(store, o_r, repo, fam, off, took, extra=()):
     return True, line
 
 
-def owner_intro(owner):
-    fam = owner["family"]
-    reds = "; ".join(owner.get("reds") or [])
-    return (f"You are the LONG-LIVED OWNER of the `{fam}` red family: one background session (the owner sees it in "
-            "`claude agents`) that keeps every red of the family, across reds and restarts, in ONE worktree. Your "
-            f"NOTEBOOK is {owner['notebook']}: read it FIRST, and keep it current after every step (the reproducer you "
-            "built and how to run it, each hypothesis and how it ended, what is left) -- a restart of you continues "
-            "from it and this same worktree. Your reds' leases are held for you by agentctl while you work (do not "
-            "`red claim` them); new reds of your family arrive in RED-INBOX.md and as your next turn. "
-            + (f"This turn's reds: {reds}. " if reds else "")
-            + "End each turn with ONE verdict line for the turn's reds (LANDED <sha> / WAITS ON <sha> (red <key>): / "
-              "GAVE UP: / DIAGNOSED: / BLOCKED ON OWNER:). When the durable fix needs the OWNER'S DECISION in an owner-only "
-              "category (the brief's ASK THE OWNER ONLY WHAT NO AGENT CAN DO), end `DIAGNOSED: <cause>; "
-              "decide[<category>]: <the decision only the owner can make>`: the red then waits on the owner with it. "
-              "Any other question is yours: proceed under the repo's standing rules and checked-in policies. ")
-
-
 def owner_resume_target(rec):
     """The session the owner's next turn resumes: its recorded one when that holds a conversation (fixer.bg_resumable),
     else the last one that did (`resumable`, kept here), else None -- a fresh session, never a resume claude refuses."""

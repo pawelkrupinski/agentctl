@@ -95,13 +95,6 @@ def red_renew_holders(store, t):
             store.renew(row["name"], row["epoch"], row["secret"], mark, ttl)
 
 
-def fixer_keys(r):
-    """The red keys a fixer record holds or held: its own red's, its lease's and its run's other reds' leases'."""
-    names = [r.get("lease")] + [x.get("name") for x in r.get("extra_leases") or []]
-    keys = {n.split("/", 1)[1] for n in names if n and n.startswith("red/")}
-    return keys | ({r["key"]} if r.get("key") else set())
-
-
 # -- the dispatcher (the phase-2 shape: offers and leases only)
 def red_fixers_alive(store, t):
     """One row per live FIXER (a fixer holding several reds' leases counts once)."""

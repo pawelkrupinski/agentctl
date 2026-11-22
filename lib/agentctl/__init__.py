@@ -28,13 +28,14 @@ MODULES = ("core", "timefmt", "statefile", "moviestools", "forge", "ghapp", "cla
            "dispatches", "cleanup", "machine", "govtickets", "testtmp", "procwatch", "inbox", "jvmreap",
            "conditions", "notifier", "upkeep", "queue", "patches", "generated", "conflicts", "fixchange",
            "queuerecheck", "redfixes", "redworkflows", "redreplay", "issues", "identitychange", "changekind",
-           "redrepos", "redfamilies", "cistate", "owners", "redask", "alerts", "projector")
+           "redrepos", "redfamilies", "cistate", "owners", "redask", "alerts", "projector", "laptoprole",
+           "fixerland", "fixer", "govbudget", "gov", "govcmd")
 
 NAMESPACE = ("ciwhy", "branches", "red", "redseen", "redmove", "reduntracked", "redstep", "redcrash", "redpending",
-             "redverify", "reddispatch", "fixer", "fixerland", "fixerlife", "redclaim", "redview", "redearly",
-             "redtick", "redblock", "redvault", "ask", "owner", "gov", "slots", "landwatch", "waiting",
-             "queuesubmit", "queueuntil", "queueclose", "queuediff", "queuepush", "queuebatch", "remote", "batch",
-             "tools", "blame", "server", "watchdog", "recovery", "status", "cli")
+             "redverify", "reddispatch", "fixerlife", "redclaim", "redview", "redearly", "redtick", "redblock",
+             "redvault", "ask", "owner", "slots", "landwatch", "waiting", "queuesubmit", "queueuntil", "queueclose",
+             "queuediff", "queuepush", "queuebatch", "remote", "batch", "tools", "blame", "server", "watchdog",
+             "recovery", "status", "cli")
 
 PARTS = MODULES + NAMESPACE
 

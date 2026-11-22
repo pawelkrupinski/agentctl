@@ -1,48 +1,6 @@
 # agentctl, part `slots`: check slots, the landing lease, the known-red baseline.
 # Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
 
-# ---------------------------------------------------------------- check slots
-# The owner (2026-10-27): "just limit the precommit checks to a reasonable number", and "keep measuring to adjust that
-# number". Every pre-commit check run (land's dry run, the `waiting` batch check, the known-red baseline) is admitted by
-# THE GOVERNOR (above) as a check-kind ticket of class `check` (`red` for a change fixing a red run, which skips the
-# cap): at most N run at once. Its ticket counts a JVM's 5 GB: the hook's `sbt -batch` takes no ticket of its own; an
-# sbt server it starts through sbt-warm does (at the check's priority, KINOWO_GOV_CLASS), counted twice for a while. Its
-# cores are the check's (GOV_JOB_CORES["check"]): the hook's sbt-warm calls take no cores ticket (KINOWO_GOV_CPU_HELD).
-# N: $AGENTCTL_MAX_CHECKS if set, else the automatic cap (checks/cap.json, default 3, at most the budget's worth of sbt
-# servers). A waiter prints why it waits. Each run appends to checks/runs.jsonl: its duration, its wait, the cap and the
-# number of checks running, the load average, CPU % and memory pressure / swap sampled during it. After each run the cap
-# is adjusted from the data (adjust_cap), at most once a day, each change logged and sent to the inbox.
-CHECKS_DEFAULT_CAP = 3
-
-
-def checks_dir():
-    d = os.environ.get("AGENTCTL_CHECKS_DIR") or state_root("checks")
-    os.makedirs(d, exist_ok=True)
-    return d
-
-
-def gov_max_checks():
-    """The most checks the budget holds: one sbt server's worth of memory each."""
-    return max(1, int(gov_budget() // GOV_MEM_GB["check"]))
-
-
-def cap_state():
-    return read_record(os.path.join(checks_dir(), "cap.json"), {"cap": CHECKS_DEFAULT_CAP})
-
-
-def checks_cap():
-    if os.environ.get("AGENTCTL_MAX_CHECKS"):
-        return max(1, int(os.environ["AGENTCTL_MAX_CHECKS"]))
-    return max(1, min(gov_max_checks(), int(cap_state().get("cap", CHECKS_DEFAULT_CAP))))
-
-
-def machine_sample():
-    """(load1, cpu %, memory pressure %, swap used MB) of this machine, cheaply; None where unreadable."""
-    load1 = machine_load1()
-    cpu = min(100.0, 100.0 * load1 / machine_cores())
-    m = mem_stats()
-    return load1, cpu, m["pressure"], m["swap_used_mb"]
-
 
 class Slot:
     def __init__(self, label, cls="check"):
@@ -64,11 +22,6 @@ class Slot:
         """The hook's environment: its sbt JVM is admitted at this check's priority, and its sbt-warm calls take no cores
         ticket of their own (KINOWO_GOV_CPU_HELD): this check's ticket is charged the hook's cores already."""
         return dict(env, KINOWO_GOV_CLASS=self.cls, KINOWO_GOV_CPU_HELD="1")
-
-
-def slot_holders(cap=None):
-    return [f"pid {t.get('pid')} {t.get('label')} since {t.get('since')} ({t.get('class')})"
-            for t in gov_tickets() if t.get("kind") == "check"]
 
 
 @contextlib.contextmanager
@@ -103,30 +56,6 @@ def record_check(slot, duration):
            "swap_mb": mx(3), "swap_mb_start": slot.samples[0][3] if slot.samples and slot.samples[0] else None}
     with open(os.path.join(checks_dir(), "runs.jsonl"), "a") as f:
         f.write(json.dumps(rec) + "\n")
-
-
-def check_runs(days=7, now=None):
-    now = now or time.time()
-    out = []
-    try:
-        with open(os.path.join(checks_dir(), "runs.jsonl")) as f:
-            for line in f:
-                try:
-                    r = json.loads(line)
-                except ValueError:
-                    continue
-                if r.get("at", 0) >= now - days * 86400:
-                    out.append(r)
-    except OSError:
-        pass
-    return out
-
-
-def pct(vals, q):
-    vals = sorted(vals)
-    if not vals:
-        return None
-    return vals[min(len(vals) - 1, int(round(q * (len(vals) - 1))))]
 
 
 SLOT_WAIT_COMMON = 0.3        # share of the day's runs that waited over a minute for a slot
@@ -178,32 +107,6 @@ def maybe_adjust_cap(now=None):
         f.write(f"{ts()} {line}\n")
     inbox_write("checks", line, [line], [], 0)
     return line
-
-
-def cmd_checks(a):
-    if a.ccmd == "stats":
-        runs = check_runs(a.days)
-        cap = checks_cap()
-        st = cap_state()
-        print(f"check slots: cap {cap}" + (" ($AGENTCTL_MAX_CHECKS)" if os.environ.get("AGENTCTL_MAX_CHECKS") else
-                                          f" (auto; last change: {st.get('reason', 'none')})")
-              + f"; running now: {len(slot_holders(cap))}; {len(runs)} check run(s) in {a.days} d")
-        print(f"{'running':>7} {'runs':>5} {'p50 dur':>8} {'p90 dur':>8} {'p50 wait':>9} {'p90 wait':>9} {'max mem%':>8} {'max swap':>8}")
-        for level in sorted({r.get("running", 0) for r in runs}):
-            rs = [r for r in runs if r.get("running", 0) == level]
-            dur, wait = [r["duration"] for r in rs], [r["waited"] for r in rs]
-            mem = [r["pressure"] for r in rs if r.get("pressure") is not None]
-            swp = [r["swap_mb"] for r in rs if r.get("swap_mb") is not None]
-            print(f"{level:>7} {len(rs):>5} {pct(dur, .5):>7.0f}s {pct(dur, .9):>7.0f}s {pct(wait, .5):>8.0f}s "
-                  f"{pct(wait, .9):>8.0f}s {max(mem) if mem else '-':>8} {int(max(swp)) if swp else '-':>8}")
-        return 0
-    if a.ccmd == "status":
-        cap = checks_cap()
-        holders = slot_holders(cap)
-        print(f"checks: {len(holders)}/{cap} running (the governor's check cap; `agentctl gov status` for the rest)"
-              + "".join(f"\n  {h}" for h in holders))
-        return 0
-    return 2
 
 
 def stalled(step, output, log_path):

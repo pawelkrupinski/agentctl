@@ -238,7 +238,6 @@ def red_verify_run_on_way(o_r, repo, f):
 
 
 RED_PRIORITY = {"gate": 0, "fix": 1, "outside": 2, "flake": 3}
-RED_RECURRING = 3            # landed fixes the same failure outlived: `recurring`, and its fixer hunts the root cause
 RED_TICK_INTERVAL = 15       # seconds between the processor's red ticks ($AGENTCTL_RED_TICK)
 RED_FIXER_WALL = 3 * 3600    # a dispatched fixer's maximum wall time ($AGENTCTL_RED_FIXER_WALL)
 RED_RENEW_EVERY = 60         # a fixer's wrapper renews its lease this often

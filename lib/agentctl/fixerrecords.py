@@ -80,3 +80,10 @@ def record_session_is(rec: dict[str, Any], sid: str, unset: bool = False) -> boo
     have = rec.get("session")
     return have == sid or (unset and have is None) or \
         bool(sid and rec.get("bg_id") and not rec.get("transcript") and str(sid).startswith(str(rec["bg_id"])))
+
+
+def fixer_keys(r: dict[str, Any]) -> set[str]:
+    """The red keys a fixer record holds or held: its own red's, its lease's and its run's other reds' leases'."""
+    names = [r.get("lease")] + [x.get("name") for x in r.get("extra_leases") or []]
+    keys = {n.split("/", 1)[1] for n in names if n and n.startswith("red/")}
+    return keys | ({r["key"]} if r.get("key") else set())

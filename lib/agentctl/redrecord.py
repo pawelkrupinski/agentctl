@@ -35,3 +35,6 @@ def red_active(store: Any) -> dict[str, dict[str, Any]]:
         if it["state"] not in RED_TERMINAL:
             out[it["data"].get("key") or it["id"]] = it
     return out
+
+
+RED_RECURRING = 3            # landed fixes the same failure outlived: `recurring`, and its fixer hunts the root cause

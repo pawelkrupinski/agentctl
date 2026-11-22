@@ -19,6 +19,7 @@ from agentctl.timefmt import parse_time
 from agentctl.statefile import read_record, write_json
 from agentctl.ghapp import ghapp_enabled, ghapp_token
 from agentctl.classify import net_run
+from agentctl.core import HOME
 
 
 # ---------------------------------------------------------------- forge: the read side
@@ -431,3 +432,19 @@ RUN_FIELDS = "databaseId,number,status,conclusion,headSha,url,displayTitle,workf
 
 
 RED_CONCLUSIONS = ("failure", "timed_out")
+
+
+RUNNERS_PAGE_MAX_AGE = 5 * 60  # ci-runners-page reads GitHub's runners and jobs every ~15 s
+
+
+def runner_queue(now_=None):
+    """ci-runners-page's last good read of ci-runner (`running` tasks per runner, `waiting_jobs` per label, each runner's
+    `limits`), or None when it is missing or older than RUNNERS_PAGE_MAX_AGE."""
+    path = os.environ.get("AGENTCTL_RUNNERS_PAGE_CACHE", f"{HOME}/.cache/ci-runners-page/last-good.json")
+    try:
+        with open(path) as f:
+            q = json.load(f)
+        fresh = (now_ if now_ is not None else time.time()) - float(q["ok"]) <= RUNNERS_PAGE_MAX_AGE
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return q if fresh else None

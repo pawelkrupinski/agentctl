@@ -710,36 +710,6 @@ def lander_revive(store, o_r, repo, off, took, u, b):
     return True, line
 
 
-def lander_prompt(u, wt):
-    """The revived lander's task (fixer_prompt's, for tier `lander`)."""
-    l = u["lander"]
-    num, rid = u["run"].get("number"), u["run"].get("databaseId")
-    name = l.get("change")
-    head = (f"YOU ARE THE AGENT THAT LANDED {name}, continued from your transcript {l.get('transcript')} (subagent "
-            f"{l.get('agent')} of session {str(l.get('session'))[:8]}): read its last part first, it is your own context. "
-            if l.get("mode") == "transcript" else "")
-    moved = (f"Your old worktree {l['moved_from']} is gone: work in {wt} (off {remote()}/main). " if l.get("moved_from")
-             else "")
-    why = f"\n\n`agentctl ci-why {rid}` says:\n{l['ci_why']}\n\n" if l.get("ci_why") else " "
-    if l.get("reverted") is False:  # its revert did not apply: fix forward, as a gate fix
-        return (head + f"agentctl REVIVED YOU: your change {name} ({', '.join(l.get('shas') or [])}) turned main red -- "
-                f"{u['workflow']} #{num} (run id {rid}) failed in job `{u.get('job')}` with "
-                f"{str(u.get('line') or '')[:300]!r}; its parent passes the same check, its end fails. It COULD NOT BE "
-                f"REVERTED ({l.get('revert')}).{why}" + moved + f"FIX IT FORWARD in your worktree {wt}: `git fetch "
-                f"{remote()} && git rebase {remote()}/main`, fix the failure (never loosen the test), commit it with a "
-                f"`Fixes-Red: {num}` trailer and land it with `~/bin/agentctl land` (a gate fix: it lands while main is "
-                "red). End at `LANDED <sha>`, or `GAVE UP: <why>`.")
-    return (head + f"agentctl REVIVED YOU: your change {name} ({', '.join(l.get('shas') or [])}: "
-            f"{str(l.get('subject') or '')[:80]}) turned main red -- {u['workflow']} #{num} (run id {rid}) failed in job "
-            f"`{u.get('job')}` with {str(u.get('line') or '')[:300]!r}; its parent passes the same check, its end fails "
-            f"({str(l.get('evidence') or '')[:200]}). IT WAS REVERTED ({l.get('revert')}).{why}" + moved +
-            f"FIX IT in your worktree {wt}: `git fetch {remote()} && git rebase {remote()}/main` (your original commits "
-            "drop out as already upstream), re-apply your change with `git revert <the revert's sha>` once the revert is "
-            f"on {remote()}/main (`git log {remote()}/main --grep 'Reverts-Change: {name}'`), add the fix, reproduce the "
-            "failure and see it pass (the failing test, fast; never loosen it), then land again with "
-            "`~/bin/agentctl land` (no Fixes-Red: the revert fixed the red). End at `LANDED <sha>`, or `GAVE UP: <why>`.")
-
-
 # -- a withdrawn or refuted revert never lands again (2026-11-01: blame's wrong revert of ...-retained-input for #629 was
 # WITHDRAWN -- the red re-decided "pre-existing" -- yet maintain's orphan duty found its leftover worktree
 # movies-wt-revert-629, "author gone", and submitted it: re-queued at 22:33Z, landing on red through its Fixes-Red: 629.)

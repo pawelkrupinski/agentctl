@@ -1,5 +1,32 @@
 # agentctl, part `gov`: the governor.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import contextlib
+import fcntl
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from agentctl.core import env_num, err, pct, pid_alive, process_cache, run_cmd
+from agentctl.timefmt import ts
+from agentctl.statefile import read_record, write_json
+from agentctl.forge import runner_queue
+from agentctl.store import LeaseLost
+from agentctl.procs import proc_alive, process_start
+from agentctl.leases import lock_beat
+from agentctl.cpu import GOV_SATURATED, cpu_pressure, machine_busy_cores, run_queue
+from agentctl.owned import lock_held
+from agentctl.machine import free_gb, machine_cores, machine_fixed, machine_load1, machine_sample, read_meminfo
+from agentctl.govtickets import (
+    GOV_POLL, gov_bump, gov_change_mark, gov_dir, gov_log, gov_log_end, gov_tickets, gov_wait_change)
+from agentctl.jvmreap import sbt_warm_state
+from agentctl.redfixes import fixes_of
+from agentctl.changekind import classify_change, queue_facts
+from agentctl.govbudget import GOV_MEM_GB, checks_cap, gov_budget
+
 
 # ---------------------------------------------------------------- the governor: ONE admission control for memory and CPU
 # The owner (2026-10-27): "one governor for laptop memory and CPU". Three limiters guarded the 36 GB / 14-core Mac each on
@@ -34,7 +61,6 @@
 # - CHECKS keep their cap (`checks`, below): measured and auto-tuned as before, now one of the governor's limits.
 # Every admission is a line of <gov>/admits.jsonl (class, GB, wait, what it waited on); every eviction a line of gov.log.
 GOV_CLASSES = {"red": 0, "check": 1, "agent": 2, "measure": 3, "suite": 4}
-GOV_MEM_GB = {"red": 5.0, "check": 5.0, "agent": 5.0, "measure": 6.0, "hook": 1.0, "suite": 1.0}
 SUITE_CAP = 1  # agentctl's own test-suite runs at once ($AGENTCTL_SUITE_CAP): parallel agents queue, never pile up
 GOV_RAMP = 120          # seconds a new ticket's JVM is still growing into its expected memory
 GOV_RESERVE_GB = 1.0
@@ -60,10 +86,6 @@ GOV_USAGE_DAYS = 14
 GOV_USAGE_MIN_WALL = 20  # seconds: a shorter call says nothing about a job's cores
 GOV_EVICT_IDLE = 60     # a kept server unused this long (seconds) may be evicted
 GOV_REPORT = 600
-
-
-def gov_budget():
-    return env_num("AGENTCTL_GOV_BUDGET_GB", round(0.6 * ram_gb(), 1))
 
 
 def gov_machine():
@@ -704,108 +726,3 @@ def gov_class_of(repo, commits, reds, st=None):
     return "red" if classify_change({"fixes": sorted(fixes)}, queue_facts(reds, st))["red_fix"] else "check"
 
 
-def cmd_gov(a):
-    if a.gcmd == "admit":
-        t = gov_admit(a.cls, a.mem, a.label or "", kind=a.kind, fd=a.fd, ticket=a.ticket, wait=not a.try_,
-                      force=a.force, pid=a.pid, cwd=a.cwd, cores=a.cores, job=a.job)
-        return 0 if t else 1
-    if a.gcmd == "usage":
-        rec = gov_record_usage(a.job, a.wall, a.cpu, a.load1, a.label or "")
-        print(f"{a.job}: {rec['cores']:g} cores over {a.wall:g} s" if rec else f"{a.job}: under {GOV_USAGE_MIN_WALL} s, not recorded")
-        return 0
-    if a.gcmd == "cores":
-        print(f"{gov_job_cores(a.job, a.cls):g}")
-        return 0
-    if a.gcmd == "route":
-        where, why = gov_route(a.job, a.cls, a.mem)
-        print(f"{where}: {why}")
-        return 0 if where == "ci" else 1
-    if a.gcmd == "replay":
-        rows = []
-        try:
-            with open(os.path.join(gov_dir(), "admits.jsonl")) as f:
-                for line in f:
-                    try:
-                        rows.append(json.loads(line))
-                    except ValueError:
-                        pass
-        except OSError:
-            pass
-        at = dt.datetime.fromisoformat(a.at.replace("Z", "+00:00")).timestamp()
-        rows = [r for r in rows if abs(float(r.get("at", r.get("end", 0))) - at) <= 12 * 3600]
-        cap = env_num("AGENTCTL_GOV_CPU_FACTOR", GOV_CPU_FACTOR) * (a.cores or machine_cores())
-        res = gov_replay(rows, cap, at, a.hold * 60)
-        fmt = lambda js: ", ".join(f"{l} {c:g}" for l, c in js) or "-"
-        print(f"replay at {a.at} (cap {cap:g} cores; a ticket with no end record held {a.hold:g} min):")
-        print(f"  as admitted:    {len(res['old'])} live, {sum(c for _, c in res['old']):g} cores: {fmt(res['old'])}")
-        print(f"  the cores rule: {len(res['new'])} live, {sum(c for _, c in res['new']):g} cores: {fmt(res['new'])}; "
-              f"{len(res['waiting'])} waiting: {fmt(res['waiting'])}")
-        print(f"  peak cores live: {res['old_peak']:g} as admitted, {res['new_peak']:g} under the rule; p50 wait "
-              f"{res['old_wait_p50'] / 60:.0f} min as admitted, {res['new_wait_p50'] / 60:.0f} min under the rule")
-        return 0
-    if a.gcmd == "evict":
-        if a.dry_run:
-            for idle, root, _p in idle_servers():
-                print(f"would evict {root} (unused {int(idle // 60)} min)")
-            return 0
-        root = gov_evict("by hand (agentctl gov evict)")
-        print(f"evicted {root}" if root else "no idle sbt server to evict")
-        return 0
-    if a.gcmd == "capacity":
-        cap, tickets = gov_capacity(), gov_tickets()
-        print(f"{cap['state']}: {cap['busy']:.1f} of {cap['cores']} cores busy ({cap['charged']:g} charged, "
-              f"{cap['measured']:.1f} measured, load {machine_load1():.1f}); {len(tickets)} admitted, "
-              f"{len(gov_waiters())} waiting")
-        return 0
-    if a.gcmd == "status":
-        tickets, m = gov_tickets(), gov_machine()
-        cap = env_num("AGENTCTL_GOV_CPU_FACTOR", GOV_CPU_FACTOR) * m["cores"]
-        print(f"governor: {len(tickets)} admitted, {gov_committed(tickets):.1f}/{gov_budget():.0f} GB committed, "
-              f"{gov_charged(tickets):g}/{cap:g} cores charged, {gov_ramp(tickets):.0f} GB still growing; free {m['free'] if m['free'] is None else round(m['free'], 1)} "
-              f"GB, pressure {m['pressure']}%, load {m['load1']:.1f}/{m['cores']} cores; check cap {checks_cap()}")
-        for t in tickets:
-            print(f"  {t.get('class'):<7} {t.get('mem'):>4} GB {float(t.get('cores') or 0):>4g} cores  {t.get('kind'):<5} "
-                  f"{t.get('label')}  pid {t.get('pid')}  "
-                  f"since {t.get('since')}  {t.get('cwd')}")
-        for w in gov_waiters():
-            print(f"  WAITING {w.get('class'):<7} {w.get('mem'):>4} GB {float(w.get('cores') or 0):>4g} cores  "
-                  f"{w.get('label')}  pid {w.get('pid')}")
-        idle = idle_servers()
-        if idle:
-            print("evictable: " + ", ".join(f"{os.path.basename(r)} ({int(i // 60)} min)" for i, r, _p in idle))
-        why, summary = pressure_report()
-        print(f"pressure: {why} -- holds all but red fixes [{summary}]" if why else f"pressure: none [{summary}]")
-        return 0
-    if a.gcmd == "stats":
-        rc = cmd_checks(argparse.Namespace(ccmd="stats", days=a.days))
-        cutoff = time.time() - a.days * 86400
-        rows = []
-        try:
-            with open(os.path.join(gov_dir(), "admits.jsonl")) as f:
-                for line in f:
-                    try:
-                        r = json.loads(line)
-                    except ValueError:
-                        continue
-                    if r.get("at", 0) >= cutoff:
-                        rows.append(r)
-        except OSError:
-            pass
-        print(f"{'class':>7} {'admits':>6} {'p50 wait':>9} {'p90 wait':>9} {'waited>1m':>9}")
-        for cls in GOV_CLASSES:
-            rs = [r for r in rows if r.get("class") == cls]
-            if rs:
-                w = [r.get("waited", 0) for r in rs]
-                print(f"{cls:>7} {len(rs):>6} {pct(w, .5):>8.0f}s {pct(w, .9):>8.0f}s {sum(1 for x in w if x > 60):>9}")
-        usage = gov_usage(a.days)
-        for job in sorted({r.get("job") for r in usage if r.get("job")}):
-            m_ = gov_measured_cores(job, usage)
-            print(f"cores {job}: {sum(1 for r in usage if r.get('job') == job)} runs, charged "
-                  f"{gov_job_cores(job):g} ({'measured p75' if m_ is not None else 'default'})")
-        try:
-            ev = sum(1 for l in open(os.path.join(gov_dir(), "gov.log")) if " evicted " in l)
-        except OSError:
-            ev = 0
-        print(f"evictions (all time): {ev}")
-        return rc
-    return 2

@@ -246,22 +246,6 @@ def run_jobs(o_r, run):
         return None
 
 
-RUNNERS_PAGE_MAX_AGE = 5 * 60  # ci-runners-page reads GitHub's runners and jobs every ~15 s
-
-
-def runner_queue(now_=None):
-    """ci-runners-page's last good read of ci-runner (`running` tasks per runner, `waiting_jobs` per label, each runner's
-    `limits`), or None when it is missing or older than RUNNERS_PAGE_MAX_AGE."""
-    path = os.environ.get("AGENTCTL_RUNNERS_PAGE_CACHE", f"{HOME}/.cache/ci-runners-page/last-good.json")
-    try:
-        with open(path) as f:
-            q = json.load(f)
-        fresh = (now_ if now_ is not None else time.time()) - float(q["ok"]) <= RUNNERS_PAGE_MAX_AGE
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
-    return q if fresh else None
-
-
 def queue_full(o_r, number, q):
     """'queued: <label> full (N/N busy, M ahead, oldest Xm)' when run #number of o_r waits only on labels whose every
     serving runner is up with all its slots busy, else None (a free slot, a runner down, or nothing known: stuck)."""

@@ -355,3 +355,11 @@ def red_fix_of(it, facts, store=None):
 
 def red_entry_status(facts, eid):
     return next((e.get("status") for e in facts.get("entries") or [] if e.get("id") == eid), None)
+
+
+def fixes_of(repo, commits):
+    """The run ids/numbers the commits' Fixes-Red: trailers name -- those that count as fixes (fix_check)."""
+    out = set()
+    for c in commits:
+        out |= commit_fixes(repo, c)  # only those that count: touching what the red's job reads (fix_check)
+    return out
