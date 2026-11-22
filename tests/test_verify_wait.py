@@ -303,3 +303,54 @@ class CancelledFixFollowsNoOlderChangeTest(VerifyWaitBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MainMovedUnderAnOutsideRedTest(VerifyWaitBase):
+    """2026-11-22, Order independence #105: 9a7130036 (tools-only, rightly no `Fixes-Red:`) fixed it, while the red sat
+    fix-pending on an unrelated change linked only by editing its workflow file; no run was dispatched to see main fixed."""
+
+    OI = ("name: Order independence\non:\n    workflow_dispatch:\njobs:\n    swift:\n        runs-on: x\n"
+          "        steps:\n            - run: scripts/ci/ratchet_diff.py\n")
+
+    def setUp(self):
+        super().setUp()
+        self.r.write(".github/workflows/order-independence.yml", self.OI)
+        self.r.write("scripts/ci/ratchet_diff.py", "print('ratchet')\n")
+        self.head = self.r.commit("the red run's head")
+        self.r.push()
+        self.t[0] = utc("2026-11-22T05:20:00Z")
+        self.st.put_item("red", "ec12a4564dbc.9", "fix-pending", {
+            "key": "ec12a4564dbc", "workflow": "Order independence", "gate": False, "red_kind": "outside",
+            "jobs": ["swift"], "job": "swift", "kind": "test", "line": "POLLUTE", "runs": ["105"], "opened_at": 0,
+            "last_run": {"number": 105, "databaseId": 44985132691, "headSha": self.head},
+            "fix": {"entry": "20261122-101950-movies-oi-structural-fdfee6", "status": "checking",
+                    "linked": "its workflow's own files"}})
+
+    def verify(self):
+        return A.red_main_verify(self.st, self.st.item("red", "ec12a4564dbc.9"), self.r.path, A.RED_PRIMARY, self.t[0])
+
+    def test_main_moving_under_it_dispatches_its_workflow_to_verify_once_per_head(self):
+        self.assertEqual(self.verify(), [], "main has not moved since its run: nothing to verify")
+        self.r.write("scripts/ci/ratchet_diff.py", "import sys\nsys.dont_write_bytecode = True\nprint('ratchet')\n")
+        fix = self.r.commit("ratchet-diff: write no bytecode for its sibling ratchets")
+        self.r.push()
+        out = self.verify()
+        self.assertEqual(len(out), 1, out)
+        self.assertIn("main moved since its run", out[0])
+        self.assertTrue(any(m == "POST" and "order-independence.yml/dispatches" in p for m, p in self.posts), self.posts)
+        mv = self.st.item("red", "ec12a4564dbc.9")["data"]["main_verify"]
+        self.assertEqual(mv["reach"], fix)
+        self.t[0] += A.RED_MAIN_VERIFY_EVERY + 1
+        self.assertEqual(self.verify(), [], "once per main head")
+
+    def test_a_gate_red_or_one_with_its_own_landed_fix_is_left_to_its_fix(self):
+        self.r.write("scripts/ci/ratchet_diff.py", "print('moved')\n")
+        self.r.commit("moved")
+        self.r.push()
+        it = self.st.item("red", "ec12a4564dbc.9")
+        self.st.update_item("red", it["id"], it["version"], {"gate": True})
+        self.assertEqual(self.verify(), [])
+        it = self.st.item("red", "ec12a4564dbc.9")
+        self.st.update_item("red", it["id"], it["version"], {"gate": False, "fix": {"status": "landed", "sha": "x"}})
+        self.assertEqual(self.verify(), [])
+        self.assertEqual(self.posts, [])

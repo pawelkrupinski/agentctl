@@ -2680,6 +2680,11 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
     off = repo_dispatch_off(store, red_repo_of(d))
     if off and st in ("red", "offered", "leased", "blocked-external", "dispatch-off"):
         return red_hold_off(store, it, row, block, gone, obs, t)
+    verified = red_main_verify(store, it, repo, o_r, t)
+    if verified:  # its version moved: read again
+        it = store.item("red", it["id"])
+        d = it["data"]
+        acts += verified
     if st == "dispatch-off":  # its repo's dispatch is on again: offered
         red_offer(store, it, f"{red_what(d)}: dispatch on again for {red_repo_of(d)}: offered")
         return [f"offered {red_what(d)} (dispatch on again)"]
@@ -3918,6 +3923,44 @@ def red_fix_unverifiable(store, it, why, t):
     store.close_offer(f"red:{it['id']}", "unverified")
     red_offer(store, it, f"{red_what(d)}: {why}: offered again", escalate=True, data=upd)
     return [f"re-offered {red_what(d)} ({why[:80]})"]
+
+
+# MAIN MOVED UNDER AN OUTSIDE RED: VERIFY IT (2026-11-22, Order independence #105: 9a7130036 fixed it -- a tools-only
+# commit, rightly with no `Fixes-Red:` -- while the red sat fix-pending on an unrelated change that edited its workflow
+# file, and its fixer had been stopped hours before; nothing dispatched a run that would have seen main fixed). An
+# outside-gate red with no LANDED fix of its own, whose job reads something main changed since the red's run
+# (fix_reaches_red over each commit since its head), has its workflow dispatched on main to verify -- once per main
+# head, at most every RED_MAIN_VERIFY_EVERY, and only where a verify dispatch is allowed (red_verify_dispatch:
+# red-workflows.tsv). A green run clears it as any decided run does; a red one says main has not fixed it.
+RED_MAIN_VERIFY_EVERY = 3 * 3600
+RED_MAIN_VERIFY_STATES = ("offered", "leased", "fix-pending", "blocked-external")
+
+
+def red_main_verify(store, it, repo, o_r, t):
+    d = it["data"]
+    if d.get("gate") or it["state"] not in RED_MAIN_VERIFY_STATES or not repo:
+        return []
+    if (d.get("fix") or {}).get("status") == "landed":
+        return []  # its own landed fix's verify (red_fix_pending) is on its way
+    mv = d.get("main_verify") or {}
+    if t - float(mv.get("at") or 0) < env_num("AGENTCTL_RED_MAIN_VERIFY_EVERY", RED_MAIN_VERIFY_EVERY):
+        return []
+    head = (d.get("last_run") or {}).get("headSha")
+    r = git(repo, "rev-parse", f"{remote()}/main", check=False)
+    main = r.stdout.strip() if r.returncode == 0 else ""
+    if not head or not main or main == head or mv.get("main") == main:
+        return []
+    r = git(repo, "rev-list", "--no-merges", f"{head}..{main}", check=False)
+    shas = r.stdout.split() if r.returncode == 0 else []
+    reach = next((x for x in shas if fix_reaches_red(repo, x, d)), None)
+    if not reach:
+        return []
+    line = red_verify_dispatch(o_r, repo, d.get("workflow"), main, (d.get("last_run") or {}).get("databaseId"))
+    store.update_item("red", it["id"], it["version"], {"main_verify": {"at": t, "main": main, "reach": reach,
+                                                                       "verify": line}})
+    out = f"{red_what(d)}: main moved since its run ({len(shas)} commit(s), {reach[:10]} reaching its job): {line}"
+    inbox_write("red", out, [out], [], 0)
+    return [out]
 
 
 def red_verify_dispatch(o_r, repo, workflow, sha, run_id=None):

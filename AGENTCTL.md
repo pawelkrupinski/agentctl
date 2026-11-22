@@ -1044,6 +1044,11 @@ agent must be assigned to it".
   own revert of that commit, `Fixes-Red` and a specific `Fix-Replay: none`, landed by `agentctl land` under the normal
   checks -- once (`reverted`), then the ladder as before. A fix change that ended rejected puts its change's `why` in
   the red's history, so red status, the inbox and the next fixer's prompt say why.
+- **Main moved under an outside red: verify it (2026-11-22, Order independence #105).** An outside-gate red with no
+  landed fix of its own, whose job reads something main changed since the red's run (`fix_reaches_red` over the
+  commits since its head), has its workflow dispatched on main to verify (red.py `red_main_verify`): once per main
+  head, at most every `RED_MAIN_VERIFY_EVERY` (3 h), only where `red_verify_dispatch` allows it. A fix that lands
+  without a trailer (tools-only, rightly) is seen by the run it starts, never waited for behind a weakly linked change.
 - **No signature where main keeps none (2026-11-22).** A fixer of a repo whose main is unsigned (red-repos.json
   `signed: false`: movies, whose land rebases with NO_SIGN) commits unsigned (`fixer_env`: `commit.gpgsign` and
   `tag.gpgsign` false through git's env config), so commit signing never parks one on the vault: #348/#349's revert
@@ -2940,6 +2945,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `red_fix_next_run` | `AGENTCTL_RED_FIX_NEXT_RUN` | `108000` | s an outside red's landed fix waits unproven for its workflow's next run |
 | `red_fix_requeue_grace` | `AGENTCTL_RED_FIX_REQUEUE_GRACE` | `900` | $AGENTCTL_RED_FIX_REQUEUE_GRACE |
 | `red_join_idle` | `AGENTCTL_RED_JOIN_IDLE` | `1800` | s a red joined to its family holder's lease may go with no progress on it before it is released |
+| `red_main_verify_every` | `AGENTCTL_RED_MAIN_VERIFY_EVERY` | `10800` | - |
 | `red_old_run` | `AGENTCTL_RED_OLD_RUN` | `172800` | an outside red whose newest run is older than this is checked by a fresh run before it is fixed |
 | `red_orphan_grace` | `AGENTCTL_RED_ORPHAN_GRACE` | `300` | an ended session's turn still held this long is orphaned |
 | `red_others_every` | `AGENTCTL_RED_OTHERS_EVERY` | `60` | seconds between the other watched repos' red ticks: one gate read each |
