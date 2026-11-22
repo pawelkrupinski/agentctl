@@ -1435,8 +1435,7 @@ def red_release(store, o_r, target, any_=False):
 # -- how a red reads (ci-why, the status line, `red status`): its state, holder or offer, deadline. Never NOBODY.
 def gate_red_runs():
     """[(workflow name, decided run)] of the gate's red workflow(s) in the snapshot."""
-    return [(g.get("name"), g.get("decided") or {}) for g in (state_read().get("ci") or {}).get("gate") or []
-            if ((g.get("decided") or {}).get("conclusion") or "") in RED_CONCLUSIONS]
+    return [(g.get("name"), g["decided"]) for g in snapshot_gate_reds()]
 
 
 def gate_red_now_label():

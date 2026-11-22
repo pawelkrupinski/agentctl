@@ -1,21 +1,21 @@
 # THE TYPES BASELINE (quality/ratchet.py update writes it; hooks/pre-push holds every push to it).
 # mypy --strict errors per part (quality/typecheck.py), frozen. A row may only fall; a rise lands only in a
 # commit carrying `Types: <why>`. CLAUDE.md, "The ratchets".
-mypy-errors	alerts	151
+mypy-errors	alerts	150
 mypy-errors	ask	76
-mypy-errors	batch	524
+mypy-errors	batch	521
 mypy-errors	blame	283
-mypy-errors	branches	399
+mypy-errors	branches	397
 mypy-errors	buildview	49
 mypy-errors	changekind	32
-mypy-errors	ciwhy	309
+mypy-errors	ciwhy	302
 mypy-errors	classify	12
 mypy-errors	cleanup	156
 mypy-errors	cli	7
 mypy-errors	config	22
 mypy-errors	core	134
 mypy-errors	explorer	33
-mypy-errors	fixer	744
+mypy-errors	fixer	743
 mypy-errors	forge	69
 mypy-errors	ghapp	37
 mypy-errors	gov	237
@@ -34,12 +34,12 @@ mypy-errors	recovery	187
 mypy-errors	red	1151
 mypy-errors	remote	241
 mypy-errors	reverts	72
-mypy-errors	server	464
+mypy-errors	server	459
 mypy-errors	slots	462
 mypy-errors	stats	178
-mypy-errors	status	279
+mypy-errors	status	277
 mypy-errors	store	189
-mypy-errors	tools	161
+mypy-errors	tools	159
 mypy-errors	upkeep	41
 mypy-errors	wait	71
 mypy-errors	waiting	227

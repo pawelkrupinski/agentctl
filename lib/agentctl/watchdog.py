@@ -91,8 +91,7 @@ def w1_gate_reds(o_r):
     snap = ci_state_load(o_r)
     if not snap:
         return 0.0, None
-    reds = [g for g in snap.get("gate") or []
-            if (g.get("decided") or {}).get("conclusion") not in (None, "success") and g.get("since")]
+    reds = [g for g in snapshot_gate_reds(snap) if g.get("since")]
     if not reds:
         return 0.0, ""
     starts = [parse_time(g["since"]).timestamp() for g in reds]

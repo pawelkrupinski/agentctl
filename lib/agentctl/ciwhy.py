@@ -1212,17 +1212,24 @@ CI_STATE_MAX_AGE = 180
 _state_lock = __import__("threading").Lock()
 
 
-def state_path():
+def state_path() -> str:
     return os.environ.get("AGENTCTL_STATE_FILE") or state_root("state.json")
 
 
-def state_read():
+def state_read() -> dict[str, Any]:
     try:
         with open(state_path()) as f:
             d = json.load(f)
         return d if isinstance(d, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def snapshot_gate_reds(ci: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """THE ONE READING of "the gate is red" from a CI snapshot (ci_state_refresh's; default the current state.json's
+    `ci`): its gate rows whose newest decided run is red. A decided run is only ever success or red (gate_runs)."""
+    ci = (state_read().get("ci") or {}) if ci is None else ci
+    return [g for g in ci.get("gate") or [] if ((g.get("decided") or {}).get("conclusion") or "") in RED_CONCLUSIONS]
 
 
 def state_update(**parts):

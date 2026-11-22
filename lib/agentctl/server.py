@@ -731,9 +731,8 @@ def clear_holds_on(st, eid):
             pass  # moved meanwhile: the next tick records its hold
 
 
-def gate_is_red_now():
-    ci = state_read().get("ci") or {}
-    return any((g.get("conclusion") or "") in ("failure", "timed_out") for g in ci.get("gate") or [])
+def gate_is_red_now() -> bool:
+    return bool(snapshot_gate_reds())
 
 
 def track_red_time(st, red, now_=None):
