@@ -21,6 +21,7 @@ from agentctl.conditions import cmd_recover, wire_probes, wire_recover_actions
 from agentctl.upkeep import probe_disk_free
 from agentctl.queue import probe_infra_requeue, probe_push_credential
 from agentctl.alerts import alert_write
+from agentctl.laptoprole import cmd_laptop
 from agentctl.gov import cmd_suite
 from agentctl.govcmd import cmd_checks, cmd_gov
 from agentctl.ciwhy import gate_from_snap, outside_from_snap, red_for
@@ -34,22 +35,23 @@ from agentctl.recovery import (
     cmd_inbox, probe_gate_read, probe_git_fetch, probe_http, probe_route, probe_tcp, probe_token, probe_tunnel,
     probe_waiting_ok, probe_workflow_green, recover_clear_flag, recover_clear_hold, recover_tunnel_reset,
     token_unavailable_note)
-from agentctl.watchdog import cmd_watchdog
 from agentctl.localrecheck import check_failures, recheck_local
 from agentctl.tools import cmd_env, cmd_prepush, cmd_queue_retired, cmd_state
 from agentctl.batch import probe_batch_progress
 from agentctl.superseded import cmd_supersede
 from agentctl.park import cmd_park, cmd_unpark
 from agentctl.status import cmd_ci_why, cmd_issue, cmd_status
+from agentctl.orphans import probe_orphan_landed
+from agentctl.maintain import cmd_maintain
 from agentctl.redtick import cmd_red, probe_red_read
-from agentctl.server import cmd_laptop, cmd_store, probe_clone_health, process_store
+from agentctl.invariants import probe_invariant
+from agentctl.watchdog import cmd_watchdog
+from agentctl.server import cmd_store, process_store
 from agentctl.processor import cmd_tick, cmd_waiting
 from agentctl.queueenter import cmd_land_precheck
 from agentctl.slots import cmd_land
-from agentctl.orphans import probe_orphan_landed
-from agentctl.maintain import cmd_maintain
-from agentctl.invariants import probe_invariant
 from agentctl.cliparser import parser
+from agentctl.serverclone import probe_clone_health
 
 
 # THE COMPOSITION ROOT: what every process wires before any command runs.

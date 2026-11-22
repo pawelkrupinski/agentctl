@@ -13,27 +13,28 @@ from agentctl.store import machine_state, open_store
 from agentctl.policy import policy_blocks
 from agentctl.trailers import do_not_land, held_commit
 from agentctl.waitingdir import waiting_state
-from agentctl.inboxentry import inbox_write
-from agentctl.land import landed, run_watched, tool_env
 from agentctl.storetoken import no_vault
 from agentctl.lander import commit_keys, lander_record
+from agentctl.inboxentry import inbox_write
+from agentctl.land import landed, run_watched, tool_env
 from agentctl.worktrees import WorktreeGuard
 from agentctl.conflicts import conflict_resolve
 from agentctl.redfixes import fixes_of
 from agentctl.redreplay import fix_replay_refusal, run_fix_replays
+from agentctl.queueuntil import (
+    UNTIL_DONE_AGAIN, UNTIL_DONE_DEADLINE, next_command, own_change_item, until_done_finish)
+from agentctl.waiting import diagnoses_of, waiting_commits
 from agentctl.queuesubmit import (
     FAST_PRECHECK, FAST_PRECHECK_BOUND, await_queued, await_verdict, change_decided, landed_sha_of, note_precheck,
     precheck_reason, push_failure_why, queued_tail, start_fast_precheck, submit_ref, take_delivery,
     verdict_still_holds)
-from agentctl.queueuntil import (
-    UNTIL_DONE_AGAIN, UNTIL_DONE_DEADLINE, next_command, own_change_item, until_done_finish)
-from agentctl.waiting import diagnoses_of, waiting_commits
 from agentctl.branches import in_fixer
 from agentctl.remote import offer_token, spawn_waiting_processor
 from agentctl.blame import blame_land_refusal, blame_records_quiet
 from agentctl.tools import check_range
-from agentctl.server import queue_change, submit_remote
 from agentctl.landqueue import queue_command
+from agentctl.server import queue_change
+from agentctl.syncsteps import submit_remote
 
 
 def change_fields(repo, main_ref, head, a):

@@ -10,12 +10,11 @@ from agentctl.queueuntil import parse_duration
 from agentctl.waiting import WAITING_HELP
 from agentctl.remotestore import DEFAULT_STORE_URL, STORE_PORT
 from agentctl.launchd import SERVICE_LABEL
-from agentctl.server import STORE_AUTHS
-from agentctl.slots import LAND_SUBCOMMANDS
 from agentctl.cliops import (
-    add_config, add_decide, add_dispatch, add_gov, add_inbox, add_issue, add_laptop, add_lease, add_maintain,
-    add_park, add_reap, add_recover, add_red, add_revert, add_status, add_supersede, add_unpark)
-from agentctl.cliops import Subparsers
+    Subparsers, add_config, add_decide, add_dispatch, add_gov, add_inbox, add_issue, add_laptop, add_lease,
+    add_maintain, add_park, add_reap, add_recover, add_red, add_revert, add_status, add_supersede, add_unpark)
+from agentctl.storeauth import STORE_AUTHS
+from agentctl.slots import LAND_SUBCOMMANDS
 
 
 def parser() -> argparse.ArgumentParser:
