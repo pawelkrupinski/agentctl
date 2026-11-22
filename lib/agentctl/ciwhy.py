@@ -257,11 +257,6 @@ def commit_line(o_r, sha, repo=None):
         return sha[:9]
 
 
-# scripts/ci/bounded-step.sh --reap's warning: a step outlived its own `timeout-minutes` (the runner gives up on it and
-# goes on, so its log just stops). Identity rule ablation #2400 read as UNCLEAR with it in its log.
-STEP_TIMED_OUT = "ending what a timed-out step left running"
-
-
 def timed_out_jobs(log_text):
     """The jobs of a --log-failed output whose log carries bounded-step's timed-out-step warning."""
     return {raw.split("\t", 1)[0] for raw in log_text.splitlines() if STEP_TIMED_OUT in raw and "\t" in raw}
@@ -525,33 +520,6 @@ def main_callable_flows(o_r):
     """The workflows on origin/main whose only trigger is workflow_call: they never run on their own, so no newer run
     of theirs can ever clear a red run of theirs on main (red_callable_evidence does)."""
     return main_flow_meta(o_r)["callable"]
-
-
-def workflow_triggers(txt):
-    """The trigger names of a workflow file's `on:` (a scalar, a [list], a block of keys or of `- items`)."""
-    lines = txt.splitlines()
-    for i, line in enumerate(lines):
-        m = re.match(r"^[\"']?on[\"']?:\s*(.*?)\s*(#.*)?$", line)
-        if not m:
-            continue
-        inline = m.group(1)
-        if inline:
-            while re.search(r"\{[^{}]*\}", inline[1:]):  # a {flow: mapping}: its keys, not their values
-                inline = inline[0] + re.sub(r"\{[^{}]*\}", "", inline[1:])
-            return set(re.findall(r"[A-Za-z_]+", re.sub(r"\[[^\]]*\]", "", inline) if inline[0] == "{" else inline))
-        names, indent = set(), None
-        for sub in lines[i + 1:]:
-            if not sub.strip() or sub.lstrip().startswith("#"):
-                continue
-            k = re.match(r"^(\s+)(?:-\s*)?[\"']?([A-Za-z_]+)[\"']?\s*(:|$)", sub)
-            if not k:
-                break  # the next top-level key
-            if indent is None:
-                indent = len(k.group(1))
-            if len(k.group(1)) == indent:
-                names.add(k.group(2))
-        return names
-    return set()
 
 
 def outside_gate(o_r):

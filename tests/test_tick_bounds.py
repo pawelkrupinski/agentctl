@@ -1,5 +1,5 @@
 """Every tick step is bounded (2026-10-29: RECONCILER STALLED 05:37-05:41, a tunnel hang held the gate's reads)."""
-import os, sys, threading, time, unittest
+import inspect, os, sys, threading, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -45,7 +45,7 @@ class StepBoundTest(unittest.TestCase):
 
     def test_no_external_call_of_the_tick_is_unbounded(self):
         src = code_source()
-        self.assertIn("def git(repo, *args, check=True, input=None, timeout=600):", src)  # bounded by default...
+        self.assertEqual(inspect.signature(A.git).parameters["timeout"].default, 600)  # bounded by default...
         self.assertIn("timeout=timeout)  # every git call is bounded", src)  # ...and always passed on
         self.assertIn('capture_output=True, timeout=120).returncode == 0', src)
 

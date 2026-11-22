@@ -68,12 +68,6 @@ def blame_hint(repo, groups, d):
     return hit[0] if len(hit) == 1 else None
 
 
-def job_inner(name):
-    """A job's own name: the part after ` / ` of GitHub's `<caller> / <job>` (convergence_reuse.py's jobs_by_name)."""
-    caller, sep, inner = str(name).partition(" / ")
-    return inner if sep else caller
-
-
 def is_drift_job(name):
     return bool(DRIFT_JOB.match(job_inner(name)))
 

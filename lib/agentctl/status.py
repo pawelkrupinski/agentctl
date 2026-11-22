@@ -391,15 +391,6 @@ def red_history_note(it):
     return str(hist[-1].get("outcome"))[:400]
 
 
-def tail_bytes(path, max_bytes):
-    """(the last max_bytes of the file, its size). Raises OSError/TypeError."""
-    with open(path, "rb") as f:
-        f.seek(0, 2)
-        size = f.tell()
-        f.seek(max(0, size - max_bytes))
-        return f.read(max_bytes), size
-
-
 def status_log_body(path, max_bytes=None):
     """(/log's body, the file's size): the file's tail, and when it is short (just rotated), the tail of its newest
     rotated part (<path>.1) before it, marked."""

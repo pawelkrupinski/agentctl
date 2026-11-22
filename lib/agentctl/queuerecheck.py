@@ -267,13 +267,6 @@ def verdict_kept(repo, e, main):
     return _kept_known[key]
 
 
-def branch_of(wt):
-    """The worktree's checked-out branch ('' when detached or gone)."""
-    if not os.path.isdir(wt or ""):
-        return ""
-    return git(wt, "symbolic-ref", "--short", "-q", "HEAD", check=False).stdout.strip()
-
-
 def same_change_source(e, worktree, branch):
     """Whether entry e came from this worktree and branch (an entry from before branches were recorded: the worktree)."""
     if os.path.realpath(e.get("worktree") or "") != os.path.realpath(worktree or ""):

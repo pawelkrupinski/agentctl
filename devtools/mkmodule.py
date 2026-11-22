@@ -2,7 +2,8 @@
 """Turn a part into a real module: write its explicit imports (stdlib + the MODULES it reads), mark it, list it.
 
 usage: mkmodule.py <lib/agentctl> <part>
-Refuses when the part reads a name only a namespace part (not a MODULE) defines."""
+Refuses when the part reads a name only a namespace part (not a MODULE) defines. On a part that is a module already
+(code was moved into it), adds only the import lines it now lacks."""
 import ast
 import builtins
 import os
@@ -97,8 +98,14 @@ for m, v in sorted(from_mod.items(), key=lambda kv: parts.index(kv[0])):
         body.append(cur.rstrip().rstrip(","))
         text = f"from agentctl.{m} import (\n" + "\n".join(body) + ")"
     lines.append(text)
-# drop the part's own old import lines (a real module states its own), then insert after the header comments
 src_lines = src.split("\n")
+if part in modules:  # already a module (code moved into it): add only the imports it now lacks, after its own
+    if lines:
+        last = max(n.end_lineno for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom)))
+        open(path, "w").write("\n".join(src_lines[:last] + lines + src_lines[last:]))
+    print(part, "+", lines)
+    sys.exit(0)
+# insert the imports after the header comments
 i = 0
 while i < len(src_lines) and src_lines[i].startswith("#"):
     i += 1

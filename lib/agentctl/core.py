@@ -178,7 +178,8 @@ GIT_NET_SSH = "ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=
 NO_SIGN = ("-c", "commit.gpgsign=false")
 
 
-def git(repo, *args, check=True, input=None, timeout=600):
+def git(repo: str, *args: str, check: bool = True, input: str | None = None, timeout: float = 600) -> Any:
+    """git -C repo args, bounded: its stdout when check (raising on a failure), else the CompletedProcess."""
     env = None
     if args and args[0] in ("fetch", "ls-remote"):  # never hang on a remote whose ssh accepts and does not answer
         env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
@@ -436,3 +437,15 @@ def host_role() -> str:
     if os.environ.get("AGENTCTL_ROLE") == "server" or os.environ.get("AGENTCTL_HOST") == "ci-runner":
         return "server"
     return "sync"
+
+
+def reds_dir(*parts: str) -> str:
+    d = os.environ.get("AGENTCTL_REDS_DIR") or state_root("reds")
+    return os.path.join(d, *parts)
+
+
+def branch_of(wt: str | None) -> str:
+    """The worktree's checked-out branch ('' when detached or gone)."""
+    if not os.path.isdir(wt or ""):
+        return ""
+    return str(git(wt or "", "symbolic-ref", "--short", "-q", "HEAD", check=False).stdout).strip()

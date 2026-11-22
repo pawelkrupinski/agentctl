@@ -49,3 +49,12 @@ def tosec(t: Any) -> float:
         except ValueError:
             return 0.0
     return s + dd * 86400
+
+
+def safe_cwd() -> str:
+    """The cwd, or what it was: a watch's WATCH OK closes the worktree it runs in, and os.getcwd() then raises (the
+    verdict was lost with it)."""
+    try:
+        return os.getcwd()
+    except OSError:
+        return os.environ.get("PWD") or "(removed)"

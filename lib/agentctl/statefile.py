@@ -38,3 +38,19 @@ def write_json_file(path: str, d: Any) -> None:
         write_json(path, d, indent=None)
     except OSError:
         pass
+
+
+def mtime(path: Any) -> float:
+    try:
+        return os.stat(path).st_mtime
+    except (OSError, TypeError):
+        return 0.0
+
+
+def tail_bytes(path: str, max_bytes: int) -> tuple[bytes, int]:
+    """(the last max_bytes of the file, its size). Raises OSError/TypeError."""
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        f.seek(max(0, size - max_bytes))
+        return f.read(max_bytes), size

@@ -62,15 +62,6 @@ def caller_owner(cwd: str | None = None) -> str:
     return os.environ.get("CLAUDE_CODE_SESSION_ID") or f"{os.environ.get('USER', '?')}@{cwd or safe_cwd()}"
 
 
-def safe_cwd() -> str:
-    """The cwd, or what it was: a watch's WATCH OK closes the worktree it runs in, and os.getcwd() then raises (the
-    verdict was lost with it)."""
-    try:
-        return os.getcwd()
-    except OSError:
-        return os.environ.get("PWD") or "(removed)"
-
-
 INBOX_KINDS = [("REVERTED", r"REVERTED: "), ("REVERT_NOTICE", r"REVERT (NOTICE|UNACKED): "),  # reverts.py: whole revert messages
                ("INVARIANT", r"INVARIANT "), ("CLOSED", r"CLOSED"), ("UNLANDED_ORPHAN", r"UNLANDED ORPHAN:"), ("RECOVERED", r"RECOVERED:"), ("RELANDING", r"RELANDING:"), ("NETWORK", r"NETWORK:"), ("PARKED", r"PARKED DIGEST:|UNPARKED "), ("ORPHAN_FIXER", r"ORPHAN FIXER DISPATCHED"), ("ORPHAN_SUBMITTED", r"ORPHAN SUBMITTED:"),  # first: they quote others
                ("LANDER_REVIVED", r"LANDER REVIVED"), ("LAUNCH_FAILED", r"LAUNCH FAILED"),

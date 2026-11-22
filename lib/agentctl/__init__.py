@@ -20,17 +20,17 @@ import os as _os
 import sys as _sys
 import types as _types
 
-MODULES = ("core", "timefmt", "statefile", "moviestools", "forge", "ghapp", "classify", "store", "procs", "selfcode", "repos", "buildview", "policy", "notifyurl", "config")
+MODULES = ("core", "timefmt", "statefile", "moviestools", "forge", "ghapp", "classify", "store", "procs", "selfcode", "repos", "buildview", "policy", "notifyurl", "config", "workflows", "trailers")
 
 PARTS = ("core", "timefmt", "statefile", "moviestools", "forge", "ghapp", "classify", "store", "procs", "selfcode",
-         "repos", "buildview", "policy", "notifyurl", "config", "storetoken", "wait", "owned", "ciwhy", "branches",
-         "red", "redseen", "redfixread", "redfixes", "redmove", "redretired", "reduntracked", "redstep", "redcrash",
-         "redpending", "redverify", "reddispatch", "redreplay", "fixer", "fixerland", "fixersession", "fixerlife",
-         "redclaim", "redview", "redearly", "redtick", "redblock", "redvault", "ask", "owner", "land", "cpu", "gov", "slots",
-         "landwatch", "waiting", "queue", "queuerecheck", "queuesubmit", "queueuntil", "queueslots", "queueclose",
-         "queuediff", "queuepush", "queuebatch", "remote", "batch", "changekind", "tools", "cleanup", "maint",
-         "lander", "blame", "explorer", "reverts", "server", "upkeep", "watchdog", "inbox", "alerts", "recovery",
-         "projector", "status", "live", "stats", "cli")
+         "repos", "buildview", "policy", "notifyurl", "config", "workflows", "trailers", "storetoken", "wait",
+         "owned", "ciwhy", "branches", "red", "redseen", "redfixread", "redfixes", "redmove", "redretired",
+         "reduntracked", "redstep", "redcrash", "redpending", "redverify", "reddispatch", "redreplay", "fixer",
+         "fixerland", "fixersession", "fixerlife", "redclaim", "redview", "redearly", "redtick", "redblock",
+         "redvault", "ask", "owner", "land", "cpu", "gov", "slots", "landwatch", "waiting", "queue", "queuerecheck",
+         "queuesubmit", "queueuntil", "queueslots", "queueclose", "queuediff", "queuepush", "queuebatch", "remote",
+         "batch", "changekind", "tools", "cleanup", "maint", "lander", "blame", "explorer", "reverts", "server",
+         "upkeep", "watchdog", "inbox", "alerts", "recovery", "projector", "status", "live", "stats", "cli")
 
 
 class Namespace(_types.ModuleType):

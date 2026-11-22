@@ -160,6 +160,15 @@ class MakeModuleTest(unittest.TestCase):
                            capture_output=True, text=True, timeout=60)
         self.assertEqual(r.stdout.split(), [os.sep + "x"] * 2, r.stderr)
 
+    def test_code_moved_into_a_module_gets_the_imports_it_lacks(self):
+        lib = fake_lib(dict(PARTS, mid="import re\n\n\ndef helper():\n    return root(), re, json.dumps(1)\n"))
+        self.assertEqual(tool("mkmodule", lib, "mid").returncode, 0)
+        r = tool("mkmodule", lib, "mid")  # again: nothing lacking, nothing added
+        self.assertEqual(r.returncode, 0, r.stderr)
+        text = read(lib, "mid")
+        self.assertEqual(text.count("from agentctl.core import root"), 1)
+        self.assertEqual(text.count("import json"), 1)
+
     def test_placemodules_puts_the_modules_first(self):
         lib = fake_lib(dict([("top", PARTS["top"]), ("mid", PARTS["mid"]), ("core", PARTS["core"])]))
         self.assertEqual(tool("placemodules", lib).returncode, 0)

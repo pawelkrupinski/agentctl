@@ -146,32 +146,6 @@ def fix_show_many(repo, sha, paths):
     return out
 
 
-def fix_workflow_jobs(text):
-    """{job key: (its block's text, its `name:`)} of a workflow file, by indentation (no YAML parser here)."""
-    lines = text.splitlines()
-    try:
-        start = next(i for i, l in enumerate(lines) if re.match(r"^jobs:\s*$", l))
-    except StopIteration:
-        return {}
-    jobs, ind, cur = {}, None, None
-    for l in lines[start + 1:]:
-        if l.strip() and not l.startswith((" ", "\t")):
-            break
-        m = re.match(r"^(\s+)([\w-]+):\s*$", l)
-        if m and (ind is None or len(m.group(1)) == ind):
-            ind, cur = len(m.group(1)), m.group(2)
-            jobs[cur] = []
-            continue
-        if cur:
-            jobs[cur].append(l)
-    out = {}
-    for k, ls in jobs.items():
-        body = "\n".join(ls)
-        nm = re.search(r"^\s+name:\s*['\"]?([^'\"\n]+)", body, re.M)
-        out[k] = (body, (nm.group(1).strip() if nm else k))
-    return out
-
-
 def fix_job_steps(body):
     """(the job block without its steps, [(step name or None, step text)]) of a job block, by indentation."""
     pre, items, steps_ind, item_ind = [], [], None, None

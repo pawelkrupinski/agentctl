@@ -165,8 +165,6 @@ def tunnel_state_path():
     return os.environ.get("AGENTCTL_TUNNEL_STATE") or state_root("tunnel-health.json")
 
 
-
-
 def tunnel_probe():
     """'ok' (any HTTP answer), 'timeout' or 'refused' for GET <store>/ (the tunnel carries the agentctl store)."""
     import socket
@@ -509,34 +507,7 @@ def do_not_land(repo, commits, branch=""):
     return None
 
 
-# HELD WORK (2026-11-06 22:51Z: the orphan re-lander queued ~/projects/movies-wt/es-gate-check, a gate re-enable the
-# owner was explicitly holding, as stranded work). A `Hold: <why>` trailer says so on the commit itself: land refuses
-# it with NOT LANDED unless `--release-hold` (the owner's go), and recovery (orphan duty) never submits it at all.
-TRAILER_LINE = re.compile(r"^[A-Za-z][\w-]*:\s")
 HOLD_TRAILER = re.compile(r"^Hold:\s*(\S.*)$", re.I)
-
-
-def commit_trailers(msg):
-    """The trailer lines of a commit message: every paragraph after the subject made only of `Token: value` lines (a
-    value may fold onto indented continuation lines, joined here). Not only the last paragraph (review 2026-11-07): a
-    `Hold:` block written above the attribution block, or a folded Hold: value, is a trailer to whoever wrote it, and
-    reading it as prose let held work land."""
-    paras = [p for p in re.split(r"\n\s*\n", (msg or "").strip()) if p.strip()]
-    out = []
-    for para in paras[1:]:
-        lines = []
-        for ln in para.splitlines():
-            if not ln.strip():
-                continue
-            if ln[:1].isspace() and lines:  # a continuation of the trailer above
-                lines[-1] += " " + ln.strip()
-            elif TRAILER_LINE.match(ln):
-                lines.append(ln.strip())
-            else:
-                lines = None
-                break
-        out += lines or []
-    return out
 
 
 def held_commit(repo, commits):
