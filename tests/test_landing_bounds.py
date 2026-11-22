@@ -171,6 +171,48 @@ class QuietStepTest(unittest.TestCase):
             h.release()
 
 
+class ExitedWhileJudgedTest(unittest.TestCase):
+    """2026-11-22 (a pre-push at load 290): a quiet step's verdict came after it had exited by itself; ending its group
+    then raised PermissionError (macOS's EPERM for a group of unreaped exits) out of run_watched."""
+    def test_a_step_that_exits_while_it_is_judged_ended_by_itself(self):
+        d = tempfile.mkdtemp()
+        calls, t = [0], [0.0]
+
+        def cpu(pgid):
+            calls[0] += 1
+            if calls[0] == 2:  # the step exits while this poll judges it
+                deadline = time.time() + 30
+                while time.time() < deadline and subprocess.run(["ps", "-o", "stat=", "-p", str(pgid)],
+                                                                capture_output=True, text=True).stdout.strip()[:1] \
+                        not in ("Z", ""):
+                    time.sleep(0.05)
+            return 0.0
+
+        def clock():
+            t[0] += 100.0  # every reading is past the stall bound
+            return t[0]
+        rc, _out = A.run_watched(["sleep", "1"], d, dict(os.environ), os.path.join(d, "log"), "check", stall=0.8,
+                                 cpu=cpu, clock=clock)
+        self.assertEqual(rc, 0, "it exited by itself: no stall, no group to end")
+
+    def test_ending_a_group_whose_members_all_exited_is_no_error(self):
+        p = subprocess.Popen(["true"], start_new_session=True)
+        deadline = time.time() + 30
+        while time.time() < deadline and subprocess.run(["ps", "-o", "stat=", "-p", str(p.pid)], capture_output=True,
+                                                        text=True).stdout.strip()[:1] not in ("Z", ""):
+            time.sleep(0.05)
+        saved = A.os.killpg
+
+        def eperm(pgid, sig):
+            raise PermissionError(1, "Operation not permitted")
+        A.os.killpg = eperm
+        try:
+            A._end_group(p)  # raised PermissionError before 2026-11-22
+        finally:
+            A.os.killpg = saved
+        self.assertIsNotNone(p.poll())
+
+
 class UnboundTest(unittest.TestCase):
     def test_a_store_error_mid_wait_ends_the_child_group_and_propagates(self):
         """run_watched caught only LeaseLost: a StoreUnavailable escaped with the push still running, untracked."""

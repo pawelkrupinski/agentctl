@@ -132,11 +132,21 @@ def group_runs_hook(pgid):
 
 
 def _end_group(p):
+    """SIGTERM, then SIGKILL, the step's process group. macOS answers EPERM for a group whose members have all exited
+    but are not reaped yet (2026-11-22: a quiet step ending as its watch ended it, at load 290): the step is over then;
+    a live leader it refuses is signalled alone."""
     for sig, grace in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
         try:
             os.killpg(p.pid, sig)
         except ProcessLookupError:
             return
+        except PermissionError:
+            if p.poll() is not None:
+                return
+            try:
+                p.send_signal(sig)
+            except ProcessLookupError:
+                return
         try:
             p.wait(timeout=grace)
             return
@@ -186,6 +196,8 @@ def _watch_group(p, out_path, step, stall, sampler, cpu_of, clock, wall, quiet_o
             why = why or (f"no output and no CPU for {bound:g} s" + (" while its pre-push hook ran" if in_hook else ""))
         if wall is not None and now_c - t_start > wall:  # busy or not: the wall bound (a push's)
             why = why or f"past its wall bound of {wall:g} s"
+        if why and p.poll() is not None:  # it exited while it was judged (a late wakeup under load): its own end
+            break
         if why:
             err(f"{why}: ending {step}")
             _end_group(p)
