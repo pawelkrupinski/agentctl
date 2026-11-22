@@ -107,9 +107,14 @@ def start_worker(timeout, env, stderr):
     return p
 
 
-def end_worker(p):
-    """The worker ended (killed if it still runs), then its root removed -- tried again briefly, for a detached child
+def end_worker(p, grace=0):
+    """The worker ended (killed if it still runs after `grace` s: a worker whose input ended exits by itself, its exit
+    handlers run -- coverage saves its data there), then its root removed -- tried again briefly, for a detached child
     of a test still writing into it."""
+    try:
+        p.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        pass
     if p.poll() is None:
         try:
             p.kill()
@@ -262,7 +267,7 @@ def main():
                 sys.stdout.write(mark)
                 sys.stdout.flush()
         p.stdin.close()
-        end_worker(p)
+        end_worker(p, grace=GRACE)
 
     # a SIGTERM / SIGHUP (a hook's bound, a closed terminal) ends the run through the finally below, its roots removed
     for sig in (signal.SIGTERM, signal.SIGHUP):

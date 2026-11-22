@@ -62,6 +62,17 @@ class TempRootTest(unittest.TestCase):
             self.run.end_worker(p)
         self.assertFalse(os.path.exists(p.root))
 
+    def test_a_worker_whose_input_ends_exits_by_itself_not_killed(self):
+        """2026-11-22: suite-at.sh's coverage recorded 2 data files of 8+ workers -- end_worker killed a worker the
+        moment its stdin closed, before its exit handlers (coverage's save among them) ran."""
+        p = self.run.start_worker(60, dict(os.environ), subprocess.DEVNULL)
+        p.stdin.write("test_suite_runner.ShardTest.test_a_shard_outside_its_count_is_refused\n")
+        p.stdin.flush()
+        self.assertIn('"run": 1', p.stdout.readline())
+        p.stdin.close()
+        self.run.end_worker(p, grace=30)
+        self.assertEqual(p.returncode, 0, "the worker was killed instead of left to exit")
+
     def test_a_root_that_survives_is_named(self):
         import tempfile
         p = type("P", (), {"root": tempfile.mkdtemp(prefix="agentctl-t-")})()
