@@ -1056,10 +1056,6 @@ def note_local_red(main, fails, passes):
 # processor's patrol (the governor's check class), synchronously by `red patrol`, or by the next land's dry run. A pass
 # clears the red, releases its claims, stops its dispatched fixer (process groups) and puts FIX OK in the inbox; the
 # fixer's worktrees whose commits are patch-equivalent on main are removed, any other is listed in the inbox.
-HOOK_CHECKS = ("eslint drift snapshot sbt dashboards scripttests actionlint shellcheck oldrefs identity page ios "
-               "judgements lintspecs linux basic").split()
-
-
 def recheck_local(repo, wait=True):
     """Recompute a stale local red on the current origin/main. Returns action lines (when it ran synchronously)."""
     main = local_stale(repo)
@@ -1118,12 +1114,13 @@ def run_local_recheck(repo, main):
         return []
     log_path = reds_dir("local", "recheck.log")
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    tree_hook = os.path.join(tree, os.path.relpath(hook, repo))
     try:
         err(f"local checks were recorded on an older main: rechecking {', '.join(failing)} on {remote()}/main {main[:10]}")
         with check_slot(repo, f"local recheck {main[:10]}", "check") as slot:
             env = {**slot.env(tool_env()), "PREPUSH_BASELINE_DIR": "",
-                   "PREPUSH_SKIP": " ".join(c for c in HOOK_CHECKS if c not in failing)}
-            rc, out = run_watched([os.path.join(tree, os.path.relpath(hook, repo)), "--checks-only", f"{base}..{synth}"],
+                   "PREPUSH_SKIP": " ".join(c for c in hook_checks(tree_hook) if c not in failing)}
+            rc, out = run_watched([tree_hook, "--checks-only", f"{base}..{synth}"],
                                   tree, env, log_path, "recheck", sampler=slot.sample)
             slot.done(rc, out)
     finally:
