@@ -1,25 +1,18 @@
-# agentctl, part `alerts`: THE ALERT MODEL -- who must act on what.
+# agentctl, part `alerts`: THE ALERT MODEL -- who must act on what: the alert index (written, acked, closed, reconciled each tick) and `inbox wait`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import contextlib
 import os
 import re
 import time
-from agentctl.core import cherry_landed, env_num, err, hashlib_sha1, remote
-from agentctl.timefmt import iso_epoch
+from agentctl.core import env_num, err, hashlib_sha1
 from agentctl.statefile import read_record, write_json
-from agentctl.store import open_store
-from agentctl.redrecord import lease_is_live, red_lease, red_what
-from agentctl.leases import red_block_of
-from agentctl.inboxentry import CONDITION_KINDS, INBOX_COMMANDS, inbox_dir, inbox_entries, inbox_kind
-from agentctl.fixersession import TRUST_ASK_PREFIX, claude_trust_gap
+from agentctl.inboxentry import inbox_dir, inbox_entries, inbox_kind
 from agentctl.inbox import WAIT_KINDS_DEFAULT, entry_line
-from agentctl.conditions import open_conditions
-from agentctl.redfamilies import red_family
-from agentctl.cistate import state_path
-from agentctl.owners import owner_alive
-from agentctl.redask import red_ask
-from agentctl.statemachines import MACHINES, machine_state
+from agentctl.store import open_store
+from agentctl.alertroute import (
+    ALERT_AUTHOR_VERDICT_KINDS, alert_audience, alert_kind_of, alert_norm, alert_route, alert_tier)
+from agentctl.alertprobe import alert_probe
 
 
 # ---------------------------------------------------------------- the alert model (the owner, 2026-11-04)
@@ -44,163 +37,11 @@ from agentctl.statemachines import MACHINES, machine_state
 #      entry is routed and stamped, and the older unread entries of one item are folded into its newest (acked, counted),
 #      so the switch-over floods nobody.
 ALERT_INDEX_VERSION = 1
-ALERT_OWNER_KINDS = {"BLOCKED", "RED_BUDGET", "UNLANDED_ORPHAN", "ORPHAN_SUBMITTED", "REVERT_NOTICE"}  # a decision, what its bounded fixer
-# left undone, recovery queueing somebody's work (its owner may need to stop it), or a revert to route (reverts.py)
-ALERT_AUTHOR_KINDS = {"NOT_LANDED", "PRECHECK_REFUSED", "RED", "RED_AUTHOR", "FIX_FAILED", "FIX_NOT_COUNTED", "BRANCH_RED", "RED_REVERT",
-                      "REVERTED", "RED_BLAME", "RED_RELAND", "ENDED", "USAGE", "UNKNOWN", "STALLED"}
-# a change's final verdict to its author (review round 7: routed `info`, a LANDED reached no `inbox wait --audience
-# author` -- 2b8927680's author waited 3000 s for it). Each is an entry of its own, under its change's id: it closes
-# its worktree's live land alert and is never one itself (a later change's NOT LANDED would merge into it, over its
-# id). A command's own reply (with_inbox) stays `info`: it printed it.
-ALERT_AUTHOR_VERDICT_KINDS = {"LANDED", "SUPERSEDED"}
-ALERT_FIXER_KINDS = {"FIXER_FAILED", "DIAGNOSED", "RED_DISPATCHED", "ORPHAN_FIXER", "LAUNCH_FAILED", "RED_FLAKE",
-                     "LANDER_REVIVED", "RELANDING", "FIX_UNVERIFIED", "NETWORK"}
-ALERT_RED_KINDS = {"RED_UNCLAIMED", "RED_STARVED", "RED_ESCALATE"}  # whose audience depends on who holds the red
-ALERT_RED_OWNER_LEVEL = 2  # offer rounds a red goes untaken (nobody holding it, no family owner) before it is the owner's
-# a condition the machinery repairs itself is the owner's only once it outlives its bound (the hysteresis's second half)
-ALERT_CONDITION_OWNER_AFTER = {"INVARIANT": 1800, "STALLED": 3600, "NETWORK": 3600, "UNKNOWN": 3600}
-ALERT_SELF_HEALING_INVARIANTS = {"W5", "WM", "W7"}  # heartbeat gaps: the processor/maintain/watchdog beat again
 ALERT_CLOSES = {"LANDED": ("land",), "SUPERSEDED": ("land",), "OK": ("watch",), "FIX_OK": ("red",),
                 "RED_CLEARED": ("red",), "FIXER_LANDED": ("red",)}
 ALERT_RECONCILE_EVERY = 60  # s between reconcile passes ($AGENTCTL_ALERT_RECONCILE)
 ALERT_QUIET_MAX = 24 * 3600  # s a READ alert stays its item's live one after its last event ($AGENTCTL_ALERT_QUIET_MAX)
 ALERT_SEEN_MAX = 2000       # merged entry ids remembered (a re-projected event is merged once)
-RUN_REF = re.compile(r"((?:[\w.-]+/)?[A-Za-z][\w .()/-]*? #\d+)")
-
-
-def alert_kind_of(rec):
-    return rec.get("kind") or inbox_kind(rec.get("verdict"), rec.get("final", True))
-
-
-def alert_is_reply(rec):
-    """A command's own verdict to the agent that ran it (with_inbox). Old entries carry no flag: a land/watch/wait
-    command's crash, signal or bare exit is one."""
-    if "reply" in rec:
-        return bool(rec["reply"])
-    return rec.get("command") in INBOX_COMMANDS and bool(re.match(r"(crashed:|exited:|ended by signal|exit \d+ with no "
-                                                                  r"verdict)", str(rec.get("verdict") or "")))
-
-
-def alert_run_ref(verdict):
-    """The run a red-ish line names (`Main #2123`, `core Main Pipeline #699`), or None."""
-    body = str(verdict or "").split(": ", 1)[-1] if ": " in str(verdict or "") else str(verdict or "")
-    m = RUN_REF.search(body)
-    return re.sub(r"\s+", " ", m.group(1)).strip() if m else None
-
-
-def alert_item(rec):
-    """The ITEM an entry is about: what keeps it to one live alert, and what its self-close probes."""
-    if rec.get("alert_item"):
-        return rec["alert_item"]
-    kind, v = alert_kind_of(rec), str(rec.get("verdict") or "")
-    if rec.get("item_type") and rec.get("item_id") and rec["item_type"] != "change":
-        return f"{rec['item_type']}:{rec['item_id']}"
-    cwd = rec.get("cwd") or ""
-    wt = os.path.realpath(cwd) if cwd and os.path.isabs(cwd) else cwd
-    if kind == "INVARIANT":
-        m = re.match(r"INVARIANT (\w+)", v)
-        return f"condition:invariant-{m.group(1)}" if m else "condition:invariant"
-    if kind in ("NOT_LANDED", "LANDED", "SUPERSEDED") or (kind in ("WAITING", "QUEUED", "HELD") and rec.get("command") == "land"):
-        return f"wt:{wt}:land" if wt else f"change:{rec.get('entry')}"
-    if kind in ("RED", "OK", "STALLED") and rec.get("command") in ("land", "watch"):
-        run = alert_run_ref(v) if kind == "RED" else None
-        return f"wt:{wt}:watch" + (f":{run}" if run else "")
-    if kind in ("ENDED", "USAGE", "UNKNOWN") and alert_is_reply(rec):
-        return f"wt:{wt}:cmd:{rec.get('command')}"
-    run = alert_run_ref(v) if kind not in ("OTHER",) else None
-    if run and (kind.startswith(("RED", "FIX")) or kind in ALERT_FIXER_KINDS | ALERT_RED_KINDS | {"BLOCKED", "DIAGNOSED"}):
-        return f"run:{run}"
-    if kind == "UNLANDED_ORPHAN":
-        m = re.search(r"(~?/\S+)", v)
-        return f"orphan:{m.group(1).rstrip(':,;')}" if m else f"text:{alert_norm(v)}"
-    return f"text:{wt}:{alert_norm(v)}"
-
-
-def alert_norm(v):
-    return re.sub(r"[0-9a-f]{7,40}|\d+", "N", str(v or "").splitlines()[0] if v else "")[:120]
-
-
-def alert_red_audience(rec, red, st, t):
-    """Who must act on a red escalation (UNCLAIMED, STARVED, ESCALATE): the fixer machinery while anyone holds the red,
-    its family's owner session is alive, or it has had fewer than ALERT_RED_OWNER_LEVEL offer rounds; the owner once
-    nobody can take it. ESCALATE (a deep investigation offered: a dispatch follows) is the fixers' always."""
-    kind = alert_kind_of(rec)
-    if red is None:
-        return "fixer"  # no item to judge by (an old entry): the next escalation of a live red routes it properly
-    try:
-        if machine_state("red", red["state"]).terminal:
-            return "info"
-    except (KeyError, ValueError):
-        pass
-    if kind == "RED_ESCALATE":
-        return "fixer"
-    d = red.get("data") or {}
-    try:
-        if lease_is_live(st.get(red_lease(d.get("key") or red["id"])), t):
-            return "fixer"
-        fam = red_family(d)
-        if fam and owner_alive(st, fam, t):
-            return "fixer"
-    except Exception:  # the store cannot tell now: the fixers', the next round asks again
-        return "fixer"
-    return "owner" if int(red.get("level") or 0) >= env_num("AGENTCTL_ALERT_RED_OWNER_LEVEL", ALERT_RED_OWNER_LEVEL) \
-        else "fixer"
-
-
-def alert_condition_audience(kind, rec, opened_at, t):
-    """A condition's: the owner's at once unless the machinery repairs it itself (a heartbeat invariant, a tunnel, the
-    network, an unreadable gate), then only once open past its bound."""
-    v = str(rec.get("verdict") or "")
-    if kind == "INVARIANT":
-        m = re.match(r"INVARIANT (\w+)", v)
-        if not m or m.group(1) not in ALERT_SELF_HEALING_INVARIANTS:
-            return "owner"
-    bound = ALERT_CONDITION_OWNER_AFTER.get(kind)
-    if bound is None:
-        return "owner"
-    return "owner" if opened_at and t - float(opened_at) >= env_num(f"AGENTCTL_ALERT_{kind}_AFTER", bound) else "fixer"
-
-
-def alert_route(rec, st=None, t=None, red=None, condition=None):
-    """(audience, item) of an inbox record. st: the store to judge reds by (None: judge by the record alone);
-    condition: the open condition's data when the record is a condition's entry."""
-    t = time.time() if t is None else t
-    kind = alert_kind_of(rec)
-    item = alert_item(rec)
-    if not rec.get("final", True):
-        return "info", item
-    if kind == "BLOCKED" or "WAITING ON YOU" in str(rec.get("verdict") or ""):
-        return "owner", item
-    if alert_is_reply(rec) and kind not in ALERT_OWNER_KINDS:
-        return ("author" if kind in ALERT_AUTHOR_KINDS | ALERT_FIXER_KINDS | ALERT_RED_KINDS | {"INVARIANT"} else "info"), item
-    if kind in ALERT_RED_KINDS:
-        if red is None and st is not None and item.startswith("red:"):
-            try:
-                red = st.item("red", item[4:])
-            except Exception:
-                red = None
-        return alert_red_audience(rec, red, st, t), item
-    if kind in CONDITION_KINDS and kind not in ALERT_OWNER_KINDS:
-        opened = (condition or {}).get("opened_at") or rec.get("first_at") or rec.get("at")
-        return alert_condition_audience(kind, rec, opened, t), item
-    if kind in ALERT_OWNER_KINDS:
-        return "owner", item
-    if kind in ALERT_AUTHOR_KINDS | ALERT_AUTHOR_VERDICT_KINDS:
-        return "author", item
-    if kind in ALERT_FIXER_KINDS:
-        return "fixer", item
-    return "info", item
-
-
-def alert_audience(rec):
-    """An entry's audience: its stamp, else routed by the record alone (an entry written before the model)."""
-    return rec.get("audience") or alert_route(rec)[0]
-
-
-def alert_tier(rec, red):
-    """The escalation tier a red alert stands at (a change surfaces it again)."""
-    d = (red or {}).get("data") or {}
-    return f"{alert_kind_of(rec)}/{d.get('tier') or ''}"
 
 
 # ---------------------------------------------------------------- the index
@@ -437,164 +278,6 @@ def alert_close_naming(pattern, why, d=None):
     return n
 
 
-# ---------------------------------------------------------------- the probes: each live alert closes itself
-def alert_probe(st, item, e, t, ctx=None):
-    """(closed why or None, the audience now or None): what the item's own state says of its live alert."""
-    if item.startswith("red:"):
-        it = st.item("red", item[4:])
-        if it is None:
-            return "its red is gone", None
-        if machine_state("red", it["state"]).terminal:
-            return f"its red is {it['state']}", None
-        kind = alert_kind_of(e)
-        if kind == "BLOCKED" and it["state"] != "blocked-external":  # WAITING ON YOU, but its red waits on nobody now
-            return f"its red is {it['state']} now (no longer waiting on you)", None  # (resumed, decided, its fix landed)
-        if kind == "BLOCKED" and red_ask(it, red_block_of(it, st)) is None:
-            # AN ASK IS RETRACTED WITH ITS CONDITION (2026-11-19: `decide vault-movies here`, run off the inbox and the
-            # owner-decisions hook, said "no red waits on the movies vault"): its block lapsed or no longer asks the
-            # owner, while the red still read blocked-external for a tick -- closed now, not when the red moves on
-            return "its question is no longer asked (its block lapsed or waits on no owner action)", None
-        if kind in ("RED_UNCLAIMED", "RED_STARVED") and it["state"] != "offered":
-            return f"its red is {it['state']} now (taken)", None
-        if kind in ALERT_RED_KINDS:
-            return None, alert_red_audience(e, it, st, t)
-        return None, None
-    if item.startswith("condition:"):
-        key = item[len("condition:"):]
-        cond = next((c for c in open_conditions(st) if c.get("key") == key or c.get("id") == key), None)
-        if cond is None:
-            return "its condition closed", None
-        kind = alert_kind_of(e)
-        if kind in CONDITION_KINDS and kind not in ALERT_OWNER_KINDS:
-            return None, alert_condition_audience(kind, e, cond.get("opened_at"), t)
-        return None, None
-    if item.startswith("change:"):
-        it = st.item("change", item[len("change:"):])
-        if it and it["state"] in ("landed", "superseded", "cancelled"):
-            return f"its change is {it['state']}", None
-        return None, None
-    if item.startswith(TRUST_ASK_PREFIX):  # the owner was asked to trust a clone (fixersession.py trust_asks)
-        path = item[len(TRUST_ASK_PREFIX):]
-        return ("claude trusts it now" if not claude_trust_gap(path) else None), None
-    if item.startswith("wt:"):
-        wt = item[3:].split(":", 1)[0]
-        if wt and os.path.isabs(wt) and not os.path.isdir(wt):
-            return "its worktree is gone", None
-    if item.startswith("revert-owner:"):  # a revert notice's orchestrator / escalation alert (reverts.py)
-        item = "revert:" + item[len("revert-owner:"):].split("/", 1)[0]
-    typ, _, iid = item.partition(":")
-    if typ in MACHINES and iid:
-        # ANY STORE ITEM WITH A STATE (2026-11-19: issue 55799d's escalation stayed unread a day after the issue was
-        # closed -- no probe knew `issue:`): an issue, a hold, an explorer flip, a branch red, a batch... -- its alert
-        # retires once the item is terminal or gone from the store
-        it = st.item(typ, iid)
-        if it is None:
-            return f"its {typ} is gone", None
-        if machine_state(typ, it["state"]).terminal:
-            return f"its {typ} is {it['state']}", None
-    return alert_probe_cleared(st, item, e, t, ctx if ctx is not None else {}), None
-
-
-# ---------------------------------------------------------------- an owner alert whose condition has cleared
-# The owner, 2026-11-06: "why is there always 30 unread in inbox" -- 44 owner alerts, nearly all for what had cleared
-# days before: 20 RED BLOCKED ON OWNER whose reds were closed, 17 UNLANDED ORPHAN of Forgejo-era worktrees, 3 NETWORK
-# long recovered, 3 WATCH UNKNOWN whose commits later runs had decided, a HELD batch that moved on. Their items were
-# keyed before the probes knew them (`run:`, `text:`, `orphan:`), so nothing ever closed them. Now each such alert's
-# CONDITION is probed from its kind and verdict, whatever its item, and closed with the reason once it has cleared.
-# What cannot be told (no red named, no gate read, git failing) stays as it is: never closed on a guess.
-ALERT_ORPHAN_PROBE_EVERY = 600  # s between git probes of one orphan's worktree ($AGENTCTL_ALERT_ORPHAN_PROBE)
-ALERT_NETWORK_GRACE = 600       # s a NETWORK alert stays before "no NETWORK condition open" closes it
-ALERT_RED_PROBED = {"BLOCKED", "RED_BUDGET", "DIAGNOSED", "FIXER_FAILED", "FIX_FAILED", "FIX_UNVERIFIED",
-                    "FIX_NOT_COUNTED", "RED_DISPATCHED", "LAUNCH_FAILED", "RED_FLAKE", "RED_AUTHOR", "RED_REVERT",
-                    "RED_BLAME", "RED_RELAND"} | ALERT_RED_KINDS
-
-
-def alert_ctx_get(ctx, name, load):
-    """One read per reconcile pass of what several alerts' probes ask (the open reds, conditions, batches, the gate)."""
-    if name not in ctx:
-        ctx[name] = load()
-    return ctx[name]
-
-
-def alert_open_reds(st):
-    return st.items("red", [s for s, spec in MACHINES["red"].items() if not spec.terminal])
-
-
-def alert_red_named(d, verdict):
-    """Does verdict name red d: its `decide <key>`, or `<workflow> #<run>` for ANY run the red carries -- one red item
-    spans every run failing its way (red_attach_obs moves last_run on), and an alert names the run it was written
-    against (review 2026-11-07: a FIX FAILED for #2128 closed as 'its red is closed' once the open red was at #2140)."""
-    key = str(d.get("key") or "")
-    if key and re.search(r"\bdecide " + re.escape(key) + r"\b", verdict):
-        return True
-    prefix = red_what(d).split(" [", 1)[0].rsplit(" #", 1)[0]  # '[<repo> ]<workflow>'
-    nums = {str((d.get("last_run") or {}).get("number") or "")} | {str(r) for r in d.get("runs") or []}
-    return any(re.search(re.escape(f"{prefix} #{n}") + r"(?!\d)", verdict) for n in nums if n and n != "None")
-
-
-def alert_gate():
-    return ((read_record(state_path()) or {}).get("ci") or {}).get("gate") or []
-
-
-def alert_gate_decided_after(gate, at):
-    """True when every gate workflow has a run decided that was created after `at` (main is linear: it covers every
-    commit landed before); None when the gate snapshot (alert_gate) cannot be read."""
-    if not gate:
-        return None
-    for g in gate:
-        created = ((g.get("decided") or {}).get("createdAt")) or ""
-        c = iso_epoch(created)
-        if c is None:
-            return False
-        if c <= at:
-            return False
-    return True
-
-
-def alert_probe_cleared(st, item, e, t, ctx):
-    """Why the alert's condition has cleared, or None (still live, or nothing to tell by)."""
-    kind, v = alert_kind_of(e), str(e.get("verdict") or "")
-    at = float(e.get("first_at") or e.get("at") or t)
-    if kind in ALERT_RED_PROBED and not item.startswith("red:"):
-        if not (re.search(r" #\d+", v) or re.search(r"\bdecide \w+", v)):
-            return None
-        reds = alert_ctx_get(ctx, "reds", lambda: alert_open_reds(st))
-        return None if any(alert_red_named(r["data"], v) for r in reds) else "its red is closed (no open red names it)"
-    if kind == "UNLANDED_ORPHAN" or item.startswith("orphan:"):
-        m = re.search(r"(~?/\S+)", item[len("orphan:"):] if item.startswith("orphan:") else v)
-        if not m:
-            return None
-        wt = os.path.expanduser(m.group(1).rstrip(":,;"))
-        if not os.path.isdir(wt):
-            return "its worktree is gone"
-        probed = ctx.setdefault("probed", {})
-        if t - float(probed.get(item) or 0) < env_num("AGENTCTL_ALERT_ORPHAN_PROBE", ALERT_ORPHAN_PROBE_EVERY):
-            return None
-        probed[item] = t
-        commits, left = cherry_landed(wt, f"refs/remotes/{remote()}/main", "HEAD")
-        return "its commits are on main" if commits is not None and not left else None
-    if v.startswith("WATCH UNKNOWN") or item.startswith("watch:"):
-        gate = alert_ctx_get(ctx, "gate", alert_gate)
-        return "a later gate run has decided (its commit is covered)" if alert_gate_decided_after(gate, at) else None
-    if kind == "NETWORK":
-        if t - at < env_num("AGENTCTL_ALERT_NETWORK_GRACE", ALERT_NETWORK_GRACE):
-            return None
-        conds = alert_ctx_get(ctx, "conditions", lambda: open_conditions(st))
-        return None if any(c.get("kind") == "NETWORK" for c in conds) else "the network is back (no NETWORK condition open)"
-    if v.startswith("HELD:") or item.startswith("batch:"):
-        held = alert_ctx_get(ctx, "held", lambda: st.items("batch", ["held"]))
-        m = re.match(r"HELD: the batch check of ([0-9a-f]{7,})", v)
-        bid = item[len("batch:"):] if item.startswith("batch:") else (re.match(r"HELD: the batch (\S+) ", v) or [None, None])[1]
-        if m:
-            live = any(str((b["data"] or {}).get("tip") or "").startswith(m.group(1)) for b in held)
-        elif bid:
-            live = any(b["id"] == bid for b in held)
-        else:
-            return None
-        return None if live else "its batch moved on (no longer held)"
-    return None
-
-
 def reconcile_alerts(store=None, force=False):
     """The processor's pass: every live alert's item probed -- cleared: closed (acked, `closed` recorded); its audience
     changed (a red nobody holds became the owner's; a self-healing condition outlived its bound): re-stamped, surfaced
@@ -639,25 +322,6 @@ def reconcile_alerts(store=None, force=False):
         idx["probed"] = {k: v for k, v in ctx["probed"].items() if k in (idx.get("items") or {})}
         alert_index_save(d, idx)
     return out
-
-
-def event_audience(st, ev, it, t=None):
-    """The audience of a store event (the notifier's question): routed like the inbox entry it projects."""
-    refs = ev.get("refs") or {}
-    verdict = refs.get("verdict") or ev.get("text") or ev["kind"]
-    rec = {"verdict": verdict, "kind": inbox_kind(verdict, refs.get("final", True)), "final": refs.get("final", True),
-           "item_type": ev.get("item_type"), "item_id": ev.get("item_id"), "at": ev["at"], "command": refs.get("command")}
-    if ev.get("item_type") == "red":
-        return alert_route(rec, st=st, t=t, red=it)[0]
-    if ev.get("item_type") == "condition":
-        d = (it or {}).get("data") or {}
-        rec["verdict"] = d.get("text") or verdict
-        rec["kind"] = d.get("kind") or rec["kind"]
-        return alert_route(rec, t=t, condition=d)[0] if rec["kind"] in CONDITION_KINDS else "owner"
-    if ev.get("item_type") == "change":
-        return "owner"  # a change stuck in the pipeline: nobody but the owner unsticks the pipeline
-    aud = alert_route(rec, st=st, t=t)[0]
-    return "owner" if aud == "info" else aud
 
 
 INBOX_WAIT_POLL = 1.0  # seconds between stat()s of the inbox directory ($AGENTCTL_INBOX_POLL)

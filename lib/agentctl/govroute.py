@@ -1,0 +1,106 @@
+# agentctl, part `govroute`: where heavy work runs: here when it fits, else ci-runner's measure lane when free; replayed admissions
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+from agentctl.core import pct
+from agentctl.forge import runner_queue
+from agentctl.govtickets import gov_tickets
+from agentctl.govbudget import GOV_MEM_GB
+from agentctl.gov import GOV_CLASSES, gov_fits, gov_machine, gov_waiters
+from agentctl.govusage import GOV_JOB_CORES, gov_job_cores
+
+
+# THE ROUTE of a heavy job (the owner, 2026-11-18: "stop the laptop being the bottleneck"): a whole-module test run or
+# a commit-gate proof (scripts/fail-before: two full runs) the governor would HOLD now goes to ci-runner's measure lane
+# (scripts/identity-ci-run's identity-run.yml, which runs sbt there) when that lane is free -- no job waiting on its
+# label in ci-runners-page's last good read (redseen.py's runner_queue) -- instead of queueing on the laptop. A red fix is
+# never held, so it stays local; so does anything the lane cannot be read for.
+MEASURE_LANE = "movies-measure"
+
+
+def measure_lane_free(q=None):
+    """(free?, why) of ci-runner's measure lane: free when the runners page is fresh and no job waits on its label."""
+    q = runner_queue() if q is None else q
+    if not q:
+        return False, "ci-runners-page has no fresh read of ci-runner"
+    waiting = [w for w in q.get("waiting_jobs") or [] if MEASURE_LANE in str(w.get("label") or "")]
+    if waiting:
+        return False, f"{len(waiting)} job(s) already wait on {MEASURE_LANE}"
+    return True, f"no job waits on {MEASURE_LANE}"
+
+
+def gov_route(job, cls="agent", mem=None, kind="job", q=None):
+    """("ci" | "local", why) for a job about to ask the governor: ci when it would be held now and the lane is free."""
+    if cls == "red":
+        return "local", "a red fix is never held"
+    cores = gov_job_cores(job, cls, kind)
+    mem = GOV_MEM_GB.get(cls, 5.0) if mem is None else float(mem)
+    ahead = [w for w in gov_waiters() if GOV_CLASSES.get(w.get("class"), 9) <= GOV_CLASSES.get(cls, 9)]
+    if ahead:
+        held = f"{len(ahead)} waiter(s) ahead of it"
+    else:
+        ok, held, _ = gov_fits(cls, mem, gov_tickets(), gov_machine(), kind, cores)
+        if ok:
+            return "local", f"the governor admits it now ({cores:g} cores)"
+    free, lane = measure_lane_free(q)
+    if free:
+        return "ci", f"the governor would hold it ({held}); {lane}"
+    return "local", f"the governor would hold it ({held}) but {lane}: it waits for the governor"
+
+
+# THE REPLAY (`agentctl gov replay`): the day's admissions (admits.jsonl) again under the cores rule, to show what it
+# would have admitted. Each admission is an arrival at at - waited, held until its end record (gov_log_end) or, where
+# none was written (before 2026-11-18), for --hold minutes; its cores are its record's, else its job's by label. The
+# replay admits oldest first while the charged cores + its own fit the cap (one at a time when none is charged).
+def replay_cores(r):
+    if r.get("cores") is not None:
+        return float(r["cores"])
+    label, cls = r.get("label") or "", r.get("class")
+    job = ("what-if" if "what-if" in label else "slice" if "identity-slice" in label else "measure" if cls == "measure"
+           else "check" if r.get("kind") == "check" or cls == "check" else "job")
+    return GOV_JOB_CORES[job]
+
+
+def gov_replay(rows, cap, at, hold=30 * 60):
+    """{old: [(label, cores)] live at `at` as admitted, new: [...] live at `at` under the cores rule, waiting: [...],
+    old_peak / new_peak: the most cores live at once}."""
+    ends = {r["id"]: r["end"] for r in rows if "end" in r and r.get("id")}
+    jobs = []
+    for r in rows:
+        if "end" in r or "at" not in r:
+            continue
+        start = float(r["at"])
+        dur = ends.get(r.get("id"), start + hold) - start
+        jobs.append({"label": r.get("label") or "?", "cores": replay_cores(r), "arrive": start - float(r.get("waited") or 0),
+                     "admitted": start, "dur": max(dur, 1.0)})
+
+    def live(js, t, key):
+        return [j for j in js if j.get(key) is not None and j[key] <= t < j[key] + j["dur"]]
+
+    def peak(js, key):
+        return max((sum(x["cores"] for x in live(js, j[key], key)) for j in js if j.get(key) is not None), default=0.0)
+    # the new rule, event by event: arrivals in order, each admitted once the charged cores leave it room
+    queue, running, t = sorted((dict(j, new=None) for j in jobs), key=lambda j: j["arrive"]), [], None
+    pending = list(queue)
+    events = sorted({j["arrive"] for j in queue})
+    while pending:
+        t = events.pop(0) if events else t
+        running = [j for j in running if j["new"] + j["dur"] > t]
+        for j in [p for p in pending if p["arrive"] <= t]:
+            charged = sum(x["cores"] for x in running)
+            if j["cores"] == 0 or charged == 0 or charged + j["cores"] <= cap:
+                j["new"] = t
+                running.append(j)
+                pending.remove(j)
+            else:
+                break  # oldest first: none overtakes the head
+        nxt = [x["new"] + x["dur"] for x in running] + [p["arrive"] for p in pending if p["arrive"] > t]
+        if pending and not nxt:
+            break
+        if nxt:
+            events = sorted(set(events) | {min(nxt)})
+    return {"old": [(j["label"], j["cores"]) for j in live(jobs, at, "admitted")],
+            "new": [(j["label"], j["cores"]) for j in live(queue, at, "new")],
+            "waiting": [(j["label"], j["cores"]) for j in queue if j["arrive"] <= at and (j["new"] is None or j["new"] > at)],
+            "old_peak": peak(jobs, "admitted"), "new_peak": peak(queue, "new"),
+            "new_wait_p50": pct([j["new"] - j["arrive"] for j in queue if j["new"] is not None], .5) or 0.0,
+            "old_wait_p50": pct([j["admitted"] - j["arrive"] for j in jobs], .5) or 0.0}

@@ -6,17 +6,17 @@ import os
 import time
 from agentctl.core import env_num, fmt_age, pid_alive, state_root
 from agentctl.statefile import write_json
-from agentctl.store import open_store
 from agentctl.repos import movies_repo_path
 from agentctl.waitingdir import waiting_entries, waiting_state
 from agentctl.storetoken import TOKEN_SHAPE, hand_token, processor_sock, token_request
-from agentctl.conditions import close_condition, open_condition, open_conditions, run_probe
 from agentctl.notifier import notify
-from agentctl.changekind import file_unheld_change, unheld_changes
-from agentctl.alerts import ALERT_SELF_HEALING_INVARIANTS
 from agentctl.launchd import SERVICE_LABEL, launchctl
 from agentctl.beats import beat_age, beat_path, write_beat
+from agentctl.store import open_store
+from agentctl.conditions import close_condition, open_condition, open_conditions, run_probe
+from agentctl.changekind import file_unheld_change, unheld_changes
 from agentctl.invariants import INVARIANTS, W5_MAX, watchdog_state
+from agentctl.alertroute import ALERT_SELF_HEALING_INVARIANTS
 
 
 WATCHDOG_KICK_GAP = 600

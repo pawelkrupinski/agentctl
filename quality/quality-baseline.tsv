@@ -828,8 +828,6 @@ cyclomatic	workflow_timeout_bound	21
 cyclomatic	workflow_triggers	12
 cyclomatic	worktree_holding	12
 cyclomatic	write_snapshot	24
-file-lines	alerts	720
-file-lines	gov	728
 file-lines	owner	718
 file-lines	slots	574
 file-lines	stats	623

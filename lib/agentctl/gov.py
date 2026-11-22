@@ -1,4 +1,4 @@
-# agentctl, part `gov`: the governor.
+# agentctl, part `gov`: the governor: ONE admission control for the laptop's memory and cores: its capacity, its waiters, a ticket admitted or refused, idle sbt servers evicted
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import contextlib
@@ -10,22 +10,23 @@ import re
 import subprocess
 import sys
 import time
-from agentctl.core import env_num, err, pct, pid_alive, process_cache, run_cmd
+from agentctl.core import env_num, err, pid_alive, process_cache, run_cmd
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
-from agentctl.forge import runner_queue
-from agentctl.store import LeaseLost
 from agentctl.procs import proc_alive, process_start
-from agentctl.leases import lock_beat
-from agentctl.cpu import GOV_SATURATED, cpu_pressure, machine_busy_cores, run_queue
+from agentctl.cpu import GOV_SATURATED
 from agentctl.owned import lock_held
-from agentctl.machine import free_gb, machine_cores, machine_fixed, machine_load1, machine_sample, read_meminfo
+from agentctl.machine import free_gb, machine_cores, machine_sample
 from agentctl.govtickets import (
     GOV_POLL, gov_bump, gov_change_mark, gov_dir, gov_log, gov_log_end, gov_tickets, gov_wait_change)
 from agentctl.jvmreap import sbt_warm_state
+from agentctl.govbudget import GOV_MEM_GB, checks_cap, gov_budget
+from agentctl.store import LeaseLost
+from agentctl.leases import lock_beat
 from agentctl.redfixes import fixes_of
 from agentctl.changekind import classify_change, queue_facts
-from agentctl.govbudget import GOV_MEM_GB, checks_cap, gov_budget
+from agentctl.pressure import gov_busy_cores, laptop_pressure, pressure_reading
+from agentctl.govusage import gov_job_cores
 
 
 # ---------------------------------------------------------------- the governor: ONE admission control for memory and CPU
@@ -75,15 +76,7 @@ GOV_PRESSURE_DEFAULT = 75  # memory pressure (100 - free %) at which every class
 GOV_STARVED = 1.0       # x the cores: over it, starved ($AGENTCTL_GOV_STARVED)
 GOV_RESUME = 0.8        # x the cores: under it, admitting again ($AGENTCTL_GOV_RESUME)
 GOV_SPARE = 0.5         # x the cores: under it, spare ($AGENTCTL_GOV_SPARE)
-GOV_IDLE_CLAUDE = 10.0  # %CPU under which a Claude session is idle (not work)
 GOV_CPU_FACTOR = 1.0    # charged cores (or the load) + a job's own may reach this x the cores ($AGENTCTL_GOV_CPU_FACTOR)
-# A job's expected cores, by its name (scripts/jvm-gate.sh passes --job: sbt-warm classifies its command); measured
-# history (usage.jsonl) replaces the number once a job has GOV_USAGE_MIN uncontended runs. `job`: a JVM of unknown work.
-GOV_JOB_CORES = {"testUnit": 4.0, "test": 4.0, "what-if": 4.0, "measure": 4.0, "check": 4.0, "compile": 3.0,
-                 "job": 3.0, "testOnly": 2.0, "slice": 2.0, "suite": 2.0, "serve": 1.0, "keeper": 0.0}
-GOV_USAGE_MIN = 3       # uncontended runs of a job before its measured cores replace the default
-GOV_USAGE_DAYS = 14
-GOV_USAGE_MIN_WALL = 20  # seconds: a shorter call says nothing about a job's cores
 GOV_EVICT_IDLE = 60     # a kept server unused this long (seconds) may be evicted
 GOV_REPORT = 600
 
@@ -112,105 +105,9 @@ def gov_charged(tickets):
     return sum(float(t.get("cores") or 0) for t in tickets)
 
 
-def gov_usage(days=GOV_USAGE_DAYS, now=None):
-    """usage.jsonl's records of the last `days`: {at, job, wall, cpu, cores, load1, machine_cores}."""
-    cutoff = (now or time.time()) - days * 86400
-    out = []
-    try:
-        with open(os.path.join(gov_dir(), "usage.jsonl")) as f:
-            for line in f:
-                try:
-                    r = json.loads(line)
-                except ValueError:
-                    continue
-                if r.get("at", 0) >= cutoff:
-                    out.append(r)
-    except OSError:
-        pass
-    return out
-
-
-def gov_measured_cores(job, usage=None):
-    """The job's p75 cores over its uncontended runs (the load at its end no more than the cores: a starved run uses
-    fewer cores than it wants), to the half core; None under GOV_USAGE_MIN such runs."""
-    runs = [float(r["cores"]) for r in (gov_usage() if usage is None else usage)
-            if r.get("job") == job and r.get("cores") is not None and float(r.get("wall") or 0) >= GOV_USAGE_MIN_WALL
-            and r.get("load1") is not None and float(r["load1"]) <= float(r.get("machine_cores") or machine_cores())]
-    if len(runs) < GOV_USAGE_MIN:
-        return None
-    return min(float(machine_cores()), max(0.5, round(2 * pct(runs, .75)) / 2))
-
-
-def gov_job_cores(job=None, cls="agent", kind="job"):
-    """The cores a ticket is charged: its job's measured cores, else its default; with no job named, a check's (agentctl's
-    own pre-commit check: the hook's sbt) or the suite's, else none (a caller from before cores were charged: memory
-    only, as it was)."""
-    if not job:
-        job = "check" if kind == "check" else "suite" if cls == "suite" else None
-        if not job:
-            return 0.0
-    if job == "keeper":
-        return 0.0
-    measured = gov_measured_cores(job)
-    return measured if measured is not None else GOV_JOB_CORES.get(job, GOV_JOB_CORES["job"])
-
-
-def gov_record_usage(job, wall, cpu, load1=None, label=""):
-    """One run's cores (CPU seconds over wall seconds) for the job's measured history; a run under GOV_USAGE_MIN_WALL
-    is not recorded."""
-    if wall < GOV_USAGE_MIN_WALL:
-        return None
-    rec = {"at": time.time(), "job": job, "label": label, "wall": round(wall, 1), "cpu": round(cpu, 1),
-           "cores": round(cpu / wall, 2), "load1": machine_load1() if load1 is None else load1,
-           "machine_cores": machine_cores()}
-    with open(os.path.join(gov_dir(), "usage.jsonl"), "a") as f:
-        f.write(json.dumps(rec) + "\n")
-    return rec
-
-
 def gov_ramp(tickets, now=None):
     now = now or time.time()
     return sum(float(t.get("mem") or 0) for t in tickets if now - t.get("at", 0) < GOV_RAMP)
-
-
-def gov_busy_cores():
-    """The cores the machine is busy on now: its own CPU ticks (cpu.py machine_busy_cores: user + sys), else ps's %CPU
-    summed (ps_busy_cores). Seams: $AGENTCTL_GOV_BUSY_PROBE (its output: the number), the tests' $AGENTCTL_GOV_LOAD_PROBE (read as
-    busy), $AGENTCTL_GOV_PS_PROBE (ps's `pcpu args` rows)."""
-    for k in ("AGENTCTL_GOV_BUSY_PROBE", "AGENTCTL_GOV_LOAD_PROBE"):
-        if os.environ.get(k):
-            try:
-                return float(run_cmd(os.environ[k], shell=True).stdout.strip() or 0)
-            except ValueError:
-                return 0.0
-    probe = os.environ.get("AGENTCTL_GOV_PS_PROBE")
-    fixed = machine_fixed() if not probe else None
-    if fixed is not None:  # the tests' fixed machine (AGENTCTL_MACHINE): its busy cores, else its load
-        return float(fixed.get("busy", fixed.get("load1")) or 0)
-    whole = None if probe else machine_busy_cores(machine_cores())
-    return whole if whole is not None else ps_busy_cores(probe)
-
-
-def ps_busy_cores(probe=None):
-    """ps's %CPU summed (the machine's own ticks unreadable, or the tests' $AGENTCTL_GOV_PS_PROBE rows), less the
-    governor's waiters and idle Claude sessions."""
-    out = run_cmd(probe, shell=True).stdout if probe else run_cmd(["ps", "-A", "-o", "pcpu=,args="]).stdout
-    total = 0.0
-    for line in out.splitlines():
-        parts = line.split(None, 1)
-        if len(parts) != 2:
-            continue
-        try:
-            pct = float(parts[0])
-        except ValueError:
-            continue
-        args = parts[1]
-        if "agentctl gov admit" in args:
-            continue
-        if os.path.basename(args.split()[0]) == "claude" and pct < GOV_IDLE_CLAUDE:
-            continue
-        total += pct
-    return total / 100.0
 
 
 def gov_starved(busy: float, measured: float, n: int) -> bool:
@@ -499,212 +396,6 @@ def gov_ticket(cls, mem=None, label="", kind="job", report=None, cores=None, job
         yield t
     finally:
         t.release()
-
-
-# THE ROUTE of a heavy job (the owner, 2026-11-18: "stop the laptop being the bottleneck"): a whole-module test run or
-# a commit-gate proof (scripts/fail-before: two full runs) the governor would HOLD now goes to ci-runner's measure lane
-# (scripts/identity-ci-run's identity-run.yml, which runs sbt there) when that lane is free -- no job waiting on its
-# label in ci-runners-page's last good read (redseen.py's runner_queue) -- instead of queueing on the laptop. A red fix is
-# never held, so it stays local; so does anything the lane cannot be read for.
-MEASURE_LANE = "movies-measure"
-
-
-def measure_lane_free(q=None):
-    """(free?, why) of ci-runner's measure lane: free when the runners page is fresh and no job waits on its label."""
-    q = runner_queue() if q is None else q
-    if not q:
-        return False, "ci-runners-page has no fresh read of ci-runner"
-    waiting = [w for w in q.get("waiting_jobs") or [] if MEASURE_LANE in str(w.get("label") or "")]
-    if waiting:
-        return False, f"{len(waiting)} job(s) already wait on {MEASURE_LANE}"
-    return True, f"no job waits on {MEASURE_LANE}"
-
-
-def gov_route(job, cls="agent", mem=None, kind="job", q=None):
-    """("ci" | "local", why) for a job about to ask the governor: ci when it would be held now and the lane is free."""
-    if cls == "red":
-        return "local", "a red fix is never held"
-    cores = gov_job_cores(job, cls, kind)
-    mem = GOV_MEM_GB.get(cls, 5.0) if mem is None else float(mem)
-    ahead = [w for w in gov_waiters() if GOV_CLASSES.get(w.get("class"), 9) <= GOV_CLASSES.get(cls, 9)]
-    if ahead:
-        held = f"{len(ahead)} waiter(s) ahead of it"
-    else:
-        ok, held, _ = gov_fits(cls, mem, gov_tickets(), gov_machine(), kind, cores)
-        if ok:
-            return "local", f"the governor admits it now ({cores:g} cores)"
-    free, lane = measure_lane_free(q)
-    if free:
-        return "ci", f"the governor would hold it ({held}); {lane}"
-    return "local", f"the governor would hold it ({held}) but {lane}: it waits for the governor"
-
-
-# THE REPLAY (`agentctl gov replay`): the day's admissions (admits.jsonl) again under the cores rule, to show what it
-# would have admitted. Each admission is an arrival at at - waited, held until its end record (gov_log_end) or, where
-# none was written (before 2026-11-18), for --hold minutes; its cores are its record's, else its job's by label. The
-# replay admits oldest first while the charged cores + its own fit the cap (one at a time when none is charged).
-def replay_cores(r):
-    if r.get("cores") is not None:
-        return float(r["cores"])
-    label, cls = r.get("label") or "", r.get("class")
-    job = ("what-if" if "what-if" in label else "slice" if "identity-slice" in label else "measure" if cls == "measure"
-           else "check" if r.get("kind") == "check" or cls == "check" else "job")
-    return GOV_JOB_CORES[job]
-
-
-def gov_replay(rows, cap, at, hold=30 * 60):
-    """{old: [(label, cores)] live at `at` as admitted, new: [...] live at `at` under the cores rule, waiting: [...],
-    old_peak / new_peak: the most cores live at once}."""
-    ends = {r["id"]: r["end"] for r in rows if "end" in r and r.get("id")}
-    jobs = []
-    for r in rows:
-        if "end" in r or "at" not in r:
-            continue
-        start = float(r["at"])
-        dur = ends.get(r.get("id"), start + hold) - start
-        jobs.append({"label": r.get("label") or "?", "cores": replay_cores(r), "arrive": start - float(r.get("waited") or 0),
-                     "admitted": start, "dur": max(dur, 1.0)})
-
-    def live(js, t, key):
-        return [j for j in js if j.get(key) is not None and j[key] <= t < j[key] + j["dur"]]
-
-    def peak(js, key):
-        return max((sum(x["cores"] for x in live(js, j[key], key)) for j in js if j.get(key) is not None), default=0.0)
-    # the new rule, event by event: arrivals in order, each admitted once the charged cores leave it room
-    queue, running, t = sorted((dict(j, new=None) for j in jobs), key=lambda j: j["arrive"]), [], None
-    pending = list(queue)
-    events = sorted({j["arrive"] for j in queue})
-    while pending:
-        t = events.pop(0) if events else t
-        running = [j for j in running if j["new"] + j["dur"] > t]
-        for j in [p for p in pending if p["arrive"] <= t]:
-            charged = sum(x["cores"] for x in running)
-            if j["cores"] == 0 or charged == 0 or charged + j["cores"] <= cap:
-                j["new"] = t
-                running.append(j)
-                pending.remove(j)
-            else:
-                break  # oldest first: none overtakes the head
-        nxt = [x["new"] + x["dur"] for x in running] + [p["arrive"] for p in pending if p["arrive"] > t]
-        if pending and not nxt:
-            break
-        if nxt:
-            events = sorted(set(events) | {min(nxt)})
-    return {"old": [(j["label"], j["cores"]) for j in live(jobs, at, "admitted")],
-            "new": [(j["label"], j["cores"]) for j in live(queue, at, "new")],
-            "waiting": [(j["label"], j["cores"]) for j in queue if j["arrive"] <= at and (j["new"] is None or j["new"] > at)],
-            "old_peak": peak(jobs, "admitted"), "new_peak": peak(queue, "new"),
-            "new_wait_p50": pct([j["new"] - j["arrive"] for j in queue if j["new"] is not None], .5) or 0.0,
-            "old_wait_p50": pct([j["admitted"] - j["arrive"] for j in jobs], .5) or 0.0}
-
-
-# THE LAPTOP'S PRESSURE, read as it is NOW. Two movies reds sat `waiting: laptop pressure (swap 17.7 of 19.0 GB used)`
-# for want of a fixer (2026-10-31) while memory_pressure said 58% free at load 5: macOS keeps pages swapped out hours
-# ago counted as swap USED until they are touched, so swap's level -- as a share (7c3c342 dropped that) or in GB -- is
-# no signal. The signals are macOS's free % (kern.memorystatus_level: memory_pressure's "free percentage", one cheap
-# sysctl; Linux: MemAvailable of MemTotal), the kernel's own pressure level (kern.memorystatus_vm_pressure_level: 1
-# normal, 2 warn, 4 critical), the 1-min load, and swap only while it GROWS (over the last LAPTOP_SWAP_WINDOW, from
-# samples kept in <gov>/swap-samples.json). Under pressure the governor holds every class but red (gov_fits): NOTHING
-# STOPS A GATE FIX, EVER (the owner, 2026-10-31) -- the red dispatcher never reads it, and a red fix's ticket never
-# waits. `agentctl gov status` and `agentctl red status` show the reading with its numbers.
-LAPTOP_FREE_PCT = 20          # holds other work while macOS's memory free % is under this
-LAPTOP_PRESSURE_LEVEL = 2     # holds other work at this kernel pressure level or over (1 normal, 2 warn, 4 critical)
-LAPTOP_SWAP_GROWTH_MB = 1024  # holds other work while swap grew this much (MB) within LAPTOP_SWAP_WINDOW
-LAPTOP_SWAP_WINDOW = 600      # seconds of swap samples the growth is read over
-PRESSURE_LEVELS = {1: "normal", 2: "warn", 4: "critical"}
-
-
-def pressure_sysctl():
-    """macOS: free %, pressure level and vm.swapusage, one sysctl call ("" elsewhere)."""
-    if sys.platform != "darwin":
-        return ""
-    return run_cmd(["sysctl", "-n", "kern.memorystatus_level", "kern.memorystatus_vm_pressure_level", "vm.swapusage"],
-                   timeout=10).stdout
-
-
-def swap_growth(mb, now_):
-    """(MB swap grew since the oldest sample within LAPTOP_SWAP_WINDOW, seconds that spans); this sample is kept."""
-    if mb is None:
-        return None, 0
-    window = env_num("AGENTCTL_LAPTOP_SWAP_WINDOW", LAPTOP_SWAP_WINDOW)
-    path = os.path.join(gov_dir(), "swap-samples.json")
-    samples = [s for s in (read_record(path) or []) if now_ - window <= s[0] <= now_]
-    samples.append([now_, mb])
-    try:
-        write_json(path, samples)
-    except OSError:
-        pass
-    first = samples[0]
-    return mb - first[1], now_ - first[0]
-
-
-def pressure_reading(sysctl_out=None, meminfo=None, load1=None, cores=None, now_=None):
-    """{free_pct, level, load1, cores, swap_mb, swap_growth_mb, swap_span}: this machine now, None where unreadable.
-    The readers are the tests' seams: sysctl_out (pressure_sysctl's text), meminfo (read_meminfo's dict)."""
-    now_ = time.time() if now_ is None else now_
-    # its CPU is the cores processes use (gov_busy_cores), never the load average, which counts threads waiting (46 on
-    # 18 cores while 5.2 were busy, 2026-11-19); `load1` passed in (the tests' seam) stands for it
-    r = {"free_pct": None, "level": None, "swap_mb": None, "load1": gov_busy_cores() if load1 is None else load1,
-         "cores": cores or machine_cores(), "runq": run_queue(passed=load1)}
-    fixed = machine_fixed() if meminfo is None and sysctl_out is None else None
-    mi = {} if fixed is not None else read_meminfo() if meminfo is None else meminfo
-    if fixed is not None:
-        r["free_pct"], r["level"], r["swap_mb"] = fixed.get("free_pct"), fixed.get("level"), fixed.get("swap_used_mb")
-    elif mi.get("MemTotal"):
-        if "MemAvailable" in mi:
-            r["free_pct"] = round(100 * mi["MemAvailable"] / mi["MemTotal"])
-        if "SwapTotal" in mi and "SwapFree" in mi:
-            r["swap_mb"] = (mi["SwapTotal"] - mi["SwapFree"]) / 1024
-    else:
-        lines = (pressure_sysctl() if sysctl_out is None else sysctl_out).splitlines()
-        if len(lines) >= 2 and lines[0].strip().isdigit() and lines[1].strip().isdigit():
-            r["free_pct"], r["level"] = int(lines[0]), int(lines[1])
-        used = re.search(r"used = ([\d.]+)M", "\n".join(lines))
-        if used:
-            r["swap_mb"] = float(used.group(1))
-    r["swap_growth_mb"], r["swap_span"] = swap_growth(r["swap_mb"], now_)
-    return r
-
-
-def laptop_pressure(r=None, load=True):
-    """Why this machine is under pressure now, with its numbers ("; "-joined), or None. load=False leaves the load out
-    (the governor holds each class on its own load factor). $AGENTCTL_LAPTOP_PRESSURE set (the tests'): its value is
-    the answer, `-` or empty for none."""
-    if r is None and "AGENTCTL_LAPTOP_PRESSURE" in os.environ:
-        return os.environ["AGENTCTL_LAPTOP_PRESSURE"].strip("-") or None  # `-` or empty: none
-    r = r or pressure_reading()
-    why = []
-    free_pct = env_num("AGENTCTL_LAPTOP_FREE_PCT", LAPTOP_FREE_PCT)
-    if r.get("free_pct") is not None and r["free_pct"] < free_pct:
-        why.append(f"memory {r['free_pct']}% free (holds under {free_pct:g}%)")
-    if r.get("level") is not None and r["level"] >= env_num("AGENTCTL_LAPTOP_PRESSURE_LEVEL", LAPTOP_PRESSURE_LEVEL):
-        why.append(f"kernel memory pressure {PRESSURE_LEVELS.get(r['level'], '?')} (level {r['level']})")
-    why += cpu_pressure(r) if load else []
-    bar = env_num("AGENTCTL_LAPTOP_SWAP_GROWTH_MB", LAPTOP_SWAP_GROWTH_MB)
-    if r.get("swap_growth_mb") is not None and r["swap_growth_mb"] >= bar:
-        why.append(f"swap growing +{r['swap_growth_mb'] / 1024:.1f} GB in {r['swap_span'] / 60:.0f} min (holds at "
-                   f"+{bar / 1024:.1f} GB in {env_num('AGENTCTL_LAPTOP_SWAP_WINDOW', LAPTOP_SWAP_WINDOW) / 60:.0f} min)")
-    return "; ".join(why) or None
-
-
-def pressure_summary(r=None):
-    """Every number of the reading, for a status line."""
-    r = r or pressure_reading()
-    q = lambda v, f="{}": "?" if v is None else f.format(v)
-    lvl = f"{r['level']} ({PRESSURE_LEVELS.get(r['level'], '?')})" if r.get("level") is not None else "?"
-    swap = "swap ?" if r.get("swap_mb") is None else (
-        f"swap {r['swap_mb'] / 1024:.1f} GB ({round((r.get('swap_growth_mb') or 0) / 1024, 1) + 0.0:+.1f} GB in "
-        f"{(r.get('swap_span') or 0) / 60:.0f} min)")
-    return f"memory {q(r.get('free_pct'))}% free, level {lvl}, load {q(r.get('load1'), '{:.1f}')}/{r['cores']} cores, {swap}"
-
-
-def pressure_report():
-    """(why or None, summary) of this machine now: the tests' $AGENTCTL_LAPTOP_PRESSURE stands for both."""
-    if "AGENTCTL_LAPTOP_PRESSURE" in os.environ:
-        why = laptop_pressure()
-        return why, why or "none (test)"
-    r = pressure_reading()
-    return laptop_pressure(r), pressure_summary(r)
 
 
 def cmd_suite(a):
