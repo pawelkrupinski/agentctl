@@ -15,6 +15,7 @@ mypy-errors	ciwhy	123
 mypy-errors	classify	1
 mypy-errors	cleanup	54
 mypy-errors	cli	12
+mypy-errors	clones	1
 mypy-errors	conditions	42
 mypy-errors	config	19
 mypy-errors	conflicts	40
@@ -55,11 +56,11 @@ mypy-errors	queue	29
 mypy-errors	queuebatch	65
 mypy-errors	queueclose	91
 mypy-errors	queuediff	85
-mypy-errors	queueenter	61
+mypy-errors	queueenter	53
 mypy-errors	queuepush	74
 mypy-errors	queuerecheck	49
 mypy-errors	queueslots	28
-mypy-errors	queuesubmit	29
+mypy-errors	queuesubmit	37
 mypy-errors	queueuntil	18
 mypy-errors	recovery	54
 mypy-errors	red	49
@@ -92,7 +93,7 @@ mypy-errors	remotestore	26
 mypy-errors	repos	34
 mypy-errors	reverts	46
 mypy-errors	rundispatch	11
-mypy-errors	server	259
+mypy-errors	server	258
 mypy-errors	slots	184
 mypy-errors	stats	139
 mypy-errors	status	224

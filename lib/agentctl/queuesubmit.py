@@ -13,6 +13,10 @@ from agentctl.store import MACHINES, StaleVersion, StoreUnavailable, machine_sta
 from agentctl.selfcode import TOOL_PATH
 from agentctl.waitingdir import ENTRY_FINAL, waiting_entries
 from agentctl.owned import backoff
+from agentctl.classify import TransientNetwork, net_retry
+from agentctl.waitingdir import save_entry
+from agentctl.land import push_bounds, run_watched, tool_env
+from agentctl.waiting import tail_of
 
 
 # SUBMISSION BY REF (design §13 step 14, §14.2): a queued change is also pushed to the remote as refs/heads/land/<entry>
@@ -343,3 +347,36 @@ def await_queued(eid, store=None):
     print(f"NOT LANDED (still queued): {eid} is {state} after {fmt_age(waited)}; it stays queued as "
           "its red's fix (the red machine verifies it once it lands) -- `agentctl land status`", flush=True)
     return 1
+
+
+def submit_ref(repo, d, e, to_server=False):
+    """Push the change to refs/heads/land/<entry> (bounded); the entry records it. Never fatal in phase 1 (the queue does
+    not need it); in phase 2 (to_server: ci-runner fetches the change from it) the caller refuses without it."""
+    if not land_refs_supported(repo):
+        e["push_error"] = f"not pushed: {remote()}/main's scripts/hooks/pre-push takes no refs/heads/land/ ref"
+        return None
+    ref = f"refs/heads/land/{e['id']}"
+
+    def push():  # the same sha to the change's own ref: idempotent, so tried again through a blip (net_retry)
+        rc_, out_ = run_watched(["git", "push", "--quiet", remote(), f"{e['head']}:{ref}"], repo, tool_env(),
+                                os.path.join(d, f"submit-{e['id']}"), "submit", **push_bounds())
+        if rc_ != 0 and is_transient_network(out_) and not credential_failure(out_):
+            raise RuntimeError(tail_of(out_ or "", 2)[:200])
+        return rc_, out_
+    try:
+        rc, out = net_retry(f"submit: the push of {ref}", push)
+    except TransientNetwork as ex:
+        rc, out = 1, str(ex)
+    if rc == 0:
+        e["ref"] = ref
+        if not to_server:
+            save_entry(d, e)
+        return ref
+    e["push_error"] = tail_of(out or "", 2).strip()[:300]
+    err(f"submit: could not push {ref} ({e['push_error'][:160]}); the change is queued all the same")
+    return None
+
+
+SUBMIT_FIELDS = ("worktree", "branch", "head", "commits", "fixes", "keep_worktree", "claude_pid", "session", "base", "host",
+                 "lander", "commit_keys", "no_batch", "replays", "diagnoses")  # lander.py: who landed it, and its commits' keys;
+# no_batch: land --no-batch (never in a backlog batch); replays: agentctl's FIX REPLAY proofs (redreplay.py run_fix_replays)

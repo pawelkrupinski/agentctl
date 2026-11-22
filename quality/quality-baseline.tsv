@@ -403,6 +403,7 @@ copies	batch	6
 copies	blame	4
 copies	buildview	2
 copies	cireport|redtick	2
+copies	clones|server	2
 copies	fixerland|watchdog	2
 copies	owner	2
 copies	queueclose	2
@@ -410,10 +411,8 @@ copies	redcrash	2
 copies	redcrash|redstep	2
 copies	redpending	7
 copies	redstep	2
-copies	server	2
 copies	store	4
 cycle	batch	1
-cycle	queueclose	1
 cycle	queueenter	1
 cycle	queuepush	1
 cycle	recovery	1
@@ -839,7 +838,6 @@ cyclomatic	workflow_timeout_bound	21
 cyclomatic	workflow_triggers	12
 cyclomatic	worktree_holding	12
 cyclomatic	write_snapshot	24
-fan-out	cli	10
 file-lines	alerts	719
 file-lines	batch	1564
 file-lines	blame	833
@@ -849,8 +847,8 @@ file-lines	gov	728
 file-lines	live	755
 file-lines	owner	718
 file-lines	remote	824
-file-lines	server	1246
-file-lines	slots	897
+file-lines	server	1208
+file-lines	slots	896
 file-lines	stats	623
 file-lines	status	1069
 file-lines	store	780

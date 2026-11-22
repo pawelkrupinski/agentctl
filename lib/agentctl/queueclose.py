@@ -1,5 +1,38 @@
 # agentctl, part `queueclose`: one queue closed by content: bounces, regen-only rows, overdue regen holds.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import time
+from agentctl.core import cherry_landed, env_num, fmt_age, git, git_ok, host_role, process_cache, remote
+from agentctl.timefmt import ts
+from agentctl.statefile import read_record
+from agentctl.classify import network_failure, network_only
+from agentctl.store import StaleVersion, TerminalState, change_event, machine_state, open_store
+from agentctl.procs import safe_cwd
+from agentctl.repos import movies_repo_path, precheck_hook, waiting_supported
+from agentctl.policy import policy_blocks
+from agentctl.waitingdir import ENTRY_FINAL, save_entry, waiting_entries, waiting_state, wlog
+from agentctl.inboxentry import inbox_write
+from agentctl.clones import clone_shared, fetch_main, note_clone_suspect
+from agentctl.queueslots import check_tree, check_tree_slot, checker_lease, entry_owned, queue_verdict, set_change
+from agentctl.conditions import open_condition, run_probe
+from agentctl.queue import (
+    FETCH_MAIN_FAILED, INFRA_CHECK_FAILURE, STALLED_REASON, STALL_KEEP_PLACE, VERIFY_MODE, module_overlap,
+    range_paths, requeue_infra, verify_areas_supported, verify_supported)
+from agentctl.patches import equivalent_on
+from agentctl.generated import generated_entry
+from agentctl.conflicts import CONFLICT_PLACE_KEPT, conflict_cause, conflict_paths
+from agentctl.queuerecheck import recheck_reason
+from agentctl.redreplay import fix_replay_refusal
+from agentctl.changekind import HOLD_SHOWN, classify_change, kind_text, queue_facts
+from agentctl.gov import gov_class_of
+from agentctl.queuesubmit import SUBMIT_FIELDS, submit_ref
+from agentctl.waiting import already_landed, cancel_entry_remote, must_wait, waiting_commits
+from agentctl.redseen import gate_reds
+from agentctl.queuebatch import run_entry_checks
+from agentctl.blame import blame_land_refusal
+from agentctl.queuediff import CHECK_TIMEOUT, TIMEOUT_RETRIES, judge_failure, keys_text, rebase_in_tree
+
 
 # ONE QUEUE, CLOSED BY CONTENT (2026-10-30 split brain: six pre-cutover entries in the laptop's local waiting dir and
 # four store items mirrored from them sat "waiting" for 11 h, every one already on main under rebased shas, and W1
@@ -431,3 +464,6 @@ def _check_entry(repo, d, e, i, own=None):
                verified_areas=areas)
     wlog(d, f"{e['id']}: {verified} ({where})")
     return 0
+
+
+NETWORK_REASON = "its checks could not reach the network"

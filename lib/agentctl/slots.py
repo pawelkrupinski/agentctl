@@ -447,7 +447,6 @@ BASELINE_RECHECKS = 3  # dry runs against a known-red baseline at most, main mov
 # either: no reds/local.json, no baseline; the change is handed to the land queue as an infra re-queue (requeue_infra:
 # the same reason QUEUE_INFRA_RETRIES times or INFRA_SAME_MAX opens its STALLED condition), checked again later.
 NETWORK_SHAPED = "network-shaped"
-NETWORK_REASON = "its checks could not reach the network"
 
 
 def network_requeue(repo, head, out, log_path, a=None):

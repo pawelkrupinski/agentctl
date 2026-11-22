@@ -296,3 +296,11 @@ def conflict_cause(repo, since, main, conflicts, n=3):
         out.append(f"{c} (changed on main by {line[:90]})" if line else c)
     more = len(conflicts or []) - n
     return f"; it conflicts in {', '.join(out)}" + (f" (+{more} more)" if more > 0 else "") if out else ""
+
+
+# A RESOLVED CONFLICT KEEPS ITS PLACE (2026-11-19: lane F2b, bounced for a conflict main had made, rebased and queued
+# again at the back, behind every change queued while it was out): a change queued from the same worktree and branch
+# within CONFLICT_PLACE_KEPT s of its last entry's rejection for a conflict (`conflict_files`: no longer applies on
+# main) takes that entry's seq -- the queue's age order -- instead of a new one. The rejected entry is final, so no two
+# live entries share a seq. Tests: tests/test_generated.py.
+CONFLICT_PLACE_KEPT = 24 * 3600

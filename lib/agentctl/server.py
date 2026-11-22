@@ -223,35 +223,8 @@ def server_clone_remote(repo):
 
 CLONE_REPAIR_RETRY = 15 * 60  # a repair that failed is tried again after this
 CLONE_LOCK_WAIT = 300         # the swap waits this long for the clone's users to finish, then tries again next tick
-_clone_lock_depth = threading.local()
 _clone_repairing = threading.Lock()
 _clone_repair_at = process_cache({})
-
-
-@contextlib.contextmanager
-def clone_shared(repo):
-    """Use the clone: shared under its lock (the swap takes it exclusive). A no-op where it never heals, and nested."""
-    depth = getattr(_clone_lock_depth, "n", 0)
-    if depth or not heal_enabled(repo):
-        _clone_lock_depth.n = depth + 1
-        try:
-            yield
-        finally:
-            _clone_lock_depth.n = depth
-        return
-    os.makedirs(os.path.dirname(clone_side(repo, "x")), exist_ok=True)
-    with open(clone_side(repo, "clone-gate.lock"), "a+") as gate, open(clone_side(repo, "clone.lock"), "a+") as lk:
-        fcntl.flock(gate, fcntl.LOCK_EX)  # a swap waiting for the lock holds the gate: no new user starves it
-        try:
-            fcntl.flock(lk, fcntl.LOCK_SH)
-        finally:
-            fcntl.flock(gate, fcntl.LOCK_UN)
-        _clone_lock_depth.n = 1
-        try:
-            yield
-        finally:
-            _clone_lock_depth.n = 0
-            fcntl.flock(lk, fcntl.LOCK_UN)
 
 
 @contextlib.contextmanager
@@ -422,14 +395,6 @@ def clone_heal_tick(repo):
     return repair_clone(repo, f"{r.detail}\n{sus.get('error') or ''}".strip())
 
 
-# A RESOLVED CONFLICT KEEPS ITS PLACE (2026-11-19: lane F2b, bounced for a conflict main had made, rebased and queued
-# again at the back, behind every change queued while it was out): a change queued from the same worktree and branch
-# within CONFLICT_PLACE_KEPT s of its last entry's rejection for a conflict (`conflict_files`: no longer applies on
-# main) takes that entry's seq -- the queue's age order -- instead of a new one. The rejected entry is final, so no two
-# live entries share a seq. Tests: tests/test_generated.py.
-CONFLICT_PLACE_KEPT = 24 * 3600
-
-
 def conflict_bounced(every, e, now_=None):
     """The newest entry of e's worktree and branch, when it was rejected for a conflict within CONFLICT_PLACE_KEPT s
     (and nothing of that source was queued since), or is still held for its regeneration (queueclose.py regen_hold): the
@@ -473,9 +438,6 @@ def queue_change(d, fields, entry_id=None):
     return e, max(len(queued_entries(d)) - 1, 0)
 
 
-SUBMIT_FIELDS = ("worktree", "branch", "head", "commits", "fixes", "keep_worktree", "claude_pid", "session", "base", "host",
-                 "lander", "commit_keys", "no_batch", "replays", "diagnoses")  # lander.py: who landed it, and its commits' keys;
-# no_batch: land --no-batch (never in a backlog batch); replays: agentctl's FIX REPLAY proofs (redreplay.py run_fix_replays)
 
 
 def submit_change(body, repo=None):

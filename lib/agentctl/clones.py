@@ -8,6 +8,9 @@ import time
 from agentctl.core import git, git_ok, remote
 from agentctl.statefile import write_json
 from agentctl.repos import server_repo
+import contextlib
+import fcntl
+import threading
 
 
 def main_clone(path: str) -> Any:
@@ -71,3 +74,32 @@ def fetch_main(repo: str) -> Any:
         out = f"exit {r.returncode}" + ("" if r.returncode else f"; {remote()}/main does not resolve")
     note_clone_suspect(repo, out)
     return False, out
+
+
+_clone_lock_depth = threading.local()
+
+
+@contextlib.contextmanager
+def clone_shared(repo):
+    """Use the clone: shared under its lock (the swap takes it exclusive). A no-op where it never heals, and nested."""
+    depth = getattr(_clone_lock_depth, "n", 0)
+    if depth or not heal_enabled(repo):
+        _clone_lock_depth.n = depth + 1
+        try:
+            yield
+        finally:
+            _clone_lock_depth.n = depth
+        return
+    os.makedirs(os.path.dirname(clone_side(repo, "x")), exist_ok=True)
+    with open(clone_side(repo, "clone-gate.lock"), "a+") as gate, open(clone_side(repo, "clone.lock"), "a+") as lk:
+        fcntl.flock(gate, fcntl.LOCK_EX)  # a swap waiting for the lock holds the gate: no new user starves it
+        try:
+            fcntl.flock(lk, fcntl.LOCK_SH)
+        finally:
+            fcntl.flock(gate, fcntl.LOCK_UN)
+        _clone_lock_depth.n = 1
+        try:
+            yield
+        finally:
+            _clone_lock_depth.n = 0
+            fcntl.flock(lk, fcntl.LOCK_UN)

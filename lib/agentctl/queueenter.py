@@ -2,34 +2,6 @@
 # Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
 
 
-def submit_ref(repo, d, e, to_server=False):
-    """Push the change to refs/heads/land/<entry> (bounded); the entry records it. Never fatal in phase 1 (the queue does
-    not need it); in phase 2 (to_server: ci-runner fetches the change from it) the caller refuses without it."""
-    if not land_refs_supported(repo):
-        e["push_error"] = f"not pushed: {remote()}/main's scripts/hooks/pre-push takes no refs/heads/land/ ref"
-        return None
-    ref = f"refs/heads/land/{e['id']}"
-
-    def push():  # the same sha to the change's own ref: idempotent, so tried again through a blip (net_retry)
-        rc_, out_ = run_watched(["git", "push", "--quiet", remote(), f"{e['head']}:{ref}"], repo, tool_env(),
-                                os.path.join(d, f"submit-{e['id']}"), "submit", **push_bounds())
-        if rc_ != 0 and is_transient_network(out_) and not credential_failure(out_):
-            raise RuntimeError(tail_of(out_ or "", 2)[:200])
-        return rc_, out_
-    try:
-        rc, out = net_retry(f"submit: the push of {ref}", push)
-    except TransientNetwork as ex:
-        rc, out = 1, str(ex)
-    if rc == 0:
-        e["ref"] = ref
-        if not to_server:
-            save_entry(d, e)
-        return ref
-    e["push_error"] = tail_of(out or "", 2).strip()[:300]
-    err(f"submit: could not push {ref} ({e['push_error'][:160]}); the change is queued all the same")
-    return None
-
-
 def change_fields(repo, main_ref, head, a):
     """A queue entry's fields for the change at head in repo (land's own submission)."""
     commits = waiting_commits(repo, f"{remote()}/main", head)
