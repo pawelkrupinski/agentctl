@@ -113,12 +113,14 @@ class PureMoveTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def test_movedefs_before_puts_the_moved_statements_above_the_one_reading_them(self):
-        parts = dict(PARTS, mid=PARTS["mid"] + "\n\n        LIMIT = 3\n",
+        parts = dict(PARTS, mid=PARTS["mid"] + "\n\n        LIMIT, OTHER = 3, 4\n",
                      top=PARTS["top"] + "\n\n        TABLE = {'limit': LIMIT}\n")
         lib = fake_lib(parts)
-        r = tool("movedefs", lib, "top", "--before", "TABLE", "LIMIT")
+        self.assertNotEqual(tool("movedefs", lib, "top", "LIMIT", "OTHER", "nonesuch").returncode, 0)
+        self.assertIn("LIMIT", read(lib, "mid"), "a refused move writes nothing")
+        r = tool("movedefs", lib, "top", "--before", "TABLE", "LIMIT", "OTHER")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("return other()\n\n\nLIMIT = 3\n\n\nTABLE = {", read(lib, "top"))
+        self.assertIn("return other()\n\n\nLIMIT, OTHER = 3, 4\n\n\nTABLE = {", read(lib, "top"))
         self.assertNotIn("LIMIT", read(lib, "mid"))
 
     def test_split_part_cuts_at_a_marker_and_lists_the_piece_in_its_place(self):

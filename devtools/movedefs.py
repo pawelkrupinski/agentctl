@@ -43,7 +43,7 @@ def stmt_spans(src):
             nm = {n.name}
         elif isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
             ts = n.targets if isinstance(n, ast.Assign) else [n.target]
-            nm = {t.id for t in ts if isinstance(t, ast.Name)}
+            nm = {x.id for t in ts for x in ast.walk(t) if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Store)}
         else:
             nm = set()
         out.append((k + 1, n.end_lineno, nm))
@@ -51,7 +51,7 @@ def stmt_spans(src):
     return out
 
 
-moved, found = [], set()
+moved, found, writes = [], set(), {}
 for p in parts:
     if p == to:
         continue
@@ -76,10 +76,12 @@ for p in parts:
     text = "\n".join(keep)
     while "\n\n\n\n" in text:
         text = text.replace("\n\n\n\n", "\n\n\n")
-    open(path, "w").write(text)
+    writes[path] = text
 missing = names - found
 if missing:
-    sys.exit(f"not found: {sorted(missing)}")
+    sys.exit(f"not found: {sorted(missing)}")  # nothing written yet
+for path, text in writes.items():
+    open(path, "w").write(text)
 tpath = os.path.join(lib, f"{to}.py")
 if new_desc is not None:
     assert not os.path.exists(tpath), tpath
