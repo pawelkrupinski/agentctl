@@ -312,6 +312,16 @@ class SameCodeTest(unittest.TestCase):
         exec("def f(a):\n if a:\n" + "".join(f"  x{i} = a.b{i}\n" for i in range(300)) + " return 1\n", ns)
         self.assertNotIn("EXTENDED_ARG", [op for op, _ in samecode.instructions(ns["f"].__code__)])
 
+    def test_a_borrowed_load_reads_as_the_plain_load(self):
+        """The compiler borrows a local's reference (LOAD_FAST_BORROW, 3.14+) or not by its context alone: a move
+        that adds a module-level import turned canon_job's `re` loads into plain LOAD_FAST."""
+        import samecode
+        ns = {}
+        exec("def f(a):\n    return a + 1\n", ns)
+        ops = [op for op, _ in samecode.instructions(ns["f"].__code__)]
+        self.assertIn("LOAD_FAST", ops)
+        self.assertFalse([op for op in ops if op.endswith("_BORROW")], ops)
+
 
 class StatsTest(unittest.TestCase):
     def test_start_and_now_are_measured_from_their_snapshots_with_one_ruler(self):

@@ -34,7 +34,8 @@ def instructions(code):
         if i.opname == "STORE_NAME" and i.argval == "__firstlineno__":  # a class body's own line: positions aside
             out.pop()
             continue
-        out.append((i.opname, i.argval if not isinstance(i.argval, types.CodeType) else None))
+        op = i.opname.replace("_BORROW", "")  # a borrowed reference or not: the compiler's choice by context alone
+        out.append((op, i.argval if not isinstance(i.argval, types.CodeType) else None))
     return out
 
 
