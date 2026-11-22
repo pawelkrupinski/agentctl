@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Move top-level definitions between parts of agentctl's one namespace, as a pure move.
 
-usage: movedefs.py <lib/agentctl> <to-part> [--new "<description>" --after <part>] <name>... [--from-line A:B@part]
+usage: movedefs.py <lib/agentctl> <to-part> [--new "<description>" --after <part>] [--before <name>] <name>...
 Each named top-level statement (def/class/assignment, with the comment block right above it) is cut from its part and
-appended, in source order, to <to-part> (created after --after when new). Proof: every function's bytecode in the
+appended, in source order, to <to-part> (created after --after when new), or inserted, in that order, right before the
+statement binding <name> there (--before: a module-level statement there reads them). Proof: every function's bytecode in the
 loaded namespace is unchanged (run samecode.py after)."""
 import ast
 import os
@@ -14,9 +15,11 @@ from partlist import parts_and_modules
 lib = sys.argv[1]
 to = sys.argv[2]
 args = sys.argv[3:]
-new_desc, after = None, None
+new_desc, after, before = None, None, None
 if "--new" in args:
     i = args.index("--new"); new_desc = args[i + 1]; del args[i:i + 2]
+if "--before" in args:
+    i = args.index("--before"); before = args[i + 1]; del args[i:i + 2]
 if "--after" in args:
     i = args.index("--after"); after = args[i + 1]; del args[i:i + 2]
 names = set(args)
@@ -87,7 +90,14 @@ if new_desc is not None:
     assert s.count(f'"{after}", ') == 1
     open(init, "w").write(s.replace(f'"{after}", ', f'"{after}", "{to}", ', 1))
 body = open(tpath).read().rstrip("\n")
-for _p, text in moved:
-    body += "\n\n\n" + text.strip("\n")
+block = "".join("\n\n\n" + text.strip("\n") for _p, text in moved)
+if before is None:
+    body += block
+else:
+    spans = [a for a, _b, nm in stmt_spans(body) if before in nm]
+    if len(spans) != 1:
+        sys.exit(f"{to}: --before {before}: {len(spans)} statements bind it")
+    lines = body.split("\n")
+    body = "\n".join(lines[:spans[0] - 1]).rstrip("\n") + block.rstrip("\n") + "\n\n\n" + "\n".join(lines[spans[0] - 1:])
 open(tpath, "w").write(body + "\n")
 print(f"moved {len(moved)} statements into {to}")

@@ -112,6 +112,15 @@ class PureMoveTest(unittest.TestCase):
         r = tool("samecode", os.path.dirname(before), os.path.dirname(lib))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
+    def test_movedefs_before_puts_the_moved_statements_above_the_one_reading_them(self):
+        parts = dict(PARTS, mid=PARTS["mid"] + "\n\n        LIMIT = 3\n",
+                     top=PARTS["top"] + "\n\n        TABLE = {'limit': LIMIT}\n")
+        lib = fake_lib(parts)
+        r = tool("movedefs", lib, "top", "--before", "TABLE", "LIMIT")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("return other()\n\n\nLIMIT = 3\n\n\nTABLE = {", read(lib, "top"))
+        self.assertNotIn("LIMIT", read(lib, "mid"))
+
     def test_split_part_cuts_at_a_marker_and_lists_the_piece_in_its_place(self):
         lib = fake_lib()
         before = copy(lib)
