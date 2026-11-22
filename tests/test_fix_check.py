@@ -136,9 +136,9 @@ class FixCheckTest(FixCheckBase):
 
 class LandingTest(FixCheckBase):
     def with_store(self):
-        saved = A.Store
-        A.Store = lambda *a, **k: self.st
-        self.addCleanup(lambda: setattr(A, "Store", saved))
+        saved = A.open_store
+        A.open_store = lambda *a, **k: self.st
+        self.addCleanup(lambda: setattr(A, "open_store", saved))
 
     def test_a_trailer_that_does_not_count_waits_on_a_red_gate_and_names_no_fix(self):
         self.with_store()
@@ -218,9 +218,9 @@ class PerRedTest(FixCheckBase):
         return {"entries": [], "landed": A.landed_fix_commits(self.r.path), "repo": self.r.path}
 
     def ios_fix(self):
-        saved = A.Store
-        A.Store = lambda *a, **k: self.st
-        self.addCleanup(lambda: setattr(A, "Store", saved))
+        saved = A.open_store
+        A.open_store = lambda *a, **k: self.st
+        self.addCleanup(lambda: setattr(A, "open_store", saved))
         sha = self.change(["ios/KinowoUITests/CardShareMenuUITests.swift"], ("74",))
         self.r.push()
         return sha

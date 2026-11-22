@@ -15,7 +15,7 @@ def cmd_tick(a):
     if host_role() == "server":  # ci-runner: its own clone, systemd's notify protocol, a clean stop between ticks
         repo = ensure_server_clone(a.repo)
         signal.signal(signal.SIGTERM, lambda *_: TICK_STOP.__setitem__(0, True))
-        Store()  # the database exists (its schema) before systemd hears READY
+        open_store()  # the database exists (its schema) before systemd hears READY
         sd_notify("READY=1")
         SD_READY[0] = True
     else:

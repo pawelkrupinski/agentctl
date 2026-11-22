@@ -249,14 +249,14 @@ class WatchTest(Base):
         self.assertEqual(rc2, 0, out2)
         self.assertEqual(len(self.listed), looks, "the second follower read the first one's verdict, not GitHub")
         self.assertIn("WATCH OK", out2)
-        [it] = A.Store().items("watch")
+        [it] = A.open_store().items("watch")
         self.assertEqual((it["id"], it["state"]), (self.sha, "ok"))
-        self.assertEqual([e["to_state"] for e in A.Store().events() if e["item_type"] == "watch"], ["ok"])
+        self.assertEqual([e["to_state"] for e in A.open_store().events() if e["item_type"] == "watch"], ["ok"])
 
     def test_a_follower_of_a_sha_another_live_follower_watches_waits_for_its_verdict(self):
         A.start_watch(self.r.path, self.sha, self.pushed_at, o_r=MOVIES,
                       follower={"followed_by": "ci-runner:4242", "followed_until": time.time() + 3600})
-        st = A.Store()
+        st = A.open_store()
 
         def theirs_decides(_s):  # the other follower's verdict, on the item
             it = st.item("watch", self.sha)
@@ -276,7 +276,7 @@ class WatchTest(Base):
         rc, out = self.watch()
         self.assertEqual(rc, 0, out)
         self.assertGreater(len(self.listed), 0)
-        self.assertEqual(A.Store().item("watch", self.sha)["state"], "ok")
+        self.assertEqual(A.open_store().item("watch", self.sha)["state"], "ok")
 
     def test_a_follower_the_local_owned_lock_refuses_gives_its_claim_back(self):
         """Review round 8: a follower that claimed the item and then met another local watcher's Owned lock returned
@@ -287,26 +287,26 @@ class WatchTest(Base):
         rc, out = self.watch()
         self.assertEqual(rc, 2, out)
         self.assertIn("already watches", out)
-        self.assertFalse(A.Store().item("watch", self.sha)["data"].get("followed_by"), "the claim was given back")
+        self.assertFalse(A.open_store().item("watch", self.sha)["data"].get("followed_by"), "the claim was given back")
 
     def test_a_sha_whose_watch_ended_unknown_is_rewatched_claimed_and_its_verdict_kept(self):
         """Review round 8: the re-watch of an `unknown` item ran unclaimed, so its verdict was never stored and every
         later follower watched GitHub again. It claims the item like any follower and keeps its verdict there."""
         it = A.start_watch(self.r.path, self.sha, self.pushed_at, o_r=MOVIES)
-        A.Store().transition("watch", self.sha, "unknown", it["version"], data={"verdict": "WATCH UNKNOWN: stuck"})
+        A.open_store().transition("watch", self.sha, "unknown", it["version"], data={"verdict": "WATCH UNKNOWN: stuck"})
         self.main, self.conv = [run(11, self.sha)], [run(21, self.sha)]
         claimed = []
         saved = A.watch_look
 
         def look(*a, **kw):  # while it watches, the item is this follower's
-            claimed.append(A.Store().item("watch", self.sha)["data"].get("followed_by"))
+            claimed.append(A.open_store().item("watch", self.sha)["data"].get("followed_by"))
             return saved(*a, **kw)
         A.watch_look = look
         self.addCleanup(setattr, A, "watch_look", saved)
         rc, out = self.watch()
         self.assertEqual(rc, 0, out)
         self.assertTrue(claimed and all(claimed), claimed)
-        it = A.Store().item("watch", self.sha)
+        it = A.open_store().item("watch", self.sha)
         self.assertEqual((it["data"].get("outcome"), it["data"].get("followed_by")), ("ok", None))
         self.assertIn("WATCH OK: Main #11 green", it["data"]["verdict"])
         looks = len(self.listed)
@@ -334,7 +334,7 @@ class LandWatchTest(Base):
 
         def fake(repo, sha, pushed_at, o_r=None, close=None, fixes=()):
             # the lease is free while watching: another lander could take it now
-            r = A.Store().get(A.land_lease_name(repo))
+            r = A.open_store().get(A.land_lease_name(repo))
             assert not r or not r["holder"] or r["expires_at"] <= time.time(), "the landing lease is held while watching"
             self.calls.append((sha, pushed_at))
             print("WATCH RED: Main #5 test")
@@ -408,7 +408,7 @@ class WatchItemTest(unittest.TestCase):
         A.start_watch("/repo", "a" * 40, time.time(), worktree=wt, close=wt, session="s1")
         A.watch_eval = lambda *a: None
         self.assertEqual(A.tick_watches(), [])
-        self.assertEqual(A.Store().item("watch", "a" * 40)["state"], "watching")
+        self.assertEqual(A.open_store().item("watch", "a" * 40)["state"], "watching")
         A.watch_eval = lambda *a: ("ok", "WATCH OK: Main #5 green, convergence #6 green (aaaaaaaaaa)", [])
         self.assertEqual(A.tick_watches(now_=time.time() + 120), [f"watch {'a' * 10}: ok"])
         self.assertEqual(self.closed, [wt])
@@ -450,7 +450,7 @@ class WatchItemTest(unittest.TestCase):
         A.watch_eval = lambda *a: looked.append(a) or ("ok", "WATCH OK", [])
         self.assertEqual(A.tick_watches(), [])
         self.assertEqual(looked, [], "no clone here: nothing looked at")
-        self.assertEqual(A.Store().item("watch", "f" * 40)["state"], "watching")
+        self.assertEqual(A.open_store().item("watch", "f" * 40)["state"], "watching")
 
     def test_a_follower_never_renews_a_claim_another_follower_took_over(self):
         """Review round 7: renew() wrote its lease over whoever held the item, so a follower whose claim lapsed (asleep)
@@ -459,17 +459,17 @@ class WatchItemTest(unittest.TestCase):
         A.start_watch("/repo", "g" * 40, time.time(), worktree="/w",
                       follower={"followed_by": "ci-runner:7", "followed_until": time.time() + 600})
         claim.renew()
-        self.assertEqual(A.Store().item("watch", "g" * 40)["data"]["followed_by"], "ci-runner:7")
-        A.Store().update_item("watch", "g" * 40, A.Store().item("watch", "g" * 40)["version"], claim.lease(time.time() - 900))
+        self.assertEqual(A.open_store().item("watch", "g" * 40)["data"]["followed_by"], "ci-runner:7")
+        A.open_store().update_item("watch", "g" * 40, A.open_store().item("watch", "g" * 40)["version"], claim.lease(time.time() - 900))
         claim.renew()
-        self.assertGreater(A.Store().item("watch", "g" * 40)["data"]["followed_until"], time.time(), "its own: renewed")
+        self.assertGreater(A.open_store().item("watch", "g" * 40)["data"]["followed_until"], time.time(), "its own: renewed")
 
     def test_undecided_past_its_deadline_is_unknown_and_escalates(self):
         A.start_watch("/repo", "b" * 40, time.time(), worktree="/w")
         A.watch_eval = lambda *a: None
         A.tick_watches(now_=time.time() + 4 * 3600)
-        self.assertEqual(A.Store().item("watch", "b" * 40)["state"], "unknown")
-        self.assertEqual(A.Store().events()[-1]["severity"], "escalate")
+        self.assertEqual(A.open_store().item("watch", "b" * 40)["state"], "unknown")
+        self.assertEqual(A.open_store().events()[-1]["severity"], "escalate")
 
 
 if __name__ == "__main__":

@@ -334,7 +334,7 @@ _pin_tried = [0.0]
 def stored_pins(st=None):
     """The pins record the store holds (PIN_META), or None."""
     try:
-        v = (st or Store()).meta_get(PIN_META)
+        v = (st or open_store()).meta_get(PIN_META)
         rec = json.loads(v) if v else None
     except (Exception, SystemExit) as e:
         err(f"pinned recording: the store's copy not read ({str(e).replace('agentctl: ', '')[:160]})")
@@ -345,7 +345,7 @@ def stored_pins(st=None):
 def store_pins(rec, st=None):
     """The pins into the store (PIN_META) for the reconciler; the local cache marks them stored. Never fatal."""
     try:
-        (st or Store()).meta_set(PIN_META, json.dumps({k: rec[k] for k in ("at", "repo", "tag", "pins")}))
+        (st or open_store()).meta_set(PIN_META, json.dumps({k: rec[k] for k in ("at", "repo", "tag", "pins")}))
     except (Exception, SystemExit) as e:
         err(f"pinned recording: not stored ({str(e).replace('agentctl: ', '')[:160]})")
         return rec
@@ -521,7 +521,7 @@ def branch_red_id(o_r, rid):
 def settle_branch_reds(o_r, snap, store=None):
     """Close the orphan branch reds (event: why), reopen the ones that found an owner (marked `reopened` in the snapshot
     so route_branch_reds tells that owner), retire the ones gone from the snapshot. Returns the event texts."""
-    st = store or Store()
+    st = store or open_store()
     out, live = [], set()
     for e in (snap or {}).get("branches") or []:
         if not e.get("red") or not e.get("alive"):
@@ -681,7 +681,7 @@ def orphan_branches(repo, o_r, dry, out, runs_for=None, store=None):
     recorded = {r.get("branch") for r in dispatch_records() if r.get("branch")}
     found = []
     try:
-        st = store or Store()
+        st = store or open_store()
     except (Exception, SystemExit):
         st = None
     for line in git(repo, "ls-remote", "--heads", remote(), check=False).stdout.splitlines():

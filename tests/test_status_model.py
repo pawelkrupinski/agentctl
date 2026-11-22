@@ -66,7 +66,7 @@ class StatusModelTest(unittest.TestCase):
         self.assertTrue(text.startswith("gate UNREAD (as of "), text)
 
     def test_red_status_is_the_models_reds_families_and_dispatcher(self):
-        st = A.Store()
+        st = A.open_store()
         st.put_item("red", "k1", "offered", {"key": "k1", "workflow": "Main", "last_run": {"number": 20}, "jobs": ["test"],
                                              "gate": True})
         saved = A.cached_dispatch_blocker

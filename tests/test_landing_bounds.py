@@ -280,7 +280,7 @@ class UnboundTest(unittest.TestCase):
 
     def test_the_ticks_push_never_waits_for_a_busy_landing_lease(self):
         with tempfile.TemporaryDirectory() as d:
-            st = A.Store()
+            st = A.open_store()
             subprocess.run(["git", "init", "-q", d], check=True)
             name = A.land_lease_name(d)
             st.acquire(name, "other:land:1", 600, 3600)
@@ -334,8 +334,8 @@ class RequeueTest(unittest.TestCase):
         st = A.Store(path=os.path.join(d, "store.db"))
         e = {"id": "e1", "seq": 1, "status": "checking", "worktree": "/w"}
         A.write_json(os.path.join(d, "entries", "e1.json"), e)
-        saved_store, saved_wlog = A.Store, A.wlog
-        A.Store = lambda *a, **k: st
+        saved_store, saved_wlog = A.open_store, A.wlog
+        A.open_store = lambda *a, **k: st
         A.wlog = lambda d_, m: None
         try:
             waits = []
@@ -346,7 +346,7 @@ class RequeueTest(unittest.TestCase):
                 st.transition("change", "e1", "checking", st.item("change", "e1")["version"])
                 e["status"] = "checking"
         finally:
-            A.Store, A.wlog = saved_store, saved_wlog
+            A.open_store, A.wlog = saved_store, saved_wlog
         self.assertEqual([w // 60 for w in waits], [5, 10, 30, 60])
         sev = [x["severity"] for x in st.events() if x["to_state"] == "queued"]
         self.assertEqual(sev, ["info", "info", "escalate", "escalate"])

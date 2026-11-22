@@ -62,7 +62,7 @@ def queue_facts(gate, st=None):
     id, red kind]} for every red the store has open}. An unreadable store gives no open reds: the gate's still count."""
     open_ = {}
     try:
-        items = (st if st is not None else Store()).items("red")
+        items = (st if st is not None else open_store()).items("red")
     except Exception:  # an unreadable store orders nothing: the gate's reds still do
         items = []
     for it in items:

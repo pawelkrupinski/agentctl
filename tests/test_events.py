@@ -61,12 +61,12 @@ class EventsTest(unittest.TestCase):
         self.assertTrue(all(e["notified_at"] for e in self.st.events() if e["severity"] == "escalate"))
         os.environ["AGENTCTL_W6_MAX"] = "0"
         self.addCleanup(os.environ.pop, "AGENTCTL_W6_MAX", None)
-        saved = A.Store
-        A.Store = lambda *a, **k: self.st
+        saved = A.open_store
+        A.open_store = lambda *a, **k: self.st
         try:
             self.assertTrue(A.inv_w6()[0])
         finally:
-            A.Store = saved
+            A.open_store = saved
 
     def test_a_change_never_leaves_the_queue_without_its_authors_inbox_entry(self):
         """2026-10-30 `…-76336e`: its NOT LANDED entry did not carry the item id (a search by id found nothing), and
@@ -110,8 +110,8 @@ class EventsTest(unittest.TestCase):
         c.execute("UPDATE events SET audience='{}', severity='info' WHERE item_id='s1'")  # a writer around transition
         c.close()
         self.assertEqual(A.change_exits_unannounced(self.st), ["s1"])
-        saved = A.Store
-        A.Store = lambda *a, **k: self.st
+        saved = A.open_store
+        A.open_store = lambda *a, **k: self.st
         try:
             ok, why = A.inv_w8()
             self.assertFalse(ok)
@@ -120,7 +120,7 @@ class EventsTest(unittest.TestCase):
             self.addCleanup(os.environ.pop, "AGENTCTL_W8_WINDOW", None)
             self.assertTrue(A.inv_w8()[0])
         finally:
-            A.Store = saved
+            A.open_store = saved
 
     def test_w8_does_not_name_a_change_that_left_the_queue_while_it_read(self):
         """2026-11-17 10:14:46 `…-ref-scrapers-2a9c4e` (and 2026-11-16 11:32 `…-keeperflake-054603`): W8 read every
@@ -185,11 +185,11 @@ class NotifierDeliveryTest(unittest.TestCase):
         os.environ["AGENTCTL_NOTIFY"] = self.hook
         self.t = [1_000_000.0]
         self.st = A.Store(path=os.path.join(self.root, "store.db"), clock=lambda: self.t[0])
-        self.saved_store = A.Store
-        A.Store = lambda *a, **k: self.st
+        self.saved_store = A.open_store
+        A.open_store = lambda *a, **k: self.st
 
     def tearDown(self):
-        A.Store = self.saved_store
+        A.open_store = self.saved_store
         for k, v in self.saved.items():
             if v is None:
                 os.environ.pop(k, None)

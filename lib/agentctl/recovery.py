@@ -239,7 +239,7 @@ def reland_worktree(cond, a):
 
 
 def recover_clear_hold(cond, a):
-    st = Store()
+    st = open_store()
     it = current_batch(st, a["d"])
     if it and it["state"] == "held":
         batch_move(st, it, "assembling", text=f"batch {it['id']}: its hold lifted")
@@ -327,7 +327,7 @@ def open_condition(kind, text, probe, on_recover, key=None, inbox=True, command=
             raise ConditionBypass(f"unknown on_recover action {name!r}")
     if probe.ok:
         return None
-    st = store or Store()
+    st = store or open_store()
     key = key or condition_key(kind, probe)
     cur = condition_item_of(st, key)
     if not cur and condition_pending(st, key, condition_grace(kind) if grace is None else grace, time.time()):
@@ -363,13 +363,13 @@ def open_condition(kind, text, probe, on_recover, key=None, inbox=True, command=
 
 def open_conditions(store=None):
     """The open conditions, as dicts (key, kind, text, probe, on_recover, inbox, ... plus id and version)."""
-    return [condition_dict(it) for it in (store or Store()).items("condition", ["open"])]
+    return [condition_dict(it) for it in (store or open_store()).items("condition", ["open"])]
 
 
 def close_condition(cond, result, store=None):
     """The probe passed (result: its ProbeResult, or a reason string for a manual close): the item moves to closed (a
     compare-and-set: one closer), its inbox entries are acked, its on_recover actions run, one RECOVERED note."""
-    st = store or Store()
+    st = store or open_store()
     if isinstance(result, str):
         result = ProbeResult(cond["probe"]["kind"], cond["probe"]["args"], True,
                              result if result.startswith("INVALID:") else f"closed by hand: {result}",
@@ -444,7 +444,7 @@ def recovery_tick(now_=None, force=False, store=None):
     RECOVER_BACKOFF_MAX. Past its deadline (10 min after opening, then every 2 h) an open condition escalates -- on the
     server only (one writer of escalations): the state's self-transition, an escalate event the notifier delivers.
     Returns the RECOVERED lines."""
-    st = store or Store()
+    st = store or open_store()
     t = now_ if now_ is not None else time.time()
     out = []
     server = host_role() == "server"
@@ -496,7 +496,7 @@ def recovery_recheck(kind, store=None):
 
 def recovery_recheck_all(store=None):
     """The network changed or came back: every open condition is probed at the next tick, backoff reset."""
-    st = store or Store()
+    st = store or open_store()
     for it in st.items("condition", ["open"]):
         try:
             st.update_item("condition", it["id"], it["version"], {"next_check": 0, "fails": 0})
@@ -533,7 +533,7 @@ def cmd_recover(a):
 # passing: the item leaves that state and the escalation is gone -- nobody acks a solved problem.
 def escalated_now(store=None):
     """[(item type, item, words)] of the items escalated and still in that state."""
-    st = store or Store()
+    st = store or open_store()
     out = []
     t = time.time()
     for it in st.items("red", ["offered", "fix-pending"]):  # only what is the OWNER's (THE ALERT MODEL, alerts.py)

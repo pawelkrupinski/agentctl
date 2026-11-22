@@ -91,7 +91,7 @@ def explorer_file(o_r, repo, rows, now_):
 
 def explorer_tick(o_r, repo, st=None, now_=None, force=False, fetch=None, filer=None):
     """At most hourly. Returns what it said (a list of strings); never raises."""
-    st = st or Store()
+    st = st or open_store()
     t = now_ if now_ is not None else time.time()
     try:
         if not force and t - float(st.meta_get("explorer_at", 0) or 0) < EXPLORER_EVERY:

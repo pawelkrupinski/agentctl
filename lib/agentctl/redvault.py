@@ -310,7 +310,7 @@ def red_block(o_r, a):
     """`red block`: the red waits on the OWNER, for an owner cause only, as a block lease the tick renews while its
     probe -- named (--until-green / --until-http / --until-tcp), an open cause's, or the red's own workflow going green
     -- still fails and its justification holds. --cause NAME: ONE lease for that outage, every red it explains attached."""
-    st = Store()
+    st = open_store()
     n = str(a.run).lstrip("#")
     name, units = None, []
     known = red_targets(st, o_r, n, create=False)  # a red key, or a run the tick has seen: as `red claim` finds it

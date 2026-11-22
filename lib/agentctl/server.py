@@ -7,7 +7,7 @@
 # checked by the store itself (THE STORE'S OWN TOKENS below): an --allow-user login gets the whole API, a
 # --metrics-user login GET /metrics alone, anyone else 403, no token 401. The reconciler (`agentctl tick` there) opens
 # the same database in-process: two units, one WAL file, so a reconciler crash leaves leases, submissions and the event
-# feed up. RemoteStore is Store's twin over the API: on the laptop `Store()` IS one, so the laptop's sync, its
+# feed up. RemoteStore is Store's twin over the API: on the laptop `open_store()` IS one, so the laptop's sync, its
 # dispatcher, `red claim` and the fixers' wrappers work against ci-runner's store unchanged.
 #
 # TWO ROLES, ONE WRITER (owner decision 7, 2026-10-29: no laptop standby reconciler; the laptop's own store and its
@@ -179,14 +179,11 @@ for _m in STORE_RPC:
     setattr(RemoteStore, _m, (lambda m: lambda self, *a, **k: self._rpc(m, a, k))(_m))
 
 
-def _store_new(cls, path=None, clock=None):
-    url = store_url() if cls is Store and path is None else None
-    if url:
-        return RemoteStore(url, clock=clock)
-    return object.__new__(cls)
-
-
-Store.__new__ = _store_new
+def process_store(clock=None):
+    """The store this process uses (cli wires it as open_store's opener): the remote store when a store URL is set
+    (store_url: every sync process), else the file store (the server's own database)."""
+    url = store_url()
+    return RemoteStore(url, clock=clock) if url else Store(clock=clock)
 
 
 def store_grace(st, now_=None):
@@ -683,7 +680,7 @@ def submit_change(body, repo=None):
 def supersede_stranded(d, e, store=None):
     """A submission replaces every older open item of the same worktree that no entry carries (queue_change supersedes
     the entries; an item mirrored from another host's queue has none): SUPERSEDED, never left waiting."""
-    st = store or Store()
+    st = store or open_store()
     carried = {x["id"] for x in waiting_entries(d, open_only=False)}
     for it in st.items("change"):
         dd = it.get("data") or {}
@@ -702,7 +699,7 @@ def cancel_submitted(eid, how="cancel", repo=None):
     d = waiting_state(repo or server_repo())[0]
     hits = [e for e in queued_entries(d) + waiting_entries(d) if e["id"] == eid]
     if not hits:  # an item no entry carries (stranded): the item alone
-        st = Store()
+        st = open_store()
         it = st.item("change", eid)
         if not it or machine_state("change", it["state"]).terminal:
             raise KeyError(eid)
@@ -714,7 +711,7 @@ def cancel_submitted(eid, how="cancel", repo=None):
     set_change(d, e, "cancelled", event={"text": f"{e['id']}: {how}led"}, why=f"{how}led through the store API",
                decided=ts())
     cancel_entry_remote(e, f"its queue entry was {how}led")
-    clear_holds_on(Store(), eid)
+    clear_holds_on(open_store(), eid)
     return {"id": eid, "status": "cancelled"}
 
 
@@ -1126,7 +1123,7 @@ def submit_remote(st, e):
 
 def flush_outbox(st=None):
     """The changes `land` could not submit (the store down): sent now, oldest first. Returns how many went."""
-    st = st or Store()
+    st = st or open_store()
     n = 0
     for p in sorted(glob.glob(os.path.join(sync_outbox_dir(), "*.json"))):
         e = read_record(p)
@@ -1146,7 +1143,7 @@ def flush_outbox(st=None):
 
 def mirror_state(st=None, now_=None):
     """ci-runner's /v1/state copied into the laptop's state.json (with fetched_at): the status line reads it."""
-    st = st or Store()
+    st = st or open_store()
     try:
         snap = st.state()
     except StoreUnavailable as e:
@@ -1170,7 +1167,7 @@ QUIET_DEADLINE_TYPES = tuple(k for k, v in DEADLINE_TICKS.items() if v == "tick_
 def tick_quiet_deadlines(st=None, now_=None):
     """The reconciler's step: each lander record past its 14 days goes `gone` (blame reads landings that recent) and
     each forgotten explorer flip `closed`, an info event apiece (no inbox entry, no notification). Returns what it did."""
-    st = st or Store()
+    st = st or open_store()
     t = now_ if now_ is not None else st.clock()
     did = []
     for typ in QUIET_DEADLINE_TYPES:
@@ -1205,7 +1202,7 @@ def server_steps(repo, d, shared):
             ("lease archive", lambda: maybe_archive_leases(d)),
             ("children", reap_children),
             ("gate summary", lambda: maybe_publish_gate(repo)),
-            ("red time", lambda: track_red_time(Store(), gate_is_red_now())),
+            ("red time", lambda: track_red_time(open_store(), gate_is_red_now())),
             ("red tick", lambda: maybe_red_tick(repo)),
             ("recovery", maybe_recovery_tick),
             ("issues", lambda: [wlog(d, f"tick: {x}") for x in tick_issues()]),
@@ -1226,7 +1223,7 @@ def sync_steps(repo, d, o_r):
     def sync_claims():
         """The laptop's holders on ci-runner's store: every claim renewed by its worktree's activity; every fixer and
         owner lease held by no work revoked (red_reap_orphans)."""
-        st = Store()
+        st = open_store()
         red_renew_holders(st, time.time())
         red_reap_orphans(st, time.time())
 
@@ -1245,7 +1242,7 @@ def sync_steps(repo, d, o_r):
     def dispatch():
         if os.path.exists(reds_dir("DISPATCH_OFF")):
             return []
-        return red_dispatcher(Store(), o_r, repo, time.time())
+        return red_dispatcher(open_store(), o_r, repo, time.time())
     role = [None]  # None: not claimed in this loop yet (a step run on its own: a test)
 
     def claim_role():
@@ -1286,7 +1283,7 @@ _regen_answered = process_cache({})  # (change id, head, round) -> True: its `ag
 def answer_regen_holds(d, store=None):
     """The laptop's step (above): `agentctl land` started in the worktree of each regen-held change it can answer; its
     lines."""
-    out, st = [], store or Store()
+    out, st = [], store or open_store()
     for it in st.items("change"):
         dd = it.get("data") or {}
         if it["state"] != "queued" or ((dd.get("hold") or {}).get("kind")) != "regen":
@@ -1343,7 +1340,7 @@ def close_landed_worktrees(store=None):
     """The sync's half of WATCH OK while the reconciler runs on ci-runner: the worktree a change was landed from is on
     this laptop, so each `watch.ok` event's `close` worktree is closed here (close_worktree: only when proven merged and
     clean). Its own cursor (meta closer_seq). Returns what it said."""
-    st = store or Store()
+    st = store or open_store()
     out = []
     for ev in st.events(after=int(st.meta_get("closer_seq", 0) or 0)):
         wt = (ev.get("refs") or {}).get("close")
@@ -1430,7 +1427,7 @@ def laptop_role_standby(store=None, t=None):
     """None when this machine may do laptop duties (it holds the role, or no live holder stands); else the standby
     line naming the holder. Read only: never acquires."""
     try:
-        st = store or Store()
+        st = store or open_store()
         t = st.clock() if t is None else t
         row = st.get(LAPTOP_ROLE_LEASE)
     except Exception:  # an unread store decides nothing here: the duty's own store calls fail on their own
@@ -1451,7 +1448,7 @@ def laptop_role_line(row):
 def laptop_role_step(store=None):
     """The sync loop's first step: the role claimed or renewed. Standby: said to this machine's owner ONCE per holder
     (its inbox), then only in `agentctl status`. Returns True when this machine holds the role."""
-    st = store or Store()
+    st = store or open_store()
     held, row = laptop_role(st)
     rec = read_record(laptop_role_path()) or {}
     if held:
@@ -1469,7 +1466,7 @@ def laptop_role_step(store=None):
 
 def cmd_laptop(a):
     """`agentctl laptop status|take [--yes]`: who holds the laptop role; take it for this machine."""
-    st = Store()
+    st = open_store()
     if a.lcmd == "status":
         row = st.get(LAPTOP_ROLE_LEASE)
         line = laptop_role_standby(st)

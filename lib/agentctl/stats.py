@@ -460,7 +460,7 @@ def stats_sent(st, name, iid):
 
 def stats_pass(repo=None, d=None, store=None, url=None, now_=None, out=None):
     """One pass: the records due (an exit older than STATS_SETTLE, not sent yet), sent; returns how many."""
-    st = store or Store()
+    st = store or open_store()
     url = url or stats_url()
     if not url:
         return 0
@@ -601,7 +601,7 @@ def maybe_stats_pass(repo, d):
     """The reconciler's step: a pass every STATS_EVERY s when there is a store to write to."""
     if not stats_url():
         return 0
-    st = Store()
+    st = open_store()
     if time.time() - float(st.meta_get("stats_at", 0) or 0) < env_num("AGENTCTL_STATS_EVERY", STATS_EVERY):
         return 0
     st.meta_set("stats_at", time.time())

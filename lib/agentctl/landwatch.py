@@ -119,7 +119,7 @@ class WatchClaim:
         """('mine' | 'theirs' | 'decided', item), or (None, None) when the store did not answer."""
         t = time.time()
         try:
-            st = Store()
+            st = open_store()
             it = start_watch(self.repo, self.sha, self.pushed_at, worktree=self.repo, close=self.close, o_r=self.o_r,
                              session=os.environ.get("CLAUDE_CODE_SESSION_ID"), follower=self.lease(t))
             for _ in range(3):
@@ -158,7 +158,7 @@ class WatchClaim:
 
     def renew(self):
         try:
-            st = Store()
+            st = open_store()
             it = st.item("watch", self.sha)
             # only its OWN claim: one that lapsed (a laptop asleep) and was taken over is the new follower's now --
             # renewing it would take it back from under that one, and the tick would leave both watching
@@ -174,7 +174,7 @@ class WatchClaim:
         """Its own claim given up (never another follower's): the tick carries a `watching` item on to its own deadline;
         an `unknown` one waits for the next follower."""
         try:
-            st = Store()
+            st = open_store()
             it = st.item("watch", self.sha)
             if self.mine(it):
                 st.update_item("watch", self.sha, it["version"], {"followed_by": None, "followed_until": 0})
@@ -187,7 +187,7 @@ class WatchClaim:
         if state not in ("ok", "red"):
             return self.release()
         try:
-            st = Store()
+            st = open_store()
             it = st.item("watch", self.sha)
             if it and watch_outcome(it) not in ("ok", "red"):
                 finish_watch(st, it, state, line, list(red_runs), told=True)

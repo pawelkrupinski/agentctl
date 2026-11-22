@@ -49,7 +49,7 @@ class RedsBase(RedBase):
         os.environ["AGENTCTL_RECOVERY_DIR"] = os.path.join(self.tmp.name, "recovery")
         os.environ["AGENTCTL_RUNNERS_PAGE_CACHE"] = os.path.join(self.tmp.name, "runners-page.json")
         self.t = [time.time()]
-        self.st = A.Store(clock=lambda: self.t[0])
+        self.st = A.open_store(clock=lambda: self.t[0])
         A._blocker_cache.clear()
 
     def tearDown(self):
@@ -1774,13 +1774,13 @@ class BackgroundSessionTest(RedsBase):
                             "started": A.ts(), "log": A.reds_dir("20", "claude-1.log")})
         # the 2nd set_meta: the session's id, sent when `claude agents` first lists it
         flaky = DroppingStore(self.st, get={2, 3, 4}, set_meta={2}, renew={1}, release={1})
-        saved = A.Store, {sg: signal.getsignal(sg) for sg in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+        saved = A.open_store, {sg: signal.getsignal(sg) for sg in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
         os.environ.update(FAKE_CLAUDE_SLEEP="10", AGENTCTL_RED_RENEW="0.3", AGENTCTL_LEASE_SECRET=took["secret"])
-        A.Store = lambda *a, **k: flaky
+        A.open_store = lambda *a, **k: flaky
         try:
             rc = A.red_fixer(types.SimpleNamespace(record=path, repo=self.r.path))
         finally:
-            A.Store = saved[0]
+            A.open_store = saved[0]
             for sg, h in saved[1].items():
                 signal.signal(sg, h)
             os.environ.update(FAKE_CLAUDE_SLEEP="0")

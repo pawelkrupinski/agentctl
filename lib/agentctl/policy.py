@@ -108,7 +108,7 @@ def policy_blocks(pid, st=None, subject=None, what=None):
                 "only warns (policy.py POLICIES)")
         err(line)
         try:
-            st = st or Store()
+            st = st or open_store()
             it = st.item("change", subject) if subject else None
             if it and not machine_state("change", it["state"]).terminal:
                 st.transition("change", subject, it["state"], it["version"],

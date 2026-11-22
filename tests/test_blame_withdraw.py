@@ -43,7 +43,7 @@ def blame(state, run=629, change=CHANGE, wt=None, sha=None, withdrawn=False):
 @own_tests_only
 class WithdrawnRevertOrphanTest(test_orphans.OrphanTest):
     def put_red(self, iid, b, state="cleared", key="k"):
-        A.Store().put_item("red", iid, state, {"key": key, "workflow": "Identity model convergence",
+        A.open_store().put_item("red", iid, state, {"key": key, "workflow": "Identity model convergence",
                                                 "last_run": {"number": b["run"]["number"]}, "blame": b})
 
     def test_629_a_withdrawn_reverts_worktree_is_never_submitted_and_is_removed(self):
@@ -121,7 +121,7 @@ class WithdrawnRevertOrphanTest(test_orphans.OrphanTest):
     def test_withdraw_records_it_stops_nothing_landed_and_removes_its_worktree(self):
         wt, sha = self.worktree_commit("repo-wt-revert-629", revert_msg())
         self.put_red("red-629.5", blame("confirmed", wt=wt, sha=sha), state="offered")
-        st = A.Store()
+        st = A.open_store()
         ok, line = A.blame_withdraw(st, st.item("red", "red-629.5"), "the parent fails with seed 42", self.r.path)
         self.assertTrue(ok, line)
         self.assertIn("RED BLAME WITHDRAWN", line)
@@ -139,7 +139,7 @@ class WithdrawnRevertOrphanTest(test_orphans.OrphanTest):
         wt, sha = self.worktree_commit("repo-wt-revert-629", revert_msg())
         sh(wt, "git", "push", "-q", "origin", "HEAD:main")
         self.put_red("red-629.5", blame("confirmed", wt=wt, sha=sha), state="offered")
-        st = A.Store()
+        st = A.open_store()
         ok, line = A.blame_withdraw(st, st.item("red", "red-629.5"), "x", self.r.path)
         self.assertFalse(ok)
         self.assertIn("is on origin/main", line)
@@ -152,7 +152,7 @@ class WithdrawnRevertLandTest(test_land.LandBase):
         self.hook("exit 0")
         self.r.write("f.txt", "reverted\n")
         sha = self.r.commit(revert_msg())
-        A.Store().put_item("red", "red-629.6", "cleared", {"key": "k", "blame": blame(None, sha=sha, withdrawn=True)})
+        A.open_store().put_item("red", "red-629.6", "cleared", {"key": "k", "blame": blame(None, sha=sha, withdrawn=True)})
         rc, out = self.land()
         self.assertEqual(rc, 1, out)
         self.assertIn("NOT LANDED", out)
@@ -166,7 +166,7 @@ class WithdrawnRevertQueuedTest(test_queue.QueueTest):
         """#629's re-queued revert was `checking` when the owner cancelled it: the checker itself refuses it."""
         wt, sha = self.agent("revert-629", "web/src/main/A.scala", "a\n", msg=revert_msg())
         eid, _out = self.queued(wt)
-        A.Store().put_item("red", "red-629.6", "cleared", {"key": "k", "blame": blame(None, wt=wt, withdrawn=True)})
+        A.open_store().put_item("red", "red-629.6", "cleared", {"key": "k", "blame": blame(None, wt=wt, withdrawn=True)})
         self.assertEqual(self.check(eid), 1)
         self.assertNotIn("Revert change", self.remote_log()[0])
         rejected = [e for e in self.inbox() if e["kind"] == "NOT LANDED" or "NOT THE CULPRIT" in str(e.get("verdict"))]

@@ -22,9 +22,9 @@ BLOCKED = ("BLOCKED ON OWNER: `! secrets unlock movies` (or allow unsigned agent
 class VaultBase(AskBase):
     def setUp(self):
         super().setUp()
-        saved = A.Store
-        A.Store = lambda *a, **k: self.st
-        self.addCleanup(setattr, A, "Store", saved)
+        saved = A.open_store
+        A.open_store = lambda *a, **k: self.st
+        self.addCleanup(setattr, A, "open_store", saved)
 
     def ios_red(self, key="oi77", n=77):
         return self.red(key=key, workflow="Order independence", job="ios", kind="test",

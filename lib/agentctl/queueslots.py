@@ -113,7 +113,7 @@ def entry_queued_since(e):
 def set_change(d, e, to, data=None, event=None, store=None, **fields):
     """THE writer of a change's state: its item (transition + event) and its entry's status, together. A waiting entry
     that queued changes joined passes a final state on to them (joined_verdicts)."""
-    st = store or Store()
+    st = store or open_store()
     joined = joined_changes(d, e, st) if machine_state("change", to).terminal else []
     if joined and event:  # its author hears it under the queued id alone (joined_verdicts)
         event = {**event, "refs": {**(event.get("refs") or {}), "no_inbox": True}}

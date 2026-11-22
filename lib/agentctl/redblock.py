@@ -10,7 +10,7 @@ def infra_check(o_r):
 def gate_unread_spell(o_r, why):
     """The patrol could not read the gate: no dispatch, ONE `UNKNOWN:` condition per spell, with an infra check; the
     gate_read probe (a snapshot written after it opened) clears it."""
-    if why is None or condition_item_of(Store(), "gate-unread"):
+    if why is None or condition_item_of(open_store(), "gate-unread"):
         return None
     line = (f"UNKNOWN: the red patrol cannot read the gate ({why[:200]}): nothing dispatched, pushes fail closed. "
             f"Infra check: {infra_check(o_r)}")
@@ -142,7 +142,7 @@ def owner_details(o_r, n, name, units, cmd, words, owner_cause):
     u = units[0] if units else {}
     failing = f"{u.get('job') or '?'}: {str(u.get('line') or 'no error line read')[:160]}"
     try:
-        its = red_item_of_run(Store(), n, name)
+        its = red_item_of_run(open_store(), n, name)
     except Exception:
         its = []
     hist = [h for it in its for h in it["data"].get("history") or []]
@@ -169,7 +169,7 @@ def block_lease(key=None, cause=None):
 
 def red_block_of(it, store=None):
     """{name, text, cause, until, meta} of the live block lease holding this red, or None."""
-    st = store or Store()
+    st = store or open_store()
     d = it["data"]
     for row in st.list("block/"):
         if lease_is_live(row, st.clock()):

@@ -96,9 +96,9 @@ class FixReplayTest(unittest.TestCase):
         self.assertIsNone(A.fix_replay_refusal(self.r.path, self.fix("Fixes-Red: 5"), self.st))
 
     def test_land_refuses_it_before_queueing(self):
-        saved = A.Store
-        A.Store = lambda *a, **k: self.st
-        self.addCleanup(setattr, A, "Store", saved)
+        saved = A.open_store
+        A.open_store = lambda *a, **k: self.st
+        self.addCleanup(setattr, A, "open_store", saved)
         self.fix("Fixes-Red: 5")
         sh = lambda *args: A.subprocess.run(args, cwd=self.r.path, capture_output=True, text=True)  # noqa: E731
         import io, contextlib
@@ -237,9 +237,9 @@ class FixReplayTest(unittest.TestCase):
         self.assertIn("agentctl ran `grep -q fixed marker.txt`: base=PASS head=PASS", why)
 
     def test_land_refuses_a_gate_fix_without_its_replay_and_lands_a_proven_one(self):
-        saved = A.Store
-        A.Store = lambda *a, **k: self.st
-        self.addCleanup(setattr, A, "Store", saved)
+        saved = A.open_store
+        A.open_store = lambda *a, **k: self.st
+        self.addCleanup(setattr, A, "open_store", saved)
         self.gate_red()
         sh = lambda *args: A.subprocess.run(args, cwd=self.r.path, capture_output=True, text=True)  # noqa: E731
         import io, contextlib
@@ -303,7 +303,7 @@ class ServerRefusesUnreplayedFixTest(test_backlog_batch.BacklogBatchTest):
         self.r.write("infra/test/alert-backtest-allowlist.yml", "a guess\n", at=wt)
         self.r.commit("backtest: a guess\n\nFixes-Red: 5", at=wt)
         eid = self.queued(wt)[0]  # no red known when it queued: the laptop could not tell
-        A.Store().put_item("red", "5254bffda9d2", "offered", {
+        A.open_store().put_item("red", "5254bffda9d2", "offered", {
             "key": "5254bffda9d2", "workflow": "Alert backtest", "jobs": ["backtest"], "runs": ["5", "44459271435"],
             "last_run": {"number": 5, "databaseId": 44459271435}, "red_kind": "outside"})
         with approved("fix-replay-outside"):  # outside the gate it only warns, unless approved (test_policy.py)
@@ -319,7 +319,7 @@ class ServerRefusesUnreplayedGateFixTest(test_backlog_batch.BacklogBatchTest):
         self.r.write("web/src/main/Fix.scala", "a fix\n", at=wt)
         self.r.commit("web: a fix\n\nFixes-Red: 2600", at=wt)
         eid = self.queued(wt)[0]
-        A.Store().put_item("red", "9d1e2a7c4b10", "offered", {
+        A.open_store().put_item("red", "9d1e2a7c4b10", "offered", {
             "key": "9d1e2a7c4b10", "workflow": "Main", "jobs": ["unit (web)"], "runs": ["2600"],
             "last_run": {"number": 2600}, "red_kind": "gate", "gate": True})
         A.check_entry(self.r.path, eid)

@@ -369,7 +369,7 @@ def remote_mirror(eid, rem):
     keep = ("branch", "run", "run_status", "status", "pushed_at", "progress_at", "unlisted_at", "jobs", "decided_at")
     summary = {k: rem.get(k) for k in keep if rem.get(k) is not None}
     try:
-        st = Store()
+        st = open_store()
         it = st.item("change", eid)
         if it and (it.get("data") or {}).get("check") != summary:
             st.update_item("change", eid, it["version"], {"check": summary})
@@ -708,7 +708,7 @@ def _await_entry(repo, eid, own):
     state, said = "not in the store yet", None
     while True:
         try:
-            it = Store().item("change", eid)
+            it = open_store().item("change", eid)
             if not it:
                 state = "not in the store yet"
         except StoreUnavailable as ex:  # a blip: asked again at the next poll, bounded by the timeout below
@@ -884,7 +884,7 @@ def start_watch(repo, sha, pushed_at, worktree=None, close=None, session=None, o
     o_r = o_r or slug(repo)
     if not WATCH.get(o_r):
         return None
-    return Store().put_item("watch", sha, "watching", {"repo": main_clone(repo), "o_r": o_r, "pushed_at": pushed_at or time.time(),
+    return open_store().put_item("watch", sha, "watching", {"repo": main_clone(repo), "o_r": o_r, "pushed_at": pushed_at or time.time(),
                                                        "worktree": worktree or repo, "close": close, "session": session,
                                                        "next_at": 0, **(follower or {})})
 
@@ -918,7 +918,7 @@ def watch_event(it, verdict, severity="info", code=0):
 def tick_watches(now_=None):
     """One evaluation of each due watch item. Returns what it decided."""
     t = now_ if now_ is not None else time.time()
-    st = Store()
+    st = open_store()
     did = []
     for it in st.items("watch", states=("watching",)):
         dd = it["data"]
@@ -1074,7 +1074,7 @@ def bisect(repo, d, batch, base, bwt, depth="fast", runs=None, failed_out=None, 
 
 def unread_note(d, reds, entries):
     """The gate unread while changes wait: once per unread spell, an UNKNOWN inbox entry (they would wait unseen)."""
-    if GATE_UNREAD not in reds or condition_item_of(Store(), "gate-unread-waiting"):
+    if GATE_UNREAD not in reds or condition_item_of(open_store(), "gate-unread-waiting"):
         return
     wlog(d, f"the gate is unread ({gate_unread_why[0]}): taken as red")
     open_condition("UNKNOWN", f"UNKNOWN: the waiting processor cannot read the gate ({gate_unread_why[0]}); {len(entries)} "

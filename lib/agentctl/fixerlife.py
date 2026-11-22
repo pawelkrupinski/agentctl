@@ -113,12 +113,12 @@ def fixer_quiet(verdict):
 
 
 class CurrentStore:
-    """Store() resolved again at every call, so a long-running process follows `agentctl store use URL` (2026-10-29
+    """open_store() resolved again at every call, so a long-running process follows `agentctl store use URL` (2026-10-29
     cutover: the gate fixer's wrapper, started on the laptop's then store, renewed its leases there for hours while
     ci-runner's copies expired and its reds were offered again)."""
 
     def __getattr__(self, name):
-        return getattr(Store(), name)
+        return getattr(open_store(), name)
 
 
 def red_fixer(a):

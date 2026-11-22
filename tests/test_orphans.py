@@ -99,7 +99,7 @@ class OrphanTest(RedBase):
         sh(ci5, "git", "cherry-pick", sha)  # the same change, another sha, plus ci-5's own
         self.r.write("ci5.txt", "ci-5\n", at=ci5)
         head = self.r.commit("ci-5: its own", at=ci5)
-        st = A.Store()
+        st = A.open_store()
         st.put_item("change", "20261030-154005-repo-wt-ci-5-819355", "checking", {"worktree": ci5, "head": head})
         self.assertEqual(sorted(A.orphan_duty(self.r.path)),  # ci-5 too: its own open change carries it
                          [f"orphan {n}: carried by open change 20261030-154005-repo-wt-ci-5-819355: not submitted"
@@ -124,7 +124,7 @@ class OrphanTest(RedBase):
         sh(ci5, "git", "cherry-pick", sha)
         self.r.write("ci5.txt", "ci-5\n", at=ci5)
         head = self.r.commit("ci-5: its own", at=ci5)
-        st = A.Store()
+        st = A.open_store()
         cid = "20261030-175250-repo-wt-ci-5-45426e"
         st.put_item("change", cid, "checking", {"worktree": ci5, "head": head})
         self.assertEqual(len(A.recovery_tick(force=True)), 1)  # the probe: covered by the open change
@@ -141,7 +141,7 @@ class OrphanTest(RedBase):
 
     def test_an_orphan_whose_last_change_was_cancelled_goes_to_a_person_not_the_queue(self):
         wt, _sha = self.worktree_commit("repo-wt-dropped", "dropped: cancelled on purpose")
-        st = A.Store()
+        st = A.open_store()
         it = st.put_item("change", "20261030-120000-repo-wt-dropped-1", "queued", {"worktree": wt, "head": _sha})
         st.transition("change", it["id"], "cancelled", it["version"])
         self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-dropped: escalated UNLANDED ORPHAN"])
@@ -187,7 +187,7 @@ class OrphanTest(RedBase):
 
     def test_a_mark_by_change_id_follows_resubmissions_and_lapses_when_it_ends_unlanded(self):
         wt, _sha = self.worktree_commit("repo-wt-review", "review: a fix")
-        st = A.Store()
+        st = A.open_store()
         first, second = "20261030-154005-repo-wt-ci-5-819355", "20261030-175250-repo-wt-ci-5-45426e"
         gone = os.path.join(self.tmp.name, "repo-wt-ci-5")  # the successor's tree is not here (another host's)
         it = st.put_item("change", first, "queued", {"worktree": gone, "head": "a" * 40})

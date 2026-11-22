@@ -93,7 +93,7 @@ def sweep_test_tmp(now_=None, tmp_root="/tmp"):
 def close_finished_fixer_trees(store=None):
     """Each ended fixer's worktree whose red is closed: closed when proven merged, clean and unused (close_worktree
     keeps it otherwise and says why). Returns the lines."""
-    st = store or Store()
+    st = store or open_store()
     try:
         open_keys = {it["data"].get("key") for it in red_active(st).values()}
     except Exception:

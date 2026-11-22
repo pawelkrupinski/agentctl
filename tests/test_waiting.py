@@ -115,7 +115,7 @@ class WaitingTest(Base):
 
     def batch(self):
         d, _c, _w = A.waiting_state(self.r.path)
-        return A.current_batch(A.Store(), d)
+        return A.current_batch(A.open_store(), d)
 
     def calls_of(self, mode):
         return [l for l in open(self.calls).read().splitlines() if l.startswith(mode)] if os.path.exists(self.calls) else []
@@ -312,7 +312,7 @@ class WaitingTest(Base):
         self.assertEqual(self.entries()["1"]["status"], "waiting", "held, not rejected")
         self.assertEqual(self.pushes_count(), 0)
         self.assertEqual(self.batch()["state"], "held")
-        self.assertTrue([x for x in A.Store().events() if x["kind"] == "batch.held" and x["severity"] == "escalate"])
+        self.assertTrue([x for x in A.open_store().events() if x["kind"] == "batch.held" and x["severity"] == "escalate"])
         self.assertEqual(self.drive(), [], "held: nothing moves until its deadline")
         self.run_tool("waiting", "resume", cwd=self.r.path)
         self.assertEqual(self.batch()["state"], "assembling")
@@ -395,7 +395,7 @@ class WaitingTest(Base):
         d, _c, _w = A.waiting_state(self.r.path)
         eid = A.waiting_entries(d)[0]["id"]
         A.project_changes(d)
-        st = A.Store()
+        st = A.open_store()
         it = st.put_item("batch", "var_lib_agentctl_movies_.git#4", "checking", {"retries": 0})
         st.update_item("batch", it["id"], it["version"], {"members": [eid], "tip": "340057e4d3c7", "base": "24e95ec1a217"})
         rc, out = self.run_tool("land", "status", cwd=self.r.path)
@@ -430,7 +430,7 @@ class WaitingTest(Base):
         self.assertIn("HELD until", out)
         self.assertIn("deploy window", out)
         self.run_tool("land", "release", cwd=self.r.path)
-        self.assertIsNone(A.land_hold(A.Store()))
+        self.assertIsNone(A.land_hold(A.open_store()))
         rc, out = self.run_tool("land", "cancel", "-1", cwd=self.r.path)
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.entries()["1"]["status"], "cancelled")
@@ -444,7 +444,7 @@ class WaitingTest(Base):
         rc, out = self.run_tool("land", "hold", "--for", "30", "--why", "infra deploy", cwd=self.r.path)
         self.assertEqual(rc, 0, out)
         self.assertFalse(os.path.exists(os.path.join(d, "PAUSED")), "no local file: the store holds it")
-        [h] = A.Store().items("hold", ["held"])
+        [h] = A.open_store().items("hold", ["held"])
         self.assertEqual(h["data"]["why"], "infra deploy")
         self.assertAlmostEqual(h["deadline"] - time.time(), 30 * 60, delta=60)
         self.assertEqual(self.drive(), ["held"])
@@ -452,15 +452,15 @@ class WaitingTest(Base):
         line = A.status_line()
         self.assertIn("LAND HELD until", line)
         self.assertIn("infra deploy", line)
-        self.assertIn("infra deploy", A.status_landing(A.Store(), time.time())["hold"]["why"])
+        self.assertIn("infra deploy", A.status_landing(A.open_store(), time.time())["hold"]["why"])
         # a second hold extends the one in force (one hold, never two)
         self.run_tool("land", "hold", "--for", "60", cwd=self.r.path)
-        self.assertEqual(len(A.Store().items("hold", ["held"])), 1)
+        self.assertEqual(len(A.open_store().items("hold", ["held"])), 1)
         # past its deadline: the next reader expires it, with an event; the tick moves the batch again
         later = time.time() + 61 * 60
-        self.assertIsNone(A.land_hold(A.Store(), later))
-        self.assertEqual(A.Store().items("hold", ["held"]), [])
-        self.assertTrue([e for e in A.Store().events() if e["kind"] == "hold.expired"])
+        self.assertIsNone(A.land_hold(A.open_store(), later))
+        self.assertEqual(A.open_store().items("hold", ["held"]), [])
+        self.assertTrue([e for e in A.open_store().events() if e["kind"] == "hold.expired"])
         self.assertNotEqual(self.drive(), ["held"])
         A.write_snapshot(d)
         self.assertNotIn("HELD", A.status_line())
@@ -544,7 +544,7 @@ class WaitingTest(Base):
         [p] = os.listdir(A.sync_outbox_dir())
         self.assertEqual(json.load(open(os.path.join(A.sync_outbox_dir(), p)))["fixes"], ["7"],
                          "unchecked here (no store): the reconciler checks the trailer again at the push")
-        os.environ["AGENTCTL_STORE_TOKEN"] = "tok-pawel"  # the sync's own token (the server thread's Store() too)
+        os.environ["AGENTCTL_STORE_TOKEN"] = "tok-pawel"  # the sync's own token (the server thread's open_store() too)
         self.assertEqual(A.flush_outbox(), 1)
         [e] = A.queued_entries(A.waiting_state(server_repo)[0])
         self.assertEqual((e["worktree"], e["commits"]), (wt, [sha]))
@@ -625,7 +625,7 @@ class WaitingTest(Base):
         the entry: the landed sha and push time its verdict wrote, or a NOT LANDED with its why."""
         import contextlib, io
         await_entry = self.saved[3]
-        st = A.Store()
+        st = A.open_store()
         d = A.waiting_state(self.r.path)[0]
         for eid, verdict, status, fields in (
                 ("e-landed", "LANDED abc123 (batch: 1 change(s) in one push)", "landed",
@@ -656,7 +656,7 @@ class WaitingTest(Base):
         but `waiting await` printed `NOT LANDED: <bare reason>` and exited 1, so a `land --follow` read it as a failure."""
         import contextlib, io
         await_entry = self.saved[3]
-        st = A.Store()
+        st = A.open_store()
         d = A.waiting_state(self.r.path)[0]
         e = {"id": "e-old", "seq": 1, "status": "waiting", "worktree": self.r.path}
         st.put_item("change", "e-old", "waiting", A.change_item_fields(e))
@@ -679,8 +679,8 @@ class WaitingTest(Base):
         await_entry = self.saved[3]
         d = A.waiting_state(self.r.path)[0]
         e = {"id": "e-blip", "seq": 1, "status": "waiting", "worktree": self.r.path}
-        A.Store().put_item("change", "e-blip", "waiting", A.change_item_fields(e))
-        real, calls = A.Store, []
+        A.open_store().put_item("change", "e-blip", "waiting", A.change_item_fields(e))
+        real, calls = A.open_store, []
 
         class Flaky:
             def __init__(self, *a, **k):
@@ -702,13 +702,13 @@ class WaitingTest(Base):
                 A.queue_verdict(d, dict(e), "landed", "LANDED abc123 (batch: 1 change(s) in one push)", code=0,
                                 landed_sha="abc123", pushed_at=1.0)
         A.time.sleep = tick
-        A.Store = Flaky
+        A.open_store = Flaky
         try:
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
                 got = await_entry(self.r.path, "e-blip")
         finally:
-            A.Store = real
+            A.open_store = real
         self.assertEqual(got, (0, "abc123", 1.0))
         out = buf.getvalue()
         self.assertEqual(out.count("the store did not answer"), 1, out)

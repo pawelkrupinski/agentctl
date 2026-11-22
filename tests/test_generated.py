@@ -187,7 +187,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         did = A.tick_changes(self.r.path, self.d)
         self.assertEqual(self.started, [], f"both wait for the backlog batch, none for the other: {did}")
         self.assertEqual([x for x in self.inbox() if "CONFLICTS" in json.dumps(x)], [], "no conflict to tell")
-        hold = (A.Store().item("change", ey)["data"] or {}).get("hold") or {}
+        hold = (A.open_store().item("change", ey)["data"] or {}).get("hold") or {}
         self.assertEqual(hold.get("kind"), "backlog-batch", "not held behind the older (`land status` says so)")
 
     def test_a_real_source_both_change_still_holds(self):
@@ -197,7 +197,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
                                                        "worker/src/fixtures/scala/tools/TestWiring.scala": "y\n"})
         A.tick_changes(self.r.path, self.d)
         self.assertEqual(self.started, [eo], "the younger waits for the older")
-        hold = A.Store().item("change", ey)["data"]["hold"]
+        hold = A.open_store().item("change", ey)["data"]["hold"]
         self.assertEqual((hold["kind"], hold["blocker"], hold["files"]),
                          ("overlap", eo, ["worker/src/fixtures/scala/tools/TestWiring.scala"]),
                          "held for the source alone, never the baseline")
@@ -242,7 +242,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.assertEqual(self.entry(ea)["status"], "queued", "the batch is gone: a is checked alone")
         A.tick_changes(self.r.path, self.d)
         self.assertEqual(self.started, [ea], "b waits behind a, as before")
-        self.assertEqual(A.Store().item("change", eb)["data"]["hold"]["files"], [BASELINE])
+        self.assertEqual(A.open_store().item("change", eb)["data"]["hold"]["files"], [BASELINE])
 
     def test_the_server_role_runs_no_regen_command_and_keeps_mains_row_for_the_checks_to_judge(self):
         """ci-runner's reconciler has no JVM: a same-row conflict there takes the side already in the tree, never
@@ -330,7 +330,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.assertIn("runs `scripts/regen` on this machine", e["why"])
         A.tick_changes(self.r.path, self.d)  # held: not checked again, not rejected
         self.assertEqual(self.entry(eid)["status"], "queued")
-        hold = A.Store().item("change", eid)["data"]["hold"]  # 2026-11-20, phase8-units: it read "an infra failure"
+        hold = A.open_store().item("change", eid)["data"]["hold"]  # 2026-11-20, phase8-units: it read "an infra failure"
         self.assertEqual(hold["kind"], "regen", hold)
         self.assertIn(f"its agent's regeneration of {BASELINE}: `cd {wt} && ~/bin/agentctl land`", hold["why"])
         self.assertNotIn("infra", hold["why"])
@@ -381,21 +381,21 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         for t in (t0, t0 + 60):  # overdue: recovered, once, never rejected
             A.tick_changes(self.r.path, self.d, now_=t)
             self.assertEqual(self.entry(eid)["status"], "queued", self.entry(eid).get("why"))
-        evs = A.Store().item_events("change", eid)
+        evs = A.open_store().item_events("change", eid)
         self.assertEqual(len([ev for ev in evs if ev["kind"] == "regen.recover"]), 1, [ev["kind"] for ev in evs])
         self.assertFalse(any("NOT LANDED" in (ev.get("text") or "") for ev in evs))
-        self.assertEqual(A.Store().item("change", eid)["data"]["regen_round"], 1)
+        self.assertEqual(A.open_store().item("change", eid)["data"]["regen_round"], 1)
         A.answer_regen_holds(self.d)
         self.assertEqual(started, [("land", wt), ("land", wt)], "the regeneration is run again")
-        self.assertEqual(A.Store().item("change", eid)["data"]["regen_answered"], 1, "the laptop says it answered")
+        self.assertEqual(A.open_store().item("change", eid)["data"]["regen_answered"], 1, "the laptop says it answered")
         later = t0 + A.REGEN_RECOVERY_WAIT + 60
         for t in (later, later + 60, later + A.CONFLICT_PLACE_KEPT):  # still held: the owner is told once
             A.tick_changes(self.r.path, self.d, now_=t)
             self.assertEqual(self.entry(eid)["status"], "queued")
-        told = [ev for ev in A.Store().item_events("change", eid) if ev["kind"] == "regen.escalate"]
+        told = [ev for ev in A.open_store().item_events("change", eid) if ev["kind"] == "regen.escalate"]
         self.assertEqual(len(told), 1, "escalated once")
         self.assertEqual(told[0]["severity"], "escalate")
-        self.assertEqual(A.event_audience(A.Store(), told[0], A.Store().item("change", eid)), "owner")
+        self.assertEqual(A.event_audience(A.open_store(), told[0], A.open_store().item("change", eid)), "owner")
         self.assertIn(f"REGEN HELD {eid}", told[0]["text"])
         self.assertIn(BASELINE, told[0]["text"])
         self.assertIn(f"`cd {wt} && ~/bin/agentctl land`", told[0]["text"])

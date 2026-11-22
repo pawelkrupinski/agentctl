@@ -105,7 +105,7 @@ def inv_w1():
     W1_MAX (while main is red: past the red's own start) is outside what its state's table allows (change_progress);
     none at all older than W1_HARD_FACTOR x that. Names the change and why it has not landed."""
     repo = movies_repo_path()
-    st = Store()
+    st = open_store()
     if os.path.isdir(repo):
         close_landed_changes(repo, store=st)
     open_ = [r for r in change_rows(st) if r["state"] in ("queued", "checking", "checked", "waiting")]
@@ -177,7 +177,7 @@ def inv_wr(store=None, reds=None, now_=None):
     submitted."""
     if reds is None:
         reds = snap_reds(ci_state_load(SHORT["movies"]))
-    st = store or Store()
+    st = store or open_store()
     facts = queue_facts(reds or set(), st)
     if not reds and not facts["open"]:
         return True, "main green (or its gate unread) and no red open: no red fix to hold"
@@ -333,7 +333,7 @@ def inv_w2():
     """W2: every red has a live lease, an open offer, a fix on its way or an owner block -- for no red is that missing
     for W2_MAX (read from the store)."""
     try:
-        bad = red_unheld(Store())
+        bad = red_unheld(open_store())
     except Exception as e:
         return None, f"cannot read the store ({str(e)[:120]})"
     st = watchdog_state()
@@ -367,7 +367,7 @@ def inv_wn():
     that failed (notify_fix: a timeout is the load's, not a permission); cleared by the notifier's next delivery that
     gets through (or nothing left undelivered)."""
     try:
-        f = notify_failure(Store())
+        f = notify_failure(open_store())
     except Exception as e:
         return None, f"cannot read the store ({str(e)[:120]})"
     if not f:
@@ -380,7 +380,7 @@ def inv_w6():
     """W6: no escalation event left unnotified for over W6_MAX (the notifier's delivery, from the store). While the
     delivery itself is broken (WN) that is WN's one condition, not a count of every escalation waiting behind it."""
     try:
-        st = Store()
+        st = open_store()
         if notify_failure(st):
             return None, "the notifier cannot deliver (see WN)"
         t = st.clock()
@@ -399,7 +399,7 @@ def inv_w7():
     if host_role() != "sync":
         return True, "no sync here (the server)"
     try:
-        st = Store()
+        st = open_store()
         behind = st.events(after=int(st.meta_get("projector_seq", 0) or 0), limit=1)
     except Exception as e:
         return None, f"cannot read the store ({str(e)[:120]})"
@@ -415,7 +415,7 @@ def inv_w8():
     author's inbox -- Store.transition completes every such event (change_exit_event); this catches a writer around it.
     Looks at the items closed within W8_WINDOW, so it clears itself once a stray one ages out (and the fix lands)."""
     try:
-        st = Store()
+        st = open_store()
         silent = change_exits_unannounced(st, st.clock() - env_num("AGENTCTL_W8_WINDOW", W8_WINDOW))
     except Exception as e:
         return None, f"cannot read the store ({str(e)[:120]})"
@@ -570,7 +570,7 @@ def watchdog_unheld(store=None, entries=None, now_=None):
     checked change past its state's deadline with nothing recorded holding it is agentctl's bug, filed ONCE as an
     agentctl issue -- never an owner page, never a wait for W1's 2 h. Returns one line per change filed (or already
     filed)."""
-    st = store or Store()
+    st = store or open_store()
     t = now_ if now_ is not None else time.time()
     if entries is None:
         try:
@@ -884,7 +884,7 @@ def orphan_infra(verdict):
 def store_answers(store=None):
     """True when the store answers now (an infra-failed orphan's retry waits for it)."""
     try:
-        (store or Store()).item("change", "store-answers-probe")
+        (store or open_store()).item("change", "store-answers-probe")
         return True
     except (Exception, SystemExit):
         return False
@@ -924,7 +924,7 @@ def orphan_dispatch(repo, wt, name, verdict):
 def live_lease_worktrees():
     """The worktrees a live lease names (a fixer's, an interactive claim's): somebody works there."""
     out, t = set(), time.time()
-    for r in Store().list():
+    for r in open_store().list():
         if r["holder"] and r["expires_at"] > t:
             wt = (json.loads(r["meta"] or "{}") or {}).get("worktree")
             if wt:
@@ -1119,7 +1119,7 @@ def change_chain_end(st, cid):
 
 def successor_state(m, repo, store=None):
     """(open | landed | lapsed, why) of mark m's successor."""
-    st = store or Store()
+    st = store or open_store()
     by, at = m["by"], float(m.get("at") or 0)
     end = change_chain_end(st, m["change"]) if m.get("change") else None
     if end and end["state"] == "landed":
@@ -1240,7 +1240,7 @@ def resolve_successor(by, repo, store=None):
             raise ValueError(f"{os.path.basename(top)} carries nothing that is not on main yet: mark it superseded once "
                              "its successor holds the work (commit it there first)")
         return os.path.basename(top), None, os.path.realpath(top), git(top, "rev-parse", "HEAD").strip()
-    st = store or Store()
+    st = store or open_store()
     its = [i for i in st.items("change") if i["id"] == by] or [i for i in st.items("change") if by in i["id"]]
     if len(its) != 1:
         raise ValueError(f"--by {by}: no worktree of that name, and {'no' if not its else len(its)} change id"
@@ -1463,7 +1463,7 @@ def park_release_why(m, repo, t=None, store=None):
         return None
     if u.get("change"):
         try:
-            end = change_chain_end(store or Store(), u["change"])
+            end = change_chain_end(store or open_store(), u["change"])
         except (Exception, SystemExit):
             end = None
         if end and end["state"] == "landed":
@@ -1536,7 +1536,7 @@ def parked_lines():
 def resolve_blocker(x, repo, store=None):
     """{change, commit} of `--until-landed x`: a change id (whole or a unique part; its head the commit), else a commit
     of repo. Raises ValueError."""
-    st = store or Store()
+    st = store or open_store()
     try:
         items = st.items("change")
     except (Exception, SystemExit):
@@ -1626,7 +1626,7 @@ def cmd_unpark(a):
 def worktree_change_items(wt, store=None):
     """{"open": [the open change items], "last": this worktree's newest change item (any state) or None}."""
     try:
-        items = (store or Store()).items("change")
+        items = (store or open_store()).items("change")
     except (Exception, SystemExit):
         return {"open": [], "last": None}
     rw = os.path.realpath(wt)

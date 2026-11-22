@@ -458,7 +458,7 @@ def land_hold_release(st, by):
 
 def tick_land_hold(st=None):
     """The reconciler's step: a hold past its deadline expires even while no batch ticks."""
-    land_hold(st or Store())
+    land_hold(st or open_store())
     return []
 
 # NO SILENT WAIT AT GREEN (2026-10-30). Changes waiting while the gate is green, with no hold and no batch checking,
@@ -515,7 +515,7 @@ def tick_batch(repo, d, now_=None):
     try:
         seen["last"] = did[-1] if did else None
         if seen.get("waiting"):  # the batch as this tick left it (assembled -> checking is no stall)
-            seen["batch"] = current_batch(Store(), d)
+            seen["batch"] = current_batch(open_store(), d)
         note_batch_progress(d, seen, now_)
     except (Exception, SystemExit) as e:  # never the batch's own step
         err(f"batch progress: {str(e)[:160]}")
@@ -560,7 +560,7 @@ def waiting_batch_max():
 
 def _tick_batch(repo, d, now_, seen):
     """A backlog batch's members brought in line with it (backlog_reconcile), then the batch's step."""
-    st = Store()
+    st = open_store()
     return backlog_reconcile(d, st) + batch_step(repo, d, now_, seen, st)
 
 
@@ -994,7 +994,7 @@ def check_batch(repo, bid):
     assembled tip; pass -> pushing (the tick pushes); fail -> bisecting -> a confirmed culprit rejected and the passing
     prefix -> pushing (or assembling), every prefix passing -> assembling again (counted); stalled twice -> held."""
     d, _c, _w = waiting_state(repo)
-    st = Store()
+    st = open_store()
     it = st.item("batch", bid)
     if not it or it["state"] not in ("checking", "bisecting"):
         return 0
@@ -1285,7 +1285,7 @@ def land_status_entry(st, entry, t):
 
 def write_snapshot(d, store=None):
     """The tick's part of state.json: the open items and the tick's own time and code version."""
-    st = store or Store()
+    st = store or open_store()
     open_ = lambda typ: [i for i in st.items(typ) if typ in MACHINES and not machine_state(typ, i["state"]).terminal]
     brief = lambda i: {"id": i["id"], "state": i["state"], "deadline": i["deadline"], "level": i["level"],
                        "worktree": (i["data"] or {}).get("worktree"),
@@ -1573,14 +1573,14 @@ def cmd_waiting(a):
         rc, sha, pushed_at = await_entry(repo, a.entry)
         return watch_landed(repo, sha, pushed_at, close=a.close) if rc == 0 and sha else rc
     if a.wcmd == "pause":  # `land hold`: an item in the store (the reconciler's, wherever this runs)
-        st = Store()
+        st = open_store()
         secs = int(float(getattr(a, "hold_for", None) or LAND_HOLD_DEFAULT // 60) * 60)
         it = land_hold_set(st, secs, getattr(a, "hold_why", None), hold_by())
         print(f"held: the processor takes no batch until `agentctl land release` or "
               f"{time.strftime('%H:%M', time.localtime(it['deadline']))} (then the hold expires); changes still queue")
         return 0
     if a.wcmd == "resume":
-        st = Store()
+        st = open_store()
         gone = land_hold_release(st, hold_by())
         try:
             os.unlink(os.path.join(d, "PAUSED"))  # the pre-store hold file, if an old version left one
@@ -1593,9 +1593,9 @@ def cmd_waiting(a):
               + ": the processor takes the next batch")
         return 0
     if a.wcmd == "status" and getattr(a, "entry", None):  # one change, open or decided (A VERDICT IS DURABLE)
-        return land_status_entry(Store(), a.entry, time.time())
+        return land_status_entry(open_store(), a.entry, time.time())
     if a.wcmd == "status":  # ONE QUEUE: the store's change items, on either host
-        st = Store()
+        st = open_store()
         rows = change_rows(st)
         print(f"queue: {store_url() or 'this host'}")
         print(f"processor: {'running' if waiting_processor_alive(d) else 'not running'}")
@@ -1631,7 +1631,7 @@ def cmd_waiting(a):
         if len(hits) != 1:
             print(f"no single open change matches {a.entry!r}: `agentctl land status`")
             return 1
-        Store().cancel_change(hits[0])
+        open_store().cancel_change(hits[0])
         print(f"cancelled {hits[0]}")
         return 0
     if a.wcmd == "cancel":

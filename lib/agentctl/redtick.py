@@ -115,7 +115,7 @@ def red_tick_repo(repo, snap=None, dispatch=False):
     with _red_lock:
         _last_red_tick[0] = time.time()
         recheck_local(repo, wait=False)
-        acts = red_tick(Store(), o_r, repo, snap or ci_state_load(o_r), dispatch=dispatch)
+        acts = red_tick(open_store(), o_r, repo, snap or ci_state_load(o_r), dispatch=dispatch)
     for line in acts:
         err(f"red: {line}")
     return acts
@@ -125,7 +125,7 @@ def red_open_flows(o_r, store=None):
     """The workflows of o_r's open reds that are not its gate's: their newest decided run on main must be read too, or
     such a red can never clear (core Dependabot Updates #154, 2026-11-02: green #155/#156 came, nothing read them)."""
     try:
-        its = (store or Store()).items("red")
+        its = (store or open_store()).items("red")
     except (Exception, SystemExit):
         return []
     gate = {n for n, _f in red_gate_flows(o_r)}
@@ -211,7 +211,7 @@ def red_tick_others(store=None, now_=None, dispatch=False, force=True):
             clone = red_repo_clone(o_r)
             with _red_lock:
                 acts += [f"{red_repo_short(o_r)}: {x}" for x in
-                         red_tick(store or Store(), o_r, clone, snap, now_=now_, dispatch=dispatch)]
+                         red_tick(store or open_store(), o_r, clone, snap, now_=now_, dispatch=dispatch)]
             _others_said.pop(o_r, None)
         except (Exception, SystemExit) as e:
             red_others_skipped(o_r, str(e).replace('agentctl: ', '')[:200])
@@ -297,7 +297,7 @@ def cmd_red(a):
     if a.rcmd == "probe":
         return cmd_red_probe(a)
     o_r = slug(a.repo) if getattr(a, "repo", None) and a.rcmd not in ("fixer", "owner") else default_repo()
-    st = Store()
+    st = open_store()
     if a.rcmd == "block":
         return red_block(o_r, a)
     if a.rcmd == "unblock":

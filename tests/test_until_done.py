@@ -112,7 +112,7 @@ class UntilDoneTest(test_queue.QueueTest):
         eid = out.split("QUEUED ", 1)[1].split()[0]
         for _ in range(3):  # the processor decides it while no --until-done waits
             self.drive_queue(0)
-        self.assertEqual(A.Store().item("change", eid)["state"], "rejected")
+        self.assertEqual(A.open_store().item("change", eid)["state"], "rejected")
         A.project_events()  # its exit event's inbox entry names the worktree and the change
         told = [x for x in self.inbox() if x.get("item_id") == eid and x["kind"] == "NOT_LANDED"]
         self.assertEqual([x["cwd"] for x in told], [wt], self.inbox())
@@ -138,7 +138,7 @@ class UntilDoneTest(test_queue.QueueTest):
         eid = out.split("QUEUED ", 1)[1].split()[0]
         for _ in range(3):  # decided while no --until-done waits
             self.drive_queue(0)
-        self.assertEqual(A.Store().item("change", eid)["state"], "rejected")
+        self.assertEqual(A.open_store().item("change", eid)["state"], "rejected")
         other, _ = self.agent("mm", "docs/mm.md", "mm\n", msg="main moves")
         sh(other, "git", "push", "-q", "origin", "HEAD:main")
         A.time.sleep = self.drive_queue
@@ -156,7 +156,7 @@ class UntilDoneTest(test_queue.QueueTest):
         self.assertEqual(rc, 1, out)
         self.assertIn("NOT LANDED: the pre-push checks failed", out)
         eid = out.split("QUEUED ", 1)[1].split()[0]
-        self.assertTrue(A.Store().item("change", eid)["data"].get("delivered_at"), "its waiter took delivery")
+        self.assertTrue(A.open_store().item("change", eid)["data"].get("delivered_at"), "its waiter took delivery")
         rc, out = self.until_done(wt)
         self.assertNotIn("while no --until-done waited", out)
         self.assertIn("QUEUED ", out, "the change is checked again")

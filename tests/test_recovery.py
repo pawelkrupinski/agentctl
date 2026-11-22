@@ -144,7 +144,7 @@ class HostTest(RegistryBase):
                         else os.environ.pop("AGENTCTL_ROLE", None))
 
     def test_the_laptops_condition_is_probed_on_the_laptop_never_on_ci_runner(self):
-        st = A.Store()  # one store, both hosts (the laptop's is ci-runner's through the API)
+        st = A.open_store()  # one store, both hosts (the laptop's is ci-runner's through the API)
         rec = Recorder(fails=1)
         A.PROBES["tcp"] = rec
         self.role("sync-test")
@@ -161,7 +161,7 @@ class HostTest(RegistryBase):
         self.assertEqual(len(rec.calls), 2)
 
     def test_a_token_condition_the_server_opened_is_cleared_by_the_laptops_probe(self):
-        st = A.Store()
+        st = A.open_store()
         rec = Recorder(fails=1)
         A.PROBES["token"] = rec
         self.role("server")
@@ -179,7 +179,7 @@ class ConditionItemTest(RegistryBase):
         ok = [False]
         A.PROBES["tunnel"] = lambda a: (ok[0], "down" if not ok[0] else "up")
         A.open_condition("STALLED", "STALLED: x", A.run_probe("tunnel"), [], key="k1")
-        st = A.Store()
+        st = A.open_store()
         it = st.item("condition", "k1")
         self.assertEqual((it["state"], it["level"]), ("open", 0))
         self.assertEqual(A.recovery_tick(now_=time.time() + 11 * 60), [])
@@ -306,7 +306,7 @@ class UntilGreenTest(RedBase):
         os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp.name, "state")
         self.addCleanup(lambda: os.environ.__setitem__("AGENTCTL_STATE_ROOT", saved) if saved is not None
                         else os.environ.pop("AGENTCTL_STATE_ROOT", None))
-        self.st = A.Store()
+        self.st = A.open_store()
 
     def snap(self, conclusion):
         A._gate_lists.clear()

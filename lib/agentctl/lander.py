@@ -282,7 +282,7 @@ def lander_note_direct(repo, head, keys):
     try:
         cid = f"direct-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{head[:10]}"
         with no_vault():
-            lander_put(Store(), cid, lander_record(repo), keys or [], landed_sha=head)
+            lander_put(open_store(), cid, lander_record(repo), keys or [], landed_sha=head)
         return cid
     except (Exception, SystemExit) as e:
         err(f"lander: not recorded ({str(e)[:160]})")

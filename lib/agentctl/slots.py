@@ -424,7 +424,7 @@ class LeaseHold:
 
     def __init__(self, name, ttl, max_hold, meta=None, store=None):
         self.name, self.ttl, self.max_hold, self.meta = name, ttl, max_hold, dict(meta or {}, pid=os.getpid())
-        self.store, self.lease, self.held = store or Store(), None, None
+        self.store, self.lease, self.held = store or open_store(), None, None
 
     def acquire(self):
         got = self.store.acquire(self.name, f"{socket_host()}:{self.name.split('/')[0]}:{os.getpid()}", self.ttl,
@@ -451,7 +451,7 @@ class LeaseHold:
 
 def lease_live(name, store=None):
     """The live lease `name` (its row, meta decoded), or None."""
-    r = (store or Store()).get(name)
+    r = (store or open_store()).get(name)
     if r and r["holder"] and r["expires_at"] > time.time():
         r["meta"] = json.loads(r["meta"] or "{}")
         return r

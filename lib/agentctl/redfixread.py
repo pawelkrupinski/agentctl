@@ -439,7 +439,7 @@ def fix_check(repo, sha, values, store=None):
     if not todo:
         return ok, bad
     try:
-        st = store or Store()
+        st = store or open_store()
         items = [it for it in st.items("red") if it["data"].get("key")]
     except (Exception, SystemExit):  # SystemExit: NoToken (the laptop's land with no token: the server checks again)
         items = []

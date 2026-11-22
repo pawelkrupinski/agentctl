@@ -22,7 +22,7 @@ class StateRootTest(unittest.TestCase):
         root = tempfile.mkdtemp()
         os.environ["AGENTCTL_STATE_ROOT"] = root
         try:
-            for path in (A.waiting_dir(), A.Store().path, A.sweep_dir(), A.reap_log_path(), A.gate_dirty_path(),
+            for path in (A.waiting_dir(), A.open_store().path, A.sweep_dir(), A.reap_log_path(), A.gate_dirty_path(),
                          A.state_root("maintain.json")):
                 self.assertTrue(path.startswith(root), path)
         finally:

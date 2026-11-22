@@ -133,7 +133,7 @@ class QueueTest(WaitingTest):
         self.assertIn(f"{eb}: its push waits for batch", " ".join(did))
         self.assertEqual(entry(eb)["status"], "checked", "no solo push under the checking batch")
         self.assertEqual(self.remote_log()[0], "the hook's plans")
-        st = A.Store()
+        st = A.open_store()
         bt = self.batch()
         st.transition("batch", bt["id"], "pushing", bt["version"])  # passed: its tree is about to be pushed from
         wc, _ = self.agent("c", "worker/src/main/C.scala", "c\n", msg="c: queued")
@@ -900,7 +900,7 @@ class QueueTest(WaitingTest):
         for _ in range(2):  # the second tick: it stays blocked, never flips back to assembling
             self.drive()  # (THE BATCH IS THE MECHANISM: its red pre-check runs, then it is blocked again)
             self.assertEqual(self.batch()["state"], "blocked-red", "nothing in it may land on red")
-        self.assertIsNone(A.batch_goes_first(A.Store(), d))
+        self.assertIsNone(A.batch_goes_first(A.open_store(), d))
         wb, _ = self.agent("b", "scripts/b.sh", "echo b\n", msg="b: tools only")
         eb, _ = self.queued(wb)
         self.assertEqual(self.check(eb), 0)
@@ -969,7 +969,7 @@ class QueueTest(WaitingTest):
         e = self.entries()[eid.rsplit("-", 1)[-1]]
         self.assertEqual((e["status"], e["infra_retries"]), ("queued", 1 + A.QUEUE_INFRA_RETRIES),
                          "infra never rejects a change (design §5.1)")
-        evs = [x for x in A.Store().events() if x["item_id"] == eid and x["severity"] == "escalate"]
+        evs = [x for x in A.open_store().events() if x["item_id"] == eid and x["severity"] == "escalate"]
         self.assertTrue(evs, "from the third infra re-queue on, each one escalates")
 
     def test_a_check_whose_environment_lacked_the_gitops_manifests_is_an_infra_retry_not_a_rejection(self):
@@ -1040,7 +1040,7 @@ class QueueTest(WaitingTest):
         eid, _out = self.queued(wt)
         d, _c, _w = A.waiting_state(self.r.path)
         os.remove(os.path.join(d, "entries", f"{eid}.json"))  # held by the store alone
-        A.Store().put_item("change", eid, "queued", {"worktree": wt, "head": sha})
+        A.open_store().put_item("change", eid, "queued", {"worktree": wt, "head": sha})
         A._last_ref_sweep[0] = 0
         self.assertEqual(A.sweep_land_refs(self.r.path, d), [], "open in the store: its ref stays")
         self.assertEqual(self.remote_refs(), [f"refs/heads/land/{eid}"])
@@ -1389,7 +1389,7 @@ class RemotePickupTest(QueueTest):
         """Step 6 (reconcile_checking deleted): a wedged checker stops renewing check/<entry>; once the lease lapses
         the tick starts a replacement, which adopts the decided run."""
         d, e = self.checking_entry()
-        st = A.Store()
+        st = A.open_store()
         got = st.acquire(f"check/{e['id']}", "a wedged checker", 600, 3600)
         self.assertEqual(self.tick(d)[1], [], "a live checker: nothing started")
         st.release(f"check/{e['id']}", got["epoch"], got["secret"])  # its lease lapsed (here at once)
@@ -1400,7 +1400,7 @@ class RemotePickupTest(QueueTest):
 
     def test_checking_past_its_deadline_with_no_checker_is_queued_again_as_infra(self):
         d, e = self.checking_entry()
-        st = A.Store()
+        st = A.open_store()
         st.put_item("change", e["id"], "checking")
         self.tick(d)  # in time: unchanged
         self.assertEqual(self.entry(e["id"])["status"], "checking")
@@ -1664,7 +1664,7 @@ class MinimalRecheckTest(QueueTest):
     def status_of(self, eid):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            A.land_status_entry(A.Store(), eid, time.time())
+            A.land_status_entry(A.open_store(), eid, time.time())
         return out.getvalue()
 
     def test_a_main_move_outside_what_its_checks_read_keeps_the_verdict(self):
@@ -1897,7 +1897,7 @@ entry's own id, in its author's worktree."""
     def test_by_content_a_store_item_no_queue_carries(self):
         """The laptop's look: a change item the store holds, closed by content (close_item_landed)."""
         wt, head = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: by hand")
-        st = A.Store()
+        st = A.open_store()
         st.put_item("change", "x-95", "waiting", {"worktree": wt, "head": head})
         sh(wt, "git", "push", "-q", "origin", "HEAD:main")
         A._landed_looked.clear()

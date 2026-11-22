@@ -236,7 +236,7 @@ class OrphanBranchRedTest(BranchBase):
                                brun(3554, 2371, self.on, self.b71, created=now, wf=IDRUN, wfile=IDRUN_FILE),
                                dict(run(40, 20, "Main", "main.yml", self.sha), event="push"),
                                dict(run(39, 19, CONV, CONV_FILE, self.sha), event="workflow_dispatch")])
-        self.store = A.Store()
+        self.store = A.open_store()
 
     def reds(self, snap):
         return {e["run"]["number"]: e for e in snap["branches"] if e.get("red")}

@@ -292,7 +292,7 @@ class Timeline08010cTest(unittest.TestCase):
             replay = {(k, label.get(b)) for _t, k, b, _f in sim.holds.get(
                 next(c for c in sim.changes if c.label == "replay").eid, []) if k == "overlap"}
             self.assertEqual(replay, {("overlap", "fix")}, f"seed {seed}: fix-replay waits for the fix it overlaps")
-            st = queue_sim.A.Store()
+            st = queue_sim.A.open_store()
             self.assertEqual([i for i in st.items("issue") if "[change-unheld" in i["data"]["text"]], [],
                              f"seed {seed}: no change was past its deadline unheld")
 

@@ -248,13 +248,13 @@ class LandTest(LandBase):
 
     def lock_probe(self, out):
         """Shell that records whether the landing LEASE is FREE (another process could take it) while it runs."""
-        db, name = A.Store().path, A.land_lease_name(self.r.path)
+        db, name = A.open_store().path, A.land_lease_name(self.r.path)
         return (f"{sys.executable} -c \"import os,sqlite3,sys,time\n"
                 f"r=os.path.exists(sys.argv[1]) and sqlite3.connect(sys.argv[1]).execute('select holder,expires_at from leases where name=?',(sys.argv[2],)).fetchone()\n"
                 f"print('held' if r and r[0] and r[1] > time.time() else 'free')\" {db} {name} >> {out}")
 
     def lease_free(self, repo=None):
-        r = A.Store().get(A.land_lease_name(repo or self.r.path))
+        r = A.open_store().get(A.land_lease_name(repo or self.r.path))
         return not r or not r["holder"] or r["expires_at"] <= time.time()
 
     def mine(self):
@@ -340,7 +340,7 @@ class LandTest(LandBase):
 
     def hold_lock(self, seconds):
         """Another lander: the repository's landing lease held by someone else, released after <seconds>."""
-        st, name = A.Store(), A.land_lease_name(self.r.path)
+        st, name = A.open_store(), A.land_lease_name(self.r.path)
         got = st.acquire(name, "other lander", 120, 300, meta={"pid": 4242})
         import threading
         t = threading.Timer(seconds, lambda: st.release(name, got["epoch"], got["secret"]))
@@ -371,7 +371,7 @@ class LandTest(LandBase):
         def first_wait(secs):
             if threading.get_ident() != lander or not refused:
                 return sleep(min(secs, 0.05))
-            A.Store().release(name, got["epoch"], got["secret"])
+            A.open_store().release(name, got["epoch"], got["secret"])
             A.time.sleep = sleep
             return sleep(min(secs, 0.2))
         A.time.sleep = first_wait

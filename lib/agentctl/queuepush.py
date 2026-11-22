@@ -32,7 +32,7 @@ def tick_changes(repo, d, now_=None):
     checking change past its deadline back to queued (infra), a queued one past its deadline escalated, and each
     checked change pushed. Returns what it did."""
     t = now_ if now_ is not None else time.time()
-    st = Store()
+    st = open_store()
     try:
         reds = gate_reds(repo)
     except Exception:

@@ -579,7 +579,7 @@ def reconcile_alerts(store=None, force=False):
     changed (a red nobody holds became the owner's; a self-healing condition outlived its bound): re-stamped, surfaced
     again when it became the owner's. Returns what it did."""
     d = inbox_dir()
-    st = store or Store()
+    st = store or open_store()
     t = time.time()
     try:
         last = float((read_record(alert_index_path(d)) or {}).get("reconciled_at") or 0)

@@ -17,7 +17,7 @@ class OneQueueBase(Base):
         A.WAITING_DIR = os.path.join(self.tmp.name, "waiting-state")
         A._landed_looked.clear()
         self.d = A.waiting_state(self.r.path)[0]
-        self.st = A.Store()
+        self.st = A.open_store()
 
     def tearDown(self):
         A.WAITING_DIR = self.saved_dir

@@ -1,6 +1,10 @@
 # agentctl, part `cli`: the command line (main: the parser and the handlers' table).
 # Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
 
+# THE COMPOSITION ROOT: what every process wires before any command runs.
+wire_store(process_store)
+
+
 # ---------------------------------------------------------------- main
 def main(argv=None):
     if (sys.argv[1:] if argv is None else argv) == ["--selftest"]:

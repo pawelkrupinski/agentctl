@@ -145,7 +145,7 @@ class WatchdogTest(unittest.TestCase):
         nongate until noon. With main green W1 returned 0.0 (`age < lim or (red_since and ...)`), which the watchdog
         neither refreshed nor closed on (`r.ok is False` / `r.ok`). Each violated pass re-describes the open
         condition (one inbox entry, one notification per spell still); the invariant holding closes it."""
-        st_ = A.Store()
+        st_ = A.open_store()
         st_.put_item("change", "old-1", "checking", {"head": "0" * 40, "submitted_at": time.time() - 5 * 3600})
         st_.put_item("change", "old-2", "queued", {"head": "1" * 40, "submitted_at": time.time() - 4 * 3600})
         self.assertIs(A.inv_w1()[0], False, "a green main's W1 is violated, never 0.0 (neither held nor violated)")
@@ -167,7 +167,7 @@ class WatchdogTest(unittest.TestCase):
     def test_w1_reads_the_gate_from_its_snapshot_and_names_the_red_row_holding_a_waiting_change(self):
         """2026-11-22: the gate was red on Identity takes #349 (Main green) and W1 said "waiting for green while main
         is green": it read the gate from the published summary line, unread past 180 s on a starved laptop."""
-        st_ = A.Store()
+        st_ = A.open_store()
         st_.put_item("change", "impact", "waiting", {"head": "0" * 40, "submitted_at": time.time() - 4 * 3600})
         def snap(takes_since):
             iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
@@ -192,7 +192,7 @@ class WatchdogTest(unittest.TestCase):
     def test_a_waiting_change_its_batch_carries_is_the_batchs_within_the_batchs_deadline(self):
         """2026-11-22 09:56Z: the gate went green and batch #94 left blocked-red within a tick, checking
         impact-same-file and film-codec on the new main; W1 said of both "waiting for green while the gate is green"."""
-        st_ = A.Store()
+        st_ = A.open_store()
         st_.put_item("change", "impact", "waiting", {"head": "0" * 40, "submitted_at": time.time() - 9 * 3600})
         st_.put_item("batch", "movies#94", "checking", {"members": ["impact", "codec"], "tip": "2d1beab02b"})
         ok, detail = A.inv_w1()
@@ -204,7 +204,7 @@ class WatchdogTest(unittest.TestCase):
         self.assertIn("carried by batch movies#94 (checking, past its deadline)", detail)
 
     def test_w1_from_the_store_and_w2_from_the_store(self):
-        st_ = A.Store()  # W1: the one queue, the store's open change items, by their submission time
+        st_ = A.open_store()  # W1: the one queue, the store's open change items, by their submission time
         st_.put_item("change", "e1", "waiting", {"head": "0" * 40, "submitted_at": time.time() - 3 * 3600})
         ok, detail = A.inv_w1()
         self.assertFalse(ok)
@@ -273,7 +273,7 @@ class TableJudgedInvariantsTest(unittest.TestCase):
     bound -- and violates only outside it, or past W1_HARD_FACTOR x the bound whatever it says."""
 
     def setUp(self):
-        self.st = A.Store()
+        self.st = A.open_store()
         for it in self.st.items("change"):
             if not A.machine_state("change", it["state"]).terminal:
                 self.st.transition("change", it["id"], "cancelled", it["version"])

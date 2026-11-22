@@ -45,7 +45,7 @@ def own_change_item(repo, head, store=None):
 
     def ours(x):
         return x.get("head") == head and os.path.realpath(x.get("worktree") or "") == rp
-    mine = [it for it in (store or Store()).items("change") if ours(it.get("data") or {})]
+    mine = [it for it in (store or open_store()).items("change") if ours(it.get("data") or {})]
     known = {it["id"] for it in mine}
     try:
         d = waiting_state(repo)[0]
@@ -151,7 +151,7 @@ def land_until_done(repo, main_ref, sh, a):
         sha = data.get("landed_sha") or landed_sha_of(eid, data)
         print(f"LANDED {sha} (queued {eid})", flush=True)
         return until_done_finish(repo, eid, sha, a, (it if it and it["id"] == eid else None)
-                                 or Store().item("change", eid))
+                                 or open_store().item("change", eid))
     if change_decided(state):
         why = str(data.get("why") or f"{eid} {state}")
         print(why if why.startswith("NOT LANDED") else f"NOT LANDED: {why}", flush=True)

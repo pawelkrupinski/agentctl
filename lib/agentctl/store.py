@@ -514,6 +514,21 @@ class Store:
         finally:
             c.close()
 
+# THE STORE SEAM: the store a process uses is chosen once, at the composition root (cli: wire_store(process_store), the
+# remote store when a store URL is set), not by the Store class (its constructor is the file store, nothing else).
+# Until it is wired -- a part loaded on its own -- open_store() opens the file store.
+_store_opener = []
+
+
+def wire_store(opener):
+    """Make opener(clock=None) the store every open_store() returns (the composition root, once)."""
+    _store_opener[:] = [opener]
+
+
+def open_store(clock=None):
+    """The process's state store: the wired opener's, else the file store."""
+    return (_store_opener[0] if _store_opener else Store)(clock=clock)
+
 
 # ---------------------------------------------------------------- the machines (design §5; phase 1 step 5)
 # Every state of every machine has a finite deadline and an automatic exit (`on_deadline`, a state of the same
@@ -692,7 +707,7 @@ def projected_transition(e, w, frm, to):
 def project_changes(d, store=None):
     """Each queue entry's change item: created in its state, moved (a transition, with its event) when the entry's
     status moved. Returns the items."""
-    st = store or Store()
+    st = store or open_store()
     out = []
     every = {x["id"]: x for x in waiting_entries(d, open_only=False)}
     for e in every.values():
@@ -724,7 +739,7 @@ def project_changes(d, store=None):
 # the orchestrator's routing and the status line read the inbox as before.
 def project_events(store=None):
     """Write the inbox entries of the events since the projector's cursor; returns how many."""
-    st = store or Store()
+    st = store or open_store()
     cur = int(st.meta_get("projector_seq", 0) or 0)
     n = 0
     for ev in st.events(after=cur):
@@ -790,7 +805,7 @@ def escalation_stale(it, ev):
 def notify_failure(store=None):
     """{at, cause} of the notifier's last failed delivery (both channels failed), or None: invariant WN's reading."""
     try:
-        return json.loads((store or Store()).meta_get("notify_failed") or "null") or None
+        return json.loads((store or open_store()).meta_get("notify_failed") or "null") or None
     except ValueError:
         return None
 
@@ -813,7 +828,7 @@ def notify_escalations(store=None):
         and records notify_failed {at, cause, fix}: invariant WN raises ONE condition naming the failed channel's fix;
         W6 defers to it.
     Returns how many notifications were shown."""
-    st = store or Store()
+    st = store or open_store()
     cur = int(st.meta_get("notifier_seq", 0) or 0)
     evs = st.events(after=max(0, cur - NOTIFY_LOOKBACK), limit=5000)
     t = st.clock()
@@ -960,7 +975,7 @@ LEASE_LIST_RECENT = 3600         # `lease list` shows the live leases and those 
 
 def maybe_archive_leases(d, every=3600):
     """Once an hour: the leases free for over a day go to the events (Store.archive_free_leases)."""
-    st = Store()
+    st = open_store()
     if time.time() - float(st.meta_get("lease_archive_at", 0) or 0) < every:
         return 0
     st.meta_set("lease_archive_at", time.time())
@@ -973,7 +988,7 @@ def maybe_archive_leases(d, every=3600):
 def cmd_lease(a):
     """`agentctl lease list [prefix] [--all]` (debugging; the leases' holders, epochs, expiry, notes): the live ones and
     those free for under an hour; --all every one still in the table."""
-    st, now_ = Store(), time.time()
+    st, now_ = open_store(), time.time()
     rows = st.list(a.prefix or "")
     hidden = 0 if a.all else sum(1 for r in rows if not (r["holder"] and r["expires_at"] > now_)
                                  and now_ - r["expires_at"] > LEASE_LIST_RECENT)

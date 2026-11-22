@@ -117,12 +117,12 @@ class HealTest(unittest.TestCase):
         os.environ.update(AGENTCTL_MOVIES_REMOTE=self.src, AGENTCTL_MOVIES_REPO=self.repo)
         A._clone_repair_at.clear()
         self.store = A.Store(path=os.path.join(self.root, "store.db"))
-        self.saved = A.Store
-        A.Store = lambda *a, **k: self.store
+        self.saved = A.open_store
+        A.open_store = lambda *a, **k: self.store
         A.ensure_server_clone(self.repo)
 
     def tearDown(self):
-        A.Store = self.saved
+        A.open_store = self.saved
         os.environ.clear()
         os.environ.update(self.saved_env)
 
@@ -235,15 +235,15 @@ class RequeueLoopTest(unittest.TestCase):
         os.makedirs(os.path.join(self.d, "entries"))
         self.st = A.Store(path=os.path.join(self.d, "store.db"))
         self.opened = []
-        self.saved = A.Store, A.wlog, A.open_condition
-        A.Store = lambda *a, **k: self.st
+        self.saved = A.open_store, A.wlog, A.open_condition
+        A.open_store = lambda *a, **k: self.st
         A.wlog = lambda d_, m: None
         A.open_condition = lambda kind, text, probe, acts, **kw: self.opened.append((kind, text, probe, kw)) or {}
         self.e = {"id": "e1", "seq": 1, "status": "checking", "worktree": "/w", "head": "a" * 40}
         A.write_json(os.path.join(self.d, "entries", "e1.json"), self.e)
 
     def tearDown(self):
-        A.Store, A.wlog, A.open_condition = self.saved
+        A.open_store, A.wlog, A.open_condition = self.saved
 
     def again(self, why, **kw):
         A.requeue_infra(self.d, self.e, why, **kw)

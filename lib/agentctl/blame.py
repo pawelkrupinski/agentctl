@@ -788,7 +788,7 @@ def blame_records(store=None):
     revert stands (a change blamed AGAIN for a newer red is reverted for that red: never refused)."""
     dead, live = {}, {"runs": {}, "worktrees": set()}
     try:
-        items = (store or Store()).items("red")
+        items = (store or open_store()).items("red")
     except (Exception, SystemExit):
         return dead, live
     for it in items:
@@ -828,7 +828,7 @@ def blame_records_quiet():
     """blame_records for `agentctl land` on the laptop: a land never needs a token (it never runs `secrets`), so a
     remote store is read only with a token already in hand; else nothing here -- ci-runner's submission and its checker
     refuse the revert with their own store (submit_change, _check_entry)."""
-    st = Store()
+    st = open_store()
     if isinstance(st, RemoteStore) and not (os.environ.get("AGENTCTL_STORE_TOKEN") or _tokens.get("movies")):
         return {}, {"runs": {}, "worktrees": set()}
     return blame_records(st)
@@ -914,7 +914,7 @@ def blame_cancel_changes_of(wt, why):
     """Cancel every open queued change submitted from `wt`; returns their ids."""
     rw, out = os.path.realpath(wt), []
     try:
-        st = Store()
+        st = open_store()
         items = st.items("change")
     except (Exception, SystemExit):
         return out

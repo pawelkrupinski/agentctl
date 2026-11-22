@@ -66,7 +66,7 @@ def sweep_land_refs(repo, d, now_=None, store=None):
         return []
     every = {e["id"]: e for e in waiting_entries(d, open_only=False)}
     try:
-        items = {it["id"]: it for it in (store or Store()).items("change")}
+        items = {it["id"]: it for it in (store or open_store()).items("change")}
     except Exception as ex:  # the store unreachable: decide nothing this tick
         err(f"land refs: store unreadable ({ex}); no ref deleted")
         return []
@@ -131,7 +131,7 @@ def submit_to_server(repo, d, fields, note="", after_queued=None, waits=False):
         print(f"NOT LANDED: could not push the change to refs/heads/land/{e['id']} (ci-runner checks it from there; "
               "the network's when `agentctl env --check` says the tunnel fails, never the change's): land again")
         return 1
-    r = submit_remote(Store(), e)
+    r = submit_remote(open_store(), e)
     offer_token(repo)  # this agent's token to the laptop processor, which holds none after a restart
     if r.get("outbox"):
         why = ("no store token in this process (none in its environment, the processor's socket held none; land "
@@ -208,7 +208,7 @@ def note_precheck(eid, secs, rc, out, store=None, sleep=time.sleep):
             delays.append(d)
     for delay in (*delays, None):
         try:
-            st = store or Store()
+            st = store or open_store()
             for _ in range(3):  # a compare-and-set: the reconciler may move the item meanwhile
                 it = st.item("change", eid)
                 if not it:
@@ -429,7 +429,7 @@ def await_verdict(eid, bound, store=None):
     state, data = "unread", {}
     while True:
         try:
-            it = (store or Store()).item("change", eid)
+            it = (store or open_store()).item("change", eid)
         except StoreUnavailable as e:
             it, state = None, f"the store did not answer ({str(e)[:80]})"
         if it:
@@ -449,7 +449,7 @@ def take_delivery(it, store=None):
     if (it.get("data") or {}).get("delivered_at") or it.get("version") is None:  # said already, or a queue entry
         return  # the tick has not made an item of yet (own_change_item): nothing to record it on
     try:
-        (store or Store()).update_item("change", it["id"], it["version"], {"delivered_at": time.time()})
+        (store or open_store()).update_item("change", it["id"], it["version"], {"delivered_at": time.time()})
     except (StaleVersion, StoreUnavailable):
         pass
 

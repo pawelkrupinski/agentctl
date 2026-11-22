@@ -392,6 +392,6 @@ def red_decide(store, o_r, target, answer):
 
 def cmd_decide(a):
     o_r = slug(a.repo) if getattr(a, "repo", None) else default_repo()
-    rc, lines = red_decide(Store(), o_r, a.red, a.answer)
+    rc, lines = red_decide(open_store(), o_r, a.red, a.answer)
     print("\n".join(lines))
     return rc

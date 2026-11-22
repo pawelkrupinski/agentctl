@@ -1072,7 +1072,7 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
         units += local_units(lrepo) + predict_units(o_r, bsnap)
         for u in units:
             units_of.setdefault((u["workflow"], u["run"].get("databaseId")), []).append(u)
-        store = Store()
+        store = open_store()
         states = red_view_of_units(store, units)
         flakes_ = [it for it in red_active(store).values() if it["data"].get("red_kind") == "flake"]
         untracked = red_untracked_runs(store, o_r, units)
@@ -1154,7 +1154,7 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
         out.append("Flaky (passed on the next run with no fix; a red until a fix lands and a run proves it):")
         for it in flakes_:
             out.append(f"  {red_what(it['data'])}: {str(it['data'].get('line'))[:120]}")
-            out.append(f"    fixing: {red_view(Store(), it)[0]}")
+            out.append(f"    fixing: {red_view(open_store(), it)[0]}")
     head = f"ci-why {o_r}: " + ("main is RED for the gate" if red else "main is green for the gate")
     if others_err is not None:
         out.append(f"outside the gate: could not list main's runs ({others_err})")

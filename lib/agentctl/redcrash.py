@@ -371,7 +371,7 @@ def probe_red_newer_verdict(a):
         return False, f"no {a.get('workflow')} run newer than #{a.get('run')}"
     if last.get("conclusion") == "success":
         return True, f"{a.get('workflow')} #{last.get('number')} green"
-    it = Store().item("red", a.get("item")) if a.get("item") else None
+    it = open_store().item("red", a.get("item")) if a.get("item") else None
     if it and str((it["data"].get("last_run") or {}).get("databaseId")) == str(last.get("databaseId")):
         return False, f"{a.get('workflow')} #{last.get('number')} still fails this way"
     return True, f"{a.get('workflow')} #{last.get('number')} {last.get('conclusion')}, no longer this failure"

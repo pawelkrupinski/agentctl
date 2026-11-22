@@ -62,7 +62,7 @@ class TiersTest(test_generated.GeneratedQueueTest):
         return sh(self.r.root, "git", "--git-dir", self.r.bare, "show", f"main:{path}") + "\n"
 
     def held(self, eid):
-        return (A.Store().item("change", eid)["data"] or {}).get("hold") or {}
+        return (A.open_store().item("change", eid)["data"] or {}).get("hold") or {}
 
     # ------------------------------------------------------------------------------------------- tier 2: snapshots
     def test_split_shared_js_replayed_a_snapshot_both_change_is_no_hold(self):
@@ -159,7 +159,7 @@ class TiersTest(test_generated.GeneratedQueueTest):
                      "--format=%(trailers:key=Auto-Resolved,valueonly)", "main")
         self.assertIn(f"{LIST}: line 4: kept both sides' added lines (1 ours, then 1 theirs, a comma between)", trailer,
                       "the landed commit says what was resolved")
-        said = [ev["text"] for ev in A.Store().item_events("change", eb) if "AUTO-RESOLVED" in (ev.get("text") or "")]
+        said = [ev["text"] for ev in A.open_store().item_events("change", eb) if "AUTO-RESOLVED" in (ev.get("text") or "")]
         self.assertTrue(said, "its author is told, while it checks")
 
     def test_a_resolution_failing_the_batchs_checks_is_the_culprit_and_falls_back_to_the_hold(self):

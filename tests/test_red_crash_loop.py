@@ -302,12 +302,12 @@ class RecoveryTest(CrashLoopBase):
         return it, A.red_block_of(it, self.st)["meta"]["probe"]["args"]
 
     def probe(self, args):
-        saved = A.Store
-        A.Store = lambda *a, **k: self.st
+        saved = A.open_store
+        A.open_store = lambda *a, **k: self.st
         try:
             return A.probe_red_newer_verdict(args)
         finally:
-            A.Store = saved
+            A.open_store = saved
 
     def test_no_newer_run_holds_it(self):
         _it, args = self.blocked()
@@ -333,13 +333,13 @@ class RecoveryTest(CrashLoopBase):
     def test_the_probe_passing_lapses_the_block_through_the_ticks_renewal(self):
         it, _args = self.blocked()
         self.snap(9400, 2400, "success")
-        saved = A.Store
-        A.Store = lambda *a, **k: self.st
+        saved = A.open_store
+        A.open_store = lambda *a, **k: self.st
         try:
             self.t[0] += A.BLOCK_PROBE_EVERY + 1
             out = A.red_renew_blocks(self.st, self.t[0])
         finally:
-            A.Store = saved
+            A.open_store = saved
         self.assertTrue(any("RECOVERED" in l for l in out), out)
         self.assertIsNone(A.red_block_of(it, self.st))
 
@@ -398,9 +398,9 @@ class OneEndOneAttemptTest(CrashLoopBase):
 
     def setUp(self):
         super().setUp()
-        saved = A.Store
-        A.Store = lambda *a, **k: self.st
-        self.addCleanup(setattr, A, "Store", saved)
+        saved = A.open_store
+        A.open_store = lambda *a, **k: self.st
+        self.addCleanup(setattr, A, "open_store", saved)
 
     def step(self, it):
         return A.red_step(self.st, self.st.item("red", it["id"]), None, None, {}, None, "pawelkrupinski/movies",

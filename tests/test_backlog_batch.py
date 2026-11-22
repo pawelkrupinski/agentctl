@@ -79,7 +79,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         for eid in (ea, eb, ei, ej, ec):
             e = self.entry(eid)
             self.assertEqual(e["status"], "landed", eid)
-            it = A.Store().item("change", eid)
+            it = A.open_store().item("change", eid)
             self.assertEqual(it["state"], "landed")
             self.assertEqual(it["data"]["batch"], 5, "its record names the batch's size")
             bid = bid or it["data"]["batch_id"]
@@ -87,7 +87,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         self.assertEqual(len(self.watches), 5, "each member its own watch")
         landed = [x for x in self.inbox() if x["kind"] == "LANDED"]
         self.assertEqual(len(landed), 5, "each author told")
-        st = A.Store()
+        st = A.open_store()
         rec = A.landing_records(st.item("change", ea), st.item_events("change", ea), self.entry(ea))[0]
         self.assertEqual((rec["batch"], rec["batch_id"], rec["outcome"], rec["rounds"]), (5, bid, "landed", 1))
 
@@ -102,7 +102,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         self.drive()
         for eid in (ea, eb):
             self.assertEqual(self.entry(eid)["status"], "landed", eid)
-            self.assertEqual(A.Store().item("change", eid)["data"]["batch"], 2, "b and a land as one batch")
+            self.assertEqual(A.open_store().item("change", eid)["data"]["batch"], 2, "b and a land as one batch")
 
     def test_a_verified_pure_move_of_identity_code_joins_the_batch(self):
         """2026-11-19 ("make it simpler and faster"): a commit saying `Pure-Move: verified` moves no take -- the hook's
@@ -124,7 +124,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         self.drive()
         for eid in (em, en, ea, eo):
             self.assertEqual(self.entry(eid)["status"], "landed", eid)
-            self.assertEqual(A.Store().item("change", eid)["data"]["batch"], 4, "the four land as one batch")
+            self.assertEqual(A.open_store().item("change", eid)["data"]["batch"], 4, "the four land as one batch")
 
     def test_a_failing_batch_lands_its_passing_prefix_and_queues_the_rest_again(self):
         ea = self.queue("a", "web/src/main/A.scala")
@@ -139,7 +139,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         e = self.entry(ec)
         self.assertEqual(e["status"], "queued", "the rest queued again for the next batch")
         self.assertFalse(e.get("backlog_batch"))
-        self.assertEqual(A.Store().item("change", ec)["state"], "queued")
+        self.assertEqual(A.open_store().item("change", ec)["state"], "queued")
         # the whole batch, the prefixes through b (fails) and a (passes), b's prefix confirmed: 3 extra rounds
         self.assertEqual(len(self.calls_of("--range")), 4)
         self.assertEqual(self.remote_log()[0], "a: web/src/main/A.scala")
@@ -172,8 +172,8 @@ class BacklogBatchTest(test_queue.QueueTest):
         self.assertEqual([self.entry(e)["status"] for e in (ea, eb)], ["landed", "landed"])
         # the hook logs a call only past its infra line: the one logged is the batch's second check (a bisect logged 3)
         self.assertEqual(len(self.calls_of("--range")), 1, "the batch's check once again: no prefix checks")
-        bid = A.Store().item("change", ea)["data"]["batch_id"]
-        states = [ev["to_state"] for ev in A.Store().item_events("batch", bid)]
+        bid = A.open_store().item("change", ea)["data"]["batch_id"]
+        states = [ev["to_state"] for ev in A.open_store().item_events("batch", bid)]
         self.assertNotIn("bisecting", states)
 
     def test_a_change_landed_with_no_batch_and_a_lone_change_are_checked_alone(self):
@@ -322,7 +322,7 @@ class PushBatchTest(test_queue.QueueTest):
                          "one push, skipping the checks already passed")
         self.assertEqual(self.remote_log()[:4], ["c: scripts/c.sh", "b: worker/src/main/B.scala",
                                                  "a: web/src/main/A.scala", "main moves: docs/notes.md"])
-        st, bid = A.Store(), None
+        st, bid = A.open_store(), None
         for eid in (ea, eb, ec):
             self.assertEqual(self.entry(eid)["status"], "landed", eid)
             it = st.item("change", eid)
@@ -344,7 +344,7 @@ class PushBatchTest(test_queue.QueueTest):
         ec = self.checked("c", "worker/src/main/C.scala")
         self.main_moves("docs/notes.md", "".join(f"line {i}\n" for i in range(11)) + "theirs\n")  # a's file too
         self.run_queue([ea, eb, ec])
-        st = A.Store()
+        st = A.open_store()
         for eid in (eb, ec):
             self.assertEqual((self.entry(eid)["status"], st.item("change", eid)["data"].get("batch")), ("landed", 2), eid)
         self.assertEqual(self.entry(ea)["status"], "landed")
@@ -360,7 +360,7 @@ class PushBatchTest(test_queue.QueueTest):
         self.main_moves("worker/src/main/PartB.scala", "b\n")  # the fake hook fails on PartA beside PartB
         self.run_queue([ea, eb, ec])
         self.assertEqual(self.entry(ea)["status"], "landed", "the passing prefix lands")
-        self.assertEqual(A.Store().item("change", ea)["data"].get("batch"), 1)
+        self.assertEqual(A.open_store().item("change", ea)["data"].get("batch"), 1)
         self.assertEqual(self.entry(eb)["status"], "rejected", "the confirmed culprit")
         self.assertIn("NOT LANDED", self.entry(eb)["why"])
         self.assertEqual(self.entry(ec)["status"], "landed", "the rest verified again, then landed")
@@ -374,14 +374,14 @@ class PushBatchTest(test_queue.QueueTest):
         self.main_moves()
         A.spawn_batch_executor = lambda repo, d_, bid: None  # the batch's verify round runs elsewhere
         self.run_queue([ea, eb], n=3)
-        it = A.current_batch(A.Store(), self.d)
+        it = A.current_batch(A.open_store(), self.d)
         self.assertEqual((it["state"], it["data"]["depth"], it["data"]["members"]), ("checking", "verify", [ea, eb]))
         self.reds = {"7"}
         ef = self.checked("fix", "web/src/main/Fix.scala", msg="fix: the red\n\nFixes-Red: 7")
         did = A.tick_changes(self.r.path, self.d)
         self.assertEqual(self.entry(ef)["status"], "landed", f"the red fix lands alone while the batch verifies: {did}")
         self.assertEqual(self.remote_log()[0], "fix: the red")
-        self.assertNotIn(ef, A.current_batch(A.Store(), self.d)["data"]["members"])
+        self.assertNotIn(ef, A.current_batch(A.open_store(), self.d)["data"]["members"])
 
     def test_a_change_checked_while_a_push_batch_verifies_joins_the_next_one(self):
         ea = self.checked("a", "web/src/main/A.scala")
@@ -390,7 +390,7 @@ class PushBatchTest(test_queue.QueueTest):
         real = A.spawn_batch_executor
         A.spawn_batch_executor = lambda repo, d_, bid: None
         self.run_queue([ea, eb], n=3)
-        bid = A.current_batch(A.Store(), self.d)["id"]
+        bid = A.current_batch(A.open_store(), self.d)["id"]
         ec = self.checked("c", "scripts/c.sh")  # checked on the main the batch verifies on
         ed = self.checked("d", "scripts/d.sh")
         did = A.tick_changes(self.r.path, self.d)
@@ -398,7 +398,7 @@ class PushBatchTest(test_queue.QueueTest):
         self.assertEqual(self.entry(ec)["status"], "checked", "no push under the batch")
         A.spawn_batch_executor = real
         self.run_queue([ea, eb, ec, ed])
-        st = A.Store()
+        st = A.open_store()
         self.assertEqual(st.item("batch", bid)["data"]["members"], [ea, eb], "the running batch neither held nor restarted")
         self.assertEqual({st.item("change", e)["data"].get("batch_id") for e in (ea, eb)}, {bid})
         nxt = {st.item("change", e)["data"].get("batch_id") for e in (ec, ed)}
@@ -413,7 +413,7 @@ class PushBatchTest(test_queue.QueueTest):
     # (push_alone), then sat behind the batch's ~110-min verify round (BATCH_FIRST), `checked` and past its deadline at
     # level 0 with nothing said; fix-replay, overlapping it on infra/bin/backtest-alerts, waited behind it.
     def open_outside_red(self):
-        A.Store().put_item("red", "5254bffda9d2", "fix-pending",
+        A.open_store().put_item("red", "5254bffda9d2", "fix-pending",
                            {"key": "5254bffda9d2", "workflow": "Alert backtest", "gate": False, "red_kind": "outside",
                             "runs": ["44479918396", "5", "6"]})
 
@@ -434,7 +434,7 @@ class PushBatchTest(test_queue.QueueTest):
         did = A.tick_changes(self.r.path, self.d)
         self.assertIn(f"{eo}: its push waits for {ef}'s combined-tree verification", " ".join(did))
         self.assertEqual(self.entry(eo)["status"], "checked", "no push under the red fix's verification")
-        hold = A.Store().item("change", eo)["data"]["hold"]
+        hold = A.open_store().item("change", eo)["data"]["hold"]
         self.assertEqual((hold["kind"], hold["blocker"]), ("verify", ef))
         A.check_entry(self.r.path, ef)
         A.tick_changes(self.r.path, self.d)
@@ -450,7 +450,7 @@ class PushBatchTest(test_queue.QueueTest):
         self.main_moves()
         A.spawn_batch_executor = lambda repo, d_, bid: None  # the batch's verify round runs elsewhere
         self.run_queue([ea, eb], n=3)
-        bt = A.current_batch(A.Store(), self.d)
+        bt = A.current_batch(A.open_store(), self.d)
         self.assertEqual((bt["state"], bt["data"]["depth"]), ("checking", "verify"))
         ef = self.checked("fix", "infra/bin/backtest-alerts", msg="backtest-alerts: the fix\n\nFixes-Red: 6")
         wx, _ = self.agent("replay", "infra/bin/backtest-alerts", "replay\n", msg="fix replay: backtest-alerts")
@@ -459,7 +459,7 @@ class PushBatchTest(test_queue.QueueTest):
         self.assertNotIn(f"{ef}: its push waits", " ".join(did))
         self.assertEqual(self.entry(ef)["status"], "landed", f"the red fix lands while the batch verifies: {did}")
         self.assertEqual(self.remote_log()[0], "backtest-alerts: the fix")
-        self.assertNotIn(ef, A.current_batch(A.Store(), self.d)["data"]["members"])
+        self.assertNotIn(ef, A.current_batch(A.open_store(), self.d)["data"]["members"])
         A.tick_changes(self.r.path, self.d)
         self.assertEqual(self.entry(ex)["status"], "rejected", "the overlapping change no longer waits on the fix: it "
                          "conflicts with what landed, so its author rebases now")
@@ -490,14 +490,14 @@ class PushBatchTest(test_queue.QueueTest):
         self.main_moves()
         A.spawn_batch_executor = lambda repo, d_, bid: None
         self.run_queue([ea, eb], n=3)
-        bid = A.current_batch(A.Store(), self.d)["id"]
+        bid = A.current_batch(A.open_store(), self.d)["id"]
         ec = self.checked("c", "scripts/c.sh")
         A.tick_changes(self.r.path, self.d)
-        row = next(r for r in A.change_rows(A.Store()) if r["id"] == ec)
+        row = next(r for r in A.change_rows(A.open_store()) if r["id"] == ec)
         self.assertEqual(row["state"], "checked")
         self.assertIn(f"its push waits for batch {bid}", row["hold"] or "", "land status names the hold")
         A.tick_changes(self.r.path, self.d, now_=time.time() + 20 * 60)  # past its 5-min deadline
-        st = A.Store()
+        st = A.open_store()
         it = st.item("change", ec)
         self.assertEqual((it["state"], it["level"]), ("checked", 0), "a held push is no escalation")
         evs = st.item_events("change", ec)
@@ -515,7 +515,7 @@ class PushBatchTest(test_queue.QueueTest):
 
         def pushing(repo, d, e):
             later = time.time() + 40 * 60  # the watchdog's pass, mid-push, past the change's deadline
-            seen.append([it["id"] for it, _e in A.unheld_changes(A.Store(), {e["id"]: e}, later)])
+            seen.append([it["id"] for it, _e in A.unheld_changes(A.open_store(), {e["id"]: e}, later)])
             return "the landing lease is busy"
         A.push_change = pushing
         try:
@@ -535,7 +535,7 @@ class PushBatchTest(test_queue.QueueTest):
             A.tick_changes(self.r.path, self.d, now_=time.time() + 40 * 60)
         finally:
             A.push_change = saved
-        st = A.Store()
+        st = A.open_store()
         it = st.item("change", ec)
         self.assertEqual((it["state"], it["level"]), ("checked", 0), "no escalation: the owner is not paged")
         issues = [i for i in st.items("issue", ("open",)) if i["data"]["text"].startswith(f"[change-unheld {ec}]")]
@@ -615,7 +615,7 @@ class OverlapTest(BacklogBatchTest):
         self.r.write("infra/bin/backtest-alerts", "".join(f"line {i}\n" for i in range(1, 11)))
         self.r.commit("the backtest")
         self.r.push()
-        A.Store().put_item("red", "5254bffda9d2", "fix-pending",
+        A.open_store().put_item("red", "5254bffda9d2", "fix-pending",
                            {"key": "5254bffda9d2", "workflow": "Alert backtest", "gate": False, "red_kind": "outside",
                             "runs": ["44479918396", "5", "6"]})
         wf = self.r.worktree("wt-fix", branch="fix")
@@ -625,7 +625,7 @@ class OverlapTest(BacklogBatchTest):
         ey = self.edit("younger", "infra/bin/backtest-alerts", 9, "younger's line 10", extra="docs/y.md")
         A.tick_changes(self.r.path, self.d)
         self.assertEqual(self.started, [ef], "the fix goes; the younger waits for it")
-        st = A.Store()
+        st = A.open_store()
         self.assertEqual(st.item("change", ef)["data"]["change_kind"]["reds"],
                          [{"name": "6", "red": "5254bffda9d2", "kind": "outside"}])
         hold = st.item("change", ey)["data"]["hold"]
@@ -651,7 +651,7 @@ class OverlapTest(BacklogBatchTest):
         A.tick_changes(self.r.path, self.d)
         self.assertEqual(self.started, [ea])
         A.tick_changes(self.r.path, self.d, now_=time.time() + 16 * 60)  # each past its 15-min deadline
-        st = A.Store()
+        st = A.open_store()
         for eid, blocker, path in ((ef, ea, "web/src/main/Ten.scala"), (ee, ef, "web/src/main/TestWiring.scala")):
             it = st.item("change", eid)
             self.assertEqual((it["state"], it["level"]), ("queued", 0), "a held wait is never a level up")
@@ -686,7 +686,7 @@ class OverlapTest(BacklogBatchTest):
         ey = self.edit("younger", "web/src/main/Ten.scala", 9, "younger's line 10", extra="identity/src/main/Y.scala")
         A.tick_changes(self.r.path, self.d)
         self.assertEqual(self.started, [ey], "checked now, never held behind a change waiting on the gate")
-        self.assertNotEqual(((A.Store().item("change", ey)["data"] or {}).get("hold") or {}).get("kind"), "overlap")
+        self.assertNotEqual(((A.open_store().item("change", ey)["data"] or {}).get("hold") or {}).get("kind"), "overlap")
 
     def test_a_kept_place_never_jumps_an_overlapping_check_in_flight(self):
         """The simulated 2026-11-19 seed 0: a change queued again after a conflict took its first entry's seq and so
@@ -701,14 +701,14 @@ class OverlapTest(BacklogBatchTest):
         A.save_entry(self.d, e)
         A.tick_changes(self.r.path, self.d)
         self.assertNotIn(eb, self.started, "b waits for the check in flight")
-        self.assertEqual(A.Store().item("change", eb)["data"]["hold"]["blocker"], ea)
+        self.assertEqual(A.open_store().item("change", eb)["data"]["hold"]["blocker"], ea)
 
     def test_cancelling_a_blocker_clears_the_holds_that_name_it(self):
         eo = self.edit("older", "web/src/main/Ten.scala", 0, "older's line 1", extra="identity/src/main/I.scala",
                        alone=True)
         ey = self.edit("younger", "web/src/main/Ten.scala", 9, "younger's line 10", extra="identity/src/main/Y.scala")
         A.tick_changes(self.r.path, self.d)
-        st = A.Store()
+        st = A.open_store()
         self.assertEqual(st.item("change", ey)["data"]["hold"]["blocker"], eo)
         A.cancel_submitted(eo, repo=self.r.path)
         self.assertIsNone(st.item("change", ey)["data"].get("hold"),
@@ -717,7 +717,7 @@ class OverlapTest(BacklogBatchTest):
     def test_land_status_of_a_checking_change_names_its_remote_run_and_jobs(self):
         """2026-11-20: five changes `checking`, and `land status <id>` said only "OPEN: checking for 25 min"."""
         import contextlib, io
-        st, t = A.Store(), time.time()
+        st, t = A.open_store(), time.time()
         st.put_item("change", "20261120-055534-movies-x-1", "checking", {"worktree": "/w", "head": "a" * 40})
         A.remote_mirror("20261120-055534-movies-x-1", {
             "branch": "check/x-1", "run": 44682642375, "run_status": "waiting", "pushed_at": t - 5400,
@@ -788,7 +788,7 @@ class RedPrecheckTest(BacklogBatchTest):
         self.assertEqual([c.split()[0] for c in open(self.calls).read().splitlines()], ["--checks-only"] * 3,
                          "their own checks and the pre-check; no check again at green: its verdict kept")
         for x in (ea, eb):  # stats' kept_verdicts reads the item (2026-11-21: 0 in every landing record)
-            log = (A.Store().item("change", x)["data"] or {}).get("rechecks") or []
+            log = (A.open_store().item("change", x)["data"] or {}).get("rechecks") or []
             self.assertEqual([r["kind"] for r in log], ["kept"], x)
 
     def test_a_fix_their_checks_read_gets_the_fast_check_at_green(self):
@@ -803,7 +803,7 @@ class RedPrecheckTest(BacklogBatchTest):
         """PartA and PartB pass alone and fail together (the fixture's hook): only the combined pre-check sees it."""
         ea, eb = self.red_batch(("a", "web/src/main/PartA.scala"), ("b", "worker/src/main/PartB.scala"))
         self.assertEqual(self.entry(eb)["status"], "rejected", "the culprit, its failure its own")
-        self.assertIn("NOT LANDED", A.Store().item("change", eb)["data"]["why"])
+        self.assertIn("NOT LANDED", A.open_store().item("change", eb)["data"]["why"])
         self.assertEqual(self.batch()["data"]["prechecked"]["members"], [ea])
         self.reds = set()
         self.lands_on_main("docs/fix.md")

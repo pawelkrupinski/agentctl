@@ -53,7 +53,7 @@ def close_item_landed(st, cid, why, via=None):
 def close_landed_changes(repo, d=None, store=None, now_=None):
     """Every open change whose commits are on main by content closes as LANDED: the queue entries of d (with their
     items), then the store's other open items (by their head). Returns what it did."""
-    st, t = store or Store(), now_ if now_ is not None else time.time()
+    st, t = store or open_store(), now_ if now_ is not None else time.time()
     did, carried = [], set()
     for e in waiting_entries(d, open_only=False) if d else []:
         if e.get("status") in ENTRY_FINAL or e.get("status") == "pushing":
@@ -79,7 +79,7 @@ def stranded_changes(repo, d, store=None, now_=None):
     """THE SERVER'S: each open store change item its queue (d) has no entry for -- no source, nothing will ever check,
     push or close it -- opens a STRANDED CHANGE condition naming it; its probe (the item closed, or an entry for it)
     closes it. Returns the ids."""
-    st = store or Store()
+    st = store or open_store()
     entries = {e["id"] for e in waiting_entries(d, open_only=False)}
     out = []
     for it in st.items("change"):
@@ -99,7 +99,7 @@ def stranded_changes(repo, d, store=None, now_=None):
 
 def probe_change_source(a):
     """The change item is closed, or the server's queue carries it again."""
-    it = Store().item("change", a["id"])
+    it = open_store().item("change", a["id"])
     if not it or machine_state("change", it["state"]).terminal:
         return True, f"change {a['id']} is {it['state'] if it else 'gone'}"
     d = waiting_state(a.get("repo") or movies_repo_path())[0]
@@ -116,7 +116,7 @@ def migrate_local_queue(repo, store=None):
     if host_role() != "sync" or not os.path.isdir(repo):
         return []
     d = waiting_state(repo)[0]
-    st = store or Store()
+    st = store or open_store()
     did = []
     for e in waiting_entries(d, open_only=False):
         if e.get("status") in ENTRY_FINAL:
@@ -163,7 +163,7 @@ def change_rows(store=None):
              "kind": kind_text((i.get("data") or {}).get("change_kind")) or None,
              "resolved": (i.get("data") or {}).get("autoresolved") if i["state"] == "checking" else None,
              "since": float((i.get("data") or {}).get("submitted_at") or i.get("entered_at") or 0)}
-            for i in (store or Store()).items("change") if not machine_state("change", i["state"]).terminal]
+            for i in (store or open_store()).items("change") if not machine_state("change", i["state"]).terminal]
     return sorted(rows, key=lambda r: r["id"])
 
 

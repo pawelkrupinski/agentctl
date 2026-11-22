@@ -146,7 +146,7 @@ class CommitKeysTest(Base):
         self.assertEqual([k["sha"] for k in fields["commit_keys"]], [sha])
         self.assertIn("lander", A.SUBMIT_FIELDS)
         self.assertIn("commit_keys", A.SUBMIT_FIELDS)
-        st = A.Store()
+        st = A.open_store()
         e = {**fields, "id": "e-b", "status": "queued"}
         d = os.path.join(self.tmp.name, "wd")
         os.makedirs(os.path.join(d, "entries"))
@@ -167,7 +167,7 @@ class CommitKeysTest(Base):
         wt, sha = self.change("c", {"c.txt": "c\n"})
         keys = A.commit_keys(wt, "origin/main", sha)
         cid = A.lander_note_direct(wt, sha, keys)
-        it = A.Store().item("lander", cid)
+        it = A.open_store().item("lander", cid)
         self.assertEqual(it["state"], "recorded")
         self.assertEqual(it["data"]["landed_commits"], {sha: keys[0]["patch_id"]})
         self.assertEqual(it["data"]["lander"]["worktree"], wt)

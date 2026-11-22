@@ -175,7 +175,7 @@ def fix_replay_refusal(repo, commits, store=None, proofs=None):
         return None
     try:
         with no_vault():  # THE LAPTOP'S LAND NEEDS NO VAULT: never `secrets` for this read (no token: no refusal)
-            items = [it for it in (store or Store()).items("red") if it["data"].get("key")
+            items = [it for it in (store or open_store()).items("red") if it["data"].get("key")
                      and it["state"] not in RED_TERMINAL]
     except (Exception, SystemExit):
         return None

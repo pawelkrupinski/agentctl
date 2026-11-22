@@ -39,7 +39,7 @@ class LeaseHistoryTest(unittest.TestCase):
         self.t = [1_000_000.0]
         self.st = A.Store(path=os.path.join(tempfile.mkdtemp(), "store.db"), clock=lambda: self.t[0])
         self.saved_root = os.environ.get("AGENTCTL_STATE_ROOT")
-        os.environ["AGENTCTL_STATE_ROOT"] = tempfile.mkdtemp()  # cmd_lease's own Store()
+        os.environ["AGENTCTL_STATE_ROOT"] = tempfile.mkdtemp()  # cmd_lease's own open_store()
 
     def tearDown(self):
         if self.saved_root is None:
@@ -66,7 +66,7 @@ class LeaseHistoryTest(unittest.TestCase):
     def test_lease_list_shows_the_live_and_the_lately_freed_unless_all(self):
         import contextlib, io, types
         now = A.time.time()
-        st = A.Store()
+        st = A.open_store()
         a = st.acquire("t/live", "me", 600, 900)
         b = st.acquire("t/recent", "me", 600, 900)
         st.release("t/recent", b["epoch"], b["secret"])

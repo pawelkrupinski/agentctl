@@ -208,8 +208,8 @@ class CiWhyTest(FakeForge):
         # ...so a production fix naming #42 goes while #43 is red; one naming #39 (before the green #40) waits
         from test_agentctl import Repo
         r = Repo(self.tmp.name)
-        saved_store = A.Store
-        A.Store = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no store in this test"))
+        saved_store = A.open_store
+        A.open_store = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no store in this test"))
         try:
             def fix(run_no):
                 r.write("web/src/main/scala/A.scala", f"fix {run_no}\n")
@@ -218,7 +218,7 @@ class CiWhyTest(FakeForge):
             self.assertTrue(A.must_wait(r.path, [fix(39)], reds), "a fix naming an older episode's run waits")
             self.assertTrue(A.must_wait(r.path, [fix(41)], reds), "a fix naming a run failing another way waits")
         finally:
-            A.Store = saved_store
+            A.open_store = saved_store
 
     def test_a_gating_workflow_not_on_main_yet_gates_nothing_and_the_rest_is_read(self):
         # 2026-11-08 16:35-18:10: agentctl's GATING named identity-takes.yml before the movies commit adding it reached

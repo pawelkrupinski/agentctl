@@ -32,7 +32,7 @@ STATUS_BATCH_OPEN = ("blocked-red", "assembling", "checking", "pushing", "bisect
 def status_store():
     """The store the page reads: the remote one with short timeouts when the laptop is the sync, else the local one."""
     url = store_url()
-    return RemoteStore(url, timeout=STATUS_STORE_TIMEOUT) if url else Store()
+    return RemoteStore(url, timeout=STATUS_STORE_TIMEOUT) if url else open_store()
 
 
 def status_run_url(repo, number, run=None):
@@ -1012,7 +1012,7 @@ def issue_escalation_text(it, t):
 def tick_issues(st=None, now_=None):
     """The reconciler's step: the most overdue open issue escalated, at most one per ISSUE_ESCALATE_GAP. Returns what
     it did."""
-    st = st or Store()
+    st = st or open_store()
     t = now_ if now_ is not None else st.clock()
     if t - float(st.meta_get("issue_escalated_at", 0) or 0) < env_num("AGENTCTL_ISSUE_ESCALATE_GAP", ISSUE_ESCALATE_GAP):
         return []
@@ -1037,7 +1037,7 @@ def status_issues(st, t):
 
 def cmd_issue(a):
     """agentctl issue "<text>" | --list | --close ID [--note N]"""
-    st = Store()
+    st = open_store()
     by = claimant()
     try:
         if a.close:
