@@ -57,6 +57,11 @@ movies model (movies "Code quality ratchets" and "Coupling"):
   names it uses that another part defines (a FOUNDATION -- a part using no part but other foundations, a leaf
   helper like `statefile` -- is no collaborator: extracting a concept into its own part never raises its users'
   fan-out), and mypy checks the parts concatenated in `PARTS` order.
+- REAL MODULES (`MODULES`, loaded before every namespace part: `devtools/placemodules.py`) import the standard
+  library and other modules only, so a module's dependencies are its `from agentctl.<module> import` lines. What a
+  module must not import -- the remote store, a missing token's inbox condition -- is wired at the composition root
+  (cli: `wire_store(process_store)`, `wire_token_missing_note(token_unavailable_note)`), never reached by a module
+  calling up.
 - The migration's tools (`devtools/`, tested by `tests/test_devtools.py`): `defgraph.py --cycles` (the scope-aware
   graph of every top-level definition, and its cycles), `movedefs.py` and `split_part.py` (pure moves between parts),
   `sameast.py` / `samecode.py` (their proofs: the same statements, the same bytecode), `mkmodule.py` (a part into a
