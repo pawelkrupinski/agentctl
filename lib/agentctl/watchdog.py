@@ -68,6 +68,25 @@ def change_progress(st, it, t):
     return None
 
 
+def w1_gate_reds(o_r):
+    """(seconds the gate has been red, the red gate rows as "<workflow> #N since HH:MMZ", comma-joined) read from the
+    CI snapshot itself; (0.0, "") when every gate workflow is green, (0.0, None) with no snapshot. 2026-11-22: the gate
+    was red on Identity takes #349 for 7 h while Main was green, and W1 said "waiting for green while main is green":
+    it read the gate from the PUBLISHED summary line, which goes unread past 180 s (a starved processor), and named no
+    row."""
+    snap = ci_state_load(o_r)
+    if not snap:
+        return 0.0, None
+    reds = [g for g in snap.get("gate") or []
+            if (g.get("decided") or {}).get("conclusion") not in (None, "success") and g.get("since")]
+    if not reds:
+        return 0.0, ""
+    starts = [parse_time(g["since"]).timestamp() for g in reds]
+    rows = ", ".join(f"{g.get('workflow') or g.get('name') or '?'} #{(g.get('decided') or {}).get('number')} since "
+                     f"{hhmmz(parse_time(g['since']).timestamp())}" for g in reds)
+    return time.time() - min(starts), rows
+
+
 def inv_w1():
     """W1: no UNLANDED change of the one queue (the store's open items, after the landed-by-content look) older than
     W1_MAX (while main is red: past the red's own start) is outside what its state's table allows (change_progress);
@@ -81,12 +100,7 @@ def inv_w1():
         return True, "no change waits"
     t = time.time()
     oldest = min(open_, key=lambda r: r["since"])
-    line, _e = cached_gate_summary(SHORT["movies"])
-    red_since = 0.0
-    if line and line.startswith("gate RED"):
-        snap = ci_state_load(SHORT["movies"]) or {}
-        starts = [parse_time(g["since"]).timestamp() for g in snap.get("gate") or [] if g.get("since")]
-        red_since = (time.time() - min(starts)) if starts else 0.0
+    red_since, holding = w1_gate_reds(SHORT["movies"])
     lim = env_num("AGENTCTL_W1_MAX", W1_MAX)
     conds = open_conditions(st)
     bad = None
@@ -98,7 +112,11 @@ def inv_w1():
         stranded = any(c["key"] == f"change-stranded-{r['id']}" for c in conds)
         off = "STRANDED, no queue entry carries it" if stranded else change_progress(st, it, t) if it else "no item"
         if off is None and r["state"] == "waiting" and not red_since:
-            off = "waiting for green while main is green"
+            off = "waiting for green while the gate is green" if holding is not None else \
+                "waiting for green, the gate unread (no CI snapshot)"
+        elif r["state"] == "waiting" and holding:
+            off = f"{off}; " if off else ""
+            off += f"held by the red gate: {holding}"
         if off is None and age < W1_HARD_FACTOR * lim + (red_since or 0):
             continue
         if off is None and it and hold_recovers_itself(change_hold_visible(st, it, {}, t)):
@@ -111,7 +129,7 @@ def inv_w1():
                       "within what its state's table allows")
     r, age, off = bad
     return False, f"unlanded change {r['id']} ({r['state']}: {off}) is {fmt_age(age)} old" + \
-        (f", main red for {fmt_age(red_since)}" if red_since else "")
+        (f", the gate red for {fmt_age(red_since)} ({holding})" if red_since else "")
 
 
 def snap_reds(snap):

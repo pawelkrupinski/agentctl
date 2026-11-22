@@ -197,7 +197,7 @@ class OneViewTest(OneQueueBase):
         try:
             ok, detail = A.inv_w1()
             self.assertFalse(ok)
-            self.assertIn("x-92 (waiting: waiting for green while main is green) is 11 h old", detail)
+            self.assertIn("x-92 (waiting: waiting for green, the gate unread (no CI snapshot)) is 11 h old", detail)
             self.land_rebased(head)
             A._landed_looked.clear()
             ok, detail = A.inv_w1()  # its own landed look closes x-92 before it counts

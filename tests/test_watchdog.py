@@ -164,12 +164,37 @@ class WatchdogTest(unittest.TestCase):
         self.run_wd()
         self.assertEqual([c for c in A.open_conditions() if c["key"] == "invariant-W1"], [])
 
+    def test_w1_reads_the_gate_from_its_snapshot_and_names_the_red_row_holding_a_waiting_change(self):
+        """2026-11-22: the gate was red on Identity takes #349 (Main green) and W1 said "waiting for green while main
+        is green": it read the gate from the published summary line, unread past 180 s on a starved laptop."""
+        st_ = A.Store()
+        st_.put_item("change", "impact", "waiting", {"head": "0" * 40, "submitted_at": time.time() - 4 * 3600})
+        def snap(takes_since):
+            iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+            return {"ci": {"repo": A.SHORT["movies"], "at": time.time(), "gate": [
+                {"name": "Main", "decided": {"conclusion": "success", "number": 2816}, "since": None},
+                {"name": "Identity takes", "decided": {"conclusion": "failure", "number": 349},
+                 "since": iso(time.time() - takes_since)}]}}
+        real = A.state_read
+        self.addCleanup(setattr, A, "state_read", real)
+        A.state_read = lambda: snap(7 * 3600)
+        ok, detail = A.inv_w1()
+        self.assertTrue(ok, "a change waiting behind a 7-h red is within the red's own start + its bound: " + detail)
+        A.state_read = lambda: snap(3600)  # red for 1 h, the change 4 h old: past red + bound, named with its row
+        ok, detail = A.inv_w1()
+        self.assertFalse(ok)
+        self.assertNotIn("main is green", detail)
+        self.assertIn("held by the red gate: Identity takes #349 since", detail)
+        A.state_read = lambda: {}
+        ok, detail = A.inv_w1()
+        self.assertIn("the gate unread", detail)
+
     def test_w1_from_the_store_and_w2_from_the_store(self):
         st_ = A.Store()  # W1: the one queue, the store's open change items, by their submission time
         st_.put_item("change", "e1", "waiting", {"head": "0" * 40, "submitted_at": time.time() - 3 * 3600})
         ok, detail = A.inv_w1()
         self.assertFalse(ok)
-        self.assertIn("e1 (waiting: waiting for green while main is green) is 3 h", detail)
+        self.assertIn("e1 (waiting: waiting for green", detail)
         it = st_.item("change", "e1")
         st_.transition("change", "e1", "landed", it["version"])
         self.assertTrue(A.inv_w1()[0])  # W2 (step 10): a red with no live lease, open offer, fix or block -- read from the store
