@@ -384,6 +384,37 @@ class CiWhyTest(FakeForge):
         self.assertIn("[infra] takes (poland): failed in setup step 'Runner preflight'", out)
         self.assertNotIn("TEST FAILURE", out)
 
+    def test_a_build_tool_failing_before_any_test_ran_is_the_harness_never_a_test_red(self):
+        # movies Order independence #113 (run 45030284135): sbt's launcher could not write its home inside the
+        # no-network wrapper; its `[error]` lines made a TEST FAILURE of a leg where no test had run
+        self.scenario([{**job("takes (poland)", conclusion="failure"), "steps": [step("Set up job", "success"),
+                                                                                 step("Unit specs, one suite at a time in that order", "failure")]}],
+                      "takes (poland)\tUnit specs\t2026-11-22T14:24:09Z mkdir: cannot create directory '/root': Permission denied\n"
+                      "takes (poland)\tUnit specs\t2026-11-22T14:24:09Z java.nio.file.AccessDeniedException: /root/.sbt/1.0/java9-rt-ext-eclipse_adoptium_27/rt.jar\n"
+                      "takes (poland)\tUnit specs\t2026-11-22T14:24:09Z [error] [launcher] error during sbt launcher: java.nio.file.AccessDeniedException: "
+                      "/root/.sbt/1.0/java9-rt-ext-eclipse_adoptium_27/rt.jar\n"
+                      "takes (poland)\tUnit specs\t2026-11-22T14:24:09Z [error] [launcher] error during sbt launcher: java.io.IOException: failed to "
+                      "create lock file /root/.sbt/boot/sbt.boot.lock\n"
+                      "takes (poland)\tUnit specs\t2026-11-22T14:24:10Z ##[error]Process completed with exit code 1.\n")
+        rc, out, _ = self.why()
+        self.assertIn("[infra] takes (poland): HARNESS: the build tool or the test wrapper failed before any test ran", out)
+        self.assertIn("error during sbt launcher", out)
+        self.assertNotIn("TEST FAILURE", out)
+
+    def test_gradle_offline_missing_an_artifact_is_the_harness_but_a_failed_test_beside_it_is_a_test_red(self):
+        log = ("takes (poland)\tRobolectric\t2026-11-22T14:12:01Z > Task :app:mergeDebugUnitTestManifest FAILED\n"
+               "takes (poland)\tRobolectric\t2026-11-22T14:12:01Z    > Could not download espresso-core-3.5.0.aar "
+               "(androidx.test.espresso:espresso-core:3.5.0): No cached version available for offline mode\n"
+               "takes (poland)\tRobolectric\t2026-11-22T14:12:02Z ##[error]Process completed with exit code 1.\n")
+        steps = [step("Set up job", "success"), step("Robolectric tests, classes and methods in a seeded order", "failure")]
+        self.scenario([{**job("takes (poland)", conclusion="failure"), "steps": steps}], log)
+        rc, out, _ = self.why()
+        self.assertIn("[infra] takes (poland): HARNESS:", out)
+        self.scenario([{**job("takes (poland)", conclusion="failure"), "steps": steps}],
+                      log + "takes (poland)\tRobolectric\t2026-11-22T14:12:03Z 120 tests completed, 1 failed\n")
+        rc, out, _ = self.why()
+        self.assertNotIn("HARNESS", out)
+
     def test_an_outside_service_refusing_the_runs_key_is_never_a_test_failure(self):
         # Record scrape fixtures #2426: the preflight found the OMDb key's day spent before any leg started -- no code ran.
         self.scenario([{**job("preflight", conclusion="failure"), "steps": [step("OMDb and TMDB still take the keys", "failure")]}],

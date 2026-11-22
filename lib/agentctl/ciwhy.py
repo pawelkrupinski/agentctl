@@ -926,6 +926,11 @@ def explain_run_jobs(o_r, run, tail, repo=None):
             jl = [ov] + [l for l in jl if ORDER_VERDICT.search(l) is None]
             why = f"{why}; {'REGRESSION, not an order dependence' if is_regression(ov) else 'an order dependence (or a flake)'}"
             regressions += [j["name"]] if is_regression(ov) else []
+        # THE HARNESS FAILED BEFORE ANY TEST RAN (classify.py): infra, whatever `[error]` the build tool printed
+        hf = harness_failure(l for jn, l in log_entries(log) if jn == j["name"]) if log and kind == "test" and not ov else None
+        if hf:
+            kind, why = "infra", f"HARNESS: the build tool or the test wrapper failed before any test ran (not a test red): {hf[:160]}"
+            jl = [hf] + [l for l in jl if l != hf]
         if unread and not jl and not setup:
             kind, why = "unclear", (f"LOG UNREADABLE ({unread[-1]}): no log was read, so nothing says infra or test -- "
                                     f"read `gh run view {rid} --log-failed` again; never rerun on this alone")

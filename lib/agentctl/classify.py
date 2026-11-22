@@ -117,6 +117,27 @@ def order_verdict(lines):
     return None
 
 
+# THE HARNESS FAILED BEFORE ANY TEST RAN (movies Order independence #113, run 45030284135, 2026-11-22): the scala legs'
+# sbt launcher could not write its home (`[error] [launcher] error during sbt launcher: AccessDeniedException:
+# /root/.sbt/...`) inside scripts/ci/no-network, and the android leg's --offline Gradle lacked an artifact its warm step
+# had not fetched ("No cached version available for offline mode"). sbt's `[error]` made each a TEST FAILURE, though no
+# test had run: the build tool or the test wrapper failed. When the job's log shows no test ran, it is infra (the
+# harness's), its fixer a diagnose-then-fix of the harness, never one sent after a test.
+HARNESS_LOG = re.compile(r"error during sbt launcher|failed to create lock file \S*sbt\.boot\.lock|"
+                         r"No cached version available for offline mode|^no-network: |::error title=no-network::")
+TEST_RAN = re.compile(r"\*\*\* FAILED|\*\*\* \d+ TESTS? FAILED|\bFailed tests:|Tests: succeeded|There were failing tests|"
+                      r"tests completed, \d+ failed|Test Case '.*' failed|^FAILED alone: |\bfail alone under seed\b")
+
+
+def harness_failure(lines):
+    """The first harness line of a job's log when no line says a test ran, else None."""
+    lines = [l or "" for l in lines]
+    hit = next((l for l in lines if HARNESS_LOG.search(l)), None)
+    if hit is None or any(TEST_RAN.search(l) for l in lines):
+        return None
+    return hit.strip()[:300]
+
+
 def is_regression(line):
     return str(line or "").startswith("REGRESSION, not an order dependence:")
 

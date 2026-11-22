@@ -132,3 +132,14 @@ class OrderVerdict(unittest.TestCase):
         p = A.fixer_prompt(u, "/wt", "/brief")
         self.assertNotIn("COMMIT THAT BROKE THEM", p)
         self.assertIn("find the state one test leaves for another", p)
+
+
+class HarnessFailure(unittest.TestCase):
+    """movies Order independence #113: the build tool failed inside the test wrapper before any test ran."""
+    def test_a_launcher_error_with_no_test_run_is_the_harness(self):
+        lines = ["[error] [launcher] error during sbt launcher: java.io.IOException: failed to create lock file /root/.sbt/boot/sbt.boot.lock"]
+        self.assertTrue(A.harness_failure(lines).startswith("[error] [launcher] error during sbt launcher"))
+        self.assertIsNone(A.harness_failure(lines + ["[error] Failed tests:", "[error] \ta.ASpec"]))
+        self.assertIsNone(A.harness_failure(["[error] Failed tests:"]))
+        self.assertTrue(A.harness_failure(["no-network: NO_NETWORK_MODE=netns, but this runner allows no network namespace"]))
+

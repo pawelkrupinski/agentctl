@@ -503,7 +503,10 @@ main. For each red run it shows:
     each read as an order red;
   - `INFRA-SHAPED`, with the `rerun --failed` command. Covers failures in a setup step (a step named `Runner
     preflight ...` too: Order independence's runner checks, `scripts/ci/order-preflight.sh` -- a missing simulator, a
-    wrong JDK, BSD tools on a Linux leg -- and an emulator that never booted), a 0-length log,
+    wrong JDK, BSD tools on a Linux leg -- and an emulator that never booted), `HARNESS` (the build tool or the test
+    wrapper failed before any test ran: sbt's `[launcher] error during sbt launcher`, Gradle's `No cached version
+    available for offline mode`, a `no-network:` setup error -- with no line in the job's log saying a test ran;
+    Order independence #113), a 0-length log,
     `artifact already exists`, ENOENT, docker, disk or connection errors, an OOM kill (exit 137), a runner shutdown
     or lost runner, `No test results found for`. A test verdict is read only from a test runner's own line (scalatest's
     `*** FAILED`, sbt's `[error]`): GitHub's `##[error]` step-end annotation is none, or no infra signature would win
