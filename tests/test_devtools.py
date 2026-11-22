@@ -11,6 +11,7 @@ ROOT = os.path.dirname(HERE)
 DEV = os.path.join(ROOT, "devtools")
 sys.path.insert(0, DEV)
 import defgraph  # noqa: E402
+import partdeps  # noqa: E402
 
 PARTS = {
     "core": """\
@@ -98,6 +99,34 @@ class DefinitionGraphTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("cycle of 3: entry@top, helper@mid, other@mid", r.stdout)
         self.assertEqual(tool("defgraph", fake_lib(), "--cycles").returncode, 0)
+
+
+class PartDepsTest(unittest.TestCase):
+    def test_a_part_is_blocked_by_the_namespace_definitions_it_reads_and_never_by_a_module(self):
+        found, defs = partdeps.blockers(fake_lib())
+        self.assertEqual(found, {"mid": set(), "top": {("entry", "other")}})  # mid reads core's root: a module
+        r = tool("partdeps", fake_lib(), "--top", "5")
+        self.assertEqual(r.stdout.splitlines(), ["0 mid ", "1 top other@mid"], r.stderr)
+
+
+class SuiteAtTest(unittest.TestCase):
+    def test_the_suite_runs_on_a_snapshot_of_the_revision_not_the_worktree(self):
+        repo = tempfile.mkdtemp(prefix="devtools-")
+        os.makedirs(os.path.join(repo, "tests"))
+        with open(os.path.join(repo, "tests", "run.py"), "w") as f:
+            f.write("print(open('marker').read())\nraise SystemExit(3)\n")
+        with open(os.path.join(repo, "marker"), "w") as f:
+            f.write("committed")
+        for args in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "x"]):
+            subprocess.run(["git", "-C", repo, *args], check=True, capture_output=True)
+        with open(os.path.join(repo, "marker"), "w") as f:
+            f.write("edited after")
+        out = tempfile.mkdtemp(prefix="devtools-")
+        r = subprocess.run(["bash", os.path.join(DEV, "suite-at.sh"), repo, "HEAD", out], capture_output=True,
+                           text=True, timeout=60, env=dict(os.environ, SUITE_CMD=f"{sys.executable} tests/run.py"))
+        self.assertEqual(r.returncode, 3, r.stderr)
+        with open(os.path.join(out, "suite.log")) as f:
+            self.assertEqual(f.read().split(), ["committed", "exit", "3"])
 
 
 class PureMoveTest(unittest.TestCase):
