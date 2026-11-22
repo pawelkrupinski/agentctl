@@ -1,5 +1,45 @@
 # agentctl, part `branches`: branch runs (the snapshot, branch reds and their route), the pinned recording, the published gate line.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import datetime as dt
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.parse
+from agentctl.core import (
+    HOME, dispatches_dir, env_num, err, fmt_age, git, git_ok, host_role, process_cache, reds_dir, remote, slug)
+from agentctl.timefmt import ts
+from agentctl.statefile import read_record, write_json
+from agentctl.forge import RED_CONCLUSIONS, RUN_FIELDS, api, forge_argv, forge_env, forge_release_asset, gh_json
+from agentctl.classify import (
+    CREDENTIAL_STEP, INFRA_LOG, KEY_REFUSED_LOG, NOISE, NOT_A_FAILURE, RUNNER_FAILED, SETUP_STEP, STRONG,
+    UNKNOWN_LOG, WEAK, classify_job, log_verdict_version, norm_line)
+from agentctl.store import open_store
+from agentctl.procs import lsof_cwds, proc_alive, ps
+from agentctl.workflows import STEP_TIMED_OUT
+from agentctl.waitingdir import waiting_entries, waiting_state
+from agentctl.fixerrecords import own_fixer_record_path
+from agentctl.inboxentry import inbox_entries, inbox_write
+from agentctl.wait import (
+    ANNOTATION, DRIFT_LINE, FLIP_HEADER, FLIP_KEY_MAX, FLIP_ROW, FLIP_TAKES, choose_job_lines, drift_key,
+    failed_jobs_log, flip_key_line, flip_listings, job_log_lines, relevant_lines, step_window_lines)
+from agentctl.allowedpaths import allowed_path
+from agentctl.owned import default_repo
+from agentctl.worktrees import gitdir_activity, merged_reason, worktree_of
+from agentctl.dispatches import (
+    branch_base, branch_red_id, dispatch_key, dispatch_records, orphan_why, owner_gone, owner_of, owner_text,
+    record_dispatch, save_dispatch, tracked_branch, worktree_holding)
+from agentctl.inbox import INBOX_TAIL
+from agentctl.jvmreap import AGENT_WORK
+from agentctl.cistate import state_read, state_update
+from agentctl.ciwhy import (
+    VERDICT_COMPLETE_JOB, _gate_lists, _outside_lists, explain_run_jobs, job_is_phantom, job_is_verdict_report,
+    jobs_no_verdict, resolve_run, run_failed_attempt, run_failed_jobs)
+
 
 # inputs that change where or how a run runs, or how much of it, never what main's run of the same workflow would decide
 INPUTS_NOT_PREDICTIVE = frozenset({"tier", "runner", "profile", "jvm-options", "heap", "reuse-run", "takes-base",
@@ -362,20 +402,6 @@ def route_branch_reds(o_r, snap, now_=None):
     return written
 
 
-def predict_units(o_r, snap):
-    """Red units for the branch reds that PREDICT MAIN RED: gate reds (claimed, RED UNCLAIMED, dispatched) before main
-    fails. Their signatures are the run's: main failing the same way later is the same red."""
-    units = []
-    for e in branch_reds(snap):
-        if not entry_predicts(e):
-            continue
-        run = dict(e["run"], headBranch=e["branch"], workflowName=e["workflow"])
-        for u in gate_red_units(o_r, [(e["workflow"], run, [run], True)]):
-            u["predicts"] = e["branch"]
-            units.append(u)
-    return units
-
-
 def branch_lines(snap):
     """ci-why's section on the branch reds."""
     reds = branch_reds(snap)
@@ -506,65 +532,6 @@ def cached_gate_summary(o_r, now=None):
 
 
 _last_gate_publish = [0.0]
-
-
-def maybe_publish_gate(repo):
-    """The processor's loop, at most every GATE_PUBLISH_INTERVAL s: read the gate (it holds the token) and publish the
-    summary line for the status line. Never fatal; a failed read leaves the old file to age out (fail-closed)."""
-    try:  # a push to main since the last publish (mark_gate_dirty): publish now, not at the 45 s mark
-        marked = os.path.getmtime(gate_dirty_path()) > _last_gate_publish[0]
-    except OSError:
-        marked = False
-    if not marked and time.time() - _last_gate_publish[0] < env_num("AGENTCTL_GATE_PUBLISH", 45):
-        return
-    _last_gate_publish[0] = time.time()
-
-    def work():
-        try:
-            o_r = slug(repo)
-            snap = ci_state_refresh(o_r, write=False)  # ONE read of GitHub per cycle; everything below reads it
-            refresh_pinned_recording(o_r, repo)  # what PREDICTS MAIN RED compares a branch run's recording with
-            ci_state_write(snap)
-            # THE RED TICK ON THIS SNAPSHOT before its line is published: every red it shows is an item, offered or
-            # held (never NOBODY). Bounded: a dispatch's worktree checkout finishes on the tick's own thread
-            if not run_bounded("red-tick", lambda: red_tick_repo(repo, snap), env_num("AGENTCTL_ASSIGN_BOUND", 20)):
-                err("red tick: still running; the gate line is published meanwhile")
-            _red, line = ci_why(o_r, summary=True, snap=snap, repo=repo)
-            publish_gate_summary(o_r, line.splitlines()[-1], epoch=snap["at"])
-        except (Exception, SystemExit) as e:
-            err(f"gate summary: skipped ({str(e).replace('agentctl: ', '')[:200]})")
-            return
-        try:
-            for text in settle_branch_reds(o_r, snap):
-                err(f"branch reds: {text}")
-        except (Exception, SystemExit) as e:
-            err(f"branch reds: not settled ({str(e).replace('agentctl: ', '')[:200]})")
-        try:
-            for routed in route_branch_reds(o_r, snap):
-                err(f"branch reds: {routed}")
-        except (Exception, SystemExit) as e:
-            err(f"branch reds: not routed ({str(e).replace('agentctl: ', '')[:200]})")
-    if not run_bounded("gate-publish", work, env_num("AGENTCTL_STEP_BOUND", 120)):
-        err("gate summary: still reading from an earlier cycle (the loop goes on)")
-
-
-def cmd_ci_why(a):
-    o_r = slug(a.repo) if a.repo else default_repo()
-    target = None if a.target in (None, "main") else a.target.lstrip("#")
-    if target is not None and not target.isdigit():
-        raise SystemExit("agentctl: ci-why takes a run id, a run number (#N) or `main`")
-    if getattr(a, "cached", False):
-        if not getattr(a, "summary", False) or target:
-            raise SystemExit("agentctl: ci-why --cached goes with --summary and main")
-        # NEVER LIVE WORK (2026-10-28: a stale file sent the status line's 15 s refresh into a 60 s live read): the
-        # processor's published line, or -- stale or missing -- what it last said, marked with its age. Live reads
-        # belong to the processor's publish step only.
-        text = status_gate_text(state_read(), time.time(), o_r)  # the status model's gate text, for this repo
-        print(text)
-        return 1 if text.startswith("gate RED") else 0 if GATE_LINE.match(text) else 2  # 2: UNREAD / ? / NETWORK
-    red, text = ci_why(o_r, a.tail, target, summary=getattr(a, "summary", False))
-    print(text)
-    return 1 if red else 0
 
 
 def signature(workflow, job, line):

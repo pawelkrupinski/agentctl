@@ -476,3 +476,14 @@ UNDECIDED = ("cancelled", "skipped", "neutral", "")
 
 def is_cancelled(r: dict[str, Any]) -> bool:
     return r.get("status") == "completed" and (r.get("conclusion") or "") in UNDECIDED
+
+
+def run_id_of_number(o_r, n):
+    """The run id whose run NUMBER (run_number, the #N of every link) is n, or None."""
+    try:
+        # listing: the newest 100 matched by number (GitHub filters by none); None is 'not found', callers fall back
+        runs = forge_actions_runs(o_r, run_number=n, limit=5)
+    except (Exception, SystemExit):
+        return None
+    hit = next((x for x in runs if str(x.get("run_number")) == str(n)), None)
+    return hit and hit.get("id")

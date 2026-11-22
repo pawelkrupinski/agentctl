@@ -441,3 +441,17 @@ def episode_names(o_r, name, decided):
         err(f"could not read {name} #{decided.get('number')}'s failures ({str(e)[:120]}): only that run counts as its red")
         return set()
     return set().union(*(set(u.get("names") or ()) for u in units))
+
+
+def predict_units(o_r, snap):
+    """Red units for the branch reds that PREDICT MAIN RED: gate reds (claimed, RED UNCLAIMED, dispatched) before main
+    fails. Their signatures are the run's: main failing the same way later is the same red."""
+    units = []
+    for e in branch_reds(snap):
+        if not entry_predicts(e):
+            continue
+        run = dict(e["run"], headBranch=e["branch"], workflowName=e["workflow"])
+        for u in gate_red_units(o_r, [(e["workflow"], run, [run], True)]):
+            u["predicts"] = e["branch"]
+            units.append(u)
+    return units

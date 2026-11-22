@@ -19,30 +19,6 @@ def gate_unread_spell(o_r, why):
     return line if c else None
 
 
-def resolve_run(o_r, n):
-    """(workflow, run) of the run on main a number or id names, else (None, None)."""
-    n = str(n).lstrip("#")
-    for key in ("number", "databaseId"):  # a run NUMBER first (the repo's convention), an id only failing that
-        for lists in (_gate_lists, _outside_lists):
-            for name, runs in lists.items():
-                for r in runs:
-                    if str(r.get(key)) == n:
-                        return name, r
-    try:
-        # listing: a number not in the newest 200 falls back to its run id (run_id_of_number), then says unknown
-        runs = gh_json(o_r, "run", "list", "--branch", "main", "--limit", "200", "--json", RUN_FIELDS)
-        r = next((r for r in runs if str(r.get("number")) == n), None)
-        if r is None:
-            rid = run_id_of_number(o_r, n) if n.isdigit() else None
-            r = next((r for r in runs if str(r.get("databaseId")) == str(rid or n)), None)
-            if r is None:
-                r = gh_json(o_r, "run", "view", str(rid or n), "--json", RUN_FIELDS)
-        return r.get("workflowName"), r
-    except (Exception, SystemExit) as e:
-        err(f"red: could not look up run {n} ({str(e)[:120]}): claimed by its number only")
-        return None, None
-
-
 def red_run_units(o_r, n):
     """The units of one red run (for claim / dispatch / block by run); `local`: main's own local-checks red."""
     if str(n) == "local":

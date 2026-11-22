@@ -5,11 +5,11 @@ mypy-errors	alerts	119
 mypy-errors	ask	45
 mypy-errors	batch	358
 mypy-errors	blame	145
-mypy-errors	branches	172
+mypy-errors	branches	149
 mypy-errors	buildview	42
 mypy-errors	changekind	28
-mypy-errors	cireport	66
-mypy-errors	ciwhy	120
+mypy-errors	cireport	85
+mypy-errors	ciwhy	124
 mypy-errors	classify	1
 mypy-errors	cleanup	54
 mypy-errors	cli	12
@@ -24,7 +24,7 @@ mypy-errors	fixerenv	3
 mypy-errors	fixerland	31
 mypy-errors	fixerlife	67
 mypy-errors	fixersession	38
-mypy-errors	forge	68
+mypy-errors	forge	70
 mypy-errors	gating	33
 mypy-errors	generated	51
 mypy-errors	ghapp	34
@@ -36,7 +36,7 @@ mypy-errors	inbox	17
 mypy-errors	jvmreap	42
 mypy-errors	land	20
 mypy-errors	lander	34
-mypy-errors	landwatch	64
+mypy-errors	landwatch	62
 mypy-errors	laptoprole	11
 mypy-errors	live	89
 mypy-errors	maint	40
@@ -61,7 +61,7 @@ mypy-errors	queueuntil	18
 mypy-errors	recovery	54
 mypy-errors	red	49
 mypy-errors	redask	13
-mypy-errors	redblock	28
+mypy-errors	redblock	24
 mypy-errors	redclaim	28
 mypy-errors	redcrash	52
 mypy-errors	reddispatch	61
@@ -75,7 +75,7 @@ mypy-errors	redpending	76
 mypy-errors	redreplay	19
 mypy-errors	redrepos	12
 mypy-errors	redretired	63
-mypy-errors	redseen	75
+mypy-errors	redseen	79
 mypy-errors	redstep	107
 mypy-errors	redtick	107
 mypy-errors	reduntracked	45
