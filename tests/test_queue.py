@@ -340,6 +340,40 @@ class QueueTest(WaitingTest):
         self.assertNotIn("a: one", self.remote_log())
         self.assertIn("pre-push checks failed", [e for e in self.inbox() if e["kind"] == "NOT_LANDED"][0]["verdict"])
 
+    def test_a_first_network_shaped_check_failure_is_an_infra_requeue_never_the_changes_rejection(self):
+        """2026-11-22 (packet loss on the tunnel to ci-runner): a change's first check that failed reaching the network
+        -- no test failed, the remote did not answer -- went to judge_failure, which filed it "(no failing test named)"
+        against the change: NOT LANDED for the network's blip. Only a change that had been re-queued for the network
+        before was re-queued again. Now any network-shaped failure with no test runner's failure line is infra."""
+        hook = os.path.join(self.r.path, "scripts/hooks/pre-push")
+        flag = os.path.join(self.tmp.name, "net-failed-once")
+        self.r.write("scripts/hooks/pre-push", open(hook).read().replace(
+            "exit 0\n", f"if git ls-files | grep -q NetFlake && [ ! -e {flag} ]; then touch {flag}; "
+            "echo \"fatal: unable to access 'https://github.com/o/g.git/': Could not resolve host: github.com\"; "
+            "echo '! pre-push sbt FAILED (3s)'; exit 1; fi\nexit 0\n", 1))
+        self.r.commit("a hook whose first run cannot reach the network")
+        self.r.push()
+        wt, _ = self.agent("a", "web/src/main/NetFlake.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        A.check_entry(self.r.path, eid)
+        A.project_events()
+        self.assertTrue(os.path.exists(flag), "its check ran, and failed on the network")
+        e = self.entries()[eid.rsplit("-", 1)[-1]]
+        self.assertEqual((e["status"], e.get("infra_reason")), ("queued", A.NETWORK_REASON))
+        self.assertEqual([x for x in self.inbox() if x["kind"] == "NOT_LANDED"], [], "the network's blip is no verdict")
+
+    def test_a_test_failure_beside_a_network_line_is_still_the_changes(self):
+        hook = os.path.join(self.r.path, "scripts/hooks/pre-push")
+        self.r.write("scripts/hooks/pre-push", open(hook).read().replace(
+            "exit 0\n", "if git ls-files | grep -q NetFlake; then echo 'Connection refused'; "
+            "echo '[info] - should parse *** FAILED ***'; echo '[error] Failed tests: a.ASpec'; exit 1; fi\nexit 0\n", 1))
+        self.r.commit("a hook whose test fails beside a network line")
+        self.r.push()
+        wt, _ = self.agent("a", "web/src/main/NetFlake.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        self.assertEqual(self.check(eid), 1)
+        self.assertIn("pre-push checks failed", [x for x in self.inbox() if x["kind"] == "NOT_LANDED"][0]["verdict"])
+
     def test_a_hook_without_the_verification_gets_the_full_round(self):
         hook = os.path.join(self.r.path, "scripts/hooks/pre-push")
         self.r.write("scripts/hooks/pre-push", open(hook).read().replace("--verify-only", "--other"))

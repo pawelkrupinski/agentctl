@@ -148,7 +148,7 @@ ZERO = "0" * 40
 
 
 # ---------------------------------------------------------------- helpers
-def err(msg):
+def err(msg: object) -> None:
     print(f"agentctl: {msg}", file=sys.stderr, flush=True)
 
 

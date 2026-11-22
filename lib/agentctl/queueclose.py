@@ -433,7 +433,7 @@ def _check_entry(repo, d, e, i, own=None):
             requeue_infra(d, e, f"its checks failed on the laptop, not on the change "
                              f"({INFRA_CHECK_FAILURE.search(out).group(0)})")
             return 0
-        if not ok and e.get("infra_reason") == NETWORK_REASON and network_failure(out):
+        if not ok and network_only(out):  # no verdict, on its first round too (judge_failure: the change's)
             requeue_infra(d, e, f"{NETWORK_REASON} ({network_failure(out)})", reason=NETWORK_REASON,
                           detail=out, repo=repo)
             return 0

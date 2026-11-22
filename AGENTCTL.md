@@ -3097,6 +3097,14 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
   launchd's 256: a lossy uplink strands an fd per abandoned request). On a lossy uplink (any lost ping of 10 to
   1.1.1.1, e.g. a phone hotspot) the processor never kicks it -- a restart only drops what is in flight -- and the
   status line says NETWORK until a clean sample.
+- **gh / GitHub / git timeouts on a lossy uplink.** Every forge read (gh_json, api GETs), the land/ ref push and the
+  push's proving fetch go through `net_retry` / `net_run` (lib/agentctl/classify.py, beside the network's signature table): a failure in the network's words
+  (TRANSIENT_NETWORK) or a timeout is tried again 2-20 s apart within NET_RETRY_BUDGET (120 s), then raises
+  TransientNetwork -- infra, never a red or a NOT LANDED (a push it cannot prove prints `UNKNOWN:`, exit 2). A
+  mutation (a dispatch, a cancel) is never retried. A check that failed only reaching the network (no test runner's
+  failure line) is an infra re-queue. 2026-11-22's loss was the laptop's uplink, not the fleet: a path-MTU black hole
+  at ~1408 bytes behind a 1500 MTU (DF pings of 1380 pass, 1390 vanish) and 37-350 ms jitter to its own gateway;
+  ci-runner itself saw 0% loss. `ping -D -s 1380` / `-s 1390` to the jump host tells whether it is back.
 - **The red gate refused the push.** `land` already printed `ci-why`. For a tools-only change, it lands while red. For
   a production change, wait for the green run that `ci-why` names (in the background, with `wait run`), or add
   `Fixes-Red: <#|id>` only if your commit really fixes that run. Never use PREPUSH_SKIP or `--no-verify`.

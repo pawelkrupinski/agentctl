@@ -152,6 +152,27 @@ class WaitingTest(Base):
         self.assertGreaterEqual(e["retry_after"], t0 + A.INFRA_BACKOFF[0], "checked again later, not now")
         self.assertEqual(sh(self.r.root, "git", "--git-dir", self.r.bare, "rev-parse", "main"), before, "nothing landed")
 
+    def test_a_push_whose_proof_cannot_be_fetched_is_unknown_never_not_landed(self):
+        """2026-11-22 (the tunnel's packet loss): the push exited 0, the fetch proving it failed once on the network
+        (its exit unread, no bound), and land said NOT LANDED for a change that was on main."""
+        self.reds = set()
+        wt, sha = self.agent("a", "web/src/main/A.scala", "a\n")
+        saved = A.net_run
+
+        def net_run(what, argv, **kw):
+            if argv[:2] == ["git", "fetch"]:
+                return A.subprocess.CompletedProcess(argv, 128, "", "fatal: unable to access 'https://x/': "
+                                                                     "Could not resolve host: github.com")
+            return saved(what, argv, **kw)
+        A.net_run = net_run
+        try:
+            rc, out = self.land(wt)
+        finally:
+            A.net_run = saved
+        self.assertNotIn("NOT LANDED", out)
+        self.assertIn(f"UNKNOWN: {sha[:10]} was pushed", out)
+        self.assertEqual(rc, 2, out)
+
     def test_green_main_lands_directly_after_its_own_checks(self):
         self.reds = set()
         wt, sha = self.agent("a", "web/src/main/A.scala", "a\n")

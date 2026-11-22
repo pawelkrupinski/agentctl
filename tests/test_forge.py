@@ -120,6 +120,43 @@ class GithubForgeTest(unittest.TestCase):
         self.assertEqual(A.fetch_takes_verdicts(O_R, 5), {"identity-takes-pl": "OK 12 takes"})
         self.assertIn(f"run download 5 -n identity-takes-pl", " ".join(self.calls()))
 
+    def blipping_gh(self, fails, line="gh: Bad Gateway (HTTP 502)"):
+        """A gh that fails the network's way `fails` times, then is the fake GitHub."""
+        path, count = os.path.join(self.tmp.name, "blip-gh"), os.path.join(self.tmp.name, "blips")
+        with open(path, "w") as f:
+            f.write(f"#!/bin/sh\nn=$(cat {count} 2>/dev/null || echo 0)\n"
+                    f"if [ \"$n\" -lt {fails} ]; then echo $((n + 1)) > {count}; echo '{line}' >&2; exit 1; fi\n"
+                    f"exec {sys.executable} {FAKE_GH} \"$@\"\n")
+        os.chmod(path, 0o755)
+        A.GH_CLI = path
+
+    def test_a_get_through_a_network_blip_is_tried_again_and_answers(self):
+        """2026-11-22: one `gh api` 502 or timeout over the tunnel was the read's answer -- gate_reds' GATE_UNREAD, a
+        red to every caller. A GET is tried again (net_run) and the second try's answer is the read's."""
+        self.gh_api(f"repos/{O_R}/actions/runs/5", {"id": 5, "status": "completed"})
+        self.blipping_gh(2)
+        saved, A.NET_RETRY_DELAYS = A.NET_RETRY_DELAYS, (0, 0, 0)
+        try:
+            self.assertEqual(A.api(O_R, "GET", "actions/runs/5")["id"], 5)
+        finally:
+            A.NET_RETRY_DELAYS = saved
+
+    def test_a_refusal_is_never_tried_again(self):
+        self.blipping_gh(1, "gh: Not Found (HTTP 404)")
+        saved, A.NET_RETRY_DELAYS = A.NET_RETRY_DELAYS, (0, 0, 0)
+        try:
+            with self.assertRaises(A.ForgeHTTPError):
+                A.api(O_R, "GET", "actions/runs/5")
+        finally:
+            A.NET_RETRY_DELAYS = saved
+        self.assertEqual(open(os.path.join(self.tmp.name, "blips")).read().strip(), "1", "one try: a 404 is an answer")
+
+    def test_a_mutation_is_never_tried_again_after_a_blip(self):
+        self.blipping_gh(1)
+        with self.assertRaises(A.ForgeHTTPError):
+            A.api(O_R, "POST", "actions/runs/5/cancel")
+
+
     def test_cancel(self):
         A.cancel_run(O_R, 77, "superseded")
         self.assertIn(f"run cancel 77 -R {O_R}", self.calls())
@@ -334,6 +371,55 @@ class GithubForgeTest(unittest.TestCase):
         os.environ.pop("GH_TOKEN")
         self.assertEqual(A.token_env(O_R, {}), {})
         self.assertNotIn("GH_TOKEN", A.forge_env(O_R, {}))
+
+
+class NetRetryTest(unittest.TestCase):
+    """net_retry: the one bounded retry every network call goes through (core.py)."""
+    def test_a_transient_failure_is_tried_again_with_growing_delays(self):
+        n, slept = [0], []
+
+        def call():
+            n[0] += 1
+            if n[0] < 3:
+                raise RuntimeError("fatal: unable to access 'https://github.com/o/r/': Connection reset by peer")
+            return "ok"
+        self.assertEqual(A.net_retry("a read", call, delays=(2, 5, 10), sleep=slept.append, clock=lambda: 0.0), "ok")
+        self.assertEqual(slept, [2, 5])
+
+    def test_every_try_failing_is_transient_network_never_the_last_error(self):
+        def call():
+            raise RuntimeError("ssh: connect to host ci-runner port 22: Operation timed out")
+        with self.assertRaises(A.TransientNetwork) as cm:
+            A.net_retry("a read", call, delays=(1, 1), sleep=lambda s: None, clock=lambda: 0.0)
+        self.assertIn("3 tries", str(cm.exception))
+
+    def test_a_real_error_is_raised_at_once(self):
+        n = [0]
+
+        def call():
+            n[0] += 1
+            raise RuntimeError("HTTP 404: Not Found")
+        with self.assertRaises(RuntimeError):
+            A.net_retry("a read", call, delays=(1, 1), sleep=lambda s: None, clock=lambda: 0.0)
+        self.assertEqual(n[0], 1)
+
+    def test_no_retry_starts_past_the_budget(self):
+        t, slept = [0.0], []
+
+        def call():
+            t[0] += 90  # a call that hangs to its own 90-s timeout
+            raise A.subprocess.TimeoutExpired("gh", 90)
+        with self.assertRaises(A.TransientNetwork):
+            A.net_retry("gh run list", call, delays=(2, 5, 10, 20), sleep=slept.append, clock=lambda: t[0], budget=120)
+        self.assertEqual(slept, [2], "tried twice, not five times")
+
+    def test_net_run_returns_the_last_run_and_says_a_timeout_as_124(self):
+        r = A.net_run("a sleep", ["sleep", "5"], delays=(), timeout=0.2, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 124)
+        self.assertTrue(A.is_transient_network(r.stderr), r.stderr)
+        r = A.net_run("a refusal", ["sh", "-c", "echo 'rejected: not allowed' >&2; exit 1"], delays=(0, 0),
+                      capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1)
 
 
 if __name__ == "__main__":

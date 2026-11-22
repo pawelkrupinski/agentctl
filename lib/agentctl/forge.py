@@ -106,7 +106,7 @@ def gh_tally_as(what):
         _gh_tally_kind.what = before
 
 
-def gh_tally_shape(path):
+def gh_tally_shape(path: str) -> str:
     """A REST path or gh argument with its ids and shas folded: runs/123/jobs -> runs/N/jobs."""
     return re.sub(r"\b[0-9a-f]{40}\b", "SHA", re.sub(r"\b\d+\b", "N", path.split("?")[0]))[:80]
 
@@ -149,6 +149,15 @@ def _split_response(text):
     return (int(m.group(1)) if m else None), hdrs, body
 
 
+def _gh_api_run(method: str, path: str, argv: list[str], env: dict[str, str],
+                body: object) -> "subprocess.CompletedProcess[Any]":
+    """One `gh api` run: a GET tried again through a blip (net_run); a mutation never is -- it may have been done
+    before the line broke."""
+    kw: dict[str, Any] = dict(capture_output=True, text=True, env=env, timeout=API_TIMEOUT,
+                              input=json.dumps(body) if body is not None else None)
+    return net_run(f"gh api GET {gh_tally_shape(path)}", argv, **kw) if method == "GET" else subprocess.run(argv, **kw)
+
+
 def _gh_api_once(o_r, method, path, params=None, body=None):
     url = f"repos/{o_r}/{path}" + ("?" + urllib.parse.urlencode(params) if params else "")
     argv = [GH_CLI, "api", "-X", method, "-H", "Accept: application/vnd.github+json", url]
@@ -159,8 +168,7 @@ def _gh_api_once(o_r, method, path, params=None, body=None):
         argv += ["--input", "-"]
     with gh_tally_as(f"api {method} {gh_tally_shape(path)}"):
         env = forge_env(o_r)
-    r = subprocess.run(argv, capture_output=True, text=True, env=env, timeout=API_TIMEOUT,
-                       input=json.dumps(body) if body is not None else None)
+    r = _gh_api_run(method, path, argv, env, body)
     if method != "GET":
         if r.returncode != 0:
             raise ForgeHTTPError(f"gh api {method} {url}: {(r.stderr or r.stdout).strip()[:300]}")
@@ -398,7 +406,8 @@ def gh_json(o_r, *args):
         return _gh_api_once(o_r, "GET", args[1][len(f"repos/{o_r}/"):])
     with gh_tally_as("gh " + " ".join(gh_tally_shape(a) for a in args[:3])):
         env = forge_env(o_r)
-    r = subprocess.run(forge_argv(o_r, *args), capture_output=True, text=True, env=env, timeout=GH_JSON_TIMEOUT)
+    r = net_run(f"gh {' '.join(args[:3])}", forge_argv(o_r, *args), capture_output=True, text=True, env=env,
+                timeout=GH_JSON_TIMEOUT)
     if r.returncode != 0:
         raise RuntimeError(f"gh {' '.join(args)}: {r.stderr.strip()[:300]}")
     return json.loads(r.stdout)

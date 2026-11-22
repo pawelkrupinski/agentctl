@@ -21,8 +21,17 @@ def submit_ref(repo, d, e, to_server=False):
     if not land_refs_supported(repo):
         return None
     ref = f"refs/heads/land/{e['id']}"
-    rc, out = run_watched(["git", "push", "--quiet", remote(), f"{e['head']}:{ref}"], repo, tool_env(),
-                          os.path.join(d, f"submit-{e['id']}"), "submit", **push_bounds())
+
+    def push():  # the same sha to the change's own ref: idempotent, so tried again through a blip (net_retry)
+        rc_, out_ = run_watched(["git", "push", "--quiet", remote(), f"{e['head']}:{ref}"], repo, tool_env(),
+                                os.path.join(d, f"submit-{e['id']}"), "submit", **push_bounds())
+        if rc_ != 0 and is_transient_network(out_):
+            raise RuntimeError(tail_of(out_ or "", 2)[:200])
+        return rc_, out_
+    try:
+        rc, out = net_retry(f"submit: the push of {ref}", push)
+    except TransientNetwork as ex:
+        rc, out = 1, str(ex)
     if rc == 0:
         e["ref"] = ref
         if not to_server:
@@ -119,8 +128,8 @@ def submit_to_server(repo, d, fields, note="", after_queued=None, waits=False):
     head = fields["head"]
     e = {**fields, "id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{os.urandom(3).hex()}"}
     if not submit_ref(repo, d, e, to_server=True):
-        print(f"NOT LANDED: could not push the change to refs/heads/land/{e['id']} (ci-runner checks it from there): "
-              "`agentctl env --check`, then land again")
+        print(f"NOT LANDED: could not push the change to refs/heads/land/{e['id']} (ci-runner checks it from there; "
+              "the network's when `agentctl env --check` says the tunnel fails, never the change's): land again")
         return 1
     r = submit_remote(Store(), e)
     offer_token(repo)  # this agent's token to the laptop processor, which holds none after a restart
