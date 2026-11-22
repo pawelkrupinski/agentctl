@@ -156,7 +156,7 @@ class PureMoveTest(unittest.TestCase):
         lib = fake_lib(parts)
         self.assertNotEqual(tool("movedefs", lib, "top", "TABLE").returncode, 0, "two modules bind it: say which")
         self.assertIn("TABLE = {}", read(lib, "core"), "a refused move writes nothing")
-        r = tool("movedefs", lib, "top", "--from", "mid", "TABLE['y']")
+        r = tool("movedefs", lib, "top", "--from", "mid", 'TABLE["y"]')  # either quote
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("TABLE = {}", read(lib, "core"))
         self.assertIn("TABLE = {'x': 1}", read(lib, "mid"))

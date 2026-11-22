@@ -25,7 +25,7 @@ if "--before" in args:
     i = args.index("--before"); before = args[i + 1]; del args[i:i + 2]
 if "--from" in args:
     i = args.index("--from"); source = args[i + 1]; del args[i:i + 2]
-names = set(args)
+names = {ast.unparse(ast.parse(x, mode="eval").body) if "[" in x else x for x in args}  # TABLE["k"] as unparsed
 init = os.path.join(lib, "__init__.py")
 parts = module_list(lib)
 
