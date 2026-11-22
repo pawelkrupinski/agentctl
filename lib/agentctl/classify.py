@@ -12,7 +12,7 @@
 #   - every pattern is DATA: a (name, pattern, the incident it was born of) row, and tests/test_classifier_incidents.py
 #     holds one fixture per incident.
 
-def _union(rows):
+def _union(rows: list[tuple[str, str, str]]) -> re.Pattern[str]:
     return re.compile("|".join(f"(?:{p})" for _name, p, _incident in rows), re.I)
 
 
@@ -60,7 +60,18 @@ INFRA_SIGNATURES = NETWORK_SIGNATURES + [
     ("no runner", r"was not acquired by Runner|not acquired by Runner of type", "iOS #526 43903912001: no hosted macOS runner"),
     ("emulator boot", r"Timeout waiting for emulator to boot", "an Android emulator that never booted: the runner's KVM or image"),
 ]
+# A PUSH that failed this way is the network's or the forge's fault, never the change's (queue.py, A PUSH, FETCH OR
+# TUNNEL BLIP IS NO VERDICT): every network row, and what only a push's transport says.
+PUSH_SIGNATURES = NETWORK_SIGNATURES + [
+    ("transport", r"Connection closed|closed by remote host|broken pipe|early EOF|remote end hung up|RPC failed",
+     "audit #6, 2026-10-28: a tunnel error in a push's tail"),
+    ("forge 5xx", r"HTTP (500|502|503|504)", "a forge's own outage"),
+    ("timeout", r"timed out|tunnel", "audit #6"),
+    ("forge fault", r"fatal error in commit_refs|\[remote rejected\][^\n]*\((Internal Server Error|internal error)\)",
+     "issue 20261104T104042-83b1c0, GitHub 2026-11-04"),
+]
 NETWORK_CHECK_FAILURE = _union(NETWORK_SIGNATURES)
+TRANSIENT_PUSH = _union(PUSH_SIGNATURES)
 INFRA_LOG = _union(INFRA_SIGNATURES)
 # A job that says it could not judge because something OUTSIDE the code was unreachable (movies' recording health:
 # `::error::UNKNOWN: proxy unreachable -- ...`, Record scrape fixtures #2238; Security headers / OG cards' `proxy

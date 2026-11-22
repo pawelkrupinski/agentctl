@@ -35,12 +35,7 @@ QUEUE_INFRA_RETRIES = 3
 # hook or remote)" was a tunnel error in its tail; a fixer GAVE UP on it): such a failure, a stalled push, a lock that
 # never came free and main moving under every round re-queue the entry (retry_after, at most QUEUE_INFRA_RETRIES),
 # its `attempts` reset (a checker restart after an infra re-queue is no failure of the change).
-TRANSIENT_PUSH = re.compile(r"Connection (reset|refused|timed out|closed)|closed by remote host|Could not resolve host|ssh: connect to host|"
-                            r"kex_exchange_identification|[Bb]roken pipe|early EOF|remote end hung up|RPC failed|"
-                            r"unable to access|HTTP (500|502|503|504)|timed out|Operation timed out|tunnel|"
-                            # the forge's own fault (issue 20261104T104042-83b1c0, GitHub 2026-11-04)
-                            r"fatal error in commit_refs|\[remote rejected\][^\n]*\((Internal Server Error|internal error)\)",
-                            re.I)
+# TRANSIENT_PUSH: classify.py's PUSH_SIGNATURES (the network's rows and the push's own).
 
 
 INFRA_BACKOFF = (300, 600, 1800, 3600)  # infra re-queues back off; from the third, each one escalates
