@@ -76,6 +76,9 @@ for name in sorted(need):
                 stdlib.append(f"import {spec[0]} as {spec[1]}" if spec[1] else f"import {spec[0]}")
         continue
     p = owner.get(name)
+    if p is None and name in sys.stdlib_module_names:  # a standard module core does not import (ast, operator)
+        stdlib.append(f"import {name}")
+        continue
     if p in modules:
         from_mod.setdefault(p, []).append(name)
     else:

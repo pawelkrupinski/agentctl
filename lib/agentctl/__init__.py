@@ -20,7 +20,7 @@ import os as _os
 import sys as _sys
 import types as _types
 
-MODULES = ("core", "timefmt", "statefile", "moviestools", "forge", "ghapp", "classify", "store", "procs", "selfcode", "repos", "buildview", "policy", "notifyurl")
+MODULES = ("core", "timefmt", "statefile", "moviestools", "forge", "ghapp", "classify", "store", "procs", "selfcode", "repos", "buildview", "policy", "notifyurl", "config")
 
 PARTS = ("core", "timefmt", "statefile", "moviestools", "forge", "ghapp", "classify", "store", "procs", "selfcode",
          "repos", "buildview", "policy", "notifyurl", "config", "storetoken", "wait", "owned", "ciwhy", "branches",

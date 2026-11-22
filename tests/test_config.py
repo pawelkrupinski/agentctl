@@ -21,6 +21,14 @@ class ConfigTest(unittest.TestCase):
         with open(self.file, "w") as f:
             f.write('red_fixers = 3\n[red]\nstarve = 600\n')
 
+    def test_a_default_naming_a_constant_is_evaluated_from_the_source_not_a_namespace(self):
+        texts = [("a.py", "A = 3 * 60\nB, C = 2 * A, 'x'\nD = f()\nP = os.path.join(HOME, 'bin')\n")]
+        consts = A.config_constants(texts)
+        self.assertEqual({k: consts.get(k) for k in "ABCDP"},
+                         {"A": 180, "B": 360, "C": "x", "D": None, "P": os.path.join(A.HOME, "bin")})
+        self.assertEqual(A.config_default("B", consts), 360)
+        self.assertEqual(A.config_default("D", consts), "D")  # not a constant of literals: the expression as written
+
     def test_the_file_sets_a_knob_the_environment_overrides_it(self):
         out = show({"AGENTCTL_CONFIG": self.file})
         self.assertIn(f"red_fixers                   = 3  ({self.file})", out)

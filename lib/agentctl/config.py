@@ -1,11 +1,21 @@
 # agentctl, part `config`: the knobs, read from the code; `agentctl config`.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import ast
+import json
+import operator
+import os
+import re
+from typing import Any, Callable
+from agentctl.core import CONFIG_ERRORS, CONFIG_SOURCE, HOME, config_files
+from agentctl.selfcode import TOOL_PATH, code_files
+
 
 # ---------------------------------------------------------------- config: every knob, generated from the code
 # The knobs are what the code reads: each `env_num("AGENTCTL_X", DEFAULT)` and `os.environ.get("AGENTCTL_X", DEFAULT)`
 # (config_knobs scans the code, so a new knob is listed the moment it is read). Its default is the code's (a constant
-# resolved in this namespace), its doc the comment on that constant's line, else on the line that reads it. Names in
-# CONFIG_INTERNAL are not knobs: a process's identity, secrets, and test hooks -- never set in a config file. The
+# evaluated from the source: config_constants), its doc the comment on that constant's line, else on the line that
+# reads it. Names in CONFIG_INTERNAL are not knobs: a process's identity, secrets, and test hooks -- never set in a config file. The
 # file is read by core's config_load; `agentctl config` shows what applies, `config defaults` prints a complete file,
 # `config doc --write` regenerates AGENTCTL.md's reference (a test keeps the two in step).
 CONFIG_INTERNAL = {
@@ -30,9 +40,89 @@ def config_source_text():
     return out
 
 
-def config_default(expr):
-    """A default's value: a literal, a constant of this namespace, else the expression as written."""
-    import ast
+CONSTANT_OPS: dict[str, Callable[[Any, Any], Any]] = {"Add": operator.add, "Sub": operator.sub, "Mult": operator.mul, "FloorDiv": operator.floordiv,
+                "Div": operator.truediv, "LShift": operator.lshift}
+
+
+def assigned_pairs(node: ast.stmt) -> list[tuple[ast.expr, ast.expr]]:
+    """(target, value) of a top-level assignment, a tuple one (`A, B = 1, 2`) pair by pair; [] for any other stmt."""
+    if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
+        return []
+    target, value = node.targets[0], node.value
+    if isinstance(target, ast.Tuple) and isinstance(value, ast.Tuple) and len(target.elts) == len(value.elts):
+        return list(zip(target.elts, value.elts))
+    return [(target, value)]
+
+
+def constant_exprs(texts: list[tuple[str, str]]) -> dict[str, ast.expr]:
+    """NAME -> the expression its first top-level assignment in the code gives it."""
+    exprs: dict[str, ast.expr] = {}
+    for _rel, text in texts:
+        for node in ast.parse(text).body:
+            for target, value in assigned_pairs(node):
+                if isinstance(target, ast.Name):
+                    exprs.setdefault(target.id, value)
+    return exprs
+
+
+class ConstantReader:
+    """The value of a constant expression of the code: a literal, HOME, another constant, -x, x <op> y,
+    os.path.join(...); ValueError for anything else (a call, an environment read). One reader per node kind."""
+
+    def __init__(self, exprs: dict[str, ast.expr]):
+        self.exprs = exprs
+
+    def value(self, node: ast.expr, seen: frozenset[str]) -> Any:
+        read = getattr(self, f"read_{type(node).__name__}", None)
+        if read is None:
+            raise ValueError(ast.unparse(node))
+        return read(node, seen)
+
+    def read_Constant(self, node: ast.Constant, seen: frozenset[str]) -> Any:
+        if isinstance(node.value, (int, float, str, bool)):
+            return node.value
+        raise ValueError(repr(node.value))
+
+    def read_Name(self, node: ast.Name, seen: frozenset[str]) -> Any:
+        if node.id == "HOME":  # core's, the one the running code joins its paths to
+            return HOME
+        if node.id not in self.exprs or node.id in seen:
+            raise ValueError(node.id)
+        return self.value(self.exprs[node.id], seen | {node.id})
+
+    def read_UnaryOp(self, node: ast.UnaryOp, seen: frozenset[str]) -> Any:
+        if not isinstance(node.op, ast.USub):
+            raise ValueError(ast.unparse(node))
+        return -self.value(node.operand, seen)
+
+    def read_BinOp(self, node: ast.BinOp, seen: frozenset[str]) -> Any:
+        op = CONSTANT_OPS.get(type(node.op).__name__)
+        if op is None:
+            raise ValueError(ast.unparse(node))
+        return op(self.value(node.left, seen), self.value(node.right, seen))
+
+    def read_Call(self, node: ast.Call, seen: frozenset[str]) -> Any:
+        if ast.unparse(node.func) != "os.path.join" or node.keywords:
+            raise ValueError(ast.unparse(node))
+        return os.path.join(*[self.value(a, seen) for a in node.args])
+
+
+def config_constants(texts: list[tuple[str, str]]) -> dict[str, Any]:
+    """NAME -> value of each top-level constant the code assigns from literals and other such constants, by + - * / //
+    and << (`RED_FIX_GIVEUP = 2 * RED_FIX_DECIDE`) or os.path.join under HOME: read from the source, never from a
+    running namespace, so the defaults shown are the code's whatever the environment overrides."""
+    exprs, out = constant_exprs(texts), {}
+    reader = ConstantReader(exprs)
+    for name, node in exprs.items():
+        try:
+            out[name] = reader.value(node, frozenset({name}))
+        except (ValueError, TypeError, ArithmeticError):
+            pass
+    return out
+
+
+def config_default(expr: str | None, constants: dict[str, Any]) -> Any:
+    """A default's value: a literal, a constant of the code (config_constants), else the expression as written."""
     if expr is None:
         return None
     e = expr.strip()
@@ -40,15 +130,13 @@ def config_default(expr):
         return ast.literal_eval(e)
     except (ValueError, SyntaxError):
         pass
-    if re.fullmatch(r"[A-Z_][A-Z0-9_]*", e) and e in globals():
-        v = globals()[e]
-        return v if isinstance(v, (int, float, str, bool)) else e
-    return e
+    return constants.get(e, e) if re.fullmatch(r"[A-Z_][A-Z0-9_]*", e) else e
 
 
 def config_knobs():
     """[{name, key, default, doc, where}] of every knob the code reads, sorted by name."""
     texts = config_source_text()
+    constants = config_constants(texts)
     consts = {}  # NAME -> its line's comment
     for _rel, text in texts:
         for m in re.finditer(r"^([A-Z_][A-Z0-9_]*) = [^\n#]*#\s*(.+)$", text, re.M):
@@ -68,7 +156,7 @@ def config_knobs():
             k = knobs.setdefault(key, {"name": f"AGENTCTL_{key}", "key": key.lower(), "default": None, "doc": "",
                                        "where": rel})
             if k["default"] is None and expr is not None:
-                k["default"] = config_default(expr)
+                k["default"] = config_default(expr, constants)
             if not k["doc"] and doc:
                 k["doc"] = re.sub(r"\(\$AGENTCTL_[A-Z0-9_]+\)", "", doc).strip(" ;,")
     return sorted(knobs.values(), key=lambda k: k["name"])

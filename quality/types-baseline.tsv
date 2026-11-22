@@ -12,7 +12,7 @@ mypy-errors	ciwhy	250
 mypy-errors	classify	1
 mypy-errors	cleanup	137
 mypy-errors	cli	14
-mypy-errors	config	21
+mypy-errors	config	19
 mypy-errors	core	45
 mypy-errors	explorer	29
 mypy-errors	fixer	33
