@@ -384,22 +384,6 @@ def cmd_red(a):
     return 2
 
 
-def culprit_of(repo, u):
-    """The commit that turned this red, when one alone can have: the only commit between the last green run's head and
-    the first red run's head of the streak. None when unknown."""
-    runs = u.get("runs") or []
-    decided = decided_runs(runs)
-    streak = streak_runs(runs)
-    if not repo or not streak or len(decided) <= len(streak):
-        return None
-    first, green = streak[-1], decided[len(streak)]
-    if green.get("conclusion") != "success":
-        return None
-    r = git(repo, "rev-list", f"{green.get('headSha')}..{first.get('headSha')}", check=False)
-    shas = r.stdout.split() if r.returncode == 0 else []
-    return shas[0] if len(shas) == 1 else None
-
-
 def red_revert(o_r, repo, u, culprit):
     """The revert fallback: a revert of the culprit with `Fixes-Red: N`, landed by a detached `agentctl land` through
     the normal hook (its verdicts reach the inbox). (ok, message)."""
@@ -427,9 +411,6 @@ def red_revert(o_r, repo, u, culprit):
             + "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>")
     pid = spawn_land(wt, fixer_env(o_r, num), reds_dir(f"revert-{num}.log"))
     return True, f"landing a revert of {culprit[:10]} from {wt} (pid {pid})"
-
-
-PATHISH = re.compile(r"(?:\./)?((?:[\w.-]+/)+[\w.-]+)")
 
 
 def run_workflows():

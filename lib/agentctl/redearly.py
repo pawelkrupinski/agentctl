@@ -1,5 +1,23 @@
 # agentctl, part `redearly`: EARLY REDS -- a failed job of a gate run still in progress, acted on before the run ends.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import re
+from typing import Any, Callable
+from agentctl.core import env_num, err, fmt_age, reds_dir
+from agentctl.timefmt import ts
+from agentctl.statefile import read_json_file, write_json_file
+from agentctl.forge import RED_CONCLUSIONS, api
+from agentctl.leases import lease_meta
+from agentctl.inboxentry import inbox_write
+from agentctl.redrecord import lease_is_live, red_lease, red_what
+from agentctl.allowedpaths import allowed_path
+from agentctl.red import red_active_of, red_obs_for
+from agentctl.redmove import red_close
+from agentctl.ciwhy import explain_run_jobs
+from agentctl.redseen import red_obs_of_units, red_units
+from agentctl.redopen import red_culprit_search
+
 
 # THE OWNER (2026-11-22): "teach agentctl to react to parts of workflow failing and notifying / spinning the agents right
 # away". Main takes ~20 min and the identity runs longer; a job can fail in minute 3 while the rest runs on. Each red

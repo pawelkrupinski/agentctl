@@ -1,5 +1,27 @@
 # agentctl, part `redopen`: opening a red and what it reads: opening, attaching, offering, its author, history, culprit search and diagnosis
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+from agentctl.core import HOME, SHORT, env_num, err, fmt_age, git, remote
+from agentctl.timefmt import iso_at, parse_time, ts
+from agentctl.statefile import read_record
+from agentctl.store import StaleVersion
+from agentctl.repos import RED_PRIMARY
+from agentctl.leases import lease_meta
+from agentctl.redrecord import RED_JOIN_IDLE, red_active, red_names, red_what
+from agentctl.allowedpaths import allowed_path
+from agentctl.redrepos import red_gate_flows, red_is_other
+from agentctl.redfamilies import red_identity
+from agentctl.owners import owner_record_path
+from agentctl.redask import red_decision
+from agentctl.ancestry import contains_local
+from agentctl.red import RED_OFFER, decided_revert, red_obs_for, red_tier
+from agentctl.redmove import red_keep_holder, red_move, red_offer_class, red_put_offer, tail_lines
+from agentctl.ciwhy import main_flow_meta, resolve_run
+from agentctl.branches import classifier_version, red_authors, run_sigs
+from agentctl.redseen import red_obs_of_units, red_units, sigs_no_verdict
+from agentctl.rundispatch import red_verify_dispatch
+from agentctl.blameopen import BLAME_MAX, blame_open, culprit_of
 
 
 def red_offer(store, it, text, data=None, repo=None, escalate=False, verdict=None, tail=None, quiet=False):

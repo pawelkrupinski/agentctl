@@ -38,3 +38,13 @@ def red_active(store: Any) -> dict[str, dict[str, Any]]:
 
 
 RED_RECURRING = 3            # landed fixes the same failure outlived: `recurring`, and its fixer hunts the root cause
+
+
+# A JOINED RED SHOWS PROGRESS OR GOES ON (the owner, 2026-11-08). A red joined to its family holder's lease (the
+# dispatcher's join: `joined_at` on the lease) waits on a session that may be deep in its own red. With no progress on
+# THAT red within RED_JOIN_IDLE of joining -- a commit carrying its `Fixes-Red:` in the holder's worktree, a fix on its
+# way (the red's `fix`, or the red in fix-pending), a note on it (`red claim <it> --note` inside the fixer) -- it is
+# RELEASED (no attempt counted) and offered again, never joined to that holder again (`family_released`).
+RED_JOIN_IDLE = 30 * 60  # s a red joined to its family holder's lease may go with no progress on it before it is released
+
+

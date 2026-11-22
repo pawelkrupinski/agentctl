@@ -9,6 +9,7 @@ from agentctl.selfcode import TOOL_PATH
 from agentctl.repos import RED_PRIMARY, red_repo_conf, red_repo_of
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.redrepos import red_gate_flows
+from agentctl.classify import norm_line
 
 
 # RED FAMILIES (the owner, 2026-10-29: "give all convergence red work to one agent"): the reds of one family -- by
@@ -64,3 +65,9 @@ def red_outside_gate(d):
     leaves out); the local checks are the landing gate's own, never outside it. No workflow named: cannot tell, no."""
     wf = d.get("workflow")
     return bool(wf) and wf != LOCAL_FLOW and wf not in {n for n, _f in red_gate_flows(red_repo_of(d))}
+
+
+def red_identity(d):
+    """A red's identity fields: its signature (the normalized first error line, None when none was read) and its
+    configured family (None: its run is its queue family)."""
+    return {"signature": norm_line(d.get("line")) or None, "family": red_family(d)}

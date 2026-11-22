@@ -30,14 +30,6 @@ def owner_holder(fam):
     return f"laptop:owner:{fam}"
 
 
-def owner_dir(fam):
-    return reds_dir("owners", re.sub(r"[^A-Za-z0-9_.-]", "_", fam))
-
-
-def owner_record_path(fam):
-    return os.path.join(owner_dir(fam), "owner.json")
-
-
 def owner_leases_path(fam):
     return os.path.join(owner_dir(fam), "leases.json")
 

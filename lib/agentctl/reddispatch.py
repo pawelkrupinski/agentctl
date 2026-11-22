@@ -15,14 +15,6 @@ def red_wt_mark(wt):
     return f"{head[:12]}:{hashlib.sha1(st.encode()).hexdigest()[:10]}:{int(newest)}"
 
 
-# A JOINED RED SHOWS PROGRESS OR GOES ON (the owner, 2026-11-08). A red joined to its family holder's lease (the
-# dispatcher's join: `joined_at` on the lease) waits on a session that may be deep in its own red. With no progress on
-# THAT red within RED_JOIN_IDLE of joining -- a commit carrying its `Fixes-Red:` in the holder's worktree, a fix on its
-# way (the red's `fix`, or the red in fix-pending), a note on it (`red claim <it> --note` inside the fixer) -- it is
-# RELEASED (no attempt counted) and offered again, never joined to that holder again (`family_released`).
-RED_JOIN_IDLE = 30 * 60  # s a red joined to its family holder's lease may go with no progress on it before it is released
-
-
 def red_joined_progress(store, row, why):
     """Mark a joined (or owner-held) red's lease as worked on (why: `note: ...`, `commit <sha>`, `fix <entry>`): a joined
     red's backstop is done; an owner-held one's RED_HELD_IDLE counts from now."""
@@ -192,12 +184,6 @@ def red_queue_family(d):
 
 
 RED_MODEL = 2  # the store's red data model (meta red_model): 2 = the queue (item 5); red_migrate brings older data up
-
-
-def red_identity(d):
-    """A red's identity fields: its signature (the normalized first error line, None when none was read) and its
-    configured family (None: its run is its queue family)."""
-    return {"signature": norm_line(d.get("line")) or None, "family": red_family(d)}
 
 
 def red_migrate(store):
