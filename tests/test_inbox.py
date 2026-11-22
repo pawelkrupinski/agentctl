@@ -11,9 +11,12 @@ class InboxTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.inbox = os.path.join(self.tmp.name, "inbox")
-        self.saved = {k: os.environ.get(k) for k in ("AGENTCTL_INBOX_DIR", "AGENTCTL_OWNERS_DIR", "AGENTCTL_SCRATCH")}
+        self.saved = {k: os.environ.get(k) for k in ("AGENTCTL_INBOX_DIR", "AGENTCTL_OWNERS_DIR", "AGENTCTL_SCRATCH",
+                                                     "CLAUDE_CODE_SESSION_ID")}
+        # the entries are this test's own by its session, wherever it runs: `--ack` acks only the caller's, and outside
+        # a git worktree (the suite from a non-git cwd) nothing else would name them the caller's
         os.environ.update(AGENTCTL_INBOX_DIR=self.inbox, AGENTCTL_OWNERS_DIR=os.path.join(self.tmp.name, "owners"),
-                          AGENTCTL_SCRATCH=os.path.join(self.tmp.name, "s"))
+                          AGENTCTL_SCRATCH=os.path.join(self.tmp.name, "s"), CLAUDE_CODE_SESSION_ID="test-inbox-session")
 
     def tearDown(self):
         for k, v in self.saved.items():
