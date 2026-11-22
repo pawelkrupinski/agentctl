@@ -4390,6 +4390,14 @@ FIX_REPLAY_VAGUE = re.compile(r"(?i)(?<![\w/])n/?a(?![\w/])|flak|can'?t|cannot")
 FIX_REPLAY_TIMEOUT = 30 * 60  # s one side of agentctl's replay may run ($AGENTCTL_FIX_REPLAY_TIMEOUT)
 
 
+def agentctl_revert_fix_replay(reason):
+    """The `Fix-Replay: none — <why>` line agentctl's OWN revert of a culprit carries (blame's revert, the fixer's revert
+    fallback; 2026-11-21 Main #2806-#2808: blame's revert carried none, FIX REPLAY refused it, main stayed red ~1 h). A
+    revert puts main back to code that passed: there is no fix to replay, and the reason names the reverted change and
+    the red, so the owner's weekly list reads it like any other."""
+    return f"Fix-Replay: none — {reason}\n"
+
+
 def red_replay_command(repo, d):
     """The replay command for red data d (its run id in place of `{run}`), or None."""
     cmd = red_workflow_policy(repo, d.get("workflow"))["replay"]

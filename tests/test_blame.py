@@ -407,6 +407,19 @@ class RevertTest(BlameBase):
         self.assertTrue(any(e["verdict"].startswith("RED REVERT") and "ch-a" in e["verdict"] for e in A.inbox_entries()))
         self.assertIn("reverted ch-a", A.red_view(self.st, it)[1])  # the status line says so
 
+    def test_the_reverts_fixes_red_passes_the_gates_fix_replay_rule(self):
+        """2026-11-21 Main #2806-#2808: blame's revert of the culprit was refused by FIX REPLAY ("its Fixes-Red needs
+        `Fix-Replay: <command>`"), and main stayed red ~1 h until a hand revert carrying one landed."""
+        self.red_one()
+        self.tick(dispatch=True)
+        [wt] = self.lands
+        self.assertTrue(self.only()["data"].get("gate"), "Main's red is a gate red: FIX REPLAY is enforced for it")
+        commits = A.waiting_commits(wt, "origin/main", "HEAD")
+        self.assertIsNone(A.fix_replay_refusal(wt, commits, self.st))
+        [reason] = A.fix_replay_none_reasons(wt, commits)
+        self.assertIsNone(A.fix_replay_none_lint(reason), reason)
+        self.assertIn("ch-a", reason)  # specific: the owner's weekly list names the change it reverted
+
     def test_an_owners_change_is_reverted_and_the_owner_told_no_agent_started(self):
         self.red_one(lander=False)
         self.tick(dispatch=True)

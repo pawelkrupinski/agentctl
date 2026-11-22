@@ -158,7 +158,14 @@ moves it forward; nothing is a detached process that can die with its state in i
     and the server's check refuses a gate fix without one. The escape hatch, for a red that genuinely cannot replay
     (infra, a CI-only race): `Fix-Replay: none — <why>` (`--` or `-` will do for the dash), a specific reason of 30+
     characters with no "n/a", "flaky" or "can't"; movies' weekly Coupling exemptions report lists them
-    (`scripts/ci/fix_replay_exemptions.py --since 7d`) for the owner to strike. red.py `fix_replay_refusal`,
+    (`scripts/ci/fix_replay_exemptions.py --since 7d`) for the owner to strike. **AGENTCTL'S OWN REVERT USES IT**
+    (2026-11-21, Main #2806-#2808: blame's revert of the culprit carried no `Fix-Replay:`, the rule refused it and main
+    stayed red ~1 h until a hand revert landed): blame's revert and the fixer's revert fallback write `Fix-Replay: none
+    — agentctl blame's revert of <change>: <workflow> #N's parent <sha> passed the same check, ...` (the fallback: `...
+    revert fallback of <sha>: ... outlived two fix attempts ...`) in their final trailer block -- a revert puts main back
+    on code that passed, nothing new to replay -- and the owner's weekly list shows them like any other; the rule itself
+    is unchanged. red.py `agentctl_revert_fix_replay`; tests: test_blame `test_the_reverts_fixes_red_passes_the_gates_fix_replay_rule`,
+    test_fix_replay `test_the_revert_fallbacks_fixes_red_passes_the_gates_fix_replay_rule`. red.py `fix_replay_refusal`,
     `run_fix_replays`; slots.py `fix_replay_blocks`; tests: `tests/test_fix_replay.py`. A fix-pending self-move (a fix landing, followed, re-cut) is never an
     escalation unless it says so. A cancelled fix change follows only a change of its worktree submitted after it
     (`submitted_at`, else the change id's stamp), and the invariant waits out `RED_FIX_REQUEUE_GRACE` as the red's own

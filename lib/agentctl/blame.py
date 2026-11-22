@@ -545,7 +545,11 @@ def blame_revert_commit(wt, u, b, g, rec, num):
            f"same check, its end fails ({str(b.get('evidence') or '')[:300]}).\nReverted: "
            f"{', '.join(c[:10] for c in g['commits'])}. Its lander, {lander_name(g.get('lander'))}, re-applies it with "
            f"its fix.\n\n" + "".join(f"This reverts commit {c}.\n" for c in reversed(g["commits"]))  # prepush-check's
-           + f"\nReverts-Change: {name}\nFixes-Red: {num}\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n")
+           + f"\nReverts-Change: {name}\nFixes-Red: {num}\n"
+           + agentctl_revert_fix_replay(f"agentctl blame's revert of {blame_change_name(g)}: {u['workflow']} #{num}'s "
+                                        f"parent {str(b.get('parent'))[:10]} passed the same check, so the revert "
+                                        "restores passing code; nothing new to replay")
+           + "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n")
     c = git(wt, *NO_SIGN, "commit", "-q", "-m", msg, check=False)
     if c.returncode != 0:
         return {**rec, "ok": False, "worktree": wt, "msg": f"git commit of the revert failed ({c.stderr.strip()[:160]})"}

@@ -185,6 +185,28 @@ class FixReplayTest(unittest.TestCase):
             self.assertEqual(pid, "fix-replay", reason)
             self.assertIn("is no reason", why)
 
+    def test_the_revert_fallbacks_fixes_red_passes_the_gates_fix_replay_rule(self):
+        """The fixer's revert fallback (red_revert) is agentctl's own revert too: like blame's (test_blame, Main
+        #2806-#2808) it carries a specific `Fix-Replay: none` so FIX REPLAY lets it land."""
+        self.gate_red()
+        self.r.write("web/broken.txt", "broken\n")
+        self.r.commit("web: the culprit")
+        self.r.push()
+        culprit = A.git(self.r.path, "rev-parse", "HEAD").strip()
+        lands = []
+        saved = A.spawn_land
+        A.spawn_land = lambda wt, env, log: lands.append(wt) or 4242
+        self.addCleanup(setattr, A, "spawn_land", saved)
+        ok, msg = A.red_revert("o/r", self.r.path, {"workflow": "Main", "run": {"number": 2600}}, culprit)
+        self.assertTrue(ok, msg)
+        [wt] = lands
+        self.addCleanup(A.git, self.r.path, "worktree", "remove", "--force", wt, check=False)
+        commits = A.waiting_commits(wt, "origin/main", "HEAD")
+        self.assertIsNone(A.fix_replay_refusal(wt, commits, self.st))
+        [reason] = A.fix_replay_none_reasons(wt, commits)
+        self.assertIsNone(A.fix_replay_none_lint(reason), reason)
+        self.assertIn(culprit[:10], reason)
+
     def test_agentctl_runs_the_replay_at_base_and_head(self):
         self.gate_red()
         self.r.write("marker.txt", "broken\n")
