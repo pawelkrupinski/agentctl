@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import time
+from typing import Any
 from agentctl.core import err, git, git_ok, process_cache, reds_dir, remote
 from agentctl.statefile import read_record, write_json
 from agentctl.forge import gh_json
@@ -126,17 +127,17 @@ FIX_SOURCED = re.compile(r"(?:^|[\s;&|(])(?:\.|source)\s+['\"]?(?:\$\{?\w+\}?/)?
                          r"|shellcheck\s+source=([\w./-]+)", re.M)
 
 
-def fix_tree_files(repo, sha):
+def fix_tree_files(repo: str, sha: str) -> list[str]:
     r = git(repo, "ls-tree", "-r", "--name-only", sha, check=False)
     return (r.stdout if r.returncode == 0 else "").splitlines()
 
 
-def fix_show(repo, sha, path):
+def fix_show(repo: str, sha: str, path: str) -> str | None:
     r = git(repo, "show", f"{sha}:{path}", check=False)
     return r.stdout if r.returncode == 0 else None
 
 
-def fix_show_many(repo, sha, paths):
+def fix_show_many(repo: str, sha: str, paths: list[str]) -> dict[str, str]:
     """{path: text} of `paths` at commit sha, in one `git cat-file --batch` (a path missing there: left out)."""
     paths = list(dict.fromkeys(paths))
     if not paths:
@@ -162,7 +163,7 @@ def fix_show_many(repo, sha, paths):
     return out
 
 
-def fix_job_steps(body):
+def fix_job_steps(body: str) -> tuple[str, list[tuple[str | None, str]]]:
     """(the job block without its steps, [(step name or None, step text)]) of a job block, by indentation."""
     pre, items, steps_ind, item_ind = [], [], None, None
     for l in body.splitlines():
@@ -198,22 +199,24 @@ def fix_job_steps(body):
     return "\n".join(pre), out
 
 
+def fix_step_failed(nm: str | None, txt: str, failing: list[str]) -> bool:
+    """Step `nm` (its text txt) is one of the failing steps' names (an unnamed `run:` step: GitHub's "Run <command>")."""
+    return any(nm == f or (nm is None and f.startswith("Run ") and f[4:].strip() and f[4:].strip() in txt)
+               for f in failing)
+
+
 def fix_step_text(body, failing):
     """The part of job block `body` its failing steps read (PER FAILING STEP, above): the job without its steps, the
     failing steps, and the setup steps before them; the whole block when no step of it is known to have failed."""
     pre, steps = fix_job_steps(body)
-
-    def failed(nm, txt):
-        return any(nm == f or (nm is None and f.startswith("Run ") and f[4:].strip() and f[4:].strip() in txt)
-                   for f in failing)
-    idx = [i for i, (nm, txt) in enumerate(steps) if failed(nm, txt)]
+    idx = [i for i, (nm, txt) in enumerate(steps) if fix_step_failed(nm, txt, failing)]
     if not idx:
         return body
     keep = [txt for i, (_nm, txt) in enumerate(steps) if i in idx or (i < max(idx) and FIX_SETUP_STEP.search(txt))]
     return "\n".join([pre] + keep)
 
 
-def red_failed_steps(d):
+def red_failed_steps(d: dict[str, Any]) -> list[str]:
     """The steps that failed in red d's jobs on its newest run (by name): its `steps`, else read once through gh and
     kept (reds/runsteps/<run id>.json: a finished run's steps never change); [] when they cannot be read."""
     if d.get("steps"):
@@ -242,27 +245,39 @@ def red_failed_steps(d):
     return sorted({s for j, ss in rec.items() if j in names for s in ss or []})
 
 
+def red_workflow_file(repo: str, sha: str, d: dict[str, Any], files: list[str]) -> tuple[str, str] | None:
+    """(path, text) of red d's workflow file in the tree of commit sha (files: that tree's paths), or None."""
+    want = str(d.get("workflow") or "")
+    for f in files:
+        if not FIX_WORKFLOW_FILE.match(f):
+            continue
+        txt = fix_show(repo, sha, f) or ""
+        m = re.search(r"^name:\s*['\"]?([^'\"\n]+)", txt, re.M)
+        if (m and m.group(1).strip() == want) or os.path.basename(f) == want:
+            return f, txt
+    return None
+
+
+def red_job_names(d: dict[str, Any]) -> list[str]:
+    return [str(j) for j in d.get("jobs") or [d.get("job")] if j]
+
+
+def red_failing_jobs(text: str, d: dict[str, Any]) -> list[str]:
+    """The blocks of workflow text's jobs red d failed in (by job key or `name:`); [] when it names no job."""
+    heads = {re.split(r" / | \(", n, maxsplit=1)[0].strip().lower() for n in red_job_names(d)}
+    return [body for k, (body, nm) in fix_workflow_jobs(text).items()
+            if k.lower() in heads or re.sub(r"\$\{\{.*?\}\}", "", nm).strip().lower() in heads] if heads else []
+
+
 def red_job_reads(repo, sha, d):
     """What red d's failing job reads, from the tree of `sha`: {files, prefixes, text, broad, sbt} -- or None when it
     cannot be told (no workflow file of that name, nothing readable)."""
     files = fix_tree_files(repo, sha)
-    wfs = [f for f in files if FIX_WORKFLOW_FILE.match(f)]
-    want = str(d.get("workflow") or "")
-    wf = None
-    for f in wfs:
-        txt = fix_show(repo, sha, f) or ""
-        m = re.search(r"^name:\s*['\"]?([^'\"\n]+)", txt, re.M)
-        if (m and m.group(1).strip() == want) or os.path.basename(f) == want:
-            wf = (f, txt)
-            break
+    wf = red_workflow_file(repo, sha, d, files)
     if not wf:
         return None
     reads, texts = {wf[0]}, []
-    jobs = fix_workflow_jobs(wf[1])
-    names = [str(j) for j in d.get("jobs") or [d.get("job")] if j]
-    heads = {re.split(r" / | \(", n, maxsplit=1)[0].strip().lower() for n in names}
-    picked = [body for k, (body, nm) in jobs.items()
-              if k.lower() in heads or re.sub(r"\$\{\{.*?\}\}", "", nm).strip().lower() in heads] if heads else []
+    picked = red_failing_jobs(wf[1], d)
     failing = red_failed_steps(d) if picked else []
     picked = [fix_step_text(body, failing) for body in picked] if failing else picked
     texts.append("\n".join(picked) if picked else wf[1])  # its job's steps, or (unsure which) the whole workflow
@@ -318,7 +333,7 @@ def red_job_reads(repo, sha, d):
     text = "\n".join(texts)
     sbt = bool(FIX_SBT.search(text))
     return {"files": reads, "workflow": wf[0], "text": text, "sbt": sbt, "broad": sbt and bool(FIX_BROAD_TEST.search(text)),
-            "named": set(re.findall(r"\b[A-Z]\w+\b", text + " " + str(d.get("line") or "") + " " + " ".join(names))),
+            "named": set(re.findall(r"\b[A-Z]\w+\b", text + " " + str(d.get("line") or "") + " " + " ".join(red_job_names(d)))),
             "tops": {top: fix_top_reads(top, text, texts[0], files) for top in FIX_UNREAD_TOP}}
 
 
@@ -358,7 +373,7 @@ def fix_path_unread(p, rd):
 FIX_RULES = 3  # the reading rules' version (2: per red, per failing step; 3: what a self-test reads): a verdict cached under another is read again
 
 
-def fix_changed(repo, sha):
+def fix_changed(repo: str, sha: str) -> list[str]:
     r = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", sha, check=False)
     return [p for p in (r.stdout if r.returncode == 0 else "").splitlines() if p]
 

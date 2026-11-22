@@ -142,8 +142,8 @@ moves it forward; nothing is a detached process that can die with its state in i
     worktree says so): the red stays in hand until its verification run decides it -- green: FIX OK, the holder
     released; the same failure: FIX FAILED, back to that same holder (leased), the fix refuted. A gate red keeps its
     own FIX REPLAY enforcement (below) and is released as before. **DIAGNOSTICS ARE NO FIX:** a commit that only
-    collects evidence says `Diagnoses-Red: <run>` instead: it never links its red (no fix-pending, nor through the
-    red's own workflow file), and once it lands its red's workflow -- when dispatchable as above -- is dispatched on
+    collects evidence says `Diagnoses-Red: <run>` instead: it never links its red (no fix-pending, nor through what it
+    changes of the failing step), and once it lands its red's workflow -- when dispatchable as above -- is dispatched on
     main, once per change, and the first decided run after it is told to the same holder (RED-NOTE.md). Movies'
     pre-push trailer lint suggests `Diagnoses-Red` for a `Fixes-Red` commit touching only CI or report plumbing.
     **A MISSED DEADLINE IS NEVER SILENT:** a fix-pending (or fix-unproven) red past its `verified by` deadline with no
@@ -1179,7 +1179,12 @@ agent must be assigned to it".
 - **Only a `Fixes-Red:` trailer makes a change a gate red's fix** (2026-11-20, Main #2716: metrics-packages, no
   trailer, edited `scripts/ci/coupling_ratchet.py`, which the failing job reads, and ci-why read "fix ... landing on red
   (Fixes-Red)" while the real fixer was stopped and its committed fix sat unlanded). An untrailered queued change links
-  only an OUTSIDE red, and only by editing that red's own workflow file (`red_workflow_file_touched`); a red's fixer
+  only an OUTSIDE red, and only by what it changes of that red's failing step (`red_change_link`, redlink.py, the
+  owner 2026-11-22): the failing step's own text or its job's own keys (comments aside), or a file that step names and
+  no other job of any workflow names (the code under it). Editing the workflow FILE links nothing: Alert backtest #21
+  took ci-cpu, which added the job-telemetry steps to every job, for its fix. A linked change never stops a live
+  holder (the red stays leased; RED-NOTE.md names the change once), carries no fix on to its lane's next change, and
+  ends its red's fix-pending at once when it ends unlanded (no re-queue grace). A red's fixer
   whose lease lapses leaves its unlanded commits as `prior_work`, and the next fixer is briefed to land them.
 - **`Fixes-Red: N` is the run NUMBER** (#N, GitHub's run_number): resolved through the newest runs' numbers first,
   as a run id only when no run has that number; a number and an id naming different runs: the number, and the FIX

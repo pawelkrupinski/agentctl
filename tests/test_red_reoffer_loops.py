@@ -61,6 +61,101 @@ class ReOfferLoopTest(RedsBase):
         return e
 
 
+    BACKTEST_WF = ("name: Alert backtest\non:\n  schedule:\n    - cron: '0 13 * * *'\n  workflow_dispatch:\njobs:\n"
+                   "  backtest:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v5\n"
+                   "      - name: Backtest\n        run: scripts/backtest-alerts\n      - name: Publish\n"
+                   "        run: scripts/ci/gh-release.sh upload\n")
+    TELEMETRY = "      - uses: ./.github/actions/job-telemetry\n        with:\n          phase: {}\n"
+
+    def alert_backtest_red(self, holder=True):
+        """Alert backtest #21 red on main (an outside red), failing in its step `Backtest`; leased to its fixer when
+        holder: (the red, the holder's worktree or None)."""
+        self.r.write(".github/workflows/alert-backtest.yml", self.BACKTEST_WF)
+        self.r.write(".github/workflows/scrape.yml", "name: Scrape\non: push\njobs:\n  scrape:\n    steps:\n"
+                     "      - uses: actions/checkout@v5\n      - run: scripts/ci/gh-release.sh upload\n")
+        self.r.write("scripts/backtest-alerts", "#!/bin/sh\nbacktest\n")
+        self.r.write("scripts/ci/gh-release.sh", "#!/bin/sh\nrelease\n")
+        self.r.commit("the backtest workflow")
+        self.r.push()
+        self.put("runs.json", [run(40, 20, "Main", "main.yml", self.sha), run(39, 19, "Identity model convergence",
+                                                                             "identity-model-convergence.yml", self.sha),
+                               run(70, 21, "Alert backtest", "alert-backtest.yml", self.sha, conclusion="failure")])
+        self.put("run-70.json", {"jobs": [{"name": "backtest", "status": "completed", "conclusion": "failure",
+                                           "steps": [{"name": "Backtest", "conclusion": "failure"}]}], "headSha": self.sha,
+                                 "url": "u", "number": 21, "status": "completed", "conclusion": "failure",
+                                 "workflowName": "Alert backtest"})
+        self.put("run-70.log", "backtest\tBacktest\t2026-11-22T13:00:00Z   MongodInternalAssertionsRising  quiet  0.00%\n")
+        self.tick()
+        it = self.only()
+        wt = None
+        if holder:
+            wt = self.r.worktree("repo-wt-owner", branch="repo-wt-owner")
+            self.st.acquire(A.red_lease(it["data"]["key"]), "laptop:claim:owner@" + wt, 1800, 3600,
+                            meta={"kind": "claim", "worktree": wt})
+            self.tick(advance=5)
+            self.assertEqual(self.only()["state"], "leased")
+        return self.only(), wt
+
+    def test_20261122_alert_backtest_21_a_change_adding_telemetry_steps_to_every_workflow_is_no_fix(self):
+        """Alert backtest #21 (5254bffda9d2.4): ci-cpu (no Fixes-Red) added the job-telemetry steps to every job of
+        every workflow, alert-backtest.yml among them, and was taken for the red's fix: its owner's lease revoked, the
+        red parked fix-pending on a change that never touched what fails. Editing the workflow FILE links nothing."""
+        it, wt = self.alert_backtest_red()
+        telemetry = self.BACKTEST_WF.replace("      - uses: actions/checkout@v5\n", "      - uses: actions/checkout@v5\n"
+                                             "      # the job's measurements\n" + self.TELEMETRY.format("start")) \
+            + self.TELEMETRY.format("finish")
+        e = self.queued_entry("the telemetry action, no trailer", "waiting", path=".github/actions/job-telemetry/action.yml")
+        cwt = e["worktree"]
+        self.r.write(".github/workflows/alert-backtest.yml", telemetry, at=cwt)
+        self.r.write(".github/workflows/scrape.yml", "name: Scrape\non: push\njobs:\n  scrape:\n    steps:\n"
+                     + self.TELEMETRY.format("start"), at=cwt)
+        sha = self.r.commit("job telemetry in every job, no trailer", at=cwt)
+        d = A.waiting_state(self.r.path)[0]
+        e.update(head=sha, commits=[e["commits"][0], sha])
+        A.save_entry(d, e)
+        for _ in range(2):
+            self.tick(advance=120)
+        it = self.only()
+        self.assertEqual(it["state"], "leased", f"its fixer goes on: {it['data'].get('history', [])[-1:]}")
+        self.assertIsNone(it["data"].get("fix"))
+        self.assertFalse(os.path.exists(os.path.join(wt, "RED-STOP.md")), "the fixer is never stopped for it")
+        self.assertIsNone(A.red_change_link(self.r.path, it["data"], e["commits"]))
+
+    def test_a_change_to_the_failing_step_links_an_outside_red_and_never_stops_its_fixer(self):
+        """The same red: a change editing its failing step itself (no trailer) may well be its fix -- linked, and its
+        live fixer is told, never stopped: the red stays leased."""
+        it, wt = self.alert_backtest_red()
+        e = self.queued_entry("backtest: judge young alerts, no trailer", "waiting", path="notes.txt")
+        d = A.waiting_state(self.r.path)[0]
+        cwt = e["worktree"]
+        self.r.write(".github/workflows/alert-backtest.yml",
+                     self.BACKTEST_WF.replace("run: scripts/backtest-alerts", "run: scripts/backtest-alerts --young 7"),
+                     at=cwt)
+        sha = self.r.commit("backtest: judge young alerts, no trailer", at=cwt)
+        e.update(head=sha, commits=[sha])
+        A.save_entry(d, e)
+        self.tick(advance=120)
+        it = self.only()
+        self.assertEqual(it["state"], "leased", it["data"].get("history", [])[-1:])
+        self.assertEqual(A.red_change_link(self.r.path, it["data"], [sha]), A.LINK_STEP)
+        self.assertEqual(it["data"].get("linked_told"), e["id"])
+        with open(os.path.join(wt, "RED-NOTE.md")) as f:
+            self.assertIn(f"{e['id']} (no Fixes-Red) changes its failing step", f.read())
+        self.assertFalse(os.path.exists(os.path.join(wt, "RED-STOP.md")))
+
+    def test_a_script_only_the_failing_step_runs_is_its_code_a_shared_one_is_not(self):
+        it, _wt = self.alert_backtest_red(holder=False)
+        main = sh(self.r.path, "git", "rev-parse", "HEAD")
+        self.assertEqual(A.red_link_reads(self.r.path, main, it["data"])[2], {"scripts/backtest-alerts"},
+                         "gh-release.sh is run by the Publish step and by Scrape: shared tooling, no link")
+        wt = self.r.worktree("repo-wt-code", branch="repo-wt-code")
+        self.r.write("scripts/backtest-alerts", "#!/bin/sh\nbacktest --young\n", at=wt)
+        own = self.r.commit("the backtest's young verdict, no trailer", at=wt)
+        self.r.write("scripts/ci/gh-release.sh", "#!/bin/sh\nrelease --retry\n", at=wt)
+        shared = self.r.commit("release retries, no trailer", at=wt)
+        self.assertEqual(A.red_change_link(self.r.path, it["data"], [own]), A.LINK_CODE)
+        self.assertIsNone(A.red_change_link(self.r.path, it["data"], [shared]))
+
     def test_20261112T164528_14afee_a_reds_own_run_rerun_green_clears_it_never_re_offers_it(self):
         self.tick()
         self.assertEqual(self.only()["state"], "offered")
@@ -73,9 +168,26 @@ class ReOfferLoopTest(RedsBase):
                          "the failing run's own rerun is green: the red is over, not offered again -- and, no commit "
                          "between, a flake of its own (never rerun to green)")
 
-    def test_20261106T102105_327f4c_a_queued_change_touching_the_red_workflows_own_files_holds_the_red(self):
+    CAPTURE_WF = ("name: Identity capture\non:\n  schedule:\n    - cron: '0 3 * * 1'\n  workflow_dispatch:\njobs:\n"
+                  "  capture:\n    steps:\n      - name: Run\n        run: scripts/ci/capture.sh\n")
+
+    def test_20261106T102105_327f4c_a_queued_change_editing_the_red_workflows_failing_step_holds_the_red(self):
+        """family-shards fixed exactly the explorer's shard timeouts in its failing step, with no trailer: an offered
+        red waits for it (fix-pending) rather than sending a fixer whose fix would conflict with it."""
+        self.r.write("scripts/ci/capture.sh", "#!/bin/sh\ncapture\n")
+        self.r.commit("the capture script")
+        self.r.push()
         self.outside_capture_red()
-        e = self.queued_entry("shard the capture workflow, no trailer", "waiting", path=".github/workflows/identity-capture.yml")
+        self.r.write(".github/workflows/identity-capture.yml", self.CAPTURE_WF)
+        self.r.commit("the workflow runs the script")
+        self.r.push()
+        self.tick(advance=60)
+        e = self.queued_entry("shard the capture workflow, no trailer", "waiting", path="shards.txt")
+        self.r.write(".github/workflows/identity-capture.yml",
+                     self.CAPTURE_WF.replace("        run:", "        timeout-minutes: 90\n        run:"), at=e["worktree"])
+        sha = self.r.commit("shard the capture workflow, no trailer", at=e["worktree"])
+        e.update(head=sha, commits=e["commits"] + [sha])
+        A.save_entry(A.waiting_state(self.r.path)[0], e)
         self.assertFalse(e.get("fixes"))
         for status in ("waiting", "checking"):
             d = A.waiting_state(self.r.path)[0]
@@ -135,9 +247,11 @@ class ReOfferLoopTest(RedsBase):
 
     def test_a_queued_untrailered_change_editing_only_a_script_an_outside_reds_workflow_runs_is_no_fix(self):
         """The same red (Order independence #89) took metrics-packages for its fix through
-        scripts/ci/coupling_ratchet.py, a script many jobs read. Without a trailer, only an edit of the red's OWN
-        workflow file links a change to it (20261106T102105-327f4c)."""
+        scripts/ci/coupling_ratchet.py, a script many jobs read. Without a trailer, a script links a change to it only
+        when no other job runs it (redlink.py): here another workflow's job runs it too."""
         self.r.write("scripts/ci/capture.sh", "#!/bin/sh\ncapture\n")
+        self.r.write(".github/workflows/nightly.yml", "name: Nightly\non: push\njobs:\n  n:\n    steps:\n"
+                     "      - run: scripts/ci/capture.sh --dry-run\n")
         self.r.commit("the capture script")
         self.r.push()
         self.outside_capture_red()

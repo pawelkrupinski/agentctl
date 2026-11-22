@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
+from typing import Any
 from agentctl.timefmt import ts
 from agentctl.procs import allowed_path
 from agentctl.leases import lease_is_live, lease_meta
@@ -74,7 +75,7 @@ def red_fix_proven(store, d, fix):
     return any(r.get("base") == "FAIL" and r.get("head") == "PASS" for r in (ch.get("data") or {}).get("replays") or [])
 
 
-def red_keep_holder(row, text):
+def red_keep_holder(row: Any, text: str) -> None:
     """Tell a red's live holder something, its lease kept (RED-NOTE.md in its worktree)."""
     wt = lease_meta(row).get("worktree")
     if wt and os.path.isdir(wt) and allowed_path(wt):

@@ -29,6 +29,32 @@ def change_submitted_at(ch):
     return -age if age is not None else None
 
 
+def red_same_lane(o: dict[str, Any], ch: dict[str, Any], wt: str) -> bool:
+    """Change item o is another open change of worktree wt (change ch's)."""
+    return o["id"] != ch["id"] and o["data"].get("worktree") == wt and o["state"] not in CHANGE_ENDED
+
+
+def red_later_changes(store: Any, ch: dict[str, Any]) -> list[Any]:
+    """The open changes of change item ch's worktree submitted since it, the earliest first."""
+    wt, since = (ch["data"] or {}).get("worktree"), change_submitted_at(ch)
+    if not wt or since is None:
+        return []
+    try:
+        items = list(store.items("change"))
+    except Exception:
+        return []
+    later = sorted(((change_submitted_at(o) or 0.0, o) for o in items if red_same_lane(o, ch, wt)), key=lambda x: x[0])
+    return [o for at, o in later if at >= since]
+
+
+def red_fix_requeue_wait(store: Any, f: dict[str, Any], t: float) -> bool:
+    """Fix f's change ended within RED_FIX_REQUEUE_GRACE: a re-queue of its worktree may follow the cancel -- never for
+    a linked change's (it carries no fix on, red_fix_follow)."""
+    ch = red_change(store, f.get("entry")) or {}
+    return not f.get("linked") and t - float(ch.get("entered_at") or 0) < env_num("AGENTCTL_RED_FIX_REQUEUE_GRACE",
+                                                                                  RED_FIX_REQUEUE_GRACE)
+
+
 def red_fix_follow(store, f, repo, t):
     """(fix, its change's state) for a not-yet-landed fix f whose change ENDED without landing: the change that carries
     its work since -- the earliest later change of the same worktree (landed, or still open) -- or f's own commits
@@ -37,16 +63,9 @@ def red_fix_follow(store, f, repo, t):
     if not ch or ch["state"] not in CHANGE_ENDED:
         return None, None
     cd = ch["data"] or {}
-    wt, since = cd.get("worktree"), change_submitted_at(ch)
-    later = []
-    try:
-        later = sorted((o for o in store.items("change") if o["id"] != ch["id"] and wt and o["data"].get("worktree") == wt
-                        and since is not None and (change_submitted_at(o) or 0) >= since
-                        and o["state"] not in CHANGE_ENDED),
-                       key=lambda o: change_submitted_at(o) or 0)
-    except Exception:
-        pass
-    for o in later:
+    # a change linked only by what it edits (redlink.py) carries no fix on: its lane's next change is no fix of this
+    # red's (Alert backtest #21: ci-cpu's ...-711b99 followed ...-bf1eed)
+    for o in [] if f.get("linked") else red_later_changes(store, ch):
         od = o["data"]
         sha = od.get("landed_sha") or od.get("tip")
         if o["state"] == "landed" and sha:
@@ -200,14 +219,13 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
                 store.update_item("red", it["id"], it["version"], {"fix": moved})
             return []
         if ended:
-            ch = red_change(store, f.get("entry")) or {}
-            if t - float(ch.get("entered_at") or 0) < env_num("AGENTCTL_RED_FIX_REQUEUE_GRACE", RED_FIX_REQUEUE_GRACE):
-                return []  # a re-queue of its worktree may follow the cancel
+            if red_fix_requeue_wait(store, f, t):
+                return []
             status = ended
         if status in FIX_OPEN and f.get("linked") and not (fix and fix.get("entry") == f.get("entry")):
             # A LINK THAT NO LONGER HOLDS IS NO FIX (2026-11-20, Order independence #89: parked on metrics-packages,
             # linked through a script by a rule since dropped, while its owner held the lease): back to its holder
-            why = f"{f.get('entry')} no longer links it (no Fixes-Red, nor its workflow file)"
+            why = f"{f.get('entry')} no longer links it (no Fixes-Red, nor a change to its failing step)"
             row = store.get(red_lease(d["key"]))
             if lease_is_live(row, t):
                 red_move(store, it, "leased", f"{red_what(d)}: {why}: its holder {row['holder']} keeps it",

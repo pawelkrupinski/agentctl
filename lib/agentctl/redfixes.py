@@ -11,10 +11,10 @@ from agentctl.waitingdir import waiting_entries, waiting_state
 from agentctl.redrecord import red_names
 from agentctl.clones import fetch_main
 from agentctl.redfixread import (
-    FIX_OPEN, RED_MAIN_REFETCH, fix_changed, fix_check, fix_reaches_red, landed_fix_commits, red_job_reads,
-    red_unrelated)
+    FIX_OPEN, RED_MAIN_REFETCH, fix_check, fix_reaches_red, landed_fix_commits, red_unrelated)
 from agentctl.patches import equivalent_on, patch_id
 from agentctl.fixchange import fixes_named, red_fix_fresh
+from agentctl.redlink import red_change_link
 
 
 def commit_fixes(repo, sha, store=None):
@@ -173,11 +173,12 @@ def red_fix_candidates(d, facts):
         # no trailer, edited scripts/ci/coupling_ratchet.py -- read by both failing jobs, as by most -- and was taken
         # for both reds' fix "landing on red (Fixes-Red)"; Main's own fixer was stopped for it while it waited on that
         # very gate. A gate red's fix carries `Fixes-Red:` (nothing else lands while it is red); untrailered, only the
-        # red's own workflow file links a change to an outside red.
+        # change to its failing step, or to the code only that step runs (redlink.py), links a change to an outside red.
         if {str(x) for x in e.get("diagnoses") or []} & {str(x) for x in names}:
             continue  # DIAGNOSTICS ARE NO FIX: a `Diagnoses-Red:` change never links its red, whatever it edits
-        if red_workflow_file_touched(repo, d, e.get("commits") or []):
-            yield {"entry": e["id"], "status": e["status"], "linked": "its workflow's own files",
+        link = red_change_link(repo, d, e.get("commits") or [])  # what it changes of the failing step (redlink.py)
+        if link:
+            yield {"entry": e["id"], "status": e["status"], "linked": link,
                    "author": {"worktree": e.get("worktree"), "session": e.get("session")}}
     for sha, ct, vals, _s in facts.get("landed") or []:
         if vals & names and ct >= since and its_own(vals & names, [sha]):
@@ -211,29 +212,6 @@ def red_run_on_way(d, snap, repo):
             if fix_reaches_red(repo, sha, d):
                 return r, sha
     return None
-
-
-_ci_reads = process_cache({})
-
-
-def red_workflow_file_touched(repo, d, commits):
-    """Red d's own workflow file (red_job_reads, read in main's tree), when these commits edit it; empty when they do
-    not or when that cannot be read. The scripts its job runs are no link: shared tooling is read by most jobs."""
-    if not repo or not commits:
-        return set()
-    sha = git(repo, "rev-parse", "-q", "--verify", f"refs/remotes/{remote()}/main", check=False).stdout.strip() or \
-        (d.get("last_run") or {}).get("headSha")
-    if not sha:
-        return set()
-    k = (d.get("key"), sha)
-    if k not in _ci_reads:
-        try:
-            rd = red_job_reads(repo, sha, d)
-        except (Exception, SystemExit):
-            rd = None
-        _ci_reads[k] = {rd["workflow"]} if rd and rd.get("workflow") else set()
-    reads = _ci_reads[k]
-    return {p for c in commits for p in fix_changed(repo, c)} & reads if reads else set()
 
 
 _landed_fetched = process_cache({})

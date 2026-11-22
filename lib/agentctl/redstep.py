@@ -39,7 +39,7 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
     row = store.get(red_lease(key))
     live = lease_is_live(row, t)
     gone = obs is not None and red_gone(it, obs, snap)
-    fix = red_fix_current(store, it, facts)
+    it, fix = red_linked_kept(store, it, row, red_fix_current(store, it, facts), live)
     block = red_block_of(it, store)
     acts = []
     if st not in RED_TERMINAL:
@@ -188,6 +188,19 @@ def red_step(store, it, obs, snap, facts, repo, o_r, t):
             return [f"re-offered {red_what(d)} (block ended: {out[:60]})"]
         return acts
     return acts
+
+
+def red_linked_kept(store: Any, it: Any, row: Any, fix: Any, live: bool) -> tuple[Any, Any]:
+    """(it, fix) for a leased red: A LINKED CHANGE NEVER STOPS THE RED'S FIXER (redlink.py) -- with a live holder, a
+    change linked only by what it edits is no fix here (None): the holder is told once (RED-NOTE.md) and keeps it."""
+    if not (fix and live and fix.get("linked") and it["state"] == "leased"):
+        return it, fix
+    if it["data"].get("linked_told") != fix["entry"]:
+        red_keep_holder(row, f"{fix['entry']} (no Fixes-Red) changes {fix['linked']}: check it is no fix before yours; "
+                             f"the red stays yours")
+        store.update_item("red", it["id"], it["version"], {"linked_told": fix["entry"]})
+        it = store.item("red", it["id"])
+    return it, None
 
 
 def red_hold_off(store, it, row, block, gone, obs, t):
