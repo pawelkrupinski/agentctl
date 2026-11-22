@@ -99,6 +99,13 @@ class LandingRecordTest(unittest.TestCase):
         self.assertEqual((rec["reason_class"], rec["precheck_outcome"], rec["precheck_s"]), ("precheck", "refused", 41.2))
         self.assertEqual(rec["precheck_step"], "PRECHECK REFUSED: drift slice missing")
 
+    def test_a_precheck_that_could_not_check_is_unchecked_never_passed(self):
+        """2026-11-22: exit 2 (a step could not run -- the lints past their 300-s bound) was recorded `passed`, so the
+        landing records showed no precheck ever reaching its bound (45 of 497 had)."""
+        self.assertEqual(A.precheck_outcome(2, "PRECHECK UNCHECKED: lints (309 s)\n"), ("unchecked", None))
+        self.assertEqual(A.precheck_outcome(0, "PRECHECK PASS (9 s)\n"), ("passed", None))
+        self.assertEqual(A.precheck_outcome(None, ""), ("unchecked", None))
+
     def test_a_precheck_is_noted_through_a_store_blip_and_on_an_item_that_comes_late(self):
         """2026-11-17: deploy-nix's note died on one `POST /v1/store/item: timed out`; an outbox submit's item comes
         after its precheck ends."""

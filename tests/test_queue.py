@@ -1095,6 +1095,43 @@ class FastPrecheckTest(QueueTest):
         self.assertIn("PRECHECK FAIL: rules", v)
         self.assertIn("fixes a drift/flip red but the push commits no drift slice", v)
 
+    # The 2026-11-19 refusal of 20261119-172743-...-f900cc, as movies' land-precheck printed it: the NOT LANDED line
+    # named two tests that PASSED ("lints: [info] - should name that file ...") and never the suite that failed.
+    SCALATEST_FAIL = ["precheck rebase PASS (0 s)", "precheck rules PASS (12 s)", "precheck lints FAIL (296 s)",
+                      "    [info] - should name that file for the app it belongs to",
+                      "    [info] - should keep the exec so the JVM stays PID-adjacent",
+                      "    [info] - should take temp directories and files through the helper that deletes them *** FAILED ***",
+                      "    [info] - should name only files that are tests and still offend",
+                      "    [error] Failed tests:", "    [error] \tdeploy.SharedMachineStateLintSpec",
+                      "    [error] (repochecks / Test / testOnly) sbt.TestsFailedException: Tests unsuccessful",
+                      "PRECHECK FAIL: lints (296 s)"]
+
+    def test_a_failed_spec_is_named_by_its_suite_and_failing_test_never_by_the_tests_that_passed(self):
+        why = A.precheck_reason(self.SCALATEST_FAIL)
+        self.assertIn("deploy.SharedMachineStateLintSpec", why)
+        self.assertIn("should take temp directories and files through the helper that deletes them", why)
+        self.assertNotIn("should name that file", why)
+        self.assertNotIn("PID-adjacent", why)
+
+    def test_a_failed_specs_first_assertion_line_follows_its_name(self):
+        lines = list(self.SCALATEST_FAIL)
+        at = next(i for i, l in enumerate(lines) if "*** FAILED ***" in l) + 1
+        lines[at:at] = ['    [info]   List("scripts/x.sh:3: mktemp -d") was not empty (SharedMachineStateLintSpec.scala:88)',
+                        '    [info]   at more.stack(Frame.scala:1)']
+        why = A.precheck_reason(lines)
+        self.assertIn('List("scripts/x.sh:3: mktemp -d") was not empty (SharedMachineStateLintSpec.scala:88)', why)
+        self.assertNotIn("more.stack", why)
+        self.assertLess(why.index("SharedMachineStateLintSpec:"), why.index("was not empty"), why)
+
+    def test_a_failed_unittest_is_named_with_its_assertion(self):
+        why = A.precheck_reason(["precheck rules FAIL (3 s)", "    ok: test_a (m.T)",
+                                 "    FAIL: test_b (scripts.ci.m_test.T.test_b)", "    Traceback (most recent call last):",
+                                 '      File "m_test.py", line 9, in test_b', "    AssertionError: 1 != 2",
+                                 "PRECHECK FAIL: rules (3 s)"])
+        self.assertIn("scripts.ci.m_test.T.test_b", why)
+        self.assertIn("AssertionError: 1 != 2", why)
+        self.assertNotIn("test_a", why)
+
     def test_a_refusal_after_the_change_landed_never_says_not_landed(self):
         """Review 2026-11-07: the precheck runs beside the queue, so the landing check can decide first. Its refusal
         then cancels nothing -- `land cancel` finds no open change -- and must not tell the author NOT LANDED (and

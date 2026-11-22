@@ -173,10 +173,11 @@ def start_fast_precheck(repo, main_ref, head, eid, a):
 
 
 def precheck_outcome(rc, out):
-    """(outcome, the refusing step) of a fast precheck: passed / refused / unchecked, its `PRECHECK ...` line."""
+    """(outcome, the refusing step) of a fast precheck: passed (exit 0) / refused (1) / unchecked (2: a step could not
+    run, or ended at its bound -- never `passed`), its `PRECHECK ...` line."""
     lines = (out or "").splitlines()
     last = next((l for l in reversed(lines) if l.startswith("PRECHECK ")), None)
-    outcome = "unchecked" if rc is None else "refused" if rc == 1 else "passed"
+    outcome = "refused" if rc == 1 else "passed" if rc == 0 else "unchecked"
     return outcome, (last or "")[:200] if outcome == "refused" else None
 
 
@@ -220,25 +221,82 @@ def note_precheck(eid, secs, rc, out, store=None, sleep=time.sleep):
 
 
 PRECHECK_STEP_FAIL = re.compile(r"^precheck (\S+) FAIL\b")
-PRECHECK_NOISE = re.compile(r"blocked by:|^!?\s*pre-push\S* \S+ (ok|FAILED)|^\W*$")
+PRECHECK_NOISE = re.compile(r"blocked by:|^!?\s*pre-push\S* \S+ (ok|FAILED)|^\W*$|^\[info\] - ")
 
 
-def precheck_reason(lines):
-    """The refusing steps' own first reason lines (the detail the precheck indents under `precheck <step> FAIL`), for
-    the NOT LANDED line (issue 20261116T225455-04c3c1: it named only `PRECHECK FAIL: rules`)."""
-    out, step = [], None
+# THE FAILURE, NEVER THE TESTS AROUND IT (2026-11-19, 20261119-172743-...-f900cc: the NOT LANDED line read "lints: [info]
+# - should name that file ...", two specs that PASSED, while deploy.SharedMachineStateLintSpec failed further down): a
+# refusing step's detail is read for a test runner's own failure first -- ScalaTest's `- <test> *** FAILED ***` with
+# its suite (sbt's `Failed tests:` list, or the `<Suite>:` header above it) and its first assertion line (the indented
+# one under it), unittest's `FAIL: <test>` with its `...Error: ...` line -- and only without one for its first lines.
+SCALATEST_FAILED = re.compile(r"^(?:\[info\]\s*)?- (.+?)\s*\*\*\* FAILED \*\*\*")
+SCALATEST_SUITE = re.compile(r"^(?:\[info\]\s*)?([A-Z][\w$]*):$")
+SCALATEST_DETAIL = re.compile(r"^(?:\[info\])?\s{2,}(?!at )(\S.*)$")
+SBT_FAILED_TESTS = re.compile(r"^(?:\[error\]\s*)?Failed tests:")
+SBT_FAILED_SUITE = re.compile(r"^\[error\]\s+([\w$]+(?:\.[\w$]+)+)$")
+UNITTEST_FAILED = re.compile(r"^(?:FAIL|ERROR): (.+)$")
+UNITTEST_ASSERTION = re.compile(r"^\w*(?:Error|Exception)\b.*")
+
+
+def _failed_suites(texts: list[str]) -> list[str]:
+    """The suites sbt's `Failed tests:` list names."""
+    out, listed = [], False
+    for t in texts:
+        listed = listed or bool(SBT_FAILED_TESTS.match(t))
+        m = SBT_FAILED_SUITE.match(t) if listed else None
+        if m:
+            out.append(m.group(1))
+    return out
+
+
+def _scalatest_failure(texts: list[str], i: int, test: str) -> str:
+    """`<suite>: <test>: <its first assertion line>` of ScalaTest's failing test at texts[i]."""
+    above = next((m.group(1) for m in map(SCALATEST_SUITE.match, reversed(texts[:i])) if m), None)
+    detail = SCALATEST_DETAIL.match(texts[i + 1]) if i + 1 < len(texts) else None
+    return ": ".join(x for x in ((_failed_suites(texts) or [above])[0], test, detail and detail.group(1)) if x)
+
+
+def _unittest_failure(texts: list[str], i: int, test: str) -> str:
+    """`<test>: <its ...Error line>` of unittest's failing test at texts[i]."""
+    return ": ".join(x for x in (test, next((u for u in texts[i + 1:] if UNITTEST_ASSERTION.match(u)), None)) if x)
+
+
+def runner_failure(texts: list[str]) -> Optional[str]:
+    """The first failing test in a step's detail lines (outer indentation stripped), with its suite and first assertion
+    line, or None when no test runner's failure is there."""
+    for i, t in enumerate(texts):
+        for rx, read in ((SCALATEST_FAILED, _scalatest_failure), (UNITTEST_FAILED, _unittest_failure)):
+            m = rx.match(t)
+            if m:
+                return read(texts, i, m.group(1))
+    return None
+
+
+def _failed_step_details(lines: list[str]) -> dict[str, list[str]]:
+    """{step: its detail lines (the 4-space indent stripped)} of each `precheck <step> FAIL`."""
+    details, step = {}, None
     for line in lines:
         m = PRECHECK_STEP_FAIL.match(line)
         if m:
             step = m.group(1)
-            continue
-        if step and line.startswith((" ", "\t")):
-            text = line.strip()
-            if not PRECHECK_NOISE.search(text) and len(out) < 2:
-                out.append(f"{step}: {text}" if not text.startswith(f"{step}:") else text)
-        elif not line.startswith((" ", "\t")):
+            details.setdefault(step, [])
+        elif step and line.startswith((" ", "\t")):
+            details[step].append(line[4:] if line.startswith("    ") else line.strip())
+        else:
             step = None
-    return "; ".join(out)[:400]
+    return details
+
+
+def precheck_reason(lines: list[str]) -> str:
+    """The refusing steps' own reason (the detail the precheck indents under `precheck <step> FAIL`), for the NOT
+    LANDED line (issue 20261116T225455-04c3c1: it named only `PRECHECK FAIL: rules`): a failing test with its first
+    assertion line when the step ran tests (runner_failure), else its first two reason lines."""
+    out = []
+    for step, texts in _failed_step_details(lines).items():
+        failed = runner_failure(texts)
+        reasons = [failed] if failed else [t.strip() for t in texts if not PRECHECK_NOISE.search(t.strip())]
+        out += [r if r.startswith(f"{step}:") else f"{step}: {r}" for r in reasons]
+    return "; ".join(out[:2])[:400]
 
 
 def cmd_land_precheck(a):
