@@ -3,7 +3,7 @@
 # commit carrying `Types: <why>`. CLAUDE.md, "The ratchets".
 mypy-errors	alerts	119
 mypy-errors	ask	33
-mypy-errors	batch	356
+mypy-errors	batch	348
 mypy-errors	blame	130
 mypy-errors	blameopen	13
 mypy-errors	branches	148
@@ -52,7 +52,7 @@ mypy-errors	policy	43
 mypy-errors	procwatch	2
 mypy-errors	projector	25
 mypy-errors	queue	29
-mypy-errors	queuebatch	57
+mypy-errors	queuebatch	65
 mypy-errors	queueclose	93
 mypy-errors	queuediff	83
 mypy-errors	queueenter	61
@@ -88,10 +88,11 @@ mypy-errors	redvault	50
 mypy-errors	redverify	21
 mypy-errors	redview	35
 mypy-errors	remote	131
+mypy-errors	remotestore	26
 mypy-errors	repos	34
 mypy-errors	reverts	46
 mypy-errors	rundispatch	11
-mypy-errors	server	294
+mypy-errors	server	259
 mypy-errors	slots	195
 mypy-errors	stats	139
 mypy-errors	status	215
@@ -100,7 +101,7 @@ mypy-errors	storetoken	55
 mypy-errors	tools	95
 mypy-errors	upkeep	14
 mypy-errors	wait	66
-mypy-errors	waiting	34
+mypy-errors	waiting	43
 mypy-errors	watchdog	289
 mypy-errors	watchtick	68
 mypy-errors	worktrees	8

@@ -1,5 +1,43 @@
 # agentctl, part `blame`: who landed what, the change that turned a gate red, its revert, and its lander revived.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from agentctl.core import (
+    HOME, NO_SIGN, PROTECTED_BRANCHES, _tokens, env_num, err, fmt_age, git, reds_dir, remote, slug, spawn_detached)
+from agentctl.timefmt import ts
+from agentctl.statefile import read_record, write_json
+from agentctl.forge import GH_JSON_TIMEOUT, forge_argv, forge_env
+from agentctl.store import machine_state, open_store
+from agentctl.procs import proc_alive, process_cwds, process_start
+from agentctl.selfcode import TOOL_PATH
+from agentctl.repos import movies_repo_path
+from agentctl.trailers import fixes_red_in_message
+from agentctl.inboxentry import inbox_write
+from agentctl.land import spawn_land
+from agentctl.lander import blame_change_name, blame_decision, lander_name
+from agentctl.redrecord import RED_TERMINAL, red_what
+from agentctl.claudefiles import bg_transcript
+from agentctl.allowedpaths import allowed_path
+from agentctl.owned import backoff
+from agentctl.worktrees import WorktreeGuard, fresh_worktree, worktrees
+from agentctl.fixerenv import fixer_env
+from agentctl.deletions import log_deletion
+from agentctl.cleanup import own_ancestry
+from agentctl.redreplay import agentctl_revert_fix_replay
+from agentctl.redrepos import red_owner_only, red_repo_tag
+from agentctl.fixerland import dispatch_log, red_dispatch
+from agentctl.redmove import red_stop_holder
+from agentctl.waiting import cancel_submitted
+from agentctl.blameopen import BLAME_MAX, CONVERGENCE_FLOWS, PATHISH, TEST_TOKEN
+from agentctl.redopen import red_offer
+from agentctl.remote import REMOTE_WORKFLOW, delete_check_branch, remote_poll
+from agentctl.remotestore import RemoteStore
+
 
 # ---------------------------------------------------------------- blame (the owner, 2026-11-01)
 # "change agentctl to: remember which agent landed what change, when a build fails: revert the offending change and

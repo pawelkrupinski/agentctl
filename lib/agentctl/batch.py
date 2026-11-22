@@ -103,26 +103,6 @@ def backlog_min():
     return max(2, int(env_num("AGENTCTL_BACKLOG_BATCH_MIN", BACKLOG_BATCH_MIN)))
 
 
-def backlog_batchable(repo, d, e, t, facts=None):
-    """Whether queued entry e may join a backlog batch now (THE BACKLOG BATCH, above): its KIND lets it (no red fix,
-    no --no-batch, no batch_alone, no identity change it cannot tell: changekind.py) and its state does (queued, no verify round, no
-    retry due, no own run or live checker)."""
-    rem = e.get("remote") or {}
-    if e.get("status") != "queued" or e.get("backlog_batch") or e.get("verify") or float(e.get("retry_after") or 0) > t:
-        return False
-    if rem.get("run") is not None and not rem.get("collected_at"):  # its own run: a checker adopts it
-        return False
-    if checker_alive(e["id"]):
-        return False
-    return kind_of(repo, e, facts, t)["backlog_batch"] is None
-
-
-def kind_of(repo, e, facts, t):
-    """Entry e's kind (changekind.py classify_change) under facts (queue_facts of the gate's reds when None), read as
-    it is now: a flag set since the tick began (push_alone, batch_alone, known_red) counts."""
-    return classify_change(e, facts if facts is not None else queue_facts(gate_reds(repo)), t, repo)
-
-
 def backlog_candidates(repo, d, reds, t=None, facts=None):
     """The queued changes a backlog batch takes now, in queue order, at most BACKLOG_BATCH_MAX; [] while the gate is
     red, a change verifies its combined tree, or fewer than BACKLOG_BATCH_MIN may go. A fix of an open red (its kind
@@ -773,9 +753,6 @@ def batch_goes_first(st, d, states=BATCH_FIRST):
         return None  # main under it, and it pre-checks again (THE BATCH IS THE MECHANISM)
     backlog = it and (it.get("data") or {}).get("depth") in DEEP_BATCHES
     return it if it and it["state"] in states and (backlog or waiting_entries(d)) else None
-
-
-_behind_said = process_cache({})  # (entry id, what) -> batch id: said once per batch
 
 
 def behind_batch(e, it, what):

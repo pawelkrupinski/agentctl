@@ -16,6 +16,10 @@ from agentctl.conflicts import pick
 from agentctl.queuerecheck import same_change_source
 from agentctl.redfixes import commit_fixes
 from agentctl.changekind import classify_change, gate_facts
+from agentctl.store import StaleVersion, machine_state, open_store
+from agentctl.repos import server_repo
+from agentctl.waitingdir import waiting_state
+from agentctl.queuerecheck import queued_entries
 
 
 PRODUCTION_GLOBS = ("*/src/main/*", "conf/*", "*/conf/*", "build.sbt", "project/*", "infra/nix/*", "infra/kubernetes/*",
@@ -175,3 +179,35 @@ def note_waiting(d, log_path, head, eid):
     with open(log_path, "a") as f:
         f.write(f"=== waiting {ts()} {head} as {eid} ({n} waiting)\n")
     return f"WAITING {head} (entry {eid}, {n} waiting)"
+
+
+def cancel_submitted(eid, how="cancel", repo=None):
+    d = waiting_state(repo or server_repo())[0]
+    hits = [e for e in queued_entries(d) + waiting_entries(d) if e["id"] == eid]
+    if not hits:  # an item no entry carries (stranded): the item alone
+        st = open_store()
+        it = st.item("change", eid)
+        if not it or machine_state("change", it["state"]).terminal:
+            raise KeyError(eid)
+        st.transition("change", eid, "cancelled", it["version"], data={"why": f"{how}led through the store API"},
+                      event={"text": f"{eid}: {how}led", "refs": {"entry": eid}})
+        clear_holds_on(st, eid)
+        return {"id": eid, "status": "cancelled"}
+    e = hits[0]
+    set_change(d, e, "cancelled", event={"text": f"{e['id']}: {how}led"}, why=f"{how}led through the store API",
+               decided=ts())
+    cancel_entry_remote(e, f"its queue entry was {how}led")
+    clear_holds_on(open_store(), eid)
+    return {"id": eid, "status": "cancelled"}
+
+
+def clear_holds_on(st, eid):
+    """Every open change's recorded hold naming change eid as its blocker, cleared (eid is gone: the next tick reads
+    each one's hold again); never a phantom blocker in `land status`."""
+    for it in st.items("change"):
+        if machine_state("change", it["state"]).terminal or ((it.get("data") or {}).get("hold") or {}).get("blocker") != eid:
+            continue
+        try:
+            st.update_item("change", it["id"], it["version"], {"hold": None})
+        except StaleVersion:
+            pass  # moved meanwhile: the next tick records its hold

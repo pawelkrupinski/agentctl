@@ -1,5 +1,32 @@
 # agentctl, part `queuebatch`: overlapping changes checked as one, the batch tiers, generated overlaps, held waits, one item per change.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import subprocess
+import sys
+import time
+from agentctl.core import env_num, fmt_age, git, host_role, process_cache, remote, spawn_detached
+from agentctl.timefmt import ts
+from agentctl.store import StaleVersion, change_event, machine_state
+from agentctl.selfcode import TOOL_PATH
+from agentctl.policy import HOLDS, hold_kind
+from agentctl.waitingdir import save_entry, waiting_entries, wlog
+from agentctl.land import run_watched, tool_env
+from agentctl.storetoken import detached_env
+from agentctl.queueslots import checker_alive, set_change
+from agentctl.queue import VERIFY_MODE
+from agentctl.generated import generated_entry, without_generated
+from agentctl.conflicts import first_hunk, hunks_resolve, union_safe
+from agentctl.queuerecheck import same_change_source
+from agentctl.redfixes import fixes_of
+from agentctl.identitychange import change_paths_of
+from agentctl.changekind import classify_change, queue_facts
+from agentctl.gov import GovTimeout
+from agentctl.waiting import note_waiting, supersede_older_waiting, waiting_commits
+from agentctl.redseen import gate_reds
+from agentctl.checkslot import check_slot
+from agentctl.remote import remote_check, remote_checks_supported, remote_matches
+
 
 # OVERLAPPING CHANGES ARE CHECKED AS ONE (the coordinator, 2026-11-18: B1 against the CI-workflows change, the scraper
 # catalog against the scrapers refactor, the cycle-breaking change against both -- each a check, then `NOT LANDED: no
@@ -358,3 +385,26 @@ def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own=None
     with open(os.path.join(d, "checks.log"), "a") as f:
         f.write(f"=== {ts()} {e['id']} {base[:10]}..{head[:10]} {mode} rc {rc}\n{out}\n")
     return (None if rc is None else rc == 0), out, f"locally, check tree {os.path.basename(tree)}"
+
+
+def backlog_batchable(repo, d, e, t, facts=None):
+    """Whether queued entry e may join a backlog batch now (THE BACKLOG BATCH, above): its KIND lets it (no red fix,
+    no --no-batch, no batch_alone, no identity change it cannot tell: changekind.py) and its state does (queued, no verify round, no
+    retry due, no own run or live checker)."""
+    rem = e.get("remote") or {}
+    if e.get("status") != "queued" or e.get("backlog_batch") or e.get("verify") or float(e.get("retry_after") or 0) > t:
+        return False
+    if rem.get("run") is not None and not rem.get("collected_at"):  # its own run: a checker adopts it
+        return False
+    if checker_alive(e["id"]):
+        return False
+    return kind_of(repo, e, facts, t)["backlog_batch"] is None
+
+
+def kind_of(repo, e, facts, t):
+    """Entry e's kind (changekind.py classify_change) under facts (queue_facts of the gate's reds when None), read as
+    it is now: a flag set since the tick began (push_alone, batch_alone, known_red) counts."""
+    return classify_change(e, facts if facts is not None else queue_facts(gate_reds(repo)), t, repo)
+
+
+_behind_said = process_cache({})  # (entry id, what) -> batch id: said once per batch

@@ -32,11 +32,12 @@ MODULES = ("core", "timefmt", "statefile", "moviestools", "forge", "ghapp", "cla
            "laptoprole", "fixerland", "fixer", "govbudget", "gov", "govcmd", "queuesubmit", "queueuntil", "ancestry",
            "red", "redmove", "waiting", "ciwhy", "branches", "redseen", "redobserve", "reduntracked", "landwatch",
            "redblock", "rundispatch", "blameopen", "redopen", "redearly", "redclaim", "redverify", "redcrash",
-           "fixerlife", "owner", "redvault", "ask", "checkslot", "redpending", "remote")
+           "fixerlife", "owner", "redvault", "ask", "checkslot", "redpending", "remote", "remotestore", "queuebatch",
+           "blame")
 
 NAMESPACE = ("cireport", "redstep", "reddispatch", "redview", "redtick", "slots", "watchtick", "queueenter",
-             "queueclose", "queuediff", "queuepush", "queuebatch", "batch", "tools", "blame", "server", "watchdog",
-             "recovery", "status", "cli")
+             "queueclose", "queuediff", "queuepush", "batch", "tools", "server", "watchdog", "recovery", "status",
+             "cli")
 
 PARTS = MODULES + NAMESPACE
 
