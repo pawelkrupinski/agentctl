@@ -927,14 +927,6 @@ def env_num(name, default):
         return default
 
 
-def write_json(path, obj):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = f"{path}.{os.getpid()}.tmp"
-    with open(tmp, "w") as f:
-        json.dump(obj, f, indent=1)
-    os.replace(tmp, path)
-
-
 HEXISH = re.compile(r"\b[0-9a-f]{7,40}\b")
 NUMS = re.compile(r"\d+(\.\d+)?")
 

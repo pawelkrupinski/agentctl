@@ -91,11 +91,7 @@ def _ghapp_cache_path(role, o_r):
 def _ghapp_cached(role, o_r, now_):
     hit = _ghapp_tokens.get((role, o_r))
     if not hit:
-        try:
-            with open(_ghapp_cache_path(role, o_r)) as f:
-                hit = json.load(f)
-        except (OSError, ValueError):
-            hit = None
+        hit = read_record(_ghapp_cache_path(role, o_r))
     if hit and hit.get("token") and float(hit.get("expires") or 0) - GHAPP_REFRESH > now_:
         _ghapp_tokens[(role, o_r)] = hit
         return hit["token"]
@@ -124,10 +120,7 @@ def ghapp_token(o_r, role=None, now_=None):
     path = _ghapp_cache_path(role, o_r)
     try:
         os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
-        fd = os.open(path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            json.dump(hit, f)
-        os.replace(path + ".new", path)
+        write_json(path, hit, indent=None, mode=0o600)
     except OSError as e:
         err(f"github-app: token cache not written ({e})")
     return hit["token"]

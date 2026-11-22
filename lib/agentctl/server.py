@@ -848,11 +848,7 @@ def store_tokens_load():
 
 
 def store_tokens_save(reg):
-    path = store_tokens_path()
-    fd = os.open(path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        json.dump(reg, f, indent=1, sort_keys=True)
-    os.replace(path + ".new", path)
+    write_json(store_tokens_path(), reg, mode=0o600, sort_keys=True)
 
 
 def store_token_issue(user, name=""):

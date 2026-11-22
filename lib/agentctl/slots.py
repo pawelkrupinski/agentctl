@@ -27,11 +27,7 @@ def gov_max_checks():
 
 
 def cap_state():
-    try:
-        with open(os.path.join(checks_dir(), "cap.json")) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {"cap": CHECKS_DEFAULT_CAP}
+    return read_record(os.path.join(checks_dir(), "cap.json"), {"cap": CHECKS_DEFAULT_CAP})
 
 
 def checks_cap():
@@ -176,9 +172,7 @@ def maybe_adjust_cap(now=None):
     if why is None or new == cap:
         return None
     st = {"cap": new, "changed_at": now, "reason": why, "previous": cap}
-    with open(os.path.join(checks_dir(), "cap.json.tmp"), "w") as f:
-        json.dump(st, f)
-    os.replace(os.path.join(checks_dir(), "cap.json.tmp"), os.path.join(checks_dir(), "cap.json"))
+    write_json(os.path.join(checks_dir(), "cap.json"), st, indent=None)
     line = f"CHECK CAP {cap} -> {new}: {why}"
     with open(os.path.join(checks_dir(), "adjust.log"), "a") as f:
         f.write(f"{ts()} {line}\n")

@@ -118,10 +118,8 @@ def waiting_state(repo):
 def waiting_entries(d, open_only=True):
     out = []
     for p in sorted(glob.glob(os.path.join(d, "entries", "*.json"))):
-        try:
-            with open(p) as f:
-                e = json.load(f)
-        except (OSError, ValueError):
+        e = read_record(p)
+        if e is None:
             continue
         if not open_only or e.get("status") == "waiting":
             out.append(e)
@@ -138,9 +136,7 @@ def save_entry(d, e):
     disk = read_record(p) or {}
     if disk.get("status") in ENTRY_FINAL and e.get("status") not in ENTRY_FINAL:
         e.update({k: disk[k] for k in ("status", "why", "decided", "superseded_by", "landed_sha") if k in disk})
-    with open(p + ".tmp", "w") as f:
-        json.dump(e, f, indent=1)
-    os.replace(p + ".tmp", p)
+    write_json(p, e)
 
 
 def wlog(d, msg):

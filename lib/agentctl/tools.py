@@ -165,24 +165,6 @@ def tunnel_state_path():
     return os.environ.get("AGENTCTL_TUNNEL_STATE") or state_root("tunnel-health.json")
 
 
-def read_json_file(path):
-    try:
-        with open(path) as f:
-            d = json.load(f)
-        return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
-def write_json_file(path, d):
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = f"{path}.{os.getpid()}.tmp"
-        with open(tmp, "w") as f:
-            json.dump(d, f)
-        os.replace(tmp, path)
-    except OSError:
-        pass
 
 
 def tunnel_probe():

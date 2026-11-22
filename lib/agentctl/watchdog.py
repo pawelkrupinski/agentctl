@@ -1836,11 +1836,7 @@ def cmd_orphans(a):
         if reasons:
             found.append(("wait-loop", pid, etime, "; ".join(reasons), body[:140].replace("\n", " ")))
     cpu_path = state_root("sbt-cpu.json")
-    try:
-        with open(cpu_path) as f:
-            cpu_state = json.load(f)
-    except (OSError, ValueError):
-        cpu_state = {}
+    cpu_state = read_record(cpu_path, {})
     procs_cpu, children = {}, {}
     for line in run_cmd(["ps", "-A", "-o", "pid=,ppid=,time="]).stdout.splitlines():
         f3 = line.split()
@@ -1880,9 +1876,7 @@ def cmd_orphans(a):
     try:
         if not live and os.environ.get("AGENTCTL_SBT_REAP") == "0":
             raise OSError("tests: the real state is left alone")
-        with open(cpu_path + ".tmp", "w") as f:
-            json.dump({k: v for k, v in cpu_state.items() if k in live}, f)
-        os.replace(cpu_path + ".tmp", cpu_path)
+        write_json(cpu_path, {k: v for k, v in cpu_state.items() if k in live}, indent=None)
     except OSError:
         pass
     jvms = []

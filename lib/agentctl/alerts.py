@@ -342,10 +342,7 @@ def alert_write(rec, st=None, red=None, condition=None, d=None):
             idx.setdefault("seen", []).append(rec["id"])
             alert_index_save(d, idx)
             return live["id"]
-        tmp = os.path.join(d, f".{rec['id']}.tmp")
-        with open(tmp, "w") as f:
-            json.dump(rec, f, indent=1)
-        os.replace(tmp, os.path.join(d, rec["id"] + ".json"))
+        write_json(os.path.join(d, rec["id"] + ".json"), rec)
         if not alone:
             idx.setdefault("items", {})[rec["item"]] = rec["id"]
         idx.setdefault("seen", []).append(rec["id"])

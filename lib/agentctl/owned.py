@@ -87,14 +87,6 @@ def process_start(pid):
     return r.stdout.strip()
 
 
-def read_record(path):
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
-
-
 def cancel_run(o_r, rid, why):
     """Cancel a CI run this tool started (a cancel is a no-op on a finished run, on either forge)."""
     try:
@@ -161,10 +153,7 @@ class Owned:
                "process_start": process_start(os.getpid()),
                "owner": os.environ.get("CLAUDE_CODE_SESSION_ID") or f"{os.environ.get('USER', '?')}@{os.getcwd()}",
                "cwd": os.getcwd(), "argv": self.argv, "code": code_version(), "runs": [list(r) for r in self.runs]}
-        tmp = f"{self.record}.{os.getpid()}"
-        with open(tmp, "w") as f:
-            json.dump(rec, f)
-        os.replace(tmp, self.record)
+        write_json(self.record, rec, indent=None)
 
     def _signals(self):
         def end(signum, frame):
@@ -374,10 +363,7 @@ class Waiter:
         except Exception as e:  # transient API trouble: report and keep waiting
             done, ok, text = False, None, f"check failed: {e}"
         if done:
-            tmp = self.verdict + f".{os.getpid()}"
-            with open(tmp, "w") as f:
-                json.dump({"ok": ok, "line": text, "at": ts()}, f)
-            os.replace(tmp, self.verdict)
+            write_json(self.verdict, {"ok": ok, "line": text, "at": ts()}, indent=None)
             self.result = (ok, text)
         return text
 

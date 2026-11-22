@@ -57,21 +57,11 @@ def owner_alive(store, fam, t):
 
 
 def owner_leases(fam):
-    try:
-        with open(owner_leases_path(fam)) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
+    return read_record(owner_leases_path(fam), {})
 
 
 def owner_set_leases(fam, leases):
-    os.makedirs(owner_dir(fam), exist_ok=True)
-    path = owner_leases_path(fam)
-    tmp = f"{path}.{os.getpid()}.tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # lease secrets: the owner's eyes only
-    with os.fdopen(fd, "w") as f:
-        json.dump(leases, f)
-    os.replace(tmp, path)
+    write_json(owner_leases_path(fam), leases, indent=None, mode=0o600)  # lease secrets: the owner's eyes only
 
 
 def owner_hand(fam, name, took):

@@ -1233,12 +1233,7 @@ def state_path() -> str:
 
 
 def state_read() -> dict[str, Any]:
-    try:
-        with open(state_path()) as f:
-            d = json.load(f)
-        return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return read_json_file(state_path())
 
 
 def snapshot_gate_reds(ci: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -1257,10 +1252,7 @@ def state_update(**parts):
         fcntl.flock(lk, fcntl.LOCK_EX)
         d = state_read()
         d.update(parts)
-        tmp = f"{path}.{os.getpid()}.tmp"
-        with open(tmp, "w") as f:
-            json.dump(d, f)
-        os.replace(tmp, path)
+        write_json(path, d, indent=None)
     return d
 
 
