@@ -93,9 +93,6 @@ def red_repo_key(o_r, key):
     return hashlib.sha1(f"{o_r}\0{key}".encode()).hexdigest()[:12]
 
 
-RUN_FIELDS = "databaseId,number,status,conclusion,headSha,url,displayTitle,workflowName,createdAt,updatedAt,event"
-RED_CONCLUSIONS = ("failure", "timed_out")
-
 # A WORKFLOW NOT ON MAIN HAS NO RUNS ON MAIN (2026-11-08 16:35-18:10: agentctl's gate list named identity-takes.yml before
 # the movies commit adding the file reached main; GitHub answered each list of it `HTTP 404: workflow ... not found on
 # the default branch`, so the whole gate read failed every cycle -- the status line said `gate UNREAD (as of 16:44)` and

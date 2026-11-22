@@ -1,57 +1,27 @@
 # agentctl, part `cleanup`: cleanup and the lifecycle.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-# ---------------------------------------------------------------- cleanup
-def log_deletion(kind, repo, name, sha, why):
-    with open(os.path.join(scratch(), "agentctl-deleted.log"), "a") as f:
-        f.write(f"{ts()}\t{kind}\t{repo}\t{name}\t{sha}\t{why}\n")
-
-
-def worktrees(repo):
-    wts, cur = [], {}
-    for line in git(repo, "worktree", "list", "--porcelain").splitlines() + [""]:
-        if not line:
-            if cur:
-                wts.append(cur)
-            cur = {}
-            continue
-        k, _, v = line.partition(" ")
-        cur[k] = v if v else True
-    return [w for w in wts if not isinstance(w.get("worktree"), str) or allowed_path(w["worktree"])]
-
-
-SYSTEM_CMD = ("/System/", "/Applications/", "/usr/libexec/", "/Library/", "/usr/sbin/", "/sbin/", "/usr/bin/login")
-
-
-def cwd_candidates():
-    """Pids worth asking for a cwd: everything but GUI apps and system daemons (Finder, Preview...). NEVER every process:
-    lsof walking all cwds touches ~/Desktop, ~/Documents... and macOS charges those to our Python (TCC prompts)."""
-    return [pid for pid, _pp, _e, cmd in ps() if not cmd.startswith(SYSTEM_CMD) and pid != os.getpid()]
-
-
-def process_cwds():
-    return lsof_cwds(cwd_candidates())
-
-
-def gitdir_activity(repo, wt_path):
-    gd = git(repo, "-C", wt_path, "rev-parse", "--absolute-git-dir", check=False)
-    if gd.returncode != 0:
-        return None
-    d = gd.stdout.strip()
-    mt = [os.stat(os.path.join(d, f)).st_mtime for f in ("HEAD", "index", "logs/HEAD", "ORIG_HEAD") if os.path.exists(os.path.join(d, f))]
-    return max(mt) if mt else None
-
-
-def merged_reason(repo, head, main):
-    if git_ok(repo, "merge-base", "--is-ancestor", head, main):
-        return f"ancestor of {remote()}/main"
-    commits, left = cherry_landed(repo, main, head)
-    if commits and not left:
-        return f"all {len(commits)} commit(s) patch-equivalent on {remote()}/main (by patch-id or changed lines)"
-    return None
-
-
-CACHE_TREES = os.path.join(HOME, ".cache") + "/"  # tool-owned trees (e.g. kinowo-identity measure-local): reused, not litter
+import argparse
+import contextlib
+import datetime as dt
+import io
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from agentctl.core import (
+    GIT_NET_SSH, HOME, PROTECTED_BRANCHES, REPOS, cherry_landed, env_num, err, git, git_ok, remote, run_cmd,
+    scratch, slug, state_root)
+from agentctl.timefmt import now, ts
+from agentctl.forge import forge_branch_sha, forge_branches, forge_delete_branch, gh_json
+from agentctl.procs import PROC_ROOT, process_cwds, ps
+from agentctl.worktrees import CACHE_TREES, gitdir_activity, merged_reason, worktrees
+from agentctl.maint import cmd_orphans
+from agentctl.deletions import SWEEP_KEEP_REMOTE, delete_remote_branch, log_deletion
+from agentctl.dispatches import orphan_branches
+from agentctl.jvmreap import SBT_STALL_MIN
 
 
 # A CLEANUP IS BOUNDED PER TREE AND AS A WHOLE (2026-11-22: the upkeep's `cleanup --execute --no-remote` ran past its
@@ -249,7 +219,6 @@ def cmd_cleanup(a):
 # (git cherry shows nothing of its own left, the tree clean) and never the root checkout or a tree another process is
 # in; and a daily `agentctl sweep` reports what is unmerged and idle, deleting only remote branches proven merged.
 SWEEP_IDLE_DAYS = 3
-SWEEP_KEEP_REMOTE = ("main", "master", WAITING_BRANCH)
 SWEEP_DIR = None  # a test's override; else sweep_dir(): under the state root, resolved at each use
 
 
@@ -373,14 +342,6 @@ def free_worktree(wt, out=print):
         time.sleep(0.5)
         held = worktree_holders(wt)
     return held
-
-
-def delete_remote_branch(repo, o_r, name, sha):
-    """Delete a forge branch through the API, only if it still points at sha."""
-    cur = forge_branch_sha(o_r, name)
-    if cur != sha:
-        raise RuntimeError(f"moved to {cur[:10]} since it was read")
-    forge_delete_branch(o_r, name)
 
 
 FETCH_TIMEOUT = 180  # an unattended fetch's bound ($AGENTCTL_FETCH_TIMEOUT)

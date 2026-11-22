@@ -304,3 +304,9 @@ def _watch(repo, sha, pushed_at, o_r, flows, own, fixes=(), claim=None):
         restart_if_changed([own])
         time.sleep(next(err_delays) if unreachable is not None else next(delays))
 
+
+def cmd_watch(a):
+    a.inbox_cwd = a.agent_cwd or a.close or a.repo or safe_cwd()  # its inbox entry routes to the agent's worktree
+    repo = main_clone(a.repo or safe_cwd())
+    os.chdir(repo)  # not the worktree: --close removes it, and so may its agent
+    return watch_landed(repo, a.sha, a.pushed_at, close=a.close, fixes=a.fixes or ())

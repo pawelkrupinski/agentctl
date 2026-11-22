@@ -24,14 +24,15 @@ MODULES = ("core", "timefmt", "statefile", "moviestools", "forge", "ghapp", "cla
            "repos", "buildview", "policy", "notifyurl", "config", "workflows", "trailers", "leases", "waitingdir",
            "fixerrecords", "inboxentry", "wait", "redretired", "land", "storetoken", "lander", "redrecord",
            "claudefiles", "gating", "allowedpaths", "cpu", "fixersession", "live", "owned", "stats", "clones",
-           "worktrees", "fixerenv", "explorer", "queueslots", "redfixread", "reverts")
+           "worktrees", "fixerenv", "explorer", "queueslots", "redfixread", "reverts", "maint", "deletions",
+           "dispatches", "cleanup", "machine", "govtickets", "testtmp", "procwatch", "inbox", "jvmreap")
 
 NAMESPACE = ("ciwhy", "branches", "red", "redseen", "redfixes", "redmove", "reduntracked", "redstep", "redcrash",
              "redpending", "redverify", "reddispatch", "redreplay", "fixer", "fixerland", "fixerlife", "redclaim",
              "redview", "redearly", "redtick", "redblock", "redvault", "ask", "owner", "gov", "slots", "landwatch",
              "waiting", "queue", "queuerecheck", "queuesubmit", "queueuntil", "queueclose", "queuediff", "queuepush",
-             "queuebatch", "remote", "batch", "changekind", "tools", "cleanup", "maint", "blame", "server", "upkeep",
-             "procwatch", "watchdog", "inbox", "alerts", "recovery", "projector", "status", "cli")
+             "queuebatch", "remote", "batch", "changekind", "tools", "blame", "server", "upkeep", "watchdog",
+             "alerts", "recovery", "projector", "status", "cli")
 
 PARTS = MODULES + NAMESPACE
 

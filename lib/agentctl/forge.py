@@ -379,11 +379,11 @@ def forge_branches(o_r, prefix=""):
         page += 1
 
 
-def forge_branch_sha(o_r, name):
-    return api(o_r, "GET", f"branches/{urllib.parse.quote(name, safe='')}")["commit"]["sha"]
+def forge_branch_sha(o_r: str, name: str) -> str:
+    return str(api(o_r, "GET", f"branches/{urllib.parse.quote(name, safe='')}")["commit"]["sha"])
 
 
-def forge_delete_branch(o_r, name):
+def forge_delete_branch(o_r: str, name: str) -> None:
     """Delete a branch through the API (its ref)."""
     api(o_r, "DELETE", f"git/refs/heads/{urllib.parse.quote(name, safe='/')}")
 
@@ -425,3 +425,9 @@ def api(o_r, method, path, params=None, body=None):
 
 
 API_TIMEOUT = 60
+
+
+RUN_FIELDS = "databaseId,number,status,conclusion,headSha,url,displayTitle,workflowName,createdAt,updatedAt,event"
+
+
+RED_CONCLUSIONS = ("failure", "timed_out")

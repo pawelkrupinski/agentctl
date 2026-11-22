@@ -10,8 +10,7 @@ import time
 from agentctl.core import dispatches_dir, env_num, process_cache, reds_dir
 from agentctl.statefile import mtime, read_json_file, read_record, tail_bytes
 from agentctl.procs import proc_alive
-from agentctl.lander import claude_projects_root
-from agentctl.claudefiles import bg_transcript
+from agentctl.claudefiles import bg_transcript, claude_projects_root
 
 
 # ---------------------------------------------------------------- live agent output (2026-10-29)

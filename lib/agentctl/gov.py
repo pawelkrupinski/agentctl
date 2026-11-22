@@ -59,110 +59,11 @@ GOV_USAGE_MIN = 3       # uncontended runs of a job before its measured cores re
 GOV_USAGE_DAYS = 14
 GOV_USAGE_MIN_WALL = 20  # seconds: a shorter call says nothing about a job's cores
 GOV_EVICT_IDLE = 60     # a kept server unused this long (seconds) may be evicted
-GOV_POLL = 2.0
 GOV_REPORT = 600
-
-
-def gov_dir() -> str:
-    d = os.environ.get("AGENTCTL_GOV_DIR") or state_root("gov")
-    os.makedirs(d, exist_ok=True)
-    return d
-
-
-def gov_log(msg):
-    with open(os.path.join(gov_dir(), "gov.log"), "a") as f:
-        f.write(f"{ts()} {msg}\n")
-
-
-def read_meminfo(path="/proc/meminfo"):
-    """{field: kB} of Linux's /proc/meminfo ({} elsewhere)."""
-    try:
-        with open(path) as f:
-            return {m.group(1): int(m.group(2)) for m in re.finditer(r"^(\w+):\s+(\d+)", f.read(), re.M)}
-    except OSError:
-        return {}
-
-
-# A FIXED MACHINE ($AGENTCTL_MACHINE, JSON): ram_gb, free_gb, pressure, swap_used_mb, swap_total_mb, load1, cores,
-# free_pct, level -- read in place of this host's (sysctl, vm_stat, /proc/meminfo, the load, the CPU count). The tests'
-# one seam: tests/harness.py pins an idle 12-core 36 GB machine, so no test depends on the runner it runs on
-# (2026-10-31: GitHub's 4-core hosted runner, with its own load and RAM, failed a dozen governor, check-cap and land
-# tests that pass on the laptop and on ci-runner). A test of a reader passes its own input or sets its own probe.
-def machine_fixed() -> Optional[dict[str, Any]]:
-    raw = os.environ.get("AGENTCTL_MACHINE")
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except ValueError:
-        return None
-
-
-def machine_load1():
-    m = machine_fixed()
-    return float(m["load1"]) if m and m.get("load1") is not None else os.getloadavg()[0]
-
-
-def machine_cores():
-    m = machine_fixed()
-    return int(m["cores"]) if m and m.get("cores") else (os.cpu_count() or 1)
-
-
-def mem_stats():
-    """THE machine's memory, macOS or Linux alike: {ram_gb, free_gb, pressure (% of RAM not available), swap_used_mb,
-    swap_total_mb}, each None when unreadable. macOS: sysctl, vm_stat, memory_pressure; Linux (ci-runner, where a check
-    may fall back to running locally): /proc/meminfo (MemAvailable). Before, Linux read none of it: the budget assumed
-    36 GB and free memory, pressure and swap were unknown, so the governor admitted blind."""
-    out = dict.fromkeys(("ram_gb", "free_gb", "pressure", "swap_used_mb", "swap_total_mb"))
-    fixed = machine_fixed()
-    if fixed is not None:
-        return {k: fixed.get(k) for k in out}
-    mi = read_meminfo()
-    if mi.get("MemTotal"):
-        out["ram_gb"] = mi["MemTotal"] / 2 ** 20
-        if "MemAvailable" in mi:
-            out["free_gb"] = mi["MemAvailable"] / 2 ** 20
-            out["pressure"] = round(100 * (1 - mi["MemAvailable"] / mi["MemTotal"]))
-        if "SwapTotal" in mi and "SwapFree" in mi:
-            out["swap_total_mb"] = mi["SwapTotal"] / 1024
-            out["swap_used_mb"] = (mi["SwapTotal"] - mi["SwapFree"]) / 1024
-        return out
-    r = run_cmd(["sysctl", "-n", "hw.memsize"], timeout=10)
-    if r.stdout.strip().isdigit():
-        out["ram_gb"] = int(r.stdout.strip()) / 2 ** 30
-    vm = run_cmd(["vm_stat"], timeout=10).stdout
-    page = re.search(r"page size of (\d+) bytes", vm)
-    if page:
-        pages = sum(int(m.group(2)) for m in re.finditer(r"Pages (free|inactive|speculative):\s+(\d+)", vm))
-        out["free_gb"] = pages * int(page.group(1)) / 2 ** 30
-    lvl = run_cmd(["sysctl", "-n", "kern.memorystatus_level"], timeout=10).stdout.strip()  # memory_pressure's free %
-    if lvl.isdigit():
-        out["pressure"] = 100 - int(lvl)
-    sw = run_cmd(["sysctl", "-n", "vm.swapusage"], timeout=10).stdout
-    tot, used = re.search(r"total = ([\d.]+)M", sw), re.search(r"used = ([\d.]+)M", sw)
-    if tot and used:
-        out["swap_total_mb"], out["swap_used_mb"] = float(tot.group(1)), float(used.group(1))
-    return out
-
-
-def ram_gb() -> float:
-    return mem_stats()["ram_gb"] or 36.0
 
 
 def gov_budget():
     return env_num("AGENTCTL_GOV_BUDGET_GB", round(0.6 * ram_gb(), 1))
-
-
-def free_gb():
-    """GB of RAM a new heap can have now (free + inactive + speculative pages); $AGENTCTL_GOV_FREE_PROBE's output when
-    set (the tests' seam); None when unreadable."""
-    probe = os.environ.get("AGENTCTL_GOV_FREE_PROBE")
-    if probe:
-        try:
-            return float(run_cmd(probe, shell=True).stdout.strip())
-        except ValueError:
-            return None
-    return mem_stats()["free_gb"]
 
 
 def gov_machine():
@@ -178,35 +79,6 @@ def gov_machine():
     except Exception:
         laptop = None
     return {"free": free_gb(), "pressure": pressure, "load1": load1, "cores": machine_cores(), "laptop": laptop}
-
-
-def gov_tickets() -> list[dict[str, Any]]:
-    """The live tickets' records (their lock held), oldest first; a dead ticket's files are removed."""
-    out = []
-    for p in sorted(glob.glob(os.path.join(gov_dir(), "t-*.json"))):
-        lock = p[:-5] + ".lock"
-        if not lock_held(lock):
-            try:
-                if time.time() - os.path.getmtime(p) > 30:  # never one being written
-                    os.unlink(p)
-                    os.unlink(lock)
-                    gov_log_end(os.path.basename(lock))
-                    gov_bump()
-            except OSError:
-                pass
-            continue
-        rec = read_record(p)
-        if rec:
-            rec["path"] = lock
-            out.append(rec)
-    return sorted(out, key=lambda r: r.get("at", 0))
-
-
-def gov_log_end(ticket_id, at=None):
-    """A ticket's end, in admits.jsonl beside its admission (`gov replay` reads both): exact for a ticket released in
-    process, the first look after it for one a shell held (the kernel freed it)."""
-    with open(os.path.join(gov_dir(), "admits.jsonl"), "a") as af:
-        af.write(json.dumps({"end": round(at or time.time(), 1), "id": ticket_id}) + "\n")
 
 
 def gov_committed(tickets):
@@ -404,33 +276,6 @@ def gov_fits(cls, mem, tickets, m, kind="job", cores=0.0):
 GOV_IDLE_MAX = 30.0     # s a waiter behind the head waits at most between two reads of the queue
 GOV_ALIVE_TTL = 60.0    # s a waiter's start time, once read, vouches for its pid
 _gov_alive = process_cache({})
-
-
-def gov_bump():
-    """Mark that the queue changed (a waiter or a ticket left): every waiter behind the head looks again now."""
-    try:
-        with open(os.path.join(gov_dir(), "changed"), "a"):
-            pass
-        os.utime(os.path.join(gov_dir(), "changed"))
-    except OSError:
-        pass
-
-
-def gov_change_mark():
-    try:
-        return os.stat(os.path.join(gov_dir(), "changed")).st_mtime_ns
-    except OSError:
-        return 0
-
-
-def gov_wait_change(mark, secs):
-    """Sleep up to secs, returning early when the change mark moves past `mark`."""
-    end = time.monotonic() + secs
-    step = min(env_num("AGENTCTL_GOV_POLL", GOV_POLL), secs)
-    while time.monotonic() < end:
-        time.sleep(max(0.01, min(step, end - time.monotonic())))
-        if gov_change_mark() != mark:
-            return
 
 
 def gov_waiter_alive(rec):

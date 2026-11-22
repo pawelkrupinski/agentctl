@@ -9,8 +9,7 @@ import time
 from typing import Callable
 from agentctl.core import (
     HOME, NoReadAccess, NoToken, _tokens, env_num, err, fmt_age, on_ci_runner, process_cache, run_cmd, slug)
-from agentctl.forge import ghapp_enabled, ghapp_token
-from agentctl.ghapp import ghapp_config
+from agentctl.ghapp import ghapp_config, ghapp_enabled, ghapp_token
 from agentctl.repos import movies_repo_path
 from agentctl.waitingdir import waiting_state
 
@@ -282,7 +281,7 @@ def token_env(o_r, env=None):
 # process that can read the vault -- every `land` that joins `waiting`, `waiting status` / `resume`, any command whose
 # token() read the vault (seed_processor), and the watchdog's kick (kick_processor) -- hands it the token. It lives only in the processor's memory and environment (a re-exec keeps it; the push's hook and the watches it
 # starts inherit it), never on disk. Until it has one, the gate is unread: taken as red, said once in the inbox.
-def token_sock_path(d):
+def token_sock_path(d: str) -> str:
     import hashlib
     base = os.environ.get("AGENTCTL_SOCK_DIR") or f"/tmp/agentctl-{os.getuid()}"  # short: a socket path is <= 104 bytes
     return os.path.join(base, hashlib.sha1(os.path.abspath(d).encode()).hexdigest()[:12] + ".sock")

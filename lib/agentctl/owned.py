@@ -84,7 +84,7 @@ def cancel_run(o_r, rid, why):
         err(f"could not cancel {o_r} run {rid} ({why}): {e}")
 
 
-def lock_held(lockpath):
+def lock_held(lockpath: str) -> bool:
     """Whether a live process holds the flock at lockpath (tried without blocking, released at once)."""
     if not os.path.exists(lockpath):
         return False

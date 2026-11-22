@@ -164,7 +164,7 @@ def state_root(*parts: str) -> str:
     return os.path.join(os.environ.get("AGENTCTL_STATE_ROOT") or os.path.join(HOME, ".cache", "agentctl"), *parts)
 
 
-def scratch():
+def scratch() -> str:
     d = os.environ.get("AGENTCTL_SCRATCH")
     if not d:
         sid = os.environ.get("CLAUDE_CODE_SESSION_ID")

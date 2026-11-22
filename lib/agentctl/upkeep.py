@@ -14,80 +14,13 @@
 #     TEST_TMP_MAX_AGE (a run removes its own at exit; these are killed runs').
 UPKEEP_EVERY = 3600
 DISK_MIN_GB = 50  # the Data volume's free space below which the upkeep runs at once, then WD opens ($AGENTCTL_DISK_MIN_GB)
-TEST_TMP_MAX_AGE = 3600
 _last_upkeep = [0.0]
-
-
-def disk_free_gb(path=None):
-    """GB free on path ($AGENTCTL_DISK_PATH, else HOME); the fixed machine's disk_free_gb for the default path."""
-    import shutil
-    fixed = machine_fixed()
-    if path in (None, "", HOME) and not os.environ.get("AGENTCTL_DISK_PATH") and fixed and \
-            fixed.get("disk_free_gb") is not None:  # the default path (maybe_upkeep names HOME itself)
-        return float(fixed["disk_free_gb"])
-    return shutil.disk_usage(path or os.environ.get("AGENTCTL_DISK_PATH") or HOME).free / 1e9
 
 
 def probe_disk_free(a):
     free = disk_free_gb(a.get("path"))
     floor = DISK_MIN_GB if a.get("min_gb") in (None, "") else float(a["min_gb"])  # 0 is a floor, not "unset"
     return free >= floor, f"{free:.1f} GB free on {a.get('path') or HOME}"
-
-
-def user_tmp_dir():
-    try:
-        return os.confstr("CS_DARWIN_USER_TEMP_DIR") or tempfile_dir()
-    except (ValueError, OSError, AttributeError):
-        return tempfile_dir()
-
-
-def tempfile_dir():
-    import tempfile
-    return tempfile.gettempdir()
-
-
-def _suite_root_in_use(p: str, t: float) -> bool:
-    """A test suite root still in use: its runner alive (tests/run.py writes owner.pid), or the root or an entry of it
-    changed within TEST_TMP_MAX_AGE."""
-    try:
-        with open(os.path.join(p, "owner.pid")) as f:
-            os.kill(int(f.read().strip()), 0)
-        return True
-    except (OSError, ValueError):
-        pass
-    try:
-        newest = max([os.lstat(p).st_mtime] + [os.lstat(e.path).st_mtime for e in os.scandir(p)])
-    except OSError:
-        return True
-    return t - newest <= TEST_TMP_MAX_AGE
-
-
-def _sweepable(p: str, t: float, suite_root: bool) -> bool:
-    """A real directory past TEST_TMP_MAX_AGE -- and, a suite root, not in use."""
-    try:
-        if not os.path.isdir(p) or os.path.islink(p) or t - os.lstat(p).st_mtime <= TEST_TMP_MAX_AGE:
-            return False
-    except OSError:
-        return False
-    return not (suite_root and _suite_root_in_use(p, t))
-
-
-def sweep_test_tmp(now_=None, tmp_root="/tmp"):
-    """The test suite's leftovers older than TEST_TMP_MAX_AGE: `agentctl-*` in the user's temp dir, `agentctl-sock-*` in
-    /tmp (never the processor's own socket dir /tmp/agentctl-<uid>), and /tmp's suite roots `agentctl-t-*` (2026-11-22:
-    174 of them, 197 MB, fed a runaway fseventsd) unless one is in use (_suite_root_in_use). Returns how many went."""
-    import shutil
-    t = now_ if now_ is not None else time.time()
-    n = 0
-    roots = set(glob.glob(os.path.join(tmp_root, "agentctl-t-*")))
-    for pat in (os.path.join(user_tmp_dir(), "agentctl-*"), os.path.join(tmp_root, "agentctl-sock-*"), *roots):
-        for p in glob.glob(pat):
-            if os.path.realpath(p) == os.path.realpath(os.path.dirname(token_sock_path("x"))):
-                continue  # the processor's own socket dir (Linux: the user temp dir IS /tmp)
-            if _sweepable(p, t, p in roots):
-                shutil.rmtree(p, ignore_errors=True)
-                n += 1
-    return n
 
 
 def close_finished_fixer_trees(store=None):

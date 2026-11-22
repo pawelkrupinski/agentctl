@@ -64,6 +64,12 @@ for n in ast.parse(open(os.path.join(lib, "core.py")).read()).body:
     elif isinstance(n, ast.ImportFrom) and n.module and not n.module.startswith("agentctl"):
         for a in n.names:
             core_imports[a.asname or a.name] = ("from", n.module, a.name, a.asname)
+std_from = {}  # {name: (module, original name)} for every part's `from <non-agentctl module> import`
+for p in parts:
+    for n in ast.parse(open(os.path.join(lib, f"{p}.py")).read()).body:
+        if isinstance(n, ast.ImportFrom) and n.module and not n.module.startswith("agentctl") and not n.level:
+            for a in n.names:
+                std_from.setdefault(a.asname or a.name, (n.module, a.name))
 stdlib, from_std, from_mod, bad = [], {}, {}, []
 for name in sorted(need):
     if name in core_imports:
@@ -75,6 +81,10 @@ for name in sorted(need):
                 stdlib += [f"import urllib.{u}" for u in sorted(set(re.findall(r"\burllib\.(error|parse|request)\b", src)))]
             else:
                 stdlib.append(f"import {spec[0]} as {spec[1]}" if spec[1] else f"import {spec[0]}")
+        continue
+    if name in std_from:  # a name some part imports from outside agentctl (typing's Optional): from there
+        mod_, orig = std_from[name]
+        from_std.setdefault(mod_, []).append(orig if orig == name else f"{orig} as {name}")
         continue
     p = owner.get(name)
     if p is None and name in sys.stdlib_module_names:  # a standard module core does not import (ast, operator)
@@ -99,7 +109,8 @@ for m, v in sorted(from_mod.items(), key=lambda kv: parts.index(kv[0])):
         text = f"from agentctl.{m} import (\n" + "\n".join(body) + ")"
     lines.append(text)
 src_lines = src.split("\n")
-if part in modules:  # already a module (code moved into it): add only the imports it now lacks, after its own
+if part in modules and any(isinstance(n, (ast.Import, ast.ImportFrom)) for n in tree.body):  # already a module (code
+    # moved into it): add only the imports it now lacks, after its own
     if lines:
         last = max(n.end_lineno for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom)))
         open(path, "w").write("\n".join(src_lines[:last] + lines + src_lines[last:]))

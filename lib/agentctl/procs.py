@@ -97,3 +97,16 @@ def lsof_cwds(pids: Any) -> dict[int, str]:
             elif line.startswith("n") and pid and allowed_path(line[1:]):
                 res[pid] = line[1:]
     return res
+
+
+SYSTEM_CMD = ("/System/", "/Applications/", "/usr/libexec/", "/Library/", "/usr/sbin/", "/sbin/", "/usr/bin/login")
+
+
+def cwd_candidates() -> list[int]:
+    """Pids worth asking for a cwd: everything but GUI apps and system daemons (Finder, Preview...). NEVER every process:
+    lsof walking all cwds touches ~/Desktop, ~/Documents... and macOS charges those to our Python (TCC prompts)."""
+    return [pid for pid, _pp, _e, cmd in ps() if not cmd.startswith(SYSTEM_CMD) and pid != os.getpid()]
+
+
+def process_cwds() -> dict[int, str]:
+    return lsof_cwds(cwd_candidates())

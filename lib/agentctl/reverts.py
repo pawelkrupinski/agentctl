@@ -8,10 +8,10 @@ from agentctl.core import HOME, fmt_age, git, git_ok, remote
 from agentctl.timefmt import ts
 from agentctl.store import (
     ARCHIVE, IllegalTransition, MACHINES, StaleVersion, StateSpec, StoreUnavailable, TerminalState, open_store)
-from agentctl.procs import allowed_path
 from agentctl.repos import RED_PRIMARY
 from agentctl.trailers import fixes_red_in_message, trailer_values
 from agentctl.lander import lander_index, lander_name, lander_of_commit, lander_records, patch_ids
+from agentctl.allowedpaths import allowed_path
 from agentctl.worktrees import claimant, worktree_exclude
 
 

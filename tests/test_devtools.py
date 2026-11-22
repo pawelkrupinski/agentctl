@@ -196,6 +196,12 @@ class MakeModuleTest(unittest.TestCase):
         self.assertEqual(text.count("from agentctl.core import root"), 1)
         self.assertEqual(text.count("import json"), 1)
 
+    def test_a_listed_module_without_imports_yet_gets_them_all(self):
+        lib = fake_lib(modules=("core", "mid"))  # listed, but its text is still a namespace part's (a rebase took theirs)
+        r = tool("mkmodule", lib, "mid")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("from agentctl.core import root\n", read(lib, "mid"))
+
     def test_placemodules_puts_the_modules_first(self):
         lib = fake_lib(dict([("top", PARTS["top"]), ("mid", PARTS["mid"]), ("core", PARTS["core"])]))
         self.assertEqual(tool("placemodules", lib).returncode, 0)
@@ -206,6 +212,16 @@ class MakeModuleTest(unittest.TestCase):
         lib = fake_lib(dict(PARTS, mid="TABLE = {p: p for p in (1, 2)}\n"))
         r = tool("mkmodule", lib, "mid")
         self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_a_name_another_part_imports_from_the_standard_library_is_imported_from_there(self):
+        low = "# agentctl, part `low`: a module.\n# A real module.\n\nfrom typing import Optional\n\nX: Optional[int] = 1\n"
+        parts = {"core": PARTS["core"], "low": low, "mid": "def helper() -> Optional[str]:\n    return root()\n",
+                 "top": PARTS["top"]}
+        lib = fake_lib(parts, modules=("core", "low"))
+        r = tool("mkmodule", lib, "mid")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("from typing import Optional\n", read(lib, "mid"))
+        self.assertNotIn("from agentctl.core import Optional", read(lib, "mid"))
 
     def test_a_part_reading_a_namespace_name_is_refused(self):
         r = tool("mkmodule", fake_lib(), "top")

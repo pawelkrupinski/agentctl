@@ -2,10 +2,9 @@
 
 import os
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 from agentctl.core import env_num, state_root
 from agentctl.statefile import read_record, write_json
-from agentctl.classify import Optional
 
 
 GOV_SATURATED = 0.95    # x the cores: the machine's measured CPU at or over it is starved, whatever is charged

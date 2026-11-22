@@ -1,5 +1,5 @@
 # agentctl, part `procwatch`: the watchdog's machine invariants WP (a runaway process) and WT (temp churn).
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 #
 # 2026-11-22: fseventsd held 21.5 GB and over 100% CPU for days, and mds_stores ran hot beside it, fed by the file
 # churn of 174 leaked test roots (/private/tmp/agentctl-t-*, 197 MB of fake repos) -- and nothing said so. WP watches
@@ -22,6 +22,19 @@
 # local prod mirror warming WiredTiger's cache (no cacheSizeGB: 50% of (RAM - 1 GB), ~68 GB here). So a process with a
 # known memory CEILING is judged against it (CEILINGS: a JVM's -Xmx, a mongod's cache, a VM's guest memory), and growth must reach
 # WP_GROWTH_PCT or WP_GROWTH_MB over the window: 1% of a big long-lived server is its noise.
+
+import glob
+import os
+import re
+import time
+from typing import Any, Callable, Optional
+from agentctl.core import HOME, run_cmd, state_root
+from agentctl.statefile import read_record, write_json
+from agentctl.machine import machine_fixed, ram_gb
+from agentctl.govtickets import gov_tickets
+from agentctl.testtmp import TEST_TMP_MAX_AGE
+
+
 WP_RSS_GB = 4.0
 WP_CPU_PCT = 90.0
 WP_CPU_MIN = 20

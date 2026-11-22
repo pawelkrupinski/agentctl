@@ -2,13 +2,14 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
-from typing import Any
-from agentctl.core import git, git_ok, remote, state_root
+from typing import Any, Optional
+from agentctl.core import HOME, cherry_landed, git, git_ok, remote, state_root
 from agentctl.timefmt import ts
 from agentctl.statefile import write_json
 from agentctl.procs import safe_cwd
 from agentctl.waitingdir import waiting_state
 from agentctl.fixerrecords import agent_name
+from agentctl.allowedpaths import allowed_path
 
 
 def internal_trees_dir(*parts: str) -> str:
@@ -76,3 +77,38 @@ def fresh_worktree(repo: str, kind: str, num: Any) -> tuple[str | None, str | No
     if r.returncode != 0:
         return None, f"git worktree add failed ({r.stderr.strip()[:160]})"
     return wt, None
+
+
+def worktrees(repo: str) -> list[dict[str, Any]]:
+    wts: list[dict[str, Any]] = []
+    cur: dict[str, Any] = {}
+    for line in git(repo, "worktree", "list", "--porcelain").splitlines() + [""]:
+        if not line:
+            if cur:
+                wts.append(cur)
+            cur = {}
+            continue
+        k, _, v = line.partition(" ")
+        cur[k] = v if v else True
+    return [w for w in wts if not isinstance(w.get("worktree"), str) or allowed_path(w["worktree"])]
+
+
+def gitdir_activity(repo: str, wt_path: str) -> Optional[float]:
+    gd = git(repo, "-C", wt_path, "rev-parse", "--absolute-git-dir", check=False)
+    if gd.returncode != 0:
+        return None
+    d = gd.stdout.strip()
+    mt = [os.stat(os.path.join(d, f)).st_mtime for f in ("HEAD", "index", "logs/HEAD", "ORIG_HEAD") if os.path.exists(os.path.join(d, f))]
+    return max(mt) if mt else None
+
+
+def merged_reason(repo: str, head: str, main: str) -> Optional[str]:
+    if git_ok(repo, "merge-base", "--is-ancestor", head, main):
+        return f"ancestor of {remote()}/main"
+    commits, left = cherry_landed(repo, main, head)
+    if commits and not left:
+        return f"all {len(commits)} commit(s) patch-equivalent on {remote()}/main (by patch-id or changed lines)"
+    return None
+
+
+CACHE_TREES = os.path.join(HOME, ".cache") + "/"  # tool-owned trees (e.g. kinowo-identity measure-local): reused, not litter
