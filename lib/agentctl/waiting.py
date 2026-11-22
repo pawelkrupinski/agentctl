@@ -267,7 +267,7 @@ def union_resolve(wt, files=None):
 # ratchets in the pre-push hook recompute them over the tree they check, so a combined tree's right content is "the
 # rows regenerated over it" -- and two changes touching DISJOINT rows do not conflict at all. A repo registers them in
 # red-repos.json (`generated`: {paths, regen: its own --update command, timeout}); a registered file is
-# - NO OVERLAP: the hold (OVERLAPPING CHANGES ARE CHECKED AS ONE, queue.py), backlog-batch membership, the conflict a
+# - NO OVERLAP: the hold (OVERLAPPING CHANGES ARE CHECKED AS ONE, queuebatch.py), backlog-batch membership, the conflict a
 #   queued change is told of, `no longer applies on main` and the push's full-recheck rule all leave it out -- a real
 #   source both change (TestWiring.scala) still holds the younger as before;
 # - RESOLVED, when a rebase, a batch's assembly or land's own rebase conflicts in it: its rows merged three-way (each
@@ -541,7 +541,7 @@ def snapshots_both_changed(wt, commit, before):
 
 
 # A SOURCE CONFLICT IS RESOLVED IN THE BATCH WHEN BOTH SIDES ONLY ADD (the owner, 2026-11-21: "make agentctl batch even
-# more, merge / fix conflicts"). Tier 3 of THE BATCH TIERS (queue.py): a real source two queued changes conflict in --
+# more, merge / fix conflicts"). Tier 3 of THE BATCH TIERS (queuebatch.py): a real source two queued changes conflict in --
 # both appended a test case, both added an import, both added a row to a hand-written Scala table -- is resolved on
 # the combined tree, hunk by hunk over `git merge-file --diff3`: a hunk is taken when, past the lines both sides wrote
 # the same (their common prefix and suffix, which must account for every base line of the hunk), what is left on each

@@ -133,7 +133,7 @@ class GuardedCommandsTest(unittest.TestCase):
         for part, needle in (("slots.py", "with exit_guard(), WorktreeGuard(repo):"),
                              ("slots.py", "with WorktreeGuard(repo):\n        return sync_onto_main"),
                              ("blame.py", "with WorktreeGuard(wt):"),
-                             ("fixer.py", "with WorktreeGuard(wt):"),
+                             ("redtick.py", "with WorktreeGuard(wt):"),
                              ("waiting.py", "with WorktreeGuard(wt):\n        return pick_commits")):
             with open(os.path.join(lib, part)) as f:
                 self.assertIn(needle, f.read(), f"{part}: {needle.splitlines()[0]}")

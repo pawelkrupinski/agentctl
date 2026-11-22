@@ -529,7 +529,7 @@ class QueueTest(WaitingTest):
         return [m for m, _r in self.verified()]
 
     def test_a_build_change_under_a_change_out_of_the_builds_reach_gets_the_verify_round(self):
-        """OUT OF THE BUILD'S REACH (queue.py; the owner, 2026-11-21): no path of the change is one the build compiles
+        """OUT OF THE BUILD'S REACH (queuerecheck.py; the owner, 2026-11-21): no path of the change is one the build compiles
         or reads, so only the checks reading its files can see the new build -- the verify round's."""
         self.assertEqual(self.reader_names_move_under("android/app/src/main/java/Auth.kt", "ios/App/List.swift"),
                          ["--range", "--verify-only"])

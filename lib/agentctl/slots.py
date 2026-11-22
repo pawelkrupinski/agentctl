@@ -614,7 +614,7 @@ def land_in_worktree(repo, a):
             stash = Stash(repo)
             stash.save()
             err(f"stashed local changes as {stash.name} ({stash.sha[:10]})")
-        if getattr(a, "until_done", False):  # the whole tail: submit, wait, clean up (queue.py LAND --UNTIL-DONE)
+        if getattr(a, "until_done", False):  # the whole tail: submit, wait, clean up (queueuntil.py LAND --UNTIL-DONE)
             if not queue_mode(repo, a):
                 print("NOT LANDED: --until-done is the land queue's (movies); it takes no --follow / --no-watch")
                 return 1

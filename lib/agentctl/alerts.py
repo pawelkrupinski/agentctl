@@ -452,7 +452,7 @@ def alert_probe(st, item, e, t, ctx=None):
         if it and it["state"] in ("landed", "superseded", "cancelled"):
             return f"its change is {it['state']}", None
         return None, None
-    if item.startswith(TRUST_ASK_PREFIX):  # the owner was asked to trust a clone (fixer.py trust_asks)
+    if item.startswith(TRUST_ASK_PREFIX):  # the owner was asked to trust a clone (fixersession.py trust_asks)
         path = item[len(TRUST_ASK_PREFIX):]
         return ("claude trusts it now" if not claude_trust_gap(path) else None), None
     if item.startswith("wt:"):

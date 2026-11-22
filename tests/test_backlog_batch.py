@@ -214,7 +214,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         self.assertEqual(self.batch()["data"]["members"], [ea, eb])
 
     def test_an_older_verification_pushes_before_a_backlog_batch_forms(self):
-        """Review 2026-11-18 (THE OLDEST VERIFICATION PUSHES FIRST, queue.py): a backlog batch formed while an older
+        """Review 2026-11-18 (THE OLDEST VERIFICATION PUSHES FIRST, queuepush.py): a backlog batch formed while an older
         change verified its combined tree, so that change's push waited behind the batch's 30-40 min check (THE BATCH
         GOES FIRST), the batch's push moved main under it, and it verified again -- behind the next backlog batch, and
         the next: workermem's 10 h again. A verification in flight forms no backlog batch until it pushed."""
@@ -549,7 +549,7 @@ class PushBatchTest(test_queue.QueueTest):
 
 
 class OverlapTest(BacklogBatchTest):
-    """OVERLAPPING CHANGES ARE CHECKED AS ONE (queue.py; the coordinator, 2026-11-18: B1 against the CI-workflows change,
+    """OVERLAPPING CHANGES ARE CHECKED AS ONE (queuebatch.py; the coordinator, 2026-11-18: B1 against the CI-workflows change,
     the scraper catalog against the scrapers refactor, the cycle-breaking change against both -- each checked alone,
     then NOT LANDED "no longer applies", a rebase and a full recheck)."""
 

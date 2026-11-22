@@ -46,7 +46,7 @@ OWNER_ONLY = {
     "publish-external": "publishing outside: a release, a post, a message under the owner's name",
     "policy-no-rule": "a policy decision no checked-in rule answers -- asked as the rule row to add",
 }
-# `red block --owner-cause` (fixer.py OWNER_CAUSES): each cause is one of the categories above
+# `red block --owner-cause` (redblock.py OWNER_CAUSES): each cause is one of the categories above
 OWNER_CAUSE_CATEGORY = {"external-account": "money-credentials", "credentials": "money-credentials",
                         "billing": "money-credentials", "dashboard": "money-credentials", "infra-apply": "irreversible",
                         "deploy": "irreversible"}

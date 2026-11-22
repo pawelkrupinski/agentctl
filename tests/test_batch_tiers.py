@@ -1,4 +1,4 @@
-"""THE BATCH TIERS (queue.py; the owner, 2026-11-21: "make agentctl batch even more, merge / fix conflicts"). Two
+"""THE BATCH TIERS (queuebatch.py; the owner, 2026-11-21: "make agentctl batch even more, merge / fix conflicts"). Two
 queued changes that overlap are checked as ONE batch whenever one of these assembles them, in order:
 1. git merges them cleanly (merge-tree);
 2. the overlap is in generated files: rows merged, else the regen command -- and a SNAPSHOT (`merge: regen`) is always

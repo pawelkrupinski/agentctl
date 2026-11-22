@@ -1041,7 +1041,7 @@ agent must be assigned to it".
   the pass it happens; the owner-decisions hook and the status line drop it with it (a blocked-external red with no
   block reads `re-offering`, never BLOCKED ON OWNER). ONE ENTRY PER ASK: an owner ask is keyed by its content too
   (alerts.py `alert_ask_digest`), so the same question under another item merges into the live entry.
-- **Workspace trust is asked when a repo is registered (fixer.py `trust_asks`, 2026-11-19).** The laptop's sync checks
+- **Workspace trust is asked when a repo is registered (fixersession.py `trust_asks`, 2026-11-19).** The laptop's sync checks
   every red-repos.json clone's claude trust each pass; an untrusted one is ONE `[tty-trust]` owner ask (item
   `trust:<path>`), asked once per gap, retracted once trusted -- never 21 minutes into a red, nor once per flap of its
   offer reason (the dispatcher's NOT DISPATCHABLE stays on the offer, out of the inbox).
@@ -1460,7 +1460,7 @@ The owner: "agents never wait on a land". In movies (a repo whose hook can check
    NOT LANDED); one the cancel cannot reach (the store unreachable) gets `PRECHECK REFUSED <id> ... could not be
    cancelled` and is still judged by its landing check. Exit 0 or 2 (could not check: sbt never came up, a bound) leaves the change to the
    landing check, and so does a precheck past its 900 s bound: it runs in its own process group, ended whole there
-   (its sbt and test JVMs with it). `--no-fast-precheck` starts none. Code: queue.py `start_fast_precheck` / `cmd_land_precheck`
+   (its sbt and test JVMs with it). `--no-fast-precheck` starts none. Code: queuesubmit.py `start_fast_precheck` / `cmd_land_precheck`
    (the hidden `agentctl land-precheck`); tests: `tests/test_queue.py` FastPrecheckTest.
 
 The reconciler then takes it, a step per tick:
@@ -1554,13 +1554,13 @@ The reconciler then takes it, a step per tick:
   file alone (movies' `@per-file` rows, proved by scripts/ci/lint_per_file_check.py) that the paths select by what they
   read, never by their own code; one both sides name so is no overlap of the lint plan (`read_overlap`): the two meet in
   its verdict only through a file both change, a full round already, or its code, which one side then names it for.
-  queue.py `PER_FILE_MODE`, `hook_text_modes`; tests: `tests/test_queue.py` `*per_file_lint*`; the simulator's table
+  queuerecheck.py `PER_FILE_MODE`, `hook_text_modes`; tests: `tests/test_queue.py` `*per_file_lint*`; the simulator's table
   carries each kind's per-file specs (`per_file`). PER TEST (2026-11-20): a hook answering
   `--script-test-plan` (movies: the self-tests `scripts/run-script-tests --paths <file> --list` selects -- a tool's own
-  test, its users' tests, the tests naming it or declaring they read it) has its `scripttests` word read per test. queue.py `read_overlap`, `own_diff_changed`, `verdict_kept`, `recheck_logged`; tests:
+  test, its users' tests, the tests naming it or declaring they read it) has its `scripttests` word read per test. queuerecheck.py `read_overlap`, `own_diff_changed`, `verdict_kept`, `recheck_logged`; tests:
   `tests/test_queue.py` MinimalRecheckTest, `tests/test_queue_sim.py` MinimalRecheckSimTest (INVARIANT 11 now also
   accepts a tree holding a verified one whose extra patches no check of it reads, the simulation's own read model).
-  Code: queue.py `recheck_reason` (THE RULE), `selection_change`, `share_selection`, `module_overlap`, buildview.py `build_view_change`, `_push_change`,
+  Code: queuerecheck.py `recheck_reason` (THE RULE), `selection_change`, `share_selection`, `module_overlap`, buildview.py `build_view_change`, `_push_change`,
   `_check_entry`; tests: `tests/test_queue.py` (`*verif*`, `*deleted_file*`, `*rechecks`, `*full_round`,
   `*build_change*`, `*share*`, `*module*`, `*verifyareas*`), `tests/test_buildview.py`.
   THE OLDEST VERIFICATION PUSHES FIRST (2026-11-16: workermem verified four times, each on a main a younger change
@@ -1570,7 +1570,7 @@ The reconciler then takes it, a step per tick:
   push, OLDER ones too (2026-11-19: ratchet-diff, queued before 08010c, pushed at 10:11Z under the fix's 09:34-10:18Z
   round; the fix verified again until 10:36Z, with 100213 and 102400 held behind it), and NO PUSH BATCH forms while a
   red fix is in flight (queued..pushing: batch #48 formed 13 s before 08010c pushed, and its passed verify round was
-  thrown away). queue.py `older_verifying`, batch.py `push_candidates`. With two or more changes owing a verify
+  thrown away). queuepush.py `older_verifying`, batch.py `push_candidates`. With two or more changes owing a verify
   round, THE PUSH BATCH (below) verifies and pushes them together instead. Pushing a disjoint checked change first is
   NOT done: any push moves main, and THE RULE then sends the verification round again (queue simulator, 50 seeds of
   an outside red's fix verifying while an older change is checked: the fix re-verified in 14 seeds before, 9 after;
@@ -1630,7 +1630,7 @@ The reconciler then takes it, a step per tick:
   (its push would throw the batch's check away: THE BATCH GOES FIRST), but its push's hold is recorded like a queued
   change's (`held: its push waits for batch <id> (<state>), which it is not in`, `... for the next push batch`, `...
   for <id>'s combined-tree verification`, `its push waits for the landing lock or a push tree`, `its last push did not
-  land ...`), `land status` prints it, and its `checked` deadline laps quietly while the hold is live (queue.py
+  land ...`), `land status` prints it, and its `checked` deadline laps quietly while the hold is live (queuepush.py
   `_push_checked`, `lap_change_deadline`). Tests: `tests/test_backlog_batch.py` PushBatchTest
   `test_a_fix_of_an_open_red_outside_the_gate_*` (the 2026-11-19 queue replayed), `test_a_checked_change_*`.
 - **ONE CLASSIFIER: A CHANGE'S KIND (the owner, 2026-11-19: "fix that structurally"; changekind.py).** 08010c sat
@@ -1684,7 +1684,7 @@ The reconciler then takes it, a step per tick:
   (<state>): both change <file>`). A lap of `queued`'s 15-min deadline is a QUIET re-deadline (severity info, no level
   up, no notification, and NO INBOX ENTRY: the lap's event names no audience, so the projector writes none -- on
   2026-11-19 movies-fix-replay's held laps reached the inbox every 15 min, 93 of the day's 442 entries) while that
-  hold is live; it escalates only when the hold is stuck (queue.py
+  hold is live; it escalates only when the hold is stuck (queuebatch.py
   `change_hold_stuck`): nothing named holds it, its blocking change is gone, or it is older than
   `$AGENTCTL_CHANGE_HOLD_MAX` (6 h, the `waiting` state's own bound). The blocker's own machine escalates should IT
   stick. Test: `tests/test_backlog_batch.py` OverlapTest `test_overlap_held_changes_wait_quietly...`.
@@ -1702,7 +1702,7 @@ The reconciler then takes it, a step per tick:
   A WAITING CHANGE HOLDS NOTHING IT ASSEMBLES WITH (2026-11-20, Main #2716: metrics-packages and phase7-houses sat
   `held: its check waits for movies-misc-cx (waiting)` -- held until green, behind a change that lands only at green):
   the younger is checked now and meets it in the batch at green; only a conflicting one waits (told `CONFLICTS`).
-  `land cancel` clears every hold naming the cancelled change (`clear_holds_on`). queue.py `overlap_hold`,
+  `land cancel` clears every hold naming the cancelled change (`clear_holds_on`). queuebatch.py `overlap_hold`,
   `pair_conflict`, `hold_for_overlap`; tests: `tests/test_backlog_batch.py` OverlapTest, `tests/test_queue_sim.py`
   CollisionTest (the three collisions of 2026-11-17 replayed: no check spent on a change that could not land, no full
   recheck).
@@ -1726,7 +1726,7 @@ The reconciler then takes it, a step per tick:
   and when the hold still stands `$AGENTCTL_REGEN_RECOVERY_WAIT` (2 h) later (the laptop or its JVM unreachable, the
   regen failing) it escalates ONCE to the owner (`REGEN HELD <id>: ...`, what is held and why, whether the laptop
   answered); the change stays held in its place. Its hold kind's recovery is `recover`: never a stuck lap, nor W1.
-  queue.py `regen_hold_overdue`, server.py `answer_regen_holds`. queue.py `conflict_cause`,
+  queueclose.py `regen_hold_overdue`, server.py `answer_regen_holds`. queueclose.py `conflict_cause`,
   `regen_hold`, server.py `conflict_bounced`, `queue_change`; tests: `tests/test_generated.py`.
 - **GENERATED FILES ARE NO OVERLAP (2026-11-19 ~06:05Z: six movies changes -- agreement, f2, datalayer3, resolver2-b1,
   enrichment2, resolver2 -- each `held: its check waits for <prev>` because each edits coupling-baseline.tsv: every
@@ -1766,7 +1766,7 @@ The reconciler then takes it, a step per tick:
   \`...\`, this change \`...\``) and the fix (`Fix now: \`cd <worktree> && git rebase <older's branch>\`, resolve
   those hunks, \`~/bin/agentctl land\``). Batch size: `$AGENTCTL_BACKLOG_BATCH_MAX` stays 8 -- over the 7-day replay
   (3 seeds a day, 591 landings) a cap of 4, 8, 16 and 32 ran 1252, 1256, 1255 and 1255 checks, median 4 ticks each,
-  p90 11, 10, 10, 10: batches seldom reach 8, so a bigger cap buys nothing measurable. queue.py `overlap_of`,
+  p90 11, 10, 10, 10: batches seldom reach 8, so a bigger cap buys nothing measurable. queuebatch.py `overlap_of`,
   `pair_resolvable`, `conflict_hunks`; tests: `tests/test_batch_tiers.py`, `tests/test_queue_sim.py` BatchTiersSimTest.
 - **SNAPSHOTS ARE REGENERATED, NEVER MERGED (2026-11-21 ~07:40Z: split-shared-js `held: its check waits for
   scrapers-2`, both changing movies' page snapshots expected-{index,warszawa-index,wroclaw-index}.html).** A snapshot
@@ -1813,7 +1813,7 @@ The reconciler then takes it, a step per tick:
   regenerated there; never behind a `waiting` change, and a red fix never waits. Queued together, the two holds of
   2026-11-21 are one batch, one check, all four landed (before: 2 of 4, the others told they no longer applied).
   A source overlap with a change in flight still waits as before: a check of the younger stacked on the older's tip
-  is not built. queue.py `generated_overlap`, `overlap_hold`; simulator invariant I10 (v3: no change held behind a
+  is not built. queuebatch.py `generated_overlap`, `overlap_hold`; simulator invariant I10 (v3: no change held behind a
   QUEUED one for generated files alone).
 - **THE PUSH BATCH (the owner, 2026-11-17: "combine them instead of landing them one by one", W1).** A checked change
   pushed alone: each on a main that moved since its full check paid a verify round of its own, and THE OLDEST
@@ -2051,7 +2051,7 @@ ancestry). `land --until-done` (movies, the queue) owns the tail, bounded by `--
 
 The brief (`~/bin/briefs/movies-agent-preamble.md`) makes it every movies agent's last step: run it with
 `run_in_background=true` and NO redirect (the task's own output file is per task), end the turn, report once after
-its last line. Code: queue.py `land_until_done`,
+its last line. Code: queueuntil.py `land_until_done`,
 `own_change_item`, `until_done_finish`, `next_command`; batch.py `land_status_entry`; tests: `tests/test_until_done.py`.
 
 ### remote checks: ci-runner's check tier

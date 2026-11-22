@@ -81,7 +81,7 @@ def main(argv=None):
     ld.add_argument("--no-fast-precheck", action="store_true",
                     help="movies: start no scripts/land-precheck beside the queue (default: it runs alongside, and a "
                          "refusal cancels the queued change with NOT LANDED in the inbox)")
-    lp = sub.add_parser("land-precheck", help=argparse.SUPPRESS)  # land's detached fast precheck (queue.py)
+    lp = sub.add_parser("land-precheck", help=argparse.SUPPRESS)  # land's detached fast precheck (queuesubmit.py)
     lp.add_argument("entry")
     lp.add_argument("--repo", required=True)
     lp.add_argument("--base", required=True)

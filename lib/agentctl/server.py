@@ -610,7 +610,7 @@ CONFLICT_PLACE_KEPT = 24 * 3600
 
 def conflict_bounced(every, e, now_=None):
     """The newest entry of e's worktree and branch, when it was rejected for a conflict within CONFLICT_PLACE_KEPT s
-    (and nothing of that source was queued since), or is still held for its regeneration (queue.py regen_hold): the
+    (and nothing of that source was queued since), or is still held for its regeneration (queueclose.py regen_hold): the
     place e takes. None otherwise."""
     mine = [x for x in every if x["id"] != e["id"] and same_change_source(x, e["worktree"], e.get("branch"))]
     last = max(mine, key=lambda x: x["seq"], default=None)
@@ -1273,12 +1273,12 @@ def sync_steps(repo, d, o_r):
 
 
 # THE LAPTOP ANSWERS A REGEN HOLD ITSELF (2026-11-20, phase8-units: held a day for `cd <worktree> && agentctl land`, a
-# command its lane, finished, never ran). A REGEN NEEDED hold (queue.py regen_hold: a generated row both sides changed,
+# command its lane, finished, never ran). A REGEN NEEDED hold (queueclose.py regen_hold: a generated row both sides changed,
 # which ci-runner, with no JVM, kept as main's, and the checks failed over) waits for the one command the laptop can run
 # -- the rebase and the repo's regen in the change's own worktree. The laptop's sync now runs it: for each queued change
 # so held whose worktree is on this machine, clean and still at the held head, `agentctl land` there, detached, once per
 # change and head (it queues the change again in the held entry's place). A dirty worktree, or one moved on, is its
-# agent's: left to it, as before. AN OVERDUE HOLD'S RECOVERY (queue.py regen_hold_overdue) is a new `regen_round` on
+# agent's: left to it, as before. AN OVERDUE HOLD'S RECOVERY (queueclose.py regen_hold_overdue) is a new `regen_round` on
 # the item: answered once more, and `regen_answered` says the round the laptop started (the owner's escalation reads it).
 _regen_answered = process_cache({})  # (change id, head, round) -> True: its `agentctl land` started
 

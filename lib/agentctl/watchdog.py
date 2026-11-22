@@ -139,7 +139,7 @@ def inv_w1():
         if off is None and age < W1_HARD_FACTOR * lim + (red_since or 0):
             continue
         if off is None and it and hold_recovers_itself(change_hold_visible(st, it, {}, t)):
-            continue  # a REGEN NEEDED hold: its own recovery escalates it once (queue.py regen_hold_overdue)
+            continue  # a REGEN NEEDED hold: its own recovery escalates it once (queueclose.py regen_hold_overdue)
         bad = (r, age, off or f"past {W1_HARD_FACTOR} x its bound, though its state still says it progresses")
         break
     if not bad:

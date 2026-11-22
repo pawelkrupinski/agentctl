@@ -65,7 +65,7 @@ class ProfileSeedsTest(unittest.TestCase):
         self.assertEqual(failures(sims), [])
 
     def test_under_load_the_backlog_batch_forms_and_every_change_lands_within_the_bound(self):
-        """Seeds 0-3 of the load profile: the fixed seeds of PUSHES FIRST, THEN THE HOLDS (queue.py tick_changes)."""
+        """Seeds 0-3 of the load profile: the fixed seeds of PUSHES FIRST, THEN THE HOLDS (queuepush.py tick_changes)."""
         sims = [queue_sim.Sim(seed, calm=True, trees=1, profile=LOAD, n_changes=LOAD["n"]).run() for seed in range(4)]
         self.assertEqual(failures(sims), [])
         self.assertGreater(sum(1 for s in sims for t in s.pushes if len(t[2]) > 2), 0, "batches pushed")
@@ -74,7 +74,7 @@ class ProfileSeedsTest(unittest.TestCase):
 # THE CHAOS PROFILE: reds, breaking changes, conflicts, infra failures and outside pushes several times as often, many
 # changes sharing files. Its fixed seeds (one check tree): 121, a member superseded while its batch checked was pushed
 # with it (A DECIDED MEMBER IS NEVER PUSHED, batch.py); 36 and 52, a change that no longer applied on main waited for a
-# tree before it was told (main_conflict, queue.py).
+# tree before it was told (main_conflict, queuebatch.py).
 CHAOS = {"red": 0.08, "bad": 0.3, "conflict": 0.3, "infra": 0.08, "outside": 0.1, "shared_path": 0.4, "outside_red": 0}
 
 
@@ -134,7 +134,7 @@ class GeneratedOverlapTest(unittest.TestCase):
 
     def test_the_baseline_queue_of_2026_11_19_holds_only_on_test_wiring_or_behind_a_check_in_flight(self):
         """Behind a QUEUED change, only the TestWiring.scala overlap holds; a generated overlap waits only for a check
-        already in flight (A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT, queue.py; invariant I10 holds the rest)."""
+        already in flight (A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT, queuebatch.py; invariant I10 holds the rest)."""
         for sim in self.run_seeds(range(4)):
             label = {c.eid: c.label for c in sim.changes}
             held = {(label[eid], label.get(b), f) for eid, hs in sim.holds.items() for _t, k, b, f in hs if k == "overlap"}
@@ -174,7 +174,7 @@ class GeneratedOverlapTest(unittest.TestCase):
 
 
 class BatchTiersSimTest(unittest.TestCase):
-    """THE BATCH TIERS (queue.py; the owner, 2026-11-21): the two holds of 2026-11-21 replayed over the real queue code
+    """THE BATCH TIERS (queuebatch.py; the owner, 2026-11-21): the two holds of 2026-11-21 replayed over the real queue code
     (queue_sim.HOLDS_2026_11_21), before (`before_tiers`: snapshots unregistered, no source resolution) and after."""
 
     def run_seeds(self, script, seeds=range(4), **profile):
@@ -201,7 +201,7 @@ class BatchTiersSimTest(unittest.TestCase):
 
     def test_as_observed_the_younger_two_wait_for_the_check_in_flight_and_meet_in_the_next_batch(self):
         """The younger two queued while the older two checked in a batch (as on 2026-11-21): A GENERATED OVERLAP
-        WAITS FOR A CHECK IN FLIGHT (queue.py) -- checked beside it, split-shared-js's check was voided by the older
+        WAITS FOR A CHECK IN FLIGHT (queuebatch.py) -- checked beside it, split-shared-js's check was voided by the older
         landing (100 checks over 20 seeds, against 40 held, the median the same) -- and the two meet in one batch."""
         for before, sim in zip(self.run_seeds(queue_sim.HOLDS_2026_11_21_IN_FLIGHT, before_tiers=True),
                                self.run_seeds(queue_sim.HOLDS_2026_11_21_IN_FLIGHT)):
@@ -226,7 +226,7 @@ class BatchTiersSimTest(unittest.TestCase):
 
 
 class MinimalRecheckSimTest(unittest.TestCase):
-    """MINIMAL RECHECKS (queue.py; the owner, 2026-11-20): over the real queue code, a change main moves under is
+    """MINIMAL RECHECKS (queuerecheck.py; the owner, 2026-11-20): over the real queue code, a change main moves under is
     checked again only when its checks read what main changed -- by the simulated hook's own plans (queue_sim
     reads_of) -- and INVARIANT 11 still holds: every tree pushed is one a check passed, or holds one whose extra
     patches no check of it reads."""
@@ -401,10 +401,14 @@ class MutationTest(unittest.TestCase):
                     s = os.path.join(src, x)
                     (shutil.copytree if os.path.isdir(s) else shutil.copy)(
                         s, os.path.join(tmp, x), **({"ignore": shutil.ignore_patterns("__pycache__")} if os.path.isdir(s) else {}))
-                q = os.path.join(tmp, "lib", "agentctl", "changekind.py" if name.startswith("changekind.py") else "queue.py")
+                # the part holding the anchor, wherever it moved (one part, exactly)
+                lib = os.path.join(tmp, "lib", "agentctl")
+                holders = [os.path.join(lib, f) for f in sorted(os.listdir(lib))
+                           if f.endswith(".py") and anchor in open(os.path.join(lib, f)).read()]
+                self.assertEqual(len(holders), 1, f"mutation {name}: its anchor is in {len(holders)} parts; update it")
+                q = holders[0]
                 with open(q) as f:
                     text = f.read()
-                self.assertIn(anchor, text, f"mutation {name}: its anchor is gone from {os.path.basename(q)}; update it")
                 with open(q, "w") as f:
                     f.write(text.replace(anchor, mutant, 1))
                 runner = os.path.join(tmp, "run_mutant.py")

@@ -303,7 +303,7 @@ def red_dispatcher(store, o_r, repo, t):
             continue
         gap = claude_trust_gap(prepo)
         if gap:  # never a launch claude refuses: said on its offer, dispatched once trusted -- the owner was asked
-            why = f"NOT DISPATCHABLE: {gap}"  # when the repo was registered (fixer.py trust_asks), never once per offer
+            why = f"NOT DISPATCHABLE: {gap}"  # when the repo was registered (fixersession.py trust_asks), never once per offer
             if why != off.get("reason"):
                 store.offer_reason(off["id"], why)
             continue

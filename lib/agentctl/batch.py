@@ -196,7 +196,7 @@ def backlog_candidates(repo, d, reds, t=None, facts=None):
         return []
     facts = queue_facts(reds) if facts is None else facts
     entries = queued_entries(d)
-    # THE OLDEST VERIFICATION PUSHES FIRST (queue.py) holds the batch too (review 2026-11-18): formed meanwhile, the
+    # THE OLDEST VERIFICATION PUSHES FIRST (queuepush.py) holds the batch too (review 2026-11-18): formed meanwhile, the
     # batch held the verified change's push for its whole check (THE BATCH GOES FIRST), then its push moved main under
     # it and it verified again -- behind the next backlog batch, and the next. No backlog batch while one verifies, or
     # while a checked change's push is due (its verification may have ended since the change tick).
@@ -581,7 +581,7 @@ def check_tree_slot_free(repo, d):
 # the verdict kept on the batch (`prechecked`: its members, base and tip) and on each member. It pre-checks again
 # whenever its membership changes (main moving while red is judged once, at green). At green the batch, at most
 # BACKLOG_BATCH_MAX changes, is assembled on the new main and lands in ONE push (green_batch_depth): its members exactly
-# the pre-checked ones and main's move since read by none of their checks (MINIMAL RECHECKS, queue.py read_overlap) ->
+# the pre-checked ones and main's move since read by none of their checks (MINIMAL RECHECKS, queuerecheck.py read_overlap) ->
 # no check again; else the fast check of the combined tree, as before. Measured (the simulator over 2026-11-18..20's
 # arrivals, 20 seeds a day, real round lengths): joining `waiting` unchecked instead, the batch's one tree doing every
 # change's check, cut check time 8% but put the p90 wait at 274 ticks against 158 (the red's idle trees went unused);
@@ -1254,7 +1254,7 @@ def land_status_line(r, bt, in_batch, t):
 def land_status_entry(st, entry, t):
     """`land status <entry>`: ONE change -- the item whose id is `entry`, else the one whose id contains it -- open or
     decided: its state, worktree and head, then its verdict (LANDED <sha> / NOT LANDED: <why>) or what it waits on.
-    A VERDICT IS DURABLE (queue.py): an agent whose wait died reads it here after the fact. 1 when none or several
+    A VERDICT IS DURABLE (queueuntil.py): an agent whose wait died reads it here after the fact. 1 when none or several
     match."""
     items = st.items("change")
     hits = [it for it in items if it["id"] == entry] or [it for it in items if entry in it["id"]]
@@ -1278,7 +1278,7 @@ def land_status_entry(st, entry, t):
             for line in remote_check_lines(d.get("check"), t) or [
                     "check: no remote check recorded (a local check tree, or its executor is starting)"]:
                 print(line)
-    for r in d.get("rechecks") or []:  # MINIMAL RECHECKS (queue.py): why each round after the first ran, or did not
+    for r in d.get("rechecks") or []:  # MINIMAL RECHECKS (queuerecheck.py): why each round after the first ran, or did not
         print(f"recheck: {hhmmz(r.get('at') or 0)} {r.get('kind')} on {r.get('main') or '?'}: {r.get('why')}")
     return 0
 
