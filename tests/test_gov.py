@@ -427,5 +427,55 @@ class GovernorTest(unittest.TestCase):
         self.assertIn("4/12 cores charged", out.getvalue())
 
 
+
+
+class MachineCpuTest(unittest.TestCase):
+    """2026-11-22: top read 0.24% idle (44% user, 56% sys), load 131-150 on 18 cores, and `gov status` said "pressure:
+    none [... load 6.1/18 cores]": gov_busy_cores summed ps's %CPU, a decaying per-process average that misses kernel
+    time and the fork/exec churn (run-script-tests trees, git, fake repos) that was burning the CPU. The busy cores are
+    the whole machine's CPU ticks now -- user + sys + nice over a delta -- and a saturated CPU with an overfull run
+    queue is pressure."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.saved = {k: os.environ.get(k) for k in ("AGENTCTL_GOV_DIR", "AGENTCTL_GOV_BUSY_PROBE", "AGENTCTL_GOV_LOAD_PROBE",
+                                                       "AGENTCTL_GOV_PS_PROBE", "AGENTCTL_MACHINE", "AGENTCTL_LAPTOP_PRESSURE")}
+        for k in self.saved:
+            os.environ.pop(k, None)
+        os.environ["AGENTCTL_GOV_DIR"] = self.d
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+    def ticks(self, *samples):
+        it = iter(samples)
+        return lambda: next(it)
+
+    def test_a_cpu_all_user_and_sys_reads_every_core_busy(self):
+        busy = A.machine_busy_cores(18, read=self.ticks((1000, 5000), (1000 + 1800, 5000 + 1800)), sleep=lambda s: None)
+        self.assertAlmostEqual(busy, 18.0)
+        half = A.machine_busy_cores(18, read=self.ticks((0, 0), (900, 1800)), sleep=lambda s: None,
+                                    state=os.path.join(self.d, "other.json"))
+        self.assertAlmostEqual(half, 9.0)
+
+    def test_a_saturated_machine_with_an_overfull_run_queue_is_pressure(self):
+        r = {"free_pct": 80, "level": 1, "swap_mb": 0, "load1": 18.0, "cores": 18, "runq": 131.0,
+             "swap_growth_mb": None, "swap_span": 0}
+        why = A.laptop_pressure(r)
+        self.assertIsNotNone(why, "100% user+sys with load 131 on 18 cores read as no pressure")
+        self.assertIn("CPU saturated", why)
+        self.assertIsNone(A.laptop_pressure(dict(r, runq=20.0)), "busy but not oversubscribed: no pressure")
+        self.assertIsNone(A.laptop_pressure(dict(r, load1=8.0)), "threads waiting while cores idle: no pressure")
+
+    def test_the_governor_reads_a_saturated_machine_as_starved(self):
+        saved = A.machine_busy_cores
+        A.machine_busy_cores = lambda n, **k: float(n)
+        try:
+            cap = A.gov_capacity(tickets=[], m={"cores": 18})
+        finally:
+            A.machine_busy_cores = saved
+        self.assertEqual((cap["state"], cap["measured"]), ("starved", 18.0))
+
 if __name__ == "__main__":
     unittest.main()
