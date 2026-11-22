@@ -399,7 +399,8 @@ cognitive	workflow_triggers	26
 cognitive	write_snapshot	13
 copies	ask	2
 copies	batch	4
-copies	blame	4
+copies	blame	2
+copies	blame|blamerecords	2
 copies	buildview	2
 copies	cireport|redtick	2
 copies	clones|serverclone	2
@@ -828,7 +829,6 @@ cyclomatic	workflow_triggers	12
 cyclomatic	worktree_holding	12
 cyclomatic	write_snapshot	24
 file-lines	alerts	719
-file-lines	blame	833
 file-lines	ciwhy	760
 file-lines	gov	728
 file-lines	live	755

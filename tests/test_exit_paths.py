@@ -132,7 +132,7 @@ class GuardedCommandsTest(unittest.TestCase):
         lib = os.path.join(os.path.dirname(HERE), "lib", "agentctl")
         for part, needle in (("slots.py", "with exit_guard(), WorktreeGuard(repo):"),
                              ("queueenter.py", "with WorktreeGuard(repo):\n        return sync_onto_main"),
-                             ("blame.py", "with WorktreeGuard(wt):"),
+                             ("culpritfix.py", "with WorktreeGuard(wt):"),
                              ("reddispatch.py", "with WorktreeGuard(wt):"),
                              ("conflicts.py", "with WorktreeGuard(wt):\n        return pick_commits")):
             with open(os.path.join(lib, part)) as f:

@@ -28,13 +28,14 @@ from agentctl.owners import OWNER_TTL, owner_alive, owner_lease
 from agentctl.fixerland import red_dispatch
 from agentctl.red import (
     DECIDED_REVERT, RED_CLAIM_MAX, RED_CLAIM_TTL, RED_DECIDED_REVERT_MAX, RED_FIXER_MAX, RED_FIXER_TTL)
+from agentctl.dispatchblock import cached_dispatch_blocker
 from agentctl.redseen import KIND_ORDER
 from agentctl.redopen import red_family_tell
 from agentctl.redclaim import red_joined_progress, red_wt_mark
 from agentctl.redcrash import red_queue_family
 from agentctl.owner import OWNER_MAX, family_owned, owner_hand, owner_holder, owner_spawn, owner_still_ending
-from agentctl.blame import blame_note, blame_reland, blame_waiting, lander_spawn
-from agentctl.dispatchblock import cached_dispatch_blocker
+from agentctl.blame import blame_waiting
+from agentctl.culpritfix import blame_note, blame_reland, lander_spawn
 
 
 def red_commits_naming(wt: str | None, names: Any, keys: tuple[str, ...] = ("Fixes-Red",)) -> list[tuple[str, float]]:

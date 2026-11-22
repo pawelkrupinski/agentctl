@@ -25,11 +25,15 @@ from agentctl.red import RED_TICK_INTERVAL, red_active_of, red_obs_for
 from agentctl.redmove import red_put_offer, red_settled_runs
 from agentctl.ciwhy import (
     _gate_lists, _gate_no_verdict, _outside_lists, ci_state_load, ci_state_write, gate_from_snap, gate_runs)
+from agentctl.recordingpins import refresh_pinned_recording
+from agentctl.gatesummary import _last_gate_publish, publish_gate_summary
+from agentctl.dispatchblock import _blocker_cache, dispatch_blocker, in_fixer
 from agentctl.branches import route_branch_reds, settle_branch_reds
 from agentctl.redseen import gate_red_units, red_merge_rekeyed, red_obs_of_units, stuck_obs
 from agentctl.redobserve import red_observe
 from agentctl.reduntracked import red_active_untracked, red_note_untracked, red_split_untracked, red_untrack
 from agentctl.redblock import gate_unread_spell, red_renew_blocks
+from agentctl.localrecheck import recheck_local
 from agentctl.redopen import red_attach_obs, red_offer, red_open
 from agentctl.redearly import early_attach, early_observed, early_opened, early_unobserved
 from agentctl.redclaim import bind_fixer_session, red_beat, red_claim, red_release, red_targets
@@ -37,17 +41,14 @@ from agentctl.fixerlife import red_fixer
 from agentctl.owner import red_owner, red_reap_orphans
 from agentctl.redvault import red_block, red_owner_push, red_quota_waits, red_unblock
 from agentctl.ask import red_owner_reminders
-from agentctl.blame import blame_withdraw, cmd_red_probe
+from agentctl.redprobe import cmd_red_probe
 from agentctl.reddispatch import RED_MODEL, red_dispatcher, red_migrate, red_renew_holders, repo_dispatch_off_all
 from agentctl.redstep import red_step
 from agentctl.redview import repo_dispatch_set
 from agentctl.cireport import ci_state_refresh, ci_why
-from agentctl.localrecheck import recheck_local
 from agentctl.redhold import red_enforce
 from agentctl.redstatus import red_status
-from agentctl.recordingpins import refresh_pinned_recording
-from agentctl.gatesummary import _last_gate_publish, publish_gate_summary
-from agentctl.dispatchblock import _blocker_cache, dispatch_blocker, in_fixer
+from agentctl.blamerecords import blame_withdraw
 
 
 # -- the tick's red step (the processor; ci-why never acts)

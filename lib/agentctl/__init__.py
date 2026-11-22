@@ -22,9 +22,9 @@ MODULES = ("usage", "core", "timefmt", "statefile", "moviestools", "classify", "
            "storeauth", "serverclone", "landhold", "tickrun", "tickservice", "statusagents", "recordingpins",
            "runsigs", "gatesummary", "dispatchblock", "branches", "redseen", "redobserve", "reduntracked",
            "redblock", "queuebatch", "queuediff", "localrecheck", "cliops", "redauthors", "redopen", "redearly",
-           "redclaim", "redverify", "redcrash", "fixerlife", "owner", "redvault", "ask", "redpending", "blame",
-           "reddispatch", "redstep", "redview", "cireport", "watchtick", "queueclose", "recovery", "queuepush",
-           "netwatch", "tools", "superseded", "park", "orphans", "maintain", "redhold", "invariants", "watchdog",
-           "batchitem", "batchpush", "batch", "batchcheck", "server", "snapshot", "landqueue", "status",
-           "statuspage", "redstatus", "redtick", "syncsteps", "serversteps", "queueenter", "slots", "cliparser",
-           "processor", "cli")
+           "redclaim", "redverify", "redcrash", "fixerlife", "owner", "redvault", "ask", "redpending", "redprobe",
+           "blame", "culpritfix", "reddispatch", "redstep", "redview", "cireport", "watchtick", "redhold",
+           "blamerecords", "queueclose", "recovery", "queuepush", "netwatch", "tools", "superseded", "park",
+           "orphans", "maintain", "invariants", "watchdog", "batchitem", "batchpush", "batch", "batchcheck",
+           "server", "snapshot", "landqueue", "status", "statuspage", "redstatus", "redtick", "syncsteps",
+           "serversteps", "queueenter", "slots", "cliparser", "processor", "cli")

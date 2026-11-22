@@ -8,8 +8,9 @@ mypy-errors	batchcheck	43
 mypy-errors	batchitem	7
 mypy-errors	batchpush	34
 mypy-errors	beats	4
-mypy-errors	blame	126
+mypy-errors	blame	43
 mypy-errors	blameopen	13
+mypy-errors	blamerecords	25
 mypy-errors	branches	73
 mypy-errors	buildview	42
 mypy-errors	changekind	27
@@ -24,6 +25,7 @@ mypy-errors	conditions	41
 mypy-errors	config	19
 mypy-errors	conflicts	40
 mypy-errors	core	33
+mypy-errors	culpritfix	35
 mypy-errors	dispatchblock	13
 mypy-errors	dispatches	48
 mypy-errors	explorer	16
@@ -96,6 +98,7 @@ mypy-errors	redmove	14
 mypy-errors	redobserve	20
 mypy-errors	redopen	38
 mypy-errors	redpending	79
+mypy-errors	redprobe	23
 mypy-errors	redrecord	4
 mypy-errors	redreplay	19
 mypy-errors	redrepos	12
