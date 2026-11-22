@@ -1,4 +1,5 @@
 """Tests for ~/bin/agentctl: python3 -m unittest discover -s ~/bin/tests -v"""
+from unittest import mock
 import contextlib, re, datetime as dt, importlib.machinery, importlib.util, io, json, os, subprocess, sys, tempfile, threading, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -412,6 +413,43 @@ class CleanupTest(Base):
         self.assertTrue(os.path.isdir(mainwt))
         self.assertIn("active", out)
         self.assertIn("on master", out)
+
+    def test_an_owner_worktree_is_locked_and_kept(self):
+        """2026-11-22T04:01Z: outside-gate's owner GAVE UP mid-turn, "my worktree was deleted": upkeep's cleanup removed
+        it, clean and an ancestor of main between commits. An owner's worktree is locked when made, and a recorded one
+        (made before the lock) when taken up again; cleanup keeps a locked tree."""
+        made = A.owner_worktree(self.r.path, "fam-new", {})
+        old = self.r.worktree("wt-owner-old")  # recorded by an owner from before the lock: unlocked
+        self.assertEqual(A.owner_worktree(self.r.path, "fam-old", {"worktree": old}), old)
+        make_old(made); make_old(old)
+        rc, out = self.cleanup("-v")
+        self.assertTrue(os.path.isdir(made), out)
+        self.assertTrue(os.path.isdir(old), out)
+        self.assertEqual(out.count(": locked"), 2, out)
+        self.assertEqual(self.deleted_log(), "")
+
+    def test_a_tree_locked_or_entered_after_planning_is_kept(self):
+        """A cleanup run took 30 min on 2026-11-22 (upkeep killed it): its plan's lock / cwd / activity reads went stale
+        before the removals. They are read again just before each `git worktree remove`."""
+        wt = self.r.worktree("wt-late")
+        make_old(wt)
+        plan = A.plan_worktrees
+        def plan_then_lock(*a, **k):
+            out = plan(*a, **k)
+            subprocess.run(["git", "-C", self.r.path, "worktree", "lock", wt], check=True)
+            return out
+        with mock.patch.object(A, "plan_worktrees", plan_then_lock):
+            rc, out = self.cleanup()
+        self.assertTrue(os.path.isdir(wt), out)
+        self.assertIn("locked since planning; kept", out)
+        self.assertEqual(self.deleted_log(), "")
+        subprocess.run(["git", "-C", self.r.path, "worktree", "unlock", wt], check=True)
+        with mock.patch.object(A, "process_cwds", lambda: {4242: wt}), \
+                mock.patch.object(A, "plan_worktrees",
+                                  lambda *a, **k: [("delete", wt, None, sh(wt, "git", "rev-parse", "HEAD"), "ancestor")]):
+            rc, out = self.cleanup()
+        self.assertTrue(os.path.isdir(wt), out)
+        self.assertIn("in use by pid [4242] since planning; kept", out)
 
     def test_dry_run_deletes_nothing(self):
         wt = self.r.worktree("wt-dry")

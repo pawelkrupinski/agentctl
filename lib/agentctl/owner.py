@@ -96,8 +96,12 @@ def owner_drop(fam, names):
 
 def owner_worktree(repo, fam, rec):
     """The owner's ONE worktree: the recorded one while it exists, else <clone>-wt-owner-<family> (created off
-    origin/main, or its branch taken up again). The notebook and RED-INBOX.md are excluded from commits."""
+    origin/main, or its branch taken up again). The notebook and RED-INBOX.md are excluded from commits. It is LOCKED
+    (`git worktree lock`), which `cleanup` keeps: an owner's tree is clean and its HEAD an ancestor of main between
+    commits, so upkeep's hourly cleanup removed it -- once mid-turn (outside-gate turn 67, 2026-11-22T04:01Z: "my
+    worktree was deleted mid-turn"), and at 11-21 12:39Z, 19:46Z, 11-22 00:12Z and 04:27Z between turns."""
     if rec.get("worktree") and os.path.isdir(rec["worktree"]):
+        lock_owner_worktree(repo, fam, rec["worktree"])
         return rec["worktree"]
     _d, clone, _w = waiting_state(repo)
     slug_ = re.sub(r"[^A-Za-z0-9_.-]", "-", fam)
@@ -110,11 +114,18 @@ def owner_worktree(repo, fam, rec):
                 check=False)
         if r.returncode != 0:
             return None
+    lock_owner_worktree(repo, fam, wt)
     try:
         worktree_exclude(wt, (OWNER_NOTEBOOK, "RED-INBOX.md", "RED-NUDGE.md", "RED-STOP.md"))
     except OSError:
         pass
     return wt
+
+
+def lock_owner_worktree(repo, fam, wt):
+    """Lock the owner's worktree against `git worktree remove` / prune (idempotent: an already locked tree refuses
+    the lock, which is fine)."""
+    git(repo, "worktree", "lock", "--reason", f"agentctl red owner {fam}: its one worktree", wt, check=False)
 
 
 def worktree_exclude(wt, names):

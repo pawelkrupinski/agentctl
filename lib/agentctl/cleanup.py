@@ -120,6 +120,19 @@ def plan_worktrees(repo, main, min_age_h, cwds, include_caches=False):
     return plan
 
 
+def still_in_use(repo, path):
+    """Why worktree `path` must be kept after all, read now (not at plan time), or None."""
+    w = next((w for w in worktrees(repo) if w["worktree"] == path), None)
+    if w is None:
+        return "gone"
+    if "locked" in w:
+        return "locked"
+    busy = [p for p, c in process_cwds().items() if c == path or c.startswith(path + "/")]
+    if busy:
+        return f"in use by pid {busy[:3]}"
+    return None  # (no gitdir-activity re-read: the plan's own `git status` refreshed the index's mtime)
+
+
 def plan_measure(o_r, runs_for, now_=None):
     """Remote measure/* branches: [(action, name, sha, reason)]. runs_for(name) -> list of run dicts."""
     now_ = now_ or now()
@@ -167,9 +180,14 @@ def cmd_cleanup(a):
             print(f"  {'would delete' if dry else 'delete'} {label}: {why}")
             if dry:
                 continue
-            # Re-verify right before acting; `git worktree remove` (no --force) refuses dirty trees itself.
+            # Re-verify right before acting; `git worktree remove` (no --force) refuses dirty trees itself. A run over
+            # many repos takes minutes (2026-11-22: 30, killed by upkeep's bound), so the plan's lock and cwd reads are
+            # taken again here: a tree a process entered or locked since planning is kept.
             if git(repo, "-C", path, "rev-parse", "HEAD").strip() != sha or not merged_reason(repo, sha, main):
                 print("    changed since planning; kept"); continue
+            busy_now = still_in_use(repo, path)
+            if busy_now:
+                print(f"    {busy_now} since planning; kept"); continue
             r = git(repo, "worktree", "remove", path, check=False)
             if r.returncode != 0:
                 print(f"    worktree remove refused: {r.stderr.strip()}"); rc = 1; continue
