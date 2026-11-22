@@ -469,12 +469,13 @@ class MachineCpuTest(unittest.TestCase):
         self.assertIsNone(A.laptop_pressure(dict(r, load1=8.0)), "threads waiting while cores idle: no pressure")
 
     def test_the_governor_reads_a_saturated_machine_as_starved(self):
-        saved = A.machine_busy_cores
-        A.machine_busy_cores = lambda n, **k: float(n)
+        saved = A.machine_busy_cores, A.machine_cores
+        # an 18-core machine all busy -- never the runner's own core count (a 2-core GitHub runner read as `spare`)
+        A.machine_busy_cores, A.machine_cores = (lambda n, **k: float(n)), (lambda: 18)
         try:
             cap = A.gov_capacity(tickets=[], m={"cores": 18})
         finally:
-            A.machine_busy_cores = saved
+            A.machine_busy_cores, A.machine_cores = saved
         self.assertEqual((cap["state"], cap["measured"]), ("starved", 18.0))
 
 if __name__ == "__main__":
