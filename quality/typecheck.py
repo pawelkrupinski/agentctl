@@ -32,6 +32,9 @@ def concatenate(root, out):
     with open(out, "w") as f:
         for part in part_order(root):
             text = open(os.path.join(root, "lib", "agentctl", f"{part}.py")).read()
+            # a real module's imports of its siblings are the namespace's own names here: blanked, lines kept
+            text = re.sub(r"^from agentctl\.\w+ import (\([^)]*\)|.*)$", lambda m: "\n" * m.group(0).count("\n"), text,
+                          flags=re.M)
             if not text.endswith("\n"):
                 text += "\n"
             starts.append((line, part))

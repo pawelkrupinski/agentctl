@@ -20,6 +20,7 @@ os.environ.setdefault("AGENTCTL_CONFIG", "-")  # no config file of the machine's
 _loader = importlib.machinery.SourceFileLoader("agentctl", TOOL)
 _spec = importlib.util.spec_from_loader("agentctl", _loader)
 A = importlib.util.module_from_spec(_spec)
+sys.modules["agentctl"] = A  # the namespace is the package its real modules (MODULES) import under: A.<name> reaches them
 _loader.exec_module(A)
 # THE GH TALLY NEVER PRINTS INTO A TEST (2026-11-19, a042390's CI): a worker process alive past GH_TALLY_SECONDS (a
 # suite over 300 s on a slow runner) printed its `agentctl: github calls (pid ...)` tally into a fixer land's captured

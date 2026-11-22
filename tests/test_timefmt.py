@@ -23,5 +23,22 @@ class TimeFormatsTest(unittest.TestCase):
         self.assertEqual(A.day_hhmmz("90061"), "1970-01-02 01:01Z")
 
 
+class RealModuleTest(unittest.TestCase):
+    """timefmt is a real module (lib/agentctl MODULES): a test's patch of the namespace reaches it."""
+
+    def test_a_patch_of_the_namespace_reaches_the_module(self):
+        import sys
+        mod = sys.modules["agentctl.timefmt"]
+        self.assertIs(mod.ts, A.ts)
+        saved = A.now
+        try:
+            A.now = lambda: A.dt.datetime(2026, 1, 2, 3, 4, 5, tzinfo=A.dt.timezone.utc)
+            self.assertIs(mod.now, A.now)
+            self.assertEqual(A.ts(), "2026-01-02T03:04:05Z")  # ts, in the module, calls the patched now
+        finally:
+            A.now = saved
+        self.assertIs(mod.now, saved)
+
+
 if __name__ == "__main__":
     unittest.main()

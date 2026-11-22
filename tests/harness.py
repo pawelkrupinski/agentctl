@@ -107,11 +107,14 @@ def _agentctl_modules():
 
 
 def _fresh_proxies():
+    """ONE proxy per stdlib module for all of agentctl's modules: `A.time.sleep = fake` fakes the sleep of the
+    namespace and of every real module (lib/agentctl MODULES) alike."""
+    proxies = {name: ModuleProxy(real) for name, real in _PROXIED.items()}
     for mod in _agentctl_modules():
         for name, real in _PROXIED.items():
             cur = mod.__dict__.get(name)
             if cur is real or isinstance(cur, ModuleProxy):
-                setattr(mod, name, ModuleProxy(real))
+                mod.__dict__[name] = proxies[name]
 
 
 def _stdlib_patched():

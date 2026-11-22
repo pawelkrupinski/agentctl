@@ -1,5 +1,10 @@
 # agentctl, part `timefmt`: the clock's formats, one copy each: now, the ISO stamp, its parse and epoch, HH:MMZ.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's only.
+
+import datetime as dt
+import time
+from typing import Any
+
 
 def now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)

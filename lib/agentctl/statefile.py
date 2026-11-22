@@ -1,5 +1,11 @@
 # agentctl, part `statefile`: THE JSON STATE FILES: one reader (read_record) and one atomic writer (write_json).
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's only.
+
+import json
+import os
+import threading
+from typing import Any
+
 
 def read_record(path: str, default: Any = None) -> Any:
     """THE JSON STATE READER: the JSON at path, or default when it is missing or unreadable (a torn or foreign file)."""

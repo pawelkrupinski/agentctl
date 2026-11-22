@@ -131,6 +131,17 @@ class TypecheckMappingTest(unittest.TestCase):
         self.assertEqual(typecheck.rows(errors), [("mypy-errors", "a", 1), ("mypy-errors", "b", 1)])
 
 
+class RealModuleImportsTest(unittest.TestCase):
+    def test_a_real_modules_sibling_imports_are_blanked_with_their_lines_kept(self):
+        root = tree({"a": "x = 1\n", "b": "from agentctl.a import (x,\n    y)\nfrom agentctl.a import x\nv = x\n"})
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "ns.py")
+            starts = typecheck.concatenate(root, path)
+            text = open(path).read()
+        self.assertNotIn("from agentctl", text)
+        self.assertEqual(text.splitlines()[starts[1][0] - 1 + 3], "v = x")
+
+
 class LimitsMatchMoviesTest(unittest.TestCase):
     def test_the_limits_are_the_movies_ratchets(self):
         self.assertEqual(measure.LIMITS, {"cognitive": 10, "cyclomatic": 10, "inner-defs": 2, "method-lines": 50,

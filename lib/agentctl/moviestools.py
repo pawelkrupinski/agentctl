@@ -1,8 +1,10 @@
 # agentctl, part `moviestools`: what agentctl reads from the movies tools it calls, read from the tools themselves.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's only.
 #
 # ONE PLACE FOR THE INTERFACE (2026-11-22, the shell-to-python migration's phase 3 freezes it): what agentctl knows of a
 # movies tool -- its checks, its words -- is derived here from the tool's own text, never a copy that drifts.
+
+import re
 
 
 def hook_checks(hook_path: str) -> list[str]:
