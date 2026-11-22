@@ -13,7 +13,11 @@
 #     holds one fixture per incident.
 
 import re
-from typing import Iterable, List, Optional, Tuple
+import subprocess
+import time
+from typing import Any, Callable, Iterable, List, Optional, Sequence, Tuple, TypeVar
+
+from agentctl.core import err
 
 
 def _union(rows: list[tuple[str, str, str]]) -> re.Pattern[str]:
@@ -29,8 +33,6 @@ def _union(rows: list[tuple[str, str, str]]) -> re.Pattern[str]:
 # five times), and only then raises TransientNetwork -- which its caller reads as infra (no answer), never as a red, a
 # rejection or a fault of the change. Anything else (a 404, a refusal, a parse error) is raised at once: retrying it
 # hides a real answer.
-from typing import Any, Callable, Optional, Sequence, TypeVar
-
 _NetT = TypeVar("_NetT")
 
 # Log lines that mean the machine or the network failed, not the code. The network rows are also what a LOCAL check's

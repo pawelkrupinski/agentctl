@@ -401,7 +401,7 @@ def pid_alive(pid):
         return True
 
 
-def env_num(name, default):
+def env_num(name: str, default: Any) -> Any:
     try:
         return float(os.environ[name]) if os.environ.get(name) else default
     except ValueError:

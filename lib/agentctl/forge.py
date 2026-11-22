@@ -12,10 +12,13 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from typing import Any
+
 from agentctl.core import err, process_cache, state_root
 from agentctl.timefmt import parse_time
 from agentctl.statefile import read_record, write_json
 from agentctl.ghapp import ghapp_enabled, ghapp_token
+from agentctl.classify import net_run
 
 
 # ---------------------------------------------------------------- forge: the read side
