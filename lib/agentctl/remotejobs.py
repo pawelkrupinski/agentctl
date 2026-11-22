@@ -7,7 +7,8 @@ import time
 from agentctl.timefmt import parse_time
 from agentctl.forge import api
 from agentctl.workflows import workflow_job_names, workflow_job_timeouts
-from agentctl.stats import _num, stats_query, stats_url
+from agentctl.stats import stats_query, stats_url
+from agentctl.statsrecords import _num
 
 
 # ---------------------------------------------------------------- remote checks: ci-runner's check tier

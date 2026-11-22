@@ -53,6 +53,7 @@ mypy-errors	invariants	38
 mypy-errors	issues	7
 mypy-errors	jvmreap	42
 mypy-errors	land	29
+mypy-errors	landdryrun	48
 mypy-errors	lander	33
 mypy-errors	landhold	5
 mypy-errors	landqueue	6
@@ -68,10 +69,12 @@ mypy-errors	maintain	21
 mypy-errors	netwatch	20
 mypy-errors	notifier	26
 mypy-errors	notifyurl	14
+mypy-errors	orphanreap	30
 mypy-errors	orphans	84
 mypy-errors	outsideflows	23
 mypy-errors	owned	47
-mypy-errors	owner	147
+mypy-errors	owner	93
+mypy-errors	ownerleases	24
 mypy-errors	owners	3
 mypy-errors	park	35
 mypy-errors	patches	8
@@ -133,10 +136,11 @@ mypy-errors	server	71
 mypy-errors	serverclone	36
 mypy-errors	serversteps	28
 mypy-errors	sessionpaths	14
-mypy-errors	slots	109
+mypy-errors	slots	61
 mypy-errors	snapshot	9
 mypy-errors	statemachines	32
-mypy-errors	stats	139
+mypy-errors	stats	50
+mypy-errors	statsrecords	89
 mypy-errors	status	110
 mypy-errors	statusagents	39
 mypy-errors	statuspage	55

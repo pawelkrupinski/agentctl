@@ -11,28 +11,28 @@ from agentctl.core import (
     NoToken, env_num, err, git, git_ok, process_cache, reap_children, reds_dir, remote, run_bounded,
     spawn_detached, state_root)
 from agentctl.statefile import read_record, write_json
-from agentctl.store import StoreUnavailable, open_store
 from agentctl.selfcode import TOOL_PATH
 from agentctl.procs import safe_cwd
 from agentctl.inboxentry import inbox_write
-from agentctl.land import tool_env
 from agentctl.fixersession import trust_asks
+from agentctl.store import StoreUnavailable, open_store
+from agentctl.land import tool_env
 from agentctl.explorer import explorer_tick
 from agentctl.reverts import revert_notes
 from agentctl.cleanup import close_worktree
 from agentctl.conditions import maybe_recovery_tick
 from agentctl.upkeep import maybe_upkeep
-from agentctl.alerts import reconcile_alerts
-from agentctl.projector import notify_escalations, project_events
 from agentctl.laptoprole import laptop_role_step
 from agentctl.fixerland import fixers_land_watch
-from agentctl.owner import red_reap_orphans
+from agentctl.storestate import mirror_state
+from agentctl.recordingpins import refresh_pinned_recording
 from agentctl.reddispatch import red_dispatcher, red_renew_holders
 from agentctl.queueclose import close_landed_changes, migrate_local_queue
-from agentctl.storestate import mirror_state
+from agentctl.alerts import reconcile_alerts
+from agentctl.projector import notify_escalations, project_events
 from agentctl.netwatch import network_watch, tunnel_watch
 from agentctl.redstatus import write_red_status_snapshot
-from agentctl.recordingpins import refresh_pinned_recording
+from agentctl.orphanreap import red_reap_orphans
 
 
 SYNC_MIRROR_EVERY = 10   # s between the laptop's copies of /v1/state into state.json

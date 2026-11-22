@@ -11,31 +11,32 @@ from agentctl.timefmt import parse_time, ts
 from agentctl.repos import red_repo_clone, red_repo_of
 from agentctl.trailers import trailer_values
 from agentctl.waitingdir import waiting_state
-from agentctl.redrecord import RED_JOIN_IDLE, RED_TERMINAL, lease_is_live, red_active, red_names, red_what
 from agentctl.allowedpaths import allowed_dir
 from agentctl.procs import socket_host
-from agentctl.leases import lease_meta
 from agentctl.inboxentry import inbox_write
-from agentctl.land import spawn_land
 from agentctl.fixersession import claude_trust_gap
 from agentctl.worktrees import WorktreeGuard
 from agentctl.fixerenv import fixer_env
-from agentctl.redreplay import agentctl_revert_fix_replay
 from agentctl.redrepos import red_owner_only
 from agentctl.redfamilies import red_identity
+from agentctl.dispatchblock import cached_dispatch_blocker
+from agentctl.statemachines import StaleVersion
+from agentctl.redrecord import RED_JOIN_IDLE, RED_TERMINAL, lease_is_live, red_active, red_names, red_what
+from agentctl.leases import lease_meta
+from agentctl.land import spawn_land
+from agentctl.redreplay import agentctl_revert_fix_replay
 from agentctl.owners import OWNER_TTL, owner_alive, owner_lease
 from agentctl.fixerland import red_dispatch
 from agentctl.red import (
     DECIDED_REVERT, RED_CLAIM_MAX, RED_CLAIM_TTL, RED_DECIDED_REVERT_MAX, RED_FIXER_MAX, RED_FIXER_TTL)
-from agentctl.dispatchblock import cached_dispatch_blocker
+from agentctl.culpritfix import blame_note, blame_reland, lander_spawn
 from agentctl.redseen import KIND_ORDER
 from agentctl.redopen import red_family_tell
 from agentctl.redclaim import red_joined_progress, red_wt_mark
 from agentctl.redcrash import red_queue_family
-from agentctl.owner import OWNER_MAX, family_owned, owner_hand, owner_holder, owner_spawn, owner_still_ending
-from agentctl.culpritfix import blame_note, blame_reland, lander_spawn
+from agentctl.owner import OWNER_MAX, owner_spawn, owner_still_ending
 from agentctl.blame import blame_waiting
-from agentctl.statemachines import StaleVersion
+from agentctl.ownerleases import family_owned, owner_hand, owner_holder
 
 
 def red_commits_naming(wt: str | None, names: Any, keys: tuple[str, ...] = ("Fixes-Red",)) -> list[tuple[str, float]]:

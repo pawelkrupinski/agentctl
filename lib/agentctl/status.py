@@ -29,15 +29,16 @@ from agentctl.tunnel import tunnel_ports, tunnel_state_path
 from agentctl.storestate import NETWORK_SHOWN_FOR, STORE_UNREACHABLE_AFTER, port_open, remote_status_state
 from agentctl.recordingpins import pins_status
 from agentctl.reduntracked import red_untracked_list
-from agentctl.owner import holder_work, owners_status
 from agentctl.redvault import block_verdict_note
+from agentctl.statusagents import status_agents, status_strip_lease
+from agentctl.pressure import pressure_report
+from agentctl.orphanreap import holder_work
 from agentctl.reddispatch import red_cap, red_family_holder, red_fixers_alive, repo_dispatch_off_all
+from agentctl.park import parked_lines
 from agentctl.redview import red_view
 from agentctl.cireport import ci_why
 from agentctl.recovery import escalated_now
-from agentctl.park import parked_lines
-from agentctl.statusagents import status_agents, status_strip_lease
-from agentctl.pressure import pressure_report
+from agentctl.ownerleases import owners_status
 
 
 STATUS_SOURCE_BOUND = 8         # s a source may take ($AGENTCTL_STATUS_BOUND); the agents' source twice that
