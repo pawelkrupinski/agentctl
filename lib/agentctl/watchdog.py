@@ -68,6 +68,20 @@ def change_progress(st, it, t):
     return None
 
 
+# A WAITING CHANGE A BATCH CARRIES IS THE BATCH'S (2026-11-22 09:56Z: the gate went green, batch #94 left blocked-red at
+# once and checked impact-same-file and film-codec on the new main -- a full round, the revert having moved identity code
+# -- while W1 said of both "waiting for green while the gate is green", 170 min past their own deadlines).
+BATCH_AT_WORK = ("assembling", "checking", "pushing", "bisecting")
+
+
+def change_carrying_batch(st, cid):
+    """The open batch item whose members hold change cid, else None."""
+    for b in st.items("batch", list(BATCH_AT_WORK) + ["blocked-red", "held"]):
+        if cid in ((b.get("data") or {}).get("members") or []):
+            return b
+    return None
+
+
 def w1_gate_reds(o_r):
     """(seconds the gate has been red, the red gate rows as "<workflow> #N since HH:MMZ", comma-joined) read from the
     CI snapshot itself; (0.0, "") when every gate workflow is green, (0.0, None) with no snapshot. 2026-11-22: the gate
@@ -109,8 +123,14 @@ def inv_w1():
         if age < lim or (red_since and age < red_since + lim):
             continue
         it = st.item("change", r["id"]) or {}
+        carried = change_carrying_batch(st, r["id"]) if r["state"] == "waiting" else None
+        if carried and carried["state"] in BATCH_AT_WORK and t < float(carried.get("deadline") or 0):
+            continue  # its batch carries it, within the batch's own deadline: the batch's bounds judge it
         stranded = any(c["key"] == f"change-stranded-{r['id']}" for c in conds)
         off = "STRANDED, no queue entry carries it" if stranded else change_progress(st, it, t) if it else "no item"
+        if off is None and carried:
+            off = (f"carried by batch {carried['id']} ({carried['state']}"
+                   + (", past its deadline" if t >= float(carried.get("deadline") or 0) else "") + ")")
         if off is None and r["state"] == "waiting" and not red_since:
             off = "waiting for green while the gate is green" if holding is not None else \
                 "waiting for green, the gate unread (no CI snapshot)"

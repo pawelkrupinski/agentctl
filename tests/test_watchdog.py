@@ -189,6 +189,20 @@ class WatchdogTest(unittest.TestCase):
         ok, detail = A.inv_w1()
         self.assertIn("the gate unread", detail)
 
+    def test_a_waiting_change_its_batch_carries_is_the_batchs_within_the_batchs_deadline(self):
+        """2026-11-22 09:56Z: the gate went green and batch #94 left blocked-red within a tick, checking
+        impact-same-file and film-codec on the new main; W1 said of both "waiting for green while the gate is green"."""
+        st_ = A.Store()
+        st_.put_item("change", "impact", "waiting", {"head": "0" * 40, "submitted_at": time.time() - 9 * 3600})
+        st_.put_item("batch", "movies#94", "checking", {"members": ["impact", "codec"], "tip": "2d1beab02b"})
+        ok, detail = A.inv_w1()
+        self.assertTrue(ok, detail)
+        b = st_.item("batch", "movies#94")  # its batch past ITS deadline: named, never "waiting for green"
+        st_.transition("batch", "movies#94", "checking", b["version"], deadline_s=-60)
+        ok, detail = A.inv_w1()
+        self.assertFalse(ok)
+        self.assertIn("carried by batch movies#94 (checking, past its deadline)", detail)
+
     def test_w1_from_the_store_and_w2_from_the_store(self):
         st_ = A.Store()  # W1: the one queue, the store's open change items, by their submission time
         st_.put_item("change", "e1", "waiting", {"head": "0" * 40, "submitted_at": time.time() - 3 * 3600})
