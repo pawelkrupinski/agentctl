@@ -46,7 +46,7 @@ def tempfile_dir():
     return tempfile.gettempdir()
 
 
-def _suite_root_in_use(p, t):
+def _suite_root_in_use(p: str, t: float) -> bool:
     """A test suite root still in use: its runner alive (tests/run.py writes owner.pid), or the root or an entry of it
     changed within TEST_TMP_MAX_AGE."""
     try:
@@ -62,6 +62,16 @@ def _suite_root_in_use(p, t):
     return t - newest <= TEST_TMP_MAX_AGE
 
 
+def _sweepable(p: str, t: float, suite_root: bool) -> bool:
+    """A real directory past TEST_TMP_MAX_AGE -- and, a suite root, not in use."""
+    try:
+        if not os.path.isdir(p) or os.path.islink(p) or t - os.lstat(p).st_mtime <= TEST_TMP_MAX_AGE:
+            return False
+    except OSError:
+        return False
+    return not (suite_root and _suite_root_in_use(p, t))
+
+
 def sweep_test_tmp(now_=None, tmp_root="/tmp"):
     """The test suite's leftovers older than TEST_TMP_MAX_AGE: `agentctl-*` in the user's temp dir, `agentctl-sock-*` in
     /tmp (never the processor's own socket dir /tmp/agentctl-<uid>), and /tmp's suite roots `agentctl-t-*` (2026-11-22:
@@ -74,15 +84,9 @@ def sweep_test_tmp(now_=None, tmp_root="/tmp"):
         for p in glob.glob(pat):
             if os.path.realpath(p) == os.path.realpath(os.path.dirname(token_sock_path("x"))):
                 continue  # the processor's own socket dir (Linux: the user temp dir IS /tmp)
-            try:
-                if not os.path.isdir(p) or os.path.islink(p) or t - os.lstat(p).st_mtime <= TEST_TMP_MAX_AGE:
-                    continue
-                if p in roots and _suite_root_in_use(p, t):
-                    continue
+            if _sweepable(p, t, p in roots):
                 shutil.rmtree(p, ignore_errors=True)
                 n += 1
-            except OSError:
-                pass
     return n
 
 

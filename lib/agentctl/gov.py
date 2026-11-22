@@ -48,7 +48,6 @@ GOV_PRESSURE_DEFAULT = 75  # memory pressure (100 - free %) at which every class
 # it has SPARE capacity. `agentctl gov capacity` prints it in one line.
 GOV_STARVED = 1.0       # x the cores: over it, starved ($AGENTCTL_GOV_STARVED)
 GOV_RESUME = 0.8        # x the cores: under it, admitting again ($AGENTCTL_GOV_RESUME)
-GOV_SATURATED = 0.95    # x the cores: the machine's measured CPU at or over it is starved, whatever is charged
 GOV_SPARE = 0.5         # x the cores: under it, spare ($AGENTCTL_GOV_SPARE)
 GOV_IDLE_CLAUDE = 10.0  # %CPU under which a Claude session is idle (not work)
 GOV_CPU_FACTOR = 1.0    # charged cores (or the load) + a job's own may reach this x the cores ($AGENTCTL_GOV_CPU_FACTOR)
@@ -64,7 +63,7 @@ GOV_POLL = 2.0
 GOV_REPORT = 600
 
 
-def gov_dir():
+def gov_dir() -> str:
     d = os.environ.get("AGENTCTL_GOV_DIR") or state_root("gov")
     os.makedirs(d, exist_ok=True)
     return d
@@ -280,57 +279,9 @@ def gov_ramp(tickets, now=None):
     return sum(float(t.get("mem") or 0) for t in tickets if now - t.get("at", 0) < GOV_RAMP)
 
 
-# THE WHOLE MACHINE'S CPU (2026-11-22: top 0.24% idle -- 44% user, 56% sys -- at load 131-150 on 18 cores, while ps's
-# %CPU summed to 6.1 cores and the governor saw no pressure). ps's %CPU is a decaying per-process average: it misses
-# kernel time and the fork/exec churn of short-lived processes (git, test fake repos, run-script-tests trees,
-# syspolicyd scanning each new executable). The busy cores are the machine's own CPU ticks -- user + sys + nice over
-# a delta (host_statistics on macOS, /proc/stat on Linux) -- times the cores.
-def cpu_ticks():
-    """(busy ticks, all ticks) of the whole machine since boot, or None where unreadable."""
-    try:
-        if os.path.exists("/proc/stat"):
-            with open("/proc/stat") as f:
-                v = [int(x) for x in f.readline().split()[1:]]
-            idle = v[3] + (v[4] if len(v) > 4 else 0)  # idle + iowait
-            return sum(v[:8]) - idle, sum(v[:8])
-        import ctypes, ctypes.util
-        lib = ctypes.CDLL(ctypes.util.find_library("System"))
-        lib.mach_host_self.restype = ctypes.c_uint
-        info, count = (ctypes.c_uint * 4)(), ctypes.c_uint(4)
-        if lib.host_statistics(lib.mach_host_self(), 3, ctypes.byref(info), ctypes.byref(count)) != 0:  # CPU_LOAD
-            return None
-        user, system, idle, nice = info
-        return user + system + nice, user + system + idle + nice
-    except (OSError, ValueError, AttributeError, IndexError):
-        return None
-
-
-CPU_SAMPLE_GAP = 0.25  # s between two tick samples when no recent one is kept
-CPU_SAMPLE_KEEP = 120  # s a kept sample serves as the delta's start
-
-
-def machine_busy_cores(n, read=None, sleep=None, state=None):
-    """The cores the whole machine is busy on (user + sys + nice), from a tick delta: against the sample kept in
-    <gov>/cpu-ticks.json when it is 0.5-120 s old, else two samples CPU_SAMPLE_GAP apart. None where unreadable."""
-    read, path = read or cpu_ticks, state or os.path.join(gov_dir(), "cpu-ticks.json")
-    prev, now_ = read_record(path) or {}, time.time()
-    start = prev.get("ticks") if 0.5 <= now_ - float(prev.get("at") or 0) <= CPU_SAMPLE_KEEP else None
-    if not start:
-        start = read()
-        (sleep or time.sleep)(CPU_SAMPLE_GAP)
-    end = read()
-    if not start or not end or end[1] <= start[1]:
-        return None
-    try:
-        write_json(path, {"at": now_, "ticks": list(end)})
-    except OSError:
-        pass
-    return round(n * (end[0] - start[0]) / (end[1] - start[1]), 2)
-
-
 def gov_busy_cores():
-    """The cores processes use now: ps's %CPU summed, less the governor's waiters (`agentctl gov admit`) and idle Claude
-    sessions. Seams: $AGENTCTL_GOV_BUSY_PROBE (its output: the number), the tests' $AGENTCTL_GOV_LOAD_PROBE (read as
+    """The cores the machine is busy on now: its own CPU ticks (cpu.py machine_busy_cores: user + sys), else ps's %CPU
+    summed (ps_busy_cores). Seams: $AGENTCTL_GOV_BUSY_PROBE (its output: the number), the tests' $AGENTCTL_GOV_LOAD_PROBE (read as
     busy), $AGENTCTL_GOV_PS_PROBE (ps's `pcpu args` rows)."""
     for k in ("AGENTCTL_GOV_BUSY_PROBE", "AGENTCTL_GOV_LOAD_PROBE"):
         if os.environ.get(k):
@@ -343,8 +294,12 @@ def gov_busy_cores():
     if fixed is not None:  # the tests' fixed machine (AGENTCTL_MACHINE): its busy cores, else its load
         return float(fixed.get("busy", fixed.get("load1")) or 0)
     whole = None if probe else machine_busy_cores(machine_cores())
-    if whole is not None:
-        return whole
+    return whole if whole is not None else ps_busy_cores(probe)
+
+
+def ps_busy_cores(probe=None):
+    """ps's %CPU summed (the machine's own ticks unreadable, or the tests' $AGENTCTL_GOV_PS_PROBE rows), less the
+    governor's waiters and idle Claude sessions."""
     out = run_cmd(probe, shell=True).stdout if probe else run_cmd(["ps", "-A", "-o", "pcpu=,args="]).stdout
     total = 0.0
     for line in out.splitlines():
@@ -364,6 +319,12 @@ def gov_busy_cores():
     return total / 100.0
 
 
+def gov_starved(busy: float, measured: float, n: int) -> bool:
+    """Charged or busy past GOV_STARVED x the cores, or the whole machine's CPU saturated (GOV_SATURATED: a tick
+    measure never reads past the cores)."""
+    return busy > env_num("AGENTCTL_GOV_STARVED", GOV_STARVED) * n or measured >= GOV_SATURATED * n
+
+
 def gov_capacity(tickets=None, m=None):
     """{state: starved | ok | spare, busy, charged, measured, cores, load1}: the laptop's CPU now, with hysteresis (the
     last state kept in <gov>/capacity.json between GOV_RESUME and GOV_STARVED)."""
@@ -373,8 +334,8 @@ def gov_capacity(tickets=None, m=None):
     busy = max(charged, measured)
     path = os.path.join(gov_dir(), "capacity.json")
     prev = (read_record(path) or {}).get("state", "ok")
-    if busy > env_num("AGENTCTL_GOV_STARVED", GOV_STARVED) * n or measured >= GOV_SATURATED * n:
-        state = "starved"  # charged past the cores, or the whole machine's CPU saturated (it never reads past them)
+    if gov_starved(busy, measured, n):
+        state = "starved"
     elif busy < env_num("AGENTCTL_GOV_SPARE", GOV_SPARE) * n:
         state = "spare"
     elif busy < env_num("AGENTCTL_GOV_RESUME", GOV_RESUME) * n:
@@ -781,7 +742,6 @@ def gov_replay(rows, cap, at, hold=30 * 60):
 # waits. `agentctl gov status` and `agentctl red status` show the reading with its numbers.
 LAPTOP_FREE_PCT = 20          # holds other work while macOS's memory free % is under this
 LAPTOP_PRESSURE_LEVEL = 2     # holds other work at this kernel pressure level or over (1 normal, 2 warn, 4 critical)
-LAPTOP_LOAD = 2.0             # holds other work while the 1-min load is over this x the cores
 LAPTOP_SWAP_GROWTH_MB = 1024  # holds other work while swap grew this much (MB) within LAPTOP_SWAP_WINDOW
 LAPTOP_SWAP_WINDOW = 600      # seconds of swap samples the growth is read over
 PRESSURE_LEVELS = {1: "normal", 2: "warn", 4: "critical"}
@@ -811,15 +771,6 @@ def swap_growth(mb, now_):
     return mb - first[1], now_ - first[0]
 
 
-def run_queue():
-    """The 1-min load average: the run queue, beside the busy cores (a saturated CPU is pressure only when it is
-    oversubscribed too). None where unreadable."""
-    try:
-        return os.getloadavg()[0]
-    except OSError:
-        return None
-
-
 def pressure_reading(sysctl_out=None, meminfo=None, load1=None, cores=None, now_=None):
     """{free_pct, level, load1, cores, swap_mb, swap_growth_mb, swap_span}: this machine now, None where unreadable.
     The readers are the tests' seams: sysctl_out (pressure_sysctl's text), meminfo (read_meminfo's dict)."""
@@ -827,7 +778,7 @@ def pressure_reading(sysctl_out=None, meminfo=None, load1=None, cores=None, now_
     # its CPU is the cores processes use (gov_busy_cores), never the load average, which counts threads waiting (46 on
     # 18 cores while 5.2 were busy, 2026-11-19); `load1` passed in (the tests' seam) stands for it
     r = {"free_pct": None, "level": None, "swap_mb": None, "load1": gov_busy_cores() if load1 is None else load1,
-         "cores": cores or machine_cores(), "runq": run_queue() if load1 is None else None}
+         "cores": cores or machine_cores(), "runq": run_queue(passed=load1)}
     fixed = machine_fixed() if meminfo is None and sysctl_out is None else None
     mi = {} if fixed is not None else read_meminfo() if meminfo is None else meminfo
     if fixed is not None:
@@ -846,21 +797,6 @@ def pressure_reading(sysctl_out=None, meminfo=None, load1=None, cores=None, now_
             r["swap_mb"] = float(used.group(1))
     r["swap_growth_mb"], r["swap_span"] = swap_growth(r["swap_mb"], now_)
     return r
-
-
-def cpu_pressure(r):
-    """The CPU's part of laptop_pressure: busy cores past LAPTOP_LOAD x the cores (a reading charged past them), or the
-    whole machine's CPU saturated (GOV_SATURATED, user + sys) with a run queue over LAPTOP_LOAD x the cores -- never
-    a long run queue alone (46 threads waiting on 18 cores while cores sat idle, 2026-11-19)."""
-    factor, n, busy, runq = env_num("AGENTCTL_LAPTOP_LOAD", LAPTOP_LOAD), r.get("cores"), r.get("load1"), r.get("runq")
-    if busy is None or not n:
-        return []
-    if busy > factor * n:
-        return [f"{busy:.1f} cores busy of {n} (holds over {factor * n:g})"]
-    if busy >= GOV_SATURATED * n and runq is not None and runq > factor * n:
-        return [f"CPU saturated: {busy:.1f} of {n} cores busy (user + sys), run queue {runq:.0f} (holds at "
-                f"{GOV_SATURATED:.0%} busy with a run queue over {factor * n:g})"]
-    return []
 
 
 def laptop_pressure(r=None, load=True):

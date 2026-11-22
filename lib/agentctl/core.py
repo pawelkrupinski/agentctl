@@ -152,7 +152,7 @@ def err(msg: object) -> None:
     print(f"agentctl: {msg}", file=sys.stderr, flush=True)
 
 
-def state_root(*parts):
+def state_root(*parts: str) -> str:
     """THE state root (the owner, 2026-10-28: tests wrote ~200 waiting/ dirs, the sweep reports and 176 rows of
     checks/runs.jsonl into the real cache): $AGENTCTL_STATE_ROOT, else ~/.cache/agentctl, resolved at EVERY use and
     inherited by every child process. Every agentctl path is under it unless its own override says otherwise."""
