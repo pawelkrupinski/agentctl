@@ -78,7 +78,7 @@ cognitive	cmd_ci_why	14
 cognitive	cmd_cleanup	96
 cognitive	cmd_config	21
 cognitive	cmd_dispatch	41
-cognitive	cmd_env	38
+cognitive	cmd_env	35
 cognitive	cmd_gov	67
 cognitive	cmd_inbox	41
 cognitive	cmd_issue	19
@@ -437,6 +437,7 @@ cycle	live	1
 cycle	maint	1
 cycle	owned	1
 cycle	owner	1
+cycle	procwatch	1
 cycle	projector	1
 cycle	queue	1
 cycle	queuebatch	1
@@ -915,11 +916,11 @@ fan-out	redtick	25
 fan-out	redvault	14
 fan-out	redview	13
 fan-out	remote	13
-fan-out	server	30
+fan-out	server	31
 fan-out	slots	18
 fan-out	status	18
 fan-out	waiting	10
-fan-out	watchdog	28
+fan-out	watchdog	29
 file-lines	alerts	639
 file-lines	batch	1672
 file-lines	blame	964
@@ -931,12 +932,12 @@ file-lines	live	743
 file-lines	owner	742
 file-lines	recovery	762
 file-lines	remote	1053
-file-lines	server	1504
+file-lines	server	1505
 file-lines	slots	1295
 file-lines	stats	611
 file-lines	status	1056
 file-lines	store	780
-file-lines	tools	587
+file-lines	tools	607
 file-lines	waiting	861
 file-lines	watchdog	1915
 inner-defs	red_owner	5
@@ -973,7 +974,7 @@ method-lines	land_loop	61
 method-lines	landing_records	109
 method-lines	live_registry_read	53
 method-lines	live_stream	53
-method-lines	main	416
+method-lines	main	417
 method-lines	notify_escalations	91
 method-lines	orphan_candidates	58
 method-lines	orphan_duty	113
@@ -1004,5 +1005,5 @@ method-lines	stats_pass	71
 method-lines	status_page_server	103
 method-lines	sweep_repo	61
 method-lines	sync_onto_main	61
-method-lines	sync_steps	56
+method-lines	sync_steps	57
 method-lines	waiting_run	70
