@@ -433,7 +433,7 @@ cycle	redclaim	1
 cycle	redcrash	1
 cycle	reddispatch	1
 cycle	redearly	1
-cycle	redmove	1
+cycle	redopen	1
 cycle	redpending	1
 cycle	redseen	1
 cycle	redstep	1

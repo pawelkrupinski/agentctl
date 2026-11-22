@@ -68,7 +68,8 @@ mypy-errors	redearly	10
 mypy-errors	redfamilies	8
 mypy-errors	redfixes	54
 mypy-errors	redfixread	50
-mypy-errors	redmove	56
+mypy-errors	redmove	15
+mypy-errors	redopen	41
 mypy-errors	redpending	76
 mypy-errors	redreplay	19
 mypy-errors	redrepos	12
