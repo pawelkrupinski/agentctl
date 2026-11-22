@@ -134,14 +134,6 @@ def red_vault_block(store, it, upd, ns, why, t):
     return [f"{red_what(d)}: waits on the {ns} vault"]
 
 
-# A SPENT QUOTA IS AN EXTERNAL WAIT, NOT THE OWNER'S (the owner's coordinator, 2026-10-29: Record scrape fixtures #2426
-# sat BLOCKED ON OWNER for OMDb's `HTTP 401: Request limit reached` -- a daily quota, which resets on its own; only an
-# invalid key is the owner's). A red whose error line says a quota is spent is held by a WAIT lease (block/cause/quota-
-# <service>, holder `wait:quota`), never offered to a fixer and never an owner block. Its probe re-checks the key the
-# cheap way the workflow itself does: the red's workflow dispatched on main once the quota's window has reset (OMDb's
-# daily window: midnight UTC), whose first job (the recording preflight: one OMDb call) fails within minutes if the key
-# is still refused; the wait clears when a run of the workflow created after the block got past that job.
-WAIT_CAUSES = {"quota": "an outside service's quota for the run's key, spent; it resets on its own"}
 QUOTA_RESET_HOUR_UTC = 0
 
 

@@ -1,5 +1,25 @@
 # agentctl, part `redblock`: an unreadable gate, blocks on the owner's causes, owner blocks as leases.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import re
+import time
+from agentctl.forge import GH_CLI, RED_CONCLUSIONS
+from agentctl.classify import QUOTA_LOG
+from agentctl.store import open_store
+from agentctl.repos import scan_repo_for
+from agentctl.workflows import LOCAL_FLOW
+from agentctl.leases import lease_meta
+from agentctl.inboxentry import inbox_write
+from agentctl.redrecord import lease_is_live, red_active, red_lease, red_what
+from agentctl.conditions import PROBES, condition_item_of, open_condition, run_probe
+from agentctl.redrepos import red_gate_flows
+from agentctl.redask import OWNER_CAUSES, ask_category, ask_refusal
+from agentctl.red import red_item_of_run
+from agentctl.ciwhy import _gate_lists, _outside_lists, resolve_run
+from agentctl.branches import run_sigs
+from agentctl.redseen import red_units
+from agentctl.redobserve import local_units
+
 
 # -- an unreadable gate: no dispatch, one UNKNOWN per spell, an infra check
 def infra_check(o_r):
@@ -123,6 +143,16 @@ def owner_details(o_r, n, name, units, cmd, words, owner_cause):
 # fixer). Its probe passing, the justification gone, or the max hold: it lapses, and its reds go on (verify / offered).
 BLOCK_TTL, BLOCK_MAX = 10 * 60, 7 * 86400
 BLOCK_PROBE_EVERY = 60
+
+
+# A SPENT QUOTA IS AN EXTERNAL WAIT, NOT THE OWNER'S (the owner's coordinator, 2026-10-29: Record scrape fixtures #2426
+# sat BLOCKED ON OWNER for OMDb's `HTTP 401: Request limit reached` -- a daily quota, which resets on its own; only an
+# invalid key is the owner's). A red whose error line says a quota is spent is held by a WAIT lease (block/cause/quota-
+# <service>, holder `wait:quota`), never offered to a fixer and never an owner block. Its probe re-checks the key the
+# cheap way the workflow itself does: the red's workflow dispatched on main once the quota's window has reset (OMDb's
+# daily window: midnight UTC), whose first job (the recording preflight: one OMDb call) fails within minutes if the key
+# is still refused; the wait clears when a run of the workflow created after the block got past that job.
+WAIT_CAUSES = {"quota": "an outside service's quota for the run's key, spent; it resets on its own"}
 
 
 def block_invalid(store, it, m, t):
