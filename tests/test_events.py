@@ -242,6 +242,63 @@ class NotifierDeliveryTest(unittest.TestCase):
         self.assertIn("Notifications are not allowed", A.notify_cause())
         self.assertIn("osascript", A.notify_cause())
 
+    def darwin_without_terminal_notifier(self, osascript_body):
+        """notify()'s macOS path with no terminal-notifier installed and `osascript_body` as osascript."""
+        os.environ.pop("AGENTCTL_NOTIFY")
+        bindir = os.path.join(self.root, "bin")
+        os.makedirs(bindir, exist_ok=True)
+        with open(os.path.join(bindir, "osascript"), "w") as f:
+            f.write("#!/bin/sh\n" + osascript_body + "\n")
+        os.chmod(os.path.join(bindir, "osascript"), 0o755)
+        os.environ["PATH"] = bindir + os.pathsep + os.environ["PATH"]
+        saved_platform = A.sys.platform
+        A.sys.platform = "darwin"
+        self.addCleanup(setattr, A.sys, "platform", saved_platform)
+        saved_bin = A.notifier_bin
+        A.notifier_bin = lambda: None
+        self.addCleanup(setattr, A, "notifier_bin", saved_bin)
+
+    def test_an_osascript_timeout_says_timed_out_and_blames_the_load_not_terminal_notifier(self):
+        """2026-11-22 08:04Z: osascript, at load ~150, was killed by its 10 s timeout; WN said only "Command '['osascript',
+        '-e', 'display notification ..." (the exception's argv, cut) and told the owner to allow terminal-notifier --
+        not installed."""
+        self.darwin_without_terminal_notifier("sleep 5")
+        os.environ["AGENTCTL_NOTIFY_TIMEOUT"] = "1"
+        self.addCleanup(os.environ.pop, "AGENTCTL_NOTIFY_TIMEOUT", None)
+        self.escalate("slow")
+        self.assertEqual(A.notify_escalations(self.st), 0)
+        self.assertEqual(A.notify_cause(), "osascript: timed out after 1 s")
+        ok, detail = A.inv_wn()
+        self.assertIs(ok, False)
+        self.assertIn("(osascript: timed out after 1 s; 1 waiting)", detail)
+        self.assertIn("overloaded", detail)
+        self.assertNotIn("terminal-notifier", detail)
+        self.assertNotIn("Command '", detail)
+
+    def test_a_failing_osascript_keeps_its_exit_code_and_last_stderr_line_and_names_its_own_permission(self):
+        self.darwin_without_terminal_notifier("echo starting; echo 'noise' >&2; "
+                                              "echo 'execution error: Notifications are not allowed (-1743)' >&2; exit 1")
+        self.assertIs(A.notify("t", "m"), False)
+        self.assertEqual(A.notify_cause(), "osascript: exit 1: execution error: Notifications are not allowed (-1743)")
+        self.assertIn("Script Editor", A.notify_fix())
+        self.assertNotIn("terminal-notifier", A.notify_fix())
+
+    def test_each_channel_gets_time_for_an_overloaded_cold_start(self):
+        """10 s was the 2026-11-22 osascript's whole cold start under load (XProtect, trustd, then its TCC request)."""
+        self.darwin_without_terminal_notifier("exit 0")
+        seen, real = [], A.subprocess.run
+
+        def run(argv, **kw):
+            seen.append(kw.get("timeout"))
+            return real(argv, **kw)
+        A.subprocess.run = run
+        try:
+            self.assertIs(A.notify("t", "m"), True)
+        finally:
+            A.subprocess.run = real
+        self.assertEqual(seen, [30])
+        self.assertEqual((A.notify_cause(), A.notify_fix()), ("", ""))
+
     def test_a_failed_delivery_is_not_recorded_and_raises_ONE_condition_naming_the_owners_fix(self):
         os.environ["AGENTCTL_W6_MAX"] = "0"
         self.addCleanup(os.environ.pop, "AGENTCTL_W6_MAX", None)
@@ -252,7 +309,8 @@ class NotifierDeliveryTest(unittest.TestCase):
         self.assertEqual(len(self.unmarked()), 5, "nothing reached the owner: nothing is recorded as told")
         ok, detail = A.inv_wn()
         self.assertIs(ok, False)
-        self.assertIn("System Settings > Notifications", detail)
+        self.assertIn("notify.sh: exit 1", detail)
+        self.assertIn("fix the notification command ($AGENTCTL_NOTIFY)", detail)
         self.assertIsNone(A.inv_w6()[0], "W6 defers to WN: one condition, not one per waiting escalation")
         os.remove(os.path.join(self.root, "down"))
         self.t[0] += 60

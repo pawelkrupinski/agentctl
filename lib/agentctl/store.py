@@ -817,7 +817,8 @@ def notify_escalations(store=None):
         (ask_interval: 1 h, 2 h, 4 h, ...) -- marked without a notification before that;
       - more than NOTIFY_BURST items to tell at once: ONE summary notification for all of them;
       - an event is marked only AFTER a delivery got through (notify() True). Both channels failing leaves them unmarked
-        and records notify_failed {at, cause}: invariant WN raises ONE condition naming the owner's fix; W6 defers to it.
+        and records notify_failed {at, cause, fix}: invariant WN raises ONE condition naming the failed channel's fix;
+        W6 defers to it.
     Returns how many notifications were shown."""
     st = store or Store()
     cur = int(st.meta_get("notifier_seq", 0) or 0)
@@ -884,7 +885,8 @@ def notify_escalations(store=None):
             told[k] = {"at": t, "kind": ev["kind"], "state": ev.get("to_state"),
                        "since": (it or {}).get("entered_at"), "n": int((told.get(k) or {}).get("n") or 0) + 1 if r else 1}
         if len(done) < len(tell):
-            st.meta_set("notify_failed", json.dumps({"at": t, "cause": notify_cause(), "pending": len(tell) - len(done)}))
+            st.meta_set("notify_failed", json.dumps({"at": t, "cause": notify_cause(), "fix": notify_fix(),
+                                                        "pending": len(tell) - len(done)}))
         elif st.meta_get("notify_failed"):
             st.meta_set("notify_failed", "")
     elif st.meta_get("notify_failed"):

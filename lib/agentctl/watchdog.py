@@ -306,16 +306,17 @@ def inv_w5():
 
 def inv_wn():
     """WN: the owner's notifications get through -- the notifier's last delivery did not fail on both channels
-    (terminal-notifier and the osascript fallback). Raised once, naming the cause and the owner's fix; cleared by the
-    notifier's next delivery that gets through (or nothing left undelivered)."""
+    (terminal-notifier and the osascript fallback). Raised once, naming the cause and the owner's fix for the channel
+    that failed (notify_fix: a timeout is the load's, not a permission); cleared by the notifier's next delivery that
+    gets through (or nothing left undelivered)."""
     try:
         f = notify_failure(Store())
     except Exception as e:
         return None, f"cannot read the store ({str(e)[:120]})"
     if not f:
         return True, "notifications reach the owner"
-    return False, (f"notifications cannot reach the owner ({str(f.get('cause'))[:140]}; {f.get('pending', '?')} waiting): "
-                   f"{NOTIFY_FIX}")
+    return False, (f"notifications cannot reach the owner ({str(f.get('cause'))[:200]}; {f.get('pending', '?')} waiting): "
+                   f"{f.get('fix') or 'see the cause'}")
 
 
 def inv_w6():

@@ -220,7 +220,9 @@ moves it forward; nothing is a detached process that can die with its state in i
   for `queued` / `checked` (policy.py HOLDS), a red gate for `waiting` -- and none at all over 3 x that (2026-11-20: 13
   of W1's 18 firings were checks simply running past 2 h, each worked out by hand), W2 every red has a holder, an offer, a fix on its way or an owner block, W5 the processor beats, W6 every
   escalation was notified, WN notifications get through (both terminal-notifier and the osascript fallback failing
-  is ONE condition naming the fix: allow terminal-notifier in System Settings > Notifications; W6 defers to it), WM
+  is ONE condition naming the real cause -- exit code and last stderr line, or `timed out after N s` -- and
+  that channel's fix: a timeout is the overloaded laptop's, a refusal the channel's permission in System Settings >
+  Notifications; each channel bounded by `AGENTCTL_NOTIFY_TIMEOUT`, 30 s; W6 defers to it), WM
   maintain ran, WR no red fix waits (none on `waiting`, none held by a hold kind that is other work -- a batch, an overlap, a
   verification -- and none unlanded 40 min after it was queued unless its own check runs, or 2 h whatever), WB nobody leaves uncommitted edits in ~/bin's own checkout for over 10 min
   (it names the processes working there), WF the system-wide file table (kern.num_files) stays under 70% of
