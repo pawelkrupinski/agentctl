@@ -7,6 +7,7 @@ import re
 import time
 from typing import Any, Callable
 from agentctl.core import env_num, state_root
+from agentctl.offers import OfferTable
 from agentctl.statemachines import (
     ARCHIVE, IllegalTransition, MACHINES, StaleVersion, StateSpec, TerminalState, change_exit_event, machine_state)
 
@@ -39,7 +40,7 @@ def lease_machine(holder):
     return m if ":" in str(holder or "") and CONTACT_MACHINE.fullmatch(m) else None
 
 
-class Store:
+class Store(OfferTable):
     """Leases (design §6): a holder plus a TTL, renewed only on real progress (a new progress mark), capped by an
     absolute max hold; an expired lease is free. Every acquire bumps the epoch (a fencing token) and draws a secret that
     renew and release need."""
@@ -56,7 +57,7 @@ class Store:
               "CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, kind TEXT NOT NULL, "
               "item_type TEXT, item_id TEXT, from_state TEXT, to_state TEXT, severity TEXT NOT NULL DEFAULT 'info', "
               "audience TEXT, text TEXT, refs TEXT, dedupe TEXT UNIQUE, notified_at REAL)",
-              # offers (design §6.2; step 10): open work a taker may take; take() closes it AND acquires its lease
+              # offers (design §6.2; step 10; offers.py): open work a taker may take; take() closes it AND acquires its lease
               "CREATE TABLE IF NOT EXISTS offers (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, item TEXT NOT NULL, "
               "lease TEXT NOT NULL, tier TEXT, priority INTEGER, deadline REAL, picture TEXT, opened_at REAL, closed_at REAL, "
               "closed_why TEXT, taken_by TEXT, reason TEXT)",
@@ -233,86 +234,6 @@ class Store:
                 c.execute("UPDATE leases SET meta=? WHERE name=? AND epoch=?",
                           (json.dumps({**json.loads(row["meta"] or "{}"), **meta}), name, epoch))
             c.execute("COMMIT")
-        finally:
-            c.close()
-
-    # -- offers (design §6.2; step 10) ------------------------------------------------------------------------------
-    def _offer_row(self, r):
-        if not r:
-            return None
-        d = dict(r)
-        d["picture"] = json.loads(d["picture"] or "{}")
-        return d
-
-    def offer(self, kind, item, lease, tier, priority, deadline, picture):
-        """Open (or refresh) THE open offer of an item. Returns its id. The reconciler's only."""
-        c = self.db()
-        try:
-            c.execute("BEGIN IMMEDIATE")
-            r = c.execute("SELECT id FROM offers WHERE item=? AND closed_at IS NULL", (item,)).fetchone()
-            if r:
-                c.execute("UPDATE offers SET kind=?, lease=?, tier=?, priority=?, deadline=?, picture=? WHERE id=?",
-                          (kind, lease, tier, priority, deadline, json.dumps(picture), r["id"]))
-                oid = r["id"]
-            else:
-                oid = c.execute("INSERT INTO offers (kind, item, lease, tier, priority, deadline, picture, opened_at) "
-                                "VALUES (?,?,?,?,?,?,?,?)", (kind, item, lease, tier, priority, deadline,
-                                                             json.dumps(picture), self.clock())).lastrowid
-            c.execute("COMMIT")
-            return oid
-        finally:
-            c.close()
-
-    def offers(self, kind=None):
-        """The open offers, by priority (gate > fix > outside > flake), oldest first."""
-        c = self.db()
-        try:
-            rows = c.execute("SELECT * FROM offers WHERE closed_at IS NULL" + (" AND kind=?" if kind else "")
-                             + " ORDER BY priority, opened_at", ((kind,) if kind else ())).fetchall()
-            return [self._offer_row(r) for r in rows]
-        finally:
-            c.close()
-
-    def offer_of(self, item):
-        c = self.db()
-        try:
-            return self._offer_row(c.execute("SELECT * FROM offers WHERE item=? AND closed_at IS NULL", (item,)).fetchone())
-        finally:
-            c.close()
-
-    def offer_reason(self, oid, reason):
-        """Why nobody took it yet (capacity, dispatch OFF): its escalation says so."""
-        c = self.db()
-        try:
-            c.execute("UPDATE offers SET reason=? WHERE id=?", (reason, oid))
-        finally:
-            c.close()
-
-    def close_offer(self, item, why):
-        c = self.db()
-        try:
-            c.execute("UPDATE offers SET closed_at=?, closed_why=? WHERE item=? AND closed_at IS NULL",
-                      (self.clock(), why, item))
-        finally:
-            c.close()
-
-    def take(self, oid, holder, ttl, max_hold, meta=None):
-        """Atomically: the offer closed AND its lease acquired. The lease plus the picture, {'held': ...} when the lease
-        is held, or {'gone': ...} when the offer is closed."""
-        c = self.db()
-        try:
-            c.execute("BEGIN IMMEDIATE")
-            off = self._offer_row(c.execute("SELECT * FROM offers WHERE id=?", (oid,)).fetchone())
-            if not off or off["closed_at"]:
-                c.execute("COMMIT")
-                return {"gone": oid}
-            r = self._acquire_in(c, off["lease"], holder, ttl, max_hold, "taken", off["item"], meta)
-            if "held" not in r:
-                c.execute("UPDATE offers SET closed_at=?, closed_why='taken', taken_by=? WHERE id=?",
-                          (self.clock(), holder, oid))
-                r["picture"] = off["picture"]
-            c.execute("COMMIT")
-            return r
         finally:
             c.close()
 

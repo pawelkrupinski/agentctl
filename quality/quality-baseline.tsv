@@ -827,7 +827,6 @@ cyclomatic	workflow_timeout_bound	21
 cyclomatic	workflow_triggers	12
 cyclomatic	worktree_holding	12
 cyclomatic	write_snapshot	24
-file-lines	store	567
 inner-defs	red_owner	5
 inner-defs	status_page_server	8
 inner-defs	store_server	4
