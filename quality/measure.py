@@ -12,7 +12,8 @@ ratchets' limits, CLAUDE.md "Code quality ratchets"):
   method-lines <qualname>   lines from its `def` to its body's end                     50
   file-lines   <part>       the part's lines                                           500
   copies       <a>|<b>...   clone groups of 50+ tokens spanning exactly these parts    0
-  fan-out      <part>       the other parts whose top-level names it uses              9
+  fan-out      <part>       the other parts whose top-level names it uses, foundations   9
+                            aside (a part using no part but foundations: a leaf helper)
   cycle        <part>       1: the part is in a reference cycle (a strong component)   0
 
 ONE NAMESPACE (lib/agentctl/__init__.py): the parts never import each other, they read the names the others define,
@@ -172,6 +173,18 @@ def part_graph(parts):
     return graph
 
 
+def foundations(graph):
+    """The parts that use no part but other foundations (the fixed point from the leaves): a leaf helper such as the
+    state files' reader and writer. Using one is no collaboration (movies' fan-out counts collaborators only), so a
+    concept extracted into a part of its own never raises its users' fan-out."""
+    found = set()
+    while True:
+        more = {p for p, uses in graph.items() if p not in found and uses <= found}
+        if not more:
+            return found
+        found |= more
+
+
 def strong_components(graph):
     index, low, stack, on, out, counter = {}, {}, [], set(), [], [0]
 
@@ -215,7 +228,8 @@ def measure(root, analysers=None):
         copies[key] = copies.get(key, 0) + len(group)
     rows += [("copies", key, n) for key, n in copies.items()]
     graph = part_graph(parts)
-    rows += [("fan-out", part, len(uses)) for part, uses in graph.items()]
+    found = foundations(graph)
+    rows += [("fan-out", part, len(uses - found)) for part, uses in graph.items()]
     for comp in strong_components(graph):
         rows += [("cycle", part, int(len(comp) > 1)) for part in comp]
     return rows

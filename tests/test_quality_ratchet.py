@@ -55,6 +55,16 @@ class SeededViolationTest(unittest.TestCase):
         self.assertIn("types: NEW   mypy-errors a = 3", out)
 
 
+class FoundationsTest(unittest.TestCase):
+    def test_a_leaf_helper_part_is_no_collaborator(self):
+        parts = {"leaf": "def helper():\n    return 1\n",
+                 "a": "def many():\n" + "".join(f"    p{i}()\n" for i in range(9)) + "    helper()\n"}
+        parts.update({f"p{i}": f"def p{i}():\n    return many()\n" for i in range(9)})
+        rc, out = quiet_check(tree(parts))
+        self.assertNotIn("fan-out a", out)  # 9 collaborators and the leaf
+        self.assertEqual(measure.foundations({"x": set(), "y": {"x"}, "z": {"y", "w"}, "w": {"z"}}), {"x", "y"})
+
+
 class FrozenRowsOnlyFallTest(unittest.TestCase):
     def test_rise_refuses_fall_passes_and_update_records_the_fall(self):
         root = tree({"a": LONG})

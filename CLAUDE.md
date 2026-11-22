@@ -54,7 +54,9 @@ movies model (movies "Code quality ratchets" and "Coupling"):
   kind and must see each refused. Measures: `quality/measure.py` (`--all` for every row), `quality/typecheck.py
   --errors` (every mypy error, mapped back to its part and line).
 - ONE NAMESPACE: the parts share one namespace (`lib/agentctl/__init__.py`), so a part's coupling is the top-level
-  names it uses that another part defines, and mypy checks the parts concatenated in `PARTS` order.
+  names it uses that another part defines (a FOUNDATION -- a part using no part but other foundations, a leaf
+  helper like `statefile` -- is no collaborator: extracting a concept into its own part never raises its users'
+  fan-out), and mypy checks the parts concatenated in `PARTS` order.
 
 ## Design (movies "Design rules")
 
