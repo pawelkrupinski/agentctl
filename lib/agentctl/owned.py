@@ -8,11 +8,11 @@
 #   * one flock per (kind, key) under ~/.cache/agentctl/owners/ ($AGENTCTL_OWNERS_DIR): the kernel frees it when the
 #     process dies, however it dies, so a second instance can never run beside a live one and never waits on a dead one;
 #   * beside it a record (<kind>-<key>.json): owner (the Claude session, else user@cwd), pid, the process's start time,
-#     argv, cwd, the code version (agentctl's sha256) and the CI runs it started;
-#   * the runs it started are cancelled when it ends -- by its SIGTERM/SIGHUP/SIGINT handler, or, after a SIGKILL, by
-#     the next owner of the same key, which finds the dead one's record;
+#     argv, cwd and the code version (agentctl's sha256); a SIGTERM/SIGHUP/SIGINT ends it with a verdict (Terminated).
+#     (Owners once cancelled the CI runs they started; d073975, 2026-10-27, gave a remote check's run to its change
+#     entry instead -- an owner's end cancelled a run its replacement still needed -- and the path is gone.)
 #   * at each poll it compares agentctl's file with the version it started on and, when a fix has landed, re-execs
-#     itself on the new code with the same pid (its runs adopted, not cancelled);
+#     itself on the new code with the same pid;
 #   * `agentctl orphans` reads the records: a dead process's record, an owner on old code, an owner whose cwd is gone.
 OWNERS_RESTART_CHECK = 30  # seconds between code-version checks ($AGENTCTL_RESTART_CHECK)
 TOOL_PATH = os.path.realpath(__file__)
@@ -125,7 +125,7 @@ class Owned:
         base = os.path.join(owners_dir(), f"{kind}-{self.key}")
         self.lockpath, self.record = base + ".lock", base + ".json"
         self.argv = list(sys.argv[1:] if argv is None else argv)
-        self.f, self.holder, self.runs, self.started, self._old = None, None, [], None, {}
+        self.f, self.holder, self.started, self._old = None, None, None, {}
 
     def acquire(self):
         os.makedirs(owners_dir(), exist_ok=True)
@@ -138,11 +138,8 @@ class Owned:
             return False
         self.f = f
         prev = read_record(self.record)
-        if prev and prev.get("pid") == os.getpid():  # our own re-exec on new code: its runs are still ours
-            self.runs, self.started = [tuple(r) for r in prev.get("runs") or []], prev.get("started")
-        elif prev:
-            for o_r, rid in prev.get("runs") or []:
-                cancel_run(o_r, rid, f"its owner, {prev.get('kind')} pid {prev.get('pid')}, died without ending it")
+        if prev and prev.get("pid") == os.getpid():  # our own re-exec on new code: still the same start
+            self.started = prev.get("started")
         self.started = self.started or ts()
         self._signals()  # before the record shows: whoever reads it may signal us at once (a verdict, never a bare death)
         self._write()
@@ -151,7 +148,7 @@ class Owned:
     def _write(self):
         rec = {"kind": self.kind, "key": self.key, "pid": os.getpid(), "started": self.started,
                "process_start": process_start(os.getpid()),
-               "owner": caller_owner(), "cwd": safe_cwd(), "argv": self.argv, "code": code_version(), "runs": [list(r) for r in self.runs]}
+               "owner": caller_owner(), "cwd": safe_cwd(), "argv": self.argv, "code": code_version()}
         write_json(self.record, rec, indent=None)
 
     def _signals(self):
@@ -163,21 +160,9 @@ class Owned:
             except ValueError:  # not the main thread: the caller's own handling stands
                 pass
 
-    def add_run(self, o_r, rid):
-        self.runs.append((o_r, int(rid)))
-        self._write()
-
-    def drop_run(self, rid):
-        self.runs = [r for r in self.runs if r[1] != int(rid)]
-        self._write()
-
-    def release(self, cancel=True, keep_record=False):
+    def release(self, keep_record=False):
         if not self.f:
             return
-        if cancel:
-            for o_r, rid in self.runs:
-                cancel_run(o_r, rid, f"its {self.kind} ended")
-            self.runs = []
         if not keep_record:
             try:
                 os.unlink(self.record)
@@ -282,7 +267,7 @@ def selftest():
 def restart_if_changed(owned=(), argv=None):
     """Re-exec this process on agentctl's new code (same pid; argv: given, else the first owner's, else this process's)
     once the file on disk changed.
-    The owned locks are released without cancelling: the new process takes them back and adopts their runs."""
+    The owned locks are released with their records kept: the new process takes them back."""
     every = env_num("AGENTCTL_RESTART_CHECK", OWNERS_RESTART_CHECK)
     if time.time() - _last_code_check[0] < every:
         return
@@ -298,7 +283,7 @@ def restart_if_changed(owned=(), argv=None):
         return
     err(f"agentctl changed on disk ({START_CODE[:8]} -> {now_code[:8]}): restarting on the new code, pid {os.getpid()}")
     for o in owned:
-        o.release(cancel=False, keep_record=True)
+        o.release(keep_record=True)
     sys.stdout.flush()
     sys.stderr.flush()
     # The owner's own command (land's watch resumes as `agentctl watch`, not as `land`), else this process's.

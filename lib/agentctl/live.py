@@ -26,10 +26,6 @@ _live_reg_lock = threading.Lock()
 _live_info = process_cache({})                 # transcript -> ((size, mtime), tail info)
 
 
-def claude_projects_root():
-    return os.environ.get("AGENTCTL_CLAUDE_PROJECTS") or os.path.join(HOME, ".claude", "projects")
-
-
 def live_globs():
     v = os.environ.get("AGENTCTL_LIVE_GLOBS")
     return [g for g in (v.split(os.pathsep) if v is not None

@@ -26,10 +26,10 @@ mypy-errors	inbox	41
 mypy-errors	land	24
 mypy-errors	lander	45
 mypy-errors	landwatch	106
-mypy-errors	live	106
-mypy-errors	maint	86
+mypy-errors	live	104
+mypy-errors	maint	84
 mypy-errors	notifyurl	16
-mypy-errors	owned	98
+mypy-errors	owned	92
 mypy-errors	owner	228
 mypy-errors	policy	45
 mypy-errors	queue	45

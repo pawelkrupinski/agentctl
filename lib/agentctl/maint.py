@@ -204,31 +204,24 @@ def owner_orphans_dead_only():
     for rec in owner_records():
         if rec["alive"]:
             continue
-        for o_r, rid in rec.get("runs") or []:
-            cancel_run(o_r, rid, f"its owner pid {rec.get('pid')} died")
         for ext in (".json", ".verdict"):
             try:
                 os.unlink(rec["path"][: -len(".json")] + ext)
             except FileNotFoundError:
                 pass
-        reap_log(f"removed dead owner {rec.get('kind')} {rec.get('key')} pid {rec.get('pid')} (runs {rec.get('runs')})")
+        reap_log(f"removed dead owner {rec.get('kind')} {rec.get('key')} pid {rec.get('pid')}")
 
 
 def owner_orphans(kill):
-    """Owner records that are strays: a dead process's (its runs never cancelled), an owner on old code, an owner whose
-    cwd is gone. With kill: a dead one's runs are cancelled and its record removed; a live one gets SIGTERM, whose
-    handler cancels its runs."""
+    """Owner records that are strays: a dead process's, an owner on old code, an owner whose cwd is gone. With kill: a
+    dead one's record is removed; a live one gets SIGTERM."""
     found = []
     current = code_version()
     for rec in owner_records():
         what = f"{rec.get('kind')} {rec.get('key')} ({rec.get('owner')}, since {rec.get('started')})"
-        runs = " ".join(str(r[1]) for r in rec.get("runs") or [])
         if not rec["alive"]:
-            found.append(("owner", rec.get("pid"), "process gone, record left" + (f"; runs {runs} never cancelled" if runs
-                                                                                     else ""), what))
+            found.append(("owner", rec.get("pid"), "process gone, record left", what))
             if kill:
-                for o_r, rid in rec.get("runs") or []:
-                    cancel_run(o_r, rid, f"its owner pid {rec.get('pid')} died")
                 for ext in (".json", ".verdict"):
                     try:
                         os.unlink(rec["path"][: -len(".json")] + ext)

@@ -17,7 +17,6 @@ spec = importlib.util.spec_from_loader("agentctl", loader)
 A = importlib.util.module_from_spec(spec)
 loader.exec_module(A)
 with A.Owned("test", "k1", argv=["test"]) as o:
-    o.add_run("o/r", 77)
     print("held", flush=True)
     while True:
         time.sleep(0.1)
@@ -83,25 +82,21 @@ class OwnedTest(unittest.TestCase):
         self.assertTrue(b.acquire(), "released: the next one takes it")
         b.release()
 
-    def test_the_kernel_frees_the_lock_and_the_next_owner_cancels_a_killed_ones_runs(self):
+    def test_the_kernel_frees_the_lock_of_a_killed_owner(self):
         p = self.holder()
         self.assertFalse(A.Owned("test", "k1", argv=["x"]).acquire())
         p.send_signal(signal.SIGKILL)
         p.wait()
-        self.assertEqual(self.cancels(), [], "SIGKILL runs no handler")
         o = A.Owned("test", "k1", argv=["x"])
         self.assertTrue(o.acquire())
-        self.assertEqual(len(self.cancels()), 1)
-        self.assertIn("run cancel 77", self.cancels()[0])
         o.release()
+        self.assertEqual(self.cancels(), [], "an owner cancels no run (d073975)")
 
-    def test_sigterm_cancels_its_own_runs_and_drops_its_record(self):
+    def test_sigterm_drops_its_record(self):
         p = self.holder()
         rec = A.Owned("test", "k1", argv=["x"]).record
         p.send_signal(signal.SIGTERM)
         p.wait(timeout=180)
-        self.assertEqual(len(self.cancels()), 1)
-        self.assertIn("run cancel 77", self.cancels()[0])
         self.assertFalse(os.path.exists(rec))
 
     def test_the_signal_handlers_are_in_place_before_the_record_shows(self):
@@ -143,12 +138,6 @@ class OwnedTest(unittest.TestCase):
             os.chdir(here)
             if saved is not None:
                 os.environ["CLAUDE_CODE_SESSION_ID"] = saved
-
-    def test_a_finished_run_is_not_cancelled(self):
-        with A.Owned("test", "k3", argv=["x"]) as o:
-            o.add_run("o/r", 5)
-            o.drop_run(5)
-        self.assertEqual(self.cancels(), [])
 
     def test_a_held_owner_raises_with_the_holder(self):
         with A.Owned("test", "k4", argv=["x"]):
@@ -203,7 +192,7 @@ class OwnedTest(unittest.TestCase):
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, "test-dead.json"), "w") as f:
             json.dump({"kind": "test", "key": "dead", "pid": 999999, "started": "then", "process_start": "x",
-                       "owner": "gone-agent", "argv": ["x"], "code": "abc", "runs": [["o/r", 9]]}, f)
+                       "owner": "gone-agent", "argv": ["x"], "code": "abc"}, f)
         p = self.holder()
         rec = A.Owned("test", "k1", argv=["x"]).record
         r = json.load(open(rec))
@@ -213,20 +202,18 @@ class OwnedTest(unittest.TestCase):
         rc, out = self.tool("orphans")
         self.assertIn("dead", out)
         self.assertIn("process gone", out)
-        self.assertIn("runs 9", out)
         self.assertIn(f"pid {p.pid}", out)
         self.assertIn("old code", out)
         rc, out = self.tool("orphans", "--kill")
         self.assertTrue(self.until(lambda: p.poll() is not None))
         self.assertFalse(os.path.exists(os.path.join(d, "test-dead.json")))
-        self.assertTrue(any("run cancel 9" in c for c in self.cancels()), "the dead owner's runs are cancelled")
 
     def test_the_safe_reaper_ends_strays_but_never_an_owner_on_old_code_and_logs_each(self):
         d = os.environ["AGENTCTL_OWNERS_DIR"]
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, "test-dead.json"), "w") as f:
             json.dump({"kind": "test", "key": "dead", "pid": 999999, "started": "then", "process_start": "x",
-                       "owner": "gone-agent", "argv": ["x"], "code": "abc", "runs": [["o/r", 9]]}, f)
+                       "owner": "gone-agent", "argv": ["x"], "code": "abc"}, f)
         p = self.holder()
         rec = A.Owned("test", "k1", argv=["x"]).record
         r = json.load(open(rec))

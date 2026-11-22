@@ -215,8 +215,7 @@ cognitive	own_inbox_entry	18
 cognitive	owner_cmd_unsafe	36
 cognitive	owner_decision_record	17
 cognitive	owner_of	25
-cognitive	owner_orphans	40
-cognitive	owner_orphans_dead_only	11
+cognitive	owner_orphans	31
 cognitive	owner_spawn	11
 cognitive	owner_text	13
 cognitive	owner_work	21
@@ -412,7 +411,6 @@ copies	branches|status	2
 copies	buildview	2
 copies	ciwhy|redtick	2
 copies	fixerland|watchdog	2
-copies	maint	2
 copies	owner	2
 copies	queueclose	2
 copies	redcrash	2
@@ -495,7 +493,6 @@ cycle	waiting	1
 cycle	watchdog	1
 cyclomatic	HeldLease.check	12
 cyclomatic	LiveTail.poll	14
-cyclomatic	Owned.acquire	11
 cyclomatic	RemoteStore._call_once	17
 cyclomatic	Store.transition	32
 cyclomatic	StoreAPI.handle	26
@@ -725,7 +722,7 @@ cyclomatic	owner_cmd_unsafe	32
 cyclomatic	owner_decision_record	27
 cyclomatic	owner_details	14
 cyclomatic	owner_of	21
-cyclomatic	owner_orphans	20
+cyclomatic	owner_orphans	15
 cyclomatic	owner_spawn	13
 cyclomatic	owner_text	12
 cyclomatic	owner_turn_prompt	13
@@ -960,8 +957,8 @@ file-lines	ciwhy	1319
 file-lines	cleanup	519
 file-lines	core	716
 file-lines	gov	955
-file-lines	live	747
-file-lines	maint	509
+file-lines	live	743
+file-lines	maint	502
 file-lines	owner	742
 file-lines	recovery	743
 file-lines	remote	1084
