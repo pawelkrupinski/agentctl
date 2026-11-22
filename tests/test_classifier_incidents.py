@@ -91,6 +91,24 @@ class Incidents(unittest.TestCase):
         self.assertIsNone(A.RUNNER_FAILED.search("##[error]Process completed with exit code 1."))
         self.assertIsNotNone(A.RUNNER_FAILED.search("[error] Failed tests: x.YSpec"))
 
+    def test_a_forge_refusal_in_a_publish_step_is_infra_never_a_test_failure(self):
+        """Main #2825 (run 45018758712, 2026-11-22): publish-web and publish-worker failed at "Record that an image exists
+        for this commit" -- `gh api PATCH .../git/refs/tags/deployed-*` answered HTTP 403 "Resource not accessible by
+        integration" (the next run's same step passed, nothing changed). ci-why said TEST FAILURE, and blame revived the
+        lander, which began reverting a correct change. A GitHub API refusal (403 / 429 / 5xx, a rate limit) with no
+        test runner's failure line is the forge's, never the commit's."""
+        log = open(os.path.join(HERE, "fixtures", "main-2825-publish-record-403.log")).read()
+        lines = A.relevant_lines(log, 8)
+        self.assertEqual(sorted(lines), ["publish-web", "publish-worker"])
+        for name, ls in lines.items():
+            kind, why = A.classify_job(job("Record that an image exists for this commit", name), ls, (len(ls), ls))
+            self.assertEqual(kind, "infra", (name, why, ls))
+            self.assertIn("Resource not accessible by integration", why)
+
+    def test_a_forge_refusal_beside_a_failing_test_is_still_the_tests(self):
+        lines = ["gh: Resource not accessible by integration (HTTP 403)", "[info] - should parse *** FAILED ***"]
+        self.assertEqual(A.classify_job(job("Run tests"), lines, (2, lines))[0], "test")
+
     def test_every_pattern_row_names_its_incident(self):
         for name, pattern, incident in A.INFRA_STEPS + A.INFRA_SIGNATURES:
             self.assertTrue(name and pattern and incident, (name, pattern))

@@ -174,17 +174,13 @@ SETUP_STEP = re.compile("|".join(f"(?:{p})" for _n, p, _i in INFRA_STEPS), re.I)
 # `red block --owner-cause external-account` refused it as "a code red").
 CREDENTIAL_STEP = re.compile(r"create-github-app-token|configure-aws-credentials|google-github-actions/auth|azure/login", re.I)
 
-# Log lines that mean the machine or the network failed, not the code. The network rows are also what a LOCAL check's
-# output is read for (network_failure): one table, not a second classifier in slots.py.
-NETWORK_SIGNATURES = [
-    ("gitops fetch", r"fetch-gitops: .*(unreachable|could not fetch)|GitOps manifests STALE", "#823, 2026-10-29 packet loss"),
-    ("git transport", r"unable to access '[^']*'|kex_exchange_identification|ssh: connect to host", "#823"),
-    ("dns", r"Could not resolve host|Could not resolve hostname|Temporary failure in name resolution|"
-            r"nodename nor servname provided", "#823"),
-    ("connection", r"connection (reset|refused|timed out)|Operation timed out|Network is unreachable|No route to host|"
-                   r"TLS handshake timeout|context deadline exceeded", "#823, runner network blips"),
-]
+# The forge refusing an API call (gh's `gh: <message> (HTTP 403)`, a rate limit, a 5xx): GitHub's or the token's, never
+# the commit's (Main #2825, run 45018758712: a `gh api PATCH` of the deployed-* marker, 403 "Resource not accessible by
+# integration", the next run's same step green). A relevant line (STRONG) so it reaches the classifier.
+FORGE_REFUSED = (r"Resource not accessible by integration|\bgh: .*\(HTTP (403|429|50[0-4])\)|API rate limit exceeded|"
+                 r"secondary rate limit")
 INFRA_SIGNATURES = NETWORK_SIGNATURES + [
+    ("forge refused", FORGE_REFUSED, "Main #2825 45018758712: gh api PATCH of deployed-web, HTTP 403"),
     ("artifact clash", r"artifact already exists", "a rerun's upload over its first attempt's"),
     ("missing file", r"ENOENT", "a runner's workspace cleaned under a job"),
     ("disk", r"No space left on device", "a full runner disk"),
@@ -213,7 +209,7 @@ QUOTA_LOG = re.compile(r"request limit reached|daily limit|quota (exceeded|reach
 # What a test runner writes when a test fails -- the only lines a TEST verdict is read from. `*** FAILED ***` is
 # anchored to scalatest's own form: a passing test named "... FAILED rows ..." is no failure (2026-10-31). The pre-push
 # hook's own per-check verdict (`! pre-push scripttests FAILED (344s)`) is one too: a remote check's reason (2026-11-04).
-STRONG = re.compile(r"\*\*\* FAILED \*\*\*|\*\*\* FAILED$|\*\*\* ABORTED \*\*\*|\[error\]|::error::|(?i:assertion|assert(ion)? failed)|\bError:|ENOENT|"
+STRONG = re.compile(FORGE_REFUSED + r"|\*\*\* FAILED \*\*\*|\*\*\* FAILED$|\*\*\* ABORTED \*\*\*|\[error\]|::error::|(?i:assertion|assert(ion)? failed)|\bError:|ENOENT|"
                     r"artifact already exists|(?i:exit code [1-9])|^! pre-push\S* \S+ FAILED\b")
 WEAK = re.compile(r"\bfail(ed|ure)?\b|\berror\b|exception|assert", re.I)
 # A line that says something PASSED or was skipped is never a failure's line, whatever words it holds: a test runner's

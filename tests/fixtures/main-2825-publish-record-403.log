@@ -1,0 +1,42 @@
+publish-worker	Record that an image exists for this commit	﻿2026-11-22T12:08:14.7448552Z ##[group]Run set -euo pipefail
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:14.7449040Z ^[[36;1mset -euo pipefail^[[0m
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:14.7449414Z ^[[36;1mgh api --method PATCH \^[[0m
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:14.7449986Z ^[[36;1m    "/repos/pawelkrupinski/movies/git/refs/tags/deployed-worker" \^[[0m
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:14.7450551Z ^[[36;1m    -f sha='432a357842b111210003ea80cb01e61dc2d35342' -F force=true \^[[0m
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:14.7451089Z ^[[36;1m  || gh api --method POST \^[[0m
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:14.7451527Z ^[[36;1m    "/repos/pawelkrupinski/movies/git/refs" \^[[0m
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:14.7452082Z ^[[36;1m    -f ref=refs/tags/deployed-worker -f sha='432a357842b111210003ea80cb01e61dc2d35342'^[[0m
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:14.7476707Z shell: /usr/bin/bash -e {0}
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:14.7477195Z env:
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:14.7477497Z   IMAGE_REPO: registry.kinowo.net
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:14.7477920Z   REGISTRY_HOST: registry.kinowo.net
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:14.7478314Z   REGISTRY_USER: ci
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:14.7478759Z   CI_METRICS_FILE: /home/runner/work/_temp/ci-metrics/metrics.jsonl
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:14.7479460Z   JDK_JAVA_OPTIONS: -Xlog:gc:file=/home/runner/work/_temp/ci-gc/gc-%p.log:uptime,level,tags
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:14.7482166Z   GH_TOKEN: ***
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:14.7482490Z ##[endgroup]
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:15.3195061Z gh: Resource not accessible by integration (HTTP 403)
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:15.7391237Z gh: Resource not accessible by integration (HTTP 403)
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:15.7409612Z {"message":"Resource not accessible by integration","documentation_url":"https://docs.github.com/rest/git/refs#update-a-reference","status":"403"}{"message":"Resource not accessible by integration","documentation_url":"https://docs.github.com/rest/git/refs#create-a-reference","status":"403"}
+publish-worker	Record that an image exists for this commit	2026-11-22T12:08:15.7422577Z ##[error]Process completed with exit code 1.
+publish-web	Record that an image exists for this commit	﻿2026-11-22T12:08:26.2680943Z ##[group]Run set -euo pipefail
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:26.2681261Z ^[[36;1mset -euo pipefail^[[0m
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:26.2681571Z ^[[36;1mgh api --method PATCH \^[[0m
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:26.2681908Z ^[[36;1m    "/repos/pawelkrupinski/movies/git/refs/tags/deployed-web" \^[[0m
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:26.2682350Z ^[[36;1m    -f sha='432a357842b111210003ea80cb01e61dc2d35342' -F force=true \^[[0m
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:26.2682738Z ^[[36;1m  || gh api --method POST \^[[0m
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:26.2683039Z ^[[36;1m    "/repos/pawelkrupinski/movies/git/refs" \^[[0m
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:26.2683443Z ^[[36;1m    -f ref=refs/tags/deployed-web -f sha='432a357842b111210003ea80cb01e61dc2d35342'^[[0m
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:26.2706349Z shell: /usr/bin/bash -e {0}
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:26.2706662Z env:
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:26.2706932Z   IMAGE_REPO: registry.kinowo.net
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:26.2707243Z   REGISTRY_HOST: registry.kinowo.net
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:26.2707517Z   REGISTRY_USER: ci
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:26.2707847Z   CI_METRICS_FILE: /home/runner/work/_temp/ci-metrics/metrics.jsonl
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:26.2708408Z   JDK_JAVA_OPTIONS: -Xlog:gc:file=/home/runner/work/_temp/ci-gc/gc-%p.log:uptime,level,tags
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:26.2711048Z   GH_TOKEN: ***
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:26.2711317Z ##[endgroup]
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:29.5753564Z gh: Resource not accessible by integration (HTTP 403)
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:29.9244552Z gh: Resource not accessible by integration (HTTP 403)
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:29.9261569Z {"message":"Resource not accessible by integration","documentation_url":"https://docs.github.com/rest/git/refs#update-a-reference","status":"403"}{"message":"Resource not accessible by integration","documentation_url":"https://docs.github.com/rest/git/refs#create-a-reference","status":"403"}
+publish-web	Record that an image exists for this commit	2026-11-22T12:08:29.9271316Z ##[error]Process completed with exit code 1.
