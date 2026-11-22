@@ -141,9 +141,22 @@ def worktree_exclude(wt, names):
             f.write("\n".join(add) + "\n")
 
 
+# ONE START PER FAMILY (2026-11-21 22:12:33Z and 22:12:36Z): the convergence owner, ended ORPHANED, was started twice
+# 3 s apart (pids 6921, 7139) -- two of its reds re-offered in two dispatcher passes, each finding no live heartbeat
+# because the first wrapper had not taken it yet; the second wrapper ended DUPLICATE. The dispatcher now takes the
+# owner's heartbeat lease ITSELF before it starts the wrapper, atomically in the store, and hands it over
+# ($AGENTCTL_OWNER_HEARTBEAT): a later pass finds the owner alive and hands it the red; a pass that loses the take is a
+# no-op that hands its leases to the owner starting.
+OWNER_HEARTBEAT_ENV = "AGENTCTL_OWNER_HEARTBEAT"
+
+
+def owner_meta(fam, wt, pid, notebook):
+    return {"kind": "owner", "family": fam, "worktree": wt, "pid": pid, "notebook": notebook, "host": socket_host()}
+
+
 def owner_spawn(store, o_r, repo, fam, off, took, extra=()):
     """Start (or restart, after it died) the family's owner: its worktree and notebook kept, the taken leases handed
-    to it, its wrapper detached. (ok, message)."""
+    to it, its heartbeat taken for it (ONE START PER FAMILY), its wrapper detached. (ok, message)."""
     rec = read_record(owner_record_path(fam)) or {"family": fam, "restarts": -1}
     wt = owner_worktree(repo, fam, rec)
     if not wt:
@@ -151,6 +164,10 @@ def owner_spawn(store, o_r, repo, fam, off, took, extra=()):
     for x in [{"name": off["lease"], **took}] + [dict(x) for x in extra]:
         owner_hand(fam, x["name"], x)
     nb = os.path.join(wt, OWNER_NOTEBOOK)
+    hb = store.acquire(owner_lease(fam), owner_holder(fam), OWNER_TTL, OWNER_MAX, progress=f"beat {int(time.time())}",
+                       meta=owner_meta(fam, wt, None, nb))
+    if "held" in hb:  # another pass started it a moment ago: the red is the starting owner's next turn
+        return True, f"RED OWNER {fam}: already starting ({hb['held']['holder']}): red {off['lease']} handed to it"
     if not os.path.exists(nb):
         with open(nb, "w") as f:
             f.write(f"# {fam} red family: the owner's notebook\n\nKept by the family's owner session across reds and "
@@ -168,9 +185,15 @@ def owner_spawn(store, o_r, repo, fam, off, took, extra=()):
     except OSError:
         pass
     env = fixer_env(o_r, f"owner-{fam}")
-    with open(rec["log"], "a") as logf:
-        p = spawn_detached([sys.executable, TOOL_PATH, "red", "owner", "--family", fam, "--repo", repo],
-                           stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=wt, env=env)
+    env[OWNER_HEARTBEAT_ENV] = json.dumps({"epoch": hb["epoch"], "secret": hb["secret"]})
+    try:
+        with open(rec["log"], "a") as logf:
+            p = spawn_detached([sys.executable, TOOL_PATH, "red", "owner", "--family", fam, "--repo", repo],
+                               stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=wt,
+                               env=env)
+    except OSError as e:  # never a heartbeat held for a wrapper that never ran
+        store.release(owner_lease(fam), hb["epoch"], hb["secret"], outcome=f"NOT STARTED: {e}")
+        return False, f"RED OWNER {fam}: NOT STARTED: {e}"
     rec.update(pid=p.pid, process_start=process_start(p.pid))
     write_json(owner_record_path(fam), rec)
     pic = off["picture"]
@@ -261,11 +284,12 @@ def red_owner(a):
         print(f"RED OWNER {fam}: NOT STARTED ({standby})")
         return 0
     holder = owner_holder(fam)
-    hb = st.acquire(owner_lease(fam), holder, OWNER_TTL, OWNER_MAX, progress=f"beat {int(time.time())}",
-                    meta={"kind": "owner", "family": fam, "worktree": wt, "pid": me, "notebook": rec.get("notebook"),
-                          "host": socket_host()})
+    hb = owner_take_heartbeat(st, fam, holder, owner_meta(fam, wt, me, rec.get("notebook")))
     if "held" in hb:
         print(f"RED OWNER {fam}: DUPLICATE ({hb['held']['holder']} is alive)")
+        return 0
+    if "lost" in hb:
+        print(f"RED OWNER {fam}: NOT STARTED: the heartbeat taken for it was lost ({str(hb['lost'])[:300]})")
         return 0
     rec.update(pid=me, process_start=process_start(me))
     write_json(path, rec)
@@ -487,6 +511,23 @@ def red_owner(a):
     return 0
 
 
+def owner_take_heartbeat(st, fam, holder, meta):
+    """The wrapper's heartbeat lease: the one its dispatcher took for it ($AGENTCTL_OWNER_HEARTBEAT, ONE START PER
+    FAMILY), still held, its meta made the wrapper's -- else {'lost': why}; with none handed over (`red owner` run by
+    hand), taken now -- {'held': ...} when another owner holds it."""
+    handed = os.environ.pop(OWNER_HEARTBEAT_ENV, None)
+    if not handed:
+        return st.acquire(owner_lease(fam), holder, OWNER_TTL, OWNER_MAX, progress=f"beat {int(time.time())}",
+                          meta=meta)
+    x = json.loads(handed)
+    hl = HeldLease(owner_lease(fam), x["epoch"], x["secret"], holder, OWNER_TTL)
+    gone = hl.renew(st, f"beat {int(time.time())}")
+    if gone:
+        return {"lost": gone[1]}
+    st.set_meta(owner_lease(fam), hl.epoch, hl.secret, meta)
+    return {"epoch": hl.epoch, "secret": hl.secret}
+
+
 def owner_tell_leases(st, leases, s, wt, me, rec):
     """Each red lease the owner holds carries its worktree, notebook, wrapper pid and session (`red status` shows the
     holder's worktree, never "?"): sent once per lease epoch and session."""
@@ -688,13 +729,8 @@ def bg_reap_spent(t):
     if on_ci_runner():
         return []
     cli = claude_cli()
-    try:
-        r = subprocess.run([cli, "agents", "--json", "--all"], capture_output=True, text=True, timeout=60,
-                           stdin=subprocess.DEVNULL)
-        rows = json.loads(r.stdout) if r.returncode == 0 else None
-    except (OSError, subprocess.TimeoutExpired, ValueError):
-        rows = None
-    if not isinstance(rows, list):
+    rows = bg_rows(cli)
+    if rows is None:
         return []
     acts = []
     for x in bg_spent(rows, bg_live_turns(), t):

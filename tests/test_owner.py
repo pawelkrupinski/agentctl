@@ -136,6 +136,67 @@ class OwnerTest(OwnerBase):
         argv = self.argv_of(self.rec()["session"])
         self.assertNotIn("--resume", argv, "a session with no conversation is never resumed: a fresh one")
 
+    def test_a_turn_closed_under_a_working_row_ends_at_once_never_at_the_stall(self):
+        """2026-11-21 21:53Z (convergence, session 0f6f7ecd) and 22:55Z (outside-gate, 0dedcd39): the session answered
+        its verdict and claude closed the turn (`turn_duration`), but its row stayed `working` with its process alive.
+        The wrapper read only `blocked` / `idle` rows' transcripts and held the turn until RED_STALL (30 min) stopped
+        it; the orphan reaper then revoked its heartbeat ("its session ... is stopped while its wrapper ... still holds
+        the turn"). The wrapper now ends that turn within a poll or two."""
+        os.environ["FAKE_CLAUDE_STAY_WORKING"] = "1"
+        self.addCleanup(os.environ.pop, "FAKE_CLAUDE_STAY_WORKING", None)
+        self.tick(dispatch=True)
+        name = A.red_lease(self.only()["data"]["key"])
+        outcome = lambda: str(A.lease_meta(self.st.get(name) or {}).get("outcome") or "")
+        self.assertTrue(self.wait(outcome, limit=20), self.owner_log())
+        self.assertTrue(outcome().startswith("LANDED"), outcome())
+        self.assertTrue(self.wait(lambda: not self.rec().get("in_turn"), limit=5),
+                        "the turn is over: the reaper reads `between turns`")
+        self.assertTrue(A.lease_is_live(self.st.get(A.owner_lease(FAM)), time.time()), "the owner lives on")
+
+    def test_a_wrapper_whose_worktree_was_deleted_still_reads_its_session(self):
+        """2026-11-22 04:27Z (outside-gate, wrapper pid 3227, session c07162d7): the owner's worktree -- the wrapper's
+        cwd -- was deleted and made again mid-turn. claude refuses to start in a deleted directory, so each `claude
+        agents` the wrapper ran read nothing, and the session's `done` went unseen until the orphan reaper revoked the
+        turn. agentctl runs claude from a directory that exists."""
+        agents = os.path.join(os.environ["FAKE_CLAUDE_OUT"], "agents")
+        os.makedirs(agents, exist_ok=True)
+        with open(os.path.join(agents, "c07162d7.json"), "w") as f:
+            json.dump({"id": "c07162d7", "sessionId": "c07162d7-c31d", "kind": "background", "state": "done"}, f)
+        gone = os.path.join(self.tmp.name, "deleted-worktree")
+        os.makedirs(gone)
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(gone)
+        os.rmdir(gone)
+        self.assertEqual(A.bg_session(A.claude_cli(), "c07162d7").get("state"), "done")
+
+    def test_a_dead_owner_is_started_once_however_many_passes_find_it_dead(self):
+        """2026-11-21 22:12:33Z and 22:12:36Z: after its ORPHANED end the convergence owner was started twice, 3 s apart
+        (pids 6921, 7139): two of the family's reds re-offered in two dispatcher passes, each finding no live heartbeat
+        -- the first wrapper had not taken it yet -- and the second wrapper ended DUPLICATE. The dispatcher now takes
+        the owner's heartbeat itself before it starts the wrapper (one start per family per epoch): the next pass finds
+        the owner alive and hands it the red."""
+        started = []
+        saved = A.spawn_detached
+
+        def spawn(argv, **kw):  # a wrapper slow to start: it never reaches its own heartbeat
+            p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+            started.append(p)
+            self.addCleanup(lambda: (p.kill(), p.wait()))
+            return p
+        A.spawn_detached = spawn
+        self.addCleanup(setattr, A, "spawn_detached", saved)
+        self.tick(dispatch=True)
+        self.assertEqual(len(started), 1)
+        self.main_red(41, 21, line="[info] - BarSpec should baz *** FAILED ***")
+        self.tick(dispatch=True, advance=3)
+        self.assertEqual(len(started), 1, "one start per family: the second pass hands its red to the starting owner")
+        name = A.red_lease(self.only()["data"]["key"])  # the second red (the first cleared with its run)
+        self.assertEqual(self.st.get(name)["holder"], A.owner_holder(FAM))
+        self.assertIn(name, A.owner_leases(FAM))
+        hb = self.st.get(A.owner_lease(FAM))
+        self.assertTrue(A.lease_is_live(hb, self.t[0]), "the heartbeat is the starting wrapper's, taken for it")
+        self.assertEqual(self.rec()["pid"], started[0].pid)
+
     def test_a_turn_past_its_wall_time_is_stopped_and_its_leases_released_the_owner_lives_on(self):
         """An owner turn was unbounded: a hung session held its family's reds `leased` for up to OWNER_MAX (7 days)."""
         os.environ["FAKE_CLAUDE_SLEEP"] = "60"

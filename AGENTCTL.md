@@ -884,7 +884,9 @@ agent must be assigned to it".
   carries claude's own error (its job's `detail`, `~/.claude/jobs/<id>/state.json`), and so does the HARNESS FAULT. A turn
   ends with one verdict line; that turn's red leases are released with it, exactly as a fixer's, so verification,
   re-offers (back to the same owner), the attempt ladder and the crash-loop breaker work as before. It is restarted
-  only when it died (same worktree, notebook and session), and ends after 6 h with no red (`$AGENTCTL_OWNER_IDLE`, counted from its last turn's end), on
+  only when it died (same worktree, notebook and session) -- ONCE: the dispatcher takes the owner's heartbeat itself
+  before it starts the wrapper (`$AGENTCTL_OWNER_HEARTBEAT` hands it over), so a later pass finds the owner alive and
+  hands it the red, never a second wrapper (2026-11-21 22:12Z: two starts 3 s apart, the second DUPLICATE) -- and ends after 6 h with no red (`$AGENTCTL_OWNER_IDLE`, counted from its last turn's end), on
   `RED-STOP.md`, or after 2 turns in a row with no verdict. A wrapper whose heartbeat is LOST (revoked, re-taken; a
   merely lapsed one is taken again) ends `STOPPED: the owner's heartbeat lease was lost (<why, from the lease>)` and
   leaves its turn's session at work: the next owner adopts it, never starting it over. Its brief: fast reproducer first, and for convergence the
@@ -983,7 +985,8 @@ agent must be assigned to it".
   refuted fix) ends the streak; a release by hand is no launch. `$AGENTCTL_RED_CRASH_LOOP` (3). The block names the
   newest crash's log (an owner's wrapper log, else the fixer's transcript or worktree) and each launch's stop reason.
   A turn is read from its transcript: a background session whose process lives on after its turn (`blocked` / `idle`
-  with a live pid) has ended it when its answer carries a verdict, or -- nothing of its own pending -- after
+  with a live pid, or any row -- even `working` -- whose transcript closed the turn with `turn_duration`, 2026-11-21)
+  has ended it when its answer carries a verdict, or -- nothing of its own pending -- after
   `$AGENTCTL_BG_IDLE_GRACE` (60 s) of quiet; one waiting on its own backgrounded task (`agentctl wait`) is at work, and
   its lease is renewed by the wait.
 - **OWNER-ONLY CATEGORIES (ask.py `OWNER_ONLY`, 2026-11-19: "could any of these decision things could've been handled

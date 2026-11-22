@@ -14,6 +14,8 @@
                               an implementer briefed with a diagnosis, $FAKE_CLAUDE_RESULT_IMPLEMENT when set), done
                               (or $FAKE_CLAUDE_END_STATE: `blocked`, `stopped`). $FAKE_CLAUDE_LINGER: its process lives
                               on after the turn (`claude bg-spare`), its row `blocked` / `idle` with that live pid.
+                              $FAKE_CLAUDE_STAY_WORKING: after its answer it closes the turn (a `turn_duration`
+                              entry) yet its row stays `working`, its process alive (claude's job did so, 2026-11-21).
                               $FAKE_CLAUDE_BG_WAIT=<s>: it first backgrounds a task (`agentctl wait`), ends its turn
                               waiting on it (row `blocked`, live pid, no answer) for <s> s, then the task's notification
                               comes and it answers.
@@ -74,6 +76,12 @@ def say(path, role, text):
         f.write(json.dumps({"type": role, "message": {"role": role, "content": [{"type": "text", "text": text}]}}) + "\n")
 
 
+try:  # claude refuses to start in a deleted directory
+    os.getcwd()
+except FileNotFoundError:
+    print("The current directory no longer exists (it was deleted or moved). Start Claude Code from an existing "
+          "directory.", file=sys.stderr)
+    sys.exit(1)
 argv = sys.argv[1:]
 if "--help" in argv:
     print("Usage: claude [options]\n  --bg, --background\n  --permission-mode <mode>\n  --permission-prompts <target>")
@@ -137,6 +145,10 @@ if argv[:1] == ["_session"]:
     if os.environ.get("FAKE_CLAUDE_RESULT_IMPLEMENT") and "was DIAGNOSED" in r["prompt"]:  # an implementer's brief
         result = os.environ["FAKE_CLAUDE_RESULT_IMPLEMENT"]
     say(path, "assistant", "Done.\n" + result)
+    if os.environ.get("FAKE_CLAUDE_STAY_WORKING"):  # the turn closed in the transcript, the row still `working`
+        with open(path, "a") as f:
+            f.write(json.dumps({"type": "system", "subtype": "turn_duration", "durationMs": 1000}) + "\n")
+        time.sleep(3600)  # until `stop` ends its group
     r = read_row(argv[1])
     if r and not r.get("stopped") and os.environ.get("FAKE_CLAUDE_LINGER"):  # the turn over, the process lives on
         r.update(state="blocked", status="idle")

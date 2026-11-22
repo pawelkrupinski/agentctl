@@ -670,16 +670,31 @@ def bg_start(argv, cwd, env):
     return (m.group(1), None) if m else (None, f"exit {r.returncode}: {(r.stderr.strip() or r.stdout.strip())[-300:]}")
 
 
-def bg_session(cli, bid):
-    """The session's row in `claude agents --json --all` ({id, sessionId, name, state, ...}); None when it is not
-    listed; {} when the list cannot be read (no verdict either way)."""
+# CLAUDE RUNS FROM A DIRECTORY THAT EXISTS (2026-11-22 04:27Z, outside-gate owner, wrapper pid 3227): a wrapper's cwd is
+# its worktree, and that worktree was deleted and made again mid-turn. claude refuses to start in a deleted directory
+# ("The current directory no longer exists"), so every `claude agents` the wrapper ran read nothing ({}: no verdict
+# either way) and its session's `done` went unseen until the laptop's orphan reaper -- running elsewhere -- revoked the
+# turn. agentctl's own `claude agents` / `claude stop` run from HOME.
+def claude_cwd():
+    return HOME if os.path.isdir(HOME) else "/"
+
+
+def bg_rows(cli):
+    """The rows of `claude agents --json --all`, or None when they cannot be read."""
     try:
         r = subprocess.run([cli, "agents", "--json", "--all"], capture_output=True, text=True, timeout=60,
-                           stdin=subprocess.DEVNULL)
+                           stdin=subprocess.DEVNULL, cwd=claude_cwd())
         rows = json.loads(r.stdout) if r.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired, ValueError):
         rows = None
-    if not isinstance(rows, list):
+    return rows if isinstance(rows, list) else None
+
+
+def bg_session(cli, bid):
+    """The session's row in `claude agents --json --all` ({id, sessionId, name, state, ...}); None when it is not
+    listed; {} when the list cannot be read (no verdict either way)."""
+    rows = bg_rows(cli)
+    if rows is None:
         return {}
     return next((x for x in rows if x.get("id") == bid or str(x.get("sessionId") or "").startswith(bid)), None)
 
@@ -723,16 +738,17 @@ _BG_TURN_CACHE = {}
 def bg_turn(path):
     """What the transcript says of the session's current turn: {"final": its last answer since the latest input (a
     prompt or a task notification), "pending": its background tasks started since its prompt and neither reported
-    nor stopped}. Cached on the
-    file's size and mtime; empty for an unreadable one."""
+    nor stopped, "closed": claude recorded the turn's end (a `turn_duration` entry) after that answer, with no input
+    since}. Cached on the file's size and mtime; empty for an unreadable one."""
+    empty = {"final": "", "pending": [], "closed": False}
     try:
         sig = (os.path.getsize(path), os.path.getmtime(path))
     except (OSError, TypeError):
-        return {"final": "", "pending": []}
+        return empty
     hit = _BG_TURN_CACHE.get(path)
     if hit and hit[0] == sig:
         return hit[1]
-    final, started, reported = "", [], set()
+    final, started, reported, closed = "", [], set(), False
     try:
         with open(path, errors="replace") as f:
             for line in f:
@@ -746,18 +762,20 @@ def bg_turn(path):
                     blocks = [{"type": "text", "text": c}] if isinstance(c, str) else c if isinstance(c, list) else []
                     for b in blocks:
                         if isinstance(b, dict) and b.get("type") == "text":
-                            final = ""  # new input: the turn's answer is what comes after it
+                            final, closed = "", False  # new input: the turn's answer is what comes after it
                             if "<task-notification>" not in str(b.get("text")):  # a prompt: a new turn (a resume
                                 started = []                                      # is a new process: no older task)
                 elif isinstance(e, dict) and e.get("type") == "assistant" and isinstance(c, list):
                     t = "\n".join(b.get("text") or "" for b in c if isinstance(b, dict) and b.get("type") == "text")
                     if t.strip():
-                        final = t
+                        final, closed = t, False
+                elif isinstance(e, dict) and e.get("type") == "system" and e.get("subtype") == "turn_duration":
+                    closed = bool(final)
                 started += [x or y for x, y in BG_TASK_STARTED.findall(line)]
                 reported.update(BG_TASK_REPORTED.findall(line) + BG_TASK_STOPPED.findall(line))
     except OSError:
-        return {"final": "", "pending": []}
-    out = {"final": final, "pending": [x for x in dict.fromkeys(started) if x not in reported]}
+        return empty
+    out = {"final": final, "pending": [x for x in dict.fromkeys(started) if x not in reported], "closed": closed}
     _BG_TURN_CACHE[path] = (sig, out)
     return out
 
@@ -768,14 +786,23 @@ def bg_waiting(ent):
     return bool(ent) and (ent.get("state") or ent.get("status")) in BG_WAITING_STATES and bool(pid) and pid_alive(int(pid))
 
 
+# A CLOSED TURN UNDER A `working` ROW (2026-11-21 21:53Z convergence owner session 0f6f7ecd, 22:55Z outside-gate
+# 0dedcd39): the session gave its final answer, verdict and all, and claude wrote the turn's `turn_duration` -- but its
+# row (and its job, ~/.claude/jobs/<id>/state.json) stayed `working` with the process alive. Only `blocked` / `idle`
+# rows had their transcript read, so the wrapper held the turn until RED_STALL (30 min) stopped it, and the orphan
+# reaper, seeing that stop, revoked the owner's heartbeat seconds later. A row in any state whose transcript closed the
+# turn is judged as a waiting one.
 def bg_turn_over(ent, path, now=None):
-    """The session's turn is over: its row says so (bg_ended), or it waits with its process alive and its transcript
-    says the turn ended -- a verdict in its final answer, or no background task of its own pending for BG_IDLE_GRACE."""
+    """The session's turn is over: its row says so (bg_ended), or it waits with its process alive -- or its transcript
+    closed the turn whatever its row says -- and its transcript says the turn ended: a verdict in its final answer, or
+    no background task of its own pending for BG_IDLE_GRACE."""
     if bg_ended(ent):
         return True
-    if not bg_waiting(ent):
+    if not ent:
         return False
     turn = bg_turn(path)
+    if not (bg_waiting(ent) or turn["closed"]):
+        return False
     if fixer_verdict(turn["final"]):
         return True
     if turn["pending"]:
@@ -817,7 +844,7 @@ def store_reauth():
 
 def bg_stop(cli, bid):
     try:
-        subprocess.run([cli, "stop", bid], capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
+        subprocess.run([cli, "stop", bid], capture_output=True, timeout=60, stdin=subprocess.DEVNULL, cwd=claude_cwd())
     except (OSError, subprocess.TimeoutExpired):
         pass
 
