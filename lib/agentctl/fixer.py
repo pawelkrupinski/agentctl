@@ -2032,8 +2032,9 @@ def red_revert(o_r, repo, u, culprit):
             git(wt, "revert", "--abort", check=False)
             return False, f"git revert {culprit[:10]} does not apply ({(r.stderr or r.stdout).strip()[:120]})"
         msg = git(wt, "log", "-1", "--format=%B").strip()
-        git(wt, *NO_SIGN, "commit", "--amend", "-q", "-m", f"{msg}\n\nThe revert fallback (agentctl red): {u['workflow']} "
-            f"#{num} still failed after two attempts (its tier ladder).\n\nFixes-Red: {num}\n"
+        why = u.get("revert_why") or f"{u['workflow']} #{num} still failed after two attempts (its tier ladder)."
+        git(wt, *NO_SIGN, "commit", "--amend", "-q", "-m", f"{msg}\n\nThe revert fallback (agentctl red): {why}"
+            f"\n\nFixes-Red: {num}\n"
             + agentctl_revert_fix_replay(f"agentctl's revert fallback of {culprit[:10]}: {u['workflow']} #{num} outlived "
                                          "two fix attempts, so main goes back to the code before it; nothing new to replay")
             + "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>")

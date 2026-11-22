@@ -1038,6 +1038,12 @@ agent must be assigned to it".
   every red-repos.json clone's claude trust each pass; an untrusted one is ONE `[tty-trust]` owner ask (item
   `trust:<path>`), asked once per gap, retracted once trusted -- never 21 minutes into a red, nor once per flap of its
   offer reason (the dispatcher's NOT DISPATCHABLE stays on the offer, out of the inbox).
+- **A decided revert the fixers did not land is landed by agentctl (2026-11-22, Identity takes #349).** A gate red
+  whose in-progress owner decision is `revert <sha>`, offered again `RED_DECIDED_REVERT_MAX` (45 min,
+  `$AGENTCTL_RED_DECIDED_REVERT_MAX`) after the decision, goes to the revert tier (red.py `decided_revert`): agentctl's
+  own revert of that commit, `Fixes-Red` and a specific `Fix-Replay: none`, landed by `agentctl land` under the normal
+  checks -- once (`reverted`), then the ladder as before. A fix change that ended rejected puts its change's `why` in
+  the red's history, so red status, the inbox and the next fixer's prompt say why.
 - **No signature where main keeps none (2026-11-22).** A fixer of a repo whose main is unsigned (red-repos.json
   `signed: false`: movies, whose land rebases with NO_SIGN) commits unsigned (`fixer_env`: `commit.gpgsign` and
   `tag.gpgsign` false through git's env config), so commit signing never parks one on the vault: #348/#349's revert

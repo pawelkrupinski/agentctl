@@ -266,9 +266,32 @@ RED_LADDER = ((0, "author", "author"), (0, None, "fresh"),
               (3, None, "deep"))
 
 
-def red_tier(d, culprit=None):
+# A DECIDED REVERT THE FIXERS DID NOT LAND IS LANDED BY AGENTCTL (the owner, 2026-11-22: "fix this structurally, so
+# it recovers by itself"; Identity takes #349: the owner decided "revert f64d8a73a" at ~07:00Z, the fixer's revert was
+# rejected at 07:52Z and the gate stayed red, every land waiting behind it). A gate red whose in-progress decision is
+# `revert <sha>`, offered again RED_DECIDED_REVERT_MAX after the owner decided it, goes to the revert tier: agentctl's
+# own revert of that commit (red_revert: Fixes-Red, a specific `Fix-Replay: none`, landed by `agentctl land` under the
+# normal checks), once -- `reverted` set, the ladder goes on as before if it does not land.
+RED_DECIDED_REVERT_MAX = 45 * 60
+DECIDED_REVERT = re.compile(r"^\W*revert\s+([0-9a-f]{7,40})\b", re.I)
+
+
+def decided_revert(d, t=None):
+    """The commit the owner decided red d is fixed by reverting, once that decision is RED_DECIDED_REVERT_MAX old (t:
+    now) and agentctl has not reverted it yet; else None."""
+    dec = red_decision(d) or {}
+    m = DECIDED_REVERT.match(str(dec.get("answer") or ""))
+    if not m or not d.get("gate") or d.get("reverted"):
+        return None
+    age = (time.time() if t is None else t) - float(dec.get("at") or 0)
+    return m.group(1) if age >= env_num("AGENTCTL_RED_DECIDED_REVERT_MAX", RED_DECIDED_REVERT_MAX) else None
+
+
+def red_tier(d, culprit=None, t=None):
     if (d.get("crash_loop") or {}).get("stage") == "deep":  # the crash-loop breaker moved it up (red_crash_loop)
         return "deep"
+    if decided_revert(d, t):
+        return "revert"
     # THE DECISION RULE (blame.py, blame_decision): while its culprit is decided the red waits (tier `blame`); a
     # determined culprit is reverted and its lander revived (tier `lander`, once); only an undetermined one goes up the
     # ladder below to a fresh fixer
@@ -1684,7 +1707,10 @@ def red_offer(store, it, text, data=None, repo=None, escalate=False, verdict=Non
     """Into `offered`, with its tier from the ladder, its deadline and its offer (the picture a taker gets). quiet: a
     re-offer that is no escalation (its culprit decided: blame.py)."""
     d = {**it["data"], **(data or {})}
-    tier = red_tier(d, d.get("culprit"))
+    tier = red_tier(d, d.get("culprit"), store.clock())
+    if tier == "revert" and not d.get("culprit"):  # the owner's decided revert (decided_revert): its commit is the culprit
+        d["culprit"] = decided_revert(d, store.clock())
+        data = {**(data or {}), "culprit": d["culprit"]}
     deadline = RED_OFFER["author"] if tier == "author" else RED_OFFER[red_offer_class(d)]
     if tier == "blame":  # waits for its culprit, at most BLAME_MAX: never escalated UNCLAIMED meanwhile
         deadline = max(60, float((d.get("blame") or {}).get("since") or 0) + env_num("AGENTCTL_BLAME_MAX", BLAME_MAX)
@@ -4332,6 +4358,12 @@ def red_spawn(store, o_r, repo, off, took, extra=()):
     if b.get("culprit") is not None:
         u["blame_note"] = blame_note(b)
     if tier == "revert":
+        dec = pic.get("decision") or {}
+        if DECIDED_REVERT.match(str(dec.get("answer") or "")):
+            u["revert_why"] = (f"the owner decided {u['workflow']} #{u['run'].get('number')} is fixed by this revert "
+                               f"({str(dec.get('answer'))[:120]!r}) and no fixer landed it within "
+                               f"{fmt_age(env_num('AGENTCTL_RED_DECIDED_REVERT_MAX', RED_DECIDED_REVERT_MAX))} "
+                               "(decided_revert).")
         ok, msg = red_revert(o_r, repo, u, pic.get("culprit"))
         store.note(off["lease"], took["epoch"], took["secret"], msg)
         it_id = off["item"].split(":", 1)[1]
