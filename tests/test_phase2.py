@@ -485,6 +485,9 @@ class RedFamilyTest(Phase2Base):
         super().setUp()
         os.environ.pop("AGENTCTL_REDS_DIR", None)
         os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp, "laptop")
+        # its own inbox: the harness's is one per process, so an earlier test's verdicts would be counted with its own
+        self.addCleanup(os.environ.__setitem__, "AGENTCTL_INBOX_DIR", os.environ["AGENTCTL_INBOX_DIR"])
+        os.environ["AGENTCTL_INBOX_DIR"] = os.path.join(self.tmp, "inbox")
         seed_gating_checks()  # no clone, no forge: the gate's workflows as last read
         self.spawned, self.fns = [], (A.red_spawn, A.cached_dispatch_blocker)
         A.red_spawn = lambda store, o_r, repo, off, took, extra=(): self.spawned.append((off, extra)) or (True, "ok")
