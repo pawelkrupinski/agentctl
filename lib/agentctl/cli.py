@@ -422,3 +422,23 @@ def main(argv=None):
                "red": cmd_red, "decide": cmd_decide, "config": cmd_config, "issue": cmd_issue, "revert": cmd_revert, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "laptop": cmd_laptop, "status": cmd_status, "queue": cmd_queue_retired, "tick": cmd_tick, "store": cmd_store, "github-app": cmd_github_app, "waiting": cmd_waiting, "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "park": cmd_park, "unpark": cmd_unpark, "watch": cmd_watch, "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": cmd_land, "land-precheck": cmd_land_precheck, "env": cmd_env}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)
+
+
+def selftest():
+    """Fast smoke check of the code a service would re-exec onto: the parser builds, the failure parsers and the
+    snapshot readers work on fixtures, a fixture gate reads green."""
+    snap = {"at": time.time(), "repo": "x/y", "outside_error": None, "outside": [],
+            "gate": [{"name": "Main", "decided": {"databaseId": 1, "number": 1, "status": "completed",
+                                                  "conclusion": "success"}, "newer": None, "since": None, "count": 0,
+                      "runs": []}]}
+    assert gate_from_snap(snap)[0][0] == "Main" and outside_from_snap(snap) == []
+    assert set(check_failures("! pre-push sbt FAILED (3s)\n")) == {"sbt"}
+    assert red_for("2026-01-01T00:00:00Z", dt.datetime(2026, 1, 1, 1, 5, tzinfo=dt.timezone.utc)) == "1h 5m"
+    assert callable(recheck_local) and callable(restart_gate)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            main(["ci-why", "--help"])
+    except SystemExit as e:
+        assert e.code == 0
+    print("selftest ok")
+    return 0

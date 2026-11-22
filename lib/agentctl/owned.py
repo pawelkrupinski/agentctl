@@ -244,26 +244,6 @@ def restart_gate():
     return ok, ("" if ok else f"commit {head[:9]} fails its smoke check ({why})")
 
 
-def selftest():
-    """Fast smoke check of the code a service would re-exec onto: the parser builds, the failure parsers and the
-    snapshot readers work on fixtures, a fixture gate reads green."""
-    snap = {"at": time.time(), "repo": "x/y", "outside_error": None, "outside": [],
-            "gate": [{"name": "Main", "decided": {"databaseId": 1, "number": 1, "status": "completed",
-                                                  "conclusion": "success"}, "newer": None, "since": None, "count": 0,
-                      "runs": []}]}
-    assert gate_from_snap(snap)[0][0] == "Main" and outside_from_snap(snap) == []
-    assert set(check_failures("! pre-push sbt FAILED (3s)\n")) == {"sbt"}
-    assert red_for("2026-01-01T00:00:00Z", dt.datetime(2026, 1, 1, 1, 5, tzinfo=dt.timezone.utc)) == "1h 5m"
-    assert callable(recheck_local) and callable(restart_gate)
-    try:
-        with contextlib.redirect_stdout(io.StringIO()):
-            main(["ci-why", "--help"])
-    except SystemExit as e:
-        assert e.code == 0
-    print("selftest ok")
-    return 0
-
-
 def restart_if_changed(owned=(), argv=None):
     """Re-exec this process on agentctl's new code (same pid; argv: given, else the first owner's, else this process's)
     once the file on disk changed.
