@@ -1,5 +1,5 @@
 # agentctl, part `core`: the help texts, imports, constants and helpers every part uses.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's only.
 
 WAIT_RUN_HELP = """Block until GitHub Actions runs finish; print only the verdicts.
 
