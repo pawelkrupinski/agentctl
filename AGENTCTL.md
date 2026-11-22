@@ -2227,6 +2227,18 @@ agentctl gov replay --at 2026-11-18T05:45Z [--hold 30] [--cores 18]   # the admi
 agentctl suite [run.py args]       # agentctl's own tests (tests/run.py) under a `suite` ticket: one run at once (SUITE_CAP)
 ```
 
+- **The busy cores are the whole machine's CPU** (2026-11-22): `machine_busy_cores` reads the CPU tick delta of the
+  machine itself (user + sys + nice; host_statistics on macOS, /proc/stat on Linux), never ps's %CPU, which is a
+  decaying per-process average blind to kernel time and to fork/exec churn (that day: top 0.24% idle, 56% sys, load
+  131-150 on 18 cores, while ps summed to 6.1 cores and pressure read none). The capacity is starved at 95% of the
+  cores measured (GOV_SATURATED); `laptop_pressure` says `CPU saturated: B of N cores busy (user + sys), run queue R`
+  when that coincides with a run queue over LAPTOP_LOAD x the cores. A long run queue alone, cores idle, is no pressure.
+- **Every suite run holds a ticket**: `tests/run.py` takes a class-`suite` ticket charged its workers (`agentctl suite`
+  holds it for it), its wait bounded at 900 s before its own `--suite-timeout` starts; the pre-push hook's KILL bound
+  leaves that room. It owns each worker's temp root (`agentctl-t-*` with an `owner.pid`), removed however the worker
+  ended, and fails the run naming any that survives; upkeep removes /tmp's `agentctl-t-*` past the bound unless its
+  runner is alive or an entry of it changed lately.
+
 The owner (2026-10-27): one governor instead of three limiters (jvm-gate.sh's 4 JVM slots, the check-slot cap,
 sbt-warm's kept servers each holding a slot, idle or not).
 
