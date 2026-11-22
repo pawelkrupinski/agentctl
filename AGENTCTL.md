@@ -2907,6 +2907,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `dispatch_find_poll` | `AGENTCTL_DISPATCH_FIND_POLL` | `5` | - |
 | `drift_ci` | `AGENTCTL_DRIFT_CI` | - | - |
 | `drift_stall` | `AGENTCTL_DRIFT_STALL` | `1800` | s with no output before the drift check is ended (no verdict: the batch goes on) |
+| `early_max_runs` | `AGENTCTL_EARLY_MAX_RUNS` | `6` | in-progress runs read per tick, the gate's first |
 | `ever_green_recheck` | `AGENTCTL_EVER_GREEN_RECHECK` | `600` | s before a never-green answer is asked of GitHub again |
 | `fetch_timeout` | `AGENTCTL_FETCH_TIMEOUT` | `180` | an unattended fetch's bound |
 | `fixer_claim_within` | `AGENTCTL_FIXER_CLAIM_WITHIN` | `600` | s a started session has to start its transcript / run `red claim` |
