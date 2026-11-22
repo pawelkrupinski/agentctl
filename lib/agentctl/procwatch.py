@@ -26,7 +26,7 @@ SYSTEM_FIXES = {
 OURS = re.compile(r"^(java|python3?(\.\d+)?|claude|node|sbt|bash|git)$")
 
 
-def proc_rows(ps_out=None):
+def proc_rows(ps_out: Optional[str] = None) -> list[tuple[int, int, float, str]]:
     """[(pid, rss KB, %cpu, command name)] of every process (ps), or of `ps_out` (the tests')."""
     fixed = machine_fixed() if ps_out is None else None  # the tests' fixed machine: its own processes, else none
     out = ps_out if ps_out is not None else str(fixed.get("ps") or "") if fixed is not None else \
@@ -41,7 +41,7 @@ def proc_rows(ps_out=None):
     return rows
 
 
-def _proc_finding(p, now_):
+def _proc_finding(p: dict[str, Any], now_: float) -> Optional[str]:
     """Why kept process record `p` is a runaway now, or None."""
     rss = p["rss"]
     grew = rss[-1][1] - rss[0][1] >= max(WP_GROWTH_MB * 1024, rss[0][1] / 100)  # 100 MB or 1%: noise is no trend
@@ -57,19 +57,25 @@ def _proc_finding(p, now_):
     return ", ".join(said)
 
 
-def proc_watch(rows, state, now_):
+def _proc_sample(state: dict[str, Any], pid: int, rss: int, cpu: float, name: str, now_: float) -> dict[str, Any]:
+    """Process pid's kept record moved on by one sample (a new one when the pid now runs another command)."""
+    key = str(pid)
+    p = state.get(key) if (state.get(key) or {}).get("name") == name else None
+    p = p or {"name": name, "rss": [], "hot_since": None}
+    p["rss"] = (p["rss"] + [[now_, rss]])[-WP_KEEP:]
+    p["cpu"] = cpu
+    p["hot_since"] = (now_ if p["hot_since"] is None else p["hot_since"]) if cpu > WP_CPU_PCT else None
+    state[key] = p
+    return p
+
+
+def proc_watch(rows: list[tuple[int, int, float, str]], state: dict[str, Any],
+               now_: float) -> list[tuple[int, str, str]]:
     """The kept samples `state` ({pid: record}) moved on by `rows`; [(pid, name, why)] of the runaways now."""
     seen, found = set(), []
     for pid, rss, cpu, name in rows:
-        key = str(pid)
-        seen.add(key)
-        p = state.get(key) if (state.get(key) or {}).get("name") == name else None
-        p = p or {"name": name, "rss": [], "hot_since": None}
-        p["rss"] = (p["rss"] + [[now_, rss]])[-WP_KEEP:]
-        p["cpu"] = cpu
-        p["hot_since"] = (now_ if p["hot_since"] is None else p["hot_since"]) if cpu > WP_CPU_PCT else None
-        state[key] = p
-        why = _proc_finding(p, now_)
+        seen.add(str(pid))
+        why = _proc_finding(_proc_sample(state, pid, rss, cpu, name, now_), now_)
         if why:
             found.append((pid, name, why))
     for key in set(state) - seen:  # a process gone: its episode with it
@@ -77,7 +83,7 @@ def proc_watch(rows, state, now_):
     return found
 
 
-def proc_cwd(pid):
+def proc_cwd(pid: int) -> Optional[str]:
     """The process's working directory (lsof), or None."""
     try:
         out = run_cmd(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"], timeout=10).stdout
@@ -86,7 +92,7 @@ def proc_cwd(pid):
     return next((l[1:] for l in out.splitlines() if l.startswith("n")), None)
 
 
-def proc_fix(pid, name, cwd_of=None):
+def proc_fix(pid: int, name: str, cwd_of: Optional[Callable[[int], Optional[str]]] = None) -> str:
     """What to do about runaway `name`: a system daemon's owner fix, or one of ours named by where it runs."""
     if name in SYSTEM_FIXES:
         return SYSTEM_FIXES[name]
@@ -97,7 +103,8 @@ def proc_fix(pid, name, cwd_of=None):
     return "the owner's to look at (agentctl never stops a process it did not start)"
 
 
-def inv_wp(ps_out=None, now_=None, state_path=None, cwd_of=None):
+def inv_wp(ps_out: Optional[str] = None, now_: Optional[float] = None, state_path: Optional[str] = None,
+           cwd_of: Optional[Callable[[int], Optional[str]]] = None) -> tuple[bool, str]:
     """WP: no process past WP_RSS_GB and growing, or over WP_CPU_PCT for WP_CPU_MIN minutes (any process: a system
     daemon too). Its samples are kept in procwatch.json between passes."""
     path, t = state_path or state_root("procwatch.json"), now_ if now_ is not None else time.time()
@@ -112,21 +119,31 @@ def inv_wp(ps_out=None, now_=None, state_path=None, cwd_of=None):
     return False, "; ".join(f"{name} pid {pid}: {why} -- {proc_fix(pid, name, cwd_of)}" for pid, name, why in found[:5])
 
 
-def inv_wt(tmp_root=None, now_=None, projects=None):
+def _wt_places(tmp_root: Optional[str], projects: Optional[str]) -> tuple[str, str]:
+    """(the temp root, the projects dir) WT reads: the given ones, the tests' fixed machine's (none unless it names
+    them), else /tmp and ~/projects."""
+    fixed = machine_fixed() if tmp_root is None else None
+    if fixed is not None:
+        return (fixed.get("tmp_root") or os.path.join(HOME, ".no-tmp"),
+                projects or fixed.get("projects") or os.path.join(HOME, ".no-projects"))
+    return tmp_root or "/tmp", projects or os.path.join(HOME, "projects")
+
+
+def _older_than(p: str, t: float, secs: float) -> bool:
+    try:
+        return t - os.lstat(p).st_mtime > secs
+    except OSError:
+        return False
+
+
+def inv_wt(tmp_root: Optional[str] = None, now_: Optional[float] = None,
+           projects: Optional[str] = None) -> tuple[bool, str]:
     """WT: the test suite's roots past twice the sweep's bound stay under WT_STALE_MAX (upkeep removes the ones no
     runner holds); said with them, how many worktrees hold build output (target/, node_modules)."""
     t = now_ if now_ is not None else time.time()
-    fixed = machine_fixed() if tmp_root is None else None  # the tests' fixed machine: its own dirs, else none
-    tmp_root = tmp_root or (fixed.get("tmp_root") or os.path.join(HOME, ".no-tmp") if fixed is not None else "/tmp")
-    projects = projects or (fixed.get("projects") or os.path.join(HOME, ".no-projects") if fixed is not None else None)
-    stale = []
-    for p in glob.glob(os.path.join(tmp_root, "agentctl-t-*")):
-        try:
-            if t - os.lstat(p).st_mtime > 2 * TEST_TMP_MAX_AGE:
-                stale.append(p)
-        except OSError:
-            continue
-    trees = glob.glob(os.path.join(projects or os.path.join(HOME, "projects"), "movies-*"))
+    tmp_root, projects = _wt_places(tmp_root, projects)
+    stale = [p for p in glob.glob(os.path.join(tmp_root, "agentctl-t-*")) if _older_than(p, t, 2 * TEST_TMP_MAX_AGE)]
+    trees = glob.glob(os.path.join(projects, "movies-*"))
     built = sum(1 for w in trees if any(os.path.isdir(os.path.join(w, d)) for d in ("target", "node_modules")))
     said = f"{len(stale)} test roots in {tmp_root} past {2 * TEST_TMP_MAX_AGE / 3600:g} h; {built} worktrees hold build output"
     if len(stale) <= WT_STALE_MAX:

@@ -89,24 +89,29 @@ def export_lines():
 # movies vault). fixer_env hands a fixer agentctl's credential in its environment (the store token; the repo's own):
 # land and every agentctl call use it, so a locked vault is said, never a refusal. A fix that needs a secret of its own
 # (`secrets run movies <KEY> -- ...`) still meets the vault there, and asks then.
-def vault_not_needed():
+def vault_not_needed() -> bool:
     """This process is an agentctl fixer that already holds its credentials (fixer_env)."""
     return bool(os.environ.get("AGENTCTL_RED_FIXER") and os.environ.get("AGENTCTL_STORE_TOKEN"))
+
+
+def env_print(ns: str) -> int:
+    """`env --print`: the export lines, then the vault's one line on stderr when it stops this session."""
+    print("\n".join(export_lines()))
+    st = vault_state(ns)
+    if st == "locked" and vault_not_needed():
+        print(f"vault {ns} locked, not needed: this fixer's credentials are in its environment (a secret its fix "
+              f"needs, `secrets run {ns} ...`, asks then)", file=sys.stderr)
+        return 0
+    if st != "unlocked":
+        print(locked_line(ns) if st == "locked" else f"vault {ns} {st}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def cmd_env(a):
     ns = a.ns or default_ns()
     if not a.check:
-        print("\n".join(export_lines()))
-        st = vault_state(ns)
-        if st == "locked" and vault_not_needed():
-            print(f"vault {ns} locked, not needed: this fixer's credentials are in its environment (a secret its fix "
-                  f"needs, `secrets run {ns} ...`, asks then)", file=sys.stderr)
-            return 0
-        if st != "unlocked":
-            print(locked_line(ns) if st == "locked" else f"vault {ns} {st}", file=sys.stderr)
-            return 1
-        return 0
+        return env_print(ns)
     env = tool_env()
     problems, report = [], []
 
