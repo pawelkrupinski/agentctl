@@ -10,6 +10,34 @@ sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
 
 
+class PollClock:
+    """THE LEASE TTL ON AN INJECTED CLOCK: the store and the stall judge read one time that moves a poll per poll, never
+    the wall's. A 2-3 s TTL on the wall's time lost the lease whenever the loaded suite delayed one poll past it (the
+    delayed-poll cases below prove it): the test then judged the machine's load, not the renewal. The time moves in
+    run_watched's sampler (called once a poll, before the renewal); `gate` (a file) is created once it passes
+    `open_at`, so a step that waits for it is quiet for exactly that long in this time."""
+    def __init__(self, step, gate=None, open_at=None, delay=None):
+        self.t, self.step, self.gate, self.open_at, self.delay = 1000.0, step, gate, open_at, delay
+
+    def now(self):  # the store's and the stall judge's: reading the time never moves it
+        return self.t
+
+    def poll(self):  # run_watched's sampler: one step a poll (after `delay`, the wall's seconds, on the first)
+        if self.delay:
+            time.sleep(self.delay)
+            self.delay = None
+        self.t += self.step
+        if self.gate and self.t >= self.open_at and not os.path.exists(self.gate):
+            open(self.gate, "w").close()
+        return self.t
+
+
+def wait_for(gate):
+    """A step that waits, quiet, until `gate` exists."""
+    return f"while [ ! -e {gate} ]; do sleep 0.1; done"
+
+
+
 class PushBoundTest(unittest.TestCase):
     def test_a_push_hanging_after_its_transport_died_is_killed_within_its_bound_and_is_infra(self):
         d = tempfile.mkdtemp()
@@ -89,11 +117,11 @@ class PushHookTest(unittest.TestCase):
     out of the push's process group (a kept sbt server, a Docker container), past the lease's 120 s TTL. The hook
     bounds itself (movies: stall-watch, 1200 s), so while it runs the push renews its leases and is judged by the
     hook's bound (the check outside the lock's); only the transport after it gets the strict push bound."""
-    def hook_push(self, d, hook_secs, after="echo pushed"):
+    def hook_push(self, d, hook_secs, after="echo pushed", hook_body=None):
         os.makedirs(os.path.join(d, "hooks"))
         hook = os.path.join(d, "hooks", "pre-push")
         with open(hook, "w") as f:
-            f.write(f"#!/bin/sh\necho checking\nsleep {hook_secs}\n")
+            f.write(f"#!/bin/sh\necho checking\n{hook_body or f'sleep {hook_secs}'}\n")
         os.chmod(hook, 0o755)
         script = os.path.join(d, "push.sh")
         with open(script, "w") as f:
@@ -102,17 +130,27 @@ class PushHookTest(unittest.TestCase):
         return script
 
     def test_a_quiet_pre_push_hook_keeps_the_landing_lease_past_its_ttl_and_the_push_bound(self):
+        self.quiet_hook_keeps_the_lease()
+
+    def test_a_quiet_hook_keeps_the_landing_lease_when_the_machine_delays_a_poll_past_its_ttl(self):
+        self.quiet_hook_keeps_the_lease(delay=3)
+
+    def quiet_hook_keeps_the_lease(self, delay=None):
         d = tempfile.mkdtemp()
-        st = A.Store(path=os.path.join(d, "store.db"))
+        gate = os.path.join(d, "go")
+        clock = PollClock(0.75, gate, 1000.0 + 7, delay)  # the hook quiet for 7 s: past the TTL and stall=3
+        st = A.Store(path=os.path.join(d, "store.db"), clock=clock.now)
         h = A.LeaseHold("land/x", 2, 300, store=st)
         self.assertTrue(h.acquire())
         A._landing[0] = h
         try:
-            rc, out = A.run_watched([self.hook_push(d, 7)], d, dict(os.environ), os.path.join(d, "log"), "push",
-                                    stall=3, wall=120, hook_stall=60)
+            rc, out = A.run_watched([self.hook_push(d, 0, hook_body=wait_for(gate))], d, dict(os.environ),
+                                    os.path.join(d, "log"), "push", stall=3, wall=120, hook_stall=60, clock=clock.now,
+                                    sampler=clock.poll)
             self.assertEqual(rc, 0, f"a quiet hook within its own bound ended the push: {out}")
             self.assertIn("pushed", out)
             self.assertEqual(h.renew("after"), "ok", "the landing lease is still this lander's")
+            self.assertGreater(clock.now() - 1000.0, 2 * 2, "quiet past twice the lease's TTL")
         finally:
             A._landing[0] = None
             h.release()
@@ -158,15 +196,24 @@ class QuietStepTest(unittest.TestCase):
         self.assertNotEqual(A.beat_mark("drift", 10, 2.7, 1, True), A.beat_mark("drift", 10, 2.7, 2, True))
 
     def test_a_quiet_ok_step_keeps_its_lease_past_the_ttl(self):
+        self.quiet_step_keeps_the_lease()
+
+    def test_a_quiet_ok_step_keeps_its_lease_when_the_machine_delays_a_poll_past_the_ttl(self):
+        self.quiet_step_keeps_the_lease(delay=4)
+
+    def quiet_step_keeps_the_lease(self, delay=None):
         d = tempfile.mkdtemp()
-        st = A.Store(path=os.path.join(d, "store.db"))
+        gate = os.path.join(d, "go")
+        clock = PollClock(2.0, gate, 1000.0 + 6, delay)  # quiet for 6 s of the clock: twice the TTL, within stall=8
+        st = A.Store(path=os.path.join(d, "store.db"), clock=clock.now)
         h = A.LeaseHold("check/batch-x#1", 3, 300, store=st)
         self.assertTrue(h.acquire())
         try:
-            rc, _out = A.run_watched(["sleep", "7"], d, dict(os.environ), os.path.join(d, "log"), "drift", stall=8,
-                                     quiet_ok=True)
+            rc, _out = A.run_watched(["sh", "-c", wait_for(gate)], d, dict(os.environ), os.path.join(d, "log"),
+                                     "drift", stall=8, quiet_ok=True, clock=clock.now, sampler=clock.poll)
             self.assertEqual(rc, 0, "quiet for twice the TTL, within its stall bound: it ran to the end")
             self.assertEqual(h.renew("after"), "ok", "the lease is still this holder's")
+            self.assertGreaterEqual(clock.now() - 1000.0, 2 * 3, "quiet for twice the lease's TTL")
         finally:
             h.release()
 
