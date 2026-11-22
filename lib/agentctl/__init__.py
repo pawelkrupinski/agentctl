@@ -35,9 +35,9 @@ MODULES = ("core", "timefmt", "statefile", "moviestools", "forge", "ghapp", "cla
            "fixerlife", "owner", "redvault", "ask", "checkslot", "redpending", "remote", "remotestore", "queuebatch",
            "blame", "reddispatch", "redstep", "queuediff", "redview", "cireport", "watchtick", "queueclose",
            "tunnel", "launchd", "recovery", "watchdog", "queuepush", "storestate", "status", "localrecheck",
-           "redtick")
+           "redtick", "netwatch", "tools", "batch", "server", "processor", "queueenter", "slots", "cli", "landqueue")
 
-NAMESPACE = ("slots", "queueenter", "batch", "tools", "server", "cli")
+NAMESPACE = ()
 
 PARTS = MODULES + NAMESPACE
 

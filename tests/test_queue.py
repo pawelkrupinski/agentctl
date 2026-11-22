@@ -1185,15 +1185,15 @@ class FastPrecheckTest(QueueTest):
         told the precheck refused and how to drop it, never NOT LANDED."""
         wt, _ = self.agent_with_precheck("a", 1, "PRECHECK FAIL: lints (3 s)")
         eid, _ = self.queued(wt)
-        saved = A.cmd_waiting
+        saved = A.queue_command
 
         def unreachable(a):
             raise A.StoreUnavailable("POST /v1/changes: Connection refused")
-        A.cmd_waiting = unreachable
+        A.queue_command = unreachable
         try:
             rc, out = self.run_spawned(wt)
         finally:
-            A.cmd_waiting = saved
+            A.queue_command = saved
         self.assertEqual(rc, 1, out)
         verdicts = [e["verdict"] for e in A.inbox_entries() if eid in (e.get("verdict") or "")
                     and "precheck" in (e.get("verdict") or "").lower()]

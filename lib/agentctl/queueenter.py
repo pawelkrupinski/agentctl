@@ -1,5 +1,39 @@
 # agentctl, part `queueenter`: entering the land queue: enqueue, the server submit, the precheck and land-until-done
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import argparse
+import datetime as dt
+import os
+import subprocess
+import time
+from agentctl.core import (
+    MAX_FOREIGN, NO_SIGN, branch_of, cherry_landed, env_num, err, fmt_age, git, git_ok, host_role, process_cache,
+    remote, scratch)
+from agentctl.store import machine_state, open_store
+from agentctl.policy import policy_blocks
+from agentctl.trailers import do_not_land, held_commit
+from agentctl.waitingdir import waiting_state
+from agentctl.inboxentry import inbox_write
+from agentctl.land import landed, run_watched, tool_env
+from agentctl.storetoken import no_vault
+from agentctl.lander import commit_keys, lander_record
+from agentctl.worktrees import WorktreeGuard
+from agentctl.conflicts import conflict_resolve
+from agentctl.redfixes import fixes_of
+from agentctl.redreplay import fix_replay_refusal, run_fix_replays
+from agentctl.queuesubmit import (
+    FAST_PRECHECK, FAST_PRECHECK_BOUND, await_queued, await_verdict, change_decided, landed_sha_of, note_precheck,
+    precheck_reason, push_failure_why, queued_tail, start_fast_precheck, submit_ref, take_delivery,
+    verdict_still_holds)
+from agentctl.queueuntil import (
+    UNTIL_DONE_AGAIN, UNTIL_DONE_DEADLINE, next_command, own_change_item, until_done_finish)
+from agentctl.waiting import diagnoses_of, waiting_commits
+from agentctl.branches import in_fixer
+from agentctl.remote import offer_token, spawn_waiting_processor
+from agentctl.blame import blame_land_refusal, blame_records_quiet
+from agentctl.tools import check_range
+from agentctl.server import queue_change, submit_remote
+from agentctl.landqueue import queue_command
 
 
 def change_fields(repo, main_ref, head, a):
@@ -71,7 +105,7 @@ def cmd_land_precheck(a):
     # NOT LANDED only when the cancel took: the landing check runs alongside and may have decided first (review
     # 2026-11-07: a change that LANDED was told NOT LANDED, "its queue entry is cancelled").
     try:
-        rc = cmd_waiting(cancel)
+        rc = queue_command(cancel)
     except (Exception, SystemExit) as e:  # the store unreachable: the change is still queued, its check judges it
         err(f"could not cancel {a.entry}: {e}")
         verdict = (f"PRECHECK REFUSED {a.entry} ({a.head[:10]}): {last}; it could not be cancelled ({str(e)[:120]}), so "
@@ -187,3 +221,159 @@ def land_until_done(repo, main_ref, sh, a):
     print(f"NOT DONE: {eid} is {state} after {fmt_age(time.time() - t0)} (the --deadline); it stays queued -- run "
           f"{UNTIL_DONE_AGAIN} again from {repo}: it resumes this entry", flush=True)
     return 2
+
+
+def rebase_in_progress(repo):
+    """The worktree's rebase-merge / rebase-apply directory when a rebase is in progress there, else None."""
+    for name in ("rebase-merge", "rebase-apply"):
+        p = git(repo, "rev-parse", "--path-format=absolute", "--git-path", name, check=False).stdout.strip()
+        if p and os.path.isdir(p):
+            return p
+    return None
+
+
+# EVERY NOT LANDED LEAVES NO REBASE BEHIND (issue 20261119T162652-494caa, movies-wt-owner-outside-gate 2026-11-19: a land
+# ended NOT LANDED with its rebase onto origin/main in progress; later commits went onto the rebase's detached HEAD, and
+# the next land's `rebase --abort` reset the branch to the pre-rebase commit, dropping them). A land that finds a rebase
+# already in progress refuses -- it is the agent's to finish or abort, never land's to discard -- and a rebase land
+# started is aborted on whatever path land leaves it unfinished.
+def sync(repo, main_ref, sh, release_hold=False):
+    """sync_onto_main, never leaving a rebase it started in progress; refused when one is in progress already."""
+    pending = rebase_in_progress(repo)
+    if pending:
+        print(f"NOT LANDED: a rebase is in progress in this worktree ({pending}): finish it (`git rebase --continue`) "
+              "or abort it (`git rebase --abort`) yourself -- commits made since it started are on its detached HEAD, "
+              "and an abort resets the branch -- then land again")
+        return 1, None
+    with WorktreeGuard(repo):
+        return sync_onto_main(repo, main_ref, sh, release_hold)
+
+
+def sync_onto_main(repo, main_ref, sh, release_hold=False):
+    """Fetch, rebase onto origin/main, the squash guard: (rc, None) when land is decided here, else (None, head).
+    A commit with a `Hold: <why>` trailer is refused unless release_hold (`land --release-hold`: the owner's go)."""
+    r = sh("git", "fetch", "--quiet", remote(), "main")
+    if r.returncode:  # a tunnel restart is seconds long: one more try before giving up
+        err(f"git fetch failed ({r.stderr.strip()[:120]}); retrying once in 15 s")
+        time.sleep(15)
+        r = sh("git", "fetch", "--quiet", remote(), "main")
+    if r.returncode:
+        print(f"NOT LANDED: git fetch {remote()} main failed: {r.stderr.strip()[:300]} (tunnel? `agentctl env --check`)")
+        return 1, None
+    head = git(repo, "rev-parse", "HEAD").strip()
+    if landed(repo, head, main_ref):
+        print(f"LANDED {head} (already on {remote()}/main)")
+        return 0, None
+    why = do_not_land(repo, waiting_commits(repo, f"{remote()}/main", head), branch_of(repo))
+    if why:
+        print(f"NOT LANDED: {why}. Throwaway work never lands; remove the marker (rename the branch, reword the commit, "
+              "drop the Do-Not-Land: trailer) only if the owner wants it landed.")
+        return 1, None
+    # policy: hold-trailer
+    why = None if release_hold else held_commit(repo, waiting_commits(repo, f"{remote()}/main", head))
+    if why:
+        print(f"NOT LANDED: {why}. Held work lands only on the owner's go: `agentctl land --release-hold` then (or "
+              "drop the trailer).")
+        return 1, None
+    # policy: blame-dead
+    why = blame_land_refusal(repo, waiting_commits(repo, f"{remote()}/main", head), repo,
+                             records=blame_records_quiet())
+    if why:
+        print(f"NOT LANDED: {why}. A withdrawn or refuted blame revert is dead: drop this worktree "
+              "(`git worktree remove`), never land it.")
+        return 1, None
+    # agentctl's own rewrites never sign (issue 20261115T112749-d27361): main's commits are unsigned, and a global
+    # commit.gpgsign=true with an empty ssh-agent (an unattended fixer) failed every rebase behind main
+    r = sh("git", *NO_SIGN, "rebase", "--quiet", f"{remote()}/main")
+    for _ in range(50):  # each stop whose conflicts are docs or generated files only: resolved (conflict_resolve), and on
+        if not r.returncode or not conflict_resolve(repo):
+            break
+        r = sh("git", *NO_SIGN, "-c", "core.editor=true", "rebase", "--continue")
+    if r.returncode:
+        conflicts = git(repo, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
+        sh("git", "rebase", "--abort")
+        if conflicts:
+            print(f"NOT LANDED: rebase onto {remote()}/main conflicts in: {', '.join(conflicts)}. "
+                  f"Resolve by hand (git rebase {remote()}/main), then land again.")
+        else:  # no conflicted file: git itself failed (a hook, signing, a lock), never told as a conflict
+            print(f"NOT LANDED: rebase onto {remote()}/main failed (no conflict): {r.stderr.strip()[:300]}")
+        return 1, None
+    head = git(repo, "rev-parse", "HEAD").strip()
+    if landed(repo, head, main_ref):
+        print(f"LANDED {head} (the rebase left nothing: already on {remote()}/main)")
+        return 0, None
+    head = land_before_queue(repo, head)
+    if fix_replay_blocks(repo, head):
+        return 1, None
+    problems = check_range(repo, f"{remote()}/main", head, [], int(env_num("AGENTCTL_MAX_FOREIGN", MAX_FOREIGN)))
+    if problems:
+        print("NOT LANDED: prepush-check refused:\n  " + "\n  ".join(problems))
+        return 1, None
+    return None, head
+
+
+# THE REPO'S OWN STEP AFTER THE REBASE (2026-11-20, the movies stamp carry: a proven-equivalent identity change keeps its
+# stamps only if a lane remembers to write the carry rows, and 3-7 of 37 stamp-moving deploys would have): a repo's
+# executable LAND_BEFORE_QUEUE runs with <origin/main> <head> on the rebased change, and may commit onto it -- the commit
+# then rides the same push, judged by the same checks. It never refuses a land: a failure or a timeout is said and the
+# head stays as it was.
+LAND_BEFORE_QUEUE = "scripts/land-before-queue"
+
+
+LAND_BEFORE_QUEUE_SECONDS = 1200
+
+
+def land_before_queue(repo, head):
+    """The head after the repo's LAND_BEFORE_QUEUE step: head itself, or a descendant the step committed onto it."""
+    tool = os.path.join(repo, LAND_BEFORE_QUEUE)
+    if not os.access(tool, os.X_OK):
+        return head
+    base = git(repo, "rev-parse", f"{remote()}/main").strip()
+    branch = git(repo, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip()
+    try:
+        r = subprocess.run([tool, base, head], cwd=repo, capture_output=True, text=True, env=tool_env(),
+                           timeout=env_num("AGENTCTL_LAND_BEFORE_QUEUE_SECONDS", LAND_BEFORE_QUEUE_SECONDS))
+        for line in (r.stdout + r.stderr).strip().splitlines()[-12:]:
+            err(f"{LAND_BEFORE_QUEUE}: {line}")
+    except subprocess.TimeoutExpired:
+        err(f"{LAND_BEFORE_QUEUE}: timed out; the change lands as it was")
+    now = git(repo, "rev-parse", "HEAD").strip()
+    if now != head and git(repo, "merge-base", "--is-ancestor", head, now, check=False).returncode != 0:
+        err(f"{LAND_BEFORE_QUEUE}: left HEAD off the change ({now[:10]}): put back on {head[:10]}")
+        if branch:
+            git(repo, "checkout", "-q", "--force", branch)
+        git(repo, "reset", "-q", "--hard", head)
+        return head
+    if now != head:
+        err(f"{LAND_BEFORE_QUEUE}: added {git(repo, 'rev-list', '--count', f'{head}..{now}').strip()} commit(s) to the change")
+    return now
+
+
+# FIX REPLAY at land (redreplay.py): on the rebased head, agentctl runs each bare `Fix-Replay: <command>` of a Fixes-Red push
+# at origin/main and at head (once per base, head and command), keeps the proof for the submission (change_fields'
+# `replays`), and refuses a gate red's fix it does not prove; a red outside the gate only warns.
+_fix_replay_proofs = process_cache({})  # (base, head) -> [proof]
+
+
+def fix_replay_proofs(repo, head):
+    """agentctl's replays of the push origin/main..head (run_fix_replays), run once per base and head."""
+    base = git(repo, "rev-parse", f"{remote()}/main").strip()
+    if (base, head) not in _fix_replay_proofs:
+        _fix_replay_proofs[(base, head)] = run_fix_replays(repo, base, head, waiting_commits(repo, base, head))
+    return _fix_replay_proofs[(base, head)]
+
+
+def fix_replay_blocks(repo, head):
+    """True (its NOT LANDED printed) when FIX REPLAY refuses the push origin/main..head."""
+    commits = waiting_commits(repo, f"{remote()}/main", head)
+    verdict = fix_replay_refusal(repo, commits, proofs=fix_replay_proofs(repo, head))
+    if not verdict:
+        return False
+    pid, why = verdict
+    if pid == "fix-replay":
+        blocks = policy_blocks("fix-replay", None, None, why[:160])  # policy: fix-replay
+    else:
+        blocks = policy_blocks("fix-replay-outside", None, None, why[:160])  # policy: fix-replay-outside
+    if blocks:
+        print(f"NOT LANDED: {why}. A red fix lands only once a replay proved it (or says why none can).")
+    return blocks

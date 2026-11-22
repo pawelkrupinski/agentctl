@@ -9,11 +9,11 @@ from test_agentctl import A  # noqa: E402
 
 class RenameTest(unittest.TestCase):
     def setUp(self):
-        self.calls, self.saved = [], A.cmd_waiting
-        A.cmd_waiting = lambda w: self.calls.append(w) or 0
+        self.calls, self.saved = [], (A.cmd_waiting, A.queue_command)
+        A.cmd_waiting = A.queue_command = lambda w: self.calls.append(w) or 0  # the processor's, the queue's
 
     def tearDown(self):
-        A.cmd_waiting = self.saved
+        A.cmd_waiting, A.queue_command = self.saved
 
     def test_land_subcommands_are_the_queues_and_tick_is_the_processor(self):
         saved = os.environ.pop("AGENTCTL_ROLE", None)  # the laptop's `tick` (the sync); ci-runner's has its own clone
@@ -35,7 +35,7 @@ class RenameTest(unittest.TestCase):
 
     def test_land_status_works_outside_any_git_checkout(self):
         import tempfile
-        A.cmd_waiting = self.saved
+        A.cmd_waiting, A.queue_command = self.saved
         seen, saved = [], (A.waiting_state, A.main_clone, A.movies_repo_path)
         A.movies_repo_path = lambda: "/the/movies/clone"
         A.main_clone = lambda p: p
@@ -48,7 +48,7 @@ class RenameTest(unittest.TestCase):
         self.assertEqual(seen, ["/the/movies/clone"])
 
     def test_an_old_name_says_its_new_one(self):
-        A.cmd_waiting = self.saved
+        A.cmd_waiting, A.queue_command = self.saved
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             try:

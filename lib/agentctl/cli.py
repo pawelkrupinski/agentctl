@@ -1,5 +1,58 @@
 # agentctl, part `cli`: the command line (main: the parser and the handlers' table).
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import argparse
+import contextlib
+import datetime as dt
+import io
+import sys
+import time
+from agentctl.core import CI_WHY_HELP, ENV_HELP, LAND_HELP, WAIT_RUN_HELP, remote
+from agentctl.ghapp import GHAPP_ROLES, cmd_github_app
+from agentctl.store import cmd_lease, wire_store
+from agentctl.config import cmd_config
+from agentctl.inboxentry import wire_inbox_writer
+from agentctl.storetoken import wire_token_missing_note
+from agentctl.owned import cmd_wait, restart_gate
+from agentctl.reverts import cmd_revert
+from agentctl.maint import cmd_orphans
+from agentctl.cleanup import SWEEP_IDLE_DAYS, cmd_cleanup, cmd_sweep
+from agentctl.inbox import WAIT_KINDS_DEFAULT, inbox_command, with_inbox
+from agentctl.conditions import cmd_recover, wire_probes, wire_recover_actions
+from agentctl.upkeep import probe_disk_free
+from agentctl.queue import probe_infra_requeue, probe_push_credential
+from agentctl.redask import OWNER_CAUSES
+from agentctl.alerts import alert_write
+from agentctl.gov import GOV_CLASSES, cmd_suite
+from agentctl.govcmd import cmd_checks, cmd_gov
+from agentctl.queueuntil import parse_duration
+from agentctl.red import RED_HELP
+from agentctl.waiting import WAITING_HELP
+from agentctl.ciwhy import gate_from_snap, outside_from_snap, red_for
+from agentctl.branches import DISPATCH_HELP, cmd_dispatch
+from agentctl.redcrash import probe_red_newer_verdict
+from agentctl.redvault import probe_quota_reset
+from agentctl.ask import cmd_decide
+from agentctl.remotestore import DEFAULT_STORE_URL, STORE_PORT
+from agentctl.watchtick import cmd_watch
+from agentctl.queueclose import probe_change_source
+from agentctl.launchd import SERVICE_LABEL
+from agentctl.recovery import (
+    cmd_inbox, probe_gate_read, probe_git_fetch, probe_http, probe_route, probe_tcp, probe_token, probe_tunnel,
+    probe_waiting_ok, probe_workflow_green, recover_clear_flag, recover_clear_hold, recover_tunnel_reset,
+    token_unavailable_note)
+from agentctl.watchdog import (
+    cmd_maintain, cmd_park, cmd_supersede, cmd_unpark, cmd_watchdog, probe_invariant, probe_orphan_landed)
+from agentctl.status import cmd_ci_why, cmd_issue, cmd_status
+from agentctl.localrecheck import check_failures, recheck_local
+from agentctl.redtick import cmd_red, probe_red_read
+from agentctl.tools import cmd_env, cmd_prepush, cmd_queue_retired, cmd_state
+from agentctl.batch import probe_batch_progress
+from agentctl.server import STORE_AUTHS, cmd_laptop, cmd_store, probe_clone_health, process_store
+from agentctl.processor import cmd_tick, cmd_waiting
+from agentctl.queueenter import cmd_land_precheck
+from agentctl.slots import LAND_SUBCOMMANDS, cmd_land
+
 
 # THE COMPOSITION ROOT: what every process wires before any command runs.
 wire_store(process_store)

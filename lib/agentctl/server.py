@@ -1,5 +1,69 @@
 # agentctl, part `server`: the store over HTTP, the server clone, the sync.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import contextlib
+import datetime as dt
+import fcntl
+import glob
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import threading
+import time
+import urllib.parse
+from agentctl.core import (
+    NoToken, env_num, err, git, git_ok, pid_alive, process_cache, reap_children, reds_dir, remote, run_bounded,
+    spawn_detached, state_root)
+from agentctl.timefmt import day_hhmmz, iso_epoch, now, ts
+from agentctl.statefile import read_record, write_json
+from agentctl.store import (
+    MACHINES, StaleVersion, Store, StoreUnavailable, TerminalState, machine_state, open_store, store_errors)
+from agentctl.procs import safe_cwd
+from agentctl.selfcode import TOOL_PATH
+from agentctl.repos import server_repo
+from agentctl.trailers import do_not_land
+from agentctl.leases import lease_meta
+from agentctl.waitingdir import save_entry, waiting_entries, waiting_state, wlog
+from agentctl.inboxentry import inbox_write
+from agentctl.land import tool_env
+from agentctl.redrecord import red_lease
+from agentctl.fixersession import trust_asks
+from agentctl.stats import maybe_stats_pass
+from agentctl.clones import CORRUPT_GIT, clone_shared, clone_side, heal_enabled
+from agentctl.explorer import explorer_tick
+from agentctl.queueslots import entry_queued_since
+from agentctl.reverts import revert_notes, tick_reverts
+from agentctl.cleanup import close_worktree
+from agentctl.conditions import maybe_recovery_tick, open_condition, recovery_recheck, run_probe
+from agentctl.upkeep import maybe_upkeep
+from agentctl.conflicts import CONFLICT_PLACE_KEPT
+from agentctl.queuerecheck import queued_entries, same_change_source
+from agentctl.cistate import snapshot_gate_reds, state_read
+from agentctl.alerts import reconcile_alerts
+from agentctl.projector import maybe_archive_leases, notify_escalations, project_changes, project_events
+from agentctl.laptoprole import (
+    LAPTOP_ROLE_LEASE, laptop_role_holder, laptop_role_line, laptop_role_standby, machine_id, role_host)
+from agentctl.fixerland import fixers_land_watch
+from agentctl.queuesubmit import SUBMIT_FIELDS, sweep_land_refs
+from agentctl.waiting import cancel_submitted, supersede
+from agentctl.branches import refresh_pinned_recording
+from agentctl.owner import red_reap_orphans
+from agentctl.remotestore import RemoteStore, STORE_PORT, store_url
+from agentctl.blame import blame_land_refusal
+from agentctl.reddispatch import red_dispatcher, red_renew_holders
+from agentctl.watchtick import tick_watches
+from agentctl.queueclose import close_landed_changes, migrate_local_queue, stranded_changes
+from agentctl.watchdog import red_unheld
+from agentctl.queuepush import tick_changes
+from agentctl.storestate import mirror_state
+from agentctl.status import tick_issues, write_red_status_snapshot
+from agentctl.redtick import maybe_publish_gate, maybe_red_tick
+from agentctl.netwatch import network_watch, tunnel_watch
+from agentctl.batch import TICK, say_batch, tick_batch, tick_land_hold
+
 
 # ---------------------------------------------------------------- phase 2: the store over HTTP (design §6.3, §13 phase 2)
 # `agentctl store serve` puts the store behind a small HTTP API on ci-runner (:3014, reached through the laptop's

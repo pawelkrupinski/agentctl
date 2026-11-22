@@ -1,5 +1,54 @@
 # agentctl, part `batch`: the batch machine and the tick loop.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import contextlib
+import os
+import re
+import subprocess
+import sys
+import time
+from agentctl.core import (
+    HOME, NoToken, _bounded, env_num, err, fmt_age, git, git_ok, process_cache, remote, run_bounded, slug,
+    spawn_detached, state_root)
+from agentctl.timefmt import hhmmz, ts
+from agentctl.statefile import read_json_file, write_json_file
+from agentctl.forge import forge_env
+from agentctl.classify import INFRA_LOG, _test_line
+from agentctl.store import ARCHIVE, MACHINES, StaleVersion, StateSpec, TerminalState, machine_state, open_store
+from agentctl.selfcode import TOOL_PATH, code_version
+from agentctl.repos import precheck_hook, repo_of_waiting
+from agentctl.leases import LeaseHold, lease_live, lock_note
+from agentctl.waitingdir import ENTRY_FINAL, save_entry, waiting_entries, waiting_state, wlog
+from agentctl.fixerrecords import agent_name
+from agentctl.land import RACE, REDGATE, SDKMAN_BINS, land_lock, landed, push_argv, push_bounds, run_watched, tool_env
+from agentctl.storetoken import detached_env
+from agentctl.gating import mark_gate_dirty
+from agentctl.owned import Owned, lock_held, start_rev
+from agentctl.queueslots import CHECK_LEASE_TTL, check_tree, check_tree_slot, queue_verdict, set_change, tree_slot
+from agentctl.reverts import revert_brief
+from agentctl.conditions import open_condition, run_probe
+from agentctl.queue import (
+    INFRA_CHECK_FAILURE, VERIFY_MODE, forces_full_recheck, hold_row, hook_query, land_hold, land_holds,
+    range_paths, verify_supported)
+from agentctl.generated import without_generated
+from agentctl.queuerecheck import queued_entries, read_overlap, recheck_logged, recheck_reason
+from agentctl.identitychange import identity_model_commits
+from agentctl.changekind import HOLD_SHOWN, classify_change, gate_facts, kind_text, queue_facts
+from agentctl.cistate import state_update
+from agentctl.queuesubmit import landed_sha_of
+from agentctl.waiting import batch_order, must_wait, tail_of, waiting_commits
+from agentctl.redseen import gate_reds
+from agentctl.landwatch import start_watch
+from agentctl.ask import owner_asks
+from agentctl.remote import assemble, batch_check, bisect, remote_check_lines, unread_note, waiting_processor_alive
+from agentctl.queuediff import CHECK_TIMEOUT, judge_failure
+from agentctl.queueclose import change_rows
+from agentctl.launchd import SERVICE_LABEL, launch_agents_dir, launchctl
+from agentctl.recovery import batch_key, batch_move, current_batch
+from agentctl.queuepush import (
+    BACKLOG_BATCH_MAX, DEEP_BATCHES, backlog_candidates, backlog_min, check_tree_slot_free, drift_serialize,
+    push_candidates)
+
 
 # ---------------------------------------------------------------- the batch machine (design §5.2 + §14.1; step 8)
 # The batch is an ITEM, not a branch: while main is red, checked changes wait (entries `waiting`); at green -- or with a
@@ -972,80 +1021,6 @@ def write_snapshot(d, store=None):
 TICK = 5  # seconds between ticks ($AGENTCTL_TICK); every step is bounded or rate-limited inside
 
 
-def waiting_run(repo, once=False, service=False):
-    """THE processor: ONE loop of ticks (design §3). On ci-runner (server_steps): the change items (executors,
-    pushes), the batch, the watches, the gate line, the red tick, the recovery registry. On the laptop (sync_steps):
-    the outbox, the state mirror, events -> inbox and the notifier, claims, the fixer dispatcher, the network and
-    tunnel watches, upkeep. Nothing in it blocks for long (checks run in executors with leases); it re-execs
-    onto agentctl's new code between ticks; the external watchdog (W5) watches its beat."""
-    d, _c, _wt = waiting_state(repo)
-    own = processor_owned(d, repo)
-    if not own.acquire():
-        return 0
-    argv = ["waiting", "run", "--repo", repo] + (["--once"] if once else []) + (["--service"] if service else [])
-    with contextlib.ExitStack() as stack:
-        stack.callback(own.release)
-        try:
-            o_r = slug(repo)
-        except (Exception, SystemExit):
-            o_r = SHORT["movies"]
-        _IN_PROCESSOR[0] = True
-        drop = TokenDrop(d, o_r).open()
-        stack.callback(drop.close)
-        errors, stalled_noted = 0, False
-        role = host_role()
-        if service:
-            keep_awake()  # a plugged-in laptop never sleeps under the service (no-op off macOS)
-        if service and role != "server":
-            status_page_start()  # the read-only status page, a daemon thread (see "the status page"); never fatal
-        def shared(fn):  # a step that uses the clone holds it shared: a repair's swap waits for it
-            def run():
-                with clone_shared(repo):
-                    return fn()
-            return run
-        steps = sync_steps(repo, d, o_r) if role == "sync" else server_steps(repo, d, shared)
-        while True:
-            if TICK_STOP[0]:  # SIGTERM (systemd's stop): between ticks, never inside one
-                return 0
-            write_beat("processor")
-            if not any(t.is_alive() for k, t in _bounded.items() if k.startswith("step:")):
-                restart_if_changed([own], argv)  # never under a step still at work in its thread (a push, say)
-            failed = False
-            for name, step in steps:
-                failed = run_step(name, step) is False or failed
-                write_beat("processor")
-                sd_notify("WATCHDOG=1")  # each bounded step is progress: systemd's WatchdogSec never cuts a long tick
-            errors = errors + 1 if failed else 0
-            if errors == 0:
-                stalled_noted = False
-            if errors >= ROUND_ERRORS_MAX and not stalled_noted:
-                # NEVER FATAL (2026-10-29 22:31: the network dropped, every step failed, and this condition's own store
-                # call -- the store is remote on the laptop -- raised StoreUnavailable out of the loop: the processor
-                # died, launchd restarted it, and the restart holds no token until the owner hands it over).
-                # Not noted now: tried again next round.
-                try:
-                    open_condition("STALLED", f"STALLED: the waiting processor's ticks failed {errors} times in a row; "
-                                              f"see {d}/processor.log and service.log",
-                                   run_probe("waiting_ok", {"d": d, "since": time.time()}), [], key="waiting-rounds",
-                                   command="waiting")
-                    stalled_noted = True
-                except (Exception, SystemExit) as e:
-                    err(f"STALLED could not be noted ({str(e)[:160]}); the loop goes on")
-            if not failed:
-                write_json(os.path.join(d, "round-ok.json"), {"at": time.time()})
-            if role != "sync":  # the sync's state.json is ci-runner's, mirrored
-                try:
-                    write_snapshot(d)
-                except Exception as e:
-                    err(f"the snapshot could not be written: {e}")
-            sd_notify("WATCHDOG=1")
-            if once and (role == "sync" or (not queued_entries(d) and not waiting_entries(d))):
-                return 0
-            drop.nap(env_num("AGENTCTL_TICK", TICK))
-
-
-TICK_STOP = [False]  # set by SIGTERM in `agentctl tick`: the loop returns between ticks
-
 # EVERY STEP OF THE TICK IS BOUNDED (2026-10-29, RECONCILER STALLED 05:37-05:41: during a tunnel hang the gate's
 # forge reads -- gh calls of up to 90 s each, one kickstart and a retry, ten workflows -- held the loop for minutes,
 # and state.json's tick_at aged past 2 min). A step runs in a thread of its own and the tick waits at most STEP_JOIN s
@@ -1171,120 +1146,3 @@ def waiting_service(action, repo):
     return 2
 
 
-def cmd_waiting(a):
-    if a.wcmd in WAITING_RENAMED and not getattr(a, "renamed", False) and \
-            (a.wcmd not in ("run", "service") or sys.stdin.isatty()):
-        err(f"`agentctl waiting {a.wcmd}` is now `agentctl {WAITING_RENAMED[a.wcmd]}` (the old name answers until "
-            f"{ALIASES_UNTIL})")
-    here = a.repo or safe_cwd()
-    if a.wcmd == "await":
-        repo = main_clone(here)
-    elif git_ok(here, "rev-parse", "--show-toplevel"):
-        repo = git(here, "rev-parse", "--show-toplevel").strip()
-    else:  # outside any git checkout (e.g. ~/bitcashier): the movies clone's queue, as `await` resolves it
-        repo = main_clone(movies_repo_path())
-    d, _c, wt = waiting_state(repo)
-    if a.wcmd == "run":
-        return waiting_run(repo, once=a.once, service=getattr(a, "service", False))
-    if a.wcmd == "check":  # one queued change's checker (the processor starts it)
-        return check_entry(main_clone(repo), a.entry)
-    if a.wcmd == "check-batch":  # the batch's executor (the processor starts it)
-        return check_batch(main_clone(repo), a.entry)
-    if a.wcmd == "service":
-        return waiting_service(a.action, repo)
-    if a.wcmd == "await":  # land's wait on its entry, resumed after a restart on new code
-        a.inbox_cwd = a.close or a.repo
-        repo = main_clone(repo)
-        os.chdir(repo)
-        rc, sha, pushed_at = await_entry(repo, a.entry)
-        return watch_landed(repo, sha, pushed_at, close=a.close) if rc == 0 and sha else rc
-    if a.wcmd == "pause":  # `land hold`: an item in the store (the reconciler's, wherever this runs)
-        st = open_store()
-        secs = int(float(getattr(a, "hold_for", None) or LAND_HOLD_DEFAULT // 60) * 60)
-        it = land_hold_set(st, secs, getattr(a, "hold_why", None), hold_by())
-        print(f"held: the processor takes no batch until `agentctl land release` or "
-              f"{time.strftime('%H:%M', time.localtime(it['deadline']))} (then the hold expires); changes still queue")
-        return 0
-    if a.wcmd == "resume":
-        st = open_store()
-        gone = land_hold_release(st, hold_by())
-        try:
-            os.unlink(os.path.join(d, "PAUSED"))  # the pre-store hold file, if an old version left one
-        except FileNotFoundError:
-            pass
-        recover_clear_hold(None, {"d": d})  # a held batch is assembled again at once
-        spawn_waiting_processor(repo)
-        offer_token(repo)
-        print("released" + (f" ({', '.join(gone)})" if gone else " (no hold was in force)")
-              + ": the processor takes the next batch")
-        return 0
-    if a.wcmd == "status" and getattr(a, "entry", None):  # one change, open or decided (A VERDICT IS DURABLE)
-        return land_status_entry(open_store(), a.entry, time.time())
-    if a.wcmd == "status":  # ONE QUEUE: the store's change items, on either host
-        st = open_store()
-        rows = change_rows(st)
-        print(f"queue: {store_url() or 'this host'}")
-        print(f"processor: {'running' if waiting_processor_alive(d) else 'not running'}")
-        hold = land_hold(st)
-        if hold:
-            print(f"land: {hold_text(hold)}")
-        bt = status_batch(st, d)
-        if bt:
-            dd = bt["data"]
-            print(f"batch {bt['id']}: {bt['state']}" + (f", {len(dd.get('members') or [])} change(s) at "
-                  f"{str(dd.get('tip'))[:10]} on {str(dd.get('base'))[:10]}" if dd.get("tip") else "")
-                  + f", deadline in {int((bt['deadline'] - time.time()) // 60)} min")
-        offer_token(repo)
-        reds = gate_reds(repo)
-        print("gate: " + (f"UNREAD, taken as red ({gate_unread_why[0]})" if GATE_UNREAD in reds else
-                          f"RED ({', '.join(sorted(reds))})" if reds else "green"))
-        print(f"changes: {len(rows)}")
-        in_batch = batch_row_ids(bt, rows)
-        for r in rows:
-            print(land_status_line(r, bt, in_batch, time.time()))
-        prog = read_json_file(batch_progress_path(d)) if host_role() == "server" else {}
-        if prog.get("ticks"):
-            print(f"stall at green: {prog['ticks']} tick(s): {prog.get('why')}")
-        if not rows:
-            print("  (no change queued or waiting)")
-        local = [e for e in waiting_entries(d, open_only=False) if e.get("status") not in ENTRY_FINAL]
-        if host_role() == "sync" and local:
-            print(f"LOCAL QUEUE: {len(local)} entr(ies) in {d}, which nothing runs; the sync moves them to ci-runner's "
-                  f"queue: {', '.join(e['id'] for e in local)}")
-        return 0
-    if a.wcmd == "cancel" and host_role() == "sync":  # ONE QUEUE: ci-runner's, through the store API
-        hits = [r["id"] for r in change_rows() if a.entry in r["id"]]
-        if len(hits) != 1:
-            print(f"no single open change matches {a.entry!r}: `agentctl land status`")
-            return 1
-        open_store().cancel_change(hits[0])
-        print(f"cancelled {hits[0]}")
-        return 0
-    if a.wcmd == "cancel":
-        queued = [e for e in queued_entries(d) if a.entry in e["id"]]
-        if len(queued) == 1:
-            e = queued[0]
-            set_change(d, e, "cancelled", event={"text": f"{e['id']}: cancelled"},
-                       why="cancelled by `agentctl land cancel`", decided=ts())
-            cancel_entry_remote(e, "its queue entry was cancelled")
-            h = read_record(entry_owned(e["id"]).record) or {}
-            if lock_held(entry_owned(e["id"]).lockpath) and h.get("pid"):
-                os.kill(int(h["pid"]), signal.SIGTERM)  # its checker: its CI run is cancelled with it
-            print(f"cancelled {e['id']}")
-            return 0
-        hits = [e for e in waiting_entries(d) if a.entry in e["id"]]
-        if not hits:  # an item no entry carries (stranded): the item alone
-            ids = [r["id"] for r in change_rows() if a.entry in r["id"]]
-            if len(ids) == 1:
-                cancel_submitted(ids[0], repo=repo)
-                print(f"cancelled {ids[0]}")
-                return 0
-        if len(hits) != 1:
-            print(f"no single waiting change matches {a.entry!r}: `agentctl land status`")
-            return 1
-        e = hits[0]
-        set_change(d, e, "cancelled", event={"text": f"{e['id']}: cancelled"}, why="cancelled by `agentctl land cancel`",
-                   decided=ts())  # the next batch is assembled without it
-        print(f"cancelled {e['id']}")
-        return 0
-    return 2

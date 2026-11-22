@@ -1,5 +1,50 @@
 # agentctl, part `slots`: check slots, the landing lease, the known-red baseline.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import argparse
+import contextlib
+import datetime as dt
+import fcntl
+import os
+import signal
+import stat
+import subprocess
+import sys
+import threading
+import time
+from agentctl.core import branch_of, env_num, err, git, host_role, reds_dir, remote, scratch, slug
+from agentctl.timefmt import ts
+from agentctl.statefile import read_record, write_json
+from agentctl.classify import TRANSIENT_PUSH, is_transient_network, net_run, network_failure
+from agentctl.repos import batching, precheck_hook, waiting_supported
+from agentctl.leases import lock_note
+from agentctl.waitingdir import save_entry, waiting_entries, waiting_state
+from agentctl.land import (
+    LAND_PRECHECK_ROUNDS, LAND_RETRIES, LAND_STALL_MIN, RACE, REDGATE, TUNNEL_TROUBLE, land_lock, landed,
+    push_argv, push_bounds, run_watched, stall_reason, tool_env)
+from agentctl.lander import commit_keys, lander_note_direct
+from agentctl.gating import mark_gate_dirty
+from agentctl.worktrees import WorktreeGuard, mark_internal
+from agentctl.queue import requeue_infra
+from agentctl.queuerecheck import queue_mode
+from agentctl.redfixes import fixes_of
+from agentctl.redrepos import red_owner_only
+from agentctl.gov import GovTimeout, gov_class_of
+from agentctl.queuesubmit import queued_tail, submit_ref
+from agentctl.waiting import must_wait, note_waiting, supersede_older_waiting, tail_of, waiting_commits
+from agentctl.branches import in_fixer
+from agentctl.redseen import gate_reds
+from agentctl.redobserve import local_red
+from agentctl.landwatch import start_watch
+from agentctl.checkslot import check_slot
+from agentctl.remote import await_entry, offer_token, spawn_waiting_processor
+from agentctl.cireport import ci_why
+from agentctl.watchtick import watch_landed
+from agentctl.queueclose import NETWORK_REASON
+from agentctl.localrecheck import check_failures, check_passes, local_cleared, note_local_red, write_baseline_out
+from agentctl.server import queue_change
+from agentctl.queueenter import change_fields, enqueue, land_until_done, submit_to_server, sync
+from agentctl.landqueue import queue_command
 
 
 def stalled(step, output, log_path):
@@ -66,12 +111,6 @@ class Stash:
 
 
 LAND_SUBCOMMANDS = {"status": "status", "hold": "pause", "release": "resume", "cancel": "cancel"}
-WAITING_RENAMED = {"status": "land status", "pause": "land hold", "resume": "land release", "cancel": "land cancel <id>",
-                   "run": "tick", "service": "tick service"}
-ALIASES_UNTIL = "2026-11-05"  # the old command names (design §14.5) answer until then, each naming its new one
-# TODO(2026-11-05): drop `waiting` and WAITING_RENAMED. NOT BEFORE the laptop's launchd job stops calling `waiting run
-# --service` (as installed 2026-10-29): the owner reinstalls it with `agentctl tick service install` (which kickstarts
-# it and needs the token handed over again), then the alias goes -- removing it first would stop the sync.
 
 
 # ONE WAITING LAND, ONE OUTPUT FILE (2026-11-18): two subagents of one session each ran `land --until-done >
@@ -113,7 +152,7 @@ def cmd_land(a):
             return 2
         w = argparse.Namespace(wcmd=LAND_SUBCOMMANDS[a.lcmd], repo=a.repo, entry=a.entry, renamed=True,
                                hold_for=getattr(a, "hold_for", None), hold_why=getattr(a, "hold_why", None))
-        return cmd_waiting(w)
+        return queue_command(w)
     shared = (getattr(a, "until_done", False) or getattr(a, "follow", False)) and output_file_shared(sys.stdout)
     if shared:
         err(f"land did not start: another running land writes its output file {shared}, so their verdicts would mix "
@@ -227,160 +266,6 @@ def land_in_worktree(repo, a):
 
 
 MAIN_MOVED = "main moved"  # land_loop: the check outside the lock no longer covers origin/main
-
-
-def rebase_in_progress(repo):
-    """The worktree's rebase-merge / rebase-apply directory when a rebase is in progress there, else None."""
-    for name in ("rebase-merge", "rebase-apply"):
-        p = git(repo, "rev-parse", "--path-format=absolute", "--git-path", name, check=False).stdout.strip()
-        if p and os.path.isdir(p):
-            return p
-    return None
-
-
-# EVERY NOT LANDED LEAVES NO REBASE BEHIND (issue 20261119T162652-494caa, movies-wt-owner-outside-gate 2026-11-19: a land
-# ended NOT LANDED with its rebase onto origin/main in progress; later commits went onto the rebase's detached HEAD, and
-# the next land's `rebase --abort` reset the branch to the pre-rebase commit, dropping them). A land that finds a rebase
-# already in progress refuses -- it is the agent's to finish or abort, never land's to discard -- and a rebase land
-# started is aborted on whatever path land leaves it unfinished.
-def sync(repo, main_ref, sh, release_hold=False):
-    """sync_onto_main, never leaving a rebase it started in progress; refused when one is in progress already."""
-    pending = rebase_in_progress(repo)
-    if pending:
-        print(f"NOT LANDED: a rebase is in progress in this worktree ({pending}): finish it (`git rebase --continue`) "
-              "or abort it (`git rebase --abort`) yourself -- commits made since it started are on its detached HEAD, "
-              "and an abort resets the branch -- then land again")
-        return 1, None
-    with WorktreeGuard(repo):
-        return sync_onto_main(repo, main_ref, sh, release_hold)
-
-
-def sync_onto_main(repo, main_ref, sh, release_hold=False):
-    """Fetch, rebase onto origin/main, the squash guard: (rc, None) when land is decided here, else (None, head).
-    A commit with a `Hold: <why>` trailer is refused unless release_hold (`land --release-hold`: the owner's go)."""
-    r = sh("git", "fetch", "--quiet", remote(), "main")
-    if r.returncode:  # a tunnel restart is seconds long: one more try before giving up
-        err(f"git fetch failed ({r.stderr.strip()[:120]}); retrying once in 15 s")
-        time.sleep(15)
-        r = sh("git", "fetch", "--quiet", remote(), "main")
-    if r.returncode:
-        print(f"NOT LANDED: git fetch {remote()} main failed: {r.stderr.strip()[:300]} (tunnel? `agentctl env --check`)")
-        return 1, None
-    head = git(repo, "rev-parse", "HEAD").strip()
-    if landed(repo, head, main_ref):
-        print(f"LANDED {head} (already on {remote()}/main)")
-        return 0, None
-    why = do_not_land(repo, waiting_commits(repo, f"{remote()}/main", head), branch_of(repo))
-    if why:
-        print(f"NOT LANDED: {why}. Throwaway work never lands; remove the marker (rename the branch, reword the commit, "
-              "drop the Do-Not-Land: trailer) only if the owner wants it landed.")
-        return 1, None
-    # policy: hold-trailer
-    why = None if release_hold else held_commit(repo, waiting_commits(repo, f"{remote()}/main", head))
-    if why:
-        print(f"NOT LANDED: {why}. Held work lands only on the owner's go: `agentctl land --release-hold` then (or "
-              "drop the trailer).")
-        return 1, None
-    # policy: blame-dead
-    why = blame_land_refusal(repo, waiting_commits(repo, f"{remote()}/main", head), repo,
-                             records=blame_records_quiet())
-    if why:
-        print(f"NOT LANDED: {why}. A withdrawn or refuted blame revert is dead: drop this worktree "
-              "(`git worktree remove`), never land it.")
-        return 1, None
-    # agentctl's own rewrites never sign (issue 20261115T112749-d27361): main's commits are unsigned, and a global
-    # commit.gpgsign=true with an empty ssh-agent (an unattended fixer) failed every rebase behind main
-    r = sh("git", *NO_SIGN, "rebase", "--quiet", f"{remote()}/main")
-    for _ in range(50):  # each stop whose conflicts are docs or generated files only: resolved (conflict_resolve), and on
-        if not r.returncode or not conflict_resolve(repo):
-            break
-        r = sh("git", *NO_SIGN, "-c", "core.editor=true", "rebase", "--continue")
-    if r.returncode:
-        conflicts = git(repo, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
-        sh("git", "rebase", "--abort")
-        if conflicts:
-            print(f"NOT LANDED: rebase onto {remote()}/main conflicts in: {', '.join(conflicts)}. "
-                  f"Resolve by hand (git rebase {remote()}/main), then land again.")
-        else:  # no conflicted file: git itself failed (a hook, signing, a lock), never told as a conflict
-            print(f"NOT LANDED: rebase onto {remote()}/main failed (no conflict): {r.stderr.strip()[:300]}")
-        return 1, None
-    head = git(repo, "rev-parse", "HEAD").strip()
-    if landed(repo, head, main_ref):
-        print(f"LANDED {head} (the rebase left nothing: already on {remote()}/main)")
-        return 0, None
-    head = land_before_queue(repo, head)
-    if fix_replay_blocks(repo, head):
-        return 1, None
-    problems = check_range(repo, f"{remote()}/main", head, [], int(env_num("AGENTCTL_MAX_FOREIGN", MAX_FOREIGN)))
-    if problems:
-        print("NOT LANDED: prepush-check refused:\n  " + "\n  ".join(problems))
-        return 1, None
-    return None, head
-
-
-# THE REPO'S OWN STEP AFTER THE REBASE (2026-11-20, the movies stamp carry: a proven-equivalent identity change keeps its
-# stamps only if a lane remembers to write the carry rows, and 3-7 of 37 stamp-moving deploys would have): a repo's
-# executable LAND_BEFORE_QUEUE runs with <origin/main> <head> on the rebased change, and may commit onto it -- the commit
-# then rides the same push, judged by the same checks. It never refuses a land: a failure or a timeout is said and the
-# head stays as it was.
-LAND_BEFORE_QUEUE = "scripts/land-before-queue"
-LAND_BEFORE_QUEUE_SECONDS = 1200
-
-
-def land_before_queue(repo, head):
-    """The head after the repo's LAND_BEFORE_QUEUE step: head itself, or a descendant the step committed onto it."""
-    tool = os.path.join(repo, LAND_BEFORE_QUEUE)
-    if not os.access(tool, os.X_OK):
-        return head
-    base = git(repo, "rev-parse", f"{remote()}/main").strip()
-    branch = git(repo, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip()
-    try:
-        r = subprocess.run([tool, base, head], cwd=repo, capture_output=True, text=True, env=tool_env(),
-                           timeout=env_num("AGENTCTL_LAND_BEFORE_QUEUE_SECONDS", LAND_BEFORE_QUEUE_SECONDS))
-        for line in (r.stdout + r.stderr).strip().splitlines()[-12:]:
-            err(f"{LAND_BEFORE_QUEUE}: {line}")
-    except subprocess.TimeoutExpired:
-        err(f"{LAND_BEFORE_QUEUE}: timed out; the change lands as it was")
-    now = git(repo, "rev-parse", "HEAD").strip()
-    if now != head and git(repo, "merge-base", "--is-ancestor", head, now, check=False).returncode != 0:
-        err(f"{LAND_BEFORE_QUEUE}: left HEAD off the change ({now[:10]}): put back on {head[:10]}")
-        if branch:
-            git(repo, "checkout", "-q", "--force", branch)
-        git(repo, "reset", "-q", "--hard", head)
-        return head
-    if now != head:
-        err(f"{LAND_BEFORE_QUEUE}: added {git(repo, 'rev-list', '--count', f'{head}..{now}').strip()} commit(s) to the change")
-    return now
-
-
-# FIX REPLAY at land (redreplay.py): on the rebased head, agentctl runs each bare `Fix-Replay: <command>` of a Fixes-Red push
-# at origin/main and at head (once per base, head and command), keeps the proof for the submission (change_fields'
-# `replays`), and refuses a gate red's fix it does not prove; a red outside the gate only warns.
-_fix_replay_proofs = process_cache({})  # (base, head) -> [proof]
-
-
-def fix_replay_proofs(repo, head):
-    """agentctl's replays of the push origin/main..head (run_fix_replays), run once per base and head."""
-    base = git(repo, "rev-parse", f"{remote()}/main").strip()
-    if (base, head) not in _fix_replay_proofs:
-        _fix_replay_proofs[(base, head)] = run_fix_replays(repo, base, head, waiting_commits(repo, base, head))
-    return _fix_replay_proofs[(base, head)]
-
-
-def fix_replay_blocks(repo, head):
-    """True (its NOT LANDED printed) when FIX REPLAY refuses the push origin/main..head."""
-    commits = waiting_commits(repo, f"{remote()}/main", head)
-    verdict = fix_replay_refusal(repo, commits, proofs=fix_replay_proofs(repo, head))
-    if not verdict:
-        return False
-    pid, why = verdict
-    if pid == "fix-replay":
-        blocks = policy_blocks("fix-replay", None, None, why[:160])  # policy: fix-replay
-    else:
-        blocks = policy_blocks("fix-replay-outside", None, None, why[:160])  # policy: fix-replay-outside
-    if blocks:
-        print(f"NOT LANDED: {why}. A red fix lands only once a replay proved it (or says why none can).")
-    return blocks
 
 
 def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False, cls="check", a=None, judged=None):
