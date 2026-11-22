@@ -31,24 +31,27 @@ def owner_set_leases(fam, leases):
     write_json(owner_leases_path(fam), leases, indent=None, mode=0o600)  # lease secrets: the owner's eyes only
 
 
-def owner_hand(fam, name, took):
-    """The dispatcher hands a red lease it took for the owner to the owner's wrapper (its inbox of leases)."""
+def owner_change_leases(fam, change):
+    """The family's leases read, changed in place by change(leases) and written back, under the family's lock."""
     os.makedirs(owner_dir(fam), exist_ok=True)
     with open(os.path.join(owner_dir(fam), ".lock"), "a+") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
         leases = owner_leases(fam)
-        leases[name] = {"epoch": took["epoch"], "secret": took["secret"], "at": time.time()}
+        change(leases)
         owner_set_leases(fam, leases)
+
+
+def owner_hand(fam, name, took):
+    """The dispatcher hands a red lease it took for the owner to the owner's wrapper (its inbox of leases)."""
+    owner_change_leases(fam, lambda leases: leases.update(
+        {name: {"epoch": took["epoch"], "secret": took["secret"], "at": time.time()}}))
 
 
 def owner_drop(fam, names):
-    os.makedirs(owner_dir(fam), exist_ok=True)
-    with open(os.path.join(owner_dir(fam), ".lock"), "a+") as lf:
-        fcntl.flock(lf, fcntl.LOCK_EX)
-        leases = owner_leases(fam)
+    def drop(leases):
         for n in names:
             leases.pop(n, None)
-        owner_set_leases(fam, leases)
+    owner_change_leases(fam, drop)
 
 
 def owner_tell_leases(st, leases, s, wt, me, rec):
