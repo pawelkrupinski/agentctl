@@ -144,8 +144,8 @@ class Owned:
             for o_r, rid in prev.get("runs") or []:
                 cancel_run(o_r, rid, f"its owner, {prev.get('kind')} pid {prev.get('pid')}, died without ending it")
         self.started = self.started or ts()
+        self._signals()  # before the record shows: whoever reads it may signal us at once (a verdict, never a bare death)
         self._write()
-        self._signals()
         return True
 
     def _write(self):

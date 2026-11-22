@@ -104,6 +104,29 @@ class OwnedTest(unittest.TestCase):
         self.assertIn("run cancel 77", self.cancels()[0])
         self.assertFalse(os.path.exists(rec))
 
+    def test_the_signal_handlers_are_in_place_before_the_record_shows(self):
+        """2026-11-22: test_inbox's signal test failed under load 80 (the pre-push of bd46924): its SIGTERM, sent once
+        the owner record appeared, came before the handlers that turn it into an inbox entry were installed -- the
+        record was written first -- and the process died with no verdict. Anyone who reads the record to signal the
+        holder (orphans, cleanup) met the same window."""
+        seen = []
+        real = A.signal.signal
+
+        def spy(sig, handler):
+            seen.append(os.path.exists(rec))
+            return real(sig, handler)
+
+        o = A.Owned("test", "k-order", argv=["x"])
+        rec = o.record
+        A.signal.signal = spy
+        try:
+            with o:
+                pass
+        finally:
+            A.signal.signal = real
+        self.assertTrue(seen)
+        self.assertFalse(any(seen[:3]), "a handler was installed after the record showed")
+
     def test_a_finished_run_is_not_cancelled(self):
         with A.Owned("test", "k3", argv=["x"]) as o:
             o.add_run("o/r", 5)
