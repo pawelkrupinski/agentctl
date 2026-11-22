@@ -1,0 +1,177 @@
+# agentctl, part `redverify`: verifying a landed fix: the scheduled slot, the verify dispatch, a flake check.
+# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+
+def red_verify_scheduled(store, it, f, sha, o_r, repo, t):
+    """A scheduled fix (red_verify_plan) at its deadline with no decided run containing it: a run of its workflow
+    still undecided that will decide it holds it again, quietly; else the slot passed without verifying it --
+    escalated (the scheduler never dispatched it, or its run ended without deciding it)."""
+    d, wf = it["data"], it["data"].get("workflow")
+    r = red_verify_run_on_way(o_r, repo, f)
+    if r:
+        line = (f"{red_what(d)}: fix {sha[:10]} awaits {wf} #{r.get('number')} ({r.get('status')}), the run that "
+                f"decides it")
+        red_move(store, it, "fix-pending", line, data={"fix": {**f, "verify_by": t + RED_VERIFY_HOLD}},
+                 deadline_s=RED_VERIFY_HOLD, severity="info")
+        return [line]
+    since = [r for r in workflow_main_runs(o_r, f.get("verify_file")) if f.get("verify_file")
+             and r.get("createdAt") and parse_time(r["createdAt"]).timestamp() >= float(f.get("next_run_at") or 0) - 60]
+    why = (f"its {hhmmz(f['next_run_at'])} run #{since[-1].get('number')} ended {since[-1].get('conclusion')} "
+           f"without deciding it" if since else f"no {wf} run was dispatched for its {hhmmz(f['next_run_at'])} slot")
+    # A MISSED DEADLINE IS NEVER SILENT (the owner, 2026-11-21: Order independence #94 passed its `verified by 06:27Z`
+    # with nobody at work): no run decided it by then -- back to a fixer (its live holder first), escalated
+    return red_fix_unverifiable(store, it, f"fix {sha[:10]} unverified past its deadline "
+                                           f"{hhmmz(f.get('verify_by') or it['deadline'])}: {why}", t)
+
+
+def red_verify_await(store, it, f, plan, t):
+    """Into the quiet wait for a scheduled fix's run: its deadline is the plan's `by`, its level back to 0 (a landing
+    is no escalation)."""
+    d = it["data"]
+    fix = {**f, "next_run_at": plan["slot"], "verify_by": plan["by"], "verify_file": plan["file"]}
+    line = (f"{red_what(d)}: fix {str(f.get('sha'))[:10]} awaiting next scheduled run at {hhmmz(plan['slot'])} "
+            f"(verified by {hhmmz(plan['by'])})")
+    red_move(store, it, "fix-pending", line, data={"fix": fix}, deadline_s=max(60.0, plan["by"] - t), severity="info",
+             **({"level": 0} if it.get("level") else {}))
+    return [line]
+
+
+def red_fix_since(it):
+    """When a fix-pending red's verification began: the tick that saw its queued fix land (a fix waits in the queue
+    behind a red gate for hours, untested), else entering fix-pending."""
+    f = it["data"].get("fix") or {}
+    return max(float(it["entered_at"]), float(f.get("verify_since") or 0))
+
+
+def red_fix_unverifiable(store, it, why, t):
+    """A fix-pending that cannot rest any longer: offered again (escalated), its fix set aside so it does not snap back
+    to fix-pending, the reason in its history -- the dispatcher gives it a fixer."""
+    d = it["data"]
+    f = d.get("fix") or {}
+    h = {"at": iso_at(t), "holder": f.get("entry") or (f.get("sha") or "")[:10] or None, "outcome": f"UNVERIFIED: {why}"}
+    upd = {"fix": None, "history": (d.get("history") or []) + [h]}
+    if f.get("sha"):
+        upd["unverified"] = (d.get("unverified") or []) + [f["sha"]]
+    store.close_offer(f"red:{it['id']}", "unverified")
+    red_offer(store, it, f"{red_what(d)}: {why}: offered again", escalate=True, data=upd)
+    return [f"re-offered {red_what(d)} ({why[:80]})"]
+
+
+# MAIN MOVED UNDER AN OUTSIDE RED: VERIFY IT (2026-11-22, Order independence #105: 9a7130036 fixed it -- a tools-only
+# commit, rightly with no `Fixes-Red:` -- while the red sat fix-pending on an unrelated change that edited its workflow
+# file, and its fixer had been stopped hours before; nothing dispatched a run that would have seen main fixed). An
+# outside-gate red with no LANDED fix of its own, whose job reads something main changed since the red's run
+# (fix_reaches_red over each commit since its head), has its workflow dispatched on main to verify -- once per main
+# head, at most every RED_MAIN_VERIFY_EVERY, and only where a verify dispatch is allowed (red_verify_dispatch:
+# red-workflows.tsv). A green run clears it as any decided run does; a red one says main has not fixed it.
+RED_MAIN_VERIFY_EVERY = 3 * 3600
+RED_MAIN_VERIFY_STATES = ("offered", "leased", "fix-pending", "blocked-external")
+
+
+def red_main_verify(store, it, repo, o_r, t):
+    d = it["data"]
+    if d.get("gate") or it["state"] not in RED_MAIN_VERIFY_STATES or not repo:
+        return []
+    if (d.get("fix") or {}).get("status") == "landed":
+        return []  # its own landed fix's verify (red_fix_pending) is on its way
+    mv = d.get("main_verify") or {}
+    if t - float(mv.get("at") or 0) < env_num("AGENTCTL_RED_MAIN_VERIFY_EVERY", RED_MAIN_VERIFY_EVERY):
+        return []
+    head = (d.get("last_run") or {}).get("headSha")
+    r = git(repo, "rev-parse", f"{remote()}/main", check=False)
+    main = r.stdout.strip() if r.returncode == 0 else ""
+    if not head or not main or main == head or mv.get("main") == main:
+        return []
+    r = git(repo, "rev-list", "--no-merges", f"{head}..{main}", check=False)
+    shas = r.stdout.split() if r.returncode == 0 else []
+    reach = next((x for x in shas if fix_reaches_red(repo, x, d)), None)
+    if not reach:
+        return []
+    line = red_verify_dispatch(o_r, repo, d.get("workflow"), main, (d.get("last_run") or {}).get("databaseId"))
+    store.update_item("red", it["id"], it["version"], {"main_verify": {"at": t, "main": main, "reach": reach,
+                                                                       "verify": line}})
+    out = f"{red_what(d)}: main moved since its run ({len(shas)} commit(s), {reach[:10]} reaching its job): {line}"
+    inbox_write("red", out, [out], [], 0)
+    return [out]
+
+
+def red_verify_dispatch(o_r, repo, workflow, sha, run_id=None):
+    """The red's workflow dispatched on main to verify a landed fix (no wait: the next tick reads its run), with the
+    failing run's own inputs (run_id's) so the verifying run repeats it. Archive recording #823 (2026-10-29): dispatched
+    with no inputs, its required `runs` input made Forgejo refuse it (HTTP 400), so no run could ever verify the red."""
+    path, txt = workflow_file_of(repo, f"{remote()}/main", workflow) if repo and workflow else (None, "")
+    if not path:
+        return f"FIX UNVERIFIED: no workflow file named {workflow!r} on main"
+    if "workflow_dispatch" not in txt:
+        return f"FIX UNVERIFIED until {workflow}'s next scheduled run (no workflow_dispatch)"
+    if workflow_crons(txt) and not verify_dispatchable(repo, workflow):  # A VERIFY DISPATCH IS PER WORKFLOW
+        return (f"FIX UNVERIFIED until {workflow}'s next scheduled run (scheduled, and {RED_WORKFLOWS_FILE} says "
+                f"verify_dispatch no: never dispatched to verify)")
+    inputs = (run_dispatch_inputs(o_r, run_id) or run_title_inputs(o_r, run_id, txt)) if run_id else {}
+    try:
+        api(o_r, "POST", f"actions/workflows/{os.path.basename(path)}/dispatches", body={"ref": "main", "inputs": inputs})
+        record_dispatch(branch="main", workflow=workflow, sha=sha, agent="red verify", pid=os.getpid(), inputs=inputs,
+                        purpose=f"verify the fix {sha[:10]}", key=f"verify-{os.path.basename(path)}-{int(time.time())}")
+    except (Exception, SystemExit) as e:
+        return f"FIX UNVERIFIED: could not dispatch {workflow} ({http_error_text(e)[:240]})"
+    return f"dispatched {workflow} on main to verify {sha[:10]}" + (f" with {json.dumps(inputs)}" if inputs else "")
+
+
+def run_dispatch_inputs(o_r, run_id):
+    """The workflow_dispatch inputs run_id was started with ({} for any other event, or when its run cannot be read).
+    GitHub serves no run's inputs: they are the dispatch record's (agentctl's own, written by `dispatch run`)."""
+    rec = read_record(dispatches_dir("inputs", f"{run_id}.json"))
+    return {str(k): str(v) for k, v in rec.items()} if isinstance(rec, dict) else {}
+
+
+RUN_TITLE_INPUT = re.compile(r"(?<!\S)([A-Za-z_][\w-]*)=(\S*)")
+
+
+def run_title_inputs(o_r, run_id, workflow_text):
+    """The dispatch inputs a run that agentctl did not start carries in its title: the workflow's `run-name` writes them
+    as `name=value` (`Verify scrape recording recording=<id> countries=<cc,...>`), and only names the workflow declares
+    as an input are taken. {} when its title names none or the run cannot be read. 2026-11-11, Verify scrape recording
+    #23: dispatched by Record scrape fixtures, its verify went out without the required `recording` (HTTP 422)."""
+    try:
+        title = gh_json(o_r, "run", "view", str(run_id), "--json", "displayTitle").get("displayTitle") or ""
+    except (Exception, SystemExit):
+        return {}
+    return {k: v for k, v in RUN_TITLE_INPUT.findall(title)
+            if re.search(rf"^\s+{re.escape(k)}:\s*$", workflow_text or "", re.M)}
+
+
+def http_error_text(e):
+    """An exception's text, with the response body when it is an HTTP error (the forge names a refusal's cause there)."""
+    text = str(e)
+    if isinstance(e, urllib.error.HTTPError):
+        try:
+            body = e.read().decode("utf-8", "replace").strip()
+        except Exception:
+            body = ""
+        if body:
+            text += f": {body}"
+    return text
+
+
+def red_flake_check(store, it, snap, repo, facts):
+    """A test red that cleared with no commit between that can have fixed it: a FLAKE, its own red (determinism tier,
+    lowest priority), open until a fix for it lands and a run proves it."""
+    d = it["data"]
+    if d.get("kind") != "test" or d.get("red_kind") not in ("gate", "outside"):
+        return []
+    last = ((snap or {}).get("latest") or {}).get(d.get("workflow")) or {}
+    if last.get("conclusion") != "success":
+        return []
+    rec = {"runs": d.get("runs"), "job": d.get("job"), "line": d.get("line"), "workflow": d.get("workflow")}
+    vals = sorted(set().union(*[v for _s, _c, v, _t in facts.get("landed") or []])) if facts.get("landed") else []
+    fixed_by, known = fix_between(repo, rec, (d.get("last_run") or {}).get("headSha"), last.get("headSha"),
+                                  name_causes(None, vals), run_workflows())
+    if fixed_by or not known:
+        return []
+    ob = {"key": d["key"], "workflow": d["workflow"], "jobs": d.get("jobs"), "job": d.get("job"), "kind": "test",
+          "line": d.get("line"), "red_kind": "flake", "gate": False, "names": set(d.get("runs") or []),
+          "run": d.get("last_run") or {}, "runs_list": []}
+    flake = red_open(store, ob, None, store.clock())
+    line = (f"RED FLAKE: {red_what(d)} passed on #{last.get('number')} and no commit between can have fixed it: a flake "
+            "-- make it deterministic (never rerun to green); it stays a red until a fix lands")
+    inbox_write("red", line, [line], [d.get("line") or ""], 1)
+    return [line] + ([f"opened flake {flake['id']}"] if flake else [])

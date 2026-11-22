@@ -257,7 +257,7 @@ def render_red_status(m, verbose=False):
     unread = {k: m[k]["error"] for k in ("families", "owners") if isinstance(m.get(k), dict) and "error" in m[k]}
     out += [f"{k}: unread ({e})" for k, e in unread.items()]  # a timed-out section (status_sources) is no list
     never = m.get("untracked")
-    if verbose and isinstance(never, list) and never:  # for information only: no red, no fixer, no alert (red.py)
+    if verbose and isinstance(never, list) and never:  # for information only: no red, no fixer, no alert (reduntracked.py)
         out.append(f"untracked (never green) ({len(never)}):")
         for u in never:
             short = "" if u.get("repo") == RED_PRIMARY else f"{red_repo_short(u.get('repo') or '')} "

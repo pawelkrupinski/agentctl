@@ -81,11 +81,11 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
               f"escalation to the owner.\n\n=== THE FIXER BRIEF ({bpath.replace(HOME, '~')}) ===\n{btext}\n"
               "=== END OF THE FIXER BRIEF ===\n\n")
     replay = red_replay_command(red_repo_clone(o_r), u) if not owner else None
-    if replay:  # FIX REPLAY (red.py): its land is refused without the replay's base=FAIL head=PASS
+    if replay:  # FIX REPLAY (redreplay.py): its land is refused without the replay's base=FAIL head=PASS
         common += (f"REPLAY BEFORE LANDING: this red's check replays cheaply: `{replay}`. Run it at {remote()}/main "
                    "(base) and at your fix (head) and land only when it says base=FAIL head=PASS, with the trailer "
                    f"`Fix-Replay: {replay} base=FAIL head=PASS` beside Fixes-Red. ")
-    if u.get("gate") and not owner:  # FIX REPLAY FOR GATE REDS (red.py; the owner, 2026-11-20): enforced
+    if u.get("gate") and not owner:  # FIX REPLAY FOR GATE REDS (redreplay.py; the owner, 2026-11-20): enforced
         common += ("REPLAY YOUR GATE FIX: beside Fixes-Red, add the trailer `Fix-Replay: <command>` -- the narrowest "
                    "command that fails where this red fails (a `testOnly`, a script's self-test) -- and agentctl's "
                    f"land runs it at {remote()}/main and at your fix: the change counts as the fix only on base=FAIL "
@@ -1488,7 +1488,7 @@ def red_view_state(store, it, t=None):
         return (f"{who} ({wt}, leased{fam}; lapses {exp} without progress)" + (f" -- {m['note']}" if m.get("note") else "")
                 + rec,
                 f"{who.replace('movies-wt-', '').replace('red-fixer-', 'fixer ')} leased")
-    if st == "fix-pending" and (d.get("fix") or {}).get("unproven"):  # A FIX WITH NO REPLAY KEEPS ITS FIXER (red.py)
+    if st == "fix-pending" and (d.get("fix") or {}).get("unproven"):  # A FIX WITH NO REPLAY KEEPS ITS FIXER (redmove.py)
         f = d["fix"]
         return (f"fix-unproven: {f.get('entry') or str(f.get('sha'))[:9]} ({f.get('status')}) carries no replay; "
                 f"{d.get('holder') or 'its holder'} keeps it until a {d.get('workflow')} run decides it{rec}",
@@ -1540,7 +1540,7 @@ def red_view_state(store, it, t=None):
             return "the owner's answer is in: offered again at the next tick", "re-dispatching"
         if not b:  # its block lapsed (the tick offers it again): never a stale BLOCKED ON OWNER on the status line
             return "no block holds it now: offered again at the next tick", "re-offering"
-        if (b.get("meta") or {}).get("harness"):  # agentctl's own fault (red.py red_harness_issue): its maintainer's
+        if (b.get("meta") or {}).get("harness"):  # agentctl's own fault (redcrash.py red_harness_issue): its maintainer's
             return b.get("text"), f"HARNESS FAULT: agentctl issue {(b.get('meta') or {}).get('issue')}"
         return b.get("text") or "BLOCKED ON OWNER", (f"BLOCKED: {d.get('cause')} down" if d.get("cause") else "BLOCKED ON OWNER")
     return st, st
@@ -1637,7 +1637,7 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
         except (Exception, SystemExit) as e:
             err(f"red tick: could not observe ({str(e)[:160]}): nothing opens or clears this tick")
     untracked = {}
-    if obs is not None:  # A CHECK NEVER GREEN ON MAIN IS NOT TRACKED (red.py): set apart, listed for red status -v
+    if obs is not None:  # A CHECK NEVER GREEN ON MAIN IS NOT TRACKED (reduntracked.py): set apart, listed for red status -v
         obs, untracked = red_split_untracked(store, o_r, obs, t)
         try:
             red_note_untracked(store, o_r, untracked)
@@ -2287,7 +2287,7 @@ def block_invalid(store, it, m, t):
         if m.get("crash_loop") and not m.get("harness"):  # an owner block of a crash loop from before 2026-11-19
             return "a fixer crash loop is a harness fault, agentctl's own, never the owner's"
         iss = store.item("issue", m["issue"]) if m.get("issue") else None
-        if iss and iss["state"] == "closed":  # A HARNESS FAULT FIXED: its maintainer closed the issue (red.py)
+        if iss and iss["state"] == "closed":  # A HARNESS FAULT FIXED: its maintainer closed the issue (redcrash.py)
             return f"its harness issue {m['issue']} is closed ({str((iss.get('data') or {}).get('note') or '')[:120]})"
         row = store.get(red_lease(d["key"]))
         return f"a live fixer is on it: {row['holder']}" if lease_is_live(row, t) else None

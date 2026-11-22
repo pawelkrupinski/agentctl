@@ -35,7 +35,7 @@
 # a red, and one trust line written to the inbox five times. ONLY WHAT NO AGENT CAN DO REACHES THE OWNER: every ask
 # names one of these categories (red_ask: an ask that names none is no ask; test_owner_only lints every source of one)
 # and is routed back to its fixer otherwise (red_ask_route) -- or, for a fault of agentctl itself, to agentctl's
-# maintainer as an issue (red.py, red_harness_fault). A policy ask (`policy-no-rule`) proposes the rule row to add.
+# maintainer as an issue (redcrash.py, red_harness_issue). A policy ask (`policy-no-rule`) proposes the rule row to add.
 OWNER_ONLY = {
     "vault": "a Touch ID prompt: unlocking a vault, signing for a session -- only the owner's finger",
     "tty-trust": "a prompt that needs the owner's terminal (claude's workspace-trust dialog)",

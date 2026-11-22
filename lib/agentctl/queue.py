@@ -694,7 +694,7 @@ def change_fields(repo, main_ref, head, a):
             "base": git(repo, "rev-parse", main_ref).strip(), "host": os.uname().nodename,
             # THE LANDER (lander.py): who landed it, and each commit's keys to find it on main after the rebase
             "lander": lander_record(repo), "commit_keys": commit_keys(repo, main_ref, head),
-            # FIX REPLAY (red.py): agentctl's own replays of the push, for the server's check
+            # FIX REPLAY (redreplay.py): agentctl's own replays of the push, for the server's check
             "replays": fix_replay_proofs(repo, head) or None}
 
 
@@ -1745,7 +1745,7 @@ def _check_entry(repo, d, e, i, own=None):
         # policy: blame-dead
         queue_verdict(d, e, "rejected", f"NOT LANDED: {dead}", decided_on=base)
         return 1
-    # FIX REPLAY (red.py): the laptop's land may hold no token; its replays ride with the submission (`replays`)
+    # FIX REPLAY (redreplay.py): the laptop's land may hold no token; its replays ride with the submission (`replays`)
     unreplayed = fix_replay_refusal(repo, commits, proofs=e.get("replays"))
     if unreplayed and unreplayed[0] == "fix-replay" and policy_blocks("fix-replay", None, e["id"], unreplayed[1][:160]):
         queue_verdict(d, e, "rejected", f"NOT LANDED: {unreplayed[1]}", decided_on=base)  # policy: fix-replay

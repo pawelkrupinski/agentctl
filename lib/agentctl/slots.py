@@ -787,7 +787,7 @@ def land_before_queue(repo, head):
     return now
 
 
-# FIX REPLAY at land (red.py): on the rebased head, agentctl runs each bare `Fix-Replay: <command>` of a Fixes-Red push
+# FIX REPLAY at land (redreplay.py): on the rebased head, agentctl runs each bare `Fix-Replay: <command>` of a Fixes-Red push
 # at origin/main and at head (once per base, head and command), keeps the proof for the submission (change_fields'
 # `replays`), and refuses a gate red's fix it does not prove; a red outside the gate only warns.
 _fix_replay_proofs = process_cache({})  # (base, head) -> [proof]

@@ -149,8 +149,8 @@ moves it forward; nothing is a detached process that can die with its state in i
     **A MISSED DEADLINE IS NEVER SILENT:** a fix-pending (or fix-unproven) red past its `verified by` deadline with no
     run that decides it -- the slot passed, or its verifying dispatch never produced a run -- is offered again,
     escalated (`red_fix_unverifiable`): its live holder takes it back, else the offer's own escalation (RED UNCLAIMED)
-    reaches the owner. red.py `red_workflow_policy`, `red_fix_proven`, `red_keep_holder`, `red_diagnosis_step`,
-    `red_verify_scheduled`; tests: `tests/test_red_in_hand.py`, `tests/test_verify_wait.py`. THE REPO'S STEP AFTER THE REBASE (2026-11-20): a repo's executable
+    reaches the owner. red.py `red_workflow_policy`, redmove.py `red_fix_proven`, `red_keep_holder`, `red_diagnosis_step`,
+    redverify.py `red_verify_scheduled`; tests: `tests/test_red_in_hand.py`, `tests/test_verify_wait.py`. THE REPO'S STEP AFTER THE REBASE (2026-11-20): a repo's executable
     `scripts/land-before-queue <origin/main> <head>` runs on the rebased change before its checks, and may commit onto it
     (movies: the identity stamp carry's rows); the commit rides the same push. It never refuses a land: a failure or a
     timeout (`$AGENTCTL_LAND_BEFORE_QUEUE_SECONDS`, 1200) leaves the change as it was. FIX REPLAY: when a red's workflow row names a `replay`, `land` warns on a
@@ -171,8 +171,8 @@ moves it forward; nothing is a detached process that can die with its state in i
     — agentctl blame's revert of <change>: <workflow> #N's parent <sha> passed the same check, ...` (the fallback: `...
     revert fallback of <sha>: ... outlived two fix attempts ...`) in their final trailer block -- a revert puts main back
     on code that passed, nothing new to replay -- and the owner's weekly list shows them like any other; the rule itself
-    is unchanged. red.py `agentctl_revert_fix_replay`; tests: test_blame `test_the_reverts_fixes_red_passes_the_gates_fix_replay_rule`,
-    test_fix_replay `test_the_revert_fallbacks_fixes_red_passes_the_gates_fix_replay_rule`. red.py `fix_replay_refusal`,
+    is unchanged. redreplay.py `agentctl_revert_fix_replay`; tests: test_blame `test_the_reverts_fixes_red_passes_the_gates_fix_replay_rule`,
+    test_fix_replay `test_the_revert_fallbacks_fixes_red_passes_the_gates_fix_replay_rule`. redreplay.py `fix_replay_refusal`,
     `run_fix_replays`; slots.py `fix_replay_blocks`; tests: `tests/test_fix_replay.py`. A fix-pending self-move (a fix landing, followed, re-cut) is never an
     escalation unless it says so. A cancelled fix change follows only a change of its worktree submitted after it
     (`submitted_at`, else the change id's stamp), and the invariant waits out `RED_FIX_REQUEUE_GRACE` as the red's own
@@ -1053,7 +1053,7 @@ agent must be assigned to it".
   the red's history, so red status, the inbox and the next fixer's prompt say why.
 - **Main moved under an outside red: verify it (2026-11-22, Order independence #105).** An outside-gate red with no
   landed fix of its own, whose job reads something main changed since the red's run (`fix_reaches_red` over the
-  commits since its head), has its workflow dispatched on main to verify (red.py `red_main_verify`): once per main
+  commits since its head), has its workflow dispatched on main to verify (redverify.py `red_main_verify`): once per main
   head, at most every `RED_MAIN_VERIFY_EVERY` (3 h), only where `red_verify_dispatch` allows it. A fix that lands
   without a trailer (tools-only, rightly) is seen by the run it starts, never waited for behind a weakly linked change.
 - **No signature where main keeps none (2026-11-22).** A fixer of a repo whose main is unsigned (red-repos.json

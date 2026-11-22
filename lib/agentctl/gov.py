@@ -624,7 +624,7 @@ def gov_ticket(cls, mem=None, label="", kind="job", report=None, cores=None, job
 # THE ROUTE of a heavy job (the owner, 2026-11-18: "stop the laptop being the bottleneck"): a whole-module test run or
 # a commit-gate proof (scripts/fail-before: two full runs) the governor would HOLD now goes to ci-runner's measure lane
 # (scripts/identity-ci-run's identity-run.yml, which runs sbt there) when that lane is free -- no job waiting on its
-# label in ci-runners-page's last good read (red.py's runner_queue) -- instead of queueing on the laptop. A red fix is
+# label in ci-runners-page's last good read (redseen.py's runner_queue) -- instead of queueing on the laptop. A red fix is
 # never held, so it stays local; so does anything the lane cannot be read for.
 MEASURE_LANE = "movies-measure"
 

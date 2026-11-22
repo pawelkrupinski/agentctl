@@ -847,7 +847,7 @@ def fixes_of(repo, commits):
 
 
 def diagnoses_of(repo, commits):
-    """The run ids/numbers the commits' `Diagnoses-Red:` trailers name (DIAGNOSTICS ARE NO FIX, red.py)."""
+    """The run ids/numbers the commits' `Diagnoses-Red:` trailers name (DIAGNOSTICS ARE NO FIX, redmove.py)."""
     out = set()
     for c in commits:
         r = git(repo, "log", "-1", "--format=%(trailers:key=Diagnoses-Red,valueonly,separator=%x2C)", c, check=False)

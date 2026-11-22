@@ -607,7 +607,7 @@ MACHINES["red"] = {
                                                          "verified", "dispatch-off"), escalate=True, wait=True),
     "leased": StateSpec(RED_CLAIM_MAX, "offered", ("fix-pending", "offered", "blocked-external", "cleared", "verified",
                                                    "dispatch-off")),
-    # fix-pending -> leased: a link that no longer holds is no fix; its live holder keeps the red (red.py, 331b586)
+    # fix-pending -> leased: a link that no longer holds is no fix; its live holder keeps the red (redpending.py, 331b586)
     "fix-pending": StateSpec(RED_FIX_DECIDE, "fix-pending", ("offered", "verified", "cleared", "leased"), escalate=True,
                              wait=True),
     "blocked-external": StateSpec(7 * 86400, "offered", ("offered", "fix-pending", "leased", "cleared", "verified",

@@ -1,0 +1,398 @@
+# agentctl, part `reddispatch`: holders and the dispatcher: renewing claims, family holders, the capacity, spawning a fixer.
+# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+
+# -- interactive holders: the tick renews a claim from its worktree's activity; imported claim files lapse unless busy
+def red_wt_mark(wt):
+    """An interactive claim's progress mark: its worktree's HEAD, `git status` and the newest change's mtime."""
+    if not wt or not os.path.isdir(wt) or not allowed_path(wt):
+        return ""
+    import hashlib
+    head = git(wt, "rev-parse", "HEAD", check=False).stdout.strip()
+    st = git(wt, "status", "--porcelain", check=False).stdout
+    newest = 0.0
+    for line in st.splitlines()[:200]:
+        newest = max(newest, mtime(os.path.join(wt, line[3:].split(" -> ")[-1])))
+    return f"{head[:12]}:{hashlib.sha1(st.encode()).hexdigest()[:10]}:{int(newest)}"
+
+
+# A JOINED RED SHOWS PROGRESS OR GOES ON (the owner, 2026-11-08). A red joined to its family holder's lease (the
+# dispatcher's join: `joined_at` on the lease) waits on a session that may be deep in its own red. With no progress on
+# THAT red within RED_JOIN_IDLE of joining -- a commit carrying its `Fixes-Red:` in the holder's worktree, a fix on its
+# way (the red's `fix`, or the red in fix-pending), a note on it (`red claim <it> --note` inside the fixer) -- it is
+# RELEASED (no attempt counted) and offered again, never joined to that holder again (`family_released`).
+RED_JOIN_IDLE = 30 * 60  # s a red joined to its family holder's lease may go with no progress on it before it is released
+
+
+def red_joined_progress(store, row, why):
+    """Mark a joined red's lease as worked on (why: `note: ...`, `commit <sha>`, `fix <entry>`): the backstop is done."""
+    store.set_meta(row["name"], row["epoch"], row["secret"], {"progressed": str(why)[:200]})
+
+
+def red_fixes_red_commits(wt, names):
+    """The first commit in worktree wt not on any remote whose `Fixes-Red:` names one of names (runs, the key), or None."""
+    if not wt or not os.path.isdir(wt) or not allowed_path(wt):
+        return None
+    out = git(wt, "log", "HEAD", "--not", "--remotes", "-n", "200",
+              "--format=%H%x09%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", check=False).stdout
+    want = {str(n).lstrip("#") for n in names if n}
+    for line in out.splitlines():
+        sha, _tab, vals = line.partition("\t")
+        if want & trailer_values(vals):
+            return sha
+    return None
+
+
+def red_joined_idle(store, row, t):
+    """None while a joined red is within its window or worked on (marked so), else the release outcome."""
+    m = lease_meta(row)
+    if not m.get("joined_at") or m.get("progressed"):
+        return None
+    it = store.item("red", str(row.get("item") or "").split(":", 1)[-1]) if row.get("item") else None
+    d = (it or {}).get("data") or {}
+    if it and (it["state"] in ("fix-pending",) + RED_TERMINAL or d.get("fix")):
+        red_joined_progress(store, row, f"fix {(d.get('fix') or {}).get('entry') or it['state']}")
+        return None
+    sha = red_fixes_red_commits(m.get("worktree"), red_names(d)) if it else None
+    if sha:
+        red_joined_progress(store, row, f"commit {sha[:10]}")
+        return None
+    idle = env_num("AGENTCTL_RED_JOIN_IDLE", RED_JOIN_IDLE)
+    if t - float(m["joined_at"]) < idle:
+        return None
+    if it:
+        try:
+            store.update_item("red", it["id"], it["version"],
+                              {"family_released": sorted(set(d.get("family_released") or []) | {row["holder"]})})
+        except StaleVersion:
+            return None  # another writer moved the red: the next pass
+    return (f"RELEASED: no progress on it {fmt_age(t - float(m['joined_at']))} after it joined {row['holder']}'s lease "
+            f"(no commit, land or note for it within {fmt_age(idle)}): offered to a fixer of its own")
+
+
+def red_renew_holders(store, t):
+    """Each live interactive claim renewed by its worktree's activity (no activity: it lapses at its TTL); each sibling
+    exactly as long as its run's fixer's own lease; a joined red released when it shows no progress (red_joined_idle)."""
+    for row in store.list("red/"):
+        if not lease_is_live(row, t):
+            continue
+        m = lease_meta(row)
+        why = red_joined_idle(store, row, t) if m.get("kind") in ("claim", "sibling") else None
+        if why:
+            store.revoke(row["name"], why)
+            continue
+        if m.get("kind") == "claim":
+            mark = red_wt_mark(m.get("worktree"))
+            ttl = m.get("ttl") or RED_CLAIM_TTL
+        elif m.get("kind") == "sibling":  # held by its run's fixer: lives exactly as long as that fixer's own lease
+            prim = store.get(m.get("primary") or "")
+            if not lease_is_live(prim, t) or prim["holder"] != row["holder"]:
+                store.revoke(row["name"], "its run's fixer ended")
+                continue
+            mark, ttl = f"with {prim['renewed_at']}", RED_FIXER_TTL
+        else:
+            continue
+        if mark:
+            store.renew(row["name"], row["epoch"], row["secret"], mark, ttl)
+
+
+def fixer_keys(r):
+    """The red keys a fixer record holds or held: its own red's, its lease's and its run's other reds' leases'."""
+    names = [r.get("lease")] + [x.get("name") for x in r.get("extra_leases") or []]
+    keys = {n.split("/", 1)[1] for n in names if n and n.startswith("red/")}
+    return keys | ({r["key"]} if r.get("key") else set())
+
+
+# -- the dispatcher (the phase-2 shape: offers and leases only)
+def red_fixers_alive(store, t):
+    """One row per live FIXER (a fixer holding several reds' leases counts once)."""
+    out = {}
+    for r in store.list("red/"):
+        if lease_is_live(r, t) and lease_meta(r).get("kind") in ("fixer", "sibling", "owned"):
+            out.setdefault(r["holder"], r)
+    return list(out.values())
+
+
+# ONE RED MODEL (docs/simplification-2026-10.md item 5; replaces the gate/other/overflow capacity classes, the borrow
+# and the separate one-run and one-family rules). A red is (workflow, failing job, signature) -- `key` hashes the
+# workflow and the signature (the normalized first error line; the job when none was read), `jobs` are every job
+# failing that way. Every red belongs to ONE QUEUE FAMILY:
+# its configured family (red-families.json: convergence, ...), else its run (`run:<workflow>#<number>`). The open
+# fixer offers are ONE PRIORITY QUEUE (gate < fix < outside < flake, then a test failure first, then the oldest), and
+# the dispatcher keeps EXACTLY ONE FIXER PER FAMILY: a family whose fixer is at work gets each new red under that
+# fixer's lease (a sibling, told in RED-INBOX.md); a family with none gets one fixer, its other open offers taken with
+# it, while fewer than RED_FIXERS fixers are alive in all. One family never holds two slots, so no class reserves are
+# needed for fairness; an offer that waits RED_STARVE with no slot escalates as STARVED (then every cycle). Every wait
+# names what it waits for and when.
+RED_FIXERS = 5           # live fixers at once, every family together ($AGENTCTL_RED_FIXERS)
+RED_STARVE = 45 * 60     # an offer waiting this long for a slot is STARVED ($AGENTCTL_RED_STARVE)
+
+
+def red_queue_family(d):
+    """The queue family of a red (its data, its picture, a fixer record): the configured family, else its run."""
+    fam = red_family(d)
+    if fam:
+        return fam
+    run = d.get("run") if d.get("run") is not None else d.get("last_run")
+    num = run.get("number") if isinstance(run, dict) else run
+    o_r = red_repo_of(d)
+    return f"run:{d.get('workflow')}#{num}" if o_r == RED_PRIMARY else f"run:{o_r}:{d.get('workflow')}#{num}"
+
+
+RED_MODEL = 2  # the store's red data model (meta red_model): 2 = the queue (item 5); red_migrate brings older data up
+
+
+def red_identity(d):
+    """A red's identity fields: its signature (the normalized first error line, None when none was read) and its
+    configured family (None: its run is its queue family)."""
+    return {"signature": norm_line(d.get("line")) or None, "family": red_family(d)}
+
+
+def red_migrate(store):
+    """IN-PLACE MIGRATION to RED_MODEL, once per store (meta red_model), run by the tick: every open red gets its
+    identity fields (signature, family). The capacity classes' lease meta (`slot`) needs nothing: it is no longer read,
+    and a fixer's lease ends with it. Idempotent; a red another writer moved meanwhile is done at the next tick.
+    Returns how many reds it updated."""
+    if int(store.meta_get("red_model", 1) or 1) >= RED_MODEL:
+        return 0
+    n, left = 0, 0
+    for it in store.items("red"):
+        if it["state"] in RED_TERMINAL:
+            continue
+        want = red_identity(it["data"])
+        if all(k in it["data"] and it["data"][k] == v for k, v in want.items()):
+            continue
+        try:
+            store.update_item("red", it["id"], it["version"], want)
+            n += 1
+        except StaleVersion:
+            left += 1
+    if not left:
+        store.meta_set("red_model", RED_MODEL)
+    return n
+
+
+def red_cap():
+    return int(env_num("AGENTCTL_RED_FIXERS", RED_FIXERS))
+
+
+def red_capacity(store, waited, t, alive=None):
+    """(True, None) when a fixer may start now (fewer than RED_FIXERS alive), else (False, why): what it waits for and
+    WHEN, `STARVED: ...` past RED_STARVE."""
+    alive = red_fixers_alive(store, t) if alive is None else alive
+    n, cap = len(alive), red_cap()
+    if n < cap:
+        return True, None
+    first = min(alive, key=lambda r: float(r.get("max_until") or r.get("expires_at") or 0)) if alive else None
+    hm = lambda x: time.strftime("%H:%M", time.localtime(x))
+    eta = f"; next slot when {first['holder']} ends by {hm(float(first.get('max_until') or first.get('expires_at')))}" \
+        if first else ""
+    starve = env_num("AGENTCTL_RED_STARVE", RED_STARVE)
+    head = f"capacity {n}/{cap}, waiting {fmt_age(waited)}"
+    if waited >= starve:
+        return False, f"STARVED: {head}, past its {fmt_age(starve)} window{eta}"
+    return False, head + eta
+
+
+def red_family_holder(store, fam, t, active=None):
+    """The live primary lease on a red of queue family fam, or None: a fixer's own (not a sibling), or a CLAIM made
+    inside a dispatched fixer (`red claim <M>` there: its record on the lease, 2026-11-07 -- the dispatcher started a
+    second owner session beside the consolidated non-gate fixer). An interactive session's claim takes ONLY its red,
+    never its family (the owner, 2026-11-08): family holding is for the sessions agentctl itself starts."""
+    if not fam:
+        return None
+    active = active if active is not None else red_active(store)
+    for row in store.list("red/"):
+        m = lease_meta(row)
+        if not lease_is_live(row, t) or not (m.get("kind") == "fixer" or (m.get("kind") == "claim" and m.get("fixer"))):
+            continue
+        it = active.get(row["name"].split("/", 1)[1])
+        if it and red_queue_family(it["data"]) == fam:
+            return row
+    return None  # a holder is ONLY a live lease
+
+
+def red_dispatcher(store, o_r, repo, t):
+    """THE QUEUE (see ONE RED MODEL above): the open fixer offers, highest priority first; per queue family exactly one
+    fixer -- a new red of a family at work joins its fixer, a family with none is dispatched once (its other open
+    offers taken with it) while a slot is free and dispatch can run. An offer that cannot be taken says why (its
+    escalation names it)."""
+    acts = []
+    offs = store.offers("fixer")
+    if not offs:
+        return acts
+    offs.sort(key=lambda o: (o["priority"], KIND_ORDER.get(o["picture"].get("kind"), 1), o["opened_at"]))
+    blocker = cached_dispatch_blocker()
+    gone = set()
+    for off in offs:
+        if off["id"] in gone:
+            continue
+        pic = off["picture"]
+        if repo_dispatch_off(store, red_repo_of(pic)):  # its repo's dispatch is off (the owner's): never dispatched
+            store.offer_reason(off["id"], f"dispatch off for {red_repo_of(pic)} (owner)")
+            continue
+        fam = red_queue_family(pic)
+        owned = family_owned(fam) and off["tier"] not in ("revert", "author", "lander", "blame")
+        live = owner_alive(store, fam, t) if owned else None
+        if owned and not live and (ending := owner_still_ending(store, fam, t)):
+            # its last wrapper lost its heartbeat (orphaned, revoked) and is still ending: the next starts after it
+            if ending != off.get("reason"):
+                store.offer_reason(off["id"], ending)
+            continue
+        if owned and live:
+            # THE FAMILY'S OWNER IS ALIVE: the red is its next turn -- its lease taken for the owner and handed over
+            took = store.take(off["id"], owner_holder(fam), OWNER_TTL, OWNER_MAX,
+                              meta={"kind": "owned", "family": fam, "owner": owner_lease(fam), "host": socket_host(),
+                                    "worktree": lease_meta(live).get("worktree"), "gate": bool(pic.get("gate"))})
+            if took and "epoch" in took:
+                owner_hand(fam, off["lease"], took)
+                red_family_tell(live, pic, fam)
+                acts.append(f"{pic.get('workflow')} #{(pic.get('run') or {}).get('number')}: red {pic['key']} handed "
+                            f"to its family {fam}'s owner")
+            continue
+        holder = red_family_holder(store, fam, t) if off["tier"] not in ("revert", "lander", "blame") else None
+        item = store.item("red", off["item"].split(":", 1)[1]) or {"data": {}}
+        if holder and holder["holder"] in (item["data"].get("family_released") or []):
+            holder = None  # released from that holder for no progress (red_joined_idle): a fixer of its own, never back
+        if holder and holder["name"] != off["lease"]:
+            # ONE FIXER PER FAMILY: a new red of a family whose fixer is at work is that fixer's -- under its lease; an
+            # owned family's too while its owner is not running (never a second session beside a live holder). A
+            # claim's red is a claim of the same worktree (renewed by its activity, red_renew_holders), a fixer's a sibling;
+            # the holder's note is about its own red, never the joined one's
+            claim = lease_meta(holder).get("kind") == "claim"
+            took = store.take(off["id"], holder["holder"], *((RED_CLAIM_TTL, RED_CLAIM_MAX) if claim else
+                                                             (RED_FIXER_TTL, RED_FIXER_MAX)),
+                              meta={**lease_meta(holder), "family": fam, "outcome": None, "note": None, "notes": None,
+                                    "gate": bool(pic.get("gate")), "joined_at": t, "progressed": None,
+                                    **({} if claim else {"kind": "sibling", "primary": holder["name"]})})
+            if took and "epoch" in took:
+                red_family_tell(holder, pic, fam)
+                acts.append(f"{pic.get('workflow')} #{(pic.get('run') or {}).get('number')}: red {pic['key']} joined "
+                            f"its family {fam}'s fixer {holder['holder']}")
+            continue
+        after = float(item["data"].get("dispatch_after") or 0)
+        # NOTHING STOPS A GATE FIX, EVER (the owner, 2026-10-31): a gate red's fixer starts past the cap, and no fixer
+        # waits on laptop pressure (that holds only other work: gov_fits); a gate fixer still counts toward the cap
+        free, cap_why = (True, None) if pic.get("gate") else red_capacity(store, t - float(off.get("opened_at") or t), t)
+        if off["tier"] == "author":
+            why = f"offered to its author ({str((pic.get('author') or {}).get('worktree') or '?').replace(HOME, '~')})"
+        elif off["tier"] == "blame":
+            why = blame_waiting(pic.get("blame"))
+        elif after > t:
+            last = next((str(h.get("outcome") or "") for h in reversed(item["data"].get("history") or [])
+                         if str(h.get("outcome") or "").startswith("NOT STARTED")), "")
+            last = re.sub(r"^(NOT STARTED: )+", "", last)
+            why = (f"its last {item['data'].get('start_failures')} fixer(s) never got going; the next at "
+                   f"{time.strftime('%H:%M', time.localtime(after))}" + (f"; launch error: {last[:240]}" if last else ""))
+        elif blocker:
+            why = blocker
+        elif not free:
+            why = cap_why
+        else:
+            why = None
+        if why:
+            if why != off.get("reason"):
+                store.offer_reason(off["id"], why)
+            continue
+        # ANOTHER WATCHED REPO'S RED: its fixer works in that repo's clone on this machine (red-repos.json `clone`)
+        po = pic.get("repo") or o_r
+        prepo = repo if po == o_r else red_repo_clone(po)
+        if po != o_r and not prepo:
+            why = f"no clone of {po} on this machine (red-repos.json `clone`)"
+            if why != off.get("reason"):
+                store.offer_reason(off["id"], why)
+            continue
+        gap = claude_trust_gap(prepo)
+        if gap:  # never a launch claude refuses: said on its offer, dispatched once trusted -- the owner was asked
+            why = f"NOT DISPATCHABLE: {gap}"  # when the repo was registered (fixer.py trust_asks), never once per offer
+            if why != off.get("reason"):
+                store.offer_reason(off["id"], why)
+            continue
+        num = (pic.get("run") or {}).get("number")
+        holder_id = owner_holder(fam) if owned else f"laptop:fixer:red-{pic['key']}-{int(pic.get('attempts') or 0) + 1}"
+        meta = red_dispatch_meta(pic, fam, owned, off, num)
+        ttl, max_ = (OWNER_TTL, OWNER_MAX) if owned else (RED_FIXER_TTL, RED_FIXER_MAX)
+        took = store.take(off["id"], holder_id, ttl, max_, meta=meta)
+        if not took or "held" in took or "gone" in took:
+            continue
+        extra = []
+        if off["tier"] not in ("revert", "resume", "lander"):
+            for sib in offs:
+                if sib["id"] != off["id"] and sib["id"] not in gone and sib["tier"] not in ("author", "revert", "resume",
+                                                                                             "lander", "blame") \
+                        and red_queue_family(sib["picture"]) == fam:
+                    st_ = store.take(sib["id"], holder_id, ttl, max_, meta=meta)
+                    if st_ and "epoch" in st_:
+                        extra.append({"name": sib["lease"], "epoch": st_["epoch"], "secret": st_["secret"],
+                                      "picture": sib["picture"]})
+                        gone.add(sib["id"])
+        ok, msg = (owner_spawn if owned else red_spawn)(store, po, prepo, *((fam,) if owned else ()), off, took, extra)
+        if not ok:
+            for x in [{"name": off["lease"], **took}] + extra:
+                store.release(x["name"], x["epoch"], x["secret"], outcome=f"NOT STARTED: {str(msg)[:200]}")
+        acts.append(msg)
+    return acts
+
+
+def red_dispatch_meta(pic, fam, owned, off, num):
+    """The lease meta the dispatcher takes a red's offer with; `host`: the machine its wrapper runs on, the only one
+    that may judge its pid (holder_work)."""
+    return {"kind": "owned" if owned else "fixer", "gate": bool(pic.get("gate")), "family": fam,
+            "tier": off["tier"], "run": num, "workflow": pic.get("workflow"), "host": socket_host()}
+
+
+def red_spawn(store, o_r, repo, off, took, extra=()):
+    """Start what the tier says, under the taken lease: the revert fallback, or a headless fixer (fresh worktree; the
+    same session and worktree for `resume`)."""
+    pic, tier = off["picture"], off["tier"]
+    u = {"workflow": pic["workflow"], "job": pic.get("job"), "jobs": pic.get("jobs"), "kind": pic.get("kind") or "test",
+         "line": pic.get("line"), "run": pic.get("run") or {}, "refuted": pic.get("refuted"), "predicts": pic.get("predicts"),
+         "flake": pic.get("red_kind") == "flake", "diagnosis": pic.get("diagnosis"), "key": pic["key"],
+         "names": set(pic.get("names") or []), "prior_work": pic.get("prior_work"), "old_note": pic.get("old_note"),
+         "history": pic.get("history") or [], "repo": pic.get("repo"), "decision": pic.get("decision")}
+    for x in extra:  # the run's other reds, under the same fixer
+        u["jobs"] = sorted(set(u.get("jobs") or [u["job"]]) | set(x["picture"].get("jobs") or []))
+    if tier == "lander":  # THE DECISION RULE's determined culprit: reverted, its lander revived (blame.py)
+        return lander_spawn(store, o_r, repo, off, took, u)
+    b = pic.get("blame") or {}
+    if b.get("reland_due") and not b.get("reland"):  # its revert was refuted: the change relanded before a fixer starts
+        rl = blame_reland(o_r, repo, u, b)
+        it_ = store.item("red", off["item"].split(":", 1)[1])
+        if it_:
+            store.update_item("red", it_["id"], it_["version"], {"blame": dict(b, reland=rl)})
+        inbox_write("red", f"RED RELAND: {red_what(pic)}: {rl['msg']}", [], [], 0 if rl.get("ok") else 1)
+        b = dict(b, reland=rl)
+    if b.get("culprit") is not None:
+        u["blame_note"] = blame_note(b)
+    if tier == "revert":
+        dec = pic.get("decision") or {}
+        if DECIDED_REVERT.match(str(dec.get("answer") or "")):
+            u["revert_why"] = (f"the owner decided {u['workflow']} #{u['run'].get('number')} is fixed by this revert "
+                               f"({str(dec.get('answer'))[:120]!r}) and no fixer landed it within "
+                               f"{fmt_age(env_num('AGENTCTL_RED_DECIDED_REVERT_MAX', RED_DECIDED_REVERT_MAX))} "
+                               "(decided_revert).")
+        ok, msg = red_revert(o_r, repo, u, pic.get("culprit"))
+        store.note(off["lease"], took["epoch"], took["secret"], msg)
+        it_id = off["item"].split(":", 1)[1]
+        it = store.item("red", it_id)
+        if it:
+            store.update_item("red", it_id, it["version"], {"reverted": {"at": ts(), "culprit": pic.get("culprit"), "ok": ok}})
+        return ok, f"RED REVERT: {pic['workflow']} #{u['run'].get('number')}: {msg}"
+    last = (pic.get("history") or [{}])[-1]
+    resume = last if tier == "resume" else None
+    if tier == "resume":
+        resume = dict(last, note=(f"YOUR FIX DID NOT FIX IT ({last.get('outcome')}): find out why, and fix it properly "
+                                  f"(same rules; Fixes-Red: {u['run'].get('number')})."))
+    effort = "max" if tier == "deep" else None
+    if tier == "deep":
+        u["diagnosis"] = red_investigation_brief(pic)
+    return red_dispatch(o_r, repo, u, why=f"tier {tier}", resume=resume, effort=effort, lease=off["lease"], took=took,
+                        extra=extra, store=store)
+
+
+def red_investigation_brief(pic):
+    verdicts = " | ".join(f"{h.get('at')}: {h.get('holder')}: {str(h.get('outcome'))[:160]}" for h in pic.get("history") or [])
+    return (f"DEEP INVESTIGATION (effort max) after {pic.get('attempts')} attempts did not clear it. Failing: "
+            f"`{pic.get('job')}`: {str(pic.get('line') or '')[:300]!r}. Refuted fixes: "
+            f"{', '.join(x[:10] for x in pic.get('refuted') or []) or 'none'}. Attempts: {verdicts or 'none'}. Find the "
+            "ROOT CAUSE they all missed and fix it in the code. A code red is never the owner's: no `red block` unless you "
+            "PROVE the cause is outside the code and only the owner can act")
