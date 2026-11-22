@@ -127,6 +127,23 @@ class OwnedTest(unittest.TestCase):
         self.assertTrue(seen)
         self.assertFalse(any(seen[:3]), "a handler was installed after the record showed")
 
+    def test_an_owner_in_a_removed_directory_still_records(self):
+        """The owner string is the inbox's (caller_owner): a removed cwd (a watch closing its own worktree) reads as
+        what it was, never an OSError out of the record (owned.py used os.getcwd() itself, inbox.py safe_cwd)."""
+        here, gone = os.getcwd(), tempfile.mkdtemp()
+        saved = os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+        try:
+            os.chdir(gone)
+            os.rmdir(gone)
+            with A.Owned("test", "k-gone", argv=["x"]) as o:
+                rec = A.read_record(o.record)
+            self.assertEqual(rec["owner"], A.caller_owner())
+            self.assertTrue(rec["owner"].endswith("@" + rec["cwd"]))
+        finally:
+            os.chdir(here)
+            if saved is not None:
+                os.environ["CLAUDE_CODE_SESSION_ID"] = saved
+
     def test_a_finished_run_is_not_cancelled(self):
         with A.Owned("test", "k3", argv=["x"]) as o:
             o.add_run("o/r", 5)

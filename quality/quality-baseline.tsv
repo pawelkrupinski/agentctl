@@ -659,7 +659,7 @@ cyclomatic	hunks_resolve	22
 cyclomatic	identity_change	15
 cyclomatic	idle_servers	11
 cyclomatic	inbox_wait	35
-cyclomatic	inbox_write	12
+cyclomatic	inbox_write	11
 cyclomatic	inv_w1	38
 cyclomatic	inv_wb	15
 cyclomatic	inv_wr	24

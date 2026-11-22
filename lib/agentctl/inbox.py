@@ -56,7 +56,13 @@ class VerdictTee:
         return getattr(self.stream, name)
 
 
-def safe_cwd():
+def caller_owner(cwd: str | None = None) -> str:
+    """Who is calling, as a record's `owner`: the Claude session, else `<user>@<cwd>` (the one copy: Owned's record and
+    every inbox entry)."""
+    return os.environ.get("CLAUDE_CODE_SESSION_ID") or f"{os.environ.get('USER', '?')}@{cwd or safe_cwd()}"
+
+
+def safe_cwd() -> str:
     """The cwd, or what it was: a watch's WATCH OK closes the worktree it runs in, and os.getcwd() then raises (the
     verdict was lost with it)."""
     try:
@@ -108,7 +114,7 @@ def inbox_write(command, verdict, verdicts, tail, exit_code, final=True, cwd=Non
     rec = {"id": eid, "time": iso_at(now.timestamp()), "at": now.timestamp(), "command": command, "argv": sys.argv[1:],
            "cwd": cwd or here, "pid": os.getpid(), "final": final, "exit": exit_code, "verdict": verdict,
            "kind": inbox_kind(verdict, final),
-           "owner": os.environ.get("CLAUDE_CODE_SESSION_ID") or f"{os.environ.get('USER', '?')}@{here}",
+           "owner": caller_owner(here),
            "claude_pid": int(os.environ["CLAUDE_PID"]) if (os.environ.get("CLAUDE_PID") or "").isdigit() else None,
            "agent": agent_name(), "verdicts": verdicts, "tail": tail, "reply": bool(reply)}
     if item:

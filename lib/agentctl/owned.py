@@ -151,8 +151,7 @@ class Owned:
     def _write(self):
         rec = {"kind": self.kind, "key": self.key, "pid": os.getpid(), "started": self.started,
                "process_start": process_start(os.getpid()),
-               "owner": os.environ.get("CLAUDE_CODE_SESSION_ID") or f"{os.environ.get('USER', '?')}@{os.getcwd()}",
-               "cwd": os.getcwd(), "argv": self.argv, "code": code_version(), "runs": [list(r) for r in self.runs]}
+               "owner": caller_owner(), "cwd": safe_cwd(), "argv": self.argv, "code": code_version(), "runs": [list(r) for r in self.runs]}
         write_json(self.record, rec, indent=None)
 
     def _signals(self):
