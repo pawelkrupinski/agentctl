@@ -15,9 +15,10 @@ from agentctl.slots import LAND_SUBCOMMANDS
 from agentctl.cliops import (
     add_config, add_decide, add_dispatch, add_gov, add_inbox, add_issue, add_laptop, add_lease, add_maintain,
     add_park, add_reap, add_recover, add_red, add_revert, add_status, add_supersede, add_unpark)
+from agentctl.cliops import Subparsers
 
 
-def parser():
+def parser() -> argparse.ArgumentParser:
     """agentctl's argument parser: the usage text, then every command's subparser, in COMMANDS order."""
     ap = argparse.ArgumentParser(prog="agentctl", description=USAGE, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -26,7 +27,7 @@ def parser():
     return ap
 
 
-def add_wait(sub):
+def add_wait(sub: Subparsers) -> None:
     w = sub.add_parser("wait")
     wsub = w.add_subparsers(dest="kind", required=True)
     wr = wsub.add_parser("run", help="block until GitHub Actions runs finish; print only the verdicts",
@@ -44,7 +45,7 @@ def add_wait(sub):
         p.add_argument("--timeout", type=int, default=6 * 3600)
 
 
-def add_state(sub):
+def add_state(sub: Subparsers) -> None:
     s = sub.add_parser("state", help="print/update scratchpad/state-<topic>.md (the hand-off file for long waits)",
                        description="Print scratchpad/state-<topic>.md, creating it from the template first. --set field=value "
                        "replaces a field, --add field=value appends to a comma-separated one. Write it before ending a turn "
@@ -54,7 +55,7 @@ def add_state(sub):
     s.add_argument("--add", action="append")
 
 
-def add_prepush_check(sub):
+def add_prepush_check(sub: Subparsers) -> None:
     pp = sub.add_parser("prepush-check", help="refuse a push that strays outside --allow or reverts others' work on main",
                         description="Refuses when base...head touches a file outside the allowed set, or returns more than "
                         "--max-foreign (2) files to an older main version (the `reset --soft` squash onto a moved main). "
@@ -66,7 +67,7 @@ def add_prepush_check(sub):
     pp.add_argument("--hook", nargs="+", metavar="REMOTE [URL]")
 
 
-def add_cleanup(sub):
+def add_cleanup(sub: Subparsers) -> None:
     c = sub.add_parser("cleanup", help="remove ONLY proven-merged worktrees/branches and finished measure/* branches",
                        description="Removes only clean, idle worktrees whose HEAD is on origin/main (ancestor or all commits "
                        "patch-equivalent), their branches, and remote measure/* branches whose runs finished. Every deletion "
@@ -84,7 +85,7 @@ def add_cleanup(sub):
     c.add_argument("-v", "--verbose", action="store_true", help="also list what is kept and why")
 
 
-def add_ci_why(sub):
+def add_ci_why(sub: Subparsers) -> None:
     cw = sub.add_parser("ci-why", help="why is main red: the gating runs' failed jobs, log tails, infra vs test, clearing rule",
                         description=CI_WHY_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     cw.add_argument("target", nargs="?", default="main", help="`main` (default) or a run id to explain")
@@ -94,7 +95,7 @@ def add_ci_why(sub):
     cw.add_argument("--cached", action="store_true", help="with --summary: the line the waiting processor published if under 3 min old, else a live read, else `gate UNREAD (as of HH:MM ...)`")
 
 
-def add_land(sub):
+def add_land(sub: Subparsers) -> None:
     ld = sub.add_parser("land", help="fetch, rebase onto origin/main, prepush-check, push (hook runs), verify: LANDED <sha>",
                         description=LAND_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     ld.add_argument("lcmd", nargs="?", choices=sorted(LAND_SUBCOMMANDS), metavar="status|hold|release|cancel",
@@ -134,7 +135,7 @@ def add_land(sub):
                     help="after WATCH OK, keep the worktree land ran from (default: closed when proven merged and clean)")
 
 
-def add_env(sub):
+def add_env(sub: Subparsers) -> None:
     ev = sub.add_parser("env", help="print sdkman sbt/java export lines (--print) or check the agent environment (--check)",
                         description=ENV_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     eg = ev.add_mutually_exclusive_group()
@@ -143,7 +144,7 @@ def add_env(sub):
     ev.add_argument("--ns", choices=("movies", "bitcashier"), help="vault namespace (default: movies inside ~/projects/movies, else bitcashier)")
 
 
-def add_orphans(sub):
+def add_orphans(sub: Subparsers) -> None:
     o = sub.add_parser("orphans", help="list stray owners, wait loops and sbt servers (worktree, owner or runs gone; old code)",
                        description="Lists owner records that are strays (a dead process's record and its uncancelled runs, "
                        "an owner on old code, an owner whose cwd is gone), and wait loops and sbt servers that are orphaned: "
@@ -156,7 +157,7 @@ def add_orphans(sub):
                         "wait loops, stuck sbt servers), never an owner merely on old code; every kill is logged")
 
 
-def add_waiting(sub):
+def add_waiting(sub: Subparsers) -> None:
     wg = sub.add_parser("waiting", help="the processor and its queue: changes checked and pushed, held while main is red, batched at green",
                         description=WAITING_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     wgs = wg.add_subparsers(dest="wcmd", required=True)
@@ -187,7 +188,7 @@ def add_waiting(sub):
     wga.add_argument("--close")
 
 
-def add_watch(sub):
+def add_watch(sub: Subparsers) -> None:
     wt = sub.add_parser("watch", help="watch Main and the convergence for a landed sha (land's watch, resumed after a "
                                       "restart on new code): WATCH OK / RED / UNKNOWN")
     wt.add_argument("--sha", required=True)
@@ -199,7 +200,7 @@ def add_watch(sub):
                     help="a run the landed commits claim to fix (Fixes-Red); the sha's own trailers are read too")
 
 
-def add_sweep(sub):
+def add_sweep(sub: Subparsers) -> None:
     sw = sub.add_parser("sweep", help="daily report: unmerged idle worktrees/branches (listed); remote branches merged into "
                                       "main (deleted, standing OK)")
     sw.add_argument("--repo", action="append", help="a checkout (repeatable); default movies")
@@ -208,7 +209,7 @@ def add_sweep(sub):
     sw.add_argument("--no-report", action="store_true", help="do not write ~/.cache/agentctl/sweep/<date>.txt")
 
 
-def add_store(sub):
+def add_store(sub: Subparsers) -> None:
     sto = sub.add_parser("store", help="phase 2: the store's HTTP API (`store serve`, ci-runner's agentctl-store unit)")
     stos = sto.add_subparsers(dest="scmd", required=True)
     sts = stos.add_parser("serve", help="serve $AGENTCTL_STATE_ROOT/store.db: the §6.3 API and GET /metrics")
@@ -230,7 +231,7 @@ def add_store(sub):
     stu.add_argument("url", help="http://localhost:3014 (through the tunnel)")
 
 
-def add_github_app(sub):
+def add_github_app(sub: Subparsers) -> None:
     gha = sub.add_parser("github-app", help="ci-runner's GitHub App identity (AGENTCTL_IDENTITY=github-app): an "
                          "installation token, or git's credential helper")
     ghs = gha.add_subparsers(dest="gcmd", required=True)
@@ -241,7 +242,7 @@ def add_github_app(sub):
     ghc.add_argument("op", nargs="?", default="get")
 
 
-def add_tick(sub):
+def add_tick(sub: Subparsers) -> None:
     tk = sub.add_parser("tick", help="the processor: the reconciler's loop of ticks (`tick service install|uninstall|status`: "
                         "it as the launchd agent)")
     tk.add_argument("tcmd", nargs="?", choices=("service",), help="service: the launchd agent")
@@ -250,12 +251,12 @@ def add_tick(sub):
     tk.add_argument("--repo", help="the repository (default: the cwd's, else the movies clone)")
 
 
-def add_queue(sub):
+def add_queue(sub: Subparsers) -> None:
     q = sub.add_parser("queue", help="RETIRED 2026-10-26: use `agentctl land` (prints this and exits 2)")
     q.add_argument("rest", nargs=argparse.REMAINDER)
 
 
-def add_checks(sub):
+def add_checks(sub: Subparsers) -> None:
     ck = sub.add_parser("checks", help="the pre-commit check slots: status, and stats per concurrency level")
     cks = ck.add_subparsers(dest="ccmd", required=True)
     cks.add_parser("status", help="the slots and their holders")

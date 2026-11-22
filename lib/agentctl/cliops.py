@@ -2,14 +2,18 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import argparse
+from typing import TypeAlias
 from agentctl.inbox import WAIT_KINDS_DEFAULT
 from agentctl.redask import OWNER_CAUSES
 from agentctl.gov import GOV_CLASSES
 from agentctl.red import RED_HELP
 from agentctl.branches import DISPATCH_HELP
 
+# a parser's subcommands, as argparse's add_subparsers returns them (its class is private: the name is typeshed's)
+Subparsers: TypeAlias = "argparse._SubParsersAction[argparse.ArgumentParser]"
 
-def add_gov(sub):
+
+def add_gov(sub: Subparsers) -> None:
     gv = sub.add_parser("gov", help="the governor: ONE admission control for laptop memory and CPU (status, stats, admit, evict, route, replay, usage, cores)")
     gvs = gv.add_subparsers(dest="gcmd", required=True)
     gvs.add_parser("status", help="admitted work, waiters, memory, evictable idle sbt servers, pressure")
@@ -55,20 +59,20 @@ def add_gov(sub):
     gev.add_argument("--dry-run", action="store_true")
 
 
-def add_laptop(sub):
+def add_laptop(sub: Subparsers) -> None:
     lap = sub.add_parser("laptop", help="the laptop role (ONE machine holds it): `laptop status`, `laptop take [--yes]`")
     lap.add_argument("lcmd", choices=("status", "take"))
     lap.add_argument("--yes", action="store_true", help="take it without asking (it is held by another machine)")
 
 
-def add_lease(sub):
+def add_lease(sub: Subparsers) -> None:
     ls_ = sub.add_parser("lease", help="the store's leases (debugging): `lease list [prefix]`")
     ls_.add_argument("lcmd", choices=("list",))
     ls_.add_argument("prefix", nargs="?", default="")
     ls_.add_argument("--all", action="store_true", help="also the leases free for over an hour")
 
 
-def add_status(sub):
+def add_status(sub: Subparsers) -> None:
     sta = sub.add_parser("status", help="the snapshot (state.json): `--line` is the status line; else the open items "
                          "with their states and deadlines, and the leases")
     sta.add_argument("--line", action="store_true", help="the one status line (no git, no GitHub: state.json only)")
@@ -77,13 +81,13 @@ def add_status(sub):
                    "gate red nobody holds, W5 processor beat, W6 escalations notified, WM maintain ran")
 
 
-def add_recover(sub):
+def add_recover(sub: Subparsers) -> None:
     rcv = sub.add_parser("recover", help="the recovery registry: each open non-green condition, its probe, its next check")
     rcv.add_argument("rcmd", nargs="?", choices=("status", "tick"), default="status",
                      help="status (default): list; tick: probe every open condition now (clears what passes)")
 
 
-def add_inbox(sub):
+def add_inbox(sub: Subparsers) -> None:
     ib = sub.add_parser("inbox", help="every verdict: the reconciler's events (QUEUED, LANDED, WAITING, NOT LANDED, WATCH ...) and wait's, "
                                       "kept whether or not the agent that ran it is alive")
     ib.add_argument("ids", nargs="*", metavar="ID", help="only these entries (an id prefix); or `wait`: block until an "
@@ -109,7 +113,7 @@ def add_inbox(sub):
     ib.add_argument("-v", "--verbose", action="store_true", help="each entry's last output lines too")
 
 
-def add_decide(sub):
+def add_decide(sub: Subparsers) -> None:
     dc = sub.add_parser("decide", help="answer a red WAITING ON YOU: the answer is stored, the red re-dispatched with "
                         "it (IN PROGRESS); if the action fails you are told")
     dc.add_argument("red", help="the red: its key, or its run number or id (as the status line / ci-why name it); "
@@ -118,7 +122,7 @@ def add_decide(sub):
     dc.add_argument("--repo", help="the red's repo when it is not the primary's (a run number is per repo)")
 
 
-def add_red_claims(rds):
+def add_red_claims(rds: Subparsers) -> list[argparse.ArgumentParser]:
     """`red claim | beat | block | unblock | owner-push`: the parsers taking --repo."""
     rc_ = rds.add_parser("claim", help="take a red's lease (a run number or id, `local`, or its key): you are fixing it")
     rc_.add_argument("run")
@@ -153,7 +157,7 @@ def add_red_claims(rds):
     return [rc_, rbt, rb, rop]
 
 
-def add_red_others(rds):
+def add_red_others(rds: Subparsers) -> list[argparse.ArgumentParser]:
     """`red release | status | dispatch | unblame | auto` and the internal ones: the parsers taking --repo."""
     rr = rds.add_parser("release", help="drop your red lease")
     rr.add_argument("run")
@@ -182,7 +186,7 @@ def add_red_others(rds):
     return [rr, rdp, ra, rf, rfo, rl, rpb]
 
 
-def add_red(sub):
+def add_red(sub: Subparsers) -> None:
     rd = sub.add_parser("red", help="every red build held by a lease or offered: status / claim / beat / release / block",
                         description=RED_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     rds = rd.add_subparsers(dest="rcmd", required=True)
@@ -192,7 +196,7 @@ def add_red(sub):
                          "pre-commit hook asks)")
 
 
-def add_issue(sub):
+def add_issue(sub: Subparsers) -> None:
     iss = sub.add_parser("issue", help="file an agentctl defect (a fixer never edits ~/bin): stored, on the status page")
     iss.add_argument("text", nargs="*", help="what is wrong (none: --list)")
     iss.add_argument("--list", action="store_true", help="the open issues")
@@ -201,7 +205,7 @@ def add_issue(sub):
     iss.add_argument("--note", help="with --close: what fixed it")
 
 
-def add_revert(sub):
+def add_revert(sub: Subparsers) -> None:
     rvp = sub.add_parser("revert", help="reverted changes told to their landers: list the open notices, or ack one")
     rvs = rvp.add_subparsers(dest="rcmd")
     rvl = rvs.add_parser("list", help="the open notices (the default)")
@@ -216,7 +220,7 @@ def add_revert(sub):
     rvl.add_argument("--all", action="store_true", default=argparse.SUPPRESS, help="closed notices too")
 
 
-def add_dispatch(sub):
+def add_dispatch(sub: Subparsers) -> None:
     dp = sub.add_parser("dispatch", help="own every CI dispatch: run (the forge CLI's workflow run, recorded) / record / list",
                         description=DISPATCH_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     dps = dp.add_subparsers(dest="dcmd", required=True)
@@ -235,14 +239,14 @@ def add_dispatch(sub):
         p_.add_argument("--repo")
 
 
-def add_maintain(sub):
+def add_maintain(sub: Subparsers) -> None:
     mt = sub.add_parser("maintain", help="THE reaper, every 15 min (launchd net.bitcashier.agentctl-maintain): the reap, "
                                          "the cache expiry (7 days), and once a day the sweep")
     mt.add_argument("--dry-run", action="store_true", help="list what would be reaped / swept, kill and delete nothing")
     mt.add_argument("--sweep", action="store_true", help="run the sweep now, whatever the hour")
 
 
-def add_supersede(sub):
+def add_supersede(sub: Subparsers) -> None:
     sup = sub.add_parser("supersede", help="mark a worktree SUPERSEDED BY another change: no orphan escalation; it closes "
                          "itself when that change lands (no worktree: list the marks)",
                          description="A worktree whose work was carried into another change (rebased with real conflict "
@@ -255,7 +259,7 @@ def add_supersede(sub):
     sup.add_argument("--all", action="store_true", help="list: the closed and lapsed marks too")
 
 
-def add_park(sub):
+def add_park(sub: Subparsers) -> None:
     pk = sub.add_parser("park", help="PARK a worktree that is deliberately not landed: no orphan escalation; it "
                         "re-surfaces when its condition is met (no worktree: list the parked)",
                         description="A worktree whose commits are not on main for a reason (a design the owner is "
@@ -270,17 +274,17 @@ def add_park(sub):
     pk.add_argument("--owner-decision", action="store_true", help="until a person unparks it")
 
 
-def add_unpark(sub):
+def add_unpark(sub: Subparsers) -> None:
     upk = sub.add_parser("unpark", help="release a parked worktree: the orphan rules apply again")
     upk.add_argument("worktree")
 
 
-def add_reap(sub):
+def add_reap(sub: Subparsers) -> None:
     rp_ = sub.add_parser("reap", help="the reap alone: orphans --kill --safe (stale JVMs included); --dry-run lists")
     rp_.add_argument("--dry-run", action="store_true")
 
 
-def add_config(sub):
+def add_config(sub: Subparsers) -> None:
     cf = sub.add_parser("config", help="the knobs: what applies and from where (default), `defaults` (a complete "
                                        "agentctl.toml), `doc [--write]` (AGENTCTL.md's reference)")
     cf.add_argument("ccmd", nargs="?", choices=("show", "defaults", "doc"), default="show")

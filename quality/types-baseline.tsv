@@ -15,9 +15,7 @@ mypy-errors	cireport	66
 mypy-errors	ciwhy	123
 mypy-errors	classify	1
 mypy-errors	cleanup	54
-mypy-errors	cli	13
-mypy-errors	cliops	21
-mypy-errors	cliparser	18
+mypy-errors	cli	12
 mypy-errors	clones	1
 mypy-errors	conditions	42
 mypy-errors	config	19
