@@ -105,12 +105,12 @@ def probe_waiting_ok(a):
 PROBES = {"disk_free": lambda a: probe_disk_free(a), "quota_reset": lambda a: probe_quota_reset(a), "invariant": probe_invariant, "waiting_ok": probe_waiting_ok, "orphan_landed": probe_orphan_landed, "workflow_green": probe_workflow_green, "http": probe_http, "tcp": probe_tcp,
           "route": probe_route, "tunnel": probe_tunnel, "gate_read": probe_gate_read, "token": probe_token,
           "git_fetch": probe_git_fetch, "clone_health": probe_clone_health,
-          "change_source": lambda a: probe_change_source(a),
+          "change_source": lambda a: probe_change_source(a), "push_credential": probe_push_credential,
           "infra_requeue": probe_infra_requeue, "red_newer_verdict": lambda a: probe_red_newer_verdict(a),
           "batch_progress": lambda a: probe_batch_progress(a), "red_read": lambda a: probe_red_read(a)}
 PROBE_EVERY = {"disk_free": 300, "quota_reset": 300, "invariant": 60, "waiting_ok": 30, "orphan_landed": 300, "route": 5, "tunnel": 10, "gate_read": 15,
                "workflow_green": 60, "token": 60, "tcp": 60, "http": 120, "git_fetch": 120,
-               "clone_health": 120, "infra_requeue": 60, "change_source": 60, "red_newer_verdict": 60,
+               "clone_health": 120, "infra_requeue": 60, "push_credential": 60, "change_source": 60, "red_newer_verdict": 60,
                "batch_progress": 30, "red_read": 300}
 
 
@@ -122,7 +122,7 @@ def probe_words(kind, a):
             "tcp": lambda: f"{a.get('host')}:{a.get('port')} accepts",
             "route": lambda: "the network is back", "tunnel": lambda: "the tunnel answers",
             "gate_read": lambda: "the gate is read", "token": lambda: "the processor holds a token",
-            "git_fetch": lambda: f"git can read {remote()}/main",
+            "git_fetch": lambda: f"git can read {remote()}/main", "push_credential": lambda: "a push succeeds again",
             "invariant": lambda: f"invariant {a.get('id')} holds", "waiting_ok": lambda: "a waiting round completes",
             "orphan_landed": lambda: "its commits are on main or somebody works in it",
             "change_source": lambda: f"change {a.get('id')} closes or is queued again",
@@ -133,7 +133,7 @@ def probe_words(kind, a):
             "red_newer_verdict": lambda: f"a newer {a.get('workflow')} run than #{a.get('run')} no longer fails this way"}.get(kind, lambda: kind)()
 
 
-def run_probe(kind, args=None):
+def run_probe(kind: str, args: dict[str, Any] | None = None) -> ProbeResult:
     """Run probe `kind` on args: the ONE way to a ProbeResult. A probe that raises is ok=None (cannot tell)."""
     if kind not in PROBES:
         raise ConditionBypass(f"unknown probe {kind!r}: every condition needs a probe from PROBES")

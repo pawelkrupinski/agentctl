@@ -50,11 +50,21 @@ def requeue_infra(d, e, why, delay=None, reason=None, detail=None, repo=None):
                infra_reason=reason, infra_same=n_same, infra_reason_since=since)
     wlog(d, f"{e['id']}: {why}: queued again in {int(wait // 60)} min (infra retry {n}"
             + (", escalated" if sev == "escalate" else "") + ")")
-    if n_same >= QUEUE_INFRA_RETRIES or t - since >= env_num("AGENTCTL_INFRA_SAME_MAX", INFRA_SAME_MAX):
-        try:
-            infra_requeue_condition(d, e, why, reason, n_same, t - since, detail, repo)
-        except (Exception, SystemExit) as x:
-            err(f"{e['id']}: re-queued {n_same} times for {reason}, and its condition could not be opened ({str(x)[:160]})")
+    requeue_condition(d, e, why, reason, n_same, t - since, detail, repo)
+
+
+def requeue_condition(d: str, e: dict[str, Any], why: str, reason: str, n_same: int, age: float, detail: str | None,
+                      repo: str | None) -> None:
+    """The condition a re-queue opens, if any. A push credential failure: ONE for the clone, at once (no retry brings it
+    back). Any other reason: the infra one, once the same reason repeated QUEUE_INFRA_RETRIES times or for
+    INFRA_SAME_MAX."""
+    try:
+        if credential_failure(why) and push_credential_condition(d, why, detail, repo):
+            return
+        if n_same >= QUEUE_INFRA_RETRIES or age >= env_num("AGENTCTL_INFRA_SAME_MAX", INFRA_SAME_MAX):
+            infra_requeue_condition(d, e, why, reason, n_same, age, detail, repo)
+    except (Exception, SystemExit) as x:
+        err(f"{e['id']}: re-queued {n_same} times for {reason}, and its condition could not be opened ({str(x)[:160]})")
 
 
 INFRA_SAME_MAX = 30 * 60
@@ -63,12 +73,13 @@ STALL_KEEP_PLACE = 2  # stalls in a row re-queued with no backoff (the change ke
 FETCH_MAIN_FAILED = "its fetch of main failed"
 
 
-def infra_reason_of(why):
+def infra_reason_of(why: str) -> str:
     """An infra re-queue's reason without its details (what differs between two re-queues for the same cause)."""
     return re.sub(r"\s*\(.*?\)", "", why).split(":")[0].strip()
 
 
-def infra_requeue_condition(d, e, why, reason, n, age, detail, repo):
+def infra_requeue_condition(d: str, e: dict[str, Any], why: str, reason: str, n: int, age: float, detail: str | None,
+                            repo: str | None) -> Any:
     """The condition of a change re-queued n times for the same infra reason: main's fetch failing is the clone's
     (one per clone, cleared when it verifies and fetches main again); any other reason the change's own (cleared when
     it gets past it)."""
@@ -82,6 +93,43 @@ def infra_requeue_condition(d, e, why, reason, n, age, detail, repo):
                               key=f"main-fetch-{os.path.basename(os.path.abspath(repo))}", command="land", tail=tail)
     return open_condition("STALLED", text, run_probe("infra_requeue", {"d": d, "eid": e["id"], "reason": reason}), [],
                           key=f"infra-requeue-{e['id']}", command="land", cwd=e.get("worktree"), tail=tail)
+
+
+def push_credential_condition(d: str, why: str, detail: str | None, repo: str | None) -> Any:
+    """GitHub never got, or refused, this clone's push credential: ONE condition per clone, opened at the first such
+    re-queue and naming every change it holds, cleared by the next push that succeeds (probe_push_credential) -- not an
+    "infra failure" retried on a timer per change (2026-11-22: four changes held for hours by a dead helper)."""
+    repo = repo or repo_of_waiting(d)
+    held = credential_held(waiting_entries(d, open_only=False))
+    text = (f"PUSH CREDENTIAL: GitHub refused {host_role()}'s push credential for {os.path.basename(repo)}; "
+            f"{len(held)} change(s) wait on it ({', '.join(held[:6])}). Not the vault's and not the changes': "
+            f"Its credential helper there must work again (the App helper on ci-runner, gh's login on the laptop). "
+            f"Cleared by the next check-branch push that succeeds. Last: {redact_credentials(why)}")
+    tail = redact_credentials(detail or why).strip().splitlines()[-15:]
+    probe = run_probe("push_credential", {"d": d, "since": time.time(), "host": host_role()})
+    return open_condition("STALLED", text, probe, [], key=f"push-credential-{os.path.basename(os.path.abspath(repo))}",
+                          command="land", tail=tail, grace=0)
+
+
+def credential_held(entries: list[dict[str, Any]]) -> list[str]:
+    """The ids of the changes waiting on a push credential: queued or checking, re-queued for a credential failure."""
+    return [str(x.get("id")) for x in entries if x.get("status") in ("queued", "checking")
+            and credential_failure(x.get("why"))]
+
+
+def probe_push_credential(a: dict[str, Any]) -> tuple[bool | None, str]:
+    """A check-branch push of the clone's queue succeeded since the condition opened (save_remote's pushed_at), or no
+    change waits on a credential any more. Read from the queue's own records ONLY: never a credential helper (the
+    GitHub App's mints a token per call, 2026-11-22 review), and only on the host whose push failed (a["host"]):
+    another host's clone and helper say nothing about it, so there it cannot tell."""
+    if a.get("host") != host_role():
+        return None, f"read on {a.get('host')} only, where the push failed"
+    entries = waiting_entries(a["d"], open_only=False)
+    pushed = max((float((x.get("remote") or {}).get("pushed_at") or 0) for x in entries), default=0.0)
+    if pushed > float(a.get("since") or 0):
+        return True, f"a check-branch push succeeded at {iso_at(pushed)}"
+    held = credential_held(entries)
+    return not held, f"{len(held)} change(s) wait on it" if held else "no change waits on it"
 
 
 def probe_infra_requeue(a):

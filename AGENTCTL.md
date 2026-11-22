@@ -1070,6 +1070,14 @@ agent must be assigned to it".
   commits since its head), has its workflow dispatched on main to verify (redverify.py `red_main_verify`): once per main
   head, at most every `RED_MAIN_VERIFY_EVERY` (3 h), only where `red_verify_dispatch` allows it. A fix that lands
   without a trailer (tools-only, rightly) is seen by the run it starts, never waited for behind a weakly linked change.
+- **A vault ask names the secret it needs (2026-11-22, Tool self-tests #480, Alert backtest #20).** In a repo whose
+  main is unsigned (movies) nothing a fixer does but reading a secret touches the vault: commits are unsigned, pushes
+  authenticate as gh's keyring login on the laptop and as the GitHub App on ci-runner, the store token is in its
+  environment. There a `BLOCKED ON OWNER` / `decide` vault ask counts only when it names the read that failed --
+  `secrets run|get <ns> ...` (redvault.py `vault_ask_unfounded`); any other is routed back to the fixer saying so
+  (a failed land push, or `env --check` saying the vault is locked, is no reason). #480's and #20's asks came from a
+  land push that failed on DNS, whose NOT LANDED pointed at `env --check`; land's NOT LANDED now says what git said and
+  whose failure it is (queuesubmit.py `push_failure_why`), never the vault.
 - **No signature where main keeps none (2026-11-22).** A fixer of a repo whose main is unsigned (red-repos.json
   `signed: false`: movies, whose land rebases with NO_SIGN) commits unsigned (`fixer_env`: `commit.gpgsign` and
   `tag.gpgsign` false through git's env config), so commit signing never parks one on the vault: #348/#349's revert
@@ -2194,6 +2202,17 @@ The old names (design §14.5) answer until 2026-11-05, each printing its new one
 
 (`waiting check <id>`, `waiting check-batch <id>`, `waiting await` and `watch` are internal: the executors and `land --follow`.)
 
+- **A push credential failure is ONE condition, at once (2026-11-22).** ci-runner's check-branch pushes authenticate
+  through agentctl's own git credential helper (the GitHub App, ghapp.py), which runs the agentctl ENTRY (selfcode
+  `TOOL_PATH`): after ghapp became a real module the helper named ghapp.py itself, died on its import, and every push
+  said `fatal: could not read User` -- four changes re-queued "an infra failure" for hours. A push GitHub refuses for
+  its credential (classify.py `CREDENTIAL_SIGNATURES`) is never retried as a blip; the re-queue opens ONE `PUSH
+  CREDENTIAL` condition per clone naming the changes it holds and the helper's own error, cleared by the next
+  check-branch push that succeeds (save_remote's `pushed_at`), or when no
+  change waits on it (probe `push_credential`). The probe reads the queue's own records only, never a credential
+  helper (the GitHub App's mints a token per call), and only on the host whose push failed (elsewhere it cannot tell).
+  A token GitHub refuses opens the same condition. What it says is redacted (classify.py `redact_credentials`). A held
+  change's status names its retry's reason.
 - **An unread gate is RED** (the owner, 2026-10-27). When the processor cannot read the gate (GitHub, gh's auth or
   the token down) a production change waits and no batch is taken; one `UNKNOWN: ... cannot read the gate (…)` per
   spell, and `land status` prints `gate: UNREAD, taken as red (…)`.

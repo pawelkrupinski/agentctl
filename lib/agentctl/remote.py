@@ -425,7 +425,7 @@ def check_branch_push(repo, head, branch, sleep=time.sleep):
     """git push of head to the check branch, tried again through a transient failure; the last result."""
     for delay in (*CHECK_PUSH_DELAYS, None):
         r = git(repo, "push", "--quiet", "--force", remote(), f"{head}:refs/heads/{branch}", check=False)
-        if r.returncode == 0 or delay is None:
+        if r.returncode == 0 or delay is None or credential_failure(r.stderr):  # no wait brings a credential back
             return r
         err(f"push of {branch} failed ({(r.stderr or '').strip()[:160]}): again in {delay} s")
         sleep(delay)
@@ -461,7 +461,7 @@ def remote_check(repo, e, base, head, mode, own=None, red=False):
         branch = f"check/{'red-' if red else ''}{remote_mode_prefix(e, base, mode)}{e['id']}"
         r = check_branch_push(repo, head, branch)
         if r.returncode != 0:
-            return None, f"push of {branch} failed: {r.stderr.strip()[:300]}"
+            return None, check_push_failure(branch, r.stderr, host_role())
         rem = {"branch": branch, "head": e.get("head"), "base": base, "tip": head, "mode": mode, "run": None,
                "pushed_at": time.time(), "status": None}
         save_remote(d, e, rem)

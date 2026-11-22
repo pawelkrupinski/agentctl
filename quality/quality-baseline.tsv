@@ -324,7 +324,6 @@ cognitive	remote_run_listed	13
 cognitive	render_red_status	61
 cognitive	render_status_line	21
 cognitive	replay_cores	13
-cognitive	requeue_infra	12
 cognitive	resolve_run	23
 cognitive	resolve_successor	15
 cognitive	restart_gate	13
@@ -812,7 +811,6 @@ cyclomatic	remote_poll	28
 cyclomatic	remote_progress	11
 cyclomatic	render_red_status	48
 cyclomatic	render_status_line	20
-cyclomatic	requeue_infra	12
 cyclomatic	resolve_blocker	14
 cyclomatic	resolve_run	16
 cyclomatic	resolve_successor	17

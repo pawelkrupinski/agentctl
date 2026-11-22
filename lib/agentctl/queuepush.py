@@ -174,7 +174,8 @@ def retry_hold(e):
         return "regen", (f"its check waits for its agent's regeneration of {', '.join(hold.get('files') or [])}: "
                          f"`{hold.get('cmd')}` (run again at {day_hhmmz(e['retry_after'])} "
                          f"if unanswered; never rejected for it){gone}")
-    return "retry", f"its check is retried at {hhmmz(e['retry_after'])} (an infra failure)"
+    why = re.sub(r"^infra:\s*", "", str(e.get("why") or "")).strip()
+    return "retry", f"its check is retried at {hhmmz(e['retry_after'])} (an infra failure{': ' + why[:200] if why else ''})"
 
 
 def _push_checked(repo, d, st, t, e, fix, todo, pheld, kinds=None):

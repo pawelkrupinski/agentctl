@@ -19,13 +19,14 @@ def submit_ref(repo, d, e, to_server=False):
     """Push the change to refs/heads/land/<entry> (bounded); the entry records it. Never fatal in phase 1 (the queue does
     not need it); in phase 2 (to_server: ci-runner fetches the change from it) the caller refuses without it."""
     if not land_refs_supported(repo):
+        e["push_error"] = f"not pushed: {remote()}/main's scripts/hooks/pre-push takes no refs/heads/land/ ref"
         return None
     ref = f"refs/heads/land/{e['id']}"
 
     def push():  # the same sha to the change's own ref: idempotent, so tried again through a blip (net_retry)
         rc_, out_ = run_watched(["git", "push", "--quiet", remote(), f"{e['head']}:{ref}"], repo, tool_env(),
                                 os.path.join(d, f"submit-{e['id']}"), "submit", **push_bounds())
-        if rc_ != 0 and is_transient_network(out_):
+        if rc_ != 0 and is_transient_network(out_) and not credential_failure(out_):
             raise RuntimeError(tail_of(out_ or "", 2)[:200])
         return rc_, out_
     try:
@@ -37,8 +38,24 @@ def submit_ref(repo, d, e, to_server=False):
         if not to_server:
             save_entry(d, e)
         return ref
-    err(f"submit: could not push {ref} ({tail_of(out or '', 2)[:160]}); the change is queued all the same")
+    e["push_error"] = tail_of(out or "", 2).strip()[:300]
+    err(f"submit: could not push {ref} ({e['push_error'][:160]}); the change is queued all the same")
     return None
+
+
+def push_failure_why(text: object) -> str:
+    """What a failed push of land/<id> was, for land's NOT LANDED: git's own words and whose failure they are -- never a
+    pointer at the vault (2026-11-22, Tool self-tests #480: a DNS failure's NOT LANDED said `agentctl env --check`,
+    which said the movies vault was locked, and the fixer asked the owner for an unlock nothing needed)."""
+    said = " ".join(redact_credentials(text).split()) or "no output"
+    if credential_failure(said):
+        whose = ("GitHub refused this machine's credential (gh's login: `gh auth status`), never the vault's or the "
+                 "change's")
+    elif is_transient_network(said):
+        whose = "the network's, never the vault's or the change's"
+    else:
+        whose = "not the vault's: no push reads it"
+    return f"git said `{said[:240]}` -- {whose}"
 
 
 LAND_REF_UNKNOWN_AGE = 24 * 3600  # s: a ref of a change neither the entries nor the store know is deleted only past this
@@ -128,8 +145,8 @@ def submit_to_server(repo, d, fields, note="", after_queued=None, waits=False):
     head = fields["head"]
     e = {**fields, "id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{os.urandom(3).hex()}"}
     if not submit_ref(repo, d, e, to_server=True):
-        print(f"NOT LANDED: could not push the change to refs/heads/land/{e['id']} (ci-runner checks it from there; "
-              "the network's when `agentctl env --check` says the tunnel fails, never the change's): land again")
+        print(f"NOT LANDED: could not push the change to refs/heads/land/{e['id']} (ci-runner checks it from there): "
+              f"{push_failure_why(e.get('push_error'))}: land again")
         return 1
     r = submit_remote(open_store(), e)
     offer_token(repo)  # this agent's token to the laptop processor, which holds none after a restart

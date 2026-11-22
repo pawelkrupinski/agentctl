@@ -66,7 +66,7 @@ def batch_fail(st, d, it, why, n_changes=0):
     return it
 
 
-def repo_of_waiting(d):
+def repo_of_waiting(d: str) -> str:
     return movies_repo_path()
 
 

@@ -1515,6 +1515,53 @@ class CheckPushBlipTest(unittest.TestCase):
         self.assertEqual(A.check_branch_push("/r", "abc", "check/x", sleep=slept.append).stderr, "denied")
 
 
+class CredentialFailureTest(unittest.TestCase):
+    """2026-11-22: ci-runner's check-branch pushes all failed `fatal: could not read User` (its App credential helper
+    had died) and were retried as network blips; land's own push failing (DNS) said `agentctl env --check`, which said
+    the movies vault was locked, and its fixer asked the owner for an unlock no push reads."""
+
+    def test_a_credential_failure_is_its_own_never_the_networks(self):
+        for text in ("fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+                     "remote: Invalid username or token.\nfatal: Authentication failed for 'https://github.com/o/r/'",
+                     "fatal: unable to access 'https://github.com/o/r.git/': The requested URL returned error: 403"):
+            self.assertTrue(A.credential_failure(text), text)
+        self.assertFalse(A.credential_failure("fatal: unable to access 'https://github.com/o/r.git/': Could not "
+                                              "resolve host: github.com"))
+
+    def test_a_check_branch_push_refused_its_credential_is_not_retried_and_names_the_helpers_error(self):
+        calls, slept = [], []
+        stderr = ("Traceback (most recent call last):\n  File \"/x/lib/agentctl/ghapp.py\", line 12, in <module>\n"
+                  "ModuleNotFoundError: No module named 'agentctl'\n"
+                  "fatal: could not read Username for 'https://github.com': terminal prompts disabled")
+        real = A.git
+        A.git = lambda repo, *args, check=True, input=None: calls.append(args) or \
+            subprocess.CompletedProcess(args, 128, "", stderr)
+        self.addCleanup(setattr, A, "git", real)
+        r = A.check_branch_push("/r", "abc", "check/x", sleep=slept.append)
+        self.assertEqual((len(calls), slept), (1, []), "no wait brings a credential back")
+        last = A.check_push_failure("check/x", r.stderr, "ci-runner").splitlines()[-1]
+        self.assertIn("GitHub credential failed on ci-runner", last)
+        self.assertIn("No module named 'agentctl'", last)
+
+    def test_no_credential_reaches_what_agentctl_says(self):
+        for text, secret in (("password=hunter2", "hunter2"), ("token: ghs_abcdefabcdefabcdefabcd", "ghs_"),
+                             ("fatal: unable to access 'https://x-access-token:s3cr3t@github.com/o/r/'", "s3cr3t"),
+                             ("github_pat_11ABCDEF_xyz rejected", "github_pat_")):
+            self.assertNotIn(secret, A.redact_credentials(text), text)
+            self.assertNotIn(secret, A.push_failure_why(text), text)
+            self.assertNotIn(secret, A.check_push_failure("check/x", "fatal: Authentication failed\n" + text, "laptop"))
+        self.assertEqual(A.redact_credentials("fatal: Authentication failed for 'https://github.com/o/r/'"),
+                         "fatal: Authentication failed for 'https://github.com/o/r/'")
+
+    def test_lands_not_landed_says_what_git_said_and_never_points_at_the_vault(self):
+        dns = "fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com"
+        why = A.push_failure_why(dns)
+        self.assertIn("Could not resolve host", why)
+        self.assertIn("the network's", why)
+        self.assertNotIn("env --check", why)
+        self.assertIn("gh auth status", A.push_failure_why("fatal: Authentication failed for 'https://github.com/'"))
+
+
 class RemoteRunProgressTest(unittest.TestCase):
     """2026-11-17, ref-srp-54ebae: every check passed by 14:44, `check (page)` waited 23 min for a saturated check runner
     and was 14 min into its work when the 2-h bound, counted from the push at 13:19, cancelled the run -- a run making

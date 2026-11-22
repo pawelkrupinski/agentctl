@@ -238,7 +238,9 @@ class RequeueLoopTest(unittest.TestCase):
         self.saved = A.open_store, A.wlog, A.open_condition
         A.open_store = lambda *a, **k: self.st
         A.wlog = lambda d_, m: None
-        A.open_condition = lambda kind, text, probe, acts, **kw: self.opened.append((kind, text, probe, kw)) or {}
+        # open_condition's own rule: no condition while its probe passes (nothing is wrong now)
+        A.open_condition = lambda kind, text, probe, acts, **kw: None if probe.ok else \
+            self.opened.append((kind, text, probe, kw)) or {"key": kw.get("key")}
         self.e = {"id": "e1", "seq": 1, "status": "checking", "worktree": "/w", "head": "a" * 40}
         A.write_json(os.path.join(self.d, "entries", "e1.json"), self.e)
 
@@ -267,6 +269,64 @@ class RequeueLoopTest(unittest.TestCase):
         self.assertIn("Could not read", "".join(kw["tail"]))
         queued = [x["text"] for x in self.st.events() if x["to_state"] == "queued"]
         self.assertTrue(all("did not send all necessary objects" in t for t in queued), queued)
+
+    def test_a_credential_failure_opens_one_condition_for_the_clone_at_once_never_an_infra_loop(self):
+        """2026-11-22: ci-runner's App helper died (ghapp.py run as a script), every check-branch push said `fatal:
+        could not read User`, and four changes were re-queued "an infra failure" for hours, each on its own timer."""
+        helper = ("push of check/e1 failed: Traceback ...\nModuleNotFoundError: No module named 'agentctl'\n"
+                  "fatal: could not read Username for 'https://github.com': terminal prompts disabled")
+        self.again("its checks stalled (on ci-runner (no verdict): fatal: could not read Username)", detail=helper,
+                   repo=self.d)
+        self.assertEqual(len(self.opened), 1, "the first one: no retry brings a credential back")
+        kind, text, probe, kw = self.opened[0]
+        self.assertEqual(probe.kind, "push_credential")
+        self.assertEqual(kw["key"], f"push-credential-{os.path.basename(self.d)}")
+        self.assertIn("PUSH CREDENTIAL", text)
+        self.assertIn("Not the vault's", text)
+        self.assertIn("e1", text)
+        self.assertIn("ModuleNotFoundError: No module named 'agentctl'", "".join(kw["tail"]))
+        self.assertIn("could not read Username", A.retry_hold(A.read_record(os.path.join(self.d, "entries",
+                                                                                         "e1.json")))[1])
+
+    def credential_probe(self, since):
+        return A.run_probe("push_credential", {"d": self.d, "since": since, "host": A.host_role()})
+
+    def test_the_credential_condition_clears_on_the_next_push_that_succeeds_never_by_asking_a_helper(self):
+        """2026-11-22 review: a probe running `git credential fill` minted a GitHub App token every 60 s while open."""
+        saved = A.git, A.run_cmd
+        self.addCleanup(lambda: (setattr(A, "git", saved[0]), setattr(A, "run_cmd", saved[1])))
+        A.git = A.run_cmd = lambda *a, **k: self.fail(f"the probe ran {a}")
+        self.again("its checks stalled (on ci-runner: fatal: could not read Username)", repo=self.d)
+        since = self.opened[0][2].args["since"]
+        got = self.credential_probe(since)
+        self.assertFalse(got.ok, got.detail)
+        self.assertIn("1 change(s) wait", got.detail)
+        e = A.read_record(os.path.join(self.d, "entries", "e1.json"))
+        A.write_json(os.path.join(self.d, "entries", "e1.json"), {**e, "remote": {"pushed_at": since - 5}})
+        self.assertFalse(self.credential_probe(since).ok, "a push before the condition opened says nothing")
+        A.write_json(os.path.join(self.d, "entries", "e1.json"), {**e, "remote": {"pushed_at": since + 5}})
+        got = self.credential_probe(since)
+        self.assertTrue(got.ok, got.detail)
+        self.assertIn("push succeeded", got.detail)
+
+    def test_the_credential_condition_clears_when_no_change_waits_on_it(self):
+        self.again("its checks stalled (on ci-runner: fatal: could not read Username)", repo=self.d)
+        since = self.opened[0][2].args["since"]
+        e = A.read_record(os.path.join(self.d, "entries", "e1.json"))
+        A.write_json(os.path.join(self.d, "entries", "e1.json"), {**e, "status": "rejected"})
+        self.assertTrue(self.credential_probe(since).ok)
+
+    def test_the_credential_condition_is_read_only_where_the_push_failed(self):
+        self.again("its checks stalled (on ci-runner: fatal: could not read Username)", repo=self.d)
+        args = self.opened[0][2].args
+        self.assertEqual(args["host"], A.host_role())
+        got = A.run_probe("push_credential", {**args, "host": "elsewhere"})
+        self.assertIsNone(got.ok, "another host cannot tell")
+
+    def test_a_credential_github_refuses_opens_the_same_one_condition(self):
+        self.again("its checks stalled (on ci-runner: fatal: Authentication failed for 'https://github.com/o/r/')",
+                   repo=self.d)
+        self.assertEqual([p.kind for _k, _t, p, _kw in self.opened], ["push_credential"])
 
     def test_a_different_reason_starts_the_count_again(self):
         self.again("its checks stalled (sbt)")
