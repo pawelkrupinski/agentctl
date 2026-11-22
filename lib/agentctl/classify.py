@@ -13,6 +13,7 @@
 #     holds one fixture per incident.
 
 import re
+from typing import Iterable, List, Optional, Tuple
 
 
 def _union(rows: list[tuple[str, str, str]]) -> re.Pattern[str]:
@@ -108,7 +109,7 @@ NOISE = re.compile(r"Setting level of logger|\|-INFO in ch\.qos|\berrors?[=:] ?0
 ORDER_VERDICT = re.compile(r"(REGRESSION, not an order dependence: .*|ORDER DEPENDENCE \(or a flake\): .*)")
 
 
-def order_verdict(lines):
+def order_verdict(lines: Iterable[str]) -> Optional[str]:
     """The order verdict a job's log lines say (its text from REGRESSION / ORDER DEPENDENCE on), else None."""
     for l in lines:
         m = ORDER_VERDICT.search(l or "")
@@ -129,17 +130,41 @@ TEST_RAN = re.compile(r"\*\*\* FAILED|\*\*\* \d+ TESTS? FAILED|\bFailed tests:|T
                       r"tests completed, \d+ failed|Test Case '.*' failed|^FAILED alone: |\bfail alone under seed\b")
 
 
-def harness_failure(lines):
+def harness_failure(lines: Iterable[str]) -> Optional[str]:
     """The first harness line of a job's log when no line says a test ran, else None."""
-    lines = [l or "" for l in lines]
-    hit = next((l for l in lines if HARNESS_LOG.search(l)), None)
-    if hit is None or any(TEST_RAN.search(l) for l in lines):
+    seen = [l or "" for l in lines]
+    hit = next((l for l in seen if HARNESS_LOG.search(l)), None)
+    if hit is None or any(TEST_RAN.search(l) for l in seen):
         return None
     return hit.strip()[:300]
 
 
-def is_regression(line):
+def job_log_verdict(lines: List[str], kind: str, why: str, jl: List[str]) -> Tuple[str, str, List[str], bool]:
+    """(kind, why, key lines, regression) of a TEST job once its whole log is read: a control pass's order verdict
+    keys the red (ORDER_VERDICT), else the harness failing before any test ran makes it infra (HARNESS_LOG)."""
+    if kind != "test":
+        return kind, why, jl, False
+    ov = order_verdict(lines)
+    if ov:
+        regression = is_regression(ov)
+        said = "REGRESSION, not an order dependence" if regression else "an order dependence (or a flake)"
+        return kind, f"{why}; {said}", [ov] + [l for l in jl if ORDER_VERDICT.search(l) is None], regression
+    hf = harness_failure(lines)
+    if hf:
+        return ("infra", f"HARNESS: the build tool or the test wrapper failed before any test ran (not a test red): "
+                f"{hf[:160]}", [hf] + [l for l in jl if l != hf], False)
+    return kind, why, jl, False
+
+
+def is_regression(line: object) -> bool:
     return str(line or "").startswith("REGRESSION, not an order dependence:")
+
+
+def log_verdict_version() -> str:
+    """What job_log_verdict judges by: its patterns and functions, part of a cached signature's classifier version."""
+    import inspect
+    return "\n".join([ORDER_VERDICT.pattern, HARNESS_LOG.pattern, TEST_RAN.pattern]
+                     + [inspect.getsource(f) for f in (order_verdict, harness_failure, job_log_verdict, is_regression)])
 
 
 def network_failure(out):
