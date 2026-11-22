@@ -45,7 +45,8 @@ class StepBoundTest(unittest.TestCase):
 
     def test_no_external_call_of_the_tick_is_unbounded(self):
         src = code_source()
-        self.assertIn("timeout=600)  # every git call is bounded", src)
+        self.assertIn("def git(repo, *args, check=True, input=None, timeout=600):", src)  # bounded by default...
+        self.assertIn("timeout=timeout)  # every git call is bounded", src)  # ...and always passed on
         self.assertIn('capture_output=True, timeout=120).returncode == 0', src)
 
 
