@@ -384,3 +384,41 @@ def cmd_red(a):
     return 2
 
 
+def maybe_publish_gate(repo):
+    """The processor's loop, at most every GATE_PUBLISH_INTERVAL s: read the gate (it holds the token) and publish the
+    summary line for the status line. Never fatal; a failed read leaves the old file to age out (fail-closed)."""
+    try:  # a push to main since the last publish (mark_gate_dirty): publish now, not at the 45 s mark
+        marked = os.path.getmtime(gate_dirty_path()) > _last_gate_publish[0]
+    except OSError:
+        marked = False
+    if not marked and time.time() - _last_gate_publish[0] < env_num("AGENTCTL_GATE_PUBLISH", 45):
+        return
+    _last_gate_publish[0] = time.time()
+
+    def work():
+        try:
+            o_r = slug(repo)
+            snap = ci_state_refresh(o_r, write=False)  # ONE read of GitHub per cycle; everything below reads it
+            refresh_pinned_recording(o_r, repo)  # what PREDICTS MAIN RED compares a branch run's recording with
+            ci_state_write(snap)
+            # THE RED TICK ON THIS SNAPSHOT before its line is published: every red it shows is an item, offered or
+            # held (never NOBODY). Bounded: a dispatch's worktree checkout finishes on the tick's own thread
+            if not run_bounded("red-tick", lambda: red_tick_repo(repo, snap), env_num("AGENTCTL_ASSIGN_BOUND", 20)):
+                err("red tick: still running; the gate line is published meanwhile")
+            _red, line = ci_why(o_r, summary=True, snap=snap, repo=repo)
+            publish_gate_summary(o_r, line.splitlines()[-1], epoch=snap["at"])
+        except (Exception, SystemExit) as e:
+            err(f"gate summary: skipped ({str(e).replace('agentctl: ', '')[:200]})")
+            return
+        try:
+            for text in settle_branch_reds(o_r, snap):
+                err(f"branch reds: {text}")
+        except (Exception, SystemExit) as e:
+            err(f"branch reds: not settled ({str(e).replace('agentctl: ', '')[:200]})")
+        try:
+            for routed in route_branch_reds(o_r, snap):
+                err(f"branch reds: {routed}")
+        except (Exception, SystemExit) as e:
+            err(f"branch reds: not routed ({str(e).replace('agentctl: ', '')[:200]})")
+    if not run_bounded("gate-publish", work, env_num("AGENTCTL_STEP_BOUND", 120)):
+        err("gate summary: still reading from an earlier cycle (the loop goes on)")

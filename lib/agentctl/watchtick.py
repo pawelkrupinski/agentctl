@@ -1,5 +1,22 @@
 # agentctl, part `watchtick`: a watch item followed to its verdict: the tick's evaluation, a `land --follow` follower's claim (WatchClaim) and watch, the verdict's ending (the worktree closed, a red attached)
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import time
+from agentctl.core import NoToken, env_num, err, slug
+from agentctl.timefmt import iso_at
+from agentctl.store import StaleVersion, TerminalState, open_store
+from agentctl.procs import safe_cwd
+from agentctl.owned import Owned, backoff, restart_if_changed
+from agentctl.clones import main_clone
+from agentctl.cleanup import close_worktree
+from agentctl.redfixes import fixes_of
+from agentctl.ciwhy import red_for
+from agentctl.landwatch import (
+    WATCH, WATCH_CONV_START, WATCH_EVERY, WATCH_FOLLOW_LEASE, WATCH_STALL_MIN, WATCH_TIMEOUT, start_watch,
+    watch_clone, watch_eval, watch_event, watch_look, watch_outcome, watch_verdict)
+from agentctl.redopen import red_attach
+from agentctl.cireport import ci_why
 
 
 def watch_landed(repo, sha, pushed_at, o_r=None, close=None, fixes=()):

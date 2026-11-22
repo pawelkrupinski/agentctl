@@ -1,5 +1,28 @@
 # agentctl, part `redview`: how a red reads (ci-why, the status line, `red status`), and dispatch off per repo.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import json
+import time
+from typing import Any
+from agentctl.core import HOME, env_num, state_root
+from agentctl.timefmt import hhmmz, ts
+from agentctl.statefile import read_record
+from agentctl.leases import lease_meta, red_block_of
+from agentctl.redrecord import RED_RECURRING, red_active, red_lease, red_names
+from agentctl.redfixread import FIX_OPEN
+from agentctl.redfixes import red_refuted
+from agentctl.cistate import snapshot_gate_reds
+from agentctl.owners import owner_record_path
+from agentctl.redask import red_ask, red_decision
+from agentctl.red import RED_FIX_GIVEUP
+from agentctl.redmove import red_settled_runs
+from agentctl.branches import run_names, short_flow
+from agentctl.redseen import red_obs_of_units
+from agentctl.ask import red_decided_view, trim_words
+from agentctl.redpending import RED_WAITS_ON
+from agentctl.blame import blame_status
+from agentctl.reddispatch import RED_HELD_IDLE, REPO_DISPATCH_OFF, red_owned_progress_at, repo_dispatch_off_all
+
 
 # -- how a red reads (ci-why, the status line, `red status`): its state, holder or offer, deadline. Never NOBODY.
 def gate_red_runs():
@@ -176,24 +199,3 @@ def red_status_snapshot_path() -> str:
     return state_root("red-status.json")
 
 
-def red_status_text(store: Any, verbose: bool = False) -> str:
-    """`agentctl red status`'s text, from the status model (its reds, families and dispatcher sections)."""
-    t = store.clock() if hasattr(store, "clock") else time.time()
-    return render_red_status(status_data(store=store, now_=t, only=("reds", "families", "owners", "dispatcher",
-                                                                    "untracked", "reverts")), verbose)
-
-
-def write_red_status_snapshot(store: Any = None) -> None:
-    """The sync's step: the rendered red status, for `red status` to print at once."""
-    write_json(red_status_snapshot_path(), {"at": time.time(), "text": red_status_text(store or status_store())})
-
-
-def red_status(store: Any, verbose: bool = False, live: bool = False) -> int:
-    """`agentctl red status`: the sync's fresh snapshot, else read now."""
-    snap = {} if verbose or live else (read_record(red_status_snapshot_path()) or {})
-    age = time.time() - float(snap.get("at") or 0)
-    if snap.get("text") and 0 <= age <= RED_STATUS_FRESH:
-        print(f"{snap['text']}\n(as of {age:.0f} s ago: the sync's snapshot; `agentctl red status --live` reads the store)")
-        return 0
-    print(red_status_text(store, verbose))
-    return 0

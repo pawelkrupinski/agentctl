@@ -1025,3 +1025,45 @@ def cmd_issue(a):
         return 2
     print(f"ISSUE {it['id']} filed: the agentctl maintainer sees it on the status page and in `agentctl issue --list`")
     return 0
+
+
+def red_status_text(store: Any, verbose: bool = False) -> str:
+    """`agentctl red status`'s text, from the status model (its reds, families and dispatcher sections)."""
+    t = store.clock() if hasattr(store, "clock") else time.time()
+    return render_red_status(status_data(store=store, now_=t, only=("reds", "families", "owners", "dispatcher",
+                                                                    "untracked", "reverts")), verbose)
+
+
+def write_red_status_snapshot(store: Any = None) -> None:
+    """The sync's step: the rendered red status, for `red status` to print at once."""
+    write_json(red_status_snapshot_path(), {"at": time.time(), "text": red_status_text(store or status_store())})
+
+
+def red_status(store: Any, verbose: bool = False, live: bool = False) -> int:
+    """`agentctl red status`: the sync's fresh snapshot, else read now."""
+    snap = {} if verbose or live else (read_record(red_status_snapshot_path()) or {})
+    age = time.time() - float(snap.get("at") or 0)
+    if snap.get("text") and 0 <= age <= RED_STATUS_FRESH:
+        print(f"{snap['text']}\n(as of {age:.0f} s ago: the sync's snapshot; `agentctl red status --live` reads the store)")
+        return 0
+    print(red_status_text(store, verbose))
+    return 0
+
+
+def cmd_ci_why(a):
+    o_r = slug(a.repo) if a.repo else default_repo()
+    target = None if a.target in (None, "main") else a.target.lstrip("#")
+    if target is not None and not target.isdigit():
+        raise SystemExit("agentctl: ci-why takes a run id, a run number (#N) or `main`")
+    if getattr(a, "cached", False):
+        if not getattr(a, "summary", False) or target:
+            raise SystemExit("agentctl: ci-why --cached goes with --summary and main")
+        # NEVER LIVE WORK (2026-10-28: a stale file sent the status line's 15 s refresh into a 60 s live read): the
+        # processor's published line, or -- stale or missing -- what it last said, marked with its age. Live reads
+        # belong to the processor's publish step only.
+        text = status_gate_text(state_read(), time.time(), o_r)  # the status model's gate text, for this repo
+        print(text)
+        return 1 if text.startswith("gate RED") else 0 if GATE_LINE.match(text) else 2  # 2: UNREAD / ? / NETWORK
+    red, text = ci_why(o_r, a.tail, target, summary=getattr(a, "summary", False))
+    print(text)
+    return 1 if red else 0
