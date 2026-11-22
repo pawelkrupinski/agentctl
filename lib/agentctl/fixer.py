@@ -145,7 +145,7 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
     if u.get("decision"):  # THE OWNER ANSWERED this red's question (`agentctl decide`): act on that answer
         dec = u["decision"]
         task = (f"THE OWNER DECIDED this red: asked {str(dec.get('question'))[:400]!r}, the owner answered "
-                f"{str(dec.get('answer'))[:600]!r}. Act on exactly that answer (it settles what the fixers could not "
+                f"{str(dec.get('answer'))[:1500]!r}. Act on exactly that answer (it settles what the fixers could not "
                 "decide) and land the result. If acting on it fails (the land is NOT LANDED, a check rejects it, it "
                 "cannot be done), end `NOT LANDED: <why>` or `GAVE UP: <why>`: the owner is told at once. ") + task
     task += WAITS_ON_BRIEF + LAND_BRIEF

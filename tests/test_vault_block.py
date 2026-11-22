@@ -102,6 +102,11 @@ class VaultAskTest(VaultBase):
         # whose fixers commit unsigned (fixer_env): the probe is the command that needed the vault
         self.assertNotIn("commit-tree -S", prompt)
         self.assertIn("run again the one command that needed the vault", prompt)
+        # Alert backtest #20, 2026-11-22 15:52Z / 15:54Z: released twice, re-blocked within 3 min each time -- the
+        # session took `agentctl env --check` for "the command that needed the vault", which only reads `secrets
+        # status` and never raises a Touch ID prompt: no release could ever clear it
+        self.assertIn("never `agentctl env --check`", prompt)
+        self.assertIn("name the command that failed and its error", prompt)
         self.assertIn("BLOCKED ON OWNER: ! secrets unlock movies", dec["answer"])
         self.assertNotIn("WAITING ON YOU", self.view(it)[1])
         A.reconcile_alerts(self.st, force=True)

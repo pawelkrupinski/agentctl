@@ -40,11 +40,15 @@ def red_vault_resume(store, it, ns, answer, t):
     # raise a prompt for nothing; the vault was for a secret, so the probe is the command that needed it
     probe = ("run `git commit-tree -S HEAD^{tree} -m 'signing probe' < /dev/null` in your worktree"
              if repo_signs(d.get("repo") or RED_PRIMARY) else
-             "run again the one command that needed the vault (your commits here are unsigned: never sign one)")
+             "run again the one command that needed the vault -- a `secrets run` of the secret your fix uses, never "
+             "`agentctl env --check` or `secrets status` (they only read the vault's state, raise no Touch ID prompt, "
+             "and a fixer's land needs no vault: its credentials are in its environment); your commits here are "
+             "unsigned: never sign one. A fix needing no secret just lands")
     dec = {"answer": f"the owner is at the machine (`decide vault-{ns}`: {answer}). No other session's unlock lets "
                      "yours use the vault: your first use raises a Touch ID prompt for YOUR session, which the owner "
                      f"answers now. So FIRST {probe}; if it fails, end `BLOCKED ON OWNER: ! secrets unlock {ns}` at "
-                     "once. Then go on with the fix and land it.", "question": str(q)[:600], "at": t,
+                     "once, and in it name the command that failed and its error (no secret's value). Then go on "
+                     "with the fix and land it.", "question": str(q)[:600], "at": t,
            "status": "in-progress", "category": "vault"}
     store.close_offer(f"red:{it['id']}", "resumed")
     red_offer(store, it, f"{red_what(d)}: the owner resumed it (the {ns} vault): offered again",
