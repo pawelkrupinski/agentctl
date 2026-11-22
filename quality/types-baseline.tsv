@@ -47,9 +47,10 @@ mypy-errors	redblock	50
 mypy-errors	redclaim	66
 mypy-errors	redcrash	80
 mypy-errors	reddispatch	96
+mypy-errors	redearly	23
 mypy-errors	redfixes	76
 mypy-errors	redfixread	75
-mypy-errors	redmove	100
+mypy-errors	redmove	102
 mypy-errors	redpending	143
 mypy-errors	redreplay	41
 mypy-errors	redretired	66

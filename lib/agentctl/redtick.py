@@ -6,9 +6,9 @@ _red_lock = threading.Lock()
 _last_red_tick = [0.0]
 
 
-def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync=False):
-    """One level-triggered pass: observe (unless the gate is unread: nothing opens or clears on an unknown), each red one
-    step (per item, inside try: one bad item never stops the tick), the claims renewed, the dispatcher. Returns what it
+def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync=False, early=None):
+    """One level-triggered pass: observe (unless the gate is unread: nothing opens or clears on an unknown; early reds
+    too, redearly.py), each red one step (per item, inside try: one bad item never stops the tick), the claims renewed, the dispatcher. Returns what it
     did."""
     t = now_ if now_ is not None else store.clock()
     acts = []
@@ -22,6 +22,7 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
             obs = red_obs_for(o_r, red_observe(o_r, repo, snap) if primary else red_observe_gate(o_r, snap))
         except (Exception, SystemExit) as e:
             err(f"red tick: could not observe ({str(e)[:160]}): nothing opens or clears this tick")
+    obs = early_observed(store, o_r, snap, t, obs, early)  # EARLY REDS (redearly.py): failed jobs of running runs
     untracked = {}
     if obs is not None:  # A CHECK NEVER GREEN ON MAIN IS NOT TRACKED (reduntracked.py): set apart, listed for red status -v
         obs, untracked = red_split_untracked(store, o_r, obs, t)
@@ -51,13 +52,13 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
         try:
             it = active.get(key)
             if it:
-                active[key] = red_attach_obs(store, it, ob)
+                active[key] = red_attach_obs(store, early_attach(store, it, ob, repo, o_r, t, acts), ob)
                 continue
             settled = red_settled_runs(store) if settled is None else settled
             if (key, str(ob["run"].get("databaseId"))) not in settled \
                     and not red_retired(o_r, {"red_kind": ob["red_kind"], "workflow": ob["workflow"],
                                               "last_run": ob["run"], "jobs": ob["jobs"]}, t):
-                active[key] = red_open(store, ob, repo, t, o_r)  # a retired check's run opens no red
+                active[key] = early_opened(red_open(store, ob, repo, t, o_r), acts)  # a retired check's run opens no red
         except (Exception, SystemExit) as e:
             err(f"red tick: {key}: {str(e)[:160]}")
     try:
@@ -79,6 +80,7 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
                 red_untrack(store, it, why)
                 acts.append(f"untracked {red_what(it['data'])}: {why}")
                 continue
+            acts += early_unobserved(store, it, obs, snap, repo, o_r, t)  # its run ended, or a rerun cleared it
             acts += red_step(store, it, obs, snap, facts, repo, o_r, t)
         except StaleVersion:
             pass  # another writer moved it: the next tick

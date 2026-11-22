@@ -279,7 +279,7 @@ def decided_revert(d, t=None):
     now) and agentctl has not reverted it yet; else None."""
     dec = red_decision(d) or {}
     m = DECIDED_REVERT.match(str(dec.get("answer") or ""))
-    if not m or not d.get("gate") or d.get("reverted"):
+    if not m or not d.get("gate") or d.get("reverted") or d.get("early"):  # an early red: no verdict to revert on
         return None
     age = (time.time() if t is None else t) - float(dec.get("at") or 0)
     return m.group(1) if age >= env_num("AGENTCTL_RED_DECIDED_REVERT_MAX", RED_DECIDED_REVERT_MAX) else None
@@ -304,7 +304,7 @@ def red_tier(d, culprit=None, t=None):
     last = (d.get("history") or [{}])[-1]
     conds = {"author": bool((d.get("author") or {}).get("worktree")) and not d.get("author_tried"),
              "resumable": bool(last.get("session") and last.get("worktree")),
-             "culprit": bool(culprit) and not d.get("reverted")}
+             "culprit": bool(culprit) and not d.get("reverted") and not d.get("early")}  # early: never
     a = min(int(d.get("attempts") or 0), 3)
     for n, cond, tier in RED_LADDER:
         if n == a and (cond is None or conds[cond]):

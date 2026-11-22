@@ -150,7 +150,8 @@ def red_picture(d):
             "refuted": d.get("refuted") or [], "diagnosis": d.get("diagnosis"), "predicts": d.get("predicts"),
             "author": d.get("author"), "culprit": d.get("culprit"), "names": sorted(red_names(d) - {None}),
             "prior_work": d.get("prior_work"), "old_note": d.get("old_note"), "repo": d.get("repo"),
-            "blame": d.get("blame"), "lander_tried": d.get("lander_tried"), "decision": red_decision(d)}
+            "blame": d.get("blame"), "lander_tried": d.get("lander_tried"), "decision": red_decision(d),
+            "early": d.get("early") or {}}
 
 
 def red_put_offer(store, it):
@@ -181,15 +182,27 @@ def red_open(store, ob, repo, t, o_r=None):
             data["author"] = red_author(repo, ob, t)
         except (Exception, SystemExit) as e:
             err(f"red: no author for {key} ({str(e)[:120]})")
-        try:
-            data["culprit"] = culprit_of(repo, {"runs": ob["runs_list"]})
-        except (Exception, SystemExit):
-            pass
-    try:  # THE CULPRIT (blame.py): searched from the red's opening; a gate test red only
-        data["blame"] = blame_open(store, repo, o_r or RED_PRIMARY, ob, t)
-    except (Exception, SystemExit) as e:
-        data["blame"] = {"state": "none", "why": f"its range could not be read ({str(e)[:120]})"}
+    data.update(red_culprit_search(store, ob, repo, t, o_r))
     return store.put_item("red", iid, "red", data)
+
+
+def red_culprit_search(store, ob, repo, t, o_r):
+    """{culprit, blame} of a red opened from observation ob: THE CULPRIT (blame.py) searched from a completed run's
+    verdict -- a gate test red only. An EARLY red (redearly.py: its run still in progress) gets none: it carries its
+    `early`, and early_settle opens the search when its run completes failing."""
+    if ob.get("early"):
+        return {"early": ob["early"], "culprit": None, "blame": None}
+    out = {}
+    try:
+        if ob["kind"] == "test" and ob["red_kind"] in ("gate", "outside"):
+            out["culprit"] = culprit_of(repo, {"runs": ob["runs_list"]})
+    except (Exception, SystemExit):
+        pass
+    try:
+        out["blame"] = blame_open(store, repo, o_r or RED_PRIMARY, ob, t)
+    except (Exception, SystemExit) as e:
+        out["blame"] = {"state": "none", "why": f"its range could not be read ({str(e)[:120]})"}
+    return out
 
 
 def red_attach_obs(store, it, ob):

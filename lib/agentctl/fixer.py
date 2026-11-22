@@ -180,7 +180,12 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
                  "the ordering); do not just retry it.")
     if u.get("blame_note"):  # the red's blame (blame.py): the offending change, its revert, what to do with it
         task += u["blame_note"]
-    return common + task + (f" {resume_note}" if resume_note else "")
+    return common + task + early_brief_of(u) + (f" {resume_note}" if resume_note else "")
+
+
+def early_brief_of(u: dict[str, Any]) -> str:
+    """An EARLY red's words for its fixer (redearly.py writes them into its `early`: the run still goes on), else ""."""
+    return str(dict(u.get("early") or {}).get("brief") or "")
 
 
 FIXER_IDENTITY_ENV = ("AGENTCTL_AGENT_NAME", "AGENTCTL_RED_FIXER", "AGENTCTL_FIXER_RECORD", "AGENTCTL_CLAIM_PID",

@@ -2094,6 +2094,55 @@ the listing ci-runner's runner scheduler reads, so no runner is ever started for
 <id>` of a checking change prints its remote check (run, branch, pushed and last-progress ages, each job: its verdict,
 `running <age>` or `waiting for a runner slot`), mirrored on its item as `check` (`remote_mirror`).
 
+### early reds: a failed job of a run still in progress (2026-11-22)
+
+The owner: "teach agentctl to react to parts of workflow failing and notifying / spinning the agents right away".
+Main takes ~20 min and the identity runs longer; a job can fail in minute 3 while the rest runs on. `redearly.py`.
+
+- **Detection (the red tick, every gate publish: ~45 s, at once after a push).** For each run on main the snapshot
+  shows `in_progress` -- the gate's workflows first, then the outside ones, at most `$AGENTCTL_EARLY_MAX_RUNS` (6) --
+  ONE `GET repos/<o_r>/actions/runs/<id>/jobs?filter=latest&per_page=100` (a page more per 100 jobs, at most 3)
+  through `api()`'s conditional GET: an unchanged list is a 304 and costs no quota. A job `completed` with `failure` /
+  `timed_out` is an early failure, keyed like any red (workflow + its first relevant line). Only when the set of failed
+  job ids (or the attempt) changed is the run explained -- `explain_run_jobs`, the one classifier ci-why uses (a `gh run
+  view` and the failed job's log): ~2-3 calls per newly failed job, never again for it. Each run's answer is kept
+  under `reds/early/<run id>.json`.
+- **Rate limits.** A 403 / 429 / 5xx (or `rate limit` in gh's words) pauses every early read 60 s, doubling to 15 min
+  (`reds/early/backoff.json`); a good read ends it. A paused or failed read answers what was last read: no early red
+  is ever withdrawn by a read that did not happen.
+- **Classification first.** Only a TEST failure (a test or compile failure in the commit's code) is an early red.
+  An infra-shaped or unclear one (classify_job's infra / unclear: a setup step, a lost runner, no error line) opens nothing: the
+  completed run decides it, through the normal infra path. A `verdict complete` report is never one.
+- **Acted on at once.** The early red is an ordinary red item with `early` in its data (`{run, number, attempt,
+  seen_at, brief}`): opened, offered (its live author first: `RED AUTHOR` to the lander's session) and dispatched in
+  the same tick; the owner's inbox gets `RED EARLY: <workflow> #N [jobs] failed while run #N is still in progress`.
+  The fixer's brief says the run goes on, other jobs may still fail, and nothing is blamed or reverted before it ends,
+  with ci-why's lines of the failed job. A family owner gets it as its next turn, as any red.
+- **One red per failure, one fixer per run.** A later job failing the same way attaches to the same red (its holder
+  told in `RED-INBOX.md`); one failing another way is a red of its own, joined to the same fixer by its queue family
+  (configured, else the run). When the run COMPLETES failing, its verdict observes the same key: the red is SETTLED in
+  place (`early` cleared, `early_settled` kept) -- one red, never a second -- and its culprit search (`blame_open`)
+  opens only then. An early red the completed read words otherwise also settles in place (no culprit search).
+- **Withdrawn cleanly.** An early red its tick no longer sees is WITHDRAWN when its run ended `cancelled` / green
+  (superseded by a newer push, a concurrency cancel), a rerun attempt is clearing the job, or the run is gone from
+  main's lists and a newer one decided: `RED CLEARED: ... EARLY RED WITHDRAWN: <why>; stand down -- no blame and no
+  revert`, its lease revoked and `RED-STOP.md` in its fixer's worktree.
+- **Never a blame or a revert on an early red.** `red_culprit_search` gives an early red no culprit and no blame,
+  `decided_revert` skips it, so no tier `blame` / `lander` / `revert` can come up before the completed run's verdict
+  (2026-11-22: a wrong blame-revert had followed an infra red; an early red adds no such path).
+- **The push gate is unchanged: it reads COMPLETED runs.** An early red holds no push and needs no `Fixes-Red:` of
+  anyone else: it can still be withdrawn (a rerun, a cancel), the movies pre-push hook judges the gate by completed
+  runs, and a gate the hook and agentctl read differently would refuse pushes agentctl lets through. A fix landed for
+  it (`Fixes-Red: <the running run>`) is a red-fix change (first in line) and is verified like any fix.
+- **Polling, not a callback (evaluated 2026-11-22).** The tick runs on ci-runner, which has no public endpoint.
+  `gh webhook forward` (the cli/gh-webhook extension) is a development tool: it creates a temporary hook that lives
+  only while the forwarder runs, and an event sent while it is disconnected is not redelivered to it. A GitHub App webhook (`agentctl github-app`'s
+  apps) or a repo webhook needs a public receiver with signature verification -- a relay on our edge (the Flux
+  Receiver at flux.kinowo.net is the precedent) that ci-runner pulls through the tunnel. The jobs poll already reacts
+  within one tick (~45 s) at ~1 conditional GET per running run per tick; a relay would cut that to seconds and would
+  only TRIGGER the same tick (as `mark_gate_dirty` does after a push), never replace it: the poll stays the
+  reconciliation for missed events and restarts. Adding it is the owner's call (a deploy and a webhook setting).
+
 ### tick: the processor, the token, the gate
 
 ONE QUEUE (2026-10-30): the queue is ci-runner's store. `land status`, the status line and the status page all read

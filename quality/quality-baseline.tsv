@@ -283,7 +283,6 @@ cognitive	red_merge_rekeyed	17
 cognitive	red_migrate	11
 cognitive	red_obs_of_units	26
 cognitive	red_offer	31
-cognitive	red_open	11
 cognitive	red_owner	153
 cognitive	red_owner_push	12
 cognitive	red_owner_reminders	42
@@ -466,6 +465,7 @@ cycle	redblock	1
 cycle	redclaim	1
 cycle	redcrash	1
 cycle	reddispatch	1
+cycle	redearly	1
 cycle	redfixes	1
 cycle	redfixread	1
 cycle	redmove	1
@@ -814,7 +814,7 @@ cyclomatic	red_step	76
 cyclomatic	red_stop_holder	12
 cyclomatic	red_tick	40
 cyclomatic	red_tick_others	12
-cyclomatic	red_tier	23
+cyclomatic	red_tier	24
 cyclomatic	red_unblock	14
 cyclomatic	red_unheld	15
 cyclomatic	red_units	13
@@ -938,7 +938,7 @@ fan-out	redmove	19
 fan-out	redpending	15
 fan-out	redreplay	11
 fan-out	redstep	19
-fan-out	redtick	32
+fan-out	redtick	33
 fan-out	redvault	19
 fan-out	redverify	10
 fan-out	redview	14
@@ -1025,7 +1025,7 @@ method-lines	red_owner	241
 method-lines	red_owner.step	102
 method-lines	red_run_retired	51
 method-lines	red_step	157
-method-lines	red_tick	98
+method-lines	red_tick	100
 method-lines	red_view_state	85
 method-lines	regenerate	72
 method-lines	remote_check	79
