@@ -446,18 +446,6 @@ def blame_reland(o_r, repo, u, b):
     return {"ok": True, "at": ts(), "worktree": wt, "msg": f"relanding {blame_change_name(g)} (reverting {rv[:10]}) from {wt} (pid {pid})"}
 
 
-def blame_refuted(repo, b, sha):
-    """The landed fix `sha` that a run refuted is this red's revert (its `Reverts-Change:` trailer): the culprit was
-    wrong. The blame, marked refuted with the reland due -- the laptop's dispatcher relands it (blame_reland)."""
-    if (b or {}).get("state") != "confirmed" or not (b.get("revert") or {}).get("ok") or not sha:
-        return None
-    body = git(repo, "log", "-1", "--format=%B", sha, check=False).stdout if repo else ""
-    if "Reverts-Change:" not in body:
-        return None
-    return dict(b, state="refuted", why=f"its revert {sha[:10]} did not clear the red: the culprit was wrong",
-                revert=dict(b["revert"], landed=sha), reland_due=sha)
-
-
 def blame_note(b):
     """What a fresh fixer is told of a red's blame (its change's diff and worktree), or ''."""
     b = b or {}

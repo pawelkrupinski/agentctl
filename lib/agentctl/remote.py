@@ -1,5 +1,39 @@
 # agentctl, part `remote`: remote checks, the token hand-off, watches.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import fnmatch
+import os
+import re
+import subprocess
+import sys
+import time
+from agentctl.core import env_num, err, fmt_age, git, host_role, remote, slug, spawn_detached
+from agentctl.timefmt import parse_time, ts
+from agentctl.forge import api, forge_actions_run, forge_actions_runs, forge_delete_branch, forge_find_run
+from agentctl.classify import check_push_failure, credential_failure
+from agentctl.store import LeaseLost, StoreUnavailable, machine_state, open_store
+from agentctl.procs import Terminated
+from agentctl.selfcode import TOOL_PATH
+from agentctl.repos import precheck_hook
+from agentctl.workflows import workflow_job_names, workflow_job_timeouts
+from agentctl.leases import lock_beat
+from agentctl.waitingdir import WAITING_BRANCH, save_entry, waiting_state, wlog
+from agentctl.wait import fetch_failed_log, job_log_lines, relevant_lines
+from agentctl.land import run_watched, tool_env
+from agentctl.storetoken import (
+    TOKEN_REQUEST, TOKEN_SHAPE, detached_env, hand_token, token, token_back, token_env_name, token_ns,
+    token_sock_path)
+from agentctl.owned import Owned, backoff, cancel_run, lock_held, restart_if_changed
+from agentctl.stats import _num, stats_query, stats_url
+from agentctl.queueslots import queue_verdict
+from agentctl.dispatches import record_dispatch, save_dispatch
+from agentctl.conditions import condition_item_of, open_condition, run_probe
+from agentctl.queue import VERIFY_AREAS_MODE, VERIFY_MODE
+from agentctl.conflicts import conflict_cause, conflict_paths
+from agentctl.waiting import (
+    GATE_UNREAD, WAITING_AWAIT_TIMEOUT, already_landed, apply_entry, gate_unread_why, supersede)
+from agentctl.checkslot import check_slot
+
 
 # ---------------------------------------------------------------- remote checks: ci-runner's check tier
 # The owner (2026-10-27, then decision 1): a queued change's pre-commit checks run on ci-runner's check tier (first only

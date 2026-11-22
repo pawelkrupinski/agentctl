@@ -272,3 +272,27 @@ def pick_commits(wt, commits, dropped=None, regen=True, regenerated=None, provis
             if dropped is not None:
                 dropped.append((c, equivalent_on(wt, c, before)))
     return None
+
+
+# A BOUNCE NAMES WHAT CAUSED IT (2026-11-19: lane F2b's `no longer applies on origin/main 2cfa0ee95e` named neither
+# file nor commit; its agent rebased blind). Only a real conflict reaches the agent (generated files are resolved in
+# the check tree, waiting.py GENERATED FILES ARE NO OVERLAP), and its verdict names each conflicting file with the
+# commit of main that last changed it since the change's base; the files are kept on the entry (`conflict_files`), so
+# the change queued again from the same source takes its old place (server.py queue_change, A RESOLVED CONFLICT
+# KEEPS ITS PLACE).
+def conflict_paths(conflicts):
+    """The file paths of a pick's conflict list (a generated file's entry carries its resolution's why)."""
+    return [c.split(" (generated: ", 1)[0] for c in conflicts or []]
+
+
+def conflict_cause(repo, since, main, conflicts, n=3):
+    """`; it conflicts in F (changed on main by <sha> <subject>), ...` for the conflict list, each file's newest
+    commit in since..main; '' when none is known."""
+    out = []
+    for c in (conflicts or [])[:n]:
+        path = c.split(" (generated: ", 1)[0]
+        line = git(repo, "log", "-1", "--format=%h %s", "--abbrev=10", f"{since}..{main}", "--", path,
+                   check=False).stdout.strip() if since and main else ""
+        out.append(f"{c} (changed on main by {line[:90]})" if line else c)
+    more = len(conflicts or []) - n
+    return f"; it conflicts in {', '.join(out)}" + (f" (+{more} more)" if more > 0 else "") if out else ""

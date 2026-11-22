@@ -4,11 +4,12 @@
 mypy-errors	alerts	119
 mypy-errors	ask	33
 mypy-errors	batch	356
-mypy-errors	blame	131
+mypy-errors	blame	130
 mypy-errors	blameopen	13
 mypy-errors	branches	148
 mypy-errors	buildview	42
 mypy-errors	changekind	27
+mypy-errors	checkslot	26
 mypy-errors	cireport	85
 mypy-errors	ciwhy	123
 mypy-errors	classify	1
@@ -16,7 +17,7 @@ mypy-errors	cleanup	54
 mypy-errors	cli	12
 mypy-errors	conditions	42
 mypy-errors	config	19
-mypy-errors	conflicts	38
+mypy-errors	conflicts	40
 mypy-errors	core	35
 mypy-errors	dispatches	48
 mypy-errors	explorer	16
@@ -52,7 +53,7 @@ mypy-errors	procwatch	2
 mypy-errors	projector	25
 mypy-errors	queue	29
 mypy-errors	queuebatch	57
-mypy-errors	queueclose	95
+mypy-errors	queueclose	93
 mypy-errors	queuediff	83
 mypy-errors	queueenter	61
 mypy-errors	queuepush	74
@@ -74,13 +75,13 @@ mypy-errors	redfixread	35
 mypy-errors	redmove	14
 mypy-errors	redobserve	20
 mypy-errors	redopen	38
-mypy-errors	redpending	67
+mypy-errors	redpending	79
 mypy-errors	redrecord	4
 mypy-errors	redreplay	19
 mypy-errors	redrepos	12
 mypy-errors	redretired	63
 mypy-errors	redseen	68
-mypy-errors	redstep	103
+mypy-errors	redstep	92
 mypy-errors	redtick	103
 mypy-errors	reduntracked	45
 mypy-errors	redvault	50
@@ -91,7 +92,7 @@ mypy-errors	repos	34
 mypy-errors	reverts	46
 mypy-errors	rundispatch	11
 mypy-errors	server	294
-mypy-errors	slots	221
+mypy-errors	slots	195
 mypy-errors	stats	139
 mypy-errors	status	215
 mypy-errors	store	128
