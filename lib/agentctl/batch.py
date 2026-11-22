@@ -169,39 +169,6 @@ def hold_by():
     return name or f"{os.environ.get('USER', '?')}@{os.uname().nodename.split('.')[0]}"
 
 
-def land_holds(st):
-    return st.items("hold", ["held"])
-
-
-def land_hold(st, now_=None, expire=True):
-    """The land hold in force, or None. A hold past its deadline is moved to `expired` here (an event says so): every
-    reader -- the tick, `land status`, the snapshot -- lifts a forgotten hold the moment it is due. expire=False: only
-    read (the status page never writes)."""
-    t = now_ if now_ is not None else time.time()
-    live = None
-    for it in land_holds(st):
-        if it["deadline"] <= t:
-            if not expire:
-                continue
-            try:
-                st.transition("hold", it["id"], "expired", it["version"],
-                              event={"text": f"land hold {it['id']} expired (held by {it['data'].get('by')}: "
-                                             f"{it['data'].get('why') or 'no reason given'})"})
-            except (StaleVersion, TerminalState):
-                pass
-        elif live is None or it["deadline"] > live["deadline"]:
-            live = it
-    return live
-
-
-def hold_text(h, t=None):
-    """`HELD until HH:MM (by, why)` for a hold row ({deadline, data} or the snapshot's {until, by, why})."""
-    until = h.get("until") or h.get("deadline")
-    d = h.get("data") or h
-    return (f"HELD until {time.strftime('%H:%M', time.localtime(float(until)))} (`agentctl land release`; "
-            f"by {d.get('by') or '?'}" + (f": {d['why']}" if d.get("why") else "") + ")")
-
-
 def land_hold_set(st, secs, why, by):
     """Hold, or extend the hold in force to now + secs. Returns the hold item."""
     secs = max(60, min(int(secs), LAND_HOLD_MAX))
@@ -938,10 +905,6 @@ def _push_batch_item(repo, d, st, it, members, tip, base, i):
 ROUND_ERRORS_MAX = 3
 
 
-def hold_row(it):
-    return {"id": it["id"], "until": it["deadline"], "by": it["data"].get("by"), "why": it["data"].get("why")} if it else None
-
-
 def land_status_line(r, bt, in_batch, t):
     """`land status`'s line for change row r (change_rows): its state, its KIND when it is a red fix, the batch it is
     in, its hold, and whether it is past its deadline -- no held change is silent (tests/queue_sim.py checks it)."""
@@ -1004,36 +967,6 @@ def write_snapshot(d, store=None):
                  hold=hold_row(land_hold(st)),
                  waiting=[r["worktree"] for r in rows if r["state"] == "waiting"],
                  queued=[r["worktree"] for r in rows if r["state"] != "waiting"])
-
-
-NETWORK_SHOWN_FOR = 600  # a lossy-uplink reading this recent turns the status line's UNREAD into NETWORK
-
-
-STATUS_LIVE_AFTER = 30   # s: a mirror of ci-runner's /v1/state older than this is read live by the status line
-STORE_UNREACHABLE_AFTER = 60  # s without a good read of ci-runner's /v1/state: the line says STORE UNREACHABLE
-
-
-def note_store_error(e, t=None):
-    """The remote store did not answer: kept in state.json (since when, why) for the status line."""
-    t = t if t is not None else time.time()
-    prev = state_read().get("store_error") or {}
-    state_update(store_error={"since": prev.get("since") or t, "at": t, "why": str(e).replace("agentctl: ", "")[:200]})
-
-
-def remote_status_state(url, t):
-    """THE STATUS LINE IN REMOTE MODE (2026-10-29 cutover: the line said RECONCILER STALLED since 13:01 while ci-runner's
-    reconciler ticked fine -- the laptop's state.json is only a mirror, and the mirror had stopped). state.json as the
-    sync mirrored it, read live from GET /v1/state when the mirror is over STATUS_LIVE_AFTER s old (at most once per
-    STATUS_LIVE_AFTER s while the store does not answer); a failed read is recorded as store_error."""
-    d = state_read()
-    last_try = max(float(d.get("fetched_at") or 0), float((d.get("store_error") or {}).get("at") or 0))
-    if t - last_try > STATUS_LIVE_AFTER:
-        try:
-            mirror_state(RemoteStore(url, timeout=5, retries=0), t)  # the status line never waits out a retry
-        except (Exception, SystemExit) as e:
-            note_store_error(e, t)
-        d = state_read()
-    return d
 
 
 TICK = 5  # seconds between ticks ($AGENTCTL_TICK); every step is bounded or rate-limited inside

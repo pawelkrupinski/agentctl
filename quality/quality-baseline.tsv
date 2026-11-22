@@ -418,7 +418,6 @@ cycle	queueenter	1
 cycle	redtick	1
 cycle	server	1
 cycle	slots	1
-cycle	status	1
 cycle	tools	1
 cyclomatic	HeldLease.check	12
 cyclomatic	LiveTail.poll	14
@@ -837,7 +836,7 @@ cyclomatic	workflow_triggers	12
 cyclomatic	worktree_holding	12
 cyclomatic	write_snapshot	24
 file-lines	alerts	719
-file-lines	batch	1357
+file-lines	batch	1290
 file-lines	blame	833
 file-lines	branches	843
 file-lines	ciwhy	760
@@ -845,12 +844,12 @@ file-lines	gov	728
 file-lines	live	755
 file-lines	owner	718
 file-lines	remote	824
-file-lines	server	1182
+file-lines	server	1170
 file-lines	slots	896
 file-lines	stats	623
-file-lines	status	1069
+file-lines	status	1117
 file-lines	store	780
-file-lines	tools	526
+file-lines	tools	517
 file-lines	watchdog	1836
 inner-defs	red_owner	5
 inner-defs	status_page_server	8

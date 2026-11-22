@@ -18,6 +18,7 @@ from agentctl.core import host_role
 from agentctl.timefmt import iso_at
 from agentctl.classify import credential_failure, redact_credentials
 from agentctl.waitingdir import waiting_entries
+from agentctl.store import StaleVersion, TerminalState
 
 
 # a backlog batch (batch.py, THE BACKLOG BATCH) is up to BACKLOG_BATCH_MAX of them checked in ONE tree.
@@ -364,3 +365,40 @@ def selection_change(tree, full_tip, tip, paths, new=None):
             return f"its {key.lstrip('-')} for the change adds {', '.join(added[:3]) or 'a mode'}" \
                 + (f" (+{len(added) - 3} more)" if len(added) > 3 else "")
     return None
+
+
+def land_holds(st):
+    return st.items("hold", ["held"])
+
+
+def land_hold(st, now_=None, expire=True):
+    """The land hold in force, or None. A hold past its deadline is moved to `expired` here (an event says so): every
+    reader -- the tick, `land status`, the snapshot -- lifts a forgotten hold the moment it is due. expire=False: only
+    read (the status page never writes)."""
+    t = now_ if now_ is not None else time.time()
+    live = None
+    for it in land_holds(st):
+        if it["deadline"] <= t:
+            if not expire:
+                continue
+            try:
+                st.transition("hold", it["id"], "expired", it["version"],
+                              event={"text": f"land hold {it['id']} expired (held by {it['data'].get('by')}: "
+                                             f"{it['data'].get('why') or 'no reason given'})"})
+            except (StaleVersion, TerminalState):
+                pass
+        elif live is None or it["deadline"] > live["deadline"]:
+            live = it
+    return live
+
+
+def hold_text(h, t=None):
+    """`HELD until HH:MM (by, why)` for a hold row ({deadline, data} or the snapshot's {until, by, why})."""
+    until = h.get("until") or h.get("deadline")
+    d = h.get("data") or h
+    return (f"HELD until {time.strftime('%H:%M', time.localtime(float(until)))} (`agentctl land release`; "
+            f"by {d.get('by') or '?'}" + (f": {d['why']}" if d.get("why") else "") + ")")
+
+
+def hold_row(it):
+    return {"id": it["id"], "until": it["deadline"], "by": it["data"].get("by"), "why": it["data"].get("why")} if it else None

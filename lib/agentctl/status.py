@@ -1,5 +1,53 @@
 # agentctl, part `status`: the status page.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import glob
+import json
+import os
+import re
+import subprocess
+import threading
+import time
+import urllib.parse
+from typing import Any
+from agentctl.core import HOME, SHORT, env_num, err, fmt_age, on_ci_runner, process_cache, reds_dir, slug, state_root
+from agentctl.timefmt import iso_epoch, parse_time
+from agentctl.statefile import mtime, read_json_file, read_record, tail_bytes, write_json
+from agentctl.forge import RED_CONCLUSIONS, forge_run_url
+from agentctl.store import ARCHIVE, MACHINES, StaleVersion, StateSpec, StoreUnavailable, TerminalState, open_store
+from agentctl.procs import proc_alive, safe_cwd
+from agentctl.repos import RED_PRIMARY, red_repo_short
+from agentctl.leases import lease_meta
+from agentctl.fixerrecords import fixer_records
+from agentctl.redrecord import lease_is_live, red_active, red_lease, red_what
+from agentctl.live import (
+    AGENT_PAGE_HTML, LIVE_SEND_TIMEOUT, LIVE_STREAMS, STATUS_PAGE_HTML, _live_streams, live_annotate, live_lookup,
+    live_mask_text, live_peer_closed, live_stream, live_transcript_ok)
+from agentctl.owned import default_repo
+from agentctl.worktrees import claimant
+from agentctl.reverts import REVERT_OPEN, revert_brief, revert_line
+from agentctl.conditions import open_conditions
+from agentctl.queue import hold_row, hold_text, land_hold
+from agentctl.issues import issue_close, issue_open
+from agentctl.changekind import HOLD_SHOWN
+from agentctl.redfamilies import red_family
+from agentctl.cistate import state_read
+from agentctl.owners import owner_record_path
+from agentctl.laptoprole import laptop_role_standby
+from agentctl.gov import pressure_report
+from agentctl.branches import GATE_LINE, GATE_SUMMARY_MAX_AGE, cached_dispatch_blocker, pins_status
+from agentctl.reduntracked import red_untracked_list
+from agentctl.owner import holder_work, owners_status
+from agentctl.redvault import block_verdict_note
+from agentctl.remotestore import RemoteStore, store_url
+from agentctl.reddispatch import red_cap, red_family_holder, red_fixers_alive, repo_dispatch_off_all
+from agentctl.redview import RED_STATUS_FRESH, red_status_snapshot_path, red_view
+from agentctl.cireport import ci_why
+from agentctl.tunnel import tunnel_ports, tunnel_state_path
+from agentctl.recovery import escalated_now
+from agentctl.watchdog import parked_lines
+from agentctl.storestate import NETWORK_SHOWN_FOR, STORE_UNREACHABLE_AFTER, port_open, remote_status_state
+
 
 # ---------------------------------------------------------------- the status page (2026-10-29)
 # The owner: "write a status page for the agentctl - all reds and agents assigned, status, progress, logs etc". The

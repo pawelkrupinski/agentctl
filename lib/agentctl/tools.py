@@ -54,15 +54,6 @@ def locked_line(ns):
     return f"vault {ns} locked: ask the user to run `! secrets unlock {ns}`"
 
 
-def port_open(port, host="127.0.0.1", timeout=2.0):
-    import socket
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except OSError:
-        return False
-
-
 def export_lines():
     lines = []
     bins = [b for b in SDKMAN_BINS if os.path.isdir(b)]

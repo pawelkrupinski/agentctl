@@ -850,18 +850,6 @@ def flush_outbox(st=None):
     return n
 
 
-def mirror_state(st=None, now_=None):
-    """ci-runner's /v1/state copied into the laptop's state.json (with fetched_at): the status line reads it."""
-    st = st or open_store()
-    try:
-        snap = st.state()
-    except StoreUnavailable as e:
-        note_store_error(e, now_)
-        raise
-    state_update(**{**snap, "fetched_at": now_ if now_ is not None else time.time(), "store_error": None})
-    return snap
-
-
 # WHO MOVES EACH MACHINE PAST ITS DEADLINE (2026-11-12, issue 20261111T124954-ec04bd: `issue` and `lander` had a
 # deadline and no tick, so AgentctlItemsPastDeadline fired for days). Every machine is named here with the step that
 # fires its on_deadline; test_machines refuses a machine that is not. QUIET_DEADLINE_TYPES are the machines whose
