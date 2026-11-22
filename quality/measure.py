@@ -165,8 +165,8 @@ def global_reads(src, path):
     """The names a source reads at module level or as a GLOBAL inside a function or class (symtable: a local or a
     parameter that happens to share a top-level name elsewhere is no use of it)."""
     def walk(table):
-        out = {s.get_name() for s in table.get_symbols()
-               if s.is_referenced() and (s.is_global() or table.get_type() == "module")}
+        out = {s.get_name() for s in table.get_symbols() if s.is_referenced() and (  # module level: read, never bound
+            not (s.is_assigned() or s.is_imported()) if table.get_type() == "module" else s.is_global())}
         for child in table.get_children():
             out |= walk(child)
         return out

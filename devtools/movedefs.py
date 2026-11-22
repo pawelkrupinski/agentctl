@@ -80,18 +80,21 @@ for p in parts:
 missing = names - found
 if missing:
     sys.exit(f"not found: {sorted(missing)}")  # nothing written yet
-for path, text in writes.items():
-    open(path, "w").write(text)
 tpath = os.path.join(lib, f"{to}.py")
-if new_desc is not None:
-    assert not os.path.exists(tpath), tpath
-    head = (f"# agentctl, part `{to}`: {new_desc}\n# Runs inside agentctl's one namespace, after the parts before it in "
-            f"lib/agentctl/__init__.py's PARTS (it uses their names).\n")
-    open(tpath, "w").write(head)
+init_text = None
+if new_desc is not None:  # every check before the first write: a refused move writes nothing
+    if os.path.exists(tpath):
+        sys.exit(f"{tpath} exists")
     s = open(init).read()
-    assert s.count(f'"{after}", ') == 1
-    open(init, "w").write(s.replace(f'"{after}", ', f'"{after}", "{to}", ', 1))
-body = open(tpath).read().rstrip("\n")
+    head, sep, rest = s.partition("PARTS = (")
+    if rest.split(")", 1)[0].count(f'"{after}",') != 1:
+        sys.exit(f"--after {after}: not once in PARTS")
+    init_text = head + sep + rest.replace(f'"{after}",', f'"{after}", "{to}",', 1)
+    body = (f"# agentctl, part `{to}`: {new_desc}\n# Runs inside agentctl's one namespace, after the parts before it in "
+            f"lib/agentctl/__init__.py's PARTS (it uses their names).\n")
+else:
+    body = open(tpath).read()
+body = body.rstrip("\n")
 block = "".join("\n\n\n" + text.strip("\n") for _p, text in moved)
 if before is None:
     body += block
@@ -101,5 +104,9 @@ else:
         sys.exit(f"{to}: --before {before}: {len(spans)} statements bind it")
     lines = body.split("\n")
     body = "\n".join(lines[:spans[0] - 1]).rstrip("\n") + block.rstrip("\n") + "\n\n\n" + "\n".join(lines[spans[0] - 1:])
+for path, text in writes.items():
+    open(path, "w").write(text)
+if init_text is not None:
+    open(init, "w").write(init_text)
 open(tpath, "w").write(body + "\n")
 print(f"moved {len(moved)} statements into {to}")

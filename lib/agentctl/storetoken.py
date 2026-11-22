@@ -35,13 +35,6 @@ def secrets_bin():
     return None
 
 
-def movies_repo_path():
-    """THE movies clone of this host: $AGENTCTL_MOVIES_REPO, else the server's own clone (~/movies) on ci-runner, else
-    ~/projects/movies. Every invariant, probe and step resolves the repository here."""
-    return os.environ.get("AGENTCTL_MOVIES_REPO") or os.path.join(
-        HOME, "movies" if host_role() == "server" else os.path.join("projects", "movies"))
-
-
 def interactive_foreground():
     """Only an interactive, foreground invocation may run `secrets` (it can pop a Touch ID / keychain prompt): a TTY on
     stdin or stderr, AGENTCTL_INTERACTIVE=1, or an agent's own command in its Claude Code session (CLAUDECODE and

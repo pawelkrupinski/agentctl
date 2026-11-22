@@ -118,6 +118,8 @@ class PureMoveTest(unittest.TestCase):
         lib = fake_lib(parts)
         self.assertNotEqual(tool("movedefs", lib, "top", "LIMIT", "OTHER", "nonesuch").returncode, 0)
         self.assertIn("LIMIT", read(lib, "mid"), "a refused move writes nothing")
+        self.assertNotEqual(tool("movedefs", lib, "new", "--new", "x", "--after", "nonesuch", "LIMIT", "OTHER").returncode, 0)
+        self.assertIn("LIMIT", read(lib, "mid"), "nor does one refused for its new part's place")
         r = tool("movedefs", lib, "top", "--before", "TABLE", "LIMIT", "OTHER")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("return other()\n\n\nLIMIT, OTHER = 3, 4\n\n\nTABLE = {", read(lib, "top"))
@@ -157,6 +159,16 @@ class MakeModuleTest(unittest.TestCase):
                             "print(agentctl.entry(), sys.modules['agentctl.mid'].helper())", os.path.dirname(lib)],
                            capture_output=True, text=True, timeout=60)
         self.assertEqual(r.stdout.split(), [os.sep + "x"] * 2, r.stderr)
+
+    def test_placemodules_puts_the_modules_first(self):
+        lib = fake_lib(dict([("top", PARTS["top"]), ("mid", PARTS["mid"]), ("core", PARTS["core"])]))
+        self.assertEqual(tool("placemodules", lib).returncode, 0)
+        self.assertIn('PARTS = ("core", "top", "mid")', read(lib, "__init__"))
+
+    def test_a_module_level_comprehension_variable_is_no_namespace_name(self):
+        lib = fake_lib(dict(PARTS, mid="TABLE = {p: p for p in (1, 2)}\n"))
+        r = tool("mkmodule", lib, "mid")
+        self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_a_part_reading_a_namespace_name_is_refused(self):
         r = tool("mkmodule", fake_lib(), "top")

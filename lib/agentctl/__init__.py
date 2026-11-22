@@ -20,11 +20,17 @@ import os as _os
 import sys as _sys
 import types as _types
 
-MODULES = ("core", "timefmt", "statefile", "moviestools", "forge", "ghapp", "classify", "store", "procs", "selfcode", "buildview")
+MODULES = ("core", "timefmt", "statefile", "moviestools", "forge", "ghapp", "classify", "store", "procs", "selfcode", "repos", "buildview", "policy", "notifyurl")
 
-PARTS = ("core", "storetoken", "timefmt", "statefile", "moviestools", "forge", "ghapp", "classify", "store", "procs", "selfcode", "wait", "owned", "ciwhy", "branches", "red", "redseen", "redfixread", "redfixes", "redmove", "redretired", "reduntracked", "redstep", "redcrash", "redpending", "redverify", "reddispatch", "redreplay", "fixer", "fixerland", "fixersession", "fixerlife", "redclaim", "redview", "redearly", "redtick", "redblock", "redvault", "ask", "owner", "land", "cpu", "gov", "slots",
-         "landwatch", "waiting", "buildview", "queue", "queuerecheck", "queuesubmit", "queueuntil", "queueslots", "queueclose", "queuediff", "queuepush", "queuebatch", "remote", "batch", "changekind", "tools", "cleanup", "maint", "policy", "lander", "blame", "explorer", "reverts", "server", "upkeep", "watchdog",
-         "inbox", "alerts", "notifyurl", "recovery", "projector", "status", "live", "stats", "config", "cli")
+PARTS = ("core", "timefmt", "statefile", "moviestools", "forge", "ghapp", "classify", "store", "procs", "selfcode",
+         "repos", "buildview", "policy", "notifyurl", "config", "storetoken", "wait", "owned", "ciwhy", "branches",
+         "red", "redseen", "redfixread", "redfixes", "redmove", "redretired", "reduntracked", "redstep", "redcrash",
+         "redpending", "redverify", "reddispatch", "redreplay", "fixer", "fixerland", "fixersession", "fixerlife",
+         "redclaim", "redview", "redearly", "redtick", "redblock", "redvault", "ask", "owner", "land", "cpu", "gov", "slots",
+         "landwatch", "waiting", "queue", "queuerecheck", "queuesubmit", "queueuntil", "queueslots", "queueclose",
+         "queuediff", "queuepush", "queuebatch", "remote", "batch", "changekind", "tools", "cleanup", "maint",
+         "lander", "blame", "explorer", "reverts", "server", "upkeep", "watchdog", "inbox", "alerts", "recovery",
+         "projector", "status", "live", "stats", "cli")
 
 
 class Namespace(_types.ModuleType):
@@ -32,6 +38,8 @@ class Namespace(_types.ModuleType):
 
     def __setattr__(self, name, value):
         super().__setattr__(name, value)
+        if isinstance(value, _types.ModuleType) and value.__name__ == f"agentctl.{name}":
+            return  # the import system binding a submodule on its package: no patch (policy.py defines `policy`)
         for mod in modules_loaded():
             if name in mod.__dict__:
                 setattr(mod, name, value)

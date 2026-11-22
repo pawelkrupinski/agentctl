@@ -180,12 +180,6 @@ def store_grace(st, now_=None):
     return gap if gap > 60 else 0
 
 
-def server_repo():
-    """The reconciler's own clone on ci-runner (movies_repo_path; `tick` clones it from $AGENTCTL_MOVIES_REMOTE as
-    remote()'s name)."""
-    return movies_repo_path()
-
-
 # THE SERVER CLONE IS ATOMIC (2026-10-29: the reconciler crash-looped at 11:33 mid-clone; the half clone's .git -- an
 # incomplete object store, a stray shallow_* temp file -- passed for a clone, and every landing check's fetch of main
 # failed for hours). A clone goes into a temp directory beside the target, is verified (origin/main resolves, its

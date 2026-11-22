@@ -34,7 +34,9 @@ def top_defs(tree):
 
 def reads(src, path):
     def walk(t):
-        out = {s.get_name() for s in t.get_symbols() if s.is_referenced() and (s.is_global() or t.get_type() == "module")}
+        # at module level: a name read and never bound there (a module-level comprehension's variable is bound)
+        out = {s.get_name() for s in t.get_symbols() if s.is_referenced() and (
+            not (s.is_assigned() or s.is_imported()) if t.get_type() == "module" else s.is_global())}
         for c in t.get_children():
             out |= walk(c)
         return out

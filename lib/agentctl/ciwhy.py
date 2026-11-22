@@ -12,17 +12,12 @@
 # following them -- or any red of an unproven gate workflow -- is REPORT ONLY: it holds no push, it is no gate red (its
 # reds are outside the gate's), and ci-why says so. Only movies (GATED_REPOS) puts a red gate in front of its landings.
 GATING_CHECKS_FILE = ".github/gating-checks.tsv"  # kind, workflow (file), name, proven (#run | aggregate | unproven), note
-GATED_REPOS = ("pawelkrupinski/movies",)
 _gating_rows = process_cache({})      # (repo, main sha) -> rows
 _report_only_mem = process_cache({})  # run id -> (bool, why): a decided run's jobs never change
 
 
 class GateRegistryUnread(RuntimeError):
     """The gating checks registry could not be read and none was read before: the gate is unread (never green)."""
-
-
-def gated_repo(o_r):
-    return o_r in GATED_REPOS
 
 
 def gating_checks_parse(text):
@@ -179,114 +174,6 @@ def gate_report_only(o_r, name, run):
     return out
 
 
-# THE WATCHED REPOS (the owner, 2026-10-30, ci-failures recommendation 4: infra's Stage NixOS closures was red 29 h and
-# core's Main Pipeline 21 h with no fixer, because the red tick read movies only). Which repos the red machine watches
-# is config: red-repos.json beside the entry ($AGENTCTL_RED_REPOS names another file), one entry per repo --
-# its gate workflows (the newest decided run of each is what opens and clears its reds), its family (every red of the
-# repo goes to that ONE fixer; red-families.json says how the family is held) and its push policy: "land" (the fixer
-# lands with `agentctl land`) or "owner-only" (an infra push is a deploy: the fixer prepares the fix on a local
-# branch and files the owner a one-liner with `agentctl red owner-push`; it never pushes or deploys). The PRIMARY
-# repo (movies) keeps everything it had -- its reds' keys, its outside workflows, its local checks, its landing gate
-# (its gating checks registry above, which stays movies' alone: watching a repo's reds does not put a red gate in front
-# of its landings). The other repos are read through their gate workflows only.
-RED_PRIMARY = GATED_REPOS[0]
-RED_REPOS_DEFAULT = [{"repo": RED_PRIMARY, "push": "land", "red_workflows": True, "signed": False}]
-RED_PUSH_POLICIES = ("land", "owner-only")
-_red_repos_cache = process_cache({})
-
-
-def red_repos_path():
-    return os.environ.get("AGENTCTL_RED_REPOS") or os.path.join(os.path.dirname(TOOL_PATH), "red-repos.json")
-
-
-def red_repos_parse(raw):
-    """The watched repos from red-repos.json's parsed JSON: [{repo, gate: [(name, file)], family, push, clone}], the
-    primary first (added when the file lacks it). Raises ValueError on a malformed entry: a typo must not quietly
-    stop a repo being watched."""
-    out = []
-    for x in (raw or {}).get("repos") or []:
-        repo = x.get("repo")
-        if not isinstance(repo, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
-            raise ValueError(f"a repo entry needs `repo: <owner>/<name>`: {x!r}")
-        gate = x.get("gate") or []
-        if repo == RED_PRIMARY and not gate:
-            pass  # the primary's gate is its gating checks registry (gate_flows), never a list here
-        elif not gate or not all(isinstance(g, list) and len(g) == 2 and all(isinstance(v, str) and v for v in g)
-                               for g in gate):
-            raise ValueError(f"{repo}: `gate` must be [[<workflow name>, <workflow file>], ...]")
-        push = x.get("push") or "land"
-        if push not in RED_PUSH_POLICIES:
-            raise ValueError(f"{repo}: `push` must be one of {', '.join(RED_PUSH_POLICIES)}, not {push!r}")
-        clone = x.get("clone")
-        keeps = x.get("red_workflows", False)
-        if not isinstance(keeps, bool):
-            raise ValueError(f"{repo}: `red_workflows` is true or false, not {keeps!r}")
-        signed = x.get("signed", True)
-        if not isinstance(signed, bool):
-            raise ValueError(f"{repo}: `signed` is true or false, not {signed!r}")
-        out.append({"repo": repo, "gate": [tuple(g) for g in gate], "family": x.get("family"), "push": push,
-                    "clone": os.path.expanduser(clone) if clone else None,
-                    "generated": generated_parse(repo, x.get("generated")), "red_workflows": keeps,
-                    "signed": signed})
-    if len({c["repo"] for c in out}) != len(out):
-        raise ValueError("a repo is listed twice")
-    if not any(c["repo"] == RED_PRIMARY for c in out):
-        out.insert(0, red_repos_parse({"repos": RED_REPOS_DEFAULT})[0])
-    return sorted(out, key=lambda c: c["repo"] != RED_PRIMARY)
-
-
-def generated_parse(repo, raw):
-    """A repo's GENERATED FILES (waiting.py): [{paths: [glob], regen: [argv] or None, timeout: s}] from its `generated`
-    entries (`{"paths": [...], "regen": "<command run in the tree>", "timeout": <s, optional>, "merge": "rows" | "regen"}`;
-    no `regen`: a table merged row by row only, its rows hand-written -- a row both sides changed is the author's
-    conflict; `merge: regen`: a SNAPSHOT -- HTML, JSON, a rendered text -- never merged by rows, regenerated over the
-    combined tree whenever both sides changed it: waiting.py SNAPSHOTS ARE REGENERATED, NEVER MERGED). Raises
-    ValueError."""
-    out = []
-    for g in raw or []:
-        paths, regen = (g or {}).get("paths"), (g or {}).get("regen")
-        if not paths or not all(isinstance(p, str) and p and not p.startswith("/") for p in paths) \
-                or (regen is not None and (not isinstance(regen, str) or not regen.strip())):
-            raise ValueError(f"{repo}: a `generated` entry needs `paths: [<repo path or glob>, ...]` and, when it has "
-                             f"one, `regen: <command>`: {g!r}")
-        timeout = g.get("timeout")
-        if timeout is not None and not (isinstance(timeout, (int, float)) and timeout > 0):
-            raise ValueError(f"{repo}: a `generated` entry's `timeout` is seconds > 0: {g!r}")
-        merge = g.get("merge", "rows")
-        if merge not in ("rows", "regen") or (merge == "regen" and regen is None):
-            raise ValueError(f"{repo}: a `generated` entry's `merge` is `rows` (the default) or `regen` (a SNAPSHOT: "
-                             f"never merged by rows, always regenerated: it needs `regen`): {g!r}")
-        out.append({"paths": list(paths), "regen": shlex.split(regen) if regen is not None else None, "timeout": timeout,
-                    **({"merge": "regen"} if merge == "regen" else {})})
-    return out
-
-
-def red_repos():
-    """The watched repos (red_repos_parse), re-read when the file changes; the primary alone when it is missing or
-    unreadable (said once per change)."""
-    path = red_repos_path()
-    try:
-        m = os.path.getmtime(path)
-    except OSError:
-        m = None
-    hit = _red_repos_cache.get(path)
-    if hit and hit[0] == m:
-        return hit[1]
-    repos = red_repos_parse({"repos": RED_REPOS_DEFAULT})
-    if m is not None:
-        try:
-            with open(path) as f:
-                repos = red_repos_parse(json.load(f))
-        except (OSError, ValueError) as e:
-            err(f"red repos: {path} unreadable ({str(e)[:200]}): only {RED_PRIMARY} is watched")
-    _red_repos_cache[path] = (m, repos)
-    return repos
-
-
-def red_repo_conf(o_r):
-    return next((c for c in red_repos() if c["repo"] == o_r), None)
-
-
 def repo_signs(o_r):
     """Whether repo o_r's main keeps commit signatures (red-repos.json `signed`, default true). movies' does not: its
     land rebases every change with NO_SIGN, so a fixer's signature never reaches main."""
@@ -298,12 +185,6 @@ def red_is_other(o_r):
     """True for a watched repo other than the primary (red-repos.json). Any other name -- the primary, or a repo nobody
     configured (the tests' `o/r`) -- is treated as the primary, exactly as before 2026-10-30."""
     return o_r != RED_PRIMARY and red_repo_conf(o_r) is not None
-
-
-def red_repo_of(d):
-    """The repo a red (its data, its picture, a fixer record) belongs to: its `repo`, else the primary (every red from
-    before 2026-10-30 is movies')."""
-    return (d or {}).get("repo") or RED_PRIMARY
 
 
 def red_gate_flows(o_r):
@@ -321,10 +202,6 @@ def red_owner_only(o_r):
     return bool(c and c["push"] == "owner-only")
 
 
-def red_repo_short(o_r):
-    return o_r.split("/", 1)[-1]
-
-
 def red_repo_tag(o_r, num):
     """A red run's directory name under reds/: the run number for the primary (as always), `<repo>-<number>` for the
     others -- run numbers are per repo, so infra #3455 and movies #3455 are two runs."""
@@ -340,16 +217,6 @@ def red_repo_key(o_r, key):
     return hashlib.sha1(f"{o_r}\0{key}".encode()).hexdigest()[:12]
 
 
-def red_repo_clone(o_r):
-    """This machine's clone of o_r: its config's `clone` when it is a git checkout, else a known clone (REPOS); None."""
-    c = red_repo_conf(o_r) or {}
-    p = c.get("clone")
-    if p and os.path.isdir(p) and git_ok(p, "rev-parse", "--git-dir"):
-        return p
-    try:
-        return repo_path_for(o_r)
-    except (Exception, SystemExit):
-        return None
 RUN_FIELDS = "databaseId,number,status,conclusion,headSha,url,displayTitle,workflowName,createdAt,updatedAt,event"
 RED_CONCLUSIONS = ("failure", "timed_out")
 
@@ -375,20 +242,6 @@ def main_runs(o_r, wfile, limit=30):
             _not_on_main_said.add(wfile)
             err(f"{wfile} is not on main yet: no run of it gates anything until it lands")
         return []
-
-
-def repo_path_for(o_r):
-    # ci-runner's reconciler has none of REPOS (HOME is its state root): its own clone is movies' scan repo, or
-    # main_workflow_files reads nothing there -- no workflow outside the newest 200 runs is listed and no callable-only
-    # red is ever proven (2026-10-29: Report run timings #38 stayed offered under f8f51e8)
-    for p in REPOS + [server_repo()]:
-        if os.path.isdir(p) and git_ok(p, "remote", "get-url", remote()):
-            try:
-                if slug(p) == o_r:
-                    return p
-            except (SystemExit, RuntimeError):
-                pass
-    return None
 
 
 def commit_line(o_r, sha, repo=None):

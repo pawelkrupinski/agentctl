@@ -8,7 +8,7 @@ mypy-errors	blame	261
 mypy-errors	branches	322
 mypy-errors	buildview	49
 mypy-errors	changekind	32
-mypy-errors	ciwhy	274
+mypy-errors	ciwhy	250
 mypy-errors	classify	1
 mypy-errors	cleanup	137
 mypy-errors	cli	14
@@ -63,13 +63,14 @@ mypy-errors	redvault	113
 mypy-errors	redverify	44
 mypy-errors	redview	41
 mypy-errors	remote	214
+mypy-errors	repos	27
 mypy-errors	reverts	66
-mypy-errors	server	398
+mypy-errors	server	396
 mypy-errors	slots	408
 mypy-errors	stats	144
 mypy-errors	status	249
 mypy-errors	store	132
-mypy-errors	storetoken	63
+mypy-errors	storetoken	62
 mypy-errors	tools	131
 mypy-errors	upkeep	30
 mypy-errors	wait	68

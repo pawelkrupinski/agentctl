@@ -14,6 +14,9 @@
 # is STUCK, and what the tick does then (its recovery). note_hold refuses an unknown kind, change_hold_stuck reads the
 # bound, and the change tick runs the recovery: no hold outlives its bound in silence.
 
+from agentctl.core import err, process_cache
+from agentctl.store import machine_state, open_store
+
 
 class Policy:
     """A rule: id, effect (hold / reject / delay), the rule in one line, who decided it (None: agent-proposed), whether

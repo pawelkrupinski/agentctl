@@ -3,6 +3,14 @@
 # Runs inside agentctl's one namespace (it uses core's gh_json, HOME, state_root).
 # A red -> the failing JOB's page anchored at the failing step (GitHub highlights it); else the run; an ask with no run
 # -> a local HTML page of the question, its section highlighted by :target; anything else -> None (a plain notification).
+
+import os
+import re
+from agentctl.core import process_cache, state_root
+from agentctl.forge import gh_json
+from agentctl.repos import red_repo_of
+
+
 import html as _html
 
 
