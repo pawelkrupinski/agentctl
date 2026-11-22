@@ -1,5 +1,19 @@
 # agentctl, part `queuesubmit`: submitting a change: by ref, without the vault, the queued line, the fast precheck, a red fix's land.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import re
+import subprocess
+import sys
+import time
+from typing import Optional
+from agentctl.core import env_num, err, fmt_age, git, git_ok, remote, scratch, spawn_detached
+from agentctl.ghapp import TOOL_PATH
+from agentctl.classify import credential_failure, is_transient_network, redact_credentials
+from agentctl.store import MACHINES, StaleVersion, StoreUnavailable, machine_state, open_store
+from agentctl.waitingdir import ENTRY_FINAL, waiting_entries
+from agentctl.owned import backoff
+
 
 # SUBMISSION BY REF (design §13 step 14, §14.2): a queued change is also pushed to the remote as refs/heads/land/<entry>
 # (its own ref: the movies hook checks nothing on it, no workflow runs on it), so the change no longer lives only in a
@@ -13,34 +27,6 @@ def land_refs_supported(repo):
     """The repository's hook at origin/main checks nothing on a land/ ref (else the push would run its full checks)."""
     hook = git(repo, "show", f"{remote()}/main:scripts/hooks/pre-push", check=False).stdout
     return "refs/heads/land/" in hook
-
-
-def submit_ref(repo, d, e, to_server=False):
-    """Push the change to refs/heads/land/<entry> (bounded); the entry records it. Never fatal in phase 1 (the queue does
-    not need it); in phase 2 (to_server: ci-runner fetches the change from it) the caller refuses without it."""
-    if not land_refs_supported(repo):
-        e["push_error"] = f"not pushed: {remote()}/main's scripts/hooks/pre-push takes no refs/heads/land/ ref"
-        return None
-    ref = f"refs/heads/land/{e['id']}"
-
-    def push():  # the same sha to the change's own ref: idempotent, so tried again through a blip (net_retry)
-        rc_, out_ = run_watched(["git", "push", "--quiet", remote(), f"{e['head']}:{ref}"], repo, tool_env(),
-                                os.path.join(d, f"submit-{e['id']}"), "submit", **push_bounds())
-        if rc_ != 0 and is_transient_network(out_) and not credential_failure(out_):
-            raise RuntimeError(tail_of(out_ or "", 2)[:200])
-        return rc_, out_
-    try:
-        rc, out = net_retry(f"submit: the push of {ref}", push)
-    except TransientNetwork as ex:
-        rc, out = 1, str(ex)
-    if rc == 0:
-        e["ref"] = ref
-        if not to_server:
-            save_entry(d, e)
-        return ref
-    e["push_error"] = tail_of(out or "", 2).strip()[:300]
-    err(f"submit: could not push {ref} ({e['push_error'][:160]}); the change is queued all the same")
-    return None
 
 
 def push_failure_why(text: object) -> str:
@@ -106,22 +92,6 @@ def sweep_land_refs(repo, d, now_=None, store=None):
     return did
 
 
-def change_fields(repo, main_ref, head, a):
-    """A queue entry's fields for the change at head in repo (land's own submission)."""
-    commits = waiting_commits(repo, f"{remote()}/main", head)
-    return {"worktree": repo, "branch": branch_of(repo), "head": head, "commits": commits,
-            "fixes": sorted(fixes_of(repo, commits)), "diagnoses": sorted(diagnoses_of(repo, commits)) or None,
-            "keep_worktree": bool(getattr(a, "keep_worktree", False)),
-            "no_batch": bool(getattr(a, "no_batch", False)),
-            "claude_pid": int(os.environ["CLAUDE_PID"]) if (os.environ.get("CLAUDE_PID") or "").isdigit() else None,
-            "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or None,
-            "base": git(repo, "rev-parse", main_ref).strip(), "host": os.uname().nodename,
-            # THE LANDER (lander.py): who landed it, and each commit's keys to find it on main after the rebase
-            "lander": lander_record(repo), "commit_keys": commit_keys(repo, main_ref, head),
-            # FIX REPLAY (redreplay.py): agentctl's own replays of the push, for the server's check
-            "replays": fix_replay_proofs(repo, head) or None}
-
-
 # THE LAPTOP'S LAND NEEDS NO VAULT (2026-10-31: agents' `land` still died NoToken -- a `Fixes-Red:` trailer made
 # change_fields read the reds from ci-runner's store, the token read failed in a session whose vault was locked, and
 # fix_check let the NoToken (a SystemExit) through; the 10-30 fix had only let agents run `secrets` themselves, which
@@ -135,35 +105,6 @@ def queued_tail(waits=False):
     """The end of land's QUEUED / QUEUED-LOCAL line."""
     return ("not on main yet: this land now waits for its verdict" if waits
             else "not on main yet: END YOUR TURN; its verdict comes to `agentctl inbox`")
-
-
-def submit_to_server(repo, d, fields, note="", after_queued=None, waits=False):
-    """THE LAPTOP'S ONLY WAY INTO THE QUEUE (phase 2; it holds no queue of its own): the change pushed to
-    refs/heads/land/<id>, then submitted to ci-runner's queue (the store unreachable, or no token here: the outbox,
-    which the sync sends). Prints QUEUED / QUEUED-LOCAL / NOT LANDED; returns land's exit code. waits: this land then
-    waits for the verdict itself (a red fixer's, fixer_land)."""
-    head = fields["head"]
-    e = {**fields, "id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{os.urandom(3).hex()}"}
-    if not submit_ref(repo, d, e, to_server=True):
-        print(f"NOT LANDED: could not push the change to refs/heads/land/{e['id']} (ci-runner checks it from there): "
-              f"{push_failure_why(e.get('push_error'))}: land again")
-        return 1
-    r = submit_remote(open_store(), e)
-    offer_token(repo)  # this agent's token to the laptop processor, which holds none after a restart
-    if r.get("outbox"):
-        why = ("no store token in this process (none in its environment, the processor's socket held none; land "
-               "never runs `secrets`): the sync submits it with its own token" if "AGENTCTL_STORE_TOKEN" in r["outbox"]
-               else f"the store is unreachable ({r['outbox']}); the sync submits it when it answers")
-        print(f"QUEUED-LOCAL {e['id']} ({head[:10]}){note}: {why}; {queued_tail(waits)}", flush=True)
-        if after_queued:
-            after_queued(e["id"])
-        return 0
-    ahead = r.get("ahead") or 0
-    print(f"QUEUED {r['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}){note}: its checks run on ci-runner; "
-          f"{queued_tail(waits)}", flush=True)
-    if after_queued:
-        after_queued(r["id"])
-    return 0
 
 
 # THE FAST PRECHECK (review 2026-11-06 P1; the owner, 11-06: "landing must not take significantly longer"): a repository
@@ -325,85 +266,6 @@ def precheck_reason(lines: list[str]) -> str:
     return "; ".join(out[:2])[:400]
 
 
-def cmd_land_precheck(a):
-    """The detached half of start_fast_precheck: run the repo's precheck, and on a refusal cancel the queued change."""
-    # Its own process group, ended WHOLE at the bound (review 2026-11-07: subprocess.run killed only the script, so what
-    # it started -- sbt, a test JVM -- lived on, and kept the output pipe, and so this wait, open): run_watched.
-    t0 = time.time()
-    rc, out = run_watched([os.path.join(a.repo, FAST_PRECHECK), "--base", a.base, "--head", a.head], a.repo, None,
-                          os.path.join(scratch(), f"agentctl-precheck-{a.entry}"), "precheck",
-                          stall=FAST_PRECHECK_BOUND, wall=FAST_PRECHECK_BOUND)
-    note_precheck(a.entry, time.time() - t0, rc, out)
-    if rc is None:
-        print(f"{out or ''}PRECHECK UNCHECKED: past its {FAST_PRECHECK_BOUND} s bound, ended with its children: "
-              "could not check, its landing check judges it", flush=True)
-        return 0
-    lines = (out or "").splitlines()
-    print("\n".join(lines), flush=True)
-    if rc != 1:
-        return 0
-    last = next((l for l in reversed(lines) if l.startswith("PRECHECK ")), lines[-1] if lines else "exit 1")
-    why = precheck_reason(lines)
-    last = f"{last} -- {why}" if why else last
-    cancel = argparse.Namespace(wcmd="cancel", repo=a.repo, entry=a.entry, renamed=True, hold_for=None, hold_why=None)
-    # NOT LANDED only when the cancel took: the landing check runs alongside and may have decided first (review
-    # 2026-11-07: a change that LANDED was told NOT LANDED, "its queue entry is cancelled").
-    try:
-        rc = cmd_waiting(cancel)
-    except (Exception, SystemExit) as e:  # the store unreachable: the change is still queued, its check judges it
-        err(f"could not cancel {a.entry}: {e}")
-        verdict = (f"PRECHECK REFUSED {a.entry} ({a.head[:10]}): {last}; it could not be cancelled ({str(e)[:120]}), so "
-                   f"the landing check still judges it -- `agentctl land cancel {a.entry}` to drop it, fix it in {a.repo}")
-        inbox_write("land", verdict, [verdict], [l for l in lines if l.strip()][-40:], 1, cwd=a.repo)
-        print(verdict, flush=True)
-        return 1
-    if rc != 0:
-        print(f"the fast precheck refused {a.entry}, but it is already decided (no open change to cancel): its own "
-              "verdict stands", flush=True)
-        return 0
-    verdict = (f"NOT LANDED: the fast precheck refused {a.entry} ({a.head[:10]}): {last}; its queue entry is cancelled. "
-               f"Fix it in {a.repo}, then land again")
-    inbox_write("land", verdict, [verdict], [l for l in lines if l.strip()][-40:], 1, cwd=a.repo)
-    print(verdict, flush=True)
-    return 1
-
-
-def enqueue(repo, main_ref, sh, a):
-    """Rebase, squash guard, then the change becomes a queued entry: prints QUEUED and starts the processor. A red
-    fixer's land then waits for the verdict (fixer_land)."""
-    rc, head = sync(repo, main_ref, sh, getattr(a, "release_hold", False))
-    if rc is not None:
-        return rc
-    d, _clone, _wt = waiting_state(repo)
-    fixer = in_fixer()
-    waits = fixer or bool(getattr(a, "until_done", False))  # this land waits for the verdict itself
-    a.queued_id = None
-
-    def after_queued(eid):
-        a.queued_id = eid
-        if not waits:  # one that waits runs it in the foreground (fixer_land, land_until_done)
-            start_fast_precheck(repo, main_ref, head, eid, a)
-    if host_role() == "sync":  # THE LAPTOP'S LAND NEEDS NO VAULT (see submit_to_server)
-        with no_vault():
-            rc = submit_to_server(repo, d, change_fields(repo, main_ref, head, a), after_queued=after_queued,
-                                  waits=waits)
-    else:
-        fields = change_fields(repo, main_ref, head, a)
-        e, ahead = queue_change(d, fields)
-        submit_ref(repo, d, e)
-        print(f"QUEUED {e['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}): its checks run in the "
-              f"background; {queued_tail(waits)}", flush=True)
-        after_queued(e["id"])
-        spawn_waiting_processor(repo)
-        offer_token(repo)
-        rc = 0
-    if rc != 0 or not waits or not a.queued_id:
-        return rc
-    if not fixer:  # land --until-done: its caller waits (land_until_done)
-        return foreground_precheck(repo, main_ref, head, a.queued_id, a)
-    return fixer_land(repo, main_ref, head, a.queued_id, a)
-
-
 # A RED FIX LANDS THROUGH THE QUEUE (2026-11-16, Main #2515: a fixer's land, in-process since the queue began, ran the
 # whole pre-push hook on the laptop -- its identitydrift step waited 75 min on the starved measure queue -- while its
 # fixer's own `timeout` killed it twice and its 180-min turn ran out; the queue's 45-s precheck would have refused the
@@ -412,22 +274,6 @@ def enqueue(repo, main_ref, sh, a):
 # waits for the change's verdict, bounded: LANDED <sha> / NOT LANDED: <why>, the lines its wrapper reads.
 FIXER_LAND_WAIT = 2 * 3600  # s a fixer's land waits for its queued change's verdict ($AGENTCTL_FIXER_LAND_WAIT)
 FIXER_LAND_POLL = (15, 60)  # s: the await's backoff, first and cap
-
-
-def foreground_precheck(repo, main_ref, head, eid, a):
-    """The fast precheck of queued change eid in THIS process (a land that waits for its verdict): 1 when it refused
-    (its NOT LANDED or PRECHECK REFUSED line the last printed), else 0."""
-    if not getattr(a, "no_fast_precheck", False) and os.access(os.path.join(repo, FAST_PRECHECK), os.X_OK):
-        base = git(repo, "rev-parse", main_ref).strip()
-        if cmd_land_precheck(argparse.Namespace(entry=eid, repo=repo, base=base, head=head)) == 1:
-            return 1
-    return 0
-
-
-def fixer_land(repo, main_ref, head, eid, a):
-    if foreground_precheck(repo, main_ref, head, eid, a) == 1:
-        return 1
-    return await_queued(eid)
 
 
 def change_decided(state):

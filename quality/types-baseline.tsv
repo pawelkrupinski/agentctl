@@ -51,11 +51,12 @@ mypy-errors	queue	30
 mypy-errors	queuebatch	59
 mypy-errors	queueclose	98
 mypy-errors	queuediff	84
+mypy-errors	queueenter	62
 mypy-errors	queuepush	76
 mypy-errors	queuerecheck	49
 mypy-errors	queueslots	28
-mypy-errors	queuesubmit	76
-mypy-errors	queueuntil	34
+mypy-errors	queuesubmit	30
+mypy-errors	queueuntil	18
 mypy-errors	recovery	54
 mypy-errors	red	56
 mypy-errors	redask	13

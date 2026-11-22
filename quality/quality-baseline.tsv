@@ -425,9 +425,8 @@ cycle	owner	1
 cycle	queuebatch	1
 cycle	queueclose	1
 cycle	queuediff	1
+cycle	queueenter	1
 cycle	queuepush	1
-cycle	queuesubmit	1
-cycle	queueuntil	1
 cycle	recovery	1
 cycle	red	1
 cycle	redblock	1
@@ -868,12 +867,12 @@ cyclomatic	workflow_timeout_bound	21
 cyclomatic	workflow_triggers	12
 cyclomatic	worktree_holding	12
 cyclomatic	write_snapshot	24
-fan-out	batch	15
-fan-out	cli	19
+fan-out	batch	14
+fan-out	cli	18
 fan-out	redmove	11
 fan-out	redtick	19
-fan-out	server	15
-fan-out	slots	12
+fan-out	server	14
+fan-out	slots	11
 fan-out	status	11
 fan-out	watchdog	14
 file-lines	alerts	719

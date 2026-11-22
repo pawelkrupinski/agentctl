@@ -1,5 +1,15 @@
 # agentctl, part `queueuntil`: land --until-done and durable verdicts.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import argparse
+import os
+import re
+from agentctl.core import cherry_landed, env_num, git, remote
+from agentctl.store import ENTRY_STATE, machine_state, open_store
+from agentctl.waitingdir import waiting_entries, waiting_state
+from agentctl.worktrees import worktrees
+from agentctl.cleanup import FREE_WAIT, close_worktree, free_worktree
+
 
 # LAND --UNTIL-DONE (the owner, 2026-11-18): agents kept ending badly -- stopping after the rebase without landing,
 # handing back partial reports or the same report twice, leaving worktrees behind, and `git branch -D` by hand after a
@@ -115,48 +125,3 @@ def until_done_finish(repo, eid, sha, a, item=None):
     return 0
 
 
-def land_until_done(repo, main_ref, sh, a):
-    """`land --until-done` (LAND --UNTIL-DONE above)."""
-    t0 = time.time()
-    bound = a.deadline if a.deadline is not None else env_num("AGENTCTL_UNTIL_DONE_DEADLINE", UNTIL_DONE_DEADLINE)
-    head = git(repo, "rev-parse", "HEAD").strip()
-    it = own_change_item(repo, head)
-    if it and it["state"] == "landed":
-        eid = it["id"]
-    elif it and it["state"] == "rejected" and verdict_still_holds(repo, main_ref, it):
-        # A VERDICT IS DURABLE (above): decided while no call waited, on this very main, said now
-        take_delivery(it)
-        why = str((it.get("data") or {}).get("why") or f"{it['id']} rejected")
-        print(f"DECIDED {it['id']} ({head[:10]}) while no --until-done waited:", flush=True)
-        print(why if why.startswith("NOT LANDED") else f"NOT LANDED: {why}", flush=True)
-        print(next_command(repo, why) + f" (to queue {head[:10]} again unchanged: ~/bin/agentctl land)", flush=True)
-        return 1
-    elif it and not machine_state("change", it["state"]).terminal:
-        eid = it["id"]
-        print(f"RESUMING {eid} ({head[:10]}, {it['state']}): waiting for its verdict", flush=True)
-    else:
-        git(repo, "fetch", "--quiet", remote(), "main", check=False)
-        commits, left = cherry_landed(repo, main_ref, "HEAD")
-        if commits is not None and not left and git_ok(repo, "rev-parse", "--verify", "-q", main_ref):
-            # nothing of its own left to land (it reached main another way, or there never was a commit)
-            return until_done_finish(repo, "-", git(repo, "rev-parse", main_ref).strip(), a)
-        a.until_done = True
-        rc = enqueue(repo, main_ref, sh, a)
-        eid = getattr(a, "queued_id", None)
-        if rc != 0 or not eid:
-            print(next_command(repo, ""), flush=True)
-            return 1
-    state, data, _waited = await_verdict(eid, max(0.0, bound - (time.time() - t0)))
-    if state == "landed":
-        sha = data.get("landed_sha") or landed_sha_of(eid, data)
-        print(f"LANDED {sha} (queued {eid})", flush=True)
-        return until_done_finish(repo, eid, sha, a, (it if it and it["id"] == eid else None)
-                                 or open_store().item("change", eid))
-    if change_decided(state):
-        why = str(data.get("why") or f"{eid} {state}")
-        print(why if why.startswith("NOT LANDED") else f"NOT LANDED: {why}", flush=True)
-        print(next_command(repo, why), flush=True)
-        return 1
-    print(f"NOT DONE: {eid} is {state} after {fmt_age(time.time() - t0)} (the --deadline); it stays queued -- run "
-          f"{UNTIL_DONE_AGAIN} again from {repo}: it resumes this entry", flush=True)
-    return 2
