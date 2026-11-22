@@ -20,22 +20,22 @@ import os as _os
 import sys as _sys
 import types as _types
 
-MODULES = ("core", "timefmt", "statefile", "moviestools", "forge", "ghapp", "classify", "store", "procs", "selfcode",
-           "repos", "buildview", "policy", "notifyurl", "config", "workflows", "trailers", "leases", "waitingdir",
-           "fixerrecords", "inboxentry", "wait", "redretired", "land", "storetoken", "lander", "redrecord",
-           "claudefiles", "gating", "allowedpaths", "cpu", "fixersession", "live", "owned", "stats", "clones",
-           "worktrees", "fixerenv", "explorer", "queueslots", "redfixread", "reverts", "maint", "deletions",
-           "dispatches", "cleanup", "machine", "govtickets", "testtmp", "procwatch", "inbox", "jvmreap",
-           "conditions", "notifier", "upkeep", "queue", "patches", "generated", "conflicts", "fixchange",
-           "queuerecheck", "redlink", "redfixes", "redworkflows", "redreplay", "issues", "identitychange",
-           "changekind", "redrepos", "redfamilies", "cistate", "owners", "redask", "alerts", "projector",
-           "laptoprole", "fixerland", "fixer", "govbudget", "gov", "govcmd", "queuesubmit", "queueuntil", "ancestry",
-           "red", "redmove", "waiting", "ciwhy", "branches", "redseen", "redobserve", "reduntracked", "landwatch",
-           "redblock", "rundispatch", "blameopen", "redopen", "redearly", "redclaim", "redverify", "redcrash",
-           "fixerlife", "owner", "redvault", "ask", "checkslot", "redpending", "remote", "remotestore", "queuebatch",
-           "blame", "reddispatch", "redstep", "queuediff", "redview", "cireport", "watchtick", "queueclose",
-           "tunnel", "launchd", "recovery", "watchdog", "queuepush", "storestate", "status", "localrecheck",
-           "redtick", "netwatch", "tools", "batch", "server", "processor", "queueenter", "slots", "cli", "landqueue")
+MODULES = ("core", "timefmt", "statefile", "moviestools", "classify", "store", "selfcode", "ghapp", "forge", "repos",
+           "buildview", "policy", "notifyurl", "config", "workflows", "trailers", "waitingdir", "redretired",
+           "storetoken", "redrecord", "claudefiles", "lander", "gating", "allowedpaths", "procs", "leases",
+           "fixerrecords", "inboxentry", "wait", "land", "cpu", "fixersession", "live", "owned", "stats", "clones",
+           "worktrees", "fixerenv", "explorer", "queueslots", "redfixread", "reverts", "deletions", "dispatches",
+           "machine", "govtickets", "testtmp", "procwatch", "inbox", "jvmreap", "maint", "cleanup", "conditions",
+           "notifier", "upkeep", "queue", "patches", "generated", "conflicts", "fixchange", "queuerecheck",
+           "redlink", "redfixes", "redworkflows", "redreplay", "issues", "identitychange", "changekind", "redrepos",
+           "redfamilies", "cistate", "owners", "redask", "alerts", "projector", "laptoprole", "fixerland", "fixer",
+           "govbudget", "gov", "govcmd", "queueuntil", "ancestry", "red", "redmove", "waiting", "queuesubmit",
+           "ciwhy", "branches", "redseen", "redobserve", "reduntracked", "landwatch", "redblock", "rundispatch",
+           "blameopen", "redopen", "redearly", "redclaim", "redverify", "redcrash", "fixerlife", "owner", "redvault",
+           "ask", "checkslot", "redpending", "remote", "remotestore", "queuebatch", "blame", "reddispatch",
+           "redstep", "queuediff", "redview", "cireport", "watchtick", "queueclose", "tunnel", "launchd", "recovery",
+           "watchdog", "queuepush", "storestate", "status", "localrecheck", "redtick", "netwatch", "tools", "batch",
+           "server", "landqueue", "processor", "queueenter", "slots", "cli")
 
 NAMESPACE = ()
 

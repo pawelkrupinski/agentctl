@@ -313,6 +313,19 @@ class MakeModuleTest(unittest.TestCase):
         self.assertEqual(lists(lib)[0], ["core", "top", "mid"])
         self.assertIn("PARTS = MODULES + NAMESPACE", read(lib, "__init__"))
 
+    def test_placemodules_puts_each_module_after_the_modules_it_imports(self):
+        parts = {"top": "from agentctl.mid import helper\n", "mid": "from agentctl.core import root\n\n\nhelper = root\n",
+                 "core": "def root():\n    return 1\n", "free": "X = 1\n"}
+        lib = fake_lib(parts, modules=tuple(parts))
+        r = tool("placemodules", lib)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(lists(lib)[1], ["core", "mid", "top", "free"])  # free imports nothing: it keeps its place
+        with open(os.path.join(lib, "core.py"), "w") as f:
+            f.write("from agentctl.top import helper\n")
+        r = tool("placemodules", lib)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("an import cycle among: core, mid, top", r.stderr)
+
     def test_a_module_level_comprehension_variable_is_no_namespace_name(self):
         lib = fake_lib(dict(PARTS, mid="TABLE = {p: p for p in (1, 2)}\n"))
         r = tool("mkmodule", lib, "mid")

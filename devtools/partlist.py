@@ -51,6 +51,27 @@ def place(lib, parts, modules):
     write_lists(lib, [p for p in parts if p in modules], [p for p in parts if p not in modules])
 
 
+def module_imports(lib, module):
+    """The modules a module imports at its top level (`from agentctl.<m> import ...`)."""
+    tree = ast.parse(open(part_path(lib, module)).read())
+    return {n.module.split(".")[1] for n in tree.body
+            if isinstance(n, ast.ImportFrom) and (n.module or "").startswith("agentctl.")}
+
+
+def import_order(lib, modules):
+    """The modules, each after every module it imports, otherwise in their given order (Kahn's, the earliest ready
+    first); refuses an import cycle, naming its modules."""
+    deps = {m: module_imports(lib, m) & set(modules) - {m} for m in modules}
+    out, done = [], set()
+    while len(out) < len(modules):
+        ready = next((m for m in modules if m not in done and deps[m] <= done), None)
+        if ready is None:
+            raise SystemExit(f"an import cycle among: {', '.join(m for m in modules if m not in done)}")
+        out.append(ready)
+        done.add(ready)
+    return out
+
+
 def import_lines(module, names):
     """`from <module> import a, b`, parenthesised and wrapped under 118 columns when longer: the one shape every devtool
     writes an import in."""
