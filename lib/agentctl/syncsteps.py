@@ -32,7 +32,7 @@ from agentctl.reddispatch import red_dispatcher, red_renew_holders
 from agentctl.queueclose import close_landed_changes, migrate_local_queue
 from agentctl.storestate import mirror_state
 from agentctl.netwatch import network_watch, tunnel_watch
-from agentctl.status import write_red_status_snapshot
+from agentctl.redstatus import write_red_status_snapshot
 
 
 SYNC_MIRROR_EVERY = 10   # s between the laptop's copies of /v1/state into state.json

@@ -45,8 +45,8 @@ from agentctl.redstep import red_step
 from agentctl.redview import repo_dispatch_set
 from agentctl.cireport import ci_state_refresh, ci_why
 from agentctl.localrecheck import recheck_local
-from agentctl.status import red_status
 from agentctl.redhold import red_enforce
+from agentctl.redstatus import red_status
 
 
 # -- the tick's red step (the processor; ci-why never acts)

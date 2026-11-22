@@ -9,17 +9,17 @@ from agentctl.stats import maybe_stats_pass
 from agentctl.clones import heal_enabled
 from agentctl.reverts import tick_reverts
 from agentctl.conditions import maybe_recovery_tick
+from agentctl.issues import tick_issues
 from agentctl.cistate import snapshot_gate_reds
 from agentctl.projector import maybe_archive_leases, project_changes
 from agentctl.queuesubmit import sweep_land_refs
 from agentctl.watchtick import tick_watches
 from agentctl.queueclose import close_landed_changes, stranded_changes
 from agentctl.queuepush import tick_changes
-from agentctl.status import tick_issues
-from agentctl.redtick import maybe_publish_gate, maybe_red_tick
 from agentctl.serverclone import clone_heal_tick
 from agentctl.landhold import tick_land_hold
 from agentctl.batch import say_batch, tick_batch
+from agentctl.redtick import maybe_publish_gate, maybe_red_tick
 
 
 def gate_is_red_now() -> bool:
