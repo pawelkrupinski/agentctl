@@ -2617,10 +2617,8 @@ def block_verdict_note(it, t, store=None):
     last = red_blocked_verdict(d)
     if not last or red_block_of(it, store):
         return None
-    try:
-        age = t - dt.datetime.strptime(str(last.get("at")), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp()
-    except ValueError:
-        age = None
+    at = iso_epoch(last.get("at"))
+    age = t - at if at is not None else None
     said = f"said {fmt_age(age)} ago" if age is not None else f"said at {last.get('at')}"
     return (f"{str(last.get('outcome'))[:300]} -- {said}, no block holds it (no probe clears it): if it is done or "
             f"superseded, `agentctl red unblock {d.get('key')} --why \"<what changed>\"`")

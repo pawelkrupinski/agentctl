@@ -105,7 +105,7 @@ def inbox_write(command, verdict, verdicts, tail, exit_code, final=True, cwd=Non
     eid = (f"{now.strftime('%Y%m%dT%H%M%S%f')}-{os.getpid()}-{re.sub(r'[^a-z]+', '-', command)}"
            + ("" if final else "-waiting"))
     here = safe_cwd()
-    rec = {"id": eid, "time": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "at": now.timestamp(), "command": command, "argv": sys.argv[1:],
+    rec = {"id": eid, "time": iso_at(now.timestamp()), "at": now.timestamp(), "command": command, "argv": sys.argv[1:],
            "cwd": cwd or here, "pid": os.getpid(), "final": final, "exit": exit_code, "verdict": verdict,
            "kind": inbox_kind(verdict, final),
            "owner": os.environ.get("CLAUDE_CODE_SESSION_ID") or f"{os.environ.get('USER', '?')}@{here}",

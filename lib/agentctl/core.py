@@ -148,14 +148,6 @@ ZERO = "0" * 40
 
 
 # ---------------------------------------------------------------- helpers
-def now():
-    return dt.datetime.now(dt.timezone.utc)
-
-
-def ts():
-    return now().strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def err(msg):
     print(f"agentctl: {msg}", file=sys.stderr, flush=True)
 
@@ -722,7 +714,3 @@ def pid_alive(pid):
         return False
     except PermissionError:
         return True
-
-
-def parse_time(s):
-    return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))

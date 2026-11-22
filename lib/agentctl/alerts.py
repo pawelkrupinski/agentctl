@@ -522,9 +522,8 @@ def alert_gate_decided_after(gate, at):
         return None
     for g in gate:
         created = ((g.get("decided") or {}).get("createdAt")) or ""
-        try:
-            c = dt.datetime.strptime(created, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp()
-        except ValueError:
+        c = iso_epoch(created)
+        if c is None:
             return False
         if c <= at:
             return False

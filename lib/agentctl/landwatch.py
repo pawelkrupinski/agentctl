@@ -304,6 +304,3 @@ def _watch(repo, sha, pushed_at, o_r, flows, own, fixes=(), claim=None):
         restart_if_changed([own])
         time.sleep(next(err_delays) if unreachable is not None else next(delays))
 
-
-def iso_at(t):
-    return dt.datetime.fromtimestamp(t, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

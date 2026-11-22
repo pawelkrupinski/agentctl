@@ -244,8 +244,6 @@ def red_verify_run_on_way(o_r, repo, f):
     return None
 
 
-def hhmmz(t):
-    return time.strftime("%H:%MZ", time.gmtime(float(t)))
 RED_PRIORITY = {"gate": 0, "fix": 1, "outside": 2, "flake": 3}
 RED_RECURRING = 3            # landed fixes the same failure outlived: `recurring`, and its fixer hunts the root cause
 RED_TICK_INTERVAL = 15       # seconds between the processor's red ticks ($AGENTCTL_RED_TICK)
@@ -3180,9 +3178,8 @@ def lapse_in_sleep(h):
     o = str(h.get("outcome") or "")
     if not LEASE_LAPSE.search(o):
         return False
-    try:
-        end = dt.datetime.strptime(str(h.get("at")), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp()
-    except ValueError:
+    end = iso_epoch(h.get("at"))
+    if end is None:
         return False
     return host_slept(end, OWNER_TTL + 300) >= env_num("AGENTCTL_SLEEP_MIN", SLEEP_MIN)
 

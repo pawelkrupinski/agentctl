@@ -618,11 +618,10 @@ def conflict_bounced(every, e, now_=None):
         return last
     if not last or last.get("status") != "rejected" or last.get("conflict_files") is None:
         return None
-    try:
-        at = dt.datetime.strptime(last.get("decided") or "", "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
-    except ValueError:
+    at = iso_epoch(last.get("decided"))
+    if at is None:
         return None
-    return last if (now_ or now().timestamp()) - at.timestamp() <= CONFLICT_PLACE_KEPT else None
+    return last if (now_ or now().timestamp()) - at <= CONFLICT_PLACE_KEPT else None
 
 
 def queue_change(d, fields, entry_id=None):
@@ -1444,7 +1443,7 @@ def laptop_role_standby(store=None, t=None):
 def laptop_role_line(row):
     m = lease_meta(row)
     since = m.get("since") or row.get("acquired_at")
-    when = time.strftime("%Y-%m-%d %H:%MZ", time.gmtime(float(since))) if since else "?"
+    when = day_hhmmz(since) if since else "?"
     return (f"laptop role held by {m.get('host') or row.get('holder')} since {when}; this machine "
             f"({role_host()}) is standby -- `agentctl laptop take` hands the role to it")
 
@@ -1478,7 +1477,7 @@ def cmd_laptop(a):
             print(line)
         elif row and row.get("holder"):
             print(f"laptop role held by this machine ({role_host()}, {machine_id()}) since "
-                  f"{time.strftime('%Y-%m-%d %H:%MZ', time.gmtime(float(lease_meta(row).get('since') or 0)))}")
+                  f"{day_hhmmz(lease_meta(row).get('since') or 0)}")
         else:
             print("laptop role: free (the next sync pass takes it)")
         return 0

@@ -40,13 +40,6 @@ def status_run_url(repo, number, run=None):
     return forge_run_url(repo or SHORT["movies"], number, run)
 
 
-def status_iso_epoch(s):
-    try:
-        return dt.datetime.strptime(str(s), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp()
-    except (TypeError, ValueError):
-        return None
-
-
 def status_err(e):
     return {"error": f"{type(e).__name__}: {str(e).replace('agentctl: ', '')[:300]}"}
 
@@ -656,7 +649,7 @@ def status_agents(st, t, records=None):
                                   "worktree": ls.get("worktree"), "transcript": ls.get("log"), "leases": []})
         a["leases"].append(ls)
     for rec in records if records is not None else status_fixer_records(t):
-        ended = status_iso_epoch(rec.get("ended"))
+        ended = iso_epoch(rec.get("ended"))
         if not rec.get("alive") and (not ended or t - ended > STATUS_AGENT_RECENT):
             continue
         k = f"pid:{rec.get('pid')}"
@@ -679,7 +672,7 @@ def status_agents(st, t, records=None):
         out.append(a)
     def started(a):
         s = a.get("started")
-        return float(s) if isinstance(s, (int, float)) else status_iso_epoch(s) or 0.0
+        return float(s) if isinstance(s, (int, float)) else iso_epoch(s) or 0.0
     out.sort(key=lambda a: (not a["leases"], not a.get("alive"), -started(a)))
     out = status_enrich_all(out[:STATUS_AGENTS_MAX])
     try:

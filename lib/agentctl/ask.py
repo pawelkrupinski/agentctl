@@ -151,7 +151,7 @@ def red_decided_view(d, text, short):
     dec = red_decision(d)
     if not dec:
         return text, short
-    at = f" {time.strftime('%H:%MZ', time.gmtime(float(dec['at'])))}" if dec.get("at") else ""
+    at = f" {hhmmz(dec['at'])}" if dec.get("at") else ""
     tail = (f"vault released{at}" if dec.get("category") == "vault"
             else f"decided{at}: {clean_cut(dec['answer'])}")
     return f"{text} ({tail})", f"{short} ({tail})"

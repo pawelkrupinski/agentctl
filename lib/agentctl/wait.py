@@ -214,10 +214,6 @@ def step_window_lines(log, steps):
     return out
 
 
-def _ts(iso19):
-    return dt.datetime.fromisoformat(iso19 + "+00:00").timestamp()
-
-
 def log_last_ts(log):
     return next((m.group(1) for m in (STEP_TS.match(l) for l in reversed((log or "").splitlines())) if m), None)
 
@@ -230,7 +226,8 @@ def job_failed_slice(o_r, job):
     picked = step_window_lines(log, steps) or [(steps[0]["name"] if steps else "-", l) for l in log.splitlines()]
     note = None
     ends, done = log_last_ts(log), max((str(s.get("completedAt") or "")[:19] for s in steps), default="")
-    if ends and done and _ts(done) - _ts(ends) > 120:  # the log stops minutes before its failed step ended
+    end_at, done_at = iso_epoch(ends), iso_epoch(done)
+    if end_at is not None and done_at is not None and done_at - end_at > 120:  # the log stops minutes before its failed step ended
         note = f"LOG TRUNCATED: {job['name']}'s log ends {ends}Z, its failed step ended {done}Z"
     return [f"{job['name']}\t{st}\t{l}" for st, l in picked], note
 
