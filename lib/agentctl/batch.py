@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import time
+from typing import Any, Callable
 from agentctl.core import (
     HOME, NoToken, _bounded, env_num, err, fmt_age, git, git_ok, process_cache, remote, run_bounded, slug,
     spawn_detached, state_root)
@@ -65,7 +66,7 @@ BATCH_RETRY_MAX = 3
 BATCH_LEASE_MAX = 6 * 3600  # the batch executor's leases: its check (2 h) and its bisect (4 h), its machine's bounds
 
 
-def status_batch(st, d):
+def status_batch(st: Any, d: str) -> Any:
     """The batch `land status` shows: this host's, else (the laptop) the one ci-runner's reconciler runs."""
     return current_batch(st, d) or current_batch(st, d, any_key=True)
 
@@ -209,7 +210,7 @@ MACHINES["hold"] = {
 }
 
 
-def hold_by():
+def hold_by() -> str:
     """Who holds or releases: the agent's name, else the user and host."""
     try:
         name = agent_name()
@@ -218,7 +219,7 @@ def hold_by():
     return name or f"{os.environ.get('USER', '?')}@{os.uname().nodename.split('.')[0]}"
 
 
-def land_hold_set(st, secs, why, by):
+def land_hold_set(st: Any, secs: int, why: str | None, by: str) -> Any:
     """Hold, or extend the hold in force to now + secs. Returns the hold item."""
     secs = max(60, min(int(secs), LAND_HOLD_MAX))
     cur = land_hold(st)
@@ -238,7 +239,7 @@ def land_hold_set(st, secs, why, by):
     return it
 
 
-def land_hold_release(st, by):
+def land_hold_release(st: Any, by: str) -> list[str]:
     """Release every hold in force. Returns their ids."""
     out = []
     for it in land_holds(st):
@@ -264,7 +265,7 @@ WAITING_GREEN_TICKS = 100  # ticks (~10 min) changes may wait at a green gate wi
 BATCH_MOVING = ("checking", "bisecting", "pushing", "held")  # held: its own STALLED condition says so
 
 
-def batch_progress_path(d):
+def batch_progress_path(d: str) -> str:
     return os.path.join(d, "batch-progress.json")
 
 
@@ -598,7 +599,7 @@ def batch_step(repo, d, now_, seen, st):
     return []
 
 
-def batch_row_ids(bt, rows):
+def batch_row_ids(bt: dict[str, Any] | None, rows: list[dict[str, Any]]) -> set[str]:
     """The change rows the batch carries: its members, and a change that joined one of them (the same worktree: a
     queued change that met a red gate before ONE CHANGE, ONE ITEM, queue_join, became a waiting entry of its own, so
     its item follows that entry)."""
@@ -682,7 +683,8 @@ def batch_drift_check(repo, d, tree, base, tip, against_main=False):
     return None, out
 
 
-def batch_drift_split(repo, d, st, it, members, tree, out):
+def batch_drift_split(repo: str, d: str, st: Any, it: dict[str, Any], members: list[dict[str, Any]], tree: str,
+                      out: str) -> int:
     """DRIFT RED on the batch tip: a lone identity change confirmed red is rejected; else every identity change is marked
     and the batch assembled again, one identity change per batch (drift_serialize)."""
     ident = [e for e in members if identity_model_commits(tree, e.get("commits") or [])]
@@ -708,7 +710,7 @@ def batch_drift_split(repo, d, st, it, members, tree, out):
     return 1
 
 
-def check_batch(repo, bid):
+def check_batch(repo: str, bid: str) -> int:
     """THE BATCH EXECUTOR (`waiting check-batch <id>`): holding check/batch-<id> and its tree's slot, it checks the
     assembled tip; pass -> pushing (the tick pushes); fail -> bisecting -> a confirmed culprit rejected and the passing
     prefix -> pushing (or assembling), every prefix passing -> assembling again (counted); stalled twice -> held."""
@@ -954,7 +956,7 @@ def _push_batch_item(repo, d, st, it, members, tip, base, i):
 ROUND_ERRORS_MAX = 3
 
 
-def land_status_line(r, bt, in_batch, t):
+def land_status_line(r: dict[str, Any], bt: dict[str, Any] | None, in_batch: set[str], t: float) -> str:
     """`land status`'s line for change row r (change_rows): its state, its KIND when it is a red fix, the batch it is
     in, its hold, and whether it is past its deadline -- no held change is silent (tests/queue_sim.py checks it)."""
     left = int(r["deadline"] - t)
@@ -966,7 +968,7 @@ def land_status_line(r, bt, in_batch, t):
             + (f"  PAST ITS DEADLINE (level {r['level']})" if left < 0 else ""))
 
 
-def land_status_entry(st, entry, t):
+def land_status_entry(st: Any, entry: str, t: float) -> int:
     """`land status <entry>`: ONE change -- the item whose id is `entry`, else the one whose id contains it -- open or
     decided: its state, worktree and head, then its verdict (LANDED <sha> / NOT LANDED: <why>) or what it waits on.
     A VERDICT IS DURABLE (queueuntil.py): an agent whose wait died reads it here after the fact. 1 when none or several
@@ -998,7 +1000,7 @@ def land_status_entry(st, entry, t):
     return 0
 
 
-def write_snapshot(d, store=None):
+def write_snapshot(d: str, store: Any = None) -> None:
     """The tick's part of state.json: the open items and the tick's own time and code version."""
     st = store or open_store()
     open_ = lambda typ: [i for i in st.items(typ) if typ in MACHINES and not machine_state(typ, i["state"]).terminal]
@@ -1031,7 +1033,7 @@ STEP_JOIN = 20
 _step_errors = process_cache({})
 
 
-def run_step(name, step):
+def run_step(name: str, step: Callable[[], Any]) -> bool | None:
     """One tick step, bounded (see above). True: done; False: it failed (now or, still running before, since);
     None: still running in its thread."""
     def work():
@@ -1107,7 +1109,7 @@ def service_plist(repo, log):
 """
 
 
-def waiting_service(action, repo):
+def waiting_service(action: str, repo: str) -> int:
     """The `waiting` processor as a launchd agent (KeepAlive, RunAtLoad): `agentctl waiting run --service` for the clone,
     its log in the waiting state dir. install writes the plist and bootstraps it; uninstall boots it out and removes it."""
     d, clone, _wt = waiting_state(repo)

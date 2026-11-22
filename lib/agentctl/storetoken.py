@@ -65,7 +65,7 @@ def interactive_foreground():
         return False
 
 
-def token_from_processor(o_r):
+def token_from_processor(o_r: str) -> str | None:
     """Ask the always-on processor (private 0600 socket, same uid) for the token it holds. None when it is not there."""
     import socket
     if _IN_PROCESSOR[0] or token_ns(o_r) != "movies":
@@ -80,12 +80,12 @@ def token_from_processor(o_r):
         return None
 
 
-def processor_sock():
+def processor_sock() -> str:
     """The movies processor's token socket on this host."""
     return token_sock_path(waiting_state(movies_repo_path())[0])
 
 
-def seed_processor(tok):
+def seed_processor(tok: str) -> None:
     """A token this process just read from the vault goes to the processor too when it listens and holds none (THE
     TOKEN HAND-OFF): any command allowed to run `secrets` -- an agent's ci-why or inbox in its Claude Code session, not
     only `land status` -- re-seeds a processor a restart left tokenless (2026-11-15: tokenless 16:58-18:36). Never

@@ -424,7 +424,7 @@ def red_gone(it, obs, snap):
         or int(last.get("databaseId") or 0) == own and last.get("conclusion") == "success")
 
 
-def gate_reds(repo):
+def gate_reds(repo: str) -> set[str]:
     """The ids (run numbers and run ids) of the gating workflows' red runs on main; empty when green or not gated. A
     report-only red (gate_report_only: red only in the registry's unproven jobs) holds no push.
     When the gate cannot be read: {GATE_UNREAD}, which every caller takes as RED -- a production change waits, the

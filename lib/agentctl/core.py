@@ -324,7 +324,7 @@ def cherry_landed(repo, main, head="HEAD", *limit):
     return commits, left
 
 
-def slug(repo_arg):
+def slug(repo_arg: str) -> str:
     if repo_arg in SHORT:
         return SHORT[repo_arg]
     if os.path.isdir(repo_arg):
@@ -351,7 +351,7 @@ _DETACHED = []
 _zombies_seen = process_cache(set())
 
 
-def spawn_detached(argv, **kw):
+def spawn_detached(argv: list[str], **kw: Any) -> "subprocess.Popen[Any]":
     """agentctl's own background process (a processor, executor, watch, fixer wrapper, owner): marked
     AGENTCTL_DETACHED, so it never runs `secrets` (interactive_foreground) -- its token comes in its environment or from
     the processor's socket."""

@@ -157,8 +157,9 @@ def condition_pending(st, key, grace, t):
     return False
 
 
-def open_condition(kind, text, probe, on_recover, key=None, inbox=True, command="recover", exit_code=1, cwd=None,
-                   tail=(), effect=None, store=None, grace=None):
+def open_condition(kind: str, text: str, probe: Any, on_recover: Any, key: str | None = None, inbox: bool = True,
+                   command: str = "recover", exit_code: int = 1, cwd: str | None = None, tail: Any = (), effect: Any = None,
+                   store: Any = None, grace: float | None = None) -> Any:
     """Open (or refresh) a non-green condition: an item of the "condition" machine. probe: the FAILED ProbeResult of the
     check that found it (required: the same probe, passing, closes it); on_recover: [(action, args)] from
     RECOVER_ACTIONS. effect: a callable run inside; its dict result is merged into every on_recover args. Writes ONE

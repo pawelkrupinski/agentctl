@@ -3,6 +3,7 @@
 
 import os
 import time
+from typing import Sequence
 from agentctl.core import NoToken, env_num, err, slug
 from agentctl.timefmt import iso_at
 from agentctl.store import StaleVersion, TerminalState, open_store
@@ -19,7 +20,8 @@ from agentctl.redopen import red_attach
 from agentctl.cireport import ci_why
 
 
-def watch_landed(repo, sha, pushed_at, o_r=None, close=None, fixes=()):
+def watch_landed(repo: str, sha: str, pushed_at: float | None, o_r: str | None = None, close: str | None = None,
+                 fixes: Sequence[str] = ()) -> int:
     """Watch Main and the convergence for a landed sha. 0 green (or nothing to watch), 3 red, 2 could not tell. OWNED
     (one watcher per sha; on agentctl's new code it re-execs as `agentctl watch`). fixes: the runs the landed commits'
     `Fixes-Red:` trailers name (the sha's own are read here too): each is verified against the new run (FIX OK / FIX

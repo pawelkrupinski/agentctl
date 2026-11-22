@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 import urllib.parse
+from typing import Any, Callable, Sequence
 from agentctl.core import (
     NoToken, env_num, err, git, git_ok, pid_alive, process_cache, reap_children, reds_dir, remote, run_bounded,
     spawn_detached, state_root)
@@ -225,7 +226,7 @@ def clone_into_tmp(repo, url):
     return tmp
 
 
-def ensure_server_clone(repo=None):
+def ensure_server_clone(repo: str | None = None) -> str:
     repo = repo or server_repo()
     clean_clone_tmps(repo)
     if not os.path.isdir(os.path.join(repo, ".git")):
@@ -862,7 +863,7 @@ def cmd_store(a):
     return 0
 
 
-def sd_notify(msg):
+def sd_notify(msg: str) -> bool:
     """systemd's notify protocol ($NOTIFY_SOCKET; '@' an abstract socket): READY=1, WATCHDOG=1. A no-op elsewhere."""
     path = os.environ.get("NOTIFY_SOCKET")
     if not path:
@@ -946,7 +947,7 @@ def tick_quiet_deadlines(st=None, now_=None):
     return did
 
 
-def server_steps(repo, d, shared):
+def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callable[[], Any]]) -> Sequence[tuple[str, Callable[[], Any]]]:
     """The reconciler's tick on ci-runner (the one writer): the changes, the batch, the watches, the gate, the reds,
     the recovery registry. Never the laptop's duties (events -> inbox, the notifier, the network and tunnel watches, the
     fixers, upkeep): those are sync_steps."""
@@ -972,7 +973,7 @@ def server_steps(repo, d, shared):
             ("stats", shared(lambda: maybe_stats_pass(repo, d))))
 
 
-def sync_steps(repo, d, o_r):
+def sync_steps(repo: str, d: str, o_r: str) -> Sequence[tuple[str, Callable[[], Any]]]:
     """The laptop's loop once the store is remote: it never ticks."""
     last_mirror = [0.0]
 

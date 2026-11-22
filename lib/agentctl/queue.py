@@ -371,7 +371,7 @@ def land_holds(st):
     return st.items("hold", ["held"])
 
 
-def land_hold(st, now_=None, expire=True):
+def land_hold(st: Any, now_: float | None = None, expire: bool = True) -> dict[str, Any] | None:
     """The land hold in force, or None. A hold past its deadline is moved to `expired` here (an event says so): every
     reader -- the tick, `land status`, the snapshot -- lifts a forgotten hold the moment it is due. expire=False: only
     read (the status page never writes)."""
@@ -392,7 +392,7 @@ def land_hold(st, now_=None, expire=True):
     return live
 
 
-def hold_text(h, t=None):
+def hold_text(h: Any, t: float | None = None) -> str:
     """`HELD until HH:MM (by, why)` for a hold row ({deadline, data} or the snapshot's {until, by, why})."""
     until = h.get("until") or h.get("deadline")
     d = h.get("data") or h

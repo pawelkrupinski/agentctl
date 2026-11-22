@@ -4,6 +4,7 @@
 import fnmatch
 import os
 import signal
+from typing import Any
 from agentctl.core import SHORT, err, git, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record
@@ -113,7 +114,7 @@ def already_landed(d, e, via):
                                   "nothing left to push", code=0, landed_sha=via, already=True)
 
 
-def cancel_entry_remote(e, why):
+def cancel_entry_remote(e: dict[str, Any], why: str) -> None:
     """An entry that ends (superseded, cancelled) takes its undecided remote run with it: the run is the entry's."""
     rem = e.get("remote") or {}
     if rem.get("run") is not None and not rem.get("status"):
@@ -181,7 +182,7 @@ def note_waiting(d, log_path, head, eid):
     return f"WAITING {head} (entry {eid}, {n} waiting)"
 
 
-def cancel_submitted(eid, how="cancel", repo=None):
+def cancel_submitted(eid: str, how: str = "cancel", repo: str | None = None) -> dict[str, Any]:
     d = waiting_state(repo or server_repo())[0]
     hits = [e for e in queued_entries(d) + waiting_entries(d) if e["id"] == eid]
     if not hits:  # an item no entry carries (stranded): the item alone

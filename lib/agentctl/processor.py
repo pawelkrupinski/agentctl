@@ -7,6 +7,7 @@ import os
 import signal
 import sys
 import time
+from typing import Any, Callable
 from agentctl.core import SHORT, _bounded, env_num, err, git, git_ok, host_role, slug
 from agentctl.statefile import write_json
 from agentctl.store import open_store
@@ -37,7 +38,7 @@ ALIASES_UNTIL = "2026-11-05"  # the old command names (design §14.5) answer unt
 # it and needs the token handed over again), then the alias goes -- removing it first would stop the sync.
 
 
-def waiting_run(repo, once=False, service=False):
+def waiting_run(repo: str, once: bool = False, service: bool = False) -> int:
     """THE processor: ONE loop of ticks (design §3). On ci-runner (server_steps): the change items (executors,
     pushes), the batch, the watches, the gate line, the red tick, the recovery registry. On the laptop (sync_steps):
     the outbox, the state mirror, events -> inbox and the notifier, claims, the fixer dispatcher, the network and
@@ -63,8 +64,8 @@ def waiting_run(repo, once=False, service=False):
             keep_awake()  # a plugged-in laptop never sleeps under the service (no-op off macOS)
         if service and role != "server":
             status_page_start()  # the read-only status page, a daemon thread (see "the status page"); never fatal
-        def shared(fn):  # a step that uses the clone holds it shared: a repair's swap waits for it
-            def run():
+        def shared(fn: Callable[[], Any]) -> Callable[[], Any]:  # a step that uses the clone holds it shared: a repair's swap waits for it
+            def run() -> Any:
                 with clone_shared(repo):
                     return fn()
             return run
@@ -112,7 +113,7 @@ def waiting_run(repo, once=False, service=False):
 TICK_STOP = [False]  # set by SIGTERM in `agentctl tick`: the loop returns between ticks
 
 
-def cmd_tick(a):
+def cmd_tick(a: argparse.Namespace) -> int:
     """`agentctl tick`: the processor (the reconciler's loop of ticks); `tick service install|uninstall|status`: it as the
     launchd agent (design §14.5: `waiting run` / `waiting service`, renamed)."""
     if host_role() == "server":  # ci-runner: its own clone, systemd's notify protocol, a clean stop between ticks
@@ -132,7 +133,7 @@ def cmd_tick(a):
     return cmd_waiting(w)
 
 
-def cmd_waiting(a):
+def cmd_waiting(a: argparse.Namespace) -> int:
     if a.wcmd in WAITING_RENAMED and not getattr(a, "renamed", False) and \
             (a.wcmd not in ("run", "service") or sys.stdin.isatty()):
         err(f"`agentctl waiting {a.wcmd}` is now `agentctl {WAITING_RENAMED[a.wcmd]}` (the old name answers until "

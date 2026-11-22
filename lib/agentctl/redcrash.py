@@ -57,17 +57,17 @@ SLEEP_MIN = 120      # s of sleep inside a lapse's window that count as "the hos
 _SLEEP_CACHE = [0.0, []]
 
 
-def keep_awake(pid=None):
+def keep_awake(pid: int | None = None) -> "subprocess.Popen[Any] | None":
     """Hold a no-system-sleep assertion, valid on AC power only, for `pid` (default: this process) so a held lease is
     never starved by the laptop's sleep. Once per pid: an exec'd restart keeps the assertion it already has. Best
     effort: the Popen, or None (already held, no caffeinate, $AGENTCTL_CAFFEINATE empty)."""
     exe = os.environ.get("AGENTCTL_CAFFEINATE", "/usr/bin/caffeinate")
-    pid = str(pid or os.getpid())
-    if not exe or not os.access(exe, os.X_OK) or os.environ.get("AGENTCTL_AWAKE_PID") == pid:
+    who = str(pid or os.getpid())
+    if not exe or not os.access(exe, os.X_OK) or os.environ.get("AGENTCTL_AWAKE_PID") == who:
         return None
-    os.environ["AGENTCTL_AWAKE_PID"] = pid
+    os.environ["AGENTCTL_AWAKE_PID"] = who
     try:
-        return spawn_detached([exe, "-s", "-w", pid], stdin=subprocess.DEVNULL,
+        return spawn_detached([exe, "-s", "-w", who], stdin=subprocess.DEVNULL,
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     except OSError:
         return None

@@ -10,7 +10,7 @@ from agentctl.core import HOME, REPOS, err, git_ok, host_role, process_cache, re
 from agentctl.selfcode import TOOL_PATH
 
 
-def movies_repo_path():
+def movies_repo_path() -> str:
     """THE movies clone of this host: $AGENTCTL_MOVIES_REPO, else the server's own clone (~/movies) on ci-runner, else
     ~/projects/movies. Every invariant, probe and step resolves the repository here."""
     return os.environ.get("AGENTCTL_MOVIES_REPO") or os.path.join(

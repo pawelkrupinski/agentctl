@@ -3,6 +3,7 @@
 
 import os
 import time
+from typing import Any
 from agentctl.core import cherry_landed, env_num, fmt_age, git, git_ok, host_role, process_cache, remote
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record
@@ -184,7 +185,7 @@ def migrate_local_queue(repo, store=None):
     return did
 
 
-def change_rows(store=None):
+def change_rows(store: Any = None) -> list[dict[str, Any]]:
     """THE QUEUE as everyone reads it (`land status`, the status line, the page): the store's open change items,
     by id, as {id, state, worktree, head, deadline, level, hold, kind (a red fix's, changekind.py), since (submitted)}."""
     rows = [{"id": i["id"], "state": i["state"], "worktree": (i.get("data") or {}).get("worktree"),
@@ -284,7 +285,7 @@ def regen_hold_overdue(st, d, e, t):
     return True
 
 
-def check_entry(repo, eid):
+def check_entry(repo: str, eid: str) -> int:
     """THE EXECUTOR of one change's checks (`waiting check <id>`, detached): holding check/<entry> and a check tree slot
     (leases), it takes the change to checking and leaves it checked (with the tip and base it passed on), rejected (a
     test failure, a conflict) or queued again (infra). It never pushes: the tick does (push_change)."""
@@ -315,7 +316,7 @@ def check_entry(repo, eid):
         lease.release()
 
 
-def _check_entry(repo, d, e, i, own=None):
+def _check_entry(repo: str, d: str, e: dict[str, Any], i: int, own: Any = None) -> int:
     hook = precheck_hook(repo)
     log_path = os.path.join(d, f"check-{e['id']}")
     if e.get("status") != "checking":

@@ -941,7 +941,7 @@ def status_page_file():
     return state_root("status-page.json")
 
 
-def status_page_start():
+def status_page_start() -> Any:
     """Serve the page from a daemon thread of this process, once: 127.0.0.1:80, else :3015 ($AGENTCTL_STATUS_PORT: that
     port alone; AGENTCTL_STATUS_PAGE=off: none). Writes status-page.json (its URL, for `status --open`). Returns the URL
     or None. Never raises."""

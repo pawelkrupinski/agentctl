@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import time
+from typing import Sequence
 from agentctl.core import SHORT, env_num, err, git, process_cache, run_cmd, slug, state_root
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -113,7 +114,7 @@ class Owned:
         self.argv = list(sys.argv[1:] if argv is None else argv)
         self.f, self.holder, self.started, self._old = None, None, None, {}
 
-    def acquire(self):
+    def acquire(self) -> bool:
         os.makedirs(owners_dir(), exist_ok=True)
         f = open(self.lockpath, "a+")
         try:
@@ -146,7 +147,7 @@ class Owned:
             except ValueError:  # not the main thread: the caller's own handling stands
                 pass
 
-    def release(self, keep_record=False):
+    def release(self, keep_record: bool = False) -> None:
         if not self.f:
             return
         if not keep_record:
@@ -230,7 +231,7 @@ def restart_gate():
     return ok, ("" if ok else f"commit {head[:9]} fails its smoke check ({why})")
 
 
-def restart_if_changed(owned=(), argv=None):
+def restart_if_changed(owned: Sequence["Owned"] = (), argv: list[str] | None = None) -> None:
     """Re-exec this process on agentctl's new code (same pid; argv: given, else the first owner's, else this process's)
     once the file on disk changed.
     The owned locks are released with their records kept: the new process takes them back."""

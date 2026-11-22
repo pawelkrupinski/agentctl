@@ -3,6 +3,7 @@
 
 import os
 import subprocess
+from typing import Any
 from agentctl.core import env_num, err, git
 from agentctl.timefmt import parse_time, ts
 from agentctl.store import (
@@ -84,7 +85,7 @@ def check_tree(repo, i, sha):
     return tree
 
 
-def entry_owned(eid):
+def entry_owned(eid: str) -> Owned:
     return Owned("check", eid, ["waiting", "check", eid])
 
 
@@ -124,14 +125,15 @@ def entry_queued_since(e):
         return None
 
 
-def set_change(d, e, to, data=None, event=None, store=None, **fields):
+def set_change(d: str, e: dict[str, Any], to: str, data: dict[str, Any] | None = None, event: dict[str, Any] | None = None, store: Any = None,
+               **fields: Any) -> None:
     """THE writer of a change's state: its item (transition + event) and its entry's status, together. A waiting entry
     that queued changes joined passes a final state on to them (joined_verdicts)."""
     st = store or open_store()
     joined = joined_changes(d, e, st) if machine_state("change", to).terminal else []
     if joined and event:  # its author hears it under the queued id alone (joined_verdicts)
         event = {**event, "refs": {**(event.get("refs") or {}), "no_inbox": True}}
-    cur = st.put_item("change", e["id"], ENTRY_STATE.get(e.get("status"), "queued"), change_item_fields(e))
+    cur = st.put_item("change", e["id"], ENTRY_STATE.get(e.get("status", ""), "queued"), change_item_fields(e))
     if fields.get("why"):  # a decided change's why, on its item: a fixer's land reads it there (await_queued)
         data = {**(data or {}), "why": str(fields["why"])[:600]}
     landed = {k: fields[k] for k in ("landed_sha", "pushed_at", "batch", "batch_id", "superseded_by", "decided_on")

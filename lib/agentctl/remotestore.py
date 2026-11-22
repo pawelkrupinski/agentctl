@@ -129,7 +129,7 @@ STORE_PORT = 3014
 DEFAULT_STORE_URL = f"http://localhost:{STORE_PORT}"  # ci-runner's store through the laptop's tunnel
 
 
-def store_url():
+def store_url() -> str | None:
     """The store a sync process uses: $AGENTCTL_STORE_URL, else the one `agentctl store use URL` wrote (state root's
     store.url, so every agentctl process -- agents' `land` and `red claim` included -- agrees), else ci-runner's through
     the tunnel. None on the server: its database is in-process."""
@@ -144,6 +144,6 @@ def store_url():
         return default_store_url()
 
 
-def default_store_url():
+def default_store_url() -> str:
     """ci-runner's store through the tunnel; $AGENTCTL_STORE_DEFAULT_URL overrides (the tests: a closed port)."""
     return os.environ.get("AGENTCTL_STORE_DEFAULT_URL") or DEFAULT_STORE_URL

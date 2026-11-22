@@ -4,6 +4,7 @@
 import os
 import subprocess
 import time
+from typing import Any
 from agentctl.core import git, process_cache
 from agentctl.repos import batching, precheck_hook
 from agentctl.buildview import BUILD_VIEW_PATHS, build_view_change, read_build
@@ -286,7 +287,7 @@ def same_change_source(e, worktree, branch):
     return not e.get("branch") or not branch or e["branch"] == branch
 
 
-def queued_entries(d):
+def queued_entries(d: str) -> list[dict[str, Any]]:
     return [e for e in waiting_entries(d, open_only=False) if e.get("status") in ("queued", "checking", "checked", "pushing")]
 
 

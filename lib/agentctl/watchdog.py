@@ -38,7 +38,7 @@ def awake_since(st, now_=None):
     return float(st.get("awake_since") or 0)
 
 
-def kick_processor():
+def kick_processor() -> str:
     """Kickstart the processor WITHOUT losing its store token (2026-11-15 16:58: a W5 kick left the new process
     tokenless, nothing landed for 1 h 38 min until the owner handed it over). The old processor is asked for the token
     on its socket first -- served on a thread of its own, it answers even when its loop is stuck -- then, once the old

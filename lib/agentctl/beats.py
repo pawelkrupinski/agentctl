@@ -10,7 +10,7 @@ def beat_path(name):
     return state_root(f"{name}.beat")
 
 
-def write_beat(name):
+def write_beat(name: str) -> None:
     try:
         os.makedirs(state_root(), exist_ok=True)
         with open(beat_path(name), "w") as f:

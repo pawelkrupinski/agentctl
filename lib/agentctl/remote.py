@@ -5,7 +5,9 @@ import fnmatch
 import os
 import re
 import subprocess
+import socket
 import sys
+import threading
 import time
 from agentctl.core import env_num, err, fmt_age, git, host_role, remote, slug, spawn_detached
 from agentctl.timefmt import parse_time, ts
@@ -495,16 +497,16 @@ def remote_check(repo, e, base, head, mode, own=None, red=False):
         time.sleep(next(delays))
 
 
-def processor_owned(d, repo=None):
+def processor_owned(d: str, repo: str | None = None) -> Owned:
     """The processor's ownership: one per waiting state directory (one per repository)."""
     return Owned("waiting", os.path.basename(d.rstrip("/")) or "repo", ["waiting", "run", "--repo", repo or ""])
 
 
-def waiting_processor_alive(d):
+def waiting_processor_alive(d: str) -> bool:
     return lock_held(processor_owned(d).lockpath)
 
 
-def spawn_waiting_processor(repo):
+def spawn_waiting_processor(repo: str) -> None:
     d, clone, _w = waiting_state(repo)
     if waiting_processor_alive(d):
         return
@@ -518,11 +520,12 @@ def spawn_waiting_processor(repo):
 class TokenDrop:
     """The processor's end of the hand-off."""
 
-    def __init__(self, d, o_r):
-        self.path, self.o_r, self.sock, self.thread = token_sock_path(d), o_r, None, None
+    def __init__(self, d: str, o_r: str) -> None:
+        self.path, self.o_r = token_sock_path(d), o_r
+        self.sock: socket.socket | None = None
+        self.thread: threading.Thread | None = None
 
-    def open(self):
-        import socket
+    def open(self) -> "TokenDrop":
         try:
             os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
             os.chmod(os.path.dirname(self.path), 0o700)
@@ -536,7 +539,7 @@ class TokenDrop:
                 os.umask(old)
             s.listen(4)
             self.sock = s
-            import threading  # served on a thread of its own: no step of the main loop can leave a client waiting
+            # served on a thread of its own: no step of the main loop can leave a client waiting
             self.thread = threading.Thread(target=self.serve, name="token-socket", daemon=True)
             self.thread.start()
         except OSError as e:
@@ -556,7 +559,7 @@ class TokenDrop:
             except (OSError, ValueError):
                 return
 
-    def nap(self, secs):
+    def nap(self, secs: float) -> None:
         """Sleep secs (the socket is served by its own thread)."""
         end = time.time() + secs
         while True:
@@ -566,6 +569,8 @@ class TokenDrop:
             time.sleep(min(left, 10))
 
     def take(self):
+        if self.sock is None:  # closed under the serving thread
+            return
         try:
             conn, _ = self.sock.accept()
         except OSError:
@@ -602,7 +607,7 @@ class TokenDrop:
             thread.join(5)
 
 
-def offer_token(repo):
+def offer_token(repo: str) -> bool:
     """Hand this process's store token to the repo's waiting processor when it listens (see THE TOKEN HAND-OFF) AND
     lacks it: asked first (one socket round trip), so an interactive command hands over only on a real transition
     (2026-10-30: every `land` / `waiting status` handed it over, 175 "handed over" lines in 400). Never fatal; True when
@@ -617,7 +622,7 @@ def offer_token(repo):
         return False
 
 
-def await_entry(repo, eid, close=None):
+def await_entry(repo: str, eid: str, close: str | None = None) -> tuple[int, str | None, float | None]:
     """Block until the entry lands or is rejected: (rc, landed sha, pushed_at). Restarts a dead processor. OWNED (one
     awaiter per entry; on agentctl's new code it re-execs as `agentctl waiting await <entry>`, which then watches)."""
     own = Owned("await", eid, ["waiting", "await", eid, "--repo", repo] + (["--close", close] if close else []))
@@ -631,7 +636,7 @@ def await_entry(repo, eid, close=None):
         own.release()
 
 
-def _await_entry(repo, eid, own):
+def _await_entry(repo: str, eid: str, own: Owned) -> tuple[int, str | None, float | None]:
     """The change's STORE ITEM decides (a RemoteStore on the laptop): an entry's JSON is only on the host whose queue
     runs it -- ci-runner's for every change since ONE QUEUE (2026-11-16: `waiting await` on the laptop crashed with
     FileNotFoundError on one). A joined change's item follows its waiting entry (project_changes)."""
