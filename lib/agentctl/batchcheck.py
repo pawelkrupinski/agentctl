@@ -17,11 +17,11 @@ from agentctl.queueslots import CHECK_LEASE_TTL, queue_verdict, tree_slot
 from agentctl.queue import INFRA_CHECK_FAILURE
 from agentctl.identitychange import identity_model_commits
 from agentctl.waiting import tail_of, waiting_commits
-from agentctl.remote import batch_check, bisect
 from agentctl.queuediff import CHECK_TIMEOUT, judge_failure
 from agentctl.recovery import batch_move
 from agentctl.queuepush import DEEP_BATCHES
 from agentctl.batchitem import batch_fail, batch_members
+from agentctl.batchrun import batch_check, bisect
 
 
 BATCH_LEASE_MAX = 6 * 3600  # the batch executor's leases: its check (2 h) and its bisect (4 h), its machine's bounds

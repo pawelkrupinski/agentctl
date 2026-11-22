@@ -21,18 +21,18 @@ from agentctl.queuerecheck import queued_entries
 from agentctl.changekind import HOLD_SHOWN
 from agentctl.waiting import GATE_UNREAD, cancel_entry_remote, cancel_submitted, gate_unread_why
 from agentctl.queuesubmit import landed_sha_of
-from agentctl.redseen import gate_reds
-from agentctl.remote import (
-    await_entry, offer_token, remote_check_lines, spawn_waiting_processor, waiting_processor_alive)
+from agentctl.remote import remote_check_lines
 from agentctl.remotestore import store_url
+from agentctl.landhold import LAND_HOLD_DEFAULT, hold_by, land_hold_release, land_hold_set
+from agentctl.tickservice import waiting_service
+from agentctl.redseen import gate_reds
 from agentctl.watchtick import watch_landed
 from agentctl.queueclose import change_rows, check_entry
 from agentctl.recovery import recover_clear_hold
 from agentctl.batchitem import status_batch
-from agentctl.landhold import LAND_HOLD_DEFAULT, hold_by, land_hold_release, land_hold_set
 from agentctl.batch import batch_progress_path, batch_row_ids
 from agentctl.batchcheck import check_batch
-from agentctl.tickservice import waiting_service
+from agentctl.processorlink import await_entry, offer_token, spawn_waiting_processor, waiting_processor_alive
 
 
 def waiting_repo(a: argparse.Namespace) -> str:

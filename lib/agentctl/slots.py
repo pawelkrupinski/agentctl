@@ -32,19 +32,19 @@ from agentctl.redrepos import red_owner_only
 from agentctl.gov import GovTimeout, gov_class_of
 from agentctl.waiting import must_wait, note_waiting, supersede_older_waiting, tail_of, waiting_commits
 from agentctl.queuesubmit import queued_tail, submit_ref
-from agentctl.redseen import gate_reds
-from agentctl.redobserve import local_red
 from agentctl.landwatch import start_watch
 from agentctl.checkslot import check_slot
-from agentctl.remote import await_entry, offer_token, spawn_waiting_processor
+from agentctl.dispatchblock import in_fixer
+from agentctl.redseen import gate_reds
+from agentctl.redobserve import local_red
+from agentctl.localrecheck import check_failures, check_passes, local_cleared, note_local_red, write_baseline_out
 from agentctl.cireport import ci_why
 from agentctl.watchtick import watch_landed
 from agentctl.queueclose import NETWORK_REASON
-from agentctl.localrecheck import check_failures, check_passes, local_cleared, note_local_red, write_baseline_out
 from agentctl.server import queue_change
 from agentctl.landqueue import queue_command
 from agentctl.queueenter import change_fields, enqueue, land_until_done, submit_to_server, sync
-from agentctl.dispatchblock import in_fixer
+from agentctl.processorlink import await_entry, offer_token, spawn_waiting_processor
 
 
 def stalled(step, output, log_path):

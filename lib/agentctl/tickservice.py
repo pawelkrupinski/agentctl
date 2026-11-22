@@ -8,8 +8,8 @@ from agentctl.core import HOME
 from agentctl.selfcode import TOOL_PATH
 from agentctl.waitingdir import waiting_state
 from agentctl.land import SDKMAN_BINS
-from agentctl.remote import waiting_processor_alive
 from agentctl.launchd import SERVICE_LABEL, launch_agents_dir, launchctl
+from agentctl.processorlink import waiting_processor_alive
 
 
 def service_plist(repo, log):

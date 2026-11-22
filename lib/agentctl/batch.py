@@ -12,10 +12,10 @@ from agentctl.statefile import read_json_file, write_json_file
 from agentctl.store import machine_state, open_store
 from agentctl.selfcode import TOOL_PATH
 from agentctl.repos import precheck_hook
-from agentctl.leases import lease_live
 from agentctl.waitingdir import ENTRY_FINAL, save_entry, waiting_entries, wlog
-from agentctl.land import landed
 from agentctl.storetoken import detached_env
+from agentctl.leases import lease_live
+from agentctl.land import landed
 from agentctl.queueslots import CHECK_LEASE_TTL, check_tree, check_tree_slot, set_change
 from agentctl.conditions import open_condition, run_probe
 from agentctl.queue import VERIFY_MODE, forces_full_recheck, land_hold, range_paths, verify_supported
@@ -24,13 +24,13 @@ from agentctl.queuerecheck import queued_entries, read_overlap, recheck_logged, 
 from agentctl.changekind import classify_change, gate_facts, kind_text, queue_facts
 from agentctl.waiting import batch_order, must_wait
 from agentctl.redseen import gate_reds
-from agentctl.remote import assemble, unread_note
 from agentctl.recovery import batch_key, batch_move, current_batch
 from agentctl.queuepush import (
     BACKLOG_BATCH_MAX, DEEP_BATCHES, backlog_candidates, backlog_min, check_tree_slot_free, drift_serialize,
     push_candidates)
 from agentctl.batchitem import batch_fail, new_batch
 from agentctl.batchpush import push_batch_item
+from agentctl.batchrun import assemble, unread_note
 
 
 # EVERY CHANGE IS A MEMBER (2026-11-20, the owner: "batching waiting changes ... structurally"): an identity change joins

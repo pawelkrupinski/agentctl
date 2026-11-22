@@ -10,7 +10,8 @@ from agentctl.timefmt import ts
 from agentctl.statefile import write_json
 from agentctl.forge import GH_JSON_TIMEOUT, forge_argv, forge_env
 from agentctl.owned import backoff
-from agentctl.remote import REMOTE_WORKFLOW, delete_check_branch, remote_poll
+from agentctl.remote import delete_check_branch, remote_poll
+from agentctl.remotejobs import REMOTE_WORKFLOW
 
 
 BLAME_PROBE_WALL = 2 * 3600      # s one probe may run before it is no verdict ($AGENTCTL_BLAME_PROBE_WALL)
