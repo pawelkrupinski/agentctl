@@ -127,6 +127,33 @@ class SuiteAtTest(unittest.TestCase):
             self.assertEqual(f.read().split(), ["committed", "exit", "3"])
 
 
+    def test_coverage_reaches_the_processes_the_suite_starts(self):
+        venv = coverage_venv()
+        if not venv:
+            self.skipTest("no coverage venv (~/.cache/agentctl-quality/venv)")
+        repo = tempfile.mkdtemp(prefix="devtools-")
+        for d in ("tests", os.path.join("lib", "agentctl")):
+            os.makedirs(os.path.join(repo, d))
+        files = {"lib/agentctl/__init__.py": "",
+                 "lib/agentctl/m.py": "def f(a):\n    if a:\n        return 1\n    return 2\n\nf(1)\n",
+                 "tests/run.py": "import subprocess, sys\n"
+                                 "subprocess.run([sys.executable, '-c', 'import sys; sys.path.insert(0, \"lib\"); "
+                                 "import agentctl.m'], check=True)\n"}
+        for path, text in files.items():
+            with open(os.path.join(repo, path), "w") as f:
+                f.write(text)
+        for args in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "x"]):
+            subprocess.run(["git", "-C", repo, *args], check=True, capture_output=True)
+        out = tempfile.mkdtemp(prefix="devtools-")
+        r = subprocess.run(["bash", os.path.join(DEV, "suite-at.sh"), repo, "HEAD", out, "cov"], capture_output=True,
+                           text=True, timeout=120, env=dict(os.environ, COVERAGE_VENV=venv))
+        with open(os.path.join(out, "suite.log")) as f:
+            log = f.read()
+        self.assertEqual(r.returncode, 0, log)
+        self.assertNotIn("No data to report", log)
+        self.assertRegex(log, r"TOTAL\s+\d+\s+\d+\s+\d+\s+\d+\s+(?!0\.0%)[\d.]+%")
+
+
 class PureMoveTest(unittest.TestCase):
     def test_movedefs_moves_a_definition_with_its_comment_and_the_proofs_agree(self):
         lib = fake_lib()
@@ -236,6 +263,21 @@ def tools_python():
     hits = sorted(glob.glob(os.path.join(pwd.getpwuid(os.getuid()).pw_dir, ".cache", "agentctl-quality",
                                          "tools-*", "bin", "python")))
     return hits[-1] if hits else None
+
+
+def coverage_venv():
+    """The coverage venv's bin/ under the REAL home (suite-at.sh's cov mode), or None."""
+    import pwd
+    d = os.path.join(pwd.getpwuid(os.getuid()).pw_dir, ".cache", "agentctl-quality", "venv", "bin")
+    return d if os.path.exists(os.path.join(d, "coverage")) else None
+
+
+class SameCodeTest(unittest.TestCase):
+    def test_a_jump_offset_past_255_leaves_no_extended_arg_in_the_signature(self):
+        import samecode
+        ns = {}
+        exec("def f(a):\n if a:\n" + "".join(f"  x{i} = a.b{i}\n" for i in range(300)) + " return 1\n", ns)
+        self.assertNotIn("EXTENDED_ARG", [op for op, _ in samecode.instructions(ns["f"].__code__)])
 
 
 class StatsTest(unittest.TestCase):

@@ -25,10 +25,11 @@ def load(lib):
 def instructions(code):
     """The code's instructions, opname and argument, with what only the compiler's knowledge of its module changes left
     out: a real module's `import time` makes `time.time()` a plain attribute load and a PUSH_NULL where the namespace
-    compiled a method load, and every jump after it moves by one."""
+    compiled a method load, and every jump after it moves by one -- which can push a jump offset past 255 or back, so
+    an EXTENDED_ARG prefix comes or goes (dis already folds its value into the instruction it prefixes)."""
     out = []
     for i in dis.get_instructions(code):
-        if i.opname == "PUSH_NULL" or i.opname in dis.hasjrel or i.opcode in dis.hasjump:
+        if i.opname in ("PUSH_NULL", "EXTENDED_ARG") or i.opname in dis.hasjrel or i.opcode in dis.hasjump:
             continue
         if i.opname == "STORE_NAME" and i.argval == "__firstlineno__":  # a class body's own line: positions aside
             out.pop()
