@@ -3722,7 +3722,11 @@ def red_fix_pending(store, it, fix, gone, obs, snap, facts, repo, o_r, t):
         if status in FIX_OPEN:
             return []
         if not fix:  # its change was rejected, cancelled or superseded, and no other fix is on its way
-            h = {"at": iso_at(t), "holder": f.get("entry"), "outcome": f"its fix change {f.get('entry')} ended {status}"}
+            # WHY IT ENDED, where the owner and the next fixer read (2026-11-22, #349: "ended rejected" in red status
+            # and the inbox, the reason only in the change item's own `why`)
+            why = " ".join(str((red_change(store, f.get("entry")) or {}).get("data", {}).get("why") or "").split())[:300]
+            h = {"at": iso_at(t), "holder": f.get("entry"),
+                 "outcome": f"its fix change {f.get('entry')} ended {status}" + (f": {why}" if why else "")}
             if red_decision(d):  # the owner's decided action: its change did not land -- the owner is told
                 return red_decision_failed(store, it, {"attempts": int(d.get("attempts") or 0) + 1, "fix": None,
                                                        "history": (d.get("history") or []) + [h]},

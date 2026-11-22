@@ -267,6 +267,33 @@ class CancelledFixFollowsNoOlderChangeTest(VerifyWaitBase):
         self.assertEqual((it["state"], it["data"]["fix"]["entry"]), ("fix-pending", requeued))
         self.assertNotIn("INVARIANT", " ".join(str(h.get("outcome")) for h in it["data"].get("history") or []))
 
+    def test_a_rejected_fix_goes_back_to_a_fixer_with_the_rejections_reason(self):
+        """2026-11-22, Identity takes #349: its fix change ended rejected (the landing check's itrest row: the GitOps
+        manifests missing) and red status and the inbox said only "ended rejected": the reason was in the change item
+        alone. The red goes back to a fixer with the reason in its history, where red status and the prompt read."""
+        wt = "/Users/x/projects/movies-wt-owner-convergence"
+        eid = "20261122-082612-movies-wt-owner-convergence-2ba8fd"
+        why = ("NOT LANDED: the pre-push checks failed (on ci-runner); failing with this change only: should hold G1's "
+               "heap-sizing ergonomics at JDK 25's values")
+        self.t[0] = self.stamp(eid) + 60
+        ch = self.st.put_item("change", eid, "queued", {"worktree": wt, "head": "45a09c7219" + "0" * 30})
+        self.st.put_item("red", "9a333c1f0ccc", "fix-pending", {
+            "key": "9a333c1f0ccc", "workflow": "Alert backtest", "gate": False, "red_kind": "outside",
+            "jobs": ["backtest"], "kind": "test", "line": "takes moved", "runs": ["349"],
+            "opened_at": self.stamp(eid) - 3600, "last_run": {"number": 349, "databaseId": 349},
+            "fix": {"entry": eid, "status": "checking", "author": {"worktree": wt}}})
+        self.st.transition("change", eid, "rejected", ch["version"], data={"why": why})
+        facts = {"entries": [{"id": eid, "status": "rejected", "fixes": ["349"], "worktree": wt,
+                              "created": "2026-11-22T07:26:12Z"}], "landed": [], "repo": None}
+        self.t[0] += A.RED_FIX_REQUEUE_GRACE + 1
+        it = self.st.item("red", "9a333c1f0ccc")
+        out = A.red_fix_pending(self.st, it, A.red_fix_of(it, facts, self.st), False, {}, {"latest": {}}, facts,
+                                None, A.RED_PRIMARY, self.t[0])
+        it = self.st.item("red", "9a333c1f0ccc")
+        self.assertEqual(it["state"], "offered", out)
+        self.assertIn("heap-sizing ergonomics", it["data"]["history"][-1]["outcome"])
+        self.assertIn("heap-sizing ergonomics", " ".join(out))
+
     def test_a_change_without_submitted_at_was_submitted_at_its_id_stamp(self):
         eid = "20261119-035758-movies-wt-owner-outside-gate-8b34c0"
         self.assertEqual(A.change_submitted_at({"id": eid, "data": {}}), self.stamp(eid))

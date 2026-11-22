@@ -938,6 +938,24 @@ class QueueTest(WaitingTest):
         evs = [x for x in A.Store().events() if x["item_id"] == eid and x["severity"] == "escalate"]
         self.assertTrue(evs, "from the third infra re-queue on, each one escalates")
 
+    def test_a_check_whose_environment_lacked_the_gitops_manifests_is_an_infra_retry_not_a_rejection(self):
+        """2026-11-22, landing checks 44984605717 / 44998261508: Identity takes #349's fix was REJECTED twice because
+        the check's own copy of the GitOps manifests (another repository's, fetched by the check) was missing. That is
+        the check's environment: an infra retry of the check (never a rerun-to-green of a test), queued again."""
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
+        eid, _ = self.queued(wt)
+        real = A.run_entry_checks
+        A.run_entry_checks = lambda *a, **k: (False, "- should hold G1's heap-sizing ergonomics *** FAILED ***\n"
+                                                      "  java.lang.AssertionError: infra/kubernetes/web/base/all.yaml is "
+                                                      "missing because the GitOps manifests are no longer in this "
+                                                      "repository.\n", "on ci-runner")
+        self.addCleanup(setattr, A, "run_entry_checks", real)
+        self.assertEqual(self.check(eid), 0)
+        e = self.entries()[eid.rsplit("-", 1)[-1]]
+        self.assertEqual((e["status"], e["infra_retries"]), ("queued", 1))
+        self.assertIn("GitOps manifests", e["why"])
+        self.assertEqual([x for x in self.inbox() if x["kind"] == "NOT_LANDED"], [])
+
     def test_the_hook_is_given_the_remotes_ref_so_it_reads_its_gate(self):
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         eid, _ = self.queued(wt)

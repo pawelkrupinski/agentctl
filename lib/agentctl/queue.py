@@ -18,8 +18,18 @@ QUEUE_POOL = 4          # check trees, so at most this many queued changes are c
 # lane: movies runner_scheduler.py), up to 2 lane + 1 CPU-admitted + 2 borrowed since; 4 is a first step, re-measure.
 # A check the LAPTOP failed, not the change: sbt's server never came up or was lost, a script test cut off by its
 # time bound, a stall. Queued again after QUEUE_INFRA_DELAY, at most QUEUE_INFRA_RETRIES times, then judged as it is.
+# THE CHECK'S ENVIRONMENT LACKED THE GITOPS MANIFESTS (2026-11-22, landing checks 44984605717 and 44998261508: the
+# deploy specs failed "infra/kubernetes/... is missing because the GitOps manifests are no longer in this repository",
+# the beside script tests having moved the fetched manifests aside; Identity takes #349's fix was REJECTED twice and the
+# gate stayed red ~7 h). The manifests are another repository's, fetched by the check itself (infra/bin/fetch-gitops):
+# their absence, or the fetch failing, is the check's environment, never the change. This is an INFRA RETRY of the
+# check, NOT a rerun-to-green of a test: no test result is discarded, the check never ran the specs against their
+# input. Re-queued like any infra failure (backed off, escalated from the third, a condition opened past
+# QUEUE_INFRA_RETRIES), so a change that really breaks the fetch is still seen.
+GITOPS_MISSING = (r"GitOps manifests are no longer in this repository|fetch-gitops could not fetch|"
+                  r"GitOps manifests STALE")
 INFRA_CHECK_FAILURE = re.compile(r"failed to connect to server|sbt server did not start within \d+ seconds|"
-                                 r"sbt server disconnected|^TIMEOUT +\d+s|STALLED:", re.M)
+                                 r"sbt server disconnected|^TIMEOUT +\d+s|STALLED:|" + GITOPS_MISSING, re.M)
 QUEUE_INFRA_RETRIES = 3
 QUEUE_INFRA_DELAY = 300
 # A PUSH, FETCH OR TUNNEL BLIP IS NO VERDICT ON THE CHANGE (audit #6, 2026-10-28: entry 67 "the push failed (pre-push
