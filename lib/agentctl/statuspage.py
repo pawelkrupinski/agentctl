@@ -11,13 +11,14 @@ import urllib.parse
 from typing import Any
 from agentctl.core import err, on_ci_runner, process_cache, reds_dir, state_root
 from agentctl.statefile import read_json_file, write_json
-from agentctl.live import (
-    AGENT_PAGE_HTML, LIVE_SEND_TIMEOUT, LIVE_STREAMS, STATUS_PAGE_HTML, _live_streams, live_lookup, live_mask_text,
-    live_peer_closed, live_stream)
+from agentctl.live import live_lookup
 from agentctl.laptoprole import laptop_role_standby
 from agentctl.storestate import port_open
-from agentctl.status import render_status, status_cached, status_header
 from agentctl.statusagents import STATUS_LOG_MAX, STATUS_LOG_SUFFIXES, status_log_body
+from agentctl.status import render_status, status_cached, status_header
+from agentctl.livepage import AGENT_PAGE_HTML, STATUS_PAGE_HTML
+from agentctl.livestream import (
+    LIVE_SEND_TIMEOUT, LIVE_STREAMS, _live_streams, live_mask_text, live_peer_closed, live_stream)
 
 
 # ---------------------------------------------------------------- the status page (2026-10-29)

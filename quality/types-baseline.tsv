@@ -17,7 +17,7 @@ mypy-errors	buildview	42
 mypy-errors	changekind	27
 mypy-errors	checkslot	26
 mypy-errors	cireport	66
-mypy-errors	ciwhy	123
+mypy-errors	ciwhy	56
 mypy-errors	classify	1
 mypy-errors	cleanup	51
 mypy-errors	cli	12
@@ -56,7 +56,8 @@ mypy-errors	landwatch	20
 mypy-errors	laptoprole	39
 mypy-errors	launchd	2
 mypy-errors	leases	1
-mypy-errors	live	89
+mypy-errors	live	46
+mypy-errors	livestream	43
 mypy-errors	localrecheck	33
 mypy-errors	maint	38
 mypy-errors	maintain	21
@@ -64,6 +65,7 @@ mypy-errors	netwatch	20
 mypy-errors	notifier	26
 mypy-errors	notifyurl	14
 mypy-errors	orphans	84
+mypy-errors	outsideflows	23
 mypy-errors	owned	47
 mypy-errors	owner	147
 mypy-errors	owners	3
@@ -120,6 +122,7 @@ mypy-errors	remotestore	26
 mypy-errors	repos	29
 mypy-errors	reverts	46
 mypy-errors	rundispatch	11
+mypy-errors	runexplain	44
 mypy-errors	runsigs	22
 mypy-errors	server	71
 mypy-errors	serverclone	36

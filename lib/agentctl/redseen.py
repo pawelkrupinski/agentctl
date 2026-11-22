@@ -11,14 +11,14 @@ from agentctl.classify import norm_line
 from agentctl.forge import RED_CONCLUSIONS, gh_json, runner_queue, stuck_durations
 from agentctl.repos import gated_repo
 from agentctl.workflows import LOCAL_FLOW
+from agentctl.ciwhy import _gate_lists, gate_report_only, gate_runs, queue_full, streak_runs
+from agentctl.runsigs import classifier_version, run_names, run_sigs
 from agentctl.redrecord import RED_TERMINAL, red_what
 from agentctl.red import STUCK_FACTOR, STUCK_FLOOR, red_key
 from agentctl.redmove import red_close
 from agentctl.waiting import GATE_UNREAD, gate_unread_why
-from agentctl.ciwhy import (
-    _gate_lists, gate_report_only, gate_runs, queue_full, streak_runs, stuck_history, stuck_timeout)
 from agentctl.branches import branch_reds, entry_predicts
-from agentctl.runsigs import classifier_version, run_names, run_sigs
+from agentctl.outsideflows import stuck_history, stuck_timeout
 
 
 # -- what is red now: one observation per key, from the CI-state snapshot

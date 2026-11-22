@@ -11,11 +11,12 @@ import time
 from agentctl.core import env_num, err, process_cache, reds_dir
 from agentctl.timefmt import iso_epoch
 from agentctl.statefile import mtime, tail_bytes
-from agentctl.redrecord import lease_is_live
 from agentctl.procs import proc_alive
-from agentctl.leases import lease_meta
 from agentctl.fixerrecords import fixer_records
-from agentctl.live import live_annotate, live_mask_text, live_transcript_ok
+from agentctl.live import live_annotate, live_transcript_ok
+from agentctl.redrecord import lease_is_live
+from agentctl.leases import lease_meta
+from agentctl.livestream import live_mask_text
 
 
 STATUS_LOG_TAIL = 40            # lines of each log shown in the page

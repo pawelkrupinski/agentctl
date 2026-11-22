@@ -12,20 +12,21 @@ import urllib.parse
 from agentctl.core import dispatches_dir, env_num, git_ok, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
-from agentctl.store import open_store
 from agentctl.forge import RED_CONCLUSIONS, RUN_FIELDS, api, forge_argv, forge_env, gh_json
 from agentctl.inboxentry import inbox_write
 from agentctl.owned import default_repo
 from agentctl.worktrees import merged_reason
-from agentctl.dispatches import (
-    branch_base, branch_red_id, dispatch_key, dispatch_records, orphan_why, owner_gone, owner_of, owner_text,
-    record_dispatch, save_dispatch, tracked_branch)
 from agentctl.inbox import INBOX_TAIL
-from agentctl.ciwhy import _gate_lists, _outside_lists, explain_run_jobs
-from agentctl.recordingpins import pinned_recording, pinned_runs
+from agentctl.ciwhy import _gate_lists, _outside_lists
 from agentctl.runsigs import save_run_sigs
 from agentctl.gatesummary import SUMMARY_MAX_REDS
 from agentctl.dispatchblock import short_flow
+from agentctl.store import open_store
+from agentctl.dispatches import (
+    branch_base, branch_red_id, dispatch_key, dispatch_records, orphan_why, owner_gone, owner_of, owner_text,
+    record_dispatch, save_dispatch, tracked_branch)
+from agentctl.recordingpins import pinned_recording, pinned_runs
+from agentctl.runexplain import explain_run_jobs
 
 
 # inputs that change where or how a run runs, or how much of it, never what main's run of the same workflow would decide
