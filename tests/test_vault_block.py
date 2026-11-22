@@ -43,6 +43,13 @@ class VaultBase(AskBase):
 
 
 class VaultAskTest(VaultBase):
+    def test_the_decide_vault_line_itself_is_a_vault_ask(self):
+        """2026-11-22, Order independence #105: turns 69-71 ended `BLOCKED ON OWNER: ~/bin/agentctl decide vault-movies
+        "here"` -- the line the owner is told -- and, unread as a vault ask, each was re-offered ~2 min later."""
+        it, _acts = self.launch(self.ios_red(), outcome='BLOCKED ON OWNER: ~/bin/agentctl decide vault-movies "here"')
+        self.assertEqual(it["state"], "blocked-external")
+        self.assertEqual(A.red_block_of(it, self.st)["name"], "block/cause/vault-movies")
+
     def test_a_diagnosed_vault_ask_waits_on_the_vault_lease_not_on_a_decision(self):
         it, _acts = self.launch(self.ios_red(), outcome=DIAG)
         self.assertEqual(it["state"], "blocked-external")
@@ -91,8 +98,10 @@ class VaultAskTest(VaultBase):
              "run": {"number": 77, "databaseId": 9077}, "decision": dec}
         prompt = A.fixer_prompt(u, "/w", "the brief")
         # an unlock is pinned to ONE Claude Code session (secrets' session anchor), never the fixer's own: its first
-        # signature raises its own Touch ID prompt, probed first while the owner is there
-        self.assertIn("commit-tree -S", prompt)
+        # use raises its own Touch ID prompt, probed first while the owner is there -- never by signing in movies,
+        # whose fixers commit unsigned (fixer_env): the probe is the command that needed the vault
+        self.assertNotIn("commit-tree -S", prompt)
+        self.assertIn("run again the one command that needed the vault", prompt)
         self.assertIn("BLOCKED ON OWNER: ! secrets unlock movies", dec["answer"])
         self.assertNotIn("WAITING ON YOU", self.view(it)[1])
         A.reconcile_alerts(self.st, force=True)

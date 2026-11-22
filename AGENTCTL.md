@@ -1026,13 +1026,18 @@ agent must be assigned to it".
   every red-repos.json clone's claude trust each pass; an untrusted one is ONE `[tty-trust]` owner ask (item
   `trust:<path>`), asked once per gap, retracted once trusted -- never 21 minutes into a red, nor once per flap of its
   offer reason (the dispatcher's NOT DISPATCHABLE stays on the offer, out of the inbox).
+- **No signature where main keeps none (2026-11-22).** A fixer of a repo whose main is unsigned (red-repos.json
+  `signed: false`: movies, whose land rebases with NO_SIGN) commits unsigned (`fixer_env`: `commit.gpgsign` and
+  `tag.gpgsign` false through git's env config), so commit signing never parks one on the vault: #348/#349's revert
+  waited 91 min and Order independence #105's fix 43 min on Touch ID for a signature the land threw away. A vault ask
+  there is for a secret, and its resume probe is the command that needed it, never a signature.
 - **A vault ask is ONE owner item per vault (2026-11-16, Order independence #77).** A fixer verdict whose one ask is
-  `secrets unlock <ns>` (`BLOCKED ON OWNER: ...`, or a `DIAGNOSED: ...; decide: ...` naming it) puts the red, whatever
+  `secrets unlock <ns>` or `decide vault-<ns>` (`BLOCKED ON OWNER: ...`, or a `DIAGNOSED: ...; decide: ...` naming it) puts the red, whatever
   its kind, on ONE lease per vault, `block/cause/vault-<ns>`: one WAITING ON YOU for every red it holds, carrying the
   one line that resumes them all: `! ~/bin/agentctl decide vault-<ns> "here"`. Each red is offered again as a decide
   would -- RESUMED BEFORE the lease is released (2026-11-19 03:01Z, core #1053: revoking first let the tick's
   invariant re-offer the red bare in the same second, and the decide said NOT DECIDED; a red the invariant re-offered
-  is resumed too); its fixer signs a probe (`git commit-tree -S HEAD^{tree} ...`) FIRST -- its own Touch ID prompt, which the
+  is resumed too); its fixer (in a repo that signs) signs a probe (`git commit-tree -S HEAD^{tree} ...`) FIRST -- its own Touch ID prompt, which the
   owner answers while at the machine -- and ends `BLOCKED ON OWNER` at once if that fails (back on the vault's lease,
   told once again), never after a whole fix. NO UNLOCK RESUMES THEM BY ITSELF (review round 3, 2026-11-16): an unlock
   is pinned to ONE session anchor, the caller's nearest Claude Code ancestor, and signing asks Touch ID once per anchor

@@ -1,5 +1,6 @@
 """One CI-state snapshot (gate, outside-the-gate reds, summary, patrol read it), the stale local red (recheck, release,
 fixer worktree tidy) and the re-exec gate (committed + smoke-checked code only)."""
+from unittest import mock
 import contextlib, glob, io, json, os, signal, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -115,6 +116,32 @@ class FixerTokenTest(RedBase):
         os.symlink(os.path.join(os.path.dirname(agent), "daemon-not-up.sock"), agent)
         self.addCleanup(os.unlink, agent)
         self.assertEqual(A.fixer_env(MOVIES, 20).get("SSH_AUTH_SOCK"), agent)
+
+    def test_a_fixer_of_a_repo_whose_main_is_unsigned_commits_unsigned(self):
+        """2026-11-22: #348/#349's revert and Order independence #105's fix sat BLOCKED ON OWNER on the movies vault
+        for 91 and 43 min, for a signature movies' land (a NO_SIGN rebase) throws away. A movies fixer commits
+        unsigned; a repo whose main keeps signatures (bitcashier's) still signs."""
+        def git_config(env, key):
+            return subprocess.run(["git", "config", "--get", key], env=env, capture_output=True, text=True,
+                                  cwd=self.tmp.name).stdout.strip()
+        env = A.fixer_env(MOVIES, 20)
+        self.assertEqual(git_config(env, "commit.gpgsign"), "false")
+        self.assertEqual(git_config(env, "tag.gpgsign"), "false")
+        signed = "pawelkrupinski/signs"
+        with mock.patch.object(A, "red_repo_conf", lambda o_r: {"repo": o_r, "signed": o_r == signed}):
+            self.assertNotIn("GIT_CONFIG_COUNT", A.fixer_env(signed, 21))
+        # an env config already counted is extended, never overwritten
+        with mock.patch.dict(os.environ, {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.x", "GIT_CONFIG_VALUE_0": "y"}):
+            env = A.fixer_env(MOVIES, 22)
+        self.assertEqual((env["GIT_CONFIG_COUNT"], env["GIT_CONFIG_KEY_0"], env["GIT_CONFIG_KEY_1"]),
+                         ("3", "core.x", "commit.gpgsign"))
+
+    def test_red_repos_signed_is_a_bool_defaulting_true_and_movies_is_unsigned(self):
+        self.assertFalse(A.repo_signs(MOVIES))
+        with self.assertRaises(ValueError):
+            A.red_repos_parse({"repos": [{"repo": "a/b", "gate": [["W", "w.yml"]], "signed": "no"}]})
+        c = A.red_repos_parse({"repos": [{"repo": "a/b", "gate": [["W", "w.yml"]]}]})
+        self.assertTrue(next(x for x in c if x["repo"] == "a/b")["signed"])
 
 
 FAKE_HOOK = """#!/bin/sh

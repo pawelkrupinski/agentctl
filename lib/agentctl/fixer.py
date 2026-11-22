@@ -224,6 +224,15 @@ def fixer_env(o_r, num, wrapper_pid=None):
     agent = os.path.join(HOME, ".ssh", "secrets-agent.sock")
     if os.path.lexists(agent):
         env["SSH_AUTH_SOCK"] = agent
+    # NO SIGNATURE WHERE MAIN KEEPS NONE (2026-11-22: #348/#349's revert and Order independence #105's fix, tested, sat
+    # BLOCKED ON OWNER on the vault for 91 and 43 min, each owner turn a new `claude` process asking its own Touch ID).
+    # movies' land rebases every change with NO_SIGN, so the signature those waits were for never reached main: a
+    # fixer of a repo whose main is unsigned (red-repos.json `signed: false`) commits unsigned, git's own env config.
+    if not repo_signs(o_r):
+        n = int(env.get("GIT_CONFIG_COUNT") or 0)
+        env.update({"GIT_CONFIG_COUNT": str(n + 2), f"GIT_CONFIG_KEY_{n}": "commit.gpgsign",
+                    f"GIT_CONFIG_VALUE_{n}": "false", f"GIT_CONFIG_KEY_{n + 1}": "tag.gpgsign",
+                    f"GIT_CONFIG_VALUE_{n + 1}": "false"})
     if wrapper_pid:
         env["AGENTCTL_CLAIM_PID"] = str(wrapper_pid)
     return env
@@ -2328,14 +2337,16 @@ def red_renew_blocks(store, t):
 # approve. `decide vault-<ns>` says what matters: the owner is at the machine now. Each resumed fixer signs a probe
 # commit FIRST (its own Touch ID prompt, raised while he is there) and ends BLOCKED ON OWNER at once if that fails: back
 # on the vault's one lease, told once again.
-VAULT_ASK = re.compile(r"secrets\s+unlock\s+([A-Za-z0-9_-]+)")
+# `decide vault-<ns>` too (2026-11-22, Order independence #105: turns 69-71 ended `BLOCKED ON OWNER: ~/bin/agentctl
+# decide vault-movies "here"`, the cmd the owner is told, not `secrets unlock`; unmatched, each was re-offered ~2 min later)
+VAULT_ASK = re.compile(r"secrets\s+unlock\s+([A-Za-z0-9_-]+)|decide\s+vault-([A-Za-z0-9_-]+)")
 VAULT_TARGET = re.compile(r"vault-([A-Za-z0-9_-]+)")
 
 
 def vault_ask_ns(text):
     """The vault an owner ask waits on (`secrets unlock <ns>` in it), or None."""
     m = VAULT_ASK.search(str(text or ""))
-    return m.group(1) if m else None
+    return (m.group(1) or m.group(2)) if m else None
 
 
 def vault_decide_cmd(ns):
@@ -2347,12 +2358,16 @@ def red_vault_resume(store, it, ns, answer, t):
     would, its fixer briefed to prove its OWN session can sign before anything else."""
     d = it["data"]
     q = (d.get("ask") or {}).get("q") or f"agents' work waits on the {ns} vault"
+    # a repo whose main is unsigned (fixer_env commits unsigned there): no signing probe, which would itself sign and
+    # raise a prompt for nothing; the vault was for a secret, so the probe is the command that needed it
+    probe = ("run `git commit-tree -S HEAD^{tree} -m 'signing probe' < /dev/null` in your worktree"
+             if repo_signs(d.get("repo") or RED_PRIMARY) else
+             "run again the one command that needed the vault (your commits here are unsigned: never sign one)")
     dec = {"answer": f"the owner is at the machine (`decide vault-{ns}`: {answer}). No other session's unlock lets "
-                     "yours sign: your first signature raises a Touch ID prompt for YOUR session, which the owner answers "
-                     "now. So FIRST run `git commit-tree -S HEAD^{tree} -m 'signing probe' < /dev/null` in your "
-                     f"worktree; if it fails, end `BLOCKED ON OWNER: ! secrets unlock {ns}` at once. Then go on with the "
-                     "fix and land it.", "question": str(q)[:600], "at": t, "status": "in-progress",
-           "category": "vault"}
+                     "yours use the vault: your first use raises a Touch ID prompt for YOUR session, which the owner "
+                     f"answers now. So FIRST {probe}; if it fails, end `BLOCKED ON OWNER: ! secrets unlock {ns}` at "
+                     "once. Then go on with the fix and land it.", "question": str(q)[:600], "at": t,
+           "status": "in-progress", "category": "vault"}
     store.close_offer(f"red:{it['id']}", "resumed")
     red_offer(store, it, f"{red_what(d)}: the owner resumed it (the {ns} vault): offered again",
               data={"cause": None, "block": None, "ask": None, "decision": dec, "dispatch_after": 0})

@@ -190,7 +190,7 @@ def gate_report_only(o_r, name, run):
 # (its gating checks registry above, which stays movies' alone: watching a repo's reds does not put a red gate in front
 # of its landings). The other repos are read through their gate workflows only.
 RED_PRIMARY = GATED_REPOS[0]
-RED_REPOS_DEFAULT = [{"repo": RED_PRIMARY, "push": "land", "red_workflows": True}]
+RED_REPOS_DEFAULT = [{"repo": RED_PRIMARY, "push": "land", "red_workflows": True, "signed": False}]
 RED_PUSH_POLICIES = ("land", "owner-only")
 _red_repos_cache = process_cache({})
 
@@ -221,9 +221,13 @@ def red_repos_parse(raw):
         keeps = x.get("red_workflows", False)
         if not isinstance(keeps, bool):
             raise ValueError(f"{repo}: `red_workflows` is true or false, not {keeps!r}")
+        signed = x.get("signed", True)
+        if not isinstance(signed, bool):
+            raise ValueError(f"{repo}: `signed` is true or false, not {signed!r}")
         out.append({"repo": repo, "gate": [tuple(g) for g in gate], "family": x.get("family"), "push": push,
                     "clone": os.path.expanduser(clone) if clone else None,
-                    "generated": generated_parse(repo, x.get("generated")), "red_workflows": keeps})
+                    "generated": generated_parse(repo, x.get("generated")), "red_workflows": keeps,
+                    "signed": signed})
     if len({c["repo"] for c in out}) != len(out):
         raise ValueError("a repo is listed twice")
     if not any(c["repo"] == RED_PRIMARY for c in out):
@@ -281,6 +285,13 @@ def red_repos():
 
 def red_repo_conf(o_r):
     return next((c for c in red_repos() if c["repo"] == o_r), None)
+
+
+def repo_signs(o_r):
+    """Whether repo o_r's main keeps commit signatures (red-repos.json `signed`, default true). movies' does not: its
+    land rebases every change with NO_SIGN, so a fixer's signature never reaches main."""
+    c = red_repo_conf(o_r)
+    return True if c is None else c.get("signed", True)
 
 
 def red_is_other(o_r):
