@@ -217,12 +217,33 @@ def revert_deadlines(st, t):
     return out
 
 
+def revert_closed_text(d):
+    """How a closed notice was closed: who acknowledged it, when, how and with what note -- or what re-landed it."""
+    if d.get("reworked_by"):
+        return f"re-landed by {str(d['reworked_by'])[:10]} at {d.get('closed_at')} ({d.get('how')})"
+    if d.get("acked_by"):
+        return (f"acknowledged by {d['acked_by']} at {d.get('closed_at')} ({d.get('how')})"
+                + (f": {d['note']}" if d.get("note") else ""))
+    return "never acknowledged"
+
+
 def revert_ack(st, ref, how, note, by):
-    """Acknowledge the open notice whose id starts with ref. (item or None, message)."""
-    hits = [i for i in st.items("revert", REVERT_OPEN) if i["id"].startswith(ref)]
+    """Acknowledge the notice whose id starts with ref. (item or None, message). A notice closed already (acked by
+    its orchestrator, re-landed) says by whom, when and how, and keeps this reply's note beside its own."""
+    every = [i for i in st.items("revert") if i["id"].startswith(ref)]
+    hits = [i for i in every if i["state"] in REVERT_OPEN] or every
     if len(hits) != 1:
-        return None, f"revert {ref}: {'no open notice' if not hits else f'{len(hits)} open notices'} with that id"
+        return None, f"revert {ref}: {'no notice' if not hits else f'{len(hits)} notices'} with that id"
     it = hits[0]
+    if it["state"] not in REVERT_OPEN:
+        d = it["data"] or {}
+        reply = {"by": by, "how": how, "note": note, "at": ts()}
+        try:
+            st.update_item("revert", it["id"], it["version"], {"replies": (d.get("replies") or []) + [reply]})
+        except StaleVersion:
+            pass
+        return st.item("revert", it["id"]), (f"revert {it['id']}: already {it['state']} -- {revert_closed_text(d)}; "
+                                             f"your reply ({how}) is noted beside it")
     st.transition("revert", it["id"], "acked", it["version"],
                   data={"acked_by": by, "how": how, "note": note, "closed_at": ts()},
                   event={"text": f"revert {it['id']} acknowledged by {by}: {how}" + (f" ({note})" if note else ""),
@@ -231,19 +252,25 @@ def revert_ack(st, ref, how, note, by):
 
 
 def revert_line(r, t):
-    """One open notice, for `status` and `red status`."""
+    """One notice, for `status`, `red status` and `revert`: an open one's age, a closed one's ack (or re-land) and
+    every later reply."""
     d = r.get("data") or r
     what = ", ".join(x["sha"][:10] for x in d.get("reverted") or [])
     who = lander_name(d["lander"]) if d.get("lander") else "the owner"
-    return (f"  {r['id']}  {r['state']}  {what} reverted by {str(d.get('revert_sha'))[:10]}"
-            + (f" (Fixes-Red: {', '.join(d['fixes'])})" if d.get("fixes") else "") + f" -- told {who}, unacked "
-            + fmt_age(t - float(d.get("opened_at") or t)))
+    head = (f"  {r['id']}  {r['state']}  {what} reverted by {str(d.get('revert_sha'))[:10]}"
+            + (f" (Fixes-Red: {', '.join(d['fixes'])})" if d.get("fixes") else "") + f" -- told {who}")
+    if r["state"] in REVERT_OPEN:
+        return head + ", unacked " + fmt_age(t - float(d.get("opened_at") or t))
+    return "\n".join([f"{head}; {revert_closed_text(d)}"]
+                     + [f"      reply by {x.get('by')} at {x.get('at')} ({x.get('how')})"
+                        + (f": {x['note']}" if x.get("note") else "") for x in d.get("replies") or []])
 
 
 def revert_brief(i):
     d = i["data"] or {}
     return {"id": i["id"], "state": i["state"], "deadline": i["deadline"], "level": i["level"],
-            **{k: d.get(k) for k in ("revert_sha", "reverted", "fixes", "lander", "opened_at")}}
+            **{k: d.get(k) for k in ("revert_sha", "reverted", "fixes", "lander", "opened_at", "acked_by", "how", "note",
+                                     "closed_at", "reworked_by", "replies")}}
 
 
 def revert_note_text(iid, d):
@@ -281,12 +308,12 @@ def cmd_revert(a):
             it, msg = revert_ack(st, a.id, "drop" if a.drop else "rework", a.note, claimant())
             print(msg)
             return 0 if it else 1
-        items = st.items("revert", None if a.all else REVERT_OPEN)
+        items = st.items("revert", None if getattr(a, "all", False) else REVERT_OPEN)
     except StoreUnavailable as e:
         print(f"agentctl revert: the store did not answer ({str(e)[:200]})")
         return 2
     for i in sorted(items, key=lambda i: i["id"]):
         print(revert_line(i, t))
     if not items:
-        print("reverts: none open" if not a.all else "reverts: none recorded")
+        print("reverts: none recorded" if getattr(a, "all", False) else "reverts: none open")
     return 0

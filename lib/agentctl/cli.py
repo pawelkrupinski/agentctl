@@ -357,8 +357,9 @@ def main(argv=None):
     how.add_argument("--rework", action="store_true", help="you re-land it (with `Rework-Of: <sha>`)")
     how.add_argument("--drop", action="store_true", help="it stays reverted")
     rva.add_argument("--note", help="what you will do")
-    for p_ in (rvp, rvl):
-        p_.add_argument("--all", action="store_true", help="closed notices too")
+    rvp.add_argument("--all", action="store_true", help="closed notices too (with who acked them, how and the note)")
+    # SUPPRESS: `revert --all list` keeps the parent's --all (a subparser's own default would reset it to False)
+    rvl.add_argument("--all", action="store_true", default=argparse.SUPPRESS, help="closed notices too")
     dp = sub.add_parser("dispatch", help="own every CI dispatch: run (the forge CLI's workflow run, recorded) / record / list",
                         description=DISPATCH_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     dps = dp.add_subparsers(dest="dcmd", required=True)

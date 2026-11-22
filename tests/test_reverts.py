@@ -2,7 +2,7 @@
 reverted by a red fixer as 7380cf9d7 and nobody told its lander). A revert on main opens a notice told to its lander
 (author) and its orchestrator (owner audience); an ack closes it; an unacked one escalates once past its deadline; a
 re-land with `Rework-Of:` (or a revert of the revert) closes it. A real git clone, a real store, the real projector."""
-import os, subprocess, sys, tempfile, unittest
+import contextlib, io, os, subprocess, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -125,6 +125,46 @@ class RevertNoticeTest(unittest.TestCase):
         self.assertTrue(all(e["read"] for e in self.entries()), "both alerts close with their notice")
         self.t[0] += A.REVERT_ACK_MAX * 2
         self.assertEqual(A.revert_deadlines(self.st, self.t[0]), [], "an acked notice never escalates")
+
+    def cli(self, *argv):
+        saved = A.Store
+        A.Store = lambda *a, **k: self.st
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = A.main(list(argv))
+            return code, buf.getvalue()
+        finally:
+            A.Store = saved
+
+    def test_a_second_ack_of_a_closed_notice_says_who_acked_it_and_keeps_its_note(self):
+        """2026-11-22: the orchestrator acked 7380cf9d775c-604134d1a582, then its authoring agent's own ack said "no
+        open notice with that id"."""
+        self.revert(self.land())
+        self.tick()
+        iid = self.only()["id"]
+        self.assertEqual(self.cli("revert", "ack", iid, "--rework", "--note", "handed back to its lane")[0], 0)
+        code, out = self.cli("revert", "ack", iid, "--rework", "--note", "re-landing with a monotone link")
+        self.assertEqual(code, 0, out)
+        self.assertIn("already acked -- acknowledged by", out)
+        self.assertIn("(rework): handed back to its lane", out)
+        it = self.only()
+        self.assertEqual(it["state"], "acked")
+        self.assertEqual([r["note"] for r in it["data"]["replies"]], ["re-landing with a monotone link"])
+        self.assertEqual(it["data"]["note"], "handed back to its lane", "the first ack stays the ack")
+
+    def test_revert_all_lists_closed_notices_with_their_ack_whichever_way_it_is_written(self):
+        self.revert(self.land())
+        self.tick()
+        iid = self.only()["id"]
+        A.revert_ack(self.st, iid, "drop", "it stays reverted", "session orch")
+        self.assertIn("reverts: none open", self.cli("revert")[1])
+        for argv in (("revert", "--all"), ("revert", "--all", "list"), ("revert", "list", "--all")):
+            code, out = self.cli(*argv)
+            self.assertEqual(code, 0)
+            self.assertIn(f"{iid}  acked", out, argv)
+            self.assertIn("acknowledged by session orch at", out, argv)
+            self.assertIn("(drop): it stays reverted", out, argv)
 
     def test_unacked_past_its_deadline_it_escalates_once_to_the_owner(self):
         self.revert(self.land())

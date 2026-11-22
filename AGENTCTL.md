@@ -1257,7 +1257,7 @@ briefed with the change's diff, its original worktree and why its lander could n
 ### revert: a reverted change gets back to the agent that wrote it (2026-11-21)
 
 ```
-agentctl revert [list] [--all]                          # the open notices (--all: closed ones too)
+agentctl revert [list] [--all]                          # the open notices (--all: closed ones too, with their ack)
 agentctl revert ack <id> --rework|--drop [--note "..."] # the lander (or its orchestrator) takes it back up, or drops it
 ```
 
@@ -1286,6 +1286,9 @@ tests `tests/test_reverts.py`.
   change again (`reworked`): a commit with `Rework-Of: <sha>` (the reverted commit's or the revert's, 7+ hex; in the
   message's final trailer block, as git reads trailers), a revert of the revert, or blame's `Relands-Change: <change>`.
   An `inbox --ack` only reads the entry: the notice stays open. Its alerts close with it (the alert probe).
+  A notice is acknowledged once: a later `revert ack` (the lander after its orchestrator, 2026-11-22) says `already
+  acked -- acknowledged by <who> at <when> (<how>): <note>` and its own reply is kept beside it (`replies`), never
+  `no notice`. `revert --all` (`revert --all list`, `revert list --all`) lists the closed ones with that line and each reply.
 - **Escalated once.** Unacknowledged `REVERT_ACK_MAX` (6 h) after it was told: `open -> escalated`, ONE escalate event
   to the owner (`REVERT UNACKED: ...`, a notification, an unread entry of its own); then it waits quietly and expires
   after 14 days. The machine: `open` (6 h -> `escalated`), `escalated` (14 d -> `expired`), `acked` / `reworked` /
