@@ -44,6 +44,14 @@ def bind_fixer_session(sid, record):
     return record
 
 
+def red_noted(store: Any, items: list[Any], note: str) -> None:
+    """A note on reds held by the fixer: progress on each joined to its lease or in its owner's hand (reddispatch.py)."""
+    for it in items:
+        row = store.get(red_lease(it["data"]["key"]))
+        if lease_meta(row).get("joined_at") or lease_meta(row).get("kind") == "owned":
+            red_joined_progress(store, row, f"note: {note}")
+
+
 def red_claim(store, o_r, target, note="", wt=None):
     """(rc, lines): the red's lease to the caller (a claim, renewed by its worktree's activity). Inside a dispatched
     fixer, a red its wrapper already holds (its own, or a family / run sibling under the same holder) gets the fixer's
@@ -69,10 +77,7 @@ def red_claim(store, o_r, target, note="", wt=None):
         if not items or all(held_by_me(it) for it in items):
             rec["note"] = note or rec.get("note") or "working"
             write_json(own, rec)
-            for it in items or []:  # a red joined to its lease, worked on: no longer one the backstop releases
-                row = store.get(red_lease(it["data"]["key"]))
-                if lease_meta(row).get("joined_at"):
-                    red_joined_progress(store, row, f"note: {rec['note']}")
+            red_noted(store, items or [], rec["note"])
             return 0, [f"noted on your lease {rec.get('lease')}: {rec['note']}"]
         items = [it for it in items if not held_by_me(it)]
         wt = wt or rec.get("worktree")

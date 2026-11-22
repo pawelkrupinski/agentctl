@@ -888,6 +888,14 @@ agent must be assigned to it".
   remote in the holder's worktree whose `Fixes-Red:` names it, a fix on its way (the red's `fix`, fix-pending), or a
   note on it (`red claim <it> --note` inside the fixer). Once shown, the lease's `progressed` says what, and the
   backstop is done with it (red_joined_idle, run with the claims' renewal).
+- **A RED IN AN OWNER'S HAND SHOWS ITS OWN PROGRESS WITHIN 45 MIN (the owner, 2026-11-22).** A family owner's wrapper
+  renews every red lease it holds with each beat of a turn not stalled: the turn's progress, the family's. Alert
+  backtest #21 sat ~3 h in the outside-gate owner's hand (16:05Z on) while its turns worked the other red. A red under
+  an owned lease with no progress on IT for `$AGENTCTL_RED_HELD_IDLE` (45 min) since the later of its lease's start and
+  that progress -- a `DIAGNOSED` or `LANDED` verdict in its history, a commit not on the remote in the owner's worktree
+  whose `Fixes-Red:` or `Diagnoses-Red:` names it, a note on it (`red claim <it> --note`: the lease's `progressed_at`)
+  -- is released `STALLED: no progress on <red> ...` (an attempt), the reason in the inbox (`RED NO PROGRESS`), and
+  goes on up the ladder (red_owned_idle). `red status` shows that deadline as "lapses HH:MM without progress".
 - **A BLOCK NO PROBE CAN CLEAR IS SHOWN WITH ITS AGE (2026-11-07).** A turn's `BLOCKED ON OWNER: <cmd>` verdict with no
   `red block` lease behind it has no probe: it stayed the red's last word after the owner had run the command (Verify
   scrape recording #14: "re-pin the scheduler to 362196b15a", long since re-pinned past it). Its note now reads `said
@@ -3054,6 +3062,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `red_fix_giveup` | `AGENTCTL_RED_FIX_GIVEUP` | `21600` | - |
 | `red_fix_next_run` | `AGENTCTL_RED_FIX_NEXT_RUN` | `108000` | s an outside red's landed fix waits unproven for its workflow's next run |
 | `red_fix_requeue_grace` | `AGENTCTL_RED_FIX_REQUEUE_GRACE` | `900` | $AGENTCTL_RED_FIX_REQUEUE_GRACE |
+| `red_held_idle` | `AGENTCTL_RED_HELD_IDLE` | `2700` | s a red in its owner's hand may go with no progress of its own before it is released |
 | `red_join_idle` | `AGENTCTL_RED_JOIN_IDLE` | `1800` | s a red joined to its family holder's lease may go with no progress on it before it is released |
 | `red_main_verify_every` | `AGENTCTL_RED_MAIN_VERIFY_EVERY` | `10800` | - |
 | `red_old_run` | `AGENTCTL_RED_OLD_RUN` | `172800` | an outside red whose newest run is older than this is checked by a fresh run before it is fixed |

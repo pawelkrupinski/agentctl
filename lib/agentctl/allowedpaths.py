@@ -21,6 +21,11 @@ _skipped_paths: set[str] = process_cache(set())
 PROTECTED_DIRS = ("Desktop", "Documents", "Downloads")  # under HOME: never touched, even below an allowed root
 
 
+def allowed_dir(path: str | None) -> bool:
+    """path is a directory under the allowed roots (allowed_path): one background code may read and write in."""
+    return bool(path) and os.path.isdir(str(path)) and allowed_path(path)
+
+
 def allowed_path(path: str | None) -> bool:
     """True when path (a string; never stat'ed here) is under an allowed root, or a sibling worktree of ~/bin
     (~/bin, ~/bin-wt-*). Otherwise False, logged once."""

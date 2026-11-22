@@ -4,7 +4,7 @@
 # -- interactive holders: the tick renews a claim from its worktree's activity; imported claim files lapse unless busy
 def red_wt_mark(wt):
     """An interactive claim's progress mark: its worktree's HEAD, `git status` and the newest change's mtime."""
-    if not wt or not os.path.isdir(wt) or not allowed_path(wt):
+    if not allowed_dir(wt):
         return ""
     import hashlib
     head = git(wt, "rev-parse", "HEAD", check=False).stdout.strip()
@@ -24,22 +24,82 @@ RED_JOIN_IDLE = 30 * 60  # s a red joined to its family holder's lease may go wi
 
 
 def red_joined_progress(store, row, why):
-    """Mark a joined red's lease as worked on (why: `note: ...`, `commit <sha>`, `fix <entry>`): the backstop is done."""
-    store.set_meta(row["name"], row["epoch"], row["secret"], {"progressed": str(why)[:200]})
+    """Mark a joined (or owner-held) red's lease as worked on (why: `note: ...`, `commit <sha>`, `fix <entry>`): a joined
+    red's backstop is done; an owner-held one's RED_HELD_IDLE counts from now."""
+    store.set_meta(row["name"], row["epoch"], row["secret"], {"progressed": str(why)[:200], "progressed_at": time.time()})
 
 
-def red_fixes_red_commits(wt, names):
-    """The first commit in worktree wt not on any remote whose `Fixes-Red:` names one of names (runs, the key), or None."""
-    if not wt or not os.path.isdir(wt) or not allowed_path(wt):
-        return None
-    out = git(wt, "log", "HEAD", "--not", "--remotes", "-n", "200",
-              "--format=%H%x09%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", check=False).stdout
+def red_commits_naming(wt: str | None, names: Any, keys: tuple[str, ...] = ("Fixes-Red",)) -> list[tuple[str, float]]:
+    """[(sha, commit time)] of the commits in worktree wt not on any remote whose trailers `keys` name one of names
+    (runs, the key), the newest first."""
+    if not allowed_dir(wt):
+        return []
+    fmt = "%x09".join(["%H", "%ct"] + [f"%(trailers:key={k},valueonly,separator=%x2C)" for k in keys])
+    out = git(str(wt), "log", "HEAD", "--not", "--remotes", "-n", "200", f"--format={fmt}", check=False).stdout
     want = {str(n).lstrip("#") for n in names if n}
+    got = []
     for line in out.splitlines():
-        sha, _tab, vals = line.partition("\t")
-        if want & trailer_values(vals):
-            return sha
-    return None
+        sha, ct, *vals = line.split("\t")
+        if any(want & trailer_values(v) for v in vals) and ct.isdigit():
+            got.append((sha, float(ct)))
+    return got
+
+
+def red_fixes_red_commits(wt: str | None, names: Any) -> str | None:
+    """The first commit in worktree wt not on any remote whose `Fixes-Red:` names one of names (runs, the key), or None."""
+    return next((sha for sha, _ct in red_commits_naming(wt, names)), None)
+
+
+# A RED IN AN OWNER'S HAND SHOWS ITS OWN PROGRESS (the owner, 2026-11-22: Alert backtest #21, 5254bffda9d2.4, held by
+# the outside-gate owner from 16:05Z with no diagnosis or commit for ~3 h). The owner wrapper renews every red lease it
+# holds with each beat of a turn not stalled: the TURN's progress (its transcript, its worktree), the family's -- turn 85
+# ran 16:38-18:54Z on its other red, and "lapses ... without progress" moved on with each beat. A red held under an
+# owner's lease with no progress on IT -- a DIAGNOSED or LANDED verdict in its history, a commit in the owner's worktree
+# whose `Fixes-Red:` or `Diagnoses-Red:` names it, a note on it (`red claim <it> --note`) -- for RED_HELD_IDLE since the
+# later of its lease's start and that progress is released STALLED (an attempt), the reason in the inbox, and goes on
+# up the ladder like any ended lease.
+RED_HELD_IDLE = 45 * 60  # s a red in its owner's hand may go with no progress of its own before it is released
+RED_PROGRESS_VERDICT = re.compile(r"^(DIAGNOSED|LANDED)\b")
+
+
+def red_owned_progress_at(row: dict[str, Any], d: dict[str, Any]) -> float:
+    """When red d, held by owned lease row, last showed progress of its own (0 when never)."""
+    m = lease_meta(row)
+    at = [float(m.get("progressed_at") or 0)]
+    for h in d.get("history") or []:
+        if RED_PROGRESS_VERDICT.match(str(h.get("outcome") or "")) and h.get("at"):
+            try:
+                at.append(parse_time(h["at"]).timestamp())
+            except (ValueError, TypeError):
+                pass
+    at += [ct for _sha, ct in red_commits_naming(m.get("worktree"), red_names(d), ("Fixes-Red", "Diagnoses-Red"))[:1]]
+    return max(at)
+
+
+def red_owned_idle(store: Any, row: dict[str, Any], t: float) -> str | None:
+    """None while a red under an owner's lease shows progress of its own (RED_HELD_IDLE), else the release outcome."""
+    it = store.item("red", str(row.get("item") or "").split(":", 1)[-1]) if row.get("item") else None
+    if not it or it["state"] != "leased":
+        return None
+    d = it["data"]
+    since = max(float(row.get("acquired_at") or t), red_owned_progress_at(row, d))
+    idle = float(env_num("AGENTCTL_RED_HELD_IDLE", RED_HELD_IDLE))
+    if t - since < idle:
+        return None
+    why = (f"STALLED: no progress on {red_what(d)} for {fmt_age(t - since)} in {row['holder']}'s hand (no DIAGNOSED "
+           f"line, commit naming it or note on it within {fmt_age(idle)}): released, offered again")
+    inbox_write("red", f"RED NO PROGRESS: {why}", [f"RED NO PROGRESS: {why}"], [], 1,
+                cwd=lease_meta(row).get("worktree"))
+    return why
+
+
+def red_holder_idle(store: Any, row: dict[str, Any], t: float) -> str | None:
+    """The release outcome of a live red lease that shows no progress on its red (a joined one's, an owner-held
+    one's), else None."""
+    kind = lease_meta(row).get("kind")
+    if kind in ("claim", "sibling"):
+        return red_joined_idle(store, row, t)
+    return red_owned_idle(store, row, t) if kind == "owned" else None
 
 
 def red_joined_idle(store, row, t):
@@ -76,7 +136,7 @@ def red_renew_holders(store, t):
         if not lease_is_live(row, t):
             continue
         m = lease_meta(row)
-        why = red_joined_idle(store, row, t) if m.get("kind") in ("claim", "sibling") else None
+        why = red_holder_idle(store, row, t)
         if why:
             store.revoke(row["name"], why)
             continue

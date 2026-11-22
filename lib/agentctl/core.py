@@ -414,7 +414,7 @@ def env_num(name: str, default: Any) -> Any:
         return default
 
 
-def fmt_age(secs):
+def fmt_age(secs: float) -> str:
     secs = max(0, int(secs))
     return f"{secs // 86400} d" if secs >= 86400 else f"{secs // 3600} h" if secs >= 3600 else f"{secs // 60} min"
 

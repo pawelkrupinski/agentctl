@@ -717,6 +717,68 @@ class RedFamilyTest(Phase2Base):
         A.red_renew_holders(self.st, t)
         self.assertTrue(A.lease_is_live(self.st.get("red/v1"), t))
 
+    def owner_held(self, held_min, history=(), key="ab21"):
+        """Alert backtest #21 (red ab21) in the outside-gate owner's hand for held_min minutes, the owner's worktree a git
+        repo: (t, wt)."""
+        wt = os.path.join(self.tmp, f"movies-wt-owner-{key}")
+        subprocess.run(["git", "init", "-q", wt], check=True)
+        self.st.put_item("red", key, "leased", {"key": key, "workflow": "Alert backtest", "job": "backtest",
+                                                   "jobs": ["backtest"], "runs": ["21"], "last_run": {"number": 21},
+                                                   "history": list(history)})
+        self.st.acquire(f"red/{key}", "laptop:owner:outside-gate", 4 * 3600, 48 * 3600, item=f"red:{key}",
+                        meta={"kind": "owned", "family": "outside-gate", "worktree": wt})
+        return time.time() + held_min * 60, wt
+
+    def commit(self, wt, msg, at):
+        env = {**os.environ, "GIT_COMMITTER_DATE": f"@{int(at)} +0000", "GIT_AUTHOR_DATE": f"@{int(at)} +0000"}
+        subprocess.run(["git", "-C", wt, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty",
+                        "-m", msg], check=True, env=env)
+
+    def test_20261122_alert_backtest_21_a_red_in_its_owners_hand_with_no_progress_of_its_own_is_released(self):
+        """5254bffda9d2.4: held by the outside-gate owner from 16:05Z, its lease renewed by every beat of turns working
+        its other red -- no DIAGNOSED line or commit for it in ~3 h. Past RED_HELD_IDLE (45 min) with no progress of
+        its own, it is released STALLED (an attempt), the reason in the inbox."""
+        t, wt = self.owner_held(46, history=[{"at": "2026-11-22T13:30:48Z", "outcome": "DIAGNOSED: an older spell's"}])
+        self.commit(wt, "the other red's fix\n\nFixes-Red: 488", t - 60)  # progress on its OTHER red is none of its own
+        A.red_renew_holders(self.st, t)
+        row = self.st.get("red/ab21")
+        self.assertFalse(A.lease_is_live(row, t), A.lease_meta(row))
+        self.assertRegex(A.lease_meta(row)["outcome"],
+                         r"^STALLED: no progress on Alert backtest #21 .* in laptop:owner:outside-gate's hand")
+        said = [e["verdict"] for e in A.inbox_entries() if str(e.get("verdict")).startswith("RED NO PROGRESS")]
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("no DIAGNOSED line, commit naming it or note on it within 45 min", said[0])
+        A.red_lease_ended(self.st, self.st.item("red", "ab21"), row, None, t)
+        it = self.st.item("red", "ab21")
+        self.assertEqual((it["state"], it["data"]["attempts"]), ("offered", 1), "an attempt: on up the ladder")
+
+    def test_a_red_in_its_owners_hand_within_45_min_or_with_its_own_progress_stays_held(self):
+        t, _wt = self.owner_held(30)
+        A.red_renew_holders(self.st, t)
+        self.assertTrue(A.lease_is_live(self.st.get("red/ab21"), t), "within its window")
+        by = time.strftime("%H:%M", time.localtime(self.st.get("red/ab21")["acquired_at"] + 45 * 60))
+        self.assertIn(f"lapses {by} without progress", A.red_view(self.st, self.st.item("red", "ab21"), t)[0],
+                      "its own progress deadline, never the beat-renewed expiry")
+        recent = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 170 * 60))
+        t, _wt = self.owner_held(180, history=[{"at": recent, "outcome": "DIAGNOSED: the young-alert verdict"}], key="ab22")
+        A.red_renew_holders(self.st, t)
+        self.assertTrue(A.lease_is_live(self.st.get("red/ab22"), t), "DIAGNOSED 10 min ago")
+
+    def test_a_commit_naming_the_owner_held_red_or_a_note_on_it_is_its_progress(self):
+        t, wt = self.owner_held(180)
+        self.commit(wt, "the backtest's evidence\n\nDiagnoses-Red: 21", t - 600)
+        A.red_renew_holders(self.st, t)
+        self.assertTrue(A.lease_is_live(self.st.get("red/ab21"), t), "a Diagnoses-Red commit 10 min ago")
+        A.red_renew_holders(self.st, t + 3600)
+        self.assertFalse(A.lease_is_live(self.st.get("red/ab21"), t + 3600), "an hour later, nothing since")
+        _t, _wt = self.owner_held(180, key="ab22")
+        row = self.st.get("red/ab22")
+        A.red_joined_progress(self.st, row, "note: bisecting the young alerts")  # `red claim 21 --note` in the owner
+        A.red_renew_holders(self.st, time.time() + 600)
+        self.assertTrue(A.lease_is_live(self.st.get("red/ab22"), time.time() + 600), "noted now: within its window")
+        A.red_renew_holders(self.st, time.time() + 46 * 60)
+        self.assertFalse(A.lease_is_live(self.st.get("red/ab22"), time.time() + 46 * 60), "46 min after the note")
+
     def test_with_no_family_fixer_at_work_one_fixer_takes_every_open_red_of_the_family(self):
         t = time.time()
         self.red("c1", "Identity model convergence", "leg (uk)", 2527)

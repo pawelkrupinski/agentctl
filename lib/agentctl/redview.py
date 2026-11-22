@@ -28,6 +28,15 @@ def red_view(store, it, t=None):
     return (f"{text} -- {bl[0]}", f"{short}; {bl[1]}") if bl else (text, short)
 
 
+def red_lease_lapses(row: dict[str, Any], d: dict[str, Any], t: float) -> float:
+    """When red d's live lease row lapses with no progress: its expiry -- or, held by an owner (renewed by its beat), its
+    RED_HELD_IDLE past the red's own progress (reddispatch.py)."""
+    if lease_meta(row).get("kind") == "owned":
+        return max(float(row.get("acquired_at") or t), red_owned_progress_at(row, d)) + float(env_num(
+            "AGENTCTL_RED_HELD_IDLE", RED_HELD_IDLE))
+    return float(row.get("expires_at") or t)
+
+
 def red_view_state(store, it, t=None):
     """(text, short) of one red's state."""
     t = t if t is not None else store.clock()
@@ -51,7 +60,7 @@ def red_view_state(store, it, t=None):
         if not wt and m.get("kind") == "owned" and m.get("family"):  # an owner's red: the owner's ONE worktree
             wt = (read_record(owner_record_path(m["family"])) or {}).get("worktree")
         wt = str(wt or "?").replace(HOME, "~")
-        exp = time.strftime("%H:%M", time.localtime(row.get("expires_at") or t))
+        exp = time.strftime("%H:%M", time.localtime(red_lease_lapses(row, d, t)))
         prim = str(m.get("primary") or "").split("/")[-1]  # a sibling's primary red; an owner's red has none
         fam = f" [family {m['family']}{', with ' + prim if prim else ''}]" if m.get("family") else ""
         return (f"{who} ({wt}, leased{fam}; lapses {exp} without progress)" + (f" -- {m['note']}" if m.get("note") else "")
