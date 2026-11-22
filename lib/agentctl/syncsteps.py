@@ -26,13 +26,13 @@ from agentctl.alerts import reconcile_alerts
 from agentctl.projector import notify_escalations, project_events
 from agentctl.laptoprole import laptop_role_step
 from agentctl.fixerland import fixers_land_watch
-from agentctl.branches import refresh_pinned_recording
 from agentctl.owner import red_reap_orphans
 from agentctl.reddispatch import red_dispatcher, red_renew_holders
 from agentctl.queueclose import close_landed_changes, migrate_local_queue
 from agentctl.storestate import mirror_state
 from agentctl.netwatch import network_watch, tunnel_watch
 from agentctl.redstatus import write_red_status_snapshot
+from agentctl.recordingpins import refresh_pinned_recording
 
 
 SYNC_MIRROR_EVERY = 10   # s between the laptop's copies of /v1/state into state.json

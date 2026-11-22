@@ -15,14 +15,14 @@ from agentctl.core import (
 from agentctl.timefmt import ts
 from agentctl.statefile import mtime, read_record, write_json
 from agentctl.store import StoreAuthFailed, StoreUnavailable
-from agentctl.procs import proc_alive, process_start, socket_host
 from agentctl.selfcode import TOOL_PATH
-from agentctl.leases import lease_meta
 from agentctl.waitingdir import waiting_state
-from agentctl.fixerrecords import fixer_records
-from agentctl.inboxentry import inbox_write
 from agentctl.redrecord import lease_is_live, red_active, red_what
 from agentctl.claudefiles import bg_transcript, fixer_verdict
+from agentctl.procs import proc_alive, process_start, socket_host
+from agentctl.leases import lease_meta
+from agentctl.fixerrecords import fixer_records
+from agentctl.inboxentry import inbox_write
 from agentctl.fixersession import (
     BG_POLL, RED_STALL, bg_failure, bg_resumable, bg_rows, bg_session, bg_start, bg_stop, bg_turn, bg_turn_over,
     bg_waiting, store_reauth)
@@ -37,10 +37,10 @@ from agentctl.laptoprole import laptop_role_standby
 from agentctl.fixer import FIXER_IDENTITY_ENV, fixer_prompt
 from agentctl.red import RED_FIXER_WALL, RED_RENEW_EVERY
 from agentctl.redmove import tail_lines
-from agentctl.branches import claude_cli, interactive_mode
 from agentctl.redclaim import bind_fixer_session
 from agentctl.redcrash import keep_awake, verdict_cut
 from agentctl.fixerlife import CurrentStore, HeldLease, TurnProgress
+from agentctl.dispatchblock import claude_cli, interactive_mode
 
 
 OWNER_MAX = 7 * 86400        # ...and is held at most this long in one spell (a restart takes it again)

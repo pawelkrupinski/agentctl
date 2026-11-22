@@ -9,15 +9,15 @@ from typing import Any
 from agentctl.core import HOME, NO_SIGN, env_num, fmt_age, git, git_ok, reds_dir, remote
 from agentctl.timefmt import parse_time, ts
 from agentctl.store import StaleVersion
-from agentctl.procs import socket_host
 from agentctl.repos import red_repo_clone, red_repo_of
 from agentctl.trailers import trailer_values
-from agentctl.leases import lease_meta
 from agentctl.waitingdir import waiting_state
-from agentctl.inboxentry import inbox_write
-from agentctl.land import spawn_land
 from agentctl.redrecord import RED_JOIN_IDLE, RED_TERMINAL, lease_is_live, red_active, red_names, red_what
 from agentctl.allowedpaths import allowed_dir
+from agentctl.procs import socket_host
+from agentctl.leases import lease_meta
+from agentctl.inboxentry import inbox_write
+from agentctl.land import spawn_land
 from agentctl.fixersession import claude_trust_gap
 from agentctl.worktrees import WorktreeGuard
 from agentctl.fixerenv import fixer_env
@@ -28,13 +28,13 @@ from agentctl.owners import OWNER_TTL, owner_alive, owner_lease
 from agentctl.fixerland import red_dispatch
 from agentctl.red import (
     DECIDED_REVERT, RED_CLAIM_MAX, RED_CLAIM_TTL, RED_DECIDED_REVERT_MAX, RED_FIXER_MAX, RED_FIXER_TTL)
-from agentctl.branches import cached_dispatch_blocker
 from agentctl.redseen import KIND_ORDER
 from agentctl.redopen import red_family_tell
 from agentctl.redclaim import red_joined_progress, red_wt_mark
 from agentctl.redcrash import red_queue_family
 from agentctl.owner import OWNER_MAX, family_owned, owner_hand, owner_holder, owner_spawn, owner_still_ending
 from agentctl.blame import blame_note, blame_reland, blame_waiting, lander_spawn
+from agentctl.dispatchblock import cached_dispatch_blocker
 
 
 def red_commits_naming(wt: str | None, names: Any, keys: tuple[str, ...] = ("Fixes-Red",)) -> list[tuple[str, float]]:

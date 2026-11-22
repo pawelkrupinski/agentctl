@@ -3,22 +3,22 @@
 
 import re
 import time
-from agentctl.forge import GH_CLI, RED_CONCLUSIONS
 from agentctl.classify import QUOTA_LOG
 from agentctl.store import open_store
+from agentctl.forge import GH_CLI, RED_CONCLUSIONS
 from agentctl.repos import scan_repo_for
 from agentctl.workflows import LOCAL_FLOW
+from agentctl.redrecord import lease_is_live, red_active, red_lease, red_what
 from agentctl.leases import lease_meta
 from agentctl.inboxentry import inbox_write
-from agentctl.redrecord import lease_is_live, red_active, red_lease, red_what
 from agentctl.conditions import PROBES, condition_item_of, open_condition, run_probe
 from agentctl.redrepos import red_gate_flows
 from agentctl.redask import OWNER_CAUSES, ask_category, ask_refusal
 from agentctl.red import red_item_of_run
 from agentctl.ciwhy import _gate_lists, _outside_lists, resolve_run
-from agentctl.branches import run_sigs
 from agentctl.redseen import red_units
 from agentctl.redobserve import local_units
+from agentctl.runsigs import run_sigs
 
 
 # -- an unreadable gate: no dispatch, one UNKNOWN per spell, an infra check

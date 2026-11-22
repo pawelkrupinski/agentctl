@@ -10,7 +10,7 @@ mypy-errors	batchpush	34
 mypy-errors	beats	4
 mypy-errors	blame	126
 mypy-errors	blameopen	13
-mypy-errors	branches	147
+mypy-errors	branches	73
 mypy-errors	buildview	42
 mypy-errors	changekind	27
 mypy-errors	checkslot	26
@@ -24,6 +24,7 @@ mypy-errors	conditions	41
 mypy-errors	config	19
 mypy-errors	conflicts	40
 mypy-errors	core	33
+mypy-errors	dispatchblock	13
 mypy-errors	dispatches	48
 mypy-errors	explorer	16
 mypy-errors	fixer	16
@@ -32,6 +33,7 @@ mypy-errors	fixerland	30
 mypy-errors	fixerlife	63
 mypy-errors	fixersession	38
 mypy-errors	forge	70
+mypy-errors	gatesummary	4
 mypy-errors	gating	33
 mypy-errors	generated	50
 mypy-errors	ghapp	34
@@ -76,9 +78,11 @@ mypy-errors	queuerecheck	48
 mypy-errors	queueslots	25
 mypy-errors	queuesubmit	36
 mypy-errors	queueuntil	18
+mypy-errors	recordingpins	23
 mypy-errors	recovery	54
 mypy-errors	red	49
 mypy-errors	redask	19
+mypy-errors	redauthors	12
 mypy-errors	redblock	23
 mypy-errors	redclaim	29
 mypy-errors	redcrash	52
@@ -109,6 +113,7 @@ mypy-errors	remotestore	26
 mypy-errors	repos	29
 mypy-errors	reverts	46
 mypy-errors	rundispatch	11
+mypy-errors	runsigs	22
 mypy-errors	server	71
 mypy-errors	serverclone	36
 mypy-errors	serversteps	28

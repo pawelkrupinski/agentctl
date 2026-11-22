@@ -829,7 +829,6 @@ cyclomatic	worktree_holding	12
 cyclomatic	write_snapshot	24
 file-lines	alerts	719
 file-lines	blame	833
-file-lines	branches	843
 file-lines	ciwhy	760
 file-lines	gov	728
 file-lines	live	755

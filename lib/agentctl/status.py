@@ -17,12 +17,12 @@ from agentctl.owned import default_repo
 from agentctl.reverts import REVERT_OPEN, revert_brief, revert_line
 from agentctl.conditions import open_conditions
 from agentctl.queue import hold_row, hold_text, land_hold
+from agentctl.issues import status_issues
 from agentctl.changekind import HOLD_SHOWN
 from agentctl.redfamilies import red_family
 from agentctl.cistate import state_read
 from agentctl.owners import owner_record_path
 from agentctl.gov import pressure_report
-from agentctl.branches import GATE_LINE, GATE_SUMMARY_MAX_AGE, cached_dispatch_blocker, pins_status
 from agentctl.reduntracked import red_untracked_list
 from agentctl.owner import holder_work, owners_status
 from agentctl.redvault import block_verdict_note
@@ -34,8 +34,10 @@ from agentctl.tunnel import tunnel_ports, tunnel_state_path
 from agentctl.recovery import escalated_now
 from agentctl.storestate import NETWORK_SHOWN_FOR, STORE_UNREACHABLE_AFTER, port_open, remote_status_state
 from agentctl.park import parked_lines
-from agentctl.issues import status_issues
 from agentctl.statusagents import status_agents, status_strip_lease
+from agentctl.recordingpins import pins_status
+from agentctl.gatesummary import GATE_LINE, GATE_SUMMARY_MAX_AGE
+from agentctl.dispatchblock import cached_dispatch_blocker
 
 
 STATUS_SOURCE_BOUND = 8         # s a source may take ($AGENTCTL_STATUS_BOUND); the agents' source twice that

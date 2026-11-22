@@ -18,10 +18,10 @@ from agentctl.maint import MAINTAIN_SWEEP_HOUR, cmd_orphans, spotlight_exclude
 from agentctl.cleanup import SWEEP_IDLE_DAYS, cmd_sweep
 from agentctl.notifier import notify
 from agentctl.upkeep import rotate_logs
-from agentctl.branches import shutil_which
 from agentctl.launchd import launch_agents_dir
 from agentctl.orphans import orphan_duty
 from agentctl.beats import beat_age, write_beat
+from agentctl.dispatchblock import shutil_which
 
 
 IOS_SWEEP_TIMEOUT = 120  # seconds: one `scripts/ios-simulators sweep` (it calls xcrun simctl, which can hang)

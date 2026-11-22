@@ -10,12 +10,12 @@ from agentctl.core import env_num, fmt_age
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.store import StoreAuthFailed, StoreUnavailable, open_store
-from agentctl.procs import process_start, socket_host
 from agentctl.repos import red_repo_of
-from agentctl.leases import lease_meta
-from agentctl.inboxentry import inbox_write
 from agentctl.redrecord import lease_is_live, red_lease
 from agentctl.claudefiles import bg_transcript, fixer_verdict
+from agentctl.procs import process_start, socket_host
+from agentctl.leases import lease_meta
+from agentctl.inboxentry import inbox_write
 from agentctl.fixersession import (
     BG_POLL, FIXER_CLAIM_WITHIN, RED_STALL, bg_failure, bg_final_text, bg_row_brief, bg_session, bg_start, bg_stop,
     bg_turn, bg_turn_over, bg_wait_mark, fixer_label, store_reauth)
@@ -26,9 +26,9 @@ from agentctl.redrepos import red_owner_only
 from agentctl.fixerland import fixer_mark, fixer_meta_sent
 from agentctl.fixer import FIXER_IDENTITY_ENV, OWNER_ONLY_DENIED, fixer_prompt
 from agentctl.red import RED_FIXER_MAX, RED_FIXER_TTL, RED_FIXER_WALL, RED_RELEASE_ASKS, RED_RENEW_EVERY
-from agentctl.branches import claude_cli, interactive_mode
 from agentctl.redclaim import bind_fixer_session
 from agentctl.redcrash import keep_awake, verdict_cut
+from agentctl.dispatchblock import claude_cli, interactive_mode
 
 
 # ONE FIXER LIFECYCLE (2026-11-04): a dispatched fixer's wrapper (red_fixer) and a family owner's (owner.red_owner) keep

@@ -25,9 +25,7 @@ from agentctl.red import RED_TICK_INTERVAL, red_active_of, red_obs_for
 from agentctl.redmove import red_put_offer, red_settled_runs
 from agentctl.ciwhy import (
     _gate_lists, _gate_no_verdict, _outside_lists, ci_state_load, ci_state_write, gate_from_snap, gate_runs)
-from agentctl.branches import (
-    _blocker_cache, _last_gate_publish, dispatch_blocker, in_fixer, publish_gate_summary, refresh_pinned_recording,
-    route_branch_reds, settle_branch_reds)
+from agentctl.branches import route_branch_reds, settle_branch_reds
 from agentctl.redseen import gate_red_units, red_merge_rekeyed, red_obs_of_units, stuck_obs
 from agentctl.redobserve import red_observe
 from agentctl.reduntracked import red_active_untracked, red_note_untracked, red_split_untracked, red_untrack
@@ -47,6 +45,9 @@ from agentctl.cireport import ci_state_refresh, ci_why
 from agentctl.localrecheck import recheck_local
 from agentctl.redhold import red_enforce
 from agentctl.redstatus import red_status
+from agentctl.recordingpins import refresh_pinned_recording
+from agentctl.gatesummary import _last_gate_publish, publish_gate_summary
+from agentctl.dispatchblock import _blocker_cache, dispatch_blocker, in_fixer
 
 
 # -- the tick's red step (the processor; ci-why never acts)

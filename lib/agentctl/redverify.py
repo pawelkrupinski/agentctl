@@ -6,15 +6,15 @@ from agentctl.core import env_num, git, reds_dir, remote
 from agentctl.timefmt import hhmmz, iso_at, parse_time
 from agentctl.statefile import read_record
 from agentctl.trailers import trailer_values
-from agentctl.inboxentry import inbox_write
 from agentctl.redrecord import red_what
+from agentctl.inboxentry import inbox_write
 from agentctl.redfixread import fix_reaches_red
 from agentctl.red import RED_VERIFY_HOLD, red_verify_run_on_way, workflow_main_runs
 from agentctl.redmove import red_move
-from agentctl.branches import cause_of, name_causes
 from agentctl.rundispatch import red_verify_dispatch
 from agentctl.blameopen import PATHISH
 from agentctl.redopen import red_offer, red_open
+from agentctl.runsigs import cause_of, name_causes
 
 
 def red_verify_scheduled(store, it, f, sha, o_r, repo, t):

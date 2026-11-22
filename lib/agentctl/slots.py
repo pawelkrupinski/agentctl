@@ -17,22 +17,21 @@ from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.classify import TRANSIENT_PUSH, is_transient_network, net_run, network_failure
 from agentctl.repos import batching, precheck_hook, waiting_supported
-from agentctl.leases import lock_note
 from agentctl.waitingdir import save_entry, waiting_entries, waiting_state
+from agentctl.lander import commit_keys, lander_note_direct
+from agentctl.gating import mark_gate_dirty
+from agentctl.leases import lock_note
 from agentctl.land import (
     LAND_PRECHECK_ROUNDS, LAND_RETRIES, LAND_STALL_MIN, RACE, REDGATE, TUNNEL_TROUBLE, land_lock, landed,
     push_argv, push_bounds, run_watched, stall_reason, tool_env)
-from agentctl.lander import commit_keys, lander_note_direct
-from agentctl.gating import mark_gate_dirty
 from agentctl.worktrees import WorktreeGuard, mark_internal
 from agentctl.queue import requeue_infra
 from agentctl.queuerecheck import queue_mode
 from agentctl.redfixes import fixes_of
 from agentctl.redrepos import red_owner_only
 from agentctl.gov import GovTimeout, gov_class_of
-from agentctl.queuesubmit import queued_tail, submit_ref
 from agentctl.waiting import must_wait, note_waiting, supersede_older_waiting, tail_of, waiting_commits
-from agentctl.branches import in_fixer
+from agentctl.queuesubmit import queued_tail, submit_ref
 from agentctl.redseen import gate_reds
 from agentctl.redobserve import local_red
 from agentctl.landwatch import start_watch
@@ -43,8 +42,9 @@ from agentctl.watchtick import watch_landed
 from agentctl.queueclose import NETWORK_REASON
 from agentctl.localrecheck import check_failures, check_passes, local_cleared, note_local_red, write_baseline_out
 from agentctl.server import queue_change
-from agentctl.queueenter import change_fields, enqueue, land_until_done, submit_to_server, sync
 from agentctl.landqueue import queue_command
+from agentctl.queueenter import change_fields, enqueue, land_until_done, submit_to_server, sync
+from agentctl.dispatchblock import in_fixer
 
 
 def stalled(step, output, log_path):

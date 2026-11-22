@@ -5,8 +5,8 @@ from agentctl.core import err, git, reds_dir, remote
 from agentctl.statefile import read_record
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.ciwhy import _gate_lists, _outside_lists, gate_from_snap, gate_report_only, outside_from_snap
-from agentctl.branches import signature
 from agentctl.redseen import gate_red_units, predict_units, red_obs_of_units, red_units, stuck_obs, unkicked_obs
+from agentctl.runsigs import signature
 
 
 def red_observe(o_r, repo, snap):

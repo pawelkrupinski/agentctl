@@ -25,12 +25,12 @@ from agentctl.worktrees import gitdir_activity, worktrees
 from agentctl.fixerenv import fixer_env
 from agentctl.dispatches import internal_tree
 from agentctl.conditions import open_condition, recovery_dir, run_probe
-from agentctl.branches import land_cwds
 from agentctl.blame import blame_drop_revert_worktree, blame_land_refusal, blame_records
 from agentctl.recovery import reland_tree_path, reland_worktree
 from agentctl.sessionpaths import session_worktrees
 from agentctl.superseded import superseded_duty, superseded_mark, worktree_change_items
 from agentctl.park import park_duty, parked_mark
+from agentctl.dispatchblock import land_cwds
 
 
 # ORPHANED WORK (the owner, 2026-10-28: "review and fix landing code ... so things don't get missed or stalled"; the
