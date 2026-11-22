@@ -30,12 +30,12 @@ MODULES = ("core", "timefmt", "statefile", "moviestools", "forge", "ghapp", "cla
            "queuerecheck", "redlink", "redfixes", "redworkflows", "redreplay", "issues", "identitychange", "changekind",
            "redrepos", "redfamilies", "cistate", "owners", "redask", "alerts", "projector", "laptoprole",
            "fixerland", "fixer", "govbudget", "gov", "govcmd", "queuesubmit", "queueuntil", "ancestry", "red",
-           "redmove", "waiting", "ciwhy", "branches")
+           "redmove", "waiting", "ciwhy", "branches", "redseen", "redobserve", "reduntracked")
 
-NAMESPACE = ("cireport", "redseen", "redopen", "reduntracked", "redstep", "redcrash", "redpending", "redverify",
-             "reddispatch", "fixerlife", "redclaim", "redview", "redearly", "redtick", "redblock", "redvault", "ask",
-             "owner", "slots", "landwatch", "queueenter", "queueclose", "queuediff", "queuepush", "queuebatch",
-             "remote", "batch", "tools", "blame", "server", "watchdog", "recovery", "status", "cli")
+NAMESPACE = ("cireport", "redopen", "redstep", "redcrash", "redpending", "redverify", "reddispatch", "fixerlife",
+             "redclaim", "redview", "redearly", "redtick", "redblock", "redvault", "ask", "owner", "slots",
+             "landwatch", "queueenter", "queueclose", "queuediff", "queuepush", "queuebatch", "remote", "batch",
+             "tools", "blame", "server", "watchdog", "recovery", "status", "cli")
 
 PARTS = MODULES + NAMESPACE
 

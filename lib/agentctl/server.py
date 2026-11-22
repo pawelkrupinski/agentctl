@@ -998,26 +998,6 @@ def cmd_store(a):
     return 0
 
 
-RED_DERIVED_FIELDS = ("holder", "fix", "block", "cause", "until", "tier", "priority")  # the tick's to set, from the state
-
-
-def red_import_merge(into, other):
-    """One red's data from two spells of it: `other`'s history kept (fix, refuted, attempts, author, ...), the runs and
-    jobs united, the newer last run and the earlier opening -- the red's NAMES are what links a Fixes-Red change to it."""
-    by_id = lambda r: int((r or {}).get("databaseId") or 0)
-    m = {**into, **{k: v for k, v in other.items() if v not in (None, [], {}, "") and not into.get(k)
-                    and k not in RED_DERIVED_FIELDS}}
-    m["runs"] = sorted(set(map(str, into.get("runs") or [])) | set(map(str, other.get("runs") or [])))
-    m["jobs"] = sorted(set(into.get("jobs") or []) | set(other.get("jobs") or []))
-    m["last_run"] = max((into.get("last_run"), other.get("last_run")), key=by_id) or into.get("last_run")
-    opened = [float(x) for x in (into.get("opened_at"), other.get("opened_at")) if x]
-    if opened:
-        m["opened_at"] = min(opened)
-    m["attempts"] = max(int(into.get("attempts") or 0), int(other.get("attempts") or 0))
-    m["history"] = (other.get("history") or []) + [h for h in into.get("history") or [] if h not in (other.get("history") or [])]
-    return m
-
-
 def sd_notify(msg):
     """systemd's notify protocol ($NOTIFY_SOCKET; '@' an abstract socket): READY=1, WATCHDOG=1. A no-op elsewhere."""
     path = os.environ.get("NOTIFY_SOCKET")

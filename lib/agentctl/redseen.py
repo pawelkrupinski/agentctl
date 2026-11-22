@@ -1,5 +1,24 @@
 # agentctl, part `redseen`: what is red now: one observation per key from the CI snapshot, stuck and unkicked runs.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import subprocess
+import time
+from agentctl.core import env_num, err, fmt_age, git, git_ok, pct, reds_dir, remote, slug
+from agentctl.timefmt import parse_time
+from agentctl.statefile import read_record
+from agentctl.forge import RED_CONCLUSIONS, gh_json, runner_queue, stuck_durations
+from agentctl.classify import norm_line
+from agentctl.repos import gated_repo
+from agentctl.workflows import LOCAL_FLOW
+from agentctl.redrecord import RED_TERMINAL, red_what
+from agentctl.red import STUCK_FACTOR, STUCK_FLOOR, red_key
+from agentctl.redmove import red_close
+from agentctl.waiting import GATE_UNREAD, gate_unread_why
+from agentctl.ciwhy import (
+    _gate_lists, gate_report_only, gate_runs, queue_full, streak_runs, stuck_history, stuck_timeout)
+from agentctl.branches import branch_reds, classifier_version, entry_predicts, run_names, run_sigs
+
 
 # -- what is red now: one observation per key, from the CI-state snapshot
 STREAK_REREADS = 3  # stale or missing streak run signatures read again per tick ($AGENTCTL_STREAK_REREADS)
@@ -304,22 +323,6 @@ def unkicked_unit(repo, snap, now_, name, paths_file, matcher, kicker):
     return u
 
 
-def red_observe(o_r, repo, snap):
-    """{key: observation} of everything red on main now: the gate, every other workflow (its newest decided run, audit
-    #7), main's local checks, the branch runs that predict main red, and the stuck runs (audit #8). A report-only gate
-    run's reds (gate_report_only) are outside the gate's."""
-    rows = [(n, d, _gate_lists.get(n, []), not gate_report_only(o_r, n, d)[0]) for n, d, _nw, _s in gate_from_snap(snap)]
-    others = [(n, r, _outside_lists.get(n, []), False) for n, r, _s, _c in outside_from_snap(snap)]
-    units = gate_red_units(o_r, rows, others) + local_units(repo) + predict_units(o_r, snap)
-    obs = red_obs_of_units(units)
-    obs.update(stuck_obs(snap))
-    try:
-        obs.update(unkicked_obs(o_r, repo, snap))
-    except (Exception, SystemExit) as e:
-        err(f"red: could not tell whether the convergence was kicked ({str(e)[:120]})")
-    return obs
-
-
 def red_rekeyed(d, obs):
     """A line-less or unreadable red whose own run is now read in full under other keys (its jobs merged into the run's
     one infra red, or its failed jobs read at last): superseded by that red, never 'cleared by a newer run'."""
@@ -329,6 +332,26 @@ def red_rekeyed(d, obs):
     rid = (d.get("last_run") or {}).get("databaseId")
     same_run = [o for o in obs.values() if o["workflow"] == d.get("workflow") and o["run"].get("databaseId") == rid]
     return bool(same_run) and all(o["job"] != "?" for o in same_run)
+
+
+RED_DERIVED_FIELDS = ("holder", "fix", "block", "cause", "until", "tier", "priority")  # the tick's to set, from the state
+
+
+def red_import_merge(into, other):
+    """One red's data from two spells of it: `other`'s history kept (fix, refuted, attempts, author, ...), the runs and
+    jobs united, the newer last run and the earlier opening -- the red's NAMES are what links a Fixes-Red change to it."""
+    by_id = lambda r: int((r or {}).get("databaseId") or 0)
+    m = {**into, **{k: v for k, v in other.items() if v not in (None, [], {}, "") and not into.get(k)
+                    and k not in RED_DERIVED_FIELDS}}
+    m["runs"] = sorted(set(map(str, into.get("runs") or [])) | set(map(str, other.get("runs") or [])))
+    m["jobs"] = sorted(set(into.get("jobs") or []) | set(other.get("jobs") or []))
+    m["last_run"] = max((into.get("last_run"), other.get("last_run")), key=by_id) or into.get("last_run")
+    opened = [float(x) for x in (into.get("opened_at"), other.get("opened_at")) if x]
+    if opened:
+        m["opened_at"] = min(opened)
+    m["attempts"] = max(int(into.get("attempts") or 0), int(other.get("attempts") or 0))
+    m["history"] = (other.get("history") or []) + [h for h in into.get("history") or [] if h not in (other.get("history") or [])]
+    return m
 
 
 def red_merge_rekeyed(store, active, obs):

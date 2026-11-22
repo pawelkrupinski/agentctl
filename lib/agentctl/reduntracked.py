@@ -1,5 +1,18 @@
 # agentctl, part `reduntracked`: a check never green is not tracked: the never-green record and untracking.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import json
+import time
+from agentctl.core import env_num, err, process_cache
+from agentctl.forge import RUN_FIELDS, gh_json
+from agentctl.redrecord import RED_TERMINAL
+from agentctl.gating import main_workflow_files
+from agentctl.redrepos import red_is_other
+from agentctl.red import canon_job, red_obs_for
+from agentctl.redmove import red_move, red_stop_holder
+from agentctl.ciwhy import _gate_lists, _outside_lists, decided_runs, registry_name
+from agentctl.redseen import red_obs_of_units
+
 
 # A CHECK THAT HAS NEVER BEEN GREEN IS NOT TRACKED (the owner, 2026-11-19, of "Alert backtest #9 -> IN PROGRESS ... fix
 # 4528ed2 awaiting next scheduled run at 12:41Z": "remove it from tracked reds and don't alert in status line until it

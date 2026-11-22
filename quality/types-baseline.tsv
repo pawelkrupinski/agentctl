@@ -70,12 +70,13 @@ mypy-errors	redfamilies	8
 mypy-errors	redfixes	54
 mypy-errors	redfixread	50
 mypy-errors	redmove	15
+mypy-errors	redobserve	20
 mypy-errors	redopen	41
 mypy-errors	redpending	76
 mypy-errors	redreplay	19
 mypy-errors	redrepos	12
 mypy-errors	redretired	63
-mypy-errors	redseen	79
+mypy-errors	redseen	70
 mypy-errors	redstep	107
 mypy-errors	redtick	107
 mypy-errors	reduntracked	45
@@ -85,8 +86,8 @@ mypy-errors	redview	35
 mypy-errors	remote	164
 mypy-errors	repos	34
 mypy-errors	reverts	48
-mypy-errors	server	295
-mypy-errors	slots	231
+mypy-errors	server	294
+mypy-errors	slots	221
 mypy-errors	stats	139
 mypy-errors	status	216
 mypy-errors	store	128
