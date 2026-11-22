@@ -5,6 +5,7 @@ import os
 import re
 import signal
 import time
+from typing import Callable
 from agentctl.core import HOME, REPOS, git, pid_alive, run_cmd, slug, state_root
 from agentctl.procs import tosec
 from agentctl.selfcode import code_version
@@ -108,37 +109,64 @@ MAINTAIN_SWEEP_HOUR = 9  # local time: the daily sweep runs at the first maintai
 # `git status` through the repo's shared info/exclude. macOS honours the marker unevenly across releases; the owner's
 # Spotlight Privacy exclusion of ~/projects is the sure one (AGENTCTL.md, maintain).
 SPOTLIGHT_MARKER = ".metadata_never_index"
+# NEVER INTO A TREE IN USE (2026-11-22, fix-replay 8cdd705b46e6-base.log): a pass marked the base tree of a fix replay
+# while run-script-tests ran there, and the run read the new file as its test's leftover ("left in the checkout during
+# the run ... .metadata_never_index"). A worktree some process has its cwd in -- a land, a check, a replay, an agent --
+# is marked at a later pass, once nothing runs there.
 
 
-def spotlight_exclude(repos=None):
-    """Markers into every worktree (and its target/) of the repos; returns the paths it marked."""
-    marked = []
+def spotlight_info_exclude(repo: str) -> bool:
+    """The marker kept out of `git status` by repo's shared info/exclude; False when that cannot be made sure of (the
+    repo's trees are never marked then: the marker would dirty them)."""
+    r = git(repo, "rev-parse", "--git-common-dir", check=False)
+    if r.returncode:
+        return False
+    common = os.path.join(repo, r.stdout.strip())  # an absolute common dir stays itself
+    excl = os.path.join(common, "info", "exclude")
+    try:
+        have = open(excl).read() if os.path.exists(excl) else ""
+        if SPOTLIGHT_MARKER not in have.split():
+            os.makedirs(os.path.dirname(excl), exist_ok=True)
+            with open(excl, "a") as f:
+                f.write(("" if not have or have.endswith("\n") else "\n") + SPOTLIGHT_MARKER + "\n")
+    except OSError:
+        return False
+    return True
+
+
+def spotlight_unmarked(wt: str) -> list[str]:
+    """Worktree wt and its target/, those that exist without the marker."""
+    return [d for d in (wt, os.path.join(wt, "target")) if os.path.isdir(d)
+            and not os.path.exists(os.path.join(d, SPOTLIGHT_MARKER))]
+
+
+def in_use(wt: str, cwds: list[str]) -> bool:
+    """Some process works in worktree wt: one of cwds (real paths) is it or lies under it."""
+    real = os.path.realpath(wt)
+    return any(c == real or c.startswith(real + os.sep) for c in cwds)
+
+
+def spotlight_exclude(repos: list[str] | None = None, cwds: Callable[[], dict[int, str]] = process_cwds) -> list[str]:
+    """Markers into every worktree (and its target/) of the repos that no process works in (cwds: {pid: cwd}, read
+    once, only when some tree lacks its marker); returns the paths it marked."""
+    marked: list[str] = []
+    busy: list[str] | None = None
     for repo in repos if repos is not None else REPOS:
-        if not os.path.isdir(repo):
+        if not os.path.isdir(repo) or not spotlight_info_exclude(repo):
             continue
-        r = git(repo, "rev-parse", "--git-common-dir", check=False)
-        if r.returncode:
-            continue
-        common = os.path.join(repo, r.stdout.strip()) if not os.path.isabs(r.stdout.strip()) else r.stdout.strip()
-        excl = os.path.join(common, "info", "exclude")
-        try:
-            have = open(excl).read() if os.path.exists(excl) else ""
-            if SPOTLIGHT_MARKER not in have.split():
-                os.makedirs(os.path.dirname(excl), exist_ok=True)
-                with open(excl, "a") as f:
-                    f.write(("" if not have or have.endswith("\n") else "\n") + SPOTLIGHT_MARKER + "\n")
-        except OSError:
-            continue  # never marks a tree whose git status the marker would dirty
         out = git(repo, "worktree", "list", "--porcelain", check=False).stdout
         for wt in (l[len("worktree "):] for l in out.splitlines() if l.startswith("worktree ")):
-            for d in (wt, os.path.join(wt, "target")):
-                m = os.path.join(d, SPOTLIGHT_MARKER)
-                if os.path.isdir(d) and not os.path.exists(m):
-                    try:
-                        open(m, "a").close()
-                        marked.append(d)
-                    except OSError:
-                        pass
+            todo = spotlight_unmarked(wt)
+            if todo and busy is None:
+                busy = [os.path.realpath(c) for c in cwds().values()]
+            if todo and in_use(wt, busy or []):
+                continue  # in use: marked once nothing runs there
+            for d in todo:
+                try:
+                    open(os.path.join(d, SPOTLIGHT_MARKER), "a").close()
+                    marked.append(d)
+                except OSError:
+                    pass
     return marked
 
 

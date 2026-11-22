@@ -2762,7 +2762,9 @@ replaces `net.bitcashier.agentctl-reap`, `net.bitcashier.agentctl-sweep` and `de
 Each pass also marks every worktree of agentctl's repos, and its `target/`, with `.metadata_never_index` (kept out of
 `git status` by the repo's shared `info/exclude`): 2026-11-19 mds indexed ~26 movies worktrees at ~1.5 cores. macOS
 honours that marker unevenly; the sure exclusion is the owner's System Settings > Spotlight > Search Privacy entry
-for `~/projects`.
+for `~/projects`. A worktree some process has its cwd in (a land, a check, a replay, an agent) is marked at a later
+pass, once nothing runs there (2026-11-22: a pass marked a fix replay's tree mid run-script-tests, which read the
+marker as its test's leftover).
 
 Each pass also sweeps the iOS Simulators agents left booted (`ios_simulator_sweep`, 2026-11-07: three booted for days took
 the laptop to load 368): movies' `scripts/ios-simulators sweep` from the root checkout, bounded to 120 s, laptop only,
