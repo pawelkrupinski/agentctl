@@ -14,6 +14,7 @@ from agentctl.statefile import mtime
 from agentctl.store import ARCHIVE, MACHINES, StaleVersion, StateSpec, open_store
 from agentctl.repos import RED_PRIMARY
 from agentctl.storetoken import no_vault
+from agentctl.claudefiles import claude_projects_root
 
 
 # ---------------------------------------------------------------- the lander (the owner, 2026-11-01: "remember which
@@ -32,11 +33,6 @@ MACHINES["lander"] = {
     "recorded": StateSpec(LANDER_KEEP, "gone", ("gone",)),
     "gone": StateSpec(ARCHIVE, "gone", (), terminal=True),
 }
-
-
-# -- 1. the lander: who ran `agentctl land`
-def claude_projects_root():
-    return os.environ.get("AGENTCTL_CLAUDE_PROJECTS") or os.path.join(HOME, ".claude", "projects")
 
 
 LAND_CALL = re.compile(r"agentctl land(?![ \t]+(status|hold|release|cancel|--help)\b)(?=[\s;&|)'\"]|$)")

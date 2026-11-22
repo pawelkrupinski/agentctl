@@ -1,5 +1,18 @@
 # agentctl, part `live`: the live agent output (SSE transcripts).
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import glob
+import json
+import os
+import re
+import threading
+import time
+from agentctl.core import dispatches_dir, env_num, process_cache, reds_dir
+from agentctl.statefile import mtime, read_json_file, read_record, tail_bytes
+from agentctl.procs import proc_alive
+from agentctl.lander import claude_projects_root
+from agentctl.claudefiles import bg_transcript
+
 
 # ---------------------------------------------------------------- live agent output (2026-10-29)
 # The owner: "could this page show live output of agents", then "I want full output". Every agent row of the page can

@@ -1,5 +1,19 @@
 # agentctl, part `fixersession`: a fixer is a background Claude session: launching it, workspace trust, reading its session's state.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import json
+import os
+import re
+import shlex
+import subprocess
+import time
+from agentctl.core import HOME, SHORT, _tokens, env_num, git, pid_alive, state_root
+from agentctl.statefile import mtime, read_record, write_json
+from agentctl.repos import red_repo_clone, red_repos
+from agentctl.inboxentry import inbox_write
+from agentctl.storetoken import no_vault, token, token_ns
+from agentctl.claudefiles import bg_transcript, claude_jobs_root, fixer_verdict
+
 
 # A FIXER IS A BACKGROUND CLAUDE SESSION (the owner, 2026-10-29: "I want fixers to be visible in ui"): `claude --bg -n
 # <label>` starts it, so `claude agents` lists it by its label and the owner can `claude attach | logs | stop` it. The
@@ -295,12 +309,6 @@ def bg_stop(cli, bid):
         subprocess.run([cli, "stop", bid], capture_output=True, timeout=60, stdin=subprocess.DEVNULL, cwd=claude_cwd())
     except (OSError, subprocess.TimeoutExpired):
         pass
-
-
-def bg_transcript(session):
-    root = os.environ.get("AGENTCTL_CLAUDE_PROJECTS") or os.path.join(HOME, ".claude", "projects")
-    hits = glob.glob(os.path.join(root, "*", f"{session}.jsonl"))
-    return hits[0] if hits else None
 
 
 # A SESSION WITH NO CONVERSATION CANNOT BE RESUMED (2026-11-21, Order independence #99 HARNESS FAULT, issue

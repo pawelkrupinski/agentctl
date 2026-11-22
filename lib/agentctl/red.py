@@ -280,7 +280,6 @@ RED_RELEASE_ASKS = 12        # ...and asks a store that does not answer this man
 STUCK_FACTOR, STUCK_FLOOR = 3, 30 * 60  # audit #8: a run undecided past max(3 x its workflow's p90, 30 min) is a red
 BRIEF = os.path.join(HOME, "bin", "briefs", "movies-agent-preamble.md")
 BRIEF_SRC = ""  # a file to use instead of the tracked docs/fixer-brief.md in fixers' prompts (an override): none by default
-RED_TERMINAL = ("verified", "cleared")
 
 
 # THE TIER LADDER (design §5.3), a table: (attempts, condition, tier), the first row whose attempts and condition hold.
@@ -353,14 +352,6 @@ def red_key(workflow, job, line):
     import hashlib
     n = norm_line(line)
     return hashlib.sha1((f"{workflow}\0{n}" if n else f"{workflow}\0job {canon_job(job)}").encode()).hexdigest()[:12]
-
-
-def red_lease(key):
-    return f"red/{key}"
-
-
-def lease_is_live(row, t=None):
-    return bool(row and row.get("holder") and row["expires_at"] > (t if t is not None else time.time()))
 
 
 def lease_meta(row):

@@ -69,3 +69,6 @@ def job_inner(name: Any) -> str:
     """A job's own name: the part after ` / ` of GitHub's `<caller> / <job>` (convergence_reuse.py's jobs_by_name)."""
     caller, sep, inner = str(name).partition(" / ")
     return inner if sep else caller
+
+
+LOCAL_FLOW = "Local checks"

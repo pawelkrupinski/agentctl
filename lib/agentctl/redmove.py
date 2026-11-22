@@ -23,12 +23,6 @@ def red_move(store, it, to, text, data=None, deadline_s=None, level=None, **ev):
     return store.item("red", it["id"]) if v else None
 
 
-def red_what(d):
-    jobs = [str(j) for j in d.get("jobs") or [d.get("job")] if j]
-    o_r = red_repo_of(d)
-    return ("" if o_r == RED_PRIMARY else f"{red_repo_short(o_r)} ") + f"{d.get('workflow')} #{(d.get('last_run') or {}).get('number')}" + (f" [{', '.join(jobs)}]" if jobs else "")
-
-
 def red_offer_class(d):
     return "flake" if d.get("red_kind") == "flake" else "gate" if d.get("gate") else "other"
 

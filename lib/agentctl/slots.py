@@ -861,7 +861,6 @@ def network_requeue(repo, head, out, log_path, a=None):
           f"{queued_tail()}", flush=True)
     spawn_waiting_processor(repo)
     return 0
-LOCAL_FLOW = "Local checks"
 
 
 def check_failures(out):

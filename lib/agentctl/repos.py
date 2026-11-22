@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shlex
+from typing import Any
 from agentctl.core import HOME, REPOS, err, git_ok, host_role, process_cache, remote, slug
 from agentctl.selfcode import TOOL_PATH
 
@@ -137,13 +138,13 @@ def red_repo_conf(o_r):
     return next((c for c in red_repos() if c["repo"] == o_r), None)
 
 
-def red_repo_of(d):
+def red_repo_of(d: Any) -> str:
     """The repo a red (its data, its picture, a fixer record) belongs to: its `repo`, else the primary (every red from
     before 2026-10-30 is movies')."""
-    return (d or {}).get("repo") or RED_PRIMARY
+    return str((d or {}).get("repo") or RED_PRIMARY)
 
 
-def red_repo_short(o_r):
+def red_repo_short(o_r: str) -> str:
     return o_r.split("/", 1)[-1]
 
 
@@ -177,3 +178,17 @@ def server_repo():
     """The reconciler's own clone on ci-runner (movies_repo_path; `tick` clones it from $AGENTCTL_MOVIES_REMOTE as
     remote()'s name)."""
     return movies_repo_path()
+
+
+def red_repo(o_r):
+    """The clone whose worktrees, landers and waiting entries name the fixers ($AGENTCTL_RED_REPO; '-' for none)."""
+    v = os.environ.get("AGENTCTL_RED_REPO")
+    if v == "-":
+        return None
+    return v or repo_path_for(o_r)
+
+
+def scan_repo_for(o_r, repo=None):
+    if os.environ.get("AGENTCTL_RED_REPO"):
+        return red_repo(o_r)
+    return repo or repo_path_for(o_r)

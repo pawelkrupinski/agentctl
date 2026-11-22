@@ -1,5 +1,24 @@
 # agentctl, part `owned`: owned long-running modes.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import fcntl
+import glob
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from agentctl.core import SHORT, env_num, err, git, process_cache, run_cmd, slug, state_root
+from agentctl.timefmt import ts
+from agentctl.statefile import read_record, write_json
+from agentctl.forge import forge_argv, forge_env
+from agentctl.procs import Terminated, process_start, safe_cwd
+from agentctl.selfcode import TOOL_PATH, code_files, code_version
+from agentctl.inboxentry import caller_owner, inbox_write
+from agentctl.wait import file_verdict, foreign_loops_on, run_verdict
+
 
 # ---------------------------------------------------------------- owned: every long-running mode
 # The owner (2026-10-26), after a day of strays: a zombie processor blocking the next one, duplicate waiters, a processor

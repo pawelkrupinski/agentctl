@@ -1,5 +1,17 @@
 # agentctl, part `stats`: the pipeline's statistics, one structured record per finished thing, in VictoriaLogs.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import json
+import os
+import re
+import sys
+import time
+from agentctl.core import env_num, err, git, host_role
+from agentctl.timefmt import iso_at
+from agentctl.store import open_store
+from agentctl.waitingdir import waiting_entries, wlog
+from agentctl.gating import gate_flows
+
 
 # ---------------------------------------------------------------- landing stats (the owner, 2026-11-17)
 # "keep landing stats -- timings, time between landing and landed in victoria logs, modules touched etc -- for easy

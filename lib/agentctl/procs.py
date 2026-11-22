@@ -63,3 +63,7 @@ def safe_cwd() -> str:
 def socket_host() -> str:
     import socket
     return socket.gethostname().split(".")[0]
+
+
+class Terminated(SystemExit):
+    """A signal's exit (Owned's handler): never swallowed by a wait loop that rides out a token or tunnel outage."""

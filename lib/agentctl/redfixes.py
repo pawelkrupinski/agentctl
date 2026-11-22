@@ -90,10 +90,6 @@ def red_fix_facts(repo, store=None):
             "patches": patches, "repo": repo, "queue_unread": queue_unread}
 
 
-def red_names(d):
-    return set(d.get("runs") or []) | {d.get("key")} | ({"local"} if d.get("workflow") == LOCAL_FLOW else set())
-
-
 def red_refuted(d):
     """The red's refuted fixes, each once, in the order they were refuted. A list that took one sha many times (784badc4406e.3,
     2026-11-11: 2 shas stored 593 times) counts its distinct fixes, never its entries."""

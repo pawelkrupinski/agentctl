@@ -1,5 +1,13 @@
 # agentctl, part `cpu`: the whole machine's CPU, as the governor and laptop_pressure read it (gov.py uses it).
 
+import os
+import time
+from typing import Any, Callable
+from agentctl.core import env_num, state_root
+from agentctl.statefile import read_record, write_json
+from agentctl.classify import Optional
+
+
 GOV_SATURATED = 0.95    # x the cores: the machine's measured CPU at or over it is starved, whatever is charged
 LAPTOP_LOAD = 2.0             # holds other work while the 1-min load is over this x the cores
 

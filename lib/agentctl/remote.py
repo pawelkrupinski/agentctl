@@ -20,10 +20,6 @@ def remote_checks_supported(tree):
     return os.path.exists(os.path.join(tree, ".github", "workflows", REMOTE_WORKFLOW))
 
 
-class Terminated(SystemExit):
-    """A signal's exit (Owned's handler): never swallowed by a wait loop that rides out a token or tunnel outage."""
-
-
 def remote_matches(e, base, head, mode):
     """The entry's recorded remote check, when it is the check of exactly this tip on this base in this mode."""
     rem = e.get("remote") or {}

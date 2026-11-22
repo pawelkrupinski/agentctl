@@ -454,3 +454,8 @@ def branch_of(wt: str | None) -> str:
     if not os.path.isdir(wt or ""):
         return ""
     return str(git(wt or "", "symbolic-ref", "--short", "-q", "HEAD", check=False).stdout).strip()
+
+
+def dispatches_dir(*parts: str) -> str:
+    d = os.environ.get("AGENTCTL_DISPATCH_DIR") or os.path.join(os.path.dirname(reds_dir()), "dispatches")
+    return os.path.join(d, *parts)

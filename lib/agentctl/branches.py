@@ -48,11 +48,6 @@ BRANCH_ROUTE_MAX_AGE = 24 * 3600  # a failure first seen older than this is reco
 OWNER_REMATCH = 3600  # an unmatched branch is matched again after this long
 
 
-def dispatches_dir(*parts):
-    d = os.environ.get("AGENTCTL_DISPATCH_DIR") or os.path.join(os.path.dirname(reds_dir()), "dispatches")
-    return os.path.join(d, *parts)
-
-
 def dispatch_key(branch=None, run_id=None):
     return f"branch-{re.sub(r'[^A-Za-z0-9._-]', '_', branch)}" if branch else f"run-{run_id}"
 
@@ -1081,44 +1076,6 @@ def worktree_of(path):
     return r.stdout.strip() if r.returncode == 0 else None
 
 
-def red_repo(o_r):
-    """The clone whose worktrees, landers and waiting entries name the fixers ($AGENTCTL_RED_REPO; '-' for none)."""
-    v = os.environ.get("AGENTCTL_RED_REPO")
-    if v == "-":
-        return None
-    return v or repo_path_for(o_r)
-
-
-# BACKGROUND CODE TOUCHES ONLY THESE ROOTS. A path learned from another process (its cwd) or from a git registry
-# (`worktree list`) that lies elsewhere -- ~/Desktop, ~/Documents, ~/Downloads -- is never stat'ed or opened: macOS asks
-# "Python wants to access files in your Desktop folder" for every such touch. Skipped paths are logged once.
-def allowed_roots():
-    h = HOME
-    roots = [f"{h}/projects", f"{h}/bitcashier", f"{h}/.cache/agentctl", f"{h}/.cache", f"{h}/Library/Logs", "/tmp", "/private/tmp",
-             "/var/folders", "/private/var/folders", os.path.realpath(os.environ.get("TMPDIR") or "/tmp")]
-    return roots + [x for x in os.environ.get("AGENTCTL_ALLOWED_ROOTS", "").split(":") if x]
-
-
-_skipped_paths = process_cache(set())
-PROTECTED_DIRS = ("Desktop", "Documents", "Downloads")  # under HOME: never touched, even below an allowed root
-
-
-def allowed_path(path):
-    """True when path (a string; never stat'ed here) is under an allowed root, or a sibling worktree of ~/bin
-    (~/bin, ~/bin-wt-*). Otherwise False, logged once."""
-    if not path:
-        return False
-    n = os.path.normpath(path)
-    h = HOME
-    protected = any(n == f"{h}/{d}" or n.startswith(f"{h}/{d}/") for d in PROTECTED_DIRS)  # whatever root holds it
-    ok = not protected and (n == f"{h}/bin" or n.startswith(f"{h}/bin/") or n.startswith(f"{h}/bin-wt-")
-                            or any(n == r or n.startswith(r.rstrip("/") + "/") for r in allowed_roots()))
-    if not ok and n not in _skipped_paths:
-        _skipped_paths.add(n)
-        err(f"skipped {n}: outside the roots background code may touch")
-    return ok
-
-
 def land_cwds():
     """{worktree: pid} of every running `agentctl land`."""
     out = {}
@@ -1159,12 +1116,6 @@ def cached_dispatch_blocker(ttl=60):
 
 def short_flow(name):
     return "main" if name == "Main" else "convergence" if "convergence" in name.lower() else name.lower()
-
-
-def scan_repo_for(o_r, repo=None):
-    if os.environ.get("AGENTCTL_RED_REPO"):
-        return red_repo(o_r)
-    return repo or repo_path_for(o_r)
 
 
 def dispatch_blocker():
