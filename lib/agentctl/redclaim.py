@@ -33,38 +33,6 @@ def root_checkout(wt, o_r):
     return os.path.realpath(wt) in roots
 
 
-def own_fixer_record_path():
-    """This session's own fixer record, or None. The session id decides -- its binding (bind_fixer_session), else a
-    record naming it; with a session, the environment never does: a `claude --bg` session can start in a spare
-    process spawned with ANOTHER fixer's environment (2026-10-29: #2426's fixer carried #2432's AGENTCTL_FIXER_RECORD
-    and wrote its notes onto #2432's lease), so the environment's record counts only when its session is this one, or
-    when no record names this session (a record not yet told its session id)."""
-    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
-    env = os.environ.get("AGENTCTL_FIXER_RECORD")
-    if sid:
-        bound = (read_record(fixer_session_path(sid)) or {}).get("record")
-        rec = read_record(bound) if bound else None
-        if rec and not rec.get("ended") and record_session_is(rec, sid, unset=True):
-            return bound
-        mine = [r for r in fixer_records() if r.get("session") == sid and not r.get("ended")]
-        if mine:
-            return max(mine, key=lambda r: r.get("started") or "")["path"]
-        return None  # a session no record or binding names is no fixer, whatever its environment says
-    return env or None
-
-
-def fixer_session_path(sid):
-    return reds_dir("sessions", f"{re.sub(r'[^A-Za-z0-9_.-]', '_', sid)}.json")
-
-
-def record_session_is(rec, sid, unset=False):
-    """Fixer record rec is session sid's: it names sid, or (its wrapper's first poll not yet done) the bg session it
-    launched, whose id sid begins with (issue 20261119T025305-21375d); unset: a record naming no session yet too."""
-    have = rec.get("session")
-    return have == sid or (unset and have is None) or \
-        bool(sid and rec.get("bg_id") and not rec.get("transcript") and str(sid).startswith(str(rec["bg_id"])))
-
-
 def bind_fixer_session(sid, record):
     """The session -> fixer record binding (reds/sessions/<session id>.json): written by the wrapper once `claude
     agents` names its session, and by the fixer's own first command (`red claim N --fixer <record>`, in its prompt).

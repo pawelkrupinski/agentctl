@@ -1,27 +1,7 @@
 # agentctl, part `recovery`: the recovery registry.
 # Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
 
-# ---------------------------------------------------------------- recovery: every non-green condition clears itself
-# The owner (2026-10-28): "make this self-recover", "i want a general solution. recovery mechanism", "the way it got
-# red / blocked i want it to go green as well", "structural". ONE registry, one JSON per open CONDITION in
-# recovery_dir(). Every non-green state the status line or the inbox shows -- an escalation-kind inbox entry
-# (CONDITION_KINDS: RED UNCLAIMED / BUDGET / ESCALATE, RED BLOCKED ON OWNER, STALLED, UNKNOWN, NETWORK), an owner block
-# (`red block`), the gate UNREAD, an infra NOT LANDED -- is opened by open_condition(kind, text, probe, on_recover) and
-# ONLY there: inbox_write refuses those kinds anywhere else (ConditionBypass), a blocked claim cannot be written outside
-# it, and test_recovery's lint fails on a bypass in the source.
-# THE RULE: the probe is the check that found the problem -- a FAILED ProbeResult, which only run_probe makes -- so the
-# check that turned it red is the check that turns it green. The duties thread re-runs each open condition's probe
-# (recovery_tick; per-condition backoff; never `secrets`). When it passes the condition closes itself: its inbox entries
-# are acked, the gate is marked dirty, the status line refreshes, its on_recover actions run (release a block and
-# dispatch the red's workflow to verify it, kick the tunnel, land a change again), and one RECOVERED note is written.
-# Nobody acks a solved problem. `agentctl recover status` lists the open conditions.
-CONDITION_KINDS = ("INVARIANT", "UNLANDED_ORPHAN", "STALLED", "UNKNOWN", "NETWORK")
 RECOVER_BACKOFF_MAX = 600  # a probe is re-run at most this far apart, however often it failed ($AGENTCTL_RECOVER_MAX)
-_OPENING = [0]  # > 0 inside open_condition: the one place a condition-kind inbox entry or a block may be written
-
-
-class ConditionBypass(RuntimeError):
-    """A non-green condition written without open_condition (and so without a probe that can clear it): a bug."""
 
 
 class ProbeResult:

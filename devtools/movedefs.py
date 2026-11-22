@@ -10,7 +10,7 @@ import ast
 import os
 import sys
 
-from partlist import parts_and_modules
+from partlist import parts_and_modules, place
 
 lib = sys.argv[1]
 to = sys.argv[2]
@@ -81,15 +81,15 @@ missing = names - found
 if missing:
     sys.exit(f"not found: {sorted(missing)}")  # nothing written yet
 tpath = os.path.join(lib, f"{to}.py")
-init_text = None
+placing = False
 if new_desc is not None:  # every check before the first write: a refused move writes nothing
     if os.path.exists(tpath):
         sys.exit(f"{tpath} exists")
-    s = open(init).read()
-    head, sep, rest = s.partition("PARTS = (")
-    if rest.split(")", 1)[0].count(f'"{after}",') != 1:
-        sys.exit(f"--after {after}: not once in PARTS")
-    init_text = head + sep + rest.replace(f'"{after}",', f'"{after}", "{to}",', 1)
+    all_parts, modules = parts_and_modules(lib)
+    if after not in all_parts:
+        sys.exit(f"--after {after}: not in PARTS")
+    new_order = all_parts[:all_parts.index(after) + 1] + [to] + all_parts[all_parts.index(after) + 1:]
+    placing = True
     body = (f"# agentctl, part `{to}`: {new_desc}\n# Runs inside agentctl's one namespace, after the parts before it in "
             f"lib/agentctl/__init__.py's PARTS (it uses their names).\n")
 else:
@@ -106,7 +106,7 @@ else:
     body = "\n".join(lines[:spans[0] - 1]).rstrip("\n") + block.rstrip("\n") + "\n\n\n" + "\n".join(lines[spans[0] - 1:])
 for path, text in writes.items():
     open(path, "w").write(text)
-if init_text is not None:
-    open(init, "w").write(init_text)
+if placing:
+    place(lib, new_order, modules)
 open(tpath, "w").write(body + "\n")
 print(f"moved {len(moved)} statements into {to}")

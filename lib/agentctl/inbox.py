@@ -1,25 +1,8 @@
 # agentctl, part `inbox`: the inbox.
 # Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
 
-# ---------------------------------------------------------------- inbox
-# The owner (2026-10-27): three agents ended their turns while their land/watch still ran, and the WATCH verdicts went
-# nowhere. Every `land`, `watch`, `wait` and `waiting await` writes its verdict to an inbox when it ends -- normally, on
-# a signal, or on a crash -- and land's WAITING line too (it may wait for hours): one JSON file per verdict under
-# ~/.cache/agentctl/inbox/ ($AGENTCTL_INBOX_DIR; beside $AGENTCTL_OWNERS_DIR when only that is set). The orchestrating
-# session reads it with `agentctl inbox` whether or not the agent that started the command is still alive. A restart
-# on new code (os.execv) writes nothing: the resumed process writes the verdict. Only a SIGKILL leaves no entry (its
-# owner record stays, and `agentctl orphans` names it).
-INBOX_COMMANDS = {"land", "watch", "wait", "waiting await"}
 VERDICT_LINE = re.compile(r"^(LANDED \S+|NOT LANDED|WAITING \S+|QUEUED \S+|WATCH (OK|RED|UNKNOWN|STALLED)\b|run \S+#\d+: |file \S+: )")
 INBOX_TAIL = 15
-
-
-def inbox_dir():
-    if os.environ.get("AGENTCTL_INBOX_DIR"):
-        return os.environ["AGENTCTL_INBOX_DIR"]
-    if os.environ.get("AGENTCTL_OWNERS_DIR"):
-        return os.path.join(os.path.dirname(os.path.abspath(os.environ["AGENTCTL_OWNERS_DIR"])), "inbox")
-    return state_root("inbox")
 
 
 class VerdictTee:
@@ -56,65 +39,7 @@ class VerdictTee:
         return getattr(self.stream, name)
 
 
-def caller_owner(cwd: str | None = None) -> str:
-    """Who is calling, as a record's `owner`: the Claude session, else `<user>@<cwd>` (the one copy: Owned's record and
-    every inbox entry)."""
-    return os.environ.get("CLAUDE_CODE_SESSION_ID") or f"{os.environ.get('USER', '?')}@{cwd or safe_cwd()}"
-
-
-INBOX_KINDS = [("REVERTED", r"REVERTED: "), ("REVERT_NOTICE", r"REVERT (NOTICE|UNACKED): "),  # reverts.py: whole revert messages
-               ("INVARIANT", r"INVARIANT "), ("CLOSED", r"CLOSED"), ("UNLANDED_ORPHAN", r"UNLANDED ORPHAN:"), ("RECOVERED", r"RECOVERED:"), ("RELANDING", r"RELANDING:"), ("NETWORK", r"NETWORK:"), ("PARKED", r"PARKED DIGEST:|UNPARKED "), ("ORPHAN_FIXER", r"ORPHAN FIXER DISPATCHED"), ("ORPHAN_SUBMITTED", r"ORPHAN SUBMITTED:"),  # first: they quote others
-               ("LANDER_REVIVED", r"LANDER REVIVED"), ("LAUNCH_FAILED", r"LAUNCH FAILED"),
-               ("BRANCH_RED", r"BRANCH RED"), ("RED_UNCLAIMED", r"RED UNCLAIMED"), ("RED_BUDGET", r"RED BUDGET"), ("RED_AUTHOR", r"RED AUTHOR"), ("RED_ESCALATE", r"RED ESCALATE"), ("BLOCKED", r"RED BLOCKED ON OWNER"),
-               ("RED_DISPATCHED", r"RED DISPATCHED"), ("RED_REVERT", r"RED REVERT"), ("RED_BLAME", r"RED BLAME"), ("RED_RELAND", r"RED RELAND"), ("RED_FLAKE", r"RED FLAKE"), ("FIXER_LANDED", r"RED FIXER [^:]*: LANDED "), ("DIAGNOSED", r"RED FIXER [^:]*: DIAGNOSED:"),
-               ("FIXER_FAILED", r"RED FIXER "), ("RED_CLEARED", r"RED CLEARED"), ("FIX_FAILED", r"FIX FAILED"), ("FIX_NOT_COUNTED", r"FIX NOT COUNTED"), ("FIX_OK", r"FIX OK"), ("FIX_UNVERIFIED", r"FIX UNVERIFIED"),
-               ("RED", r"WATCH RED"), ("OK", r"WATCH OK"), ("STALLED", r"WATCH STALLED|STALLED:|.*\bstalled\b"),
-               # a crash, a signal or an exit with no verdict: whatever it watched is unknown now
-               # an agent's command killed (a reap, a restart) or misused: its own news, never an unknown state
-               ("ENDED", r"ended by signal"), ("USAGE", r"exited: .*needs numeric|exited: usage:"),
-               ("RED_STARVED", r"RED STARVED"),
-               ("UNKNOWN", r"WATCH UNKNOWN|UNKNOWN:|crashed:|exited:|ended by signal|exit \d+ with no verdict"),
-               ("NOT_LANDED", r"NOT LANDED"), ("PRECHECK_REFUSED", r"PRECHECK REFUSED "), ("SUPERSEDED", r"SUPERSEDED "), ("LANDED", r"LANDED "), ("WAITING", r"WAITING "), ("QUEUED", r"QUEUED "), ("HELD", r"HELD:"),
-               ("CHECK", r"CHECK CAP")]
 WAIT_KINDS_DEFAULT = "INVARIANT,NETWORK,RED_STARVED,RED,BRANCH_RED,FIX_FAILED,FIX_NOT_COUNTED,NOT_LANDED,PRECHECK_REFUSED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_BUDGET,RED_AUTHOR,RED_ESCALATE,BLOCKED,FIXER_FAILED,DIAGNOSED,UNLANDED_ORPHAN,ORPHAN_SUBMITTED,RED_REVERT,LAUNCH_FAILED,REVERTED,REVERT_NOTICE"
-
-
-def inbox_kind(verdict, final=True):
-    """An entry's kind, from its verdict line: what `inbox wait --kinds` selects on."""
-    v = verdict or ""
-    if not final:
-        return "QUEUED" if v.startswith("QUEUED ") else "WAITING"
-    for kind, pat in INBOX_KINDS:
-        if re.match(pat, v):
-            return kind
-    return "OTHER"
-
-
-def inbox_write(command, verdict, verdicts, tail, exit_code, final=True, cwd=None, reply=False, item=None):
-    """One inbox entry, written atomically; returns its id (None when the inbox cannot be written: never fatal).
-    A CONDITION_KINDS entry only from open_condition (ConditionBypass otherwise: it would have no probe to clear it);
-    reply=True: a command's own verdict to the agent that ran it (with_inbox), not a standing condition. item: the alert
-    model's item (alerts.py; derived from the verdict when None). Routed and merged by alert_write: the id returned is the
-    entry that carries it (its item's live alert when one is unread)."""
-    if final and not reply and not _OPENING[0] and inbox_kind(verdict, final) in CONDITION_KINDS:
-        raise ConditionBypass(f"a {inbox_kind(verdict, final)} inbox entry outside open_condition: {str(verdict)[:160]}")
-    now = dt.datetime.now(dt.timezone.utc)
-    eid = (f"{now.strftime('%Y%m%dT%H%M%S%f')}-{os.getpid()}-{re.sub(r'[^a-z]+', '-', command)}"
-           + ("" if final else "-waiting"))
-    here = safe_cwd()
-    rec = {"id": eid, "time": iso_at(now.timestamp()), "at": now.timestamp(), "command": command, "argv": sys.argv[1:],
-           "cwd": cwd or here, "pid": os.getpid(), "final": final, "exit": exit_code, "verdict": verdict,
-           "kind": inbox_kind(verdict, final),
-           "owner": caller_owner(here),
-           "claude_pid": int(os.environ["CLAUDE_PID"]) if (os.environ.get("CLAUDE_PID") or "").isdigit() else None,
-           "agent": agent_name(), "verdicts": verdicts, "tail": tail, "reply": bool(reply)}
-    if item:
-        rec["alert_item"] = item
-    try:
-        return alert_write(rec)
-    except OSError as e:
-        err(f"could not write the inbox entry ({e})")
-        return None
 
 
 def inbox_command(a):
@@ -168,19 +93,6 @@ def with_inbox(command, handler, a):
         if not (crash is None and code == 0 and waiting_line and verdict == waiting_line[-1]):  # land ended AT WAITING:
             inbox_write(command, verdict, tee.verdicts, tee.tail, code if crash is None else (code or 1),  # written once
                         cwd=getattr(a, "inbox_cwd", None), reply=True)
-
-
-def inbox_entries():
-    d = inbox_dir()
-    acked_dir = os.path.join(d, "acked")
-    acked = set(os.listdir(acked_dir)) if os.path.isdir(acked_dir) else set()
-    out = []
-    for p in glob.glob(os.path.join(d, "*.json")):
-        rec = read_record(p)
-        if rec is not None and rec.get("id"):
-            rec["read"] = rec["id"] in acked
-            out.append(rec)
-    return sorted(out, key=lambda r: (r.get("at") or 0, r["id"]))
 
 
 def entry_line(e):

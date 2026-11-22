@@ -20,10 +20,20 @@ ERROR = re.compile(r"^[^:]+:(\d+): error: (.*)$")
 
 def part_order(root):
     init = os.path.join(root, "lib", "agentctl", "__init__.py")
+    lists = {}  # NAME -> its tuple of part names; PARTS may be a sum of others (MODULES + NAMESPACE)
     for node in ast.parse(open(init).read()).body:
-        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "PARTS" for t in node.targets):
-            return list(ast.literal_eval(node.value))
-    raise SystemExit("types: no PARTS in lib/agentctl/__init__.py")
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            value = node.value
+            terms = [value.left, value.right] if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add) \
+                else [value]
+            try:
+                lists[node.targets[0].id] = [n for t in terms for n in (
+                    lists[t.id] if isinstance(t, ast.Name) else ast.literal_eval(t))]
+            except (ValueError, KeyError, TypeError):
+                continue
+    if "PARTS" not in lists:
+        raise SystemExit("types: no PARTS in lib/agentctl/__init__.py")
+    return list(lists["PARTS"])
 
 
 def concatenate(root, out):

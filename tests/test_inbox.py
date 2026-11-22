@@ -114,6 +114,18 @@ class InboxTest(unittest.TestCase):
         [e] = self.entries()
         self.assertEqual((e["command"], e["verdict"], e["exit"]), ("wait", "ended by signal 15", 143))
 
+    def test_the_composition_root_routes_entries_through_the_alert_model_and_unwired_they_are_plain_files(self):
+        self.assertEqual(A._inbox_writers, [A.alert_write])
+        saved = list(A._inbox_writers)
+        A._inbox_writers[:] = []
+        try:
+            eid = A.inbox_write("wait", "run o/r#1: success", [], [], 0)
+        finally:
+            A._inbox_writers[:] = saved
+        [e] = self.entries()
+        self.assertEqual((e["id"], e["verdict"]), (eid, "run o/r#1: success"))
+        self.assertNotIn("audience", e)  # never routed: no alert model ran
+
     def test_inbox_lists_unread_and_acks(self):
         A.inbox_write("land", "WATCH RED: Main #9 test", [], [], 3)
         A.inbox_write("wait", "run o/r#1: success", [], [], 0)

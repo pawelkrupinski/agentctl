@@ -1055,29 +1055,6 @@ def run_sigs(o_r, run, workflow, now_=None):
     return save_run_sigs(o_r, run, workflow, per_job)
 
 
-def fixer_name(rec):
-    """A dispatched fixer's name, from its record: 'red-fixer-<run>' (its first), 'red-fixer-<run>-<n>' (its n-th)."""
-    stem = os.path.basename(str(rec.get("path") or "")).rsplit(".", 1)[0]
-    n = stem[len("fixer-"):] if stem.startswith("fixer-") else ""
-    return f"red-fixer-{rec.get('run')}" + (f"-{n}" if n else "")
-
-
-def agent_name():
-    """This process's agent name: a dispatched fixer's, from ITS OWN fixer record (own_fixer_record_path: the session
-    decides); $AGENTCTL_AGENT_NAME only in a process with no Claude session (one agentctl spawned itself, e.g. the
-    wrapper's or a revert's land). Never an inherited environment: background sessions inherit the claude daemon's,
-    the wrapper's that spawned it (2026-10-29: every background fixer, and the owner's sessions, released reds as
-    'red-fixer-2473'). None otherwise."""
-    own = own_fixer_record_path()
-    if own:
-        rec = read_record(own) or {}
-        if rec.get("run") is not None:
-            return fixer_name({**rec, "path": own})
-    if not os.environ.get("CLAUDE_CODE_SESSION_ID"):
-        return os.environ.get("AGENTCTL_AGENT_NAME") or None
-    return None
-
-
 def in_fixer():
     """True inside a dispatched fixer (its session's own record), or a process agentctl spawned with a fixer's
     environment and no Claude session of its own."""
@@ -1229,17 +1206,6 @@ def interactive_mode():
     p = os.environ.get("AGENTCTL_CLAUDE_SETTINGS") or os.path.join(HOME, ".claude", "settings.json")
     rec = read_record(p) or {}
     return (rec.get("permissions") or {}).get("defaultMode") or "default"
-
-
-def fixer_records():
-    out = []
-    for p in glob.glob(reds_dir("*", "fixer*.json")):
-        r = read_record(p)
-        if r:
-            r["path"] = p
-            r["alive"] = not r.get("ended") and proc_alive(r.get("pid"), r.get("process_start"))
-            out.append(r)
-    return out
 
 
 AUTHOR_ACTIVE_MIN = 15   # live = a pid alive and activity within this ($AGENTCTL_AUTHOR_ACTIVE_MIN)

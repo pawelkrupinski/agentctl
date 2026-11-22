@@ -11,7 +11,7 @@ import re
 import symtable
 import sys
 
-from partlist import parts_and_modules
+from partlist import parts_and_modules, place
 
 lib, part = sys.argv[1], sys.argv[2]
 init = os.path.join(lib, "__init__.py")
@@ -116,11 +116,5 @@ while body and not body[0].strip():
     body.pop(0)
 out = src_lines[:i] + [""] + lines + ["", ""] + body
 open(path, "w").write("\n".join(out))
-s = open(init).read()
-m = re.search(r"MODULES = \(([^)]*)\)", s)
-mods = [x.strip().strip('"') for x in m.group(1).split(",") if x.strip()]
-mods.append(part)
-mods = sorted(set(mods), key=parts.index)
-s = s[:m.start()] + "MODULES = (" + ", ".join(f'"{x}"' for x in mods) + ")" + s[m.end():]
-open(init, "w").write(s)
+place(lib, parts, set(modules) | {part})
 print(part, "->", lines)

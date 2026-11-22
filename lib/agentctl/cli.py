@@ -4,6 +4,7 @@
 # THE COMPOSITION ROOT: what every process wires before any command runs.
 wire_store(process_store)
 wire_token_missing_note(token_unavailable_note)
+wire_inbox_writer(alert_write)
 
 
 # ---------------------------------------------------------------- main

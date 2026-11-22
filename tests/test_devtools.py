@@ -11,6 +11,7 @@ ROOT = os.path.dirname(HERE)
 DEV = os.path.join(ROOT, "devtools")
 sys.path.insert(0, DEV)
 import defgraph  # noqa: E402
+import partlist  # noqa: E402
 import partdeps  # noqa: E402
 
 PARTS = {
@@ -46,23 +47,20 @@ PARTS = {
 }
 
 
-def quoted(names):
-    return ", ".join(f'"{n}"' for n in names)
-
-
 def fake_lib(parts=PARTS, modules=("core",)):
-    """<tmp>/lib/agentctl: the real __init__.py with this PARTS and MODULES, and each part's text."""
+    """<tmp>/lib/agentctl: the real __init__.py with these parts (modules first) and each part's text."""
     lib = os.path.join(tempfile.mkdtemp(prefix="devtools-"), "lib", "agentctl")
     os.makedirs(lib)
-    init = open(os.path.join(ROOT, "lib", "agentctl", "__init__.py")).read()
-    init = re.sub(r"MODULES = \([^)]*\)", lambda _m: f"MODULES = ({quoted(modules)},)", init)
-    init = re.sub(r"PARTS = \([^)]*\)", lambda _m: f"PARTS = ({quoted(parts)},)", init)
-    with open(os.path.join(lib, "__init__.py"), "w") as f:
-        f.write(init)
+    shutil.copy(os.path.join(ROOT, "lib", "agentctl", "__init__.py"), lib)
+    partlist.write_lists(lib, [p for p in parts if p in modules], [p for p in parts if p not in modules])
     for name, text in parts.items():
         with open(os.path.join(lib, f"{name}.py"), "w") as f:
             f.write(textwrap.dedent(text))
     return lib
+
+
+def lists(lib):
+    return partlist.parts_and_modules(lib)
 
 
 def tool(name, *args):
@@ -162,7 +160,7 @@ class PureMoveTest(unittest.TestCase):
             f.write("-\tmid\t-\n# a comment block\tmid2\tthe other half\n")
         r = tool("split_part", lib, "mid", plan)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn('"mid", "mid2", "top"', read(lib, "__init__"))
+        self.assertEqual(lists(lib)[0], ["core", "mid", "mid2", "top"])
         self.assertTrue(read(lib, "mid2").startswith("# agentctl, part `mid2`: the other half\n"))
         self.assertEqual(tool("sameast", before, lib).returncode, 0)
 
@@ -183,7 +181,7 @@ class MakeModuleTest(unittest.TestCase):
         r = tool("mkmodule", lib, "mid")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("from agentctl.core import root\n", read(lib, "mid"))
-        self.assertIn("MODULES = (\"core\", \"mid\")", read(lib, "__init__"))
+        self.assertEqual(lists(lib), (["core", "mid", "top"], ["core", "mid"]))
         r = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import agentctl; "
                             "print(agentctl.entry(), sys.modules['agentctl.mid'].helper())", os.path.dirname(lib)],
                            capture_output=True, text=True, timeout=60)
@@ -201,7 +199,8 @@ class MakeModuleTest(unittest.TestCase):
     def test_placemodules_puts_the_modules_first(self):
         lib = fake_lib(dict([("top", PARTS["top"]), ("mid", PARTS["mid"]), ("core", PARTS["core"])]))
         self.assertEqual(tool("placemodules", lib).returncode, 0)
-        self.assertIn('PARTS = ("core", "top", "mid")', read(lib, "__init__"))
+        self.assertEqual(lists(lib)[0], ["core", "top", "mid"])
+        self.assertIn("PARTS = MODULES + NAMESPACE", read(lib, "__init__"))
 
     def test_a_module_level_comprehension_variable_is_no_namespace_name(self):
         lib = fake_lib(dict(PARTS, mid="TABLE = {p: p for p in (1, 2)}\n"))

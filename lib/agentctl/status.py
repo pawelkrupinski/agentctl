@@ -617,16 +617,7 @@ STATUS_RECORD_MAX_AGE = 8 * 3600  # s: an older fixer record (by mtime) is neith
 def status_fixer_records(t):
     """fixer_records, of the records written in the last STATUS_RECORD_MAX_AGE s only (a fixer's wall time is bounded
     and its record is rewritten when it ends): ~150 old ones are never opened, nor their pids checked."""
-    out = []
-    for p in glob.glob(reds_dir("*", "fixer*.json")):
-        if t - mtime(p) > STATUS_RECORD_MAX_AGE:
-            continue
-        r = read_record(p)
-        if r:
-            r["path"] = p
-            r["alive"] = not r.get("ended") and proc_alive(r.get("pid"), r.get("process_start"))
-            out.append(r)
-    return out
+    return fixer_records(max_age=STATUS_RECORD_MAX_AGE, now_=t)
 
 
 def status_agents(st, t, records=None):
