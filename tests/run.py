@@ -17,6 +17,7 @@ import argparse, json, os, subprocess, sys, threading, time, traceback, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DURATIONS = os.path.join(os.path.expanduser("~"), ".cache", "agentctl-tests", "durations.json")
+SUITE_WALL = os.path.join(os.path.dirname(DURATIONS), "suite-wall.json")  # the last FULL run's wall time: hooks/pre-push's base
 GRACE = 30
 
 
@@ -95,14 +96,18 @@ def load_durations():
         return {}
 
 
-def save_durations(d):
+def save_json(path, d):
     try:
-        os.makedirs(os.path.dirname(DURATIONS), exist_ok=True)
-        with open(DURATIONS + ".tmp", "w") as f:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(f"{path}.{os.getpid()}.tmp", "w") as f:
             json.dump(d, f)
-        os.replace(DURATIONS + ".tmp", DURATIONS)
+        os.replace(f"{path}.{os.getpid()}.tmp", path)
     except OSError:
         pass
+
+
+def save_durations(d):
+    save_json(DURATIONS, d)
 
 
 def main():
@@ -196,8 +201,8 @@ def main():
         print("=" * 70 + f"\nFAIL: {tid}\n" + "-" * 70 + f"\n{tb}")
     if timed_out:
         print(f"SUITE TIMEOUT after {a.suite_timeout} s; not run: {', '.join(todo) or '-'}")
-    if not a.patterns:  # a shard keeps the other shards' durations
-        save_durations({**(past if shard else {}), **{r["cls"]: r["secs"] for r in results}})
+    if not a.patterns:  # a shard, or a run cut short, keeps the other classes' durations (the longest-first order)
+        save_durations({**past, **{r["cls"]: r["secs"] for r in results}})
     if a.durations:
         times = sorted(((s, t) for r in results for t, s in r["times"].items()), reverse=True)[:a.durations]
         print("slowest:\n" + "\n".join(f"  {s:6.1f}s {t}" for s, t in times))
@@ -206,6 +211,8 @@ def main():
     print(f"Ran {nrun} tests in {took:.1f}s ({a.jobs} workers)" +
           (f", {skipped} skipped" if skipped else ""))
     ok = not fails and not timed_out and len(results) == len(classes)
+    if ok and not a.patterns and not shard:
+        save_json(SUITE_WALL, {"wall": round(took, 1), "jobs": a.jobs, "tests": nrun})
     print("OK" if ok else f"FAILED (failures={len(fails)})")
     return 0 if ok else 1
 

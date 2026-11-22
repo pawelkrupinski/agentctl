@@ -74,6 +74,33 @@ class BinPrePushHookTest(unittest.TestCase):
 
 
     @unittest.skipUnless(TIMEOUT, "no GNU timeout on this machine: the hook cannot run here")
+    def test_the_suites_bound_is_never_below_one_and_a_half_of_its_last_full_run(self):
+        """2026-11-22: two pushes of 82b6231 ended SUITE TIMEOUT at 280 s (469, then 708 of 1839 tests run, none
+        failing) at load 18-24 on 18 cores, where the whole suite took 415-525 s in every full run that day: the load
+        factor alone cannot see a suite grown slower than its fixed base. The base is now 1.5 x the last full run's
+        wall time (tests/run.py writes it to ~/.cache/agentctl-tests/suite-wall.json), never below 280 s."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(os.path.join(repo, "tests"))
+            mark = os.path.join(tmp, "argv")
+            with open(os.path.join(repo, "tests", "run.py"), "w") as f:
+                f.write(f"import sys\nopen({mark!r}, 'w').write(' '.join(sys.argv[1:]))\nprint('OK')\n")
+            git(tmp, "init", "-q", repo)
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "base")
+            sha = git(repo, "rev-parse", "HEAD")
+            home = os.path.join(tmp, "home")
+            os.makedirs(os.path.join(home, ".cache", "agentctl-tests"))
+            with open(os.path.join(home, ".cache", "agentctl-tests", "suite-wall.json"), "w") as f:
+                f.write('{"wall": 400.0}')
+            for load, want, per_test in (("9.0", "600", "128"), ("36.0", "1200", "257")):
+                env = dict(ENV, HOME=home, AGENTCTL_PREPUSH_LOAD=load, AGENTCTL_PREPUSH_CORES="18")
+                p = subprocess.run(["sh", HOOK, "origin", "x"], cwd=repo, input=f"refs/heads/main {sha} refs/heads/main "
+                                   f"{'0' * 39}1\n", capture_output=True, text=True, env=env, timeout=60)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(open(mark).read(), f"--suite-timeout {want} --timeout {per_test}", load)
+
+    @unittest.skipUnless(TIMEOUT, "no GNU timeout on this machine: the hook cannot run here")
     def test_the_ratchets_refuse_and_a_missing_tool_blocks(self):
         """The ratchets (quality/ratchet.py) run after the suite: a refusal refuses the push, and so does a tool that
         cannot be installed -- never a skip."""

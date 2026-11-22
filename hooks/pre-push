@@ -17,8 +17,13 @@ while read -r _lref lsha _rref _rsha; do
   cores=${AGENTCTL_PREPUSH_CORES:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)}
   load=${AGENTCTL_PREPUSH_LOAD:-$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')}
   [ -n "$load" ] || load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)
-  bound=$(awk -v l="${load:-0}" -v c="$cores" 'BEGIN { f = (c > 0) ? l / c : 1; if (f < 1) f = 1; if (f > 4) f = 4;
-                                                     printf "%d", 280 * f }')
+  # ITS BASE IS THE SUITE'S OWN (2026-11-22: 82b6231 refused twice as SUITE TIMEOUT at 280 s, load 18-24, while every
+  # full run that day took 415-525 s): 1.5 x the last full run's wall time (tests/run.py, suite-wall.json), at least 280
+  wall=$(python3 -c 'import json, os, sys
+try: print(float(json.load(open(os.path.expanduser("~/.cache/agentctl-tests/suite-wall.json")))["wall"]))
+except Exception: print(0)' 2>/dev/null)
+  bound=$(awk -v l="${load:-0}" -v c="$cores" -v w="${wall:-0}" 'BEGIN { f = (c > 0) ? l / c : 1; if (f < 1) f = 1; if (f > 4) f = 4;
+                                                     b = 1.5 * w; if (b < 280) b = 280; printf "%d", b * f }')
   # the per-test timeout grows the same way (2026-11-22: queue_sim's mutation 1, ~40 s idle, timed out at load 290)
   per_test=$(awk -v b="$bound" 'BEGIN { printf "%d", 60 * b / 280 }')
   if ! (cd "$tmp/tree" && timeout --foreground -s KILL $((bound + 20)) python3 tests/run.py --suite-timeout "$bound" --timeout "$per_test" >"$tmp/out" 2>&1); then
