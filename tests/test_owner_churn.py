@@ -9,7 +9,7 @@ main-tests: 11 restart(s)", "owner infra: ended: STOPPED: the owner's heartbeat 
   - a restart stopped the session mid-turn and started it over (turn 0, the fresh task prompt);
   - the laptop asleep or the store's tunnel down lapsed every laptop lease at once (the store's clock ran on);
 and the holder's worktree read "?" with an empty "with" list."""
-import json, os, signal, subprocess, sys, time, unittest
+import contextlib, json, os, signal, subprocess, sys, time, types, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -246,15 +246,49 @@ class LostHeartbeatVerdictTest(OwnerBase):
         self.assertTrue(self.wait(lambda: self.rec().get("in_turn")))
         self.assertTrue(self.st.revoke(A.owner_lease(FAM), "ORPHANED: judged by another machine"))
         self.assertTrue(self.wait(lambda: self.rec().get("ended")), self.rec())
-        time.sleep(4)  # the session ends with its DIAGNOSED verdict
+        self.assertTrue(self.wait(lambda: self.rec().get("handed_turn")), self.owner_log())  # handed over, not stopped
+        # the session ends with its DIAGNOSED verdict (FAKE_CLAUDE_SLEEP): waited for by its transcript's final answer
+        self.assertTrue(self.wait(lambda: "DIAGNOSED" in str(A.bg_turn(self.rec().get("transcript") or "")["final"])),
+                        self.owner_log())
+        # THE NEXT OWNER RUNS HERE (the process launch is the seam, 2026-11-22): the dispatcher's `red owner` wrapper
+        # is run in this process, once, with the environment and worktree it would have been started with, and stopped
+        # by a RED-STOP.md after its first pass -- what is asserted is what it does with the handed turn's verdict,
+        # never how long two agentctl process starts take (they took over 40 s at load average 60, 2026-11-22)
+        runs = self.next_owner_inline()
+        self.tick(dispatch=True, advance=1)
+        self.assertEqual(len(runs), 1, "the next owner was started, here")
+        self.tick(advance=1)
+        d = self.reds()[key]["data"]
+        self.assertIn("DIAGNOSED", " | ".join(str(h.get("outcome")) for h in d.get("history") or []) + str(d.get("diagnosis")),
+                      f"the turn's DIAGNOSED verdict reached the red: {d.get('history')!r}\n{self.owner_log()}")
 
-        def reached():  # the tick offers the red again, the next owner starts (a process of its own: seconds on a
-            # loaded 4-core runner) and ends its lease with the handed turn's verdict, the next tick reads it
-            self.tick(dispatch=True, advance=1)
-            d = self.reds()[key]["data"]
-            return "DIAGNOSED" in " | ".join(str(h.get("outcome")) for h in d.get("history") or []) + str(d.get("diagnosis"))
-        self.assertTrue(self.wait(reached, limit=40),
-                        f"the turn's DIAGNOSED verdict reached the red: {self.reds()[key]['data'].get('history')!r}")
+    def next_owner_inline(self):
+        """spawn_detached for the next `red owner` wrapper: run in this process, its first pass then RED-STOP."""
+        real, runs = A.spawn_detached, []
+
+        def inline(argv, **kw):
+            if argv[2:4] != ["red", "owner"]:
+                return real(argv, **kw)
+            runs.append(argv)
+            env, cwd = dict(os.environ), os.getcwd()
+            with open(os.path.join(kw["cwd"], "RED-STOP.md"), "w") as f:
+                f.write("STOP: the test's inline owner ends after its first pass\n")
+            os.environ.clear()
+            os.environ.update(kw["env"])
+            os.chdir(kw["cwd"])
+            try:
+                with contextlib.redirect_stdout(kw["stdout"]):
+                    A.main(argv[2:])
+            except SystemExit:
+                pass
+            finally:
+                os.chdir(cwd)
+                os.environ.clear()
+                os.environ.update(env)
+            return types.SimpleNamespace(pid=os.getpid())
+        A.spawn_detached = inline
+        self.addCleanup(setattr, A, "spawn_detached", real)
+        return runs
 
 
 class LongVerdictTest(OwnerBase):
