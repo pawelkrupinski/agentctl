@@ -2825,6 +2825,8 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `claude_projects` | `AGENTCTL_CLAUDE_PROJECTS` | - | - |
 | `claude_settings` | `AGENTCTL_CLAUDE_SETTINGS` | - | - |
 | `claude_tmp` | `AGENTCTL_CLAUDE_TMP` | - | - |
+| `cleanup_item_timeout` | `AGENTCTL_CLEANUP_ITEM_TIMEOUT` | `120` | $AGENTCTL_CLEANUP_ITEM_TIMEOUT |
+| `cleanup_remove_reserve` | `AGENTCTL_CLEANUP_REMOVE_RESERVE` | `300` | $AGENTCTL_CLEANUP_REMOVE_RESERVE |
 | `clone_keepalive` | `AGENTCTL_CLONE_KEEPALIVE` | `20` | - |
 | `clone_lock_wait` | `AGENTCTL_CLONE_LOCK_WAIT` | `300` | the swap waits this long for the clone's users to finish, then tries again next tick |
 | `clone_repair_retry` | `AGENTCTL_CLONE_REPAIR_RETRY` | `900` | a repair that failed is tried again after this |
