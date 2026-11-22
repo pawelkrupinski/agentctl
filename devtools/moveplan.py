@@ -5,6 +5,9 @@
   python3 devtools/moveplan.py <lib/agentctl> plan [--mode M] [--tsv OUT]   the moves leaving no upward read
   python3 devtools/moveplan.py <lib/agentctl> stuck PART     PART's definitions reading (through PART) another part
   python3 devtools/moveplan.py <lib/agentctl> who NAME...    a definition's part, what it reads and who reads it
+  python3 devtools/moveplan.py <lib/agentctl> pull           each part's PULL: the namespace definitions of other
+        parts its reads reach (closure), how many of them come back to it (a cycle), and their parts, smallest first
+  python3 devtools/moveplan.py <lib/agentctl> pullset PART   that closure by part, each part's names and who reads them
 
 ORDER: Eades' greedy feedback-arc-set heuristic on the part graph, each edge weighted by its definition edges: a part
 reading no remaining part goes low, one no remaining part reads goes high, else the part most read and least reading
@@ -132,6 +135,39 @@ def stuck(g, part):
     return out
 
 
+def closure(g, roots):
+    """Every namespace definition reachable from roots (themselves included)."""
+    seen, todo = set(), list(roots)
+    while todo:
+        n = todo.pop()
+        if n not in seen:
+            seen.add(n)
+            todo += g.deps[n]
+    return seen
+
+
+def part_pull(g, part):
+    """The closure of what PART's definitions read in other parts."""
+    return closure(g, {u for n in g.deps if g.defs[n] == part for u in g.deps[n] if g.defs[u] != part})
+
+
+def pull(g):
+    """[(closure size, part, how many of it are the part's own, the closure's parts)], smallest first."""
+    rows = []
+    for p in g.parts:
+        c = part_pull(g, p)
+        rows.append((len(c), p, sum(1 for x in c if g.defs[x] == p), sorted({g.defs[x] for x in c})))
+    return sorted(rows)
+
+
+def pullset(g, part):
+    """{part: its sorted names} of PART's pull."""
+    by = {}
+    for x in part_pull(g, part):
+        by.setdefault(g.defs[x], []).append(x)
+    return {q: sorted(v) for q, v in sorted(by.items())}
+
+
 def other_readers(g, name):
     return sorted({g.defs[r] for r in g.readers.get(name, ())} - {g.defs[name]})
 
@@ -146,11 +182,20 @@ def main(argv):
     p.add_argument("--tsv")
     sub.add_parser("stuck").add_argument("part")
     sub.add_parser("who").add_argument("names", nargs="+")
+    sub.add_parser("pull")
+    sub.add_parser("pullset").add_argument("part")
     a = ap.parse_args(argv)
     g = load(a.lib)
     if a.cmd == "stuck":
         s = stuck(g, a.part)
         print(sum(1 for n in g.deps if g.defs[n] == a.part), "defs;", len(s), "stuck:", " ".join(sorted(s)))
+    elif a.cmd == "pull":
+        for size, p, back, parts in pull(g):
+            print(size, p, back, " ".join(parts))
+    elif a.cmd == "pullset":
+        for q, names in pullset(g, a.part).items():
+            readers = sorted({g.defs[r] for x in names for r in g.readers[x]} - {q})
+            print(q, " ".join(names), "| read by", " ".join(readers))
     elif a.cmd == "who":
         for n in a.names:
             reads = sorted(f"{u}@{g.defs[u]}" for u in g.deps.get(n, ()) if g.defs[u] != g.defs[n])

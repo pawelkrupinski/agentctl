@@ -141,6 +141,16 @@ class MovePlanTest(unittest.TestCase):
         self.assertEqual(tool("moveplan", lib, "stuck", "top").stdout, "3 defs; 2 stuck: entry inner\n")
         self.assertEqual(tool("moveplan", lib, "who", "other").stdout, "other@mid\n  reads: \n  used by: top\n")
 
+    def test_pull_sizes_each_part_closure_and_pullset_lists_it_by_part(self):
+        lib = fake_lib(dict(PARTS, mid=textwrap.dedent(PARTS["mid"]) + "\n\ndef back():\n    return entry()\n"))
+        g = moveplan.load(lib)
+        # top reads mid's other, reaching mid's helper; mid's back reads top's entry, whose closure comes back to mid
+        self.assertEqual(moveplan.pull(g), [(2, "top", 0, ["mid"]), (3, "mid", 2, ["mid", "top"])])
+        self.assertEqual(moveplan.pullset(g, "mid"), {"mid": ["helper", "other"], "top": ["entry"]})
+        self.assertEqual(tool("moveplan", lib, "pull").stdout, "2 top 0 mid\n3 mid 2 mid top\n")
+        self.assertEqual(tool("moveplan", lib, "pullset", "mid").stdout,
+                         "mid helper other | read by top\ntop entry | read by mid\n")
+
 
 class SuiteAtTest(unittest.TestCase):
     def test_the_suite_runs_on_a_snapshot_of_the_revision_not_the_worktree(self):
