@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""Turn a part into a real module: write its explicit imports (stdlib + the MODULES it reads), mark it, list it.
+
+usage: mkmodule.py <lib/agentctl> <part>
+Refuses when the part reads a name only a namespace part (not a MODULE) defines."""
+import ast
+import builtins
+import os
+import re
+import symtable
+import sys
+
+from partlist import parts_and_modules
+
+lib, part = sys.argv[1], sys.argv[2]
+init = os.path.join(lib, "__init__.py")
+parts, modules = parts_and_modules(lib)
+
+
+def top_defs(tree):
+    out = set()
+    for n in tree.body:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out.add(n.name)
+        elif isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            ts = n.targets if isinstance(n, ast.Assign) else [n.target]
+            out |= {x.id for t in ts for x in ast.walk(t) if isinstance(x, ast.Name)}
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            out |= {(a.asname or a.name).split(".")[0] for a in n.names}
+        elif isinstance(n, (ast.For, ast.With)):
+            out |= {x.id for x in ast.walk(n) if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Store)}
+    return out
+
+
+def reads(src, path):
+    def walk(t):
+        out = {s.get_name() for s in t.get_symbols() if s.is_referenced() and (s.is_global() or t.get_type() == "module")}
+        for c in t.get_children():
+            out |= walk(c)
+        return out
+    return walk(symtable.symtable(src, path, "exec"))
+
+
+path = os.path.join(lib, f"{part}.py")
+src = open(path).read()
+tree = ast.parse(src)
+own = top_defs(tree)
+need = reads(src, path) - own - set(dir(builtins)) - {"__file__", "__name__"}
+owner = {}
+for p in parts:
+    if p == part:
+        continue
+    t = ast.parse(open(os.path.join(lib, f"{p}.py")).read())
+    for n in top_defs(t) - {"__doc__"}:
+        owner.setdefault(n, p)
+core_imports = {}
+for n in ast.parse(open(os.path.join(lib, "core.py")).read()).body:
+    if isinstance(n, ast.Import):
+        for a in n.names:
+            core_imports[(a.asname or a.name).split(".")[0]] = (a.name, a.asname)
+    elif isinstance(n, ast.ImportFrom) and n.module and not n.module.startswith("agentctl"):
+        for a in n.names:
+            core_imports[a.asname or a.name] = ("from", n.module, a.name, a.asname)
+stdlib, from_std, from_mod, bad = [], {}, {}, []
+for name in sorted(need):
+    if name in core_imports:
+        spec = core_imports[name]
+        if spec[0] == "from":
+            from_std.setdefault(spec[1], []).append(spec[2] if not spec[3] else f"{spec[2]} as {spec[3]}")
+        else:
+            if spec[0].startswith("urllib."):  # each urllib submodule the part names
+                stdlib += [f"import urllib.{u}" for u in sorted(set(re.findall(r"\burllib\.(error|parse|request)\b", src)))]
+            else:
+                stdlib.append(f"import {spec[0]} as {spec[1]}" if spec[1] else f"import {spec[0]}")
+        continue
+    p = owner.get(name)
+    if p in modules:
+        from_mod.setdefault(p, []).append(name)
+    else:
+        bad.append((name, p))
+if bad:
+    sys.exit(f"{part}: reads namespace names: {bad}")
+lines = sorted(set(stdlib)) + [f"from {m} import {', '.join(sorted(v))}" for m, v in sorted(from_std.items())]
+for m, v in sorted(from_mod.items(), key=lambda kv: parts.index(kv[0])):
+    text = f"from agentctl.{m} import {', '.join(sorted(v))}"
+    if len(text) > 118:
+        body, cur = [], "    "
+        for x in sorted(v):
+            if len(cur) + len(x) + 2 > 116:
+                body.append(cur.rstrip()); cur = "    "
+            cur += x + ", "
+        body.append(cur.rstrip().rstrip(","))
+        text = f"from agentctl.{m} import (\n" + "\n".join(body) + ")"
+    lines.append(text)
+# drop the part's own old import lines (a real module states its own), then insert after the header comments
+src_lines = src.split("\n")
+i = 0
+while i < len(src_lines) and src_lines[i].startswith("#"):
+    i += 1
+if src_lines[1:2] and "Runs inside agentctl's one namespace" in src_lines[1]:
+    src_lines[1] = "# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only."
+body = src_lines[i:]
+while body and not body[0].strip():
+    body.pop(0)
+out = src_lines[:i] + [""] + lines + ["", ""] + body
+open(path, "w").write("\n".join(out))
+s = open(init).read()
+m = re.search(r"MODULES = \(([^)]*)\)", s)
+mods = [x.strip().strip('"') for x in m.group(1).split(",") if x.strip()]
+mods.append(part)
+mods = sorted(set(mods), key=parts.index)
+s = s[:m.start()] + "MODULES = (" + ", ".join(f'"{x}"' for x in mods) + ")" + s[m.end():]
+open(init, "w").write(s)
+print(part, "->", lines)
