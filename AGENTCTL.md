@@ -2925,6 +2925,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `reds_dir` | `AGENTCTL_REDS_DIR` | - | - |
 | `red_crash_block_max` | `AGENTCTL_RED_CRASH_BLOCK_MAX` | `86400` | $AGENTCTL_RED_CRASH_BLOCK_MAX |
 | `red_crash_loop` | `AGENTCTL_RED_CRASH_LOOP` | `3` | $AGENTCTL_RED_CRASH_LOOP |
+| `red_decided_revert_max` | `AGENTCTL_RED_DECIDED_REVERT_MAX` | `2700` | - |
 | `red_decision_block_max` | `AGENTCTL_RED_DECISION_BLOCK_MAX` | `604800` | an owner-decision block lapses after this: the red offered again (2026-11-03: was |
 | `red_families` | `AGENTCTL_RED_FAMILIES` | - | - |
 | `red_fixers` | `AGENTCTL_RED_FIXERS` | `5` | live fixers at once, every family together |
