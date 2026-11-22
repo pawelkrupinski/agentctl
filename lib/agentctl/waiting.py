@@ -1,5 +1,21 @@
 # agentctl, part `waiting`: waiting.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import fnmatch
+import os
+import signal
+from agentctl.core import SHORT, err, git, remote, slug
+from agentctl.timefmt import ts
+from agentctl.statefile import read_record
+from agentctl.store import change_event
+from agentctl.trailers import trailer_values
+from agentctl.waitingdir import save_entry, waiting_entries, wlog
+from agentctl.owned import cancel_run, lock_held
+from agentctl.queueslots import entry_owned, queue_verdict, set_change
+from agentctl.conflicts import pick
+from agentctl.queuerecheck import same_change_source
+from agentctl.redfixes import commit_fixes
+from agentctl.changekind import classify_change, gate_facts
 
 
 PRODUCTION_GLOBS = ("*/src/main/*", "conf/*", "*/conf/*", "build.sbt", "project/*", "infra/nix/*", "infra/kubernetes/*",
@@ -26,48 +42,6 @@ def is_production_path(p):
 
 GATE_UNREAD = "unread"  # gate_reds' member when the gate could not be read: never green, and no Fixes-Red matches it
 gate_unread_why = [""]
-
-
-def gate_reds(repo):
-    """The ids (run numbers and run ids) of the gating workflows' red runs on main; empty when green or not gated. A
-    report-only red (gate_report_only: red only in the registry's unproven jobs) holds no push.
-    When the gate cannot be read: {GATE_UNREAD}, which every caller takes as RED -- a production change waits, the
-    processor takes no batch (the owner, 2026-10-27: an unread gate is never green; at 08:05Z a launchd processor with
-    no token read it as green, and the hook, with no token either, skipped its own gate: a push onto red #2047)."""
-    try:
-        o_r = slug(repo)
-        if not gated_repo(o_r):
-            return set()
-        reds = set()
-        for name, decided, _newer, _streak in gate_runs(o_r):
-            if decided and decided.get("conclusion") != "success" and not gate_report_only(o_r, name, decided)[0]:
-                reds |= {str(decided.get("number")), str(decided.get("databaseId"))} | episode_names(o_r, name, decided)
-        gate_unread_why[0] = ""
-        return reds
-    except (Exception, SystemExit) as e:  # SystemExit: NoToken
-        gate_unread_why[0] = str(e).replace("agentctl: ", "")[:200]
-        err(f"could not read the gate ({gate_unread_why[0]}): taken as RED until it is read")
-        return {GATE_UNREAD}
-
-
-# A FIX MATCHES THE RED IT FIXES, NOT ONE RUN NUMBER (2026-11-05). Every push that lands while main is red (tools-only
-# commits land freely) starts a new run failing the same way, so a fix naming the run it was written against was
-# stranded WAITING once the next run went red: a red owner's fixes named Main #2164, then #2172, while the gate read
-# #2173, then #2174; main stayed red ~5.5 h until the fix was re-trailered by hand, twice. Now a `Fixes-Red:` counts
-# when it names ANY run of the CURRENT red EPISODE: the workflow's failed runs on main since its last green (the red
-# streak) that share a failure signature with its newest red run -- the names red_units links a red item by. A run of
-# an older episode (main went green since) never counts. movies' pre-push judges the same rule from gh's run list and
-# failed job names (episode_reds there).
-def episode_names(o_r, name, decided):
-    """The names (numbers and ids) of workflow `name`'s red streak runs on main that fail the way its newest decided red
-    run does (red_units' names); empty when its signatures cannot be read -- then only the newest run counts."""
-    try:
-        sigs = run_sigs(o_r, decided, name)
-        units = red_units(o_r, name, decided, _gate_lists.get(name) or [], sigs, True)
-    except (Exception, SystemExit) as e:  # SystemExit: NoToken
-        err(f"could not read {name} #{decided.get('number')}'s failures ({str(e)[:120]}): only that run counts as its red")
-        return set()
-    return set().union(*(set(u.get("names") or ()) for u in units))
 
 
 def waiting_commits(repo, base, head):
@@ -135,6 +109,16 @@ def already_landed(d, e, via):
                                   "nothing left to push", code=0, landed_sha=via, already=True)
 
 
+def cancel_entry_remote(e, why):
+    """An entry that ends (superseded, cancelled) takes its undecided remote run with it: the run is the entry's."""
+    rem = e.get("remote") or {}
+    if rem.get("run") is not None and not rem.get("status"):
+        try:
+            cancel_run(slug(e["worktree"]) if os.path.isdir(e.get("worktree") or "") else SHORT["movies"], rem["run"], why)
+        except (Exception, SystemExit) as ex:
+            err(f"could not cancel run {rem['run']} of {e['id']}: {str(ex)[:120]}")
+
+
 def supersede(d, e, by, why):
     """The entry gives way to `by` (a newer entry of the same worktree and branch, or one carrying the same change): its
     checker, if running, is stopped; said in the inbox."""
@@ -191,29 +175,3 @@ def note_waiting(d, log_path, head, eid):
     with open(log_path, "a") as f:
         f.write(f"=== waiting {ts()} {head} as {eid} ({n} waiting)\n")
     return f"WAITING {head} (entry {eid}, {n} waiting)"
-
-
-def join(repo, main_ref, sh, log_path, a, head=None, worktree=None, branch=None):
-    """The change (its own checks passed) waits for main to turn green: a `waiting` entry (design §14.1: no branch, no
-    worktree -- the batch is computed at green, in a check tree). Prints `WAITING <head> (entry <id>, n waiting)`."""
-    if head is None:
-        rc, head = sync(repo, main_ref, sh, getattr(a, "release_hold", False))
-        if rc is not None:
-            return rc
-    d, _clone, _wt = waiting_state(repo)
-    commits = waiting_commits(repo, f"{remote()}/main", head)
-    branch = branch_of(repo) if branch is None else branch
-    with open(os.path.join(d, "seq.lock"), "a+") as seq_lock:  # a seq of its own, beside a land queueing meanwhile
-        fcntl.flock(seq_lock, fcntl.LOCK_EX)
-        seq = max([e["seq"] for e in waiting_entries(d, open_only=False)] + [0]) + 1
-        eid = f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(worktree or repo)}-{seq}"
-        supersede_older_waiting(d, worktree or repo, branch, eid)
-        e = {"id": eid, "seq": seq, "worktree": worktree or repo, "branch": branch, "head": head, "commits": commits,
-             "fixes": sorted(fixes_of(repo, commits)), "status": "waiting", "created": ts(), "tip": head,
-             "follow": bool(getattr(a, "follow", False))}
-        save_entry(d, e)
-    print(note_waiting(d, log_path, head, e["id"]), flush=True)
-    a.waiting = e
-    spawn_waiting_processor(repo)
-    offer_token(repo)
-    return 0

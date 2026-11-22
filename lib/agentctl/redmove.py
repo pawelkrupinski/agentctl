@@ -4,10 +4,10 @@
 import os
 from typing import Any
 from agentctl.timefmt import ts
-from agentctl.procs import allowed_path
-from agentctl.leases import lease_is_live, lease_meta
+from agentctl.leases import lease_meta
 from agentctl.inboxentry import inbox_write
-from agentctl.redrecord import red_lease, red_names, red_what
+from agentctl.redrecord import lease_is_live, red_lease, red_names, red_what
+from agentctl.allowedpaths import allowed_path
 from agentctl.fixchange import red_change
 from agentctl.redask import red_decision
 from agentctl.red import RED_PRIORITY

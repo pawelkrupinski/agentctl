@@ -1112,3 +1112,29 @@ def refused(repo, out, log_path, what):
                 "`gh auth status`, then land again.")
     print(f"NOT LANDED: {what}. Last lines (full log {log_path}):\n  {tail}{hint}")
     return 1
+
+
+def join(repo, main_ref, sh, log_path, a, head=None, worktree=None, branch=None):
+    """The change (its own checks passed) waits for main to turn green: a `waiting` entry (design §14.1: no branch, no
+    worktree -- the batch is computed at green, in a check tree). Prints `WAITING <head> (entry <id>, n waiting)`."""
+    if head is None:
+        rc, head = sync(repo, main_ref, sh, getattr(a, "release_hold", False))
+        if rc is not None:
+            return rc
+    d, _clone, _wt = waiting_state(repo)
+    commits = waiting_commits(repo, f"{remote()}/main", head)
+    branch = branch_of(repo) if branch is None else branch
+    with open(os.path.join(d, "seq.lock"), "a+") as seq_lock:  # a seq of its own, beside a land queueing meanwhile
+        fcntl.flock(seq_lock, fcntl.LOCK_EX)
+        seq = max([e["seq"] for e in waiting_entries(d, open_only=False)] + [0]) + 1
+        eid = f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(worktree or repo)}-{seq}"
+        supersede_older_waiting(d, worktree or repo, branch, eid)
+        e = {"id": eid, "seq": seq, "worktree": worktree or repo, "branch": branch, "head": head, "commits": commits,
+             "fixes": sorted(fixes_of(repo, commits)), "status": "waiting", "created": ts(), "tip": head,
+             "follow": bool(getattr(a, "follow", False))}
+        save_entry(d, e)
+    print(note_waiting(d, log_path, head, e["id"]), flush=True)
+    a.waiting = e
+    spawn_waiting_processor(repo)
+    offer_token(repo)
+    return 0

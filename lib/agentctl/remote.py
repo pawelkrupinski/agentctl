@@ -518,16 +518,6 @@ def remote_check(repo, e, base, head, mode, own=None, red=False):
         time.sleep(next(delays))
 
 
-def cancel_entry_remote(e, why):
-    """An entry that ends (superseded, cancelled) takes its undecided remote run with it: the run is the entry's."""
-    rem = e.get("remote") or {}
-    if rem.get("run") is not None and not rem.get("status"):
-        try:
-            cancel_run(slug(e["worktree"]) if os.path.isdir(e.get("worktree") or "") else SHORT["movies"], rem["run"], why)
-        except (Exception, SystemExit) as ex:
-            err(f"could not cancel run {rem['run']} of {e['id']}: {str(ex)[:120]}")
-
-
 def processor_owned(d, repo=None):
     """The processor's ownership: one per waiting state directory (one per repository)."""
     return Owned("waiting", os.path.basename(d.rstrip("/")) or "repo", ["waiting", "run", "--repo", repo or ""])

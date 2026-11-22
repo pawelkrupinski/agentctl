@@ -430,3 +430,45 @@ def red_gone(it, obs, snap):
     return bool(last) and last.get("headBranch", "main") == "main" and (
         int(last.get("databaseId") or 0) > own
         or int(last.get("databaseId") or 0) == own and last.get("conclusion") == "success")
+
+
+def gate_reds(repo):
+    """The ids (run numbers and run ids) of the gating workflows' red runs on main; empty when green or not gated. A
+    report-only red (gate_report_only: red only in the registry's unproven jobs) holds no push.
+    When the gate cannot be read: {GATE_UNREAD}, which every caller takes as RED -- a production change waits, the
+    processor takes no batch (the owner, 2026-10-27: an unread gate is never green; at 08:05Z a launchd processor with
+    no token read it as green, and the hook, with no token either, skipped its own gate: a push onto red #2047)."""
+    try:
+        o_r = slug(repo)
+        if not gated_repo(o_r):
+            return set()
+        reds = set()
+        for name, decided, _newer, _streak in gate_runs(o_r):
+            if decided and decided.get("conclusion") != "success" and not gate_report_only(o_r, name, decided)[0]:
+                reds |= {str(decided.get("number")), str(decided.get("databaseId"))} | episode_names(o_r, name, decided)
+        gate_unread_why[0] = ""
+        return reds
+    except (Exception, SystemExit) as e:  # SystemExit: NoToken
+        gate_unread_why[0] = str(e).replace("agentctl: ", "")[:200]
+        err(f"could not read the gate ({gate_unread_why[0]}): taken as RED until it is read")
+        return {GATE_UNREAD}
+
+
+# A FIX MATCHES THE RED IT FIXES, NOT ONE RUN NUMBER (2026-11-05). Every push that lands while main is red (tools-only
+# commits land freely) starts a new run failing the same way, so a fix naming the run it was written against was
+# stranded WAITING once the next run went red: a red owner's fixes named Main #2164, then #2172, while the gate read
+# #2173, then #2174; main stayed red ~5.5 h until the fix was re-trailered by hand, twice. Now a `Fixes-Red:` counts
+# when it names ANY run of the CURRENT red EPISODE: the workflow's failed runs on main since its last green (the red
+# streak) that share a failure signature with its newest red run -- the names red_units links a red item by. A run of
+# an older episode (main went green since) never counts. movies' pre-push judges the same rule from gh's run list and
+# failed job names (episode_reds there).
+def episode_names(o_r, name, decided):
+    """The names (numbers and ids) of workflow `name`'s red streak runs on main that fail the way its newest decided red
+    run does (red_units' names); empty when its signatures cannot be read -- then only the newest run counts."""
+    try:
+        sigs = run_sigs(o_r, decided, name)
+        units = red_units(o_r, name, decided, _gate_lists.get(name) or [], sigs, True)
+    except (Exception, SystemExit) as e:  # SystemExit: NoToken
+        err(f"could not read {name} #{decided.get('number')}'s failures ({str(e)[:120]}): only that run counts as its red")
+        return set()
+    return set().union(*(set(u.get("names") or ()) for u in units))
