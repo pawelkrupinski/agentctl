@@ -66,7 +66,9 @@ movies model (movies "Code quality ratchets" and "Coupling"):
   graph of every top-level definition, and its cycles), `movedefs.py` and `split_part.py` (pure moves between parts),
   `sameast.py` / `samecode.py` (their proofs: the same statements, the same bytecode), `mkmodule.py` (a part into a
   real module, refused while it reads a namespace name), `partdeps.py` (the parts nearest to a module and what
-  blocks each), `placemodules.py` (modules first in PARTS), `suite-at.sh` (the full suite on a snapshot of a revision).
+  blocks each), `placemodules.py` (modules first in PARTS), `closure.py` (a definition's closure among the namespace
+  parts), `retarget.py` (repoint the modules' imports after a move), `unused.py` (drop a module's dead imports),
+  `suite-at.sh` (the full suite on a snapshot of a revision; `cov`: branch coverage, the venv's python running it).
 
 ## Design (movies "Design rules")
 

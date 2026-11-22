@@ -202,6 +202,39 @@ class PureMoveTest(unittest.TestCase):
         self.assertIn("helper", r.stdout)
 
 
+class ImportToolsTest(unittest.TestCase):
+    def test_retarget_imports_a_moved_name_from_the_module_now_defining_it(self):
+        parts = {"core": "import os\n\n\ndef root():\n    return os.sep\n",
+                 "base": "def helper():\n    return 1\n",
+                 "top": "from agentctl.core import helper, root\n\n\ndef entry():\n    return helper() + root()\n"}
+        lib = fake_lib(parts, modules=("core", "base", "top"))
+        r = tool("retarget", lib)
+        self.assertEqual(r.stdout, "retargeted top\n", r.stderr)
+        self.assertTrue(read(lib, "top").startswith("from agentctl.core import root\nfrom agentctl.base import helper\n"))
+
+    def test_retarget_refuses_an_import_block_holding_another_statement(self):
+        parts = {"core": "def root():\n    return 1\n", "base": "def helper():\n    return 1\n",
+                 "top": "from agentctl.core import helper\nfrom typing import Any\nfrom agentctl.core import root\n"}
+        lib = fake_lib(parts, modules=("core", "base", "top"))
+        r = tool("retarget", lib)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("from typing import Any", read(lib, "top"))
+
+    def test_unused_drops_only_the_names_nothing_reads(self):
+        parts = dict(PARTS, core="import os, re\nfrom agentctl.mid import helper, other  # x\n\n\n"
+                                 "def root():\n    return os.sep  # re-reading is not re\n")
+        lib = fake_lib(parts)
+        r = tool("unused", lib, "core")
+        self.assertEqual(r.stdout, "core 2 ['helper', 'other']\n", r.stderr)
+        tool("unused", lib, "--fix", "core")
+        self.assertTrue(read(lib, "core").startswith("import os, re\n\n\ndef root"), read(lib, "core"))
+
+    def test_closure_walks_the_namespace_and_stops_at_a_module(self):
+        r = tool("closure", fake_lib(), "entry")
+        self.assertEqual(r.stdout, "entry 3 {'mid': ['helper', 'other'], 'top': ['entry']}\n", r.stderr)
+        self.assertNotEqual(tool("closure", fake_lib(), "nonesuch").returncode, 0)
+
+
 class MakeModuleTest(unittest.TestCase):
     def test_a_part_reading_only_modules_becomes_one_with_explicit_imports(self):
         lib = fake_lib()

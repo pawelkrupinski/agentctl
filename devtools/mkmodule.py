@@ -11,7 +11,7 @@ import re
 import symtable
 import sys
 
-from partlist import parts_and_modules, place
+from partlist import import_lines, parts_and_modules, place
 
 lib, part = sys.argv[1], sys.argv[2]
 init = os.path.join(lib, "__init__.py")
@@ -98,16 +98,7 @@ if bad:
     sys.exit(f"{part}: reads namespace names: {bad}")
 lines = sorted(set(stdlib)) + [f"from {m} import {', '.join(sorted(v))}" for m, v in sorted(from_std.items())]
 for m, v in sorted(from_mod.items(), key=lambda kv: parts.index(kv[0])):
-    text = f"from agentctl.{m} import {', '.join(sorted(v))}"
-    if len(text) > 118:
-        body, cur = [], "    "
-        for x in sorted(v):
-            if len(cur) + len(x) + 2 > 116:
-                body.append(cur.rstrip()); cur = "    "
-            cur += x + ", "
-        body.append(cur.rstrip().rstrip(","))
-        text = f"from agentctl.{m} import (\n" + "\n".join(body) + ")"
-    lines.append(text)
+    lines += import_lines(f"agentctl.{m}", sorted(v))
 src_lines = src.split("\n")
 if part in modules and any(isinstance(n, (ast.Import, ast.ImportFrom)) for n in tree.body):  # already a module (code
     # moved into it): add only the imports it now lacks, after its own

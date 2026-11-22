@@ -1,5 +1,6 @@
 """The part list of agentctl's one namespace: PARTS (every part, in load order) and MODULES (the parts that are real
 modules), read from lib/agentctl/__init__.py without running its loader. Shared by the devtools."""
+import ast
 import os
 import re
 
@@ -48,3 +49,31 @@ def write_lists(lib, modules, namespace):
 def place(lib, parts, modules):
     """Write the lists from a PARTS order: the modules first (in that order), then the namespace parts."""
     write_lists(lib, [p for p in parts if p in modules], [p for p in parts if p not in modules])
+
+
+def import_lines(module, names):
+    """`from <module> import a, b`, parenthesised and wrapped under 118 columns when longer: the one shape every devtool
+    writes an import in."""
+    text = f"from {module} import {', '.join(names)}"
+    if len(text) <= 118:
+        return [text]
+    body, cur = [], "    "
+    for x in names:
+        if len(cur) + len(x) + 2 > 116:
+            body.append(cur.rstrip())
+            cur = "    "
+        cur += x + ", "
+    body.append(cur.rstrip().rstrip(","))
+    return [f"from {module} import ("] + body[:-1] + [body[-1] + ")"]
+
+
+def defined_names(tree):
+    """The names a module's top level DEFINES (def, class, assignment targets), its imports aside."""
+    out = set()
+    for n in tree.body:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out.add(n.name)
+        elif isinstance(n, (ast.Assign, ast.AnnAssign)):
+            for t in n.targets if isinstance(n, ast.Assign) else [n.target]:
+                out |= {x.id for x in ast.walk(t) if isinstance(x, ast.Name)}
+    return out
