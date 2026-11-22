@@ -49,6 +49,8 @@ def main(argv=None):
     c.add_argument("--no-fetch", action="store_true")
     c.add_argument("--no-remote", action="store_true", help="skip remote measure/* branches")
     c.add_argument("--min-age-hours", type=float, default=2.0)
+    c.add_argument("--deadline", type=float, metavar="S", help="stop by itself S seconds in: no tree looked at past it, "
+                   "no removal begun within the removal reserve of it (the upkeep's, under its own bound)")
     c.add_argument("--include-caches", action="store_true", help="also consider worktrees under ~/.cache")
     c.add_argument("-v", "--verbose", action="store_true", help="also list what is kept and why")
     cw = sub.add_parser("ci-why", help="why is main red: the gating runs' failed jobs, log tails, infra vs test, clearing rule",

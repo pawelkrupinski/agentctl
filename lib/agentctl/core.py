@@ -185,18 +185,18 @@ GIT_NET_SSH = "ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=
 NO_SIGN = ("-c", "commit.gpgsign=false")
 
 
-def git(repo, *args, check=True, input=None):
+def git(repo, *args, check=True, input=None, timeout=600):
     env = None
     if args and args[0] in ("fetch", "ls-remote"):  # never hang on a remote whose ssh accepts and does not answer
         env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
         env.setdefault("GIT_SSH_COMMAND", GIT_NET_SSH)
     try:
         r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, errors="replace", input=input, env=env,
-                           timeout=600)  # every git call is bounded: a stuck lock or network never holds a step
+                           timeout=timeout)  # every git call is bounded: a stuck lock or network never holds a step
     except subprocess.TimeoutExpired:
         if check:
-            raise RuntimeError(f"git {' '.join(args)} in {repo}: timed out after 600 s")
-        return subprocess.CompletedProcess(args, 124, "", "timed out after 600 s")
+            raise RuntimeError(f"git {' '.join(args)} in {repo}: timed out after {timeout:g} s")
+        return subprocess.CompletedProcess(args, 124, "", f"timed out after {timeout:g} s")
     if check and r.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} in {repo}: {r.stderr.strip()}")
     return r.stdout if check else r

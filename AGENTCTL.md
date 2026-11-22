@@ -2482,11 +2482,15 @@ agentctl sweep [--repo PATH ...] [--idle-days 3] [--dry-run] [--no-report]
 ### cleanup: remove proven-merged items only
 
 ```
-agentctl cleanup [--dry-run|--execute] [--repo PATH ...] [--no-fetch] [--no-remote] [--min-age-hours H] [--include-caches] [-v]
+agentctl cleanup [--dry-run|--execute] [--repo PATH ...] [--no-fetch] [--no-remote] [--min-age-hours H] [--include-caches] [--deadline S] [-v]
 ```
 
 For the scope and the log, see "Standing-OK cleanup scope" above. It is a dry run by default on a TTY. Exit 0, or 1
-if something could not be removed.
+if something could not be removed. Bounded (2026-11-22: the upkeep's pass hit its 1800 s bound on a lossy uplink, every
+https fetch waiting out git's 600 s): a tree's git status gets 120 s (`$AGENTCTL_CLEANUP_ITEM_TIMEOUT`, else kept as
+undecided), the fetch is the unattended 180 s one with an https low-speed cut-off, and one fetch timing out skips the
+other repos. `--deadline S` (the upkeep passes 1200) stops it by itself: no tree looked at past S, no removal begun
+within 300 s of it (`$AGENTCTL_CLEANUP_REMOVE_RESERVE`); its last line says how long each repo took (into upkeep.log).
 
 ```
 agentctl cleanup (DRY RUN); log: /…/scratchpad/agentctl-deleted.log

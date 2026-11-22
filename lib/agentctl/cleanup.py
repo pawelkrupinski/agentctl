@@ -83,16 +83,33 @@ def merged_reason(repo, head, main):
 CACHE_TREES = os.path.join(HOME, ".cache") + "/"  # tool-owned trees (e.g. kinowo-identity measure-local): reused, not litter
 
 
-def plan_worktrees(repo, main, min_age_h, cwds, include_caches=False):
-    """[(action, wt, branch, sha, reason)] where action is 'delete' or 'skip'."""
+# A CLEANUP IS BOUNDED PER TREE AND AS A WHOLE (2026-11-22: the upkeep's `cleanup --execute --no-remote` ran past its
+# 1800 s bound at 03:58Z and was killed in the middle of a `git worktree remove`). Each tree's own git reads get
+# CLEANUP_ITEM_TIMEOUT -- a tree that cannot be decided in that time is kept, said, and looked at next pass -- the
+# fetch is the unattended bounded_fetch (180 s, not git()'s 600 s), and the whole pass stops by itself at its
+# --deadline: no tree is looked at past it, and no removal starts with less than CLEANUP_REMOVE_RESERVE left.
+CLEANUP_ITEM_TIMEOUT = 120  # $AGENTCTL_CLEANUP_ITEM_TIMEOUT
+CLEANUP_REMOVE_RESERVE = 300  # $AGENTCTL_CLEANUP_REMOVE_RESERVE
+
+
+def cleanup_left(until):
+    """Seconds left before the cleanup's deadline (monotonic `until`); inf without one."""
+    return float("inf") if until is None else until - time.monotonic()
+
+
+def plan_worktrees(repo, main, min_age_h, cwds, include_caches=False, until=None):
+    """[(action, wt, branch, sha, reason)] where action is 'delete' or 'skip' -- 'stop' for every tree not looked at
+    once the deadline (`until`, monotonic) passed."""
     plan = []
     wts = worktrees(repo)
-    checked_out = {w.get("branch") for w in wts if w.get("branch")}
+    item = env_num("AGENTCTL_CLEANUP_ITEM_TIMEOUT", CLEANUP_ITEM_TIMEOUT)
     for w in wts[1:]:  # the first entry is the main checkout
         path, sha = w["worktree"], w.get("HEAD", "")
         branch = w.get("branch", "").removeprefix("refs/heads/") or None
         def skip(why):
             plan.append(("skip", path, branch, sha, why))
+        if cleanup_left(until) <= 0:
+            plan.append(("stop", path, branch, sha, "not looked at: the cleanup's deadline passed")); continue
         if "locked" in w:
             skip("locked"); continue
         if branch in PROTECTED_BRANCHES:
@@ -107,15 +124,22 @@ def plan_worktrees(repo, main, min_age_h, cwds, include_caches=False):
         act = gitdir_activity(repo, path)
         if act and time.time() - act < min_age_h * 3600:
             skip(f"active {int((time.time() - act) / 60)} min ago"); continue
-        dirty = git(repo, "-C", path, "status", "--porcelain", "--untracked-files=all", check=False)
+        t0 = time.monotonic()
+        dirty = git(repo, "-C", path, "status", "--porcelain", "--untracked-files=all", check=False, timeout=item)
+        if dirty.returncode == 124:
+            skip(f"undecided: git status took over {item:g} s (looked at again next pass)"); continue
         if dirty.returncode != 0:
             skip("git status failed"); continue
         if dirty.stdout.strip():
             skip(f"dirty ({len(dirty.stdout.splitlines())} changed/untracked)"); continue
+        if cleanup_left(until) <= 0:
+            plan.append(("stop", path, branch, sha, "not looked at: the cleanup's deadline passed")); continue
         why = merged_reason(repo, sha, main)
         if not why:
-            n = len(git(repo, "rev-list", f"{main}..{sha}").split())
+            n = git(repo, "rev-list", "--count", f"{main}..{sha}", check=False, timeout=item).stdout.strip() or "?"
             skip(f"unmerged ({n} commit(s) not on {remote()}/main)"); continue
+        if time.monotonic() - t0 > 30:
+            err(f"cleanup: {path} took {time.monotonic() - t0:.0f} s to decide")
         plan.append(("delete", path, branch, sha, why))
     return plan
 
@@ -157,22 +181,36 @@ def cmd_cleanup(a):
     dry = a.dry_run or (sys.stdin.isatty() and not a.execute)
     mode = "DRY RUN" if dry else "EXECUTE"
     print(f"agentctl cleanup ({mode}); log: {os.path.join(scratch(), 'agentctl-deleted.log')}")
+    t_start = time.monotonic()
+    until = t_start + a.deadline if getattr(a, "deadline", None) is not None else None
+    reserve = env_num("AGENTCTL_CLEANUP_REMOVE_RESERVE", CLEANUP_REMOVE_RESERVE)
     cwds = process_cwds()
-    rc = 0
+    rc, took, stopped, net_down = 0, [], [], None
     for repo in a.repo or REPOS:
         repo = os.path.abspath(os.path.expanduser(repo))
         name = os.path.basename(repo)
         if not os.path.isdir(repo):
             continue
+        if cleanup_left(until) <= 0:
+            stopped.append(f"repo {name}"); continue
+        if net_down:
+            err(f"{name}: not fetched -- {net_down}; skipping repo"); rc = 1; continue
+        t_repo = time.monotonic()
         try:
             if not a.no_fetch:
-                git(repo, "fetch", "--quiet", remote(), "main")
+                f = bounded_fetch(repo, refs=("main",))
+                if f is not True:
+                    if str(f).startswith("timed out"):  # A STALLED REMOTE STALLS THEM ALL: one wait, not one per repo
+                        net_down = f"{name}'s fetch {f}"
+                    raise RuntimeError(f"fetch: {f}")
             main = git(repo, "rev-parse", f"refs/remotes/{remote()}/main").strip()
         except RuntimeError as e:
             err(f"{name}: {e}; skipping repo"); rc = 1; continue
         print(f"\n== {name} ({remote()}/main {main[:10]})")
-        for action, path, branch, sha, why in plan_worktrees(repo, main, a.min_age_hours, cwds, a.include_caches):
+        for action, path, branch, sha, why in plan_worktrees(repo, main, a.min_age_hours, cwds, a.include_caches, until):
             label = f"worktree {path} [{branch or 'detached'}] {sha[:10]}"
+            if action == "stop" or (action == "delete" and not dry and cleanup_left(until) < reserve):
+                stopped.append(path); continue  # never a removal begun that the deadline could cut in half
             if action == "skip":
                 if a.verbose:
                     print(f"  keep   {label}: {why}")
@@ -202,6 +240,7 @@ def cmd_cleanup(a):
                     print(f"    deleted branch {branch} ({sha[:10]})")
                 else:
                     print(f"    branch {branch} not deleted: {r.stderr.strip()}"); rc = 1
+        took.append(f"{name} {time.monotonic() - t_repo:.0f} s")
         if a.no_remote:
             continue
         o_r = slug(repo)
@@ -227,6 +266,10 @@ def cmd_cleanup(a):
                 log_deletion("remote-branch", o_r, bname, sha, why)
             except Exception as e:
                 print(f"    delete failed: {e}"); rc = 1
+    if stopped:
+        print(f"cleanup: stopped at its {a.deadline:g} s deadline: {len(stopped)} left for the next pass "
+              f"({', '.join(stopped[:3])}{', ...' if len(stopped) > 3 else ''})")
+    print(f"cleanup: {time.monotonic() - t_start:.0f} s ({'; '.join(took) or 'no repo'})")
     return rc
 
 
@@ -372,13 +415,14 @@ def delete_remote_branch(repo, o_r, name, sha):
 FETCH_TIMEOUT = 180  # an unattended fetch's bound ($AGENTCTL_FETCH_TIMEOUT)
 
 
-def bounded_fetch(repo, *extra):
+def bounded_fetch(repo, *extra, refs=()):
     """`git fetch <remote>` for an unattended run (maintain's sweep): bounded, ssh keepalives on, never prompting. True,
     or why not (2026-10-27: the remote's ssh accepted the connection and never answered, and the first maintain pass hung
-    in the sweep's fetch)."""
+    in the sweep's fetch). Every remote here is https, where the ssh keepalives do nothing: a transfer under 1 KB/s for
+    30 s is given up (http.lowSpeed*), so a lossy uplink (2026-11-22 03:28Z, 40% loss) never waits out the whole bound."""
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_SSH_COMMAND=GIT_NET_SSH)
     try:
-        r = subprocess.run(["git", "-C", repo, "fetch", "--quiet", *extra, remote()], capture_output=True, text=True, env=env,
+        r = subprocess.run(["git", "-C", repo, "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30", "fetch", "--quiet", *extra, remote(), *refs], capture_output=True, text=True, env=env,
                            timeout=env_num("AGENTCTL_FETCH_TIMEOUT", FETCH_TIMEOUT), stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return f"timed out after {int(env_num('AGENTCTL_FETCH_TIMEOUT', FETCH_TIMEOUT))} s"

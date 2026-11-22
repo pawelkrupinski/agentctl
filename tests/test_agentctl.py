@@ -451,6 +451,52 @@ class CleanupTest(Base):
         self.assertTrue(os.path.isdir(wt), out)
         self.assertIn("in use by pid [4242] since planning; kept", out)
 
+    def test_a_cleanup_near_its_deadline_begins_no_removal_and_says_what_it_left(self):
+        # 2026-11-22: the upkeep's cleanup ran past its 1800 s bound at 03:58Z and was killed mid `git worktree remove`.
+        wt = self.r.worktree("wt-late", branch="late")
+        self.r.write("f1.txt", "late\n", at=wt)
+        self.r.commit("late", at=wt)
+        self.r.push(at=wt)
+        make_old(wt)
+        rc, out = self.cleanup("--deadline", "100")  # inside the 300 s removal reserve
+        self.assertTrue(os.path.isdir(wt), out)
+        self.assertEqual(self.deleted_log(), "")
+        self.assertIn("cleanup: stopped at its 100 s deadline: 1 left for the next pass", out)
+        rc, out = self.cleanup("--deadline", "0")  # past it: no tree is even looked at
+        self.assertTrue(os.path.isdir(wt), out)
+        self.assertNotIn("delete worktree", out)
+        make_old(wt)  # the reads above refreshed its index
+        rc, out = self.cleanup("--deadline", "1200")  # control: time enough, it goes
+        self.assertFalse(os.path.exists(wt), out)
+        self.assertRegex(out, r"cleanup: \d+ s \(repo \d+ s\)")
+
+    def test_a_tree_whose_git_status_overruns_its_bound_is_kept_undecided(self):
+        wt = self.r.worktree("wt-slow", branch="slow")
+        self.r.write("f1.txt", "slow\n", at=wt)
+        self.r.commit("slow", at=wt)
+        self.r.push(at=wt)
+        make_old(wt)
+        os.environ["AGENTCTL_CLEANUP_ITEM_TIMEOUT"] = "0.000001"
+        try:
+            rc, out = self.cleanup("-v")
+        finally:
+            os.environ.pop("AGENTCTL_CLEANUP_ITEM_TIMEOUT", None)
+        self.assertTrue(os.path.isdir(wt), out)
+        self.assertIn("undecided: git status took over", out)
+        self.assertEqual(self.deleted_log(), "")
+
+    def test_a_fetch_that_timed_out_skips_the_other_repos_fetches(self):
+        # 2026-11-22 03:28Z: a lossy uplink, https remotes, one fetch after another each waiting out its bound
+        other = self.r.worktree("wt-other-repo", branch="other")
+        calls, saved = [], A.bounded_fetch
+        A.bounded_fetch = lambda repo, *extra, refs=(): calls.append(repo) or "timed out after 180 s"
+        try:
+            rc, out = self.run_tool("cleanup", "--execute", "--repo", self.r.path, "--repo", other, "--no-remote")
+        finally:
+            A.bounded_fetch = saved
+        self.assertEqual((rc, calls), (1, [self.r.path]), out)
+        self.assertIn("not fetched -- repo's fetch timed out after 180 s", out)
+
     def test_dry_run_deletes_nothing(self):
         wt = self.r.worktree("wt-dry")
         make_old(wt)

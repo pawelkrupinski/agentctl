@@ -38,10 +38,12 @@
         an older version of main -- the `reset --soft` squash onto a moved main (not when the push also rewrites the
         definition those lines referred to: a coherent edit). `git revert` commits are exempt
         for the files of the commit they revert.
-  agentctl cleanup [--dry-run|--execute] [--repo PATH ...] [--no-fetch] [--no-remote] [--min-age-hours H]
+  agentctl cleanup [--dry-run|--execute] [--repo PATH ...] [--no-fetch] [--no-remote] [--min-age-hours H] [--deadline S]
         Removes ONLY proven-merged items: clean, idle worktrees whose HEAD is an ancestor of <remote>/main or whose
         commits are all patch-equivalent on it (`git cherry`), their local branches, and remote measure/* branches
         whose runs all finished (or >24 h old with no run in progress). Every deletion -> agentctl-deleted.log.
+        Bounded: each tree's git status 120 s (else kept, undecided), a fetch the unattended 180 s (one timing out
+        skips the other repos); --deadline S stops it by itself (no removal begun within 300 s of it).
         Dry run by default when stdin is a TTY.
   agentctl orphans [--kill]
         Wait loops / sbt servers whose worktree is gone, whose owning shell died, whose target runs finished,

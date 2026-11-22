@@ -22,7 +22,8 @@ class UpkeepTest(unittest.TestCase):
         def run(argv, **k):
             if "cleanup" in argv:
                 self.calls.append(argv[2:])
-                return A.subprocess.CompletedProcess(argv, 0, "== movies\n  delete worktree /x/movies-wt-old [old] abc: merged\n", "")
+                return A.subprocess.CompletedProcess(argv, 0, "== movies\n  delete worktree /x/movies-wt-old [old] abc: merged\n"
+                                                              "cleanup: 12 s (movies 12 s)\n", "")
             return real_run(argv, **k)
         A.subprocess.run = run
         live, done, open_, other = (os.path.join(self.tmp, n) for n in ("wt-live", "wt-done", "wt-open", "wt-other"))
@@ -43,7 +44,9 @@ class UpkeepTest(unittest.TestCase):
         os.utime(old, (time.time() - 7200, time.time() - 7200))
         os.utime(foreign, (time.time() - 7200, time.time() - 7200))
         lines = A.run_upkeep()
-        self.assertEqual(self.calls, [["cleanup", "--execute", "--no-remote"]])
+        self.assertEqual(self.calls, [["cleanup", "--execute", "--no-remote", "--deadline", "1200"]])  # its own stop first
+        self.assertLess(A.UPKEEP_CLEANUP_DEADLINE + A.CLEANUP_REMOVE_RESERVE, A.UPKEEP_CLEANUP_BOUND)
+        self.assertIn("cleanup: 12 s (movies 12 s)", lines)  # how long it took: in upkeep.log
         self.assertEqual(self.closed, [done])
         self.assertIn("delete worktree /x/movies-wt-old [old] abc: merged", lines)
         self.assertEqual((os.path.exists(old), os.path.exists(new), os.path.exists(foreign)), (False, True, True))

@@ -171,13 +171,18 @@ def rotate_logs():
         return out
 
 
+UPKEEP_CLEANUP_BOUND = 1800  # the cleanup process's hard bound (killed past it)
+UPKEEP_CLEANUP_DEADLINE = 1200  # its own deadline: well before the bound, the removal reserve (300 s) included
+
+
 def run_upkeep():
     """One upkeep pass (see above); its lines, also appended to the state root's upkeep.log."""
     lines = []
     try:  # its own process: cleanup prints, and the processor's stdout is never redirected under its other threads
-        r = subprocess.run([sys.executable, TOOL_PATH, "cleanup", "--execute", "--no-remote"], capture_output=True,
-                           text=True, timeout=1800, stdin=subprocess.DEVNULL)
-        lines += [x.strip() for x in r.stdout.splitlines() if x.strip().startswith("delete")]
+        r = subprocess.run([sys.executable, TOOL_PATH, "cleanup", "--execute", "--no-remote", "--deadline",
+                            f"{UPKEEP_CLEANUP_DEADLINE:g}"], capture_output=True, text=True, timeout=UPKEEP_CLEANUP_BOUND,
+                           stdin=subprocess.DEVNULL)  # it stops by itself first: the bound never cuts a removal in half
+        lines += [x.strip() for x in r.stdout.splitlines() if x.strip().startswith(("delete", "cleanup:"))]
         if r.returncode not in (0, 1):
             lines.append(f"cleanup exit {r.returncode}: {(r.stderr or r.stdout).strip()[-200:]}")
     except (OSError, subprocess.TimeoutExpired) as e:
