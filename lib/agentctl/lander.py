@@ -1,5 +1,20 @@
 # agentctl, part `lander`: who landed what -- every `agentctl land` remembers its lander, in the store.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import datetime as dt
+import glob
+import json
+import os
+import re
+import subprocess
+import time
+from agentctl.core import HOME, branch_of, env_num, err, git, git_ok, process_cache, remote, slug
+from agentctl.timefmt import ts
+from agentctl.statefile import mtime
+from agentctl.store import ARCHIVE, MACHINES, StaleVersion, StateSpec, open_store
+from agentctl.repos import RED_PRIMARY
+from agentctl.storetoken import no_vault
+
 
 # ---------------------------------------------------------------- the lander (the owner, 2026-11-01: "remember which
 # agent landed what change"). Every `agentctl land` records who ran it (lander_record): the Claude session
