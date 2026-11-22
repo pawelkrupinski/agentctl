@@ -145,7 +145,7 @@ def mem_stats():
     return out
 
 
-def ram_gb():
+def ram_gb() -> float:
     return mem_stats()["ram_gb"] or 36.0
 
 

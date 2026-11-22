@@ -386,6 +386,35 @@ class RunawayProcessTest(unittest.TestCase):
         self.assertIn("past its -Xmx 2.0 GB", detail)
         self.assertIn("ours: it runs in ~/projects/movies-wt-x", detail)
 
+    def mongod_conf(self, body):
+        conf = os.path.join(self.d, "mongod.conf")
+        with open(conf, "w") as f:
+            f.write(body)
+        return f"/opt/homebrew/opt/mongodb-community/bin/mongod --config {conf}"
+
+    def test_a_mongod_warming_its_default_wiredtiger_cache_is_no_runaway(self):
+        """2026-11-22 17:10Z, a false alarm: "mongod pid 65521: RSS 9.2 GB (from 9.1 GB at 16:25Z), past 4 GB, growing
+        for 45 min" -- the local prod mirror, no cacheSizeGB set: WiredTiger's default cache is 50% of (RAM - 1 GB),
+        ~68 GB on this 137 GB Mac."""
+        args = self.mongod_conf("net:\n  port: 28017\nstorage:\n  dbPath: /opt/homebrew/var/mongodb\n")
+        passes = self.run_passes(self.climb(9.1, 9.2, 45), pid=65521, name="mongod", cpu=5.0,
+                                 args_of=lambda pid: args, ram=137.0)
+        self.assertTrue(all(ok for _, ok, _ in passes), [d for _, ok, d in passes if not ok][:1])
+        self.assertEqual(int(A.mongod_cache_kb(args, 137.0) / 1024 / 1024), 68)
+
+    def test_a_mongod_past_its_cache_and_margin_still_climbing_is_a_runaway(self):
+        args = self.mongod_conf("storage:\n  wiredTiger:\n    engineConfig:\n      cacheSizeGB: 2\n")
+        passes = self.run_passes(self.climb(3.0, 8.0, 40), pid=700, name="mongod", cpu=5.0,
+                                 args_of=lambda pid: args, ram=137.0)
+        self.assertFalse(passes[-1][1])
+        self.assertIn("mongod pid 700: RSS 8.0 GB", passes[-1][2])
+        self.assertIn("past its WiredTiger cache 2.0 GB + margin", passes[-1][2])
+
+    def test_a_big_server_creeping_by_a_sliver_is_no_runaway(self):
+        """300 MB over 45 min on a 9 GB process is no trend: growth must reach 5% or 500 MB over the window."""
+        passes = self.run_passes(self.climb(9.1, 9.4, 45), pid=900, name="postgres", cpu=5.0)
+        self.assertTrue(all(ok for _, ok, _ in passes), [d for _, ok, d in passes if not ok][:1])
+
     def test_a_process_within_its_governor_tickets_charge_is_no_runaway(self):
         """sbt-warm, gov-run, fail-before: the governor admitted them with the memory they were charged."""
         tickets = [{"pid": 400, "mem": 12, "cores": 4, "label": "fail-before"}]

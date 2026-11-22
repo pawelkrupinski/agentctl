@@ -17,15 +17,21 @@
 # WP_JVM_MARGIN of it plus WP_JVM_NONHEAP_GB (metaspace, code cache, threads, direct buffers); a process under a live
 # governor ticket (sbt-warm, gov-run, fail-before: the shell holding it, or its descendants) may also use the memory and
 # cores it was charged.
+#
+# 17:10Z the same day: "mongod pid 65521: RSS 9.2 GB (from 9.1 GB at 16:25Z), past 4 GB, growing for 45 min" -- the
+# local prod mirror warming WiredTiger's cache (no cacheSizeGB: 50% of (RAM - 1 GB), ~68 GB here). So a process with a
+# known memory CEILING is judged against it (CEILINGS: a JVM's -Xmx, a mongod's cache), and growth must reach
+# WP_GROWTH_PCT or WP_GROWTH_MB over the window: 1% of a big long-lived server is its noise.
 WP_RSS_GB = 4.0
 WP_CPU_PCT = 90.0
 WP_CPU_MIN = 20
 WP_PERSIST_MIN = 30  # minutes the RSS growth must have held before it is a trend
 WP_WINDOW_MIN = 120  # minutes of RSS samples kept a process
 WP_SAMPLE_GAP = 300  # s between kept RSS samples (the newest always the latest pass's)
-WP_GROWTH_MB = 100  # RSS growth over the kept window that is a trend (and at least 1%); half of it in each half
-WP_JVM_MARGIN = 0.25  # x a JVM's -Xmx that its RSS may exceed it by, besides the non-heap headroom
-WP_JVM_NONHEAP_GB = 1.0
+WP_GROWTH_MB = 500  # RSS growth over the kept window that is a trend (or WP_GROWTH_PCT, the more); half in each half
+WP_GROWTH_PCT = 5.0
+WP_CEILING_MARGIN = 0.25  # x a ceiling (-Xmx, a mongod's cache) its RSS may exceed it by, besides the headroom
+WP_CEILING_HEADROOM_GB = 1.0  # what lives beside it: a JVM's metaspace, code cache, threads; a mongod's connections
 WT_STALE_MAX = 10  # suite roots past twice the sweep's bound before WT is violated
 SPOTLIGHT_EXCLUDE = ("System Settings > Spotlight > Search Privacy: add ~/projects and /private/tmp (or `sudo mdutil "
                      "-i off /private/tmp`)")
@@ -37,6 +43,9 @@ SYSTEM_FIXES = {
 }
 OURS = re.compile(r"^(java|python3?(\.\d+)?|claude|node|sbt|bash|git)$")
 XMX = re.compile(r"(?:^|\s)-Xmx(\d+)([kKmMgGtT]?)(?=\s|$)")
+MONGOD_CACHE_ARG = re.compile(r"--wiredTigerCacheSizeGB[=\s]+([\d.]+)")
+MONGOD_CONFIG_ARG = re.compile(r"(?:--config|-f)[=\s]+(\S+)")
+MONGOD_CACHE_CONF = re.compile(r"^\s*cacheSizeGB\s*:\s*([\d.]+)", re.M)
 ProcRow = tuple[int, int, int, float, str]  # (pid, ppid, rss KB, %cpu, command name)
 
 
@@ -65,6 +74,35 @@ def jvm_xmx_kb(args: str) -> Optional[int]:
     return int(n) * {"": 1, "k": 1024, "m": 1024 ** 2, "g": 1024 ** 3, "t": 1024 ** 4}[unit.lower()] // 1024
 
 
+def mongod_cache_kb(args: str, ram: float) -> int:
+    """The KB of a mongod's WiredTiger cache: --wiredTigerCacheSizeGB, else its config's cacheSizeGB, else WiredTiger's
+    default, 50% of (RAM - 1 GB) and at least 256 MB."""
+    found = MONGOD_CACHE_ARG.search(args or "")
+    conf = MONGOD_CONFIG_ARG.search(args or "")
+    if not found and conf:
+        try:
+            with open(os.path.expanduser(conf.group(1))) as f:
+                found = MONGOD_CACHE_CONF.search(f.read())
+        except OSError:
+            pass
+    gb = float(found.group(1)) if found else max(0.25, 0.5 * (ram - 1))
+    return int(gb * 1024 * 1024)
+
+
+def proc_ceiling(name: str, args: str, ram: float) -> Optional[tuple[int, str]]:
+    """(KB, what it is) of the memory ceiling a process of `name` run with `args` sets itself, or None (CEILINGS)."""
+    if name == "java":
+        xmx = jvm_xmx_kb(args)
+        return (xmx, f"its -Xmx {xmx / 1024 / 1024:.1f} GB") if xmx else None
+    if name == "mongod":
+        cache = mongod_cache_kb(args, ram)
+        return cache, f"its WiredTiger cache {cache / 1024 / 1024:.1f} GB"
+    return None
+
+
+CEILINGS = ("java", "mongod")
+
+
 def proc_args(pid: int) -> str:
     """The process's command line (ps), or ''."""
     try:
@@ -76,6 +114,10 @@ def proc_args(pid: int) -> str:
 def no_args(pid: int) -> str:
     """No command line: the tests' processes, unless they give one."""
     return ""
+
+
+def no_ceiling(pid: int, name: str) -> Optional[tuple[int, str]]:
+    return None
 
 
 def _ticket_of(pid: int, ppids: dict[int, int], tickets: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
@@ -93,9 +135,9 @@ def _ticket_of(pid: int, ppids: dict[int, int], tickets: list[dict[str, Any]]) -
 def _limits(p: dict[str, Any], ticket: Optional[dict[str, Any]]) -> tuple[float, str, float]:
     """(RSS KB past which process record `p` may not grow, what that limit is, the %CPU it may hold)."""
     gb = 1024 * 1024
-    xmx = p.get("xmx_kb")
-    rss, said = (xmx * (1 + WP_JVM_MARGIN) + WP_JVM_NONHEAP_GB * gb, f"past its -Xmx {xmx / gb:.1f} GB + margin") \
-        if xmx else (WP_RSS_GB * gb, f"past {WP_RSS_GB:g} GB")
+    ceiling = p.get("ceiling")
+    rss, said = (ceiling[0] * (1 + WP_CEILING_MARGIN) + WP_CEILING_HEADROOM_GB * gb, f"past {ceiling[1]} + margin") \
+        if ceiling else (WP_RSS_GB * gb, f"past {WP_RSS_GB:g} GB")
     cpu = WP_CPU_PCT
     if ticket:
         charged = float(ticket.get("mem") or 0) * gb
@@ -110,7 +152,7 @@ def _growing(rss: list[list[float]]) -> bool:
     if len(rss) < 3 or rss[-1][0] - rss[0][0] < WP_PERSIST_MIN * 60:
         return False
     mid = min(rss[1:-1], key=lambda s: abs(s[0] - (rss[0][0] + rss[-1][0]) / 2))
-    step = max(WP_GROWTH_MB * 1024, rss[0][1] / 100) / 2  # 100 MB or 1% in all: noise is no trend
+    step = max(WP_GROWTH_MB * 1024, rss[0][1] * WP_GROWTH_PCT / 100) / 2  # 500 MB or 5% in all: less is noise
     return mid[1] - rss[0][1] >= step and rss[-1][1] - mid[1] >= step
 
 
@@ -137,14 +179,14 @@ def _keep_rss(kept: list[list[float]], rss: int, now_: float) -> list[list[float
 
 
 def _proc_sample(state: dict[str, Any], row: ProcRow, now_: float, ticket: Optional[dict[str, Any]],
-                 args_of: Callable[[int], str]) -> dict[str, Any]:
+                 ceiling_of: Callable[[int, str], Optional[tuple[int, str]]]) -> dict[str, Any]:
     """Process pid's kept record moved on by one sample (a new one when the pid now runs another command)."""
     pid, _ppid, rss, cpu, name = row
     key = str(pid)
     p = state.get(key) if (state.get(key) or {}).get("name") == name else None
     p = p or {"name": name, "rss": [], "hot_since": None}
-    if name == "java" and "xmx_kb" not in p:
-        p["xmx_kb"] = jvm_xmx_kb(args_of(pid))
+    if name in CEILINGS and "ceiling" not in p:
+        p["ceiling"] = ceiling_of(pid, name)
     p["rss"] = _keep_rss(p["rss"], rss, now_)
     p["cpu"] = cpu
     p["hot_since"] = (now_ if p["hot_since"] is None else p["hot_since"]) if cpu > _limits(p, ticket)[2] else None
@@ -153,15 +195,15 @@ def _proc_sample(state: dict[str, Any], row: ProcRow, now_: float, ticket: Optio
 
 
 def proc_watch(rows: list[ProcRow], state: dict[str, Any], now_: float, tickets: Optional[list[dict[str, Any]]] = None,
-               args_of: Optional[Callable[[int], str]] = None) -> list[tuple[int, str, str]]:
+               ceiling_of: Optional[Callable[[int, str], Optional[tuple[int, str]]]] = None) -> list[tuple[int, str, str]]:
     """The kept samples `state` ({pid: record}) moved on by `rows`; [(pid, name, why)] of the runaways now. `tickets`:
-    the live governor tickets; `args_of`: a pid's command line (a JVM's -Xmx)."""
+    the live governor tickets; `ceiling_of`: a process's own memory ceiling (proc_ceiling), by pid and name."""
     ppids = {pid: ppid for pid, ppid, *_ in rows}
     seen, found = set(), []
     for row in rows:
         seen.add(str(row[0]))
         ticket = _ticket_of(row[0], ppids, tickets or [])
-        p = _proc_sample(state, row, now_, ticket, args_of or no_args)
+        p = _proc_sample(state, row, now_, ticket, ceiling_of or no_ceiling)
         why = _proc_finding(p, now_, ticket)
         if why:
             found.append((row[0], row[4], why))
@@ -190,25 +232,28 @@ def proc_fix(pid: int, name: str, cwd_of: Optional[Callable[[int], Optional[str]
     return "the owner's to look at (agentctl never stops a process it did not start)"
 
 
-def _wp_machine(ps_out: Optional[str], tickets: Optional[list[dict[str, Any]]],
-                args_of: Optional[Callable[[int], str]]) -> tuple[list[dict[str, Any]], Callable[[int], str]]:
-    """(the live governor tickets, a pid's command line): the given ones, else the real machine's -- none when the
-    processes are the tests' (`ps_out`, or a fixed machine)."""
+def _wp_machine(ps_out: Optional[str], tickets: Optional[list[dict[str, Any]]], args_of: Optional[Callable[[int], str]],
+                ram: Optional[float]) -> tuple[list[dict[str, Any]], Callable[[int, str], Optional[tuple[int, str]]]]:
+    """(the live governor tickets, a process's memory ceiling by pid and name): from the given tickets, command lines
+    and RAM GB, else the real machine's -- no tickets nor command lines when the processes are the tests' (`ps_out`, or
+    a fixed machine)."""
     real = ps_out is None and machine_fixed() is None
+    args, gb = args_of or (proc_args if real else no_args), ram if ram is not None else ram_gb()
     return (tickets if tickets is not None else gov_tickets() if real else []), \
-        args_of or (proc_args if real else no_args)
+        lambda pid, name: proc_ceiling(name, args(pid), gb)
 
 
 def inv_wp(ps_out: Optional[str] = None, now_: Optional[float] = None, state_path: Optional[str] = None,
            cwd_of: Optional[Callable[[int], Optional[str]]] = None, args_of: Optional[Callable[[int], str]] = None,
-           tickets: Optional[list[dict[str, Any]]] = None) -> tuple[bool, str]:
-    """WP: no process past its own RSS limit (WP_RSS_GB; a JVM's -Xmx plus headroom; a governor ticket's charge) and
+           tickets: Optional[list[dict[str, Any]]] = None, ram: Optional[float] = None) -> tuple[bool, str]:
+    """WP: no process past its own RSS limit (WP_RSS_GB; a ceiling it sets itself plus headroom: a JVM's -Xmx, a mongod's
+    WiredTiger cache; a governor ticket's charge) and
     growing for WP_PERSIST_MIN minutes, or over WP_CPU_PCT (a ticket's charged cores) for WP_CPU_MIN minutes (any
     process: a system daemon too). Its samples are kept in procwatch.json between passes. The tests give `ps_out`
-    (or a fixed machine), and with it `args_of` and `tickets`: none read from the real machine."""
+    (or a fixed machine), and with it `args_of`, `tickets` and `ram`: none read from the real machine but its RAM."""
     path, t = state_path or state_root("procwatch.json"), now_ if now_ is not None else time.time()
     state = read_record(path) or {}
-    found = proc_watch(proc_rows(ps_out), state, t, *_wp_machine(ps_out, tickets, args_of))
+    found = proc_watch(proc_rows(ps_out), state, t, *_wp_machine(ps_out, tickets, args_of, ram))
     try:
         write_json(path, state)
     except OSError:
