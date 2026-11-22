@@ -327,6 +327,7 @@ def main(argv=None):
     rr.add_argument("--any", action="store_true", help="release anyone's claim of it")
     rl = rds.add_parser("status", help="every red: its state, holder or offer, deadline")
     rl.add_argument("-v", "--verbose", action="store_true", help="also each red's attempts")
+    rl.add_argument("--live", action="store_true", help="read the store now, not the sync's snapshot")
     rdp = rds.add_parser("dispatch", help="a red's offer at top priority: the dispatcher takes it now")
     rdp.add_argument("run")
     rub = rds.add_parser("unblame", help="WITHDRAW a red's blame (its culprit was wrongly decided, its revert not landed): "

@@ -1235,6 +1235,7 @@ def sync_steps(repo, d, o_r):
             ("revert notes", duty(lambda: [err(x) for x in revert_notes()])),
             ("fixer landing", lambda: [err(f"red: {x}") for x in fixers_land_watch()]),
             ("network watch", network_watch), ("tunnel probe", tunnel_watch),
+            ("red status snapshot", lambda: run_bounded("red status snapshot", write_red_status_snapshot, 1)),
             ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep()]),
             ("root checkout", lambda: [err(x) for x in root_checkout_ff(repo)]),
             ("recovery", maybe_recovery_tick))

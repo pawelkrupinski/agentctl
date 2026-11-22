@@ -325,7 +325,7 @@ def cmd_red(a):
     if a.rcmd == "status":
         if a.rcmd != "status":
             print(f"(`red {a.rcmd}` is now `red status`: the tick acts on every red)")
-        return red_status(st, getattr(a, "verbose", False))
+        return red_status(st, getattr(a, "verbose", False), getattr(a, "live", False))
     if a.rcmd == "auto" and getattr(a, "repo", None):  # ONE REPO's dispatch (the owner, 2026-11-19: "no bitcashier
         # builds"), in the store: the server's tick reads it
         if a.state in ("on", "off"):

@@ -55,6 +55,37 @@ class StatusModelTest(unittest.TestCase):
         self.assertIn("gate green", line)
         self.assertLess(took, 0.5, f"status --line took {took:.2f} s")
 
+    def test_red_status_reads_the_sync_loops_snapshot_within_its_budget(self):
+        """2026-11-22: `agentctl red status` timed out at 8 s under load ("reds: unread (no answer within 8 s)"): every
+        call read ci-runner's store over the tunnel and ran git per red. The laptop's sync writes the rendered red
+        status each cycle (red-status.json); a call prints it while fresh -- no store, no network -- and says its age."""
+        class NoStore:
+            def __getattr__(self, name):
+                raise AssertionError(f"red status touched the store ({name})")
+        A.write_json(A.red_status_snapshot_path(), {"at": self.t - 20, "text": "reds (1 open):\n  leased  Main #1 k: x"})
+        t0 = time.monotonic()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = A.red_status(NoStore())
+        took = time.monotonic() - t0
+        self.assertEqual(rc, 0)
+        self.assertIn("leased  Main #1 k: x", buf.getvalue())
+        self.assertIn("as of 20 s ago", buf.getvalue())
+        self.assertLess(took, 0.5, f"red status took {took:.2f} s")
+
+    def test_a_stale_red_status_snapshot_is_read_live(self):
+        A.write_json(A.red_status_snapshot_path(), {"at": self.t - 3600, "text": "reds: STALE"})
+        saved = A.red_status_text
+        A.red_status_text = lambda store, verbose=False: "reds: read live"
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                A.red_status(object())
+        finally:
+            A.red_status_text = saved
+        self.assertNotIn("STALE", buf.getvalue())
+        self.assertIn("reds: read live", buf.getvalue())
+
     def test_a_stale_or_missing_gate_reads_unread_everywhere(self):
         self.assertEqual(A.status_gate_text({}, self.t), "gate UNREAD (as of never: no fresh published gate)")
         A.state_update(tick_at=self.t, summary={"at": int(self.t - 3600), "repo": A.SHORT["movies"], "line": "gate green"})

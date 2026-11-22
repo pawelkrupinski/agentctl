@@ -716,7 +716,8 @@ agentctl red block <run> --cmd "<command>" [--cause <outage>] [--until-green <wo
 agentctl red beat <run> --note "<what>"       # renew your lease by hand (a new note is progress; in a dispatched
                                                # fixer only its note: its wrapper renews the lease)
 agentctl red release <run> [--any]
-agentctl red status [-v]                       # every red: its state, holder or offer, deadline
+agentctl red status [-v] [--live]              # every red: its state, holder or offer, deadline (the laptop sync's
+                                               # snapshot while under 3 min old, its age said; -v / --live read the store)
 agentctl red dispatch <run> [--force]          # the red's offer at top priority: the dispatcher takes it now
 agentctl red unblock <run|key> --why "<what changed>"
 agentctl red auto on|off|status [--repo R]      # --repo: ONE repo's dispatch (the owner's "no bitcashier builds")

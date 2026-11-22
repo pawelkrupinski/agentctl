@@ -176,9 +176,35 @@ def repo_dispatch_off(store, o_r):
     return repo_dispatch_off_all(store).get(o_r)
 
 
-def red_status(store, verbose=False):
-    """`agentctl red status`: rendered from the status model (its reds, families and dispatcher sections)."""
-    print(render_red_status(status_data(store=store, now_=store.clock(), only=("reds", "families", "owners", "dispatcher",
-                                                                                 "untracked", "reverts")),
-                            verbose))
+# RED STATUS READS THE SYNC'S SNAPSHOT (2026-11-22: `red status` timed out at 8 s under load -- each call read
+# ci-runner's store over the tunnel and ran git per red): the laptop's sync renders it each cycle into red-status.json
+# (write_red_status_snapshot, bounded in the background), and a call prints that while it is RED_STATUS_FRESH s old,
+# saying its age; --verbose, --live or a stale snapshot reads the store.
+RED_STATUS_FRESH = 180
+
+
+def red_status_snapshot_path() -> str:
+    return state_root("red-status.json")
+
+
+def red_status_text(store, verbose=False):
+    """`agentctl red status`'s text, from the status model (its reds, families and dispatcher sections)."""
+    t = store.clock() if hasattr(store, "clock") else time.time()
+    return render_red_status(status_data(store=store, now_=t, only=("reds", "families", "owners", "dispatcher",
+                                                                    "untracked", "reverts")), verbose)
+
+
+def write_red_status_snapshot(store=None):
+    """The sync's step: the rendered red status, for `red status` to print at once."""
+    write_json(red_status_snapshot_path(), {"at": time.time(), "text": red_status_text(store or status_store())})
+
+
+def red_status(store, verbose=False, live=False):
+    """`agentctl red status`: the sync's fresh snapshot, else read now."""
+    snap = {} if verbose or live else (read_record(red_status_snapshot_path()) or {})
+    age = time.time() - float(snap.get("at") or 0)
+    if snap.get("text") and 0 <= age <= RED_STATUS_FRESH:
+        print(f"{snap['text']}\n(as of {age:.0f} s ago: the sync's snapshot; `agentctl red status --live` reads the store)")
+        return 0
+    print(red_status_text(store, verbose))
     return 0
