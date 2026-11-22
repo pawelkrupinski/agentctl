@@ -17,7 +17,7 @@ QUEUE_POOL = 4          # check trees, so at most this many queued changes are c
 # 4, not 3 (2026-11-17): ci-runner's check runners were 3 in effect (a lane bug let borrowed checks hold the check
 # lane: movies runner_scheduler.py), up to 2 lane + 1 CPU-admitted + 2 borrowed since; 4 is a first step, re-measure.
 # A check the LAPTOP failed, not the change: sbt's server never came up or was lost, a script test cut off by its
-# time bound, a stall. Queued again after QUEUE_INFRA_DELAY, at most QUEUE_INFRA_RETRIES times, then judged as it is.
+# time bound, a stall. Queued again after INFRA_BACKOFF's delay, at most QUEUE_INFRA_RETRIES times, then judged as it is.
 # THE CHECK'S ENVIRONMENT LACKED THE GITOPS MANIFESTS (2026-11-22, landing checks 44984605717 and 44998261508: the
 # deploy specs failed "infra/kubernetes/... is missing because the GitOps manifests are no longer in this repository",
 # the beside script tests having moved the fetched manifests aside; Identity takes #349's fix was REJECTED twice and the
@@ -31,7 +31,6 @@ GITOPS_MISSING = (r"GitOps manifests are no longer in this repository|fetch-gito
 INFRA_CHECK_FAILURE = re.compile(r"failed to connect to server|sbt server did not start within \d+ seconds|"
                                  r"sbt server disconnected|^TIMEOUT +\d+s|STALLED:|" + GITOPS_MISSING, re.M)
 QUEUE_INFRA_RETRIES = 3
-QUEUE_INFRA_DELAY = 300
 # A PUSH, FETCH OR TUNNEL BLIP IS NO VERDICT ON THE CHANGE (audit #6, 2026-10-28: entry 67 "the push failed (pre-push
 # hook or remote)" was a tunnel error in its tail; a fixer GAVE UP on it): such a failure, a stalled push, a lock that
 # never came free and main moving under every round re-queue the entry (retry_after, at most QUEUE_INFRA_RETRIES),

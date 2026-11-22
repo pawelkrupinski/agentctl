@@ -787,13 +787,6 @@ def escalation_stale(it, ev):
     return float(it.get("entered_at") or 0) > float(ev["at"])
 
 
-def escalation_resolved(st, ev):
-    """The escalation's item has moved on (escalation_stale): nothing left to tell. An event with no item is live."""
-    if not ev.get("item_type") or not ev.get("item_id"):
-        return False
-    return escalation_stale(st.item(ev["item_type"], ev["item_id"]), ev)
-
-
 def notify_failure(store=None):
     """{at, cause} of the notifier's last failed delivery (both channels failed), or None: invariant WN's reading."""
     try:

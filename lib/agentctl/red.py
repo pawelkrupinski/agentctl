@@ -4648,27 +4648,3 @@ def fix_replay_refusal(repo, commits, store=None, proofs=None):
             outside = (f"{red_what(d)} has a replay: run `{cmd}` at origin/main and at your fix, see base=FAIL "
                        f"head=PASS, and record it as the trailer `Fix-Replay: {cmd} base=FAIL head=PASS`{said}")
     return ("fix-replay-outside", outside) if outside else None
-    try:
-        with no_vault():  # THE LAPTOP'S LAND NEEDS NO VAULT: never `secrets` for this read (no token: no refusal)
-            items = [it for it in (store or Store()).items("red") if it["data"].get("key")
-                     and it["state"] not in RED_TERMINAL]
-    except (Exception, SystemExit):
-        return None
-    for it in items:
-        d = it["data"]
-        if not named & {str(x) for x in red_names(d) if x is not None}:
-            continue
-        if not red_workflows_on_main(repo) and (red_repo_conf(red_repo_of(d)) or {}).get("red_workflows"):
-            return (f"{RED_WORKFLOWS_FILE} is missing on {remote()}/main, though red-repos.json says "
-                    f"{red_repo_of(d)} keeps one: no Fixes-Red lands for {red_what(d)} until it is back (its rows say "
-                    "which reds need a `Fix-Replay:`)")
-        cmd = red_replay_command(repo, d)
-        if not cmd:
-            continue
-        stem = red_workflow_policy(repo, d.get("workflow"))["replay"].split("{run}")[0].strip()
-        ok = [r for r in replays if r[0].startswith(stem)]
-        if not any(r[1:] == ("FAIL", "PASS") for r in ok):
-            seen = f" (this push says base={ok[0][1]} head={ok[0][2]})" if ok else ""
-            return (f"{red_what(d)} has a replay: run `{cmd}` at origin/main and at your fix, see base=FAIL head=PASS, "
-                    f"and record it as the trailer `Fix-Replay: {cmd} base=FAIL head=PASS`{seen}")
-    return None

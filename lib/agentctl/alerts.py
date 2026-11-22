@@ -23,7 +23,6 @@
 #      entry is routed and stamped, and the older unread entries of one item are folded into its newest (acked, counted),
 #      so the switch-over floods nobody.
 ALERT_INDEX_VERSION = 1
-ALERT_AUDIENCES = ("owner", "author", "fixer", "info")
 ALERT_OWNER_KINDS = {"BLOCKED", "RED_BUDGET", "UNLANDED_ORPHAN", "ORPHAN_SUBMITTED", "REVERT_NOTICE"}  # a decision, what its bounded fixer
 # left undone, recovery queueing somebody's work (its owner may need to stop it), or a revert to route (reverts.py)
 ALERT_AUTHOR_KINDS = {"NOT_LANDED", "PRECHECK_REFUSED", "RED", "RED_AUTHOR", "FIX_FAILED", "FIX_NOT_COUNTED", "BRANCH_RED", "RED_REVERT",

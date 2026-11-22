@@ -26,7 +26,6 @@
 # Over-inclusion is the safe side: an identifier that merely LOOKS like a definition's name pulls it in. Anything that
 # cannot be read (a file, a statement, no project for a module) answers None: the full round.
 BUILD_VIEW_PATHS = re.compile(r"^([^/]+\.sbt|project/.*)$")  # every root *.sbt is the build (sbt reads them all)
-SCALA_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 SBT_DEF = re.compile(r"^(?:lazy\s+val|val|def)\s+([A-Za-z_][A-Za-z0-9_]*)")
 SBT_PROJECT_DIR = re.compile(r"\bproject\s*(?:in|\.in)\s*\(?\s*file\(\s*\"([^\"]*)\"\s*\)")
 SCALA_MEMBER = re.compile(r"^(?:(?:private(?:\[\w+\])?|protected|override|final|implicit|lazy|sealed|case)\s+)*"

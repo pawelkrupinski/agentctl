@@ -153,15 +153,6 @@ def launchctl_kick():
         err(f"launchctl kickstart {TUNNEL_LABEL}: no answer in 30 s")
 
 
-def kick_tunnel():
-    launchctl_kick()
-    for _ in range(15):
-        if port_open(tunnel_ports()[0][0]):
-            return True
-        time.sleep(1)
-    return False
-
-
 # ---- THE TUNNEL HEALTH (2026-10-27: the tunnel's ssh was alive but its connections hung; only a *refused* connection
 # was kicked). The always-on processor probes GET <store>/ each cycle (5 s): 2 failures in a row kick it (at most once a minute, logged), and a
 # kick that does not restore it within 2 min is ONE STALLED inbox entry.
