@@ -520,7 +520,7 @@ def inv_wf(reading=False, lsof_out=None):
 WATCHDOG_MISSES = 2  # consecutive passes a self-healing invariant (W5, WM, W7) fails before its condition opens
 
 INVARIANTS = {"WB": inv_wb, "W1": inv_w1, "WR": inv_wr, "W2": inv_w2, "W5": inv_w5, "W6": inv_w6, "W7": inv_w7, "W8": inv_w8, "WM": inv_wm,
-              "WN": inv_wn, "WF": inv_wf}
+              "WN": inv_wn, "WF": inv_wf, "WP": inv_wp, "WT": inv_wt}
 
 
 def probe_invariant(a):

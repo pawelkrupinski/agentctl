@@ -30,7 +30,7 @@ PARTS = ("core", "timefmt", "statefile", "moviestools", "forge", "ghapp", "class
          "redearly", "redtick", "redblock", "redvault", "ask", "owner", "cpu", "gov", "slots", "landwatch", "waiting",
          "queue", "queuerecheck", "queuesubmit", "queueuntil", "queueslots", "queueclose", "queuediff", "queuepush",
          "queuebatch", "remote", "batch", "changekind", "tools", "cleanup", "maint", "blame", "explorer", "reverts",
-         "server", "upkeep", "watchdog", "inbox", "alerts", "recovery", "projector", "status", "live", "stats", "cli")
+         "server", "upkeep", "procwatch", "watchdog", "inbox", "alerts", "recovery", "projector", "status", "live", "stats", "cli")
 
 
 class Namespace(_types.ModuleType):

@@ -325,5 +325,74 @@ class TableJudgedInvariantsTest(unittest.TestCase):
         self.assertNotIn("fix-run", why)
 
 
+class RunawayProcessTest(unittest.TestCase):
+    """WP / WT (2026-11-22): fseventsd at 21.5 GB and over 100% CPU for days, mds_stores hot beside it, fed by 174
+    leaked test roots -- and no invariant said so. WP watches every process from samples kept between passes."""
+
+    def setUp(self):
+        import tempfile
+        self.d = tempfile.mkdtemp()
+        self.state = os.path.join(self.d, "procwatch.json")
+
+    def ps(self, *rows):
+        return "\n".join(f"{pid} {rss_kb} {cpu} {name}" for pid, rss_kb, cpu, name in rows)
+
+    def test_a_daemon_growing_past_its_rss_bound_is_named_with_the_owners_fix(self):
+        gb = 1024 * 1024
+        ok, _ = A.inv_wp(self.ps((322, 20 * gb, 40.0, "/usr/sbin/fseventsd")), now_=1000.0, state_path=self.state)
+        self.assertTrue(ok, "one sample is no trend")
+        ok, detail = A.inv_wp(self.ps((322, int(21.5 * gb), 40.0, "/usr/sbin/fseventsd")), now_=1600.0,
+                              state_path=self.state)
+        self.assertFalse(ok)
+        self.assertIn("fseventsd pid 322: RSS 21.5 GB (from 20.0 GB", detail)
+        self.assertIn("`sudo killall fseventsd`", detail)
+        self.assertIn("Spotlight", detail)
+        ok, _ = A.inv_wp(self.ps((322, int(21.5 * gb), 40.0, "/usr/sbin/fseventsd")), now_=2200.0,
+                         state_path=self.state)
+        self.assertFalse(ok, "past the bound, not shrinking: still the episode")
+
+    def test_a_big_process_that_holds_steady_is_no_runaway(self):
+        gb = 1024 * 1024
+        for t, kb in ((0.0, 8 * gb), (600.0, 8 * gb + 300), (1200.0, 8 * gb + 900)):  # mds_stores at 7.9 GB, +KB
+            ok, detail = A.inv_wp(self.ps((719, kb, 9.0, "mds_stores")), now_=t, state_path=self.state)
+            self.assertTrue(ok, detail)
+
+    def test_a_process_hot_for_twenty_minutes_is_a_runaway_and_a_cool_one_is_not(self):
+        rows = lambda cpu: self.ps((88, 50_000, cpu, "mds_stores"))  # noqa: E731
+        for t in (0, 600, 1199):
+            ok, _ = A.inv_wp(rows(130.0), now_=float(t), state_path=self.state)
+            self.assertTrue(ok, f"hot for {t} s only")
+        ok, detail = A.inv_wp(rows(130.0), now_=1200.0, state_path=self.state)
+        self.assertFalse(ok)
+        self.assertIn("mds_stores pid 88: CPU 130%, over 90% for 20 min", detail)
+        ok, _ = A.inv_wp(rows(5.0), now_=1300.0, state_path=self.state)
+        self.assertTrue(ok, "it cooled: the episode ended")
+
+    def test_one_of_ours_is_named_by_the_worktree_it_runs_in(self):
+        for t in (0.0, 1300.0):
+            ok, detail = A.inv_wp(self.ps((501, 90_000, 99.0, "java")), now_=t, state_path=self.state,
+                                  cwd_of=lambda pid: os.path.join(A.HOME, "projects", "movies-wt-x"))
+        self.assertFalse(ok)
+        self.assertIn("ours: it runs in ~/projects/movies-wt-x", detail)
+        self.assertNotIn("killall", detail)
+
+    def test_wt_counts_the_stale_test_roots_and_the_worktrees_holding_build_output(self):
+        import tempfile, time as _t
+        tmp, projects = tempfile.mkdtemp(), tempfile.mkdtemp()
+        old = _t.time() - 3 * A.TEST_TMP_MAX_AGE
+        for n in range(A.WT_STALE_MAX + 1):
+            p = os.path.join(tmp, f"agentctl-t-{n}")
+            os.makedirs(p)
+            os.utime(p, (old, old))
+        os.makedirs(os.path.join(projects, "movies-wt-a", "target"))
+        os.makedirs(os.path.join(projects, "movies-wt-b"))
+        ok, detail = A.inv_wt(tmp_root=tmp, projects=projects)
+        self.assertFalse(ok)
+        self.assertIn(f"{A.WT_STALE_MAX + 1} test roots", detail)
+        self.assertIn("1 worktrees hold build output", detail)
+        self.assertIn("WP", A.INVARIANTS)
+        self.assertIn("WT", A.INVARIANTS)
+
+
 if __name__ == "__main__":
     unittest.main()
