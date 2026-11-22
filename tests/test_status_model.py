@@ -32,6 +32,29 @@ class StatusModelTest(unittest.TestCase):
         self.assertEqual((rc, text), (1, h["gate_text"]))
         self.assertTrue(self.out(["status"])[1].startswith(h["line"]))
 
+    def test_the_line_reads_the_snapshot_only_within_its_budget(self):
+        """2026-11-22: the owner's status line read "gate ?" -- ~/bin/claude-statusline gives `status --line` a short
+        timeout, and it took 2-4.6 s: cmd_status asked the store (laptop_role_standby, an RPC over the lossy tunnel) for
+        a STANDBY line that --line never prints. The line is the processor's snapshot alone: no RPC, no network."""
+        A.state_update(tick_at=self.t - 3, waiting=[], queued=[],
+                       summary={"at": int(self.t - 10), "repo": A.SHORT["movies"], "line": "gate green"})
+        asked = []
+        names = ("laptop_role_standby", "on_ci_runner")
+        saved = {n: getattr(A, n) for n in names}
+        self.addCleanup(lambda: [setattr(A, n, v) for n, v in saved.items()])
+        A.laptop_role_standby = lambda *x, **k: (asked.append("standby"), time.sleep(3), "standby")[2]
+        A.on_ci_runner = lambda: False
+        import socket
+        real = socket.create_connection
+        socket.create_connection = lambda *x, **k: (asked.append("network"), real(*x, **k))[1]
+        self.addCleanup(lambda: setattr(socket, "create_connection", real))
+        t0 = time.monotonic()
+        rc, line = self.out(["status", "--line"])
+        took = time.monotonic() - t0
+        self.assertEqual((rc, asked), (0, []), "the line asked the store or the network")
+        self.assertIn("gate green", line)
+        self.assertLess(took, 0.5, f"status --line took {took:.2f} s")
+
     def test_a_stale_or_missing_gate_reads_unread_everywhere(self):
         self.assertEqual(A.status_gate_text({}, self.t), "gate UNREAD (as of never: no fresh published gate)")
         A.state_update(tick_at=self.t, summary={"at": int(self.t - 3600), "repo": A.SHORT["movies"], "line": "gate green"})
