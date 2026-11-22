@@ -259,8 +259,24 @@ class DecideTest(AskBase):
         self.assertEqual(A.red_owner_reminders(self.st, self.t[0]), [], "answered: no more reminders")
         it = A.red_offer(self.st, it, "offered again", escalate=False)
         _text, short = self.view(it)
-        self.assertTrue(short.startswith("IN PROGRESS (decided: baseline the 2 Titans flips)"), short)
+        self.assertRegex(short, r"\(decided \d\d:\d\dZ: baseline the 2 Titans flips\)$")
         self.assertEqual(A.red_picture(it["data"])["decision"]["answer"], "baseline the 2 Titans flips")
+
+    def test_the_view_leads_with_its_state_and_a_vault_decision_reads_as_released_never_cut_mid_word(self):
+        """2026-11-22, Order independence #105: "IN PROGRESS (decided: the owner is at the machine (`decide
+        vault-movies`: here). No other session's un" led its status hours after the vault block cleared."""
+        vault = {"key": "k", "decision": {"answer": "the owner is at the machine (`decide vault-movies`: here). No other "
+                                                    "session's unlock lets yours use the vault", "status": "in-progress",
+                                          "category": "vault", "at": 1795328100.0}}
+        text, short = A.red_decided_view(vault, "fix waiting to land", "fix waiting to land")
+        self.assertEqual(short, "fix waiting to land (vault released 06:15Z)")
+        self.assertNotIn("IN PROGRESS", text)
+        long = {"key": "k", "decision": {"answer": "revert f64d8a73a (the house-production banner guard): it drops the "
+                                                   "two right Lichfield takes", "status": "in-progress", "at": 1795330800.0}}
+        _t, short = A.red_decided_view(long, "leased", "leased")
+        self.assertTrue(short.startswith("leased (decided 07:00Z: revert f64d8a73a"), short)
+        self.assertTrue(short.endswith("…)"), short)
+        self.assertNotIn("Lichf", short.replace("Lichfield", ""), "cut at a word boundary, never mid-word")
 
     def test_the_fixer_is_briefed_with_the_answer(self):
         u = {"workflow": "Identity model convergence", "job": "j", "kind": "test", "line": "drift",
@@ -283,7 +299,7 @@ class DecideTest(AskBase):
         self.assertEqual(d["decision"]["status"], "in-progress")
         self.assertEqual(d["decision"]["answer"], "baseline them")
         self.assertTrue(d["decision"]["question"], "the question is kept with the answer")
-        self.assertIn("IN PROGRESS (decided: baseline them)", self.view(self.st.item("red", it["id"]))[1])
+        self.assertRegex(self.view(self.st.item("red", it["id"]))[1], r"\(decided \d\d:\d\dZ: baseline them\)$")
 
     def test_decide_on_a_red_closed_since_says_it_is_resolved_and_acks_its_alert(self):
         """The owner, 2026-11-06: `decide 971723aec893 "yes: fix the stuck limit as proposed"` answered "names no open

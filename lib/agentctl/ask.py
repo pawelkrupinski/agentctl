@@ -13,7 +13,7 @@
 #     ASK_REMIND_FIRST, doubling up to ASK_REMIND_MAX, by a notification only (no inbox entry: one live reminder per
 #     red, never one per tick or per fixer attempt), until the red leaves the block.
 #   - THE OWNER ANSWERS with `agentctl decide <red> "<answer>"`: the answer is stored, the block lifted, the red reads
-#     IN PROGRESS (decided: <answer>) and is offered again -- its fixer is briefed with the answer (fixer_prompt). If the
+#     <its state> (decided HH:MMZ: <answer>) and is offered again -- its fixer is briefed with the answer (fixer_prompt). If the
 #     decided action fails (NOT LANDED, GAVE UP, DIAGNOSED, its fix change rejected), the red goes back on the owner
 #     with "you decided X; the action failed: Y" (red_decision_failed): never silently left as it was.
 #   - It clears itself as before: the block's own probe (a newer run no longer failing this way, the workflow green),
@@ -133,13 +133,28 @@ def red_decision(d):
     return dec if dec.get("status") == "in-progress" and dec.get("answer") else None
 
 
+def clean_cut(text, n=60):
+    """text at most n characters, cut at a word boundary with an ellipsis, never mid-word."""
+    text = " ".join(str(text or "").split())
+    if len(text) <= n:
+        return text
+    cut = text[:n].rsplit(" ", 1)[0].rstrip(" ,;:.(-")
+    return (cut or text[:n]) + "…"
+
+
 def red_decided_view(d, text, short):
-    """(text, short) of a red whose owner's decision is being acted on: IN PROGRESS (decided: <answer>) first."""
+    """(text, short) of a red whose owner's decision is being acted on: ITS STATE FIRST, the decision after it as a
+    clean summary (2026-11-22, Order independence #105: "IN PROGRESS (decided: the owner is at the machine (`decide
+    vault-movies`: here). No other session's un" led its status hours after that vault block had cleared, cut
+    mid-word, and read to the owner as a new question for him). A vault decision only let the fixer use the vault:
+    "vault released HH:MMZ"."""
     dec = red_decision(d)
     if not dec:
         return text, short
-    head = f"IN PROGRESS (decided: {str(dec['answer'])[:80]})"
-    return f"{head} -- {text}", f"{head}; {short}"
+    at = f" {time.strftime('%H:%MZ', time.gmtime(float(dec['at'])))}" if dec.get("at") else ""
+    tail = (f"vault released{at}" if dec.get("category") == "vault"
+            else f"decided{at}: {clean_cut(dec['answer'])}")
+    return f"{text} ({tail})", f"{short} ({tail})"
 
 
 def ask_interval(n):
