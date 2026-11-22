@@ -43,6 +43,7 @@ class TempRootTest(unittest.TestCase):
         p = self.run.start_worker(60, dict(os.environ), subprocess.DEVNULL)
         root = p.root
         self.assertTrue(os.path.basename(root).startswith("agentctl-t-"), root)
+        self.assertEqual(os.path.dirname(root), "/tmp", "a short root, whatever the runner's TMPDIR")
         os.makedirs(os.path.join(root, "repo", "remote.git", "hooks"))
         p.kill()  # as the runner kills a worker past its per-test timeout, or a hook's `timeout -s KILL`
         p.wait()

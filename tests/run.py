@@ -95,7 +95,9 @@ def worker(timeout):
 # none of its own), removes it once the worker has ended however it ended, and fails the run if one survives.
 def start_worker(timeout, env, stderr):
     """A worker process in a fresh temp root of its own (p.root)."""
-    root = tempfile.mkdtemp(prefix="agentctl-t-")
+    # in /tmp, as the workers' own were (their TMPDIR stripped): a short path, never the runner's $TMPDIR (macOS's
+    # /var/folders/.../T/ cut a test's ~/projects/<wt> paths at SESSION_PATH_DEPTH and lengthens every socket path)
+    root = tempfile.mkdtemp(prefix="agentctl-t-", dir="/tmp" if os.path.isdir("/tmp") else None)
     with open(os.path.join(root, "owner.pid"), "w") as f:  # upkeep's sweep never removes a live runner's root
         f.write(str(os.getpid()))
     p = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--worker", "--timeout", str(timeout)],
