@@ -1,6 +1,6 @@
 # agentctl, part `notifyurl`: where an owner notification's click goes (the owner, 2026-11-03: "can agentctl notifications
 # open a tab in chrome when clicked and highlight the relevant section?").
-# Runs inside agentctl's one namespace (it uses core's gh_json, HOME, state_root).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 # A red -> the failing JOB's page anchored at the failing step (GitHub highlights it); else the run; an ask with no run
 # -> a local HTML page of the question, its section highlighted by :target; anything else -> None (a plain notification).
 

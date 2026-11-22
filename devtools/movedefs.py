@@ -1,30 +1,29 @@
 #!/usr/bin/env python3
-"""Move top-level definitions between parts of agentctl's one namespace, as a pure move.
+"""Move top-level definitions between agentctl's modules, as a pure move.
 
-usage: movedefs.py <lib/agentctl> <to-part> [--new "<description>" --after <part>] [--before <name>] <name>...
-Each named top-level statement (def/class/assignment, with the comment block right above it) is cut from its part and
-appended, in source order, to <to-part> (created after --after when new), or inserted, in that order, right before the
-statement binding <name> there (--before: a module-level statement there reads them). Proof: every function's bytecode in the
-loaded namespace is unchanged (run samecode.py after)."""
+usage: movedefs.py <lib/agentctl> <to-module> [--new "<description>"] [--before <name>] <name>...
+Each named top-level statement (def/class/assignment, with the comment block right above it) is cut from its module and
+appended, in source order, to <to-module> (created, and listed in MODULES, with --new), or inserted, in that order,
+right before the statement binding <name> there (--before: a module-level statement there reads them). Then:
+mkmodule.py <to-module> (its imports), retarget.py (the importers'), unused.py --fix (the dead ones). Proof: sameast.py
+(the same statements) and samecode.py (every function's bytecode unchanged)."""
 import ast
 import os
 import sys
 
-from partlist import parts_and_modules, place
+from partlist import module_list, write_modules
 
 lib = sys.argv[1]
 to = sys.argv[2]
 args = sys.argv[3:]
-new_desc, after, before = None, None, None
+new_desc, before = None, None
 if "--new" in args:
     i = args.index("--new"); new_desc = args[i + 1]; del args[i:i + 2]
 if "--before" in args:
     i = args.index("--before"); before = args[i + 1]; del args[i:i + 2]
-if "--after" in args:
-    i = args.index("--after"); after = args[i + 1]; del args[i:i + 2]
 names = set(args)
 init = os.path.join(lib, "__init__.py")
-parts = parts_and_modules(lib)[0]
+parts = module_list(lib)
 
 
 def stmt_spans(src):
@@ -85,13 +84,9 @@ placing = False
 if new_desc is not None:  # every check before the first write: a refused move writes nothing
     if os.path.exists(tpath):
         sys.exit(f"{tpath} exists")
-    all_parts, modules = parts_and_modules(lib)
-    if after not in all_parts:
-        sys.exit(f"--after {after}: not in PARTS")
-    new_order = all_parts[:all_parts.index(after) + 1] + [to] + all_parts[all_parts.index(after) + 1:]
     placing = True
-    body = (f"# agentctl, part `{to}`: {new_desc}\n# Runs inside agentctl's one namespace, after the parts before it in "
-            f"lib/agentctl/__init__.py's PARTS (it uses their names).\n")
+    body = (f"# agentctl, part `{to}`: {new_desc}\n# A real module (lib/agentctl/__init__.py MODULES): its own imports, "
+            f"the standard library's and MODULES' only.\n")
 else:
     body = open(tpath).read()
 body = body.rstrip("\n")
@@ -107,6 +102,6 @@ else:
 for path, text in writes.items():
     open(path, "w").write(text)
 if placing:
-    place(lib, new_order, modules)
+    write_modules(lib, parts + [to])  # mkmodule.py, writing its imports, sorts it into place
 open(tpath, "w").write(body + "\n")
 print(f"moved {len(moved)} statements into {to}")

@@ -108,7 +108,7 @@ def _agentctl_modules():
 
 def _fresh_proxies():
     """ONE proxy per stdlib module for all of agentctl's modules: `A.time.sleep = fake` fakes the sleep of the
-    namespace and of every real module (lib/agentctl MODULES) alike."""
+    tests' view (tests/agentctl_view.py) and of every module (lib/agentctl MODULES) alike."""
     proxies = {name: ModuleProxy(real) for name, real in _PROXIED.items()}
     for mod in _agentctl_modules():
         for name, real in _PROXIED.items():

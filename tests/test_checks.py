@@ -5,7 +5,7 @@ import contextlib, io, json, os, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, StallSamples  # noqa: E402
+from test_agentctl import A, StallSamples, TOOL  # noqa: E402
 
 DAY = 86400
 
@@ -95,12 +95,10 @@ class SlotTest(unittest.TestCase):
     def holder(self, seconds):
         """Another process holding a check ticket for `seconds`."""
         ready = os.path.join(self.tmp.name, "ready")
-        code = ("import sys, time, importlib.machinery, importlib.util\n"
-                "l = importlib.machinery.SourceFileLoader('agentctl', sys.argv[1])\n"
-                "s = importlib.util.spec_from_loader('agentctl', l); A = importlib.util.module_from_spec(s); l.exec_module(A)\n"
+        code = (f"import sys, time; sys.path.insert(0, {HERE!r}); from agentctl_view import load; A = load(sys.argv[1])\n"
                 "t = A.gov_admit('check', 1.0, 'land movies-wt-x abc', kind='check')\n"
                 "open(sys.argv[2], 'w').close(); time.sleep(float(sys.argv[3]))")
-        p = subprocess.Popen([sys.executable, "-c", code, A.__file__, ready, str(seconds)])
+        p = subprocess.Popen([sys.executable, "-c", code, TOOL, ready, str(seconds)])
         self.procs.append(p)
         while not os.path.exists(ready):
             time.sleep(0.05)

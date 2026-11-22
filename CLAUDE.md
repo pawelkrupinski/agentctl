@@ -53,23 +53,21 @@ movies model (movies "Code quality ratchets" and "Coupling"):
   the push with the fix; it is never skipped. `ratchet.py selftest` (the hook runs it first) seeds a violation of every
   kind and must see each refused. Measures: `quality/measure.py` (`--all` for every row), `quality/typecheck.py
   --errors` (every mypy error, mapped back to its part and line).
-- ONE NAMESPACE: the parts share one namespace (`lib/agentctl/__init__.py`), so a part's coupling is the top-level
-  names it uses that another part defines (a FOUNDATION -- a part using no part but other foundations, a leaf
-  helper like `statefile` -- is no collaborator: extracting a concept into its own part never raises its users'
-  fan-out), and mypy checks the parts concatenated in `PARTS` order.
-- REAL MODULES (`MODULES`, loaded before every namespace part: `devtools/placemodules.py`) import the standard
-  library and other modules only, so a module's dependencies are its `from agentctl.<module> import` lines. What a
-  module must not import -- the remote store, a missing token's inbox condition -- is wired at the composition root
-  (cli: `wire_store(process_store)`, `wire_token_missing_note(token_unavailable_note)`), never reached by a module
-  calling up.
-- The migration's tools (`devtools/`, tested by `tests/test_devtools.py`): `defgraph.py --cycles` (the scope-aware
-  graph of every top-level definition, and its cycles), `movedefs.py` and `split_part.py` (pure moves between parts),
-  `sameast.py` / `samecode.py` (their proofs: the same statements, the same bytecode), `mkmodule.py` (a part into a
-  real module, refused while it reads a namespace name), `partdeps.py` (the parts nearest to a module and what
-  blocks each), `placemodules.py` (modules first in PARTS), `closure.py` (a definition's closure among the namespace
-  parts), `moveplan.py` (the part order with fewest upward reads, the move plan that
-  leaves none, a part's stuck definitions, who reads a definition), `retarget.py` (repoint the modules' imports after a move), `unused.py` (drop a module's dead imports),
-  `suite-at.sh` (the full suite on a snapshot of a revision; `cov`: branch coverage, the venv's python running it).
+- REAL MODULES (2026-11-22; `lib/agentctl/__init__.py`): every part is a module importing the standard library and
+  the modules before it in `MODULES` (import order, written by `devtools/placemodules.py`), so a part's coupling is the
+  modules it imports (a FOUNDATION -- a module importing no module but other foundations, a leaf helper like
+  `statefile` -- is no collaborator: extracting a concept into its own module never raises its users' fan-out), and
+  mypy checks the modules concatenated in `MODULES` order. What a module must not import -- the remote store, a
+  missing token's inbox condition -- is wired at the composition root (cli: `wire_store(process_store)`,
+  `wire_token_missing_note(token_unavailable_note)`), never reached by a module calling up. The tests read and patch
+  the modules as one object, `A` (`tests/agentctl_view.py`: `A.<name> = fake` replaces the name in every module
+  binding it), until the collaborators are injected.
+- The restructuring's tools (`devtools/`, tested by `tests/test_devtools.py`): `movedefs.py` (a pure move of
+  top-level definitions between modules, `--new` making one), then `mkmodule.py` (the imports a module now lacks),
+  `retarget.py` (repoint the importers), `unused.py` (drop the dead imports) and `placemodules.py` (MODULES in import
+  order); `sameast.py` / `samecode.py` (the proofs: the same statements, the same bytecode); `suite-at.sh` (the full
+  suite on a snapshot of a revision; `cov`: branch coverage, the venv's python running it); `stats.sh` (the
+  complexity stats against the owner's start).
 
 ## Design (movies "Design rules")
 
@@ -91,5 +89,5 @@ movies model (movies "Code quality ratchets" and "Coupling"):
 
 Movies "Cleanup and displaced-code audit": remove what the change made obsolete (dead functions, unreachable
 branches, stale comments and tests, now-redundant copies) in the same change; name what you saw and did not do.
-`vulture` (in the quality venv) finds candidates; check each by hand (the one namespace hides call sites from it:
+`vulture` (in the quality venv) finds candidates; check each by hand (the tests' `A.<name>` hides call sites from it:
 `grep -rn '<name>' agentctl lib tests`).

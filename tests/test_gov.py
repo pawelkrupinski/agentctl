@@ -5,7 +5,7 @@ import contextlib, io, json, os, subprocess, sys, tempfile, threading, time, uni
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A  # noqa: E402
+from test_agentctl import A, TOOL  # noqa: E402
 
 KEYS = ("AGENTCTL_GOV_CPU_FACTOR", "AGENTCTL_RUNNERS_PAGE_CACHE", "AGENTCTL_GOV_DIR", "AGENTCTL_GOV_FREE_PROBE", "AGENTCTL_GOV_PRESSURE_PROBE", "AGENTCTL_GOV_LOAD_PROBE",
         "AGENTCTL_GOV_POLL", "AGENTCTL_GOV_BUSY_PROBE", "AGENTCTL_GOV_PS_PROBE", "AGENTCTL_GOV_BUDGET_GB", "AGENTCTL_GOV_RESERVE_GB", "AGENTCTL_GOV_EVICT_SETTLE",
@@ -268,7 +268,7 @@ class GovernorTest(unittest.TestCase):
     def test_a_shell_holds_its_ticket_on_descriptor_7(self):
         ticket = os.path.join(A.gov_dir(), "t-shell.lock")
         flag = os.path.join(self.d, "admitted")
-        p = subprocess.Popen(["bash", "-c", f'exec 7>>"{ticket}"; "{sys.executable}" "{A.__file__}" gov admit --fd 7 '
+        p = subprocess.Popen(["bash", "-c", f'exec 7>>"{ticket}"; "{sys.executable}" "{TOOL}" gov admit --fd 7 '
                                             f'--ticket "{ticket}" --class agent --label shell --pid $$ --try && '
                                             f'touch "{flag}"; while [ ! -e "{flag}.release" ]; do sleep 0.05; done'])
         self.procs.append(p)

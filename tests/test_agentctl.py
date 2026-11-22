@@ -1,6 +1,6 @@
 """Tests for ~/bin/agentctl: python3 -m unittest discover -s ~/bin/tests -v"""
 from unittest import mock
-import contextlib, re, datetime as dt, importlib.machinery, importlib.util, io, json, os, subprocess, sys, tempfile, threading, time, unittest
+import contextlib, re, datetime as dt, io, json, os, subprocess, sys, tempfile, threading, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -17,11 +17,8 @@ if not os.environ.get("AGENTCTL_TEST_RUN_TMP"):
 tempfile.tempdir = os.environ["AGENTCTL_TEST_RUN_TMP"]
 TOOL = os.environ.get("AGENTCTL_UNDER_TEST") or os.path.join(HERE, "..", "agentctl")
 os.environ.setdefault("AGENTCTL_CONFIG", "-")  # no config file of the machine's: the code's defaults, then the test's env
-_loader = importlib.machinery.SourceFileLoader("agentctl", TOOL)
-_spec = importlib.util.spec_from_loader("agentctl", _loader)
-A = importlib.util.module_from_spec(_spec)
-sys.modules["agentctl"] = A  # the namespace is the package its real modules (MODULES) import under: A.<name> reaches them
-_loader.exec_module(A)
+from agentctl_view import load as _load_view  # noqa: E402
+A = _load_view(TOOL)  # the tests' view of every module (tests/agentctl_view.py): A.<name> reads and patches them all
 # THE GH TALLY NEVER PRINTS INTO A TEST (2026-11-19, a042390's CI): a worker process alive past GH_TALLY_SECONDS (a
 # suite over 300 s on a slow runner) printed its `agentctl: github calls (pid ...)` tally into a fixer land's captured
 # output, and three test_red_fix_lands_fast tests read it as the land's last line. test_forge's tally test sets its own.
@@ -52,13 +49,10 @@ class approved:
 
 
 def code_source():
-    """ALL of agentctl's code as one text, in the order it runs: the entry, then lib/agentctl's PARTS (a test that
-    reads the source -- "only transition writes a state" -- must see every part)."""
+    """ALL of agentctl's code as one text: the entry, then lib/agentctl's MODULES in import order (a test that reads
+    the source -- "only transition writes a state" -- must see every module)."""
     lib = os.path.join(os.path.dirname(os.path.realpath(TOOL)), "lib", "agentctl")
-    ns = {"__name__": "agentctl._parts"}
-    with open(os.path.join(lib, "__init__.py")) as f:
-        exec(f.read(), ns)
-    texts = [open(TOOL).read()] + [open(os.path.join(lib, f"{p}.py")).read() for p in ns["PARTS"]]
+    texts = [open(TOOL).read()] + [open(os.path.join(lib, f"{p}.py")).read() for p in A.MODULES]
     return "\n".join(texts)
 
 # No test writes to the real inbox (~/.cache/agentctl/inbox): every land / watch / wait a test runs writes its verdict

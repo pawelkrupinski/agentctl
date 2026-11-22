@@ -153,9 +153,7 @@ class TokenResolutionTest(Base):
 
     def test_detached_env_i_run_succeeds_through_the_socket(self):
         self.serve()
-        code = ("import importlib.machinery as m, importlib.util as u, sys\n"
-                f"l = m.SourceFileLoader('agentctl', {TOOL!r}); s = u.spec_from_loader('agentctl', l)\n"
-                "A = u.module_from_spec(s); l.exec_module(A)\n"
+        code = (f"import sys; sys.path.insert(0, {HERE!r}); from agentctl_view import load; A = load({TOOL!r})\n"
                 f"print(A.token({MOVIES!r}))\n")
         env = {"HOME": os.path.expanduser("~"), "PATH": "/usr/bin:/bin", "AGENTCTL_SOCK_DIR": self.sock_dir,
                "AGENTCTL_MOVIES_REPO": self.r.path, "AGENTCTL_INBOX_DIR": os.environ["AGENTCTL_INBOX_DIR"],

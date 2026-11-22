@@ -71,10 +71,10 @@ class ExitGuardSignalTest(Base):
         sh(self.r.path, "git", "checkout", "-q", "side")
         mark = os.path.join(self.tmp.name, "started")
         code = textwrap.dedent(f"""
-            import importlib.machinery, importlib.util, sys, time
-            loader = importlib.machinery.SourceFileLoader("agentctl", {TOOL!r})
-            spec = importlib.util.spec_from_loader("agentctl", loader)
-            A = importlib.util.module_from_spec(spec); loader.exec_module(A)
+            import sys, time
+            sys.path.insert(0, {HERE!r})
+            from agentctl_view import load
+            A = load({TOOL!r})
             try:
                 with A.exit_guard(), A.WorktreeGuard({self.r.path!r}):
                     A.git({self.r.path!r}, "rebase", {main!r}, check=False)

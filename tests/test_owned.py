@@ -10,12 +10,11 @@ from test_agentctl import A, TOOL  # noqa: E402
 
 FAKE = os.path.join(HERE, "fake_gh.py")
 
-HOLDER = """
-import importlib.machinery, importlib.util, sys, time
-loader = importlib.machinery.SourceFileLoader("agentctl", sys.argv[1])
-spec = importlib.util.spec_from_loader("agentctl", loader)
-A = importlib.util.module_from_spec(spec)
-loader.exec_module(A)
+HOLDER = f"""
+import sys, time
+sys.path.insert(0, {HERE!r})
+from agentctl_view import load
+A = load(sys.argv[1])
 with A.Owned("test", "k1", argv=["test"]) as o:
     print("held", flush=True)
     while True:

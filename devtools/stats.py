@@ -5,10 +5,12 @@
 
 START defaults to 27b12c3 (before the simplify lanes, the owner's baseline), REV to origin/main, the repo to this
 checkout. Each side is a `git archive` snapshot. Per side: the production lines (the entry and lib/agentctl/*.py),
-its files, the parts and real modules (lib/agentctl/__init__.py's PARTS / MODULES), the functions past ANY function
+its files, the parts and real modules (lib/agentctl/__init__.py's PARTS / MODULES; since the namespace went, every
+part a module), the functions past ANY function
 limit, the rows past each kind's limit, and the mypy errors its types baseline records (quality/types-baseline.tsv:
 the types ratchet's sum; mypy itself is not re-run, nor coverage -- each takes minutes, the suite's own run).
 --python: the interpreter with the measure's pinned tools (default: what quality/tools.py prints)."""
+import ast
 import json
 import os
 import subprocess
@@ -17,8 +19,6 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-sys.path.insert(0, HERE)
-from partlist import parts_and_modules  # noqa: E402
 
 KINDS = ("cognitive", "cyclomatic", "method-lines", "inner-defs", "file-lines", "copies", "fan-out", "cycle")
 FUNCTION_KINDS = ("cognitive", "cyclomatic", "method-lines", "inner-defs")
@@ -29,6 +29,26 @@ def snapshot(repo, rev, into):
     os.makedirs(into)
     tar = subprocess.run(["git", "-C", repo, "archive", rev], capture_output=True, check=True).stdout
     subprocess.run(["tar", "-x", "-C", into], input=tar, check=True)
+
+
+def part_lists(lib):
+    """(PARTS, MODULES) of a revision's lib/agentctl/__init__.py: an old one's namespace parts and real modules
+    (PARTS = MODULES + NAMESPACE), a new one's modules alone (every part one); ([], []) before the package."""
+    try:
+        tree = ast.parse(open(os.path.join(lib, "__init__.py")).read())
+    except (OSError, SyntaxError):
+        return [], []
+    lists = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            terms = [node.value.left, node.value.right] if isinstance(node.value, ast.BinOp) else [node.value]
+            try:
+                lists[node.targets[0].id] = [n for t in terms for n in (
+                    lists[t.id] if isinstance(t, ast.Name) else ast.literal_eval(t))]
+            except (ValueError, KeyError, TypeError):
+                continue
+    modules = lists.get("MODULES", [])
+    return lists.get("PARTS", modules), modules
 
 
 def side(repo, rev, py, tmp):
@@ -44,10 +64,7 @@ def side(repo, rev, py, tmp):
         if os.path.isfile(p):
             with open(p) as f:
                 lines += sum(1 for _ in f)
-    try:
-        parts, modules = parts_and_modules(lib)
-    except (OSError, KeyError, SyntaxError):
-        parts, modules = [], []
+    parts, modules = part_lists(lib)
     mypy = None
     tb = os.path.join(d, "quality", "types-baseline.tsv")
     if os.path.exists(tb):

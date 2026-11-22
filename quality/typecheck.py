@@ -3,9 +3,9 @@
 
   python3 quality/typecheck.py [--root DIR] [--errors]    rows (--errors: every error, mapped back to its part and line)
 
-ONE NAMESPACE (lib/agentctl/__init__.py): the parts read each other's names without imports, so mypy checking a part
-alone would call every such name undefined. mypy checks what the entry runs instead: the parts concatenated in PARTS
-order, one module, exactly the namespace agentctl executes; each error is mapped back to its part's own line.
+mypy checks the modules concatenated in MODULES order (lib/agentctl/__init__.py: import order), one module, their
+`from agentctl.<module> import` lines blanked: the names they import are the concatenation's own. The measure was
+taken so while the parts shared one namespace, and stays comparable; each error is mapped back to its module's line.
 """
 import ast
 import os
@@ -20,20 +20,10 @@ ERROR = re.compile(r"^[^:]+:(\d+): error: (.*)$")
 
 def part_order(root):
     init = os.path.join(root, "lib", "agentctl", "__init__.py")
-    lists = {}  # NAME -> its tuple of part names; PARTS may be a sum of others (MODULES + NAMESPACE)
     for node in ast.parse(open(init).read()).body:
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            value = node.value
-            terms = [value.left, value.right] if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add) \
-                else [value]
-            try:
-                lists[node.targets[0].id] = [n for t in terms for n in (
-                    lists[t.id] if isinstance(t, ast.Name) else ast.literal_eval(t))]
-            except (ValueError, KeyError, TypeError):
-                continue
-    if "PARTS" not in lists:
-        raise SystemExit("types: no PARTS in lib/agentctl/__init__.py")
-    return list(lists["PARTS"])
+        if isinstance(node, ast.Assign) and [getattr(t, "id", None) for t in node.targets] == ["MODULES"]:
+            return list(ast.literal_eval(node.value))
+    raise SystemExit("types: no MODULES in lib/agentctl/__init__.py")
 
 
 def concatenate(root, out):
@@ -42,7 +32,7 @@ def concatenate(root, out):
     with open(out, "w") as f:
         for part in part_order(root):
             text = open(os.path.join(root, "lib", "agentctl", f"{part}.py")).read()
-            # a real module's imports of its siblings are the namespace's own names here: blanked, lines kept
+            # a module's imports of its siblings are the concatenation's own names here: blanked, lines kept
             text = re.sub(r"^from agentctl\.\w+ import (\([^)]*\)|.*)$", lambda m: "\n" * m.group(0).count("\n"), text,
                           flags=re.M)
             if not text.endswith("\n"):
@@ -63,9 +53,9 @@ def locate(starts, line):
 
 
 def mypy_errors(root, run=subprocess.run):
-    """[(part, line, message)] of `mypy --strict` over the concatenated namespace."""
+    """[(part, line, message)] of `mypy --strict` over the concatenated modules."""
     with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "agentctl_namespace.py")
+        path = os.path.join(tmp, "agentctl_modules.py")
         starts = concatenate(root, path)
         cache = os.path.join(os.environ.get("AGENTCTL_QUALITY_HOME") or os.path.expanduser("~/.cache/agentctl-quality"),
                              "mypy-cache")

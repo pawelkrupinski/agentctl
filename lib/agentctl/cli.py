@@ -52,6 +52,7 @@ from agentctl.server import STORE_AUTHS, cmd_laptop, cmd_store, probe_clone_heal
 from agentctl.processor import cmd_tick, cmd_waiting
 from agentctl.queueenter import cmd_land_precheck
 from agentctl.slots import LAND_SUBCOMMANDS, cmd_land
+from agentctl.usage import USAGE
 
 
 # THE COMPOSITION ROOT: what every process wires before any command runs.
@@ -74,7 +75,7 @@ wire_recover_actions({"clear_hold": recover_clear_hold, "tunnel_reset": recover_
 def main(argv=None):
     if (sys.argv[1:] if argv is None else argv) == ["--selftest"]:
         return selftest()
-    ap = argparse.ArgumentParser(prog="agentctl", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(prog="agentctl", description=USAGE, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     w = sub.add_parser("wait")
     wsub = w.add_subparsers(dest="kind", required=True)

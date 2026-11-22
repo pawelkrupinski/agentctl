@@ -1,25 +1,33 @@
 #!/usr/bin/env python3
-"""Pure-move proof over two lib/ trees, loaded: the same names in the namespace, and every function's code (bytecode,
+"""Pure-move proof over two lib/ trees, loaded: the same top-level names across the modules, and every function's code (bytecode,
 names, variables, constants, nested code alike, line numbers aside) unchanged.
 
   python3 devtools/samecode.py <old lib> <new lib>       (lib: the directory holding agentctl/)   exit 0 the same"""
 import dis
-import os
+import importlib
 import sys
 import types
 
 
+def ours():
+    return [k for k in sys.modules if k == "agentctl" or k.startswith("agentctl.")]
+
+
 def load(lib):
-    init = os.path.join(lib, "agentctl", "__init__.py")
-    ns = {"__name__": "agentctl", "__file__": init}
-    saved = {k: v for k, v in sys.modules.items() if k == "agentctl" or k.startswith("agentctl.")}
-    for k in saved:
-        del sys.modules[k]
-    exec(compile(open(init).read(), init, "exec"), ns)
-    for k in [k for k in sys.modules if k == "agentctl" or k.startswith("agentctl.")]:
-        del sys.modules[k]
-    sys.modules.update(saved)
-    return ns
+    """{name: value} of every module's top-level names (MODULES in order, a later module's value of a name winning),
+    lib's package imported on its own and dropped again."""
+    saved = {k: sys.modules.pop(k) for k in ours()}
+    sys.path.insert(0, lib)
+    try:
+        ns = {}
+        for m in importlib.import_module("agentctl").MODULES:
+            ns.update({k: v for k, v in vars(importlib.import_module(f"agentctl.{m}")).items() if not k.startswith("__")})
+        return ns
+    finally:
+        sys.path.remove(lib)
+        for k in ours():
+            del sys.modules[k]
+        sys.modules.update(saved)
 
 
 def instructions(code):

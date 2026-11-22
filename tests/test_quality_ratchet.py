@@ -16,7 +16,7 @@ def tree(parts):
     os.makedirs(lib)
     os.makedirs(os.path.join(root, "quality"))
     with open(os.path.join(lib, "__init__.py"), "w") as f:
-        f.write(f"PARTS = {tuple(parts)!r}\n")
+        f.write(f"MODULES = {tuple(parts)!r}\n")
     for name, text in parts.items():
         with open(os.path.join(lib, f"{name}.py"), "w") as f:
             f.write(textwrap.dedent(text))
@@ -41,9 +41,10 @@ class SeededViolationTest(unittest.TestCase):
     def test_nested_defs_clones_fan_out_and_cycles_refuse(self):
         nested = "def outer():\n    def a():\n        def b():\n            def c():\n                pass\n"
         clone = "".join(f"    v{i} = alpha({i}, beta) + gamma[{i}]\n" for i in range(8))
-        parts = {"a": nested + "\n\ndef c1():\n" + clone + "\n\ndef c2():\n" + clone
+        parts = {"a": "".join(f"from agentctl.p{i} import p{i}\n" for i in range(10)) + "\n\n" + nested
+                 + "\n\ndef c1():\n" + clone + "\n\ndef c2():\n" + clone
                  + "\n\ndef many():\n" + "".join(f"    p{i}()\n" for i in range(10))}
-        parts.update({f"p{i}": f"def p{i}():\n    return many()\n" for i in range(10)})
+        parts.update({f"p{i}": f"from agentctl.a import many\n\n\ndef p{i}():\n    return many()\n" for i in range(10)})
         rc, out = quiet_check(tree(parts))
         self.assertEqual(rc, 1)
         for line in ("NEW   inner-defs outer = 3", "NEW   copies a = 2", "NEW   fan-out a = 10", "NEW   cycle p3 = 1"):
@@ -58,27 +59,23 @@ class SeededViolationTest(unittest.TestCase):
 class FoundationsTest(unittest.TestCase):
     def test_a_leaf_helper_part_is_no_collaborator(self):
         parts = {"leaf": "def helper():\n    return 1\n",
-                 "a": "def many():\n" + "".join(f"    p{i}()\n" for i in range(9)) + "    helper()\n"}
-        parts.update({f"p{i}": f"def p{i}():\n    return many()\n" for i in range(9)})
+                 "a": "".join(f"from agentctl.p{i} import p{i}\n" for i in range(9)) + "from agentctl.leaf import helper\n"
+                      "\n\ndef many():\n" + "".join(f"    p{i}()\n" for i in range(9)) + "    helper()\n"}
+        parts.update({f"p{i}": f"from agentctl.a import many\n\n\ndef p{i}():\n    return many()\n" for i in range(9)})
         rc, out = quiet_check(tree(parts))
         self.assertNotIn("fan-out a", out)  # 9 collaborators and the leaf
+        self.assertIn("NEW   cycle a = 1", out)  # the imports are measured: a and its p's import each other
         self.assertEqual(measure.foundations({"x": set(), "y": {"x"}, "z": {"y", "w"}, "w": {"z"}}), {"x", "y"})
 
-    def test_a_registration_into_a_table_defines_nothing(self):
-        """`TABLE["x"] = v` in a part fills the table another part defines: the registering part uses that part, the
-        defining part does not use it back (the store's MACHINES, each machine's row registered by its owner)."""
+    def test_a_module_uses_exactly_the_modules_it_imports(self):
+        """A registration into another module's table (the store's MACHINES, each machine's row registered by its
+        owner) uses the table's module through its import; the table's module does not use it back."""
         graph = measure.part_graph([(p, path) for p, path in measure.sources(tree({
-            "base": "TABLE = {}\n", "owner": "LIMIT = 3\nTABLE['owner'] = LIMIT\n"})) if p != "__init__"])
-        self.assertEqual(graph, {"base": set(), "owner": {"base"}})
-
-
-    def test_a_local_of_the_same_name_is_no_use_and_a_real_module_uses_what_it_imports(self):
-        graph = measure.part_graph([(p, path) for p, path in measure.sources(tree({
-            "base": "def helper():\n    return 1\n",
-            "shadow": "def f(helper):\n    return helper\n\n\ndef g():\n    helper = 2\n    return helper\n",
+            "base": "TABLE = {}\n\n\ndef helper():\n    return 1\n",
+            "owner": "from agentctl.base import TABLE\n\nLIMIT = 3\nTABLE['owner'] = LIMIT\n",
             "module": "import os\nfrom agentctl.base import helper as h\n\n\ndef k():\n    return h(), os.sep\n"}))
             if p != "__init__"])
-        self.assertEqual(graph, {"base": set(), "shadow": set(), "module": {"base"}})
+        self.assertEqual(graph, {"base": set(), "owner": {"base"}, "module": {"base"}})
 
 
 class FrozenRowsOnlyFallTest(unittest.TestCase):

@@ -302,8 +302,8 @@ class Timeline08010cTest(unittest.TestCase):
             doc = f.read()
         self.assertIn(queue_sim.A.priority_table_markdown(), doc,
                       "AGENTCTL.md's priority table drifted from changekind.py PRIORITY: paste "
-                      "`python3 -c 'import sys; sys.path.insert(0, \"lib\"); import agentctl as A; "
-                      "print(A.priority_table_markdown())'` over it")
+                      "`python3 -c 'import sys; sys.path.insert(0, \"lib\"); from agentctl.changekind import priority_table_markdown as p; "
+                      "print(p())'` over it")
 
 
 # THE SIMULATOR CATCHES A REVERTED FIX: agentctl copied, one fix undone, the profile run on the copy must fail an

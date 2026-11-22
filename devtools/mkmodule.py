@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Turn a part into a real module: write its explicit imports (stdlib + the MODULES it reads), mark it, list it.
+"""Write a module's explicit imports: the standard library's and the other modules' names it reads (after movedefs.py
+moved code into it). A module with imports gets only the lines it now lacks; one with none yet (movedefs --new) gets
+them after its header comments. Refuses when it reads a name no module defines. MODULES is re-sorted by import.
 
-usage: mkmodule.py <lib/agentctl> <part>
-Refuses when the part reads a name only a namespace part (not a MODULE) defines. On a part that is a module already
-(code was moved into it), adds only the import lines it now lacks."""
+usage: mkmodule.py <lib/agentctl> <module>"""
 import ast
 import builtins
 import os
@@ -11,11 +11,11 @@ import re
 import symtable
 import sys
 
-from partlist import import_lines, parts_and_modules, place
+from partlist import import_lines, module_list, place
 
 lib, part = sys.argv[1], sys.argv[2]
 init = os.path.join(lib, "__init__.py")
-parts, modules = parts_and_modules(lib)
+modules = module_list(lib)
 
 
 def top_defs(tree):
@@ -50,7 +50,7 @@ tree = ast.parse(src)
 own = top_defs(tree)
 need = {n for n in reads(src, path) - own - set(dir(builtins)) if not n.startswith("__")}  # dunders: the compiler's
 owner = {}
-for p in parts:
+for p in modules:
     if p == part:
         continue
     t = ast.parse(open(os.path.join(lib, f"{p}.py")).read())
@@ -65,7 +65,7 @@ for n in ast.parse(open(os.path.join(lib, "core.py")).read()).body:
         for a in n.names:
             core_imports[a.asname or a.name] = ("from", n.module, a.name, a.asname)
 std_from = {}  # {name: (module, original name)} for every part's `from <non-agentctl module> import`
-for p in parts:
+for p in modules:
     for n in ast.parse(open(os.path.join(lib, f"{p}.py")).read()).body:
         if isinstance(n, ast.ImportFrom) and n.module and not n.module.startswith("agentctl") and not n.level:
             for a in n.names:
@@ -90,33 +90,31 @@ for name in sorted(need):
     if p is None and name in sys.stdlib_module_names:  # a standard module core does not import (ast, operator)
         stdlib.append(f"import {name}")
         continue
-    if p in modules:
-        from_mod.setdefault(p, []).append(name)
+    if p is None:
+        bad.append(name)
     else:
-        bad.append((name, p))
+        from_mod.setdefault(p, []).append(name)
 if bad:
-    sys.exit(f"{part}: reads namespace names: {bad}")
+    sys.exit(f"{part}: reads names no module defines: {bad}")
 lines = sorted(set(stdlib)) + [f"from {m} import {', '.join(sorted(v))}" for m, v in sorted(from_std.items())]
-for m, v in sorted(from_mod.items(), key=lambda kv: parts.index(kv[0])):
+for m, v in sorted(from_mod.items(), key=lambda kv: modules.index(kv[0])):
     lines += import_lines(f"agentctl.{m}", sorted(v))
 src_lines = src.split("\n")
-if part in modules and any(isinstance(n, (ast.Import, ast.ImportFrom)) for n in tree.body):  # already a module (code
-    # moved into it): add only the imports it now lacks, after its own
+if any(isinstance(n, (ast.Import, ast.ImportFrom)) for n in tree.body):  # its own imports: only those it lacks, after them
     if lines:
         last = max(n.end_lineno for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom)))
         open(path, "w").write("\n".join(src_lines[:last] + lines + src_lines[last:]))
+        place(lib, modules)
     print(part, "+", lines)
     sys.exit(0)
 # insert the imports after the header comments
 i = 0
 while i < len(src_lines) and src_lines[i].startswith("#"):
     i += 1
-if src_lines[1:2] and "Runs inside agentctl's one namespace" in src_lines[1]:
-    src_lines[1] = "# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only."
 body = src_lines[i:]
 while body and not body[0].strip():
     body.pop(0)
 out = src_lines[:i] + [""] + lines + ["", ""] + body
 open(path, "w").write("\n".join(out))
-place(lib, parts, set(modules) | {part})
+place(lib, modules)
 print(part, "->", lines)

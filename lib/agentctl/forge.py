@@ -1,6 +1,6 @@
 # agentctl, part `forge`: THE FORGE agentctl reads CI from -- GitHub, through the real `gh` CLI and api.github.com
 # (`gh api`). Forgejo was switched off on 2026-10-31; GitHub is the only forge.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import contextlib
 import json

@@ -118,8 +118,9 @@ How it is wired:
   the port they use: `land_hold(store, clock)`. The tick loop passes one Ctx down the steps.
 - During the migration, a module-level `CTX` (the real ctx) is the default: `def f(..., ctx=None): ctx = ctx or CTX`.
   Callers that have not moved yet keep working, and each step can land on its own.
-- The one namespace stays. Injection does not need packages or imports. The parts remain one namespace, and the
-  `ports` part is just loaded early.
+- (2026-11-22) The one namespace is gone: every part is a real module with explicit imports, cli the composition
+  root. The tests' `A` (tests/agentctl_view.py) still patches a name in every module binding it; injecting the
+  collaborators from cli retires that.
 
 ## 4. Migration order
 

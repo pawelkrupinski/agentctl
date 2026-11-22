@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Pure-move proof over two lib/agentctl trees: the same multiset of top-level statements (by AST, positions aside)
-across all their parts. A real module's own import lines are left out (they state what the namespace gave it).
+across all their modules. A module's own import lines are left out (a move changes them).
 
   python3 devtools/sameast.py <old lib/agentctl> <new lib/agentctl>       exit 0 the same, 1 not (the first few shown)"""
 import ast
@@ -8,12 +8,12 @@ import collections
 import os
 import sys
 
-from partlist import part_path, parts_and_modules
+from partlist import module_list, part_path
 
 
 def statements(lib):
     out = collections.Counter()
-    for p in parts_and_modules(lib)[0]:
+    for p in module_list(lib):
         for n in ast.parse(open(part_path(lib, p)).read()).body:
             if not isinstance(n, (ast.Import, ast.ImportFrom)):
                 out[ast.dump(n)] += 1

@@ -1,6 +1,6 @@
-"""The migration devtools (devtools/): the definition graph and its cycles, the move planner, the pure-move tools
-(movedefs, split_part) and their proofs (sameast, samecode), and mkmodule turning a part into a real module, each on a
-small fake lib that loads through the real lib/agentctl/__init__.py."""
+"""The restructuring's devtools (devtools/): the pure-move tools between modules (movedefs) and their proofs (sameast,
+samecode), the import tools (mkmodule, retarget, unused, placemodules), suite-at and stats, each on a small fake lib
+of real modules under the real lib/agentctl/__init__.py."""
 import os, re, shutil, subprocess, sys, tempfile, textwrap, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -10,58 +10,53 @@ from test_agentctl import A  # noqa: E402,F401  (the harness: HOME, PATH, git co
 ROOT = os.path.dirname(HERE)
 DEV = os.path.join(ROOT, "devtools")
 sys.path.insert(0, DEV)
-import defgraph  # noqa: E402
 import partlist  # noqa: E402
-import partdeps  # noqa: E402
-import moveplan  # noqa: E402
 
+HEADER = "# agentctl, part `{0}`: the {0}.\n# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.\n\n"
 PARTS = {
-    "core": """\
-        # agentctl, part `core`: the bottom.
-        # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
-
-        import os
+    "core": HEADER.format("core") + """\
+import os
 
 
-        def root():
-            return os.sep
-        """,
-    "mid": """\
-        # agentctl, part `mid`: the middle.
-        # Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
-
-        def helper():
-            return root() + "x"
+def root():
+    return os.sep
+""",
+    "mid": HEADER.format("mid") + """\
+from agentctl.core import root
 
 
-        # a comment block
-        def other():
-            return helper()
-        """,
-    "top": """\
-        # agentctl, part `top`: the top.
-        # Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+def helper():
+    return root() + "x"
 
-        def entry():
-            return other()
-        """,
+
+# a comment block
+def other():
+    return helper()
+""",
+    "top": HEADER.format("top") + """\
+from agentctl.mid import other
+
+
+def entry():
+    return other()
+""",
 }
 
 
-def fake_lib(parts=PARTS, modules=("core",)):
-    """<tmp>/lib/agentctl: the real __init__.py with these parts (modules first) and each part's text."""
+def fake_lib(parts=PARTS):
+    """<tmp>/lib/agentctl: the real __init__.py listing these modules, in this order, and each one's text."""
     lib = os.path.join(tempfile.mkdtemp(prefix="devtools-"), "lib", "agentctl")
     os.makedirs(lib)
     shutil.copy(os.path.join(ROOT, "lib", "agentctl", "__init__.py"), lib)
-    partlist.write_lists(lib, [p for p in parts if p in modules], [p for p in parts if p not in modules])
+    partlist.write_modules(lib, list(parts))
     for name, text in parts.items():
         with open(os.path.join(lib, f"{name}.py"), "w") as f:
             f.write(textwrap.dedent(text))
     return lib
 
 
-def lists(lib):
-    return partlist.parts_and_modules(lib)
+def modules(lib):
+    return partlist.module_list(lib)
 
 
 def tool(name, *args):
@@ -78,78 +73,6 @@ def copy(lib):
 def read(lib, part):
     with open(os.path.join(lib, f"{part}.py")) as f:
         return f.read()
-
-
-class DefinitionGraphTest(unittest.TestCase):
-    def test_an_edge_is_a_global_read_and_a_local_of_the_same_name_is_none(self):
-        parts = dict(PARTS, top="def entry(helper=None):\n    return other()\n\n\ndef shadow():\n    helper = 1\n    return helper\n")
-        defs, graph = defgraph.build(fake_lib(parts))
-        self.assertEqual(defs["helper"], "mid")
-        self.assertEqual(graph["helper"], ["root"])
-        self.assertEqual(graph["entry"], ["other"])
-        self.assertEqual(graph["shadow"], [])
-
-    def test_cycles_are_reported_and_fail(self):
-        parts = dict(PARTS, mid=PARTS["mid"].replace('return root() + "x"', "return entry()"))
-        lib = fake_lib(parts)
-        cycles = [sorted(c) for c in defgraph.components(defgraph.build(lib)[1]) if len(c) > 1]
-        self.assertEqual(cycles, [["entry", "helper", "other"]])
-        r = tool("defgraph", lib, "--cycles")
-        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn("cycle of 3: entry@top, helper@mid, other@mid", r.stdout)
-        self.assertEqual(tool("defgraph", fake_lib(), "--cycles").returncode, 0)
-
-
-class PartDepsTest(unittest.TestCase):
-    def test_a_part_is_blocked_by_the_namespace_definitions_it_reads_and_never_by_a_module(self):
-        found, defs = partdeps.blockers(fake_lib())
-        self.assertEqual(found, {"mid": set(), "top": {("entry", "other")}})  # mid reads core's root: a module
-        r = tool("partdeps", fake_lib(), "--top", "5")
-        self.assertEqual(r.stdout.splitlines(), ["0 mid ", "1 top other@mid"], r.stderr)
-
-
-TANGLE = {  # low and high read each other, though no definition cycle does
-    "core": PARTS["core"],
-    "low": "def c():\n    return 1\n\n\ndef a():\n    return b()\n\n\ndef a2():\n    return e()\n",
-    "high": "def b():\n    return c()\n\n\ndef e():\n    return 2\n\n\ndef top():\n    return b()\n",
-}
-
-
-class MovePlanTest(unittest.TestCase):
-    def test_the_order_puts_the_part_read_most_low(self):
-        g = moveplan.load(fake_lib(TANGLE))
-        self.assertEqual(moveplan.part_weights(g), {("low", "high"): 2, ("high", "low"): 1})
-        self.assertEqual(moveplan.part_order(g), ["high", "low"])  # read twice, reading once: it goes low
-        self.assertEqual(moveplan.upward(g, ["high", "low"]), [(1, "high", "low")])
-        self.assertEqual(moveplan.upward(g, ["low", "high"]), [(2, "low", "high")])
-
-    def test_up_raises_every_reader_and_hybrid_first_lowers_a_leaf_to_its_reader(self):
-        g = moveplan.load(fake_lib(TANGLE))
-        self.assertEqual(moveplan.move_plan(g, ["low", "high"], "up"), {"a": ("low", "high"), "a2": ("low", "high")})
-        self.assertEqual(moveplan.move_plan(g, ["low", "high"]), {"a": ("low", "high"), "e": ("high", "low")})
-        lib = fake_lib(TANGLE)
-        tsv = os.path.join(os.path.dirname(lib), "plan.tsv")
-        r = tool("moveplan", lib, "plan", "--tsv", tsv)
-        self.assertEqual(r.stdout, "moves 1\n  low -> high: 1 c\n", r.stderr)  # in its own order: high, low
-        self.assertEqual(open(tsv).read(), "c\tlow\thigh\n")
-
-    def test_stuck_follows_the_part_own_reads_to_another_part_and_who_says_both_sides(self):
-        lib = fake_lib(dict(PARTS, top=textwrap.dedent(PARTS["top"]) + "\n\ndef inner():\n    return entry()\n\n\ndef alone():\n    return 1\n"))
-        g = moveplan.load(lib)
-        self.assertEqual(moveplan.stuck(g, "top"), {"entry", "inner"})
-        self.assertEqual(moveplan.stuck(g, "mid"), set())  # it reads core's root: a module
-        self.assertEqual(tool("moveplan", lib, "stuck", "top").stdout, "3 defs; 2 stuck: entry inner\n")
-        self.assertEqual(tool("moveplan", lib, "who", "other").stdout, "other@mid\n  reads: \n  used by: top\n")
-
-    def test_pull_sizes_each_part_closure_and_pullset_lists_it_by_part(self):
-        lib = fake_lib(dict(PARTS, mid=textwrap.dedent(PARTS["mid"]) + "\n\ndef back():\n    return entry()\n"))
-        g = moveplan.load(lib)
-        # top reads mid's other, reaching mid's helper; mid's back reads top's entry, whose closure comes back to mid
-        self.assertEqual(moveplan.pull(g), [(2, "top", 0, ["mid"]), (3, "mid", 2, ["mid", "top"])])
-        self.assertEqual(moveplan.pullset(g, "mid"), {"mid": ["helper", "other"], "top": ["entry"]})
-        self.assertEqual(tool("moveplan", lib, "pull").stdout, "2 top 0 mid\n3 mid 2 mid top\n")
-        self.assertEqual(tool("moveplan", lib, "pullset", "mid").stdout,
-                         "mid helper other | read by top\ntop entry | read by mid\n")
 
 
 class SuiteAtTest(unittest.TestCase):
@@ -200,41 +123,47 @@ class SuiteAtTest(unittest.TestCase):
 
 
 class PureMoveTest(unittest.TestCase):
-    def test_movedefs_moves_a_definition_with_its_comment_and_the_proofs_agree(self):
+    def test_movedefs_moves_a_definition_with_its_comment_and_the_import_tools_and_proofs_follow(self):
         lib = fake_lib()
         before = copy(lib)
         r = tool("movedefs", lib, "top", "other")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("def other", read(lib, "mid"))
         self.assertIn("# a comment block\ndef other():", read(lib, "top"))
+        self.assertEqual(tool("retarget", lib).stdout, "retargeted top\n")  # top defines other now
+        self.assertEqual(tool("mkmodule", lib, "top").returncode, 0)  # it reads mid's helper
+        self.assertIn("from agentctl.mid import helper\n", read(lib, "top"))
+        self.assertNotIn("import other", read(lib, "top"))
         self.assertEqual(tool("sameast", before, lib).returncode, 0)
         r = tool("samecode", os.path.dirname(before), os.path.dirname(lib))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def test_movedefs_before_puts_the_moved_statements_above_the_one_reading_them(self):
-        parts = dict(PARTS, mid=PARTS["mid"] + "\n\n        LIMIT, OTHER = 3, 4\n",
-                     top=PARTS["top"] + "\n\n        TABLE = {'limit': LIMIT}\n")
+        parts = dict(PARTS, mid=PARTS["mid"] + "\n\nLIMIT, OTHER = 3, 4\n", top=PARTS["top"] + "\n\nTABLE = {'limit': LIMIT}\n")
         lib = fake_lib(parts)
         self.assertNotEqual(tool("movedefs", lib, "top", "LIMIT", "OTHER", "nonesuch").returncode, 0)
         self.assertIn("LIMIT", read(lib, "mid"), "a refused move writes nothing")
-        self.assertNotEqual(tool("movedefs", lib, "new", "--new", "x", "--after", "nonesuch", "LIMIT", "OTHER").returncode, 0)
-        self.assertIn("LIMIT", read(lib, "mid"), "nor does one refused for its new part's place")
+        self.assertNotEqual(tool("movedefs", lib, "top", "--new", "x", "LIMIT", "OTHER").returncode, 0)
+        self.assertIn("LIMIT", read(lib, "mid"), "nor does one refused for its new module existing")
         r = tool("movedefs", lib, "top", "--before", "TABLE", "LIMIT", "OTHER")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("return other()\n\n\nLIMIT, OTHER = 3, 4\n\n\nTABLE = {", read(lib, "top"))
         self.assertNotIn("LIMIT", read(lib, "mid"))
 
-    def test_split_part_cuts_at_a_marker_and_lists_the_piece_in_its_place(self):
+    def test_a_new_module_is_listed_and_mkmodule_gives_it_its_imports_in_import_order(self):
         lib = fake_lib()
         before = copy(lib)
-        plan = os.path.join(os.path.dirname(lib), "plan.tsv")
-        with open(plan, "w") as f:
-            f.write("-\tmid\t-\n# a comment block\tmid2\tthe other half\n")
-        r = tool("split_part", lib, "mid", plan)
+        r = tool("movedefs", lib, "low", "--new", "the low helpers", "helper")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(lists(lib)[0], ["core", "mid", "mid2", "top"])
-        self.assertTrue(read(lib, "mid2").startswith("# agentctl, part `mid2`: the other half\n"))
+        self.assertTrue(read(lib, "low").startswith("# agentctl, part `low`: the low helpers\n# A real module"))
+        r = tool("mkmodule", lib, "low")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("\nfrom agentctl.core import root\n", read(lib, "low"))
+        tool("mkmodule", lib, "mid")
+        self.assertEqual(modules(lib), ["core", "low", "mid", "top"])  # mid imports low now: low sorts before it
         self.assertEqual(tool("sameast", before, lib).returncode, 0)
+        r = tool("samecode", os.path.dirname(before), os.path.dirname(lib))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def test_the_proofs_catch_a_changed_statement(self):
         lib = fake_lib()
@@ -252,7 +181,7 @@ class ImportToolsTest(unittest.TestCase):
         parts = {"core": "import os\n\n\ndef root():\n    return os.sep\n",
                  "base": "def helper():\n    return 1\n",
                  "top": "from agentctl.core import helper, root\n\n\ndef entry():\n    return helper() + root()\n"}
-        lib = fake_lib(parts, modules=("core", "base", "top"))
+        lib = fake_lib(parts)
         r = tool("retarget", lib)
         self.assertEqual(r.stdout, "retargeted top\n", r.stderr)
         self.assertTrue(read(lib, "top").startswith("from agentctl.core import root\nfrom agentctl.base import helper\n"))
@@ -260,7 +189,7 @@ class ImportToolsTest(unittest.TestCase):
     def test_retarget_refuses_an_import_block_holding_another_statement(self):
         parts = {"core": "def root():\n    return 1\n", "base": "def helper():\n    return 1\n",
                  "top": "from agentctl.core import helper\nfrom typing import Any\nfrom agentctl.core import root\n"}
-        lib = fake_lib(parts, modules=("core", "base", "top"))
+        lib = fake_lib(parts)
         r = tool("retarget", lib)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("from typing import Any", read(lib, "top"))
@@ -274,78 +203,53 @@ class ImportToolsTest(unittest.TestCase):
         tool("unused", lib, "--fix", "core")
         self.assertTrue(read(lib, "core").startswith("import os, re\n\n\ndef root"), read(lib, "core"))
 
-    def test_closure_walks_the_namespace_and_stops_at_a_module(self):
-        r = tool("closure", fake_lib(), "entry")
-        self.assertEqual(r.stdout, "entry 3 {'mid': ['helper', 'other'], 'top': ['entry']}\n", r.stderr)
-        self.assertNotEqual(tool("closure", fake_lib(), "nonesuch").returncode, 0)
-
 
 class MakeModuleTest(unittest.TestCase):
-    def test_a_part_reading_only_modules_becomes_one_with_explicit_imports(self):
-        lib = fake_lib()
+    def test_code_moved_into_a_module_gets_the_imports_it_lacks(self):
+        lib = fake_lib(dict(PARTS, mid=PARTS["mid"] + "\n\ndef more():\n    return root(), re, json.dumps(1)\n"))
         r = tool("mkmodule", lib, "mid")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("from agentctl.core import root\n", read(lib, "mid"))
-        self.assertEqual(lists(lib), (["core", "mid", "top"], ["core", "mid"]))
-        r = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import agentctl; "
-                            "print(agentctl.entry(), sys.modules['agentctl.mid'].helper())", os.path.dirname(lib)],
-                           capture_output=True, text=True, timeout=60)
-        self.assertEqual(r.stdout.split(), [os.sep + "x"] * 2, r.stderr)
-
-    def test_code_moved_into_a_module_gets_the_imports_it_lacks(self):
-        lib = fake_lib(dict(PARTS, mid="import re\n\n\ndef helper():\n    return root(), re, json.dumps(1)\n"))
-        self.assertEqual(tool("mkmodule", lib, "mid").returncode, 0)
         r = tool("mkmodule", lib, "mid")  # again: nothing lacking, nothing added
         self.assertEqual(r.returncode, 0, r.stderr)
         text = read(lib, "mid")
         self.assertEqual(text.count("from agentctl.core import root"), 1)
-        self.assertEqual(text.count("import json"), 1)
-
-    def test_a_listed_module_without_imports_yet_gets_them_all(self):
-        lib = fake_lib(modules=("core", "mid"))  # listed, but its text is still a namespace part's (a rebase took theirs)
-        r = tool("mkmodule", lib, "mid")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("from agentctl.core import root\n", read(lib, "mid"))
-
-    def test_placemodules_puts_the_modules_first(self):
-        lib = fake_lib(dict([("top", PARTS["top"]), ("mid", PARTS["mid"]), ("core", PARTS["core"])]))
-        self.assertEqual(tool("placemodules", lib).returncode, 0)
-        self.assertEqual(lists(lib)[0], ["core", "top", "mid"])
-        self.assertIn("PARTS = MODULES + NAMESPACE", read(lib, "__init__"))
+        self.assertEqual((text.count("import json"), text.count("import re")), (1, 1))
+        r = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import agentctl.top as t; "
+                            "print(t.entry())", os.path.dirname(lib)], capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.stdout.split(), [os.sep + "x"], r.stderr)
 
     def test_placemodules_puts_each_module_after_the_modules_it_imports(self):
         parts = {"top": "from agentctl.mid import helper\n", "mid": "from agentctl.core import root\n\n\nhelper = root\n",
                  "core": "def root():\n    return 1\n", "free": "X = 1\n"}
-        lib = fake_lib(parts, modules=tuple(parts))
+        lib = fake_lib(parts)
         r = tool("placemodules", lib)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(lists(lib)[1], ["core", "mid", "top", "free"])  # free imports nothing: it keeps its place
+        self.assertEqual(modules(lib), ["core", "mid", "top", "free"])  # free imports nothing: it keeps its place
         with open(os.path.join(lib, "core.py"), "w") as f:
             f.write("from agentctl.top import helper\n")
         r = tool("placemodules", lib)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("an import cycle among: core, mid, top", r.stderr)
 
-    def test_a_module_level_comprehension_variable_is_no_namespace_name(self):
-        lib = fake_lib(dict(PARTS, mid="TABLE = {p: p for p in (1, 2)}\n"))
+    def test_a_module_level_comprehension_variable_is_no_name_to_import(self):
+        lib = fake_lib(dict(PARTS, mid="import os\n\nTABLE = {p: p for p in (1, 2)}\n"))
         r = tool("mkmodule", lib, "mid")
         self.assertEqual(r.returncode, 0, r.stderr)
 
-    def test_a_name_another_part_imports_from_the_standard_library_is_imported_from_there(self):
+    def test_a_name_another_module_imports_from_the_standard_library_is_imported_from_there(self):
         low = "# agentctl, part `low`: a module.\n# A real module.\n\nfrom typing import Optional\n\nX: Optional[int] = 1\n"
-        parts = {"core": PARTS["core"], "low": low, "mid": "def helper() -> Optional[str]:\n    return root()\n",
+        parts = {"core": PARTS["core"], "low": low, "mid": "import os\n\n\ndef helper() -> Optional[str]:\n    return os.sep\n",
                  "top": PARTS["top"]}
-        lib = fake_lib(parts, modules=("core", "low"))
+        lib = fake_lib(parts)
         r = tool("mkmodule", lib, "mid")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("from typing import Optional\n", read(lib, "mid"))
         self.assertNotIn("from agentctl.core import Optional", read(lib, "mid"))
 
-    def test_a_part_reading_a_namespace_name_is_refused(self):
-        r = tool("mkmodule", fake_lib(), "top")
+    def test_a_module_reading_a_name_no_module_defines_is_refused(self):
+        r = tool("mkmodule", fake_lib(dict(PARTS, top=PARTS["top"] + "\n\ndef more():\n    return nonesuch()\n")), "top")
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("reads namespace names: [('other', 'mid')]", r.stderr)
-
+        self.assertIn("reads names no module defines: ['nonesuch']", r.stderr)
 
 
 def tools_python():
@@ -419,7 +323,7 @@ class StatsTest(unittest.TestCase):
         out = __import__("json").loads(r.stdout)
         self.assertEqual((out["start"]["over"]["method-lines"], out["now"]["over"]["method-lines"]), (0, 1))
         self.assertEqual((out["start"]["functions_over_any"], out["now"]["functions_over_any"]), (0, 1))
-        self.assertEqual((out["now"]["parts"], out["now"]["modules"], out["now"]["files"]), (3, 1, 4))
+        self.assertEqual((out["now"]["parts"], out["now"]["modules"], out["now"]["files"]), (3, 3, 4))
         self.assertEqual(out["now"]["mypy_errors"], 7)
         self.assertGreater(out["now"]["lines"], out["start"]["lines"])
 

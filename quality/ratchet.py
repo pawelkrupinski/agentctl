@@ -183,14 +183,14 @@ def selftest():
         os.makedirs(os.path.join(tmp, "quality"))
         names = [f"p{i}" for i in range(11)]
         with open(os.path.join(lib, "__init__.py"), "w") as f:
-            f.write(f"PARTS = {tuple(['seed'] + names)!r}\n")
+            f.write(f"MODULES = {tuple(['seed'] + names)!r}\n")
         uses = "\n".join(f"    {n}_name()" for n in names)
         with open(os.path.join(lib, "seed.py"), "w") as f:
-            f.write(SEEDED + "\n\ndef cloned_a(beta, gamma, delta):\n" + CLONE + "\n\ndef cloned_b(beta, gamma, delta):\n"
+            f.write("".join(f"from agentctl.{n} import {n}_name\n" for n in names) + "\n\n" + SEEDED + "\n\ndef cloned_a(beta, gamma, delta):\n" + CLONE + "\n\ndef cloned_b(beta, gamma, delta):\n"
                     + CLONE + f"\n\ndef uses_many():\n{uses}\n" + "\n" * 480)
         for n in names:
             with open(os.path.join(lib, f"{n}.py"), "w") as f:
-                f.write(f"def {n}_name():\n    return uses_many()\n")
+                f.write(f"from agentctl.seed import uses_many\n\n\ndef {n}_name():\n    return uses_many()\n")
         rows = current_rows(tmp)
         kinds = {kind for ratchet in rows.values() for kind, _ in ratchet}
         missing = sorted(set(TRAILERS) - kinds)

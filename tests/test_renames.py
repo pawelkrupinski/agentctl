@@ -1,10 +1,10 @@
 """Design §14.5: the queue's commands under `land`, the processor under `tick`; the old `waiting` names answer for a
 week, each naming its new one."""
-import argparse, contextlib, io, os, sys, unittest
+import argparse, contextlib, io, os, subprocess, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A  # noqa: E402
+from test_agentctl import A, TOOL  # noqa: E402
 
 
 class RenameTest(unittest.TestCase):
@@ -60,3 +60,13 @@ class RenameTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HelpTest(unittest.TestCase):
+    def test_help_is_the_usage_text(self):
+        """`agentctl --help` opens with the usage text (2026-11-22: cli became a real module, and the parser's
+        description, its module's __doc__, was None: the help lost every command's usage)."""
+        r = subprocess.run([sys.executable, TOOL, "--help"], capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("agentctl wait run <id>...", r.stdout)
+        self.assertIn("Full reference, examples and the standard agent workflow: ~/bin/AGENTCTL.md", r.stdout)
