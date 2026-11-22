@@ -1,5 +1,10 @@
 # agentctl, part `buildview`: what an sbt build means for a change's modules, read statically from build.sbt and project/.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import re
+from agentctl.core import git, git_ok
+
 
 # ---------------------------------------------------------------- THE BUILD AS A CHANGE'S MODULES SEE IT
 # The owner, 2026-11-17 (landing stats: a build.sbt / project/ change landing meanwhile forced a FULL re-check of every

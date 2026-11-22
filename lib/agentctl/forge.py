@@ -2,6 +2,22 @@
 # (`gh api`). Forgejo was switched off on 2026-10-31; GitHub is the only forge.
 # Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
 
+import contextlib
+import json
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
+import urllib.parse
+import urllib.request
+from agentctl.core import err, process_cache, state_root
+from agentctl.timefmt import parse_time
+from agentctl.statefile import read_record, write_json
+from agentctl.ghapp import ghapp_enabled, ghapp_token
+
+
 # ---------------------------------------------------------------- forge: the read side
 # Every run list, run view, failed log, artifact, dispatch, cancel and actions-API read goes through the functions below:
 #   gh_json / forge_argv / forge_env    the CLI: GH_CLI (gh's own auth: $GH_TOKEN or `gh auth login`; on ci-runner the

@@ -1,5 +1,18 @@
 # agentctl, part `ghapp`: THE RECONCILER'S GITHUB IDENTITY -- GitHub App installation tokens (forge = github).
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from agentctl.core import NoReadAccess, err, process_cache, state_root
+from agentctl.timefmt import parse_time
+from agentctl.statefile import read_record, write_json
+
 
 # ---------------------------------------------------------------- github-app (github-return plan §4.1 W5b, §4.2)
 # On ci-runner the reconciler pushes and reads as GitHub Apps, never as a person or a machine user:

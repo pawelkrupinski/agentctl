@@ -20,7 +20,7 @@ import os as _os
 import sys as _sys
 import types as _types
 
-MODULES = ("core", "timefmt", "statefile", "moviestools")
+MODULES = ("core", "timefmt", "statefile", "moviestools", "forge", "ghapp", "classify", "buildview")
 
 PARTS = ("core", "storetoken", "timefmt", "statefile", "moviestools", "forge", "ghapp", "classify", "wait", "owned", "ciwhy", "branches", "red", "redseen", "redfixread", "redfixes", "redmove", "redretired", "reduntracked", "redstep", "redcrash", "redpending", "redverify", "reddispatch", "redreplay", "fixer", "fixerland", "fixersession", "fixerlife", "redclaim", "redview", "redtick", "redblock", "redvault", "ask", "owner", "land", "gov", "slots",
          "landwatch", "waiting", "buildview", "queue", "queuerecheck", "queuesubmit", "queueuntil", "queueslots", "queueclose", "queuediff", "queuepush", "queuebatch", "remote", "batch", "changekind", "tools", "cleanup", "maint", "store", "policy", "lander", "blame", "explorer", "reverts", "server", "upkeep", "watchdog",

@@ -923,7 +923,6 @@ fan-out	cli	25
 fan-out	fixer	12
 fan-out	fixerland	13
 fan-out	fixerlife	16
-fan-out	landwatch	10
 fan-out	owner	18
 fan-out	queuebatch	16
 fan-out	queueclose	22

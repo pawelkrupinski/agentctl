@@ -1,5 +1,5 @@
 # agentctl, part `classify`: THE ONE FAILURE CLASSIFIER (simplification-2026-10-31 item 2).
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 #
 # A failed CI job, or a failed local check, is INFRA or a TEST failure. The week to 2026-10-31 misread it four ways, each
 # from a loose pattern matched anywhere in a log: `verdict complete` read as a test failure, a PASSING test whose name
@@ -11,6 +11,9 @@
 #     `[error]`, a `::error` annotation, a JUnit/assertion failure (STRONG) -- never a bare word "FAILED" in a line;
 #   - every pattern is DATA: a (name, pattern, the incident it was born of) row, and tests/test_classifier_incidents.py
 #     holds one fixture per incident.
+
+import re
+
 
 def _union(rows: list[tuple[str, str, str]]) -> re.Pattern[str]:
     return re.compile("|".join(f"(?:{p})" for _name, p, _incident in rows), re.I)
