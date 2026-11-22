@@ -13,10 +13,10 @@ from test_agentctl import A  # noqa: E402
 from test_owner_ask import AskBase  # noqa: E402
 
 DIAG = ("DIAGNOSED: the first app launch on CI's freshly booted simulator times out; the fix is in stash e94585c437a9 "
-        "but can't be committed, because signing is refused while the vault is locked; decide: run `! secrets unlock "
-        "movies`, or allow agents to make unsigned commits, so the fix can be committed with `Fixes-Red: 77` and landed")
-BLOCKED = ("BLOCKED ON OWNER: `! secrets unlock movies` (or allow unsigned agent commits): commit signing is refused "
-           "while the vault is locked")
+        "but its proof can't run: `secrets run movies TMDB_API_KEY -- scripts/ios-local-server` failed (locked); "
+        "decide: run `! secrets unlock movies`, so the fix can be proved, committed with `Fixes-Red: 77` and landed")
+BLOCKED = ("BLOCKED ON OWNER: `! secrets unlock movies`: `secrets run movies TMDB_API_KEY -- sbt itAll` failed while "
+           "the vault is locked")
 
 
 class VaultBase(AskBase):
@@ -46,9 +46,31 @@ class VaultAskTest(VaultBase):
     def test_the_decide_vault_line_itself_is_a_vault_ask(self):
         """2026-11-22, Order independence #105: turns 69-71 ended `BLOCKED ON OWNER: ~/bin/agentctl decide vault-movies
         "here"` -- the line the owner is told -- and, unread as a vault ask, each was re-offered ~2 min later."""
-        it, _acts = self.launch(self.ios_red(), outcome='BLOCKED ON OWNER: ~/bin/agentctl decide vault-movies "here"')
+        it, _acts = self.launch(self.ios_red(), outcome='BLOCKED ON OWNER: ~/bin/agentctl decide vault-movies "here" '
+                                                        '(`secrets run movies OMDB_API_KEY -- sbt it` failed: locked)')
         self.assertEqual(it["state"], "blocked-external")
         self.assertEqual(A.red_block_of(it, self.st)["name"], "block/cause/vault-movies")
+
+    def test_a_vault_ask_reading_no_secret_in_an_unsigned_repo_goes_back_to_its_fixer(self):
+        """2026-11-22, Tool self-tests #480 / Alert backtest #20: `BLOCKED ON OWNER: ! secrets unlock movies` after a
+        land's push failed (DNS) and `env --check` said the vault was locked -- no movies secret in the fix. Released
+        three times, each back on the vault within minutes. movies' main is unsigned: such an ask is no owner's."""
+        for outcome in ("BLOCKED ON OWNER: ! secrets unlock movies",
+                        "BLOCKED ON OWNER: secrets unlock movies: `agentctl env --check` says vault movies locked",
+                        'BLOCKED ON OWNER: ~/bin/agentctl decide vault-movies "here"'):
+            it, _acts = self.launch(self.ios_red(key=f"k{abs(hash(outcome)) % 9999}"), outcome=outcome)
+            self.assertEqual(it["state"], "offered", outcome)
+            self.assertIsNone(A.red_block_of(it, self.st), outcome)
+            self.assertIn("no movies secret was read", it["data"]["diagnosis"])
+            self.assertIn("secrets run movies <KEY>", it["data"]["diagnosis"])
+        self.assertFalse(self.owner_told(), "nothing reaches the owner")
+
+    def test_a_vault_ask_in_a_repo_that_signs_still_waits_on_the_vault(self):
+        saved = A.repo_signs
+        A.repo_signs = lambda o_r: True
+        self.addCleanup(setattr, A, "repo_signs", saved)
+        it, _acts = self.launch(self.ios_red(), outcome="BLOCKED ON OWNER: ! secrets unlock movies: signing refused")
+        self.assertEqual(it["state"], "blocked-external")
 
     def test_a_diagnosed_vault_ask_waits_on_the_vault_lease_not_on_a_decision(self):
         it, _acts = self.launch(self.ios_red(), outcome=DIAG)

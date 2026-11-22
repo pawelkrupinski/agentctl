@@ -299,7 +299,7 @@ def red_decision_needed(d, h):
     return None
 
 
-def red_ask_route(store, it, upd, why, words, t):
+def red_ask_route(store: Any, it: Any, upd: dict[str, Any], why: str, words: object, t: float) -> list[str]:
     """An ask outside the owner-only categories (ask.py OWNER_ONLY) never reaches the owner: the red goes back to its
     fixers, briefed to proceed under the repo's standing rules (CLAUDE.md: root cause, test-first, never a rerun) and its
     checked-in policies, with the words it asked in as the diagnosis -- an attempt like any other, so the ladder climbs."""

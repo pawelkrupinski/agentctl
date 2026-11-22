@@ -238,8 +238,8 @@ class HoldTest(AskBase):
     def test_a_vault_ask_is_told_at_once(self):
         """2026-11-18: a vault-unlock ask (one owner item per vault, b755ac8) was held an hour while its fixers' tested
         fixes waited on signing: no unlock elsewhere resumes them, only the owner's `decide vault-<ns>`."""
-        vault = ("DIAGNOSED: the fix can't be committed, signing is refused while the vault is locked; decide: run "
-                 "`! secrets unlock movies` so the fix can be committed")
+        vault = ("DIAGNOSED: the fix can't be proved, `secrets run movies TMDB_API_KEY -- sbt itAll` failed while the "
+                 "vault is locked; decide: run `! secrets unlock movies` so the fix can be proved")
         it, _acts = self.launch(self.red(key="v"), outcome=vault)
         self.assertEqual(A.red_block_of(it, self.st)["name"], "block/cause/vault-movies")
         told = self.remind(0)

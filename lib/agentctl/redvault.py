@@ -27,6 +27,30 @@ def vault_ask_ns(text):
     return (m.group(1) or m.group(2)) if m else None
 
 
+# A VAULT ASK NAMES THE SECRET IT NEEDS (2026-11-22: Tool self-tests #480, Order independence #116 and Alert backtest #20
+# asked `! secrets unlock movies` while nothing in their fixes read a movies secret -- a land's push had failed (DNS),
+# its NOT LANDED said `agentctl env --check`, and env --check said the vault was locked; released three times, back on
+# the vault within minutes each time). In a repo whose main is unsigned (red-repos.json `signed: false`) nothing a fixer
+# does but reading a secret touches the vault: its commits are unsigned (fixer_env), its pushes authenticate as gh's
+# keyring login on the laptop and the GitHub App on ci-runner, agentctl's store token is in its environment. So there a
+# vault ask counts only when it names the read that failed -- `secrets run|get <ns> ...` (SECRET_USE) -- and any other
+# is routed back to the fixer (red_ask_route), saying why: decided from the fixer's own first secret use, never by
+# default. A repo that signs keeps every vault ask (its commits need the vault's signing key).
+SECRET_USE = re.compile(r"secrets\s+(?:run|get)\s+([A-Za-z0-9_-]+)\b")
+
+
+def vault_ask_unfounded(o_r: str, text: object, ns: str) -> str | None:
+    """Why the vault ask `text` (for vault ns) is no owner's -- None when it stands: a repo that signs, or the ask names
+    a read of one of ns's secrets."""
+    if repo_signs(o_r) or ns in SECRET_USE.findall(str(text or "")):
+        return None
+    return (f"no {ns} secret was read: in {o_r} a land, a push, a commit and agentctl's own reads need no vault -- "
+            "commits are unsigned, GitHub authenticates through gh's login (the App on ci-runner), the store token is "
+            "in your environment; a NOT LANDED push or `agentctl env --check` saying the vault is locked is no reason. "
+            f"Ask only when `secrets run {ns} <KEY> -- <cmd>` for a secret your fix needs failed: name that command and "
+            "its error in the ask")
+
+
 def vault_decide_cmd(ns):
     return decide_cmd(f"vault-{ns}", "here")
 

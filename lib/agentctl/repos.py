@@ -194,8 +194,8 @@ def scan_repo_for(o_r, repo=None):
     return repo or repo_path_for(o_r)
 
 
-def repo_signs(o_r):
+def repo_signs(o_r: str) -> bool:
     """Whether repo o_r's main keeps commit signatures (red-repos.json `signed`, default true). movies' does not: its
     land rebases every change with NO_SIGN, so a fixer's signature never reaches main."""
     c = red_repo_conf(o_r)
-    return True if c is None else c.get("signed", True)
+    return True if c is None else bool(c.get("signed", True))

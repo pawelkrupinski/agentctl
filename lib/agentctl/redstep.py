@@ -262,6 +262,15 @@ def red_lease_read(d, row):
     return bool(row) and row.get("epoch") is not None and d.get("ended_lease") == row.get("epoch")
 
 
+def red_vault_ask(store: Any, it: Any, upd: dict[str, Any], ns: str, out: str, t: float, o_r: str | None) -> Any:
+    """A fixer's vault ask: the red waits on vault ns (red_vault_block) -- unless it names no secret read that failed
+    in a repo that does not sign (redvault.py vault_ask_unfounded): then it goes back to its fixer, saying why."""
+    unfounded = vault_ask_unfounded(o_r or RED_PRIMARY, out, ns)
+    if unfounded:
+        return red_ask_route(store, it, upd, unfounded, out, t)
+    return red_vault_block(store, it, upd, ns, out, t)
+
+
 def red_lease_ended(store, it, row, block, t, repo=None):
     """Its holder's lease ended (released with a verdict, expired without progress, revoked): one attempt (not for a
     release by hand, a fixer that never started, a lease lost to infra, a red found already fixed, or one that needs the
@@ -330,8 +339,8 @@ def red_lease_ended(store, it, row, block, t, repo=None):
             upd["diagnosis"] = re.sub(r"^\W*GAVE UP:\s*", "", out[:m.start(1) if m.group(1) else m.start(2)])
             upd["diagnosis"] = re.sub(r"[;\s]*decide\s*$", "", upd["diagnosis"]).strip()[:600]
     vault = vault_ask_ns(decide or (out if out.startswith("BLOCKED ON OWNER") else ""))
-    if vault:  # ITS ONE ASK IS A VAULT UNLOCK: a wait agentctl checks itself (red_vault_block), never a decision
-        return red_vault_block(store, it, upd, vault, out, t)
+    if vault:  # ITS ONE ASK IS A VAULT UNLOCK: a wait agentctl checks itself (red_vault_ask), never a decision
+        return red_vault_ask(store, it, upd, vault, out, t, d.get("repo"))
     if red_decision(d) and DECISION_FAILED.match(str(h["outcome"])):  # THE OWNER'S DECIDED ACTION FAILED: told
         return red_decision_failed(store, it, upd, h["outcome"], t)
     if decide:
