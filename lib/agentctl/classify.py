@@ -25,6 +25,9 @@ INFRA_STEPS = [
     ("registry login", r"(docker/login-action|^Log ?in to\b|\blogin\b.*registry|registry.*\blogin\b)",
      "2026-10-31: docker login `denied` read as a TEST FAILURE"),
     ("docker setup", r"(docker/setup-(buildx|qemu)-action|^Set up Docker)", "a buildx bootstrap that timed out"),
+    ("runner preflight", r"^Runner preflight\b",
+     "movies Order independence, 2026-11-22: ~12 of its ~66 reds were the runner (a missing simulator, BSD tools), read "
+     "as code reds; each leg now checks its runner first in a step of this name (scripts/ci/order-preflight.sh)"),
     ("toolchain setup", r"^(Run )?[\w.-]+/setup-[\w.-]+@",
      "movies Main #2388, 2026-11-11: setup-swift's keyserver refresh failed, blamed on the release commit"),
 ]
@@ -55,6 +58,7 @@ INFRA_SIGNATURES = NETWORK_SIGNATURES + [
     ("runner shutdown", r"The runner has received a shutdown signal|lost communication with the server", "Identity takes #13 42600045483"),
     ("no test results", r"No test results found for", "Verify #14 42335293225"),
     ("no runner", r"was not acquired by Runner|not acquired by Runner of type", "iOS #526 43903912001: no hosted macOS runner"),
+    ("emulator boot", r"Timeout waiting for emulator to boot", "an Android emulator that never booted: the runner's KVM or image"),
 ]
 NETWORK_CHECK_FAILURE = _union(NETWORK_SIGNATURES)
 INFRA_LOG = _union(INFRA_SIGNATURES)
@@ -80,6 +84,27 @@ WEAK = re.compile(r"\bfail(ed|ure)?\b|\berror\b|exception|assert", re.I)
 # (`cleanup(fixture) skipped: spawn sbt ENOENT`, printed on green runs too: core #799's red key, 2026-11-05).
 NOT_A_FAILURE = re.compile(r"^\s*[\u2713\u2714]\s|\bskipped: ")
 NOISE = re.compile(r"Setting level of logger|\|-INFO in ch\.qos|\berrors?[=:] ?0\b|\b0 (errors?|failed)\b|\b(INFO|DEBUG|TRACE)\b", re.I)
+
+
+# THE ORDER VERDICT (movies' scripts/ci/order-compare.sh, 2026-11-22). Order independence runs a failing leg's tests
+# again in DEFAULT order at the same commit and says what it found in the failing step itself: `REGRESSION, not an
+# order dependence: <tests> fail in default order too` (a change broke them: the red is a regression's, its key the
+# tests, its fixer sent after the commit that broke them) or `ORDER DEPENDENCE (or a flake): <tests> ... pass in
+# default order`. ~31 of its ~66 reds over runs #1-#100 were such regressions, each read as an order red.
+ORDER_VERDICT = re.compile(r"(REGRESSION, not an order dependence: .*|ORDER DEPENDENCE \(or a flake\): .*)")
+
+
+def order_verdict(lines):
+    """The order verdict a job's log lines say (its text from REGRESSION / ORDER DEPENDENCE on), else None."""
+    for l in lines:
+        m = ORDER_VERDICT.search(l or "")
+        if m:
+            return m.group(1).strip()[:300]
+    return None
+
+
+def is_regression(line):
+    return str(line or "").startswith("REGRESSION, not an order dependence:")
 
 
 def network_failure(out):

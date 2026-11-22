@@ -98,3 +98,37 @@ class Incidents(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OrderVerdict(unittest.TestCase):
+    """movies Order independence, 2026-11-22: of ~66 reds one was an order dependence; its control pass now says which."""
+    LINE = ("##[error]REGRESSION, not an order dependence: `a.ASpec` fail in default order too -- a change broke them; "
+            "find it among the commits since the last green run")
+
+    def test_the_verdict_is_read_from_the_log_and_a_regression_is_known_by_it(self):
+        v = A.order_verdict(["[error] Failed tests:", self.LINE])
+        self.assertTrue(v.startswith("REGRESSION, not an order dependence: `a.ASpec`"))
+        self.assertTrue(A.is_regression(v))
+        self.assertFalse(A.is_regression("ORDER DEPENDENCE (or a flake): `a.ASpec` fail in the scala-reverse order"))
+        self.assertIsNone(A.order_verdict(["[error] Failed tests:", "[error] \ta.ASpec"]))
+
+    def test_one_regression_in_both_scala_orders_is_one_red(self):
+        v = A.order_verdict([self.LINE])
+        self.assertEqual(A.red_key("Order independence", "scala (reverse)", v), A.red_key("Order independence", "scala (shuffled)", v))
+
+    def test_a_runner_preflight_or_an_emulator_that_never_booted_is_infra(self):
+        self.assertEqual(A.classify_job(job("Runner preflight"), ["##[error]UNKNOWN: runner preflight (scala): java is 17"], (1, []))[0], "infra")
+        self.assertEqual(A.classify_job(job("Runner preflight, the simulator boots"), ["x"], (1, []))[0], "infra")
+        self.assertEqual(A.classify_job(job("Every androidTest class alone"), ["Timeout waiting for emulator to boot."], (1, []))[0], "infra")
+
+    def test_a_regression_fixer_is_sent_after_the_commit_that_broke_it(self):
+        u = {"workflow": "Order independence", "run": {"number": 106, "databaseId": 4, "headSha": "abc1234567890"},
+             "job": "scala (reverse)", "kind": "test", "line": A.order_verdict([self.LINE])}
+        p = A.fixer_prompt(u, "/wt", "/brief")
+        self.assertIn("REGRESSION, NOT AN ORDER DEPENDENCE", p)
+        self.assertIn("COMMIT THAT BROKE THEM", p)
+        self.assertIn("abc1234567", p)
+        u["line"] = "ORDER DEPENDENCE (or a flake): `a.ASpec` fail in the scala-reverse order but pass in default order"
+        p = A.fixer_prompt(u, "/wt", "/brief")
+        self.assertNotIn("COMMIT THAT BROKE THEM", p)
+        self.assertIn("find the state one test leaves for another", p)

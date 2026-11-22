@@ -351,6 +351,39 @@ class CiWhyTest(FakeForge):
         self.assertIn("[infra] convergence (united-kingdom): UNKNOWN, an outside dependency unreachable", out)
         self.assertNotIn("TEST FAILURE", out)
 
+    def test_a_control_pass_regression_keys_the_red_and_says_regression_not_order(self):
+        # movies Order independence, 2026-11-22: ~31 of its ~66 reds failed in default order too, each read as an order
+        # red. order-compare.sh's control pass now says so in the failing step; the verdict and the red's key say it too.
+        self.scenario([{**job("takes (poland)", conclusion="failure"), "steps": [step("Set up job", "success"),
+                                                                        step("Every swift test case alone, in a seeded order", "failure")]}],
+                      "takes (poland)\tEvery swift\t2026-11-22T03:00:00Z FAILED alone: M.A/testX\n"
+                      "takes (poland)\tEvery swift\t2026-11-22T03:00:00Z ##[error]XCTAssertEqual failed: (1) is not equal to (2)\n"
+                      "takes (poland)\tEvery swift\t2026-11-22T03:00:01Z ##[error]REGRESSION, not an order dependence: `M.A/testX` fail in "
+                      "default order too -- a change broke them; find it among the commits since the last green run\n")
+        rc, out, _ = self.why()
+        self.assertIn("verdict: TEST FAILURE: REGRESSION, not an order dependence (takes (poland): the failing tests fail in default order too", out)
+        self.assertIn("[test] takes (poland): failed step 'Every swift test case alone, in a seeded order'; REGRESSION, not an order dependence", out)
+        self.assertIn("      REGRESSION, not an order dependence: `M.A/testX`", out.partition("[test] takes (poland)")[2].splitlines()[1])
+
+    def test_an_order_verdict_says_order_and_a_plain_test_failure_says_neither(self):
+        self.scenario([{**job("takes (poland)", conclusion="failure"), "steps": [step("Every XCUITest class alone", "failure")]}],
+                      "takes (poland)\tEvery XCUITest\t2026-11-22T03:00:01Z ##[error]ORDER DEPENDENCE (or a flake): `AUITests` fail in the ios "
+                      "order but pass in default order\n")
+        rc, out, _ = self.why()
+        self.assertIn("verdict: TEST FAILURE\n", out + "\n")
+        self.assertIn("an order dependence (or a flake)", out)
+        self.assertNotIn("REGRESSION", out)
+
+    def test_a_failed_runner_preflight_is_infra_never_a_test_red(self):
+        # Order independence's legs check their runner first (scripts/ci/order-preflight.sh): a missing simulator is
+        # the runner's, whatever words the step printed
+        self.scenario([{**job("takes (poland)", conclusion="failure"), "steps": [step("Set up job", "success"), step("Runner preflight", "failure")]}],
+                      "takes (poland)\tRunner preflight\t2026-11-22T03:00:01Z ##[error]UNKNOWN: runner preflight (ios): no iPhone simulator on this "
+                      "image (ios-sim-destination.sh: nothing) -- the runner, not a test red\n")
+        rc, out, _ = self.why()
+        self.assertIn("[infra] takes (poland): failed in setup step 'Runner preflight'", out)
+        self.assertNotIn("TEST FAILURE", out)
+
     def test_an_outside_service_refusing_the_runs_key_is_never_a_test_failure(self):
         # Record scrape fixtures #2426: the preflight found the OMDb key's day spent before any leg started -- no code ran.
         self.scenario([{**job("preflight", conclusion="failure"), "steps": [step("OMDb and TMDB still take the keys", "failure")]}],

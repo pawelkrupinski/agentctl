@@ -476,8 +476,18 @@ main. For each red run it shows:
 - the failed jobs and their relevant log lines;
 - the commit and author;
 - a verdict:
-  - `TEST FAILURE`;
-  - `INFRA-SHAPED`, with the `rerun --failed` command. Covers failures in a setup step, a 0-length log,
+  - `TEST FAILURE`; `TEST FAILURE: REGRESSION, not an order dependence (<jobs>: ...)` when a job's failing step says
+    so. THE ORDER VERDICT (movies' Order independence, 2026-11-22; `classify.py`'s `ORDER_VERDICT`): each leg's control
+    pass (`scripts/ci/order-compare.sh leg`) runs the failing tests again in default order at the same commit and
+    prints `REGRESSION, not an order dependence: <tests> fail in default order too` or `ORDER DEPENDENCE (or a flake):
+    <tests> ... pass in default order`. That line becomes the job's first line, so the red's KEY is the tests, not
+    the leg (both scala orders failing alike are one red); a REGRESSION red's fixer is told the order is not the cause
+    and sent after the commit that broke the tests (the range from the workflow's newest green run to the red head),
+    an ORDER one after the state one test leaves another. ~31 of its ~66 reds over runs #1-#100 were such regressions,
+    each read as an order red;
+  - `INFRA-SHAPED`, with the `rerun --failed` command. Covers failures in a setup step (a step named `Runner
+    preflight ...` too: Order independence's runner checks, `scripts/ci/order-preflight.sh` -- a missing simulator, a
+    wrong JDK, BSD tools on a Linux leg -- and an emulator that never booted), a 0-length log,
     `artifact already exists`, ENOENT, docker, disk or connection errors, an OOM kill (exit 137), a runner shutdown
     or lost runner, `No test results found for`. A test verdict is read only from a test runner's own line (scalatest's
     `*** FAILED`, sbt's `[error]`): GitHub's `##[error]` step-end annotation is none, or no infra signature would win

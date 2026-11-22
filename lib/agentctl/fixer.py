@@ -163,6 +163,18 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
     if u.get("predicts"):
         task += (f" This red is on branch {u['predicts']}, not main yet: a run of commits that have since landed on main, "
                  "with main's inputs, so main will fail the same way next. Fix it on main before it does.")
+    if is_regression(u.get("line")):  # THE ORDER VERDICT (classify.py): the control pass failed in default order too
+        task += (" REGRESSION, NOT AN ORDER DEPENDENCE: its control pass ran the failing tests again in DEFAULT order at "
+                 "the same commit and they failed there too, so the order they ran in is not the cause and no ordering "
+                 "fix is one. Go after the COMMIT THAT BROKE THEM: the range from this workflow's newest green run on "
+                 f"{remote()}/main to this run's head {str(u['run'].get('headSha') or '')[:10]} (`git log --oneline "
+                 "<green head>..<red head> -- <the tests' and their code's paths>`); reproduce the failure with a plain "
+                 "`testOnly` of the named tests, then fix that change forward (or revert it) -- and say which commit it "
+                 "was in the commit message.")
+    elif str(u.get("line") or "").startswith("ORDER DEPENDENCE (or a flake):"):
+        task += (" ORDER DEPENDENCE (or a flake): its control pass ran the failing tests in DEFAULT order at the same "
+                 "commit and they PASSED: find the state one test leaves for another (a singleton, a file, the clock, a "
+                 "cache) with the replay the line names, and make each test set up its own.")
     if u.get("flake"):
         task += (" This red PASSED on the next run: it is a FLAKE. Make it deterministic (find the race, the clock, "
                  "the ordering); do not just retry it.")

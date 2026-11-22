@@ -1023,7 +1023,8 @@ def classifier_version():
              inspect.getsource(flip_key_line), inspect.getsource(drift_key), DRIFT_LINE.pattern, FLIP_HEADER.pattern,
              FLIP_ROW.pattern, FLIP_TAKES.pattern, str(FLIP_KEY_MAX), STRONG.pattern, WEAK.pattern, NOISE.pattern, ANNOTATION.pattern,
              NOT_A_FAILURE.pattern, CREDENTIAL_STEP.pattern, RUNNER_FAILED.pattern, inspect.getsource(failed_jobs_log),
-             inspect.getsource(step_window_lines), inspect.getsource(run_failed_jobs), inspect.getsource(run_failed_attempt)]
+             inspect.getsource(step_window_lines), inspect.getsource(run_failed_jobs), inspect.getsource(run_failed_attempt),
+             ORDER_VERDICT.pattern, inspect.getsource(order_verdict)]
     return hashlib.sha1("\n".join(parts).encode()).hexdigest()[:12]
 
 

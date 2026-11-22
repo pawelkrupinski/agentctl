@@ -854,7 +854,7 @@ def explain_run_jobs(o_r, run, tail, repo=None):
     if attempt:
         lines.append(f"  read attempt {attempt}, the failed one: attempt {latest.get('attempt')} (the latest) is "
                      f"{latest.get('conclusion') or latest.get('status')}")
-    kinds, fetched, per_job = [], 0, []
+    kinds, fetched, per_job, regressions = [], 0, [], []
     for j in failed:
         if j["name"] in annotated:
             jl = annotated[j["name"]]
@@ -893,6 +893,12 @@ def explain_run_jobs(o_r, run, tail, repo=None):
             fetched += 1
             jl = job_annotations(o_r, j)  # no log line at all (0 steps, no runner): GitHub's annotations
         kind, why = classify_job(j, jl, raws.get(j["name"], (0, [])), j["name"] in timed or any(STEP_TIMED_OUT in l for l in jl))
+        # THE ORDER VERDICT (classify.py): a control pass's REGRESSION / ORDER line keys the red and says what it is
+        ov = order_verdict(l for jn, l in log_entries(log) if jn == j["name"]) if log and kind == "test" else None
+        if ov:
+            jl = [ov] + [l for l in jl if ORDER_VERDICT.search(l) is None]
+            why = f"{why}; {'REGRESSION, not an order dependence' if is_regression(ov) else 'an order dependence (or a flake)'}"
+            regressions += [j["name"]] if is_regression(ov) else []
         if unread and not jl and not setup:
             kind, why = "unclear", (f"LOG UNREADABLE ({unread[-1]}): no log was read, so nothing says infra or test -- "
                                     f"read `gh run view {rid} --log-failed` again; never rerun on this alone")
@@ -926,6 +932,9 @@ def explain_run_jobs(o_r, run, tail, repo=None):
                    "skipped, cancelled or missing; not a test failure, no fixer: the next complete run decides)")
     elif any(l.startswith("  [test]") and ": TIMEOUT: " in l for l in lines):
         verdict = "TIMEOUT (a step ran past its own timeout-minutes: a code/config red, not a rerun)"
+    elif "test" in kinds and regressions:
+        verdict = (f"TEST FAILURE: REGRESSION, not an order dependence ({', '.join(regressions)}: the failing tests fail in "
+                   "default order too, at the same commit -- a change broke them)")
     elif "test" in kinds:
         verdict = "TEST FAILURE"
     elif "unclear" in kinds:
