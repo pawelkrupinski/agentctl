@@ -3,7 +3,7 @@
 2026-11-06: `agentctl land` of ~/bin ended twice with "stalled push ... no output and no CPU for 20 min" and its landing
 lease lost, though the suite passed by hand in 162 s. GNU timeout puts the command in a process group of its own, so
 land's progress watcher (land.py group_cpu_seconds, by the push's process group) saw neither output nor CPU."""
-import os, pwd, shutil, subprocess, tempfile, unittest
+import os, pwd, shutil, subprocess, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 HOOK = os.path.join(os.path.dirname(HERE), "hooks", "pre-push")
@@ -53,7 +53,8 @@ class BinPrePushHookTest(unittest.TestCase):
     def test_the_suites_bound_grows_with_the_laptops_load(self):
         """2026-11-21: two pushes of d2be9d3 were refused as SUITE TIMEOUT after 280 s with no test failing (1005, then
         1522 of 1755 run) while other agents' what-ifs held the laptop at load 30 on 18 cores. The bound scales with
-        load per core (1x to 4x)."""
+        load per core (1x to 4x), and the per-test timeout with it (2026-11-22: queue_sim's mutation 1 timed out at load
+        290 and refused a push with nothing wrong)."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = os.path.join(tmp, "repo")
             os.makedirs(os.path.join(repo, "tests"))
@@ -64,12 +65,26 @@ class BinPrePushHookTest(unittest.TestCase):
             git(repo, "add", "-A")
             git(repo, "commit", "-qm", "base")
             sha = git(repo, "rev-parse", "HEAD")
-            for load, want in (("9.0", "280"), ("36.0", "560"), ("200", "1120")):
+            for load, want, per_test in (("9.0", "280", "60"), ("36.0", "560", "120"), ("200", "1120", "240")):
                 env = dict(ENV, AGENTCTL_PREPUSH_LOAD=load, AGENTCTL_PREPUSH_CORES="18")
                 p = subprocess.run(["sh", HOOK, "origin", "x"], cwd=repo, input=f"refs/heads/main {sha} refs/heads/main "
                                    f"{'0' * 39}1\n", capture_output=True, text=True, env=env, timeout=60)
                 self.assertEqual(p.returncode, 0, p.stderr)
-                self.assertEqual(open(mark).read(), f"--suite-timeout {want}", load)
+                self.assertEqual(open(mark).read(), f"--suite-timeout {want} --timeout {per_test}", load)
+
+
+class MutantBoundTest(unittest.TestCase):
+    def test_a_mutant_scenario_s_bound_follows_the_per_test_timeout(self):
+        sys.path.insert(0, HERE)
+        import test_queue_sim
+        saved = os.environ.get("AGENTCTL_TEST_TIMEOUT")
+        try:
+            for per_test, want in (("60", 50), ("240", 230)):
+                os.environ["AGENTCTL_TEST_TIMEOUT"] = per_test
+                self.assertEqual(test_queue_sim.MUTANT_BOUND(), want)
+        finally:
+            os.environ["AGENTCTL_TEST_TIMEOUT"] = saved if saved is not None else "60"
+
 
 if __name__ == "__main__":
     unittest.main()

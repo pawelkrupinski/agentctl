@@ -28,6 +28,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import queue_sim  # noqa: E402
 
+
+def MUTANT_BOUND():
+    """A mutant scenario's bound: 10 s inside the per-test timeout, which the pre-push hook grows with the laptop's load
+    (a fixed 50 s refused a push at load 290, 2026-11-22: mutation 1 takes ~40 s on an idle laptop)."""
+    return max(50, int(os.environ.get("AGENTCTL_TEST_TIMEOUT") or 60) - 10)
+
 SEEDS = int(os.environ.get("AGENTCTL_TEST_SIM_SEEDS") or 200)
 SHARDS = 8
 # THE LOAD PROFILE: one check tree, a steady stream of mostly batchable changes, nothing failing. Every change lands
@@ -405,7 +411,7 @@ class MutationTest(unittest.TestCase):
                 with open(runner, "w") as f:
                     f.write(RUNNER)
                 r = subprocess.run([sys.executable, runner, os.path.join(tmp, "tests"), scenario], capture_output=True,
-                                   text=True, timeout=50, env=dict(os.environ))
+                                   text=True, timeout=MUTANT_BOUND(), env=dict(os.environ))
                 self.assertEqual(r.returncode, 0, r.stderr[-2000:])
                 self.assertNotEqual(r.stdout.strip().splitlines()[-1], "[]",
                                     f"mutation {name}: no invariant failed -- the simulator no longer catches it")
