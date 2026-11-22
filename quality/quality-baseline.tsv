@@ -419,7 +419,6 @@ cycle	batch	1
 cycle	blame	1
 cycle	cireport	1
 cycle	fixerlife	1
-cycle	landwatch	1
 cycle	owner	1
 cycle	queuebatch	1
 cycle	queueclose	1
@@ -445,6 +444,7 @@ cycle	slots	1
 cycle	status	1
 cycle	tools	1
 cycle	watchdog	1
+cycle	watchtick	1
 cyclomatic	HeldLease.check	12
 cyclomatic	LiveTail.poll	14
 cyclomatic	RemoteStore._call_once	17
@@ -875,7 +875,7 @@ file-lines	ciwhy	760
 file-lines	gov	728
 file-lines	live	755
 file-lines	owner	703
-file-lines	remote	963
+file-lines	remote	790
 file-lines	server	1382
 file-lines	slots	1106
 file-lines	stats	623
