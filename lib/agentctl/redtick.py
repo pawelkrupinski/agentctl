@@ -1,5 +1,53 @@
 # agentctl, part `redtick`: the tick's red step (the processor; ci-why never acts).
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import threading
+import time
+from agentctl.core import NoReadAccess, env_num, err, process_cache, reds_dir, run_bounded, slug
+from agentctl.timefmt import ts
+from agentctl.forge import RUN_FIELDS, gh_json
+from agentctl.store import StaleVersion, open_store
+from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_clone, red_repo_short, red_repos, scan_repo_for
+from agentctl.fixerrecords import agent_name, own_fixer_record_path
+from agentctl.redretired import red_retired
+from agentctl.storetoken import red_read_token
+from agentctl.lander import lander_note_landed
+from agentctl.redrecord import RED_TERMINAL, red_what
+from agentctl.gating import gate_dirty_path
+from agentctl.owned import default_repo
+from agentctl.worktrees import claimant
+from agentctl.redfixread import red_main_current
+from agentctl.conditions import open_condition, run_probe
+from agentctl.redfixes import red_fix_facts
+from agentctl.redrepos import red_gate_flows, red_is_other
+from agentctl.red import RED_TICK_INTERVAL, red_active_of, red_obs_for
+from agentctl.redmove import red_put_offer, red_settled_runs
+from agentctl.ciwhy import (
+    _gate_lists, _gate_no_verdict, _outside_lists, ci_state_load, ci_state_write, gate_from_snap, gate_runs)
+from agentctl.branches import (
+    _blocker_cache, _last_gate_publish, dispatch_blocker, in_fixer, publish_gate_summary, refresh_pinned_recording,
+    route_branch_reds, settle_branch_reds)
+from agentctl.redseen import gate_red_units, red_merge_rekeyed, red_obs_of_units, stuck_obs
+from agentctl.redobserve import red_observe
+from agentctl.reduntracked import red_active_untracked, red_note_untracked, red_split_untracked, red_untrack
+from agentctl.redblock import gate_unread_spell, red_renew_blocks
+from agentctl.redopen import red_attach_obs, red_offer, red_open
+from agentctl.redearly import early_attach, early_observed, early_opened, early_unobserved
+from agentctl.redclaim import bind_fixer_session, red_beat, red_claim, red_release, red_targets
+from agentctl.fixerlife import red_fixer
+from agentctl.owner import red_owner, red_reap_orphans
+from agentctl.redvault import red_block, red_owner_push, red_quota_waits, red_unblock
+from agentctl.ask import red_owner_reminders
+from agentctl.blame import blame_withdraw, cmd_red_probe
+from agentctl.reddispatch import RED_MODEL, red_dispatcher, red_migrate, red_renew_holders, repo_dispatch_off_all
+from agentctl.redstep import red_step
+from agentctl.redview import repo_dispatch_set
+from agentctl.cireport import ci_state_refresh, ci_why
+from agentctl.watchdog import red_enforce
+from agentctl.status import red_status
+from agentctl.localrecheck import recheck_local
+
 
 # -- the tick's red step (the processor; ci-why never acts)
 _red_lock = threading.Lock()

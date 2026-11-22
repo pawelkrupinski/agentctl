@@ -43,6 +43,7 @@ mypy-errors	landwatch	23
 mypy-errors	laptoprole	11
 mypy-errors	launchd	2
 mypy-errors	live	89
+mypy-errors	localrecheck	33
 mypy-errors	maint	39
 mypy-errors	notifier	26
 mypy-errors	notifyurl	14
@@ -95,7 +96,7 @@ mypy-errors	repos	34
 mypy-errors	reverts	46
 mypy-errors	rundispatch	11
 mypy-errors	server	252
-mypy-errors	slots	184
+mypy-errors	slots	151
 mypy-errors	stats	139
 mypy-errors	status	224
 mypy-errors	store	128
