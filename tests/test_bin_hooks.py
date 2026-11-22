@@ -73,6 +73,35 @@ class BinPrePushHookTest(unittest.TestCase):
                 self.assertEqual(open(mark).read(), f"--suite-timeout {want} --timeout {per_test}", load)
 
 
+    @unittest.skipUnless(TIMEOUT, "no GNU timeout on this machine: the hook cannot run here")
+    def test_the_ratchets_refuse_and_a_missing_tool_blocks(self):
+        """The ratchets (quality/ratchet.py) run after the suite: a refusal refuses the push, and so does a tool that
+        cannot be installed -- never a skip."""
+        cases = (("import sys\nprint(sys.executable)\n", "import sys\nsys.exit(0)\n", 0, "ratchets"),
+                 ("import sys\nsys.exit('no network')\n", "import sys\nsys.exit(0)\n", 1, "not installed"),
+                 ("import sys\nprint(sys.executable)\n",
+                  "import sys\nprint('NEW cognitive f = 11')\nsys.exit(1 if sys.argv[1] == 'check' else 0)\n", 1,
+                  "NEW cognitive f = 11"))
+        for tools, ratchet_py, want_rc, want_text in cases:
+            with tempfile.TemporaryDirectory() as tmp:
+                repo = os.path.join(tmp, "repo")
+                os.makedirs(os.path.join(repo, "tests"))
+                os.makedirs(os.path.join(repo, "quality"))
+                files = {"tests/run.py": "print('OK')\n", "quality/tools.py": tools,
+                         "quality/ratchet.py": "print('ratchets: OK')\n" + ratchet_py}
+                for name, text in files.items():
+                    with open(os.path.join(repo, name), "w") as f:
+                        f.write(text)
+                git(tmp, "init", "-q", repo)
+                git(repo, "add", "-A")
+                git(repo, "commit", "-qm", "base")
+                sha = git(repo, "rev-parse", "HEAD")
+                p = subprocess.run(["sh", HOOK, "origin", "x"], cwd=repo, input=f"refs/heads/main {sha} refs/heads/main "
+                                   f"{'0' * 39}1\n", capture_output=True, text=True, env=ENV, timeout=60)
+                self.assertEqual(p.returncode, want_rc, p.stderr)
+                self.assertIn(want_text, p.stderr)
+
+
 class MutantBoundTest(unittest.TestCase):
     def test_a_mutant_scenario_s_bound_follows_the_per_test_timeout(self):
         sys.path.insert(0, HERE)
