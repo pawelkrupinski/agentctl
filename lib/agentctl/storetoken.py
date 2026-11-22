@@ -137,11 +137,6 @@ def token_unavailable_note(ns, why):
 _noting_token = [False]  # token_unavailable_note is running: the remote store's own token read must not recurse
 
 
-def on_ci_runner():
-    """The reconciler's own host (infra's agentctl.nix sets AGENTCTL_HOST=ci-runner), not a test's server role."""
-    return os.environ.get("AGENTCTL_HOST") == "ci-runner"
-
-
 def red_read_token(o_r):
     """None when o_r can be read (movies, off ci-runner, or the reader App configured: forge_env takes its token);
     NoReadAccess when ci-runner has no reader App."""

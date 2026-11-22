@@ -48,13 +48,6 @@ def default_store_url():
     return os.environ.get("AGENTCTL_STORE_DEFAULT_URL") or DEFAULT_STORE_URL
 
 
-def host_role():
-    """"server" on ci-runner (AGENTCTL_HOST=ci-runner, or AGENTCTL_ROLE=server), else "sync". There is no third role."""
-    if os.environ.get("AGENTCTL_ROLE") == "server" or os.environ.get("AGENTCTL_HOST") == "ci-runner":
-        return "server"
-    return "sync"
-
-
 def contact_machine():
     """The machine this process's store calls speak for (A SILENT MACHINE'S LEASE CLOCKS PAUSE): $AGENTCTL_MACHINE, else
     `laptop` for the laptop's agentctl (the sync role on macOS: its holders are `laptop:...`), else None."""
@@ -62,22 +55,6 @@ def contact_machine():
     if m is not None:
         return m or None
     return "laptop" if host_role() == "sync" and sys.platform == "darwin" else None
-
-
-def store_errors():
-    return {"StaleVersion": StaleVersion, "TerminalState": TerminalState, "LeaseLost": LeaseLost,
-            "IllegalTransition": IllegalTransition}
-
-
-class StoreUnavailable(RuntimeError):
-    """The remote store did not answer (the tunnel, ci-runner, the service): no verdict either way."""
-
-
-class StoreAuthFailed(StoreUnavailable):
-    """The store refused the caller's credential (HTTP 401/403): never transient. A wrapper holding leases takes a fresh
-    store token once and, refused again, ends at once -- its leases released (or revoked by the tick) with `store auth
-    failed: <detail>` -- instead of 'asking again at the next beat' forever (2026-10-31: an owner session started
-    before the store-only-token switch got 403s while its wrapper kept its reds leased)."""
 
 
 class _StoreTransient(Exception):

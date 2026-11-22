@@ -15,35 +15,10 @@
 #     itself on the new code with the same pid;
 #   * `agentctl orphans` reads the records: a dead process's record, an owner on old code, an owner whose cwd is gone.
 OWNERS_RESTART_CHECK = 30  # seconds between code-version checks ($AGENTCTL_RESTART_CHECK)
-TOOL_PATH = os.path.realpath(__file__)
-if TOOL_PATH.endswith(os.path.join("lib", "agentctl", "__init__.py")):  # imported as a package: the entry beside lib/
-    TOOL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(TOOL_PATH))), "agentctl")
 
 
 def owners_dir():
     return os.environ.get("AGENTCTL_OWNERS_DIR") or state_root("owners")
-
-
-def code_files(path=TOOL_PATH):
-    """agentctl's code: the entry script and every part of its package beside it (lib/agentctl/*.py), as
-    (relative path, absolute path), in a fixed order."""
-    root = os.path.dirname(path)
-    lib = os.path.join(root, "lib", "agentctl")
-    parts = sorted(f for f in os.listdir(lib) if f.endswith(".py")) if os.path.isdir(lib) else []
-    return [(os.path.basename(path), path)] + [(f"lib/agentctl/{f}", os.path.join(lib, f)) for f in parts]
-
-
-def code_version(path=TOOL_PATH):
-    """A hash of ALL of agentctl's code (code_files): a change to any part is new code."""
-    import hashlib
-    h = hashlib.sha256()
-    try:
-        for rel, p in code_files(path):
-            with open(p, "rb") as f:
-                h.update(rel.encode() + b"\0" + f.read() + b"\0")
-    except OSError:
-        return ""
-    return h.hexdigest()[:16]
 
 
 START_CODE = code_version()
@@ -77,14 +52,6 @@ def start_rev():
     if not _start_rev:
         _start_rev.append(code_rev() if code_version() == START_CODE else "")
     return _start_rev[0]
-
-
-def process_start(pid):
-    """The process's start time as ps prints it: with the pid, it names one process even after the pid is reused."""
-    # LC_ALL=C: one format whoever asks (2026-10-27: launchd's processor wrote "Tue Oct 27 …", a session's en_GB ps read
-    # "Tue 27 Oct …", and a live red fixer looked dead)
-    r = run_cmd(["ps", "-o", "lstart=", "-p", str(pid)], env=dict(os.environ, LC_ALL="C"))
-    return r.stdout.strip()
 
 
 def cancel_run(o_r, rid, why):

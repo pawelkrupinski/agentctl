@@ -30,13 +30,17 @@ def instructions(code):
     for i in dis.get_instructions(code):
         if i.opname == "PUSH_NULL" or i.opname in dis.hasjrel or i.opcode in dis.hasjump:
             continue
+        if i.opname == "STORE_NAME" and i.argval == "__firstlineno__":  # a class body's own line: positions aside
+            out.pop()
+            continue
         out.append((i.opname, i.argval if not isinstance(i.argval, types.CodeType) else None))
     return out
 
 
 def signature(code):
     return (instructions(code), code.co_names, code.co_varnames,
-            tuple(signature(x) if isinstance(x, types.CodeType) else repr(x) for x in code.co_consts))
+            tuple(signature(x) if isinstance(x, types.CodeType) else repr(x) for x in code.co_consts
+                  if "__firstlineno__" not in code.co_names or x != code.co_firstlineno))
 
 
 def main(argv):

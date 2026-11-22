@@ -1,16 +1,6 @@
 # agentctl, part `maint`: orphans and stale JVMs.
 # Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
 
-# ---------------------------------------------------------------- orphans
-def ps():
-    r = run_cmd(["ps", "-axo", "pid=,ppid=,etime=,command="])
-    out = []
-    for line in r.stdout.splitlines():
-        parts = line.split(None, 3)
-        if len(parts) == 4:
-            out.append((int(parts[0]), int(parts[1]), parts[2], parts[3]))
-    return out
-
 
 def loop_body(cmd):
     m = re.search(r"eval '(.*)' < /dev/null", cmd, re.S)
@@ -281,22 +271,6 @@ AGENT_WORK = re.compile(r"(^|/)claude( |$)|agentctl (land|waiting run|red fixer)
 def jvm_knob(name, default):
     """The old script's tunables, by the same names ($HOG_MIN_AGE_SECONDS, ...)."""
     return os.environ.get(name, default)
-
-
-def tosec(t):
-    """ps's [[dd-]hh:]mm:ss[.frac] (etime) or unbounded mm:ss (cputime) -> seconds."""
-    dd = 0
-    t = str(t)
-    if "-" in t:
-        d_, t = t.split("-", 1)
-        dd = int(d_ or 0)
-    s = 0.0
-    for part in t.split(":"):
-        try:
-            s = s * 60 + float(part)
-        except ValueError:
-            return 0.0
-    return s + dd * 86400
 
 
 def jvm_candidates(rows, cwd, kept, port_pids, self_pid, isdir=os.path.isdir):

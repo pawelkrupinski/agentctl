@@ -50,7 +50,7 @@ ENV_HELP = """Agent environment, without secrets.
 A locked vault prints exactly: vault <ns> locked: ask the user to run `! secrets unlock <ns>`  -- and exits 1.
 agentctl never runs `secrets unlock` (Touch ID is the user's). Output never contains a token: tools read it at use."""
 import argparse, contextlib, io, datetime as dt, fcntl, fnmatch, glob, itertools, json, os, re, shlex, signal, stat, subprocess, sys, threading, time, traceback, urllib.error, urllib.parse, urllib.request
-from typing import Any, Callable  # the types ratchet (quality/typecheck.py): typed records read as dict[str, Any] until typed
+from typing import Any, Callable, Sequence  # the types ratchet (quality/typecheck.py): typed records read as dict[str, Any] until typed
 
 # THE PROCESS-WIDE CACHES, IN ONE REGISTRY (simplification-2026-10-31 item 10): every module-level dict, list or set a
 # part keeps between calls is made with `process_cache(...)`, so the test harness clears them all between tests
@@ -195,7 +195,7 @@ def git(repo, *args, check=True, input=None, timeout=600):
     return r.stdout if check else r
 
 
-def run_cmd(args, timeout=60, text=True, **kw):
+def run_cmd(args: Sequence[str], timeout: float = 60, text: bool = True, **kw: Any) -> subprocess.CompletedProcess[Any]:
     """THE subprocess runner for a short local command (ps, lsof, pgrep, launchctl, a probe, a quick git): output
     captured, stdin closed, and BOUNDED -- a hung command reads as exit 124 with empty output, never a hung caller."""
     kw.setdefault("stdin", None if "input" in kw else subprocess.DEVNULL)
@@ -391,7 +391,7 @@ def reap_children():
     return n
 
 
-def pid_alive(pid):
+def pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
         return True
@@ -424,3 +424,15 @@ class NoToken(SystemExit):
 # installation token (ghapp.py), never the lander's.
 class NoReadAccess(NoToken):
     """ci-runner has no read credential for a repo other than movies (the agentctl-reader App is not configured)."""
+
+
+def on_ci_runner() -> bool:
+    """The reconciler's own host (infra's agentctl.nix sets AGENTCTL_HOST=ci-runner), not a test's server role."""
+    return os.environ.get("AGENTCTL_HOST") == "ci-runner"
+
+
+def host_role() -> str:
+    """"server" on ci-runner (AGENTCTL_HOST=ci-runner, or AGENTCTL_ROLE=server), else "sync". There is no third role."""
+    if os.environ.get("AGENTCTL_ROLE") == "server" or os.environ.get("AGENTCTL_HOST") == "ci-runner":
+        return "server"
+    return "sync"

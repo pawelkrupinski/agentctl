@@ -761,3 +761,19 @@ def cmd_lease(a):
     if hidden:
         print(f"({hidden} free for over {LEASE_LIST_RECENT // 60} min not shown: --all)")
     return 0
+
+
+def store_errors() -> dict[str, type[Exception]]:
+    return {"StaleVersion": StaleVersion, "TerminalState": TerminalState, "LeaseLost": LeaseLost,
+            "IllegalTransition": IllegalTransition}
+
+
+class StoreUnavailable(RuntimeError):
+    """The remote store did not answer (the tunnel, ci-runner, the service): no verdict either way."""
+
+
+class StoreAuthFailed(StoreUnavailable):
+    """The store refused the caller's credential (HTTP 401/403): never transient. A wrapper holding leases takes a fresh
+    store token once and, refused again, ends at once -- its leases released (or revoked by the tick) with `store auth
+    failed: <detail>` -- instead of 'asking again at the next beat' forever (2026-10-31: an owner session started
+    before the store-only-token switch got 403s while its wrapper kept its reds leased)."""
