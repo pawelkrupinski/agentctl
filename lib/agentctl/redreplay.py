@@ -1,9 +1,6 @@
 # agentctl, part `redreplay`: a fixer's brief and FIX REPLAY: the replay trailers, agentctl's own replays, the refusal.
 # Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
 
-# -- dispatch: a headless Claude Code fixer in a fresh worktree
-SECRET_ENV = re.compile(r"TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|PRIVATE|CREDENTIAL|VAULT", re.I)
-
 
 def sync_brief():
     """The movies agents' preamble a fixer reads first (~/bin/briefs/movies-agent-preamble.md, $AGENTCTL_BRIEF). The

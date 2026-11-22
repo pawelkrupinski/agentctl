@@ -63,3 +63,17 @@ def save_entry(d: str, e: dict[str, Any]) -> None:
 def wlog(d: str, msg: str) -> None:
     with open(os.path.join(d, "processor.log"), "a") as f:
         f.write(f"{ts()} {msg}\n")
+
+
+# ---------------------------------------------------------------- the land queue: agents never wait on a land
+# The owner (2026-10-27): "agents never wait on a land". `land` rebases the change onto origin/main, runs the squash
+# guard, enqueues it and returns at once: `QUEUED <id> (<sha>)`. The always-on `waiting` processor (launchd
+# net.bitcashier.agentctl-waiting) runs each queued change's checks in a CHECK TREE of its own (a pool of detached
+# worktrees <clone>-wt-check-<n>, kept warm between checks, seeded from the shared build cache when cold), admitted by
+# the governor (a check; red for a Fixes-Red fix of a red run, which goes first) -- or on ci-runner's check tier when the
+# governor reports pressure (see "remote checks") -- then, under the landing lock: main green (or a change that may land
+# while red), the checked tip is pushed (`LANDED`, and a detached watch); main red, it joins `waiting` (`WAITING`). Main
+# moved meanwhile: rebased in the tree and checked again. Every verdict goes to the inbox with the agent's worktree.
+# `land --follow` keeps the old in-process land (checks, push, watch) for scripts; a red fixer queues and waits
+# (fixer_land).
+QUEUE_POOL = 4          # check trees, so at most this many queued changes are checked at once ($AGENTCTL_CHECK_TREES);

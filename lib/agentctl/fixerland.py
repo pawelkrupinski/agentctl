@@ -38,16 +38,9 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
         wt = cont["worktree"]
         resume = {"note": cont["note"]}
     else:
-        _d, clone, _w = waiting_state(repo)
-        wt, branch, n = f"{clone}-wt-red-{num}", f"red-{num}", 1
-        while os.path.exists(wt) or git_ok(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"):
-            n += 1
-            wt, branch = f"{clone}-wt-red-{num}-{n}", f"red-{num}-{n}"
-        git(repo, "worktree", "prune", check=False)
-        git(repo, "fetch", "--quiet", remote(), "main", check=False)
-        r = git(repo, "worktree", "add", "-q", "-b", branch, wt, f"{remote()}/main", check=False)
-        if r.returncode != 0:
-            return False, dispatch_log(u, f"NOT DISPATCHED: git worktree add failed ({r.stderr.strip()[:160]})")
+        wt, why_not = fresh_worktree(repo, "red", num)
+        if wt is None:
+            return False, dispatch_log(u, f"NOT DISPATCHED: {why_not}")
     rec = {"key": u.get("key"), "lease": lease, "epoch": (took or {}).get("epoch"),
            "jobs": u.get("jobs") or [u.get("job")],
            "run": num, "run_id": u["run"].get("databaseId"), "workflow": u["workflow"], "job": u.get("job"),

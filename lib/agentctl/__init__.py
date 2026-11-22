@@ -23,15 +23,15 @@ import types as _types
 MODULES = ("core", "timefmt", "statefile", "moviestools", "forge", "ghapp", "classify", "store", "procs", "selfcode",
            "repos", "buildview", "policy", "notifyurl", "config", "workflows", "trailers", "leases", "waitingdir",
            "fixerrecords", "inboxentry", "wait", "redretired", "land", "storetoken", "lander", "redrecord",
-           "claudefiles", "gating", "allowedpaths", "cpu", "fixersession", "live", "owned", "stats")
+           "claudefiles", "gating", "allowedpaths", "cpu", "fixersession", "live", "owned", "stats", "clones",
+           "worktrees", "fixerenv", "explorer", "queueslots", "redfixread", "reverts")
 
-NAMESPACE = ("ciwhy", "branches", "red", "redseen", "redfixread", "redfixes", "redmove", "reduntracked", "redstep",
-             "redcrash", "redpending", "redverify", "reddispatch", "redreplay", "fixer", "fixerland", "fixerlife",
-             "redclaim", "redview", "redearly", "redtick", "redblock", "redvault", "ask", "owner", "gov", "slots",
-             "landwatch", "waiting", "queue", "queuerecheck", "queuesubmit", "queueuntil", "queueslots",
-             "queueclose", "queuediff", "queuepush", "queuebatch", "remote", "batch", "changekind", "tools",
-             "cleanup", "maint", "blame", "explorer", "reverts", "server", "upkeep", "procwatch", "watchdog",
-             "inbox", "alerts", "recovery", "projector", "status", "cli")
+NAMESPACE = ("ciwhy", "branches", "red", "redseen", "redfixes", "redmove", "reduntracked", "redstep", "redcrash",
+             "redpending", "redverify", "reddispatch", "redreplay", "fixer", "fixerland", "fixerlife", "redclaim",
+             "redview", "redearly", "redtick", "redblock", "redvault", "ask", "owner", "gov", "slots", "landwatch",
+             "waiting", "queue", "queuerecheck", "queuesubmit", "queueuntil", "queueclose", "queuediff", "queuepush",
+             "queuebatch", "remote", "batch", "changekind", "tools", "cleanup", "maint", "blame", "server", "upkeep",
+             "procwatch", "watchdog", "inbox", "alerts", "recovery", "projector", "status", "cli")
 
 PARTS = MODULES + NAMESPACE
 

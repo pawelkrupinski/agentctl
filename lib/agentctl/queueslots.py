@@ -1,5 +1,19 @@
 # agentctl, part `queueslots`: check slots and a change's check as leases; the red-fix tree; a fix of an open red first.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import subprocess
+from agentctl.core import env_num, err, git
+from agentctl.timefmt import parse_time, ts
+from agentctl.store import (
+    ENTRY_STATE, StaleVersion, TerminalState, change_event, joined_verdict, machine_state, open_store)
+from agentctl.leases import LeaseHold, lease_live
+from agentctl.waitingdir import QUEUE_POOL, save_entry, waiting_entries, waiting_state, wlog
+from agentctl.land import tool_env
+from agentctl.lander import lander_fields
+from agentctl.owned import Owned
+from agentctl.worktrees import mark_internal
+
 
 # CHECK SLOTS AND A CHANGE'S CHECK ARE LEASES (design §6, §7.1; phase 1 step 4): `slot/check/<repo>/<i>` (one per
 # check tree) and `check/<entry>` (its checker), TTL CHECK_LEASE_TTL renewed on the check's real progress

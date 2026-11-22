@@ -174,7 +174,7 @@ def repo_path_for(o_r):
     return None
 
 
-def server_repo():
+def server_repo() -> Any:
     """The reconciler's own clone on ci-runner (movies_repo_path; `tick` clones it from $AGENTCTL_MOVIES_REMOTE as
     remote()'s name)."""
     return movies_repo_path()
@@ -192,3 +192,10 @@ def scan_repo_for(o_r, repo=None):
     if os.environ.get("AGENTCTL_RED_REPO"):
         return red_repo(o_r)
     return repo or repo_path_for(o_r)
+
+
+def repo_signs(o_r):
+    """Whether repo o_r's main keeps commit signatures (red-repos.json `signed`, default true). movies' does not: its
+    land rebases every change with NO_SIGN, so a fixer's signature never reaches main."""
+    c = red_repo_conf(o_r)
+    return True if c is None else c.get("signed", True)

@@ -325,33 +325,11 @@ def server_clone_remote(repo):
         git(repo, "remote", "set-url", remote(), url)
 
 
-# THE CLONE HEALS ITSELF (2026-10-29: `git fetch --refetch` could not repair the half clone either: "shallow roots
-# are not allowed to be updated"). A fetch of main failing with a corruption signature marks the clone suspect; the
-# processor's "clone health" step re-probes it (clone_health: verified, and a fetch of main works) and, when it is
-# broken, clones afresh into a temp directory and swaps it in under the clone lock (exclusive: every step and checker
-# that uses the clone holds it shared). The broken copy is kept as <repo>.broken-<ts> (the newest one only, older ones
-# deleted after a successful swap); the check and waiting worktrees are re-linked to the new clone. A CLONE condition
-# says so, and the same probe, passing, closes it. Only the server's own clone ($AGENTCTL_MOVIES_REMOTE set): never a
-# person's checkout.
-CORRUPT_GIT = re.compile(r"did not send all necessary objects|Could not read [0-9a-f]{7,}|missing (blob|tree|commit|tag) "
-                         r"object|is missing|failed to traverse parents|shallow roots are not allowed|bad object|"
-                         r"bad tree object|unable to read [0-9a-f]{7,}|is corrupt|object file .* is empty|"
-                         r"inflate: data stream error|invalid object|unable to parse object", re.I)
 CLONE_REPAIR_RETRY = 15 * 60  # a repair that failed is tried again after this
 CLONE_LOCK_WAIT = 300         # the swap waits this long for the clone's users to finish, then tries again next tick
 _clone_lock_depth = threading.local()
 _clone_repairing = threading.Lock()
 _clone_repair_at = process_cache({})
-
-
-def heal_enabled(repo):
-    return bool(os.environ.get("AGENTCTL_MOVIES_REMOTE")) and \
-        os.path.realpath(repo) == os.path.realpath(server_repo())
-
-
-def clone_side(repo, what):
-    parent, base = os.path.split(os.path.abspath(repo))
-    return os.path.join(parent, f".{base}.{what}")
 
 
 @contextlib.contextmanager
@@ -404,26 +382,6 @@ def clone_exclusive(repo, wait=None):
                 fcntl.flock(lk, fcntl.LOCK_UN)
         finally:
             fcntl.flock(gate, fcntl.LOCK_UN)
-
-
-def note_clone_suspect(repo, error):
-    """A git error on the clone that looks like corruption: the clone health step looks at it next tick."""
-    if heal_enabled(repo) and CORRUPT_GIT.search(error or ""):
-        write_json(clone_side(repo, "suspect.json"), {"at": time.time(), "error": (error or "").strip()[-2000:]})
-        return True
-    return False
-
-
-def fetch_main(repo):
-    """git fetch <the forge remote> main in repo: (ok, git's stderr). A corruption signature marks the clone suspect."""
-    r = git(repo, "fetch", "--quiet", remote(), "main", check=False)
-    out = (r.stderr or "").strip()
-    if r.returncode == 0 and git_ok(repo, "rev-parse", "--verify", "-q", f"{remote()}/main"):
-        return True, out
-    if not out:
-        out = f"exit {r.returncode}" + ("" if r.returncode else f"; {remote()}/main does not resolve")
-    note_clone_suspect(repo, out)
-    return False, out
 
 
 def probe_clone_health(a):

@@ -7,6 +7,8 @@ from agentctl.core import process_cache
 from agentctl.timefmt import ts
 from agentctl.store import LeaseLost, open_store
 from agentctl.procs import socket_host
+import json
+import time
 
 
 _landing: list["LeaseHold | None"] = [None]  # the LeaseHold of the landing lease this process holds (land_lock)
@@ -63,3 +65,12 @@ class LeaseHold:
         if self.lease:
             self.store.release(self.name, self.lease["epoch"], self.lease["secret"])
             self.lease = None
+
+
+def lease_live(name: str, store: Any = None) -> dict[str, Any] | None:
+    """The live lease `name` (its row, meta decoded), or None."""
+    r: dict[str, Any] | None = (store or open_store()).get(name)
+    if r and r["holder"] and r["expires_at"] > time.time():
+        r["meta"] = json.loads(r["meta"] or "{}")
+        return r
+    return None

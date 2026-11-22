@@ -814,25 +814,6 @@ def batch_check(repo, d, tree, base, tip, cls="check", depth="fast", runs=None, 
     return False, out, True
 
 
-def main_clone(path):
-    """The main clone a worktree belongs to (its git common dir's checkout): what a DETACHED process works from, since
-    the worktree it was started for may be removed under it (2026-10-27: a watch crashed with `git rev-parse
-    --show-toplevel in ~/projects/movies-wt-gate-closed: cannot change to ...` after its agent removed the worktree at
-    LANDED). A path that is gone resolves by name: <clone>-wt-<name> -> <clone>."""
-    if path and os.path.isdir(path):
-        r = git(path, "rev-parse", "--path-format=absolute", "--git-common-dir", check=False)
-        if r.returncode == 0:
-            common = os.path.realpath(r.stdout.strip())
-            clone = os.path.dirname(common) if os.path.basename(common) == ".git" else common
-            if os.path.isdir(clone):
-                return clone
-        return git(path, "rev-parse", "--show-toplevel").strip()
-    m = re.match(r"^(.*?)-wt-[^/]+/?$", path or "")
-    if m and os.path.isdir(m.group(1)):
-        return m.group(1)
-    raise RuntimeError(f"{path}: gone, and no main clone found for it")
-
-
 # WATCHES FROM ITEMS (design §5.1 `landed`, phase 1 step 9): a landed sha is a `watch` item; each tick evaluates it ONCE
 # (no detached process, no loop): its Main run and convergence run (pick_main_run / pick_convergence_run), WATCH OK
 # -> ok (the worktree closed when proven merged), WATCH RED -> red (its author told; the red machine attaches it), still

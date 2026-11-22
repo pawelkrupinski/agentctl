@@ -298,3 +298,10 @@ def lander_note_direct(repo, head, keys):
     except (Exception, SystemExit) as e:
         err(f"lander: not recorded ({str(e)[:160]})")
         return None
+
+
+def lander_name(l):
+    l = l or {}
+    who = f"subagent {l['agent']} of session {str(l.get('session'))[:8]}" if l.get("agent") else \
+        f"session {str(l.get('session'))[:8]}" if l.get("session") else "the owner"
+    return f"{who} ({str(l.get('worktree') or '?').replace(HOME, '~')})"

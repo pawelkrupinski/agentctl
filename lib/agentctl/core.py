@@ -143,7 +143,7 @@ SHORT = {
 DEFAULT_REMOTE = "origin"  # GitHub's remote name in every clone (laptop and ci-runner)
 
 
-def remote():
+def remote() -> str:
     """THE PUSH AND FETCH REMOTE of every clone agentctl lands, queues, waits, fixes and batches through:
     $AGENTCTL_REMOTE, else `origin`. Read at EVERY call: a test or a config change applies at once."""
     return (os.environ.get("AGENTCTL_REMOTE") or "").strip() or DEFAULT_REMOTE
@@ -212,7 +212,7 @@ def run_cmd(args: Sequence[str], timeout: float = 60, text: bool = True, **kw: A
         return subprocess.CompletedProcess(args, 124, empty, empty or f"timed out after {timeout} s")
 
 
-def git_ok(repo, *args):
+def git_ok(repo: str, *args: str) -> bool:
     try:
         return subprocess.run(["git", "-C", repo, *args], capture_output=True, timeout=120).returncode == 0
     except subprocess.TimeoutExpired:
@@ -459,3 +459,5 @@ def branch_of(wt: str | None) -> str:
 def dispatches_dir(*parts: str) -> str:
     d = os.environ.get("AGENTCTL_DISPATCH_DIR") or os.path.join(os.path.dirname(reds_dir()), "dispatches")
     return os.path.join(d, *parts)
+
+

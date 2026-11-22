@@ -1,5 +1,19 @@
 # agentctl, part `reverts`: a reverted change gets back to the agent that wrote it.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import re
+import time
+from agentctl.core import HOME, fmt_age, git, git_ok, remote
+from agentctl.timefmt import ts
+from agentctl.store import (
+    ARCHIVE, IllegalTransition, MACHINES, StaleVersion, StateSpec, StoreUnavailable, TerminalState, open_store)
+from agentctl.procs import allowed_path
+from agentctl.repos import RED_PRIMARY
+from agentctl.trailers import fixes_red_in_message, trailer_values
+from agentctl.lander import lander_index, lander_name, lander_of_commit, lander_records, patch_ids
+from agentctl.worktrees import claimant, worktree_exclude
+
 
 # ---------------------------------------------------------------- THE REVERT NOTICE (the owner, 2026-11-21)
 # 604134d1a landed through `agentctl land`, turned Main red (#2806-#2808), and a red fixer reverted it as 7380cf9d7

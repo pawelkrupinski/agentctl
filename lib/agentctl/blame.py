@@ -174,13 +174,6 @@ def blame_change_name(g):
     return f"change {g['change']}" if g.get("change") else f"commit {g['commits'][0][:10]}"
 
 
-def lander_name(l):
-    l = l or {}
-    who = f"subagent {l['agent']} of session {str(l.get('session'))[:8]}" if l.get("agent") else \
-        f"session {str(l.get('session'))[:8]}" if l.get("session") else "the owner"
-    return f"{who} ({str(l.get('worktree') or '?').replace(HOME, '~')})"
-
-
 def blame_free(o_r, d, b, i, runs):
     """A boundary's verdict that costs nothing: a decided run of the red's own (unseeded) workflow on exactly that commit
     -- pass on success; None when no such run exists, and ALWAYS None for a convergence red: its drift seeds rotate per
@@ -489,21 +482,6 @@ def blame_culprit(b):
     return b["groups"][b["culprit"]] if b.get("culprit") is not None and b.get("groups") else None
 
 
-def blame_worktree(repo, kind, num):
-    """A fresh <clone>-wt-<kind>-<run>[-n] off <remote>/main (its branch named the same): (path, None) or (None, why)."""
-    _d, clone, _w = waiting_state(repo)
-    wt, branch, n = f"{clone}-wt-{kind}-{num}", f"{kind}-{num}", 1
-    while os.path.exists(wt) or git_ok(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"):
-        n += 1
-        wt, branch = f"{clone}-wt-{kind}-{num}-{n}", f"{kind}-{num}-{n}"
-    git(repo, "worktree", "prune", check=False)
-    git(repo, "fetch", "--quiet", remote(), "main", check=False)
-    r = git(repo, "worktree", "add", "-q", "-b", branch, wt, f"{remote()}/main", check=False)
-    if r.returncode != 0:
-        return None, f"git worktree add failed ({r.stderr.strip()[:160]})"
-    return wt, None
-
-
 def blame_revert(o_r, repo, u, b):
     """ONE `git revert` of the culprit's commits (newest first, one commit) with `Reverts-Change:` and `Fixes-Red:`,
     landed by a detached `agentctl land` (a gate fix: it lands while main is red, through the normal hook). Returns
@@ -513,7 +491,7 @@ def blame_revert(o_r, repo, u, b):
     rec = {"at": ts(), "commits": g["commits"], "change": g.get("change")}
     if red_owner_only(u.get("repo") or o_r):
         return {**rec, "ok": False, "msg": f"no revert in {u.get('repo') or o_r}: its pushes are the owner's"}
-    wt, why = blame_worktree(repo, "revert", num)
+    wt, why = fresh_worktree(repo, "revert", num)
     if not wt:
         return {**rec, "ok": False, "msg": why}
     with WorktreeGuard(wt):  # EVERY EXIT PUTS THE WORKTREE BACK (slots.py) -- the land starts after it, never inside
@@ -558,7 +536,7 @@ def blame_reland(o_r, repo, u, b):
     g = blame_culprit(b) or {}
     if not rv:
         return {"ok": False, "at": ts(), "msg": "no landed revert to undo"}
-    wt, why = blame_worktree(repo, "reland", num)
+    wt, why = fresh_worktree(repo, "reland", num)
     if not wt:
         return {"ok": False, "at": ts(), "msg": why}
     r = git(wt, *NO_SIGN, "revert", "--no-edit", rv, check=False)
@@ -702,7 +680,7 @@ def lander_revive(store, o_r, repo, off, took, u, b):
     wt, moved = l.get("worktree"), None
     if not wt or not os.path.isdir(wt) or not allowed_path(wt):
         moved = wt
-        wt, why = blame_worktree(repo, "lander", num)
+        wt, why = fresh_worktree(repo, "lander", num)
         if not wt:
             return lander_fallback(store, o_r, repo, off, took, u, dict(b, revive_failed=why), why)
     rv = b.get("revert") or {}

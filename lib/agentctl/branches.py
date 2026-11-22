@@ -102,26 +102,6 @@ def tracked_branch(name, recorded=()):
 INTERNAL_TREE = re.compile(r"-wt-(check-\d+|waiting|batch)$")  # legacy fallback: trees made before they were tagged
 
 
-def internal_trees_dir(*parts):
-    d = os.environ.get("AGENTCTL_INTERNAL_TREES_DIR") or state_root("internal-trees")
-    return os.path.join(d, *parts)
-
-
-def mark_internal(path):
-    """Tag a worktree agentctl made for itself (check-N, baseline, recheck, waiting, batch, a finished red fixer's):
-    a registry entry, so owner and fixer detection exclude it by the tag, not by what the tree is called."""
-    if not path:
-        return path
-    try:
-        import hashlib
-        p = os.path.realpath(path)
-        os.makedirs(internal_trees_dir(), exist_ok=True)
-        write_json(internal_trees_dir(hashlib.sha1(p.encode()).hexdigest() + ".json"), {"path": p, "at": ts()})
-    except OSError:
-        pass
-    return path
-
-
 def internal_tree(path):
     """agentctl's own trees -- tagged at creation (mark_internal): the queue's check trees, the baseline / recheck /
     `waiting` / batch trees, a finished red fixer's tree, the queue's work clone, tool caches -- never an owner, author
@@ -1056,24 +1036,6 @@ def in_fixer():
     if own_fixer_record_path():
         return True
     return not os.environ.get("CLAUDE_CODE_SESSION_ID") and bool(os.environ.get("AGENTCTL_RED_FIXER"))
-
-
-def claimant(cwd=None):
-    """The agent name (agent_name: a dispatched fixer's, by its session's record), else the Claude session, else the
-    worktree."""
-    name = agent_name()
-    if name:
-        return name
-    if os.environ.get("CLAUDE_CODE_SESSION_ID"):
-        return f"session {os.environ['CLAUDE_CODE_SESSION_ID'][:8]}"
-    return os.path.basename(worktree_of(cwd or safe_cwd()) or safe_cwd())
-
-
-def worktree_of(path):
-    if not path or not os.path.isdir(path):
-        return None
-    r = git(path, "rev-parse", "--show-toplevel", check=False)
-    return r.stdout.strip() if r.returncode == 0 else None
 
 
 def land_cwds():

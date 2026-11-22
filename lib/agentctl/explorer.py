@@ -1,3 +1,16 @@
+
+import os
+import subprocess
+import sys
+import time
+from agentctl.core import NO_SIGN, err, git, reds_dir, remote
+from agentctl.forge import forge_release_asset
+from agentctl.store import ARCHIVE, MACHINES, StateSpec, open_store
+from agentctl.land import spawn_land
+from agentctl.worktrees import fresh_worktree
+from agentctl.fixerenv import fixer_env
+
+
 """The movies flip explorer's filing (2026-11-04): the nightly explorer workflow publishes `new-flips.tsv` on the release
 `identity-flip-explorer`; the laptop's sync (the owner's token reads releases; ci-lander gets a 403, as with the pins)
 reads the newest asset at most hourly and, for each flip no row of origin/main's identity-flip-backlog.tsv names and no
@@ -48,7 +61,7 @@ def explorer_backlog(repo):
 def explorer_file(o_r, repo, rows, now_):
     """ONE commit for the new rows in a fresh worktree off main, landed by a detached `agentctl land`. Returns the
     worktree, or None when the script printed nothing (no commit) or the worktree/commit failed (logged)."""
-    wt, why = blame_worktree(repo, "explorer", int(now_))
+    wt, why = fresh_worktree(repo, "explorer", int(now_))
     if not wt:
         err(f"drift explorer: {why}")
         return None

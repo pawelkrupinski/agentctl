@@ -1,5 +1,21 @@
 # agentctl, part `redfixread`: a fix's reach: Fixes-Red commits on main, what a red's failing jobs read and whether a fix touches it.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import re
+import subprocess
+import time
+from agentctl.core import err, git, git_ok, process_cache, reds_dir, remote
+from agentctl.statefile import read_record, write_json
+from agentctl.forge import gh_json
+from agentctl.store import open_store
+from agentctl.repos import red_repo_of
+from agentctl.workflows import fix_workflow_jobs
+from agentctl.trailers import trailer_values
+from agentctl.inboxentry import inbox_write
+from agentctl.redrecord import red_names, red_what
+from agentctl.clones import fetch_main
+
 
 # -- fixes on their way: Fixes-Red changes in the queue, and Fixes-Red commits landed on main
 FIX_OPEN = ("queued", "checking", "checked", "waiting", "joined", "pushing")

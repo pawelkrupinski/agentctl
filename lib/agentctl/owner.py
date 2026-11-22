@@ -118,19 +118,6 @@ def lock_owner_worktree(repo, fam, wt):
     git(repo, "worktree", "lock", "--reason", f"agentctl red owner {fam}: its one worktree", wt, check=False)
 
 
-def worktree_exclude(wt, names):
-    """Keep agentctl's notes in worktree wt out of every commit and `git status`: each name in the clone's shared
-    info/exclude (once). Raises OSError."""
-    common = git(wt, "rev-parse", "--git-common-dir", check=False).stdout.strip()
-    excl = os.path.join(wt if not os.path.isabs(common) else "", common, "info", "exclude")
-    os.makedirs(os.path.dirname(excl), exist_ok=True)
-    have = open(excl).read() if os.path.exists(excl) else ""
-    add = [p for p in names if p not in have.split()]
-    if add:
-        with open(excl, "a") as f:
-            f.write("\n".join(add) + "\n")
-
-
 # ONE START PER FAMILY (2026-11-21 22:12:33Z and 22:12:36Z): the convergence owner, ended ORPHANED, was started twice
 # 3 s apart (pids 6921, 7139) -- two of its reds re-offered in two dispatcher passes, each finding no live heartbeat
 # because the first wrapper had not taken it yet; the second wrapper ended DUPLICATE. The dispatcher now takes the

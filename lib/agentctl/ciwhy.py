@@ -57,13 +57,6 @@ def gate_report_only(o_r, name, run):
     return out
 
 
-def repo_signs(o_r):
-    """Whether repo o_r's main keeps commit signatures (red-repos.json `signed`, default true). movies' does not: its
-    land rebases every change with NO_SIGN, so a fixer's signature never reaches main."""
-    c = red_repo_conf(o_r)
-    return True if c is None else c.get("signed", True)
-
-
 def red_is_other(o_r):
     """True for a watched repo other than the primary (red-repos.json). Any other name -- the primary, or a repo nobody
     configured (the tests' `o/r`) -- is treated as the primary, exactly as before 2026-10-30."""

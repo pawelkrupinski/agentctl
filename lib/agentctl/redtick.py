@@ -429,13 +429,6 @@ def red_revert(o_r, repo, u, culprit):
     return True, f"landing a revert of {culprit[:10]} from {wt} (pid {pid})"
 
 
-def spawn_land(wt, env, log):
-    """A detached `agentctl land` of wt (the normal hook; its verdicts reach the inbox). Its pid."""
-    with open(log, "a") as logf:
-        return spawn_detached([sys.executable, TOOL_PATH, "land"], cwd=wt, stdin=subprocess.DEVNULL, stdout=logf,
-                              stderr=logf, start_new_session=True, env=env).pid
-
-
 PATHISH = re.compile(r"(?:\./)?((?:[\w.-]+/)+[\w.-]+)")
 
 

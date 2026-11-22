@@ -10,6 +10,11 @@ from agentctl.core import HOME, env_num, err, process_cache, run_cmd
 from agentctl.store import LeaseLost, StoreUnavailable
 from agentctl.procs import tosec
 from agentctl.leases import lock_beat
+import sys
+from agentctl.core import spawn_detached
+from agentctl.selfcode import TOOL_PATH
+from agentctl.core import SHORT, reds_dir
+from agentctl.forge import forge_env
 
 
 # ---------------------------------------------------------------- land / env
@@ -214,3 +219,30 @@ def _watch_group(p, out_path, step, stall, sampler, cpu_of, clock, wall, quiet_o
             _end_group(p)
             return why
     return None
+
+
+def spawn_land(wt, env, log):
+    """A detached `agentctl land` of wt (the normal hook; its verdicts reach the inbox). Its pid."""
+    with open(log, "a") as logf:
+        return spawn_detached([sys.executable, TOOL_PATH, "land"], cwd=wt, stdin=subprocess.DEVNULL, stdout=logf,
+                              stderr=logf, start_new_session=True, env=env).pid
+
+
+def tool_env():
+    """os.environ with sdkman's sbt and java first on PATH (the movies hook's sbt check needs them) -- moved to the
+    front when PATH already holds them further back (a fixer's environment: another java ahead of sdkman's)."""
+    env = dict(os.environ)
+    bins = [b for b in SDKMAN_BINS if os.path.isdir(b)]
+    env["PATH"] = ":".join(bins + [p for p in env.get("PATH", "").split(":") if p not in bins])
+    java_home = f"{HOME}/.sdkman/candidates/java/current"
+    if not env.get("JAVA_HOME") and os.path.isdir(java_home):
+        env["JAVA_HOME"] = java_home
+    # the movies hook's known-red baseline: `<dir>/<main sha>`, written by baseline_failures (a hook without the mode
+    # ignores it)
+    env.setdefault("PREPUSH_BASELINE_DIR", reds_dir("baseline-out"))
+    env["KINOWO_FORGE"] = "github"  # the movies hook's gate and tools read GitHub (scripts/forge-gh)
+    try:  # as the lander App on ci-runner
+        env = forge_env(SHORT["movies"], env)
+    except (Exception, SystemExit) as e:
+        err(f"tool env: no GitHub App token for movies ({str(e)[:120]}); the hook reads without one")
+    return env
