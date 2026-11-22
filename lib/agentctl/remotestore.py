@@ -12,6 +12,7 @@ from agentctl.core import SHORT, env_num, host_role
 from agentctl.store import StoreAuthFailed, StoreUnavailable, store_errors
 from agentctl.storetoken import token
 from agentctl.laptoprole import laptop_role_holder
+from agentctl.core import state_root
 
 
 def contact_machine():
@@ -120,3 +121,29 @@ class RemoteStore:
 
     def nudge(self):
         return self.call("POST", "/v1/tick", {}, safe=True)
+
+
+STORE_PORT = 3014
+
+
+DEFAULT_STORE_URL = f"http://localhost:{STORE_PORT}"  # ci-runner's store through the laptop's tunnel
+
+
+def store_url():
+    """The store a sync process uses: $AGENTCTL_STORE_URL, else the one `agentctl store use URL` wrote (state root's
+    store.url, so every agentctl process -- agents' `land` and `red claim` included -- agrees), else ci-runner's through
+    the tunnel. None on the server: its database is in-process."""
+    if host_role() == "server":
+        return None
+    if os.environ.get("AGENTCTL_STORE_URL"):
+        return os.environ["AGENTCTL_STORE_URL"]
+    try:
+        with open(state_root("store.url")) as f:
+            return f.read().strip() or default_store_url()
+    except OSError:
+        return default_store_url()
+
+
+def default_store_url():
+    """ci-runner's store through the tunnel; $AGENTCTL_STORE_DEFAULT_URL overrides (the tests: a closed port)."""
+    return os.environ.get("AGENTCTL_STORE_DEFAULT_URL") or DEFAULT_STORE_URL

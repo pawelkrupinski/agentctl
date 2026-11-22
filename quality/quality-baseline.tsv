@@ -399,7 +399,7 @@ cognitive	workflow_timeout_bound	22
 cognitive	workflow_triggers	26
 cognitive	write_snapshot	13
 copies	ask	2
-copies	batch	6
+copies	batch	4
 copies	blame	4
 copies	buildview	2
 copies	cireport|redtick	2
@@ -407,6 +407,7 @@ copies	clones|server	2
 copies	fixerland|watchdog	2
 copies	owner	2
 copies	queueclose	2
+copies	queuepush	2
 copies	redcrash	2
 copies	redcrash|redstep	2
 copies	redpending	7
@@ -414,14 +415,11 @@ copies	redstep	2
 copies	store	4
 cycle	batch	1
 cycle	queueenter	1
-cycle	queuepush	1
-cycle	recovery	1
 cycle	redtick	1
 cycle	server	1
 cycle	slots	1
 cycle	status	1
 cycle	tools	1
-cycle	watchdog	1
 cyclomatic	HeldLease.check	12
 cyclomatic	LiveTail.poll	14
 cyclomatic	RemoteStore._call_once	17
@@ -839,7 +837,7 @@ cyclomatic	workflow_triggers	12
 cyclomatic	worktree_holding	12
 cyclomatic	write_snapshot	24
 file-lines	alerts	719
-file-lines	batch	1564
+file-lines	batch	1357
 file-lines	blame	833
 file-lines	branches	843
 file-lines	ciwhy	760
@@ -847,13 +845,13 @@ file-lines	gov	728
 file-lines	live	755
 file-lines	owner	718
 file-lines	remote	824
-file-lines	server	1208
+file-lines	server	1182
 file-lines	slots	896
 file-lines	stats	623
 file-lines	status	1069
 file-lines	store	780
-file-lines	tools	607
-file-lines	watchdog	1770
+file-lines	tools	526
+file-lines	watchdog	1836
 inner-defs	red_owner	5
 inner-defs	status_page_server	8
 inner-defs	store_server	4

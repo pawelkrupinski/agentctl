@@ -34,15 +34,6 @@ def cmd_queue_retired(a):
     return 2
 
 
-# ---------------------------------------------------------------- env
-TUNNEL_PORTS = [(3014, "agentctl store")]  # what the laptop tunnel carries
-
-
-def tunnel_ports():
-    """The ports the laptop's tunnel must hold: the agentctl store's."""
-    return TUNNEL_PORTS
-
-
 def default_ns():
     return "movies" if os.path.realpath(os.getcwd()).startswith(os.path.realpath(f"{HOME}/projects/movies")) else "bitcashier"
 
@@ -173,34 +164,8 @@ def launchctl_kick():
         err(f"launchctl kickstart {TUNNEL_LABEL}: no answer in 30 s")
 
 
-# ---- THE TUNNEL HEALTH (2026-10-27: the tunnel's ssh was alive but its connections hung; only a *refused* connection
-# was kicked). The always-on processor probes GET <store>/ each cycle (5 s): 2 failures in a row kick it (at most once a minute, logged), and a
-# kick that does not restore it within 2 min is ONE STALLED inbox entry.
-TUNNEL_PROBE_TIMEOUT = 5
 TUNNEL_KICK_MIN_GAP = 60
 TUNNEL_RESTORE_WAIT = 120
-
-
-def tunnel_state_path():
-    return os.environ.get("AGENTCTL_TUNNEL_STATE") or state_root("tunnel-health.json")
-
-
-def tunnel_probe():
-    """'ok' (any HTTP answer), 'timeout' or 'refused' for GET <store>/ (the tunnel carries the agentctl store)."""
-    import socket
-    url = (store_url() or default_store_url()).rstrip("/") + "/"
-    try:
-        with urllib.request.urlopen(url, timeout=TUNNEL_PROBE_TIMEOUT) as resp:
-            resp.read()
-        return "ok"
-    except urllib.error.HTTPError:
-        return "ok"
-    except Exception as e:
-        if isinstance(e, urllib.error.URLError):
-            e = e.reason if isinstance(e.reason, BaseException) else e
-        if isinstance(e, (socket.timeout, TimeoutError)) or "timed out" in str(e):
-            return "timeout"
-        return "refused"
 
 
 # Packet loss to the internet at or above which the laptop's own uplink, not the tunnel, is the fault: ONE lost ping of
@@ -224,16 +189,6 @@ def uplink_loss():
 
 
 _last_route = ["unseen"]  # the route at the last look; None while offline
-
-
-def default_route():
-    """(interface, gateway) of the default route, or None (offline / route failed)."""
-    try:
-        out = subprocess.run(["route", "-n", "get", "default"], capture_output=True, text=True, timeout=5).stdout
-    except (OSError, subprocess.SubprocessError):
-        return None
-    f = dict(re.findall(r"^\s*(interface|gateway): (\S+)", out, re.M))
-    return (f.get("interface"), f.get("gateway")) if f else None
 
 
 def open_outage(kind, text, probe, on_recover, **kw):
@@ -503,42 +458,6 @@ def coherent_edit(repo, mb, head, path, commit, files, hits):
 
 def allowed(path, globs):
     return any(fnmatch.fnmatch(path, g) or path.startswith(g.rstrip("/") + "/") for g in globs)
-
-
-DO_NOT_LAND_BRANCH = re.compile(r"^(measure|experiment)/")
-DO_NOT_LAND_SUBJECT = re.compile(r"^\s*(PROTOTYPE|WIP|DO[ _-]?NOT[ _-]?LAND)(?![\w-])", re.I)
-DO_NOT_LAND_TRAILER = re.compile(r"^Do-Not-Land:", re.I | re.M)
-
-
-def do_not_land(repo, commits, branch=""):
-    """Why this work must never reach main (throwaway: a measure/* or experiment/* branch, a commit whose subject starts
-    PROTOTYPE / WIP / DO NOT LAND, a `Do-Not-Land:` trailer), or None. 2026-11-01: `agentctl land` from a prototype
-    worktree (measure/chain-settle-proto, "PROTOTYPE: ... measure only, do not land") queued twice. Every path that queues
-    a worktree's commits (land, a re-land, an orphan or blame re-land, a laptop submission) passes through here."""
-    if DO_NOT_LAND_BRANCH.match(branch or ""):
-        return f"branch {branch} is throwaway work (measure/* and experiment/* never land)"
-    for c in commits or []:
-        msg = git(repo, "log", "-1", "--format=%B", c, check=False).stdout
-        subject = msg.strip().splitlines()[0] if msg.strip() else ""
-        if DO_NOT_LAND_SUBJECT.match(subject):
-            return f"commit {c[:10]} is marked not for landing (subject: {subject[:80]!r})"
-        if DO_NOT_LAND_TRAILER.search(msg):
-            return f"commit {c[:10]} carries a Do-Not-Land: trailer"
-    return None
-
-
-HOLD_TRAILER = re.compile(r"^Hold:\s*(\S.*)$", re.I)
-
-
-def held_commit(repo, commits):
-    """`commit <sha> carries Hold: <why>` for the first commit with a Hold: trailer, or None."""
-    for c in commits or []:
-        msg = git(repo, "log", "-1", "--format=%B", c, check=False).stdout
-        for ln in commit_trailers(msg):
-            m = HOLD_TRAILER.match(ln)
-            if m:
-                return f"commit {c[:10]} carries Hold: {m.group(1).strip()}"
-    return None
 
 
 def check_range(repo, base, head, allow, max_foreign):

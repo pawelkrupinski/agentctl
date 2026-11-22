@@ -1,5 +1,71 @@
 # agentctl, part `watchdog`: the invariant watchdog and orphaned work.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import argparse
+import datetime as dt
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from agentctl.core import (
+    HOME, PROTECTED_BRANCHES, REPOS, SHORT, branch_of, cherry_landed, env_num, fmt_age, git, git_ok, hashlib_sha1,
+    host_role, pid_alive, reds_dir, remote, run_cmd, slug, spawn_detached, state_root)
+from agentctl.timefmt import hhmmz, parse_time, ts
+from agentctl.statefile import read_record, write_json
+from agentctl.classify import NETWORK_CHECK_FAILURE
+from agentctl.store import StaleVersion, change_exits_unannounced, machine_state, open_store
+from agentctl.procs import process_cwds, process_start, ps
+from agentctl.selfcode import TOOL_PATH
+from agentctl.repos import movies_repo_path, red_repo_of
+from agentctl.policy import HOLDS
+from agentctl.trailers import do_not_land, held_commit
+from agentctl.leases import red_block_of
+from agentctl.waitingdir import WAITING_BRANCH, waiting_entries, waiting_state
+from agentctl.fixerrecords import fixer_records
+from agentctl.inboxentry import inbox_entries, inbox_write
+from agentctl.storetoken import TOKEN_SHAPE, hand_token, processor_sock, token_request
+from agentctl.redrecord import RED_TERMINAL, lease_is_live, red_active, red_lease, red_what
+from agentctl.claudefiles import claude_projects_root
+from agentctl.allowedpaths import allowed_path
+from agentctl.live import live_slug
+from agentctl.worktrees import gitdir_activity, worktrees
+from agentctl.fixerenv import fixer_env
+from agentctl.queueslots import checker_alive
+from agentctl.redfixread import FIX_OPEN
+from agentctl.maint import MAINTAIN_SWEEP_HOUR, cmd_orphans, spotlight_exclude
+from agentctl.deletions import log_deletion
+from agentctl.dispatches import internal_tree
+from agentctl.cleanup import SWEEP_IDLE_DAYS, cmd_sweep
+from agentctl.procwatch import inv_wp, inv_wt
+from agentctl.conditions import close_condition, open_condition, open_conditions, recovery_dir, run_probe
+from agentctl.notifier import notify
+from agentctl.upkeep import rotate_logs
+from agentctl.fixchange import CHANGE_ENDED, red_change, red_change_read
+from agentctl.redfixes import red_fix_of
+from agentctl.changekind import (
+    HOLD_SHOWN, change_hold_visible, classify_change, file_unheld_change, kind_text, queue_facts, unheld_changes)
+from agentctl.cistate import snapshot_gate_reds
+from agentctl.alerts import ALERT_SELF_HEALING_INVARIANTS
+from agentctl.projector import notify_failure
+from agentctl.fixerland import bin_repo
+from agentctl.red import red_fix_giveup
+from agentctl.redmove import red_put_offer
+from agentctl.ciwhy import ci_state_load
+from agentctl.branches import land_cwds, shutil_which
+from agentctl.redopen import red_offer
+from agentctl.redverify import red_fix_since, red_fix_unverifiable
+from agentctl.redpending import RED_FIX_REQUEUE_GRACE, RED_WAITS_ON
+from agentctl.queuebatch import change_hold_stuck, hold_recovers_itself
+from agentctl.blame import blame_drop_revert_worktree, blame_land_refusal, blame_records
+from agentctl.reddispatch import repo_dispatch_off
+from agentctl.redstep import red_lease_ended
+from agentctl.queueclose import change_landed, change_rows, close_landed_changes
+from agentctl.launchd import SERVICE_LABEL, launch_agents_dir, launchctl
+from agentctl.recovery import reland_tree_path, reland_worktree
+
 
 # ---------------------------------------------------------------- the invariant watchdog (design §10, phase 1 step 2)
 # A separate, cheap, dumb launchd job (net.bitcashier.agentctl-watchdog, every 60 s): `agentctl watchdog` reads today's

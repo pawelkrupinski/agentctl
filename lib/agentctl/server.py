@@ -21,31 +21,7 @@ STORE_RPC = ("acquire", "renew", "note", "release", "revoke", "set_meta", "offer
              "close_offer", "take", "get", "item", "items", "put_item", "transition", "update_item", "mark_notified",
              "meta_get", "meta_set", "events", "item_events", "archive_free_leases", "list")
 STORE_BODY_MAX = 4 << 20     # bytes: a larger request body is refused unread (413)
-STORE_PORT = 3014
 SYNC_MIRROR_EVERY = 10   # s between the laptop's copies of /v1/state into state.json
-
-
-DEFAULT_STORE_URL = f"http://localhost:{STORE_PORT}"  # ci-runner's store through the laptop's tunnel
-
-
-def store_url():
-    """The store a sync process uses: $AGENTCTL_STORE_URL, else the one `agentctl store use URL` wrote (state root's
-    store.url, so every agentctl process -- agents' `land` and `red claim` included -- agrees), else ci-runner's through
-    the tunnel. None on the server: its database is in-process."""
-    if host_role() == "server":
-        return None
-    if os.environ.get("AGENTCTL_STORE_URL"):
-        return os.environ["AGENTCTL_STORE_URL"]
-    try:
-        with open(state_root("store.url")) as f:
-            return f.read().strip() or default_store_url()
-    except OSError:
-        return default_store_url()
-
-
-def default_store_url():
-    """ci-runner's store through the tunnel; $AGENTCTL_STORE_DEFAULT_URL overrides (the tests: a closed port)."""
-    return os.environ.get("AGENTCTL_STORE_DEFAULT_URL") or DEFAULT_STORE_URL
 
 
 for _m in STORE_RPC:
@@ -436,8 +412,6 @@ def queue_change(d, fields, entry_id=None):
             if old["id"] != e["id"] and same_change_source(old, e["worktree"], e.get("branch")):
                 supersede(d, old, e["id"], f"{e['worktree']} queued again ({e['head'][:10]}); only the newest entry runs")
     return e, max(len(queued_entries(d)) - 1, 0)
-
-
 
 
 def submit_change(body, repo=None):

@@ -1,5 +1,34 @@
 # agentctl, part `recovery`: the recovery registry.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from agentctl.core import HOME, SHORT, _tokens, err, git, remote, run_cmd, spawn_detached
+from agentctl.timefmt import iso_at, ts
+from agentctl.statefile import read_json_file, read_record, write_json_file
+from agentctl.store import machine_state, open_store
+from agentctl.procs import safe_cwd
+from agentctl.selfcode import TOOL_PATH
+from agentctl.repos import movies_repo_path
+from agentctl.trailers import held_commit
+from agentctl.fixerrecords import agent_name
+from agentctl.inboxentry import inbox_dir, inbox_entries
+from agentctl.storetoken import token_env_name, token_from_processor, token_vault_key
+from agentctl.redrecord import red_what
+from agentctl.worktrees import mark_internal
+from agentctl.inbox import entry_line
+from agentctl.conditions import open_condition, recovery_dir, run_probe
+from agentctl.alerts import alert_audience, alert_condition_audience, alert_red_audience, inbox_wait
+from agentctl.ciwhy import ci_state_load
+from agentctl.blame import blame_land_refusal
+from agentctl.redview import red_view
+from agentctl.tunnel import default_route, tunnel_ports, tunnel_probe, tunnel_state_path
 
 
 # -- the probes: (ok, detail) for their args. Background-safe: no `secrets`, bounded, never raising (run_probe catches).
@@ -287,3 +316,25 @@ def token_unavailable_note(ns: str, why: str) -> None:
 
 
 _noting_token = [False]  # token_unavailable_note is running: the remote store's own token read must not recurse
+
+
+def batch_key(d):
+    return os.path.basename(d.rstrip("/"))
+
+
+def current_batch(st, d, any_key=False):
+    """The repository's open batch item, or None. any_key: whichever host's key it carries -- the laptop's `land
+    status` reads ci-runner's store, whose batch is keyed by ci-runner's waiting dir (var_lib_agentctl_movies_.git),
+    never the laptop's (2026-10-30: batch #4 checked for an hour while `land status` showed no batch at all)."""
+    key = batch_key(d)
+    open_ = [it for it in st.items("batch") if (any_key or it["id"].startswith(key + "#"))
+             and not machine_state("batch", it["state"]).terminal]
+    return max(open_, key=lambda it: int(it["id"].rsplit("#", 1)[1])) if open_ else None
+
+
+def batch_move(st, it, to, data=None, text=None, severity=None):
+    ev = {"text": text or f"batch {it['id']}: {it['state']} -> {to}"}
+    if severity:
+        ev["severity"] = severity
+    st.transition("batch", it["id"], to, it["version"], data=data, event=ev)
+    return st.item("batch", it["id"])

@@ -1,5 +1,31 @@
 # agentctl, part `queuepush`: pushing a checked change: the oldest verification first, a red fix's verification kept.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import re
+import time
+from agentctl.core import env_num, fmt_age, git, host_role, remote
+from agentctl.timefmt import day_hhmmz, hhmmz
+from agentctl.store import ENTRY_STATE, StaleVersion, open_store
+from agentctl.policy import policy_blocks
+from agentctl.waitingdir import waiting_entries
+from agentctl.queueslots import change_item_fields, check_tree_slot, checker_alive, queue_verdict, set_change
+from agentctl.queue import requeue_infra
+from agentctl.conflicts import conflict_cause, conflict_paths
+from agentctl.queuerecheck import queued_entries, same_change_source, verdict_kept
+from agentctl.identitychange import identity_model_commits
+from agentctl.changekind import (
+    change_hold_visible, classify_change, classify_queue, file_unheld_change, kind_order, queue_facts,
+    record_change_kind)
+from agentctl.waiting import supersede
+from agentctl.redseen import gate_reds
+from agentctl.queuebatch import (
+    _behind_said, backlog_batchable, change_hold_stuck, hold_for_overlap, kind_of, main_conflict, note_hold,
+    overlap_hold, restart_hold, spawn_executor, stuck_recovery)
+from agentctl.queuediff import push_change
+from agentctl.queueclose import regen_hold_overdue
+from agentctl.recovery import current_batch
+
 
 # THE OLDEST VERIFICATION PUSHES FIRST (2026-11-16, workermem: fully checked by 09:15, then its combined tree verified
 # four times, each ~10 min, each on a main a YOUNGER change had pushed onto meanwhile, until a hook change forced a full
@@ -259,3 +285,184 @@ def lap_change_deadline(st, e, state, t, note=None):
                              **({} if stuck and not issue else {"severity": "info"})})
     except StaleVersion:
         pass  # the next tick says it
+
+
+# ---------------------------------------------------------------- the backlog batch (the owner, 2026-11-17)
+# "BATCH WHENEVER THERE'S A BACKLOG, NOT ONLY ON RED": with 6-8 changes queued at green each paid a 30-40 min check of
+# its own, mostly waiting for a ci-runner check slot. Now, at green with no batch open, BACKLOG_BATCH_MIN or more queued
+# changes that no checker has taken and that may share a check (backlog_batchable: identity changes too, 2026-11-20;
+# no `land --no-batch`, no red fix, no combined-tree verification
+# round, none in an infra backoff or holding an unread remote run) are THE BATCH ABOVE with depth `full`: assembled in
+# queue order (Fixes-Red first; a member that does not apply is left out and checked alone, batch_alone), its tip
+# checked once with the FULL landing check (the hook's --range dry run; on ci-runner check/batch-<tip>, the same
+# precommit-check round a change gets, area tests and heavy rows included -- no member had a check of its own), in
+# ONE check tree. Pass: one push carrying that run (PREPUSH_REMOTE_RUN), every member LANDED with its own record and
+# watch (batch_id, batch). Fail: bisected by prefix (no whole-batch re-check first: the culprit's own confirmation
+# guards a flaky failure), the culprit rejected only when its failure is its own (judge_failure: a base red, a time
+# cap or an infra failure sends it to a check of its own instead), the passing prefix pushed at once, the rest queued
+# again (backlog_reconcile). At most BACKLOG_BATCH_MAX members, so a bisect is at most 4 extra rounds (3 prefixes and
+# the confirmation). While such candidates wait for a tree, the change tick gives them none of its own (they wait for
+# the batch); red fixes are checked alone beside it, and a red fix never waits for it.
+BACKLOG_BATCH_MIN = 2  # queued changes that may share a check and make a backlog batch
+
+
+BACKLOG_BATCH_MAX = 8  # a backlog batch's members at most: its bisect is 3 prefix checks + 1 confirmation
+
+
+DEEP_BATCHES = ("full", "verify")  # the depths whose members are queue entries of their own: backlog and push batches
+
+
+def backlog_min():
+    return max(2, int(env_num("AGENTCTL_BACKLOG_BATCH_MIN", BACKLOG_BATCH_MIN)))
+
+
+def backlog_candidates(repo, d, reds, t=None, facts=None):
+    """The queued changes a backlog batch takes now, in queue order, at most BACKLOG_BATCH_MAX; [] while the gate is
+    red, a change verifies its combined tree, or fewer than BACKLOG_BATCH_MIN may go. A fix of an open red (its kind
+    under facts: queue_facts, read from the store when None) is checked alone."""
+    t = t if t is not None else time.time()
+    if reds:
+        return []
+    facts = queue_facts(reds) if facts is None else facts
+    entries = queued_entries(d)
+    # THE OLDEST VERIFICATION PUSHES FIRST (queuepush.py) holds the batch too (review 2026-11-18): formed meanwhile, the
+    # batch held the verified change's push for its whole check (THE BATCH GOES FIRST), then its push moved main under
+    # it and it verified again -- behind the next backlog batch, and the next. No backlog batch while one verifies, or
+    # while a checked change's push is due (its verification may have ended since the change tick).
+    if any((verifying(e, t) or (e.get("status") == "checked" and not float(e.get("retry_after") or 0) > t))
+           and not e.get("backlog_batch") for e in entries):  # a checked change's push is due at the next change tick
+        return []
+    ok = [e for e in entries if backlog_batchable(repo, d, e, t, facts)
+          and not overlap_hold(repo, d, e, entries, facts, t)]
+    out = sorted(ok, key=lambda e: e["seq"])[:int(env_num("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX))]
+    return out if len(out) >= backlog_min() else []
+
+
+def backlog_held(repo, d, reds, st, t=None, facts=None):
+    """The ids of the queued changes the change tick holds back for the next backlog batch: with no batch open, the
+    candidates one would take now."""
+    return set() if current_batch(st, d) else {c["id"] for c in backlog_candidates(repo, d, reds, t, facts)}
+
+
+# ---------------------------------------------------------------- the push batch (the owner, 2026-11-17)
+# "COMBINE THEM INSTEAD OF LANDING THEM ONE BY ONE" (W1: the oldest unlanded change over 2 h). A checked change pushed
+# alone: on a main that moved since its full check it got a verify round of its own (THE RULE, queue.py), and THE
+# OLDEST VERIFICATION PUSHES FIRST held every younger checked change meanwhile -- so N checked changes landed serially,
+# each paying a check-runner wait plus a ~10-min verify round after the previous push moved main (ref-scrapers
+# verifying while pr274 and postlanding held their pushes behind it, each to verify again after it pushed). Now, at
+# green with no batch open and no verify round running, PUSH_BATCH_MIN or more changes that would each need a verify
+# round on the current main (push_batchable: checked on an older main, or queued for a verify round; no red fix, no
+# `land --no-batch`, no known red, none in a backoff) are THE BATCH ABOVE with depth `verify`, the backlog batch's
+# machine: assembled oldest first on the current main, each member judged by THE RULE against main plus the members
+# before it (push_batch_select: one that needs a FULL round is left out -- checked again alone now when what landed on
+# main demands it, else pushed alone after the batch, push_alone), the union verified ONCE (the hook's --verify-only
+# over <the oldest member's full base>..<tip>: every test config compiled, the lints, the fast specs and the unit
+# tests of every module a member or what landed meanwhile touches; on ci-runner check/verify-<base>-batch-<tip>), and
+# pushed ONCE (the hook skipping the plan the members' full checks passed, as a lone verified change's push does).
+# Fail: bisected by prefix as the backlog batch is (the culprit confirmed, rejected only when the failure is its own),
+# the passing prefix pushed, the rest queued again for their verify round. More than one identity-model commit in it:
+# G5's drift check of its tip (check_batch); after a drift split, one identity change per batch (drift_serialize). A
+# change checked while a push batch runs is no member: its push waits for the batch (batch_goes_first) and it joins
+# the next one. At most BACKLOG_BATCH_MAX members.
+PUSH_BATCH_MIN = 2  # changes owing a verify round that make a push batch
+
+
+def push_batchable(repo, d, e, t, main, facts=None):
+    """Whether entry e would need a verify round on main (THE PUSH BATCH above) and may share one: its KIND lets it (no
+    red fix, no --no-batch, batch_alone, push_alone or known red: changekind.py) and it is checked on an older main, or
+    queued for its verify round with no checker on it."""
+    rem = e.get("remote") or {}
+    if e.get("backlog_batch") or float(e.get("retry_after") or 0) > t:
+        return False
+    if kind_of(repo, e, facts, t)["push_batch"] is not None:
+        return False
+    if e.get("status") == "checked":  # one keeping its verdict on main (MINIMAL RECHECKS) owes no verify round
+        return bool(e.get("checked_base")) and e["checked_base"] != main and not verdict_kept(repo, e, main)
+    if e.get("status") != "queued" or not e.get("verify") or not e.get("full_base"):
+        return False
+    if rem.get("run") is not None and not rem.get("collected_at"):  # its own run: a checker adopts it
+        return False
+    return not checker_alive(e["id"])
+
+
+def push_candidates(repo, d, reds, t=None, facts=None):
+    """The changes a push batch takes now, oldest first, at most BACKLOG_BATCH_MAX; [] while the gate is red, while a
+    change's own verify round runs (it pushes first), or when fewer than PUSH_BATCH_MIN may go. A fix of an open red
+    (its kind under facts: queue_facts, read from the store when None) pushes alone."""
+    t = t if t is not None else time.time()
+    if reds:
+        return []
+    facts = queue_facts(reds) if facts is None else facts
+    entries = queued_entries(d)
+    if any(e.get("status") == "checking" and e.get("verify") and not e.get("backlog_batch") for e in entries):
+        return []
+    # NO PUSH BATCH UNDER A RED FIX IN FLIGHT (2026-11-19 10:37:14Z: push batch #48 formed 13 s before 08010c, a red
+    # fix just verified, pushed; its push moved main under the batch's verify round, which passed at 10:46 and was
+    # thrown away -- "main moved during its check: assembled again"). A red fix goes first and pushes alone, so a push
+    # batch formed meanwhile is verified for nothing: none forms until the open red fixes are decided.
+    if any(not e.get("backlog_batch") and not float(e.get("retry_after") or 0) > t
+           and classify_change(e, facts, t)["red_fix"] for e in entries):
+        return []
+    main = git(repo, "rev-parse", f"{remote()}/main", check=False).stdout.strip()
+    out = [e for e in sorted(entries, key=lambda e: e["seq"])
+           if push_batchable(repo, d, e, t, main, facts)]
+    out = drift_serialize(repo, out)[:int(env_num("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX))]
+    return out if len(out) >= max(2, int(env_num("AGENTCTL_PUSH_BATCH_MIN", PUSH_BATCH_MIN))) else []
+
+
+def push_held(repo, d, reds, st, t=None, facts=None):
+    """The ids of the changes the change tick holds back for the next push batch: with no batch open, the candidates
+    one would take now."""
+    return set() if current_batch(st, d) else {c["id"] for c in push_candidates(repo, d, reds, t, facts)}
+
+
+def check_tree_slot_free(repo, d):
+    """Whether a check tree is free now (its lease taken and given back at once)."""
+    slot = check_tree_slot(repo, d)
+    if slot:
+        slot[1].release()
+    return bool(slot)
+
+
+# THE BATCH GOES FIRST (2026-10-30). Batch #4 (the flips and filmweb changes) passed its 45-min check at 14:34Z, but a
+# solo change (identity-solid) had pushed at 14:05Z, so its push found main moved and assembled it again; and the moment
+# its executor freed check tree 3 the change tick (it runs before the batch tick) started a change's check in it, so
+# the batch could neither push from its tree nor, assembling, get any tree: it waited behind every solo change, for
+# ever. Now, while the batch is open with changes waiting, a checked change does not push (assembling, checking,
+# bisecting, pushing: a push moves main under it) and no new change check takes a tree while the batch needs one
+# (assembling, pushing). Its deadlines bound the wait: a held or blocked-red batch lets solo changes go.
+BATCH_FIRST = ("assembling", "checking", "bisecting", "pushing")
+
+
+def batch_goes_first(st, d, states=BATCH_FIRST):
+    """The open batch, when solo changes wait for it (its state in `states`, changes waiting in it or a backlog batch),
+    else None."""
+    it = current_batch(st, d)
+    if it and (it.get("data") or {}).get("depth") == "red":  # a red pre-check holds nothing: what lands on red moves
+        return None  # main under it, and it pre-checks again (THE BATCH IS THE MECHANISM)
+    backlog = it and (it.get("data") or {}).get("depth") in DEEP_BATCHES
+    return it if it and it["state"] in states and (backlog or waiting_entries(d)) else None
+
+
+def behind_batch(e, it, what):
+    """The tick's line for a change held behind the batch: once per change, batch and kind."""
+    k = (e["id"], what)
+    if _behind_said.get(k) == it["id"]:
+        return []
+    _behind_said[k] = it["id"]
+    return [f"{e['id']}: its {what} waits for batch {it['id']} ({it['state']})"]
+
+
+def drift_serialize(repo, batch):
+    """After a drift-red batch (an entry marked drift_split waits): at most ONE identity-model change per batch, the
+    first in batch order; the rest of the identity changes wait for the next batch, every other change goes now."""
+    if not any(e.get("drift_split") for e in batch):
+        return batch
+    out, ident = [], False
+    for e in batch:
+        if identity_model_commits(repo, e.get("commits") or []):
+            if ident:
+                continue
+            ident = True
+        out.append(e)
+    return out
