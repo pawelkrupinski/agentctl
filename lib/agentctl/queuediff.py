@@ -14,12 +14,15 @@
 # under ci-runner load 30..90 on 14 cores): re-queued as infra, TIMEOUT_RETRIES times, then rejected as too slow.
 FAIL_TEST = re.compile(r"(?:^|\s)-\s+(.+?)\s+\*\*\* FAILED \*\*\*")
 FAIL_CLASS = re.compile(r"\[error\]\s+([a-z_][\w]*(?:\.[\w]+)*\.[A-Z]\w*)\s*$")
+# movies' run-script-tests' table row of a script test that failed (`POLLUTE  505s  scripts/ci/x-test.sh (floor)`): the
+# test is named, with how it failed (run 45013308331: a POLLUTE read as "scripttests (no failing test named)")
+FAIL_SCRIPT = re.compile(r"^\s*(FAIL|POLLUTE|STALLED|TIMEOUT)\s+\d+s\s+(\S+)")
 CHECK_TIMEOUT = re.compile(r"ran past \d+ minutes and were stopped")
 TIMEOUT_RETRIES = 2
 BASE_CORPUS_AGE = 24 * 3600
 
 
-def test_keys(lines):
+def test_keys(lines: list[str]) -> dict[str, str]:
     """{key: name} of the failing tests the lines name: the key normalized (numbers, shas out), the name as printed."""
     out = {}
     for raw in lines:
@@ -28,8 +31,10 @@ def test_keys(lines):
         if m:
             out["test " + norm_line(m.group(1))] = m.group(1).strip()
             continue
-        m = FAIL_CLASS.search(line)
-        if m:
+        m = FAIL_CLASS.search(line) or FAIL_SCRIPT.search(line)
+        if m and m.re is FAIL_SCRIPT:
+            out["script " + m.group(2)] = f"{m.group(2)} ({m.group(1)})"
+        elif m:
             out["class " + m.group(1)] = m.group(1)
     return out
 

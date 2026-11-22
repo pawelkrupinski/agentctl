@@ -109,6 +109,22 @@ class DifferentialCheckTest(test_queue.QueueTest):
         self.assertEqual(self.check(eid), 1)
         self.assertIn("check (rest): shellcheck (no failing test named)", self.verdicts("NOT_LANDED")[0])
 
+    def test_a_failing_script_test_is_named_by_its_path_and_how_it_failed(self):
+        """Run 45013308331 (20261122-113630-movies-data-objects-4fc0ea, 2026-11-22): run-script-tests failed one test
+        as POLLUTE (it left scripts/ci/__pycache__/ in the checkout), and the NOT LANDED said only "check (rest):
+        scripttests (no failing test named)": the lander could not tell which test, nor reproduce it."""
+        wt, _ = self.agent("st", "web/src/main/St.scala", "st\n")
+        eid, _ = self.queued(wt)
+        self.remote_fails(46, "PASS      3s  scripts/a-test.sh",
+                          "POLLUTE  505s  scripts/ci/quality-ratchet-mutation-test.sh (floor)",
+                          "FAIL      9s  scripts/b-test.sh", "1 of 18 failed (1658s)", "pre-push scripttests FAILED (1669s)")
+        self.assertEqual(self.check(eid), 1)
+        v = self.verdicts("NOT_LANDED")[0]
+        self.assertIn("scripts/ci/quality-ratchet-mutation-test.sh (POLLUTE)", v)
+        self.assertIn("scripts/b-test.sh (FAIL)", v)
+        self.assertNotIn("scripts/a-test.sh", v)
+        self.assertNotIn("no failing test named", v)
+
     def test_a_check_stopped_at_its_time_cap_is_requeued_then_rejected(self):
         wt, _ = self.agent("slow", "web/src/main/Slow.scala", "s\n")
         eid, _ = self.queued(wt)
