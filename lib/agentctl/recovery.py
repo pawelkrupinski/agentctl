@@ -13,7 +13,7 @@ from typing import Any
 from agentctl.core import HOME, SHORT, _tokens, err, git, remote, run_cmd, spawn_detached
 from agentctl.timefmt import iso_at, ts
 from agentctl.statefile import read_json_file, read_record, write_json_file
-from agentctl.store import machine_state, open_store
+from agentctl.store import open_store
 from agentctl.selfcode import TOOL_PATH
 from agentctl.repos import movies_repo_path
 from agentctl.trailers import held_commit
@@ -28,8 +28,9 @@ from agentctl.conditions import open_condition, recovery_dir, run_probe
 from agentctl.alerts import alert_audience, alert_condition_audience, alert_red_audience, inbox_wait
 from agentctl.ciwhy import ci_state_load
 from agentctl.tunnel import default_route, tunnel_ports, tunnel_probe, tunnel_state_path
-from agentctl.redview import red_view
 from agentctl.blamerecords import blame_land_refusal
+from agentctl.redview import red_view
+from agentctl.statemachines import machine_state
 
 
 # -- the probes: (ok, detail) for their args. Background-safe: no `secrets`, bounded, never raising (run_probe catches).

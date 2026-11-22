@@ -828,14 +828,14 @@ cyclomatic	workflow_timeout_bound	21
 cyclomatic	workflow_triggers	12
 cyclomatic	worktree_holding	12
 cyclomatic	write_snapshot	24
-file-lines	alerts	719
+file-lines	alerts	720
 file-lines	ciwhy	760
 file-lines	gov	728
 file-lines	live	755
 file-lines	owner	718
 file-lines	slots	574
 file-lines	stats	623
-file-lines	store	780
+file-lines	store	567
 inner-defs	red_owner	5
 inner-defs	status_page_server	8
 inner-defs	store_server	4

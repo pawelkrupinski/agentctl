@@ -9,7 +9,7 @@ from typing import Any
 from agentctl.core import env_num, err, fmt_age, git, remote, spawn_detached
 from agentctl.timefmt import ts
 from agentctl.statefile import read_json_file, write_json_file
-from agentctl.store import machine_state, open_store
+from agentctl.store import open_store
 from agentctl.selfcode import TOOL_PATH
 from agentctl.repos import precheck_hook
 from agentctl.waitingdir import ENTRY_FINAL, save_entry, waiting_entries, wlog
@@ -31,6 +31,7 @@ from agentctl.queuepush import (
 from agentctl.batchitem import batch_fail, new_batch
 from agentctl.batchpush import push_batch_item
 from agentctl.batchrun import assemble, unread_note
+from agentctl.statemachines import machine_state
 
 
 # EVERY CHANGE IS A MEMBER (2026-11-20, the owner: "batching waiting changes ... structurally"): an identity change joins

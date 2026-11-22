@@ -4,9 +4,10 @@
 import os
 import time
 from typing import Any
-from agentctl.store import ARCHIVE, MACHINES, StaleVersion, StateSpec, TerminalState, open_store
+from agentctl.store import open_store
 from agentctl.fixerrecords import agent_name
 from agentctl.queue import land_hold, land_holds
+from agentctl.statemachines import ARCHIVE, MACHINES, StaleVersion, StateSpec, TerminalState
 
 
 LAND_HOLD_DEFAULT = 4 * 3600  # s a `land hold` lasts unless --for says otherwise: it then lifts itself (expired)

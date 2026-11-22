@@ -3,12 +3,13 @@
 
 import time
 from agentctl.core import fmt_age
-from agentctl.store import StaleVersion, machine_state, open_store
+from agentctl.store import open_store
 from agentctl.redrecord import RED_TERMINAL, red_names
 from agentctl.queueslots import checker_alive
 from agentctl.fixchange import fixes_named
 from agentctl.issues import issue_open
 from agentctl.identitychange import identity_change
+from agentctl.statemachines import StaleVersion, machine_state
 
 
 # ---------------------------------------------------------------- ONE CLASSIFIER (the owner, 2026-11-19: "fix that structurally")

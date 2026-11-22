@@ -15,7 +15,8 @@
 # bound, and the change tick runs the recovery: no hold outlives its bound in silence.
 
 from agentctl.core import err, process_cache
-from agentctl.store import machine_state, open_store
+from agentctl.store import open_store
+from agentctl.statemachines import machine_state
 
 
 class Policy:

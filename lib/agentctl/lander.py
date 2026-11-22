@@ -12,10 +12,11 @@ from typing import Any
 from agentctl.core import HOME, branch_of, env_num, err, git, git_ok, process_cache, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import mtime
-from agentctl.store import ARCHIVE, MACHINES, StaleVersion, StateSpec, open_store
+from agentctl.store import open_store
 from agentctl.repos import RED_PRIMARY
 from agentctl.storetoken import no_vault
 from agentctl.claudefiles import claude_projects_root
+from agentctl.statemachines import ARCHIVE, MACHINES, StaleVersion, StateSpec
 
 
 # ---------------------------------------------------------------- the lander (the owner, 2026-11-01: "remember which

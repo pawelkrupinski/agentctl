@@ -6,19 +6,16 @@ import re
 import subprocess
 import time
 from typing import Any
-from agentctl.core import env_num, err, fmt_age, git, git_ok
+from agentctl.core import env_num, err, fmt_age, git, git_ok, host_role
+from agentctl.timefmt import iso_at
 from agentctl.statefile import read_record
-from agentctl.store import change_event
+from agentctl.classify import credential_failure, redact_credentials
 from agentctl.repos import precheck_hook, repo_of_waiting
-from agentctl.waitingdir import wlog
+from agentctl.waitingdir import waiting_entries, wlog
 from agentctl.land import tool_env
 from agentctl.queueslots import set_change
 from agentctl.conditions import open_condition, run_probe
-from agentctl.core import host_role
-from agentctl.timefmt import iso_at
-from agentctl.classify import credential_failure, redact_credentials
-from agentctl.waitingdir import waiting_entries
-from agentctl.store import StaleVersion, TerminalState
+from agentctl.statemachines import StaleVersion, TerminalState, change_event
 
 
 # a backlog batch (batch.py, THE BACKLOG BATCH) is up to BACKLOG_BATCH_MAX of them checked in ONE tree.

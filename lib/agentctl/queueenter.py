@@ -9,7 +9,7 @@ import time
 from agentctl.core import (
     MAX_FOREIGN, NO_SIGN, branch_of, cherry_landed, env_num, err, fmt_age, git, git_ok, host_role, process_cache,
     remote, scratch)
-from agentctl.store import machine_state, open_store
+from agentctl.store import open_store
 from agentctl.policy import policy_blocks
 from agentctl.trailers import do_not_land, held_commit
 from agentctl.waitingdir import waiting_state
@@ -32,9 +32,10 @@ from agentctl.dispatchblock import in_fixer
 from agentctl.blamerecords import blame_land_refusal, blame_records_quiet
 from agentctl.tools import check_range
 from agentctl.server import queue_change
-from agentctl.landqueue import queue_command
 from agentctl.syncsteps import submit_remote
 from agentctl.processorlink import offer_token, spawn_waiting_processor
+from agentctl.landqueue import queue_command
+from agentctl.statemachines import machine_state
 
 
 def change_fields(repo, main_ref, head, a):

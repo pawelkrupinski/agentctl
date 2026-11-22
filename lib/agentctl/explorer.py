@@ -4,11 +4,12 @@ import subprocess
 import sys
 import time
 from agentctl.core import NO_SIGN, err, git, reds_dir, remote
+from agentctl.store import open_store
 from agentctl.forge import forge_release_asset
-from agentctl.store import ARCHIVE, MACHINES, StateSpec, open_store
 from agentctl.land import spawn_land
 from agentctl.worktrees import fresh_worktree
 from agentctl.fixerenv import fixer_env
+from agentctl.statemachines import ARCHIVE, MACHINES, StateSpec
 
 
 """The movies flip explorer's filing (2026-11-04): the nightly explorer workflow publishes `new-flips.tsv` on the release

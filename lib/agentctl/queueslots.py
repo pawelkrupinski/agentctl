@@ -6,14 +6,15 @@ import subprocess
 from typing import Any
 from agentctl.core import env_num, err, git
 from agentctl.timefmt import parse_time, ts
-from agentctl.store import (
-    ENTRY_STATE, StaleVersion, TerminalState, change_event, joined_verdict, machine_state, open_store)
-from agentctl.leases import LeaseHold, lease_live
+from agentctl.store import open_store
 from agentctl.waitingdir import QUEUE_POOL, save_entry, waiting_entries, waiting_state, wlog
-from agentctl.land import tool_env
 from agentctl.lander import lander_fields
+from agentctl.leases import LeaseHold, lease_live
+from agentctl.land import tool_env
 from agentctl.owned import Owned
 from agentctl.worktrees import mark_internal
+from agentctl.statemachines import (
+    ENTRY_STATE, StaleVersion, TerminalState, change_event, joined_verdict, machine_state)
 
 
 # CHECK SLOTS AND A CHANGE'S CHECK ARE LEASES (design §6, §7.1; phase 1 step 4): `slot/check/<repo>/<i>` (one per

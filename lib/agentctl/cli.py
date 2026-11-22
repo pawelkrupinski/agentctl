@@ -7,10 +7,11 @@ import datetime as dt
 import io
 import sys
 import time
-from agentctl.store import cmd_lease, wire_store
+from agentctl.store import wire_store
 from agentctl.ghapp import cmd_github_app
 from agentctl.config import cmd_config
 from agentctl.storetoken import wire_token_missing_note
+from agentctl.leases import cmd_lease
 from agentctl.inboxentry import wire_inbox_writer
 from agentctl.owned import cmd_wait, restart_gate
 from agentctl.reverts import cmd_revert
@@ -26,7 +27,9 @@ from agentctl.laptoprole import cmd_laptop
 from agentctl.gov import cmd_suite
 from agentctl.govcmd import cmd_checks, cmd_gov
 from agentctl.ciwhy import gate_from_snap, outside_from_snap, red_for
+from agentctl.serverclone import probe_clone_health
 from agentctl.branches import cmd_dispatch
+from agentctl.localrecheck import check_failures, recheck_local
 from agentctl.redcrash import probe_red_newer_verdict
 from agentctl.redvault import probe_quota_reset
 from agentctl.ask import cmd_decide
@@ -36,7 +39,6 @@ from agentctl.recovery import (
     cmd_inbox, probe_gate_read, probe_git_fetch, probe_http, probe_route, probe_tcp, probe_token, probe_tunnel,
     probe_waiting_ok, probe_workflow_green, recover_clear_flag, recover_clear_hold, recover_tunnel_reset,
     token_unavailable_note)
-from agentctl.localrecheck import check_failures, recheck_local
 from agentctl.tools import cmd_env, cmd_prepush, cmd_queue_retired, cmd_state
 from agentctl.superseded import cmd_supersede
 from agentctl.park import cmd_park, cmd_unpark
@@ -44,16 +46,15 @@ from agentctl.orphans import probe_orphan_landed
 from agentctl.maintain import cmd_maintain
 from agentctl.invariants import probe_invariant
 from agentctl.watchdog import cmd_watchdog
-from agentctl.serverclone import probe_clone_health
-from agentctl.batch import probe_batch_progress
 from agentctl.server import cmd_store, process_store
 from agentctl.status import cmd_ci_why
+from agentctl.statuspage import cmd_status
 from agentctl.redtick import cmd_red, probe_red_read
+from agentctl.batch import probe_batch_progress
 from agentctl.queueenter import cmd_land_precheck
 from agentctl.slots import cmd_land
 from agentctl.cliparser import parser
 from agentctl.processor import cmd_tick, cmd_waiting
-from agentctl.statuspage import cmd_status
 
 
 # THE COMPOSITION ROOT: what every process wires before any command runs.

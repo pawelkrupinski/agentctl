@@ -3,7 +3,7 @@
 
 import time
 from typing import Any
-from agentctl.store import MACHINES, machine_state, open_store
+from agentctl.store import open_store
 from agentctl.selfcode import code_version
 from agentctl.owned import start_rev
 from agentctl.reverts import revert_brief
@@ -12,6 +12,7 @@ from agentctl.changekind import HOLD_SHOWN
 from agentctl.cistate import state_update
 from agentctl.ask import owner_asks
 from agentctl.queueclose import change_rows
+from agentctl.statemachines import MACHINES, machine_state
 
 
 def write_snapshot(d: str, store: Any = None) -> None:

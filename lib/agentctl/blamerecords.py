@@ -5,7 +5,7 @@ import os
 import re
 from agentctl.core import HOME, PROTECTED_BRANCHES, _tokens, err, git, remote
 from agentctl.timefmt import ts
-from agentctl.store import machine_state, open_store
+from agentctl.store import open_store
 from agentctl.repos import movies_repo_path
 from agentctl.trailers import fixes_red_in_message
 from agentctl.redrecord import RED_TERMINAL, red_what
@@ -21,6 +21,7 @@ from agentctl.waiting import cancel_submitted
 from agentctl.remotestore import RemoteStore
 from agentctl.redopen import red_offer
 from agentctl.culpritfix import blame_culprit
+from agentctl.statemachines import machine_state
 
 
 # -- a withdrawn or refuted revert never lands again (2026-11-01: blame's wrong revert of ...-retained-input for #629 was

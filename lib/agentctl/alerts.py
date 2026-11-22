@@ -8,10 +8,10 @@ import time
 from agentctl.core import cherry_landed, env_num, err, hashlib_sha1, remote
 from agentctl.timefmt import iso_epoch
 from agentctl.statefile import read_record, write_json
-from agentctl.store import MACHINES, machine_state, open_store
+from agentctl.store import open_store
+from agentctl.redrecord import lease_is_live, red_lease, red_what
 from agentctl.leases import red_block_of
 from agentctl.inboxentry import CONDITION_KINDS, INBOX_COMMANDS, inbox_dir, inbox_entries, inbox_kind
-from agentctl.redrecord import lease_is_live, red_lease, red_what
 from agentctl.fixersession import TRUST_ASK_PREFIX, claude_trust_gap
 from agentctl.inbox import WAIT_KINDS_DEFAULT, entry_line
 from agentctl.conditions import open_conditions
@@ -19,6 +19,7 @@ from agentctl.redfamilies import red_family
 from agentctl.cistate import state_path
 from agentctl.owners import owner_alive
 from agentctl.redask import red_ask
+from agentctl.statemachines import MACHINES, machine_state
 
 
 # ---------------------------------------------------------------- the alert model (the owner, 2026-11-04)

@@ -7,12 +7,11 @@ import sys
 import time
 from agentctl.core import env_num, fmt_age, git, host_role, process_cache, remote, spawn_detached
 from agentctl.timefmt import ts
-from agentctl.store import StaleVersion, change_event, machine_state
 from agentctl.selfcode import TOOL_PATH
 from agentctl.policy import HOLDS, hold_kind
 from agentctl.waitingdir import save_entry, waiting_entries, wlog
-from agentctl.land import run_watched, tool_env
 from agentctl.storetoken import detached_env
+from agentctl.land import run_watched, tool_env
 from agentctl.queueslots import checker_alive, set_change
 from agentctl.queue import VERIFY_MODE
 from agentctl.generated import generated_entry, without_generated
@@ -23,9 +22,10 @@ from agentctl.identitychange import change_paths_of
 from agentctl.changekind import classify_change, queue_facts
 from agentctl.gov import GovTimeout
 from agentctl.waiting import note_waiting, supersede_older_waiting, waiting_commits
-from agentctl.redseen import gate_reds
 from agentctl.checkslot import check_slot
+from agentctl.redseen import gate_reds
 from agentctl.remote import remote_check, remote_checks_supported, remote_matches
+from agentctl.statemachines import StaleVersion, change_event, machine_state
 
 
 # OVERLAPPING CHANGES ARE CHECKED AS ONE (the coordinator, 2026-11-18: B1 against the CI-workflows change, the scraper

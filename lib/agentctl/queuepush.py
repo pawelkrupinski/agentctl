@@ -6,7 +6,7 @@ import re
 import time
 from agentctl.core import env_num, fmt_age, git, host_role, remote
 from agentctl.timefmt import day_hhmmz, hhmmz
-from agentctl.store import ENTRY_STATE, StaleVersion, open_store
+from agentctl.store import open_store
 from agentctl.policy import policy_blocks
 from agentctl.waitingdir import waiting_entries
 from agentctl.queueslots import change_item_fields, check_tree_slot, checker_alive, queue_verdict, set_change
@@ -25,6 +25,7 @@ from agentctl.queuebatch import (
 from agentctl.queuediff import push_change
 from agentctl.queueclose import regen_hold_overdue
 from agentctl.recovery import current_batch
+from agentctl.statemachines import ENTRY_STATE, StaleVersion
 
 
 # THE OLDEST VERIFICATION PUSHES FIRST (2026-11-16, workermem: fully checked by 09:15, then its combined tree verified

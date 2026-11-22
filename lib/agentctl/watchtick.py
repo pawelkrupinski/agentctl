@@ -6,7 +6,7 @@ import time
 from typing import Sequence
 from agentctl.core import NoToken, env_num, err, slug
 from agentctl.timefmt import iso_at
-from agentctl.store import StaleVersion, TerminalState, open_store
+from agentctl.store import open_store
 from agentctl.procs import safe_cwd
 from agentctl.owned import Owned, backoff, restart_if_changed
 from agentctl.clones import main_clone
@@ -18,6 +18,7 @@ from agentctl.landwatch import (
     watch_clone, watch_eval, watch_event, watch_look, watch_outcome, watch_verdict)
 from agentctl.redopen import red_attach
 from agentctl.cireport import ci_why
+from agentctl.statemachines import StaleVersion, TerminalState
 
 
 def watch_landed(repo: str, sha: str, pushed_at: float | None, o_r: str | None = None, close: str | None = None,

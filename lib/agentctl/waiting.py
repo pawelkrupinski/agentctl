@@ -8,19 +8,17 @@ from typing import Any
 from agentctl.core import SHORT, err, git, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record
-from agentctl.store import change_event
+from agentctl.store import open_store
+from agentctl.repos import server_repo
 from agentctl.trailers import trailer_values
-from agentctl.waitingdir import save_entry, waiting_entries, wlog
+from agentctl.waitingdir import save_entry, waiting_entries, waiting_state, wlog
 from agentctl.owned import cancel_run, lock_held
 from agentctl.queueslots import entry_owned, queue_verdict, set_change
 from agentctl.conflicts import pick
-from agentctl.queuerecheck import same_change_source
+from agentctl.queuerecheck import queued_entries, same_change_source
 from agentctl.redfixes import commit_fixes
 from agentctl.changekind import classify_change, gate_facts
-from agentctl.store import StaleVersion, machine_state, open_store
-from agentctl.repos import server_repo
-from agentctl.waitingdir import waiting_state
-from agentctl.queuerecheck import queued_entries
+from agentctl.statemachines import StaleVersion, change_event, machine_state
 
 
 PRODUCTION_GLOBS = ("*/src/main/*", "conf/*", "*/conf/*", "build.sbt", "project/*", "infra/nix/*", "infra/kubernetes/*",

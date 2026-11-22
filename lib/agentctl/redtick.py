@@ -6,7 +6,7 @@ import threading
 import time
 from agentctl.core import NoReadAccess, env_num, err, process_cache, reds_dir, run_bounded, slug
 from agentctl.timefmt import ts
-from agentctl.store import StaleVersion, open_store
+from agentctl.store import open_store
 from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_clone, red_repo_short, red_repos, scan_repo_for
 from agentctl.redretired import red_retired
@@ -41,6 +41,7 @@ from agentctl.fixerlife import red_fixer
 from agentctl.owner import red_owner, red_reap_orphans
 from agentctl.redvault import red_block, red_owner_push, red_quota_waits, red_unblock
 from agentctl.ask import red_owner_reminders
+from agentctl.blamerecords import blame_withdraw
 from agentctl.redprobe import cmd_red_probe
 from agentctl.reddispatch import RED_MODEL, red_dispatcher, red_migrate, red_renew_holders, repo_dispatch_off_all
 from agentctl.redstep import red_step
@@ -48,7 +49,7 @@ from agentctl.redview import repo_dispatch_set
 from agentctl.cireport import ci_state_refresh, ci_why
 from agentctl.redhold import red_enforce
 from agentctl.redstatus import red_status
-from agentctl.blamerecords import blame_withdraw
+from agentctl.statemachines import StaleVersion
 
 
 # -- the tick's red step (the processor; ci-why never acts)

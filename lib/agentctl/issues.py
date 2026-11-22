@@ -5,12 +5,12 @@ import datetime as dt
 import os
 import time
 from typing import Any, Optional
-from agentctl.core import hashlib_sha1
+from agentctl.core import env_num, fmt_age, hashlib_sha1
 from agentctl.timefmt import ts
-from agentctl.core import env_num, fmt_age
-from agentctl.store import ARCHIVE, MACHINES, StaleVersion, StateSpec, StoreUnavailable, TerminalState, open_store
+from agentctl.store import StoreUnavailable, open_store
 from agentctl.procs import safe_cwd
 from agentctl.worktrees import claimant
+from agentctl.statemachines import ARCHIVE, MACHINES, StaleVersion, StateSpec, TerminalState
 
 
 ISSUE_TEXT_MAX = 4000

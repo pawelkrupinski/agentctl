@@ -5,10 +5,11 @@ import argparse
 import os
 import re
 from agentctl.core import cherry_landed, env_num, git, remote
-from agentctl.store import ENTRY_STATE, machine_state, open_store
+from agentctl.store import open_store
 from agentctl.waitingdir import waiting_entries, waiting_state
 from agentctl.worktrees import worktrees
 from agentctl.cleanup import FREE_WAIT, close_worktree, free_worktree
+from agentctl.statemachines import ENTRY_STATE, machine_state
 
 
 # LAND --UNTIL-DONE (the owner, 2026-11-18): agents kept ending badly -- stopping after the rebase without landing,

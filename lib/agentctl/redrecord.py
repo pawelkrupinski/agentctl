@@ -4,9 +4,9 @@
 import re
 import time
 from typing import Any
-from agentctl.store import machine_state
 from agentctl.repos import RED_PRIMARY, red_repo_of, red_repo_short
 from agentctl.workflows import LOCAL_FLOW
+from agentctl.statemachines import machine_state
 
 
 RED_TERMINAL = ("verified", "cleared")

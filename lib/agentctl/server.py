@@ -13,7 +13,7 @@ import time
 import urllib.parse
 from agentctl.core import env_num, err, git, remote, state_root
 from agentctl.timefmt import iso_epoch, now, ts
-from agentctl.store import MACHINES, StaleVersion, Store, TerminalState, machine_state, open_store, store_errors
+from agentctl.store import Store, open_store, store_errors
 from agentctl.repos import server_repo
 from agentctl.trailers import do_not_land
 from agentctl.waitingdir import save_entry, waiting_entries, waiting_state
@@ -29,8 +29,9 @@ from agentctl.remotestore import RemoteStore, STORE_PORT, store_url
 from agentctl.storeauth import (
     store_secret, store_secret_path, store_token_issue, store_token_revoke, store_token_user, store_tokens_load)
 from agentctl.tickrun import TICK
-from agentctl.redhold import red_unheld
 from agentctl.blamerecords import blame_land_refusal
+from agentctl.redhold import red_unheld
+from agentctl.statemachines import MACHINES, StaleVersion, TerminalState, machine_state
 
 
 # ---------------------------------------------------------------- phase 2: the store over HTTP (design §6.3, §13 phase 2)

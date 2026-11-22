@@ -8,15 +8,15 @@ import sys
 import time
 from typing import Optional
 from agentctl.core import env_num, err, fmt_age, git, git_ok, remote, scratch, spawn_detached
-from agentctl.classify import credential_failure, is_transient_network, redact_credentials
-from agentctl.store import MACHINES, StaleVersion, StoreUnavailable, machine_state, open_store
+from agentctl.classify import (
+    TransientNetwork, credential_failure, is_transient_network, net_retry, redact_credentials)
+from agentctl.store import StoreUnavailable, open_store
 from agentctl.selfcode import TOOL_PATH
-from agentctl.waitingdir import ENTRY_FINAL, waiting_entries
-from agentctl.owned import backoff
-from agentctl.classify import TransientNetwork, net_retry
-from agentctl.waitingdir import save_entry
+from agentctl.waitingdir import ENTRY_FINAL, save_entry, waiting_entries
 from agentctl.land import push_bounds, run_watched, tool_env
+from agentctl.owned import backoff
 from agentctl.waiting import tail_of
+from agentctl.statemachines import MACHINES, StaleVersion, machine_state
 
 
 # SUBMISSION BY REF (design §13 step 14, §14.2): a queued change is also pushed to the remote as refs/heads/land/<entry>

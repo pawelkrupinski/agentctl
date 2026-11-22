@@ -8,15 +8,15 @@ import time
 from agentctl.core import HOME, SHORT, fmt_age, git, remote, slug
 from agentctl.timefmt import iso_at, iso_epoch, parse_time
 from agentctl.statefile import read_record
-from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.classify import QUOTA_LOG
-from agentctl.store import StaleVersion, open_store
-from agentctl.procs import safe_cwd
+from agentctl.store import open_store
+from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.repos import RED_PRIMARY, repo_signs
+from agentctl.redrecord import lease_is_live, red_lease, red_of_key, red_what
+from agentctl.procs import safe_cwd
 from agentctl.leases import block_lease, lease_meta, red_block_of
 from agentctl.fixerrecords import own_fixer_record_path
 from agentctl.inboxentry import inbox_write
-from agentctl.redrecord import lease_is_live, red_lease, red_of_key, red_what
 from agentctl.worktrees import claimant, worktree_of
 from agentctl.conditions import probe_words, run_probe
 from agentctl.redrepos import red_owner_only
@@ -25,12 +25,13 @@ from agentctl.fixerland import unlanded_commits
 from agentctl.red import red_active_of
 from agentctl.redmove import red_move
 from agentctl.ciwhy import resolve_run
+from agentctl.rundispatch import red_verify_dispatch
 from agentctl.redseen import run_jobs
 from agentctl.redblock import BLOCK_MAX, BLOCK_TTL, owner_cmd_unsafe, owner_details, red_run_units
-from agentctl.rundispatch import red_verify_dispatch
 from agentctl.redopen import red_offer
 from agentctl.redclaim import red_targets, root_checkout
 from agentctl.owner import owner_holder
+from agentctl.statemachines import StaleVersion
 
 
 # A VAULT ASK IS ONE OWNER ITEM PER VAULT, ANSWERED BY ONE LINE (2026-11-16, Order independence #77 [ios]: its fixer's

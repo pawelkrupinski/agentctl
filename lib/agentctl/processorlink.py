@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 from agentctl.core import env_num, err, slug, spawn_detached
-from agentctl.store import StoreUnavailable, machine_state, open_store
+from agentctl.store import StoreUnavailable, open_store
 from agentctl.selfcode import TOOL_PATH
 from agentctl.waitingdir import WAITING_BRANCH, waiting_state
 from agentctl.storetoken import (
@@ -16,6 +16,7 @@ from agentctl.storetoken import (
     token_sock_path)
 from agentctl.owned import Owned, backoff, lock_held, restart_if_changed
 from agentctl.waiting import WAITING_AWAIT_TIMEOUT
+from agentctl.statemachines import machine_state
 
 
 def processor_owned(d: str, repo: str | None = None) -> Owned:

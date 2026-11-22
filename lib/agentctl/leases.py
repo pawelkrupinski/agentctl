@@ -1,4 +1,4 @@
-# agentctl, part `leases`: the leases this process holds (LeaseHold): acquired, renewed together on progress (lock_beat), noted (lock_note), the landing lease among them.
+# agentctl, part `leases`: the leases this process holds (LeaseHold): acquired, renewed together on progress (lock_beat), noted (lock_note), the landing lease among them; `agentctl lease list`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
@@ -101,3 +101,28 @@ def red_block_of(it: dict[str, Any], store: Any = None) -> Optional[dict[str, An
                 return {"name": row["name"], "text": m.get("text") or "BLOCKED ON OWNER", "cause": m.get("cause"),
                         "until": m.get("until"), "meta": m}
     return None
+
+
+LEASE_LIST_RECENT = 3600         # `lease list` shows the live leases and those free for less than this (--all: every one)
+
+
+def cmd_lease(a):
+    """`agentctl lease list [prefix] [--all]` (debugging; the leases' holders, epochs, expiry, notes): the live ones and
+    those free for under an hour; --all every one still in the table."""
+    st, now_ = open_store(), time.time()
+    rows = st.list(a.prefix or "")
+    hidden = 0 if a.all else sum(1 for r in rows if not (r["holder"] and r["expires_at"] > now_)
+                                 and now_ - r["expires_at"] > LEASE_LIST_RECENT)
+    if not a.all:
+        rows = [r for r in rows if (r["holder"] and r["expires_at"] > now_) or now_ - r["expires_at"] <= LEASE_LIST_RECENT]
+    for r in rows:
+        live = r["holder"] and r["expires_at"] > now_
+        meta = json.loads(r["meta"] or "{}")
+        print(f"{r['name']}  {'LIVE' if live else 'free'}  {r['holder'] or '-'}  epoch {r['epoch']}  "
+              f"expires in {int(r['expires_at'] - now_)} s  max {int(r['max_until'] - now_)} s"
+              + (f"  -- {meta.get('note')}" if meta.get("note") else ""))
+    if not rows:
+        print("no leases")
+    if hidden:
+        print(f"({hidden} free for over {LEASE_LIST_RECENT // 60} min not shown: --all)")
+    return 0
