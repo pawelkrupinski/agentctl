@@ -448,3 +448,31 @@ def runner_queue(now_=None):
     except (OSError, ValueError, KeyError, TypeError):
         return None
     return q if fresh else None
+
+
+# A RUN THAT DID NOTHING IS NO SAMPLE (issues 20261101T101427-e15fe1, 20261108T205920-0e4015): Order independence #27
+# took 31 s with every real job skipped, and Identity takes' first runs failed in ~3 min, so the p90 fell to the floor
+# and healthy 40-min runs were stuck reds. A finished run shorter than STUCK_SAMPLE_MIN tells nothing of how long the
+# workflow takes: it is left out of the p90, and the stuck line says how many runs the limit came from.
+STUCK_SAMPLE_MIN = 5 * 60
+
+
+def stuck_durations(runs: list[dict[str, Any]]) -> list[float]:
+    """The durations of the finished runs that ran (STUCK_SAMPLE_MIN or longer)."""
+    durs: list[float] = []
+    for r in runs:
+        if r.get("status") == "completed" and r.get("createdAt") and r.get("updatedAt"):
+            try:
+                dur = parse_time(r["updatedAt"]).timestamp() - parse_time(r["createdAt"]).timestamp()
+            except (ValueError, TypeError):
+                continue
+            if dur >= STUCK_SAMPLE_MIN:
+                durs.append(dur)
+    return durs
+
+
+UNDECIDED = ("cancelled", "skipped", "neutral", "")
+
+
+def is_cancelled(r: dict[str, Any]) -> bool:
+    return r.get("status") == "completed" and (r.get("conclusion") or "") in UNDECIDED

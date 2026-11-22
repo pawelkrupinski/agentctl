@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import time
+from typing import Any
 from agentctl.core import HOME, branch_of, env_num, err, git, git_ok, process_cache, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import mtime
@@ -300,8 +301,27 @@ def lander_note_direct(repo, head, keys):
         return None
 
 
-def lander_name(l):
+def lander_name(l: dict[str, Any] | None) -> str:
     l = l or {}
     who = f"subagent {l['agent']} of session {str(l.get('session'))[:8]}" if l.get("agent") else \
         f"session {str(l.get('session'))[:8]}" if l.get("session") else "the owner"
     return f"{who} ({str(l.get('worktree') or '?').replace(HOME, '~')})"
+
+
+def blame_decision(b: dict[str, Any] | None) -> tuple[str | None, str]:
+    """THE DECISION RULE: (who, why). who: `lander` -- the culprit and its lander are determined: revert it and revive
+    the lander; `owner` -- the culprit is determined and nobody's session landed it (the owner by hand, a land outside
+    Claude): revert it and tell the owner; `fixer` -- it cannot be determined: a fresh fixer; None -- still deciding."""
+    st = (b or {}).get("state")
+    if st == "probing":
+        return None, "deciding the culprit"
+    if st != "confirmed":
+        return "fixer", (b or {}).get("why") or "no culprit"
+    g = b["groups"][b["culprit"]]
+    if not g.get("change") or not (g.get("lander") or {}).get("session"):
+        return "owner", f"{blame_change_name(g)} was landed by hand (no agent session recorded)"
+    return "lander", f"{blame_change_name(g)} landed by {lander_name(g['lander'])}"
+
+
+def blame_change_name(g: dict[str, Any]) -> str:
+    return f"change {g['change']}" if g.get("change") else f"commit {g['commits'][0][:10]}"

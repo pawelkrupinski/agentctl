@@ -11,12 +11,9 @@ from agentctl.forge import forge_argv, forge_env, gh_json
 from agentctl.classify import NOISE, NOT_A_FAILURE, STRONG, WEAK
 from agentctl.procs import ps
 from agentctl.workflows import STEP_TIMED_OUT, job_inner
+from agentctl.classify import ANSI, LOG_TS
 
 
-# ---------------------------------------------------------------- wait
-# gh prints a log's escapes as caret text (`^[[36;1m`) when it refuses raw ones: both are colours
-ANSI = re.compile(r"(?:\x1b|\^\[)\[[0-9;]*[A-Za-z]")
-LOG_TS = re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ")
 MEASURE_WORKFLOWS = {"Identity takes", "Identity model convergence"}  # takes rows: Identity takes (2026-11-08); a --full measure starts it from convergence
 # A STEP'S SCRIPT IS NO OUTPUT (2026-11-04): the runner echoes each `run:` step's script (cyan bold, `36;1m`) inside a
 # `##[group]Run <first line>` ... `##[endgroup]` header, with its shell and env, before running it. precommit-check.yml's

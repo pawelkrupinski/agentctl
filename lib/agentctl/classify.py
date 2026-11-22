@@ -395,4 +395,26 @@ def classify_job(job, lines, raw=(0, []), timed_out=False):
     return "test", f"failed step '{step}'" if step else "test failure"
 
 
+# ---------------------------------------------------------------- wait
+# gh prints a log's escapes as caret text (`^[[36;1m`) when it refuses raw ones: both are colours
+ANSI = re.compile(r"(?:\x1b|\^\[)\[[0-9;]*[A-Za-z]")
 
+
+LOG_TS = re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ")
+
+
+HEXISH = re.compile(r"\b[0-9a-f]{7,40}\b")
+
+
+NUMS = re.compile(r"\d+(\.\d+)?")
+
+
+def norm_line(line: str | None) -> str:
+    """A first error line with what changes run to run taken out: timestamps, shas, numbers, temp paths."""
+    s = ANSI.sub("", line or "")
+    s = LOG_TS.sub("", s)
+    s = re.sub(r"/(private/)?(tmp|var/folders)/\S*", "<tmp>", s)
+    s = re.sub(r"\b0x[0-9a-f]+\b", "H", s.lower())
+    s = HEXISH.sub("H", s)
+    s = NUMS.sub("N", s)
+    return " ".join(s.split())[:160]

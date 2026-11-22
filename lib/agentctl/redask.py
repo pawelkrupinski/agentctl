@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import re
+from typing import Any
 from agentctl.core import HOME, env_num
 
 
@@ -140,3 +141,9 @@ def ask_interval(n):
     """The wait before reminder n+1 (n reminders so far, the first telling included): 1 h, 2 h, 4 h, 4 h, ..."""
     first = env_num("AGENTCTL_ASK_REMIND_FIRST", ASK_REMIND_FIRST)
     return min(first * 2 ** max(0, int(n) - 1), env_num("AGENTCTL_ASK_REMIND_MAX", ASK_REMIND_MAX))
+
+
+def red_decision(d: dict[str, Any]) -> dict[str, Any] | None:
+    """The owner's decision on red d while it is being acted on, else None."""
+    dec = d.get("decision") or {}
+    return dec if dec.get("status") == "in-progress" and dec.get("answer") else None

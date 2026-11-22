@@ -1,5 +1,22 @@
 # agentctl, part `red`: the red machine.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import re
+import time
+from agentctl.core import env_num, err, pct, process_cache, remote
+from agentctl.timefmt import parse_time
+from agentctl.forge import RUN_FIELDS, gh_json, is_cancelled, stuck_durations
+from agentctl.classify import norm_line
+from agentctl.store import ARCHIVE, MACHINES, StateSpec
+from agentctl.repos import RED_PRIMARY, red_repo_of
+from agentctl.workflows import workflow_file_of
+from agentctl.lander import blame_decision
+from agentctl.redrecord import red_active
+from agentctl.redrepos import red_is_other, red_repo_key
+from agentctl.redask import red_decision
+from agentctl.ancestry import contains_local
+
 
 # ---------------------------------------------------------------- red: every red build held by a lease, or offered
 # -- reds as items, held by leases (design §5.3, §6, §7.2; reconciler phase 1, step 10)

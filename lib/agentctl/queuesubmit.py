@@ -8,9 +8,9 @@ import sys
 import time
 from typing import Optional
 from agentctl.core import env_num, err, fmt_age, git, git_ok, remote, scratch, spawn_detached
-from agentctl.ghapp import TOOL_PATH
 from agentctl.classify import credential_failure, is_transient_network, redact_credentials
 from agentctl.store import MACHINES, StaleVersion, StoreUnavailable, machine_state, open_store
+from agentctl.selfcode import TOOL_PATH
 from agentctl.waitingdir import ENTRY_FINAL, waiting_entries
 from agentctl.owned import backoff
 

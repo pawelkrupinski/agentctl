@@ -567,21 +567,6 @@ def cmd_ci_why(a):
     return 1 if red else 0
 
 
-HEXISH = re.compile(r"\b[0-9a-f]{7,40}\b")
-NUMS = re.compile(r"\d+(\.\d+)?")
-
-
-def norm_line(line):
-    """A first error line with what changes run to run taken out: timestamps, shas, numbers, temp paths."""
-    s = ANSI.sub("", line or "")
-    s = LOG_TS.sub("", s)
-    s = re.sub(r"/(private/)?(tmp|var/folders)/\S*", "<tmp>", s)
-    s = re.sub(r"\b0x[0-9a-f]+\b", "H", s.lower())
-    s = HEXISH.sub("H", s)
-    s = NUMS.sub("N", s)
-    return " ".join(s.split())[:160]
-
-
 def signature(workflow, job, line):
     import hashlib
     return hashlib.sha1(f"{workflow}\0{job}\0{norm_line(line)}".encode()).hexdigest()[:12]
@@ -725,17 +710,6 @@ def land_cwds():
             if wt:
                 out[os.path.realpath(wt)] = pid
     return out
-
-
-def contains_local(repo, sha, head):
-    """True / False when both commits are here, else None."""
-    if not head:
-        return None
-    if head == sha:
-        return True
-    if not git_ok(repo, "cat-file", "-e", f"{head}^{{commit}}"):
-        return None
-    return git_ok(repo, "merge-base", "--is-ancestor", sha, head)
 
 
 _blocker_cache = process_cache({})

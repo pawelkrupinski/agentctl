@@ -14,22 +14,6 @@ WATCH_TIMEOUT = 3 * 3600          # either run undecided by then: exit 2, could 
 WATCH_CONV_START = 3600           # no convergence (or takes) run containing the sha started by then: said, not waited for
 WATCH_SLACK = 120                 # clock skew between the laptop and GitHub's createdAt
 WATCH_STALL_MIN = 120  # a watch with no change in its runs for this long ends WATCH STALLED
-UNDECIDED = ("cancelled", "skipped", "neutral", "")
-
-
-def contains(repo, sha, head):
-    """Whether a run's head commit contains sha (fetching main once when head is unknown here)."""
-    if not head:
-        return False
-    if head == sha:
-        return True
-    if not git_ok(repo, "cat-file", "-e", f"{head}^{{commit}}"):
-        git(repo, "fetch", "--quiet", remote(), "main", check=False)
-    return git_ok(repo, "merge-base", "--is-ancestor", sha, head)
-
-
-def is_cancelled(r):
-    return r.get("status") == "completed" and (r.get("conclusion") or "") in UNDECIDED
 
 
 def pick_main_run(repo, sha, runs):
@@ -209,17 +193,6 @@ def run_id_of_number(o_r, n):
         return None
     hit = next((x for x in runs if str(x.get("run_number")) == str(n)), None)
     return hit and hit.get("id")
-
-
-def workflow_file_of(repo, sha, name):
-    """(path in the tree, text) of the workflow file whose `name:` is `name`, at sha."""
-    for d in (".github/workflows",):
-        r = git(repo, "ls-tree", "--name-only", sha, f"{d}/", check=False)
-        for path in r.stdout.split():
-            txt = git(repo, "show", f"{sha}:{path}", check=False).stdout
-            if re.search(rf"^name:\s*[\"']?{re.escape(name)}[\"']?\s*$", txt, re.M):
-                return path, txt
-    return None, ""
 
 
 def _watch(repo, sha, pushed_at, o_r, flows, own, fixes=(), claim=None):

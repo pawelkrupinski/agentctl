@@ -3,6 +3,7 @@
 
 import re
 from typing import Any
+from agentctl.core import git
 
 
 # scripts/ci/bounded-step.sh --reap's warning: a step outlived its own `timeout-minutes` (the runner gives up on it and
@@ -72,3 +73,14 @@ def job_inner(name: Any) -> str:
 
 
 LOCAL_FLOW = "Local checks"
+
+
+def workflow_file_of(repo: str, sha: str, name: str) -> tuple[str | None, str]:
+    """(path in the tree, text) of the workflow file whose `name:` is `name`, at sha."""
+    for d in (".github/workflows",):
+        r = git(repo, "ls-tree", "--name-only", sha, f"{d}/", check=False)
+        for path in r.stdout.split():
+            txt = git(repo, "show", f"{sha}:{path}", check=False).stdout
+            if re.search(rf"^name:\s*[\"']?{re.escape(name)}[\"']?\s*$", txt, re.M):
+                return path, txt
+    return None, ""

@@ -128,31 +128,12 @@ GITHUB_JOB_TIMEOUT = 360 * 60  # GitHub's own timeout of a job that sets none
 UNSTARTED = ("queued", "waiting", "pending", "requested")
 
 
-# A RUN THAT DID NOTHING IS NO SAMPLE (issues 20261101T101427-e15fe1, 20261108T205920-0e4015): Order independence #27
-# took 31 s with every real job skipped, and Identity takes' first runs failed in ~3 min, so the p90 fell to the floor
-# and healthy 40-min runs were stuck reds. A finished run shorter than STUCK_SAMPLE_MIN tells nothing of how long the
-# workflow takes: it is left out of the p90, and the stuck line says how many runs the limit came from.
-STUCK_SAMPLE_MIN = 5 * 60
 # A SCHEDULED BOT WAITS ITS TURN (issue 20261108T135045-06bcab: Scala Steward #145, a daily run queued behind a
 # CPU-saturated ci-runner -- checks first, by design -- was stuck at 1 h): a run its schedule started that has not
 # started a job yet waits its turn behind checks, so its limit is at least STUCK_SCHEDULED; once a job runs, the
 # workflow's own limit judges it.
 STUCK_SCHEDULED = 6 * 3600
 STUCK_SCHEDULED_EVENTS = ("schedule", "repository_dispatch")  # movies' scheduler dispatches the crons (repository_dispatch)
-
-
-def stuck_durations(runs):
-    """The durations of the finished runs that ran (STUCK_SAMPLE_MIN or longer)."""
-    durs = []
-    for r in runs:
-        if r.get("status") == "completed" and r.get("createdAt") and r.get("updatedAt"):
-            try:
-                dur = parse_time(r["updatedAt"]).timestamp() - parse_time(r["createdAt"]).timestamp()
-            except (ValueError, TypeError):
-                continue
-            if dur >= STUCK_SAMPLE_MIN:
-                durs.append(dur)
-    return durs
 
 
 def stuck_limit(name, runs, history_of, timeout_of, how=None):

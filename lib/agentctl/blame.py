@@ -145,21 +145,6 @@ def blame_next(b):
     return (lo + hi) // 2
 
 
-def blame_decision(b):
-    """THE DECISION RULE: (who, why). who: `lander` -- the culprit and its lander are determined: revert it and revive
-    the lander; `owner` -- the culprit is determined and nobody's session landed it (the owner by hand, a land outside
-    Claude): revert it and tell the owner; `fixer` -- it cannot be determined: a fresh fixer; None -- still deciding."""
-    st = (b or {}).get("state")
-    if st == "probing":
-        return None, "deciding the culprit"
-    if st != "confirmed":
-        return "fixer", (b or {}).get("why") or "no culprit"
-    g = b["groups"][b["culprit"]]
-    if not g.get("change") or not (g.get("lander") or {}).get("session"):
-        return "owner", f"{blame_change_name(g)} was landed by hand (no agent session recorded)"
-    return "lander", f"{blame_change_name(g)} landed by {lander_name(g['lander'])}"
-
-
 def blame_waiting(b):
     """Why a `blame` offer is not taken yet: what the search is judging."""
     b = b or {}
@@ -168,10 +153,6 @@ def blame_waiting(b):
     what = (f"probing {str(p.get('commit'))[:10]} ({p.get('kind')}) on CI" if p else "reading its range")
     return (f"deciding the culprit among {len(b.get('groups') or [])} change(s): {what}; {judged} boundary(ies) judged "
             f"(at most {fmt_age(env_num('AGENTCTL_BLAME_MAX', BLAME_MAX))}, then a fixer)")
-
-
-def blame_change_name(g):
-    return f"change {g['change']}" if g.get("change") else f"commit {g['commits'][0][:10]}"
 
 
 def blame_free(o_r, d, b, i, runs):

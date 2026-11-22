@@ -24,12 +24,6 @@ def trim_words(text, n=160):
     return text[:n].rsplit(" ", 1)[0].rstrip(" ,;:-") + "\u2026"
 
 
-def red_decision(d):
-    """The owner's decision on red d while it is being acted on, else None."""
-    dec = d.get("decision") or {}
-    return dec if dec.get("status") == "in-progress" and dec.get("answer") else None
-
-
 def clean_cut(text, n=60):
     """text at most n characters, cut at a word boundary with an ellipsis, never mid-word."""
     text = " ".join(str(text or "").split())
