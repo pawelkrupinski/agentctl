@@ -122,7 +122,6 @@ class TokenDrop:
                 os.unlink(self.path)
             except OSError:
                 pass
-        import threading  # the part's own import, as in open()
         thread, self.thread = self.thread, None
         if thread is not None and thread is not threading.current_thread():
             thread.join(5)
