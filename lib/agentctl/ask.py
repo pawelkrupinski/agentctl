@@ -1,18 +1,22 @@
 # agentctl, part `ask`: what a red waiting on the owner asks, how the owner is reminded, and the owner's answer.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-# A fixer asks the owner with `decide[<category>]: <the decision>` (in a DIAGNOSED or GAVE UP verdict); a policy ask
-# adds `rule: <where>: <the row to add>`. A bare `decide:` names no category: it is routed back (red_ask_route).
-ASK_CATEGORY = re.compile(r"^\s*\[\s*([\w-]+)\s*\]\s*:?\s*", re.S)
+import re
+import time
+from agentctl.core import slug
+from agentctl.timefmt import hhmmz
+from agentctl.store import StaleVersion, open_store
+from agentctl.leases import red_block_of
+from agentctl.redrecord import RED_TERMINAL, red_closed_of, red_what
+from agentctl.owned import default_repo
+from agentctl.redask import ask_held_until, ask_interval, ask_refusal, ask_split, red_ask, red_decision
+from agentctl.alerts import alert_close_naming
+from agentctl.redmove import red_move
+from agentctl.redclaim import red_targets
+from agentctl.redcrash import RED_DECIDE, red_ask_route, red_decision_block
+from agentctl.redvault import VAULT_TARGET, red_vault_decide
 
 
-def ask_split(decide):
-    """(category, question) of a fixer's decide text: `[<category>]: <question>` or `[<category>] <question>`."""
-    m = ASK_CATEGORY.match(str(decide or ""))
-    return (m.group(1).lower(), str(decide)[m.end():].strip()) if m else (None, str(decide or "").strip())
-
-
-ASK_HOLD = 3600               # s a question its block's probe may answer is held (recorded, not told) ($AGENTCTL_ASK_HOLD)
 DECISION_FAILED = re.compile(r"\W*(NOT LANDED|GAVE UP|DIAGNOSED)\b")
 
 
@@ -53,49 +57,6 @@ def red_ask_line(d, ask, n=0):
     head = f"REMINDER {n}: " if n else ""
     return (f"RED BLOCKED ON OWNER [{ask.get('category')}]: {head}WAITING ON YOU: {what}: {ask['q']} -- {ask['how']}"
             + (f" -- auto-clears when {ask['until']}" if ask.get("until") else ""))
-
-
-def ask_blocks_work(b):
-    """Block b (red_block_of) waits on the owner alone: no probe of its own can lift it (ONLY A QUESTION THE WORLD MAY
-    ANSWER IS HELD, above), so its reds' work stops until he answers."""
-    return not b or ((b.get("meta") or {}).get("probe") or {}).get("kind") not in PROBES
-
-
-def ask_held_until(members, spell, t, store=None):
-    """Until when the owner's question for these reds ((item, ask) pairs) is held (THE QUESTION IS HELD, above), or
-    None: tell now (no hold, a gate red, a deadline inside the hold, a block only the owner lifts, or the hold over)."""
-    hold = env_num("AGENTCTL_ASK_HOLD", ASK_HOLD)
-    until = float(spell) + hold
-    if hold <= 0 or t >= until or any(m[0]["data"].get("gate") for m in members):
-        return None
-    if any(float(m[0].get("deadline") or until + 1) <= until for m in members):
-        return None
-    if any(ask_blocks_work(red_block_of(m[0], store)) for m in members):
-        return None
-    return until
-
-
-def red_owner_block(store, it, line, t, **ev):
-    """Move red it onto the owner (blocked-external) with its question: told at once (an escalation: its inbox entry and
-    notification) or, held (ask_held_until), recorded with an info event -- the tick tells it when the hold ends."""
-    held = ask_held_until([({"data": {**it["data"], **(ev.get("data") or {})}}, None)], t, t, store) is not None
-    moved = red_move(store, it, "blocked-external", line, severity="info" if held else "escalate", **ev)
-    red_ask_mark(store, moved, t, told=not held)
-    return moved
-
-
-def red_ask_mark(store, it, t, told=True):
-    """The red just moved onto the owner. told: with an escalation of its own (its inbox entry and notification): that
-    is the owner told for this spell -- the reminders count from here, never a second telling; else the question is
-    held (n 0) and red_owner_reminders tells it when the hold ends."""
-    if not it or it["state"] != "blocked-external":
-        return
-    ask = red_ask(it, red_block_of(it, store))
-    if ask:
-        rec = {"q": ask["q"], "since": it["entered_at"], "first_at": t, "last_at": t, "n": 1} if told else \
-            {"q": ask["q"], "since": it["entered_at"], "held_at": t, "last_at": t, "n": 0}
-        rec["category"] = ask.get("category")
-        store.update_item("red", it["id"], it["version"], {"ask": rec})
 
 
 def red_owner_reminders(store, t):
@@ -197,20 +158,6 @@ def red_decision_failed(store, it, upd, why, t):
     decide = (f"{said}; the action failed: {why}. Decide again (the same answer once its cause is fixed, or another; "
               f"you were asked: {str(dec.get('question') or '')[:300]})")
     return red_decision_block(store, it, upd, decide, t, category=category)
-
-
-def red_closed_of(store, key):
-    """The newest closed (terminal) red item of a red key or id -- `key`, `key.2`, ... -- or None."""
-    base = re.sub(r"\.\d+$", "", key)
-    last, n = None, 1
-    while n < 200:
-        it = store.item("red", base if n == 1 else f"{base}.{n}")
-        if it is None:
-            break
-        last, n = it, n + 1
-    if last is None or not machine_state("red", last["state"]).terminal:
-        return None
-    return last
 
 
 def red_decide(store, o_r, target, answer):

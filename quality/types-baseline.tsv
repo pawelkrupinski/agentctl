@@ -2,7 +2,7 @@
 # mypy --strict errors per part (quality/typecheck.py), frozen. A row may only fall; a rise lands only in a
 # commit carrying `Types: <why>`. CLAUDE.md, "The ratchets".
 mypy-errors	alerts	119
-mypy-errors	ask	45
+mypy-errors	ask	33
 mypy-errors	batch	356
 mypy-errors	blame	131
 mypy-errors	blameopen	13
@@ -62,11 +62,11 @@ mypy-errors	queuesubmit	29
 mypy-errors	queueuntil	18
 mypy-errors	recovery	54
 mypy-errors	red	49
-mypy-errors	redask	13
+mypy-errors	redask	19
 mypy-errors	redblock	24
-mypy-errors	redclaim	28
-mypy-errors	redcrash	48
-mypy-errors	reddispatch	53
+mypy-errors	redclaim	30
+mypy-errors	redcrash	54
+mypy-errors	reddispatch	49
 mypy-errors	redearly	9
 mypy-errors	redfamilies	10
 mypy-errors	redfixes	49
@@ -75,15 +75,16 @@ mypy-errors	redmove	14
 mypy-errors	redobserve	20
 mypy-errors	redopen	38
 mypy-errors	redpending	67
+mypy-errors	redrecord	4
 mypy-errors	redreplay	19
 mypy-errors	redrepos	12
 mypy-errors	redretired	63
 mypy-errors	redseen	68
-mypy-errors	redstep	105
-mypy-errors	redtick	106
+mypy-errors	redstep	103
+mypy-errors	redtick	103
 mypy-errors	reduntracked	45
 mypy-errors	redvault	50
-mypy-errors	redverify	18
+mypy-errors	redverify	21
 mypy-errors	redview	35
 mypy-errors	remote	131
 mypy-errors	repos	34

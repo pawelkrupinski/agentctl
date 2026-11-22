@@ -1,5 +1,37 @@
 # agentctl, part `redvault`: vault asks, spent quotas as external waits, blocks nobody can see clear.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import datetime as dt
+import os
+import re
+import time
+from agentctl.core import HOME, SHORT, fmt_age, git, remote, slug
+from agentctl.timefmt import iso_at, iso_epoch, parse_time
+from agentctl.statefile import read_record
+from agentctl.forge import RUN_FIELDS, gh_json
+from agentctl.classify import QUOTA_LOG
+from agentctl.store import StaleVersion, open_store
+from agentctl.procs import safe_cwd
+from agentctl.repos import RED_PRIMARY, repo_signs
+from agentctl.leases import block_lease, lease_meta, red_block_of
+from agentctl.fixerrecords import own_fixer_record_path
+from agentctl.inboxentry import inbox_write
+from agentctl.redrecord import lease_is_live, red_lease, red_of_key, red_what
+from agentctl.worktrees import claimant, worktree_of
+from agentctl.conditions import probe_words, run_probe
+from agentctl.redrepos import red_owner_only
+from agentctl.redask import OWNER_CAUSES, OWNER_CAUSE_CATEGORY, red_decision, vault_decide_cmd
+from agentctl.fixerland import unlanded_commits
+from agentctl.red import red_active_of
+from agentctl.redmove import red_move
+from agentctl.ciwhy import resolve_run
+from agentctl.redseen import run_jobs
+from agentctl.redblock import BLOCK_MAX, BLOCK_TTL, owner_cmd_unsafe, owner_details, red_run_units
+from agentctl.rundispatch import red_verify_dispatch
+from agentctl.redopen import red_offer
+from agentctl.redclaim import red_targets, root_checkout
+from agentctl.owner import owner_holder
+
 
 # A VAULT ASK IS ONE OWNER ITEM PER VAULT, ANSWERED BY ONE LINE (2026-11-16, Order independence #77 [ios]: its fixer's
 # tested fix waited on commit signing while the `movies` vault was locked; it ended BLOCKED ON OWNER five turns in four

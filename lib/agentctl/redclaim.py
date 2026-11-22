@@ -1,5 +1,25 @@
 # agentctl, part `redclaim`: interactive holders: claim, beat, release a red.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import time
+from typing import Any
+from agentctl.core import HOME, git
+from agentctl.timefmt import ts
+from agentctl.statefile import mtime, read_record, write_json
+from agentctl.procs import safe_cwd
+from agentctl.repos import RED_PRIMARY, movies_repo_path, red_repo_of, repo_path_for, scan_repo_for
+from agentctl.leases import lease_meta, red_block_of
+from agentctl.fixerrecords import fixer_session_path, own_fixer_record_path, record_session_is
+from agentctl.redrecord import lease_is_live, red_active, red_lease, red_what
+from agentctl.allowedpaths import allowed_dir
+from agentctl.worktrees import claimant, worktree_of
+from agentctl.redrepos import red_is_other
+from agentctl.red import RED_CLAIM_MAX, RED_CLAIM_TTL, red_item_of_run, red_obs_for
+from agentctl.redseen import red_obs_of_units
+from agentctl.redblock import red_run_units
+from agentctl.redopen import red_attach_obs, red_open
+
 
 # -- interactive: claim, beat, release
 def red_targets(store, o_r, target, create=True):
@@ -159,3 +179,23 @@ def red_release(store, o_r, target, any_=False):
         rc = 0
         out.append(f"released {red_what(it['data'])} ({row['holder']})")
     return rc, out or [f"red: no live lease on #{target}"]
+
+
+# -- interactive holders: the tick renews a claim from its worktree's activity; imported claim files lapse unless busy
+def red_wt_mark(wt):
+    """An interactive claim's progress mark: its worktree's HEAD, `git status` and the newest change's mtime."""
+    if not allowed_dir(wt):
+        return ""
+    import hashlib
+    head = git(wt, "rev-parse", "HEAD", check=False).stdout.strip()
+    st = git(wt, "status", "--porcelain", check=False).stdout
+    newest = 0.0
+    for line in st.splitlines()[:200]:
+        newest = max(newest, mtime(os.path.join(wt, line[3:].split(" -> ")[-1])))
+    return f"{head[:12]}:{hashlib.sha1(st.encode()).hexdigest()[:10]}:{int(newest)}"
+
+
+def red_joined_progress(store, row, why):
+    """Mark a joined (or owner-held) red's lease as worked on (why: `note: ...`, `commit <sha>`, `fix <entry>`): a joined
+    red's backstop is done; an owner-held one's RED_HELD_IDLE counts from now."""
+    store.set_meta(row["name"], row["epoch"], row["secret"], {"progressed": str(why)[:200], "progressed_at": time.time()})

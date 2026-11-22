@@ -1,5 +1,21 @@
 # agentctl, part `redverify`: verifying a landed fix: the scheduled slot, the verify dispatch, a flake check.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import glob
+from agentctl.core import env_num, git, reds_dir, remote
+from agentctl.timefmt import hhmmz, iso_at, parse_time
+from agentctl.statefile import read_record
+from agentctl.trailers import trailer_values
+from agentctl.inboxentry import inbox_write
+from agentctl.redrecord import red_what
+from agentctl.redfixread import fix_reaches_red
+from agentctl.red import RED_VERIFY_HOLD, red_verify_run_on_way, workflow_main_runs
+from agentctl.redmove import red_move
+from agentctl.branches import cause_of, name_causes
+from agentctl.rundispatch import red_verify_dispatch
+from agentctl.blameopen import PATHISH
+from agentctl.redopen import red_offer, red_open
+
 
 def red_verify_scheduled(store, it, f, sha, o_r, repo, t):
     """A scheduled fix (red_verify_plan) at its deadline with no decided run containing it: a run of its workflow
@@ -117,3 +133,47 @@ def red_flake_check(store, it, snap, repo, facts):
             "-- make it deterministic (never rerun to green); it stays a red until a fix lands")
     inbox_write("red", line, [line], [d.get("line") or ""], 1)
     return [line] + ([f"opened flake {flake['id']}"] if flake else [])
+
+
+def run_workflows():
+    """{run number or id: workflow} of every run whose signatures are known."""
+    out = {}
+    for p in glob.glob(reds_dir("runsig", "*.json")):
+        rec = read_record(p)
+        if rec:
+            for n in (rec.get("run"), rec.get("number")):
+                if n is not None:
+                    out[str(n)] = rec.get("workflow")
+    return out
+
+
+def fix_between(repo, rec, red_head, green_head, causes, workflows):
+    """The commit between a red run's head and the next passing run's head that FIXED this red rather than it passing
+    by chance (the owner, 2026-10-27: live drift #2051 was called a flake, and 03d646e63, `Fixes-Red: 2049`, which fixed
+    the same failure in another workflow, had landed between): a `Fixes-Red:` naming one of its runs, a run with the
+    same cause (any workflow) or a run of the same workflow, or a change to a file its failure names, or to CI's own
+    workflows and actions -- a `Fixes-Red:` beside `Red-Unrelated:` names the red only to pass the gate, and fixes
+    nothing (`landed_fix_commits`). (sha or None, known): known False when the commits between cannot be read here."""
+    if not repo or not red_head or not green_head:
+        return None, False
+    if red_head == green_head:
+        return None, True
+    r = git(repo, "log", f"{red_head}..{green_head}", "--format=%x00%H%x09%(trailers:key=Red-Unrelated,valueonly,separator=%x2C)"
+            "%x09%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", "--name-only", check=False)
+    if r.returncode != 0:
+        return None, False
+    names = set(map(str, rec.get("runs") or []))
+    cause = cause_of(rec.get("job"), rec.get("line"))
+    named = {m.group(1) for m in PATHISH.finditer(rec.get("line") or "")}
+    for chunk in r.stdout.split("\0")[1:]:
+        head, _, files = chunk.partition("\n")
+        sha, _, rest = head.partition("\t")
+        unrelated, _, vals = rest.partition("\t")
+        vals = set() if unrelated.strip() else trailer_values(vals)
+        if vals & names or (cause and any(cause in causes.get(v, ()) for v in vals)) \
+                or any(workflows.get(v) == rec.get("workflow") for v in vals):
+            return sha, True
+        for f in files.split():
+            if f.startswith((".github/workflows/", ".github/actions/")) or any(f.endswith(n) or n.endswith(f) for n in named):
+                return sha, True
+    return None, True

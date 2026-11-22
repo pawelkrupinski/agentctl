@@ -5,6 +5,8 @@ import time
 from typing import Any
 from agentctl.repos import RED_PRIMARY, red_repo_of, red_repo_short
 from agentctl.workflows import LOCAL_FLOW
+import re
+from agentctl.store import machine_state
 
 
 RED_TERMINAL = ("verified", "cleared")
@@ -48,3 +50,26 @@ RED_RECURRING = 3            # landed fixes the same failure outlived: `recurrin
 RED_JOIN_IDLE = 30 * 60  # s a red joined to its family holder's lease may go with no progress on it before it is released
 
 
+def red_of_key(store, key):
+    """The red item of key now: its open spell, else its newest closed one."""
+    try:
+        for it in store.items("red"):
+            if it["data"].get("key") == key and it["state"] not in RED_TERMINAL:
+                return it
+        return red_closed_of(store, key)
+    except Exception:
+        return None
+
+
+def red_closed_of(store, key):
+    """The newest closed (terminal) red item of a red key or id -- `key`, `key.2`, ... -- or None."""
+    base = re.sub(r"\.\d+$", "", key)
+    last, n = None, 1
+    while n < 200:
+        it = store.item("red", base if n == 1 else f"{base}.{n}")
+        if it is None:
+            break
+        last, n = it, n + 1
+    if last is None or not machine_state("red", last["state"]).terminal:
+        return None
+    return last

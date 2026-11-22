@@ -1,5 +1,35 @@
 # agentctl, part `fixerlife`: one fixer lifecycle: the wrapper a dispatched fixer and a family owner share.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import json
+import os
+import re
+import signal
+import time
+from agentctl.core import env_num, fmt_age
+from agentctl.timefmt import ts
+from agentctl.statefile import read_record, write_json
+from agentctl.store import StoreAuthFailed, StoreUnavailable, open_store
+from agentctl.procs import process_start, socket_host
+from agentctl.repos import red_repo_of
+from agentctl.leases import lease_meta
+from agentctl.inboxentry import inbox_write
+from agentctl.redrecord import lease_is_live, red_lease
+from agentctl.claudefiles import bg_transcript, fixer_verdict
+from agentctl.fixersession import (
+    BG_POLL, FIXER_CLAIM_WITHIN, RED_STALL, bg_failure, bg_final_text, bg_row_brief, bg_session, bg_start, bg_stop,
+    bg_turn, bg_turn_over, bg_wait_mark, fixer_label, store_reauth)
+from agentctl.worktrees import mark_internal
+from agentctl.inbox import INBOX_TAIL
+from agentctl.redreplay import sync_brief
+from agentctl.redrepos import red_owner_only
+from agentctl.fixerland import fixer_mark, fixer_meta_sent
+from agentctl.fixer import FIXER_IDENTITY_ENV, OWNER_ONLY_DENIED, fixer_prompt
+from agentctl.red import RED_FIXER_MAX, RED_FIXER_TTL, RED_FIXER_WALL, RED_RELEASE_ASKS, RED_RENEW_EVERY
+from agentctl.branches import claude_cli, interactive_mode
+from agentctl.redclaim import bind_fixer_session
+from agentctl.redcrash import keep_awake, verdict_cut
+
 
 # ONE FIXER LIFECYCLE (2026-11-04): a dispatched fixer's wrapper (red_fixer) and a family owner's (owner.red_owner) keep
 # their leases and judge their session's progress with the SAME code below, so the two can never drift again. On
@@ -332,3 +362,23 @@ def red_fixer(a):
         mark_internal(wt)  # its fixer ended: the tree is agentctl's litter now, never a fixer or owner
     print(line)
     return 0 if verdict.startswith("LANDED") else 1
+
+
+# AN ATTEMPT IS A FIXER THAT TRIED AND FAILED TO FIX (2026-11-04: RED ESCALATE 261 and FIXER FAILED 204 in a week; #728
+# escalated 58 times on 11-02, each owner turn's "GAVE UP: ... the approved flip-unification stage 5 (a resolver rule
+# change, outside red fixing)" counted as one more attempt at the deep tier). Not an attempt:
+#   - a dispatched fixer's or owner's lease LOST TO INFRA (lapsed: the laptop asleep, the store out of reach, a wrapper
+#     gone; or orphaned): offered again quietly -- a living wrapper takes its lapsed lease again itself
+#     (fixer.HeldLease), and the crash-loop breaker still bounds launches that keep ending that way;
+#   - "GAVE UP: already fixed": checked by the red's own probe (a newer decided run no longer failing this way) -- the
+#     red is closed when it passes, else it waits in fix-pending (verify) for the run that decides it; a claim the run
+#     refutes is an attempt then;
+#   - "GAVE UP: needs the owner's decision / a design change": the red goes onto the owner ONCE, as the existing WAITING
+#     ON YOU (red_decision_block) with the fixer's words as its diagnosis -- never offered again meanwhile.
+GAVE_UP_FIXED = re.compile(r"\W*GAVE UP:.*?(\balready (?:fixed|fixes|landed|on (?:origin/)?main)\b|\bfixed upstream\b|"
+                           r"\bno fix needed\b|\bnothing (?:left )?to (?:fix|land)\b)", re.I | re.S)
+
+
+GAVE_UP_DECIDE = re.compile(r"\W*GAVE UP:.*?(\bneeds? (?:the |an? )?owner|\bowner'?s (?:choice|decision|call|approval)|"
+                            r"\boutside red fixing\b|\bdesign (?:change|call|decision)\b|\bresolver (?:rule|design)\b)",
+                            re.I | re.S)

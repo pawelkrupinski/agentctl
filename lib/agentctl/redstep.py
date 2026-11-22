@@ -246,22 +246,6 @@ def red_lift_block(store, it, block, why):
 RED_QUICK_EXIT = 120       # a fixer ending this soon with no verdict never got going
 RED_START_BACKOFF = 600    # ...and its red waits this long (doubling) before the next dispatch
 
-# AN ATTEMPT IS A FIXER THAT TRIED AND FAILED TO FIX (2026-11-04: RED ESCALATE 261 and FIXER FAILED 204 in a week; #728
-# escalated 58 times on 11-02, each owner turn's "GAVE UP: ... the approved flip-unification stage 5 (a resolver rule
-# change, outside red fixing)" counted as one more attempt at the deep tier). Not an attempt:
-#   - a dispatched fixer's or owner's lease LOST TO INFRA (lapsed: the laptop asleep, the store out of reach, a wrapper
-#     gone; or orphaned): offered again quietly -- a living wrapper takes its lapsed lease again itself
-#     (fixer.HeldLease), and the crash-loop breaker still bounds launches that keep ending that way;
-#   - "GAVE UP: already fixed": checked by the red's own probe (a newer decided run no longer failing this way) -- the
-#     red is closed when it passes, else it waits in fix-pending (verify) for the run that decides it; a claim the run
-#     refutes is an attempt then;
-#   - "GAVE UP: needs the owner's decision / a design change": the red goes onto the owner ONCE, as the existing WAITING
-#     ON YOU (red_decision_block) with the fixer's words as its diagnosis -- never offered again meanwhile.
-GAVE_UP_FIXED = re.compile(r"\W*GAVE UP:.*?(\balready (?:fixed|fixes|landed|on (?:origin/)?main)\b|\bfixed upstream\b|"
-                           r"\bno fix needed\b|\bnothing (?:left )?to (?:fix|land)\b)", re.I | re.S)
-GAVE_UP_DECIDE = re.compile(r"\W*GAVE UP:.*?(\bneeds? (?:the |an? )?owner|\bowner'?s (?:choice|decision|call|approval)|"
-                            r"\boutside red fixing\b|\bdesign (?:change|call|decision)\b|\bresolver (?:rule|design)\b)",
-                            re.I | re.S)
 LEASE_INFRA = re.compile(r"(lease expired|ORPHANED|STOPPED: the red's lease was lost)")
 
 
@@ -422,17 +406,6 @@ def red_wait_cycle(store, own_key, other):
         if cur in chain:
             return None  # a cycle among others: theirs to break
     return None
-
-
-def red_of_key(store, key):
-    """The red item of key now: its open spell, else its newest closed one."""
-    try:
-        for it in store.items("red"):
-            if it["data"].get("key") == key and it["state"] not in RED_TERMINAL:
-                return it
-        return red_closed_of(store, key)
-    except Exception:
-        return None
 
 
 def red_waits_on_step(store, it, f, repo, t):

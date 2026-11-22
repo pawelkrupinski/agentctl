@@ -1,5 +1,30 @@
 # agentctl, part `redcrash`: the crash-loop breaker, harness faults, decisions for the owner, old runs.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import datetime as dt
+import os
+import re
+import subprocess
+import time
+from typing import Any
+from agentctl.core import HOME, SHORT, env_num, fmt_age, remote, spawn_detached
+from agentctl.timefmt import iso_epoch, parse_time, ts
+from agentctl.statefile import read_record
+from agentctl.store import open_store
+from agentctl.repos import RED_PRIMARY, red_repo_of
+from agentctl.workflows import workflow_file_of
+from agentctl.leases import block_lease, lease_meta
+from agentctl.redrecord import red_what
+from agentctl.issues import issue_open
+from agentctl.redfamilies import red_family
+from agentctl.owners import OWNER_TTL, owner_record_path
+from agentctl.redask import ask_held_until, ask_refusal, ask_split, decide_cmd, red_ask_mark
+from agentctl.redmove import red_move
+from agentctl.ciwhy import ci_state_load
+from agentctl.redblock import BLOCK_TTL
+from agentctl.rundispatch import red_verify_dispatch
+from agentctl.redopen import red_offer
+
 
 # THE CRASH-LOOP BREAKER (G9, convergence-failures-2026-10-29 §4: in E9 fixers were launched 52 times over 9 reds, #2335
 # 18 and #2375 16 times, mostly `exit 1 with no LANDED / GAVE UP line`): RED_CRASH_LOOP dispatched fixers in a row that
@@ -414,3 +439,23 @@ def red_resolve_old(store, it, age, o_r, repo, t):
     store.update_item("red", it["id"], it["version"], {"old_checked": True,
                                                       "old_note": f"no fresh run can check it ({why[:200]}): a fixer decides"})
     return None
+
+
+def red_queue_family(d):
+    """The queue family of a red (its data, its picture, a fixer record): the configured family, else its run."""
+    fam = red_family(d)
+    if fam:
+        return fam
+    run = d.get("run") if d.get("run") is not None else d.get("last_run")
+    num = run.get("number") if isinstance(run, dict) else run
+    o_r = red_repo_of(d)
+    return f"run:{d.get('workflow')}#{num}" if o_r == RED_PRIMARY else f"run:{o_r}:{d.get('workflow')}#{num}"
+
+
+def red_owner_block(store, it, line, t, **ev):
+    """Move red it onto the owner (blocked-external) with its question: told at once (an escalation: its inbox entry and
+    notification) or, held (ask_held_until), recorded with an info event -- the tick tells it when the hold ends."""
+    held = ask_held_until([({"data": {**it["data"], **(ev.get("data") or {})}}, None)], t, t, store) is not None
+    moved = red_move(store, it, "blocked-external", line, severity="info" if held else "escalate", **ev)
+    red_ask_mark(store, moved, t, told=not held)
+    return moved

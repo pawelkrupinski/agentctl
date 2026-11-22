@@ -1,25 +1,6 @@
 # agentctl, part `reddispatch`: holders and the dispatcher: renewing claims, family holders, the capacity, spawning a fixer.
 # Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
 
-# -- interactive holders: the tick renews a claim from its worktree's activity; imported claim files lapse unless busy
-def red_wt_mark(wt):
-    """An interactive claim's progress mark: its worktree's HEAD, `git status` and the newest change's mtime."""
-    if not allowed_dir(wt):
-        return ""
-    import hashlib
-    head = git(wt, "rev-parse", "HEAD", check=False).stdout.strip()
-    st = git(wt, "status", "--porcelain", check=False).stdout
-    newest = 0.0
-    for line in st.splitlines()[:200]:
-        newest = max(newest, mtime(os.path.join(wt, line[3:].split(" -> ")[-1])))
-    return f"{head[:12]}:{hashlib.sha1(st.encode()).hexdigest()[:10]}:{int(newest)}"
-
-
-def red_joined_progress(store, row, why):
-    """Mark a joined (or owner-held) red's lease as worked on (why: `note: ...`, `commit <sha>`, `fix <entry>`): a joined
-    red's backstop is done; an owner-held one's RED_HELD_IDLE counts from now."""
-    store.set_meta(row["name"], row["epoch"], row["secret"], {"progressed": str(why)[:200], "progressed_at": time.time()})
-
 
 def red_commits_naming(wt: str | None, names: Any, keys: tuple[str, ...] = ("Fixes-Red",)) -> list[tuple[str, float]]:
     """[(sha, commit time)] of the commits in worktree wt not on any remote whose trailers `keys` name one of names
@@ -170,17 +151,6 @@ def red_fixers_alive(store, t):
 # names what it waits for and when.
 RED_FIXERS = 5           # live fixers at once, every family together ($AGENTCTL_RED_FIXERS)
 RED_STARVE = 45 * 60     # an offer waiting this long for a slot is STARVED ($AGENTCTL_RED_STARVE)
-
-
-def red_queue_family(d):
-    """The queue family of a red (its data, its picture, a fixer record): the configured family, else its run."""
-    fam = red_family(d)
-    if fam:
-        return fam
-    run = d.get("run") if d.get("run") is not None else d.get("last_run")
-    num = run.get("number") if isinstance(run, dict) else run
-    o_r = red_repo_of(d)
-    return f"run:{d.get('workflow')}#{num}" if o_r == RED_PRIMARY else f"run:{o_r}:{d.get('workflow')}#{num}"
 
 
 RED_MODEL = 2  # the store's red data model (meta red_model): 2 = the queue (item 5); red_migrate brings older data up

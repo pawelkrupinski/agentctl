@@ -4,6 +4,8 @@
 import re
 from typing import Any
 from agentctl.core import HOME, env_num
+from agentctl.leases import red_block_of
+from agentctl.conditions import PROBES
 
 
 # BLOCKED ON OWNER IS FOR THE OWNER'S CAUSES ONLY (the owner, 2026-10-28: "fix this: main #2283 → BLOCKED ON OWNER ...
@@ -147,3 +149,51 @@ def red_decision(d: dict[str, Any]) -> dict[str, Any] | None:
     """The owner's decision on red d while it is being acted on, else None."""
     dec = d.get("decision") or {}
     return dec if dec.get("status") == "in-progress" and dec.get("answer") else None
+
+
+# A fixer asks the owner with `decide[<category>]: <the decision>` (in a DIAGNOSED or GAVE UP verdict); a policy ask
+# adds `rule: <where>: <the row to add>`. A bare `decide:` names no category: it is routed back (red_ask_route).
+ASK_CATEGORY = re.compile(r"^\s*\[\s*([\w-]+)\s*\]\s*:?\s*", re.S)
+
+
+def ask_split(decide):
+    """(category, question) of a fixer's decide text: `[<category>]: <question>` or `[<category>] <question>`."""
+    m = ASK_CATEGORY.match(str(decide or ""))
+    return (m.group(1).lower(), str(decide)[m.end():].strip()) if m else (None, str(decide or "").strip())
+
+
+ASK_HOLD = 3600               # s a question its block's probe may answer is held (recorded, not told) ($AGENTCTL_ASK_HOLD)
+
+
+def ask_blocks_work(b):
+    """Block b (red_block_of) waits on the owner alone: no probe of its own can lift it (ONLY A QUESTION THE WORLD MAY
+    ANSWER IS HELD, above), so its reds' work stops until he answers."""
+    return not b or ((b.get("meta") or {}).get("probe") or {}).get("kind") not in PROBES
+
+
+def ask_held_until(members, spell, t, store=None):
+    """Until when the owner's question for these reds ((item, ask) pairs) is held (THE QUESTION IS HELD, above), or
+    None: tell now (no hold, a gate red, a deadline inside the hold, a block only the owner lifts, or the hold over)."""
+    hold = env_num("AGENTCTL_ASK_HOLD", ASK_HOLD)
+    until = float(spell) + hold
+    if hold <= 0 or t >= until or any(m[0]["data"].get("gate") for m in members):
+        return None
+    if any(float(m[0].get("deadline") or until + 1) <= until for m in members):
+        return None
+    if any(ask_blocks_work(red_block_of(m[0], store)) for m in members):
+        return None
+    return until
+
+
+def red_ask_mark(store, it, t, told=True):
+    """The red just moved onto the owner. told: with an escalation of its own (its inbox entry and notification): that
+    is the owner told for this spell -- the reminders count from here, never a second telling; else the question is
+    held (n 0) and red_owner_reminders tells it when the hold ends."""
+    if not it or it["state"] != "blocked-external":
+        return
+    ask = red_ask(it, red_block_of(it, store))
+    if ask:
+        rec = {"q": ask["q"], "since": it["entered_at"], "first_at": t, "last_at": t, "n": 1} if told else \
+            {"q": ask["q"], "since": it["entered_at"], "held_at": t, "last_at": t, "n": 0}
+        rec["category"] = ask.get("category")
+        store.update_item("red", it["id"], it["version"], {"ask": rec})
