@@ -84,11 +84,25 @@ def export_lines():
     return lines
 
 
+# A FIXER HOLDING ITS CREDENTIALS NEEDS NO VAULT (2026-11-22, Tool self-tests #480: the outside-gate owner had its fix
+# committed -- unsigned since 83063bb -- and ended BLOCKED ON OWNER [vault] because `env --check` refused on the locked
+# movies vault). fixer_env hands a fixer agentctl's credential in its environment (the store token; the repo's own):
+# land and every agentctl call use it, so a locked vault is said, never a refusal. A fix that needs a secret of its own
+# (`secrets run movies <KEY> -- ...`) still meets the vault there, and asks then.
+def vault_not_needed():
+    """This process is an agentctl fixer that already holds its credentials (fixer_env)."""
+    return bool(os.environ.get("AGENTCTL_RED_FIXER") and os.environ.get("AGENTCTL_STORE_TOKEN"))
+
+
 def cmd_env(a):
     ns = a.ns or default_ns()
     if not a.check:
         print("\n".join(export_lines()))
         st = vault_state(ns)
+        if st == "locked" and vault_not_needed():
+            print(f"vault {ns} locked, not needed: this fixer's credentials are in its environment (a secret its fix "
+                  f"needs, `secrets run {ns} ...`, asks then)", file=sys.stderr)
+            return 0
         if st != "unlocked":
             print(locked_line(ns) if st == "locked" else f"vault {ns} {st}", file=sys.stderr)
             return 1
@@ -112,10 +126,11 @@ def cmd_env(a):
     else:
         problems.append(f"java: no java that runs ({java or 'none on PATH'})")
     st = vault_state(ns)
-    if st == "locked":
+    if st == "locked" and not vault_not_needed():
         print(locked_line(ns))
         return 1
-    (report if st == "unlocked" else problems).append(f"vault {ns}: {st}")
+    (report if st in ("unlocked", "locked") else problems).append(
+        f"vault {ns}: {st}" + (", not needed (this fixer's credentials are in its environment)" if st == "locked" else ""))
     tunnel_ok = True
     for port, what in tunnel_ports():
         ok = port_open(port)

@@ -74,6 +74,39 @@ class EnvTest(unittest.TestCase):
         self.assertEqual(out.strip().splitlines(), ["vault movies locked: ask the user to run `! secrets unlock movies`"])
         self.assertFalse(any(c.startswith("unlock") for c in self.secrets_calls()))
 
+    def test_a_fixer_holding_its_credentials_is_never_stopped_by_a_locked_vault(self):
+        """2026-11-22, Tool self-tests #480: the outside-gate owner had its fix committed (unsigned: 83063bb) and ran
+        `agentctl env --check`, which refused on the locked movies vault; the owner ended BLOCKED ON OWNER [vault] for a
+        land that needed no secret -- fixer_env gives a fixer its repo and store tokens. A fixer holding them reads the
+        vault as not needed; only a fix that itself needs a secret asks for it."""
+        os.environ["SECRETS_STATE"] = "locked"
+        held = {"AGENTCTL_RED_FIXER": "owner-outside-gate", "AGENTCTL_STORE_TOKEN": "t"}
+        saved = {k: os.environ.get(k) for k in held}
+        os.environ.update(held)
+        try:
+            rc, out, errs = self.tool("env", "--print", "--ns", "movies")
+            self.assertEqual(rc, 0, errs)
+            self.assertIn("vault movies locked, not needed", errs)
+            rc, out, _ = self.tool("env", "--check", "--ns", "movies")
+            self.assertNotIn("ask the user to run", out)
+            self.assertIn("vault movies: locked, not needed", out)
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+    def test_a_fixer_without_its_credentials_still_asks_for_the_vault(self):
+        os.environ["SECRETS_STATE"] = "locked"
+        saved = {k: os.environ.get(k) for k in ("AGENTCTL_RED_FIXER", "AGENTCTL_STORE_TOKEN")}
+        os.environ["AGENTCTL_RED_FIXER"] = "12"
+        os.environ.pop("AGENTCTL_STORE_TOKEN", None)
+        try:
+            rc, _out, errs = self.tool("env", "--print", "--ns", "movies")
+            self.assertEqual(rc, 1)
+            self.assertIn("ask the user to run", errs)
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
     def test_check_tunnel_down_and_no_token_read(self):
         os.environ["SECRETS_STATE"] = "unlocked"
         A.TUNNEL_PORTS = [(free_port(), "agentctl store")]

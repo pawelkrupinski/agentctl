@@ -2329,6 +2329,9 @@ agentctl env [--print|--check] [--ns movies|bitcashier]
 - `--ns`: defaults to movies inside `~/projects/movies`, else bitcashier.
 - Locked vault: exactly one line, `vault <ns> locked: ask the user to run `! secrets unlock <ns>``, then exit 1
   (on stderr with `--print`, so the eval stays clean).
+- An agentctl fixer holding its credentials (fixer_env: `AGENTCTL_RED_FIXER` and the store token) is never stopped by a
+  locked vault: `vault <ns> locked, not needed`, exit 0 (Tool self-tests #480, 2026-11-22: an owner with its fix
+  committed ended BLOCKED ON OWNER [vault] on this check alone). A secret its fix needs asks for the vault then.
 - Exit: 0 all ok, 1 a problem.
 
 ```

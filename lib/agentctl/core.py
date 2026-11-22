@@ -48,6 +48,7 @@ ENV_HELP = """Agent environment, without secrets.
   agentctl env --check            # sbt, a java that runs, `secrets status <ns>`, the tunnel's localhost:3014 (the
                                   # agentctl store) and gh
 A locked vault prints exactly: vault <ns> locked: ask the user to run `! secrets unlock <ns>`  -- and exits 1.
+An agentctl fixer holding its credentials (AGENTCTL_RED_FIXER, the store token) reads it as not needed: exit 0.
 agentctl never runs `secrets unlock` (Touch ID is the user's). Output never contains a token: tools read it at use."""
 import argparse, contextlib, io, datetime as dt, fcntl, fnmatch, glob, itertools, json, os, re, shlex, signal, stat, subprocess, sys, threading, time, traceback, urllib.error, urllib.parse, urllib.request
 from typing import Any, Callable, Sequence, TypeVar  # the types ratchet (quality/typecheck.py): typed records read as dict[str, Any] until typed
