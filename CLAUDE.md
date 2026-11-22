@@ -66,7 +66,9 @@ movies model (movies "Code quality ratchets" and "Coupling"):
   reads of its own module's names: a split's seams), `movedefs.py` (a pure move of top-level definitions between
   modules, `--new` making one, `--from` the one module to cut a twice-bound name from), then `mkmodule.py` (the imports a module now lacks),
   `retarget.py` (repoint the importers), `unused.py` (drop the dead imports) and `placemodules.py` (MODULES in import
-  order); `sameast.py` / `samecode.py` (the proofs: the same statements, the same bytecode); `suite-at.sh` (the full
+  order); `sameast.py` / `samecode.py` (the proofs: the same statements, the same bytecode); `split.sh` (a split by a spec of
+  `module|description|names` lines: the moves and every import tool above) and `prove.sh` (sameast, samecode, every
+  module importing, the ratchets' check); `suite-at.sh` (the full
   suite on a snapshot of a revision; `cov`: branch coverage, the venv's python running it); `stats.sh` (the
   complexity stats against the owner's start).
 

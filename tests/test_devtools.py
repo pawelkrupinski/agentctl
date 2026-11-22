@@ -1,6 +1,6 @@
 """The restructuring's devtools (devtools/): the pure-move tools between modules (movedefs) and their proofs (sameast,
-samecode), the import tools (mkmodule, retarget, unused, placemodules), suite-at and stats, each on a small fake lib
-of real modules under the real lib/agentctl/__init__.py."""
+samecode), the import tools (mkmodule, retarget, unused, placemodules), split.sh and prove.sh (a split by spec, its
+proofs), suite-at and stats, each on a small fake lib of real modules under the real lib/agentctl/__init__.py."""
 import os, re, shutil, subprocess, sys, tempfile, textwrap, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -187,6 +187,47 @@ class PureMoveTest(unittest.TestCase):
         r = tool("samecode", os.path.dirname(lib), os.path.dirname(changed))
         self.assertEqual(r.returncode, 1)
         self.assertIn("helper", r.stdout)
+
+
+def committed(lib):
+    """lib's repository (<tmp>, holding lib/agentctl) with everything committed: prove.sh's revision."""
+    repo = os.path.dirname(os.path.dirname(lib))
+    for cmd in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "base"]):
+        subprocess.run(["git", "-C", repo, *cmd], check=True, capture_output=True, timeout=60)
+    return repo
+
+
+def script(name, *args):
+    return subprocess.run(["bash", os.path.join(DEV, name), *args], capture_output=True, text=True, timeout=120)
+
+
+class SplitTest(unittest.TestCase):
+    def test_a_spec_splits_a_module_into_a_new_and_an_existing_one_and_prove_holds_it_a_pure_move(self):
+        lib = fake_lib()
+        repo = committed(lib)
+        spec = os.path.join(repo, "spec")
+        with open(spec, "w") as f:
+            f.write("low|the low helpers|helper\ntop|-|other\n")
+        r = script("split.sh", lib, "mid", spec)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("low: ", r.stdout)
+        self.assertNotIn("def helper", read(lib, "mid"))
+        self.assertIn("from agentctl.core import root\n", read(lib, "low"))
+        self.assertIn("from agentctl.low import helper\n", read(lib, "top"))
+        self.assertNotIn("from agentctl.mid import", read(lib, "top"))  # retargeted, the dead import dropped
+        self.assertEqual(modules(lib), ["core", "mid", "low", "top"])  # top imports low now: after it
+        r = script("prove.sh", repo, "--no-ratchet")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_prove_names_a_changed_statement_and_a_module_that_does_not_import(self):
+        lib = fake_lib()
+        repo = committed(lib)
+        with open(os.path.join(lib, "mid.py"), "w") as f:
+            f.write(read(lib, "mid").replace('+ "x"', '+ "y"') + "\nfrom agentctl.nonesuch import gone\n")
+        r = script("prove.sh", repo, "HEAD", "--no-ratchet")
+        self.assertEqual(r.returncode, 1)
+        for failed in ("SAMEAST FAILED", "SAMECODE FAILED", "IMPORT FAILED"):
+            self.assertIn(failed, r.stdout)
 
 
 class IntraTest(unittest.TestCase):
