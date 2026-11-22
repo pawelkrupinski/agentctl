@@ -2,11 +2,11 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
+import json
+import time
 from agentctl.core import env_num, state_root
 from agentctl.statefile import read_record
 from agentctl.machine import ram_gb
-import json
-import time
 from agentctl.govtickets import gov_tickets
 
 

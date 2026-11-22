@@ -250,6 +250,9 @@ class MakeModuleTest(unittest.TestCase):
         text = read(lib, "mid")
         self.assertEqual(text.count("from agentctl.core import root"), 1)
         self.assertEqual((text.count("import json"), text.count("import re")), (1, 1))
+        imports = [line for line in text.split("\n") if line.startswith(("import ", "from "))]
+        self.assertEqual(imports, ["import json", "import re", "from agentctl.core import root"],
+                         "the standard library's imports above the modules' ones")
         r = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import agentctl.top as t; "
                             "print(t.entry())", os.path.dirname(lib)], capture_output=True, text=True, timeout=60)
         self.assertEqual(r.stdout.split(), [os.sep + "x"], r.stderr)

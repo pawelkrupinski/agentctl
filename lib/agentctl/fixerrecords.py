@@ -4,11 +4,11 @@
 import glob
 import os
 import re
+import time
+from typing import Any
 from agentctl.core import reds_dir
 from agentctl.statefile import read_record
 from agentctl.procs import proc_alive
-import time
-from typing import Any
 from agentctl.statefile import mtime
 
 

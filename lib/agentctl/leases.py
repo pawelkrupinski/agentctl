@@ -3,13 +3,13 @@
 
 import os
 from typing import Any, Optional
+import json
+import time
+import re
 from agentctl.core import process_cache
 from agentctl.timefmt import ts
 from agentctl.store import LeaseLost, open_store
 from agentctl.procs import socket_host
-import json
-import time
-import re
 from agentctl.redrecord import lease_is_live
 
 

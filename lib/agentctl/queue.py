@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import time
+from typing import Any
 from agentctl.core import env_num, err, fmt_age, git, git_ok
 from agentctl.statefile import read_record
 from agentctl.store import change_event
@@ -13,7 +14,6 @@ from agentctl.waitingdir import wlog
 from agentctl.land import tool_env
 from agentctl.queueslots import set_change
 from agentctl.conditions import open_condition, run_probe
-from typing import Any
 from agentctl.core import host_role
 from agentctl.timefmt import iso_at
 from agentctl.classify import credential_failure, redact_credentials

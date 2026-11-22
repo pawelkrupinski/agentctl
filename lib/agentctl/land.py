@@ -6,17 +6,17 @@ import re
 import signal
 import subprocess
 import time
+import sys
+import contextlib
+import json
 from agentctl.core import HOME, env_num, err, process_cache, run_cmd
 from agentctl.store import LeaseLost, StoreUnavailable
 from agentctl.procs import tosec
 from agentctl.leases import lock_beat
-import sys
 from agentctl.core import spawn_detached
 from agentctl.selfcode import TOOL_PATH
 from agentctl.core import SHORT, reds_dir
 from agentctl.forge import forge_env
-import contextlib
-import json
 from agentctl.core import cherry_landed, git, git_ok, slug
 from agentctl.leases import LeaseHold, _landing
 

@@ -1,12 +1,12 @@
 # agentctl, part `redrecord`: a red's record: its lease's name and liveness, its terminal states, the names it answers to and what it is.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+import re
 import time
 from typing import Any
+from agentctl.store import machine_state
 from agentctl.repos import RED_PRIMARY, red_repo_of, red_repo_short
 from agentctl.workflows import LOCAL_FLOW
-import re
-from agentctl.store import machine_state
 
 
 RED_TERMINAL = ("verified", "cleared")

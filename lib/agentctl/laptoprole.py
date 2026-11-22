@@ -4,12 +4,12 @@
 import os
 import re
 import subprocess
+import sys
 from agentctl.core import process_cache
 from agentctl.timefmt import day_hhmmz
 from agentctl.store import open_store
 from agentctl.procs import socket_host
 from agentctl.leases import lease_meta
-import sys
 from agentctl.core import env_num, err, state_root
 from agentctl.statefile import read_record, write_json
 from agentctl.inboxentry import inbox_write

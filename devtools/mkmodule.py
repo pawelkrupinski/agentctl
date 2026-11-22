@@ -101,9 +101,15 @@ for m, v in sorted(from_mod.items(), key=lambda kv: modules.index(kv[0])):
     lines += import_lines(f"agentctl.{m}", sorted(v))
 src_lines = src.split("\n")
 if any(isinstance(n, (ast.Import, ast.ImportFrom)) for n in tree.body):  # its own imports: only those it lacks, after them
-    if lines:
-        last = max(n.end_lineno for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom)))
-        open(path, "w").write("\n".join(src_lines[:last] + lines + src_lines[last:]))
+    if lines:  # the standard library's above the first module import, the modules' after the last import
+        imports = [n for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))]
+        ours = [n for n in imports if isinstance(n, ast.ImportFrom) and (n.module or "").startswith("agentctl")]
+        last = max(n.end_lineno for n in imports)
+        first_ours = ours[0].lineno - 1 if ours else last
+        std = [x for x in lines if not x.startswith(("from agentctl", "    "))]
+        mods = lines[len(std):]
+        out = src_lines[:first_ours] + std + src_lines[first_ours:last] + mods + src_lines[last:]
+        open(path, "w").write("\n".join(out))
         place(lib, modules)
     print(part, "+", lines)
     sys.exit(0)

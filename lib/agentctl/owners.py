@@ -2,9 +2,9 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any, Optional
-from agentctl.redrecord import lease_is_live
 import os
 import re
+from agentctl.redrecord import lease_is_live
 from agentctl.core import reds_dir
 
 
