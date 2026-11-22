@@ -127,6 +127,41 @@ class UntilDoneTest(test_queue.QueueTest):
         self.assertIn("NOT LANDED: the pre-push checks failed", out)
         self.assertIn(wt, out)
 
+    def test_a_rejection_decided_before_main_moved_is_checked_again_not_replayed(self):
+        """2026-11-21, movies-devpanel-oauth: rejected at 17:02 (a main-side bug, fixed on main since), a new
+        `land --until-done` at 17:35 at the same head replayed that NOT LANDED although main had moved: the verdict no
+        longer held, and the agent rebased by hand. A verdict decided on another main is checked again."""
+        wt, _ = self.agent("mv", "web/src/main/BROKEN.scala", "v\n", msg="mv: broken")
+        A.time.sleep = lambda s: None
+        rc, out = self.until_done(wt, "--deadline", "0")
+        self.assertEqual(rc, 2, out)
+        eid = out.split("QUEUED ", 1)[1].split()[0]
+        for _ in range(3):  # decided while no --until-done waits
+            self.drive_queue(0)
+        self.assertEqual(A.Store().item("change", eid)["state"], "rejected")
+        other, _ = self.agent("mm", "docs/mm.md", "mm\n", msg="main moves")
+        sh(other, "git", "push", "-q", "origin", "HEAD:main")
+        A.time.sleep = self.drive_queue
+        rc, out = self.until_done(wt)
+        self.assertNotIn("DECIDED", out, "a verdict decided on an older main is no verdict on this one")
+        self.assertIn("QUEUED ", out, "the change is checked again")
+        self.assertEqual(len(A.waiting_entries(self.d, open_only=False)), 2)
+
+    def test_a_rejection_a_waiter_already_received_is_not_replayed_as_undelivered(self):
+        """The same lane: its first `--until-done` had printed the NOT LANDED at 17:02, yet the next call said it was
+        DECIDED "while no --until-done waited". A verdict once delivered is never replayed: the next call checks
+        the change again."""
+        wt, _ = self.agent("dl", "web/src/main/BROKEN.scala", "d\n", msg="dl: broken")
+        rc, out = self.until_done(wt)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("NOT LANDED: the pre-push checks failed", out)
+        eid = out.split("QUEUED ", 1)[1].split()[0]
+        self.assertTrue(A.Store().item("change", eid)["data"].get("delivered_at"), "its waiter took delivery")
+        rc, out = self.until_done(wt)
+        self.assertNotIn("while no --until-done waited", out)
+        self.assertIn("QUEUED ", out, "the change is checked again")
+        self.assertEqual(len(A.waiting_entries(self.d, open_only=False)), 2)
+
     def test_land_status_of_a_landed_entry_gives_its_sha(self):
         wt, _ = self.agent("s", "web/src/main/S.scala", "s\n", msg="s: status")
         rc, out = self.until_done(wt, "--keep-worktree")

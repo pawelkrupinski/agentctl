@@ -2000,7 +2000,12 @@ ancestry). `land --until-done` (movies, the queue) owns the tail, bounded by `--
    Landed: straight to step 4. REJECTED (decided while no call waited: A VERDICT IS DURABLE, 2026-11-19 -- subagents'
    waits died with a Claude session restart and they handed back "queued, waiting"): `DECIDED <id> ...`, its `NOT
    LANDED: <why>` and `next:` as in step 3, exit 1 -- never queued again unchanged (`agentctl land` does that, on
-   purpose). None (or only a cancelled or superseded one): when every local commit is already on main by patch,
+   purpose). That replay is only for a verdict that STILL HOLDS (2026-11-21, movies-devpanel-oauth: a rejection its
+   own waiter had already printed at 17:02 was replayed at 17:35, "while no --until-done waited", though main had
+   moved and fixed the main-side bug behind it): no waiter took delivery of it (a call that printed it records
+   `delivered_at` on the item) and `origin/main` is still the main it was decided on (`decided_on`: the check's base,
+   else the one it was queued on). Delivered already, or main moved: the change is queued, so checked, again.
+   None (or only a cancelled or superseded one): when every local commit is already on main by patch,
    straight to step 4; else the plain land's rebase, squash guard and `QUEUED <id>`. After the fact, `agentctl land
    status <entry>` (an id or a unique part of one) prints that one change, open or decided: its state, worktree and
    head, then `LANDED <sha>` / `NOT LANDED: <why>` / `OPEN: ... held: ...`; and its exit event's inbox entry names

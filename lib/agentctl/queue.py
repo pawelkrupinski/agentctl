@@ -976,10 +976,35 @@ def await_verdict(eid, bound, store=None):
         if it:
             state, data = it["state"], it.get("data") or {}
             if machine_state("change", state).terminal:
+                take_delivery(it, store)
                 return state, data, time.time() - t0
         if time.time() - t0 >= bound:
             return state, data, time.time() - t0
         time.sleep(next(delays))
+
+
+def take_delivery(it, store=None):
+    """Record on change item `it` that a waiting call received its verdict (`delivered_at`): a later land never
+    replays it as undelivered (verdict_still_holds). Best effort: a store blip or a racing writer only leaves it
+    unrecorded, and the next land then checks the change again or replays it, both of them true."""
+    if (it.get("data") or {}).get("delivered_at") or it.get("version") is None:  # said already, or a queue entry
+        return  # the tick has not made an item of yet (own_change_item): nothing to record it on
+    try:
+        (store or Store()).update_item("change", it["id"], it["version"], {"delivered_at": time.time()})
+    except (StaleVersion, StoreUnavailable):
+        pass
+
+
+def verdict_still_holds(repo, main_ref, it):
+    """Whether rejected change item `it` may be replayed to a new `land --until-done` instead of being checked again
+    (A VERDICT IS DURABLE, below): nobody has taken delivery of it yet (take_delivery) AND main is still the main it
+    was decided on (`decided_on`). Main moved, the verdict said already, or no base recorded: it no longer holds."""
+    data = it.get("data") or {}
+    if data.get("delivered_at") or not data.get("decided_on"):
+        return False
+    git(repo, "fetch", "--quiet", remote(), "main", check=False)
+    return git_ok(repo, "rev-parse", "--verify", "-q", main_ref) \
+        and git(repo, "rev-parse", main_ref).strip() == data["decided_on"]
 
 
 def await_queued(eid, store=None):
@@ -1016,7 +1041,10 @@ def await_queued(eid, store=None):
 # worktree and the change (the projector), whether or not a call waited; `land status <entry>` prints it after the
 # fact; and a call again from the worktree at that head finds its entry (own_change_item): open -> RESUMING, landed ->
 # the cleanup, REJECTED -> that verdict and the next command (before, a rejection decided while nothing waited was
-# silently queued again unchanged).
+# silently queued again unchanged) -- but only while it STILL HOLDS (verdict_still_holds; 2026-11-21,
+# movies-devpanel-oauth: a rejection from 17:02, already printed to its waiter, was replayed at 17:35 as decided "while
+# no --until-done waited" though main had moved and fixed the main-side bug behind it): never delivered to a waiter and
+# decided on the main of today. Otherwise the change is queued, so checked, again.
 UNTIL_DONE_DEADLINE = 4 * 3600  # s (--deadline): a batch at green, a verify round and a push fit well inside it
 
 
@@ -1117,7 +1145,9 @@ def land_until_done(repo, main_ref, sh, a):
     it = own_change_item(repo, head)
     if it and it["state"] == "landed":
         eid = it["id"]
-    elif it and it["state"] == "rejected":  # A VERDICT IS DURABLE (below): decided while no call waited, said now
+    elif it and it["state"] == "rejected" and verdict_still_holds(repo, main_ref, it):
+        # A VERDICT IS DURABLE (above): decided while no call waited, on this very main, said now
+        take_delivery(it)
         why = str((it.get("data") or {}).get("why") or f"{it['id']} rejected")
         print(f"DECIDED {it['id']} ({head[:10]}) while no --until-done waited:", flush=True)
         print(why if why.startswith("NOT LANDED") else f"NOT LANDED: {why}", flush=True)
@@ -1273,10 +1303,10 @@ def set_change(d, e, to, data=None, event=None, store=None, **fields):
     cur = st.put_item("change", e["id"], ENTRY_STATE.get(e.get("status"), "queued"), change_item_fields(e))
     if fields.get("why"):  # a decided change's why, on its item: a fixer's land reads it there (await_queued)
         data = {**(data or {}), "why": str(fields["why"])[:600]}
-    landed = {k: fields[k] for k in ("landed_sha", "pushed_at", "batch", "batch_id", "superseded_by")
+    landed = {k: fields[k] for k in ("landed_sha", "pushed_at", "batch", "batch_id", "superseded_by", "decided_on")
               if fields.get(k) is not None}
-    if landed:  # where and when it landed (or what superseded it), on its item: an awaiter on any host reads it there
-        # (await_entry)
+    if landed:  # where and when it landed (or what superseded it, or the main it was decided on), on its item: an
+        # awaiter on any host reads it there (await_entry, verdict_still_holds)
         data = {**(data or {}), **landed}
     if to != cur["state"] and (cur.get("data") or {}).get("hold"):  # a new state's wait is said anew (note_hold): a
         data = {**(data or {}), "hold": None}  # hold of the state it leaves never shows on the next (no stale reason)
@@ -1324,7 +1354,10 @@ def joined_verdicts(st, w, joined, to, event, data):
 
 
 def queue_verdict(d, e, status, verdict, tail=(), code=1, **fields):
-    """A change's final verdict: its state (set_change), whose event the projector makes its author's inbox entry."""
+    """A change's final verdict: its state (set_change), whose event the projector makes its author's inbox entry.
+    `decided_on`: the main it was decided on (else the base it was checked on, else the one it was queued on): a land
+    replays the verdict only while main is still that (verdict_still_holds)."""
+    fields["decided_on"] = fields.get("decided_on") or e.get("checked_base") or e.get("base")
     # its recheck log on its item too (stats' kept_verdicts reads it there): a batch's kept verdict is logged on the
     # entry alone
     set_change(d, e, {"joined": "waiting"}.get(status, status), event=change_event(e, verdict, tail, code),
@@ -1707,7 +1740,7 @@ def _check_entry(repo, d, e, i, own=None):
         queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {remote()}/main {base[:10]} "
                       f"(main moved since QUEUED{conflict_cause(tree, e.get('base'), base, conflicts)}): rebase onto "
                       f"{remote()}/main and land again (it keeps its place in the queue)",
-                      conflict_files=conflict_paths(conflicts))
+                      conflict_files=conflict_paths(conflicts), decided_on=base)
         return 1
     e["tip"] = head
     save_entry(d, e)
@@ -1716,16 +1749,16 @@ def _check_entry(repo, d, e, i, own=None):
     dead = blame_land_refusal(tree, commits, e.get("worktree"))
     if dead:  # queued before its blame was withdrawn or refuted (2026-11-01: revert-629 re-queued by orphan duty)
         # policy: blame-dead
-        queue_verdict(d, e, "rejected", f"NOT LANDED: {dead}")
+        queue_verdict(d, e, "rejected", f"NOT LANDED: {dead}", decided_on=base)
         return 1
     # FIX REPLAY (red.py): the laptop's land may hold no token; its replays ride with the submission (`replays`)
     unreplayed = fix_replay_refusal(repo, commits, proofs=e.get("replays"))
     if unreplayed and unreplayed[0] == "fix-replay" and policy_blocks("fix-replay", None, e["id"], unreplayed[1][:160]):
-        queue_verdict(d, e, "rejected", f"NOT LANDED: {unreplayed[1]}")  # policy: fix-replay
+        queue_verdict(d, e, "rejected", f"NOT LANDED: {unreplayed[1]}", decided_on=base)  # policy: fix-replay
         return 1
     if unreplayed and unreplayed[0] == "fix-replay-outside" \
             and policy_blocks("fix-replay-outside", None, e["id"], unreplayed[1][:160]):
-        queue_verdict(d, e, "rejected", f"NOT LANDED: {unreplayed[1]}")  # policy: fix-replay-outside
+        queue_verdict(d, e, "rejected", f"NOT LANDED: {unreplayed[1]}", decided_on=base)  # policy: fix-replay-outside
         return 1
     joining = bool(reds) and must_wait(repo, commits, reds)
     cls = gov_class_of(repo, commits, reds)
@@ -1784,7 +1817,7 @@ def _check_entry(repo, d, e, i, own=None):
                 # policy: checks-failed
                 queue_verdict(d, e, "rejected", f"NOT LANDED: the pre-push checks failed ({where}){timed}; failing "
                               f"with this change only: {keys_text(what)}{provisional_hint(tree, e)}; the change "
-                              f"{e['head'][:10]} stays in {e['worktree']}", (out or "").splitlines())
+                              f"{e['head'][:10]} stays in {e['worktree']}", (out or "").splitlines(), decided_on=base)
                 return 1
             srcs = sorted(set(what.values()))
             known_red = {"keys": sorted(what), "where": srcs, "base": base}
@@ -2019,7 +2052,7 @@ def _push_change(repo, d, e, i):
                 queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {remote()}/main "
                               f"{moved[:10]} (main moved during its checks{conflict_cause(tree, base, moved, conflicts)}"
                               f"): rebase onto {remote()}/main and land again (it keeps its place in the queue)",
-                              conflict_files=conflict_paths(conflicts))
+                              conflict_files=conflict_paths(conflicts), decided_on=moved)
                 return "rejected"
             tree_hook = precheck_hook(tree) if hook else None
             n, why = recheck_reason(tree, full_base, moved, new_head, range_paths(tree, moved, new_head),
@@ -2235,7 +2268,7 @@ def _tick_changes_pass(repo, d, st, t, facts, kinds, phase, mine, todo, held, ph
                 queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {remote()}/main "
                               f"{gone[0][:10]} (main moved since QUEUED{conflict_cause(repo, e.get('base'), gone[0], gone[1])}"
                               f"): rebase onto {remote()}/main and land again (it keeps its place in the queue)",
-                              conflict_files=conflict_paths(gone[1]))
+                              conflict_files=conflict_paths(gone[1]), decided_on=gone[0])
                 did.append(f"{e['id']}: rejected (no longer applies on main)")
                 continue
             hold = overlap_hold(repo, d, e, todo, facts, t)
