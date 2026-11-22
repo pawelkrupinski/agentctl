@@ -32,6 +32,49 @@ class StoreTest(unittest.TestCase):
         self.assertIn("held", self.st.acquire("land/r", "me", 120, 300))
 
 
+class OffersTest(unittest.TestCase):
+    """The offers table (design §6.2): one open offer per item, refreshed in place; read by priority then age; a
+    reason kept; closed by item; take() closes it and acquires its lease in one step."""
+
+    def setUp(self):
+        self.t = [1000.0]
+        self.st = A.Store(path=os.path.join(tempfile.mkdtemp(), "store.db"), clock=lambda: self.t[0])
+
+    def test_one_open_offer_per_item_refreshed_in_place_and_read_by_priority_then_age(self):
+        a = self.st.offer("fixer", "red:1", "red/a", "fresh", 3, 2000.0, {"run": 1})
+        self.t[0] += 1
+        b = self.st.offer("fixer", "red:2", "red/b", "fresh", 1, 2000.0, {"run": 2})
+        self.t[0] += 1
+        c = self.st.offer("owner", "red:3", "red/c", "fresh", 1, 2000.0, {})
+        self.assertEqual(self.st.offer("fixer", "red:1", "red/a2", "stale", 1, 3000.0, {"run": 9}), a)  # refreshed
+        self.assertEqual([o["id"] for o in self.st.offers()], [a, b, c])  # priority 1 each now: oldest first
+        self.assertEqual([o["id"] for o in self.st.offers("fixer")], [a, b])
+        got = self.st.offer_of("red:1")
+        self.assertEqual((got["lease"], got["tier"], got["deadline"], got["picture"], got["opened_at"]),
+                         ("red/a2", "stale", 3000.0, {"run": 9}, 1000.0))
+        self.st.offer_reason(b, "capacity 0/0, waiting")
+        self.assertEqual(self.st.offer_of("red:2")["reason"], "capacity 0/0, waiting")
+        self.st.close_offer("red:2", "verified")
+        self.assertIsNone(self.st.offer_of("red:2"))
+        self.assertEqual([o["id"] for o in self.st.offers()], [a, c])
+        self.assertNotEqual(self.st.offer("fixer", "red:2", "red/b", "fresh", 1, 2000.0, {}), b)  # a new one after close
+
+    def test_take_closes_the_offer_and_acquires_its_lease_held_or_gone_otherwise(self):
+        oid = self.st.offer("fixer", "red:1", "red/a", "fresh", 1, 2000.0, {"workflow": "Main"})
+        other = self.st.offer("fixer", "red:2", "red/b", "fresh", 1, 2000.0, {})
+        self.st.acquire("red/b", "laptop:fixer:x", 600, 3600)
+        got = self.st.take(oid, "laptop:fixer:c", 900, 3600, meta={"who": "c"})
+        self.assertEqual(got["picture"], {"workflow": "Main"})
+        self.assertEqual(self.st.get("red/a")["holder"], "laptop:fixer:c")
+        self.assertEqual(self.st.get("red/a")["item"], "red:1")
+        self.assertEqual(self.st.get("red/a")["progress"], "taken")
+        self.assertIsNone(self.st.offer_of("red:1"))
+        self.assertEqual(self.st.take(oid, "laptop:fixer:d", 900, 3600), {"gone": oid})
+        held = self.st.take(other, "laptop:fixer:d", 900, 3600)
+        self.assertEqual(held["held"]["holder"], "laptop:fixer:x")
+        self.assertIsNotNone(self.st.offer_of("red:2"))  # a held lease leaves the offer open
+
+
 class LeaseHistoryTest(unittest.TestCase):
     """The owner (2026-10-29): `lease list` showed ~20 long-free leases beside the 6 live ones."""
 
