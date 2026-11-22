@@ -104,15 +104,18 @@ JOB_NAME_LINE = re.compile(r"^( +)name:[ \t]*(.*?)[ \t]*$")
 JOB_TIMEOUT_LINE = re.compile(r"^ +timeout-minutes:[ \t]*(\d+)[ \t]*(?:#.*)?$")
 
 
-def workflow_jobs(text):
+def workflow_jobs(text: str) -> list[dict[str, Any]]:
     """The jobs of a workflow, as its text declares them: [{name, timeout_s}] -- name its template (a job without
     `name:` is named by its key), timeout_s its own `timeout-minutes` in s or None."""
-    jobs, lines = [], text.splitlines()
+    jobs: list[dict[str, Any]] = []
+    lines = text.splitlines()
     try:
         i = next(n for n, l in enumerate(lines) if re.match(r"^jobs:[ \t]*(?:#.*)?$", l)) + 1
     except StopIteration:
         return []
-    job_indent = job = props_indent = None
+    job: dict[str, Any] | None = None
+    job_indent = -1  # the jobs' indent, once the first job key sets it
+    props_indent: int | None = None
     for line in lines[i:]:
         if not line.strip() or line.lstrip().startswith("#"):
             continue
@@ -120,7 +123,7 @@ def workflow_jobs(text):
         if indent == 0:
             break
         key = JOB_KEY_LINE.match(line)
-        if job_indent is None and key:
+        if job_indent < 0 and key:
             job_indent = indent
         if indent == job_indent and key:
             job, props_indent = {"name": key.group(2), "timeout_s": None}, None
@@ -142,11 +145,11 @@ def workflow_jobs(text):
     return jobs
 
 
-def workflow_job_names(text):
+def workflow_job_names(text: str) -> list[str]:
     """The name templates of a workflow's jobs, as its text declares them (a job without `name:` is named by its key)."""
     return [j["name"] for j in workflow_jobs(text)]
 
 
-def workflow_job_timeouts(text):
+def workflow_job_timeouts(text: str) -> dict[str, int | None]:
     """{name template: its timeout-minutes in s, or None} of a workflow's jobs."""
     return {j["name"]: j["timeout_s"] for j in workflow_jobs(text)}

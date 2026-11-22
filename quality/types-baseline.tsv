@@ -9,7 +9,7 @@ mypy-errors	branches	172
 mypy-errors	buildview	42
 mypy-errors	changekind	28
 mypy-errors	cireport	66
-mypy-errors	ciwhy	121
+mypy-errors	ciwhy	120
 mypy-errors	classify	1
 mypy-errors	cleanup	54
 mypy-errors	cli	12
@@ -82,7 +82,7 @@ mypy-errors	reduntracked	45
 mypy-errors	redvault	51
 mypy-errors	redverify	29
 mypy-errors	redview	35
-mypy-errors	remote	166
+mypy-errors	remote	164
 mypy-errors	repos	34
 mypy-errors	reverts	48
 mypy-errors	server	295
@@ -96,5 +96,4 @@ mypy-errors	upkeep	14
 mypy-errors	wait	66
 mypy-errors	waiting	34
 mypy-errors	watchdog	304
-mypy-errors	workflows	6
 mypy-errors	worktrees	8
