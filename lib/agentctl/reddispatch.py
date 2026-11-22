@@ -1,5 +1,40 @@
 # agentctl, part `reddispatch`: holders and the dispatcher: renewing claims, family holders, the capacity, spawning a fixer.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import json
+import os
+import re
+import time
+from typing import Any
+from agentctl.core import HOME, NO_SIGN, env_num, fmt_age, git, git_ok, reds_dir, remote
+from agentctl.timefmt import parse_time, ts
+from agentctl.store import StaleVersion
+from agentctl.procs import socket_host
+from agentctl.repos import red_repo_clone, red_repo_of
+from agentctl.trailers import trailer_values
+from agentctl.leases import lease_meta
+from agentctl.waitingdir import waiting_state
+from agentctl.inboxentry import inbox_write
+from agentctl.land import spawn_land
+from agentctl.redrecord import RED_JOIN_IDLE, RED_TERMINAL, lease_is_live, red_active, red_names, red_what
+from agentctl.allowedpaths import allowed_dir
+from agentctl.fixersession import claude_trust_gap
+from agentctl.worktrees import WorktreeGuard
+from agentctl.fixerenv import fixer_env
+from agentctl.redreplay import agentctl_revert_fix_replay
+from agentctl.redrepos import red_owner_only
+from agentctl.redfamilies import red_identity
+from agentctl.owners import OWNER_TTL, owner_alive, owner_lease
+from agentctl.fixerland import red_dispatch
+from agentctl.red import (
+    DECIDED_REVERT, RED_CLAIM_MAX, RED_CLAIM_TTL, RED_DECIDED_REVERT_MAX, RED_FIXER_MAX, RED_FIXER_TTL)
+from agentctl.branches import cached_dispatch_blocker
+from agentctl.redseen import KIND_ORDER
+from agentctl.redopen import red_family_tell
+from agentctl.redclaim import red_joined_progress, red_wt_mark
+from agentctl.redcrash import red_queue_family
+from agentctl.owner import OWNER_MAX, family_owned, owner_hand, owner_holder, owner_spawn, owner_still_ending
+from agentctl.blame import blame_note, blame_reland, blame_waiting, lander_spawn
 
 
 def red_commits_naming(wt: str | None, names: Any, keys: tuple[str, ...] = ("Fixes-Red",)) -> list[tuple[str, float]]:
@@ -405,3 +440,52 @@ def red_investigation_brief(pic):
             f"{', '.join(x[:10] for x in pic.get('refuted') or []) or 'none'}. Attempts: {verdicts or 'none'}. Find the "
             "ROOT CAUSE they all missed and fix it in the code. A code red is never the owner's: no `red block` unless you "
             "PROVE the cause is outside the code and only the owner can act")
+
+
+# DISPATCH OFF PER REPO (the owner, 2026-11-19 ~16:20Z: "no bitcashier builds" -- the laptop CPU-starved). The store's
+# meta `repo_dispatch_off` names the repos whose reds are recorded and shown but never offered, dispatched or put to the
+# owner (no vault Touch ID ask): red_step holds each in `dispatch-off` (its offer closed, its lease and its owner block
+# released), the dispatcher skips any offer of one, and `red auto on --repo R` resumes them (offered at the next tick).
+REPO_DISPATCH_OFF = "repo_dispatch_off"
+
+
+def repo_dispatch_off_all(store):
+    try:
+        v = json.loads(store.meta_get(REPO_DISPATCH_OFF) or "{}")
+        return v if isinstance(v, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def repo_dispatch_off(store, o_r):
+    """The record of o_r's dispatch being off (the owner's), or None."""
+    return repo_dispatch_off_all(store).get(o_r)
+
+
+def red_revert(o_r, repo, u, culprit):
+    """The revert fallback: a revert of the culprit with `Fixes-Red: N`, landed by a detached `agentctl land` through
+    the normal hook (its verdicts reach the inbox). (ok, message)."""
+    num = u["run"].get("number")
+    if red_owner_only(u.get("repo") or o_r):
+        return False, f"no revert in {u.get('repo') or o_r}: its pushes are the owner's (red-repos.json owner-only)"
+    _d, clone, _w = waiting_state(repo)
+    wt, branch = f"{clone}-wt-revert-{num}", f"revert-{num}"
+    if os.path.exists(wt) or git_ok(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"):
+        return False, f"revert worktree {wt} or branch {branch} exists already"
+    git(repo, "fetch", "--quiet", remote(), "main", check=False)
+    if git(repo, "worktree", "add", "-q", "-b", branch, wt, f"{remote()}/main", check=False).returncode != 0:
+        return False, "git worktree add failed"
+    with WorktreeGuard(wt):  # EVERY EXIT PUTS THE WORKTREE BACK (slots.py) -- the land starts after it, never inside
+        r = git(wt, *NO_SIGN, "revert", "--no-edit", culprit, check=False)
+        if r.returncode != 0:
+            git(wt, "revert", "--abort", check=False)
+            return False, f"git revert {culprit[:10]} does not apply ({(r.stderr or r.stdout).strip()[:120]})"
+        msg = git(wt, "log", "-1", "--format=%B").strip()
+        why = u.get("revert_why") or f"{u['workflow']} #{num} still failed after two attempts (its tier ladder)."
+        git(wt, *NO_SIGN, "commit", "--amend", "-q", "-m", f"{msg}\n\nThe revert fallback (agentctl red): {why}"
+            f"\n\nFixes-Red: {num}\n"
+            + agentctl_revert_fix_replay(f"agentctl's revert fallback of {culprit[:10]}: {u['workflow']} #{num} outlived "
+                                         "two fix attempts, so main goes back to the code before it; nothing new to replay")
+            + "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>")
+    pid = spawn_land(wt, fixer_env(o_r, num), reds_dir(f"revert-{num}.log"))
+    return True, f"landing a revert of {culprit[:10]} from {wt} (pid {pid})"

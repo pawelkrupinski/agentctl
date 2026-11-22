@@ -1,5 +1,37 @@
 # agentctl, part `redstep`: the red step: one item, one small idempotent step per tick; holds, lapsed leases, waits on another red.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import re
+from typing import Any
+from agentctl.core import cherry_landed, env_num, fmt_age, remote
+from agentctl.timefmt import iso_at, ts
+from agentctl.forge import forge_actions_run
+from agentctl.repos import RED_PRIMARY, red_repo_of
+from agentctl.workflows import LOCAL_FLOW
+from agentctl.leases import block_lease, lease_meta, red_block_of
+from agentctl.inboxentry import inbox_write
+from agentctl.redretired import red_retired
+from agentctl.redrecord import RED_TERMINAL, lease_is_live, red_closed_of, red_lease, red_what
+from agentctl.gating import main_workflow_files
+from agentctl.allowedpaths import allowed_path
+from agentctl.redfixes import RED_LANDED_VERDICT, red_fix_of, red_run_on_way
+from agentctl.redask import red_decision
+from agentctl.redmove import red_close, red_fix_proven, red_keep_holder, red_move, red_put_offer, red_stop_holder
+from agentctl.redseen import red_gone, red_gone_why
+from agentctl.redopen import red_callable_evidence, red_diagnosis_step, red_history, red_offer
+from agentctl.redverify import red_flake_check, red_main_verify
+from agentctl.redcrash import (
+    AGENTCTL_DEFECT_CAUSE, RED_CRASH_LOOP, RED_DECIDE, probe_red_newer_verdict, red_ask_route, red_blamed_issue,
+    red_crash_loop, red_crash_streak, red_decision_block, red_decision_needed, red_harness_block, red_old_run,
+    red_resolve_old)
+from agentctl.fixerlife import GAVE_UP_DECIDE, GAVE_UP_FIXED
+from agentctl.redvault import red_vault_block, vault_ask_ns, vault_ask_unfounded
+from agentctl.ask import DECISION_FAILED, red_decision_failed
+from agentctl.redpending import RED_WAITS_ON, red_fix_current, red_fix_pending, red_wait_cycle
+from agentctl.blame import blame_step
+from agentctl.reddispatch import repo_dispatch_off
+
 
 # A RED IS NAMED BY ITS WORKFLOW (2026-11-12, b059f05c70fa): opened while the forge read a run's run-name for its
 # workflow's name, the red "Identity takes (convergence run 43013487979)" #40 named a workflow no other run is in: no

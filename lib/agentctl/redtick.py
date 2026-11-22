@@ -384,32 +384,3 @@ def cmd_red(a):
     return 2
 
 
-def red_revert(o_r, repo, u, culprit):
-    """The revert fallback: a revert of the culprit with `Fixes-Red: N`, landed by a detached `agentctl land` through
-    the normal hook (its verdicts reach the inbox). (ok, message)."""
-    num = u["run"].get("number")
-    if red_owner_only(u.get("repo") or o_r):
-        return False, f"no revert in {u.get('repo') or o_r}: its pushes are the owner's (red-repos.json owner-only)"
-    _d, clone, _w = waiting_state(repo)
-    wt, branch = f"{clone}-wt-revert-{num}", f"revert-{num}"
-    if os.path.exists(wt) or git_ok(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"):
-        return False, f"revert worktree {wt} or branch {branch} exists already"
-    git(repo, "fetch", "--quiet", remote(), "main", check=False)
-    if git(repo, "worktree", "add", "-q", "-b", branch, wt, f"{remote()}/main", check=False).returncode != 0:
-        return False, "git worktree add failed"
-    with WorktreeGuard(wt):  # EVERY EXIT PUTS THE WORKTREE BACK (slots.py) -- the land starts after it, never inside
-        r = git(wt, *NO_SIGN, "revert", "--no-edit", culprit, check=False)
-        if r.returncode != 0:
-            git(wt, "revert", "--abort", check=False)
-            return False, f"git revert {culprit[:10]} does not apply ({(r.stderr or r.stdout).strip()[:120]})"
-        msg = git(wt, "log", "-1", "--format=%B").strip()
-        why = u.get("revert_why") or f"{u['workflow']} #{num} still failed after two attempts (its tier ladder)."
-        git(wt, *NO_SIGN, "commit", "--amend", "-q", "-m", f"{msg}\n\nThe revert fallback (agentctl red): {why}"
-            f"\n\nFixes-Red: {num}\n"
-            + agentctl_revert_fix_replay(f"agentctl's revert fallback of {culprit[:10]}: {u['workflow']} #{num} outlived "
-                                         "two fix attempts, so main goes back to the code before it; nothing new to replay")
-            + "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>")
-    pid = spawn_land(wt, fixer_env(o_r, num), reds_dir(f"revert-{num}.log"))
-    return True, f"landing a revert of {culprit[:10]} from {wt} (pid {pid})"
-
-

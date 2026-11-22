@@ -156,21 +156,6 @@ def red_lines(st, indent="  "):
     return [f"{indent}fixing: {st['text']}"] if st else []
 
 
-# DISPATCH OFF PER REPO (the owner, 2026-11-19 ~16:20Z: "no bitcashier builds" -- the laptop CPU-starved). The store's
-# meta `repo_dispatch_off` names the repos whose reds are recorded and shown but never offered, dispatched or put to the
-# owner (no vault Touch ID ask): red_step holds each in `dispatch-off` (its offer closed, its lease and its owner block
-# released), the dispatcher skips any offer of one, and `red auto on --repo R` resumes them (offered at the next tick).
-REPO_DISPATCH_OFF = "repo_dispatch_off"
-
-
-def repo_dispatch_off_all(store):
-    try:
-        v = json.loads(store.meta_get(REPO_DISPATCH_OFF) or "{}")
-        return v if isinstance(v, dict) else {}
-    except (ValueError, TypeError):
-        return {}
-
-
 def repo_dispatch_set(store, o_r, off, by):
     cur = repo_dispatch_off_all(store)
     if off:
@@ -178,11 +163,6 @@ def repo_dispatch_set(store, o_r, off, by):
     else:
         cur.pop(o_r, None)
     store.meta_set(REPO_DISPATCH_OFF, json.dumps(cur, sort_keys=True))
-
-
-def repo_dispatch_off(store, o_r):
-    """The record of o_r's dispatch being off (the owner's), or None."""
-    return repo_dispatch_off_all(store).get(o_r)
 
 
 # RED STATUS READS THE SYNC'S SNAPSHOT (2026-11-22: `red status` timed out at 8 s under load -- each call read

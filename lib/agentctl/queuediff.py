@@ -1,5 +1,34 @@
 # agentctl, part `queuediff`: the differential landing check.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import re
+import time
+from agentctl.core import err, git, git_ok, reds_dir, remote, slug
+from agentctl.timefmt import ts
+from agentctl.statefile import read_record, write_json
+from agentctl.classify import ANSI, TRANSIENT_PUSH, norm_line
+from agentctl.repos import gated_repo, precheck_hook, waiting_supported
+from agentctl.waitingdir import save_entry, waiting_entries, waiting_state, wlog
+from agentctl.wait import fetch_failed_log, log_entries
+from agentctl.land import HOOK_STATUS, RACE, REDGATE, land_lock, landed, push_argv, push_bounds, run_watched, tool_env
+from agentctl.gating import mark_gate_dirty
+from agentctl.clones import fetch_main
+from agentctl.queueslots import PUSH_ATTEMPTS_MAX, check_tree, queue_verdict, set_change, tree_slot
+from agentctl.conditions import open_condition, run_probe
+from agentctl.queue import (
+    VERIFY_MODE, hook_query, module_overlap, range_paths, verify_areas_supported, verify_supported)
+from agentctl.generated import without_generated
+from agentctl.conflicts import conflict_cause, conflict_paths, union_safe
+from agentctl.queuerecheck import own_diff_changed, read_overlap, recheck_logged, recheck_reason
+from agentctl.redfixes import fixes_of
+from agentctl.changekind import classify_change, gate_facts
+from agentctl.waiting import already_landed, apply_entry, must_wait, tail_of, waiting_commits
+from agentctl.ciwhy import gate_runs
+from agentctl.redseen import gate_reds
+from agentctl.landwatch import start_watch
+from agentctl.queuebatch import queue_join
+
 
 # THE DIFFERENTIAL LANDING CHECK (2026-11-04: two good changes, credited-memo and G1 retention, were NOT LANDED because
 # their checks failed on `uk-mowlem-theatre-purbeck-film-festival-hen-736301b7 lacks answers`, a stale slice failing on
@@ -328,3 +357,18 @@ def check_tree_for_push(repo, e, i):
         tree = check_tree(repo, i, e["tip"])
     git(tree, "checkout", "-q", "--force", "--detach", e["tip"], check=False)
     return tree
+
+
+def rebase_in_tree(d, tree, e, base, regen=True, conflicts=None):
+    """The entry's commits on base, in the tree: (head, None); (None, None) on a conflict (aborted; its files appended
+    to `conflicts`); (None, via) when every commit is on base already (dropped: LANDED via that commit, never an empty
+    push). regen False: a conflict in a generated file is left a conflict (waiting.py conflict_resolve)."""
+    git(tree, "checkout", "-q", "--force", "--detach", base)
+    how, x = apply_entry(d, tree, e, base, regen=regen)
+    if how == "conflict":
+        if conflicts is not None:
+            conflicts.extend(x or [])
+        return None, None
+    if how in ("landed", "duplicate"):
+        return None, x or "an equivalent commit"
+    return git(tree, "rev-parse", "HEAD").strip(), None

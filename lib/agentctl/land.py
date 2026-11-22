@@ -15,6 +15,10 @@ from agentctl.core import spawn_detached
 from agentctl.selfcode import TOOL_PATH
 from agentctl.core import SHORT, reds_dir
 from agentctl.forge import forge_env
+import contextlib
+import json
+from agentctl.core import cherry_landed, git, git_ok, slug
+from agentctl.leases import LeaseHold, _landing
 
 
 # ---------------------------------------------------------------- land / env
@@ -246,3 +250,111 @@ def tool_env():
     except (Exception, SystemExit) as e:
         err(f"tool env: no GitHub App token for movies ({str(e)[:120]}); the hook reads without one")
     return env
+
+
+# EVERY PUSH IS BOUNDED (the owner, 2026-10-28, "fix root cause in a structural way": a queued change's `git push` over
+# the ssh tunnel died with "Connection to localhost closed by remote host" when the hotspot dropped, then hung -- no
+# progress, no exit -- holding the landing lock 30+ min while a checked batch waited behind it with the gate green): a
+# push gets a no-progress bound (no output and no CPU) of PUSH_STALL_SECS and a wall bound of PUSH_WALL_MIN, its group
+# killed on either; a stalled or dead-transport push is infra (re-queued), never a hang.
+# THE HOOK INSIDE A PUSH IS JUDGED BY THE HOOK'S BOUND (2026-11-16: movies 040934987's push lost its landing lease
+# 3 min in -- a gate run had completed since the check outside the lock, so the hook could not reuse that pass and ran
+# its checks again, silent, their CPU in a kept sbt server and a Docker container, out of the push's process group): while
+# a pre-push hook process runs in the push's group, its leases renew at every poll and the hook's own bound (the check
+# outside the lock's, LAND_STALL_MIN; movies' hook bounds each step itself) applies; the transport around it keeps
+# PUSH_STALL_SECS and progress-only renewal, so a push hung on a dead tunnel still loses the lock within minutes.
+PUSH_STALL_SECS = 180
+
+
+PUSH_WALL_MIN = 45
+
+
+def push_bounds():
+    """A push's bounds: `stall` for its transport; while its pre-push hook runs, the hook's own -- the check outside the
+    lock's (LAND_STALL_MIN), its leases renewed at every poll (run_watched hook_stall); `wall` over all of it."""
+    return {"stall": env_num("AGENTCTL_PUSH_STALL_SECS", PUSH_STALL_SECS),
+            "wall": env_num("AGENTCTL_PUSH_WALL_MIN", PUSH_WALL_MIN) * 60,
+            "hook_stall": env_num("AGENTCTL_LAND_STALL_MIN", LAND_STALL_MIN) * 60}
+
+
+def push_argv(remote, src, dst="main"):
+    argv = ["git", "push", remote, f"{src}:refs/heads/{dst}"]
+    assert not any(a in ("--no-verify", "-n", "--force", "-f") or a.startswith("--force") for a in argv)
+    return argv
+
+
+def landed(repo, sha, main_ref):
+    if git_ok(repo, "merge-base", "--is-ancestor", sha, main_ref):
+        return "ancestor"
+    commits, left = cherry_landed(repo, main_ref, sha)
+    if commits and not left:
+        return "patch-equivalent"
+    return None
+
+
+# THE LANDING LOCK IS A LEASE (design §6, phase 1 step 3; the owner, 2026-10-28: a push hung on a dropped tunnel held
+# the flock 30+ min and a checked batch waited behind it). `land/<repo>` in the store: TTL LAND_LEASE_TTL, renewed only
+# on real progress (run_watched's output / CPU), capped at LAND_LEASE_MAX; a holder that stops progressing simply
+# loses it, and a waiter takes it. No flock, no heartbeat file, no killing another process: expiry IS the release.
+# A holder that lost the lease stops its work (run_watched ends its group: LeaseLost).
+LAND_LEASE_TTL = 120
+
+
+LAND_LEASE_MAX = 45 * 60  # the design's 300 s once checks no longer run in the push's hook under the lease (step 6)
+
+
+def land_lease_name(repo):
+    """One lease per REPOSITORY (its GitHub slug): every clone and worktree of it, on every host -- keyed by the
+    local clone's path, the laptop's `land --follow` and ci-runner's pushes took different leases on one store. A
+    checkout without the remote: its git common dir."""
+    try:
+        key = slug(repo)
+    except (SystemExit, RuntimeError):
+        key = os.path.realpath(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
+    return "land/" + re.sub(r"[^A-Za-z0-9._-]", "_", key.strip("/"))
+
+
+@contextlib.contextmanager
+def land_lock(repo, timeout=None):
+    """Hold the repository's landing lease, waiting for it with a line saying who holds it and doing what, repeated
+    every LAND_WAIT_REPORT_MIN minutes. Yields True when held, False when the wait timed out (timeout s; default
+    LAND_LOCK_TIMEOUT -- the tick's pushes pass 0: busy now is tried again next tick, never a tick held for hours)."""
+    h = LeaseHold(land_lease_name(repo), env_num("AGENTCTL_LAND_LEASE_TTL", LAND_LEASE_TTL),
+                  env_num("AGENTCTL_LAND_LEASE_MAX", LAND_LEASE_MAX), meta={"repo": repo})
+    if not h.acquire():
+        def said(r):
+            meta = json.loads(r.get("meta") or "{}")
+            return f"{r['holder']} (pid {meta.get('pid')}), {meta.get('note') or 'working'}; expires in {int(r['expires_at'] - time.time())} s"
+        err(f"waiting for the landing lease {h.name}, held by {said(h.held)}")
+        deadline = time.monotonic() + (env_num("AGENTCTL_LAND_LOCK_TIMEOUT", LAND_LOCK_TIMEOUT) if timeout is None
+                                       else timeout)
+        every = env_num("AGENTCTL_LAND_WAIT_REPORT_MIN", LAND_WAIT_REPORT_MIN) * 60
+        report_at = time.monotonic() + every
+        while not h.acquire():
+            if time.monotonic() > deadline:
+                yield False
+                return
+            if time.monotonic() > report_at:
+                err(f"still waiting for the landing lease: {said(h.held)}")
+                report_at = time.monotonic() + every
+            time.sleep(2)
+        err("got the landing lease")
+    _landing[0] = h
+    try:
+        yield True
+    finally:
+        _landing[0] = None
+        h.release()
+
+
+# THE KNOWN-RED BASELINE (the owner, 2026-10-27: "pre-push fails on plain origin/main" is itself a claimed red, and
+# while it is open a change is judged against main's known-failing checks). When a change's dry run fails, the same
+# checks run on plain origin/main's tree: a commit with main's tree on top of the change (`git commit-tree
+# main^{tree} -p <head>`), checked with `--checks-only <head>..<that>` -- the change's paths select the checks, main's
+# tree is checked. Checks failing there the same way (the same normalized failure lines) are main's own red: recorded
+# in reds/local.json, shown by ci-why as `Local checks`, claimable (`red claim local`) and dispatched like any red, and
+# land says which failures are the change's own. The hook's own output there is kept as `reds/baseline-out/<main sha>`
+# (first line `pre-push baseline <main sha>`), the file movies' pre-push reads through $PREPUSH_BASELINE_DIR (tool_env):
+# land's dry run then runs the hook once more, which passes a check failing only as it fails on main (its pass stored,
+# so the push reuses it). No file for main: the hook blocks every failure (fail-closed).
+HOOK_STATUS = re.compile(r"pre-push (\S+) (ok|FAILED) \(\d+s\)")

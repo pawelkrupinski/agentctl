@@ -415,12 +415,9 @@ copies	store	4
 cycle	batch	1
 cycle	cireport	1
 cycle	queueclose	1
-cycle	queuediff	1
 cycle	queueenter	1
 cycle	queuepush	1
 cycle	recovery	1
-cycle	reddispatch	1
-cycle	redstep	1
 cycle	redtick	1
 cycle	redview	1
 cycle	server	1
@@ -846,7 +843,7 @@ cyclomatic	workflow_triggers	12
 cyclomatic	worktree_holding	12
 cyclomatic	write_snapshot	24
 fan-out	cli	12
-fan-out	server	11
+fan-out	server	10
 file-lines	alerts	719
 file-lines	batch	1564
 file-lines	blame	833
@@ -857,7 +854,7 @@ file-lines	live	755
 file-lines	owner	718
 file-lines	remote	824
 file-lines	server	1246
-file-lines	slots	999
+file-lines	slots	897
 file-lines	stats	623
 file-lines	status	1027
 file-lines	store	780

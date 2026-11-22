@@ -251,21 +251,6 @@ def regen_hold_overdue(st, d, e, t):
     return True
 
 
-def rebase_in_tree(d, tree, e, base, regen=True, conflicts=None):
-    """The entry's commits on base, in the tree: (head, None); (None, None) on a conflict (aborted; its files appended
-    to `conflicts`); (None, via) when every commit is on base already (dropped: LANDED via that commit, never an empty
-    push). regen False: a conflict in a generated file is left a conflict (waiting.py conflict_resolve)."""
-    git(tree, "checkout", "-q", "--force", "--detach", base)
-    how, x = apply_entry(d, tree, e, base, regen=regen)
-    if how == "conflict":
-        if conflicts is not None:
-            conflicts.extend(x or [])
-        return None, None
-    if how in ("landed", "duplicate"):
-        return None, x or "an equivalent commit"
-    return git(tree, "rev-parse", "HEAD").strip(), None
-
-
 def check_entry(repo, eid):
     """THE EXECUTOR of one change's checks (`waiting check <id>`, detached): holding check/<entry> and a check tree slot
     (leases), it takes the change to checking and leaves it checked (with the tip and base it passed on), rejected (a
