@@ -150,6 +150,19 @@ class PureMoveTest(unittest.TestCase):
         self.assertIn("return other()\n\n\nLIMIT, OTHER = 3, 4\n\n\nTABLE = {", read(lib, "top"))
         self.assertNotIn("LIMIT", read(lib, "mid"))
 
+    def test_movedefs_from_moves_only_that_modules_statement_and_a_registration_by_its_key(self):
+        parts = dict(PARTS, core=PARTS["core"] + "\n\nTABLE = {}\n",
+                     mid=PARTS["mid"] + "\n\nTABLE = {'x': 1}\nTABLE['y'] = 2\n")
+        lib = fake_lib(parts)
+        self.assertNotEqual(tool("movedefs", lib, "top", "TABLE").returncode, 0, "two modules bind it: say which")
+        self.assertIn("TABLE = {}", read(lib, "core"), "a refused move writes nothing")
+        r = tool("movedefs", lib, "top", "--from", "mid", "TABLE['y']")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("TABLE = {}", read(lib, "core"))
+        self.assertIn("TABLE = {'x': 1}", read(lib, "mid"))
+        self.assertNotIn("TABLE['y']", read(lib, "mid"))
+        self.assertIn("\n\n\nTABLE['y'] = 2\n", read(lib, "top"))
+
     def test_a_new_module_is_listed_and_mkmodule_gives_it_its_imports_in_import_order(self):
         lib = fake_lib()
         before = copy(lib)
@@ -174,6 +187,19 @@ class PureMoveTest(unittest.TestCase):
         r = tool("samecode", os.path.dirname(lib), os.path.dirname(changed))
         self.assertEqual(r.returncode, 1)
         self.assertIn("helper", r.stdout)
+
+
+class IntraTest(unittest.TestCase):
+    def test_each_definition_lists_the_modules_own_names_it_reads(self):
+        lib = fake_lib(dict(PARTS, mid=PARTS["mid"] + "\n\nLIMIT = 3\nTABLE = {}\nTABLE['y'] = LIMIT\n\n\n"
+                                                      "def last():\n    os = helper()\n    return os, LIMIT\n"))
+        r = tool("intra", os.path.join(lib, "mid.py"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rows = [line.split("\t") for line in r.stdout.splitlines()]
+        self.assertEqual([(name, used) for _line, name, used in rows],
+                         [("helper", ""), ("other", "helper"), ("LIMIT", ""), ("TABLE", ""),
+                          ("TABLE['y']", "LIMIT TABLE"), ("last", "LIMIT helper")])
+        self.assertEqual(int(rows[0][0]), read(lib, "mid").split("\n").index("def helper():") + 1)
 
 
 class ImportToolsTest(unittest.TestCase):

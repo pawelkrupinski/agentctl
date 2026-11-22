@@ -62,8 +62,9 @@ movies model (movies "Code quality ratchets" and "Coupling"):
   `wire_token_missing_note(token_unavailable_note)`), never reached by a module calling up. The tests read and patch
   the modules as one object, `A` (`tests/agentctl_view.py`: `A.<name> = fake` replaces the name in every module
   binding it), until the collaborators are injected.
-- The restructuring's tools (`devtools/`, tested by `tests/test_devtools.py`): `movedefs.py` (a pure move of
-  top-level definitions between modules, `--new` making one), then `mkmodule.py` (the imports a module now lacks),
+- The restructuring's tools (`devtools/`, tested by `tests/test_devtools.py`): `intra.py` (each top-level definition's
+  reads of its own module's names: a split's seams), `movedefs.py` (a pure move of top-level definitions between
+  modules, `--new` making one, `--from` the one module to cut a twice-bound name from), then `mkmodule.py` (the imports a module now lacks),
   `retarget.py` (repoint the importers), `unused.py` (drop the dead imports) and `placemodules.py` (MODULES in import
   order); `sameast.py` / `samecode.py` (the proofs: the same statements, the same bytecode); `suite-at.sh` (the full
   suite on a snapshot of a revision; `cov`: branch coverage, the venv's python running it); `stats.sh` (the

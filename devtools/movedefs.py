@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Move top-level definitions between agentctl's modules, as a pure move.
 
-usage: movedefs.py <lib/agentctl> <to-module> [--new "<description>"] [--before <name>] <name>...
+usage: movedefs.py <lib/agentctl> <to-module> [--new "<description>"] [--before <name>] [--from <module>] <name>...
 Each named top-level statement (def/class/assignment, with the comment block right above it) is cut from its module and
 appended, in source order, to <to-module> (created, and listed in MODULES, with --new), or inserted, in that order,
-right before the statement binding <name> there (--before: a module-level statement there reads them). Then:
+right before the statement binding <name> there (--before: a module-level statement there reads them). A name two
+modules bind is refused unless --from names the one module to cut from; a registration into another module's table
+(`TABLE["key"] = ...`) is named by its target as written, `TABLE["key"]`. Then:
 mkmodule.py <to-module> (its imports), retarget.py (the importers'), unused.py --fix (the dead ones). Proof: sameast.py
 (the same statements) and samecode.py (every function's bytecode unchanged)."""
 import ast
@@ -16,11 +18,13 @@ from partlist import module_list, write_modules
 lib = sys.argv[1]
 to = sys.argv[2]
 args = sys.argv[3:]
-new_desc, before = None, None
+new_desc, before, source = None, None, None
 if "--new" in args:
     i = args.index("--new"); new_desc = args[i + 1]; del args[i:i + 2]
 if "--before" in args:
     i = args.index("--before"); before = args[i + 1]; del args[i:i + 2]
+if "--from" in args:
+    i = args.index("--from"); source = args[i + 1]; del args[i:i + 2]
 names = set(args)
 init = os.path.join(lib, "__init__.py")
 parts = module_list(lib)
@@ -43,6 +47,7 @@ def stmt_spans(src):
         elif isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
             ts = n.targets if isinstance(n, ast.Assign) else [n.target]
             nm = {x.id for t in ts for x in ast.walk(t) if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Store)}
+            nm |= {ast.unparse(t) for t in ts if isinstance(t, ast.Subscript)}  # a registration: TABLE["key"] = ...
         else:
             nm = set()
         out.append((k + 1, n.end_lineno, nm))
@@ -50,9 +55,9 @@ def stmt_spans(src):
     return out
 
 
-moved, found, writes = [], set(), {}
+moved, found, writes, binders = [], set(), {}, {}
 for p in parts:
-    if p == to:
+    if p == to or (source is not None and p != source):
         continue
     path = os.path.join(lib, f"{p}.py")
     src = open(path).read()
@@ -65,7 +70,9 @@ for p in parts:
         continue
     for a, b in cut:
         moved.append((p, "\n".join(lines[a - 1:b])))
-        found |= {x for x0, y0, nm in stmt_spans(src) if (x0, y0) == (a, b) for x in nm}
+        for x in {x for x0, y0, nm in stmt_spans(src) if (x0, y0) == (a, b) for x in nm}:
+            found.add(x)
+            binders.setdefault(x, set()).add(p)
     keep = []
     i = 1
     for a, b in cut:
@@ -79,6 +86,9 @@ for p in parts:
 missing = names - found
 if missing:
     sys.exit(f"not found: {sorted(missing)}")  # nothing written yet
+twice = sorted(f"{x} ({', '.join(sorted(ps))})" for x, ps in binders.items() if len(ps) > 1)
+if twice:
+    sys.exit(f"bound in more than one module: {'; '.join(twice)}: --from <module> names the one to cut from")
 tpath = os.path.join(lib, f"{to}.py")
 placing = False
 if new_desc is not None:  # every check before the first write: a refused move writes nothing
