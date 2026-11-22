@@ -51,10 +51,6 @@ def vault_ask_unfounded(o_r: str, text: object, ns: str) -> str | None:
             "its error in the ask")
 
 
-def vault_decide_cmd(ns):
-    return decide_cmd(f"vault-{ns}", "here")
-
-
 def red_vault_resume(store, it, ns, answer, t):
     """The owner is at the machine (`decide vault-<ns>`): red `it`, waiting on vault ns, offered again as a decide
     would, its fixer briefed to prove its OWN session can sign before anything else."""

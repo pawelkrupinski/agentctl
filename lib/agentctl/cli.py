@@ -5,6 +5,16 @@
 wire_store(process_store)
 wire_token_missing_note(token_unavailable_note)
 wire_inbox_writer(alert_write)
+wire_probes({"disk_free": probe_disk_free, "quota_reset": probe_quota_reset, "invariant": probe_invariant,
+             "waiting_ok": probe_waiting_ok, "orphan_landed": probe_orphan_landed, "workflow_green": probe_workflow_green,
+             "http": probe_http, "tcp": probe_tcp, "route": probe_route, "tunnel": probe_tunnel,
+             "gate_read": probe_gate_read, "token": probe_token, "git_fetch": probe_git_fetch,
+             "clone_health": probe_clone_health, "change_source": probe_change_source,
+             "push_credential": probe_push_credential,
+             "infra_requeue": probe_infra_requeue, "red_newer_verdict": probe_red_newer_verdict,
+             "batch_progress": probe_batch_progress, "red_read": probe_red_read})
+wire_recover_actions({"clear_hold": recover_clear_hold, "tunnel_reset": recover_tunnel_reset,
+                      "clear_flag": recover_clear_flag})
 
 
 # ---------------------------------------------------------------- main

@@ -26,3 +26,12 @@ def red_what(d: dict[str, Any]) -> str:
     jobs = [str(j) for j in d.get("jobs") or [d.get("job")] if j]
     o_r = red_repo_of(d)
     return ("" if o_r == RED_PRIMARY else f"{red_repo_short(o_r)} ") + f"{d.get('workflow')} #{(d.get('last_run') or {}).get('number')}" + (f" [{', '.join(jobs)}]" if jobs else "")
+
+
+def red_active(store: Any) -> dict[str, dict[str, Any]]:
+    """{key: item} of the non-terminal reds (one per key)."""
+    out = {}
+    for it in store.items("red"):
+        if it["state"] not in RED_TERMINAL:
+            out[it["data"].get("key") or it["id"]] = it
+    return out

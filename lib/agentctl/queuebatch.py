@@ -193,15 +193,6 @@ def restart_hold(st, e, t):
         pass
 
 
-def change_hold_now(it, e, t):
-    """The hold a queued change waits on now: its recorded one, its retry, or the governor's slot; None: nothing."""
-    if e.get("retry_after", 0) > t:
-        return {"kind": "retry", "why": "its retry (an infra failure of its last check)"}
-    if e.get("waiting_on"):
-        return {"kind": "governor", "why": f"waiting on {e['waiting_on']}"}
-    return (it.get("data") or {}).get("hold")
-
-
 def change_hold_stuck(st, hold, it, t):
     """Why a queued or checked change's hold is stuck (an escalation), or None (a legitimate wait: quiet)."""
     if not hold:

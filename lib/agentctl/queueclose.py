@@ -151,9 +151,6 @@ def migrate_local_queue(repo, store=None):
     return did
 
 
-HOLD_SHOWN = ("queued", "checked")  # the states whose item's `hold` says why it waits (a check, a push)
-
-
 def change_rows(store=None):
     """THE QUEUE as everyone reads it (`land status`, the status line, the page): the store's open change items,
     by id, as {id, state, worktree, head, deadline, level, hold, kind (a red fix's, changekind.py), since (submitted)}."""

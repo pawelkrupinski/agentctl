@@ -25,14 +25,16 @@ MODULES = ("core", "timefmt", "statefile", "moviestools", "forge", "ghapp", "cla
            "fixerrecords", "inboxentry", "wait", "redretired", "land", "storetoken", "lander", "redrecord",
            "claudefiles", "gating", "allowedpaths", "cpu", "fixersession", "live", "owned", "stats", "clones",
            "worktrees", "fixerenv", "explorer", "queueslots", "redfixread", "reverts", "maint", "deletions",
-           "dispatches", "cleanup", "machine", "govtickets", "testtmp", "procwatch", "inbox", "jvmreap")
+           "dispatches", "cleanup", "machine", "govtickets", "testtmp", "procwatch", "inbox", "jvmreap",
+           "conditions", "notifier", "upkeep", "queue", "patches", "generated", "conflicts", "fixchange",
+           "queuerecheck", "redfixes", "redworkflows", "redreplay", "issues", "identitychange", "changekind",
+           "redrepos", "redfamilies", "cistate", "owners", "redask", "alerts", "projector")
 
-NAMESPACE = ("ciwhy", "branches", "red", "redseen", "redfixes", "redmove", "reduntracked", "redstep", "redcrash",
-             "redpending", "redverify", "reddispatch", "redreplay", "fixer", "fixerland", "fixerlife", "redclaim",
-             "redview", "redearly", "redtick", "redblock", "redvault", "ask", "owner", "gov", "slots", "landwatch",
-             "waiting", "queue", "queuerecheck", "queuesubmit", "queueuntil", "queueclose", "queuediff", "queuepush",
-             "queuebatch", "remote", "batch", "changekind", "tools", "blame", "server", "upkeep", "watchdog",
-             "alerts", "recovery", "projector", "status", "cli")
+NAMESPACE = ("ciwhy", "branches", "red", "redseen", "redmove", "reduntracked", "redstep", "redcrash", "redpending",
+             "redverify", "reddispatch", "fixer", "fixerland", "fixerlife", "redclaim", "redview", "redearly",
+             "redtick", "redblock", "redvault", "ask", "owner", "gov", "slots", "landwatch", "waiting",
+             "queuesubmit", "queueuntil", "queueclose", "queuediff", "queuepush", "queuebatch", "remote", "batch",
+             "tools", "blame", "server", "watchdog", "recovery", "status", "cli")
 
 PARTS = MODULES + NAMESPACE
 

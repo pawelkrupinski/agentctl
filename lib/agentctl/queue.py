@@ -1,5 +1,24 @@
 # agentctl, part `queue`: the land queue and submission.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import re
+import subprocess
+import time
+from agentctl.core import env_num, err, fmt_age, git, git_ok
+from agentctl.statefile import read_record
+from agentctl.store import change_event
+from agentctl.repos import precheck_hook, repo_of_waiting
+from agentctl.waitingdir import wlog
+from agentctl.land import tool_env
+from agentctl.queueslots import set_change
+from agentctl.conditions import open_condition, run_probe
+from typing import Any
+from agentctl.core import host_role
+from agentctl.timefmt import iso_at
+from agentctl.classify import credential_failure, redact_credentials
+from agentctl.waitingdir import waiting_entries
+
 
 # a backlog batch (batch.py, THE BACKLOG BATCH) is up to BACKLOG_BATCH_MAX of them checked in ONE tree.
 # 4, not 3 (2026-11-17): ci-runner's check runners were 3 in effect (a lane bug let borrowed checks hold the check

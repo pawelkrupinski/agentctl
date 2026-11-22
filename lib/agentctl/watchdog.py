@@ -826,11 +826,6 @@ def orphan_key(repo, wt):
     return plus, hashlib_sha1("\n".join(sorted(ids)))[:16] if ids else None
 
 
-def hashlib_sha1(text):
-    import hashlib
-    return hashlib.sha1(text.encode()).hexdigest()
-
-
 def land_entries_by_cwd(entries=None):
     """{realpath of a cwd: its land/waiting inbox entries, oldest first}."""
     out = {}

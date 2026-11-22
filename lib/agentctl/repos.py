@@ -199,3 +199,28 @@ def repo_signs(o_r: str) -> bool:
     land rebases every change with NO_SIGN, so a fixer's signature never reaches main."""
     c = red_repo_conf(o_r)
     return True if c is None else bool(c.get("signed", True))
+
+
+def precheck_hook(repo):
+    """The repo's own pre-push hook, when it has one with a dry-run mode (movies: scripts/hooks/pre-push --range)."""
+    hook = os.path.join(repo, "scripts", "hooks", "pre-push")
+    return hook if os.access(hook, os.X_OK) else None
+
+
+def repo_of_waiting(d: str) -> str:
+    return movies_repo_path()
+
+
+def waiting_supported(repo):
+    """A repo hook, if any, must have --checks-only (its checks without the red gate) to check a waiting tip."""
+    hook = precheck_hook(repo)
+    if not hook:
+        return True
+    with open(hook) as f:
+        return "--checks-only" in f.read()
+
+
+def batching(repo):
+    """Whether land batches here (every change joins `waiting`): a repo hook with --checks-only (movies)."""
+    hook = precheck_hook(repo)
+    return bool(hook) and waiting_supported(repo)

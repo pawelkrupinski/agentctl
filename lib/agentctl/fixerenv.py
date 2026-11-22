@@ -1,4 +1,4 @@
-# agentctl, part `fixerenv`: a dispatched fixer's environment: no parent session, no secret but the credential agentctl reads (SECRET_ENV).
+# agentctl, part `fixerenv`: a dispatched fixer's environment: no parent session, no secret but the credential agentctl reads (SECRET_ENV), and the brief files its prompt reads (BRIEF, BRIEF_SRC).
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
@@ -62,3 +62,9 @@ def fixer_env(o_r: str, num: Any, wrapper_pid: int | None = None) -> dict[str, s
     if wrapper_pid:
         env["AGENTCTL_CLAIM_PID"] = str(wrapper_pid)
     return env
+
+
+BRIEF = os.path.join(HOME, "bin", "briefs", "movies-agent-preamble.md")
+
+
+BRIEF_SRC = ""  # a file to use instead of the tracked docs/fixer-brief.md in fixers' prompts (an override): none by default

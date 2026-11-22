@@ -1,5 +1,15 @@
 # agentctl, part `changekind`: THE CHANGE CLASSIFIER -- what kind of change a queued change is, decided in one place.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import time
+from agentctl.core import fmt_age
+from agentctl.store import StaleVersion, machine_state, open_store
+from agentctl.redrecord import RED_TERMINAL, red_names
+from agentctl.queueslots import checker_alive
+from agentctl.fixchange import fixes_named
+from agentctl.issues import issue_open
+from agentctl.identitychange import identity_change
+
 
 # ---------------------------------------------------------------- ONE CLASSIFIER (the owner, 2026-11-19: "fix that structurally")
 # 08010c (`Fixes-Red: 6`, Alert backtest #6, a red OUTSIDE the gate) sat ~2 h before it landed as e266788ae6: checked
@@ -43,12 +53,6 @@ def priority_table_markdown():
     rows = [f"| {i + 1} | `{name}` | {why} |" for i, (name, why) in enumerate(PRIORITY)]
     return "\n".join([PRIORITY_DOC_BEGIN, "| order | class | what puts a change in it |", "|---|---|---|", *rows,
                       PRIORITY_DOC_END])
-
-
-def fixes_named(x):
-    """The red names (run numbers, ids, keys) a change entry or item data says it fixes: its `fixes` (its commits'
-    counting `Fixes-Red:` values, recorded at submission), as strings without a leading '#'."""
-    return {str(f).strip().lstrip("#") for f in (x or {}).get("fixes") or [] if str(f).strip()}
 
 
 def red_kind_of(d):
@@ -211,3 +215,15 @@ def unheld_changes(st, entries, t):
         if change_past_deadline(it, t) and not change_hold_visible(st, it, e, t):
             out.append((it, e))
     return out
+
+
+HOLD_SHOWN = ("queued", "checked")  # the states whose item's `hold` says why it waits (a check, a push)
+
+
+def change_hold_now(it, e, t):
+    """The hold a queued change waits on now: its recorded one, its retry, or the governor's slot; None: nothing."""
+    if e.get("retry_after", 0) > t:
+        return {"kind": "retry", "why": "its retry (an infra failure of its last check)"}
+    if e.get("waiting_on"):
+        return {"kind": "governor", "why": f"waiting on {e['waiting_on']}"}
+    return (it.get("data") or {}).get("hold")

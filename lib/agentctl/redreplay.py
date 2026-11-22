@@ -1,5 +1,18 @@
 # agentctl, part `redreplay`: a fixer's brief and FIX REPLAY: the replay trailers, agentctl's own replays, the refusal.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import re
+import subprocess
+from agentctl.core import env_num, err, git, remote, state_root
+from agentctl.store import open_store
+from agentctl.repos import red_repo_conf, red_repo_of
+from agentctl.trailers import commit_trailers, trailer_values
+from agentctl.land import tool_env
+from agentctl.storetoken import no_vault
+from agentctl.redrecord import RED_TERMINAL, red_names, red_what
+from agentctl.fixerenv import BRIEF
+from agentctl.redworkflows import RED_WORKFLOWS_FILE, red_workflow_policy, red_workflows_on_main
 
 
 def sync_brief():

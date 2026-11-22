@@ -506,36 +506,6 @@ def cached_gate_summary(o_r, now=None):
 
 
 _last_gate_publish = [0.0]
-_bounded = process_cache({})
-
-
-def run_bounded(name, fn, secs):
-    """Run fn in a daemon thread and wait at most secs: a hung network call can never stall the processor's loop. A step
-    still running from an earlier cycle is not started again (False); True when fn finished in time."""
-    import threading
-    t = _bounded.get(name)
-    if t and t.is_alive():
-        return False
-    t = threading.Thread(target=fn, name=name, daemon=True)
-    _bounded[name] = t
-    t.start()
-    t.join(secs)
-    return not t.is_alive()
-
-
-def gate_dirty_path():
-    return state_root("gate.dirty")
-
-
-def mark_gate_dirty():
-    """A push moved main: the processor re-reads the gate at its next tick (<= TICK s)."""
-    try:
-        os.makedirs(os.path.dirname(gate_dirty_path()), exist_ok=True)
-        with open(gate_dirty_path(), "a"):
-            pass
-        os.utime(gate_dirty_path(), None)
-    except OSError:
-        pass
 
 
 def maybe_publish_gate(repo):

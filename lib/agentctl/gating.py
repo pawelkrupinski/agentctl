@@ -167,3 +167,18 @@ def main_workflow_files(o_r):
         _flow_meta.clear()
         _flow_meta[main] = meta
     return _flow_files[main]
+
+
+def gate_dirty_path():
+    return state_root("gate.dirty")
+
+
+def mark_gate_dirty():
+    """A push moved main: the processor re-reads the gate at its next tick (<= TICK s)."""
+    try:
+        os.makedirs(os.path.dirname(gate_dirty_path()), exist_ok=True)
+        with open(gate_dirty_path(), "a"):
+            pass
+        os.utime(gate_dirty_path(), None)
+    except OSError:
+        pass

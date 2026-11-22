@@ -1,5 +1,21 @@
 # agentctl, part `redfixes`: a red's candidate fixes: queued and landed Fixes-Red changes, refuted and set-aside ones, a fix on main.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import re
+import time
+from agentctl.core import cherry_landed, git, git_ok, process_cache, remote
+from agentctl.timefmt import parse_time, ts
+from agentctl.forge import gh_json
+from agentctl.trailers import trailer_values
+from agentctl.waitingdir import waiting_entries, waiting_state
+from agentctl.redrecord import red_names
+from agentctl.clones import fetch_main
+from agentctl.redfixread import (
+    FIX_OPEN, RED_MAIN_REFETCH, fix_changed, fix_check, fix_reaches_red, landed_fix_commits, red_job_reads,
+    red_unrelated)
+from agentctl.patches import equivalent_on, patch_id
+from agentctl.fixchange import fixes_named, red_fix_fresh
+
 
 def commit_fixes(repo, sha, store=None):
     """The `Fixes-Red:` values of commit sha that count as fixes (fix_check)."""

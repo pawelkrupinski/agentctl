@@ -461,3 +461,23 @@ def dispatches_dir(*parts: str) -> str:
     return os.path.join(d, *parts)
 
 
+_bounded = process_cache({})
+
+
+def run_bounded(name, fn, secs):
+    """Run fn in a daemon thread and wait at most secs: a hung network call can never stall the processor's loop. A step
+    still running from an earlier cycle is not started again (False); True when fn finished in time."""
+    import threading
+    t = _bounded.get(name)
+    if t and t.is_alive():
+        return False
+    t = threading.Thread(target=fn, name=name, daemon=True)
+    _bounded[name] = t
+    t.start()
+    t.join(secs)
+    return not t.is_alive()
+
+
+def hashlib_sha1(text: str) -> str:
+    import hashlib
+    return hashlib.sha1(text.encode()).hexdigest()

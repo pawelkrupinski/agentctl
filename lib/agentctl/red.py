@@ -116,7 +116,6 @@ def red_waits_for_its_run(d):
 RED_VERIFY_SLACK = 2 * 3600     # s past a slot's expected end before its fix is called unverified ($AGENTCTL_RED_VERIFY_SLACK)
 RED_VERIFY_DURATION = 2 * 3600  # s a scheduled run is taken to last when none of its runs finished
 RED_VERIFY_HOLD = 30 * 60       # s a run that will decide the fix, still undecided at the deadline, holds it again
-RED_WORKFLOWS_FILE = ".github/red-workflows.tsv"  # workflow, verify_dispatch (yes|no), replay (a command or -), why
 CRON_HORIZON_DAYS = 32
 CRON_RANGES = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7))
 
@@ -190,39 +189,6 @@ def workflow_crons(text):
     return [m.group(2) for m in re.finditer(r"^\s*-\s*cron:\s*(['\"])(.+?)\1", text or "", re.M)]
 
 
-def red_workflow_policies(repo, ref=None):
-    """{workflow: {verify_dispatch: bool, replay: command or None, why}} from RED_WORKFLOWS_FILE at ref (main)."""
-    txt = git(repo, "show", f"{ref or remote() + '/main'}:{RED_WORKFLOWS_FILE}", check=False).stdout if repo else ""
-    out = {}
-    for line in (txt or "").splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        cols = [c.strip() for c in line.split("\t")]
-        cols += [""] * (4 - len(cols))
-        out[cols[0]] = {"verify_dispatch": cols[1].lower() == "yes",
-                        "replay": cols[2] if cols[2] not in ("", "-") else None, "why": cols[3]}
-    return out
-
-
-def red_workflows_on_main(repo, ref=None):
-    """RED_WORKFLOWS_FILE exists at ref (main). Absent is not "no workflow has a replay": a repo whose red-repos.json
-    entry says `red_workflows` refuses Fixes-Red landings while it is (fix_replay_refusal)."""
-    return bool(repo) and git_ok(repo, "cat-file", "-e", f"{ref or remote() + '/main'}:{RED_WORKFLOWS_FILE}")
-
-
-# VERIFY PROMPTLY BY DEFAULT (the owner, 2026-11-21: "structural fix for the order independence being abandoned" --
-# Order independence #94's fix landed and waited ~24 h for its 02:40Z cron, no one at work): a workflow with no row
-# in RED_WORKFLOWS_FILE MAY be dispatched to verify a landed fix -- at once, never after its next slot. A costly one
-# opts out with a row, `verify_dispatch no` and why (more than ~60 runner-minutes a run, or a paid service).
-def red_workflow_policy(repo, workflow, ref=None):
-    return red_workflow_policies(repo, ref).get(workflow) or {"verify_dispatch": True, "replay": None, "why": ""}
-
-
-def verify_dispatchable(repo, workflow):
-    """The registry says `workflow` may be dispatched to verify a fix."""
-    return red_workflow_policy(repo, workflow)["verify_dispatch"]
-
-
 _verify_runs = process_cache({})
 VERIFY_RUNS_TTL = 5 * 60
 
@@ -278,8 +244,6 @@ RED_FIXER_WALL = 3 * 3600    # a dispatched fixer's maximum wall time ($AGENTCTL
 RED_RENEW_EVERY = 60         # a fixer's wrapper renews its lease this often
 RED_RELEASE_ASKS = 12        # ...and asks a store that does not answer this many times, a poll apart, to release it
 STUCK_FACTOR, STUCK_FLOOR = 3, 30 * 60  # audit #8: a run undecided past max(3 x its workflow's p90, 30 min) is a red
-BRIEF = os.path.join(HOME, "bin", "briefs", "movies-agent-preamble.md")
-BRIEF_SRC = ""  # a file to use instead of the tracked docs/fixer-brief.md in fixers' prompts (an override): none by default
 
 
 # THE TIER LADDER (design §5.3), a table: (attempts, condition, tier), the first row whose attempts and condition hold.
@@ -352,22 +316,6 @@ def red_key(workflow, job, line):
     import hashlib
     n = norm_line(line)
     return hashlib.sha1((f"{workflow}\0{n}" if n else f"{workflow}\0job {canon_job(job)}").encode()).hexdigest()[:12]
-
-
-def lease_meta(row):
-    try:
-        return json.loads((row or {}).get("meta") or "{}")
-    except ValueError:
-        return {}
-
-
-def red_active(store):
-    """{key: item} of the non-terminal reds (one per key)."""
-    out = {}
-    for it in store.items("red"):
-        if it["state"] not in RED_TERMINAL:
-            out[it["data"].get("key") or it["id"]] = it
-    return out
 
 
 def red_active_of(store, o_r):

@@ -1,5 +1,17 @@
 # agentctl, part `queuerecheck`: what a recheck runs: out of the build's reach, minimal rechecks, per-file lints, one side compiled against the other.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import os
+import subprocess
+import time
+from agentctl.core import git, process_cache
+from agentctl.repos import batching, precheck_hook
+from agentctl.buildview import BUILD_VIEW_PATHS, build_view_change, read_build
+from agentctl.waitingdir import waiting_entries
+from agentctl.queue import (
+    SELECTION_PATHS, forces_full_recheck, hook_query, named_reader, range_paths, selection_at, selection_change)
+from agentctl.generated import without_generated
+
 
 # OUT OF THE BUILD'S REACH (the owner, 2026-11-21: "narrow the 27 'build' rechecks (about 24 min each)"; 26 of them in
 # 11-19..21 were BUILD-AWARE's view moving, every view holding e2e, worker and repochecks -- the `basic` lines every sbt

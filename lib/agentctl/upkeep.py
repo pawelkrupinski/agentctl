@@ -1,5 +1,22 @@
 # agentctl, part `upkeep`: upkeep.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import glob
+import os
+import subprocess
+import sys
+import time
+from agentctl.core import HOME, _bounded, env_num, reds_dir, run_bounded, state_root
+from agentctl.timefmt import ts
+from agentctl.store import open_store
+from agentctl.selfcode import TOOL_PATH
+from agentctl.fixerrecords import fixer_records
+from agentctl.redrecord import red_active
+from agentctl.cleanup import close_worktree
+from agentctl.machine import disk_free_gb
+from agentctl.testtmp import TEST_TMP_MAX_AGE, sweep_test_tmp
+from agentctl.conditions import open_condition, run_probe
+
 
 # ---------------------------------------------------------------- upkeep: the tick keeps the laptop's disk (2026-10-29)
 # The owner's coordinator, 2026-10-29: the Data volume filled up (739 MB free) -- 109 proven-merged idle worktrees

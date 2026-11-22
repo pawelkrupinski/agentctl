@@ -1,5 +1,23 @@
 # agentctl, part `projector`: the store's projectors, run by the server's tick: change items from the queue, inbox entries and alerts from the events, one live notification per escalation, the lease archive.
-# Runs inside agentctl's one namespace, after the parts before it in lib/agentctl/__init__.py's PARTS (it uses their names).
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
+
+import datetime as dt
+import json
+import os
+import re
+import time
+from agentctl.core import env_num, err
+from agentctl.timefmt import iso_at
+from agentctl.store import (
+    ENTRY_STATE, LEASE_ARCHIVE_AFTER, StaleVersion, TerminalState, machine_state, open_store, projected_transition)
+from agentctl.procs import safe_cwd
+from agentctl.notifyurl import notification_url
+from agentctl.waitingdir import waiting_entries, wlog
+from agentctl.inboxentry import inbox_dir, inbox_kind
+from agentctl.queueslots import change_item_fields
+from agentctl.notifier import notify, notify_cause, notify_fix
+from agentctl.redask import ASK_REMIND_MAX, ask_interval
+from agentctl.alerts import alert_write, event_audience
 
 
 def project_changes(d, store=None):

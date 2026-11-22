@@ -955,26 +955,6 @@ MACHINES["issue"] = {
     "open": StateSpec(7 * 86400, "open", ("closed",), escalate=True, wait=True),
     "closed": StateSpec(ARCHIVE, "closed", (), terminal=True),
 }
-ISSUE_TEXT_MAX = 4000
-
-
-def issue_open(st, text, by, cwd=None, now_=None):
-    """A new open issue; returns the item."""
-    t = now_ if now_ is not None else time.time()
-    text = str(text or "").strip()[:ISSUE_TEXT_MAX]
-    iid = f"{dt.datetime.fromtimestamp(t, dt.timezone.utc):%Y%m%dT%H%M%S}-{hashlib_sha1(f'{by}|{text}|{t}')[:6]}"
-    return st.put_item("issue", iid, "open", {"text": text, "by": by, "at": ts(), "cwd": cwd,
-                                              "session": os.environ.get("CLAUDE_CODE_SESSION_ID")})
-
-
-def issue_close(st, iid, note, by):
-    it = st.item("issue", iid)
-    if not it:
-        return None
-    if it["state"] != "closed":
-        st.transition("issue", iid, "closed", it["version"], data={"closed_by": by, "note": note, "closed_at": ts()},
-                      event={"text": f"issue {iid} closed by {by}: {note}"[:400]})
-    return st.item("issue", iid)
 
 
 # THE WEEKLY ESCALATION (the owner, 2026-11-11, issue 20261111T143441-75a957: ONE NOTIFICATION PER ISSUE, never a

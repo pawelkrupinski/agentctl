@@ -25,9 +25,6 @@ OWNER_IDLE = 6 * 3600        # no red held this long: the owner ends ($AGENTCTL_
 OWNER_EMPTY_TURNS = 2        # turns in a row ending with no verdict line: the owner ends (its reds are offered again)
 OWNER_NOTEBOOK = "RED-NOTEBOOK.md"
 
-def owner_lease(fam):
-    return f"owner/{fam}"
-
 
 def owner_holder(fam):
     return f"laptop:owner:{fam}"
@@ -48,12 +45,6 @@ def owner_leases_path(fam):
 def family_owned(fam):
     """A configured family with a long-lived owner (red-families.json `"owner": true`)."""
     return any(f["name"] == fam and f.get("owner") for f in red_families())
-
-
-def owner_alive(store, fam, t):
-    """The owner's heartbeat lease while it is live, else None."""
-    row = store.get(owner_lease(fam))
-    return row if lease_is_live(row, t) else None
 
 
 def owner_leases(fam):

@@ -62,20 +62,6 @@ def red_run_units(o_r, n):
     return name, r, []
 
 
-# BLOCKED ON OWNER IS FOR THE OWNER'S CAUSES ONLY (the owner, 2026-10-28: "fix this: main #2283 → BLOCKED ON OWNER ...
-# root cause and structural fix", "fix structurally so it doesn't false-flag this way" -- an escalation block raised for
-# the CdpLaunchSpec crash on #2164 followed the red onto #2283 and hid its live fixer). A code red is never the owner's:
-# a block needs an OWNER CAUSE (outside the code, that only the owner can act on), a red whose verdict is not a test
-# failure, no live fixer, and the owner's exact command -- checked at the block AND again every tick (block_invalid:
-# the tick renews a block lease only while it holds): a block that lost its justification lapses at once.
-OWNER_CAUSES = {"external-account": "an external account only the owner holds (a provider dashboard, a plan)",
-                "credentials": "credentials or secrets only the owner can issue or rotate",
-                "infra-apply": "an infra apply only the owner may run",
-                "deploy": "a deploy only the owner may run",
-                "billing": "a billing action in an account only the owner holds",
-                "dashboard": "an action in a dashboard only the owner can reach"}
-
-
 # AN OWNER COMMAND THAT DELETES IS SCOPED AND GUARDED (issue 20261110T084827-38f01b, P0). `red block` handed the owner
 # `sudo rm -rf /run/github-runner/bitcashier-gh-builder-{1,4,6,7,8,12}/core/core/docker`; he ran it 8 h later, while
 # builders 4, 6 and 12 ran Main Pipeline #939, and docker/ vanished under all three jobs (red #939). An owner command
@@ -161,23 +147,6 @@ def owner_details(o_r, n, name, units, cmd, words, owner_cause):
 # fixer). Its probe passing, the justification gone, or the max hold: it lapses, and its reds go on (verify / offered).
 BLOCK_TTL, BLOCK_MAX = 10 * 60, 7 * 86400
 BLOCK_PROBE_EVERY = 60
-
-
-def block_lease(key=None, cause=None):
-    return ("block/cause/" + re.sub(r'[^\w.-]+', '_', cause)) if cause else f"block/{key}"
-
-
-def red_block_of(it, store=None):
-    """{name, text, cause, until, meta} of the live block lease holding this red, or None."""
-    st = store or open_store()
-    d = it["data"]
-    for row in st.list("block/"):
-        if lease_is_live(row, st.clock()):
-            m = lease_meta(row)
-            if d.get("key") in (m.get("keys") or []):
-                return {"name": row["name"], "text": m.get("text") or "BLOCKED ON OWNER", "cause": m.get("cause"),
-                        "until": m.get("until"), "meta": m}
-    return None
 
 
 def block_invalid(store, it, m, t):

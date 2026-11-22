@@ -57,42 +57,6 @@ def gate_report_only(o_r, name, run):
     return out
 
 
-def red_is_other(o_r):
-    """True for a watched repo other than the primary (red-repos.json). Any other name -- the primary, or a repo nobody
-    configured (the tests' `o/r`) -- is treated as the primary, exactly as before 2026-10-30."""
-    return o_r != RED_PRIMARY and red_repo_conf(o_r) is not None
-
-
-def red_gate_flows(o_r):
-    """[(name, file)] of a watched repo's gate workflows: the registry's for a gated repo (gate_flows), its config's for
-    the others."""
-    if gated_repo(o_r):
-        return gate_flows(o_r)
-    c = red_repo_conf(o_r)
-    return list(c["gate"]) if c else []
-
-
-def red_owner_only(o_r):
-    """True for a repo whose fixer never pushes (red-repos.json `"push": "owner-only"`)."""
-    c = red_repo_conf(o_r)
-    return bool(c and c["push"] == "owner-only")
-
-
-def red_repo_tag(o_r, num):
-    """A red run's directory name under reds/: the run number for the primary (as always), `<repo>-<number>` for the
-    others -- run numbers are per repo, so infra #3455 and movies #3455 are two runs."""
-    return f"{red_repo_short(o_r)}-{num}" if red_is_other(o_r) else str(num)
-
-
-def red_repo_key(o_r, key):
-    """A red's key in the store: as it always was for the primary; for another repo, its key bound to the repo, so the
-    same workflow name and line in two repos are two reds."""
-    if not red_is_other(o_r):
-        return key
-    import hashlib
-    return hashlib.sha1(f"{o_r}\0{key}".encode()).hexdigest()[:12]
-
-
 # A WORKFLOW NOT ON MAIN HAS NO RUNS ON MAIN (2026-11-08 16:35-18:10: agentctl's gate list named identity-takes.yml before
 # the movies commit adding the file reached main; GitHub answered each list of it `HTTP 404: workflow ... not found on
 # the default branch`, so the whole gate read failed every cycle -- the status line said `gate UNREAD (as of 16:44)` and
@@ -871,48 +835,6 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
             line += " \u00b7 " + bsum
         return red, line
     return red, "\n".join([head] + out)
-
-
-# THE ONE CI-STATE SNAPSHOT (the owner, 2026-10-27: the watch, the gate summary, ci-why's outside list and the red patrol
-# each polled the forge on their own and disagreed). The processor reads every main workflow once per cycle, writes
-# ci-state.json atomically; the gate verdict, the outside-the-gate reds, the published summary and the patrol read it.
-# One older than CI_STATE_MAX_AGE is UNREAD (never green).
-CI_STATE_MAX_AGE = 180
-
-
-# THE SNAPSHOT (design §9, phase 1 step 13): ONE file, state.json at the state root, written by the processor -- the
-# gate's read (`ci`), the published gate line (`summary`), and each tick the items (changes, the batch, reds,
-# conditions), `tick_at` and the code version. The status line and `ci-why --summary --cached` read only it; their
-# staleness words come from its times. ci-state.json, gate-summary.txt and the statusline.stale marker are gone.
-_state_lock = __import__("threading").Lock()
-
-
-def state_path() -> str:
-    return os.environ.get("AGENTCTL_STATE_FILE") or state_root("state.json")
-
-
-def state_read() -> dict[str, Any]:
-    return read_json_file(state_path())
-
-
-def snapshot_gate_reds(ci: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """THE ONE READING of "the gate is red" from a CI snapshot (ci_state_refresh's; default the current state.json's
-    `ci`): its gate rows whose newest decided run is red. A decided run is only ever success or red (gate_runs)."""
-    ci = (state_read().get("ci") or {}) if ci is None else ci
-    return [g for g in ci.get("gate") or [] if ((g.get("decided") or {}).get("conclusion") or "") in RED_CONCLUSIONS]
-
-
-def state_update(**parts):
-    """Merge parts into state.json, atomically (one writer at a time: a lock file, and a lock for this process's
-    threads)."""
-    path = state_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with _state_lock, open(path + ".lock", "a+") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
-        d = state_read()
-        d.update(parts)
-        write_json(path, d, indent=None)
-    return d
 
 
 def ci_state_refresh(o_r, write=True):

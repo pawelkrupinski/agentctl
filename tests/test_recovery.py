@@ -51,6 +51,17 @@ class RegistryBase(unittest.TestCase):
         return [e for e in A.inbox_entries() if kind is None or e.get("kind") == kind]
 
 
+class WiredRegistryTest(unittest.TestCase):
+    def test_the_condition_machine_is_a_module_and_the_root_wires_every_probe_and_action_into_it(self):
+        mod = sys.modules["agentctl.conditions"]
+        self.assertIs(mod.PROBES, A.PROBES)  # one registry: what the root wires is what the machine reads
+        self.assertIs(mod.RECOVER_ACTIONS, A.RECOVER_ACTIONS)
+        self.assertEqual(set(A.PROBES), set(A.PROBE_EVERY))  # every probe has its recheck interval, and only those
+        self.assertTrue({"clear_hold", "tunnel_reset", "clear_flag"} <= set(A.RECOVER_ACTIONS))
+        for kind, probe in A.PROBES.items():
+            self.assertIs(probe, getattr(A, f"probe_{kind}"), kind)  # the probe itself, no late-binding wrapper
+
+
 class SameProbeTest(RegistryBase):
     def test_every_probe_kind_opens_and_closes_through_the_same_function(self):
         for kind in sorted(self.saved_probes):
