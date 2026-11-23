@@ -8,10 +8,10 @@ import fcntl
 import os
 import signal
 import stat
-import subprocess
 import sys
 import threading
 import time
+from agentctl.procrunner import process_runner
 from agentctl.core import branch_of, err, git, remote, scratch, slug
 from agentctl.timefmt import ts
 from agentctl.classify import TRANSIENT_PUSH, is_transient_network, net_run
@@ -181,7 +181,7 @@ def land_in_worktree(repo, a, clock):
     log_path = os.path.join(scratch(), f"agentctl-land-{os.path.basename(repo)}-{os.getpid()}.log")
 
     def sh(*args):
-        return subprocess.run(args, cwd=repo, capture_output=True, text=True, env=env)
+        return process_runner().run(args, cwd=repo, capture_output=True, text=True, env=env)
 
     dirty = git(repo, "status", "--porcelain", "--untracked-files=no").strip()
     stash = None

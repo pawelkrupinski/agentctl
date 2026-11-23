@@ -6,6 +6,7 @@ import contextlib, io, json, os, re, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, TOOL, code_source  # noqa: E402
+from fake_runner import FakeRunner  # noqa: E402
 import harness  # noqa: E402
 
 
@@ -40,20 +41,20 @@ class CachedSummaryTest(unittest.TestCase):
         epoch, repo, line = content.rstrip("\n").split("\t", 2)
         with open(path, "w") as f:
             json.dump({"summary": {"at": int(epoch), "repo": repo, "line": line}}, f)
-        saved = (os.environ.get("AGENTCTL_STATE_FILE"), A.subprocess.run, A.subprocess.Popen, A.ci_why)
+        saved = (os.environ.get("AGENTCTL_STATE_FILE"), A.ci_why)
 
         def boom(*a, **k):
             raise AssertionError("live work on the cached path")
         os.environ["AGENTCTL_STATE_FILE"] = path
-        A.subprocess.run = A.subprocess.Popen = A.ci_why = boom
+        A.ci_why = boom
         out = io.StringIO()
         try:
             t0 = time.monotonic()
             with contextlib.redirect_stdout(out):
-                rc = A.main(["ci-why", "--summary", "--cached", "--repo", "movies"])
+                rc = A.main(["ci-why", "--summary", "--cached", "--repo", "movies"], runner=FakeRunner(boom, boom))
             took = time.monotonic() - t0
         finally:
-            A.subprocess.run, A.subprocess.Popen, A.ci_why = saved[1], saved[2], saved[3]
+            A.ci_why = saved[1]
             if saved[0] is None:
                 os.environ.pop("AGENTCTL_STATE_FILE")
             else:

@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import time
+from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, git, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import write_json
@@ -39,7 +40,7 @@ def drift_overlay(repo, commit):
     env = {**os.environ, "GIT_INDEX_FILE": idx}
 
     def g(*args):
-        return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, env=env)
+        return process_runner().run(["git", "-C", repo, *args], capture_output=True, text=True, env=env)
     try:
         if g("read-tree", commit).returncode != 0:
             return None
@@ -83,7 +84,7 @@ def probe_drift(repo, commit, run, wall):
     if not probe:
         return {"verdict": "none", "evidence": f"could not lay {remote()}/main's CI over {commit[:10]}"}
     try:
-        r = subprocess.run([drift_ci_path(repo), probe, "--for-red", str(run), "--timeout", str(int(wall // 60))],
+        r = process_runner().run([drift_ci_path(repo), probe, "--for-red", str(run), "--timeout", str(int(wall // 60))],
                            cwd=repo, capture_output=True, text=True, timeout=wall + 120, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired) as e:
         return {"verdict": "none", "evidence": f"identity-drift-ci: {str(e)[:160]}"}
@@ -135,7 +136,7 @@ def probe_checks(repo, o_r, commit, run, tokens, wall):
     if not tokens:
         return {"verdict": "none", "evidence": f"{name}: success, but the red names no test to look for in its log"}
     try:
-        log = subprocess.run(forge_argv(o_r, "run", "view", str(rem["run"]), "--log"), capture_output=True, text=True,
+        log = process_runner().run(forge_argv(o_r, "run", "view", str(rem["run"]), "--log"), capture_output=True, text=True,
                              env=forge_env(o_r), timeout=GH_JSON_TIMEOUT).stdout
     except (OSError, subprocess.TimeoutExpired):
         log = ""

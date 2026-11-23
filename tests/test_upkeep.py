@@ -5,19 +5,20 @@ import json, os, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_runner import FakeRunner  # noqa: E402
 
 
 class UpkeepTest(unittest.TestCase):
     def setUp(self):
-        self.saved = (A.subprocess.run, A.fixer_records, A.close_worktree, A.red_active, A.user_tmp_dir)
+        self.saved = (A.fixer_records, A.close_worktree, A.red_active, A.user_tmp_dir)
         self.tmp = tempfile.mkdtemp()
         self.calls, self.closed = [], []
 
     def tearDown(self):
-        A.subprocess.run, A.fixer_records, A.close_worktree, A.red_active, A.user_tmp_dir = self.saved
+        A.fixer_records, A.close_worktree, A.red_active, A.user_tmp_dir = self.saved
 
     def test_an_upkeep_runs_the_standing_ok_cleanup_closes_closed_reds_fixer_trees_and_old_test_dirs(self):
-        real_run = self.saved[0]
+        real_run = A.ProcessRunner().run
 
         def run(argv, **k):
             if "cleanup" in argv:
@@ -25,7 +26,7 @@ class UpkeepTest(unittest.TestCase):
                 return A.subprocess.CompletedProcess(argv, 0, "== movies\n  delete worktree /x/movies-wt-old [old] abc: merged\n"
                                                               "cleanup: 12 s (movies 12 s)\n", "")
             return real_run(argv, **k)
-        A.subprocess.run = run
+        A.wire_runner(FakeRunner(run=run))
         live, done, open_, other = (os.path.join(self.tmp, n) for n in ("wt-live", "wt-done", "wt-open", "wt-other"))
         for p in (live, done, open_):
             os.makedirs(p)

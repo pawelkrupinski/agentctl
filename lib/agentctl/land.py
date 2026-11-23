@@ -10,6 +10,7 @@ import sys
 import contextlib
 import json
 from typing import Any, Iterator
+from agentctl.procrunner import process_runner
 from agentctl.clock import Clock
 from agentctl.core import HOME, env_num, err, process_cache, run_cmd
 from agentctl.store import LeaseLost, StoreUnavailable
@@ -107,7 +108,7 @@ def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None, cpu=No
     stall = stall if stall is not None else env_num("AGENTCTL_LAND_STALL_MIN", LAND_STALL_MIN) * 60
     out_path = f"{log_path}.{re.sub(r'[^A-Za-z0-9_-]', '_', step)}.out"
     with open(out_path, "w") as out:
-        p = subprocess.Popen(argv, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+        p = process_runner().popen(argv, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                              start_new_session=True)
     WATCHED_GROUPS.add(p.pid)
     try:

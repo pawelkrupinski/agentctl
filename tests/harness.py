@@ -10,13 +10,12 @@ No test depends on the machine it runs on (docs/simplification-2026-10.md, Agent
   system config.
 - A GLOBAL PER-TEST TIMEOUT ($AGENTCTL_TEST_TIMEOUT, default 60 s): SIGALRM raises TestTimeout inside the test, so a
   hang (RemotePickupTest once spun for 50 min) fails fast with its traceback, under any runner.
-- THE CLOCK IS PASSED IN (lib/agentctl/clock.py): a test hands agentctl a tests/fake_clock.py FakeClock (or a store on
-  a fake clock), never patches a time module; agentctl's modules hold the stdlib's own `time`. A test faking
-  subprocess does it through agentctl's own module proxy (`A.subprocess.run = ...`), never the stdlib module, so no
-  real subprocess ever runs under a fake (82fdc89), until the process runner is passed in too. Every test starts and
-  ends with a fresh proxy in every agentctl module (a forgotten restore cannot leak into the next test), and a test
-  that leaves the stdlib's time or subprocess patched fails. agentctl's process-wide flags
-  (_IN_PROCESSOR, the token cache) are reset per test too: a leaked processor flag failed test_token at random.
+- THE CLOCK AND THE PROCESS RUNNER ARE PASSED IN (lib/agentctl/clock.py, procrunner.py): a test hands agentctl a
+  tests/fake_clock.py FakeClock (or a store on a fake clock) and wires a tests/fake_runner.py FakeRunner, never patches
+  the time or subprocess module (a faked stdlib sleep once reached subprocess's own wait: 82fdc89). Every test starts
+  and ends with the real runner wired (a forgotten restore cannot leak into the next test), and a test that leaves the
+  stdlib's time or subprocess patched fails. agentctl's process-wide flags (_IN_PROCESSOR, the token cache) are reset
+  per test too: a leaked processor flag failed test_token at random.
 - ONE ENVIRONMENT: every test ends with os.environ as it found it, and a test that changed a token variable
   ($GH_TOKEN, $AGENTCTL_STORE_TOKEN, any *_TOKEN) fails, naming it."""
 import os, shutil, signal, subprocess, sys, tempfile, threading, time, types, unittest
@@ -76,19 +75,6 @@ _hermetic_environment()
 
 # --- the stdlib rule -------------------------------------------------------------------------------------------------
 
-class ModuleProxy(types.ModuleType):
-    """A module's attributes, except what a test assigns on the proxy: `A.subprocess.run = fake` fakes agentctl's
-    run alone, while the stdlib's (the harness's, git's helpers in the tests) keeps the real one."""
-
-    def __init__(self, real):
-        super().__init__(real.__name__)
-        object.__setattr__(self, "_real", real)
-
-    def __getattr__(self, name):
-        return getattr(object.__getattribute__(self, "_real"), name)
-
-
-_PROXIED = {"subprocess": subprocess}
 _GUARDED = {"time": time, "subprocess": subprocess}  # a test leaving one of these patched fails
 _STDLIB = {(m, n): getattr(mod, n) for m, mod in _GUARDED.items()
            for n in ("sleep", "time", "monotonic", "run", "Popen", "check_output", "call", "check_call")
@@ -97,9 +83,8 @@ _AGENTCTL_MODULES = []  # registered by test_agentctl: the loaded agentctl (and,
 
 
 def register(module):
-    """agentctl's module(s): each gets its own subprocess proxy now and a fresh one before every test."""
+    """agentctl's module(s): what the harness resets before and after every test."""
     _AGENTCTL_MODULES.append(module)
-    _fresh_proxies()
 
 
 def _agentctl_modules():
@@ -107,17 +92,6 @@ def _agentctl_modules():
     mods += [m for n, m in list(sys.modules.items())
              if (n == "agentctl" or n.startswith("agentctl.")) and m is not None and m not in mods]
     return mods
-
-
-def _fresh_proxies():
-    """ONE proxy per stdlib module for all of agentctl's modules: `A.subprocess.run = fake` fakes the run of the
-    tests' view (tests/agentctl_view.py) and of every module (lib/agentctl MODULES) alike."""
-    proxies = {name: ModuleProxy(real) for name, real in _PROXIED.items()}
-    for mod in _agentctl_modules():
-        for name, real in _PROXIED.items():
-            cur = mod.__dict__.get(name)
-            if cur is real or isinstance(cur, ModuleProxy):
-                mod.__dict__[name] = proxies[name]
 
 
 def _stdlib_patched():
@@ -132,8 +106,8 @@ def _stdlib_patched():
 
 def _reset_process_state():
     """agentctl's process-wide state a test may leave set (a processor run marks the process as the processor; a
-    token read caches the token; the registered caches): every test starts as a fresh, non-processor process with no
-    cached token and empty caches."""
+    token read caches the token; the registered caches; a wired FakeRunner): every test starts as a fresh,
+    non-processor process with no cached token, empty caches and the real process runner."""
     for mod in _agentctl_modules():
         for name in ("_IN_PROCESSOR", "_NO_VAULT"):
             flag = mod.__dict__.get(name)
@@ -146,6 +120,10 @@ def _reset_process_state():
         # met test_caches' deliberate `_gate_lists["leak"] = 1` when both ran in one worker (agentctl CI #44108162628)
         for cache in mod.__dict__.get("PROCESS_CACHES") or []:
             cache.clear()
+        # the process runner (procrunner.wire_runner): the real one, whatever FakeRunner a test wired
+        runner, real = mod.__dict__.get("_runner"), mod.__dict__.get("ProcessRunner")
+        if isinstance(runner, list) and real is not None and mod.__name__ == "agentctl.procrunner":
+            runner[:] = [real()]
 
 
 # --- the per-test timeout -------------------------------------------------------------------------------------------
@@ -195,7 +173,6 @@ def _run(self, result=None):
     main = threading.current_thread() is threading.main_thread()
     env_before = dict(os.environ)
     patches_before = [(m, _patchable(m)) for m in _agentctl_modules()]
-    _fresh_proxies()
     _reset_process_state()
     if main:
         prev = signal.signal(signal.SIGALRM, _alarm)
@@ -206,7 +183,7 @@ def _run(self, result=None):
         if main:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, prev)
-    _fresh_proxies()  # a fake the test did not restore ends with it
+    _reset_process_state()  # a fake runner the test did not restore ends with it
     leaked = _restore_environment(env_before)  # every test ends with the environment it started with
     if leaked and result is not None:
         try:
@@ -225,7 +202,7 @@ def _run(self, result=None):
     if bad and result is not None:
         try:
             raise AssertionError(f"the test left the stdlib's {', '.join(bad)} faked: hand agentctl a "
-                                 f"FakeClock (tests/fake_clock.py) and fake its subprocess with A.subprocess.*, never "
+                                 f"FakeClock (tests/fake_clock.py) and wire a FakeRunner (tests/fake_runner.py), never "
                                  f"the stdlib's -- a real subprocess would wait under the fake")
         except AssertionError:
             result.addFailure(self, sys.exc_info())

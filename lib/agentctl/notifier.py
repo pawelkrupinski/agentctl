@@ -6,6 +6,7 @@ import re
 import shlex
 import subprocess
 import sys
+from agentctl.procrunner import process_runner
 from agentctl.core import HOME, env_num
 
 
@@ -87,7 +88,7 @@ def _run_said(e):
 def _channel(ch, argv, fix):
     """Runs one channel: None when it got through, else (channel, what it said, the owner's fix)."""
     try:
-        r = subprocess.run(argv, capture_output=True, timeout=env_num("AGENTCTL_NOTIFY_TIMEOUT", NOTIFY_TIMEOUT))
+        r = process_runner().run(argv, capture_output=True, timeout=env_num("AGENTCTL_NOTIFY_TIMEOUT", NOTIFY_TIMEOUT))
     except subprocess.TimeoutExpired as e:
         return ch, _run_said(e), NOTIFY_FIX_TIMEOUT.format(ch=ch)
     except (OSError, subprocess.SubprocessError) as e:

@@ -5,6 +5,7 @@ import os, subprocess, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_runner import FakeRunner  # noqa: E402
 import harness  # noqa: E402
 
 
@@ -75,13 +76,14 @@ class TimeoutAndClockTest(unittest.TestCase):
         self.assertEqual(len(res.failures), 1)
         self.assertIn("time.sleep", res.failures[0][1])
 
-    def test_faking_agentctls_subprocess_never_reaches_the_stdlibs_and_ends_with_the_test(self):
+    def test_a_fake_runner_never_reaches_the_stdlibs_and_ends_with_the_test(self):
         def body(self):
-            A.subprocess.run = None
+            A.wire_runner(FakeRunner(run=lambda argv, **kw: A.subprocess.CompletedProcess(argv, 0, "faked", "")))
+            self.assertEqual(A.run_cmd(["false"]).stdout, "faked")  # agentctl's runs go through it
             subprocess.run(["true"], timeout=40)  # the stdlib's own run is untouched (its timeout bounds a broken run)
         res = self.outcome(body)
         self.assertEqual((res.failures, res.errors), ([], []))
-        self.assertIs(A.subprocess.run, subprocess.run)  # a forgotten restore never reaches the next test
+        self.assertIs(type(A.process_runner()), A.ProcessRunner)  # a forgotten restore never reaches the next test
 
     def test_agentctls_time_is_the_stdlibs_a_test_hands_it_a_clock(self):
         """THE CLOCK IS PASSED IN: no proxy stands between agentctl and the time module any more, so a test cannot fake

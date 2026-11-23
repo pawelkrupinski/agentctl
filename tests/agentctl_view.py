@@ -7,10 +7,11 @@ and each one importing it -- so a fake reaches the code under test wherever it r
 drops it from them all. Each module's names are copied onto the package once, when the view loads (a later module's
 value of a name winning: they are the same object but for the MACHINES registry, extended in place, and equal aliases).
 
-The clock is passed in from the composition root (lib/agentctl/clock.py: a test hands a tests/fake_clock.py FakeClock
-to main, land, the checkers, the ticks, the watch and the processor's loop, or a store on a fake clock). Until the
-process runner and the store are passed in too, this view is how a test fakes the rest (`A.subprocess.run = ...`,
-tests/harness.py's proxy; `A.gh_json = ...`); it is the tests' only, never imported by agentctl itself.
+The clock and the process runner are passed in from the composition root (lib/agentctl/clock.py: a test hands a
+tests/fake_clock.py FakeClock to main, land, the checkers, the ticks, the watch and the processor's loop, or a store on
+a fake clock; procrunner.py: a test wires a tests/fake_runner.py FakeRunner, or hands one to main). Until the store and
+the forge's collaborators are passed in too, this view is how a test fakes the rest (`A.gh_json = ...`); it is the
+tests' only, never imported by agentctl itself.
 
   from agentctl_view import load; A = load(<path of an agentctl entry>)     (a child process's way in, too)
 """

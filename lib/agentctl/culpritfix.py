@@ -4,6 +4,7 @@
 import os
 import subprocess
 import sys
+from agentctl.procrunner import process_runner
 from agentctl.core import HOME, NO_SIGN, git, reds_dir, remote
 from agentctl.timefmt import ts
 from agentctl.selfcode import TOOL_PATH
@@ -185,7 +186,7 @@ def lander_fallback(store, o_r, repo, off, took, u, b, why):
 def lander_ci_why(rid, limit=25):
     """The failing step and its log lines, as `agentctl ci-why <run id>` says them (bounded; '' when it cannot)."""
     try:
-        r = subprocess.run([sys.executable, TOOL_PATH, "ci-why", str(rid)], capture_output=True, text=True, timeout=90,
+        r = process_runner().run([sys.executable, TOOL_PATH, "ci-why", str(rid)], capture_output=True, text=True, timeout=90,
                            stdin=subprocess.DEVNULL, env={**os.environ, "AGENTCTL_DETACHED": "1"})
         return "\n".join((r.stdout or "").strip().splitlines()[-limit:])
     except (OSError, subprocess.TimeoutExpired):

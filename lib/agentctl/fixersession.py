@@ -7,6 +7,7 @@ import re
 import shlex
 import subprocess
 import time
+from agentctl.procrunner import process_runner
 from agentctl.core import HOME, SHORT, _tokens, env_num, git, pid_alive, state_root
 from agentctl.statefile import mtime, read_record, write_json
 from agentctl.repos import red_repo_clone, red_repos
@@ -124,7 +125,7 @@ def trust_asks():
 def bg_start(argv, cwd, env):
     """(id, None) once `claude --bg` backgrounded the session, else (None, why)."""
     try:
-        r = subprocess.run(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
+        r = process_runner().run(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.TimeoutExpired) as e:
         return None, f"failed ({e})"
     m = BG_STARTED.search(r.stdout + r.stderr)
@@ -144,7 +145,7 @@ def claude_cwd():
 def bg_rows(cli):
     """The rows of `claude agents --json --all`, or None when they cannot be read."""
     try:
-        r = subprocess.run([cli, "agents", "--json", "--all"], capture_output=True, text=True, timeout=60,
+        r = process_runner().run([cli, "agents", "--json", "--all"], capture_output=True, text=True, timeout=60,
                            stdin=subprocess.DEVNULL, cwd=claude_cwd())
         rows = json.loads(r.stdout) if r.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired, ValueError):
@@ -306,7 +307,7 @@ def store_reauth():
 
 def bg_stop(cli, bid):
     try:
-        subprocess.run([cli, "stop", bid], capture_output=True, timeout=60, stdin=subprocess.DEVNULL, cwd=claude_cwd())
+        process_runner().run([cli, "stop", bid], capture_output=True, timeout=60, stdin=subprocess.DEVNULL, cwd=claude_cwd())
     except (OSError, subprocess.TimeoutExpired):
         pass
 

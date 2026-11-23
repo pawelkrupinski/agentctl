@@ -1,5 +1,5 @@
 # agentctl, part `core`: the help texts, imports, constants and helpers every part uses.
-# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's only.
+# A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and procrunner's only.
 
 WAIT_RUN_HELP = """Block until GitHub Actions runs finish; print only the verdicts.
 
@@ -52,6 +52,7 @@ An agentctl fixer holding its credentials (AGENTCTL_RED_FIXER, the store token) 
 agentctl never runs `secrets unlock` (Touch ID is the user's). Output never contains a token: tools read it at use."""
 import argparse, contextlib, io, datetime as dt, fcntl, fnmatch, glob, itertools, json, os, re, shlex, signal, stat, subprocess, sys, threading, time, traceback, urllib.error, urllib.parse, urllib.request
 from typing import Any, Callable, Sequence, TypeVar  # the types ratchet (quality/typecheck.py): typed records read as dict[str, Any] until typed
+from agentctl.procrunner import process_runner
 
 # THE PROCESS-WIDE CACHES, IN ONE REGISTRY (simplification-2026-10-31 item 10): every module-level dict, list or set a
 # part keeps between calls is made with `process_cache(...)`, so the test harness clears them all between tests
@@ -190,7 +191,7 @@ def git(repo: str, *args: str, check: bool = True, input: str | None = None, tim
         env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
         env.setdefault("GIT_SSH_COMMAND", GIT_NET_SSH)
     try:
-        r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, errors="replace", input=input, env=env,
+        r = process_runner().run(["git", "-C", repo, *args], capture_output=True, text=True, errors="replace", input=input, env=env,
                            timeout=timeout)  # every git call is bounded: a stuck lock or network never holds a step
     except subprocess.TimeoutExpired:
         if check:
@@ -206,7 +207,7 @@ def run_cmd(args: Sequence[str], timeout: float = 60, text: bool = True, **kw: A
     captured, stdin closed, and BOUNDED -- a hung command reads as exit 124 with empty output, never a hung caller."""
     kw.setdefault("stdin", None if "input" in kw else subprocess.DEVNULL)
     try:
-        return subprocess.run(args, capture_output=True, text=text, timeout=timeout, **kw)
+        return process_runner().run(args, capture_output=True, text=text, timeout=timeout, **kw)
     except subprocess.TimeoutExpired:
         empty = "" if text else b""
         return subprocess.CompletedProcess(args, 124, empty, empty or f"timed out after {timeout} s")
@@ -214,7 +215,7 @@ def run_cmd(args: Sequence[str], timeout: float = 60, text: bool = True, **kw: A
 
 def git_ok(repo: str, *args: str) -> bool:
     try:
-        return subprocess.run(["git", "-C", repo, *args], capture_output=True, timeout=120).returncode == 0
+        return process_runner().run(["git", "-C", repo, *args], capture_output=True, timeout=120).returncode == 0
     except subprocess.TimeoutExpired:
         return False
 
@@ -356,7 +357,7 @@ def spawn_detached(argv: list[str], **kw: Any) -> "subprocess.Popen[Any]":
     AGENTCTL_DETACHED, so it never runs `secrets` (interactive_foreground) -- its token comes in its environment or from
     the processor's socket."""
     kw["env"] = {**(kw.get("env") if kw.get("env") is not None else os.environ), "AGENTCTL_DETACHED": "1"}
-    p = subprocess.Popen(argv, **kw)
+    p = process_runner().popen(argv, **kw)
     _DETACHED.append(p)
     return p
 
@@ -365,7 +366,7 @@ def zombie_children(pid=None):
     """The pids of this process's children that are zombies (ps; [] when it cannot tell)."""
     me = pid or os.getpid()
     try:
-        out = subprocess.run(["ps", "-ax", "-o", "pid=,ppid=,stat="], capture_output=True, text=True, timeout=10).stdout
+        out = process_runner().run(["ps", "-ax", "-o", "pid=,ppid=,stat="], capture_output=True, text=True, timeout=10).stdout
     except (OSError, subprocess.SubprocessError):
         return []
     zs = []

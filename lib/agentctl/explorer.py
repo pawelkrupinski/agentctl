@@ -1,8 +1,8 @@
 
 import os
-import subprocess
 import sys
 import time
+from agentctl.procrunner import process_runner
 from agentctl.core import NO_SIGN, err, git, reds_dir, remote
 from agentctl.store import open_store
 from agentctl.forge import forge_release_asset
@@ -73,7 +73,7 @@ def explorer_file(o_r, repo, rows, now_):
         for r in rows:
             f.write("\t".join(r.get(c, "") for c in EXPLORER_COLS) + "\n")
     try:
-        p = subprocess.run([sys.executable, "scripts/ci/drift_explorer.py", "file", "--asset", asset], cwd=wt,
+        p = process_runner().run([sys.executable, "scripts/ci/drift_explorer.py", "file", "--asset", asset], cwd=wt,
                            capture_output=True, text=True, timeout=300)
         if p.returncode != 0 or not p.stdout.strip():
             if p.returncode != 0:

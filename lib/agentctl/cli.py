@@ -55,6 +55,7 @@ from agentctl.batch import probe_batch_progress
 from agentctl.queueenter import cmd_land_precheck
 from agentctl.slots import cmd_land
 from agentctl.clock import Clock
+from agentctl.procrunner import ProcessRunner, wire_runner
 from agentctl.cliparser import parser
 from agentctl.processor import cmd_tick, cmd_waiting
 
@@ -76,9 +77,11 @@ wire_recover_actions({"clear_hold": recover_clear_hold, "tunnel_reset": recover_
 
 
 # ---------------------------------------------------------------- main
-def main(argv: list[str] | None = None, clock: Clock | None = None) -> Any:
-    """The entry: wires the process's collaborators (the clock: a test passes its own) and runs the command."""
+def main(argv: list[str] | None = None, clock: Clock | None = None, runner: ProcessRunner | None = None) -> Any:
+    """The entry: wires the process's collaborators (the clock and the process runner: a test passes its own) and runs
+    the command."""
     clock = clock or Clock()
+    wire_runner(runner or ProcessRunner())
     if (sys.argv[1:] if argv is None else argv) == ["--selftest"]:
         return selftest()
     a = parser().parse_args(argv)

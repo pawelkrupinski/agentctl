@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+from agentctl.procrunner import process_runner
 from agentctl.core import HOME, MAX_FOREIGN, ZERO, env_num, err, git, git_ok, remote, scratch
 from agentctl.timefmt import ts
 from agentctl.forge import GH_CLI
@@ -37,7 +38,7 @@ def default_ns():
 def vault_state(ns):
     """'unlocked', 'locked' or 'unknown: <why>' -- `secrets status` only; never unlock, never read a value."""
     try:
-        r = subprocess.run([secrets_bin() or "secrets", "status", ns], capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
+        r = process_runner().run([secrets_bin() or "secrets", "status", ns], capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
     except FileNotFoundError:
         return "unknown: no `secrets` command"
     except subprocess.TimeoutExpired:
@@ -103,7 +104,7 @@ def cmd_env(a):
     sbt = which("sbt")
     (report if sbt else problems).append(f"sbt: {sbt or 'NOT FOUND (install sdkman sbt)'}")
     java = os.path.join(env["JAVA_HOME"], "bin", "java") if env.get("JAVA_HOME") else which("java")
-    jv = subprocess.run([java, "-version"], capture_output=True, text=True, timeout=30) if java else None
+    jv = process_runner().run([java, "-version"], capture_output=True, text=True, timeout=30) if java else None
     if jv and jv.returncode == 0:
         report.append(f"java: {(jv.stderr or jv.stdout).splitlines()[0]}")
     else:

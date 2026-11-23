@@ -6,6 +6,7 @@ import re
 import subprocess
 import urllib.error
 import urllib.request
+from agentctl.procrunner import process_runner
 from agentctl.core import state_root
 from agentctl.remotestore import default_store_url, store_url
 
@@ -50,7 +51,7 @@ def tunnel_probe():
 def default_route():
     """(interface, gateway) of the default route, or None (offline / route failed)."""
     try:
-        out = subprocess.run(["route", "-n", "get", "default"], capture_output=True, text=True, timeout=5).stdout
+        out = process_runner().run(["route", "-n", "get", "default"], capture_output=True, text=True, timeout=5).stdout
     except (OSError, subprocess.SubprocessError):
         return None
     f = dict(re.findall(r"^\s*(interface|gateway): (\S+)", out, re.M))

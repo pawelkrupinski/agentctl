@@ -4,6 +4,7 @@
 import os
 import subprocess
 from typing import Any
+from agentctl.procrunner import process_runner
 from agentctl.core import git, process_cache
 from agentctl.repos import batching, precheck_hook
 from agentctl.buildview import BUILD_VIEW_PATHS, build_view_change, read_build
@@ -241,7 +242,7 @@ def own_diff_changed(tree, base, tip, moved, new_head):
         if diff.returncode != 0:
             return None
         try:
-            r = subprocess.run(["git", "patch-id", "--stable"], cwd=tree, input=diff.stdout, capture_output=True,
+            r = process_runner().run(["git", "patch-id", "--stable"], cwd=tree, input=diff.stdout, capture_output=True,
                                text=True, timeout=60)
         except (OSError, subprocess.TimeoutExpired):
             return None

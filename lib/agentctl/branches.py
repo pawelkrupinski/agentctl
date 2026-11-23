@@ -5,10 +5,10 @@ import datetime as dt
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 import urllib.parse
+from agentctl.procrunner import process_runner
 from agentctl.core import dispatches_dir, env_num, git_ok, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -336,7 +336,7 @@ def cmd_dispatch(a):
     args = ["workflow", "run", a.workflow, "--ref", a.ref]
     for k, v in inputs.items():
         args += ["-f", f"{k}={v}"]
-    r = subprocess.run(forge_argv(o_r, *args), capture_output=True, text=True, env=forge_env(o_r), timeout=300)
+    r = process_runner().run(forge_argv(o_r, *args), capture_output=True, text=True, env=forge_env(o_r), timeout=300)
     sys.stdout.write(r.stdout)
     sys.stderr.write(r.stderr)
     if r.returncode != 0:

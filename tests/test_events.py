@@ -6,6 +6,7 @@ import ast, os, stat, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, TOOL, code_source  # noqa: E402
+from fake_runner import FakeRunner  # noqa: E402
 
 
 class EventsTest(unittest.TestCase):
@@ -286,16 +287,13 @@ class NotifierDeliveryTest(unittest.TestCase):
     def test_each_channel_gets_time_for_an_overloaded_cold_start(self):
         """10 s was the 2026-11-22 osascript's whole cold start under load (XProtect, trustd, then its TCC request)."""
         self.darwin_without_terminal_notifier("exit 0")
-        seen, real = [], A.subprocess.run
+        seen, real = [], A.ProcessRunner().run
 
         def run(argv, **kw):
             seen.append(kw.get("timeout"))
             return real(argv, **kw)
-        A.subprocess.run = run
-        try:
-            self.assertIs(A.notify("t", "m"), True)
-        finally:
-            A.subprocess.run = real
+        A.wire_runner(FakeRunner(run=run))
+        self.assertIs(A.notify("t", "m"), True)
         self.assertEqual(seen, [30])
         self.assertEqual((A.notify_cause(), A.notify_fix()), ("", ""))
 

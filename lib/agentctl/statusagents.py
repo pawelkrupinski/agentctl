@@ -8,6 +8,7 @@ import re
 import subprocess
 import threading
 import time
+from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, process_cache, reds_dir
 from agentctl.timefmt import iso_epoch
 from agentctl.statefile import mtime, tail_bytes
@@ -162,7 +163,7 @@ def status_head(wt):
 
 
 def status_git(wt, *args, timeout=None):
-    r = subprocess.run(["git", "-C", wt] + list(args), capture_output=True, text=True,
+    r = process_runner().run(["git", "-C", wt] + list(args), capture_output=True, text=True,
                        timeout=timeout or STATUS_GIT_TIMEOUT, stdin=subprocess.DEVNULL,
                        env=dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0"))
     return r.stdout if r.returncode == 0 else ""

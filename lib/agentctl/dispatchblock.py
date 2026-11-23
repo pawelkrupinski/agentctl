@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import time
+from agentctl.procrunner import process_runner
 from agentctl.core import HOME, process_cache, reds_dir
 from agentctl.statefile import read_record
 from agentctl.procs import lsof_cwds, ps
@@ -59,7 +60,7 @@ def dispatch_blocker():
     if not cli:
         return "no `claude` CLI found ($AGENTCTL_CLAUDE, PATH, ~/.local/bin/claude)"
     try:
-        r = subprocess.run([cli, "--help"], capture_output=True, text=True, timeout=60)
+        r = process_runner().run([cli, "--help"], capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
         return f"`{cli} --help` failed ({e})"
     if r.returncode != 0 or "--permission-mode" not in r.stdout or "--bg" not in r.stdout:

@@ -6,6 +6,7 @@ import re
 import subprocess
 import time
 from typing import Any
+from agentctl.procrunner import process_runner
 from agentctl.core import err, git, git_ok, process_cache, reds_dir, remote
 from agentctl.statefile import read_record, write_json
 from agentctl.forge import gh_json
@@ -143,7 +144,7 @@ def fix_show_many(repo: str, sha: str, paths: list[str]) -> dict[str, str]:
     if not paths:
         return {}
     try:
-        r = subprocess.run(["git", "-C", repo, "cat-file", "--batch"], input="".join(f"{sha}:{p}\n" for p in paths)
+        r = process_runner().run(["git", "-C", repo, "cat-file", "--batch"], input="".join(f"{sha}:{p}\n" for p in paths)
                            .encode(), capture_output=True, timeout=120)
     except (OSError, subprocess.TimeoutExpired):
         return {}

@@ -6,6 +6,7 @@ import re
 import subprocess
 import time
 from typing import Any
+from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, fmt_age, git, git_ok, host_role
 from agentctl.timefmt import iso_at
 from agentctl.statefile import read_record
@@ -227,7 +228,7 @@ def range_paths(cwd, a, b, deleted=False):
 def hook_query(hook, tree, flag, paths):
     """The hook's dry-run answer for paths on stdin (`--plan`, `--compile-plan`), as words; None when unreadable."""
     try:
-        r = subprocess.run([hook, flag], cwd=tree, input="".join(f"{p}\n" for p in paths), capture_output=True,
+        r = process_runner().run([hook, flag], cwd=tree, input="".join(f"{p}\n" for p in paths), capture_output=True,
                            text=True, timeout=120, env=tool_env())
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -304,7 +305,7 @@ def share_selection(tree):
     env = {**tool_env(), "GITHUB_REF_NAME": "check/selection"}
     for share in SHARES:
         try:
-            r = subprocess.run([script, "checks", share], cwd=tree, capture_output=True, text=True, timeout=120,
+            r = process_runner().run([script, "checks", share], cwd=tree, capture_output=True, text=True, timeout=120,
                                env=env, stdin=subprocess.DEVNULL)
         except (OSError, subprocess.TimeoutExpired):
             return False

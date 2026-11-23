@@ -7,6 +7,7 @@ import re
 import subprocess
 import time
 from typing import Any
+from agentctl.procrunner import process_runner
 from agentctl.core import HOME, SHORT, env_num, fmt_age, remote, spawn_detached
 from agentctl.timefmt import iso_epoch, parse_time, ts
 from agentctl.statefile import read_record
@@ -84,7 +85,7 @@ def sleep_intervals():
         if path:
             text = open(path).read()
         else:
-            text = subprocess.run(["pmset", "-g", "log"], capture_output=True, text=True, timeout=30).stdout
+            text = process_runner().run(["pmset", "-g", "log"], capture_output=True, text=True, timeout=30).stdout
     except (OSError, subprocess.SubprocessError):
         text = ""
     out, start = [], None

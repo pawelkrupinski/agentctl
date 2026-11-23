@@ -7,6 +7,7 @@ import re
 import shlex
 import subprocess
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from agentctl.procrunner import process_runner
 from agentctl.core import env_num, git, host_role, process_cache, slug
 from agentctl.repos import red_repo_conf
 from agentctl.land import tool_env
@@ -201,7 +202,7 @@ def merge_file(ours: str, base: str, theirs: str, *flags: str) -> "subprocess.Co
             with open(q, "w") as fh:
                 fh.write(x)
             paths.append(q)
-        return subprocess.run(["git", "merge-file", "-p", *flags, *paths], capture_output=True, text=True)
+        return process_runner().run(["git", "merge-file", "-p", *flags, *paths], capture_output=True, text=True)
 
 
 BLOCK_HELD = "agentctl: the generated block stands here\n"  # what stands in for a block while the lines around it are merged
@@ -265,7 +266,7 @@ def run_regen(wt, g):
     limit = g.get("timeout") or env_num("AGENTCTL_GENERATED_REGEN_TIMEOUT", GENERATED_REGEN_TIMEOUT)
     cmd = " ".join(shlex.quote(x) for x in g["regen"])
     try:
-        r = subprocess.run(g["regen"], cwd=wt, capture_output=True, text=True, timeout=limit, env=tool_env(),
+        r = process_runner().run(g["regen"], cwd=wt, capture_output=True, text=True, timeout=limit, env=tool_env(),
                            stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return f"`{cmd}` ran past {limit:.0f} s"

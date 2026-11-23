@@ -4,6 +4,7 @@
 import os
 import re
 import subprocess
+from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, git, remote, state_root
 from agentctl.store import open_store
 from agentctl.repos import red_repo_conf, red_repo_of
@@ -131,7 +132,7 @@ def fix_replay_once(repo, sha, cmd, side):
         err(f"fix replay: `{cmd}` at {side} {sha[:10]} (log: {log})")
         with open(log, "w") as f:
             try:
-                rc = subprocess.run(["bash", "-c", cmd], cwd=wt, stdin=subprocess.DEVNULL, stdout=f,
+                rc = process_runner().run(["bash", "-c", cmd], cwd=wt, stdin=subprocess.DEVNULL, stdout=f,
                                     stderr=subprocess.STDOUT, env=tool_env(),
                                     timeout=env_num("AGENTCTL_FIX_REPLAY_TIMEOUT", FIX_REPLAY_TIMEOUT)).returncode
             except subprocess.TimeoutExpired:

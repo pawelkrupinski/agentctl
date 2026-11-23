@@ -5,6 +5,7 @@ import json, os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_runner import FakeRunner  # noqa: E402
 from test_wait_run import FakeForge  # noqa: E402
 
 SHA = "e" * 40
@@ -120,15 +121,11 @@ class Accuracy(FakeForge):
     def test_ghs_escape_sequence_refusal_is_never_a_log(self):
         """2026-11-19: gh's 99-byte refusal ("the response contains terminal escape sequences ...") came back as the
         log. A body that is that refusal is a failed read."""
-        saved = A.subprocess.run
-        A.subprocess.run = lambda *a, **k: A.subprocess.CompletedProcess(a, 0, "the response contains terminal escape "
-                                                                         "sequences; pass --allow-escape-sequences to "
-                                                                         "output it anyway\n", "")
-        try:
-            with self.assertRaises(RuntimeError):
-                A.fetch_job_log_api(O_R, 1)
-        finally:
-            A.subprocess.run = saved
+        A.wire_runner(FakeRunner(run=lambda *a, **k: A.subprocess.CompletedProcess(
+            a, 0, "the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway\n",
+            "")))
+        with self.assertRaises(RuntimeError):
+            A.fetch_job_log_api(O_R, 1)
 
     # -- the attempt: a rerun's jobs replace the failed attempt's
     def test_the_failed_attempt_is_read_not_the_green_rerun(self):

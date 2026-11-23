@@ -4,11 +4,11 @@
 import json
 import os
 import re
-import subprocess
 import threading
 import time
 import urllib.parse
 from typing import Any
+from agentctl.procrunner import process_runner
 from agentctl.core import err, on_ci_runner, process_cache, reds_dir, state_root
 from agentctl.statefile import read_json_file, write_json
 from agentctl.live import live_lookup
@@ -242,5 +242,5 @@ def status_page_url():
 def status_page_open():
     url = status_page_url()
     print(url)
-    subprocess.run([os.environ.get("AGENTCTL_OPEN", "open"), url], capture_output=True, timeout=30)
+    process_runner().run([os.environ.get("AGENTCTL_OPEN", "open"), url], capture_output=True, timeout=30)
     return 0

@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import time
+from agentctl.procrunner import process_runner
 from agentctl.core import err, host_role, run_cmd
 from agentctl.statefile import read_json_file, write_json_file
 from agentctl.store import StoreUnavailable
@@ -58,7 +59,7 @@ UPLINK_LOSS_CLEAR = 0.0
 def uplink_loss():
     """Packet loss (0..1) from the laptop to 1.1.1.1 over 10 pings; 1.0 when ping fails outright."""
     try:
-        out = subprocess.run(["ping", "-c", "10", "-i", "0.2", "-t", "5", "1.1.1.1"], capture_output=True, text=True,
+        out = process_runner().run(["ping", "-c", "10", "-i", "0.2", "-t", "5", "1.1.1.1"], capture_output=True, text=True,
                              timeout=15).stdout
         m = re.search(r"([\d.]+)% packet loss", out)
         return float(m.group(1)) / 100 if m else 1.0

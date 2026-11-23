@@ -4,6 +4,7 @@
 import os
 import subprocess
 import time
+from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, fmt_age, git, git_ok, pct, reds_dir, remote, slug
 from agentctl.timefmt import parse_time
 from agentctl.statefile import read_record
@@ -271,7 +272,7 @@ def convergence_relevant(repo, base, head, paths_file, matcher):
             with open(files[name], "w") as f:
                 f.write(r.stdout)
         try:
-            r = subprocess.run(["bash", files["matcher"], files["paths"]], input=d.stdout, capture_output=True, text=True,
+            r = process_runner().run(["bash", files["matcher"], files["paths"]], input=d.stdout, capture_output=True, text=True,
                                timeout=30)
         except (OSError, subprocess.SubprocessError):
             return None

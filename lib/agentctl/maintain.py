@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import time
+from agentctl.procrunner import process_runner
 from agentctl.core import REPOS, env_num, fmt_age, state_root
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -43,7 +44,7 @@ def ios_simulator_sweep(root=None, dry_run=False):
     if not shutil_which("xcrun"):
         return print("  skipped (no xcrun)")
     try:
-        r = subprocess.run([script, "sweep"] + (["--dry-run"] if dry_run else []), cwd=root, capture_output=True,
+        r = process_runner().run([script, "sweep"] + (["--dry-run"] if dry_run else []), cwd=root, capture_output=True,
                            text=True, timeout=IOS_SWEEP_TIMEOUT)
     except subprocess.TimeoutExpired:
         return print(f"  timed out after {IOS_SWEEP_TIMEOUT} s")

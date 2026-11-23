@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 import time
+from agentctl.procrunner import process_runner
 from agentctl.core import (
     GIT_NET_SSH, HOME, PROTECTED_BRANCHES, REPOS, cherry_landed, env_num, err, git, git_ok, remote, run_cmd,
     scratch, slug, state_root)
@@ -354,7 +355,7 @@ def bounded_fetch(repo, *extra, refs=()):
     30 s is given up (http.lowSpeed*), so a lossy uplink (2026-11-22 03:28Z, 40% loss) never waits out the whole bound."""
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_SSH_COMMAND=GIT_NET_SSH)
     try:
-        r = subprocess.run(["git", "-C", repo, "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30", "fetch", "--quiet", *extra, remote(), *refs], capture_output=True, text=True, env=env,
+        r = process_runner().run(["git", "-C", repo, "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30", "fetch", "--quiet", *extra, remote(), *refs], capture_output=True, text=True, env=env,
                            timeout=env_num("AGENTCTL_FETCH_TIMEOUT", FETCH_TIMEOUT), stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return f"timed out after {int(env_num('AGENTCTL_FETCH_TIMEOUT', FETCH_TIMEOUT))} s"

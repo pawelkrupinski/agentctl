@@ -4,7 +4,7 @@
 import datetime as dt
 import os
 import re
-import subprocess
+from agentctl.procrunner import process_runner
 from agentctl.core import scratch
 from agentctl.timefmt import iso_epoch
 from agentctl.forge import forge_argv, forge_env, gh_json
@@ -138,7 +138,7 @@ def fetch_job_log_api(o_r, job_id):
     env = forge_env(o_r)
     flag = [ESCAPE_FLAG]
     for attempt in (1, 2, 3):
-        r = subprocess.run(forge_argv(o_r, "api", *flag, f"repos/{o_r}/actions/jobs/{job_id}/logs"), capture_output=True,
+        r = process_runner().run(forge_argv(o_r, "api", *flag, f"repos/{o_r}/actions/jobs/{job_id}/logs"), capture_output=True,
                            text=True, env=env, timeout=300)
         if r.returncode == 0 and not ESCAPE_REFUSAL.match(r.stdout or ""):
             return r.stdout
@@ -181,7 +181,7 @@ def read_log(o_r, *args):
     (convergence #2473, run 3656: the takes-drift rows' flip failures handed to a diagnose-only fixer)."""
     env = forge_env(o_r)
     for attempt in (1, 2):
-        r = subprocess.run(forge_argv(o_r, "run", "view", *args), capture_output=True, text=True, env=env, timeout=300)
+        r = process_runner().run(forge_argv(o_r, "run", "view", *args), capture_output=True, text=True, env=env, timeout=300)
         if r.returncode == 0:
             return r.stdout
     raise RuntimeError((r.stderr.strip().splitlines() or [f"exit {r.returncode}"])[-1][:200])
@@ -291,7 +291,7 @@ def fetch_takes_verdicts(o_r, run_id):
             continue
         d = os.path.join(scratch(), "agentctl-wait", f"art-{run_id}-{name}")
         os.makedirs(d, exist_ok=True)
-        subprocess.run(forge_argv(o_r, "run", "download", str(run_id), "-n", name, "-D", d), capture_output=True, env=env,
+        process_runner().run(forge_argv(o_r, "run", "download", str(run_id), "-n", name, "-D", d), capture_output=True, env=env,
                        timeout=300)
         p = os.path.join(d, "verdict.txt")
         out[name] = open(p, errors="replace").read().strip() if os.path.exists(p) else "(no verdict.txt in the artifact)"

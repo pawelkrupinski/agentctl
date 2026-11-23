@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from typing import Sequence
+from agentctl.procrunner import process_runner
 from agentctl.core import SHORT, env_num, err, git, process_cache, run_cmd, slug, state_root
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -53,11 +54,11 @@ def code_rev(path=TOOL_PATH):
     if re.fullmatch(r"[0-9a-f]{40}", base):
         return base[:12]
     try:
-        r = subprocess.run(["git", "-C", root, "rev-parse", "--short=12", "HEAD"], capture_output=True, text=True,
+        r = process_runner().run(["git", "-C", root, "rev-parse", "--short=12", "HEAD"], capture_output=True, text=True,
                            timeout=10, stdin=subprocess.DEVNULL)
         if r.returncode != 0:
             return ""
-        d = subprocess.run(["git", "-C", root, "status", "--porcelain", "--", os.path.basename(path), "lib/agentctl"],
+        d = process_runner().run(["git", "-C", root, "status", "--porcelain", "--", os.path.basename(path), "lib/agentctl"],
                            capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
         return r.stdout.strip() + ("+dirty" if d.stdout.strip() else "")
     except (OSError, subprocess.TimeoutExpired):
@@ -77,7 +78,7 @@ def start_rev():
 def cancel_run(o_r, rid, why):
     """Cancel a CI run this tool started (a cancel is a no-op on a finished run, on either forge)."""
     try:
-        r = subprocess.run(forge_argv(o_r, "run", "cancel", str(rid)), capture_output=True, text=True,
+        r = process_runner().run(forge_argv(o_r, "run", "cancel", str(rid)), capture_output=True, text=True,
                            env=forge_env(o_r), timeout=120)
         err(f"cancelled {o_r} run {rid} ({why})" if r.returncode == 0 else
             f"could not cancel {o_r} run {rid} ({why}): {r.stderr.strip()[:160]}")
@@ -182,12 +183,12 @@ _smoked = process_cache({})
 def smoke_check(path):
     """(ok, why): the code compiles (the entry and its package's parts) and `--selftest` (import, parser, fixture
     reads) passes, in a process of its own."""
-    r = subprocess.run([sys.executable, "-m", "py_compile"] + [p for _r, p in code_files(path)], capture_output=True,
+    r = process_runner().run([sys.executable, "-m", "py_compile"] + [p for _r, p in code_files(path)], capture_output=True,
                        text=True, timeout=60)
     if r.returncode:
         return False, "py_compile: " + (r.stderr.strip().splitlines() or ["failed"])[-1][:160]
     try:
-        r = subprocess.run([sys.executable, path, "--selftest"], capture_output=True, text=True, timeout=120,
+        r = process_runner().run([sys.executable, path, "--selftest"], capture_output=True, text=True, timeout=120,
                            stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return False, "--selftest timed out"

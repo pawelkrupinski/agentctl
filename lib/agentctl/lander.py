@@ -6,9 +6,9 @@ import glob
 import json
 import os
 import re
-import subprocess
 import time
 from typing import Any
+from agentctl.procrunner import process_runner
 from agentctl.core import HOME, branch_of, env_num, err, git, git_ok, process_cache, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import mtime
@@ -86,7 +86,7 @@ def process_ancestry(stop_pid=None, depth=8):
     for _ in range(depth):
         if pid <= 1 or pid == stop_pid:
             break
-        r = subprocess.run(["ps", "-ww", "-o", "ppid=,args=", "-p", str(pid)], capture_output=True, text=True)
+        r = process_runner().run(["ps", "-ww", "-o", "ppid=,args=", "-p", str(pid)], capture_output=True, text=True)
         parts = r.stdout.strip().split(None, 1)
         if r.returncode != 0 or len(parts) < 2 or not parts[0].isdigit():
             break
@@ -174,11 +174,11 @@ def patch_ids(repo, shas):
     """{commit sha: stable patch-id} of the given commits (a merge or an empty commit has none)."""
     if not shas:
         return {}
-    show = subprocess.run(["git", "-C", repo, "show", "--no-color", "--format=commit %H", "-p"] + list(shas),
+    show = process_runner().run(["git", "-C", repo, "show", "--no-color", "--format=commit %H", "-p"] + list(shas),
                           capture_output=True, text=True, errors="replace")
     if show.returncode != 0:
         return {}
-    r = subprocess.run(["git", "-C", repo, "patch-id", "--stable"], input=show.stdout, capture_output=True, text=True)
+    r = process_runner().run(["git", "-C", repo, "patch-id", "--stable"], input=show.stdout, capture_output=True, text=True)
     out = {}
     for line in r.stdout.splitlines():
         p = line.split()

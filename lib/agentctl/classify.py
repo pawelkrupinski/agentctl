@@ -17,6 +17,7 @@ import subprocess
 import time
 from typing import Any, Callable, Iterable, List, Optional, Sequence, Tuple, TypeVar
 
+from agentctl.procrunner import process_runner
 from agentctl.core import err
 
 
@@ -169,10 +170,10 @@ def net_retry(what: str, call: Callable[[], _NetT], delays: Optional[Sequence[fl
 
 
 def _run_bounded(argv: Sequence[str], kw: Any) -> "subprocess.CompletedProcess[Any]":
-    """subprocess.run(argv, **kw), a run past its `timeout` read as exit 124 ("timed out after N s"), as `timeout`
+    """process_runner().run(argv, **kw), a run past its `timeout` read as exit 124 ("timed out after N s"), as `timeout`
     says it: a hung call is the network's too."""
     try:
-        return subprocess.run(argv, **kw)
+        return process_runner().run(argv, **kw)
     except subprocess.TimeoutExpired as e:
         text = bool(kw.get("text"))
         return subprocess.CompletedProcess(argv, 124, "" if text else b"",
@@ -186,7 +187,7 @@ def _failed_on_the_network(r: "subprocess.CompletedProcess[Any]", kw: Any) -> bo
 def net_run(what: str, argv: Sequence[str], delays: Optional[Sequence[float]] = None,
             sleep: Optional[Callable[[float], Any]] = None, clock: Optional[Callable[[], float]] = None,
             **kw: Any) -> "subprocess.CompletedProcess[Any]":
-    """subprocess.run(argv, **kw) through net_retry: a (text) run that exits non-zero with the network's words in its
+    """process_runner().run(argv, **kw) through net_retry: a (text) run that exits non-zero with the network's words in its
     output, or times out (exit 124), is tried again; the last run's result is returned, for its caller to judge
     (is_transient_network(its output) says it was the network all along). Never raises for the network."""
     last: list["subprocess.CompletedProcess[Any]"] = []

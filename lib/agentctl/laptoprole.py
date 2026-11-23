@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+from agentctl.procrunner import process_runner
 from agentctl.core import process_cache
 from agentctl.timefmt import day_hhmmz
 from agentctl.store import open_store
@@ -40,7 +41,7 @@ def machine_id():
     if "id" not in _laptop_role_seen:
         uid = None
         try:
-            out = subprocess.run(["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"], capture_output=True, text=True,
+            out = process_runner().run(["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"], capture_output=True, text=True,
                                  timeout=10).stdout
             m = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', out)
             uid = m.group(1) if m else None

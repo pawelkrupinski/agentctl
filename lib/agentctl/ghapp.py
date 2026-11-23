@@ -4,11 +4,11 @@
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
+from agentctl.procrunner import process_runner
 from agentctl.core import NoReadAccess, err, process_cache, state_root
 from agentctl.timefmt import parse_time
 from agentctl.statefile import read_record, write_json
@@ -74,7 +74,7 @@ def ghapp_jwt(app_id, key_file, now_=None):
     head = _b64url(json.dumps({"alg": "RS256", "typ": "JWT"}, separators=(",", ":")).encode())
     body = _b64url(json.dumps({"iat": t - 60, "exp": t + 540, "iss": str(app_id)}, separators=(",", ":")).encode())
     signing = f"{head}.{body}".encode()
-    r = subprocess.run(["openssl", "dgst", "-sha256", "-sign", key_file], input=signing, capture_output=True, timeout=30)
+    r = process_runner().run(["openssl", "dgst", "-sha256", "-sign", key_file], input=signing, capture_output=True, timeout=30)
     if r.returncode != 0 or not r.stdout:
         raise RuntimeError(f"github-app: openssl could not sign with {key_file}: "
                            f"{r.stderr.decode(errors='replace').strip()[:200]}")

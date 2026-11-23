@@ -4,6 +4,7 @@
 import os
 import subprocess
 from typing import Any
+from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, git
 from agentctl.timefmt import parse_time, ts
 from agentctl.store import open_store
@@ -76,7 +77,7 @@ def check_tree(repo, i, sha):
         seed = os.path.join(tree, "scripts", "sbt-warm")
         if os.access(seed, os.X_OK):  # a cold tree's first compile seeded from the shared build cache, not from scratch
             try:
-                subprocess.run([seed, "--seed"], cwd=tree, capture_output=True, text=True, timeout=600, env=tool_env())
+                process_runner().run([seed, "--seed"], cwd=tree, capture_output=True, text=True, timeout=600, env=tool_env())
             except subprocess.TimeoutExpired:
                 err(f"sbt-warm --seed in {tree} took over 10 min")
     else:

@@ -10,6 +10,7 @@ import re
 import subprocess
 import threading
 import time
+from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, git, git_ok, pid_alive, process_cache, remote
 from agentctl.statefile import read_record
 from agentctl.repos import server_repo
@@ -87,7 +88,7 @@ def run_clone(cmd, what):
 
     def work():  # subprocess.run (bounded, waited for): the keepalives go on in this thread meanwhile
         try:
-            got["r"] = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=bound,
+            got["r"] = process_runner().run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=bound,
                                       env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
         except (subprocess.TimeoutExpired, OSError) as x:
             got["x"] = x

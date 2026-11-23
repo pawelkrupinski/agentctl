@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import time
+from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, pid_alive, process_cache, run_cmd
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -267,7 +268,7 @@ def gov_evict(why):
             if not os.access(script, os.X_OK):
                 continue
             try:
-                subprocess.run([script, "--stop", "--root"], cwd=root, capture_output=True, text=True, timeout=180)
+                process_runner().run([script, "--stop", "--root"], cwd=root, capture_output=True, text=True, timeout=180)
             except subprocess.TimeoutExpired:
                 gov_log(f"evict {root}: sbt-warm --stop took over 3 min")
             gov_log(f"evicted the idle sbt server of {root} (unused {int(idle // 60)} min) for: {why}")
@@ -404,7 +405,7 @@ def cmd_suite(a):
     piling up. Arguments are run.py's (-j N, --timeout S, PATTERN...)."""
     args = list(a.args or [])
     with gov_ticket("suite", label=f"agentctl suite {os.path.basename(os.getcwd())}"):  # run.py then takes none
-        return subprocess.run([sys.executable, os.path.join("tests", "run.py")] + args,
+        return process_runner().run([sys.executable, os.path.join("tests", "run.py")] + args,
                               env={**os.environ, "AGENTCTL_SUITE_TICKET": "agentctl suite"}).returncode
 
 

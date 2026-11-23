@@ -6,6 +6,7 @@ import datetime as dt
 import os
 import subprocess
 import time
+from agentctl.procrunner import process_runner
 from agentctl.core import (
     MAX_FOREIGN, NO_SIGN, branch_of, cherry_landed, env_num, err, fmt_age, git, git_ok, host_role, process_cache,
     remote, scratch)
@@ -333,7 +334,7 @@ def land_before_queue(repo, head):
     base = git(repo, "rev-parse", f"{remote()}/main").strip()
     branch = git(repo, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip()
     try:
-        r = subprocess.run([tool, base, head], cwd=repo, capture_output=True, text=True, env=tool_env(),
+        r = process_runner().run([tool, base, head], cwd=repo, capture_output=True, text=True, env=tool_env(),
                            timeout=env_num("AGENTCTL_LAND_BEFORE_QUEUE_SECONDS", LAND_BEFORE_QUEUE_SECONDS))
         for line in (r.stdout + r.stderr).strip().splitlines()[-12:]:
             err(f"{LAND_BEFORE_QUEUE}: {line}")

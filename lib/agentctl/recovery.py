@@ -10,6 +10,7 @@ import time
 import urllib.error
 import urllib.request
 from typing import Any
+from agentctl.procrunner import process_runner
 from agentctl.core import HOME, SHORT, _tokens, err, git, remote, run_cmd, spawn_detached
 from agentctl.timefmt import iso_at, ts
 from agentctl.statefile import read_json_file, read_record, write_json_file
@@ -99,7 +100,7 @@ def probe_git_fetch(a):
     """The remote's main can be read over git (what a land's `git fetch` needs)."""
     repo = a.get("repo") or movies_repo_path()
     try:
-        r = subprocess.run(["git", "-C", repo, "ls-remote", "--heads", remote(), "main"], capture_output=True, text=True,
+        r = process_runner().run(["git", "-C", repo, "ls-remote", "--heads", remote(), "main"], capture_output=True, text=True,
                            timeout=60, stdin=subprocess.DEVNULL, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
     except (OSError, subprocess.SubprocessError) as e:
         return False, f"git ls-remote {remote()}: {str(e)[:120]}"

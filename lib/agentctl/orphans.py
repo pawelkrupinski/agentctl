@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import time
+from agentctl.procrunner import process_runner
 from agentctl.core import (
     HOME, branch_of, cherry_landed, env_num, git, git_ok, hashlib_sha1, reds_dir, remote, slug, spawn_detached)
 from agentctl.timefmt import parse_time, ts
@@ -53,8 +54,8 @@ def orphan_key(repo, wt):
     plus = cherry_landed(wt, main, "HEAD")[1] or []  # landed by patch or by content: not the orphan's
     ids = []
     for sha in plus:  # bytes: a commit may carry binary content
-        show = subprocess.run(["git", "-C", wt, "show", sha], capture_output=True, timeout=60).stdout
-        r = subprocess.run(["git", "patch-id", "--stable"], input=show, capture_output=True, timeout=60)
+        show = process_runner().run(["git", "-C", wt, "show", sha], capture_output=True, timeout=60).stdout
+        r = process_runner().run(["git", "patch-id", "--stable"], input=show, capture_output=True, timeout=60)
         ids.append((r.stdout.decode(errors="replace").split() or [sha])[0])
     return plus, hashlib_sha1("\n".join(sorted(ids)))[:16] if ids else None
 

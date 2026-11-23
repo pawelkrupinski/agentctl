@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import time
+from agentctl.procrunner import process_runner
 from agentctl.core import err, git, host_role, remote
 from agentctl.timefmt import ts
 from agentctl.store import open_store
@@ -65,7 +66,7 @@ def sbt_stop(tree):
     script = os.path.join(tree, "scripts", "sbt-warm")
     if os.access(script, os.X_OK):
         try:
-            subprocess.run([script, "--stop"], cwd=tree, capture_output=True, text=True, timeout=180, env=tool_env())
+            process_runner().run([script, "--stop"], cwd=tree, capture_output=True, text=True, timeout=180, env=tool_env())
         except subprocess.TimeoutExpired:
             err(f"sbt-warm --stop in {tree} took over 3 min")
 

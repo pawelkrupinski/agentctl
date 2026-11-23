@@ -8,6 +8,7 @@ import re
 import signal
 import subprocess
 import time
+from agentctl.procrunner import process_runner
 from agentctl.core import HOME, env_num, pid_alive, run_cmd, state_root
 from agentctl.timefmt import ts
 from agentctl.procs import lsof_cwds, tosec
@@ -157,7 +158,7 @@ def thread_dump(pid, cwd):
     os.makedirs(d, exist_ok=True)
     path = os.path.join(d, f"{pid}-{dt.datetime.now().strftime('%Y%m%dT%H%M%S')}.txt")
     try:
-        r = subprocess.run(["jcmd", str(pid), "Thread.print"], capture_output=True, text=True, timeout=60)
+        r = process_runner().run(["jcmd", str(pid), "Thread.print"], capture_output=True, text=True, timeout=60)
         with open(path, "w") as f:
             f.write(f"# sbt server pid {pid}, checkout {cwd}\n{r.stdout}{r.stderr}")
         return path

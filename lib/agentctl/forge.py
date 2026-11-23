@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from agentctl.procrunner import process_runner
 from agentctl.core import err, process_cache, state_root
 from agentctl.timefmt import parse_time
 from agentctl.statefile import read_record, write_json
@@ -159,7 +160,7 @@ def _gh_api_run(method: str, path: str, argv: list[str], env: dict[str, str],
     before the line broke."""
     kw: dict[str, Any] = dict(capture_output=True, text=True, env=env, timeout=API_TIMEOUT,
                               input=json.dumps(body) if body is not None else None)
-    return net_run(f"gh api GET {gh_tally_shape(path)}", argv, **kw) if method == "GET" else subprocess.run(argv, **kw)
+    return net_run(f"gh api GET {gh_tally_shape(path)}", argv, **kw) if method == "GET" else process_runner().run(argv, **kw)
 
 
 def _gh_api_once(o_r, method, path, params=None, body=None):
@@ -391,7 +392,7 @@ def forge_delete_branch(o_r: str, name: str) -> None:
 
 def forge_release_asset(o_r, tag, name):
     """A release asset's bytes."""
-    r = subprocess.run([GH_CLI, "release", "download", tag, "-p", name, "-O", "-", "-R", o_r], capture_output=True,
+    r = process_runner().run([GH_CLI, "release", "download", tag, "-p", name, "-O", "-", "-R", o_r], capture_output=True,
                        env=forge_env(o_r), timeout=60)
     if r.returncode != 0:
         raise ForgeHTTPError(f"gh release download {tag} {name}: {r.stderr.decode(errors='replace').strip()[:200]}")
