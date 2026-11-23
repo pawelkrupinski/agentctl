@@ -153,7 +153,11 @@ moves it forward; nothing is a detached process that can die with its state in i
     redverify.py `red_verify_scheduled`; tests: `tests/test_red_in_hand.py`, `tests/test_verify_wait.py`. THE REPO'S STEP AFTER THE REBASE (2026-11-20): a repo's executable
     `scripts/land-before-queue <origin/main> <head>` runs on the rebased change before its checks, and may commit onto it
     (movies: the identity stamp carry's rows); the commit rides the same push. It never refuses a land: a failure or a
-    timeout (`$AGENTCTL_LAND_BEFORE_QUEUE_SECONDS`, 1200) leaves the change as it was. FIX REPLAY: when a red's workflow row names a `replay`, `land` warns on a
+    timeout (`$AGENTCTL_LAND_BEFORE_QUEUE_SECONDS`, 1200) leaves the change as it was. The queue PICKS the change's
+    commits again -- the check tree's rebuild, a moved main at push, a batch -- so what the step commits must never
+    depend on the shas it saw: movies' carry rows cited them and every rewritten carry was refused at push (one carry
+    landed 2026-11-21..23); its rows now name each range's commit count and patch-id, and its check finds the range again
+    in the pushed history (movies `scripts/identity_stamp_carry.py`, "THE QUEUE REWRITES"). FIX REPLAY: when a red's workflow row names a `replay`, `land` warns on a
     push whose `Fixes-Red:` names that red unless one of its commits carries `Fix-Replay: <the command> base=FAIL
     head=PASS` (the replay run at origin/main and at the fix), naming the command to run (Alert backtest 5254bffda9d2,
     2026-11-19: seven fixes landed unreplayed and the nightly refuted each; policy `fix-replay-outside`, warn-only by

@@ -318,7 +318,8 @@ def sync_onto_main(repo, main_ref, sh, clock, release_hold=False):
 # stamps only if a lane remembers to write the carry rows, and 3-7 of 37 stamp-moving deploys would have): a repo's
 # executable LAND_BEFORE_QUEUE runs with <origin/main> <head> on the rebased change, and may commit onto it -- the commit
 # then rides the same push, judged by the same checks. It never refuses a land: a failure or a timeout is said and the
-# head stays as it was.
+# head stays as it was. The queue picks the commits again before the push (check tree, moved main, batch): the step's
+# commit must not depend on the shas it saw (AGENTCTL.md, "THE REPO'S STEP AFTER THE REBASE").
 LAND_BEFORE_QUEUE = "scripts/land-before-queue"
 
 
