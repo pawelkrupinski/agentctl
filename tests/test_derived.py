@@ -303,6 +303,81 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         self.assertIn("## Tools (3)", self.on_main(CATALOGUE), "the combined count")
         self.assertEqual(self.on_main(CATALOGUE), self.generated_over_main(CATALOGUE, "scripts/catalogue"))
 
+    # ------------------------------------------------------- A CHANGE RE-APPLIED ONTO MAIN IS JUDGED BY ITS OWN COMMITS
+    def stacked_on_a_landed_parent(self, beside=True):
+        """The 2026-11-23 replay (dispatch-py and title-trace-py, refused right after kick-convergence landed): lane
+        `dispatch` is stacked on lane `kick`'s branch -- kick adds src/kick.py and a tool, dispatch edits src/kick.py
+        and adds a tool, each regenerating docs/tools.md. kick lands under new shas (main moved under it first), then
+        main adds a tool beside dispatch's, regenerating the page. Returns (dispatch's id, its worktree)."""
+        wk = self.r.worktree("wt-kick", branch="kick")
+        self.r.write("src/kick.py", "def kick():\n    return 1\n", at=wk)
+        self.r.write("tools/k.sh", tool("the kick"), at=wk)
+        sh(wk, "scripts/catalogue")
+        kick = self.r.commit("kick: the tool in Python, the catalogue regenerated", at=wk)
+        wd = self.r.worktree("wt-dispatch", base="kick", branch="dispatch")
+        self.r.write("src/kick.py", "def kick():\n    return 2\n", at=wd)
+        self.r.write("tools/p.sh", tool("the dispatch"), at=wd)
+        sh(wd, "scripts/catalogue")
+        self.r.commit("dispatch: retired into the kick, the catalogue regenerated", at=wd)
+        eid = self.queued(wd)[0]
+        wm = self.r.worktree("wt-main")  # main moves, then kick lands on it: the same patch under a new sha
+        self.r.write("README", "readme\n", at=wm)
+        self.r.commit("main moves", at=wm)
+        sh(wm, "git", "cherry-pick", kick)
+        if beside:
+            self.r.write("tools/o.sh", tool("another tool"), at=wm)  # the row beside dispatch's: the page conflicts
+            sh(wm, "scripts/catalogue")
+            self.r.commit("another lane: its tool, the catalogue regenerated", at=wm)
+        self.r.push(at=wm)
+        for c in A.PROCESS_CACHES:
+            c.clear()
+        return eid, wd
+
+    def main_commits(self, name, files):
+        wm = self.r.worktree(f"wt-{name}")
+        for path, text in files.items():
+            self.r.write(path, text, at=wm)
+        self.r.commit(f"{name}: on main", at=wm)
+        self.r.push(at=wm)
+        for c in A.PROCESS_CACHES:
+            c.clear()
+
+    def test_a_change_stacked_on_a_parent_that_landed_under_new_shas_conflicting_only_in_the_catalogue_lands(self):
+        """Its head and main's merge conflict in src/kick.py (both ADD it, the parent's commit on main under another
+        sha) and the catalogue; its own commit, re-applied onto main as the check does, conflicts in the catalogue
+        alone -- regenerated. Never refused `no longer applies`: it lands, main's page the generator's."""
+        eid, _wd = self.stacked_on_a_landed_parent()
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        self.assertNotEqual(self.entry(eid)["status"], "rejected", self.entry(eid).get("why"))
+        self.assertEqual(self.check(eid), 0, self.entry(eid).get("why"))
+        self.assertTrue(self.landed(eid), self.entry(eid))
+        self.assertEqual(self.on_main("src/kick.py"), "def kick():\n    return 2\n", "its own edit on main")
+        self.assertIn("## Tools (4)", self.on_main(CATALOGUE), "k, m, o and p")
+        self.assertEqual(self.on_main(CATALOGUE), self.generated_over_main(CATALOGUE, "scripts/catalogue"))
+
+    def test_a_change_whose_own_commit_conflicts_in_source_on_main_is_still_refused(self):
+        """Only a real source conflict refuses: main edits the very line the change's own commit edits."""
+        eid, _wd = self.stacked_on_a_landed_parent()
+        self.main_commits("main-edits", {"src/kick.py": "def kick():\n    return 3\n"})
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        self.assertEqual(self.entry(eid)["status"], "rejected")
+        self.assertIn("no longer applies", self.entry(eid)["why"])
+        self.assertEqual(self.entry(eid).get("conflict_files"), ["src/kick.py"])
+
+    def test_a_stacked_change_whose_own_commit_landed_too_is_landed_never_refused(self):
+        """Its own commit landed too, under a new sha (folded into the parent's batch, as what-if and slice were into
+        kick's): LANDED via main's commit, never refused, nothing pushed again."""
+        eid, wd = self.stacked_on_a_landed_parent(beside=False)
+        wm = self.r.worktree("wt-main-2")
+        sh(wm, "git", "cherry-pick", sh(wd, "git", "rev-parse", "HEAD"))
+        self.r.push(at=wm)
+        for c in A.PROCESS_CACHES:
+            c.clear()
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        self.assertNotEqual(self.entry(eid)["status"], "rejected", self.entry(eid).get("why"))
+        self.check(eid)
+        self.assertEqual(self.entry(eid)["status"], "landed", self.entry(eid))
+
     def test_a_lint_row_shared_with_a_check_in_flight_still_holds(self):
         """The additive tier resolves a hand-written file only in a backlog batch's assembly, whose full check is the
         verification. With the older already in flight there is no batch to meet in: checked now, the younger's push

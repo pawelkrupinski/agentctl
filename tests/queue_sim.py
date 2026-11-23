@@ -598,6 +598,19 @@ class Sim:
             return both or ["?"]
         return None
 
+    def own_commits_conflict(self, repo, onto, commits):
+        """conflicts.py own_commits_conflict in the model: the change's patches main lacks against main's since their
+        merge base -- a mutual source conflict names its files; a generated file's is the rebase's to regenerate."""
+        b = commits[-1] if commits else None
+        if b not in self.commits or onto not in self.commits:
+            return None
+        common = max(self.anc(onto) & self.anc(b), key=lambda c: len(self.anc(c)))
+        mine, theirs = self.patches_of(b) - self.patches_of(onto), self.patches_of(onto) - self.patches_of(common)
+        both = sorted({x for p in mine for x in self.patches[p].paths} & {x for p in theirs for x in self.patches[p].paths})
+        if any(self.patches[p].conflicts & theirs for p in mine):
+            return [x for x in both if x not in GENERATED] or ["?"]
+        return None
+
     def pair_resolvable(self, repo, older, younger, files):
         """The conflicting files a backlog batch's assembly resolves: all of them when the two conflict only in source
         of additions on both sides (the model's `resolvable`), else none."""
@@ -759,7 +772,7 @@ class Sim:
              "spawn_executor", "spawn_batch_executor", "precheck_hook", "verify_areas_supported", "remote_matches",
              "remote_checks_supported", "slug", "cancel_entry_remote", "stats_post", "check_runs_of", "gate_runs_pass",
              "clone_shared", "spawn_waiting_processor", "offer_token", "tool_env", "stats_echo", "pair_conflict", "pair_resolvable",
-             "recheck_reason", "waiting_entries", "process_start", "code_version", "dt", "own_diff_changed")
+             "own_commits_conflict", "recheck_reason", "waiting_entries", "process_start", "code_version", "dt", "own_diff_changed")
 
     def install(self):
         import contextlib
@@ -836,6 +849,7 @@ class Sim:
         A.tool_env = lambda: dict(os.environ)
         A.pair_conflict = self.pair_conflict
         A.pair_resolvable = self.pair_resolvable
+        A.own_commits_conflict = self.own_commits_conflict
         A.process_start = lambda pid: ""  # Owned's `ps` per record: no process of the simulation is one
         A.code_version = lambda path=None: "sim"
         parsed = {}

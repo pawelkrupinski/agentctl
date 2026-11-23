@@ -15,7 +15,7 @@ from agentctl.land import run_watched, tool_env
 from agentctl.queueslots import checker_alive, set_change
 from agentctl.queue import VERIFY_MODE
 from agentctl.generated import generated_entry, holds_in_flight, without_generated
-from agentctl.conflicts import first_hunk, hunks_resolve, union_safe
+from agentctl.conflicts import first_hunk, hunks_resolve, own_commits_conflict, union_safe
 from agentctl.queuerecheck import same_change_source
 from agentctl.redfixes import fixes_of
 from agentctl.identitychange import change_paths_of
@@ -148,7 +148,10 @@ def main_conflict(repo, e):
     key = ("main", main, e["id"], e.get("head"))
     if key not in _overlap_known:
         files = pair_conflict(repo, {"id": "main", "head": main}, e)
-        _overlap_known[key] = without_generated(repo, files) if files else files  # regenerated in its rebase
+        files = without_generated(repo, files) if files else files  # regenerated in its rebase
+        # the heads' merge sees commits main carries under other shas (a stacked change's landed parent): judged again
+        # as its rebase picks it (conflicts.py A CHANGE RE-APPLIED ONTO MAIN IS JUDGED BY ITS OWN COMMITS)
+        _overlap_known[key] = own_commits_conflict(repo, main, e.get("commits") or []) if files else files
     files = _overlap_known[key]
     return (main, files) if files else None
 

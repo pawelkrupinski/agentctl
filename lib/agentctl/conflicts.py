@@ -4,6 +4,7 @@
 import fnmatch
 import os
 import subprocess
+from typing import Optional
 from agentctl.core import NO_SIGN, git
 from agentctl.worktrees import WorktreeGuard
 from agentctl.patches import deliberate_empty, equivalent_on, is_empty_commit, patch_id, upstream_patch_ids
@@ -283,3 +284,37 @@ def conflict_cause(repo, since, main, conflicts, n=3):
 # main) takes that entry's seq -- the queue's age order -- instead of a new one. The rejected entry is final, so no two
 # live entries share a seq. Tests: tests/test_generated.py.
 CONFLICT_PLACE_KEPT = 24 * 3600
+
+
+# A CHANGE RE-APPLIED ONTO MAIN IS JUDGED BY ITS OWN COMMITS (2026-11-23: dispatch-py and title-trace-py, stacked on
+# kick-convergence's branch, were refused `no longer applies` the moment kick landed: their heads and main's merged
+# with an add/add conflict in kick_convergence.py -- kick's commits, on main under new shas -- while their own commits,
+# picked onto main as the check's rebase picks them, conflicted in docs/tools.md alone, which it regenerates). A
+# merge of the two heads sees every commit since their merge base; the rebase drops the change's commits main carries
+# (patch-equivalent, pick_commits) and resolves what conflict_resolve resolves. So the pre-check does as the rebase:
+# the change's commits main lacks, each merged onto the last (git merge-tree, no worktree), and only a conflict in a
+# file the rebase leaves to its author (source: no registered generated file, no prose) refuses.
+def own_commits_conflict(repo: str, onto: str, commits: list[str]) -> Optional[list[str]]:
+    """The files `commits` (oldest first) conflict in when picked onto `onto` as pick_commits picks them -- each one
+    main carries already (patch-equivalent) dropped, a generated or prose file's conflict left to the rebase's
+    resolution -- or None: they apply. None too when git cannot tell (an old git, a commit missing): the rebase says."""
+    on_main = upstream_patch_ids(repo, commits[0], onto) if commits else {}
+    tree: Optional[str] = onto
+    for c in [c for c in commits if not on_main.get(patch_id(repo, c) or "") or deliberate_empty(repo, c)]:
+        tree, left = tree_pick(repo, tree or onto, c)
+        if tree is None:
+            return left or None
+    return None
+
+
+def tree_pick(repo: str, tree: str, c: str) -> tuple[Optional[str], list[str]]:
+    """Commit c merged onto `tree` as a cherry-pick merges it (git merge-tree over c's parent, no worktree): (the
+    tree it makes, []), (None, the files only its author resolves -- source, neither generated nor prose), or (None,
+    []) when git cannot tell."""
+    r = git(repo, "merge-tree", "--write-tree", "--name-only", "--no-messages", f"--merge-base={c}^", tree, c,
+            check=False)
+    if r.returncode not in (0, 1):
+        return None, []
+    lines = r.stdout.splitlines()
+    left = [f for f in lines[1:] if f.strip() and not generated_entry(repo, f) and not union_safe(f)]
+    return (None, left) if r.returncode == 1 and left else (lines[0].strip(), [])

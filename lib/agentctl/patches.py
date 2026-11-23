@@ -1,6 +1,7 @@
 # agentctl, part `patches`: a commit's patch identity: its patch-id, whether it is empty (or deliberately so), whether an equivalent patch is upstream already
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from typing import Optional
 from agentctl.core import content_twin, git, run_cmd
 
 
@@ -13,7 +14,7 @@ from agentctl.core import content_twin, git, run_cmd
 ALLOW_EMPTY_TRAILER = "Allow-Empty"
 
 
-def deliberate_empty(repo, c):
+def deliberate_empty(repo: str, c: str) -> bool:
     """A commit made empty on purpose: `git commit --allow-empty` with an `Allow-Empty: <why>` trailer."""
     return bool(git(repo, "log", "-1", f"--format=%(trailers:key={ALLOW_EMPTY_TRAILER},valueonly)", c,
                     check=False).stdout.strip())
@@ -27,7 +28,7 @@ def is_empty_commit(repo, c):
     return git(repo, "rev-parse", f"{c}^{{tree}}").strip() == git(repo, "rev-parse", f"{parents[0]}^{{tree}}").strip()
 
 
-def patch_id(repo, c):
+def patch_id(repo: str, c: str) -> Optional[str]:
     diff = git(repo, "show", "--format=", "--no-color", "--no-ext-diff", c, check=False).stdout
     if not diff.strip():
         return None
@@ -49,7 +50,7 @@ def equivalent_on(repo, c, upstream, limit=400):
     return content_twin(repo, c, upstream)
 
 
-def upstream_patch_ids(repo, since_commit, upstream, limit=400):
+def upstream_patch_ids(repo: str, since_commit: str, upstream: str, limit: int = 400) -> dict[str, str]:
     """{patch-id: commit} of `upstream`'s non-merge commits since its merge-base with `since_commit`, in one pass."""
     mb = git(repo, "merge-base", since_commit, upstream, check=False).stdout.strip()
     rng = f"{mb}..{upstream}" if mb else upstream
