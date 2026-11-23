@@ -11,7 +11,7 @@ I6	3	5a2f1fd0212f	0	no change lost (entries and items agree, LANDED is on main, 
 I7	3	32d08c0f4a28	0	exactly one agentctl.landing record per decided change
 I8	2	3caedd159fbc	0	a change that no longer applies was told at queue time and never checked meanwhile
 I9	2	a6f5e971123b	0	no full recheck for a file overlap with a change open when it was queued
-I10	5	68e99bb230c3	0	no change held behind a queued one for generated files alone
+I10	6	558e08f9f410	0	no change held behind a queued one for generated files alone
 I11	2	e7e182677281	0	no unverified combined tree reaches main
 Ib	3	669ddf146386	0	every queued or checked change past its deadline has a recorded hold
 Ic	3	669ddf146386	0	no change past its deadline is silent in `land status`
