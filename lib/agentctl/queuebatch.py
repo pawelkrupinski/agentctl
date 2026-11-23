@@ -14,7 +14,7 @@ from agentctl.storetoken import detached_env
 from agentctl.land import run_watched, tool_env
 from agentctl.queueslots import checker_alive, set_change
 from agentctl.queue import VERIFY_MODE
-from agentctl.generated import derived, generated_entry, regen_here, without_generated
+from agentctl.generated import generated_entry, holds_in_flight, without_generated
 from agentctl.conflicts import first_hunk, hunks_resolve, union_safe
 from agentctl.queuerecheck import same_change_source
 from agentctl.redfixes import fixes_of
@@ -26,6 +26,7 @@ from agentctl.checkslot import check_slot
 from agentctl.redseen import gate_reds
 from agentctl.remote import remote_check, remote_checks_supported, remote_matches
 from agentctl.statemachines import StaleVersion, change_event, machine_state
+from agentctl.holdgraph import as_own, cycle_breaker, cycle_text, dependency_between, hold_cycles
 
 
 # OVERLAPPING CHANGES ARE CHECKED AS ONE (the coordinator, 2026-11-18: B1 against the CI-workflows change, the scraper
@@ -88,12 +89,18 @@ def pair_resolvable(repo, older, younger, files):
     return out
 
 
+def overlap_key(e):
+    """An entry's part of overlap_of's cache key: its id, head and how many commits it is read with (holdgraph.py
+    as_own: a stacked change's own)."""
+    return e["id"], e.get("head"), len(e.get("commits") or [])
+
+
 def overlap_of(repo, older, younger, strict=False):
     """(the files both change, the files they conflict in or None, the conflicting files the batch resolves), per pair
     of heads (cached in the process); the repo's generated files are neither (GENERATED FILES ARE NO OVERLAP,
     waiting.py) unless strict (a change whose generated files or source conflict could not be resolved in a batch:
     held as before), and with strict every textual conflict is one."""
-    key = (older["id"], older.get("head"), younger["id"], younger.get("head"), strict)
+    key = (*overlap_key(older), *overlap_key(younger), strict)
     if key not in _overlap_known:
         shared = sorted(set(change_paths_of(repo, older) or []) & set(change_paths_of(repo, younger) or []))
         shared = shared if strict else without_generated(repo, shared)
@@ -125,11 +132,10 @@ IN_FLIGHT = ("checking", "checked", "pushing")
 
 
 def generated_overlap(repo, older, younger):
-    """The registered generated files both changes change, derived ones aside (GENERATED FILES ARE NO OVERLAP's, for
-    the in-flight wait; A DERIVED FILE HOLDS NOTHING)."""
+    """The registered generated files both changes change that hold the younger behind a check in flight (GENERATED
+    FILES ARE NO OVERLAP's in-flight wait): no derived file, on any host, nor a `holds: false` table (holds_in_flight)."""
     both = sorted(set(change_paths_of(repo, older) or []) & set(change_paths_of(repo, younger) or []))
-    held = [f for f in both if generated_entry(repo, f)]
-    return [f for f in held if not derived(generated_entry(repo, f))] if regen_here() else held
+    return [f for f in both if holds_in_flight(generated_entry(repo, f))]
 
 
 def main_conflict(repo, e):
@@ -146,27 +152,40 @@ def main_conflict(repo, e):
     return (main, files) if files else None
 
 
-def overlap_hold(repo, d, e, entries, facts, t):
+def overlap_candidate(o, e, stacks):
+    """Whether entry o may hold queued change e as an older change it overlaps."""
+    # A KEPT PLACE NEVER JUMPS A CHECK IN FLIGHT (2026-11-20, the simulated 2026-11-19 seed 0: a change queued again
+    # after a conflict took its first entry's seq, 10, and so was "older" than a change it overlaps that was already
+    # checking, seq 20 -- checked beside it, then fully rechecked once that landed). A younger-by-seq change counts
+    # too once it is past queued: its check (or push) runs now, before this one could.
+    if o["seq"] >= e["seq"] and o.get("status") == "queued":
+        return False
+    if o["id"] == e["id"] or o.get("status") not in OVERLAP_OLDER \
+            or same_change_source(o, e["worktree"], e.get("branch") or ""):  # its own older version: superseded
+        return False
+    # a broken cycle's wait, or a parent and its stacked change: a dependency, never an overlap
+    return o["id"] not in (e.get("cycle_ignore") or []) and not dependency_between(o, e, stacks)
+
+
+def overlap_hold(repo, d, e, entries, facts, t, stacks=None):
     """(older entry, shared files, conflicting files or None) queued change e waits for (OVERLAPPING CHANGES ARE
-    CHECKED AS ONE), or None."""
+    CHECKED AS ONE), or None. stacks: {id: the entry it is stacked on} (holdgraph.py A STACKED CHANGE WAITS FOR ITS
+    PARENT): a parent and its stacked change are never each other's overlap, and each change's files are its own
+    commits'. A blocker e's cycle_ignore names (A HOLD CYCLE IS BROKEN) holds it no more."""
     if e.get("backlog_batch"):
         return None
     together, first = None, None
+    stacks = stacks or {}
+    mine = as_own(e, stacks)
     ids = {x["id"] for x in entries}
     entries = list(entries) + [w for w in waiting_entries(d) if w["id"] not in ids]  # and those waiting for green
     for o in sorted(entries, key=lambda x: x["seq"]):
-        # A KEPT PLACE NEVER JUMPS A CHECK IN FLIGHT (2026-11-20, the simulated 2026-11-19 seed 0: a change queued again
-        # after a conflict took its first entry's seq, 10, and so was "older" than a change it overlaps that was
-        # already checking, seq 20 -- checked beside it, then fully rechecked once that landed). A younger-by-seq
-        # change counts too once it is past queued: its check (or push) runs now, before this one could.
-        if o["seq"] >= e["seq"] and o.get("status") == "queued":
+        if not overlap_candidate(o, e, stacks):
             continue
-        if o["id"] == e["id"] or o.get("status") not in OVERLAP_OLDER \
-                or same_change_source(o, e["worktree"], e.get("branch") or ""):  # its own older version: superseded
-            continue
-        shared, conflict, resolvable = overlap_of(repo, o, e, strict=e.get("batch_alone") in ("regen", "resolve"))
+        theirs = as_own(o, stacks)
+        shared, conflict, resolvable = overlap_of(repo, theirs, mine, strict=e.get("batch_alone") in ("regen", "resolve"))
         if not shared:
-            gen = generated_overlap(repo, o, e) if o.get("status") in IN_FLIGHT else []
+            gen = generated_overlap(repo, theirs, mine) if o.get("status") in IN_FLIGHT else []
             if gen:  # A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT: they meet in the next batch
                 first = first or (o, gen, None)
             continue
@@ -214,6 +233,51 @@ def note_hold(st, e, kind, why, t, blocker=None, files=None, batch=None):
         st.update_item("change", e["id"], it["version"], {"hold": rec})
     except StaleVersion:
         pass  # the next tick records it
+
+
+def break_hold_cycles(st, d, todo):
+    """A HOLD CYCLE IS BROKEN, NEVER WAITED OUT (holdgraph.py): every cycle among the holds recorded on the open
+    changes' items, its oldest change let go of its wait on its blocker in it -- for good (`cycle_ignore` on its
+    entry) --, the cycle said on that change's item (`cycle`, shown by `status`) and in the log. Returns the lines."""
+    by_id = {e["id"]: e for e in todo}
+    edges, why, items = recorded_hold_edges(st, todo)
+    did = []
+    for cyc in hold_cycles(edges):
+        brk = cycle_breaker(cyc, {x: by_id[x]["seq"] for x in cyc})
+        did.append(cycle_text(cyc, brk, why))
+        break_cycle_at(st, d, by_id[brk], items[brk], edges[brk], did[-1])
+    return did
+
+
+def recorded_hold_edges(st, todo):
+    """({change: the change its recorded hold names}, {change: that hold's why}, {change: its item}) among todo, the
+    waits a cycle break dropped left out."""
+    ids = {e["id"] for e in todo}
+    edges, why, items = {}, {}, {}
+    for e in todo:
+        it = st.item("change", e["id"]) or {}
+        hold = (it.get("data") or {}).get("hold") or {}
+        if waits_on_another(e, hold.get("blocker"), ids):
+            edges[e["id"]], why[e["id"]], items[e["id"]] = hold["blocker"], hold.get("why") or "", it
+    return edges, why, items
+
+
+def waits_on_another(e, blocker, ids):
+    """Whether change e's recorded blocker is another change among ids whose wait no cycle break dropped."""
+    return blocker in ids and blocker != e["id"] and blocker not in (e.get("cycle_ignore") or [])
+
+
+def break_cycle_at(st, d, e, it, blocker, text):
+    """Change e lets go of its wait on blocker for good (cycle_ignore), the cycle said on its item and in the log."""
+    e["cycle_ignore"] = sorted(set(e.get("cycle_ignore") or []) | {blocker})
+    save_entry(d, e)
+    wlog(d, text)
+    try:
+        st.transition("change", e["id"], it["state"], it["version"], data={"cycle": text, "hold": None},
+                      event={"kind": "change.cycle", "text": text, "severity": "info",
+                             "audience": {"worktree": e.get("worktree")}})
+    except StaleVersion:
+        pass  # its entry carries the break: the hold is re-derived without that wait all the same
 
 
 def restart_hold(st, e, t):

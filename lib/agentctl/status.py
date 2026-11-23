@@ -1,6 +1,7 @@
 # agentctl, part `status`: the status model: each source read under a bound, assembled and cached; the status line
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from typing import Any, Dict
 import json
 import os
 import re
@@ -214,15 +215,21 @@ def code_text(h):
     return f"{h['rev']} (code {code[:8]})" if h.get("rev") else code
 
 
+def item_line(r: Dict[str, Any], t: float) -> str:
+    """`status`'s line for an open item row: its state, deadline, level, hold and a broken hold cycle."""
+    return (f"  {r['id']}  {r['state']}  deadline in {int((r['deadline'] - t) // 60)} min"
+            + (f"  (level {r['level']})" if r.get("level") else "")
+            + (f"  held: {r['hold']}" if r.get("hold") else "")
+            + (f"  {r['cycle']}" if r.get("cycle") else ""))
+
+
 def render_status(h, t):
     """`agentctl status`: the line, the open items with their states and deadlines, the tick, the pins."""
     out = [h["line"]]
     for key in ("changes", "batch", "reds", "conditions"):
         rows = h["items"][key]
         out.append(f"{key}: {len(rows)}")
-        out += [f"  {r['id']}  {r['state']}  deadline in {int((r['deadline'] - t) // 60)} min"
-                + (f"  (level {r['level']})" if r.get("level") else "")
-                + (f"  held: {r['hold']}" if r.get("hold") else "") for r in rows]
+        out += [item_line(r, t) for r in rows]
     out.append(f"reverts unacked: {len(h.get('reverts') or [])}")
     out += [revert_line(r, t) for r in h.get("reverts") or []]
     try:  # parked worktrees: shown once here, never escalated (watchdog.py, PARKED)
@@ -342,7 +349,7 @@ def status_landing(st, t):
                 "branch": d.get("branch"), "head": str(d.get("head") or "")[:10] or None,
                 "submitted_at": d.get("submitted_at"), "why": d.get("why") or d.get("reason"),
                 "hold": (d.get("hold") or {}).get("why") if it["state"] in HOLD_SHOWN else None,
-                "changes": d.get("changes") or d.get("entries")}
+                "cycle": d.get("cycle"), "changes": d.get("changes") or d.get("entries")}
     return {"changes": [row(it) for it in st.items("change", list(STATUS_CHANGE_OPEN))],
             "batch": [row(it) for it in st.items("batch", list(STATUS_BATCH_OPEN))],
             "hold": hold_row(land_hold(st, t, expire=False))}

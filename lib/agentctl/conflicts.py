@@ -8,7 +8,7 @@ from agentctl.core import NO_SIGN, git
 from agentctl.worktrees import WorktreeGuard
 from agentctl.patches import deliberate_empty, equivalent_on, is_empty_commit, patch_id, upstream_patch_ids
 from agentctl.generated import (
-    conflict_stages, generated_entry, merge_file, regen_here, regenerate, snapshots_both_changed, unmerged)
+    conflict_stages, generated_entry, merge_file, regenerate, snapshots_both_changed, unmerged)
 
 
 # A DOCS CONFLICT IS NO VERDICT ON A CHANGE (2026-11-04: of the week's 42 conflict rejections, 6 were docs/markdown
@@ -221,7 +221,7 @@ def pick_commits(wt, commits, dropped=None, regen=True, regenerated=None, provis
         notes, mine = [], [] if resolved is not None else None
         if r.returncode != 0 and conflict_resolve(wt, regen, notes, regenerated, provisional, mine):
             r = git(wt, *NO_SIGN, "-c", "core.editor=true", "cherry-pick", "--continue", check=False)
-        if r.returncode == 0 and regen and regen_here():  # elsewhere git's clean merge stands, for the checks to judge
+        if r.returncode == 0 and regen:  # only what a command here regenerates (regen_runs); else git's merge stands
             sides = snapshots_both_changed(wt, c, before)
             why = regenerate(wt, sorted(sides), regenerated, provisional, sides=sides) if sides else None
             if why:

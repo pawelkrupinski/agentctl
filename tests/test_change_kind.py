@@ -120,7 +120,8 @@ class WatchdogKindTest(unittest.TestCase):
             self.st.transition("change", eid, "queued", it["version"], deadline_s=-1)  # past its deadline
             A.lap_change_deadline(self.st, {"id": eid, "worktree": f"/w/{eid}"}, "queued", t)
             it = self.st.item("change", eid)
-            self.assertIsNone(it["data"].get("hold"), eid)
+            # NEVER UNHELD BETWEEN TWO READINGS (queuepush.py): kept, its clock restarted, until the tick records anew
+            self.assertEqual((it["data"]["hold"]["why"], it["data"]["hold"]["since"]), (hold["why"], t), eid)
             evs = [e for e in self.st.item_events("change", eid) if e["kind"] == "change.rederived"]
             self.assertEqual(len(evs), 1, eid)
             self.assertEqual(evs[0]["severity"], "info")

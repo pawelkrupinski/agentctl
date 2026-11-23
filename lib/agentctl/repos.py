@@ -94,7 +94,8 @@ def generated_parse(repo, raw):
     HTML, JSON, a rendered text -- never merged by rows, regenerated over the combined tree whenever both sides changed
     it: generated.py SNAPSHOTS ARE REGENERATED, NEVER MERGED; `merge: derived`: the same, its output needing no
     explaining by the sides, and `block` a file only part of which is generated: generated.py A DERIVED FILE IS THE
-    COMBINED TREE'S). Raises ValueError."""
+    COMBINED TREE'S; `holds: false` on a hand-written table: its row merge is safe, so it holds no change behind a check
+    in flight, generated.py holds_in_flight). Raises ValueError."""
     out = []
     for g in raw or []:
         paths, regen = (g or {}).get("paths"), (g or {}).get("regen")
@@ -119,7 +120,17 @@ def generated_merge(repo: str, g: Dict[str, Any], regen: Optional[str]) -> Dict[
                          f"merged by rows, always regenerated: it needs `regen`) or `derived` (the same, its output the "
                          f"combined tree's): {g!r}")
     block = generated_block(repo, g, merge)
-    return {**({"merge": merge} if merge != "rows" else {}), **({"block": block} if block else {})}
+    return {**({"merge": merge} if merge != "rows" else {}), **({"block": block} if block else {}),
+            **generated_holds(repo, g, merge, regen)}
+
+
+def generated_holds(repo: str, g: Dict[str, Any], merge: str, regen: Optional[str]) -> Dict[str, Any]:
+    """A `generated` entry's `holds: false` as its parsed entry carries it ({} when it holds). Raises ValueError."""
+    holds = g.get("holds", True)
+    if not isinstance(holds, bool) or (holds is False and (merge != "rows" or regen is not None)):
+        raise ValueError(f"{repo}: a `generated` entry's `holds: false` is for a hand-written table merged by rows (no "
+                         f"`regen`, no `merge`): its row merge safe, it holds no change behind a check in flight: {g!r}")
+    return {} if holds else {"holds": False}
 
 
 def generated_block(repo: str, g: Dict[str, Any], merge: str) -> Optional[List[str]]:

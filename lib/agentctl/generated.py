@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from agentctl.procrunner import process_runner
 from agentctl.core import env_num, git, host_role, process_cache, slug
@@ -158,9 +159,35 @@ def rows_merge(base, ours, theirs, prefer_ours=False):
 
 
 def regen_here() -> bool:
-    """Whether this host runs a repo's regen commands: not the server role -- ci-runner's reconciler has no JVM (its
-    checks run on CI), and a doomed command would hold a tick step for minutes."""
+    """Whether this host runs every regen command of a repo, the heavy ones too: not the server role -- ci-runner's
+    reconciler has no JVM (its checks run on CI), and a doomed sbt command would hold a tick step for minutes."""
     return host_role() != "server"
+
+
+# A DERIVED FILE IS REGENERATED WHERE THE COMBINE HAPPENS (2026-11-23, the movies queue deadlocked at 22 changes:
+# ci-runner, the server role, ran no regen command, so its queue held every change sharing docs/tools.md behind the
+# one in flight -- the laptop's A DERIVED FILE HOLDS NOTHING (63239f5) never reached the host that runs the queue). A
+# derived file's command is a cheap, deterministic script over the tree (`python3 scripts/tool_catalogue.py`, a path
+# closure: no JVM, no network), so it runs on every role, the server included -- the interpreter agentctl runs under
+# on PATH (run_regen) -- and a derived file holds nothing on any host. A snapshot's or a baseline's command (sbt) still
+# runs only where regen_here says.
+def regen_runs(g: Optional[Dict[str, Any]]) -> bool:
+    """Whether registry entry g's regen command runs on this host: a DERIVED file's everywhere, the rest where
+    regen_here."""
+    return derived(g) or regen_here()
+
+
+def regenerated_here(g: Optional[Dict[str, Any]]) -> bool:
+    """Whether entry g is regenerated-only (a snapshot, a derived file) and its command runs on this host."""
+    return regen_only(g) and regen_runs(g)
+
+
+def holds_in_flight(g: Optional[Dict[str, Any]]) -> bool:
+    """Whether a registered generated file both changes change holds the younger behind a check in flight (A GENERATED
+    OVERLAP WAITS FOR A CHECK IN FLIGHT, queuebatch.py): never a DERIVED file (regenerated over the combined tree,
+    regen_runs), nor a hand-written table registered `holds: false` (its row merge is safe: rows apart combine, a row
+    both changed is its author's conflict)."""
+    return bool(g) and not derived(g) and (g or {}).get("holds", True) is not False
 
 
 def regen_only(g: Optional[Dict[str, Any]]) -> bool:
@@ -261,12 +288,23 @@ def snapshot_unexplained(base, ours, theirs, regenerated):
     return None
 
 
+def regen_env():
+    """tool_env with the interpreter agentctl runs under last on PATH: a derived file's `python3 <script>` runs on a host
+    whose PATH has no python3 of its own (ci-runner's reconciler: python3 by its store path; REGENERATED WHERE THE
+    COMBINE HAPPENS)."""
+    env = tool_env()
+    here = os.path.dirname(sys.executable)
+    if here and here not in env.get("PATH", "").split(":"):
+        env["PATH"] = ":".join(x for x in (env.get("PATH", ""), here) if x)
+    return env
+
+
 def run_regen(wt, g):
     """Run registry entry g's regen command in wt: None, or why it failed, in words."""
     limit = g.get("timeout") or env_num("AGENTCTL_GENERATED_REGEN_TIMEOUT", GENERATED_REGEN_TIMEOUT)
     cmd = " ".join(shlex.quote(x) for x in g["regen"])
     try:
-        r = process_runner().run(g["regen"], cwd=wt, capture_output=True, text=True, timeout=limit, env=tool_env(),
+        r = process_runner().run(g["regen"], cwd=wt, capture_output=True, text=True, timeout=limit, env=regen_env(),
                            stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return f"`{cmd}` ran past {limit:.0f} s"
@@ -307,7 +345,7 @@ def regenerate(wt, files, regenerated=None, provisional=None, sides=None):
             continue
         if not g.get("regen"):  # a hand-written table merged row by row only: never a side's row kept provisionally
             return f"a row both sides changed in {', '.join(mine)}, which no regen command decides"
-        if not regen_here():
+        if not regen_runs(g):
             if regen_only(g):
                 return f"{', '.join(mine)}: a snapshot both sides changed, and the server role runs no regen command"
             for f in mine:
@@ -382,13 +420,13 @@ def regen_base(wt: str, g: Dict[str, Any], mine: List[str], stages: Dict[str, Di
 def regen_owed(wt: str, base: str, moved: str, head: Optional[str]) -> List[str]:
     """The files a push of the change moved..head (rebased by git alone onto main, which moved base..moved) owes a
     regeneration of: the regenerated-only ones (a snapshot, a DERIVED file) both main's move and the change change --
-    git's line merge of them, clean or not, is no tree's output (A DERIVED FILE HOLDS NOTHING, queuebatch.py). [] where
-    no regen command runs (the server role: its derived overlaps are held, as before)."""
-    if not regen_here() or not head:
+    git's line merge of them, clean or not, is no tree's output (A DERIVED FILE HOLDS NOTHING, queuebatch.py) -- those
+    whose command runs here (regen_runs: a derived file's on every role)."""
+    if not head:
         return []
     names = [set(git(wt, "diff", "--name-only", "--no-renames", a, b, check=False).stdout.split())
              for a, b in ((base, moved), (moved, head))]
-    return sorted(f for f in names[0] & names[1] if regen_only(generated_entry(wt, f)))
+    return sorted(f for f in names[0] & names[1] if regenerated_here(generated_entry(wt, f)))
 
 
 def tracked(wt, globs):
@@ -401,7 +439,7 @@ def snapshots_both_changed(wt, commit, before):
     """{file: {1: base, 2: ours, 3: theirs}} of the SNAPSHOTS (`merge: regen`) commit changes which the tree had changed
     too since commit's parent (before: the tree's HEAD before the pick) -- git merged them cleanly, and a snapshot is
     regenerated all the same (SNAPSHOTS ARE REGENERATED, NEVER MERGED)."""
-    reg = [g for g in generated_registry(wt) if regen_only(g)]
+    reg = [g for g in generated_registry(wt) if regenerated_here(g)]
     if not reg:
         return {}
     mine = git(wt, "diff-tree", "--no-commit-id", "--name-only", "-r", commit, check=False).stdout.split()

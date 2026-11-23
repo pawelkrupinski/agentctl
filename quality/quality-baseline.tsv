@@ -18,7 +18,7 @@ cognitive	_push_batch_item	41
 cognitive	_push_change	94
 cognitive	_push_checked	14
 cognitive	_run_list_options	13
-cognitive	_tick_changes_pass	70
+cognitive	_tick_changes_pass	62
 cognitive	_watch	46
 cognitive	_watch_group	30
 cognitive	adjust_cap	24
@@ -96,7 +96,7 @@ cognitive	cmd_state	12
 cognitive	cmd_store	28
 cognitive	cmd_supersede	22
 cognitive	cmd_wait	18
-cognitive	cmd_watchdog	31
+cognitive	cmd_watchdog	26
 cognitive	coherent_edit	11
 cognitive	condition_record	13
 cognitive	config_knobs	25
@@ -174,7 +174,7 @@ cognitive	lander_revive	26
 cognitive	lander_spawn	14
 cognitive	lander_transcript	32
 cognitive	landing_records	97
-cognitive	lap_change_deadline	21
+cognitive	lap_change_deadline	18
 cognitive	laptop_pressure	12
 cognitive	laptop_role	15
 cognitive	laptop_role_refusal	23
@@ -203,7 +203,7 @@ cognitive	orphan_branches	29
 cognitive	orphan_candidates	41
 cognitive	orphan_duty	101
 cognitive	outside_gate	22
-cognitive	overlap_hold	34
+cognitive	overlap_hold	30
 cognitive	overlap_of	16
 cognitive	own_change_item	14
 cognitive	own_configs	12
@@ -425,7 +425,7 @@ cyclomatic	_push_change	62
 cyclomatic	_push_checked	14
 cyclomatic	_run_list_options	15
 cyclomatic	_step_branch_gone	16
-cyclomatic	_tick_changes_pass	40
+cyclomatic	_tick_changes_pass	37
 cyclomatic	_watch	24
 cyclomatic	_watch_group	22
 cyclomatic	adjust_cap	36
@@ -511,7 +511,7 @@ cyclomatic	cmd_state	11
 cyclomatic	cmd_store	17
 cyclomatic	cmd_supersede	18
 cyclomatic	cmd_wait	12
-cyclomatic	cmd_watchdog	24
+cyclomatic	cmd_watchdog	22
 cyclomatic	coherent_edit	12
 cyclomatic	condition_record	22
 cyclomatic	config_knobs	14
@@ -598,7 +598,7 @@ cyclomatic	lander_revive	26
 cyclomatic	lander_spawn	16
 cyclomatic	lander_transcript	23
 cyclomatic	landing_records	123
-cyclomatic	lap_change_deadline	20
+cyclomatic	lap_change_deadline	19
 cyclomatic	laptop_pressure	13
 cyclomatic	laptop_role	17
 cyclomatic	laptop_role_refusal	16
@@ -628,7 +628,7 @@ cyclomatic	orphan_duty	53
 cyclomatic	orphan_why	11
 cyclomatic	out_of_build_reach	17
 cyclomatic	outside_gate	18
-cyclomatic	overlap_hold	27
+cyclomatic	overlap_hold	23
 cyclomatic	overlap_of	15
 cyclomatic	own_change_item	18
 cyclomatic	own_fixer_record_path	13
@@ -645,7 +645,7 @@ cyclomatic	owner_turn_prompt	13
 cyclomatic	owner_work	19
 cyclomatic	park_duty	20
 cyclomatic	park_release_why	16
-cyclomatic	pick_commits	35
+cyclomatic	pick_commits	34
 cyclomatic	plan_worktrees	23
 cyclomatic	pressure_reading	18
 cyclomatic	previous_fixer_tree	23
@@ -832,7 +832,7 @@ inner-defs	sync_steps	7
 method-lines	_check_entry	149
 method-lines	_push_batch_item	72
 method-lines	_push_change	132
-method-lines	_tick_changes_pass	92
+method-lines	_tick_changes_pass	86
 method-lines	_watch	81
 method-lines	alert_probe	55
 method-lines	alert_write	59

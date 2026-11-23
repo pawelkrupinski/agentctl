@@ -3,7 +3,9 @@
 
 import json
 import os
+import re
 import time
+from typing import Any, Dict
 from agentctl.core import env_num, fmt_age, pid_alive, state_root
 from agentctl.statefile import write_json
 from agentctl.repos import movies_repo_path
@@ -82,6 +84,42 @@ def watchdog_unheld(store=None, entries=None, now_=None):
             f"{file_unheld_change(st, it, t, 'agentctl watchdog')}" for it, _e in unheld_changes(st, entries, t)]
 
 
+# ONE EPISODE, ONE NOTIFICATION (2026-11-23: W1 told "unlanded change ...-what-if-py-edef9e (queued: nothing holds it,
+# yet it has not started)" every few minutes -- its condition closed whenever the next pass found the hold recorded
+# again, and each re-open notified). An invariant's violation is told once per SUBJECT (the change, red or run it names:
+# its detail less the ages and counts that move pass to pass) within WATCHDOG_RETELL; the condition still opens and
+# closes with the facts, `status` and the conditions say it each pass. Tests: tests/test_watchdog_episode.py.
+WATCHDOG_RETELL = 6 * 3600  # s ($AGENTCTL_WATCHDOG_RETELL)
+EPISODE_ID = re.compile(r"\b\d{8}-\d{6}-[\w.-]+")
+
+
+def episode_subject(detail: str) -> str:
+    """What an invariant's violation is about: the first queue id it names, else its text with the numbers out."""
+    m = EPISODE_ID.search(detail or "")
+    return m.group(0) if m else re.sub(r"\d+(?:\.\d+)?", "#", detail or "")
+
+
+def new_episode(st: Dict[str, Any], wid: str, detail: str, t: float) -> bool:
+    """Whether invariant wid's violation `detail` is a new episode -- another subject, or the last telling of this one
+    over WATCHDOG_RETELL ago --, recorded in the watchdog's state `st` (told: {wid: [subject, at]}) when it is."""
+    told = dict(st.get("told") or {})
+    subject = episode_subject(detail)
+    last = told.get(wid) or [None, 0]
+    if last[0] == subject and t - float(last[1]) < env_num("AGENTCTL_WATCHDOG_RETELL", WATCHDOG_RETELL):
+        return False
+    told[wid] = [subject, t]
+    st["told"] = told
+    write_json(state_root("watchdog.json"), {**watchdog_state(), "told": told})
+    return True
+
+
+def tell_violation(st: Dict[str, Any], wid: str, detail: str, cond: object, heals: bool) -> None:
+    """Notify invariant wid's violation as its condition opens -- not a self-healing one's (told once past its bound),
+    and once per episode (new_episode)."""
+    if not cond and not heals and new_episode(st, wid, detail, time.time()):
+        notify(f"agentctl watchdog: {wid}", detail[:220])
+
+
 def cmd_watchdog(a):
     """One watchdog pass: every invariant checked; a violation opens its INVARIANT condition (and notifies), a restored
     one closes it; W5 kickstarts the processor. Prints one line per invariant."""
@@ -106,8 +144,7 @@ def cmd_watchdog(a):
             # while another one violated W1): its text, escalations and the ESCALATED line say what violates it now
             if cond or not heals or misses[wid] >= env_num("AGENTCTL_WATCHDOG_MISSES", WATCHDOG_MISSES):
                 open_condition("INVARIANT", f"INVARIANT {wid} violated: {r.detail}", r, [], key=key, command="watchdog")
-                if not cond and not heals:
-                    notify(f"agentctl watchdog: {wid}", r.detail[:220])
+                tell_violation(st, wid, r.detail, cond, heals)
             # only for a processor silent past 3 x W5_MAX of AWAKE time (a beat the laptop slept through is no
             # silence: 2026-11-15 16:58, a dark wake), at most every WATCHDOG_KICK_GAP; the kick keeps its token
             silent = min(beat_age("processor") or 0, time.time() - woke)

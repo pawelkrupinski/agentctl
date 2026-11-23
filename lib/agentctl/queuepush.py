@@ -19,8 +19,9 @@ from agentctl.changekind import (
     record_change_kind)
 from agentctl.waiting import supersede
 from agentctl.redseen import gate_reds
+from agentctl.holdgraph import OPEN_PARENT_STATES, stack_map
 from agentctl.queuebatch import (
-    _behind_said, backlog_batchable, change_hold_stuck, hold_for_overlap, kind_of, main_conflict, note_hold,
+    _behind_said, backlog_batchable, break_hold_cycles, change_hold_stuck, hold_for_overlap, kind_of, main_conflict, note_hold,
     overlap_hold, restart_hold, spawn_executor, stuck_recovery)
 from agentctl.queuediff import push_change
 from agentctl.queueclose import regen_hold_overdue
@@ -47,10 +48,13 @@ def verifying(e, t):
 # younger. Tests: tests/test_backlog_batch.py PushBatchTest ..._never_pushes_under_a_red_fixs_verification.
 def older_verifying(todo, e, t, kinds=None):
     """The entry whose combined-tree verification runs now (verifying) and that e's push waits for: one queued before
-    e, or a red fix (its kind in kinds, classify_queue) queued at any time; the oldest such, or None."""
+    e, or a red fix (its kind in kinds, classify_queue) queued at any time; the oldest such, or None. A blocker e's
+    cycle_ignore names (holdgraph.py A HOLD CYCLE IS BROKEN) holds it no more."""
     red = lambda o: bool(((kinds or {}).get(o["id"]) or {}).get("red_fix"))
+    ignore = set(e.get("cycle_ignore") or [])
     return next((o for o in sorted(todo, key=lambda o: o["seq"])
-                 if o["id"] != e["id"] and (o["seq"] < e["seq"] or red(o)) and verifying(o, t)), None)
+                 if o["id"] != e["id"] and o["id"] not in ignore and (o["seq"] < e["seq"] or red(o))
+                 and verifying(o, t)), None)
 
 
 def tick_changes(repo, d, clock):
@@ -75,7 +79,9 @@ def tick_changes(repo, d, clock):
                 supersede(d, older, e["id"], f"{e['worktree']} queued again; only the newest entry runs")
                 del newest[k]
         newest[e["id"]] = e
-    did = []
+    runs = [e for e in todo if e["id"] in newest]
+    did = break_hold_cycles(st, d, runs)  # A HOLD CYCLE IS BROKEN (holdgraph.py)
+    stacks = stack_map(todo, waiting_entries(d, open_only=False))  # A STACKED CHANGE WAITS FOR ITS PARENT
     # PUSHES FIRST, THEN THE HOLDS (queue simulator, 2026-11-18): the holds below were read before this tick's pushes,
     # and a checked change's push due holds every backlog batch back (backlog_candidates) -- so the tree a finished
     # check had just freed went to the oldest lone check, never to the batch: under load (every tree busy, a tree
@@ -91,14 +97,15 @@ def tick_changes(repo, d, clock):
         # never formed. A lone change younger than the oldest held one never takes the LAST free tree: that is the
         # batch's (a red fix excepted).
         batch_seq = min((x["seq"] for x in todo if x["id"] in held | pheld), default=None)
-        did += _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, [e for e in todo if e["id"] in newest],
-                                  todo, held, pheld, batch_seq)
+        did += _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, runs, todo, held, pheld, batch_seq,
+                                  stacks)
     return did
 
 
-def _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, mine, todo, held, pheld, batch_seq):
+def _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, mine, todo, held, pheld, batch_seq, stacks):
     """One pass of tick_changes over the newest entries: `push` (the checked and interrupted pushes) or `check` (the
-    rest: executors started, deadlines). facts: queue_facts; kinds: each entry's kind (classify_queue)."""
+    rest: executors started, deadlines). facts: queue_facts; kinds: each entry's kind (classify_queue); stacks: each
+    stacked entry's parent (holdgraph.py stack_map)."""
     did = []
     for e in mine:
         if e.get("backlog_batch"):  # a backlog batch's member: the batch checks and pushes it (backlog_reconcile)
@@ -136,16 +143,9 @@ def _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, mine, todo, h
                               conflict_files=conflict_paths(gone[1]), decided_on=gone[0])
                 did.append(f"{e['id']}: rejected (no longer applies on main)")
                 continue
-            hold = overlap_hold(repo, d, e, todo, facts, t)
-            if hold and fix:  # a red fix never waits: its author is told of a conflict, and it goes on
-                did += hold_for_overlap(st, d, e, *hold, waits=False, repo=repo)
-                hold = None
-            if hold:  # OVERLAPPING CHANGES ARE CHECKED AS ONE (below)
-                did += hold_for_overlap(st, d, e, *hold, repo=repo)
-                o, shared = hold[0], hold[1]
-                note_hold(st, e, "overlap", f"its check waits for {o['id']} ({o.get('status')}): both change "
-                          f"{', '.join(shared[:3])}" + (f" (+{len(shared) - 3} more)" if len(shared) > 3 else ""), t,
-                          blocker=o["id"], files=shared[:10])
+            lines, waits = queued_change_waits(repo, d, st, t, e, fix, todo, facts, stacks)
+            did += lines
+            if waits:
                 continue
         if e.get("regen_hold") and regen_hold_overdue(st, d, e, t):
             continue
@@ -188,6 +188,38 @@ def _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, mine, todo, h
         spawn_executor(repo, d, e["id"])
         did.append(f"{e['id']}: executor started")
     return did
+
+
+def stacked_wait(st, t, e, parent):
+    """Queued change e waits for its parent (A STACKED CHANGE WAITS FOR ITS PARENT): its hold recorded, the line said
+    once per parent."""
+    why = (f"its check waits for {parent['id']} ({parent.get('status')}), which its branch is stacked on: it lands "
+           "after it, checked once on top of it")
+    note_hold(st, e, "stacked", why, t, blocker=parent["id"])
+    said = _behind_said.get((e["id"], "stacked")) == parent["id"]
+    _behind_said[(e["id"], "stacked")] = parent["id"]
+    return [] if said else [f"{e['id']}: {why}"]
+
+
+def queued_change_waits(repo, d, st, t, e, fix, todo, facts, stacks):
+    """(the tick's lines, whether queued change e waits for another change -- its parent (A STACKED CHANGE WAITS FOR
+    ITS PARENT, holdgraph.py) or an older one it overlaps (OVERLAPPING CHANGES ARE CHECKED AS ONE) --), its hold
+    recorded. A red fix waits for neither (told of a conflict all the same)."""
+    parent = None if fix else stacks.get(e["id"])
+    if parent is not None and parent.get("status") in OPEN_PARENT_STATES \
+            and parent["id"] not in (e.get("cycle_ignore") or []):
+        return stacked_wait(st, t, e, parent), True
+    hold = overlap_hold(repo, d, e, todo, facts, t, stacks)
+    if hold and fix:  # a red fix never waits: its author is told of a conflict, and it goes on
+        return hold_for_overlap(st, d, e, *hold, waits=False, repo=repo), False
+    if not hold:
+        return [], False
+    o, shared = hold[0], hold[1]
+    did = hold_for_overlap(st, d, e, *hold, repo=repo)
+    note_hold(st, e, "overlap", f"its check waits for {o['id']} ({o.get('status')}): both change "
+              f"{', '.join(shared[:3])}" + (f" (+{len(shared) - 3} more)" if len(shared) > 3 else ""), t,
+              blocker=o["id"], files=shared[:10])
+    return did, True
 
 
 def retry_hold(e):
@@ -256,10 +288,9 @@ def lap_change_deadline(st, e, state, t, note=None):
         # SELF-HEALING (2026-11-20, THE HOLD TABLE): a hold that describes a world that moved -- its blocker ended, or
         # its kind's bound passed -- is dropped, and the tick decides afresh (it records the hold again if one still
         # applies, its clock restarted); said quietly on the change's events, never a page
-        if state == "queued":  # its holds are derived after this lap, in the same tick: from nothing
-            note_hold(st, e, None, None, t)
-        else:  # a checked change's were derived just before it, this tick: their clock restarts
-            restart_hold(st, e, t)
+        # NEVER UNHELD BETWEEN TWO READINGS (2026-11-23, W1 "nothing holds it" every few minutes): the hold stays,
+        # its clock restarted, until this tick records what holds it now -- never cleared for the tick's minutes
+        restart_hold(st, e, t)
         try:
             it = st.item("change", e["id"]) or it
             st.transition("change", e["id"], state, it["version"],

@@ -42,6 +42,8 @@ POLICIES = {p.id: p for p in (
     Policy("push", "delay", "a push waits for the landing lock or a push tree, or is under way", mechanism=True),
     Policy("retry", "delay", "an infra failure's check or push is retried after its backoff", mechanism=True),
     Policy("governor", "delay", "a local check waits for the governor's slot", mechanism=True),
+    Policy("stacked", "hold", "a change whose branch carries another open change's commits waits for it, landing "
+           "after it, checked on top of it (holdgraph.py A STACKED CHANGE WAITS FOR ITS PARENT)", mechanism=True),
     Policy("checks-failed", "reject", "a change whose pre-push checks fail is NOT LANDED", mechanism=True),
     Policy("no-longer-applies", "reject", "a change that no longer applies on main is NOT LANDED (rebase and land again)",
            mechanism=True),
@@ -151,6 +153,7 @@ HOLDS = {h.kind: h for h in (
     HoldKind("retry", "retry", "an infra failure's retry", 6 * 3600, "escalate", red_fix_ok=True),
     HoldKind("governor", "governor", "the governor's check slot", 6 * 3600, "escalate", red_fix_ok=True),
     HoldKind("regen", "regen", "its agent's regeneration", 24 * 3600, "recover"),
+    HoldKind("stacked", "stacked", "the change its branch is stacked on", 6 * 3600, "rederive"),
     HoldKind("overlap", "overlap", "an older change it overlaps", 6 * 3600, "rederive"),
     HoldKind("batch", "batch", "a batch it is not in", 4 * 3600, "rederive"),
     HoldKind("backlog-batch", "backlog-batch", "the next backlog batch", 2 * 3600, "rederive"),
