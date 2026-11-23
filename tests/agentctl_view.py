@@ -9,9 +9,10 @@ value of a name winning: they are the same object but for the MACHINES registry,
 
 The clock and the process runner are passed in from the composition root (lib/agentctl/clock.py: a test hands a
 tests/fake_clock.py FakeClock to main, land, the checkers, the ticks, the watch and the processor's loop, or a store on
-a fake clock; procrunner.py: a test wires a tests/fake_runner.py FakeRunner, or hands one to main). Until the store and
-the forge's collaborators are passed in too, this view is how a test fakes the rest (`A.gh_json = ...`); it is the
-tests' only, never imported by agentctl itself.
+a fake clock; procrunner.py: a test wires a tests/fake_runner.py FakeRunner, or hands one to main). So is the store
+(store.py CurrentStore: main hands it to the ticks, checkers, land, the queue's writers, the conditions and the
+commands; a test hands its own, or fake_clock.on_clock's). Until the forge's collaborators are passed in too, this view
+is how a test fakes the rest (`A.gh_json = ...`); it is the tests' only, never imported by agentctl itself.
 
   from agentctl_view import load; A = load(<path of an agentctl entry>)     (a child process's way in, too)
 """
