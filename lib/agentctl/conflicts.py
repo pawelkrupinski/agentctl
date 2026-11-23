@@ -20,7 +20,7 @@ from agentctl.generated import (
 UNION_SAFE = ("docs/*", "*.md")
 
 
-def union_safe(path):
+def union_safe(path: str) -> bool:
     return any(fnmatch.fnmatch(path, g) for g in UNION_SAFE)
 
 

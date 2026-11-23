@@ -14,7 +14,7 @@ from agentctl.storetoken import detached_env
 from agentctl.land import run_watched, tool_env
 from agentctl.queueslots import checker_alive, set_change
 from agentctl.queue import VERIFY_MODE
-from agentctl.generated import generated_entry, without_generated
+from agentctl.generated import derived, generated_entry, regen_here, without_generated
 from agentctl.conflicts import first_hunk, hunks_resolve, union_safe
 from agentctl.queuerecheck import same_change_source
 from agentctl.redfixes import fixes_of
@@ -115,13 +115,21 @@ def overlap_of(repo, older, younger, strict=False):
 # 8 -> 9). So the younger waits, quietly (A HELD WAIT IS NO ESCALATION), and meets the others waiting in the next
 # batch, its generated files merged or regenerated there. Never behind a `waiting` change (it holds nothing it
 # assembles with), and a red fix never waits.
+# A DERIVED FILE HOLDS NOTHING (2026-11-23: three shell-to-Python migration lanes each `its check waits for <older>
+# (checking): both change docs/tools.md`, landing one after another for a page a command writes). A derived file
+# (`merge: derived`) is neither read by the checks as a measure nor merged by rows: it is the combined tree's, its
+# command run over whatever tree lands. So it never holds the younger, not even behind a check in flight: checked now,
+# beside the older, its push finding main moved under a derived file both changed is a new round that regenerates it
+# (queuediff.py _push_change, regen_owed), never the line merge pushed. Tests: tests/test_derived.py.
 IN_FLIGHT = ("checking", "checked", "pushing")
 
 
 def generated_overlap(repo, older, younger):
-    """The registered generated files both changes change (GENERATED FILES ARE NO OVERLAP's, for the in-flight wait)."""
+    """The registered generated files both changes change, derived ones aside (GENERATED FILES ARE NO OVERLAP's, for
+    the in-flight wait; A DERIVED FILE HOLDS NOTHING)."""
     both = sorted(set(change_paths_of(repo, older) or []) & set(change_paths_of(repo, younger) or []))
-    return [f for f in both if generated_entry(repo, f)]
+    held = [f for f in both if generated_entry(repo, f)]
+    return [f for f in held if not derived(generated_entry(repo, f))] if regen_here() else held
 
 
 def main_conflict(repo, e):

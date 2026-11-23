@@ -1839,6 +1839,21 @@ The reconciler then takes it, a step per tick:
   stays the author's), and the command rewrites the block over the merged file. generated.py `block_merge`,
   `explained`, `regen_base`; tests: `tests/test_derived.py` (two lanes each regenerating the catalogue land in one
   check, main's page the generator's output over the merged tree).
+  **A DERIVED FILE HOLDS NOTHING (2026-11-23: the three migration lanes still sat `its check waits for <older>
+  (checking): both change docs/tools.md`, one after another).** A derived file is no overlap even behind a check IN
+  FLIGHT (A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT, below, is for the baselines, tables and snapshots): the
+  younger is checked now, beside the older, and its push, finding main moved under a snapshot or derived file both
+  changed -- a conflict, or a clean line merge git made, which is no tree's output -- is a new round that regenerates it
+  over the combined tree (`main moved under regenerated files it changes too (...)`), never git's merge pushed. On the
+  server role (no regen command) a derived overlap in flight holds as before. queuebatch.py `generated_overlap`,
+  generated.py `derived`, `regen_owed`, queuediff.py `generated_round`. **A hand-written file both sides only add to
+  (scripts/hooks/lint-registry.tsv rows, a skill's bullets) still holds behind a check in flight**, by decision: two
+  QUEUED changes adding to it already meet in one batch (tier 3; a `*.md` is union-merged), but with the older in
+  flight there is no batch to meet in, the additive resolution runs only in a batch's assembly (whose full check
+  verifies it, never a push's rebase), and a file both touch is THE RULE's full round (`both touch ...`; the lint
+  registry is a selection path besides) -- a check of the younger now would be thrown away. Tests:
+  `tests/test_derived.py` (the lanes adding catalogue tools and lint rows, queued together: one batch, both land;
+  behind a check in flight: the catalogue holds nothing, the lint row holds).
 - **A SOURCE CONFLICT IS RESOLVED IN THE BATCH WHEN BOTH SIDES ONLY ADD (tier 3).** In a BACKLOG batch's assembly only
   (its check is the full landing check of exactly the tree that lands -- never a lone change's rebase, a push's rebase,
   a push batch or a verify round), a source conflict is resolved hunk by hunk over `git merge-file --diff3`: past the
@@ -1867,7 +1882,7 @@ The reconciler then takes it, a step per tick:
   2026-11-21 are one batch, one check, all four landed (before: 2 of 4, the others told they no longer applied).
   A source overlap with a change in flight still waits as before: a check of the younger stacked on the older's tip
   is not built. queuebatch.py `generated_overlap`, `overlap_hold`; simulator invariant I10 (v3: no change held behind a
-  QUEUED one for generated files alone).
+  QUEUED one for generated files alone). Derived files aside: A DERIVED FILE HOLDS NOTHING (above).
 - **THE PUSH BATCH (the owner, 2026-11-17: "combine them instead of landing them one by one", W1).** A checked change
   pushed alone: each on a main that moved since its full check paid a verify round of its own, and THE OLDEST
   VERIFICATION PUSHES FIRST held the younger ones meanwhile, so N checked changes landed serially (ref-scrapers

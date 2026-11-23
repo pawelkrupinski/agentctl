@@ -4,6 +4,7 @@
 import os
 import re
 import time
+from typing import List, Optional, Tuple
 from agentctl.core import err, git, git_ok, reds_dir, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -18,7 +19,7 @@ from agentctl.queueslots import PUSH_ATTEMPTS_MAX, check_tree, queue_verdict, se
 from agentctl.conditions import open_condition, run_probe
 from agentctl.queue import (
     VERIFY_MODE, hook_query, module_overlap, range_paths, verify_areas_supported, verify_supported)
-from agentctl.generated import without_generated
+from agentctl.generated import regen_owed, without_generated
 from agentctl.conflicts import conflict_cause, conflict_paths, union_safe
 from agentctl.queuerecheck import own_diff_changed, read_overlap, recheck_logged, recheck_reason
 from agentctl.redfixes import fixes_of
@@ -235,9 +236,9 @@ def _push_change(repo, d, e, i):
             if via:
                 already_landed(d, e, via if via != "an equivalent commit" else None)
                 return "landed"
-            if not new_head and conflicts and not [f for f in without_generated(tree, conflicts) if not union_safe(f)]:
-                what = (f"main moved by what conflicts with it only in generated files ({', '.join(conflicts[:3])}): "
-                        "a new round, which regenerates them over the combined tree")
+            owed = generated_round(tree, conflicts, base, moved, new_head)
+            if owed:
+                what = f"main moved {owed[0]} ({', '.join(owed[1][:3])}): a new round, which regenerates them"
                 set_change(d, e, "queued", data={"rounds": e.get("rounds", 0) + 1},
                            event={"text": f"{e['id']}: {what}"}, rounds=e.get("rounds", 0) + 1, retry_after=0,
                            verify=True)
@@ -357,6 +358,17 @@ def check_tree_for_push(repo, e, i):
         tree = check_tree(repo, i, e["tip"])
     git(tree, "checkout", "-q", "--force", "--detach", e["tip"], check=False)
     return tree
+
+
+def generated_round(tree: str, conflicts: List[str], base: str, moved: str,
+                    new_head: Optional[str]) -> Optional[Tuple[str, List[str]]]:
+    """(how, files) when a push's rebase (no regen command under the landing lock) leaves generated files only a new
+    round's regeneration decides -- it conflicts only in generated files (or prose), or git merged a snapshot or
+    derived file both sides changed (generated.py regen_owed: A DERIVED FILE HOLDS NOTHING) --, else None."""
+    if not new_head and conflicts and not [f for f in without_generated(tree, conflicts) if not union_safe(f)]:
+        return "by what conflicts with it only in generated files", conflicts
+    owed = regen_owed(tree, base, moved, new_head)
+    return ("under regenerated files it changes too", owed) if owed else None
 
 
 def rebase_in_tree(d, tree, e, base, regen=True, conflicts=None):
