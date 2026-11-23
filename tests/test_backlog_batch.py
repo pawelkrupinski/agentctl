@@ -672,7 +672,8 @@ class OverlapTest(BacklogBatchTest):
         self.assertIsNone(A.change_hold_stuck(st, st.item("change", ef)["data"]["hold"], st.item("change", ef),
                                               time.time()))
         it = st.item("change", ee)
-        self.assertIn("nothing holds it", A.change_hold_stuck(st, None, it, time.time()))
+        self.assertIsNone(A.change_hold_stuck(st, None, it, time.time()), "between ticks: its hold not yet recorded")
+        self.assertIn("nothing holds it", A.change_hold_stuck(st, None, it, time.time() + A.UNHELD_GRACE + 1))
         self.assertIn("held for over", A.change_hold_stuck(st, it["data"]["hold"], it, time.time() + 7 * 3600))
 
     def test_a_change_waiting_for_a_green_gate_holds_no_younger_change_sharing_its_file(self):

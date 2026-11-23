@@ -6,6 +6,7 @@ import contextlib, io, json, os, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_clock import FakeClock  # noqa: E402
 
 
 class FakeProcessor:
@@ -145,6 +146,8 @@ class WatchdogTest(unittest.TestCase):
         nongate until noon. With main green W1 returned 0.0 (`age < lim or (red_since and ...)`), which the watchdog
         neither refreshed nor closed on (`r.ok is False` / `r.ok`). Each violated pass re-describes the open
         condition (one inbox entry, one notification per spell still); the invariant holding closes it."""
+        os.environ["AGENTCTL_UNHELD_GRACE"] = "0"  # old-2's lack of a hold is stuck at once (UNHELD_GRACE passed)
+        self.addCleanup(os.environ.pop, "AGENTCTL_UNHELD_GRACE", None)
         st_ = A.open_store()
         st_.put_item("change", "old-1", "checking", {"head": "0" * 40, "submitted_at": time.time() - 5 * 3600})
         st_.put_item("change", "old-2", "queued", {"head": "1" * 40, "submitted_at": time.time() - 4 * 3600})
@@ -223,6 +226,18 @@ class WatchdogTest(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             A.land_status_entry(st_, "scope", time.time())
         self.assertIn("check: in batch movies#107 (checking): the batch's check is its check", out.getvalue())
+
+    def test_a_change_just_checked_with_no_hold_yet_is_between_ticks_never_unheld(self):
+        """2026-11-23 04:19Z/04:44Z: py-restore-corpus, 4 h old, was checked and pushed by the next tick (40 s, 27 s
+        later); W1 read it in between as "checked: nothing holds it, yet it has not pushed". No hold is stuck only once
+        it outlives the grace a tick needs to push it or record what holds it (UNHELD_GRACE); then it is named."""
+        st_ = A.open_store()
+        st_.put_item("change", "corpus", "checked", {"head": "0" * 40, "submitted_at": time.time() - 4 * 3600})
+        ok, detail = A.inv_w1(A.Clock(), A.CurrentStore())
+        self.assertTrue(ok, detail)
+        ok, detail = A.inv_w1(FakeClock(time.time() + A.UNHELD_GRACE + 60), A.CurrentStore())
+        self.assertFalse(ok)
+        self.assertIn("corpus (checked: nothing holds it, yet it has not pushed", detail)
 
     def test_a_lone_checking_change_with_no_live_checker_is_still_named(self):
         st_ = A.open_store()

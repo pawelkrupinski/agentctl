@@ -100,6 +100,8 @@ class WatchdogKindTest(unittest.TestCase):
 
     def test_wr_names_a_slow_fix_of_a_red_outside_the_gate(self):
         """Before: WR read the CI snapshot's gate reds alone -- 08010c, unlanded 2 h, was never flagged."""
+        os.environ["AGENTCTL_UNHELD_GRACE"] = "0"  # c-fix's lack of a hold is stuck at once (UNHELD_GRACE passed)
+        self.addCleanup(os.environ.pop, "AGENTCTL_UNHELD_GRACE", None)
         self.st.put_item("red", "r-out", "fix-pending", {"key": "r-out", "runs": ["6"], "gate": False,
                                                           "red_kind": "outside"})
         self.st.put_item("change", "c-fix", "checked", {"fixes": ["6"], "submitted_at": time.time() - 3600})

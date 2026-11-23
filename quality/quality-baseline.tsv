@@ -58,7 +58,7 @@ cognitive	branch_state	32
 cognitive	build_view	70
 cognitive	change_exit_event	14
 cognitive	change_exits_unannounced	12
-cognitive	change_hold_stuck	15
+cognitive	change_hold_stuck	13
 cognitive	change_rows	12
 cognitive	change_waits	14
 cognitive	changed_lines	16
@@ -471,7 +471,7 @@ cyclomatic	build_view	35
 cyclomatic	build_view_change	15
 cyclomatic	change_exit_event	16
 cyclomatic	change_exits_unannounced	14
-cyclomatic	change_hold_stuck	13
+cyclomatic	change_hold_stuck	12
 cyclomatic	change_paths	14
 cyclomatic	change_rows	16
 cyclomatic	changed_lines	14

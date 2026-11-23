@@ -1722,7 +1722,9 @@ The reconciler then takes it, a step per tick:
   up, no notification, and NO INBOX ENTRY: the lap's event names no audience, so the projector writes none -- on
   2026-11-19 movies-fix-replay's held laps reached the inbox every 15 min, 93 of the day's 442 entries) while that
   hold is live; it escalates only when the hold is stuck (queuebatch.py
-  `change_hold_stuck`): nothing named holds it, its blocking change is gone, or it is older than
+  `change_hold_stuck`): nothing named holds it past `$AGENTCTL_UNHELD_GRACE` (10 min in its state: a change just
+  checked or queued has no hold until the next tick pushes, starts or holds it -- 2026-11-23, py-restore-corpus read
+  `nothing holds it, yet it has not pushed` by W1 in the 40 s before its push), its blocking change is gone, or it is older than
   `$AGENTCTL_CHANGE_HOLD_MAX` (6 h, the `waiting` state's own bound). The blocker's own machine escalates should IT
   stick. Test: `tests/test_backlog_batch.py` OverlapTest `test_overlap_held_changes_wait_quietly...`.
 - **THE HOLD GRAPH (2026-11-23: 22 movies changes deadlocked for over an hour -- gitops-specs' push waited for
@@ -3176,6 +3178,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `tick` | `AGENTCTL_TICK` | `5` | seconds between ticks ; every step is bounded or rate-limited inside |
 | `token_summary` | `AGENTCTL_TOKEN_SUMMARY` | `600` | s between the summaries of a still-missing token (said on its transition first) |
 | `tunnel_state` | `AGENTCTL_TUNNEL_STATE` | - | - |
+| `unheld_grace` | `AGENTCTL_UNHELD_GRACE` | `600` | s |
 | `unkicked_after` | `AGENTCTL_UNKICKED_AFTER` | `3600` | a convergence-relevant main push with no convergence (or Identity takes) run on main by then is a red |
 | `unknown_grace` | `AGENTCTL_UNKNOWN_GRACE` | `300` | s an UNKNOWN condition must keep failing (seen again past this) before it opens |
 | `until_done_deadline` | `AGENTCTL_UNTIL_DONE_DEADLINE` | `14400` | s (--deadline): a batch at green, a verify round and a push fit well inside it |

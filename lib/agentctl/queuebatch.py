@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import time
+from typing import Any, Optional
 from agentctl.core import env_num, fmt_age, git, host_role, process_cache, remote, spawn_detached
 from agentctl.timefmt import ts
 from agentctl.selfcode import TOOL_PATH
@@ -217,6 +218,10 @@ def overlap_hold(repo, d, e, entries, facts, t, stacks=None):
 # It escalates only when the hold is stuck: nothing named holds it, its blocking change is gone, or it is older than
 # CHANGE_HOLD_MAX (the `waiting` state's own bound).
 CHANGE_HOLD_MAX = 6 * 3600  # s ($AGENTCTL_CHANGE_HOLD_MAX)
+# NO HOLD YET IS NO STUCK HOLD (2026-11-23 04:19Z/04:44Z: py-restore-corpus, checked, was pushed by the next tick 40 s
+# and 27 s later; W1 read it in between as "nothing holds it, yet it has not pushed"). A change that has just entered
+# its state has no recorded hold until a tick pushes, starts or holds it: past this grace with none, it is stuck.
+UNHELD_GRACE = 10 * 60  # s ($AGENTCTL_UNHELD_GRACE)
 
 
 def note_hold(st, e, kind, why, t, blocker=None, files=None, batch=None):
@@ -278,10 +283,19 @@ def restart_hold(st, e, t):
         pass
 
 
+def unheld_stuck(it: dict[str, Any], t: float) -> Optional[str]:
+    """Why a change with no recorded hold is stuck, or None within UNHELD_GRACE in its state (NO HOLD YET IS NO STUCK
+    HOLD: a tick pushes, starts or holds it)."""
+    grace = env_num("AGENTCTL_UNHELD_GRACE", UNHELD_GRACE)
+    if grace > 0 and t - float(it.get("entered_at") or t) < grace:
+        return None
+    return "nothing holds it, yet it has not " + ("pushed" if it["state"] == "checked" else "started")
+
+
 def change_hold_stuck(st, hold, it, t):
     """Why a queued or checked change's hold is stuck (an escalation), or None (a legitimate wait: quiet)."""
     if not hold:
-        return "nothing holds it, yet it has not " + ("pushed" if it["state"] == "checked" else "started")
+        return unheld_stuck(it, t)
     if hold_recovers_itself(hold):
         return None  # its own recovery runs at its bound (regen_hold_overdue): never a stuck lap, the owner told once
     if t - float(it.get("entered_at") or t) > env_num("AGENTCTL_CHANGE_HOLD_MAX", CHANGE_HOLD_MAX):

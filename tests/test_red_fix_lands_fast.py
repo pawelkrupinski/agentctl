@@ -217,6 +217,8 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         self.assertFalse(ok, why)
         self.assertIn("c-fix", why)
         self.assertIn("waiting for main to turn green", why)
+        os.environ["AGENTCTL_UNHELD_GRACE"] = "0"  # c-slow's lack of a hold is stuck at once (UNHELD_GRACE passed)
+        self.addCleanup(os.environ.pop, "AGENTCTL_UNHELD_GRACE", None)
         st2 = A.Store(path=os.path.join(self.tmp.name, "store2.db"))
         st2.put_item("change", "c-slow", "queued", {"fixes": ["7"], "submitted_at": A.time.time() - 3600})
         st2.put_item("change", "c-plain", "waiting", {"submitted_at": A.time.time() - 3600})
