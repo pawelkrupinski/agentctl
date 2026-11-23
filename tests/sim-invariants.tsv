@@ -2,18 +2,18 @@
 # fingerprint, the number of the gate's fixed scenarios violating it (its baseline). A changed
 # definition is a new version, in a commit of its own; a baseline only falls without one.
 # kind	version	fingerprint	baseline	what
-I1	2	5bc9d4322335	0	one open item per change (worktree + head)
+I1	3	bbc3c91add1b	0	one open item per change (worktree + head)
 I2	2	e7e182677281	0	never two pushes of one change; never a decided change's commit pushed
-I3	2	ff4beaa96598	0	a red fix is never behind a batch or a non-red change (its own tree, started and pushed when it may go)
-I4	2	5bc9d4322335	0	a batch reaches landed, bisecting or held within its bound
-I5	2	5bc9d4322335	0	the oldest change lands within a bound when nothing fails
-I6	2	3ce57d42afba	0	no change lost (entries and items agree, LANDED is on main, every change decided after the drain)
-I7	2	4b47281a31cf	0	exactly one agentctl.landing record per decided change
+I3	3	8de67bb67531	0	a red fix is never behind a batch or a non-red change (its own tree, started and pushed when it may go)
+I4	3	bbc3c91add1b	0	a batch reaches landed, bisecting or held within its bound
+I5	3	bbc3c91add1b	0	the oldest change lands within a bound when nothing fails
+I6	3	5a2f1fd0212f	0	no change lost (entries and items agree, LANDED is on main, every change decided after the drain)
+I7	3	32d08c0f4a28	0	exactly one agentctl.landing record per decided change
 I8	2	3caedd159fbc	0	a change that no longer applies was told at queue time and never checked meanwhile
 I9	2	a6f5e971123b	0	no full recheck for a file overlap with a change open when it was queued
-I10	3	2b2b818bb60e	0	no change held behind a queued one for generated files alone
+I10	4	3ada25edd390	0	no change held behind a queued one for generated files alone
 I11	2	e7e182677281	0	no unverified combined tree reaches main
-Ib	2	5c5d748e725b	0	every queued or checked change past its deadline has a recorded hold
-Ic	2	5c5d748e725b	0	no change past its deadline is silent in `land status`
-Id	2	5c5d748e725b	0	executors start in the documented priority order within a tick
-IX	2	3a9f982152df	0	no executor for a decided change
+Ib	3	669ddf146386	0	every queued or checked change past its deadline has a recorded hold
+Ic	3	669ddf146386	0	no change past its deadline is silent in `land status`
+Id	3	669ddf146386	0	executors start in the documented priority order within a tick
+IX	3	afb158da1cff	0	no executor for a decided change
