@@ -99,7 +99,7 @@ def probe_drift(repo, commit, run, wall):
     return {"verdict": v, "evidence": said}
 
 
-def probe_checks(repo, o_r, commit, run, tokens, wall):
+def probe_checks(repo, o_r, commit, run, tokens, wall, clock):
     """The boundary's TREE through precommit-check.yml on CI: a commit holding it on top of <remote>/main pushed as
     `check/blame-<run>-<sha>` (the change's paths -- everything after the boundary, undone -- select the checks, as
     the known-red baseline does). A pass counts only when the run's log names the failing test (else the check never
@@ -115,16 +115,16 @@ def probe_checks(repo, o_r, commit, run, tokens, wall):
     if r.returncode != 0:
         return {"verdict": "none", "evidence": f"push of {branch} failed: {r.stderr.strip()[:200]}"}
     rem = {"branch": branch, "tip": tip, "run": None, "status": None}
-    t0 = time.time()
+    t0 = clock.time()
     try:
         for delay in backoff(30, 300):
             try:
-                rem = remote_poll(o_r, rem, time.time())
+                rem = remote_poll(o_r, rem, clock.time())
             except (Exception, SystemExit) as e:
                 err(f"blame probe {branch}: {str(e)[:160]}")
-            if rem.get("status") or time.time() - t0 > wall:
+            if rem.get("status") or clock.time() - t0 > wall:
                 break
-            time.sleep(delay)
+            clock.sleep(delay)
     finally:
         delete_check_branch(o_r, branch)
     st = rem.get("status")
@@ -146,14 +146,15 @@ def probe_checks(repo, o_r, commit, run, tokens, wall):
     return {"verdict": "pass", "evidence": f"{name}: success, ran {', '.join(seen)}"}
 
 
-def cmd_red_probe(a):
+def cmd_red_probe(a, clock):
     """`agentctl red probe`: one boundary's verdict on CI, written to --out (the red tick reads it)."""
     wall = env_num("AGENTCTL_BLAME_PROBE_WALL", BLAME_PROBE_WALL)
     try:
         if a.kind == "drift":
             v = probe_drift(a.repo, a.commit, a.run, wall)
         elif a.kind == "checks":
-            v = probe_checks(a.repo, slug(a.repo), a.commit, a.run, [t for t in (a.tokens or "").split() if t], wall)
+            v = probe_checks(a.repo, slug(a.repo), a.commit, a.run, [t for t in (a.tokens or "").split() if t], wall,
+                             clock)
         else:
             v = {"verdict": "none", "evidence": f"no probe of kind {a.kind}"}
     except (Exception, SystemExit) as e:

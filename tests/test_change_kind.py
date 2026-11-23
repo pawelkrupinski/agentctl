@@ -104,7 +104,7 @@ class WatchdogKindTest(unittest.TestCase):
                                                           "red_kind": "outside"})
         self.st.put_item("change", "c-fix", "checked", {"fixes": ["6"], "submitted_at": time.time() - 3600})
         self.st.put_item("change", "c-wait", "waiting", {"fixes": ["6"], "submitted_at": time.time()})
-        ok, why = A.inv_wr(store=self.st, reds=set())
+        ok, why = A.inv_wr(A.Clock(), st=self.st, reds=set())
         self.assertFalse(ok, why)
         self.assertIn("c-fix (red fix of 6 (outside)) is checked", why)
         self.assertNotIn("c-wait", why, "only a GATE red's fix may not wait for green")

@@ -64,7 +64,7 @@ from agentctl.processor import cmd_tick, cmd_waiting
 wire_store(process_store)
 wire_token_missing_note(token_unavailable_note)
 wire_inbox_writer(alert_write)
-wire_probes({"disk_free": probe_disk_free, "quota_reset": probe_quota_reset, "invariant": probe_invariant,
+wire_probes({"disk_free": probe_disk_free, "quota_reset": probe_quota_reset,
              "waiting_ok": probe_waiting_ok, "orphan_landed": probe_orphan_landed, "workflow_green": probe_workflow_green,
              "http": probe_http, "tcp": probe_tcp, "route": probe_route, "tunnel": probe_tunnel,
              "gate_read": probe_gate_read, "token": probe_token, "git_fetch": probe_git_fetch,
@@ -76,6 +76,15 @@ wire_recover_actions({"clear_hold": recover_clear_hold, "tunnel_reset": recover_
                       "clear_flag": recover_clear_flag})
 
 
+def wire_collaborators(clock: Clock, store: Any) -> None:
+    """What reads the process's clock and store from a registry (the `invariant` probe: the watchdog's invariants)
+    wired with main's; at import, with the wall's clock and the process's store, for a probe run before any main."""
+    wire_probes({"invariant": lambda a: probe_invariant(a, clock, store)})
+
+
+wire_collaborators(Clock(), CurrentStore())
+
+
 # ---------------------------------------------------------------- main
 def main(argv: list[str] | None = None, clock: Clock | None = None, runner: ProcessRunner | None = None,
          store: Any = None) -> Any:
@@ -83,12 +92,13 @@ def main(argv: list[str] | None = None, clock: Clock | None = None, runner: Proc
     own) and runs the command."""
     clock = clock or Clock()
     store = store if store is not None else CurrentStore(clock.time)
+    wire_collaborators(clock, store)
     wire_runner(runner or ProcessRunner())
     if (sys.argv[1:] if argv is None else argv) == ["--selftest"]:
         return selftest()
     a = parser().parse_args(argv)
     handler: Callable[[argparse.Namespace], Any] = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": cmd_red, "decide": cmd_decide, "config": cmd_config, "issue": cmd_issue, "revert": cmd_revert, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "laptop": cmd_laptop, "status": cmd_status, "queue": cmd_queue_retired, "tick": lambda a: cmd_tick(a, clock, store), "store": cmd_store, "github-app": cmd_github_app, "waiting": lambda a: cmd_waiting(a, clock, store), "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "park": cmd_park, "unpark": cmd_unpark, "watch": lambda a: cmd_watch(a, clock, store), "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": lambda a: cmd_land(a, clock, store), "land-precheck": lambda a: cmd_land_precheck(a, store), "env": cmd_env}[a.cmd]
+               "red": lambda a: cmd_red(a, clock, store), "decide": cmd_decide, "config": cmd_config, "issue": cmd_issue, "revert": cmd_revert, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": lambda a: cmd_watchdog(a, clock, store), "lease": cmd_lease, "laptop": cmd_laptop, "status": cmd_status, "queue": cmd_queue_retired, "tick": lambda a: cmd_tick(a, clock, store), "store": cmd_store, "github-app": cmd_github_app, "waiting": lambda a: cmd_waiting(a, clock, store), "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "park": cmd_park, "unpark": cmd_unpark, "watch": lambda a: cmd_watch(a, clock, store), "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": lambda a: cmd_land(a, clock, store), "land-precheck": lambda a: cmd_land_precheck(a, store), "env": cmd_env}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)
 

@@ -1027,22 +1027,22 @@ class CloseAfterWatchTest(Phase2Base):
 
 class W7Test(Phase2Base):
     def test_w7_flags_a_sync_behind_the_event_feed_and_clears_once_it_projects(self):
-        self.assertEqual(A.inv_w7()[0], True)  # the server: no sync here to lag
+        self.assertEqual(A.inv_w7(A.Clock(), A.CurrentStore())[0], True)  # the server: no sync here to lag
         self.sync()
-        self.assertEqual(A.inv_w7()[0], True)  # no events
+        self.assertEqual(A.inv_w7(A.Clock(), A.CurrentStore())[0], True)  # no events
         it = self.st.put_item("condition", "w7", "open", {})
         self.st.transition("condition", "w7", "closed", it["version"], event={"text": "x"})
         seq = max(e["seq"] for e in self.st.events())
         c = self.st.db()
         c.execute("UPDATE events SET at=? WHERE seq=?", (time.time() - 3600, seq))
         c.close()
-        ok, why = A.inv_w7()
+        ok, why = A.inv_w7(A.Clock(), A.CurrentStore())
         self.assertEqual(ok, False)
         self.assertIn("behind ci-runner's events", why)
         self.st.meta_set("projector_seq", seq)  # the sync projected it
-        self.assertEqual(A.inv_w7()[0], True)
+        self.assertEqual(A.inv_w7(A.Clock(), A.CurrentStore())[0], True)
         os.environ["AGENTCTL_STORE_URL"] = "http://127.0.0.1:9"
-        self.assertIsNone(A.inv_w7()[0])  # the store down: no verdict
+        self.assertIsNone(A.inv_w7(A.Clock(), A.CurrentStore())[0])  # the store down: no verdict
         self.assertIn("W7", A.INVARIANTS)
 
 

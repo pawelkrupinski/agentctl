@@ -22,7 +22,7 @@ mypy-errors	cireport	66
 mypy-errors	ciwhy	56
 mypy-errors	classify	1
 mypy-errors	cleanup	51
-mypy-errors	cli	12
+mypy-errors	cli	14
 mypy-errors	clones	1
 mypy-errors	conditions	40
 mypy-errors	config	19
@@ -49,7 +49,7 @@ mypy-errors	govroute	18
 mypy-errors	govusage	6
 mypy-errors	identitychange	13
 mypy-errors	inbox	17
-mypy-errors	invariants	38
+mypy-errors	invariants	37
 mypy-errors	issues	7
 mypy-errors	jvmreap	42
 mypy-errors	land	23

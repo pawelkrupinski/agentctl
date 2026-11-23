@@ -211,7 +211,7 @@ class SelfCloseTest(AlertBase):
 class HysteresisTest(AlertBase):
     def test_a_self_healing_invariant_is_the_fixers_until_it_outlives_its_bound(self):
         saved = A.INVARIANTS["W5"]
-        A.INVARIANTS["W5"] = lambda: (False, "the processor has not beaten for 10 min")
+        A.INVARIANTS["W5"] = lambda clock, st: (False, "the processor has not beaten for 10 min")
         try:
             p = A.run_probe("invariant", {"id": "W5"})
             A.open_condition("INVARIANT", "INVARIANT W5 violated: the processor has not beaten", p, [],

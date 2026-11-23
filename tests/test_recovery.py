@@ -59,7 +59,21 @@ class WiredRegistryTest(unittest.TestCase):
         self.assertEqual(set(A.PROBES), set(A.PROBE_EVERY))  # every probe has its recheck interval, and only those
         self.assertTrue({"clear_hold", "tunnel_reset", "clear_flag"} <= set(A.RECOVER_ACTIONS))
         for kind, probe in A.PROBES.items():
-            self.assertIs(probe, getattr(A, f"probe_{kind}"), kind)  # the probe itself, no late-binding wrapper
+            if kind != "invariant":
+                self.assertIs(probe, getattr(A, f"probe_{kind}"), kind)  # the probe itself, no late-binding wrapper
+
+    def test_the_invariant_probe_checks_with_mains_clock_and_store(self):
+        clock, store, seen = A.Clock(), object(), []
+        saved = dict(A.PROBES), A.INVARIANTS.get("WX")
+        A.INVARIANTS["WX"] = lambda c, st: seen.append((c, st)) or (True, "held")
+        try:
+            A.wire_collaborators(clock, store)
+            self.assertTrue(A.run_probe("invariant", {"id": "WX"}).ok)
+        finally:
+            A.PROBES.clear()
+            A.PROBES.update(saved[0])
+            A.INVARIANTS.pop("WX")
+        self.assertEqual(seen, [(clock, store)], "the watchdog's invariants read the clock and store cli handed")
 
 
 class SameProbeTest(RegistryBase):

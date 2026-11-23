@@ -65,7 +65,7 @@ class EventsTest(unittest.TestCase):
         saved = A.open_store
         A.open_store = lambda *a, **k: self.st
         try:
-            self.assertTrue(A.inv_w6()[0])
+            self.assertTrue(A.inv_w6(A.Clock(), A.CurrentStore())[0])
         finally:
             A.open_store = saved
 
@@ -114,12 +114,12 @@ class EventsTest(unittest.TestCase):
         saved = A.open_store
         A.open_store = lambda *a, **k: self.st
         try:
-            ok, why = A.inv_w8()
+            ok, why = A.inv_w8(A.Clock(), A.CurrentStore())
             self.assertFalse(ok)
             self.assertIn("s1", why)
             os.environ["AGENTCTL_W8_WINDOW"] = "-60"  # it ages out of the window: the condition clears itself
             self.addCleanup(os.environ.pop, "AGENTCTL_W8_WINDOW", None)
-            self.assertTrue(A.inv_w8()[0])
+            self.assertTrue(A.inv_w8(A.Clock(), A.CurrentStore())[0])
         finally:
             A.open_store = saved
 
@@ -269,7 +269,7 @@ class NotifierDeliveryTest(unittest.TestCase):
         self.escalate("slow")
         self.assertEqual(A.notify_escalations(self.st), 0)
         self.assertEqual(A.notify_cause(), "osascript: timed out after 1 s")
-        ok, detail = A.inv_wn()
+        ok, detail = A.inv_wn(A.Clock(), A.CurrentStore())
         self.assertIs(ok, False)
         self.assertIn("(osascript: timed out after 1 s; 1 waiting)", detail)
         self.assertIn("overloaded", detail)
@@ -305,17 +305,17 @@ class NotifierDeliveryTest(unittest.TestCase):
         open(os.path.join(self.root, "down"), "w").close()
         self.assertEqual(A.notify_escalations(self.st), 0)
         self.assertEqual(len(self.unmarked()), 5, "nothing reached the owner: nothing is recorded as told")
-        ok, detail = A.inv_wn()
+        ok, detail = A.inv_wn(A.Clock(), A.CurrentStore())
         self.assertIs(ok, False)
         self.assertIn("notify.sh: exit 1", detail)
         self.assertIn("fix the notification command ($AGENTCTL_NOTIFY)", detail)
-        self.assertIsNone(A.inv_w6()[0], "W6 defers to WN: one condition, not one per waiting escalation")
+        self.assertIsNone(A.inv_w6(A.Clock(), A.CurrentStore())[0], "W6 defers to WN: one condition, not one per waiting escalation")
         os.remove(os.path.join(self.root, "down"))
         self.t[0] += 60
         self.assertEqual(A.notify_escalations(self.st), 1)  # caught up: one summary
         self.assertEqual(self.unmarked(), [])
-        self.assertIs(A.inv_wn()[0], True)
-        self.assertIs(A.inv_w6()[0], True)
+        self.assertIs(A.inv_wn(A.Clock(), A.CurrentStore())[0], True)
+        self.assertIs(A.inv_w6(A.Clock(), A.CurrentStore())[0], True)
 
     def test_one_live_notification_per_item_re_notified_on_the_reminder_schedule(self):
         self.escalate("r1", times=3)  # three re-escalations pending at once

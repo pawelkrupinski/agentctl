@@ -4,7 +4,6 @@
 import re
 import time
 from agentctl.core import SHORT, env_num, fmt_age
-from agentctl.store import open_store
 from agentctl.repos import red_repo_of
 from agentctl.policy import HOLDS
 from agentctl.redrecord import RED_TERMINAL, lease_is_live, red_active, red_lease, red_what
@@ -71,18 +70,17 @@ def snap_reds(snap):
     return out - {"None"}
 
 
-def inv_wr(store=None, reds=None, now_=None):
+def inv_wr(clock, st, reds=None):
     """WR: A RED FIX NEVER WAITS FOR GREEN (the owner, 2026-11-16). No open change whose KIND (changekind.py: its
     `Fixes-Red:` against the gate's reds and every red the store has open) is a gate red's fix is on `waiting`, and no
     fix of any open red -- the gate's or one outside it (08010c, 2026-11-19) -- is still unlanded WR_MAX after it was
     submitted."""
     if reds is None:
         reds = snap_reds(ci_state_load(SHORT["movies"]))
-    st = store or open_store()
     facts = queue_facts(reds or set(), st)
     if not reds and not facts["open"]:
         return True, "main green (or its gate unread) and no red open: no red fix to hold"
-    t = now_ if now_ is not None else time.time()
+    t = clock.time()
     lim = env_num("AGENTCTL_WR_MAX", WR_MAX)
     bad = []
     for it in st.items("change"):

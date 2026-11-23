@@ -14,7 +14,6 @@ from agentctl.storetoken import TOKEN_SHAPE, hand_token, processor_sock, token_r
 from agentctl.notifier import notify
 from agentctl.launchd import SERVICE_LABEL, launchctl
 from agentctl.beats import beat_age, beat_path, write_beat
-from agentctl.store import open_store
 from agentctl.conditions import close_condition, open_condition, open_conditions, run_probe
 from agentctl.changekind import file_unheld_change, unheld_changes
 from agentctl.invariants import INVARIANTS, W5_MAX, watchdog_state
@@ -67,13 +66,12 @@ def kick_processor() -> str:
     return f"the new processor did not listen within {fmt_age(env_num('AGENTCTL_KICK_HANDOFF_WAIT', KICK_HANDOFF_WAIT))}: its token is lost"
 
 
-def watchdog_unheld(store=None, entries=None, now_=None):
+def watchdog_unheld(st, entries=None, now_=None):
     """THE WATCHDOG'S HOLD CHECK (changekind.py, A CHANGE PAST ITS DEADLINE WITH NO RECORDED HOLD): every queued or
     checked change past its state's deadline with nothing recorded holding it is agentctl's bug, filed ONCE as an
     agentctl issue -- never an owner page, never a wait for W1's 2 h. Returns one line per change filed (or already
     filed)."""
-    st = store or open_store()
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else st.clock()
     if entries is None:
         try:
             d, _c, _w = waiting_state(movies_repo_path())
@@ -113,25 +111,26 @@ def new_episode(st: Dict[str, Any], wid: str, detail: str, t: float) -> bool:
     return True
 
 
-def tell_violation(st: Dict[str, Any], wid: str, detail: str, cond: object, heals: bool) -> None:
+def tell_violation(st: Dict[str, Any], wid: str, detail: str, cond: object, heals: bool, t: float) -> None:
     """Notify invariant wid's violation as its condition opens -- not a self-healing one's (told once past its bound),
     and once per episode (new_episode)."""
-    if not cond and not heals and new_episode(st, wid, detail, time.time()):
+    if not cond and not heals and new_episode(st, wid, detail, t):
         notify(f"agentctl watchdog: {wid}", detail[:220])
 
 
-def cmd_watchdog(a):
+def cmd_watchdog(a, clock, store):
     """One watchdog pass: every invariant checked; a violation opens its INVARIANT condition (and notifies), a restored
-    one closes it; W5 kickstarts the processor. Prints one line per invariant."""
+    one closes it; W5 kickstarts the processor. Prints one line per invariant. clock and store: cli's (the invariants'
+    probe is wired with the same)."""
     st = watchdog_state()
-    woke = awake_since(st)
+    woke = awake_since(st, clock.time())
     write_beat("watchdog")
     rc = 0
     misses = dict(st.get("misses") or {})
     for wid in INVARIANTS:
         r = run_probe("invariant", {"id": wid})
         key = f"invariant-{wid}"
-        cond = next((c for c in open_conditions() if c["key"] == key), None)
+        cond = next((c for c in open_conditions(store) if c["key"] == key), None)
         print(f"{wid}: {'ok' if r.ok else 'cannot tell' if r.ok is None else 'VIOLATED'} -- {r.detail}")
         if r.ok is False:
             rc = 1
@@ -143,22 +142,23 @@ def cmd_watchdog(a):
             # an open one is RE-DESCRIBED each pass (2026-11-16: invariant-W1.6 named a change landed 6 h before,
             # while another one violated W1): its text, escalations and the ESCALATED line say what violates it now
             if cond or not heals or misses[wid] >= env_num("AGENTCTL_WATCHDOG_MISSES", WATCHDOG_MISSES):
-                open_condition("INVARIANT", f"INVARIANT {wid} violated: {r.detail}", r, [], key=key, command="watchdog")
-                tell_violation(st, wid, r.detail, cond, heals)
+                open_condition("INVARIANT", f"INVARIANT {wid} violated: {r.detail}", r, [], key=key, command="watchdog",
+                               store=store)
+                tell_violation(st, wid, r.detail, cond, heals, clock.time())
             # only for a processor silent past 3 x W5_MAX of AWAKE time (a beat the laptop slept through is no
             # silence: 2026-11-15 16:58, a dark wake), at most every WATCHDOG_KICK_GAP; the kick keeps its token
-            silent = min(beat_age("processor") or 0, time.time() - woke)
+            silent = min(beat_age("processor") or 0, clock.time() - woke)
             if wid == "W5" and silent > 3 * env_num("AGENTCTL_W5_MAX", W5_MAX) \
-                    and time.time() - float(st.get("kicked_at") or 0) >= WATCHDOG_KICK_GAP:
-                st["kicked_at"] = time.time()
+                    and clock.time() - float(st.get("kicked_at") or 0) >= WATCHDOG_KICK_GAP:
+                st["kicked_at"] = clock.time()
                 write_json(state_root("watchdog.json"), {**watchdog_state(), "kicked_at": st["kicked_at"]})
                 print(f"W5: kickstarted {SERVICE_LABEL} ({kick_processor()})")
         elif r.ok and cond:
-            close_condition(cond, r)
+            close_condition(cond, r, store)
         if r.ok:
             misses.pop(wid, None)
     try:
-        for line in watchdog_unheld():
+        for line in watchdog_unheld(store, now_=clock.time()):
             print(f"unheld: {line}")
     except (Exception, SystemExit) as e:  # the store unreadable: the invariants above already say so
         print(f"unheld: cannot tell ({str(e)[:160]})")

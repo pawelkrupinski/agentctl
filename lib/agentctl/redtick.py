@@ -343,13 +343,12 @@ def red_am_fixer():
     return 1
 
 
-def cmd_red(a):
+def cmd_red(a, clock, st):
     if a.rcmd == "am-fixer":
         return red_am_fixer()
     if a.rcmd == "probe":
-        return cmd_red_probe(a)
+        return cmd_red_probe(a, clock)
     o_r = slug(a.repo) if getattr(a, "repo", None) and a.rcmd not in ("fixer", "owner") else default_repo()
-    st = open_store()
     if a.rcmd == "block":
         return red_block(o_r, a)
     if a.rcmd == "unblock":

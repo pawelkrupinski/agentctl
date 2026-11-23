@@ -196,12 +196,12 @@ class OneViewTest(OneQueueBase):
         saved = os.environ.get("AGENTCTL_MOVIES_REPO")
         os.environ["AGENTCTL_MOVIES_REPO"] = self.r.path
         try:
-            ok, detail = A.inv_w1()
+            ok, detail = A.inv_w1(A.Clock(), A.CurrentStore())
             self.assertFalse(ok)
             self.assertIn("x-92 (waiting: waiting for green, the gate unread (no CI snapshot)) is 11 h old", detail)
             self.land_rebased(head)
             A._landed_looked.clear()
-            ok, detail = A.inv_w1()  # its own landed look closes x-92 before it counts
+            ok, detail = A.inv_w1(A.Clock(), A.CurrentStore())  # its own landed look closes x-92 before it counts
         finally:
             os.environ["AGENTCTL_MOVIES_REPO"] = saved
         self.assertTrue(ok, detail)
