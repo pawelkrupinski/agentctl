@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import subprocess
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from agentctl.core import env_num, git, host_role, process_cache, slug
 from agentctl.repos import red_repo_conf
 from agentctl.land import tool_env
@@ -161,9 +162,68 @@ def regen_here():
     return host_role() != "server"
 
 
-def regen_only(g):
-    """Whether a registry entry is a SNAPSHOT (`merge: regen`): never merged by rows, always regenerated."""
+def regen_only(g: Optional[Dict[str, Any]]) -> bool:
+    """Whether a registry entry is never merged by rows, always regenerated: a SNAPSHOT (`merge: regen`) or a DERIVED
+    file (`merge: derived`)."""
+    return bool(g) and g.get("merge") in ("regen", "derived")
+
+
+def explained(g: Optional[Dict[str, Any]]) -> bool:
+    """Whether a regenerated entry's output must be explained by the sides: a SNAPSHOT's, never a DERIVED file's."""
     return bool(g) and g.get("merge") == "regen"
+
+
+# A DERIVED FILE IS THE COMBINED TREE'S (2026-11-23: three parallel shell-to-Python migration lanes each regenerating
+# movies' docs/tools.md -- `python3 scripts/tool_catalogue.py`, from each tool's own purpose line -- and every queued
+# one conflicting with the others there; one lane was refused four times for that alone, a clean line merge or the
+# docs union leaving a page scripts/tool_catalogue_test.py calls stale). A file the tree derives by a cheap,
+# deterministic command -- a catalogue, a path closure -- is registered with `merge: derived`: regenerated over the
+# combined tree whenever both sides changed it, as a snapshot is, but its output needs no explaining by the sides
+# (explained): its aggregate lines -- a section's count, a "called by N tools" -- are by construction lines neither
+# side had, and the repo's own check of the combined tree (the tool catalogue's test) asserts it. A file only PART of
+# which is generated (`block`: [the begin line's prefix, the end line's]; .github/convergence-paths.txt's block) keeps
+# its hand-written lines: they are merged three-way with the block left out (block_merge), a conflict there the
+# author's, and the command then rewrites the block over the merged file.
+def merge_file(ours: str, base: str, theirs: str, *flags: str) -> "subprocess.CompletedProcess[str]":
+    """`git merge-file -p <flags>` of three texts: the CompletedProcess (returncode: the conflicts, < 0 or > 127 an
+    error)."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        paths = []
+        for n, x in zip(("ours", "base", "theirs"), (ours, base, theirs)):
+            q = os.path.join(td, n)
+            with open(q, "w") as fh:
+                fh.write(x)
+            paths.append(q)
+        return subprocess.run(["git", "merge-file", "-p", *flags, *paths], capture_output=True, text=True)
+
+
+BLOCK_HELD = "agentctl: the generated block stands here\n"  # what stands in for a block while the lines around it are merged
+
+
+def block_cut(text: str, block: List[str]) -> Optional[Tuple[List[str], List[str], List[str]]]:
+    """(the lines before, the block's lines -- its begin and end lines with them --, the lines after) of a text, or
+    None when it has no whole block."""
+    lines = text.splitlines(True)
+    begin = next((i for i, x in enumerate(lines) if x.startswith(block[0])), None)
+    end = None if begin is None else next((i for i in range(begin + 1, len(lines)) if lines[i].startswith(block[1])),
+                                          None)
+    if end is None:
+        return None
+    return lines[:begin], lines[begin:end + 1], lines[end + 1:]
+
+
+def block_merge(base: str, ours: str, theirs: str, block: List[str]) -> Optional[str]:
+    """The file merged three-way outside its generated block, ours' block in place (for the regen command to
+    rewrite), or None when a side has no whole block or the hand-written lines conflict."""
+    cuts = [block_cut(x, block) for x in (base, ours, theirs)]
+    if None in cuts:
+        return None
+    b, o, t = ("".join(c[0]) + BLOCK_HELD + "".join(c[2]) for c in cuts)
+    r = merge_file(o, b, t)
+    if r.returncode != 0 or r.stdout.count(BLOCK_HELD) != 1:
+        return None
+    return r.stdout.replace(BLOCK_HELD, "".join(cuts[1][1]))
 
 
 # SNAPSHOTS ARE REGENERATED, NEVER MERGED (2026-11-21 ~07:40Z: split-shared-js `held: its check waits for scrapers-2`,
@@ -251,28 +311,19 @@ def regenerate(wt, files, regenerated=None, provisional=None, sides=None):
                 if provisional is not None:
                     provisional.append(f)
             continue
-        if sides is None:
-            git(wt, "checkout", "--ours", "--", *mine, check=False)  # no conflict markers in what the command reads
+        if sides is None:  # no conflict markers in what the command reads
+            why = regen_base(wt, g, mine, stages, take)
+            if why:
+                return why
         before = {p: git(wt, "show", f":{p}", check=False).stdout for p in tracked(wt, g["paths"])
-                  if p not in mine} if regen_only(g) else {}
+                  if p not in mine} if explained(g) else {}
         why = run_regen(wt, g)
         if why:
-            return ("both sides changed the snapshot " if regen_only(g) else "a row both sides changed, and ") + why
-        if regen_only(g):  # A REGENERATED SNAPSHOT HIDES NOTHING: explained by the sides, else not resolved
-            for f in mine:
-                path = os.path.join(wt, f)
-                if not os.path.exists(path):
-                    return f"`{' '.join(g['regen'])}` did not write {f}"
-                with open(path) as fh:
-                    odd = snapshot_unexplained(stages[f][1], stages[f][2], stages[f][3], fh.read())
-                if odd:
-                    return (f"the regenerated {f} holds a change neither side made ({odd}): an interaction its "
-                            "authors regenerate and commit")
-            for p, text in before.items():
-                path = os.path.join(wt, p)
-                if os.path.exists(path) and open(path).read() != text:
-                    return (f"the regen also moved {p}, which only one side changed: an interaction its authors "
-                            "regenerate and commit")
+            return ("both sides changed the snapshot " if explained(g) else "both sides changed the derived file "
+                    if regen_only(g) else "a row both sides changed, and ") + why
+        why = snapshot_hidden(wt, g, mine, stages, before) if explained(g) else None
+        if why:
+            return why
         git(wt, "add", "-A", "--", *g["paths"], check=False)
         left = sorted(set(unmerged(wt)) & set(mine))
         if left:
@@ -282,6 +333,42 @@ def regenerate(wt, files, regenerated=None, provisional=None, sides=None):
             git(wt, "checkout", "--", *stray, check=False)
     if regenerated is not None:
         regenerated.extend(f for f in files if f not in regenerated)
+    return None
+
+
+def snapshot_hidden(wt: str, g: Dict[str, Any], mine: List[str], stages: Dict[str, Dict[int, str]],
+                    before: Dict[str, str]) -> Optional[str]:
+    """Why a snapshot regenerated in wt is no resolution -- a file not written, a change neither side made, another
+    snapshot of the command moved (A REGENERATED SNAPSHOT HIDES NOTHING) --, or None."""
+    for f in mine:
+        path = os.path.join(wt, f)
+        if not os.path.exists(path):
+            return f"`{' '.join(g['regen'])}` did not write {f}"
+        with open(path) as fh:
+            odd = snapshot_unexplained(stages[f][1], stages[f][2], stages[f][3], fh.read())
+        if odd:
+            return (f"the regenerated {f} holds a change neither side made ({odd}): an interaction its "
+                    "authors regenerate and commit")
+    for p, text in before.items():
+        path = os.path.join(wt, p)
+        if os.path.exists(path) and open(path).read() != text:
+            return (f"the regen also moved {p}, which only one side changed: an interaction its authors "
+                    "regenerate and commit")
+    return None
+
+
+def regen_base(wt: str, g: Dict[str, Any], mine: List[str], stages: Dict[str, Dict[int, str]],
+               take: Callable[[str, str], None]) -> Optional[str]:
+    """Put wt's conflicted files of entry g in a state its regen command reads: ours' side, or -- a file with a
+    generated `block` -- its hand-written lines merged (A DERIVED FILE IS THE COMBINED TREE'S). None, or why not."""
+    if not g.get("block"):
+        git(wt, "checkout", "--ours", "--", *mine, check=False)
+        return None
+    for f in mine:
+        text = block_merge(stages[f][1], stages[f][2], stages[f][3], g["block"])
+        if text is None:
+            return f"{f}: both sides changed its hand-written lines, outside the generated block, in one place"
+        take(f, text)
     return None
 
 

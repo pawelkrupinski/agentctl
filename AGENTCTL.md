@@ -1768,9 +1768,11 @@ The reconciler then takes it, a step per tick:
   coupling or complexity lane landed one at a time).** A repo registers its generated files in red-repos.json
   (`generated`: `[{paths, regen, timeout}]`; movies: coupling-baseline.tsv and coupling-fanout-refs.tsv by
   `scripts/coupling-report --update`, the complexity, length and duplication baselines by `scripts/quality-report
-  --update`; since 2026-11-21 the SNAPSHOTS, `merge: regen` (below); since 2026-11-20 also the HAND-WRITTEN TABLES,
-  registered with no `regen`: coupling-exemptions.tsv,
-  coupling-layers.tsv, identity-judgements.tsv and identity-unmatched/expected-matches.tsv -- metrics-packages sat held
+  --update`, py-quality-baseline.tsv by `scripts/py-quality-report --update`; since 2026-11-21 the SNAPSHOTS, `merge:
+  regen` (below); since 2026-11-23 the DERIVED FILES, `merge: derived` (below); since 2026-11-20 also the HAND-WRITTEN
+  TABLES, registered with no `regen`: coupling-exemptions.tsv,
+  coupling-layers.tsv, identity-judgements.tsv, identity-unmatched/expected-matches.tsv and
+  scripts/tool-catalogue/migration-classes.tsv -- metrics-packages sat held
   behind phase6-data on coupling-exemptions.tsv -- merged row by row only, a row both sides changed staying the author's
   conflict, never one side's row kept provisionally: no ratchet would judge a lost exemption). Such a file is no overlap -- not
   for the hold (but A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT, below), backlog-batch membership, the CONFLICTS a queued change is told of, `main_conflict`, nor the push's
@@ -1789,7 +1791,8 @@ The reconciler then takes it, a step per tick:
   landing lock) never runs a regen command: a generated-only conflict there is a new verify round. A failed resolution
   (no JVM where the queue runs, the command's exit, its timeout) leaves the member out of the batch (`batch_alone`
   `regen`, why in the log) and holds it behind the change it overlaps, as before; a member resolved in a batch that
-  then fails is checked alone, never rejected for it. waiting.py `conflict_resolve`, `rows_merge`, `regenerate`;
+  then fails is checked alone, never rejected for it. conflicts.py `conflict_resolve`, generated.py `rows_merge`,
+  `regenerate`;
   tests: `tests/test_generated.py`, `tests/test_queue_sim.py` GeneratedOverlapTest (the six replayed, 4 check trees,
   seeds 0-19: mean 8.2 -> 5.3 ticks from queued to landed, max 18 -> 11).
 - **THE BATCH TIERS (the owner, 2026-11-21: "make agentctl batch even more, merge / fix conflicts").** Two QUEUED
@@ -1819,8 +1822,23 @@ The reconciler then takes it, a step per tick:
   then part of exactly the tree the batch's full check runs: movies' `basic` tests assert expected-schedules.txt and the
   read model (FilmScheduleEndToEnd) as for each side's own regen; the page snapshots are asserted on Main (the page
   layer runs after landing), which is why the explained rule, not the check, guards them. A regen failing on the
-  combined tree (exit, timeout, no file written) falls back to the hold, never a reject. waiting.py
+  combined tree (exit, timeout, no file written) falls back to the hold, never a reject. generated.py
   `snapshot_unexplained`, `snapshots_both_changed`, `regenerate`; tests: `tests/test_batch_tiers.py`.
+- **A DERIVED FILE IS THE COMBINED TREE'S (2026-11-23: three parallel shell-to-Python migration lanes each regenerating
+  movies' docs/tools.md, every queued one conflicting with the others there; one lane refused four times for it
+  alone).** A file the tree derives by a cheap, deterministic command is registered with `"merge": "derived"` (movies:
+  docs/tools.md by `python3 scripts/tool_catalogue.py`; .github/convergence-paths.txt by `python3
+  scripts/ci/convergence_paths.py --write`). Like a snapshot it is generated (no overlap between queued changes) and,
+  whenever both sides changed it -- a conflict, or a clean line merge that leaves it stale (two tools added apart, one
+  short in the section's count) -- both sides are dropped and its command runs over the combined tree, the result
+  committed in the change being picked (a rebase, a batch's assembly, land's own rebase; on the laptop only, the server
+  role holds the member). Unlike a snapshot its output needs NO EXPLAINING by the sides: its aggregate lines (a count,
+  a "called by N tools") are by construction lines neither side wrote, and the repo's own check of the combined tree
+  asserts it (`scripts/tool_catalogue_test.py`). A file only part of which is generated takes `"block": [<begin line
+  prefix>, <end line prefix>]`: its hand-written lines are merged three-way with the block left out (a conflict there
+  stays the author's), and the command rewrites the block over the merged file. generated.py `block_merge`,
+  `explained`, `regen_base`; tests: `tests/test_derived.py` (two lanes each regenerating the catalogue land in one
+  check, main's page the generator's output over the merged tree).
 - **A SOURCE CONFLICT IS RESOLVED IN THE BATCH WHEN BOTH SIDES ONLY ADD (tier 3).** In a BACKLOG batch's assembly only
   (its check is the full landing check of exactly the tree that lands -- never a lone change's rebase, a push's rebase,
   a push batch or a verify round), a source conflict is resolved hunk by hunk over `git merge-file --diff3`: past the

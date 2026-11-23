@@ -5,7 +5,7 @@ import json
 import os
 import re
 import shlex
-from typing import Any
+from typing import Any, Dict, List, Optional
 from agentctl.core import HOME, REPOS, err, git_ok, host_role, process_cache, remote, slug
 from agentctl.selfcode import TOOL_PATH
 
@@ -87,12 +87,14 @@ def red_repos_parse(raw):
 
 
 def generated_parse(repo, raw):
-    """A repo's GENERATED FILES (waiting.py): [{paths: [glob], regen: [argv] or None, timeout: s}] from its `generated`
-    entries (`{"paths": [...], "regen": "<command run in the tree>", "timeout": <s, optional>, "merge": "rows" | "regen"}`;
-    no `regen`: a table merged row by row only, its rows hand-written -- a row both sides changed is the author's
-    conflict; `merge: regen`: a SNAPSHOT -- HTML, JSON, a rendered text -- never merged by rows, regenerated over the
-    combined tree whenever both sides changed it: waiting.py SNAPSHOTS ARE REGENERATED, NEVER MERGED). Raises
-    ValueError."""
+    """A repo's GENERATED FILES (generated.py): [{paths: [glob], regen: [argv] or None, timeout: s}] from its `generated`
+    entries (`{"paths": [...], "regen": "<command run in the tree>", "timeout": <s, optional>, "merge": "rows" | "regen"
+    | "derived", "block": [<begin line prefix>, <end line prefix>] (optional)}`; no `regen`: a table merged row by row
+    only, its rows hand-written -- a row both sides changed is the author's conflict; `merge: regen`: a SNAPSHOT --
+    HTML, JSON, a rendered text -- never merged by rows, regenerated over the combined tree whenever both sides changed
+    it: generated.py SNAPSHOTS ARE REGENERATED, NEVER MERGED; `merge: derived`: the same, its output needing no
+    explaining by the sides, and `block` a file only part of which is generated: generated.py A DERIVED FILE IS THE
+    COMBINED TREE'S). Raises ValueError."""
     out = []
     for g in raw or []:
         paths, regen = (g or {}).get("paths"), (g or {}).get("regen")
@@ -103,13 +105,34 @@ def generated_parse(repo, raw):
         timeout = g.get("timeout")
         if timeout is not None and not (isinstance(timeout, (int, float)) and timeout > 0):
             raise ValueError(f"{repo}: a `generated` entry's `timeout` is seconds > 0: {g!r}")
-        merge = g.get("merge", "rows")
-        if merge not in ("rows", "regen") or (merge == "regen" and regen is None):
-            raise ValueError(f"{repo}: a `generated` entry's `merge` is `rows` (the default) or `regen` (a SNAPSHOT: "
-                             f"never merged by rows, always regenerated: it needs `regen`): {g!r}")
         out.append({"paths": list(paths), "regen": shlex.split(regen) if regen is not None else None, "timeout": timeout,
-                    **({"merge": "regen"} if merge == "regen" else {})})
+                    **generated_merge(repo, g, regen)})
     return out
+
+
+def generated_merge(repo: str, g: Dict[str, Any], regen: Optional[str]) -> Dict[str, Any]:
+    """A `generated` entry's merge kind and block, as its parsed entry carries them ({} for a table merged by rows).
+    Raises ValueError."""
+    merge = g.get("merge", "rows")
+    if merge not in ("rows", "regen", "derived") or (merge != "rows" and regen is None):
+        raise ValueError(f"{repo}: a `generated` entry's `merge` is `rows` (the default), `regen` (a SNAPSHOT: never "
+                         f"merged by rows, always regenerated: it needs `regen`) or `derived` (the same, its output the "
+                         f"combined tree's): {g!r}")
+    block = generated_block(repo, g, merge)
+    return {**({"merge": merge} if merge != "rows" else {}), **({"block": block} if block else {})}
+
+
+def generated_block(repo: str, g: Dict[str, Any], merge: str) -> Optional[List[str]]:
+    """A `generated` entry's `block` ([begin line prefix, end line prefix]: a file only part of which is generated), or
+    None. Raises ValueError."""
+    block = g.get("block")
+    if block is None:
+        return None
+    if merge == "rows" or not isinstance(block, list) or len(block) != 2 \
+            or not all(isinstance(x, str) and x for x in block):
+        raise ValueError(f"{repo}: a `generated` entry's `block` is [<begin line prefix>, <end line prefix>], on a "
+                         f"`regen` or `derived` entry: {g!r}")
+    return list(block)
 
 
 def red_repos():

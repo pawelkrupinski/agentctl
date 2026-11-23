@@ -137,7 +137,7 @@ cognitive	gate_run_record	18
 cognitive	gate_runs	19
 cognitive	gate_runs_pass	17
 cognitive	gating_checks	31
-cognitive	generated_parse	22
+cognitive	generated_parse	16
 cognitive	github_incidents	16
 cognitive	gov_admit	42
 cognitive	gov_busy_cores	12
@@ -149,7 +149,7 @@ cognitive	hold_for_overlap	21
 cognitive	holder_work	14
 cognitive	hook_selection	12
 cognitive	hunk_take	11
-cognitive	hunks_resolve	29
+cognitive	hunks_resolve	26
 cognitive	identity_change	12
 cognitive	idle_servers	14
 cognitive	inbox_wait	65
@@ -310,7 +310,7 @@ cognitive	red_wait_cycle	12
 cognitive	red_waits_on_step	21
 cognitive	refresh_pinned_recording	16
 cognitive	regen_hold_overdue	23
-cognitive	regenerate	63
+cognitive	regenerate	53
 cognitive	release_local_leftovers	15
 cognitive	relevant_lines	16
 cognitive	relink_worktrees	14
@@ -532,7 +532,6 @@ cyclomatic	failing_job_step	13
 cyclomatic	failure_detail	17
 cyclomatic	fetch_job_log_api	12
 cyclomatic	file_unheld_change	15
-cyclomatic	first_hunk	12
 cyclomatic	fix_between	22
 cyclomatic	fix_check	32
 cyclomatic	fix_job_steps	19
@@ -555,7 +554,7 @@ cyclomatic	gate_run_record	30
 cyclomatic	gate_runs	17
 cyclomatic	gate_runs_pass	21
 cyclomatic	gating_checks	22
-cyclomatic	generated_parse	21
+cyclomatic	generated_parse	17
 cyclomatic	gh_tally	11
 cyclomatic	github_incidents	16
 cyclomatic	gov_admit	31
@@ -570,7 +569,7 @@ cyclomatic	holder_work	16
 cyclomatic	hook_lines	11
 cyclomatic	hook_selection	13
 cyclomatic	hunk_take	13
-cyclomatic	hunks_resolve	22
+cyclomatic	hunks_resolve	18
 cyclomatic	identity_change	14
 cyclomatic	idle_servers	11
 cyclomatic	inbox_wait	35
@@ -745,7 +744,7 @@ cyclomatic	red_waits_on_step	23
 cyclomatic	red_workflow_named	14
 cyclomatic	refresh_pinned_recording	18
 cyclomatic	regen_hold_overdue	22
-cyclomatic	regenerate	34
+cyclomatic	regenerate	31
 cyclomatic	release_local_leftovers	11
 cyclomatic	relevant_lines	13
 cyclomatic	remote_check	28
@@ -881,7 +880,7 @@ method-lines	red_run_retired	51
 method-lines	red_step	157
 method-lines	red_tick	100
 method-lines	red_view_state	85
-method-lines	regenerate	72
+method-lines	regenerate	63
 method-lines	remote_check	79
 method-lines	remote_poll	68
 method-lines	render_red_status	51

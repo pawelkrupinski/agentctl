@@ -8,7 +8,7 @@ from agentctl.core import NO_SIGN, git
 from agentctl.worktrees import WorktreeGuard
 from agentctl.patches import deliberate_empty, equivalent_on, is_empty_commit, patch_id, upstream_patch_ids
 from agentctl.generated import (
-    conflict_stages, generated_entry, regen_here, regenerate, snapshots_both_changed, unmerged)
+    conflict_stages, generated_entry, merge_file, regen_here, regenerate, snapshots_both_changed, unmerged)
 
 
 # A DOCS CONFLICT IS NO VERDICT ON A CHANGE (2026-11-04: of the week's 42 conflict rejections, 6 were docs/markdown
@@ -33,18 +33,10 @@ def union_resolve(wt, files=None):
     stages = conflict_stages(wt, files)
     if stages is None:
         return None
-    import tempfile
     for f, got in stages.items():
-        with tempfile.TemporaryDirectory() as td:
-            paths = []
-            for n in (2, 1, 3):  # merge-file <current> <base> <other>
-                q = os.path.join(td, str(n))
-                with open(q, "w") as fh:
-                    fh.write(got[n])
-                paths.append(q)
-            r = subprocess.run(["git", "merge-file", "-p", "--union", *paths], capture_output=True, text=True)
-            if r.returncode < 0 or r.returncode > 127:
-                return None
+        r = merge_file(got[2], got[1], got[3], "--union")
+        if r.returncode < 0 or r.returncode > 127:
+            return None
         with open(os.path.join(wt, f), "w") as fh:
             fh.write(r.stdout)
         git(wt, "add", "--", f)
@@ -63,20 +55,16 @@ def union_resolve(wt, files=None):
 # status` shows it) -- and a member so resolved that its batch then fails is checked alone and held behind the change
 # it conflicts with, as before (batch.py: the bisect names the resolution). Never in a lone change's rebase, a push's
 # rebase or a verify round.
+def merge_diff3(base: str, ours: str, theirs: str) -> "subprocess.CompletedProcess[str]":
+    """`git merge-file --diff3` of three texts, each ending in a newline, the sides labelled ours, base and theirs."""
+    texts = [x if x.endswith("\n") or not x else x + "\n" for x in (ours, base, theirs)]
+    return merge_file(*texts, "--diff3", "-L", "ours", "-L", "base", "-L", "theirs")
+
+
 def hunks_resolve(base, ours, theirs):
     """(merged text, [what each hunk took]) of a source conflict whose every conflicting hunk resolves (A SOURCE
     CONFLICT IS RESOLVED ...), or None."""
-    import tempfile
-    texts = [x if x.endswith("\n") or not x else x + "\n" for x in (ours, base, theirs)]
-    with tempfile.TemporaryDirectory() as td:
-        paths = []
-        for n, x in zip(("ours", "base", "theirs"), texts):
-            q = os.path.join(td, n)
-            with open(q, "w") as fh:
-                fh.write(x)
-            paths.append(q)
-        r = subprocess.run(["git", "merge-file", "-p", "--diff3", "-L", "ours", "-L", "base", "-L", "theirs", *paths],
-                           capture_output=True, text=True)
+    r = merge_diff3(base, ours, theirs)
     if r.returncode < 0 or r.returncode > 127:
         return None
     out, how, region, part, lineno = [], [], None, None, 0
@@ -117,16 +105,7 @@ def hunks_resolve(base, ours, theirs):
 def first_hunk(base, ours, theirs):
     """(line number, ours' first line, theirs' first line) of the first conflicting hunk of a three-way merge (diff3),
     or None when it merges cleanly or git cannot tell."""
-    import tempfile
-    with tempfile.TemporaryDirectory() as td:
-        paths = []
-        for n, x in zip(("ours", "base", "theirs"), (ours, base, theirs)):
-            q = os.path.join(td, n)
-            with open(q, "w") as fh:
-                fh.write(x if x.endswith("\n") or not x else x + "\n")
-            paths.append(q)
-        r = subprocess.run(["git", "merge-file", "-p", "--diff3", "-L", "ours", "-L", "base", "-L", "theirs", *paths],
-                           capture_output=True, text=True)
+    r = merge_diff3(base, ours, theirs)
     lines = r.stdout.splitlines()
     if r.returncode <= 0 or "<<<<<<< ours" not in lines:
         return None
