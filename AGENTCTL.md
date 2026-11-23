@@ -223,7 +223,9 @@ moves it forward; nothing is a detached process that can die with its state in i
   stop <id>` work on them (see "red").
 - **The watchdog** (launchd `net.bitcashier.agentctl-watchdog`, every 60 s, `agentctl watchdog`) checks the invariants
   from outside the processor: W1 no unlanded change over 2 h old (counted from the red's start while main is red)
-  is outside what its state's table allows -- a live checker for `checking`, a recorded hold within its kind's bound
+  is outside what its state's table allows -- a live checker for `checking` (a backlog batch's member: its batch at
+  work within the batch's deadline, the batch's executor its checker -- 2026-11-23, ci-row-scope-py in batch #107 read
+  `no live checker`; `land status <id>` names its batch), a recorded hold within its kind's bound
   for `queued` / `checked` (policy.py HOLDS), a red gate for `waiting` -- and none at all over 3 x that (2026-11-20: 13
   of W1's 18 firings were checks simply running past 2 h, each worked out by hand), W2 every red has a holder, an offer, a fix on its way or an owner block, W5 the processor beats, W6 every
   escalation was notified, WN notifications get through (both terminal-notifier and the osascript fallback failing
@@ -1849,6 +1851,15 @@ The reconciler then takes it, a step per tick:
   stays the author's), and the command rewrites the block over the merged file. generated.py `block_merge`,
   `explained`, `regen_base`; tests: `tests/test_derived.py` (two lanes each regenerating the catalogue land in one
   check, main's page the generator's output over the merged tree).
+  **A CHANGE RE-APPLIED ONTO MAIN IS JUDGED BY ITS OWN COMMITS (2026-11-23: dispatch-py and title-trace-py, stacked on
+  kick-convergence's branch, refused `no longer applies` the moment kick landed).** The queue-time check (queuebatch.py
+  `main_conflict`) merged the change's head with main's: commits main carries under new shas (a stacked change's landed
+  parent) read as an add/add source conflict. A conflict there is now judged again as the rebase picks it: the
+  change's commits main lacks (patch-equivalent ones dropped, as `pick_commits` drops them), each merged onto the last
+  (`git merge-tree`, no worktree); only a file the rebase leaves to its author -- source, neither a registered
+  generated file nor prose -- refuses. A derived file's conflict is regenerated in the check's rebase. conflicts.py
+  `own_commits_conflict`; tests: `tests/test_derived.py` (stacked on a landed parent: lands, the catalogue the
+  generator's; a real source conflict still refused; every own commit landed: LANDED).
   **A DERIVED FILE HOLDS NOTHING (2026-11-23: the three migration lanes still sat `its check waits for <older>
   (checking): both change docs/tools.md`, one after another).** A derived file is no overlap even behind a check IN
   FLIGHT (A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT, below, is for the baselines, tables and snapshots): the

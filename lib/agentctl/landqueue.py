@@ -34,6 +34,7 @@ from agentctl.tickservice import waiting_service
 from agentctl.batch import batch_progress_path, batch_row_ids
 from agentctl.batchcheck import check_batch
 from agentctl.statemachines import machine_state
+from agentctl.invariants import change_carrying_batch
 
 
 def waiting_repo(a: argparse.Namespace) -> str:
@@ -217,6 +218,16 @@ def land_status_line(r: dict[str, Any], bt: dict[str, Any] | None, in_batch: set
             + (f"  PAST ITS DEADLINE (level {r['level']})" if left < 0 else ""))
 
 
+def check_lines(st: Any, it: dict[str, Any], t: float) -> list[str]:
+    """What a checking change's check is: its batch's, for a backlog batch's member (no remote check of its own --
+    2026-11-23: ci-row-scope-py's in batch #107 read as a dead check), else its remote check's lines."""
+    b = change_carrying_batch(st, it["id"])
+    if b:
+        return [f"check: in batch {b['id']} ({b['state']}): the batch's check is its check"]
+    return list(remote_check_lines((it.get("data") or {}).get("check"), t) or [
+        "check: no remote check recorded (a local check tree, or its executor is starting)"])
+
+
 def land_status_entry(st: Any, entry: str, t: float) -> int:
     """`land status <entry>`: ONE change -- the item whose id is `entry`, else the one whose id contains it -- open or
     decided: its state, worktree and head, then its verdict (LANDED <sha> / NOT LANDED: <why>) or what it waits on.
@@ -241,9 +252,7 @@ def land_status_entry(st: Any, entry: str, t: float) -> int:
         print(f"OPEN: {it['state']} for {fmt_age(t - float(it.get('entered_at') or t))}"
               + (f", held: {hold}" if hold else "") + f"; deadline in {int((it['deadline'] - t) // 60)} min")
         if it["state"] == "checking":
-            for line in remote_check_lines(d.get("check"), t) or [
-                    "check: no remote check recorded (a local check tree, or its executor is starting)"]:
-                print(line)
+            print("\n".join(check_lines(st, it, t)))
     for r in d.get("rechecks") or []:  # MINIMAL RECHECKS (queuerecheck.py): why each round after the first ran, or did not
         print(f"recheck: {hhmmz(r.get('at') or 0)} {r.get('kind')} on {r.get('main') or '?'}: {r.get('why')}")
     return 0

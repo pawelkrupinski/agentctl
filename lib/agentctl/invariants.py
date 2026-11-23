@@ -2,7 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
-from typing import Any
+from typing import Any, Optional
 from agentctl.core import SHORT, env_num, fmt_age, git, host_role, run_cmd, state_root
 from agentctl.timefmt import hhmmz, parse_time
 from agentctl.statefile import read_record, write_json
@@ -63,7 +63,7 @@ def watchdog_state():
 BATCH_AT_WORK = ("assembling", "checking", "pushing", "bisecting")
 
 
-def change_carrying_batch(st, cid):
+def change_carrying_batch(st: Any, cid: str) -> Optional[dict[str, Any]]:
     """The open batch item whose members hold change cid, else None."""
     for b in st.items("batch", list(BATCH_AT_WORK) + ["blocked-red", "held"]):
         if cid in ((b.get("data") or {}).get("members") or []):
@@ -89,6 +89,19 @@ def w1_gate_reds(o_r, now_):
     return now_ - min(starts), rows
 
 
+def w1_carried(st: Any, r: dict[str, Any], t: float) -> Optional[str]:
+    """W1 of a batch's member -- waiting for green, or checking in a backlog batch, whose executor is its checker (no
+    lease of its own: 2026-11-23, ci-row-scope-py in batch #107 read "no live checker"): "" while its batch at work
+    carries it within the batch's deadline, else the words naming its batch; None for no batch's member."""
+    b = change_carrying_batch(st, r["id"]) if r["state"] in ("waiting", "checking") else None
+    if not b:
+        return None
+    late = t >= float(b.get("deadline") or 0)
+    if b["state"] in BATCH_AT_WORK and not late:
+        return ""
+    return f"carried by batch {b['id']} ({b['state']}" + (", past its deadline" if late else "") + ")"
+
+
 def inv_w1(clock, st):
     """W1: no UNLANDED change of the one queue (the store's open items, after the landed-by-content look) older than
     W1_MAX (while main is red: past the red's own start) is outside what its state's table allows (change_progress);
@@ -110,14 +123,13 @@ def inv_w1(clock, st):
         if age < lim or (red_since and age < red_since + lim):
             continue
         it = st.item("change", r["id"]) or {}
-        carried = change_carrying_batch(st, r["id"]) if r["state"] == "waiting" else None
-        if carried and carried["state"] in BATCH_AT_WORK and t < float(carried.get("deadline") or 0):
+        carried = w1_carried(st, r, t)
+        if carried == "":
             continue  # its batch carries it, within the batch's own deadline: the batch's bounds judge it
         stranded = any(c["key"] == f"change-stranded-{r['id']}" for c in conds)
-        off = "STRANDED, no queue entry carries it" if stranded else change_progress(st, it, t) if it else "no item"
-        if off is None and carried:
-            off = (f"carried by batch {carried['id']} ({carried['state']}"
-                   + (", past its deadline" if t >= float(carried.get("deadline") or 0) else "") + ")")
+        off = "STRANDED, no queue entry carries it" if stranded else "no item" if not it \
+            else carried if carried and r["state"] == "checking" else change_progress(st, it, t)
+        off = carried if off is None and carried else off
         if off is None and r["state"] == "waiting" and not red_since:
             off = "waiting for green while the gate is green" if holding is not None else \
                 "waiting for green, the gate unread (no CI snapshot)"

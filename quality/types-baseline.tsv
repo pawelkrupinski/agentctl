@@ -26,7 +26,7 @@ mypy-errors	cli	14
 mypy-errors	clones	1
 mypy-errors	conditions	40
 mypy-errors	config	19
-mypy-errors	conflicts	35
+mypy-errors	conflicts	31
 mypy-errors	core	33
 mypy-errors	culpritfix	35
 mypy-errors	dispatchblock	13
@@ -49,7 +49,7 @@ mypy-errors	govroute	18
 mypy-errors	govusage	6
 mypy-errors	identitychange	13
 mypy-errors	inbox	17
-mypy-errors	invariants	37
+mypy-errors	invariants	36
 mypy-errors	issues	7
 mypy-errors	jvmreap	42
 mypy-errors	land	23
@@ -77,7 +77,7 @@ mypy-errors	owner	93
 mypy-errors	ownerleases	24
 mypy-errors	owners	3
 mypy-errors	park	35
-mypy-errors	patches	8
+mypy-errors	patches	4
 mypy-errors	policy	45
 mypy-errors	pressure	19
 mypy-errors	processorlink	17
@@ -104,7 +104,7 @@ mypy-errors	redcrash	52
 mypy-errors	reddispatch	57
 mypy-errors	redearly	9
 mypy-errors	redfamilies	10
-mypy-errors	redfixes	49
+mypy-errors	redfixes	48
 mypy-errors	redfixread	35
 mypy-errors	redhold	32
 mypy-errors	redmove	14
@@ -152,7 +152,7 @@ mypy-errors	superseded	27
 mypy-errors	syncsteps	49
 mypy-errors	tickrun	6
 mypy-errors	tickservice	8
-mypy-errors	tools	59
+mypy-errors	tools	58
 mypy-errors	trailers	2
 mypy-errors	tunnel	5
 mypy-errors	upkeep	13

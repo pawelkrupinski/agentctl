@@ -203,6 +203,34 @@ class WatchdogTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("carried by batch movies#94 (checking, past its deadline)", detail)
 
+    def test_a_checking_change_its_backlog_batch_carries_is_the_batchs_never_no_live_checker(self):
+        """2026-11-23 03:2xZ: ci-row-scope-py, 3 h old, sat `checking` as a member of backlog batch #107 (03:02-03:48Z),
+        the batch's executor its checker; W1 said "its checks run with no live checker" (no lease of its own) and
+        `land status` "no remote check recorded" -- read as a dead check. Within the batch's deadline it is the batch's;
+        past it, named by its batch."""
+        st_ = A.open_store()
+        st_.put_item("change", "scope", "checking", {"head": "0" * 40, "submitted_at": time.time() - 3 * 3600})
+        st_.put_item("batch", "movies#107", "checking", {"members": ["scope", "other"], "tip": "bdfcdb5142"})
+        ok, detail = A.inv_w1(A.Clock(), A.CurrentStore())
+        self.assertTrue(ok, detail)
+        b = st_.item("batch", "movies#107")
+        st_.transition("batch", "movies#107", "checking", b["version"], deadline_s=-60)
+        ok, detail = A.inv_w1(A.Clock(), A.CurrentStore())
+        self.assertFalse(ok)
+        self.assertIn("carried by batch movies#107 (checking, past its deadline)", detail)
+        self.assertNotIn("no live checker", detail)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            A.land_status_entry(st_, "scope", time.time())
+        self.assertIn("check: in batch movies#107 (checking): the batch's check is its check", out.getvalue())
+
+    def test_a_lone_checking_change_with_no_live_checker_is_still_named(self):
+        st_ = A.open_store()
+        st_.put_item("change", "lone", "checking", {"head": "0" * 40, "submitted_at": time.time() - 3 * 3600})
+        ok, detail = A.inv_w1(A.Clock(), A.CurrentStore())
+        self.assertFalse(ok)
+        self.assertIn("its checks run with no live checker", detail)
+
     def test_w1_from_the_store_and_w2_from_the_store(self):
         st_ = A.open_store()  # W1: the one queue, the store's open change items, by their submission time
         st_.put_item("change", "e1", "waiting", {"head": "0" * 40, "submitted_at": time.time() - 3 * 3600})

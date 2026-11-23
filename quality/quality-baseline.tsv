@@ -153,7 +153,7 @@ cognitive	hunks_resolve	26
 cognitive	identity_change	12
 cognitive	idle_servers	14
 cognitive	inbox_wait	65
-cognitive	inv_w1	47
+cognitive	inv_w1	44
 cognitive	inv_wr	26
 cognitive	job_ever_green	23
 cognitive	joined_verdicts	15
@@ -165,7 +165,7 @@ cognitive	land_calls	19
 cognitive	land_hold	13
 cognitive	land_in_worktree	41
 cognitive	land_loop	39
-cognitive	land_status_entry	29
+cognitive	land_status_entry	25
 cognitive	land_until_done	28
 cognitive	lander_index	17
 cognitive	lander_note_landed	13
@@ -572,7 +572,7 @@ cyclomatic	identity_change	14
 cyclomatic	idle_servers	11
 cyclomatic	inbox_wait	35
 cyclomatic	inbox_write	11
-cyclomatic	inv_w1	38
+cyclomatic	inv_w1	34
 cyclomatic	inv_wb	15
 cyclomatic	inv_wr	22
 cyclomatic	ios_simulator_sweep	13
@@ -588,7 +588,7 @@ cyclomatic	jvm_scan	25
 cyclomatic	land_calls	12
 cyclomatic	land_in_worktree	31
 cyclomatic	land_loop	25
-cyclomatic	land_status_entry	27
+cyclomatic	land_status_entry	25
 cyclomatic	land_until_done	25
 cyclomatic	lander_note_landed	18
 cyclomatic	lander_prompt	11
