@@ -1723,6 +1723,16 @@ The reconciler then takes it, a step per tick:
   `change_hold_stuck`): nothing named holds it, its blocking change is gone, or it is older than
   `$AGENTCTL_CHANGE_HOLD_MAX` (6 h, the `waiting` state's own bound). The blocker's own machine escalates should IT
   stick. Test: `tests/test_backlog_batch.py` OverlapTest `test_overlap_held_changes_wait_quietly...`.
+- **THE HOLD GRAPH (2026-11-23: 22 movies changes deadlocked for over an hour -- gitops-specs' push waited for
+  landing-check's verification, landing-check's check for kick-convergence, kick's for gitops-specs).** A STACKED
+  CHANGE WAITS FOR ITS PARENT: a change whose commits include every commit of another open change of another worktree
+  waits for it (hold `stacked`), lands after it, checked once on top of it; its parent never waits for it, and its
+  overlap with others is read from its own commits. A HOLD CYCLE IS BROKEN, NEVER WAITED OUT: each tick finds every
+  cycle among the recorded holds, its oldest change (lowest seq) drops its wait for good (`cycle_ignore`) and `status`
+  shows `HOLD CYCLE ...` on it. A HELD VERIFICATION HOLDS NOTHING: a verify round held behind another change holds no
+  younger push and no backlog batch. holdgraph.py, queuebatch.py `break_hold_cycles`, `change_waits`; tests:
+  tests/test_hold_graph.py. The watchdog tells one notification per episode (a subject: the change it names) per 6 h
+  (`AGENTCTL_WATCHDOG_RETELL`), and the tick's rederive lap never clears a hold between two readings.
 - **OVERLAPPING CHANGES ARE CHECKED AS ONE (2026-11-18: B1 against the CI-workflows change, the scraper catalog
   against the scrapers refactor, the cycle-breaking change against both -- each checked alone, then `NOT LANDED: the
   change no longer applies ... main moved during its checks`, a rebase and a full recheck).** A queued change sharing a
@@ -1845,7 +1855,10 @@ The reconciler then takes it, a step per tick:
   younger is checked now, beside the older, and its push, finding main moved under a snapshot or derived file both
   changed -- a conflict, or a clean line merge git made, which is no tree's output -- is a new round that regenerates it
   over the combined tree (`main moved under regenerated files it changes too (...)`), never git's merge pushed. On the
-  server role (no regen command) a derived overlap in flight holds as before. queuebatch.py `generated_overlap`,
+  server role too (2026-11-23, the 22-change deadlock on ci-runner): A DERIVED FILE IS REGENERATED WHERE THE COMBINE
+  HAPPENS -- its cheap command (no JVM) runs on every role, agentctl's interpreter on PATH (generated.py `regen_runs`,
+  `regen_env`); a hand-written table registered `holds: false` (movies' migration-classes.tsv: rows apart combine, a row
+  both change is its author's) holds nothing in flight either (`holds_in_flight`). queuebatch.py `generated_overlap`,
   generated.py `derived`, `regen_owed`, queuediff.py `generated_round`. **A hand-written file both sides only add to
   (scripts/hooks/lint-registry.tsv rows, a skill's bullets) still holds behind a check in flight**, by decision: two
   QUEUED changes adding to it already meet in one batch (tier 3; a `*.md` is union-merged), but with the older in
@@ -3165,6 +3178,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `waiting_green_ticks` | `AGENTCTL_WAITING_GREEN_TICKS` | `100` | ticks (~10 min) changes may wait at a green gate with no batch moving: then STALLED |
 | `waiting_timeout` | `AGENTCTL_WAITING_TIMEOUT` | `86400` | - |
 | `watchdog_misses` | `AGENTCTL_WATCHDOG_MISSES` | `2` | consecutive passes a self-healing invariant (W5, WM, W7) fails before its condition opens |
+| `watchdog_retell` | `AGENTCTL_WATCHDOG_RETELL` | `21600` | s |
 | `watchdog_sleep_gap` | `AGENTCTL_WATCHDOG_SLEEP_GAP` | `180` | s since the watchdog's own last pass (launchd: every 60 s) that mean the laptop slept |
 | `watch_conv_start` | `AGENTCTL_WATCH_CONV_START` | `3600` | no convergence (or takes) run containing the sha started by then: said, not waited for |
 | `watch_error_poll` | `AGENTCTL_WATCH_ERROR_POLL` | `30` | - |

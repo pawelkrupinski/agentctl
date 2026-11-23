@@ -26,7 +26,8 @@ from agentctl.checkslot import check_slot
 from agentctl.redseen import gate_reds
 from agentctl.remote import remote_check, remote_checks_supported, remote_matches
 from agentctl.statemachines import StaleVersion, change_event, machine_state
-from agentctl.holdgraph import as_own, cycle_breaker, cycle_text, dependency_between, hold_cycles
+from agentctl.holdgraph import (
+    as_own, cycle_breaker, cycle_text, dependency_between, hold_cycles, recorded_hold_edges)
 
 
 # OVERLAPPING CHANGES ARE CHECKED AS ONE (the coordinator, 2026-11-18: B1 against the CI-workflows change, the scraper
@@ -247,24 +248,6 @@ def break_hold_cycles(st, d, todo):
         did.append(cycle_text(cyc, brk, why))
         break_cycle_at(st, d, by_id[brk], items[brk], edges[brk], did[-1])
     return did
-
-
-def recorded_hold_edges(st, todo):
-    """({change: the change its recorded hold names}, {change: that hold's why}, {change: its item}) among todo, the
-    waits a cycle break dropped left out."""
-    ids = {e["id"] for e in todo}
-    edges, why, items = {}, {}, {}
-    for e in todo:
-        it = st.item("change", e["id"]) or {}
-        hold = (it.get("data") or {}).get("hold") or {}
-        if waits_on_another(e, hold.get("blocker"), ids):
-            edges[e["id"]], why[e["id"]], items[e["id"]] = hold["blocker"], hold.get("why") or "", it
-    return edges, why, items
-
-
-def waits_on_another(e, blocker, ids):
-    """Whether change e's recorded blocker is another change among ids whose wait no cycle break dropped."""
-    return blocker in ids and blocker != e["id"] and blocker not in (e.get("cycle_ignore") or [])
 
 
 def break_cycle_at(st, d, e, it, blocker, text):

@@ -199,6 +199,23 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         self.assertEqual(self.on_main(CATALOGUE), self.generated_over_main(CATALOGUE, "scripts/catalogue"))
         self.assertTrue(self.on_main(LINT_REGISTRY).endswith("web:lint.B\tweb/b/*\nworker:lint.C\tworker/*\n"))
 
+    def test_tools_only_lanes_sharing_the_catalogue_and_lint_rows_land_as_one_batch_on_the_server_role(self):
+        """The owner, 2026-11-23 ("is the waiting all merged / batched?" -- `batch: 0` with 25 changes): N queued
+        tools-only lanes, each adding a tool (docs/tools.md regenerated) and a lint-registry row at its end, on the
+        server role that runs the movies queue. One backlog batch, one check, every lane landed."""
+        self.assertFalse(A.regen_here())
+        ids = [self.lane(f"tool-{c}", {f"tools/{c}.sh": f"tool {c}"}, rows=[f"web:lint.{c.upper()}\tweb/{c}/*"])
+               for c in "abc"]
+        A.tick_changes(self.r.path, self.d, A.Clock())
+        self.assertEqual(self.started, [], "every one waits for the backlog batch, none held behind another")
+        self.drive()
+        self.assertTrue(self.landed(*ids), [self.entry(x) for x in ids])
+        self.assertEqual(len(self.calls_of("--range")), 1, "one tree, one check")
+        self.assertIn("## Tools (4)", self.on_main(CATALOGUE))
+        self.assertEqual(self.on_main(CATALOGUE), self.generated_over_main(CATALOGUE, "scripts/catalogue"))
+        self.assertTrue(self.on_main(LINT_REGISTRY).endswith("web:lint.A\tweb/a/*\nweb:lint.B\tweb/b/*\n"
+                                                             "web:lint.C\tweb/c/*\n"), self.on_main(LINT_REGISTRY))
+
     def test_a_lane_sharing_only_the_catalogue_with_a_check_in_flight_is_checked_now(self):
         """A DERIVED FILE HOLDS NOTHING: before, the younger lane sat `its check waits for <older> (checking): both
         change docs/tools.md` -- three lanes landed one after another. Now it is checked at once, beside the older; at

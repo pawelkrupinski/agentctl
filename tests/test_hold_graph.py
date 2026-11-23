@@ -99,6 +99,27 @@ class StackedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.assertEqual(self.hold_of(eg).get("blocker"), el, "gitops pushes after landing's verification")
         self.assertEqual(self.drive_to_rest([el, ek, eg]), {el: "landed", ek: "landed", eg: "landed"})
 
+    def test_a_verification_held_behind_another_change_holds_no_push_and_no_batch(self):
+        """A HELD VERIFICATION HOLDS NOTHING (queuebatch.py; `batch: 0` on 2026-11-23): landing's verify round waits
+        behind an older change in flight it overlaps, so it verifies nothing now -- gitops' checked push goes, and
+        two queued lanes form their backlog batch meanwhile."""
+        wo = self.r.worktree("wt-older", branch="older")
+        self.r.write("scripts/landing_check.py", "older\n", at=wo)
+        self.r.commit("older: the same script", at=wo)
+        eo = self.queued(wo)[0]
+        el, ek, eg = self.the_live_cycle()
+        o = self.entry(eo)
+        o["seq"] = self.entry(ek)["seq"] - 1
+        A.save_entry(self.d, o)
+        A.set_change(self.d, o, "checking")
+        A.tick_changes(self.r.path, self.d, A.Clock())
+        self.assertEqual(self.hold_of(el).get("blocker"), eo, "landing waits for the older change in flight")
+        A.tick_changes(self.r.path, self.d, A.Clock())
+        self.assertEqual(self.entry(eg)["status"], "landed", f"gitops pushes: {self.hold_of(eg)}")
+        ea = self.queue("a", "web/src/main/A.scala")
+        eb = self.queue("b", "worker/src/main/B.scala")
+        self.assertEqual([c["id"] for c in A.backlog_candidates(self.r.path, self.d, set())], [ea, eb])
+
     def test_the_exact_cycle_a_stack_unseen_closes_is_broken_by_its_oldest_change(self):
         """With no stack seen (an entry from before the rule, a parent's commits re-cut), the three holds close the
         exact cycle of 2026-11-23. The tick finds it, kick -- the oldest place -- drops its wait on gitops, and

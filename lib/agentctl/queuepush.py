@@ -19,7 +19,7 @@ from agentctl.changekind import (
     record_change_kind)
 from agentctl.waiting import supersede
 from agentctl.redseen import gate_reds
-from agentctl.holdgraph import OPEN_PARENT_STATES, stack_map
+from agentctl.holdgraph import OPEN_PARENT_STATES, push_due, stack_map, waiting_on_changes
 from agentctl.queuebatch import (
     _behind_said, backlog_batchable, break_hold_cycles, change_hold_stuck, hold_for_overlap, kind_of, main_conflict, note_hold,
     overlap_hold, restart_hold, spawn_executor, stuck_recovery)
@@ -36,9 +36,11 @@ from agentctl.statemachines import ENTRY_STATE, StaleVersion
 # queued or checking with `verify`, not in an infra backoff), every younger checked change holds its push (a red's fix
 # excepted) and the verification takes the next free check tree: it lands after ONE more round, and the younger ones
 # verify after it.
-def verifying(e, t):
-    """Whether entry e is in a combined-tree verification round that can run now."""
-    return bool(e.get("verify")) and e.get("status") in ("queued", "checking") and not e.get("retry_after", 0) > t
+def verifying(e, t, waits=frozenset()):
+    """Whether entry e is in a combined-tree verification round that can run now: not in an infra backoff, nor -- its
+    id in waits (holdgraph.py waiting_on_changes) -- held behind another change (A HELD VERIFICATION HOLDS NOTHING)."""
+    return bool(e.get("verify")) and e.get("status") in ("queued", "checking") and not e.get("retry_after", 0) > t \
+        and e["id"] not in waits
 
 
 # A RED FIX'S VERIFICATION IS NEVER THROWN AWAY BY AN ORDINARY PUSH (2026-11-19: 08010c, `Fixes-Red: 6`, verified its
@@ -46,7 +48,7 @@ def verifying(e, t):
 # moved, and the fix verified again until 10:36Z, holding 100213 and 102400 behind it the whole time). A red fix goes
 # first (changekind.py PRIORITY): while its verification runs, every ordinary checked change holds its push, older or
 # younger. Tests: tests/test_backlog_batch.py PushBatchTest ..._never_pushes_under_a_red_fixs_verification.
-def older_verifying(todo, e, t, kinds=None):
+def older_verifying(todo, e, t, kinds=None, waits=frozenset()):
     """The entry whose combined-tree verification runs now (verifying) and that e's push waits for: one queued before
     e, or a red fix (its kind in kinds, classify_queue) queued at any time; the oldest such, or None. A blocker e's
     cycle_ignore names (holdgraph.py A HOLD CYCLE IS BROKEN) holds it no more."""
@@ -54,7 +56,7 @@ def older_verifying(todo, e, t, kinds=None):
     ignore = set(e.get("cycle_ignore") or [])
     return next((o for o in sorted(todo, key=lambda o: o["seq"])
                  if o["id"] != e["id"] and o["id"] not in ignore and (o["seq"] < e["seq"] or red(o))
-                 and verifying(o, t)), None)
+                 and verifying(o, t, waits)), None)
 
 
 def tick_changes(repo, d, clock):
@@ -143,7 +145,7 @@ def _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, mine, todo, h
                               conflict_files=conflict_paths(gone[1]), decided_on=gone[0])
                 did.append(f"{e['id']}: rejected (no longer applies on main)")
                 continue
-            lines, waits = queued_change_waits(repo, d, st, t, e, fix, todo, facts, stacks)
+            lines, waits = queued_waiting_on_changes(repo, d, st, t, e, fix, todo, facts, stacks)
             did += lines
             if waits:
                 continue
@@ -191,8 +193,7 @@ def _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, mine, todo, h
 
 
 def stacked_wait(st, t, e, parent):
-    """Queued change e waits for its parent (A STACKED CHANGE WAITS FOR ITS PARENT): its hold recorded, the line said
-    once per parent."""
+    """Queued change e waits for its parent (holdgraph.py): its hold recorded, the line said once per parent."""
     why = (f"its check waits for {parent['id']} ({parent.get('status')}), which its branch is stacked on: it lands "
            "after it, checked once on top of it")
     note_hold(st, e, "stacked", why, t, blocker=parent["id"])
@@ -201,10 +202,9 @@ def stacked_wait(st, t, e, parent):
     return [] if said else [f"{e['id']}: {why}"]
 
 
-def queued_change_waits(repo, d, st, t, e, fix, todo, facts, stacks):
-    """(the tick's lines, whether queued change e waits for another change -- its parent (A STACKED CHANGE WAITS FOR
-    ITS PARENT, holdgraph.py) or an older one it overlaps (OVERLAPPING CHANGES ARE CHECKED AS ONE) --), its hold
-    recorded. A red fix waits for neither (told of a conflict all the same)."""
+def queued_waiting_on_changes(repo, d, st, t, e, fix, todo, facts, stacks):
+    """(the tick's lines, whether queued change e waits for its stack parent or an older change it overlaps), its hold
+    recorded; a red fix waits for neither (told of a conflict all the same)."""
     parent = None if fix else stacks.get(e["id"])
     if parent is not None and parent.get("status") in OPEN_PARENT_STATES \
             and parent["id"] not in (e.get("cycle_ignore") or []):
@@ -244,7 +244,7 @@ def _push_checked(repo, d, st, clock, t, e, fix, todo, pheld, kinds=None):
     quietly while it is live; a checked change past its deadline that nothing holds escalates (lap_change_deadline)."""
     did = []
     first = None if fix else batch_goes_first(st, d)  # a red fix goes before the batch
-    older = None if fix or first or e["id"] in pheld else older_verifying(todo, e, t, kinds)
+    older = None if fix or first or e["id"] in pheld else older_verifying(todo, e, t, kinds, waiting_on_changes(st, todo))
     if first:  # a solo push now moves main under the batch, and its whole check is thrown away
         did += behind_batch(e, first, "push")
         note_hold(st, e, "batch", f"its push waits for batch {first['id']} ({first['state']}), which it is not in", t,
@@ -288,8 +288,7 @@ def lap_change_deadline(st, e, state, t, note=None):
         # SELF-HEALING (2026-11-20, THE HOLD TABLE): a hold that describes a world that moved -- its blocker ended, or
         # its kind's bound passed -- is dropped, and the tick decides afresh (it records the hold again if one still
         # applies, its clock restarted); said quietly on the change's events, never a page
-        # NEVER UNHELD BETWEEN TWO READINGS (2026-11-23, W1 "nothing holds it" every few minutes): the hold stays,
-        # its clock restarted, until this tick records what holds it now -- never cleared for the tick's minutes
+        # NEVER UNHELD BETWEEN TWO READINGS (2026-11-23, W1's "nothing holds it"): kept, its clock restarted
         restart_hold(st, e, t)
         try:
             it = st.item("change", e["id"]) or it
@@ -361,8 +360,9 @@ def backlog_candidates(repo, d, reds, t=None, facts=None):
     # batch held the verified change's push for its whole check (THE BATCH GOES FIRST), then its push moved main under
     # it and it verified again -- behind the next backlog batch, and the next. No backlog batch while one verifies, or
     # while a checked change's push is due (its verification may have ended since the change tick).
-    if any((verifying(e, t) or (e.get("status") == "checked" and not float(e.get("retry_after") or 0) > t))
-           and not e.get("backlog_batch") for e in entries):  # a checked change's push is due at the next change tick
+    st = open_store()  # A HELD VERIFICATION HOLDS NOTHING (holdgraph.py): nor a push that waits for one
+    if any((verifying(e, t, waiting_on_changes(st, [e])) or push_due(st, e, t)) and not e.get("backlog_batch")
+           for e in entries):  # a checked change's push is due at the next change tick
         return []
     ok = [e for e in entries if backlog_batchable(repo, d, e, t, facts)
           and not overlap_hold(repo, d, e, entries, facts, t)]

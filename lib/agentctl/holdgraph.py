@@ -1,6 +1,6 @@
 # agentctl, part `holdgraph`: the queue's hold graph -- stacked changes (a branch carrying another queued change's
 # commits) and cycles among the holds. Pure: entries and recorded holds in, answers out.
-# A real module (lib/agentctl/__init__.py MODULES): the standard library's imports only.
+# A real module (lib/agentctl/__init__.py MODULES): the standard library's imports only; `st` is the store, read only.
 
 from typing import Any, Dict, Iterable, List, Optional, Set
 
@@ -104,3 +104,51 @@ def cycle_text(cycle: List[str], breaker: str, why: Dict[str, str]) -> str:
     steps = "; ".join(f"{x} {why.get(x) or 'waits'}" for x in cycle)
     return (f"HOLD CYCLE of {len(cycle)} changes ({steps}): none could ever go first; {breaker}, the oldest, proceeds "
             f"(its wait on {cycle[(cycle.index(breaker) + 1) % len(cycle)]} dropped)")
+
+
+# A HELD VERIFICATION HOLDS NOTHING (2026-11-23: the 22-change queue formed no batch at all -- `batch: 0` -- since
+# landing-check-py sat in a verify round held behind other changes, and THE OLDEST VERIFICATION PUSHES FIRST read it
+# as verifying: every younger push waited for it and no backlog batch formed, while its own verification could not
+# start). A change whose recorded hold is a wait for another change (an overlap, its stack parent) verifies nothing
+# now: it holds no push and no batch until that wait ends (queuepush.py verifying).
+CHANGE_WAITS = ("overlap", "stacked")
+
+
+def waiting_on_changes(st: Any, entries: Iterable[Dict[str, Any]]) -> Set[str]:
+    """The ids of entries whose recorded hold is a wait for another change (A HELD VERIFICATION HOLDS NOTHING)."""
+    out: Set[str] = set()
+    for e in entries:
+        hold = ((st.item("change", e["id"]) or {}).get("data") or {}).get("hold") or {}
+        if hold.get("kind") in CHANGE_WAITS and hold.get("blocker"):
+            out.add(e["id"])
+    return out
+
+
+def push_waits(st: Any, e: Dict[str, Any]) -> bool:
+    """Whether checked entry e's push waits for another change's verification (its recorded hold): not due."""
+    return (((st.item("change", e["id"]) or {}).get("data") or {}).get("hold") or {}).get("kind") == "verify"
+
+
+def push_due(st: Any, e: Dict[str, Any], t: float) -> bool:
+    """Whether checked entry e pushes at the next change tick: no retry backoff, and no verification it waits for."""
+    return e.get("status") == "checked" and not float(e.get("retry_after") or 0) > t and not push_waits(st, e)
+
+
+def recorded_hold_edges(st: Any, todo: List[Dict[str, Any]]) -> Any:
+    """({change: the change its recorded hold names}, {change: that hold's why}, {change: its item}) among todo, the
+    waits a cycle break dropped left out."""
+    ids = {e["id"] for e in todo}
+    edges: Dict[str, str] = {}
+    why: Dict[str, str] = {}
+    items: Dict[str, Any] = {}
+    for e in todo:
+        it = st.item("change", e["id"]) or {}
+        hold = (it.get("data") or {}).get("hold") or {}
+        if waits_on_another(e, hold.get("blocker"), ids):
+            edges[e["id"]], why[e["id"]], items[e["id"]] = hold["blocker"], hold.get("why") or "", it
+    return edges, why, items
+
+
+def waits_on_another(e: Dict[str, Any], blocker: Optional[str], ids: Set[str]) -> bool:
+    """Whether change e's recorded blocker is another change among ids whose wait no cycle break dropped."""
+    return blocker in ids and blocker != e["id"] and blocker not in (e.get("cycle_ignore") or [])
