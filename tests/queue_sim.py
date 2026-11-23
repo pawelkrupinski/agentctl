@@ -24,7 +24,7 @@ import hashlib, json, os, random, re, shutil, subprocess, sys, tempfile, threadi
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
-from fake_clock import FakeClock  # noqa: E402
+from fake_clock import FakeClock, on_clock  # noqa: E402
 
 TICK = 60  # s of simulated time per reconciler tick
 # THE INVARIANT KINDS (tests/sim-invariants.tsv: each one's version, definition fingerprint and violation baseline;
@@ -732,10 +732,10 @@ class Sim:
                 c.cid for c in self.changes if (self.entry(c) or {}).get("status") == "waiting")
         if e.get("status") not in ("queued", "checking"):
             self.violate("IX", f"an executor started for {eid}, which is {e.get('status')}")
-        self._spawn(f"check-{eid}", lambda: A.check_entry(repo, eid, self.sim_clock))
+        self._spawn(f"check-{eid}", lambda: A.check_entry(repo, eid, *on_clock(self.sim_clock)))
 
     def spawn_batch_executor(self, repo, d, bid):
-        self._spawn(f"batch-{bid}", lambda: A.check_batch(repo, bid, self.sim_clock))
+        self._spawn(f"batch-{bid}", lambda: A.check_batch(repo, bid, *on_clock(self.sim_clock)))
 
     def _spawn(self, name, fn):
         t = Task(self, name, fn)
@@ -743,7 +743,7 @@ class Sim:
         t.thread.start()
         t.step()
 
-    def start_watch(self, repo, sha, pushed_at, **kw):
+    def start_watch(self, st, repo, sha, pushed_at, **kw):
         return None
 
     def violate(self, kind, what):
@@ -1059,7 +1059,7 @@ class Sim:
         import argparse, contextlib, io
         with contextlib.redirect_stdout(io.StringIO()):
             A.cmd_waiting(argparse.Namespace(wcmd="cancel", repo=self.repo, entry=ch.eid, renamed=True, hold_for=None,
-                                             hold_why=None), self.sim_clock)  # a cancel never waits
+                                             hold_why=None), *on_clock(self.sim_clock))  # a cancel never waits
 
     def entry_by_id(self, eid):
         return A.read_record(os.path.join(self.d, "entries", f"{eid}.json"))
@@ -1156,9 +1156,9 @@ class Sim:
         reds = set(self.reds)
         A.project_changes(self.d)
         A.close_landed_changes(self.repo, self.sim_clock, self.d)
-        for x in A.tick_changes(self.repo, self.d, self.sim_clock):
+        for x in A.tick_changes(self.repo, self.d, *on_clock(self.sim_clock)):
             A.wlog(self.d, f"tick {self.tick}: {x}")
-        for x in A.tick_batch(self.repo, self.d, self.sim_clock):
+        for x in A.tick_batch(self.repo, self.d, *on_clock(self.sim_clock)):
             A.wlog(self.d, f"tick {self.tick}: {x}")
         if self.tick % 10 == 0:
             A.stats_pass(self.sim_clock, self.repo, self.d)

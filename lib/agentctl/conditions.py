@@ -42,14 +42,14 @@ def recovery_dir(*parts):
 # (`name` -> run on a condition's close: (condition, args) -> what it did) lives with the code it reads; the
 # composition root (cli) wires them in, so this machine reads no part above it.
 PROBES: dict[str, Callable[[dict[str, Any]], tuple[Any, str]]] = {}
-RECOVER_ACTIONS: dict[str, Callable[[dict[str, Any], dict[str, Any]], str]] = {}
+RECOVER_ACTIONS: dict[str, Callable[[dict[str, Any], dict[str, Any], Any], str]] = {}
 
 
 def wire_probes(probes: dict[str, Callable[[dict[str, Any]], tuple[Any, str]]]) -> None:
     PROBES.update(probes)
 
 
-def wire_recover_actions(actions: dict[str, Callable[[dict[str, Any], dict[str, Any]], str]]) -> None:
+def wire_recover_actions(actions: dict[str, Callable[[dict[str, Any], dict[str, Any], Any], str]]) -> None:
     RECOVER_ACTIONS.update(actions)
 
 
@@ -100,11 +100,11 @@ def condition_key(kind, probe):
 _last_recovery = [0.0]
 
 
-def maybe_recovery_tick():
+def maybe_recovery_tick(store: Any) -> None:
     if time.time() - _last_recovery[0] < 5:
         return
     _last_recovery[0] = time.time()
-    recovery_tick()
+    recovery_tick(store=store)
 
 
 # -- conditions are items (design §5.4; phase 1 step 12): the store's "condition" machine, open -> closed
@@ -239,7 +239,7 @@ def close_condition(cond, result, store=None):
     did = []
     for name, a in it["data"].get("on_recover") or []:
         try:
-            w = RECOVER_ACTIONS[name](cond, a)
+            w = RECOVER_ACTIONS[name](cond, a, st)
             if w:
                 did.append(w)
         except (Exception, SystemExit) as e:

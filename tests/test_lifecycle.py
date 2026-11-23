@@ -6,7 +6,7 @@ import os, subprocess, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base, sh  # noqa: E402
-from fake_clock import FakeClock  # noqa: E402
+from fake_clock import FakeClock, on_clock  # noqa: E402
 from test_watch import MOVIES, run  # noqa: E402
 
 
@@ -58,7 +58,7 @@ class CloseAfterWatchTest(Base):
         import contextlib, io
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            rc = A.watch_landed(wt, sha, time.time(), FakeClock(), o_r=MOVIES, close=wt)
+            rc = A.watch_landed(wt, sha, time.time(), *on_clock(FakeClock()), o_r=MOVIES, close=wt)
         return rc, out.getvalue()
 
     def branches(self):

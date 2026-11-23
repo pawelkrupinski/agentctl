@@ -242,11 +242,10 @@ def gate_runs_pass(st, url, t, since, cap, out=None):
     return n
 
 
-def maybe_stats_pass(repo, d, clock):
+def maybe_stats_pass(repo, d, clock, st):
     """The reconciler's step: a pass every STATS_EVERY s when there is a store to write to."""
     if not stats_url():
         return 0
-    st = open_store(clock.time)
     if clock.time() - float(st.meta_get("stats_at", 0) or 0) < env_num("AGENTCTL_STATS_EVERY", STATS_EVERY):
         return 0
     st.meta_set("stats_at", clock.time())

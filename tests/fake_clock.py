@@ -31,3 +31,10 @@ class FakeClock(Clock):
 
     def advance(self, secs):
         self.t += secs
+
+
+def on_clock(clock):
+    """(clock, the process's store on that clock): what a tick, a checker or a command takes from cli, which hands them
+    the clock and a store reading its time (`A.tick_changes(repo, d, *on_clock(FakeClock(t)))`)."""
+    from agentctl.store import CurrentStore
+    return clock, CurrentStore(clock.time)

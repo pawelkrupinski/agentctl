@@ -9,6 +9,7 @@ import json, os, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base, sh  # noqa: E402
+from fake_clock import on_clock  # noqa: E402
 from test_queue import QueueTest  # noqa: E402
 
 
@@ -118,7 +119,7 @@ class NoEmptyQueueTest(QueueTest):
         A.save_entry(d, dup)
         os.environ["AGENTCTL_CHECK_TREES"] = "0"  # no tree free: nothing is started, the dedupe is all that runs
         self.addCleanup(os.environ.pop, "AGENTCTL_CHECK_TREES", None)
-        A.tick_changes(self.r.path, d, A.Clock())
+        A.tick_changes(self.r.path, d, *on_clock(A.Clock()))
         es = self.entries()
         self.assertEqual((es[self.key(e1)]["status"], es["9"]["status"]), ("superseded", "queued"))
 

@@ -9,6 +9,7 @@ import os, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, sh  # noqa: E402
+from fake_clock import on_clock  # noqa: E402
 import test_backlog_batch  # noqa: E402
 
 SHARED = "shared/S.scala"
@@ -67,7 +68,7 @@ class StackedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.r.write(SHARED, LINES.replace("line 9\n", "line 9 gitops\n"), at=wg)
         self.r.commit("gitops-specs: in Python", at=wg)
         eg = self.queued(wg)[0]
-        A.check_entry(self.r.path, eg, self.clock)
+        A.check_entry(self.r.path, eg, *on_clock(self.clock))
         self.assertEqual(self.entry(eg)["status"], "checked")
         e = self.entry(el)
         A.set_change(self.d, e, "queued", event={"text": "verify"}, verify=True, full_base=e["base"],
@@ -83,8 +84,8 @@ class StackedQueueTest(test_backlog_batch.BacklogBatchTest):
                 e = self.entry(x)
                 if e["status"] in ("queued", "checking") and x in self.started and not e.get("retry_after", 0) > self.clock.time():
                     self.started.remove(x)
-                    A.check_entry(self.r.path, x, self.clock)
-            A.tick_changes(self.r.path, self.d, A.Clock())
+                    A.check_entry(self.r.path, x, *on_clock(self.clock))
+            A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
             self.drive()  # the batch tick: queued changes that meet may land as one backlog batch
             if all(self.entry(x)["status"] in A.ENTRY_FINAL for x in ids):
                 break
@@ -92,7 +93,7 @@ class StackedQueueTest(test_backlog_batch.BacklogBatchTest):
 
     def test_a_stacked_change_waits_for_its_parent_and_the_queue_never_deadlocks(self):
         el, ek, eg = self.the_live_cycle()
-        A.tick_changes(self.r.path, self.d, A.Clock())
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertEqual((self.hold_of(ek).get("kind"), self.hold_of(ek).get("blocker")), ("stacked", el),
                          "kick waits for the change its branch carries")
         self.assertIn(el, self.started, f"landing verifies now, never held behind its own dependent: {self.hold_of(el)}")
@@ -112,13 +113,13 @@ class StackedQueueTest(test_backlog_batch.BacklogBatchTest):
         o["seq"] = self.entry(ek)["seq"] - 1
         A.save_entry(self.d, o)
         A.set_change(self.d, o, "checking")
-        A.tick_changes(self.r.path, self.d, A.Clock())
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertEqual(self.hold_of(el).get("blocker"), eo, "landing waits for the older change in flight")
-        A.tick_changes(self.r.path, self.d, A.Clock())
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertEqual(self.entry(eg)["status"], "landed", f"gitops pushes: {self.hold_of(eg)}")
         ea = self.queue("a", "web/src/main/A.scala")
         eb = self.queue("b", "worker/src/main/B.scala")
-        self.assertEqual([c["id"] for c in A.backlog_candidates(self.r.path, self.d, set())], [ea, eb])
+        self.assertEqual([c["id"] for c in A.backlog_candidates(self.r.path, self.d, set(), A.CurrentStore())], [ea, eb])
 
     def test_the_exact_cycle_a_stack_unseen_closes_is_broken_by_its_oldest_change(self):
         """With no stack seen (an entry from before the rule, a parent's commits re-cut), the three holds close the
@@ -128,9 +129,9 @@ class StackedQueueTest(test_backlog_batch.BacklogBatchTest):
         A.stack_map = lambda todo, entries: {}
         self.addCleanup(setattr, A, "stack_map", saved)
         el, ek, eg = self.the_live_cycle()
-        A.tick_changes(self.r.path, self.d, A.Clock())
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertEqual([self.hold_of(x).get("blocker") for x in (el, ek, eg)], [ek, eg, el], "the cycle, as live")
-        did = A.tick_changes(self.r.path, self.d, A.Clock())
+        did = A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         line = next((x for x in did if x.startswith("HOLD CYCLE")), None)
         self.assertIsNotNone(line, did)
         for x in (el, ek, eg):
@@ -140,7 +141,7 @@ class StackedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.assertEqual(self.entry(ek)["cycle_ignore"], [eg])
         rows = A.status_landing(A.open_store(), self.clock.time())["changes"]
         self.assertIn("HOLD CYCLE", next(r for r in rows if r["id"] == ek)["cycle"] or "", "status says so")
-        self.assertNotIn("HOLD CYCLE", " ".join(A.tick_changes(self.r.path, self.d, A.Clock())), "broken once, not every tick")
+        self.assertNotIn("HOLD CYCLE", " ".join(A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))), "broken once, not every tick")
         final = self.drive_to_rest([el, ek, eg])
         self.assertTrue(all(v == "landed" for v in final.values()), final)
 

@@ -7,7 +7,7 @@ import json, os, stat, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base, StallSamples, sh  # noqa: E402
-from fake_clock import FakeClock  # noqa: E402
+from fake_clock import FakeClock, on_clock  # noqa: E402
 
 REPO_HOOK = """#!/bin/sh
 # supports --checks-only (the checks without the red gate) and --fast-only (compile and the fast tests)
@@ -36,13 +36,13 @@ class WaitingTest(Base):
         A.spawn_waiting_processor = lambda repo: None
         self.watches = []
         self.saved_start_watch = A.start_watch
-        A.start_watch = lambda repo, sha, pushed_at, **kw: self.watches.append(sha)
+        A.start_watch = lambda st, repo, sha, pushed_at, **kw: self.watches.append(sha)
         os.environ["AGENTCTL_CHECKS_DIR"] = os.path.join(t, "checks")
         self.saved_inbox = os.environ.get("AGENTCTL_INBOX_DIR")
         os.environ["AGENTCTL_INBOX_DIR"] = os.path.join(t, "inbox")
         self.awaited = []
-        A.await_entry = lambda repo, eid, clock, close=None: (self.awaited.append(eid), (9, None, None))[1]
-        A.watch_landed = lambda repo, sha, pushed_at, clock, o_r=None, close=None, fixes=(): 0
+        A.await_entry = lambda repo, eid, clock, store, close=None: (self.awaited.append(eid), (9, None, None))[1]
+        A.watch_landed = lambda repo, sha, pushed_at, clock, store, o_r=None, close=None, fixes=(): 0
         os.environ.pop("PREPUSH_SKIP", None)
         self.calls, self.pushes = os.path.join(t, "hook-calls"), os.path.join(t, "pushes")
         hooks = os.path.join(t, "hooks")
@@ -98,11 +98,11 @@ class WaitingTest(Base):
         """The batch to rest, as the processor's ticks drive it, its executors run in-process (step 8)."""
         d, _c, _w = A.waiting_state(self.r.path)
         saved = A.spawn_batch_executor
-        A.spawn_batch_executor = lambda repo, d_, bid: A.check_batch(repo, bid, self.clock)
+        A.spawn_batch_executor = lambda repo, d_, bid: A.check_batch(repo, bid, *on_clock(self.clock))
         out = []
         try:
             for _ in range(n):
-                did = A.close_landed_changes(self.r.path, A.Clock(), d) + A.tick_batch(self.r.path, d, A.Clock())  # the server's order
+                did = A.close_landed_changes(self.r.path, A.Clock(), d) + A.tick_batch(self.r.path, d, *on_clock(A.Clock()))  # the server's order
                 out += did
                 if not did or did == ["held"]:
                     break
@@ -135,7 +135,7 @@ class WaitingTest(Base):
         before = sh(self.r.root, "git", "--git-dir", self.r.bare, "rev-parse", "main")
         outs = lambda: set(os.listdir(A.reds_dir("baseline-out"))) if os.path.isdir(A.reds_dir("baseline-out")) else set()  # noqa: E731
         had = outs()  # the worker's state root outlives a test: another land test's baseline may be there already
-        t0 = time.time()
+        t0 = self.clock.time()  # land's clock (run_tool hands it to main): the re-queue reads its time
         rc, out = self.land(wt)
         self.assertEqual(rc, 0, out)
         self.assertNotIn("KNOWN RED", out)
@@ -146,7 +146,7 @@ class WaitingTest(Base):
         (e,) = self.entries().values()
         self.assertEqual((e["status"], e["head"], e["infra_reason"], e["infra_same"]),
                          ("queued", sha, A.NETWORK_REASON, 1))
-        # judged from before the land, never from now: the test's own duration under load is no part of the backoff
+        # judged on land's clock, never the wall's: the test's own duration under load is no part of the backoff
         self.assertGreaterEqual(e["retry_after"], t0 + A.INFRA_BACKOFF[0], "checked again later, not now")
         self.assertEqual(sh(self.r.root, "git", "--git-dir", self.r.bare, "rev-parse", "main"), before, "nothing landed")
 
@@ -350,9 +350,9 @@ class WaitingTest(Base):
         A.check_tree_slot = lambda repo, d_: None  # every check tree busy: the batch cannot be assembled
         try:
             for _ in range(2):
-                A.tick_batch(self.r.path, d, A.Clock())
+                A.tick_batch(self.r.path, d, *on_clock(A.Clock()))
             self.assertEqual([c for c in A.open_conditions() if c["key"].startswith("waiting-green")], [])
-            A.tick_batch(self.r.path, d, A.Clock())
+            A.tick_batch(self.r.path, d, *on_clock(A.Clock()))
             conds = [c for c in A.open_conditions() if c["key"].startswith("waiting-green")]
             self.assertEqual(len(conds), 1)
             self.assertIn("waiting while the gate is green for 3 ticks", conds[0]["text"])
@@ -373,13 +373,13 @@ class WaitingTest(Base):
         self.land(wa)
         d, _c, _w = A.waiting_state(self.r.path)
         for _ in range(4):  # red: waiting is right
-            A.tick_batch(self.r.path, d, A.Clock())
+            A.tick_batch(self.r.path, d, *on_clock(A.Clock()))
         self.reds = set()
         saved = A.spawn_batch_executor
         A.spawn_batch_executor = lambda repo, d_, bid: None  # its executor runs elsewhere: the batch stays checking
         try:
             for _ in range(4):
-                A.tick_batch(self.r.path, d, A.Clock())
+                A.tick_batch(self.r.path, d, *on_clock(A.Clock()))
         finally:
             A.spawn_batch_executor = saved
         self.assertEqual(self.batch()["state"], "checking")
@@ -406,14 +406,14 @@ class WaitingTest(Base):
         saved = A.gate_reds
         A.gate_reds = lambda repo: self.fail("an empty batch reads no gate")
         try:
-            self.assertEqual(A.tick_batch(self.r.path, d, A.Clock()), [])
+            self.assertEqual(A.tick_batch(self.r.path, d, *on_clock(A.Clock())), [])
         finally:
             A.gate_reds = saved
 
     def test_land_follow_still_waits_and_watches(self):
-        A.await_entry = lambda repo, eid, clock, close=None: (print("LANDED abc (with …)"), (0, "abc", 1.0))[1]
+        A.await_entry = lambda repo, eid, clock, store, close=None: (print("LANDED abc (with …)"), (0, "abc", 1.0))[1]
         watched = []
-        A.watch_landed = lambda repo, sha, pushed_at, clock, o_r=None, close=None, fixes=(): (watched.append(sha), 3)[1]
+        A.watch_landed = lambda repo, sha, pushed_at, clock, store, o_r=None, close=None, fixes=(): (watched.append(sha), 3)[1]
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         rc, out = self.land(wt, "--follow")
         self.assertEqual(rc, 3, out)
@@ -543,7 +543,7 @@ class WaitingTest(Base):
         self.assertEqual(json.load(open(os.path.join(A.sync_outbox_dir(), p)))["fixes"], ["7"],
                          "unchecked here (no store): the reconciler checks the trailer again at the push")
         os.environ["AGENTCTL_STORE_TOKEN"] = "tok-pawel"  # the sync's own token (the server thread's open_store() too)
-        self.assertEqual(A.flush_outbox(), 1)
+        self.assertEqual(A.flush_outbox(A.CurrentStore()), 1)
         [e] = A.queued_entries(A.waiting_state(server_repo)[0])
         self.assertEqual((e["worktree"], e["commits"]), (wt, [sha]))
 
@@ -643,7 +643,7 @@ class WaitingTest(Base):
             self.clock.on_sleep = decide
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                got = await_entry(self.r.path, eid, self.clock)
+                got = await_entry(self.r.path, eid, *on_clock(self.clock))
             self.assertEqual(ticks, [1])
             if status == "landed":
                 self.assertEqual(got, (0, "abc123", 1234.5))
@@ -666,7 +666,7 @@ class WaitingTest(Base):
         try:
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                got = await_entry(self.r.path, "e-old", self.clock)
+                got = await_entry(self.r.path, "e-old", *on_clock(self.clock))
         finally:
             A.cancel_entry_remote = saved
         self.assertEqual(got, (0, None, None))
@@ -707,7 +707,7 @@ class WaitingTest(Base):
         try:
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-                got = await_entry(self.r.path, "e-blip", self.clock)
+                got = await_entry(self.r.path, "e-blip", *on_clock(self.clock))
         finally:
             A.open_store = real
         self.assertEqual(got, (0, "abc123", 1.0))

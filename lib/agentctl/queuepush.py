@@ -6,7 +6,6 @@ import re
 import time
 from agentctl.core import env_num, fmt_age, git, host_role, remote
 from agentctl.timefmt import day_hhmmz, hhmmz
-from agentctl.store import open_store
 from agentctl.policy import policy_blocks
 from agentctl.waitingdir import waiting_entries
 from agentctl.queueslots import change_item_fields, check_tree_slot, checker_alive, queue_verdict, set_change
@@ -59,13 +58,12 @@ def older_verifying(todo, e, t, kinds=None, waits=frozenset()):
                  and verifying(o, t, waits)), None)
 
 
-def tick_changes(repo, d, clock):
+def tick_changes(repo, d, clock, st):
     """One tick over the change items: re-queueing re-derived (only the newest entry per worktree and branch runs), an
     executor started for each queued or lease-less checking change (red fixes first, while a slot is free), a
     checking change past its deadline back to queued (infra), a queued one past its deadline escalated, and each
     checked change pushed. Returns what it did."""
     t = clock.time()
-    st = open_store(clock.time)
     try:
         reds = gate_reds(repo)
     except Exception:
@@ -265,7 +263,7 @@ def _push_checked(repo, d, st, clock, t, e, fix, todo, pheld, kinds=None):
     # may fetch, find main moved and re-queue the change for a verification -- left a checked change past its deadline
     # with nothing recorded for the seconds it ran, and the watchdog's pass filed it as unheld
     note_hold(st, e, "push", "its push is under way (re-checked first if main moved)", t)
-    out = push_change(repo, d, e, clock)
+    out = push_change(repo, d, e, clock, st)
     if out in ("checked", "busy"):  # raced, met the red gate, or the landing lock / push tree was busy: tried again
         note_hold(st, e, "push", "its push waits for the landing lock or a push tree" if out == "busy" else
                   "its last push did not land (a race or the red gate): tried again at the next tick", t)
@@ -347,20 +345,20 @@ def backlog_min():
     return max(2, int(env_num("AGENTCTL_BACKLOG_BATCH_MIN", BACKLOG_BATCH_MIN)))
 
 
-def backlog_candidates(repo, d, reds, t=None, facts=None):
+def backlog_candidates(repo, d, reds, st, t=None, facts=None):
     """The queued changes a backlog batch takes now, in queue order, at most BACKLOG_BATCH_MAX; [] while the gate is
     red, a change verifies its combined tree, or fewer than BACKLOG_BATCH_MIN may go. A fix of an open red (its kind
     under facts: queue_facts, read from the store when None) is checked alone."""
     t = t if t is not None else time.time()
     if reds:
         return []
-    facts = queue_facts(reds) if facts is None else facts
+    facts = queue_facts(reds, st) if facts is None else facts
     entries = queued_entries(d)
     # THE OLDEST VERIFICATION PUSHES FIRST (queuepush.py) holds the batch too (review 2026-11-18): formed meanwhile, the
     # batch held the verified change's push for its whole check (THE BATCH GOES FIRST), then its push moved main under
     # it and it verified again -- behind the next backlog batch, and the next. No backlog batch while one verifies, or
     # while a checked change's push is due (its verification may have ended since the change tick).
-    st = open_store()  # A HELD VERIFICATION HOLDS NOTHING (holdgraph.py): nor a push that waits for one
+    # A HELD VERIFICATION HOLDS NOTHING (holdgraph.py): nor a push that waits for one
     if any((verifying(e, t, waiting_on_changes(st, [e])) or push_due(st, e, t)) and not e.get("backlog_batch")
            for e in entries):  # a checked change's push is due at the next change tick
         return []
@@ -373,7 +371,7 @@ def backlog_candidates(repo, d, reds, t=None, facts=None):
 def backlog_held(repo, d, reds, st, t=None, facts=None):
     """The ids of the queued changes the change tick holds back for the next backlog batch: with no batch open, the
     candidates one would take now."""
-    return set() if current_batch(st, d) else {c["id"] for c in backlog_candidates(repo, d, reds, t, facts)}
+    return set() if current_batch(st, d) else {c["id"] for c in backlog_candidates(repo, d, reds, st, t, facts)}
 
 
 # ---------------------------------------------------------------- the push batch (the owner, 2026-11-17)

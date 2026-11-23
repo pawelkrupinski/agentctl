@@ -8,6 +8,7 @@ import os, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, sh  # noqa: E402
+from fake_clock import on_clock  # noqa: E402
 import test_queue  # noqa: E402
 
 SLICE = "uk-mowlem-theatre-purbeck-film-festival-hen-736301b7"
@@ -131,7 +132,7 @@ class DifferentialCheckTest(test_queue.QueueTest):
         self.remote_fails(45, "::error::the pre-push checks ran past 80 minutes and were stopped")
         d, _c, _w = A.waiting_state(self.r.path)
         for n in (1, 2):
-            A.check_entry(self.r.path, eid, self.clock)
+            A.check_entry(self.r.path, eid, *on_clock(self.clock))
             e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
             self.assertEqual(e["status"], "queued", f"time cap {n}: infra, re-queued")
             e["retry_after"] = 0

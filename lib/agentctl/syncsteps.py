@@ -14,7 +14,7 @@ from agentctl.selfcode import TOOL_PATH
 from agentctl.procs import safe_cwd
 from agentctl.inboxentry import inbox_write
 from agentctl.fixersession import trust_asks
-from agentctl.store import StoreUnavailable, open_store
+from agentctl.store import StoreUnavailable
 from agentctl.land import tool_env
 from agentctl.explorer import explorer_tick
 from agentctl.reverts import revert_notes
@@ -39,7 +39,7 @@ SYNC_MIRROR_EVERY = 10   # s between the laptop's copies of /v1/state into state
 
 
 # ---- the laptop's sync (role "sync")
-def sync_outbox_dir():
+def sync_outbox_dir() -> str:
     return state_root("outbox")
 
 
@@ -53,9 +53,8 @@ def submit_remote(st, e):
         return {"id": e["id"], "outbox": str(ex)[:200]}
 
 
-def flush_outbox(st=None):
+def flush_outbox(st: Any) -> int:
     """The changes `land` could not submit (the store down): sent now, oldest first. Returns how many went."""
-    st = st or open_store()
     n = 0
     for p in sorted(glob.glob(os.path.join(sync_outbox_dir(), "*.json"))):
         e = read_record(p)
@@ -73,21 +72,20 @@ def flush_outbox(st=None):
     return n
 
 
-def sync_steps(repo: str, d: str, o_r: str, clock: Clock) -> Sequence[tuple[str, Callable[[], Any]]]:
-    """The laptop's loop once the store is remote: it never ticks. clock: the process's (cli's)."""
+def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any) -> Sequence[tuple[str, Callable[[], Any]]]:
+    """The laptop's loop once the store is remote: it never ticks. clock and store: the process's (cli's)."""
     last_mirror = [0.0]
 
     def mirror():
         if clock.time() - last_mirror[0] >= env_num("AGENTCTL_SYNC_MIRROR", SYNC_MIRROR_EVERY):
             last_mirror[0] = clock.time()
-            mirror_state()
+            mirror_state(store)
 
     def sync_claims():
         """The laptop's holders on ci-runner's store: every claim renewed by its worktree's activity; every fixer and
         owner lease held by no work revoked (red_reap_orphans)."""
-        st = open_store()
-        red_renew_holders(st, clock.time())
-        red_reap_orphans(st, clock.time())
+        red_renew_holders(store, clock.time())
+        red_reap_orphans(store, clock.time())
 
     def pins():
         """The convergence pins read with the owner's token the processor holds and written into the store: the
@@ -104,32 +102,33 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock) -> Sequence[tuple[str,
     def dispatch():
         if os.path.exists(reds_dir("DISPATCH_OFF")):
             return []
-        return red_dispatcher(open_store(), o_r, repo, clock.time())
+        return red_dispatcher(store, o_r, repo, clock.time())
     role = [None]  # None: not claimed in this loop yet (a step run on its own: a test)
 
     def claim_role():
-        role[0] = laptop_role_step()
+        role[0] = laptop_role_step(store)
 
     def duty(fn):  # ONE MACHINE HOLDS THE LAPTOP ROLE: a standby machine runs none of the laptop's duties
         return lambda: None if role[0] is False else fn()
     return (("laptop role", claim_role),
-            ("outbox", flush_outbox), ("state mirror", mirror), ("children", reap_children),
-            ("events", project_events), ("notifier", duty(notify_escalations)), ("alerts", duty(reconcile_alerts)),
+            ("outbox", lambda: flush_outbox(store)), ("state mirror", mirror), ("children", reap_children),
+            ("events", lambda: project_events(store)), ("notifier", duty(lambda: notify_escalations(store))),
+            ("alerts", duty(lambda: reconcile_alerts(store))),
             ("workspace trust", lambda: [err(x) for x in trust_asks()]),
-            ("landed worktrees", lambda: [err(x) for x in close_landed_worktrees()]),
-            ("local queue", lambda: [err(f"land: {x}") for x in migrate_local_queue(repo)]),
-            ("landed changes", lambda: [err(f"land: {x}") for x in close_landed_changes(repo, clock)]),
-            ("regen holds", duty(lambda: [err(f"land: {x}") for x in answer_regen_holds(d)])),
+            ("landed worktrees", lambda: [err(x) for x in close_landed_worktrees(store)]),
+            ("local queue", lambda: [err(f"land: {x}") for x in migrate_local_queue(repo, store)]),
+            ("landed changes", lambda: [err(f"land: {x}") for x in close_landed_changes(repo, clock, store=store)]),
+            ("regen holds", duty(lambda: [err(f"land: {x}") for x in answer_regen_holds(d, store)])),
             ("claims", duty(sync_claims)),
             ("dispatcher", duty(dispatch)),
             ("pins", duty(pins)), ("drift explorer", duty(explorer)),
-            ("revert notes", duty(lambda: [err(x) for x in revert_notes()])),
+            ("revert notes", duty(lambda: [err(x) for x in revert_notes(store)])),
             ("fixer landing", lambda: [err(f"red: {x}") for x in fixers_land_watch()]),
             ("network watch", network_watch), ("tunnel probe", tunnel_watch),
-            ("red status snapshot", lambda: run_bounded("red status snapshot", write_red_status_snapshot, 1)),
+            ("red status snapshot", lambda: run_bounded("red status snapshot", lambda: write_red_status_snapshot(store), 1)),
             ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep()]),
             ("root checkout", lambda: [err(x) for x in root_checkout_ff(repo)]),
-            ("recovery", maybe_recovery_tick))
+            ("recovery", lambda: maybe_recovery_tick(store)))
 
 
 # THE LAPTOP ANSWERS A REGEN HOLD ITSELF (2026-11-20, phase8-units: held a day for `cd <worktree> && agentctl land`, a
@@ -143,10 +142,10 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock) -> Sequence[tuple[str,
 _regen_answered = process_cache({})  # (change id, head, round) -> True: its `agentctl land` started
 
 
-def answer_regen_holds(d, store=None):
+def answer_regen_holds(d: str, st: Any) -> list[str]:
     """The laptop's step (above): `agentctl land` started in the worktree of each regen-held change it can answer; its
     lines."""
-    out, st = [], store or open_store()
+    out = []
     for it in st.items("change"):
         dd = it.get("data") or {}
         if it["state"] != "queued" or ((dd.get("hold") or {}).get("kind")) != "regen":
@@ -199,11 +198,10 @@ def root_checkout_ff(repo):
     return [f"root checkout {repo}: fast-forwarded {head[:10]} -> {main[:10]}"]
 
 
-def close_landed_worktrees(store=None):
+def close_landed_worktrees(st: Any) -> list[str]:
     """The sync's half of WATCH OK while the reconciler runs on ci-runner: the worktree a change was landed from is on
     this laptop, so each `watch.ok` event's `close` worktree is closed here (close_worktree: only when proven merged and
     clean). Its own cursor (meta closer_seq). Returns what it said."""
-    st = store or open_store()
     out = []
     for ev in st.events(after=int(st.meta_get("closer_seq", 0) or 0)):
         wt = (ev.get("refs") or {}).get("close")

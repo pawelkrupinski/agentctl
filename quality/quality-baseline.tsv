@@ -31,7 +31,7 @@ cognitive	alert_probe_cleared	45
 cognitive	alert_red_audience	12
 cognitive	alert_route	23
 cognitive	alert_write	41
-cognitive	answer_regen_holds	16
+cognitive	answer_regen_holds	15
 cognitive	apply_entry	20
 cognitive	assemble	24
 cognitive	await_verdict	12
@@ -376,7 +376,7 @@ cognitive	sweep_repo	36
 cognitive	sync_onto_main	18
 cognitive	sync_steps	11
 cognitive	table_parse	13
-cognitive	tick_quiet_deadlines	12
+cognitive	tick_quiet_deadlines	11
 cognitive	tick_reverts	49
 cognitive	token	34
 cognitive	transcript_paths	26
@@ -405,7 +405,6 @@ copies	cireport|redtick	2
 copies	clones|serverclone	2
 copies	fixerland|orphans	2
 copies	queueclose	2
-copies	queuepush	2
 copies	redcrash	2
 copies	redcrash|redstep	2
 copies	redpending	7
@@ -442,10 +441,10 @@ cyclomatic	alert_red_named	11
 cyclomatic	alert_route	22
 cyclomatic	alert_write	44
 cyclomatic	allowed_path	12
-cyclomatic	answer_regen_holds	15
+cyclomatic	answer_regen_holds	14
 cyclomatic	apply_entry	31
 cyclomatic	assemble	15
-cyclomatic	backlog_candidates	14
+cyclomatic	backlog_candidates	12
 cyclomatic	backlog_reconcile	19
 cyclomatic	base_failure_keys	19
 cyclomatic	baseline_failures	14
@@ -838,7 +837,7 @@ method-lines	alert_probe	55
 method-lines	alert_write	59
 method-lines	batch_step	135
 method-lines	build_view	65
-method-lines	check_batch	120
+method-lines	check_batch	119
 method-lines	ci_why	183
 method-lines	cmd_cleanup	94
 method-lines	cmd_gov	105

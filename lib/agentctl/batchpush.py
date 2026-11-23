@@ -103,7 +103,7 @@ def _push_batch_item(repo, d, st, it, members, tip, base, i):
         queue_verdict(d, e, "landed", f"LANDED {e['tip']} ({kind} {it['id']}: {len(members)} change(s) in one push)",
                       code=0, landed_sha=e["tip"], pushed_at=pushed_at, batch=len(members), batch_id=it["id"])
         if not lock_held(Owned("await", e["id"]).lockpath):  # a `land --follow` waiting on it watches it itself
-            start_watch(repo, e["tip"], pushed_at, worktree=e["worktree"],
+            start_watch(st, repo, e["tip"], pushed_at, worktree=e["worktree"],
                         close=e["worktree"] if os.path.isdir(e["worktree"]) else None, session=e.get("session"))
     batch_move(st, st.item("batch", it["id"]), "landed", text=f"LANDED {tip} ({len(members)} change(s) in one push)")
     wlog(d, f"LANDED {tip} ({len(members)} change(s) in one push)")

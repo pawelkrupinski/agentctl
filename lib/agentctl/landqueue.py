@@ -10,7 +10,6 @@ from agentctl.clock import Clock
 from agentctl.core import fmt_age, git, git_ok, host_role
 from agentctl.timefmt import hhmmz, ts
 from agentctl.statefile import read_json_file, read_record
-from agentctl.store import open_store
 from agentctl.repos import movies_repo_path
 from agentctl.waitingdir import ENTRY_FINAL, waiting_entries, waiting_state
 from agentctl.procs import safe_cwd
@@ -47,7 +46,7 @@ def waiting_repo(a: argparse.Namespace) -> str:
     return main_clone(movies_repo_path())  # outside any git checkout (e.g. ~/bitcashier): the movies clone's queue, as `await` resolves it
 
 
-def queue_command(a: argparse.Namespace) -> int:
+def queue_command(a: argparse.Namespace, store: Any) -> int:
     """The land queue's commands (`land status | hold | release | cancel`, and the processor's children: a change's or
     the service): every `waiting` subcommand but `run` (the processor), `await` and the checkers (cmd_waiting)."""
     repo = waiting_repo(a)
@@ -55,35 +54,34 @@ def queue_command(a: argparse.Namespace) -> int:
     if a.wcmd == "service":
         return waiting_service(a.action, repo)
     if a.wcmd == "pause":  # `land hold`: an item in the store (the reconciler's, wherever this runs)
-        return land_hold_command(a)
+        return land_hold_command(a, store)
     if a.wcmd == "resume":
-        return land_release_command(repo, d)
+        return land_release_command(repo, d, store)
     if a.wcmd == "status":
-        return land_status_command(a, repo, d)
+        return land_status_command(a, repo, d, store)
     if a.wcmd == "cancel":
-        return land_cancel_command(a, repo, d)
+        return land_cancel_command(a, repo, d, store)
     return 2
 
 
-def queue_checker(a: argparse.Namespace, clock: Clock) -> int:
+def queue_checker(a: argparse.Namespace, clock: Clock, store: Any) -> int:
     """`waiting check <id>` (one queued change's checker) or `waiting check-batch <id>` (the batch's executor): the
     processor starts them, detached."""
     repo = main_clone(waiting_repo(a))
-    return check_entry(repo, a.entry, clock) if a.wcmd == "check" else check_batch(repo, a.entry, clock)
+    return check_entry(repo, a.entry, clock, store) if a.wcmd == "check" else check_batch(repo, a.entry, clock, store)
 
 
-def land_await(a: argparse.Namespace, repo: str, clock: Clock) -> int:
+def land_await(a: argparse.Namespace, repo: str, clock: Clock, store: Any) -> int:
     """`waiting await`: land's wait on its entry, resumed after a restart on new code."""
     a.inbox_cwd = a.close or a.repo
     repo = main_clone(repo)
     os.chdir(repo)
-    rc, sha, pushed_at = await_entry(repo, a.entry, clock)
-    return watch_landed(repo, sha, pushed_at, clock, close=a.close) if rc == 0 and sha else rc
+    rc, sha, pushed_at = await_entry(repo, a.entry, clock, store)
+    return watch_landed(repo, sha, pushed_at, clock, store, close=a.close) if rc == 0 and sha else rc
 
 
-def land_hold_command(a: argparse.Namespace) -> int:
+def land_hold_command(a: argparse.Namespace, st: Any) -> int:
     """`land hold [--for M] [--why W]`: the hold item, in the store."""
-    st = open_store()
     secs = int(float(getattr(a, "hold_for", None) or LAND_HOLD_DEFAULT // 60) * 60)
     it = land_hold_set(st, secs, getattr(a, "hold_why", None), hold_by())
     print(f"held: the processor takes no batch until `agentctl land release` or "
@@ -91,15 +89,14 @@ def land_hold_command(a: argparse.Namespace) -> int:
     return 0
 
 
-def land_release_command(repo: str, d: str) -> int:
+def land_release_command(repo: str, d: str, st: Any) -> int:
     """`land release`: the hold gone, the processor started and the token offered."""
-    st = open_store()
     gone = land_hold_release(st, hold_by())
     try:
         os.unlink(os.path.join(d, "PAUSED"))  # the pre-store hold file, if an old version left one
     except FileNotFoundError:
         pass
-    recover_clear_hold(None, {"d": d})  # a held batch is assembled again at once
+    recover_clear_hold(None, {"d": d}, st)  # a held batch is assembled again at once
     spawn_waiting_processor(repo)
     offer_token(repo)
     print("released" + (f" ({', '.join(gone)})" if gone else " (no hold was in force)")
@@ -107,12 +104,11 @@ def land_release_command(repo: str, d: str) -> int:
     return 0
 
 
-def land_status_command(a: argparse.Namespace, repo: str, d: str) -> int:
+def land_status_command(a: argparse.Namespace, repo: str, d: str, st: Any) -> int:
     """`land status [<id>]`: one change, open or decided (A VERDICT IS DURABLE), else the whole queue."""
     if getattr(a, "entry", None):
-        return land_status_entry(open_store(), a.entry, time.time())
+        return land_status_entry(st, a.entry, time.time())
     # ONE QUEUE: the store's change items, on either host
-    st = open_store()
     rows = change_rows(st)
     print(f"queue: {store_url() or 'this host'}")
     print(f"processor: {'running' if waiting_processor_alive(d) else 'not running'}")
@@ -157,23 +153,23 @@ def land_status_tail(d: str, rows: list[dict[str, Any]]) -> None:
               f"queue: {', '.join(e['id'] for e in local)}")
 
 
-def land_cancel_command(a: argparse.Namespace, repo: str, d: str) -> int:
+def land_cancel_command(a: argparse.Namespace, repo: str, d: str, st: Any) -> int:
     """`land cancel <id>`: on the laptop through the store API (ONE QUEUE: ci-runner's); here the entry, its checker
     and its CI run."""
     if host_role() == "sync":
-        return cancel_through_store(a.entry)
+        return cancel_through_store(a.entry, st)
     queued = [e for e in queued_entries(d) if a.entry in e["id"]]
     if len(queued) == 1:
         return cancel_queued(d, queued[0])
-    return cancel_waiting(a.entry, repo, d)
+    return cancel_waiting(a.entry, repo, d, st)
 
 
-def cancel_through_store(entry: str) -> int:
-    hits = [r["id"] for r in change_rows() if entry in r["id"]]
+def cancel_through_store(entry: str, st: Any) -> int:
+    hits = [r["id"] for r in change_rows(st) if entry in r["id"]]
     if len(hits) != 1:
         print(f"no single open change matches {entry!r}: `agentctl land status`")
         return 1
-    open_store().cancel_change(hits[0])
+    st.cancel_change(hits[0])
     print(f"cancelled {hits[0]}")
     return 0
 
@@ -190,11 +186,11 @@ def cancel_queued(d: str, e: dict[str, Any]) -> int:
     return 0
 
 
-def cancel_waiting(entry: str, repo: str, d: str) -> int:
+def cancel_waiting(entry: str, repo: str, d: str, st: Any) -> int:
     """A waiting entry cancelled (the next batch is assembled without it), or a stranded item no entry carries."""
     hits = [e for e in waiting_entries(d) if entry in e["id"]]
     if not hits:  # an item no entry carries (stranded): the item alone
-        ids = [r["id"] for r in change_rows() if entry in r["id"]]
+        ids = [r["id"] for r in change_rows(st) if entry in r["id"]]
         if len(ids) == 1:
             cancel_submitted(ids[0], repo=repo)
             print(f"cancelled {ids[0]}")

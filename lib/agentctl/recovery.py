@@ -114,7 +114,7 @@ def probe_waiting_ok(a):
     return at > float(a.get("since") or 0), f"last good round {iso_at(at)}" if at else "no good round yet"
 
 
-def recover_tunnel_reset(cond, a):
+def recover_tunnel_reset(cond, a, store):
     st = read_json_file(tunnel_state_path())
     if st.get("network") or st.get("fails") or st.get("pending_since"):
         st.update(fails=0, network=False, pending_since=None, escalated=False)
@@ -122,7 +122,7 @@ def recover_tunnel_reset(cond, a):
     return ""
 
 
-def recover_clear_flag(cond, a):
+def recover_clear_flag(cond, a, store):
     try:
         os.unlink(a["path"])
     except OSError:
@@ -185,8 +185,7 @@ def reland_worktree(cond, a):
     return f"landing {wt.replace(HOME, '~')} again from a throwaway tree {tree.replace(HOME, '~')} (attempt {a.get('attempt')})"
 
 
-def recover_clear_hold(cond: dict[str, Any] | None, a: dict[str, Any]) -> str:
-    st = open_store()
+def recover_clear_hold(cond: dict[str, Any] | None, a: dict[str, Any], st: Any) -> str:
     it = current_batch(st, a["d"])
     if it and it["state"] == "held":
         batch_move(st, it, "assembling", text=f"batch {it['id']}: its hold lifted")

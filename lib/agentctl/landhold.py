@@ -4,7 +4,6 @@
 import os
 import time
 from typing import Any
-from agentctl.store import open_store
 from agentctl.fixerrecords import agent_name
 from agentctl.queue import land_hold, land_holds
 from agentctl.statemachines import ARCHIVE, MACHINES, StaleVersion, StateSpec, TerminalState
@@ -68,7 +67,7 @@ def land_hold_release(st: Any, by: str) -> list[str]:
     return out
 
 
-def tick_land_hold(st=None):
+def tick_land_hold(st: Any) -> list[str]:
     """The reconciler's step: a hold past its deadline expires even while no batch ticks."""
-    land_hold(st or open_store())
+    land_hold(st)
     return []

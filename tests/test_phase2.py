@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, seed_gating_checks  # noqa: E402
-from fake_clock import FakeClock  # noqa: E402
+from fake_clock import FakeClock, on_clock  # noqa: E402
 
 USERS = {"tok-pawel": "pawel", "tok-metrics": "ci-metrics", "tok-other": "mallory"}
 
@@ -338,10 +338,10 @@ class ServerSideTest(Phase2Base):
             self.assertIsNone(A.store_url())
         finally:
             os.environ.pop("AGENTCTL_HOST")
-        names = [n for n, _ in A.sync_steps(self.repo, self.tmp, "o/r", A.Clock())]
+        names = [n for n, _ in A.sync_steps(self.repo, self.tmp, "o/r", *on_clock(A.Clock()))]
         self.assertEqual(names, ["laptop role", "outbox", "state mirror", "children", "events", "notifier", "alerts", "workspace trust", "landed worktrees", "local queue", "landed changes", "regen holds", "claims", "dispatcher", "pins", "drift explorer", "revert notes", "fixer landing",
                                  "network watch", "tunnel probe", "red status snapshot", "upkeep", "root checkout", "recovery"])
-        server = [n for n, _ in A.server_steps(self.repo, self.tmp, lambda f: f, A.Clock())]
+        server = [n for n, _ in A.server_steps(self.repo, self.tmp, lambda f: f, *on_clock(A.Clock()))]
         self.assertEqual(server, ["clone health", "change items", "landed changes", "stranded changes", "change tick", "land hold", "batch tick", "watches", "land refs",
                                   "lease archive", "children", "gate summary", "red time", "red tick", "recovery", "issues",
                                   "reverts", "quiet deadlines", "stats"])
@@ -945,7 +945,7 @@ class LandHoldTest(Phase2Base):
     def land(self, cmd, **kw):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            rc = A.cmd_waiting(argparse.Namespace(wcmd=cmd, repo=self.repo, entry=None, renamed=True, **kw), FakeClock())
+            rc = A.cmd_waiting(argparse.Namespace(wcmd=cmd, repo=self.repo, entry=None, renamed=True, **kw), *on_clock(FakeClock()))
         return rc, out.getvalue()
 
     def test_a_hold_made_on_the_laptop_holds_ci_runners_batch_until_released(self):
@@ -961,7 +961,7 @@ class LandHoldTest(Phase2Base):
         saved = A.waiting_entries, A.current_batch
         A.waiting_entries = lambda d_, **kw: [{"id": "e1"}]  # a change waits: only the hold stops the batch
         try:
-            self.assertEqual(A.tick_batch(self.repo, d, A.Clock()), ["held"])
+            self.assertEqual(A.tick_batch(self.repo, d, *on_clock(A.Clock())), ["held"])
         finally:
             A.waiting_entries, A.current_batch = saved
         A.write_snapshot(d)
@@ -986,7 +986,14 @@ class LandHoldTest(Phase2Base):
         self.assertIsNone(A.land_hold(self.st, time.time() + 120))
         self.assertEqual(self.st.items("hold", ["held"]), [])
         self.assertTrue(any(e["kind"] == "hold.expired" for e in self.st.events()))
-        self.assertIn(("land hold", A.tick_land_hold), A.server_steps(self.repo, "/d", lambda f: f, A.Clock()))
+        ticked = []
+        saved = A.tick_land_hold
+        A.tick_land_hold = ticked.append
+        try:
+            dict(A.server_steps(self.repo, "/d", lambda f: f, A.Clock(), self.st))["land hold"]()
+        finally:
+            A.tick_land_hold = saved
+        self.assertEqual(ticked, [self.st], "the reconciler's step ticks the hold on the store it was handed")
 
 class CurrentStoreTest(Phase2Base):
     def test_a_long_running_holder_follows_store_use(self):

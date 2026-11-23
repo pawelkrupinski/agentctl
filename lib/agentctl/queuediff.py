@@ -192,7 +192,7 @@ def keys_text(keys, n=4):
     return ", ".join(keys[:n]) + (f" (+{len(keys) - n} more)" if len(keys) > n else "")
 
 
-def push_change(repo, d, e, clock):
+def push_change(repo, d, e, clock, st):
     """The tick's push of one checked change, under the landing lease: rebased onto a moved main (re-checked when what
     landed overlaps: a new round, queued), joined to `waiting` while main is red and it must wait, else pushed with
     the push's bounds and verified. pushing -> landed, or back to checked (a push never rejects); after
@@ -204,7 +204,7 @@ def push_change(repo, d, e, clock):
         slot = tree_slot(d, i)
         if slot.acquire():
             try:
-                return _push_change(repo, d, e, i, clock)
+                return _push_change(repo, d, e, i, clock, st)
             finally:
                 slot.release()
     return "busy"
@@ -214,7 +214,7 @@ PUSH_TREE = "push"  # <clone>-wt-check-push, under its own lease; no checker eve
 # and a red fix's RED_FIX_TREE)
 
 
-def _push_change(repo, d, e, i, clock):
+def _push_change(repo, d, e, i, clock, st):
     hook = precheck_hook(repo)
     log_path = os.path.join(d, f"check-{e['id']}")
     tree = check_tree_for_push(repo, e, i)
@@ -326,7 +326,7 @@ def _push_change(repo, d, e, i, clock):
             queue_verdict(d, e, "landed", f"LANDED {head} (queued {e['id']}, checked {where})", code=0,
                           landed_sha=head, pushed_at=pushed_at)
             close = None if e.get("keep_worktree") else e["worktree"]
-            start_watch(repo, head, pushed_at, worktree=e["worktree"],
+            start_watch(st, repo, head, pushed_at, worktree=e["worktree"],
                         close=close if close and os.path.isdir(close) else None, session=e.get("session"))
             return "landed"
         if rc is not None and (RACE.search(out or "") or REDGATE.search(out or "")):

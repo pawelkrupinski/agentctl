@@ -9,7 +9,6 @@ from agentctl.clock import Clock
 from agentctl.core import env_num, err, git, git_ok, slug, state_root
 from agentctl.timefmt import ts
 from agentctl.classify import INFRA_LOG, _test_line
-from agentctl.store import open_store
 from agentctl.forge import forge_env
 from agentctl.waitingdir import save_entry, waiting_state, wlog
 from agentctl.leases import LeaseHold
@@ -133,12 +132,11 @@ def batch_drift_split(repo: str, d: str, st: Any, it: dict[str, Any], members: l
     return 1
 
 
-def check_batch(repo: str, bid: str, clock: Clock) -> int:
+def check_batch(repo: str, bid: str, clock: Clock, st: Any) -> int:
     """THE BATCH EXECUTOR (`waiting check-batch <id>`): holding check/batch-<id> and its tree's slot, it checks the
     assembled tip; pass -> pushing (the tick pushes); fail -> bisecting -> a confirmed culprit rejected and the passing
     prefix -> pushing (or assembling), every prefix passing -> assembling again (counted); stalled twice -> held."""
     d, _c, _w = waiting_state(repo)
-    st = open_store()
     it = st.item("batch", bid)
     if not it or it["state"] not in ("checking", "bisecting"):
         return 0

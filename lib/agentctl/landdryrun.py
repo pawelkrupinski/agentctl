@@ -34,9 +34,9 @@ def stalled(step, output, log_path):
     return 1
 
 
-def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False, cls="check", a=None, judged=None):
+def dry_run(repo, hook, head, log_path, attempt, clock, store, mode="--range", rechecked=False, cls="check", a=None, judged=None):
     """The repo hook's dry run over origin/main..head, admitted by the governor as a check (`red` for a fix of a red
-    run), watched for a stall: None when it passed, else land's rc (0: handed to the queue as infra)."""
+    run), watched for a stall: None when it passed, else land's rc (0: handed to the queue as infra: clock, store)."""
     err(f"checking {head[:10]}: {os.path.relpath(hook, repo)} {mode} {remote()}/main..HEAD (log: {log_path})")
     lock_note(f"checks of {head[:10]}")
     try:
@@ -57,7 +57,7 @@ def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False
             main_at = git(repo, "rev-parse", f"{remote()}/main", check=False).stdout.strip()
             new, known = judge_against_baseline(repo, hook, head, out, log_path)
             if known is NETWORK_SHAPED:
-                return network_requeue(repo, head, out, log_path, a)
+                return network_requeue(repo, head, out, log_path, clock, store, a)
             if known and not new:
                 checks = ", ".join(sorted(known))
                 print(f"KNOWN RED: {checks} fail{'s' if len(known) == 1 else ''} the same way on plain {remote()}/main "
@@ -67,7 +67,7 @@ def dry_run(repo, hook, head, log_path, attempt, mode="--range", rechecked=False
                 # new main's baseline, which nobody had run): judged again on the main it reads, a bounded few times
                 moved = rechecked and judged and main_at != judged and int(rechecked) < BASELINE_RECHECKS
                 if not rechecked or moved:
-                    return dry_run(repo, hook, head, log_path, f"{attempt}, against the known-red baseline", mode,
+                    return dry_run(repo, hook, head, log_path, f"{attempt}, against the known-red baseline", clock, store, mode,
                                    rechecked=int(rechecked) + 1, cls=cls, a=a, judged=main_at)
                 return refused(repo, out, log_path, f"the pre-push checks failed only where plain {remote()}/main fails "
                                f"too ({checks}; a known red, claimable as `local`), and the hook still held them "
@@ -100,7 +100,7 @@ BASELINE_RECHECKS = 3  # dry runs against a known-red baseline at most, main mov
 NETWORK_SHAPED = "network-shaped"
 
 
-def network_requeue(repo, head, out, log_path, a=None):
+def network_requeue(repo, head, out, log_path, clock, store, a=None):
     """A dry run that failed on the network, on the change and on plain main: the change goes to the land queue as an
     infra re-queue (bounded by requeue_infra's STALLED condition). A repo without a queue: NOT LANDED, nothing recorded."""
     sig = network_failure(out)
@@ -112,12 +112,12 @@ def network_requeue(repo, head, out, log_path, a=None):
                        "land again once the remote answers")
     d, _clone, _wt = waiting_state(repo)
     if host_role() == "sync":  # ONE QUEUE: ci-runner's (its checks run there, its own network)
-        return submit_to_server(repo, d, change_fields(repo, f"{remote()}/main", head, a), note=f" after {why}")
+        return submit_to_server(repo, d, change_fields(repo, f"{remote()}/main", head, a), store, note=f" after {why}")
     e, _ahead = queue_change(d, change_fields(repo, f"{remote()}/main", head, a))
     submit_ref(repo, d, e)
-    requeue_infra(d, e, why, time.time(), reason=NETWORK_REASON, detail=out, repo=repo)
+    requeue_infra(d, e, why, clock.time(), reason=NETWORK_REASON, detail=out, repo=repo)
     e = read_record(os.path.join(d, "entries", f"{e['id']}.json")) or e
-    left = max(0, int((float(e.get("retry_after") or time.time()) - time.time()) // 60))
+    left = max(0, int((float(e.get("retry_after") or clock.time()) - clock.time()) // 60))
     print(f"QUEUED {e['id']} ({head[:10]}): infra, not a known red -- {why}; checked again in {left} min; "
           f"{queued_tail()}", flush=True)
     spawn_waiting_processor(repo)
@@ -190,7 +190,7 @@ def judge_against_baseline(repo, hook, head, out, log_path):
     return new, {c: l for c, l in mine.items() if c not in new}
 
 
-def precheck(repo, main_ref, sh, log_path, a, clock):
+def precheck(repo, main_ref, sh, log_path, a, clock, store):
     """Before the lock: sync and the hook's dry run (the long part). None when land goes on to the lock (with
     a.prechecked = (head, base) when the dry run passed there), else land's rc."""
     rc, head = sync(repo, main_ref, sh, clock, getattr(a, "release_hold", False))
@@ -205,7 +205,7 @@ def precheck(repo, main_ref, sh, log_path, a, clock):
     reds = gate_reds(repo) if waiting_supported(repo) else set()
     commits = waiting_commits(repo, f"{remote()}/main", head)
     joining = bool(reds) and must_wait(repo, commits, reds)
-    rc = dry_run(repo, hook, head, log_path, "before the lock", mode="--checks-only" if joining else "--range",
+    rc = dry_run(repo, hook, head, log_path, "before the lock", clock, store, mode="--checks-only" if joining else "--range",
                  cls=gov_class_of(repo, commits, reds), a=a)
     if rc is not None:
         return rc

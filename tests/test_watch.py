@@ -5,7 +5,7 @@ import datetime as dt, os, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base  # noqa: E402
-from fake_clock import FakeClock  # noqa: E402
+from fake_clock import FakeClock, on_clock  # noqa: E402
 
 MOVIES = "pawelkrupinski/movies"
 
@@ -58,7 +58,7 @@ class WatchTest(Base):
         import contextlib, io
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            rc = A.watch_landed(self.r.path, self.sha, self.pushed_at, self.clock, o_r=MOVIES)
+            rc = A.watch_landed(self.r.path, self.sha, self.pushed_at, *on_clock(self.clock), o_r=MOVIES)
         return rc, out.getvalue()
 
     def test_green_main_and_convergence(self):
@@ -247,7 +247,7 @@ class WatchTest(Base):
         self.assertEqual([e["to_state"] for e in A.open_store().events() if e["item_type"] == "watch"], ["ok"])
 
     def test_a_follower_of_a_sha_another_live_follower_watches_waits_for_its_verdict(self):
-        A.start_watch(self.r.path, self.sha, self.pushed_at, o_r=MOVIES,
+        A.start_watch(A.CurrentStore(), self.r.path, self.sha, self.pushed_at, o_r=MOVIES,
                       follower={"followed_by": "ci-runner:4242", "followed_until": time.time() + 3600})
         st = A.open_store()
 
@@ -262,7 +262,7 @@ class WatchTest(Base):
         self.assertIn("WATCH OK: Main #7 green", out)
 
     def test_a_follower_takes_over_a_watch_whose_follower_lapsed(self):
-        A.start_watch(self.r.path, self.sha, self.pushed_at, o_r=MOVIES,
+        A.start_watch(A.CurrentStore(), self.r.path, self.sha, self.pushed_at, o_r=MOVIES,
                       follower={"followed_by": "ci-runner:4242", "followed_until": time.time() - 1})
         self.main.append(run(1, self.sha))
         self.conv.append(run(2, self.sha, created=self.pushed_at + 5))
@@ -285,7 +285,7 @@ class WatchTest(Base):
     def test_a_sha_whose_watch_ended_unknown_is_rewatched_claimed_and_its_verdict_kept(self):
         """Review round 8: the re-watch of an `unknown` item ran unclaimed, so its verdict was never stored and every
         later follower watched GitHub again. It claims the item like any follower and keeps its verdict there."""
-        it = A.start_watch(self.r.path, self.sha, self.pushed_at, o_r=MOVIES)
+        it = A.start_watch(A.CurrentStore(), self.r.path, self.sha, self.pushed_at, o_r=MOVIES)
         A.open_store().transition("watch", self.sha, "unknown", it["version"], data={"verdict": "WATCH UNKNOWN: stuck"})
         self.main, self.conv = [run(11, self.sha)], [run(21, self.sha)]
         claimed = []
@@ -312,7 +312,7 @@ class WatchTest(Base):
         import contextlib, io
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            rc = A.watch_landed(self.r.path, self.sha, self.pushed_at, self.clock, o_r="bitcashier/infra")
+            rc = A.watch_landed(self.r.path, self.sha, self.pushed_at, *on_clock(self.clock), o_r="bitcashier/infra")
         self.assertEqual(rc, 0)
         self.assertEqual(self.listed, [])
 
@@ -325,7 +325,7 @@ class LandWatchTest(Base):
         self.saved = A.watch_landed
         self.calls = []
 
-        def fake(repo, sha, pushed_at, clock, o_r=None, close=None, fixes=()):
+        def fake(repo, sha, pushed_at, clock, store, o_r=None, close=None, fixes=()):
             # the lease is free while watching: another lander could take it now
             r = A.open_store().get(A.land_lease_name(repo))
             assert not r or not r["holder"] or r["expires_at"] <= time.time(), "the landing lease is held while watching"
@@ -340,7 +340,7 @@ class LandWatchTest(Base):
 
     def test_land_ends_at_landed_and_watches_detached(self):
         spawned, saved = [], A.start_watch
-        A.start_watch = lambda repo, sha, pushed_at, **kw: spawned.append(sha)
+        A.start_watch = lambda st, repo, sha, pushed_at, **kw: spawned.append(sha)
         try:
             self.r.write("f1.txt", "mine\n")
             sha = self.r.commit("mine")
@@ -398,58 +398,58 @@ class WatchItemTest(unittest.TestCase):
     def test_pending_then_ok_closes_the_worktree_and_tells_its_author(self):
         wt = os.path.join(self.root, "wt")
         os.makedirs(wt)
-        A.start_watch("/repo", "a" * 40, time.time(), worktree=wt, close=wt, session="s1")
+        A.start_watch(A.CurrentStore(), "/repo", "a" * 40, time.time(), worktree=wt, close=wt, session="s1")
         A.watch_eval = lambda *a: None
-        self.assertEqual(A.tick_watches(A.Clock()), [])
+        self.assertEqual(A.tick_watches(*on_clock(A.Clock())), [])
         self.assertEqual(A.open_store().item("watch", "a" * 40)["state"], "watching")
         A.watch_eval = lambda *a: ("ok", "WATCH OK: Main #5 green, convergence #6 green (aaaaaaaaaa)", [])
-        self.assertEqual(A.tick_watches(FakeClock(time.time() + 120)), [f"watch {'a' * 10}: ok"])
+        self.assertEqual(A.tick_watches(*on_clock(FakeClock(time.time() + 120))), [f"watch {'a' * 10}: ok"])
         self.assertEqual(self.closed, [wt])
         A.project_events()
         [e] = A.inbox_entries()
         self.assertEqual((e["kind"], e["cwd"], e["exit"]), ("OK", wt, 0))
 
     def test_a_watch_a_live_follower_holds_is_left_to_it(self):
-        A.start_watch("/repo", "c" * 40, time.time(), worktree="/w",
+        A.start_watch(A.CurrentStore(), "/repo", "c" * 40, time.time(), worktree="/w",
                       follower={"followed_by": "laptop:1", "followed_until": time.time() + 600})
         looked = []
         A.watch_eval = lambda *a: looked.append(1) or ("ok", "WATCH OK", [])
-        self.assertEqual(A.tick_watches(A.Clock()), [])
+        self.assertEqual(A.tick_watches(*on_clock(A.Clock())), [])
         self.assertEqual(looked, [])
-        self.assertEqual(A.tick_watches(FakeClock(time.time() + 4 * 3600)), [f"watch {'c' * 10}: unknown"],
+        self.assertEqual(A.tick_watches(*on_clock(FakeClock(time.time() + 4 * 3600))), [f"watch {'c' * 10}: unknown"],
                          "a lapsed follower's watch is the tick's again")
 
     def test_a_lapsed_laptop_followers_watch_is_taken_over_by_another_hosts_tick_in_its_own_clone(self):
         """Review round 7: the item named its repo by the laptop's path; ci-runner's tick, taking over a dead laptop
         follower's watch, looked there, failed every look and ended it UNKNOWN. The repo is its slug, resolved here."""
         laptop = "/Users/somebody/projects/movies-wt-gone"  # no such path on this host
-        A.start_watch(laptop, "d" * 40, time.time(), worktree=laptop, close=laptop,
+        A.start_watch(A.CurrentStore(), laptop, "d" * 40, time.time(), worktree=laptop, close=laptop,
                       follower={"followed_by": "laptop:4242", "followed_until": time.time() - 1})
         looked = []
         A.watch_eval = lambda repo, *a: looked.append(repo) or ("ok", "WATCH OK: Main #5 green (dddddddddd)", [])
-        self.assertEqual(A.tick_watches(A.Clock()), [f"watch {'d' * 10}: ok"])
+        self.assertEqual(A.tick_watches(*on_clock(A.Clock())), [f"watch {'d' * 10}: ok"])
         self.assertEqual(looked, [self.here], "looked at in this host's clone, never the laptop's path")
         self.assertEqual(self.closed, [], "the laptop's worktree is not this host's to close")
-        A.start_watch(self.here, "e" * 40, time.time(), worktree=self.here)  # made here: its own path, as it is
+        A.start_watch(A.CurrentStore(), self.here, "e" * 40, time.time(), worktree=self.here)  # made here: its own path, as it is
         A.watch_eval = lambda repo, *a: looked.append(repo) or None
-        A.tick_watches(A.Clock())
+        A.tick_watches(*on_clock(A.Clock()))
         self.assertEqual(looked[-1], self.here)
 
     def test_a_watch_of_a_repo_this_host_has_no_clone_of_waits_for_its_deadline(self):
         A.WATCH["someone/else"] = A.WATCH["pawelkrupinski/movies"]
         self.addCleanup(A.WATCH.pop, "someone/else", None)
-        A.start_watch("/elsewhere", "f" * 40, time.time(), worktree="/w", o_r="someone/else")
+        A.start_watch(A.CurrentStore(), "/elsewhere", "f" * 40, time.time(), worktree="/w", o_r="someone/else")
         looked = []
         A.watch_eval = lambda *a: looked.append(a) or ("ok", "WATCH OK", [])
-        self.assertEqual(A.tick_watches(A.Clock()), [])
+        self.assertEqual(A.tick_watches(*on_clock(A.Clock())), [])
         self.assertEqual(looked, [], "no clone here: nothing looked at")
         self.assertEqual(A.open_store().item("watch", "f" * 40)["state"], "watching")
 
     def test_a_follower_never_renews_a_claim_another_follower_took_over(self):
         """Review round 7: renew() wrote its lease over whoever held the item, so a follower whose claim lapsed (asleep)
         took it back from the one that had taken it over."""
-        claim = A.WatchClaim("/repo", "g" * 40, time.time(), "pawelkrupinski/movies", FakeClock())
-        A.start_watch("/repo", "g" * 40, time.time(), worktree="/w",
+        claim = A.WatchClaim(A.CurrentStore(), "/repo", "g" * 40, time.time(), "pawelkrupinski/movies", FakeClock())
+        A.start_watch(A.CurrentStore(), "/repo", "g" * 40, time.time(), worktree="/w",
                       follower={"followed_by": "ci-runner:7", "followed_until": time.time() + 600})
         claim.renew()
         self.assertEqual(A.open_store().item("watch", "g" * 40)["data"]["followed_by"], "ci-runner:7")
@@ -458,9 +458,9 @@ class WatchItemTest(unittest.TestCase):
         self.assertGreater(A.open_store().item("watch", "g" * 40)["data"]["followed_until"], time.time(), "its own: renewed")
 
     def test_undecided_past_its_deadline_is_unknown_and_escalates(self):
-        A.start_watch("/repo", "b" * 40, time.time(), worktree="/w")
+        A.start_watch(A.CurrentStore(), "/repo", "b" * 40, time.time(), worktree="/w")
         A.watch_eval = lambda *a: None
-        A.tick_watches(FakeClock(time.time() + 4 * 3600))
+        A.tick_watches(*on_clock(FakeClock(time.time() + 4 * 3600)))
         self.assertEqual(A.open_store().item("watch", "b" * 40)["state"], "unknown")
         self.assertEqual(A.open_store().events()[-1]["severity"], "escalate")
 

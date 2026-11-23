@@ -14,6 +14,7 @@ import json, os, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, sh  # noqa: E402
+from fake_clock import on_clock  # noqa: E402
 import test_backlog_batch, test_generated  # noqa: E402
 
 SNAP = "test/resources/fixtures/08-06-2026/expected-index.html"
@@ -70,7 +71,7 @@ class TiersTest(test_generated.GeneratedQueueTest):
         page snapshots. A snapshot is generated: no overlap, the younger is checked now beside the older."""
         eo = self.change("scrapers-2", files={"src/a.txt": "a\n", SNAP: "a\nm\n", "identity/src/main/I.scala": "i\n"})
         ey = self.change("split-shared-js", files={"src/z.txt": "z\n", SNAP: "m\nz\n"})
-        A.tick_changes(self.r.path, self.d, A.Clock())
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertNotEqual(self.held(ey).get("kind"), "overlap", self.held(ey))
         self.assertIsNone(A.overlap_hold(self.r.path, self.d, self.entry(ey), [self.entry(eo), self.entry(ey)], None,
                                          A.time.time()), "nothing holds it behind scrapers-2")
@@ -79,7 +80,7 @@ class TiersTest(test_generated.GeneratedQueueTest):
         ea = self.change("a", files={"src/a.txt": "a\n", SNAP: "a\nm\n"})
         eb = self.change("b", files={"src/z.txt": "z\n", SNAP: "m\nz\n"})
         self.assertIsNone(A.pair_conflict(self.r.path, self.entry(ea), self.entry(eb)), "git alone merges these")
-        A.tick_changes(self.r.path, self.d, A.Clock())
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.drive_as("sync")
         self.assertEqual([self.entry(x)["status"] for x in (ea, eb)], ["landed", "landed"])
         self.assertEqual(len(self.calls_of("--range")), 1, "one tree, one check")
@@ -90,7 +91,7 @@ class TiersTest(test_generated.GeneratedQueueTest):
         ea = self.change("a", files={"src/a.txt": "a\n", SNAP: "a\nm\n"})
         eb = self.change("b", files={"src/b.txt": "b\n", SNAP: "b\nm\n"})
         self.assertTrue(A.pair_conflict(self.r.path, self.entry(ea), self.entry(eb)), "git conflicts here")
-        A.tick_changes(self.r.path, self.d, A.Clock())
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertEqual(self.started, [], "both wait for the backlog batch")
         self.drive_as("sync")
         self.assertEqual([self.entry(x)["status"] for x in (ea, eb)], ["landed", "landed"])
@@ -102,32 +103,32 @@ class TiersTest(test_generated.GeneratedQueueTest):
         interaction nobody committed. Not landed by a regenerator: the member is held behind the older, as before."""
         ea = self.change("a", files={"src/a.txt": "a\n", SNAP: "a\nm\n", "INTERACT": "x\n"})
         eb = self.change("b", files={"src/z.txt": "z\n", SNAP: "m\nz\n"})
-        A.tick_changes(self.r.path, self.d, A.Clock())
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.drive_as("sync")
         self.assertEqual(self.entry(eb)["batch_alone"], "regen")
         self.assertIn(f"the regenerated {SNAP} holds a change neither side made (+both)",
                       open(os.path.join(self.d, "processor.log")).read())
         self.assertNotEqual(self.entry(eb)["status"], "landed")
-        A.tick_changes(self.r.path, self.d, A.Clock())
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertEqual(self.held(eb).get("blocker"), ea, "held behind a, as before")
 
     def test_a_snapshot_regen_failing_on_the_combined_tree_falls_back_to_the_hold_never_a_reject(self):
         ea = self.change("a", files={"src/a.txt": "a\n", SNAP: "a\nm\n", "FAIL_REGEN": "x\n"})
         eb = self.change("b", files={"src/b.txt": "b\n", SNAP: "b\nm\n"})
-        A.tick_changes(self.r.path, self.d, A.Clock())
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.drive_as("sync")
         b = self.entry(eb)
         self.assertEqual((b["batch_alone"], b["status"]), ("regen", "queued"), "left out, never rejected")
         self.assertIn("both sides changed the snapshot `scripts/snap` exited 2: PageSnapshotSpec wrote no snapshot",
                       open(os.path.join(self.d, "processor.log")).read())
-        A.tick_changes(self.r.path, self.d, A.Clock())
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertEqual(self.started, [ea], "a is checked alone; b waits behind it")
         self.assertEqual((self.held(eb)["kind"], self.held(eb)["blocker"]), ("overlap", ea))
 
     def test_the_server_role_never_keeps_a_side_of_a_snapshot(self):
         ea = self.change("a", files={"src/a.txt": "a\n", SNAP: "a\nm\n"})
         eb = self.change("b", files={"src/b.txt": "b\n", SNAP: "b\nm\n"})
-        A.tick_changes(self.r.path, self.d, A.Clock())
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.drive_as("server")
         self.assertEqual(self.regen_runs(), 0)
         self.assertEqual(self.entry(eb)["batch_alone"], "regen")
@@ -148,7 +149,7 @@ class TiersTest(test_generated.GeneratedQueueTest):
         conflict in git (each gave the last entry its comma); the batch resolves it, its full check the verification."""
         ea, eb = self.two_appends()
         self.assertTrue(A.pair_conflict(self.r.path, self.entry(ea), self.entry(eb)), "git conflicts here")
-        A.tick_changes(self.r.path, self.d, A.Clock())
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertEqual(self.started, [], "both wait for the backlog batch: no hold, nothing told")
         self.assertEqual([x for x in self.inbox() if "CONFLICTS" in json.dumps(x)], [])
         self.drive()
@@ -164,7 +165,7 @@ class TiersTest(test_generated.GeneratedQueueTest):
 
     def test_a_resolution_failing_the_batchs_checks_is_the_culprit_and_falls_back_to_the_hold(self):
         ea, eb = self.two_appends({"FAIL_BOTH": "x\n"})
-        A.tick_changes(self.r.path, self.d, A.Clock())
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.drive()
         self.assertEqual(self.entry(ea)["status"], "landed", "the prefix before it lands")
         b = self.entry(eb)
@@ -177,7 +178,7 @@ class TiersTest(test_generated.GeneratedQueueTest):
     def test_a_conflict_no_tier_resolves_holds_and_tells_its_author_the_hunks_and_the_fix(self):
         ea = self.change("a", files={LIST: LIST_TEXT.replace("a -> 1", "a -> 9")})
         eb = self.change("b", files={LIST: LIST_TEXT.replace("a -> 1", "a -> 8")})
-        A.tick_changes(self.r.path, self.d, A.Clock())
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertEqual(self.started, [ea], "the younger waits for the older")
         told = [x for x in self.inbox() if f"CONFLICTS {eb}" in json.dumps(x)]
         self.assertEqual(len(told), 1, "told at once")

@@ -24,7 +24,7 @@ mypy-errors	classify	1
 mypy-errors	cleanup	51
 mypy-errors	cli	12
 mypy-errors	clones	1
-mypy-errors	conditions	41
+mypy-errors	conditions	40
 mypy-errors	config	19
 mypy-errors	conflicts	35
 mypy-errors	core	33
@@ -35,7 +35,7 @@ mypy-errors	explorer	16
 mypy-errors	fixer	16
 mypy-errors	fixerenv	3
 mypy-errors	fixerland	30
-mypy-errors	fixerlife	63
+mypy-errors	fixerlife	62
 mypy-errors	fixersession	38
 mypy-errors	forge	70
 mypy-errors	gatesummary	4
@@ -55,7 +55,7 @@ mypy-errors	jvmreap	42
 mypy-errors	land	23
 mypy-errors	landdryrun	48
 mypy-errors	lander	33
-mypy-errors	landhold	5
+mypy-errors	landhold	4
 mypy-errors	landqueue	6
 mypy-errors	landwatch	20
 mypy-errors	laptoprole	39
@@ -84,7 +84,7 @@ mypy-errors	processorlink	17
 mypy-errors	procwatch	2
 mypy-errors	projector	25
 mypy-errors	queue	28
-mypy-errors	queuebatch	68
+mypy-errors	queuebatch	64
 mypy-errors	queueclose	77
 mypy-errors	queuediff	73
 mypy-errors	queueenter	80
@@ -149,7 +149,7 @@ mypy-errors	storeauth	22
 mypy-errors	storestate	8
 mypy-errors	storetoken	46
 mypy-errors	superseded	27
-mypy-errors	syncsteps	54
+mypy-errors	syncsteps	49
 mypy-errors	tickrun	6
 mypy-errors	tickservice	8
 mypy-errors	tools	59

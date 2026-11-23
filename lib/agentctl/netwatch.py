@@ -99,7 +99,7 @@ def network_watch(route=None, kick=None):
         f"{r[0]} via {r[1]}): "
         f"kickstarting {TUNNEL_LABEL}, the gate is read at once")
     (kick or launchctl_kick)()
-    recover_tunnel_reset(None, {})
+    recover_tunnel_reset(None, {}, None)
     try:
         recovery_recheck_all()  # a new route: every open condition is probed again now, its backoff reset
     except StoreUnavailable as e:  # the tunnel is not back yet: the next tick's probes run on their own schedule

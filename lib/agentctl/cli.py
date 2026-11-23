@@ -7,8 +7,8 @@ import datetime as dt
 import io
 import sys
 import time
-from typing import Any
-from agentctl.store import wire_store
+from typing import Any, Callable
+from agentctl.store import CurrentStore, wire_store
 from agentctl.ghapp import cmd_github_app
 from agentctl.config import cmd_config
 from agentctl.storetoken import wire_token_missing_note
@@ -77,16 +77,18 @@ wire_recover_actions({"clear_hold": recover_clear_hold, "tunnel_reset": recover_
 
 
 # ---------------------------------------------------------------- main
-def main(argv: list[str] | None = None, clock: Clock | None = None, runner: ProcessRunner | None = None) -> Any:
-    """The entry: wires the process's collaborators (the clock and the process runner: a test passes its own) and runs
-    the command."""
+def main(argv: list[str] | None = None, clock: Clock | None = None, runner: ProcessRunner | None = None,
+         store: Any = None) -> Any:
+    """The entry: wires the process's collaborators (the clock, the process runner and the store: a test passes its
+    own) and runs the command."""
     clock = clock or Clock()
+    store = store if store is not None else CurrentStore(clock.time)
     wire_runner(runner or ProcessRunner())
     if (sys.argv[1:] if argv is None else argv) == ["--selftest"]:
         return selftest()
     a = parser().parse_args(argv)
-    handler = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": cmd_red, "decide": cmd_decide, "config": cmd_config, "issue": cmd_issue, "revert": cmd_revert, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "laptop": cmd_laptop, "status": cmd_status, "queue": cmd_queue_retired, "tick": lambda a: cmd_tick(a, clock), "store": cmd_store, "github-app": cmd_github_app, "waiting": lambda a: cmd_waiting(a, clock), "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "park": cmd_park, "unpark": cmd_unpark, "watch": lambda a: cmd_watch(a, clock), "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": lambda a: cmd_land(a, clock), "land-precheck": cmd_land_precheck, "env": cmd_env}[a.cmd]
+    handler: Callable[[argparse.Namespace], Any] = {"maintain": cmd_maintain, "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
+               "red": cmd_red, "decide": cmd_decide, "config": cmd_config, "issue": cmd_issue, "revert": cmd_revert, "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": cmd_inbox, "recover": cmd_recover, "watchdog": cmd_watchdog, "lease": cmd_lease, "laptop": cmd_laptop, "status": cmd_status, "queue": cmd_queue_retired, "tick": lambda a: cmd_tick(a, clock, store), "store": cmd_store, "github-app": cmd_github_app, "waiting": lambda a: cmd_waiting(a, clock, store), "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": cmd_supersede, "park": cmd_park, "unpark": cmd_unpark, "watch": lambda a: cmd_watch(a, clock, store), "sweep": cmd_sweep, "ci-why": cmd_ci_why, "land": lambda a: cmd_land(a, clock, store), "land-precheck": lambda a: cmd_land_precheck(a, store), "env": cmd_env}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)
 

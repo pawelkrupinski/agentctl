@@ -224,9 +224,8 @@ def notify_escalations(store=None):
     return shown
 
 
-def maybe_archive_leases(d, every=3600):
+def maybe_archive_leases(d, st, every=3600):
     """Once an hour: the leases free for over a day go to the events (Store.archive_free_leases)."""
-    st = open_store()
     if time.time() - float(st.meta_get("lease_archive_at", 0) or 0) < every:
         return 0
     st.meta_set("lease_archive_at", time.time())

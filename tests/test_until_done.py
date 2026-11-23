@@ -8,6 +8,7 @@ import contextlib, fcntl, os, subprocess, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, sh  # noqa: E402
+from fake_clock import on_clock  # noqa: E402
 import test_queue  # noqa: E402 (a module, so the loader runs QueueTest's own tests there only)
 
 
@@ -34,9 +35,9 @@ class UntilDoneTest(test_queue.QueueTest):
             hook()
         for e in A.waiting_entries(self.d, open_only=False):
             if e["status"] in ("queued", "checking"):
-                A.check_entry(self.r.path, e["id"], self.clock)
+                A.check_entry(self.r.path, e["id"], *on_clock(self.clock))
             elif e["status"] == "checked":
-                A.push_change(self.r.path, self.d, e, A.Clock())
+                A.push_change(self.r.path, self.d, e, *on_clock(A.Clock()))
 
     def until_done(self, wt, *extra):
         return self.land(wt, "--until-done", *extra)

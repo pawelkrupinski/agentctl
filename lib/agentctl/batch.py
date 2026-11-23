@@ -8,7 +8,6 @@ from typing import Any
 from agentctl.core import env_num, err, fmt_age, git, remote, spawn_detached
 from agentctl.timefmt import ts
 from agentctl.statefile import read_json_file, write_json_file
-from agentctl.store import open_store
 from agentctl.selfcode import TOOL_PATH
 from agentctl.repos import precheck_hook
 from agentctl.waitingdir import ENTRY_FINAL, save_entry, waiting_entries, wlog
@@ -175,14 +174,14 @@ def probe_batch_progress(a):
     return n < limit, (f"{n} stalled tick(s) at green: {rec.get('why')}" if n else "no change waits at green")
 
 
-def tick_batch(repo, d, clock):
+def tick_batch(repo, d, clock, st):
     """One tick of the repository's batch, then its stall count (note_batch_progress). Returns what it did."""
     seen = {}
-    did = _tick_batch(repo, d, clock, seen)
+    did = _tick_batch(repo, d, st, seen)
     try:
         seen["last"] = did[-1] if did else None
         if seen.get("waiting"):  # the batch as this tick left it (assembled -> checking is no stall)
-            seen["batch"] = current_batch(open_store(clock.time), d)
+            seen["batch"] = current_batch(st, d)
         note_batch_progress(d, seen, clock.time())
     except (Exception, SystemExit) as e:  # never the batch's own step
         err(f"batch progress: {str(e)[:160]}")
@@ -225,9 +224,9 @@ def waiting_batch_max():
     return int(env_num("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX))
 
 
-def _tick_batch(repo, d, clock, seen):
-    """A backlog batch's members brought in line with it (backlog_reconcile), then the batch's step."""
-    st = open_store(clock.time)  # its clock is the tick's: batch_step and the push read the time on it
+def _tick_batch(repo, d, st, seen):
+    """A backlog batch's members brought in line with it (backlog_reconcile), then the batch's step. st: the tick's
+    store, on the tick's clock (batch_step and the push read the time on it)."""
     return backlog_reconcile(d, st) + batch_step(repo, d, seen, st)
 
 
@@ -347,7 +346,7 @@ def batch_step(repo, d, seen, st):
         # solo check behind it, and is held itself past its 5-min deadline)
         facts = queue_facts(reds, st)
         push = push_candidates(repo, d, reds, t, facts) if not it or depth == "verify" else []
-        ready = push or (backlog_candidates(repo, d, reds, t, facts) if not it or depth == "full" else [])
+        ready = push or (backlog_candidates(repo, d, reds, st, t, facts) if not it or depth == "full" else [])
         if not it:
             if not ready or not check_tree_slot_free(repo, d):
                 return []

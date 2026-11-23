@@ -23,7 +23,7 @@ from agentctl.worktrees import worktree_exclude
 from agentctl.fixerenv import fixer_env
 from agentctl.inbox import INBOX_TAIL
 from agentctl.dispatchblock import claude_cli, interactive_mode
-from agentctl.store import StoreAuthFailed, StoreUnavailable
+from agentctl.store import CurrentStore, StoreAuthFailed, StoreUnavailable
 from agentctl.redrecord import red_active, red_what
 from agentctl.leases import lease_meta
 from agentctl.redreplay import sync_brief
@@ -34,7 +34,7 @@ from agentctl.fixer import FIXER_IDENTITY_ENV, fixer_prompt
 from agentctl.red import RED_FIXER_WALL, RED_RENEW_EVERY
 from agentctl.redclaim import bind_fixer_session
 from agentctl.redcrash import keep_awake, verdict_cut
-from agentctl.fixerlife import CurrentStore, HeldLease, TurnProgress
+from agentctl.fixerlife import HeldLease, TurnProgress
 from agentctl.ownerleases import owner_drop, owner_hand, owner_holder, owner_leases, owner_tell_leases
 
 

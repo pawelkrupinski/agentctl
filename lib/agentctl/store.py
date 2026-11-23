@@ -461,6 +461,18 @@ def open_store(clock: Callable[[], float] | None = None) -> Any:
     return (_store_opener[0] if _store_opener else Store)(clock=clock)
 
 
+class CurrentStore:
+    """THE STORE IS PASSED IN (CLAUDE.md, "Design"): cli, the composition root, hands it to each command, tick and
+    checker. Each call goes to the store open_store(clock) gives then: a long-running process follows `store use URL`
+    (2026-10-29: a fixer renewed its leases on the old store for hours). clock: the store's time, None for the wall's."""
+
+    def __init__(self, clock: Callable[[], float] | None = None) -> None:
+        self._clock = clock
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(open_store(self._clock), name)
+
+
 # §5.4 a condition (the recovery registry folded in), phase 1 step 12: open escalates 10 min after opening, then every
 # 2 h (recovery_tick's re-deadline); only its own probe passing closes it
 MACHINES["condition"] = {

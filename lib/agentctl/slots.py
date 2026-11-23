@@ -130,14 +130,14 @@ def output_file_shared(stream):
         return "its output file"
 
 
-def cmd_land(a, clock):
+def cmd_land(a, clock, store):
     if getattr(a, "lcmd", None):  # land status | hold | release | cancel <id>: the queue (design §14.5)
         if a.lcmd == "cancel" and not a.entry:
             print("usage: agentctl land cancel <id>")
             return 2
         w = argparse.Namespace(wcmd=LAND_SUBCOMMANDS[a.lcmd], repo=a.repo, entry=a.entry, renamed=True,
                                hold_for=getattr(a, "hold_for", None), hold_why=getattr(a, "hold_why", None))
-        return queue_command(w)
+        return queue_command(w, store)
     shared = (getattr(a, "until_done", False) or getattr(a, "follow", False)) and output_file_shared(sys.stdout)
     if shared:
         err(f"land did not start: another running land writes its output file {shared}, so their verdicts would mix "
@@ -164,7 +164,7 @@ def cmd_land(a, clock):
         return 1
     with exit_guard(), WorktreeGuard(repo):  # EVERY EXIT PUTS THE WORKTREE BACK: its rebase, stash and lease
         try:
-            return land_in_worktree(repo, a, clock)
+            return land_in_worktree(repo, a, clock, store)
         except Interrupted as ex:
             print(f"NOT LANDED: interrupted by {ex}: its stash, rebase and landing lease were put back; land again",
                   flush=True)
@@ -174,7 +174,7 @@ def cmd_land(a, clock):
 LAND_FETCH_TIMEOUT = 120  # s: one fetch of main proving a push (net_run tries it again through a blip)
 
 
-def land_in_worktree(repo, a, clock):
+def land_in_worktree(repo, a, clock, store):
     """cmd_land's work in the worktree (stash, rebase, checks, push, watch), under its exit guards."""
     main_ref = f"refs/remotes/{remote()}/main"
     env = tool_env()
@@ -208,16 +208,16 @@ def land_in_worktree(repo, a, clock):
             if not queue_mode(repo, a):
                 print("NOT LANDED: --until-done is the land queue's (movies); it takes no --follow / --no-watch")
                 return 1
-            return land_until_done(repo, main_ref, sh, a, clock)
+            return land_until_done(repo, main_ref, sh, a, clock, store)
         if queue_mode(repo, a):  # THE LAND QUEUE: rebase, guard, QUEUED -- the checks and the push are the processor's
-            return enqueue(repo, main_ref, sh, a, clock)
+            return enqueue(repo, main_ref, sh, a, clock, store)
         a.landed_sha, a.pushed_at, a.waiting = None, None, None
         rc = None
         for round_ in range(LAND_PRECHECK_ROUNDS + 1):
             # The long checks first, WITHOUT the lock (the last round: under it, so a lander always finishes).
             a.prechecked = None
             if round_ < LAND_PRECHECK_ROUNDS:
-                rc = precheck(repo, main_ref, sh, log_path, a, clock)
+                rc = precheck(repo, main_ref, sh, log_path, a, clock, store)
                 if rc is not None:
                     break
             with land_lock(repo, clock) as held:
@@ -225,7 +225,7 @@ def land_in_worktree(repo, a, clock):
                     print("NOT LANDED: timed out waiting for the landing lock (another land is running its checks); "
                           "land again.")
                     return 1
-                rc = land_loop(repo, main_ref, sh, log_path, a, clock)
+                rc = land_loop(repo, main_ref, sh, log_path, a, clock, store)
             if rc != MAIN_MOVED:
                 break
             err(f"{remote()}/main moved since the check: checking again on it, outside the lock")
@@ -235,18 +235,18 @@ def land_in_worktree(repo, a, clock):
     if rc == 0 and a.waiting and not getattr(a, "follow", False):
         return 0  # the processor lands it; LANDED / NOT LANDED and the WATCH verdict go to `agentctl inbox`
     if rc == 0 and a.waiting:  # --follow: wait here for the batch, then watch
-        rc, a.landed_sha, a.pushed_at = await_entry(repo, a.waiting["id"], clock, close=None if getattr(a, "keep_worktree", False) else repo)
+        rc, a.landed_sha, a.pushed_at = await_entry(repo, a.waiting["id"], clock, store, close=None if getattr(a, "keep_worktree", False) else repo)
     if rc != 0 or not a.landed_sha or getattr(a, "no_watch", False):
         return rc
     if not getattr(a, "follow", False):  # land ends at LANDED; its watch item's verdict goes to the inbox
-        start_watch(repo, a.landed_sha, a.pushed_at, worktree=repo,
+        start_watch(store, repo, a.landed_sha, a.pushed_at, worktree=repo,
                     close=None if getattr(a, "keep_worktree", False) else repo,
                     session=os.environ.get("CLAUDE_CODE_SESSION_ID"))
         print(f"watching {a.landed_sha[:10]}: its WATCH verdict goes to `agentctl inbox`", flush=True)
         return 0
     # the lock is free again: the next lander goes while this one watches main's CI; on WATCH OK the worktree it ran
     # from is closed when proven merged (close_worktree), unless --keep-worktree
-    return watch_landed(repo, a.landed_sha, a.pushed_at, clock, close=None if getattr(a, "keep_worktree", False) else repo,
+    return watch_landed(repo, a.landed_sha, a.pushed_at, clock, store, close=None if getattr(a, "keep_worktree", False) else repo,
                         fixes=getattr(a, "fixes", None) or ())
 
 
@@ -273,7 +273,7 @@ def proven_push(repo, head, main_ref, log_path, a):
     return 1
 
 
-def land_loop(repo, main_ref, sh, log_path, a, clock):
+def land_loop(repo, main_ref, sh, log_path, a, clock, store):
     for attempt in range(LAND_RETRIES + 1):
         lock_note("fetch and rebase")
         rc, head = sync(repo, main_ref, sh, clock, getattr(a, "release_hold", False))
@@ -293,7 +293,7 @@ def land_loop(repo, main_ref, sh, log_path, a, clock):
             # CHECK FIRST: the hook's dry run over exactly what the push will carry (its pass is stored, so the push's own
             # hook run reuses it in seconds). A long hook inside `git push` holds the push's ssh connection idle, and a
             # tunnel drop kills it after "all clear" (2026-10-23); the area tests make long hooks the norm.
-            rc = dry_run(repo, hook, head, log_path, attempt + 1,
+            rc = dry_run(repo, hook, head, log_path, attempt + 1, clock, store,
                          cls=gov_class_of(repo, waiting_commits(repo, f"{remote()}/main", head), reds), a=a)
             if rc is not None:
                 return rc

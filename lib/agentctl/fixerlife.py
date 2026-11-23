@@ -9,7 +9,7 @@ import time
 from agentctl.core import env_num, fmt_age
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
-from agentctl.store import StoreAuthFailed, StoreUnavailable, open_store
+from agentctl.store import CurrentStore, StoreAuthFailed, StoreUnavailable
 from agentctl.repos import red_repo_of
 from agentctl.redrecord import lease_is_live, red_lease
 from agentctl.claudefiles import bg_transcript, fixer_verdict
@@ -140,15 +140,6 @@ def fixer_quiet(verdict):
     WAITING ON YOU, from the reconciler)."""
     v = str(verdict or "")
     return v.startswith("ENDED: ") or bool(GAVE_UP_FIXED.match(v) or GAVE_UP_DECIDE.match(v))
-
-
-class CurrentStore:
-    """open_store() resolved again at every call, so a long-running process follows `agentctl store use URL` (2026-10-29
-    cutover: the gate fixer's wrapper, started on the laptop's then store, renewed its leases there for hours while
-    ci-runner's copies expired and its reds were offered again)."""
-
-    def __getattr__(self, name):
-        return getattr(open_store(), name)
 
 
 def red_fixer(a):

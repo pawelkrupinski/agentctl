@@ -6,7 +6,6 @@ import time
 from agentctl.core import env_num, err, slug
 from agentctl.timefmt import parse_time
 from agentctl.forge import gh_json, is_cancelled
-from agentctl.store import open_store
 from agentctl.repos import movies_repo_path, red_repo_clone
 from agentctl.clones import main_clone
 from agentctl.ancestry import contains
@@ -71,14 +70,14 @@ def failed_jobs(o_r, rid):
 WATCH_EVERY = 60
 
 
-def start_watch(repo, sha, pushed_at, worktree=None, close=None, session=None, o_r=None, follower=None):
+def start_watch(st, repo, sha, pushed_at, worktree=None, close=None, session=None, o_r=None, follower=None):
     """The landed sha's watch item: created once, a second start leaves it as it is (the sha's ONE watch, whichever
     host or follower starts it). follower: {followed_by, followed_until}, a `land --follow` that watches it itself
     (claim_watch)."""
     o_r = o_r or slug(repo)
     if not WATCH.get(o_r):
         return None
-    return open_store().put_item("watch", sha, "watching", {"repo": main_clone(repo), "o_r": o_r, "pushed_at": pushed_at or time.time(),
+    return st.put_item("watch", sha, "watching", {"repo": main_clone(repo), "o_r": o_r, "pushed_at": pushed_at or time.time(),
                                                        "worktree": worktree or repo, "close": close, "session": session,
                                                        "next_at": 0, **(follower or {})})
 

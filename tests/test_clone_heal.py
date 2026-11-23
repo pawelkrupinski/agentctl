@@ -7,6 +7,7 @@ import os, subprocess, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_clock import on_clock  # noqa: E402
 
 GIT_ID = ["-c", "user.email=t@t", "-c", "user.name=t"]
 
@@ -361,7 +362,7 @@ class RequeueLoopTest(unittest.TestCase):
         A.fetch_main = lambda repo: (False, "error: Could not read 409b8bb3c1\nfatal: remote did not send all "
                                             "necessary objects")
         try:
-            self.assertEqual(A._check_entry(self.d, self.d, self.e, 1, A.Clock()), 0)
+            self.assertEqual(A._check_entry(self.d, self.d, self.e, 1, *on_clock(A.Clock())), 0)
         finally:
             A.precheck_hook, A.fetch_main = saved
         self.assertEqual(self.e["status"], "queued")

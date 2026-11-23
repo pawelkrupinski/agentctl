@@ -10,7 +10,6 @@ from typing import Any, Callable
 from agentctl.clock import Clock
 from agentctl.core import SHORT, _bounded, env_num, err, git, git_ok, host_role, slug
 from agentctl.statefile import write_json
-from agentctl.store import open_store
 from agentctl.repos import movies_repo_path
 from agentctl.waitingdir import waiting_entries, waiting_state
 from agentctl.storetoken import _IN_PROCESSOR
@@ -42,7 +41,7 @@ ALIASES_UNTIL = "2026-11-05"  # the old command names (design §14.5) answer unt
 # it and needs the token handed over again), then the alias goes -- removing it first would stop the sync.
 
 
-def waiting_run(repo: str, clock: Clock, once: bool = False, service: bool = False) -> int:
+def waiting_run(repo: str, clock: Clock, store: Any, once: bool = False, service: bool = False) -> int:
     """THE processor: ONE loop of ticks (design §3). On ci-runner (server_steps): the change items (executors,
     pushes), the batch, the watches, the gate line, the red tick, the recovery registry. On the laptop (sync_steps):
     the outbox, the state mirror, events -> inbox and the notifier, claims, the fixer dispatcher, the network and
@@ -73,7 +72,7 @@ def waiting_run(repo: str, clock: Clock, once: bool = False, service: bool = Fal
                 with clone_shared(repo):
                     return fn()
             return run
-        steps = sync_steps(repo, d, o_r, clock) if role == "sync" else server_steps(repo, d, shared, clock)
+        steps = sync_steps(repo, d, o_r, clock, store) if role == "sync" else server_steps(repo, d, shared, clock, store)
         while True:
             if TICK_STOP[0]:  # SIGTERM (systemd's stop): between ticks, never inside one
                 return 0
@@ -97,7 +96,7 @@ def waiting_run(repo: str, clock: Clock, once: bool = False, service: bool = Fal
                     open_condition("STALLED", f"STALLED: the waiting processor's ticks failed {errors} times in a row; "
                                               f"see {d}/processor.log and service.log",
                                    run_probe("waiting_ok", {"d": d, "since": clock.time()}), [], key="waiting-rounds",
-                                   command="waiting")
+                                   command="waiting", store=store)
                     stalled_noted = True
                 except (Exception, SystemExit) as e:
                     err(f"STALLED could not be noted ({str(e)[:160]}); the loop goes on")
@@ -105,7 +104,7 @@ def waiting_run(repo: str, clock: Clock, once: bool = False, service: bool = Fal
                 write_json(os.path.join(d, "round-ok.json"), {"at": clock.time()})
             if role != "sync":  # the sync's state.json is ci-runner's, mirrored
                 try:
-                    write_snapshot(d)
+                    write_snapshot(d, store)
                 except Exception as e:
                     err(f"the snapshot could not be written: {e}")
             sd_notify("WATCHDOG=1")
@@ -117,13 +116,13 @@ def waiting_run(repo: str, clock: Clock, once: bool = False, service: bool = Fal
 TICK_STOP = [False]  # set by SIGTERM in `agentctl tick`: the loop returns between ticks
 
 
-def cmd_tick(a: argparse.Namespace, clock: Clock) -> int:
+def cmd_tick(a: argparse.Namespace, clock: Clock, store: Any) -> int:
     """`agentctl tick`: the processor (the reconciler's loop of ticks); `tick service install|uninstall|status`: it as the
     launchd agent (design §14.5: `waiting run` / `waiting service`, renamed)."""
     if host_role() == "server":  # ci-runner: its own clone, systemd's notify protocol, a clean stop between ticks
         repo = ensure_server_clone(a.repo)
         signal.signal(signal.SIGTERM, lambda *_: TICK_STOP.__setitem__(0, True))
-        open_store()  # the database exists (its schema) before systemd hears READY
+        store.db().close()  # the database exists (its schema) before systemd hears READY
         sd_notify("READY=1")
         SD_READY[0] = True
     else:
@@ -134,18 +133,18 @@ def cmd_tick(a: argparse.Namespace, clock: Clock) -> int:
     if a.tcmd == "service" and not a.action:
         print("usage: agentctl tick service install|uninstall|status")
         return 2
-    return cmd_waiting(w, clock)
+    return cmd_waiting(w, clock, store)
 
 
-def cmd_waiting(a: argparse.Namespace, clock: Clock) -> int:
+def cmd_waiting(a: argparse.Namespace, clock: Clock, store: Any) -> int:
     if a.wcmd in WAITING_RENAMED and not getattr(a, "renamed", False) and \
             (a.wcmd not in ("run", "service") or sys.stdin.isatty()):
         err(f"`agentctl waiting {a.wcmd}` is now `agentctl {WAITING_RENAMED[a.wcmd]}` (the old name answers until "
             f"{ALIASES_UNTIL})")
     if a.wcmd == "run":
-        return waiting_run(waiting_repo(a), clock, once=a.once, service=getattr(a, "service", False))
+        return waiting_run(waiting_repo(a), clock, store, once=a.once, service=getattr(a, "service", False))
     if a.wcmd == "await":  # land's wait on its entry, resumed after a restart on new code
-        return land_await(a, waiting_repo(a), clock)
+        return land_await(a, waiting_repo(a), clock, store)
     if a.wcmd in ("check", "check-batch"):
-        return queue_checker(a, clock)
-    return queue_command(a)
+        return queue_checker(a, clock, store)
+    return queue_command(a, store)

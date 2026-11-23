@@ -7,7 +7,7 @@ import contextlib, io, json, os, re, subprocess, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, StallSamples, sh  # noqa: E402
-from fake_clock import FakeClock  # noqa: E402
+from fake_clock import FakeClock, on_clock  # noqa: E402
 from test_waiting import REPO_HOOK, WaitingTest, assert_queued_line_names_no_verdict  # noqa: E402
 
 PLAN_HOOK = """#!/bin/sh
@@ -70,9 +70,9 @@ class QueueTest(WaitingTest):
         for _ in range(rounds):
             e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
             if e["status"] in ("queued", "checking") and not e.get("retry_after", 0) > time.time():
-                A.check_entry(self.r.path, eid, self.clock)
+                A.check_entry(self.r.path, eid, *on_clock(self.clock))
             elif e["status"] == "checked":
-                A.push_change(self.r.path, d, e, A.Clock())
+                A.push_change(self.r.path, d, e, *on_clock(A.Clock()))
             else:
                 break
         A.project_events()  # the processor's projector: the events become the inbox entries
@@ -111,7 +111,7 @@ class QueueTest(WaitingTest):
             saved = A.spawn_executor
             A.spawn_executor = lambda repo, d_, eid: started.append(eid)
             try:
-                return A.tick_changes(self.r.path, d, A.Clock()), started
+                return A.tick_changes(self.r.path, d, *on_clock(A.Clock())), started
             finally:
                 A.spawn_executor = saved
         d, _c, _w = A.waiting_state(self.r.path)
@@ -123,12 +123,12 @@ class QueueTest(WaitingTest):
         saved = A.spawn_batch_executor
         A.spawn_batch_executor = lambda repo, d_, bid: None  # its executor runs elsewhere
         try:
-            self.assertIn("checking", A.tick_batch(self.r.path, d, A.Clock())[0])
+            self.assertIn("checking", A.tick_batch(self.r.path, d, *on_clock(A.Clock()))[0])
         finally:
             A.spawn_batch_executor = saved
         wb, _ = self.agent("b", "worker/src/main/B.scala", "b\n", msg="b: solo")
         eb, _ = self.queued(wb)
-        A.check_entry(self.r.path, eb, self.clock)
+        A.check_entry(self.r.path, eb, *on_clock(self.clock))
         self.assertEqual(entry(eb)["status"], "checked")
         did, _started = tick()
         self.assertIn(f"{eb}: its push waits for batch", " ".join(did))
@@ -148,7 +148,7 @@ class QueueTest(WaitingTest):
         self.assertIn(ec, started, "the batch landed: changes go again")
         tick()  # b: main moved by the batch, no file overlap: its combined tree verified, then pushed
         self.assertEqual((entry(eb)["status"], entry(eb)["verify"]), ("queued", True))
-        A.check_entry(self.r.path, eb, self.clock)
+        A.check_entry(self.r.path, eb, *on_clock(self.clock))
         tick()
         self.assertEqual(entry(eb)["status"], "landed")
 
@@ -166,7 +166,7 @@ class QueueTest(WaitingTest):
             saved = A.spawn_executor
             A.spawn_executor = lambda repo, d_, eid: started.append(eid)
             try:
-                return A.tick_changes(self.r.path, d, A.Clock()), started
+                return A.tick_changes(self.r.path, d, *on_clock(A.Clock())), started
             finally:
                 A.spawn_executor = saved
         d, _c, _w = A.waiting_state(self.r.path)
@@ -174,26 +174,26 @@ class QueueTest(WaitingTest):
         ez, _ = self.queued(wz)
         wa, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: older")
         ea, _ = self.queued(wa)
-        A.check_entry(self.r.path, ea, self.clock)
+        A.check_entry(self.r.path, ea, *on_clock(self.clock))
         other, _ = self.agent("m", "docs/notes.md", "n\n", msg="main moves")
         sh(other, "git", "push", "-q", "origin", "HEAD:main")
         tick()  # a: main moved, no file overlap: its combined tree verified
         self.assertEqual((entry(ea)["status"], entry(ea)["verify"]), ("queued", True))
         wb, _ = self.agent("b", "worker/src/main/B.scala", "b\n", msg="b: younger")
         eb, _ = self.queued(wb)
-        A.check_entry(self.r.path, eb, self.clock)
+        A.check_entry(self.r.path, eb, *on_clock(self.clock))
         self.assertEqual(entry(eb)["status"], "checked")
         did, started = tick()
         self.assertIn(f"{eb}: its push waits for {ea}'s combined-tree verification", " ".join(did))
         self.assertEqual(entry(eb)["status"], "checked", "no push under the older change's verification")
         self.assertEqual(self.remote_log()[0], "main moves")
         self.assertEqual(started[:2], [ea, ez], "the verification takes the next check tree first")
-        A.check_entry(self.r.path, ea, self.clock)  # verified on the main it was queued on: it stands
+        A.check_entry(self.r.path, ea, *on_clock(self.clock))  # verified on the main it was queued on: it stands
         tick()
         self.assertEqual(entry(ea)["status"], "landed")
         self.assertEqual(self.remote_log()[0], "a: older", "verified once, then pushed")
         self.assertEqual((entry(eb)["status"], entry(eb)["verify"]), ("queued", True), "b verifies after it")
-        A.check_entry(self.r.path, eb, self.clock)
+        A.check_entry(self.r.path, eb, *on_clock(self.clock))
         tick()
         self.assertEqual(entry(eb)["status"], "landed")
         self.assertEqual(self.remote_log()[:2], ["b: younger", "a: older"])
@@ -236,7 +236,7 @@ class QueueTest(WaitingTest):
         saved = A.spawn_batch_executor
         A.spawn_batch_executor = lambda repo, d_, bid: None
         try:
-            self.assertIn("checking", A.tick_batch(self.r.path, d, A.Clock())[0])
+            self.assertIn("checking", A.tick_batch(self.r.path, d, *on_clock(A.Clock()))[0])
         finally:
             A.spawn_batch_executor = saved
         self.assertEqual(self.batch()["data"]["members"], ids, "the batch's members are the changes, each once")
@@ -356,7 +356,7 @@ class QueueTest(WaitingTest):
         self.r.push()
         wt, _ = self.agent("a", "web/src/main/NetFlake.scala", "a\n", msg="a: one")
         eid, _ = self.queued(wt)
-        A.check_entry(self.r.path, eid, self.clock)
+        A.check_entry(self.r.path, eid, *on_clock(self.clock))
         A.project_events()
         self.assertTrue(os.path.exists(flag), "its check ran, and failed on the network")
         e = self.entries()[eid.rsplit("-", 1)[-1]]
@@ -434,8 +434,8 @@ class QueueTest(WaitingTest):
         eid, _ = self.queued(wt)
         d, _c, _w = A.waiting_state(self.r.path)
         self.moves_once(("worker/src/main/W.scala", "w\n"))
-        A.check_entry(self.r.path, eid, self.clock)  # the full check, main moving under it
-        A.push_change(self.r.path, d, A.read_record(os.path.join(d, "entries", f"{eid}.json")), A.Clock())
+        A.check_entry(self.r.path, eid, *on_clock(self.clock))  # the full check, main moving under it
+        A.push_change(self.r.path, d, A.read_record(os.path.join(d, "entries", f"{eid}.json")), *on_clock(A.Clock()))
         e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
         self.assertEqual((e["status"], e.get("verify")), ("queued", True), "no overlap yet: queued to be verified")
         other, _ = self.agent("t", "docs/notes.md", "".join(f"line {i}\n" for i in range(11)) + "theirs\n")
@@ -1201,7 +1201,7 @@ class FastPrecheckTest(QueueTest):
         eid, _ = self.queued(wt)
         saved = A.queue_command
 
-        def unreachable(a):
+        def unreachable(a, store):
             raise A.StoreUnavailable("POST /v1/changes: Connection refused")
         A.queue_command = unreachable
         try:
@@ -1395,7 +1395,7 @@ class RemotePickupTest(QueueTest):
         saved = A.spawn_executor
         A.spawn_executor = lambda repo, d_, eid: started.append(eid)
         try:
-            return A.tick_changes(self.r.path, d, A.Clock()), started
+            return A.tick_changes(self.r.path, d, *on_clock(A.Clock())), started
         finally:
             A.spawn_executor = saved
 
@@ -1421,7 +1421,7 @@ class RemotePickupTest(QueueTest):
         saved = A.spawn_executor
         A.spawn_executor = lambda *a: None
         try:
-            A.tick_changes(self.r.path, d, FakeClock(time.time() + 3 * 3600))
+            A.tick_changes(self.r.path, d, *on_clock(FakeClock(time.time() + 3 * 3600)))
         finally:
             A.spawn_executor = saved
         e2 = self.entry(e["id"])
@@ -1444,7 +1444,7 @@ class RemotePickupTest(QueueTest):
         other, _ = self.agent("b", "worker/src/main/B.scala", "b\n", msg="b: two")
         sh(other, "git", "push", "-q", "origin", "HEAD:main")
         self.state["status"] = "success"  # it went green while no checker ran
-        A.check_entry(self.r.path, e["id"], self.clock)
+        A.check_entry(self.r.path, e["id"], *on_clock(self.clock))
         e2 = self.entry(e["id"])
         self.assertEqual(self.state["cancelled"], [], "the dead checker's run is adopted, never cancelled")
         self.assertEqual(len(self.state["branch_pushes"]), 1, "no second check/ push, no second run")
@@ -1461,7 +1461,7 @@ class RemotePickupTest(QueueTest):
         e["remote"]["base"] = "0" * 40  # not main's ancestor (nor any commit here): no evidence about this main
         A.save_entry(d, e)
         self.state["status"] = "success"
-        A.check_entry(self.r.path, e["id"], self.clock)
+        A.check_entry(self.r.path, e["id"], *on_clock(self.clock))
         self.assertEqual(self.state["cancelled"], [99], "the stray run is cancelled")
         self.assertEqual(len(self.state["branch_pushes"]), 2, "a new round on the current main")
 

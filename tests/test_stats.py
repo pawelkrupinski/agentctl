@@ -8,7 +8,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, seed_gating_checks  # noqa: E402
-from fake_clock import FakeClock  # noqa: E402
+from fake_clock import FakeClock, on_clock  # noqa: E402
 
 T0 = 1_794_900_000.0
 
@@ -303,10 +303,10 @@ class StatsPassTest(unittest.TestCase):
     def test_no_url_no_pass_and_the_reconciler_runs_the_step(self):
         with mock.patch.dict(os.environ, {"AGENTCTL_STATS_URL": "off"}):
             self.assertIsNone(A.stats_url())
-            self.assertEqual(A.maybe_stats_pass("/r", "/d", A.Clock()), 0)
+            self.assertEqual(A.maybe_stats_pass("/r", "/d", *on_clock(A.Clock())), 0)
         with mock.patch.dict(os.environ, {"AGENTCTL_HOST": "ci-runner", "AGENTCTL_STATS_URL": ""}):
             self.assertEqual(A.stats_url(), A.STATS_URL_SERVER)
-        names = [n for n, _f in A.server_steps("/r", "/d", lambda f: f, A.Clock())]
+        names = [n for n, _f in A.server_steps("/r", "/d", lambda f: f, *on_clock(A.Clock()))]
         self.assertIn("stats", names)
 
 

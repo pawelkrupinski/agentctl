@@ -9,7 +9,7 @@ import os, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Repo, approved  # noqa: E402
-from fake_clock import FakeClock  # noqa: E402
+from fake_clock import FakeClock, on_clock  # noqa: E402
 
 REGISTRY = ("# workflow\tverify_dispatch\treplay\twhy\n"
             "Alert backtest\tyes\tinfra/bin/backtest-alerts-replay --from-run {run}\t~30 min on ci-runner\n"
@@ -308,7 +308,7 @@ class ServerRefusesUnreplayedFixTest(test_backlog_batch.BacklogBatchTest):
             "key": "5254bffda9d2", "workflow": "Alert backtest", "jobs": ["backtest"], "runs": ["5", "44459271435"],
             "last_run": {"number": 5, "databaseId": 44459271435}, "red_kind": "outside"})
         with approved("fix-replay-outside"):  # outside the gate it only warns, unless approved (test_policy.py)
-            A.check_entry(self.r.path, eid, self.clock)
+            A.check_entry(self.r.path, eid, *on_clock(self.clock))
         e = self.entry(eid)
         self.assertEqual(e["status"], "rejected")
         self.assertIn(f"`Fix-Replay: {CMD} base=FAIL head=PASS`", e["why"])
@@ -323,7 +323,7 @@ class ServerRefusesUnreplayedGateFixTest(test_backlog_batch.BacklogBatchTest):
         A.open_store().put_item("red", "9d1e2a7c4b10", "offered", {
             "key": "9d1e2a7c4b10", "workflow": "Main", "jobs": ["unit (web)"], "runs": ["2600"],
             "last_run": {"number": 2600}, "red_kind": "gate", "gate": True})
-        A.check_entry(self.r.path, eid, self.clock)
+        A.check_entry(self.r.path, eid, *on_clock(self.clock))
         e = self.entry(eid)
         self.assertEqual(e["status"], "rejected")
         self.assertIn("is a gate red", e["why"])

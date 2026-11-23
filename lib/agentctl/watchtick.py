@@ -2,10 +2,9 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
-from typing import Sequence
+from typing import Any, Sequence
 from agentctl.core import NoToken, env_num, err, slug
 from agentctl.timefmt import iso_at
-from agentctl.store import open_store
 from agentctl.procs import safe_cwd
 from agentctl.owned import Owned, backoff, restart_if_changed
 from agentctl.clones import main_clone
@@ -21,7 +20,7 @@ from agentctl.statemachines import StaleVersion, TerminalState
 from agentctl.clock import Clock
 
 
-def watch_landed(repo: str, sha: str, pushed_at: float | None, clock: Clock, o_r: str | None = None,
+def watch_landed(repo: str, sha: str, pushed_at: float | None, clock: Clock, store: Any, o_r: str | None = None,
                  close: str | None = None, fixes: Sequence[str] = ()) -> int:
     """Watch Main and the convergence for a landed sha. 0 green (or nothing to watch), 3 red, 2 could not tell. OWNED
     (one watcher per sha; on agentctl's new code it re-execs as `agentctl watch`). fixes: the runs the landed commits'
@@ -37,7 +36,7 @@ def watch_landed(repo: str, sha: str, pushed_at: float | None, clock: Clock, o_r
         fixes = sorted(set(fixes) | fixes_of(repo, [sha]))
     except Exception:
         fixes = sorted(set(fixes))
-    claim = WatchClaim(repo, sha, pushed_at, o_r, clock, close)
+    claim = WatchClaim(store, repo, sha, pushed_at, o_r, clock, close)
     how, it = claim.look()
     if how == "theirs":
         how, it = claim.wait_theirs(it)
@@ -69,8 +68,8 @@ def watch_landed(repo: str, sha: str, pushed_at: float | None, clock: Clock, o_r
 
 
 class WatchClaim:
-    def __init__(self, repo, sha, pushed_at, o_r, clock, close=None):
-        self.repo, self.sha, self.pushed_at, self.o_r, self.close = repo, sha, pushed_at, o_r, close
+    def __init__(self, store, repo, sha, pushed_at, o_r, clock, close=None):
+        self.store, self.repo, self.sha, self.pushed_at, self.o_r, self.close = store, repo, sha, pushed_at, o_r, close
         self.clock = clock
         self.me = f"{os.uname().nodename}:{os.getpid()}"
 
@@ -81,8 +80,8 @@ class WatchClaim:
         """('mine' | 'theirs' | 'decided', item), or (None, None) when the store did not answer."""
         t = self.clock.time()
         try:
-            st = open_store()
-            it = start_watch(self.repo, self.sha, self.pushed_at, worktree=self.repo, close=self.close, o_r=self.o_r,
+            st = self.store
+            it = start_watch(st, self.repo, self.sha, self.pushed_at, worktree=self.repo, close=self.close, o_r=self.o_r,
                              session=os.environ.get("CLAUDE_CODE_SESSION_ID"), follower=self.lease(t))
             for _ in range(3):
                 dd = it.get("data") or {}
@@ -120,7 +119,7 @@ class WatchClaim:
 
     def renew(self):
         try:
-            st = open_store()
+            st = self.store
             it = st.item("watch", self.sha)
             # only its OWN claim: one that lapsed (a laptop asleep) and was taken over is the new follower's now --
             # renewing it would take it back from under that one, and the tick would leave both watching
@@ -136,7 +135,7 @@ class WatchClaim:
         """Its own claim given up (never another follower's): the tick carries a `watching` item on to its own deadline;
         an `unknown` one waits for the next follower."""
         try:
-            st = open_store()
+            st = self.store
             it = st.item("watch", self.sha)
             if self.mine(it):
                 st.update_item("watch", self.sha, it["version"], {"followed_by": None, "followed_until": 0})
@@ -149,7 +148,7 @@ class WatchClaim:
         if state not in ("ok", "red"):
             return self.release()
         try:
-            st = open_store()
+            st = self.store
             it = st.item("watch", self.sha)
             if it and watch_outcome(it) not in ("ok", "red"):
                 finish_watch(st, it, state, line, list(red_runs), told=True)
@@ -240,17 +239,16 @@ def _watch(repo, sha, pushed_at, o_r, flows, own, clock, fixes=(), claim=None):
         clock.sleep(next(err_delays) if unreachable is not None else next(delays))
 
 
-def cmd_watch(a, clock):
+def cmd_watch(a, clock, store):
     a.inbox_cwd = a.agent_cwd or a.close or a.repo or safe_cwd()  # its inbox entry routes to the agent's worktree
     repo = main_clone(a.repo or safe_cwd())
     os.chdir(repo)  # not the worktree: --close removes it, and so may its agent
-    return watch_landed(repo, a.sha, a.pushed_at, clock, close=a.close, fixes=a.fixes or ())
+    return watch_landed(repo, a.sha, a.pushed_at, clock, store, close=a.close, fixes=a.fixes or ())
 
 
-def tick_watches(clock):
+def tick_watches(clock, st):
     """One evaluation of each due watch item. Returns what it decided."""
     t = clock.time()
-    st = open_store(clock.time)
     did = []
     for it in st.items("watch", states=("watching",)):
         dd = it["data"]

@@ -604,5 +604,5 @@ class CachedGateTest(CiWhyTest):
         subprocess.run(["git", "-C", clone, "remote", "add", "origin", "git@github.com:pawelkrupinski/movies.git"], check=True)
         self.scenario([])
         A._last_gate_publish[0] = 0
-        A.maybe_publish_gate(clone)
+        A.maybe_publish_gate(clone, A.CurrentStore())
         self.assertTrue(A.cached_gate_summary(A.slug(clone))[0] or os.path.exists(self.gs))

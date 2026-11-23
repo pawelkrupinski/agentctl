@@ -5,6 +5,7 @@ import json, os, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_clock import on_clock  # noqa: E402
 from fake_runner import FakeRunner  # noqa: E402
 
 
@@ -51,8 +52,8 @@ class UpkeepTest(unittest.TestCase):
         self.assertEqual(self.closed, [done])
         self.assertIn("delete worktree /x/movies-wt-old [old] abc: merged", lines)
         self.assertEqual((os.path.exists(old), os.path.exists(new), os.path.exists(foreign)), (False, True, True))
-        self.assertIn("upkeep", [n for n, _ in A.sync_steps("/r", utmp, "o/r", A.Clock())])  # the laptop's, never ci-runner's
-        self.assertNotIn("upkeep", [n for n, _ in A.server_steps("/r", utmp, lambda f: f, A.Clock())])
+        self.assertIn("upkeep", [n for n, _ in A.sync_steps("/r", utmp, "o/r", *on_clock(A.Clock()))])  # the laptop's, never ci-runner's
+        self.assertNotIn("upkeep", [n for n, _ in A.server_steps("/r", utmp, lambda f: f, *on_clock(A.Clock()))])
 
     def test_the_upkeep_runs_at_most_hourly_in_its_own_thread(self):
         runs = []

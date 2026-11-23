@@ -10,7 +10,6 @@ from agentctl.procrunner import process_runner
 from agentctl.core import (
     MAX_FOREIGN, NO_SIGN, branch_of, cherry_landed, env_num, err, fmt_age, git, git_ok, host_role, process_cache,
     remote, scratch)
-from agentctl.store import open_store
 from agentctl.policy import policy_blocks
 from agentctl.trailers import do_not_land, held_commit
 from agentctl.waitingdir import waiting_state
@@ -55,7 +54,7 @@ def change_fields(repo, main_ref, head, a):
             "replays": fix_replay_proofs(repo, head) or None}
 
 
-def submit_to_server(repo, d, fields, note="", after_queued=None, waits=False):
+def submit_to_server(repo, d, fields, store, note="", after_queued=None, waits=False):
     """THE LAPTOP'S ONLY WAY INTO THE QUEUE (phase 2; it holds no queue of its own): the change pushed to
     refs/heads/land/<id>, then submitted to ci-runner's queue (the store unreachable, or no token here: the outbox,
     which the sync sends). Prints QUEUED / QUEUED-LOCAL / NOT LANDED; returns land's exit code. waits: this land then
@@ -66,7 +65,7 @@ def submit_to_server(repo, d, fields, note="", after_queued=None, waits=False):
         print(f"NOT LANDED: could not push the change to refs/heads/land/{e['id']} (ci-runner checks it from there): "
               f"{push_failure_why(e.get('push_error'))}: land again")
         return 1
-    r = submit_remote(open_store(), e)
+    r = submit_remote(store, e)
     offer_token(repo)  # this agent's token to the laptop processor, which holds none after a restart
     if r.get("outbox"):
         why = ("no store token in this process (none in its environment, the processor's socket held none; land "
@@ -84,7 +83,7 @@ def submit_to_server(repo, d, fields, note="", after_queued=None, waits=False):
     return 0
 
 
-def cmd_land_precheck(a):
+def cmd_land_precheck(a, store):
     """The detached half of start_fast_precheck: run the repo's precheck, and on a refusal cancel the queued change."""
     # Its own process group, ended WHOLE at the bound (review 2026-11-07: subprocess.run killed only the script, so what
     # it started -- sbt, a test JVM -- lived on, and kept the output pipe, and so this wait, open): run_watched.
@@ -92,7 +91,7 @@ def cmd_land_precheck(a):
     rc, out = run_watched([os.path.join(a.repo, FAST_PRECHECK), "--base", a.base, "--head", a.head], a.repo, None,
                           os.path.join(scratch(), f"agentctl-precheck-{a.entry}"), "precheck",
                           stall=FAST_PRECHECK_BOUND, wall=FAST_PRECHECK_BOUND)
-    note_precheck(a.entry, time.time() - t0, rc, out)
+    note_precheck(a.entry, time.time() - t0, rc, out, store)
     if rc is None:
         print(f"{out or ''}PRECHECK UNCHECKED: past its {FAST_PRECHECK_BOUND} s bound, ended with its children: "
               "could not check, its landing check judges it", flush=True)
@@ -108,7 +107,7 @@ def cmd_land_precheck(a):
     # NOT LANDED only when the cancel took: the landing check runs alongside and may have decided first (review
     # 2026-11-07: a change that LANDED was told NOT LANDED, "its queue entry is cancelled").
     try:
-        rc = queue_command(cancel)
+        rc = queue_command(cancel, store)
     except (Exception, SystemExit) as e:  # the store unreachable: the change is still queued, its check judges it
         err(f"could not cancel {a.entry}: {e}")
         verdict = (f"PRECHECK REFUSED {a.entry} ({a.head[:10]}): {last}; it could not be cancelled ({str(e)[:120]}), so "
@@ -127,7 +126,7 @@ def cmd_land_precheck(a):
     return 1
 
 
-def enqueue(repo, main_ref, sh, a, clock):
+def enqueue(repo, main_ref, sh, a, clock, store):
     """Rebase, squash guard, then the change becomes a queued entry: prints QUEUED and starts the processor. A red
     fixer's land then waits for the verdict (fixer_land)."""
     rc, head = sync(repo, main_ref, sh, clock, getattr(a, "release_hold", False))
@@ -144,7 +143,7 @@ def enqueue(repo, main_ref, sh, a, clock):
             start_fast_precheck(repo, main_ref, head, eid, a)
     if host_role() == "sync":  # THE LAPTOP'S LAND NEEDS NO VAULT (see submit_to_server)
         with no_vault():
-            rc = submit_to_server(repo, d, change_fields(repo, main_ref, head, a), after_queued=after_queued,
+            rc = submit_to_server(repo, d, change_fields(repo, main_ref, head, a), store, after_queued=after_queued,
                                   waits=waits)
     else:
         fields = change_fields(repo, main_ref, head, a)
@@ -159,37 +158,37 @@ def enqueue(repo, main_ref, sh, a, clock):
     if rc != 0 or not waits or not a.queued_id:
         return rc
     if not fixer:  # land --until-done: its caller waits (land_until_done)
-        return foreground_precheck(repo, main_ref, head, a.queued_id, a)
-    return fixer_land(repo, main_ref, head, a.queued_id, a, clock)
+        return foreground_precheck(repo, main_ref, head, a.queued_id, a, store)
+    return fixer_land(repo, main_ref, head, a.queued_id, a, clock, store)
 
 
-def foreground_precheck(repo, main_ref, head, eid, a):
+def foreground_precheck(repo, main_ref, head, eid, a, store):
     """The fast precheck of queued change eid in THIS process (a land that waits for its verdict): 1 when it refused
     (its NOT LANDED or PRECHECK REFUSED line the last printed), else 0."""
     if not getattr(a, "no_fast_precheck", False) and os.access(os.path.join(repo, FAST_PRECHECK), os.X_OK):
         base = git(repo, "rev-parse", main_ref).strip()
-        if cmd_land_precheck(argparse.Namespace(entry=eid, repo=repo, base=base, head=head)) == 1:
+        if cmd_land_precheck(argparse.Namespace(entry=eid, repo=repo, base=base, head=head), store) == 1:
             return 1
     return 0
 
 
-def fixer_land(repo, main_ref, head, eid, a, clock):
-    if foreground_precheck(repo, main_ref, head, eid, a) == 1:
+def fixer_land(repo, main_ref, head, eid, a, clock, store):
+    if foreground_precheck(repo, main_ref, head, eid, a, store) == 1:
         return 1
-    return await_queued(eid, clock)
+    return await_queued(eid, clock, store)
 
 
-def land_until_done(repo, main_ref, sh, a, clock):
+def land_until_done(repo, main_ref, sh, a, clock, store):
     """`land --until-done` (LAND --UNTIL-DONE above)."""
     t0 = clock.time()
     bound = a.deadline if a.deadline is not None else env_num("AGENTCTL_UNTIL_DONE_DEADLINE", UNTIL_DONE_DEADLINE)
     head = git(repo, "rev-parse", "HEAD").strip()
-    it = own_change_item(repo, head)
+    it = own_change_item(repo, head, store)
     if it and it["state"] == "landed":
         eid = it["id"]
     elif it and it["state"] == "rejected" and verdict_still_holds(repo, main_ref, it):
         # A VERDICT IS DURABLE (above): decided while no call waited, on this very main, said now
-        take_delivery(it)
+        take_delivery(it, store)
         why = str((it.get("data") or {}).get("why") or f"{it['id']} rejected")
         print(f"DECIDED {it['id']} ({head[:10]}) while no --until-done waited:", flush=True)
         print(why if why.startswith("NOT LANDED") else f"NOT LANDED: {why}", flush=True)
@@ -205,17 +204,17 @@ def land_until_done(repo, main_ref, sh, a, clock):
             # nothing of its own left to land (it reached main another way, or there never was a commit)
             return until_done_finish(repo, "-", git(repo, "rev-parse", main_ref).strip(), a)
         a.until_done = True
-        rc = enqueue(repo, main_ref, sh, a, clock)
+        rc = enqueue(repo, main_ref, sh, a, clock, store)
         eid = getattr(a, "queued_id", None)
         if rc != 0 or not eid:
             print(next_command(repo, ""), flush=True)
             return 1
-    state, data, _waited = await_verdict(eid, max(0.0, bound - (clock.time() - t0)), clock)
+    state, data, _waited = await_verdict(eid, max(0.0, bound - (clock.time() - t0)), clock, store)
     if state == "landed":
         sha = data.get("landed_sha") or landed_sha_of(eid, data)
         print(f"LANDED {sha} (queued {eid})", flush=True)
         return until_done_finish(repo, eid, sha, a, (it if it and it["id"] == eid else None)
-                                 or open_store().item("change", eid))
+                                 or store.item("change", eid))
     if change_decided(state):
         why = str(data.get("why") or f"{eid} {state}")
         print(why if why.startswith("NOT LANDED") else f"NOT LANDED: {why}", flush=True)

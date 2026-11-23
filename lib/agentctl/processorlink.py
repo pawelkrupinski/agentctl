@@ -8,7 +8,7 @@ import sys
 import threading
 from agentctl.clock import Clock
 from agentctl.core import env_num, err, slug, spawn_detached
-from agentctl.store import StoreUnavailable, open_store
+from agentctl.store import StoreUnavailable
 from agentctl.selfcode import TOOL_PATH
 from agentctl.waitingdir import WAITING_BRANCH, waiting_state
 from agentctl.storetoken import (
@@ -143,7 +143,7 @@ def offer_token(repo: str) -> bool:
         return False
 
 
-def await_entry(repo: str, eid: str, clock: Clock, close: str | None = None) -> tuple[int, str | None, float | None]:
+def await_entry(repo: str, eid: str, clock: Clock, store: Any, close: str | None = None) -> tuple[int, str | None, float | None]:
     """Block until the entry lands or is rejected: (rc, landed sha, pushed_at). Restarts a dead processor. OWNED (one
     awaiter per entry; on agentctl's new code it re-execs as `agentctl waiting await <entry>`, which then watches)."""
     own = Owned("await", eid, ["waiting", "await", eid, "--repo", repo] + (["--close", close] if close else []))
@@ -152,12 +152,12 @@ def await_entry(repo: str, eid: str, clock: Clock, close: str | None = None) -> 
         print(f"NOT LANDED (still waiting): entry {eid} is already awaited by pid {h.get('pid')} ({h.get('owner')})")
         return 2, None, None
     try:
-        return _await_entry(repo, eid, own, clock)
+        return _await_entry(repo, eid, own, clock, store)
     finally:
         own.release()
 
 
-def _await_entry(repo: str, eid: str, own: Owned, clock: Clock) -> tuple[int, str | None, float | None]:
+def _await_entry(repo: str, eid: str, own: Owned, clock: Clock, store: Any) -> tuple[int, str | None, float | None]:
     """The change's STORE ITEM decides (a RemoteStore on the laptop): an entry's JSON is only on the host whose queue
     runs it -- ci-runner's for every change since ONE QUEUE (2026-11-16: `waiting await` on the laptop crashed with
     FileNotFoundError on one). A joined change's item follows its waiting entry (project_changes)."""
@@ -166,7 +166,7 @@ def _await_entry(repo: str, eid: str, own: Owned, clock: Clock) -> tuple[int, st
     state, said = "not in the store yet", None
     while True:
         try:
-            it = open_store().item("change", eid)
+            it = store.item("change", eid)
             if not it:
                 state = "not in the store yet"
         except StoreUnavailable as ex:  # a blip: asked again at the next poll, bounded by the timeout below

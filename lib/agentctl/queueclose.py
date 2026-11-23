@@ -287,7 +287,7 @@ def regen_hold_overdue(st, d, e, t):
     return True
 
 
-def check_entry(repo: str, eid: str, clock: Clock) -> int:
+def check_entry(repo: str, eid: str, clock: Clock, store: Any) -> int:
     """THE EXECUTOR of one change's checks (`waiting check <id>`, detached): holding check/<entry> and a check tree slot
     (leases), it takes the change to checking and leaves it checked (with the tip and base it passed on), rejected (a
     test failure, a conflict) or queued again (infra). It never pushes: the tick does (push_change)."""
@@ -303,7 +303,7 @@ def check_entry(repo: str, eid: str, clock: Clock) -> int:
         e = read_record(os.path.join(d, "entries", f"{eid}.json"))
         if not e or e.get("status") not in ("queued", "checking") or e.get("backlog_batch"):  # a backlog batch's
             return 0
-        fix = bool(e.get("fixes")) and classify_change(e, queue_facts(gate_reds(repo)), clock.time())["red_fix"]
+        fix = bool(e.get("fixes")) and classify_change(e, queue_facts(gate_reds(repo), store), clock.time())["red_fix"]
         slot = check_tree_slot(repo, d, fix=fix)
         if not slot:  # all trees busy: it stays queued, the tick starts it again when one frees
             return 0

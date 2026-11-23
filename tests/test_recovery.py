@@ -94,7 +94,7 @@ class SameProbeTest(RegistryBase):
 
     def test_on_recover_actions_run_once(self):
         ran = []
-        A.RECOVER_ACTIONS["kick_tunnel"] = lambda c, a: ran.append(a) or "kicked"
+        A.RECOVER_ACTIONS["kick_tunnel"] = lambda c, a, st: ran.append(a) or "kicked"
         A.PROBES["route"] = Recorder()
         A.open_condition("NETWORK", "NETWORK: offline", A.run_probe("route"), [("kick_tunnel", {"n": 1})], key="net")
         lines = A.recovery_tick(force=True) + A.recovery_tick(force=True)

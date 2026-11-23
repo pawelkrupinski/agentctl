@@ -160,14 +160,14 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
     return acts
 
 
-def red_tick_repo(repo, snap=None, dispatch=False):
+def red_tick_repo(repo, store, snap=None, dispatch=False):
     o_r = slug(repo)
     if not gated_repo(o_r):
         return []
     with _red_lock:
         _last_red_tick[0] = time.time()
         recheck_local(repo, wait=False)
-        acts = red_tick(open_store(), o_r, repo, snap or ci_state_load(o_r), dispatch=dispatch)
+        acts = red_tick(store, o_r, repo, snap or ci_state_load(o_r), dispatch=dispatch)
     for line in acts:
         err(f"red: {line}")
     return acts
@@ -315,21 +315,21 @@ def probe_red_read(a):
     return True, "every watched repo's runs read"
 
 
-def maybe_red_tick(repo):
+def maybe_red_tick(repo, store):
     """At most every RED_TICK_INTERVAL s, from the processor's duties. Bounded; never fatal."""
     if time.time() - _last_red_tick[0] < env_num("AGENTCTL_RED_TICK", RED_TICK_INTERVAL):
         return
 
     def work():
         try:
-            red_tick_repo(repo)
+            red_tick_repo(repo, store)
         except (Exception, SystemExit) as e:
             err(f"red tick: skipped ({str(e).replace('agentctl: ', '')[:200]})")
             try:
                 gate_unread_spell(slug(repo), str(e)[:200])
             except (Exception, SystemExit):
                 pass
-        red_tick_others(force=False)  # the other watched repos (red-repos.json); never fatal, never the primary's gate spell
+        red_tick_others(store, force=False)  # the other watched repos (red-repos.json); never fatal, never the primary's gate spell
     if not run_bounded("red-tick", work, env_num("AGENTCTL_STEP_BOUND", 120)):
         err("red tick: still running from an earlier cycle (the loop goes on)")
 
@@ -436,7 +436,7 @@ def cmd_red(a):
     return 2
 
 
-def maybe_publish_gate(repo):
+def maybe_publish_gate(repo, store):
     """The processor's loop, at most every GATE_PUBLISH_INTERVAL s: read the gate (it holds the token) and publish the
     summary line for the status line. Never fatal; a failed read leaves the old file to age out (fail-closed)."""
     try:  # a push to main since the last publish (mark_gate_dirty): publish now, not at the 45 s mark
@@ -455,7 +455,7 @@ def maybe_publish_gate(repo):
             ci_state_write(snap)
             # THE RED TICK ON THIS SNAPSHOT before its line is published: every red it shows is an item, offered or
             # held (never NOBODY). Bounded: a dispatch's worktree checkout finishes on the tick's own thread
-            if not run_bounded("red-tick", lambda: red_tick_repo(repo, snap), env_num("AGENTCTL_ASSIGN_BOUND", 20)):
+            if not run_bounded("red-tick", lambda: red_tick_repo(repo, store, snap), env_num("AGENTCTL_ASSIGN_BOUND", 20)):
                 err("red tick: still running; the gate line is published meanwhile")
             _red, line = ci_why(o_r, summary=True, snap=snap, repo=repo)
             publish_gate_summary(o_r, line.splitlines()[-1], epoch=snap["at"])
