@@ -29,8 +29,7 @@ class WaitingTest(Base):
     def setUp(self):
         super().setUp()
         t = self.tmp.name
-        self.saved = (A.WAITING_DIR, A.gate_reds, A.spawn_waiting_processor, A.await_entry,
-                      A.time.sleep, A.watch_landed)
+        self.saved = (A.WAITING_DIR, A.gate_reds, A.spawn_waiting_processor, A.await_entry, A.watch_landed)
         A.WAITING_DIR = os.path.join(t, "waiting-state")
         self.reds = {"7"}
         A.gate_reds = lambda repo: set(self.reds)
@@ -43,7 +42,6 @@ class WaitingTest(Base):
         os.environ["AGENTCTL_INBOX_DIR"] = os.path.join(t, "inbox")
         self.awaited = []
         A.await_entry = lambda repo, eid, clock, close=None: (self.awaited.append(eid), (9, None, None))[1]
-        A.time.sleep = lambda s: None
         A.watch_landed = lambda repo, sha, pushed_at, clock, o_r=None, close=None, fixes=(): 0
         os.environ.pop("PREPUSH_SKIP", None)
         self.calls, self.pushes = os.path.join(t, "hook-calls"), os.path.join(t, "pushes")
@@ -63,8 +61,7 @@ class WaitingTest(Base):
                 os.remove(p)
 
     def tearDown(self):
-        (A.WAITING_DIR, A.gate_reds, A.spawn_waiting_processor, A.await_entry, A.time.sleep,
-         A.watch_landed) = self.saved
+        A.WAITING_DIR, A.gate_reds, A.spawn_waiting_processor, A.await_entry, A.watch_landed = self.saved
         A.start_watch = self.saved_start_watch
         os.environ.pop("AGENTCTL_CHECKS_DIR", None)
         if self.saved_inbox is None:
@@ -101,7 +98,7 @@ class WaitingTest(Base):
         """The batch to rest, as the processor's ticks drive it, its executors run in-process (step 8)."""
         d, _c, _w = A.waiting_state(self.r.path)
         saved = A.spawn_batch_executor
-        A.spawn_batch_executor = lambda repo, d_, bid: A.check_batch(repo, bid)
+        A.spawn_batch_executor = lambda repo, d_, bid: A.check_batch(repo, bid, self.clock)
         out = []
         try:
             for _ in range(n):
@@ -270,12 +267,12 @@ class WaitingTest(Base):
         self.reds = set()
         check, joined = A.batch_check, []
 
-        def joining(repo, d, tree, base, tip, cls="check", *depth_runs, **kw):
+        def joining(repo, d, tree, base, tip, clock, cls="check", *depth_runs, **kw):
             if not joined:
                 self.reds = {"7"}  # red again for a moment: b joins while a's batch is being checked
                 joined.append(self.land(wb))
                 self.reds = set()
-            return check(repo, d, tree, base, tip, cls, *depth_runs, **kw)
+            return check(repo, d, tree, base, tip, clock, cls, *depth_runs, **kw)
         A.batch_check = joining
         try:
             self.drive()

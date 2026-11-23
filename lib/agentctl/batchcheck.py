@@ -5,6 +5,7 @@ import contextlib
 import os
 import sys
 from typing import Any
+from agentctl.clock import Clock
 from agentctl.core import env_num, err, git, git_ok, slug, state_root
 from agentctl.timefmt import ts
 from agentctl.classify import INFRA_LOG, _test_line
@@ -132,7 +133,7 @@ def batch_drift_split(repo: str, d: str, st: Any, it: dict[str, Any], members: l
     return 1
 
 
-def check_batch(repo: str, bid: str) -> int:
+def check_batch(repo: str, bid: str, clock: Clock) -> int:
     """THE BATCH EXECUTOR (`waiting check-batch <id>`): holding check/batch-<id> and its tree's slot, it checks the
     assembled tip; pass -> pushing (the tick pushes); fail -> bisecting -> a confirmed culprit rejected and the passing
     prefix -> pushing (or assembling), every prefix passing -> assembling again (counted); stalled twice -> held."""
@@ -162,7 +163,7 @@ def check_batch(repo: str, bid: str) -> int:
         range_base = it["data"].get("range_base")
         if it["state"] == "checking":
             for attempt in range(BATCH_INFRA_RETRIES + 1):  # AN INFRA FAILURE IS NO BISECT (batch_infra_failure)
-                ok, out, stalled = batch_check(repo, d, tree, base, tip, it["data"].get("cls") or "check", depth,
+                ok, out, stalled = batch_check(repo, d, tree, base, tip, clock, it["data"].get("cls") or "check", depth,
                                                runs, range_base=range_base)
                 infra = None if ok or stalled else batch_infra_failure(out)
                 if not infra or attempt == BATCH_INFRA_RETRIES:
@@ -190,7 +191,7 @@ def check_batch(repo: str, bid: str) -> int:
                 return 0
             it = batch_move(st, it, "bisecting", {"failed_out": (out or "")[-20000:]},
                             text=f"batch {bid}: {tip[:10]} failed its check; bisecting")
-        culprit, cout = bisect(repo, d, members, base, tree, depth, runs, it["data"].get("failed_out"),
+        culprit, cout = bisect(repo, d, members, base, tree, clock, depth, runs, it["data"].get("failed_out"),
                                range_base=range_base, cls=it["data"].get("cls") or "check")
         it = st.item("batch", bid)
         if culprit is None and depth == "red":  # every prefix passed: no verdict, pre-checked again at the next change

@@ -207,6 +207,24 @@ class SimOs(types.ModuleType):
         task.step()
 
 
+class SimClock(FakeClock):
+    """The simulated clock as agentctl's Clock (lib/agentctl/clock.py: THE CLOCK IS PASSED IN): its time is the
+    simulation's cell (the run moves it a tick at a time), its sleeps return at once and move nothing."""
+
+    def __init__(self, cell):
+        super().__init__(cell[0])
+        self.cell = cell
+
+    def time(self):
+        return self.cell[0]
+
+    def monotonic(self):
+        return self.cell[0]
+
+    def advance(self, secs):
+        pass
+
+
 def sim_datetime(clock):
     """agentctl's `dt` (the datetime module) in the simulation: now() reads the simulated clock, so entry ids
     (YYYYMMDD-HHMMSS-...) and stamps never depend on the wall clock -- ids crossing a real second boundary reordered a
@@ -628,7 +646,7 @@ class Sim:
         self.verified.add(frozenset(self.patches_of(tip)))
         return True, f"checks passed {where}\n"
 
-    def run_entry_checks(self, repo, d, e, tree, base, head, mode, cls, log_path, own=None):
+    def run_entry_checks(self, repo, d, e, tree, base, head, mode, cls, log_path, clock, own=None):
         open_ = set(self.reds) | set(self.outside)
         red_fix = lambda x: bool({str(f) for f in x.get("fixes") or []} & open_)  # the simulation's truth
         if red_fix(e) and not tree.endswith("-wt-check-redfix"):
@@ -647,7 +665,7 @@ class Sim:
         ok, out = self.verdict(head, f"{mode} {head[:8]}")
         return ok, out, "in the simulation"
 
-    def batch_check(self, repo, d, tree, base, tip, cls="check", depth="fast", runs=None, range_base=None):
+    def batch_check(self, repo, d, tree, base, tip, clock, cls="check", depth="fast", runs=None, range_base=None):
         self.batch_checks += 1
         self.local.task.block(self.rng.randint(*self.profile.get("verify_ticks", (1, 2))) if depth == "verify"
                               else self.rng.randint(*self.profile.get("batch_ticks", (2, 5))))
@@ -714,10 +732,10 @@ class Sim:
                 c.cid for c in self.changes if (self.entry(c) or {}).get("status") == "waiting")
         if e.get("status") not in ("queued", "checking"):
             self.violate("IX", f"an executor started for {eid}, which is {e.get('status')}")
-        self._spawn(f"check-{eid}", lambda: A.check_entry(repo, eid))
+        self._spawn(f"check-{eid}", lambda: A.check_entry(repo, eid, self.sim_clock))
 
     def spawn_batch_executor(self, repo, d, bid):
-        self._spawn(f"batch-{bid}", lambda: A.check_batch(repo, bid))
+        self._spawn(f"batch-{bid}", lambda: A.check_batch(repo, bid, self.sim_clock))
 
     def _spawn(self, name, fn):
         t = Task(self, name, fn)
@@ -774,6 +792,7 @@ class Sim:
         for c in A.PROCESS_CACHES:
             c.clear()
         clock = self.clock = [1_800_000_000.0]
+        self.sim_clock = SimClock(clock)
         A.time.time = lambda: clock[0]
         A.time.sleep = lambda s: None
         A.dt = sim_datetime(clock)  # entry ids and stamps from the simulated clock: a seed replays exactly
@@ -1043,7 +1062,7 @@ class Sim:
         import argparse, contextlib, io
         with contextlib.redirect_stdout(io.StringIO()):
             A.cmd_waiting(argparse.Namespace(wcmd="cancel", repo=self.repo, entry=ch.eid, renamed=True, hold_for=None,
-                                             hold_why=None), FakeClock(self.clock[0]))  # a cancel never waits
+                                             hold_why=None), self.sim_clock)  # a cancel never waits
 
     def entry_by_id(self, eid):
         return A.read_record(os.path.join(self.d, "entries", f"{eid}.json"))

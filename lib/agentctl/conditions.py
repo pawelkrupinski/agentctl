@@ -165,7 +165,8 @@ def open_condition(kind: str, text: str, probe: Any, on_recover: Any, key: str |
     check that found it (required: the same probe, passing, closes it); on_recover: [(action, args)] from
     RECOVER_ACTIONS. effect: a callable run inside; its dict result is merged into every on_recover args. Writes ONE
     inbox entry (text) per spell. Returns the condition, or None when the probe passes now (nothing is wrong) or the
-    failure is still inside its kind's grace (grace: seconds, None for the kind's: THE BLIP rule above)."""
+    failure is still inside its kind's grace (grace: seconds, None for the kind's: THE BLIP rule above). Its time is
+    the store's clock."""
     if not isinstance(probe, ProbeResult):
         raise ConditionBypass(f"open_condition({kind!r}) without a ProbeResult: no condition without its recovery probe")
     for name, _a in on_recover:
@@ -176,7 +177,7 @@ def open_condition(kind: str, text: str, probe: Any, on_recover: Any, key: str |
     st = store or open_store()
     key = key or condition_key(kind, probe)
     cur = condition_item_of(st, key)
-    if not cur and condition_pending(st, key, condition_grace(kind) if grace is None else grace, time.time()):
+    if not cur and condition_pending(st, key, condition_grace(kind) if grace is None else grace, st.clock()):
         return None
     _OPENING[0] += 1
     try:
@@ -188,7 +189,7 @@ def open_condition(kind: str, text: str, probe: Any, on_recover: Any, key: str |
             ids = [eid] if eid else []
     finally:
         _OPENING[0] -= 1
-    t = time.time()
+    t = st.clock()
     new = [[n, {**x, **extra}] for n, x in on_recover]
     if cur:  # refreshed: re-described too, so its escalations say what is wrong NOW, not at its opening
         d = cur["data"]

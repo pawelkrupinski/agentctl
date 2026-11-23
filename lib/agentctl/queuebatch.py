@@ -357,7 +357,7 @@ def checks_here():
     return host_role() != "server"
 
 
-def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own=None):
+def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, clock, own=None):
     """(ok, output, where) of the change's checks: on the CI tier when the repo has the remote check workflow (owner
     decision 1; the reconciler is ci-runner's, the laptop runs no checks since its tick went), else in the tree,
     admitted by the governor. ok None: stalled."""
@@ -365,7 +365,7 @@ def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own=None
     why = "its remote run, adopted" if adopted else "the CI tier (owner decision 1)"
     if adopted or remote_checks_supported(tree):
         wlog(d, f"{e['id']}: checks on {why}")
-        ok, out = remote_check(repo, e, base, head, mode, own, red=cls == "red")
+        ok, out = remote_check(repo, e, base, head, mode, clock, own, red=cls == "red")
         if ok is not None:
             return ok, out, f"on ci-runner ({why})"
         if not checks_here():

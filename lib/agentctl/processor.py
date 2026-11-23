@@ -25,7 +25,7 @@ from agentctl.serverclone import ensure_server_clone
 from agentctl.tickrun import ROUND_ERRORS_MAX, TICK, run_step
 from agentctl.redcrash import keep_awake
 from agentctl.snapshot import write_snapshot
-from agentctl.landqueue import land_await, queue_command, waiting_repo
+from agentctl.landqueue import land_await, queue_checker, queue_command, waiting_repo
 from agentctl.statuspage import status_page_start
 from agentctl.syncsteps import sync_steps
 from agentctl.serversteps import server_steps
@@ -146,4 +146,6 @@ def cmd_waiting(a: argparse.Namespace, clock: Clock) -> int:
         return waiting_run(waiting_repo(a), clock, once=a.once, service=getattr(a, "service", False))
     if a.wcmd == "await":  # land's wait on its entry, resumed after a restart on new code
         return land_await(a, waiting_repo(a), clock)
+    if a.wcmd in ("check", "check-batch"):
+        return queue_checker(a, clock)
     return queue_command(a)

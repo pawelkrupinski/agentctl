@@ -222,12 +222,12 @@ class DerivedTest(test_generated.GeneratedQueueTest):
                       open(os.path.join(self.d, "processor.log")).read(), "the new round is owed for the page")
 
     def check_and_push(self, older, younger):
-        A.check_entry(self.r.path, older)
-        A.check_entry(self.r.path, younger)  # checked on the main the older has not reached yet
+        A.check_entry(self.r.path, older, self.clock)
+        A.check_entry(self.r.path, younger, self.clock)  # checked on the main the older has not reached yet
         A.tick_changes(self.r.path, self.d)  # pushes the older; the younger's push finds main moved
         for _ in range(4):
             if self.entry(younger)["status"] == "queued":
-                A.check_entry(self.r.path, younger)  # its new round, on main with the older
+                A.check_entry(self.r.path, younger, self.clock)  # its new round, on main with the older
             A.tick_changes(self.r.path, self.d)
             if self.entry(younger)["status"] in A.ENTRY_FINAL:
                 break

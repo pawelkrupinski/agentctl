@@ -22,8 +22,7 @@ def run(rid, sha, status="completed", conclusion="success", created=None):
 class WatchTest(Base):
     def setUp(self):
         super().setUp()
-        self.saved = A.gh_json, A.ci_why, A.time.sleep
-        A.time.sleep = lambda s: None
+        self.saved = A.gh_json, A.ci_why
         A.ci_why = lambda o_r, tail=6, run_id=None, repo=None: (True, "ci-why: main is RED for the gate")
         self.main, self.conv, self.takes, self.jobs = [], [], None, {}
         self.listed = []
@@ -50,7 +49,7 @@ class WatchTest(Base):
         self.pushed_at = time.time()
 
     def tearDown(self):
-        A.gh_json, A.ci_why, A.time.sleep = self.saved
+        A.gh_json, A.ci_why = self.saved
         for k in ("AGENTCTL_WATCH_TIMEOUT", "AGENTCTL_WATCH_CONV_START", "AGENTCTL_WATCH_POLL"):
             os.environ.pop(k, None)
         super().tearDown()

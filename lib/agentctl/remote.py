@@ -3,7 +3,6 @@
 
 import os
 import re
-import time
 from agentctl.core import env_num, err, fmt_age, git, host_role, remote, slug
 from agentctl.timefmt import parse_time
 from agentctl.classify import check_push_failure, credential_failure
@@ -91,11 +90,11 @@ def remote_jobs_summary(jobs):
              "started_at": j.get("started_at")} for j in jobs or []]
 
 
-def remote_poll(o_r, rem):
+def remote_poll(o_r, rem, now):
     """STATELESS: the remote check's state from the forge alone -- the run (found by its check/ branch and tip when its id
     is not known yet), its status, and for a decided run the verdict: decided by its verdict jobs while it still runs
-    (VERDICT_JOBS above), else by its conclusion. Returns the updated record (a copy); raises when the forge cannot be
-    read."""
+    (VERDICT_JOBS above), else by its conclusion. Returns the updated record (a copy), its stamps at `now`; raises when the
+    forge cannot be read."""
     rem = dict(rem)
     if rem.get("run") is None:
         # listing: none -- the run agentctl's own push started is found by its workflow, branch and tip (A LISTING IS
@@ -117,13 +116,13 @@ def remote_poll(o_r, rem):
         jobs = (api(o_r, "GET", f"actions/runs/{rem['run']}/jobs", {"per_page": 100}) or {}).get("jobs") or []
         if rem.get("job_bounds") is None:
             rem["job_bounds"] = remote_read_bounds(o_r, rem["tip"])
-        rem = remote_progress(rem, run, jobs, time.time(), rem["job_bounds"])
+        rem = remote_progress(rem, run, jobs, now, rem["job_bounds"])
         rem["jobs"] = remote_jobs_summary(jobs)
     name = f"{REMOTE_WORKFLOW} run {rem['run']} (#{run.get('run_number')})"
     if rem.get("status"):
         return rem
     if status == "waiting":  # queued: a ghost no runner will ever take (above)?
-        rem = remote_ghost(o_r, rem, jobs, time.time())
+        rem = remote_ghost(o_r, rem, jobs, now)
         if rem.get("status"):
             return rem
     if status in ("running", "waiting"):
@@ -134,7 +133,7 @@ def remote_poll(o_r, rem):
         verdict, failed, going = jobs_verdict(jobs, rem["verdict_jobs"], rem["verdict_expect"])
         if verdict is None:
             return rem
-        rem["status"], rem["decided_at"] = verdict, time.time()
+        rem["status"], rem["decided_at"] = verdict, now
         rest = f"; not waited for: {', '.join(j.get('name', '?') for j in going)}" if going else ""
         if verdict == "success":
             rem["out"] = f"{name}: success (its verdict jobs: {', '.join(rem['verdict_jobs'])}{rest})"
@@ -145,7 +144,7 @@ def remote_poll(o_r, rem):
             rem["out"] = "\n".join(out)
         return rem
     if status in ("success", "failure", "cancelled", "skipped"):
-        rem["status"], rem["decided_at"] = status, time.time()
+        rem["status"], rem["decided_at"] = status, now
         if status == "success":
             rem["out"] = f"{name}: success"
         elif status == "failure":
@@ -240,7 +239,7 @@ def remote_mode_prefix(e, base, mode):
 CHECK_PUSH_DELAYS = (5, 20)
 
 
-def check_branch_push(repo, head, branch, sleep=time.sleep):
+def check_branch_push(repo, head, branch, sleep):
     """git push of head to the check branch, tried again through a transient failure; the last result."""
     for delay in (*CHECK_PUSH_DELAYS, None):
         r = git(repo, "push", "--quiet", "--force", remote(), f"{head}:refs/heads/{branch}", check=False)
@@ -256,7 +255,7 @@ def check_branch_push(repo, head, branch, sleep=time.sleep):
 REMOTE_POLL_CAP = 30  # s
 
 
-def remote_check(repo, e, base, head, mode, own=None, red=False):
+def remote_check(repo, e, base, head, mode, clock, own=None, red=False):
     """(ok, output) of the change's checks on ci-runner; ok None when no verdict came (the caller checks locally).
     The run belongs to the ENTRY, not to this process: its record (`remote` in the entry) is saved the moment the branch is
     pushed and again when the run is found, so a checker that dies or is replaced mid-wait strands nothing -- the next one
@@ -270,7 +269,7 @@ def remote_check(repo, e, base, head, mode, own=None, red=False):
     rem = remote_matches(e, base, head, mode)
     if rem and d:
         wlog(d, f"{e['id']}: adopting its remote check (run {rem.get('run') or 'not found yet'}, pushed "
-                f"{int((time.time() - rem['pushed_at']) // 60)} min ago)")
+                f"{int((clock.time() - rem['pushed_at']) // 60)} min ago)")
     if not rem:
         # the branch NAMES the hook's mode for precommit-check.yml: check/fast-<id> runs `--fast-only` (the batch's
         # combined check, as on the laptop), check/verify-<full base sha>-<id> `--verify-only <full base>..HEAD` (a
@@ -278,11 +277,11 @@ def remote_check(repo, e, base, head, mode, own=None, red=False):
         # starts check/red-: its jobs ask for movies-check-red-fix, the check lane ci-runner's scheduler serves first
         # (movies runner_scheduler.py CHECK_LANES; 2026-11-17, a red fix still checking 41 min after it was queued)
         branch = f"check/{'red-' if red else ''}{remote_mode_prefix(e, base, mode)}{e['id']}"
-        r = check_branch_push(repo, head, branch)
+        r = check_branch_push(repo, head, branch, clock.sleep)
         if r.returncode != 0:
             return None, check_push_failure(branch, r.stderr, host_role())
         rem = {"branch": branch, "head": e.get("head"), "base": base, "tip": head, "mode": mode, "run": None,
-               "pushed_at": time.time(), "status": None}
+               "pushed_at": clock.time(), "status": None}
         save_remote(d, e, rem)
         try:
             record_dispatch(branch=branch, workflow=REMOTE_WORKFLOW, worktree=e.get("worktree"), sha=head,
@@ -292,7 +291,7 @@ def remote_check(repo, e, base, head, mode, own=None, red=False):
     delays = backoff(15, REMOTE_POLL_CAP)
     while True:
         try:
-            new = remote_poll(o_r, rem)
+            new = remote_poll(o_r, rem, clock.time())
             if new.get("run") is not None and rem.get("run") is None:
                 try:
                     save_dispatch({"branch": rem["branch"], "run_id": new["run"]})
@@ -307,33 +306,33 @@ def remote_check(repo, e, base, head, mode, own=None, red=False):
             err(f"remote check of {e['id']}: {str(ex)[:160]}")
         try:  # the CI run is the check's work: its status (and, while it runs, the minute) is the progress mark
             lock_beat(f"remote:{rem.get('run')}:{rem.get('status') or rem.get('run_status') or 'pending'}:"
-                      f"{int(time.time() // 60)}")
+                      f"{int(clock.time() // 60)}")
         except LeaseLost as ex:
             err(f"remote check of {e['id']}: {ex}; a new checker adopts its run")
             return None, str(ex)
         if rem.get("status"):
             if rem.get("ghost"):
                 cancel_run(o_r, rem["run"], "a ghost run: no runner scheduler can see it")
-            rem["collected_at"] = time.time()
+            rem["collected_at"] = clock.time()
             save_remote(d, e, rem)
             delete_check_branch(o_r, rem["branch"])
             if rem["status"] in ("success", "failure"):
                 return rem["status"] == "success", rem["out"]
             return None, rem["out"]
-        age = time.time() - rem["pushed_at"]
+        age = clock.time() - rem["pushed_at"]
         if rem.get("run") is None and age > REMOTE_START:
-            rem.update(status="abandoned", collected_at=time.time())
+            rem.update(status="abandoned", collected_at=clock.time())
             save_remote(d, e, rem)
             delete_check_branch(o_r, rem["branch"])
             return None, f"no {REMOTE_WORKFLOW} run started for {rem['branch']} in {REMOTE_START // 60} min"
-        idle = time.time() - float(rem.get("progress_at") or rem["pushed_at"])
+        idle = clock.time() - float(rem.get("progress_at") or rem["pushed_at"])
         if age > REMOTE_TIMEOUT_MAX or (age > REMOTE_TIMEOUT and idle > REMOTE_IDLE):
             cancel_run(o_r, rem["run"], "the remote check timed out")
-            rem.update(status="abandoned", collected_at=time.time())
+            rem.update(status="abandoned", collected_at=clock.time())
             save_remote(d, e, rem)
             delete_check_branch(o_r, rem["branch"])
             return None, (f"{REMOTE_WORKFLOW} run {rem['run']} undecided after {int(age // 60)} min, "
                           f"no progress for {int(idle // 60)} min")
-        time.sleep(next(delays))
+        clock.sleep(next(delays))
 
 

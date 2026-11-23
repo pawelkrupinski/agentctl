@@ -118,7 +118,7 @@ def probe_checks(repo, o_r, commit, run, tokens, wall):
     try:
         for delay in backoff(30, 300):
             try:
-                rem = remote_poll(o_r, rem)
+                rem = remote_poll(o_r, rem, time.time())
             except (Exception, SystemExit) as e:
                 err(f"blame probe {branch}: {str(e)[:160]}")
             if rem.get("status") or time.time() - t0 > wall:

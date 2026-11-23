@@ -34,7 +34,7 @@ class UntilDoneTest(test_queue.QueueTest):
             hook()
         for e in A.waiting_entries(self.d, open_only=False):
             if e["status"] in ("queued", "checking"):
-                A.check_entry(self.r.path, e["id"])
+                A.check_entry(self.r.path, e["id"], self.clock)
             elif e["status"] == "checked":
                 A.push_change(self.r.path, self.d, e)
 

@@ -30,8 +30,7 @@ def age(repo, branch, days):
 class CloseAfterWatchTest(Base):
     def setUp(self):
         super().setUp()
-        self.saved = A.gh_json, A.ci_why, A.time.sleep, A.process_cwds
-        A.time.sleep = lambda s: None
+        self.saved = A.gh_json, A.ci_why, A.process_cwds
         A.ci_why = lambda *a, **k: (True, "ci-why")
         A.process_cwds = lambda: {}
         self.main, self.conv = [], []
@@ -45,7 +44,7 @@ class CloseAfterWatchTest(Base):
         A.gh_json = gh_json
 
     def tearDown(self):
-        A.gh_json, A.ci_why, A.time.sleep, A.process_cwds = self.saved
+        A.gh_json, A.ci_why, A.process_cwds = self.saved
         super().tearDown()
 
     def landed_worktree(self, name="wt-done"):

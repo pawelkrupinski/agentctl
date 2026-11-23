@@ -220,7 +220,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         the next: workermem's 10 h again. A verification in flight forms no backlog batch until it pushed."""
         wv, _ = self.agent("v", "scripts/v.sh", "v\n", msg="v: scripts/v.sh")
         ev = self.queued(wv)[0]
-        A.check_entry(self.r.path, ev)
+        A.check_entry(self.r.path, ev, self.clock)
         self.assertEqual(self.entry(ev)["status"], "checked")
         other, _ = self.agent("m", "docs/notes.md", "n\n", msg="main moves")
         sh(other, "git", "push", "-q", "origin", "HEAD:main")
@@ -232,7 +232,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         self.assertEqual(A.backlog_candidates(self.r.path, self.d, set()), [], "no batch while v verifies")
         self.assertEqual(self.drive(), [])
         self.assertIsNone(self.batch())
-        A.check_entry(self.r.path, ev)  # its verify round, ended between the change tick and the batch tick
+        A.check_entry(self.r.path, ev, self.clock)  # its verify round, ended between the change tick and the batch tick
         self.assertEqual(self.entry(ev)["status"], "checked")
         self.assertEqual(self.drive(), [], "nor while its push is due")
         A.tick_changes(self.r.path, self.d)
@@ -255,7 +255,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         wf, _ = self.agent("fix", "web/src/main/Fix.scala", "fix\n", msg="fix: the red\n\nFixes-Red: 7")
         ef = self.queued(wf)[0]
         self.assertEqual(self.entry(ef)["fixes"], ["7"])
-        A.check_entry(self.r.path, ef)
+        A.check_entry(self.r.path, ef, self.clock)
         self.assertEqual(self.entry(ef)["status"], "checked")
         did = A.tick_changes(self.r.path, self.d)
         self.assertNotIn("waits for batch", " ".join(did))
@@ -275,8 +275,8 @@ class PushBatchTest(test_queue.QueueTest):
         self.d = A.waiting_state(self.r.path)[0]
         for name in ("spawn_executor", "spawn_batch_executor"):
             self.addCleanup(setattr, A, name, getattr(A, name))
-        A.spawn_executor = lambda repo, d_, eid: A.check_entry(repo, eid)  # the executors run in-process
-        A.spawn_batch_executor = lambda repo, d_, bid: A.check_batch(repo, bid)
+        A.spawn_executor = lambda repo, d_, eid: A.check_entry(repo, eid, self.clock)  # the executors run in-process
+        A.spawn_batch_executor = lambda repo, d_, bid: A.check_batch(repo, bid, self.clock)
 
     def entry(self, eid):
         return A.read_record(os.path.join(self.d, "entries", f"{eid}.json"))
@@ -284,7 +284,7 @@ class PushBatchTest(test_queue.QueueTest):
     def checked(self, name, path, text=None, msg=None):
         wt, _ = self.agent(name, path, text or f"{name}\n", msg=msg or f"{name}: {path}")
         eid, _ = self.queued(wt)
-        A.check_entry(self.r.path, eid)
+        A.check_entry(self.r.path, eid, self.clock)
         self.assertEqual(self.entry(eid)["status"], "checked", eid)
         return eid
 
@@ -429,14 +429,14 @@ class PushBatchTest(test_queue.QueueTest):
         self.main_moves()
         did = A.tick_changes(self.r.path, self.d)
         self.assertEqual((self.entry(ef)["status"], self.entry(ef)["verify"]), ("queued", True), did)
-        A.check_entry(self.r.path, eo)
+        A.check_entry(self.r.path, eo, self.clock)
         self.assertEqual(self.entry(eo)["status"], "checked")
         did = A.tick_changes(self.r.path, self.d)
         self.assertIn(f"{eo}: its push waits for {ef}'s combined-tree verification", " ".join(did))
         self.assertEqual(self.entry(eo)["status"], "checked", "no push under the red fix's verification")
         hold = A.open_store().item("change", eo)["data"]["hold"]
         self.assertEqual((hold["kind"], hold["blocker"]), ("verify", ef))
-        A.check_entry(self.r.path, ef)
+        A.check_entry(self.r.path, ef, self.clock)
         A.tick_changes(self.r.path, self.d)
         self.assertEqual(self.entry(ef)["status"], "landed", "verified once, then pushed")
         self.assertEqual(self.remote_log()[0], "backtest-alerts: the fix")
@@ -595,11 +595,11 @@ class OverlapTest(BacklogBatchTest):
         A.tick_changes(self.r.path, self.d)
         self.assertEqual(self.started, [eo], "the younger waits for the older it shares a file with")
         self.assertEqual([x for x in self.inbox() if "CONFLICTS" in json.dumps(x)], [], "no conflict to tell")
-        A.check_entry(self.r.path, eo)
+        A.check_entry(self.r.path, eo, self.clock)
         A.tick_changes(self.r.path, self.d)  # the older pushed, then the younger's check starts on top of it
         self.assertEqual(self.entry(eo)["status"], "landed")
         self.assertEqual(self.started, [eo, ey])
-        A.check_entry(self.r.path, ey)
+        A.check_entry(self.r.path, ey, self.clock)
         A.tick_changes(self.r.path, self.d)
         e = self.entry(ey)
         self.assertEqual(e["status"], "landed", "checked once, on top of the older one: no recheck")

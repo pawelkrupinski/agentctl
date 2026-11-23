@@ -113,14 +113,12 @@ class BlipTest(RegistryBase):
         self.addCleanup(os.environ.__setitem__, "AGENTCTL_UNKNOWN_GRACE", "0")
         A.PROBES["token"] = Recorder(fails=99)
         self.t = [1_794_900_000.0]
-        self.saved_time = A.time.time
-        A.time.time = lambda: self.t[0]
-        self.addCleanup(setattr, A.time, "time", self.saved_time)
+        self.st = A.Store(clock=lambda: self.t[0])  # open_condition's time is its store's clock
 
     def sighting(self, after):
         self.t[0] += after
         return A.open_condition("UNKNOWN", "UNKNOWN: token unavailable", A.run_probe("token", {"ns": "movies"}), [],
-                                key="token-movies")
+                                key="token-movies", store=self.st)
 
     def test_a_failure_that_clears_inside_the_grace_opens_nothing(self):
         self.assertIsNone(self.sighting(0))

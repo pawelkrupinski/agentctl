@@ -17,11 +17,9 @@ class LandBase(Base):
         os.environ.pop("PREPUSH_SKIP", None)
         self.saved_retries, self.saved_why = A.LAND_RETRIES, A.ci_why
         os.environ.pop("AGENTCTL_LAND_LOCK_TIMEOUT", None)
-        self.sleep = A.time.sleep
-        A.time.sleep = lambda s: None
 
     def tearDown(self):
-        A.LAND_RETRIES, A.ci_why, A.time.sleep = self.saved_retries, self.saved_why, self.sleep
+        A.LAND_RETRIES, A.ci_why = self.saved_retries, self.saved_why
         os.environ.pop("AGENTCTL_LAND_LOCK_TIMEOUT", None)
         os.environ.pop("PREPUSH_SKIP", None)
         super().tearDown()

@@ -49,13 +49,9 @@ def waiting_repo(a: argparse.Namespace) -> str:
 
 def queue_command(a: argparse.Namespace) -> int:
     """The land queue's commands (`land status | hold | release | cancel`, and the processor's children: a change's or
-    the batch's checker, the service): every `waiting` subcommand but `run` (the processor) and `await` (cmd_waiting)."""
+    the service): every `waiting` subcommand but `run` (the processor), `await` and the checkers (cmd_waiting)."""
     repo = waiting_repo(a)
     d, _c, _wt = waiting_state(repo)
-    if a.wcmd == "check":  # one queued change's checker (the processor starts it)
-        return check_entry(main_clone(repo), a.entry)
-    if a.wcmd == "check-batch":  # the batch's executor (the processor starts it)
-        return check_batch(main_clone(repo), a.entry)
     if a.wcmd == "service":
         return waiting_service(a.action, repo)
     if a.wcmd == "pause":  # `land hold`: an item in the store (the reconciler's, wherever this runs)
@@ -67,6 +63,13 @@ def queue_command(a: argparse.Namespace) -> int:
     if a.wcmd == "cancel":
         return land_cancel_command(a, repo, d)
     return 2
+
+
+def queue_checker(a: argparse.Namespace, clock: Clock) -> int:
+    """`waiting check <id>` (one queued change's checker) or `waiting check-batch <id>` (the batch's executor): the
+    processor starts them, detached."""
+    repo = main_clone(waiting_repo(a))
+    return check_entry(repo, a.entry, clock) if a.wcmd == "check" else check_batch(repo, a.entry, clock)
 
 
 def land_await(a: argparse.Namespace, repo: str, clock: Clock) -> int:

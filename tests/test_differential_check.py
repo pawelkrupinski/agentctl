@@ -42,7 +42,7 @@ class DifferentialCheckTest(test_queue.QueueTest):
         verdicts = [(False, f"precommit-check.yml run {run} (#1) failed: http://x\n-- check (rest)\n" + "\n".join(lines))]
         verdicts += then or []
 
-        def remote(repo, e, base, head, mode, own=None, red=False):
+        def remote(repo, e, base, head, mode, clock, own=None, red=False):
             e["remote_run"] = run
             return verdicts.pop(0) if len(verdicts) > 1 else verdicts[0]
         A.remote_check = remote
@@ -131,7 +131,7 @@ class DifferentialCheckTest(test_queue.QueueTest):
         self.remote_fails(45, "::error::the pre-push checks ran past 80 minutes and were stopped")
         d, _c, _w = A.waiting_state(self.r.path)
         for n in (1, 2):
-            A.check_entry(self.r.path, eid)
+            A.check_entry(self.r.path, eid, self.clock)
             e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
             self.assertEqual(e["status"], "queued", f"time cap {n}: infra, re-queued")
             e["retry_after"] = 0

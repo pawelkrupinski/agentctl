@@ -308,7 +308,7 @@ class ServerRefusesUnreplayedFixTest(test_backlog_batch.BacklogBatchTest):
             "key": "5254bffda9d2", "workflow": "Alert backtest", "jobs": ["backtest"], "runs": ["5", "44459271435"],
             "last_run": {"number": 5, "databaseId": 44459271435}, "red_kind": "outside"})
         with approved("fix-replay-outside"):  # outside the gate it only warns, unless approved (test_policy.py)
-            A.check_entry(self.r.path, eid)
+            A.check_entry(self.r.path, eid, self.clock)
         e = self.entry(eid)
         self.assertEqual(e["status"], "rejected")
         self.assertIn(f"`Fix-Replay: {CMD} base=FAIL head=PASS`", e["why"])
@@ -323,7 +323,7 @@ class ServerRefusesUnreplayedGateFixTest(test_backlog_batch.BacklogBatchTest):
         A.open_store().put_item("red", "9d1e2a7c4b10", "offered", {
             "key": "9d1e2a7c4b10", "workflow": "Main", "jobs": ["unit (web)"], "runs": ["2600"],
             "last_run": {"number": 2600}, "red_kind": "gate", "gate": True})
-        A.check_entry(self.r.path, eid)
+        A.check_entry(self.r.path, eid, self.clock)
         e = self.entry(eid)
         self.assertEqual(e["status"], "rejected")
         self.assertIn("is a gate red", e["why"])

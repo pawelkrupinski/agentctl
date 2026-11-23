@@ -4,6 +4,7 @@
 import os
 import time
 from typing import Any
+from agentctl.clock import Clock
 from agentctl.core import cherry_landed, env_num, fmt_age, git, git_ok, host_role, process_cache, remote
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record
@@ -286,7 +287,7 @@ def regen_hold_overdue(st, d, e, t):
     return True
 
 
-def check_entry(repo: str, eid: str) -> int:
+def check_entry(repo: str, eid: str, clock: Clock) -> int:
     """THE EXECUTOR of one change's checks (`waiting check <id>`, detached): holding check/<entry> and a check tree slot
     (leases), it takes the change to checking and leaves it checked (with the tip and base it passed on), rejected (a
     test failure, a conflict) or queued again (infra). It never pushes: the tick does (push_change)."""
@@ -309,7 +310,7 @@ def check_entry(repo: str, eid: str) -> int:
         i, slot_h = slot
         try:
             with clone_shared(repo):  # a clone swap (repair_clone) waits for the check
-                return _check_entry(repo, d, e, i, own)
+                return _check_entry(repo, d, e, i, clock, own)
         finally:
             slot_h.release()
     finally:
@@ -317,7 +318,7 @@ def check_entry(repo: str, eid: str) -> int:
         lease.release()
 
 
-def _check_entry(repo: str, d: str, e: dict[str, Any], i: int, own: Any = None) -> int:
+def _check_entry(repo: str, d: str, e: dict[str, Any], i: int, clock: Clock, own: Any = None) -> int:
     hook = precheck_hook(repo)
     log_path = os.path.join(d, f"check-{e['id']}")
     if e.get("status") != "checking":
@@ -411,7 +412,7 @@ def _check_entry(repo: str, d: str, e: dict[str, Any], i: int, own: Any = None) 
     if mode != VERIFY_MODE:
         e.pop("verify_areas", None)
     if hook:
-        ok, out, where = run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, own)
+        ok, out, where = run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, clock, own)
         if ok is None:  # stalled: the laptop's, not the change's -- and what stalled it is said (2026-11-17: two
             # 13-s "stalls" whose cause no record kept)
             last = ((out or "").strip().splitlines() or [""])[-1].strip()[:240]

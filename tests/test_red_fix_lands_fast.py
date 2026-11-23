@@ -61,7 +61,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
             d, _c, _w = A.waiting_state(self.r.path)
             for e in A.waiting_entries(d, open_only=False):
                 if e["status"] in ("queued", "checking"):
-                    A.check_entry(self.r.path, e["id"])
+                    A.check_entry(self.r.path, e["id"], self.clock)
                 elif e["status"] == "checked":
                     A.push_change(self.r.path, d, e)
         self.clock.on_sleep = sleep
@@ -160,9 +160,9 @@ class RedFixLandsFastTest(test_queue.QueueTest):
             ef, _ = self.queued(wf)
             _did, started = self.tick(d)
             self.assertEqual(started, [ef], "the fix starts in the red-fix slot; the ordinary change waits")
-            A.check_entry(self.r.path, eo)
+            A.check_entry(self.r.path, eo, self.clock)
             self.assertEqual(self.entry(eo)["status"], "queued", "an ordinary change never takes the red-fix slot")
-            A.check_entry(self.r.path, ef)
+            A.check_entry(self.r.path, ef, self.clock)
             self.assertEqual(self.entry(ef)["status"], "checked", "the fix's executor took the red-fix slot")
         finally:
             for h in held:
@@ -178,7 +178,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         A.new_batch(st, d, "checking")
         wf, _ = self.agent("fix", "web/src/main/A.scala", "a\n", msg="the fix\n\nFixes-Red: 7")
         ef, _ = self.queued(wf)
-        A.check_entry(self.r.path, ef)
+        A.check_entry(self.r.path, ef, self.clock)
         self.assertEqual(self.entry(ef)["status"], "checked")
         did, _ = self.tick(d)
         self.assertNotIn("waits for batch", " ".join(did))
@@ -189,7 +189,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         d, _c, _w = A.waiting_state(self.r.path)
         wf, _ = self.agent("fix", "web/src/main/A.scala", "a\n", msg="the fix\n\nFixes-Red: 7")
         ef, _ = self.queued(wf)
-        A.check_entry(self.r.path, ef)
+        A.check_entry(self.r.path, ef, self.clock)
         e = self.entry(ef)
         e["known_red"] = {"keys": ["Local checks"], "where": ["plain main"], "base": e.get("checked_base")}
         A.save_entry(d, e)
@@ -201,7 +201,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         d, _c, _w = A.waiting_state(self.r.path)
         wo, _ = self.agent("plain", "web/src/main/A.scala", "a\n", msg="an ordinary change")
         eo, _ = self.queued(wo)
-        A.check_entry(self.r.path, eo)
+        A.check_entry(self.r.path, eo, self.clock)
         e = self.entry(eo)
         e["known_red"] = {"keys": ["Local checks"], "where": ["plain main"], "base": e.get("checked_base")}
         A.save_entry(d, e)

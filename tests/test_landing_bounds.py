@@ -8,6 +8,7 @@ import contextlib, fcntl, io, json, os, subprocess, sys, tempfile, time, unittes
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_clock import FakeClock  # noqa: E402
 
 
 class PollClock:
@@ -321,7 +322,7 @@ class BatchRetryTest(unittest.TestCase):
         saved = A.batch_check
         A.batch_check = lambda *a, **k: next(results)
         try:
-            culprit, _out = A.bisect(d, d, batch, "base", d)
+            culprit, _out = A.bisect(d, d, batch, "base", d, FakeClock())
         finally:
             A.batch_check = saved
         self.assertIsNone(culprit)  # flaky: nobody rejected

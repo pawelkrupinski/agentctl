@@ -268,7 +268,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
     # ------------------------------------------------------------------------------------------- the push's rebase
     def test_main_moving_by_a_generated_conflict_is_a_new_round_never_a_rejection(self):
         ey = self.change("younger", {"ce\ttools": 1}, {"identity/src/main/J.scala": "j\n"})
-        A.check_entry(self.r.path, ey)
+        A.check_entry(self.r.path, ey, self.clock)
         self.assertEqual(self.entry(ey)["status"], "checked")
         other = self.r.worktree("wt-other", branch="other")  # lands meanwhile, on the next row
         with open(os.path.join(other, BASELINE)) as f:
@@ -279,7 +279,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         A.tick_changes(self.r.path, self.d)
         e = self.entry(ey)
         self.assertEqual((e["status"], e.get("verify")), ("queued", True), "a new round, not NOT LANDED")
-        A.check_entry(self.r.path, ey)
+        A.check_entry(self.r.path, ey, self.clock)
         A.tick_changes(self.r.path, self.d)
         self.assertEqual(self.entry(ey)["status"], "landed")
         self.assertIn("ce\tservices\t5\nce\ttools\t1\n", self.baseline_on_main())
@@ -308,7 +308,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.r.commit("Coupling: a file's imports are charged to the classes using them\n\nCoupling: a measurement fix",
                       at=main)
         self.r.push(at=main)
-        A.check_entry(self.r.path, eid)
+        A.check_entry(self.r.path, eid, self.clock)
         e = self.entry(eid)
         self.assertEqual(e["status"], "checked", e.get("why"))
         tip_file = lambda path: sh(self.r.path, "git", "show", f"{e['tip']}:{path}") + "\n"
@@ -329,7 +329,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.r.write(BASELINE, text.replace("fanout\tA\t12", "fanout\tA\t11"), at=main)
         self.r.commit("main: a fall", at=main)
         self.r.push(at=main)
-        A.check_entry(self.r.path, eid)
+        A.check_entry(self.r.path, eid, self.clock)
         e = self.entry(eid)
         # A ROW ONLY A REGEN DECIDES IS NO BOUNCE: held in its place, its agent told ONE command
         self.assertEqual(e["status"], "queued")
@@ -377,7 +377,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.r.write(BASELINE, text.replace("fanout\tA\t12", "fanout\tA\t11"), at=main)
         self.r.commit("main: a fall", at=main)
         self.r.push(at=main)
-        A.check_entry(self.r.path, eid)
+        A.check_entry(self.r.path, eid, self.clock)
         self.assertEqual(self.entry(eid)["status"], "queued")
         started = []
         saved = A.spawn_detached
@@ -423,7 +423,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.r.write(wiring, "".join(["wire 0 theirs\n"] + lines[1:]), at=other)
         self.r.commit("other: rewire the first", at=other)
         self.r.push(at=other)
-        A.check_entry(self.r.path, eid)
+        A.check_entry(self.r.path, eid, self.clock)
         A.tick_changes(self.r.path, self.d)
         self.assertEqual(self.entry(eid)["status"], "landed", self.entry(eid).get("why"))
         on_main = sh(self.r.root, "git", "--git-dir", self.r.bare, "show", f"main:{wiring}")
@@ -461,7 +461,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.r.write(wiring, "theirs\n", at=other)
         culprit = self.r.commit("other: rewire differently", at=other)
         self.r.push(at=other)
-        A.check_entry(self.r.path, eid)
+        A.check_entry(self.r.path, eid, self.clock)
         e = self.entry(eid)
         self.assertEqual(e["status"], "rejected")
         self.assertIn(f"it conflicts in {wiring} (changed on main by {culprit[:10]} other: rewire differently)", e["why"])
@@ -479,7 +479,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.r.write(wiring, "theirs\n", at=other)
         self.r.commit("other: rewire differently", at=other)
         self.r.push(at=other)
-        A.check_entry(self.r.path, first)
+        A.check_entry(self.r.path, first, self.clock)
         self.assertEqual(self.entry(first)["status"], "rejected")
         later = self.change("later", files={"web/src/main/L.scala": "l\n"})
         sh(wt, "git", "fetch", "-q", "origin")

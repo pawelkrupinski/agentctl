@@ -8,7 +8,7 @@ out, one attempt's jobs, a log cut short).
 - the ghost check (a queued run no runner scheduler can see) pages GitHub's listing to its end, and past what it reads
   it cannot tell, which is never a ghost (a healthy run is never cancelled for a long queue);
 - every run listing in lib/agentctl/ says at its call site, in a `# listing:` line, how it treats a run it left out."""
-import os, re, sys, unittest
+import os, re, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -61,7 +61,7 @@ class ListingTest(unittest.TestCase):
         A.verdict_jobs = lambda *a: ([], 0)
         A.remote_ghost = lambda o_r, rem, jobs, t: rem
         try:
-            rem = A.remote_poll("o/r", {"tip": "a" * 40, "branch": "check/x-1", "run": None})
+            rem = A.remote_poll("o/r", {"tip": "a" * 40, "branch": "check/x-1", "run": None}, time.time())
         finally:
             A.remote_read_bounds, A.verdict_jobs, A.remote_ghost = saved
         self.assertEqual(rem.get("run"), 999)
