@@ -75,17 +75,18 @@ class TimeoutAndClockTest(unittest.TestCase):
         self.assertEqual(len(res.failures), 1)
         self.assertIn("time.sleep", res.failures[0][1])
 
-    def test_faking_agentctls_clock_never_reaches_subprocess_and_ends_with_the_test(self):
+    def test_faking_agentctls_subprocess_never_reaches_the_stdlibs_and_ends_with_the_test(self):
         def body(self):
-            A.time.sleep = lambda s: (_ for _ in ()).throw(AssertionError("fake sleep reached"))
             A.subprocess.run = None
-            # subprocess's own poll keeps the real clock and Popen (its timeout only bounds a broken run: a fake
-            # sleep reached throws at once; 5 s failed once under a laptop load of 70 -- fork and exec wait for a CPU)
-            subprocess.run(["sleep", "0.2"], timeout=40)
+            subprocess.run(["true"], timeout=40)  # the stdlib's own run is untouched (its timeout bounds a broken run)
         res = self.outcome(body)
         self.assertEqual((res.failures, res.errors), ([], []))
-        self.assertIs(A.time.sleep, time.sleep)  # a forgotten restore never reaches the next test
-        self.assertIs(A.subprocess.run, subprocess.run)
+        self.assertIs(A.subprocess.run, subprocess.run)  # a forgotten restore never reaches the next test
+
+    def test_agentctls_time_is_the_stdlibs_a_test_hands_it_a_clock(self):
+        """THE CLOCK IS PASSED IN: no proxy stands between agentctl and the time module any more, so a test cannot fake
+        agentctl's time behind its back -- what reads the time takes a Clock (tests/fake_clock.py FakeClock)."""
+        self.assertIs(A.time, time)
 
 
     def test_an_agentctl_function_left_faked_fails_the_test_and_is_undone(self):

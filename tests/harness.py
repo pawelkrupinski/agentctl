@@ -10,10 +10,12 @@ No test depends on the machine it runs on (docs/simplification-2026-10.md, Agent
   system config.
 - A GLOBAL PER-TEST TIMEOUT ($AGENTCTL_TEST_TIMEOUT, default 60 s): SIGALRM raises TestTimeout inside the test, so a
   hang (RemotePickupTest once spun for 50 min) fails fast with its traceback, under any runner.
-- ONE CLOCK RULE: a test fakes time only through agentctl's own module proxies (`A.time.sleep = ...`,
-  `A.subprocess.run = ...`), never the stdlib modules, so no real subprocess ever waits under a faked clock (82fdc89).
-  Every test starts and ends with fresh proxies in every agentctl module (a forgotten restore cannot leak into the next
-  test), and a test that leaves the stdlib's time or subprocess patched fails. agentctl's process-wide flags
+- THE CLOCK IS PASSED IN (lib/agentctl/clock.py): a test hands agentctl a tests/fake_clock.py FakeClock (or a store on
+  a fake clock), never patches a time module; agentctl's modules hold the stdlib's own `time`. A test faking
+  subprocess does it through agentctl's own module proxy (`A.subprocess.run = ...`), never the stdlib module, so no
+  real subprocess ever runs under a fake (82fdc89), until the process runner is passed in too. Every test starts and
+  ends with a fresh proxy in every agentctl module (a forgotten restore cannot leak into the next test), and a test
+  that leaves the stdlib's time or subprocess patched fails. agentctl's process-wide flags
   (_IN_PROCESSOR, the token cache) are reset per test too: a leaked processor flag failed test_token at random.
 - ONE ENVIRONMENT: every test ends with os.environ as it found it, and a test that changed a token variable
   ($GH_TOKEN, $AGENTCTL_STORE_TOKEN, any *_TOKEN) fails, naming it."""
@@ -72,11 +74,11 @@ def _hermetic_environment():
 _hermetic_environment()
 
 
-# --- the clock rule -------------------------------------------------------------------------------------------------
+# --- the stdlib rule -------------------------------------------------------------------------------------------------
 
 class ModuleProxy(types.ModuleType):
-    """A module's attributes, except what a test assigns on the proxy: `A.time.sleep = fake` fakes agentctl's sleep
-    alone, while subprocess's own wait(timeout=...) poll keeps the real one."""
+    """A module's attributes, except what a test assigns on the proxy: `A.subprocess.run = fake` fakes agentctl's
+    run alone, while the stdlib's (the harness's, git's helpers in the tests) keeps the real one."""
 
     def __init__(self, real):
         super().__init__(real.__name__)
@@ -86,15 +88,16 @@ class ModuleProxy(types.ModuleType):
         return getattr(object.__getattribute__(self, "_real"), name)
 
 
-_PROXIED = {"time": time, "subprocess": subprocess}
-_STDLIB = {(m, n): getattr(mod, n) for m, mod in _PROXIED.items()
+_PROXIED = {"subprocess": subprocess}
+_GUARDED = {"time": time, "subprocess": subprocess}  # a test leaving one of these patched fails
+_STDLIB = {(m, n): getattr(mod, n) for m, mod in _GUARDED.items()
            for n in ("sleep", "time", "monotonic", "run", "Popen", "check_output", "call", "check_call")
            if hasattr(mod, n)}
 _AGENTCTL_MODULES = []  # registered by test_agentctl: the loaded agentctl (and, after the split, its modules)
 
 
 def register(module):
-    """agentctl's module(s): each gets its own time and subprocess proxy now and fresh ones before every test."""
+    """agentctl's module(s): each gets its own subprocess proxy now and a fresh one before every test."""
     _AGENTCTL_MODULES.append(module)
     _fresh_proxies()
 
@@ -107,7 +110,7 @@ def _agentctl_modules():
 
 
 def _fresh_proxies():
-    """ONE proxy per stdlib module for all of agentctl's modules: `A.time.sleep = fake` fakes the sleep of the
+    """ONE proxy per stdlib module for all of agentctl's modules: `A.subprocess.run = fake` fakes the run of the
     tests' view (tests/agentctl_view.py) and of every module (lib/agentctl MODULES) alike."""
     proxies = {name: ModuleProxy(real) for name, real in _PROXIED.items()}
     for mod in _agentctl_modules():
@@ -121,9 +124,9 @@ def _stdlib_patched():
     """The stdlib clock / subprocess attributes a test replaced (and puts them back)."""
     bad = []
     for (m, n), real in _STDLIB.items():
-        if getattr(_PROXIED[m], n) is not real:
+        if getattr(_GUARDED[m], n) is not real:
             bad.append(f"{m}.{n}")
-            setattr(_PROXIED[m], n, real)
+            setattr(_GUARDED[m], n, real)
     return bad
 
 
@@ -221,9 +224,9 @@ def _run(self, result=None):
     bad = _stdlib_patched()
     if bad and result is not None:
         try:
-            raise AssertionError(f"the test left the stdlib's {', '.join(bad)} faked: fake agentctl's own "
-                                 f"(A.time.* / A.subprocess.*), never the stdlib's -- a real subprocess would wait "
-                                 f"under the fake")
+            raise AssertionError(f"the test left the stdlib's {', '.join(bad)} faked: hand agentctl a "
+                                 f"FakeClock (tests/fake_clock.py) and fake its subprocess with A.subprocess.*, never "
+                                 f"the stdlib's -- a real subprocess would wait under the fake")
         except AssertionError:
             result.addFailure(self, sys.exc_info())
     return out

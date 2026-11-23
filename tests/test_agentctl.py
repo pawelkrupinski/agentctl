@@ -26,11 +26,10 @@ A = _load_view(TOOL)  # the tests' view of every module (tests/agentctl_view.py)
 A.GH_TALLY_SECONDS = 10 ** 9
 
 
-# agentctl's OWN `time` and `subprocess` (82fdc89, made universal by the harness): tests fake the clock and the waits
-# with `A.time.sleep = ...`; on the shared stdlib module that also replaced the sleep inside subprocess's
-# `wait(timeout=...)` poll, so a git call that outlived its busy-loop window (a loaded laptop) hit the fake: a
-# die-on-sleep fake killed the checker inside `git checkout`, before its remote run existed (test_queue's
-# test_superseding_an_entry_cancels_its_run, 2026-10-29), and a no-op one turned the poll into a busy loop.
+# agentctl's OWN `subprocess` (82fdc89, made universal by the harness): tests fake it with `A.subprocess.run = ...`,
+# never the stdlib module. The clock is passed in (FakeClock): faking the shared stdlib `time.sleep` once also replaced
+# the sleep inside subprocess's `wait(timeout=...)` poll -- a die-on-sleep fake killed the checker inside
+# `git checkout` (test_queue's test_superseding_an_entry_cancels_its_run, 2026-10-29).
 harness.register(A)
 
 
