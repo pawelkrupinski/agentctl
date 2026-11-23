@@ -36,7 +36,7 @@ class ReapTest(unittest.TestCase):
     def test_no_detached_start_bypasses_the_bookkeeping(self):
         src = code_source()
         self.assertEqual(src.count("subprocess.Popen("), 2)  # spawn_detached itself, and run_watched (which waits)
-        self.assertIn("children", [n for n, _ in A.sync_steps("/r", "/d", "o/r")])
+        self.assertIn("children", [n for n, _ in A.sync_steps("/r", "/d", "o/r", A.Clock())])
 
 
 if __name__ == "__main__":

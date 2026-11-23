@@ -71,8 +71,9 @@ class LeaseHold:
 
 def lease_live(name: str, store: Any = None) -> dict[str, Any] | None:
     """The live lease `name` (its row, meta decoded), or None."""
-    r: dict[str, Any] | None = (store or open_store()).get(name)
-    if r and r["holder"] and r["expires_at"] > time.time():
+    st = store or open_store()
+    r: dict[str, Any] | None = st.get(name)
+    if r and r["holder"] and r["expires_at"] > st.clock():
         r["meta"] = json.loads(r["meta"] or "{}")
         return r
     return None

@@ -338,10 +338,10 @@ class ServerSideTest(Phase2Base):
             self.assertIsNone(A.store_url())
         finally:
             os.environ.pop("AGENTCTL_HOST")
-        names = [n for n, _ in A.sync_steps(self.repo, self.tmp, "o/r")]
+        names = [n for n, _ in A.sync_steps(self.repo, self.tmp, "o/r", A.Clock())]
         self.assertEqual(names, ["laptop role", "outbox", "state mirror", "children", "events", "notifier", "alerts", "workspace trust", "landed worktrees", "local queue", "landed changes", "regen holds", "claims", "dispatcher", "pins", "drift explorer", "revert notes", "fixer landing",
                                  "network watch", "tunnel probe", "red status snapshot", "upkeep", "root checkout", "recovery"])
-        server = [n for n, _ in A.server_steps(self.repo, self.tmp, lambda f: f)]
+        server = [n for n, _ in A.server_steps(self.repo, self.tmp, lambda f: f, A.Clock())]
         self.assertEqual(server, ["clone health", "change items", "landed changes", "stranded changes", "change tick", "land hold", "batch tick", "watches", "land refs",
                                   "lease archive", "children", "gate summary", "red time", "red tick", "recovery", "issues",
                                   "reverts", "quiet deadlines", "stats"])
@@ -961,7 +961,7 @@ class LandHoldTest(Phase2Base):
         saved = A.waiting_entries, A.current_batch
         A.waiting_entries = lambda d_, **kw: [{"id": "e1"}]  # a change waits: only the hold stops the batch
         try:
-            self.assertEqual(A.tick_batch(self.repo, d), ["held"])
+            self.assertEqual(A.tick_batch(self.repo, d, A.Clock()), ["held"])
         finally:
             A.waiting_entries, A.current_batch = saved
         A.write_snapshot(d)
@@ -986,7 +986,7 @@ class LandHoldTest(Phase2Base):
         self.assertIsNone(A.land_hold(self.st, time.time() + 120))
         self.assertEqual(self.st.items("hold", ["held"]), [])
         self.assertTrue(any(e["kind"] == "hold.expired" for e in self.st.events()))
-        self.assertIn(("land hold", A.tick_land_hold), A.server_steps(self.repo, "/d", lambda f: f))
+        self.assertIn(("land hold", A.tick_land_hold), A.server_steps(self.repo, "/d", lambda f: f, A.Clock()))
 
 class CurrentStoreTest(Phase2Base):
     def test_a_long_running_holder_follows_store_use(self):

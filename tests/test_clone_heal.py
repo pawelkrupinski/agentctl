@@ -2,7 +2,7 @@
 incomplete object store that passed for a clone; every landing check's fetch of main failed for hours, re-queued
 silently). The clone is atomic (a temp directory, verified, renamed into place), a broken clone is re-cloned and
 swapped in under the clone lock, and a change re-queued for the same infra reason opens a condition."""
-import os, subprocess, sys, tempfile, unittest
+import os, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -248,7 +248,7 @@ class RequeueLoopTest(unittest.TestCase):
         A.open_store, A.wlog, A.open_condition = self.saved
 
     def again(self, why, **kw):
-        A.requeue_infra(self.d, self.e, why, **kw)
+        A.requeue_infra(self.d, self.e, why, time.time(), **kw)
         self.st.transition("change", "e1", "checking", self.st.item("change", "e1")["version"])
         self.e["status"] = "checking"
 
@@ -361,7 +361,7 @@ class RequeueLoopTest(unittest.TestCase):
         A.fetch_main = lambda repo: (False, "error: Could not read 409b8bb3c1\nfatal: remote did not send all "
                                             "necessary objects")
         try:
-            self.assertEqual(A._check_entry(self.d, self.d, self.e, 1), 0)
+            self.assertEqual(A._check_entry(self.d, self.d, self.e, 1, A.Clock()), 0)
         finally:
             A.precheck_hook, A.fetch_main = saved
         self.assertEqual(self.e["status"], "queued")

@@ -5,7 +5,6 @@ import glob
 import os
 import subprocess
 import sys
-import time
 from typing import Any, Callable, Sequence
 from agentctl.core import (
     NoToken, env_num, err, git, git_ok, process_cache, reap_children, reds_dir, remote, run_bounded,
@@ -33,6 +32,7 @@ from agentctl.projector import notify_escalations, project_events
 from agentctl.netwatch import network_watch, tunnel_watch
 from agentctl.redstatus import write_red_status_snapshot
 from agentctl.orphanreap import red_reap_orphans
+from agentctl.clock import Clock
 
 
 SYNC_MIRROR_EVERY = 10   # s between the laptop's copies of /v1/state into state.json
@@ -73,21 +73,21 @@ def flush_outbox(st=None):
     return n
 
 
-def sync_steps(repo: str, d: str, o_r: str) -> Sequence[tuple[str, Callable[[], Any]]]:
-    """The laptop's loop once the store is remote: it never ticks."""
+def sync_steps(repo: str, d: str, o_r: str, clock: Clock) -> Sequence[tuple[str, Callable[[], Any]]]:
+    """The laptop's loop once the store is remote: it never ticks. clock: the process's (cli's)."""
     last_mirror = [0.0]
 
     def mirror():
-        if time.time() - last_mirror[0] >= env_num("AGENTCTL_SYNC_MIRROR", SYNC_MIRROR_EVERY):
-            last_mirror[0] = time.time()
+        if clock.time() - last_mirror[0] >= env_num("AGENTCTL_SYNC_MIRROR", SYNC_MIRROR_EVERY):
+            last_mirror[0] = clock.time()
             mirror_state()
 
     def sync_claims():
         """The laptop's holders on ci-runner's store: every claim renewed by its worktree's activity; every fixer and
         owner lease held by no work revoked (red_reap_orphans)."""
         st = open_store()
-        red_renew_holders(st, time.time())
-        red_reap_orphans(st, time.time())
+        red_renew_holders(st, clock.time())
+        red_reap_orphans(st, clock.time())
 
     def pins():
         """The convergence pins read with the owner's token the processor holds and written into the store: the
@@ -104,7 +104,7 @@ def sync_steps(repo: str, d: str, o_r: str) -> Sequence[tuple[str, Callable[[], 
     def dispatch():
         if os.path.exists(reds_dir("DISPATCH_OFF")):
             return []
-        return red_dispatcher(open_store(), o_r, repo, time.time())
+        return red_dispatcher(open_store(), o_r, repo, clock.time())
     role = [None]  # None: not claimed in this loop yet (a step run on its own: a test)
 
     def claim_role():
@@ -118,7 +118,7 @@ def sync_steps(repo: str, d: str, o_r: str) -> Sequence[tuple[str, Callable[[], 
             ("workspace trust", lambda: [err(x) for x in trust_asks()]),
             ("landed worktrees", lambda: [err(x) for x in close_landed_worktrees()]),
             ("local queue", lambda: [err(f"land: {x}") for x in migrate_local_queue(repo)]),
-            ("landed changes", lambda: [err(f"land: {x}") for x in close_landed_changes(repo)]),
+            ("landed changes", lambda: [err(f"land: {x}") for x in close_landed_changes(repo, clock)]),
             ("regen holds", duty(lambda: [err(f"land: {x}") for x in answer_regen_holds(d)])),
             ("claims", duty(sync_claims)),
             ("dispatcher", duty(dispatch)),

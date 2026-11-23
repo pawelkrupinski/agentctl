@@ -234,7 +234,7 @@ class RevertNoticeTest(unittest.TestCase):
 
     def test_the_machine_is_ticked_and_no_policy(self):
         self.assertEqual(A.DEADLINE_TICKS["revert"], "tick_reverts")
-        self.assertIn("reverts", [n for n, _ in A.server_steps("/r", tempfile.mkdtemp(), lambda f: f)])
+        self.assertIn("reverts", [n for n, _ in A.server_steps("/r", tempfile.mkdtemp(), lambda f: f, A.Clock())])
         self.assertNotIn("revert", A.POLICIES)  # a notification: it holds and rejects nothing
 
 

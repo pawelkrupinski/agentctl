@@ -97,7 +97,7 @@ class SyncWritesTheStoreTest(PinsBase):
 
     def test_the_sync_loop_has_a_bounded_pins_step(self):
         self.laptop()
-        step = dict(A.sync_steps(self.repo, self.tmp, MOVIES))["pins"]
+        step = dict(A.sync_steps(self.repo, self.tmp, MOVIES, A.Clock()))["pins"]
         step()
         A._bounded["pins"].join(10)
         self.assertEqual(self.stored()["pins"], {"pl": "528", "de": "528"})

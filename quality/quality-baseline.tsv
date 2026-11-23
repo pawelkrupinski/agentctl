@@ -39,7 +39,7 @@ cognitive	backlog_reconcile	23
 cognitive	base_failure_keys	28
 cognitive	baseline_failures	16
 cognitive	batch_check	19
-cognitive	batch_step	125
+cognitive	batch_step	124
 cognitive	bg_final_text	13
 cognitive	bg_spent	16
 cognitive	bg_turn	44
@@ -70,7 +70,7 @@ cognitive	classify_change	41
 cognitive	classify_job	27
 cognitive	claude_trust_gap	14
 cognitive	close_condition	20
-cognitive	close_landed_changes	21
+cognitive	close_landed_changes	20
 cognitive	close_superseded	17
 cognitive	close_worktree	20
 cognitive	cmd_checks	12
@@ -193,7 +193,7 @@ cognitive	mem_stats	12
 cognitive	metrics_text	26
 cognitive	migrate_local_queue	20
 cognitive	name_causes	32
-cognitive	note_batch_progress	16
+cognitive	note_batch_progress	15
 cognitive	note_hold	12
 cognitive	note_precheck	19
 cognitive	notification_url	12
@@ -350,7 +350,7 @@ cognitive	settle_branch_reds	32
 cognitive	sleep_intervals	12
 cognitive	snap_reds	16
 cognitive	spotlight_exclude	23
-cognitive	stats_pass	52
+cognitive	stats_pass	51
 cognitive	status_agents	29
 cognitive	status_data	14
 cognitive	status_families	19
@@ -450,7 +450,7 @@ cyclomatic	backlog_reconcile	19
 cyclomatic	base_failure_keys	19
 cyclomatic	baseline_failures	14
 cyclomatic	batch_check	17
-cyclomatic	batch_step	84
+cyclomatic	batch_step	83
 cyclomatic	bg_final_text	11
 cyclomatic	bg_spent	15
 cyclomatic	bg_turn	32
@@ -485,7 +485,7 @@ cyclomatic	classify_job	34
 cyclomatic	claude_trust_gap	16
 cyclomatic	close_condition	16
 cyclomatic	close_finished_fixer_trees	11
-cyclomatic	close_landed_changes	17
+cyclomatic	close_landed_changes	16
 cyclomatic	close_superseded	23
 cyclomatic	close_worktree	25
 cyclomatic	cmd_checks	17
@@ -616,7 +616,7 @@ cyclomatic	mem_stats	13
 cyclomatic	metrics_text	24
 cyclomatic	migrate_local_queue	14
 cyclomatic	name_causes	22
-cyclomatic	note_batch_progress	19
+cyclomatic	note_batch_progress	18
 cyclomatic	note_hold	12
 cyclomatic	note_precheck	12
 cyclomatic	notification_url	12
@@ -782,7 +782,7 @@ cyclomatic	settle_branch_reds	21
 cyclomatic	snap_reds	11
 cyclomatic	snapshots_both_changed	12
 cyclomatic	spotlight_exclude	16
-cyclomatic	stats_pass	41
+cyclomatic	stats_pass	40
 cyclomatic	status_agents	26
 cyclomatic	status_data	15
 cyclomatic	status_families	19
@@ -805,7 +805,7 @@ cyclomatic	superseded_duty	11
 cyclomatic	sweep_land_refs	18
 cyclomatic	sweep_repo	30
 cyclomatic	sync_onto_main	16
-cyclomatic	tick_changes	12
+cyclomatic	tick_changes	11
 cyclomatic	tick_reverts	22
 cyclomatic	token	16
 cyclomatic	transcript_paths	19

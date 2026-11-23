@@ -2,7 +2,6 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
-import time
 from typing import Sequence
 from agentctl.core import NoToken, env_num, err, slug
 from agentctl.timefmt import iso_at
@@ -248,10 +247,10 @@ def cmd_watch(a, clock):
     return watch_landed(repo, a.sha, a.pushed_at, clock, close=a.close, fixes=a.fixes or ())
 
 
-def tick_watches(now_=None):
+def tick_watches(clock):
     """One evaluation of each due watch item. Returns what it decided."""
-    t = now_ if now_ is not None else time.time()
-    st = open_store()
+    t = clock.time()
+    st = open_store(clock.time)
     did = []
     for it in st.items("watch", states=("watching",)):
         dd = it["data"]

@@ -102,7 +102,7 @@ class LaptopRoleTest(unittest.TestCase):
             saved_fn = getattr(A, name)
             setattr(A, name, lambda *a, _n=name, **k: ran.append(_n) or [])
             self.addCleanup(setattr, A, name, saved_fn)
-        steps = dict(A.sync_steps(None, None, "pawelkrupinski/movies"))
+        steps = dict(A.sync_steps(None, None, "pawelkrupinski/movies", A.Clock()))
         for name in ("laptop role", "notifier", "alerts", "claims", "dispatcher", "pins", "drift explorer"):
             steps[name]()
         self.assertEqual(ran, [], "standby: none of the laptop's duties")

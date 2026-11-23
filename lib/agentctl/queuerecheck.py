@@ -3,7 +3,6 @@
 
 import os
 import subprocess
-import time
 from typing import Any
 from agentctl.core import git, process_cache
 from agentctl.repos import batching, precheck_hook
@@ -254,11 +253,11 @@ def own_diff_changed(tree, base, tip, moved, new_head):
 RECHECK_LOG_MAX = 12  # the rounds and kept verdicts a change keeps (`land status <id>` prints them)
 
 
-def recheck_logged(e, kind, why, main):
+def recheck_logged(e, kind, why, main, at):
     """e's recheck log with one more decision: a `full` round, a `verify` round or a `kept` verdict, why, on which
-    main."""
+    main, at `at`."""
     return (list(e.get("rechecks") or [])[-(RECHECK_LOG_MAX - 1):]
-            + [{"at": int(time.time()), "kind": kind, "main": (main or "")[:10], "why": str(why)[:300]}])
+            + [{"at": int(at), "kind": kind, "main": (main or "")[:10], "why": str(why)[:300]}])
 
 
 _kept_known = process_cache({})  # (entry id, tip, checked base, main) -> verdict_kept's answer

@@ -72,7 +72,7 @@ class QueueTest(WaitingTest):
             if e["status"] in ("queued", "checking") and not e.get("retry_after", 0) > time.time():
                 A.check_entry(self.r.path, eid, self.clock)
             elif e["status"] == "checked":
-                A.push_change(self.r.path, d, e)
+                A.push_change(self.r.path, d, e, A.Clock())
             else:
                 break
         A.project_events()  # the processor's projector: the events become the inbox entries
@@ -111,7 +111,7 @@ class QueueTest(WaitingTest):
             saved = A.spawn_executor
             A.spawn_executor = lambda repo, d_, eid: started.append(eid)
             try:
-                return A.tick_changes(self.r.path, d), started
+                return A.tick_changes(self.r.path, d, A.Clock()), started
             finally:
                 A.spawn_executor = saved
         d, _c, _w = A.waiting_state(self.r.path)
@@ -123,7 +123,7 @@ class QueueTest(WaitingTest):
         saved = A.spawn_batch_executor
         A.spawn_batch_executor = lambda repo, d_, bid: None  # its executor runs elsewhere
         try:
-            self.assertIn("checking", A.tick_batch(self.r.path, d)[0])
+            self.assertIn("checking", A.tick_batch(self.r.path, d, A.Clock())[0])
         finally:
             A.spawn_batch_executor = saved
         wb, _ = self.agent("b", "worker/src/main/B.scala", "b\n", msg="b: solo")
@@ -166,7 +166,7 @@ class QueueTest(WaitingTest):
             saved = A.spawn_executor
             A.spawn_executor = lambda repo, d_, eid: started.append(eid)
             try:
-                return A.tick_changes(self.r.path, d), started
+                return A.tick_changes(self.r.path, d, A.Clock()), started
             finally:
                 A.spawn_executor = saved
         d, _c, _w = A.waiting_state(self.r.path)
@@ -236,7 +236,7 @@ class QueueTest(WaitingTest):
         saved = A.spawn_batch_executor
         A.spawn_batch_executor = lambda repo, d_, bid: None
         try:
-            self.assertIn("checking", A.tick_batch(self.r.path, d)[0])
+            self.assertIn("checking", A.tick_batch(self.r.path, d, A.Clock())[0])
         finally:
             A.spawn_batch_executor = saved
         self.assertEqual(self.batch()["data"]["members"], ids, "the batch's members are the changes, each once")
@@ -435,7 +435,7 @@ class QueueTest(WaitingTest):
         d, _c, _w = A.waiting_state(self.r.path)
         self.moves_once(("worker/src/main/W.scala", "w\n"))
         A.check_entry(self.r.path, eid, self.clock)  # the full check, main moving under it
-        A.push_change(self.r.path, d, A.read_record(os.path.join(d, "entries", f"{eid}.json")))
+        A.push_change(self.r.path, d, A.read_record(os.path.join(d, "entries", f"{eid}.json")), A.Clock())
         e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
         self.assertEqual((e["status"], e.get("verify")), ("queued", True), "no overlap yet: queued to be verified")
         other, _ = self.agent("t", "docs/notes.md", "".join(f"line {i}\n" for i in range(11)) + "theirs\n")
@@ -1382,7 +1382,7 @@ class RemotePickupTest(QueueTest):
         saved = A.spawn_executor
         A.spawn_executor = lambda repo, d_, eid: started.append(eid)
         try:
-            return A.tick_changes(self.r.path, d), started
+            return A.tick_changes(self.r.path, d, A.Clock()), started
         finally:
             A.spawn_executor = saved
 
@@ -1408,7 +1408,7 @@ class RemotePickupTest(QueueTest):
         saved = A.spawn_executor
         A.spawn_executor = lambda *a: None
         try:
-            A.tick_changes(self.r.path, d, now_=A.time.time() + 3 * 3600)
+            A.tick_changes(self.r.path, d, FakeClock(time.time() + 3 * 3600))
         finally:
             A.spawn_executor = saved
         e2 = self.entry(e["id"])
@@ -1948,7 +1948,7 @@ entry's own id, in its author's worktree."""
         st.put_item("change", "x-95", "waiting", {"worktree": wt, "head": head})
         sh(wt, "git", "push", "-q", "origin", "HEAD:main")
         A._landed_looked.clear()
-        self.assertEqual(A.close_landed_changes(self.r.path, store=st),
+        self.assertEqual(A.close_landed_changes(self.r.path, A.Clock(), store=st),
                          ["x-95: its commits are on main (by content): landed"])
         self.assert_told_once("x-95", wt)
 

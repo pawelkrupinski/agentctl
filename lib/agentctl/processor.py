@@ -73,7 +73,7 @@ def waiting_run(repo: str, clock: Clock, once: bool = False, service: bool = Fal
                 with clone_shared(repo):
                     return fn()
             return run
-        steps = sync_steps(repo, d, o_r) if role == "sync" else server_steps(repo, d, shared)
+        steps = sync_steps(repo, d, o_r, clock) if role == "sync" else server_steps(repo, d, shared, clock)
         while True:
             if TICK_STOP[0]:  # SIGTERM (systemd's stop): between ticks, never inside one
                 return 0

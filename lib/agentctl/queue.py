@@ -46,7 +46,7 @@ QUEUE_INFRA_RETRIES = 3
 INFRA_BACKOFF = (300, 600, 1800, 3600)  # infra re-queues back off; from the third, each one escalates
 
 
-def requeue_infra(d, e, why, delay=None, reason=None, detail=None, repo=None):
+def requeue_infra(d, e, why, now, delay=None, reason=None, detail=None, repo=None):
     """Back to queued for a later look: infra NEVER rejects a change (design §5.1). The delay grows 5 -> 60 min; from
     QUEUE_INFRA_RETRIES on, each re-queue is an escalation (its event's severity). NEVER SILENTLY FOREVER (2026-10-29:
     a corrupt clone's fetch of main re-queued every change for hours, and nobody was told): re-queued for the same
@@ -55,7 +55,7 @@ def requeue_infra(d, e, why, delay=None, reason=None, detail=None, repo=None):
     n = e.get("infra_retries", 0) + 1
     wait = delay if delay is not None else INFRA_BACKOFF[min(n - 1, len(INFRA_BACKOFF) - 1)]
     sev = "escalate" if n >= QUEUE_INFRA_RETRIES else "info"
-    t = time.time()
+    t = now
     reason = reason or infra_reason_of(why)
     same = e.get("infra_reason") == reason
     n_same = int(e.get("infra_same") or 0) + 1 if same else 1

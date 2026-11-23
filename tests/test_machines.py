@@ -105,7 +105,7 @@ class DeadlineTickTest(unittest.TestCase):
         self.assertEqual(past, 0)
 
     def test_the_server_tick_runs_it(self):
-        self.assertIn("quiet deadlines", [n for n, _ in A.server_steps("/r", tempfile.mkdtemp(), lambda f: f)])
+        self.assertIn("quiet deadlines", [n for n, _ in A.server_steps("/r", tempfile.mkdtemp(), lambda f: f, A.Clock())])
 
 
 class OneLoopTest(unittest.TestCase):

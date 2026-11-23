@@ -53,13 +53,13 @@ def older_verifying(todo, e, t, kinds=None):
                  if o["id"] != e["id"] and (o["seq"] < e["seq"] or red(o)) and verifying(o, t)), None)
 
 
-def tick_changes(repo, d, now_=None):
+def tick_changes(repo, d, clock):
     """One tick over the change items: re-queueing re-derived (only the newest entry per worktree and branch runs), an
     executor started for each queued or lease-less checking change (red fixes first, while a slot is free), a
     checking change past its deadline back to queued (infra), a queued one past its deadline escalated, and each
     checked change pushed. Returns what it did."""
-    t = now_ if now_ is not None else time.time()
-    st = open_store()
+    t = clock.time()
+    st = open_store(clock.time)
     try:
         reds = gate_reds(repo)
     except Exception:
@@ -91,12 +91,12 @@ def tick_changes(repo, d, now_=None):
         # never formed. A lone change younger than the oldest held one never takes the LAST free tree: that is the
         # batch's (a red fix excepted).
         batch_seq = min((x["seq"] for x in todo if x["id"] in held | pheld), default=None)
-        did += _tick_changes_pass(repo, d, st, t, facts, kinds, phase, [e for e in todo if e["id"] in newest], todo,
-                                  held, pheld, batch_seq)
+        did += _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, [e for e in todo if e["id"] in newest],
+                                  todo, held, pheld, batch_seq)
     return did
 
 
-def _tick_changes_pass(repo, d, st, t, facts, kinds, phase, mine, todo, held, pheld, batch_seq):
+def _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, mine, todo, held, pheld, batch_seq):
     """One pass of tick_changes over the newest entries: `push` (the checked and interrupted pushes) or `check` (the
     rest: executors started, deadlines). facts: queue_facts; kinds: each entry's kind (classify_queue)."""
     did = []
@@ -117,11 +117,11 @@ def _tick_changes_pass(repo, d, st, t, facts, kinds, phase, mine, todo, held, ph
             if e.get("retry_after", 0) > t:
                 note_hold(st, e, "retry", f"its push is retried at {hhmmz(e['retry_after'])}", t)
                 continue
-            did += _push_checked(repo, d, st, t, e, fix, todo, pheld, kinds)
+            did += _push_checked(repo, d, st, clock, t, e, fix, todo, pheld, kinds)
             continue
         alive = checker_alive(e["id"])
         if state == "checking" and not alive and t > it["deadline"]:
-            requeue_infra(d, e, "its check passed its deadline with no live checker")
+            requeue_infra(d, e, "its check passed its deadline with no live checker", t)
             did.append(f"{e['id']}: re-queued (checking past its deadline)")
             continue
         if state == "queued":  # past its deadline: said, re-deadlined -- an escalation only when its hold is stuck
@@ -205,7 +205,7 @@ def retry_hold(e):
     return "retry", f"its check is retried at {hhmmz(e['retry_after'])} (an infra failure{': ' + why[:200] if why else ''})"
 
 
-def _push_checked(repo, d, st, t, e, fix, todo, pheld, kinds=None):
+def _push_checked(repo, d, st, clock, t, e, fix, todo, pheld, kinds=None):
     """The change tick's step for checked entry e: pushed, unless its push is held -- before an open batch it is not
     in (THE BATCH GOES FIRST), for the next push batch, or behind an older change's combined-tree verification; a red
     fix (fix) is held by none of them. The hold is recorded on its item (`land status` prints it) and its deadline laps
@@ -233,7 +233,7 @@ def _push_checked(repo, d, st, t, e, fix, todo, pheld, kinds=None):
     # may fetch, find main moved and re-queue the change for a verification -- left a checked change past its deadline
     # with nothing recorded for the seconds it ran, and the watchdog's pass filed it as unheld
     note_hold(st, e, "push", "its push is under way (re-checked first if main moved)", t)
-    out = push_change(repo, d, e)
+    out = push_change(repo, d, e, clock)
     if out in ("checked", "busy"):  # raced, met the red gate, or the landing lock / push tree was busy: tried again
         note_hold(st, e, "push", "its push waits for the landing lock or a push tree" if out == "busy" else
                   "its last push did not land (a race or the red gate): tried again at the next tick", t)

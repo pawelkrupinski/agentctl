@@ -102,7 +102,7 @@ class WaitingTest(Base):
         out = []
         try:
             for _ in range(n):
-                did = A.close_landed_changes(self.r.path, d) + A.tick_batch(self.r.path, d)  # the server's order
+                did = A.close_landed_changes(self.r.path, A.Clock(), d) + A.tick_batch(self.r.path, d, A.Clock())  # the server's order
                 out += did
                 if not did or did == ["held"]:
                     break
@@ -350,9 +350,9 @@ class WaitingTest(Base):
         A.check_tree_slot = lambda repo, d_: None  # every check tree busy: the batch cannot be assembled
         try:
             for _ in range(2):
-                A.tick_batch(self.r.path, d)
+                A.tick_batch(self.r.path, d, A.Clock())
             self.assertEqual([c for c in A.open_conditions() if c["key"].startswith("waiting-green")], [])
-            A.tick_batch(self.r.path, d)
+            A.tick_batch(self.r.path, d, A.Clock())
             conds = [c for c in A.open_conditions() if c["key"].startswith("waiting-green")]
             self.assertEqual(len(conds), 1)
             self.assertIn("waiting while the gate is green for 3 ticks", conds[0]["text"])
@@ -373,13 +373,13 @@ class WaitingTest(Base):
         self.land(wa)
         d, _c, _w = A.waiting_state(self.r.path)
         for _ in range(4):  # red: waiting is right
-            A.tick_batch(self.r.path, d)
+            A.tick_batch(self.r.path, d, A.Clock())
         self.reds = set()
         saved = A.spawn_batch_executor
         A.spawn_batch_executor = lambda repo, d_, bid: None  # its executor runs elsewhere: the batch stays checking
         try:
             for _ in range(4):
-                A.tick_batch(self.r.path, d)
+                A.tick_batch(self.r.path, d, A.Clock())
         finally:
             A.spawn_batch_executor = saved
         self.assertEqual(self.batch()["state"], "checking")
@@ -406,7 +406,7 @@ class WaitingTest(Base):
         saved = A.gate_reds
         A.gate_reds = lambda repo: self.fail("an empty batch reads no gate")
         try:
-            self.assertEqual(A.tick_batch(self.r.path, d), [])
+            self.assertEqual(A.tick_batch(self.r.path, d, A.Clock()), [])
         finally:
             A.gate_reds = saved
 

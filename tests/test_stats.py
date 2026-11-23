@@ -8,6 +8,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, seed_gating_checks  # noqa: E402
+from fake_clock import FakeClock  # noqa: E402
 
 T0 = 1_794_900_000.0
 
@@ -249,21 +250,21 @@ class StatsPassTest(unittest.TestCase):
         landed_change(st, t, "old")
         t[0] += 3600
         out = io.StringIO()
-        self.assertGreater(A.stats_pass(store=st, url="http://vl", now_=t[0], out=out), 0)  # the first pass: since=now
+        self.assertGreater(A.stats_pass(FakeClock(t[0]), store=st, url="http://vl", out=out), 0)  # the first pass: since=now
         self.assertEqual({r["record"] for r in self.sent}, {"agentctl.landing", "agentctl.landing_round"})
         self.assertTrue(all(r["backfill"] for r in self.sent))
         self.assertEqual(out.getvalue(), "")  # backfill never floods the journal
         n = len(self.sent)
-        A.stats_pass(store=st, url="http://vl", now_=t[0] + 60, out=out)
+        A.stats_pass(FakeClock(t[0] + 60), store=st, url="http://vl", out=out)
         self.assertEqual(len(self.sent), n)  # sent once
         landed_change(st, t, "new")
-        A.stats_pass(store=st, url="http://vl", now_=t[0] + 60, out=out)
+        A.stats_pass(FakeClock(t[0] + 60), store=st, url="http://vl", out=out)
         self.assertEqual(len(self.sent), n)  # not settled yet: the collector's rows may still be coming
         self.fail[0] = True
-        A.stats_pass(store=st, url="http://vl", now_=t[0] + A.STATS_SETTLE + 1, out=out)
+        A.stats_pass(FakeClock(t[0] + A.STATS_SETTLE + 1), store=st, url="http://vl", out=out)
         self.assertEqual(len(self.sent), n)  # refused: unsent, tried again
         self.fail[0] = False
-        A.stats_pass(store=st, url="http://vl", now_=t[0] + A.STATS_SETTLE + 2, out=out)
+        A.stats_pass(FakeClock(t[0] + A.STATS_SETTLE + 2), store=st, url="http://vl", out=out)
         live = [r for r in self.sent[n:] if r["record"] == "agentctl.landing"]
         self.assertEqual([(r["change_id"], r["backfill"]) for r in live], [("new", False)])
         self.assertIn('agentctl.landing {"', out.getvalue())
@@ -290,7 +291,7 @@ class StatsPassTest(unittest.TestCase):
             return []
         with mock.patch.object(A, "stats_query", query):
             for i in range(20):
-                A.stats_pass(store=st, url="http://vl", now_=T0 + i)
+                A.stats_pass(FakeClock(T0 + i), store=st, url="http://vl")
         gates = [r for r in self.sent if r["record"] == "agentctl.gate_run"]
         self.assertIn('repo:="pawelkrupinski/movies" workflow_file:in("main.yml", ', calls[0][0])
         self.assertEqual(sorted((g["run_id"], g["workflow"], g["backfill"]) for g in gates),
@@ -302,10 +303,10 @@ class StatsPassTest(unittest.TestCase):
     def test_no_url_no_pass_and_the_reconciler_runs_the_step(self):
         with mock.patch.dict(os.environ, {"AGENTCTL_STATS_URL": "off"}):
             self.assertIsNone(A.stats_url())
-            self.assertEqual(A.maybe_stats_pass("/r", "/d"), 0)
+            self.assertEqual(A.maybe_stats_pass("/r", "/d", A.Clock()), 0)
         with mock.patch.dict(os.environ, {"AGENTCTL_HOST": "ci-runner", "AGENTCTL_STATS_URL": ""}):
             self.assertEqual(A.stats_url(), A.STATS_URL_SERVER)
-        names = [n for n, _f in A.server_steps("/r", "/d", lambda f: f)]
+        names = [n for n, _f in A.server_steps("/r", "/d", lambda f: f, A.Clock())]
         self.assertIn("stats", names)
 
 

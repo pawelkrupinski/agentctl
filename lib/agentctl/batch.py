@@ -4,7 +4,6 @@
 import os
 import subprocess
 import sys
-import time
 from typing import Any
 from agentctl.core import env_num, err, fmt_age, git, remote, spawn_detached
 from agentctl.timefmt import ts
@@ -142,9 +141,8 @@ def batch_progress_path(d: str) -> str:
     return os.path.join(d, "batch-progress.json")
 
 
-def note_batch_progress(d, seen, now_=None):
+def note_batch_progress(d, seen, t):
     """Count this tick: stalled (changes wait, gate green, no hold, no batch moving) or not. Returns the count."""
-    t = now_ if now_ is not None else time.time()
     waiting, it = seen.get("waiting") or [], seen.get("batch")
     stalled = (bool(waiting) and seen.get("reds") is not None and not seen["reds"] and not seen.get("held")
                and not (it and it["state"] in BATCH_MOVING))
@@ -177,15 +175,15 @@ def probe_batch_progress(a):
     return n < limit, (f"{n} stalled tick(s) at green: {rec.get('why')}" if n else "no change waits at green")
 
 
-def tick_batch(repo, d, now_=None):
+def tick_batch(repo, d, clock):
     """One tick of the repository's batch, then its stall count (note_batch_progress). Returns what it did."""
     seen = {}
-    did = _tick_batch(repo, d, now_, seen)
+    did = _tick_batch(repo, d, clock, seen)
     try:
         seen["last"] = did[-1] if did else None
         if seen.get("waiting"):  # the batch as this tick left it (assembled -> checking is no stall)
-            seen["batch"] = current_batch(open_store(), d)
-        note_batch_progress(d, seen, now_)
+            seen["batch"] = current_batch(open_store(clock.time), d)
+        note_batch_progress(d, seen, clock.time())
     except (Exception, SystemExit) as e:  # never the batch's own step
         err(f"batch progress: {str(e)[:160]}")
     return did
@@ -227,10 +225,10 @@ def waiting_batch_max():
     return int(env_num("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX))
 
 
-def _tick_batch(repo, d, now_, seen):
+def _tick_batch(repo, d, clock, seen):
     """A backlog batch's members brought in line with it (backlog_reconcile), then the batch's step."""
-    st = open_store()
-    return backlog_reconcile(d, st) + batch_step(repo, d, now_, seen, st)
+    st = open_store(clock.time)  # its clock is the tick's: batch_step and the push read the time on it
+    return backlog_reconcile(d, st) + batch_step(repo, d, seen, st)
 
 
 # THE BATCH IS THE MECHANISM (the owner, 2026-11-20: "batching waiting changes ... structurally, not just now"). While
@@ -322,8 +320,8 @@ def release_red_fixes(d, st, reds, waiting, t):
     return out
 
 
-def batch_step(repo, d, now_, seen, st):
-    t = now_ if now_ is not None else time.time()
+def batch_step(repo, d, seen, st):
+    t = st.clock()
     waiting = waiting_entries(d)
     it = current_batch(st, d)
     seen.update(waiting=waiting, batch=it)
@@ -420,7 +418,7 @@ def batch_step(repo, d, now_, seen, st):
             if depth == "kept":
                 moved = (it["data"].get("prechecked") or {}).get("base") != base
                 for e in kept if moved else ():  # MINIMAL RECHECKS' log, as a lone change's (land status, kept_verdicts)
-                    e["rechecks"] = recheck_logged(e, "kept", why, base)
+                    e["rechecks"] = recheck_logged(e, "kept", why, base, t)
                     save_entry(d, e)
                 batch_move(st, it, "checking", {"members": [e["id"] for e in kept], "tip": tip, "base": base, "tree": i,
                                                 "cls": "check", "depth": "fast"}, text=f"batch {it['id']}: {why}")
@@ -448,7 +446,7 @@ def batch_step(repo, d, now_, seen, st):
         spawn_batch_executor(repo, d, it["id"])
         return [f"batch {it['id']}: assembled {len(kept)} change(s), checking {tip[:10]}"]
     if state in ("checking", "bisecting"):
-        if not lease_live(f"check/batch-{it['id']}"):
+        if not lease_live(f"check/batch-{it['id']}", st):
             if t > it["deadline"]:
                 return [batch_fail(st, d, it, "its check passed its deadline with no live checker")["state"]]
             spawn_batch_executor(repo, d, it["id"])

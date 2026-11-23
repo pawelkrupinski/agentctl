@@ -3,7 +3,6 @@
 
 import os
 import re
-import time
 from typing import List, Optional, Tuple
 from agentctl.core import err, git, git_ok, reds_dir, remote, slug
 from agentctl.timefmt import ts
@@ -143,7 +142,7 @@ def run_failure_keys(o_r, run_id):
     return keys
 
 
-def base_failure_keys(repo, d, e, base):
+def base_failure_keys(repo, d, e, base, now):
     """{key: where} failing on the change's base: main's red gate runs, and other changes' failed checks on this
     base (a different head) in the last day."""
     out = {}
@@ -159,30 +158,29 @@ def base_failure_keys(repo, d, e, base):
                         err(f"{name} run {decided['databaseId']}: failed log unread ({str(ex)[:120]})")
     except (Exception, SystemExit) as ex:
         err(f"the gate's runs unread ({str(ex)[:120]}): judged against the queue's own record only")
-    now_ = time.time()
     for o in waiting_entries(d, open_only=False):
         f = o.get("failed_on") or {}
         if o.get("id") == e.get("id") or o.get("head") == e.get("head") or f.get("base") != base:
             continue
-        if now_ - float(f.get("at") or 0) > BASE_CORPUS_AGE:
+        if now - float(f.get("at") or 0) > BASE_CORPUS_AGE:
             continue
         for k in f.get("keys") or []:
             out.setdefault(k, f"change {o['id']} on the same main")
     return out
 
 
-def judge_failure(repo, d, e, base, out):
+def judge_failure(repo, d, e, base, out, now):
     """('base', {key: where}) when every failing job's tests fail on the base too; else ('head', [what is the
     change's own]). The head's keys are kept on the entry (failed_on), the queue's own record of the base."""
     jobs = head_failure_jobs(repo, e, out)
     keys, unjudged = failure_keys(jobs)
-    e["failed_on"] = {"base": base, "head": e.get("head"), "keys": sorted(keys), "at": time.time()}
+    e["failed_on"] = {"base": base, "head": e.get("head"), "keys": sorted(keys), "at": now}
     save_entry(d, e)
     if CHECK_TIMEOUT.search(out or ""):  # checks it never reached are unjudged: never a base verdict
         return "head", sorted(keys.values()) + ["the checks' time cap"]
     if not keys:
         return "head", [f"{u} (no failing test named)" for u in unjudged] or ["(no failing test named)"]
-    known = base_failure_keys(repo, d, e, base)
+    known = base_failure_keys(repo, d, e, base, now)
     mine = sorted(n for k, n in keys.items() if k not in known)
     if mine or unjudged:
         return "head", mine + [f"{u} (no failing test named)" for u in unjudged]
@@ -194,7 +192,7 @@ def keys_text(keys, n=4):
     return ", ".join(keys[:n]) + (f" (+{len(keys) - n} more)" if len(keys) > n else "")
 
 
-def push_change(repo, d, e):
+def push_change(repo, d, e, clock):
     """The tick's push of one checked change, under the landing lease: rebased onto a moved main (re-checked when what
     landed overlaps: a new round, queued), joined to `waiting` while main is red and it must wait, else pushed with
     the push's bounds and verified. pushing -> landed, or back to checked (a push never rejects); after
@@ -206,7 +204,7 @@ def push_change(repo, d, e):
         slot = tree_slot(d, i)
         if slot.acquire():
             try:
-                return _push_change(repo, d, e, i)
+                return _push_change(repo, d, e, i, clock)
             finally:
                 slot.release()
     return "busy"
@@ -216,7 +214,7 @@ PUSH_TREE = "push"  # <clone>-wt-check-push, under its own lease; no checker eve
 # and a red fix's RED_FIX_TREE)
 
 
-def _push_change(repo, d, e, i):
+def _push_change(repo, d, e, i, clock):
     hook = precheck_hook(repo)
     log_path = os.path.join(d, f"check-{e['id']}")
     tree = check_tree_for_push(repo, e, i)
@@ -268,7 +266,7 @@ def _push_change(repo, d, e, i):
             if kept is not None:
                 note = f"{moved_by} since its checks on {base[:10]}, no check of it reading what changed: its verdict kept"
                 wlog(d, f"{e['id']}: {note}")
-                e["rechecks"] = recheck_logged(e, "kept", note, moved)
+                e["rechecks"] = recheck_logged(e, "kept", note, moved, clock.time())
                 where, skip = f"{where}; {note}", kept
                 e.pop("remote_run", None)
                 base, head, e["tip"] = moved, new_head, new_head
@@ -280,7 +278,7 @@ def _push_change(repo, d, e, i):
                         "modules' unit tests" + (f", the area tests: sbt modules both sides touch, {', '.join(areas)}"
                                                  if areas else "") + ")"
                         + (f", as {verify_why}" if verify_why else "")) if verify else f"{why}: checked again"
-                log = recheck_logged(e, "verify" if verify else "full", f"{moved_by}: {verify_why or why}", moved)
+                log = recheck_logged(e, "verify" if verify else "full", f"{moved_by}: {verify_why or why}", moved, clock.time())
                 set_change(d, e, "queued", data={"rounds": e.get("rounds", 0) + 1, "rechecks": log},
                            event={"text": f"{e['id']}: {moved_by} since its checks, {what}"},
                            rounds=e.get("rounds", 0) + 1, retry_after=0, verify=verify, rechecks=log)
@@ -304,7 +302,7 @@ def _push_change(repo, d, e, i):
             e.pop("remote_run", None)
         commits = waiting_commits(tree, base, head)
         reds = gate_reds(repo) if waiting_supported(repo) else set()
-        kr = None if classify_change(e, gate_facts(reds))["gate_fix"] else e.get("known_red")  # a gate red's fix
+        kr = None if classify_change(e, gate_facts(reds), clock.time())["gate_fix"] else e.get("known_red")  # a gate red's fix
         # failing only as main fails lands: no wait
         if kr or (reds and must_wait(repo, commits, reds)):
             why = (f"its checks failed only where {remote()}/main fails too ({keys_text(kr['keys'])}: "
@@ -315,7 +313,7 @@ def _push_change(repo, d, e, i):
         fixes = sorted(fixes_of(repo, commits))
         set_change(d, e, "pushing", data={"rechecks": e["rechecks"]} if e.get("rechecks") else None,
                    event={"text": f"{e['id']}: pushing {head[:10]}"})
-        pushed_at = time.time()
+        pushed_at = clock.time()
         env = tool_env()
         if e.get("remote_run"):  # the hook takes ci-runner's pass once GitHub confirms it (remote checks)
             env["PREPUSH_REMOTE_RUN"] = str(e["remote_run"])
@@ -340,7 +338,7 @@ def _push_change(repo, d, e, i):
         set_change(d, e, "checked", data={"push_attempts": n},
                    event={"text": f"{e['id']}: {why}: push attempt {n}", "severity": "escalate" if n >= PUSH_ATTEMPTS_MAX else "info",
                           "audience": {"worktree": e.get("worktree")}},
-                   push_attempts=n, retry_after=time.time() + min(60 * 2 ** n, 1800))
+                   push_attempts=n, retry_after=clock.time() + min(60 * 2 ** n, 1800))
         wlog(d, f"{e['id']}: {why} (push attempt {n}); its tail: {tail_of(out or '')[:300]}")
         if n >= PUSH_ATTEMPTS_MAX:
             open_condition("STALLED", f"STALLED: the push of {e['id']} failed {n} times ({why}); it is tried again when "

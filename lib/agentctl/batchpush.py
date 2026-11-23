@@ -2,7 +2,6 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
-import time
 from agentctl.core import git, git_ok, remote
 from agentctl.timefmt import ts
 from agentctl.repos import precheck_hook
@@ -60,7 +59,7 @@ def _push_batch_item(repo, d, st, it, members, tip, base, i):
             batch_move(st, it, "assembling", text=f"batch {it['id']}: its tree is gone: assembled again")
             return f"batch {it['id']}: tree gone"
         git(tree, "checkout", "-q", "--force", "--detach", tip, check=False)
-        pushed_at = time.time()
+        pushed_at = st.clock()
         depth = it["data"].get("depth")
         if depth == "full":  # its full check's run stands for the push, once GitHub confirms it
             run = (it["data"].get("runs") or {}).get(tip)

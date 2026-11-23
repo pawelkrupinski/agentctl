@@ -23,6 +23,7 @@ from agentctl.queuebatch import hold_recovers_itself
 from agentctl.redhold import W1_HARD_FACTOR, change_progress, inv_wr, red_unheld
 from agentctl.queueclose import change_rows, close_landed_changes
 from agentctl.statemachines import change_exits_unannounced
+from agentctl.clock import Clock
 
 
 # ---------------------------------------------------------------- the invariant watchdog (design §10, phase 1 step 2)
@@ -96,7 +97,7 @@ def inv_w1():
     repo = movies_repo_path()
     st = open_store()
     if os.path.isdir(repo):
-        close_landed_changes(repo, store=st)
+        close_landed_changes(repo, Clock(), store=st)  # the watchdog's invariants: the wall's time, not passed in yet
     open_ = [r for r in change_rows(st) if r["state"] in ("queued", "checking", "checked", "waiting")]
     if not open_:
         return True, "no change waits"

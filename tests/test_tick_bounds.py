@@ -75,7 +75,7 @@ class StoreDownNeverEndsTheLoopTest(unittest.TestCase):
             rounds.append(1)
             if len(rounds) >= A.ROUND_ERRORS_MAX + 2:
                 A.TICK_STOP[0] = True
-        A.server_steps = lambda repo, d, shared: (("boom", lambda: (_ for _ in ()).throw(RuntimeError("down"))),)
+        A.server_steps = lambda repo, d, shared, clock: (("boom", lambda: (_ for _ in ()).throw(RuntimeError("down"))),)
         A.open_condition, A.TokenDrop.nap, A.restart_if_changed = down, nap, lambda *a, **k: None
         A.write_snapshot = lambda *a, **k: None
         try:

@@ -5,7 +5,6 @@ import json
 import os
 import re
 import sys
-import time
 from agentctl.core import env_num, err, git, host_role
 from agentctl.timefmt import iso_at
 from agentctl.waitingdir import waiting_entries, wlog
@@ -104,18 +103,18 @@ def stats_sent(st, name, iid):
     return st.meta_get(f"stats:{name}:{iid}") is not None
 
 
-def stats_pass(repo=None, d=None, store=None, url=None, now_=None, out=None):
+def stats_pass(clock, repo=None, d=None, store=None, url=None, out=None):
     """One pass: the records due (an exit older than STATS_SETTLE, not sent yet), sent; returns how many."""
     st = store or open_store()
     url = url or stats_url()
     if not url:
         return 0
-    t = time.time() if now_ is None else now_
+    t = clock.time()
     since = _num(st.meta_get("stats_since"))
     if since is None:
         since = t
         st.meta_set("stats_since", since)
-    deadline = time.monotonic() + env_num("AGENTCTL_STATS_PASS_BOUND", STATS_PASS_BOUND)
+    deadline = clock.monotonic() + env_num("AGENTCTL_STATS_PASS_BOUND", STATS_PASS_BOUND)
     entries = {}
     if d:
         for e in waiting_entries(d, open_only=False):
@@ -141,7 +140,7 @@ def stats_pass(repo=None, d=None, store=None, url=None, now_=None, out=None):
     sent = 0
     cap = int(env_num("AGENTCTL_STATS_PER_PASS", STATS_PER_PASS))
     for name, iid, it in due:
-        if sent >= cap or time.monotonic() > deadline:
+        if sent >= cap or clock.monotonic() > deadline:
             break
         if name == "landing":
             evs = item_events(st, "change", iid)
@@ -157,7 +156,7 @@ def stats_pass(repo=None, d=None, store=None, url=None, now_=None, out=None):
             recs = [watch_record(it, by_sha.get(iid), since)]
         elif name == "red":
             if waits is None:
-                waits = change_waits(st, changes)
+                waits = change_waits(st, changes, t)
             evs = item_events(st, "red", iid)
             recs = [red_record(it, evs, waits, since)]
             od = owner_decision_record(it, evs, since)
@@ -172,7 +171,7 @@ def stats_pass(repo=None, d=None, store=None, url=None, now_=None, out=None):
         st.meta_set(f"stats:{name}:{iid}", t)
         stats_echo(recs, out)
         sent += len(recs)
-    if time.monotonic() <= deadline and sent < cap:
+    if clock.monotonic() <= deadline and sent < cap:
         sent += gate_runs_pass(st, url, t, since, cap - sent, out)
     return sent
 
@@ -184,7 +183,7 @@ def stats_echo(recs, out=None):
             print(f"{r['record']} {json.dumps(r, sort_keys=True)}", file=out or sys.stdout, flush=True)
 
 
-def change_waits(st, changes):
+def change_waits(st, changes, now):
     """[(change id, entered waiting, left)] over every change item's events."""
     out = []
     for c in changes:
@@ -193,7 +192,7 @@ def change_waits(st, changes):
             continue
         for s, a, b, _e in state_spans(evs, _num((c["data"] or {}).get("submitted_at")) or c["entered_at"]):
             if s == "waiting":
-                out.append((c["id"], a, b if b is not None else time.time()))
+                out.append((c["id"], a, b if b is not None else now))
     return out
 
 
@@ -243,15 +242,15 @@ def gate_runs_pass(st, url, t, since, cap, out=None):
     return n
 
 
-def maybe_stats_pass(repo, d):
+def maybe_stats_pass(repo, d, clock):
     """The reconciler's step: a pass every STATS_EVERY s when there is a store to write to."""
     if not stats_url():
         return 0
-    st = open_store()
-    if time.time() - float(st.meta_get("stats_at", 0) or 0) < env_num("AGENTCTL_STATS_EVERY", STATS_EVERY):
+    st = open_store(clock.time)
+    if clock.time() - float(st.meta_get("stats_at", 0) or 0) < env_num("AGENTCTL_STATS_EVERY", STATS_EVERY):
         return 0
-    st.meta_set("stats_at", time.time())
-    n = stats_pass(repo, d, st)
+    st.meta_set("stats_at", clock.time())
+    n = stats_pass(clock, repo, d, st)
     if n:
         wlog(d, f"tick: stats: {n} record(s) sent to VictoriaLogs")
     return n

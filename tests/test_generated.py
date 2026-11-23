@@ -10,6 +10,7 @@ import json, os, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, sh, approved  # noqa: E402
+from fake_clock import FakeClock  # noqa: E402
 import test_backlog_batch  # noqa: E402
 
 BASELINE = "test/resources/coupling-baseline.tsv"
@@ -193,7 +194,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
     def test_a_change_sharing_only_the_baseline_with_one_in_flight_is_not_held(self):
         eo = self.change("older", {"ce\tservices": 6}, {"identity/src/main/I.scala": "i\n"})
         ey = self.change("younger", {"ce\ttools": 1}, {"identity/src/main/J.scala": "j\n"})
-        did = A.tick_changes(self.r.path, self.d)
+        did = A.tick_changes(self.r.path, self.d, A.Clock())
         self.assertEqual(self.started, [], f"both wait for the backlog batch, none for the other: {did}")
         self.assertEqual([x for x in self.inbox() if "CONFLICTS" in json.dumps(x)], [], "no conflict to tell")
         hold = (A.open_store().item("change", ey)["data"] or {}).get("hold") or {}
@@ -204,7 +205,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
                                                         "worker/src/fixtures/scala/tools/TestWiring.scala": "o\n"})
         ey = self.change("younger", {"ce\ttools": 1}, {"identity/src/main/J.scala": "j\n",
                                                        "worker/src/fixtures/scala/tools/TestWiring.scala": "y\n"})
-        A.tick_changes(self.r.path, self.d)
+        A.tick_changes(self.r.path, self.d, A.Clock())
         self.assertEqual(self.started, [eo], "the younger waits for the older")
         hold = A.open_store().item("change", ey)["data"]["hold"]
         self.assertEqual((hold["kind"], hold["blocker"], hold["files"]),
@@ -217,7 +218,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
                          msg="a: cut a dependency\n\nCoupling: the seam belongs here")
         eb = self.change("b", {"ce\ttools": 1}, {"worker/src/main/C.scala": "c\n"})
         self.assertTrue(A.pair_conflict(self.r.path, self.entry(ea), self.entry(eb)), "git alone conflicts here")
-        A.tick_changes(self.r.path, self.d)
+        A.tick_changes(self.r.path, self.d, A.Clock())
         self.assertEqual(self.started, [], "both wait for the backlog batch")
         self.drive()
         self.assertEqual([self.entry(x)["status"] for x in (ea, eb)], ["landed", "landed"])
@@ -232,7 +233,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
     def test_one_row_both_change_is_regenerated_over_the_combined_tree(self):
         ea = self.change("a", {"fanout\tA": 13}, {"web/src/main/A.scala": "a\na2\n"})
         eb = self.change("b", {"fanout\tA": 14}, {"worker/src/main/C.scala": "c\n"})
-        A.tick_changes(self.r.path, self.d)
+        A.tick_changes(self.r.path, self.d, A.Clock())
         self.drive_as("sync")
         self.assertEqual([self.entry(x)["status"] for x in (ea, eb)], ["landed", "landed"])
         self.assertEqual(self.regen_runs(), 1, "the repo's regen command, once")
@@ -241,7 +242,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
     def test_a_failed_regeneration_leaves_the_member_out_and_holds_it_as_before(self):
         ea = self.change("a", {"fanout\tA": 13}, {"web/src/main/A.scala": "a\na2\n", "FAIL_REGEN": "x\n"})
         eb = self.change("b", {"fanout\tA": 14}, {"worker/src/main/C.scala": "c\n"})
-        A.tick_changes(self.r.path, self.d)
+        A.tick_changes(self.r.path, self.d, A.Clock())
         self.drive_as("sync")
         b = self.entry(eb)
         self.assertEqual(b["batch_alone"], "regen")
@@ -249,7 +250,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.assertIn("generated: a row both sides changed, and `scripts/regen` exited 2: sbt couplingReport failed",
                       log)
         self.assertEqual(self.entry(ea)["status"], "queued", "the batch is gone: a is checked alone")
-        A.tick_changes(self.r.path, self.d)
+        A.tick_changes(self.r.path, self.d, A.Clock())
         self.assertEqual(self.started, [ea], "b waits behind a, as before")
         self.assertEqual(A.open_store().item("change", eb)["data"]["hold"]["files"], [BASELINE])
 
@@ -258,7 +259,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         minutes in a tick, and the batch's checks (the ratchet over the combined tree) judge it."""
         ea = self.change("a", {"fanout\tA": 13}, {"web/src/main/A.scala": "a\na2\n"})
         eb = self.change("b", {"fanout\tA": 14}, {"worker/src/main/C.scala": "c\n"})
-        A.tick_changes(self.r.path, self.d)
+        A.tick_changes(self.r.path, self.d, A.Clock())
         self.drive_as("server")
         self.assertEqual(self.regen_runs(), 0)
         self.assertEqual([self.entry(x)["status"] for x in (ea, eb)], ["landed", "landed"])
@@ -276,11 +277,11 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.r.write(BASELINE, text.replace("ce\tservices\t7", "ce\tservices\t5"), at=other)
         self.r.commit("other: a row next to it", at=other)
         self.r.push(at=other)
-        A.tick_changes(self.r.path, self.d)
+        A.tick_changes(self.r.path, self.d, A.Clock())
         e = self.entry(ey)
         self.assertEqual((e["status"], e.get("verify")), ("queued", True), "a new round, not NOT LANDED")
         A.check_entry(self.r.path, ey, self.clock)
-        A.tick_changes(self.r.path, self.d)
+        A.tick_changes(self.r.path, self.d, A.Clock())
         self.assertEqual(self.entry(ey)["status"], "landed")
         self.assertIn("ce\tservices\t5\nce\ttools\t1\n", self.baseline_on_main())
 
@@ -314,7 +315,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         tip_file = lambda path: sh(self.r.path, "git", "show", f"{e['tip']}:{path}") + "\n"
         self.assertIn("fanout\tA\t15\n", tip_file(BASELINE), "main's re-measured row, for the ratchet to judge")
         self.assertEqual(tip_file(REFS), "A\tmodels.X\nA\tmodels.V\nA\ttools.Z\nB\tmodels.X\n", "both sides' lines")
-        A.tick_changes(self.r.path, self.d)
+        A.tick_changes(self.r.path, self.d, A.Clock())
         self.assertEqual(self.entry(eid)["status"], "landed")
 
     def test_a_change_failing_its_checks_over_mains_rows_is_told_to_regenerate(self):
@@ -337,7 +338,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.assertIn(f"REGEN NEEDED {eid}: its {BASELINE} kept origin/main's rows where both sides changed them", e["why"])
         self.assertIn(f"it keeps its place in the queue: run `cd {wt} && ~/bin/agentctl land`", e["why"])
         self.assertIn("runs `scripts/regen` on this machine", e["why"])
-        A.tick_changes(self.r.path, self.d)  # held: not checked again, not rejected
+        A.tick_changes(self.r.path, self.d, A.Clock())  # held: not checked again, not rejected
         self.assertEqual(self.entry(eid)["status"], "queued")
         hold = A.open_store().item("change", eid)["data"]["hold"]  # 2026-11-20, phase8-units: it read "an infra failure"
         self.assertEqual(hold["kind"], "regen", hold)
@@ -383,12 +384,12 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         saved = A.spawn_detached
         A.spawn_detached = lambda argv, **kw: started.append((argv[-1], kw.get("cwd")))
         self.addCleanup(setattr, A, "spawn_detached", saved)
-        A.tick_changes(self.r.path, self.d)
+        A.tick_changes(self.r.path, self.d, A.Clock())
         A.answer_regen_holds(self.d)
         self.assertEqual(started, [("land", wt)], "the laptop answers it once")
         t0 = time.time() + A.CONFLICT_PLACE_KEPT + 60
         for t in (t0, t0 + 60):  # overdue: recovered, once, never rejected
-            A.tick_changes(self.r.path, self.d, now_=t)
+            A.tick_changes(self.r.path, self.d, FakeClock(t))
             self.assertEqual(self.entry(eid)["status"], "queued", self.entry(eid).get("why"))
         evs = A.open_store().item_events("change", eid)
         self.assertEqual(len([ev for ev in evs if ev["kind"] == "regen.recover"]), 1, [ev["kind"] for ev in evs])
@@ -399,7 +400,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.assertEqual(A.open_store().item("change", eid)["data"]["regen_answered"], 1, "the laptop says it answered")
         later = t0 + A.REGEN_RECOVERY_WAIT + 60
         for t in (later, later + 60, later + A.CONFLICT_PLACE_KEPT):  # still held: the owner is told once
-            A.tick_changes(self.r.path, self.d, now_=t)
+            A.tick_changes(self.r.path, self.d, FakeClock(t))
             self.assertEqual(self.entry(eid)["status"], "queued")
         told = [ev for ev in A.open_store().item_events("change", eid) if ev["kind"] == "regen.escalate"]
         self.assertEqual(len(told), 1, "escalated once")
@@ -424,7 +425,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.r.commit("other: rewire the first", at=other)
         self.r.push(at=other)
         A.check_entry(self.r.path, eid, self.clock)
-        A.tick_changes(self.r.path, self.d)
+        A.tick_changes(self.r.path, self.d, A.Clock())
         self.assertEqual(self.entry(eid)["status"], "landed", self.entry(eid).get("why"))
         on_main = sh(self.r.root, "git", "--git-dir", self.r.bare, "show", f"main:{wiring}")
         self.assertIn("wire 0 theirs", on_main)
@@ -507,7 +508,7 @@ class HandWrittenTableTest(GeneratedQueueTest):
     def test_disjoint_rows_are_no_hold_and_merge_in_the_batch(self):
         ea = self.change("a", {"ce\tservices": 6}, {"web/src/main/B.scala": "b\n"})
         eb = self.change("b", {"ce\ttools": 1}, {"worker/src/main/C.scala": "c\n"})
-        A.tick_changes(self.r.path, self.d)
+        A.tick_changes(self.r.path, self.d, A.Clock())
         self.assertEqual(self.started, [], "both wait for the backlog batch: no overlap hold")
         self.drive_as("server")
         self.assertEqual([self.entry(x)["status"] for x in (ea, eb)], ["landed", "landed"])
@@ -517,7 +518,7 @@ class HandWrittenTableTest(GeneratedQueueTest):
     def test_a_row_both_change_is_never_kept_provisionally(self):
         ea = self.change("a", {"fanout\tA": 13}, {"web/src/main/A.scala": "a\na2\n"})
         eb = self.change("b", {"fanout\tA": 14}, {"worker/src/main/C.scala": "c\n"})
-        A.tick_changes(self.r.path, self.d)
+        A.tick_changes(self.r.path, self.d, A.Clock())
         self.drive_as("server")
         self.assertEqual(self.regen_runs(), 0)
         self.assertEqual(self.entry(eb)["batch_alone"], "regen", "b falls out of the stack, its why in the log")

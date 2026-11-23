@@ -86,10 +86,10 @@ def close_item_landed(st, cid, why, via=None):
         return False
 
 
-def close_landed_changes(repo, d=None, store=None, now_=None):
+def close_landed_changes(repo, clock, d=None, store=None):
     """Every open change whose commits are on main by content closes as LANDED: the queue entries of d (with their
     items), then the store's other open items (by their head). Returns what it did."""
-    st, t = store or open_store(), now_ if now_ is not None else time.time()
+    st, t = store or open_store(clock.time), clock.time()
     did, carried = [], set()
     for e in waiting_entries(d, open_only=False) if d else []:
         if e.get("status") in ENTRY_FINAL or e.get("status") == "pushing":
@@ -303,7 +303,7 @@ def check_entry(repo: str, eid: str, clock: Clock) -> int:
         e = read_record(os.path.join(d, "entries", f"{eid}.json"))
         if not e or e.get("status") not in ("queued", "checking") or e.get("backlog_batch"):  # a backlog batch's
             return 0
-        fix = bool(e.get("fixes")) and classify_change(e, queue_facts(gate_reds(repo)))["red_fix"]
+        fix = bool(e.get("fixes")) and classify_change(e, queue_facts(gate_reds(repo)), clock.time())["red_fix"]
         slot = check_tree_slot(repo, d, fix=fix)
         if not slot:  # all trees busy: it stays queued, the tick starts it again when one frees
             return 0
@@ -326,7 +326,7 @@ def _check_entry(repo: str, d: str, e: dict[str, Any], i: int, clock: Clock, own
     fetched, ferr = fetch_main(repo)  # a corruption signature marks the clone for repair (clone_heal_tick)
     if not fetched:  # never checked on a stale main; git's own words say why (2026-10-29: "Could not read 409b8bb...")
         last = (ferr.strip().splitlines() or ["?"])[-1][:240]
-        requeue_infra(d, e, f"{FETCH_MAIN_FAILED}: {last}", reason=FETCH_MAIN_FAILED, detail=ferr,
+        requeue_infra(d, e, f"{FETCH_MAIN_FAILED}: {last}", clock.time(), reason=FETCH_MAIN_FAILED, detail=ferr,
                       repo=repo)
         return 0
     base = git(repo, "rev-parse", f"{remote()}/main").strip()
@@ -336,7 +336,7 @@ def _check_entry(repo: str, d: str, e: dict[str, Any], i: int, clock: Clock, own
             lerr = (lr.stderr or "").strip()
             note_clone_suspect(repo, lerr)
             requeue_infra(d, e, f"its commits are not here and refs/heads/land/{e['id']} gave none"
-                          + (f": {lerr.splitlines()[-1][:240]}" if lerr else ""), detail=lerr,
+                          + (f": {lerr.splitlines()[-1][:240]}" if lerr else ""), clock.time(), detail=lerr,
                           repo=repo)
             return 0
     rem = e.get("remote") or {}
@@ -420,25 +420,25 @@ def _check_entry(repo: str, d: str, e: dict[str, Any], i: int, clock: Clock, own
             # every check tree, and it waited 15+ min more for one): the first STALL_KEEP_PLACE stalls in a row are due
             # at once -- the tree it just freed goes to it, first by age; then the infra backoff as for any infra cause
             same = int(e.get("infra_same") or 0) if e.get("infra_reason") == STALLED_REASON else 0
-            requeue_infra(d, e, f"its checks stalled ({where}{': ' + last if last else ''})",
+            requeue_infra(d, e, f"its checks stalled ({where}{': ' + last if last else ''})", clock.time(),
                           delay=0 if same < STALL_KEEP_PLACE else None, reason=STALLED_REASON, detail=out, repo=repo)
             return 0
         if not ok and INFRA_CHECK_FAILURE.search(out or ""):
             requeue_infra(d, e, f"its checks failed on the laptop, not on the change "
-                             f"({INFRA_CHECK_FAILURE.search(out).group(0)})")
+                             f"({INFRA_CHECK_FAILURE.search(out).group(0)})", clock.time())
             return 0
         if not ok and network_only(out):  # no verdict, on its first round too (judge_failure: the change's)
-            requeue_infra(d, e, f"{NETWORK_REASON} ({network_failure(out)})", reason=NETWORK_REASON,
+            requeue_infra(d, e, f"{NETWORK_REASON} ({network_failure(out)})", clock.time(), reason=NETWORK_REASON,
                           detail=out, repo=repo)
             return 0
         if not ok and CHECK_TIMEOUT.search(out or "") and int(e.get("timeout_retries") or 0) < TIMEOUT_RETRIES:
             e["timeout_retries"] = int(e.get("timeout_retries") or 0) + 1
             requeue_infra(d, e, f"its checks ran past their time cap ({where}; retry {e['timeout_retries']} of "
-                                f"{TIMEOUT_RETRIES})", reason="its checks ran past their time cap", detail=out, repo=repo)
+                                f"{TIMEOUT_RETRIES})", clock.time(), reason="its checks ran past their time cap", detail=out, repo=repo)
             return 0
         known_red = None
         if not ok:
-            side, what = judge_failure(repo, d, e, base, out)
+            side, what = judge_failure(repo, d, e, base, out, clock.time())
             if side == "head" and e.get("provisional") and not CHECK_TIMEOUT.search(out or ""):
                 return regen_hold(d, e, tree, keys_text(what), out)  # A ROW ONLY A REGEN DECIDES IS NO BOUNCE
             if side == "head":

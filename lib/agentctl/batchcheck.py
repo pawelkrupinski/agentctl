@@ -202,7 +202,7 @@ def check_batch(repo: str, bid: str, clock: Clock) -> int:
             batch_fail(st, d, it, "it failed, then every prefix passed on its own (flaky or infra)", len(members))
             return 0
         bad = members[culprit]
-        if depth == "red" and not culprit_own_failure(repo, d, bad, base, cout):
+        if depth == "red" and not culprit_own_failure(repo, d, bad, base, cout, clock.time()):
             # failing only as main fails (the red itself, judged as a lone change's check is): no culprit; the prefix
             # before it pre-checked, the rest checked again at green (the fast check, as before)
             red_prechecked(d, st, it, members[:culprit], members[culprit - 1]["tip"] if culprit else None, base,
@@ -214,7 +214,7 @@ def check_batch(repo: str, bid: str, clock: Clock) -> int:
         # resolution is the suspect -- named, and the member held behind the change it conflicts with, never rejected
         regenerated, resolved = bad.get("regenerated"), bad.get("autoresolved")
         alone = depth in DEEP_BATCHES and (bool(regenerated) or bool(resolved)
-                                           or not culprit_own_failure(repo, d, bad, base, cout))
+                                           or not culprit_own_failure(repo, d, bad, base, cout, clock.time()))
         if alone:  # not shown to be its own: its own check judges it (a base red, a time cap, an infra failure)
             bad["batch_alone"] = "resolve" if resolved else "regen" if regenerated else bid
             bad.pop("autoresolved", None)
@@ -276,10 +276,10 @@ def batch_infra_failure(out):
     return hit.strip()[:160] if hit and not _test_line(lines) else None
 
 
-def culprit_own_failure(repo, d, e, base, out):
+def culprit_own_failure(repo, d, e, base, out, now):
     """Whether a backlog batch's confirmed culprit failed by its own fault, as a change's own check judges it
     (judge_failure): no infra failure, no time cap, a failing test that main's red runs and the queue's record do not
     share."""
     if INFRA_CHECK_FAILURE.search(out or "") or CHECK_TIMEOUT.search(out or ""):
         return False
-    return judge_failure(repo, d, e, base, out)[0] == "head"
+    return judge_failure(repo, d, e, base, out, now)[0] == "head"

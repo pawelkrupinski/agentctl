@@ -36,7 +36,7 @@ class UntilDoneTest(test_queue.QueueTest):
             if e["status"] in ("queued", "checking"):
                 A.check_entry(self.r.path, e["id"], self.clock)
             elif e["status"] == "checked":
-                A.push_change(self.r.path, self.d, e)
+                A.push_change(self.r.path, self.d, e, A.Clock())
 
     def until_done(self, wt, *extra):
         return self.land(wt, "--until-done", *extra)

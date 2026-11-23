@@ -63,7 +63,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
                 if e["status"] in ("queued", "checking"):
                     A.check_entry(self.r.path, e["id"], self.clock)
                 elif e["status"] == "checked":
-                    A.push_change(self.r.path, d, e)
+                    A.push_change(self.r.path, d, e, A.Clock())
         self.clock.on_sleep = sleep
 
     # -- the fixer's land ---------------------------------------------------------------------------------------------
@@ -144,7 +144,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         saved = A.spawn_executor
         A.spawn_executor = lambda repo, d_, eid: started.append(eid)
         try:
-            return A.tick_changes(self.r.path, d), started
+            return A.tick_changes(self.r.path, d, A.Clock()), started
         finally:
             A.spawn_executor = saved
 
@@ -193,7 +193,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         e = self.entry(ef)
         e["known_red"] = {"keys": ["Local checks"], "where": ["plain main"], "base": e.get("checked_base")}
         A.save_entry(d, e)
-        A.push_change(self.r.path, d, e)
+        A.push_change(self.r.path, d, e, A.Clock())
         self.assertEqual(self.entry(ef)["status"], "landed", "a red fix is never parked on `waiting` for green")
 
     def test_an_ordinary_change_failing_only_as_main_fails_still_waits(self):
@@ -205,7 +205,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         e = self.entry(eo)
         e["known_red"] = {"keys": ["Local checks"], "where": ["plain main"], "base": e.get("checked_base")}
         A.save_entry(d, e)
-        A.push_change(self.r.path, d, e)
+        A.push_change(self.r.path, d, e, A.Clock())
         self.assertEqual(self.entry(eo)["status"], "waiting")
 
     # -- the invariant ------------------------------------------------------------------------------------------------

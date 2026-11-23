@@ -21,6 +21,7 @@ from agentctl.queuepush import tick_changes
 from agentctl.redtick import maybe_publish_gate, maybe_red_tick
 from agentctl.batch import say_batch, tick_batch
 from agentctl.statemachines import StaleVersion, TerminalState, machine_state
+from agentctl.clock import Clock
 
 
 def gate_is_red_now() -> bool:
@@ -73,19 +74,20 @@ def tick_quiet_deadlines(st=None, now_=None):
     return did
 
 
-def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callable[[], Any]]) -> Sequence[tuple[str, Callable[[], Any]]]:
+def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callable[[], Any]],
+                 clock: Clock) -> Sequence[tuple[str, Callable[[], Any]]]:
     """The reconciler's tick on ci-runner (the one writer): the changes, the batch, the watches, the gate, the reds,
     the recovery registry. Never the laptop's duties (events -> inbox, the notifier, the network and tunnel watches, the
-    fixers, upkeep): those are sync_steps."""
+    fixers, upkeep): those are sync_steps. clock: the process's (cli's), the change, batch and watch ticks' time."""
     return (("clone health", lambda: [wlog(d, f"tick: {x}") for x in [clone_heal_tick(repo)] if x]
              if heal_enabled(repo) else None),
             ("change items", lambda: project_changes(d)),
-            ("landed changes", shared(lambda: [wlog(d, f"tick: {x}") for x in close_landed_changes(repo, d)])),
+            ("landed changes", shared(lambda: [wlog(d, f"tick: {x}") for x in close_landed_changes(repo, clock, d)])),
             ("stranded changes", lambda: stranded_changes(repo, d)),
-            ("change tick", shared(lambda: [wlog(d, f"tick: {x}") for x in tick_changes(repo, d)])),
+            ("change tick", shared(lambda: [wlog(d, f"tick: {x}") for x in tick_changes(repo, d, clock)])),
             ("land hold", tick_land_hold),
-            ("batch tick", shared(lambda: say_batch(d, tick_batch(repo, d)))),
-            ("watches", lambda: [wlog(d, f"tick: {x}") for x in tick_watches()]),
+            ("batch tick", shared(lambda: say_batch(d, tick_batch(repo, d, clock)))),
+            ("watches", lambda: [wlog(d, f"tick: {x}") for x in tick_watches(clock)]),
             ("land refs", shared(lambda: [wlog(d, f"tick: {x}") for x in sweep_land_refs(repo, d)])),
             ("lease archive", lambda: maybe_archive_leases(d)),
             ("children", reap_children),
@@ -96,4 +98,4 @@ def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callab
             ("issues", lambda: [wlog(d, f"tick: {x}") for x in tick_issues()]),
             ("reverts", lambda: [wlog(d, f"tick: {x}") for x in tick_reverts(repo)]),  # reverts.py: told their landers
             ("quiet deadlines", lambda: [wlog(d, f"tick: {x}") for x in tick_quiet_deadlines()]),
-            ("stats", shared(lambda: maybe_stats_pass(repo, d))))
+            ("stats", shared(lambda: maybe_stats_pass(repo, d, clock))))

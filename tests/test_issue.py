@@ -179,7 +179,7 @@ class IssueEscalationTest(AlertBase):
         self.assertEqual(self.st.item("issue", self.ids[0])["state"], "closed")
 
     def test_the_server_tick_runs_it(self):
-        self.assertIn("issues", [n for n, _ in A.server_steps("/r", self.root, lambda f: f)])
+        self.assertIn("issues", [n for n, _ in A.server_steps("/r", self.root, lambda f: f, A.Clock())])
 
 
 if __name__ == "__main__":

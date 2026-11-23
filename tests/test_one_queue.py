@@ -8,6 +8,7 @@ import json, os, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base, sh  # noqa: E402
+from fake_clock import FakeClock  # noqa: E402
 
 
 class OneQueueBase(Base):
@@ -53,7 +54,7 @@ class LandedByContentTest(OneQueueBase):
         wt, head = self.change("proxy-park", "a\n")
         self.entry("20261028-162641-movies-wt-proxy-park-92", wt, head)
         via = self.land_rebased(head)
-        did = A.close_landed_changes(self.r.path, self.d, self.st)
+        did = A.close_landed_changes(self.r.path, A.Clock(), self.d, self.st)
         self.assertEqual(len(did), 1, did)
         e = A.read_record(os.path.join(self.d, "entries", "20261028-162641-movies-wt-proxy-park-92.json"))
         self.assertEqual((e["status"], e["landed_sha"]), ("landed", via))
@@ -65,7 +66,7 @@ class LandedByContentTest(OneQueueBase):
         wt, head = self.change("proxy-park", "b\n")
         self.st.put_item("change", "x-95", "waiting", {"worktree": wt, "head": head})
         via = self.land_rebased(head)
-        did = A.close_landed_changes(self.r.path, store=self.st)  # the laptop's look: no entries of its own
+        did = A.close_landed_changes(self.r.path, A.Clock(), store=self.st)  # the laptop's look: no entries of its own
         self.assertEqual(did, ["x-95: its commits are on main (by content): landed"])
         it = self.st.item("change", "x-95")
         self.assertEqual(it["state"], "landed")
@@ -77,7 +78,7 @@ class LandedByContentTest(OneQueueBase):
         wt, head = self.change("open", "c\n")
         self.entry("open-1", wt, head, status="queued")
         self.st.put_item("change", "far-1", "waiting", {"head": "1" * 40})
-        self.assertEqual(A.close_landed_changes(self.r.path, self.d, self.st), [])
+        self.assertEqual(A.close_landed_changes(self.r.path, A.Clock(), self.d, self.st), [])
         self.assertEqual(A.change_landed(self.r.path, "1" * 40), (None, None))
         self.assertEqual(A.change_landed(self.r.path, head), (False, None))
 
@@ -85,10 +86,10 @@ class LandedByContentTest(OneQueueBase):
         wt, head = self.change("later", "d\n")
         self.entry("later-1", wt, head)
         t = time.time()
-        self.assertEqual(A.close_landed_changes(self.r.path, self.d, self.st, now_=t), [])
+        self.assertEqual(A.close_landed_changes(self.r.path, FakeClock(t), self.d, self.st), [])
         self.land_rebased(head)
-        self.assertEqual(A.close_landed_changes(self.r.path, self.d, self.st, now_=t + 5), [])
-        self.assertEqual(len(A.close_landed_changes(self.r.path, self.d, self.st, now_=t + A.LANDED_LOOK_EVERY)), 1)
+        self.assertEqual(A.close_landed_changes(self.r.path, FakeClock(t + 5), self.d, self.st), [])
+        self.assertEqual(len(A.close_landed_changes(self.r.path, FakeClock(t + A.LANDED_LOOK_EVERY), self.d, self.st)), 1)
 
 
 class FakeRemote:
@@ -234,21 +235,21 @@ class TreeSlotTest(OneQueueBase):
         by a checker waiting on its remote CI run (up to its 2.4 h max hold), and a push waited for its own tree."""
         trees = []
         saved = A._push_change
-        A._push_change = lambda repo, d, e, i: trees.append(i) or "landed"
+        A._push_change = lambda repo, d, e, i, clock: trees.append(i) or "landed"
         other = A.tree_slot(self.d, 1)
         self.assertTrue(other.acquire())
         try:
             e = {"id": "c-1", "tree": 1, "tip": "6" * 40, "status": "checked"}
-            self.assertEqual(A.push_change(self.r.path, self.d, e), "landed")
+            self.assertEqual(A.push_change(self.r.path, self.d, e, A.Clock()), "landed")
             self.assertEqual(trees, [A.PUSH_TREE], "never the tree another checker holds")
             push = A.tree_slot(self.d, A.PUSH_TREE)
             self.assertTrue(push.acquire(), "the push tree's lease is released after the push")
             try:
-                self.assertEqual(A.push_change(self.r.path, self.d, e), "busy", "both held: it waits")
+                self.assertEqual(A.push_change(self.r.path, self.d, e, A.Clock()), "busy", "both held: it waits")
             finally:
                 push.release()
             other.release()
-            self.assertEqual(A.push_change(self.r.path, self.d, e), "landed")
+            self.assertEqual(A.push_change(self.r.path, self.d, e, A.Clock()), "landed")
             self.assertEqual(trees[-1], 1, "its own tree, free, first: its tip and build are there")
         finally:
             A._push_change = saved

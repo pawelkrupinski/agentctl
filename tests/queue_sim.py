@@ -724,7 +724,7 @@ class Sim:
 
     def spawn_executor(self, repo, d, eid):
         e = self.entry_by_id(eid) or {}
-        k = (A.Store().item("change", eid) or {}).get("data", {}).get("change_kind") or {}
+        k = (A.open_store().item("change", eid) or {}).get("data", {}).get("change_kind") or {}
         self.spawned.append((self.tick, eid, k.get("rank")))
         me = next((c for c in self.changes if c.eid == eid), None)
         if me:  # who was `waiting` for green when its check began (A WAITING CHANGE HOLDS NOTHING, invariant 9)
@@ -764,7 +764,7 @@ class Sim:
     def install(self):
         import contextlib
         self.saved = {n: getattr(A, n, None) for n in self.FAKES + ("os",)}
-        self.saved_clock = (A.time.__dict__.get("time"), A.time.__dict__.get("sleep"))
+        self.saved_opener = list(A._store_opener)
         self.env_saved = dict(os.environ)
         self.tmp = tempfile.mkdtemp(prefix="agentctl-sim-")
         self.repo = os.path.realpath(os.path.join(self.tmp, "movies"))
@@ -793,8 +793,9 @@ class Sim:
             c.clear()
         clock = self.clock = [1_800_000_000.0]
         self.sim_clock = SimClock(clock)
-        A.time.time = lambda: clock[0]
-        A.time.sleep = lambda s: None
+        # the store's clock is the simulation's: every store the code under test opens (open_store) is wired to it,
+        # as cli wires the process's (THE CLOCK IS PASSED IN: the ticks and the checkers get self.sim_clock)
+        A.wire_store(lambda clock=None: A.Store(clock=clock or self.sim_clock.time))
         A.dt = sim_datetime(clock)  # entry ids and stamps from the simulated clock: a seed replays exactly
         A.os = SimOs(self)
         A.git, A.git_ok = self.git, self.git_ok
@@ -894,11 +895,7 @@ class Sim:
         for k in self.conns.values():
             k.c.close()
         A.WAITING_DIR = self.saved_wdir
-        for name, v in zip(("time", "sleep"), self.saved_clock):
-            if v is None:
-                A.time.__dict__.pop(name, None)
-            else:
-                setattr(A.time, name, v)
+        A._store_opener[:] = self.saved_opener
         os.environ.clear()
         os.environ.update(self.env_saved)
         for c in A.PROCESS_CACHES:
@@ -1082,7 +1079,7 @@ class Sim:
         self.outside_run += 1
         name = str(self.outside_run)
         rid = f"sim-outside-{name}"
-        A.Store().put_item("red", rid, "offered", {"key": rid, "workflow": "Alert backtest", "gate": False,
+        A.open_store().put_item("red", rid, "offered", {"key": rid, "workflow": "Alert backtest", "gate": False,
                                                    "red_kind": "outside", "runs": [name]})
         self.outside[name] = rid
         return name
@@ -1090,7 +1087,7 @@ class Sim:
     def close_outside_reds(self):
         for name, at in list(self.outside_clears.items()):
             if self.tick >= at:
-                st = A.Store()
+                st = A.open_store()
                 it = st.item("red", self.outside[name])
                 st.transition("red", it["id"], "verified", it["version"], event={"text": "sim: fix verified"})
                 del self.outside[name], self.outside_clears[name]
@@ -1158,14 +1155,14 @@ class Sim:
         self.known_entries = {e["id"] for e in A.waiting_entries(self.d, open_only=False)}
         reds = set(self.reds)
         A.project_changes(self.d)
-        A.close_landed_changes(self.repo, self.d)
-        for x in A.tick_changes(self.repo, self.d):
+        A.close_landed_changes(self.repo, self.sim_clock, self.d)
+        for x in A.tick_changes(self.repo, self.d, self.sim_clock):
             A.wlog(self.d, f"tick {self.tick}: {x}")
-        for x in A.tick_batch(self.repo, self.d):
+        for x in A.tick_batch(self.repo, self.d, self.sim_clock):
             A.wlog(self.d, f"tick {self.tick}: {x}")
         if self.tick % 10 == 0:
-            A.stats_pass(self.repo, self.d)
-        for it in A.Store().items("change"):  # what held each change, tick by tick (the overlap tests read it)
+            A.stats_pass(self.sim_clock, self.repo, self.d)
+        for it in A.open_store().items("change"):  # what held each change, tick by tick (the overlap tests read it)
             hold = (it.get("data") or {}).get("hold")
             if hold and it["state"] in ("queued", "checked"):
                 self.holds.setdefault(it["id"], []).append((self.tick, hold.get("kind"), hold.get("blocker"),
@@ -1212,7 +1209,7 @@ class Sim:
 
     # ---------------------------------------------------------------- the invariants
     def check_invariants(self, before, reds):
-        st = A.Store()
+        st = A.open_store()
         items = st.items("change")
         open_ = [it for it in items if not A.machine_state("change", it["state"]).terminal]
         # 1. ONE OPEN ITEM PER CHANGE (worktree + head): the head as the change (its last patch), whichever sha a
@@ -1239,10 +1236,10 @@ class Sim:
                 continue
             if e.get("backlog_batch"):
                 self.violate("I3", f"red fix {eid} is a member of batch {e['backlog_batch']}")
-            due = not float(e.get("retry_after") or 0) > A.time.time()
+            due = not float(e.get("retry_after") or 0) > self.clock[0]
             if e["status"] == "queued" and due and not A.checker_alive(eid) \
                     and before.get(eid, {}).get("status") == "queued" \
-                    and not float(before[eid].get("retry_after") or 0) > A.time.time() - TICK:
+                    and not float(before[eid].get("retry_after") or 0) > self.clock[0] - TICK:
                 other = redfix_holder and eid not in json.dumps(redfix_holder.get("meta") or {})
                 if not other:
                     self.violate("I3", f"red fix {eid} queued and not started: held behind other work")
@@ -1306,7 +1303,7 @@ class Sim:
     def check_hold_invariants(self, st, entries):
         """(b) EVERY CHANGE PAST ITS DEADLINE HAS A RECORDED HOLD, (c) NO CHANGE IS SILENT: every held change's
         `land status` line says why, (d) THE PRIORITY ORDER: executors start in PRIORITY's order within a tick."""
-        t = A.time.time()
+        t = self.clock[0]
         for it, _e in A.unheld_changes(st, entries, t):
             self.violate("Ib", f"change {it['id']} {it['state']} {int((t - it['entered_at']) // TICK)} ticks, past its "
                          f"deadline, and nothing recorded holding it (hold {(it['data'] or {}).get('hold')})")
@@ -1349,7 +1346,7 @@ class Sim:
                          f"after {culprit.eid}, which it was told it conflicts with")
 
     def final_checks(self):
-        st = A.Store()
+        st = A.open_store()
         for ch in self.changes:
             e = self.entry(ch)
             if e is None:
@@ -1363,7 +1360,7 @@ class Sim:
                 self.violate("I6", f"change {ch.eid} superseded by nothing newer")
         # 7. STATS: exactly one landing record per decided change, `landed` for each landed one
         for _ in range(3):
-            A.stats_pass(self.repo, self.d)
+            A.stats_pass(self.sim_clock, self.repo, self.d)
         recs = {}
         for r in self.stats:
             if r.get("record") == "agentctl.landing":
